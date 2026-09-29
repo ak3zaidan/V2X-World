@@ -581,6 +581,10 @@ pub struct Engine {
     dcc: Option<SaeJ2945Dcc>,
     weather: WeatherState,
     actors: BTreeMap<ActorId, ActorRecord>,
+    /// The actor each equipped node rides, kept beside [`Engine::actors`] so a node's
+    /// position is one lookup. It was a scan of every actor, made for every frame put on
+    /// the air and every node position asked for: quadratic in the fleet.
+    node_actor: BTreeMap<NodeId, ActorId>,
     /// Every hosted device: vehicles' OBUs and roadside units, and — when
     /// `actors.vru.device_fraction` equips them — pedestrians' and cyclists' handsets
     /// ([`crate::hosted::HostedNode`]).
@@ -926,6 +930,7 @@ impl Engine {
                 crate::wiring::build_dcc(&scenario_for_radio)
             },
             actors: BTreeMap::new(),
+            node_actor: BTreeMap::new(),
             nodes: BTreeMap::new(),
             inboxes: BTreeMap::new(),
             // `validate` refuses any other name, so the fallback is unreachable from a
@@ -1359,10 +1364,12 @@ impl Engine {
         if let Some(pos) = self.rsus.get(&node) {
             return Some(*pos);
         }
-        self.actors
-            .values()
-            .find(|a| a.node == Some(node))
-            .map(|a| a.last.extrapolate(at).pos)
+        self.actor_of(node).map(|a| a.last.extrapolate(at).pos)
+    }
+
+    /// The actor record of the vehicle or VRU a node rides, if it rides one.
+    fn actor_of(&self, node: NodeId) -> Option<&ActorRecord> {
+        self.node_actor.get(&node).and_then(|a| self.actors.get(a))
     }
 
     /// Puts the scheduled events that exist before the first dispatch on the heap.
@@ -1939,6 +1946,9 @@ impl Engine {
             } else {
                 None
             };
+            if let Some(node) = node {
+                self.node_actor.insert(node, spawn.actor);
+            }
             self.actors.insert(
                 spawn.actor,
                 ActorRecord {
@@ -1963,6 +1973,7 @@ impl Engine {
             if let Some(rec) = self.actors.remove(actor)
                 && let Some(node) = rec.node
             {
+                self.node_actor.remove(&node);
                 if let Some(phase2) = self.phase2.as_mut() {
                     phase2.retire(node);
                 }
@@ -2343,17 +2354,15 @@ impl Engine {
         let rng = &self.rng;
 
         let reverse = self.reverse_node_walk;
-        let selected = move |id: &NodeId| only.is_none_or(|o| o == *id);
-        let walk: Box<dyn Iterator<Item = (&NodeId, &mut crate::hosted::HostedNode)>> = if reverse {
-            Box::new(
-                self.nodes
-                    .iter_mut()
-                    .rev()
-                    .filter(move |(id, _)| selected(id)),
-            )
-        } else {
-            Box::new(self.nodes.iter_mut().filter(move |(id, _)| selected(id)))
-        };
+        // One node — the per-node step of a desynchronised timing, and every wake — is a
+        // range of one key, not a filter over every node: there are as many of those
+        // events as nodes (and more), so the filter made each step quadratic in the fleet.
+        let walk: Box<dyn Iterator<Item = (&NodeId, &mut crate::hosted::HostedNode)>> =
+            match (only, reverse) {
+                (Some(id), _) => Box::new(self.nodes.range_mut(id..=id)),
+                (None, true) => Box::new(self.nodes.iter_mut().rev()),
+                (None, false) => Box::new(self.nodes.iter_mut()),
+            };
         let mut suppressed_by_vru = 0u64;
         let mut results: Vec<(NodeId, StepOutcome, Vec<v2xw_core::ctx::OwnedRecord>, f64)> = walk
             .map(|(id, runtime)| {
@@ -2758,10 +2767,9 @@ impl Engine {
         let mut signature_valid = true;
         if self.phase2.as_ref().is_some_and(|p| p.is_attacker(node)) {
             let actor = self
-                .actors
-                .iter()
-                .find(|(_, a)| a.node == Some(node))
-                .map(|(id, _)| *id)
+                .node_actor
+                .get(&node)
+                .copied()
                 .unwrap_or(ActorId::new(0));
             let believed = self
                 .nodes
@@ -3575,11 +3583,7 @@ impl Engine {
         let mut beyond: Vec<(NodeId, Vec3)> = Vec::new();
         // Each receiver's heading — its street's direction — for the corner tracer.
         let mut headings: BTreeMap<NodeId, f64> = BTreeMap::new();
-        state.tx_heading = self
-            .actors
-            .values()
-            .find(|a| a.node == Some(state.tx))
-            .map(|a| a.last.heading_rad);
+        state.tx_heading = self.actor_of(state.tx).map(|a| a.last.heading_rad);
         for actor in self.snapshot.actors_within(state.tx_pos, reach_m) {
             let Some(rec) = self.actors.get(&actor) else {
                 continue;
@@ -4871,11 +4875,7 @@ impl Engine {
         let Some(kind) = self.phase2.as_ref().map(|p| p.access_kind(node)) else {
             return;
         };
-        let pos = self
-            .actors
-            .values()
-            .find(|a| a.node == Some(node))
-            .map_or(Vec3::ZERO, |a| a.last.pos);
+        let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
         let bytes = crate::phase2::report_bytes();
         let sign = self.signing_cost(node);
         match kind {
@@ -5101,11 +5101,7 @@ impl Engine {
         if self.rsus.contains_key(&node) {
             return;
         }
-        let pos = self
-            .actors
-            .values()
-            .find(|a| a.node == Some(node))
-            .map_or(Vec3::ZERO, |a| a.last.pos);
+        let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
         let (Some(p), Some(runtime)) = (self.phase2.as_ref(), self.nodes.get(&node)) else {
             return;
         };
