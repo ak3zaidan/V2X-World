@@ -43,6 +43,7 @@ export function Viewport(): React.JSX.Element {
   const hudDocked = useStudio((s) => s.hudDocked);
   const setHudDocked = useStudio((s) => s.setHudDocked);
   const runState = useStudio((s) => s.run.state);
+  const devDetails = useStudio((s) => s.devDetails);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -211,10 +212,16 @@ export function Viewport(): React.JSX.Element {
 
         <span className="spacer grow" />
 
-        <span className="chip" title="World build report from @vwp/viewer">
-          {world ? `${world.lanes} lanes · ${world.buildings} buildings · ${world.sites} RSUs` : "world loading…"}
-        </span>
-        <StatsChip />
+        {/* A build report and a renderer readout: for whoever is debugging the page, so they are
+            shown in developer mode (the menu) and are not decoration over everyone else's picture. */}
+        {devDetails ? (
+          <>
+            <span className="chip" title="World build report from @vwp/viewer" data-testid="world-chip">
+              {world ? `${world.lanes} lanes · ${world.buildings} buildings · ${world.sites} RSUs` : "world loading…"}
+            </span>
+            <StatsChip />
+          </>
+        ) : null}
         <button type="button" className="chip" onClick={() => setHudDocked(!hudDocked)} data-testid="hud-dock">
           HUD {hudDocked ? "float" : "dock"}
         </button>
@@ -228,7 +235,9 @@ export function Viewport(): React.JSX.Element {
       */}
 
       <StateLegend />
-      {hudDocked ? null : <ObuHud />}
+      {/* With nothing selected the HUD only said "No radio selected" over the picture; the
+          inspector's empty state says it where it covers nothing. */}
+      {hudDocked || (selectedActor === null && selectedNode === null) ? null : <ObuHud />}
     </div>
   );
 }

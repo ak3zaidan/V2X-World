@@ -71,7 +71,12 @@ button {
 button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg-panel); }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 button.primary { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
-:root[data-theme="light"] button.primary { color: #fff; }
+/* The generic hover darkens a button to the panel colour, which turned the primary action into a
+   plain one under the pointer. */
+button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-dim) 80%, var(--accent)); border-color: var(--accent); }
+/* White on the light theme's pale accent (#96c8e6) was 1.9:1; on the full accent it is 5.1:1. */
+:root[data-theme="light"] button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+:root[data-theme="light"] button.primary:hover:not(:disabled) { background: #005f94; }
 button.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 button.icon { padding: 3px 8px; font-family: var(--mono); }
 
@@ -111,28 +116,36 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 
 /* ------------------------------------------------------------------ shell */
 
+/*
+ * Two rows: the header and the body. The plots strip that used to be a third row is the Metrics
+ * panel now, and the settings sidebar is the Settings window (docs/design/14-studio-shell.md).
+ */
 .app {
+  --topbar-h: 42px;
   display: grid;
-  grid-template-rows: 34px minmax(0, 1fr) 150px;
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr);
   height: 100%;
 }
+.app.standalone { grid-template-rows: auto minmax(0, 1fr); }
 
 .topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 0 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
+  min-width: 0;
 }
 .topbar h1 {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   margin: 0;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
+  color: var(--accent);
 }
-.topbar .spacer { flex: 1; }
 .topbar .meta { color: var(--text-dim); font-family: var(--mono); font-size: 11px; }
+.topbar-rule { width: 1px; align-self: stretch; margin: 9px 2px; background: var(--border); flex: none; }
 
 /* The scenario's name: the second thing a reader looks for, after "is it running?". */
 .topbar-scenario {
@@ -140,10 +153,327 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 28ch;
+  max-width: 32ch;
 }
-.headline-clock { font-size: 12px; color: var(--text-dim); }
+.scenario-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border-color: transparent;
+  min-width: 0;
+  font-weight: 600;
+}
+.scenario-switch:hover:not(:disabled) { background: var(--bg-raised); border-color: var(--border); }
+.scenario-switch .caret { color: var(--text-faint); font-size: 10px; }
+.headline-clock { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
 .headline-clock .mono { color: var(--text); font-size: 13px; }
+
+/* A square button holding an icon; `labelled` adds a word after it. */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 7px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+  position: relative;
+}
+.icon-button:hover:not(:disabled) { color: var(--text); background: var(--bg-raised); border-color: var(--border); }
+.icon-button.on, .icon-button[aria-expanded="true"] { color: var(--text); background: var(--bg-raised); border-color: var(--border-strong); }
+.icon-button.labelled { padding: 0 10px 0 8px; }
+.badge-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--bg-panel);
+}
+
+/* The header's menus. */
+.app-menu { min-width: 240px; padding: 4px; }
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 5px 8px;
+  border-radius: 4px;
+}
+.menu-item:hover:not(:disabled), .menu-item:focus-visible { background: var(--bg-raised); border-color: var(--border); outline: none; }
+.menu-item .count, .toggle .count, .tree-item .count {
+  font-size: 10px;
+  font-family: var(--mono);
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.menu-item .check-mark { width: 12px; color: var(--accent); }
+.menu-rule { height: 1px; background: var(--border); margin: 4px 2px; }
+.menu-note { padding: 4px 8px; font-size: 11px; }
+.menu-note.shortcuts { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; }
+kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  color: var(--text-dim);
+}
+
+/* ------------------------------------------------------------- panels over the main view */
+
+/*
+ * A full-screen panel covers everything under the header, which stays: the run state, the clock and
+ * the primary action are never hidden behind Settings or Metrics.
+ */
+.fullpanel {
+  position: fixed;
+  top: var(--topbar-h, 42px);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  outline: none;
+}
+.fullpanel[hidden] { display: none; }
+.fullpanel-inner { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.fullpanel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.fullpanel-head h2, .sheet-head h2, .settings-head h2 { font-size: 15px; margin: 0; font-weight: 600; }
+.fullpanel-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; }
+
+/* The measurements strip, given the page: its cards wrap instead of scrolling sideways. */
+.metrics-panel .plots { border-top: none; background: transparent; grid-template-rows: auto minmax(0, 1fr); }
+.metrics-panel .plots-head { border-bottom: none; padding: 0 0 8px; overflow: visible; }
+.metrics-panel .plots-body { flex-wrap: wrap; overflow: visible; padding: 0; gap: 12px; }
+
+/* A sheet slides over the viewport's left edge; the time controls and the inspector stay usable. */
+.stage { position: relative; min-height: 0; display: grid; }
+.sheet {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(420px, calc(100% - 48px));
+  z-index: 30;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border-strong);
+  box-shadow: 12px 0 32px rgb(0 0 0 / 35%);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  outline: none;
+}
+.sheet-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 14px; border-bottom: 1px solid var(--border); }
+.sheet-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.sheet-body > .panel-body { flex: 1; }
+.run-details .kv { grid-template-columns: minmax(64px, max-content) 1fr; }
+.run-details .sec {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+  padding: 10px 0 4px;
+}
+
+/* The map is asked for a point: say so over it, with a way out. */
+.pick-banner {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+
+/* The inspector's own close button, over its tab row. */
+.inspector-dock { position: relative; }
+.inspector-close { position: absolute; top: 3px; right: 4px; z-index: 2; height: 26px; min-width: 26px; }
+.inspector-dock > .panel-head { padding-right: 36px; }
+
+/* ------------------------------------------------------------- the settings window */
+
+.settings-window { display: flex; flex-direction: column; min-height: 0; height: 100%; flex: 1; background: var(--bg); }
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-wrap: wrap;
+}
+.settings-search { position: relative; flex: 1 1 320px; min-width: 200px; max-width: 720px; display: flex; align-items: center; }
+.settings-search input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 6px 90px 6px 10px;
+  font-size: 13px;
+}
+.settings-search input:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.settings-count { position: absolute; right: 10px; font-size: 11px; pointer-events: none; }
+.settings-filters { display: flex; gap: 6px; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.toggle.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.segmented button { border: none; border-radius: 0; background: transparent; padding: 4px 10px; font-size: 12px; color: var(--text-dim); }
+.segmented button.on { background: var(--bg-raised); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+
+.settings-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr); }
+.settings-tree {
+  overflow: auto;
+  padding: 10px 6px 16px 10px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.tree-item.group { font-weight: 600; color: var(--text); margin-top: 4px; }
+.tree-item.sub { padding-left: 20px; }
+.tree-item.on { color: var(--text); background: var(--bg-raised); border-color: var(--border); }
+.tree-item.group.on { box-shadow: inset 2px 0 0 var(--accent); }
+
+.settings-content { overflow: auto; padding: 4px 28px 40px; scroll-padding-top: 8px; }
+.settings-content > section, .settings-content > .json-view, .settings-content > .settings-empty { max-width: 920px; }
+.settings-content h3 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 22px 0 2px;
+  padding-top: 6px;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.settings-content h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 16px 0 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.group-blurb { margin: 0 0 6px; font-size: 12px; }
+.settings-scenario .kv { max-width: 640px; margin: 6px 0; }
+.presets { margin: 10px 0; }
+.preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 4px 16px; margin-top: 6px; }
+.preset-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 2px 0; border-bottom: 1px dotted var(--border); min-width: 0; }
+.preset-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-row button { padding: 1px 10px; font-size: 12px; }
+.settings-check { margin: 10px 0; }
+
+/* One setting: the marker bar, then title, description, control, and the meta line. */
+.setting { display: flex; gap: 10px; padding: 10px 8px 10px 0; border-radius: var(--radius); }
+.setting:hover { background: color-mix(in srgb, var(--bg-raised) 60%, transparent); }
+.setting:focus-within { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.setting-marker { width: 3px; flex: none; border-radius: 2px; background: transparent; }
+.setting.modified .setting-marker { background: var(--border-strong); }
+.setting.edited .setting-marker { background: var(--accent); }
+.setting.invalid .setting-marker { background: var(--err); }
+.setting-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.setting-title { font-size: 13px; color: var(--text); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 4px; }
+.setting-title b { font-weight: 600; }
+.setting-crumb { color: var(--text-dim); }
+.setting-title .unit { color: var(--text-faint); font-family: var(--mono); font-size: 11px; }
+.setting-flag { font-size: 10px; color: var(--text-dim); border: 1px solid var(--border-strong); border-radius: 8px; padding: 0 5px; margin-left: 4px; }
+.setting-flag.edited-flag { color: var(--accent); border-color: var(--accent); }
+.setting-desc { font-size: 12px; color: var(--text-dim); line-height: 1.45; max-width: 760px; }
+.setting-desc .status-note { color: var(--warn); margin-top: 2px; }
+.setting-control { max-width: 420px; }
+.setting-control.inline { display: flex; align-items: center; gap: 8px; }
+.setting-control input[type="checkbox"] { width: auto; }
+.setting-control textarea { font-family: var(--mono); font-size: 11px; }
+.setting:has(.events-editor) .setting-control, .setting:has(textarea) .setting-control { max-width: 760px; }
+.setting-error { color: var(--err); font-size: 12px; border-left: 2px solid var(--err); padding-left: 8px; }
+.setting-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; font-size: 11px; color: var(--text-faint); }
+.setting-meta code { font-size: 10.5px; color: var(--text-dim); }
+.setting.inactive .setting-title, .setting.inactive .setting-control { opacity: 0.65; }
+.linkbutton {
+  all: unset;
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 11px;
+  border-radius: 2px;
+}
+.linkbutton:hover { text-decoration: underline; }
+.linkbutton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.linkbutton:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.json-view { display: flex; flex-direction: column; gap: 6px; padding-top: 12px; height: 100%; }
+.json-text {
+  flex: 1;
+  min-height: 60vh;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.settings-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex-wrap: wrap;
+}
+.settings-foot-text { flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.settings-foot-text .note { margin: 0; }
+.settings-message { overflow-wrap: anywhere; }
+
+/* Narrow windows: the tree collapses to a strip of group chips above the list. */
+@media (max-width: 900px) {
+  .settings-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .settings-tree { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border); padding: 6px; }
+  .tree-item.sub { display: none; }
+  .tree-item { width: auto; white-space: nowrap; }
+  .settings-content { padding: 4px 14px 40px; }
+}
 
 /* ------------------------------------------------------------- the status sentence */
 
@@ -191,36 +521,33 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 .ident:hover .ident-hint, .ident:focus-visible .ident-hint { color: var(--accent); }
 .ident:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/*
+ * The viewport and, when it is open, the inspector. Nothing else takes width from the simulator:
+ * with nothing selected the viewport is the whole window.
+ */
 .body {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr);
   min-height: 0;
+  position: relative;
 }
+.body.with-inspector { grid-template-columns: minmax(0, 1fr) 360px; }
 /*
- * Narrower side panels on smaller windows, so the viewport — the simulator — keeps most of the
- * width. At 960 px the fixed 280 + 360 left it 320 px, at 800 px 160.
+ * A narrower inspector on smaller windows, so the viewport keeps at least half of the width
+ * (measured by `e2e/regressions.spec.ts` at 800 x 520 up to 1280 x 800).
  */
 @media (max-width: 1280px) {
-  .body { grid-template-columns: 240px minmax(0, 1fr) 300px; }
+  .body.with-inspector { grid-template-columns: minmax(0, 1fr) 320px; }
 }
 @media (max-width: 1000px) {
-  .body { grid-template-columns: 200px minmax(0, 1fr) 240px; }
+  .body.with-inspector { grid-template-columns: minmax(0, 1fr) 260px; }
 }
-/*
- * A small window is still a simulator window: at 800 x 520 the 200 + 240 px panels and the
- * 150 px plots strip left the viewport 360 x 146 px, a letterbox nobody can drive a camera in.
- * Below 900 px wide the side panels narrow again and scroll their own content; below 640 px tall
- * the plots strip shrinks, and below 560 px to one row of sparklines. The viewport keeps at least half of each
- * dimension (measured by `e2e/regressions.spec.ts`).
- */
 @media (max-width: 900px) {
-  .body { grid-template-columns: 150px minmax(0, 1fr) 180px; }
+  .body.with-inspector { grid-template-columns: minmax(0, 1fr) 220px; }
+  .topbar .headline-clock .faint, .icon-button.labelled span { display: none; }
 }
 @media (max-height: 640px) {
-  .app { grid-template-rows: 30px minmax(0, 1fr) 84px; }
-}
-@media (max-height: 560px) {
-  .app { grid-template-rows: 30px minmax(0, 1fr) 58px; }
+  .app { --topbar-h: 36px; }
 }
 
 .panel {

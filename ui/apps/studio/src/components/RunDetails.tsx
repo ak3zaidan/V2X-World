@@ -12,7 +12,7 @@
  * the header keeps is the state, the scenario, the clock and the connection.
  */
 
-import { useEffect, useRef, useState } from "react";
+
 
 import { EngineTargetChip } from "./EngineTarget.js";
 import { Identifier } from "./Identifier.js";
@@ -34,42 +34,25 @@ function splitBuild(version: string): { readonly name: string; readonly build: s
   return { name: match[1], build: match[2] };
 }
 
-export function RunDetails(): React.JSX.Element {
-  const [open, setOpen] = useState(false);
+/**
+ * @param onRetarget re-resolves the engine and reconnects. The chip used to be given a function that
+ * only closed the popover, so pinning another engine wrote the pin to storage and changed nothing on
+ * the page until a reload.
+ */
+export function RunDetails({ onRetarget }: { onRetarget: () => void }): React.JSX.Element {
   const hello = useStudio((s) => s.hello);
   const run = useStudio((s) => s.run);
   const frames = useStudio((s) => s.frames);
   const connection = useStudio((s) => s.connection);
   const target = useStudio((s) => s.target);
   const devDetails = useStudio((s) => s.devDetails);
-  const setDevDetails = useStudio((s) => s.setDevDetails);
-  const ref = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (ev: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(ev.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
 
   return (
-    <div className="menu" ref={ref}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        data-testid="run-details-button"
-        title="Run identity, engine build, timing and stream counters"
-      >
-        Details {open ? "▴" : "▾"}
-      </button>
-      {open ? (
-        <div className="menu-pop anchor-right wide" data-testid="run-details">
+    <div className="panel-body run-details" data-testid="run-details">
+      <div>
           <div className="sec">Engine</div>
           <div className="row">
-            <EngineTargetChip onRetarget={() => setOpen(false)} />
+            <EngineTargetChip onRetarget={onRetarget} />
             <span className="dim">{target.engine}</span>
           </div>
           <dl className="kv">
@@ -137,6 +120,8 @@ export function RunDetails(): React.JSX.Element {
             Click either to copy it in full.
           </p>
 
+          {devDetails ? (
+            <>
           <div className="sec">Drawing and stream</div>
           <div className="dim">
             <StatsReadout />
@@ -155,24 +140,14 @@ export function RunDetails(): React.JSX.Element {
               {hello ? `${durationNs(hello.mobilityStepNs)} per step · full snapshot every ${durationNs(hello.keyframePeriodNs)}` : "—"}
             </dd>
           </dl>
-
-          <div className="sec">For debugging</div>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={devDetails}
-              onChange={(e) => setDevDetails(e.target.checked)}
-              data-testid="dev-details-toggle"
-            />
-            <span>Show protocol names and specification references</span>
-          </label>
-          <p className="help">
-            Adds the wire field names, the method behind each control and the specification section each
-            model follows, wherever the interface explains a value. Off by default: the explanations read
-            in plain language without them.
-          </p>
-        </div>
-      ) : null}
+            </>
+          ) : (
+            <p className="help">
+              The frame rate, the draw calls and the stream&apos;s frame counters are for debugging the page and
+              the engine. Turn on <b>Developer mode</b> in the menu to show them here and over the viewport.
+            </p>
+          )}
+      </div>
     </div>
   );
 }

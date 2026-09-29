@@ -734,6 +734,18 @@ export class StudioEngine {
     this.attachViewer();
   }
 
+  /**
+   * Talk to an engine over HTTP only, without opening a stream.
+   *
+   * For the settings window opened in a browser window of its own (`?view=settings`): it reads and
+   * writes the scenario and never draws a frame, so a second WebSocket and a second copy of the pose
+   * buffer would be cost with no use. Every `request` then goes over `POST /rpc`, which serves the
+   * same methods.
+   */
+  attachHttpOnly(baseUrl: string): void {
+    this.#baseUrl = baseUrl;
+  }
+
   // ---------------------------------------------------------------------------------------------
   // Viewer
   // ---------------------------------------------------------------------------------------------
@@ -1178,6 +1190,7 @@ export class StudioEngine {
         staged: res.staged ?? null,
         fields: Array.isArray(res.fields) ? res.fields : [],
         statuses: Array.isArray(res.statuses) ? res.statuses : [],
+        groups: Array.isArray(res.groups) ? res.groups : [],
       });
     } catch (err) {
       this.#log("warn", "scenario", `scenario.get failed: ${errText(err)}`);

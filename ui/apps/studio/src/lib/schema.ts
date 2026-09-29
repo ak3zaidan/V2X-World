@@ -226,6 +226,13 @@ export interface PublishedFormField extends FormField {
   readonly statusNote: string;
   /** True for a list or a map, edited as JSON because its elements have no fixed pointer. */
   readonly collection: boolean;
+  /** The engine's dotted path for the field (`time.duration_s`), which is how a scenario file spells it. */
+  readonly path: string;
+  /** Whether the engine published a default, and what it is. A list or map has none to publish. */
+  readonly hasDefault: boolean;
+  readonly defaultValue?: unknown;
+  /** The engine's range in words, when it bounds the value (`(0, ∞)`). */
+  readonly range?: string;
 }
 
 /** One row of the published field index, or one node of the published schema. */
@@ -317,6 +324,10 @@ export function fieldsFromPublished(
     status: statusOf(row["x-status"]),
     statusNote: typeof row["x-status-note"] === "string" ? row["x-status-note"] : "",
     collection,
+    path: pathOfPointer(pointer),
+    hasDefault: Object.prototype.hasOwnProperty.call(row, "default") && pointer === row["x-pointer"],
+    ...(Object.prototype.hasOwnProperty.call(row, "default") && pointer === row["x-pointer"] ? { defaultValue: row.default } : {}),
+    ...(typeof row["x-range"] === "string" ? { range: row["x-range"] } : {}),
   });
 
   for (const row of fields) {
@@ -352,6 +363,15 @@ export function fieldsFromPublished(
     }
   }
   return out;
+}
+
+/** A JSON Pointer as the dotted path a scenario file uses: `/time/duration_s` → `time.duration_s`. */
+export function pathOfPointer(pointer: string): string {
+  return pointer
+    .split("/")
+    .slice(1)
+    .map((p) => p.replace(/~1/g, "/").replace(/~0/g, "~"))
+    .join(".");
 }
 
 /** The pointers at which `a` and `b` differ, down to the leaves, sorted. */
