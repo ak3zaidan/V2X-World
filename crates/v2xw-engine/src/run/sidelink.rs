@@ -99,6 +99,12 @@ pub struct SidelinkReport {
     pub rat: String,
     /// The configuration the pool and the scheduler come from.
     pub profile: String,
+    /// The regulatory region the run transmits under (`radio.region`).
+    pub region: String,
+    /// The channel number, and its width in MHz.
+    pub channel: u16,
+    /// The channel's width, MHz.
+    pub channel_mhz: u16,
     /// The MCS, by name.
     pub mcs: String,
     /// The resource pool's sub-channel count.
@@ -232,6 +238,20 @@ pub(crate) struct SidelinkAccess {
     pub(crate) report: SidelinkReport,
 }
 
+/// The transmission bandwidth, PRB, of a sidelink carrier `width_mhz` wide: TS 36.101
+/// Table 5.6-1 (LTE at 15 kHz) and TS 38.101-1 Table 5.3.2-1 (NR at 30 kHz).
+fn prb_in(rat: v2xw_radio::SlRat, width_mhz: f64) -> Option<u32> {
+    let w = width_mhz.round() as u32;
+    match (rat, w) {
+        (v2xw_radio::SlRat::LteMode4, 10) => Some(50),
+        (v2xw_radio::SlRat::LteMode4, 20) => Some(100),
+        (v2xw_radio::SlRat::NrMode2, 10) => Some(24),
+        (v2xw_radio::SlRat::NrMode2, 20) => Some(51),
+        (v2xw_radio::SlRat::NrMode2, 30) => Some(78),
+        _ => None,
+    }
+}
+
 /// A TS 38.214 Table 5.1.3.1-2 row, falling back to MCS 7 for an index the loader has
 /// already refused.
 fn nr_table2(index: u8) -> SlMcsSpec {
@@ -248,6 +268,29 @@ fn configuration(rat: Rat, choice: SidelinkChoice) -> Option<(PoolConfig, SpsPar
             SpsParams::molina_masegosa(10),
             "molina-masegosa-2017",
         ),
+        (Rat::LteV2xPc5, Some(SidelinkProfile::EtsiEn303613)) => {
+            let mcs: SlMcsSpec = match choice.mcs {
+                Some(5) => sl::LTE_MCS5_J3161,
+                Some(11) => sl::LTE_MCS11_J3161,
+                _ => sl::LTE_MCS7_J3161,
+            };
+            // EN 303 613 V1.1.1 Table B.2: ten-PRB sub-channels with an adjacent PSCCH,
+            // and `minMCS-PSSCH` "0 for the transmission using one sub-channel" — so one
+            // sub-channel is allowed, unlike J3161/1's two. The width is the channel's
+            // (`for_scenario`). The keep probability and the sensing parameters are not
+            // in Annex B; they stay Rel-14's study values (Molina-Masegosa).
+            (
+                PoolConfig {
+                    min_subchannels: 1,
+                    ..PoolConfig::sae_j3161(mcs)
+                },
+                SpsParams {
+                    cc: Some(CrLimitTable::ETSI_TS_103_574),
+                    ..SpsParams::molina_masegosa(10)
+                },
+                "etsi-en303613",
+            )
+        }
         (Rat::LteV2xPc5, _) => {
             let mcs: SlMcsSpec = match choice.mcs {
                 Some(5) => sl::LTE_MCS5_J3161,
@@ -334,18 +377,39 @@ impl SidelinkAccess {
             Tier::Abstract => Tier::Medium,
             t => t,
         };
-        let choice = crate::wiring::radio_models(scenario)
+        let mut choice = crate::wiring::radio_models(scenario)
             .ok()
             .and_then(|m| m.sidelink)
             .unwrap_or_default();
+        // No `radio.models.sidelink`: the RAT's default profile in the run's region.
+        if choice.profile.is_none() {
+            choice.profile = crate::wiring::sidelink_profile(scenario);
+        }
         let (pool, params, profile) = configuration(scenario.radio.rat, choice)?;
+        // The channel the region's rules put this technology on (`radio.region`,
+        // `radio.channel`); the loader has already refused a scenario with none.
+        let regulation = crate::wiring::radio_regulation(scenario).ok()?;
+        let width = regulation.rule.channel.bandwidth_mhz();
+        // A profile that sizes itself to its channel takes the channel's transmission
+        // bandwidth: TS 36.101 Table 5.6-1 for LTE (50 PRB in 10 MHz, 100 in 20 MHz), TS
+        // 38.101-1 Table 5.3.2-1 at 30 kHz for NR (24, 51 and 78 PRB in 10, 20, 30 MHz).
+        let adapts = matches!(profile.as_str(), "etsi-en303613" | "etsi-en303798");
+        let bandwidth_prb = if adapts {
+            prb_in(pool.rat, width).unwrap_or(pool.bandwidth_prb)
+        } else {
+            pool.bandwidth_prb
+        };
         let pool = PoolConfig {
-            centre_hz: CV2X_FREQ_HZ,
+            centre_hz: regulation.centre_hz(),
+            bandwidth_prb,
             ..pool
         };
         let report = SidelinkReport {
             rat: pool.rat.label().to_string(),
             profile,
+            region: regulation.region.id().to_string(),
+            channel: regulation.rule.channel.number,
+            channel_mhz: width.round() as u16,
             mcs: pool.mcs.label.to_string(),
             subchannels: pool.subchannels(),
             slot_ns: pool.slot().as_nanos(),
@@ -368,8 +432,8 @@ impl SidelinkAccess {
             phy,
             phy_high,
             mac: SpsEngine::new(tier, pool, params),
-            channel: CV2X_CHANNEL,
-            freq_hz: CV2X_FREQ_HZ,
+            channel: regulation.channel(),
+            freq_hz: regulation.centre_hz(),
             tx_power_dbm: CV2X_TX_POWER_DBM,
             slot_tx: BTreeMap::new(),
             slot_frames: BTreeMap::new(),
@@ -653,7 +717,7 @@ impl Engine {
         let channel = self
             .sidelink
             .as_ref()
-            .map_or(super::SAFETY_CHANNEL, |sl| sl.channel);
+            .map_or(self.dsrc_channel, |sl| sl.channel);
         self.scheduler.schedule(
             at,
             EventClass::MacTimer,
@@ -1133,8 +1197,19 @@ fn coupling_card(
         Parameter::new(
             "channel",
             "-",
-            serde_json::json!(CV2X_CHANNEL.0),
-            std_src("FCC 20-164 (2020): 5.905-5.925 GHz reserved for C-V2X; channel 183"),
+            serde_json::json!(report.channel),
+            std_src(match report.region.as_str() {
+                "eu" => {
+                    "ETSI EN 302 571 V2.1.1 Table 2 (10 MHz carriers); the 5GAA European \
+                     deployment band configurations (2021, 2024) for which technology sits \
+                     on which (radio/regulation)"
+                }
+                _ => {
+                    "47 CFR §90.390(a) as adopted by FCC 24-123 (2024): C-V2X in \
+                     5.895-5.925 GHz; SAE J3161/1's 20 MHz channel 5.905-5.925 GHz \
+                     (radio/regulation)"
+                }
+            }),
         ),
         Parameter::new(
             "tx_power_dbm",

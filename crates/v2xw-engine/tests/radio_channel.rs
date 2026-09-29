@@ -124,3 +124,175 @@ fn an_nr_run_reads_its_block_errors_from_the_link_level_curves() {
         near.len()
     );
 }
+
+// -----------------------------------------------------------------------------------------
+// radio.region and radio.channel
+// -----------------------------------------------------------------------------------------
+
+fn with_region(mut s: Scenario, region: &str) -> Scenario {
+    s.radio.region = Some(serde_json::from_value(serde_json::json!(region)).expect("a region"));
+    s
+}
+
+fn refusals(s: &Scenario) -> String {
+    v2xw_engine::scenario::validate(s)
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn tx_channels(recorder: &MemoryRecorder) -> std::collections::BTreeSet<u16> {
+    views::<v2xw_metrics::channels::NodeTxView>(recorder)
+        .iter()
+        .filter_map(|v| v.channel)
+        .collect()
+}
+
+/// Which band a run transmits in follows its region's rules, read from the rules
+/// themselves (`v2xw_radio::regulation`):
+///
+/// * unset, 802.11p takes the 2016 US band plan and the J2945/1 channel 172 — every
+///   existing DSRC run, unchanged;
+/// * `us` refuses 802.11p, because FCC 20-164 gave channel 172 to Wi-Fi and FCC 24-123
+///   ends DSRC, and says so;
+/// * `eu` puts ITS-G5 on 5.895-5.905 GHz (channel 180), LTE-V2X on the 10 MHz channel
+///   182 under ETSI EN 303 613's pool (five 10-PRB sub-channels) and NR-V2X on 178 in
+///   24 PRB (two 12-PRB sub-channels);
+/// * a channel the region does not open, or a 20 MHz US profile in Europe, is refused.
+///
+/// The counterexample is the engine before `radio.region`: every run was on 172 or 183
+/// whatever it named, and neither key existed.
+#[test]
+fn the_region_decides_the_channel_and_refuses_what_its_rules_forbid() {
+    let base = grid(3_000.0, 3.0);
+
+    let (_, dsrc) = run_recorded(base.clone());
+    assert_eq!(tx_channels(&dsrc), [172].into_iter().collect());
+
+    let us_dsrc = with_region(base.clone(), "us");
+    let why = refusals(&us_dsrc);
+    assert!(
+        why.contains("radio.region") && why.contains("FCC 24-123") && why.contains("us-2016"),
+        "{why}"
+    );
+
+    let (_, g5) = run_recorded(with_region(base.clone(), "eu"));
+    assert_eq!(tx_channels(&g5), [180].into_iter().collect());
+
+    let (lte, lte_rec) = run_recorded(with_region(with_rat(base.clone(), "lte-v2x-pc5"), "eu"));
+    let sl = lte.sidelink.as_ref().expect("a sidelink report");
+    assert_eq!(
+        (sl.profile.as_str(), sl.region.as_str(), sl.channel, sl.channel_mhz, sl.subchannels),
+        ("etsi-en303613", "eu", 182, 10, 5)
+    );
+    assert_eq!(tx_channels(&lte_rec), [182].into_iter().collect());
+
+    let (nr, _) = run_recorded(with_region(with_rat(base.clone(), "nr-v2x-pc5"), "eu"));
+    let sl = nr.sidelink.as_ref().expect("a sidelink report");
+    assert_eq!(
+        (sl.profile.as_str(), sl.channel, sl.channel_mhz, sl.subchannels),
+        ("etsi-en303798", 178, 10, 2)
+    );
+
+    // The US C-V2X default is SAE J3161/1's 20 MHz channel 183.
+    let (us_lte, _) = run_recorded(with_rat(base.clone(), "lte-v2x-pc5"));
+    let sl = us_lte.sidelink.as_ref().expect("a sidelink report");
+    assert_eq!(
+        (sl.profile.as_str(), sl.region.as_str(), sl.channel, sl.channel_mhz, sl.subchannels),
+        ("sae-j3161", "us", 183, 20, 10)
+    );
+
+    // J3161/1's 20 MHz pool has no channel in Europe's 10 MHz plan.
+    let mut j3161_eu = with_region(with_rat(base.clone(), "lte-v2x-pc5"), "eu");
+    j3161_eu.radio.models.insert(
+        "sidelink".to_string(),
+        v2xw_engine::scenario::schema::ModelChoice {
+            id: "access/sidelink/engine-coupling".to_string(),
+            params: serde_json::json!({ "profile": "sae-j3161" }),
+        },
+    );
+    let why = refusals(&j3161_eu);
+    assert!(why.contains("sae-j3161") && why.contains("20 MHz"), "{why}");
+
+    // A channel the region does not open to the technology.
+    let mut odd = with_region(base.clone(), "eu");
+    odd.radio.channel = Some(184);
+    let why = refusals(&odd);
+    assert!(why.contains("radio.channel") && why.contains("184"), "{why}");
+    let mut odd = base;
+    odd.radio.channel = Some(169);
+    assert!(refusals(&odd).contains("radio.channel"));
+}
+
+/// A unit configured above its region's EIRP limit transmits at the limit: a US C-V2X
+/// OBU with no geofence may radiate 27 dBm toward the horizon (47 CFR §95.3204(a)(5)),
+/// so a 30 dBm radio behind a 3 dBi antenna is turned down to 24 dBm conducted, while in
+/// Europe (EN 302 571, 33 dBm) the same radio keeps its 30 dBm.
+///
+/// The counterexample is the engine before this change, which transmitted whatever
+/// `radio.devices` said.
+#[test]
+fn a_unit_above_its_regions_eirp_limit_transmits_at_the_limit() {
+    let mut s = with_rat(grid(3_000.0, 3.0), "lte-v2x-pc5");
+    s.radio.devices.obu.tx_power_dbm = 30.0;
+    let powers = |rec: &MemoryRecorder| -> std::collections::BTreeSet<i64> {
+        views::<v2xw_metrics::channels::NodeTxView>(rec)
+            .iter()
+            .filter_map(|v| v.power_dbm)
+            .map(|p| (p * 10.0).round() as i64)
+            .collect()
+    };
+    let (_, us) = run_recorded(s.clone());
+    assert_eq!(powers(&us), [240].into_iter().collect(), "US: 27 dBm EIRP less 3 dBi");
+    let (_, eu) = run_recorded(with_region(s, "eu"));
+    assert_eq!(powers(&eu), [300].into_iter().collect(), "EU: 33 dBm allows 30 + 3");
+}
+
+// -----------------------------------------------------------------------------------------
+// Congestion control per region
+// -----------------------------------------------------------------------------------------
+
+fn dcc_labels(recorder: &MemoryRecorder) -> std::collections::BTreeSet<String> {
+    views::<v2xw_metrics::channels::NodeTxView>(recorder)
+        .iter()
+        .filter_map(|v| v.dcc_state.as_deref())
+        .map(|s| s.split(' ').next().unwrap_or("").to_string())
+        .collect()
+}
+
+/// An 802.11p unit runs its region's congestion control, and every frame it sends says
+/// which: SAE J2945/1 under the US DSRC plan, ETSI TS 102 687's adaptive gatekeeper in
+/// Europe (EN 302 571 requires a DCC; TS 102 687 V1.2.1 makes the adaptive approach the
+/// normative one), and whichever `radio.models.dcc` names. A DCC on a sidelink is refused.
+///
+/// The counterexample is the engine before this change: J2945/1 everywhere, including
+/// Europe, `radio.models.dcc` refused as an unknown family, and no DCC state on `node.tx`.
+#[test]
+fn each_region_runs_its_own_congestion_control() {
+    let base = grid(3_000.0, 3.0);
+    let (_, us) = run_recorded(base.clone());
+    assert_eq!(dcc_labels(&us), ["sae-j2945-1".to_string()].into_iter().collect());
+    let (_, eu) = run_recorded(with_region(base.clone(), "eu"));
+    assert_eq!(dcc_labels(&eu), ["etsi-adaptive".to_string()].into_iter().collect());
+    let mut reactive = with_region(base.clone(), "eu");
+    reactive.radio.models.insert(
+        "dcc".to_string(),
+        v2xw_engine::scenario::schema::ModelChoice {
+            id: "dcc/etsi/reactive-ts102687".to_string(),
+            params: serde_json::json!({}),
+        },
+    );
+    let (_, re) = run_recorded(reactive);
+    assert_eq!(dcc_labels(&re), ["etsi-reactive".to_string()].into_iter().collect());
+    let mut sl = with_rat(base, "lte-v2x-pc5");
+    sl.radio.models.insert(
+        "dcc".to_string(),
+        v2xw_engine::scenario::schema::ModelChoice {
+            id: "dcc/etsi/adaptive-ts102687".to_string(),
+            params: serde_json::json!({}),
+        },
+    );
+    let why = refusals(&sl);
+    assert!(why.contains("radio.models.dcc"), "{why}");
+}

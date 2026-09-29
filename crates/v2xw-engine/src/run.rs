@@ -101,9 +101,9 @@ use v2xw_msg::generator::DccState;
 use v2xw_node::stores::VerificationState;
 use v2xw_node::{NodeConfig, RxDisposition, RxFrame, RxReport, RxStamp, StepOutcome, Transmission};
 use v2xw_radio::{
-    AccessCategory, Arrival, ChannelId, Dcc, EdcaOcbMac, FrameDescriptor, FrameKind,
+    AccessCategory, Arrival, ChannelId, EdcaOcbMac, FrameDescriptor, FrameKind,
     InterferenceSource, LossCause, Mac, MacSdu, Mcs, OfdmPhy, Phy, RadioEndpoint, RxHandle,
-    SaeJ2945Dcc, SduRef, TxHandle,
+    SduRef, TxHandle,
 };
 use v2xw_record::{Cadence, Profile};
 use v2xw_world::World;
@@ -119,10 +119,13 @@ use crate::snapshot::{ActorState, SnapshotStream};
 pub mod jamming;
 pub mod sidelink;
 
-/// The 5.9 GHz safety channel, and the frequency the link budget is evaluated at.
+/// The 5.9 GHz safety channel an 802.11p run transmits on when no regulation resolves,
+/// and the frequency the link budget is evaluated at.
 ///
-/// Channel 172 is the SAE J2945/1 safety channel in the US band plan; 5.86–5.93 GHz maps
-/// it to 5.860 GHz + 5 MHz × (n − 172) with 10 MHz channels, which puts 172 at 5.860 GHz.
+/// Channel 172 is the SAE J2945/1 safety channel in the 2016 US band plan; 5.86–5.93 GHz
+/// maps it to 5.860 GHz + 5 MHz × (n − 172) with 10 MHz channels, which puts 172 at
+/// 5.860 GHz. A run's own channel is the region's (`Engine::dsrc_channel`,
+/// `radio.region`); this is only the fallback a scenario the loader refused would take.
 const SAFETY_CHANNEL: ChannelId = ChannelId(172);
 /// The centre frequency of [`SAFETY_CHANNEL`], hertz.
 const SAFETY_FREQ_HZ: f64 = 5.860e9;
@@ -577,7 +580,7 @@ pub struct Engine {
     /// models no medium access: there the frame reaches the air one AIFS after signing.
     mac: Option<EdcaOcbMac>,
     /// Congestion control, at the medium and high tiers.
-    dcc: Option<SaeJ2945Dcc>,
+    dcc: Option<crate::wiring::EngineDcc>,
     weather: WeatherState,
     actors: BTreeMap<ActorId, ActorRecord>,
     /// Every hosted device: vehicles' OBUs and roadside units, and — when
@@ -668,6 +671,12 @@ pub struct Engine {
     /// land use at its centre is urban or suburban, highway otherwise (TR 37.885's two
     /// CDL environments).
     radio_env: v2xw_radio::NrEnvironment,
+    /// The regulation the radios transmit under (`radio.region`, `radio.channel`).
+    regulation: Option<crate::wiring::RadioRegulation>,
+    /// The channel an 802.11p run transmits on: the region's, 172 in the 2016 US plan.
+    dsrc_channel: ChannelId,
+    /// That channel's centre, Hz.
+    dsrc_freq_hz: f64,
     /// Rain over the link (`weather/attenuation/itu-r-p838`), at the medium and high
     /// propagation tiers.
     rain: Option<v2xw_radio::RainAttenuation>,
@@ -773,6 +782,18 @@ impl Engine {
         mobility.set_weather(crate::wiring::initial_weather(&scenario));
         let gnss = crate::wiring::build_gnss(&scenario);
         let (propagation, fading) = crate::wiring::build_radio(&scenario, &world);
+        // The band plan and power limits the radios transmit under (`radio.region`). The
+        // loader has refused a scenario with none, so `None` only stands for `hybrid`.
+        let regulation = crate::wiring::radio_regulation(&scenario).ok();
+        let (dsrc_channel, dsrc_freq_hz) = regulation
+            .filter(|r| r.technology == v2xw_radio::regulation::Technology::Ieee80211p)
+            .map_or((SAFETY_CHANNEL, SAFETY_FREQ_HZ), |r| (r.channel(), r.centre_hz()));
+        if let Some(r) = regulation.as_ref() {
+            let card = v2xw_radio::regulation::card(r.region);
+            if !registry.contains(&card.id) {
+                registry.register(card)?;
+            }
+        }
         let radio_env = match crate::wiring::world_env(&world) {
             v2xw_world::model::EnvClass::Urban | v2xw_world::model::EnvClass::Suburban => {
                 v2xw_radio::NrEnvironment::Urban
@@ -814,7 +835,7 @@ impl Engine {
             &scenario,
             &world,
             &crate::wiring::build_phy(&scenario),
-            sidelink.as_ref().map_or(SAFETY_FREQ_HZ, |sl| sl.freq_hz),
+            sidelink.as_ref().map_or(dsrc_freq_hz, |sl| sl.freq_hz),
         );
         let mut range = range;
         let detector_range_m = {
@@ -847,7 +868,7 @@ impl Engine {
         });
         let jammers = jamming::Jamming::for_scenario(
             &scenario,
-            sidelink.as_ref().map_or(SAFETY_CHANNEL, |sl| sl.channel),
+            sidelink.as_ref().map_or(dsrc_channel, |sl| sl.channel),
         );
         for card in jammers.cards() {
             if !registry.contains(&card.id) {
@@ -975,6 +996,9 @@ impl Engine {
             main_law,
             focus_law,
             radio_env,
+            regulation,
+            dsrc_channel,
+            dsrc_freq_hz,
             rain,
             detector_range_m,
             sidelink,
@@ -2184,9 +2208,13 @@ impl Engine {
     ///
     /// The state that comes out is handed to the node's message generator, which is where
     /// J2945/1 rate control belongs: `MessageSchedule::due` already refuses to generate
-    /// inside `t_off`. The engine does **not** also call [`Dcc::gate`], because that would
-    /// apply the same inter-transmission time twice; what it does read from the model is
-    /// the transmit power, in [`Engine::tx_power_dbm`].
+    /// inside `t_off`. Under J2945/1 the engine does **not** also call [`Dcc::gate`],
+    /// because that would apply the same inter-transmission time twice; what it does read
+    /// from the model is the transmit power, in [`Engine::tx_power_dbm`]. The ETSI
+    /// algorithms are gatekeepers between the network and the access layer (TS 102 687
+    /// §5.4, Annex A), so the engine asks their gate for every frame in
+    /// [`Engine::on_mac_timer`] and hands their `T_off` to the CAM generator as
+    /// `T_GenCam_Dcc` (EN 302 637-2 §6.1.3).
     fn update_dcc(&mut self, node: NodeId, now: SimTime) {
         if self.dcc.is_none() {
             return;
@@ -2194,7 +2222,7 @@ impl Engine {
         let cbr = self
             .mac
             .as_ref()
-            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, SAFETY_CHANNEL, now));
+            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, self.dsrc_channel, now));
         let neighbours = self.nodes.get(&node).map_or(0, |runtime| {
             let own = v2xw_core::NodeView::position(runtime).pos;
             runtime
@@ -2221,10 +2249,10 @@ impl Engine {
             );
             let dcc = dcc.as_mut().expect("checked above");
             if let Some(cbr) = cbr {
-                Dcc::on_cbr(dcc, &mut ctx, node, cbr);
+                dcc.on_cbr(&mut ctx, node, cbr);
             }
             dcc.on_density(&mut ctx, node, neighbours);
-            <SaeJ2945Dcc as Dcc<EngineCtx<'_>>>::state(dcc, node)
+            dcc.state::<EngineCtx<'_>>(node)
         };
         let (t_off, cbr) = state.generator_view();
         if let Some(runtime) = self.nodes.get_mut(&node) {
@@ -2876,7 +2904,7 @@ impl Engine {
         let channel = self
             .sidelink
             .as_ref()
-            .map_or(SAFETY_CHANNEL, |sl| sl.channel);
+            .map_or(self.dsrc_channel, |sl| sl.channel);
         let tx_power_dbm = self.tx_power_dbm(node);
         // The frame on the air is the SPDU inside a network and transport header, LLC/SNAP,
         // the 802.11 MAC header and the FCS (`v2xw_net::frame`); the PHY's air time and the
@@ -3158,14 +3186,40 @@ impl Engine {
         let rp = if is_obu {
             self.dcc
                 .as_ref()
-                .and_then(|d| <SaeJ2945Dcc as Dcc<EngineCtx<'_>>>::state(d, node).power_dbm)
+                .and_then(|d| d.state::<EngineCtx<'_>>(node).power_dbm)
         } else {
             None
         };
-        match rp {
+        let configured = match rp {
             Some(rp) => device.tx_power_dbm.min(rp - device.net_gain_db()),
             None => device.tx_power_dbm,
+        };
+        // The region's EIRP limit for this kind of station on this channel
+        // (`radio.region`): a unit configured above it transmits at it.
+        match self.regulated_eirp_dbm(node) {
+            Some(cap) => configured.min(cap - device.net_gain_db()),
+            None => configured,
         }
+    }
+
+    /// The most `node` may radiate on the run's channel, dBm EIRP, by the region's rules:
+    /// a roadside unit's limit at its antenna's height, an on-board unit's toward the
+    /// horizon, a pedestrian's or cyclist's device as a portable unit.
+    fn regulated_eirp_dbm(&self, node: NodeId) -> Option<f64> {
+        let reg = self.regulation.as_ref()?;
+        if let Some(&pos) = self.rsus.get(&node) {
+            let device = crate::wiring::device_for(&self.scenario, v2xw_radio::ActorClass::Rsu);
+            let h = device
+                .antenna_height_m
+                .unwrap_or_else(|| pos.z - self.world.ground_height_at(pos.x, pos.y));
+            return Some(reg.max_eirp_dbm(v2xw_radio::ActorClass::Rsu, h));
+        }
+        let class = self
+            .node_class
+            .get(&node)
+            .copied()
+            .unwrap_or(v2xw_radio::ActorClass::Car);
+        Some(reg.max_eirp_dbm(class, class.default_antenna_height_m()))
     }
 
     /// One node's medium-access state machine advances (invariant I-R1's access half).
@@ -3266,6 +3320,66 @@ impl Engine {
             else {
                 continue;
             };
+            // The ETSI gatekeeper (TS 102 687 §5.4, Annex A): a frame that arrives inside
+            // the unit's T_off waits for the gate to open, and one the EN 302 571 floor
+            // refuses outright (T_on above 4 ms) is dropped. J2945/1 has no gatekeeper; its
+            // rate control is the generator's inter-transmit time.
+            if self.dcc.as_ref().is_some_and(crate::wiring::EngineDcc::gates) {
+                let req = v2xw_radio::TxRequest {
+                    bytes: descriptor.bytes,
+                    mcs: descriptor.mcs,
+                    power_dbm: descriptor.tx_power_dbm,
+                    ac: SAFETY_AC,
+                    channel,
+                    air_time: air,
+                    at: now,
+                };
+                let decision = {
+                    let Engine {
+                        scheduler,
+                        rng,
+                        world,
+                        snapshot,
+                        provenance,
+                        params,
+                        dcc,
+                        ..
+                    } = self;
+                    let mut null = crate::ctx::NullRecorder::new();
+                    let mut ctx = EngineCtx::new(
+                        scheduler, rng, world, snapshot, provenance, params, &mut null,
+                    );
+                    dcc.as_mut()
+                        .expect("checked above")
+                        .gate(&mut ctx, node, &req)
+                };
+                match decision {
+                    v2xw_radio::GateDecision::Now { .. } => {}
+                    v2xw_radio::GateDecision::DelayUntil(t) => {
+                        if t <= horizon {
+                            self.pending_tx.entry(node).or_default().push((t, frame));
+                            self.scheduler.schedule(
+                                t,
+                                EventClass::MacTimer,
+                                Event::MacTimer {
+                                    node,
+                                    channel: channel.0,
+                                },
+                            );
+                        } else {
+                            // The gate opens after the run: the frame never goes on air.
+                            self.frames.remove(&frame);
+                        }
+                        continue;
+                    }
+                    v2xw_radio::GateDecision::Drop => {
+                        self.frames.remove(&frame);
+                        self.report.mac_drops += 1;
+                        self.mac_window.entry(node).or_default().drops += 1;
+                        continue;
+                    }
+                }
+            }
             let window = self.mac_window.entry(node).or_default();
             window.frames += 1;
             window.bytes += u64::from(descriptor.bytes);
@@ -3768,7 +3882,7 @@ impl Engine {
             if power >= v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM
                 && let Some(mac) = self.mac.as_mut()
             {
-                mac.note_busy(rx, SAFETY_CHANNEL, state.start, state.end);
+                mac.note_busy(rx, self.dsrc_channel, state.start, state.end);
             }
         }
         for (_, source, victim) in overlaps {
@@ -4215,7 +4329,19 @@ impl Engine {
         )
         .with_layers(&state.layers, state.cert_bytes)
         .with_content(Some(hex_digest(&state.signer.0[..])), state.content.clone())
-        .with_radio(mcs_index, Some(radio));
+        .with_radio(mcs_index, Some(radio))
+        .with_dcc(
+            self.dcc
+                .as_ref()
+                .filter(|_| {
+                    !self.rsus.contains_key(&state.tx)
+                        && !matches!(
+                            self.node_class.get(&state.tx),
+                            Some(v2xw_radio::ActorClass::Pedestrian | v2xw_radio::ActorClass::Bicycle)
+                        )
+                })
+                .map(|d| d.label::<EngineCtx<'_>>(state.tx)),
+        );
         // The frame's own octets, for a viewer that decodes them (`RunRecorder::tap_frame`).
         // Not a record: nothing recorded, counted or digested changes.
         if let Some(spdu) = state.spdu.as_deref() {
@@ -5313,7 +5439,7 @@ impl Engine {
     fn carrier_hz(&self) -> f64 {
         self.sidelink
             .as_ref()
-            .map_or(SAFETY_FREQ_HZ, |sl| sl.freq_hz)
+            .map_or(self.dsrc_freq_hz, |sl| sl.freq_hz)
     }
 
     /// One node's radio endpoint at an instant: its antenna position and class.
@@ -5414,9 +5540,9 @@ impl Engine {
         for node in nodes {
             let (channel, cbr, depth) = if let Some(mac) = self.mac.as_ref() {
                 (
-                    SAFETY_CHANNEL.0,
-                    Mac::<EngineCtx<'_>>::cbr(mac, node, SAFETY_CHANNEL, now),
-                    mac.queue_len(node, SAFETY_CHANNEL, SAFETY_AC) as u64,
+                    self.dsrc_channel.0,
+                    Mac::<EngineCtx<'_>>::cbr(mac, node, self.dsrc_channel, now),
+                    mac.queue_len(node, self.dsrc_channel, SAFETY_AC) as u64,
                 )
             } else if let Some(sl) = self.sidelink.as_ref() {
                 (

@@ -263,6 +263,13 @@ impl NodeTx {
         })
     }
 
+    /// Fills in the transmitter's congestion-control state when the frame went out.
+    #[must_use]
+    pub fn with_dcc(mut self, state: Option<String>) -> Self {
+        self.0.dcc_state = state;
+        self
+    }
+
     /// Fills in how the access layer sent the frame.
     #[must_use]
     ///

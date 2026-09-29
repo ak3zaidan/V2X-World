@@ -539,6 +539,44 @@ pub struct Radio {
     /// How far a transmission is followed: derived from the link budget.
     #[serde(default)]
     pub range: CandidateRange,
+    /// The regulatory region: its band plan, the channel each technology deploys on and
+    /// the EIRP limits (`v2xw_radio::regulation`). Unset, the region the technology was
+    /// deployed under: `us-2016` for 802.11p (the DSRC band plan SAE J2945/1 was written
+    /// for), `us` for LTE-V2X and NR-V2X (FCC 24-123).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<RadioRegion>,
+    /// The channel number within the region's band plan. Unset, the region's deployment
+    /// channel for the technology.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<u16>,
+}
+
+/// A regulatory region: the band plan and power limits a run transmits under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RadioRegion {
+    /// The United States under FCC 24-123 (2024): LTE-V2X and NR-V2X in 5.895-5.925 GHz,
+    /// no DSRC.
+    Us,
+    /// The US DSRC band plan before FCC 20-164 (47 CFR §90.377, 2017): 802.11p, the BSM
+    /// on channel 172.
+    #[serde(rename = "us-2016")]
+    Us2016,
+    /// Europe under ETSI EN 302 571: 10 MHz channels in 5.855-5.925 GHz for ITS-G5,
+    /// LTE-V2X and NR-V2X alike.
+    Eu,
+}
+
+impl RadioRegion {
+    /// The radio crate's region.
+    #[must_use]
+    pub const fn regulation(self) -> v2xw_radio::regulation::Region {
+        match self {
+            RadioRegion::Us => v2xw_radio::regulation::Region::Us,
+            RadioRegion::Us2016 => v2xw_radio::regulation::Region::Us2016,
+            RadioRegion::Eu => v2xw_radio::regulation::Region::Eu,
+        }
+    }
 }
 
 /// The radio hardware of each kind of node (04-models.md §3.7).

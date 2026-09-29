@@ -696,6 +696,6 @@ impl Engine {
     pub(super) fn access_channel(&self) -> ChannelId {
         self.sidelink
             .as_ref()
-            .map_or(super::SAFETY_CHANNEL, |sl| sl.channel)
+            .map_or(self.dsrc_channel, |sl| sl.channel)
     }
 }

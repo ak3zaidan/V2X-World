@@ -318,6 +318,15 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the candidate-range cap",
     },
+    // The 5.9 GHz ITS band's IEEE channel numbers, 5.850-5.925 GHz: 170 to 184. Which of
+    // them a technology may use is the region's rule, checked separately.
+    Bound {
+        path: "radio.channel",
+        lo: 170.0,
+        hi: 184.0,
+        exclusive_lo: false,
+        what: "the ITS channel number",
+    },
     Bound {
         path: "security.pseudonym_change.period_s",
         lo: 1.0,
@@ -693,8 +702,10 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "radio.rat",
         status: Status::Wired,
-        note: "The radio access technology. dsrc-80211p runs CSMA/CA with J2945/1 \
-               congestion control on channel 172. lte-v2x-pc5 runs Mode 4 sensing-based \
+        note: "The radio access technology. dsrc-80211p runs CSMA/CA on the region's \
+               channel (172 in the 2016 US plan, 180 in Europe) with its congestion \
+               control: SAE J2945/1 in the US, ETSI TS 102 687's adaptive gatekeeper in \
+               Europe. lte-v2x-pc5 runs Mode 4 sensing-based \
                semi-persistent scheduling on the SAE J3161/1 US profile: channel 183, \
                20 MHz, ten 10-PRB sub-channels, MCS 7, probResourceKeep 0.8, and the \
                J3161/1 CR limits enforced per CBR zone (values second-hand, via Abrar et \
@@ -736,8 +747,8 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "radio.tiers.mac",
         status: Status::Wired,
         note: "Medium-access fidelity. Abstract has no MAC (reception comes from a \
-               table); medium and high run the same 802.11p EDCA/OCB CSMA model with \
-               J2945/1 congestion control, so high adds nothing over medium.",
+               table); medium and high run the same 802.11p EDCA/OCB CSMA model with the \
+               region's congestion control, so high adds nothing over medium.",
     },
     KeyStatus {
         path: "radio.tiers.focus",
@@ -758,13 +769,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                tr37885, v2v-urban-geometric), fading (none, nakagami-m with a preset), per (the \
                802.11p error model's implementation loss), phy (the 802.11p sensitivity table), \
                obstacle (the Sommer building row) and sidelink \
-               (access/sidelink/engine-coupling: profile sae-j3161 or \
+               (access/sidelink/engine-coupling: profile sae-j3161, etsi-en303613 or \
                molina-masegosa-2017 for LTE, etsi-en303798 or todisco-2021 for NR; mcs, \
                an index into the profile's table (NR etsi-en303798: TS 38.214 Table \
                5.1.3.1-2, 0-27); max_transmissions for blind \
                HARQ retransmissions, 1-2 LTE, 1-3 NR; congestion_control \
-               etsi-ts-103-574, sae-j3161 or off). Unknown families, ids and values are \
-               refused.",
+               etsi-ts-103-574, sae-j3161 or off), and dcc for 802.11p \
+               (dcc/sae/j2945-1-rate-power, dcc/etsi/adaptive-ts102687 or \
+               dcc/etsi/reactive-ts102687; the region's by default). Unknown families, \
+               ids and values are refused.",
     },
     KeyStatus {
         path: "radio.devices",
@@ -786,6 +799,30 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                it is counted as interference, not a reception attempt; the reference is \
                fixed, so the links a run attempts do not move with the transmit power. An optional cap bounds the fully evaluated range; beyond it, \
                line-of-sight receivers still get the frame's energy as interference.",
+    },
+    KeyStatus {
+        path: "radio.region",
+        status: Status::Wired,
+        note: "The regulation the radios transmit under: the channel each technology \
+               deploys on, and the EIRP each unit may radiate there. us is FCC 24-123 \
+               (2024): LTE-V2X and NR-V2X on the 20 MHz channel 5.905-5.925 GHz, an OBU \
+               without a geofence at 27 dBm EIRP toward the horizon, a roadside unit at \
+               33 dBm less 20 log10(h/8) above 8 m; 802.11p is refused, because FCC \
+               20-164 gave channel 172 to Wi-Fi and FCC 24-123 cancels the last DSRC \
+               licences on 13 December 2026. us-2016 is the DSRC band plan SAE J2945/1 was \
+               written for (47 CFR 90.377, 2017): 802.11p on channel 172, roadside units \
+               at 33 dBm, portable units at 1 mW. eu is ETSI EN 302 571: 10 MHz channels, \
+               33 dBm EIRP; ITS-G5 on 5.895-5.905 GHz, LTE-V2X on 5.905-5.915 GHz, NR-V2X \
+               on 5.885-5.895 GHz. Unset, us-2016 for 802.11p and us otherwise. A \
+               configured power above the limit is lowered to it.",
+    },
+    KeyStatus {
+        path: "radio.channel",
+        status: Status::Wired,
+        note: "The IEEE channel number within the region's band plan (170-184); unset, the \
+               region's deployment channel. Only channels the region opens to the \
+               technology are accepted, and the sidelink's resource pool is sized to the \
+               channel's width.",
     },
     // --- network -----------------------------------------------------------
     KeyStatus {
@@ -1868,6 +1905,16 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
              dsrc-80211p, lte-v2x-pc5 or nr-v2x-pc5"
                 .to_string(),
         ));
+    } else {
+        // `radio.region` and `radio.channel`: the technology must have a channel in the
+        // region, a named channel must be one the region opens to it, and a sidelink
+        // profile fixed to one width needs a channel of that width.
+        if let Some(ch) = s.radio.channel {
+            bounded_at("radio.channel", "radio.channel", f64::from(ch), e);
+        }
+        if let Err((path, why)) = crate::wiring::radio_regulation(s) {
+            e.push(conflict(path, why));
+        }
     }
 
     // 03-interfaces.md §13's own example, and 02-architecture.md §7.1's ladder: a

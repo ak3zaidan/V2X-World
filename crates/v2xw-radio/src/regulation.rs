@@ -38,7 +38,7 @@
 //! (§95.3204(a)) — and a vehicle's link to another vehicle *is* within ±5° of the horizon,
 //! so 27 dBm is the operative figure.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use v2xw_core::card::{
     Determinism, Equation, Family, ModelCard, Parameter, Source, SourceKind, Tier, Validation,
@@ -47,7 +47,7 @@ use v2xw_core::card::{
 use v2xw_core::math;
 
 /// A regulatory region.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Region {
     /// The United States under FCC 24-123: C-V2X in 5.895-5.925 GHz.
