@@ -128,6 +128,10 @@ pub struct SlArrival {
     pub rx_transmitting: bool,
     /// Co-slot transmissions at this receiver.
     pub interferers: Vec<SlInterferer>,
+    /// The link's environment, state and relative speed, for an error model whose
+    /// curves depend on them ([`crate::bler_nr`]); `None` reads the model's reference
+    /// curve.
+    pub condition: Option<crate::bler_nr::NrLinkCondition>,
 }
 
 impl SlArrival {
@@ -149,6 +153,7 @@ impl SlArrival {
             bytes: 190,
             rx_transmitting: false,
             interferers: Vec::new(),
+            condition: None,
         }
     }
 }
@@ -231,11 +236,12 @@ impl SidelinkPhy {
     /// The NR model's id.
     pub const ID_NR: &'static str = "phy/nr-v2x/mode2";
 
-    /// The PHY for a pool at a tier, with the error model the pool's MCS is best covered
-    /// by ([`SidelinkErrorModel::best_for`]).
+    /// The PHY for a pool at a tier, with the error model the pool is best covered by
+    /// ([`SidelinkErrorModel::for_pool`]: the NR link-level lookups for an NR pool whose
+    /// MCS they carry, [`SidelinkErrorModel::best_for`] otherwise).
     #[must_use]
     pub fn new(tier: Tier, pool: PoolConfig) -> Self {
-        let error = SidelinkErrorModel::best_for(pool.mcs);
+        let error = SidelinkErrorModel::for_pool(&pool);
         Self {
             card: card(tier, &pool, &error),
             tier,
@@ -563,7 +569,7 @@ impl SidelinkPhy {
                 };
             }
         }
-        if rng.bool(self.error.tb_bler(effective)) {
+        if rng.bool(self.error.tb_bler_in(effective, arrival.condition.as_ref())) {
             return SlDecode {
                 effective_sinr_db: effective,
                 soft_sinr_lin: soft,
@@ -1095,13 +1101,20 @@ mod tests {
         // −101.6 dBm and the 10 % point 8.7 dB above it, i.e. −92.9 dBm, which is *below*
         // the −90.4 dBm receiver sensitivity. For the reference mapping the front end's
         // sensitivity spec, not thermal noise, sets the range, so every noise-limited
-        // loss is reported P_SEN. NR MCS 21 needs about 17.25 dB, i.e. −84.4 dBm, and
-        // there the noise-limited region is real.
+        // loss is reported P_SEN. 256QAM-948 (TS 38.214 Table 5.1.3.1-2 MCS 27) needs
+        // about 24.3 dB in the transcribed NR link-level curve (`bler_nr`), i.e. about
+        // −78 dBm in one 10-PRB sub-channel at 15 kHz, and there the noise-limited region
+        // is real. (NR MCS 21 of Table 5.1.3.1-1 served here while its curve was the
+        // spectral-efficiency fit's 17.25 dB; its transcribed 64QAM-616 curve crosses
+        // 10 % near 11 dB, under the sensitivity again.)
         let hi_se = SidelinkPhy::new(
             Tier::High,
-            PoolConfig::todisco_nr(Numerology::Mu0, nr_mcs(21).unwrap()),
+            PoolConfig::todisco_nr(
+                Numerology::Mu0,
+                crate::bler_nr::nr_mcs_table2(27).unwrap(),
+            ),
         );
-        let weak = hi_se.evaluate(&mut ctx, &arrival(-88.0));
+        let weak = hi_se.evaluate(&mut ctx, &arrival(-85.0));
         assert_eq!(weak, RxOutcome::Lost(LossCause::Fading));
 
         // P_COL: a strong co-channel interferer on the identical resource.

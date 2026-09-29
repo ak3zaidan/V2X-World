@@ -519,6 +519,13 @@ pub enum CurveProvenance {
     /// Both the point and the shape are derived: the point from [`SeGapFit`], the shape
     /// borrowed. `todo-calibrate` on both.
     FittedPointBorrowedShape,
+    /// Link-level curves transcribed point by point from a published figure, for this
+    /// MCS, in every link condition the source prints
+    /// ([`crate::bler_nr`], Lusvarghi et al. 2024).
+    Transcribed,
+    /// The same source, for an MCS it did not plot: the 10 % point interpolated in code
+    /// rate between two transcribed MCS of the modulation, the shape transcribed.
+    TranscribedInterpolated,
 }
 
 impl CurveProvenance {
@@ -529,6 +536,8 @@ impl CurveProvenance {
             CurveProvenance::Verbatim => "verbatim",
             CurveProvenance::CitedPointBorrowedShape => "cited-point-borrowed-shape",
             CurveProvenance::FittedPointBorrowedShape => "fitted-point-borrowed-shape",
+            CurveProvenance::Transcribed => "transcribed",
+            CurveProvenance::TranscribedInterpolated => "transcribed-interpolated",
         }
     }
 
@@ -536,7 +545,7 @@ impl CurveProvenance {
     /// `unvalidated`.
     #[must_use]
     pub const fn is_fully_cited(self) -> bool {
-        matches!(self, CurveProvenance::Verbatim)
+        matches!(self, CurveProvenance::Verbatim | CurveProvenance::Transcribed)
     }
 }
 
@@ -552,7 +561,17 @@ pub struct SidelinkErrorModel {
     data: BlerCurve,
     control: BlerCurve,
     provenance: CurveProvenance,
+    /// For a link-level lookup indexed by link condition: the transport block's curve in
+    /// every condition, keyed by `(environment, state, speed bucket)`. `data` is the
+    /// reference condition's (highway, line of sight, 0 km/h).
+    by_condition: Option<std::collections::BTreeMap<ConditionKey, BlerCurve>>,
 }
+
+type ConditionKey = (
+    crate::bler_nr::NrEnvironment,
+    crate::bler_nr::NrLinkState,
+    u16,
+);
 
 impl SidelinkErrorModel {
     /// The model's id when its curve is verbatim.
@@ -657,8 +676,105 @@ impl SidelinkErrorModel {
             data,
             control,
             provenance,
+            by_condition: None,
         }
     }
+
+    /// The model's id when its curves are the NR-V2X link-level lookups of Lusvarghi et
+    /// al. 2024.
+    pub const ID_LUSVARGHI: &'static str = "phy/nr-v2x/bler-lut-lusvarghi-2024";
+
+    /// The NR-V2X model for a TS 38.214 Table 5.1.3.1-2 MCS: the transport block's
+    /// transcribed curve in every link condition the source prints, and the 1st-stage
+    /// SCI's own transcribed curve for the control channel ([`crate::bler_nr`]).
+    ///
+    /// `None` when the MCS is not a Table 5.1.3.1-2 row.
+    #[must_use]
+    pub fn lusvarghi_2024(mcs: SlMcsSpec) -> Option<Self> {
+        use crate::bler_nr::{
+            NrCurveSource, NrEnvironment, NrLinkCondition, NrLinkState, sci1_curve, tb_curve,
+        };
+        let (data, src) = tb_curve(mcs, &NrLinkCondition::REFERENCE)?;
+        let provenance = match src {
+            NrCurveSource::Interpolated => CurveProvenance::TranscribedInterpolated,
+            _ => CurveProvenance::Transcribed,
+        };
+        let mut by_condition = std::collections::BTreeMap::new();
+        for env in [NrEnvironment::Highway, NrEnvironment::Urban] {
+            for state in [NrLinkState::Los, NrLinkState::NlosV, NrLinkState::Nlos] {
+                for v in [0u16, 70, 140, 280] {
+                    let cond = NrLinkCondition {
+                        environment: env,
+                        state,
+                        relative_speed_kmh: f64::from(v),
+                    };
+                    if cond.speed_bucket_kmh() != v {
+                        continue;
+                    }
+                    if let Some((c, _)) = tb_curve(mcs, &cond) {
+                        by_condition.insert((env, state, v), c);
+                    }
+                }
+            }
+        }
+        let control = sci1_curve();
+        Some(Self {
+            card: nr_card(mcs, &data, provenance, by_condition.len()),
+            data,
+            control,
+            provenance,
+            by_condition: Some(by_condition),
+        })
+    }
+
+    /// The model a sidelink pool's MCS is best covered by: the NR link-level lookups for
+    /// an NR-V2X pool whose MCS they cover, [`SidelinkErrorModel::best_for`] otherwise.
+    #[must_use]
+    pub fn for_pool(pool: &crate::sidelink::PoolConfig) -> Self {
+        if pool.rat == crate::sidelink::SlRat::NrMode2
+            && let Some(m) = Self::lusvarghi_2024(pool.mcs)
+        {
+            return m;
+        }
+        Self::best_for(pool.mcs)
+    }
+
+    /// Whether the curves vary with the link condition.
+    #[must_use]
+    pub const fn is_condition_indexed(&self) -> bool {
+        self.by_condition.is_some()
+    }
+
+    /// The transport block's error probability at an effective SINR under a link
+    /// condition. A model with one curve, or no condition, reads its reference curve.
+    #[must_use]
+    pub fn tb_bler_in(
+        &self,
+        sinr_db: f64,
+        cond: Option<&crate::bler_nr::NrLinkCondition>,
+    ) -> f64 {
+        use crate::bler_nr::{NrEnvironment, NrLinkCondition, NrLinkState};
+        if let (Some(map), Some(c)) = (self.by_condition.as_ref(), cond) {
+            // TR 37.885 has no highway NLOS CDL: a building-blocked highway link reads
+            // the urban NLOS curve, as `bler_nr::tb_curve` does.
+            let (environment, state) = match (c.environment, c.state) {
+                (NrEnvironment::Highway, NrLinkState::Nlos) => {
+                    (NrEnvironment::Urban, NrLinkState::Nlos)
+                }
+                other => other,
+            };
+            let keyed = NrLinkCondition {
+                environment,
+                state,
+                relative_speed_kmh: c.relative_speed_kmh,
+            };
+            if let Some(curve) = map.get(&(environment, state, keyed.speed_bucket_kmh())) {
+                return curve.bler(sinr_db);
+            }
+        }
+        self.data.bler(sinr_db)
+    }
+
 
     /// The shared-channel curve.
     #[must_use]
@@ -747,7 +863,11 @@ fn card(id: &'static str, curve: &BlerCurve, provenance: CurveProvenance) -> Mod
         },
     ];
     let point_source = match provenance {
-        CurveProvenance::Verbatim => huawei.clone(),
+        // The transcribed NR curves carry their own card (`nr_card`); an LTE card is
+        // never built for them.
+        CurveProvenance::Verbatim
+        | CurveProvenance::Transcribed
+        | CurveProvenance::TranscribedInterpolated => huawei.clone(),
         CurveProvenance::CitedPointBorrowedShape => wilab.clone(),
         CurveProvenance::FittedPointBorrowedShape => Source {
             kind: SourceKind::TodoCalibrate,
@@ -877,12 +997,196 @@ fn card(id: &'static str, curve: &BlerCurve, provenance: CurveProvenance) -> Mod
     card
 }
 
+fn nr_card(
+    mcs: SlMcsSpec,
+    curve: &BlerCurve,
+    provenance: CurveProvenance,
+    conditions: usize,
+) -> ModelCard {
+    let lusvarghi = Source {
+        kind: SourceKind::Paper,
+        reference: "L. Lusvarghi, B. Coll-Perales, J. Gozalvez, M. L. Merani, \"Link Level \
+                    Analysis of NR V2X Sidelink Communications\", IEEE Internet of Things \
+                    Journal, 2024, DOI 10.1109/JIOT.2024.3402551, Figs. 4, 5, 7 and 8 \
+                    (author's CC-BY version, iris.unimore.it)"
+            .to_string(),
+        accessed: Some("2026-09-29".to_string()),
+        note: Some(
+            "Transcribed from the figures' vector drawings (marker centres through the \
+             figures' own grid lines), to 0.03 dB in SNR and three significant figures in \
+             BLER. The authors' CSV dataset sits behind a registration form and was not \
+             downloaded. Link-level set-up (Table I): 5.9 GHz, 2 Tx / 4 Rx isotropic, 20 MHz \
+             at 30 kHz, 12-PRB sub-channels, PSCCH 12 PRB x 3 symbols, PSSCH-DMRS {2}, \
+             TR 37.885 CDL channels, 1e4 TBs per SNR."
+                .to_string(),
+        ),
+    };
+    let mut card = ModelCard::new(
+        SidelinkErrorModel::ID_LUSVARGHI,
+        Family::Phy,
+        "1.0.0",
+        "NR-V2X sidelink block-error rate from published link-level curves: the transport \
+         block's BLER against average SNR per MCS, environment, link state and relative \
+         speed, and the 1st-stage SCI's own curve for the control channel.",
+    );
+    card.tier = vec![Tier::Medium, Tier::High];
+    card.equations = vec![Equation {
+        name: "log-space interpolation".to_string(),
+        latex_or_text: "log10 BLER(γ) linear in γ between transcribed points; BLER = 1 \
+                        below the first and held at the last transcribed value above the \
+                        last (an error floor is kept, not extrapolated away)"
+            .to_string(),
+        notes: Some(format!(
+            "MCS {} (Qm {}, R {}/1024): {} link conditions carried; reference curve {}.",
+            mcs.label, mcs.qm, mcs.r_1024, conditions, curve.label
+        )),
+    }];
+    card.parameters = vec![Parameter {
+        name: "curve".to_string(),
+        unit: "-".to_string(),
+        default: serde_json::json!(curve.label.clone()),
+        range: None,
+        source: if provenance.is_fully_cited() {
+            lusvarghi.clone()
+        } else {
+            Source {
+                kind: SourceKind::TodoCalibrate,
+                reference: "10 % point interpolated linearly in code rate between the two \
+                            nearest transcribed MCS of the same modulation; shape \
+                            transcribed for the modulation"
+                    .to_string(),
+                accessed: None,
+                note: Some(
+                    "The paper plots 12 of Table 5.1.3.1-2's 28 rows; the rest are in the \
+                     authors' dataset."
+                        .to_string(),
+                ),
+            }
+        },
+        calibration: (!provenance.is_fully_cited()).then(|| {
+            "Load the authors' released CSV for this MCS in place of the interpolation."
+                .to_string()
+        }),
+    }];
+    card.assumptions = vec![
+        "The curves are BLER against the average SNR of a fading CDL channel: they include \
+         the channel's small-scale fading, so the link budget that feeds them should not \
+         draw a second fast-fading sample."
+            .to_string(),
+        "The 2 Tx / 4 Rx antenna configuration of TR 37.885's evaluation is the \
+         source's; the SNR is per receive antenna, so the receive-diversity gain of four \
+         branches is inside the curve."
+            .to_string(),
+        "Highway relative speeds read the nearest simulated speed (0, 70, 140, 280 km/h); \
+         urban links read the 0 km/h urban curves, the only urban speed the paper prints."
+            .to_string(),
+        "One sub-channel's curve is used for every allocation size; the paper's Fig. 9 \
+         shows N_sub moves only 256-QAM (by up to 2 dB at N_sub 4)."
+            .to_string(),
+        "A highway link blocked by a building reads the urban NLOS curve: TR 37.885 has \
+         no highway NLOS CDL."
+            .to_string(),
+    ];
+    card.limitations = vec![
+        "Transcription from figures: at BLER below 1e-3 a point is one to ten errors in \
+         the source's 1e4 blocks, so the tail is coarse."
+            .to_string(),
+        "The 2nd-stage SCI is not decoded separately; its curve lies between the SCI's \
+         and the TB's (Fig. 4) and a TB decode implies it."
+            .to_string(),
+    ];
+    card.sources = vec![lusvarghi];
+    card.validation = Validation {
+        status: if provenance.is_fully_cited() {
+            ValidationStatus::LiteratureChecked
+        } else {
+            ValidationStatus::Unvalidated
+        },
+        references: vec![Source::new(
+            SourceKind::Paper,
+            "Lusvarghi 2024 §VI's own statements: QPSK-308 at 1 % from -1.8 dB (0 km/h) \
+             to 5.5 dB (280 km/h); 16QAM-658 about 7 dB above QPSK-602 at 1 %; urban \
+             NLOSv and NLOS 2 and 4 dB above LOS for 16QAM-490 at 1 %",
+        )],
+        tests: vec![
+            "qpsk_308_moves_as_the_paper_says_with_speed".to_string(),
+            "sixteen_qam_658_needs_seven_db_more_than_qpsk_602".to_string(),
+            "the_channel_state_costs_what_the_paper_says".to_string(),
+            "the_high_speed_error_floors_are_kept".to_string(),
+        ],
+    };
+    card.determinism = Determinism {
+        uses_rng: false,
+        rng_domains: Vec::new(),
+    };
+    card
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn the_nr_model_reads_its_curve_by_link_condition() {
+        use crate::bler_nr::{NrEnvironment, NrLinkCondition, NrLinkState, nr_mcs_table2};
+        let m = SidelinkErrorModel::lusvarghi_2024(nr_mcs_table2(7).unwrap()).unwrap();
+        assert_eq!(m.provenance(), CurveProvenance::Transcribed);
+        assert!(m.is_condition_indexed());
+        assert!(m.card().validate().is_ok(), "{:?}", m.card().validate());
+        // 16QAM-490 at 6 dB: 0.0149 highway LOS 0 km/h, 0.0865 at 70 km/h, 0.134 highway
+        // NLOSv, 0.26 urban NLOS.
+        let at = |environment, state, relative_speed_kmh: f64| {
+            m.tb_bler_in(
+                6.0,
+                Some(&NrLinkCondition {
+                    environment,
+                    state,
+                    relative_speed_kmh,
+                }),
+            )
+        };
+        assert!((m.tb_bler_in(6.0, None) - 0.0149).abs() < 1e-9);
+        assert!((at(NrEnvironment::Highway, NrLinkState::Los, 0.0) - 0.0149).abs() < 1e-9);
+        assert!((at(NrEnvironment::Highway, NrLinkState::Los, 80.0) - 0.0865).abs() < 1e-9);
+        assert!((at(NrEnvironment::Highway, NrLinkState::NlosV, 0.0) - 0.134).abs() < 1e-9);
+        assert!((at(NrEnvironment::Urban, NrLinkState::Nlos, 50.0) - 0.26).abs() < 1e-9);
+        // The control channel is the 1st-stage SCI's own curve, not an offset TB curve.
+        assert!((m.sci_bler(-8.0) - 0.165).abs() < 1e-9);
+        // A model with a single curve ignores the condition.
+        let lte = SidelinkErrorModel::r1_160284_qpsk_r070();
+        let c = NrLinkCondition {
+            environment: NrEnvironment::Urban,
+            state: NrLinkState::Nlos,
+            relative_speed_kmh: 100.0,
+        };
+        assert_eq!(lte.tb_bler_in(8.0, Some(&c)), lte.tb_bler(8.0));
+    }
+
+    #[test]
+    fn an_nr_pool_takes_the_link_level_lookups_and_an_lte_pool_does_not() {
+        use crate::bler_nr::nr_mcs_table2;
+        use crate::sidelink::{Numerology, PoolConfig};
+        let nr = PoolConfig::etsi_en303798_nr(nr_mcs_table2(7).unwrap());
+        assert_eq!(
+            SidelinkErrorModel::for_pool(&nr).card().id,
+            SidelinkErrorModel::ID_LUSVARGHI
+        );
+        // A Table 5.1.3.1-1 row that Table 2 does not have keeps the fit.
+        let t1 = PoolConfig::todisco_nr(Numerology::Mu1, crate::sidelink::nr_mcs(9).unwrap());
+        assert_eq!(
+            SidelinkErrorModel::for_pool(&t1).provenance(),
+            CurveProvenance::FittedPointBorrowedShape
+        );
+        let lte = PoolConfig::sae_j3161(crate::sidelink::LTE_MCS7_J3161);
+        assert_ne!(
+            SidelinkErrorModel::for_pool(&lte).card().id,
+            SidelinkErrorModel::ID_LUSVARGHI
+        );
+    }
+
+    #[test]
     fn the_r1_160284_lut_reproduces_every_printed_point() {
+
         let c = BlerCurve::r1_160284_qpsk_r070();
         for (snr, bler) in [
             (0.0, 1.0),

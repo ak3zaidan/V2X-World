@@ -1050,6 +1050,7 @@ pub fn sweep_sidelink(sweep: &HighwaySweep, pool: PoolConfig, params: SpsParams)
                     bytes: tx.bytes,
                     rx_transmitting,
                     interferers: interferers.clone(),
+                    condition: None,
                 };
                 let outcome = phy.evaluate(&mut ctx, &arrival);
                 bins[bin].evaluated += 1;

@@ -33,6 +33,7 @@
 //! | Jammers: constant, pulsed, reactive, and the noise rise they cause | [`jamming`] | 04-models.md §12.3 |
 //! | Sidelink resource structure: numerologies, sub-channels, MCS, SCI, IBE, CBR/CR | [`sidelink`] | 04-models.md §5.1, §5.2 |
 //! | The C-V2X block-error lookups and the spectral-efficiency fit | [`bler`] | 04-models.md §5.1 |
+//! | The NR-V2X link-level lookups transcribed from Lusvarghi et al. 2024 | [`bler_nr`] | 04-models.md §5.2 |
 //! | Sensing-based semi-persistent scheduling, Mode 4 and Mode 2 | [`sps`] | 04-models.md §5.1, §5.2 |
 //! | The sidelink PHY: per-sub-channel SINR, in-band emissions, SCI decoding | [`cv2x`] | 04-models.md §5.1, §5.2, §5.4 |
 //! | The cellular Uu link, handover, outage and store-and-forward | [`cellular`] | 04-models.md §10.1 |
@@ -102,6 +103,7 @@
 
 pub mod abstract_tier;
 pub mod bler;
+pub mod bler_nr;
 pub mod budget;
 pub mod cellular;
 pub mod cv2x;
@@ -179,6 +181,9 @@ pub use terrain::{
     radio_line_height_m,
 };
 
+pub use bler_nr::{
+    NrCurveSource, NrEnvironment, NrLinkCondition, NrLinkState, nr_mcs_table2,
+};
 pub use bler::{
     BlerCurve, CurveProvenance, SeAnchor, SeGapFit, SidelinkErrorModel, WILAB_LTE_SINR_AT_10PC,
     WilabRow, cited_anchors, wilab_sinr_at_10pc,
