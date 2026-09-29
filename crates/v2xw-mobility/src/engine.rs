@@ -643,6 +643,10 @@ pub struct NativeMobility {
     actors: BTreeMap<ActorId, Actor>,
     published: BTreeMap<ActorId, Kinematics>,
     closed: BTreeSet<LaneId>,
+    /// How many times a closure command has changed [`Self::closed`]: the router's cost
+    /// generation ([`DynamicCost::with_generation`]). Counting the closed lanes instead
+    /// missed a reopen and a close in the same step.
+    closure_changes: u64,
     pending: Vec<MobilityCommand>,
     /// Trips whose origin had no room when they arrived, with the instant they first
     /// asked, oldest first (not in the legacy parity mode).
@@ -746,6 +750,7 @@ impl NativeMobility {
             actors: BTreeMap::new(),
             published: BTreeMap::new(),
             closed: BTreeSet::new(),
+            closure_changes: 0,
             pending: Vec::new(),
             waiting: Vec::new(),
             weather: WeatherState::CLEAR,
@@ -1037,10 +1042,13 @@ impl NativeMobility {
                     self.actors.remove(&actor);
                 }
                 MobilityCommand::Closure { lane, closed } => {
-                    if closed {
-                        self.closed.insert(lane);
+                    let changed = if closed {
+                        self.closed.insert(lane)
                     } else {
-                        self.closed.remove(&lane);
+                        self.closed.remove(&lane)
+                    };
+                    if changed {
+                        self.closure_changes += 1;
                     }
                 }
                 MobilityCommand::Spawn(trip) => {
@@ -1060,7 +1068,7 @@ impl NativeMobility {
         for lane in &self.closed {
             costs.set_closed(*lane, true);
         }
-        costs
+        costs.with_generation(self.closure_changes)
     }
 
     /// Pass 2: routes a trip and puts it on the road, or drops it.
@@ -2427,12 +2435,7 @@ impl Mobility for NativeMobility {
         let dt_s = dt.as_secs_f64();
 
         // --- pass 1: commands ---------------------------------------------
-        let commanded: Vec<ActorId> = {
-            let world = ctx.world();
-            let world: &World = world;
-            let _ = world;
-            self.apply_commands(&*ctx, t0)
-        };
+        let commanded: Vec<ActorId> = self.apply_commands(&*ctx, t0);
 
         // --- pass 2: spawn -------------------------------------------------
         let mut spawned: Vec<ActorSpawn> = Vec::new();
@@ -2811,17 +2814,6 @@ impl Mobility for NativeMobility {
             // further back than the model asked, never closer.
             if along && actor.accel_mps2 < 0.0 {
                 accel = accel.min(actor.accel_mps2 + RELEASE_JERK_MPS3 * dt_s);
-            }
-            // DEBUG-TRACE
-            if std::env::var("V2XW_TRACE_ACTOR").ok().and_then(|v| v.parse::<u32>().ok()) == Some(id.index()) {
-                eprintln!("TRACE t={:.1} a={} lane={} s={:.2} v={:.2} prev_a={:.2} -> accel={:.2} leader={:?} nbr={:?} nearest={:?} stopline={:?} v0={:.2}",
-                    ns_to_secs(t0), id.index(), actor.lane.index(), actor.s_m, actor.speed_mps, actor.accel_mps2, accel,
-                    leader.map(|l| (l.vehicle.map(|v| v.actor.index()), (l.gap_m*100.0).round()/100.0, (l.speed_mps*100.0).round()/100.0)),
-                    nbrs.leader.map(|l| (l.vehicle.map(|v| v.actor.index()), (l.gap_m*100.0).round()/100.0)),
-                    nearest_vehicle.map(|l| (l.vehicle.map(|v| v.actor.index()), (l.gap_m*100.0).round()/100.0)),
-                    binding_stop_line, v0);
-                eprintln!("TRACE   route_idx={} route={:?} lanelimit={:.2} ",
-                    actor.route_index, actor.route.lanes.iter().skip(actor.route_index).take(4).map(|l| l.index()).collect::<Vec<_>>(), lane_view.speed_limit_mps);
             }
             let v0_effective = v0.min(lane_view.speed_limit_mps);
             decisions.push(Decision {
