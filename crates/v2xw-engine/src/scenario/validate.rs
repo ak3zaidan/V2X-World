@@ -716,7 +716,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                of sight, TR 37.885 blockage from the vehicles actually on the path, the \
                Mangel 2011 model round a traced street corner, TR 37.885 NLOS where no \
                single corner connects. Both take Nakagami fading unless radio.models \
-               says otherwise. High is the default: on a street grid it is the law best \
+               says otherwise, except on an LTE-V2X or NR-V2X run, whose block-error \
+               curves were measured over fading channels and already contain it. High \
+               is the default: on a street grid it is the law best \
                supported by the intersection measurements it was fitted to, at about 1.8 \
                times medium's cost. Rain applies at medium and high.",
     },

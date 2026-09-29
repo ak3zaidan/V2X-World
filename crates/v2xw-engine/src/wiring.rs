@@ -1113,8 +1113,20 @@ pub fn build_radio_at(
         }
     };
     let models = radio_models(scenario).unwrap_or_default();
+    // A sidelink's block errors come from link-level curves — Huawei R1-160284, the
+    // WiLabV2Xsim tables, Lusvarghi 2024 — each simulated over a fading channel and
+    // printed against the *average* SNR, so the small-scale fading is already inside
+    // them. A second Nakagami draw per packet would count it twice and steepen every
+    // delivery-versus-distance curve; a sidelink run therefore draws none unless
+    // `radio.models.fading` asks for it. 802.11p's error model is computed for an AWGN
+    // channel, so it keeps its fading draw.
+    let sidelink = matches!(
+        scenario.radio.rat,
+        crate::scenario::schema::Rat::LteV2xPc5 | crate::scenario::schema::Rat::NrV2xPc5
+    );
     let default_fading = match tier {
         v2xw_core::card::Tier::Abstract => FadingChoice::None,
+        _ if sidelink => FadingChoice::None,
         _ => FadingChoice::Nakagami(v2xw_radio::NakagamiPreset::FixedMedium),
     };
     let fading: Box<dyn BoxedFading> = match models.fading.unwrap_or(default_fading) {
