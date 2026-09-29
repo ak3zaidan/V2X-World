@@ -80,6 +80,8 @@ const UNDERGROUND_Z_M: f64 = 3.0;
 pub struct AuditActor {
     /// Which actor.
     pub actor: ActorId,
+    /// Its class.
+    pub class: crate::VehicleClass,
     /// Body length, metres.
     pub length_m: f64,
     /// Body width, metres.
@@ -1748,6 +1750,7 @@ mod tests {
         let rear = (s - 4.5).max(0.0);
         AuditActor {
             actor: ActorId::new(id),
+            class: crate::VehicleClass::Passenger,
             length_m: 4.5,
             width_m: 1.8,
             min_gap_m: 2.0,

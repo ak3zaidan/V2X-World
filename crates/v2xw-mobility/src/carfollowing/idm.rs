@@ -426,6 +426,30 @@ impl Idm {
         a_lead_mps2: f64,
         driver: &DriverProfile,
     ) -> f64 {
+        self.accel_with(
+            v_mps,
+            v0_mps,
+            gap_m,
+            v_lead_mps,
+            a_lead_mps2,
+            driver,
+            self.params.enhanced,
+        )
+    }
+
+    /// [`Idm::accel_full`] with the Kesting 2010 enhancement on or off whatever the
+    /// parameters say.
+    #[allow(clippy::too_many_arguments)]
+    fn accel_with(
+        &self,
+        v_mps: f64,
+        v0_mps: f64,
+        gap_m: f64,
+        v_lead_mps: f64,
+        a_lead_mps2: f64,
+        driver: &DriverProfile,
+        enhanced: bool,
+    ) -> f64 {
         let p = &self.params;
         let v0 = v0_mps.max(p.v0_floor_mps);
         let a_max = driver.max_accel_mps2;
@@ -444,7 +468,7 @@ impl Idm {
             };
             let s_star = driver.min_gap_m + p.s1_m * math::sqrt(v_mps / v0) + interaction;
             let idm = a_max * (free - (s_star / gap) * (s_star / gap));
-            if p.enhanced {
+            if enhanced {
                 self.enhanced(idm, v_mps, gap, v_lead_mps, a_lead_mps2, driver)
             } else {
                 idm
@@ -481,7 +505,11 @@ impl Idm {
         let b = driver.comfort_decel_mps2;
         let a_tilde = a_lead.min(a_max);
         let dv = v - v_lead;
-        let cah = if v_lead * dv <= -2.0 * gap * a_tilde {
+        // Strictly less, as the reference implementation writes it
+        // (traffic-simulation.de, `js/models.js`, `ACC.calcAcc`: `vl*(v-vl) < -2*s*al`):
+        // with `<=` a standing leader that is not accelerating (`v_l = ã_l = 0`) fell into
+        // the first branch's 0/0 instead of the second's kinematic `−v²/(2s)`.
+        let cah = if v_lead * dv < -2.0 * gap * a_tilde {
             let denom = v_lead * v_lead - 2.0 * gap * a_tilde;
             if denom.abs() < f64::EPSILON {
                 idm
@@ -507,13 +535,15 @@ impl v2xw_core::model::Model for Idm {
     }
 }
 
-impl CarFollowing for Idm {
-    fn accel(
+impl Idm {
+    /// The trait's acceleration, with the enhancement on or off.
+    fn accel_view(
         &self,
         ego: &VehicleView,
         leader: Option<&LeaderView>,
         lane: &LaneView,
         w: &WeatherState,
+        enhanced: bool,
     ) -> f64 {
         let road = self.params.road_context.resolve(lane.speed_limit_mps);
         let effects = weather::driving_effects(self.params.weather_response, w, road);
@@ -536,18 +566,39 @@ impl CarFollowing for Idm {
             min_gap_m: ego.driver.min_gap_m,
         };
         let a = match leader {
-            None => self.accel_full(ego.speed_mps, v0, f64::INFINITY, 0.0, 0.0, &driver),
-            Some(l) => self.accel_full(
+            None => self.accel_with(
+                ego.speed_mps,
+                v0,
+                f64::INFINITY,
+                0.0,
+                0.0,
+                &driver,
+                enhanced,
+            ),
+            Some(l) => self.accel_with(
                 ego.speed_mps,
                 v0,
                 l.gap_m,
                 l.speed_mps,
                 l.accel_mps2,
                 &driver,
+                enhanced,
             ),
         };
         // And no car brakes harder than its tyres grip on this surface.
         a.max(-effects.max_decel_mps2)
+    }
+}
+
+impl CarFollowing for Idm {
+    fn accel(
+        &self,
+        ego: &VehicleView,
+        leader: Option<&LeaderView>,
+        lane: &LaneView,
+        w: &WeatherState,
+    ) -> f64 {
+        self.accel_view(ego, leader, lane, w, self.params.enhanced)
     }
 
     fn profile(&self, class: VehicleClass) -> DriverProfile {

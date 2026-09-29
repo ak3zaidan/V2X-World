@@ -90,6 +90,13 @@ pub const MODEL_ID: &str = "mobility/native/medium";
 /// The model version.
 pub const MODEL_VERSION: &str = "1.0.0";
 
+/// How far short of a stop line the first car of a queue stops, metres (front bumper).
+///
+/// MUTCD 2009 §3B.16 places a stop line 4 ft (1.2 m) before the crosswalk it protects, and
+/// a driver stops *at* the line; half a metre short of it is **this crate's choice** for
+/// "at". It sets where a queue starts, and so the first discharge headway.
+pub const STOP_LINE_MARGIN_M: f64 = 0.5;
+
 /// How far before a stop line a discretionary lane change may no longer start, metres.
 ///
 /// MUTCD 2009 §3B.04 marks the approach to a junction with a solid lane line where
@@ -138,6 +145,81 @@ const PLANNED_BRAKE_JERK_MPS3: f64 = 20.0;
 /// the 3.4 m/s² AASHTO *Green Book* 2018 §3.2.2 takes as the deceleration most drivers
 /// brake at when they must stop for something unexpected.
 const PLANNED_STOP_MAX_DECEL_MPS2: f64 = 3.4;
+
+/// The model id a driver's own traits are drawn under ([`DriverTraits`]).
+const DRIVER_TRAITS_ID: &str = "mobility/native/driver";
+
+/// The median of a driver's reaction time, seconds.
+///
+/// Taoka 1989 (TRR 1213, "An analytical model for driver response") fits a lognormal to
+/// published measurements of drivers responding to a signal change — the amber onset —
+/// and reports a median of 1.1-1.2 s, a mean of 1.3-1.4 s and a standard deviation of
+/// 0.55-0.75 s (**secondary**: read in the paper's abstract and a search excerpt, not the
+/// full text). 1.15 s is the middle of the median range.
+pub const REACTION_MEDIAN_S: f64 = 1.15;
+
+/// The lognormal shape of a driver's reaction time: σ = 0.5 gives a mean of 1.30 s and a
+/// standard deviation of 0.69 s with the median above, inside Taoka's ranges.
+pub const REACTION_SIGMA: f64 = 0.5;
+
+/// A vehicle standing still moves off only once the car-following model asks for more
+/// than this, m/s²: below it is the creep of a queue closing its last centimetres, which is
+/// not a decision to go. **This crate's choice.**
+const GO_ACCEL_MPS2: f64 = 0.2;
+
+/// Standing still, for the start-up reaction, m/s.
+const STANDSTILL_MPS: f64 = 0.1;
+
+/// What makes one driver unlike another, beyond the car-following parameters.
+///
+/// * `speed_factor` — the speed the driver chooses on a free road as a multiple of the
+///   posted limit: SUMO's `speedFactor`, drawn per vehicle from `normc(1, speedDev, 0.2,
+///   2)` with the class's `speedDev` (0.1 for a passenger car) — the SUMO vType default
+///   (R10 §B4), and the same law SUMO applies to every lane limit. No New York field
+///   distribution of free speeds against the 25 mph limit was available to calibrate it.
+/// * `reaction_s` — how long the driver takes to move off once what held them (a red, the
+///   car in front) lets them go: lognormal with median [`REACTION_MEDIAN_S`] and shape
+///   [`REACTION_SIGMA`] (Taoka 1989), clamped to 0.3-3 s. It is what makes a queue start
+///   as a wave instead of all at once, and it is where the HCM's start-up lost time comes
+///   from.
+///
+/// Drawn once per trip from the trip's own streams (`DesiredSpeed` and `ReactionTime`,
+/// keyed by the demand sequence number), so one driver's draws do not depend on anybody
+/// else's. The legacy parity mode and a vehicle placed by
+/// [`NativeMobility::spawn_with_route`] get [`DriverTraits::NEUTRAL`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DriverTraits {
+    /// Free speed as a multiple of the posted limit.
+    pub speed_factor: f64,
+    /// Start-up reaction time, seconds.
+    pub reaction_s: f64,
+}
+
+impl DriverTraits {
+    /// The limit exactly and no reaction time: the model without heterogeneity.
+    pub const NEUTRAL: DriverTraits = DriverTraits {
+        speed_factor: 1.0,
+        reaction_s: 0.0,
+    };
+
+    /// The traits of the driver of trip `seq` in a vehicle of `class`.
+    pub fn draw(ctx: &dyn MobCtx, seq: u64, class: VehicleClass) -> DriverTraits {
+        let key = EntityRef::custom(DRIVER_TRAITS_ID, seq);
+        let speed_factor = {
+            let mut rng = ctx.rng(RngDomain::DesiredSpeed, key);
+            rng.normal(1.0, class.spec().speed_dev).clamp(0.2, 2.0)
+        };
+        let reaction_s = {
+            let mut rng = ctx.rng(RngDomain::ReactionTime, key);
+            rng.lognormal(math::ln(REACTION_MEDIAN_S), REACTION_SIGMA)
+                .clamp(0.3, 3.0)
+        };
+        DriverTraits {
+            speed_factor,
+            reaction_s,
+        }
+    }
+}
 
 /// How many vulnerable road users the engine keeps in the world (`actors.vru`).
 ///
@@ -240,6 +322,9 @@ pub struct EngineParams {
     /// they could not clear (`crate::vru::crosswalk`). On by default; off is the control
     /// run that proves the auditor's crosswalk checks can fail.
     pub crosswalk_yield: bool,
+    /// Whether each driver gets their own [`DriverTraits`] — a free speed around the
+    /// posted limit and a start-up reaction time. Not applied in the legacy parity mode.
+    pub driver_heterogeneity: bool,
     /// **A test hook, not a model parameter.** Walks the decision pass in reverse actor
     /// order. Because the pass reads only the frozen snapshot, the published result must be
     /// bit-identical either way; that is the ADR 0004 Jacobi property, and this is how the
@@ -262,6 +347,7 @@ impl Default for EngineParams {
             turn_lateral_accel_mps2: DEFAULT_TURN_LATERAL_ACCEL_MPS2,
             junction_clearance: true,
             crosswalk_yield: true,
+            driver_heterogeneity: true,
             reverse_order: false,
         }
     }
@@ -318,6 +404,10 @@ struct Actor {
     trail: Vec<LaneId>,
     /// The junction the vehicle chose to clear on amber; see the decision pass.
     amber_commit: Option<JunctionId>,
+    /// The driver's own speed factor and reaction time.
+    traits: DriverTraits,
+    /// While standing: when what held it first let it go (the start of its reaction).
+    release_at: Option<SimTime>,
 }
 
 impl Actor {
@@ -770,6 +860,7 @@ impl NativeMobility {
                 let dims = a.class.dims();
                 crate::audit::AuditActor {
                     actor: a.id,
+                    class: a.class,
                     length_m: dims.length_m,
                     width_m: dims.width_m,
                     min_gap_m: a.driver.min_gap_m,
@@ -890,6 +981,8 @@ impl NativeMobility {
                 stopped_until: None,
                 trail: Vec::new(),
                 amber_commit: None,
+                traits: DriverTraits::NEUTRAL,
+                release_at: None,
             },
         );
         Ok(id)
@@ -918,7 +1011,8 @@ impl NativeMobility {
     /// driver profile and a demand-stream `seq` that nothing in `states` records, so a
     /// consumer that provisions a node per spawn never hears about an injected vehicle if
     /// this list is thrown away.
-    fn apply_commands(&mut self, world: &World, now: SimTime) -> Vec<ActorId> {
+    fn apply_commands(&mut self, ctx: &dyn MobCtx, now: SimTime) -> Vec<ActorId> {
+        let world = ctx.world();
         let mut spawned = Vec::new();
         let commands = core::mem::take(&mut self.pending);
         for command in commands {
@@ -950,7 +1044,8 @@ impl NativeMobility {
                     }
                 }
                 MobilityCommand::Spawn(trip) => {
-                    if let Some(id) = self.insert_trip(world, &trip, now) {
+                    let traits = self.traits_for(ctx, &trip);
+                    if let Some(id) = self.insert_trip_with(world, &trip, now, traits) {
                         spawned.push(id);
                     }
                 }
@@ -969,8 +1064,20 @@ impl NativeMobility {
     }
 
     /// Pass 2: routes a trip and puts it on the road, or drops it.
+    #[cfg(test)]
     fn insert_trip(&mut self, world: &World, trip: &TripRequest, now: SimTime) -> Option<ActorId> {
-        match self.try_insert(world, trip, now, None) {
+        self.insert_trip_with(world, trip, now, DriverTraits::NEUTRAL)
+    }
+
+    /// [`Self::insert_trip`] with the driver's own traits.
+    fn insert_trip_with(
+        &mut self,
+        world: &World,
+        trip: &TripRequest,
+        now: SimTime,
+        traits: DriverTraits,
+    ) -> Option<ActorId> {
+        match self.try_insert(world, trip, now, None, traits) {
             Insertion::Placed(id) => Some(id),
             Insertion::Occupied | Insertion::Unroutable => {
                 self.dropped_trips += 1;
@@ -981,12 +1088,23 @@ impl NativeMobility {
 
     /// Routes a trip and puts it on the road if its origin has room now, as actor
     /// `reserved` if the trip already holds an id, else as the next one.
+    /// The traits the driver of `trip` gets: drawn from the trip's own streams, or
+    /// [`DriverTraits::NEUTRAL`] in the legacy parity mode or with heterogeneity off.
+    fn traits_for(&self, ctx: &dyn MobCtx, trip: &TripRequest) -> DriverTraits {
+        if self.along_path() && self.params.driver_heterogeneity {
+            DriverTraits::draw(ctx, trip.seq, trip.class)
+        } else {
+            DriverTraits::NEUTRAL
+        }
+    }
+
     fn try_insert(
         &mut self,
         world: &World,
         trip: &TripRequest,
         now: SimTime,
         reserved: Option<ActorId>,
+        traits: DriverTraits,
     ) -> Insertion {
         let costs = self.costs(world);
         let Some(route) = self.router_for(trip.class).replan(
@@ -1046,11 +1164,8 @@ impl NativeMobility {
             // current speed, the IDM's own desired gap for a standing leader. The fixed
             // 2 m gap alone dropped cars at rest in front of traffic doing 11 m/s, which
             // then braked at the IDM's -6 m/s² floor. Not applied in the legacy mode.
-            if self.along_path() && behind >= 0.0 {
-                let need = a.driver.min_gap_m + a.speed_mps * a.driver.time_headway_s;
-                if behind < need {
-                    return Insertion::Occupied;
-                }
+            if self.along_path() && behind >= 0.0 && !self.may_follow_newcomer(world, a, behind) {
+                return Insertion::Occupied;
             }
         }
         if self.along_path() {
@@ -1062,8 +1177,7 @@ impl NativeMobility {
                 };
                 for a in self.actors.values().filter(|a| a.lane == from) {
                     let gap = (up.length_m - a.s_m) + (front - length);
-                    let need = a.driver.min_gap_m + a.speed_mps * a.driver.time_headway_s;
-                    if gap < need {
+                    if !self.may_follow_newcomer(world, a, gap) {
                         return Insertion::Occupied;
                     }
                 }
@@ -1102,10 +1216,39 @@ impl NativeMobility {
                 stopped_until: None,
                 trail: Vec::new(),
                 amber_commit: None,
+                traits,
+                release_at: None,
             },
         );
         self.next_seq = self.next_seq.max(trip.seq + 1);
         Insertion::Placed(id)
+    }
+
+    /// Whether `follower` can take a vehicle standing `gap_m` ahead of it without braking
+    /// harder than its comfortable deceleration: its standstill gap plus its time headway
+    /// at its speed, and the car-following model's own verdict on a standing leader at that
+    /// gap.
+    ///
+    /// The headway alone let a car be placed at rest 16.7 m in front of one doing 8.5 m/s
+    /// (2 + 8.5 × 1.5 = 14.8 m needed), which the IDM then braked for at −5.7 m/s² — a
+    /// standing obstacle needs the braking distance, not the following distance.
+    fn may_follow_newcomer(&self, world: &World, follower: &Actor, gap_m: f64) -> bool {
+        let need = follower.driver.min_gap_m + follower.speed_mps * follower.driver.time_headway_s;
+        if gap_m < need {
+            return false;
+        }
+        if follower.speed_mps <= 0.0 {
+            return true;
+        }
+        let mut lane = LaneView::of(world.lane(follower.lane));
+        lane.speed_limit_mps *= follower.traits.speed_factor;
+        let a = self.cf.accel(
+            &follower.view(world),
+            Some(&LeaderView::virtual_obstacle(gap_m, 0.0)),
+            &lane,
+            &self.weather,
+        );
+        a >= -follower.driver.comfort_decel_mps2
     }
 
     /// Tops the VRU population up to [`VruPopulation`], removing pedestrians who have
@@ -1232,8 +1375,9 @@ impl NativeMobility {
                     desired_speed_mps: bicycle_driver().desired_speed_mps,
                 };
                 self.next_seq += 1;
+                let traits = self.traits_for(&*ctx, &trip);
                 let world = ctx.world();
-                if let Insertion::Placed(id) = self.try_insert(world, &trip, now, None) {
+                if let Insertion::Placed(id) = self.try_insert(world, &trip, now, None, traits) {
                     spawned.push(self.actor_spawn(world, id, now));
                     missing -= 1;
                 }
@@ -1974,7 +2118,7 @@ impl NativeMobility {
         claims: &BTreeMap<JunctionId, Vec<ConflictView>>,
         actor: &Actor,
         t: SimTime,
-    ) -> Option<LeaderView> {
+    ) -> Option<JunctionConstraint> {
         let lane = world.lane(actor.lane);
         // The connector the actor is on or about to take, and its front's arc length
         // along it (negative before the stop line).
@@ -1994,6 +2138,12 @@ impl NativeMobility {
         let inside = pos >= 0.0;
         let len_m = world.lane(movement).length_m;
         let mut best: Option<LeaderView> = None;
+        let mut merge: Option<MergePartner> = None;
+        let mut take_merge = |m: MergePartner| {
+            if merge.as_ref().is_none_or(|b| m.gap_m < b.gap_m) {
+                merge = Some(m);
+            }
+        };
         // Vehicles still approaching on a movement that merges with ours are in the
         // order too: two that entered a short merge in the same step — each judging the
         // other not yet inside — could not sort themselves out in a 4 m connector.
@@ -2002,8 +2152,23 @@ impl NativeMobility {
             .junction
             .and_then(|j| claims.get(&j))
             .map_or(&[], Vec::as_slice);
+        // Who reaches the merge point first is decided by *time*, from each vehicle's own
+        // start-of-step speed ([`merge_arrival_s`]), not by distance: a car standing 40 m
+        // from the merge behind its own queue is not ahead of one arriving at 11 m/s from
+        // 45 m, and ordering the two by distance projected the standing one onto the
+        // moving one's path at a zero gap — a phantom obstacle braked for at −6 m/s² (the
+        // auditor's jerk class). The rule is the same from both sides, so the two agree.
+        let self_view = snapshot.view(actor.id);
+        let self_speed = self_view.map_or(actor.speed_mps, |v| v.speed_mps);
+        let t_self = merge_arrival_s(
+            len_m - pos,
+            self_speed,
+            actor.driver.max_accel_mps2,
+            self.connector_speed(world, movement),
+        );
         for z in self.zones.of(movement).iter().filter(|z| z.merge) {
             let len_o = world.lane(z.other).length_m;
+            let cap_o = self.connector_speed(world, z.other);
             for c in approaching
                 .iter()
                 .filter(|c| c.movement_lane == Some(z.other))
@@ -2022,9 +2187,14 @@ impl NativeMobility {
                 };
                 let d_self = len_m - pos;
                 let d_other = len_o + c.stop_line_gap_m;
-                if d_other < d_self || (d_other == d_self && c.actor < actor.id) {
-                    let gap = d_self - d_other - view.dims.length_m;
-                    best = Self::closest(best, Some(LeaderView::of(*view, gap.max(0.0))));
+                let t_other =
+                    merge_arrival_s(d_other, view.speed_mps, view.driver.max_accel_mps2, cap_o);
+                if t_other < t_self || (t_other == t_self && c.actor < actor.id) {
+                    take_merge(MergePartner {
+                        view: *view,
+                        gap_m: d_self - d_other - view.dims.length_m,
+                        d_self_m: d_self,
+                    });
                 }
             }
         }
@@ -2043,13 +2213,21 @@ impl NativeMobility {
                 if z.merge {
                     let d_self = len_m - pos;
                     let d_other = len_o - front;
-                    let ahead = d_other < d_self || (d_other == d_self && other < actor.id);
+                    let t_other = merge_arrival_s(
+                        d_other,
+                        view.speed_mps,
+                        view.driver.max_accel_mps2,
+                        self.connector_speed(world, z.other),
+                    );
+                    let ahead = t_other < t_self || (t_other == t_self && other < actor.id);
                     if !ahead || rear > len_o {
                         continue; // behind us, or already off the connector
                     }
-                    let gap = d_self - d_other - view.dims.length_m;
-                    let l = LeaderView::of(*view, gap.max(0.0));
-                    best = Self::closest(best, Some(l));
+                    take_merge(MergePartner {
+                        view: *view,
+                        gap_m: d_self - d_other - view.dims.length_m,
+                        d_self_m: d_self,
+                    });
                 } else if inside {
                     let edge = z.s_self - z.half_self;
                     if pos > edge || !z.other_not_clear(rear) {
@@ -2067,7 +2245,48 @@ impl NativeMobility {
                 }
             }
         }
-        best
+        Some(JunctionConstraint {
+            crossing: best,
+            merge,
+        })
+    }
+
+    /// How long the amber shown to the movement on `movement_lane` at `junction` has left
+    /// at `t`, seconds: `Some(0)` if it shows no amber, `None` if nothing is signalled.
+    fn amber_left_s(
+        &self,
+        world: &World,
+        junction: JunctionId,
+        movement_lane: Option<LaneId>,
+        t: SimTime,
+    ) -> Option<f64> {
+        let JunctionControl::Signalised { plan } = world.roads.try_junction(junction)?.control
+        else {
+            return None;
+        };
+        let plan = world.signal_plan(plan)?;
+        let k = plan.controlled.iter().position(|l| Some(*l) == movement_lane)?;
+        let (i, into) = plan.phase_at(ns_to_secs(t))?;
+        let amber = |p: usize| plan.phases[p].states.get(k) == Some(&SignalState::Amber);
+        if !amber(i) {
+            return Some(0.0);
+        }
+        let mut left = plan.phases[i].duration_s - into;
+        let mut j = i;
+        for _ in 1..plan.phases.len() {
+            j = (j + 1) % plan.phases.len();
+            if !amber(j) {
+                break;
+            }
+            left += plan.phases[j].duration_s;
+        }
+        Some(left.max(0.0))
+    }
+
+    /// The speed a junction connector is driven at: its turn speed, or its limit.
+    fn connector_speed(&self, world: &World, connector: LaneId) -> f64 {
+        let limit = world.lane(connector).speed_limit_mps;
+        self.turn_speed.get(&connector).map_or(limit, |v| v.min(limit))
     }
 
     /// The highest speed the vehicle should be doing now so that, braking at its
@@ -2087,7 +2306,7 @@ impl NativeMobility {
             let Some(lane) = world.try_lane(next) else {
                 break;
             };
-            let mut cap = lane.speed_limit_mps;
+            let mut cap = lane.speed_limit_mps * actor.traits.speed_factor;
             if let Some(v) = self.turn_speed.get(&next) {
                 cap = cap.min(*v);
             }
@@ -2134,6 +2353,9 @@ struct Decision {
     /// The junction this vehicle is committed to clearing because it chose to go on
     /// amber, carried to the next step.
     amber_commit: Option<JunctionId>,
+    /// When the standing vehicle's reaction to being let go began, carried to the next
+    /// step.
+    release_at: Option<SimTime>,
 }
 
 impl v2xw_core::model::Model for NativeMobility {
@@ -2208,7 +2430,8 @@ impl Mobility for NativeMobility {
         let commanded: Vec<ActorId> = {
             let world = ctx.world();
             let world: &World = world;
-            self.apply_commands(world, t0)
+            let _ = world;
+            self.apply_commands(&*ctx, t0)
         };
 
         // --- pass 2: spawn -------------------------------------------------
@@ -2235,7 +2458,8 @@ impl Mobility for NativeMobility {
                 let mut queue = core::mem::take(&mut self.waiting);
                 queue.extend(trips.into_iter().map(|trip| (trip, t0, None)));
                 for (trip, since, reserved) in queue {
-                    match self.try_insert(world, &trip, t0, reserved) {
+                    let traits = self.traits_for(&*ctx, &trip);
+                    match self.try_insert(world, &trip, t0, reserved, traits) {
                         Insertion::Placed(id) => spawned.push(self.actor_spawn(world, id, t0)),
                         Insertion::Occupied
                             if t0.saturating_sub(since) < MAX_DEPART_DELAY.as_nanos() =>
@@ -2252,7 +2476,8 @@ impl Mobility for NativeMobility {
                 }
             } else {
                 for trip in trips {
-                    if let Some(id) = self.insert_trip(world, &trip, t0) {
+                    let traits = self.traits_for(&*ctx, &trip);
+                    if let Some(id) = self.insert_trip_with(world, &trip, t0, traits) {
                         spawned.push(self.actor_spawn(world, id, t0));
                     }
                 }
@@ -2300,6 +2525,9 @@ impl Mobility for NativeMobility {
             let lane = world.lane(actor.lane);
             let along = self.along_path();
             let mut lane_view = LaneView::of(lane);
+            // The driver's own free speed on this lane: the posted limit times their
+            // speed factor ([`DriverTraits`]).
+            lane_view.speed_limit_mps *= actor.traits.speed_factor;
             // A junction connector is driven no faster than its curvature allows.
             if along && let Some(v) = self.turn_speed.get(&actor.lane) {
                 lane_view.speed_limit_mps = lane_view.speed_limit_mps.min(*v);
@@ -2316,8 +2544,14 @@ impl Mobility for NativeMobility {
             let nbrs =
                 snapshot.neighbors(world, &ego, &actor.route.lanes, actor.route_index, options);
             let mut leader = nbrs.leader;
+            // The nearest real vehicle among the constraints, kept apart from the binding
+            // one: a virtual obstacle's relaxed stop (below) must never let the vehicle
+            // brake less than the car-following model asks for behind a real car.
+            let mut nearest_vehicle = nbrs.leader.filter(LeaderView::is_vehicle);
+            let mut merge_partner: Option<MergePartner> = None;
             // The junction ahead becomes a virtual leader when it says stop or slow.
             let mut amber_commit: Option<JunctionId> = None;
+            let mut commit_floor: Option<f64> = None;
             // The stop line behind the binding virtual obstacle, when a junction's "stop"
             // is what binds: how much room there is up to the line itself.
             let mut binding_stop_line: Option<f64> = None;
@@ -2329,15 +2563,25 @@ impl Mobility for NativeMobility {
                 // it has slowed for the turn ahead, which is what left drivers braking into
                 // the junction on red. It keeps its speed and clears.
                 if along && matches!(junction.signal, Some(SignalState::Amber | SignalState::Red)) {
-                    if actor.amber_commit == Some(junction.id) {
+                    let committed = if actor.amber_commit == Some(junction.id) {
                         decision = EntryDecision::Proceed;
+                        true
+                    } else {
+                        junction.signal == Some(SignalState::Amber)
+                            && decision == EntryDecision::Proceed
+                            && junction.stop_line_gap_m > 0.0
+                            && amber_commit.is_none()
+                    };
+                    if committed {
                         amber_commit = Some(junction.id);
-                    } else if junction.signal == Some(SignalState::Amber)
-                        && decision == EntryDecision::Proceed
-                        && junction.stop_line_gap_m > 0.0
-                        && amber_commit.is_none()
-                    {
-                        amber_commit = Some(junction.id);
+                        // The slowest average speed that still reaches the line before
+                        // the amber ends: a committed driver still slows for the turn
+                        // beyond the line, but never below this.
+                        let left = self.amber_left_s(world, junction.id, junction.movement_lane, t0);
+                        commit_floor = Some(match left {
+                            Some(r) if r > 0.05 => junction.stop_line_gap_m.max(0.0) / r,
+                            _ => f64::INFINITY,
+                        });
                     }
                 }
                 if along
@@ -2404,10 +2648,10 @@ impl Mobility for NativeMobility {
                     ..ego
                 };
                 let before = leader;
-                leader = Self::closest(
-                    leader,
-                    snapshot.leader_on_route(world, &in_from, &[tr.from], 0, options),
-                );
+                let in_from_leader =
+                    snapshot.leader_on_route(world, &in_from, &[tr.from], 0, options);
+                nearest_vehicle = Self::closest(nearest_vehicle, in_from_leader);
+                leader = Self::closest(leader, in_from_leader);
                 if leader != before {
                     binding_stop_line = None;
                 }
@@ -2416,13 +2660,12 @@ impl Mobility for NativeMobility {
             // exit, and give way at a crossing to one that reaches it first.
             if along && self.params.junction_clearance {
                 let before = leader;
-                leader = Self::closest(
-                    leader,
-                    self.junction_leader(world, &snapshot, &occupancy, &claims, actor, t0),
-                );
+                let inside = self.junction_leader(world, &snapshot, &occupancy, &claims, actor, t0);
+                leader = Self::closest(leader, inside.as_ref().and_then(|c| c.crossing));
                 if leader != before {
                     binding_stop_line = None;
                 }
+                merge_partner = inside.and_then(|c| c.merge);
             }
             // Crosswalks: yield to anyone on one, and do not stop inside one
             // (`crate::vru::crosswalk`, UVC §11-502(a), §11-202(a)1, §11-1003).
@@ -2452,10 +2695,17 @@ impl Mobility for NativeMobility {
                 Some(cap) => actor.driver.desired_speed_mps.min(cap),
                 None => actor.driver.desired_speed_mps,
             };
-            // Slow down *before* a slower lane or a turn rather than at its boundary — unless
-            // committed to clearing the junction on amber.
-            let v0 = if along && amber_commit.is_none() {
-                v0.min(self.anticipated_speed(world, actor))
+            // Slow down *before* a slower lane or a turn rather than at its boundary. A
+            // vehicle committed to clearing a junction on amber slows too, but only as far
+            // as still reaches the stop line before the amber ends. Holding its speed
+            // instead carried it into a 6 m/s turn at 11 m/s, and the car-following model
+            // braked it at −6 m/s² on the connector (the auditor's jerk class).
+            let v0 = if along {
+                let anticipated = self.anticipated_speed(world, actor);
+                match commit_floor {
+                    None => v0.min(anticipated),
+                    Some(floor) => v0.min(anticipated.max(floor)),
+                }
             } else {
                 v0
             };
@@ -2466,22 +2716,57 @@ impl Mobility for NativeMobility {
                 },
                 ..ego
             };
+            // A stop line is stopped *at*. The junction decisions place their virtual
+            // obstacle `STOP_LINE_OFFSET_M` before the line (the legacy engine's 2 m) and the
+            // car-following model then stops its standstill gap `s0` behind that, so the first
+            // car of every queue stood 4 m back from its own stop line: its rear had 9 m to
+            // cover before the queue discharge began to count, which alone put a second on
+            // the HCM's first headway. The obstacle is moved so the front stops
+            // [`STOP_LINE_MARGIN_M`] short of the line.
+            let mut leader = leader;
+            let mut line_slack = 0.0;
+            if along
+                && let Some(line) = binding_stop_line
+                && let Some(l) = leader.as_mut()
+                && !l.is_vehicle()
+                && l.speed_mps == 0.0
+            {
+                l.gap_m = l.gap_m.max(line - STOP_LINE_MARGIN_M + actor.driver.min_gap_m);
+                // The relaxed stop may use the room up to just short of the line, never
+                // past it — which, the obstacle now standing beyond the line, is a
+                // negative slack.
+                line_slack = (line - 0.2) - l.gap_m;
+            } else if let Some(line) = binding_stop_line
+                && let Some(l) = leader.as_ref()
+            {
+                line_slack = (line - l.gap_m - 0.5).max(0.0);
+            }
             let mut accel = self
                 .cf
                 .accel(&ego_capped, leader.as_ref(), &lane_view, &self.weather);
+            // A merge partner that reaches the merge point first is fallen in behind by the
+            // time the ego gets there ([`merge_accel`]), not braked for as if it stood at
+            // the ego's bumper now.
+            if let Some(m) = merge_partner.as_ref() {
+                let tau = merge_arrival_s(
+                    m.d_self_m,
+                    ego.speed_mps,
+                    actor.driver.max_accel_mps2,
+                    self.connector_speed(world, world.lane(actor.lane).id),
+                );
+                accel = accel.min(merge_accel(&ego_capped, m, tau));
+            }
             if along
                 && let Some(l) = leader.as_ref()
                 && !l.is_vehicle()
                 && l.speed_mps == 0.0
             {
-                // Up to half a metre short of the line itself, never past it.
-                let slack = binding_stop_line.map_or(0.0, |line| (line - l.gap_m - 0.5).max(0.0));
                 accel = static_obstacle_accel(
                     accel,
                     ego.speed_mps,
                     l.gap_m,
                     actor.driver.min_gap_m,
-                    slack,
+                    line_slack,
                 );
                 // A planned stop is braked into, not stamped on: the deceleration builds
                 // at no more than `PLANNED_BRAKE_JERK_MPS3` while the stop needs no more
@@ -2489,6 +2774,35 @@ impl Mobility for NativeMobility {
                 // limited.
                 if accel < actor.accel_mps2 && -accel <= PLANNED_STOP_MAX_DECEL_MPS2 {
                     accel = accel.max(actor.accel_mps2 - PLANNED_BRAKE_JERK_MPS3 * dt_s);
+                }
+                // Relaxing the stop relaxes the obstacle, not the driver's own speed: a
+                // vehicle above the speed it has to slow to for the turn beyond the line
+                // still slows for it. Without this, the relaxed stop for a line 60 m away
+                // (−0.8 m/s²) overrode the anticipation of a 6 m/s turn, the car reached
+                // the connector at 9.7 m/s, and the model braked it there at −5.6 m/s².
+                accel = accel.min(self.cf.accel(&ego_capped, None, &lane_view, &self.weather));
+                // Whatever the stop line allows, the car ahead still binds. The relaxed
+                // stop lets a vehicle creep up to a line (or a crosswalk's edge) it is
+                // already inside its standstill gap of; with a car standing just beyond
+                // that obstacle, it crept into the car's standstill gap at 0.1-0.2 m/s
+                // for seconds on end (the auditor's gap-below-s0 class, 308 vehicle-steps
+                // on the shipped Midtown run).
+                if let Some(v) = nearest_vehicle {
+                    accel = accel.min(self.cf.accel(&ego_capped, Some(&v), &lane_view, &self.weather));
+                }
+            }
+            // Moving off takes the driver their reaction time: a vehicle standing still
+            // goes only once what held it has let it go for `reaction_s` ([`DriverTraits`]).
+            // This is the start-up wave of a queue at green — the source of the HCM's
+            // start-up lost time — which the IDM, reacting instantly, does not have.
+            let mut release_at = None;
+            if along && ego.speed_mps < STANDSTILL_MPS && actor.traits.reaction_s > 0.0 {
+                if accel > GO_ACCEL_MPS2 {
+                    let since = actor.release_at.unwrap_or(t0);
+                    release_at = Some(since);
+                    if ns_to_secs(t0.saturating_sub(since)) < actor.traits.reaction_s {
+                        accel = accel.min(0.0);
+                    }
                 }
             }
             // Coming off the brake happens at no more than `RELEASE_JERK_MPS3`, until the
@@ -2498,6 +2812,17 @@ impl Mobility for NativeMobility {
             if along && actor.accel_mps2 < 0.0 {
                 accel = accel.min(actor.accel_mps2 + RELEASE_JERK_MPS3 * dt_s);
             }
+            // DEBUG-TRACE
+            if std::env::var("V2XW_TRACE_ACTOR").ok().and_then(|v| v.parse::<u32>().ok()) == Some(id.index()) {
+                eprintln!("TRACE t={:.1} a={} lane={} s={:.2} v={:.2} prev_a={:.2} -> accel={:.2} leader={:?} nbr={:?} nearest={:?} stopline={:?} v0={:.2}",
+                    ns_to_secs(t0), id.index(), actor.lane.index(), actor.s_m, actor.speed_mps, actor.accel_mps2, accel,
+                    leader.map(|l| (l.vehicle.map(|v| v.actor.index()), (l.gap_m*100.0).round()/100.0, (l.speed_mps*100.0).round()/100.0)),
+                    nbrs.leader.map(|l| (l.vehicle.map(|v| v.actor.index()), (l.gap_m*100.0).round()/100.0)),
+                    nearest_vehicle.map(|l| (l.vehicle.map(|v| v.actor.index()), (l.gap_m*100.0).round()/100.0)),
+                    binding_stop_line, v0);
+                eprintln!("TRACE   route_idx={} route={:?} lanelimit={:.2} ",
+                    actor.route_index, actor.route.lanes.iter().skip(actor.route_index).take(4).map(|l| l.index()).collect::<Vec<_>>(), lane_view.speed_limit_mps);
+            }
             let v0_effective = v0.min(lane_view.speed_limit_mps);
             decisions.push(Decision {
                 actor: *id,
@@ -2505,6 +2830,7 @@ impl Mobility for NativeMobility {
                 v0_mps: v0_effective,
                 lane_change: LaneChangeDecision::Stay,
                 amber_commit,
+                release_at,
             });
             neighbours.insert(*id, (ego_capped, nbrs));
         }
@@ -2555,6 +2881,7 @@ impl Mobility for NativeMobility {
             // anticipation in the decision pass has it slowing before the boundary.
             actor.accel_mps2 = decision.accel_mps2;
             actor.amber_commit = decision.amber_commit;
+            actor.release_at = decision.release_at;
             let ceiling = if along {
                 decision.v0_mps.max(actor.speed_mps)
             } else {
@@ -2895,6 +3222,79 @@ fn turn_speeds(world: &World, a_lat_mps2: f64) -> BTreeMap<LaneId, f64> {
     out
 }
 
+/// What other vehicles at a junction impose on one approaching or inside it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct JunctionConstraint {
+    /// A crossing to wait at, as a virtual obstacle.
+    crossing: Option<LeaderView>,
+    /// The partner ahead in a merge onto the same exit, the tightest one.
+    merge: Option<MergePartner>,
+}
+
+/// A vehicle on another connector that reaches the shared merge point first.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MergePartner {
+    /// The partner.
+    view: VehicleView,
+    /// Its rear's distance ahead of the ego's front once both are projected onto the
+    /// merge point, metres — negative while the two are side by side.
+    gap_m: f64,
+    /// The ego's front's distance to the merge point, metres.
+    d_self_m: f64,
+}
+
+/// The acceleration that has the ego fall in behind a merge partner by the time it
+/// reaches the merge point.
+///
+/// The partner's projected gap is where it will be relative to the ego *at the merge
+/// point*, `τ` seconds ahead (the ego's own [`merge_arrival_s`]). Holding both speeds, the
+/// gap there would be `g + (v_p − v)·τ`; it has to be at least `s_req`, the gap at which
+/// the car-following model, at equal speeds, brakes at no more than the driver's
+/// comfortable deceleration `b`: from the IDM, `(s0 + v_p·T) / sqrt(1 + b/a)`. What is
+/// missing is made up at the constant deceleration that loses it over `τ`:
+/// `a = 2·(g + (v_p − v)·τ − s_req) / τ²` — and nothing is imposed when nothing is
+/// missing. Feeding the projected gap to the car-following model instead, as this engine
+/// did, braked a car at −6 m/s² for a partner exactly beside it at the same speed 40 m
+/// before the merge, because the model reads a gap as a body at the bumper now (the
+/// auditor's jerk class: 23 of the 30 classified onsets on dense Midtown). **This crate's
+/// rule**, from the IDM's own parameters; near the merge point `τ` is small and it becomes
+/// the emergency brake it should be.
+fn merge_accel(ego: &VehicleView, m: &MergePartner, tau_s: f64) -> f64 {
+    let d = &ego.driver;
+    let v = ego.speed_mps;
+    let v_p = m.view.speed_mps;
+    let s_req = (d.min_gap_m + v_p * d.time_headway_s)
+        / math::sqrt(1.0 + d.comfort_decel_mps2 / d.max_accel_mps2.max(0.1));
+    let tau = tau_s.max(0.3);
+    // A partner that is braking keeps braking; one accelerating is not counted on.
+    let a_p = m.view.accel_mps2.min(0.0);
+    let slack = m.gap_m + (v_p - v) * tau + 0.5 * a_p * tau * tau - s_req;
+    if slack >= 0.0 {
+        return f64::INFINITY;
+    }
+    (2.0 * slack / (tau * tau)).max(crate::carfollowing::idm::LEGACY_A_MIN_MPS2)
+}
+
+/// When a vehicle `d_m` from a merge point, doing `v_mps`, reaches it if it accelerates
+/// at `a_mps2` up to `cap_mps` and holds that: the arrival order a merge is settled by.
+/// A vehicle at the merge point already arrives at 0; one standing arrives when its launch
+/// would bring it there.
+pub fn merge_arrival_s(d_m: f64, v_mps: f64, a_mps2: f64, cap_mps: f64) -> f64 {
+    if d_m <= 0.0 {
+        return 0.0;
+    }
+    let a = a_mps2.max(0.1);
+    let v = v_mps.max(0.0);
+    let cap = cap_mps.max(v).max(0.1);
+    let t_acc = (cap - v) / a;
+    let d_acc = 0.5 * (v + cap) * t_acc;
+    if d_acc >= d_m {
+        (-v + math::sqrt(v * v + 2.0 * a * d_m)) / a
+    } else {
+        t_acc + (d_m - d_acc) / cap
+    }
+}
+
 /// The acceleration towards a *standing* virtual obstacle (a stop line, a give-way line)
 /// `gap_m` ahead: the car-following model's, unless that brakes harder than stopping
 /// `s0` short of the obstacle needs, in which case the kinematic deceleration
@@ -2908,7 +3308,9 @@ fn turn_speeds(world: &World, a_lat_mps2: f64) -> BTreeMap<LaneId, f64> {
 /// than stopping needs, so it cannot carry a vehicle over the line.
 ///
 /// `slack_m` is how far past the obstacle the vehicle may still stop without crossing
-/// anything: for a stop line's virtual obstacle, the stop-line offset. When stopping
+/// anything: for a stop line's virtual obstacle, the distance from it to just short of the
+/// line — negative, since that obstacle stands beyond the line ([`STOP_LINE_MARGIN_M`]).
+/// When stopping
 /// `s0` short of the obstacle would take more than a planned stop's deceleration
 /// ([`PLANNED_STOP_MAX_DECEL_MPS2`]), the driver uses the room up to the line itself —
 /// the amber rule decided "stop" by the distance to the *line* (ITE), so the stop it

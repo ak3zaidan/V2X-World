@@ -88,6 +88,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audit;
+pub mod calibration;
 pub mod carfollowing;
 pub mod classes;
 pub mod clock;
