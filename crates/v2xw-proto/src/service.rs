@@ -83,6 +83,11 @@ pub struct ServiceQueue {
     busy_ns: u64,
     served: u64,
     waited_ns: u64,
+    /// When each admitted request that may still be in the system finishes, oldest first.
+    /// Arrivals reach one entity in time order, so everything finished by the latest
+    /// arrival can be forgotten; what is left is the queue.
+    finishing: std::collections::VecDeque<SimTime>,
+    servers: u32,
 }
 
 impl ServiceQueue {
@@ -94,7 +99,19 @@ impl ServiceQueue {
             busy_ns: 0,
             served: 0,
             waited_ns: 0,
+            finishing: std::collections::VecDeque::new(),
+            servers: spec.servers.max(1),
         }
+    }
+
+    /// How many requests are in service or waiting at `t`: admitted and not yet finished.
+    pub fn depth_at(&self, t: SimTime) -> usize {
+        self.finishing.iter().filter(|&&done| done > t).count()
+    }
+
+    /// The `c` of the M/M/c.
+    pub const fn servers(&self) -> u32 {
+        self.servers
     }
 
     /// Admits a request that arrived at `arrival` and needs `work` of cryptographic time.
@@ -119,6 +136,12 @@ impl ServiceQueue {
         self.busy_ns = self.busy_ns.saturating_add(service.as_nanos());
         self.waited_ns = self.waited_ns.saturating_add(start - arrival);
         self.served += 1;
+        while self.finishing.front().is_some_and(|&t| t <= arrival) {
+            self.finishing.pop_front();
+        }
+        // Kept sorted: with several servers a later request can finish earlier.
+        let at = self.finishing.partition_point(|&t| t <= done);
+        self.finishing.insert(at, done);
         done
     }
 

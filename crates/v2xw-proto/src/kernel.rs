@@ -217,6 +217,23 @@ const fn op_kind_str(kind: PrimitiveOpKind) -> &'static str {
     }
 }
 
+/// What one entity has put on and taken off its links, for an inspector.
+///
+/// Counted where the kernel already is — a send when it is dispatched, a receipt when it
+/// is delivered — so the numbers cannot drift from the wire log they summarise. A timer
+/// an entity set for itself crosses no link and is not a receipt.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct NodeTraffic {
+    /// Messages delivered to this entity by another one.
+    pub received: u64,
+    /// Messages this entity sent.
+    pub sent: u64,
+    /// Bytes it received.
+    pub bytes_in: u64,
+    /// Bytes it sent.
+    pub bytes_out: u64,
+}
+
 /// The event kernel: a schedule, one service queue per entity, and the two logs.
 pub struct Kernel<M> {
     now: SimTime,
@@ -231,6 +248,11 @@ pub struct Kernel<M> {
     pub steps: Vec<WireStep>,
     /// Operation counts per node, for the protocol metrics.
     pub ops: BTreeMap<(NodeId, &'static str, &'static str), u64>,
+    /// Messages and bytes per node.
+    traffic: BTreeMap<NodeId, NodeTraffic>,
+    /// Bytes of each message still in flight, by `(arrival, sequence)`, so a receipt can
+    /// be booked with the size its send was charged.
+    in_flight_bytes: BTreeMap<(SimTime, u64), u64>,
 }
 
 impl<M> Kernel<M> {
@@ -256,7 +278,30 @@ impl<M> Kernel<M> {
             stages: StageLog::new(),
             steps: Vec::new(),
             ops: BTreeMap::new(),
+            traffic: BTreeMap::new(),
+            in_flight_bytes: BTreeMap::new(),
         }
+    }
+
+    /// What `node` has sent and received so far.
+    pub fn traffic(&self, node: NodeId) -> NodeTraffic {
+        self.traffic.get(&node).copied().unwrap_or_default()
+    }
+
+    /// How many deliveries are scheduled *to* `node` — messages on a link towards it and
+    /// timers it set — which is its inbound backlog at this instant.
+    pub fn pending_to(&self, node: NodeId) -> usize {
+        self.heap.iter().filter(|q| q.0.delivery.to == node).count()
+    }
+
+    /// Every node that has a service model, in id order.
+    pub fn hosted(&self) -> Vec<NodeId> {
+        self.queues.keys().copied().collect()
+    }
+
+    /// How many requests `node` has in service or waiting at `t`.
+    pub fn depth_at(&self, node: NodeId, t: SimTime) -> usize {
+        self.queues.get(&node).map_or(0, |q| q.depth_at(t))
     }
 
     /// Gives `node` a service model and a hardware profile.
@@ -331,12 +376,17 @@ impl<M> Kernel<M> {
     }
 
     fn push(&mut self, at: SimTime, delivery: Delivery<M>) {
+        self.push_seq(at, delivery);
+    }
+
+    fn push_seq(&mut self, at: SimTime, delivery: Delivery<M>) -> u64 {
         self.seq += 1;
         self.heap.push(Reverse(Queued {
             at,
             seq: self.seq,
             delivery,
         }));
+        self.seq
     }
 
     /// The next delivery, advancing the clock to it.
@@ -347,6 +397,11 @@ impl<M> Kernel<M> {
     pub fn next_delivery(&mut self) -> Option<Delivery<M>> {
         let Reverse(q) = self.heap.pop()?;
         self.now = q.at;
+        if let Some(bytes) = self.in_flight_bytes.remove(&(q.at, q.seq)) {
+            let t = self.traffic.entry(q.delivery.to).or_default();
+            t.received += 1;
+            t.bytes_in = t.bytes_in.saturating_add(bytes);
+        }
         Some(q.delivery)
     }
 
@@ -473,7 +528,11 @@ impl<M> Kernel<M> {
                 flow: s.flow,
                 run: s.run,
             };
-            self.push(arrival, delivery);
+            let seq = self.push_seq(arrival, delivery);
+            self.in_flight_bytes.insert((arrival, seq), u64::from(bytes));
+            let t = self.traffic.entry(node).or_default();
+            t.sent += 1;
+            t.bytes_out = t.bytes_out.saturating_add(u64::from(bytes));
         }
 
         Ok(done)

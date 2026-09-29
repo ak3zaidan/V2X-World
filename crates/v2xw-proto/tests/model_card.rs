@@ -125,10 +125,19 @@ fn the_mandatory_separations_are_checked_and_can_fail() {
 fn the_scms_plug_in_describes_itself_completely() {
     let scms = CampScms::default();
     let roles = scms.roles();
-    assert_eq!(roles.len(), 13, "11 online roles and 2 offline ones");
-    assert_eq!(roles.iter().filter(|r| r.offline).count(), 2);
+    assert_eq!(
+        roles.len(),
+        16,
+        "11 request-path roles, the SCMS Manager and the Policy Generator online, and the \
+         Root CA, the electors and the ICA offline"
+    );
+    assert_eq!(roles.iter().filter(|r| r.offline).count(), 3);
     assert_eq!(scms.credential_types().len(), 2);
-    assert_eq!(scms.flows().len(), 7);
+    assert_eq!(
+        scms.flows().len(),
+        9,
+        "the seven of 05-protocols §3.2, successor enrolment and policy distribution"
+    );
     assert_eq!(scms.separations().len(), 10);
     assert_eq!(scms.primitives().len(), 4);
     assert!(matches!(

@@ -88,6 +88,7 @@ pub mod sizes;
 pub mod spec;
 pub mod stage;
 pub mod threshold;
+pub mod view;
 
 pub use error::{ProtoError, Result};
 pub use kernel::{Delivery, Kernel, Outbox};

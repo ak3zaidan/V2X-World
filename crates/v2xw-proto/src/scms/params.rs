@@ -147,6 +147,31 @@ pub struct ScmsParams {
     pub certs_per_period: u32,
     /// The initial batch: 3,120 certificates, three years [PRIMER p.7].
     pub initial_batch: u32,
+    /// How many i-periods ahead the RA provisions a device at most: 156, the three years
+    /// of the initial batch [PRIMER p.7: 3,120 = 156 × 20]. The RA clips a request for
+    /// more.
+    pub max_periods_ahead: u32,
+    /// How long an enrolment certificate is valid.
+    ///
+    /// **Uncited, `todo-calibrate`.** The CAMP design describes the enrolment certificate
+    /// as long-lived — it outlasts every pseudonym batch and is replaced by a successor
+    /// request rather than by provisioning — and no document this build can read prints a
+    /// number. Six years is the stated default; the ETSI policy's three years for the
+    /// equivalent credential [EUCP Table 11] is the nearest published figure. A run
+    /// compresses it to see re-enrolment.
+    pub enrolment_lifetime: Duration,
+    /// How long before its enrolment certificate expires a device asks the ECA for a
+    /// successor (IEEE 1609.2.1's successor enrolment). **Uncited**: a week, so a device
+    /// that is offline for a few days still renews in time.
+    pub reenrol_lead: Duration,
+    /// How many electors endorse the trust list.
+    ///
+    /// **Uncited.** The CAMP design has several electors and a quorum; three electors
+    /// with a quorum of two is the smallest arrangement in which no single elector can
+    /// either endorse or block a list alone.
+    pub electors: u32,
+    /// How many valid elector endorsements a device requires of a trust list.
+    pub elector_quorum: u32,
     /// The RA's certificate-request shuffle window [CAMP-EE §2.2.7].
     pub shuffle_window: Duration,
     /// The RA's report shuffle window [CAMP-EE SCMS-765].
@@ -210,6 +235,11 @@ impl Default for ScmsParams {
             cert_lifetime: Duration::from_secs(10_140 * 60),
             certs_per_period: 20,
             initial_batch: 3_120,
+            max_periods_ahead: 156,
+            enrolment_lifetime: Duration::from_secs(6 * 365 * 86_400),
+            reenrol_lead: Duration::from_secs(7 * 86_400),
+            electors: 3,
+            elector_quorum: 2,
             shuffle_window: BatchPolicy::CAMP_SHUFFLE.max_delay,
             report_shuffle_window: BatchPolicy::CAMP_SHUFFLE.max_delay,
             crl_cadence: Duration::from_secs(86_400),

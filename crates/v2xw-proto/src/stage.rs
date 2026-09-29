@@ -45,6 +45,12 @@ pub enum FlowId {
     CrlIssuance,
     /// CRL download, expansion and enforcement at a device.
     CrlDistribution,
+    /// IEEE 1609.2.1 successor enrolment: device → ECA, signed with the enrolment
+    /// certificate being replaced.
+    Reenrolment,
+    /// A policy change: SCMS Manager → Policy Generator (signs the Global Policy File) →
+    /// Registration Authority (signs the Local Policy File its devices fetch).
+    PolicyDistribution,
     /// ETSI TS 102 941 enrolment.
     EtsiEnrolment,
     /// ETSI TS 102 941 authorization (standard variant).
@@ -81,6 +87,8 @@ impl FlowId {
             FlowId::LinkageResolution => "linkage-resolution",
             FlowId::CrlIssuance => "crl-issuance",
             FlowId::CrlDistribution => "crl-distribution",
+            FlowId::Reenrolment => "reenrolment",
+            FlowId::PolicyDistribution => "policy-distribution",
             FlowId::EtsiEnrolment => "etsi-enrolment",
             FlowId::EtsiAuthorization => "etsi-authorization",
             FlowId::EtsiButterflyAuthorization => "etsi-butterfly-authorization",

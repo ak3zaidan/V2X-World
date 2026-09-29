@@ -12,7 +12,8 @@ use v2xw_sec::ec::Point;
 use v2xw_sec::linkage::{LaId, LinkageSeed, LinkageValue, PreLinkageValue};
 
 use crate::sizes::{
-    AES128_KEY_BYTES, CRL_LINKAGE_ENTRY_BYTES, CertificateSizes, EC_POINT_COMPRESSED_BYTES,
+    AES128_KEY_BYTES, CRL_LINKAGE_ENTRY_BYTES, CertificateSizes, ECDSA_P256_SIG_COER_BYTES,
+    EC_POINT_COMPRESSED_BYTES,
     ECIES_P256_ENCRYPTED_KEY_BYTES, ENVELOPE_OVERHEAD_CERT_BYTES, ENVELOPE_OVERHEAD_DIGEST_BYTES,
     HASHED_ID8_BYTES, LINKAGE_VALUE_BYTES, SHA256_BYTES, SizeParams, TIME32_BYTES, WireSize,
 };
@@ -78,9 +79,59 @@ impl LaIndex {
     }
 }
 
+/// Why the Registration Authority or the Enrolment CA refused a device.
+///
+/// IEEE 1609.2.1 answers a refused request with an error rather than silence, and the
+/// device acts on the reason: a blocklisted device stops asking, a device whose enrolment
+/// certificate expired asks for a successor first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Refusal {
+    /// The enrolment certificate is on the RA's blocklist (passive revocation).
+    Blocklisted,
+    /// The enrolment certificate the request was signed with has expired.
+    EnrolmentExpired,
+    /// The request was not signed by an enrolment certificate the ECA issued.
+    UnknownEnrolment,
+}
+
+impl Refusal {
+    /// The reason's stable name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Refusal::Blocklisted => "blocklisted",
+            Refusal::EnrolmentExpired => "enrolment-expired",
+            Refusal::UnknownEnrolment => "unknown-enrolment",
+        }
+    }
+}
+
+/// A device's enrolment certificate as the device holds and presents it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct EnrolmentCert {
+    /// 0 for the bootstrap certificate, then one more per successor.
+    pub generation: u32,
+    /// Start of validity.
+    pub valid_from: v2xw_core::time::SimTime,
+    /// End of validity.
+    pub valid_until: v2xw_core::time::SimTime,
+}
+
+impl EnrolmentCert {
+    /// Whether it is valid at `t`.
+    #[must_use]
+    pub const fn valid_at(&self, t: v2xw_core::time::SimTime) -> bool {
+        t >= self.valid_from && t < self.valid_until
+    }
+}
+
 /// The butterfly request material a device uploads.
 #[derive(Debug, Clone)]
 pub struct ProvisioningRequest {
+    /// The enrolment certificate the request is signed with, which the RA checks before
+    /// anything else: issued by the ECA, inside its validity, not blocklisted.
+    pub enrolment: Option<EnrolmentCert>,
     /// The device.
     pub device: NodeId,
     /// The caterpillar signing public key `A`.
@@ -195,6 +246,8 @@ pub enum ScmsMsg {
     EnrolResponse {
         /// The device.
         device: NodeId,
+        /// The enrolment certificate.
+        cert: EnrolmentCert,
     },
     /// Device → LOP → RA: the butterfly provisioning request.
     ProvisioningRequest(Box<ProvisioningRequest>),
@@ -204,6 +257,10 @@ pub enum ScmsMsg {
         device: NodeId,
         /// The hash the RA will know this request by.
         request_hash: [u8; 32],
+        /// The i-periods the RA accepted, after clipping the request to its policy.
+        periods: u32,
+        /// The certificates per period it accepted.
+        jmax: u32,
     },
     /// RA → LA: allocate a chain and return pre-linkage values.
     PreLinkageRequest {
@@ -364,6 +421,69 @@ pub enum ScmsMsg {
         /// The device in range.
         device: NodeId,
     },
+
+    // ---------------- governance, trust and the enrolment lifecycle ----------------
+    /// DCM → device, at bootstrap: the elector anchors, the certificate trust list, the
+    /// Local Certificate Chain File and the Local Policy File.
+    TrustBundle {
+        /// The device.
+        device: NodeId,
+    },
+    /// Device → LOP → RA: "these are the file versions I hold" (IEEE 1609.2.1's LPF and
+    /// LCCF download, made on every RA connection).
+    FileRequest {
+        /// The device.
+        device: NodeId,
+        /// The Local Policy File version it holds.
+        lpf: Option<u32>,
+        /// The Local Certificate Chain File version it holds.
+        lccf: Option<u32>,
+    },
+    /// RA → LOP → device: the newer files, if any.
+    FileResponse {
+        /// The device.
+        device: NodeId,
+        /// A newer Local Policy File.
+        lpf: Option<Box<crate::scms::governance::PolicyFile>>,
+        /// A newer Local Certificate Chain File.
+        lccf: Option<Box<crate::scms::governance::ChainFile>>,
+    },
+    /// RA → LOP → device: the provisioning request was refused.
+    ProvisioningRefused {
+        /// The device.
+        device: NodeId,
+        /// Why.
+        reason: Refusal,
+    },
+    /// Device → ECA: a successor enrolment certificate, signed with the current one.
+    SuccessorEnrolRequest {
+        /// The device.
+        device: NodeId,
+        /// The enrolment certificate it signs with.
+        current: EnrolmentCert,
+    },
+    /// ECA → device: the successor.
+    SuccessorEnrolResponse {
+        /// The device.
+        device: NodeId,
+        /// The new certificate.
+        cert: EnrolmentCert,
+    },
+    /// ECA → device: the successor was refused.
+    EnrolRefused {
+        /// The device.
+        device: NodeId,
+        /// Why.
+        reason: Refusal,
+    },
+    /// RA → ECA: an enrolment certificate was blocklisted, so its successor must not be
+    /// issued either.
+    BlocklistNotice {
+        /// The device.
+        device: NodeId,
+    },
+    /// SCMS Manager → Policy Generator → RA: a new policy.
+    PolicyUpdate(Box<crate::scms::governance::Policy>),
 }
 
 /// Every SCMS message size, in one place.
@@ -625,6 +745,114 @@ impl ScmsSizes {
         )
     }
 
+    /// A certificate trust list of `certs` certificates and `endorsements` elector
+    /// signatures: each endorsement is an elector index and an ECDSA signature, and the
+    /// header is the sequence number, the quorum and the series.
+    pub fn ctl(&self, certs: u32, endorsements: u32) -> WireSize {
+        WireSize::derived(
+            TIME32_BYTES
+                + 2
+                + certs * self.certs.authority.bytes()
+                + endorsements * (1 + ECDSA_P256_SIG_COER_BYTES),
+            "sequence + quorum + series + certs · authority certificate + endorsements · \
+             (index + ECDSA signature)",
+            DERIVATION,
+        )
+    }
+
+    /// A certificate-chain file of `certs` authority certificates, signed with the
+    /// signer's certificate attached.
+    pub fn chain_file(&self, certs: u32) -> WireSize {
+        WireSize::derived(
+            ENVELOPE_OVERHEAD_CERT_BYTES
+                + self.certs.authority.bytes()
+                + TIME32_BYTES
+                + certs * self.certs.authority.bytes(),
+            "envelope(certificate) + signer certificate + version + certs · authority \
+             certificate",
+            DERIVATION,
+        )
+    }
+
+    /// A policy file: the eight fields of `governance::Policy`, each a COER tag and a
+    /// uint32, signed with the signer's certificate attached.
+    pub fn policy_file(&self) -> WireSize {
+        WireSize::derived(
+            ENVELOPE_OVERHEAD_CERT_BYTES
+                + self.certs.authority.bytes()
+                + TIME32_BYTES
+                + crate::scms::governance::Policy::FIELDS * (1 + TIME32_BYTES),
+            "envelope(certificate) + signer certificate + version + 8 · (tag + uint32)",
+            DERIVATION,
+        )
+    }
+
+    /// DCM → device at bootstrap: the anchors, the trust list, the chain and the policy.
+    pub fn trust_bundle(&self, anchors: u32, ctl_certs: u32, chain: u32) -> WireSize {
+        WireSize::derived(
+            ENVELOPE_OVERHEAD_CERT_BYTES
+                + self.certs.authority.bytes()
+                + anchors * self.certs.authority.bytes()
+                + self.ctl(ctl_certs, anchors).bytes()
+                + self.chain_file(chain).bytes()
+                + self.policy_file().bytes(),
+            "envelope(certificate) + DCM certificate + elector anchors + trust list + chain \
+             file + policy file",
+            DERIVATION,
+        )
+    }
+
+    /// Device → RA: the two file versions it holds.
+    pub const fn file_request(&self) -> WireSize {
+        WireSize::derived(
+            ENVELOPE_OVERHEAD_DIGEST_BYTES + 2 * (1 + TIME32_BYTES),
+            "envelope(digest) + 2 · (file id + version)",
+            DERIVATION,
+        )
+    }
+
+    /// RA → device: whichever files are newer.
+    pub fn file_response(&self, lpf: bool, chain: Option<u32>) -> WireSize {
+        WireSize::derived(
+            ENVELOPE_OVERHEAD_DIGEST_BYTES
+                + if lpf { self.policy_file().bytes() } else { 0 }
+                + chain.map_or(0, |n| self.chain_file(n).bytes()),
+            "envelope(digest) + the newer policy file + the newer chain file",
+            DERIVATION,
+        )
+    }
+
+    /// RA or ECA → device: an error code and the request it answers.
+    pub const fn refusal(&self) -> WireSize {
+        WireSize::derived(
+            ENVELOPE_OVERHEAD_DIGEST_BYTES + 1 + HASHED_ID8_BYTES,
+            "envelope(digest) + error code + request hash8",
+            DERIVATION,
+        )
+    }
+
+    /// Device → ECA: a successor request, signed with the current enrolment certificate
+    /// attached, carrying the new verification key.
+    pub fn successor_request(&self) -> WireSize {
+        WireSize::derived(
+            ENVELOPE_OVERHEAD_CERT_BYTES
+                + self.certs.enrolment.bytes()
+                + EC_POINT_COMPRESSED_BYTES
+                + TIME32_BYTES,
+            "envelope(certificate) + enrolment certificate + new public key + time32",
+            DERIVATION,
+        )
+    }
+
+    /// RA → ECA: the blocklisted enrolment certificate's digest.
+    pub const fn blocklist_notice(&self) -> WireSize {
+        WireSize::derived(
+            ENVELOPE_OVERHEAD_DIGEST_BYTES + HASHED_ID8_BYTES,
+            "envelope(digest) + enrolment certificate hash8",
+            DERIVATION,
+        )
+    }
+
     /// Every message kind with a representative size, for the conformance test.
     ///
     /// The step names are the ones the flows pass to `proto.msg`, so
@@ -632,6 +860,22 @@ impl ScmsSizes {
     /// entry here.
     pub fn table(&self) -> Vec<(&'static str, WireSize)> {
         vec![
+            ("trust-bundle", self.trust_bundle(3, 4, 13)),
+            ("file-request", self.file_request()),
+            ("file-request-proxied", self.file_request()),
+            ("file-response", self.file_response(true, Some(13))),
+            ("file-response-proxied", self.file_response(true, Some(13))),
+            ("provisioning-refused", self.refusal()),
+            ("provisioning-refused-proxied", self.refusal()),
+            ("successor-enrol-request", self.successor_request()),
+            ("successor-enrol-response", self.enrol_response()),
+            ("enrol-refused", self.refusal()),
+            ("blocklist-notice", self.blocklist_notice()),
+            ("policy-update", self.policy_file()),
+            ("policy-publish", self.policy_file()),
+            ("provisioning-ack-proxied", self.provisioning_ack()),
+            ("batch-download-request-proxied", self.batch_download_request()),
+            ("batch-download-proxied", self.batch_download(1)),
             ("enrol-request", self.enrol_request()),
             ("enrol-forward", self.enrol_forward()),
             ("enrol-response", self.enrol_response()),
