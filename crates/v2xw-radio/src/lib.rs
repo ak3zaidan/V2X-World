@@ -40,6 +40,7 @@
 //! | Hybrid operation: a node with both radios and a policy | [`hybrid`] | composition over §4-§5 and §10.1 |
 //! | The measurement harness behind the §13 validation curves | [`sweep`] | 04-models.md §13 |
 //! | The error function, dB arithmetic, ordered power sums | [`numeric`] | ADR 0003, 02-architecture.md §6.3 |
+//! | Band plans, EIRP limits, spectrum masks and adjacent-channel interference per region | [`regulation`] | FCC 24-123, 47 CFR §90.377 (2017), ETSI EN 302 571 |
 //!
 //! # The four properties this crate is built to keep
 //!
@@ -119,6 +120,7 @@ pub mod obstacle;
 pub mod per;
 pub mod phy;
 pub mod prop;
+pub mod regulation;
 pub mod sidelink;
 pub mod sps;
 pub mod sweep;
