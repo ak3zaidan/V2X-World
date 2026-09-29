@@ -1348,6 +1348,9 @@ struct Projector {
     /// backend link, CRL state) and its most recent `sec.pseudonym` changes, for
     /// `inspect.node`'s `certs` and `crl` sections.
     security: BTreeMap<NodeId, (Value, std::collections::VecDeque<Value>)>,
+    /// The credential system's recent `backend.state` snapshots, `(t, view)`, oldest
+    /// first, for `inspect.entity` and the Backend view. Bounded at [`BACKEND_HISTORY`].
+    backend: std::collections::VecDeque<(u64, Value)>,
     /// Every node's recent traffic, for the followed node's message feed and queues and for
     /// `inspect.node`'s `messages` section (`crate::feed`).
     feed: crate::feed::FeedStore,
@@ -1428,6 +1431,7 @@ impl Projector {
             unnamed_metrics: BTreeSet::new(),
             breakdowns: BTreeMap::new(),
             security: BTreeMap::new(),
+            backend: std::collections::VecDeque::new(),
             feed: crate::feed::FeedStore::new(step_ns),
             unprojected_channels: BTreeSet::new(),
             undecodable_channels: BTreeMap::new(),
@@ -1695,6 +1699,18 @@ impl Projector {
                 // ground truth for the `pdr` metric, which is what the stream carries; the
                 // two reassembly channels are what the fragmentation metrics measure.
                 "msg.latency" | "net.bytes" | "phy.prr" | "net.frag" | "net.reassembly" => {}
+                // The backend's entities and flows, kept for `inspect.entity`: one snapshot
+                // a simulated second, the newest few minutes of them.
+                "backend.state" => match serde_json::from_slice::<Value>(&record.json) {
+                    Ok(v) => {
+                        let at = v["t"].as_u64().unwrap_or(t);
+                        if self.backend.len() >= BACKEND_HISTORY {
+                            self.backend.pop_front();
+                        }
+                        self.backend.push_back((at, v));
+                    }
+                    Err(_) => self.undecodable(record.channel),
+                },
                 // The security path's own records, which the page does not draw.
                 "privacy.link" | "ma.report" | "ma.decision" => {}
                 // A scenario timeline item firing: kept for `run.status` (`timeline`), which
@@ -2236,6 +2252,9 @@ impl Pool {
         row
     }
 }
+
+/// How many `backend.state` snapshots the projector keeps: ten minutes at one a second.
+const BACKEND_HISTORY: usize = 600;
 
 /// How many of a node's pseudonym changes the security panel keeps (and, before the
 /// message feed replaced it, how many sent and received messages the evidence log kept).
@@ -4000,6 +4019,22 @@ impl Engine for LiveEngine {
 impl Introspect for LiveEngine {
     fn node_list(&self) -> Vec<crate::engine::NodeFacts> {
         self.node_rows()
+    }
+
+    fn entity_facts(&self, entity: &str, t_ns: u64, limit: usize) -> Option<Value> {
+        let history = &self.projector.backend;
+        let (t, view) = history
+            .iter()
+            .rev()
+            .find(|(t, _)| *t <= t_ns)
+            .or_else(|| history.front())?;
+        Some(crate::introspect::entity_answer(
+            entity,
+            *t,
+            view,
+            limit,
+            self.provenance_chain(),
+        )?)
     }
 
     fn metric_groups(

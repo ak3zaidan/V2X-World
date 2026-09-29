@@ -771,6 +771,18 @@ impl HardwareProfile {
     /// node using it can run — deliberately, because the alternative is an invented number
     /// that would silently set the load of every run.
     pub fn op_cost(&self, op: &str) -> Option<(Duration, RunsOn)> {
+        // A hybrid signature is both signatures, made or checked one after the other: its
+        // cost is the sum of the two components' published costs, and it needs both. It
+        // runs where the classical half runs; a post-quantum half on a CPU beside an HSM
+        // would overlap in a real device, and this sum is the upper bound of that.
+        if let Some((pq, classical)) = hybrid_components(op) {
+            let (a, where_) = self.op_cost(classical)?;
+            let (b, _) = self.op_cost(pq)?;
+            return Some((
+                Duration::from_nanos(a.as_nanos().saturating_add(b.as_nanos())),
+                where_,
+            ));
+        }
         if self.hsm.kind != HsmKind::None
             && let Some(spec) = self.hsm.ops.get(op)
             && let Some(t) = spec.service_time()
@@ -990,4 +1002,38 @@ fn unit_of(name: &str) -> &'static str {
     } else {
         "-"
     }
+}
+
+/// The operation ids a node signs and verifies with under a scenario's
+/// `security.signature`.
+///
+/// The hybrid schemes are the ECDSA P-256 signature with a post-quantum one concatenated
+/// (05-protocols.md §5.3): signing makes both and verifying checks both, so their ops are
+/// compound ids whose cost [`HardwareProfile::op_cost`] composes from the two published
+/// components. The classical curves other than P-256 keep the P-256 ops: no shipped
+/// profile publishes a brainpool figure, and one P-384 figure is not a table.
+#[must_use]
+pub fn signature_ops(signature: &str) -> (&'static str, &'static str) {
+    match signature {
+        "hybrid-falcon512-ecdsa-p256" => (
+            "hybrid-falcon512-ecdsa-p256-sign",
+            "hybrid-falcon512-ecdsa-p256-verify",
+        ),
+        "hybrid-mldsa44-ecdsa-p256" => (
+            "hybrid-mldsa44-ecdsa-p256-sign",
+            "hybrid-mldsa44-ecdsa-p256-verify",
+        ),
+        _ => ("ecdsa-p256-sign", "ecdsa-p256-verify"),
+    }
+}
+
+/// A compound hybrid op's `(post-quantum, classical)` components.
+fn hybrid_components(op: &str) -> Option<(&'static str, &'static str)> {
+    Some(match op {
+        "hybrid-falcon512-ecdsa-p256-sign" => ("falcon-512-sign", "ecdsa-p256-sign"),
+        "hybrid-falcon512-ecdsa-p256-verify" => ("falcon-512-verify", "ecdsa-p256-verify"),
+        "hybrid-mldsa44-ecdsa-p256-sign" => ("ml-dsa-44-sign", "ecdsa-p256-sign"),
+        "hybrid-mldsa44-ecdsa-p256-verify" => ("ml-dsa-44-verify", "ecdsa-p256-verify"),
+        _ => return None,
+    })
 }

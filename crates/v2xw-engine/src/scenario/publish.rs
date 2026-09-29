@@ -239,7 +239,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("radio.tiers.focus.region.node", "node id"),
     ("threats.attackers[].count", "vehicles"),
     ("threats.attackers[].actor_ids[]", "actor id"),
-    ("threats.compromised_rsus[]", "site id"),
+    ("threats.compromised_rsus[]", "rsu index"),
     ("events[].t", "s"),
     ("events[].until", "s"),
     ("experiment.replications", "runs"),

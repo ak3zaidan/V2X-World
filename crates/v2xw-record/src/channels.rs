@@ -79,6 +79,16 @@ pub const CHANNELS: &[ChannelSpec] = &[
         visibility: Visibility::Node,
         payload_bytes: Some(32),
     },
+    // Every credential-system entity with its queue, traffic and counts, and the traffic
+    // between them and the devices, once a simulated second (`v2xw_proto::view`). A
+    // recording and inspector channel; the live server keeps the newest for
+    // `inspect.entity`.
+    ChannelSpec {
+        name: "backend.state",
+        wire_id: None,
+        visibility: Visibility::Public,
+        payload_bytes: None,
+    },
     ChannelSpec {
         name: "det.observation",
         wire_id: Some(30),

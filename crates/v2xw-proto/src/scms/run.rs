@@ -65,6 +65,12 @@ pub struct DeviceState {
     pub trust: DeviceTrust,
     /// The last refusal the RA or the ECA answered it with.
     pub refused: Option<Refusal>,
+    /// Why the RA refused its current provisioning or top-up request, if it did. Kept
+    /// apart from the ECA's answer: a successor enrolment refused while a top-up is in
+    /// flight says nothing about the top-up.
+    pub topup_refused: Option<Refusal>,
+    /// Why the ECA refused its current successor-enrolment request, if it did.
+    pub reenrol_refused: Option<Refusal>,
     /// How many refusals it has received.
     pub refusals: u32,
     /// How many successor enrolment certificates it has installed.
@@ -102,6 +108,8 @@ impl DeviceState {
             enrolment: None,
             trust: DeviceTrust::default(),
             refused: None,
+            topup_refused: None,
+            reenrol_refused: None,
             refusals: 0,
             reenrolments: 0,
             crls_rejected: 0,
@@ -669,6 +677,9 @@ impl ScmsRun {
                 valid_until: 0,
             });
         let at = at.max(self.kernel.now());
+        if let Some(d) = self.state.devices.get_mut(&device) {
+            d.reenrol_refused = None;
+        }
         self.inject_at(
             at,
             device,
@@ -700,6 +711,18 @@ impl ScmsRun {
     #[must_use]
     pub fn refusal_of(&self, device: NodeId) -> Option<Refusal> {
         self.state.devices.get(&device).and_then(|d| d.refused)
+    }
+
+    /// Why the RA refused `device`'s current provisioning or top-up request, if it did.
+    #[must_use]
+    pub fn topup_refusal_of(&self, device: NodeId) -> Option<Refusal> {
+        self.state.devices.get(&device).and_then(|d| d.topup_refused)
+    }
+
+    /// Why the ECA refused `device`'s current successor-enrolment request, if it did.
+    #[must_use]
+    pub fn reenrol_refusal_of(&self, device: NodeId) -> Option<Refusal> {
+        self.state.devices.get(&device).and_then(|d| d.reenrol_refused)
     }
 
     fn inject(&mut self, to: NodeId, msg: ScmsMsg, flow: FlowId, run: FlowRun) {
@@ -802,6 +825,7 @@ impl ScmsRun {
             d.caterpillar = Some(cat);
             d.download_retries = 0;
             d.refused = None;
+            d.topup_refused = None;
             d.provisioning = Some(ProvisioningProgress {
                 start_i,
                 periods,
@@ -2505,6 +2529,7 @@ impl ScmsState {
                 Self::verify(out, 1);
                 if let Some(dev) = self.devices.get_mut(&device) {
                     dev.refused = Some(reason);
+                    dev.topup_refused = Some(reason);
                     dev.refusals += 1;
                     dev.provisioning = None;
                 }
@@ -2585,6 +2610,7 @@ impl ScmsState {
                 Self::verify(out, 1);
                 if let Some(dev) = self.devices.get_mut(&device) {
                     dev.refused = Some(reason);
+                    dev.reenrol_refused = Some(reason);
                     dev.refusals += 1;
                 }
             }

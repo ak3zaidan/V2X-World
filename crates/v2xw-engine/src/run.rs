@@ -1241,7 +1241,11 @@ impl Engine {
             let signs = self
                 .nodes
                 .get(&node)
-                .is_some_and(|n| n.profile().op_cost(NodeConfig::default().sign_op).is_some());
+                .is_some_and(|n| {
+                    n.profile()
+                        .op_cost(v2xw_node::profile::signature_ops(&self.scenario.security.signature).0)
+                        .is_some()
+                });
             if !signs {
                 let profile = self
                     .nodes
@@ -1343,7 +1347,7 @@ impl Engine {
             .get(&node)
             .and_then(|n| {
                 n.profile()
-                    .op_cost(NodeConfig::default().sign_op)
+                    .op_cost(v2xw_node::profile::signature_ops(&self.scenario.security.signature).0)
                     .map(|(d, _)| d)
             })
             // A profile that publishes no signing rate: one microsecond, which is not a
@@ -4237,6 +4241,36 @@ impl Engine {
                 {
                     return;
                 }
+                // The unit decides what reaches the authority: an honest one forwards the
+                // report, a compromised one may drop it or forward a forgery instead
+                // (`threats.compromised_rsus`).
+                let own = self
+                    .nodes
+                    .get(&rx)
+                    .and_then(|n| n.stores().certs.active().map(|c| hex_digest(&c.digest.0[..])))
+                    .unwrap_or_default();
+                let forwarded = {
+                    let Engine {
+                        scheduler,
+                        rng,
+                        world,
+                        snapshot,
+                        provenance,
+                        params,
+                        phase2,
+                        ..
+                    } = self;
+                    let mut null = crate::ctx::NullRecorder::new();
+                    let mut ctx = EngineCtx::new(
+                        scheduler, rng, world, snapshot, provenance, params, &mut null,
+                    );
+                    phase2
+                        .as_mut()
+                        .and_then(|p| p.rsu_forward(&mut ctx, rx, &own, report, now))
+                };
+                let Some(report) = forwarded else {
+                    return;
+                };
                 let bytes = crate::phase2::report_bytes();
                 let at = backhaul.delay(bytes).after(now);
                 if at > horizon {
@@ -4248,7 +4282,7 @@ impl Engine {
                     sdu,
                     Transfer::Report {
                         reporter: tx,
-                        report: report.clone(),
+                        report: Box::new(report.clone()),
                         via: Some(rx),
                         journey: Some(journey),
                         detected_at: report.detection_time.min(journey.t_generated),
@@ -4480,10 +4514,43 @@ impl Engine {
                 .get(&rsu)
                 .map_or(now, |n| n.clock().believed_time(now));
             for (chunk, bytes) in chunks.iter().zip(&sizes) {
+                let mut frame = chunk.clone();
+                let mut bytes = *bytes;
+                // A compromised unit may add entries of its own before it signs the frame
+                // with its roadside credentials; it cannot re-sign the list as the CRL
+                // Generator, so every receiver's check refuses it.
+                if self.phase2.as_ref().is_some_and(|p| p.is_compromised(rsu)) {
+                    let own = hex_digest(&signer.0[..]);
+                    let forged = {
+                        let Engine {
+                            scheduler,
+                            rng,
+                            world,
+                            snapshot,
+                            provenance,
+                            params,
+                            phase2,
+                            ..
+                        } = self;
+                        let mut null = crate::ctx::NullRecorder::new();
+                        let mut ctx = EngineCtx::new(
+                            scheduler, rng, world, snapshot, provenance, params, &mut null,
+                        );
+                        phase2
+                            .as_mut()
+                            .is_some_and(|p| p.forge_crl_frame(&mut ctx, rsu, &own, now, &mut frame))
+                    };
+                    if forged {
+                        bytes = self
+                            .phase2
+                            .as_ref()
+                            .map_or(bytes, |p| p.crl_size(frame.len() as u32));
+                    }
+                }
                 let ready_at = self.signing_cost(rsu).after(believed);
                 let tx = Transmission::sized(
                     v2xw_msg::MsgType::Crl,
-                    *bytes,
+                    bytes,
                     signer.clone(),
                     true,
                     ready_at,
@@ -4494,7 +4561,7 @@ impl Engine {
                     &tx,
                     now,
                     horizon,
-                    Some(AppPayload::Crl(Box::new((version, chunk.clone())))),
+                    Some(AppPayload::Crl(Box::new((version, frame)))),
                 );
                 if let Some(phase2) = self.phase2.as_mut() {
                     phase2.note_crl_broadcast();
@@ -4586,6 +4653,15 @@ impl Engine {
             }
             let rec = crate::sec_records::SecCert::new(now, *node, "top-up", None, Some(*bytes));
             self.emit(recorder, &rec);
+        }
+        // Refused top-ups and successor enrolments, as credential events.
+        for (node, event) in &tick.events {
+            let rec = crate::sec_records::SecCert::new(now, *node, event, None, None);
+            self.emit(recorder, &rec);
+        }
+        // The backend's state, for the Backend view.
+        if let Some(view) = tick.view {
+            self.emit(recorder, &crate::sec_records::BackendState(view));
         }
 
         // 4. A newly published list starts the roadside broadcast.
@@ -4742,6 +4818,35 @@ impl Engine {
             };
             if let Some(link) = link {
                 p.start_topup(node, link, i, now);
+            }
+        }
+
+        // 6b. Successor enrolments for certificates about to expire, over the same access.
+        let due = self
+            .phase2
+            .as_mut()
+            .map(|p| p.reenrolments_due(now))
+            .unwrap_or_default();
+        for (node, kind) in due {
+            let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+            let Some(p) = self.phase2.as_mut() else { break };
+            let link = match kind {
+                crate::backend::AccessKind::Cellular => {
+                    if p.access_mut().uu_coverage(pos, now) {
+                        p.access_mut().nominal_link(kind, None)
+                    } else {
+                        None
+                    }
+                }
+                crate::backend::AccessKind::RsuRelay => {
+                    let unit = p.relay_in_range(pos, "provisioning-proxy");
+                    let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
+                    p.access_mut().nominal_link(kind, backhaul)
+                }
+                crate::backend::AccessKind::Offline => None,
+            };
+            if let Some(link) = link {
+                p.start_reenrol(node, link, now);
             }
         }
 

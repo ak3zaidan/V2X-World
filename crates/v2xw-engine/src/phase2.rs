@@ -68,6 +68,7 @@ use v2xw_core::time::{Duration, SimTime};
 use v2xw_proto::net::Transport;
 use v2xw_proto::scms::run::{ScmsRun, crl_bytes};
 use v2xw_proto::stage::{FlowRun, StageId};
+use v2xw_proto::view::{BackendView, EdgeTracker};
 use v2xw_proto::{RevocationLatency, ScmsParams};
 use v2xw_sec::linkage::{CrlLinkageEntry, LinkageValue};
 use v2xw_threat::{
@@ -192,6 +193,11 @@ pub struct LifecycleParams {
     pub crl_fetch_interval: Duration,
     /// How often a `crl` unit repeats the list.
     pub crl_broadcast_interval: Duration,
+    /// ETSI only: top up with one butterfly authorization request and a batch download
+    /// (TS 102 941 V2 §6.2.3.5) instead of one standard request per ticket.
+    pub etsi_butterfly: bool,
+    /// How often the backend's state is published for the Backend view.
+    pub view_interval: Duration,
 }
 
 fn secs(v: f64) -> Duration {
@@ -216,6 +222,8 @@ impl LifecycleParams {
             topup_below_periods: 1,
             crl_fetch_interval: secs(CRL_FETCH_INTERVAL_S),
             crl_broadcast_interval: secs(CRL_BROADCAST_INTERVAL_S),
+            etsi_butterfly: false,
+            view_interval: secs(BACKEND_VIEW_INTERVAL_S),
         };
         let Some(choice) = scenario.security.protocol.as_ref() else {
             return Ok(p);
@@ -256,6 +264,12 @@ impl LifecycleParams {
                 "crl_broadcast_interval_s" => p.crl_broadcast_interval = secs(v.max(0.1)),
                 "first_batch_delay_s" => p.scms.first_batch_delay = secs(v),
                 "download_poll_interval_s" => p.scms.download_poll_interval = secs(v.max(0.1)),
+                "enrolment_lifetime_s" => p.scms.enrolment_lifetime = secs(v.max(1.0)),
+                "reenrol_lead_s" => p.scms.reenrol_lead = secs(v),
+                "max_periods_ahead" => {
+                    p.scms.max_periods_ahead = (v.round() as u32).max(1);
+                }
+                "etsi_butterfly" => p.etsi_butterfly = v >= 0.5,
                 other => {
                     return Err(conflict(
                         "security.protocol.params",
@@ -288,7 +302,7 @@ impl LifecycleParams {
 }
 
 /// The lifecycle keys `security.protocol.params` accepts.
-pub const LIFECYCLE_KEYS: [&str; 12] = [
+pub const LIFECYCLE_KEYS: [&str; 16] = [
     "i_period_s",
     "cert_lifetime_s",
     "certs_per_period",
@@ -301,7 +315,16 @@ pub const LIFECYCLE_KEYS: [&str; 12] = [
     "crl_broadcast_interval_s",
     "first_batch_delay_s",
     "download_poll_interval_s",
+    "enrolment_lifetime_s",
+    "reenrol_lead_s",
+    "max_periods_ahead",
+    "etsi_butterfly",
 ];
+
+/// How often, in simulated seconds, the backend's state is published on `backend.state`
+/// for the Backend view: often enough to watch a queue fill, rarely enough that a
+/// five-minute run records a few hundred snapshots.
+pub const BACKEND_VIEW_INTERVAL_S: f64 = 1.0;
 
 /// An armed attacker: the model, and the window it is allowed to act in.
 struct AttackerSlot {
@@ -395,6 +418,15 @@ struct NodeSec {
     active_digest: Option<[u8; 8]>,
     self_revoked: bool,
     starved: bool,
+    /// When this vehicle's enrolment certificate expires.
+    enrolment_until: SimTime,
+    /// A successor enrolment in flight.
+    reenrol: Option<FlowRun>,
+    /// The RA refused it as blocklisted: it asks for nothing more.
+    blocked: bool,
+    /// ETSI butterfly: the i-period of a batch waiting at the EA, and whether its
+    /// download has been asked for.
+    etsi_batch: Option<(u32, bool)>,
 }
 
 /// Counters the run report carries for this path.
@@ -464,6 +496,27 @@ pub struct Phase2Report {
     pub topups_completed: u64,
     /// Certificates installed by top-ups.
     pub certs_topped_up: u64,
+    /// Top-ups the RA refused: blocklisted, or the enrolment certificate had expired.
+    pub topups_refused: u64,
+    /// Of those, refused because the enrolment was blocklisted (passive revocation).
+    pub topups_refused_blocklisted: u64,
+    /// Successor enrolments started, completed and refused.
+    pub reenrolments_started: u64,
+    /// See [`Phase2Report::reenrolments_started`].
+    pub reenrolments_completed: u64,
+    /// See [`Phase2Report::reenrolments_started`].
+    pub reenrolments_refused: u64,
+    /// CRL frames a vehicle discarded because their entries were not the CRL
+    /// Generator's signed list (a compromised roadside unit's forgery).
+    pub crl_frames_rejected: u64,
+    /// Roadside units under an attacker's control (`threats.compromised_rsus`).
+    pub compromised_rsus: u64,
+    /// Relayed reports a compromised unit dropped instead of forwarding.
+    pub rsu_reports_suppressed: u64,
+    /// Relayed reports a compromised unit re-targeted at an innocent subject.
+    pub rsu_reports_poisoned: u64,
+    /// CRL frames a compromised unit put on the air with fabricated entries.
+    pub rsu_crl_frames_forged: u64,
     /// Pseudonym changes, all vehicles.
     pub pseudonym_changes: u64,
     /// Links the passive observer claimed across a pseudonym change.
@@ -501,6 +554,11 @@ pub struct BackendTick {
     pub published: Option<u32>,
     /// Certificates a completed top-up installs, per node.
     pub installs: Vec<(NodeId, Vec<ProvisionedCred>, u64)>,
+    /// Credential events to write on `sec.cert`: `(node, event)` — `topup-refused`,
+    /// `reenrolled`, `reenrol-refused`.
+    pub events: Vec<(NodeId, &'static str)>,
+    /// The backend's state, when it is due for publication.
+    pub view: Option<BackendView>,
     /// Backend-network and backhaul bytes moved since the last tick:
     /// `(t, bucket, bytes, node)`. The sidelink's own bytes are not here: a relayed
     /// report's air hop is a frame on `node.tx` like any other.
@@ -553,6 +611,17 @@ pub struct Phase2 {
     observer: v2xw_threat::PrivacyObserver,
     /// Its link claims since the last backend step, for the recorder.
     link_claims: Vec<v2xw_threat::records::PrivacyLinkClaim>,
+    /// The fold of the backend's wire log into edges, for the Backend view.
+    tracker: EdgeTracker,
+    /// `threats.compromised_rsus`: the attack each compromised unit runs, by the unit's
+    /// index in `actors.rsus`, with its active window.
+    compromised_specs: BTreeMap<usize, (v2xw_threat::RsuAttackParams, SimTime, SimTime)>,
+    /// The compromised units, once they exist, by node.
+    compromised: BTreeMap<NodeId, v2xw_threat::CompromisedRsu>,
+    /// Which node each compromised unit's spec belongs to, before its model is built.
+    compromised_nodes: BTreeMap<NodeId, usize>,
+    /// When the backend's state is next published.
+    next_view: SimTime,
 }
 
 impl core::fmt::Debug for Phase2 {
@@ -814,6 +883,7 @@ impl Phase2 {
             });
         }
 
+        let compromised_specs = compromised_rsu_specs(scenario)?;
         let params = LifecycleParams::from_scenario(scenario)?;
         let mut scms_params = params.scms;
         apply_backend_net(scenario, &mut scms_params)?;
@@ -832,6 +902,7 @@ impl Phase2 {
             let mut ep = v2xw_proto::etsi::ts102941::EtsiParams::default();
             ep.decide_on_report = false;
             ep.at_validity = params.scms.cert_lifetime;
+            ep.butterfly_batch = params.jmax;
             Some(v2xw_proto::etsi::ts102941::EtsiRun::new(ep).map_err(|e| {
                 conflict(
                     "security.protocol",
@@ -874,6 +945,11 @@ impl Phase2 {
             report: Phase2Report::default(),
             observer: v2xw_threat::PrivacyObserver::cited_defaults(NodeId::new(u32::MAX)),
             link_claims: Vec::new(),
+            tracker: EdgeTracker::default(),
+            next_view: 0,
+            compromised_specs,
+            compromised: BTreeMap::new(),
+            compromised_nodes: BTreeMap::new(),
         }))
     }
 
@@ -890,8 +966,154 @@ impl Phase2 {
 
     /// Records the node id the engine gave one roadside unit.
     pub fn note_rsu(&mut self, node: NodeId) {
+        let index = self.rsu_nodes.len();
         self.rsu_nodes.push(node);
         self.report.rsus += 1;
+        if self.compromised_specs.contains_key(&index) {
+            self.compromised_nodes.insert(node, index);
+            self.report.compromised_rsus += 1;
+        }
+    }
+
+    /// Whether `node` is a roadside unit under an attacker's control.
+    #[must_use]
+    pub fn is_compromised(&self, node: NodeId) -> bool {
+        self.compromised_nodes.contains_key(&node)
+    }
+
+    /// The compromised unit's model, built the first time the unit acts, with the
+    /// certificate digest it signs under (the credentials every receiver trusts).
+    fn compromised_model(
+        &mut self,
+        node: NodeId,
+        own_digest: &str,
+    ) -> Option<&mut v2xw_threat::CompromisedRsu> {
+        let index = *self.compromised_nodes.get(&node)?;
+        if !self.compromised.contains_key(&node) {
+            let (params, from, to) = self.compromised_specs.get(&index)?.clone();
+            let mut params = params;
+            params.own_cert_digest = own_digest.to_string();
+            let schedule = v2xw_threat::capability::AttackSchedule {
+                from,
+                to,
+                ..v2xw_threat::capability::AttackSchedule::default()
+            };
+            self.compromised.insert(
+                node,
+                v2xw_threat::CompromisedRsu::new(node, params, schedule),
+            );
+        }
+        self.compromised.get_mut(&node)
+    }
+
+    /// A report a roadside unit is about to forward to the authority, after the unit has
+    /// had its say: an honest unit forwards it, a compromised one may drop it or replace
+    /// it with a forgery that frames a vehicle it has heard (07-threats-and-detection §2.2).
+    /// `None` means the report goes no further.
+    pub fn rsu_forward(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        rsu: NodeId,
+        own_digest: &str,
+        report: &MisbehaviourReport,
+        now: SimTime,
+    ) -> Option<MisbehaviourReport> {
+        let Some(model) = self.compromised_model(rsu, own_digest) else {
+            return Some(report.clone());
+        };
+        if !v2xw_threat::Attacker::schedule(model).active_at(now, 0.0, 0.0) {
+            return Some(report.clone());
+        }
+        match model.on_forward(ctx, report, now).0 {
+            v2xw_threat::ForwardDecision::Forward => Some(report.clone()),
+            v2xw_threat::ForwardDecision::Drop => {
+                self.report.rsu_reports_suppressed += 1;
+                None
+            }
+            v2xw_threat::ForwardDecision::Replace(forged) => {
+                self.report.rsu_reports_poisoned += 1;
+                // The forgery arrives as the unit's own report, and the authority trusts
+                // infrastructure: that is the attack.
+                self.ma.trust_infrastructure(forged.reporter_cert_digest.clone());
+                Some(*forged)
+            }
+        }
+    }
+
+    /// A compromised unit with `FalseCrl` adds fabricated entries to the CRL frame it is
+    /// about to broadcast. It holds no CRL Generator key, so the frame no longer verifies
+    /// and every receiver discards it. Returns whether the frame was altered.
+    pub fn forge_crl_frame(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        rsu: NodeId,
+        own_digest: &str,
+        now: SimTime,
+        frame: &mut Vec<CrlLinkageEntry>,
+    ) -> bool {
+        let Some(model) = self.compromised_model(rsu, own_digest) else {
+            return false;
+        };
+        if model.kind() != v2xw_threat::RsuAttackKind::FalseCrl
+            || !v2xw_threat::Attacker::schedule(model).active_at(now, 0.0, 0.0)
+        {
+            return false;
+        }
+        let n = model.params().fabricated_entries.round().max(1.0) as u32;
+        let mut rng = ctx.rng(
+            v2xw_core::rng::RngDomain::Attack,
+            v2xw_core::rng::EntityRef::Node(rsu),
+        );
+        for _ in 0..n {
+            let mut a = [0u8; 16];
+            let mut b = [0u8; 16];
+            rng.fill_bytes(&mut a);
+            rng.fill_bytes(&mut b);
+            frame.push(CrlLinkageEntry {
+                i: self.params.period_at(now),
+                la_id1: v2xw_sec::linkage::LaId(1),
+                la_id2: v2xw_sec::linkage::LaId(2),
+                ls1_i: v2xw_sec::linkage::LinkageSeed::new(a),
+                ls2_i: v2xw_sec::linkage::LinkageSeed::new(b),
+                jmax: self.params.jmax,
+                max_forward: v2xw_sec::linkage::DEFAULT_MAX_FORWARD_PERIODS,
+            });
+        }
+        drop(rng);
+        self.report.rsu_crl_frames_forged += 1;
+        true
+    }
+
+    /// Lets a compromised unit note the senders it hears, which is where a poisoner picks
+    /// its victims from.
+    pub fn compromised_hears(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
+        rsu: NodeId,
+        own_digest: &str,
+        me: &SelfBelief,
+        heard: &[ObservedMessage],
+    ) {
+        if heard.is_empty() {
+            return;
+        }
+        let Some(model) = self.compromised_model(rsu, own_digest) else {
+            return;
+        };
+        let view = AttackerView {
+            own_rx: heard,
+            own_credentials: &[],
+            crl_revocations_seen: None,
+            own_belief: *me,
+            honest: v2xw_threat::HonestClaim {
+                x_m: me.x_m,
+                y_m: me.y_m,
+                speed_mps: 0.0,
+                heading_rad: 0.0,
+            },
+            believed_time: me.believed_time,
+        };
+        v2xw_threat::Attacker::observe(model, ctx, &view);
     }
 
     /// The roadside units' node ids.
@@ -1024,6 +1246,7 @@ impl Phase2 {
                     access: Some(kind),
                     last_period: start + self.params.pool_periods.saturating_sub(1),
                     next_crl_fetch: SimTime::MAX,
+                    enrolment_until: SimTime::MAX,
                     ..NodeSec::default()
                 },
             );
@@ -1046,12 +1269,34 @@ impl Phase2 {
         }
         let out = self.creds_of_device(device, 0);
         let last = start + self.params.pool_periods.saturating_sub(1);
+        // A vehicle on the road holds an enrolment certificate issued some time before the
+        // run — at the factory or at its last renewal — so its remaining validity is
+        // uniform over the lifetime, drawn from the vehicle's own keyed stream. With the
+        // default six years almost no run sees a renewal; a compressed lifetime does.
+        let lifetime = self.params.scms.enrolment_lifetime.as_nanos().max(1);
+        let u = rng
+            .checkout(
+                v2xw_core::rng::RngDomain::Backend,
+                v2xw_core::rng::EntityRef::custom("phase2/enrolment-age", u64::from(node.index())),
+            )
+            .f64();
+        let remaining = ((u * lifetime as f64) as u64).clamp(1, lifetime);
+        let until = now.saturating_add(remaining);
+        self.scms.set_enrolment(
+            device,
+            v2xw_proto::scms::msg::EnrolmentCert {
+                generation: 0,
+                valid_from: until.saturating_sub(lifetime),
+                valid_until: until,
+            },
+        );
         self.nodes.insert(
             node,
             NodeSec {
                 access: Some(kind),
                 last_period: last,
                 next_crl_fetch: now,
+                enrolment_until: until,
                 ..NodeSec::default()
             },
         );
@@ -1230,6 +1475,8 @@ impl Phase2 {
         };
         let interval = secs(self.detector_params.generation_interval_s);
         let mut out = Vec::new();
+        let mut heard: Vec<ObservedMessage> = Vec::new();
+        let compromised = self.compromised_nodes.contains_key(&node);
         for m in delivered {
             let Some(signer) = &m.signer else { continue };
             let key = digest_key(signer);
@@ -1279,6 +1526,9 @@ impl Phase2 {
                     _ => VerificationState::Unverified,
                 },
             };
+            if compromised {
+                heard.push(observed.clone());
+            }
             let verdict = v2xw_threat::Detector::on_message(detector, ctx, me, &observed, &NoMap);
             self.report.messages_checked += 1;
             *self
@@ -1319,6 +1569,10 @@ impl Phase2 {
                 self.report.reports_sent += 1;
                 out.push(report);
             }
+        }
+        if compromised {
+            let own = reporter_digest.unwrap_or_default();
+            self.compromised_hears(ctx, node, &own, me, &heard);
         }
         out
     }
@@ -1590,6 +1844,8 @@ impl Phase2 {
                 tick.installs.push((node, fresh, bytes));
             }
         }
+        // Top-ups the RA refused, and successor enrolments that finished either way.
+        self.settle_refusals_and_renewals(&log, &mut tick);
         // Bytes the backend moved.
         let (steps, cursor) = {
             let (new, cursor) = self.scms.kernel.steps_since(self.step_cursor);
@@ -1597,7 +1853,232 @@ impl Phase2 {
         };
         self.step_cursor = cursor;
         push_bytes(&mut tick, steps);
+        self.maybe_publish_view(now, &mut tick);
         tick
+    }
+
+    /// Acts on what the RA and the ECA answered: a refused top-up ends the request (a
+    /// blocklisted vehicle asks for nothing more; an expired enrolment is renewed first),
+    /// and a successor enrolment moves the vehicle's certificate expiry.
+    fn settle_refusals_and_renewals(
+        &mut self,
+        log: &v2xw_proto::stage::StageLog,
+        tick: &mut BackendTick,
+    ) {
+        let mut refused = Vec::new();
+        let mut renewed = Vec::new();
+        for (node, n) in &self.nodes {
+            let device = device_of(*node);
+            if n.topup.is_some()
+                && let Some(reason) = self.scms.topup_refusal_of(device)
+            {
+                refused.push((*node, reason));
+            }
+            if let Some(run) = n.reenrol {
+                if log.at(run, StageId::Installed).is_some() {
+                    let until = self
+                        .scms
+                        .state
+                        .devices
+                        .get(&device)
+                        .and_then(|d| d.enrolment)
+                        .map_or(n.enrolment_until, |e| e.valid_until);
+                    renewed.push((*node, Some(until)));
+                } else if self.scms.reenrol_refusal_of(device).is_some() {
+                    renewed.push((*node, None));
+                }
+            }
+        }
+        for (node, reason) in refused {
+            use v2xw_proto::scms::msg::Refusal;
+            self.report.topups_refused += 1;
+            tick.events.push((node, "topup-refused"));
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.topup = None;
+                match reason {
+                    Refusal::Blocklisted => {
+                        n.blocked = true;
+                        self.report.topups_refused_blocklisted += 1;
+                    }
+                    // The certificate it signed with had run out: renew before asking
+                    // again (the ECA refuses an expired one, which is then final).
+                    Refusal::EnrolmentExpired => n.enrolment_until = 0,
+                    Refusal::UnknownEnrolment => n.blocked = true,
+                }
+            }
+        }
+        for (node, until) in renewed {
+            let Some(n) = self.nodes.get_mut(&node) else {
+                continue;
+            };
+            n.reenrol = None;
+            match until {
+                Some(t) => {
+                    n.enrolment_until = t;
+                    self.report.reenrolments_completed += 1;
+                    tick.events.push((node, "reenrolled"));
+                }
+                None => {
+                    // Blocklisted, or already expired: the ECA will not renew it and the
+                    // vehicle's credentials end with its last pseudonym batch.
+                    n.blocked = true;
+                    self.report.reenrolments_refused += 1;
+                    tick.events.push((node, "reenrol-refused"));
+                }
+            }
+        }
+    }
+
+    /// Vehicles whose enrolment certificate is within the renewal lead of expiring and
+    /// that are not already renewing, with the access to use.
+    pub fn reenrolments_due(&mut self, now: SimTime) -> Vec<(NodeId, AccessKind)> {
+        if self.etsi.is_some() {
+            return Vec::new();
+        }
+        let lead = self.params.scms.reenrol_lead;
+        self.nodes
+            .iter()
+            .filter(|(_, n)| {
+                n.reenrol.is_none()
+                    && !n.blocked
+                    && !n.self_revoked
+                    && lead.after(now) >= n.enrolment_until
+            })
+            .map(|(node, n)| (*node, n.access.unwrap_or(AccessKind::Offline)))
+            .collect()
+    }
+
+    /// Starts one vehicle's successor enrolment over `link`.
+    pub fn start_reenrol(&mut self, node: NodeId, link: v2xw_proto::Link, now: SimTime) {
+        let device = device_of(node);
+        self.scms.set_access(device, link);
+        let run = self.scms.reenrol_at(device, now);
+        self.report.reenrolments_started += 1;
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.reenrol = Some(run);
+        }
+    }
+
+    /// Publishes the backend's state on the view's cadence.
+    fn maybe_publish_view(&mut self, now: SimTime, tick: &mut BackendTick) {
+        if now < self.next_view {
+            return;
+        }
+        self.next_view = self.params.view_interval.after(now);
+        tick.view = Some(self.backend_view(now));
+    }
+
+    /// Every backend entity, the roadside units and the vehicles, and the traffic between
+    /// them, at `now`: the credential system's own view (`v2xw_proto::view`) with what the
+    /// engine carries itself — CRL downloads over the vehicles' Uu, roadside broadcasts,
+    /// relayed reports and the authority's decisions — added to the entities that did it.
+    pub fn backend_view(&mut self, now: SimTime) -> BackendView {
+        let mut view = match self.etsi.as_ref() {
+            Some(e) => e.backend_view(now, &mut self.tracker),
+            None => self.scms.backend_view(now, &mut self.tracker),
+        };
+        let r = &self.report;
+        let a = &self.access.report;
+        for e in &mut view.entities {
+            match e.id.as_str() {
+                "crl-store" => {
+                    e.set("downloads_served", r.crl_downloads);
+                    e.set("versions_published", r.crl_versions_published);
+                }
+                "crl-broadcast" => {
+                    e.set("rsu_frames", r.crl_broadcasts);
+                }
+                "ma" => {
+                    e.set("reports_ingested", r.reports_at_ma);
+                    e.set("revocation_decisions", r.ma_revoke_decisions);
+                    e.set("cases_opened", r.cases_opened);
+                }
+                "ee" => {
+                    e.set("vehicles", self.nodes.len() as u64);
+                    e.set("reports_filed", r.reports_sent);
+                    e.set("reports_over_cellular", r.reports_uploaded_cellular);
+                    e.set("reports_via_rsu", r.reports_uploaded_relay);
+                    e.set("reports_waiting_for_coverage", self.nodes.values().map(|n| n.outbox.len() as u64).sum::<u64>());
+                    e.set("topups_started", r.topups_started);
+                    e.set("topups_completed", r.topups_completed);
+                    e.set("topups_refused", r.topups_refused);
+                    e.set(
+                        "topups_in_flight",
+                        self.nodes.values().filter(|n| n.topup.is_some()).count() as u64,
+                    );
+                    e.set("certificates_topped_up", r.certs_topped_up);
+                    e.set("pseudonym_changes", r.pseudonym_changes);
+                    e.set("reenrolments_completed", r.reenrolments_completed);
+                    e.set("vehicles_starved", r.vehicles_starved);
+                    e.set("crl_installs", r.crls_installed);
+                    e.set("revoked_receptions", r.revoked_receptions);
+                    e.set("access_cellular", a.cellular_vehicles);
+                    e.set("access_rsu_relay", a.relay_only_vehicles);
+                    e.set("access_offline", a.offline_vehicles);
+                }
+                _ => {}
+            }
+        }
+        if !self.rsus.is_empty() {
+            let mut rsu = v2xw_proto::view::EntityView {
+                id: "rsu".to_string(),
+                name: "Roadside units".to_string(),
+                system: view.system,
+                tier: "distribution",
+                online: true,
+                node: None,
+                role: "Relay reports and top-ups over their backhaul and repeat the CRL on \
+                       the air; never on the safety channel's behalf.",
+                queue: None,
+                traffic: v2xw_proto::kernel::NodeTraffic::default(),
+                ops: std::collections::BTreeMap::new(),
+                state: std::collections::BTreeMap::new(),
+            };
+            rsu.set("units", self.rsus.len() as u64);
+            rsu.set(
+                "with_backhaul",
+                self.rsus.iter().filter(|s| s.backhaul.connected).count() as u64,
+            );
+            rsu.set("crl_role", self.rsus_with_role("crl").len() as u64);
+            rsu.set("crl_frames", r.crl_broadcasts);
+            rsu.set("reports_filed_by_units", r.reports_from_rsus);
+            rsu.set("reports_relayed", r.reports_uploaded_relay);
+            rsu.set("compromised", self.compromised_count() as u64);
+            view.entities.push(rsu);
+        }
+        // What the engine carried outside the credential kernel, as edges.
+        let mut extra = |from: &str, to: &str, messages: u64, step: &str, transport: &str| {
+            if messages == 0 {
+                return;
+            }
+            view.edges.push(v2xw_proto::view::EdgeView {
+                from: from.to_string(),
+                to: to.to_string(),
+                messages,
+                bytes: 0,
+                last_t: now,
+                last_step: step.to_string(),
+                transport: transport.to_string(),
+                steps: std::iter::once((step.to_string(), messages)).collect(),
+            });
+        };
+        extra("crl-store", "ee", r.crl_downloads, "crl-download", "cellular-uu");
+        extra(
+            "crl-broadcast",
+            "rsu",
+            u64::from(self.broadcast_version > 0) * r.crl_versions_published,
+            "crl-to-rsu",
+            "rsu-backhaul",
+        );
+        extra("rsu", "ee", r.crl_broadcasts, "crl-air-broadcast", "v2x-air");
+        extra("ee", "rsu", r.reports_uploaded_relay, "report-relay", "v2x-air");
+        view
+    }
+
+    /// How many roadside units are under an attacker's control.
+    #[must_use]
+    pub fn compromised_count(&self) -> usize {
+        self.compromised_nodes.len()
     }
 
     /// The reports the authority received in `stamps`, through the persistence gate, in the
@@ -1754,6 +2235,56 @@ impl Phase2 {
                 blocked: None,
             });
         }
+        // Butterfly top-ups: once the EA holds the certified batch, the station asks for
+        // it; a blocklisted station's download is answered empty (passive revocation).
+        let ready: Vec<(NodeId, u32)> = self
+            .nodes
+            .iter()
+            .filter_map(|(node, n)| match n.etsi_batch {
+                Some((i, false))
+                    if self
+                        .etsi
+                        .as_ref()
+                        .is_some_and(|e| e.pending_batches.contains_key(&device_of(*node))) =>
+                {
+                    Some((*node, i))
+                }
+                _ => None,
+            })
+            .collect();
+        for (node, i) in ready {
+            if let Some(e) = self.etsi.as_mut() {
+                let run = e.download_ats(device_of(node), i);
+                if let Some(n) = self.nodes.get_mut(&node) {
+                    n.etsi_batch = Some((i, true));
+                    n.topup = Some(run);
+                    n.etsi_target = Some(e.tickets_of(device_of(node)) + self.params.jmax);
+                }
+            }
+        }
+        // A butterfly request the EA refused outright never produces a batch.
+        let refused: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .filter(|(node, n)| {
+                matches!(n.etsi_batch, Some((_, false)))
+                    && self.etsi.as_ref().is_some_and(|e| {
+                        e.blocklist.contains(&device_of(**node))
+                            && !e.pending_batches.contains_key(&device_of(**node))
+                    })
+            })
+            .map(|(node, _)| *node)
+            .collect();
+        for node in refused {
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.etsi_batch = None;
+                n.topup = None;
+                n.blocked = true;
+            }
+            self.report.topups_refused += 1;
+            self.report.topups_refused_blocklisted += 1;
+            tick.events.push((node, "topup-refused"));
+        }
         // Ticket top-ups: a request per ticket, and the batch installs when the AA has
         // granted them all.
         let mut finished = Vec::new();
@@ -1784,6 +2315,7 @@ impl Phase2 {
             if let Some(n) = self.nodes.get_mut(&node) {
                 n.etsi_target = None;
                 n.topup = None;
+                n.etsi_batch = None;
                 n.last_period = i;
             }
             self.report.topups_completed += 1;
@@ -1801,6 +2333,7 @@ impl Phase2 {
         };
         self.step_cursor = cursor;
         push_bytes(&mut tick, steps);
+        self.maybe_publish_view(now, &mut tick);
         tick
     }
 
@@ -1955,6 +2488,21 @@ impl Phase2 {
         Vec<crate::sec_records::ProtoRevocation>,
     ) {
         let mut records = Vec::new();
+        // The list is the CRL Generator's, signed: an entry it did not sign fails the
+        // signature and the frame is discarded whole. What a vehicle holds is checked
+        // against the Generator's own list, which is what its signature covers
+        // (`v2xw_proto::scms::run::crl_digest`); a roadside unit that adds or alters an
+        // entry — it holds no Generator key — produces a frame that does not verify.
+        let signed = &self.scms.state.crlg.entries;
+        if !entries.iter().all(|e| signed.contains(e)) {
+            self.report.crl_frames_rejected += 1;
+            if let Some(n) = self.nodes.get_mut(&node)
+                && cellular
+            {
+                n.crl_fetch_in_flight = false;
+            }
+            return (Vec::new(), records);
+        }
         let Some(n) = self.nodes.get_mut(&node) else {
             return (Vec::new(), records);
         };
@@ -2079,7 +2627,7 @@ impl Phase2 {
         let below = self.params.topup_below_periods;
         let mut out = Vec::new();
         for (node, n) in &self.nodes {
-            if n.topup.is_some() || n.self_revoked {
+            if n.topup.is_some() || n.self_revoked || n.blocked || n.etsi_batch.is_some() {
                 continue;
             }
             let remaining = n.last_period.saturating_add(1).saturating_sub(current);
@@ -2097,6 +2645,22 @@ impl Phase2 {
     /// Starts one vehicle's top-up over `link`, for period `i`.
     pub fn start_topup(&mut self, node: NodeId, link: v2xw_proto::Link, i: u32, now: SimTime) {
         let device = device_of(node);
+        if let Some(etsi) = self.etsi.as_mut()
+            && self.params.etsi_butterfly
+        {
+            // One butterfly request for the whole period (TS 102 941 V2 §6.2.3.5): the EA
+            // expands the caterpillar keys, the AA certifies the batch without learning
+            // whose it is, and the station comes back for it at the next backend step.
+            etsi.set_access(device, link);
+            etsi.current_i = i;
+            let run = etsi.authorize_butterfly(device);
+            self.report.topups_started += 1;
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.topup = Some(run);
+                n.etsi_batch = Some((i, false));
+            }
+            return;
+        }
         if let Some(etsi) = self.etsi.as_mut() {
             // One standard authorization per ticket [TS 102 941 §6.2.3.3]; a blocklisted
             // station's requests are refused by the EA and its pool runs dry.
@@ -2629,4 +3193,121 @@ pub fn digest_bytes(digest: &v2xw_msg::sec_types::HashedId8) -> [u8; 8] {
 #[must_use]
 pub fn report_bytes() -> u32 {
     ScmsParams::default().sizes.report_payload_bytes
+}
+
+/// `threats.compromised_rsus` and `threats.compromised_rsu_attack`: which roadside units
+/// (by their index in `actors.rsus`) are under an attacker's control, and what they do.
+fn compromised_rsu_specs(
+    scenario: &Scenario,
+) -> Result<BTreeMap<usize, (v2xw_threat::RsuAttackParams, SimTime, SimTime)>> {
+    let mut out = BTreeMap::new();
+    let units = &scenario.threats.compromised_rsus;
+    if units.is_empty() {
+        if scenario.threats.compromised_rsu_attack.is_some() {
+            return Err(conflict(
+                "threats.compromised_rsu_attack",
+                "is set but threats.compromised_rsus names no roadside unit",
+            ));
+        }
+        return Ok(out);
+    }
+    let mut params = v2xw_threat::RsuAttackParams::default();
+    let horizon = (scenario.time.duration_s * 1e9).round().max(0.0) as u64;
+    let (mut from, mut to) = (0, horizon);
+    if let Some(choice) = &scenario.threats.compromised_rsu_attack {
+        if choice.id != v2xw_threat::attack_rsu::MODEL_ID {
+            return Err(conflict(
+                "threats.compromised_rsu_attack.id",
+                format!(
+                    "{} is not the compromised-unit model; use {}",
+                    choice.id,
+                    v2xw_threat::attack_rsu::MODEL_ID
+                ),
+            ));
+        }
+        if let Some(map) = choice.params.as_object() {
+            for (key, value) in map {
+                let bad = || {
+                    conflict(
+                        &format!("threats.compromised_rsu_attack.params.{key}"),
+                        format!("has an unusable value {value}"),
+                    )
+                };
+                let prob = |v: &serde_json::Value| {
+                    v.as_f64().filter(|p| (0.0..=1.0).contains(p)).ok_or_else(bad)
+                };
+                match key.as_str() {
+                    "kind" => {
+                        let name = value.as_str().ok_or_else(bad)?;
+                        let kind = v2xw_threat::RsuAttackKind::parse(name).ok_or_else(|| {
+                            conflict(
+                                "threats.compromised_rsu_attack.params.kind",
+                                format!(
+                                    "'{name}' is not a compromised-unit attack; \
+                                     SuppressForwardedReports, PoisonForwardedReports or \
+                                     FalseCrl"
+                                ),
+                            )
+                        })?;
+                        if matches!(
+                            kind,
+                            v2xw_threat::RsuAttackKind::FalseSpat
+                                | v2xw_threat::RsuAttackKind::FalseMap
+                                | v2xw_threat::RsuAttackKind::FalseCtl
+                        ) {
+                            return Err(conflict(
+                                "threats.compromised_rsu_attack.params.kind",
+                                format!(
+                                    "'{name}' is declared by the model but not driven: no \
+                                     receiver application acts on SPaT or MAP content yet, \
+                                     and roadside units do not broadcast the trust list in \
+                                     this build; SuppressForwardedReports, \
+                                     PoisonForwardedReports or FalseCrl"
+                                ),
+                            ));
+                        }
+                        params.kind = kind;
+                    }
+                    "suppress_prob" => params.suppress_prob = prob(value)?,
+                    "poison_prob" => params.poison_prob = prob(value)?,
+                    "fabricated_entries" => {
+                        params.fabricated_entries =
+                            value.as_f64().filter(|v| *v >= 1.0).ok_or_else(bad)?;
+                    }
+                    "from_s" => {
+                        from = (value.as_f64().filter(|v| *v >= 0.0).ok_or_else(bad)? * 1e9)
+                            .round() as u64;
+                    }
+                    "to_s" => {
+                        to = (value.as_f64().filter(|v| *v >= 0.0).ok_or_else(bad)? * 1e9)
+                            .round() as u64;
+                    }
+                    other => {
+                        return Err(conflict(
+                            "threats.compromised_rsu_attack.params",
+                            format!(
+                                "'{other}' is not a parameter; kind, suppress_prob, \
+                                 poison_prob, fabricated_entries, from_s, to_s"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for &index in units {
+        let index = index as usize;
+        if index >= scenario.actors.rsus.len() {
+            return Err(conflict(
+                "threats.compromised_rsus",
+                format!(
+                    "names roadside unit {index}, and actors.rsus declares {}; a unit is \
+                     named by its position in that list, from 0",
+                    scenario.actors.rsus.len()
+                ),
+            ));
+        }
+        out.insert(index, (params.clone(), from, to));
+    }
+    Ok(out)
 }
