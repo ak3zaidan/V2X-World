@@ -1301,9 +1301,36 @@ impl ObstacleStack {
         geometry: bool,
         dirs: (StreetDir, StreetDir),
     ) -> v2xw_radio::LosResult {
-        let mut parts = Vec::with_capacity(2);
+        self.prepare(world);
+        self.classify_directed_shared(world, a, b, geometry, dirs)
+    }
+
+    /// Builds every index the shared-borrow queries use, for this world. Idempotent.
+    ///
+    /// The building index is the one [`v2xw_radio::BuildingShadowing::los_cached`] would
+    /// build on its first call; building it ahead is what lets the reception phase
+    /// classify a frame's links in parallel through `&self`.
+    pub fn prepare(&mut self, world: &World) {
         if let Some(buildings) = self.buildings.as_mut() {
-            let mut los = buildings.los_cached(world, a, b);
+            buildings.prepare(world);
+        }
+    }
+
+    /// [`ObstacleStack::classify_directed`] through a shared borrow, so a frame's links can
+    /// be classified in parallel. The same answer: every model it reads is pure, and the
+    /// building index is [`ObstacleStack::prepare`]'s (or, if that was not called, the
+    /// building model's scan, which gives the same classification).
+    pub fn classify_directed_shared(
+        &self,
+        world: &World,
+        a: v2xw_core::geom::Vec3,
+        b: v2xw_core::geom::Vec3,
+        geometry: bool,
+        dirs: (StreetDir, StreetDir),
+    ) -> v2xw_radio::LosResult {
+        let mut parts = Vec::with_capacity(2);
+        if let Some(buildings) = self.buildings.as_ref() {
+            let mut los = buildings.los_shared(world, a, b);
             if geometry
                 && los.class.has_building()
                 && let Some(tracer) = self.corners.as_ref()
@@ -1344,13 +1371,37 @@ impl ObstacleStack {
         a: v2xw_core::geom::Vec3,
         b: v2xw_core::geom::Vec3,
     ) -> bool {
+        self.prepare_blocked(world);
+        self.blocked_shared(world, a, b)
+    }
+
+    /// Builds what [`ObstacleStack::blocked_shared`] walks — the corner tracer's building
+    /// index — when buildings are composed and it is not built yet. The tracer is built
+    /// here, on first need, exactly as [`ObstacleStack::blocked_by_buildings`] always has.
+    pub fn prepare_blocked(&mut self, world: &World) {
+        if self.buildings.is_some() && self.corners.is_none() {
+            self.corners = Some(v2xw_radio::CornerTracer::build(world));
+        }
+    }
+
+    /// [`ObstacleStack::blocked_by_buildings`] through a shared borrow, after
+    /// [`ObstacleStack::prepare_blocked`]. `false` when buildings are not composed.
+    ///
+    /// # Panics
+    /// When buildings are composed and `prepare_blocked` was not called first.
+    pub fn blocked_shared(
+        &self,
+        world: &World,
+        a: v2xw_core::geom::Vec3,
+        b: v2xw_core::geom::Vec3,
+    ) -> bool {
         if self.buildings.is_none() {
             return false;
         }
-        if self.corners.is_none() {
-            self.corners = Some(v2xw_radio::CornerTracer::build(world));
-        }
-        let tracer = self.corners.as_ref().expect("just built");
+        let tracer = self
+            .corners
+            .as_ref()
+            .expect("prepare_blocked runs before blocked_shared");
         v2xw_radio::segment_blocked(world, tracer.buildings(), a, b)
     }
 

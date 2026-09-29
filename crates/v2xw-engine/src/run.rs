@@ -117,6 +117,7 @@ use crate::scenario::Scenario;
 use crate::snapshot::{ActorState, SnapshotStream};
 
 pub mod jamming;
+mod link;
 pub mod sidelink;
 
 /// The 5.9 GHz safety channel, and the frequency the link budget is evaluated at.
@@ -3618,9 +3619,32 @@ impl Engine {
         // at all. An arrival under the noise floor less the margin is not a reception
         // attempt: no receiver detects a frame that far under its own noise. It stays as
         // energy, which is what it is.
-        for &(rx, rx_pos) in &candidates {
-            let (rssi, dist, high, placement) =
-                self.link_budget(&state, rx, rx_pos, headings.get(&rx).copied());
+        //
+        // The geometry half of each budget — antennas, focus placement, buildings, the
+        // street corner, the vehicles on the path — is pure, and is computed first for
+        // every receiver in parallel (`link`); the stateful half then runs here in
+        // receiver order on those results.
+        self.obstacles.prepare(&self.world);
+        let geometry: Vec<link::LinkGeometry> = {
+            let view = self.link_view();
+            let (tx, tx_pos, tx_heading) = (state.tx, state.tx_pos, state.tx_heading);
+            candidates
+                .par_iter()
+                .map(|&(rx, rx_pos)| {
+                    view.geometry(
+                        tx,
+                        tx_pos,
+                        tx_heading,
+                        rx,
+                        rx_pos,
+                        headings.get(&rx).copied(),
+                        now,
+                    )
+                })
+                .collect()
+        };
+        for (&(rx, rx_pos), geometry) in candidates.iter().zip(geometry) {
+            let (rssi, dist, high, placement) = self.link_budget(&state, rx, rx_pos, geometry);
             if rssi < floor_dbm {
                 state.faint.insert(rx, rssi);
                 self.report.faint_arrivals += 1;
@@ -3636,19 +3660,34 @@ impl Engine {
         }
         // Beyond the cap: line-of-sight energy only, from the deterministic law. A path
         // through buildings that far out is under the margin in every NLOS law.
+        // A pure any-hit test per receiver, so in parallel too, merged in receiver order.
         let tx_antenna = self.endpoint(state.tx, state.tx_pos, now).pos;
-        for &(rx, rx_pos) in &beyond {
-            let rx_end = self.endpoint(rx, rx_pos, now);
-            if self
-                .obstacles
-                .blocked_by_buildings(&self.world, tx_antenna, rx_end.pos)
-            {
-                continue;
+        if !beyond.is_empty() {
+            self.obstacles.prepare_blocked(&self.world);
+        }
+        let beyond_power: Vec<Option<f64>> = {
+            let view = self.link_view();
+            let range = &self.range;
+            beyond
+                .par_iter()
+                .map(|&(rx, rx_pos)| {
+                    let rx_end = view.endpoint(rx, rx_pos, now);
+                    if view
+                        .obstacles
+                        .blocked_shared(view.world, tx_antenna, rx_end.pos)
+                    {
+                        return None;
+                    }
+                    let d = tx_antenna.distance(rx_end.pos);
+                    Some(range.los_power_dbm(eirp_dbm, rx_end.gain_dbi, d))
+                })
+                .collect()
+        };
+        for (&(rx, _), power) in beyond.iter().zip(beyond_power) {
+            if let Some(power) = power {
+                state.faint.insert(rx, power);
+                self.report.faint_arrivals += 1;
             }
-            let d = tx_antenna.distance(rx_end.pos);
-            let power = self.range.los_power_dbm(eirp_dbm, rx_end.gain_dbi, d);
-            state.faint.insert(rx, power);
-            self.report.faint_arrivals += 1;
         }
         // A reactive jammer that hears this frame jams it at its receivers.
         self.react_to_frame(
@@ -5116,73 +5155,20 @@ impl Engine {
         state: &FrameState,
         rx: NodeId,
         rx_pos: Vec3,
-        rx_heading: Option<f64>,
+        geometry: link::LinkGeometry,
     ) -> (f64, f64, bool, Option<&'static str>) {
         let now = self.scheduler.now();
         let link = LinkKey::new(state.tx, rx);
         let distance_m = state.tx_pos.distance(rx_pos);
         let freq_hz = self.carrier_hz();
-
-        // The antennas, not the ground points: a vehicle's phase centre stands at its
-        // class's antenna height above the road (1.5 m for a car, TR 36.885), and a
-        // roadside unit's position already carries its mast height. The building test
-        // below is 2.5-D and compares roof heights against these.
-        let tx_end = self.endpoint(state.tx, state.tx_pos, now);
-        let rx_end = self.endpoint(rx, rx_pos, now);
-
-        let evaluation = self
-            .focus
-            .as_ref()
-            .map(|f| f.plan.evaluate(tx_end.pos, rx_end.pos));
+        let link::LinkGeometry {
+            tx_end,
+            rx_end,
+            evaluation,
+            law,
+            los,
+        } = geometry;
         let high = evaluation.is_some_and(|e| e.phy_tier == Tier::High);
-        let inside_focus = matches!(
-            evaluation.map(|e| e.placement),
-            Some(v2xw_radio::LinkPlacement::Inside)
-        );
-        // The law that prices this link, and so who charges buildings and whether the
-        // street geometry is needed.
-        let law = match (inside_focus, self.focus_law) {
-            (true, Some(l)) => l,
-            _ => self.main_law,
-        };
-
-        // What obstructs the path (04-models.md §3.5): building footprints crossed
-        // (Sommer 2011), and for the geometric law the corner a blocked path turns round
-        // and the vehicles on a clear one; terrain knife edges (ITU-R P.526). Each only
-        // when the scenario turned it on and the world has it. A clear link costs nothing
-        // but the index query.
-        let dir = |h: Option<f64>| {
-            h.map(|h| {
-                let (s, c) = v2xw_core::math::sin_cos(h);
-                (c, s)
-            })
-        };
-        let mut los = self.obstacles.classify_directed(
-            &self.world,
-            tx_end.pos,
-            rx_end.pos,
-            law.traces_geometry(),
-            (dir(state.tx_heading), dir(rx_heading)),
-        );
-        // TR 37.885's NLOSv is a same-street state: the vehicles on the path are looked
-        // for only when no building is, and only near the line.
-        if law.traces_geometry()
-            && !los.class.has_building()
-            && let Some(vehicles) = self.obstacles.vehicles.as_ref()
-        {
-            let set = self.vehicles_between(state.tx, rx, tx_end.pos, rx_end.pos);
-            if !set.as_slice().is_empty() {
-                let blocked =
-                    <v2xw_radio::obstacle::VehicleBlockage as v2xw_radio::ObstacleModel<
-                        EngineCtx<'_>,
-                    >>::los(
-                        vehicles, &self.world, tx_end.pos, rx_end.pos, Some(&set)
-                    );
-                if blocked.class.has_vehicle() {
-                    los = v2xw_radio::merge_los(&[los, blocked]);
-                }
-            }
-        }
         let placement = evaluation.map(|e| e.placement.label());
 
         let (loss, fade, obstacle_db) = {
@@ -5247,44 +5233,6 @@ impl Engine {
         (rssi_dbm, distance_m, high, placement)
     }
 
-    /// The vehicles that may stand between two antennas: every actor whose body centre is
-    /// within 8 m of the straight path (half a 13 m truck and a lane), less the two ends'
-    /// own bodies, as obstacles with their actual dimensions.
-    fn vehicles_between(&self, tx: NodeId, rx: NodeId, a: Vec3, b: Vec3) -> v2xw_radio::ActorSet {
-        let mid = Vec3::new(0.5 * (a.x + b.x), 0.5 * (a.y + b.y), 0.0);
-        let radius = 0.5 * a.distance_2d(b) + 10.0;
-        let mut set = Vec::new();
-        for actor in self.snapshot.actors_within(mid, radius) {
-            let Some(rec) = self.actors.get(&actor) else {
-                continue;
-            };
-            if rec.node == Some(tx) || rec.node == Some(rx) {
-                continue;
-            }
-            let Some(entry) = self.snapshot.get(actor) else {
-                continue;
-            };
-            let class = radio_class(entry.view.class);
-            // The published reference is the rear bumper; the body is centred half a
-            // length ahead of it along the heading.
-            let k = &entry.kinematics;
-            let half = 0.5 * entry.view.dims.length_m;
-            let (s, c) = v2xw_core::math::sin_cos(k.heading_rad);
-            let centre = Vec3::new(k.pos.x + half * c, k.pos.y + half * s, k.pos.z);
-            if distance_to_segment_2d(centre, a, b) > 8.0 {
-                continue;
-            }
-            set.push(v2xw_radio::ActorObstacle {
-                actor,
-                pos: centre,
-                dims: entry.view.dims,
-                heading_rad: k.heading_rad,
-                class,
-            });
-        }
-        v2xw_radio::ActorSet::from_iter_sorted(set)
-    }
-
     /// The carrier the link budget is evaluated at, hertz.
     fn carrier_hz(&self) -> f64 {
         self.sidelink
@@ -5294,46 +5242,24 @@ impl Engine {
 
     /// One node's radio endpoint at an instant: its antenna position and class.
     fn endpoint(&self, node: NodeId, ground: Vec3, now: SimTime) -> RadioEndpoint {
-        if node.index() >= jamming::JAMMER_ID_BASE {
-            // A jammer's declared position is its antenna's.
-            return RadioEndpoint::isotropic(node, ground, v2xw_radio::ActorClass::Car, now);
+        self.link_view().endpoint(node, ground, now)
+    }
+
+    /// Shared borrows of what a link's geometry reads, for the parallel map in
+    /// [`Engine::start_frame`].
+    fn link_view(&self) -> link::LinkView<'_> {
+        link::LinkView {
+            scenario: &self.scenario,
+            world: &self.world,
+            snapshot: &self.snapshot,
+            actors: &self.actors,
+            rsus: &self.rsus,
+            node_class: &self.node_class,
+            obstacles: &self.obstacles,
+            focus: self.focus.as_ref().map(|f| &f.plan),
+            main_law: self.main_law,
+            focus_law: self.focus_law,
         }
-        if self.rsus.contains_key(&node) {
-            // A mast's position is its antenna's (`crate::phase2`'s mast height), unless
-            // `radio.devices.rsu.antenna_height_m` puts every roadside antenna at one
-            // height above the ground under it.
-            let device = crate::wiring::device_for(&self.scenario, v2xw_radio::ActorClass::Rsu);
-            let pos = match device.antenna_height_m {
-                Some(h) => Vec3::new(
-                    ground.x,
-                    ground.y,
-                    self.world.ground_height_at(ground.x, ground.y) + h,
-                ),
-                None => ground,
-            };
-            let mut end = RadioEndpoint::isotropic(node, pos, v2xw_radio::ActorClass::Rsu, now);
-            end.gain_dbi = device.net_gain_db();
-            return end;
-        }
-        let class = self
-            .node_class
-            .get(&node)
-            .copied()
-            .unwrap_or(v2xw_radio::ActorClass::Car);
-        // `radio.devices`: the class's antenna height, and its gain net of the cable
-        // between radio and antenna, at both ends of every link.
-        let device = crate::wiring::device_for(&self.scenario, class);
-        let pos = Vec3::new(
-            ground.x,
-            ground.y,
-            ground.z
-                + device
-                    .antenna_height_m
-                    .unwrap_or_else(|| class.default_antenna_height_m()),
-        );
-        let mut end = RadioEndpoint::isotropic(node, pos, class, now);
-        end.gain_dbi = device.net_gain_db();
-        end
     }
 
     /// The radio a node carries (`radio.devices`), by its class.
