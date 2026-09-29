@@ -482,3 +482,66 @@ fn every_deferred_step_is_in_the_size_table() {
         known.len()
     );
 }
+
+/// TS 102 941's privacy separation: the Authorization Authority certifies tickets for
+/// stations the EA vouches for, and never learns which enrolment credential it vouched
+/// for. The identity crosses the AA sealed for the EA, and what the AA keeps is counts.
+#[test]
+fn the_aa_cannot_learn_the_enrolment_identity() {
+    use v2xw_proto::etsi::{AaState, SealedForEa};
+    const OTHER: NodeId = NodeId::new(2_001);
+    let mut run = deployment();
+    run.add_station(OTHER);
+    // The seal: only the EA opens it.
+    let sealed = SealedForEa::seal(STATION);
+    assert_eq!(sealed.open(run.nodes.aa, run.nodes.ea), None);
+    assert_eq!(sealed.open(run.nodes.ma, run.nodes.ea), None);
+    assert_eq!(sealed.open(run.nodes.ea, run.nodes.ea), Some(STATION));
+
+    run.enrol(STATION);
+    run.enrol(OTHER);
+    run.run().expect("runs");
+    run.blocklist(OTHER);
+    run.authorize(STATION);
+    run.authorize(OTHER);
+    run.run().expect("runs");
+    // The EA told them apart — one ticket, one refusal — and the AA holds only counts.
+    // An exhaustive literal: a field naming a station would not compile here.
+    assert_eq!(
+        run.aa,
+        AaState {
+            tickets_issued: 1,
+            validations_requested: 2,
+            refused: 1,
+            butterfly_batches: 0,
+        }
+    );
+    assert_eq!(run.tickets.get(&STATION), Some(&1));
+    assert_eq!(run.tickets.get(&OTHER), None);
+
+    // The butterfly variant hands the AA a sealed handle it passes back unopened.
+    run.authorize_butterfly(STATION);
+    run.run().expect("runs");
+    assert_eq!(run.aa.butterfly_batches, 1);
+    assert!(run.pending_batches.contains_key(&STATION));
+}
+
+/// The CCMS's entities as the Backend view shows them.
+#[test]
+fn the_ccms_view_names_every_authority_and_its_flows() {
+    let mut run = deployment();
+    run.enrol(STATION);
+    run.run().expect("runs");
+    run.authorize(STATION);
+    run.publish_ectl(STATION);
+    run.run().expect("runs");
+    let mut tracker = v2xw_proto::view::EdgeTracker::default();
+    let view = run.backend_view(run.kernel.now(), &mut tracker);
+    let ids: Vec<&str> = view.entities.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, ["tlm", "cpoc", "rca", "ea", "aa", "ma", "ee"]);
+    let edge = |a: &str, b: &str| view.edges.iter().any(|e| e.from == a && e.to == b);
+    assert!(edge("ee", "aa") && edge("aa", "ea") && edge("ea", "aa") && edge("aa", "ee"));
+    assert!(edge("tlm", "cpoc") && edge("cpoc", "ee"));
+    let aa = view.entities.iter().find(|e| e.id == "aa").expect("aa");
+    assert_eq!(aa.state["tickets_issued"], 1);
+}

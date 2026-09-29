@@ -66,9 +66,11 @@
 //! * the Distribution Centre as a distinct hop: it is a cache in front of the CPOC and
 //!   adding it would add a link and no decision.
 
+pub mod inspect;
 pub mod ts102941;
 
 pub use ts102941::{
     CA_CRL_REVOCATION, DEFERRED_FLOWS, ETSI_TS102941_ID, EtsiNodes, EtsiParams, EtsiRun, EtsiSizes,
-    EtsiTs102941, FLOWS, PASSIVE_REVOCATION, SEPARATIONS, Ts102941Msg, all_flows,
+    AaState, EtsiTs102941, FLOWS, PASSIVE_REVOCATION, SEPARATIONS, SealedForEa, Ts102941Msg,
+    all_flows,
 };

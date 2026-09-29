@@ -176,6 +176,47 @@ impl Default for EtsiParams {
     }
 }
 
+/// A value only the Enrolment Authority may open: the station's enrolment identity as it
+/// travels through the Authorization Authority.
+///
+/// TS 102 941 §6.2.3.3 has the station encrypt its `ecSignature` to the EA inside the
+/// `InnerAtRequest`; the AA forwards it in the `AuthorizationValidationRequest` without
+/// being able to read it, and learns only that the EA vouched for *some* enrolled station.
+/// That is the privacy separation the scheme exists for, and making it a type means the
+/// AA's code cannot get the identity out: [`SealedForEa::open`] refuses every opener but
+/// the EA, and `tests/etsi.rs` checks the refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SealedForEa<T> {
+    inner: T,
+}
+
+impl<T> SealedForEa<T> {
+    /// Seals a value for the EA.
+    pub const fn seal(inner: T) -> SealedForEa<T> {
+        SealedForEa { inner }
+    }
+
+    /// Opens it, if `opener` is the EA.
+    pub fn open(self, opener: NodeId, ea: NodeId) -> Option<T> {
+        (opener == ea).then_some(self.inner)
+    }
+}
+
+/// What the Authorization Authority knows. **What is not here is the point**: no station
+/// identity, no enrolment credential, no map from a ticket to anything the EA holds. The AA
+/// counts what it did; `tests/etsi.rs` asserts that nothing in it names a station.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AaState {
+    /// Authorization tickets it certified.
+    pub tickets_issued: u64,
+    /// Validation requests it sent the EA.
+    pub validations_requested: u32,
+    /// Requests the EA's validation refused.
+    pub refused: u32,
+    /// Butterfly batches it certified.
+    pub butterfly_batches: u32,
+}
+
 /// The messages of the two built flows.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -192,21 +233,25 @@ pub enum Ts102941Msg {
         /// Whether the EA issued one.
         granted: bool,
     },
-    /// ITS-S → AA: `InnerAtRequest`.
+    /// ITS-S → AA: `InnerAtRequest`. The enrolment identity is sealed for the EA; the AA
+    /// answers on the connection the request arrived on.
     AuthorizationRequest {
-        /// The station.
-        station: NodeId,
+        /// The `ecSignature`, encrypted to the EA.
+        ec: SealedForEa<NodeId>,
     },
-    /// AA → EA: `AuthorizationValidationRequest`.
+    /// AA → EA: `AuthorizationValidationRequest`: the sealed `ecSignature`, forwarded
+    /// unopened, and the connection the AA will answer on.
     ValidationRequest {
-        /// The station, carried for the simulation's bookkeeping. The AA never learns it:
-        /// it forwards the `ecSignature` encrypted to the EA and holds only the keyTag.
-        station: NodeId,
+        /// The `ecSignature`, still sealed.
+        ec: SealedForEa<NodeId>,
+        /// Where the AA sends the ticket: the network endpoint the request came from, not
+        /// an enrolment identity.
+        reply_to: NodeId,
     },
     /// EA → AA: `AuthorizationValidationResponse`.
     ValidationResponse {
-        /// The station.
-        station: NodeId,
+        /// The endpoint the AA answers on.
+        reply_to: NodeId,
         /// Whether the EA validated the enrolment credential.
         valid: bool,
     },
@@ -239,10 +284,9 @@ pub enum Ts102941Msg {
     },
     /// EA → AA: one `ButterflyCertRequest` per expanded cocoon key, batched.
     ButterflyCertRequest {
-        /// The station the batch belongs to. The AA never learns the enrolment identity;
-        /// this is the simulation's bookkeeping, exactly as on
-        /// [`Ts102941Msg::ValidationRequest`].
-        station: NodeId,
+        /// The station the batch belongs to, sealed: the AA certifies cocoon keys without
+        /// learning whose they are, and hands the handle back to the EA unopened.
+        station: SealedForEa<NodeId>,
         /// The i-period.
         current_i: u32,
         /// How many cocoon keys are in the batch.
@@ -250,8 +294,8 @@ pub enum Ts102941Msg {
     },
     /// AA → EA: the certified tickets, each encrypted to the station.
     ButterflyCertResponse {
-        /// The station.
-        station: NodeId,
+        /// The station, still sealed for the EA.
+        station: SealedForEa<NodeId>,
         /// The i-period.
         current_i: u32,
         /// How many were certified.
@@ -996,6 +1040,8 @@ pub struct EtsiRun {
     pub tickets: BTreeMap<NodeId, u32>,
     /// AT requests the EA refused.
     pub refused: u32,
+    /// The Authorization Authority.
+    pub aa: AaState,
     /// Ticket batches the AA has certified and the EA holds, by station: the i-period and
     /// how many tickets are waiting for a `ButterflyAtDownloadRequest`.
     ///
@@ -1057,6 +1103,7 @@ impl EtsiRun {
             blocklist: BTreeSet::new(),
             tickets: BTreeMap::new(),
             refused: 0,
+            aa: AaState::default(),
             pending_batches: BTreeMap::new(),
             current_i: 0,
             ctl_sequence: 0,
@@ -1133,7 +1180,9 @@ impl EtsiRun {
         let run = self.new_run();
         self.inject(
             station,
-            Ts102941Msg::AuthorizationRequest { station },
+            Ts102941Msg::AuthorizationRequest {
+                ec: SealedForEa::seal(station),
+            },
             FlowId::EtsiAuthorization,
             run,
         );
@@ -1283,7 +1332,9 @@ impl EtsiRun {
                 at,
                 from: station,
                 to: station,
-                msg: Ts102941Msg::AuthorizationRequest { station },
+                msg: Ts102941Msg::AuthorizationRequest {
+                    ec: SealedForEa::seal(station),
+                },
                 flow: FlowId::EtsiAuthorization,
                 run,
             },
@@ -1413,7 +1464,7 @@ impl EtsiRun {
 
     fn handle(&mut self, d: Delivery<Ts102941Msg>, out: &mut Outbox<Ts102941Msg>) {
         use v2xw_sec::primitive::{PrimitiveId, PrimitiveOpKind};
-        let (flow, run, to) = (d.flow, d.run, d.to);
+        let (flow, run, to, from) = (d.flow, d.run, d.to, d.from);
         let n = self.nodes;
         let sign = |out: &mut Outbox<Ts102941Msg>, k: u32| {
             out.charge(PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::Sign, k);
@@ -1460,15 +1511,15 @@ impl EtsiRun {
                     out.stage_at(StageId::Installed, station, None, flow, run);
                 }
             }
-            Ts102941Msg::AuthorizationRequest { station } if to == station => {
+            Ts102941Msg::AuthorizationRequest { ec } if to != n.aa => {
                 // A fresh key pair per ticket, an HMAC key tag, and the inner signature
                 // the EA will check — the AA sees none of the keys [TS 102 941 §6.1.4].
                 out.charge(PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::KeyGen, 1);
                 sign(out, 2);
-                out.stage_at(StageId::Requested, station, None, flow, run);
+                out.stage_at(StageId::Requested, to, None, flow, run);
                 out.send(
                     n.aa,
-                    Ts102941Msg::AuthorizationRequest { station },
+                    Ts102941Msg::AuthorizationRequest { ec },
                     "etsi-authorization-request",
                     self.sizes.authorization_request(),
                     Transport::CellularUu,
@@ -1476,13 +1527,17 @@ impl EtsiRun {
                     run,
                 );
             }
-            Ts102941Msg::AuthorizationRequest { station } => {
+            Ts102941Msg::AuthorizationRequest { ec } => {
                 verify(out, 1);
                 sign(out, 1);
+                self.aa.validations_requested += 1;
                 out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
                 out.send(
                     n.ea,
-                    Ts102941Msg::ValidationRequest { station },
+                    Ts102941Msg::ValidationRequest {
+                        ec,
+                        reply_to: from,
+                    },
                     "etsi-validation-request",
                     self.sizes.validation_request(),
                     Transport::BackendNet,
@@ -1490,16 +1545,19 @@ impl EtsiRun {
                     run,
                 );
             }
-            Ts102941Msg::ValidationRequest { station } => {
+            Ts102941Msg::ValidationRequest { ec, reply_to } => {
                 verify(out, 2);
                 sign(out, 1);
-                let valid = self.enrolled.contains(&station) && !self.blocklist.contains(&station);
+                // Only the EA can open the sealed `ecSignature`, and it answers yes or no.
+                let valid = ec.open(to, n.ea).is_some_and(|station| {
+                    self.enrolled.contains(&station) && !self.blocklist.contains(&station)
+                });
                 if !valid {
                     self.refused += 1;
                 }
                 out.send(
                     n.aa,
-                    Ts102941Msg::ValidationResponse { station, valid },
+                    Ts102941Msg::ValidationResponse { reply_to, valid },
                     "etsi-validation-response",
                     self.sizes.validation_response(),
                     Transport::BackendNet,
@@ -1507,12 +1565,16 @@ impl EtsiRun {
                     run,
                 );
             }
-            Ts102941Msg::ValidationResponse { station, valid } => {
+            Ts102941Msg::ValidationResponse { reply_to, valid } => {
                 verify(out, 1);
                 if valid {
                     sign(out, 1);
+                    self.aa.tickets_issued += 1;
                     out.stage_at(StageId::Certified, to, None, flow, run);
+                } else {
+                    self.aa.refused += 1;
                 }
+                let station = reply_to;
                 out.send(
                     station,
                     Ts102941Msg::AuthorizationResponse {
@@ -1592,7 +1654,7 @@ impl EtsiRun {
                     out.send(
                         n.aa,
                         Ts102941Msg::ButterflyCertRequest {
-                            station,
+                            station: SealedForEa::seal(station),
                             current_i,
                             count,
                         },
@@ -1620,6 +1682,8 @@ impl EtsiRun {
                 // the cost the butterfly variant does *not* save — it saves round trips and
                 // uplink bytes, not signatures.
                 sign(out, count);
+                self.aa.tickets_issued += u64::from(count);
+                self.aa.butterfly_batches += 1;
                 out.stage_at(StageId::Certified, to, None, flow, run);
                 out.send(
                     n.ea,
@@ -1641,6 +1705,9 @@ impl EtsiRun {
                 count,
             } => {
                 verify(out, 1);
+                let Some(station) = station.open(to, n.ea) else {
+                    return;
+                };
                 self.pending_batches.insert(station, (current_i, count));
                 let bytes = self.sizes.butterfly_at_download_response(count).bytes();
                 out.stage_at(StageId::BatchReady, to, Some(bytes), flow, run);
