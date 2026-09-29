@@ -27,7 +27,7 @@
 
 use std::collections::BTreeMap;
 
-use rstar::{AABB, RTree, RTreeObject};
+use rstar::{AABB, RTree, RTreeObject, SelectionFunction};
 use serde::{Deserialize, Serialize};
 use v2xw_core::card::{
     Determinism, Equation, Family, ModelCard, Parameter, Source, SourceKind, Tier, Validation,
@@ -128,41 +128,98 @@ impl BuildingIndex {
         ids.into_iter().map(BuildingId::new).collect()
     }
 
-    /// Every building whose envelope touches the segment's own corridor, in id order.
+    /// Every building whose envelope the segment itself passes through, in id order.
     ///
-    /// The same answer [`BuildingIndex::candidates`] gives for every building the segment
-    /// actually crosses, found faster on a long diagonal: the segment is walked in pieces
-    /// of at most [`BuildingIndex::WALK_STEP_M`] and each piece queries its own bounding
-    /// box, so the candidates are the buildings near the line rather than every building
-    /// in the rectangle the line spans. A 2 km diagonal across Midtown spans a rectangle
-    /// holding most of the island's footprints; its corridor holds the few dozen the line
-    /// passes. Any building the segment crosses has an envelope that meets the piece of
-    /// the segment inside it, so nothing the ring test would find is dropped.
+    /// A superset of the buildings the segment crosses or starts in — any point of the
+    /// segment inside a footprint, or on one of its walls, is inside that footprint's
+    /// envelope — so the ring test downstream finds exactly what it would find over every
+    /// building in the world. Found in **one** traversal of the tree that descends only
+    /// into the nodes whose box the segment enters ([`SegmentSelection`]): a 2 km diagonal
+    /// across Midtown spans a rectangle holding most of the island's footprints, and the
+    /// traversal visits the few dozen the line actually passes.
+    ///
+    /// It used to walk the segment in 32 m pieces and query each piece's bounding box,
+    /// then sort and deduplicate the union — the same buildings plus the ones beside the
+    /// line in each piece's box, which the ring test then rejected one by one. On a dense
+    /// Manhattan run that walk and its rejections were most of the run's time.
     #[must_use]
     pub fn candidates_along(&self, a: Vec3, b: Vec3) -> Vec<BuildingId> {
-        let len = a.distance_2d(b);
-        let pieces = (len / Self::WALK_STEP_M).ceil().max(1.0) as usize;
-        let mut ids: Vec<u32> = Vec::new();
-        for i in 0..pieces {
-            let p = a.lerp(b, i as f64 / pieces as f64);
-            let q = a.lerp(b, (i + 1) as f64 / pieces as f64);
-            let query =
-                AABB::from_corners([p.x.min(q.x), p.y.min(q.y)], [p.x.max(q.x), p.y.max(q.y)]);
-            ids.extend(
-                self.tree
-                    .locate_in_envelope_intersecting(&query)
-                    .map(|e| e.id),
-            );
-        }
+        let mut ids: Vec<u32> = self.along(a, b).collect();
         ids.sort_unstable();
-        ids.dedup();
         ids.into_iter().map(BuildingId::new).collect()
     }
 
-    /// The length of one piece of [`BuildingIndex::candidates_along`]'s walk, metres:
-    /// shorter than a Manhattan side-street block (80 m), long enough that a 1 km link is
-    /// a few dozen tree queries.
-    pub const WALK_STEP_M: f64 = 32.0;
+    /// The envelopes the segment `a → b` passes through, each once, in the tree's order.
+    ///
+    /// For an any-hit or a minimum, whose answer the order cannot reach; everything that
+    /// accumulates uses [`BuildingIndex::candidates_along`], which sorts.
+    fn along(&self, a: Vec3, b: Vec3) -> impl Iterator<Item = u32> + '_ {
+        self.tree
+            .locate_with_selection_function(SegmentSelection::new(a, b))
+            .map(|e| e.id)
+    }
+}
+
+/// How far an envelope is grown before the segment is tested against it, metres.
+///
+/// The slab test below divides, and a segment grazing a footprint's corner could be
+/// rounded out of an envelope it touches exactly. A millimetre is many orders of magnitude
+/// above the rounding of a coordinate a few kilometres from the origin and far below
+/// anything a building test resolves, and a building selected because of it is only one
+/// more candidate for the ring test to reject.
+const ENVELOPE_PAD_M: f64 = 1e-3;
+
+/// The R-tree selection of the envelopes a segment passes through (2-D).
+#[derive(Debug, Clone, Copy)]
+struct SegmentSelection {
+    a: [f64; 2],
+    b: [f64; 2],
+}
+
+impl SegmentSelection {
+    fn new(a: Vec3, b: Vec3) -> Self {
+        Self {
+            a: [a.x, a.y],
+            b: [b.x, b.y],
+        }
+    }
+
+    /// Whether the segment meets the box `[lo, hi]` grown by [`ENVELOPE_PAD_M`]: the
+    /// Liang–Barsky clip of the segment's parameter range against both slabs.
+    fn meets(&self, lo: [f64; 2], hi: [f64; 2]) -> bool {
+        let (mut t0, mut t1) = (0.0f64, 1.0f64);
+        for k in 0..2 {
+            let (lo, hi) = (lo[k] - ENVELOPE_PAD_M, hi[k] + ENVELOPE_PAD_M);
+            let d = self.b[k] - self.a[k];
+            if d == 0.0 {
+                if self.a[k] < lo || self.a[k] > hi {
+                    return false;
+                }
+                continue;
+            }
+            let (mut ta, mut tb) = ((lo - self.a[k]) / d, (hi - self.a[k]) / d);
+            if ta > tb {
+                core::mem::swap(&mut ta, &mut tb);
+            }
+            t0 = t0.max(ta);
+            t1 = t1.min(tb);
+            if t0 > t1 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl SelectionFunction<Envelope> for SegmentSelection {
+    fn should_unpack_parent(&self, envelope: &AABB<[f64; 2]>) -> bool {
+        // A parent's box holds every child's, so a segment that misses it misses them all.
+        self.meets(envelope.lower(), envelope.upper())
+    }
+
+    fn should_unpack_leaf(&self, leaf: &Envelope) -> bool {
+        self.meets(leaf.min, leaf.max)
+    }
 }
 
 // =========================================================================================
@@ -176,38 +233,24 @@ impl BuildingIndex {
 #[must_use]
 pub fn segment_blocked(world: &World, index: &BuildingIndex, a: Vec3, b: Vec3) -> bool {
     let floor = a.z.min(b.z);
-    // Walked piece by piece from `a`, testing each piece's buildings as it is reached, so
-    // a path blocked near its start — most blocked paths in a city — costs one tree query
-    // rather than one per piece of its whole length. The answer is a boolean, so the
-    // order the buildings are tested in cannot reach it.
-    let len = a.distance_2d(b);
-    let pieces = (len / BuildingIndex::WALK_STEP_M).ceil().max(1.0) as usize;
-    let mut seen: Vec<u32> = Vec::new();
-    for i in 0..pieces {
-        let p = a.lerp(b, i as f64 / pieces as f64);
-        let q = a.lerp(b, (i + 1) as f64 / pieces as f64);
-        let query = AABB::from_corners([p.x.min(q.x), p.y.min(q.y)], [p.x.max(q.x), p.y.max(q.y)]);
-        for e in index.tree.locate_in_envelope_intersecting(&query) {
-            if seen.contains(&e.id) {
-                continue;
-            }
-            seen.push(e.id);
-            let Some(building) = world.building(BuildingId::new(e.id)) else {
-                continue;
-            };
-            if building.base_z_m + building.height_m <= floor {
-                continue;
-            }
-            let ring = &building.footprint;
-            if point_in_ring(ring, a) || point_in_ring(ring, b) {
-                return true;
-            }
-            if ring
-                .windows(2)
-                .any(|w| segment_intersection_t(a, b, w[0], w[1]).is_some())
-            {
-                return true;
-            }
+    // The answer is a boolean, so the order the buildings are tested in cannot reach it,
+    // and the first wall found ends the walk.
+    for id in index.along(a, b) {
+        let Some(building) = world.building(BuildingId::new(id)) else {
+            continue;
+        };
+        if building.base_z_m + building.height_m <= floor {
+            continue;
+        }
+        let ring = &building.footprint;
+        if point_in_ring(ring, a) || point_in_ring(ring, b) {
+            return true;
+        }
+        if ring
+            .windows(2)
+            .any(|w| segment_intersection_t(a, b, w[0], w[1]).is_some())
+        {
+            return true;
         }
     }
     false
@@ -229,8 +272,10 @@ pub fn first_wall_m(
 ) -> Option<f64> {
     let end = Vec3::new(origin.x + dir.0 * max_m, origin.y + dir.1 * max_m, origin.z);
     let mut best: Option<f64> = None;
-    for id in index.candidates_along(origin, end) {
-        let Some(building) = world.building(id) else {
+    // A minimum, and a zero the moment the origin is inside a footprint: neither depends
+    // on the order the buildings are visited in.
+    for id in index.along(origin, end) {
+        let Some(building) = world.building(BuildingId::new(id)) else {
             continue;
         };
         if building.base_z_m + building.height_m <= origin.z {
@@ -532,6 +577,15 @@ pub struct PolygonCrossing {
 /// re-enters the same building.
 #[must_use]
 pub fn ring_crossing(ring: &[Vec3], a: Vec3, b: Vec3) -> PolygonCrossing {
+    // Most candidates stand beside the path, not on it: they are rejected before anything
+    // is allocated, by the same two tests the full pass below makes.
+    if !point_in_ring(ring, a)
+        && !ring
+            .windows(2)
+            .any(|w| segment_intersection_t(a, b, w[0], w[1]).is_some())
+    {
+        return PolygonCrossing::default();
+    }
     let mut ts: Vec<f64> = vec![0.0, 1.0];
     let mut walls = 0u16;
     for w in ring.windows(2) {
@@ -902,6 +956,48 @@ impl BuildingShadowing {
         self.classify(world, a, b, candidates.into_iter())
     }
 
+    /// Builds this world's index now, so [`BuildingShadowing::los_shared`] can use it
+    /// through a shared borrow — from inside a parallel map.
+    pub fn prepare(&mut self, world: &World) {
+        let _ = self.index_for(world);
+    }
+
+    /// [`BuildingShadowing::los_cached`] through a shared borrow: the same answer, from the
+    /// index [`BuildingShadowing::prepare`] built for this world or, when none was, from
+    /// the scan [`ObstacleModel::los`] makes (the two agree; see the tests).
+    #[must_use]
+    pub fn los_shared(&self, world: &World, a: Vec3, b: Vec3) -> LosResult {
+        match &self.index {
+            Some(index) if index.world_hash() == world.content_hash => {
+                self.classify(world, a, b, index.candidates_along(a, b).into_iter())
+            }
+            _ => self.scan(world, a, b),
+        }
+    }
+
+    /// The classification over every building whose envelope the segment's bounding box
+    /// overlaps, without an index.
+    fn scan(&self, world: &World, a: Vec3, b: Vec3) -> LosResult {
+        // Without the cached index this is a scan, but it is still narrowed by the
+        // segment's bounding box before any ring arithmetic happens.
+        let ids = world.buildings.iter().filter_map(|bl| {
+            let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
+            let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for p in &bl.footprint {
+                min_x = min_x.min(p.x);
+                min_y = min_y.min(p.y);
+                max_x = max_x.max(p.x);
+                max_y = max_y.max(p.y);
+            }
+            let overlaps = max_x >= a.x.min(b.x)
+                && min_x <= a.x.max(b.x)
+                && max_y >= a.y.min(b.y)
+                && min_y <= a.y.max(b.y);
+            overlaps.then_some(bl.id)
+        });
+        self.classify(world, a, b, ids)
+    }
+
     fn classify(
         &self,
         world: &World,
@@ -1026,24 +1122,7 @@ impl<C: Ctx + ?Sized> ObstacleModel<C> for BuildingShadowing {
     }
 
     fn los(&self, world: &World, a: Vec3, b: Vec3, _actors: Option<&ActorSet>) -> LosResult {
-        // Without the cached index this is a scan, but it is still narrowed by the
-        // segment's bounding box before any ring arithmetic happens.
-        let ids = world.buildings.iter().filter_map(|bl| {
-            let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
-            let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
-            for p in &bl.footprint {
-                min_x = min_x.min(p.x);
-                min_y = min_y.min(p.y);
-                max_x = max_x.max(p.x);
-                max_y = max_y.max(p.y);
-            }
-            let overlaps = max_x >= a.x.min(b.x)
-                && min_x <= a.x.max(b.x)
-                && max_y >= a.y.min(b.y)
-                && min_y <= a.y.max(b.y);
-            overlaps.then_some(bl.id)
-        });
-        self.classify(world, a, b, ids)
+        self.scan(world, a, b)
     }
 
     fn obstacle_loss_db(
@@ -2501,6 +2580,102 @@ mod tests {
                 scanned.class.has_building(),
                 "{a:?} → {b:?}"
             );
+        }
+    }
+
+    /// The one-traversal segment selection against a scan of every building, over a few
+    /// thousand segments: random ones, axis-aligned ones (a zero-width slab), ones that
+    /// start inside a footprint and ones that run exactly along a footprint's edge or
+    /// through its corner. Every building a segment crosses or starts in is selected, and
+    /// the classification, the any-hit test and the first-wall distance are the answers a
+    /// scan of the whole world gives.
+    #[test]
+    fn the_segment_selection_misses_nothing_the_scan_finds() {
+        let world = city();
+        let index = BuildingIndex::build(&world);
+        let mut model = BuildingShadowing::new(Tier::Medium);
+        let unprepared = BuildingShadowing::new(Tier::Medium);
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut segments: Vec<(Vec3, Vec3)> = Vec::new();
+        for _ in 0..1500 {
+            let a = at(next() * 900.0, next() * 520.0);
+            let b = at(next() * 900.0, next() * 520.0);
+            segments.push((a, b));
+            // Axis-aligned through the same start.
+            segments.push((a, at(b.x, a.y)));
+            segments.push((a, at(a.x, b.y)));
+        }
+        // Along and through every corner of the first footprints, exactly.
+        for building in world.buildings.iter().take(40) {
+            let ring = &building.footprint;
+            let p = at(ring[0].x, ring[0].y);
+            let q = at(ring[1].x, ring[1].y);
+            segments.push((p, q));
+            segments.push((at(p.x - 30.0, p.y - 30.0), at(p.x + 30.0, p.y + 30.0)));
+            segments.push((at(p.x - 50.0, p.y), at(p.x + 50.0, p.y)));
+            segments.push((at(p.x, p.y - 50.0), at(p.x, p.y + 50.0)));
+        }
+        for (a, b) in segments {
+            let along = index.candidates_along(a, b);
+            for building in &world.buildings {
+                let r = ring_crossing(&building.footprint, a, b);
+                let touched = r.walls > 0
+                    || r.inside_len_m > 0.0
+                    || point_in_ring(&building.footprint, a)
+                    || point_in_ring(&building.footprint, b);
+                assert!(
+                    !touched || along.contains(&building.id),
+                    "{a:?} → {b:?} misses building {:?}",
+                    building.id
+                );
+            }
+            let scanned = ObstacleModel::<TestCtx>::los(&model, &world, a, b, None);
+            assert_eq!(scanned, model.los_cached(&world, a, b), "{a:?} → {b:?}");
+            // The shared-borrow form, prepared (the index) and not (the scan).
+            assert_eq!(scanned, model.los_shared(&world, a, b), "{a:?} → {b:?}");
+            assert_eq!(scanned, unprepared.los_shared(&world, a, b), "{a:?} → {b:?}");
+            let blocked_scan = world.buildings.iter().any(|bl| {
+                bl.base_z_m + bl.height_m > a.z.min(b.z)
+                    && (point_in_ring(&bl.footprint, a)
+                        || point_in_ring(&bl.footprint, b)
+                        || bl
+                            .footprint
+                            .windows(2)
+                            .any(|w| segment_intersection_t(a, b, w[0], w[1]).is_some()))
+            });
+            assert_eq!(segment_blocked(&world, &index, a, b), blocked_scan, "{a:?} → {b:?}");
+            let len = a.distance_2d(b);
+            if len > 0.0 {
+                let dir = ((b.x - a.x) / len, (b.y - a.y) / len);
+                // The end point `first_wall_m` itself computes, so the two test one segment.
+                let end = Vec3::new(a.x + dir.0 * len, a.y + dir.1 * len, a.z);
+                let wall_scan = world
+                    .buildings
+                    .iter()
+                    .filter(|bl| bl.base_z_m + bl.height_m > a.z)
+                    .fold(None::<f64>, |best, bl| {
+                        if point_in_ring(&bl.footprint, a) {
+                            return Some(0.0);
+                        }
+                        bl.footprint.windows(2).fold(best, |best, w| {
+                            match segment_intersection_t(a, end, w[0], w[1]) {
+                                Some(t) if best.is_none_or(|x| t * len < x) => Some(t * len),
+                                _ => best,
+                            }
+                        })
+                    });
+                let wall = first_wall_m(&world, &index, a, dir, len);
+                match (wall, wall_scan) {
+                    (Some(x), Some(y)) => assert!((x - y).abs() < 1e-9, "{a:?} → {b:?}"),
+                    (x, y) => assert_eq!(x, y, "{a:?} → {b:?}"),
+                }
+            }
         }
     }
 
