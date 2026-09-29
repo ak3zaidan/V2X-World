@@ -664,6 +664,10 @@ pub struct Engine {
     /// decisions of who charges buildings and who needs street geometry.
     main_law: crate::wiring::PropagationChoice,
     focus_law: Option<crate::wiring::PropagationChoice>,
+    /// The environment a sidelink link-level curve is read in: urban when the world's
+    /// land use at its centre is urban or suburban, highway otherwise (TR 37.885's two
+    /// CDL environments).
+    radio_env: v2xw_radio::NrEnvironment,
     /// Rain over the link (`weather/attenuation/itu-r-p838`), at the medium and high
     /// propagation tiers.
     rain: Option<v2xw_radio::RainAttenuation>,
@@ -769,6 +773,12 @@ impl Engine {
         mobility.set_weather(crate::wiring::initial_weather(&scenario));
         let gnss = crate::wiring::build_gnss(&scenario);
         let (propagation, fading) = crate::wiring::build_radio(&scenario, &world);
+        let radio_env = match crate::wiring::world_env(&world) {
+            v2xw_world::model::EnvClass::Urban | v2xw_world::model::EnvClass::Suburban => {
+                v2xw_radio::NrEnvironment::Urban
+            }
+            _ => v2xw_radio::NrEnvironment::Highway,
+        };
         crate::wiring::register_radio(
             &mut registry,
             propagation.as_ref(),
@@ -964,6 +974,7 @@ impl Engine {
             range,
             main_law,
             focus_law,
+            radio_env,
             rain,
             detector_range_m,
             sidelink,
@@ -3574,11 +3585,16 @@ impl Engine {
         let mut beyond: Vec<(NodeId, Vec3)> = Vec::new();
         // Each receiver's heading — its street's direction — for the corner tracer.
         let mut headings: BTreeMap<NodeId, f64> = BTreeMap::new();
-        state.tx_heading = self
+        // Each receiver's velocity, for a sidelink link-level curve indexed by relative
+        // speed; a roadside unit has none and stands still.
+        let mut velocities: BTreeMap<NodeId, Vec3> = BTreeMap::new();
+        let tx_last = self
             .actors
             .values()
             .find(|a| a.node == Some(state.tx))
-            .map(|a| a.last.heading_rad);
+            .map(|a| (a.last.heading_rad, a.last.vel));
+        state.tx_heading = tx_last.map(|(h, _)| h);
+        let tx_vel = tx_last.map_or(Vec3::ZERO, |(_, v)| v);
         for actor in self.snapshot.actors_within(state.tx_pos, reach_m) {
             let Some(rec) = self.actors.get(&actor) else {
                 continue;
@@ -3589,6 +3605,9 @@ impl Engine {
             }
             let pos = rec.last.extrapolate(now).pos;
             headings.insert(node, rec.last.heading_rad);
+            if self.sidelink.is_some() {
+                velocities.insert(node, rec.last.vel);
+            }
             if state.tx_pos.distance_2d(pos) <= full_m {
                 candidates.push((node, pos));
             } else {
@@ -3619,7 +3638,7 @@ impl Engine {
         // attempt: no receiver detects a frame that far under its own noise. It stays as
         // energy, which is what it is.
         for &(rx, rx_pos) in &candidates {
-            let (rssi, dist, high, placement) =
+            let (rssi, dist, high, placement, los_class) =
                 self.link_budget(&state, rx, rx_pos, headings.get(&rx).copied());
             if rssi < floor_dbm {
                 state.faint.insert(rx, rssi);
@@ -3627,6 +3646,10 @@ impl Engine {
                 continue;
             }
             state.arrivals.insert(rx, (rssi, dist));
+            if self.sidelink.is_some() {
+                let rx_vel = velocities.get(&rx).copied().unwrap_or(Vec3::ZERO);
+                state.sl.note_condition(self.radio_env, rx, los_class, tx_vel, rx_vel);
+            }
             if high {
                 state.focus_high.insert(rx);
             }
@@ -5117,7 +5140,7 @@ impl Engine {
         rx: NodeId,
         rx_pos: Vec3,
         rx_heading: Option<f64>,
-    ) -> (f64, f64, bool, Option<&'static str>) {
+    ) -> (f64, f64, bool, Option<&'static str>, v2xw_radio::LosClass) {
         let now = self.scheduler.now();
         let link = LinkKey::new(state.tx, rx);
         let distance_m = state.tx_pos.distance(rx_pos);
@@ -5184,6 +5207,7 @@ impl Engine {
             }
         }
         let placement = evaluation.map(|e| e.placement.label());
+        let los_class = los.class;
 
         let (loss, fade, obstacle_db) = {
             let Engine {
@@ -5244,7 +5268,7 @@ impl Engine {
             -rain_db,
             fade,
         ]);
-        (rssi_dbm, distance_m, high, placement)
+        (rssi_dbm, distance_m, high, placement, los_class)
     }
 
     /// The vehicles that may stand between two antennas: every actor whose body centre is

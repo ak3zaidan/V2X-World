@@ -699,9 +699,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                20 MHz, ten 10-PRB sub-channels, MCS 7, probResourceKeep 0.8, and the \
                J3161/1 CR limits enforced per CBR zone (values second-hand, via Abrar et \
                al. 2026). nr-v2x-pc5 runs Mode 2 at 30 kHz with re-evaluation, \
-               pre-emption and the ETSI TS 103 574 CR limits, on Todisco 2021's study \
-               pool: no US NR-V2X deployment profile was found. Sensing records only \
-               decoded SCIs. 'hybrid' is refused: the radio crate's hybrid selector \
+               pre-emption and the ETSI TS 103 574 CR limits, on the ETSI EN 303 798 \
+               pool (20 MHz, four 12-PRB sub-channels, 16QAM-490), each block error read \
+               from Lusvarghi et al. 2024's link-level curve for the link's environment, \
+               line of sight or vehicle or building blockage, and relative speed; no US \
+               NR-V2X deployment profile exists. Sensing records only decoded SCIs. 'hybrid' is refused: the radio crate's hybrid selector \
                arbitrates a direct radio against the cellular Uu link, not 802.11p \
                against a sidelink, and the Uu backend path is not wired.",
     },
@@ -754,8 +756,10 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                tr37885, v2v-urban-geometric), fading (none, nakagami-m with a preset), per (the \
                802.11p error model's implementation loss), phy (the 802.11p sensitivity table), \
                obstacle (the Sommer building row) and sidelink \
-               (access/sidelink/engine-coupling: profile sae-j3161, \
-               molina-masegosa-2017 or todisco-2021; mcs; max_transmissions for blind \
+               (access/sidelink/engine-coupling: profile sae-j3161 or \
+               molina-masegosa-2017 for LTE, etsi-en303798 or todisco-2021 for NR; mcs, \
+               an index into the profile's table (NR etsi-en303798: TS 38.214 Table \
+               5.1.3.1-2, 0-27); max_transmissions for blind \
                HARQ retransmissions, 1-2 LTE, 1-3 NR; congestion_control \
                etsi-ts-103-574, sae-j3161 or off). Unknown families, ids and values are \
                refused.",

@@ -462,10 +462,17 @@ pub enum SidelinkProfile {
     /// sub-channels, QPSK r0.7), a study configuration.
     #[serde(rename = "molina-masegosa-2017")]
     MolinaMasegosa2017,
-    /// NR-V2X: Todisco 2021's Mode 2 pool at 30 kHz, a study configuration; no US NR
-    /// deployment profile was found.
+    /// NR-V2X: Todisco 2021's Mode 2 pool at 30 kHz (10 MHz, two 10-PRB sub-channels,
+    /// TS 38.214 Table 5.1.3.1-1), a study configuration.
     #[serde(rename = "todisco-2021")]
     Todisco2021,
+    /// NR-V2X: the ETSI EN 303 798 configuration (20 MHz at 30 kHz, four 12-PRB
+    /// sub-channels, a 3-symbol PSCCH, TS 38.214 Table 5.1.3.1-2) that the Lusvarghi
+    /// 2024 link-level curves were generated in, so every block error is read from a
+    /// transcribed curve. The NR default: no US NR-V2X deployment profile exists, and
+    /// this is the configuration Europe's access-layer standard specifies.
+    #[serde(rename = "etsi-en303798")]
+    EtsiEn303798,
 }
 
 /// Which congestion-control table a sidelink run enforces.
@@ -536,17 +543,17 @@ fn sidelink_choice(
     let profile = p.profile.unwrap_or(if lte {
         SidelinkProfile::SaeJ3161
     } else {
-        SidelinkProfile::Todisco2021
+        SidelinkProfile::EtsiEn303798
     });
     match (lte, profile) {
-        (true, SidelinkProfile::Todisco2021) => {
-            return Err("profile 'todisco-2021' is an NR-V2X pool; radio.rat is \
-                        lte-v2x-pc5 (choose sae-j3161 or molina-masegosa-2017)"
+        (true, SidelinkProfile::Todisco2021 | SidelinkProfile::EtsiEn303798) => {
+            return Err("names an NR-V2X pool; radio.rat is lte-v2x-pc5 (choose \
+                        sae-j3161 or molina-masegosa-2017)"
                 .to_string());
         }
         (false, SidelinkProfile::SaeJ3161 | SidelinkProfile::MolinaMasegosa2017) => {
             return Err("names an LTE-V2X profile; radio.rat is nr-v2x-pc5 (choose \
-                        todisco-2021)"
+                        etsi-en303798 or todisco-2021)"
                 .to_string());
         }
         _ => {}
@@ -556,6 +563,7 @@ fn sidelink_choice(
             SidelinkProfile::SaeJ3161 => matches!(m, 5 | 7 | 11),
             SidelinkProfile::MolinaMasegosa2017 => false,
             SidelinkProfile::Todisco2021 => m <= 28,
+            SidelinkProfile::EtsiEn303798 => m <= 27,
         };
         if !ok {
             return Err(match profile {
@@ -569,6 +577,9 @@ fn sidelink_choice(
                 }
                 SidelinkProfile::Todisco2021 => {
                     format!("mcs {m} is outside TS 38.214 Table 5.1.3.1-1 (0-28)")
+                }
+                SidelinkProfile::EtsiEn303798 => {
+                    format!("mcs {m} is outside TS 38.214 Table 5.1.3.1-2 (0-27)")
                 }
             });
         }

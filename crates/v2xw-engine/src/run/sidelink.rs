@@ -167,6 +167,44 @@ pub(crate) struct SlFrame {
     /// Receivers that have not decoded it yet, with the outcome of their latest copy —
     /// what is recorded if no later copy decodes.
     pub(crate) held: BTreeMap<NodeId, LinkOutcome>,
+    /// Each receiver's link condition at the block's latest transmission: environment,
+    /// LOS / NLOSv / NLOS and relative speed — what an NR link-level curve is indexed by.
+    pub(crate) cond: BTreeMap<NodeId, v2xw_radio::NrLinkCondition>,
+}
+
+impl SlFrame {
+    /// Records a receiver's link condition from the link budget's line-of-sight answer
+    /// and the two ends' velocities.
+    ///
+    /// A building-blocked (or terrain-blocked) path is TR 37.885's NLOS, a path blocked
+    /// only by vehicles its NLOSv, anything else LOS; the relative speed is the magnitude
+    /// of the velocity difference, which is what sets the Doppler spread of a V2V link
+    /// (0 km/h for two cars in one platoon, 280 km/h for two at 140 km/h head-on).
+    pub(crate) fn note_condition(
+        &mut self,
+        environment: v2xw_radio::NrEnvironment,
+        rx: NodeId,
+        los: v2xw_radio::LosClass,
+        tx_vel: v2xw_core::geom::Vec3,
+        rx_vel: v2xw_core::geom::Vec3,
+    ) {
+        use v2xw_radio::{LosClass, NrLinkState};
+        let state = match los {
+            LosClass::NlosB | LosClass::NlosBv | LosClass::NlosT => NrLinkState::Nlos,
+            LosClass::NlosV => NrLinkState::NlosV,
+            LosClass::Los => NrLinkState::Los,
+        };
+        let dv = tx_vel - rx_vel;
+        let speed_mps = v2xw_core::math::sqrt(dv.x * dv.x + dv.y * dv.y + dv.z * dv.z);
+        self.cond.insert(
+            rx,
+            v2xw_radio::NrLinkCondition {
+                environment,
+                state,
+                relative_speed_kmh: speed_mps * 3.6,
+            },
+        );
+    }
 }
 
 /// The sidelink stack of one run.
@@ -194,6 +232,13 @@ pub(crate) struct SidelinkAccess {
     pub(crate) report: SidelinkReport,
 }
 
+/// A TS 38.214 Table 5.1.3.1-2 row, falling back to MCS 7 for an index the loader has
+/// already refused.
+fn nr_table2(index: u8) -> SlMcsSpec {
+    v2xw_radio::nr_mcs_table2(index)
+        .unwrap_or_else(|| v2xw_radio::nr_mcs_table2(7).expect("MCS 7 is in Table 5.1.3.1-2"))
+}
+
 /// The pool and the scheduler parameters a scenario's sidelink runs.
 fn configuration(rat: Rat, choice: SidelinkChoice) -> Option<(PoolConfig, SpsParams, String)> {
     use v2xw_radio::sidelink as sl;
@@ -213,6 +258,21 @@ fn configuration(rat: Rat, choice: SidelinkChoice) -> Option<(PoolConfig, SpsPar
                 PoolConfig::sae_j3161(mcs),
                 SpsParams::sae_j3161(),
                 "sae-j3161",
+            )
+        }
+        (Rat::NrV2xPc5, None | Some(SidelinkProfile::EtsiEn303798)) => {
+            // TS 38.214 Table 5.1.3.1-2 MCS 7, 16QAM-490: one of the four MCS the source
+            // prints in every speed and channel state (so no link condition reads a
+            // shifted or interpolated curve), and it carries a 300 B signed BSM in two of
+            // the four sub-channels, like J3161/1's LTE profile carries it in three of ten.
+            let mcs = nr_table2(choice.mcs.unwrap_or(7));
+            (
+                PoolConfig::etsi_en303798_nr(mcs),
+                SpsParams {
+                    cc: Some(CrLimitTable::ETSI_TS_103_574),
+                    ..SpsParams::ali_todisco(sl::Numerology::Mu1, true)
+                },
+                "etsi-en303798",
             )
         }
         (Rat::NrV2xPc5, _) => {
@@ -255,12 +315,16 @@ impl SidelinkAccess {
     /// `probResourceKeep` 0.8, J3161/1's CR limits), with the Molina-Masegosa 2017 study
     /// pool selectable (`profile: molina-masegosa-2017`).
     ///
-    /// **NR-V2X PC5 Mode 2** runs Todisco's pool at µ = 1 (30 kHz, 0.5 ms slots): 10 MHz
-    /// is 24 PRB at that spacing, two 10-PRB sub-channels, 12 PSSCH symbols of which 2
-    /// DMRS, at NR MCS 9 by default, with the Ali/Todisco Mode 2 profile — sensing window
-    /// 100 ms, `T1` 2, `T2` 33 slots, RSRP −128 dBm, RRI 100 ms, Rel-16 re-evaluation and
-    /// pre-emption on (04-models.md §5.2). No US NR-V2X deployment profile was found, so
-    /// this stays a study configuration and the card says so.
+    /// **NR-V2X PC5 Mode 2** defaults to the ETSI EN 303 798 configuration the
+    /// Lusvarghi 2024 link-level curves were generated in: µ = 1 (30 kHz, 0.5 ms slots),
+    /// 20 MHz = 51 PRB, four 12-PRB sub-channels, a 3-symbol 12-PRB PSCCH, 10 data
+    /// symbols, TS 38.214 Table 5.1.3.1-2 MCS 7 (16QAM-490) by default, every block error
+    /// read from a transcribed curve for the link's environment, state and relative
+    /// speed. Todisco's 10 MHz study pool stays selectable (`profile: todisco-2021`,
+    /// Table 5.1.3.1-1). Both run the Ali/Todisco Mode 2 scheduler — sensing window
+    /// 100 ms, `T1` 2, `T2` 33 slots, RSRP −128 dBm, RRI 100 ms, Rel-16 re-evaluation
+    /// and pre-emption on (04-models.md §5.2) — and ETSI TS 103 574's CR limits. No US
+    /// NR-V2X deployment profile exists.
     ///
     /// `Rat::Hybrid` is refused by the loader, so it never reaches here.
     pub(crate) fn for_scenario(scenario: &Scenario) -> Option<Self> {
@@ -356,9 +420,12 @@ impl SidelinkAccess {
         let mcs = pool.mcs;
         let index = match pool.rat {
             v2xw_radio::SlRat::LteMode4 => v2xw_radio::sidelink::lte_mcs_index(mcs),
+            // The index in the pool's own MCS table: Table 5.1.3.1-2's rows are labelled
+            // `nr-t2-mcsN`, Table 5.1.3.1-1's `nr-mcsN`; the label says which.
             v2xw_radio::SlRat::NrMode2 => mcs
                 .label
-                .strip_prefix("nr-mcs")
+                .strip_prefix("nr-t2-mcs")
+                .or_else(|| mcs.label.strip_prefix("nr-mcs"))
                 .and_then(|d| d.parse().ok()),
         };
         let q = |x: f64| (x * 1e4).round() / 1e4;
@@ -770,6 +837,7 @@ impl Engine {
                 bytes: state.layers.psdu_bytes(),
                 rx_transmitting,
                 interferers: state.sl_interferers.get(&rx).cloned().unwrap_or_default(),
+                condition: state.sl.cond.get(&rx).copied(),
             };
             // A wideband jammer lands across the whole pool, so its power in the victim's
             // allocation is its share of the band (`SidelinkPhy::interference_split`).
@@ -1044,6 +1112,17 @@ fn coupling_card(
              04-models.md §5.5",
         )
     };
+    let profile_src = if report.profile == "etsi-en303798" {
+        Source::new(
+            SourceKind::Standard,
+            "ETSI EN 303 798 V1.1.8 NR-V2X access layer configuration, as Lusvarghi et al. \
+             2024 (IEEE IoT Journal, DOI 10.1109/JIOT.2024.3402551) Table I.C-D state it: \
+             20 MHz, 30 kHz, 12-PRB sub-channels, 12-PRB 3-symbol PSCCH, DMRS {2}, \
+             TS 38.214 Table 5.1.3.1-2",
+        )
+    } else {
+        profile_src
+    };
     card.parameters = vec![
         Parameter::new(
             "profile",
@@ -1188,4 +1267,36 @@ fn coupling_card(
         ],
     };
     card
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use v2xw_core::geom::Vec3;
+    use v2xw_radio::{LosClass, NrEnvironment, NrLinkState};
+
+    /// The link condition a receiver's NR curve is read in: TR 37.885's NLOS for a
+    /// building- or terrain-blocked path, NLOSv for a path only vehicles block, LOS
+    /// otherwise; the relative speed is the magnitude of the velocity difference.
+    #[test]
+    fn a_link_condition_comes_from_the_obstruction_and_the_velocity_difference() {
+        let mut f = SlFrame::default();
+        let east = Vec3::new(70.0 / 3.6, 0.0, 0.0);
+        let west = Vec3::new(-70.0 / 3.6, 0.0, 0.0);
+        let cases = [
+            (LosClass::Los, east, east, NrLinkState::Los, 0.0),
+            (LosClass::NlosV, east, Vec3::ZERO, NrLinkState::NlosV, 70.0),
+            (LosClass::NlosB, east, west, NrLinkState::Nlos, 140.0),
+            (LosClass::NlosBv, east, west, NrLinkState::Nlos, 140.0),
+            (LosClass::NlosT, Vec3::ZERO, Vec3::ZERO, NrLinkState::Nlos, 0.0),
+        ];
+        for (i, (los, a, b, state, kmh)) in cases.into_iter().enumerate() {
+            let rx = NodeId::new(i as u32);
+            f.note_condition(NrEnvironment::Highway, rx, los, a, b);
+            let c = f.cond[&rx];
+            assert_eq!(c.state, state, "{los:?}");
+            assert!((c.relative_speed_kmh - kmh).abs() < 0.01, "{los:?}: {c:?}");
+            assert_eq!(c.environment, NrEnvironment::Highway);
+        }
+    }
 }
