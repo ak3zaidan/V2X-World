@@ -207,7 +207,11 @@ export function SettingsWindow({
             type="search"
             placeholder={`Search ${fields.length} settings by name, description or path`}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              // A search is a search of the form: the JSON view has nothing to filter.
+              setView("form");
+            }}
             onKeyDown={(e) => {
               if (e.key === "Escape" && query !== "") {
                 e.stopPropagation();
@@ -226,7 +230,10 @@ export function SettingsWindow({
             type="button"
             className={modifiedOnly ? "toggle on" : "toggle"}
             aria-pressed={modifiedOnly}
-            onClick={() => setModifiedOnly((v) => !v)}
+            onClick={() => {
+              setModifiedOnly((v) => !v);
+              setView("form");
+            }}
             data-testid="settings-modified"
             title="Only settings this scenario sets away from the default, and your unapplied edits"
           >
@@ -236,7 +243,10 @@ export function SettingsWindow({
             type="button"
             className={showUnsupported ? "toggle on" : "toggle"}
             aria-pressed={showUnsupported}
-            onClick={() => setShowUnsupported((v) => !v)}
+            onClick={() => {
+              setShowUnsupported((v) => !v);
+              setView("form");
+            }}
             data-testid="settings-unsupported"
             title={
               unsupportedCount === 0

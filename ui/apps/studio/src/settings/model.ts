@@ -95,13 +95,14 @@ export function matches(f: Field, query: string): boolean {
   const words = query.toLowerCase().split(/\s+/).filter((w) => w !== "");
   if (words.length === 0) return true;
   const path = `${fieldPath(f)} ${f.pointer}`.toLowerCase();
-  const tokens = new Set(
-    [f.label, f.help ?? "", fieldPath(f), f.group, f.unit ?? "", f.statusNote ?? ""]
-      .join(" ")
-      .toLowerCase()
-      .split(/[^a-z0-9µ°]+/)
-      .filter((t) => t !== ""),
-  );
+  // Words both whole and split at underscores, so `duration_s` and `duration` both find
+  // `time.duration_s`.
+  const words_ = [f.label, f.help ?? "", fieldPath(f), f.group, f.unit ?? "", f.statusNote ?? ""]
+    .join(" ")
+    .toLowerCase()
+    .split(/[^a-z0-9µ°_]+/)
+    .filter((t) => t !== "");
+  const tokens = new Set([...words_, ...words_.flatMap((t) => t.split("_")).filter((t) => t !== "")]);
   const unit = (f.unit ?? "").toLowerCase();
   return words.every((w) => {
     if (w.includes(".") || w.startsWith("/")) return path.includes(w);

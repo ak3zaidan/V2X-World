@@ -12,7 +12,7 @@
 
 import { expect, test } from "@playwright/test";
 
-import { EngineProcess, open, runToEnd, setField, status, writeScenarios } from "./support.js";
+import { EngineProcess, closeSettings, open, openSettings, runToEnd, setField, status, writeScenarios } from "./support.js";
 
 const scenarios = writeScenarios();
 const engine = new EngineProcess(scenarios.a);
@@ -45,34 +45,91 @@ test("every control does what it says", async ({ page }) => {
   await open(page);
 
   // --- header -------------------------------------------------------------------------------------
-  await check("header: theme toggle", "switch dark ↔ light", async () => {
+  const menu = async (item: string): Promise<void> => {
+    await page.getByTestId("app-menu-button").click();
+    await expect(page.getByTestId("app-menu")).toBeVisible(quick);
+    await page.getByTestId(item).click();
+  };
+  await check("header: menu → theme", "switch dark ↔ light", async () => {
     const before = await page.evaluate(() => document.documentElement.dataset.theme);
-    await page.getByTestId("theme-toggle").click();
+    await menu("theme-toggle");
     const after = await page.evaluate(() => document.documentElement.dataset.theme);
     expect(after).not.toBe(before);
-    await page.getByTestId("theme-toggle").click();
+    await page.keyboard.press("Escape");
+    await menu("theme-toggle");
+    await page.keyboard.press("Escape");
     return `data-theme ${before} → ${after} → back`;
   });
-  await check("header: Details", "open the run's identity panel", async () => {
-    await page.getByTestId("run-details-button").click();
+  await check("header: menu → Run details", "open the run's identity panel, and close it", async () => {
+    await menu("run-details-button");
     await expect(page.getByTestId("run-details")).toBeVisible(quick);
-    await page.getByTestId("run-details-button").click();
+    await expect(page.getByTestId("engine-version")).not.toHaveText("—", quick);
+    await page.getByTestId("sheet-close").click();
     await expect(page.getByTestId("run-details")).toHaveCount(0, quick);
-    return "opened, closed";
+    return "opened (engine version shown), closed";
   });
-  for (const [label, probe] of [
-    ["Runs", "scenario-panel"],
-    ["Compare", "scenario-panel"],
-    ["Commands", "scenario-panel"],
+  for (const [item, panel] of [
+    ["menu-runs", "panel-runs"],
+    ["menu-compare", "panel-compare"],
+    ["menu-commands", "panel-commands"],
   ] as const) {
-    await check(`header: ${label} tab`, "show that panel in place of the settings", async () => {
-      await page.getByRole("button", { name: label, exact: true }).click();
-      await expect(page.getByTestId(probe)).toHaveCount(0, quick);
-      await page.getByRole("button", { name: "Scenario", exact: true }).click();
-      await expect(page.getByTestId(probe)).toBeVisible(quick);
-      return "panel switched and back";
+    await check(`header: menu → ${item.slice(5)}`, "open that panel over the viewport; Escape closes it", async () => {
+      await menu(item);
+      await expect(page.getByTestId(panel)).toBeVisible(quick);
+      expect(page.url()).toContain(`#${item.slice(5)}`);
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId(panel)).toHaveCount(0, quick);
+      return "opened (address says so), closed with Escape";
     });
   }
+  await check("header: Metrics", "open the measurements full screen, and close them", async () => {
+    await page.getByTestId("metrics-button").click();
+    await expect(page.getByTestId("metrics-panel")).toBeVisible(quick);
+    await expect(page.getByTestId("plots-strip")).toBeVisible(quick);
+    await page.getByTestId("metrics-close").click();
+    await expect(page.getByTestId("metrics-panel")).toBeHidden(quick);
+    return "opened, closed";
+  });
+  await check("header: settings gear and Ctrl/Cmd+,", "open and close the settings window", async () => {
+    await page.getByTestId("settings-button").click();
+    await expect(page.getByTestId("settings-window")).toBeVisible(quick);
+    await expect(page.getByTestId("settings-filter")).toBeFocused(quick);
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("settings-window")).toHaveCount(0, quick);
+    await expect(page.getByTestId("settings-button"), "focus goes back to the gear").toBeFocused(quick);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
+    await expect(page.getByTestId("settings-window")).toBeVisible(quick);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
+    await expect(page.getByTestId("settings-window")).toHaveCount(0, quick);
+    return "gear opens with the search focused; Esc closes and returns focus; the shortcut toggles";
+  });
+  await check("header: inspector toggle", "show and hide the inspector", async () => {
+    const before = await page.getByTestId("inspector-panel").count();
+    await page.getByTestId("inspector-toggle").click();
+    await expect(page.getByTestId("inspector-panel")).toHaveCount(before === 0 ? 1 : 0, quick);
+    await page.getByTestId("inspector-toggle").click();
+    await expect(page.getByTestId("inspector-panel")).toHaveCount(before, quick);
+    return `${before === 0 ? "hidden → shown → hidden" : "shown → hidden → shown"}`;
+  });
+  await check("header: menu → Developer mode", "show the renderer readouts over the viewport", async () => {
+    await expect(page.getByTestId("stats-chip")).toHaveCount(0, quick);
+    await menu("dev-details-toggle");
+    await expect(page.getByTestId("stats-chip")).toBeVisible(quick);
+    await expect(page.getByTestId("world-chip")).toBeVisible(quick);
+    await page.getByTestId("dev-details-toggle").click();
+    await expect(page.getByTestId("stats-chip")).toHaveCount(0, quick);
+    await page.keyboard.press("Escape");
+    return "off: no fps chip; on: fps and world chips; off again";
+  });
+  await check("header: scenario switcher", "list the ready-made scenarios", async () => {
+    await page.getByTestId("scenario-switcher").click();
+    await expect(page.getByTestId("scenario-menu")).toBeVisible(quick);
+    const n = await page.getByTestId("switcher-load").count();
+    expect(n).toBeGreaterThanOrEqual(2);
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("scenario-menu")).toHaveCount(0, quick);
+    return `${n} scenarios listed`;
+  });
   await check("header: primary action (Play on a paused run)", "start the paused run moving", async () => {
     // At real-time speed, so the run is still moving when Pause is pressed: the harness starts
     // the engine unthrottled, where a 6 s run is over before the button can change.
@@ -115,6 +172,7 @@ test("every control does what it says", async ({ page }) => {
 
   // --- settings panel ----------------------------------------------------------------------------
   await check("settings: find a setting", "narrow the form to matching settings", async () => {
+    await openSettings(page);
     await page.getByTestId("settings-filter").fill("equipped");
     const shown = await page.getByTestId("setting").count();
     await page.getByTestId("settings-filter").fill("");
@@ -123,6 +181,7 @@ test("every control does what it says", async ({ page }) => {
     return `${shown} of ${all} shown`;
   });
   await check("settings: Check", "have the engine validate the form", async () => {
+    await openSettings(page);
     await page.getByTestId("validate").click();
     await expect(page.getByTestId("validation-state")).toHaveText("ready to run", quick);
     return "ready to run";
@@ -147,6 +206,7 @@ test("every control does what it says", async ({ page }) => {
     return "held (staged hash set), withdrawn (none)";
   });
   await check("settings: load a ready-made scenario", "put it in the form; Run runs it", async () => {
+    await openSettings(page);
     await page.locator('[data-testid="preset-load"][data-preset="e2e-grid-b"]').click();
     await expect(page.getByTestId("scenario-message")).toContainText("Loaded", quick);
     const done = await runToEnd(page);
@@ -160,6 +220,8 @@ test("every control does what it says", async ({ page }) => {
     expect(done.t_end_ns).toBe(3_000_000_000);
     return "3 s run with the edit";
   });
+
+  await closeSettings(page);
 
   // --- viewport toolbar --------------------------------------------------------------------------
   await check("viewport: overlays menu", "list the overlays and toggle one", async () => {

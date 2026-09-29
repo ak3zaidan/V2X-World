@@ -902,8 +902,10 @@ test("the drawn/live read-out agrees with the instances the viewer wrote", async
   expect(f.statsInstances).toBe(f.drawn);
   expect(f.statsLive).toBe(f.live);
 
-  // And the same numbers reach the reader. `StatsReadout` is inside the header's Details
-  // disclosure — eleven facts on one line was a previous finding — so that is where to look.
+  // And the same numbers reach the reader. `StatsReadout` is in Run details (the header's menu),
+  // shown in developer mode — a renderer readout is for whoever debugs the page.
+  await page.getByTestId("app-menu-button").click();
+  await page.getByTestId("dev-details-toggle").click();
   await page.getByTestId("run-details-button").click();
   await expect(page.getByTestId("fps")).toBeVisible({ timeout: 20_000 });
   const printed = ((await page.getByTestId("fps").textContent()) ?? "").replace(/\s+/g, " ");
@@ -920,6 +922,8 @@ test("the drawn/live read-out agrees with the instances the viewer wrote", async
 
 test("the inspector's radio count agrees with the nodes the engine announced", async ({ page }) => {
   await streaming(page);
+  // The inspector shows on demand: nothing is selected, so open it from the header.
+  await page.getByTestId("inspector-toggle").click();
   await page.getByRole("button", { name: "state", exact: true }).click();
   await expect(page.getByTestId("inspector-empty")).toBeVisible({ timeout: 30_000 });
 
@@ -955,9 +959,11 @@ test("the inspector's radio count agrees with the nodes the engine announced", a
 });
 
 test("the world chip agrees with the world that was decoded", async ({ page }) => {
+  // The world build report is a developer readout, shown in developer mode.
+  await page.addInitScript(() => localStorage.setItem("vwp.studio.devDetails", "1"));
   await streaming(page);
   const f = await sceneFacts(page);
-  const text = ((await page.locator(".chip", { hasText: "RSUs" }).first().textContent()) ?? "").replace(/\s+/g, " ");
+  const text = ((await page.getByTestId("world-chip").textContent()) ?? "").replace(/\s+/g, " ");
   const rsus = /(\d+) RSUs?/.exec(text);
   expect(rsus, `no RSU count in "${text}"`).not.toBeNull();
   expect(Number(rsus![1]), `the chip says "${text}" for a world with ${f.worldSites} sites`).toBe(f.worldSites);

@@ -17,7 +17,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { EngineProcess, REPO, open, runToEnd, status } from "./support.js";
+import { EngineProcess, REPO, open, openSettings, runToEnd, status } from "./support.js";
 
 const CLOSE_AT_S = 5;
 
@@ -119,6 +119,8 @@ test("a closure added in the settings reaches the next run and traffic avoids th
   expect(before, "the busiest street carries traffic without a closure, so the check can fail").toBeGreaterThanOrEqual(3);
 
   // --- add the closure in the editor ------------------------------------------------------------
+  await openSettings(page);
+  await page.getByTestId("settings-filter").fill("events");
   const timeline = page.getByTestId("events-editor");
   await timeline.scrollIntoViewIfNeeded();
   await page.getByTestId("event-add").selectOption("closure");
@@ -126,9 +128,13 @@ test("a closure added in the settings reaches the next run and traffic avoids th
   await row.getByTestId("event-t").fill(String(CLOSE_AT_S));
   // "pick on map" fills the target from a click; the test then names the street it wants.
   await row.getByTestId("event-pick").click();
+  // The settings window steps aside while the map is asked for a point, and comes back after.
+  await expect(page.getByTestId("settings-window")).toBeHidden();
+  await expect(page.getByTestId("map-pick-banner")).toBeVisible();
   const canvas = page.getByTestId("viewer-canvas");
   const box = await canvas.boundingBox();
   if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.getByTestId("settings-window")).toBeVisible();
   await expect(row.getByTestId("event-target")).toHaveValue(/^edge:\d+$/);
   await row.getByTestId("event-target").fill(`edge:${edge}`);
   await page.getByTestId("apply").click();
@@ -147,6 +153,8 @@ test("a closure added in the settings reaches the next run and traffic avoids th
   const mark = page.locator('[data-testid="scenario-event-mark"][data-kind="closure"]');
   await expect(mark).toHaveCount(1);
   await expect(mark).toHaveAttribute("data-fired", "true");
+  await openSettings(page);
+  await page.getByTestId("settings-filter").fill("events");
   await expect(page.getByTestId("event-fired").first()).toContainText("lanes closed");
   const fired = (done.engine as unknown as { timeline: { kind: string; lanes: number[]; effect: string }[] }).timeline;
   expect(fired.map((e) => e.kind)).toEqual(["closure"]);

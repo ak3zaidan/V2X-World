@@ -84,11 +84,12 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
 
   // 2. `Hello` arrived with an engine version (§3.1.1 str_engine_version). The build string is no
   //    longer in the header — eleven facts on one line was the defect — so it is read where it now
-  //    lives, in the header's Details disclosure.
+  //    lives, in Run details in the header's menu.
+  await page.getByTestId("app-menu-button").click();
   await page.getByTestId("run-details-button").click();
   await expect(page.getByTestId("engine-version")).toContainText("vwp-mock-server");
   await page.keyboard.press("Escape");
-  await page.mouse.click(700, 500);
+  await expect(page.getByTestId("run-details")).toHaveCount(0);
 
   // 3. The world decoded and actors are in the pose buffer (§3.3/§3.4).
   await expect.poll(async () => (await probe(page)).worldLanes, { timeout: 30_000 }).toBeGreaterThan(0);
@@ -186,16 +187,21 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
     page.evaluate(() =>
       Array.from(document.querySelectorAll('[data-testid="copilot-panel"] .m .name')).map((e) => e.textContent ?? ""),
     );
-  // The tab is named "Commands" rather than "Copilot": the panel says in its own first line that
-  // no assistant is connected in this build, so naming it after one was the interface promising
-  // something the build does not have.
-  await page.getByRole("button", { name: "Commands" }).click();
+  // The panel is named "Commands" rather than "Copilot": it says in its own first line that no
+  // assistant is connected in this build, so naming it after one was the interface promising
+  // something the build does not have. It is in the header's menu.
+  const commands = async (): Promise<void> => {
+    await page.getByTestId("app-menu-button").click();
+    await page.getByTestId("menu-commands").click();
+    await expect(page.getByTestId("panel-commands")).toBeVisible();
+  };
+  await commands();
   await expect(page.getByTestId("rpc-methods")).toBeVisible();
   const methodCount = await page.locator('[data-testid="rpc-methods"] .m').count();
   expect(methodCount).toBeGreaterThanOrEqual(32);
   void calls;
-
-  await page.getByRole("button", { name: "Scenario" }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("panel-commands")).toHaveCount(0);
 
   await page.getByTestId("pause").click();
   await expect(page.getByTestId("play")).toBeVisible({ timeout: 20_000 });
@@ -216,11 +222,7 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   }, { timeout: 20_000 }).toBe(true);
 
   // 12. The calls actually went out over JSON-RPC.
-  //     The tab is named "Commands", not "Copilot" — the panel says in its own first line that no
-  //     assistant is connected in this build, so naming it after one was the interface promising
-  //     something the build does not have (see step 10). This locator was left behind by that
-  //     rename and had been costing the suite a two-minute timeout and a red result ever since.
-  await page.getByRole("button", { name: "Commands" }).click();
+  await commands();
   const made = await page.evaluate(() =>
     Array.from(document.querySelectorAll('[data-testid="copilot-panel"] .method-list')).pop()?.textContent ?? "",
   );
@@ -229,15 +231,22 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   expect(made).toContain("run.step");
   expect(made).toContain("run.pause");
   expect(made).toContain("view.follow");
+  await page.keyboard.press("Escape");
 
-  // 13. Scenario panel rendered a form with units and help.
-  await page.getByRole("button", { name: "Scenario" }).click();
-  await expect(page.getByTestId("scenario-panel")).toBeVisible();
+  // 13. The settings window rendered a form with units and help; the metrics panel the plots.
+  await page.getByTestId("settings-button").click();
+  await expect(page.getByTestId("settings-window")).toBeVisible();
   await expect(page.getByTestId("schema-source")).toBeVisible();
   await page.getByTestId("validate").click();
   await expect(page.getByTestId("validation-state")).toBeVisible({ timeout: 20_000 });
   await page.getByTestId("validation-state").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: `${SHOTS}/04-scenario-and-plots.png` });
+  await page.screenshot({ path: `${SHOTS}/04-settings.png` });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-window")).toHaveCount(0);
+  await page.getByTestId("metrics-button").click();
+  await expect(page.getByTestId("plots-strip")).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/04b-metrics.png` });
+  await page.keyboard.press("Escape");
 
   // 14. The engine log the inspector shows carries no protocol, world or RPC errors.
   await page.getByRole("button", { name: "log", exact: true }).click();

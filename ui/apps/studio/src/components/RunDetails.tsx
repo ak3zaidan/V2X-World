@@ -1,5 +1,5 @@
 /**
- * The header's "Details" disclosure: everything the old title bar used to shout.
+ * Run details (the header's menu → Run details, a sheet): everything the old title bar used to shout.
  *
  * Before this, one line of the header carried eleven facts — the product name, the connection
  * token, the engine implementation, the engine build string, the protocol version, the scenario
@@ -9,10 +9,9 @@
  * hardest to find on it.
  *
  * Everything is still here, in groups, one click away, and every identifier copies in full. What
- * the header keeps is the state, the scenario, the clock and the connection.
+ * the header keeps is the state, the scenario, the clock and the connection. The renderer's own
+ * figures (frame rate, draw calls, frame counters) show in developer mode.
  */
-
-
 
 import { EngineTargetChip } from "./EngineTarget.js";
 import { Identifier } from "./Identifier.js";

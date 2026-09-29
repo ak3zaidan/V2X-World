@@ -18,8 +18,10 @@ import { expect, test, type Page } from "@playwright/test";
 
 import {
   EngineProcess,
+  closeSettings,
   heapBytes,
   open,
+  openSettings,
   runToEnd,
   setField,
   status,
@@ -100,6 +102,7 @@ test("an edited setting reaches the next run: duration, seed, arrival rate, radi
     dense.engine.output_digest,
   ]);
   // A transmit-power key, when the engine publishes one, must move the received power.
+  await openSettings(page);
   const txPower = page.locator('[data-testid="setting"][data-pointer*="tx_power"]');
   if ((await txPower.count()) > 0) {
     const pointer = (await txPower.first().getAttribute("data-pointer")) ?? "";
@@ -125,10 +128,14 @@ test("an edited setting reaches the next run: duration, seed, arrival rate, radi
   // an M/M/c queue at medium and high). It is now marked as partly applied, as its KEY_STATUS row
   // says. Whatever the engine still reads nothing from is found in the published surface and
   // checked; the engine's own table says there is none, and then that is what is asserted.
+  await openSettings(page);
   await page.getByTestId("settings-filter").fill("backend_tier");
   const partial = page.locator('[data-testid="setting"][data-pointer="/nodes/backend_tier"]');
   await expect(partial.getByTestId("field-status")).toHaveText("partly applied");
   await page.getByTestId("settings-filter").fill("");
+  // Settings the engine reads nothing from sit behind the Unsupported filter; show them to look.
+  await page.getByTestId("settings-unsupported").click();
+  await expect(page.getByTestId("settings-unsupported")).toHaveAttribute("aria-pressed", "true");
   const notApplied = page
     .locator('[data-testid="setting"]')
     .filter({ has: page.getByTestId("field-status").filter({ hasText: /^not applied$/ }) });
@@ -145,7 +152,9 @@ test("an edited setting reaches the next run: duration, seed, arrival rate, radi
     }
     await expect(page.getByTestId("inert-edits")).toContainText("nothing in this build");
     await page.getByTestId("discard-edits").click();
+    await page.getByTestId("settings-unsupported").click();
   } else {
+    await page.getByTestId("settings-unsupported").click();
     // The leaves the form is built from (`fields`), each with the engine's own status.
     const statuses = await page.evaluate(async () => {
       const engine = window.__vwpStudio?.engine as unknown as {
@@ -179,9 +188,12 @@ test("every transport control does what it says, and a stopped run leaves no ker
   await setField(page, "/time/duration_s", "30");
   await setField(page, "/actors/vehicles/demand/rate_veh_per_h", "3000");
   await apply(page);
+  await closeSettings(page);
   await page.getByTestId("speed").selectOption("1");
   await expect.poll(async () => (await status(page)).speed).toBe(1);
+  await openSettings(page);
   await page.getByTestId("run-start").click();
+  await expect(page.getByTestId("settings-window"), "Run closes the settings to show the run").toHaveCount(0);
   await expect.poll(async () => (await status(page)).state).toBe("running");
   await expect.poll(async () => (await status(page)).t_ns, { timeout: 20_000 }).toBeGreaterThan(1_000_000_000);
   // One kernel at most. It may already be 0: the kernel computes ahead of a stream paced to real
@@ -230,6 +242,7 @@ test("run after run keeps working, with edits and scenario switches between runs
   const runs = Number(process.env.VWP_SOAK_RUNS ?? "4");
   await open(page);
   await setField(page, "/time/duration_s", "3");
+  await closeSettings(page);
   await page.getByTestId("speed").selectOption("0");
   const samples: { run: number; rssKb: number; heapMb: number; threads: number }[] = [];
   const sampleAt = new Set([1, 2, 10, 20, 30, runs]);
@@ -238,6 +251,7 @@ test("run after run keeps working, with edits and scenario switches between runs
     if (i % 5 === 0) {
       // A scenario switch: load the other preset, which the next Run runs.
       const target = i % 10 === 0 ? "e2e-grid-a" : "e2e-grid-b";
+      await openSettings(page);
       await page.locator(`[data-testid="preset-load"][data-preset="${target}"]`).click();
       await expect(page.getByTestId("scenario-message")).toContainText(/Loaded|already running/);
     } else if (i % 3 === 0) {
@@ -280,9 +294,11 @@ test("a reload mid-run reattaches, and a restarted engine is reconnected to", as
   await setField(page, "/time/duration_s", "60");
   await setField(page, "/actors/vehicles/demand/rate_veh_per_h", "6000");
   await apply(page);
+  await closeSettings(page);
   await page.getByTestId("speed").selectOption("1");
   await expect.poll(async () => (await status(page)).speed).toBe(1);
   const before = (await status(page)).generation;
+  await openSettings(page);
   await page.getByTestId("run-start").click();
   await expect.poll(async () => (await status(page)).generation).toBe(before + 1);
   await expect.poll(async () => JSON.stringify(await status(page))).toContain('"state":"running"');

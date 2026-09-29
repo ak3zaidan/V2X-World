@@ -269,6 +269,9 @@ kbd {
 .metrics-panel .plots { border-top: none; background: transparent; grid-template-rows: auto minmax(0, 1fr); }
 .metrics-panel .plots-head { border-bottom: none; padding: 0 0 8px; overflow: visible; }
 .metrics-panel .plots-body { flex-wrap: wrap; overflow: visible; padding: 0; gap: 12px; }
+/* The picker opened upwards from a strip at the bottom of the page; at the top of a panel it opens
+   downwards, under the row that opens it. */
+.metrics-panel .metric-picker.up { top: 34px; bottom: auto; left: 0; max-height: 70vh; }
 
 /* A sheet slides over the viewport's left edge; the time controls and the inspector stay usable. */
 .stage { position: relative; min-height: 0; display: grid; }

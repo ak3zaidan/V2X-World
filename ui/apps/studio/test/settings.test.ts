@@ -84,6 +84,8 @@ describe("search", () => {
   it("finds a setting by title, description, path or pointer, every word required", () => {
     const hits = (q: string): string[] => fields().filter((f) => matches(f, q)).map((f) => f.pointer);
     expect(hits("duration")).toEqual(["/time/duration_s"]);
+    expect(hits("duration_s")).toEqual(["/time/duration_s"]);
+    expect(hits("rate_veh")).toEqual(["/actors/vehicles/demand/rate_veh_per_h"]);
     expect(hits("vehicles per hour")).toEqual(["/actors/vehicles/demand/rate_veh_per_h"]);
     expect(hits("demand.rate")).toEqual(["/actors/vehicles/demand/rate_veh_per_h"]);
     expect(hits("/radio/tiers")).toEqual(["/radio/tiers/phy"]);
