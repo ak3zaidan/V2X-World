@@ -414,11 +414,19 @@ impl Engine {
             }
         }
         for (_, frame) in ready {
-            let Some((descriptor, msg_type)) =
-                self.frames.get(&frame).map(|f| (f.descriptor, f.msg_type))
+            let Some((descriptor, msg_type, air)) = self
+                .frames
+                .get(&frame)
+                .map(|f| (f.descriptor, f.msg_type, f.air))
             else {
                 continue;
             };
+            // What was offered to the MAC in this metric window, as the 802.11p path
+            // counts it, so `mac.cbr` carries the same load figures on a sidelink.
+            let window = self.mac_window.entry(node).or_default();
+            window.frames += 1;
+            window.bytes += u64::from(descriptor.bytes);
+            window.airtime_us += air.as_nanos() / 1_000;
             let refused = {
                 let Engine {
                     scheduler,
@@ -450,6 +458,7 @@ impl Engine {
             if refused {
                 self.frames.remove(&frame);
                 self.report.mac_drops += 1;
+                self.mac_window.entry(node).or_default().drops += 1;
                 if let Some(sl) = self.sidelink.as_mut() {
                     sl.report.refused += 1;
                 }
@@ -497,6 +506,7 @@ impl Engine {
         for sdu in expired {
             self.frames.remove(&sdu.frame.sdu_ref.seq);
             self.report.mac_drops += 1;
+            self.mac_window.entry(node).or_default().drops += 1;
             if let Some(sl) = self.sidelink.as_mut() {
                 sl.report.expired += 1;
             }
@@ -504,6 +514,7 @@ impl Engine {
         for sdu in cc_dropped {
             self.frames.remove(&sdu.frame.sdu_ref.seq);
             self.report.mac_drops += 1;
+            self.mac_window.entry(node).or_default().drops += 1;
             if let Some(sl) = self.sidelink.as_mut() {
                 sl.report.cc_dropped += 1;
             }

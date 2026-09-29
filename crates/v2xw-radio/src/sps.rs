@@ -790,6 +790,13 @@ impl SpsEngine {
         }
     }
 
+    /// Transport blocks waiting in a UE's queue for a resource: the sidelink counterpart
+    /// of an EDCA queue's depth, which `mac.cbr` reports.
+    #[must_use]
+    pub fn queue_len(&self, node: NodeId) -> usize {
+        self.ues.get(&node.index()).map_or(0, |s| s.queue.len())
+    }
+
     /// A UE's live reservation, if it has one.
     #[must_use]
     pub fn reservation(&self, node: NodeId) -> Option<Reservation> {

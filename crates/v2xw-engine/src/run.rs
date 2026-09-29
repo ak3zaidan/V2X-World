@@ -5378,20 +5378,36 @@ impl Engine {
     /// Every node's MAC report for the window that closes at `now`, on `mac.cbr`: the
     /// busy ratio its MAC measured, its EDCA queue depth, and what it offered and was
     /// refused since the previous report. Only at the tiers that model a MAC.
+    ///
+    /// On a sidelink the busy ratio is the UE's sidelink CBR (TS 36.214 §5.1.30,
+    /// TS 38.215 §5.1.25: the share of the last 100 ms of sub-channels whose S-RSSI
+    /// exceeded the pool's threshold), on the sidelink's channel, and the queue is the
+    /// SPS engine's per-UE queue: the same record, measured the way the RAT measures it.
     fn emit_mac_reports(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
-        let Some(mac) = self.mac.as_ref() else {
-            return;
-        };
         let span = self.metric_period.as_nanos();
         let mut reports: Vec<MacCbr> = Vec::with_capacity(self.nodes.len());
-        for &node in self.nodes.keys() {
-            let cbr = Mac::<EngineCtx<'_>>::cbr(mac, node, SAFETY_CHANNEL, now);
-            let depth = mac.queue_len(node, SAFETY_CHANNEL, SAFETY_AC) as u64;
+        let nodes: Vec<NodeId> = self.nodes.keys().copied().collect();
+        for node in nodes {
+            let (channel, cbr, depth) = if let Some(mac) = self.mac.as_ref() {
+                (
+                    SAFETY_CHANNEL.0,
+                    Mac::<EngineCtx<'_>>::cbr(mac, node, SAFETY_CHANNEL, now),
+                    mac.queue_len(node, SAFETY_CHANNEL, SAFETY_AC) as u64,
+                )
+            } else if let Some(sl) = self.sidelink.as_ref() {
+                (
+                    sl.channel.0,
+                    Mac::<EngineCtx<'_>>::cbr(&sl.mac, node, sl.channel, now),
+                    sl.mac.queue_len(node) as u64,
+                )
+            } else {
+                return;
+            };
             let w = self.mac_window.remove(&node).unwrap_or_default();
             reports.push(MacCbr::report(
                 now,
                 node,
-                SAFETY_CHANNEL.0,
+                channel,
                 cbr,
                 depth,
                 w.drops,
