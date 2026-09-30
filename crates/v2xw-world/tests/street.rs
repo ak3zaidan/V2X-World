@@ -84,13 +84,14 @@ fn an_avenue_carries_its_bus_lane_track_and_parking() {
     assert_eq!(report.counts.parking_lanes, 4);
 
     // The northbound approach edge: its lanes right to left.
+    // (The world's origin is the extract's south-west corner, so compare, don't threshold.)
     let edge = world
         .roads
         .edges()
         .iter()
-        .find(|e| {
-            let l = world.lane(e.lanes[0]);
-            l.kind != LaneKind::Internal && l.start().y < -50.0
+        .filter(|e| e.lanes.len() == 7)
+        .min_by(|a, b| {
+            world.lane(a.lanes[0]).start().y.total_cmp(&world.lane(b.lanes[0]).start().y)
         })
         .expect("the southern block's edge");
     let kinds: Vec<LaneKind> = edge.lanes.iter().map(|l| world.lane(*l).kind).collect();
@@ -303,6 +304,53 @@ fn signals_along_an_avenue_run_a_green_wave() {
     let (world, report) = import_with(&xml, &off);
     assert_eq!(report.counts.signals_coordinated, 0);
     assert!(world.signals.iter().all(|p| p.offset_s == 0.0));
+}
+
+/// The world-validation gate (`v2xw_world::validate`, the `world_report --baseline`
+/// regression check) passes the avenue as imported, and fails when the cross-section
+/// regresses to general lanes only.
+#[test]
+fn the_validation_gate_fails_when_the_cross_section_regresses() {
+    use v2xw_world::validate::{SourceLink, ValidationParams, validate};
+    let xml = document(&avenue_crossroads(true));
+    let file = v2xw_world::osm::parse_osm(xml.as_bytes()).expect("parses");
+    let (world, report) = import_with(&xml, &opts());
+    let good = validate(
+        &world,
+        Some(SourceLink { file: &file, edges: &report.edge_sources }),
+        &ValidationParams::default(),
+    );
+    for check in [
+        "bus-lanes-mismatch",
+        "cycle-lane-missing",
+        "parking-lane-missing",
+        "lanes-mismatch",
+        "oneway-mismatch",
+    ] {
+        let c = &good.checks[check];
+        assert!(c.of > 0, "{check} examined nothing:\n{}", good.to_text());
+        assert_eq!(c.count, 0, "{check}:\n{}", good.to_text());
+    }
+    let baseline = good.as_baseline("the avenue fixture");
+    assert!(good.regressions(&baseline).is_empty());
+
+    let mut plain = opts();
+    plain.cross_section.bus_lanes = false;
+    plain.cross_section.cycle_lanes = false;
+    plain.cross_section.parking_lanes = false;
+    let (world, report) = import_with(&xml, &plain);
+    let bad = validate(
+        &world,
+        Some(SourceLink { file: &file, edges: &report.edge_sources }),
+        &ValidationParams::default(),
+    );
+    let regressions = bad.regressions(&baseline);
+    for check in ["bus-lanes-mismatch", "cycle-lane-missing", "parking-lane-missing"] {
+        assert!(
+            regressions.iter().any(|r| r.starts_with(check)),
+            "{check} did not regress: {regressions:?}"
+        );
+    }
 }
 
 /// `world.buildings.keep_holes` and `metres_per_level` change the world: the QA of

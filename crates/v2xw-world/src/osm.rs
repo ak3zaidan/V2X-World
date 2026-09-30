@@ -239,11 +239,18 @@ pub enum Anomaly {
     /// pavement within [`NODE_CROSSING_REACH_M`] on one side or the other to join a
     /// synthesised crosswalk to; it gets no crosswalk ([`OsmOptions::crossings_from_nodes`]).
     CrossingNodeUnconnected,
+    /// A kiosk-sized building (under [`KIOSK_MAX_AREA_M2`]) that a car on a drive lane
+    /// would drive into: street furniture mapped onto the carriageway, dropped.
+    KioskOnCarriageway,
+    /// A movement no car could drive as the lanes finally lie — a disguised U-turn across
+    /// a divided street, or a turn onto a lane that starts behind the approach — removed
+    /// because its approach lane has another movement to make.
+    InfeasibleTurn,
 }
 
 impl Anomaly {
     /// Every anomaly category, in report order.
-    pub const ALL: [Anomaly; 45] = [
+    pub const ALL: [Anomaly; 47] = [
         Anomaly::MissingNode,
         Anomaly::WayTooShort,
         Anomaly::DuplicateNode,
@@ -289,6 +296,8 @@ impl Anomaly {
         Anomaly::HighwayArea,
         Anomaly::DeadEndWithoutTurnaround,
         Anomaly::CrossingNodeUnconnected,
+        Anomaly::KioskOnCarriageway,
+        Anomaly::InfeasibleTurn,
     ];
 
     /// A stable kebab-case label, used by the report and the provenance record.
@@ -339,6 +348,8 @@ impl Anomaly {
             Anomaly::HighwayArea => "highway-area",
             Anomaly::DeadEndWithoutTurnaround => "dead-end-without-turnaround",
             Anomaly::CrossingNodeUnconnected => "crossing-node-unconnected",
+            Anomaly::KioskOnCarriageway => "kiosk-on-carriageway",
+            Anomaly::InfeasibleTurn => "infeasible-turn",
         }
     }
 }
@@ -2916,6 +2927,35 @@ pub fn classify_way(
         fwd = fwd.max(1);
         bwd = bwd.max(1);
     }
+    // `lanes` should count bus lanes (OSM wiki, Key:lanes), but a mapper sometimes counts
+    // only the general lanes and lists the bus lane in `bus:lanes` / `psv:lanes`: Portland's
+    // Transit Mall streets are `lanes=1` with `psv:lanes=designated|`. Where a per-lane
+    // list is longer than `lanes` by exactly its `designated` entries, the list is the
+    // street and `lanes` is read as the general lanes.
+    if options.cross_section.bus_lanes && defaults.family == WayFamily::Motor {
+        let one_way_fwd = matches!(oneway, Oneway::Forward);
+        let one_way_bwd = matches!(oneway, Oneway::Backward);
+        let widen = |n: u32, keys: &[&str]| -> u32 {
+            for key in keys {
+                let Some(raw) = way.tags.get(key) else { continue };
+                let entries: Vec<&str> = raw.split('|').map(str::trim).collect();
+                let designated = entries.iter().filter(|e| **e == "designated").count() as u32;
+                let len = entries.len() as u32;
+                if len > n && len - n == designated {
+                    return len;
+                }
+            }
+            n
+        };
+        if one_way_fwd {
+            fwd = widen(fwd, &["bus:lanes", "psv:lanes", "bus:lanes:forward", "psv:lanes:forward"]);
+        } else if one_way_bwd {
+            bwd = widen(bwd, &["bus:lanes", "psv:lanes", "bus:lanes:backward", "psv:lanes:backward"]);
+        } else {
+            fwd = widen(fwd, &["bus:lanes:forward", "psv:lanes:forward"]);
+            bwd = widen(bwd, &["bus:lanes:backward", "psv:lanes:backward"]);
+        }
+    }
     let fwd = fwd.clamp(0, MAX_LANES_PER_DIRECTION) as u8;
     let bwd = bwd.clamp(0, MAX_LANES_PER_DIRECTION) as u8;
     if fwd == 0 && bwd == 0 {
@@ -5411,6 +5451,7 @@ fn build_movements(
         }
 
         pull_back_for_turns(net, j, &requests, report);
+        let requests = drop_infeasible_turns(net, j, requests, report);
         for mut request in requests {
             // The approach heading is re-read: pulling a lane end back along a curve turns
             // it a little, and the priority and phase rules should see the lane as built.
@@ -5442,6 +5483,66 @@ fn build_movements(
         net.movements[j] = movements;
     }
     direct
+}
+
+/// Removes the movements no car could drive, as the lanes finally lie, where the approach
+/// lane has another movement to make instead; each removed is counted as
+/// [`Anomaly::InfeasibleTurn`].
+///
+/// Two shapes, both from where a way's geometry meets a junction rather than from the
+/// turn itself:
+///
+/// * a "turn" that, measured on the lanes after they were cut back for the junction, is a
+///   U-turn: the two carriageways of a divided street joined into one junction, where the
+///   last metres of the approach bent and made the reversal look like a left turn
+///   (West Burnside Street, Portland);
+/// * a turn onto a departure that starts **behind** the approach's end or ends behind its
+///   own start (a tangent leg more than a metre negative): a parking aisle that leaves the
+///   junction 30 m back along the street, whose connector looped a full circle.
+fn drop_infeasible_turns<'a>(
+    net: &Net,
+    j: usize,
+    requests: Vec<MovementRequest<'a>>,
+    report: &mut ImportReport,
+) -> Vec<MovementRequest<'a>> {
+    let infeasible: Vec<bool> = requests
+        .iter()
+        .map(|r| {
+            if r.turn == TurnDirection::UTurn {
+                return false;
+            }
+            let from = &net.lanes[r.from_lane.as_usize()];
+            let to = &net.lanes[r.to_lane.as_usize()];
+            let (start, h_in) = (from.end(), from.heading_at(from.length_m));
+            let (end, h_out) = (to.start(), to.heading_at(0.0));
+            let delta = normalise_angle(h_out - h_in);
+            if TurnDirection::from_heading_change(delta) == TurnDirection::UTurn {
+                return true;
+            }
+            if delta.abs() < 0.3 {
+                return false;
+            }
+            matches!(tangent_legs_signed(start, h_in, end, h_out), Some((u, v)) if u < -1.0 || v < -1.0)
+        })
+        .collect();
+    if !infeasible.iter().any(|x| *x) {
+        return requests;
+    }
+    let keeps: BTreeSet<LaneId> = requests
+        .iter()
+        .zip(&infeasible)
+        .filter(|(_, bad)| !**bad)
+        .map(|(r, _)| r.from_lane)
+        .collect();
+    let mut out = Vec::with_capacity(requests.len());
+    for (r, bad) in requests.into_iter().zip(infeasible) {
+        if bad && keeps.contains(&r.from_lane) {
+            report.note(Anomaly::InfeasibleTurn, net.junction_nodes[j]);
+            continue;
+        }
+        out.push(r);
+    }
+    out
 }
 
 /// The lanes of `lanes` that carry traffic through a junction — general and bus lanes —
@@ -8469,6 +8570,85 @@ fn triangle_overlap_m2(subject: [Vec3; 3], clip: [Vec3; 3]) -> f64 {
     (twice * 0.5).abs()
 }
 
+/// The largest footprint [`drop_kiosks_on_the_carriageway`] treats as street furniture, m²:
+/// a newsstand or a kiosk, well under any building a road could pass through. **This
+/// importer's choice.**
+pub const KIOSK_MAX_AREA_M2: f64 = 25.0;
+
+/// Drops the kiosk-sized buildings a car on a drive lane would drive into.
+///
+/// A newsstand stands on the pavement. Mapped a metre off — the Midtown extract's
+/// newsstand at way 1117866998 is 0.8 m from a lane's centreline — its footprint reaches
+/// into the carriageway, and cars were drawn driving through it (the auditor's 12
+/// in-building steps of 2026-09-24). The road is the better-surveyed feature, so the kiosk
+/// goes: a footprint under [`KIOSK_MAX_AREA_M2`] that a passenger car's body (half width
+/// 0.9 m either side of a drive or bus lane's centreline, sampled every half metre)
+/// enters is removed and counted as [`Anomaly::KioskOnCarriageway`] (its sample is the
+/// building's index in the import before the drop). Bigger buildings are
+/// passages ([`find_passages`]) and are never dropped.
+fn drop_kiosks_on_the_carriageway(
+    buildings: Vec<Building>,
+    net: &Net,
+    report: &mut ImportReport,
+) -> Vec<Building> {
+    const HALF_CAR_M: f64 = 0.9;
+    let small: Vec<usize> = (0..buildings.len())
+        .filter(|i| ring_area_m2(&buildings[*i].footprint) < KIOSK_MAX_AREA_M2)
+        .collect();
+    if small.is_empty() {
+        return buildings;
+    }
+    let mut hit = vec![false; buildings.len()];
+    for lane in &net.lanes {
+        let internal_motor = lane.kind == LaneKind::Internal
+            && lane.admits(ClassMask::CAR.union(ClassMask::BUS));
+        if !(matches!(lane.kind, LaneKind::Driving | LaneKind::Bus) || internal_motor) {
+            continue;
+        }
+        let (mut lo, mut hi) = (lane.centreline[0], lane.centreline[0]);
+        for p in &lane.centreline {
+            lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), 0.0);
+            hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), 0.0);
+        }
+        for &b in &small {
+            if hit[b] {
+                continue;
+            }
+            let building = &buildings[b];
+            if !crate::model::road_meets_building(building, lane.centreline[0].z) {
+                continue;
+            }
+            let bb = building.bbox();
+            if bb.max.x < lo.x - 2.0 || bb.min.x > hi.x + 2.0 || bb.max.y < lo.y - 2.0 || bb.min.y > hi.y + 2.0 {
+                continue;
+            }
+            let steps = (lane.length_m / 0.5).ceil().max(1.0) as usize;
+            'samples: for k in 0..=steps {
+                let s = (k as f64 * 0.5).min(lane.length_m);
+                let p = lane.point_at(s);
+                let (sin, cos) = math::sin_cos(lane.heading_at(s));
+                for side in [-1.0, 0.0, 1.0] {
+                    let q = Vec3::new(p.x - sin * HALF_CAR_M * side, p.y + cos * HALF_CAR_M * side, p.z);
+                    if building.contains_2d(q) {
+                        hit[b] = true;
+                        break 'samples;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(buildings.len());
+    for (i, mut building) in buildings.into_iter().enumerate() {
+        if hit[i] {
+            report.note(Anomaly::KioskOnCarriageway, i as i64);
+            continue;
+        }
+        building.id = BuildingId::new(out.len() as u32);
+        out.push(building);
+    }
+    out
+}
+
 /// The area of a closed ring, m².
 ///
 /// Multiplications and additions only (crate rule 1: no std transcendental), so it is
@@ -9057,6 +9237,8 @@ fn import_parsed(file: &OsmFile, options: &OsmOptions, report: &mut ImportReport
     } else {
         Vec::new()
     };
+
+    let buildings = drop_kiosks_on_the_carriageway(buildings, &net, report);
 
     // --- stage 9b: passages ----------------------------------------------------------
     let passages = find_passages(&net, &plans, &buildings, report);

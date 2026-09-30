@@ -892,10 +892,41 @@ fn expected(tags: &Tags, forward: bool) -> Expected {
                         .or_else(|| tags.get("bus:lanes").map(designated_in))
                         .or_else(|| tags.get("psv:lanes").map(designated_in))
                 } else {
-                    None
+                    // A two-way road's undirected count: half each way, when it halves.
+                    count_of(tags, "lanes:bus")
+                        .or_else(|| count_of(tags, "lanes:psv"))
+                        .filter(|t| t % 2 == 0)
+                        .map(|t| t / 2)
                 }
             })
     };
+    // A per-lane bus list longer than `lanes` by exactly its `designated` entries means
+    // `lanes` counted the general lanes only (Portland's Transit Mall): the list is the
+    // street, as the importer reads it.
+    let lanes = lanes.map(|n| {
+        let keys: Vec<String> = if oneway.is_some() {
+            vec![
+                "bus:lanes".into(),
+                "psv:lanes".into(),
+                format!("bus:lanes:{dir}"),
+                format!("psv:lanes:{dir}"),
+            ]
+        } else {
+            vec![format!("bus:lanes:{dir}"), format!("psv:lanes:{dir}")]
+        };
+        if n == 0 {
+            return 0;
+        }
+        for key in &keys {
+            if let Some(raw) = tags.get(key) {
+                let len = raw.split('|').count() as u32;
+                if len > n && len - n == designated_in(raw) {
+                    return len;
+                }
+            }
+        }
+        n
+    });
     Expected { lanes, bus }
 }
 
@@ -1268,9 +1299,22 @@ fn check_source(
             }
             out
         };
-        let want_cycle = tagged_sides(tags, "cycleway", &["lane", "track", "opposite_lane", "opposite_track"]);
+        let cycle_values = ["lane", "track", "opposite_lane", "opposite_track"];
+        let mut want_cycle = tagged_sides(tags, "cycleway", &cycle_values);
+        // A bare `cycleway=lane` on a one-way street names one lane and no side (OSM wiki,
+        // Key:cycleway): one on either side satisfies it.
+        let sided = ["cycleway:left", "cycleway:right", "cycleway:both"]
+            .iter()
+            .any(|k| tags.get(k).is_some_and(|v| cycle_values.contains(&v)));
+        let either = oneway_of(tags).is_some() && !sided && !want_cycle.is_empty();
+        if either {
+            want_cycle = BTreeSet::from(["either"]);
+        }
         if !want_cycle.is_empty() {
-            let have = side_kinds(LaneKind::Cycle);
+            let mut have = side_kinds(LaneKind::Cycle);
+            if either && !have.is_empty() {
+                have.insert("either");
+            }
             for side in &want_cycle {
                 report.entry("cycle-lane-missing").of += 1;
                 if !have.contains(side) {
