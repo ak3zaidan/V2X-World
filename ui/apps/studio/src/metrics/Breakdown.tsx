@@ -24,6 +24,7 @@ import { useMemo, useState } from "react";
 
 import { closePanel } from "../shell/route.js";
 import { engine } from "../state/engine.js";
+import { metricPeriodNs, type PooledSpan } from "./data.js";
 import { downloadCsv, fileName } from "./exporting.js";
 import { useGroups } from "./hooks.js";
 import {
@@ -36,6 +37,7 @@ import {
   histogram,
   metricsHash,
   niceTicks,
+  pooledText,
   toCsv,
   worstFirst,
   worstFirstLabel,
@@ -109,7 +111,8 @@ export function BreakdownSection({
 }): React.JSX.Element {
   const [within, setWithin] = useState<{ dim: string; key: string } | null>(null);
   const where = within === null ? {} : { [within.dim]: within.key };
-  const { rows, status, error, stale } = useGroups(f.base, dim, rangeNs(range), where, active);
+  const { rows, pooled, status, error, stale } = useGroups(f.base, dim, rangeNs(range), where, active);
+  const told = pooledText(range, shownOrNull(pooled, rows), metricPeriodNs() / 1e9);
   const shown = useMemo(() => ordered(dim, rows, f).filter((r) => r.value !== null || r.n > 0), [dim, rows, f]);
   const firstKey = rows.length > 0 ? rows[0].key : null;
   const withinOptions = useWithin(f, dim, range, firstKey, active);
@@ -166,7 +169,7 @@ export function BreakdownSection({
       <header className="bd-head">
         <h4>{dimLabel(dim)}</h4>
         <span className="dim">
-          pooled over {rangeText}
+          pooled over {told.span}
           {dim === "node" ? ` · ${worstFirstLabel(f.polarity)}` : ""}
         </span>
         <span className="grow" />
@@ -202,9 +205,19 @@ export function BreakdownSection({
           {copied ? "Copied" : "Link"}
         </button>
       </header>
+      {told.caveat !== null && shown.length > 0 ? (
+        <p className="dim bd-note" data-testid={`breakdown-pooled-${dim}`}>
+          {told.caveat}
+        </p>
+      ) : null}
       {body}
     </section>
   );
+}
+
+/** The pooled span is only worth reading when rows came with it. */
+function shownOrNull(pooled: PooledSpan | null, rows: readonly GroupRow[]): PooledSpan | null {
+  return rows.length > 0 ? pooled : null;
 }
 
 /** Values in `[0, 1]` with an interval, as TR 36.885 draws PRR: against distance, with a band. */

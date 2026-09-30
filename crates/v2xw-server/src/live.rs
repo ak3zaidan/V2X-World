@@ -1342,8 +1342,8 @@ struct Projector {
     /// type, a per-node figure). The §3.7 stream carries a metric's headline and its
     /// declared breakdown as series; everything else a metric measures reaches a client
     /// through this store. Each entry keeps the counts that let windows be *pooled*
-    /// ([`BreakdownEntry`]), and the store is bounded per metric.
-    breakdowns: BTreeMap<String, std::collections::VecDeque<BreakdownEntry>>,
+    /// ([`BreakdownEntry`]), and the store is bounded per metric ([`BreakdownStore`]).
+    breakdowns: BTreeMap<String, BreakdownStore>,
     /// Per node, its latest `node.security` row (certificate pool, current pseudonym,
     /// backend link, CRL state) and its most recent `sec.pseudonym` changes, for
     /// `inspect.node`'s `certs` and `crl` sections.
@@ -1995,12 +1995,10 @@ impl Projector {
         if dims.is_empty() {
             return;
         }
-        let entry = BreakdownEntry::of(sample.t, dims, &sample.value);
-        let list = self.breakdowns.entry(sample.metric.clone()).or_default();
-        if list.len() >= BREAKDOWN_CAP {
-            list.pop_front();
-        }
-        list.push_back(entry);
+        self.breakdowns
+            .entry(sample.metric.clone())
+            .or_default()
+            .push(sample.t, dims, &sample.value);
     }
 
     /// One metric's kept breakdown, grouped by `dim` and pooled over `[from, to]`, among
@@ -2013,20 +2011,10 @@ impl Projector {
         from: SimTime,
         to: SimTime,
     ) -> Vec<crate::introspect::GroupRow> {
-        let Some(list) = self.breakdowns.get(name) else {
-            return Vec::new();
-        };
-        let mut pools: BTreeMap<String, Pool> = BTreeMap::new();
-        for e in list.iter().filter(|e| e.t >= from && e.t <= to) {
-            let Some(key) = e.dims.get(dim) else { continue };
-            let others_match = e.dims.len() == filter.len() + 1
-                && filter.iter().all(|(k, v)| e.dims.get(k) == Some(v));
-            if !others_match {
-                continue;
-            }
-            pools.entry(key.clone()).or_default().add(e);
-        }
-        pools.into_iter().map(|(key, p)| p.row(key)).collect()
+        self.breakdowns
+            .get(name)
+            .map(|store| store.groups(dim, filter, from, to))
+            .unwrap_or_default()
     }
 
     /// Appends the §3.7 rows one metric sample produces.
@@ -2145,18 +2133,190 @@ fn series_bins(
     out
 }
 
-/// How many dimensioned samples the breakdown store keeps per metric: an hour of a
-/// 20 m-binned delivery ratio (fifty bins a second), and the most recent windows of a
-/// per-node figure on a large fleet. The oldest go first.
-const BREAKDOWN_CAP: usize = 200_000;
+/// How many dimensioned samples a metric's breakdown store keeps one by one: half an hour
+/// of a 20 m-binned delivery ratio (fifty bins a second), twenty seconds of a per-node
+/// figure on a 5,000-node fleet. Older samples are merged into time blocks, not dropped.
+const BREAKDOWN_RECENT: usize = 100_000;
 
-/// One dimensioned metric sample, with what it takes to pool it with others.
+/// How many merged time blocks (one per block, dimension values and kind) a metric's
+/// breakdown store keeps before it doubles the block size and merges them again.
+const BREAKDOWN_BLOCKS: usize = 100_000;
+
+/// The first block size: ten metric windows at the default 1 s period.
+const BREAKDOWN_FIRST_BLOCK_NS: SimTime = 10_000_000_000;
+
+/// One metric's dimensioned samples, for the grouped `metrics.query`, in bounded memory
+/// over a run of any length.
+///
+/// Before this the store kept the newest 200,000 samples and dropped the oldest, so on a
+/// dense run the breakdowns silently lost their past: a per-node figure on 1,000 nodes is
+/// 1,000 samples a second, and a breakdown "over the whole run" of an hour pooled only its
+/// last 200 s while the page said 0-3,600 s. Now the newest samples are kept one by one
+/// and older ones are *merged* per time block, dimension values and kind — which loses
+/// nothing a pool needs, because every kind pools by sums (successes and trials, a ratio's
+/// two sums, a distribution's sample sum and count, a point's weighted sum). What it loses
+/// is time resolution at the old end: a block is pooled whole, when its middle is in the
+/// asked range, and the answer says which span it pooled and how big the blocks were
+/// (`GroupRow::span`, `GroupRow::block_ns`). The blocks double in size whenever there
+/// are more than [`BREAKDOWN_BLOCKS`] of them, so memory is bounded and a ten-hour run
+/// keeps blocks of minutes rather than dropping its first nine hours.
+///
+/// Dimension values are interned (a per-node figure's `{node: "1234"}` is stored once, not
+/// per sample), which also lets a query decide once per distinct set whether it matches.
+#[derive(Debug)]
+struct BreakdownStore {
+    dims: Vec<BTreeMap<String, String>>,
+    dims_index: BTreeMap<BTreeMap<String, String>, u32>,
+    /// The newest samples, in the order produced (time ascending).
+    recent: std::collections::VecDeque<BreakdownEntry>,
+    /// Older samples merged, keyed by (block start, dimension set, kind): time order.
+    blocks: BTreeMap<(SimTime, u32, u8), BreakdownEntry>,
+    /// The current block size; 0 until the first merge.
+    block_ns: SimTime,
+    recent_cap: usize,
+    block_cap: usize,
+    first_block_ns: SimTime,
+}
+
+impl Default for BreakdownStore {
+    fn default() -> Self {
+        Self::with_caps(BREAKDOWN_RECENT, BREAKDOWN_BLOCKS, BREAKDOWN_FIRST_BLOCK_NS)
+    }
+}
+
+impl BreakdownStore {
+    fn with_caps(recent_cap: usize, block_cap: usize, first_block_ns: SimTime) -> Self {
+        BreakdownStore {
+            dims: Vec::new(),
+            dims_index: BTreeMap::new(),
+            recent: std::collections::VecDeque::new(),
+            blocks: BTreeMap::new(),
+            block_ns: 0,
+            recent_cap: recent_cap.max(4),
+            block_cap: block_cap.max(2),
+            first_block_ns: first_block_ns.max(1),
+        }
+    }
+
+    fn push(
+        &mut self,
+        t: SimTime,
+        dims: BTreeMap<String, String>,
+        value: &v2xw_metrics::SampleValue,
+    ) {
+        let id = match self.dims_index.get(&dims) {
+            Some(id) => *id,
+            None => {
+                let id = u32::try_from(self.dims.len()).unwrap_or(u32::MAX);
+                self.dims.push(dims.clone());
+                self.dims_index.insert(dims, id);
+                id
+            }
+        };
+        self.recent.push_back(BreakdownEntry::of(t, id, value));
+        if self.recent.len() > self.recent_cap {
+            self.compact(self.recent_cap / 4);
+        }
+    }
+
+    /// Merges the oldest `count` recent samples into blocks, then coarsens the blocks
+    /// while there are too many of them.
+    fn compact(&mut self, count: usize) {
+        if self.block_ns == 0 {
+            self.block_ns = self.first_block_ns;
+        }
+        let block = self.block_ns;
+        for e in self.recent.drain(..count.min(self.recent.len())) {
+            let start = e.t - e.t % block;
+            match self.blocks.entry((start, e.dims, e.kind())) {
+                std::collections::btree_map::Entry::Vacant(v) => {
+                    v.insert(e);
+                }
+                std::collections::btree_map::Entry::Occupied(mut o) => o.get_mut().absorb(&e),
+            }
+        }
+        // Down to half the cap, so a run does not re-merge on every push. A run whose
+        // distinct dimension sets alone exceed the cap stops once one block spans it all.
+        while self.blocks.len() > self.block_cap / 2 {
+            let latest = self.blocks.keys().next_back().map_or(0, |k| k.0);
+            if self.block_ns > latest {
+                break;
+            }
+            self.block_ns = self.block_ns.saturating_mul(2);
+            let block = self.block_ns;
+            let old = std::mem::take(&mut self.blocks);
+            for ((start, dims, kind), e) in old {
+                let key = (start - start % block, dims, kind);
+                match self.blocks.entry(key) {
+                    std::collections::btree_map::Entry::Vacant(v) => {
+                        v.insert(e);
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut o) => {
+                        o.get_mut().absorb(&e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Grouped by `dim` and pooled over `[from, to]`, among the samples whose other
+    /// dimensions are exactly `filter`. A merged block counts when the middle of the
+    /// samples it holds is in the range.
+    fn groups(
+        &self,
+        dim: &str,
+        filter: &BTreeMap<String, String>,
+        from: SimTime,
+        to: SimTime,
+    ) -> Vec<crate::introspect::GroupRow> {
+        let keys: Vec<Option<&String>> = self
+            .dims
+            .iter()
+            .map(|d| {
+                let key = d.get(dim)?;
+                let others_match = d.len() == filter.len() + 1
+                    && filter.iter().all(|(k, v)| d.get(k) == Some(v));
+                others_match.then_some(key)
+            })
+            .collect();
+        let mut pools: BTreeMap<&String, Pool> = BTreeMap::new();
+        for e in self.blocks.values() {
+            let Some(Some(key)) = keys.get(e.dims as usize) else {
+                continue;
+            };
+            let middle = e.t + (e.t_end - e.t) / 2;
+            if middle < from || middle > to {
+                continue;
+            }
+            pools.entry(key).or_default().add(e, self.block_ns);
+        }
+        for e in self.recent.iter().filter(|e| e.t >= from && e.t <= to) {
+            let Some(Some(key)) = keys.get(e.dims as usize) else {
+                continue;
+            };
+            pools.entry(key).or_default().add(e, 0);
+        }
+        pools
+            .into_iter()
+            .map(|(key, p)| p.row(key.clone()))
+            .collect()
+    }
+}
+
+/// One dimensioned metric sample — or, once merged, several with the same dimension values
+/// and kind in one time block — with what it takes to pool it with others.
 #[derive(Debug, Clone)]
 struct BreakdownEntry {
+    /// The earliest sample instant it holds.
     t: SimTime,
-    dims: BTreeMap<String, String>,
-    /// The sample's own point, when it has one.
+    /// The latest; `t` for a single sample.
+    t_end: SimTime,
+    /// The interned dimension values (`BreakdownStore::dims`).
+    dims: u32,
+    /// The sample's own point, when it has one; merged, the weighted mean of the points.
     point: Option<f64>,
+    /// The point's weight in a pool: its sample count, at least 1; merged, their sum.
+    weight: u64,
     /// Its sample count.
     n: u64,
     /// A proportion's successes and trials, which pool exactly.
@@ -2171,7 +2331,46 @@ struct BreakdownEntry {
 }
 
 impl BreakdownEntry {
-    fn of(t: SimTime, dims: BTreeMap<String, String>, value: &v2xw_metrics::SampleValue) -> Self {
+    /// How it pools (`Pool::add`): only entries of one kind are merged, so a merged entry
+    /// pools exactly as the samples it holds would have.
+    fn kind(&self) -> u8 {
+        if self.counts.is_some() {
+            0
+        } else if self.sums.is_some() {
+            1
+        } else if self.total.is_some() {
+            2
+        } else if self.point.is_some() {
+            3
+        } else {
+            4
+        }
+    }
+
+    /// Merges `o`, of the same dimension values and kind, into this entry.
+    fn absorb(&mut self, o: &BreakdownEntry) {
+        debug_assert_eq!((self.dims, self.kind()), (o.dims, o.kind()));
+        self.t = self.t.min(o.t);
+        self.t_end = self.t_end.max(o.t_end);
+        self.required = self.required.max(o.required);
+        self.n += o.n;
+        if let (Some((s, t)), Some((os, ot))) = (self.counts, o.counts) {
+            self.counts = Some((s + os, t + ot));
+        }
+        if let (Some((a, b)), Some((oa, ob))) = (self.sums, o.sums) {
+            self.sums = Some((a + oa, b + ob));
+        }
+        if let (Some(a), Some(b)) = (self.total, o.total) {
+            self.total = Some(a + b);
+        }
+        if let (Some(p), Some(q)) = (self.point, o.point) {
+            let w = (self.weight + o.weight) as f64;
+            self.point = Some((p * self.weight as f64 + q * o.weight as f64) / w);
+        }
+        self.weight += o.weight;
+    }
+
+    fn of(t: SimTime, dims: u32, value: &v2xw_metrics::SampleValue) -> Self {
         use v2xw_metrics::{DistributionSummary, RatioEstimate, SampleValue};
         let (total, required) = match value {
             SampleValue::Distribution(DistributionSummary::Insufficient {
@@ -2201,8 +2400,10 @@ impl BreakdownEntry {
         };
         BreakdownEntry {
             t,
+            t_end: t,
             dims,
             point: value.point(),
+            weight: value.n().max(1),
             n: value.n(),
             counts,
             sums,
@@ -2227,11 +2428,20 @@ struct Pool {
     n: u64,
     /// The largest sample floor any pooled window declared.
     required: u64,
+    /// The earliest and latest sample instants pooled.
+    span: Option<(SimTime, SimTime)>,
+    /// The largest time block pooled whole; 0 when every entry was one sample.
+    block_ns: SimTime,
 }
 
 impl Pool {
-    fn add(&mut self, e: &BreakdownEntry) {
+    /// Pools `e`, which is a merged time block of `block_ns` (0: a single sample).
+    fn add(&mut self, e: &BreakdownEntry, block_ns: SimTime) {
         self.required = self.required.max(e.required);
+        self.span = Some(self.span.map_or((e.t, e.t_end), |(a, b)| {
+            (a.min(e.t), b.max(e.t_end))
+        }));
+        self.block_ns = self.block_ns.max(block_ns);
         match (e.counts, e.sums, e.total) {
             (Some((s, t)), _, _) => {
                 self.successes += s;
@@ -2250,7 +2460,7 @@ impl Pool {
             }
             _ => {
                 if let Some(p) = e.point {
-                    self.points.push((p, e.n.max(1)));
+                    self.points.push((p, e.weight));
                 }
                 self.n += e.n;
             }
@@ -2269,6 +2479,8 @@ impl Pool {
             lo: None,
             hi: None,
             n: self.n,
+            span: self.span,
+            block_ns: self.block_ns,
         };
         if self.n < self.required {
             return row;
@@ -4448,6 +4660,135 @@ mod tests {
             units,
             "with {units} masts the first vehicle's node id is {units}, not 0"
         );
+    }
+}
+
+#[cfg(test)]
+mod breakdown_store_tests {
+    use std::collections::BTreeMap;
+
+    use v2xw_metrics::stats::ratio_of_sums;
+    use v2xw_metrics::{ConfidenceLevel, Estimate, RatioEstimate, SampleValue};
+
+    use super::BreakdownStore;
+    use crate::introspect::GroupRow;
+
+    const S: u64 = 1_000_000_000;
+    const RUN_S: u64 = 2_000;
+
+    fn dims(node: u64, msg: &str) -> BTreeMap<String, String> {
+        [("node", node.to_string()), ("msg_type", msg.to_string())]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    }
+
+    /// A run of `RUN_S` one-second windows on three nodes, each window of each node under
+    /// one of two message types, in the three kinds a breakdown pools: a proportion, a
+    /// point with a sample count, and a ratio of sums. Fed to a store with tiny caps (it
+    /// merges hundreds of times and coarsens its blocks) and to one that never merges.
+    fn stores(kind: u8) -> (BreakdownStore, BreakdownStore) {
+        let mut small = BreakdownStore::with_caps(100, 400, 10 * S);
+        let mut whole = BreakdownStore::with_caps(usize::MAX / 2, usize::MAX / 2, S);
+        for t in 1..=RUN_S {
+            for node in 1..=3u64 {
+                let msg = if (t + node) % 2 == 0 { "bsm" } else { "cam" };
+                let trials = 10 + node;
+                let successes = (t * 7 + node) % (trials + 1);
+                let value = match kind {
+                    0 => SampleValue::Ratio(RatioEstimate::Proportion {
+                        point: successes as f64 / trials as f64,
+                        ci_lo: 0.0,
+                        ci_hi: 1.0,
+                        level: ConfidenceLevel::P95,
+                        trials,
+                        successes,
+                    }),
+                    1 => SampleValue::Scalar(Estimate::Value {
+                        point: (t % 13) as f64 * 0.25 + node as f64,
+                        n: t % 4,
+                    }),
+                    _ => SampleValue::Ratio(ratio_of_sums(
+                        successes as f64 * 1.5,
+                        trials as f64,
+                        trials,
+                        1,
+                    )),
+                };
+                small.push(t * S, dims(node, msg), &value);
+                whole.push(t * S, dims(node, msg), &value);
+            }
+        }
+        (small, whole)
+    }
+
+    fn by_key(rows: Vec<GroupRow>) -> BTreeMap<String, GroupRow> {
+        rows.into_iter().map(|r| (r.key.clone(), r)).collect()
+    }
+
+    fn close(a: Option<f64>, b: Option<f64>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    /// Before the store merged, it dropped its oldest samples past 200,000: a breakdown of
+    /// a dense run "over the whole run" pooled only its end. Merged, the whole run pools
+    /// exactly what a store that never merges pools — same groups, same sample counts,
+    /// same values — in bounded memory, and says it used blocks.
+    #[test]
+    fn a_long_run_pools_its_whole_past_in_bounded_memory() {
+        for kind in 0..3u8 {
+            let (small, whole) = stores(kind);
+            assert!(small.recent.len() <= 100, "kind {kind}: recent {}", small.recent.len());
+            assert!(small.blocks.len() <= 400, "kind {kind}: blocks {}", small.blocks.len());
+            assert!(small.block_ns > 10 * S, "kind {kind}: the blocks coarsened");
+            for filter in [BTreeMap::new(), [("msg_type".to_string(), "bsm".to_string())].into()] {
+                let dim = if filter.is_empty() { "msg_type" } else { "node" };
+                let got = by_key(small.groups(dim, &filter, 0, u64::MAX));
+                let want = by_key(whole.groups(dim, &filter, 0, u64::MAX));
+                assert_eq!(got.keys().collect::<Vec<_>>(), want.keys().collect::<Vec<_>>());
+                assert!(!got.is_empty(), "kind {kind} by {dim}");
+                for (k, w) in &want {
+                    let g = &got[k];
+                    assert_eq!(g.n, w.n, "kind {kind} by {dim} {k}: every sample pooled");
+                    assert!(close(g.value, w.value), "kind {kind} {k}: {:?} vs {:?}", g.value, w.value);
+                    assert!(close(g.lo, w.lo) && close(g.hi, w.hi), "kind {kind} {k}");
+                    assert_eq!(g.span, w.span, "kind {kind} {k}: the span pooled");
+                    assert_eq!(w.block_ns, 0);
+                    assert_eq!(g.block_ns, small.block_ns, "kind {kind} {k}: blocks are reported");
+                }
+                let first = want.values().filter_map(|r| r.span).map(|s| s.0).min();
+                assert!(first.is_some_and(|t| t <= 2 * S), "kind {kind}: from the start");
+            }
+        }
+    }
+
+    /// A range inside the run: the newest samples are still one by one and pool exactly;
+    /// an older range pools whole blocks, reports the span it covered, and that span is
+    /// within a block of the one asked.
+    #[test]
+    fn a_range_pools_its_blocks_whole_and_says_so() {
+        let (small, whole) = stores(0);
+        let none = BTreeMap::new();
+        let recent_from = (RUN_S - 10) * S;
+        let got = by_key(small.groups("msg_type", &none, recent_from, u64::MAX));
+        let want = by_key(whole.groups("msg_type", &none, recent_from, u64::MAX));
+        for (k, w) in &want {
+            assert_eq!((got[k].n, got[k].value, got[k].span), (w.n, w.value, w.span), "{k}");
+            assert_eq!(got[k].block_ns, 0, "{k}: the newest samples are not merged");
+        }
+        let (from, to) = (500 * S, 1_500 * S);
+        let block = small.block_ns;
+        for row in small.groups("msg_type", &none, from, to) {
+            let (a, b) = row.span.expect("pooled something");
+            assert!(a + block >= from && b <= to + block, "{}: {a}..{b} vs {from}..{to}", row.key);
+            assert_eq!(row.block_ns, block);
+            let w = &by_key(whole.groups("msg_type", &none, a, b))[&row.key];
+            assert!(row.n.abs_diff(w.n) * 10 <= w.n, "{}: {} vs {}", row.key, row.n, w.n);
+        }
     }
 }
 

@@ -70,6 +70,12 @@ pub struct GroupRow {
     pub hi: Option<f64>,
     /// The samples (trials, observations) behind it.
     pub n: u64,
+    /// The earliest and latest sample instants pooled into it, which on a long run can be
+    /// narrower than the query's window (`None` for an engine that does not say).
+    pub span: Option<(u64, u64)>,
+    /// The size of the time blocks among what was pooled, 0 when every sample was pooled
+    /// on its own. A long, dense run keeps its oldest breakdown samples merged per block.
+    pub block_ns: u64,
 }
 
 /// What [`answer`] needs from the engine that is serving the run.
@@ -379,8 +385,13 @@ pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<V
             if let Some(dim) = group_by.iter().find(|d| d.as_str() != "t") {
                 let mut columns =
                     vec![json!({"name": dim, "type": "string", "visibility": "META"})];
-                let mut keys: Vec<String> = Vec::new();
-                let mut per_metric: Vec<Vec<GroupRow>> = Vec::with_capacity(metrics.len());
+                // Keyed, not searched: a per-node breakdown of a dense run has thousands of
+                // groups, and finding each key in a list was keys x groups string compares.
+                let mut keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+                let mut per_metric: Vec<std::collections::BTreeMap<String, GroupRow>> =
+                    Vec::with_capacity(metrics.len());
+                let mut pooled: Option<(u64, u64)> = None;
+                let mut pooled_block = 0u64;
                 for m in metrics {
                     let row = catalogue
                         .iter()
@@ -396,13 +407,18 @@ pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<V
                                             "unit": unit, "visibility": row.visibility}));
                     }
                     let groups = engine.metric_groups(m, dim, filter, from, to);
-                    for g in &groups {
-                        if !keys.contains(&g.key) {
-                            keys.push(g.key.clone());
+                    let mut by_key = std::collections::BTreeMap::new();
+                    for g in groups {
+                        if let Some((a, b)) = g.span {
+                            pooled = Some(pooled.map_or((a, b), |(x, y)| (x.min(a), y.max(b))));
                         }
+                        pooled_block = pooled_block.max(g.block_ns);
+                        keys.insert(g.key.clone());
+                        by_key.insert(g.key.clone(), g);
                     }
-                    per_metric.push(groups);
+                    per_metric.push(by_key);
                 }
+                let mut keys: Vec<String> = keys.into_iter().collect();
                 keys.sort_by(|a, b| group_order(a).cmp(&group_order(b)).then_with(|| a.cmp(b)));
                 let q = |v: Option<f64>| v.map_or(Value::Null, |v| json!(math::quantize(v, 6)));
                 let rows: Vec<Value> = keys
@@ -411,7 +427,7 @@ pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<V
                     .map(|k| {
                         let mut row = vec![json!(k)];
                         for groups in &per_metric {
-                            match groups.iter().find(|g| &g.key == k) {
+                            match groups.get(k) {
                                 Some(g) => {
                                     row.push(q(g.value));
                                     row.push(q(g.lo));
@@ -432,6 +448,9 @@ pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<V
                     "truncated": keys.len() > *limit,
                     "provenance": relevant_chain(engine.provenance_chain(), "metric"),
                     "group_by": group_by,
+                    "pooled_from_ns": pooled.map(|(a, _)| a),
+                    "pooled_to_ns": pooled.map(|(_, b)| b),
+                    "pooled_block_ns": pooled_block,
                 }));
             }
             let bin = (*bin_ns).max(1);

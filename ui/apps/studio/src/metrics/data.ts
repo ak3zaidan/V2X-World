@@ -133,6 +133,26 @@ export async function fetchSeries(
 }
 
 /**
+ * The simulated span a grouped answer's rows actually pool, in seconds, when the engine says. On a
+ * long, dense run the engine keeps its oldest breakdown samples merged into time blocks, so what it
+ * pooled can be coarser or narrower than what was asked. `blockS` is 0 when no block was used.
+ */
+export interface PooledSpan {
+  readonly fromS: number;
+  readonly toS: number;
+  readonly blockS: number;
+}
+
+/** A grouped answer's pooled span, or `null` when the engine reports none (or pooled nothing). */
+export function pooledSpan(res: Pick<MetricsQueryResult, "pooled_from_ns" | "pooled_to_ns" | "pooled_block_ns">): PooledSpan | null {
+  const from = res.pooled_from_ns;
+  const to = res.pooled_to_ns;
+  if (typeof from !== "number" || typeof to !== "number" || !Number.isFinite(from) || !Number.isFinite(to)) return null;
+  const block = typeof res.pooled_block_ns === "number" && res.pooled_block_ns > 0 ? res.pooled_block_ns : 0;
+  return { fromS: from / 1e9, toS: to / 1e9, blockS: block / 1e9 };
+}
+
+/**
  * One metric grouped by one dimension over `[fromNs, toNs]`, pooled by the engine. `where` pins the
  * metric's other dimensions (a message type for a stage breakdown). An engine that has no
  * breakdowns, or a metric that has none of this dimension, answers no rows.
@@ -143,7 +163,7 @@ export async function fetchGroups(
   range: { fromNs: number; toNs?: number },
   where: Readonly<Record<string, string>> = {},
   side: Side = "a",
-): Promise<GroupRow[]> {
+): Promise<{ rows: GroupRow[]; pooled: PooledSpan | null }> {
   const res = await query(side, {
     metrics: [metric],
     group_by: [dim as "t"],
@@ -152,5 +172,5 @@ export async function fetchGroups(
     ...(range.toNs !== undefined ? { t_to_ns: Math.max(0, Math.ceil(range.toNs)) } : {}),
     limit: 100_000,
   });
-  return groupRows(res.rows);
+  return { rows: groupRows(res.rows), pooled: pooledSpan(res) };
 }

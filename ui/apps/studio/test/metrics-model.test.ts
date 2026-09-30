@@ -19,6 +19,7 @@ import {
   metricsHash,
   niceTicks,
   parseMetricsHash,
+  pooledText,
   quantile7,
   rangeStats,
   seriesCsv,
@@ -295,5 +296,20 @@ describe("breakdown helpers", () => {
     const h = histogram(values, 24);
     expect(h.counts.reduce((a, b) => a + b, 0)).toBe(5000);
     expect(h.edges.length).toBe(h.counts.length + 1);
+  });
+
+  it("says what a breakdown pooled when it is not what was asked", () => {
+    // No report (the mock, an older engine): the asked range, no caveat.
+    expect(pooledText({ fromS: 0, toS: null }, null, 1)).toEqual({ span: "0–now s", caveat: null });
+    // The first sample is a window's end, a period after the asked start: not worth a word.
+    expect(pooledText({ fromS: 0, toS: 60 }, { fromS: 1, toS: 60, blockS: 0 }, 1)).toEqual({ span: "0–60 s", caveat: null });
+    // Samples only from 300 s on, asked from 0: the header tells the pooled span, and why.
+    const late = pooledText({ fromS: 0, toS: null }, { fromS: 300, toS: 3600, blockS: 0 }, 1);
+    expect(late.span).toBe("300–3,600 s");
+    expect(late.caveat).toContain("0–now s");
+    // Blocks were used: always said, with their size.
+    const blocks = pooledText({ fromS: 30, toS: 90 }, { fromS: 20, toS: 100, blockS: 40 }, 1);
+    expect(blocks.span).toBe("20–100 s");
+    expect(blocks.caveat).toContain("40 s blocks");
   });
 });

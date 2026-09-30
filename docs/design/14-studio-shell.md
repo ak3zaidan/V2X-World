@@ -144,7 +144,12 @@ its newest window's value with its unit, and its run so far as a line. Clicking 
   full-resolution series;
 * every breakdown the catalogue declares for the metric (distance with its 95 % band, nodes worst
   first with their spread, message type, stage, cause, channel, radius…), pooled over the range by
-  the engine; a metric reported only together with another dimension offers it under "Within";
+  the engine; a metric reported only together with another dimension offers it under "Within".
+  On a long, dense run the engine keeps a metric's newest 100,000 dimensioned samples one by one
+  and merges older ones into time blocks (10 s, doubling whenever there are more than 100,000
+  blocks) instead of dropping them, so a breakdown over the whole run pools the whole run; the
+  answer carries the span it pooled and the block size (`pooled_from_ns`, `pooled_to_ns`,
+  `pooled_block_ns`), and the breakdown's header says so when that differs from the range asked;
 * its definition, unit, reduction, visibility, source and what it does not account for;
 * CSV (the full-resolution series in range, or a breakdown's pooled rows) and PNG export;
 * with a second engine open in Compare, an overlay of the same series from run B and the

@@ -698,7 +698,12 @@ fn all_methods() -> Vec<Value> {
                        "arrow_url": {"type": "string"},
                        "catalogue": {"type": "array", "items": {"type": "object"}},
                        "provenance": provenance,
-                       "group_by": {"type": "array", "items": {"type": "string"}}}),
+                       "group_by": {"type": "array", "items": {"type": "string"}},
+                       // A grouped query: the span its rows actually pooled, and the size
+                       // of any time block among them (0: none).
+                       "pooled_from_ns": {"type": ["integer", "null"], "minimum": 0},
+                       "pooled_to_ns": {"type": ["integer", "null"], "minimum": 0},
+                       "pooled_block_ns": {"type": "integer", "minimum": 0}}),
             ),
             &[-32007, -32040, -32602],
         ),

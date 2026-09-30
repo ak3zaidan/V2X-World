@@ -915,3 +915,38 @@ export function histogram(values: readonly number[], bins: number): { edges: num
   for (const v of values) counts[Math.min(n - 1, Math.floor((v - lo) / w))]++;
   return { edges: Array.from({ length: n + 1 }, (_, i) => lo + i * w), counts };
 }
+
+// ------------------------------------------------------------------------------------------------
+// What a breakdown actually pooled
+// ------------------------------------------------------------------------------------------------
+
+/**
+ * What a breakdown's header says it pooled, and the caveat when that is not what was asked.
+ *
+ * `asked` is the range in view (`toS` null: up to now). `pooled` is the engine's report of the
+ * earliest and latest sample instants it pooled, and the block size of any older samples it keeps
+ * merged (`live.rs` `BreakdownStore`); `null` when the engine does not report one. A sample's
+ * instant is its window's, so the pooled span starts up to a metric period after the asked one:
+ * that is not worth a caveat, and `periodS` sets the tolerance.
+ */
+export function pooledText(
+  asked: { readonly fromS: number; readonly toS: number | null },
+  pooled: { readonly fromS: number; readonly toS: number; readonly blockS: number } | null,
+  periodS: number,
+): { span: string; caveat: string | null } {
+  const askedText = `${formatNumber(asked.fromS)}–${asked.toS === null ? "now" : formatNumber(asked.toS)} s`;
+  if (pooled === null) return { span: askedText, caveat: null };
+  const span = `${formatNumber(pooled.fromS)}–${formatNumber(pooled.toS)} s`;
+  const askedTo = asked.toS ?? Number.POSITIVE_INFINITY;
+  const tolerance = Math.max(2 * periodS, 1e-9);
+  if (pooled.blockS > 0) {
+    return {
+      span,
+      caveat: `Asked for ${askedText}. On a run this long the engine keeps its older breakdown samples merged into ${formatNumber(pooled.blockS)} s blocks (a block counts when its middle is in the range), so this breakdown pools ${span}. The chart and statistics above use every window.`,
+    };
+  }
+  if (pooled.fromS > asked.fromS + tolerance || pooled.toS > askedTo + tolerance) {
+    return { span, caveat: `Asked for ${askedText}; the samples of this breakdown in that range span ${span}.` };
+  }
+  return { span: askedText, caveat: null };
+}

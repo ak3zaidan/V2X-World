@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { useStudio } from "../state/store.js";
-import { fetchCatalogue, fetchGroups, fetchSeries, metricPeriodNs, type Side } from "./data.js";
+import { fetchCatalogue, fetchGroups, fetchSeries, metricPeriodNs, type PooledSpan, type Side } from "./data.js";
 import { appendSeries, chooseBinNs, latestOf, EMPTY_SERIES, type GroupRow, type Series, type SeriesDef } from "./model.js";
 
 /** How often a playing run's charts refresh. The engine's metric period is 1 s by default. */
@@ -270,12 +270,13 @@ export function useGroups(
   where: Readonly<Record<string, string>>,
   active: boolean,
   side: Side = "a",
-): { rows: GroupRow[]; status: LoadState; error: string | null; stale: boolean } {
+): { rows: GroupRow[]; pooled: PooledSpan | null; status: LoadState; error: string | null; stale: boolean } {
   const runKey = useRunKey();
   const { tNs, playing } = useClock();
-  const [state, setState] = useState<{ key: string; rows: GroupRow[]; status: LoadState; error: string | null }>({
+  const [state, setState] = useState<{ key: string; rows: GroupRow[]; pooled: PooledSpan | null; status: LoadState; error: string | null }>({
     key: "",
     rows: [],
+    pooled: null,
     status: "loading",
     error: null,
   });
@@ -291,15 +292,15 @@ export function useGroups(
     if (metric === null || settled !== key || !due(clock, playing)) return;
     const requested = key;
     fetchGroups(metric, dim, range, where, side)
-      .then((rows) => {
-        if (current.current === requested) setState({ key: requested, rows, status: "ready", error: null });
+      .then(({ rows, pooled }) => {
+        if (current.current === requested) setState({ key: requested, rows, pooled, status: "ready", error: null });
       })
       .catch((err: unknown) => {
         if (current.current === requested) {
-          setState({ key: requested, rows: [], status: "error", error: err instanceof Error ? err.message : String(err) });
+          setState({ key: requested, rows: [], pooled: null, status: "error", error: err instanceof Error ? err.message : String(err) });
         }
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settled, key, clock, active]);
-  return { rows: state.rows, status: state.status, error: state.error, stale: state.key !== key };
+  return { rows: state.rows, pooled: state.pooled, status: state.status, error: state.error, stale: state.key !== key };
 }
