@@ -502,6 +502,62 @@ describe("§1.4 case 1 / §2.5 / §10.4 C7 — a resumed Hello keeps the symbol 
   });
 });
 
+describe("§3.1.1 — actor_capacity is the slot bound and a preallocation hint, not an allocation", () => {
+  it("a Hello announcing 2^20 slots allocates a few thousand, and a spawn beyond them grows the buffers", async () => {
+    const { client, sockets } = makeClient();
+    const connecting = client.connect();
+    const s = sockets[0];
+    s.open();
+    const errors: string[] = [];
+    client.on("protocolerror", (e) => errors.push(e.code));
+    s.deliverBinary(
+      helloFrame(
+        {
+          helloFlags: HelloFlags.LIVE,
+          runId: new Uint8Array(16), scenarioHash: new Uint8Array(32), worldHash: new Uint8Array(32),
+          t0WallNs: 0n, simDurationNs: 0n, mobilityStepNs: 100_000_000n, keyframePeriodNs: 1_000_000_000n,
+          telemetryPeriodNs: 1_000_000_000n, metricPeriodNs: 1_000_000_000n, resumeSeq: 0n, simTimeNs: 0n,
+          originLatDeg: 0, originLonDeg: 0, originAltM: 0, bboxMinXM: 0, bboxMinYM: 0, bboxMaxXM: 1, bboxMaxYM: 1,
+          // The engine's default: `LiveOptions::actor_capacity`, 1 << 20.
+          actorCapacity: 1 << 20, nodes: [], classes: [], channels: [],
+          worldRef: { mode: 2, format: 0, payloadBytes: 0, strUrl: 0 },
+          strings: ["", "v2xw 0.4.0+9f0649d", "manhattan"],
+          strEngineVersion: 1, strScenarioName: 2, strRunLabel: 0, strSessionToken: 0,
+        },
+        0n,
+      ),
+    );
+    await connecting;
+    // Before: 1,048,576 slots of every pose and slot column, ~60 MB here and ~400 MB on the page.
+    expect(client.poses.capacity).toBeLessThanOrEqual(4096);
+    expect(client.slots.capacity).toBeLessThanOrEqual(4096);
+    // The bound is the announced one, in full.
+    expect(client.poses.slotLimit).toBe(1 << 20);
+    expect(client.slots.slotLimit).toBe(1 << 20);
+
+    s.deliverBinary(hexToArrayBuffer(SPEC_KEYFRAME_HEX)); // gop 1, step 0
+    s.deliverBinary(
+      deltaFrame(
+        {
+          simTimeNs: 1_100_000_000n,
+          gopIndex: 1,
+          stepIndex: 1,
+          spawns: [
+            {
+              slot: 10_000, actorId: 9, nodeId: 0xffffffff, xMm: 0, yMm: 0, laneId: 0xffffffff,
+              zCm: 0, headingBrad: 0, speedCq: 0, cause: 0xffff, classIdx: 0, state: 8, verifiedNeighbors: 0,
+            },
+          ],
+        },
+        12n,
+      ),
+    );
+    expect(errors).toEqual([]);
+    expect(client.poses.capacity).toBeGreaterThan(10_000);
+    expect(client.poses.actorId[10_000]).toBe(9);
+  });
+});
+
 describe("§3.4.5 / §3.1.1 — a Delta spawn slot cannot drive unbounded allocation", () => {
   it("rejects a spawn slot beyond the Hello actor-capacity bound with a typed error and closes 1002", async () => {
     const { client, sockets } = makeClient();

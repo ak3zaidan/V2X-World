@@ -44,6 +44,13 @@ import { DARK_THEME, themeByName, type ViewerTheme } from "./theme.js";
 import { WorldRenderer, type WorldRendererOptions } from "./world-render.js";
 import type { ActorClassDef, FrameScheduler, PickResult, ViewerCanvas, ViewerRenderer } from "./types.js";
 
+/**
+ * The most interpolator slots a `Hello` preallocates (see {@link Viewer.applyHello}); the same
+ * number as `@vwp/protocol`'s `PREALLOCATED_ACTOR_SLOTS`, restated because this module takes only
+ * types from that package.
+ */
+const PREALLOCATED_SLOTS = 4096;
+
 /** Options for {@link Viewer}. */
 export interface ViewerOptions {
   /** Mount immediately on this canvas; otherwise call {@link Viewer.mount}. */
@@ -498,7 +505,11 @@ export class Viewer {
       this.picker.setClasses(classes);
       this.#publishClassRadii(classes);
     }
-    if (hello.actorCapacity > 0) this.interpolator.ensureCapacity(hello.actorCapacity);
+    // `actor_capacity` is a bound and "a preallocation hint" (§3.1.1); the hint is taken only up
+    // to a few thousand slots, as `@vwp/protocol`'s PREALLOCATED_ACTOR_SLOTS does for the pose
+    // buffer. The engine announces 2^20, and the interpolator's columns at that size were 250 MB
+    // of the page's memory. `capture` grows them, by doubling, when the traffic needs it.
+    if (hello.actorCapacity > 0) this.interpolator.ensureCapacity(Math.min(hello.actorCapacity, PREALLOCATED_SLOTS));
     // §3.1: the mobility step is the cadence deltas arrive at, so it is the interval the sampler
     // should start from rather than the hardcoded 10 Hz default (Q2).
     const stepSeconds = Number(hello.mobilityStepNs) / 1e9;

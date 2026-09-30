@@ -53,6 +53,17 @@ export const DELTA_ESCAPE_MM = 32_000;
  */
 export const MAX_ACTOR_SLOTS = 1 << 20;
 
+/**
+ * How many actor slots a client allocates up front when `Hello.actor_capacity` announces more.
+ *
+ * `actor_capacity` is the run's slot bound, enforced in full ({@link MAX_ACTOR_SLOTS}), and "a
+ * preallocation hint" (§3.1.1). The engine announces 2^20 unless a scenario states its fleet, and
+ * taking that hint literally cost about 400 MB of pose, slot and interpolation columns on a
+ * Manhattan page drawing a few hundred actors. Every column grows on demand, by doubling, so
+ * starting at a few thousand costs a handful of regrowths on the densest run and nothing else.
+ */
+export const PREALLOCATED_ACTOR_SLOTS = 4096;
+
 /** Radians per binary radian. */
 export const RAD_PER_BRAD = (2 * Math.PI) / BRAD_PER_TURN;
 
