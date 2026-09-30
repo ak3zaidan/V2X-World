@@ -269,8 +269,12 @@ pub fn register_all(registry: &mut Registry) -> Result<()> {
         v2xw_core::model::Model::card(&v2xw_net::GenericSduFragmenter::default()).clone(),
         v2xw_core::model::Model::card(&v2xw_net::FacilitiesSegmentation::default()).clone(),
         v2xw_core::model::Model::card(&v2xw_net::CertCyclePartialHybrid::default()).clone(),
-        // The three 802.11p congestion controls `radio.models.dcc` chooses between.
+        // The three 802.11p congestion controls `radio.models.dcc` chooses between, and
+        // SAE J3161/1's rate control on an LTE-V2X sidelink.
         v2xw_core::model::Model::card(&v2xw_radio::SaeJ2945Dcc::new()).clone(),
+        v2xw_core::model::Model::card(&v2xw_radio::SaeJ2945Dcc::j3161()).clone(),
+        // The vehicle antenna patterns `radio.devices.obu.antenna_pattern` applies.
+        v2xw_radio::antenna::card(),
         v2xw_core::model::Model::card(&v2xw_radio::AdaptiveDcc::new()).clone(),
         v2xw_core::model::Model::card(&v2xw_radio::ReactiveDcc::new()).clone(),
     ];
@@ -536,6 +540,56 @@ impl EngineDcc {
         }
     }
 
+    /// J2945/1's 100 ms tracking step (`v2xw_radio::SaeJ2945Dcc::on_tracking`): the unit's
+    /// own state, its deceleration and a draw. Returns the exception it raised; the other
+    /// algorithms have none.
+    pub fn on_tracking(
+        &mut self,
+        node: v2xw_core::ids::NodeId,
+        own: v2xw_radio::HostState,
+        decel_mps2: f64,
+        u: f64,
+    ) -> Option<v2xw_radio::J2945Trigger> {
+        match self {
+            EngineDcc::J2945(d) => d.on_tracking(node, own, decel_mps2, u),
+            _ => None,
+        }
+    }
+
+    /// J2945/1's inference after the unit sent a BSM carrying `sent`
+    /// (`v2xw_radio::SaeJ2945Dcc::on_transmitted`), and the exception the BSM spent.
+    pub fn on_transmitted(
+        &mut self,
+        node: v2xw_core::ids::NodeId,
+        sent: v2xw_radio::HostState,
+        u: f64,
+    ) -> Option<v2xw_radio::J2945Trigger> {
+        match self {
+            EngineDcc::J2945(d) => d.on_transmitted(node, sent, u),
+            _ => None,
+        }
+    }
+
+    /// J2945/1's channel-quality update: the average PER of the unit's neighbours within
+    /// 100 m over the last 5 s.
+    pub fn on_channel_quality(&mut self, node: v2xw_core::ids::NodeId, avg_per: f64) {
+        if let EngineDcc::J2945(d) = self {
+            d.on_channel_quality(node, avg_per);
+        }
+    }
+
+    /// True for SAE J2945/1 itself: rate and power control, the tracking error and the
+    /// channel-quality inference.
+    pub const fn is_j2945(&self) -> bool {
+        matches!(self, EngineDcc::J2945(d) if d.controls_power())
+    }
+
+    /// True for either SAE rate control, J2945/1's or J3161/1's: the density-driven
+    /// inter-transmit time and the critical event.
+    pub const fn is_sae(&self) -> bool {
+        matches!(self, EngineDcc::J2945(_))
+    }
+
     /// The gatekeeper's decision for one frame.
     pub fn gate<C: v2xw_core::ctx::Ctx + ?Sized>(
         &mut self,
@@ -553,13 +607,28 @@ impl EngineDcc {
 
     /// The unit's congestion-control state as `node.tx` carries it: the algorithm and the
     /// quantities it decided with, e.g. `sae-j2945-1 itt=320ms rp=14.5dBm`,
-    /// `etsi-adaptive delta=0.0071 t_off=141ms`, `etsi-reactive active-2 t_off=400ms`.
-    pub fn label<C: v2xw_core::ctx::Ctx + ?Sized>(&self, node: v2xw_core::ids::NodeId) -> String {
+    /// `sae-j3161-1 itt=100ms event=critical`, `etsi-adaptive delta=0.0071 t_off=141ms`,
+    /// `etsi-reactive active-2 t_off=400ms`. `event` is the SAE exception that sent the
+    /// frame early, if one did.
+    pub fn label<C: v2xw_core::ctx::Ctx + ?Sized>(
+        &self,
+        node: v2xw_core::ids::NodeId,
+        event: Option<v2xw_radio::J2945Trigger>,
+    ) -> String {
         let s = self.state::<C>(node);
         let ms = |d: v2xw_core::time::Duration| d.as_nanos() / 1_000_000;
+        let event = match event {
+            Some(v2xw_radio::J2945Trigger::CriticalEvent) => " event=critical",
+            Some(v2xw_radio::J2945Trigger::TrackingError) => " event=tracking-error",
+            None => "",
+        };
         match self {
+            EngineDcc::J2945(d) if !d.controls_power() => format!(
+                "sae-j3161-1 itt={}ms{event}",
+                ms(s.itt.unwrap_or(s.t_off)),
+            ),
             EngineDcc::J2945(_) => format!(
-                "sae-j2945-1 itt={}ms rp={:.1}dBm",
+                "sae-j2945-1 itt={}ms rp={:.1}dBm{event}",
                 ms(s.itt.unwrap_or(s.t_off)),
                 s.power_dbm.unwrap_or(f64::NAN)
             ),
@@ -666,6 +735,13 @@ pub struct SidelinkChoice {
     pub max_transmissions: Option<u32>,
     /// The congestion-control table.
     pub congestion: CongestionChoice,
+    /// SAE J3161/1's application-layer rate control (`rate_control`): `None` is the
+    /// profile's default, on under `sae-j3161` and off elsewhere.
+    pub rate_control: Option<bool>,
+    /// `sensitivity: ts-36-101` cuts every copy weaker than TS 36.101's conformance
+    /// sensitivity, the receiver the standard guarantees; unset (`measured`), the
+    /// block-error curve alone decides, as a fielded receiver does.
+    pub refsens_cutoff: bool,
 }
 
 impl Default for SidelinkChoice {
@@ -675,6 +751,8 @@ impl Default for SidelinkChoice {
             mcs: None,
             max_transmissions: None,
             congestion: CongestionChoice::ProfileDefault,
+            rate_control: None,
+            refsens_cutoff: false,
         }
     }
 }
@@ -690,6 +768,10 @@ struct SidelinkParams {
     max_transmissions: Option<u32>,
     #[serde(default)]
     congestion_control: Option<String>,
+    #[serde(default)]
+    rate_control: Option<String>,
+    #[serde(default)]
+    sensitivity: Option<String>,
 }
 
 /// The sidelink profile a RAT deploys in a region when `radio.models.sidelink` names
@@ -812,11 +894,42 @@ fn sidelink_choice(
             }
         },
     };
+    let rate_control = match p.rate_control.as_deref() {
+        None => None,
+        Some("off") => Some(false),
+        Some(id) if id == v2xw_radio::SaeJ2945Dcc::J3161_ID || id == "sae-j3161" => {
+            if !lte {
+                return Err("rate_control sae-j3161 is LTE-V2X's (SAE J3161/1); no NR-V2X \
+                            rate control is published"
+                    .to_string());
+            }
+            Some(true)
+        }
+        Some(id) => {
+            return Err(format!(
+                "rate_control '{id}' is not one of: sae-j3161 (SAE J3161/1's density-driven \
+                 inter-transmit time), off"
+            ));
+        }
+    };
+    let refsens_cutoff = match p.sensitivity.as_deref() {
+        None | Some("measured") => false,
+        Some("ts-36-101") => true,
+        Some(other) => {
+            return Err(format!(
+                "sensitivity '{other}' is not one of: measured (the block-error curve \
+                 decides, as a fielded receiver does), ts-36-101 (every copy under the \
+                 conformance sensitivity is lost)"
+            ));
+        }
+    };
     Ok(SidelinkChoice {
         profile: Some(profile),
         mcs: p.mcs,
         max_transmissions: p.max_transmissions,
         congestion,
+        rate_control,
+        refsens_cutoff,
     })
 }
 
@@ -1588,8 +1701,20 @@ pub fn register_radio(
 ///
 /// `phase_window_ms: 0, max_jitter_ms: 0` is the synchronised behaviour this engine had
 /// before the model existed, kept so the contention it causes can still be studied.
+///
+/// A unit under SAE J2945/1 staggers its BSMs by J2945/1's own rule instead of ns-3's:
+/// "transmit the BSM every 100 ms +/- a random value between 0 and 5 ms" (the FMVSS 150
+/// NPRM's transcription, proposed §571.150 S5.3.4). A hand-off jitter `U[0, 5 ms]` that
+/// does not accumulate on the 100 ms grid puts every interval in exactly that range,
+/// `[95, 105]` ms, so the default jitter is 5 ms there; a scenario's own
+/// `max_jitter_ms` still wins.
 pub fn generation_timing(scenario: &Scenario) -> v2xw_msg::GenerationTiming {
     let mut t = v2xw_msg::GenerationTiming::default();
+    if build_dcc(scenario).is_some_and(|d| d.is_j2945())
+        && technology_of(scenario.radio.rat) == Some(v2xw_radio::regulation::Technology::Ieee80211p)
+    {
+        t.max_jitter = v2xw_radio::J2945Params::J2945_1.tx_rand;
+    }
     if let Some(choice) = &scenario.messages.generator {
         let ms = |key: &str| {
             choice
@@ -2572,6 +2697,19 @@ pub fn build_mac(scenario: &Scenario) -> Option<v2xw_radio::EdcaOcbMac> {
 pub fn build_dcc(scenario: &Scenario) -> Option<EngineDcc> {
     if scenario.radio.tiers.mac == v2xw_core::card::Tier::Abstract {
         return None;
+    }
+    match technology_of(scenario.radio.rat) {
+        Some(v2xw_radio::regulation::Technology::Ieee80211p) => {}
+        // A sidelink's CR limits are its MAC's; above them, LTE-V2X under SAE J3161/1
+        // runs the J2945/1 density rule without power control (`rate_control`).
+        Some(_) => {
+            let choice = radio_models(scenario).ok().and_then(|m| m.sidelink);
+            let on = choice.and_then(|c| c.rate_control).unwrap_or_else(|| {
+                sidelink_profile(scenario) == Some(SidelinkProfile::SaeJ3161)
+            });
+            return on.then(|| EngineDcc::J2945(v2xw_radio::SaeJ2945Dcc::j3161()));
+        }
+        None => return None,
     }
     let choice = radio_models(scenario)
         .ok()

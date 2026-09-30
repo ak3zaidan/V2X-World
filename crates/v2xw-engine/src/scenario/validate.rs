@@ -767,17 +767,25 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Picks a model per radio family, overriding the tier's default: \
                propagation (free-space, two-ray-ground, log-distance with a named preset, \
                tr37885, v2v-urban-geometric), fading (none, nakagami-m with a preset), per (the \
-               802.11p error model's implementation loss), phy (the 802.11p sensitivity table), \
+               802.11p error model's implementation loss), phy (the 802.11p sensitivity \
+               table: measured-obu by default, etsi-static, etsi-dynamic or cohda-mk5), \
                obstacle (the Sommer building row) and sidelink \
                (access/sidelink/engine-coupling: profile sae-j3161, etsi-en303613 or \
                molina-masegosa-2017 for LTE, etsi-en303798 or todisco-2021 for NR; mcs, \
                an index into the profile's table (NR etsi-en303798: TS 38.214 Table \
                5.1.3.1-2, 0-27); max_transmissions for blind \
                HARQ retransmissions, 1-2 LTE, 1-3 NR; congestion_control \
-               etsi-ts-103-574, sae-j3161 or off), and dcc for 802.11p \
+               etsi-ts-103-574, sae-j3161 or off; rate_control sae-j3161 or off, SAE \
+               J3161/1's density-driven BSM interval on LTE-V2X, on by default under \
+               the sae-j3161 profile; sensitivity measured, the default, where the \
+               block-error curve decides, or ts-36-101, which loses every copy under the \
+               conformance sensitivity), and dcc for 802.11p \
                (dcc/sae/j2945-1-rate-power, dcc/etsi/adaptive-ts102687 or \
-               dcc/etsi/reactive-ts102687; the region's by default). Unknown families, \
-               ids and values are refused.",
+               dcc/etsi/reactive-ts102687; the region's by default). J2945/1 sets the \
+               interval from the neighbours within 100 m and the power from the busy \
+               ratio, and sends a BSM early and at full power on hard braking or when \
+               its neighbours' coasted estimate of it drifts 0.2-0.5 m; each BSM is \
+               staggered by 0-5 ms. Unknown families, ids and values are refused.",
     },
     KeyStatus {
         path: "radio.devices",

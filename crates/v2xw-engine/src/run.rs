@@ -175,6 +175,28 @@ const MAX_GRANTS_PER_TIMER: u32 = 8;
 /// estimate, so it is a belief and not a ground-truth density (invariant I-C2).
 const J2945_DENSITY_RADIUS_M: f64 = 100.0;
 
+/// SAE J3161/1's density window: the neighbours heard in the last 1000 ms.
+const J3161_DENSITY_WINDOW_NS: u64 = 1_000_000_000;
+
+/// The keyed stream J2945/1's tracking-error draw comes from, one draw per node and
+/// 100 ms step.
+const J2945_TRACKING_STREAM: &str = "dcc/sae/j2945-1-rate-power/tracking";
+
+/// The keyed stream J2945/1's inference comes from: whether the neighbours are taken to
+/// have received a BSM, one draw per node and transmission.
+const J2945_INFERENCE_STREAM: &str = "dcc/sae/j2945-1-rate-power/inference";
+
+/// A unit's own state, as J2945/1's estimators take it, from its position estimate.
+fn host_state(belief: &v2xw_core::PositionEstimate, at: SimTime) -> v2xw_radio::HostState {
+    v2xw_radio::HostState {
+        x: belief.pos.x,
+        y: belief.pos.y,
+        speed_mps: belief.ground_speed_mps(),
+        heading_rad: belief.heading_rad,
+        at,
+    }
+}
+
 /// Where a backend transfer's byte-accounting id starts.
 ///
 /// Invariant I-N1 checks that no id is attributed to two buckets, and a `node.tx` record's
@@ -431,6 +453,9 @@ struct ActorRecord {
 #[derive(Debug, Clone)]
 struct FrameState {
     tx: NodeId,
+    /// The SAE congestion-control exception that sent this frame early (a critical event
+    /// or a tracking error), which its `node.tx` record names.
+    dcc_event: Option<v2xw_radio::J2945Trigger>,
     /// The transmitter's ground-truth position at [`FrameState::start`], filled in when
     /// the MAC's grant fixes that instant.
     tx_pos: Vec3,
@@ -581,6 +606,11 @@ pub struct Engine {
     mac: Option<EdcaOcbMac>,
     /// Congestion control, at the medium and high tiers.
     dcc: Option<crate::wiring::EngineDcc>,
+    /// J2945/1's channel-quality bookkeeping (the BSMs each unit sent and each heard),
+    /// and the last sub-interval each unit updated its indicator in. Empty unless the
+    /// run's congestion control is J2945/1.
+    j2945_per: Option<v2xw_radio::PerWindow>,
+    j2945_quality_at: BTreeMap<NodeId, u64>,
     weather: WeatherState,
     actors: BTreeMap<ActorId, ActorRecord>,
     /// Every hosted device: vehicles' OBUs and roadside units, and — when
@@ -950,11 +980,14 @@ impl Engine {
             } else {
                 crate::wiring::build_mac(&scenario_for_radio)
             },
-            dcc: if sidelink.is_some() {
-                None
-            } else {
-                crate::wiring::build_dcc(&scenario_for_radio)
-            },
+            j2945_per: (sidelink.is_none()
+                && crate::wiring::build_dcc(&scenario_for_radio)
+                    .is_some_and(|d| d.is_j2945()))
+            .then(|| v2xw_radio::PerWindow::new(v2xw_radio::J2945Params::J2945_1)),
+            j2945_quality_at: BTreeMap::new(),
+            // On a sidelink `build_dcc` returns only SAE J3161/1's rate control, which
+            // never gates: the sidelink's CR limits are its MAC's.
+            dcc: crate::wiring::build_dcc(&scenario_for_radio),
             actors: BTreeMap::new(),
             nodes: BTreeMap::new(),
             inboxes: BTreeMap::new(),
@@ -2194,7 +2227,7 @@ impl Engine {
                     obu.set_own_acceleration(a_long);
                 }
             }
-            self.update_dcc(node, now);
+            self.update_dcc(node, now, a_long);
         }
     }
 
@@ -2215,7 +2248,12 @@ impl Engine {
     /// §5.4, Annex A), so the engine asks their gate for every frame in
     /// [`Engine::on_mac_timer`] and hands their `T_off` to the CAM generator as
     /// `T_GenCam_Dcc` (EN 302 637-2 §6.1.3).
-    fn update_dcc(&mut self, node: NodeId, now: SimTime) {
+    ///
+    /// Under J2945/1 the same 100 ms step is the tracking step: the unit compares its own
+    /// state with where its neighbours are believed to put it, and hard braking beyond
+    /// 0.4 g (`a_long`, its own accelerometer) or the tracking-error draw sends the next
+    /// BSM now and at `vRPMax` (Ahmad 2019 §IV). The draw is keyed by node and instant.
+    fn update_dcc(&mut self, node: NodeId, now: SimTime, a_long: f64) {
         if self.dcc.is_none() {
             return;
         }
@@ -2223,13 +2261,55 @@ impl Engine {
             .mac
             .as_ref()
             .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, self.dsrc_channel, now));
+        // The unit's own state as its position estimate has it: the J2945/1 local
+        // estimator. Only an on-board unit tracks itself; a roadside unit does not move.
+        let own = (!self.rsus.contains_key(&node))
+            .then(|| self.nodes.get(&node))
+            .flatten()
+            .map(|runtime| host_state(v2xw_core::NodeView::position(runtime), now));
+        // Once per vPERSubInterval, J2945/1's channel-quality indicator: the average PER
+        // of the RVs within vPERRange of the unit's own position, each at the position
+        // it broadcasts.
+        let quality = match (own, self.j2945_per.as_mut()) {
+            (Some(me), Some(window)) => {
+                let k = window.sub_interval(now);
+                if self.j2945_quality_at.get(&node) == Some(&k) {
+                    None
+                } else {
+                    self.j2945_quality_at.insert(node, k);
+                    let nodes = &self.nodes;
+                    window.average_per(node, now, |tx| {
+                        nodes.get(&tx).is_some_and(|rv| {
+                            let p = v2xw_core::NodeView::position(rv).pos;
+                            v2xw_core::math::hypot(p.x - me.x, p.y - me.y)
+                                <= J2945_DENSITY_RADIUS_M
+                        })
+                    })
+                }
+            }
+            _ => None,
+        };
+        if let (Some(avg), Some(d)) = (quality, self.dcc.as_mut()) {
+            d.on_channel_quality(node, avg);
+        }
+        // SAE J3161/1 counts the unique neighbours heard at least once in the previous
+        // 1000 ms (Fouda 2023 §II-C); J2945/1 the RVs "in range currently", which is the
+        // neighbour table as it stands.
+        let heard_since = self
+            .dcc
+            .as_ref()
+            .filter(|d| d.is_sae() && !d.is_j2945())
+            .map_or(0, |_| now.saturating_sub(J3161_DENSITY_WINDOW_NS));
         let neighbours = self.nodes.get(&node).map_or(0, |runtime| {
             let own = v2xw_core::NodeView::position(runtime).pos;
             runtime
                 .stores()
                 .neighbors
                 .iter()
-                .filter(|n| n.claimed_pos.distance(own) <= J2945_DENSITY_RADIUS_M)
+                .filter(|n| {
+                    n.last_heard >= heard_since
+                        && n.claimed_pos.distance(own) <= J2945_DENSITY_RADIUS_M
+                })
                 .count() as u32
         });
         let state = {
@@ -2252,6 +2332,20 @@ impl Engine {
                 dcc.on_cbr(&mut ctx, node, cbr);
             }
             dcc.on_density(&mut ctx, node, neighbours);
+            if dcc.is_sae()
+                && let Some(own) = own
+            {
+                let u = rng
+                    .checkout(
+                        v2xw_core::rng::RngDomain::plugin(J2945_TRACKING_STREAM),
+                        v2xw_core::rng::EntityRef::LinkFrame {
+                            link: v2xw_core::ids::LinkKey::new(node, node),
+                            frame: now,
+                        },
+                    )
+                    .uniform(0.0, 1.0);
+                dcc.on_tracking(node, own, -a_long, u);
+            }
             dcc.state::<EngineCtx<'_>>(node)
         };
         let (t_off, cbr) = state.generator_view();
@@ -2906,6 +3000,35 @@ impl Engine {
             .as_ref()
             .map_or(self.dsrc_channel, |sl| sl.channel);
         let tx_power_dbm = self.tx_power_dbm(node);
+        // J2945/1: a BSM is on its way, carrying the unit's own state. Whether the
+        // neighbours are taken to have it is a Bernoulli trial on the channel quality,
+        // and an exception that sent it (a critical event, a tracking error) is spent.
+        // The power above was read first, so such a BSM goes out at vRPMax. J3161/1 has
+        // the critical event alone, and it is spent the same way.
+        let mut dcc_event = None;
+        if tx.msg_type == v2xw_msg::MsgType::Bsm
+            && !self.rsus.contains_key(&node)
+            && let Some(b) = belief
+            && self.dcc.as_ref().is_some_and(crate::wiring::EngineDcc::is_sae)
+        {
+            let sent = host_state(b, t_generated);
+            let u = self
+                .rng
+                .checkout(
+                    v2xw_core::rng::RngDomain::plugin(J2945_INFERENCE_STREAM),
+                    v2xw_core::rng::EntityRef::LinkFrame {
+                        link: v2xw_core::ids::LinkKey::new(node, node),
+                        frame: t_generated,
+                    },
+                )
+                .uniform(0.0, 1.0);
+            if let Some(d) = self.dcc.as_mut() {
+                dcc_event = d.on_transmitted(node, sent, u);
+            }
+            if let Some(window) = self.j2945_per.as_mut() {
+                window.note_sent(node, t_generated);
+            }
+        }
         // The frame on the air is the SPDU inside a network and transport header, LLC/SNAP,
         // the 802.11 MAC header and the FCS (`v2xw_net::frame`); the PHY's air time and the
         // MSDU cap are over all of it, not over the SPDU alone.
@@ -3007,6 +3130,7 @@ impl Engine {
             payload_bytes: split.map(|(p, _)| p),
             envelope_bytes: split.map(|(_, e)| e),
             sl_resource: None,
+            dcc_event,
             sl_interferers: BTreeMap::new(),
             focus_high: std::collections::BTreeSet::new(),
             focus_placement: BTreeMap::new(),
@@ -4120,6 +4244,13 @@ impl Engine {
             if let Some(cause) = outcome.cause {
                 self.report.lost(cause);
             }
+            // J2945/1's per-neighbour PER, as a receiver counts it from msgCnt.
+            if outcome.received
+                && state.msg_type == v2xw_msg::MsgType::Bsm
+                && let Some(window) = self.j2945_per.as_mut()
+            {
+                window.note_received(outcome.rx, state.tx, now);
+            }
             let record = PhyRx::new(
                 state.start,
                 now,
@@ -4340,7 +4471,7 @@ impl Engine {
                             Some(v2xw_radio::ActorClass::Pedestrian | v2xw_radio::ActorClass::Bicycle)
                         )
                 })
-                .map(|d| d.label::<EngineCtx<'_>>(state.tx)),
+                .map(|d| d.label::<EngineCtx<'_>>(state.tx, state.dcc_event)),
         );
         // The frame's own octets, for a viewer that decodes them (`RunRecorder::tap_frame`).
         // Not a record: nothing recorded, counted or digested changes.
