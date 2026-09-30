@@ -2339,9 +2339,33 @@ const LANE_WIDTH_SOURCE: &str = "AASHTO Green Book (9-12 ft lanes; 12 ft on free
                                  major arterials) and NACTO Urban Street Design Guide \
                                  (10-11 ft urban street lanes)";
 
-/// The class-based lane width for `class`, or `None` for a class that carries no motor
+/// The class lane width a jurisdiction's own design standard sets, where the preset has
+/// one; [`CLASS_LANE_WIDTH_M`] otherwise; `None` for a class that carries no motor
 /// traffic.
-fn class_lane_width_m(class: RoadClass) -> Option<f64> {
+///
+/// `urban-us-nyc`: NYC DOT *Street Design Manual* ("Lanes"): "the typical lane width for
+/// moving vehicles is 10 feet" — 3.048 m on every city street class, against the 11 ft
+/// NACTO allows on an arterial. Ramps keep 11 ft and the highway classes 12 ft (the FDR
+/// and the approaches are state-designed). Bus lanes are 11 ft in every preset
+/// ([`crate::section::CrossSectionOptions::bus_lane_width_m`]).
+fn preset_lane_width_m(preset: Option<HighwayPreset>, class: RoadClass) -> Option<f64> {
+    if preset == Some(HighwayPreset::UrbanUsNyc)
+        && matches!(
+            class,
+            RoadClass::Primary
+                | RoadClass::Secondary
+                | RoadClass::Tertiary
+                | RoadClass::Unclassified
+                | RoadClass::Residential
+        )
+    {
+        return Some(3.048);
+    }
+    class_lane_width_table(class)
+}
+
+/// The row of [`CLASS_LANE_WIDTH_M`] for `class`.
+fn class_lane_width_table(class: RoadClass) -> Option<f64> {
     CLASS_LANE_WIDTH_M
         .iter()
         .find(|(c, _)| *c == class)
@@ -2442,7 +2466,7 @@ fn motor_lane_width(
         return (forced, WidthSource::Option);
     }
     (
-        class_lane_width_m(class).unwrap_or(FALLBACK_LANE_WIDTH_M),
+        preset_lane_width_m(options.highway_preset, class).unwrap_or(FALLBACK_LANE_WIDTH_M),
         WidthSource::Class,
     )
 }
@@ -3086,7 +3110,8 @@ pub fn classify_way(
             .filter(|w| (MIN_LANE_WIDTH_M..=MAX_LANE_WIDTH_M).contains(w));
             width = shared.unwrap_or_else(|| {
                 report.note(Anomaly::UnparsableHeight, way.id);
-                class_lane_width_m(defaults.class).unwrap_or(FALLBACK_LANE_WIDTH_M)
+                preset_lane_width_m(options.highway_preset, defaults.class)
+                    .unwrap_or(FALLBACK_LANE_WIDTH_M)
             });
             section_input.general_width_m = width;
             // The tag fixes the carriageway, bus lanes included: they share it equally.
@@ -6583,7 +6608,9 @@ fn phase_greens(
                     least = least.max(need);
                 }
             }
-            quantise(least, Q_TIME_S)
+            // Rounded up, never down: a minimum rounded to the nearest step left a
+            // pedestrian 0.4 ms short of the far kerb (tests/street.rs caught it).
+            quantise((least / Q_TIME_S).ceil() * Q_TIME_S, Q_TIME_S)
         })
         .collect();
     let fixed: f64 = timing.iter().map(|(_, y, r)| y + r).sum();
@@ -9392,6 +9419,11 @@ fn separate_lanes(net: &mut Net, report: &mut ImportReport) {
     for (group, edge) in net.edge_info.iter().enumerate() {
         for lane in &edge.lanes {
             let kind = net.lanes[lane.as_usize()].kind;
+            // A cycle track stays a soft lane. Making it part of the carriageway, so that a
+            // pavement mapped where it lies moved clear of it, left the pavements squeezed
+            // between a track and a drive lane where they were: Midtown's pavement on the
+            // roadway went from 53 lanes (95 m) to 69 (646 m). `sidewalk-on-cycle-lane`
+            // counts what remains.
             let role = if edge.family == WayFamily::Motor && !edge.side && kind.is_motorised() {
                 Role::Carriageway
             } else if crate::separate::is_soft(kind) {
@@ -10244,6 +10276,7 @@ pub fn card() -> ModelCard {
         Parameter::new("yellow_max_s", "s", 6.0.into(), fhwa()),
         // The cross-section (crate::section): bus, cycle and parking lanes from the tags.
         Parameter::new("bus_lane_width_m", "m", 3.353.into(), nyc_sdm()),
+        Parameter::new("lane_width_urban_us_nyc_m", "m", 3.048.into(), nyc_sdm()),
         Parameter::new("parking_lane_width_m", "m", 2.438.into(), nyc_sdm()),
         Parameter::new("cycle_lane_width_m", "m", 1.676.into(), nyc_bike_table()),
         Parameter::new("cycle_track_width_m", "m", 1.524.into(), nyc_bike_table()),

@@ -73,9 +73,12 @@ actors:
     equipped_fraction: 1.0
     demand:
       kind: mobility/demand/poisson
-      # Downtown is about a third of the Midtown box's street length; 600 veh/h keeps the
-      # fleet at a comparable density to manhattan-5min's 1500.
-      rate_veh_per_h: 600.0
+      # Downtown has 68 km of drive lanes to the Midtown box's 119 (world_report). Measured
+      # with traffic_audit over 300 s: 600 veh/h put a peak of 36 vehicles on the map and
+      # 1000 veh/h a peak of 38 — the rate is not what limits the fleet here: Portland's
+      # 61 m blocks leave short lanes, and the demand model spawns only on a lane long
+      # enough to take a vehicle. The thinned-Poisson acceptance is the mobility model's.
+      rate_veh_per_h: 1000.0
 
 weather:
   initial: clear

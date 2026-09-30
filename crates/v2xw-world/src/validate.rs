@@ -23,6 +23,7 @@
 //! | `roadway-overlap` | driving lanes of different roads whose bands overlap, away from their ends — two one-way ways mapped closer together than their lanes are wide |
 //! | `sidewalk-in-vehicle-envelope` | sidewalk lanes whose centreline comes within half a car's width plus a pedestrian's radius of a driving lane's centreline — where a walker and a car on their own lanes *touch* |
 //! | `cycle-on-roadway` | the same as `sidewalk-on-roadway`, for cycle lanes |
+//! | `sidewalk-on-cycle-lane` | sidewalk lanes laid along a cycle lane or track, their bands overlapping by more than the tolerance |
 //! | `path-turns-faster-than-a-car` | junction connectors on which a car's body (rear axle to front bumper, [`ValidationParams::body_length_m`]) would turn faster than the AASHTO passenger-car minimum path radius allows, over the connector and the lanes either side of it — the geometric twin of the auditor's `heading-jump` |
 //! | `uturn-tighter-than-a-car` | U-turn connectors whose path is tighter than the same radius |
 //! | `dead-end-uturn` | U-turn connectors at a junction with one road arm |
@@ -349,12 +350,16 @@ fn check_band_overlaps(
         report.entry(name);
         if kind == LaneKind::Sidewalk {
             report.entry("sidewalk-in-vehicle-envelope");
+            report.entry("sidewalk-on-cycle-lane");
         }
         for lane in world.roads.lanes().iter().filter(|l| l.kind == kind) {
             report.entry(name).of += 1;
             if kind == LaneKind::Sidewalk {
                 report.entry("sidewalk-in-vehicle-envelope").of += 1;
+                report.entry("sidewalk-on-cycle-lane").of += 1;
             }
+            let mut on_cycle: Option<(f64, LaneId, Vec3)> = None;
+            let mut on_cycle_m = 0.0;
             let samples = (lane.length_m / 1.0).ceil().max(1.0) as usize;
             let step = lane.length_m / samples as f64;
             let mut worst: Option<(f64, LaneId, Vec3)> = None;
@@ -368,8 +373,26 @@ fn check_band_overlaps(
                 let mut best_lane = LaneId::new(0);
                 let mut nearest = f64::INFINITY;
                 let mut nearest_lane = LaneId::new(0);
+                let mut cycle_overlap = f64::NEG_INFINITY;
+                let mut cycle_lane = LaneId::new(0);
                 for (id, seg) in index.near(p, 12.0) {
                     let other = world.lane(id);
+                    // A pavement laid on a cycle lane or track: walkers and riders in one
+                    // band, which the auditor sees as bicycles through pedestrians.
+                    if kind == LaneKind::Sidewalk && other.kind == LaneKind::Cycle {
+                        let (a, b) = (
+                            other.centreline[seg as usize],
+                            other.centreline[seg as usize + 1],
+                        );
+                        let parallel =
+                            math::sin(h - math::atan2(b.y - a.y, b.x - a.x)).abs() <= 0.5;
+                        let o = 0.5 * (other.width_m + lane.width_m) - segment_distance(p, a, b);
+                        if parallel && ((a.z + b.z) * 0.5 - p.z).abs() <= 3.0 && o > cycle_overlap {
+                            cycle_overlap = o;
+                            cycle_lane = id;
+                        }
+                        continue;
+                    }
                     if !is_carriageway(other) {
                         continue;
                     }
@@ -409,6 +432,12 @@ fn check_band_overlaps(
                         worst = Some((best_overlap, best_lane, p));
                     }
                 }
+                if cycle_overlap > params.overlap_tolerance_m {
+                    on_cycle_m += step;
+                    if on_cycle.is_none_or(|w| cycle_overlap > w.0) {
+                        on_cycle = Some((cycle_overlap, cycle_lane, p));
+                    }
+                }
                 let envelope = params.car_half_width_m + params.pedestrian_radius_m;
                 if kind == LaneKind::Sidewalk
                     && nearest < envelope
@@ -422,6 +451,18 @@ fn check_band_overlaps(
                 report.fail(name, keep, || {
                     format!(
                         "lane {} overlaps lane {} by {o:.2} m over {overlap_m:.0} m, at ({:.1}, {:.1})",
+                        lane.id.index(),
+                        other.index(),
+                        p.x,
+                        p.y
+                    )
+                });
+            }
+            if let Some((o, other, p)) = on_cycle {
+                report.entry("sidewalk-on-cycle-lane").metres += on_cycle_m;
+                report.fail("sidewalk-on-cycle-lane", keep, || {
+                    format!(
+                        "lane {} overlaps cycle lane {} by {o:.2} m over {on_cycle_m:.0} m, at ({:.1}, {:.1})",
                         lane.id.index(),
                         other.index(),
                         p.x,

@@ -108,10 +108,11 @@ fn an_avenue_carries_its_bus_lane_track_and_parking() {
         ]
     );
     let lane = |k: usize| world.lane(edge.lanes[k]);
-    // NYC widths: 8 ft parking, 11 ft bus, 11 ft general (the preset's primary), a 5 ft
-    // track 3 ft beyond the left parking lane.
+    // NYC widths: 8 ft parking, 11 ft bus, 10 ft general (NYC DOT's typical moving lane),
+    // a 5 ft track 3 ft beyond the left parking lane.
     assert!((lane(0).width_m - 2.438).abs() < 1e-9);
     assert!((lane(1).width_m - 3.353).abs() < 1e-9);
+    assert!((lane(2).width_m - 3.048).abs() < 1e-9);
     assert!((lane(6).width_m - 1.524).abs() < 1e-9);
     // Right to left along +x (the avenue runs north, so its left is west, -x).
     for k in 1..7 {
@@ -233,7 +234,16 @@ fn the_green_is_shared_by_lanes_and_leaves_pedestrians_time_to_cross() {
         .take_while(|p| !p.states.iter().any(|s| matches!(s, SignalState::Green | SignalState::GreenYield)))
         .map(|p| p.duration_s)
         .sum();
-    let avenue_width = 2.438 * 2.0 + 3.353 * 4.0; // kerb to kerb: two parking lanes, four lanes
+    // Kerb to kerb: every lane of the avenue's edge (two parking lanes, the bus lane, three
+    // general lanes and the track).
+    let avenue_width: f64 = world
+        .roads
+        .edges()
+        .iter()
+        .filter(|e| e.lanes.len() == 7)
+        .map(|e| e.lanes.iter().map(|l| world.lane(*l).width_m).sum::<f64>())
+        .fold(0.0, f64::max);
+    assert!(avenue_width > 15.0, "{avenue_width}");
     let need = 7.0 + avenue_width / 1.067 - change;
     assert!(street + 1e-6 >= need, "street green {street} s, pedestrians need {need} s");
 

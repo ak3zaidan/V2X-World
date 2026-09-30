@@ -29,8 +29,8 @@
 //! elements beyond it: a cycle track and its buffer, a `street_side` parking bay. Across a
 //! side, in NYC practice (NYC DOT *Street Design Manual*, Bike Lane Table): a painted lane
 //! runs between the parking lane and traffic (`cycleway:*:traffic_mode=parking` puts it at
-//! the kerb instead); a track runs at the kerb, with the parking lane between it and
-//! traffic and a buffer between the two. A two-way track keeps right-hand traffic inside
+//! the kerb instead); a track runs outside the parking lane, with a buffer between the
+//! two, and is laid beyond the carriageway the way is centred on. A two-way track keeps right-hand traffic inside
 //! itself: on the right of the way the forward half is the outer one.
 //!
 //! Each lane is assigned to the direction it serves. Parking has no direction: it belongs
@@ -436,18 +436,24 @@ pub fn build(tags: &Tags, input: &SectionInput, options: &CrossSectionOptions) -
                 if c.track { options.cycle_track_width_m } else { options.cycle_lane_width_m },
                 |w| if c.two_way { 0.5 * w } else { w },
             );
+            // A track is laid beyond the carriageway the way is centred on. Counting a
+            // parking-protected track into that carriageway (it is on the roadway in NYC)
+            // shifted every Midtown avenue's drive lanes 1.2 m towards the far kerb and
+            // put 648 m of pavement on them. Where a mapped pavement lies on a track,
+            // `validate`'s `sidewalk-on-cycle-lane` counts it.
+            let on_road = !c.track;
             for dir in &dirs {
                 cycle_els.push(Element {
                     lane: Some((LaneKind::Cycle, ClassMask::BICYCLE, *dir)),
                     width_m: width,
-                    on_carriageway: !c.track,
+                    on_carriageway: on_road,
                 });
                 cycle_dirs[s].push(*dir);
             }
             let buffer = c.buffered.then_some(Element {
                 lane: None,
                 width_m: options.cycle_buffer_m,
-                on_carriageway: !c.track,
+                on_carriageway: on_road,
             });
             // Outward order.
             let row = &mut sides[s];
@@ -625,6 +631,16 @@ mod tests {
         // The carriageway (everything but the track and its buffer) is centred on the way.
         let c = s.right_extent_m + s.left_extent_m - track.width_m - o.cycle_buffer_m;
         assert!((s.right_extent_m - 0.5 * c).abs() < 1e-9);
+        assert!((s.reserved_m - 2.0 * 2.438).abs() < 1e-9);
+
+        // With no parking beside it, the same.
+        let t = tags(&[("oneway", "yes"), ("lanes", "2"), ("cycleway:left", "track")]);
+        let s = build(&t, &input(2, 0), &o);
+        let track = *s.fwd.last().unwrap();
+        assert_eq!(track.kind, LaneKind::Cycle);
+        let c = s.right_extent_m + s.left_extent_m - track.width_m - o.cycle_buffer_m;
+        assert!((s.right_extent_m - 0.5 * c).abs() < 1e-9);
+        assert!(s.reserved_m.abs() < 1e-12);
     }
 
     #[test]

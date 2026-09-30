@@ -566,8 +566,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "world.highway_preset",
         status: Status::Wired,
-        note: "Which jurisdiction's fallback speed limits the OpenStreetMap importer \
-               uses. An OSM import is refused without it.",
+        note: "Which jurisdiction's fallback speed limits (and, for urban-us-nyc, lane \
+               widths) the OpenStreetMap importer uses: urban-us-nyc, urban-us-portland, \
+               urban-de or sumo-german. An OSM import is refused without it.",
     },
     KeyStatus {
         path: "world.signals.coordinate",
