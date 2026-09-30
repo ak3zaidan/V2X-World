@@ -167,7 +167,8 @@ fn an_idle_80211p_channel_costs_the_aifs_and_backoff_the_mac_reports() {
 
 /// A sidelink frame's `node.tx` carries the sidelink's own MCS and resource: the LTE MCS
 /// of the J3161/1 profile (7) and a two-or-more-sub-channel allocation in the ten-channel
-/// pool, or the NR MCS (9) in the two-channel one — not the 802.11p rate.
+/// pool, or the NR MCS (TS 38.214 Table 5.1.3.1-2 MCS 7) in ETSI EN 303 798's
+/// four-sub-channel pool — not the 802.11p rate.
 #[test]
 fn sidelink_tx_records_carry_the_sidelink_mcs_and_resource() {
     let base = fleet(10, 2.0);
@@ -197,13 +198,15 @@ fn sidelink_tx_records_carry_the_sidelink_mcs_and_resource() {
         );
         assert_eq!(r.priority, Some(5), "a BSM is PPPP 5");
     }
+    // NR's default pool is ETSI EN 303 798's, at TS 38.214 Table 5.1.3.1-2 MCS 7.
     for v in views::<NodeTxView>(&nr_rec) {
         let r = v.radio.as_ref().expect("radio view");
         assert_eq!(
             (r.rat.as_str(), r.mcs.as_str()),
-            ("nr-v2x-mode2", "nr-mcs9")
+            ("nr-v2x-mode2", "nr-t2-mcs7")
         );
-        assert_eq!(v.mcs, Some(9));
+        assert_eq!(v.mcs, Some(7));
+        assert_eq!(r.subchannels, Some(4));
         assert_eq!(r.slot, Some(v.t / 500_000), "a 0.5 ms NR slot");
     }
 }
@@ -282,14 +285,32 @@ fn congestion_control_holds_the_cr_limit_under_load() {
 /// and each transport block is still one reception per receiver.
 #[test]
 fn blind_retransmissions_raise_delivery_at_range() {
-    let base = with_rat(fleet(30, 3.0), "lte-v2x-pc5");
+    let mut base = with_rat(fleet(30, 3.0), "lte-v2x-pc5");
+    // The regime the test needs is one where a single copy sometimes fails at range. The
+    // receivers are fielded ones and the pool's sensing now counts in-band emission, so
+    // at 23 dBm one copy loses a third of a percent here: both arms run the conformance
+    // receiver (`sensitivity: ts-36-101`) at 20 dBm, which puts the edge of one copy's
+    // range inside the fleet. One transmission is asked for by name (SAE J3161/1's
+    // profile sends two by default), and J3161/1's rate control is off, since this is
+    // about the second copy and not about the interval.
+    base.radio.devices.obu.tx_power_dbm = 20.0;
     let once = with_sidelink(
         base.clone(),
-        serde_json::json!({ "congestion_control": "off" }),
+        serde_json::json!({
+            "congestion_control": "off",
+            "max_transmissions": 1,
+            "sensitivity": "ts-36-101",
+            "rate_control": "off",
+        }),
     );
     let twice = with_sidelink(
         base,
-        serde_json::json!({ "congestion_control": "off", "max_transmissions": 2 }),
+        serde_json::json!({
+            "congestion_control": "off",
+            "max_transmissions": 2,
+            "sensitivity": "ts-36-101",
+            "rate_control": "off",
+        }),
     );
     let (r1, rec1) = run_recorded(once);
     let (r2, rec2) = run_recorded(twice);

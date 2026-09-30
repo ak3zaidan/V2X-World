@@ -134,7 +134,29 @@ pub struct JammerSpec {
     pub duty: Option<f64>,
     /// The reactive profile's trigger, dBm.
     pub trigger_dbm: Option<f64>,
+    /// Set for an emitter on an adjacent channel (`radio.adjacent_channel`) rather than a
+    /// jammer: its power above is what lands in this run's channel, after the ACIR.
+    pub adjacent: Option<AdjacentSpec>,
 }
+
+/// What makes an adjacent-channel emitter one.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct AdjacentSpec {
+    /// Its technology.
+    pub technology: v2xw_radio::regulation::Technology,
+    /// Its channel.
+    pub channel: u16,
+    /// The transmit power it radiates on its own channel, dBm.
+    pub tx_power_dbm: f64,
+    /// The adjacent-channel interference ratio its power is taken down by, dB.
+    pub acir_db: f64,
+    /// Whether that ratio is the scenario's (`acir_db`) or the rules' minimum.
+    pub acir_from_scenario: bool,
+}
+
+/// An adjacent-channel emitter's transmit power when the scenario gives none, dBm: the
+/// 23 dBm every other UE in TR 36.885 transmits at.
+pub const ADJACENT_DEFAULT_POWER_DBM: f64 = 23.0;
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -163,7 +185,9 @@ struct JammerParams {
     trigger_dbm: Option<f64>,
 }
 
-/// Parses `threats.jammers`, returning every problem with the path it is at.
+/// Parses `threats.jammers` and `radio.adjacent_channel`, returning every problem with the
+/// path it is at. Jammers come first, then the adjacent-channel emitters, each in the
+/// order the scenario lists them.
 ///
 /// # Errors
 /// One `(path, reason)` per unknown id, missing or malformed parameter.
@@ -189,7 +213,107 @@ pub fn jammer_specs(scenario: &Scenario) -> Result<Vec<JammerSpec>, Vec<(String,
                 continue;
             }
         };
-        let p: JammerParams = match serde_json::from_value(j.params.clone()) {
+        if let Some(spec) = parse_emitter(&path, Some(kind), &j.params, None, &mut errors) {
+            out.push(spec);
+        }
+    }
+    adjacent_specs(scenario, &mut out, &mut errors);
+    if errors.is_empty() {
+        Ok(out)
+    } else {
+        Err(errors)
+    }
+}
+
+/// `radio.adjacent_channel`: each emitter's ACIR against this run's receivers, and its
+/// placement and timing parsed as a jammer's.
+fn adjacent_specs(
+    scenario: &Scenario,
+    out: &mut Vec<JammerSpec>,
+    errors: &mut Vec<(String, String)>,
+) {
+    if scenario.radio.adjacent_channel.is_empty() {
+        return;
+    }
+    let victim = match crate::wiring::radio_regulation(scenario) {
+        Ok(r) => r,
+        Err((key, why)) => {
+            errors.push((
+                "radio.adjacent_channel".to_string(),
+                format!("needs this run's own channel, and {key} {why}"),
+            ));
+            return;
+        }
+    };
+    for (i, e) in scenario.radio.adjacent_channel.iter().enumerate() {
+        let path = format!("radio.adjacent_channel[{i}]");
+        let Some(tech) = crate::wiring::technology_of(e.rat) else {
+            errors.push((format!("{path}.rat"), "names no single technology".to_string()));
+            continue;
+        };
+        let channel = match e.channel {
+            Some(c) => c,
+            None => match victim.region.default_channel(tech) {
+                Ok(rule) => rule.channel.number,
+                Err(why) => {
+                    errors.push((format!("{path}.rat"), why.to_string()));
+                    continue;
+                }
+            },
+        };
+        let computed = v2xw_radio::regulation::adjacent_acir_db(
+            victim.region,
+            tech,
+            channel,
+            victim.technology,
+            victim.rule.channel.number,
+            // 6 Mbit/s, the rate every safety message goes out at.
+            2,
+        );
+        let acir = match (e.acir_db, computed) {
+            (Some(a), Ok(_)) if a.is_finite() && (0.0..=100.0).contains(&a) => a,
+            (Some(a), Ok(_)) => {
+                errors.push((
+                    format!("{path}.acir_db"),
+                    format!("is {a}; an adjacent-channel interference ratio is in [0, 100] dB"),
+                ));
+                continue;
+            }
+            (None, Ok(a)) => a,
+            (_, Err(why)) => {
+                errors.push((format!("{path}.channel"), why));
+                continue;
+            }
+        };
+        let tx_power = e
+            .params
+            .get("power_dbm")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(ADJACENT_DEFAULT_POWER_DBM);
+        let adjacent = AdjacentSpec {
+            technology: tech,
+            channel,
+            tx_power_dbm: tx_power,
+            acir_db: acir,
+            acir_from_scenario: e.acir_db.is_some(),
+        };
+        if let Some(spec) = parse_emitter(&path, None, &e.params, Some(adjacent), errors) {
+            out.push(spec);
+        }
+    }
+}
+
+/// One emitter's placement, power and timing. `kind` is a jammer's profile; `None` is an
+/// adjacent-channel emitter, constant unless it has a duty cycle below one.
+fn parse_emitter(
+    path: &str,
+    kind: Option<JammerKind>,
+    params: &serde_json::Value,
+    adjacent: Option<AdjacentSpec>,
+    errors: &mut Vec<(String, String)>,
+) -> Option<JammerSpec> {
+    {
+        let p: JammerParams = match serde_json::from_value(params.clone()) {
             Ok(p) => p,
             Err(e) => {
                 errors.push((
@@ -202,9 +326,22 @@ pub fn jammer_specs(scenario: &Scenario) -> Result<Vec<JammerSpec>, Vec<(String,
                          reactive one trigger_dbm"
                     ),
                 ));
-                continue;
+                return None;
             }
         };
+        if adjacent.is_some() && p.trigger_dbm.is_some() {
+            errors.push((
+                format!("{path}.params.trigger_dbm"),
+                "an adjacent-channel emitter transmits on its own schedule, not on what it \
+                 hears"
+                    .to_string(),
+            ));
+        }
+        let kind = kind.unwrap_or(if p.duty.is_some_and(|d| d < 1.0) {
+            JammerKind::Pulsed
+        } else {
+            JammerKind::Constant
+        });
         let point = |v: &[f64]| -> Option<Vec3> {
             let p = match v {
                 [x, y] => Vec3::new(*x, *y, 1.5),
@@ -227,7 +364,7 @@ pub fn jammer_specs(scenario: &Scenario) -> Result<Vec<JammerSpec>, Vec<(String,
                 "must place the jammer exactly one way: position_m, follow_node or path_m"
                     .to_string(),
             ));
-            continue;
+            return None;
         }
         let (position, motion) = if let Some(v) = p.position_m.as_deref() {
             let Some(pos) = point(v) else {
@@ -235,7 +372,7 @@ pub fn jammer_specs(scenario: &Scenario) -> Result<Vec<JammerSpec>, Vec<(String,
                     format!("{path}.params.position_m"),
                     "must be [x, y] or [x, y, z] in finite world metres".to_string(),
                 ));
-                continue;
+                return None;
             };
             (pos, JammerMotion::Fixed)
         } else if let Some(node) = p.follow_node {
@@ -260,7 +397,7 @@ pub fn jammer_specs(scenario: &Scenario) -> Result<Vec<JammerSpec>, Vec<(String,
                          metres and a positive speed_mps"
                             .to_string(),
                     ));
-                    continue;
+                    return None;
                 }
             }
         };
@@ -295,24 +432,27 @@ pub fn jammer_specs(scenario: &Scenario) -> Result<Vec<JammerSpec>, Vec<(String,
                 "a pulsed jammer's duty is in (0, 1] and its period_ms is positive".to_string(),
             ));
         }
-        out.push(JammerSpec {
+        // An adjacent-channel emitter's power in this run's channel: what it transmits,
+        // less the ACIR.
+        let power_dbm = match &adjacent {
+            Some(a) => Some(a.tx_power_dbm - a.acir_db),
+            None => p.power_dbm,
+        };
+        Some(JammerSpec {
             kind,
             position,
             motion,
-            power_dbm: p.power_dbm,
+            power_dbm,
             from_s,
             to_s: p.to_s,
             period_ms: p.period_ms,
             duty: p.duty,
             trigger_dbm: p.trigger_dbm,
-        });
-    }
-    if errors.is_empty() {
-        Ok(out)
-    } else {
-        Err(errors)
+            adjacent,
+        })
     }
 }
+
 
 /// One profile, as a closed set so the run can hold them without a generic context type.
 #[derive(Debug, Clone)]
@@ -360,6 +500,8 @@ impl Profile {
 #[derive(Debug, Clone)]
 pub(crate) struct Jammer {
     pub(crate) id: NodeId,
+    /// An adjacent-channel emitter (`radio.adjacent_channel`), not an attacker.
+    pub(crate) adjacent: bool,
     pub(crate) kind: JammerKind,
     pub(crate) position: Vec3,
     pub(crate) motion: JammerMotion,
@@ -380,10 +522,18 @@ impl Jamming {
     pub(crate) fn for_scenario(scenario: &Scenario, channel: ChannelId) -> Self {
         let specs = jammer_specs(scenario).unwrap_or_default();
         let horizon = scenario.time.horizon_ns();
+        let mut jammer_n = 0u32;
+        let mut adjacent_n = 0u32;
         let jammers = specs
             .into_iter()
-            .enumerate()
-            .map(|(i, s)| {
+            .map(|s| {
+                let id = if s.adjacent.is_some() {
+                    adjacent_n += 1;
+                    NodeId::new(v2xw_radio::jamming::ADJACENT_CHANNEL_SOURCE_BASE + adjacent_n - 1)
+                } else {
+                    jammer_n += 1;
+                    NodeId::new(JAMMER_ID_BASE + jammer_n - 1)
+                };
                 let profile = match s.kind {
                     JammerKind::Constant => {
                         let mut j = ConstantJammer::new().on_channel(channel);
@@ -421,7 +571,8 @@ impl Jamming {
                     }
                 };
                 Jammer {
-                    id: NodeId::new(JAMMER_ID_BASE + i as u32),
+                    id,
+                    adjacent: s.adjacent.is_some(),
                     kind: s.kind,
                     position: s.position,
                     motion: s.motion,
@@ -440,7 +591,13 @@ impl Jamming {
 
     /// The cards of the jammer models in the run.
     pub(crate) fn cards(&self) -> Vec<v2xw_core::card::ModelCard> {
-        self.jammers.iter().map(|j| j.profile.card()).collect()
+        // An adjacent-channel emitter is not an attacker: its numbers are the
+        // regulation's (`radio/regulation`, pinned with the channel), not a jammer card's.
+        self.jammers
+            .iter()
+            .filter(|j| !j.adjacent)
+            .map(|j| j.profile.card())
+            .collect()
     }
 }
 
@@ -696,6 +853,6 @@ impl Engine {
     pub(super) fn access_channel(&self) -> ChannelId {
         self.sidelink
             .as_ref()
-            .map_or(super::SAFETY_CHANNEL, |sl| sl.channel)
+            .map_or(self.dsrc_channel, |sl| sl.channel)
     }
 }

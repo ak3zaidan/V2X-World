@@ -572,6 +572,71 @@ pub struct Radio {
     /// How far a transmission is followed: derived from the link budget.
     #[serde(default)]
     pub range: CandidateRange,
+    /// The regulatory region: its band plan, the channel each technology deploys on and
+    /// the EIRP limits (`v2xw_radio::regulation`). Unset, the region the technology was
+    /// deployed under: `us-2016` for 802.11p (the DSRC band plan SAE J2945/1 was written
+    /// for), `us` for LTE-V2X and NR-V2X (FCC 24-123).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<RadioRegion>,
+    /// The channel number within the region's band plan. Unset, the region's deployment
+    /// channel for the technology.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<u16>,
+    /// Transmitters of another technology on a neighbouring channel, where the region
+    /// lets the two operate side by side (ITS-G5 beside LTE-V2X in Europe): their
+    /// leakage enters this run's receivers attenuated by the adjacent-channel
+    /// interference ratio.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adjacent_channel: Vec<AdjacentEmitter>,
+}
+
+/// One transmitter on an adjacent channel (`radio.adjacent_channel`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdjacentEmitter {
+    /// Its technology.
+    pub rat: Rat,
+    /// Its channel number; unset, the region's deployment channel for its technology.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<u16>,
+    /// The adjacent-channel interference ratio, dB; unset, the region's mask for the
+    /// emitter's technology combined with the minimum selectivity of this run's receivers
+    /// (`v2xw_radio::regulation::adjacent_acir_db`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acir_db: Option<f64>,
+    /// Where it is and when it transmits, as a jammer's: `position_m`, `follow_node` or
+    /// `path_m` (with `speed_mps`, `loop_path`); `power_dbm` (23 by default), `from_s`,
+    /// `to_s`, and `period_ms` with `duty` for an emitter that is not on all the time.
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
+/// A regulatory region: the band plan and power limits a run transmits under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RadioRegion {
+    /// The United States under FCC 24-123 (2024): LTE-V2X and NR-V2X in 5.895-5.925 GHz,
+    /// no DSRC.
+    Us,
+    /// The US DSRC band plan before FCC 20-164 (47 CFR §90.377, 2017): 802.11p, the BSM
+    /// on channel 172.
+    #[serde(rename = "us-2016")]
+    Us2016,
+    /// Europe under ETSI EN 302 571: 10 MHz channels in 5.855-5.925 GHz for ITS-G5,
+    /// LTE-V2X and NR-V2X alike.
+    Eu,
+}
+
+impl RadioRegion {
+    /// The radio crate's region.
+    #[must_use]
+    pub const fn regulation(self) -> v2xw_radio::regulation::Region {
+        match self {
+            RadioRegion::Us => v2xw_radio::regulation::Region::Us,
+            RadioRegion::Us2016 => v2xw_radio::regulation::Region::Us2016,
+            RadioRegion::Eu => v2xw_radio::regulation::Region::Eu,
+        }
+    }
 }
 
 /// The radio hardware of each kind of node (04-models.md §3.7).
@@ -605,6 +670,31 @@ pub struct ObuRadio {
     /// Antenna height above the road, metres; unset, 1.5 m on a car and 3 m on a truck or bus.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub antenna_height_m: Option<f64>,
+    /// The antenna's radiation pattern (`v2xw_radio::antenna`): TR 37.885's per vehicle
+    /// type by default — a rooftop antenna on a car or van, front and rear panels on a
+    /// truck or bus — every vehicle's on the roof, or none.
+    #[serde(default, skip_serializing_if = "ObuAntennaPattern::is_default")]
+    pub antenna_pattern: ObuAntennaPattern,
+}
+
+/// A vehicle antenna's radiation pattern (`radio.devices.obu.antenna_pattern`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObuAntennaPattern {
+    /// 3GPP TR 37.885 Option 1 by vehicle type: rooftop (Type 2) on a car, van or
+    /// motorcycle, front and rear panels (Type 3) on a truck or bus.
+    #[default]
+    Tr37885,
+    /// A rooftop antenna on every vehicle, trucks included.
+    Rooftop,
+    /// No pattern: the scalar gain in every direction.
+    Isotropic,
+}
+
+impl ObuAntennaPattern {
+    fn is_default(&self) -> bool {
+        *self == Self::Tr37885
+    }
 }
 
 impl ObuRadio {
@@ -623,6 +713,7 @@ impl Default for ObuRadio {
             antenna_gain_dbi: Self::gain(),
             cable_loss_db: 0.0,
             antenna_height_m: None,
+            antenna_pattern: ObuAntennaPattern::Tr37885,
         }
     }
 }

@@ -99,6 +99,12 @@ pub struct SidelinkReport {
     pub rat: String,
     /// The configuration the pool and the scheduler come from.
     pub profile: String,
+    /// The regulatory region the run transmits under (`radio.region`).
+    pub region: String,
+    /// The channel number, and its width in MHz.
+    pub channel: u16,
+    /// The channel's width, MHz.
+    pub channel_mhz: u16,
     /// The MCS, by name.
     pub mcs: String,
     /// The resource pool's sub-channel count.
@@ -167,6 +173,44 @@ pub(crate) struct SlFrame {
     /// Receivers that have not decoded it yet, with the outcome of their latest copy —
     /// what is recorded if no later copy decodes.
     pub(crate) held: BTreeMap<NodeId, LinkOutcome>,
+    /// Each receiver's link condition at the block's latest transmission: environment,
+    /// LOS / NLOSv / NLOS and relative speed — what an NR link-level curve is indexed by.
+    pub(crate) cond: BTreeMap<NodeId, v2xw_radio::NrLinkCondition>,
+}
+
+impl SlFrame {
+    /// Records a receiver's link condition from the link budget's line-of-sight answer
+    /// and the two ends' velocities.
+    ///
+    /// A building-blocked (or terrain-blocked) path is TR 37.885's NLOS, a path blocked
+    /// only by vehicles its NLOSv, anything else LOS; the relative speed is the magnitude
+    /// of the velocity difference, which is what sets the Doppler spread of a V2V link
+    /// (0 km/h for two cars in one platoon, 280 km/h for two at 140 km/h head-on).
+    pub(crate) fn note_condition(
+        &mut self,
+        environment: v2xw_radio::NrEnvironment,
+        rx: NodeId,
+        los: v2xw_radio::LosClass,
+        tx_vel: v2xw_core::geom::Vec3,
+        rx_vel: v2xw_core::geom::Vec3,
+    ) {
+        use v2xw_radio::{LosClass, NrLinkState};
+        let state = match los {
+            LosClass::NlosB | LosClass::NlosBv | LosClass::NlosT => NrLinkState::Nlos,
+            LosClass::NlosV => NrLinkState::NlosV,
+            LosClass::Los => NrLinkState::Los,
+        };
+        let dv = tx_vel - rx_vel;
+        let speed_mps = v2xw_core::math::sqrt(dv.x * dv.x + dv.y * dv.y + dv.z * dv.z);
+        self.cond.insert(
+            rx,
+            v2xw_radio::NrLinkCondition {
+                environment,
+                state,
+                relative_speed_kmh: speed_mps * 3.6,
+            },
+        );
+    }
 }
 
 /// The sidelink stack of one run.
@@ -194,6 +238,27 @@ pub(crate) struct SidelinkAccess {
     pub(crate) report: SidelinkReport,
 }
 
+/// The transmission bandwidth, PRB, of a sidelink carrier `width_mhz` wide: TS 36.101
+/// Table 5.6-1 (LTE at 15 kHz) and TS 38.101-1 Table 5.3.2-1 (NR at 30 kHz).
+fn prb_in(rat: v2xw_radio::SlRat, width_mhz: f64) -> Option<u32> {
+    let w = width_mhz.round() as u32;
+    match (rat, w) {
+        (v2xw_radio::SlRat::LteMode4, 10) => Some(50),
+        (v2xw_radio::SlRat::LteMode4, 20) => Some(100),
+        (v2xw_radio::SlRat::NrMode2, 10) => Some(24),
+        (v2xw_radio::SlRat::NrMode2, 20) => Some(51),
+        (v2xw_radio::SlRat::NrMode2, 30) => Some(78),
+        _ => None,
+    }
+}
+
+/// A TS 38.214 Table 5.1.3.1-2 row, falling back to MCS 7 for an index the loader has
+/// already refused.
+fn nr_table2(index: u8) -> SlMcsSpec {
+    v2xw_radio::nr_mcs_table2(index)
+        .unwrap_or_else(|| v2xw_radio::nr_mcs_table2(7).expect("MCS 7 is in Table 5.1.3.1-2"))
+}
+
 /// The pool and the scheduler parameters a scenario's sidelink runs.
 fn configuration(rat: Rat, choice: SidelinkChoice) -> Option<(PoolConfig, SpsParams, String)> {
     use v2xw_radio::sidelink as sl;
@@ -203,6 +268,29 @@ fn configuration(rat: Rat, choice: SidelinkChoice) -> Option<(PoolConfig, SpsPar
             SpsParams::molina_masegosa(10),
             "molina-masegosa-2017",
         ),
+        (Rat::LteV2xPc5, Some(SidelinkProfile::EtsiEn303613)) => {
+            let mcs: SlMcsSpec = match choice.mcs {
+                Some(5) => sl::LTE_MCS5_J3161,
+                Some(11) => sl::LTE_MCS11_J3161,
+                _ => sl::LTE_MCS7_J3161,
+            };
+            // EN 303 613 V1.1.1 Table B.2: ten-PRB sub-channels with an adjacent PSCCH,
+            // and `minMCS-PSSCH` "0 for the transmission using one sub-channel" — so one
+            // sub-channel is allowed, unlike J3161/1's two. The width is the channel's
+            // (`for_scenario`). The keep probability and the sensing parameters are not
+            // in Annex B; they stay Rel-14's study values (Molina-Masegosa).
+            (
+                PoolConfig {
+                    min_subchannels: 1,
+                    ..PoolConfig::sae_j3161(mcs)
+                },
+                SpsParams {
+                    cc: Some(CrLimitTable::ETSI_TS_103_574),
+                    ..SpsParams::molina_masegosa(10)
+                },
+                "etsi-en303613",
+            )
+        }
         (Rat::LteV2xPc5, _) => {
             let mcs: SlMcsSpec = match choice.mcs {
                 Some(5) => sl::LTE_MCS5_J3161,
@@ -213,6 +301,21 @@ fn configuration(rat: Rat, choice: SidelinkChoice) -> Option<(PoolConfig, SpsPar
                 PoolConfig::sae_j3161(mcs),
                 SpsParams::sae_j3161(),
                 "sae-j3161",
+            )
+        }
+        (Rat::NrV2xPc5, None | Some(SidelinkProfile::EtsiEn303798)) => {
+            // TS 38.214 Table 5.1.3.1-2 MCS 7, 16QAM-490: one of the four MCS the source
+            // prints in every speed and channel state (so no link condition reads a
+            // shifted or interpolated curve), and it carries a 300 B signed BSM in two of
+            // the four sub-channels, like J3161/1's LTE profile carries it in three of ten.
+            let mcs = nr_table2(choice.mcs.unwrap_or(7));
+            (
+                PoolConfig::etsi_en303798_nr(mcs),
+                SpsParams {
+                    cc: Some(CrLimitTable::ETSI_TS_103_574),
+                    ..SpsParams::ali_todisco(sl::Numerology::Mu1, true)
+                },
+                "etsi-en303798",
             )
         }
         (Rat::NrV2xPc5, _) => {
@@ -255,12 +358,16 @@ impl SidelinkAccess {
     /// `probResourceKeep` 0.8, J3161/1's CR limits), with the Molina-Masegosa 2017 study
     /// pool selectable (`profile: molina-masegosa-2017`).
     ///
-    /// **NR-V2X PC5 Mode 2** runs Todisco's pool at µ = 1 (30 kHz, 0.5 ms slots): 10 MHz
-    /// is 24 PRB at that spacing, two 10-PRB sub-channels, 12 PSSCH symbols of which 2
-    /// DMRS, at NR MCS 9 by default, with the Ali/Todisco Mode 2 profile — sensing window
-    /// 100 ms, `T1` 2, `T2` 33 slots, RSRP −128 dBm, RRI 100 ms, Rel-16 re-evaluation and
-    /// pre-emption on (04-models.md §5.2). No US NR-V2X deployment profile was found, so
-    /// this stays a study configuration and the card says so.
+    /// **NR-V2X PC5 Mode 2** defaults to the ETSI EN 303 798 configuration the
+    /// Lusvarghi 2024 link-level curves were generated in: µ = 1 (30 kHz, 0.5 ms slots),
+    /// 20 MHz = 51 PRB, four 12-PRB sub-channels, a 3-symbol 12-PRB PSCCH, 10 data
+    /// symbols, TS 38.214 Table 5.1.3.1-2 MCS 7 (16QAM-490) by default, every block error
+    /// read from a transcribed curve for the link's environment, state and relative
+    /// speed. Todisco's 10 MHz study pool stays selectable (`profile: todisco-2021`,
+    /// Table 5.1.3.1-1). Both run the Ali/Todisco Mode 2 scheduler — sensing window
+    /// 100 ms, `T1` 2, `T2` 33 slots, RSRP −128 dBm, RRI 100 ms, Rel-16 re-evaluation
+    /// and pre-emption on (04-models.md §5.2) — and ETSI TS 103 574's CR limits. No US
+    /// NR-V2X deployment profile exists.
     ///
     /// `Rat::Hybrid` is refused by the loader, so it never reaches here.
     pub(crate) fn for_scenario(scenario: &Scenario) -> Option<Self> {
@@ -270,18 +377,40 @@ impl SidelinkAccess {
             Tier::Abstract => Tier::Medium,
             t => t,
         };
-        let choice = crate::wiring::radio_models(scenario)
+        let mut choice = crate::wiring::radio_models(scenario)
             .ok()
             .and_then(|m| m.sidelink)
             .unwrap_or_default();
+        // No `radio.models.sidelink`: the RAT's default profile in the run's region.
+        if choice.profile.is_none() {
+            choice.profile = crate::wiring::sidelink_profile(scenario);
+        }
+        let refsens_cutoff = choice.refsens_cutoff;
         let (pool, params, profile) = configuration(scenario.radio.rat, choice)?;
+        // The channel the region's rules put this technology on (`radio.region`,
+        // `radio.channel`); the loader has already refused a scenario with none.
+        let regulation = crate::wiring::radio_regulation(scenario).ok()?;
+        let width = regulation.rule.channel.bandwidth_mhz();
+        // A profile that sizes itself to its channel takes the channel's transmission
+        // bandwidth: TS 36.101 Table 5.6-1 for LTE (50 PRB in 10 MHz, 100 in 20 MHz), TS
+        // 38.101-1 Table 5.3.2-1 at 30 kHz for NR (24, 51 and 78 PRB in 10, 20, 30 MHz).
+        let adapts = matches!(profile.as_str(), "etsi-en303613" | "etsi-en303798");
+        let bandwidth_prb = if adapts {
+            prb_in(pool.rat, width).unwrap_or(pool.bandwidth_prb)
+        } else {
+            pool.bandwidth_prb
+        };
         let pool = PoolConfig {
-            centre_hz: CV2X_FREQ_HZ,
+            centre_hz: regulation.centre_hz(),
+            bandwidth_prb,
             ..pool
         };
         let report = SidelinkReport {
             rat: pool.rat.label().to_string(),
             profile,
+            region: regulation.region.id().to_string(),
+            channel: regulation.rule.channel.number,
+            channel_mhz: width.round() as u16,
             mcs: pool.mcs.label.to_string(),
             subchannels: pool.subchannels(),
             slot_ns: pool.slot().as_nanos(),
@@ -292,7 +421,12 @@ impl SidelinkAccess {
                 .map_or_else(|| "off".to_string(), |t| t.id.to_string()),
             ..SidelinkReport::default()
         };
-        let phy = SidelinkPhy::new(tier, pool.clone());
+        // A fielded receiver decodes far below TS 36.101's conformance sensitivity, so
+        // the block-error curve alone decides (`SidelinkPhy::with_sensitivity_dbm`),
+        // unless the scenario asks for the conformance receiver (`sensitivity: ts-36-101`).
+        let phy = SidelinkPhy::new(tier, pool.clone()).with_sensitivity_dbm(
+            refsens_cutoff.then_some(v2xw_radio::cv2x::SIDELINK_SENSITIVITY_DBM),
+        );
         let phy_high = scenario
             .radio
             .tiers
@@ -304,8 +438,8 @@ impl SidelinkAccess {
             phy,
             phy_high,
             mac: SpsEngine::new(tier, pool, params),
-            channel: CV2X_CHANNEL,
-            freq_hz: CV2X_FREQ_HZ,
+            channel: regulation.channel(),
+            freq_hz: regulation.centre_hz(),
             tx_power_dbm: CV2X_TX_POWER_DBM,
             slot_tx: BTreeMap::new(),
             slot_frames: BTreeMap::new(),
@@ -356,9 +490,12 @@ impl SidelinkAccess {
         let mcs = pool.mcs;
         let index = match pool.rat {
             v2xw_radio::SlRat::LteMode4 => v2xw_radio::sidelink::lte_mcs_index(mcs),
+            // The index in the pool's own MCS table: Table 5.1.3.1-2's rows are labelled
+            // `nr-t2-mcsN`, Table 5.1.3.1-1's `nr-mcsN`; the label says which.
             v2xw_radio::SlRat::NrMode2 => mcs
                 .label
-                .strip_prefix("nr-mcs")
+                .strip_prefix("nr-t2-mcs")
+                .or_else(|| mcs.label.strip_prefix("nr-mcs"))
                 .and_then(|d| d.parse().ok()),
         };
         let q = |x: f64| (x * 1e4).round() / 1e4;
@@ -414,11 +551,19 @@ impl Engine {
             }
         }
         for (_, frame) in ready {
-            let Some((descriptor, msg_type)) =
-                self.frames.get(&frame).map(|f| (f.descriptor, f.msg_type))
+            let Some((descriptor, msg_type, air)) = self
+                .frames
+                .get(&frame)
+                .map(|f| (f.descriptor, f.msg_type, f.air))
             else {
                 continue;
             };
+            // What was offered to the MAC in this metric window, as the 802.11p path
+            // counts it, so `mac.cbr` carries the same load figures on a sidelink.
+            let window = self.mac_window.entry(node).or_default();
+            window.frames += 1;
+            window.bytes += u64::from(descriptor.bytes);
+            window.airtime_us += air.as_nanos() / 1_000;
             let refused = {
                 let Engine {
                     scheduler,
@@ -450,6 +595,7 @@ impl Engine {
             if refused {
                 self.frames.remove(&frame);
                 self.report.mac_drops += 1;
+                self.mac_window.entry(node).or_default().drops += 1;
                 if let Some(sl) = self.sidelink.as_mut() {
                     sl.report.refused += 1;
                 }
@@ -497,6 +643,7 @@ impl Engine {
         for sdu in expired {
             self.frames.remove(&sdu.frame.sdu_ref.seq);
             self.report.mac_drops += 1;
+            self.mac_window.entry(node).or_default().drops += 1;
             if let Some(sl) = self.sidelink.as_mut() {
                 sl.report.expired += 1;
             }
@@ -504,6 +651,7 @@ impl Engine {
         for sdu in cc_dropped {
             self.frames.remove(&sdu.frame.sdu_ref.seq);
             self.report.mac_drops += 1;
+            self.mac_window.entry(node).or_default().drops += 1;
             if let Some(sl) = self.sidelink.as_mut() {
                 sl.report.cc_dropped += 1;
             }
@@ -575,7 +723,7 @@ impl Engine {
         let channel = self
             .sidelink
             .as_ref()
-            .map_or(super::SAFETY_CHANNEL, |sl| sl.channel);
+            .map_or(self.dsrc_channel, |sl| sl.channel);
         self.scheduler.schedule(
             at,
             EventClass::MacTimer,
@@ -615,10 +763,16 @@ impl Engine {
         // the noise floor less the `radio.range` margin — is energy in the receiver's
         // S-RSSI window too, split the same way, but carries no SCI it could decode, so it
         // is measured and not sensed.
+        // Its in-band emission is energy in every other sub-channel's S-RSSI too (TS
+        // 36.214's S-RSSI is the total power there), which the busy ratio counts.
         let share_db = 10.0 * v2xw_core::math::log10(f64::from(resource.len.max(1)));
+        let pool = sl.mac.pool().clone();
         for (&rx, &(power, _)) in &state.arrivals {
             for sc in resource.range() {
                 sl.mac.note_energy(rx, slot, sc, power - share_db);
+            }
+            for (sc, leak) in pool.emission_into(resource, power) {
+                sl.mac.note_energy(rx, slot, sc, leak);
             }
         }
         for (&rx, &power) in &state.faint {
@@ -759,6 +913,7 @@ impl Engine {
                 bytes: state.layers.psdu_bytes(),
                 rx_transmitting,
                 interferers: state.sl_interferers.get(&rx).cloned().unwrap_or_default(),
+                condition: state.sl.cond.get(&rx).copied(),
             };
             // A wideband jammer lands across the whole pool, so its power in the victim's
             // allocation is its share of the band (`SidelinkPhy::interference_split`).
@@ -833,7 +988,7 @@ impl Engine {
                     RxOutcome::Received { .. }
                 )
             {
-                cause = Some(v2xw_radio::LossCause::Jammed);
+                cause = Some(jam_field.loss_cause(rx, channel, state.start, state.end));
             }
             out.push(LinkOutcome {
                 rx,
@@ -1033,6 +1188,17 @@ fn coupling_card(
              04-models.md §5.5",
         )
     };
+    let profile_src = if report.profile == "etsi-en303798" {
+        Source::new(
+            SourceKind::Standard,
+            "ETSI EN 303 798 V1.1.8 NR-V2X access layer configuration, as Lusvarghi et al. \
+             2024 (IEEE IoT Journal, DOI 10.1109/JIOT.2024.3402551) Table I.C-D state it: \
+             20 MHz, 30 kHz, 12-PRB sub-channels, 12-PRB 3-symbol PSCCH, DMRS {2}, \
+             TS 38.214 Table 5.1.3.1-2",
+        )
+    } else {
+        profile_src
+    };
     card.parameters = vec![
         Parameter::new(
             "profile",
@@ -1043,8 +1209,19 @@ fn coupling_card(
         Parameter::new(
             "channel",
             "-",
-            serde_json::json!(CV2X_CHANNEL.0),
-            std_src("FCC 20-164 (2020): 5.905-5.925 GHz reserved for C-V2X; channel 183"),
+            serde_json::json!(report.channel),
+            std_src(match report.region.as_str() {
+                "eu" => {
+                    "ETSI EN 302 571 V2.1.1 Table 2 (10 MHz carriers); the 5GAA European \
+                     deployment band configurations (2021, 2024) for which technology sits \
+                     on which (radio/regulation)"
+                }
+                _ => {
+                    "47 CFR §90.390(a) as adopted by FCC 24-123 (2024): C-V2X in \
+                     5.895-5.925 GHz; SAE J3161/1's 20 MHz channel 5.905-5.925 GHz \
+                     (radio/regulation)"
+                }
+            }),
         ),
         Parameter::new(
             "tx_power_dbm",
@@ -1177,4 +1354,36 @@ fn coupling_card(
         ],
     };
     card
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use v2xw_core::geom::Vec3;
+    use v2xw_radio::{LosClass, NrEnvironment, NrLinkState};
+
+    /// The link condition a receiver's NR curve is read in: TR 37.885's NLOS for a
+    /// building- or terrain-blocked path, NLOSv for a path only vehicles block, LOS
+    /// otherwise; the relative speed is the magnitude of the velocity difference.
+    #[test]
+    fn a_link_condition_comes_from_the_obstruction_and_the_velocity_difference() {
+        let mut f = SlFrame::default();
+        let east = Vec3::new(70.0 / 3.6, 0.0, 0.0);
+        let west = Vec3::new(-70.0 / 3.6, 0.0, 0.0);
+        let cases = [
+            (LosClass::Los, east, east, NrLinkState::Los, 0.0),
+            (LosClass::NlosV, east, Vec3::ZERO, NrLinkState::NlosV, 70.0),
+            (LosClass::NlosB, east, west, NrLinkState::Nlos, 140.0),
+            (LosClass::NlosBv, east, west, NrLinkState::Nlos, 140.0),
+            (LosClass::NlosT, Vec3::ZERO, Vec3::ZERO, NrLinkState::Nlos, 0.0),
+        ];
+        for (i, (los, a, b, state, kmh)) in cases.into_iter().enumerate() {
+            let rx = NodeId::new(i as u32);
+            f.note_condition(NrEnvironment::Highway, rx, los, a, b);
+            let c = f.cond[&rx];
+            assert_eq!(c.state, state, "{los:?}");
+            assert!((c.relative_speed_kmh - kmh).abs() < 0.01, "{los:?}: {c:?}");
+            assert_eq!(c.environment, NrEnvironment::Highway);
+        }
+    }
 }

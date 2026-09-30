@@ -45,6 +45,9 @@ use v2xw_core::rng::{EntityRef, RngDomain, RngGuard, RngRegistry};
 use v2xw_core::time::{Duration, SimTime};
 use v2xw_world::model::World;
 
+pub mod dcc;
+pub mod field;
+
 use crate::abstract_tier::ReceptionSample;
 use crate::bler::SidelinkErrorModel;
 use crate::cv2x::{SidelinkPhy, SlArrival, SlInterferer};
@@ -991,6 +994,10 @@ pub fn sweep_sidelink(sweep: &HighwaySweep, pool: PoolConfig, params: SpsParams)
                 for sc in tx.resource.range() {
                     mac.note_energy(node, slot, sc, per_subch);
                 }
+                // Its in-band emission is energy in the other sub-channels' S-RSSI.
+                for (sc, leak) in pool.emission_into(tx.resource, p) {
+                    mac.note_energy(node, slot, sc, leak);
+                }
                 let rsrp = pool.rsrp_dbm(p, tx.resource.len);
                 if rsrp >= params.rsrp_threshold_dbm {
                     mac.note_sensed(node, tx.resource, rsrp, rri_slots);
@@ -1050,6 +1057,7 @@ pub fn sweep_sidelink(sweep: &HighwaySweep, pool: PoolConfig, params: SpsParams)
                     bytes: tx.bytes,
                     rx_transmitting,
                     interferers: interferers.clone(),
+                    condition: None,
                 };
                 let outcome = phy.evaluate(&mut ctx, &arrival);
                 bins[bin].evaluated += 1;

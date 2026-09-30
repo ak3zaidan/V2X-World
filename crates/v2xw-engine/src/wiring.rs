@@ -271,6 +271,14 @@ pub fn register_all(registry: &mut Registry) -> Result<()> {
         v2xw_core::model::Model::card(&v2xw_net::GenericSduFragmenter::default()).clone(),
         v2xw_core::model::Model::card(&v2xw_net::FacilitiesSegmentation::default()).clone(),
         v2xw_core::model::Model::card(&v2xw_net::CertCyclePartialHybrid::default()).clone(),
+        // The three 802.11p congestion controls `radio.models.dcc` chooses between, and
+        // SAE J3161/1's rate control on an LTE-V2X sidelink.
+        v2xw_core::model::Model::card(&v2xw_radio::SaeJ2945Dcc::new()).clone(),
+        v2xw_core::model::Model::card(&v2xw_radio::SaeJ2945Dcc::j3161()).clone(),
+        // The vehicle antenna patterns `radio.devices.obu.antenna_pattern` applies.
+        v2xw_radio::antenna::card(),
+        v2xw_core::model::Model::card(&v2xw_radio::AdaptiveDcc::new()).clone(),
+        v2xw_core::model::Model::card(&v2xw_radio::ReactiveDcc::new()).clone(),
     ];
     for card in extra {
         if !registry.contains(&card.id) {
@@ -455,7 +463,208 @@ pub const RADIO_MODEL_FAMILIES: &[(&str, &[&str])] = &[
     ("phy", &[v2xw_radio::OfdmPhy::ID]),
     ("obstacle", &[v2xw_radio::BuildingShadowing::ID]),
     ("sidelink", &[crate::run::sidelink::SIDELINK_ACCESS_ID]),
+    (
+        "dcc",
+        &[
+            v2xw_radio::SaeJ2945Dcc::ID,
+            v2xw_radio::AdaptiveDcc::ID,
+            v2xw_radio::ReactiveDcc::ID,
+        ],
+    ),
 ];
+
+/// Which decentralised congestion control an 802.11p run's units run
+/// (`radio.models.dcc`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DccChoice {
+    /// `dcc/sae/j2945-1-rate-power`: SAE J2945/1's density-driven inter-transmit time and
+    /// channel-busy-driven radiated power.
+    SaeJ2945,
+    /// `dcc/etsi/adaptive-ts102687`: ETSI TS 102 687's adaptive approach, the gatekeeper
+    /// holding each unit's duty cycle δ so the channel settles at a 0.68 load.
+    EtsiAdaptive,
+    /// `dcc/etsi/reactive-ts102687`: TS 102 687's reactive state machine (Annex A,
+    /// Table A.1).
+    EtsiReactive,
+}
+
+/// The congestion control a run's 802.11p units run: the model `radio.models.dcc` names,
+/// or the region's own — SAE J2945/1 under the US DSRC band plan, ETSI TS 102 687's
+/// adaptive approach in Europe, where EN 302 571 requires a DCC and TS 102 687 V1.2.1
+/// makes the adaptive approach the normative one.
+#[derive(Debug)]
+pub enum EngineDcc {
+    /// SAE J2945/1.
+    J2945(v2xw_radio::SaeJ2945Dcc),
+    /// ETSI adaptive.
+    Adaptive(v2xw_radio::AdaptiveDcc),
+    /// ETSI reactive.
+    Reactive(v2xw_radio::ReactiveDcc),
+}
+
+impl EngineDcc {
+    /// The model's card.
+    pub fn card(&self) -> &v2xw_core::card::ModelCard {
+        use v2xw_core::model::Model;
+        match self {
+            EngineDcc::J2945(d) => d.card(),
+            EngineDcc::Adaptive(d) => d.card(),
+            EngineDcc::Reactive(d) => d.card(),
+        }
+    }
+
+    /// Whether the model decides each frame at a gatekeeper between the network layer
+    /// and the access layer (the ETSI algorithms) rather than through the generator's
+    /// inter-transmit time alone (J2945/1).
+    pub const fn gates(&self) -> bool {
+        !matches!(self, EngineDcc::J2945(_))
+    }
+
+    /// Feeds a channel-busy measurement in.
+    pub fn on_cbr<C: v2xw_core::ctx::Ctx + ?Sized>(
+        &mut self,
+        ctx: &mut C,
+        node: v2xw_core::ids::NodeId,
+        cbr: f64,
+    ) {
+        use v2xw_radio::Dcc;
+        match self {
+            EngineDcc::J2945(d) => Dcc::on_cbr(d, ctx, node, cbr),
+            EngineDcc::Adaptive(d) => Dcc::on_cbr(d, ctx, node, cbr),
+            EngineDcc::Reactive(d) => Dcc::on_cbr(d, ctx, node, cbr),
+        }
+    }
+
+    /// Feeds the unit's own neighbour count in; only J2945/1 reads it.
+    pub fn on_density<C: v2xw_core::ctx::Ctx + ?Sized>(
+        &mut self,
+        ctx: &mut C,
+        node: v2xw_core::ids::NodeId,
+        neighbours: u32,
+    ) {
+        if let EngineDcc::J2945(d) = self {
+            d.on_density(ctx, node, neighbours);
+        }
+    }
+
+    /// J2945/1's 100 ms tracking step (`v2xw_radio::SaeJ2945Dcc::on_tracking`): the unit's
+    /// own state, its deceleration and a draw. Returns the exception it raised; the other
+    /// algorithms have none.
+    pub fn on_tracking(
+        &mut self,
+        node: v2xw_core::ids::NodeId,
+        own: v2xw_radio::HostState,
+        decel_mps2: f64,
+        u: f64,
+    ) -> Option<v2xw_radio::J2945Trigger> {
+        match self {
+            EngineDcc::J2945(d) => d.on_tracking(node, own, decel_mps2, u),
+            _ => None,
+        }
+    }
+
+    /// J2945/1's inference after the unit sent a BSM carrying `sent`
+    /// (`v2xw_radio::SaeJ2945Dcc::on_transmitted`), and the exception the BSM spent.
+    pub fn on_transmitted(
+        &mut self,
+        node: v2xw_core::ids::NodeId,
+        sent: v2xw_radio::HostState,
+        u: f64,
+    ) -> Option<v2xw_radio::J2945Trigger> {
+        match self {
+            EngineDcc::J2945(d) => d.on_transmitted(node, sent, u),
+            _ => None,
+        }
+    }
+
+    /// J2945/1's channel-quality update: the average PER of the unit's neighbours within
+    /// 100 m over the last 5 s.
+    pub fn on_channel_quality(&mut self, node: v2xw_core::ids::NodeId, avg_per: f64) {
+        if let EngineDcc::J2945(d) = self {
+            d.on_channel_quality(node, avg_per);
+        }
+    }
+
+    /// True for SAE J2945/1 itself: rate and power control, the tracking error and the
+    /// channel-quality inference.
+    pub const fn is_j2945(&self) -> bool {
+        matches!(self, EngineDcc::J2945(d) if d.controls_power())
+    }
+
+    /// True for either SAE rate control, J2945/1's or J3161/1's: the density-driven
+    /// inter-transmit time and the critical event.
+    pub const fn is_sae(&self) -> bool {
+        matches!(self, EngineDcc::J2945(_))
+    }
+
+    /// The gatekeeper's decision for one frame.
+    pub fn gate<C: v2xw_core::ctx::Ctx + ?Sized>(
+        &mut self,
+        ctx: &mut C,
+        node: v2xw_core::ids::NodeId,
+        req: &v2xw_radio::TxRequest,
+    ) -> v2xw_radio::GateDecision {
+        use v2xw_radio::Dcc;
+        match self {
+            EngineDcc::J2945(d) => Dcc::gate(d, ctx, node, req),
+            EngineDcc::Adaptive(d) => Dcc::gate(d, ctx, node, req),
+            EngineDcc::Reactive(d) => Dcc::gate(d, ctx, node, req),
+        }
+    }
+
+    /// The unit's congestion-control state as `node.tx` carries it: the algorithm and the
+    /// quantities it decided with, e.g. `sae-j2945-1 itt=320ms rp=14.5dBm`,
+    /// `sae-j3161-1 itt=100ms event=critical`, `etsi-adaptive delta=0.0071 t_off=141ms`,
+    /// `etsi-reactive active-2 t_off=400ms`. `event` is the SAE exception that sent the
+    /// frame early, if one did.
+    pub fn label<C: v2xw_core::ctx::Ctx + ?Sized>(
+        &self,
+        node: v2xw_core::ids::NodeId,
+        event: Option<v2xw_radio::J2945Trigger>,
+    ) -> String {
+        let s = self.state::<C>(node);
+        let ms = |d: v2xw_core::time::Duration| d.as_nanos() / 1_000_000;
+        let event = match event {
+            Some(v2xw_radio::J2945Trigger::CriticalEvent) => " event=critical",
+            Some(v2xw_radio::J2945Trigger::TrackingError) => " event=tracking-error",
+            None => "",
+        };
+        match self {
+            EngineDcc::J2945(d) if !d.controls_power() => format!(
+                "sae-j3161-1 itt={}ms{event}",
+                ms(s.itt.unwrap_or(s.t_off)),
+            ),
+            EngineDcc::J2945(_) => format!(
+                "sae-j2945-1 itt={}ms rp={:.1}dBm{event}",
+                ms(s.itt.unwrap_or(s.t_off)),
+                s.power_dbm.unwrap_or(f64::NAN)
+            ),
+            EngineDcc::Adaptive(_) => format!(
+                "etsi-adaptive delta={:.4} t_off={}ms",
+                s.delta.unwrap_or(f64::NAN),
+                ms(s.t_off)
+            ),
+            EngineDcc::Reactive(_) => format!(
+                "etsi-reactive {} t_off={}ms",
+                s.state.map_or("none", v2xw_radio::ReactiveState::label),
+                ms(s.t_off)
+            ),
+        }
+    }
+
+    /// The state the generator, the HUD and the metrics read.
+    pub fn state<C: v2xw_core::ctx::Ctx + ?Sized>(
+        &self,
+        node: v2xw_core::ids::NodeId,
+    ) -> v2xw_radio::DccState {
+        use v2xw_radio::Dcc;
+        match self {
+            EngineDcc::J2945(d) => <v2xw_radio::SaeJ2945Dcc as Dcc<C>>::state(d, node),
+            EngineDcc::Adaptive(d) => <v2xw_radio::AdaptiveDcc as Dcc<C>>::state(d, node),
+            EngineDcc::Reactive(d) => <v2xw_radio::ReactiveDcc as Dcc<C>>::state(d, node),
+        }
+    }
+}
 
 /// Which published configuration a sidelink run takes its pool and scheduler from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -469,10 +678,46 @@ pub enum SidelinkProfile {
     /// sub-channels, QPSK r0.7), a study configuration.
     #[serde(rename = "molina-masegosa-2017")]
     MolinaMasegosa2017,
-    /// NR-V2X: Todisco 2021's Mode 2 pool at 30 kHz, a study configuration; no US NR
-    /// deployment profile was found.
+    /// NR-V2X: Todisco 2021's Mode 2 pool at 30 kHz (10 MHz, two 10-PRB sub-channels,
+    /// TS 38.214 Table 5.1.3.1-1), a study configuration.
     #[serde(rename = "todisco-2021")]
     Todisco2021,
+    /// NR-V2X: the ETSI EN 303 798 configuration (20 MHz at 30 kHz, four 12-PRB
+    /// sub-channels, a 3-symbol PSCCH, TS 38.214 Table 5.1.3.1-2) that the Lusvarghi
+    /// 2024 link-level curves were generated in, so every block error is read from a
+    /// transcribed curve. The NR default: no US NR-V2X deployment profile exists, and
+    /// this is the configuration Europe's access-layer standard specifies.
+    #[serde(rename = "etsi-en303798")]
+    EtsiEn303798,
+    /// LTE-V2X: the ETSI EN 303 613 V1.1.1 Annex B configuration Europe deploys:
+    /// `sl-bandwidth` n50 (10 MHz; n100 on a 20 MHz channel), sub-channels of 10 PRB
+    /// with an adjacent PSCCH, one sub-channel allowed, `maxTxPower` 23 dBm, MCS up to 11,
+    /// and ETSI TS 103 574's CR limits. The LTE default under `radio.region: eu`.
+    #[serde(rename = "etsi-en303613")]
+    EtsiEn303613,
+}
+
+impl SidelinkProfile {
+    /// The channel width the profile's pool is defined for, MHz, or `None` when it sizes
+    /// itself to the channel.
+    pub const fn fixed_bandwidth_mhz(self) -> Option<f64> {
+        match self {
+            SidelinkProfile::SaeJ3161 => Some(20.0),
+            SidelinkProfile::MolinaMasegosa2017 | SidelinkProfile::Todisco2021 => Some(10.0),
+            SidelinkProfile::EtsiEn303798 | SidelinkProfile::EtsiEn303613 => None,
+        }
+    }
+
+    /// The profile's name in a scenario.
+    pub const fn id(self) -> &'static str {
+        match self {
+            SidelinkProfile::SaeJ3161 => "sae-j3161",
+            SidelinkProfile::MolinaMasegosa2017 => "molina-masegosa-2017",
+            SidelinkProfile::Todisco2021 => "todisco-2021",
+            SidelinkProfile::EtsiEn303798 => "etsi-en303798",
+            SidelinkProfile::EtsiEn303613 => "etsi-en303613",
+        }
+    }
 }
 
 /// Which congestion-control table a sidelink run enforces.
@@ -497,6 +742,13 @@ pub struct SidelinkChoice {
     pub max_transmissions: Option<u32>,
     /// The congestion-control table.
     pub congestion: CongestionChoice,
+    /// SAE J3161/1's application-layer rate control (`rate_control`): `None` is the
+    /// profile's default, on under `sae-j3161` and off elsewhere.
+    pub rate_control: Option<bool>,
+    /// `sensitivity: ts-36-101` cuts every copy weaker than TS 36.101's conformance
+    /// sensitivity, the receiver the standard guarantees; unset (`measured`), the
+    /// block-error curve alone decides, as a fielded receiver does.
+    pub refsens_cutoff: bool,
 }
 
 impl Default for SidelinkChoice {
@@ -506,6 +758,8 @@ impl Default for SidelinkChoice {
             mcs: None,
             max_transmissions: None,
             congestion: CongestionChoice::ProfileDefault,
+            rate_control: None,
+            refsens_cutoff: false,
         }
     }
 }
@@ -521,11 +775,42 @@ struct SidelinkParams {
     max_transmissions: Option<u32>,
     #[serde(default)]
     congestion_control: Option<String>,
+    #[serde(default)]
+    rate_control: Option<String>,
+    #[serde(default)]
+    sensitivity: Option<String>,
+}
+
+/// The sidelink profile a RAT deploys in a region when `radio.models.sidelink` names
+/// none: SAE J3161/1 for LTE-V2X in the US, ETSI EN 303 613 in Europe, ETSI EN 303 798
+/// for NR-V2X everywhere. `None` for a RAT that is not a sidelink.
+pub fn default_sidelink_profile(
+    rat: crate::scenario::schema::Rat,
+    region: v2xw_radio::regulation::Region,
+) -> Option<SidelinkProfile> {
+    use crate::scenario::schema::Rat;
+    match (rat, region) {
+        (Rat::LteV2xPc5, v2xw_radio::regulation::Region::Eu) => Some(SidelinkProfile::EtsiEn303613),
+        (Rat::LteV2xPc5, _) => Some(SidelinkProfile::SaeJ3161),
+        (Rat::NrV2xPc5, _) => Some(SidelinkProfile::EtsiEn303798),
+        _ => None,
+    }
+}
+
+/// The sidelink profile a scenario runs: the one `radio.models.sidelink` names, or the
+/// RAT's default in the run's region.
+pub fn sidelink_profile(scenario: &Scenario) -> Option<SidelinkProfile> {
+    radio_models(scenario)
+        .ok()
+        .and_then(|m| m.sidelink)
+        .and_then(|c| c.profile)
+        .or_else(|| default_sidelink_profile(scenario.radio.rat, region_of(scenario).0))
 }
 
 /// Checks `radio.models.sidelink`'s parameters against the RAT the scenario runs.
 fn sidelink_choice(
     rat: crate::scenario::schema::Rat,
+    region: v2xw_radio::regulation::Region,
     p: SidelinkParams,
 ) -> core::result::Result<SidelinkChoice, String> {
     use crate::scenario::schema::Rat;
@@ -540,20 +825,23 @@ fn sidelink_choice(
             );
         }
     };
-    let profile = p.profile.unwrap_or(if lte {
-        SidelinkProfile::SaeJ3161
-    } else {
-        SidelinkProfile::Todisco2021
-    });
+    let profile = p
+        .profile
+        .unwrap_or_else(|| default_sidelink_profile(rat, region).expect("a sidelink rat"));
     match (lte, profile) {
-        (true, SidelinkProfile::Todisco2021) => {
-            return Err("profile 'todisco-2021' is an NR-V2X pool; radio.rat is \
-                        lte-v2x-pc5 (choose sae-j3161 or molina-masegosa-2017)"
+        (true, SidelinkProfile::Todisco2021 | SidelinkProfile::EtsiEn303798) => {
+            return Err("names an NR-V2X pool; radio.rat is lte-v2x-pc5 (choose \
+                        sae-j3161, etsi-en303613 or molina-masegosa-2017)"
                 .to_string());
         }
-        (false, SidelinkProfile::SaeJ3161 | SidelinkProfile::MolinaMasegosa2017) => {
+        (
+            false,
+            SidelinkProfile::SaeJ3161
+            | SidelinkProfile::MolinaMasegosa2017
+            | SidelinkProfile::EtsiEn303613,
+        ) => {
             return Err("names an LTE-V2X profile; radio.rat is nr-v2x-pc5 (choose \
-                        todisco-2021)"
+                        etsi-en303798 or todisco-2021)"
                 .to_string());
         }
         _ => {}
@@ -561,8 +849,12 @@ fn sidelink_choice(
     if let Some(m) = p.mcs {
         let ok = match profile {
             SidelinkProfile::SaeJ3161 => matches!(m, 5 | 7 | 11),
+            // EN 303 613 Table B.5 admits MCS 0-11 for a vehicle; the ones this build
+            // carries an allocation for are J3161/1's.
+            SidelinkProfile::EtsiEn303613 => matches!(m, 5 | 7 | 11),
             SidelinkProfile::MolinaMasegosa2017 => false,
             SidelinkProfile::Todisco2021 => m <= 28,
+            SidelinkProfile::EtsiEn303798 => m <= 27,
         };
         if !ok {
             return Err(match profile {
@@ -571,11 +863,18 @@ fn sidelink_choice(
                      (MCS 6 is admitted by the profile but no allocation for it is \
                      published)"
                 ),
+                SidelinkProfile::EtsiEn303613 => format!(
+                    "mcs {m} is not one this build carries an allocation for: 5, 7 or 11 \
+                     (EN 303 613 Table B.5 admits 0-11)"
+                ),
                 SidelinkProfile::MolinaMasegosa2017 => {
                     "the Molina-Masegosa pool has one MCS (QPSK r0.7); remove mcs".to_string()
                 }
                 SidelinkProfile::Todisco2021 => {
                     format!("mcs {m} is outside TS 38.214 Table 5.1.3.1-1 (0-28)")
+                }
+                SidelinkProfile::EtsiEn303798 => {
+                    format!("mcs {m} is outside TS 38.214 Table 5.1.3.1-2 (0-27)")
                 }
             });
         }
@@ -602,11 +901,42 @@ fn sidelink_choice(
             }
         },
     };
+    let rate_control = match p.rate_control.as_deref() {
+        None => None,
+        Some("off") => Some(false),
+        Some(id) if id == v2xw_radio::SaeJ2945Dcc::J3161_ID || id == "sae-j3161" => {
+            if !lte {
+                return Err("rate_control sae-j3161 is LTE-V2X's (SAE J3161/1); no NR-V2X \
+                            rate control is published"
+                    .to_string());
+            }
+            Some(true)
+        }
+        Some(id) => {
+            return Err(format!(
+                "rate_control '{id}' is not one of: sae-j3161 (SAE J3161/1's density-driven \
+                 inter-transmit time), off"
+            ));
+        }
+    };
+    let refsens_cutoff = match p.sensitivity.as_deref() {
+        None | Some("measured") => false,
+        Some("ts-36-101") => true,
+        Some(other) => {
+            return Err(format!(
+                "sensitivity '{other}' is not one of: measured (the block-error curve \
+                 decides, as a fielded receiver does), ts-36-101 (every copy under the \
+                 conformance sensitivity is lost)"
+            ));
+        }
+    };
     Ok(SidelinkChoice {
         profile: Some(profile),
         mcs: p.mcs,
         max_transmissions: p.max_transmissions,
         congestion,
+        rate_control,
+        refsens_cutoff,
     })
 }
 
@@ -670,7 +1000,14 @@ pub struct RadioModels {
     pub building_fit: Option<v2xw_radio::SommerFit>,
     /// The sidelink access layer's configuration.
     pub sidelink: Option<SidelinkChoice>,
+    /// The 802.11p congestion control.
+    pub dcc: Option<DccChoice>,
 }
+
+/// A model that takes no parameters: any key is refused.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoParams {}
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -799,8 +1136,32 @@ pub fn radio_models(
                 }
                 Err(e) => errors.push(bad(e)),
             },
+            "dcc" => {
+                if technology_of(scenario.radio.rat)
+                    != Some(v2xw_radio::regulation::Technology::Ieee80211p)
+                {
+                    errors.push((
+                        path,
+                        "configures 802.11p congestion control, and radio.rat is not \
+                         dsrc-80211p (a sidelink's congestion control is \
+                         radio.models.sidelink's congestion_control)"
+                            .to_string(),
+                    ));
+                    continue;
+                }
+                match params_of::<NoParams>(&choice.params) {
+                    Ok(_) => {
+                        out.dcc = Some(match choice.id.as_str() {
+                            v2xw_radio::AdaptiveDcc::ID => DccChoice::EtsiAdaptive,
+                            v2xw_radio::ReactiveDcc::ID => DccChoice::EtsiReactive,
+                            _ => DccChoice::SaeJ2945,
+                        });
+                    }
+                    Err(e) => errors.push(bad(e)),
+                }
+            }
             "sidelink" => match params_of::<SidelinkParams>(&choice.params)
-                .and_then(|p| sidelink_choice(scenario.radio.rat, p))
+                .and_then(|p| sidelink_choice(scenario.radio.rat, region_of(scenario).0, p))
             {
                 Ok(c) => out.sidelink = Some(c),
                 Err(e) => errors.push(bad(e)),
@@ -892,6 +1253,182 @@ pub fn device_for(scenario: &Scenario, class: v2xw_radio::ActorClass) -> DeviceR
             antenna_height_m: d.obu.antenna_height_m,
         },
     }
+}
+
+/// The regulation a run transmits under: its region, its channel, and the rule for that
+/// channel (`radio.region`, `radio.channel`, [`v2xw_radio::regulation`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RadioRegulation {
+    /// The region.
+    pub region: v2xw_radio::regulation::Region,
+    /// True when the scenario did not name it and it followed from the technology.
+    pub derived: bool,
+    /// The technology the rule is for.
+    pub technology: v2xw_radio::regulation::Technology,
+    /// The channel and its limits.
+    pub rule: &'static v2xw_radio::regulation::ChannelRule,
+}
+
+impl RadioRegulation {
+    /// The channel's centre, Hz.
+    pub fn centre_hz(&self) -> f64 {
+        self.rule.channel.centre_hz()
+    }
+
+    /// The channel's number.
+    pub fn channel(&self) -> v2xw_radio::ChannelId {
+        v2xw_radio::ChannelId(self.rule.channel.number)
+    }
+
+    /// The most a node of `class` may radiate here, dBm EIRP, with its antenna
+    /// `antenna_m` above the ground ([`v2xw_radio::regulation::max_eirp_dbm`]).
+    ///
+    /// A pedestrian's device is a *portable* unit — one whose antenna is within 20 cm of
+    /// the user's body, 47 CFR §95.639(i) (2017) and §95.3204(d) — and a cyclist's is
+    /// mounted on the bicycle, so it is an on-board unit.
+    pub fn max_eirp_dbm(&self, class: v2xw_radio::ActorClass, antenna_m: f64) -> f64 {
+        use v2xw_radio::regulation::Station;
+        let station = match class {
+            v2xw_radio::ActorClass::Rsu | v2xw_radio::ActorClass::BaseStation => Station::Rsu,
+            v2xw_radio::ActorClass::Pedestrian => Station::Portable,
+            _ => Station::Obu,
+        };
+        v2xw_radio::regulation::max_eirp_dbm(self.region, self.rule, station, antenna_m)
+    }
+}
+
+/// The regulation's technology for a `radio.rat`, `None` for `hybrid`.
+pub fn technology_of(
+    rat: crate::scenario::schema::Rat,
+) -> Option<v2xw_radio::regulation::Technology> {
+    use crate::scenario::schema::Rat;
+    use v2xw_radio::regulation::Technology;
+    match rat {
+        Rat::Dsrc80211p => Some(Technology::Ieee80211p),
+        Rat::LteV2xPc5 => Some(Technology::LteV2x),
+        Rat::NrV2xPc5 => Some(Technology::NrV2x),
+        _ => None,
+    }
+}
+
+/// The region a run is regulated under: `radio.region`, or, unset, the one its
+/// technology was deployed under — the 2016 DSRC band plan for 802.11p, FCC 24-123 for
+/// C-V2X.
+pub fn region_of(scenario: &Scenario) -> (v2xw_radio::regulation::Region, bool) {
+    use v2xw_radio::regulation::Region;
+    match scenario.radio.region {
+        Some(r) => (r.regulation(), false),
+        None => match scenario.radio.rat {
+            crate::scenario::schema::Rat::Dsrc80211p => (Region::Us2016, true),
+            _ => (Region::Us, true),
+        },
+    }
+}
+
+/// The regulation a scenario's radio transmits under, or the key and the reason it may
+/// not transmit there.
+///
+/// # Errors
+/// `(path, reason)` when the region has no channel for the technology, when
+/// `radio.channel` is not one the region lets it use, or when 802.11p is asked for a
+/// channel wider than its 10 MHz.
+pub fn radio_regulation(
+    scenario: &Scenario,
+) -> core::result::Result<RadioRegulation, (&'static str, String)> {
+    let (region, derived) = region_of(scenario);
+    let Some(technology) = technology_of(scenario.radio.rat) else {
+        return Err(("radio.rat", "has no single technology to regulate".to_string()));
+    };
+    // A sidelink profile defined for one channel width needs a channel of that width.
+    let width = sidelink_profile(scenario).and_then(|p| p.fixed_bandwidth_mhz().map(|w| (p, w)));
+    let rule = match scenario.radio.channel {
+        None => {
+            let default = region.default_channel(technology).map_err(|why| {
+                (
+                    "radio.region",
+                    format!("is '{}': {why}", region.id()),
+                )
+            })?;
+            match width {
+                Some((profile, w)) if default.channel.bandwidth_mhz() != w => {
+                    // The region's channels of the profile's width, preferring those
+                    // inside the default channel (a 10 MHz study pool inside the US
+                    // 20 MHz C-V2X channel), lowest number first.
+                    let fits = |r: &&v2xw_radio::regulation::ChannelRule| {
+                        r.technologies.contains(&technology) && r.channel.bandwidth_mhz() == w
+                    };
+                    let inside = region.rules().iter().filter(fits).find(|r| {
+                        r.channel.lower_mhz >= default.channel.lower_mhz
+                            && r.channel.upper_mhz <= default.channel.upper_mhz
+                    });
+                    inside
+                        .or_else(|| region.rules().iter().find(fits))
+                        .ok_or_else(|| {
+                            (
+                                "radio.models.sidelink",
+                                format!(
+                                    "names profile '{}', a {w} MHz pool, and region '{}' has \
+                                     no {w} MHz channel for it",
+                                    profile.id(),
+                                    region.id()
+                                ),
+                            )
+                        })?
+                }
+                _ => default,
+            }
+        }
+        Some(n) => region.rule(technology, n).ok_or_else(|| {
+            let allowed = region.channels_for(technology);
+            (
+                "radio.channel",
+                if allowed.is_empty() {
+                    format!(
+                        "is {n}, and region '{}' has no channel for this technology",
+                        region.id()
+                    )
+                } else {
+                    format!(
+                        "is {n}, which region '{}' does not open to this technology; \
+                         it may use {allowed:?}",
+                        region.id()
+                    )
+                },
+            )
+        })?,
+    };
+    if let Some((profile, w)) = width
+        && rule.channel.bandwidth_mhz() != w
+    {
+        return Err((
+            "radio.channel",
+            format!(
+                "is {}, a {} MHz channel, and profile '{}' is a {w} MHz pool",
+                rule.channel.number,
+                rule.channel.bandwidth_mhz(),
+                profile.id()
+            ),
+        ));
+    }
+    if technology == v2xw_radio::regulation::Technology::Ieee80211p
+        && rule.channel.bandwidth_mhz() > 10.0
+    {
+        return Err((
+            "radio.channel",
+            format!(
+                "is {}, a {} MHz channel; this build's 802.11p PHY is the 10 MHz OFDM of \
+                 IEEE 802.11-2016 clause 17 that V2X deploys",
+                rule.channel.number,
+                rule.channel.bandwidth_mhz()
+            ),
+        ));
+    }
+    Ok(RadioRegulation {
+        region,
+        derived,
+        technology,
+        rule,
+    })
 }
 
 /// The best net receive gain any device in the run has, dB — what the candidate range is
@@ -1109,8 +1646,20 @@ pub fn build_radio_at(
         }
     };
     let models = radio_models(scenario).unwrap_or_default();
+    // A sidelink's block errors come from link-level curves — Huawei R1-160284, the
+    // WiLabV2Xsim tables, Lusvarghi 2024 — each simulated over a fading channel and
+    // printed against the *average* SNR, so the small-scale fading is already inside
+    // them. A second Nakagami draw per packet would count it twice and steepen every
+    // delivery-versus-distance curve; a sidelink run therefore draws none unless
+    // `radio.models.fading` asks for it. 802.11p's error model is computed for an AWGN
+    // channel, so it keeps its fading draw.
+    let sidelink = matches!(
+        scenario.radio.rat,
+        crate::scenario::schema::Rat::LteV2xPc5 | crate::scenario::schema::Rat::NrV2xPc5
+    );
     let default_fading = match tier {
         v2xw_core::card::Tier::Abstract => FadingChoice::None,
+        _ if sidelink => FadingChoice::None,
         _ => FadingChoice::Nakagami(v2xw_radio::NakagamiPreset::FixedMedium),
     };
     let fading: Box<dyn BoxedFading> = match models.fading.unwrap_or(default_fading) {
@@ -1159,8 +1708,20 @@ pub fn register_radio(
 ///
 /// `phase_window_ms: 0, max_jitter_ms: 0` is the synchronised behaviour this engine had
 /// before the model existed, kept so the contention it causes can still be studied.
+///
+/// A unit under SAE J2945/1 staggers its BSMs by J2945/1's own rule instead of ns-3's:
+/// "transmit the BSM every 100 ms +/- a random value between 0 and 5 ms" (the FMVSS 150
+/// NPRM's transcription, proposed §571.150 S5.3.4). A hand-off jitter `U[0, 5 ms]` that
+/// does not accumulate on the 100 ms grid puts every interval in exactly that range,
+/// `[95, 105]` ms, so the default jitter is 5 ms there; a scenario's own
+/// `max_jitter_ms` still wins.
 pub fn generation_timing(scenario: &Scenario) -> v2xw_msg::GenerationTiming {
     let mut t = v2xw_msg::GenerationTiming::default();
+    if build_dcc(scenario).is_some_and(|d| d.is_j2945())
+        && technology_of(scenario.radio.rat) == Some(v2xw_radio::regulation::Technology::Ieee80211p)
+    {
+        t.max_jitter = v2xw_radio::J2945Params::J2945_1.tx_rand;
+    }
     if let Some(choice) = &scenario.messages.generator {
         let ms = |key: &str| {
             choice
@@ -2152,17 +2713,19 @@ pub fn bootstrap_credentials(
 ///
 /// `radio.models.per` selects the implementation-loss preset of the NIST error model
 /// (`ideal`, or `sjoberg-atheros`'s measured 5 dB), and `radio.models.phy` the sensitivity
-/// table (`etsi-static`, `etsi-dynamic`, `cohda-mk5`).
+/// table (`measured-obu`, the default — fielded units as an independent lab measured
+/// them — or the standard's `etsi-static` and `etsi-dynamic` minima, or `cohda-mk5`).
 pub fn build_phy(scenario: &Scenario) -> v2xw_radio::OfdmPhy {
     let models = radio_models(scenario).unwrap_or_default();
     let mut phy = v2xw_radio::OfdmPhy::new(scenario.radio.tiers.phy);
     if let Some(preset) = models.per {
         phy = phy.with_per_model(v2xw_radio::PerModel::new(preset));
     }
-    if let Some(sensitivity) = models.sensitivity {
-        phy = phy.with_sensitivity(sensitivity);
-    }
-    phy
+    phy.with_sensitivity(
+        models
+            .sensitivity
+            .unwrap_or(v2xw_radio::SensitivityPreset::MeasuredObu),
+    )
 }
 
 /// The medium-access model the scenario names, or `None` when the tier models no access.
@@ -2191,11 +2754,35 @@ pub fn build_mac(scenario: &Scenario) -> Option<v2xw_radio::EdcaOcbMac> {
 /// needs one is a `radio.models` entry rather than a new model.
 ///
 /// `None` at the abstract MAC tier, which measures no channel busy ratio to feed it.
-pub fn build_dcc(scenario: &Scenario) -> Option<v2xw_radio::SaeJ2945Dcc> {
-    match scenario.radio.tiers.mac {
-        v2xw_core::card::Tier::Abstract => None,
-        _ => Some(v2xw_radio::SaeJ2945Dcc::new()),
+pub fn build_dcc(scenario: &Scenario) -> Option<EngineDcc> {
+    if scenario.radio.tiers.mac == v2xw_core::card::Tier::Abstract {
+        return None;
     }
+    match technology_of(scenario.radio.rat) {
+        Some(v2xw_radio::regulation::Technology::Ieee80211p) => {}
+        // A sidelink's CR limits are its MAC's; above them, LTE-V2X under SAE J3161/1
+        // runs the J2945/1 density rule without power control (`rate_control`).
+        Some(_) => {
+            let choice = radio_models(scenario).ok().and_then(|m| m.sidelink);
+            let on = choice.and_then(|c| c.rate_control).unwrap_or_else(|| {
+                sidelink_profile(scenario) == Some(SidelinkProfile::SaeJ3161)
+            });
+            return on.then(|| EngineDcc::J2945(v2xw_radio::SaeJ2945Dcc::j3161()));
+        }
+        None => return None,
+    }
+    let choice = radio_models(scenario)
+        .ok()
+        .and_then(|m| m.dcc)
+        .unwrap_or(match region_of(scenario).0 {
+            v2xw_radio::regulation::Region::Eu => DccChoice::EtsiAdaptive,
+            _ => DccChoice::SaeJ2945,
+        });
+    Some(match choice {
+        DccChoice::SaeJ2945 => EngineDcc::J2945(v2xw_radio::SaeJ2945Dcc::new()),
+        DccChoice::EtsiAdaptive => EngineDcc::Adaptive(v2xw_radio::AdaptiveDcc::new()),
+        DccChoice::EtsiReactive => EngineDcc::Reactive(v2xw_radio::ReactiveDcc::new()),
+    })
 }
 
 /// Builds one roadside unit's node runtime.

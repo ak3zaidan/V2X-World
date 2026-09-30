@@ -101,9 +101,9 @@ use v2xw_msg::generator::DccState;
 use v2xw_node::stores::VerificationState;
 use v2xw_node::{NodeConfig, RxDisposition, RxFrame, RxReport, RxStamp, StepOutcome, Transmission};
 use v2xw_radio::{
-    AccessCategory, Arrival, ChannelId, Dcc, EdcaOcbMac, FrameDescriptor, FrameKind,
+    AccessCategory, Arrival, ChannelId, EdcaOcbMac, FrameDescriptor, FrameKind,
     InterferenceSource, LossCause, Mac, MacSdu, Mcs, OfdmPhy, Phy, RadioEndpoint, RxHandle,
-    SaeJ2945Dcc, SduRef, TxHandle,
+    SduRef, TxHandle,
 };
 use v2xw_record::{Cadence, Profile};
 use v2xw_world::World;
@@ -120,10 +120,13 @@ pub mod jamming;
 mod link;
 pub mod sidelink;
 
-/// The 5.9 GHz safety channel, and the frequency the link budget is evaluated at.
+/// The 5.9 GHz safety channel an 802.11p run transmits on when no regulation resolves,
+/// and the frequency the link budget is evaluated at.
 ///
-/// Channel 172 is the SAE J2945/1 safety channel in the US band plan; 5.86–5.93 GHz maps
-/// it to 5.860 GHz + 5 MHz × (n − 172) with 10 MHz channels, which puts 172 at 5.860 GHz.
+/// Channel 172 is the SAE J2945/1 safety channel in the 2016 US band plan; 5.86–5.93 GHz
+/// maps it to 5.860 GHz + 5 MHz × (n − 172) with 10 MHz channels, which puts 172 at
+/// 5.860 GHz. A run's own channel is the region's (`Engine::dsrc_channel`,
+/// `radio.region`); this is only the fallback a scenario the loader refused would take.
 const SAFETY_CHANNEL: ChannelId = ChannelId(172);
 /// The centre frequency of [`SAFETY_CHANNEL`], hertz.
 const SAFETY_FREQ_HZ: f64 = 5.860e9;
@@ -188,6 +191,28 @@ const LINK_STATE_GRACE: Duration = Duration::from_secs(10);
 /// count is taken from the node's **own neighbour table** against its **own** position
 /// estimate, so it is a belief and not a ground-truth density (invariant I-C2).
 const J2945_DENSITY_RADIUS_M: f64 = 100.0;
+
+/// SAE J3161/1's density window: the neighbours heard in the last 1000 ms.
+const J3161_DENSITY_WINDOW_NS: u64 = 1_000_000_000;
+
+/// The keyed stream J2945/1's tracking-error draw comes from, one draw per node and
+/// 100 ms step.
+const J2945_TRACKING_STREAM: &str = "dcc/sae/j2945-1-rate-power/tracking";
+
+/// The keyed stream J2945/1's inference comes from: whether the neighbours are taken to
+/// have received a BSM, one draw per node and transmission.
+const J2945_INFERENCE_STREAM: &str = "dcc/sae/j2945-1-rate-power/inference";
+
+/// A unit's own state, as J2945/1's estimators take it, from its position estimate.
+fn host_state(belief: &v2xw_core::PositionEstimate, at: SimTime) -> v2xw_radio::HostState {
+    v2xw_radio::HostState {
+        x: belief.pos.x,
+        y: belief.pos.y,
+        speed_mps: belief.ground_speed_mps(),
+        heading_rad: belief.heading_rad,
+        at,
+    }
+}
 
 /// Where a backend transfer's byte-accounting id starts.
 ///
@@ -421,6 +446,7 @@ const fn cause_name(cause: LossCause) -> &'static str {
         LossCause::Fading => "fading",
         LossCause::InBandEmission => "in-band-emission",
         LossCause::ResourceCollision => "resource-collision",
+        LossCause::AdjacentChannel => "adjacent-channel",
         // `LossCause` is `#[non_exhaustive]`: a cause added upstream lands here rather
         // than failing the build, and reports itself as unknown rather than as something
         // it is not.
@@ -445,6 +471,9 @@ struct ActorRecord {
 #[derive(Debug, Clone)]
 struct FrameState {
     tx: NodeId,
+    /// The SAE congestion-control exception that sent this frame early (a critical event
+    /// or a tracking error), which its `node.tx` record names.
+    dcc_event: Option<v2xw_radio::J2945Trigger>,
     /// The transmitter's ground-truth position at [`FrameState::start`], filled in when
     /// the MAC's grant fixes that instant.
     tx_pos: Vec3,
@@ -594,7 +623,12 @@ pub struct Engine {
     /// models no medium access: there the frame reaches the air one AIFS after signing.
     mac: Option<EdcaOcbMac>,
     /// Congestion control, at the medium and high tiers.
-    dcc: Option<SaeJ2945Dcc>,
+    dcc: Option<crate::wiring::EngineDcc>,
+    /// J2945/1's channel-quality bookkeeping (the BSMs each unit sent and each heard),
+    /// and the last sub-interval each unit updated its indicator in. Empty unless the
+    /// run's congestion control is J2945/1.
+    j2945_per: Option<v2xw_radio::PerWindow>,
+    j2945_quality_at: BTreeMap<NodeId, u64>,
     weather: WeatherState,
     actors: BTreeMap<ActorId, ActorRecord>,
     /// The actor each equipped node rides, kept beside [`Engine::actors`] so a node's
@@ -693,6 +727,16 @@ pub struct Engine {
     /// decisions of who charges buildings and who needs street geometry.
     main_law: crate::wiring::PropagationChoice,
     focus_law: Option<crate::wiring::PropagationChoice>,
+    /// The environment a sidelink link-level curve is read in: urban when the world's
+    /// land use at its centre is urban or suburban, highway otherwise (TR 37.885's two
+    /// CDL environments).
+    radio_env: v2xw_radio::NrEnvironment,
+    /// The regulation the radios transmit under (`radio.region`, `radio.channel`).
+    regulation: Option<crate::wiring::RadioRegulation>,
+    /// The channel an 802.11p run transmits on: the region's, 172 in the 2016 US plan.
+    dsrc_channel: ChannelId,
+    /// That channel's centre, Hz.
+    dsrc_freq_hz: f64,
     /// Rain over the link (`weather/attenuation/itu-r-p838`), at the medium and high
     /// propagation tiers.
     rain: Option<v2xw_radio::RainAttenuation>,
@@ -798,6 +842,24 @@ impl Engine {
         mobility.set_weather(crate::wiring::initial_weather(&scenario));
         let gnss = crate::wiring::build_gnss(&scenario);
         let (propagation, fading) = crate::wiring::build_radio(&scenario, &world);
+        // The band plan and power limits the radios transmit under (`radio.region`). The
+        // loader has refused a scenario with none, so `None` only stands for `hybrid`.
+        let regulation = crate::wiring::radio_regulation(&scenario).ok();
+        let (dsrc_channel, dsrc_freq_hz) = regulation
+            .filter(|r| r.technology == v2xw_radio::regulation::Technology::Ieee80211p)
+            .map_or((SAFETY_CHANNEL, SAFETY_FREQ_HZ), |r| (r.channel(), r.centre_hz()));
+        if let Some(r) = regulation.as_ref() {
+            let card = v2xw_radio::regulation::card(r.region);
+            if !registry.contains(&card.id) {
+                registry.register(card)?;
+            }
+        }
+        let radio_env = match crate::wiring::world_env(&world) {
+            v2xw_world::model::EnvClass::Urban | v2xw_world::model::EnvClass::Suburban => {
+                v2xw_radio::NrEnvironment::Urban
+            }
+            _ => v2xw_radio::NrEnvironment::Highway,
+        };
         crate::wiring::register_radio(
             &mut registry,
             propagation.as_ref(),
@@ -833,7 +895,7 @@ impl Engine {
             &scenario,
             &world,
             &crate::wiring::build_phy(&scenario),
-            sidelink.as_ref().map_or(SAFETY_FREQ_HZ, |sl| sl.freq_hz),
+            sidelink.as_ref().map_or(dsrc_freq_hz, |sl| sl.freq_hz),
         );
         let mut range = range;
         let detector_range_m = {
@@ -866,7 +928,7 @@ impl Engine {
         });
         let jammers = jamming::Jamming::for_scenario(
             &scenario,
-            sidelink.as_ref().map_or(SAFETY_CHANNEL, |sl| sl.channel),
+            sidelink.as_ref().map_or(dsrc_channel, |sl| sl.channel),
         );
         for card in jammers.cards() {
             if !registry.contains(&card.id) {
@@ -948,11 +1010,14 @@ impl Engine {
             } else {
                 crate::wiring::build_mac(&scenario_for_radio)
             },
-            dcc: if sidelink.is_some() {
-                None
-            } else {
-                crate::wiring::build_dcc(&scenario_for_radio)
-            },
+            j2945_per: (sidelink.is_none()
+                && crate::wiring::build_dcc(&scenario_for_radio)
+                    .is_some_and(|d| d.is_j2945()))
+            .then(|| v2xw_radio::PerWindow::new(v2xw_radio::J2945Params::J2945_1)),
+            j2945_quality_at: BTreeMap::new(),
+            // On a sidelink `build_dcc` returns only SAE J3161/1's rate control, which
+            // never gates: the sidelink's CR limits are its MAC's.
+            dcc: crate::wiring::build_dcc(&scenario_for_radio),
             actors: BTreeMap::new(),
             node_actor: BTreeMap::new(),
             retired: Vec::new(),
@@ -997,6 +1062,10 @@ impl Engine {
             range,
             main_law,
             focus_law,
+            radio_env,
+            regulation,
+            dsrc_channel,
+            dsrc_freq_hz,
             rain,
             detector_range_m,
             sidelink,
@@ -2269,7 +2338,7 @@ impl Engine {
                     obu.set_own_acceleration(a_long);
                 }
             }
-            self.update_dcc(node, now);
+            self.update_dcc(node, now, a_long);
         }
     }
 
@@ -2283,24 +2352,75 @@ impl Engine {
     ///
     /// The state that comes out is handed to the node's message generator, which is where
     /// J2945/1 rate control belongs: `MessageSchedule::due` already refuses to generate
-    /// inside `t_off`. The engine does **not** also call [`Dcc::gate`], because that would
-    /// apply the same inter-transmission time twice; what it does read from the model is
-    /// the transmit power, in [`Engine::tx_power_dbm`].
-    fn update_dcc(&mut self, node: NodeId, now: SimTime) {
+    /// inside `t_off`. Under J2945/1 the engine does **not** also call [`Dcc::gate`],
+    /// because that would apply the same inter-transmission time twice; what it does read
+    /// from the model is the transmit power, in [`Engine::tx_power_dbm`]. The ETSI
+    /// algorithms are gatekeepers between the network and the access layer (TS 102 687
+    /// §5.4, Annex A), so the engine asks their gate for every frame in
+    /// [`Engine::on_mac_timer`] and hands their `T_off` to the CAM generator as
+    /// `T_GenCam_Dcc` (EN 302 637-2 §6.1.3).
+    ///
+    /// Under J2945/1 the same 100 ms step is the tracking step: the unit compares its own
+    /// state with where its neighbours are believed to put it, and hard braking beyond
+    /// 0.4 g (`a_long`, its own accelerometer) or the tracking-error draw sends the next
+    /// BSM now and at `vRPMax` (Ahmad 2019 §IV). The draw is keyed by node and instant.
+    fn update_dcc(&mut self, node: NodeId, now: SimTime, a_long: f64) {
         if self.dcc.is_none() {
             return;
         }
         let cbr = self
             .mac
             .as_ref()
-            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, SAFETY_CHANNEL, now));
+            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, self.dsrc_channel, now));
+        // The unit's own state as its position estimate has it: the J2945/1 local
+        // estimator. Only an on-board unit tracks itself; a roadside unit does not move.
+        let own = (!self.rsus.contains_key(&node))
+            .then(|| self.nodes.get(&node))
+            .flatten()
+            .map(|runtime| host_state(v2xw_core::NodeView::position(runtime), now));
+        // Once per vPERSubInterval, J2945/1's channel-quality indicator: the average PER
+        // of the RVs within vPERRange of the unit's own position, each at the position
+        // it broadcasts.
+        let quality = match (own, self.j2945_per.as_mut()) {
+            (Some(me), Some(window)) => {
+                let k = window.sub_interval(now);
+                if self.j2945_quality_at.get(&node) == Some(&k) {
+                    None
+                } else {
+                    self.j2945_quality_at.insert(node, k);
+                    let nodes = &self.nodes;
+                    window.average_per(node, now, |tx| {
+                        nodes.get(&tx).is_some_and(|rv| {
+                            let p = v2xw_core::NodeView::position(rv).pos;
+                            v2xw_core::math::hypot(p.x - me.x, p.y - me.y)
+                                <= J2945_DENSITY_RADIUS_M
+                        })
+                    })
+                }
+            }
+            _ => None,
+        };
+        if let (Some(avg), Some(d)) = (quality, self.dcc.as_mut()) {
+            d.on_channel_quality(node, avg);
+        }
+        // SAE J3161/1 counts the unique neighbours heard at least once in the previous
+        // 1000 ms (Fouda 2023 §II-C); J2945/1 the RVs "in range currently", which is the
+        // neighbour table as it stands.
+        let heard_since = self
+            .dcc
+            .as_ref()
+            .filter(|d| d.is_sae() && !d.is_j2945())
+            .map_or(0, |_| now.saturating_sub(J3161_DENSITY_WINDOW_NS));
         let neighbours = self.nodes.get(&node).map_or(0, |runtime| {
             let own = v2xw_core::NodeView::position(runtime).pos;
             runtime
                 .stores()
                 .neighbors
                 .iter()
-                .filter(|n| n.claimed_pos.distance(own) <= J2945_DENSITY_RADIUS_M)
+                .filter(|n| {
+                    n.last_heard >= heard_since
+                        && n.claimed_pos.distance(own) <= J2945_DENSITY_RADIUS_M
+                })
                 .count() as u32
         });
         let state = {
@@ -2320,10 +2440,24 @@ impl Engine {
             );
             let dcc = dcc.as_mut().expect("checked above");
             if let Some(cbr) = cbr {
-                Dcc::on_cbr(dcc, &mut ctx, node, cbr);
+                dcc.on_cbr(&mut ctx, node, cbr);
             }
             dcc.on_density(&mut ctx, node, neighbours);
-            <SaeJ2945Dcc as Dcc<EngineCtx<'_>>>::state(dcc, node)
+            if dcc.is_sae()
+                && let Some(own) = own
+            {
+                let u = rng
+                    .checkout(
+                        v2xw_core::rng::RngDomain::plugin(J2945_TRACKING_STREAM),
+                        v2xw_core::rng::EntityRef::LinkFrame {
+                            link: v2xw_core::ids::LinkKey::new(node, node),
+                            frame: now,
+                        },
+                    )
+                    .uniform(0.0, 1.0);
+                dcc.on_tracking(node, own, -a_long, u);
+            }
+            dcc.state::<EngineCtx<'_>>(node)
         };
         let (t_off, cbr) = state.generator_view();
         if let Some(runtime) = self.nodes.get_mut(&node) {
@@ -2972,8 +3106,37 @@ impl Engine {
         let channel = self
             .sidelink
             .as_ref()
-            .map_or(SAFETY_CHANNEL, |sl| sl.channel);
+            .map_or(self.dsrc_channel, |sl| sl.channel);
         let tx_power_dbm = self.tx_power_dbm(node);
+        // J2945/1: a BSM is on its way, carrying the unit's own state. Whether the
+        // neighbours are taken to have it is a Bernoulli trial on the channel quality,
+        // and an exception that sent it (a critical event, a tracking error) is spent.
+        // The power above was read first, so such a BSM goes out at vRPMax. J3161/1 has
+        // the critical event alone, and it is spent the same way.
+        let mut dcc_event = None;
+        if tx.msg_type == v2xw_msg::MsgType::Bsm
+            && !self.rsus.contains_key(&node)
+            && let Some(b) = belief
+            && self.dcc.as_ref().is_some_and(crate::wiring::EngineDcc::is_sae)
+        {
+            let sent = host_state(b, t_generated);
+            let u = self
+                .rng
+                .checkout(
+                    v2xw_core::rng::RngDomain::plugin(J2945_INFERENCE_STREAM),
+                    v2xw_core::rng::EntityRef::LinkFrame {
+                        link: v2xw_core::ids::LinkKey::new(node, node),
+                        frame: t_generated,
+                    },
+                )
+                .uniform(0.0, 1.0);
+            if let Some(d) = self.dcc.as_mut() {
+                dcc_event = d.on_transmitted(node, sent, u);
+            }
+            if let Some(window) = self.j2945_per.as_mut() {
+                window.note_sent(node, t_generated);
+            }
+        }
         // The frame on the air is the SPDU inside a network and transport header, LLC/SNAP,
         // the 802.11 MAC header and the FCS (`v2xw_net::frame`); the PHY's air time and the
         // MSDU cap are over all of it, not over the SPDU alone.
@@ -3075,6 +3238,7 @@ impl Engine {
             payload_bytes: split.map(|(p, _)| p),
             envelope_bytes: split.map(|(_, e)| e),
             sl_resource: None,
+            dcc_event,
             sl_interferers: BTreeMap::new(),
             focus_high: std::collections::BTreeSet::new(),
             focus_placement: BTreeMap::new(),
@@ -3254,14 +3418,40 @@ impl Engine {
         let rp = if is_obu {
             self.dcc
                 .as_ref()
-                .and_then(|d| <SaeJ2945Dcc as Dcc<EngineCtx<'_>>>::state(d, node).power_dbm)
+                .and_then(|d| d.state::<EngineCtx<'_>>(node).power_dbm)
         } else {
             None
         };
-        match rp {
+        let configured = match rp {
             Some(rp) => device.tx_power_dbm.min(rp - device.net_gain_db()),
             None => device.tx_power_dbm,
+        };
+        // The region's EIRP limit for this kind of station on this channel
+        // (`radio.region`): a unit configured above it transmits at it.
+        match self.regulated_eirp_dbm(node) {
+            Some(cap) => configured.min(cap - device.net_gain_db()),
+            None => configured,
         }
+    }
+
+    /// The most `node` may radiate on the run's channel, dBm EIRP, by the region's rules:
+    /// a roadside unit's limit at its antenna's height, an on-board unit's toward the
+    /// horizon, a pedestrian's or cyclist's device as a portable unit.
+    fn regulated_eirp_dbm(&self, node: NodeId) -> Option<f64> {
+        let reg = self.regulation.as_ref()?;
+        if let Some(&pos) = self.rsus.get(&node) {
+            let device = crate::wiring::device_for(&self.scenario, v2xw_radio::ActorClass::Rsu);
+            let h = device
+                .antenna_height_m
+                .unwrap_or_else(|| pos.z - self.world.ground_height_at(pos.x, pos.y));
+            return Some(reg.max_eirp_dbm(v2xw_radio::ActorClass::Rsu, h));
+        }
+        let class = self
+            .node_class
+            .get(&node)
+            .copied()
+            .unwrap_or(v2xw_radio::ActorClass::Car);
+        Some(reg.max_eirp_dbm(class, class.default_antenna_height_m()))
     }
 
     /// One node's medium-access state machine advances (invariant I-R1's access half).
@@ -3362,6 +3552,66 @@ impl Engine {
             else {
                 continue;
             };
+            // The ETSI gatekeeper (TS 102 687 §5.4, Annex A): a frame that arrives inside
+            // the unit's T_off waits for the gate to open, and one the EN 302 571 floor
+            // refuses outright (T_on above 4 ms) is dropped. J2945/1 has no gatekeeper; its
+            // rate control is the generator's inter-transmit time.
+            if self.dcc.as_ref().is_some_and(crate::wiring::EngineDcc::gates) {
+                let req = v2xw_radio::TxRequest {
+                    bytes: descriptor.bytes,
+                    mcs: descriptor.mcs,
+                    power_dbm: descriptor.tx_power_dbm,
+                    ac: SAFETY_AC,
+                    channel,
+                    air_time: air,
+                    at: now,
+                };
+                let decision = {
+                    let Engine {
+                        scheduler,
+                        rng,
+                        world,
+                        snapshot,
+                        provenance,
+                        params,
+                        dcc,
+                        ..
+                    } = self;
+                    let mut null = crate::ctx::NullRecorder::new();
+                    let mut ctx = EngineCtx::new(
+                        scheduler, rng, world, snapshot, provenance, params, &mut null,
+                    );
+                    dcc.as_mut()
+                        .expect("checked above")
+                        .gate(&mut ctx, node, &req)
+                };
+                match decision {
+                    v2xw_radio::GateDecision::Now { .. } => {}
+                    v2xw_radio::GateDecision::DelayUntil(t) => {
+                        if t <= horizon {
+                            self.pending_tx.entry(node).or_default().push((t, frame));
+                            self.scheduler.schedule(
+                                t,
+                                EventClass::MacTimer,
+                                Event::MacTimer {
+                                    node,
+                                    channel: channel.0,
+                                },
+                            );
+                        } else {
+                            // The gate opens after the run: the frame never goes on air.
+                            self.frames.remove(&frame);
+                        }
+                        continue;
+                    }
+                    v2xw_radio::GateDecision::Drop => {
+                        self.frames.remove(&frame);
+                        self.report.mac_drops += 1;
+                        self.mac_window.entry(node).or_default().drops += 1;
+                        continue;
+                    }
+                }
+            }
             let window = self.mac_window.entry(node).or_default();
             window.frames += 1;
             window.bytes += u64::from(descriptor.bytes);
@@ -3681,7 +3931,14 @@ impl Engine {
         // corner tracer; a roadside unit has none.
         let mut within: Vec<(NodeId, Vec3, Option<f64>)> = Vec::new();
         let mut beyond: Vec<(NodeId, Vec3)> = Vec::new();
-        state.tx_heading = self.actor_of(state.tx).map(|a| a.last.heading_rad);
+        let tx_last = self
+            .actor_of(state.tx)
+            .map(|a| (a.last.heading_rad, a.last.vel));
+        state.tx_heading = tx_last.map(|(h, _)| h);
+        let tx_vel = tx_last.map_or(Vec3::ZERO, |(_, v)| v);
+        // Each receiver's velocity, for a sidelink link-level curve indexed by relative
+        // speed; a roadside unit has none and stands still.
+        let mut velocities: BTreeMap<NodeId, Vec3> = BTreeMap::new();
         for actor in self.snapshot.actors_within(state.tx_pos, reach_m) {
             let Some(rec) = self.actors.get(&actor) else {
                 continue;
@@ -3691,6 +3948,9 @@ impl Engine {
                 continue;
             }
             let pos = rec.last.extrapolate(now).pos;
+            if self.sidelink.is_some() {
+                velocities.insert(node, rec.last.vel);
+            }
             if state.tx_pos.distance_2d(pos) <= full_m {
                 within.push((node, pos, Some(rec.last.heading_rad)));
             } else {
@@ -3740,13 +4000,18 @@ impl Engine {
             }
         };
         for (&(rx, rx_pos), geometry) in candidates.iter().zip(geometry) {
-            let (rssi, dist, high, placement) = self.link_budget(&state, rx, rx_pos, geometry);
+            let (rssi, dist, high, placement, los_class) =
+                self.link_budget(&state, rx, rx_pos, geometry);
             if rssi < floor_dbm {
                 state.faint.insert(rx, rssi);
                 self.report.faint_arrivals += 1;
                 continue;
             }
             state.arrivals.insert(rx, (rssi, dist));
+            if self.sidelink.is_some() {
+                let rx_vel = velocities.get(&rx).copied().unwrap_or(Vec3::ZERO);
+                state.sl.note_condition(self.radio_env, rx, los_class, tx_vel, rx_vel);
+            }
             if high {
                 state.focus_high.insert(rx);
             }
@@ -3882,7 +4147,7 @@ impl Engine {
             if power >= v2xw_radio::phy::CBR_BUSY_THRESHOLD_DBM
                 && let Some(mac) = self.mac.as_mut()
             {
-                mac.note_busy(rx, SAFETY_CHANNEL, state.start, state.end);
+                mac.note_busy(rx, self.dsrc_channel, state.start, state.end);
             }
         }
         for (_, source, victim) in overlaps {
@@ -4123,6 +4388,13 @@ impl Engine {
             if let Some(cause) = outcome.cause {
                 self.report.lost(cause);
             }
+            // J2945/1's per-neighbour PER, as a receiver counts it from msgCnt.
+            if outcome.received
+                && state.msg_type == v2xw_msg::MsgType::Bsm
+                && let Some(window) = self.j2945_per.as_mut()
+            {
+                window.note_received(outcome.rx, state.tx, now);
+            }
             let record = PhyRx::new(
                 state.start,
                 now,
@@ -4332,7 +4604,19 @@ impl Engine {
         )
         .with_layers(&state.layers, state.cert_bytes)
         .with_content(Some(hex_digest(&state.signer.0[..])), state.content.clone())
-        .with_radio(mcs_index, Some(radio));
+        .with_radio(mcs_index, Some(radio))
+        .with_dcc(
+            self.dcc
+                .as_ref()
+                .filter(|_| {
+                    !self.rsus.contains_key(&state.tx)
+                        && !matches!(
+                            self.node_class.get(&state.tx),
+                            Some(v2xw_radio::ActorClass::Pedestrian | v2xw_radio::ActorClass::Bicycle)
+                        )
+                })
+                .map(|d| d.label::<EngineCtx<'_>>(state.tx, state.dcc_event)),
+        );
         // The frame's own octets, for a viewer that decodes them (`RunRecorder::tap_frame`).
         // Not a record: nothing recorded, counted or digested changes.
         if let Some(spdu) = state.spdu.as_deref() {
@@ -5249,7 +5533,7 @@ impl Engine {
         rx: NodeId,
         rx_pos: Vec3,
         geometry: link::LinkGeometry,
-    ) -> (f64, f64, bool, Option<&'static str>) {
+    ) -> (f64, f64, bool, Option<&'static str>, v2xw_radio::LosClass) {
         let now = self.scheduler.now();
         let link = LinkKey::new(state.tx, rx);
         let distance_m = state.tx_pos.distance(rx_pos);
@@ -5263,6 +5547,7 @@ impl Engine {
         } = geometry;
         let high = evaluation.is_some_and(|e| e.phy_tier == Tier::High);
         let placement = evaluation.map(|e| e.placement.label());
+        let los_class = los.class;
 
         let (loss, fade, obstacle_db) = {
             let Engine {
@@ -5323,14 +5608,14 @@ impl Engine {
             -rain_db,
             fade,
         ]);
-        (rssi_dbm, distance_m, high, placement)
+        (rssi_dbm, distance_m, high, placement, los_class)
     }
 
     /// The carrier the link budget is evaluated at, hertz.
     fn carrier_hz(&self) -> f64 {
         self.sidelink
             .as_ref()
-            .map_or(SAFETY_FREQ_HZ, |sl| sl.freq_hz)
+            .map_or(self.dsrc_freq_hz, |sl| sl.freq_hz)
     }
 
     /// One node's radio endpoint at an instant: its antenna position and class.
@@ -5397,20 +5682,36 @@ impl Engine {
     /// Every node's MAC report for the window that closes at `now`, on `mac.cbr`: the
     /// busy ratio its MAC measured, its EDCA queue depth, and what it offered and was
     /// refused since the previous report. Only at the tiers that model a MAC.
+    ///
+    /// On a sidelink the busy ratio is the UE's sidelink CBR (TS 36.214 §5.1.30,
+    /// TS 38.215 §5.1.25: the share of the last 100 ms of sub-channels whose S-RSSI
+    /// exceeded the pool's threshold), on the sidelink's channel, and the queue is the
+    /// SPS engine's per-UE queue: the same record, measured the way the RAT measures it.
     fn emit_mac_reports(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
-        let Some(mac) = self.mac.as_ref() else {
-            return;
-        };
         let span = self.metric_period.as_nanos();
         let mut reports: Vec<MacCbr> = Vec::with_capacity(self.nodes.len());
-        for &node in self.nodes.keys() {
-            let cbr = Mac::<EngineCtx<'_>>::cbr(mac, node, SAFETY_CHANNEL, now);
-            let depth = mac.queue_len(node, SAFETY_CHANNEL, SAFETY_AC) as u64;
+        let nodes: Vec<NodeId> = self.nodes.keys().copied().collect();
+        for node in nodes {
+            let (channel, cbr, depth) = if let Some(mac) = self.mac.as_ref() {
+                (
+                    self.dsrc_channel.0,
+                    Mac::<EngineCtx<'_>>::cbr(mac, node, self.dsrc_channel, now),
+                    mac.queue_len(node, self.dsrc_channel, SAFETY_AC) as u64,
+                )
+            } else if let Some(sl) = self.sidelink.as_ref() {
+                (
+                    sl.channel.0,
+                    Mac::<EngineCtx<'_>>::cbr(&sl.mac, node, sl.channel, now),
+                    sl.mac.queue_len(node) as u64,
+                )
+            } else {
+                return;
+            };
             let w = self.mac_window.remove(&node).unwrap_or_default();
             reports.push(MacCbr::report(
                 now,
                 node,
-                SAFETY_CHANNEL.0,
+                channel,
                 cbr,
                 depth,
                 w.drops,

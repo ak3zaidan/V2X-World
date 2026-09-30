@@ -699,6 +699,12 @@ pub struct PoolConfig {
     /// profile says otherwise (SAE J3161/1's minimum allocation is 2,
     /// `minSubChannel-NumberPSSCH-r14`).
     pub min_subchannels: u32,
+    /// OFDM symbols the NR PSCCH takes out of the first sub-channel of an allocation,
+    /// across its `pscch_prb` PRB, when that cost is *not* already inside
+    /// `data_symbols`: 3 in ETSI EN 303 798's configuration (Lusvarghi 2024 Table I.C),
+    /// 0 for every pool whose `data_symbols` already nets it out (LTE's separate PRB,
+    /// Todisco's slot layout).
+    pub pscch_symbols: u32,
 }
 
 impl PoolConfig {
@@ -712,6 +718,35 @@ impl PoolConfig {
     #[must_use]
     pub const fn subchannels(&self) -> u32 {
         self.bandwidth_prb / self.subchannel_prb
+    }
+
+    /// The energy a transmission on `res`, received at `power_dbm` in total, puts into
+    /// each sub-channel of the pool outside its allocation: its in-band emission, at the
+    /// attenuation [`IbeMask`] gives the separation. `(sub-channel, dBm)`, in sub-channel
+    /// order; empty when the mask models no emission.
+    ///
+    /// This is what a receiver's S-RSSI measures there, because TS 36.214 §5.1.28 defines
+    /// S-RSSI as the *total* received power in the sub-channel, whatever put it there: a
+    /// strong neighbour's leakage makes a sub-channel it does not use read busy, and the
+    /// channel busy ratio counts it. The SINR path charges the same leakage
+    /// (`SidelinkPhy::interference_split`), so the receiver's measurement and its
+    /// decoding see one channel. Leakage more than 30 dB under the −94 dBm busy
+    /// threshold is dropped: it could not move a sum across the threshold.
+    #[must_use]
+    pub fn emission_into(&self, res: SlResource, power_dbm: f64) -> Vec<(u32, f64)> {
+        if self.ibe.is_off() || power_dbm - self.ibe.adjacent_db < CBR_SRSSI_THRESHOLD_DBM - 30.0 {
+            return Vec::new();
+        }
+        let end = res.subch + res.len;
+        (0..self.subchannels())
+            .filter(|&sc| sc < res.subch || sc >= end)
+            .filter_map(|sc| {
+                let sep = if sc < res.subch { res.subch - sc } else { sc + 1 - end };
+                let att = self.ibe.attenuation_db(sep);
+                (att.is_finite() && power_dbm - att >= CBR_SRSSI_THRESHOLD_DBM - 30.0)
+                    .then_some((sc, power_dbm - att))
+            })
+            .collect()
     }
 
     /// PRB one sub-channel gives the shared channel, after the control channel takes its
@@ -730,6 +765,14 @@ impl PoolConfig {
         }
     }
 
+    /// Resource elements the control channel takes out of an allocation on top of what
+    /// `data_symbols` and [`PoolConfig::data_prb_for`] already net out: the NR PSCCH's
+    /// `pscch_symbols × pscch_prb × 12`, in the allocation's first sub-channel.
+    #[must_use]
+    pub const fn control_res(&self) -> u32 {
+        self.pscch_symbols * self.pscch_prb * 12
+    }
+
     /// PRB available to the transport block in an allocation of `len` sub-channels.
     #[must_use]
     pub const fn data_prb_for(&self, len: u32) -> u32 {
@@ -746,7 +789,9 @@ impl PoolConfig {
     /// `bits = floor(data_res_per_prb · data_prb · Qm · R) − 24`.
     #[must_use]
     pub fn payload_bits(&self, len: u32) -> u32 {
-        let res = f64::from(self.data_res_per_prb() * self.data_prb_for(len));
+        let res = f64::from(
+            (self.data_res_per_prb() * self.data_prb_for(len)).saturating_sub(self.control_res()),
+        );
         let coded = res * self.mcs.spectral_efficiency();
         // Floor, not round: a transport block cannot use a fraction of a coded bit.
         let bits = coded.floor() as i64 - i64::from(TB_CRC_BITS);
@@ -854,6 +899,7 @@ impl PoolConfig {
             ibe: IbeMask::todo_calibrate_default(),
             centre_hz: 5_900e6,
             min_subchannels: 1,
+            pscch_symbols: 0,
         }
     }
 
@@ -881,6 +927,7 @@ impl PoolConfig {
             ibe: IbeMask::todo_calibrate_default(),
             centre_hz: 5_915e6,
             min_subchannels: 2,
+            pscch_symbols: 0,
         }
     }
 
@@ -891,6 +938,34 @@ impl PoolConfig {
             subchannel_prb: 10,
             mcs,
             ..Self::molina_masegosa_highway()
+        }
+    }
+
+    /// The ETSI EN 303 798 NR-V2X configuration the Lusvarghi 2024 link-level curves
+    /// were generated in ([`crate::bler_nr`]; the paper's Table I.C): a 20 MHz channel at
+    /// 30 kHz (51 PRB, TS 38.101-1 Table 5.3.2-1), four sub-channels of 12 PRB, a
+    /// 12-PRB PSCCH over 3 symbols, and 14 symbols a slot of which the AGC symbol and the
+    /// guard are not PSSCH and 2 are PSSCH-DMRS, so 10 carry data. `mcs` is a
+    /// TS 38.214 Table 5.1.3.1-2 row ([`crate::bler_nr::nr_mcs_table2`]).
+    ///
+    /// ETSI EN 303 798 V2.0.1 (2023) later moved to 10-PRB sub-channels (five in 20 MHz)
+    /// and a 10-PRB PSCCH, which the authors' dataset page describes; the paper's figures,
+    /// and so this pool, are the 12-PRB configuration of V1.1.8.
+    #[must_use]
+    pub fn etsi_en303798_nr(mcs: SlMcsSpec) -> Self {
+        Self {
+            rat: SlRat::NrMode2,
+            mu: Numerology::Mu1,
+            bandwidth_prb: 51,
+            subchannel_prb: 12,
+            pscch_prb: 12,
+            pscch_adjacent: false,
+            data_symbols: 10,
+            mcs,
+            ibe: IbeMask::todo_calibrate_default(),
+            centre_hz: 5_900e6,
+            min_subchannels: 1,
+            pscch_symbols: 3,
         }
     }
 
@@ -920,6 +995,7 @@ impl PoolConfig {
             ibe: IbeMask::todo_calibrate_default(),
             centre_hz: 5_900e6,
             min_subchannels: 1,
+            pscch_symbols: 0,
         }
     }
 }

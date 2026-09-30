@@ -326,6 +326,15 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the candidate-range cap",
     },
+    // The 5.9 GHz ITS band's IEEE channel numbers, 5.850-5.925 GHz: 170 to 184. Which of
+    // them a technology may use is the region's rule, checked separately.
+    Bound {
+        path: "radio.channel",
+        lo: 170.0,
+        hi: 184.0,
+        exclusive_lo: false,
+        what: "the ITS channel number",
+    },
     Bound {
         path: "security.pseudonym_change.period_s",
         lo: 1.0,
@@ -721,15 +730,24 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "radio.rat",
         status: Status::Wired,
-        note: "The radio access technology. dsrc-80211p runs CSMA/CA with J2945/1 \
-               congestion control on channel 172. lte-v2x-pc5 runs Mode 4 sensing-based \
+        note: "The radio access technology. dsrc-80211p runs CSMA/CA on the region's \
+               channel (172 in the 2016 US plan, 180 in Europe) with its congestion \
+               control: SAE J2945/1 in the US, ETSI TS 102 687's adaptive gatekeeper in \
+               Europe. lte-v2x-pc5 runs Mode 4 sensing-based \
                semi-persistent scheduling on the SAE J3161/1 US profile: channel 183, \
-               20 MHz, ten 10-PRB sub-channels, MCS 7, probResourceKeep 0.8, and the \
+               20 MHz, ten 10-PRB sub-channels, MCS 7, probResourceKeep 0.8, one blind \
+               retransmission (as every deployed-profile test ran it, 5GAA P-190033), the \
                J3161/1 CR limits enforced per CBR zone (values second-hand, via Abrar et \
-               al. 2026). nr-v2x-pc5 runs Mode 2 at 30 kHz with re-evaluation, \
-               pre-emption and the ETSI TS 103 574 CR limits, on Todisco 2021's study \
-               pool: no US NR-V2X deployment profile was found. Sensing records only \
-               decoded SCIs. 'hybrid' is refused: the radio crate's hybrid selector \
+               al. 2026) and J3161/1's density-driven BSM interval. Receivers are \
+               fielded ones: an 802.11p unit's sensitivity is the lab-measured OBU's \
+               (-92 dBm at 6 Mbit/s, 4 dB better than EN 302 663's minimum), and a \
+               sidelink block is decided by its error curve with no cutoff at TS 36.101's \
+               conformance sensitivity, which fielded receivers beat by about 13 dB. nr-v2x-pc5 runs Mode 2 at 30 kHz with re-evaluation, \
+               pre-emption and the ETSI TS 103 574 CR limits, on the ETSI EN 303 798 \
+               pool (20 MHz, four 12-PRB sub-channels, 16QAM-490), each block error read \
+               from Lusvarghi et al. 2024's link-level curve for the link's environment, \
+               line of sight or vehicle or building blockage, and relative speed; no US \
+               NR-V2X deployment profile exists. Sensing records only decoded SCIs. 'hybrid' is refused: the radio crate's hybrid selector \
                arbitrates a direct radio against the cellular Uu link, not 802.11p \
                against a sidelink, and the Uu backend path is not wired.",
     },
@@ -742,7 +760,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                of sight, TR 37.885 blockage from the vehicles actually on the path, the \
                Mangel 2011 model round a traced street corner, TR 37.885 NLOS where no \
                single corner connects. Both take Nakagami fading unless radio.models \
-               says otherwise. High is the default: on a street grid it is the law best \
+               says otherwise, except on an LTE-V2X or NR-V2X run, whose block-error \
+               curves were measured over fading channels and already contain it. High \
+               is the default: on a street grid it is the law best \
                supported by the intersection measurements it was fitted to, at about 1.8 \
                times medium's cost. Rain applies at medium and high.",
     },
@@ -760,8 +780,8 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "radio.tiers.mac",
         status: Status::Wired,
         note: "Medium-access fidelity. Abstract has no MAC (reception comes from a \
-               table); medium and high run the same 802.11p EDCA/OCB CSMA model with \
-               J2945/1 congestion control, so high adds nothing over medium.",
+               table); medium and high run the same 802.11p EDCA/OCB CSMA model with the \
+               region's congestion control, so high adds nothing over medium.",
     },
     KeyStatus {
         path: "radio.tiers.focus",
@@ -780,13 +800,25 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Picks a model per radio family, overriding the tier's default: \
                propagation (free-space, two-ray-ground, log-distance with a named preset, \
                tr37885, v2v-urban-geometric), fading (none, nakagami-m with a preset), per (the \
-               802.11p error model's implementation loss), phy (the 802.11p sensitivity table), \
+               802.11p error model's implementation loss), phy (the 802.11p sensitivity \
+               table: measured-obu by default, etsi-static, etsi-dynamic or cohda-mk5), \
                obstacle (the Sommer building row) and sidelink \
-               (access/sidelink/engine-coupling: profile sae-j3161, \
-               molina-masegosa-2017 or todisco-2021; mcs; max_transmissions for blind \
+               (access/sidelink/engine-coupling: profile sae-j3161, etsi-en303613 or \
+               molina-masegosa-2017 for LTE, etsi-en303798 or todisco-2021 for NR; mcs, \
+               an index into the profile's table (NR etsi-en303798: TS 38.214 Table \
+               5.1.3.1-2, 0-27); max_transmissions for blind \
                HARQ retransmissions, 1-2 LTE, 1-3 NR; congestion_control \
-               etsi-ts-103-574, sae-j3161 or off). Unknown families, ids and values are \
-               refused.",
+               etsi-ts-103-574, sae-j3161 or off; rate_control sae-j3161 or off, SAE \
+               J3161/1's density-driven BSM interval on LTE-V2X, on by default under \
+               the sae-j3161 profile; sensitivity measured, the default, where the \
+               block-error curve decides, or ts-36-101, which loses every copy under the \
+               conformance sensitivity), and dcc for 802.11p \
+               (dcc/sae/j2945-1-rate-power, dcc/etsi/adaptive-ts102687 or \
+               dcc/etsi/reactive-ts102687; the region's by default). J2945/1 sets the \
+               interval from the neighbours within 100 m and the power from the busy \
+               ratio, and sends a BSM early and at full power on hard braking or when \
+               its neighbours' coasted estimate of it drifts 0.2-0.5 m; each BSM is \
+               staggered by 0-5 ms. Unknown families, ids and values are refused.",
     },
     KeyStatus {
         path: "radio.devices",
@@ -795,7 +827,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                at the antenna port; the link budget applies antenna gain less cable loss at \
                both ends. Defaults are 3GPP TR 36.885's: 23 dBm with a 3 dBi antenna on a \
                vehicle or a roadside unit, 23 dBm and 0 dBi on a pedestrian's device, \
-               no cable loss, antennas 1.5 m high (3 m on a truck). On 802.11p a vehicle's \
+               no cable loss, antennas 1.5 m high (3 m on a truck). obu.antenna_pattern \
+               shapes each vehicle's gain by direction (TR 37.885 Option 1): tr37885, the \
+               default, puts a rooftop antenna on a car or van (the same all round, down \
+               toward a high mast) and front and rear panels on a truck or bus, 6.75 dB \
+               down to its side; rooftop gives every vehicle the roof antenna; isotropic \
+               none. On 802.11p a vehicle's \
                J2945/1 congestion control sets the radiated power (20 dBm at most) and \
                the unit transmits at the lesser of that less its net gain and this power.",
     },
@@ -808,6 +845,47 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                it is counted as interference, not a reception attempt; the reference is \
                fixed, so the links a run attempts do not move with the transmit power. An optional cap bounds the fully evaluated range; beyond it, \
                line-of-sight receivers still get the frame's energy as interference.",
+    },
+    KeyStatus {
+        path: "radio.region",
+        status: Status::Wired,
+        note: "The regulation the radios transmit under: the channel each technology \
+               deploys on, and the EIRP each unit may radiate there. us is FCC 24-123 \
+               (2024): LTE-V2X and NR-V2X on the 20 MHz channel 5.905-5.925 GHz, an OBU \
+               without a geofence at 27 dBm EIRP toward the horizon, a roadside unit at \
+               33 dBm less 20 log10(h/8) above 8 m; 802.11p is refused, because FCC \
+               20-164 gave channel 172 to Wi-Fi and FCC 24-123 cancels the last DSRC \
+               licences on 13 December 2026. us-2016 is the DSRC band plan SAE J2945/1 was \
+               written for (47 CFR 90.377, 2017): 802.11p on channel 172, roadside units \
+               at 33 dBm, portable units at 1 mW. eu is ETSI EN 302 571: 10 MHz channels, \
+               33 dBm EIRP; ITS-G5 on 5.895-5.905 GHz, LTE-V2X on 5.905-5.915 GHz, NR-V2X \
+               on 5.885-5.895 GHz. Unset, us-2016 for 802.11p and us otherwise. A \
+               configured power above the limit is lowered to it.",
+    },
+    KeyStatus {
+        path: "radio.adjacent_channel",
+        status: Status::Wired,
+        note: "Transmitters of another technology on a neighbouring channel, where the \
+               region lets the two operate side by side (Europe: ITS-G5 on 180 beside \
+               LTE-V2X on 182 and NR-V2X on 178). Each is placed and timed as a jammer is \
+               (position_m, follow_node or path_m; power_dbm, 23 by default; period_ms and \
+               duty; from_s, to_s) and its power reaches this run's receivers through the \
+               same link budget, less the adjacent-channel interference ratio: by default \
+               the region's spectrum mask for its technology combined with the minimum \
+               selectivity of this run's receivers (ETSI EN 302 571 Table 8, 3GPP TS \
+               36.101 and 38.101-1), the worst a conformant pair may show; acir_db sets \
+               a measured one. It raises the noise a frame is decoded against, clear-channel \
+               assessment and the busy ratio, and a frame it alone killed is lost to \
+               adjacent-channel. A channel that overlaps the run's is refused (that is a \
+               jammer), as is one the region does not allow the technology on.",
+    },
+    KeyStatus {
+        path: "radio.channel",
+        status: Status::Wired,
+        note: "The IEEE channel number within the region's band plan (170-184); unset, the \
+               region's deployment channel. Only channels the region opens to the \
+               technology are accepted, and the sidelink's resource pool is sized to the \
+               channel's width.",
     },
     // --- network -----------------------------------------------------------
     KeyStatus {
@@ -1898,6 +1976,16 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
              dsrc-80211p, lte-v2x-pc5 or nr-v2x-pc5"
                 .to_string(),
         ));
+    } else {
+        // `radio.region` and `radio.channel`: the technology must have a channel in the
+        // region, a named channel must be one the region opens to it, and a sidelink
+        // profile fixed to one width needs a channel of that width.
+        if let Some(ch) = s.radio.channel {
+            bounded_at("radio.channel", "radio.channel", f64::from(ch), e);
+        }
+        if let Err((path, why)) = crate::wiring::radio_regulation(s) {
+            e.push(conflict(path, why));
+        }
     }
 
     // 03-interfaces.md §13's own example, and 02-architecture.md §7.1's ladder: a

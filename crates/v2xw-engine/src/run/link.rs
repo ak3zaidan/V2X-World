@@ -71,8 +71,13 @@ impl LinkView<'_> {
         // class's antenna height above the road (1.5 m for a car, TR 36.885), and a
         // roadside unit's position already carries its mast height. The building test
         // below is 2.5-D and compares roof heights against these.
-        let tx_end = self.endpoint(tx, tx_pos, now);
-        let rx_end = self.endpoint(rx, rx_pos, now);
+        let mut tx_end = self.endpoint(tx, tx_pos, now);
+        let mut rx_end = self.endpoint(rx, rx_pos, now);
+        // Each vehicle's antenna pattern toward the other end (TR 37.885 §6.1.4): a
+        // truck's front and rear panels are 6.75 dB down to its side. It changes the
+        // ends' gains only, not their positions, so nothing below depends on it.
+        tx_end.gain_dbi += self.pattern_gain_db(&tx_end, tx_heading, rx_end.pos);
+        rx_end.gain_dbi += self.pattern_gain_db(&rx_end, rx_heading, tx_end.pos);
 
         let evaluation = self.focus.map(|plan| plan.evaluate(tx_end.pos, rx_end.pos));
         let inside_focus = matches!(
@@ -176,6 +181,31 @@ impl LinkView<'_> {
             });
         }
         v2xw_radio::ActorSet::from_iter_sorted(set)
+    }
+
+    /// The pattern of `end`'s antenna toward `toward`, dB relative to its scalar gain
+    /// (`radio.devices.obu.antenna_pattern`, [`v2xw_radio::antenna`]). Zero for a
+    /// roadside unit, a pedestrian's device, a jammer, and a vehicle whose heading is
+    /// not known.
+    pub fn pattern_gain_db(&self, end: &RadioEndpoint, heading: Option<f64>, toward: Vec3) -> f64 {
+        use crate::scenario::schema::ObuAntennaPattern;
+        use v2xw_radio::antenna::AntennaMount;
+        if end.node.index() >= jamming::JAMMER_ID_BASE || self.rsus.contains_key(&end.node) {
+            return 0.0;
+        }
+        let mount = match (self.scenario.radio.devices.obu.antenna_pattern, AntennaMount::for_class(end.class)) {
+            (_, AntennaMount::Isotropic) | (ObuAntennaPattern::Isotropic, _) => return 0.0,
+            (ObuAntennaPattern::Rooftop, _) => AntennaMount::Rooftop,
+            (ObuAntennaPattern::Tr37885, m) => m,
+        };
+        let (dx, dy, dz) = (toward.x - end.pos.x, toward.y - end.pos.y, toward.z - end.pos.z);
+        let horizontal = v2xw_core::math::hypot(dx, dy);
+        let elevation = v2xw_core::math::atan2(dz, horizontal.max(1e-9));
+        let azimuth = heading.map_or(0.0, |h| v2xw_core::math::atan2(dy, dx) - h);
+        if heading.is_none() && mount == AntennaMount::FrontRear {
+            return 0.0;
+        }
+        mount.relative_gain_db(azimuth, elevation)
     }
 
     /// One node's radio endpoint at an instant: its antenna position and class.
