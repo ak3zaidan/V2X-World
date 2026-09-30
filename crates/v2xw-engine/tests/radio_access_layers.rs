@@ -285,17 +285,22 @@ fn congestion_control_holds_the_cr_limit_under_load() {
 /// and each transport block is still one reception per receiver.
 #[test]
 fn blind_retransmissions_raise_delivery_at_range() {
-    let base = with_rat(fleet(30, 3.0), "lte-v2x-pc5");
-    // One transmission is asked for by name: SAE J3161/1's profile sends two by default.
-    // Both arms run the conformance receiver (`sensitivity: ts-36-101`), whose cutoff puts
-    // the edge of range inside this fleet; a fielded receiver reaches past it, and one
-    // copy then loses under 0.1 % here, leaving a second nothing to rescue.
+    let mut base = with_rat(fleet(30, 3.0), "lte-v2x-pc5");
+    // The regime the test needs is one where a single copy sometimes fails at range. The
+    // receivers are fielded ones and the pool's sensing now counts in-band emission, so
+    // at 23 dBm one copy loses a third of a percent here: both arms run the conformance
+    // receiver (`sensitivity: ts-36-101`) at 20 dBm, which puts the edge of one copy's
+    // range inside the fleet. One transmission is asked for by name (SAE J3161/1's
+    // profile sends two by default), and J3161/1's rate control is off, since this is
+    // about the second copy and not about the interval.
+    base.radio.devices.obu.tx_power_dbm = 20.0;
     let once = with_sidelink(
         base.clone(),
         serde_json::json!({
             "congestion_control": "off",
             "max_transmissions": 1,
             "sensitivity": "ts-36-101",
+            "rate_control": "off",
         }),
     );
     let twice = with_sidelink(
@@ -304,6 +309,7 @@ fn blind_retransmissions_raise_delivery_at_range() {
             "congestion_control": "off",
             "max_transmissions": 2,
             "sensitivity": "ts-36-101",
+            "rate_control": "off",
         }),
     );
     let (r1, rec1) = run_recorded(once);
