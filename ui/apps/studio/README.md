@@ -24,7 +24,7 @@ on demand.
 | centre | `Viewport` + `TimeControls` | one canvas, the overlay/camera toolbar, transport and scrub bar |
 | right, when open | `Inspector` (`state · messages · why · log`) | opens on a selection, a "why" or a docked HUD; × closes it |
 | full screen | `settings/SettingsWindow.tsx` | every scenario setting, VS Code style (gear or Ctrl/Cmd+,); `?view=settings` opens it in a window of its own |
-| full screen | Metrics (`shell/panels.tsx`, today hosting `PlotsStrip`) | live `MetricSample` series in uPlot |
+| full screen | Metrics (`components/MetricsPanel.tsx`, registered in `shell/panels.tsx`, today hosting `PlotsStrip`) | live `MetricSample` series in uPlot |
 | sheets | `RunBrowser`, `ComparisonView`, `CopilotPanel`, `RunDetails` | from the menu; over the viewport's left edge |
 | floating | `ObuHud` | the HUD of 09-ui §5, shown for a selected radio, dockable into the inspector |
 
