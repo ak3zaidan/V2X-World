@@ -907,8 +907,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                policy and chain files; enrolment_lifetime_s (six years, uncited) with \
                reenrol_lead_s (a week) renews the enrolment certificate at the ECA; \
                max_periods_ahead (156) caps what the RA provisions; a blocklisted or expired \
-               enrolment is refused its top-up. The ETSI ECTL and CA-CRL flows are not \
-               driven in a run.",
+               enrolment is refused its top-up. ETSI only: the TLM signs one ECTL and the \
+               Root CA one CA-CRL at the start, and every station fetches both from the \
+               Distribution Centre (the CPOC) when it joins and then every \
+               crl_fetch_interval_s, over its own access, receiving only what is newer \
+               (TS 102 941 §6.3.3); nothing re-issues either list during a run.",
     },
     KeyStatus {
         path: "security.signature",

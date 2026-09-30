@@ -65,6 +65,10 @@ impl EtsiRun {
             "stations_with_ca_crl",
             self.installed_ca_crl.len() as u64,
         );
+        cpoc.set("ectl_served", self.dc_ectl.map_or(0, |(s, _)| s));
+        cpoc.set("ca_crl_served", self.dc_ca_crl.map_or(0, |(s, _)| s));
+        cpoc.set("fetches_answered", self.dc_fetches);
+        cpoc.set("answered_current", self.dc_not_modified);
         out.push(cpoc);
 
         let mut rca = entity(
@@ -78,6 +82,7 @@ impl EtsiRun {
             Some(n.rca),
             true,
         );
+        rca.set("ca_crl_sequence", self.ca_crl_sequence);
         rca.set("ca_crl_entries", self.params.ca_crl_entries);
         out.push(rca);
 

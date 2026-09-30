@@ -245,6 +245,28 @@ fn the_etsi_butterfly_authorization_tops_up_and_the_aa_sees_counts_only() {
     assert_eq!(aa["state"]["validations_requested"], 0);
     assert!(edge(last, "ea", "aa") && edge(last, "aa", "ea"));
     assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
+    // The trust lists: the TLM and the Root CA signed one list each, and every station
+    // that joined fetched both from the Distribution Centre over its own access.
+    let cpoc = entity(last, "cpoc");
+    println!(
+        "trust lists: {} fetches, {} installed; DC answered {}, {} current; ECTL {}",
+        p.trust_fetches,
+        p.trust_lists_installed,
+        cpoc["state"]["fetches_answered"],
+        cpoc["state"]["answered_current"],
+        entity(last, "tlm")["state"]["ectl_sequence"]
+    );
+    assert!(p.trust_lists_installed > 0, "no station installed the ECTL");
+    assert!(cpoc["state"]["fetches_answered"].as_u64() >= Some(p.trust_fetches));
+    assert_eq!(entity(last, "tlm")["state"]["ectl_sequence"], 1);
+    assert_eq!(entity(last, "rca")["state"]["ca_crl_sequence"], 1);
+    assert!(edge(last, "ee", "cpoc") && edge(last, "cpoc", "ee"));
+    assert!(edge(last, "tlm", "cpoc") && edge(last, "rca", "cpoc"));
+    assert!(
+        records(&rec, "sec.cert")
+            .iter()
+            .any(|r| r["event"] == "trust-list-installed")
+    );
 
     let (standard, rec) = run(base(false));
     let views = records(&rec, "backend.state");

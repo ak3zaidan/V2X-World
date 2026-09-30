@@ -52,7 +52,9 @@ impl ProtoRevocation {
     }
 }
 
-/// `sec.cert` — a credential lifecycle event: `change`, `expire`, `top-up`, `revoked`.
+/// `sec.cert` — a credential lifecycle event: `change`, `expire`, `top-up`, `revoked`,
+/// `topup-refused`, `reenrolled`, `reenrol-refused` and, under the CCMS,
+/// `trust-list-installed` (a newer ECTL or CA-CRL from the Distribution Centre).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(transparent)]
 pub struct SecCert(pub SecCertView);

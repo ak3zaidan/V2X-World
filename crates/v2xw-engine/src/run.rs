@@ -4850,6 +4850,36 @@ impl Engine {
             }
         }
 
+        // 6c. CCMS: stations fetch the ECTL and the CA-CRL from the Distribution Centre,
+        // over the same access.
+        let due = self
+            .phase2
+            .as_mut()
+            .map(|p| p.trust_fetches_due(now))
+            .unwrap_or_default();
+        for (node, kind) in due {
+            let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+            let Some(p) = self.phase2.as_mut() else { break };
+            let link = match kind {
+                crate::backend::AccessKind::Cellular => {
+                    if p.access_mut().uu_coverage(pos, now) {
+                        p.access_mut().nominal_link(kind, None)
+                    } else {
+                        None
+                    }
+                }
+                crate::backend::AccessKind::RsuRelay => {
+                    let unit = p.relay_in_range(pos, "provisioning-proxy");
+                    let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
+                    p.access_mut().nominal_link(kind, backhaul)
+                }
+                crate::backend::AccessKind::Offline => None,
+            };
+            if let Some(link) = link {
+                p.start_trust_fetch(node, link, now);
+            }
+        }
+
         // 7. Each vehicle's CRL gate follows its own clock across i-periods.
         let Some(p) = self.phase2.as_ref() else {
             return;

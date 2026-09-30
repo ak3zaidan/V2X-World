@@ -68,6 +68,13 @@ pub enum FlowId {
     /// ETSI TS 103 759 misbehaviour reporting, station → (pre-processing) → MA → EA
     /// blocklist.
     EtsiMisbehaviourReport,
+    /// ETSI TS 102 941 §6.3 list issuance: the TLM signs a new ECTL, or a Root CA a new
+    /// CA-CRL, and the Distribution Centre (at the CPOC) starts serving it. Once per list
+    /// version, not once per station.
+    EtsiTrustIssue,
+    /// ETSI TS 102 941 §6.3.3 a station's fetch from the Distribution Centre: it says which
+    /// list versions it holds and receives only what is newer.
+    EtsiTrustFetch,
     /// Distributed key generation for an interactive threshold protocol.
     ThresholdDkg,
     /// A t-of-n signing session.
@@ -96,6 +103,8 @@ impl FlowId {
             FlowId::EtsiTrustList => "etsi-trust-list",
             FlowId::EtsiCaCrl => "etsi-ca-crl",
             FlowId::EtsiMisbehaviourReport => "etsi-misbehaviour-report",
+            FlowId::EtsiTrustIssue => "etsi-trust-issue",
+            FlowId::EtsiTrustFetch => "etsi-trust-fetch",
             FlowId::ThresholdDkg => "threshold-dkg",
             FlowId::ThresholdSign => "threshold-sign",
             FlowId::ThresholdRefresh => "threshold-refresh",

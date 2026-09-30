@@ -128,9 +128,9 @@ fn uplink_bytes(run: &EtsiRun, flow: FlowId, from: NodeId) -> u64 {
 /// seven the module documents.
 #[test]
 fn every_deferred_flow_is_declared_once() {
-    assert_eq!(DEFERRED_FLOWS.len(), 5);
+    assert_eq!(DEFERRED_FLOWS.len(), 7);
     let all = all_flows();
-    assert_eq!(all.len(), 7, "two original plus five deferred");
+    assert_eq!(all.len(), 9, "two original plus seven deferred");
     let mut ids: Vec<&str> = all.iter().map(|f| f.id.as_str()).collect();
     let before = ids.len();
     ids.sort_unstable();
@@ -334,6 +334,81 @@ fn a_trust_list_reaches_the_station_and_is_installed() {
     run.run().expect("runs");
     assert_eq!(run.installed_ctl_of(STATION), Some(2));
     assert!(run.kernel.stages.at(flow, StageId::Issued).is_some());
+}
+
+/// The Distribution Centre: the TLM and the Root CA each sign a list once, every station
+/// fetches it, and a station that already holds it is answered "current" without the list.
+#[test]
+fn a_list_is_signed_once_and_every_station_fetches_it() {
+    let mut run = deployment();
+    let other = NodeId::new(2_050);
+    run.add_station(other);
+    // Before anything is issued the Distribution Centre has nothing to send.
+    let early = run.fetch_trust_lists(STATION, 0);
+    run.run().expect("runs");
+    assert_eq!(run.installed_ctl_of(STATION), None);
+    assert_eq!(run.dc_not_modified, 1);
+    assert!(run.kernel.stages.at(early, StageId::Processed).is_some());
+
+    let (ectl, crl) = run.issue_trust_lists(run.kernel.now());
+    run.run().expect("runs");
+    let declared = |id: FlowId| {
+        DEFERRED_FLOWS
+            .iter()
+            .find(|f| f.id == id)
+            .map(|f| f.stages)
+            .expect("declared")
+    };
+    for r in [ectl, crl] {
+        assert_eq!(run.kernel.stages.stages(r), declared(FlowId::EtsiTrustIssue));
+    }
+    let signs_before = run.kernel.steps.iter().filter(|s| s.flow == FlowId::EtsiTrustIssue).count();
+    let mut fetches = Vec::new();
+    for station in [STATION, other] {
+        fetches.push(run.fetch_trust_lists(station, run.kernel.now()));
+    }
+    run.run().expect("runs");
+    for (station, f) in [STATION, other].into_iter().zip(&fetches) {
+        assert_eq!(run.installed_ctl_of(station), Some(1));
+        assert_eq!(run.installed_ca_crl_seq.get(&station), Some(&1));
+        assert_eq!(run.kernel.stages.stages(*f), declared(FlowId::EtsiTrustFetch));
+        assert!(run.kernel.stages.is_ordered(*f));
+    }
+    // Two stations served, and the TLM and the Root CA signed nothing more for them.
+    assert_eq!(
+        run.kernel.steps.iter().filter(|s| s.flow == FlowId::EtsiTrustIssue).count(),
+        signs_before
+    );
+    let full: Vec<u32> = run
+        .kernel
+        .steps
+        .iter()
+        .filter(|s| s.step == "etsi-trust-list-response")
+        .map(|s| s.bytes)
+        .collect();
+    assert_eq!(full.len(), 2);
+
+    // Fetching again: nothing newer, so the answer is the few-byte "current".
+    let again = run.fetch_trust_lists(STATION, run.kernel.now());
+    run.run().expect("runs");
+    let current: Vec<u32> = run
+        .kernel
+        .steps
+        .iter()
+        .filter(|s| s.run == again && s.step == "etsi-trust-list-current")
+        .map(|s| s.bytes)
+        .collect();
+    assert_eq!(current.len(), 1);
+    assert!(current[0] * 10 < full[0], "{current:?} vs {full:?}");
+    assert_eq!(run.dc_not_modified, 2);
+
+    // A new ECTL and CA-CRL reach a station on its next fetch.
+    run.issue_trust_lists(run.kernel.now());
+    run.run().expect("runs");
+    run.fetch_trust_lists(other, run.kernel.now());
+    run.run().expect("runs");
+    assert_eq!(run.installed_ctl_of(other), Some(2));
+    assert_eq!(run.installed_ctl_of(STATION), Some(1));
 }
 
 /// The CA-only CRL is the protocol's one active list, and it reaches `enforced`.

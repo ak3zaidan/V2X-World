@@ -37,6 +37,12 @@
 //! | [`FlowId::EtsiTrustList`] | §6.3.1-6.3.3 | TLM → CPOC → ITS-S |
 //! | [`FlowId::EtsiCaCrl`] | §6.3.5 | RCA → CPOC → ITS-S |
 //! | [`FlowId::EtsiMisbehaviourReport`] | TS 103 759 §4-7 | ITS-S → MA → (pre-processing) → EA blocklist |
+//! | [`FlowId::EtsiTrustIssue`] | §6.3.1-6.3.5 | TLM or RCA signs a list once → CPOC (the Distribution Centre) |
+//! | [`FlowId::EtsiTrustFetch`] | §6.3.3 | ITS-S → CPOC → ITS-S: only what is newer than the station holds |
+//!
+//! The two `EtsiTrust*` flows are what a run drives: a list is signed once per version and
+//! every station fetches it. `EtsiTrustList` and `EtsiCaCrl` push one freshly signed list to
+//! one station and remain for the per-station latency measurement.
 //!
 //! [`FlowId::EtsiEnrolment`]: crate::stage::FlowId::EtsiEnrolment
 //! [`FlowId::EtsiAuthorization`]: crate::stage::FlowId::EtsiAuthorization
@@ -45,6 +51,8 @@
 //! [`FlowId::EtsiTrustList`]: crate::stage::FlowId::EtsiTrustList
 //! [`FlowId::EtsiCaCrl`]: crate::stage::FlowId::EtsiCaCrl
 //! [`FlowId::EtsiMisbehaviourReport`]: crate::stage::FlowId::EtsiMisbehaviourReport
+//! [`FlowId::EtsiTrustIssue`]: crate::stage::FlowId::EtsiTrustIssue
+//! [`FlowId::EtsiTrustFetch`]: crate::stage::FlowId::EtsiTrustFetch
 //!
 //! # Why the butterfly variant shares the SCMS's arithmetic and not its code
 //!
@@ -71,6 +79,6 @@ pub mod ts102941;
 
 pub use ts102941::{
     CA_CRL_REVOCATION, DEFERRED_FLOWS, ETSI_TS102941_ID, EtsiNodes, EtsiParams, EtsiRun, EtsiSizes,
-    AaState, EtsiTs102941, FLOWS, PASSIVE_REVOCATION, SEPARATIONS, SealedForEa, Ts102941Msg,
+    AaState, EtsiTs102941, FLOWS, PASSIVE_REVOCATION, SEPARATIONS, SealedForEa, TrustListKind, Ts102941Msg,
     all_flows,
 };

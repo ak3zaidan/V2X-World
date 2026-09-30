@@ -217,6 +217,15 @@ pub struct AaState {
     pub butterfly_batches: u32,
 }
 
+/// The two lists a Distribution Centre serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustListKind {
+    /// The European Certificate Trust List, signed by the TLM.
+    Ectl,
+    /// A Root CA's CA-only certificate revocation list.
+    CaCrl,
+}
+
 /// The messages of the two built flows.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -355,6 +364,37 @@ pub enum Ts102941Msg {
         station: NodeId,
         /// How many entries.
         entries: u32,
+    },
+
+    /// TLM → DC, or RCA → DC: a newly signed list for the Distribution Centre to serve.
+    /// Injected at the signer, which signs it, and then sent to the CPOC, which serves as
+    /// the Distribution Centre for both lists here.
+    TrustListIssue {
+        /// Which list.
+        kind: TrustListKind,
+        /// Its sequence number (`ctlSequence`, or the CRL's own counter).
+        sequence: u32,
+        /// How many entries it carries.
+        entries: u32,
+    },
+    /// ITS-S → DC: the list versions the station holds (TS 102 941 §6.3.3: a station
+    /// retrieves the ECTL and the CRLs from the Distribution Centre and keeps them current).
+    TrustListRequest {
+        /// The station.
+        station: NodeId,
+        /// The `ctlSequence` it holds, 0 for none.
+        ctl_have: u32,
+        /// The CA-CRL sequence it holds, 0 for none.
+        crl_have: u32,
+    },
+    /// DC → ITS-S: whichever lists are newer than the station's, or neither.
+    TrustListResponse {
+        /// The station.
+        station: NodeId,
+        /// The ECTL, `(sequence, entries)`, if newer than the one held.
+        ctl: Option<(u32, u32)>,
+        /// The CA-CRL, `(sequence, entries)`, if newer than the one held.
+        ca_crl: Option<(u32, u32)>,
     },
 
     // --- TS 103 759, misbehaviour reporting ----------------------------------------
@@ -652,6 +692,38 @@ impl EtsiSizes {
         )
     }
 
+    /// ITS-S → DC: which list versions the station holds. Two list references, each the
+    /// signer's `HashedId8` and the sequence number held; the transport's own request
+    /// framing (an HTTP GET in §6.3.3) is not counted, as no other message counts it.
+    pub const fn trust_list_request(&self) -> WireSize {
+        WireSize::derived(
+            2 * (HASHED_ID8_BYTES + TIME32_BYTES),
+            "2 x (signer HashedId8 + 32-bit sequence held)",
+            STRUCTURE,
+        )
+    }
+
+    /// DC → ITS-S: whichever lists are newer, given their entry counts. `None` for both is
+    /// the "current" answer.
+    pub const fn trust_list_response(&self, ctl: Option<u32>, ca_crl: Option<u32>) -> WireSize {
+        let ctl = match ctl {
+            Some(e) => self.ectl(e).bytes(),
+            None => 0,
+        };
+        let crl = match ca_crl {
+            Some(e) => self.ca_crl(e).bytes(),
+            None => 0,
+        };
+        if ctl + crl == 0 {
+            return WireSize::derived(
+                2 * TIME32_BYTES,
+                "2 x 32-bit sequence: the lists held are current",
+                STRUCTURE,
+            );
+        }
+        WireSize::parameter(ctl + crl, "etsi_ctl_framing_bytes")
+    }
+
     /// A TS 103 759 misbehaviour report: the payload, signed with the reporter's ticket
     /// and encrypted to the Misbehaviour Authority.
     ///
@@ -742,6 +814,15 @@ impl EtsiSizes {
             ("etsi-ca-crl-distribute", self.ca_crl(1)),
             ("etsi-misbehaviour-report", self.misbehaviour_report()),
             ("etsi-block-enrolment", self.block_enrolment()),
+            ("etsi-trust-list-request", self.trust_list_request()),
+            (
+                "etsi-trust-list-response",
+                self.trust_list_response(Some(1), Some(1)),
+            ),
+            (
+                "etsi-trust-list-current",
+                self.trust_list_response(None, None),
+            ),
         ]
     }
 }
@@ -818,6 +899,16 @@ pub const DEFERRED_FLOWS: &[FlowSpec] = &[
             StageId::Decision,
             StageId::Blocklisted,
         ],
+    },
+    FlowSpec {
+        id: FlowId::EtsiTrustIssue,
+        participants: &["TLM", "RCA", "CPOC"],
+        stages: &[StageId::Issued, StageId::Published],
+    },
+    FlowSpec {
+        id: FlowId::EtsiTrustFetch,
+        participants: &["ITS-S", "CPOC"],
+        stages: &[StageId::Requested, StageId::Downloaded, StageId::Processed],
     },
 ];
 
@@ -1062,6 +1153,19 @@ pub struct EtsiRun {
     pub installed_ctl: BTreeMap<NodeId, u32>,
     /// How many CA-CRL entries each station is enforcing.
     pub installed_ca_crl: BTreeMap<NodeId, u32>,
+    /// The sequence number of the last CA-CRL the Root CA signed for the Distribution
+    /// Centre (the direct-push flow [`EtsiRun::publish_ca_crl`] carries none).
+    pub ca_crl_sequence: u32,
+    /// The Distribution Centre's current ECTL, `(sequence, entries)`, once issued.
+    pub dc_ectl: Option<(u32, u32)>,
+    /// The Distribution Centre's current CA-CRL, `(sequence, entries)`, once issued.
+    pub dc_ca_crl: Option<(u32, u32)>,
+    /// The CA-CRL sequence each station holds from the Distribution Centre.
+    pub installed_ca_crl_seq: BTreeMap<NodeId, u32>,
+    /// Fetches the Distribution Centre answered.
+    pub dc_fetches: u64,
+    /// Of those, how many were answered "current" (nothing newer to send).
+    pub dc_not_modified: u64,
     /// How many reports the Misbehaviour Authority has received about each subject.
     pub reports: BTreeMap<NodeId, u32>,
     /// How many reports went through the optional pre-processing stage.
@@ -1109,6 +1213,12 @@ impl EtsiRun {
             ctl_sequence: 0,
             installed_ctl: BTreeMap::new(),
             installed_ca_crl: BTreeMap::new(),
+            ca_crl_sequence: 0,
+            dc_ectl: None,
+            dc_ca_crl: None,
+            installed_ca_crl_seq: BTreeMap::new(),
+            dc_fetches: 0,
+            dc_not_modified: 0,
             reports: BTreeMap::new(),
             pre_processed: 0,
             kernel,
@@ -1271,6 +1381,77 @@ impl EtsiRun {
             Ts102941Msg::CaCrlPublish { entries, station },
             FlowId::EtsiCaCrl,
             run,
+        );
+        run
+    }
+
+    /// Signs a new ECTL at the TLM and a new CA-CRL at the Root CA, for the Distribution
+    /// Centre to serve from `at` onwards (TS 102 941 §6.3.1-6.3.5). Each list is signed
+    /// once and served to every station that asks, as a real TLM and Root CA do;
+    /// [`EtsiRun::publish_ectl`] re-signs per station and is kept for the direct-push
+    /// latency measurement.
+    pub fn issue_trust_lists(&mut self, at: SimTime) -> (FlowRun, FlowRun) {
+        let at = at.max(self.kernel.now());
+        self.ctl_sequence = self.ctl_sequence.saturating_add(1);
+        self.ca_crl_sequence = self.ca_crl_sequence.saturating_add(1);
+        let lists = [
+            (
+                self.nodes.tlm,
+                TrustListKind::Ectl,
+                self.ctl_sequence,
+                self.params.ctl_entries,
+            ),
+            (
+                self.nodes.rca,
+                TrustListKind::CaCrl,
+                self.ca_crl_sequence,
+                self.params.ca_crl_entries,
+            ),
+        ];
+        let mut runs = [FlowRun(0); 2];
+        for (k, (signer, kind, sequence, entries)) in lists.into_iter().enumerate() {
+            let run = self.new_run();
+            runs[k] = run;
+            self.kernel.inject_at(
+                at,
+                Delivery {
+                    at,
+                    from: signer,
+                    to: signer,
+                    msg: Ts102941Msg::TrustListIssue {
+                        kind,
+                        sequence,
+                        entries,
+                    },
+                    flow: FlowId::EtsiTrustIssue,
+                    run,
+                },
+            );
+        }
+        (runs[0], runs[1])
+    }
+
+    /// A station asks the Distribution Centre for whatever is newer than what it holds,
+    /// at `at`, over the access link [`EtsiRun::set_access`] gave it.
+    pub fn fetch_trust_lists(&mut self, station: NodeId, at: SimTime) -> FlowRun {
+        let run = self.new_run();
+        let at = at.max(self.kernel.now());
+        let ctl_have = self.installed_ctl.get(&station).copied().unwrap_or(0);
+        let crl_have = self.installed_ca_crl_seq.get(&station).copied().unwrap_or(0);
+        self.kernel.inject_at(
+            at,
+            Delivery {
+                at,
+                from: station,
+                to: station,
+                msg: Ts102941Msg::TrustListRequest {
+                    station,
+                    ctl_have,
+                    crl_have,
+                },
+                flow: FlowId::EtsiTrustFetch,
+                run,
+            },
         );
         run
     }
@@ -1871,6 +2052,126 @@ impl EtsiRun {
                 self.installed_ca_crl.insert(station, entries);
                 out.stage_at(StageId::Processed, station, None, flow, run);
                 out.stage_at(StageId::Enforced, station, None, flow, run);
+            }
+
+            // --- §6.3.3, the Distribution Centre ------------------------------------
+            Ts102941Msg::TrustListIssue {
+                kind,
+                sequence,
+                entries,
+            } if to != n.cpoc => {
+                sign(out, 1);
+                let size = match kind {
+                    TrustListKind::Ectl => self.sizes.ectl(entries),
+                    TrustListKind::CaCrl => self.sizes.ca_crl(entries),
+                };
+                out.stage_at(StageId::Issued, to, Some(size.bytes()), flow, run);
+                out.send(
+                    n.cpoc,
+                    Ts102941Msg::TrustListIssue {
+                        kind,
+                        sequence,
+                        entries,
+                    },
+                    match kind {
+                        TrustListKind::Ectl => "etsi-ectl-publish",
+                        TrustListKind::CaCrl => "etsi-ca-crl-publish",
+                    },
+                    size,
+                    Transport::BackendNet,
+                    flow,
+                    run,
+                );
+            }
+            Ts102941Msg::TrustListIssue {
+                kind,
+                sequence,
+                entries,
+            } => {
+                // The DC checks the signer's signature before it serves the list.
+                verify(out, 1);
+                let slot = match kind {
+                    TrustListKind::Ectl => &mut self.dc_ectl,
+                    TrustListKind::CaCrl => &mut self.dc_ca_crl,
+                };
+                if slot.is_none_or(|(s, _)| s < sequence) {
+                    *slot = Some((sequence, entries));
+                }
+                out.stage_at(StageId::Published, to, None, flow, run);
+            }
+            Ts102941Msg::TrustListRequest {
+                station,
+                ctl_have,
+                crl_have,
+            } if to == station => {
+                out.stage_at(StageId::Requested, station, None, flow, run);
+                out.send(
+                    n.cpoc,
+                    Ts102941Msg::TrustListRequest {
+                        station,
+                        ctl_have,
+                        crl_have,
+                    },
+                    "etsi-trust-list-request",
+                    self.sizes.trust_list_request(),
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            Ts102941Msg::TrustListRequest {
+                station,
+                ctl_have,
+                crl_have,
+            } => {
+                // Serving a signed file is a lookup: the DC signs nothing.
+                let ctl = self.dc_ectl.filter(|(s, _)| *s > ctl_have);
+                let ca_crl = self.dc_ca_crl.filter(|(s, _)| *s > crl_have);
+                self.dc_fetches += 1;
+                let current = ctl.is_none() && ca_crl.is_none();
+                if current {
+                    self.dc_not_modified += 1;
+                }
+                out.send(
+                    station,
+                    Ts102941Msg::TrustListResponse {
+                        station,
+                        ctl,
+                        ca_crl,
+                    },
+                    if current {
+                        "etsi-trust-list-current"
+                    } else {
+                        "etsi-trust-list-response"
+                    },
+                    self.sizes
+                        .trust_list_response(ctl.map(|c| c.1), ca_crl.map(|c| c.1)),
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            Ts102941Msg::TrustListResponse {
+                station,
+                ctl,
+                ca_crl,
+            } => {
+                let bytes = self
+                    .sizes
+                    .trust_list_response(ctl.map(|c| c.1), ca_crl.map(|c| c.1))
+                    .bytes();
+                out.stage_at(StageId::Downloaded, station, Some(bytes), flow, run);
+                if let Some((sequence, entries)) = ctl {
+                    // The TLM's signature and one per Root CA entry, as for a pushed list.
+                    verify(out, 1 + entries);
+                    self.installed_ctl.insert(station, sequence);
+                }
+                if let Some((sequence, entries)) = ca_crl {
+                    verify(out, 1);
+                    self.installed_ca_crl.insert(station, entries);
+                    self.installed_ca_crl_seq.insert(station, sequence);
+                }
+                out.stage_at(StageId::Processed, station, None, flow, run);
             }
 
             // --- TS 103 759, misbehaviour reporting -------------------------------

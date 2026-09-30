@@ -427,6 +427,11 @@ struct NodeSec {
     /// ETSI butterfly: the i-period of a batch waiting at the EA, and whether its
     /// download has been asked for.
     etsi_batch: Option<(u32, bool)>,
+    /// ETSI: when this station next asks the Distribution Centre for the ECTL and the
+    /// CA-CRL, and the fetch in flight.
+    next_trust_fetch: SimTime,
+    /// The fetch in flight, with the ECTL and CA-CRL sequences held when it started.
+    trust_fetch: Option<(FlowRun, u32, u32)>,
 }
 
 /// Counters the run report carries for this path.
@@ -509,6 +514,11 @@ pub struct Phase2Report {
     /// CRL frames a vehicle discarded because their entries were not the CRL
     /// Generator's signed list (a compromised roadside unit's forgery).
     pub crl_frames_rejected: u64,
+    /// ETSI: fetches of the ECTL and the CA-CRL from the Distribution Centre that
+    /// completed, and of those, how many installed a newer list.
+    pub trust_fetches: u64,
+    /// See [`Phase2Report::trust_fetches`].
+    pub trust_lists_installed: u64,
     /// Roadside units under an attacker's control (`threats.compromised_rsus`).
     pub compromised_rsus: u64,
     /// Relayed reports a compromised unit dropped instead of forwarding.
@@ -903,12 +913,17 @@ impl Phase2 {
             ep.decide_on_report = false;
             ep.at_validity = params.scms.cert_lifetime;
             ep.butterfly_batch = params.jmax;
-            Some(v2xw_proto::etsi::ts102941::EtsiRun::new(ep).map_err(|e| {
+            let mut run = v2xw_proto::etsi::ts102941::EtsiRun::new(ep).map_err(|e| {
                 conflict(
                     "security.protocol",
                     format!("the ETSI deployment refused to start: {e}"),
                 )
-            })?)
+            })?;
+            // The TLM's ECTL and the Root CA's CA-CRL exist before any station asks for
+            // them: both are signed once, at the start, and served by the Distribution
+            // Centre to every station that fetches (TS 102 941 §6.3).
+            run.issue_trust_lists(0);
+            Some(run)
         } else {
             None
         };
@@ -1247,6 +1262,9 @@ impl Phase2 {
                     last_period: start + self.params.pool_periods.saturating_sub(1),
                     next_crl_fetch: SimTime::MAX,
                     enrolment_until: SimTime::MAX,
+                    // A station checks the Distribution Centre when it joins, then on the
+                    // fetch interval.
+                    next_trust_fetch: now,
                     ..NodeSec::default()
                 },
             );
@@ -1929,6 +1947,42 @@ impl Phase2 {
         }
     }
 
+    /// ETSI stations due to ask the Distribution Centre for the ECTL and the CA-CRL, with
+    /// the access to use. Advances each one's next fetch by `crl_fetch_interval_s`, which
+    /// under the CCMS is the interval of this fetch (the CCMS has no vehicle CRL).
+    pub fn trust_fetches_due(&mut self, now: SimTime) -> Vec<(NodeId, AccessKind)> {
+        if self.etsi.is_none() {
+            return Vec::new();
+        }
+        let interval = self.params.crl_fetch_interval;
+        let mut out = Vec::new();
+        for (node, n) in &mut self.nodes {
+            if n.trust_fetch.is_some() || n.next_trust_fetch > now {
+                continue;
+            }
+            n.next_trust_fetch = interval.after(now);
+            out.push((*node, n.access.unwrap_or(AccessKind::Offline)));
+        }
+        out
+    }
+
+    /// Starts one station's Distribution Centre fetch over `link`.
+    pub fn start_trust_fetch(&mut self, node: NodeId, link: v2xw_proto::Link, now: SimTime) {
+        let Some(etsi) = self.etsi.as_mut() else {
+            return;
+        };
+        let device = device_of(node);
+        etsi.set_access(device, link);
+        let held = (
+            etsi.installed_ctl.get(&device).copied().unwrap_or(0),
+            etsi.installed_ca_crl_seq.get(&device).copied().unwrap_or(0),
+        );
+        let run = etsi.fetch_trust_lists(device, now);
+        if let Some(n) = self.nodes.get_mut(&node) {
+            n.trust_fetch = Some((run, held.0, held.1));
+        }
+    }
+
     /// Vehicles whose enrolment certificate is within the renewal lead of expiring and
     /// that are not already renewing, with the access to use.
     pub fn reenrolments_due(&mut self, now: SimTime) -> Vec<(NodeId, AccessKind)> {
@@ -2009,6 +2063,10 @@ impl Phase2 {
                     e.set("certificates_topped_up", r.certs_topped_up);
                     e.set("pseudonym_changes", r.pseudonym_changes);
                     e.set("reenrolments_completed", r.reenrolments_completed);
+                    if self.etsi.is_some() {
+                        e.set("trust_fetches", r.trust_fetches);
+                        e.set("trust_lists_installed", r.trust_lists_installed);
+                    }
                     e.set("vehicles_starved", r.vehicles_starved);
                     e.set("crl_installs", r.crls_installed);
                     e.set("revoked_receptions", r.revoked_receptions);
@@ -2234,6 +2292,31 @@ impl Phase2 {
                 decided: t,
                 blocked: None,
             });
+        }
+        // Distribution Centre fetches that came back.
+        let fetched: Vec<(NodeId, bool)> = {
+            let etsi = self.etsi.as_ref().expect("checked");
+            self.nodes
+                .iter()
+                .filter_map(|(node, n)| {
+                    let (run, ctl, crl) = n.trust_fetch?;
+                    etsi.kernel.stages.at(run, StageId::Processed)?;
+                    let device = device_of(*node);
+                    let newer = etsi.installed_ctl.get(&device).copied().unwrap_or(0) > ctl
+                        || etsi.installed_ca_crl_seq.get(&device).copied().unwrap_or(0) > crl;
+                    Some((*node, newer))
+                })
+                .collect()
+        };
+        for (node, newer) in fetched {
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.trust_fetch = None;
+            }
+            self.report.trust_fetches += 1;
+            if newer {
+                self.report.trust_lists_installed += 1;
+                tick.events.push((node, "trust-list-installed"));
+            }
         }
         // Butterfly top-ups: once the EA holds the certified batch, the station asks for
         // it; a blocklisted station's download is answered empty (passive revocation).

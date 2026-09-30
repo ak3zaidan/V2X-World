@@ -615,7 +615,7 @@ pub fn telemetry_json(row: NodeTelemetry) -> Value {
 
 /// Every role id `inspect.entity` answers for: `backend` (the whole diagram), the SCMS's
 /// and the CCMS's authorities, the roadside units and the pooled devices.
-pub const ROLES: [&str; 25] = [
+pub const ROLES: [&str; 24] = [
     "backend",
     "manager",
     "pg",
@@ -640,7 +640,6 @@ pub const ROLES: [&str; 25] = [
     "aa",
     "rsu",
     "ee",
-    "attacker",
 ];
 
 /// `inspect.entity`'s answer from one `backend.state` snapshot (`v2xw_proto::view`):
@@ -695,4 +694,53 @@ pub fn entity_answer(
         out["queue"] = e["queue"].clone();
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod entity_tests {
+    use super::*;
+
+    fn view() -> Value {
+        json!({
+            "system": "scms",
+            "t": 3_000_000_000u64,
+            "entities": [
+                {"id": "ra", "name": "Registration Authority", "online": true, "node": 7,
+                 "state": {"requests": 4}, "traffic": {}, "ops": {},
+                 "queue": {"depth": 1}},
+                {"id": "pca", "name": "Pseudonym CA", "online": true, "node": null,
+                 "state": {"certs_issued": 12}, "traffic": {}, "ops": {}, "queue": null},
+            ],
+            "edges": [
+                {"from": "lop", "to": "ra", "messages": 3},
+                {"from": "ra", "to": "pca", "messages": 2},
+                {"from": "la1", "to": "la2", "messages": 1},
+            ],
+            "recent": [
+                {"from": "ra", "to": "pca", "step": "a"},
+                {"from": "la1", "to": "la2", "step": "b"},
+            ],
+        })
+    }
+
+    #[test]
+    fn an_entity_answer_carries_its_state_and_only_its_own_flows() {
+        let v = view();
+        let ra = entity_answer("ra", 3, &v, 10, Vec::new()).expect("ra is in the view");
+        assert_eq!(ra["state"]["requests"], 4);
+        assert_eq!(ra["node"], 7);
+        assert_eq!(ra["queue"]["depth"], 1);
+        assert_eq!(ra["flows"].as_array().map(Vec::len), Some(2));
+        assert_eq!(ra["recent"].as_array().map(Vec::len), Some(1));
+        let pca = entity_answer("pca", 3, &v, 10, Vec::new()).expect("pca");
+        assert!(pca.get("node").is_none() && pca.get("queue").is_none());
+        // The whole diagram, and an entity this system does not have.
+        let all = entity_answer("backend", 3, &v, 10, Vec::new()).expect("backend");
+        assert_eq!(all["state"]["entities"].as_array().map(Vec::len), Some(2));
+        assert!(entity_answer("ea", 3, &v, 10, Vec::new()).is_none());
+        // Every role the views publish is one the method accepts.
+        for id in ["ra", "pca", "backend", "ea", "aa", "tlm", "cpoc", "rsu", "ee"] {
+            assert!(ROLES.contains(&id), "{id}");
+        }
+    }
 }

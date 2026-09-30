@@ -185,11 +185,11 @@ fn the_etsi_plug_in_declares_both_halves_of_its_revocation() {
 }
 
 #[test]
-fn the_etsi_plug_in_describes_all_seven_of_its_flows() {
+fn the_etsi_plug_in_describes_all_nine_of_its_flows() {
     let etsi = EtsiTs102941::default();
     assert_eq!(etsi.flows().len(), 2, "the two the skeleton started with");
-    assert_eq!(etsi.deferred_flows().len(), 5);
-    assert_eq!(etsi.all_flows().len(), 7);
+    assert_eq!(etsi.deferred_flows().len(), 7);
+    assert_eq!(etsi.all_flows().len(), 9);
     assert_eq!(etsi.roles().len(), 6);
     assert_eq!(etsi.credential_types().len(), 2);
     // Every framing parameter a message size rests on is on the card with a plan, which is

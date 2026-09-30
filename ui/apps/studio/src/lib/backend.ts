@@ -212,6 +212,13 @@ export function formatBytes(b: number): string {
   return `${(b / 1_000_000).toFixed(2)} MB`;
 }
 
+/** The panel's heading for a snapshot's `system`. */
+export function systemTitle(system: string): string {
+  if (system === "scms") return "US SCMS (IEEE 1609.2.1, CAMP and USDOT design)";
+  if (system === "ccms") return "European CCMS (ETSI TS 102 941)";
+  return system === "" ? "Backend" : system;
+}
+
 /** A simulated instant, ns, as seconds with one decimal. */
 export function formatT(ns: number): string {
   return `${(ns / 1e9).toFixed(1)} s`;
