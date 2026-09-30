@@ -1093,6 +1093,16 @@ impl ScmsRun {
         let saved = self.state.params;
         self.state.params.shuffle_window = Duration::ZERO;
         self.state.params.first_batch_delay = Duration::ZERO;
+        // The RA's request shuffle belongs to the run's kernel. Provisioning jobs of devices
+        // topping up *in the run* may be waiting in it, with its timer armed on the run's
+        // kernel: left there, this device's job joined that queue, no timer fired on the
+        // scratch kernel, its download polls ran out and it joined the road with no
+        // certificate at all (13 of 218 vehicles at 6,000 veh/h on credential-lifecycle,
+        // no error raised) — and a flush on the scratch kernel would have released the run's
+        // jobs where the run never sees them. The scratch run gets an empty shuffle; the
+        // run's queue and its timer are put back untouched.
+        let run_jobs = core::mem::take(&mut self.state.ra.jobs);
+        let run_armed = core::mem::replace(&mut self.state.ra.shuffle_armed, false);
         self.enrol_at(device, 0);
         let mut outcome = Self::drain_into(&mut self.state, &mut self.kernel);
         if outcome.is_ok() {
@@ -1102,6 +1112,9 @@ impl ScmsRun {
         }
         core::mem::swap(&mut self.kernel, &mut real);
         self.state.params = saved;
+        let leftover = core::mem::replace(&mut self.state.ra.jobs, run_jobs);
+        self.state.ra.jobs.extend(leftover);
+        self.state.ra.shuffle_armed = run_armed;
         outcome
     }
 
