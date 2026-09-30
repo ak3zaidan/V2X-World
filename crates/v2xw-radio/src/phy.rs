@@ -139,7 +139,18 @@ pub enum SensitivityPreset {
     EtsiDynamic,
     /// Cohda MK5 module datasheet Table 2: about 5-7 dB better than the ETSI minimum.
     CohdaMk5,
+    /// Fielded on-board units as an independent lab measured them: −90.5 to −93.5 dBm at
+    /// 6 Mbit/s for a Savari MW1000 (Qualcomm QCA6584) and a Cohda unit (Qualcomm,
+    /// "C-V2X Technical Performance FAQ", 80-PE732-67 Rev. A, §5 Q4), the midpoint −92 dBm
+    /// — [`MEASURED_OBU_MARGIN_DB`] better than EN 302 663's static minimum. The other
+    /// rates keep the standard's spacing, shifted by the same margin, because only the
+    /// 6 Mbit/s figure is published. The engine's default: it is what a deployed unit does.
+    MeasuredObu,
 }
+
+/// How much better than EN 302 663's static minimum a fielded OBU receives at 6 Mbit/s,
+/// dB: the midpoint of the independently measured −90.5 to −93.5 dBm against −88 dBm.
+pub const MEASURED_OBU_MARGIN_DB: f64 = 4.0;
 
 impl SensitivityPreset {
     /// The sensitivity for one MCS, dBm.
@@ -149,6 +160,9 @@ impl SensitivityPreset {
             SensitivityPreset::EtsiStatic => mcs.sensitivity_static_dbm(),
             SensitivityPreset::EtsiDynamic => mcs.sensitivity_dynamic_dbm(),
             SensitivityPreset::CohdaMk5 => mcs.sensitivity_cohda_mk5_dbm(),
+            SensitivityPreset::MeasuredObu => {
+                mcs.sensitivity_static_dbm() - MEASURED_OBU_MARGIN_DB
+            }
         }
     }
 
@@ -159,6 +173,7 @@ impl SensitivityPreset {
             SensitivityPreset::EtsiStatic => "etsi-static",
             SensitivityPreset::EtsiDynamic => "etsi-dynamic",
             SensitivityPreset::CohdaMk5 => "cohda-mk5",
+            SensitivityPreset::MeasuredObu => "measured-obu",
         }
     }
 }
@@ -1104,7 +1119,12 @@ impl OfdmPhy {
                         .fold(f64::INFINITY, f64::min)
                         >= cp_th_db
                 {
-                    return RxOutcome::Lost(LossCause::Jammed);
+                    return RxOutcome::Lost(self.jamming.loss_cause(
+                        arrival.rx,
+                        arrival.frame.channel,
+                        arrival.start,
+                        arrival.end,
+                    ));
                 }
                 return RxOutcome::Lost(if has_interference {
                     self.interference_cause(arrival)
@@ -1136,7 +1156,12 @@ impl OfdmPhy {
             if jammed {
                 let psr_clean = self.success_probability_with(arrival, false);
                 if draw >= 1.0 - psr_clean {
-                    return RxOutcome::Lost(LossCause::Jammed);
+                    return RxOutcome::Lost(self.jamming.loss_cause(
+                        arrival.rx,
+                        arrival.frame.channel,
+                        arrival.start,
+                        arrival.end,
+                    ));
                 }
             }
             return RxOutcome::Lost(if has_interference {
@@ -1229,6 +1254,7 @@ fn phy_card(sensitivity: SensitivityPreset, rx_impl_loss_db: f64) -> ModelCard {
                 serde_json::json!("etsi-static"),
                 serde_json::json!("etsi-dynamic"),
                 serde_json::json!("cohda-mk5"),
+                serde_json::json!("measured-obu"),
             ]),
             source: en302663(),
             calibration: None,
@@ -2135,6 +2161,7 @@ mod tests {
             SensitivityPreset::EtsiStatic,
             SensitivityPreset::EtsiDynamic,
             SensitivityPreset::CohdaMk5,
+            SensitivityPreset::MeasuredObu,
         ] {
             OfdmPhy::new(Tier::High)
                 .with_sensitivity(preset)

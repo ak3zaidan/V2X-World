@@ -298,6 +298,18 @@ impl JamArrival {
     }
 }
 
+/// The first source id of an adjacent-channel emitter (`radio.adjacent_channel`): an
+/// emitter on another channel whose leakage enters this channel's receivers the way a
+/// jammer's energy does. Its source ids count up from here, above every jammer's, so a
+/// loss can be attributed to the one or the other ([`JammingField::loss_cause`]).
+pub const ADJACENT_CHANNEL_SOURCE_BASE: u32 = 0xF800_0000;
+
+/// True for the source id of an adjacent-channel emitter rather than a jammer.
+#[must_use]
+pub const fn is_adjacent_channel_source(source: NodeId) -> bool {
+    source.index() >= ADJACENT_CHANNEL_SOURCE_BASE
+}
+
 /// The jamming every receiver is exposed to, as the engine declares it.
 ///
 /// Held by the PHY ([`crate::phy::OfdmPhy::jamming_mut`]) and read by the SINR path. Keyed
@@ -365,6 +377,29 @@ impl JammingField {
         self.at(rx)
             .iter()
             .any(|a| a.channel == ch && a.window.overlaps(from, to))
+    }
+
+    /// What a frame killed by this energy on the counterfactual is lost to: an
+    /// adjacent-channel emitter when every source overlapping `[from, to)` on `ch` at
+    /// `rx` is one, a jammer otherwise.
+    #[must_use]
+    pub fn loss_cause(
+        &self,
+        rx: NodeId,
+        ch: ChannelId,
+        from: SimTime,
+        to: SimTime,
+    ) -> crate::types::LossCause {
+        let mut sources = self
+            .at(rx)
+            .iter()
+            .filter(|a| a.channel == ch && a.window.overlaps(from, to))
+            .peekable();
+        if sources.peek().is_some() && sources.all(|a| is_adjacent_channel_source(a.jammer)) {
+            crate::types::LossCause::AdjacentChannel
+        } else {
+            crate::types::LossCause::Jammed
+        }
     }
 
     /// The total jamming power at `rx` on `ch` over `[from, to)`, milliwatts, summed in

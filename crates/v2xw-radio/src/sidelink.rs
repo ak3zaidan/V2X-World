@@ -720,6 +720,35 @@ impl PoolConfig {
         self.bandwidth_prb / self.subchannel_prb
     }
 
+    /// The energy a transmission on `res`, received at `power_dbm` in total, puts into
+    /// each sub-channel of the pool outside its allocation: its in-band emission, at the
+    /// attenuation [`IbeMask`] gives the separation. `(sub-channel, dBm)`, in sub-channel
+    /// order; empty when the mask models no emission.
+    ///
+    /// This is what a receiver's S-RSSI measures there, because TS 36.214 §5.1.28 defines
+    /// S-RSSI as the *total* received power in the sub-channel, whatever put it there: a
+    /// strong neighbour's leakage makes a sub-channel it does not use read busy, and the
+    /// channel busy ratio counts it. The SINR path charges the same leakage
+    /// (`SidelinkPhy::interference_split`), so the receiver's measurement and its
+    /// decoding see one channel. Leakage more than 30 dB under the −94 dBm busy
+    /// threshold is dropped: it could not move a sum across the threshold.
+    #[must_use]
+    pub fn emission_into(&self, res: SlResource, power_dbm: f64) -> Vec<(u32, f64)> {
+        if self.ibe.is_off() || power_dbm - self.ibe.adjacent_db < CBR_SRSSI_THRESHOLD_DBM - 30.0 {
+            return Vec::new();
+        }
+        let end = res.subch + res.len;
+        (0..self.subchannels())
+            .filter(|&sc| sc < res.subch || sc >= end)
+            .filter_map(|sc| {
+                let sep = if sc < res.subch { res.subch - sc } else { sc + 1 - end };
+                let att = self.ibe.attenuation_db(sep);
+                (att.is_finite() && power_dbm - att >= CBR_SRSSI_THRESHOLD_DBM - 30.0)
+                    .then_some((sc, power_dbm - att))
+            })
+            .collect()
+    }
+
     /// PRB one sub-channel gives the shared channel, after the control channel takes its
     /// share.
     ///

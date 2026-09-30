@@ -160,8 +160,12 @@ impl SpsParams {
     }
 
     /// The SAE J3161/1 LTE-V2X deployment profile's SPS: 10 Hz BSMs with a 100 ms
-    /// reservation, `probResourceKeep` 0.8, and the J3161/1 CR limits enforced
-    /// ([`crate::sidelink::CrLimitTable::SAE_J3161`]).
+    /// reservation, `probResourceKeep` 0.8, the J3161/1 CR limits enforced
+    /// ([`crate::sidelink::CrLimitTable::SAE_J3161`]), and one blind retransmission:
+    /// "each packet is transmitted twice when HARQ is turned ON, per the 3GPP
+    /// specification", as every deployed-profile test ran it (5GAA P-190033 Table 32,
+    /// "Blind HARQ: Yes"; Qualcomm 80-PE732-67 §4 Q5). The CR limits give it up first
+    /// when the channel is congested, which is the adaptation Qualcomm describes.
     ///
     /// The keep probability and the CR limits are J3161/1's, second-hand (Abrar et al.
     /// 2026, arXiv 2608.05087). The sensing window, `T1`, `T2` and the RSRP threshold are
@@ -172,6 +176,7 @@ impl SpsParams {
         Self {
             prob_keep: ProbResourceKeep::P080,
             cc: Some(crate::sidelink::CrLimitTable::SAE_J3161),
+            max_transmissions: 2,
             ..Self::molina_masegosa(10)
         }
     }
@@ -2517,7 +2522,7 @@ mod tests {
             assert_eq!(e.retransmissions(node), 1);
         }
         // The counterexample: without retransmissions, one grant.
-        let mut e = j3161(SpsParams::sae_j3161());
+        let mut e = j3161(SpsParams::sae_j3161().with_max_transmissions(1));
         let mut ctx = TestCtx::new(1);
         Mac::enqueue(&mut e, &mut ctx, node, sdu(200, 0), AccessCategory::Vi).expect("fits");
         assert_eq!(grants(&mut e, &mut ctx, node, 0, 200).len(), 1);

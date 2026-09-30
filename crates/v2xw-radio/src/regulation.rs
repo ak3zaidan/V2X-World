@@ -640,6 +640,52 @@ pub fn acir_db(aclr_db: f64, acs_db: f64) -> f64 {
     -10.0 * math::log10(math::pow(10.0, -aclr_db / 10.0) + math::pow(10.0, -acs_db / 10.0))
 }
 
+/// The ACIR between a transmitter of `aggressor` on channel `aggressor_ch` and a receiver
+/// of `victim` on channel `victim_ch`, both where `region` allows them: the aggressor's
+/// mask leakage into the victim's channel ([`SpectrumMask::aclr_db`]) combined with the
+/// victim's selectivity ([`acs_db`], the alternate-channel figure once the channels are a
+/// whole channel apart) by [`acir_db`]. `victim_mcs_index` is the 802.11p rate index
+/// (0-7); a sidelink ignores it.
+///
+/// These are the rules' and the standards' *minimum* figures, so the ratio is the worst
+/// a conformant pair of radios may show: fielded hardware does better (the 5GAA P-190033
+/// adjacent-channel field test is the reference, `sweep::field`).
+///
+/// # Errors
+/// Why the pair is not an adjacent-channel pair: the region does not allow a technology
+/// on its channel, or the channels overlap, which is co-channel interference.
+pub fn adjacent_acir_db(
+    region: Region,
+    aggressor: Technology,
+    aggressor_ch: u16,
+    victim: Technology,
+    victim_ch: u16,
+    victim_mcs_index: u8,
+) -> Result<f64, String> {
+    let a = region.rule(aggressor, aggressor_ch).ok_or_else(|| {
+        format!(
+            "{} does not allow {aggressor:?} on channel {aggressor_ch} (it allows it on {:?})",
+            region.id(),
+            region.channels_for(aggressor)
+        )
+    })?;
+    let v = region
+        .rule(victim, victim_ch)
+        .ok_or_else(|| format!("{} does not allow {victim:?} on channel {victim_ch}", region.id()))?;
+    let gap = v.channel.edge_gap_mhz(&a.channel);
+    if gap < 0.0 {
+        return Err(format!(
+            "channel {aggressor_ch} overlaps the run's channel {victim_ch}: that is \
+             co-channel interference, which threats.jammers models"
+        ));
+    }
+    let victim_bw = v.channel.bandwidth_mhz();
+    let aclr = region.mask(aggressor).aclr_db(victim_bw, gap);
+    let alternate = gap >= a.channel.bandwidth_mhz() - 1e-9;
+    let acs = acs_db(victim, victim_bw, victim_mcs_index, alternate);
+    Ok(acir_db(aclr, acs))
+}
+
 /// The most a station may radiate on a channel, dBm EIRP.
 ///
 /// * An RSU gets the channel's limit, less `20·log10(h/8)` dB when its antenna is above
@@ -783,6 +829,30 @@ pub const REGULATION_ID: &str = "radio/regulation";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Europe's side-by-side deployment: ITS-G5 on 180 beside LTE-V2X on 182. The
+    /// ITS-G5 receiver's 6 Mbit/s adjacent-channel rejection (13 dB, EN 302 571 Table 8)
+    /// dominates the LTE-V2X transmitter's 30 dB ACLR, so ACIR is just under 13 dB; the
+    /// LTE-V2X receiver's 33 dB ACS and the 802.11p mask's leakage give about 30 dB the
+    /// other way. Overlapping channels and channels a region forbids are refused.
+    #[test]
+    fn the_adjacent_channel_ratio_is_the_masks_and_the_selectivity_combined() {
+        use Technology::{Ieee80211p, LteV2x, NrV2x};
+        let g5_victim = adjacent_acir_db(Region::Eu, LteV2x, 182, Ieee80211p, 180, 2).unwrap();
+        let want = acir_db(30.0, 13.0);
+        assert!((g5_victim - want).abs() < 0.2, "{g5_victim} against {want}");
+        assert!(g5_victim < 13.0 && g5_victim > 12.5, "{g5_victim}");
+        let lte_victim = adjacent_acir_db(Region::Eu, Ieee80211p, 180, LteV2x, 182, 0).unwrap();
+        assert!(lte_victim > 25.0 && lte_victim < 33.0, "{lte_victim}");
+        // One channel further out, the alternate-channel figures apply and it grows.
+        let alt = adjacent_acir_db(Region::Eu, NrV2x, 178, Ieee80211p, 182, 2);
+        assert!(alt.is_err() || alt.unwrap() > g5_victim, "alternate channel");
+        let g5_alt = adjacent_acir_db(Region::Eu, LteV2x, 182, Ieee80211p, 178, 2);
+        assert!(g5_alt.is_err() || g5_alt.unwrap() > g5_victim);
+        // Co-channel is not adjacent; the US gives DSRC no channel.
+        assert!(adjacent_acir_db(Region::Eu, LteV2x, 180, Ieee80211p, 180, 2).is_err());
+        assert!(adjacent_acir_db(Region::Us, Ieee80211p, 180, LteV2x, 183, 0).is_err());
+    }
 
     #[test]
     fn the_us_band_plan_is_fcc_24_123s() {

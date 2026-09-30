@@ -612,6 +612,11 @@ pub enum LossCause {
     InBandEmission,
     /// Two sidelink transmitters selected the same resource (04-models.md §5).
     ResourceCollision,
+    /// Energy leaking in from a transmitter on an adjacent channel — another technology
+    /// the region lets operate beside this one (`radio.adjacent_channel`): its spectrum
+    /// mask's leakage and this receiver's imperfect selectivity. Attributed on the same
+    /// counterfactual as [`LossCause::Jammed`].
+    AdjacentChannel,
     /// The abstract tier's Bernoulli draw said "not received" and the tier models no
     /// mechanism finer than that.
     Abstract,
@@ -632,6 +637,7 @@ impl LossCause {
             LossCause::Fading => "fading",
             LossCause::InBandEmission => "in-band-emission",
             LossCause::ResourceCollision => "resource-collision",
+            LossCause::AdjacentChannel => "adjacent-channel",
             LossCause::Abstract => "abstract",
         }
     }

@@ -268,6 +268,23 @@ impl SidelinkPhy {
         self
     }
 
+    /// The PHY with its received-power cutoff: `Some(dBm)` loses every copy weaker than
+    /// that (the Gonzalez-Martin decomposition's `P_SEN`, at TS 36.101's
+    /// [`SIDELINK_SENSITIVITY_DBM`] by default), `None` leaves the decision to the
+    /// block-error curve alone.
+    ///
+    /// TS 36.101's figure is a conformance *requirement* — a throughput a receiver must at
+    /// least reach at that power — and fielded receivers decode far below it: the 5GAA
+    /// P-190033 cabled AWGN test (§7.2.4, Table 13) delivered 90 % of 193 B MCS 5 blocks
+    /// from a Qualcomm MDM9150 at a per-antenna SNR of −4.3 dB over the 20-PRB
+    /// allocation, about 13 dB below −90.4 dBm at a 9 dB noise figure. The engine runs
+    /// `None`; the cutoff stays for the analytical decomposition that is defined with it.
+    #[must_use]
+    pub fn with_sensitivity_dbm(mut self, cutoff: Option<f64>) -> Self {
+        self.sensitivity_dbm = cutoff.unwrap_or(f64::NEG_INFINITY);
+        self
+    }
+
     /// The PHY with a caller-chosen noise figure.
     #[must_use]
     pub fn with_noise_figure_db(mut self, nf: f64) -> Self {
