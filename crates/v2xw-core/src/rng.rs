@@ -683,13 +683,14 @@ type Shard = BTreeMap<Key, Slot>;
 /// A ChaCha12 stream in use carries a four-block keystream buffer and is 312 bytes. Most
 /// keys are directed radio links, one per pair of nodes that ever heard each other — up to
 /// n(n − 1) of them, 1.56 million on the 1,250-vehicle TR 36.885 drop — each drawn a few
-/// words at a time. A link's stream is therefore **parked** between checkouts as its key
-/// and word position (a 64-byte slot) and resumed with [`RngStream::set_word_pos`]. The
-/// keystream is a pure function of the key and the position, so a parked stream continues
-/// with exactly the words the live one would have produced
-/// (`a_parked_stream_continues_word_for_word`); only the memory and the cost of a checkout
-/// differ. Every other key — an actor's, a node's — is checked out many times a second by
-/// one owner and stays live.
+/// words at a time. Once a shard holds more than [`LIVE_SLOTS_PER_SHARD`] entries, a link's
+/// stream is therefore **parked** between checkouts as its key and word position (a 64-byte
+/// slot) and resumed with [`RngStream::set_word_pos`]. The keystream is a pure function of
+/// the key and the position, so a parked stream continues with exactly the words the live
+/// one would have produced (`a_parked_stream_continues_word_for_word`); only the memory and
+/// the cost of a checkout differ — a resume regenerates the four-block buffer, which a run
+/// with a few thousand links should not pay for. Every other key — an actor's, a node's —
+/// is checked out many times a second by one owner and stays live.
 #[derive(Debug, Clone)]
 enum Slot {
     /// Checked out by an [`RngGuard`]: how a second, concurrent checkout of the same key is
@@ -702,9 +703,10 @@ enum Slot {
 }
 
 impl Slot {
-    /// The slot a stream returning from a checkout goes back into.
-    fn keep(entity: EntityRef, stream: RngStream) -> Self {
-        if matches!(entity, EntityRef::Link(_)) {
+    /// The slot a stream returning from a checkout goes back into: parked when it is a
+    /// link's and `park_links` says the cache is past its live budget.
+    fn keep(entity: EntityRef, stream: RngStream, park_links: bool) -> Self {
+        if park_links && matches!(entity, EntityRef::Link(_)) {
             Slot::Parked {
                 key: stream.inner.get_seed(),
                 word_pos: stream.word_pos(),
@@ -735,6 +737,14 @@ impl Slot {
 /// almost never waits, and the lock is held only for the `BTreeMap` lookup — never while
 /// a model computes.
 const SHARD_COUNT: usize = 64;
+
+/// How many entries a shard holds before link streams returning to it are parked ([`Slot`]).
+///
+/// 4,096 a shard is 262,144 in all: about 80 MB of live streams, which covers every link of
+/// a run with a few hundred nodes and leaves the parking — and its cost per checkout — to
+/// the dense runs whose link count would otherwise take gigabytes. Affects memory and
+/// speed, never a value.
+const LIVE_SLOTS_PER_SHARD: usize = 4096;
 
 /// The shard a key lives in. Affects locking only, never values.
 fn shard_of(domain: RngDomain, entity: EntityRef) -> usize {
@@ -789,6 +799,8 @@ fn lock(shard: &Mutex<Shard>) -> MutexGuard<'_, Shard> {
 pub struct RngRegistry {
     master_seed: u64,
     shards: Box<[Mutex<Shard>]>,
+    /// [`LIVE_SLOTS_PER_SHARD`], or less in a test that wants every link stream parked.
+    live_per_shard: usize,
 }
 
 impl RngRegistry {
@@ -800,7 +812,16 @@ impl RngRegistry {
                 .map(|_| Mutex::new(Shard::new()))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
+            live_per_shard: LIVE_SLOTS_PER_SHARD,
         }
+    }
+
+    /// The same registry with a smaller live budget, so a test reaches the parked path
+    /// without a million links.
+    #[cfg(test)]
+    fn with_live_per_shard(mut self, live_per_shard: usize) -> Self {
+        self.live_per_shard = live_per_shard;
+        self
     }
 
     /// The run's master seed (recorded in the manifest, 02-architecture.md §6.5).
@@ -971,7 +992,9 @@ impl RngRegistry {
 
     /// Puts a checked-out stream back into its shard.
     fn restore(&self, key: Key, stream: RngStream) {
-        lock(&self.shards[shard_of(key.0, key.1)]).insert(key, Slot::keep(key.1, stream));
+        let mut shard = lock(&self.shards[shard_of(key.0, key.1)]);
+        let park = shard.len() > self.live_per_shard;
+        shard.insert(key, Slot::keep(key.1, stream, park));
     }
 }
 
@@ -979,6 +1002,7 @@ impl Clone for RngRegistry {
     fn clone(&self) -> Self {
         Self {
             master_seed: self.master_seed,
+            live_per_shard: self.live_per_shard,
             shards: self
                 .shards
                 .iter()
@@ -1235,7 +1259,7 @@ mod tests {
     fn a_parked_stream_continues_word_for_word() {
         let link = EntityRef::Link(LinkKey::new(NodeId::new(3), NodeId::new(8)));
         let d = RngDomain::Shadow;
-        let reg = RngRegistry::new(21);
+        let reg = RngRegistry::new(21).with_live_per_shard(0);
         let mut open = RngStream::derive(21, d, link);
         let mut state = 0x9E37_79B9_7F4A_7C15u64;
         for round in 0..400 {
@@ -1271,6 +1295,14 @@ mod tests {
         let _ = reg.checkout(d, node).u64();
         assert!(matches!(
             lock(&reg.shards[shard_of(d, node)]).get(&(d, node)),
+            Some(Slot::Live(_))
+        ));
+        // Under the live budget a link's stream stays live too: a run with a few thousand
+        // links pays no resume.
+        let small = RngRegistry::new(21);
+        let _ = small.checkout(d, link).u64();
+        assert!(matches!(
+            lock(&small.shards[shard_of(d, link)]).get(&(d, link)),
             Some(Slot::Live(_))
         ));
     }
