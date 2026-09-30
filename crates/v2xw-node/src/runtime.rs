@@ -300,6 +300,10 @@ pub struct StepOutcome {
     /// Every received frame whose fate was settled in this step, with the instants of its
     /// journey through the node.
     pub rx_reports: Vec<RxReport>,
+    /// What this step dropped, per cause in [`DropCause::ALL`] order
+    /// ([`crate::queue::DropLedger::take_step`]). The receive-side causes are also on
+    /// `rx_reports`, frame by frame; the transmit and CRL causes are only here.
+    pub drops: [u32; 6],
 }
 
 /// How a node is configured.
@@ -720,6 +724,7 @@ impl ObuRuntime {
         let mut out = StepOutcome::default();
         if self.state == NodeState::Off {
             self.switched_off(believed, inbox, &mut out);
+            out.drops = self.drops.take_step();
             return out;
         }
 
@@ -736,6 +741,7 @@ impl ObuRuntime {
         if self.window.length(now) >= self.config.telemetry_period {
             out.telemetry = Some(self.close_window(ctx, now));
         }
+        out.drops = self.drops.take_step();
         out
     }
 
@@ -758,9 +764,11 @@ impl ObuRuntime {
         let mut out = StepOutcome::default();
         if self.state == NodeState::Off {
             self.switched_off(believed, inbox, &mut out);
+            out.drops = self.drops.take_step();
             return out;
         }
         self.receive(ctx, believed, inbox, &mut out);
+        out.drops = self.drops.take_step();
         out
     }
 

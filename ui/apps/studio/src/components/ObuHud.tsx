@@ -1,14 +1,18 @@
 /**
- * The OBU HUD — the centrepiece of 09-ui §5.
+ * The chase HUD: what the followed radio is doing, in the four things a researcher reads while
+ * following a vehicle — who it is (its pseudonym), its radio (what it sends and hears, the channel
+ * and its neighbours), its credentials (the certificate pool, the next top-up, the CRL) and its
+ * queues — over five sparklines.
  *
- * Layout follows the sketch in that section line for line: identity, then message rates and the
- * verification queue, then compute and storage, then the certificate/peer/CRL stores, then
- * neighbours and the channel, then GNSS and the clock, then evidence and reports, then the
- * sparkline row. Every value comes from the live `Telemetry` frame (§3.5) and is formatted by
- * `lib/telemetry.ts`, which knows each field's wire unit and its "not modelled" sentinel.
+ * It used to be the 09-ui §5 sketch line for line: six rows and 45 values, of which a third read
+ * "n/a" on most runs (the evidence buffer, the HSM, the clock offset…), and a pseudonym line that
+ * said "(indices pending — node.tx)" for a whole SCMS run. Now a value with nothing behind it is not
+ * drawn, a row with nothing in it is not drawn, and the pseudonym's indices come from the node's own
+ * `node.security` row (`lib/security.ts`). Everything the old HUD showed is still in the inspector's
+ * overview, grouped the same way.
  *
- * Every value is a button: clicking it — or tabbing to it and pressing Enter or Space — opens the
- * inspector's "why" tab for that field (09-ui §10, keyboard control).
+ * Every telemetry value is a button: clicking it — or tabbing to it and pressing Enter or Space —
+ * opens the inspector's "why" tab for that field (09-ui §10, keyboard control).
  */
 
 import { useMemo } from "react";
@@ -16,11 +20,16 @@ import { useMemo } from "react";
 import { Sparkline } from "./Sparkline.js";
 import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
-import { NA, durationNs, int, shortDigest, simClock } from "../lib/format.js";
-import { MISSING_FROM_WIRE, SPARKLINE_SERIES, hudGroups, totalDrops, type HudField } from "../lib/telemetry.js";
-import { getPointer } from "../lib/schema.js";
+import { NA, int, shortDigest, simClock } from "../lib/format.js";
+import { SPARKLINE_SERIES, hudGroups, totalDrops, type HudField } from "../lib/telemetry.js";
 import { bearingDeg } from "../lib/feed.js";
 import { toGeodetic } from "../lib/geo.js";
+import { linkText, pseudonymLine, untilText, type NodeSecurityRow } from "../lib/security.js";
+
+/** Whether a field has something to show: not at its "not modelled" sentinel. */
+export function hasData(f: HudField | undefined): f is HudField {
+  return f !== undefined && f.raw !== null && !f.value.includes(NA);
+}
 
 function fieldIndex(fields: HudField[]): Map<string, HudField> {
   const m = new Map<string, HudField>();
@@ -29,18 +38,15 @@ function fieldIndex(fields: HudField[]): Map<string, HudField> {
 }
 
 /**
- * One clickable value. `label` overrides the field's own when the sketch words it differently.
+ * One clickable value, or nothing when the field has no data. `label` overrides the field's own.
  *
- * A real `<button>`, not a `<span onClick>`. There are around 45 of these and each one is the
- * entry point to the inspector's "why" tab, so as bare spans they were unreachable by keyboard
- * (WCAG 2.1 SC 2.1.1) and announced as static text (SC 4.1.2) — while the Inspector's equivalent
- * control, one screen to the right, was already a button. The help text moved out of `title`,
- * which is invisible to keyboard and touch, into a visually-hidden `aria-describedby` target.
+ * A real `<button>`, not a `<span onClick>`: each is the entry point to the inspector's "why" tab,
+ * so it must be reachable by keyboard (WCAG 2.1 SC 2.1.1) and announced as a control (SC 4.1.2).
+ * The help sits in a visually hidden `aria-describedby` target rather than a `title`.
  */
-function Value({ field, label, node }: { field: HudField | undefined; label?: string; node: number | null }): React.JSX.Element {
+function Value({ field, label, node }: { field: HudField | undefined; label?: string; node: number | null }): React.JSX.Element | null {
   const setWhy = useStudio((s) => s.setWhy);
-  if (!field) return <span className="hud-na">{NA}</span>;
-  const isNa = field.value.includes(NA);
+  if (!hasData(field)) return null;
   const name = label ?? field.label;
   const helpId = `hud-help-${field.key}`;
   return (
@@ -62,7 +68,7 @@ function Value({ field, label, node }: { field: HudField | undefined; label?: st
       }
     >
       <span className="k">{name}</span>
-      <span className={isNa ? "hud-na" : "v"}>{field.value}</span>
+      <span className="v">{field.value}</span>
       {field.visibility === "GT" ? <span className="gt-tag">GT</span> : null}
       <span className="sr-only" id={helpId}>
         {field.key} — {field.unit}
@@ -72,50 +78,101 @@ function Value({ field, label, node }: { field: HudField | undefined; label?: st
   );
 }
 
+/** A value that is not a telemetry field (the security row's): shown, not explained. */
+function Plain({ k, v, testId, tone }: { k: string; v: string; testId: string; tone?: "warn" }): React.JSX.Element {
+  return (
+    <span className="hud-field plain" data-testid={testId}>
+      <span className="k">{k}</span>
+      <span className={tone === "warn" ? "v warn-text" : "v"}>{v}</span>
+    </span>
+  );
+}
+
+/** A labelled row, drawn only when something in it is. */
+function Row({ title, testId, children }: { title: string; testId: string; children: (React.JSX.Element | null)[] }): React.JSX.Element | null {
+  if (children.every((c) => c === null)) return null;
+  return (
+    <div className="hud-row" data-testid={testId}>
+      <span className="hud-row-title">{title}</span>
+      {children}
+    </div>
+  );
+}
+
+/** The security row's facts, in words; `null` members are not drawn. */
+function securityFacts(row: NodeSecurityRow | null, nowNs: number): {
+  pool: string | null;
+  validUntil: string | null;
+  topup: string | null;
+  link: string | null;
+  crl: string | null;
+  revoked: boolean;
+} {
+  if (row === null) return { pool: null, validUntil: null, topup: null, link: null, crl: null, revoked: false };
+  const pool =
+    typeof row.pool_valid === "number"
+      ? `${int(row.pool_valid)} valid${typeof row.pool_preloaded === "number" && row.pool_preloaded > 0 ? ` + ${int(row.pool_preloaded)} ahead` : ""}`
+      : null;
+  const topup = row.topup_in_flight === true ? "in flight" : untilText(row.next_topup ?? null, nowNs);
+  const crl =
+    typeof row.crl_entries === "number"
+      ? `${int(row.crl_entries)} entr${row.crl_entries === 1 ? "y" : "ies"}${typeof row.crl_version === "number" && row.crl_version > 0 ? ` · v${row.crl_version}` : ""}`
+      : null;
+  return {
+    pool,
+    validUntil: untilText(row.cert_valid_until ?? null, nowNs),
+    topup,
+    link: linkText(row),
+    crl,
+    revoked: row.self_revoked === true,
+  };
+}
+
 export function ObuHud({ docked = false }: { docked?: boolean }): React.JSX.Element | null {
   const telemetry = useStudio((s) => s.telemetry);
   const telemetryNode = useStudio((s) => s.telemetryNode);
   const pseudonym = useStudio((s) => s.pseudonym);
+  const security = useStudio((s) => s.security);
   const inspect = useStudio((s) => s.inspect);
   const simTimeNs = useStudio((s) => s.simTimeNs);
-  const selectedActor = useStudio((s) => s.selectedActor);
   const seriesTick = useStudio((s) => s.seriesTick);
   const hello = useStudio((s) => s.hello);
   const pose = useStudio((s) => s.followedPose);
+  const hudDocked = useStudio((s) => s.hudDocked);
+  const setHudDocked = useStudio((s) => s.setHudDocked);
 
   const groups = useMemo(() => (telemetry ? hudGroups(telemetry) : []), [telemetry]);
   const byKey = useMemo(() => fieldIndex(groups.flatMap((g) => [...g.fields])), [groups]);
+
+  const dock = (
+    <button
+      type="button"
+      className="icon-button hud-dock"
+      onClick={() => setHudDocked(!hudDocked)}
+      data-testid="hud-dock"
+      aria-label={hudDocked ? "Float the HUD over the viewport" : "Dock the HUD into the inspector"}
+      title={hudDocked ? "Float over the viewport" : "Dock into the inspector"}
+    >
+      {hudDocked ? "float" : "dock"}
+    </button>
+  );
 
   if (telemetryNode === null) {
     return (
       <div className={`hud${docked ? " docked" : ""}`} data-testid="obu-hud">
         <div className="hud-head">
           <span className="id">No radio selected</span>
-          <span className="dim">
-            Select a vehicle or a roadside unit on the map and its radio appears here: what it is sending
-            and receiving, what it has verified, who it can hear.
-          </span>
+          <span className="dim">Select a vehicle or a roadside unit on the map.</span>
+          <span className="spacer grow" />
+          {dock}
         </div>
       </div>
     );
   }
 
   const info = engine.nodes.get(telemetryNode);
-  if (!telemetry) {
-    return (
-      <div className={`hud${docked ? " docked" : ""}`} data-testid="obu-hud">
-        <div className="hud-head">
-          <span className="id">{info?.label || `node ${telemetryNode}`}</span>
-          <span className="dim">Selected. Waiting for its first report from the engine…</span>
-        </div>
-      </div>
-    );
-  }
-
   // A node that joined after the Hello is not in the Hello's node table (every vehicle that
-  // spawns during a run), so its kind and profile come from the engine's own inspect.node
-  // answer for it — the one the inspector's state tab shows. Without this the header read
-  // "OBU … profile: n/a" for every such node, beside a state tab naming its profile.
+  // spawns during a run), so its kind and profile come from the engine's own inspect.node answer.
   const inspected = inspect && Number(inspect.node) === Number(telemetryNode) ? inspect : null;
   const hudKind =
     info?.kind === 2 || inspected?.kind === "rsu"
@@ -123,125 +180,102 @@ export function ObuHud({ docked = false }: { docked?: boolean }): React.JSX.Elem
       : info?.kind === 1 || inspected?.kind === "vru-device"
         ? "VRU"
         : "OBU";
+  const name = info?.label || `node ${telemetryNode}`;
+  const profile = info?.profileId || inspected?.profile_id || "";
+  const line = pseudonymLine(security, pseudonym);
+
+  if (!telemetry) {
+    return (
+      <div className={`hud${docked ? " docked" : ""}`} data-testid="obu-hud">
+        <div className="hud-head">
+          <span className="id" data-testid="hud-identity">
+            {hudKind} {name}
+          </span>
+          <span className="dim">Waiting for its first report from the engine…</span>
+          <span className="spacer grow" />
+          {dock}
+        </div>
+      </div>
+    );
+  }
+
   const drops = totalDrops(telemetry);
-  const evidence = MISSING_FROM_WIRE[0];
-  const evidenceValue = inspect ? getPointer(inspect, `/${evidence.inspectPath.join("/")}`) : undefined;
+  const sec = securityFacts(security, simTimeNs);
+  const node = telemetryNode;
+  // Built here, and `null` when empty, so a row can tell that it has nothing to draw.
+  const val = (key: string, label: string): React.JSX.Element | null => {
+    const f = byKey.get(key);
+    return hasData(f) ? <Value key={key} field={f} label={label} node={node} /> : null;
+  };
+  const plain = (k: string, v: string | null, testId: string): React.JSX.Element | null =>
+    v === null ? null : <Plain key={testId} k={k} v={v} testId={testId} />;
 
   return (
     <div className={`hud${docked ? " docked" : ""}`} data-testid="obu-hud">
       <div className="hud-head">
-        <span className="id" data-testid="hud-identity">
-          {hudKind} {info?.label || `node ${telemetryNode}`}
+        <span className="id" data-testid="hud-identity" title={profile ? `profile ${profile}` : undefined}>
+          {hudKind} {name}
         </span>
-        <span className="dim">node {telemetryNode}</span>
-        {selectedActor !== null ? <span className="dim">actor {selectedActor}</span> : null}
-        <span data-testid="hud-pseudonym">
-          pseudonym{" "}
-          {pseudonym ? (
-            <>
-              <b>{shortDigest(pseudonym.digest)}</b>{" "}
-              <span className="dim">
-                {pseudonym.i !== null && pseudonym.j !== null ? `(j=${pseudonym.j}, i=${pseudonym.i})` : `(indices pending — ${pseudonym.source})`}
-              </span>
-            </>
-          ) : (
-            <span className="hud-na">not yet seen transmitting</span>
-          )}
-        </span>
-        <span className="dim">profile: {info?.profileId || inspected?.profile_id || NA}</span>
+        {line ? (
+          <span data-testid="hud-pseudonym" title={`pseudonym certificate ${line.digest}${line.tempId ? `, temporary id ${line.tempId}` : ""}`}>
+            <span className="dim">pseudonym</span> <b>{shortDigest(line.digest)}</b>
+            {line.indices ? <span className="dim"> ({line.indices})</span> : null}
+          </span>
+        ) : null}
+        {sec.revoked ? (
+          <span className="warn-text" data-testid="hud-self-revoked">
+            on the CRL — stopped sending
+          </span>
+        ) : null}
         <span className="spacer grow" />
         <span className="dim" data-testid="hud-simtime">
-          t {simClock(simTimeNs)}
+          {simClock(simTimeNs)}
         </span>
+        {dock}
       </div>
 
       <div className="hud-body">
         {pose && hello ? <PoseRow pose={pose} origin={hello.origin} /> : null}
-        <div className="hud-row">
-          <Value field={byKey.get("msgs_in_per_s")} label="rx" node={telemetryNode} />
-          <Value field={byKey.get("msgs_out_per_s")} label="tx" node={telemetryNode} />
-          <Value field={byKey.get("verifications_per_s")} label="verify" node={telemetryNode} />
-          <Value field={byKey.get("q_verify_p95")} label="verify q p95" node={telemetryNode} />
-          <Value field={byKey.get("verify_wait_p95_ms")} label="p95 wait" node={telemetryNode} />
-          <Value field={byKey.get("verify_policy")} label="policy" node={telemetryNode} />
-          <span className="hud-field">
-            <span className="k">dropped</span>
-            <span className="v" data-testid="hud-drops">
-              {int(drops)}
-            </span>
-          </span>
-        </div>
-
-        <div className="hud-row">
-          <Value field={byKey.get("cpu_util_pm")} label="CPU" node={telemetryNode} />
-          <Value field={byKey.get("ram_used_kib")} label="RAM" node={telemetryNode} />
-          <Value field={byKey.get("storage_used_b")} label="flash" node={telemetryNode} />
-          <Value field={byKey.get("hsm_util_pm")} label="HSM" node={telemetryNode} />
-          <Value field={byKey.get("airtime_ms_per_s")} label="air time" node={telemetryNode} />
-          <Value field={byKey.get("node_state")} label="state" node={telemetryNode} />
-        </div>
-
-        <div className="hud-row">
-          <Value field={byKey.get("cert_active")} label="certs active" node={telemetryNode} />
-          <Value field={byKey.get("cert_stored")} label="stored" node={telemetryNode} />
-          <Value field={byKey.get("next_topup_ns")} label="next top-up" node={telemetryNode} />
-          <Value field={byKey.get("peer_cache_entries")} label="peer cache" node={telemetryNode} />
-          <Value field={byKey.get("crl_entries")} label="CRL entries" node={telemetryNode} />
-          <Value field={byKey.get("crl_bytes")} label="CRL bytes" node={telemetryNode} />
-          <Value field={byKey.get("crl_expansion_pm")} label="expansion" node={telemetryNode} />
-          <Value field={byKey.get("p2pcd_requests")} label="P2PCD" node={telemetryNode} />
-        </div>
-
-        <div className="hud-row">
-          <Value field={byKey.get("nbr_total")} label="neighbours" node={telemetryNode} />
-          <Value field={byKey.get("nbr_verified")} label="verified" node={telemetryNode} />
-          <Value field={byKey.get("nbr_unverified")} label="unverified" node={telemetryNode} />
-          <Value field={byKey.get("nbr_revoked")} label="revoked" node={telemetryNode} />
-          <Value field={byKey.get("cbr_pm")} label="CBR" node={telemetryNode} />
-          <Value field={byKey.get("dcc_state")} label="DCC" node={telemetryNode} />
-          <Value field={byKey.get("tx_power_cdbm")} label="tx" node={telemetryNode} />
-          <Value field={byKey.get("unverified_ratio_pm")} label="unverified delivered" node={telemetryNode} />
-        </div>
-
-        <div className="hud-row">
-          <Value field={byKey.get("gnss_fix")} label="GNSS fix" node={telemetryNode} />
-          <Value field={byKey.get("gnss_sigma_m")} label="σ" node={telemetryNode} />
-          <Value field={byKey.get("gnss_hdop")} label="HDOP" node={telemetryNode} />
-          <Value field={byKey.get("clock_drift_ppm")} label="clock drift" node={telemetryNode} />
-          <Value field={byKey.get("clock_offset_ns")} label="clock offset" node={telemetryNode} />
-          <Value field={byKey.get("pos_error_m")} label="belief vs GT" node={telemetryNode} />
-        </div>
-
-        <div className="hud-row">
-          <span className="hud-field" title={evidence.reason} data-testid="hud-evidence">
-            <span className="k">evidence buffer</span>
-            {evidenceValue === undefined ? (
-              <span className="hud-missing">not on the wire — {evidence.reason}</span>
-            ) : (
-              <span className="v">{typeof evidenceValue === "object" ? JSON.stringify(evidenceValue) : String(evidenceValue)}</span>
-            )}
-          </span>
-          <Value field={byKey.get("outbox_msgs")} label="report outbox" node={telemetryNode} />
-          <Value field={byKey.get("outbox_bytes")} label="outbox bytes" node={telemetryNode} />
-          <Value field={byKey.get("full_cert_msgs")} label="full-cert msgs" node={telemetryNode} />
-          <span className="hud-field" title="The period each of these figures was measured over">
-            <span className="k">window</span>
-            <span className="v">{durationNs(hello?.telemetryPeriodNs ?? 0)}</span>
-          </span>
-        </div>
+        <Row title="radio" testId="hud-row-radio">
+          {[
+            val("msgs_out_per_s", "tx"),
+            val("msgs_in_per_s", "rx"),
+            val("cbr_pm", "CBR"),
+            val("nbr_total", "neighbours"),
+            val("dcc_state", "DCC"),
+            val("tx_power_cdbm", "power"),
+          ]}
+        </Row>
+        <Row title="security" testId="hud-row-security">
+          {[
+            plain("certs", sec.pool, "hud-sec-pool"),
+            plain("next top-up", sec.topup, "hud-sec-topup"),
+            plain("CRL", sec.crl, "hud-sec-crl"),
+            plain("backend", sec.link, "hud-sec-link"),
+            val("verifications_per_s", "verify"),
+            val("unverified_ratio_pm", "unverified"),
+          ]}
+        </Row>
+        <Row title="queues" testId="hud-row-queues">
+          {[
+            val("q_verify_p95", "verify p95"),
+            val("verify_wait_p95_ms", "wait p95"),
+            val("cpu_util_pm", "CPU"),
+            drops > 0 ? (
+              <span key="drops" className="hud-field plain" title="Messages dropped this window, all causes; the inspector breaks them down">
+                <span className="k">dropped</span>
+                <span className="v warn-text" data-testid="hud-drops">
+                  {int(drops)}
+                </span>
+              </span>
+            ) : null,
+          ]}
+        </Row>
       </div>
 
       <div className="sparkrow" data-testid="hud-sparklines">
         {SPARKLINE_SERIES.map((s, i) => (
-          <Sparkline
-            key={s.key}
-            seriesIndex={i}
-            label={s.label}
-            unit={s.unit}
-            tick={seriesTick}
-            fieldKey={s.key}
-            node={telemetryNode}
-          />
+          <Sparkline key={s.key} seriesIndex={i} label={s.label} unit={s.unit} tick={seriesTick} fieldKey={s.key} node={telemetryNode} />
         ))}
       </div>
     </div>
@@ -264,8 +298,8 @@ function PoseRow({
   const g = toGeodetic(origin, pose.x, pose.y);
   return (
     <div className="hud-row" data-testid="hud-pose" title="the vehicle's pose in the stream (its true position, drawn at the body centre)">
+      <span className="hud-row-title">where</span>
       <span className="hud-pose-field">
-        <span className="k">position</span>
         <span className="v" data-testid="hud-pose-lat" data-value={g.lat}>
           {g.lat.toFixed(6)}°
         </span>
@@ -274,13 +308,11 @@ function PoseRow({
         </span>
       </span>
       <span className="hud-pose-field">
-        <span className="k">speed</span>
         <span className="v" data-testid="hud-pose-speed" data-value={pose.speed}>
           {pose.speed.toFixed(1)} m/s
         </span>
       </span>
       <span className="hud-pose-field">
-        <span className="k">heading</span>
         <span className="v" data-testid="hud-pose-heading" data-value={bearingDeg(pose.headingRad)}>
           {bearingDeg(pose.headingRad).toFixed(0)}°
         </span>

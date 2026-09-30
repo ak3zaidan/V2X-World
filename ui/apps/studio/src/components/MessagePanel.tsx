@@ -13,40 +13,49 @@
  *
  * It lives in the right-hand panel, beside the viewport rather than over it, so it never covers the
  * vehicle the chase camera is following.
+ *
+ * The rows hold still while the pointer is over them (`lib/feed.ts`, "Hover"): newest-first rows used
+ * to slide down under the cursor several times a second, so the row aimed at was not the row clicked.
+ * A cell with nothing to say is blank, not "n/a".
  */
 
-import { Fragment, useMemo } from "react";
+import { Fragment, useEffect, useMemo } from "react";
 
 import type { FeedAccess, FeedDecoded, FeedQueue, FeedReceived, FeedSent } from "@vwp/protocol";
 
 import { useStudio } from "../state/store.js";
-import { NA, shortDigest, simClock } from "../lib/format.js";
+import { shortDigest, simClock } from "../lib/format.js";
 import { fieldOf, fieldText, hexRows, keyOf, typesSeen, visibleRows, type FeedDir } from "../lib/feed.js";
 
 /** Rows drawn per table; the ring keeps more, and the count says so. */
 const DRAWN = 60;
 
+/** A number with its unit, or blank when there is none: an empty cell, not "n/a". */
 const fmt = (v: number | null | undefined, digits: number, unit = ""): string =>
-  typeof v === "number" && Number.isFinite(v) ? `${v.toFixed(digits)}${unit}` : NA;
+  typeof v === "number" && Number.isFinite(v) ? `${v.toFixed(digits)}${unit}` : "";
+
+/** A value or blank. */
+const opt = (v: string | number | null | undefined): string => (v === null || v === undefined ? "" : String(v));
 
 /** The access layer's view of one transmission, on one line: the MCS by name and, on a
  * sidelink, the resource, the HARQ transmission and the congestion state it was granted under. */
 function accessLine(a: FeedAccess): string {
   const parts = [`${a.rat} ${a.mcs}`];
   if (a.slot !== undefined) {
-    parts.push(`slot ${a.slot}, sub-channels ${a.subch ?? NA}+${a.subch_len ?? NA}${a.subchannels !== undefined ? ` of ${a.subchannels}` : ""}`);
+    parts.push(`slot ${a.slot}${a.subch !== undefined ? `, sub-channels ${a.subch}+${opt(a.subch_len)}` : ""}${a.subchannels !== undefined ? ` of ${a.subchannels}` : ""}`);
   }
-  if (a.attempt !== undefined) parts.push(`transmission ${a.attempt} of ${a.attempts ?? NA}`);
+  if (a.attempt !== undefined) parts.push(`transmission ${a.attempt}${a.attempts !== undefined ? ` of ${a.attempts}` : ""}`);
   if (a.cbr !== undefined) parts.push(`CBR ${a.cbr.toFixed(2)}`);
   if (a.cr !== undefined) parts.push(`CR ${a.cr.toFixed(3)}${a.cr_limit !== undefined ? ` (limit ${a.cr_limit.toFixed(3)})` : ""}`);
   return parts.join(" · ");
 }
 
+/** A decoded field for a table cell: blank when the message has no such field, "—" when its octets say "unavailable". */
 function num(e: FeedSent | FeedReceived, k: string, digits: number): string {
   const f = fieldOf(e, k);
-  if (!f) return NA;
-  if (f.na) return "n/a";
-  return typeof f.v === "number" ? f.v.toFixed(digits) : String(f.v ?? NA);
+  if (!f) return "";
+  if (f.na) return "—";
+  return typeof f.v === "number" ? f.v.toFixed(digits) : opt(f.v);
 }
 
 function SentTable({ rows, openKey }: { rows: readonly FeedSent[]; openKey: string | null }): React.JSX.Element {
@@ -90,11 +99,9 @@ function SentTable({ rows, openKey }: { rows: readonly FeedSent[]; openKey: stri
                 {rotated ? <span className="feed-badge" title="the pseudonym changed on this frame"> new id</span> : null}
               </td>
               <td>
-                {num(e, "msg_cnt", 0)} · {String(fieldOf(e, "temp_id")?.v ?? NA)}
+                {[num(e, "msg_cnt", 0), opt(fieldOf(e, "temp_id")?.v)].filter((x) => x !== "").join(" · ")}
               </td>
-              <td>
-                {num(e, "lat", 5)}, {num(e, "lon", 5)}
-              </td>
+              <td>{fieldOf(e, "lat") ? `${num(e, "lat", 5)}, ${num(e, "lon", 5)}` : ""}</td>
               <td>{num(e, "speed", 1)}</td>
               <td>{num(e, "heading", 0)}</td>
               <td>{e.bytes.on_wire}</td>
@@ -130,7 +137,7 @@ function ReceivedTable({ rows, openKey }: { rows: readonly FeedReceived[]; openK
       <tbody>
         {rows.slice(0, DRAWN).map((e) => {
           const key = keyOf("received", e);
-          const from = e.from !== undefined && e.from !== null ? `node ${e.from}` : String(fieldOf(e, "temp_id")?.v ?? NA);
+          const from = e.from !== undefined && e.from !== null ? `node ${e.from}` : opt(fieldOf(e, "temp_id")?.v);
           return (
             <tr
               key={key}
@@ -151,9 +158,7 @@ function ReceivedTable({ rows, openKey }: { rows: readonly FeedReceived[]; openK
               <td data-testid="feed-from">{from}</td>
               <td>{e.type.toUpperCase()}</td>
               <td>{fate(e)}</td>
-              <td>
-                {fmt(e.rssi_dbm, 0)} / {fmt(e.sinr_db, 0)}
-              </td>
+              <td>{[fmt(e.rssi_dbm, 0), fmt(e.sinr_db, 0)].filter((x) => x !== "").join(" / ")}</td>
               <td>{fmt(e.dist_m, 0)}</td>
               <td>{fmt(e.e2e_ms, 1)}</td>
             </tr>
@@ -198,7 +203,8 @@ function HexDump({ decoded }: { decoded: FeedDecoded }): React.JSX.Element | nul
   );
 }
 
-function KV({ k, v, testid }: { k: string; v: string; testid?: string }): React.JSX.Element {
+function KV({ k, v, testid }: { k: string; v: string; testid?: string }): React.JSX.Element | null {
+  if (v === "") return null;
   return (
     <>
       <dt>{k}</dt>
@@ -237,7 +243,7 @@ function Decoded({ d }: { d: FeedDecoded }): React.JSX.Element {
           <h4>{sec.standard}</h4>
           <dl className="kv" data-testid="feed-security">
             <KV k="PSID" v={`${sec.psid} (0x${sec.psid.toString(16)})`} />
-            <KV k="generation time" v={sec.generation_time_us === null ? NA : `${sec.generation_time_us} µs since 2004-01-01`} />
+            <KV k="generation time" v={sec.generation_time_us === null ? "" : `${sec.generation_time_us} µs since 2004-01-01`} />
             <KV k="signer" v={sec.signer.kind} testid="feed-signer-kind" />
             {sec.signer.hashed_id8 ? <KV k="HashedId8" v={sec.signer.hashed_id8} testid="feed-hashedid8" /> : null}
             {sec.signer.certificate ? (
@@ -268,7 +274,8 @@ function Detail(): React.JSX.Element | null {
     <div className="feed-detail" data-testid="feed-detail" data-msg={String(e.msg)}>
       <div className="feed-detail-head">
         <b>
-          {e.type.toUpperCase()} · message {String(e.msg ?? NA)} · {open.dir === "sent" ? "sent" : "resolved"} {simClock(e.t_ns)}
+          {e.type.toUpperCase()}
+          {e.msg !== undefined && e.msg !== null ? ` · message ${String(e.msg)}` : ""} · {open.dir === "sent" ? "sent" : "resolved"} {simClock(e.t_ns)}
         </b>
         <button type="button" className="linklike" onClick={() => close(open.dir, null)} title="Close this message">
           close
@@ -276,17 +283,44 @@ function Detail(): React.JSX.Element | null {
       </div>
       {sent ? (
         <dl className="kv">
-          <KV k="pseudonym" v={sent.pseudonym ?? NA} />
-          <KV k="signer id" v={sent.signer ?? NA} />
+          <KV k="pseudonym" v={opt(sent.pseudonym)} />
+          <KV k="signer id" v={opt(sent.signer)} />
           <KV
             k="octets"
-            v={`payload ${sent.bytes.payload ?? NA} + envelope ${sent.bytes.envelope ?? NA}${sent.bytes.certificate ? ` (cert ${sent.bytes.certificate})` : ""} + network ${sent.bytes.network ?? NA} + link ${sent.bytes.link ?? NA} = ${sent.bytes.on_wire} B`}
+            v={[
+              sent.bytes.payload !== undefined && sent.bytes.payload !== null ? `payload ${sent.bytes.payload}` : "",
+              sent.bytes.envelope !== undefined && sent.bytes.envelope !== null
+                ? `envelope ${sent.bytes.envelope}${sent.bytes.certificate ? ` (cert ${sent.bytes.certificate})` : ""}`
+                : "",
+              sent.bytes.network !== undefined && sent.bytes.network !== null ? `network ${sent.bytes.network}` : "",
+              sent.bytes.link !== undefined && sent.bytes.link !== null ? `link ${sent.bytes.link}` : "",
+            ]
+              .filter((x) => x !== "")
+              .join(" + ")
+              .concat(` = ${sent.bytes.on_wire} B`)}
           />
-          <KV k="radio" v={`${fmt(sent.radio.power_dbm, 1, " dBm")} · channel ${sent.radio.channel ?? NA} · ${sent.radio.airtime_us ?? NA} µs on air`} />
+          <KV
+            k="radio"
+            v={[
+              fmt(sent.radio.power_dbm, 1, " dBm"),
+              sent.radio.channel !== undefined && sent.radio.channel !== null ? `channel ${sent.radio.channel}` : "",
+              sent.radio.airtime_us !== undefined && sent.radio.airtime_us !== null ? `${sent.radio.airtime_us} µs on air` : "",
+            ]
+              .filter((x) => x !== "")
+              .join(" · ")}
+          />
           {sent.radio.access ? <KV k="access" v={accessLine(sent.radio.access)} /> : null}
           <KV
             k="timing"
-            v={`sign queue ${fmt(sent.timing.sign_queue_ms, 3, " ms")} · signing ${fmt(sent.timing.sign_ms, 3, " ms")} · channel access ${fmt(sent.timing.channel_access_ms, 3, " ms")}`}
+            v={[
+              sent.timing.sign_queue_ms !== undefined && sent.timing.sign_queue_ms !== null ? `sign queue ${fmt(sent.timing.sign_queue_ms, 3, " ms")}` : "",
+              sent.timing.sign_ms !== undefined && sent.timing.sign_ms !== null ? `signing ${fmt(sent.timing.sign_ms, 3, " ms")}` : "",
+              sent.timing.channel_access_ms !== undefined && sent.timing.channel_access_ms !== null
+                ? `channel access ${fmt(sent.timing.channel_access_ms, 3, " ms")}`
+                : "",
+            ]
+              .filter((x) => x !== "")
+              .join(" · ")}
           />
         </dl>
       ) : null}
@@ -294,7 +328,12 @@ function Detail(): React.JSX.Element | null {
         <dl className="kv">
           <KV k="from" v={rx.from !== undefined && rx.from !== null ? `node ${rx.from}` : "not shown on a node-profile connection"} />
           <KV k="fate" v={fate(rx)} testid="feed-fate" />
-          <KV k="signal" v={`${fmt(rx.rssi_dbm, 1, " dBm")} · SINR ${fmt(rx.sinr_db, 1, " dB")} · ${fmt(rx.dist_m, 1, " m")}`} />
+          <KV
+            k="signal"
+            v={[fmt(rx.rssi_dbm, 1, " dBm"), rx.sinr_db !== undefined && rx.sinr_db !== null ? `SINR ${fmt(rx.sinr_db, 1, " dB")}` : "", fmt(rx.dist_m, 1, " m")]
+              .filter((x) => x !== "")
+              .join(" · ")}
+          />
           <KV k="end to end" v={fmt(rx.e2e_ms, 3, " ms")} />
           {Object.entries(rx.stages_ms).map(([k, v]) => (
             <KV key={k} k={`· ${k.replace(/_/g, " ")}`} v={`${v.toFixed(3)} ms`} />
@@ -331,16 +370,16 @@ function QueueTable({ queues, stepMs }: { queues: readonly FeedQueue[]; stepMs: 
               <td>{q.in_service}</td>
               <td>{fmt(q.wait_p50_ms, 2)}</td>
               <td>{fmt(q.wait_p95_ms, 2)}</td>
-              <td title={q.drops_note}>
+              <td title={q.drops_note} className={Object.keys(q.drops).length > 0 ? "warn-text" : undefined} data-testid={`queue-${q.id}-drops`}>
                 {Object.keys(q.drops).length === 0
                   ? q.drops_note
-                    ? "n/o"
+                    ? ""
                     : "0"
                   : Object.entries(q.drops)
-                      .map(([k, v]) => `${k} ${v}`)
+                      .map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`)
                       .join(", ")}
               </td>
-              <td>{q.reported_depth ? `${q.reported_depth.p50 ?? NA}/${q.reported_depth.p95 ?? NA}` : NA}</td>
+              <td>{q.reported_depth ? `${opt(q.reported_depth.p50)}/${opt(q.reported_depth.p95)}` : ""}</td>
             </tr>
           ))}
         </tbody>
@@ -372,7 +411,7 @@ function QueueTable({ queues, stepMs }: { queues: readonly FeedQueue[]; stepMs: 
                     data-waiting={w.left_ns === null ? "yes" : "no"}
                     className={w.left_ns === null ? undefined : "lost"}
                   >
-                    <td>{String(w.msg ?? NA)}</td>
+                    <td>{opt(w.msg)}</td>
                     <td>{w.type.toUpperCase()}</td>
                     <td>{w.from === null ? "self" : `node ${w.from}`}</td>
                     <td>{simClock(w.enqueued_ns).slice(3)}</td>
@@ -394,7 +433,14 @@ export function MessagePanel(): React.JSX.Element {
   const setTab = useStudio((s) => s.setFeedTab);
   const setPaused = useStudio((s) => s.setFeedPaused);
   const setFilter = useStudio((s) => s.setFeedFilter);
+  const setHover = useStudio((s) => s.setFeedHover);
   const selectedNode = useStudio((s) => s.selectedNode);
+  // A list that unmounts under the pointer (a tab switch) never sees the pointer leave.
+  useEffect(() => () => setHover(false), [setHover]);
+  const hold = {
+    onPointerEnter: () => setHover(true),
+    onPointerLeave: () => setHover(false),
+  };
 
   if (selectedNode === null) {
     return (
@@ -454,7 +500,8 @@ export function MessagePanel(): React.JSX.Element {
         ) : (
           <>
             {latest?.pseudonym ? <>pseudonym {shortDigest(latest.pseudonym)} · </> : null}
-            {feed.paused ? "paused" : "live"} at {simClock(feed.tNs)}
+            {feed.paused ? "paused" : feed.hovering ? "held while the pointer is over the list" : "live"} at {simClock(feed.tNs)}
+            {(feed.paused || feed.hovering) && feed.held.length > 0 ? ` · ${feed.held.length} update${feed.held.length === 1 ? "" : "s"} waiting` : ""}
             {feed.omitted.sent + feed.omitted.received > 0 ? ` · ${feed.omitted.sent + feed.omitted.received} left out by the push limit` : ""}
             {feed.dropped.sent + feed.dropped.received > 0 ? ` · ${feed.dropped.sent + feed.dropped.received} older rows dropped` : ""}
             {feed.undetected > 0 ? ` · ${feed.undetected} frames never detected (out of range)` : ""}
@@ -499,7 +546,7 @@ export function MessagePanel(): React.JSX.Element {
         sent.length === 0 ? (
           <p className="dim">Nothing sent yet by this radio in the part of the run played so far.</p>
         ) : (
-          <div className="feed-scroll">
+          <div className="feed-scroll" data-testid="feed-scroll-sent" {...hold}>
             <SentTable rows={sent} openKey={openKey} />
           </div>
         )
@@ -508,7 +555,7 @@ export function MessagePanel(): React.JSX.Element {
         received.length === 0 ? (
           <p className="dim">Nothing received that passes the filters.</p>
         ) : (
-          <div className="feed-scroll">
+          <div className="feed-scroll" data-testid="feed-scroll-received" {...hold}>
             <ReceivedTable rows={received} openKey={openKey} />
           </div>
         )

@@ -51,25 +51,45 @@ function Glyph({ shape, color }: { shape: string; color: string }): React.JSX.El
   );
 }
 
+/**
+ * The key, folded to one chip at the viewport's top right until it is asked for, and remembered
+ * open or shut across a reload. It used to be a column of eight rows over the picture at all times;
+ * a researcher needs it the first few minutes and then not at all.
+ */
 export function StateLegend(): React.JSX.Element {
   const theme = useStudio((s) => s.theme);
+  const open = useStudio((s) => s.legendOpen);
+  const setOpen = useStudio((s) => s.setLegendOpen);
   const palette = actorStatePalette(theme);
   return (
-    <div
-      className="chip legend"
-      data-testid="state-legend"
-      // Below the toolbar wherever it ends: the toolbar wraps onto more rows in a narrow viewport,
-      // and a legend at a fixed 46 px then sat on top of its buttons (measured at 960 x 600: the
-      // HUD-dock button unclickable under a legend row). `Viewport` publishes the toolbar's bottom.
-      style={{ position: "absolute", right: 8, top: "calc(var(--vp-toolbar-bottom, 38px) + 6px)", flexDirection: "column", alignItems: "flex-start", gap: 2 }}
-    >
-      {palette.map((p) => (
-        <span className="item" key={p.key}>
-          <Glyph shape={p.shape} color={p.color} />
-          {p.label}
+    <div className="vp-legend">
+      <button
+        type="button"
+        className={open ? "chip vp-legend-toggle on" : "chip vp-legend-toggle"}
+        aria-expanded={open}
+        aria-controls="vp-legend-body"
+        onClick={() => setOpen(!open)}
+        data-testid="legend-toggle"
+        title={open ? "Hide the key" : "What the colours and shapes mean"}
+      >
+        <span className="vp-legend-swatches" aria-hidden="true">
+          {palette.slice(0, 4).map((p) => (
+            <i key={p.key} style={{ background: p.color }} />
+          ))}
         </span>
-      ))}
-      <RoadUserKey color={palette[0]?.color ?? "currentColor"} />
+        key
+      </button>
+      {open ? (
+        <div className="chip legend vp-legend-body" id="vp-legend-body" data-testid="state-legend">
+          {palette.map((p) => (
+            <span className="item" key={p.key}>
+              <Glyph shape={p.shape} color={p.color} />
+              {p.label}
+            </span>
+          ))}
+          <RoadUserKey color={palette[0]?.color ?? "currentColor"} />
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -299,6 +299,24 @@ impl LifecycleParams {
         let since = t.saturating_sub(self.scms.epoch);
         u32::try_from(since / self.scms.i_period.as_nanos().max(1)).unwrap_or(u32::MAX)
     }
+
+    /// The instant i-period `i` begins: the inverse of [`LifecycleParams::period_at`].
+    #[must_use]
+    pub fn period_start(&self, i: u32) -> SimTime {
+        self.scms
+            .epoch
+            .saturating_add(u64::from(i).saturating_mul(self.scms.i_period.as_nanos()))
+    }
+
+    /// When a device whose pool reaches `last_period` asks for its next batch: the start
+    /// of the period at which only `topup_below_periods` periods remain, the condition
+    /// the backend step tests ([`Phase2::topups_due`]'s `remaining <= below`). `None` when
+    /// top-ups are turned off (`topup_below_periods: 0`).
+    #[must_use]
+    pub fn topup_at(&self, last_period: u32) -> Option<SimTime> {
+        let below = self.topup_below_periods;
+        (below > 0).then(|| self.period_start(last_period.saturating_add(1).saturating_sub(below)))
+    }
 }
 
 /// The lifecycle keys `security.protocol.params` accepts.
@@ -2877,6 +2895,13 @@ impl Phase2 {
             pool_last_period: Some(n.last_period),
             changes: certs.changes(),
             topup_in_flight: n.topup.is_some(),
+            // Due now or later; a device that is revoked, blocklisted or already topping up
+            // asks for nothing.
+            next_topup: if n.topup.is_some() || n.self_revoked || n.blocked {
+                None
+            } else {
+                self.params.topup_at(n.last_period)
+            },
             link: n.access.unwrap_or(AccessKind::Offline).as_str().to_string(),
             link_up,
             outbox_reports: n.outbox.len() as u32,

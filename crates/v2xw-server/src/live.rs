@@ -81,7 +81,8 @@ use v2xw_core::ids::{ActorId, LaneId, NodeId, SignalId};
 use v2xw_core::time::{Duration, SimTime};
 use v2xw_engine::{Scenario, run::RunReport};
 use v2xw_metrics::channels::{
-    DetObservationView, GtKinematicsView, MacCbrView, NodeRxView, NodeTelemetryView, NodeTxView,
+    DetObservationView, GtKinematicsView, MacCbrView, NodeDropView, NodeRxView, NodeTelemetryView,
+    NodeTxView,
     NodeVerifyView, PhyRxView, ProtoRevocationView, RxOutcome, SecCertView, SignerId,
     VerifyOutcome, decode,
 };
@@ -92,7 +93,7 @@ use v2xw_record::encoder::{
 };
 use v2xw_record::wire::event::EventEntry;
 use v2xw_record::wire::hello::{
-    ChannelRow, ClassRow, HELLO_LIVE, HELLO_SEEKABLE, HelloBody, NODE_HAS_HSM, WorldRef,
+    ChannelRow, ClassRow, HELLO_LIVE, HELLO_SEEKABLE, HelloBody, NODE_HAS_HSM, NodeRow, WorldRef,
 };
 use v2xw_record::wire::metric::MetricRow;
 use v2xw_record::wire::provenance::{PROV_FINAL, ProvEntry, ProvenanceBody};
@@ -886,6 +887,43 @@ fn assemble_setup(
     let str_session_token = strings.intern(session_token);
     let str_url = strings.intern(&payload.url_path());
 
+    // §3.1.3: the node table the connection opens with. A vehicle's radio is announced by
+    // its spawn row, but a roadside unit never spawns, so a live Hello that listed nothing
+    // left every unit out of the page's node table: the inspector could not count them and
+    // the developer chip said "0 RSUs" beside one. They are created before any vehicle,
+    // in the scenario's order, so unit `i` is node `i` ([`roadside_node_count`]).
+    let rsu_rows: Vec<NodeRow> = scenario
+        .actors
+        .rsus
+        .iter()
+        .enumerate()
+        .filter_map(|(i, spec)| {
+            let pos = match (spec.site, spec.position_m) {
+                (Some(site), None) => world.sites.get(site as usize)?.antenna_position(),
+                (None, Some(p)) => v2xw_core::geom::Vec3::new(
+                    p[0],
+                    p[1],
+                    p[2] + v2xw_engine::phase2::RSU_MAST_HEIGHT_M,
+                ),
+                _ => return None,
+            };
+            let profile = spec
+                .profile
+                .as_deref()
+                .unwrap_or(v2xw_engine::phase2::DEFAULT_RSU_PROFILE);
+            Some(NodeRow {
+                node_id: u32::try_from(i).ok()?,
+                actor_id: U32_NONE,
+                pos_m: [pos.x as f32, pos.y as f32, pos.z as f32],
+                str_label: strings.intern(&format!("rsu_{i:04}")),
+                str_profile_id: strings.intern(profile),
+                flags: NODE_HAS_HSM,
+                kind: 2,
+                class_idx: 0xFF,
+            })
+        })
+        .collect();
+
     let mut class_names = Vec::with_capacity(VehicleClass::ALL.len());
     let classes: Vec<ClassRow> = VehicleClass::ALL
         .iter()
@@ -1038,7 +1076,7 @@ fn assemble_setup(
         origin_alt_m: world.origin.alt_m,
         bbox_m: [bbox.min.x, bbox.min.y, bbox.max.x, bbox.max.y],
         actor_capacity,
-        nodes: Vec::new(),
+        nodes: rsu_rows,
         classes,
         channels,
         world_ref: WorldRef {
@@ -1671,6 +1709,11 @@ impl Projector {
                 "node.rx" => match decode::<NodeRxView>(record) {
                     Err(_) => self.undecodable(record.channel),
                     Ok(view) => self.feed.on_rx(&view),
+                },
+                // Drops no frame carries, for the followed node's queue table.
+                "node.drop" => match decode::<NodeDropView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => self.feed.on_drop(&view),
                 },
                 // The security panel's rows: the newest `node.security` per node, and a
                 // short history of its pseudonym changes.

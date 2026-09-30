@@ -203,6 +203,7 @@ impl HostedNode {
                         delivered: out.delivered,
                         telemetry: out.telemetry,
                         rx_reports: out.rx_reports,
+                        drops: out.drops,
                     },
                     suppressed,
                 )

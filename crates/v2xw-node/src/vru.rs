@@ -1058,6 +1058,8 @@ pub struct VruStepOutcome {
     /// journey through the device — the same report an OBU gives, so the engine records
     /// a pedestrian's receptions on `node.rx` exactly as a vehicle's.
     pub rx_reports: Vec<RxReport>,
+    /// What this step dropped, per cause in [`DropCause::ALL`] order, as an OBU reports it.
+    pub drops: [u32; 6],
 }
 
 /// A frame in the device's receive path, with what its reception report needs.
@@ -1394,6 +1396,7 @@ impl VruDeviceRuntime {
                     verify_done: None,
                 });
             }
+            out.drops = self.drops.take_step();
             return out;
         }
 
@@ -1437,6 +1440,7 @@ impl VruDeviceRuntime {
         if self.window.length(now) >= self.config.telemetry_period {
             out.telemetry = Some(self.close_window(now));
         }
+        out.drops = self.drops.take_step();
         out
     }
 

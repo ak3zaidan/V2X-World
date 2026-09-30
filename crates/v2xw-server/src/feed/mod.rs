@@ -26,6 +26,9 @@
 //!   instants (`v2xw-node`, moved onto the simulation's timeline by the engine), so the
 //!   depth and the waits are the model's, not a second model of it. The CRL task queue has
 //!   no per-task stamps on any channel; its depth is the node's own telemetry window.
+//! * **Drops.** A receive-side drop is a `node.rx` record's loss cause. A transmit-side
+//!   drop and a CRL backlog shed have no frame, and come from `node.drop`, one row per
+//!   node, step and cause ([`FeedStore::on_drop`]).
 //!
 //! # Bounds
 //!
@@ -44,7 +47,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use v2xw_core::ids::NodeId;
 use v2xw_core::time::SimTime;
-use v2xw_metrics::channels::{NodeRxView, NodeTxView, RxFate, SignerId, rx_cause};
+use v2xw_metrics::channels::{NodeDropView, NodeRxView, NodeTxView, RxFate, SignerId, rx_cause};
 
 /// The feed's schema version, carried in every `node.feed` notification as `v`.
 ///
@@ -64,6 +67,12 @@ pub const QUEUE_WINDOW_NS: u64 = 1_000_000_000;
 
 /// The window the drop counts cover, ns.
 pub const DROP_WINDOW_NS: u64 = 10_000_000_000;
+
+/// `node.drop`'s transmit-queue cause (`v2xw_node::DropCause::TxOverflow`).
+const TX_OVERFLOW: &str = "tx_overflow";
+
+/// `node.drop`'s CRL cause (`v2xw_node::DropCause::CrlBacklog`).
+const CRL_BACKLOG: &str = "crl_processing_backlog";
 
 /// PHY causes the receiver cannot observe: the frame was never detected.
 const UNDETECTED: [&str; 2] = ["out-of-range", "below-sensitivity"];
@@ -266,6 +275,8 @@ struct NodeLog {
     shed: [u64; 2],
     /// Attempts the receiver never detected, by cause, since the run began.
     undetected: u64,
+    /// Drops with no frame (`node.drop`): the step's instant, the cause and the count.
+    dropped: VecDeque<(SimTime, &'static str, u32)>,
 }
 
 /// How much one push carries.
@@ -388,6 +399,21 @@ impl FeedStore {
         log.received.push_back(RxEntry::of(v));
     }
 
+    /// Takes one `node.drop` record: a transmit-side drop or a CRL backlog shed, which have
+    /// no frame and so no `node.rx` row. An unknown cause is ignored rather than guessed at.
+    pub fn on_drop(&mut self, v: &NodeDropView) {
+        let cause = match v.cause.as_str() {
+            TX_OVERFLOW => TX_OVERFLOW,
+            CRL_BACKLOG => CRL_BACKLOG,
+            _ => return,
+        };
+        let log = self.logs.entry(v.node.index()).or_default();
+        if log.dropped.len() >= MAX_PER_NODE {
+            log.dropped.pop_front();
+        }
+        log.dropped.push_back((v.t, cause, v.count));
+    }
+
     /// Ends a projected step: taps whose record never came are dropped.
     pub fn end_step(&mut self) {
         self.pending_taps.clear();
@@ -406,6 +432,9 @@ impl FeedStore {
             }
             while log.received.front().is_some_and(|r| r.t < before) {
                 log.received.pop_front();
+            }
+            while log.dropped.front().is_some_and(|d| d.0 < before) {
+                log.dropped.pop_front();
             }
         }
         // A frame is kept while anything could still refer to it: its sender's log, or a
@@ -647,6 +676,16 @@ impl FeedStore {
                     );
                 }
             }
+            // Drops no frame carries (`node.drop`): the transmit queue's and the CRL queue's.
+            for &(t, cause, n) in &log.dropped {
+                if t <= drop_lo || t > now {
+                    continue;
+                }
+                let q = if cause == TX_OVERFLOW { "tx" } else { "crl" };
+                if let Some(q) = qs.get_mut(q) {
+                    *q.drops.entry(cause).or_insert(0) += u64::from(n);
+                }
+            }
             for f in log.sent.iter().filter_map(|m| self.frames.get(m)) {
                 let Some(g) = f.t_generated else { continue };
                 let stage_name = match (f.t_sign_start, f.t_signed) {
@@ -709,12 +748,6 @@ impl FeedStore {
                 "waiting_omitted": seen.saturating_sub(waiting_limit),
                 "reported_depth": rep(id),
             });
-            if id == "tx" {
-                row["drops_note"] = json!(
-                    "a frame the transmit queue refuses is on no channel, so transmit drops are \
-                     not observable here"
-                );
-            }
             list.push(row);
         }
         json!({

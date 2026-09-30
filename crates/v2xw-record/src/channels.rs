@@ -189,6 +189,15 @@ pub const CHANNELS: &[ChannelSpec] = &[
         visibility: Visibility::Gt,
         payload_bytes: None,
     },
+    // What a node discarded in one step with no frame to carry it: transmit-side drops and
+    // a CRL backlog shed, one row per node, step and cause. The receive-side drops are on
+    // `node.rx`. A recording and inspector channel, not an `Event` payload.
+    ChannelSpec {
+        name: "node.drop",
+        wire_id: None,
+        visibility: Visibility::Node,
+        payload_bytes: None,
+    },
     ChannelSpec {
         name: "node.neighbor",
         wire_id: Some(16),

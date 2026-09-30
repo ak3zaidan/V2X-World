@@ -31,6 +31,7 @@ import {
   applyPush,
   followFeed,
   openMessage,
+  setHovering,
   setPaused,
   type FeedDir,
   type FeedView,
@@ -38,6 +39,7 @@ import {
 import type { ClientProvenance } from "../lib/provenance.js";
 import type { EngineFlavour, EngineProbe } from "../lib/target.js";
 import type { ThemeName } from "../lib/theme.js";
+import { sameSecurity, type NodeSecurityRow } from "../lib/security.js";
 import { changedPointers, getPointer, setPointer } from "../lib/schema.js";
 
 /** §3.1.3 — one row of the `Hello` node table. */
@@ -416,7 +418,7 @@ const DEFAULT_SYNC: CompareSync = { time: true, camera: true, offsetNs: 0 };
  * A new panel is one id here and one entry in `PANELS` (`shell/panels.tsx`), whose type makes the
  * two agree.
  */
-export const PANEL_IDS = ["settings", "metrics", "runs", "compare", "commands", "details"] as const;
+export const PANEL_IDS = ["settings", "metrics", "backend", "runs", "compare", "commands", "details"] as const;
 export type PanelId = (typeof PANEL_IDS)[number];
 
 /** A sentence from the settings window's last action, and how to colour it. */
@@ -464,6 +466,19 @@ interface StudioState {
   radios: number;
   /** The followed node's neighbour table, refreshed on its own every two seconds. */
   neighbors: readonly InspectNeighbor[] | null;
+  /**
+   * The followed node's credential state (`node.security`, via `inspect.node` `certs` and `crl`),
+   * refreshed with the neighbour table. `null` in a run with no credential system.
+   */
+  security: NodeSecurityRow | null;
+  /**
+   * Metrics another view asked the metrics panel to show, with what they are about ("the RA"), or
+   * `null`. The Backend view sets it when a researcher asks for an entity's metrics; the metrics
+   * panel takes it as its selection and clears it.
+   */
+  metricsFocus: { readonly title: string; readonly metrics: readonly string[] } | null;
+  /** Whether the viewport's legend is open; a preference that survives a reload. */
+  legendOpen: boolean;
   overlays: Partial<Record<OverlayName, boolean>>;
   serverOverlays: readonly ServerOverlay[];
   groundTruthLocked: boolean;
@@ -562,6 +577,11 @@ interface StudioState {
   setFollowedPose: (p: FollowedPose | null) => void;
   setRadios: (n: number) => void;
   setNeighbors: (n: readonly InspectNeighbor[] | null) => void;
+  setSecurity: (r: NodeSecurityRow | null) => void;
+  setMetricsFocus: (f: { readonly title: string; readonly metrics: readonly string[] } | null) => void;
+  setLegendOpen: (v: boolean) => void;
+  /** Hold the feed's rows still while the pointer is over them (`lib/feed.ts`). */
+  setFeedHover: (hovering: boolean) => void;
   setOverlays: (o: Partial<Record<OverlayName, boolean>>) => void;
   setServerOverlays: (o: readonly ServerOverlay[]) => void;
   setGroundTruthLocked: (v: boolean) => void;
@@ -647,6 +667,27 @@ function writeDevDetails(v: boolean): void {
     if (typeof localStorage !== "undefined") localStorage.setItem(DEV_DETAILS_KEY, v ? "1" : "0");
   } catch {
     /* a browser with storage denied still gets the toggle, just not the memory of it */
+  }
+}
+
+const LEGEND_KEY = "vwp.studio.legendOpen";
+
+/** A remembered on/off preference. Storage can throw (a private window); the default is used then. */
+function readFlag(key: string, fallback: boolean): boolean {
+  try {
+    if (typeof localStorage === "undefined") return fallback;
+    const v = localStorage.getItem(key);
+    return v === null ? fallback : v === "1";
+  } catch {
+    return fallback;
+  }
+}
+
+function writeFlag(key: string, v: boolean): void {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(key, v ? "1" : "0");
+  } catch {
+    /* the toggle still works, it is just not remembered */
   }
 }
 
@@ -777,6 +818,9 @@ export const useStudio = create<StudioState>((set) => ({
   followedPose: null,
   radios: 0,
   neighbors: null,
+  security: null,
+  metricsFocus: null,
+  legendOpen: readFlag(LEGEND_KEY, false),
   overlays: {},
   serverOverlays: [],
   groundTruthLocked: false,
@@ -836,6 +880,7 @@ export const useStudio = create<StudioState>((set) => ({
       inspect: null,
       inspectMessages: null,
       neighbors: null,
+      security: state.selectedNode === nodeId ? state.security : null,
       // The feed belongs to the node: a new node starts an empty one, the same node keeps its own
       // (the page selects twice per click, before and after `view.follow` names the node).
       feed: state.feed.node === nodeId ? state.feed : followFeed(state.feed, nodeId),
@@ -882,6 +927,13 @@ export const useStudio = create<StudioState>((set) => ({
     ),
   setRadios: (n) => set((state) => (state.radios === n ? state : { radios: n })),
   setNeighbors: (n) => set({ neighbors: n }),
+  setSecurity: (r) => set((state) => (sameSecurity(state.security, r) ? state : { security: r })),
+  setMetricsFocus: (f) => set({ metricsFocus: f }),
+  setLegendOpen: (v) => {
+    writeFlag(LEGEND_KEY, v);
+    set({ legendOpen: v });
+  },
+  setFeedHover: (hovering) => set((state) => ({ feed: setHovering(state.feed, hovering) })),
   setOverlays: (o) => set((state) => ({ overlays: { ...state.overlays, ...o } })),
   setServerOverlays: (o) => set({ serverOverlays: o }),
   setGroundTruthLocked: (v) => set({ groundTruthLocked: v }),

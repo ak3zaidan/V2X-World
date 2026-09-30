@@ -25,8 +25,8 @@ use v2xw_core::kinematics::Kinematics;
 use v2xw_core::math::{q3, quantize_to};
 use v2xw_core::time::SimTime;
 use v2xw_metrics::channels::{
-    ByteBucket, GtKinematicsView, MacCbrView, NetBytesView, NodeRxView, NodeTelemetryView,
-    NodeTxView, PhyRxView, RxFate, RxOutcome, SignerId,
+    ByteBucket, GtKinematicsView, MacCbrView, NetBytesView, NodeDropView, NodeRxView,
+    NodeTelemetryView, NodeTxView, PhyRxView, RxFate, RxOutcome, SignerId,
 };
 
 /// The dB grid every received-power and ratio field is written on (build decision D9).
@@ -47,6 +47,44 @@ macro_rules! channel_record {
             const VISIBILITY: Visibility = $vis;
         }
     };
+}
+
+channel_record!(
+    /// `node.drop` — what a node discarded in one step with no frame to carry it
+    /// ([`NodeDropView`]).
+    NodeDrop,
+    NodeDropView,
+    "node.drop",
+    Visibility::Node
+);
+
+impl NodeDrop {
+    /// The causes that ride on no other channel, with their spelling: the receive-side ones
+    /// are on `node.rx` with the attempt they ended, so recording them here too would count
+    /// them twice.
+    pub const CAUSES: [v2xw_node::DropCause; 2] =
+        [v2xw_node::DropCause::TxOverflow, v2xw_node::DropCause::CrlBacklog];
+
+    /// One row per cause in [`NodeDrop::CAUSES`] that `drops` (a step's counts, in
+    /// `DropCause::ALL` order) has a non-zero count for, in that order.
+    #[must_use]
+    pub fn from_step(t: SimTime, node: NodeId, drops: &[u32; 6]) -> Vec<NodeDrop> {
+        Self::CAUSES
+            .iter()
+            .filter_map(|cause| {
+                let i = v2xw_node::DropCause::ALL.iter().position(|c| c == cause)?;
+                let count = drops[i];
+                (count > 0).then(|| {
+                    NodeDrop(NodeDropView {
+                        t,
+                        node,
+                        cause: cause.as_str().to_string(),
+                        count,
+                    })
+                })
+            })
+            .collect()
+    }
 }
 
 channel_record!(

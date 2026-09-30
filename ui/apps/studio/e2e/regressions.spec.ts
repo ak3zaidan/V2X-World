@@ -259,7 +259,7 @@ test("Q15 — the inspector's field labels keep a visible focus indicator", asyn
   await streaming(page);
   await followFirstActor(page);
 
-  await page.getByRole("button", { name: "state", exact: true }).click();
+  await page.getByTestId("tab-state").click();
   await expect(page.getByTestId("state-field-cpu_util_pm")).toBeVisible({ timeout: 30_000 });
 
   // No inline style may compete with the stylesheet's :focus-visible rule.

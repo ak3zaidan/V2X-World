@@ -226,3 +226,92 @@ export function systemTitle(system: string): string {
 export function formatT(ns: number): string {
   return `${(ns / 1e9).toFixed(1)} s`;
 }
+
+/** The ids of entities that sent or received a message within `windowNs` of the snapshot. */
+export function activeEntities(s: BackendSnapshot, windowNs = 2_000_000_000): Set<string> {
+  const out = new Set<string>();
+  for (const e of s.edges) {
+    if (isLive(e, s.t, windowNs)) {
+      out.add(e.from);
+      out.add(e.to);
+    }
+  }
+  return out;
+}
+
+/** The whole system in a few numbers: what the Backend view's top strip shows. */
+export interface Glance {
+  readonly entities: number;
+  readonly activeEntities: number;
+  readonly edges: number;
+  readonly liveEdges: number;
+  readonly messages: number;
+  readonly bytes: number;
+  /** Requests waiting in every entity's queue now. */
+  readonly queued: number;
+  /** Entities kept offline (air-gapped). */
+  readonly offline: number;
+}
+
+export function glance(s: BackendSnapshot): Glance {
+  let messages = 0;
+  let bytes = 0;
+  let liveEdges = 0;
+  for (const e of s.edges) {
+    messages += e.messages;
+    bytes += e.bytes;
+    if (isLive(e, s.t)) liveEdges++;
+  }
+  let queued = 0;
+  let offline = 0;
+  for (const e of s.entities) {
+    queued += e.queue?.depth ?? 0;
+    if (!e.online) offline++;
+  }
+  return {
+    entities: s.entities.length,
+    activeEntities: activeEntities(s).size,
+    edges: s.edges.length,
+    liveEdges,
+    messages,
+    bytes,
+    queued,
+    offline,
+  };
+}
+
+/**
+ * The metrics that measure an entity's work, by the tier the engine puts it in; `null` asks for the
+ * credential system as a whole. Names are the engine's metric catalogue (`v2xw-metrics`); the view
+ * offers only those the run actually carries.
+ *
+ *  * certificate authorities, registration and issuance: the valid pool the devices hold and how
+ *    often they change pseudonym, which is what the issuance chain exists to keep up;
+ *  * privacy (the linkage authorities, the shuffle): linkability and the change rate;
+ *  * misbehaviour and revocation: the time to detect, to decide and each revocation stage, the
+ *    detector's quality and its false accusations, and the CRL it produces;
+ *  * distribution: the CRL's size and the devices' backend reach;
+ *  * devices and roadside units: pool, reach, verification rate and the unverified share.
+ */
+export function metricsFor(e: Pick<BackendEntity, "tier" | "id"> | null): string[] {
+  const pool = ["cert_pool_valid", "pseudonym_change_rate"];
+  const revocation = ["time_to_detect", "time_to_decision", "revocation_latency_stage", "false_accusations", "det_precision", "det_recall", "crl_entries"];
+  const distribution = ["crl_entries", "crl_bytes", "backend_link_up"];
+  const device = ["cert_pool_valid", "backend_link_up", "verify_rate", "unverified_ratio", "pseudonym_change_rate"];
+  if (e === null) return [...new Set([...pool, "backend_link_up", "revocation_latency_stage", "crl_entries", "linkability"])];
+  switch (e.tier) {
+    case "governance":
+    case "ca":
+      return pool;
+    case "ra":
+      return [...pool, "backend_link_up"];
+    case "privacy":
+      return ["linkability", "pseudonym_change_rate"];
+    case "revocation":
+      return revocation;
+    case "distribution":
+      return distribution;
+    default:
+      return device;
+  }
+}

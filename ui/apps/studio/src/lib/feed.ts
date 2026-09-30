@@ -21,6 +21,14 @@
  * Pausing freezes what is shown and keeps receiving: pushes are held, counted, and applied on resume,
  * so nothing is lost by pausing and the table does not move under the pointer.
  *
+ * # Hover
+ *
+ * The rows are newest first, so every push used to insert rows at the top and slide the one under the
+ * pointer down a line or two, several times a second: the row a reader aimed at was not the row they
+ * clicked (QA, 2026-09-24). While the pointer is over the list the feed holds its pushes exactly as a
+ * pause does, and applies them when the pointer leaves. It is a separate flag from `paused`, so leaving
+ * the list does not resume a feed the reader paused on purpose.
+ *
  * Framework- and DOM-free, so it is tested in plain Node (test/feed.test.ts).
  */
 
@@ -57,7 +65,9 @@ export interface FeedView {
   /** Attempts the receiver never detected, as the server counts them. */
   readonly undetected: number;
   readonly paused: boolean;
-  /** Pushes received while paused, applied on resume. */
+  /** Whether the pointer is over the rows; pushes are held meanwhile, like a pause. */
+  readonly hovering: boolean;
+  /** Pushes received while paused or hovered, applied on resume. */
   readonly held: readonly NodeFeedNotification[];
   readonly open: OpenMessage | null;
   /** Message types to show; empty shows every type. */
@@ -80,6 +90,7 @@ export const EMPTY_FEED: FeedView = {
   dropped: { sent: 0, received: 0 },
   undetected: 0,
   paused: false,
+  hovering: false,
   held: [],
   open: null,
   types: [],
@@ -120,7 +131,7 @@ function merge<T extends FeedSent | FeedReceived>(
 /** Apply one push. A push for another node, or of another schema version, changes nothing. */
 export function applyPush(state: FeedView, push: NodeFeedNotification, ring = RING): FeedView {
   if (state.node === null || push.node !== state.node) return state;
-  if (state.paused) return { ...state, held: [...state.held, push].slice(-64) };
+  if (state.paused || state.hovering) return { ...state, held: [...state.held, push].slice(-64) };
   const base = push.reset ? { ...state, sent: [], received: [] } : state;
   const s = merge("sent", push.sent, base.sent, ring);
   const r = merge("received", push.received, base.received, ring);
@@ -141,12 +152,24 @@ export function applyPush(state: FeedView, push: NodeFeedNotification, ring = RI
   };
 }
 
-/** Pause or resume. Resuming applies every held push in order. */
-export function setPaused(state: FeedView, paused: boolean): FeedView {
-  if (paused) return { ...state, paused: true };
-  let next: FeedView = { ...state, paused: false, held: [] };
+/** Apply every held push in order, once neither a pause nor a hover holds them. */
+function release(state: FeedView): FeedView {
+  if (state.paused || state.hovering || state.held.length === 0) return state;
+  let next: FeedView = { ...state, held: [] };
   for (const p of state.held) next = applyPush(next, p);
   return next;
+}
+
+/** Pause or resume. Resuming applies every held push in order (unless the pointer still holds them). */
+export function setPaused(state: FeedView, paused: boolean): FeedView {
+  if (paused) return state.paused ? state : { ...state, paused: true };
+  return release({ ...state, paused: false });
+}
+
+/** The pointer entered or left the rows. Leaving applies what arrived meanwhile, unless paused. */
+export function setHovering(state: FeedView, hovering: boolean): FeedView {
+  if (state.hovering === hovering) return state;
+  return release({ ...state, hovering });
 }
 
 /** Open a message (or close it, with `null`). The entry is copied in: it stays open whatever arrives next. */
