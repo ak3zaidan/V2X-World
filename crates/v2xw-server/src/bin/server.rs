@@ -20,6 +20,7 @@ v2xw-server — the VWP v1 control surface and stream (docs/protocol/vwp-v1.md)
   --record <p>    write the MCAP recording here
   --build-utc <t> manifest build timestamp (the engine may not read a clock)
   --retain <n>    mobility steps of history kept for run.seek (default 36000)
+  --retain-mb <n> most memory that history may take, MB (default 1024)
   --lookahead <n> steps the kernel may run ahead of the stream (default 64)
 
   fixture run:
@@ -85,6 +86,10 @@ async fn main() -> std::process::ExitCode {
                 .and_then(|v| v.parse().ok())
                 .map(|v| live.retain_steps = v)
                 .ok_or("--retain needs a number"),
+            "--retain-mb" => next()
+                .and_then(|v| v.parse::<usize>().ok())
+                .map(|v| live.retain_bytes = v.saturating_mul(1 << 20))
+                .ok_or("--retain-mb needs a number of megabytes"),
             "--lookahead" => next()
                 .and_then(|v| v.parse().ok())
                 .map(|v| live.lookahead_steps = v)

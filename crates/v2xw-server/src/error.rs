@@ -249,11 +249,14 @@ impl From<v2xw_world::WorldError> for ServerError {
 /// `Display` of a `-32004` is "scenario invalid", which says nothing about what to fix.
 pub fn describe(e: &ServerError) -> String {
     match e {
-        ServerError::InvalidParams(rows) | ServerError::ScenarioInvalid(rows) if !rows.is_empty() => {
+        ServerError::InvalidParams(rows) | ServerError::ScenarioInvalid(rows)
+            if !rows.is_empty() =>
+        {
             let parts: Vec<String> = rows
                 .iter()
                 .map(|r| {
-                    if r.message.starts_with(r.path.trim_start_matches('/').replace('/', ".").as_str())
+                    if r.message
+                        .starts_with(r.path.trim_start_matches('/').replace('/', ".").as_str())
                     {
                         r.message.clone()
                     } else {

@@ -483,10 +483,9 @@ impl Run {
             .map_err(|e| match e {
                 v2xw_world::WorldError::InvalidParameter { parameter, problem } => {
                     let (at, hint) = match parameter.as_str() {
-                        "block_x_m" | "block_y_m" => (
-                            "/block_m",
-                            "a longer block, or fewer or narrower lanes",
-                        ),
+                        "block_x_m" | "block_y_m" => {
+                            ("/block_m", "a longer block, or fewer or narrower lanes")
+                        }
                         "lanes_per_direction" => ("/lanes_per_direction", "at least one lane"),
                         "lane_width_m" => ("/lane_width_m", "a positive lane width"),
                         _ => ("/", "change the generator's parameters"),

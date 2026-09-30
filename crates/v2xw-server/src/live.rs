@@ -142,6 +142,10 @@ pub struct LiveOptions {
     /// How many produced steps to retain for `run.seek` (§6.6: a live run seeks backwards
     /// into recorded time).
     pub retain_steps: usize,
+    /// The most memory the retained steps may take, bytes (approximately: see
+    /// `approx_step_bytes`). Whichever of this and `retain_steps` is reached first bounds
+    /// the history; a seek before the oldest retained step is refused with its range.
+    pub retain_bytes: usize,
     /// `Hello.actor_capacity` (§3.1.1), and the **bound this run enforces on slot ids**.
     ///
     /// §3.1.1 calls the field "max concurrent actor slots for the run; a preallocation
@@ -170,6 +174,12 @@ impl Default for LiveOptions {
             // the scene plus that step's events, so this is bounded by the scenario's
             // actor count rather than by its length.
             retain_steps: 36_000,
+            // The step count alone did not bound memory: a step carries every reception
+            // record, and on the SCMS lifecycle with 42 radios one step is about 180 kB, so
+            // an hour's 36 000 steps would have been 6.5 GB on an 8 GB machine (measured:
+            // 1.2 GB at 655 s of the long soak). 1 GiB keeps minutes of seekable history on
+            // such a run and the whole run on a small one.
+            retain_bytes: 1 << 30,
             // `@vwp/protocol`'s own ceiling (`MAX_ACTOR_SLOTS`, 1 << 20) clamps anything
             // larger, so this is the largest number that means anything on the wire. A
             // scenario that knows its own fleet size should set it smaller: it is what a
@@ -2734,6 +2744,8 @@ pub struct LiveEngine {
     /// Every step produced and not yet dropped, oldest first. This is the "recorded time"
     /// §6.6 lets a live run seek backwards into.
     timeline: std::collections::VecDeque<StepOutput>,
+    /// `approx_step_bytes` summed over `timeline`.
+    timeline_bytes: usize,
     /// The step index of `timeline.front()`.
     base_index: u64,
     /// The next step index the stream will emit.
@@ -2945,6 +2957,7 @@ impl LiveEngine {
             projector,
             host,
             timeline: std::collections::VecDeque::new(),
+            timeline_bytes: 0,
             base_index: 0,
             cursor: 0,
             produced: 0,
@@ -3105,7 +3118,8 @@ impl LiveEngine {
             // because the seek is about to move the stream there anyway.
             let seeking = self.seek_goal.is_some_and(|goal| self.produced <= goal);
             if !seeking
-                && self.timeline.len() >= self.options.retain_steps
+                && (self.timeline.len() >= self.options.retain_steps
+                    || self.timeline_bytes >= self.options.retain_bytes)
                 && self.base_index >= self.cursor
             {
                 break;
@@ -3170,13 +3184,19 @@ impl LiveEngine {
                 if self.timeline.is_empty() {
                     self.base_index = index;
                 }
+                self.timeline_bytes += approx_step_bytes(&out);
                 self.timeline.push_back(out);
                 self.produced = index + 1;
                 let seeking = self.seek_goal.is_some();
-                while self.timeline.len() > self.options.retain_steps
+                while (self.timeline.len() > self.options.retain_steps
+                    || self.timeline_bytes > self.options.retain_bytes)
+                    && self.timeline.len() > 1
                     && (self.base_index < self.cursor || seeking)
                 {
-                    self.timeline.pop_front();
+                    if let Some(old) = self.timeline.pop_front() {
+                        self.timeline_bytes =
+                            self.timeline_bytes.saturating_sub(approx_step_bytes(&old));
+                    }
                     self.base_index += 1;
                 }
                 // Only while seeking can the window have slid past the stream position; the
@@ -3315,6 +3335,7 @@ impl LiveEngine {
         self.host = host;
         self.scenario = scenario;
         self.timeline.clear();
+        self.timeline_bytes = 0;
         self.base_index = 0;
         self.cursor = 0;
         self.produced = 0;
@@ -3557,6 +3578,27 @@ fn setup_error(e: v2xw_engine::EngineError) -> ServerError {
         },
         other => ServerError::Internal(other.to_string()),
     }
+}
+
+/// What a retained step costs in memory, approximately: its containers and every payload
+/// byte. Events dominate on a radio-heavy run (every reception is one), so they are counted
+/// by their payloads; the rest by their element sizes. An estimate is enough: it bounds the
+/// history's order of magnitude, which the step count alone did not.
+fn approx_step_bytes(out: &StepOutput) -> usize {
+    use std::mem::size_of;
+    let events: usize = out
+        .events
+        .iter()
+        .map(|e| size_of::<v2xw_record::wire::event::EventEntry>() + e.payload.len())
+        .sum();
+    let recorded: usize = out.recorded.iter().map(|f| 64 + f.as_bytes().len()).sum();
+    size_of::<StepOutput>()
+        + out.snapshot.actors.len() * size_of::<ActorPose>()
+        + out.snapshot.signals.len() * size_of::<WireSignal>()
+        + out.telemetry.len() * size_of::<NodeTelemetry>()
+        + out.metrics.len() * size_of::<MetricRow>()
+        + events
+        + recorded
 }
 
 /// Lower-case hex of a digest.
@@ -4117,6 +4159,8 @@ impl Engine for LiveEngine {
             },
             "retained_steps": self.timeline.len(),
             "retain_limit_steps": self.options.retain_steps,
+            "retained_bytes": self.timeline_bytes,
+            "retain_limit_bytes": self.options.retain_bytes,
             // The scenario timeline's items that have fired by the stream position, with
             // what each did (`scenario.event`). The kernel is ahead of the stream, so an
             // item it has fired but the page has not reached yet is not reported.
