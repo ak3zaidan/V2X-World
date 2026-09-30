@@ -2727,7 +2727,11 @@ impl GroupSignal {
             }
             remaining += d;
         }
-        Some((state, remaining))
+        // A group that shows one state for the whole cycle never changes; its time to a
+        // change is capped at one cycle. The cap also absorbs the rounding of a sum of
+        // phase durations (24.8 + 14.75 + ... = 90.00000000000001 s on Manhattan), which
+        // would otherwise put the remaining time past the cycle it lies in.
+        Some((state, remaining.min(self.cycle_s)))
     }
 }
 
