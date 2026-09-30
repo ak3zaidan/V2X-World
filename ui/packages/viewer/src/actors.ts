@@ -13,8 +13,8 @@
  *    sitting on a band edge does not change detail every frame), then tests a bounding sphere
  *    against the six frustum planes with plain arithmetic (no `Sphere`, no `Vector3`, no allocation);
  * 2. survivors are appended to their bucket — the 16 floats of the instance matrix are written
- *    straight into `instanceMatrix.array`, because the matrix is only a yaw about +z and a
- *    translation — and the four floats of the animation attribute next to them: the wheels' roll and
+ *    straight into `instanceMatrix.array`, because the matrix is only a yaw about +z (a
+ *    two-wheeler's lean into a turn after it) and a translation — and the four floats of the animation attribute next to them: the wheels' roll and
  *    steer, the gait phase, and the packed lamps (`actor-material.ts`);
  * 3. each bucket's `count` is set to the number written and only that prefix of each buffer is
  *    uploaded.
@@ -281,6 +281,16 @@ export const DEFAULT_ACTOR_CLASSES: readonly ActorClassDef[] = [
 ];
 
 const TAU = Math.PI * 2;
+/** Standard gravity, m/s². */
+const GRAVITY = 9.80665;
+/**
+ * The most a drawn two-wheeler leans, radians (30°). Road riding stays well inside it — everyday
+ * cornering is 10–25°, a sports machine's limit near 50° — so the cap only catches a heading the
+ * data turned faster than any rider could.
+ */
+const LEAN_MAX_RAD = 0.52;
+/** Time constant of the drawn roll, seconds. */
+const LEAN_TAU_S = 0.25;
 
 function wrap(a: number): number {
   return a - Math.floor(a / TAU + 0.5) * TAU;
@@ -354,6 +364,8 @@ export class ActorRenderer {
   #gait = new Float64Array(0);
   #amp = new Float32Array(0);
   #steer = new Float32Array(0);
+  /** A single-track vehicle's drawn roll, radians (positive leans to its right). */
+  #lean = new Float32Array(0);
   #px = new Float64Array(0);
   #py = new Float64Array(0);
   #ph = new Float32Array(0);
@@ -729,6 +741,7 @@ export class ActorRenderer {
     this.#gait = g64(this.#gait);
     this.#amp = g32(this.#amp);
     this.#steer = g32(this.#steer);
+    this.#lean = g32(this.#lean);
     this.#px = g64(this.#px);
     this.#py = g64(this.#py);
     this.#ph = g32(this.#ph);
@@ -794,6 +807,7 @@ export class ActorRenderer {
     this.#gait[s] = hashId(id, 5) * TAU;
     this.#amp[s] = 0;
     this.#steer[s] = 0;
+    this.#lean[s] = 0;
     this.#px[s] = x;
     this.#py[s] = y;
     this.#ph[s] = h;
@@ -815,6 +829,9 @@ export class ActorRenderer {
     // wheel into a turn, so the drawn angle follows the path's curvature without its noise.
     const steerK = 1 - Math.exp(-dt / 0.15);
     const ampK = 1 - Math.exp(-dt / 0.25);
+    // A two-wheeler's roll settles in about a quarter of a second: the capsize-and-weave time
+    // scale of a bicycle or motorcycle at town speeds (Cossalter, Motorcycle Dynamics, 2006, ch. 4).
+    const leanK = 1 - Math.exp(-dt / LEAN_TAU_S);
 
     if (cull) this.#extractPlanes(cam);
 
@@ -905,6 +922,16 @@ export class ActorRenderer {
           else if (delta < -0.6) delta = -0.6;
           this.#steer[s] += (delta - this.#steer[s]) * steerK;
         }
+        if (model.info.singleTrack) {
+          // A single-track vehicle balances a turn by leaning into it: in a steady turn the lean
+          // φ satisfies tan φ = v²/(g·R) = v·ω/g (Cossalter 2006, §4.1), for rider and machine
+          // together. Below walking pace the rider balances with the bars and a foot, not a lean.
+          const yaw = wrap(h - this.#ph[s]) / dt;
+          let phi = v > 1.5 ? -Math.atan((v * yaw) / GRAVITY) : 0;
+          if (phi > LEAN_MAX_RAD) phi = LEAN_MAX_RAD;
+          else if (phi < -LEAN_MAX_RAD) phi = -LEAN_MAX_RAD;
+          this.#lean[s] += (phi - this.#lean[s]) * leanK;
+        }
       }
       this.#px[s] = x;
       this.#py[s] = y;
@@ -970,9 +997,20 @@ export class ActorRenderer {
       // makeRotationZ(h) then setPosition(x, y, z).
       // A person's stature scales them uniformly (a shorter person is also narrower).
       const k = this.#slotScale[s];
-      m[o] = cosH * k; m[o + 1] = sinH * k; m[o + 2] = 0; m[o + 3] = 0;
-      m[o + 4] = -sinH * k; m[o + 5] = cosH * k; m[o + 6] = 0; m[o + 7] = 0;
-      m[o + 8] = 0; m[o + 9] = 0; m[o + 10] = k; m[o + 11] = 0;
+      const lean = this.#lean[s];
+      if (lean === 0) {
+        m[o] = cosH * k; m[o + 1] = sinH * k; m[o + 2] = 0; m[o + 3] = 0;
+        m[o + 4] = -sinH * k; m[o + 5] = cosH * k; m[o + 6] = 0; m[o + 7] = 0;
+        m[o + 8] = 0; m[o + 9] = 0; m[o + 10] = k; m[o + 11] = 0;
+      } else {
+        // Rz(h)·Rx(lean): the roll about the vehicle's own long axis through its tyre contacts
+        // (the model's origin is on the ground), so the wheels stay on the road as it leans.
+        const cl = Math.cos(lean);
+        const sl = Math.sin(lean);
+        m[o] = cosH * k; m[o + 1] = sinH * k; m[o + 2] = 0; m[o + 3] = 0;
+        m[o + 4] = -sinH * cl * k; m[o + 5] = cosH * cl * k; m[o + 6] = sl * k; m[o + 7] = 0;
+        m[o + 8] = sinH * sl * k; m[o + 9] = -cosH * sl * k; m[o + 10] = cl * k; m[o + 11] = 0;
+      }
       m[o + 12] = x; m[o + 13] = y; m[o + 14] = z; m[o + 15] = 1;
 
       const a = b.anim;
@@ -1087,6 +1125,11 @@ export class ActorRenderer {
   modelOfSlot(slot: number): ActorModelKind | null {
     if (slot < 0 || slot >= this.#slotCap || this.#slotId[slot] === 0xffffffff) return null;
     return this.#models[this.#slotModel[slot]]?.kind ?? null;
+  }
+
+  /** The roll drawn for `slot`, radians: a two-wheeler turning left leans left (negative). */
+  leanOfSlot(slot: number): number {
+    return slot >= 0 && slot < this.#slotCap ? this.#lean[slot] : 0;
   }
 
   /** The steering angle drawn for `slot`, radians (left positive). */

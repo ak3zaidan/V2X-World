@@ -92,6 +92,11 @@ export interface ActorModelInfo {
   readonly wheelbaseM: number;
   /** A person's stride (two steps), metres; 0 for anything on wheels. */
   readonly strideM: number;
+  /**
+   * A single-track vehicle (motorcycle, moped, bicycle, kick scooter): it balances by leaning into
+   * a turn, so the renderer rolls it by the lean a steady turn needs. Absent means false.
+   */
+  readonly singleTrack?: boolean;
 }
 
 const COLOR = new Color();
@@ -583,7 +588,7 @@ function twoWheeler(b: PartBuilder, L: number, W: number, H: number, lod: LodLev
   // Legs to the pegs.
   b.as(ACTOR_PART.FIXED);
   for (const s of [1, -1]) box(b, 0.05, s * 0.17, (seatZ + r) / 2 + 0.05, 0.14, 0.12, seatZ - r, CLOTH_DARK);
-  return { wheelRadiusM: r, wheelbaseM: 2 * axle, strideM: 0 };
+  return { wheelRadiusM: r, wheelbaseM: 2 * axle, strideM: 0, singleTrack: true };
 }
 
 function bicycle(b: PartBuilder, L: number, W: number, H: number, lod: LodLevel, scooter: boolean): ActorModelInfo {
@@ -621,7 +626,7 @@ function bicycle(b: PartBuilder, L: number, W: number, H: number, lod: LodLevel,
     box(b, -axle * 0.1 + 0.05, -0.1, (r + saddleZ) / 2 + 0.05, 0.14, 0.12, saddleZ - r, CLOTH_DARK);
     rider(b, -axle * 0.15, saddleZ, Math.min(H, saddleZ + 0.78), axle * 0.85, barZ, 0.3, true);
   }
-  return { wheelRadiusM: r, wheelbaseM: 2 * axle, strideM: scooter ? 0 : 2 * Math.PI * r * 1.9 };
+  return { wheelRadiusM: r, wheelbaseM: 2 * axle, strideM: scooter ? 0 : 2 * Math.PI * r * 1.9, singleTrack: true };
 }
 
 /**
