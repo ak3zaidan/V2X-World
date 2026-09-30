@@ -2655,17 +2655,19 @@ pub fn bootstrap_credentials(
 ///
 /// `radio.models.per` selects the implementation-loss preset of the NIST error model
 /// (`ideal`, or `sjoberg-atheros`'s measured 5 dB), and `radio.models.phy` the sensitivity
-/// table (`etsi-static`, `etsi-dynamic`, `cohda-mk5`).
+/// table (`measured-obu`, the default — fielded units as an independent lab measured
+/// them — or the standard's `etsi-static` and `etsi-dynamic` minima, or `cohda-mk5`).
 pub fn build_phy(scenario: &Scenario) -> v2xw_radio::OfdmPhy {
     let models = radio_models(scenario).unwrap_or_default();
     let mut phy = v2xw_radio::OfdmPhy::new(scenario.radio.tiers.phy);
     if let Some(preset) = models.per {
         phy = phy.with_per_model(v2xw_radio::PerModel::new(preset));
     }
-    if let Some(sensitivity) = models.sensitivity {
-        phy = phy.with_sensitivity(sensitivity);
-    }
-    phy
+    phy.with_sensitivity(
+        models
+            .sensitivity
+            .unwrap_or(v2xw_radio::SensitivityPreset::MeasuredObu),
+    )
 }
 
 /// The medium-access model the scenario names, or `None` when the tier models no access.

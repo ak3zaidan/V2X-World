@@ -707,9 +707,14 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                control: SAE J2945/1 in the US, ETSI TS 102 687's adaptive gatekeeper in \
                Europe. lte-v2x-pc5 runs Mode 4 sensing-based \
                semi-persistent scheduling on the SAE J3161/1 US profile: channel 183, \
-               20 MHz, ten 10-PRB sub-channels, MCS 7, probResourceKeep 0.8, and the \
+               20 MHz, ten 10-PRB sub-channels, MCS 7, probResourceKeep 0.8, one blind \
+               retransmission (as every deployed-profile test ran it, 5GAA P-190033), the \
                J3161/1 CR limits enforced per CBR zone (values second-hand, via Abrar et \
-               al. 2026). nr-v2x-pc5 runs Mode 2 at 30 kHz with re-evaluation, \
+               al. 2026) and J3161/1's density-driven BSM interval. Receivers are \
+               fielded ones: an 802.11p unit's sensitivity is the lab-measured OBU's \
+               (-92 dBm at 6 Mbit/s, 4 dB better than EN 302 663's minimum), and a \
+               sidelink block is decided by its error curve with no cutoff at TS 36.101's \
+               conformance sensitivity, which fielded receivers beat by about 13 dB. nr-v2x-pc5 runs Mode 2 at 30 kHz with re-evaluation, \
                pre-emption and the ETSI TS 103 574 CR limits, on the ETSI EN 303 798 \
                pool (20 MHz, four 12-PRB sub-channels, 16QAM-490), each block error read \
                from Lusvarghi et al. 2024's link-level curve for the link's environment, \

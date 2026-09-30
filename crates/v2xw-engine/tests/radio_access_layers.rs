@@ -286,13 +286,25 @@ fn congestion_control_holds_the_cr_limit_under_load() {
 #[test]
 fn blind_retransmissions_raise_delivery_at_range() {
     let base = with_rat(fleet(30, 3.0), "lte-v2x-pc5");
+    // One transmission is asked for by name: SAE J3161/1's profile sends two by default.
+    // Both arms run the conformance receiver (`sensitivity: ts-36-101`), whose cutoff puts
+    // the edge of range inside this fleet; a fielded receiver reaches past it, and one
+    // copy then loses under 0.1 % here, leaving a second nothing to rescue.
     let once = with_sidelink(
         base.clone(),
-        serde_json::json!({ "congestion_control": "off" }),
+        serde_json::json!({
+            "congestion_control": "off",
+            "max_transmissions": 1,
+            "sensitivity": "ts-36-101",
+        }),
     );
     let twice = with_sidelink(
         base,
-        serde_json::json!({ "congestion_control": "off", "max_transmissions": 2 }),
+        serde_json::json!({
+            "congestion_control": "off",
+            "max_transmissions": 2,
+            "sensitivity": "ts-36-101",
+        }),
     );
     let (r1, rec1) = run_recorded(once);
     let (r2, rec2) = run_recorded(twice);

@@ -385,6 +385,7 @@ impl SidelinkAccess {
         if choice.profile.is_none() {
             choice.profile = crate::wiring::sidelink_profile(scenario);
         }
+        let refsens_cutoff = choice.refsens_cutoff;
         let (pool, params, profile) = configuration(scenario.radio.rat, choice)?;
         // The channel the region's rules put this technology on (`radio.region`,
         // `radio.channel`); the loader has already refused a scenario with none.
@@ -420,7 +421,12 @@ impl SidelinkAccess {
                 .map_or_else(|| "off".to_string(), |t| t.id.to_string()),
             ..SidelinkReport::default()
         };
-        let phy = SidelinkPhy::new(tier, pool.clone());
+        // A fielded receiver decodes far below TS 36.101's conformance sensitivity, so
+        // the block-error curve alone decides (`SidelinkPhy::with_sensitivity_dbm`),
+        // unless the scenario asks for the conformance receiver (`sensitivity: ts-36-101`).
+        let phy = SidelinkPhy::new(tier, pool.clone()).with_sensitivity_dbm(
+            refsens_cutoff.then_some(v2xw_radio::cv2x::SIDELINK_SENSITIVITY_DBM),
+        );
         let phy_high = scenario
             .radio
             .tiers
@@ -757,10 +763,16 @@ impl Engine {
         // the noise floor less the `radio.range` margin — is energy in the receiver's
         // S-RSSI window too, split the same way, but carries no SCI it could decode, so it
         // is measured and not sensed.
+        // Its in-band emission is energy in every other sub-channel's S-RSSI too (TS
+        // 36.214's S-RSSI is the total power there), which the busy ratio counts.
         let share_db = 10.0 * v2xw_core::math::log10(f64::from(resource.len.max(1)));
+        let pool = sl.mac.pool().clone();
         for (&rx, &(power, _)) in &state.arrivals {
             for sc in resource.range() {
                 sl.mac.note_energy(rx, slot, sc, power - share_db);
+            }
+            for (sc, leak) in pool.emission_into(resource, power) {
+                sl.mac.note_energy(rx, slot, sc, leak);
             }
         }
         for (&rx, &power) in &state.faint {
