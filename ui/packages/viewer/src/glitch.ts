@@ -856,16 +856,16 @@ export class GlitchHunter {
         const near = cam.near;
         const halfH = Math.tan((cam.fov * Math.PI) / 360) * near;
         const halfW = halfH * cam.aspect;
-        // Right = dir × up (z-up).
-        let rx = dir.y;
-        let ry = -dir.x;
-        const rl = Math.hypot(rx, ry) || 1;
-        rx /= rl;
-        ry /= rl;
+        // The camera's own right and up axes (the first two columns of its world matrix). Taking
+        // "up" as world z, as this did, put a corner of a plan view's near plane — horizontal, 364 m
+        // below a camera at 507 m — 150 m lower than it is, into every roof it passed over.
+        const m = cam.matrixWorld.elements;
+        const rl = Math.hypot(m[0], m[1], m[2]) || 1;
+        const ul = Math.hypot(m[4], m[5], m[6]) || 1;
         for (const [a, bb] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-          const x = p.x + dir.x * near + rx * halfW * a;
-          const y = p.y + dir.y * near + ry * halfW * a;
-          const z = p.z + dir.z * near + halfH * bb;
+          const x = p.x + dir.x * near + (m[0] / rl) * halfW * a + (m[4] / ul) * halfH * bb;
+          const y = p.y + dir.y * near + (m[1] / rl) * halfW * a + (m[5] / ul) * halfH * bb;
+          const z = p.z + dir.z * near + (m[2] / rl) * halfW * a + (m[6] / ul) * halfH * bb;
           const k = w.buildingIndexAt(x, y);
           if (k >= 0 && z < w.buildingTopOf(k) && k !== w.ghostBuilding && k !== w.ghostBuilding2) {
             clip = `the near plane cuts into building ${w.buildingIdOf(k)}`;
@@ -961,11 +961,17 @@ export class GlitchHunter {
       const res = logDepth
         ? (visibleM * Math.log(far / near)) / steps
         : (visibleM * visibleM) / (near * steps);
-      const bad = res > this.minLayerGapM * 0.5;
+      // Two overlapping layers are told apart when they are two depth steps apart: the gap, in
+      // steps at that distance, plus the steps the surface shader's rank bias adds (a bias on
+      // gl_Position.z, so none under a logarithmic buffer, which writes its own fragment depth).
+      const rankBias = v.worldRenderer.layerBiasSteps;
+      const biasSteps = logDepth || !(rankBias > 0) ? 0 : rankBias * 2 ** (this.depthBits - 24);
+      const separation = this.minLayerGapM / res + biasSteps;
+      const bad = separation < 2;
       if (bad && !this.#zEpisode) {
         this.#emit({
           cls: "z_fighting", frame, timeS: t, mode, cause: "viewer",
-          detail: `depth step ${(res * 100).toFixed(1)} cm at ${visibleM.toFixed(0)} m (near ${near.toFixed(2)} m) exceeds half the ${(this.minLayerGapM * 100).toFixed(0)} cm road-layer gap`,
+          detail: `depth step ${(res * 100).toFixed(1)} cm at ${visibleM.toFixed(0)} m (near ${near.toFixed(2)} m): the ${(this.minLayerGapM * 100).toFixed(0)} cm road-layer gap and a ${biasSteps.toFixed(1)}-step rank bias separate layers by ${separation.toFixed(2)} steps, under 2`,
         });
       }
       this.#zEpisode = bad;

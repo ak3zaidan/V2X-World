@@ -144,6 +144,8 @@ const PED_WALK_COLOR = 0xf2f4f7;
 const STOP_BAR_DEPTH = 0.5;
 /** Height of the stop bar above the lane centreline, metres: just above lane markings (0.26). */
 const STOP_BAR_Z = 0.28;
+/** The stop bars' polygon offset, units: two steps above the lane markings'. */
+export const STOP_BAR_OFFSET_UNITS = -14;
 
 export class SignalRenderer {
   readonly group = new Group();
@@ -163,7 +165,9 @@ export class SignalRenderer {
   #lampMaterial = new MeshBasicMaterial({ vertexColors: true, toneMapped: false, name: "signal-lamps" });
   #barMaterial = new MeshBasicMaterial({
     vertexColors: true, toneMapped: false, name: "signal-stop-bars", transparent: true,
-    polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    // Above the road surface's highest rank bias and the markings (`world-render.ts`
+    // ABOVE_SURFACE_OFFSET_UNITS, −12; a literal here because world-render imports this module).
+    polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: STOP_BAR_OFFSET_UNITS,
   });
   #geometries: BufferGeometry[] = [];
 

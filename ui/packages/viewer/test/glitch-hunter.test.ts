@@ -9,7 +9,9 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { ShaderLib } from "three";
 import { Viewer } from "../src/scene.js";
+import { SURFACE_LAYER_BIAS_GLSL } from "../src/world-render.js";
 import { GLITCH_CLASSES, GlitchHunter, obbPenetration, type GlitchClass } from "../src/glitch.js";
 import type { ViewerCanvas } from "../src/types.js";
 import { NullRenderer } from "./support/null-renderer.js";
@@ -175,6 +177,8 @@ describe("GlitchHunter — every class can go red", () => {
       r.viewer.camera.updateMatrixWorld();
     }],
     ["z_fighting", (r) => {
+      // The surface shader's rank bias taken away, and a near plane too close to resolve the gap.
+      r.viewer.worldRenderer.layerBiasSteps = 0;
       const cam = r.viewer.camera;
       cam.near = 0.01;
       cam.far = 12000;
@@ -217,6 +221,82 @@ describe("GlitchHunter — every class can go red", () => {
       expect(viewerCaused(r.hunter, cls) + (r.hunter.report().engineCaused[cls] ?? 0)).toBeGreaterThan(before);
     });
   }
+
+  it("z_fighting: a street camera's near plane needs the rank bias, and the bias is what the shader runs", () => {
+    const r = rig();
+    closeUp(r);
+    clean(r, 30);
+    // A chase camera's near plane: the 4 cm gap alone is under two depth steps at 870 m.
+    const cam = r.viewer.camera;
+    draw(r);
+    cam.near = 0.7;
+    cam.far = 4000;
+    cam.updateProjectionMatrix();
+    r.hunter.afterFrame();
+    expect(viewerCaused(r.hunter, "z_fighting"), JSON.stringify(r.hunter.report().examples.z_fighting)).toBe(0);
+    r.viewer.worldRenderer.layerBiasSteps = 0;
+    draw(r);
+    cam.near = 0.7;
+    cam.updateProjectionMatrix();
+    r.hunter.afterFrame();
+    expect(viewerCaused(r.hunter, "z_fighting")).toBe(1);
+    // The bias lives in the surface material's vertex shader, after projection.
+    const tile = r.viewer.worldRenderer.tiles.children[0] as unknown as {
+      material: { onBeforeCompile: (s: { uniforms: Record<string, unknown>; vertexShader: string; fragmentShader: string }) => void };
+      geometry: { getAttribute: (n: string) => unknown };
+    };
+    expect(tile.geometry.getAttribute("aLayer")).toBeTruthy();
+    const shader = { uniforms: {}, vertexShader: ShaderLib.lambert.vertexShader, fragmentShader: ShaderLib.lambert.fragmentShader };
+    tile.material.onBeforeCompile(shader);
+    expect(shader.vertexShader).toContain(SURFACE_LAYER_BIAS_GLSL);
+    expect(shader.vertexShader).toContain("attribute float aLayer");
+    expect(shader.uniforms).toHaveProperty("uLayerBias");
+  });
+
+  it("camera_clip: a near plane through a wall counts, a plan view's near plane high over the roofs does not", () => {
+    const r = rig();
+    closeUp(r);
+    clean(r, 30);
+    const w = r.viewer.worldRenderer.world!;
+    const b = w.buildings;
+    const ring = w.ringPoints;
+    const o = b.ringOff[0];
+    const x0 = ring.x[o];
+    const y0 = ring.y[o];
+    const x1 = ring.x[o + 1];
+    const y1 = ring.y[o + 1];
+    const el = Math.hypot(x1 - x0, y1 - y0);
+    const ex = (x1 - x0) / el;
+    const ey = (y1 - y0) / el;
+    // Outward normal of whichever winding: the side a step along it is not inside the building.
+    const mx = (x0 + x1) / 2;
+    const my = (y0 + y1) / 2;
+    const wr = r.viewer.worldRenderer;
+    const sign = wr.buildingIndexAt(mx + ey * 0.5, my - ex * 0.5) >= 0 ? -1 : 1;
+    const nx = sign * ey;
+    const ny = -sign * ex;
+    const cam = r.viewer.camera;
+    // A plan view straight down from 500 m with a 360 m near plane: its corners are 140 m up.
+    draw(r);
+    cam.position.set(mx, my, 500);
+    cam.up.set(0, 1, 0);
+    cam.lookAt(mx + 0.01, my, 0);
+    cam.near = 360;
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+    r.hunter.afterFrame();
+    expect(viewerCaused(r.hunter, "camera_clip"), JSON.stringify(r.hunter.report().examples.camera_clip)).toBe(0);
+    // Street level, 0.3 m outside the wall, facing it, with a 1 m near plane.
+    draw(r);
+    cam.up.set(0, 0, 1);
+    cam.position.set(mx + nx * 0.3, my + ny * 0.3, 1.5);
+    cam.lookAt(mx - nx, my - ny, 1.5);
+    cam.near = 1;
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+    r.hunter.afterFrame();
+    expect(viewerCaused(r.hunter, "camera_clip")).toBe(1);
+  });
 
   it("subject_lost and chase_framing: the chase camera turned away and raised", () => {
     const r = rig();

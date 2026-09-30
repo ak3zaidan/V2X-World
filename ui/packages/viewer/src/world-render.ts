@@ -77,6 +77,29 @@ const Z_CROSSING = 0.22;
 const Z_MARKING = 0.26;
 /** A sidewalk ribbon sits this far above the carriageway. */
 const SIDEWALK_LIFT_M = 0.08;
+/**
+ * Draw-order ranks of the road-surface layers, lowest first. The gaps above are not enough on
+ * their own at street level: from a chase camera's 0.7 m near plane a 24-bit depth buffer resolves
+ * 13 cm at 870 m, and a coloured bus lane lies exactly on the carriageway it overlaps. Each rank
+ * is therefore also pulled towards the camera by {@link LAYER_BIAS_STEPS} depth-buffer steps in
+ * the surface shader — a per-vertex `polygonOffsetUnits` — so an upper layer wins by a whole
+ * number of steps at any distance, and the order holds wherever the gap alone would not.
+ */
+const RANK_LANDUSE = -1;
+const RANK_ROAD = 0;
+const RANK_COLOURED_LANE = 1;
+const RANK_JUNCTION = 2;
+const RANK_SIDEWALK = 3;
+const RANK_CROSSING = 4;
+/** Depth-buffer steps (of a 24-bit buffer) between adjacent ranks. */
+export const LAYER_BIAS_STEPS = 2;
+/**
+ * Markings, stop bars and headlight pools must stay above the highest rank's bias: their polygon
+ * offset in units, which is `polygonOffsetUnits` (≈ one depth step each).
+ */
+export const ABOVE_SURFACE_OFFSET_UNITS = -(RANK_CROSSING * LAYER_BIAS_STEPS + 4);
+/** Pulls a surface vertex towards the camera by its rank's bias, after projection. */
+export const SURFACE_LAYER_BIAS_GLSL = "gl_Position.z -= uLayerBias * aLayer * gl_Position.w;";
 /** Width of a painted lane line, metres: `addOffsetLine`'s half-width 0.09 twice. */
 const MARKING_WIDTH_M = 0.18;
 
@@ -242,6 +265,8 @@ export class WorldRenderer {
   };
 
   #surfaceMaterial: MeshLambertMaterial;
+  /** The surface shader's per-rank depth bias, in NDC depth (a 24-bit step is 2⁻²³ of it). */
+  #layerBias = { value: LAYER_BIAS_STEPS * 2 ** -23 };
   #markingMaterial: MeshBasicMaterial;
   #buildingMaterial: MeshLambertMaterial;
   #siteMaterial: MeshLambertMaterial;
@@ -326,13 +351,22 @@ export class WorldRenderer {
     this.lights.name = "world/lights";
 
     this.#surfaceMaterial = new MeshLambertMaterial({ vertexColors: true, name: "world-surface" });
+    const layerBias = this.#layerBias;
+    this.#surfaceMaterial.onBeforeCompile = (shader) => {
+      shader.uniforms.uLayerBias = layerBias;
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nattribute float aLayer;\nuniform float uLayerBias;")
+        .replace("#include <project_vertex>", `#include <project_vertex>\n${SURFACE_LAYER_BIAS_GLSL}`);
+    };
+    this.#surfaceMaterial.customProgramCacheKey = () => "vwp-surface-layers";
     // Markings test depth against the road but never write it, and draw after it: where two
     // markings overlap — the edge lines of the two directions meet on the centre line, a white and a
     // yellow strip at exactly the same height — the later one wins, every frame, instead of the two
     // trading places as the camera moves (measured: 1.8 % of a 1,680 x 1,050 plan view changing
     // under a 1 cm camera move, all of it markings).
     this.#markingMaterial = new MeshBasicMaterial({
-      vertexColors: true, name: "lane-markings", polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+      vertexColors: true, name: "lane-markings", polygonOffset: true, polygonOffsetFactor: -2,
+      polygonOffsetUnits: ABOVE_SURFACE_OFFSET_UNITS,
       toneMapped: false, depthWrite: false,
     });
     this.markings.renderOrder = 1;
@@ -631,14 +665,17 @@ export class WorldRenderer {
     const nTiles = tilesX * tilesY;
     const surfaces: (MeshBuilder | null)[] = new Array<MeshBuilder | null>(nTiles).fill(null);
     const marks: (MeshBuilder | null)[] = new Array<MeshBuilder | null>(nTiles).fill(null);
-    const surfaceOf = (i: number): MeshBuilder => {
+    /** Tile `i`'s surface builder, stamping what is added next with draw-order `rank`. */
+    const surfaceAt = (i: number, rank: number): MeshBuilder => {
       let b = surfaces[i];
       if (!b) {
-        b = new MeshBuilder({ color: true, vertexCapacity: 4096, indexCapacity: 8192 });
+        b = new MeshBuilder({ color: true, layer: true, vertexCapacity: 4096, indexCapacity: 8192 });
         surfaces[i] = b;
       }
+      b.layer = rank;
       return b;
     };
+    const surfaceOf = (i: number): MeshBuilder => surfaceAt(i, RANK_ROAD);
     const markOf = (i: number): MeshBuilder => {
       let b = marks[i];
       if (!b) {
@@ -659,7 +696,7 @@ export class WorldRenderer {
       const hex = landuseColor(th, lu.classIdx);
       const [r, g, b] = colorTriple(hex);
       const t = tileIndex(ring.x[lu.ringOff], ring.y[lu.ringOff]);
-      addPolygon(surfaceOf(t), ring.x, ring.y, lu.ringOff, lu.ringCount, bbox.minZM + Z_LANDUSE, scratch, r, g, b);
+      addPolygon(surfaceAt(t, RANK_LANDUSE), ring.x, ring.y, lu.ringOff, lu.ringCount, bbox.minZM + Z_LANDUSE, scratch, r, g, b);
     }
 
     const lanes = world.lanes;
@@ -672,20 +709,20 @@ export class WorldRenderer {
       const type = lanes.laneType[i];
       const halfWidth = Math.max(0.4, lanes.widthM[i] / 2);
       const t = tileIndex(pts.x[off], pts.y[off]);
-      const surface = surfaceOf(t);
       let hex = th.road;
       let z = Z_ROAD;
+      let rank = RANK_ROAD;
       switch (type) {
-        case LANE_SIDEWALK: hex = th.sidewalk; z = Z_ROAD + SIDEWALK_LIFT_M; break;
-        case LANE_BIKE: hex = th.bikeLane; break;
-        case LANE_BUS: hex = th.busLane; break;
-        case LANE_PARKING: hex = th.parking; break;
-        case LANE_JUNCTION_INTERNAL: hex = th.junction; z = Z_JUNCTION; break;
-        case LANE_CROSSING: hex = th.crossing; z = Z_CROSSING; break;
+        case LANE_SIDEWALK: hex = th.sidewalk; z = Z_ROAD + SIDEWALK_LIFT_M; rank = RANK_SIDEWALK; break;
+        case LANE_BIKE: hex = th.bikeLane; rank = RANK_COLOURED_LANE; break;
+        case LANE_BUS: hex = th.busLane; rank = RANK_COLOURED_LANE; break;
+        case LANE_PARKING: hex = th.parking; rank = RANK_COLOURED_LANE; break;
+        case LANE_JUNCTION_INTERNAL: hex = th.junction; z = Z_JUNCTION; rank = RANK_JUNCTION; break;
+        case LANE_CROSSING: hex = th.crossing; z = Z_CROSSING; rank = RANK_CROSSING; break;
         default: break;
       }
       const [r, g, b] = colorTriple(hex);
-      addRibbon(surface, pts.x, pts.y, pts.z, off, n, halfWidth, z, r, g, b);
+      addRibbon(surfaceAt(t, rank), pts.x, pts.y, pts.z, off, n, halfWidth, z, r, g, b);
       laneCount++;
 
     }
@@ -707,7 +744,7 @@ export class WorldRenderer {
       const j = world.junctions.at(i);
       const r = Math.max(4, Math.min(30, 2.2 + j.laneCount * 1.1));
       const [cr, cg, cb] = colorTriple(th.junction);
-      addDisc(surfaceOf(tileIndex(j.xM, j.yM)), j.xM, j.yM, bbox.minZM + Z_JUNCTION, r, 16, cr, cg, cb);
+      addDisc(surfaceAt(tileIndex(j.xM, j.yM), RANK_JUNCTION), j.xM, j.yM, bbox.minZM + Z_JUNCTION, r, 16, cr, cg, cb);
     }
 
     for (let i = 0; i < world.crossings.count; i++) {
@@ -1071,6 +1108,22 @@ export class WorldRenderer {
    * depth buffer has to resolve for the road not to z-fight (the glitch hunter checks it).
    */
   get minLayerGapM(): number {
+    return this.#minLayerGapM();
+  }
+
+  /**
+   * Depth-buffer steps (24-bit) the surface shader separates adjacent layer ranks by, read back
+   * from the uniform the shader actually uses. Settable, so a test can take the bias away.
+   */
+  get layerBiasSteps(): number {
+    return this.#layerBias.value / 2 ** -23;
+  }
+
+  set layerBiasSteps(steps: number) {
+    this.#layerBias.value = steps * 2 ** -23;
+  }
+
+  #minLayerGapM(): number {
     const layers = [Z_LANDUSE, Z_ROAD, Z_ROAD + SIDEWALK_LIFT_M, Z_JUNCTION, Z_CROSSING];
     let gap = Infinity;
     for (let i = 0; i < layers.length; i++) {

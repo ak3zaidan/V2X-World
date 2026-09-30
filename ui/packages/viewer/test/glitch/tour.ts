@@ -14,6 +14,8 @@ export interface TourOptions {
   readonly dashboardS?: number;
   /** Aerial extent, metres. Default 420. */
   readonly aerialExtentM?: number;
+  /** Called after every hunted frame (a debugging hook). */
+  readonly onFrame?: () => void;
   /** Log progress to stderr. */
   readonly verbose?: boolean;
 }
@@ -69,7 +71,7 @@ export function runTour(replay: StreamReplay, options: TourOptions = {}): TourRe
   v.setCameraMode("map", true);
   v.cameras.fitExtent(options.aerialExtentM ?? 420);
   log("aerial");
-  replay.run(options.aerialS ?? 20);
+  replay.run(options.aerialS ?? 20, true, options.onFrame);
 
   const subjects: string[] = [];
   const used = new Set<number>();
@@ -91,14 +93,14 @@ export function runTour(replay: StreamReplay, options: TourOptions = {}): TourRe
     subjects.push(cls);
     log(`chase ${label}: ${cls} ${id}`);
     v.flyTo(id, "chase");
-    replay.run(options.chaseS ?? 15);
+    replay.run(options.chaseS ?? 15, true, options.onFrame);
   }
 
   const dash = pickSubject(replay, (n, c) => c === 0 && n !== "bicycle", used);
   if (dash !== null) {
     log(`dashboard ${dash}`);
     v.flyTo(dash, "dashboard");
-    replay.run(options.dashboardS ?? 20);
+    replay.run(options.dashboardS ?? 20, true, options.onFrame);
   }
   return { report: replay.hunter.report(), subjects };
 }

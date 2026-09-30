@@ -29,6 +29,7 @@ import {
   type Camera,
 } from "three";
 import type { ActorClassDef } from "./types.js";
+import { ABOVE_SURFACE_OFFSET_UNITS } from "./world-render.js";
 
 /** `lamps` bits this layer reads (vwp-v1 §3.3.5). */
 const LOW_BEAM = 0x10;
@@ -149,7 +150,7 @@ export class LampGlow {
       blending: AdditiveBlending,
       polygonOffset: true,
       polygonOffsetFactor: -4,
-      polygonOffsetUnits: -4,
+      polygonOffsetUnits: ABOVE_SURFACE_OFFSET_UNITS,
       name: "lamp-pools",
     });
     // three wants a Color-like for vec3 uniforms; an array works with ShaderMaterial.

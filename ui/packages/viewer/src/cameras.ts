@@ -116,6 +116,8 @@ const CHASE_YAW_OMEGA = 3.6;
 
 /** The chase distance for a car, metres, that `distanceM` (the zoom) is relative to. */
 const CHASE_REFERENCE_M = 9;
+/** Where in a street flight's progress `u` its final descent onto the subject begins. */
+const FLY_DESCENT_AT = 0.6;
 
 /** Eight directions round the camera, for {@link CameraController} wall proximity. */
 const NEAR_RING: readonly (readonly [number, number])[] = [
@@ -278,6 +280,8 @@ export class CameraController {
   /** Seconds elapsed in the current flight, and its total; equal means "not flying". */
   #flyT = 0;
   #flyDuration = 0;
+  /** Seconds of a street flight before its final descent begins (`FLY_DESCENT_AT` of `u`). */
+  #flyAcrossS = 0;
   #flyStart = new Vector3();
   /** Cruise height of a flight to street level, or NaN for a straight flight; see `#beginFlight`. */
   #flyCruise = Number.NaN;
@@ -954,6 +958,19 @@ export class CameraController {
     this.#flyCruise = CameraController.needsFollowSubject(this.#mode) && (hop > 60 || this.#flyStart.z > this.#desiredPosition.z + 40)
       ? this.#cruiseFor(this.#flyStart, this.#desiredPosition)
       : Number.NaN;
+    this.#flyAcrossS = this.#flyDuration * FLY_DESCENT_AT;
+    if (Number.isFinite(this.#flyCruise)) {
+      // The final descent gets time of its own, by the height it falls. In 40 % of a 1.2 s flight
+      // a 62 m drop came to rest at 400 m/s² — the last three frames before the follow took over
+      // stepped 34, 12 and 1 cm, which the glitch hunter counted as a stutter at every landing.
+      // √h keeps the peak deceleration of the smootherstep, 5.8·h/T², under about 130 m/s².
+      const cruise = this.#flyCruise;
+      const startLow = this.#flyStart.z < cruise - 1;
+      const straightAtC2 = this.#flyStart.z + (this.#desiredPosition.z - this.#flyStart.z) * smootherstep(FLY_DESCENT_AT);
+      const fall = (startLow ? cruise : Math.max(straightAtC2, cruise)) - this.#desiredPosition.z;
+      const descent = Math.max(this.#flyDuration * (1 - FLY_DESCENT_AT), MathUtils.clamp(0.21 * Math.sqrt(Math.max(0, fall)), 0.35, 1.8));
+      this.#flyDuration = this.#flyAcrossS + descent;
+    }
   }
 
   /**
@@ -981,9 +998,16 @@ export class CameraController {
   /** One step of the flight begun by {@link #beginFlight}. */
   #advanceFlight(step: number): void {
     this.#flyT += step;
-    const u = MathUtils.clamp(this.#flyT / this.#flyDuration, 0, 1);
-    const p = this.camera.position;
     const cruise = this.#flyCruise;
+    // `u` runs 0 → FLY_DESCENT_AT over the flight's first part and on to 1 over its descent, which
+    // `#beginFlight` may have given longer than the rest of `u` would.
+    const across = this.#flyAcrossS;
+    const u = !Number.isFinite(cruise) || across <= 0 || this.#flyDuration <= across
+      ? MathUtils.clamp(this.#flyT / this.#flyDuration, 0, 1)
+      : this.#flyT < across
+        ? (this.#flyT / across) * FLY_DESCENT_AT
+        : Math.min(1, FLY_DESCENT_AT + ((this.#flyT - across) / (this.#flyDuration - across)) * (1 - FLY_DESCENT_AT));
+    const p = this.camera.position;
     if (!Number.isFinite(cruise)) {
       // Smootherstep: zero velocity *and* zero acceleration at both ends.
       const e = smootherstep(u);
@@ -998,7 +1022,7 @@ export class CameraController {
     const a0 = startLow ? 0.2 : 0;
     // The last 40 % of a flight to the street is the descent onto the subject: over the last
     // fifth, as it was, a 50 m drop ended at 150 m/s in two frames.
-    const c2 = 0.6;
+    const c2 = FLY_DESCENT_AT;
     const across = smootherstep(MathUtils.clamp((u - a0) / (c2 - a0), 0, 1));
     let z: number;
     if (startLow) {
