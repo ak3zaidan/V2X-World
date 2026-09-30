@@ -102,6 +102,7 @@ pub mod secure;
 pub mod server;
 pub mod stores;
 pub mod telemetry;
+pub mod vehicle;
 pub mod vru;
 
 pub use clock::ClockModel;

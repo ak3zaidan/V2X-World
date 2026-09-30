@@ -452,6 +452,9 @@ pub struct ObuRuntime {
     /// The two §3.5.2 fields marked **GT**, handed in from outside the firewall by
     /// [`ObuRuntime::observe_truth`] and read by nothing but the telemetry path.
     gt_pos_error_m: f32,
+    /// The vehicle's own bus and what the unit derives from it (path history, path
+    /// prediction, lights, event flags): [`crate::vehicle`].
+    own: crate::vehicle::OwnVehicle,
 }
 
 impl core::fmt::Debug for ObuRuntime {
@@ -519,6 +522,7 @@ impl ObuRuntime {
             dcc_state_code: v2xw_record::wire::U16_NONE,
             relevance: BTreeMap::new(),
             gt_pos_error_m: f32::NAN,
+            own: crate::vehicle::OwnVehicle::default(),
             security: NodeSecurity::new(config.wall, config.crypto_mode, config.psid),
             etsi: EtsiUperCodec::new(),
             service,
@@ -615,6 +619,33 @@ impl ObuRuntime {
     /// derived from.
     pub fn set_belief(&mut self, belief: PositionEstimate) {
         self.belief = belief;
+        self.own.on_fix(&belief);
+    }
+
+    /// Hands the node this step's reading of its own vehicle's bus ([`crate::vehicle`]):
+    /// the dynamics, the lights and the navigation's next movement. What its BSM's Part II,
+    /// its CAM's dynamics and its event triggers are built from.
+    pub fn set_vehicle_bus(&mut self, bus: crate::vehicle::VehicleBus) {
+        self.events.set_own_acceleration(bus.a_long_mps2);
+        self.events.set_vehicle_bus(&bus);
+        self.own.set_bus(bus);
+    }
+
+    /// Switches the vehicle's hazard warning lights, which its stationary-vehicle DENM
+    /// and its BSM's event flags read.
+    pub fn set_hazard_lights(&mut self, on: bool) {
+        self.events.set_hazard_lights(on);
+    }
+
+    /// The unit's view of its own vehicle.
+    pub fn own_vehicle(&self) -> &crate::vehicle::OwnVehicle {
+        &self.own
+    }
+
+    /// The vehicle's role, which its CAM's low-frequency container states (an emergency
+    /// vehicle, public transport...).
+    pub fn set_vehicle_role(&mut self, role: cam::VehicleRole) {
+        self.own.set_role(role);
     }
 
     /// Sets the DCC state the generators honour.
@@ -1364,6 +1395,8 @@ impl ObuRuntime {
             self.drops.record_n(DropCause::TxOverflow, wanted);
             return;
         };
+        // A new pseudonym starts a new path history.
+        self.own.set_identity(crate::safety::digest_key(&cred.digest));
 
         let mut built: Vec<(MsgType, SimTime, Option<Vec<u8>>)> =
             Vec::with_capacity(wanted as usize);
@@ -1371,12 +1404,12 @@ impl ObuRuntime {
             built.push((
                 r.msg_type,
                 r.at,
-                self.encode_payload(r.msg_type, believed, &cred),
+                self.encode_payload(r.msg_type, believed, &cred, r.include_low_frequency),
             ));
         }
         for e in events {
             let ty = e.msg_type();
-            let payload = self.events.encode(&e, believed, &cred, &self.config);
+            let payload = self.events.encode(&e, believed, &cred, &self.config, &self.own);
             built.push((ty, believed, payload));
         }
         for (msg_type, at, payload) in built {
@@ -1515,13 +1548,15 @@ impl ObuRuntime {
         msg_type: MsgType,
         believed: SimTime,
         cred: &CredentialHandle,
+        low_frequency: bool,
     ) -> Option<Vec<u8>> {
         let mut id = [0u8; 4];
         id.copy_from_slice(&cred.digest.0[..4]);
+        let bus = self.own.bus().copied();
         match msg_type {
             MsgType::Cam => {
                 let generation_time = cam::timestamp_its(self.config.wall, believed).ok()?;
-                let input = cam::CamInput::new(
+                let mut input = cam::CamInput::new(
                     u32::from_be_bytes(id),
                     self.config.station_type,
                     self.belief,
@@ -1529,13 +1564,55 @@ impl ObuRuntime {
                     self.config.dims,
                     generation_time,
                 );
+                // The high-frequency container's dynamics, from the vehicle's own sensors.
+                if let Some(b) = bus {
+                    input.longitudinal_acceleration_mps2 = Some(b.a_long_mps2);
+                    input.lateral_acceleration_mps2 = Some(b.a_lat_mps2);
+                    input.yaw_rate_rad_s = Some(b.yaw_rate_rad_s);
+                    if b.speed_mps > 1.0 {
+                        input.curvature_inv_m = Some(b.yaw_rate_rad_s / b.speed_mps);
+                        input.curvature_from_yaw_rate = true;
+                    }
+                }
+                // The low-frequency container at EN 302 637-2's cadence (the first CAM,
+                // then every 500 ms or more, `generator::CamGenerator`): role, lights and
+                // the path history.
+                if low_frequency {
+                    let now = believed;
+                    let points = self.own.history_points(&self.belief);
+                    let mut lights = cam::ExteriorLightMask::NONE;
+                    if let Some(l) = self.own.lights(now) {
+                        use v2xw_msg::j2735::bsm::ExteriorLights as J;
+                        let has = |bit: J| l.0 & bit.0 != 0;
+                        if has(J::LOW_BEAM) {
+                            lights = cam::ExteriorLightMask(lights.0 | cam::ExteriorLightMask::LOW_BEAM.0);
+                        }
+                        if has(J::LEFT_TURN) || has(J::HAZARD) {
+                            lights = cam::ExteriorLightMask(lights.0 | cam::ExteriorLightMask::LEFT_TURN.0);
+                        }
+                        if has(J::RIGHT_TURN) || has(J::HAZARD) {
+                            lights = cam::ExteriorLightMask(lights.0 | cam::ExteriorLightMask::RIGHT_TURN.0);
+                        }
+                    }
+                    input.low_frequency = Some(cam::CamLowFrequency {
+                        vehicle_role: self.own.role(),
+                        exterior_lights: lights,
+                        path_history: points
+                            .iter()
+                            .map(|p| cam::PathHistoryPoint {
+                                pos: p.pos,
+                                age: Duration::from_nanos(self.belief.time_ns.saturating_sub(p.t)),
+                            })
+                            .collect(),
+                    });
+                }
                 let message = cam::build_cam(&input).ok()?;
                 let encoded = self.etsi.encode(&Message::Cam(Box::new(message))).ok()?;
                 debug_assert!(encoded.is_real(), "the ETSI codec produces real UPER bytes");
                 Some(encoded.bytes)
             }
             MsgType::Bsm => {
-                let input = bsm::BsmInput::new(
+                let mut input = bsm::BsmInput::new(
                     self.schedule.bsm_msg_count(),
                     id,
                     self.belief,
@@ -1543,7 +1620,25 @@ impl ObuRuntime {
                     self.config.dims,
                     bsm::sec_mark(self.config.wall, believed),
                 );
-                let message = bsm::build_bsm(&input).ok()?;
+                // Part I's dynamics from the vehicle's own sensors, which J2945/1 requires
+                // an OBU to fill (`accelSet`, `brakes`); `transmission` is forward gears
+                // for a vehicle that is moving or standing in traffic.
+                if let Some(b) = bus {
+                    input.longitudinal_acceleration_mps2 = Some(b.a_long_mps2);
+                    input.lateral_acceleration_mps2 = Some(b.a_lat_mps2);
+                    input.yaw_rate_rad_s = Some(b.yaw_rate_rad_s);
+                    input.brakes = self.own.brakes();
+                    input.transmission = bsm::TransmissionState::ForwardGears;
+                }
+                let mut message = bsm::build_bsm(&input).ok()?;
+                // Part II: J2945/1's path history and path prediction on every message,
+                // the event flags and lights when there are any (`crate::vehicle`).
+                if let Some(ext) =
+                    self.own
+                        .safety_extensions(&self.belief, believed, self.config.origin)
+                {
+                    message = message.with_vehicle_safety(ext);
+                }
                 // A `MessageFrame`, because that is what goes in a WSM payload; the bare
                 // PDU is three octets shorter and is not what a receiver decodes.
                 let encoded = bsm::encode_message_frame(&message).ok()?;

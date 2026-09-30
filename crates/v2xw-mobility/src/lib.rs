@@ -132,6 +132,7 @@ pub use views::{
     ActorSpawn, ConflictView, DespawnCause, DriverProfile, EdgeCost, EntryDecision, GnssEnv,
     JunctionView, LaneChangeDecision, LaneNeighbors, LaneView, LeaderView, MobilityCommand,
     MobilityUpdate, PhaseState, ReroutePolicy, Route, Side, SideNeighbors, SkyView, TripRequest,
+    Intent, INTENT_HORIZON_M, EMERGENCY_BRAKE_ONSET_JERK_MPS3,
     VehicleView,
 };
 pub use vru::SocialForce;

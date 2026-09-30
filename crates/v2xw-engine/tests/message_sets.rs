@@ -188,19 +188,68 @@ fn emergency_vehicles_request_priority_and_the_units_answer() {
     }
 }
 
-/// A DENM is raised once per hard-braking episode — the rising edge of the vehicle's own
-/// longitudinal deceleration through 0.4 g — and never otherwise. The episodes come from
-/// the ground truth's own record of each vehicle's acceleration.
-#[test]
-fn a_denm_is_raised_by_hard_braking_and_by_nothing_else() {
-    // A dense fleet, so queues form behind reds and somebody has to brake hard.
-    let mut s = connected(40.0);
-    s.actors.vehicles.demand.rate_veh_per_h = Some(20_000.0);
+/// The ETSI stack with DENM on, and a timeline of safety events.
+fn etsi_with_events(duration_s: f64, events: serde_json::Value) -> Scenario {
+    let mut s = connected(duration_s);
+    s.actors.vehicles.demand.rate_veh_per_h = Some(6_000.0);
     s.net.layer = "gn-btp".to_string();
     s.security.envelope = "etsi103097".to_string();
     s.messages.sets = vec!["cam".into(), "denm".into(), "spat".into(), "map".into()];
     s.messages.codec_tier = "uper".to_string();
+    s.events = serde_json::from_value(events).expect("timeline items");
+    s
+}
+
+/// The node each `scenario.event` of `kind` acted on, in time order.
+fn event_nodes(recorder: &MemoryRecorder, kind: &str) -> Vec<(u64, Option<u64>, String)> {
+    recorder
+        .records()
+        .iter()
+        .filter(|(_, r)| r.channel == "scenario.event")
+        .filter_map(|(_, r)| {
+            let v: serde_json::Value = serde_json::from_slice(&r.json).ok()?;
+            (v.get("kind")?.as_str()? == kind).then(|| {
+                (
+                    v.get("t").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                    v.get("node").and_then(serde_json::Value::as_u64),
+                    v.get("effect")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                )
+            })
+        })
+        .collect()
+}
+
+/// A DENM is raised once per hard-braking episode — the rising edge of the vehicle's own
+/// longitudinal deceleration through 0.4 g — and never otherwise. The episodes come from
+/// the ground truth's own record of each vehicle's acceleration.
+///
+/// The calibrated drivers do not brake that hard on their own (the hardest of 18,052
+/// samples of a dense 40 s run was −3.02 m/s²), which is realistic, so the emergencies are
+/// scripted: two `safety.hard-brake` events on the timeline, each on a vehicle with a car
+/// close behind it.
+#[test]
+fn a_denm_is_raised_by_hard_braking_and_by_nothing_else() {
+    let s = etsi_with_events(
+        40.0,
+        serde_json::json!([
+            {"t": 15.0, "type": "safety.hard-brake"},
+            {"t": 25.0, "type": "safety.hard-brake", "decel_mps2": 6.0},
+        ]),
+    );
     let (_, recorder, _) = run(s);
+    let scripted = event_nodes(&recorder, "safety.hard-brake");
+    eprintln!("scripted: {scripted:?}");
+    assert_eq!(scripted.len(), 2, "both events fired");
+    let scripted_nodes: BTreeSet<NodeId> = scripted
+        .iter()
+        .map(|(_, n, why)| {
+            NodeId::new(n.unwrap_or_else(|| panic!("an event found no equipped vehicle: {why}"))
+                as u32)
+        })
+        .collect();
     // Hard-braking rising edges per node, from gt.kinematics.
     let mut last: BTreeMap<NodeId, bool> = BTreeMap::new();
     let mut edges: BTreeMap<NodeId, u32> = BTreeMap::new();
@@ -236,6 +285,11 @@ fn a_denm_is_raised_by_hard_braking_and_by_nothing_else() {
         silent.len(),
         braked.len()
     );
+    // Every scripted vehicle braked hard and sent its DENM.
+    for n in &scripted_nodes {
+        assert!(edges.contains_key(n), "scripted {n:?} never braked hard");
+        assert!(senders.contains(n), "scripted {n:?} sent no DENM");
+    }
     // Repetition: every 100 ms for 2 s, so about twenty frames per episode.
     let episodes: u32 = edges.values().sum();
     assert!(
@@ -256,6 +310,55 @@ fn a_denm_is_raised_by_hard_braking_and_by_nothing_else() {
             denm.len()
         );
     }
+}
+
+/// A broken-down vehicle stops, switches its hazards on and, once it has stood for the
+/// dwell, announces itself as a stationary vehicle once a second until it is cleared —
+/// when it sends one cancellation and falls silent.
+#[test]
+fn a_broken_down_vehicle_announces_itself_until_it_is_cleared() {
+    let s = etsi_with_events(
+        40.0,
+        serde_json::json!([
+            {"t": 10.0, "until": 30.0, "type": "safety.breakdown"},
+        ]),
+    );
+    let (_, recorder, _) = run(s);
+    let events = event_nodes(&recorder, "safety.breakdown");
+    eprintln!("breakdown events: {events:?}");
+    let node = NodeId::new(
+        events
+            .first()
+            .and_then(|(_, n, _)| *n)
+            .expect("the breakdown found an equipped vehicle") as u32,
+    );
+    let txs = tx(&recorder);
+    let denm: Vec<f64> = txs
+        .iter()
+        .filter(|t| t.node == node && t.msg_type.as_deref() == Some("denm"))
+        .map(|t| t.t as f64 * 1e-9)
+        .collect();
+    eprintln!("DENMs from the broken-down {node:?} at {denm:?}");
+    // Nothing before it has stopped and stood the dwell (5 s), at 1 Hz while it stands,
+    // and after the clearing at 30 s exactly one: the cancellation.
+    let during: Vec<f64> = denm.iter().copied().filter(|t| *t < 30.0).collect();
+    let after: Vec<f64> = denm.iter().copied().filter(|t| *t >= 30.0).collect();
+    assert!(
+        during.first().is_some_and(|t| *t >= 15.0),
+        "a DENM before the vehicle could have stood 5 s: {during:?}"
+    );
+    assert!(
+        (8..=16).contains(&during.len()),
+        "{} stationary-vehicle DENMs while it stood",
+        during.len()
+    );
+    assert_eq!(after.len(), 1, "one cancellation after clearing: {after:?}");
+    // Only the broken-down vehicle announced anything.
+    let others = txs
+        .iter()
+        .filter(|t| t.node != node && t.msg_type.as_deref() == Some("denm"))
+        .count();
+    assert_eq!(others, 0, "{others} DENMs from vehicles that did not break down");
 }
 
 /// A SPaT says what the light is: for every junction, every signal group and a minute of

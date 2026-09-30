@@ -109,15 +109,23 @@ impl Psid {
     /// derived from. One p-encoded octet.
     pub const BSM: Psid = Psid(0x20);
 
-    /// The PSID the intersection messages (SPaT, MAP, SRM, SSM) are sent under, `0x82`.
+    /// The PSID SPaT and MAP are sent under, `0x82` (130).
     ///
-    /// **Recalled, UNVERIFIED**: IEEE 1609.12's "intersection safety and awareness" entry,
-    /// the value US connected-intersection deployments are described as using for SPaT and
-    /// MAP. Neither 1609.12 nor CTI 4501 is in this repository to check it against, and some
-    /// deployments are reported to send MAP under a four-octet PSID instead. What depends on
-    /// it here is the WSMP header's length: 0x82 is above 0x7F and p-encodes in two octets,
-    /// one more than the BSM's.
+    /// **VERIFIED** against the IEEE PSID registry on 2026-09-30:
+    /// `psid-intersection-safety-and-awareness` (SAE J2735), 130
+    /// (`v2xw_msg::registry`, which cites how the registry was read). The registry also has
+    /// `psid-map-distribution` (0x204097) for MAP; US connected-intersection deployments
+    /// send MAP beside SPaT under 0x82, as here. 0x82 is above 0x7F and p-encodes in two
+    /// octets, one more than the BSM's.
     pub const INTERSECTION: Psid = Psid(0x82);
+
+    /// The PSID an SRM is sent under: `psid-traffic-signal-request`, 2113686 (0x204096),
+    /// from the IEEE PSID registry (`v2xw_msg::registry`). Three p-encoded octets.
+    pub const SIGNAL_REQUEST: Psid = Psid(0x20_4096);
+
+    /// The PSID an SSM is sent under: `psid-traffic-signal-priority-status`, 2113685
+    /// (0x204095), from the IEEE PSID registry. Three p-encoded octets.
+    pub const SIGNAL_STATUS: Psid = Psid(0x20_4095);
 
     /// A PSID from its numeric value.
     ///

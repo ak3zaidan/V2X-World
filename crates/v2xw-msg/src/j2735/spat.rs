@@ -120,15 +120,20 @@ pub const SIGNAL_GROUP_ID_MIN: i64 = 0;
 /// `SignalGroupID`, upper bound.
 pub const SIGNAL_GROUP_ID_MAX: i64 = 255;
 
-/// `TimeMark ::= INTEGER (0..36001)`, lower bound. The unit is tenths of a second within
-/// the current or the next hour.
+/// `TimeMark ::= INTEGER (0..36111)`, lower bound (SAE J2735 2024-09 §7.213, re-read from
+/// the standard's text on 2026-09-30). The unit is tenths of a second within the current
+/// or the next hour: "if the value of TimeMark is greater than the current time, it applies
+/// in the current hour, and if it is less than the current time, it applies in the next
+/// hour".
 pub const TIME_MARK_MIN: i64 = 0;
-/// `TimeMark`, upper bound.
-pub const TIME_MARK_MAX: i64 = 36_001;
-/// `TimeMark` value for "the time is not known", per the standard's comment on the type.
-pub const TIME_MARK_UNKNOWN: u16 = 36_001;
-/// Tenths of a second in an hour: the largest *meaningful* [`TimeMark`], one past which is
-/// [`TIME_MARK_UNKNOWN`].
+/// `TimeMark`, upper bound: 36111 (J2735 2024-09). The 2016 edition's bound was 36001;
+/// both widths are 16 bits, so the octets of a value both admit are the same.
+pub const TIME_MARK_MAX: i64 = 36_111;
+/// `TimeMark` value for "undefined or unknown": 36111 in J2735 2024-09 §7.213. (36001, the
+/// 2016 edition's unknown, is a leap-second value in 2024: 36000..36009.)
+pub const TIME_MARK_UNKNOWN: u16 = 36_111;
+/// Tenths of a second in an hour: `0..=35999` covers the hour, and a boundary at or past
+/// the top of the hour wraps into the next one.
 pub const TIME_MARK_TENTHS_PER_HOUR: u16 = 36_000;
 
 /// `TimeIntervalConfidence ::= INTEGER (0..15)`, lower bound.
@@ -1140,12 +1145,14 @@ pub fn d_second(clock: WallClock, t: SimTime) -> u16 {
     crate::j2735::bsm::sec_mark(clock, t)
 }
 
-/// `TimeMark` from a phase boundary expressed in seconds since the top of the hour.
+/// `TimeMark` from a phase boundary expressed in seconds since the top of the current
+/// hour.
 ///
-/// The unit is tenths of a second. Values at or beyond the hour fold into the next hour the
-/// way the standard intends — 36 000 is "the top of the next hour" — and anything not
-/// finite, negative, or beyond that becomes [`TIME_MARK_UNKNOWN`] rather than a plausible
-/// wrong time.
+/// The unit is tenths of a second, `0..=35999`. A boundary at or past the top of the hour
+/// wraps into the next hour (`3_600.0` s is `0`, `3_610.0` s is `100`): J2735 2024-09
+/// §7.213 has a receiver read a value less than the current time as the next hour's. A
+/// boundary more than an hour ahead cannot be written and becomes [`TIME_MARK_UNKNOWN`],
+/// as does anything not finite or negative, rather than a plausible wrong time.
 ///
 /// Quantises on the D9 second grid before scaling, so the integer is a function of the
 /// quantised value rather than of an `f64`'s last bit.
@@ -1154,10 +1161,27 @@ pub fn time_mark(seconds_into_hour: f64) -> u16 {
         return TIME_MARK_UNKNOWN;
     }
     let tenths = (math::quantize_to(seconds_into_hour, Q_S) / 0.1).round();
-    if !(0.0..=f64::from(TIME_MARK_TENTHS_PER_HOUR)).contains(&tenths) {
+    let hour = f64::from(TIME_MARK_TENTHS_PER_HOUR);
+    if tenths >= 2.0 * hour {
         return TIME_MARK_UNKNOWN;
     }
-    tenths as u16
+    (tenths % hour) as u16
+}
+
+/// Seconds from `now_s_into_hour` (seconds since the top of the current hour) until a
+/// `TimeMark`, reading a mark earlier than now as the next hour's (J2735 2024-09 §7.213).
+/// `None` for [`TIME_MARK_UNKNOWN`] or a leap-second value.
+pub fn seconds_until(mark: u16, now_s_into_hour: f64) -> Option<f64> {
+    if mark >= TIME_MARK_TENTHS_PER_HOUR {
+        return None;
+    }
+    let at = f64::from(mark) * 0.1;
+    let mut d = at - now_s_into_hour;
+    // A mark a hair behind now (the message's own rounding) is now, not an hour away.
+    if d < -0.05 {
+        d += 3_600.0;
+    }
+    Some(d.max(0.0))
 }
 
 #[cfg(test)]
@@ -1394,10 +1418,19 @@ mod tests {
         assert_eq!(time_mark(0.0), 0);
         assert_eq!(time_mark(1.0), 10);
         assert_eq!(time_mark(27.5), 275);
-        assert_eq!(time_mark(3_600.0), TIME_MARK_TENTHS_PER_HOUR);
-        assert_eq!(time_mark(3_600.1), TIME_MARK_UNKNOWN);
+        // Past the top of the hour a mark wraps into the next hour (J2735 2024-09 §7.213);
+        // this test used to expect 36000 for 3,600 s and "unknown" for 3,600.1 s, and
+        // 36000 is a leap-second value in the 2024 edition.
+        assert_eq!(time_mark(3_600.0), 0);
+        assert_eq!(time_mark(3_600.1), 1);
+        assert_eq!(time_mark(7_200.0), TIME_MARK_UNKNOWN);
         assert_eq!(time_mark(-1.0), TIME_MARK_UNKNOWN);
         assert_eq!(time_mark(f64::NAN), TIME_MARK_UNKNOWN);
+        assert_eq!(TIME_MARK_UNKNOWN, 36_111);
+        // And a receiver reads a mark behind now as the next hour's.
+        assert_eq!(seconds_until(100, 3_590.0), Some(20.0));
+        assert_eq!(seconds_until(35_950, 3_590.0), Some(5.0));
+        assert_eq!(seconds_until(TIME_MARK_UNKNOWN, 0.0), None);
     }
 
     /// The disputed width, pinned as a test so the oracle run has something to contradict.

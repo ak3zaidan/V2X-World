@@ -70,6 +70,8 @@ pub mod phase2;
 pub mod privacy_metrics;
 pub mod records;
 pub mod run;
+pub mod safety_events;
+pub mod vehicle_bus;
 pub mod scenario;
 pub mod sec_records;
 pub mod signature;

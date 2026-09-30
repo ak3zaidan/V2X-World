@@ -413,7 +413,7 @@ fn card() -> ModelCard {
             "j2735::spat::tests::a_minimal_spat_is_eleven_octets".to_string(),
             "j2735::spat::tests::round_trip_is_exact".to_string(),
             "j2735::spat::tests::an_unmodelled_element_is_refused_rather_than_skipped".to_string(),
-            "j2735::map::tests::a_minimal_map_is_twenty_eight_octets".to_string(),
+            "j2735::map::tests::a_minimal_map_is_twenty_nine_octets".to_string(),
             "j2735::map::tests::round_trip_is_exact".to_string(),
             "j2735::map::tests::a_node_offset_keeps_its_alternative_so_the_bytes_are_stable"
                 .to_string(),

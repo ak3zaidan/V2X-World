@@ -607,6 +607,29 @@ impl MobilityUpdate {
     }
 }
 
+/// How far ahead [`crate::traits::Mobility::intent`] looks for the next junction, metres.
+///
+/// Drivers signal a turn about 100 ft (30 m) before it in most US codes (California
+/// Vehicle Code §22108) and 3 s or more ahead elsewhere; 150 m covers that at any urban
+/// speed and is what an intersection application needs to see a movement coming.
+pub const INTENT_HORIZON_M: f64 = 150.0;
+
+/// What a vehicle means to do at the next junction on its route.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Intent {
+    /// The junction.
+    pub junction: JunctionId,
+    /// The movement it will make there.
+    pub turn: TurnDirection,
+    /// Metres from the front bumper to the start of the movement (the stop line); zero or
+    /// negative once the vehicle is on the movement.
+    pub distance_m: f64,
+    /// The lane it approaches on.
+    pub approach: LaneId,
+    /// The junction connector it will drive.
+    pub connector: LaneId,
+}
+
 /// An external control applied at the next step (03-interfaces.md §3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
@@ -647,7 +670,42 @@ pub enum MobilityCommand {
     },
     /// Put a specific trip on the road, bypassing the demand model.
     Spawn(TripRequest),
+    /// Brake at `decel_mps2` until the vehicle stands, then hold it until `hold_until`
+    /// (indefinitely with `None`): a scripted emergency stop, the timeline's
+    /// `safety.hard-brake` and `safety.breakdown`. The deceleration builds at
+    /// [`EMERGENCY_BRAKE_ONSET_JERK_MPS3`] and is capped by the road surface's grip; a car
+    /// ahead that needs harder braking still gets it.
+    Brake {
+        /// The actor.
+        actor: ActorId,
+        /// The deceleration, m/s², positive.
+        decel_mps2: f64,
+        /// When the vehicle may move off again once it stands.
+        hold_until: Option<SimTime>,
+    },
+    /// Change lane to `side` at the first step it can, whatever the lane-change model's
+    /// incentive, into the gap ahead of the target lane's follower: a scripted cut-in,
+    /// the timeline's `safety.cut-in`. The change is still refused into a gap the vehicle
+    /// does not fit (the lane-change resolution's own check).
+    CutIn {
+        /// The actor.
+        actor: ActorId,
+        /// The side it cuts in to.
+        side: Side,
+        /// Until when it keeps trying, if no gap has let it in.
+        until: SimTime,
+    },
 }
+
+/// How fast a scripted emergency stop's deceleration builds, m/s³
+/// ([`MobilityCommand::Brake`]).
+///
+/// A hydraulic brake reaches full pressure in about 0.2–0.3 s after the pedal is hit (the
+/// brake system's build-up time that UN ECE R13-H's and FMVSS 135's stopping-distance
+/// tests allow for); 25 m/s³ reaches 6 m/s² in 0.24 s. It is also under the traffic
+/// auditor's 30 m/s³ jerk bound, so a scripted stop is not itself a jerk finding. This
+/// build's choice, stated.
+pub const EMERGENCY_BRAKE_ONSET_JERK_MPS3: f64 = 25.0;
 
 /// When a router re-plans (04-models.md §2.4).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

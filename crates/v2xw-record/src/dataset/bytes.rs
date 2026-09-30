@@ -324,6 +324,7 @@ mod tests {
             t_generated: None,
             t_sign_start: None,
             t_signed: None,
+            t_handoff: None,
             mac_aifs_ns: None,
             mac_backoff_ns: None,
             net_header_bytes: None,

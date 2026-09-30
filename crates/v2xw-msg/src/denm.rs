@@ -112,33 +112,41 @@ impl DenmCause {
     /// not distinguish, say, a multi-vehicle accident from a heavy-accident, and encoding a
     /// specific sub-cause would be inventing detail the model does not have.
     pub fn to_cause_code(self) -> CauseCodeV2 {
+        self.to_cause_code_with(0)
+    }
+
+    /// The `CauseCodeV2` for this cause with sub-cause `sub`, for the triggers that know
+    /// it: `dangerousSituation(99)` / `emergencyElectronicBrakeEngaged(1)` for a hard
+    /// brake and `stationaryVehicle(94)` / `vehicleBreakdown(2)` for a breakdown (ETSI TS
+    /// 102 894-2, `DangerousSituationSubCauseCode`, `StationaryVehicleSubCauseCode`).
+    pub fn to_cause_code_with(self, sub: u8) -> CauseCodeV2 {
         use crate::asn1::cdd as c;
         let choice = match self {
             DenmCause::TrafficCondition => {
-                CauseCodeChoice::trafficCondition1(c::TrafficConditionSubCauseCode(0))
+                CauseCodeChoice::trafficCondition1(c::TrafficConditionSubCauseCode(sub))
             }
-            DenmCause::Accident => CauseCodeChoice::accident2(c::AccidentSubCauseCode(0)),
-            DenmCause::Roadworks => CauseCodeChoice::roadworks3(c::RoadworksSubCauseCode(0)),
-            DenmCause::Adhesion => CauseCodeChoice::adhesion6(c::AdhesionSubCauseCode(0)),
+            DenmCause::Accident => CauseCodeChoice::accident2(c::AccidentSubCauseCode(sub)),
+            DenmCause::Roadworks => CauseCodeChoice::roadworks3(c::RoadworksSubCauseCode(sub)),
+            DenmCause::Adhesion => CauseCodeChoice::adhesion6(c::AdhesionSubCauseCode(sub)),
             DenmCause::ObstacleOnTheRoad => CauseCodeChoice::hazardousLocation_ObstacleOnTheRoad10(
-                c::HazardousLocationObstacleOnTheRoadSubCauseCode(0),
+                c::HazardousLocationObstacleOnTheRoadSubCauseCode(sub),
             ),
-            DenmCause::HumanPresenceOnTheRoad => {
-                CauseCodeChoice::humanPresenceOnTheRoad12(c::HumanPresenceOnTheRoadSubCauseCode(0))
-            }
+            DenmCause::HumanPresenceOnTheRoad => CauseCodeChoice::humanPresenceOnTheRoad12(
+                c::HumanPresenceOnTheRoadSubCauseCode(sub),
+            ),
             DenmCause::DangerousEndOfQueue => {
-                CauseCodeChoice::dangerousEndOfQueue27(c::DangerousEndOfQueueSubCauseCode(0))
+                CauseCodeChoice::dangerousEndOfQueue27(c::DangerousEndOfQueueSubCauseCode(sub))
             }
             DenmCause::StationaryVehicle => {
-                CauseCodeChoice::stationaryVehicle94(c::StationaryVehicleSubCauseCode(0))
+                CauseCodeChoice::stationaryVehicle94(c::StationaryVehicleSubCauseCode(sub))
             }
             DenmCause::EmergencyVehicleApproaching => {
                 CauseCodeChoice::emergencyVehicleApproaching95(
-                    c::EmergencyVehicleApproachingSubCauseCode(0),
+                    c::EmergencyVehicleApproachingSubCauseCode(sub),
                 )
             }
             DenmCause::DangerousSituation => {
-                CauseCodeChoice::dangerousSituation99(c::DangerousSituationSubCauseCode(0))
+                CauseCodeChoice::dangerousSituation99(c::DangerousSituationSubCauseCode(sub))
             }
         };
         CauseCodeV2::new(choice)
@@ -178,6 +186,36 @@ impl AwarenessDistance {
             AwarenessDistance::LessThan5km => StandardLength3b::lessThan5km,
             AwarenessDistance::LessThan10km => StandardLength3b::lessThan10km,
             AwarenessDistance::Over10km => StandardLength3b::over10km,
+        }
+    }
+}
+
+/// Which traffic a DENM is relevant to (`TrafficDirection`, ETSI TS 102 894-2), relative
+/// to the event's reference direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RelevanceDirection {
+    /// `allTrafficDirections(0)`.
+    All,
+    /// `sameAsReferenceDirection-upstreamOfReferencePosition(1)`: traffic coming up behind
+    /// the event, which is who an emergency brake or a stationary vehicle endangers.
+    Upstream,
+    /// `sameAsReferenceDirection-downstreamOfReferencePosition(2)`.
+    Downstream,
+    /// `oppositeToReferenceDirection(3)`.
+    Opposite,
+}
+
+impl RelevanceDirection {
+    fn to_cdd(self) -> crate::asn1::cdd::TrafficDirection {
+        use crate::asn1::cdd::TrafficDirection as T;
+        match self {
+            RelevanceDirection::All => T::allTrafficDirections,
+            RelevanceDirection::Upstream => T::sameAsReferenceDirection_upstreamOfReferencePosition,
+            RelevanceDirection::Downstream => {
+                T::sameAsReferenceDirection_downstreamOfReferencePosition
+            }
+            RelevanceDirection::Opposite => T::oppositeToReferenceDirection,
         }
     }
 }
@@ -293,6 +331,15 @@ pub struct DenmInput {
     /// `transmissionInterval`, the interval the originator says it is transmitting at. It
     /// **is** carried in the message, unlike the repetition parameters.
     pub transmission_interval: Option<Duration>,
+    /// The sub-cause, `0` (`unavailable`) unless the trigger knows it.
+    pub sub_cause: u8,
+    /// `trafficDirection`: which traffic the event is relevant to.
+    pub traffic_direction: Option<RelevanceDirection>,
+    /// `detectionZonesToEventPosition`: the path the detecting vehicle drove up to the
+    /// event, as ETSI `Path` deltas — `(Δlat, Δlon` in 0.1 microdegree, `Δalt` in cm,
+    /// `Δt` in 10 ms`)`, each from the point before it and the first from the event
+    /// position ([`crate::j2945::etsi_path_deltas`]). Empty is an empty trace.
+    pub trace: Vec<(i32, i32, i16, u16)>,
 }
 
 impl DenmInput {
@@ -320,6 +367,9 @@ impl DenmInput {
             awareness_distance: Some(AwarenessDistance::LessThan500m),
             validity: DEFAULT_VALIDITY,
             transmission_interval: None,
+            sub_cause: 0,
+            traffic_direction: None,
+            trace: Vec::new(),
         }
     }
 }
@@ -339,17 +389,34 @@ pub fn build_denm(input: &DenmInput) -> Result<DENM, CodecError> {
         input
             .cause_code
             .clone()
-            .unwrap_or_else(|| input.cause.to_cause_code()),
+            .unwrap_or_else(|| input.cause.to_cause_code_with(input.sub_cause)),
         None,
         None,
         None,
         None,
     );
-    // `detectionZonesToEventPosition` is mandatory and is `SEQUENCE SIZE(1..7) OF Path`.
-    // The simulator does not model the trace a detecting vehicle drove, so the one Path is
-    // empty — which `Path ::= SEQUENCE (SIZE(0..40)) OF PathPoint` allows, and which is the
-    // truthful encoding of "no trace recorded".
-    let location = LocationContainer::new(None, None, Traces(vec![Path(Vec::new())]), None, None);
+    // `detectionZonesToEventPosition` is mandatory and is `SEQUENCE SIZE(1..7) OF Path`:
+    // the path the detecting vehicle drove to the event (its own path history), which is
+    // what a receiver matches its own path against to decide the event is on its way. An
+    // empty trace is the truthful encoding of "no trace recorded".
+    let points: Vec<crate::asn1::cdd::PathPoint> = input
+        .trace
+        .iter()
+        .take(crate::cam::MAX_PATH_POINTS)
+        .map(|(dlat, dlon, dalt, dt)| {
+            crate::asn1::cdd::PathPoint::new(
+                crate::asn1::cdd::DeltaReferencePosition::new(
+                    crate::asn1::cdd::DeltaLatitude(*dlat),
+                    crate::asn1::cdd::DeltaLongitude(*dlon),
+                    crate::asn1::cdd::DeltaAltitude(*dalt),
+                ),
+                Some(crate::asn1::cdd::PathDeltaTime(rasn::types::Integer::from(
+                    u64::from((*dt).max(1)),
+                ))),
+            )
+        })
+        .collect();
+    let location = LocationContainer::new(None, None, Traces(vec![Path(points)]), None, None);
 
     Ok(DENM::new(
         header,
@@ -442,7 +509,7 @@ fn management_container(
         termination,
         event_position,
         input.awareness_distance.map(|d| d.to_cdd()),
-        None,
+        input.traffic_direction.map(RelevanceDirection::to_cdd),
         DeltaTimeSecond(validity_s),
         input.transmission_interval.map(|d| {
             // `DeltaTimeMilliSecondPositive ::= INTEGER (1..10000)`.

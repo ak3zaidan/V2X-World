@@ -38,6 +38,7 @@ interface Group {
 const STAGES = [
   "sign_queue",
   "sign",
+  "handoff",
   "mac_aifs",
   "mac_backoff",
   "mac_defer",

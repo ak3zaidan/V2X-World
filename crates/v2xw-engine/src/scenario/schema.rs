@@ -1300,6 +1300,24 @@ pub enum TimelineKind {
     /// A road closes: `lane` or `edge` names it.
     #[serde(rename = "closure")]
     Closure,
+    /// A scripted emergency stop: the vehicle `target` names (a node id, or `"auto"` for
+    /// the first moving vehicle with a vehicle close behind it) brakes at `decel_mps2`
+    /// (default 0.5 g) to a standstill, stands for `hold_s` (default 2 s) and drives on.
+    /// The traffic model's own drivers almost never brake past the 0.4 g event threshold
+    /// (none did in 18,052 samples of a dense run), so a hard-braking warning needs one.
+    #[serde(rename = "safety.hard-brake")]
+    HardBrake,
+    /// A vehicle breaks down: `target` (as for a hard brake, `"auto"` picking the first
+    /// moving vehicle) brakes to a stop at `decel_mps2` (default 3 m/s²), switches its
+    /// hazard warning lights on, and stands until `until` (or the end of the run).
+    #[serde(rename = "safety.breakdown")]
+    Breakdown,
+    /// A cut-in: `target` (a node id, or `"auto"` for the first vehicle with a car on the
+    /// `side` lane just behind it) changes lane to `side` (`left` or `right`, default
+    /// `left`) at once, into the gap ahead of that lane's follower, whatever its
+    /// lane-change model would have chosen.
+    #[serde(rename = "safety.cut-in")]
+    CutIn,
 }
 
 impl TimelineKind {
@@ -1312,6 +1330,7 @@ impl TimelineKind {
             TimelineKind::Outage => &["target"],
             TimelineKind::ParamChange => &["path", "value"],
             TimelineKind::Closure => &["target"],
+            TimelineKind::HardBrake | TimelineKind::Breakdown | TimelineKind::CutIn => &[],
         }
     }
 
@@ -1326,6 +1345,7 @@ impl TimelineKind {
                 | TimelineKind::Outage
                 | TimelineKind::AttackWave
                 | TimelineKind::Closure
+                | TimelineKind::Breakdown
         )
     }
 }

@@ -34,11 +34,30 @@ import traceback
 
 sys.path.insert(0, os.environ.get("V2XW_J2735_ORACLE_DIR", os.path.dirname(os.path.abspath(__file__))))
 
-from j2735_all import BasicSafetyMessage as BSM_MOD  # noqa: E402
-from j2735_all import MessageFrame as MF_MOD  # noqa: E402
+import j2735_all  # noqa: E402
 
-BSM = BSM_MOD.BasicSafetyMessage
-FRAME = MF_MOD.MessageFrame
+
+def load(type_name: str, candidates: list[str]):
+    """Find a compiled ASN.1 type whichever J2735 release compiled it.
+
+    The 2024 release splits the standard into modules (``BasicSafetyMessage``,
+    ``MessageFrame``, ...); the 2016 release is one module, ``DSRC``. Either is a valid
+    oracle for the BSM's root, which the two releases define identically.
+    """
+    for name in candidates:
+        module = getattr(j2735_all, name, None)
+        if module is not None and hasattr(module, type_name):
+            return getattr(module, type_name)
+    # A module rebuilt under another name (say ``J2735_2024``): scan them all.
+    for name in dir(j2735_all):
+        module = getattr(j2735_all, name)
+        if isinstance(module, type) and hasattr(module, "_name_") and hasattr(module, type_name):
+            return getattr(module, type_name)
+    raise ImportError(f"no compiled module holds {type_name}; tried {candidates}")
+
+
+BSM = load("BasicSafetyMessage", ["BasicSafetyMessage", "DSRC"])
+FRAME = load("MessageFrame", ["MessageFrame", "DSRC"])
 
 
 def to_py(value):

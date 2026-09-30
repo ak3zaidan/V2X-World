@@ -149,6 +149,9 @@ pub struct ScenarioEventView {
     /// The attacker populations an `attack.wave` names, by index.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub populations: Vec<u32>,
+    /// The vehicle a safety event (`safety.*`) acted on, by node id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<u32>,
 }
 
 impl ScenarioEventView {
@@ -168,6 +171,7 @@ impl ScenarioEventView {
             path: None,
             value: None,
             populations: Vec::new(),
+            node: None,
         }
     }
 }
@@ -250,6 +254,7 @@ impl NodeTx {
             t_generated: Some(t_generated),
             t_sign_start: None,
             t_signed: None,
+            t_handoff: None,
             mac_aifs_ns: None,
             mac_backoff_ns: None,
             net_header_bytes: None,
@@ -306,11 +311,13 @@ impl NodeTx {
         mut self,
         t_sign_start: SimTime,
         t_signed: SimTime,
+        t_handoff: SimTime,
         mac_aifs_ns: u64,
         mac_backoff_ns: u64,
     ) -> Self {
         self.0.t_sign_start = Some(t_sign_start);
         self.0.t_signed = Some(t_signed);
+        self.0.t_handoff = Some(t_handoff);
         self.0.mac_aifs_ns = Some(mac_aifs_ns);
         self.0.mac_backoff_ns = Some(mac_backoff_ns);
         self
@@ -384,6 +391,7 @@ impl NodeRx {
             t_generated: None,
             t_sign_start: None,
             t_signed: None,
+            t_handoff: None,
             mac_aifs_ns: None,
             mac_backoff_ns: None,
             t_tx_start: None,
@@ -405,6 +413,7 @@ impl NodeRx {
         t_generated: SimTime,
         t_sign_start: SimTime,
         t_signed: SimTime,
+        t_handoff: SimTime,
         mac_aifs_ns: u64,
         mac_backoff_ns: u64,
         t_tx_start: SimTime,
@@ -414,6 +423,7 @@ impl NodeRx {
         self.0.t_generated = Some(t_generated);
         self.0.t_sign_start = Some(t_sign_start);
         self.0.t_signed = Some(t_signed);
+        self.0.t_handoff = Some(t_handoff);
         self.0.mac_aifs_ns = Some(mac_aifs_ns);
         self.0.mac_backoff_ns = Some(mac_backoff_ns);
         self.0.t_tx_start = Some(t_tx_start);

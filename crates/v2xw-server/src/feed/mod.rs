@@ -242,6 +242,9 @@ impl RxEntry {
             t_generated: s[S_GEN],
             t_sign_start: s[S_SIGN_START],
             t_signed: s[S_SIGNED],
+            // The feed keeps the stamps it keeps; without the hand-off instant its trace
+            // counts the hand-off in channel access, as recordings before the split did.
+            t_handoff: None,
             mac_aifs_ns: self.mac[0],
             mac_backoff_ns: self.mac[1],
             t_tx_start: s[S_TX_START],

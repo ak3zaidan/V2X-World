@@ -92,9 +92,9 @@ use crate::j2735::spat::{
 };
 use crate::j2735::uper::{
     BitReader, BitWriter, Field, UperError, read_choice_index, read_constrained_int,
-    read_constrained_length, read_fixed_bit_string, read_open_type, read_preamble,
-    write_choice_index, write_constrained_int, write_constrained_length, write_fixed_bit_string,
-    write_open_type, write_preamble,
+    read_constrained_length, read_extensible_bit_string, read_fixed_bit_string, read_open_type,
+    read_preamble, write_choice_index, write_constrained_int, write_constrained_length,
+    write_extensible_bit_string, write_fixed_bit_string, write_open_type, write_preamble,
 };
 
 /// The structural choices that rest on recall rather than on a readable module.
@@ -183,7 +183,10 @@ pub const LANE_CONNECTION_ID_MAX: i64 = 255;
 pub const LANE_DIRECTION_BITS: u32 = 2;
 /// `LaneSharing ::= BIT STRING (SIZE(10))`.
 pub const LANE_SHARING_BITS: u32 = 10;
-/// `LaneAttributes-Vehicle ::= BIT STRING (SIZE(8))`.
+/// `LaneAttributes-Vehicle ::= BIT STRING {...} (SIZE (8,...))` — an **extensible** size
+/// constraint, so the eight root bits follow one extension bit (SAE J2735 2024-09, re-read
+/// 2026-09-30; the codec wrote the eight bits alone until the `pycrate` oracle ran and
+/// failed 113 of 112 MAP vectors on the missing bit).
 pub const LANE_ATTRIBUTES_VEHICLE_BITS: u32 = 8;
 /// `AllowedManeuvers ::= BIT STRING (SIZE(12))`.
 pub const ALLOWED_MANEUVERS_BITS: u32 = 12;
@@ -221,7 +224,7 @@ pub const LANE_TYPE_VEHICLE_INDEX: u64 = 0;
 /// Bytes of the smallest MAP this codec emits: one intersection, one lane, two nodes, no
 /// optional field anywhere.
 ///
-/// 224 bits exactly, and the arithmetic is worth writing out because it is the one number
+/// 225 bits, so 29 octets, and the arithmetic is worth writing out because it is the one number
 /// in this module a reviewer can check without the ASN.1:
 ///
 /// | Part | Bits | Running |
@@ -240,18 +243,18 @@ pub const LANE_TYPE_VEHICLE_INDEX: u64 = 0;
 /// | `laneID` | 8 | 141 |
 /// | `LaneAttributes` preamble (0 + 1) | 1 | 142 |
 /// | `directionalUse` + `sharedWith` | 12 | 154 |
-/// | `laneType` choice (1 + 3) + `vehicle` | 12 | 166 |
-/// | `nodeList` choice (1 + 1) | 2 | 168 |
-/// | `NodeSetXY` determinant, `SIZE(2..63)` | 6 | 174 |
-/// | two `NodeXY`: (1 + 1) preamble + 3-bit choice + 20-bit offset | 50 | 224 |
+/// | `laneType` choice (1 + 3) + `vehicle` (1 extension + 8) | 13 | 167 |
+/// | `nodeList` choice (1 + 1) | 2 | 169 |
+/// | `NodeSetXY` determinant, `SIZE(2..63)` | 6 | 175 |
+/// | two `NodeXY`: (1 + 1) preamble + 3-bit choice + 20-bit offset | 50 | 225 |
 ///
 /// Change any assumption in [`assumptions`] and this number moves, which is exactly what
 /// the test that pins it is for.
-pub const MINIMAL_MAP_SIZE_B: u32 = 28;
+pub const MINIMAL_MAP_SIZE_B: u32 = 29;
 
 /// The same message inside a `MessageFrame`: 1 extension bit + 15-bit `DSRCmsgID` + an
-/// 8-bit length determinant + the 28 octets above.
-pub const MINIMAL_MAP_MESSAGE_FRAME_SIZE_B: u32 = 31;
+/// 8-bit length determinant + the 29 octets above.
+pub const MINIMAL_MAP_MESSAGE_FRAME_SIZE_B: u32 = 32;
 
 // =========================================================================================
 // Bit-string flag sets
@@ -901,7 +904,7 @@ fn write_lane_attributes(w: &mut BitWriter, a: &LaneAttributes) -> Result<(), Up
         LANE_TYPE_VEHICLE_INDEX,
         LANE_TYPE_ALTERNATIVES,
     )?;
-    write_fixed_bit_string(
+    write_extensible_bit_string(
         w,
         F_LANE_TYPE_VEHICLE,
         u64::from(a.vehicle.0),
@@ -928,8 +931,11 @@ fn read_lane_attributes(r: &mut BitReader<'_>) -> Result<LaneAttributes, UperErr
                      reading on would desynchronise every field after them",
         });
     }
-    let vehicle =
-        VehicleLaneAttributes(read_fixed_bit_string(r, LANE_ATTRIBUTES_VEHICLE_BITS)? as u8);
+    let vehicle = VehicleLaneAttributes(read_extensible_bit_string(
+        r,
+        "LaneAttributes-Vehicle",
+        LANE_ATTRIBUTES_VEHICLE_BITS,
+    )? as u8);
     if pre.has(0) {
         return Err(UperError::Unsupported {
             construct: "LaneAttributes.regional",
@@ -1728,7 +1734,7 @@ mod tests {
     /// The bit arithmetic of [`MINIMAL_MAP_SIZE_B`], asserted. If any assumption in
     /// [`assumptions`] changes, this number moves — which is the point of pinning it.
     #[test]
-    fn a_minimal_map_is_twenty_eight_octets() {
+    fn a_minimal_map_is_twenty_nine_octets() {
         let map = minimal();
         let encoded = encode_map(&map).expect("encodes");
         assert_eq!(encoded.size, MINIMAL_MAP_SIZE_B);

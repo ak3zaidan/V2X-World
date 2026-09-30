@@ -86,6 +86,18 @@ pub trait Mobility: Model {
     fn set_demand_multiplier(&mut self, _m: f64) -> bool {
         false
     }
+
+    /// What `a` means to do at the next junction on its route (see
+    /// [`crate::views::Intent`]), or `None` when it is further than
+    /// [`crate::views::INTENT_HORIZON_M`] or this tier plans no routes.
+    ///
+    /// The vehicle's own intention — what its navigation knows and its turn signal shows —
+    /// which its own applications (left-turn assist, intersection movement assist) and
+    /// its BSM's exterior lights read. A provided method, so a tier without routes keeps
+    /// compiling.
+    fn intent(&self, _world: &v2xw_world::World, _a: ActorId) -> Option<crate::views::Intent> {
+        None
+    }
 }
 
 /// Longitudinal acceleration from the gap and the speed difference to the leader

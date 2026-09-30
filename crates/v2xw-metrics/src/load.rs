@@ -346,7 +346,9 @@ impl LoadProvider {
             *self.own_us.entry(v.node).or_insert(0) += us;
         }
         self.carried_bits += v.bytes_on_wire * 8;
-        if let Some(signed) = v.t_signed
+        // Channel access starts when the frame reaches the MAC: after the hand-off where
+        // the record carries one, at the signature in an older recording.
+        if let Some(signed) = v.t_handoff.or(v.t_signed)
             && v.t >= signed
         {
             self.access_ms.observe(((v.t - signed) as f64) / 1e6);

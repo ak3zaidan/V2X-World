@@ -7,7 +7,8 @@
 //!
 //! | Message | Who sends it | Trigger | Source |
 //! |---|---|---|---|
-//! | DENM `dangerousSituation(99)` | a vehicle running `denm` | its own longitudinal deceleration reaches 0.4 g (3.92 m/s²) | the J2945/1 hard-braking threshold 04-models.md §8.1 and §11 mark VERIFIED ([`crate::safety::EEBL_DECEL_THRESHOLD_MPS2`]); the DEN basic service (EN 302 637-3) leaves triggering to the application |
+//! | DENM `dangerousSituation(99)` / `emergencyElectronicBrakeEngaged(1)` | a vehicle running `denm` | its own longitudinal deceleration passes 0.4 g (3.92 m/s²) | J2735 2024-09 §7.234's hard-braking criterion for light vehicles, which is also the J2945/1 threshold 04-models.md §8.1 and §11 mark VERIFIED ([`crate::safety::EEBL_DECEL_THRESHOLD_MPS2`]); the DEN basic service (EN 302 637-3) leaves triggering to the application |
+//! | DENM `stationaryVehicle(94)` / `vehicleBreakdown(2)` | a vehicle running `denm` | its hazard lights are on and it has stood still for [`STATIONARY_DWELL`]; cancelled (`isCancellation`) when it moves or the hazards go off | the trigger is the C2C-CC stationary-vehicle warning's (hazard lights and a standstill), whose document is not in this repository, so the dwell, the 1 s repetition and the 200 m relevance are this build's choices |
 //! | SPaT / SPATEM | a roadside unit running `spat` | every [`crate::generate::SPAT_INTERVAL`] | CTI 4501 via 04-models.md §8.1 |
 //! | MAP / MAPEM | a roadside unit running `map` | every [`crate::generate::MAP_INTERVAL`] | likewise |
 //! | SRM / SREM | a vehicle running `srm` (the wiring gives it to emergency vehicles) | a junction whose MAP it heard is within [`SRM_RANGE_M`] ahead; repeated at [`SRM_INTERVAL`] | J2735's signal request; the range and interval are this build's choice |
@@ -23,12 +24,15 @@
 //!
 //! # What is not triggered, and why
 //!
-//! * `stationaryVehicle(94)`. Its triggering condition needs a breakdown or a hazard-light
-//!   input, and no mobility model here has one: the only stationary vehicles are queued at
-//!   a red or behind one, and a DENM from each of them would be a false hazard report.
-//! * The DENM's repetition (every 100 ms for 2 s) and validity (2 s) are this build's
-//!   choice. The C2C-CC triggering-condition documents that set them for the emergency
-//!   brake light are not in this repository.
+//! * A queued vehicle raises no `stationaryVehicle`: without its hazard lights on it is
+//!   traffic, not a hazard. The scenario timeline's `safety.breakdown` is what switches a
+//!   vehicle's hazards on.
+//! * The hard-braking DENM's repetition (every 100 ms for 2 s) and validity (2 s) are this
+//!   build's choice. The C2C-CC triggering-condition documents that set them for the
+//!   emergency brake light are not in this repository.
+//! * Relevance: both DENMs name the upstream traffic (`trafficDirection` 1, the traffic
+//!   coming up behind the event) and carry the path the vehicle drove to the event as
+//!   their `detectionZonesToEventPosition` trace — its own path history.
 //! * SRM and SSM have no real encoder (build decision D2): their payloads are the validated
 //!   size model's placeholder of the modelled length (`codec/size-model/j2735`), which is
 //!   why `messages.codec_tier` must be `size-model` to select them. A unit acknowledges a
@@ -67,6 +71,23 @@ pub const MAP_MEMORY: Duration = Duration::from_secs(5);
 pub const DENM_REPETITION: Duration = Duration::from_millis(100);
 /// See [`DENM_REPETITION`].
 pub const DENM_VALIDITY: Duration = Duration::from_secs(2);
+
+/// How long a vehicle with its hazard lights on must have stood before it reports itself
+/// as a stationary vehicle. This build's choice (see the module notes): long enough that a
+/// car stopping to let a passenger out with its hazards on for a moment is not a breakdown.
+pub const STATIONARY_DWELL: Duration = Duration::from_secs(5);
+
+/// The stationary-vehicle DENM's repetition interval. This build's choice.
+pub const STATIONARY_REPETITION: Duration = Duration::from_secs(1);
+
+/// The stationary-vehicle DENM's validity: the DEN service's default, 600 s
+/// (`defaultValidity`, TS 103 831). A breakdown that outlasts it is raised again.
+pub const STATIONARY_VALIDITY: Duration = v2xw_msg::denm::DEFAULT_VALIDITY;
+
+/// `DangerousSituationSubCauseCode` `emergencyElectronicBrakeEngaged(1)`.
+pub const SUB_CAUSE_EEBL: u8 = 1;
+/// `StationaryVehicleSubCauseCode` `vehicleBreakdown(2)`.
+pub const SUB_CAUSE_BREAKDOWN: u8 = 2;
 
 /// ETSI `MessageId` of a SREM, `srem(9)` (ETSI TS 102 894-2).
 pub const SREM_MESSAGE_ID: u8 = 9;
@@ -118,6 +139,16 @@ pub struct EventServices {
     last_ssm: Option<SimTime>,
     /// DENMs raised, for a test and a report.
     denm_raised: u64,
+    /// The hazard switch.
+    hazard_lights: bool,
+    /// The vehicle's own wheel speed, m/s.
+    own_speed: Option<f64>,
+    /// When the vehicle came to a stand, while it stands.
+    standing_since: Option<SimTime>,
+    /// The live stationary-vehicle event, if one is raised.
+    stationary_event: Option<EventId>,
+    /// The cause of each live event.
+    denm_causes: BTreeMap<EventId, (DenmCause, u8)>,
 }
 
 impl EventServices {
@@ -148,6 +179,17 @@ impl EventServices {
     /// How many DENM events this node has raised.
     pub fn denm_raised(&self) -> u64 {
         self.denm_raised
+    }
+
+    /// The hazard switch.
+    pub fn set_hazard_lights(&mut self, on: bool) {
+        self.hazard_lights = on;
+    }
+
+    /// The vehicle's own bus reading: its wheel speed and its hazard switch.
+    pub fn set_vehicle_bus(&mut self, bus: &crate::vehicle::VehicleBus) {
+        self.own_speed = Some(bus.speed_mps);
+        self.hazard_lights = bus.hazard_lights;
     }
 
     /// Learns from a message the applications received: a MAP is a junction a priority
@@ -194,13 +236,25 @@ impl EventServices {
                 self.denm = Some(DenmService::new(sid));
             }
             self.raise_on_hard_braking(now, belief);
+            self.raise_on_stationary(now, belief);
             if let Some(service) = self.denm.as_mut() {
                 for action in service.poll(now) {
                     out.push(EventRequest::Denm(action));
                 }
-                // Forget the events the service has dropped.
+                // Forget the events the service has dropped — but only once their last
+                // action (a termination included) has been built.
                 let service = &*service;
-                self.denm_events.retain(|id, _| service.is_active(*id));
+                let polled: Vec<EventId> = out
+                    .iter()
+                    .filter_map(|r| match r {
+                        EventRequest::Denm(a) => Some(a.event()),
+                        _ => None,
+                    })
+                    .collect();
+                self.denm_events
+                    .retain(|id, _| service.is_active(*id) || polled.contains(id));
+                self.denm_causes
+                    .retain(|id, _| service.is_active(*id) || polled.contains(id));
             }
         }
         if services.srm
@@ -226,11 +280,15 @@ impl EventServices {
         out
     }
 
-    /// Raises a `dangerousSituation` event on the rising edge of hard braking.
+    /// Raises a `dangerousSituation` / `emergencyElectronicBrakeEngaged` event on the
+    /// rising edge of hard braking (0.4 g).
     fn raise_on_hard_braking(&mut self, now: SimTime, belief: &PositionEstimate) {
         let Some(a) = self.own_accel else {
             return;
         };
+        // 0.4 g for every vehicle: J2735's 0.2 g heavy-vehicle rule governs the BSM's
+        // event flag (`crate::vehicle`), and a bus braking at 2 m/s² in service is not an
+        // emergency a DENM should announce to the traffic behind it.
         let hard = a <= -crate::safety::EEBL_DECEL_THRESHOLD_MPS2;
         if hard
             && !self.braking
@@ -243,9 +301,58 @@ impl EventServices {
                 Some(Repetition::new(DENM_REPETITION, DENM_VALIDITY)),
             );
             self.denm_events.insert(id, (now, *belief));
+            self.denm_causes
+                .insert(id, (DenmCause::DangerousSituation, SUB_CAUSE_EEBL));
             self.denm_raised += 1;
         }
         self.braking = hard;
+    }
+
+    /// Raises a `stationaryVehicle` / `vehicleBreakdown` event once the vehicle has stood
+    /// [`STATIONARY_DWELL`] with its hazards on, and cancels it when it moves off or the
+    /// hazards go out (EN 302 637-3: the originator terminates its own event).
+    fn raise_on_stationary(&mut self, now: SimTime, belief: &PositionEstimate) {
+        let standing = self.own_speed.is_some_and(|v| v < 0.1);
+        if standing {
+            self.standing_since.get_or_insert(now);
+        } else {
+            self.standing_since = None;
+        }
+        let hazard = self.hazard_lights && standing;
+        let Some(service) = self.denm.as_mut() else {
+            return;
+        };
+        // An event that ran out its validity is gone; forget it so a breakdown that
+        // outlasts it is raised again.
+        if let Some(id) = self.stationary_event
+            && !service.is_active(id)
+        {
+            self.stationary_event = None;
+        }
+        match (hazard, self.stationary_event) {
+            (false, Some(id)) => {
+                service.cancel(id, now);
+                self.stationary_event = None;
+            }
+            (true, None)
+                if belief.fix.has_position()
+                    && self
+                        .standing_since
+                        .is_some_and(|t| now.saturating_sub(t) >= STATIONARY_DWELL.as_nanos()) =>
+            {
+                let id = service.create(
+                    now,
+                    STATIONARY_VALIDITY,
+                    Some(Repetition::new(STATIONARY_REPETITION, STATIONARY_VALIDITY)),
+                );
+                self.denm_events.insert(id, (now, *belief));
+                self.denm_causes
+                    .insert(id, (DenmCause::StationaryVehicle, SUB_CAUSE_BREAKDOWN));
+                self.stationary_event = Some(id);
+                self.denm_raised += 1;
+            }
+            _ => {}
+        }
     }
 
     /// The nearest junction ahead whose MAP was heard recently, within [`SRM_RANGE_M`].
@@ -281,6 +388,7 @@ impl EventServices {
         now: SimTime,
         cred: &CredentialHandle,
         config: &NodeConfig,
+        own: &crate::vehicle::OwnVehicle,
     ) -> Option<Vec<u8>> {
         let mut id = [0u8; 4];
         id.copy_from_slice(&cred.digest.0[..4]);
@@ -289,6 +397,11 @@ impl EventServices {
             EventRequest::Denm(action) => {
                 let event = action.event();
                 let (detected_at, position) = self.denm_events.get(&event).copied()?;
+                let (cause, sub) = self
+                    .denm_causes
+                    .get(&event)
+                    .copied()
+                    .unwrap_or((DenmCause::DangerousSituation, 0));
                 let mut input = DenmInput::new(
                     event,
                     station_id,
@@ -296,12 +409,32 @@ impl EventServices {
                     v2xw_msg::cam::timestamp_its(config.wall, detected_at).ok()?,
                     position,
                     config.origin,
-                    DenmCause::DangerousSituation,
+                    cause,
                 );
+                input.sub_cause = sub;
                 input.reference_time = v2xw_msg::cam::timestamp_its(config.wall, now).ok()?;
-                input.validity = DENM_VALIDITY;
-                input.transmission_interval = Some(DENM_REPETITION);
+                let stationary = cause == DenmCause::StationaryVehicle;
+                input.validity = if stationary {
+                    STATIONARY_VALIDITY
+                } else {
+                    DENM_VALIDITY
+                };
+                input.transmission_interval = Some(if stationary {
+                    STATIONARY_REPETITION
+                } else {
+                    DENM_REPETITION
+                });
                 input.awareness_distance = Some(denm::AwarenessDistance::LessThan200m);
+                input.traffic_direction = Some(denm::RelevanceDirection::Upstream);
+                // The trace: the vehicle's own path up to the event.
+                let points = own.history_points(&position);
+                input.trace = v2xw_msg::j2945::etsi_path_deltas(
+                    &points,
+                    position.pos,
+                    position.time_ns,
+                    config.origin,
+                    v2xw_msg::cam::MAX_PATH_POINTS,
+                );
                 let message = match action {
                     DenmAction::Termination(_, kind) => denm::build_termination_denm(&input, *kind),
                     _ => denm::build_denm(&input),

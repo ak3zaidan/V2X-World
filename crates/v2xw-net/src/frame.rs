@@ -122,8 +122,15 @@ impl NetStack {
                 FrameMsg::Safety | FrameMsg::Denm => {
                     NetMeta::for_bsm(sdu_bytes).with_llc_snap(false)
                 }
-                FrameMsg::Spat | FrameMsg::Map | FrameMsg::Srm | FrameMsg::Ssm => {
+                FrameMsg::Spat | FrameMsg::Map => {
                     NetMeta::wsmp(sdu_bytes, Psid::INTERSECTION).with_llc_snap(false)
+                }
+                // Each under its own registry entry: a signal request is not a SPaT.
+                FrameMsg::Srm => {
+                    NetMeta::wsmp(sdu_bytes, Psid::SIGNAL_REQUEST).with_llc_snap(false)
+                }
+                FrameMsg::Ssm => {
+                    NetMeta::wsmp(sdu_bytes, Psid::SIGNAL_STATUS).with_llc_snap(false)
                 }
             },
             NetStack::GnBtp(_) => match msg {
@@ -169,12 +176,12 @@ impl NetStack {
 /// | DENM | `0x20` | GBC, 2002 |
 /// | SPaT / SPATEM | `0x82` | SHB, 2004 |
 /// | MAP / MAPEM | `0x82` | SHB, 2003 |
-/// | SRM / SREM | `0x82` | SHB, 2007 |
-/// | SSM / SSEM | `0x82` | SHB, 2008 |
+/// | SRM / SREM | `0x204096` | SHB, 2007 |
+/// | SSM / SSEM | `0x204095` | SHB, 2008 |
 ///
-/// The BTP ports are TS 103 301's `CSP_PortNo` (VERIFIED for 2003, 2004 and 2007; 2008
-/// through 04-models.md §7.2, UNVERIFIED). The WSMP PSID of the intersection messages is
-/// [`Psid::INTERSECTION`], recalled and unverified — see there. That the intersection
+/// The BTP ports are TS 103 248's well-known ports (VERIFIED 2026-09-30 for 2001–2008 and
+/// against Wireshark's `ITS_WKP_*` table, `v2xw_msg::registry`). The WSMP PSIDs are the
+/// IEEE PSID registry's (VERIFIED 2026-09-30, `v2xw_msg::registry`). That the intersection
 /// messages go single-hop is the common deployment (an RSU broadcasting to its own
 /// approaches) and is this build's choice for all four; a GeoBroadcast SPATEM would add
 /// the GBC header's extra octets.

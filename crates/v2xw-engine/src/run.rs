@@ -78,7 +78,7 @@
 //! Each gap is a missing *model*, not a missing seam: the event class, the phase and the
 //! record channel for each already exist.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rayon::prelude::*;
 use v2xw_core::card::Tier;
@@ -559,6 +559,9 @@ struct FrameState {
     t_generated: SimTime,
     /// When the sender's signer picked the message up, on the simulation's timeline.
     t_sign_start: SimTime,
+    /// When the signature finished, on the simulation's timeline: `ready_at` less the
+    /// hand-off ([`Engine::hand_down`]).
+    t_signed: SimTime,
     /// Of the channel-access delay, the AIFS, ns.
     mac_aifs_ns: u64,
     /// Of the channel-access delay, the backoff slots the MAC counted, ns.
@@ -756,6 +759,9 @@ pub struct Engine {
     /// The scenario timeline's state: which lanes are closed and by whom, which demand
     /// multipliers are in force. See [`crate::timeline`].
     timeline: TimelineState,
+    /// The hand-off [`Engine::hand_down`] is adding to the frame being handed down, ns,
+    /// so [`Engine::hand_down_app`] can record the signature's own end apart from it.
+    pending_handoff: u64,
     /// The 20 m bins of the reception census (`phy.prr`), the very bins the metric reads.
     prr_bins: v2xw_metrics::bins::Bins,
     /// When each node is next woken to hand over a finished signature check
@@ -780,6 +786,11 @@ struct TimelineState {
     rate_ratio: f64,
     /// The scenario's own arrival rate, veh/h, when its demand model takes one.
     base_rate: Option<f64>,
+    /// The vehicle each `safety.breakdown` item stopped, so its `until` releases it.
+    broken_down: BTreeMap<usize, (ActorId, Option<NodeId>)>,
+    /// The nodes whose hazard warning lights are on: the vehicle's own switch, which its
+    /// facilities read like its own accelerometer.
+    hazard_lights: BTreeSet<NodeId>,
 }
 
 impl TimelineState {
@@ -1072,6 +1083,7 @@ impl Engine {
             focus,
             jamming: jammers,
             timeline: TimelineState::default(),
+            pending_handoff: 0,
             prr_bins: v2xw_metrics::comms::prr_bins(),
             node_wake: BTreeMap::new(),
             infra_feeds: BTreeMap::new(),
@@ -1778,6 +1790,9 @@ impl Engine {
                     }
                 }
             }
+            TimelineKind::HardBrake | TimelineKind::Breakdown | TimelineKind::CutIn => {
+                self.on_safety_event(&item, index, end, now, &mut note);
+            }
             TimelineKind::AttackWave => {
                 // The wave's window is each named population's schedule (see
                 // `crate::timeline::attack_windows`, applied where Phase 2 arms attackers),
@@ -1795,6 +1810,149 @@ impl Engine {
             }
         }
         self.emit(recorder, &crate::records::ScenarioEvent(note));
+    }
+
+    /// A scripted safety event (`safety.hard-brake`, `safety.breakdown`, `safety.cut-in`):
+    /// picks its vehicle and tells the traffic model what the driver does. See
+    /// [`crate::safety_events`].
+    fn on_safety_event(
+        &mut self,
+        item: &crate::scenario::schema::TimelineItem,
+        index: usize,
+        end: bool,
+        now: SimTime,
+        note: &mut crate::records::ScenarioEventView,
+    ) {
+        use crate::safety_events as se;
+        use crate::scenario::TimelineKind;
+        if end {
+            // Only a breakdown has an end: the vehicle is cleared away, i.e. its hold lifts
+            // and its hazard lights go out.
+            if let Some((actor, node)) = self.timeline.broken_down.remove(&index) {
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::Stop {
+                    actor,
+                    until: Some(now),
+                }]);
+                if let Some(n) = node {
+                    self.timeline.hazard_lights.remove(&n);
+                    if let Some(obu) = self.nodes.get_mut(&n).and_then(|r| r.as_obu_mut()) {
+                        obu.set_hazard_lights(false);
+                    }
+                    note.node = Some(n.index());
+                }
+                note.effect = "the broken-down vehicle is cleared and drives on".to_string();
+            } else {
+                note.effect = "no vehicle had broken down, so nothing was cleared".to_string();
+            }
+            return;
+        }
+        let target = match se::Pick::parse(item.params.get("target")) {
+            Ok(t) => t,
+            Err(why) => {
+                note.effect = format!("not applied: {why}");
+                return;
+            }
+        };
+        let purpose = match item.kind {
+            TimelineKind::HardBrake => se::Purpose::HardBrake,
+            TimelineKind::Breakdown => se::Purpose::Breakdown,
+            _ => match se::parse_side(item.params.get("side")) {
+                Ok(side) => se::Purpose::CutIn(side),
+                Err(why) => {
+                    note.effect = format!("not applied: {why}");
+                    return;
+                }
+            },
+        };
+        let candidates: BTreeMap<ActorId, se::Candidate> = self
+            .actors
+            .iter()
+            .filter(|(_, a)| !a.class.is_vru())
+            .map(|(id, a)| {
+                (
+                    *id,
+                    se::Candidate {
+                        actor: *id,
+                        node: a.node,
+                        state: a.last,
+                    },
+                )
+            })
+            .collect();
+        let Some(chosen) = se::pick(&self.world, &candidates, target, purpose) else {
+            note.effect = "no vehicle in the run fits this event at this instant, so nothing \
+                           happened"
+                .to_string();
+            return;
+        };
+        note.node = chosen.node.map(|n| n.index());
+        let who = match chosen.node {
+            Some(n) => format!("vehicle {} (node {})", chosen.actor.index(), n.index()),
+            None => format!("vehicle {} (no on-board unit)", chosen.actor.index()),
+        };
+        let speed = v2xw_core::math::hypot(chosen.state.vel.x, chosen.state.vel.y);
+        match purpose {
+            se::Purpose::HardBrake => {
+                let decel = se::positive(
+                    item.params.get("decel_mps2"),
+                    se::HARD_BRAKE_DEFAULT_DECEL_MPS2,
+                )
+                .unwrap_or(se::HARD_BRAKE_DEFAULT_DECEL_MPS2);
+                let hold = se::positive(item.params.get("hold_s"), se::HARD_BRAKE_DEFAULT_HOLD_S)
+                    .unwrap_or(se::HARD_BRAKE_DEFAULT_HOLD_S);
+                // The hold runs from when it stands; a stop from `speed` at `decel` takes
+                // `speed / decel` plus the onset, so the release is placed after that.
+                let stop_s =
+                    speed / decel + decel / v2xw_mobility::EMERGENCY_BRAKE_ONSET_JERK_MPS3;
+                let release =
+                    now.saturating_add(Duration::from_secs_f64(stop_s + hold).as_nanos());
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::Brake {
+                    actor: chosen.actor,
+                    decel_mps2: decel,
+                    hold_until: Some(release),
+                }]);
+                note.effect = format!(
+                    "{who} brakes hard at {decel:.2} m/s² from {speed:.1} m/s and stands \
+                     {hold} s"
+                );
+            }
+            se::Purpose::Breakdown => {
+                let decel = se::positive(
+                    item.params.get("decel_mps2"),
+                    se::BREAKDOWN_DEFAULT_DECEL_MPS2,
+                )
+                .unwrap_or(se::BREAKDOWN_DEFAULT_DECEL_MPS2);
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::Brake {
+                    actor: chosen.actor,
+                    decel_mps2: decel,
+                    hold_until: None,
+                }]);
+                self.timeline
+                    .broken_down
+                    .insert(index, (chosen.actor, chosen.node));
+                if let Some(n) = chosen.node {
+                    self.timeline.hazard_lights.insert(n);
+                    if let Some(obu) = self.nodes.get_mut(&n).and_then(|r| r.as_obu_mut()) {
+                        obu.set_hazard_lights(true);
+                    }
+                }
+                note.effect = format!(
+                    "{who} breaks down: it stops at {decel:.2} m/s² from {speed:.1} m/s with \
+                     its hazard lights on"
+                );
+            }
+            se::Purpose::CutIn(side) => {
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::CutIn {
+                    actor: chosen.actor,
+                    side,
+                    until: now.saturating_add(Duration::from_secs(5).as_nanos()),
+                }]);
+                note.effect = format!(
+                    "{who} cuts in to the {} lane at {speed:.1} m/s",
+                    side.label()
+                );
+            }
+        }
     }
 
     /// Applies a parameter a `param.change` has just written into `self.scenario`.
@@ -2292,6 +2450,36 @@ impl Engine {
             .values()
             .filter_map(|a| a.node.map(|n| (n, a.last)))
             .collect();
+        // Each equipped vehicle's own bus: its dynamics, lights and next turn
+        // (`crate::vehicle_bus`). The vehicle's own sensors, like its GNSS fix.
+        let origin: v2xw_core::geo::GeoOrigin = self.world.origin.into();
+        let night = crate::vehicle_bus::is_night(self.wall, now, origin);
+        let buses: Vec<(NodeId, v2xw_node::vehicle::VehicleBus)> = self
+            .actors
+            .iter()
+            .filter(|(_, a)| !a.class.is_vru())
+            .filter_map(|(id, a)| {
+                let node = a.node?;
+                Some((
+                    node,
+                    crate::vehicle_bus::bus_of(
+                        &self.world,
+                        &a.last,
+                        a.class,
+                        self.mobility.intent(&self.world, *id),
+                        self.timeline.hazard_lights.contains(&node),
+                        night,
+                        self.weather.visibility_m,
+                        now,
+                    ),
+                ))
+            })
+            .collect();
+        for (node, bus) in buses {
+            if let Some(obu) = self.nodes.get_mut(&node).and_then(|r| r.as_obu_mut()) {
+                obu.set_vehicle_bus(bus);
+            }
+        }
         let env = GnssEnv {
             weather: self.weather,
             ..GnssEnv::OPEN_SKY
@@ -2862,7 +3050,11 @@ impl Engine {
         }
         let mut delayed = tx.clone();
         delayed.ready_at = jitter.after(tx.ready_at);
+        // The jitter is the hand-off, not the signature: it is recorded apart
+        // (`t_handoff`) so the `sign` stage is the signer's own time.
+        self.pending_handoff = jitter.as_nanos();
         self.hand_down_app(node, &delayed, now, horizon, None);
+        self.pending_handoff = 0;
     }
 
     /// [`Engine::hand_down`] with an application payload attached.
@@ -2895,6 +3087,8 @@ impl Engine {
         };
         let t_generated = on_timeline(tx.generation_time);
         let t_sign_start = on_timeline(tx.sign_start).max(t_generated);
+        // The signature's end, before the hand-off [`Engine::hand_down`] added.
+        let t_signed = ready.saturating_sub(self.pending_handoff).max(t_sign_start);
         if ready > horizon {
             return;
         }
@@ -3252,6 +3446,7 @@ impl Engine {
                 .or((cert_extra > 0).then_some(cert_extra)),
             t_generated,
             t_sign_start,
+            t_signed,
             // The abstract tier's frame waits exactly one AIFS and counts no backoff;
             // the MAC's grant overwrites both at the medium and high tiers.
             mac_aifs_ns: AIFS.as_nanos(),
@@ -4445,6 +4640,7 @@ impl Engine {
             .journey(
                 state.t_generated,
                 state.t_sign_start,
+                state.t_signed,
                 state.ready_at,
                 state.mac_aifs_ns,
                 state.mac_backoff_ns,
@@ -4515,7 +4711,7 @@ impl Engine {
                     msg: frame_index,
                     t_generated: state.t_generated,
                     t_sign_start: state.t_sign_start,
-                    t_signed: state.ready_at,
+                    t_signed: state.t_signed,
                     t_tx_start: state.start,
                     t_tx_end: state.end,
                     t_arrival: arrival,
@@ -4607,6 +4803,7 @@ impl Engine {
         .with_sizes(state.payload_bytes, state.envelope_bytes)
         .with_journey(
             state.t_sign_start,
+            state.t_signed,
             state.ready_at,
             state.mac_aifs_ns,
             state.mac_backoff_ns,

@@ -541,22 +541,35 @@ fn vehicle_high_frequency(input: &CamInput) -> BasicVehicleContainerHighFrequenc
 }
 
 fn low_frequency_container(lf: &CamLowFrequency, input: &CamInput) -> LowFrequencyContainer {
-    let (ref_lat, ref_lon, ref_alt) = input.origin.to_geodetic(input.position.pos);
+    // ETSI TS 102 894-2, DF `Path`: "The first PathPoint presents an offset delta position
+    // and optionally an offset travel time with regards to an external reference position.
+    // Each other PathPoint presents an offset delta position and optionally an offset
+    // travel time with regards to the previous PathPoint." So the deltas chain: the first
+    // from the CAM's reference position, each next one from the point before it — and the
+    // travel times too. (Every point used to be offset from the reference position, which
+    // a receiver reading the standard reconstructs as a path folding back on itself.)
+    let (mut prev_lat, mut prev_lon, mut prev_alt) = input.origin.to_geodetic(input.position.pos);
+    let mut prev_age_ns: u64 = 0;
     let mut points: Vec<PathPoint> = Vec::with_capacity(lf.path_history.len().min(MAX_PATH_POINTS));
     for point in lf.path_history.iter().take(MAX_PATH_POINTS) {
         let (lat, lon, alt) = input.origin.to_geodetic(point.pos);
+        let age_ns = point.age.as_nanos();
         points.push(PathPoint::new(
             crate::asn1::cdd::DeltaReferencePosition::new(
-                crate::asn1::cdd::DeltaLatitude(units::delta_degrees(lat - ref_lat)),
-                crate::asn1::cdd::DeltaLongitude(units::delta_degrees(lon - ref_lon)),
-                crate::asn1::cdd::DeltaAltitude(units::delta_altitude(alt - ref_alt)),
+                crate::asn1::cdd::DeltaLatitude(units::delta_degrees(lat - prev_lat)),
+                crate::asn1::cdd::DeltaLongitude(units::delta_degrees(lon - prev_lon)),
+                crate::asn1::cdd::DeltaAltitude(units::delta_altitude(alt - prev_alt)),
             ),
             // `PathDeltaTime ::= INTEGER (1..65535, ...)`, unit 10 ms. Zero is not
-            // expressible, so a point captured at the reference instant carries 1.
+            // expressible, so two points captured in the same 10 ms carry 1.
             Some(crate::asn1::cdd::PathDeltaTime(rasn::types::Integer::from(
-                (point.age.as_nanos() / 10_000_000).clamp(1, 65_535),
+                (age_ns.saturating_sub(prev_age_ns) / 10_000_000).clamp(1, 65_535),
             ))),
         ));
+        prev_lat = lat;
+        prev_lon = lon;
+        prev_alt = alt;
+        prev_age_ns = age_ns;
     }
 
     LowFrequencyContainer::basicVehicleContainerLowFrequency(

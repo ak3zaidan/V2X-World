@@ -2494,6 +2494,12 @@ pub fn build_node(
         ..NodeConfig::default()
     };
     let mut runtime = ObuRuntime::new(node, profile, policy, config, at);
+    // The role a CAM's low-frequency container states (EN 302 637-2, `VehicleRole`).
+    runtime.set_vehicle_role(match class {
+        VehicleClass::Emergency => v2xw_msg::cam::VehicleRole::Emergency,
+        VehicleClass::Bus | VehicleClass::Coach => v2xw_msg::cam::VehicleRole::PublicTransport,
+        _ => v2xw_msg::cam::VehicleRole::Default,
+    });
     apply_compute_tier(&mut runtime, scenario);
     apply_security_profile(&mut runtime, scenario, env);
     bootstrap_credentials(&mut runtime, scenario, node, at);
@@ -2610,6 +2616,33 @@ fn apply_security_profile(runtime: &mut ObuRuntime, scenario: &Scenario, env: No
     // different message types with nothing saying so.
     .with_signer_id_policies(policy, policy);
     *runtime.security_mut() = configured;
+    // Each message under its registered PSID / ITS-AID, and certificates that permit
+    // exactly what the node sends (`v2xw_msg::registry`, the IEEE PSID registry).
+    let s = runtime.schedule().services();
+    let mut sends = Vec::new();
+    for (on, msg) in [
+        (s.bsm, v2xw_msg::MsgType::Bsm),
+        (s.cam, v2xw_msg::MsgType::Cam),
+        (s.denm, v2xw_msg::MsgType::Denm),
+        (s.spat, v2xw_msg::MsgType::Spat),
+        (s.map, v2xw_msg::MsgType::Map),
+        (s.srm, v2xw_msg::MsgType::Srm),
+        (s.ssm, v2xw_msg::MsgType::Ssm),
+    ] {
+        if on {
+            sends.push(msg);
+        }
+    }
+    if sends.is_empty() {
+        sends.push(if etsi_facilities(scenario) {
+            v2xw_msg::MsgType::Cam
+        } else {
+            v2xw_msg::MsgType::Bsm
+        });
+    }
+    runtime
+        .security_mut()
+        .set_stack(etsi_facilities(scenario), &sends);
 }
 
 /// The pseudonym-rotation rule the scenario states (`security.pseudonym_change`).
