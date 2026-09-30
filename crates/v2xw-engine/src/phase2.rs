@@ -17,7 +17,7 @@
 //! | the report | [`v2xw_threat::MisbehaviourReport`] | builds one `from_verdict`, at most once a second per subject per reporter |
 //! | the access leg | [`crate::backend::BackendAccess`] | cellular Uu, roadside relay, or none |
 //! | the backend | [`v2xw_proto::ScmsRun`] | run **in lockstep** with the engine's clock: RA shuffles, PCA and LA lookups, CRL cadence |
-//! | the decision | [`v2xw_threat::LegacyWindow`] | `detection.ma`: k trusted reporters, distinct seconds, a span, a window |
+//! | the decision | [`v2xw_threat::CorroboratedMa`] (default) or [`v2xw_threat::LegacyWindow`] | `detection.ma`: independent corroborated events over time, or the legacy persistence gate |
 //! | the CRL | [`v2xw_sec::linkage::CrlLinkageEntry`] | installs it in the receiving node's own `CrlGate` |
 //! | enforcement | [`v2xw_node::stores::CrlGate`] | the node's own revocation check does the rest |
 //!
@@ -35,6 +35,30 @@
 //! `report_threshold_k`, `revoke_min_seconds`, `revoke_persist_s`, `revoke_window_s`), and
 //! it ships in `v2xw-threat` — it was simply not on this path. It is now: the decision is
 //! the pipeline's, and the backend only carries it out.
+//!
+//! # Why honest traffic was still revoked, and the second fix (2026-09-30)
+//!
+//! With the persistence gate in place, the shipped `revocation-latency.yaml` with its
+//! attackers removed still revoked 21 honest vehicles in 300 s at 6,000 veh/h, and
+//! `phase2-manhattan` one (honest node 28: eight reporters flagged one burst between 257.1
+//! and 257.9 s). Two things were wrong, and both are fixed here:
+//!
+//! 1. **The detector judged every message against a constant 5 m confidence.** A BSM
+//!    states its own accuracy (J2735 `PositionalAccuracy`) and a CAM its own confidence
+//!    ellipse; the detector host now joins each message's stated accuracy back by
+//!    `(signer, generation time)` ([`broadcast_accuracy_95_m`]) and the suite's tolerance
+//!    is that. A receiver in an urban canyon states a wider ellipse and is judged by it.
+//! 2. **The authority counted one event heard by many as many pieces of evidence.** Eight
+//!    receivers of one GNSS burst met "three reporters, four distinct seconds, a 3 s span"
+//!    by themselves. The default authority is now `threat/ma/corroborated`
+//!    ([`v2xw_threat::CorroboratedMa`]): reports about one pseudonym are correlated into
+//!    events, an event counts when two independent trusted reporters witnessed it, and
+//!    revocation takes several such events sustained over time. The legacy gate stays
+//!    selectable for parity with the legacy corpus.
+//!
+//! A benign GNSS burst still gets reported — a real receiver under-reports its error in a
+//! multipath spike, and a real fleet's detectors fire on it — and that is the honest
+//! behaviour: what must not follow is a revocation.
 //!
 //! # The joints, stated
 //!
@@ -93,6 +117,133 @@ pub const LEGACY_12: &str = "detect/legacy-12";
 
 /// The authority pipeline's id, as `detection.ma` names it.
 pub const MA_LEGACY_WINDOW: &str = v2xw_threat::ma::MODEL_ID;
+
+/// The id of the authority pipeline that decides on independent evidence over time, and
+/// the one a scenario runs when `detection.ma` is not set.
+pub const MA_CORROBORATED: &str = v2xw_threat::ma_corroborate::MODEL_ID;
+
+/// The authority pipelines this build ships, by id.
+pub const MA_PIPELINES: [&str; 2] = [MA_CORROBORATED, MA_LEGACY_WINDOW];
+
+/// The Misbehaviour Authority's decision pipeline, whichever the scenario chose.
+#[derive(Debug, Clone)]
+enum MaHost {
+    /// `threat/ma/legacy-window`: the legacy persistence gate, kept for parity with the
+    /// legacy corpus.
+    Legacy(LegacyWindow),
+    /// `threat/ma/corroborated`: reports correlated into events, revocation on
+    /// independent corroborated events over time.
+    Corroborated(v2xw_threat::CorroboratedMa),
+}
+
+impl MaHost {
+    fn ingest_evidence(&mut self, r: &MisbehaviourReport, at: SimTime) -> Option<MaAction> {
+        match self {
+            MaHost::Legacy(m) => m.ingest_evidence(r, at),
+            MaHost::Corroborated(m) => m.ingest_evidence(r, at),
+        }
+    }
+
+    fn trust_infrastructure(&mut self, digest: String) {
+        match self {
+            MaHost::Legacy(m) => m.trust_infrastructure(digest),
+            MaHost::Corroborated(m) => m.trust_infrastructure(digest),
+        }
+    }
+
+    /// The pipeline `detection.ma` names, with its parameters; the corroborating one
+    /// when the key is absent.
+    fn from_scenario(scenario: &Scenario) -> Result<MaHost> {
+        let Some(choice) = &scenario.detection.ma else {
+            return Ok(MaHost::Corroborated(v2xw_threat::CorroboratedMa::defaults()));
+        };
+        let empty = serde_json::Map::new();
+        let map = choice.params.as_object().unwrap_or(&empty);
+        let bad = |key: &str, value: &serde_json::Value| {
+            conflict(
+                &format!("detection.ma.params.{key}"),
+                format!("has an unusable value {value}"),
+            )
+        };
+        let count = |key: &str, value: &serde_json::Value| {
+            value
+                .as_u64()
+                .filter(|v| *v >= 1)
+                .map(|v| v as usize)
+                .ok_or_else(|| bad(key, value))
+        };
+        let seconds = |key: &str, value: &serde_json::Value| {
+            value
+                .as_f64()
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .ok_or_else(|| bad(key, value))
+        };
+        let unknown = |other: &str| {
+            conflict(
+                "detection.ma.params",
+                format!("'{other}' is not a {} parameter", choice.id),
+            )
+        };
+        match choice.id.as_str() {
+            MA_LEGACY_WINDOW => {
+                let mut p = MaParams::default();
+                for (key, value) in map {
+                    match key.as_str() {
+                        "report_threshold_k" => p.report_threshold_k = count(key, value)?,
+                        "revoke_min_seconds" => p.revoke_min_seconds = count(key, value)?,
+                        "revoke_persist_s" => {
+                            p.revoke_persist_s = value.as_f64().ok_or_else(|| bad(key, value))?;
+                        }
+                        "revoke_window_s" => {
+                            p.revoke_window_s = value.as_f64().ok_or_else(|| bad(key, value))?;
+                        }
+                        "defence" => p.defence = value.as_bool().ok_or_else(|| bad(key, value))?,
+                        "reputation_max" => {
+                            p.reputation_max =
+                                value.as_u64().ok_or_else(|| bad(key, value))? as u32;
+                        }
+                        "report_budget" => {
+                            p.report_budget =
+                                value.as_u64().ok_or_else(|| bad(key, value))? as u32;
+                        }
+                        other => return Err(unknown(other)),
+                    }
+                }
+                Ok(MaHost::Legacy(LegacyWindow::new(p)))
+            }
+            MA_CORROBORATED => {
+                let mut p = v2xw_threat::CorroborationParams::default();
+                for (key, value) in map {
+                    match key.as_str() {
+                        "event_window_s" => p.event_window_s = seconds(key, value)?,
+                        "event_min_reporters" => p.event_min_reporters = count(key, value)?,
+                        "min_events" => p.min_events = count(key, value)?,
+                        "window_s" => p.window_s = seconds(key, value)?,
+                        "min_reporters" => p.min_reporters = count(key, value)?,
+                        "defence" => p.defence = value.as_bool().ok_or_else(|| bad(key, value))?,
+                        "reputation_max" => {
+                            p.reputation_max =
+                                value.as_u64().ok_or_else(|| bad(key, value))? as u32;
+                        }
+                        "report_budget" => {
+                            p.report_budget =
+                                value.as_u64().ok_or_else(|| bad(key, value))? as u32;
+                        }
+                        other => return Err(unknown(other)),
+                    }
+                }
+                Ok(MaHost::Corroborated(v2xw_threat::CorroboratedMa::new(p)))
+            }
+            other => Err(conflict(
+                "detection.ma",
+                format!(
+                    "'{other}' is not an authority pipeline this build ships; one of: {}",
+                    MA_PIPELINES.join(", ")
+                ),
+            )),
+        }
+    }
+}
 
 /// How the SCMS's device numbering is kept clear of the engine's.
 pub const SCMS_DEVICE_BASE: u32 = 1_000_000;
@@ -533,6 +684,26 @@ pub struct Phase2Report {
     pub privacy_links_claimed: u64,
     /// Of those, links between two pseudonyms of one vehicle (the ground-truth join).
     pub privacy_links_correct: u64,
+    /// Safety frames the eavesdropper read (all of them without `threats.eavesdropper`).
+    pub privacy_frames_read: u64,
+    /// New pseudonyms the eavesdropper heard for the first time: its linkage decisions.
+    pub privacy_link_decisions: u64,
+    /// The anonymity-set sizes |Ψ| of those decisions, summed (mean = sum / decisions).
+    pub privacy_anonymity_set_sum: u64,
+    /// The degrees of anonymity d of those decisions, summed, in millionths.
+    pub privacy_degree_micro_sum: u64,
+    /// Vehicles the eavesdropper followed correctly across at least one pseudonym change
+    /// (ground truth).
+    pub privacy_tracked_vehicles: u64,
+    /// Over those vehicles, the longest time each was followed correctly across changes,
+    /// summed and at its largest, ns.
+    pub privacy_tracked_sum_ns: u64,
+    /// See [`Phase2Report::privacy_tracked_sum_ns`].
+    pub privacy_tracked_max_ns: u64,
+    /// Safety frames withheld by a silent period after a pseudonym change.
+    pub pseudonym_silenced_frames: u64,
+    /// Pseudonym changes the engine asked for under `c2c-cc` or `mix-zone`.
+    pub pseudonym_changes_requested: u64,
     /// Vehicles that at some instant held no usable certificate and could not sign.
     pub vehicles_starved: u64,
     /// Node steps a vehicle spent unable to sign for want of a certificate.
@@ -545,6 +716,31 @@ pub struct Phase2Report {
     pub revoked_honest: u64,
     /// Decisions about a certificate the published list already revoked.
     pub decisions_already_covered: u64,
+    /// Checked messages whose stated positional accuracy the detector used.
+    pub accuracy_stated: u64,
+    /// Checked messages that stated their accuracy "unavailable".
+    pub accuracy_unavailable: u64,
+    /// Checked messages the accuracy join had no entry for (a modelling gap, expected 0).
+    pub accuracy_unjoined: u64,
+    /// Reports filed whose subject was an armed attacker (ground truth, run report only):
+    /// the report-level true positives.
+    pub reports_about_attackers: u64,
+    /// Reports filed whose subject was honest (ground truth): report-level false positives.
+    pub reports_about_honest: u64,
+    /// Distinct attackers at least one report named (ground truth): detection recall's
+    /// numerator.
+    pub attackers_reported: u64,
+    /// Distinct honest vehicles at least one report named (ground truth).
+    pub honest_reported: u64,
+    /// Revocation decisions the authority took about an honest device (ground truth),
+    /// counted at the decision and before the backend carried it out.
+    pub decisions_honest: u64,
+    /// Per attacker the authority decided to revoke: its first falsified claim to the
+    /// first report about it, ns, in decision order.
+    pub onset_to_detection_ns: Vec<u64>,
+    /// Per attacker the authority decided to revoke: the first report about it to the
+    /// authority's decision, ns, in decision order.
+    pub detection_to_decision_ns: Vec<u64>,
     /// Backend deliveries the protocol kernel refused (modelling defects).
     pub backend_errors: u64,
     /// The first of them, for the report.
@@ -598,8 +794,12 @@ pub struct Phase2 {
     detectors: BTreeMap<NodeId, Legacy12>,
     detector_params: DetectorParams,
     detection_on: bool,
+    /// Whether the detectors read each message's stated accuracy (`true`, the default) or
+    /// the legacy constant 5 m (`detection.local[].params.use_stated_accuracy: 0`, kept to
+    /// reproduce the runs before 2026-09-30).
+    stated_accuracy: bool,
     report_interval: Duration,
-    ma: LegacyWindow,
+    ma: MaHost,
     vehicles: u64,
     /// When each (reporter, subject) pair was last filed.
     filed: BTreeMap<(NodeId, String), SimTime>,
@@ -632,6 +832,57 @@ pub struct Phase2 {
     compromised_nodes: BTreeMap<NodeId, usize>,
     /// When the backend's state is next published.
     next_view: SimTime,
+    /// Ground truth for the run report only, never read by a decision: each attacker's
+    /// first falsified claim, each subject's first report, each subject's decision.
+    first_falsified: BTreeMap<NodeId, SimTime>,
+    first_reported: BTreeMap<NodeId, SimTime>,
+    decided: BTreeMap<NodeId, SimTime>,
+    /// The positional accuracy each safety message stated on the air, as a 95 % radius in
+    /// metres, by signer and generation time: `None` when the message said "unavailable".
+    /// `v2xw_node::VerifiedMessage` does not carry it, so the detector host joins it back
+    /// by `(signer, generation time)`, which is what the message itself carries.
+    broadcast_accuracy: BTreeMap<[u8; 8], VecDeque<(SimTime, Option<f64>)>>,
+    /// The ground-truth side of the eavesdropper's chains, for the run report only: by the
+    /// pseudonym at a chain's end, the vehicle it is truly following and since when.
+    privacy_chains: BTreeMap<[u8; 8], (Option<NodeId>, SimTime)>,
+    /// Per vehicle, the longest it was followed correctly across a change, ns.
+    privacy_tracked: BTreeMap<NodeId, u64>,
+}
+
+/// The position confidence the detector host used for every message before it read each
+/// message's own (`use_stated_accuracy: 0`).
+pub const LEGACY_CONFIDENCE_M: f64 = 5.0;
+
+/// How many recent messages per signer the accuracy join keeps: three seconds at 10 Hz,
+/// far longer than any delivery takes.
+const ACCURACY_JOIN_DEPTH: usize = 32;
+
+/// The 95 % horizontal accuracy radius a safety message states on the air, metres, as
+/// its receiver decodes it; `None` when it states "unavailable".
+///
+/// * A **BSM** carries J2735 `PositionalAccuracy`, whose `semiMajor` is one standard
+///   deviation in 0.05 m steps (254 = 12.70 m or more, 255 = unavailable). The receiver
+///   scales it to 95 % by the Rayleigh factor.
+/// * A **CAM** carries ETSI `PosConfidenceEllipse`, whose `semiMajorConfidence` is already
+///   the 95 % semi-axis, in centimetres (4094 = out of range, 4095 = unavailable).
+///
+/// Computed from the belief through the encoders' own quantisers rather than by decoding
+/// the payload again: the value is the one the octets carry (the codec tests round-trip
+/// it), without a second decode of every frame.
+#[must_use]
+pub fn broadcast_accuracy_95_m(
+    msg_type: v2xw_msg::MsgType,
+    belief: &v2xw_core::PositionEstimate,
+) -> Option<f64> {
+    use v2xw_msg::j2735::bsm;
+    match msg_type {
+        v2xw_msg::MsgType::Cam => {
+            let cm = v2xw_msg::units::semi_axis_length(belief.semi_major_m);
+            (cm < 4095).then(|| f64::from(cm) / 100.0)
+        }
+        _ => bsm::semi_axis_sigma_m(bsm::semi_axis_accuracy_from_95(belief.semi_major_m))
+            .map(|sigma| sigma * bsm::RADIUS_95_PER_SIGMA),
+    }
 }
 
 impl core::fmt::Debug for Phase2 {
@@ -717,6 +968,7 @@ impl Phase2 {
 
         let mut detector_params = DetectorParams::default();
         let mut report_interval = secs(REPORT_INTERVAL_S);
+        let mut stated_accuracy = true;
         for choice in &scenario.detection.local {
             if choice.id != LEGACY_12 {
                 return Err(conflict(
@@ -740,6 +992,8 @@ impl Phase2 {
                         })?;
                     if key == "report_interval_s" {
                         report_interval = secs(v);
+                    } else if key == "use_stated_accuracy" {
+                        stated_accuracy = v != 0.0;
                     } else if !apply_detector_param(&mut detector_params, key, v) {
                         return Err(conflict(
                             &format!("detection.local[].params.{key}"),
@@ -750,57 +1004,7 @@ impl Phase2 {
             }
         }
 
-        let mut ma_params = MaParams::default();
-        if let Some(choice) = &scenario.detection.ma {
-            if choice.id != MA_LEGACY_WINDOW {
-                return Err(conflict(
-                    "detection.ma",
-                    format!(
-                        "this build ships one authority pipeline, {MA_LEGACY_WINDOW}; got {}",
-                        choice.id
-                    ),
-                ));
-            }
-            if let Some(map) = choice.params.as_object() {
-                for (key, value) in map {
-                    let bad = || {
-                        conflict(
-                            &format!("detection.ma.params.{key}"),
-                            format!("has an unusable value {value}"),
-                        )
-                    };
-                    match key.as_str() {
-                        "report_threshold_k" => {
-                            ma_params.report_threshold_k =
-                                value.as_u64().filter(|v| *v >= 1).ok_or_else(bad)? as usize;
-                        }
-                        "revoke_min_seconds" => {
-                            ma_params.revoke_min_seconds =
-                                value.as_u64().filter(|v| *v >= 1).ok_or_else(bad)? as usize;
-                        }
-                        "revoke_persist_s" => {
-                            ma_params.revoke_persist_s = value.as_f64().ok_or_else(bad)?;
-                        }
-                        "revoke_window_s" => {
-                            ma_params.revoke_window_s = value.as_f64().ok_or_else(bad)?;
-                        }
-                        "defence" => ma_params.defence = value.as_bool().ok_or_else(bad)?,
-                        "reputation_max" => {
-                            ma_params.reputation_max = value.as_u64().ok_or_else(bad)? as u32;
-                        }
-                        "report_budget" => {
-                            ma_params.report_budget = value.as_u64().ok_or_else(bad)? as u32;
-                        }
-                        other => {
-                            return Err(conflict(
-                                "detection.ma.params",
-                                format!("'{other}' is not a {MA_LEGACY_WINDOW} parameter"),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
+        let ma = MaHost::from_scenario(scenario)?;
 
         let access = BackendAccess::from_scenario(scenario)?;
 
@@ -948,8 +1152,9 @@ impl Phase2 {
             detectors: BTreeMap::new(),
             detector_params,
             detection_on: wants_detection,
+            stated_accuracy,
             report_interval,
-            ma: LegacyWindow::new(ma_params),
+            ma,
             vehicles: 0,
             filed: BTreeMap::new(),
             checked_at: BTreeMap::new(),
@@ -971,6 +1176,12 @@ impl Phase2 {
             compromised_specs,
             compromised: BTreeMap::new(),
             compromised_nodes: BTreeMap::new(),
+            first_falsified: BTreeMap::new(),
+            first_reported: BTreeMap::new(),
+            decided: BTreeMap::new(),
+            broadcast_accuracy: BTreeMap::new(),
+            privacy_chains: BTreeMap::new(),
+            privacy_tracked: BTreeMap::new(),
         }))
     }
 
@@ -1435,6 +1646,42 @@ impl Phase2 {
         }
     }
 
+    /// Whether the local detector suite runs in this scenario.
+    #[must_use]
+    pub fn detection_on(&self) -> bool {
+        self.detection_on
+    }
+
+    /// Notes the positional accuracy a safety message states, as it goes on the air (see
+    /// [`broadcast_accuracy_95_m`]).
+    pub fn note_broadcast_accuracy(
+        &mut self,
+        signer: [u8; 8],
+        generated: SimTime,
+        accuracy_95_m: Option<f64>,
+    ) {
+        let q = self.broadcast_accuracy.entry(signer).or_default();
+        if q.len() >= ACCURACY_JOIN_DEPTH {
+            q.pop_front();
+        }
+        q.push_back((generated, accuracy_95_m));
+    }
+
+    /// The accuracy a received message stated: `Some(None)` for "unavailable", `None` when
+    /// the join has nothing (a frame that was never noted).
+    fn accuracy_of(
+        joined: &BTreeMap<[u8; 8], VecDeque<(SimTime, Option<f64>)>>,
+        signer: &[u8; 8],
+        generated: SimTime,
+    ) -> Option<Option<f64>> {
+        joined
+            .get(signer)?
+            .iter()
+            .rev()
+            .find(|(t, _)| *t == generated)
+            .map(|(_, a)| *a)
+    }
+
     /// Whether this node is an armed attacker.
     #[must_use]
     pub fn is_attacker(&self, node: NodeId) -> bool {
@@ -1476,6 +1723,7 @@ impl Phase2 {
         v2xw_threat::log_actions(ctx, believed_time, actor, &id, &actions, Some(msg));
         if v2xw_threat::is_falsified(&honest, &out, believed_time, StationType::Vehicle) {
             self.report.falsified_claims += 1;
+            self.first_falsified.entry(node).or_insert(believed_time);
         }
         Some(out)
     }
@@ -1500,6 +1748,7 @@ impl Phase2 {
         };
         let interval = secs(self.detector_params.generation_interval_s);
         let mut out = Vec::new();
+        let mut truths: Vec<(String, SimTime)> = Vec::new();
         let mut heard: Vec<ObservedMessage> = Vec::new();
         let compromised = self.compromised_nodes.contains_key(&node);
         for m in delivered {
@@ -1523,6 +1772,22 @@ impl Phase2 {
             }
             self.checked_at.insert((node, key), m.received_at);
             let claimed = m.claimed_pos.unwrap_or(Vec3::ZERO);
+            // The sender's own statement of its accuracy, as the message carried it. A
+            // message that says "unavailable" (or one the join never saw) earns no
+            // tolerance beyond the suite's own floor: a sender cannot widen a receiver's
+            // gate by withholding its accuracy.
+            let stated =
+                Self::accuracy_of(&self.broadcast_accuracy, &key, m.claimed_generation_time);
+            match stated {
+                Some(Some(_)) => self.report.accuracy_stated += 1,
+                Some(None) => self.report.accuracy_unavailable += 1,
+                None => self.report.accuracy_unjoined += 1,
+            }
+            let confidence_m = if self.stated_accuracy {
+                stated.flatten().unwrap_or(0.0)
+            } else {
+                LEGACY_CONFIDENCE_M
+            };
             let observed = ObservedMessage {
                 signer: key,
                 kind: match m.msg_type {
@@ -1535,7 +1800,7 @@ impl Phase2 {
                 claimed_y_m: claimed.y,
                 claimed_speed_mps: m.claimed_speed_mps,
                 claimed_heading_rad: m.claimed_heading_rad,
-                claimed_pos_confidence_m: 5.0,
+                claimed_pos_confidence_m: confidence_m,
                 repetitions: 1,
                 cert_valid_from: 0,
                 cert_valid_to: SimTime::MAX,
@@ -1580,7 +1845,7 @@ impl Phase2 {
                 continue;
             }
             self.filed.insert(pair, m.received_at);
-            let evidence = Evidence::at(m.received_at, m.received_at, 5.0);
+            let evidence = Evidence::at(m.received_at, m.received_at, confidence_m);
             let id = format!("r-{}-{}-{}", node.index(), verdict.subject, m.received_at);
             let reporter = reporter_digest
                 .clone()
@@ -1592,14 +1857,64 @@ impl Phase2 {
                 MisbehaviourReport::from_verdict(id, node, reporter, &verdict, &evidence)
             {
                 self.report.reports_sent += 1;
+                truths.push((verdict.subject.clone(), m.received_at));
                 out.push(report);
             }
+        }
+        for (subject, at) in truths {
+            self.note_report_truth(&subject, at);
         }
         if compromised {
             let own = reporter_digest.unwrap_or_default();
             self.compromised_hears(ctx, node, &own, me, &heard);
         }
         out
+    }
+
+    /// The ground-truth join of a filed report, for the run report's precision and recall
+    /// only: nothing here reaches a detector or the authority.
+    fn note_report_truth(&mut self, subject_hex: &str, at: SimTime) {
+        let Some(subject) = decode_hex8(subject_hex).and_then(|d| self.by_digest.get(&d)) else {
+            return;
+        };
+        let subject = subject.0;
+        let attacker = self.attackers.contains_key(&subject);
+        if attacker {
+            self.report.reports_about_attackers += 1;
+        } else {
+            self.report.reports_about_honest += 1;
+        }
+        if let std::collections::btree_map::Entry::Vacant(e) = self.first_reported.entry(subject)
+        {
+            e.insert(at);
+            if attacker {
+                self.report.attackers_reported += 1;
+            } else {
+                self.report.honest_reported += 1;
+            }
+        }
+    }
+
+    /// Notes the authority's decision about `subject` for the run report's latencies.
+    fn note_decision_truth(&mut self, subject: NodeId, at: SimTime) {
+        if self.decided.contains_key(&subject) {
+            return;
+        }
+        self.decided.insert(subject, at);
+        if !self.attackers.contains_key(&subject) {
+            self.report.decisions_honest += 1;
+            return;
+        }
+        if let Some(first) = self.first_reported.get(&subject) {
+            self.report
+                .detection_to_decision_ns
+                .push(at.saturating_sub(*first));
+            if let Some(onset) = self.first_falsified.get(&subject) {
+                self.report
+                    .onset_to_detection_ns
+                    .push(first.saturating_sub(*onset));
+            }
+        }
     }
 
     /// Resolves a report's subject to `(node, i, lv)` — the PCA's table (joint 2).
@@ -2214,6 +2529,9 @@ impl Phase2 {
                     });
                 decisions.push((f.subject, subject, run, t));
             }
+        }
+        for (subject, _, _, t) in &decisions {
+            self.note_decision_truth(*subject, *t);
         }
         decisions
     }
@@ -2920,15 +3238,27 @@ impl Phase2 {
             })
             .count() as u64;
         self.report.crl_past_horizon = self.report.crl_past_horizon.max(issued_unpublished);
+        self.report.privacy_tracked_vehicles = self.privacy_tracked.len() as u64;
+        self.report.privacy_tracked_sum_ns = self.privacy_tracked.values().sum();
+        self.report.privacy_tracked_max_ns =
+            self.privacy_tracked.values().copied().max().unwrap_or(0);
+    }
+
+    /// The pseudonym policy's totals, for the run report.
+    pub fn note_policy_totals(&mut self, silenced: u64, requested: u64) {
+        self.report.pseudonym_silenced_frames = silenced;
+        self.report.pseudonym_changes_requested = requested;
     }
 
     /// Feeds one safety frame, as it goes on the air, to the passive observer.
     ///
-    /// The observer is a global eavesdropper: it hears every frame, which is the worst
-    /// case for privacy and the upper bound a roadside receiver network approaches as its
-    /// density grows. It reads only what is on the air — the signer digest, the claim and
-    /// the claimed confidence — and whether a link it makes is right is judged downstream
-    /// from the vehicles' own records, never here.
+    /// Without `threats.eavesdropper` the observer is a global eavesdropper: it hears
+    /// every frame, which is the worst case for privacy and the upper bound a roadside
+    /// receiver network approaches as its density grows; with it, the engine hands over
+    /// only what a sniffer hears (`crate::pseudonym_policy`). It reads only what is on the
+    /// air — the signer digest, the claim, the claimed confidence and a BSM's `msgCnt` —
+    /// and whether a link it makes is right is judged from the ground truth for the run
+    /// report only, never by the observer.
     #[allow(clippy::too_many_arguments)]
     pub fn observe_frame(
         &mut self,
@@ -2940,6 +3270,7 @@ impl Phase2 {
         speed_mps: f64,
         heading_rad: f64,
         confidence_m: f64,
+        seq: Option<u8>,
     ) {
         let m = ObservedMessage {
             signer,
@@ -2964,7 +3295,9 @@ impl Phase2 {
             y_m: 0.0,
             radio_range_m: f64::INFINITY,
         };
-        if let Some(o) = self.observer.on_message(ctx, &me, &m) {
+        self.report.privacy_frames_read += 1;
+        if let Some(o) = self.observer.on_message_sequenced(ctx, &me, &m, seq) {
+            self.score_link(&o, at);
             self.link_claims
                 .push(v2xw_threat::records::PrivacyLinkClaim {
                     t: at,
@@ -2998,6 +3331,36 @@ impl Phase2 {
                     self.report.privacy_links_correct += 1;
                 }
             }
+        }
+    }
+
+    /// The ground-truth score of one linkage decision, for the run report only.
+    ///
+    /// A correct link extends the true vehicle's followed time; a wrong one means the
+    /// eavesdropper's track now follows whoever the new pseudonym belongs to, from now.
+    fn score_link(&mut self, o: &v2xw_threat::LinkOutcome, at: SimTime) {
+        let owner = |hex: &str| decode_hex8(hex).and_then(|d| self.by_digest.get(&d).map(|v| v.0));
+        let succ = decode_hex8(&o.successor);
+        let succ_owner = owner(&o.successor);
+        self.report.privacy_link_decisions += 1;
+        self.report.privacy_anonymity_set_sum += u64::from(o.anonymity_set_size);
+        self.report.privacy_degree_micro_sum +=
+            (o.degree_of_anonymity.clamp(0.0, 1.0) * 1e6).round() as u64;
+        let mut start = at;
+        if let Some(pred) = o.predecessor.as_deref().and_then(decode_hex8)
+            && let Some((pred_owner, since)) = self.privacy_chains.remove(&pred)
+            && pred_owner.is_some()
+            && pred_owner == succ_owner
+        {
+            start = since;
+            if let Some(vehicle) = succ_owner {
+                let followed = at.saturating_sub(since);
+                let best = self.privacy_tracked.entry(vehicle).or_insert(0);
+                *best = (*best).max(followed);
+            }
+        }
+        if let Some(d) = succ {
+            self.privacy_chains.insert(d, (succ_owner, start));
         }
     }
 

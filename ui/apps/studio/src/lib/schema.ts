@@ -184,8 +184,10 @@ export const PHASE1_FIELDS: readonly FormField[] = [
   { pointer: "/security/envelope", label: "Message security", group: "Security", kind: "enum", options: ["ieee1609.2", "etsi-ts103097", "none"], help: "Which standard's signed message format the vehicles use, which is what lets a receiver tell a genuine message from a forged one." },
   { pointer: "/security/signature", label: "Signature algorithm", group: "Security", kind: "enum", options: ["ecdsa-p256", "ecdsa-brainpool256", "ecdsa-p384", "sm2"] },
   { pointer: "/security/crypto_mode", label: "Cryptography", group: "Security", kind: "enum", options: ["modeled", "real"], help: "“Modeled” charges the time and the bytes a signature costs without doing the arithmetic; “real” actually signs and verifies, which is slower and exactly right." },
-  { pointer: "/security/pseudonym_change/strategy", label: "Identity changes", group: "Security", kind: "enum", options: ["time", "distance", "none", "adaptive"], help: "How a vehicle decides when to switch to a fresh temporary identity. This is what stops it being followed from message to message." },
+  { pointer: "/security/pseudonym_change/strategy", label: "Identity changes", group: "Security", kind: "enum", options: ["time", "distance", "c2c-cc", "mix-zone", "silent"], help: "How a vehicle decides when to switch to a fresh temporary identity, which is what stops it being followed from message to message: every five minutes (US, SAE J2945/1), every two kilometres (the NYC pilot), the European car makers' rule (C2C-CC: after 0.8–1.5 km, then 0.8 km plus 2–6 minutes, then every 10–35 km), inside a mix zone at a signalised junction, or never." },
   { pointer: "/security/pseudonym_change/period_s", label: "…how often", group: "Security", kind: "number", unit: "s", min: 1, help: "With the “time” strategy, how long a vehicle keeps one identity before changing it." },
+  { pointer: "/security/pseudonym_change/distance_m", label: "…how far", group: "Security", kind: "number", unit: "m", min: 1, help: "With the “distance” strategy, how far a vehicle drives on one identity before changing it." },
+  { pointer: "/security/pseudonym_change/silent_period_s", label: "Silence after a change", group: "Security", kind: "json", help: "[min, max] seconds a vehicle stays silent after each identity change, so a listener loses it — and so do its neighbours' safety systems. For example [3, 13]. Leave empty for none." },
   { pointer: "/security/verification_policy", label: "Verification order", group: "Security", kind: "string", help: "Which arriving messages a receiver checks first when more arrive than it can check in time." },
 
   { pointer: "/messages/sets", label: "Messages sent", group: "Messages", kind: "json", help: "Which message types the vehicles broadcast — for example basic safety messages, ten times a second." },
@@ -198,6 +200,7 @@ export const PHASE1_FIELDS: readonly FormField[] = [
   { pointer: "/weather/intensity", label: "…how heavy", group: "Conditions", kind: "number", unit: "fraction", min: 0, max: 1, step: 0.05 },
   { pointer: "/threats/attackers", label: "Attackers", group: "Conditions", kind: "json", help: "Misbehaving vehicles, and what each one does. Empty means none — an honest baseline to measure a detector against." },
   { pointer: "/threats/jammers", label: "Jammers", group: "Conditions", kind: "json", help: "Transmitters whose purpose is to stop everyone else being heard." },
+  { pointer: "/threats/eavesdropper", label: "Eavesdropper", group: "Conditions", kind: "json", help: "A listener on poles at some of the signalised junctions, trying to follow vehicles across their identity changes. For example {\"id\": \"threat/observer/passive-privacy\", \"params\": {\"sniffer_fraction\": 0.25, \"range_m\": 200}}. Empty means it hears everything." },
 ];
 
 /** A stable group order for the form, whichever source the fields came from. */

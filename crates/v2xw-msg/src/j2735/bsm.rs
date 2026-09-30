@@ -1883,6 +1883,31 @@ pub fn elevation(m: f64) -> i32 {
     ) as i32
 }
 
+/// A 95 % horizontal error radius over the one-sigma semi-axis of the same circular
+/// error: `√(−2 ln 0.05)`, the Rayleigh 95th percentile.
+///
+/// A [`PositionEstimate`]'s ellipse is a **95 %** ellipse — every GNSS model here reports
+/// `2.4477 · √(σ_nominal² + σ_bias²)` and the CAM encodes it as ETSI's 95 %
+/// `PosConfidenceEllipse` unchanged — while J2735's `SemiMajorAxisAccuracy` is "semi-major
+/// axis accuracy at one standard dev" (the ASN.1 module's own comment). The BSM and PSM
+/// builders therefore divide by this, and a receiver multiplies by it.
+pub const RADIUS_95_PER_SIGMA: f64 = 2.447_746_830_680_816;
+
+/// `SemiMajorAxisAccuracy` / `SemiMinorAxisAccuracy`, LSB 0.05 m, **one standard
+/// deviation**, from a 95 % semi-axis (see [`RADIUS_95_PER_SIGMA`]).
+pub fn semi_axis_accuracy_from_95(m95: f64) -> u8 {
+    semi_axis_accuracy(m95 / RADIUS_95_PER_SIGMA)
+}
+
+/// The one-sigma semi-axis a received `SemiMajorAxisAccuracy` states, metres: `None` for
+/// `unavailable(255)`, and 12.70 m — the least it can mean — for `254` ("12.70 m or more").
+pub fn semi_axis_sigma_m(v: u8) -> Option<f64> {
+    if v == SEMI_AXIS_UNAVAILABLE {
+        return None;
+    }
+    Some(f64::from(v) * 0.05)
+}
+
 /// `SemiMajorAxisAccuracy` / `SemiMinorAxisAccuracy`, LSB 0.05 m.
 ///
 /// A no-fix [`PositionEstimate`] carries an infinite semi-axis, which lands on
@@ -2117,8 +2142,9 @@ pub fn build_bsm(input: &BsmInput) -> Result<BasicSafetyMessage, CodecError> {
         lon,
         elev: elevation(alt_m),
         accuracy: PositionalAccuracy {
-            semi_major: semi_axis_accuracy(input.position.semi_major_m),
-            semi_minor: semi_axis_accuracy(input.position.semi_minor_m),
+            // One sigma on the wire (J2735), from the belief's 95 % ellipse.
+            semi_major: semi_axis_accuracy_from_95(input.position.semi_major_m),
+            semi_minor: semi_axis_accuracy_from_95(input.position.semi_minor_m),
             orientation: semi_major_orientation(input.position.orientation_rad),
         },
         transmission: input.transmission,
@@ -2688,8 +2714,16 @@ mod tests {
         // 4.5 m and 1.8 m in centimetres.
         assert_eq!(bsm.core.size.length, 450);
         assert_eq!(bsm.core.size.width, 180);
-        // 1.8 m of semi-major in 0.05 m steps.
-        assert_eq!(bsm.core.accuracy.semi_major, 36);
+        // A 1.8 m 95 % semi-major is 0.735 m at one sigma, which J2735's field carries:
+        // 15 steps of 0.05 m, rounded up. (This assertion used to read 36, the 95 % radius
+        // written into the one-sigma field, which overstated the error 2.45 times.)
+        assert_eq!(bsm.core.accuracy.semi_major, 15);
+        assert!(
+            (semi_axis_sigma_m(bsm.core.accuracy.semi_major).unwrap() * RADIUS_95_PER_SIGMA
+                - 1.8)
+                .abs()
+                < 0.05 * RADIUS_95_PER_SIGMA
+        );
         // Nothing was said about the dynamics, so nothing is claimed.
         assert_eq!(bsm.core.accel_set.long, ACCELERATION_UNAVAILABLE);
         assert_eq!(bsm.core.angle, STEERING_WHEEL_ANGLE_UNAVAILABLE);

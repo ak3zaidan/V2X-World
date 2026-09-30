@@ -68,6 +68,7 @@ pub mod infra;
 pub mod manifest;
 pub mod phase2;
 pub mod privacy_metrics;
+pub mod pseudonym_policy;
 pub mod records;
 pub mod run;
 pub mod scenario;

@@ -456,3 +456,44 @@ fn the_gate_grows_with_the_silence_but_not_without_limit() {
         "40 m off after 5 s is inside the grown gate"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// Identifiers that do not change with the pseudonym
+// ---------------------------------------------------------------------------------------
+
+/// Two vehicles side by side change pseudonym at the same instant. By kinematics the
+/// observer cannot tell them apart; by a message counter that continued across the change
+/// it can, with certainty — which is why every identifier on the air has to change
+/// together (C2C-CC RS_BSP_182), the BSM `msgCnt` included.
+#[test]
+fn a_counter_that_survives_the_change_links_it_and_a_restarted_one_does_not() {
+    let run = |restart: bool| {
+        let mut ctx = CollectingCtx::new(1);
+        let mut o = PrivacyObserver::cited_defaults(OBS);
+        let tenth = NS_PER_S / 10;
+        // A and C drive east 3 m apart laterally, 10 Hz, counters 40.. and 90..
+        for i in 0..20u64 {
+            let t = i * tenth;
+            let x = 1.5 * i as f64;
+            ctx.set_now(t);
+            o.on_message_sequenced(&mut ctx, &me(t), &beacon(A, x, 0.0, t), Some(40 + i as u8));
+            o.on_message_sequenced(&mut ctx, &me(t), &beacon(C, x, 3.0, t), Some(90 + i as u8));
+        }
+        // Both change at t = 2.0 s: A becomes B. The lateral positions swap, so kinematics
+        // alone would prefer the wrong predecessor for B.
+        let t = 20 * tenth;
+        ctx.set_now(t);
+        let seq_b = if restart { 7 } else { 60 };
+        o.on_message_sequenced(&mut ctx, &me(t), &beacon(B, 30.0, 2.9, t), Some(seq_b))
+            .expect("a first reception is a decision")
+    };
+    let continued = run(false);
+    assert_eq!(continued.predecessor.as_deref(), Some("aaaaaaaaaaaaaaaa"));
+    assert_eq!(continued.anonymity_set_size, 1, "the counter left no crowd");
+    assert_eq!(continued.posterior, 1.0);
+    let restarted = run(true);
+    assert!(
+        restarted.anonymity_set_size >= 2,
+        "with the counter restarted the two vehicles are a crowd again: {restarted:?}"
+    );
+}

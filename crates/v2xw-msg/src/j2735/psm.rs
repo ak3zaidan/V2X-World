@@ -51,7 +51,7 @@ use crate::j2735::bsm::{
     HEADING_MIN, LATITUDE_MAX, LATITUDE_MIN, LONGITUDE_MAX, LONGITUDE_MIN, MSG_COUNT_MAX,
     MSG_COUNT_MIN, ORIENTATION_MAX, ORIENTATION_MIN, PositionalAccuracy, SEMI_AXIS_MAX,
     SEMI_AXIS_MIN, SPEED_MAX, SPEED_MIN, elevation, heading, latitude, longitude,
-    semi_axis_accuracy, semi_major_orientation, speed,
+    semi_axis_accuracy_from_95, semi_major_orientation, speed,
 };
 use crate::j2735::uper::{
     BitReader, BitWriter, Field, UperError, read_bool, read_constrained_int, read_enumerated,
@@ -422,8 +422,9 @@ pub fn build_psm(input: &PsmInput) -> Result<PersonalSafetyMessage, CodecError> 
         lon,
         elev: Some(elevation(alt_m)),
         accuracy: PositionalAccuracy {
-            semi_major: semi_axis_accuracy(input.position.semi_major_m),
-            semi_minor: semi_axis_accuracy(input.position.semi_minor_m),
+            // One sigma on the wire (J2735), from the belief's 95 % ellipse.
+            semi_major: semi_axis_accuracy_from_95(input.position.semi_major_m),
+            semi_minor: semi_axis_accuracy_from_95(input.position.semi_minor_m),
             orientation: semi_major_orientation(input.position.orientation_rad),
         },
         speed: speed(input.position.ground_speed_mps()),
@@ -510,7 +511,8 @@ mod tests {
         })
         .unwrap();
         assert_eq!(m.speed, speed(2f64.sqrt()));
-        assert_eq!(m.accuracy.semi_major, 60);
+        // A 3.0 m 95 % semi-major is 1.226 m at one sigma: 25 steps of 0.05 m.
+        assert_eq!(m.accuracy.semi_major, 25);
         assert!((f64::from(m.lat) * 1e-7 - 40.7527).abs() < 1e-3);
         assert_eq!(decode_psm(&encode_psm(&m).unwrap().bytes).unwrap(), m);
     }

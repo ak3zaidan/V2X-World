@@ -11,8 +11,9 @@
 #        (a report is backend traffic: it never goes on the sidelink broadcast unless a
 #        vehicle has no modem and relays through a roadside unit)
 #     -> the Location Obscurer Proxy strips the network identifiers, the RA shuffles
-#     -> the Misbehaviour Authority's persistence gate (threat/ma/legacy-window) sees
-#        sustained evidence from several trusted reporters and decides to revoke
+#     -> the Misbehaviour Authority (threat/ma/corroborated) correlates the reports into
+#        events and decides to revoke on independent, corroborated evidence sustained
+#        over time
 #     -> the PCA identifies the certificate's request, the RA blocklists the device, both
 #        Linkage Authorities release their seeds, the CRL Generator issues on its cadence
 #     -> the CRL Store publishes; cellular vehicles download it, and the roadside units
@@ -31,7 +32,7 @@ meta:
     An equipped fleet on the real Manhattan network, one of them a ConstPos attacker,
     55 roadside units at the signalised intersections of 5th and 6th Avenues, the CAMP
     SCMS backend over cellular Uu, the legacy twelve-detector suite on every honest node,
-    the legacy persistence-gated authority, and a revocation distributed by cellular
+    the corroborating authority, and a revocation distributed by cellular
     download and roadside broadcast.
   authors: [v2xw]
   tags: [phase2, manhattan, osm, dsrc, signed, scms, misbehaviour, revocation, cellular]
@@ -242,10 +243,15 @@ threats:
 detection:
   local:
     - id: detect/legacy-12
-  # The legacy authority's persistence gate at its legacy operating point: 3 trusted
-  # reporters, reports in 4 distinct seconds spanning 3 s inside a 15 s window.
+  # The Misbehaviour Authority decides on independent evidence over time
+  # (threat/ma/corroborated): reports about one pseudonym are correlated into events — one
+  # glitch heard by ten receivers is one piece of evidence, not ten — an event counts when
+  # two independent trusted reporters witnessed it, and revocation takes four such events
+  # inside a minute from at least three reporters. The legacy persistence gate
+  # (threat/ma/legacy-window) counted one event heard by many as many and revoked honest
+  # vehicles in dense traffic.
   ma:
-    id: threat/ma/legacy-window
+    id: threat/ma/corroborated
 
 metrics: [all]
 

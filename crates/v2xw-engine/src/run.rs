@@ -679,6 +679,12 @@ pub struct Engine {
     pending_tx: BTreeMap<NodeId, Vec<(SimTime, FrameSeq)>>,
     /// The Phase 2 path, when the scenario declared one.
     phase2: Option<crate::phase2::Phase2>,
+    /// The pseudonym-change strategy's engine half and the eavesdropper's coverage
+    /// (`crate::pseudonym_policy`), when the scenario asks for either.
+    pseudonym_policy: Option<crate::pseudonym_policy::PseudonymPolicy>,
+    /// Each vehicle's odometer and the store's change count at its last step, for the
+    /// policy.
+    policy_odometer: BTreeMap<NodeId, (f64, u32)>,
     /// The roadside units' positions. They are nodes but not actors, so they are not in
     /// the mobility snapshot and the reception phase has to find them here.
     rsus: BTreeMap<NodeId, Vec3>,
@@ -1041,6 +1047,8 @@ impl Engine {
             live_at_rx: BTreeMap::new(),
             pending_tx: BTreeMap::new(),
             phase2: None,
+            pseudonym_policy: None,
+            policy_odometer: BTreeMap::new(),
             rsus: BTreeMap::new(),
             transfers: BTreeMap::new(),
             next_sdu: 0,
@@ -1086,6 +1094,11 @@ impl Engine {
         };
         let phase2 = crate::phase2::Phase2::build(&engine.scenario, &engine.world)?;
         engine.phase2 = phase2;
+        let policy =
+            crate::pseudonym_policy::PseudonymPolicy::from_scenario(&engine.scenario, &engine.world)?;
+        if policy.acts() || policy.sniffer_sites().is_some() {
+            engine.pseudonym_policy = Some(policy);
+        }
         engine.create_rsus();
         engine.attach_intersection_feeds()?;
         engine.seed_timeline();
@@ -1599,6 +1612,11 @@ impl Engine {
                 Event::SignalPhase { .. } | Event::NodeTask { .. } | Event::Observe { .. } => {}
             }
             self.report.end_ns = key.time;
+        }
+        if let (Some(phase2), Some(policy)) =
+            (self.phase2.as_mut(), self.pseudonym_policy.as_ref())
+        {
+            phase2.note_policy_totals(policy.silenced_frames, policy.requested_changes);
         }
         if let Some(phase2) = self.phase2.as_mut() {
             phase2.finish();
@@ -2142,6 +2160,10 @@ impl Engine {
                 if let Some(phase2) = self.phase2.as_mut() {
                     phase2.retire(node);
                 }
+                if let Some(policy) = self.pseudonym_policy.as_mut() {
+                    policy.on_retire(node);
+                }
+                self.policy_odometer.remove(&node);
                 self.nodes.remove(&node);
                 self.inboxes.remove(&node);
                 self.node_phase.remove(&node);
@@ -2557,6 +2579,89 @@ impl Engine {
 
     /// The node phase's map and merge, over one node or all of them, as a periodic step or
     /// as a wake.
+    /// Before a node step: asks each vehicle's store for the change its pseudonym strategy
+    /// makes due now (`crate::pseudonym_policy`). The store then changes every identifier
+    /// together at its own step, exactly as for a scheduled change.
+    fn apply_pseudonym_policy(&mut self, only: Option<NodeId>, now: SimTime) {
+        let Some(policy) = self.pseudonym_policy.as_mut() else {
+            return;
+        };
+        if !policy.acts() {
+            return;
+        }
+        let ids: Vec<NodeId> = match only {
+            Some(id) => vec![id],
+            None => self.nodes.keys().copied().collect(),
+        };
+        for id in ids {
+            if self.rsus.contains_key(&id) {
+                continue;
+            }
+            let Some(runtime) = self.nodes.get_mut(&id) else {
+                continue;
+            };
+            if runtime.is_vru() || !runtime.state().transmits() {
+                continue;
+            }
+            let (odometer, changes) = match self.policy_odometer.get(&id) {
+                Some(v) => *v,
+                None => {
+                    let changes = runtime.stores().certs.changes();
+                    policy.on_spawn(&self.rng, id, now, 0.0);
+                    self.policy_odometer.insert(id, (0.0, changes));
+                    (0.0, changes)
+                }
+            };
+            let _ = changes;
+            let pos = v2xw_core::NodeView::position(runtime).pos;
+            if policy.change_due(id, now, odometer, pos) {
+                let store = runtime.stores_mut();
+                let certs = core::mem::take(&mut store.certs);
+                store.certs = certs.with_policy(v2xw_node::stores::RotationPolicy {
+                    min_age: Duration::ZERO,
+                    min_distance_m: f64::INFINITY,
+                    require_both: false,
+                });
+            }
+        }
+    }
+
+    /// After a node step: each vehicle's odometry, and the changes its store made, for the
+    /// pseudonym policy (the next stage's draw, a silent period) — and the store's own rule
+    /// put back once an asked-for change is made.
+    fn note_policy_changes(&mut self, travelled: &[(NodeId, f64)], now: SimTime) {
+        let Some(policy) = self.pseudonym_policy.as_mut() else {
+            return;
+        };
+        let own_rule = crate::wiring::rotation_policy(&self.scenario);
+        for (id, d) in travelled {
+            if self.rsus.contains_key(id) {
+                continue;
+            }
+            let Some(runtime) = self.nodes.get_mut(id) else {
+                continue;
+            };
+            if runtime.is_vru() {
+                continue;
+            }
+            let changes = runtime.stores().certs.changes();
+            let entry = self.policy_odometer.entry(*id).or_insert_with(|| {
+                policy.on_spawn(&self.rng, *id, now, 0.0);
+                (0.0, changes)
+            });
+            entry.0 += d;
+            if changes > entry.1 {
+                entry.1 = changes;
+                policy.on_changed(&self.rng, *id, now, entry.0);
+                if policy.acts() {
+                    let store = runtime.stores_mut();
+                    let certs = core::mem::take(&mut store.certs);
+                    store.certs = certs.with_policy(own_rule);
+                }
+            }
+        }
+    }
+
     fn run_nodes(
         &mut self,
         recorder: &mut dyn RunRecorder,
@@ -2581,6 +2686,9 @@ impl Engine {
         }
         if !wake {
             self.feed_controllers(only, now);
+        }
+        if !wake {
+            self.apply_pseudonym_policy(only, now);
         }
         let mut inboxes = core::mem::take(&mut self.inboxes);
         let rng = &self.rng;
@@ -2695,6 +2803,12 @@ impl Engine {
         }
         for fate in fates {
             self.emit(recorder, &fate);
+        }
+
+        if self.pseudonym_policy.is_some() {
+            let travelled: Vec<(NodeId, f64)> =
+                results.iter().map(|(id, _, _, d)| (*id, *d)).collect();
+            self.note_policy_changes(&travelled, now);
         }
 
         for (id, outcome, _, _) in &results {
@@ -2855,6 +2969,14 @@ impl Engine {
     /// colliding on every period. The engine's own application frames (a misbehaviour
     /// report, a CRL broadcast) go through [`Engine::hand_down_app`] directly and do not.
     fn hand_down(&mut self, node: NodeId, tx: &Transmission, now: SimTime, horizon: SimTime) {
+        // A silent period after a pseudonym change: no safety message at all.
+        if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+            && let Some(policy) = self.pseudonym_policy.as_mut()
+            && policy.is_silent(node, now)
+        {
+            policy.silenced_frames += 1;
+            return;
+        }
         let jitter = self.gen_timing.jitter(&self.rng, node, tx.generation_time);
         if jitter.as_nanos() == 0 {
             self.hand_down_app(node, tx, now, horizon, None);
@@ -3066,13 +3188,28 @@ impl Engine {
         }
         let _ = signature_valid;
         // The passive privacy observer hears the safety frame as it goes on the air.
+        // Only what a sniffer hears, when the scenario limits the eavesdropper's coverage:
+        // where the transmitter physically is decides that, as it decides reception.
+        let heard_by_eavesdropper = self.pseudonym_policy.as_ref().is_none_or(|p| {
+            let at = self
+                .actor_of(node)
+                .map_or_else(|| belief.map_or(Vec3::ZERO, |b| b.pos), |a| a.last.pos);
+            p.eavesdropper_reads(at)
+        });
         if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+            && heard_by_eavesdropper
             && let Some(signer) = credential
                 .as_ref()
                 .map(|c| crate::phase2::digest_bytes(&c.digest))
             && self.phase2.is_some()
         {
             let confidence = belief.map_or(5.0, |b| b.semi_major_m.max(0.0));
+            // A BSM's `msgCnt` is on the air in the clear, and the eavesdropper reads it.
+            let seq = (tx.msg_type == v2xw_msg::MsgType::Bsm)
+                .then(|| tx.signed.as_ref())
+                .flatten()
+                .and_then(|f| v2xw_msg::j2735::bsm::decode_message_frame(&f.payload).ok())
+                .map(|m| m.core.msg_cnt);
             let Engine {
                 scheduler,
                 rng,
@@ -3097,8 +3234,23 @@ impl Engine {
                     claim.1,
                     claim.2,
                     confidence,
+                    seq,
                 );
             }
+        }
+        // The positional accuracy the safety message states on the air, for the receivers'
+        // detectors: they judge a claim against the sender's own stated accuracy (a BSM's
+        // PositionalAccuracy, a CAM's confidence ellipse), not against a constant.
+        if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+            && let Some(p) = self.phase2.as_mut()
+            && p.detection_on()
+            && let (Some(cred), Some(b)) = (credential.as_ref(), belief)
+        {
+            p.note_broadcast_accuracy(
+                crate::phase2::digest_bytes(&cred.digest),
+                tx.generation_time,
+                crate::phase2::broadcast_accuracy_95_m(tx.msg_type, b),
+            );
         }
         // The transmit power is congestion control's, not the scenario's: J2945/1 controls
         // power as well as rate, and the SUPRA filter's output is what the link budget has

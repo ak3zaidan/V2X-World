@@ -1,4 +1,29 @@
-# Five minutes of Midtown Manhattan with a fleet, not a single car.
+# Five minutes of Midtown Manhattan with a fleet, not a single car — and the credential
+# system it runs on.
+#
+# The fleet signs with pseudonym certificates from the CAMP/USDOT SCMS, which runs in the
+# loop: open the page's Backend view to see every entity (RA, PCA, both Linkage
+# Authorities, the Misbehaviour Authority, the CRL Generator and Store, the LOP, the ECA)
+# with its live counters and the links in use. Eight roadside units stand at signalised
+# intersections of 5th and 6th Avenues, the corridor where the NYC Connected Vehicle Pilot
+# mounted its units; every vehicle also has a cellular modem, as a connected car's
+# telematics unit does. What happens in five minutes:
+#
+#  * pseudonym batches: every vehicle joins holding its current i-period's certificates
+#    and tops up the next period's through the LOP and the RA when it runs low;
+#  * certificate change on the J2945/1 five-minute rule and at each i-period rollover;
+#  * CRL fetches over cellular, and the roadside units repeating the CRL on the air;
+#  * misbehaviour detection on every vehicle and unit: honest traffic's GNSS glitches do
+#    get reported (a real fleet's do too), the reports cross the RA's shuffle to the
+#    Misbehaviour Authority, and the authority revokes nobody, because it revokes only on
+#    independent, corroborated evidence sustained over time (threat/ma/corroborated).
+#    To watch a revocation end to end, add an attacker population (see
+#    credential-lifecycle.yaml's `threats` block).
+#
+# The calendar is compressed so the backend has something to do in five minutes: a
+# two-minute i-period (a week in a deployment, CAMP-EE §2.1.5.3.2), the RA's report
+# shuffle and the CRL cadence at a minute (a day each, CAMP-EE SCMS-765 and Brecht 2018
+# §VI-G). Every size, cryptographic cost and protocol step stays as cited.
 #
 # Derived from phase1-manhattan.yaml with two changes: the run lasts 300 simulated
 # seconds instead of 60, and the arrival rate is 1500 vehicles per hour instead of 30,
@@ -77,6 +102,26 @@ world:
     dem: null
 
 actors:
+  # Eight roadside units at signalised intersections of 5th and 6th Avenues (positions from
+  # phase2-manhattan.yaml's survey of the imported network). Each relays reports for a
+  # vehicle without coverage, carries certificate top-ups and repeats the CRL; its
+  # hardware is the default roadside profile (rsu/commsignia-its-rs4) on the fixed
+  # backhaul below.
+  rsus:
+    - {position_m: [460.7, 494.6, 0.0], roles: [report-forward, crl, provisioning-proxy]}   # 5th Avenue / 34th Street
+    - {position_m: [770.3, 1052.8, 0.0], roles: [report-forward, crl, provisioning-proxy]}  # 5th Avenue / 42nd Street
+    - {position_m: [1042.0, 1544.6, 0.0], roles: [report-forward, crl, provisioning-proxy]} # 5th Avenue / 49th Street
+    - {position_m: [1273.1, 1962.9, 0.0], roles: [report-forward, crl, provisioning-proxy]} # 5th Avenue / 55th Street
+    - {position_m: [190.3, 644.2, 0.0], roles: [report-forward, crl, provisioning-proxy]}   # 6th Avenue / 34th Street
+    - {position_m: [496.8, 1204.0, 0.0], roles: [report-forward, crl, provisioning-proxy]}  # 6th Avenue / 42nd Street
+    - {position_m: [692.8, 1556.5, 0.0], roles: [report-forward, crl, provisioning-proxy]}  # 6th Avenue / 47th Street
+    - {position_m: [923.7, 1973.8, 0.0], roles: [report-forward, crl, provisioning-proxy]}  # 6th Avenue / 53rd Street
+
+  backend:
+    # The CAMP SCMS: the online roles, butterfly key expansion, two Linkage Authorities
+    # and the linkage-value CRL.
+    protocol: protocol/scms/camp
+
   vehicles:
     # Every vehicle that spawns is equipped, so "one vehicle" and "one node" are the same
     # number and the run is not silently measuring an unequipped car.
@@ -116,6 +161,19 @@ radio:
 
 net:
   layer: wsmp
+  # Every vehicle's telematics modem: the cell-capacity Uu model at the TR 37.885
+  # urban-macro 500 m inter-site distance. Top-ups, reports and CRL downloads use it.
+  uu:
+    id: cellular/uu/cell-capacity-mm1
+    params:
+      isd_m: 500
+      penetration: 1.0
+  # The roadside units' wired backhaul.
+  backhaul:
+    id: backhaul/fixed
+    params:
+      latency_ms: 10
+      capacity_mbps: 1000
 
 messages:
   sets: [bsm]
@@ -141,6 +199,18 @@ security:
   pseudonym_change:
     strategy: time
     period_s: 300.0
+  # The credential system, with its calendar compressed (see the header).
+  protocol:
+    id: protocol/scms/camp
+    params:
+      i_period_s: 120
+      cert_lifetime_s: 121
+      certs_per_period: 20
+      pool_periods: 2
+      topup_below_periods: 1
+      report_shuffle_window_s: 60
+      crl_cadence_s: 60
+      crl_fetch_interval_s: 60
 
 nodes:
   # The one hardware profile this build ships: the Unex OBU-301 with a Craton2, whose CPU
@@ -148,6 +218,14 @@ nodes:
   default_obu: obu/unex-obu-301-craton2
   compute_tier: medium
   backend_tier: medium
+
+# Misbehaviour detection on every vehicle and roadside unit, reporting to the
+# Misbehaviour Authority, which decides on independent corroborated evidence.
+detection:
+  local:
+    - id: detect/legacy-12
+  ma:
+    id: threat/ma/corroborated
 
 # Every metric this build computes: delivery, decomposed end-to-end delay, awareness, channel
 # load, overhead and byte accounting, security, detection and safety. A long run is where

@@ -1,0 +1,165 @@
+# ============================================================================
+# Which pseudonym-change strategy actually stops a roadside eavesdropper?
+# ============================================================================
+#
+# The same fleet on the same streets, run once per strategy, against the same adversary:
+# passive sniffers on poles at a quarter of the signalised intersections, each reading
+# every safety message sent within 200 m and linking pseudonyms across changes by
+# kinematics and by any identifier that survives a change (Wiedersheim et al. 2010's
+# tracker). Run the comparison with
+#
+#     v2xw experiment run scenarios/pseudonym-strategies.yaml --out runs/strategies
+#
+# ## The strategies (security.pseudonym_change.strategy)
+#
+# * `time` — SAE J2945/1 CERTCHG and the USDOT SCMS primer: a new certificate every five
+#   minutes, whatever the vehicle did.
+# * `distance` — the NYC CV pilot's two kilometres.
+# * `c2c-cc` — the C2C-CC Basic System Profile (R1.5.1, RS_BSP_521-524): the first change
+#   after a random 800-1,500 m, the second at least 800 m on plus a random 120-360 s, then
+#   after 10-20 km and every 25-35 km. Designed so a trip's start is not linked to its
+#   route; a short urban trip may see one change or none.
+# * `mix-zone` — CMIX (Freudiger et al. 2007): a change inside a 30 m zone around a
+#   signalised intersection once the pseudonym is a minute old, with every frame inside the
+#   zone encrypted under the zone key, so the eavesdropper loses the vehicle in the crowd
+#   crossing the junction.
+# * `silent` — no scheduled change: the control arm.
+#
+# Every change moves every identifier on the air together — the certificate, the BSM
+# TemporaryID, the link-layer address and the BSM msgCnt (restarted at random) — as
+# C2C-CC RS_BSP_182 requires; the eavesdropper would otherwise link through whichever one
+# stayed.
+#
+# `silent_period_s: [3, 13]` (the PRESERVE range; Huang et al. 2005) can be added to any
+# strategy: after each change the vehicle stays silent for a random 3-13 s, which is also
+# 3-13 s its neighbours' safety applications cannot see it.
+#
+# ## What it reports (the run report's `phase2` block)
+#
+# * `privacy_links_correct / pseudonym_changes` — linkability: the share of changes the
+#   eavesdropper bridged correctly.
+# * `privacy_anonymity_set_sum / privacy_link_decisions` — the mean anonymity set |Psi| at
+#   a decision; `privacy_degree_micro_sum` the mean degree of anonymity (ETSI TR 103 415
+#   §5.1.2), in millionths.
+# * `privacy_tracked_*` — how long the eavesdropper followed a vehicle correctly across a
+#   change: the tracking duration.
+# * `pseudonym_silenced_frames` — what a silent period cost the safety channel.
+#
+# The certificate calendar is the real one (a week's batch of 20, J2945/1's CERTCHG): no
+# i-period rolls over in the run, so every change here is the strategy's.
+schema: v2xw/scenario/1
+
+meta:
+  name: pseudonym-strategies
+  description: >-
+    One fleet, one roadside eavesdropper at a quarter of the signalised intersections, and
+    the pseudonym-change strategies as specified or deployed: J2945/1 time, the NYC pilot's
+    distance, the C2C-CC Basic System Profile, CMIX mix zones and no change. Reports
+    linkability, anonymity-set size and tracking duration per strategy.
+  authors: [v2xw]
+  tags: [privacy, pseudonym, eavesdropper, mix-zone, c2c-cc, j2945, procedural, study]
+  created: "2026-09-30"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  t0: "2027-03-04T08:00:00Z"
+  duration_s: 300.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: procedural
+    generator: world/source/procedural-grid
+    params:
+      # The Midtown grid of credential-lifecycle.yaml: five avenues by eight streets.
+      cols: 5
+      rows: 8
+      block_x_m: 274.0
+      block_y_m: 80.0
+      lanes_per_direction: 2
+      lane_width_m: 3.5
+      sidewalk_m: 2.0
+      speed_limit_mps: 11.176
+      signalised: true
+      cycle_s: 60.0
+      amber_s: 3.0
+      crossings: true
+      block_buildings: true
+      building_height_m: 30.0
+      rsu_at_junctions: false
+      corner_radius_m: 4.5
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 1500.0
+  backend:
+    protocol: protocol/scms/camp
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  tiers:
+    propagation: medium
+    phy: medium
+    mac: medium
+
+net:
+  layer: wsmp
+  uu:
+    id: cellular/uu/fixed-latency
+    params: {preset: 4g-east-coast}
+
+messages:
+  sets: [bsm]
+  codec_tier: uper
+
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: prioritized
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+  protocol:
+    id: protocol/scms/camp
+    params: {}
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+threats:
+  # The adversary: sniffers at every fourth signalised intersection, 200 m each.
+  eavesdropper:
+    id: threat/observer/passive-privacy
+    params:
+      sniffer_fraction: 0.25
+      range_m: 200.0
+
+metrics: [all]
+exporters: []
+
+experiment:
+  sweep:
+    security.pseudonym_change.strategy: [time, distance, c2c-cc, mix-zone, silent]
+  seeds: [1]
+  replications: 1
