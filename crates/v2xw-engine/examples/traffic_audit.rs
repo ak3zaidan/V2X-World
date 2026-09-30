@@ -218,6 +218,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         let people = mobility.audit_pedestrians(&world);
+        // `--near X,Y,R --window T0,T1` also lists the pedestrians there.
+        if let Some((x, y, r)) = near {
+            let ts = t1 as f64 * 1e-9;
+            if ts >= window.0 && ts <= window.1 {
+                for p in people
+                    .iter()
+                    .filter(|p| (p.pos.x - x).hypot(p.pos.y - y) <= r)
+                {
+                    println!(
+                        "t={ts:.1} pedestrian={} lane={} s={:.2} pos=({:.2},{:.2})",
+                        p.actor.index(),
+                        p.lane.index(),
+                        p.s_m,
+                        p.pos.x,
+                        p.pos.y
+                    );
+                }
+            }
+        }
         auditor.observe_with_pedestrians(&world, t, t1, &actors, &update.despawned, &people);
         t = t1;
     }
