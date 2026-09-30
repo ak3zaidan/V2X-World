@@ -133,6 +133,35 @@ export function TimeControls(): React.JSX.Element {
   /** The range the engine reported the last time it refused a seek. */
   const [refused, setRefused] = useState<SeekRefusal | null>(null);
   const scrubRef = useRef<number | null>(null);
+  const barRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Which of the bar's controls had the keyboard when a call made the bar busy. Every control is
+   * disabled while a call is in flight, and a disabled element drops the focus to the page: Alt+→
+   * jumped to the next event and the Alt+← after it went nowhere, and Space on Play started the run
+   * and a second Space did not pause it. The focus goes back once the call is over — to the same
+   * control, or from Play to the Pause that replaced it and back.
+   */
+  const refocusRef = useRef<string | null>(null);
+  const markBusy = useCallback(() => {
+    const active = typeof document === "undefined" ? null : document.activeElement;
+    const bar = barRef.current;
+    if (active instanceof HTMLElement && bar !== null && bar.contains(active)) {
+      refocusRef.current = active.dataset.testid ?? null;
+    }
+    setBusy(true);
+  }, []);
+  useEffect(() => {
+    const was = refocusRef.current;
+    if (busy || was === null) return;
+    refocusRef.current = null;
+    const bar = barRef.current;
+    if (bar === null) return;
+    const swap: Record<string, string> = { play: "pause", pause: "play" };
+    const target =
+      bar.querySelector<HTMLElement>(`[data-testid="${was}"]`) ??
+      (swap[was] !== undefined ? bar.querySelector<HTMLElement>(`[data-testid="${swap[was]}"]`) : null);
+    target?.focus();
+  }, [busy]);
 
   /**
    * Which clock the bar is driving.
@@ -175,7 +204,7 @@ export function TimeControls(): React.JSX.Element {
 
   const call = useCallback(
     async (fn: () => Promise<unknown>) => {
-      setBusy(true);
+      markBusy();
       setNotice(null);
       try {
         await fn();
@@ -192,7 +221,7 @@ export function TimeControls(): React.JSX.Element {
         }
       }
     },
-    [compareSide, compareSync.time, drivingReplay],
+    [compareSide, compareSync.time, drivingReplay, markBusy],
   );
 
   /**
@@ -304,7 +333,7 @@ export function TimeControls(): React.JSX.Element {
       setScrubNs(null);
       return;
     }
-    setBusy(true);
+    markBusy();
     setNotice(null);
     try {
       await seekOne(value);
@@ -316,7 +345,7 @@ export function TimeControls(): React.JSX.Element {
       if (!drivingReplay) await engine.refreshStatus();
       setScrubNs(null);
     }
-  }, [compareSide, compareSync.time, seekOne, drivingReplay]);
+  }, [compareSide, compareSync.time, seekOne, drivingReplay, markBusy]);
 
   // A range thumb dragged past the edge of the input releases the pointer somewhere else, so the
   // release is caught on the window rather than on the element.
@@ -354,7 +383,7 @@ export function TimeControls(): React.JSX.Element {
   );
 
   return (
-    <div className="timebar" data-testid="time-controls">
+    <div className="timebar" data-testid="time-controls" ref={barRef}>
       {run.state === "running" ? (
         <button
           type="button"

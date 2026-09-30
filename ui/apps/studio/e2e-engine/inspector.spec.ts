@@ -176,8 +176,20 @@ test("the transport bar is one row and its event ticks jump to the event", async
   await page.getByTestId("scrub-range").focus();
   await page.keyboard.press("Alt+ArrowRight");
   await expect.poll(async () => (await status(page)).t_ns, { timeout: 60_000 }).toBe(18_000_000_000);
+  // The jump disabled the bar while it ran; the keyboard must still be on the timeline afterwards,
+  // or the next Alt+arrow goes nowhere (it did: the second jump never happened).
+  await expect(page.getByTestId("scrub-range"), "a jump took the keyboard away from the timeline").toBeFocused();
   await page.keyboard.press("Alt+ArrowLeft");
   await expect.poll(async () => (await status(page)).t_ns, { timeout: 60_000 }).toBe(12_000_000_000);
+
+  // Space on Play starts the run and Space again pauses it: the keyboard moves from Play to the
+  // Pause that replaces it, rather than to the page.
+  await page.getByTestId("play").focus();
+  await page.keyboard.press("Space");
+  await expect.poll(async () => (await status(page)).state).toBe("running");
+  await expect(page.getByTestId("pause"), "starting the run took the keyboard off the bar").toBeFocused();
+  await page.keyboard.press("Space");
+  await expect.poll(async () => (await status(page)).state).toBe("paused");
 });
 
 test("the Backend panel opens under the header, reads at a glance and links to the metrics", async ({ page }) => {
