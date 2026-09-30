@@ -28,19 +28,19 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// `phase1-grid.yaml` on a 3 × 3 grid for `seconds` at 3,000 veh/h: trips of a minute or
-/// two across the grid, so over a few simulated minutes the fleet turns over.
-fn churn_scenario(seconds: u32) -> PathBuf {
+/// `phase1-grid.yaml` on a `cols` × `rows` grid for `seconds` at 3,000 veh/h: trips of a
+/// minute or two across the grid, so over a few simulated minutes the fleet turns over.
+fn churn_scenario(cols: u32, rows: u32, seconds: u32) -> PathBuf {
     let source = repo_root().join("scenarios/phase1-grid.yaml");
     let text = std::fs::read_to_string(&source)
         .expect("read phase1-grid.yaml")
         .replace("duration_s: 60.0", &format!("duration_s: {seconds}.0"))
         .replace("rate_veh_per_h: 30.0", "rate_veh_per_h: 3000.0")
-        .replace("      cols: 13\n", "      cols: 3\n")
-        .replace("      rows: 34\n", "      rows: 3\n");
+        .replace("      cols: 13\n", &format!("      cols: {cols}\n"))
+        .replace("      rows: 34\n", &format!("      rows: {rows}\n"));
     let dir = std::env::temp_dir().join("v2xw-server-soak");
     std::fs::create_dir_all(&dir).expect("scratch dir");
-    let path = dir.join("churn.yaml");
+    let path = dir.join(format!("churn-{cols}x{rows}.yaml"));
     std::fs::write(&path, text).expect("write scenario");
     path
 }
@@ -109,11 +109,13 @@ fn n(v: &Value, key: &str) -> u64 {
 /// pruning, each of these grew with every vehicle that had ever driven.
 #[test]
 fn the_projector_keeps_what_is_alive_not_what_has_been() {
-    let run = serve(&churn_scenario(360), 64 * 1024 * 1024);
+    // A 2 × 2 grid: short trips, so the fleet turns over within the run while it stays small
+    // enough for a debug build (the 3 × 3 grid needed 300 s and six minutes of wall clock).
+    let run = serve(&churn_scenario(2, 2, 240), 64 * 1024 * 1024);
     let mut samples: Vec<(f64, Value)> = Vec::new();
     stream(&run, 0.1, 30.0, |t, d| samples.push((t, d.clone())));
     let (t_end, last) = samples.last().expect("a sample");
-    assert!(*t_end >= 359.9, "the run reached its end: {t_end}");
+    assert!(*t_end >= 239.9, "the run reached its end: {t_end}");
     let live = n(last, "nodes_live");
     let ever = n(last, "nodes_ever");
     let pending = n(last, "retired_pending");
@@ -151,7 +153,7 @@ fn the_projector_keeps_what_is_alive_not_what_has_been() {
 fn soak_probe() {
     let path = std::env::var("V2XW_SOAK_SCENARIO")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| churn_scenario(300));
+        .unwrap_or_else(|_| churn_scenario(3, 3, 300));
     let every: f64 = std::env::var("V2XW_SOAK_EVERY_S")
         .ok()
         .and_then(|s| s.parse().ok())

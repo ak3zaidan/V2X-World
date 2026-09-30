@@ -1302,12 +1302,20 @@ struct WindowCounters {
 }
 
 /// How many reception attempts per node pair the projector keeps for `inspect.link`.
-const LINK_HISTORY: usize = 512;
+const LINK_HISTORY: usize = 256;
+
+/// How far behind a pair's newest attempt its older ones are kept, ns. `inspect.link`
+/// averages over `window_ns` (1 s by default) ending at the stream's instant, which trails
+/// the projector by at most its lookahead (6.4 s at the default cadence), so 15 s covers
+/// the default window with room. Kept for as long as the count cap alone allowed (512
+/// attempts, 51 s of a 10 Hz sender), the store held 1.7 million attempts, 70 MB, for 61
+/// radios on a 3 × 3 grid, and grows with the square of the fleet.
+const LINK_KEEP_NS: u64 = 15_000_000_000;
 
 /// A node pair not heard for this long behind the stream has its link history dropped:
-/// the pair is out of range, or one of them has left the run. `inspect.link` answers from
-/// the recent past; a pair silent for a minute has no recent past.
-const LINK_IDLE_NS: u64 = 60_000_000_000;
+/// the pair is out of range, or one of them has left the run. The same as
+/// [`RETIRED_GRACE_NS`], so a pair still held has both ends alive or recently retired.
+const LINK_IDLE_NS: u64 = RETIRED_GRACE_NS;
 
 /// How long behind the stream a retired node's rows are kept: the projector runs ahead of
 /// the stream by its lookahead, so a node that retired in the projector may still be on the
@@ -1619,6 +1627,10 @@ impl Projector {
                             let key = (tx.index(), view.rx.index());
                             let history = self.links.entry(key).or_default();
                             if history.len() >= LINK_HISTORY {
+                                history.pop_front();
+                            }
+                            let keep_from = view.t_end.saturating_sub(LINK_KEEP_NS);
+                            while history.front().is_some_and(|o| o.t < keep_from) {
                                 history.pop_front();
                             }
                             history.push_back(LinkObservation {

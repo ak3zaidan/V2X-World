@@ -330,9 +330,14 @@ async fn a_replay_server_serves_the_world_and_the_control_surface() {
 /// first difference is a 32-bit field of the step-9 delta's rows, 367 738 live against
 /// 370 238 recorded — 2 500 units, which at the stream's millimetre grid is the 2.5 m of half
 /// a passenger car (not decoded field by field). A recorded run would then replay vehicles
-/// half a length from where the live page drew them. The fix is one projection for both (the snapshot stream
-/// emitting body centres), which moves every recording's bytes; it is left to the integrator
-/// with this test as its check.
+/// half a length from where the live page drew them.
+///
+/// The page's replay (the WebAssembly reader, `ui/apps/studio/src/lib/replay.ts`) now applies
+/// the same display projection to what it decodes (`toBodyCentres`, with the connected
+/// engine's class lengths), so the page draws a recorded vehicle where the live page drew it.
+/// This server's own replay forwards the recorded frames unchanged, as §7.2 has it, so this
+/// test stays open until the recording itself carries body centres — which moves every
+/// recording's bytes and every golden digest built on them, a decision for the integrator.
 #[test]
 #[ignore = "open: the recording keeps the rear-bumper reference, the live stream the body centre"]
 fn a_real_run_replays_byte_identically_from_its_recording() {

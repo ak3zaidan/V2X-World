@@ -59,6 +59,20 @@ pub const HISTORY_NS: u64 = 20_000_000_000;
 /// The most entries per direction a node keeps, whatever the time window holds.
 pub const MAX_PER_NODE: usize = 4_096;
 
+/// The most receptions the store keeps across every node.
+///
+/// A reception entry is about 300 bytes (ten journey stamps), and a node on a dense street
+/// hears hundreds of frames a second, so the per-node cap alone let the store grow with the
+/// fleet: 172,000 receptions, about 50 MB, for 49 radios on a 3 × 3 grid, and ten times that
+/// for the fleets the stress runs use. With more than 64 nodes logging, each keeps its share
+/// of this budget (never fewer than [`MIN_PER_NODE`]): the feed then reaches less far back on
+/// a crowded street, and says how much it shed.
+pub const MAX_RECEPTIONS: usize = 262_144;
+
+/// The fewest receptions a node keeps however many share [`MAX_RECEPTIONS`]: a second of a
+/// dense street, enough for the queues' one-second window.
+pub const MIN_PER_NODE: usize = 512;
+
 /// The window the queues' wait percentiles and drop counts cover, ns.
 pub const QUEUE_WINDOW_NS: u64 = 1_000_000_000;
 
@@ -67,6 +81,12 @@ pub const DROP_WINDOW_NS: u64 = 10_000_000_000;
 
 /// PHY causes the receiver cannot observe: the frame was never detected.
 const UNDETECTED: [&str; 2] = ["out-of-range", "below-sensitivity"];
+
+/// How many receptions each of `nodes` logging nodes keeps: its share of
+/// [`MAX_RECEPTIONS`], between [`MIN_PER_NODE`] and [`MAX_PER_NODE`].
+fn received_cap(nodes: usize) -> usize {
+    (MAX_RECEPTIONS / nodes.max(1)).clamp(MIN_PER_NODE, MAX_PER_NODE)
+}
 
 /// A message type as a static string, so an entry holds no heap text.
 fn type_code(name: Option<&str>) -> &'static str {
@@ -377,13 +397,15 @@ impl FeedStore {
 
     /// Takes one `node.rx` record.
     pub fn on_rx(&mut self, v: &NodeRxView) {
+        let nodes = self.logs.len().max(1);
         let log = self.logs.entry(v.rx.index()).or_default();
         if v.outcome == RxFate::Lost && v.cause.as_deref().is_some_and(|c| UNDETECTED.contains(&c))
         {
             log.undetected += 1;
             return;
         }
-        if log.received.len() >= MAX_PER_NODE {
+        let cap = received_cap(nodes);
+        while log.received.len() >= cap {
             log.received.pop_front();
             log.shed[1] += 1;
         }
@@ -1156,6 +1178,31 @@ mod tests {
     /// A node that has left the run keeps no log: once its last entry is behind the window,
     /// the log itself goes. The long soak found every departed vehicle's log kept, with its
     /// capacity, for the rest of the run.
+    /// Up to 64 logging nodes each keep the full per-node cap; beyond that each keeps its
+    /// share of the store-wide budget, so the store stops growing with the fleet.
+    #[test]
+    fn the_receptions_are_bounded_across_the_store() {
+        assert_eq!(received_cap(1), MAX_PER_NODE);
+        assert_eq!(received_cap(64), MAX_PER_NODE);
+        assert_eq!(received_cap(128), MAX_RECEPTIONS / 128);
+        assert_eq!(received_cap(100_000), MIN_PER_NODE);
+        let mut store = FeedStore::new(100 * MS);
+        let nodes = 200u32;
+        for i in 0..2_000u64 {
+            for rx_node in 0..nodes {
+                let mut v = rx(u64::from(rx_node) + 1, RxFate::Delivered, None, [None; 10], i * MS);
+                v.rx = NodeId::new(rx_node);
+                store.on_rx(&v);
+            }
+        }
+        let (_, receptions) = store.size();
+        assert!(
+            receptions <= MAX_RECEPTIONS + MAX_PER_NODE,
+            "{receptions} receptions held for {nodes} nodes"
+        );
+        assert!(receptions >= MAX_RECEPTIONS / 2, "{receptions}: the budget is used");
+    }
+
     #[test]
     fn a_log_with_nothing_in_the_window_is_dropped() {
         let mut store = one_delivery();
