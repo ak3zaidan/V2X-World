@@ -139,12 +139,17 @@ function Diagram({
   const entities = useMemo(() => new Map(snapshot.entities.map((e) => [e.id, e])), [snapshot.entities]);
   const pad = 12;
   const selectedId = selection?.kind === "entity" ? selection.id : null;
+  const naturalWidth = placed.width + pad * 2 + 60;
   return (
     <div className="backend-diagram">
+      {/* Scaled to the panel's width, so every column — the vehicles on the right included — is on
+          screen at once; below 70 % of its natural size the text would be too small to read, and
+          the panel scrolls instead. */}
       <svg
-        width={placed.width + pad * 2 + 60}
-        height={placed.height + pad * 2}
-        viewBox={`${-pad} ${-pad} ${placed.width + pad * 2 + 60} ${placed.height + pad * 2}`}
+        width="100%"
+        style={{ maxWidth: naturalWidth, minWidth: naturalWidth * 0.7, display: "block" }}
+        viewBox={`${-pad} ${-pad} ${naturalWidth} ${placed.height + pad * 2}`}
+        preserveAspectRatio="xMinYMin meet"
         data-testid="backend-diagram"
       >
         <defs>
@@ -277,7 +282,7 @@ function EntityDetails({ entity: e, snapshot }: { readonly entity: BackendEntity
             <Fragmentless k="servers" v={formatValue(e.queue.servers)} />
             <Fragmentless k="served" v={formatValue(e.queue.served)} />
             <Fragmentless k="mean wait" v={e.queue.served > 0 ? `${(e.queue.waited_ns / e.queue.served / 1e6).toFixed(2)} ms` : "–"} />
-            <Fragmentless k="busy" v={`${(e.queue.busy_ns / 1e9).toFixed(2)} s`} />
+            <Fragmentless k="busy" v={formatDuration(e.queue.busy_ns)} />
           </dl>
         </>
       ) : null}
@@ -349,6 +354,13 @@ function Recent({ snapshot, filter }: { readonly snapshot: BackendSnapshot; read
       </ol>
     </>
   );
+}
+
+/** A span of simulated time at a precision that shows a backend's microseconds of cryptography. */
+function formatDuration(ns: number): string {
+  if (ns >= 1e9) return `${(ns / 1e9).toFixed(2)} s`;
+  if (ns >= 1e6) return `${(ns / 1e6).toFixed(2)} ms`;
+  return `${(ns / 1e3).toFixed(1)} µs`;
 }
 
 /** One key and value of a `<dl>`. */
