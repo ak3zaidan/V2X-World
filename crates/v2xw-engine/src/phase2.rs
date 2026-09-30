@@ -646,6 +646,177 @@ impl core::fmt::Debug for Phase2 {
     }
 }
 
+/// `detection.local`: the local detector suite's parameters and the report interval, as the
+/// run reads them. Shared with the loader (`crate::scenario::validate`), so a key or value
+/// the run would refuse is refused at Check rather than when the run is built.
+///
+/// # Errors
+/// [`EngineError::Scenario`] naming the detector id, the key or the value.
+pub(crate) fn detection_params(scenario: &Scenario) -> Result<(DetectorParams, Duration)> {
+    let mut detector_params = DetectorParams::default();
+    let mut report_interval = secs(REPORT_INTERVAL_S);
+    for (i, choice) in scenario.detection.local.iter().enumerate() {
+        if choice.id != LEGACY_12 {
+            return Err(conflict(
+                &format!("detection.local[{i}]"),
+                format!(
+                    "this build ships one local detector suite, {LEGACY_12}; got {}",
+                    choice.id
+                ),
+            ));
+        }
+        if let Some(map) = choice.params.as_object() {
+            for (key, value) in map {
+                let field = format!("detection.local[{i}].params.{key}");
+                if key != "report_interval_s" && !DETECTOR_PARAM_KEYS.contains(&key.as_str()) {
+                    return Err(conflict(
+                        &field,
+                        format!(
+                            "'{key}' is not a parameter of {LEGACY_12}; it takes \
+                             report_interval_s, {}. Remove the key or correct its spelling",
+                            DETECTOR_PARAM_KEYS.join(", ")
+                        ),
+                    ));
+                }
+                let v = value
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .ok_or_else(|| {
+                        conflict(&field, format!("is {value}; it must be a finite number, 0 or more"))
+                    })?;
+                if key == "report_interval_s" {
+                    report_interval = secs(v);
+                } else if !apply_detector_param(&mut detector_params, key, v) {
+                    // `DETECTOR_PARAM_KEYS` names a key this function does not read: the
+                    // list and the reader disagree, and the loader test over the list fails.
+                    return Err(conflict(
+                        &field,
+                        format!("'{key}' is listed but not read by {LEGACY_12}"),
+                    ));
+                }
+            }
+        } else if !choice.params.is_null() {
+            return Err(conflict(
+                &format!("detection.local[{i}].params"),
+                format!(
+                    "is {}; it must be an object of parameter names and values",
+                    choice.params
+                ),
+            ));
+        }
+    }
+    Ok((detector_params, report_interval))
+}
+
+/// The keys `detection.ma.params` accepts, in the order the pipeline's card lists them.
+pub const MA_PARAM_KEYS: [&str; 7] = [
+    "report_threshold_k",
+    "revoke_min_seconds",
+    "revoke_persist_s",
+    "revoke_window_s",
+    "defence",
+    "reputation_max",
+    "report_budget",
+];
+
+/// `detection.ma`: the misbehaviour authority pipeline's parameters, as the run reads them.
+/// Shared with the loader, as [`detection_params`] is.
+///
+/// # Errors
+/// [`EngineError::Scenario`] naming the pipeline id, the key or the value.
+pub(crate) fn ma_params(scenario: &Scenario) -> Result<MaParams> {
+    let mut ma_params = MaParams::default();
+    if let Some(choice) = &scenario.detection.ma {
+        if choice.id != MA_LEGACY_WINDOW {
+            return Err(conflict(
+                "detection.ma",
+                format!(
+                    "this build ships one authority pipeline, {MA_LEGACY_WINDOW}; got {}",
+                    choice.id
+                ),
+            ));
+        }
+        if let Some(map) = choice.params.as_object() {
+            for (key, value) in map {
+                let field = format!("detection.ma.params.{key}");
+                let whole = |min: u64| {
+                    value.as_u64().filter(|v| *v >= min).ok_or_else(|| {
+                        conflict(
+                            &field,
+                            format!("is {value}; it must be a whole number of at least {min}"),
+                        )
+                    })
+                };
+                let seconds = || {
+                    value
+                        .as_f64()
+                        .filter(|v| v.is_finite() && *v >= 0.0)
+                        .ok_or_else(|| {
+                            conflict(
+                                &field,
+                                format!("is {value}; it must be a number of seconds, 0 or more"),
+                            )
+                        })
+                };
+                match key.as_str() {
+                    "report_threshold_k" => ma_params.report_threshold_k = whole(1)? as usize,
+                    "revoke_min_seconds" => ma_params.revoke_min_seconds = whole(1)? as usize,
+                    "revoke_persist_s" => ma_params.revoke_persist_s = seconds()?,
+                    "revoke_window_s" => ma_params.revoke_window_s = seconds()?,
+                    "defence" => {
+                        ma_params.defence = value.as_bool().ok_or_else(|| {
+                            conflict(&field, format!("is {value}; it must be true or false"))
+                        })?;
+                    }
+                    "reputation_max" => {
+                        ma_params.reputation_max = u32::try_from(whole(0)?).unwrap_or(u32::MAX);
+                    }
+                    "report_budget" => {
+                        ma_params.report_budget = u32::try_from(whole(0)?).unwrap_or(u32::MAX);
+                    }
+                    other => {
+                        return Err(conflict(
+                            &field,
+                            format!(
+                                "'{other}' is not a parameter of {MA_LEGACY_WINDOW}; it takes \
+                                 {}. Remove the key or correct its spelling",
+                                MA_PARAM_KEYS.join(", ")
+                            ),
+                        ));
+                    }
+                }
+            }
+        } else if !choice.params.is_null() {
+            return Err(conflict(
+                "detection.ma.params",
+                format!(
+                    "is {}; it must be an object of parameter names and values, e.g. \
+                     {{report_threshold_k: 3}}",
+                    choice.params
+                ),
+            ));
+        }
+    }
+    Ok(ma_params)
+}
+
+/// The keys `detection.local[].params` accepts besides `report_interval_s`: exactly the
+/// names [`apply_detector_param`] reads.
+pub const DETECTOR_PARAM_KEYS: [&str; 12] = [
+    "consistency_threshold_m",
+    "heading_threshold_deg",
+    "detector_lag_s",
+    "z_threshold",
+    "min_consecutive",
+    "sybil_min_certs",
+    "sybil_cell_m",
+    "art_max_m",
+    "max_accel_mps2",
+    "stale_max_s",
+    "heading_min_speed_mps",
+    "heading_min_disp_m",
+];
+
 /// The detector-suite parameters `detection.local[].params` may override, by name.
 fn apply_detector_param(p: &mut DetectorParams, key: &str, v: f64) -> bool {
     match key {
@@ -715,92 +886,8 @@ impl Phase2 {
             ));
         }
 
-        let mut detector_params = DetectorParams::default();
-        let mut report_interval = secs(REPORT_INTERVAL_S);
-        for choice in &scenario.detection.local {
-            if choice.id != LEGACY_12 {
-                return Err(conflict(
-                    "detection.local",
-                    format!(
-                        "this build ships one local detector suite, {LEGACY_12}; got {}",
-                        choice.id
-                    ),
-                ));
-            }
-            if let Some(map) = choice.params.as_object() {
-                for (key, value) in map {
-                    let v = value
-                        .as_f64()
-                        .filter(|v| v.is_finite() && *v >= 0.0)
-                        .ok_or_else(|| {
-                            conflict(
-                                &format!("detection.local[].params.{key}"),
-                                format!("must be a finite number ≥ 0, got {value}"),
-                            )
-                        })?;
-                    if key == "report_interval_s" {
-                        report_interval = secs(v);
-                    } else if !apply_detector_param(&mut detector_params, key, v) {
-                        return Err(conflict(
-                            &format!("detection.local[].params.{key}"),
-                            "is not a legacy-12 parameter this build reads".to_string(),
-                        ));
-                    }
-                }
-            }
-        }
-
-        let mut ma_params = MaParams::default();
-        if let Some(choice) = &scenario.detection.ma {
-            if choice.id != MA_LEGACY_WINDOW {
-                return Err(conflict(
-                    "detection.ma",
-                    format!(
-                        "this build ships one authority pipeline, {MA_LEGACY_WINDOW}; got {}",
-                        choice.id
-                    ),
-                ));
-            }
-            if let Some(map) = choice.params.as_object() {
-                for (key, value) in map {
-                    let bad = || {
-                        conflict(
-                            &format!("detection.ma.params.{key}"),
-                            format!("has an unusable value {value}"),
-                        )
-                    };
-                    match key.as_str() {
-                        "report_threshold_k" => {
-                            ma_params.report_threshold_k =
-                                value.as_u64().filter(|v| *v >= 1).ok_or_else(bad)? as usize;
-                        }
-                        "revoke_min_seconds" => {
-                            ma_params.revoke_min_seconds =
-                                value.as_u64().filter(|v| *v >= 1).ok_or_else(bad)? as usize;
-                        }
-                        "revoke_persist_s" => {
-                            ma_params.revoke_persist_s = value.as_f64().ok_or_else(bad)?;
-                        }
-                        "revoke_window_s" => {
-                            ma_params.revoke_window_s = value.as_f64().ok_or_else(bad)?;
-                        }
-                        "defence" => ma_params.defence = value.as_bool().ok_or_else(bad)?,
-                        "reputation_max" => {
-                            ma_params.reputation_max = value.as_u64().ok_or_else(bad)? as u32;
-                        }
-                        "report_budget" => {
-                            ma_params.report_budget = value.as_u64().ok_or_else(bad)? as u32;
-                        }
-                        other => {
-                            return Err(conflict(
-                                "detection.ma.params",
-                                format!("'{other}' is not a {MA_LEGACY_WINDOW} parameter"),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
+        let (detector_params, report_interval) = detection_params(scenario)?;
+        let ma_params = ma_params(scenario)?;
 
         let access = BackendAccess::from_scenario(scenario)?;
 
@@ -3087,7 +3174,11 @@ pub fn attacker_params(
 }
 
 /// `net.backend_net`: the links between backend entities.
-fn apply_backend_net(scenario: &Scenario, p: &mut ScmsParams) -> Result<()> {
+///
+/// Also the loader's check of the key (`crate::scenario::validate` runs it on a default
+/// parameter set), so a wrong id or parameter is refused at Check, in the same words, and
+/// not first discovered when the run is built.
+pub(crate) fn apply_backend_net(scenario: &Scenario, p: &mut ScmsParams) -> Result<()> {
     let Some(choice) = &scenario.net.backend_net else {
         return Ok(());
     };
@@ -3095,25 +3186,55 @@ fn apply_backend_net(scenario: &Scenario, p: &mut ScmsParams) -> Result<()> {
         return Err(conflict(
             "net.backend_net",
             format!(
-                "'{}' is not a backend network model; allowed: {}",
+                "'{}' is not a backend network model; this build ships {}. Choose it, or \
+                 remove net.backend_net to keep the deployment's default links",
                 choice.id,
                 crate::backend::BACKEND_NET_MODELS.join(", ")
             ),
         ));
     }
-    if let Some(ms) = choice
-        .params
-        .get("latency_ms")
-        .and_then(serde_json::Value::as_f64)
-    {
-        p.backend_link_latency = Duration::from_nanos((ms * 1e6).round().max(0.0) as u64);
-    }
-    if let Some(mbps) = choice
-        .params
-        .get("capacity_mbps")
-        .and_then(serde_json::Value::as_f64)
-    {
-        p.backend_link_bandwidth_bps = (mbps * 1e6).round().max(1.0) as u64;
+    let map = match &choice.params {
+        serde_json::Value::Null => return Ok(()),
+        serde_json::Value::Object(map) => map,
+        other => {
+            return Err(conflict(
+                "net.backend_net.params",
+                format!("is {other}; it must be an object, e.g. {{latency_ms: 10}}"),
+            ));
+        }
+    };
+    for (key, value) in map {
+        let field = format!("net.backend_net.params.{key}");
+        let v = value.as_f64().filter(|v| v.is_finite());
+        match key.as_str() {
+            "latency_ms" => {
+                let ms = v.filter(|v| *v >= 0.0).ok_or_else(|| {
+                    conflict(
+                        &field,
+                        format!("is {value}; it must be milliseconds, 0 or more"),
+                    )
+                })?;
+                p.backend_link_latency = Duration::from_nanos((ms * 1e6).round() as u64);
+            }
+            "capacity_mbps" => {
+                let mbps = v.filter(|v| *v > 0.0).ok_or_else(|| {
+                    conflict(
+                        &field,
+                        format!("is {value}; it must be a capacity above 0 Mbit/s"),
+                    )
+                })?;
+                p.backend_link_bandwidth_bps = (mbps * 1e6).round().max(1.0) as u64;
+            }
+            other => {
+                return Err(conflict(
+                    &field,
+                    format!(
+                        "'{other}' is not a parameter of backend-net/fixed; it takes \
+                         latency_ms and capacity_mbps. Remove the key or correct its spelling"
+                    ),
+                ));
+            }
+        }
     }
     Ok(())
 }

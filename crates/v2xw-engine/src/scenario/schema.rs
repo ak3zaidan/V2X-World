@@ -1297,7 +1297,11 @@ pub enum TimelineKind {
     /// value.
     #[serde(rename = "param.change")]
     ParamChange,
-    /// A road closes: `lane` or `edge` names it.
+    /// A road closes: `target` names what, in one of three spellings
+    /// ([`crate::timeline::ClosureTarget::parse`]): one lane by id (`123` or `"lane:123"`),
+    /// every lane of one edge (`"edge:45"`), or every edge of a named street, ignoring case
+    /// (`"street:West 42nd Street"`). Only vehicle lanes close; footways and crossings stay
+    /// open. With `until`, the road reopens then.
     #[serde(rename = "closure")]
     Closure,
 }

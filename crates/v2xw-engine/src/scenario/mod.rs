@@ -51,7 +51,7 @@ pub use schema::{
     Rat, Rsu, Scenario, Security, SignerIdPolicySpec, TerrainOptions, Threats, Time, TimelineItem,
     TimelineKind, VehicleClassSpec, Vehicles, Vru, Weather, WorldSpec,
 };
-pub use validate::{resolve_path, validate};
+pub use validate::{preflight, resolve_path, validate};
 
 /// How many `meta.base` references may chain before the loader gives up.
 ///

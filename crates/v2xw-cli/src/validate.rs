@@ -9,7 +9,9 @@
 //!
 //! Validation does **not** build the world. `v2xw validate` on a scenario naming a
 //! 30 MB OSM extract is instant, and that is the point: it is the check an author runs on
-//! every edit. Whether the world can be built is what `v2xw run` finds out.
+//! every edit. It notes a map or terrain file the scenario names that is not there from the
+//! current directory (`v2xw_engine::scenario::preflight`), without reading it. Whether the
+//! world can be built is what `v2xw run` finds out.
 
 use std::path::Path;
 
@@ -55,6 +57,14 @@ pub fn validate(path: &Path) -> Result<ValidateOutcome> {
     let scenario = Scenario::load(path)?;
 
     let mut notes = Vec::new();
+    // The files it names, checked from the directory this command runs in, which is where
+    // `v2xw run` will read them. A note rather than an error: whether the document is valid
+    // and whether its inputs are on this machine are two questions, and this command answers
+    // the first (`v2xw run` refuses a missing file by the same setting, through
+    // `Engine::build`'s preflight).
+    for missing in v2xw_engine::scenario::preflight(&scenario) {
+        notes.push(format!("{missing}; `v2xw run` will refuse it from this directory"));
+    }
     // Three things the loader accepts that an author usually did not mean. Each is a note
     // and not an error, because each is a legitimate scenario.
     if scenario.metrics.is_empty() {

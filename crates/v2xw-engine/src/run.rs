@@ -813,6 +813,14 @@ impl Engine {
     /// card does not validate, and [`EngineError::Scenario`] if the scenario is invalid.
     pub fn build(scenario: Scenario, build_utc: &str) -> Result<Engine> {
         scenario.validate()?;
+        // The files the scenario names, before the importer is asked to read them: a missing
+        // map is then a refusal naming `world.source.path`, not an importer I/O error.
+        if let Some(missing) = crate::scenario::validate::preflight(&scenario)
+            .into_iter()
+            .next()
+        {
+            return Err(missing.into());
+        }
         let world = crate::wiring::build_world(&scenario)?;
         Self::build_with_world(scenario, world, build_utc)
     }

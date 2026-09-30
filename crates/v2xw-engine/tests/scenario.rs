@@ -439,3 +439,222 @@ fn an_obu_that_cannot_sign_is_refused_when_vehicles_send() {
         validate(&silent)
     );
 }
+
+/// A scenario edited as a JSON document, the way the page edits one: `edits` are
+/// `(JSON Pointer, value)` pairs applied to [`Scenario::minimal`]; a pointer whose parent
+/// is missing gets it created as an object.
+fn edited(edits: &[(&str, serde_json::Value)]) -> Scenario {
+    let mut doc = serde_json::to_value(Scenario::minimal()).expect("minimal serialises");
+    for (pointer, value) in edits {
+        let mut cur = &mut doc;
+        let parts: Vec<&str> = pointer.trim_start_matches('/').split('/').collect();
+        for (i, part) in parts.iter().enumerate() {
+            if i + 1 == parts.len() {
+                cur[*part] = value.clone();
+            } else {
+                if cur.get(*part).is_none_or(serde_json::Value::is_null) {
+                    cur[*part] = serde_json::json!({});
+                }
+                cur = &mut cur[*part];
+            }
+        }
+    }
+    Scenario::from_document(doc).expect("the edited document deserialises")
+}
+
+/// The fields `validate` and `preflight` name for `s`, in order.
+fn refused_fields(s: &Scenario) -> Vec<String> {
+    validate(s)
+        .iter()
+        .chain(v2xw_engine::scenario::preflight(s).iter())
+        .filter_map(ScenarioError::field)
+        .map(str::to_string)
+        .collect()
+}
+
+/// The five causes the 2026-09-24 QA found coming back from Run as "internal error", each
+/// now refused at Check (`validate` plus `preflight`, which the server runs for
+/// `scenario.validate`, `scenario.set` and `run.start`) by the setting that causes it, with
+/// the fix in the message. Every case is discriminating: the same scenario with the one
+/// setting corrected is accepted.
+#[test]
+fn the_five_internal_error_causes_are_refused_at_check_by_their_setting() {
+    let osm = |path: &str| serde_json::json!({"kind": "osm-xml", "path": path});
+    let imported = [
+        (
+            "/world/imported_at",
+            serde_json::json!("2026-09-18T00:00:00Z"),
+        ),
+        ("/world/highway_preset", serde_json::json!("urban-us-nyc")),
+    ];
+
+    // 1. A map file that is not there.
+    let mut edits = imported.to_vec();
+    edits.push(("/world/source", osm("worlds/no-such-map.osm.xml")));
+    let missing_map = edited(&edits);
+    assert!(
+        validate(&missing_map).is_empty(),
+        "{:#?}",
+        validate(&missing_map)
+    );
+    let rows = v2xw_engine::scenario::preflight(&missing_map);
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    assert_eq!(rows[0].field(), Some("world.source.path"));
+    let text = rows[0].to_string();
+    assert!(
+        text.contains("worlds/no-such-map.osm.xml") && text.contains("does not exist"),
+        "{text}"
+    );
+    // Run refuses it by the same setting, before any import is attempted.
+    match v2xw_engine::Engine::build(missing_map, "") {
+        Err(v2xw_engine::EngineError::Scenario(e)) => {
+            assert_eq!(e.field(), Some("world.source.path"), "{e}");
+        }
+        Err(other) => panic!("a missing map is not a scenario error: {other}"),
+        Ok(_) => panic!("a missing map built"),
+    }
+    // Discriminating: a file that exists passes the preflight.
+    let mut edits = imported.to_vec();
+    let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    edits.push(("/world/source", osm(&here.display().to_string())));
+    assert!(v2xw_engine::scenario::preflight(&edited(&edits)).is_empty());
+
+    // 2. A terrain raster that is not there.
+    let missing_dem = edited(&[(
+        "/world/terrain/dem",
+        serde_json::json!("worlds/no-such.hgt"),
+    )]);
+    assert_eq!(refused_fields(&missing_dem), ["world.terrain.dem"]);
+    assert!(matches!(
+        v2xw_engine::Engine::build(missing_dem, ""),
+        Err(v2xw_engine::EngineError::Scenario(ref e)) if e.field() == Some("world.terrain.dem")
+    ));
+
+    // 3. A roadside unit at a `site` on an imported city, which has none.
+    let mut edits = imported.to_vec();
+    edits.push(("/world/source", osm("worlds/cache/manhattan.osm.xml")));
+    edits.push(("/actors/rsus", serde_json::json!([{"site": 0}])));
+    let errors = validate(&edited(&edits));
+    let site = errors
+        .iter()
+        .find(|e| e.field() == Some("actors.rsus[0].site"))
+        .unwrap_or_else(|| panic!("an RSU site on an OSM world passed Check: {errors:#?}"));
+    assert!(
+        site.to_string().contains("position_m"),
+        "names the fix: {site}"
+    );
+    // And on a grid: none without `rsu_at_junctions`, one per junction with it.
+    let grid = |rsu: bool, site: u32| {
+        edited(&[
+            (
+                "/world/source/params",
+                serde_json::json!({"cols": 3, "rows": 2, "rsu_at_junctions": rsu}),
+            ),
+            ("/actors/rsus", serde_json::json!([{"site": site}])),
+        ])
+    };
+    assert!(refused_fields(&grid(false, 0)).contains(&"actors.rsus[0].site".to_string()));
+    assert!(refused_fields(&grid(true, 6)).contains(&"actors.rsus[0].site".to_string()));
+    assert!(
+        !refused_fields(&grid(true, 5)).contains(&"actors.rsus[0].site".to_string()),
+        "{:#?}",
+        validate(&grid(true, 5))
+    );
+
+    // 4. A backend network model id this build does not ship.
+    let bad_net = edited(&[(
+        "/net/backend_net",
+        serde_json::json!({"id": "backend-net/fibre"}),
+    )]);
+    assert_eq!(refused_fields(&bad_net), ["net.backend_net"]);
+    assert!(validate(&bad_net)[0].to_string().contains("backend-net/fixed"));
+    let good_net = edited(&[(
+        "/net/backend_net",
+        serde_json::json!({"id": "backend-net/fixed", "params": {"latency_ms": 5}}),
+    )]);
+    assert!(validate(&good_net).is_empty(), "{:#?}", validate(&good_net));
+    let bad_net_key = edited(&[(
+        "/net/backend_net",
+        serde_json::json!({"id": "backend-net/fixed", "params": {"latency": 5}}),
+    )]);
+    assert_eq!(
+        refused_fields(&bad_net_key),
+        ["net.backend_net.params.latency"]
+    );
+
+    // 5. An authority pipeline parameter that does not exist.
+    let ma = |params: serde_json::Value| {
+        edited(&[(
+            "/detection/ma",
+            serde_json::json!({"id": "threat/ma/legacy-window", "params": params}),
+        )])
+    };
+    let bad_key = ma(serde_json::json!({"report_threshold": 3}));
+    assert_eq!(
+        refused_fields(&bad_key),
+        ["detection.ma.params.report_threshold"]
+    );
+    let text = validate(&bad_key)[0].to_string();
+    assert!(
+        text.contains("report_threshold_k"),
+        "lists the keys it takes: {text}"
+    );
+    assert!(validate(&ma(serde_json::json!({"report_threshold_k": 3}))).is_empty());
+    assert_eq!(
+        refused_fields(&ma(serde_json::json!({"revoke_window_s": -1.0}))),
+        ["detection.ma.params.revoke_window_s"]
+    );
+}
+
+/// Other build-time failures a user can cause, found by reading the world builder: a world
+/// source kind this build cannot build, grid parameters the generator refuses, a grid too
+/// large for the machine, and a detector parameter that does not exist. Each is refused at
+/// Check by its setting.
+#[test]
+fn world_and_detector_inputs_the_builder_would_refuse_are_refused_at_check() {
+    let sumo = edited(&[
+        (
+            "/world/source",
+            serde_json::json!({"kind": "sumo-net", "path": "net.xml"}),
+        ),
+        (
+            "/world/imported_at",
+            serde_json::json!("2026-09-18T00:00:00Z"),
+        ),
+    ]);
+    assert_eq!(refused_fields(&sumo), ["world.source"]);
+
+    let grid = |params: serde_json::Value| edited(&[("/world/source/params", params)]);
+    assert_eq!(
+        refused_fields(&grid(serde_json::json!({"cols": 1, "rows": 4}))),
+        ["world.source.params.cols"]
+    );
+    assert_eq!(
+        refused_fields(&grid(serde_json::json!({"columns": 4}))),
+        ["world.source.params"]
+    );
+    assert_eq!(
+        refused_fields(&grid(serde_json::json!({"cols": 1300, "rows": 34}))),
+        ["world.source.params.cols"]
+    );
+    let fine = grid(serde_json::json!({"cols": 4, "rows": 4}));
+    assert!(refused_fields(&fine).is_empty(), "{:#?}", validate(&fine));
+
+    let detector = |params: serde_json::Value| {
+        edited(&[(
+            "/detection/local",
+            serde_json::json!([{"id": "detect/legacy-12", "params": params}]),
+        )])
+    };
+    assert_eq!(
+        refused_fields(&detector(serde_json::json!({"z_thresh": 2.0}))),
+        ["detection.local[0].params.z_thresh"]
+    );
+    assert!(validate(&detector(serde_json::json!({"z_threshold": 2.0}))).is_empty());
+    for key in v2xw_engine::phase2::DETECTOR_PARAM_KEYS {
+        assert!(
+            validate(&detector(serde_json::json!({key: 1.0}))).is_empty(),
+            "{key} is listed as a detector parameter and refused"
+        );
+    }
+}
