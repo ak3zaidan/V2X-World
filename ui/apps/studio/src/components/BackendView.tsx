@@ -9,7 +9,7 @@
  * exchanged a message, the numbers are the engine's counters. Clicking a box shows everything the
  * engine publishes about that entity; clicking a line shows its protocol steps.
  *
- * Self-contained on purpose — its own file, its own stylesheet, one line in `App.tsx` — so the
+ * Self-contained on purpose — its own file, its own stylesheet, one line in the shell's header (`shell/Header.tsx`) — so the
  * page's layout can change around it.
  */
 
@@ -33,6 +33,7 @@ import {
   type BackendSnapshot,
 } from "../lib/backend.js";
 import { engine } from "../state/engine.js";
+import { NetworkIcon } from "../shell/Icons.js";
 import { useStudio } from "../state/store.js";
 import "../styles/backend.css";
 
@@ -47,11 +48,15 @@ export function BackendView(): React.JSX.Element {
     <>
       <button
         type="button"
+        className={open ? "icon-button labelled on" : "icon-button labelled"}
+        aria-pressed={open}
+        aria-label="Backend"
         onClick={() => setOpen(true)}
         data-testid="backend-button"
         title="The credential system's authorities and roadside units, with the traffic between them and the vehicles"
       >
-        Backend
+        <NetworkIcon />
+        <span>Backend</span>
       </button>
       {open ? <BackendPanel onClose={() => setOpen(false)} /> : null}
     </>

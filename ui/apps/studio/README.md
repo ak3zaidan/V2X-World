@@ -15,15 +15,21 @@ pnpm --filter @vwp/studio dev          # http://127.0.0.1:5173
 
 ## Layout
 
-The shell is the wireframe of 09-ui §6, as a CSS grid:
+The shell is `docs/design/14-studio-shell.md`: the viewport takes the page, and everything else opens
+on demand.
 
 | Region | Component | What it is |
 |---|---|---|
-| left | `ScenarioPanel`, `RunBrowser`, `ComparisonView`, `CopilotPanel` | scenario form, run manifests, comparison stub, tool surface |
+| header | `shell/Header.tsx` | run state, scenario switcher, simulated clock, primary action; Metrics, inspector toggle, settings gear, menu |
 | centre | `Viewport` + `TimeControls` | one canvas, the overlay/camera toolbar, transport and scrub bar |
-| right | `Inspector` (`state · why · log`) | the §3.5.2 record in full, provenance, the connection log |
-| bottom | `PlotsStrip` | live `MetricSample` series in uPlot |
-| floating | `ObuHud` | the HUD of 09-ui §5, dockable into the inspector |
+| right, when open | `Inspector` (`state · messages · why · log`) | opens on a selection, a "why" or a docked HUD; × closes it |
+| full screen | `settings/SettingsWindow.tsx` | every scenario setting, VS Code style (gear or Ctrl/Cmd+,); `?view=settings` opens it in a window of its own |
+| full screen | Metrics (`components/MetricsPanel.tsx`, registered in `shell/panels.tsx`, today hosting `PlotsStrip`) | live `MetricSample` series in uPlot |
+| sheets | `RunBrowser`, `ComparisonView`, `CopilotPanel`, `RunDetails` | from the menu; over the viewport's left edge |
+| floating | `ObuHud` | the HUD of 09-ui §5, shown for a selected radio, dockable into the inspector |
+
+Panels are registered in `shell/panels.tsx` and mirrored in the URL hash (`#settings`, `#metrics`,
+`#runs`…) by `shell/route.ts`.
 
 ## How it is wired
 

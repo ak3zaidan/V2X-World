@@ -38,6 +38,7 @@ import {
 import type { ClientProvenance } from "../lib/provenance.js";
 import type { EngineFlavour, EngineProbe } from "../lib/target.js";
 import type { ThemeName } from "../lib/theme.js";
+import { changedPointers, getPointer, setPointer } from "../lib/schema.js";
 
 /** §3.1.3 — one row of the `Hello` node table. */
 export interface NodeInfo {
@@ -177,6 +178,8 @@ export interface ScenarioExtras {
   readonly staged: StagedScenario | null;
   readonly fields: readonly PublishedField[];
   readonly statuses: readonly { id: string; label: string; note: string }[];
+  /** The engine's setting groups, in its order, each with a sentence and the sections under it. */
+  readonly groups: readonly { name: string; description: string; sections: readonly string[] }[];
 }
 
 /** The pseudonym the followed node is currently using (§3.6.7 `sec.cert`, §3.6.4 `node.tx`). */
@@ -395,7 +398,7 @@ const EMPTY_RUN: RunInfo = {
   generation: 0, stagedHash: null, outputDigest: null, kernelThreads: null,
 };
 
-const EMPTY_EXTRAS: ScenarioExtras = { runningHash: "", staged: null, fields: [], statuses: [] };
+const EMPTY_EXTRAS: ScenarioExtras = { runningHash: "", staged: null, fields: [], statuses: [], groups: [] };
 
 /** Before the first probe: the page's own origin, unresolved. */
 const UNRESOLVED_TARGET: EngineTargetView = {
@@ -404,6 +407,23 @@ const UNRESOLVED_TARGET: EngineTargetView = {
 };
 
 const DEFAULT_SYNC: CompareSync = { time: true, camera: true, offsetNs: 0 };
+
+/**
+ * The panels the shell can open over the main view (`shell/panels.tsx`).
+ *
+ * Full-screen ones cover everything under the header; sheets slide over the viewport's left edge.
+ * One is open at a time, and it is mirrored in the URL hash so a reload keeps it and Back closes it.
+ * A new panel is one id here and one entry in `PANELS` (`shell/panels.tsx`), whose type makes the
+ * two agree.
+ */
+export const PANEL_IDS = ["settings", "metrics", "runs", "compare", "commands", "details"] as const;
+export type PanelId = (typeof PANEL_IDS)[number];
+
+/** A sentence from the settings window's last action, and how to colour it. */
+export interface SettingsMessage {
+  readonly text: string;
+  readonly tone: "info" | "err" | "warn";
+}
 
 interface StudioState {
   connection: VwpConnectionState;
@@ -501,6 +521,22 @@ interface StudioState {
   compareDiffs: readonly MetricDiff[];
   /** Metrics the difference view shows; empty means "every metric both sides report". */
   compareMetrics: readonly string[];
+  /** Which shell panel is open over the main view, or `null` for none. */
+  panel: PanelId | null;
+  /**
+   * Whether the inspector column is showing. Closed until there is something in it: selecting a
+   * radio, asking why a value is what it is, or docking the HUD opens it; its × closes it.
+   */
+  inspectorOpen: boolean;
+  /**
+   * The scenario as the settings window has edited it, not yet applied. `null` until the engine's
+   * document first arrives. Kept here rather than in the window so closing the window, or
+   * switching between the form and the JSON view, keeps the edits.
+   */
+  draft: Record<string, unknown> | null;
+  /** The settings window's last action result, and which action is in flight. */
+  settingsMessage: SettingsMessage | null;
+  settingsBusy: string | null;
 
   setConnection: (s: VwpConnectionState) => void;
   /**
@@ -585,6 +621,14 @@ interface StudioState {
   setCompareSync: (patch: Partial<CompareSync>) => void;
   setCompareDiffs: (d: readonly MetricDiff[]) => void;
   setCompareMetrics: (names: readonly string[]) => void;
+  setPanel: (p: PanelId | null) => void;
+  setInspectorOpen: (v: boolean) => void;
+  /** Replace the draft, or derive the next one from the current. */
+  setDraft: (
+    next: Record<string, unknown> | null | ((d: Record<string, unknown> | null) => Record<string, unknown> | null),
+  ) => void;
+  setSettingsMessage: (m: SettingsMessage | null) => void;
+  setSettingsBusy: (b: string | null) => void;
 }
 
 const DEV_DETAILS_KEY = "vwp.studio.devDetails";
@@ -604,6 +648,47 @@ function writeDevDetails(v: boolean): void {
   } catch {
     /* a browser with storage denied still gets the toggle, just not the memory of it */
   }
+}
+
+const THEME_KEY = "vwp.studio.theme";
+
+/** The theme this viewer chose last time. Storage can throw or be empty; dark is the default. */
+export function readTheme(): ThemeName {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+function writeTheme(v: ThemeName): void {
+  try {
+    if (typeof localStorage !== "undefined") localStorage.setItem(THEME_KEY, v);
+  } catch {
+    /* the choice holds for this page; it is just not remembered */
+  }
+}
+
+/**
+ * The draft after the engine's document changed under it.
+ *
+ * A fresh copy of the engine's scenario replaces the form only when the form holds no edits. It is
+ * re-fetched on every connect, every new run and every reconnect, and it used to replace the draft
+ * unconditionally — so an edit made while a fetch was in flight vanished, and Apply went grey under
+ * the user's cursor. Edits are rebased onto the new document instead.
+ */
+export function rebaseDraft(
+  before: unknown,
+  next: unknown,
+  current: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  const doc = (next ?? null) as Record<string, unknown> | null;
+  if (current === null || doc === null) return doc;
+  const mine = changedPointers(before ?? {}, current);
+  if (mine.length === 0) return doc;
+  let rebased: Record<string, unknown> = doc;
+  for (const pointer of mine) rebased = setPointer(rebased, pointer, getPointer(current, pointer));
+  return rebased;
 }
 
 const MAX_LOGS = 300;
@@ -696,7 +781,7 @@ export const useStudio = create<StudioState>((set) => ({
   serverOverlays: [],
   groundTruthLocked: false,
   cameraMode: "map",
-  theme: "dark",
+  theme: readTheme(),
   stats: null,
   frames: { keyframe: 0, delta: 0, telemetry: 0, event: 0, metric: 0 },
   rpcMethods: [],
@@ -730,6 +815,11 @@ export const useStudio = create<StudioState>((set) => ({
   compareSync: DEFAULT_SYNC,
   compareDiffs: [],
   compareMetrics: [],
+  panel: null,
+  inspectorOpen: false,
+  draft: null,
+  settingsMessage: null,
+  settingsBusy: null,
 
   setConnection: (s) => set({ connection: s }),
   setHello: (h, options) => set(options?.resumed === true ? { hello: h } : { hello: h, timeline: [] }),
@@ -737,6 +827,9 @@ export const useStudio = create<StudioState>((set) => ({
   setRun: (r) => set((state) => (sameRun(state.run, r) ? state : { run: { ...state.run, ...r } })),
   setSelection: (actorId, nodeId) =>
     set((state) => ({
+      // Selecting something is asking about it: the inspector opens to answer. Clearing the
+      // selection leaves it as the user left it.
+      inspectorOpen: actorId !== null || nodeId !== null ? true : state.inspectorOpen,
       selectedActor: actorId,
       selectedNode: nodeId,
       pseudonym: null,
@@ -793,7 +886,10 @@ export const useStudio = create<StudioState>((set) => ({
   setServerOverlays: (o) => set({ serverOverlays: o }),
   setGroundTruthLocked: (v) => set({ groundTruthLocked: v }),
   setCameraMode: (m) => set({ cameraMode: m }),
-  setTheme: (t) => set({ theme: t }),
+  setTheme: (t) => {
+    writeTheme(t);
+    set({ theme: t });
+  },
   setStats: (s) => set((state) => (sameStats(state.stats, s) ? state : { stats: s })),
   setFrameCounts: (f) => set((state) => (sameFrames(state.frames, f) ? state : { frames: f })),
   setRpcMethods: (m, title) => set({ rpcMethods: m, rpcTitle: title }),
@@ -801,6 +897,7 @@ export const useStudio = create<StudioState>((set) => ({
     set((state) => ({ rpcCalls: [{ method, at: Date.now() }, ...state.rpcCalls].slice(0, 40) })),
   setScenario: (doc, hash, schema, extras) =>
     set((state) => ({
+      draft: rebaseDraft(state.scenario, doc, state.draft),
       scenario: doc,
       scenarioHash: hash,
       scenarioSchema: schema,
@@ -811,6 +908,7 @@ export const useStudio = create<StudioState>((set) => ({
         staged: extras?.staged !== undefined ? extras.staged : state.scenarioExtras.staged,
         fields: extras?.fields && extras.fields.length > 0 ? extras.fields : state.scenarioExtras.fields,
         statuses: extras?.statuses && extras.statuses.length > 0 ? extras.statuses : state.scenarioExtras.statuses,
+        groups: extras?.groups && extras.groups.length > 0 ? extras.groups : state.scenarioExtras.groups,
       },
     })),
   setReconnectAttempts: (n) => set((state) => (state.reconnectAttempts === n ? state : { reconnectAttempts: n })),
@@ -832,13 +930,16 @@ export const useStudio = create<StudioState>((set) => ({
         ? state
         : { metricProvenance: provenance, metricDims: dims },
     ),
-  setWhy: (w) => set({ why: w, inspectorTab: w ? "why" : "state" }),
+  // Asking why a value is what it is is answered in the inspector, so the inspector opens.
+  setWhy: (w) =>
+    set((state) => ({ why: w, inspectorTab: w ? "why" : "state", inspectorOpen: w !== null || state.inspectorOpen })),
   setInspectorTab: (t) => set({ inspectorTab: t }),
   setDevDetails: (v) => {
     writeDevDetails(v);
     set({ devDetails: v });
   },
-  setHudDocked: (v) => set({ hudDocked: v }),
+  // A docked HUD lives at the foot of the inspector, so docking it has to show the inspector.
+  setHudDocked: (v) => set((state) => ({ hudDocked: v, inspectorOpen: v || state.inspectorOpen })),
   bumpSeries: () => set((state) => ({ seriesTick: state.seriesTick + 1 })),
   setTarget: (t) => set({ target: t }),
   setReplay: (r) => set({ replay: r }),
@@ -856,4 +957,9 @@ export const useStudio = create<StudioState>((set) => ({
   setCompareSync: (patch) => set((state) => ({ compareSync: { ...state.compareSync, ...patch } })),
   setCompareDiffs: (d) => set((state) => (sameDiffs(state.compareDiffs, d) ? state : { compareDiffs: d })),
   setCompareMetrics: (names) => set({ compareMetrics: names }),
+  setPanel: (p) => set((state) => (state.panel === p ? state : { panel: p })),
+  setInspectorOpen: (v) => set((state) => (state.inspectorOpen === v ? state : { inspectorOpen: v })),
+  setDraft: (next) => set((state) => ({ draft: typeof next === "function" ? next(state.draft) : next })),
+  setSettingsMessage: (m) => set({ settingsMessage: m }),
+  setSettingsBusy: (b) => set({ settingsBusy: b }),
 }));

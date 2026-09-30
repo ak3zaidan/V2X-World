@@ -60,10 +60,13 @@ export function EventsEditor({
   value,
   onChange,
   durationS,
+  canPick = true,
 }: {
   value: unknown;
   onChange: (next: EventItem[]) => void;
   durationS: number | undefined;
+  /** False where there is no map to click: the settings window opened in a window of its own. */
+  canPick?: boolean;
 }): React.JSX.Element {
   const items: EventItem[] = useMemo(
     () => (Array.isArray(value) ? (value as EventItem[]) : []),
@@ -199,7 +202,12 @@ export function EventsEditor({
                   type="button"
                   data-testid="event-pick"
                   className={picking?.purpose === "closure" ? "active" : undefined}
-                  title="Pick the road by clicking it on the map"
+                  disabled={!canPick}
+                  title={
+                    canPick
+                      ? "Pick the road by clicking it on the map"
+                      : "This window has no map. Open the settings in the main window to pick a road on it."
+                  }
                   onClick={() => pickOnMap(i)}
                 >
                   pick on map

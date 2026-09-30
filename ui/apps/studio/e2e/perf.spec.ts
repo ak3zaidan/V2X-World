@@ -8,7 +8,7 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 
 const actors = process.env.VWP_ACTORS ?? "200";
 const mode = process.env.VWP_HEADED === "1" ? "headed-gpu" : "headless-swiftshader";
@@ -73,6 +73,9 @@ test(`frame rate with ${actors} actors`, async ({ page }) => {
   const line = `mode=${mode} actors=${actors} rafFps=${result.rafFps.toFixed(1)} statsFps=${(result.fps ?? 0).toFixed(1)} avg=${(result.fpsAverage ?? 0).toFixed(1)} frameMs=${(result.frameMs ?? 0).toFixed(2)} p95Ms=${(result.p95Ms ?? 0).toFixed(2)} cpuMs=${(result.cpuMs ?? 0).toFixed(2)} draws=${result.drawCalls ?? 0} tris=${result.triangles ?? 0} drawn=${result.actorInstances ?? 0} culled=${result.actorCulled ?? 0} live=${result.actorLive ?? 0} buildings=${result.buildingsVisible ?? 0} poses=${result.poseCount}`;
   // eslint-disable-next-line no-console
   console.log(`FPS-RESULT ${line}`);
+  // A fresh checkout has no screenshots directory yet; the screenshot call below would make it, the
+  // append does not.
+  mkdirSync("screenshots", { recursive: true });
   appendFileSync("screenshots/fps.txt", `${line}\n`);
 
   await page.screenshot({ path: `screenshots/perf-${actors}-actors-${mode}.png` });

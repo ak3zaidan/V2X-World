@@ -334,21 +334,57 @@ test("Q14 — the marker overlay's shape channels are on from the first frame", 
 /**
  * A small window is still a simulator: at 800 x 520 the fixed side panels and plots strip used to
  * leave the viewport 360 x 146 px. It keeps at least half of each dimension now, at every window
- * size the camera fuzz drives.
+ * size the camera fuzz drives, with the inspector open as well as closed.
+ *
+ * And the main view is the viewport: with nothing selected and no panel open it takes the full
+ * width and at least four fifths of the height (the header and the time bar are the rest). The
+ * settings sidebar and the plots strip that used to take 37 % of the screen do not come back.
  */
 test("the viewport keeps a usable share of a small window", async ({ page }) => {
   for (const size of [
     { width: 800, height: 520 },
     { width: 960, height: 600 },
+    { width: 1280, height: 720 },
     { width: 1280, height: 800 },
   ]) {
     await page.setViewportSize(size);
     await page.goto("/");
+    for (const inspector of [false, true]) {
+      if (inspector) await page.getByTestId("inspector-toggle").click();
+      const box = await page.getByTestId("viewport").boundingBox();
+      expect(box, `no viewport at ${size.width} x ${size.height}`).not.toBeNull();
+      const share = { w: box!.width / size.width, h: box!.height / size.height };
+      const where = `${size.width} x ${size.height}, inspector ${inspector ? "open" : "closed"}`;
+      console.warn(`viewport ${box!.width} x ${box!.height} in ${where}`);
+      expect(share.w, `viewport ${box!.width} px wide at ${where}`).toBeGreaterThanOrEqual(inspector ? 0.5 : 0.999);
+      expect(share.h, `viewport ${box!.height} px tall at ${where}`).toBeGreaterThanOrEqual(size.height >= 720 ? 0.8 : 0.5);
+    }
+    // Nothing in the header is cut off or pushed out of the window.
+    const clipped = await page.evaluate(() =>
+      Array.from(document.querySelectorAll(".topbar button, .topbar [data-testid]"))
+        .filter((e) => {
+          const r = e.getBoundingClientRect();
+          return r.width > 0 && (r.right > innerWidth + 0.5 || r.left < -0.5);
+        })
+        .map((e) => e.getAttribute("data-testid") ?? e.textContent),
+    );
+    expect(clipped, `header controls outside a ${size.width} px window`).toEqual([]);
+  }
+
+  // With nothing to say the status banner renders nothing, and the viewport and the time bar keep
+  // their rows: the time bar used to slide into the viewport's row and stretch to 220 px of empty
+  // bar. From 1280 px up the bar is one row, with the inspector open too.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/");
+  await expect(page.getByTestId("connection-state")).toHaveAttribute("data-state", "streaming", { timeout: 60_000 });
+  await expect(page.getByTestId("status-banner")).toHaveCount(0, { timeout: 30_000 });
+  for (const inspector of [false, true]) {
+    if (inspector) await page.getByTestId("inspector-toggle").click();
+    const bar = await page.getByTestId("time-controls").boundingBox();
     const box = await page.getByTestId("viewport").boundingBox();
-    expect(box, `no viewport at ${size.width} x ${size.height}`).not.toBeNull();
-    const share = { w: box!.width / size.width, h: box!.height / size.height };
-    console.log(`viewport ${box!.width} x ${box!.height} in ${size.width} x ${size.height}`);
-    expect(share.w, `viewport ${box!.width} px wide in a ${size.width} px window`).toBeGreaterThanOrEqual(0.5);
-    expect(share.h, `viewport ${box!.height} px tall in a ${size.height} px window`).toBeGreaterThanOrEqual(0.5);
+    const where = `1280 x 720, no banner, inspector ${inspector ? "open" : "closed"}`;
+    console.warn(`time bar ${bar!.height} px, viewport ${box!.width} x ${box!.height} at ${where}`);
+    expect(bar!.height, `time bar height at ${where}`).toBeLessThanOrEqual(48);
+    expect(box!.height / 720, `viewport ${box!.height} px tall at ${where}`).toBeGreaterThanOrEqual(0.8);
   }
 });

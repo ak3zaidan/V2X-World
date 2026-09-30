@@ -140,7 +140,30 @@ export async function open(page: Page): Promise<void> {
   await page.goto("/");
   await streaming(page);
   // The engine's own settings list, not the built-in fallback.
-  await expect(page.getByTestId("schema-source")).toContainText("settings are the ones this engine accepts");
+  await openSettings(page);
+  await expect(page.getByTestId("schema-source")).toContainText("each with what this engine does with it");
+  await closeSettings(page);
+}
+
+/** Open the settings window from its gear, as a user would, unless it is open already. */
+export async function openSettings(page: Page): Promise<void> {
+  const settings = page.getByTestId("settings-window");
+  if (await settings.isVisible()) return;
+  await page.getByTestId("settings-button").click();
+  await expect(settings).toBeVisible();
+}
+
+/** Close the settings window, so the time controls under it can be pressed. */
+export async function closeSettings(page: Page): Promise<void> {
+  const settings = page.getByTestId("settings-window");
+  if (!(await settings.isVisible())) return;
+  // Run closes the window itself once the run it started is going, which can be a moment after the
+  // run is already visible in `run.status`; a click on a window that closed meanwhile is not a failure.
+  await page
+    .getByTestId("settings-close")
+    .click({ timeout: 5_000 })
+    .catch(() => undefined);
+  await expect(settings).toHaveCount(0);
 }
 
 export async function streaming(page: Page, timeout = 60_000): Promise<void> {
@@ -148,14 +171,16 @@ export async function streaming(page: Page, timeout = 60_000): Promise<void> {
 }
 
 /**
- * Put a value into one setting of the form, by its JSON Pointer.
+ * Put a value into one setting of the settings window, by its JSON Pointer, and leave the window
+ * open (Apply and Run are in its footer).
  *
- * The filter box is used to reach it, because the groups are collapsible and a field in a closed
- * group is not interactable — which is also how a user finds one setting among a hundred.
+ * The search box is used to reach it — with the pointer, which the search matches as a path — which
+ * is also how a user finds one setting among a hundred and forty.
  */
 export async function setField(page: Page, pointer: string, value: string): Promise<void> {
+  await openSettings(page);
   const filter = page.getByTestId("settings-filter");
-  await filter.fill(pointer.split("/").pop() ?? pointer);
+  await filter.fill(pointer);
   const row = page.locator(`[data-testid="setting"][data-pointer="${pointer}"]`);
   await expect(row).toBeVisible();
   const select = row.locator("select");
@@ -177,6 +202,8 @@ export async function setField(page: Page, pointer: string, value: string): Prom
  */
 export async function runToEnd(page: Page, button = "run-start", timeoutMs = 180_000): Promise<Status> {
   const before = (await status(page)).generation;
+  // The settings window's Run applies unapplied edits; it closes the window once the run starts.
+  if (button === "run-start") await openSettings(page);
   await page.getByTestId(button).click();
   const deadline = Date.now() + timeoutMs;
   let last: Status = await status(page);
