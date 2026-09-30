@@ -167,6 +167,17 @@ const MAX_RANGE_M: f64 = 1000.0;
 /// waits, and a run that hit it would be a run whose MAC is not draining.
 const MAX_GRANTS_PER_TIMER: u32 = 8;
 
+/// Below this many links a frame's geometry map runs on the calling thread.
+///
+/// The event loop runs outside the `rayon` pool, so every parallel map is a hand-off: the
+/// job is injected, a sleeping worker is woken, and the loop blocks on a latch until it is
+/// done — tens of microseconds on a loaded machine, against a few microseconds a link.
+/// Every map here is indexed or re-sorted before use, so the thread it ran on reaches no
+/// output; this is a cost choice and nothing else.
+const PAR_MIN_LINKS: usize = 8;
+/// [`PAR_MIN_LINKS`] for the reception decisions, which are cheaper per receiver.
+const PAR_MIN_DECISIONS: usize = 24;
+
 /// How long a despawned node's per-link radio state is kept before
 /// [`Engine::sweep_retired_links`] may drop it. Far longer than anything that can still be
 /// in flight at a despawn — a frame lasts milliseconds — so the sweep never races one.
@@ -3719,12 +3730,14 @@ impl Engine {
         let geometry: Vec<link::LinkGeometry> = {
             let view = self.link_view();
             let (tx, tx_pos, tx_heading) = (state.tx, state.tx_pos, state.tx_heading);
-            within
-                .par_iter()
-                .map(|&(rx, rx_pos, rx_heading)| {
-                    view.geometry(tx, tx_pos, tx_heading, rx, rx_pos, rx_heading, now)
-                })
-                .collect()
+            let one = |&(rx, rx_pos, rx_heading): &(NodeId, Vec3, Option<f64>)| {
+                view.geometry(tx, tx_pos, tx_heading, rx, rx_pos, rx_heading, now)
+            };
+            if within.len() < PAR_MIN_LINKS {
+                within.iter().map(one).collect()
+            } else {
+                within.par_iter().map(one).collect()
+            }
         };
         for (&(rx, rx_pos), geometry) in candidates.iter().zip(geometry) {
             let (rssi, dist, high, placement) = self.link_budget(&state, rx, rx_pos, geometry);
@@ -3751,20 +3764,22 @@ impl Engine {
         let beyond_power: Vec<Option<f64>> = {
             let view = self.link_view();
             let range = &self.range;
-            beyond
-                .par_iter()
-                .map(|&(rx, rx_pos)| {
-                    let rx_end = view.endpoint(rx, rx_pos, now);
-                    if view
-                        .obstacles
-                        .blocked_shared(view.world, tx_antenna, rx_end.pos)
-                    {
-                        return None;
-                    }
-                    let d = tx_antenna.distance(rx_end.pos);
-                    Some(range.los_power_dbm(eirp_dbm, rx_end.gain_dbi, d))
-                })
-                .collect()
+            let one = |&(rx, rx_pos): &(NodeId, Vec3)| {
+                let rx_end = view.endpoint(rx, rx_pos, now);
+                if view
+                    .obstacles
+                    .blocked_shared(view.world, tx_antenna, rx_end.pos)
+                {
+                    return None;
+                }
+                let d = tx_antenna.distance(rx_end.pos);
+                Some(range.los_power_dbm(eirp_dbm, rx_end.gain_dbi, d))
+            };
+            if beyond.len() < PAR_MIN_LINKS {
+                beyond.iter().map(one).collect()
+            } else {
+                beyond.par_iter().map(one).collect()
+            }
         };
         for (&(rx, _), power) in beyond.iter().zip(beyond_power) {
             if let Some(power) = power {
@@ -3962,61 +3977,64 @@ impl Engine {
         // A fragment's success probability is what 04-models.md §7.4's prediction is built
         // from; it costs one more pass over the SINR windows, so only fragments pay it.
         let fragment = state.frag.is_some() || state.cert_frag.is_some();
-        state
-            .arrivals
-            .par_iter()
-            .map(|(&rx, &(power_dbm, distance_m))| {
-                let mut out = LinkOutcome {
-                    rx,
-                    rssi_dbm: v2xw_radio::numeric::q_db(power_dbm),
-                    sinr_db: f64::NEG_INFINITY,
-                    distance_m,
-                    received: false,
-                    cause: Some(LossCause::OutOfRange),
-                    copies: None,
-                    psr: fragment.then_some(0.0),
-                };
-                let Some(arrival) = phy.arrival(RxHandle { tx: tx_id, rx }) else {
-                    // Nothing was registered for this receiver, which the PHY reports as
-                    // out of range rather than as a reception that failed.
-                    return out;
-                };
-                let windows = phy.sinr_windows(arrival);
-                // Reported, never used for the decision: the decision is per window.
-                let mean_sinr = if windows.is_empty() {
-                    f64::NEG_INFINITY
-                } else {
-                    v2xw_core::math::sum_ordered(windows.iter().map(|(_, _, s)| *s))
-                        / windows.len() as f64
-                };
-                out.sinr_db = v2xw_radio::numeric::q_db(mean_sinr);
-                // The draw is keyed by (link, frame), so a receiver's outcome depends on
-                // neither the thread that computed it nor how many frames the link has
-                // already carried.
-                let draw = rng.checkout(domain, OfdmPhy::frame_key(arrival)).f64();
-                let decided_high = high || state.focus_high.contains(&rx);
-                match phy.decide(arrival, decided_high, draw) {
-                    v2xw_radio::RxOutcome::Received { .. } => {
-                        out.received = true;
-                        out.cause = None;
-                    }
-                    v2xw_radio::RxOutcome::Lost(cause) => out.cause = Some(cause),
+        let one = |(&rx, &(power_dbm, distance_m)): (&NodeId, &(f64, f64))| {
+            let mut out = LinkOutcome {
+                rx,
+                rssi_dbm: v2xw_radio::numeric::q_db(power_dbm),
+                sinr_db: f64::NEG_INFINITY,
+                distance_m,
+                received: false,
+                cause: Some(LossCause::OutOfRange),
+                copies: None,
+                psr: fragment.then_some(0.0),
+            };
+            let Some(arrival) = phy.arrival(RxHandle { tx: tx_id, rx }) else {
+                // Nothing was registered for this receiver, which the PHY reports as
+                // out of range rather than as a reception that failed.
+                return out;
+            };
+            let windows = phy.sinr_windows(arrival);
+            // Reported, never used for the decision: the decision is per window.
+            let mean_sinr = if windows.is_empty() {
+                f64::NEG_INFINITY
+            } else {
+                v2xw_core::math::sum_ordered(windows.iter().map(|(_, _, s)| *s))
+                    / windows.len() as f64
+            };
+            out.sinr_db = v2xw_radio::numeric::q_db(mean_sinr);
+            // The draw is keyed by (link, frame), so a receiver's outcome depends on
+            // neither the thread that computed it nor how many frames the link has
+            // already carried.
+            let draw = rng.checkout(domain, OfdmPhy::frame_key(arrival)).f64();
+            let decided_high = high || state.focus_high.contains(&rx);
+            match phy.decide(arrival, decided_high, draw) {
+                v2xw_radio::RxOutcome::Received { .. } => {
+                    out.received = true;
+                    out.cause = None;
                 }
-                if fragment {
-                    // The deterministic refusals decode with probability zero; everything
-                    // else is the error model's probability under the interference present.
-                    out.psr = Some(match out.cause {
-                        Some(
-                            LossCause::HalfDuplex
-                            | LossCause::BelowSensitivity
-                            | LossCause::PreambleMissed,
-                        ) => 0.0,
-                        _ => phy.success_probability(arrival),
-                    });
-                }
-                out
-            })
-            .collect()
+                v2xw_radio::RxOutcome::Lost(cause) => out.cause = Some(cause),
+            }
+            if fragment {
+                // The deterministic refusals decode with probability zero; everything
+                // else is the error model's probability under the interference present.
+                out.psr = Some(match out.cause {
+                    Some(
+                        LossCause::HalfDuplex
+                        | LossCause::BelowSensitivity
+                        | LossCause::PreambleMissed,
+                    ) => 0.0,
+                    _ => phy.success_probability(arrival),
+                });
+            }
+            out
+        };
+        // Below a handful of receivers the pool's hand-off costs more than the decisions;
+        // the closure and the sort after it are the same either way.
+        if state.arrivals.len() < PAR_MIN_DECISIONS {
+            state.arrivals.iter().map(one).collect()
+        } else {
+            state.arrivals.par_iter().map(one).collect()
+        }
     }
 
     /// Records, delivers and retires one frame whose outcomes have been decided.
