@@ -410,9 +410,17 @@ export function worstFirst<T extends { readonly key: string; readonly value: num
 
 /** Numeric keys (node ids) in number order, the rest as text. */
 export function compareKeys(a: string, b: string): number {
-  const na = Number(a);
-  const nb = Number(b);
-  if (Number.isFinite(na) && Number.isFinite(nb) && a.trim() !== "" && b.trim() !== "") return na - nb;
+  // By the number a key starts with, as the engine orders groups (`introspect.rs` `group_order`):
+  // node 9 before node 10, and the distance bin `50-100` before `100-150`.
+  const lead = (k: string): number | null => {
+    const m = /^\d+(?:\.\d+)?/.exec(k.trim());
+    return m ? Number(m[0]) : null;
+  };
+  const na = lead(a);
+  const nb = lead(b);
+  if (na !== null && nb !== null && na !== nb) return na - nb;
+  if (na !== null && nb === null) return -1;
+  if (na === null && nb !== null) return 1;
   return a.localeCompare(b);
 }
 
@@ -702,6 +710,8 @@ export function formatNumber(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "—";
   const a = Math.abs(v);
   if (a === 0) return "0";
+  // A whole number reads as one, at any size: an axis tick of 200 m is "200", not "200.0".
+  if (Number.isInteger(v) && a < 1e15) return v.toLocaleString("en-US");
   if (a >= 1e6) return v.toLocaleString("en-US", { maximumFractionDigits: 0 });
   if (a >= 1000) return v.toLocaleString("en-US", { maximumFractionDigits: 0 });
   if (a >= 100) return v.toFixed(1);

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendSeries,
   chooseBinNs,
+  compareKeys,
   decimate,
   familiesOf,
   formatWithUnit,
@@ -117,6 +118,10 @@ describe("worst first", () => {
   it("puts the lowest first where higher is better, the highest where lower is", () => {
     expect(worstFirst(rows, "higher-better").map((r) => r.key)).toEqual(["1", "10", "3", "2"]);
     expect(worstFirst(rows, "lower-better").map((r) => r.key)).toEqual(["3", "1", "10", "2"]);
+  });
+  it("orders keys by the number they start with, as the engine does", () => {
+    expect(["100-150", "0-50", "1000+", "50-100", "unbinned"].sort(compareKeys)).toEqual(["0-50", "50-100", "100-150", "1000+", "unbinned"]);
+    expect(["10", "9", "100"].sort(compareKeys)).toEqual(["9", "10", "100"]);
   });
 });
 
@@ -250,6 +255,8 @@ describe("numbers carry units", () => {
     expect(formatWithUnit(0.9421, "ratio")).toBe("0.942");
     expect(formatWithUnit(12_345, "count")).toBe("12,345 count");
     expect(formatWithUnit(null, "ms")).toBe("—");
+    expect(formatWithUnit(200, "m")).toBe("200 m");
+    expect(formatWithUnit(0.5, "ratio")).toBe("0.5");
   });
 });
 
