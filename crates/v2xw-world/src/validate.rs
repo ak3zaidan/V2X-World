@@ -813,6 +813,24 @@ fn figures(world: &World, report: &mut ValidationReport) {
             .figures
             .insert(format!("signals.cycle_{c:03}s"), n as f64);
     }
+    // Coordination and the major phase's share of the cycle (its first green).
+    let offset = world.signals.iter().filter(|p| p.offset_s != 0.0).count();
+    report
+        .figures
+        .insert("signals.offset_nonzero".to_string(), offset as f64);
+    let shares: Vec<f64> = world
+        .signals
+        .iter()
+        .filter(|p| p.cycle_s > 0.0)
+        .filter_map(|p| p.phases.first().map(|g| g.duration_s / p.cycle_s))
+        .collect();
+    if !shares.is_empty() {
+        let mean = shares.iter().sum::<f64>() / shares.len() as f64;
+        report.figures.insert(
+            "signals.first_green_share_mean".to_string(),
+            (mean * 1000.0).round() / 1000.0,
+        );
+    }
     report.figures.insert(
         "buildings.with_holes".to_string(),
         world.buildings.iter().filter(|b| !b.holes.is_empty()).count() as f64,

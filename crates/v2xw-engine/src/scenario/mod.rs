@@ -215,6 +215,7 @@ impl Scenario {
                 cache: None,
                 // A procedural world needs no jurisdiction; only an OSM import does.
                 highway_preset: None,
+                signals: schema::WorldSignalOptions::default(),
             },
             actors: Actors::default(),
             weather: Weather::default(),

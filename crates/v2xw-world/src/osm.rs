@@ -4504,6 +4504,25 @@ fn section_fingerprint(section: &[crate::section::LaneSpec]) -> u64 {
     h
 }
 
+/// The heading of a polyline leaving its start (`from_start`) or leaving its end backwards,
+/// measured over its first (last) 5 m, radians.
+fn leaving_heading(points: &[Vec3], from_start: bool) -> f64 {
+    let n = points.len();
+    let (origin, walk): (Vec3, Vec<Vec3>) = if from_start {
+        (points[0], points[1..].to_vec())
+    } else {
+        (points[n - 1], points[..n - 1].iter().rev().copied().collect())
+    };
+    let mut target = walk.first().copied().unwrap_or(origin);
+    for p in walk {
+        target = p;
+        if p.distance_2d(origin) >= 5.0 {
+            break;
+        }
+    }
+    math::atan2(target.y - origin.y, target.x - origin.x)
+}
+
 /// Computes [`JunctionRadii`] for every road end of `segments`.
 fn junction_radii(segments: &[Segment], plans: &[WayPlan], options: &OsmOptions) -> JunctionRadii {
     let mut motor: BTreeMap<i64, f64> = BTreeMap::new();
@@ -4511,6 +4530,8 @@ fn junction_radii(segments: &[Segment], plans: &[WayPlan], options: &OsmOptions)
     // Each motor arm as seen leaving the node: (its lanes out, its lanes in — each the
     // whole cross-section, fingerprinted — lane width bits, levels below, levels above).
     let mut arms: BTreeMap<i64, Vec<(u64, u64, u64, u8, u8)>> = BTreeMap::new();
+    // Each motor arm's heading leaving the node, and its half width.
+    let mut arm_heading: BTreeMap<i64, Vec<(f64, f64)>> = BTreeMap::new();
     for segment in segments {
         let plan = &plans[segment.plan];
         let half = plan.half_width_m();
@@ -4533,6 +4554,10 @@ fn junction_radii(segments: &[Segment], plans: &[WayPlan], options: &OsmOptions)
                     plan.levels_below,
                     plan.levels_above,
                 ));
+                arm_heading
+                    .entry(node)
+                    .or_default()
+                    .push((leaving_heading(&segment.points, leaving), half));
             } else {
                 let r = soft.entry(node).or_insert(0.0);
                 *r = r.max(half);
@@ -4558,7 +4583,15 @@ fn junction_radii(segments: &[Segment], plans: &[WayPlan], options: &OsmOptions)
             && shapes[0].3 == shapes[1].3
             && shapes[0].4 == shapes[1].4
         {
-            *r = MIN_JUNCTION_RADIUS_M;
+            // Where the street bends at the split, the lanes' offset lines cross on the
+            // inside of the bend and part on the outside, and a 2 m connector joining them
+            // turned 10-12° in a car's length (Portland's split ways). Leave room for the
+            // design radius through the bend: `(R + d) tan(θ/2)`, `d` the half width.
+            let (h0, d0) = arm_heading[node][0];
+            let (h1, d1) = arm_heading[node][1];
+            let bend = normalise_angle(h1 - h0 - core::f64::consts::PI).abs().min(1.2);
+            let room = (TURN_DESIGN_RADIUS_M + d0.max(d1)) * math::tan(0.5 * bend);
+            *r = MIN_JUNCTION_RADIUS_M.max(room + 0.5 * f64::from(u8::from(bend > 0.02)));
         }
         *r = r.clamp(MIN_JUNCTION_RADIUS_M, MAX_JUNCTION_RADIUS_M);
     }
@@ -9507,6 +9540,13 @@ fn build_junction_shapes(net: &mut Net) {
         }
         for lane in &net.junctions[j].outgoing {
             points.push(net.lanes[lane.as_usize()].start());
+        }
+        // And every connector's path: a turn's arc bulges past the hull of the lane ends
+        // (netconvert sizes a junction's shape to its internal lanes for the same reason),
+        // and the auditor found connectors running up to 3.8 m outside their junction on
+        // Portland's skewed corners and cars' bodies 2.5 m outside it in Berlin.
+        for lane in &net.junctions[j].internal {
+            points.extend(net.lanes[lane.as_usize()].centreline.iter().copied());
         }
         net.junctions[j].shape = convex_hull(&points);
     }
