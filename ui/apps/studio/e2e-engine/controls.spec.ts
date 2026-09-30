@@ -104,9 +104,18 @@ test("every control does what it says", async ({ page }) => {
     await expect(page.getByTestId("settings-filter")).not.toBeFocused(quick);
     await page.keyboard.press(process.platform === "darwin" ? "Meta+KeyF" : "Control+KeyF");
     await expect(page.getByTestId("settings-filter")).toBeFocused(quick);
+    // The arrow keys walk the group tree: the first group, the next entry, then the last.
+    const groups = page.getByTestId("settings-tree-group");
+    await groups.first().focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(groups.first(), "ArrowDown leaves the first group").not.toBeFocused(quick);
+    await page.keyboard.press("End");
+    await expect(page.getByTestId("settings-tree").locator(".tree-item").last()).toBeFocused(quick);
+    await page.keyboard.press("Home");
+    await expect(page.getByTestId("settings-tree").locator(".tree-item").first()).toBeFocused(quick);
     await page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
     await expect(page.getByTestId("settings-window")).toHaveCount(0, quick);
-    return "gear opens with the search focused; Esc closes and returns focus; the shortcut toggles; Ctrl/Cmd+F finds the search";
+    return "gear opens with the search focused; Esc closes and returns focus; the shortcut toggles; Ctrl/Cmd+F finds the search; arrows walk the tree";
   });
   await check("header: inspector toggle", "show and hide the inspector", async () => {
     const before = await page.getByTestId("inspector-panel").count();

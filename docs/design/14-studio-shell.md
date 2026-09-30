@@ -96,7 +96,7 @@ Modelled on VS Code's settings editor.
   with an underscore matches whole or in its parts (`duration_s`, `duration`).
 * A category tree on the left from the engine's published groups (`x-group`), each with its second
   level (the scenario section under it) and a count. Clicking one scrolls to it; the tree follows
-  the scroll.
+  the scroll; the arrow keys, Home and End walk it.
 * Each setting: title, unit, the engine's status (applied / partly applied / not applied, with the
   engine's sentence), description, the control, the default, the dotted path. A setting whose value
   is not the default carries a **modified** bar and a *Reset to default*; an unapplied edit carries

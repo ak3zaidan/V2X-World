@@ -288,7 +288,29 @@ export function SettingsWindow({
       </div>
 
       <div className="settings-body">
-        <nav className="settings-tree" aria-label="Setting groups" data-testid="settings-tree">
+        <nav
+          className="settings-tree"
+          aria-label="Setting groups"
+          data-testid="settings-tree"
+          onKeyDown={(e) => {
+            // The arrow keys walk the tree, as they do in VS Code's table of contents, so a keyboard
+            // user does not tab through thirty entries to reach the last group.
+            if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
+            const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(".tree-item"));
+            if (items.length === 0) return;
+            e.preventDefault();
+            const at = items.indexOf(document.activeElement as HTMLElement);
+            const next =
+              e.key === "Home"
+                ? 0
+                : e.key === "End"
+                  ? items.length - 1
+                  : e.key === "ArrowDown"
+                    ? Math.min(items.length - 1, at + 1)
+                    : Math.max(0, at - 1);
+            items[next]?.focus();
+          }}
+        >
           <button
             type="button"
             className={active === SCENARIO_SECTION ? "tree-item on" : "tree-item"}
