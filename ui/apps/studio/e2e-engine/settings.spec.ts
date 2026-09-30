@@ -13,6 +13,10 @@
  *     and an Apply there reaches this page.
  */
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { expect, test } from "@playwright/test";
 
 import { EngineProcess, closeSettings, open, openSettings, runToEnd, status, writeScenarios } from "./support.js";
@@ -137,6 +141,63 @@ test("search, edit, undo, reset, JSON round trip, apply to the next run", async 
   await expect(page.getByTestId("settings-window"), "a reload on #settings reopens the window").toBeVisible({ timeout: 60_000 });
   await closeSettings(page);
   expect(page.url()).not.toContain("#settings");
+});
+
+/**
+ * A setting the engine refuses reads as that setting and its fix, wherever it is pressed — never as
+ * "internal error" — and a refused Run leaves the run on screen as it was.
+ *
+ * The terrain raster is the case: Apply accepts a file that is there, the file is then deleted, and
+ * the header's Run is refused by the engine (`-32004`, found by its preflight before it touches the
+ * run). Before this round that was "run.start failed: internal error: world: io: No such file…",
+ * and the header's Run showed nothing at all.
+ */
+test("a refused setting names itself: Check, and the header's Run, with the run on screen kept", async ({ page }) => {
+  await open(page);
+  const dir = mkdtempSync(join(tmpdir(), "vwp-refusal-"));
+  const dem = join(dir, "terrain.asc");
+  writeFileSync(dem, "ncols 2\nnrows 2\nxllcorner 0\nyllcorner 0\ncellsize 1\n0 0\n0 0\n");
+  const rpc = (method: string, params: unknown): Promise<unknown> =>
+    page.evaluate(
+      async ([m, p]) =>
+        (window.__vwpStudio?.engine as unknown as { requestHttp(m: string, p: unknown): Promise<unknown> }).requestHttp(m, p),
+      [method, params] as const,
+    );
+  // Staged while the file is there: Apply accepts it.
+  const staged = (await rpc("scenario.set", { patch: [{ op: "add", path: "/world/terrain/dem", value: dem }] })) as { valid: boolean };
+  expect(staged.valid, "a raster that exists is accepted").toBe(true);
+  // The page re-reads what the engine holds for the next run, as it does after an Apply, so the
+  // form (which Check sends) carries the raster too.
+  await page.evaluate(async () => {
+    await (window.__vwpStudio?.engine as unknown as { refreshScenario(): Promise<void> }).refreshScenario();
+  });
+  rmSync(dir, { recursive: true, force: true });
+
+  const before = await status(page);
+  await page.getByTestId("primary-action").click();
+  const said = page.getByTestId("primary-action-error");
+  await expect(said, "the header's Run says why it did not start").toBeVisible({ timeout: 60_000 });
+  await expect(said).toContainText("world.terrain.dem");
+  await expect(said).toContainText("does not exist");
+  await expect(said).not.toContainText(/internal error|-3200\d|-32603/);
+  const after = await status(page);
+  expect(after.generation, "no run was started").toBe(before.generation);
+  expect(after.state, "the run on screen is not put into error").not.toBe("error");
+
+  // The settings window marks the field, and Check says the same.
+  await openSettings(page);
+  await expect(page.getByTestId("validation-err")).toContainText("/world/terrain/dem");
+  await page.getByTestId("validate").click();
+  await expect(page.getByTestId("scenario-message")).toContainText("need fixing");
+  await expect(page.getByTestId("validation-err")).toContainText("does not exist");
+
+  // Withdraw the staged scenario so the next test starts from the file's own.
+  await rpc("scenario.load", { path: after.scenario_hash });
+  await page.evaluate(async () => {
+    await (window.__vwpStudio?.engine as unknown as { refreshScenario(): Promise<void> }).refreshScenario();
+  });
+  expect((await status(page)).staged_hash, "nothing is left staged").toBeNull();
+  await closeSettings(page);
 });
 
 test("the settings open in a window of their own, and an Apply there reaches this page", async ({ page, context }) => {

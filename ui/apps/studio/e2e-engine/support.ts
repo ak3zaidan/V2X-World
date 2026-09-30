@@ -98,6 +98,21 @@ export class EngineProcess {
     return Number(execFileSync("ps", ["-o", "rss=", "-p", String(this.pid)]).toString().trim());
   }
 
+  /**
+   * Physical footprint, kilobytes: what the process costs the machine, as `footprint` reports it.
+   *
+   * `ps` RSS is not a leak measure on this machine: macOS compresses a process's pages under memory
+   * pressure and RSS drops with them, so one soak read 25.9 MB at run 20 and 132.9 MB at run 30 with
+   * nothing leaking in between. The footprint counts compressed pages too.
+   */
+  footprintKb(): number {
+    const text = execFileSync("footprint", ["-p", String(this.pid)]).toString();
+    const m = /phys_footprint:\s+([\d.]+)\s*(B|KB|MB|GB)/.exec(text);
+    if (!m) return this.rssKb();
+    const scale: Record<string, number> = { B: 1 / 1024, KB: 1, MB: 1024, GB: 1024 * 1024 };
+    return Number(m[1]) * scale[m[2]];
+  }
+
   /** How many threads the process has. */
   threads(): number {
     return execFileSync("ps", ["-M", "-p", String(this.pid)]).toString().trim().split("\n").length - 1;
