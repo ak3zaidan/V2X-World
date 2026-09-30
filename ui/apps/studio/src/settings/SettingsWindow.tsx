@@ -198,7 +198,19 @@ export function SettingsWindow({
     );
 
   return (
-    <div className={detached ? "settings-window detached" : "settings-window"} data-testid="settings-window">
+    <div
+      className={detached ? "settings-window detached" : "settings-window"}
+      data-testid="settings-window"
+      onKeyDown={(e) => {
+        // Ctrl/Cmd + F goes to the search box, as it does in VS Code's settings editor, from
+        // anywhere in the window — the browser's find would search the page, not the settings.
+        if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f") {
+          e.preventDefault();
+          search.current?.focus();
+          search.current?.select();
+        }
+      }}
+    >
       <div className="settings-head">
         <h2>Settings</h2>
         <div className="settings-search">

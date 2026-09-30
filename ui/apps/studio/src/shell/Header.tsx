@@ -171,6 +171,8 @@ function AppMenu(): React.JSX.Element {
           <div className="menu-note faint shortcuts" aria-label="Keyboard shortcuts">
             <span>Settings</span>
             <kbd>{MOD},</kbd>
+            <span>Search the settings</span>
+            <kbd>{MOD}F</kbd>
             <span>Close a panel</span>
             <kbd>Esc</kbd>
             <span>Camera mode</span>

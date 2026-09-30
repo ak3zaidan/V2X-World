@@ -269,7 +269,11 @@ test("light theme renders and the actor-state legend keeps shape redundancy", as
     .poll(async () => page.evaluate(() => (window as unknown as { __vwpStudio?: { actorCount(): number } }).__vwpStudio?.actorCount() ?? 0), { timeout: 30_000 })
     .toBeGreaterThan(10);
   await page.waitForTimeout(2500);
+  // The theme is set once, so it lives in the header's menu rather than on the header itself.
+  await page.getByTestId("app-menu-button").click();
   await page.getByTestId("theme-toggle").click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("app-menu")).toHaveCount(0);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.getByTestId("state-legend")).toBeVisible();
   // Five state glyphs, each its own shape; the road-user key the vru track added (a vehicle dot

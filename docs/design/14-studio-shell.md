@@ -91,8 +91,9 @@ Modelled on VS Code's settings editor.
 * Opens from the gear or **Ctrl/Cmd + ,**; covers the page under the header; **Open in new window**
   puts it in its own browser window (`?view=settings`), which talks to the engine over HTTP only —
   no stream, no WebGL — and tells the main window when it applied or ran something.
-* A search box, focused on open, that filters every setting by title, description, dotted path,
-  pointer, group and the engine's status note. Words are ANDed.
+* A search box, focused on open and again on **Ctrl/Cmd + F**, that filters every setting by title,
+  description, dotted path, pointer, group and the engine's status note. Words are ANDed; a word
+  with an underscore matches whole or in its parts (`duration_s`, `duration`).
 * A category tree on the left from the engine's published groups (`x-group`), each with its second
   level (the scenario section under it) and a count. Clicking one scrolls to it; the tree follows
   the scroll.

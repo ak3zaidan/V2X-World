@@ -99,9 +99,14 @@ test("every control does what it says", async ({ page }) => {
     await expect(page.getByTestId("settings-button"), "focus goes back to the gear").toBeFocused(quick);
     await page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
     await expect(page.getByTestId("settings-window")).toBeVisible(quick);
+    // Ctrl/Cmd + F from anywhere in the window goes back to the search box.
+    await page.getByTestId("settings-view-json").focus();
+    await expect(page.getByTestId("settings-filter")).not.toBeFocused(quick);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+KeyF" : "Control+KeyF");
+    await expect(page.getByTestId("settings-filter")).toBeFocused(quick);
     await page.keyboard.press(process.platform === "darwin" ? "Meta+Comma" : "Control+Comma");
     await expect(page.getByTestId("settings-window")).toHaveCount(0, quick);
-    return "gear opens with the search focused; Esc closes and returns focus; the shortcut toggles";
+    return "gear opens with the search focused; Esc closes and returns focus; the shortcut toggles; Ctrl/Cmd+F finds the search";
   });
   await check("header: inspector toggle", "show and hide the inspector", async () => {
     const before = await page.getByTestId("inspector-panel").count();
