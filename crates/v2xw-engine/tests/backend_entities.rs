@@ -572,3 +572,45 @@ fn a_hybrid_signature_is_the_credential_systems_scheme_too() {
     assert!(up(&hv, &hybrid) > up(&cv, &classic) + 3.0 * 897.0);
     assert_eq!(hybrid.phase2.backend_errors, 0, "{}", hybrid.phase2.first_backend_error);
 }
+
+/// The shipped `scenarios/credential-lifecycle.yaml` — what a researcher opens to watch the
+/// SCMS work — loads, validates and, in its first three minutes, does what its header says:
+/// top-ups through the LOP, enrolment renewals at the ECA, and misbehaviour reports
+/// reaching the MA.
+#[test]
+fn the_credential_lifecycle_scenario_shows_every_stage() {
+    let mut s = Scenario::load(scenarios().join("credential-lifecycle.yaml"))
+        .expect("the shipped scenario loads");
+    // The shipped file validates as it is; three minutes are enough to see every stage, and
+    // the attack window is cut to the shorter run.
+    assert!(v2xw_engine::scenario::validate::validate(&s).is_empty());
+    s.time.duration_s = 180.0;
+    if let Some(w) = s.threats.attackers[0].schedule.as_mut() {
+        w.to_s = 180.0;
+    }
+    let (report, rec) = run(s);
+    let p = &report.phase2;
+    println!(
+        "top-ups {}/{} ({} certs), renewals {}/{}, reports {} sent {} at the MA, {} \
+         decisions, {} CRL versions, {} installs, {} RSU CRL frames",
+        p.topups_completed,
+        p.topups_started,
+        p.certs_topped_up,
+        p.reenrolments_completed,
+        p.reenrolments_started,
+        p.reports_sent,
+        p.reports_at_ma,
+        p.ma_revoke_decisions,
+        p.crl_versions_published,
+        p.crls_installed,
+        p.crl_broadcasts
+    );
+    assert!(p.topups_completed > 0, "no top-up completed");
+    assert!(p.reenrolments_completed > 0, "no enrolment was renewed");
+    assert!(p.reports_at_ma > 0, "no report reached the MA");
+    assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
+    let last = records(&rec, "backend.state").pop().expect("a view");
+    for (a, b) in [("ee", "lop"), ("lop", "ra"), ("ra", "pca"), ("ra", "la1"), ("lop", "ee")] {
+        assert!(edge(&last, a, b), "no {a} -> {b} edge");
+    }
+}

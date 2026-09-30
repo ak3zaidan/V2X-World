@@ -63,6 +63,8 @@ test("the Backend view draws every SCMS entity with the engine's counts", async 
   // The first snapshot is published a simulated second in.
   await expect(panel.getByTestId("backend-diagram")).toBeVisible({ timeout: 60_000 });
   await expect(panel).toContainText("US SCMS");
+  // The scheme every certificate and signed message uses, as the engine reports it.
+  await expect(panel.getByTestId("backend-time")).toContainText("ecdsa-p256");
 
   for (const id of ["manager", "pg", "electors", "root", "ica", "dcm", "eca", "lop", "ra", "la1", "la2", "pca", "ma", "crlg", "crl-store", "ee"]) {
     await expect(panel.getByTestId(`backend-entity-${id}`), `${id} is drawn`).toHaveCount(1);
