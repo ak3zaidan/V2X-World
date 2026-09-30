@@ -1367,6 +1367,9 @@ pub enum DccAlgorithm {
     ReactiveTs102687,
     /// `dcc/sae/j2945-1-rate-power` (04-models.md §6.4).
     SaeJ2945_1,
+    /// `dcc/sae/j3161-1-rate`: SAE J3161/1's rate control for LTE-V2X, J2945/1's density
+    /// rule without its power control.
+    SaeJ3161_1,
 }
 
 /// The congestion-control state of one node, as the HUD and the metrics see it

@@ -148,8 +148,8 @@ pub use abstract_tier::{
 };
 pub use budget::{LinkBudget, classify, evaluate, merge_los};
 pub use dcc::{
-    AdaptiveDcc, AdaptiveParams, En302571Floor, J2945Params, ReactiveDcc, ReactiveTable,
-    SaeJ2945Dcc,
+    AdaptiveDcc, AdaptiveParams, En302571Floor, HostState, J2945Params, J2945Trigger, PerWindow,
+    ReactiveDcc, ReactiveTable, SaeJ2945Dcc,
 };
 pub use fading::{NakagamiFading, NakagamiPreset, NoFading};
 pub use focus::{
