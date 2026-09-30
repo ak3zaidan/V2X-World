@@ -1213,7 +1213,7 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                about one pseudonym are correlated into events (every report observed \
                within event_window_s, 5 s, of an event's first is that one event, however \
                many reporters), an event counts when event_min_reporters (2) distinct \
-               trusted reporters witnessed it, and the authority revokes on min_events (4) \
+               trusted reporters witnessed it, and the authority revokes on min_events (3) \
                such events inside window_s (60 s) from min_reporters (3) trusted \
                reporters. 'threat/ma/legacy-window', the legacy persistence gate, is kept \
                for parity with the legacy corpus: report_threshold_k trusted reporters (3) \

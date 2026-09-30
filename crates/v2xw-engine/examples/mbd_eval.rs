@@ -7,7 +7,7 @@
 //!     [--attack KIND] [--count N | --fraction F] [--from S]
 //!     [--ma ID] [--detector ID] [--seed SEED] [--keep-metrics]
 //!     [--strategy NAME] [--period S] [--silent MIN,MAX] [--sniffers F [--sniffer-range M]]
-//!     [--legacy-accuracy]
+//!     [--legacy-accuracy] [--ma-params JSON] [--proto-params JSON]
 //! ```
 //!
 //! * `--no-attackers` removes every attacker population: the honest-revocation check.
@@ -102,6 +102,24 @@ fn main() {
             params: serde_json::json!({}),
         });
     }
+    if let Some(params) = value("--ma-params") {
+        let choice = s.detection.ma.get_or_insert_with(|| ModelChoice {
+            id: "threat/ma/corroborated".to_string(),
+            params: serde_json::json!({}),
+        });
+        choice.params = serde_json::from_str(&params).expect("--ma-params is JSON");
+    }
+    if let Some(params) = value("--proto-params") {
+        let extra: serde_json::Value = serde_json::from_str(&params).expect("--proto-params is JSON");
+        if let Some(choice) = s.security.protocol.as_mut() {
+            if !choice.params.is_object() {
+                choice.params = serde_json::json!({});
+            }
+            for (k, v) in extra.as_object().expect("an object") {
+                choice.params[k] = v.clone();
+            }
+        }
+    }
     if let Some(strategy) = value("--strategy") {
         s.security.pseudonym_change.strategy = strategy;
     }
@@ -186,6 +204,7 @@ fn main() {
         "honest_reported": p.honest_reported,
         "reports_at_ma": p.reports_at_ma,
         "ma_revoke_decisions": p.ma_revoke_decisions,
+        "ma_peak_unrevoked_events": p.ma_peak_unrevoked_events,
         "decisions_honest": p.decisions_honest,
         "revoked_attackers": p.revoked_attackers,
         "revoked_honest": p.revoked_honest,

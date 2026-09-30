@@ -737,6 +737,9 @@ pub struct Phase2Report {
     pub revoked_honest: u64,
     /// Decisions about a certificate the published list already revoked.
     pub decisions_already_covered: u64,
+    /// The most corroborated events any pseudonym the authority did not revoke reached
+    /// (`threat/ma/corroborated` only): the margin an honest fleet leaves to the threshold.
+    pub ma_peak_unrevoked_events: u64,
     /// Vehicles the pre-run provisioning left with no pseudonym certificate at all.
     pub vehicles_unprovisioned: u64,
     /// Receptions the live nodes' revocation gates refused for a certificate period
@@ -3278,6 +3281,8 @@ impl Phase2 {
             })
             .count() as u64;
         self.report.crl_past_horizon = self.report.crl_past_horizon.max(issued_unpublished);
+        self.report.ma_peak_unrevoked_events =
+            u64::from(self.ma.peak_unrevoked_events().unwrap_or(0));
         self.report.privacy_tracked_vehicles = self.privacy_tracked.len() as u64;
         self.report.privacy_tracked_sum_ns = self.privacy_tracked.values().sum();
         self.report.privacy_tracked_max_ns =

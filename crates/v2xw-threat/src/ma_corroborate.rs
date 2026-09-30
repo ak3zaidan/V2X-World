@@ -52,12 +52,18 @@
 //! * `event_min_reporters` = 2: an event is corroborated when a second, independent
 //!   receiver saw it. The legacy authority's k = 3 is kept as `min_reporters` over the
 //!   whole decision.
-//! * `min_events` = 4 over `window_s` = 60 s: at least 15 s of sustained, independently
-//!   witnessed misbehaviour inside one minute. A benign burst produces at most two events;
-//!   revoking an honest vehicle then takes further independent fault episodes of the same
-//!   pseudonym inside the minute, each itself corroborated. The window equals the shortest
-//!   pseudonym lifetime a shipped scenario runs (60 s i-periods), because the authority's
-//!   evidence is about one certificate and a longer window buys nothing across a change.
+//! * `min_events` = 3 over `window_s` = 60 s: at least 10 s of sustained, independently
+//!   witnessed misbehaviour inside one minute. A benign burst's reports span at most about
+//!   5 s (the 3 s burst and the 1.5 s lag), so they fall into at most two events; revoking
+//!   an honest vehicle then takes a further independent fault episode of the same
+//!   pseudonym inside the minute, itself corroborated. Measured with `mbd_eval` on
+//!   `credential-lifecycle` with no attacker: no pseudonym reached a second corroborated
+//!   event at 1,500 veh/h (the margin is in the run report,
+//!   `ma_peak_unrevoked_events`). Four events caught one ConstPos attacker in three on
+//!   that scenario's one-minute pseudonyms, three caught two. The window equals the
+//!   shortest pseudonym lifetime a shipped scenario runs (60 s i-periods), because the
+//!   authority's evidence is about one certificate and a longer window buys nothing
+//!   across a change.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -103,7 +109,7 @@ impl Default for CorroborationParams {
         Self {
             event_window_s: 5.0,
             event_min_reporters: 2,
-            min_events: 4,
+            min_events: 3,
             window_s: 60.0,
             min_reporters: 3,
             defence: true,
@@ -416,8 +422,9 @@ pub fn card(p: &CorroborationParams) -> ModelCard {
             "min_events",
             "-",
             json!(p.min_events),
-            "four disjoint 5 s events are 15 s or more of sustained misbehaviour, several \
-             times the benign GNSS burst of mobility/gnss/gauss-markov (3 s)",
+            "three disjoint 5 s events are 10 s or more of sustained misbehaviour, more \
+             than a benign GNSS burst of mobility/gnss/gauss-markov (3 s) plus the \
+             detectors' 1.5 s lag can produce twice over",
         ),
         choice(
             "window_s",
@@ -565,8 +572,8 @@ mod tests {
                 }
             }
         }
-        // Four 5 s events: the fourth opens at 15 s.
-        assert_eq!(revoked_at, Some(15));
+        // Three 5 s events: the third opens at 10 s.
+        assert_eq!(revoked_at, Some(10));
         assert!(ma.is_revoked("liar"));
         assert_eq!(ctx.on_channel("ma.decision").len(), 1);
     }
@@ -586,7 +593,7 @@ mod tests {
     fn events_spread_beyond_the_window_do_not_accumulate() {
         let mut ctx = CollectingCtx::new(1);
         let mut ma = CorroboratedMa::defaults();
-        // A corroborated event every 40 s: never four inside one minute.
+        // A corroborated event every 40 s: never three inside one minute.
         for k in 0..10u64 {
             for reporter in 1..=3 {
                 let r = report(reporter, "rare", k * 40 * NS_PER_S);
@@ -603,7 +610,7 @@ mod tests {
         let mut b = CorroboratedMa::defaults();
         let mut reports = Vec::new();
         for s in 0..20u64 {
-            for reporter in 1..=2 {
+            for reporter in 1..=3 {
                 reports.push(report(reporter, "x", s * NS_PER_S));
             }
         }
