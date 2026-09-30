@@ -38,7 +38,52 @@ the largest vehicle, a person and a two-wheeler (15 s each), then dashboard (20 
 viewer is `main` at `640ad91` with only the hooks the hunter reads. Both viewers replay the same
 captures and are judged by the same hunter:
 
-@@BEFORE_AFTER_TABLE@@
+Two captures. **Midtown**: the real Manhattan network with 600 pedestrians, 80 cyclists and
+30,000 veh/h of demand (`glitch-midtown-dense.yaml`, 150 s of sim at 10 Hz, 46 MB, from `main`'s
+engine), toured from 60 s. **Grid**: a Midtown-shaped procedural grid with 300 pedestrians, 40
+cyclists and 6,000 veh/h (`t3d-grid-dense.yaml`, 139 s, from this branch's engine, so with lamps),
+toured from 30 s. 5,057 and 4,156 drawn frames. Counts are events; "engine" is the part the
+hunter attributes to the stream's own data.
+
+| class | Midtown before | Midtown after | grid before | grid after |
+|---|---|---|---|---|
+| `pop` | 127 (127 engine) | 0 | 21 (21 engine) | 0 |
+| `teleport` | 62 | 359 (359 engine) | 0 | 0 |
+| `stutter` | 13,855 in 206 frames | 3 in 1 frame | 6,635 in 129 frames | 72 in 2 frames |
+| `heading_snap` | 2,377 | 4 (4 engine) | 1,091 | 0 |
+| `overlap_vehicle` | 0 | 0 | 0 | 0 |
+| `overlap_building` | 0 | 0 | 0 | 0 |
+| `overlap_pedestrian` | 1 (1 engine) | 1 (1 engine) | 0 | 0 |
+| `z_fighting` | 1 | 0 | 5 | 0 |
+| `flicker` | 0 | 0 | 0 | 0 |
+| `lod_pop` | 8 | 0 | 0 | 0 |
+| `camera_clip` | 0 | 0 | 0 | 0 |
+| `empty_frame` | 0 | 0 | 0 | 0 |
+| `subject_lost` | 0 | 0 | 0 | 0 |
+| `chase_framing` | 0 | 0 | 0 | 0 |
+
+Reading it:
+
+- **Pops** are actors appearing or vanishing inside the view; the engine spawns them there, so
+  the hunter blames it, but the viewer drew them as a blink. They now fade in and out over 0.3 s.
+- **Teleports went up, and they are all the engine's.** The Midtown stream moves pedestrians 2–4 m
+  in one 0.1 s step (examples: "pedestrian moved 2.43 m in one 16.6 ms frame at 1.5 m/s"). The
+  BEFORE viewer drew each as a slide at tens of m/s (62 caught as viewer teleports, the rest as
+  stutter); the AFTER viewer recognises a step longer than the reported speeds allow, cuts to it,
+  and the hunter attributes the cut to the data. The likely source is
+  `v2xw_mobility::vru::social_force` putting a person on the centreline of the next lane of their
+  route (`lateral_m = 0.0`) instead of where they stood — see Open.
+- **Stutter** was every vehicle on screen jumping when the plan view re-aimed, a street camera
+  passing every kink of its subject's path to the picture, and hard landings after a flight. What
+  is left is 3 pedestrian events in one dashboard frame at Midtown and 2 frames of pedestrians
+  jerking 1.5–1.9 px (against a 1.5 px threshold) just after a landing on the grid.
+- **Heading snaps** were people spinning on the spot with the social-force heading; a person's
+  drawn heading now turns at most 5 rad/s. The 4 left are cuts at the engine's own jumps.
+- **Camera clips**: the hunter first counted 27 (BEFORE) and 21 (AFTER) on the grid, all while
+  the camera descended from the plan view into a street. The hunter took world z as the near
+  plane's up axis, which for a camera pitched steeply down put the near plane's corners far below
+  where they are, inside roofs; with the camera's own axes neither viewer clips, so they are
+  counted as the hunter's error, not fixed defects.
 
 ### What changed
 
@@ -49,14 +94,24 @@ captures and are judged by the same hunter:
   in and out over 0.3 s instead of appearing; a departed actor lingers to its last pose; a slot
   whose snapshots jump further than it could have moved is snapped (and counted as the
   engine's). People's headings turn at most 5 rad/s and their paths use Catmull-Rom tangents.
+- **Chase framing** (the wave 1 integrator's "too steep on `manhattan-vru.yaml`"). The camera
+  used to stand 9 m back (up to 12.6 m with speed) and 16° up whatever it followed, so a person
+  was a speck seen from above and a bus filled the frame. It now stands half the subject's length plus
+  max(4.5 m, 1.5·H + 0.35·L) behind it (3.6 m for a person or rider), looks at 0.72 of its
+  height, and sits 13° up (10° for a person or rider): a car from 7.0 m, a bus from 15.3 m, a
+  person from 3.7 m (at the default zoom). The hunter's `chase_framing` class fails a chase view
+  steeper than 35° or with its subject under 6 % or over 70 % of the frame's height; it counted
+  none on either capture.
 - **Depth.** Road layers are 4 cm apart and ranked: the surface shader pulls each rank 2 depth
   steps nearer, so a coloured bus lane over a carriageway, a kerb over a junction, and a
   crossing over both keep their order at any range from a 0.35 m near plane.
 - **Road users.** Procedural models per class, three LODs each: sedan, crossover, NYC taxi
   livery (20 % of cars, a stated choice), bus, coach, box truck, semi, delivery van, ambulance,
   motorcycle, moped, delivery moped, bicycle, e-scooter and a walking person with a gait cycle.
-  Wheels spin and front wheels steer. Paint follows a published colour-popularity split; people
-  take a stature from NHANES.
+  Wheels spin and front wheels steer. Motorcycles, mopeds, bicycles and scooters lean into a
+  turn by the steady-turn angle tan φ = v²/(g·R) (Cossalter, *Motorcycle Dynamics*), capped at
+  30° and settling in 0.25 s, upright below 1.5 m/s. Paint follows a published colour-popularity
+  split; people take a stature from NHANES.
 - **Lamps from the engine.** A new VWP v1.2 `lamps` byte (brake, left/right indicator, hazard,
   low beam, reverse, emergency beacons) is written by `v2xw-mobility` (`src/lamps.rs`: brake on
   at 1.0 m/s², off at 0.6, held at a standstill; indicators 100 ft before a turn or lane change,
@@ -70,11 +125,66 @@ captures and are judged by the same hunter:
 
 ### Evidence
 
-@@EVIDENCE@@
+All from this branch at the commits named; wall times are from a loaded, shared machine.
+
+- **Viewer suite**, `vitest run` file by file (`--maxWorkers=1`): 22 files, 187 tests pass, one
+  skipped (`glitch-capture.test.ts` without a capture); `tsc -p tsconfig.test.json` clean.
+  Before this resumed session the branch did not compile: `2957cc0` declared `across` twice in
+  `cameras.ts` (fixed in `8b56fb4`).
+- **The hunter can fail**: `test/glitch-hunter.test.ts` (17 tests) injects each class into a
+  clean synthetic frame and asserts it is counted, and asserts a clean run counts nothing.
+- **The lean can fail**: flipping its sign in `actors.ts` fails 2 of the 3 tests in
+  `test/two-wheeler-lean.test.ts`; restored, 3 pass.
+- **The lamps byte can fail**: removing `|| t.lamps != r.lamps` from the encoder's moved-row
+  test fails both tests in `crates/v2xw-record/tests/lamps.rs`; restored, both pass.
+- **Captures**: `test/glitch-capture.test.ts` with `VWP_GLITCH_CAPTURE` on each capture, seed
+  24593, 20 s per view (the table above; BEFORE is `uibase`, `main`'s viewer with the hooks, run
+  with the same `glitch.ts` and tour).
+- **Per-frame budget at 5,000 actors** (`test/budget.test.ts`, `--expose-gc`, a synthetic 16×16
+  block grid, 600 frames at a simulated 60 fps with 10 Hz deltas, all 5,000 in view): viewer CPU
+  (interpolate, cull, LOD, matrix and animation write) mean 2.23 ms, wall mean 2.50 ms, p95 4.35,
+  p99 5.06 ms; 70 draw calls; instance capacity 10,496 before and after; heap +0.14 MB after a
+  forced GC. `main`'s viewer on the same test: CPU mean 1.31 ms, wall mean 1.62 ms,
+  p99 3.52 ms, 67 draw calls. The animated, lit, fading models cost about 0.9 ms a frame more
+  at 5,000 actors; both are far inside the test's 8 ms CPU ceiling (single runs on a loaded
+  machine: the difference is indicative, not precise).
+- **Golden**: `grid-traffic` re-blessed for the lamps field (`be81df7`); the new digest is
+  byte-identical at `RAYON_NUM_THREADS=1` and `=2`, and only `gt.kinematics` bytes moved
+  (108,943 → 111,733; 619 records either way). `cargo test -p v2xw-conformance --test kit golden`: 4 pass against
+  the new record; `cargo test -p v2xw-record`: 241 pass.
+- **Protocol package**: 13 files, 194 tests pass (the lamps round trip in `test/lamps.test.ts`).
+@@PLAYWRIGHT@@
 
 ### Open
 
-@@OPEN@@
+- **The engine's pedestrian jumps** (359 cuts at Midtown). `v2xw_mobility::vru::social_force`
+  moves a person to the next lane of their route with `lateral_m = 0.0` (about line 603), so a
+  person walking 1–2 m off a wide pavement's centreline jumps to it, and any gap between one
+  walkable lane's end and the next one's start is jumped too. Projecting the person's position
+  onto the next lane instead would remove both; it is the pedestrian track's code, and it moves
+  every pedestrian scenario's digest, so it is left to them. The viewer shows each jump as a
+  cut, which is honest; it will not smooth a person across 3 m in a frame.
+- **Night in the Studio.** Every NYC scenario starts at `2027-03-04T08:00:00Z`, which is 03:00
+  EST, so the engine's headlamp rule turns every low beam on. The Studio pins the viewer's sun at
+  11:00, so the page draws lit headlamps (dimly, as by day) under a noon sky. Either the
+  scenarios meant 08:00 local (`13:00:00Z`, which moves every digest) or the Studio should call
+  `viewer.setSunFromRun(true)` (one line in `apps/studio/src/state/engine.ts`, the viewport
+  track's file), which draws the run at the hour the engine simulates.
+- **Protocol fields for the pedestrian and motorcycle track.** The viewer needs nothing beyond
+  what v1.2 carries: class, pose, heading and speed drive the gait, the steer and the lean; the
+  `lamps` byte covers a motorcycle's brake lamp, indicators and headlamp. A jaywalker is drawn
+  where the engine puts them. If that track adds a class (e-bike, cargo bike, wheelchair), a
+  model per class name in `vehicle-models.ts` `modelVariants` is the one place to add it;
+  unknown names fall back by size.
+- **Remaining stutter** is 5 frames over two 70-second tours, all of pedestrians near the
+  camera: 1.5–1.9 px of jerk just after a landing on the grid, and one dashboard frame at
+  Midtown. Not chased further.
+- **The Midtown tour found no large vehicle** moving near the densest cell, so its chase
+  subjects were a car, a person and a cyclist; the grid capture's tour was the same. A bus or
+  truck is covered by the unit tests of the framing, not by a capture.
+- **The capture test is skipped in CI**: a capture is tens of megabytes and needs a running
+  engine. The hunter's own tests run everywhere; the Playwright spec
+  (`e2e-engine/traffic3d.spec.ts`) runs the hunt in the real page against the real engine.
 
 ## 2026-09-30 — six tracks merged: perf, roadnet, traffic, radio, scms, shell
 

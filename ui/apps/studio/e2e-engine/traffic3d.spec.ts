@@ -50,20 +50,29 @@ interface PixelStats {
   minStd: number;
 }
 
-/** Start the in-page hunt and the pixel sampler. */
+/**
+ * Start the in-page hunt and the pixel sampler.
+ *
+ * The sampler reads the canvas right after the viewer draws a frame, from inside the viewer's own
+ * `renderFrame`. A WebGL canvas without `preserveDrawingBuffer` is cleared once the frame is
+ * composited, so a copy taken from a timer instead reads a blank buffer: the first version of this
+ * sampler did that and counted 36 of 40 plainly drawn aerial frames as empty.
+ */
 async function startHunt(page: Page): Promise<void> {
   if (SHOTS_ONLY) return;
   await page.evaluate(() => {
-    const e = window.__vwpStudio?.engine as unknown as { viewer: { huntGlitches: () => unknown; canvas: HTMLCanvasElement } };
-    e.viewer.huntGlitches();
-    const w = window as unknown as { __t3d?: { stats: PixelStats; timer: number } };
+    type V = { huntGlitches: () => unknown; canvas: HTMLCanvasElement; renderFrame: (t?: number) => unknown };
+    const e = window.__vwpStudio?.engine as unknown as { viewer: V };
+    const v = e.viewer;
+    v.huntGlitches();
+    const w = window as unknown as { __t3d?: { stats: PixelStats } };
     const probe = document.createElement("canvas");
     probe.width = 160;
     probe.height = 100;
     const ctx = probe.getContext("2d", { willReadFrequently: true });
     const stats: PixelStats = { frames: 0, empty: 0, minStd: Infinity };
-    const timer = window.setInterval(() => {
-      const gl = e.viewer.canvas;
+    const sample = (): void => {
+      const gl = v.canvas;
       if (!ctx || !gl) return;
       ctx.drawImage(gl, 0, 0, 160, 100);
       const d = ctx.getImageData(0, 0, 160, 100).data;
@@ -80,8 +89,21 @@ async function startHunt(page: Page): Promise<void> {
       stats.frames++;
       if (std < 3 || mean < 4) stats.empty++;
       stats.minStd = Math.min(stats.minStd, std);
-    }, 250);
-    w.__t3d = { stats, timer };
+    };
+    // Wrap this instance's renderFrame (the loop calls `this.renderFrame`); `stopHunt` deletes the
+    // own property, which puts the class's method back.
+    const draw = Object.getPrototypeOf(v).renderFrame as (this: V, t?: number) => unknown;
+    let last = 0;
+    v.renderFrame = function (this: V, t?: number) {
+      const r = draw.call(this, t);
+      const now = performance.now();
+      if (now - last >= 250) {
+        last = now;
+        sample();
+      }
+      return r;
+    };
+    w.__t3d = { stats };
   });
 }
 
@@ -89,8 +111,8 @@ async function stopHunt(page: Page): Promise<{ report: unknown; pixels: PixelSta
   if (SHOTS_ONLY) return { report: null, pixels: { frames: 0, empty: 0, minStd: 0 } };
   return page.evaluate(() => {
     const e = window.__vwpStudio?.engine as unknown as { viewer: { stopGlitchHunt: () => unknown } };
-    const w = window as unknown as { __t3d?: { stats: PixelStats; timer: number } };
-    if (w.__t3d) window.clearInterval(w.__t3d.timer);
+    delete (e.viewer as unknown as { renderFrame?: unknown }).renderFrame;
+    const w = window as unknown as { __t3d?: { stats: PixelStats } };
     return { report: e.viewer.stopGlitchHunt(), pixels: w.__t3d?.stats ?? { frames: 0, empty: 0, minStd: 0 } };
   });
 }
@@ -139,6 +161,22 @@ test("the traffic scene has no geometric glitch and no empty frame in aerial, ch
   await page.waitForTimeout(4000);
 
   const results: Record<string, unknown> = {};
+  if (!SHOTS_ONLY) {
+    // The empty-frame check must be able to fail: with the scene hidden the canvas is one flat
+    // colour, and the sampler has to say so. (Its first version read a cleared buffer and would
+    // have called every frame empty, or, fixed the wrong way, none.)
+    await startHunt(page);
+    await page.evaluate(() => {
+      (window.__vwpStudio?.engine as unknown as { viewer: { scene: { visible: boolean } } }).viewer.scene.visible = false;
+    });
+    await page.waitForTimeout(1500);
+    await page.evaluate(() => {
+      (window.__vwpStudio?.engine as unknown as { viewer: { scene: { visible: boolean } } }).viewer.scene.visible = true;
+    });
+    const blank = await stopHunt(page);
+    expect(blank.pixels.frames, "sampler ran while the scene was hidden").toBeGreaterThan(2);
+    expect(blank.pixels.empty, "a hidden scene reads as empty frames").toBeGreaterThan(0);
+  }
   // Aerial.
   await startHunt(page);
   await page.waitForTimeout(SECONDS * 1000);
@@ -163,6 +201,17 @@ test("the traffic scene has no geometric glitch and no empty frame in aerial, ch
     await page.waitForTimeout(SECONDS * 1000);
     await shot(page, "chase-pedestrian");
     results.chasePedestrian = await stopHunt(page);
+  }
+
+  // A two-wheeler, when the scenario has one: the lean into turns and the rider are only seen here.
+  const rider = await aVehicle(page, (n) => ["bicycle", "motorcycle", "moped", "scooter", "moto"].includes(n));
+  if (rider >= 0) {
+    await page.evaluate((id) => (window.__vwpStudio?.engine as unknown as { selectActor(i: number, m: string): Promise<void> }).selectActor(id, "chase"), rider);
+    await page.waitForTimeout(3000);
+    await startHunt(page);
+    await page.waitForTimeout(SECONDS * 1000);
+    await shot(page, "chase-two-wheeler");
+    results.chaseTwoWheeler = await stopHunt(page);
   }
 
   // Dashboard.
