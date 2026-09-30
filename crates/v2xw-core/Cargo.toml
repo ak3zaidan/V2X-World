@@ -23,6 +23,14 @@ indexmap = { workspace = true }
 # Crate-wide error type.
 thiserror = { workspace = true }
 
+# SHA-256 in hardware on 64-bit ARM: `asm` selects sha2's ARMv8 SHA-2 extension backend,
+# chosen at run time when the CPU has it and falling back to the portable code when not.
+# The function is SHA-256 either way, so no key, stream or digest changes; it only stops
+# the portable compression function being a fifth of a run (every recorded record is
+# hashed into the run's digest). Not on Windows, where `sha2-asm` does not build.
+[target.'cfg(all(target_arch = "aarch64", not(target_os = "windows")))'.dependencies]
+sha2 = { workspace = true, features = ["asm"] }
+
 [dev-dependencies]
 # Phase-parallel determinism tests: the same phase run on 1 and on 8 threads
 # (ADR 0004 §5, 02-architecture.md §6.4).
