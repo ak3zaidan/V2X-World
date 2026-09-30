@@ -60,7 +60,18 @@ export class EngineProcess {
   async start(): Promise<void> {
     this.#child = spawn(
       ENGINE_BIN,
-      ["--scenario", this.scenario, "--port", String(this.port), "--paused", "--speed", this.speed, "--quiet"],
+      [
+        "--scenario",
+        this.scenario,
+        "--port",
+        String(this.port),
+        "--paused",
+        "--speed",
+        this.speed,
+        "--quiet",
+        // `VWP_ENGINE_ARGS`: extra flags for this run's engine, e.g. `--retain-mb 200`.
+        ...(process.env.VWP_ENGINE_ARGS ?? "").split(/\s+/).filter((a) => a !== ""),
+      ],
       { cwd: REPO, stdio: ["ignore", "ignore", "pipe"] },
     );
     let stderr = "";
