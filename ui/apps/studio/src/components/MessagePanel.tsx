@@ -492,7 +492,24 @@ export function MessagePanel(): React.JSX.Element {
         </button>
       </div>
 
-      <div className="feed-status faint" data-testid="feed-status">
+      {/*
+        One short line: whose messages, and whether the list is moving. The bookkeeping — rows the
+        push limit left out, rows the ring let go, frames the receiver never detected — is in the
+        line's tooltip; it used to be spelled out here and ran to three lines at the panel's width.
+      */}
+      <div
+        className="feed-status faint"
+        data-testid="feed-status"
+        title={
+          [
+            feed.omitted.sent + feed.omitted.received > 0 ? `${feed.omitted.sent + feed.omitted.received} rows left out by the push limit` : "",
+            feed.dropped.sent + feed.dropped.received > 0 ? `${feed.dropped.sent + feed.dropped.received} older rows dropped from the list` : "",
+            feed.undetected > 0 ? `${feed.undetected} frames sent within earshot were never detected (out of range or below sensitivity)` : "",
+          ]
+            .filter((x) => x !== "")
+            .join("\n") || undefined
+        }
+      >
         {feed.unavailable ? (
           <span className="warn-text">{feed.unavailable}</span>
         ) : feed.pushes === 0 ? (
@@ -502,9 +519,6 @@ export function MessagePanel(): React.JSX.Element {
             {latest?.pseudonym ? <>pseudonym {shortDigest(latest.pseudonym)} · </> : null}
             {feed.paused ? "paused" : feed.hovering ? "held while the pointer is over the list" : "live"} at {simClock(feed.tNs)}
             {(feed.paused || feed.hovering) && feed.held.length > 0 ? ` · ${feed.held.length} update${feed.held.length === 1 ? "" : "s"} waiting` : ""}
-            {feed.omitted.sent + feed.omitted.received > 0 ? ` · ${feed.omitted.sent + feed.omitted.received} left out by the push limit` : ""}
-            {feed.dropped.sent + feed.dropped.received > 0 ? ` · ${feed.dropped.sent + feed.dropped.received} older rows dropped` : ""}
-            {feed.undetected > 0 ? ` · ${feed.undetected} frames never detected (out of range)` : ""}
           </>
         )}
       </div>

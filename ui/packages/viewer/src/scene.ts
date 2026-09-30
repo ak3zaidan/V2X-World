@@ -41,7 +41,7 @@ import { OverlayManager, VRU_MARK_SCALE } from "./overlays.js";
 import { Picker } from "./picking.js";
 import { FrameStats } from "./stats.js";
 import { DARK_THEME, themeByName, type ViewerTheme } from "./theme.js";
-import { WorldRenderer, type WorldRendererOptions } from "./world-render.js";
+import { WorldRenderer, type RoadsideUnitPlacement, type WorldRendererOptions } from "./world-render.js";
 import type { ActorClassDef, FrameScheduler, PickResult, ViewerCanvas, ViewerRenderer } from "./types.js";
 
 /**
@@ -487,6 +487,18 @@ export class Viewer {
   }
 
   /**
+   * The run's roadside units, from the `Hello` node table, so a unit placed by position (on no
+   * world site) is drawn, can be clicked, can be watched from, and has a coverage ring
+   * ({@link WorldRenderer.setRoadsideUnits}). Returns how many masts were added.
+   */
+  setRoadsideUnits(units: readonly RoadsideUnitPlacement[]): number {
+    const added = this.worldRenderer.setRoadsideUnits(units);
+    // The coverage rings are laid out from the site list when a world is set; lay them out again.
+    if (this.worldRenderer.world !== null) this.overlays.setWorld(this.worldRenderer);
+    return added;
+  }
+
+  /**
    * Set the extent the plan view opens on, metres, as the viewer's own framing: until the user
    * or a caller changes the zoom, the plan view may widen from here to keep every live vehicle in
    * frame (see `#trackTraffic`). A plain `cameras.fitExtent` is a caller's zoom, which the viewer
@@ -514,6 +526,17 @@ export class Viewer {
     // should start from rather than the hardcoded 10 Hz default (Q2).
     const stepSeconds = Number(hello.mobilityStepNs) / 1e9;
     if (stepSeconds > 0) this.interpolator.setNominalIntervalSeconds(stepSeconds);
+    // §3.1.3: the node table lists the run's roadside units (kind 2) with their antenna positions.
+    // A unit a scenario placed by position stands on no world site, so it is drawn from here.
+    const units: RoadsideUnitPlacement[] = [];
+    // A hand-built Hello (a test's, a notebook's) may carry no node table at all.
+    const n = hello.nodes as HelloMessage["nodes"] | undefined;
+    if (n !== undefined) {
+      for (let i = 0; i < n.count; i++) {
+        if (n.kind[i] === 2) units.push({ nodeId: n.nodeId[i], x: n.posXM[i], y: n.posYM[i], z: n.posZM[i] });
+      }
+    }
+    this.setRoadsideUnits(units);
     // §1.4 case 1: a resumed `Hello` continues the stream the scene is already drawing — the
     // replay that follows it is the frames that were missed, applied in order — so the
     // interpolation history, the lamps and the followed car all stay. `0x20` is HELLO_RESUMED

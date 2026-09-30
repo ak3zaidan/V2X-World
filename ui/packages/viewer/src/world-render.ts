@@ -162,6 +162,20 @@ export interface WorldBuildReport {
  * Only the direction matters to the shading; this is chosen to sit comfortably inside the light's
  * own `shadow.camera.far` of 2,500 m with the whole city in front of it.
  */
+/** A roadside unit from the node table: its node id and its antenna position, metres. */
+export interface RoadsideUnitPlacement {
+  readonly nodeId: number;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/** How near a unit must stand to a world site, horizontally, to be the unit on that site. */
+const SITE_MATCH_M = 2;
+
+/** A site with no node (`vwp-world/1` and §3.1.3's `u32::MAX`). */
+const NO_NODE_ID = 0xffffffff;
+
 const SUN_DISTANCE_M = 900;
 
 const SUN_NOON = new Color(0xfff4e4);
@@ -276,6 +290,12 @@ export class WorldRenderer {
   #siteNodeIds = new Uint32Array(0);
   #siteKinds = new Uint8Array(0);
   #siteCount = 0;
+  /** How many of the sites are the world file's; the rest are {@link setRoadsideUnits}'s. */
+  #worldSiteCount = 0;
+  /** The masts {@link setRoadsideUnits} added, removed and rebuilt on each call. */
+  #unitMesh: Mesh | null = null;
+  /** The last {@link setRoadsideUnits} list, applied again to each new world. */
+  #units: readonly RoadsideUnitPlacement[] = [];
 
   #timeOfDay = 11;
   #lodCamPos = new Vector3(NaN, NaN, NaN);
@@ -760,6 +780,8 @@ export class WorldRenderer {
 
     this.signals.build(world);
     this.#buildSites(world);
+    // The Hello that names the run's roadside units arrives before its world does.
+    if (this.#units.length > 0) this.setRoadsideUnits(this.#units);
     if (this.#buildings) drawables++;
     if (this.signals.count > 0) drawables += 3;
     drawables += this.sitesGroup.children.length + 2; // ground and sky
@@ -1133,6 +1155,7 @@ export class WorldRenderer {
   #buildSites(world: VwpWorld): void {
     const n = world.sites.count;
     this.#siteCount = n;
+    this.#worldSiteCount = n;
     this.#sitePos = new Float32Array(n * 3);
     this.#siteIds = new Uint32Array(n);
     this.#siteNodeIds = new Uint32Array(n);
@@ -1160,6 +1183,91 @@ export class WorldRenderer {
     mesh.castShadow = false;
     mesh.matrixAutoUpdate = false;
     this.sitesGroup.add(mesh);
+  }
+
+  /**
+   * The run's roadside units, from the node table a `Hello` carries (kind 2, `pos_m` at the
+   * antenna), so that every unit is drawn, can be clicked and can be watched from.
+   *
+   * A world file's sites are where a unit *may* be mounted; a scenario can also place one by
+   * `position_m`, on no site at all, and such a unit was on no layer of the page: not drawn, not
+   * pickable, and the `rsu` camera refused for want of a mast. A unit within {@link SITE_MATCH_M} of
+   * a world site is that site — it lends the site its node id when the world left it unassigned, so
+   * a click on the mast selects the unit — and every other one is appended as a mast of its own
+   * after the world's sites, which is what picking, the `rsu` camera and the coverage overlay read.
+   *
+   * Idempotent: each call replaces the previous call's masts. The list is kept and applied again
+   * to the next world, because the `Hello` that names the units arrives before its world does.
+   * Returns how many masts were added.
+   */
+  setRoadsideUnits(units: readonly RoadsideUnitPlacement[]): number {
+    this.#units = units;
+    if (this.#unitMesh !== null) {
+      this.sitesGroup.remove(this.#unitMesh);
+      this.#unitMesh.geometry.dispose();
+      this.#unitMesh = null;
+    }
+    const base = this.#worldSiteCount;
+    const pos = this.#sitePos;
+    const nodeIds = this.#siteNodeIds;
+    const extra: RoadsideUnitPlacement[] = [];
+    for (const u of units) {
+      if (!Number.isFinite(u.x) || !Number.isFinite(u.y) || !Number.isFinite(u.z)) continue;
+      let site = -1;
+      for (let i = 0; i < base; i++) {
+        if (nodeIds[i] === u.nodeId) {
+          site = i;
+          break;
+        }
+        const dx = pos[i * 3] - u.x;
+        const dy = pos[i * 3 + 1] - u.y;
+        if (dx * dx + dy * dy <= SITE_MATCH_M * SITE_MATCH_M && site < 0) site = i;
+      }
+      if (site >= 0) {
+        if (nodeIds[site] === NO_NODE_ID) nodeIds[site] = u.nodeId;
+        continue;
+      }
+      extra.push(u);
+    }
+    const n = base + extra.length;
+    const grow = <T extends Float32Array | Uint32Array | Uint8Array>(a: T, make: (len: number) => T, per: number): T => {
+      const out = make(n * per);
+      out.set(a.subarray(0, base * per));
+      return out;
+    };
+    this.#sitePos = grow(this.#sitePos, (l) => new Float32Array(l), 3);
+    this.#siteIds = grow(this.#siteIds, (l) => new Uint32Array(l), 1);
+    this.#siteNodeIds = grow(this.#siteNodeIds, (l) => new Uint32Array(l), 1);
+    this.#siteKinds = grow(this.#siteKinds, (l) => new Uint8Array(l), 1);
+    this.#siteCount = n;
+    if (extra.length === 0) return 0;
+
+    const ground = this.#world?.bbox.minZM ?? 0;
+    const builder = new MeshBuilder({ color: true, vertexCapacity: 256, indexCapacity: 512 });
+    const [r, g, b] = colorTriple(this.#theme.rsu);
+    extra.forEach((u, k) => {
+      const i = base + k;
+      this.#sitePos[i * 3] = u.x;
+      this.#sitePos[i * 3 + 1] = u.y;
+      this.#sitePos[i * 3 + 2] = u.z;
+      this.#siteIds[i] = NO_NODE_ID;
+      this.#siteNodeIds[i] = u.nodeId;
+      this.#siteKinds[i] = 0;
+      // The mast stands on the ground under the antenna; a unit on a roof or a gantry whose
+      // antenna is far above the map's floor gets a short mast of its own rather than a tower.
+      const foot = u.z - ground > 1 && u.z - ground < 30 ? ground : u.z - Math.min(6, Math.max(1, u.z - ground));
+      addCylinder(builder, u.x, u.y, foot, u.z, 0.18, 6, 0.35, 0.38, 0.42);
+      addBox(builder, u.x, u.y, u.z + 0.35, 0.7, 0.28, 0.7, 0, r, g, b);
+    });
+    const geom = builder.toGeometry();
+    if (!geom) return 0;
+    const mesh = new Mesh(geom, this.#siteMaterial);
+    mesh.name = "world/rsu-masts";
+    mesh.castShadow = false;
+    mesh.matrixAutoUpdate = false;
+    this.sitesGroup.add(mesh);
+    this.#unitMesh = mesh;
+    return extra.length;
   }
 
   /**
@@ -1284,6 +1392,8 @@ export class WorldRenderer {
     }
     for (const d of this.#disposables) d.dispose();
     this.#disposables = [];
+    this.#unitMesh?.geometry.dispose();
+    this.#unitMesh = null;
     this.#buildings = null;
     this.#ghost = -1;
     this.#ghost2 = -1;

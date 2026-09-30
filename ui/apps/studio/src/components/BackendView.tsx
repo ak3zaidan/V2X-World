@@ -199,10 +199,11 @@ function Diagram({
     <div className="backend-diagram">
       {/* Scaled to the panel's width, so every column — the vehicles on the right included — is on
           screen at once; below 70 % of its natural size the text would be too small to read, and
-          the panel scrolls instead. */}
+          the panel scrolls instead. On a wide screen it grows to 140 %, so a full-screen panel is
+          filled by the diagram rather than by empty space under an 11 px one. */}
       <svg
         width="100%"
-        style={{ maxWidth: naturalWidth, minWidth: naturalWidth * 0.7, display: "block" }}
+        style={{ maxWidth: naturalWidth * 1.4, minWidth: naturalWidth * 0.7, display: "block" }}
         viewBox={`${-pad} ${-pad} ${naturalWidth} ${placed.height + pad * 2}`}
         preserveAspectRatio="xMinYMin meet"
         data-testid="backend-diagram"

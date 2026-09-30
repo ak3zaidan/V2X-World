@@ -38,9 +38,34 @@ import { int, radioBreakdown, radioSentence, simClock } from "../lib/format.js";
 import { hasData, hudGroups, queueRows, type HudField } from "../lib/telemetry.js";
 import { linkText, pseudonymLine, untilText } from "../lib/security.js";
 
+/**
+ * The overview's own names for fields whose telemetry label only reads right inside the HUD's
+ * group: "verified" under a "neighbours" heading is a count of neighbours, but in the overview's
+ * Radio section, beside "tx" and "CBR", it has to say so. Everything else keeps its label, in the
+ * section's lower case.
+ */
+const OVERVIEW_LABEL: Readonly<Record<string, string>> = {
+  nbr_total: "neighbours",
+  nbr_verified: "verified neighbours",
+  nbr_unverified: "unverified neighbours",
+  nbr_revoked: "revoked neighbours",
+  verifications_per_s: "verifications",
+  crl_bytes: "CRL size",
+};
+
+/** A label in the overview's lower case, acronyms (CBR, TX, CPU, HSM…) left as they are. */
+function overviewLabel(f: Pick<HudField, "key" | "label">): string {
+  const named = OVERVIEW_LABEL[f.key];
+  if (named !== undefined) return named;
+  const [first = "", ...rest] = f.label.split(" ");
+  const lower = /^[A-Z][a-z]/.test(first) ? first.toLowerCase() : first;
+  return [lower, ...rest].join(" ");
+}
+
 /** One telemetry field as a definition-list row whose name opens its provenance. */
-function FieldRow({ f, node }: { f: HudField; node: number }): React.JSX.Element {
+function FieldRow({ f: raw, node }: { f: HudField; node: number }): React.JSX.Element {
   const setWhy = useStudio((s) => s.setWhy);
+  const f = { ...raw, label: overviewLabel(raw) };
   return (
     <>
       <dt>
