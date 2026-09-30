@@ -102,6 +102,7 @@ pub mod intersection;
 pub mod kinematic;
 pub mod lanechange;
 pub mod routing;
+pub mod rules;
 pub mod snapshot;
 pub mod traits;
 pub mod views;

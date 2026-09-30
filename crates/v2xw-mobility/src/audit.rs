@@ -30,7 +30,7 @@
 //! | [`Check::InBuilding`] | a vehicle's body centre or a corner is inside a building footprint |
 //! | [`Check::OutsideJunction`] | a vehicle on a junction's internal path is outside the junction area |
 //! | [`Check::RedEntry`] | a vehicle entered a junction on a red (or red-amber) for its movement |
-//! | [`Check::AmberEntry`] | it entered on an amber it could have stopped for at the amber's onset |
+//! | [`Check::AmberEntry`] | it entered on an amber it could have stopped for, from beyond the far edge of the dilemma zone at the amber's onset |
 //! | [`Check::ConflictZone`] | two vehicles on conflicting movements occupy the same conflict zone at once |
 //! | [`Check::LaneChangeNearJunction`] | a lane change started inside the no-change zone before a stop line |
 //! | [`Check::QueueJump`] | a lane change round a vehicle standing at the stop line, started inside the no-change zone |
@@ -65,7 +65,9 @@ use v2xw_core::ids::{ActorId, JunctionId, LaneId};
 use v2xw_core::math;
 use v2xw_core::time::{SimTime, ns_to_secs};
 use v2xw_world::model::{normalise_angle, point_in_ring, ring_distance_sq_2d};
-use v2xw_world::{JunctionControl, LaneKind, SignalState, World, road_meets_building};
+use v2xw_world::{
+    JunctionControl, LaneKind, SignalState, TurnDirection, World, road_meets_building,
+};
 
 use crate::intersection::zones::{ConflictZones, Zone};
 use crate::views::DespawnCause;
@@ -324,9 +326,28 @@ pub struct AuditParams {
     /// 3 m/s², `netconvert --tls.yellow.min-decel` and the ITE yellow-interval
     /// deceleration (≈ 10 ft/s²), the same number the signal model sizes the yellow with.
     pub amber_decel_mps2: f64,
+    /// The time to the stop line at the amber's onset beyond which going on is a
+    /// violation when the vehicle could have stopped, seconds.
+    ///
+    /// The far edge of the dilemma zone, where 90 % of drivers stop (Zegeer & Deen 1978,
+    /// [`crate::engine::AMBER_DILEMMA_TTI_S`]): inside the zone drivers differ, and the
+    /// engine gives each their own threshold, so going there is behaviour, not a fault.
+    pub amber_go_tti_max_s: f64,
     /// How many examples to keep per class.
     pub examples_per_check: usize,
+    /// Whether the jurisdiction permits a right turn on a steady red after a full stop
+    /// ([`crate::rules::TrafficRules`]). With it on, a right turn entered on red is not a
+    /// [`Check::RedEntry`] if the vehicle stood within [`RIGHT_ON_RED_STOOD_M`] of the end
+    /// of the lane it turned from; without that stop it still is. Off by default, which is
+    /// New York City's rule.
+    pub right_turn_on_red: bool,
 }
+
+/// How near the end of its approach lane a vehicle must have stood for its right turn on
+/// red to count as made after a full stop, metres. Looser than the engine's own 3 m
+/// (`RIGHT_ON_RED_AT_LINE_M`) because the lane's end is the junction edge, not the stop
+/// line. **This crate's choice.**
+pub const RIGHT_ON_RED_STOOD_M: f64 = 6.0;
 
 impl Default for AuditParams {
     fn default() -> Self {
@@ -342,7 +363,9 @@ impl Default for AuditParams {
             no_change_zone_m: crate::engine::DEFAULT_NO_CHANGE_ZONE_M,
             standstill_limit_s: 180.0,
             amber_decel_mps2: 3.0,
+            amber_go_tti_max_s: crate::engine::AMBER_DILEMMA_TTI_S.1,
             examples_per_check: 5,
+            right_turn_on_red: false,
         }
     }
 }
@@ -417,6 +440,9 @@ pub struct AuditStats {
     pub pedestrian_steps: u64,
     /// Of those, pedestrian-steps on a crossing lane: how much crossing the run did.
     pub pedestrian_crossing_steps: u64,
+    /// Right turns entered on red after a full stop, where the jurisdiction permits them
+    /// ([`AuditParams::right_turn_on_red`]).
+    pub right_turns_on_red: u64,
     /// Sum of speeds, for the mean.
     #[serde(skip)]
     speed_sum: f64,
@@ -462,6 +488,9 @@ pub struct TrafficAuditor {
     crosswalks: crate::vru::CrosswalkIndex,
     /// Every pedestrian at the previous step.
     prev_peds: Vec<AuditPedestrian>,
+    /// The approach lane each vehicle last stood still near the end of, while it is still
+    /// on it ([`AuditParams::right_turn_on_red`]).
+    stood_at_end: BTreeMap<ActorId, LaneId>,
 }
 
 impl TrafficAuditor {
@@ -483,6 +512,7 @@ impl TrafficAuditor {
             zones: ConflictZones::build(world),
             crosswalks: crate::vru::CrosswalkIndex::build(world),
             prev_peds: Vec::new(),
+            stood_at_end: BTreeMap::new(),
         }
     }
 
@@ -554,6 +584,7 @@ impl TrafficAuditor {
         self.check_kinematics(t1, dt, actors);
         self.check_standstill(t1, actors);
         self.check_despawns(world, t1, despawned);
+        self.track_stops_at_lane_end(world, actors);
 
         self.prev = actors.iter().map(|a| (a.actor, *a)).collect();
     }
@@ -618,6 +649,25 @@ impl TrafficAuditor {
     // -----------------------------------------------------------------------
     // The checks
     // -----------------------------------------------------------------------
+
+    /// Keeps, for each vehicle, the approach lane it last stood still near the end of,
+    /// forgotten once it is on any other lane: a right turn on red is lawful only after a
+    /// full stop at the line.
+    fn track_stops_at_lane_end(&mut self, world: &World, actors: &[AuditActor]) {
+        let mut next = BTreeMap::new();
+        for a in actors {
+            let lane = world.lane(a.lane);
+            if lane.kind == LaneKind::Internal {
+                continue;
+            }
+            if a.speed_mps <= 0.1 && lane.length_m - a.s_m <= RIGHT_ON_RED_STOOD_M {
+                next.insert(a.actor, a.lane);
+            } else if self.stood_at_end.get(&a.actor) == Some(&a.lane) {
+                next.insert(a.actor, a.lane);
+            }
+        }
+        self.stood_at_end = next;
+    }
 
     /// Records the first instant each approaching vehicle saw amber, from the start-of-step
     /// states (the instant the engine's decision was taken).
@@ -1147,6 +1197,16 @@ impl TrafficAuditor {
             };
             self.stats.signalised_entries += 1;
             match state {
+                SignalState::Red
+                    if self.params.right_turn_on_red
+                        && self.stood_at_end.get(&a.actor) == Some(&p.lane)
+                        && world
+                            .successors(p.lane)
+                            .iter()
+                            .any(|c| c.via == Some(internal) && c.direction == TurnDirection::Right) =>
+                {
+                    self.stats.right_turns_on_red += 1;
+                }
                 SignalState::Red | SignalState::RedAmber => {
                     let ex = Self::example(
                         Check::RedEntry,
@@ -1165,15 +1225,16 @@ impl TrafficAuditor {
                 SignalState::Amber => {
                     if let Some((_, gap, v)) = self.amber_onset.get(&a.actor).copied() {
                         let stopping = v * v / (2.0 * self.params.amber_decel_mps2);
-                        if stopping + 0.5 < gap {
+                        let tti = if v > 0.0 { gap / v } else { f64::INFINITY };
+                        if stopping + 0.5 < gap && tti >= self.params.amber_go_tti_max_s {
                             let ex = Self::example(
                                 Check::AmberEntry,
                                 t1,
                                 a,
                                 None,
                                 format!(
-                                    "amber began {gap:.1} m out at {v:.2} m/s (stopping \
-                                     distance {stopping:.1} m) and it entered anyway"
+                                    "amber began {gap:.1} m out at {v:.2} m/s ({tti:.1} s; \
+                                     stopping distance {stopping:.1} m) and it entered anyway"
                                 ),
                             );
                             self.flag(Check::AmberEntry, ex);
@@ -1350,8 +1411,14 @@ impl TrafficAuditor {
                     a,
                     None,
                     format!(
-                        "moved {moved_3d:.3} m in {dt:.2} s reporting {:.2} m/s (expected {expected:.3} m)",
-                        a.speed_mps
+                        "moved {moved_3d:.3} m in {dt:.2} s reporting {:.2} m/s (expected \
+                         {expected:.3} m); {:?}, lateral {:.2} m, s {:.1}, lane {} -> {}",
+                        a.speed_mps,
+                        a.class,
+                        a.lateral_m,
+                        a.s_m,
+                        p.lane.index(),
+                        a.lane.index()
                     ),
                 );
                 self.flag(Check::StepSpeed, ex);
@@ -2083,6 +2150,58 @@ mod tests {
         }
     }
 
+    /// A right turn on red is a red entry in New York City, and where the jurisdiction
+    /// permits it, still one unless the vehicle stopped at the line first.
+    #[test]
+    fn a_right_turn_on_red_is_judged_by_the_jurisdiction_and_the_full_stop() {
+        let world = grid();
+        let plan = world.signals.first().expect("signalised");
+        let (approach, internal) = world
+            .roads
+            .connections()
+            .iter()
+            .find(|c| {
+                c.direction == TurnDirection::Right
+                    && c.via.is_some_and(|v| plan.controlled.contains(&v))
+            })
+            .map(|c| (c.from_lane, c.via.expect("via")))
+            .expect("a signalised right turn");
+        let step = 100_000_000u64;
+        let red = (0..1200u64)
+            .map(|k| k * step)
+            .find(|t| {
+                (0..4).all(|i| movement_state(&world, internal, t + i * step) == Some(SignalState::Red))
+            })
+            .expect("a red long enough");
+        let len = world.lane(approach).length_m;
+        let run = |rtor: bool, stops: bool| {
+            let mut audit = TrafficAuditor::new(
+                &world,
+                AuditParams {
+                    right_turn_on_red: rtor,
+                    ..AuditParams::default()
+                },
+            );
+            let first = if stops { 0.0 } else { 1.0 };
+            audit.observe(&world, red, red + step, &[at(&world, 0, approach, len - 1.0, first)], &[]);
+            audit.observe(
+                &world,
+                red + step,
+                red + 2 * step,
+                &[at(&world, 0, approach, len - 0.9, 1.0)],
+                &[],
+            );
+            let mut inside = at(&world, 0, internal, 0.1, 1.0);
+            inside.prev_lane = Some(approach);
+            audit.observe(&world, red + 2 * step, red + 3 * step, &[inside], &[]);
+            let r = audit.report();
+            (r.count(Check::RedEntry), r.stats.right_turns_on_red)
+        };
+        assert_eq!(run(false, true), (1, 0), "New York: a right on red is a red entry");
+        assert_eq!(run(true, true), (0, 1), "permitted, after a full stop");
+        assert_eq!(run(true, false), (1, 0), "permitted, but it rolled through");
+    }
+
     #[test]
     fn two_vehicles_in_one_conflict_zone_are_flagged() {
         let world = grid();
@@ -2266,9 +2385,13 @@ mod tests {
             audit.observe(&world, amber + 100_000_000, amber + 200_000_000, &[c], &[]);
             audit.report().count(Check::AmberEntry)
         };
-        // 10 m/s needs 16.7 m at 3 m/s²: from 40 m out it could have stopped.
-        assert_eq!(entry(40.0, 10.0), 1);
-        // From 10 m out it could not: the dilemma zone, and going is right.
+        // 10 m/s needs 16.7 m at 3 m/s²: from 60 m out (6 s) it could have stopped, and
+        // beyond the dilemma zone's far edge nearly every driver does.
+        assert_eq!(entry(60.0, 10.0), 1);
+        // From 40 m out (4 s) it could have stopped too, but that is inside the dilemma
+        // zone, where drivers differ: going is behaviour, not a violation.
+        assert_eq!(entry(40.0, 10.0), 0);
+        // From 10 m out it could not stop at all, and going is right.
         assert_eq!(entry(10.0, 10.0), 0);
     }
 

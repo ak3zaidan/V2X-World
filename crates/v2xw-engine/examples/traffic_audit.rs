@@ -151,6 +151,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // `--examples N`: keep N examples per class rather than the default five.
     let mut params = AuditParams::default();
+    // The jurisdiction's right-turn-on-red rule, as the engine applies it.
+    params.right_turn_on_red = v2xw_mobility::rules::TrafficRules::of_highway_preset(
+        scenario.world.highway_preset.map(|p| p.label()),
+    )
+    .right_turn_on_red;
     if let Some(n) = value("--examples") {
         params.examples_per_check = n.parse()?;
     }

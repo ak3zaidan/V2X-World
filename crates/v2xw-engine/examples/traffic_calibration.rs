@@ -57,7 +57,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         mobility.init(&mut ctx, demand)?;
     }
     let mut harness = CalibrationObserver::new(&world);
-    let mut auditor = TrafficAuditor::new(&world, AuditParams::default());
+    let audit_params = AuditParams {
+        right_turn_on_red: v2xw_mobility::rules::TrafficRules::of_highway_preset(
+            scenario.world.highway_preset.map(|p| p.label()),
+        )
+        .right_turn_on_red,
+        ..AuditParams::default()
+    };
+    let mut auditor = TrafficAuditor::new(&world, audit_params);
     let step = scenario.time.mobility_step();
     let horizon = (scenario.time.duration_s * 1e9) as u64;
     let mut t = 0u64;
@@ -134,6 +141,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             s.n
         );
     }
+    println!(
+        "permitted left lags: accepted mean {:.2} s p15 {:.2} [{}], rejected mean {:.2} s p85 \
+         {:.2} [{}], Raff critical gap {:.2} s",
+        report.permitted_left_lag_accepted_s.mean,
+        report.permitted_left_lag_accepted_s.p15,
+        report.permitted_left_lag_accepted_s.n,
+        report.permitted_left_lag_rejected_s.mean,
+        report.permitted_left_lag_rejected_s.p85,
+        report.permitted_left_lag_rejected_s.n,
+        report.permitted_left_critical_gap_s
+    );
+    println!(
+        "pedestrian crossings {} (compliance {:.3}); approach volumes veh/h: avenues p15/p50/p85 \
+         {:.0}/{:.0}/{:.0} [{}], streets {:.0}/{:.0}/{:.0} [{}]",
+        report.pedestrian_crossings,
+        report.pedestrian_compliance,
+        report.avenue_volume_veh_per_h.p15,
+        report.avenue_volume_veh_per_h.p50,
+        report.avenue_volume_veh_per_h.p85,
+        report.avenue_volume_veh_per_h.n,
+        report.street_volume_veh_per_h.p15,
+        report.street_volume_veh_per_h.p50,
+        report.street_volume_veh_per_h.p85,
+        report.street_volume_veh_per_h.n
+    );
     println!(
         "trip speed mean {:.2} m/s [{}]; network speed {:.2} m/s ({:.1} mph)",
         report.trip_speed_mps.mean,

@@ -167,6 +167,43 @@ pub const REACTION_MEDIAN_S: f64 = 1.15;
 /// standard deviation of 0.69 s with the median above, inside Taoka's ranges.
 pub const REACTION_SIGMA: f64 = 0.5;
 
+/// The median of a queued driver's start-up delay once the car in front has moved off,
+/// seconds ([`DriverTraits::follow_reaction_s`]).
+///
+/// Taoka's distribution is a response to a *signal change*: the first driver of a queue
+/// responds to the green, but every driver behind responds to the brake lights of the car
+/// in front going out and to it rolling, having watched the queue start. Field studies
+/// time that start-up wave at about one vehicle a second, and no primary measurement of
+/// its distribution was read, so the median is **calibrated, not measured**: 0.7 s is
+/// what brings the model's start-up lost time to the HCM default of 2.0 s with the
+/// saturation headway in the HCM range on the saturation-flow experiment
+/// ([`crate::calibration::SaturationExperiment`]). The shape and the driver's quantile
+/// are the same as for the signal response, so a slow driver is slow at both.
+pub const FOLLOW_REACTION_MEDIAN_S: f64 = 0.7;
+
+/// The amber dilemma zone, as time to the stop line at the onset of amber, seconds: at its
+/// near edge 10 % of drivers stop and at its far edge 90 % do.
+///
+/// Zegeer & Deen 1978 ("Green-extension systems at high-speed intersections", ITE
+/// Journal) define the zone by those two percentages and measured it at 2.5-5.5 s before
+/// the stop line (**secondary**: the figures as the FHWA Signal Timing Manual and the
+/// dilemma-zone literature quote them; the paper itself was not read).
+pub const AMBER_DILEMMA_TTI_S: (f64, f64) = (2.5, 5.5);
+
+/// The model id a driver's amber threshold is drawn under ([`DriverTraits`]).
+const AMBER_TRAIT_ID: &str = "mobility/native/driver/amber";
+
+/// How much of the amber a driver who goes leaves in hand, seconds: they go only if they
+/// reach the line this long before it turns red at their present speed. **This crate's
+/// choice**, one 0.1 s step and a little more, so a vehicle that goes never meets the red.
+const AMBER_GO_MARGIN_S: f64 = 0.3;
+
+/// How close the car in front of a standing vehicle must be for its moving off to be
+/// what releases the vehicle — a queue — rather than a signal or a crosswalk, metres.
+/// **This crate's choice**: a queue's standstill gap is 2 m, and 10 m leaves room for
+/// the car in front having rolled a little before the follower's model says go.
+const QUEUE_FOLLOW_GAP_M: f64 = 10.0;
+
 /// A vehicle standing still moves off only once the car-following model asks for more
 /// than this, m/s²: below it is the creep of a queue closing its last centimetres, which is
 /// not a decision to go. **This crate's choice.**
@@ -182,10 +219,18 @@ const STANDSTILL_MPS: f64 = 0.1;
 ///   2)` with the class's `speedDev` (0.1 for a passenger car) — the SUMO vType default
 ///   (R10 §B4), and the same law SUMO applies to every lane limit. No New York field
 ///   distribution of free speeds against the 25 mph limit was available to calibrate it.
-/// * `reaction_s` — how long the driver takes to move off once what held them (a red, the
-///   car in front) lets them go: lognormal with median [`REACTION_MEDIAN_S`] and shape
-///   [`REACTION_SIGMA`] (Taoka 1989), clamped to 0.3-3 s. It is what makes a queue start
-///   as a wave instead of all at once, and it is where the HCM's start-up lost time comes
+/// * `reaction_s` — how long the driver takes to move off once a signal or a crosswalk
+///   that held them lets them go: lognormal with median [`REACTION_MEDIAN_S`] and shape
+///   [`REACTION_SIGMA`] (Taoka 1989), clamped to 0.3-3 s.
+/// * `amber_go_tti_s` — the time to the stop line at the onset of amber below which the
+///   driver goes on rather than stops, where stopping at 3 m/s² would still be possible:
+///   logistic across the dilemma zone [`AMBER_DILEMMA_TTI_S`] (10 % of drivers stop at its
+///   near edge, 90 % at its far edge; Zegeer & Deen 1978), clamped to it. A driver goes only
+///   if they also reach the line before the amber ends.
+/// * `follow_reaction_s` — the same driver's delay in moving off once the car in front of
+///   them in a queue has: median [`FOLLOW_REACTION_MEDIAN_S`], the same shape and the same
+///   quantile of the one normal draw, clamped to 0.2-3 s. The two are what make a queue
+///   start as a wave instead of all at once, and where the HCM's start-up lost time comes
 ///   from.
 ///
 /// Drawn once per trip from the trip's own streams (`DesiredSpeed` and `ReactionTime`,
@@ -196,8 +241,13 @@ const STANDSTILL_MPS: f64 = 0.1;
 pub struct DriverTraits {
     /// Free speed as a multiple of the posted limit.
     pub speed_factor: f64,
-    /// Start-up reaction time, seconds.
+    /// Start-up reaction to a signal or crosswalk, seconds.
     pub reaction_s: f64,
+    /// Start-up delay behind a car in a queue, seconds.
+    pub follow_reaction_s: f64,
+    /// The time to the stop line below which this driver goes on amber rather than stops,
+    /// seconds; zero never goes where it could stop.
+    pub amber_go_tti_s: f64,
 }
 
 impl DriverTraits {
@@ -205,23 +255,51 @@ impl DriverTraits {
     pub const NEUTRAL: DriverTraits = DriverTraits {
         speed_factor: 1.0,
         reaction_s: 0.0,
+        follow_reaction_s: 0.0,
+        amber_go_tti_s: 0.0,
     };
 
-    /// The traits of the driver of trip `seq` in a vehicle of `class`.
+    /// The traits of the driver of trip `seq` in a vehicle of `class`, with the queue
+    /// start-up delay's median [`FOLLOW_REACTION_MEDIAN_S`].
     pub fn draw(ctx: &dyn MobCtx, seq: u64, class: VehicleClass) -> DriverTraits {
+        Self::draw_with(ctx, seq, class, FOLLOW_REACTION_MEDIAN_S)
+    }
+
+    /// [`DriverTraits::draw`] with the queue start-up delay's median given, seconds.
+    pub fn draw_with(
+        ctx: &dyn MobCtx,
+        seq: u64,
+        class: VehicleClass,
+        follow_median_s: f64,
+    ) -> DriverTraits {
         let key = EntityRef::custom(DRIVER_TRAITS_ID, seq);
         let speed_factor = {
             let mut rng = ctx.rng(RngDomain::DesiredSpeed, key);
             rng.normal(1.0, class.spec().speed_dev).clamp(0.2, 2.0)
         };
-        let reaction_s = {
-            let mut rng = ctx.rng(RngDomain::ReactionTime, key);
-            rng.lognormal(math::ln(REACTION_MEDIAN_S), REACTION_SIGMA)
-                .clamp(0.3, 3.0)
+        // One standard-normal draw sets how quick this driver is, for both responses.
+        let z = ctx.rng(RngDomain::ReactionTime, key).normal(0.0, 1.0);
+        let reaction_s =
+            math::exp(math::ln(REACTION_MEDIAN_S) + REACTION_SIGMA * z).clamp(0.3, 3.0);
+        let follow_reaction_s =
+            math::exp(math::ln(follow_median_s.max(0.05)) + REACTION_SIGMA * z).clamp(0.2, 3.0);
+        // The amber threshold: logistic across the dilemma zone, 10 % at its near edge
+        // and 90 % at its far edge (median 4.0 s, scale 1.5 s / ln 9), clamped to it.
+        let amber_go_tti_s = {
+            let (near, far) = AMBER_DILEMMA_TTI_S;
+            let u = ctx
+                .rng(RngDomain::ReactionTime, EntityRef::custom(AMBER_TRAIT_ID, seq))
+                .uniform(0.0, 1.0)
+                .clamp(1e-9, 1.0 - 1e-9);
+            let median = 0.5 * (near + far);
+            let scale = 0.5 * (far - near) / math::ln(9.0);
+            (median + scale * math::ln(u / (1.0 - u))).clamp(near, far)
         };
         DriverTraits {
             speed_factor,
             reaction_s,
+            follow_reaction_s,
+            amber_go_tti_s,
         }
     }
 }
@@ -330,6 +408,14 @@ pub struct EngineParams {
     /// Whether each driver gets their own [`DriverTraits`] — a free speed around the
     /// posted limit and a start-up reaction time. Not applied in the legacy parity mode.
     pub driver_heterogeneity: bool,
+    /// Whether a right turn may be made against a steady red after a full stop — the
+    /// jurisdiction's rule ([`SignalPlanParams::right_turn_on_red`]). Off by default, which
+    /// is New York City's; [`crate::rules::TrafficRules`] maps a world's highway preset
+    /// onto it.
+    pub right_turn_on_red: bool,
+    /// The median of a queued driver's start-up delay behind the car in front, seconds
+    /// ([`FOLLOW_REACTION_MEDIAN_S`], a calibrated value).
+    pub queue_start_delay_median_s: f64,
     /// **A test hook, not a model parameter.** Walks the decision pass in reverse actor
     /// order. Because the pass reads only the frozen snapshot, the published result must be
     /// bit-identical either way; that is the ADR 0004 Jacobi property, and this is how the
@@ -353,6 +439,8 @@ impl Default for EngineParams {
             junction_clearance: true,
             crosswalk_yield: true,
             driver_heterogeneity: true,
+            right_turn_on_red: false,
+            queue_start_delay_median_s: FOLLOW_REACTION_MEDIAN_S,
             reverse_order: false,
         }
     }
@@ -409,6 +497,8 @@ struct Actor {
     trail: Vec<LaneId>,
     /// The junction the vehicle chose to clear on amber; see the decision pass.
     amber_commit: Option<JunctionId>,
+    /// The junction whose amber the vehicle has already seen and decided on.
+    amber_seen: Option<JunctionId>,
     /// The driver's own speed factor and reaction time.
     traits: DriverTraits,
     /// While standing: when what held it first let it go (the start of its reaction).
@@ -737,7 +827,10 @@ impl NativeMobility {
             cf,
             lane_change: params.lane_changes.then_some(mobil),
             gap: GapAcceptance::new(GapAcceptanceParams::default()),
-            signals: FixedTimeSignals::new(SignalPlanParams::default()),
+            signals: FixedTimeSignals::new(SignalPlanParams {
+                right_turn_on_red: params.right_turn_on_red,
+                ..SignalPlanParams::default()
+            }),
             two_coloring: None,
             router,
             bike_router: DynamicReroute::new(
@@ -991,6 +1084,7 @@ impl NativeMobility {
                 stopped_until: None,
                 trail: Vec::new(),
                 amber_commit: None,
+                amber_seen: None,
                 traits: DriverTraits::NEUTRAL,
                 release_at: None,
             },
@@ -1200,7 +1294,12 @@ impl NativeMobility {
     /// [`DriverTraits::NEUTRAL`] in the legacy parity mode or with heterogeneity off.
     fn traits_for(&self, ctx: &dyn MobCtx, trip: &TripRequest) -> DriverTraits {
         if self.along_path() && self.params.driver_heterogeneity {
-            DriverTraits::draw(ctx, trip.seq, trip.class)
+            DriverTraits::draw_with(
+                ctx,
+                trip.seq,
+                trip.class,
+                self.params.queue_start_delay_median_s,
+            )
         } else {
             DriverTraits::NEUTRAL
         }
@@ -1324,6 +1423,7 @@ impl NativeMobility {
                 stopped_until: None,
                 trail: Vec::new(),
                 amber_commit: None,
+                amber_seen: None,
                 traits,
                 release_at: None,
             },
@@ -2461,6 +2561,8 @@ struct Decision {
     /// The junction this vehicle is committed to clearing because it chose to go on
     /// amber, carried to the next step.
     amber_commit: Option<JunctionId>,
+    /// The junction whose amber this vehicle has decided on, carried to the next step.
+    amber_seen: Option<JunctionId>,
     /// When the standing vehicle's reaction to being let go began, carried to the next
     /// step.
     release_at: Option<SimTime>,
@@ -2654,6 +2756,7 @@ impl Mobility for NativeMobility {
             let mut merge_partner: Option<MergePartner> = None;
             // The junction ahead becomes a virtual leader when it says stop or slow.
             let mut amber_commit: Option<JunctionId> = None;
+            let mut amber_seen: Option<JunctionId> = None;
             let mut commit_floor: Option<f64> = None;
             // The stop line behind the binding virtual obstacle, when a junction's "stop"
             // is what binds: how much room there is up to the line itself.
@@ -2661,6 +2764,32 @@ impl Mobility for NativeMobility {
             for junction in self.junctions_ahead(world, actor, t0) {
                 let conflicts = self.conflicts_for(world, &junction, &ego, &claims, t0);
                 let mut decision = self.entry_decision(world, &ego, &junction, &conflicts);
+                // The amber decision, taken once, at the onset: a driver who could stop still
+                // goes if they are nearer the line than their own threshold
+                // ([`DriverTraits::amber_go_tti_s`]) and reach it before the red. Taken
+                // later, a driver braking for the line would see their time to it shrink
+                // and change their mind.
+                if along
+                    && junction.signal == Some(SignalState::Amber)
+                    && junction.stop_line_gap_m > 0.0
+                    && amber_seen.is_none()
+                {
+                    let first_look = actor.amber_seen != Some(junction.id)
+                        && actor.amber_commit != Some(junction.id);
+                    if first_look
+                        && matches!(decision, EntryDecision::Stop { .. })
+                        && ego.speed_mps > 1.0
+                    {
+                        let tti = junction.stop_line_gap_m / ego.speed_mps;
+                        let left = self
+                            .amber_left_s(world, junction.id, junction.movement_lane, t0)
+                            .unwrap_or(0.0);
+                        if tti < actor.traits.amber_go_tti_s && tti + AMBER_GO_MARGIN_S <= left {
+                            decision = EntryDecision::Proceed;
+                        }
+                    }
+                    amber_seen = Some(junction.id);
+                }
                 // A vehicle that chose to go on amber — it was inside the distance it could
                 // stop in — is committed: it does not change its mind a step later because
                 // it has slowed for the turn ahead, which is what left drivers braking into
@@ -2912,14 +3041,24 @@ impl Mobility for NativeMobility {
             // goes only once what held it has let it go for `reaction_s` ([`DriverTraits`]).
             // This is the start-up wave of a queue at green — the source of the HCM's
             // start-up lost time — which the IDM, reacting instantly, does not have.
+            // Behind a car in a queue, the driver's own start-up delay applies instead: they
+            // have watched the queue start and respond to the car in front moving.
             let mut release_at = None;
-            if along && ego.speed_mps < STANDSTILL_MPS && actor.traits.reaction_s > 0.0 {
-                if accel > GO_ACCEL_MPS2 {
-                    let since = actor.release_at.unwrap_or(t0);
-                    release_at = Some(since);
-                    if ns_to_secs(t0.saturating_sub(since)) < actor.traits.reaction_s {
-                        accel = accel.min(0.0);
-                    }
+            if along
+                && ego.speed_mps < STANDSTILL_MPS
+                && actor.traits.reaction_s > 0.0
+                && accel > GO_ACCEL_MPS2
+            {
+                let since = actor.release_at.unwrap_or(t0);
+                release_at = Some(since);
+                let queued = nearest_vehicle.is_some_and(|v| v.gap_m < QUEUE_FOLLOW_GAP_M);
+                let delay = if queued {
+                    actor.traits.follow_reaction_s
+                } else {
+                    actor.traits.reaction_s
+                };
+                if ns_to_secs(t0.saturating_sub(since)) < delay {
+                    accel = accel.min(0.0);
                 }
             }
             // Coming off the brake happens at no more than `RELEASE_JERK_MPS3`, until the
@@ -2936,6 +3075,7 @@ impl Mobility for NativeMobility {
                 v0_mps: v0_effective,
                 lane_change: LaneChangeDecision::Stay,
                 amber_commit,
+                amber_seen,
                 release_at,
             });
             neighbours.insert(*id, (ego_capped, nbrs));
@@ -2987,6 +3127,7 @@ impl Mobility for NativeMobility {
             // anticipation in the decision pass has it slowing before the boundary.
             actor.accel_mps2 = decision.accel_mps2;
             actor.amber_commit = decision.amber_commit;
+            actor.amber_seen = decision.amber_seen;
             actor.release_at = decision.release_at;
             let ceiling = if along {
                 decision.v0_mps.max(actor.speed_mps)
@@ -3911,6 +4052,103 @@ mod tests {
             ever_stopped_at_red,
             "no arrival in a whole cycle ever met a red light"
         );
+    }
+
+    /// Drivers differ at the amber: across a cycle of arrivals, some who could still have
+    /// stopped at 3 m/s² go on — inside the dilemma zone, where the field says drivers
+    /// differ — and none of them ever meets the red. Without heterogeneity, nobody who could
+    /// stop goes.
+    #[test]
+    fn drivers_differ_at_the_amber_and_none_meets_the_red() {
+        let world = grid(true);
+        let (approach, beyond) = signalised_approach(&world);
+        let rng = RngRegistry::new(4);
+        let signals = FixedTimeSignals::default();
+        let junction = world.edge(world.lane(approach).edge).to;
+        let plan_id = match world.roads.junction(junction).control {
+            JunctionControl::Signalised { plan } => plan,
+            _ => unreachable!("chosen above"),
+        };
+        let plan = world.signal_plan(plan_id).expect("a plan");
+        let movement = world
+            .successors(approach)
+            .iter()
+            .find(|c| c.to_lane == beyond)
+            .and_then(|c| c.via)
+            .expect("an internal connector");
+        let len = world.lane(approach).length_m;
+        let went_though_could_stop = |heterogeneity: bool| -> usize {
+            let params = EngineParams {
+                intersections: IntersectionMode::SignalsOnly,
+                lane_changes: false,
+                driver_heterogeneity: heterogeneity,
+                ..EngineParams::default()
+            };
+            let mut went = 0;
+            for k in 0u64..120 {
+                let start = k * NS_PER_S / 2;
+                let mut engine = NativeMobility::new(params);
+                {
+                    let mut ctx = MobilityCtx::new(start, &world, &rng);
+                    engine
+                        .init(&mut ctx, Box::new(NoDemand::new()))
+                        .expect("init");
+                    engine.command(
+                        &mut ctx,
+                        MobilityCommand::Spawn(TripRequest {
+                            seq: k,
+                            t: start,
+                            origin: approach,
+                            origin_s_m: 5.0,
+                            destination: beyond,
+                            class: VehicleClass::Passenger,
+                            desired_speed_mps: 13.89,
+                        }),
+                    );
+                }
+                let mut onset: Option<(f64, f64)> = None;
+                let mut prev: Option<(LaneId, f64, f64, SignalState)> = None;
+                let mut t = start;
+                while t < start + 60 * NS_PER_S {
+                    let state = signals
+                        .state_for(plan, movement, ns_to_secs(t))
+                        .expect("controlled");
+                    let mut ctx = MobilityCtx::new(t, &world, &rng);
+                    engine.step(&mut ctx, params.step);
+                    let Some((_, lane, s, v)) = engine.longitudinal_states().first().copied()
+                    else {
+                        break;
+                    };
+                    if let Some((plane, ps, pv, pstate)) = prev {
+                        if plane == approach && pstate == SignalState::Amber && onset.is_none() {
+                            onset = Some((len - ps, pv));
+                        }
+                        if plane == approach && lane != approach {
+                            assert_ne!(
+                                pstate,
+                                SignalState::Red,
+                                "arrival {k} entered on red (heterogeneity {heterogeneity})"
+                            );
+                            if pstate == SignalState::Amber
+                                && let Some((gap, speed)) = onset
+                                && speed * speed / 6.0 + 3.0 < gap
+                            {
+                                went += 1;
+                            }
+                            break;
+                        }
+                        if pstate != SignalState::Amber {
+                            onset = None;
+                        }
+                    }
+                    prev = Some((lane, s, v, state));
+                    t += params.step.as_nanos();
+                }
+            }
+            went
+        };
+        assert_eq!(went_though_could_stop(false), 0);
+        assert!(went_though_could_stop(true) > 0);
     }
 
     #[test]
