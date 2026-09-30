@@ -48,11 +48,16 @@ function OverlayWhy({ name, enabled }: { name: string; enabled: boolean }): Reac
   );
 }
 
+/** The overlays whose records are streamed only while a radio is followed. */
+const SELECTION_FED = ["tx_pulses", "links", "cbr_heatmap"];
+
 export function OverlayMenu(): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const overlays = useStudio((s) => s.overlays);
   const serverOverlays = useStudio((s) => s.serverOverlays);
   const gtLocked = useStudio((s) => s.groundTruthLocked);
+  const devDetails = useStudio((s) => s.devDetails);
+  const following = useStudio((s) => s.selectedNode !== null || s.selectedActor !== null);
   const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -70,6 +75,10 @@ export function OverlayMenu(): React.JSX.Element {
   const onCount = Object.values(overlays).filter(Boolean).length;
 
   const serverOnly = serverOverlays.filter((s) => !catalogue.some((c) => c.name === s.name));
+  // Three overlays are fed only while a radio is followed (at full scale their records are millions
+  // a simulated second). The note says so when it explains what the reader sees: one of them is on
+  // and nothing is followed.
+  const starved = !following && SELECTION_FED.some((n) => overlays[n as OverlayName] === true);
 
   return (
     <div className="menu" ref={ref}>
@@ -82,7 +91,7 @@ export function OverlayMenu(): React.JSX.Element {
             <input type="checkbox" checked={gtLocked} onChange={(e) => engine.lockGroundTruth(e.target.checked)} />
             <span>Lock ground truth off (blind evaluation)</span>
           </label>
-          <div className="sec">Available</div>
+          <div className="sec">Draw on the map</div>
           {drawable.map((entry) => (
             <label key={entry.name} data-testid={`overlay-${entry.name}`}>
               <input
@@ -96,7 +105,9 @@ export function OverlayMenu(): React.JSX.Element {
               <OverlayWhy name={entry.name} enabled={overlays[entry.name as OverlayName] === true} />
             </label>
           ))}
-          {notDrawable.length > 0 ? (
+          {/* What this build cannot draw is for whoever is developing it, not a menu of dead
+              checkboxes for everyone else: developer mode only. */}
+          {devDetails && notDrawable.length > 0 ? (
             <>
               <div className="sec">Not available in this build</div>
               {notDrawable.map((entry) => (
@@ -109,14 +120,14 @@ export function OverlayMenu(): React.JSX.Element {
               ))}
             </>
           ) : null}
-          <div className="sec">Why three of these look empty</div>
-          <div className="note" style={{ margin: "2px 6px 6px" }}>
-            Transmissions, links and channel load are only streamed while a vehicle is selected — at full
-            scale they are millions of records a simulated second. Select one and they fill; clear the
-            selection and they stop. Each row&rsquo;s <em>why</em> says what feeds it.
-          </div>
+          {starved ? (
+            <div className="note" style={{ margin: "4px 6px 6px" }} data-testid="overlays-starved">
+              Transmissions, links and channel load are streamed only while a vehicle is followed. Click one
+              and they fill.
+            </div>
+          ) : null}
 
-          {serverOnly.length > 0 ? (
+          {devDetails && serverOnly.length > 0 ? (
             <>
               <div className="sec">The engine offers these, but this build cannot draw them</div>
               {serverOnly.map((entry) => (

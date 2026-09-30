@@ -1145,6 +1145,40 @@ mod tests {
         assert!(queue(&q, "verify")["wait_p50_ms"].is_null());
     }
 
+    /// A transmit-side drop has no frame; it reaches the transmit queue's row from
+    /// `node.drop`, and a CRL shed reaches the CRL queue's. The row used to say transmit
+    /// drops were "not observable here" (QA 2026-09-24).
+    #[test]
+    fn a_node_drop_row_is_a_drop_of_the_transmit_or_crl_queue() {
+        let mut store = FeedStore::new(100 * MS);
+        let drop = |t: u64, cause: &str, count: u32| NodeDropView {
+            t,
+            node: NodeId::new(7),
+            cause: cause.to_string(),
+            count,
+        };
+        store.on_drop(&drop(10 * MS, TX_OVERFLOW, 2));
+        store.on_drop(&drop(20 * MS, TX_OVERFLOW, 1));
+        store.on_drop(&drop(30 * MS, CRL_BACKLOG, 4));
+        store.on_drop(&drop(40 * MS, "rx_overflow", 9));
+        let q = store.queues_json(7, 50 * MS, None, 8);
+        assert_eq!(queue(&q, "tx")["drops"][TX_OVERFLOW].as_u64(), Some(3));
+        assert_eq!(queue(&q, "crl")["drops"][CRL_BACKLOG].as_u64(), Some(4));
+        assert!(queue(&q, "tx").get("drops_note").is_none());
+        // A cause that has a frame (and so a node.rx row) is not counted from here.
+        assert_eq!(
+            queue(&q, "rx")["drops"]
+                .as_object()
+                .map(serde_json::Map::len),
+            Some(0)
+        );
+        // Outside the drop window, and before it happened, it is not counted.
+        let later = store.queues_json(7, 10 * MS + DROP_WINDOW_NS + 1, None, 8);
+        assert_eq!(queue(&later, "tx")["drops"][TX_OVERFLOW].as_u64(), Some(1));
+        let before = store.queues_json(7, 5 * MS, None, 8);
+        assert!(queue(&before, "tx")["drops"].get(TX_OVERFLOW).is_none());
+    }
+
     #[test]
     fn a_verification_overflow_is_a_drop_of_the_verification_queue() {
         let mut store = FeedStore::new(100 * MS);

@@ -214,8 +214,10 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   await page.getByTestId("play").click();
   await expect(page.getByTestId("pause")).toBeVisible({ timeout: 20_000 });
 
-  // A seek back to the start must move the clock backwards (§6.6 run.seek).
-  await page.getByTestId("seek-start").click();
+  // A seek back to the start must move the clock backwards (§6.6 run.seek). The bar has no
+  // start button any more: Home on the timeline goes there.
+  await page.getByTestId("scrub-range").focus();
+  await page.keyboard.press("Home");
   await expect.poll(async () => {
     const text = (await page.getByTestId("sim-clock").textContent()) ?? "";
     return text.startsWith("00:00:0");
@@ -275,6 +277,9 @@ test("light theme renders and the actor-state legend keeps shape redundancy", as
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("app-menu")).toHaveCount(0);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  // The key is folded to one chip until it is asked for.
+  await expect(page.getByTestId("state-legend")).toHaveCount(0);
+  await page.getByTestId("legend-toggle").click();
   await expect(page.getByTestId("state-legend")).toBeVisible();
   // Five state glyphs, each its own shape; the road-user key the vru track added (a vehicle dot
   // and a smaller pedestrian/cyclist dot) is a size key, not a state, and is counted apart.

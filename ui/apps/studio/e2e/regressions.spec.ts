@@ -260,17 +260,17 @@ test("Q15 — the inspector's field labels keep a visible focus indicator", asyn
   await followFirstActor(page);
 
   await page.getByTestId("tab-state").click();
-  await expect(page.getByTestId("state-field-cpu_util_pm")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("state-field-cbr_pm")).toBeVisible({ timeout: 30_000 });
 
   // No inline style may compete with the stylesheet's :focus-visible rule.
   const inline = await page.evaluate(
-    () => document.querySelector('[data-testid="state-field-cpu_util_pm"]')?.getAttribute("style") ?? "",
+    () => document.querySelector('[data-testid="state-field-cbr_pm"]')?.getAttribute("style") ?? "",
   );
   expect(inline).toBe("");
 
-  // Shift+Tab from one field label must land on the previous one — the DOM order of the state tab
-  // follows `hudGroups`, not the HUD's own row order, so the assertion is on the shape of the id.
-  await page.getByTestId("state-field-ram_used_kib").focus();
+  // Shift+Tab from one field label must land on the previous one — the overview's Radio section
+  // lists the transmit and receive rates before the channel load.
+  await page.getByTestId("state-field-cbr_pm").focus();
   await page.keyboard.press("Shift+Tab");
   const focused = await page.evaluate(() => {
     const el = document.activeElement as HTMLElement | null;

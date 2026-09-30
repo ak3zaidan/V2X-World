@@ -230,6 +230,14 @@ export function hudGroups(t: NodeTelemetry): HudGroup[] {
   ];
 }
 
+/**
+ * Whether a field has something to show: not at its "not modelled" sentinel. The inspector and the
+ * chase HUD draw only these; a value that is not there is not drawn, rather than drawn as "n/a".
+ */
+export function hasData(f: HudField | undefined): f is HudField {
+  return f !== undefined && f.raw !== null && !f.value.includes(NA);
+}
+
 /** Total messages dropped, across all six reported causes, for the one-line summary. */
 export function totalDrops(t: NodeTelemetry): number {
   const parts = [t.dropRxOverflow, t.dropVerifyOverflow, t.dropVerifyPolicySkip, t.dropTxOverflow, t.dropReassemblyTimeout, t.dropCrlBacklog];

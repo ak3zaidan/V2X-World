@@ -421,4 +421,20 @@ mod tests {
         l.reset();
         assert_eq!(l.counts(), [0; 6]);
     }
+
+    /// A step's drops are handed out once, whole, and a telemetry window closing in the
+    /// middle of the step does not take them: `node.drop` and the window's counters each
+    /// see every drop exactly once.
+    #[test]
+    fn a_steps_drops_are_taken_once_and_survive_a_window_reset() {
+        let mut l = DropLedger::new();
+        l.record_n(DropCause::TxOverflow, 3);
+        l.reset();
+        l.record(DropCause::CrlBacklog);
+        let step = l.take_step();
+        assert_eq!(step[3], 3, "a window reset lost the step's transmit drops");
+        assert_eq!(step[5], 1);
+        assert_eq!(l.take_step(), [0; 6], "a step's drops were handed out twice");
+        assert_eq!(l.count(DropCause::CrlBacklog), 1, "taking the step cleared the window");
+    }
 }

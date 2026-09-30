@@ -603,6 +603,30 @@ mod tests {
     use v2xw_core::geom::Vec3;
     use v2xw_metrics::channels::decode;
 
+    /// `node.drop` carries only the causes no other channel does, one row per cause with a
+    /// count, and reads back as its view: the transmit queue's drops used to be on no record.
+    #[test]
+    fn a_steps_transmit_and_crl_drops_become_node_drop_rows() {
+        // DropCause::ALL order: rx, verify-policy, verify-overflow, tx, reassembly, crl.
+        let rows = NodeDrop::from_step(5_000, NodeId::new(9), &[4, 1, 2, 3, 0, 7]);
+        let causes: Vec<(&str, u32)> = rows.iter().map(|r| (r.0.cause.as_str(), r.0.count)).collect();
+        assert_eq!(
+            causes,
+            vec![("tx_overflow", 3), ("crl_processing_backlog", 7)],
+            "receive-side causes are on node.rx and must not be counted twice"
+        );
+        assert!(NodeDrop::from_step(0, NodeId::new(1), &[5, 0, 0, 0, 0, 0]).is_empty());
+        let owned = rows[0].to_owned_record().expect("serialises");
+        assert_eq!(owned.channel, "node.drop");
+        assert_eq!(owned.visibility, Visibility::Node);
+        let view: NodeDropView = decode(&owned).expect("decodes");
+        assert_eq!(view, rows[0].0);
+        assert!(
+            v2xw_record::channels::by_name("node.drop").is_some(),
+            "node.drop is not in the channel catalogue"
+        );
+    }
+
     /// Every record this crate writes decodes back into the reader-side view of its own
     /// channel, with the values intact. This is the guard against a writer and a reader
     /// drifting apart: if they were two structs, a renamed field would pass here only

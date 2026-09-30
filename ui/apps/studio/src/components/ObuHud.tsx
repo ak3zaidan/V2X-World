@@ -20,16 +20,11 @@ import { useMemo } from "react";
 import { Sparkline } from "./Sparkline.js";
 import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
-import { NA, int, shortDigest, simClock } from "../lib/format.js";
-import { SPARKLINE_SERIES, hudGroups, totalDrops, type HudField } from "../lib/telemetry.js";
+import { int, shortDigest, simClock } from "../lib/format.js";
+import { SPARKLINE_SERIES, hasData, hudGroups, totalDrops, type HudField } from "../lib/telemetry.js";
 import { bearingDeg } from "../lib/feed.js";
 import { toGeodetic } from "../lib/geo.js";
 import { linkText, pseudonymLine, untilText, type NodeSecurityRow } from "../lib/security.js";
-
-/** Whether a field has something to show: not at its "not modelled" sentinel. */
-export function hasData(f: HudField | undefined): f is HudField {
-  return f !== undefined && f.raw !== null && !f.value.includes(NA);
-}
 
 function fieldIndex(fields: HudField[]): Map<string, HudField> {
   const m = new Map<string, HudField>();

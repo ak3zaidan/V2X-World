@@ -159,13 +159,38 @@ test("every control does what it says", async ({ page }) => {
   });
 
   // --- transport bar (the ones lifecycle.spec.ts does not press) ---------------------------------
-  await check("transport: step unit", "make Step advance one second", async () => {
+  await check("transport: step", "advance one mobility step and stop", async () => {
     const before = (await status(page)).t_ns;
-    await page.getByTestId("step-unit").selectOption("second");
     await page.getByTestId("step").click();
-    await expect.poll(async () => (await status(page)).t_ns, quick).toBe(before + 1_000_000_000);
-    await page.getByTestId("step-unit").selectOption("step");
-    return `t ${before / 1e9} s → ${(before + 1e9) / 1e9} s`;
+    await expect.poll(async () => (await status(page)).t_ns, quick).toBeGreaterThan(before);
+    const after = (await status(page)).t_ns;
+    expect(after - before, "one press of Step moved more than a second").toBeLessThanOrEqual(1_000_000_000);
+    expect((await status(page)).state).toBe("paused");
+    return `t ${before / 1e9} s → ${after / 1e9} s, still paused`;
+  });
+  await check("transport: one row", "hold play, step, speed, the clock and the timeline, and nothing else", async () => {
+    const bar = page.getByTestId("time-controls");
+    const buttons = await bar.locator(":scope > button").count();
+    const selects = await bar.locator(":scope > select").count();
+    // Play or pause, and step; the speed.
+    expect(buttons).toBe(2);
+    expect(selects).toBe(1);
+    const box = await bar.boundingBox();
+    const play = await bar.locator(":scope > button").first().boundingBox();
+    const scrub = await page.getByTestId("scrub").boundingBox();
+    expect(box && play && scrub).toBeTruthy();
+    // One row: the timeline sits on the same line as the play button.
+    expect(Math.abs(scrub!.y + scrub!.height / 2 - (play!.y + play!.height / 2))).toBeLessThan(8);
+    return `${buttons} buttons, ${selects} select, ${Math.round(box!.height)} px tall`;
+  });
+  await check("header: menu → Restart", "rewind to t = 0 from the menu", async () => {
+    await page.getByTestId("step").click();
+    await expect.poll(async () => (await status(page)).t_ns, quick).toBeGreaterThan(0);
+    await menu("restart");
+    await expect.poll(async () => (await status(page)).t_ns, { timeout: 60_000 }).toBeLessThan(1_000_000_000);
+    await page.getByTestId("pause").click({ timeout: 5_000 }).catch(() => {});
+    await expect.poll(async () => (await status(page)).state, quick).not.toBe("running");
+    return "rewound";
   });
   await check("transport: speed", "set the engine's multiple of real time", async () => {
     await page.getByTestId("speed").selectOption("2");
@@ -259,7 +284,20 @@ test("every control does what it says", async ({ page }) => {
     await expect(page.getByTestId("camera-mode")).toHaveValue("map", quick);
     return `free ok; chase → ${mode} (${follow}); map ok`;
   });
+  await check("viewport: key", "fold and unfold the legend", async () => {
+    const open = (await page.getByTestId("state-legend").count()) > 0;
+    await page.getByTestId("legend-toggle").click();
+    await expect(page.getByTestId("state-legend")).toHaveCount(open ? 0 : 1, quick);
+    await page.getByTestId("legend-toggle").click();
+    await expect(page.getByTestId("state-legend")).toHaveCount(open ? 1 : 0, quick);
+    return open ? "open → folded → open" : "folded → open → folded";
+  });
   await check("viewport: HUD dock", "dock and float the radio HUD", async () => {
+    // The dock button lives in the HUD's own header, which shows while a vehicle is followed.
+    if ((await page.getByTestId("hud-dock").count()) === 0) {
+      await page.evaluate(() => window.__vwpStudio?.selectFirstActor());
+    }
+    await expect(page.getByTestId("hud-dock")).toBeVisible(quick);
     const before = await page.getByTestId("hud-dock").innerText();
     await page.getByTestId("hud-dock").click();
     const after = await page.getByTestId("hud-dock").innerText();

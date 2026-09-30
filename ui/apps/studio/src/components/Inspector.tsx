@@ -30,12 +30,12 @@
 import { Fragment, useMemo } from "react";
 
 import { MessagePanel } from "./MessagePanel.js";
-import { ObuHud, hasData } from "./ObuHud.js";
+import { ObuHud } from "./ObuHud.js";
 import { WhyTab } from "./WhyTab.js";
 import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
 import { int, radioBreakdown, radioSentence, simClock } from "../lib/format.js";
-import { hudGroups, queueRows, type HudField } from "../lib/telemetry.js";
+import { hasData, hudGroups, queueRows, type HudField } from "../lib/telemetry.js";
 import { linkText, pseudonymLine, untilText } from "../lib/security.js";
 
 /** One telemetry field as a definition-list row whose name opens its provenance. */

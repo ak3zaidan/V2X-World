@@ -204,6 +204,8 @@ export async function runToEnd(page: Page, button = "run-start", timeoutMs = 180
   const before = (await status(page)).generation;
   // The settings window's Run applies unapplied edits; it closes the window once the run starts.
   if (button === "run-start") await openSettings(page);
+  // Restart and Stop are items in the header's menu.
+  if (button === "restart" || button === "stop") await page.getByTestId("app-menu-button").click();
   await page.getByTestId(button).click();
   const deadline = Date.now() + timeoutMs;
   let last: Status = await status(page);

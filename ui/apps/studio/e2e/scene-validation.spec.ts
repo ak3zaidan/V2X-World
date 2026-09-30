@@ -951,7 +951,8 @@ test("the inspector's radio count agrees with the nodes the engine announced", a
   expect(printed, "the inspector does not print a radio count").not.toBeNull();
   // `radios 0` beside a panel reading `bytes_air 1468 B/s` was the defect. A count that contradicts
   // the stream beside it is worse than a blank, so it has to be the count the stream carries.
-  const shown = Number(printed!.replace(/[^0-9]/g, ""));
+  // "82 radios: 80 on vehicles, 2 roadside units" — the total leads.
+  const shown = Number(/^([\d,]+)/.exec(printed!)?.[1]?.replace(/,/g, "") ?? "NaN");
   expect(shown, `the inspector says "radios ${printed}" for a run with ${before.nodes} radios`).toBeGreaterThan(0);
   expect(shown, `the inspector says "radios ${printed}"; the client's node table holds ${f.nodeTableSize}`).toBe(
     f.nodeTableSize,
