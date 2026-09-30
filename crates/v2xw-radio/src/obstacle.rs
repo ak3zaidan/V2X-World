@@ -74,6 +74,8 @@ impl RTreeObject for Envelope {
 #[derive(Debug)]
 pub struct BuildingIndex {
     tree: RTree<Envelope>,
+    /// Each building's box in its own frame, by dense id ([`FootprintBox`]).
+    boxes: Vec<FootprintBox>,
     /// The hash of the world this index was built from, so a stale index cannot be used.
     world_hash: [u8; 32],
 }
@@ -103,6 +105,11 @@ impl BuildingIndex {
             .collect();
         Self {
             tree: RTree::bulk_load(entries),
+            boxes: world
+                .buildings
+                .iter()
+                .map(|b| FootprintBox::of(&b.footprint))
+                .collect(),
             world_hash: world.content_hash,
         }
     }
@@ -153,10 +160,99 @@ impl BuildingIndex {
     ///
     /// For an any-hit or a minimum, whose answer the order cannot reach; everything that
     /// accumulates uses [`BuildingIndex::candidates_along`], which sorts.
+    ///
+    /// An envelope is axis-aligned, and a footprint on a street grid that is not — Manhattan's
+    /// runs 29° off north — has an envelope reaching well into the street, so a link along
+    /// an avenue passes through the envelopes of the buildings lining it without touching
+    /// one. Each envelope the segment enters is therefore tested once more against the
+    /// footprint's own box ([`FootprintBox`]) before any ring arithmetic is spent on it.
     fn along(&self, a: Vec3, b: Vec3) -> impl Iterator<Item = u32> + '_ {
         self.tree
             .locate_with_selection_function(SegmentSelection::new(a, b))
             .map(|e| e.id)
+            .filter(move |&id| self.boxes.get(id as usize).is_none_or(|f| f.meets(a, b)))
+    }
+}
+
+/// A footprint's bounding box in the frame of its longest wall, grown by
+/// [`ENVELOPE_PAD_M`] when tested.
+///
+/// A conservative filter in front of the ring test, and nothing more: any segment the ring
+/// test finds crossing a wall of the footprint, or starting inside it, passes through the
+/// footprint and so through this box, which holds it. A building on a rotated street grid
+/// fills most of this box and a small part of its axis-aligned envelope. The frame is
+/// anchored at the ring's first point, so a projection's rounding is that of coordinates a
+/// few kilometres long — picometres, against the millimetre pad.
+#[derive(Debug, Clone, Copy)]
+struct FootprintBox {
+    /// The frame's origin.
+    origin: [f64; 2],
+    /// The unit direction of the longest wall; the second axis is its left normal.
+    axis: [f64; 2],
+    lo: [f64; 2],
+    hi: [f64; 2],
+    /// A ring with no wall to take a frame from: every segment is let through, as before.
+    open: bool,
+}
+
+impl FootprintBox {
+    fn of(ring: &[Vec3]) -> Self {
+        let mut best = 0.0f64;
+        let mut axis = [1.0, 0.0];
+        for w in ring.windows(2) {
+            let (dx, dy) = (w[1].x - w[0].x, w[1].y - w[0].y);
+            let len2 = dx * dx + dy * dy;
+            if len2 > best {
+                best = len2;
+                let len = math::sqrt(len2);
+                axis = [dx / len, dy / len];
+            }
+        }
+        let Some(first) = ring.first() else {
+            return Self {
+                origin: [0.0; 2],
+                axis,
+                lo: [0.0; 2],
+                hi: [0.0; 2],
+                open: true,
+            };
+        };
+        let mut f = Self {
+            origin: [first.x, first.y],
+            axis,
+            lo: [f64::INFINITY; 2],
+            hi: [f64::NEG_INFINITY; 2],
+            open: best <= 0.0 || !best.is_finite(),
+        };
+        for p in ring {
+            let q = f.project(*p);
+            for k in 0..2 {
+                f.lo[k] = f.lo[k].min(q[k]);
+                f.hi[k] = f.hi[k].max(q[k]);
+            }
+        }
+        f
+    }
+
+    /// A point in the box's frame.
+    fn project(&self, p: Vec3) -> [f64; 2] {
+        let (x, y) = (p.x - self.origin[0], p.y - self.origin[1]);
+        [
+            x * self.axis[0] + y * self.axis[1],
+            y * self.axis[0] - x * self.axis[1],
+        ]
+    }
+
+    /// Whether the segment `a → b` meets the box grown by the pad.
+    fn meets(&self, a: Vec3, b: Vec3) -> bool {
+        if self.open {
+            return true;
+        }
+        SegmentSelection {
+            a: self.project(a),
+            b: self.project(b),
+        }
+        .meets(self.lo, self.hi)
     }
 }
 
@@ -577,16 +673,10 @@ pub struct PolygonCrossing {
 /// re-enters the same building.
 #[must_use]
 pub fn ring_crossing(ring: &[Vec3], a: Vec3, b: Vec3) -> PolygonCrossing {
-    // Most candidates stand beside the path, not on it: they are rejected before anything
-    // is allocated, by the same two tests the full pass below makes.
-    if !point_in_ring(ring, a)
-        && !ring
-            .windows(2)
-            .any(|w| segment_intersection_t(a, b, w[0], w[1]).is_some())
-    {
-        return PolygonCrossing::default();
-    }
-    let mut ts: Vec<f64> = vec![0.0, 1.0];
+    // The crossing parameters, then the segment's own ends. A candidate the path does not
+    // touch — most of them — returns before anything is allocated (`Vec::new` does not),
+    // and the sort below sees the same values whatever order they were pushed in.
+    let mut ts: Vec<f64> = Vec::new();
     let mut walls = 0u16;
     for w in ring.windows(2) {
         if let Some(t) = segment_intersection_t(a, b, w[0], w[1]) {
@@ -597,6 +687,8 @@ pub fn ring_crossing(ring: &[Vec3], a: Vec3, b: Vec3) -> PolygonCrossing {
     if walls == 0 && !point_in_ring(ring, a) {
         return PolygonCrossing::default();
     }
+    ts.push(0.0);
+    ts.push(1.0);
     math::sort_total_order(&mut ts);
     let total_len = a.distance_2d(b);
     let mut inside = 0.0;
@@ -2677,6 +2769,80 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The TR 36.885 grid turned 29° — Manhattan's grid is 29° off north — so every
+    /// footprint's axis-aligned envelope reaches into the streets beside it.
+    fn rotated_city() -> World {
+        let mut world = city();
+        let (s, c) = math::sin_cos(29f64.to_radians());
+        for building in &mut world.buildings {
+            for p in &mut building.footprint {
+                let (x, y) = (p.x, p.y);
+                p.x = c * x - s * y;
+                p.y = s * x + c * y;
+            }
+        }
+        world
+    }
+
+    /// On a rotated grid the footprint boxes still let through every building a segment
+    /// crosses or starts or ends in, and they do filter: most of the envelopes a segment
+    /// enters belong to buildings it passes beside.
+    #[test]
+    fn the_footprint_box_misses_nothing_and_filters_on_a_rotated_grid() {
+        let world = rotated_city();
+        let index = BuildingIndex::build(&world);
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let (s, c) = math::sin_cos(29f64.to_radians());
+        let turn = |x: f64, y: f64| at(c * x - s * y, s * x + c * y);
+        let mut segments: Vec<(Vec3, Vec3)> = Vec::new();
+        for _ in 0..1500 {
+            let (x0, y0, x1, y1) = (next() * 900.0, next() * 520.0, next() * 900.0, next() * 520.0);
+            segments.push((turn(x0, y0), turn(x1, y1)));
+            // Down a street of the turned grid, and across one.
+            segments.push((turn(x0, 257.0), turn(x1, 257.0)));
+            segments.push((turn(440.0, y0), turn(440.0, y1)));
+        }
+        // Along and through the corners of the first footprints, exactly.
+        for building in world.buildings.iter().take(40) {
+            let ring = &building.footprint;
+            let (p, q) = (at(ring[0].x, ring[0].y), at(ring[1].x, ring[1].y));
+            segments.push((p, q));
+            segments.push((at(p.x - 30.0, p.y - 30.0), at(p.x + 30.0, p.y + 30.0)));
+            segments.push((at(p.x - 50.0, p.y), at(p.x + 50.0, p.y)));
+        }
+        let (mut envelopes, mut boxed) = (0usize, 0usize);
+        for (a, b) in segments {
+            let along = index.candidates_along(a, b);
+            envelopes += index
+                .tree
+                .locate_with_selection_function(SegmentSelection::new(a, b))
+                .count();
+            boxed += along.len();
+            for building in &world.buildings {
+                let r = ring_crossing(&building.footprint, a, b);
+                let touched = r.walls > 0
+                    || r.inside_len_m > 0.0
+                    || point_in_ring(&building.footprint, a)
+                    || point_in_ring(&building.footprint, b);
+                assert!(
+                    !touched || along.contains(&building.id),
+                    "{a:?} -> {b:?} misses building {:?}",
+                    building.id
+                );
+            }
+        }
+        assert!(
+            boxed * 10 < envelopes * 7,
+            "the boxes kept {boxed} of {envelopes} envelope candidates"
+        );
     }
 
     /// A ray finds the first wall, and a ray down an open street finds none.
