@@ -57,6 +57,7 @@ import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
 import { transport as transportCaps } from "../state/transport.js";
 import { durationNs, simClock } from "../lib/format.js";
+import { describeError } from "../lib/errors.js";
 import { eventSubject } from "../lib/provenance.js";
 import { useStatus } from "./Status.js";
 
@@ -191,7 +192,7 @@ export function TimeControls(): React.JSX.Element {
       try {
         await fn();
       } catch (err) {
-        setNotice(err instanceof Error ? err.message : String(err));
+        setNotice(describeError(err));
       } finally {
         setBusy(false);
         if (!drivingReplay) await engine.refreshStatus();
@@ -321,7 +322,7 @@ export function TimeControls(): React.JSX.Element {
       await seekOne(value);
       if (compareSide !== null && compareSync.time) await compare.seekTo(Math.round(value));
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
+      setNotice(describeError(err));
     } finally {
       setBusy(false);
       if (!drivingReplay) await engine.refreshStatus();

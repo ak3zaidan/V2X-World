@@ -21,6 +21,7 @@ import {
   formatUuid,
   verifyWorldPayload,
   ProtocolError,
+  JsonRpcError,
   type ByeMessage,
   type DeltaMessage,
   type ErrorMessage,
@@ -51,6 +52,7 @@ import {
 } from "../lib/replay.js";
 import { SPARKLINE_SERIES } from "../lib/telemetry.js";
 import { hex, shortDigest } from "../lib/format.js";
+import { describeError, refusedRows } from "../lib/errors.js";
 import { resolveEngineUrl } from "../lib/target.js";
 import { studioTheme, type ThemeName } from "../lib/theme.js";
 import {
@@ -348,9 +350,14 @@ export class StudioEngine {
    * Created *before* the call that causes the `Hello`, so it cannot be missed. The rejection is
    * pre-handled: a caller that decides not to wait does not leave an unhandled rejection behind.
    */
-  #nextHello(timeoutMs: number): Promise<HelloMessage> {
+  #nextHello(timeoutMs: number): { readonly promise: Promise<HelloMessage>; readonly cancel: () => void } {
     const client = this.client;
-    if (!client) return Promise.reject(new Error("no connection"));
+    if (!client) {
+      const promise = Promise.reject(new Error("no connection"));
+      promise.catch(() => undefined);
+      return { promise, cancel: () => undefined };
+    }
+    let cancel: () => void = () => undefined;
     const promise = new Promise<HelloMessage>((resolve, reject) => {
       const timer = setTimeout(() => {
         off();
@@ -361,9 +368,16 @@ export class StudioEngine {
         off();
         resolve(hello);
       });
+      // A refused `run.start` announces no run: the waiter and its timer go at once rather than
+      // sitting on the socket for two minutes and resolving on some later run's Hello.
+      cancel = () => {
+        clearTimeout(timer);
+        off();
+        reject(new Error("cancelled"));
+      };
     });
     promise.catch(() => undefined);
-    return promise;
+    return { promise, cancel };
   }
 
   /**
@@ -1050,8 +1064,16 @@ export class StudioEngine {
       body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
     });
     if (!res.ok) throw new Error(`the engine answered ${res.status} for ${method}`);
-    const body = (await res.json()) as { result?: unknown; error?: { code?: number; message?: string } };
-    if (body.error) throw new Error(body.error.message ?? `error ${String(body.error.code)} from ${method}`);
+    const body = (await res.json()) as { result?: unknown; error?: { code?: number; message?: string; data?: unknown } };
+    if (body.error) {
+      // The whole error object, code and rows included, as the socket path rejects with: a
+      // refusal's `data.errors` is what names the setting to fix.
+      throw new JsonRpcError(method, {
+        code: typeof body.error.code === "number" ? body.error.code : -32603,
+        message: body.error.message ?? `error ${String(body.error.code)} from ${method}`,
+        data: body.error.data,
+      });
+    }
     return body.result as ResultOf<M>;
   }
 
@@ -1100,7 +1122,8 @@ export class StudioEngine {
 
   async #startRunOnce(options: { readonly scenario?: string | Record<string, unknown> }): Promise<string> {
     await this.refreshStatus();
-    if (useStudio.getState().run.state === "running") {
+    const wasRunning = useStudio.getState().run.state === "running";
+    if (wasRunning) {
       // It may finish between the status and the pause; a refused pause is then not an error.
       await this.request("run.pause", {}).catch(() => undefined);
     }
@@ -1111,13 +1134,29 @@ export class StudioEngine {
     const fresh = this.streaming ? this.#nextHello(120_000) : null;
     // Over HTTP, because building a run can take longer than the socket's 30 s call timeout on a
     // large map, and a timeout there would report a failure for a run that is in fact starting.
-    const started = await this.requestHttp("run.start", {
-      paused: true,
-      ...(Number.isFinite(speed) ? { speed } : {}),
-      ...(options.scenario !== undefined ? { scenario: options.scenario } : {}),
-    });
+    let started: ResultOf<"run.start">;
+    try {
+      started = await this.requestHttp("run.start", {
+        paused: true,
+        ...(Number.isFinite(speed) ? { speed } : {}),
+        ...(options.scenario !== undefined ? { scenario: options.scenario } : {}),
+      });
+    } catch (err) {
+      fresh?.cancel();
+      const rows = refusedRows(err);
+      if (rows !== null) {
+        // The engine refused the settings before touching the run on screen: mark each setting in
+        // the settings window, and let the run that was playing carry on.
+        useStudio.getState().setValidation({ valid: false, errors: rows, warnings: [] });
+        if (wasRunning) await this.request("run.resume", {}).catch(() => undefined);
+      }
+      await this.refreshStatus();
+      const text = describeError(err);
+      this.#log("error", "run", text);
+      throw new Error(rows !== null ? `${text} ${rows.length === 1 ? "It is" : "Each is"} marked in Settings.` : text);
+    }
     if (fresh !== null && this.streaming) {
-      await fresh;
+      await fresh.promise;
     } else {
       await this.reopenStream();
     }
@@ -1155,6 +1194,7 @@ export class StudioEngine {
         stagedHash: typeof s.staged_hash === "string" ? s.staged_hash : null,
         outputDigest: typeof s.engine?.output_digest === "string" ? s.engine.output_digest : null,
         kernelThreads: typeof s.engine?.kernel_threads === "number" ? s.engine.kernel_threads : null,
+        failure: ((f: unknown) => (typeof f === "string" && f !== "" ? f : null))((s.engine as { failure?: unknown } | undefined)?.failure),
       });
       // The scenario timeline's items the run has fired by the stream position, each with what
       // it did (`scenario.event`); the time bar marks them as happened.

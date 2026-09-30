@@ -19,6 +19,7 @@ import { useCallback, useMemo, useState } from "react";
 import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
 import { durationNs, simClock } from "../lib/format.js";
+import { describeError } from "../lib/errors.js";
 import { describeStatus, toneClass, type StatusActionKind, type StatusView } from "../lib/status.js";
 
 /** The description of whatever the app is doing right now. */
@@ -31,6 +32,7 @@ export function useStatus(): StatusView {
   const replay = useStudio((s) => s.replay);
   const target = useStudio((s) => s.target);
   const reconnectAttempts = useStudio((s) => s.reconnectAttempts);
+  const failure = useStudio((s) => s.run.failure);
 
   return useMemo(() => {
     const span = tEndNs > 0 ? tEndNs : hello?.simDurationNs ?? 0;
@@ -46,8 +48,9 @@ export function useStatus(): StatusView {
       ...(span > 0 ? { spanText: durationNs(span) } : {}),
       clockText: simClock(tNs),
       reconnectAttempts,
+      ...(failure !== null ? { failure } : {}),
     });
-  }, [connection, runState, tEndNs, tNs, hello, replay, target, reconnectAttempts]);
+  }, [connection, runState, tEndNs, tNs, hello, replay, target, reconnectAttempts, failure]);
 }
 
 /**
@@ -89,7 +92,7 @@ export function useStatusAction(onConnect: () => void): {
             await engine.refreshStatus();
           }
         } catch (err) {
-          setError(err instanceof Error ? err.message : String(err));
+          setError(describeError(err));
         } finally {
           setBusy(false);
         }
@@ -113,7 +116,7 @@ export function PrimaryAction({ onConnect }: { onConnect: () => void }): React.J
   const status = useStatus();
   const runState = useStudio((s) => s.run.state);
   const replay = useStudio((s) => s.replay);
-  const { perform, busy } = useStatusAction(onConnect);
+  const { perform, busy, error } = useStatusAction(onConnect);
 
   // A recording has no transport: there is nothing to start, pause or resume, only a position.
   if (replay !== null) return null;
@@ -126,16 +129,26 @@ export function PrimaryAction({ onConnect }: { onConnect: () => void }): React.J
   if (action === null) return null;
 
   return (
-    <button
-      type="button"
-      className="primary"
-      disabled={busy}
-      title={action.hint}
-      data-testid="primary-action"
-      onClick={() => perform(action.kind)}
-    >
-      {busy ? "working…" : action.label}
-    </button>
+    <>
+      <button
+        type="button"
+        className="primary"
+        disabled={busy}
+        title={action.hint}
+        data-testid="primary-action"
+        onClick={() => perform(action.kind)}
+      >
+        {busy ? "working…" : action.label}
+      </button>
+      {/* The header's Run is the button most runs start from, and a refusal pressed here used to
+          vanish: the error was caught and never shown. It now says which setting and why, beside
+          the button, until the next press. */}
+      {error ? (
+        <span className="primary-error" role="alert" data-testid="primary-action-error" title={error}>
+          {error}
+        </span>
+      ) : null}
+    </>
   );
 }
 

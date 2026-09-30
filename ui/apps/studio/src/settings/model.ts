@@ -43,11 +43,14 @@ export function fieldPath(f: Field): string {
 }
 
 /**
- * Settings the engine reads nothing from, or has not classified. They sit behind the
- * "Unsupported" filter: editable, never silently accepted, but not in the way.
+ * Settings the engine reads nothing from, refuses outright, or has not classified. They sit behind
+ * the "Unsupported" filter with the engine's reason: editable, never silently accepted, but not in
+ * the way. `refused` is here because every key the engine files under it changes nothing it
+ * computes: `detection.responder` and `detection.perception_tier` are refused whatever their value,
+ * and `time.des_resolution` only refuses a resolution the run cannot keep.
  */
 export function isUnsupported(f: Field): boolean {
-  return f.status === "not-implemented" || f.status === "unknown";
+  return f.status === "not-implemented" || f.status === "unknown" || f.status === "refused";
 }
 
 /** True when an unapplied edit touches this field (or anything inside it, for a collection). */

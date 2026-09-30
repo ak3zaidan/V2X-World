@@ -122,6 +122,8 @@ export interface RunInfo {
   readonly outputDigest: string | null;
   /** Kernel threads alive in the engine process; one while a run is in flight, never more. */
   readonly kernelThreads: number | null;
+  /** Why the engine is in `error`, in its words (`run.status` → `engine.failure`), else null. */
+  readonly failure: string | null;
 }
 
 /**
@@ -395,7 +397,7 @@ export interface FollowedPose {
 
 const EMPTY_RUN: RunInfo = {
   state: "idle", tNs: 0, tEndNs: 0, speed: 1, actors: 0, nodes: 0, runId: "", profile: "full", live: true,
-  generation: 0, stagedHash: null, outputDigest: null, kernelThreads: null,
+  generation: 0, stagedHash: null, outputDigest: null, kernelThreads: null, failure: null,
 };
 
 const EMPTY_EXTRAS: ScenarioExtras = { runningHash: "", staged: null, fields: [], statuses: [], groups: [] };

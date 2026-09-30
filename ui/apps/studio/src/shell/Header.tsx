@@ -16,6 +16,7 @@ import { presetsOf, loadPreset } from "../state/settings.js";
 import { useStudio } from "../state/store.js";
 import { applyThemeToDocument } from "../lib/theme.js";
 import { changedPointers } from "../lib/schema.js";
+import { describeError } from "../lib/errors.js";
 import { ChartIcon, GearIcon, InspectorIcon, MoreIcon } from "./Icons.js";
 import { MenuButton } from "./Menu.js";
 import { openPanel, togglePanel } from "./route.js";
@@ -66,7 +67,7 @@ function ScenarioSwitcher(): React.JSX.Element {
                 setNote(null);
                 loadPreset(item)
                   .then((text) => setNote({ text, err: false }))
-                  .catch((err: unknown) => setNote({ text: err instanceof Error ? err.message : String(err), err: true }))
+                  .catch((err: unknown) => setNote({ text: describeError(err), err: true }))
                   .finally(() => setBusy(false));
               }}
             >

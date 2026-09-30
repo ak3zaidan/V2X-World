@@ -122,6 +122,10 @@ describe("edited and modified", () => {
   it("puts the settings the engine reads nothing from behind the Unsupported filter", () => {
     expect(isUnsupported(byPointer("/radio/legacy_knob"))).toBe(true);
     expect(isUnsupported(byPointer("/radio/tiers/phy"))).toBe(false);
+    // A key the engine refuses whatever its value (`detection.responder`) is unsupported too.
+    const refused: Field = { ...byPointer("/radio/legacy_knob"), pointer: "/detection/responder", status: "refused" };
+    expect(isUnsupported(refused)).toBe(true);
+    expect(isUnsupported({ ...refused, status: "partial" })).toBe(false);
   });
 });
 
