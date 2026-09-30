@@ -610,6 +610,31 @@ pub struct ObuRadio {
     /// Antenna height above the road, metres; unset, 1.5 m on a car and 3 m on a truck or bus.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub antenna_height_m: Option<f64>,
+    /// The antenna's radiation pattern (`v2xw_radio::antenna`): TR 37.885's per vehicle
+    /// type by default — a rooftop antenna on a car or van, front and rear panels on a
+    /// truck or bus — every vehicle's on the roof, or none.
+    #[serde(default, skip_serializing_if = "ObuAntennaPattern::is_default")]
+    pub antenna_pattern: ObuAntennaPattern,
+}
+
+/// A vehicle antenna's radiation pattern (`radio.devices.obu.antenna_pattern`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObuAntennaPattern {
+    /// 3GPP TR 37.885 Option 1 by vehicle type: rooftop (Type 2) on a car, van or
+    /// motorcycle, front and rear panels (Type 3) on a truck or bus.
+    #[default]
+    Tr37885,
+    /// A rooftop antenna on every vehicle, trucks included.
+    Rooftop,
+    /// No pattern: the scalar gain in every direction.
+    Isotropic,
+}
+
+impl ObuAntennaPattern {
+    fn is_default(&self) -> bool {
+        *self == Self::Tr37885
+    }
 }
 
 impl ObuRadio {
@@ -666,6 +691,7 @@ impl Default for RsuRadio {
             antenna_gain_dbi: Self::gain(),
             cable_loss_db: 0.0,
             antenna_height_m: None,
+            antenna_pattern: ObuAntennaPattern::Tr37885,
         }
     }
 }

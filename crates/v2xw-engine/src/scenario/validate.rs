@@ -799,7 +799,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                at the antenna port; the link budget applies antenna gain less cable loss at \
                both ends. Defaults are 3GPP TR 36.885's: 23 dBm with a 3 dBi antenna on a \
                vehicle or a roadside unit, 23 dBm and 0 dBi on a pedestrian's device, \
-               no cable loss, antennas 1.5 m high (3 m on a truck). On 802.11p a vehicle's \
+               no cable loss, antennas 1.5 m high (3 m on a truck). obu.antenna_pattern \
+               shapes each vehicle's gain by direction (TR 37.885 Option 1): tr37885, the \
+               default, puts a rooftop antenna on a car or van (the same all round, down \
+               toward a high mast) and front and rear panels on a truck or bus, 6.75 dB \
+               down to its side; rooftop gives every vehicle the roof antenna; isotropic \
+               none. On 802.11p a vehicle's \
                J2945/1 congestion control sets the radiated power (20 dBm at most) and \
                the unit transmits at the lesser of that less its net gain and this power.",
     },
