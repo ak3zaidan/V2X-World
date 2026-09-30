@@ -510,6 +510,18 @@ pub struct ImportCounts {
     /// no longer overlapped.
     #[serde(default)]
     pub junctions_with_cleared_arms: u64,
+    /// Bus lanes the cross-sections carry, counted once per way ([`crate::section`]).
+    #[serde(default)]
+    pub bus_lanes: u64,
+    /// Cycle lanes and tracks tagged on roads, counted once per way.
+    #[serde(default)]
+    pub cycle_lanes_on_roads: u64,
+    /// Parking lanes, counted once per way.
+    #[serde(default)]
+    pub parking_lanes: u64,
+    /// Signal plans given a progression offset ([`SignalDefaults::coordinate`]).
+    #[serde(default)]
+    pub signals_coordinated: u64,
     /// Crosswalks synthesised across a road at a `highway=crossing` node that no
     /// `footway=crossing` way passes through ([`OsmOptions::crossings_from_nodes`]).
     #[serde(default)]
@@ -1037,6 +1049,52 @@ pub struct SignalDefaults {
     pub red_clearance_max_s: f64,
     /// Height of a signal lantern above the road surface, metres.
     pub head_height_m: f64,
+    /// Share the green between the phases by the lanes they serve rather than equally.
+    ///
+    /// Default `true`. Webster's method gives each phase green in proportion to its
+    /// critical flow ratio; an OSM extract carries no flows, and the number of lanes on a
+    /// phase's widest approach is the standing proxy for its capacity need (HCM 2016 Ch. 19,
+    /// saturation flow per lane). A four-lane Midtown avenue then gets about twice the green
+    /// of the two-lane cross street, as it does on the street; `false` is netconvert's equal
+    /// split.
+    #[serde(default = "default_true")]
+    pub split_by_lanes: bool,
+    /// Offset the plans along each major road so that its greens start one travel time
+    /// apart — a green wave (a coordinated progression).
+    ///
+    /// Default `true`. Manhattan's signals are pre-timed on a common cycle and offset for
+    /// progression along the avenues; NYC DOT's "25 MPH Signal Retiming" (2014 onward) set
+    /// that progression to the 25 mph limit on its priority corridors, and its 2026 "Green
+    /// Wave" timing to 15 mph on some avenues for cyclists. `false` starts every plan at
+    /// `t0`, as netconvert does.
+    #[serde(default = "default_true")]
+    pub coordinate: bool,
+    /// The progression speed of the green wave, m/s. `None` (the default) takes each
+    /// link's speed limit — 25 mph on an untagged Manhattan street, which is NYC DOT's
+    /// retimed progression; set 6.7 (15 mph) for NYC DOT's cyclist Green Wave.
+    #[serde(default)]
+    pub progression_speed_mps: Option<f64>,
+    /// Keep every phase's green long enough for a pedestrian to cross the road that phase
+    /// stops: the walk interval plus the crossing at [`SignalDefaults::pedestrian_speed_mps`],
+    /// less the phase's own yellow and all-red (MUTCD 2009 §4E.06 lets the pedestrian
+    /// clearance run through the yellow change interval and the red clearance).
+    #[serde(default = "default_true")]
+    pub pedestrian_min_green: bool,
+    /// The walk interval, seconds: 7 s, the MUTCD 2009 §4E.06 minimum.
+    #[serde(default = "default_walk_s")]
+    pub pedestrian_walk_s: f64,
+    /// The walking speed pedestrian clearance is timed for, m/s: 3.5 ft/s (1.067 m/s),
+    /// MUTCD 2009 §4E.06.
+    #[serde(default = "default_ped_speed")]
+    pub pedestrian_speed_mps: f64,
+}
+
+fn default_walk_s() -> f64 {
+    7.0
+}
+
+fn default_ped_speed() -> f64 {
+    1.067
 }
 
 impl Default for SignalDefaults {
@@ -1054,6 +1112,12 @@ impl Default for SignalDefaults {
             red_clearance_vehicle_length_m: 6.1,
             red_clearance_max_s: 6.0,
             head_height_m: 5.0,
+            split_by_lanes: true,
+            coordinate: true,
+            progression_speed_mps: None,
+            pedestrian_min_green: true,
+            pedestrian_walk_s: default_walk_s(),
+            pedestrian_speed_mps: default_ped_speed(),
         }
     }
 }
@@ -1298,6 +1362,10 @@ pub struct OsmOptions {
     /// `crossing=*` value.
     #[serde(default = "default_true")]
     pub crossings_from_nodes: bool,
+    /// Which bus, cycle and parking lanes are built from the tags, and how wide
+    /// ([`crate::section`]).
+    #[serde(default)]
+    pub cross_section: crate::section::CrossSectionOptions,
     /// The terrain grid to attach. `None` leaves the world flat at `z = 0`, which is what
     /// Phase 1 does; this is the hook for the DEM importers of 04-models.md §1.4.
     pub terrain: Option<Terrain>,
@@ -1325,6 +1393,7 @@ impl Default for OsmOptions {
             bicycles_on_roads: true,
             dead_end_turnarounds: false,
             crossings_from_nodes: true,
+            cross_section: crate::section::CrossSectionOptions::default(),
             terrain: None,
         }
     }
@@ -1391,6 +1460,26 @@ impl OsmOptions {
             ("cycleway_width_m", self.cycleway_width_m),
             ("crossing_width_m", self.crossing_width_m),
             ("min_useful_lane_m", self.min_useful_lane_m.max(1.0)),
+            ("cross_section.bus_lane_width_m", self.cross_section.bus_lane_width_m),
+            ("cross_section.parking_lane_width_m", self.cross_section.parking_lane_width_m),
+            (
+                "cross_section.angled_parking_depth_m",
+                self.cross_section.angled_parking_depth_m,
+            ),
+            ("cross_section.cycle_lane_width_m", self.cross_section.cycle_lane_width_m),
+            ("cross_section.cycle_track_width_m", self.cross_section.cycle_track_width_m),
+            (
+                "cross_section.cycle_buffer_m",
+                self.cross_section.cycle_buffer_m.max(1e-3),
+            ),
+            (
+                "signals.pedestrian_speed_mps",
+                self.signals.pedestrian_speed_mps,
+            ),
+            (
+                "signals.progression_speed_mps",
+                self.signals.progression_speed_mps.unwrap_or(1.0),
+            ),
         ] {
             if !(v.is_finite() && v > 0.0) {
                 return Err(bad(name, format!("{v} m is not a positive width")));
@@ -1932,11 +2021,26 @@ pub enum HighwayPreset {
     /// The class distinction almost disappears on purpose — the law makes none. A street
     /// with a different posted limit carries `maxspeed` in OSM, and the tag always wins.
     UrbanUsNyc,
+    /// Portland, Oregon: 20 mph in a business district (ORS 811.111), which is what a
+    /// city-centre extract is, and on the residential streets Portland has posted 5 mph
+    /// under the 25 mph statutory limit (ORS 810.180; PBOT "Setting safe speed limits on
+    /// Portland streets"); 55 mph on an untagged motorway (ORS 811.111).
+    UrbanUsPortland,
+    /// A German city: 50 km/h inside a built-up area (StVO §3(3) No. 1), walking pace in a
+    /// traffic-calmed area (StVO Anlage 3, sign 325.1), and on an untagged Autobahn the
+    /// 130 km/h advisory speed (Autobahn-Richtgeschwindigkeits-Verordnung), there being no
+    /// general limit.
+    UrbanDe,
 }
 
 impl HighwayPreset {
     /// Every preset, in a stable order.
-    pub const ALL: [HighwayPreset; 2] = [HighwayPreset::SumoGerman, HighwayPreset::UrbanUsNyc];
+    pub const ALL: [HighwayPreset; 4] = [
+        HighwayPreset::SumoGerman,
+        HighwayPreset::UrbanUsNyc,
+        HighwayPreset::UrbanUsPortland,
+        HighwayPreset::UrbanDe,
+    ];
 
     /// The preset's stable kebab-case name, as the report, the provenance and a scenario
     /// file spell it.
@@ -1944,6 +2048,8 @@ impl HighwayPreset {
         match self {
             HighwayPreset::SumoGerman => "sumo-german",
             HighwayPreset::UrbanUsNyc => "urban-us-nyc",
+            HighwayPreset::UrbanUsPortland => "urban-us-portland",
+            HighwayPreset::UrbanDe => "urban-de",
         }
     }
 
@@ -1964,6 +2070,15 @@ impl HighwayPreset {
                  2014, under NY Vehicle & Traffic Law §1643) and the NY State statutory \
                  maximum of 55 mph (NY VTL §1180(b))"
             }
+            HighwayPreset::UrbanUsPortland => {
+                "Oregon statutory limits (ORS 811.111: 20 mph in a business district, 55 mph \
+                 elsewhere) and Portland's 20 mph residential streets (ORS 810.180)"
+            }
+            HighwayPreset::UrbanDe => {
+                "German StVO §3(3) No. 1 (50 km/h in built-up areas), StVO Anlage 3 sign \
+                 325.1 (walking pace), Autobahn-Richtgeschwindigkeits-Verordnung (130 km/h \
+                 advisory)"
+            }
         }
     }
 
@@ -1972,6 +2087,8 @@ impl HighwayPreset {
         match self {
             HighwayPreset::SumoGerman => SUMO_GERMAN_TABLE,
             HighwayPreset::UrbanUsNyc => URBAN_US_NYC_TABLE,
+            HighwayPreset::UrbanUsPortland => URBAN_US_PORTLAND_TABLE,
+            HighwayPreset::UrbanDe => URBAN_DE_TABLE,
         }
     }
 
@@ -2081,6 +2198,93 @@ const URBAN_US_NYC_TABLE: &[HighwayDefault] = &[
     HighwayDefault { key: "service",        class: RoadClass::Service,      family: WayFamily::Motor, lanes: 1, speed_mps: 11.176, speed_source: NYC_25, implicit_oneway: false },
     HighwayDefault { key: "busway",         class: RoadClass::Service,      family: WayFamily::Motor, lanes: 1, speed_mps: 11.176, speed_source: NYC_25, implicit_oneway: false },
     HighwayDefault { key: "road",           class: RoadClass::Unclassified, family: WayFamily::Motor, lanes: 1, speed_mps: 11.176, speed_source: NYC_25, implicit_oneway: false },
+    // --- cycle --------------------------------------------------------------
+    HighwayDefault { key: "cycleway",       class: RoadClass::Cycleway,     family: WayFamily::Cycle, lanes: 1, speed_mps: 5.56,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    // --- foot ---------------------------------------------------------------
+    HighwayDefault { key: "footway",        class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "pedestrian",     class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "corridor",       class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "path",           class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "track",          class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "bridleway",      class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "steps",          class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 0.5,   speed_source: PACE_SOURCE, implicit_oneway: false },
+];
+
+/// The citation every 20 mph row of `urban-us-portland` carries.
+const OR_20: &str = "Oregon statutory speed limit in a business district, 20 mph = 8.941 m/s \
+                     (ORS 811.111); Portland posts its residential streets at 20 mph too \
+                     (ORS 810.180)";
+
+/// The citation the motorway row of `urban-us-portland` carries.
+const OR_55: &str = "Oregon statutory speed limit outside a business or residence district, \
+                     55 mph = 24.587 m/s (ORS 811.111); a posted motorway carries maxspeed";
+
+/// `urban-us-portland`: Portland, Oregon's legal defaults; lane counts as
+/// [`URBAN_US_NYC_TABLE`].
+#[rustfmt::skip]
+const URBAN_US_PORTLAND_TABLE: &[HighwayDefault] = &[
+    // --- motor traffic ------------------------------------------------------
+    HighwayDefault { key: "motorway",       class: RoadClass::Motorway,     family: WayFamily::Motor, lanes: 2, speed_mps: 24.587, speed_source: OR_55, implicit_oneway: true },
+    HighwayDefault { key: "motorway_link",  class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: true },
+    HighwayDefault { key: "trunk",          class: RoadClass::Trunk,        family: WayFamily::Motor, lanes: 2, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "trunk_link",     class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "primary",        class: RoadClass::Primary,      family: WayFamily::Motor, lanes: 2, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "primary_link",   class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "secondary",      class: RoadClass::Secondary,    family: WayFamily::Motor, lanes: 2, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "secondary_link", class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "tertiary",       class: RoadClass::Tertiary,     family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "tertiary_link",  class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "unclassified",   class: RoadClass::Unclassified, family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "residential",    class: RoadClass::Residential,  family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "living_street",  class: RoadClass::Living,       family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "service",        class: RoadClass::Service,      family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "busway",         class: RoadClass::Service,      family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "road",           class: RoadClass::Unclassified, family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    // --- cycle --------------------------------------------------------------
+    HighwayDefault { key: "cycleway",       class: RoadClass::Cycleway,     family: WayFamily::Cycle, lanes: 1, speed_mps: 5.56,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    // --- foot ---------------------------------------------------------------
+    HighwayDefault { key: "footway",        class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "pedestrian",     class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "corridor",       class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "path",           class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "track",          class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "bridleway",      class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "steps",          class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 0.5,   speed_source: PACE_SOURCE, implicit_oneway: false },
+];
+
+/// The citation every 50 km/h row of `urban-de` carries.
+const DE_50: &str = "German speed limit inside built-up areas, 50 km/h = 13.889 m/s (StVO §3(3) \
+                     No. 1)";
+
+/// The citation the living-street row of `urban-de` carries.
+const DE_WALK: &str = "walking pace in a traffic-calmed area (StVO Anlage 3, sign 325.1), taken \
+                       as 7 km/h = 1.944 m/s, the middle of the 4-10 km/h courts have read it as";
+
+/// The citation the motorway row of `urban-de` carries.
+const DE_130: &str = "German Autobahn advisory speed, 130 km/h = 36.111 m/s \
+                      (Autobahn-Richtgeschwindigkeits-Verordnung); there is no general limit, \
+                      and an urban Autobahn is posted and tagged";
+
+/// `urban-de`: a German city's legal defaults; lane counts as [`URBAN_US_NYC_TABLE`].
+#[rustfmt::skip]
+const URBAN_DE_TABLE: &[HighwayDefault] = &[
+    // --- motor traffic ------------------------------------------------------
+    HighwayDefault { key: "motorway",       class: RoadClass::Motorway,     family: WayFamily::Motor, lanes: 2, speed_mps: 36.111, speed_source: DE_130, implicit_oneway: true },
+    HighwayDefault { key: "motorway_link",  class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: true },
+    HighwayDefault { key: "trunk",          class: RoadClass::Trunk,        family: WayFamily::Motor, lanes: 2, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "trunk_link",     class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "primary",        class: RoadClass::Primary,      family: WayFamily::Motor, lanes: 2, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "primary_link",   class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "secondary",      class: RoadClass::Secondary,    family: WayFamily::Motor, lanes: 2, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "secondary_link", class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "tertiary",       class: RoadClass::Tertiary,     family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "tertiary_link",  class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "unclassified",   class: RoadClass::Unclassified, family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "residential",    class: RoadClass::Residential,  family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "living_street",  class: RoadClass::Living,       family: WayFamily::Motor, lanes: 1, speed_mps: 1.944, speed_source: DE_WALK, implicit_oneway: false },
+    HighwayDefault { key: "service",        class: RoadClass::Service,      family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "busway",         class: RoadClass::Service,      family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "road",           class: RoadClass::Unclassified, family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
     // --- cycle --------------------------------------------------------------
     HighwayDefault { key: "cycleway",       class: RoadClass::Cycleway,     family: WayFamily::Cycle, lanes: 1, speed_mps: 5.56,  speed_source: PACE_SOURCE, implicit_oneway: false },
     // --- foot ---------------------------------------------------------------
@@ -2522,18 +2726,17 @@ pub struct WayPlan {
     /// How many levels above ground a bridge runs: its `layer` when positive, `0`
     /// otherwise (a bridge tagged at layer 0 crosses water or a gap, not a road).
     pub levels_above: u8,
+    /// Every lane across the way — general, bus, cycle, parking — and where it lies
+    /// ([`crate::section`]).
+    pub section: crate::section::CrossSection,
 }
 
 impl WayPlan {
-    /// Total lanes across both directions.
-    fn total_lanes(&self) -> u8 {
-        self.lanes_fwd.saturating_add(self.lanes_bwd)
-    }
-
-    /// Half the carriageway width, metres — the junction trimming radius this way
+    /// Half the street's width, kerb to kerb and beyond it to the far side of any cycle
+    /// track, metres, on its wider side — the junction trimming radius this way
     /// contributes.
     fn half_width_m(&self) -> f64 {
-        f64::from(self.total_lanes()) * self.lane_width_m * 0.5
+        self.section.half_width_m()
     }
 }
 
@@ -2812,6 +3015,67 @@ pub fn classify_way(
         WayFamily::Foot => (options.sidewalk_width_m, WidthSource::Option),
     };
 
+    // --- the cross-section: bus, cycle and parking lanes ------------------------
+    let kind = if defaults.family == WayFamily::Foot && is_crossing_way(&way.tags) {
+        LaneKind::Crossing
+    } else {
+        defaults.family.lane_kind()
+    };
+    let mut section_input = crate::section::SectionInput {
+        fwd,
+        bwd,
+        general_width_m: lane_width_m,
+        general_kind: kind,
+        general_allowed: allowed,
+        bicycles_on_roads: allowed.contains_all(ClassMask::BICYCLE),
+    };
+    let (section, lane_width_m) = if defaults.family == WayFamily::Motor {
+        let mut section = crate::section::build(&way.tags, &section_input, &options.cross_section);
+        let mut width = lane_width_m;
+        // A `width` tag is the carriageway kerb to kerb (OSM wiki, Key:width): the general
+        // lanes share what the parking and painted cycle lanes leave of it, rather than the
+        // whole of it — which made a one-lane street with parking on both sides a 9.2 m
+        // lane.
+        if width_source == WidthSource::WayTag && section.reserved_m > 0.0 {
+            let tagged = lane_width_m * f64::from(fwd.saturating_add(bwd).max(1));
+            let shared = crate::section::CrossSection::general_width_for(
+                tagged,
+                section.reserved_m,
+                u32::from(fwd.saturating_add(bwd)),
+            )
+            .filter(|w| (MIN_LANE_WIDTH_M..=MAX_LANE_WIDTH_M).contains(w));
+            width = shared.unwrap_or_else(|| {
+                report.note(Anomaly::UnparsableHeight, way.id);
+                class_lane_width_m(defaults.class).unwrap_or(FALLBACK_LANE_WIDTH_M)
+            });
+            section_input.general_width_m = width;
+            // The tag fixes the carriageway, bus lanes included: they share it equally.
+            let fixed = crate::section::CrossSectionOptions {
+                bus_lane_width_m: 0.0,
+                ..options.cross_section
+            };
+            section = crate::section::build(&way.tags, &section_input, &fixed);
+        }
+        report.counts.bus_lanes += u64::from(section.bus_lanes);
+        report.counts.cycle_lanes_on_roads += u64::from(section.cycle_lanes);
+        report.counts.parking_lanes += u64::from(section.parking_lanes);
+        if section.unusable_tags > 0 {
+            report.note(Anomaly::UnparsableTurnLanes, way.id);
+        }
+        (section, width)
+    } else {
+        let plain = crate::section::CrossSectionOptions {
+            bus_lanes: false,
+            cycle_lanes: false,
+            parking_lanes: false,
+            ..options.cross_section
+        };
+        (
+            crate::section::build(&Tags::default(), &section_input, &plain),
+            lane_width_m,
+        )
+    };
+
     Some(WayPlan {
         way: index,
         osm_id: way.id,
@@ -2827,11 +3091,8 @@ pub fn classify_way(
         // A `footway=crossing` way is the crosswalk itself: its lanes are crossing lanes,
         // which is what lets a pedestrian router, the vehicle yield rule and the signal
         // plan's pedestrian intervals find it.
-        kind: if defaults.family == WayFamily::Foot && is_crossing_way(&way.tags) {
-            LaneKind::Crossing
-        } else {
-            defaults.family.lane_kind()
-        },
+        kind,
+        section,
         turn_fwd,
         turn_bwd,
         roundabout,
@@ -2925,6 +3186,11 @@ struct Segment {
     fwd: u8,
     /// Lanes running against `nodes`.
     bwd: u8,
+    /// Every lane running along `nodes` — general, bus, cycle and parking — rightmost
+    /// first, with its offset from the way ([`crate::section`]).
+    section_fwd: Vec<crate::section::LaneSpec>,
+    /// Every lane running against `nodes`, rightmost first in that direction.
+    section_bwd: Vec<crate::section::LaneSpec>,
     /// `turn:lanes` for the forward direction at this segment's far end, rightmost first.
     turn_fwd: Option<Vec<Vec<TurnDirection>>>,
     /// `turn:lanes` for the backward direction at this segment's near end.
@@ -2960,6 +3226,8 @@ impl Segment {
             points,
             fwd: self.bwd,
             bwd: self.fwd,
+            section_fwd: self.section_bwd.clone(),
+            section_bwd: self.section_fwd.clone(),
             turn_fwd: self.turn_bwd.clone(),
             turn_bwd: self.turn_fwd.clone(),
         }
@@ -3426,6 +3694,8 @@ fn split_ways(
                     points: geometry[start..=i].to_vec(),
                     fwd: plan.lanes_fwd,
                     bwd: plan.lanes_bwd,
+                    section_fwd: plan.section.fwd.clone(),
+                    section_bwd: plan.section.bwd.clone(),
                     // Only the piece that reaches the way's far end carries the way's
                     // `turn:lanes`: the tag describes the approach to one junction.
                     turn_fwd: if nodes[i] == way_end {
@@ -3498,7 +3768,11 @@ fn collapse_trivial_junctions(
             a.reversed()
         };
         let b_out = b.oriented_from(node)?;
-        if a_in.fwd != b_out.fwd || a_in.bwd != b_out.bwd {
+        if a_in.fwd != b_out.fwd
+            || a_in.bwd != b_out.bwd
+            || a_in.section_fwd != b_out.section_fwd
+            || a_in.section_bwd != b_out.section_bwd
+        {
             return None;
         }
         if a_in.start_node() == b_out.end_node() {
@@ -4170,13 +4444,33 @@ struct JunctionRadii {
     soft: BTreeMap<i64, f64>,
 }
 
+/// A fingerprint of a cross-section: equal sections give equal numbers (FNV-1a over the
+/// kinds, widths, masks and offsets, bit for bit).
+fn section_fingerprint(section: &[crate::section::LaneSpec]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |v: u64| {
+        for byte in v.to_le_bytes() {
+            h ^= u64::from(byte);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    eat(section.len() as u64);
+    for l in section {
+        eat(u64::from(l.kind.wire_code()));
+        eat(l.width_m.to_bits());
+        eat(u64::from(l.allowed.bits()));
+        eat(l.offset_m.to_bits());
+    }
+    h
+}
+
 /// Computes [`JunctionRadii`] for every road end of `segments`.
 fn junction_radii(segments: &[Segment], plans: &[WayPlan], options: &OsmOptions) -> JunctionRadii {
     let mut motor: BTreeMap<i64, f64> = BTreeMap::new();
     let mut soft: BTreeMap<i64, f64> = BTreeMap::new();
-    // Each motor arm as seen leaving the node: (lanes out, lanes in, lane width bits,
-    // levels below, levels above).
-    let mut arms: BTreeMap<i64, Vec<(u8, u8, u64, u8, u8)>> = BTreeMap::new();
+    // Each motor arm as seen leaving the node: (its lanes out, its lanes in — each the
+    // whole cross-section, fingerprinted — lane width bits, levels below, levels above).
+    let mut arms: BTreeMap<i64, Vec<(u64, u64, u64, u8, u8)>> = BTreeMap::new();
     for segment in segments {
         let plan = &plans[segment.plan];
         let half = plan.half_width_m();
@@ -4184,10 +4478,13 @@ fn junction_radii(segments: &[Segment], plans: &[WayPlan], options: &OsmOptions)
             if plan.family == WayFamily::Motor {
                 let r = motor.entry(node).or_insert(0.0);
                 *r = r.max(half);
+                // The whole cross-section, not just the lane count: where a parking lane
+                // or a bus lane begins the lanes shift sideways, and a 1 m continuation
+                // connector cannot take that shift without a heading jump.
                 let (out, inn) = if leaving {
-                    (segment.fwd, segment.bwd)
+                    (section_fingerprint(&segment.section_fwd), section_fingerprint(&segment.section_bwd))
                 } else {
-                    (segment.bwd, segment.fwd)
+                    (section_fingerprint(&segment.section_bwd), section_fingerprint(&segment.section_fwd))
                 };
                 arms.entry(node).or_default().push((
                     out,
@@ -4534,10 +4831,9 @@ fn build_network(
         let mut reversed = core.clone();
         reversed.reverse();
 
-        let half_width = plan.half_width_m();
-        for (direction_lanes, geometry, from, to, turns, near_way, far_way) in [
+        for (section, geometry, from, to, turns, near_way, far_way) in [
             (
-                segment.fwd,
+                &segment.section_fwd,
                 &core,
                 from_j,
                 to_j,
@@ -4546,7 +4842,7 @@ fn build_network(
                 segment.end_way,
             ),
             (
-                segment.bwd,
+                &segment.section_bwd,
                 &reversed,
                 to_j,
                 from_j,
@@ -4555,14 +4851,14 @@ fn build_network(
                 segment.start_way,
             ),
         ] {
-            if direction_lanes == 0 {
+            if section.is_empty() {
                 continue;
             }
             let edge_id = EdgeId::new(net.edges.len() as u32);
-            let mut lane_ids = Vec::with_capacity(usize::from(direction_lanes));
-            for k in 0..direction_lanes {
-                let offset = -(half_width - (f64::from(k) + 0.5) * plan.lane_width_m);
-                let (offset_points, repaired) = offset_polyline(geometry, offset);
+            let mut lane_ids = Vec::with_capacity(section.len());
+            for (k, spec) in section.iter().enumerate() {
+                let k = u8::try_from(k).unwrap_or(u8::MAX);
+                let (offset_points, repaired) = offset_polyline(geometry, spec.offset_m);
                 let mut centreline = dedupe_points(offset_points);
                 // A motor lane is a path a vehicle drives: its corners are rounded into
                 // arcs, so its heading is continuous (see `crate::curve`), and a noisy
@@ -4600,11 +4896,11 @@ fn build_network(
                     edge_id,
                     None,
                     k,
-                    plan.kind,
+                    spec.kind,
                     centreline,
-                    plan.lane_width_m,
+                    spec.width_m,
                     plan.speed_mps,
-                    plan.allowed,
+                    spec.allowed,
                 ) {
                     Ok(lane) => {
                         net.lanes.push(lane);
@@ -4613,7 +4909,9 @@ fn build_network(
                             report.note(Anomaly::SelfIntersectingLane, plan.osm_id);
                             report.counts.lanes_repaired += 1;
                         }
-                        if plan.family == WayFamily::Motor {
+                        if plan.family == WayFamily::Motor
+                            && matches!(spec.kind, LaneKind::Driving | LaneKind::Bus)
+                        {
                             if plan.speed_from_preset {
                                 report.counts.speeds_defaulted += 1;
                                 defaulted_speeds.push(plan.speed_mps);
@@ -4750,7 +5048,12 @@ fn add_tagged_sidewalks(
         if !present {
             continue;
         }
-        let band = side * (plan.half_width_m() + width * 0.5);
+        let extent = if side > 0.0 {
+            plan.section.left_extent_m
+        } else {
+            plan.section.right_extent_m
+        };
+        let band = side * (extent + width * 0.5);
         for (geometry, offset, from, to) in [
             (base, band - quarter, from_j, to_j),
             (&reversed, -(band + quarter), to_j, from_j),
@@ -4901,9 +5204,16 @@ fn build_movements(
 
         for &a in &approaches {
             let approach = net.edge_info[a].clone();
-            let in_lanes = approach.lanes.clone();
+            // The lanes that carry traffic through the junction: general and bus lanes, in
+            // index order (rightmost first) — the lanes `turn:lanes` describes. Parking lanes
+            // go nowhere; cycle lanes are connected on their own below.
+            let in_lanes = traffic_lanes(net, &approach.lanes);
+            let cycle_in = cycle_lanes_with_side(net, &approach.lanes);
+            if in_lanes.is_empty() && cycle_in.is_empty() {
+                continue;
+            }
             let approach_heading = {
-                let lane = &net.lanes[in_lanes[0].as_usize()];
+                let lane = &net.lanes[approach.lanes[0].as_usize()];
                 lane.heading_at(lane.length_m)
             };
             // Candidate departures, with the turn each one represents.
@@ -4925,7 +5235,8 @@ fn build_movements(
             // road, once a junction join has put both in one junction, whose angle a
             // skewed join can make look like a sharp right. It is offered only where there
             // is nothing else to do.
-            let approach_from = net.edges[net.lanes[in_lanes[0].as_usize()].edge.as_usize()].from;
+            let approach_from =
+                net.edges[net.lanes[approach.lanes[0].as_usize()].edge.as_usize()].from;
             let is_uturn = |b: usize, turn: TurnDirection| {
                 let departure_to = net.edges
                     [net.lanes[net.edge_info[b].lanes[0].as_usize()].edge.as_usize()]
@@ -4946,9 +5257,11 @@ fn build_movements(
                 // instead: traffic arrives there (a garage, a loading dock, the edge of the
                 // map) and none drives through.
                 let tight = candidates.iter().any(|(b, _, _)| {
-                    let from = &net.lanes[in_lanes[in_lanes.len() - 1].as_usize()];
-                    let to_lanes = &net.edge_info[*b].lanes;
-                    let to = &net.lanes[to_lanes[to_lanes.len() - 1].as_usize()];
+                    let to_lanes = traffic_lanes(net, &net.edge_info[*b].lanes);
+                    let (Some(from), Some(to)) = (in_lanes.last(), to_lanes.last()) else {
+                        return true;
+                    };
+                    let (from, to) = (&net.lanes[from.as_usize()], &net.lanes[to.as_usize()]);
                     0.5 * from.end().distance_2d(to.start()) < TURN_DESIGN_RADIUS_M
                 });
                 if tight {
@@ -4960,10 +5273,38 @@ fn build_movements(
                 continue;
             }
 
+            // The general lanes (those a car may use), by index into `in_lanes`. The
+            // geometric rule — right turns from the rightmost, left from the leftmost — is
+            // applied to them; a bus lane goes straight on and turns towards its own kerb
+            // (NYC lets other traffic into a bus lane only to make the next turn, which the
+            // general lane beside it stands in for here).
+            let general: Vec<usize> = (0..in_lanes.len())
+                .filter(|k| net.lanes[in_lanes[*k].as_usize()].admits(ClassMask::CAR))
+                .collect();
             let tagged_or_geometric = |k: usize, turn: TurnDirection| -> bool {
                 match approach.turns.as_ref().and_then(|t| t.get(k)) {
                     Some(set) if !set.is_empty() => set.iter().any(|t| turn_matches(*t, turn)),
-                    _ => lanes_for_turn(turn, in_lanes.len()).contains(&k),
+                    _ => match general.iter().position(|g| *g == k) {
+                        Some(g) => lanes_for_turn(turn, general.len()).contains(&g),
+                        None if general.is_empty() => {
+                            lanes_for_turn(turn, in_lanes.len()).contains(&k)
+                        }
+                        None => {
+                            let right_of_all = general.iter().all(|g| k < *g);
+                            let left_of_all = general.iter().all(|g| k > *g);
+                            is_through(turn)
+                                || (right_of_all
+                                    && matches!(
+                                        turn,
+                                        TurnDirection::Right | TurnDirection::SlightRight
+                                    ))
+                                || (left_of_all
+                                    && matches!(
+                                        turn,
+                                        TurnDirection::Left | TurnDirection::SlightLeft
+                                    ))
+                        }
+                    },
                 }
             };
             let fork = fork_assignment(net, &candidates, in_lanes.len(), &tagged_or_geometric);
@@ -4980,15 +5321,20 @@ fn build_movements(
                 let mut made = 0usize;
                 let mut seen: Vec<LaneId> = Vec::new();
                 for &(b, turn, _) in &candidates {
-                    let departure = &net.edge_info[b];
-                    let out_lanes = departure.lanes.len();
                     if !permits(k, b, turn) {
+                        continue;
+                    }
+                    let out = traffic_lanes(net, &net.edge_info[b].lanes);
+                    if out.is_empty() {
                         continue;
                     }
                     let sharing: Vec<usize> = (0..in_lanes.len())
                         .filter(|j| permits(*j, b, turn))
                         .collect();
-                    let to_lane = departure.lanes[target_lane(turn, k, &sharing, out_lanes)];
+                    let target = target_lane(turn, k, &sharing, out.len());
+                    let Some(to_lane) = fitting_lane(net, from_lane, &out, target, k) else {
+                        continue;
+                    };
                     if seen.contains(&to_lane) {
                         continue;
                     }
@@ -5008,25 +5354,58 @@ fn build_movements(
                 if made == 0 {
                     // Give the lane the straightest candidate rather than leave it a dead
                     // end: a tag should never disconnect a lane from the network.
-                    let best = candidates
-                        .iter()
-                        .min_by(|x, y| x.2.abs().total_cmp(&y.2.abs()))
-                        .copied();
-                    if let Some((b, turn, _)) = best {
-                        let departure = &net.edge_info[b];
-                        let to_lane =
-                            departure.lanes[target_lane(turn, k, &[k], departure.lanes.len())];
-                        requests.push(MovementRequest {
-                            from_lane,
-                            to_lane,
-                            turn,
-                            approach_heading,
-                            from_edge: a,
-                            to_edge: b,
-                            plan: approach.plan,
-                            plans,
-                        });
+                    let mut ranked: Vec<(usize, TurnDirection, f64)> = candidates.clone();
+                    ranked.sort_by(|x, y| x.2.abs().total_cmp(&y.2.abs()).then(x.0.cmp(&y.0)));
+                    for (b, turn, _) in ranked {
+                        let out = traffic_lanes(net, &net.edge_info[b].lanes);
+                        if out.is_empty() {
+                            continue;
+                        }
+                        let t = target_lane(turn, k, &[k], out.len());
+                        if let Some(to_lane) = fitting_lane(net, from_lane, &out, t, k) {
+                            requests.push(MovementRequest {
+                                from_lane,
+                                to_lane,
+                                turn,
+                                approach_heading,
+                                from_edge: a,
+                                to_edge: b,
+                                plan: approach.plan,
+                                plans,
+                            });
+                            break;
+                        }
                     }
+                }
+            }
+
+            // Cycle lanes: straight on into the next cycle lane on the same side, and turns
+            // towards their own side only — a cyclist in a right-side lane turns right from
+            // it, one in a left-side track turns left from it; turning across the traffic
+            // is done as a pedestrian would, which is the VRU model's business.
+            for &(from_lane, on_right) in &cycle_in {
+                for &(b, turn, _) in &candidates {
+                    let towards_side = if on_right {
+                        matches!(turn, TurnDirection::Right | TurnDirection::SlightRight)
+                    } else {
+                        matches!(turn, TurnDirection::Left | TurnDirection::SlightLeft)
+                    };
+                    if !(is_through(turn) || towards_side) {
+                        continue;
+                    }
+                    let Some(to_lane) = cycle_target(net, b, on_right) else {
+                        continue;
+                    };
+                    requests.push(MovementRequest {
+                        from_lane,
+                        to_lane,
+                        turn,
+                        approach_heading,
+                        from_edge: a,
+                        to_edge: b,
+                        plan: approach.plan,
+                        plans,
+                    });
                 }
             }
         }
@@ -5063,6 +5442,80 @@ fn build_movements(
         net.movements[j] = movements;
     }
     direct
+}
+
+/// The lanes of `lanes` that carry traffic through a junction — general and bus lanes —
+/// in index order.
+fn traffic_lanes(net: &Net, lanes: &[LaneId]) -> Vec<LaneId> {
+    lanes
+        .iter()
+        .copied()
+        .filter(|l| matches!(net.lanes[l.as_usize()].kind, LaneKind::Driving | LaneKind::Bus))
+        .collect()
+}
+
+/// The cycle lanes of `lanes`, each with whether it is on the right of the edge's traffic
+/// lanes (true) or on their left. An edge with no traffic lanes — a one-way street's
+/// contraflow cycle lane — has its cycle lanes on the right.
+fn cycle_lanes_with_side(net: &Net, lanes: &[LaneId]) -> Vec<(LaneId, bool)> {
+    let first_traffic = lanes
+        .iter()
+        .map(|l| &net.lanes[l.as_usize()])
+        .filter(|l| matches!(l.kind, LaneKind::Driving | LaneKind::Bus))
+        .map(|l| l.index)
+        .min();
+    lanes
+        .iter()
+        .map(|l| &net.lanes[l.as_usize()])
+        .filter(|l| l.kind == LaneKind::Cycle)
+        .map(|l| (l.id, first_traffic.is_none_or(|f| l.index < f)))
+        .collect()
+}
+
+/// The class a lane is mainly for: a car for a general lane, a bus for a bus lane.
+fn main_class(lane: &Lane) -> ClassMask {
+    if lane.admits(ClassMask::CAR) {
+        ClassMask::CAR
+    } else if lane.admits(ClassMask::BUS) {
+        ClassMask::BUS
+    } else {
+        lane.allowed
+    }
+}
+
+/// The departure lane a movement from `from` enters: `out[target]` if the traffic on
+/// `from` may use it, else the nearest one it may (nearest to `target`, then to the
+/// approach lane's own index `k`), or `None` if none. A general lane's through movement
+/// that lines up with a bus lane on the far side moves over to the first general lane.
+fn fitting_lane(net: &Net, from: LaneId, out: &[LaneId], target: usize, k: usize) -> Option<LaneId> {
+    let need = main_class(&net.lanes[from.as_usize()]);
+    (0..out.len())
+        .filter(|i| net.lanes[out[*i].as_usize()].admits(need))
+        .min_by_key(|i| (i.abs_diff(target), i.abs_diff(k), *i))
+        .map(|i| out[i])
+}
+
+/// Where a cyclist leaving on departure edge `b` from a cycle lane on the right
+/// (`on_right`) or the left rides on: the departure's cycle lane on that side, else any
+/// cycle lane it has, else its outermost lane on that side that admits a bicycle.
+fn cycle_target(net: &Net, b: usize, on_right: bool) -> Option<LaneId> {
+    let lanes = &net.edge_info[b].lanes;
+    let cycles = cycle_lanes_with_side(net, lanes);
+    if let Some((l, _)) = cycles.iter().find(|(_, r)| *r == on_right) {
+        return Some(*l);
+    }
+    if let Some((l, _)) = cycles.first() {
+        return Some(*l);
+    }
+    let riding: Vec<LaneId> = traffic_lanes(net, lanes)
+        .into_iter()
+        .filter(|l| net.lanes[l.as_usize()].admits(ClassMask::BICYCLE))
+        .collect();
+    if on_right {
+        riding.first().copied()
+    } else {
+        riding.last().copied()
+    }
 }
 
 /// True for the "straight on" family of turns — straight, slight left, slight right — that
@@ -5110,7 +5563,7 @@ fn fork_assignment(
     }
     let weights: Vec<f64> = branches
         .iter()
-        .map(|(b, _, _)| net.edge_info[*b].lanes.len().max(1) as f64)
+        .map(|(b, _, _)| traffic_lanes(net, &net.edge_info[*b].lanes).len().max(1) as f64)
         .collect();
     let total: f64 = weights.iter().sum();
     let m = shared.len();
@@ -5374,6 +5827,14 @@ fn add_movement(
     }
     let lane_id = LaneId::new(net.lanes.len() as u32);
     let index = u8::try_from(internal_lanes.len()).unwrap_or(u8::MAX);
+    // The connector carries what both its lanes carry: a bus lane's connector is a bus
+    // path, a cycle lane's a cycle path, and it is as wide as the lane it leaves.
+    let (width, allowed) = {
+        let from = &net.lanes[request.from_lane.as_usize()];
+        let to = &net.lanes[request.to_lane.as_usize()];
+        let both = from.allowed.intersection(to.allowed);
+        (from.width_m, if both.is_empty() { from.allowed } else { both })
+    };
     let Ok(lane) = Lane::new(
         lane_id,
         internal_edge,
@@ -5381,9 +5842,9 @@ fn add_movement(
         index,
         LaneKind::Internal,
         geometry,
-        plan.lane_width_m,
+        width,
         plan.speed_mps,
-        plan.allowed,
+        allowed,
     ) else {
         touching(direct, report);
         return;
@@ -5745,7 +6206,17 @@ fn conflict_matrix(movements: &[Movement], lanes: &[Lane]) -> ConflictMatrix {
             }
             matrix.set_foe(a, b, true);
             let (ra, rb) = (rank(ma), rank(mb));
-            if ra < rb {
+            if ma.from_edge == mb.from_edge && is_through(ma.turn) != is_through(mb.turn) {
+                // Two movements off one approach that cross: a car turning across the
+                // cycle lane (or bus lane) beside it yields to the traffic going straight
+                // on in that lane, as every highway code requires of a turning driver
+                // (NY VTL §1160 and §1146 for cyclists).
+                if is_through(ma.turn) {
+                    matrix.set_response(b, a, true);
+                } else {
+                    matrix.set_response(a, b, true);
+                }
+            } else if ra < rb {
                 matrix.set_response(a, b, true);
             } else if rb < ra {
                 matrix.set_response(b, a, true);
@@ -5912,6 +6383,242 @@ fn split_phases(
         .collect()
 }
 
+/// The width of the road an approach belongs to, kerb to kerb in both directions, metres:
+/// the sum of every lane's width over the edges built from the approach's segment.
+fn road_width_m(net: &Net, edge_info: usize) -> f64 {
+    let segment = net.edge_info[edge_info].segment;
+    net.edge_info
+        .iter()
+        .filter(|e| e.segment == segment && e.family == WayFamily::Motor && !e.side)
+        .flat_map(|e| e.lanes.iter())
+        .map(|l| net.lanes[l.as_usize()].width_m)
+        .sum()
+}
+
+/// The greens of a plan's phase groups, and the groups reordered so the major one runs
+/// first (the phase a coordinated plan's offset refers to).
+///
+/// `timing` is `(group, yellow, all-red)` per group. Each group's weight is the number of
+/// general and bus lanes on its widest approach ([`SignalDefaults::split_by_lanes`]; 1
+/// each otherwise); the green left over by the change intervals is shared in proportion to
+/// it, and never below [`SignalDefaults::min_green_s`] nor, with
+/// [`SignalDefaults::pedestrian_min_green`], below what a pedestrian needs to cross the
+/// widest road the group stops: `walk + width / speed − yellow − all-red`. Where the
+/// minimums do not fit the target cycle they are kept and the cycle runs longer.
+fn phase_greens(
+    net: &Net,
+    movements: &[Movement],
+    groups: &[u16],
+    timing: Vec<(u16, f64, f64)>,
+    defaults: &SignalDefaults,
+) -> (Vec<(u16, f64, f64)>, Vec<f64>) {
+    let n = timing.len();
+    let weight: Vec<f64> = timing
+        .iter()
+        .map(|(g, _, _)| {
+            if !defaults.split_by_lanes {
+                return 1.0;
+            }
+            movements
+                .iter()
+                .zip(groups)
+                .filter(|(_, mg)| **mg == *g)
+                .map(|(m, _)| traffic_lanes(net, &net.edge_info[m.from_edge].lanes).len())
+                .max()
+                .unwrap_or(1)
+                .max(1) as f64
+        })
+        .collect();
+    let minimum: Vec<f64> = timing
+        .iter()
+        .map(|(g, yellow, red)| {
+            let mut least = defaults.min_green_s;
+            if defaults.pedestrian_min_green && defaults.pedestrian_speed_mps > 0.0 {
+                // The widest road this group's red stops: pedestrians cross it while this
+                // group has its green.
+                let widest = movements
+                    .iter()
+                    .zip(groups)
+                    .filter(|(_, mg)| **mg != *g)
+                    .map(|(m, _)| road_width_m(net, m.from_edge))
+                    .fold(0.0f64, f64::max);
+                if widest > 0.0 {
+                    let need = defaults.pedestrian_walk_s + widest / defaults.pedestrian_speed_mps
+                        - yellow
+                        - red;
+                    least = least.max(need);
+                }
+            }
+            quantise(least, Q_TIME_S)
+        })
+        .collect();
+    let fixed: f64 = timing.iter().map(|(_, y, r)| y + r).sum();
+    let available = defaults.cycle_s - fixed;
+    // Proportional shares, with any group held at its minimum taken out and the rest
+    // re-shared, until the shares are consistent (at most `n` rounds).
+    let mut green = vec![0.0f64; n];
+    let mut pinned = vec![false; n];
+    for _ in 0..=n {
+        let free: f64 = available
+            - (0..n).filter(|i| pinned[*i]).map(|i| minimum[i]).sum::<f64>();
+        let w: f64 = (0..n).filter(|i| !pinned[*i]).map(|i| weight[i]).sum();
+        let mut changed = false;
+        for i in 0..n {
+            if pinned[i] {
+                green[i] = minimum[i];
+                continue;
+            }
+            green[i] = if w > 0.0 { free * weight[i] / w } else { 0.0 };
+            if green[i] < minimum[i] {
+                pinned[i] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut green: Vec<f64> = (0..n)
+        .map(|i| quantise(green[i].max(minimum[i]), Q_TIME_S))
+        .collect();
+    // The major group — the heaviest, the first on a tie — runs first, and takes the
+    // rounding remainder so the plan fills its target cycle exactly when it can.
+    let major = (0..n)
+        .max_by(|a, b| weight[*a].total_cmp(&weight[*b]).then(b.cmp(a)))
+        .unwrap_or(0);
+    let total: f64 = green.iter().sum();
+    if total <= available + 1e-9 {
+        green[major] = quantise(green[major] + (available - total), Q_TIME_S);
+    }
+    let order: Vec<usize> = (major..n).chain(0..major).collect();
+    (
+        order.iter().map(|i| timing[*i]).collect(),
+        order.iter().map(|i| green[*i]).collect(),
+    )
+}
+
+/// Offsets the plans for progression along their major roads; returns how many plans were
+/// given a non-zero offset.
+///
+/// Each plan's first phase is its major road's green ([`phase_greens`]). A plan's
+/// *predecessor* is the signalised junction its major approach comes from — the approach
+/// with the most general lanes, the lowest index on a tie — provided that junction's own
+/// major green sends traffic onto that approach and runs on the same cycle. The plan's
+/// green then starts one travel time after its predecessor's: `offset = offset_up + d / v`
+/// modulo the cycle, `d` the approach lane plus the upstream connector, `v`
+/// [`SignalDefaults::progression_speed_mps`] or the approach's speed limit. A plan with no
+/// predecessor, or on a loop of predecessors, starts at `t0`. On a one-way avenue this is
+/// the textbook progression; on a two-way road it favours one direction, which is the
+/// usual compromise of a simple time-space design.
+fn coordinate_offsets(net: &Net, plans: &mut [SignalPlan], defaults: &SignalDefaults) -> u64 {
+    let plan_of: BTreeMap<usize, usize> = plans
+        .iter()
+        .enumerate()
+        .map(|(p, plan)| (plan.junction.as_usize(), p))
+        .collect();
+    // Each plan's major movements: those green in its first phase.
+    let major: Vec<Vec<&Movement>> = plans
+        .iter()
+        .map(|plan| {
+            let movements = &net.movements[plan.junction.as_usize()];
+            let Some(first) = plan.phases.first() else {
+                return Vec::new();
+            };
+            movements
+                .iter()
+                .zip(&first.states)
+                .filter(|(_, s)| matches!(s, SignalState::Green | SignalState::GreenYield))
+                .map(|(m, _)| m)
+                .collect()
+        })
+        .collect();
+    // The predecessor of each plan, and the travel time from it.
+    let mut pred: Vec<Option<(usize, f64)>> = vec![None; plans.len()];
+    for p in 0..plans.len() {
+        let mut approaches: Vec<usize> = major[p].iter().map(|m| m.from_edge).collect();
+        approaches.sort_unstable();
+        approaches.dedup();
+        approaches.sort_by_key(|e| {
+            (
+                std::cmp::Reverse(traffic_lanes(net, &net.edge_info[*e].lanes).len()),
+                *e,
+            )
+        });
+        for e in approaches {
+            let Some(first) = traffic_lanes(net, &net.edge_info[e].lanes).first().copied() else {
+                continue;
+            };
+            let lane = &net.lanes[first.as_usize()];
+            let up = net.edges[lane.edge.as_usize()].from.as_usize();
+            let Some(&q) = plan_of.get(&up) else {
+                continue;
+            };
+            if q == p || (plans[q].cycle_s - plans[p].cycle_s).abs() > 1e-9 {
+                continue;
+            }
+            let Some(feeder) = major[q].iter().find(|m| m.to_edge == e) else {
+                continue;
+            };
+            let d = lane.length_m + net.lanes[feeder.internal.as_usize()].length_m;
+            let v = defaults
+                .progression_speed_mps
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .unwrap_or(lane.speed_limit_mps)
+                .max(1.0);
+            pred[p] = Some((q, d / v));
+            break;
+        }
+    }
+    // Resolve in plan order, following predecessors; a loop is cut where it closes.
+    let mut offset: Vec<Option<f64>> = vec![None; plans.len()];
+    for start in 0..plans.len() {
+        if offset[start].is_some() {
+            continue;
+        }
+        // Walk upstream until a plan whose offset is known; `chain` holds the plans on
+        // the way, downstream first, each the predecessor-child of the next.
+        let mut chain: Vec<usize> = Vec::new();
+        let mut at = start;
+        loop {
+            if offset[at].is_some() {
+                break;
+            }
+            if let Some(k) = chain.iter().position(|x| *x == at) {
+                // A loop of predecessors: the plan where it closes is its root.
+                offset[at] = Some(0.0);
+                chain.truncate(k);
+                break;
+            }
+            chain.push(at);
+            match pred[at] {
+                Some((q, _)) => at = q,
+                None => {
+                    offset[at] = Some(0.0);
+                    chain.pop();
+                    break;
+                }
+            }
+        }
+        for &p in chain.iter().rev() {
+            let Some((q, t)) = pred[p] else { continue };
+            let cycle = plans[p].cycle_s;
+            let mut v = (offset[q].unwrap_or(0.0) + t) % cycle;
+            if v < 0.0 {
+                v += cycle;
+            }
+            offset[p] = Some(quantise(v, Q_TIME_S) % cycle);
+        }
+    }
+    let mut moved = 0u64;
+    for (p, plan) in plans.iter_mut().enumerate() {
+        plan.offset_s = offset[p].unwrap_or(0.0);
+        if plan.offset_s != 0.0 {
+            moved += 1;
+        }
+    }
+    moved
+}
+
 /// Standard gravity, m/s², for the grade term of the ITE amber formula.
 const GRAVITY_MPS2: f64 = 9.806_65;
 
@@ -6048,11 +6755,7 @@ fn synthesise_signals(
                 (*g, yellow, red)
             })
             .collect();
-        let fixed: f64 = timing.iter().map(|(_, y, r)| y + r).sum();
-        let green = quantise(
-            ((defaults.cycle_s - fixed) / present.len() as f64).max(defaults.min_green_s),
-            Q_TIME_S,
-        );
+        let (timing, greens) = phase_greens(net, &movements, &groups, timing, defaults);
 
         let state_of = |active: u16, amber: bool, index: usize| -> SignalState {
             if groups[index] != active {
@@ -6115,7 +6818,7 @@ fn synthesise_signals(
         // this list for a pedestrian walk interval (a phase whose states are all red for
         // vehicles while a crossing's head shows walk); this importer does not add one.
         let mut phases: Vec<SignalPhase> = Vec::new();
-        for &(active, yellow, all_red) in &timing {
+        for (&(active, yellow, all_red), &green) in timing.iter().zip(&greens) {
             phases.push(SignalPhase {
                 duration_s: green,
                 states: (0..movements.len())
@@ -6155,7 +6858,11 @@ fn synthesise_signals(
             heads.push(SignalHead {
                 lane: movement.from_lane,
                 position: Vec3::new(end.x, end.y, end.z + defaults.head_height_m),
-                kind: SignalHeadKind::Vehicle,
+                kind: if lane.kind == LaneKind::Cycle {
+                    SignalHeadKind::Bicycle
+                } else {
+                    SignalHeadKind::Vehicle
+                },
                 group: groups[index],
             });
         }
@@ -6171,6 +6878,9 @@ fn synthesise_signals(
             heads,
         });
         net.junctions[j].control = JunctionControl::Signalised { plan: id };
+    }
+    if defaults.coordinate {
+        report.counts.signals_coordinated = coordinate_offsets(net, &mut plans, defaults);
     }
     plans
 }
@@ -8826,6 +9536,27 @@ fn build_provenance(
             ),
     );
     provenance.record(
+        Transformation::new("cross-section")
+            .with(
+                "rule",
+                "bus lanes from bus:lanes / lanes:bus / busway, cycle lanes and tracks from \
+                 cycleway*, parking lanes from parking* and parking:lane*; carriageway \
+                 centred on the way, tracks and street-side bays beyond the kerb",
+            )
+            .with("bus_lanes", options.cross_section.bus_lanes)
+            .with("cycle_lanes", options.cross_section.cycle_lanes)
+            .with("parking_lanes", options.cross_section.parking_lanes)
+            .with("bus_lane_width_m", options.cross_section.bus_lane_width_m)
+            .with("parking_lane_width_m", options.cross_section.parking_lane_width_m)
+            .with("angled_parking_depth_m", options.cross_section.angled_parking_depth_m)
+            .with("cycle_lane_width_m", options.cross_section.cycle_lane_width_m)
+            .with("cycle_track_width_m", options.cross_section.cycle_track_width_m)
+            .with("cycle_buffer_m", options.cross_section.cycle_buffer_m)
+            .with("bus_lanes_built", report.counts.bus_lanes)
+            .with("cycle_lanes_built", report.counts.cycle_lanes_on_roads)
+            .with("parking_lanes_built", report.counts.parking_lanes),
+    );
+    provenance.record(
         Transformation::new("junction-trim")
             .with(
                 "rule",
@@ -8848,6 +9579,26 @@ fn build_provenance(
             .with("guess_signals_m", options.import.guess_signals_m)
             .with("cycle_s", options.signals.cycle_s)
             .with("green_s", options.signals.green_s)
+            .with(
+                "split_rule",
+                if options.signals.split_by_lanes {
+                    "green in proportion to the lanes on each phase's widest approach"
+                } else {
+                    "equal green per phase"
+                },
+            )
+            .with("pedestrian_min_green", options.signals.pedestrian_min_green)
+            .with("pedestrian_walk_s", options.signals.pedestrian_walk_s)
+            .with("pedestrian_speed_mps", options.signals.pedestrian_speed_mps)
+            .with("coordinate", options.signals.coordinate)
+            .with(
+                "progression_speed_mps",
+                options
+                    .signals
+                    .progression_speed_mps
+                    .map_or(serde_json::Value::Null, serde_json::Value::from),
+            )
+            .with("signals_coordinated", report.counts.signals_coordinated)
             .with("all_red_floor_s", options.signals.all_red_s)
             .with(
                 "yellow_rule",
@@ -9136,6 +9887,29 @@ pub fn card() -> ModelCard {
         )
     };
     let lane_geometry = || Source::new(SourceKind::Standard, LANE_WIDTH_SOURCE);
+    let nyc_sdm = || {
+        Source::new(
+            SourceKind::Standard,
+            "NYC DOT Street Design Manual (nycstreetdesign.info), 'Lanes': moving lanes \
+             typically 10 ft, buses and trucks need 11-12 ft, parking lanes typically 8 ft; \
+             'Curb Bus Lane': 11 ft minimum",
+        )
+    };
+    let nyc_bike_table = || {
+        Source::new(
+            SourceKind::Standard,
+            "NYC DOT Street Design Manual, Bike Lane Table: conventional lane 5-6 ft; \
+             one-way protected lane 4 ft minimum plus a 3 ft minimum buffer, 7-8 ft in all \
+             (lane 5.5 ft, the midpoint; track 5 ft plus 3 ft, the 8 ft end)",
+        )
+    };
+    let mutcd_ped = || {
+        Source::new(
+            SourceKind::Standard,
+            "MUTCD 2009 §4E.06: walk interval at least 7 s; pedestrian clearance timed at \
+             3.5 ft/s, which may run through the yellow change and red clearance intervals",
+        )
+    };
     let no_default_preset = || {
         Source::new(
             SourceKind::Code,
@@ -9246,6 +10020,49 @@ pub fn card() -> ModelCard {
         Parameter::new("yellow_min_decel_mps2", "m/s^2", 3.0.into(), netconvert()),
         Parameter::new("yellow_min_s", "s", 3.0.into(), fhwa()),
         Parameter::new("yellow_max_s", "s", 6.0.into(), fhwa()),
+        // The cross-section (crate::section): bus, cycle and parking lanes from the tags.
+        Parameter::new("bus_lane_width_m", "m", 3.353.into(), nyc_sdm()),
+        Parameter::new("parking_lane_width_m", "m", 2.438.into(), nyc_sdm()),
+        Parameter::new("cycle_lane_width_m", "m", 1.676.into(), nyc_bike_table()),
+        Parameter::new("cycle_track_width_m", "m", 1.524.into(), nyc_bike_table()),
+        Parameter::new("cycle_buffer_m", "m", 0.914.into(), nyc_bike_table()),
+        Parameter::new(
+            "angled_parking_depth_m",
+            "m",
+            5.5.into(),
+            Source::new(
+                SourceKind::Code,
+                "this importer's choice: an 18 ft stall depth for diagonal and \
+                 perpendicular parking, which the Manhattan extract does not have",
+            ),
+        ),
+        // Signal timing beyond netconvert's defaults.
+        Parameter::new(
+            "split_by_lanes",
+            "-",
+            true.into(),
+            Source::new(
+                SourceKind::Standard,
+                "Webster's method shares green by critical flow ratio; with no flows in an \
+                 OSM extract the lanes on each phase's widest approach stand in for its \
+                 capacity need (HCM 2016 Ch. 19 saturation flow is per lane)",
+            ),
+        ),
+        Parameter::new(
+            "progression_speed_mps",
+            "m/s",
+            serde_json::Value::Null,
+            Source::new(
+                SourceKind::Standard,
+                "null = each link's speed limit. NYC DOT '25 MPH Signal Retiming' (2014 \
+                 onward) sets avenue progression to the 25 mph limit; NYC DOT's Green Wave \
+                 (press release 2026-05-07) times 1st, 2nd and 8th Avenues and Hudson \
+                 Street for 15 mph. Manhattan's signals are pre-timed on 90-150 s cycles \
+                 (NYC DCP 61st Street FEIS ch. 14); 90 s, the low end, is the cycle_s default",
+            ),
+        ),
+        Parameter::new("pedestrian_walk_s", "s", 7.0.into(), mutcd_ped()),
+        Parameter::new("pedestrian_speed_mps", "m/s", 1.067.into(), mutcd_ped()),
         Parameter::new("height_tag_rule", "-", "height".into(), osm_wiki()),
         // V1: which outline a part is folded into, and on what evidence.
         Parameter::new(

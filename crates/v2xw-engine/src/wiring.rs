@@ -227,7 +227,7 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
                     "world.highway_preset",
                     "an osm-xml world needs an explicit highway=* class-default preset, \
                      because a fallback speed limit is a statement about a jurisdiction; \
-                     select one of: sumo-german, urban-us-nyc",
+                     select one of: sumo-german, urban-us-nyc, urban-us-portland, urban-de",
                 ))
             })?;
             let mut osm = v2xw_world::osm::OsmOptions {
@@ -235,6 +235,8 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
                 ..Default::default()
             }
             .highway_preset(preset);
+            osm.signals.coordinate = scenario.world.signals.coordinate;
+            osm.signals.progression_speed_mps = scenario.world.signals.progression_speed_mps;
             if let Some(b) = bbox {
                 osm = osm.bbox(*b);
             }

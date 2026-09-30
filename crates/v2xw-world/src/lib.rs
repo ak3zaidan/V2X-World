@@ -78,6 +78,7 @@ pub mod osm;
 pub mod procedural;
 pub mod quant;
 pub mod serde_native;
+pub mod section;
 pub mod separate;
 pub mod serde_vwp;
 pub mod sumo;

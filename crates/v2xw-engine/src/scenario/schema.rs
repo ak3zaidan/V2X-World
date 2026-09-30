@@ -260,6 +260,39 @@ pub struct WorldSpec {
     /// jurisdiction it means, so this is stated here and nowhere else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub highway_preset: Option<v2xw_world::osm::HighwayPreset>,
+    /// How the OSM importer times the signals it synthesises.
+    #[serde(default, skip_serializing_if = "WorldSignalOptions::is_default")]
+    pub signals: WorldSignalOptions,
+}
+
+/// How an imported world's synthesised signal plans are coordinated
+/// ([`v2xw_world::osm::SignalDefaults`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorldSignalOptions {
+    /// Offset the plans along each major road for a green wave.
+    #[serde(default = "crate::scenario::schema::truth")]
+    pub coordinate: bool,
+    /// The green wave's speed, m/s; absent, each link's speed limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progression_speed_mps: Option<f64>,
+}
+
+impl Default for WorldSignalOptions {
+    fn default() -> Self {
+        WorldSignalOptions {
+            coordinate: true,
+            progression_speed_mps: None,
+        }
+    }
+}
+
+impl WorldSignalOptions {
+    /// True when nothing differs from the default, so a scenario that never mentions
+    /// signals serialises exactly as before.
+    pub fn is_default(&self) -> bool {
+        *self == WorldSignalOptions::default()
+    }
 }
 
 /// How buildings are imported (04-models.md §1.3).

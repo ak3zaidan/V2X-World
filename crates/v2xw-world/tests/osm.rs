@@ -2418,7 +2418,12 @@ fn a_restriction_applies_even_where_the_lanes_touch() {
         ),
     ]
     .concat();
-    let (world, report) = import(&document(&body));
+    // Without the junction join: with it, every 1 m arm here is absorbed into one joined
+    // junction and there are no lanes left to touch, which is the join's job but not what
+    // this test is about.
+    let mut options = opts();
+    options.simplify.join_short_junctions = false;
+    let (world, report) = import_with(&document(&body), &options);
     assert_eq!(
         report.counts.restrictions_applied,
         1,

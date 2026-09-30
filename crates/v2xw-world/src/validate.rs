@@ -1029,7 +1029,17 @@ fn check_source(
         match src.role {
             EdgeRole::Side => sides.entry(src.way).or_default().push(edge.id),
             EdgeRole::Carriageway => {
-                let lane = world.lane(edge.lanes[0]);
+                // Every lane of the way, for the side checks; the direction checks only
+                // look at edges that carry traffic (not a contraflow cycle lane's own edge).
+                sides.entry(src.way).or_default().push(edge.id);
+                let Some(lane) = edge
+                    .lanes
+                    .iter()
+                    .map(|l| world.lane(*l))
+                    .find(|l| is_carriageway(l))
+                else {
+                    continue;
+                };
                 let mid = lane.point_at(0.5 * lane.length_m);
                 let h = lane.heading_at(0.5 * lane.length_m);
                 let Some(wh) = way_heading_near(world, file, src.way, mid) else {
@@ -1207,20 +1217,33 @@ fn check_source(
         if let Some(w) = tags.get("width").and_then(parse_metres) {
             if w > 2.0 && w < 60.0 {
                 report.entry("width-mismatch").of += 1;
-                let mut built = 0.0;
-                for (e, _) in edges {
-                    for l in &world.edge(*e).lanes {
-                        built += world.lane(*l).width_m;
-                    }
-                }
+                // Kerb to kerb: general, bus and parking lanes and painted cycle lanes; a
+                // cycle track is beyond the kerb.
+                let pts = way_points(world, file, *way_id);
+                let tracks = tagged_sides(tags, "cycleway", &["track", "opposite_track"]);
+                // Per piece of the way (the edges between one pair of junctions): a way split
+                // at three junctions has three pieces, and summing all of them tripled it.
+                let mut pieces: BTreeMap<(JunctionId, JunctionId), f64> = BTreeMap::new();
                 for e in sides.get(way_id).into_iter().flatten() {
-                    for l in &world.edge(*e).lanes {
+                    let edge = world.edge(*e);
+                    let key = (edge.from.min(edge.to), edge.from.max(edge.to));
+                    let built = pieces.entry(key).or_insert(0.0);
+                    for l in &edge.lanes {
                         let l = world.lane(*l);
-                        if matches!(l.kind, LaneKind::Parking | LaneKind::Cycle) {
-                            built += l.width_m;
+                        let on = match l.kind {
+                            LaneKind::Driving | LaneKind::Bus | LaneKind::Parking => true,
+                            LaneKind::Cycle => signed_offset(&pts, l.point_at(0.5 * l.length_m))
+                                .is_some_and(|off| {
+                                    !tracks.contains(if off >= 0.0 { "left" } else { "right" })
+                                }),
+                            _ => false,
+                        };
+                        if on {
+                            *built += l.width_m;
                         }
                     }
                 }
+                let built = pieces.values().copied().fold(0.0f64, f64::max);
                 if (built - w).abs() > 0.15 * w {
                     report.fail("width-mismatch", keep, || {
                         format!("way {way_id}: width tag {w:.1} m, built {built:.1} m")
