@@ -174,12 +174,15 @@ pub const REACTION_SIGMA: f64 = 0.5;
 /// responds to the green, but every driver behind responds to the brake lights of the car
 /// in front going out and to it rolling, having watched the queue start. Field studies
 /// time that start-up wave at about one vehicle a second, and no primary measurement of
-/// its distribution was read, so the median is **calibrated, not measured**: 0.7 s is
-/// what brings the model's start-up lost time to the HCM default of 2.0 s with the
-/// saturation headway in the HCM range on the saturation-flow experiment
-/// ([`crate::calibration::SaturationExperiment`]). The shape and the driver's quantile
-/// are the same as for the signal response, so a slow driver is slow at both.
-pub const FOLLOW_REACTION_MEDIAN_S: f64 = 0.7;
+/// its distribution was read, so the median is **calibrated, not measured**: with the
+/// [`crate::carfollowing::idm::IdmPreset::UrbanHcm`] drivers, 0.5 s gives discharge
+/// headways of 3.7, 2.9, 2.5 and 2.4 s for the first four queued vehicles and 2.17 s
+/// after them on the saturation-flow experiment
+/// ([`crate::calibration::SaturationExperiment`]), against the 3.8, 3.1, 2.7 and 2.4 s
+/// of Greenshields, Schapiro & Ericksen's 1947 study (**secondary**: as traffic
+/// engineering textbooks tabulate it) and the HCM's 2.1 s. The shape and the driver's
+/// quantile are the same as for the signal response, so a slow driver is slow at both.
+pub const FOLLOW_REACTION_MEDIAN_S: f64 = 0.5;
 
 /// The amber dilemma zone, as time to the stop line at the onset of amber, seconds: at its
 /// near edge 10 % of drivers stop and at its far edge 90 % do.
@@ -772,7 +775,8 @@ impl NativeMobility {
     /// The engine with the default medium-tier models: IDM (Kesting 2010), MOBIL
     /// (Kesting 2007), HCM gap acceptance, fixed-time signals and Dijkstra.
     pub fn new(params: EngineParams) -> Self {
-        let idm: Arc<dyn CarFollowing + Send + Sync> = Arc::new(Idm::new(IdmPreset::Kesting2010));
+        // City drivers, calibrated to the HCM saturation flow (`IdmPreset::UrbanHcm`).
+        let idm: Arc<dyn CarFollowing + Send + Sync> = Arc::new(Idm::new(IdmPreset::UrbanHcm));
         Self::with_models(params, idm, MobilPreset::Kesting2007)
     }
 
@@ -3037,6 +3041,15 @@ impl Mobility for NativeMobility {
                     accel = accel.min(self.cf.accel(&ego_capped, Some(&v), &lane_view, &self.weather));
                 }
             }
+            // Any braking short of an emergency builds at a service-brake rate, whatever
+            // asked for it — a car ahead braking, a merge partner, a pedestrian stepping
+            // out — not only a stop line: the car-following model has no jerk term, and a
+            // new constraint stepped the deceleration from +1 to −3 m/s² in one 0.1 s step
+            // (40 m/s³, the auditor's jerk class on the dense grid). Past
+            // `PLANNED_STOP_MAX_DECEL_MPS2` it is an emergency, and nothing is limited.
+            if along && accel < actor.accel_mps2 && -accel <= PLANNED_STOP_MAX_DECEL_MPS2 {
+                accel = accel.max(actor.accel_mps2 - PLANNED_BRAKE_JERK_MPS3 * dt_s);
+            }
             // Moving off takes the driver their reaction time: a vehicle standing still
             // goes only once what held it has let it go for `reaction_s` ([`DriverTraits`]).
             // This is the start-up wave of a queue at green — the source of the HCM's
@@ -4054,7 +4067,7 @@ mod tests {
         );
     }
 
-    /// Drivers differ at the amber: across a cycle of arrivals, some who could still have
+    /// Drivers differ at the amber: across a cycle of arrivals 0.1 s apart, some who could still have
     /// stopped at 3 m/s² go on — inside the dilemma zone, where the field says drivers
     /// differ — and none of them ever meets the red. Without heterogeneity, nobody who could
     /// stop goes.
@@ -4077,16 +4090,16 @@ mod tests {
             .and_then(|c| c.via)
             .expect("an internal connector");
         let len = world.lane(approach).length_m;
-        let went_though_could_stop = |heterogeneity: bool| -> usize {
+        let went_though_could_stop = |heterogeneity: bool| -> Vec<(u64, f64, f64)> {
             let params = EngineParams {
                 intersections: IntersectionMode::SignalsOnly,
                 lane_changes: false,
                 driver_heterogeneity: heterogeneity,
                 ..EngineParams::default()
             };
-            let mut went = 0;
-            for k in 0u64..120 {
-                let start = k * NS_PER_S / 2;
+            let mut went = Vec::new();
+            for k in 0u64..600 {
+                let start = k * NS_PER_S / 10;
                 let mut engine = NativeMobility::new(params);
                 {
                     let mut ctx = MobilityCtx::new(start, &world, &rng);
@@ -4119,25 +4132,25 @@ mod tests {
                     else {
                         break;
                     };
-                    if let Some((plane, ps, pv, pstate)) = prev {
-                        if plane == approach && pstate == SignalState::Amber && onset.is_none() {
+                    if let Some((plane, ps, pv, _)) = prev {
+                        if plane == approach && state == SignalState::Amber && onset.is_none() {
                             onset = Some((len - ps, pv));
                         }
                         if plane == approach && lane != approach {
                             assert_ne!(
-                                pstate,
+                                state,
                                 SignalState::Red,
                                 "arrival {k} entered on red (heterogeneity {heterogeneity})"
                             );
-                            if pstate == SignalState::Amber
+                            if state == SignalState::Amber
                                 && let Some((gap, speed)) = onset
                                 && speed * speed / 6.0 + 3.0 < gap
                             {
-                                went += 1;
+                                went.push((k, gap, speed));
                             }
                             break;
                         }
-                        if pstate != SignalState::Amber {
+                        if state != SignalState::Amber {
                             onset = None;
                         }
                     }
@@ -4147,8 +4160,11 @@ mod tests {
             }
             went
         };
-        assert_eq!(went_though_could_stop(false), 0);
-        assert!(went_though_could_stop(true) > 0);
+        let off = went_though_could_stop(false);
+        assert!(off.is_empty(), "without heterogeneity: {off:?}");
+        let on = went_though_could_stop(true);
+        assert!(!on.is_empty());
+        eprintln!("went on amber though they could stop: {on:?}");
     }
 
     #[test]

@@ -559,7 +559,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "world.highway_preset",
         status: Status::Wired,
         note: "Which jurisdiction's fallback speed limits the OpenStreetMap importer \
-               uses. An OSM import is refused without it.",
+               uses, and which rules of the road the traffic follows (right turn on red: \
+               prohibited in New York City, which is also the rule without a preset). An \
+               OSM import is refused without it.",
     },
     // --- what moves --------------------------------------------------------
     KeyStatus {

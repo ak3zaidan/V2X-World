@@ -89,31 +89,60 @@ fn trace() {
     let step = params.step;
     let mut prev_state = None;
     let mut green_at: Option<f64> = None;
+    let _ = exit;
+    // Every approach of the centre, loaded as the experiment loads it.
+    let feeds: Vec<(LaneId, LaneId)> = world
+        .roads
+        .lanes()
+        .iter()
+        .filter(|l| l.kind == LaneKind::Driving && world.edge(l.edge).to == centre)
+        .filter_map(|l| {
+            world
+                .successors(l.id)
+                .iter()
+                .find(|c| c.via.is_some() && c.direction == TurnDirection::Straight)
+                .map(|c| (l.id, c.to_lane))
+        })
+        .collect();
     let mut seq = 0u64;
-    while t < 200 * v2xw_core::time::NS_PER_S {
+    let mut greens = 0;
+    while t < 400 * v2xw_core::time::NS_PER_S {
         let ts = v2xw_core::time::ns_to_secs(t);
         let state = v2xw_mobility::audit::movement_state(&world, via, t);
-        if seq < 3 && ts >= 3.0 * seq as f64 + 1.0 {
+        let mut nearest: std::collections::BTreeMap<LaneId, f64> = Default::default();
+        for (_, lane, s, _) in engine.longitudinal_states() {
+            let e = nearest.entry(lane).or_insert(f64::INFINITY);
+            *e = e.min(s);
+        }
+        {
             let mut ctx = MobilityCtx::new(t, &world, &rng);
-            let class = VehicleClass::Passenger;
-            engine.command(
-                &mut ctx,
-                MobilityCommand::Spawn(TripRequest {
-                    seq,
-                    t,
-                    origin,
-                    origin_s_m: class.spec().length_m,
-                    destination: exit,
-                    class,
-                    desired_speed_mps: class.spec().desired_speed_mps(),
-                }),
-            );
-            seq += 1;
+            for (o, x) in &feeds {
+                if nearest.get(o).is_some_and(|f| *f < 14.0) {
+                    continue;
+                }
+                seq += 1;
+                let class = VehicleClass::Passenger;
+                engine.command(
+                    &mut ctx,
+                    MobilityCommand::Spawn(TripRequest {
+                        seq,
+                        t,
+                        origin: *o,
+                        origin_s_m: class.spec().length_m,
+                        destination: *x,
+                        class,
+                        desired_speed_mps: class.spec().desired_speed_mps(),
+                    }),
+                );
+            }
         }
         if prev_state.is_some() && prev_state != state {
             println!("t={ts:.1} signal {prev_state:?} -> {state:?}");
-            if matches!(state, Some(v2xw_world::SignalState::Green)) && green_at.is_none() && seq == 3 {
-                green_at = Some(ts);
+            if matches!(state, Some(v2xw_world::SignalState::Green)) {
+                greens += 1;
+                if greens >= 2 {
+                    green_at = Some(ts);
+                }
             }
         }
         prev_state = state;
@@ -121,17 +150,31 @@ fn trace() {
         let update = engine.step(&mut ctx, step);
         if let Some(g) = green_at
             && ts >= g - 1.0
-            && ts <= g + 12.0
+            && ts <= g + 8.0
         {
             let rows: Vec<String> = engine
                 .audit_actors(&world, update.t)
                 .iter()
+                .filter(|a| {
+                    (a.lane == origin && len - a.s_m < 16.0)
+                        || world.lane(a.lane).junction == Some(centre)
+                })
                 .map(|a| {
                     let to_line = if a.lane == origin { len - a.s_m } else { -a.s_m };
-                    format!("#{} line {:6.2} v {:5.2} a {:5.2}", a.actor.index(), to_line, a.speed_mps, a.accel_mps2)
+                    format!(
+                        "#{}@{} line {:6.2} v {:5.2} a {:5.2}",
+                        a.actor.index(),
+                        a.lane.index(),
+                        to_line,
+                        a.speed_mps,
+                        a.accel_mps2
+                    )
                 })
                 .collect();
             println!("t={:.1} (+{:.1}) {}", v2xw_core::time::ns_to_secs(update.t), v2xw_core::time::ns_to_secs(update.t) - g, rows.join(" | "));
+        }
+        if green_at.is_some_and(|g| ts > g + 8.0) {
+            break;
         }
         t = update.t;
     }
@@ -186,5 +229,18 @@ fn run(spec: &str) {
         r.queue_spacing_m.mean,
         r.launch_accel_mps2.mean,
         h
+    );
+    let h1 = &r.headway_by_position_s[0];
+    println!(
+        "    h1 p15/p50/p85 {:.2}/{:.2}/{:.2} [{}]; head gap mean {:.2} p85 {:.2} max {:.2}; queues {} size mean {:.1}",
+        h1.p15,
+        h1.p50,
+        h1.p85,
+        h1.n,
+        r.queue_head_gap_m.mean,
+        r.queue_head_gap_m.p85,
+        r.queue_head_gap_m.max,
+        r.queues,
+        r.queue_size.mean
     );
 }

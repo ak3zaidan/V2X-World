@@ -18,14 +18,14 @@
 //! | start-up lost time `l1` | `Σ_{i=1..4} (h_i − h_s)`, `h_1` measured from the green onset | HCM default 2.0 s (FHWA STM §3.3.1: "commonly assumed to be approximately 2 seconds") |
 //! | discharge headway by queue position | mean `h_i` for i = 1..10 | "after approximately the fourth vehicle in the queue, the flow rate tends to stabilize" (FHWA STM §3.3.1, Fig. 3-2) |
 //! | queue spacing | front-to-front distance between consecutive vehicles standing in a queue at green onset | HCM average queue storage 25 ft (7.6 m) per vehicle |
-//! | free-flow speed / posted limit | mid-block, cruising (`|a| < 0.3 m/s²`), no vehicle within `max(60 m, 5 s)` ahead on the lane, ≥ 40 m from the stop line | SUMO passenger `speedFactor` N(1.0, 0.1) (SUMO vType defaults) — a model default, not a New York measurement |
+//! | free-flow speed / posted limit | mid-block, cruising (`|a| < 0.3 m/s²`), no vehicle within `max(60 m, 5 s)` ahead on the lane or the next one on its route, and no signal in that reach showing anything but green; ≥ 40 m from the lane end | SUMO passenger `speedFactor` N(1.0, 0.1) (SUMO vType defaults) — a model default, not a New York measurement |
 //! | launch acceleration | mean acceleration from standstill to 8 m/s, launches that were never held back (acceleration stayed positive) | Wang, Dixon, Li & Ogle 2004 (TRR 1883): mean 0.127 g (1.25 m/s²) over the first 15 s from rest, straight movements |
 //! | stopping deceleration | peak deceleration of each stop from above 5 m/s to standstill | AASHTO *Green Book* 2018 §3.2.2: 3.4 m/s² is comfortable for most drivers |
 //! | turning speed | lowest speed through each junction connector, by turn, traversals that never stopped | reported, not tested: no single published figure fits every corner radius |
 //! | travel speed | total distance over total vehicle-time, all vehicles | NYC DOT *Mobility Report* 2019: Midtown core ≈ 5 mph (2.2 m/s), CBD ≈ 7 mph (3.1 m/s), 2017 taxi GPS — a whole-day average over real demand, so a comparison, not a test |
 //! | pedestrian walking speed | speed of every walking pedestrian step (≥ 0.3 m/s) | Knoblauch, Pietrucha & Nitzburg 1996 (TRR 1538): younger pedestrians mean 1.51 m/s, 15th percentile 1.25 m/s; MUTCD 2009 §4E.06 design speed 3.5 ft/s (1.07 m/s) |
-//! | permitted-left critical gap | lags offered to left turners on a permissive green, each judged accepted or rejected by the turner; Raff's method on the two samples | HCM 6th ed. Ch. 31: 4.5 s (secondary, LTRC Report 715) |
-//! | pedestrian signal compliance | share of kerb departures onto a signalised crossing made on walk | reported: the model's `jaywalk_probability` |
+//! | permitted-left critical gap | lags offered to left turners on a permissive green, timed to the closing opposing vehicle's actual arrival at its stop line, each accepted or rejected by the turner; Raff's method on the two samples | HCM 6th ed. Ch. 31: 4.5 s (secondary, LTRC Report 715) |
+//! | pedestrian signal compliance | share of kerb departures onto a signalised crossing made on walk | Basch et al. 2015, five Manhattan intersections: about 89 % on Walk (secondary); reported, since the model's `jaywalk_probability` is 0 by default |
 //! | approach volumes | vehicles per hour over the stop line of every signalised approach road, avenues (3+ lanes) and side streets apart | NYC DOT automated counts, Midtown 08:00-19:00: avenues 970-1,890 veh/h, side streets 330-640 veh/h — set by demand, reported |
 //!
 //! Every reference that could not be re-read from its primary document is labelled
@@ -63,9 +63,10 @@ const LAUNCH_TO_MPS: f64 = 8.0;
 const STOP_FROM_MPS: f64 = 5.0;
 /// How many queue positions the per-position headway table reports.
 const POSITIONS: usize = 10;
-/// A permitted left turner is tracked from this far before the end of its approach lane,
-/// metres: the stop line and a car or two of queue behind it.
-const LEFT_ZONE_M: f64 = 15.0;
+/// A permitted left turner is judged once its front is this near the end of its approach
+/// lane, metres, first in its lane: at the stop line, where a field observer starts
+/// timing its lag.
+const LEFT_ZONE_M: f64 = 6.0;
 
 /// One vehicle of a queue recorded at the onset of green.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -134,6 +135,8 @@ pub struct CalibrationObserver {
     closed: Vec<OpenQueue>,
     queue_sizes: Vec<usize>,
     spacing_m: Vec<f64>,
+    /// How far the first queued vehicle's front stood from the stop line at green.
+    head_gap_m: Vec<f64>,
     free_ratio: Vec<f64>,
     launch_mps2: Vec<f64>,
     stop_decel_mps2: Vec<f64>,
@@ -156,6 +159,8 @@ pub struct CalibrationObserver {
     lag_accepted_s: Vec<f64>,
     /// Every lag rejected, seconds.
     lag_rejected_s: Vec<f64>,
+    /// Lags whose closing vehicle has not arrived yet: (it, when the lag began, taken).
+    pending_lags: Vec<(ActorId, f64, bool)>,
     /// Every signalised approach road: its motorised lanes, and the vehicles that have
     /// crossed its stop line.
     approach_counts: BTreeMap<v2xw_core::ids::EdgeId, (usize, usize)>,
@@ -169,8 +174,8 @@ pub struct CalibrationObserver {
 struct LeftTurner {
     /// The approach lane.
     lane: LaneId,
-    /// The opposing vehicle that closes the lag now on offer, and that lag as it was when
-    /// it was first offered, seconds.
+    /// The opposing vehicle that closes the lag now on offer, and when the lag began,
+    /// seconds.
     offered: Option<(ActorId, f64)>,
 }
 
@@ -226,6 +231,7 @@ impl CalibrationObserver {
             lefts: BTreeMap::new(),
             lag_accepted_s: Vec::new(),
             lag_rejected_s: Vec::new(),
+            pending_lags: Vec::new(),
             approach_counts,
             span_s: None,
             prev: BTreeMap::new(),
@@ -236,6 +242,7 @@ impl CalibrationObserver {
             closed: Vec::new(),
             queue_sizes: Vec::new(),
             spacing_m: Vec::new(),
+            head_gap_m: Vec::new(),
             free_ratio: Vec::new(),
             launch_mps2: Vec::new(),
             stop_decel_mps2: Vec::new(),
@@ -267,7 +274,7 @@ impl CalibrationObserver {
         self.span_s = Some(self.span_s.map_or((t0_s, t1_s), |(a, _)| (a, t1_s)));
         self.capture_queues(world, t0_s, t1_s, actors);
         self.track_queues(world, t1, dt, actors, despawned);
-        self.track_permitted_lefts(world, t0, actors);
+        self.track_permitted_lefts(world, t0, t1, dt, actors);
         self.track_vehicles(world, t1, dt, actors, despawned);
         self.track_pedestrians(world, t0_s, dt, pedestrians);
     }
@@ -276,22 +283,63 @@ impl CalibrationObserver {
     /// procedure behind a critical-gap estimate (Raff & Hart 1950), set beside the HCM 6th
     /// edition Ch. 31 signalised permitted-left critical headway (4.5 s).
     ///
-    /// A permitted left turner is a vehicle on an approach lane, within [`LEFT_ZONE_M`] of
-    /// its end, whose next lane is a left-turn connector showing
-    /// [`SignalState::GreenYield`] at `t0`. The **lag** on offer is the time the nearest
-    /// opposing vehicle (on an approach of the same junction, heading within 30° of the
-    /// opposite way, bound straight on or right on a green) needs to reach its own stop
-    /// line at its present speed; a vehicle slower than 1 m/s closes no lag. Each lag is
-    /// judged once, by the vehicle that closes it: taken if the turner's front leaves the
-    /// approach onto its connector before another vehicle becomes the nearest, rejected
-    /// otherwise, and recorded as it was when first offered.
-    fn track_permitted_lefts(&mut self, world: &World, t0: SimTime, actors: &[AuditActor]) {
+    /// A permitted left turner is the first vehicle on an approach lane, within
+    /// [`LEFT_ZONE_M`] of its end, whose next lane is a left-turn connector showing
+    /// [`SignalState::GreenYield`] at `t0`. The lag it is offered is closed by the
+    /// **nearest opposing vehicle**: on an approach of the same junction, heading within 30°
+    /// of the opposite way, bound straight on or right on a green, and moving (1 m/s or
+    /// more); nearest by its time to its stop line at its present speed. As a field
+    /// observer times it, the **lag** runs from the moment that vehicle became the one to
+    /// judge (or the turner arrived) to the moment its front actually crosses its stop
+    /// line. It is **accepted** if the turner's front left the approach onto its connector
+    /// first, and **rejected** otherwise.
+    fn track_permitted_lefts(
+        &mut self,
+        world: &World,
+        t0: SimTime,
+        t1: SimTime,
+        dt: f64,
+        actors: &[AuditActor],
+    ) {
         struct Opp {
             actor: ActorId,
             junction: v2xw_core::ids::JunctionId,
             heading: f64,
-            lag_s: f64,
+            eta_s: f64,
         }
+        let t1_s = ns_to_secs(t1);
+        // Who crossed a stop line this step, and when.
+        let mut arrived: BTreeMap<ActorId, f64> = BTreeMap::new();
+        let present: BTreeSet<ActorId> = actors.iter().map(|a| a.actor).collect();
+        for a in actors {
+            if world.lane(a.lane).kind == LaneKind::Internal
+                && self
+                    .prev
+                    .get(&a.actor)
+                    .is_some_and(|p| world.lane(p.lane).kind != LaneKind::Internal)
+            {
+                let v = a.speed_mps.max(0.1);
+                arrived.insert(a.actor, t1_s - (a.s_m / v).min(dt));
+            }
+        }
+        // Lags waiting for the vehicle that closes them to arrive.
+        let mut waiting_lags = Vec::new();
+        for (opp, presented, accepted) in core::mem::take(&mut self.pending_lags) {
+            match arrived.get(&opp) {
+                Some(t) => {
+                    let lag = (t - presented).max(0.0);
+                    if accepted {
+                        self.lag_accepted_s.push(lag);
+                    } else {
+                        self.lag_rejected_s.push(lag);
+                    }
+                }
+                None if present.contains(&opp) => waiting_lags.push((opp, presented, accepted)),
+                None => {}
+            }
+        }
+        self.pending_lags = waiting_lags;
+
         let mut opposing: Vec<Opp> = Vec::new();
         for a in actors {
             let lane = world.lane(a.lane);
@@ -315,25 +363,39 @@ impl CalibrationObserver {
                 actor: a.actor,
                 junction,
                 heading: lane.heading_at(lane.length_m),
-                lag_s: (lane.length_m - a.s_m).max(0.0) / a.speed_mps,
+                eta_s: (lane.length_m - a.s_m).max(0.0) / a.speed_mps,
             });
+        }
+        // The front-most vehicle on each lane: only the first of a queue is offered a lag.
+        let mut first: BTreeMap<LaneId, (f64, ActorId)> = BTreeMap::new();
+        for a in actors {
+            let e = first.entry(a.lane).or_insert((a.s_m, a.actor));
+            if a.s_m > e.0 {
+                *e = (a.s_m, a.actor);
+            }
         }
         let mut still = BTreeMap::new();
         for a in actors {
             let lane = world.lane(a.lane);
             let tracked = self.lefts.get(&a.actor).copied();
-            // Entered: the front is on a left connector fed by the tracked lane.
+            // Entered: the front is on a left connector fed by the tracked lane. The lag it
+            // took is timed when the vehicle that closes it arrives.
             if lane.kind == LaneKind::Internal {
                 if let Some(l) = tracked
                     && self.movement_of.get(&a.lane) == Some(&(l.lane, TurnDirection::Left))
-                    && let Some((_, lag)) = l.offered
+                    && let Some((opp, presented)) = l.offered
                 {
-                    self.lag_accepted_s.push(lag);
+                    match arrived.get(&opp) {
+                        // Both crossed in the same step: counted as taken.
+                        Some(t) => self.lag_accepted_s.push((t - presented).max(0.0)),
+                        None => self.pending_lags.push((opp, presented, true)),
+                    }
                 }
                 continue;
             }
             let Some(next) = a.route_next else { continue };
             let waiting = lane.length_m - a.s_m <= LEFT_ZONE_M
+                && first.get(&a.lane).is_some_and(|(_, id)| *id == a.actor)
                 && self
                     .movement_of
                     .get(&next)
@@ -353,7 +415,7 @@ impl CalibrationObserver {
                         && v2xw_world::model::normalise_angle(o.heading - heading).abs()
                             > core::f64::consts::PI * (150.0 / 180.0)
                 })
-                .min_by(|x, y| x.lag_s.total_cmp(&y.lag_s).then(x.actor.cmp(&y.actor)));
+                .min_by(|x, y| x.eta_s.total_cmp(&y.eta_s).then(x.actor.cmp(&y.actor)));
             let mut l = match tracked {
                 Some(l) if l.lane == a.lane => l,
                 _ => LeftTurner {
@@ -364,11 +426,15 @@ impl CalibrationObserver {
             match (l.offered, nearest) {
                 (Some((id, _)), Some(o)) if id == o.actor => {}
                 (prior, now) => {
-                    // The lag on offer changed hands: the one before it was not taken.
-                    if let Some((_, lag)) = prior {
-                        self.lag_rejected_s.push(lag);
+                    // The lag on offer changed hands. If the vehicle that closed it arrived,
+                    // the turner let it go by: rejected. One that stopped being the nearest
+                    // without arriving (it slowed, or turned off) closed nothing.
+                    if let Some((opp, presented)) = prior
+                        && let Some(t) = arrived.get(&opp)
+                    {
+                        self.lag_rejected_s.push((t - presented).max(0.0));
                     }
-                    l.offered = now.map(|o| (o.actor, o.lag_s));
+                    l.offered = now.map(|o| (o.actor, t1_s));
                 }
             }
             still.insert(a.actor, l);
@@ -441,10 +507,12 @@ impl CalibrationObserver {
                         {
                             break 'walk;
                         }
-                        if let Some(f) = last_front {
-                            if a.speed_mps < STANDING_MPS {
+                        match last_front {
+                            Some(f) if a.speed_mps < STANDING_MPS => {
                                 spacing.push(front_behind - f);
                             }
+                            None => self.head_gap_m.push(front_behind),
+                            _ => {}
                         }
                         last_front = Some(front_behind);
                         last_rear = Some(front_behind + a.length_m);
@@ -617,11 +685,26 @@ impl CalibrationObserver {
                 && lane.speed_limit_mps > 0.0
             {
                 let clear = (60.0f64).max(5.0 * a.speed_mps);
+                let to_end = lane.length_m - a.s_m;
                 let blocked = by_lane.get(&a.lane).is_some_and(|v| {
                     v.iter()
                         .any(|(rear, _)| *rear > a.s_m && *rear - a.s_m < clear)
                 });
-                if !blocked {
+                // The lane ahead counts too: a lane split at a shape point put the car in
+                // front on the next lane, and the follower of a queue counted as free.
+                let blocked_ahead = a.route_next.is_some_and(|next| {
+                    by_lane
+                        .get(&next)
+                        .is_some_and(|v| v.iter().any(|(rear, _)| to_end + *rear < clear))
+                });
+                // And a signal ahead that is not green, within the same reach, is a driver
+                // adjusting to it, not choosing a free speed.
+                let signal_ahead = to_end < clear
+                    && a.route_next.is_some_and(|next| {
+                        crate::audit::movement_state(world, next, t1)
+                            .is_some_and(|s| !is_green(s))
+                    });
+                if !blocked && !blocked_ahead && !signal_ahead {
                     self.free_ratio.push(a.speed_mps / lane.speed_limit_mps);
                 }
             }
@@ -839,6 +922,7 @@ impl CalibrationObserver {
                 &self.queue_sizes.iter().map(|n| *n as f64).collect::<Vec<_>>(),
             ),
             queue_spacing_m: Summary::of(&self.spacing_m),
+            queue_head_gap_m: Summary::of(&self.head_gap_m),
             free_flow_speed_ratio: Summary::of(&self.free_ratio),
             launch_accel_mps2: Summary::of(&self.launch_mps2),
             stop_decel_mps2: Summary::of(&self.stop_decel_mps2),
@@ -866,6 +950,52 @@ impl CalibrationObserver {
             street_volume_veh_per_h: self.approach_volumes(|lanes| lanes <= 2),
         }
     }
+}
+
+/// Inserts an all-red of `all_red_s` after every phase that ends an amber, taken out of
+/// the phase that follows it, so the cycle is unchanged.
+fn add_all_red(plan: &mut v2xw_world::SignalPlan, all_red_s: f64) {
+    let n = plan.phases.len();
+    if n < 2 || all_red_s <= 0.0 {
+        return;
+    }
+    let mut phases = Vec::with_capacity(2 * n);
+    let mut take_from_next = false;
+    for i in 0..n {
+        let mut phase = plan.phases[i].clone();
+        if take_from_next {
+            phase.duration_s = (phase.duration_s - all_red_s).max(1.0);
+            take_from_next = false;
+        }
+        let ends_amber = phase.states.contains(&SignalState::Amber)
+            && !plan.phases[(i + 1) % n].states.contains(&SignalState::Amber);
+        phases.push(phase.clone());
+        if ends_amber {
+            let red = v2xw_world::SignalPhase {
+                duration_s: all_red_s,
+                states: phase
+                    .states
+                    .iter()
+                    .map(|s| match s {
+                        SignalState::Amber => SignalState::Red,
+                        other => *other,
+                    })
+                    .collect(),
+                name: None,
+            };
+            // An all-red only where nothing else is green: a phase that keeps another
+            // movement moving is not a clearance.
+            if !red.states.iter().any(|s| is_green(*s)) {
+                phases.push(red);
+                take_from_next = true;
+            }
+        }
+    }
+    if take_from_next && let Some(first) = phases.first_mut() {
+        first.duration_s = (first.duration_s - all_red_s).max(1.0);
+    }
+    plan.phases = phases;
+    plan.cycle_s = plan.phases.iter().map(|p| p.duration_s).sum();
 }
 
 /// Raff's critical gap (Raff & Hart 1950, the method the HCM field procedure descends
@@ -990,6 +1120,9 @@ pub struct CalibrationReport {
     pub queue_size: Summary,
     /// Front-to-front spacing in a standing queue, metres.
     pub queue_spacing_m: Summary,
+    /// How far the first queued vehicle's front stood from the stop line at green,
+    /// metres.
+    pub queue_head_gap_m: Summary,
     /// Free-flow mid-block speed over the posted limit.
     pub free_flow_speed_ratio: Summary,
     /// Mean acceleration from standstill to 8 m/s, m/s².
@@ -1057,6 +1190,11 @@ pub const HCM_CBD_AREA_FACTOR: f64 = 0.90;
 pub const HCM_STARTUP_LOST_TIME_S: f64 = 2.0;
 /// HCM average queue storage length per vehicle, m (25 ft).
 pub const HCM_QUEUE_SPACING_M: f64 = 7.62;
+/// The share of Manhattan pedestrians who cross on Walk: Basch et al. 2015 observed 21,760
+/// at five Manhattan intersections, and 974 of those crossing on Don't Walk were 42.0 % of
+/// them, so about 2,320 (10.7 %) crossed against the signal (**secondary**: derived from
+/// the abstract's figures, the paper was not read).
+pub const MANHATTAN_PEDESTRIAN_COMPLIANCE: f64 = 1.0 - (974.0 / 0.42) / 21_760.0;
 /// A Midtown avenue's daytime volume in one direction, veh/h: the middle of the NYC DOT
 /// automated counts on 5, 6, 7 and 8 Avenue, 08:00-19:00 (NYC Open Data "Automated Traffic
 /// Volume Counts", 7ym2-wayt, queried 2026-09-29: mean 15-minute volumes of 243-472).
@@ -1112,12 +1250,19 @@ impl CalibrationReport {
                 tested: true,
             },
             Comparison {
-                metric: "free-flow speed / limit, sd",
-                measured: self.free_flow_speed_ratio.sd,
+                metric: "free-flow speed / limit, spread",
+                // The normal-equivalent standard deviation from the 15th and 85th
+                // percentiles, (p85 − p15) / 2.07: the plain one is dominated by the few
+                // vehicles the free-flow filter cannot see are held (yielding at a
+                // crosswalk, say), which on the Midtown grid made it 0.16 with p15/p85 at
+                // exactly the N(1, 0.1) values.
+                measured: (self.free_flow_speed_ratio.p85 - self.free_flow_speed_ratio.p15)
+                    / (2.0 * 1.036_433),
                 samples: self.free_flow_speed_ratio.n,
                 reference: 0.1,
                 band: (0.05, 0.15),
-                source: "SUMO passenger vType speedDev 0.1",
+                source: "SUMO passenger vType speedDev 0.1, as a normal-equivalent spread \
+                         (p85 − p15) / 2.07",
                 tested: true,
             },
             Comparison {
@@ -1177,11 +1322,13 @@ impl CalibrationReport {
                 metric: "pedestrian signal compliance, share",
                 measured: self.pedestrian_compliance,
                 samples: self.pedestrian_crossings,
-                reference: 1.0,
-                band: (0.0, 1.0),
-                source: "the model's jaywalk_probability (0 by default: every crossing on walk); \
-                         field studies at North American signals find a large minority crossing \
-                         against the signal, and no New York figure was read, so reported only",
+                reference: MANHATTAN_PEDESTRIAN_COMPLIANCE,
+                band: (0.85, 0.95),
+                source: "Basch et al. 2015 (J. Community Health 40(4)), 21,760 pedestrians at \
+                         five Manhattan intersections, 974 = 42.0 % of those crossing on Don't \
+                         Walk were distracted: about 2,320 (10.7 %) crossed against the signal \
+                         (secondary: derived from the abstract's figures). The model's \
+                         jaywalk_probability is 0 by default, so reported only",
                 tested: false,
             },
             Comparison {
@@ -1276,10 +1423,19 @@ impl SaturationExperiment {
             corner_radius_m: 4.5,
             ..v2xw_world::procedural::GridParams::legacy()
         };
-        Ok(v2xw_world::procedural::grid(
-            &params,
-            &v2xw_world::ImportOptions::default(),
-        )?)
+        let mut world =
+            v2xw_world::procedural::grid(&params, &v2xw_world::ImportOptions::default())?;
+        // The procedural plans have no all-red, and the last car in on amber was still
+        // crossing the junction 1.4 s into the next green, which the queue waited for: a
+        // field study times a signal with a red clearance, so this one gets the ITE one,
+        // `r = (W + L) / v` — W the width crossed (both directions' lanes and the 2 m stop
+        // line setback), L a 20 ft (6.1 m) vehicle — taken out of the green that follows.
+        let crossed_m = 2.0 * f64::from(self.lanes_per_direction) * params.lane_width_m + 2.0;
+        let all_red_s = (crossed_m + 6.1) / params.speed_limit_mps;
+        for plan in &mut world.signals {
+            add_all_red(plan, all_red_s);
+        }
+        Ok(world)
     }
 
     /// Runs `engine` (constructed, not yet initialised) through the experiment and

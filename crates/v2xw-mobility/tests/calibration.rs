@@ -38,6 +38,17 @@ fn print(report: &CalibrationReport) {
             if c.passes() { "ok" } else { "OUT" }
         );
     }
+    let f = &report.free_flow_speed_ratio;
+    let (acc, rej) = (
+        &report.permitted_left_lag_accepted_s,
+        &report.permitted_left_lag_rejected_s,
+    );
+    eprintln!(
+        "free-flow ratio p15/p50/p85 {:.2}/{:.2}/{:.2}; permitted-left lags accepted mean {:.2} \
+         p15 {:.2} [{}], rejected mean {:.2} p85 {:.2} [{}]; stop decel p50 {:.2}",
+        f.p15, f.p50, f.p85, acc.mean, acc.p15, acc.n, rej.mean, rej.p85, rej.n,
+        report.stop_decel_mps2.p50
+    );
     eprintln!(
         "headways by position: {:?}",
         report
@@ -155,7 +166,7 @@ fn drivers_and_pedestrians_on_a_midtown_grid_move_as_published() {
         &report.comparisons(),
         &[
             "free-flow speed / limit, mean",
-            "free-flow speed / limit, sd",
+            "free-flow speed / limit, spread",
             "launch acceleration 0-8 m/s, mean, m/s²",
             "stop deceleration, 85th percentile, m/s²",
             "pedestrian walking speed, mean, m/s",

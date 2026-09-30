@@ -41,11 +41,12 @@
 //!
 //! # Parameter sets
 //!
-//! Four, all from §2.1's table and none invented:
+//! Four from §2.1's table, and one calibrated here:
 //!
 //! | Preset | Source |
 //! |---|---|
-//! | [`IdmPreset::Kesting2010`] (**default**) | Kesting, Treiber and Helbing 2010, car and truck columns [R10 §B2] |
+//! | [`IdmPreset::UrbanHcm`] (**the native engine's drivers**) | car: `T` = 1.0 s (Treiber & Kesting's city set) and `a` = 1.7 m/s², calibrated so a signalised stop line discharges at the HCM's CBD saturation flow; truck: the Kesting 2010 column |
+//! | [`IdmPreset::Kesting2010`] (the enum's default) | Kesting, Treiber and Helbing 2010, car and truck columns [R10 §B2] |
 //! | [`IdmPreset::Treiber2000`] | Treiber, Hennecke and Helbing 2000, freeway calibration [R10 §B1] |
 //! | [`IdmPreset::Kesting2007`] | the IDM set the MOBIL study used [R10 §B3] |
 //! | [`IdmPreset::Legacy`] | the frozen reference engine [`run.py` L142-146, L2274-2283] |
@@ -105,6 +106,13 @@ pub const LEGACY_LOOKAHEAD_M: f64 = 70.0;
 
 /// The legacy trip-speed range, m/s (`trip_speed_min`, `trip_speed_max`).
 pub const LEGACY_TRIP_SPEED_RANGE_MPS: (f64, f64) = (8.0, 18.0);
+
+/// [`IdmPreset::UrbanHcm`]'s car time gap, seconds: Treiber & Kesting's city value.
+pub const URBAN_HCM_TIME_HEADWAY_S: f64 = 1.0;
+
+/// [`IdmPreset::UrbanHcm`]'s car maximum acceleration, m/s², calibrated to the HCM
+/// saturation flow (see the preset).
+pub const URBAN_HCM_MAX_ACCEL_MPS2: f64 = 1.7;
 
 /// The model-wide constants: everything that is not per vehicle.
 ///
@@ -188,15 +196,28 @@ pub enum IdmPreset {
     /// The frozen reference engine's set, with its clamps
     /// (`code (legacy)` [`run.py` L142-146, L2274-2283]).
     Legacy,
+    /// City drivers, calibrated against the HCM saturation-flow field study
+    /// ([`crate::calibration::SaturationExperiment`]); the native engine's set.
+    ///
+    /// The car's time gap `T` = 1.0 s is Treiber & Kesting's *city traffic* value
+    /// (*Traffic Flow Dynamics*, 2013, Table 11.2; **secondary**: the table as recalled
+    /// and quoted, not re-read), against the 1.5 s of the Kesting 2010 freeway set. The
+    /// maximum acceleration `a` = 1.7 m/s² is **calibrated, not cited**: the Kesting 2010
+    /// set (`T` 1.5 s, `a` 1.4 m/s²) discharged a queue at 2.68 s a vehicle (1,340
+    /// veh/h/ln), far below the HCM's 1,710 for a CBD lane, and `a` = 1.7 with `T` = 1.0
+    /// gives 2.17 s (1,657 veh/h/ln) with a mean launch acceleration of 1.24 m/s², Wang et
+    /// al. 2004's field mean of 1.25. The truck is the Kesting 2010 truck column.
+    UrbanHcm,
 }
 
 impl IdmPreset {
     /// Every preset, in the order §2.1's table lists them.
-    pub const ALL: [IdmPreset; 4] = [
+    pub const ALL: [IdmPreset; 5] = [
         IdmPreset::Kesting2010,
         IdmPreset::Treiber2000,
         IdmPreset::Kesting2007,
         IdmPreset::Legacy,
+        IdmPreset::UrbanHcm,
     ];
 
     /// A stable label, also the parameter-set name a scenario selects.
@@ -206,6 +227,7 @@ impl IdmPreset {
             IdmPreset::Treiber2000 => "treiber-2000",
             IdmPreset::Kesting2007 => "kesting-2007",
             IdmPreset::Legacy => "legacy",
+            IdmPreset::UrbanHcm => "urban-hcm",
         }
     }
 
@@ -244,6 +266,21 @@ impl IdmPreset {
                 accessed: Some("2026-09-18".to_string()),
                 note: Some("the frozen reference engine's IDM port and its clamps".to_string()),
             },
+            IdmPreset::UrbanHcm => Source {
+                kind: SourceKind::Standard,
+                reference: "car: T = 1.0 s from Treiber & Kesting, Traffic Flow Dynamics \
+                            (2013) Table 11.2 city traffic (secondary); a = 1.7 m/s² calibrated \
+                            to the HCM CBD saturation flow (1,900 × 0.90 pc/h/ln) and Wang, \
+                            Dixon, Li & Ogle 2004 (TRR 1883) launch acceleration on \
+                            calibration::SaturationExperiment; truck: Kesting 2010 column"
+                    .to_string(),
+                accessed: Some("2026-09-29".to_string()),
+                note: Some(
+                    "calibrated in this crate, not a published set: measured 2.17 s \
+                     saturation headway, 2.7 s start-up lost time, 1.24 m/s² launch"
+                        .to_string(),
+                ),
+            },
         }
     }
 
@@ -251,7 +288,10 @@ impl IdmPreset {
     pub fn params(self) -> IdmParams {
         let base = IdmParams::default();
         match self {
-            IdmPreset::Kesting2010 | IdmPreset::Treiber2000 | IdmPreset::Kesting2007 => base,
+            IdmPreset::Kesting2010
+            | IdmPreset::Treiber2000
+            | IdmPreset::Kesting2007
+            | IdmPreset::UrbanHcm => base,
             // `clamp_s_star` is already true in `base`; the legacy set differs only in
             // which weather table it reads.
             IdmPreset::Legacy => IdmParams {
@@ -282,7 +322,7 @@ impl IdmPreset {
                 | VehicleClass::Delivery
         );
         match self {
-            IdmPreset::Kesting2010 if heavy => DriverProfile {
+            IdmPreset::Kesting2010 | IdmPreset::UrbanHcm if heavy => DriverProfile {
                 desired_speed_mps: 23.6,
                 max_accel_mps2: 0.7,
                 comfort_decel_mps2: 2.0,
@@ -294,6 +334,13 @@ impl IdmPreset {
                 max_accel_mps2: 1.4,
                 comfort_decel_mps2: 2.0,
                 time_headway_s: 1.5,
+                min_gap_m: 2.0,
+            },
+            IdmPreset::UrbanHcm => DriverProfile {
+                desired_speed_mps: 33.3,
+                max_accel_mps2: URBAN_HCM_MAX_ACCEL_MPS2,
+                comfort_decel_mps2: 2.0,
+                time_headway_s: URBAN_HCM_TIME_HEADWAY_S,
                 min_gap_m: 2.0,
             },
             IdmPreset::Treiber2000 => DriverProfile {
