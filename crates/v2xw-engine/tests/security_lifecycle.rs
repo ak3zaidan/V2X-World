@@ -109,6 +109,13 @@ fn a_pool_is_topped_up_over_the_link_and_runs_dry_without_one() {
     );
     assert!(p.topups_completed > 0, "no top-up batch was installed");
     assert!(p.certs_topped_up >= 3, "a top-up installs a whole period");
+    // A connected fleet whose top-ups keep up never leaves a vehicle unable to sign; a
+    // vehicle that has just joined, whose pool is not yet swept into use, is not starved.
+    assert_eq!(
+        p.vehicles_starved, 0,
+        "a vehicle with a working link was counted unable to sign ({} node-steps)",
+        p.starved_node_steps
+    );
     assert!(
         records(&rec, "sec.cert")
             .iter()

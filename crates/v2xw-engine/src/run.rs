@@ -5794,7 +5794,14 @@ impl Engine {
             let Some(p) = self.phase2.as_mut() else {
                 return;
             };
-            if active.is_none() {
+            // Starved means the node cannot sign at its next periodic step: nothing in its
+            // pool is valid now. A pool installed since the node's last periodic step (a
+            // vehicle that has just joined, a top-up that has just landed) is not yet swept
+            // into `Active`, and a wake between steps (`wake_timed`) does not sweep, so
+            // `active()` alone read every newly joined vehicle as starved for up to one
+            // step: 26 of 55 vehicles on `credential-lifecycle`, none of which ever missed
+            // a signature.
+            if active.is_none() && pool_valid == 0 {
                 p.note_starved(*id);
             }
             if let Some(old) = p.note_change(*id, n_changes, digest) {
