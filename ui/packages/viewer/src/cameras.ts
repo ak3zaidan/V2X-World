@@ -1001,12 +1001,12 @@ export class CameraController {
     const cruise = this.#flyCruise;
     // `u` runs 0 → FLY_DESCENT_AT over the flight's first part and on to 1 over its descent, which
     // `#beginFlight` may have given longer than the rest of `u` would.
-    const across = this.#flyAcrossS;
-    const u = !Number.isFinite(cruise) || across <= 0 || this.#flyDuration <= across
+    const acrossS = this.#flyAcrossS;
+    const u = !Number.isFinite(cruise) || acrossS <= 0 || this.#flyDuration <= acrossS
       ? MathUtils.clamp(this.#flyT / this.#flyDuration, 0, 1)
-      : this.#flyT < across
-        ? (this.#flyT / across) * FLY_DESCENT_AT
-        : Math.min(1, FLY_DESCENT_AT + ((this.#flyT - across) / (this.#flyDuration - across)) * (1 - FLY_DESCENT_AT));
+      : this.#flyT < acrossS
+        ? (this.#flyT / acrossS) * FLY_DESCENT_AT
+        : Math.min(1, FLY_DESCENT_AT + ((this.#flyT - acrossS) / (this.#flyDuration - acrossS)) * (1 - FLY_DESCENT_AT));
     const p = this.camera.position;
     if (!Number.isFinite(cruise)) {
       // Smootherstep: zero velocity *and* zero acceleration at both ends.
