@@ -585,6 +585,9 @@ pub struct Engine {
     /// position is one lookup. It was a scan of every actor, made for every frame put on
     /// the air and every node position asked for: quadratic in the fleet.
     node_actor: BTreeMap<NodeId, ActorId>,
+    /// The actors' bodies at the last published state, for the vehicles-on-the-path
+    /// test; rebuilt with the snapshot, and only when vehicle blockage is composed.
+    bodies: link::BodyIndex,
     /// Every hosted device: vehicles' OBUs and roadside units, and — when
     /// `actors.vru.device_fraction` equips them — pedestrians' and cyclists' handsets
     /// ([`crate::hosted::HostedNode`]).
@@ -931,6 +934,7 @@ impl Engine {
             },
             actors: BTreeMap::new(),
             node_actor: BTreeMap::new(),
+            bodies: link::BodyIndex::default(),
             nodes: BTreeMap::new(),
             inboxes: BTreeMap::new(),
             // `validate` refuses any other name, so the fallback is unreachable from a
@@ -2043,6 +2047,9 @@ impl Engine {
             ));
         }
         self.snapshot = ActorSnapshot::build(update.t, MAX_RANGE_M, entries);
+        if self.obstacles.vehicles.is_some() {
+            self.bodies = link::BodyIndex::build(&self.snapshot);
+        }
     }
 
     /// Emits `gt.kinematics` for every live actor's current state, in actor order.
@@ -3579,10 +3586,10 @@ impl Engine {
         // An arrival is an attempt when it would clear `N − margin` from a transmitter at
         // the reference EIRP: its link's loss is small enough, whatever this unit radiates.
         let floor_dbm = self.range.floor_dbm() - (reference - eirp_dbm);
-        let mut candidates: Vec<(NodeId, Vec3)> = Vec::new();
+        // Each full-range receiver with its heading — its street's direction — for the
+        // corner tracer; a roadside unit has none.
+        let mut within: Vec<(NodeId, Vec3, Option<f64>)> = Vec::new();
         let mut beyond: Vec<(NodeId, Vec3)> = Vec::new();
-        // Each receiver's heading — its street's direction — for the corner tracer.
-        let mut headings: BTreeMap<NodeId, f64> = BTreeMap::new();
         state.tx_heading = self.actor_of(state.tx).map(|a| a.last.heading_rad);
         for actor in self.snapshot.actors_within(state.tx_pos, reach_m) {
             let Some(rec) = self.actors.get(&actor) else {
@@ -3593,9 +3600,8 @@ impl Engine {
                 continue;
             }
             let pos = rec.last.extrapolate(now).pos;
-            headings.insert(node, rec.last.heading_rad);
             if state.tx_pos.distance_2d(pos) <= full_m {
-                candidates.push((node, pos));
+                within.push((node, pos, Some(rec.last.heading_rad)));
             } else {
                 beyond.push((node, pos));
             }
@@ -3609,13 +3615,14 @@ impl Engine {
             }
             let d = state.tx_pos.distance_2d(rsu_pos);
             if d <= full_m {
-                candidates.push((rsu, rsu_pos));
+                within.push((rsu, rsu_pos, None));
             } else if d <= reach_m {
                 beyond.push((rsu, rsu_pos));
             }
         }
-        candidates.sort_by_key(|(n, _)| *n);
+        within.sort_by_key(|(n, _, _)| *n);
         beyond.sort_by_key(|(n, _)| *n);
+        let candidates: Vec<(NodeId, Vec3)> = within.iter().map(|&(n, p, _)| (n, p)).collect();
         state.census = self.reception_census(state.tx, state.tx_pos, now);
 
         // Stage 2: the link budgets, sequentially, because the models carry state — a
@@ -3632,18 +3639,10 @@ impl Engine {
         let geometry: Vec<link::LinkGeometry> = {
             let view = self.link_view();
             let (tx, tx_pos, tx_heading) = (state.tx, state.tx_pos, state.tx_heading);
-            candidates
+            within
                 .par_iter()
-                .map(|&(rx, rx_pos)| {
-                    view.geometry(
-                        tx,
-                        tx_pos,
-                        tx_heading,
-                        rx,
-                        rx_pos,
-                        headings.get(&rx).copied(),
-                        now,
-                    )
+                .map(|&(rx, rx_pos, rx_heading)| {
+                    view.geometry(tx, tx_pos, tx_heading, rx, rx_pos, rx_heading, now)
                 })
                 .collect()
         };
@@ -5247,11 +5246,11 @@ impl Engine {
         link::LinkView {
             scenario: &self.scenario,
             world: &self.world,
-            snapshot: &self.snapshot,
             actors: &self.actors,
             rsus: &self.rsus,
             node_class: &self.node_class,
             obstacles: &self.obstacles,
+            bodies: &self.bodies,
             focus: self.focus.as_ref().map(|f| &f.plan),
             main_law: self.main_law,
             focus_law: self.focus_law,
