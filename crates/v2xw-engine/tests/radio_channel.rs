@@ -296,3 +296,189 @@ fn each_region_runs_its_own_congestion_control() {
     let why = refusals(&sl);
     assert!(why.contains("radio.models.dcc"), "{why}");
 }
+
+fn sidelink_params(mut s: Scenario, params: serde_json::Value) -> Scenario {
+    s.radio.models.insert(
+        "sidelink".to_string(),
+        v2xw_engine::scenario::schema::ModelChoice {
+            id: "access/sidelink/engine-coupling".to_string(),
+            params,
+        },
+    );
+    s
+}
+
+/// An LTE-V2X unit under the US J3161/1 profile runs SAE J3161/1's rate control: every BSM
+/// it sends names `sae-j3161-1` and the interval it was generated at, and none carries a
+/// J2945/1 power (J3161/1 has no power control), so every BSM goes out at the unit's
+/// configured power. `rate_control: off` removes it, NR-V2X runs none by default, and
+/// asking for it on NR-V2X, which has no published rate control, is refused.
+///
+/// The counterexample is the engine before this change: a sidelink run had no
+/// application-layer congestion control at all and `node.tx` carried no DCC state.
+#[test]
+fn an_lte_v2x_unit_runs_j3161_rate_control_without_power_control() {
+    let base = with_rat(grid(3_000.0, 3.0), "lte-v2x-pc5");
+    let (_, on) = run_recorded(base.clone());
+    let tx = views::<v2xw_metrics::channels::NodeTxView>(&on);
+    let bsm: Vec<_> = tx
+        .iter()
+        .filter(|v| v.msg_type.as_deref() == Some("bsm"))
+        .collect();
+    assert!(!bsm.is_empty(), "the run sent BSMs");
+    for v in &bsm {
+        let label = v.dcc_state.as_deref().unwrap_or("");
+        assert!(label.starts_with("sae-j3161-1 itt="), "{label}");
+        assert!(!label.contains("rp="), "J3161/1 controls no power: {label}");
+    }
+    let powers: std::collections::BTreeSet<i64> = bsm
+        .iter()
+        .filter_map(|v| v.power_dbm)
+        .map(|p| (p * 10.0).round() as i64)
+        .collect();
+    assert_eq!(powers.len(), 1, "every BSM at the configured power: {powers:?}");
+
+    let (_, off) = run_recorded(sidelink_params(
+        base,
+        serde_json::json!({ "rate_control": "off" }),
+    ));
+    assert!(dcc_labels(&off).is_empty(), "{:?}", dcc_labels(&off));
+
+    let nr = sidelink_params(
+        with_rat(grid(3_000.0, 3.0), "nr-v2x-pc5"),
+        serde_json::json!({ "rate_control": "sae-j3161" }),
+    );
+    let why = refusals(&nr);
+    assert!(why.contains("rate_control"), "{why}");
+    let (_, nr_default) = run_recorded(with_rat(grid(3_000.0, 1.0), "nr-v2x-pc5"));
+    assert!(dcc_labels(&nr_default).is_empty(), "{:?}", dcc_labels(&nr_default));
+}
+
+// -----------------------------------------------------------------------------------------
+// Antenna patterns
+// -----------------------------------------------------------------------------------------
+
+/// Every vehicle's antenna has TR 37.885's pattern: a car's rooftop antenna is the same
+/// all round, a truck's front and rear panels are 6.75 dB down to its side. On a fleet
+/// of half cars and half trucks, the same links with every vehicle given a rooftop
+/// antenna are never weaker, and some — a truck heard off its axis — are more than 1 dB
+/// stronger. With no pattern at all (`isotropic`) no link is weaker than rooftop either.
+///
+/// The runs have no medium access (`radio.tiers.mac: abstract`), so no transmission's
+/// timing depends on what was received and the three runs put the same frames on the air:
+/// every link can be compared with itself.
+///
+/// The counterexample is the engine before this change, which gave every antenna its
+/// scalar gain in every direction, so the two runs could not differ.
+#[test]
+fn a_trucks_antenna_panels_are_weaker_to_its_side() {
+    let mut base = grid(20_000.0, 5.0);
+    base.radio.tiers.mac = v2xw_core::card::Tier::Abstract;
+    base.actors.vehicles.classes = serde_json::from_value(serde_json::json!({
+        "passenger": { "fraction": 0.5 },
+        "truck": { "fraction": 0.5 },
+    }))
+    .expect("a class mix");
+    let run = |pattern: &str| {
+        let mut s = base.clone();
+        s.radio.devices.obu.antenna_pattern =
+            serde_json::from_value(serde_json::json!(pattern)).expect("a pattern");
+        let (_, rec) = run_recorded(s);
+        views::<v2xw_metrics::channels::PhyRxView>(&rec)
+            .into_iter()
+            .filter_map(|v| Some(((v.tx?.index(), v.rx.index(), v.t_start), v.rssi_dbm?)))
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let tr = run("tr37885");
+    let roof = run("rooftop");
+    let iso = run("isotropic");
+    let mut matched = 0;
+    let mut weaker = 0;
+    for (k, &r) in &roof {
+        if let Some(&t) = tr.get(k) {
+            matched += 1;
+            assert!(t <= r + 1e-9, "a pattern added gain on {k:?}: {t} against {r}");
+            if t < r - 1.0 {
+                weaker += 1;
+            }
+        }
+        if let Some(&i) = iso.get(k) {
+            assert!(i >= r - 1e-9, "no pattern is weaker than a rooftop one on {k:?}");
+        }
+    }
+    eprintln!("{matched} links matched, {weaker} weaker by more than 1 dB");
+    assert!(matched > 100, "only {matched} links in common");
+    assert!(weaker > 0, "no truck was heard off its axis");
+}
+
+// -----------------------------------------------------------------------------------------
+// Adjacent-channel interference
+// -----------------------------------------------------------------------------------------
+
+fn adjacent(
+    rat: &str,
+    channel: Option<u16>,
+    params: serde_json::Value,
+) -> v2xw_engine::scenario::schema::AdjacentEmitter {
+    serde_json::from_value(serde_json::json!({
+        "rat": rat,
+        "channel": channel,
+        "params": params,
+    }))
+    .expect("an adjacent emitter")
+}
+
+fn centre(s: &Scenario) -> [f64; 2] {
+    let world = v2xw_engine::wiring::build_world(s).expect("the world builds");
+    [
+        (world.bbox.min.x + world.bbox.max.x) * 0.5,
+        (world.bbox.min.y + world.bbox.max.y) * 0.5,
+    ]
+}
+
+/// Europe lets ITS-G5 and LTE-V2X operate side by side (ITS-G5 on 180, LTE-V2X on 182).
+/// An LTE-V2X transmitter at the centre of an ITS-G5 run, on all the time at 23 dBm,
+/// leaks into the ITS-G5 channel by the ACIR the rules allow (about 13 dB: the ITS-G5
+/// receiver's 6 Mbit/s adjacent-channel rejection), and frames near it are lost to
+/// `adjacent-channel` — not to `jammed`, since there is no jammer. The same transmitter
+/// with a measured-hardware ACIR of 80 dB costs nothing. One asked for on the run's own
+/// channel is co-channel and refused, and in the United States, which gives 802.11p no
+/// channel, an 802.11p emitter beside a C-V2X run is refused.
+///
+/// The counterexample is the engine before this change: `radio.adjacent_channel` did not
+/// exist and a mixed deployment could not be expressed.
+#[test]
+fn an_adjacent_channel_transmitter_leaks_in_by_its_acir() {
+    let base = with_region(grid(3_000.0, 3.0), "eu");
+    let c = centre(&base);
+    let mut leaky = base.clone();
+    leaky.radio.adjacent_channel = vec![adjacent(
+        "lte-v2x-pc5",
+        None,
+        serde_json::json!({ "position_m": c, "power_dbm": 23.0 }),
+    )];
+    let (r, _) = run_recorded(leaky.clone());
+    eprintln!("losses {:?}", r.rx_losses);
+    let aci = r.rx_losses.get("adjacent-channel").copied().unwrap_or(0);
+    assert!(aci > 0, "no frame lost to the adjacent channel: {:?}", r.rx_losses);
+    assert_eq!(r.rx_losses.get("jammed"), None, "{:?}", r.rx_losses);
+
+    let mut good = leaky.clone();
+    good.radio.adjacent_channel[0].acir_db = Some(80.0);
+    let (g, _) = run_recorded(good);
+    assert_eq!(g.rx_losses.get("adjacent-channel"), None, "{:?}", g.rx_losses);
+
+    let mut co = leaky.clone();
+    co.radio.adjacent_channel[0].channel = Some(180);
+    let why = refusals(&co);
+    assert!(why.contains("co-channel"), "{why}");
+
+    let mut us = with_rat(grid(3_000.0, 3.0), "lte-v2x-pc5");
+    us.radio.adjacent_channel = vec![adjacent(
+        "dsrc-80211p",
+        Some(172),
+        serde_json::json!({ "position_m": c }),
+    )];
+    let why = refusals(&us);
+    assert!(why.contains("radio.adjacent_channel"), "{why}");
+}

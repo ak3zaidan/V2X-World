@@ -549,6 +549,33 @@ pub struct Radio {
     /// channel for the technology.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<u16>,
+    /// Transmitters of another technology on a neighbouring channel, where the region
+    /// lets the two operate side by side (ITS-G5 beside LTE-V2X in Europe): their
+    /// leakage enters this run's receivers attenuated by the adjacent-channel
+    /// interference ratio.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adjacent_channel: Vec<AdjacentEmitter>,
+}
+
+/// One transmitter on an adjacent channel (`radio.adjacent_channel`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdjacentEmitter {
+    /// Its technology.
+    pub rat: Rat,
+    /// Its channel number; unset, the region's deployment channel for its technology.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<u16>,
+    /// The adjacent-channel interference ratio, dB; unset, the region's mask for the
+    /// emitter's technology combined with the minimum selectivity of this run's receivers
+    /// (`v2xw_radio::regulation::adjacent_acir_db`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acir_db: Option<f64>,
+    /// Where it is and when it transmits, as a jammer's: `position_m`, `follow_node` or
+    /// `path_m` (with `speed_mps`, `loop_path`); `power_dbm` (23 by default), `from_s`,
+    /// `to_s`, and `period_ms` with `duty` for an emitter that is not on all the time.
+    #[serde(default)]
+    pub params: serde_json::Value,
 }
 
 /// A regulatory region: the band plan and power limits a run transmits under.
@@ -653,6 +680,7 @@ impl Default for ObuRadio {
             antenna_gain_dbi: Self::gain(),
             cable_loss_db: 0.0,
             antenna_height_m: None,
+            antenna_pattern: ObuAntennaPattern::Tr37885,
         }
     }
 }
@@ -691,7 +719,6 @@ impl Default for RsuRadio {
             antenna_gain_dbi: Self::gain(),
             cable_loss_db: 0.0,
             antenna_height_m: None,
-            antenna_pattern: ObuAntennaPattern::Tr37885,
         }
     }
 }

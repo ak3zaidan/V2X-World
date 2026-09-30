@@ -429,6 +429,7 @@ const fn cause_name(cause: LossCause) -> &'static str {
         LossCause::Fading => "fading",
         LossCause::InBandEmission => "in-band-emission",
         LossCause::ResourceCollision => "resource-collision",
+        LossCause::AdjacentChannel => "adjacent-channel",
         // `LossCause` is `#[non_exhaustive]`: a cause added upstream lands here rather
         // than failing the build, and reports itself as unknown rather than as something
         // it is not.

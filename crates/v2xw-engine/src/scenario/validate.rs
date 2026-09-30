@@ -835,6 +835,23 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                configured power above the limit is lowered to it.",
     },
     KeyStatus {
+        path: "radio.adjacent_channel",
+        status: Status::Wired,
+        note: "Transmitters of another technology on a neighbouring channel, where the \
+               region lets the two operate side by side (Europe: ITS-G5 on 180 beside \
+               LTE-V2X on 182 and NR-V2X on 178). Each is placed and timed as a jammer is \
+               (position_m, follow_node or path_m; power_dbm, 23 by default; period_ms and \
+               duty; from_s, to_s) and its power reaches this run's receivers through the \
+               same link budget, less the adjacent-channel interference ratio: by default \
+               the region's spectrum mask for its technology combined with the minimum \
+               selectivity of this run's receivers (ETSI EN 302 571 Table 8, 3GPP TS \
+               36.101 and 38.101-1), the worst a conformant pair may show; acir_db sets \
+               a measured one. It raises the noise a frame is decoded against, clear-channel \
+               assessment and the busy ratio, and a frame it alone killed is lost to \
+               adjacent-channel. A channel that overlaps the run's is refused (that is a \
+               jammer), as is one the region does not allow the technology on.",
+    },
+    KeyStatus {
         path: "radio.channel",
         status: Status::Wired,
         note: "The IEEE channel number within the region's band plan (170-184); unset, the \

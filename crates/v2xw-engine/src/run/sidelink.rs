@@ -988,7 +988,7 @@ impl Engine {
                     RxOutcome::Received { .. }
                 )
             {
-                cause = Some(v2xw_radio::LossCause::Jammed);
+                cause = Some(jam_field.loss_cause(rx, channel, state.start, state.end));
             }
             out.push(LinkOutcome {
                 rx,
