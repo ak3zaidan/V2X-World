@@ -1,4 +1,12 @@
-//! TEMPORARY sweep of the car-following driver set against the saturation-flow experiment.
+//! The car-following sweep behind `IdmPreset::UrbanHcm`: runs the saturation-flow experiment
+//! (`calibration::SaturationExperiment`) for each driver set given as `T,A,B,S0,FOLLOW`
+//! (time gap s, max acceleration, comfortable deceleration, standstill gap, queue start-up
+//! delay median s) and prints the HCM figures; `trace` prints a loaded green onset step by
+//! step.
+//!
+//! ```text
+//! cargo run -p v2xw-mobility --example calib_sweep -- 1.0,1.7,2,2,0.5 1.5,1.4,2,2,0.5
+//! ```
 use std::sync::Arc;
 
 use v2xw_core::card::ModelCard;

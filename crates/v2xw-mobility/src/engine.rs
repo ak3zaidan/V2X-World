@@ -2481,7 +2481,10 @@ impl NativeMobility {
                 let d_other = len_o + c.stop_line_gap_m;
                 let t_other =
                     merge_arrival_s(d_other, view.speed_mps, view.driver.max_accel_mps2, cap_o);
-                if t_other < t_self || (t_other == t_self && c.actor < actor.id) {
+                // One still before its stop line is never ahead of us once we are in the
+                // stretch where the paths converge (see the rule for vehicles inside).
+                let self_in = pos >= z.s_self - z.half_self;
+                if !self_in && (t_other < t_self || (t_other == t_self && c.actor < actor.id)) {
                     take_merge(MergePartner {
                         view: *view,
                         gap_m: d_self - d_other - view.dims.length_m,
@@ -2511,7 +2514,24 @@ impl NativeMobility {
                         view.driver.max_accel_mps2,
                         self.connector_speed(world, z.other),
                     );
-                    let ahead = t_other < t_self || (t_other == t_self && other < actor.id);
+                    // A car already in the stretch where the two paths converge is ahead of
+                    // one that is not, whatever their arrival times: the time rule let a car
+                    // creeping at 0.1 m/s count itself first against one standing half in
+                    // the merge, and crawl into it (333 overlap steps on dense Midtown).
+                    // Both in it: the one nearer the merge point. The rule reads the same
+                    // from both sides, so the two agree.
+                    let other_in = front >= z.s_other - z.half_other;
+                    let self_in = pos >= z.s_self - z.half_self;
+                    let ahead = match (other_in, self_in) {
+                        (true, false) => true,
+                        (false, true) => false,
+                        (true, true) => {
+                            d_other < d_self || (d_other == d_self && other < actor.id)
+                        }
+                        (false, false) => {
+                            t_other < t_self || (t_other == t_self && other < actor.id)
+                        }
+                    };
                     if !ahead || rear > len_o {
                         continue; // behind us, or already off the connector
                     }
@@ -3101,14 +3121,17 @@ impl Mobility for NativeMobility {
             // A merge partner that reaches the merge point first is fallen in behind by the
             // time the ego gets there ([`merge_accel`]), not braked for as if it stood at
             // the ego's bumper now.
-            if let Some(m) = merge_partner.as_ref() {
+            let merge_limit = merge_partner.as_ref().map(|m| {
                 let tau = merge_arrival_s(
                     m.d_self_m,
                     ego.speed_mps,
                     actor.driver.max_accel_mps2,
                     self.connector_speed(world, world.lane(actor.lane).id),
                 );
-                accel = accel.min(merge_accel(&ego_capped, m, tau));
+                merge_accel(&ego_capped, m, tau)
+            });
+            if let Some(limit) = merge_limit {
+                accel = accel.min(limit);
             }
             if along
                 && let Some(l) = leader.as_ref()
@@ -3143,6 +3166,13 @@ impl Mobility for NativeMobility {
                 // on the shipped Midtown run).
                 if let Some(v) = nearest_vehicle {
                     accel = accel.min(self.cf.accel(&ego_capped, Some(&v), &lane_view, &self.weather));
+                }
+                // And so does a merge partner ahead: relaxed, two cars converging on a
+                // lane drop crept side by side towards the same crosswalk at 0.1 m/s,
+                // each overriding the other, until their bodies met (333 overlap steps on
+                // dense Midtown).
+                if let Some(limit) = merge_limit {
+                    accel = accel.min(limit);
                 }
             }
             // Any braking short of an emergency builds at a service-brake rate, whatever
@@ -3286,7 +3316,34 @@ impl Mobility for NativeMobility {
             if along && dt_s > 0.0 {
                 actor.accel_mps2 = (actor.speed_mps - before) / dt_s;
             }
-            actor.s_m += actor.speed_mps * dt_s;
+            // The speed is the vehicle's own, along the path it drives; off the centreline
+            // on a bend (in a lane change) that path is shorter or longer than the
+            // centreline, so the centreline arc advances by what moves the published
+            // point `v·dt` along the offset path — one secant step on the same offset
+            // curve the pose is drawn from. Advancing it by `v·dt` had a car 3.3 m inside a
+            // 9 m bend moving 37 % less than its reported speed (the auditor's step-speed
+            // class on Midtown); the curvature formula `1/(1 − d·κ)`, tried first, spiked
+            // at polyline vertices into 1.4-1.7 m steps (teleports).
+            let base = actor.speed_mps * dt_s;
+            let advance = if along && actor.lateral_m != 0.0 && base > 0.0 {
+                let lane = world.lane(actor.lane);
+                let rear = actor.s_m - actor.class.spec().length_m;
+                if rear >= 0.0 && rear + base <= lane.length_m {
+                    let p0 = smooth_offset_point(lane, rear, actor.lateral_m);
+                    let p1 = smooth_offset_point(lane, rear + base, actor.lateral_m);
+                    let moved = p0.distance(p1);
+                    if moved > 1e-6 {
+                        base * (base / moved).clamp(0.67, 1.5)
+                    } else {
+                        base
+                    }
+                } else {
+                    base
+                }
+            } else {
+                base
+            };
+            actor.s_m += advance;
             if actor.stopped_until.is_some_and(|until| t0 >= until) {
                 actor.stopped_until = None;
             }
