@@ -62,8 +62,10 @@ impl NodeDrop {
     /// The causes that ride on no other channel, with their spelling: the receive-side ones
     /// are on `node.rx` with the attempt they ended, so recording them here too would count
     /// them twice.
-    pub const CAUSES: [v2xw_node::DropCause; 2] =
-        [v2xw_node::DropCause::TxOverflow, v2xw_node::DropCause::CrlBacklog];
+    pub const CAUSES: [v2xw_node::DropCause; 2] = [
+        v2xw_node::DropCause::TxOverflow,
+        v2xw_node::DropCause::CrlBacklog,
+    ];
 
     /// One row per cause in [`NodeDrop::CAUSES`] that `drops` (a step's counts, in
     /// `DropCause::ALL` order) has a non-zero count for, in that order.
@@ -609,7 +611,10 @@ mod tests {
     fn a_steps_transmit_and_crl_drops_become_node_drop_rows() {
         // DropCause::ALL order: rx, verify-policy, verify-overflow, tx, reassembly, crl.
         let rows = NodeDrop::from_step(5_000, NodeId::new(9), &[4, 1, 2, 3, 0, 7]);
-        let causes: Vec<(&str, u32)> = rows.iter().map(|r| (r.0.cause.as_str(), r.0.count)).collect();
+        let causes: Vec<(&str, u32)> = rows
+            .iter()
+            .map(|r| (r.0.cause.as_str(), r.0.count))
+            .collect();
         assert_eq!(
             causes,
             vec![("tx_overflow", 3), ("crl_processing_backlog", 7)],

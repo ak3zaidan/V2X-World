@@ -434,7 +434,15 @@ mod tests {
         let step = l.take_step();
         assert_eq!(step[3], 3, "a window reset lost the step's transmit drops");
         assert_eq!(step[5], 1);
-        assert_eq!(l.take_step(), [0; 6], "a step's drops were handed out twice");
-        assert_eq!(l.count(DropCause::CrlBacklog), 1, "taking the step cleared the window");
+        assert_eq!(
+            l.take_step(),
+            [0; 6],
+            "a step's drops were handed out twice"
+        );
+        assert_eq!(
+            l.count(DropCause::CrlBacklog),
+            1,
+            "taking the step cleared the window"
+        );
     }
 }

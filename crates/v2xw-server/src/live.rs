@@ -82,8 +82,7 @@ use v2xw_core::time::{Duration, SimTime};
 use v2xw_engine::{Scenario, run::RunReport};
 use v2xw_metrics::channels::{
     DetObservationView, GtKinematicsView, MacCbrView, NodeDropView, NodeRxView, NodeTelemetryView,
-    NodeTxView,
-    NodeVerifyView, PhyRxView, ProtoRevocationView, RxOutcome, SecCertView, SignerId,
+    NodeTxView, NodeVerifyView, PhyRxView, ProtoRevocationView, RxOutcome, SecCertView, SignerId,
     VerifyOutcome, decode,
 };
 use v2xw_metrics::def::MetricSample;
@@ -3073,35 +3072,31 @@ impl LiveEngine {
         let Some(step) = self.emitted() else {
             return rows;
         };
-        rows.extend(step
-            .snapshot
-            .actors
-            .iter()
-            .filter_map(|pose| {
-                let node = pose.node?;
-                Some(crate::engine::NodeFacts {
-                    node_id: node.index(),
-                    actor_id: pose.actor.index(),
-                    pos_m: [
-                        pose.pos_m[0] as f32,
-                        pose.pos_m[1] as f32,
-                        // 1.5 m: the antenna height `v2xw-radio`'s isotropic endpoint uses
-                        // for a car. A rendering offset, not a model input.
-                        (pose.pos_m[2] + 1.5) as f32,
-                    ],
-                    label: self.node_label(pose.actor, pose.class_idx),
-                    profile_id: self.node_profile(pose.class_idx),
-                    flags: NODE_HAS_HSM,
-                    // §3.1.3 `kind`: a pedestrian's or a cyclist's handset is a
-                    // `vru-device` (1), everything else riding an actor an OBU (0).
-                    kind: if self.is_vru_class(pose.class_idx) {
-                        1
-                    } else {
-                        0
-                    },
-                    class_idx: pose.class_idx,
-                })
-            }));
+        rows.extend(step.snapshot.actors.iter().filter_map(|pose| {
+            let node = pose.node?;
+            Some(crate::engine::NodeFacts {
+                node_id: node.index(),
+                actor_id: pose.actor.index(),
+                pos_m: [
+                    pose.pos_m[0] as f32,
+                    pose.pos_m[1] as f32,
+                    // 1.5 m: the antenna height `v2xw-radio`'s isotropic endpoint uses
+                    // for a car. A rendering offset, not a model input.
+                    (pose.pos_m[2] + 1.5) as f32,
+                ],
+                label: self.node_label(pose.actor, pose.class_idx),
+                profile_id: self.node_profile(pose.class_idx),
+                flags: NODE_HAS_HSM,
+                // §3.1.3 `kind`: a pedestrian's or a cyclist's handset is a
+                // `vru-device` (1), everything else riding an actor an OBU (0).
+                kind: if self.is_vru_class(pose.class_idx) {
+                    1
+                } else {
+                    0
+                },
+                class_idx: pose.class_idx,
+            })
+        }));
         // §3.1.3: "node_id ascending, dense where possible".
         rows.sort_by_key(|row| row.node_id);
         rows

@@ -2701,7 +2701,9 @@ impl Engine {
         // build, sign or queue, a CRL backlog shed — on `node.drop`, in node order.
         let drops: Vec<crate::records::NodeDrop> = results
             .iter()
-            .flat_map(|(id, outcome, _, _)| crate::records::NodeDrop::from_step(now, *id, &outcome.drops))
+            .flat_map(|(id, outcome, _, _)| {
+                crate::records::NodeDrop::from_step(now, *id, &outcome.drops)
+            })
             .collect();
         for record in &drops {
             self.emit(recorder, record);
