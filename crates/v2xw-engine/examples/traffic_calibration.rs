@@ -7,6 +7,7 @@
 //! ```text
 //! cargo run -p v2xw-engine --example traffic_calibration -- <scenario.yaml> \
 //!     [--rate VEH_PER_H] [--duration S] [--pedestrians N] [--cyclists N] [--json OUT]
+//!     [--examples N]
 //! ```
 //!
 //! The world, the mobility engine and the demand are built by the same
@@ -62,6 +63,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             scenario.world.highway_preset.map(|p| p.label()),
         )
         .right_turn_on_red,
+        examples_per_check: value("--examples")
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(3),
         ..AuditParams::default()
     };
     let mut auditor = TrafficAuditor::new(&world, audit_params);
@@ -179,5 +183,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|c| format!("{}={}", c.label(), audit.count(*c)))
         .collect();
     println!("audit (non-zero): {nonzero:?}");
+    // `--examples N`: the auditor's examples of every class that fired, so one run
+    // explains itself without a second audit run.
+    for e in &audit.examples {
+        println!(
+            "  [{}] t={:.1}s actor={:?} other={:?} ({:.1}, {:.1}) lane={:?}: {}",
+            e.check.label(),
+            e.t_s,
+            e.actor,
+            e.other,
+            e.x_m,
+            e.y_m,
+            e.lane,
+            e.detail
+        );
+    }
     Ok(())
 }
