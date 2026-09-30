@@ -1346,7 +1346,43 @@ export class PoseInterpolator {
     if (!consistent && chord > dataJumpMetres(expected)) return false;
     co[c + 8] = az;
     co[c + 9] = cz;
-    if (this.curve === "linear" || !consistent) {
+    const ci = b.classIdx[i];
+    const vru = ci < this.#vruClasses.length && this.#vruClasses[ci] === 1;
+    if (vru && this.curve !== "linear") {
+      // People and riders: tangents from the neighbouring positions (Catmull–Rom), not from the
+      // reported speed. The social-force model's speed changes by half in a step and back; drawn
+      // through those speeds a crowd pulsed. Positions are what the model integrated, so the
+      // curve through them is continuous in velocity whatever the speeds say.
+      let m0x = cx;
+      let m0y = cy;
+      let m1x = cx;
+      let m1y = cy;
+      if (bk + 2 < this.#size) {
+        const o = this.#at(bk + 2);
+        const dt = b.simSeconds - o.simSeconds;
+        if (i < o.count && o.occupied[i] === 1 && o.actorId[i] === id && dt > 1e-9) {
+          m0x = ((b.position[p] - o.position[p]) / dt) * T;
+          m0y = ((b.position[p + 1] - o.position[p + 1]) / dt) * T;
+        }
+      }
+      if (bk >= 1) {
+        const nx = this.#at(bk - 1);
+        const dt = nx.simSeconds - a.simSeconds;
+        if (i < nx.count && nx.occupied[i] === 1 && nx.actorId[i] === id && dt > 1e-9) {
+          m1x = ((nx.position[p] - ax) / dt) * T;
+          m1y = ((nx.position[p + 1] - ay) / dt) * T;
+        }
+      }
+      limitTangent2(m0x, m0y, cx, cy);
+      m0x = TAN[0];
+      m0y = TAN[1];
+      limitTangent2(m1x, m1y, cx, cy);
+      m1x = TAN[0];
+      m1y = TAN[1];
+      co[c] = ax; co[c + 1] = m0x; co[c + 2] = 3 * cx - 2 * m0x - m1x; co[c + 3] = -2 * cx + m0x + m1x;
+      co[c + 4] = ay; co[c + 5] = m0y; co[c + 6] = 3 * cy - 2 * m0y - m1y; co[c + 7] = -2 * cy + m0y + m1y;
+      co[c + 10] = ha; co[c + 11] = dh; co[c + 12] = 0; co[c + 13] = 0;
+    } else if (this.curve === "linear" || !consistent) {
       co[c] = ax; co[c + 1] = cx; co[c + 2] = 0; co[c + 3] = 0;
       co[c + 4] = ay; co[c + 5] = cy; co[c + 6] = 0; co[c + 7] = 0;
       co[c + 10] = ha; co[c + 11] = dh; co[c + 12] = 0; co[c + 13] = 0;

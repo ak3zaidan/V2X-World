@@ -109,6 +109,11 @@ export interface GlitchReport {
     readonly headingStepMaxRad: number;
     /** Person–person overlaps (people brush past each other; reported, not counted). */
     readonly pedestrianPairsOverlapping: number;
+    /** Distinct frames with at least one stutter event, and those within 0.5 s of a camera flight's end. */
+    readonly stutterFrames: number;
+    readonly stutterFramesAfterFlight: number;
+    /** When those frames were (render clock, s), the first 40, with the mode and the worst event. */
+    readonly stutterFrameList: readonly string[];
     /** Frame-time statistics of the clock the frames were drawn on, ms. */
     readonly frameMsMean: number;
     readonly frameMsMax: number;
@@ -212,6 +217,15 @@ export class GlitchHunter {
    * screen with it, and that stutter is the data's, not the drawing's.
    */
   #frameDataCut = false;
+  #prevVp = new Float64Array(16);
+  #prevVpValid = false;
+  #transitPrev = false;
+  #lastStutterFrame = -1;
+  #stutterFrames = 0;
+  #stutterFramesAfterFlight = 0;
+  #stutterFrameList: string[] = [];
+  #flightEndedAt = -Infinity;
+  #wasInTransit = false;
   /** Whether the followed slot was snapped last frame. */
   #followSnapPrev = false;
   /** Whether the interpolator snapped each slot last frame. */
@@ -365,6 +379,14 @@ export class GlitchHunter {
 
   #emit(e: GlitchEvent): void {
     this.#counts[e.cls]++;
+    if (e.cls === "stutter" && e.frame !== this.#lastStutterFrame) {
+      this.#lastStutterFrame = e.frame;
+      this.#stutterFrames++;
+      if (e.timeS - this.#flightEndedAt < 0.5) this.#stutterFramesAfterFlight++;
+      if (this.#stutterFrameList.length < 40) {
+        this.#stutterFrameList.push(`${e.timeS.toFixed(2)} ${e.mode}${e.timeS - this.#flightEndedAt < 0.5 ? " (landing)" : ""}: ${e.detail}`);
+      }
+    }
     const m = (this.#byMode[e.mode] ??= {});
     m[e.cls] = (m[e.cls] ?? 0) + 1;
     if (e.cause === "engine") this.#engine[e.cls] = (this.#engine[e.cls] ?? 0) + 1;
@@ -385,6 +407,9 @@ export class GlitchHunter {
     const dt = report.dtSeconds;
     const t = report.clockSeconds;
     const ms = dt * 1000;
+    const transitNow = v.cameras.inTransit;
+    if (this.#wasInTransit && !transitNow) this.#flightEndedAt = t;
+    this.#wasInTransit = transitNow;
     this.#frameMsSum += ms;
     if (ms > this.#frameMsMax) this.#frameMsMax = ms;
 
@@ -436,7 +461,8 @@ export class GlitchHunter {
     for (let s = 0; s < n; s++) {
       const live = occ[s] === 1;
       const id = live ? ids[s] : NO_ID;
-      if (this.#id[s] !== id) {
+      const isNew = this.#id[s] !== id;
+      if (isNew) {
         if (this.#id[s] !== NO_ID) this.#vanish(s, frame, t, mode);
         this.#id[s] = id;
         this.#tracked[s] = 0;
@@ -499,22 +525,25 @@ export class GlitchHunter {
       const fade = fadeArr && s < fadeArr.length ? fadeArr[s] : 1;
       // An actor that dissolves in or out over several frames has not popped: only an appearance
       // or a disappearance at more than half strength is one.
-      if (drawn && !wasDrawn && interior && fade >= 0.5) {
-        const prevInterior = (intHist & 2) !== 0;
-        if (!hadHistory || prevInterior) {
+      // Pop: appeared inside the view, at more than half strength. A new actor is a spawn in
+      // view (the engine's); a known one that was not drawn last frame is a pop only if it was
+      // inside last frame's view too — not if the camera turned or flew to it.
+      if (drawn && !wasDrawn && interior && fade >= 0.5 && !inTransit && !this.#transitPrev) {
+        const wasInView = !isNew && this.#inPrevView(x, y, cz, W, H);
+        if (isNew || wasInView) {
           // A flicker is a separate, stronger claim; see below.
-          if ((drawnHist & 4) === 0 || !prevInterior) {
+          if ((drawnHist & 4) === 0) {
             this.#emit({
               cls: "pop", frame, timeS: t, mode, actorId: id,
-              cause: !hadHistory ? "engine" : "viewer",
-              detail: !hadHistory
+              cause: isNew ? "engine" : "viewer",
+              detail: isNew
                 ? `${def.name} appeared ${dist.toFixed(0)} m from the camera, inside the view (a spawn in view)`
                 : `${def.name} reappeared inside the view at ${dist.toFixed(0)} m`,
             });
           }
         }
       }
-      if (!drawn && wasDrawn && interior && (intHist & 2) !== 0 && id !== hiddenId && this.#fade[s] >= 0.5) {
+      if (!drawn && wasDrawn && interior && (intHist & 2) !== 0 && id !== hiddenId && this.#fade[s] >= 0.5 && !inTransit) {
         // Drawn last frame, in the interior both frames, not drawn now: vanished in view.
         this.#emit({
           cls: "pop", frame, timeS: t, mode, actorId: id, cause: "viewer",
@@ -633,7 +662,22 @@ export class GlitchHunter {
     this.#checkOverlaps(frame, t, mode);
     this.#checkSignalsAndGhosts(frame, t, mode);
     this.#checkSubject(frame, t, mode, vp, W, H);
+    this.#prevVp.set(vp);
+    this.#prevVpValid = true;
+    this.#transitPrev = inTransit;
     this.#prevDt = dt > 0 ? dt : this.#prevDt;
+  }
+
+  /** Whether a world point was inside the interior of last frame's view. */
+  #inPrevView(x: number, y: number, z: number, W: number, H: number): boolean {
+    if (!this.#prevVpValid) return false;
+    const m = this.#prevVp;
+    const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+    if (w <= 1e-6) return false;
+    const sx = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / w * 0.5 + 0.5) * W;
+    const sy = (1 - ((m[1] * x + m[5] * y + m[9] * z + m[13]) / w * 0.5 + 0.5)) * H;
+    const e = this.edgePx;
+    return sx > e && sx < W - e && sy > e && sy < H - e;
   }
 
   /** A tracked slot whose actor went away: a pop if it was inside the view. */
@@ -1057,6 +1101,9 @@ export class GlitchHunter {
         followJerkRmsPx: this.#followJerkN > 0 ? Math.sqrt(this.#followJerkSum2 / this.#followJerkN) : 0,
         headingStepMaxRad: this.#headingStepMax,
         pedestrianPairsOverlapping: this.#pedPairs,
+        stutterFrames: this.#stutterFrames,
+        stutterFramesAfterFlight: this.#stutterFramesAfterFlight,
+        stutterFrameList: [...this.#stutterFrameList],
         frameMsMean: frames > 0 ? this.#frameMsSum / frames : 0,
         frameMsMax: this.#frameMsMax,
       },

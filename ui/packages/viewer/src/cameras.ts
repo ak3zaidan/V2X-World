@@ -117,6 +117,7 @@ const CHASE_YAW_OMEGA = 3.6;
 /** The chase distance for a car, metres, that `distanceM` (the zoom) is relative to. */
 const CHASE_REFERENCE_M = 9;
 
+
 /**
  * One exact step of a critically damped spring: error `e` and rate `v` after `dt` towards zero,
  * `x(t) = (e + (v + ωe)t)·e^(−ωt)`. Exact, so it is frame-rate independent.
@@ -704,15 +705,27 @@ export class CameraController {
       this.#pendingFlight = false;
       this.#beginFlight();
     }
+    const followStep = step;
+    let flew = false;
     if (this.#flyT < this.#flyDuration) {
+      const px = this.camera.position.x;
+      const py = this.camera.position.y;
+      const pz = this.camera.position.z;
+      const lx = this.look.x;
+      const ly = this.look.y;
+      const lz = this.look.z;
       this.#advanceFlight(step);
-      if (this.#flyT >= this.#flyDuration && street) {
-        // The flight lands on a subject that is moving: hand the follow its velocity, or the
-        // camera stalls for a beat after landing and then runs to catch up.
-        const v = this.#followValid ? this.#followSpeed : 0;
-        this.#posVel.set(Math.cos(this.#followHeading) * v, Math.sin(this.#followHeading) * v, 0);
-        this.#lookVel.copy(this.#posVel);
+      flew = true;
+      if (this.#flyT >= this.#flyDuration && street && step > 0) {
+        // Landed. The follow takes over with the velocity the flight had on its last frame, so
+        // the camera's velocity is continuous through the landing; the spring absorbs the
+        // difference from the subject's own (a few centimetres of overshoot, not a stop).
+        this.#posVel.set((this.camera.position.x - px) / step, (this.camera.position.y - py) / step, (this.camera.position.z - pz) / step);
+        this.#lookVel.set((this.look.x - lx) / step, (this.look.y - ly) / step, (this.look.z - lz) / step);
       }
+    }
+    if (flew) {
+      // (the flight moved the camera this frame)
     } else if (street && !this.#pendingFlight) {
       // A critically damped follow with the subject's own velocity fed forward. The old law
       // lerped the camera towards its desired point, which at 15 m/s trailed by v/λ = 3.75 m more
@@ -738,17 +751,17 @@ export class CameraController {
       const vy = sn * speed;
       const cut = this.#subjectJumped;
       this.#subjectJumped = false;
-      if (cut || this.camera.position.distanceToSquared(this.#desiredPosition) > 25) {
+      if (cut || this.camera.position.distanceToSquared(this.#desiredPosition) > 3600) {
         this.camera.position.copy(this.#desiredPosition);
         this.#posVel.set(vx, vy, 0);
       } else {
-        springFollow(this.camera.position, this.#posVel, this.#desiredPosition, vx, vy, omega, step);
+        springFollow(this.camera.position, this.#posVel, this.#desiredPosition, vx, vy, omega, followStep);
       }
-      if (cut || this.look.distanceToSquared(this.#desiredLook) > 25) {
+      if (cut || this.look.distanceToSquared(this.#desiredLook) > 3600) {
         this.look.copy(this.#desiredLook);
         this.#lookVel.set(vx, vy, 0);
       } else {
-        springFollow(this.look, this.#lookVel, this.#desiredLook, vx, vy, omega, step);
+        springFollow(this.look, this.#lookVel, this.#desiredLook, vx, vy, omega, followStep);
       }
     } else {
       // A critically damped spring per axis rather than the exponential lerp 09-ui §3 named. The
