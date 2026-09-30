@@ -154,7 +154,7 @@ async fn main() -> std::process::ExitCode {
     let server = match started {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("v2xw-server: {e}");
+            eprintln!("v2xw-server: {}", v2xw_server::error::describe(&e));
             return std::process::ExitCode::FAILURE;
         }
     };

@@ -244,5 +244,28 @@ impl From<v2xw_world::WorldError> for ServerError {
     }
 }
 
+/// One line for a log, a `run.status` failure or a notification: the error's message and,
+/// for a refusal that carries rows, each row's path and message. `ServerError`'s own
+/// `Display` of a `-32004` is "scenario invalid", which says nothing about what to fix.
+pub fn describe(e: &ServerError) -> String {
+    match e {
+        ServerError::InvalidParams(rows) | ServerError::ScenarioInvalid(rows) if !rows.is_empty() => {
+            let parts: Vec<String> = rows
+                .iter()
+                .map(|r| {
+                    if r.message.starts_with(r.path.trim_start_matches('/').replace('/', ".").as_str())
+                    {
+                        r.message.clone()
+                    } else {
+                        format!("{}: {}", r.path, r.message)
+                    }
+                })
+                .collect();
+            format!("{e}: {}", parts.join("; "))
+        }
+        other => other.to_string(),
+    }
+}
+
 /// The crate result alias.
 pub type Result<T> = core::result::Result<T, ServerError>;

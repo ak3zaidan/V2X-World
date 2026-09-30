@@ -564,7 +564,7 @@ fn spawn_host(
     memo: Option<WorldMemo>,
 ) -> Result<(Box<Setup>, Host)> {
     let (setup_tx, setup_rx) =
-        std::sync::mpsc::channel::<std::result::Result<Box<Setup>, String>>();
+        std::sync::mpsc::channel::<std::result::Result<Box<Setup>, ServerError>>();
     let (step_tx, step_rx) = std::sync::mpsc::sync_channel::<HostMsg>(lookahead.max(1));
     let stop = Arc::new(AtomicBool::new(false));
 
@@ -609,7 +609,7 @@ fn spawn_host(
                         (world, bytes)
                     }
                     Err(e) => {
-                        let _ = setup_tx.send(Err(e.to_string()));
+                        let _ = setup_tx.send(Err(setup_error(e)));
                         return;
                     }
                 },
@@ -641,7 +641,7 @@ fn spawn_host(
                 match v2xw_engine::Engine::build_with_world(scenario, world, &build_utc) {
                     Ok(e) => e,
                     Err(e) => {
-                        let _ = setup_tx.send(Err(e.to_string()));
+                        let _ = setup_tx.send(Err(setup_error(e)));
                         return;
                     }
                 };
@@ -657,14 +657,29 @@ fn spawn_host(
                     s
                 }
                 Err(e) => {
-                    let _ = setup_tx.send(Err(e.to_string()));
+                    let _ = setup_tx.send(Err(e));
                     return;
                 }
             };
             let step_ns = setup.cadence.mobility_step.as_nanos().max(1);
             let last_index = setup.duration / step_ns;
             let writer = recording.as_deref().and_then(|path| {
-                open_recording(path, setup.cadence, &setup.manifest, &setup.scenario_doc).ok()
+                let mut writer =
+                    open_recording(path, setup.cadence, &setup.manifest, &setup.scenario_doc)
+                        .ok()?;
+                // The run's `Hello` first, as a connection would receive it at t = 0: the
+                // replay server (§7) builds its run from the recording's `Hello`, and without
+                // one it refused every recording this server wrote ("holds no Hello frame").
+                let descriptor = descriptor_of(&setup);
+                if let Ok(hello) = crate::session::Session::new(
+                    crate::session::ConnectParams::default(),
+                    &descriptor,
+                )
+                .hello_frame(&descriptor, RunState::Paused, 0, "")
+                {
+                    let _ = v2xw_record::RecordingWriter::write_frame(&mut writer, &hello);
+                }
+                Some(writer)
             });
             if setup_tx.send(Ok(setup)).is_err() {
                 return;
@@ -706,7 +721,7 @@ fn spawn_host(
 
     let setup = match setup_rx.recv() {
         Ok(Ok(setup)) => setup,
-        Ok(Err(message)) => return Err(ServerError::Internal(message)),
+        Ok(Err(e)) => return Err(e),
         Err(_) => {
             return Err(ServerError::Internal(
                 "the engine thread ended before it reported a run".to_string(),
@@ -848,8 +863,11 @@ fn assemble_setup(
     let world_json = v2xw_world::serde_vwp::to_json_string(world)?;
     let manifest = engine.manifest();
 
-    let mobility_step = scenario.time.mobility_step();
-    let cadence = Cadence::new(Duration::from_millis(1000), mobility_step)?;
+    // The kernel's own snapshot cadence: a keyframe every simulated second, rounded up to a
+    // whole number of steps. This was `Cadence::new(1 s, step)`, which refuses a step that
+    // does not divide a second — a 30 ms `time.mobility_step_ms`, inside the loader's
+    // 10–100 ms bounds, came back from Run as "internal error: recording: …".
+    let cadence = engine.snapshot_cadence();
     let duration = scenario.time.horizon_ns();
 
     let scenario_doc: Value = serde_json::from_str(
@@ -1027,7 +1045,7 @@ fn assemble_setup(
         world_hash: payload.content_hash,
         t0_wall_ns: i64::try_from(engine.wall_clock().unix_nanos_at(0)).unwrap_or(0),
         sim_duration_ns: duration,
-        mobility_step_ns: mobility_step.as_nanos(),
+        mobility_step_ns: cadence.mobility_step.as_nanos(),
         keyframe_period_ns: cadence.keyframe_period.as_nanos(),
         telemetry_period_ns: 1_000_000_000,
         metric_period_ns: 1_000_000_000,
@@ -2733,6 +2751,10 @@ pub struct LiveEngine {
     client_sync: bool,
     report: Option<RunReport>,
     failure: Option<String>,
+    /// True when `failure` is a run the user's settings could not build (a refused
+    /// `run.start`), false when the engine itself failed. It decides whether a later
+    /// `run.step` is told there is no run (`-32002`) or that the engine broke (`-32603`).
+    failure_is_input: bool,
     /// Every metric sample produced, by name, for `metrics.query` (§6.12).
     history: BTreeMap<String, Vec<(SimTime, f64)>>,
     /// string id → metric name, for reading a produced row back.
@@ -2861,13 +2883,31 @@ impl LiveEngine {
     /// Loads a scenario, builds the kernel and starts it.
     ///
     /// # Errors
-    /// Whatever the scenario loader, the world importer or the kernel refuses, as
-    /// [`ServerError::Internal`] carrying the engine's own message; or
-    /// [`ServerError::Io`] if the host thread cannot be spawned.
+    /// [`ServerError::ScenarioInvalid`] naming the setting for anything the scenario file
+    /// causes — a refused value, a map or terrain file that is not there — with the file's
+    /// path in the message; [`ServerError::Io`] if the file cannot be read or the host
+    /// thread cannot be spawned; [`ServerError::Internal`] only for what the engine itself
+    /// fails at.
     pub fn open(path: impl AsRef<std::path::Path>, options: LiveOptions) -> Result<Self> {
-        let scenario = Scenario::load(path.as_ref())
-            .map_err(|e| ServerError::Internal(format!("{}: {e}", path.as_ref().display())))?;
-        let mut engine = Self::new(scenario, options)?;
+        let at = path.as_ref().display().to_string();
+        let in_file = |e: ServerError| match e {
+            ServerError::ScenarioInvalid(mut rows) => {
+                for row in &mut rows {
+                    row.message = format!("{at}: {}", row.message);
+                }
+                ServerError::ScenarioInvalid(rows)
+            }
+            other => other,
+        };
+        let scenario = Scenario::load(path.as_ref()).map_err(|e| in_file(setup_error(e)))?;
+        let missing: Vec<ParamError> = v2xw_engine::scenario::preflight(&scenario)
+            .iter()
+            .map(scenario_error)
+            .collect();
+        if !missing.is_empty() {
+            return Err(in_file(ServerError::ScenarioInvalid(missing)));
+        }
+        let mut engine = Self::new(scenario, options).map_err(in_file)?;
         engine.source = Some(path.as_ref().to_path_buf());
         Ok(engine)
     }
@@ -2913,6 +2953,7 @@ impl LiveEngine {
             client_sync: false,
             report: None,
             failure: None,
+            failure_is_input: false,
             history: BTreeMap::new(),
             metric_names,
             last_telemetry: BTreeMap::new(),
@@ -3153,6 +3194,7 @@ impl LiveEngine {
             }
             HostMsg::Failed(message) => {
                 self.failure = Some(message);
+                self.failure_is_input = false;
                 self.state = RunState::Error;
                 false
             }
@@ -3253,7 +3295,8 @@ impl LiveEngine {
         ) {
             Ok(pair) => pair,
             Err(e) => {
-                self.failure = Some(e.to_string());
+                self.failure = Some(crate::error::describe(&e));
+                self.failure_is_input = e.code() != -32603;
                 self.state = RunState::Error;
                 return Err(e);
             }
@@ -3279,6 +3322,7 @@ impl LiveEngine {
         self.seek_goal = None;
         self.report = None;
         self.failure = None;
+        self.failure_is_input = false;
         self.history.clear();
         self.last_telemetry.clear();
         // Every connection gets a fresh `Hello` for the new run (`Run` moves to a new
@@ -3353,7 +3397,19 @@ impl LiveEngine {
             .map_err(|e| vec![ParamError::new("/", e.to_string(), "pass a JSON object")])?;
         let base = self.source.as_ref().and_then(|p| p.parent());
         match Scenario::parse(&text, base) {
-            Ok(s) => Ok(s),
+            // The files it names are checked here too, so Check, Apply and Run all refuse a
+            // missing map by its setting, and a refused Run leaves the run on screen alone.
+            Ok(s) => {
+                let missing: Vec<ParamError> = v2xw_engine::scenario::preflight(&s)
+                    .iter()
+                    .map(scenario_error)
+                    .collect();
+                if missing.is_empty() {
+                    Ok(s)
+                } else {
+                    Err(missing)
+                }
+            }
             Err(first) => {
                 // `parse` stops at the first problem. Collect all of them when the
                 // document at least deserialises, so a form can mark every bad field.
@@ -3363,6 +3419,7 @@ impl LiveEngine {
                     Ok(s) => {
                         let all: Vec<ParamError> = v2xw_engine::scenario::validate(&s)
                             .iter()
+                            .chain(v2xw_engine::scenario::preflight(&s).iter())
                             .map(scenario_error)
                             .collect();
                         if all.is_empty() {
@@ -3410,16 +3467,68 @@ fn preset_id(path: &std::path::Path) -> String {
 }
 
 /// A loader error as a `{path, message, hint}` row (§6.4).
+///
+/// The path is a JSON Pointer: `actors.rsus[0].site` becomes `/actors/rsus/0/site`, which is
+/// what the page matches against its fields (it was `/actors/rsus[0]/site`, which matched no
+/// field, so the refusal was listed at the top instead of marked on the setting). The hint is
+/// the field's published range or choices when it has one; the loader's message already says
+/// what to change, so a row with neither carries no hint rather than a generic one.
 fn scenario_error(e: &v2xw_engine::ScenarioError) -> ParamError {
-    let path = e
-        .field()
-        .map(|f| format!("/{}", f.replace('.', "/")))
-        .unwrap_or_else(|| "/".to_string());
-    ParamError::new(
+    let dotted = e.field().unwrap_or("");
+    let path = dotted_to_pointer(dotted);
+    let bare_path: String = {
+        // `actors.rsus[0].site` → `actors.rsus[].site`, the spelling the tables use.
+        let mut out = String::with_capacity(dotted.len());
+        let mut in_index = false;
+        for c in dotted.chars() {
+            match c {
+                '[' => {
+                    in_index = true;
+                    out.push('[');
+                }
+                ']' => {
+                    in_index = false;
+                    out.push(']');
+                }
+                _ if in_index => {}
+                _ => out.push(c),
+            }
+        }
+        out
+    };
+    let hint = v2xw_engine::scenario::validate::bound_of(&bare_path)
+        .map(|b| format!("allowed: {}", b.describe()))
+        .or_else(|| {
+            v2xw_engine::scenario::validate::choices_of(&bare_path)
+                .map(|c| format!("one of: {}", c.values.join(", ")))
+        });
+    ParamError {
         path,
-        e.to_string(),
-        "see the field's help text for its allowed values",
-    )
+        message: e.to_string(),
+        hint,
+        severity: None,
+    }
+}
+
+/// `a.b[2].c` as the JSON Pointer `/a/b/2/c`; the empty path as `/`.
+fn dotted_to_pointer(dotted: &str) -> String {
+    if dotted.is_empty() {
+        return "/".to_string();
+    }
+    let mut out = String::new();
+    for segment in dotted.split('.') {
+        let (name, rest) = match segment.find('[') {
+            Some(i) => (&segment[..i], &segment[i..]),
+            None => (segment, ""),
+        };
+        out.push('/');
+        out.push_str(&name.replace('~', "~0").replace('/', "~1"));
+        for index in rest.split(['[', ']']).filter(|s| !s.is_empty()) {
+            out.push('/');
+            out.push_str(index);
+        }
+    }
+    out
 }
 
 /// An engine error from the loader as a `{path, message, hint}` row.
@@ -3427,6 +3536,26 @@ fn engine_error(e: &v2xw_engine::EngineError) -> ParamError {
     match e {
         v2xw_engine::EngineError::Scenario(inner) => scenario_error(inner),
         other => ParamError::new("/", other.to_string(), "check the scenario document"),
+    }
+}
+
+/// A failure to build a run, as the JSON-RPC error the caller gets.
+///
+/// Whatever the scenario caused — a value the loader refuses, a file it names that is not
+/// there, a world site the world does not have — is `-32004` with the setting's row, so the
+/// page marks the field and says how to fix it. Only what the user cannot have caused (a
+/// model card that does not register, an importer invariant) is `-32603`. Before this every
+/// build failure was `-32603 internal error`, including a missing map file.
+fn setup_error(e: v2xw_engine::EngineError) -> ServerError {
+    match e {
+        v2xw_engine::EngineError::Scenario(inner) => {
+            ServerError::ScenarioInvalid(vec![scenario_error(&inner)])
+        }
+        v2xw_engine::EngineError::Io { path, source } => ServerError::Io {
+            path,
+            errno: source.to_string(),
+        },
+        other => ServerError::Internal(other.to_string()),
     }
 }
 
@@ -3643,6 +3772,16 @@ impl Engine for LiveEngine {
                 if let Some(seed) = seed {
                     next.seed = seed;
                 }
+                // Refused before the run on screen is stopped: a map deleted since Apply, or
+                // a preset naming one that was never there, is the user's to fix, and the
+                // page keeps what it was showing rather than going to `error`.
+                let missing: Vec<ParamError> = v2xw_engine::scenario::preflight(&next)
+                    .iter()
+                    .map(scenario_error)
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(ServerError::ScenarioInvalid(missing));
+                }
                 self.restart(next)?;
                 // Staged edits are consumed by the run that runs them; the form then shows
                 // the running scenario, which is now the edited one.
@@ -3717,15 +3856,28 @@ impl Engine for LiveEngine {
 
     fn step(&mut self) -> Result<Option<StepOutput>> {
         if let Some(message) = &self.failure {
-            return Err(ServerError::Internal(message.clone()));
+            return Err(if self.failure_is_input {
+                ServerError::RunNotRunning(format!(
+                    "the last run.start was refused ({message}); fix the setting and start \
+                     again"
+                ))
+            } else {
+                ServerError::Internal(message.clone())
+            });
         }
         // 60 ms is longer than the 50 ms the producer sleeps on an empty step and shorter
         // than any client's stall deadline, so `run.step` gets its step and a producer
         // that finds nothing does not hold the run lock.
         self.pump_blocking(std::time::Duration::from_millis(60));
         if !self.has(self.cursor) {
+            // Steps run from index 0 to `duration / step` inclusive: the one *at* the horizon
+            // is the last, and it carries `end_of_run`. So the stream has ended when the
+            // cursor is past it, not on it. With `>=` a stream that caught up with a slow
+            // kernel (the SCMS lifecycle with a followed vehicle, measured: 239.9 s of a
+            // 240 s run) was declared finished one step early; the transport then stopped
+            // stepping, the final step never streamed, and the run published no digest.
             if self.report.is_some()
-                || self.cursor.saturating_mul(self.step_ns()) >= self.descriptor.duration
+                || self.cursor.saturating_mul(self.step_ns()) > self.descriptor.duration
             {
                 self.state = RunState::Finished;
             }
