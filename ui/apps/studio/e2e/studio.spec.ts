@@ -130,21 +130,20 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
       cpu: read("cpu_util_pm"),
       cbr: read("cbr_pm"),
       neighbours: read("nbr_total"),
-      certs: read("cert_stored"),
-      crl: read("crl_entries"),
-      gnss: read("gnss_fix"),
       txPower: read("tx_power_cdbm"),
-      posError: read("pos_error_m"),
     };
   });
   // Non-zero, non-"n/a" telemetry: rx rate and neighbour count are the two the HUD leads with.
   expect(hudNumbers.rx).toMatch(/[1-9]/);
   expect(hudNumbers.cpu).toMatch(/[1-9]/);
-  expect(hudNumbers.neighbours).not.toContain("n/a");
-  expect(hudNumbers.certs).toMatch(/[1-9]/);
-  expect(hudNumbers.gnss).toMatch(/2D|3D|DGNSS|RTK|none|dead/);
+  expect(hudNumbers.neighbours).toMatch(/\d/);
   expect(hudNumbers.txPower).toContain("dBm");
-  expect(hudNumbers.posError).toContain("m");
+  // The rest of the record — the certificate store, GNSS and the clock — is in the inspector's
+  // overview, the HUD keeping to radio, security and queues.
+  await page.getByTestId("tab-state").click();
+  await expect(page.getByTestId("insp-security")).toContainText(/Certificates stored|certificates/i);
+  await expect(page.getByTestId("insp-more")).toContainText(/Fix|GNSS/);
+  await page.getByTestId("tab-messages").click();
 
   // 8. The sparkline row has drawn something.
   await expect(page.getByTestId("hud-sparklines")).toBeVisible();

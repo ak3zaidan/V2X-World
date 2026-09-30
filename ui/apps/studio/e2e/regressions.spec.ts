@@ -197,10 +197,10 @@ test("Q16/Q15 — every HUD value is a keyboard-reachable button with a visible 
   await followFirstActor(page);
 
   // 1. Every clickable value is a real button, named, described and in the tab order.
-  //    Counted, not estimated: the HUD renders 37 `Value` components (6 + 6 + 8 + 8 + 6 + 3 across
-  //    its six rows — the register's "around 45" was an estimate) plus exactly three `.hud-field`
-  //    spans that are genuinely not interactive and have no click handler: "dropped", "evidence
-  //    buffer" and "window".
+  //    Since the 2026-09-30 redesign the HUD draws only the values that have data (at most 15
+  //    telemetry buttons across its radio, security and queue rows), so the count depends on what
+  //    the engine models; what may not vary is that each one is a proper button. The plain
+  //    `.hud-field` spans are the security row's facts and "dropped", which have no provenance.
   const shape = await page.evaluate(() => {
     const fields = Array.from(document.querySelectorAll('[data-testid="obu-hud"] .hud-field'));
     const clickable = fields.filter((e) => e.tagName === "BUTTON");
@@ -217,18 +217,22 @@ test("Q16/Q15 — every HUD value is a keyboard-reachable button with a visible 
       testids: clickable.filter((e) => (e.getAttribute("data-testid") ?? "").startsWith("hud-")).length,
     };
   });
-  expect(shape.buttons).toBe(37);
-  expect(shape.spans).toBe(3);
-  expect(shape.labelled).toBe(37);
-  expect(shape.described).toBe(37);
-  expect(shape.tabbable).toBe(37);
-  expect(shape.testids).toBe(37);
+  expect(shape.buttons).toBeGreaterThanOrEqual(6);
+  expect(shape.buttons).toBeLessThanOrEqual(15);
+  expect(shape.labelled).toBe(shape.buttons);
+  expect(shape.described).toBe(shape.buttons);
+  expect(shape.tabbable).toBe(shape.buttons);
+  expect(shape.testids).toBe(shape.buttons);
+  // No value is drawn as "n/a": one with no data is not drawn.
+  expect(await page.getByTestId("obu-hud").innerText()).not.toMatch(/\bn\/a\b/);
 
-  // 2. Tab reaches the next one, which is what "in the tab order" means.
-  await page.getByTestId("hud-msgs_in_per_s").focus();
+  // 2. Tab reaches the next one, which is what "in the tab order" means. The radio row reads
+  //    transmit, then receive.
+  await page.getByTestId("hud-msgs_out_per_s").focus();
   await page.keyboard.press("Tab");
   const afterTab = await page.evaluate(() => document.activeElement?.getAttribute("data-testid") ?? "");
-  expect(afterTab).toBe("hud-msgs_out_per_s");
+  expect(afterTab).toBe("hud-msgs_in_per_s");
+  await page.getByTestId("hud-msgs_out_per_s").focus();
 
   // 3. The focus ring is actually painted (WCAG 2.1 SC 2.4.7).
   const outline = await page.evaluate(() => {
