@@ -1304,13 +1304,30 @@ struct WindowCounters {
 /// How many reception attempts per node pair the projector keeps for `inspect.link`.
 const LINK_HISTORY: usize = 512;
 
+/// A node pair not heard for this long behind the stream has its link history dropped:
+/// the pair is out of range, or one of them has left the run. `inspect.link` answers from
+/// the recent past; a pair silent for a minute has no recent past.
+const LINK_IDLE_NS: u64 = 60_000_000_000;
+
+/// How long behind the stream a retired node's rows are kept: the projector runs ahead of
+/// the stream by its lookahead, so a node that retired in the projector may still be on the
+/// page's screen. Past this, nothing reads them.
+const RETIRED_GRACE_NS: u64 = 30_000_000_000;
+
+/// How often, in stream time, [`Projector::prune`] sweeps the link histories.
+const LINK_SWEEP_NS: u64 = 1_000_000_000;
+
 /// One reception attempt, kept so `inspect.link` can answer from measurements.
+///
+/// Single precision: 40 bytes an attempt instead of 64, for a store that holds up to 512
+/// per node pair (a dense street has thousands of pairs). `inspect.link` reports these to
+/// two and three decimals, well inside an `f32`'s seven digits.
 #[derive(Debug, Clone, Copy)]
 struct LinkObservation {
     t: SimTime,
-    rssi_dbm: Option<f64>,
-    sinr_db: Option<f64>,
-    dist_m: Option<f64>,
+    rssi_dbm: Option<f32>,
+    sinr_db: Option<f32>,
+    dist_m: Option<f32>,
     received: bool,
 }
 
@@ -1371,7 +1388,7 @@ struct Projector {
     /// declared breakdown as series; everything else a metric measures reaches a client
     /// through this store. Each entry keeps the counts that let windows be *pooled*
     /// ([`BreakdownEntry`]), and the store is bounded per metric.
-    breakdowns: BTreeMap<String, std::collections::VecDeque<BreakdownEntry>>,
+    breakdowns: BreakdownStore,
     /// Per node, its latest `node.security` row (certificate pool, current pseudonym,
     /// backend link, CRL state) and its most recent `sec.pseudonym` changes, for
     /// `inspect.node`'s `certs` and `crl` sections.
@@ -1399,6 +1416,14 @@ struct Projector {
     /// `scenario.event` records seen since the owner last took them: the scenario
     /// timeline's items as they fired, with what each did.
     scenario_events: Vec<Value>,
+    /// Nodes whose actor left the run, with the instant it left, oldest first: their
+    /// security rows and link histories are dropped once the stream is past that instant by
+    /// [`RETIRED_GRACE_NS`] (see [`Projector::prune`]). Without it every vehicle that ever
+    /// drove kept its rows for the rest of the run: the long soak measured the server
+    /// growing by hundreds of megabytes over eight simulated minutes of churn.
+    retired: std::collections::VecDeque<(NodeId, SimTime)>,
+    /// The stream instant of the last [`Projector::prune`] sweep of the link histories.
+    links_swept: SimTime,
     last_index: u64,
 }
 
@@ -1457,7 +1482,7 @@ impl Projector {
             over_capacity: BTreeSet::new(),
             unmapped_nodes: BTreeSet::new(),
             unnamed_metrics: BTreeSet::new(),
-            breakdowns: BTreeMap::new(),
+            breakdowns: BreakdownStore::new(BREAKDOWN_CAP, BREAKDOWN_TOTAL_CAP),
             security: BTreeMap::new(),
             backend: std::collections::VecDeque::new(),
             feed: crate::feed::FeedStore::new(step_ns),
@@ -1465,6 +1490,8 @@ impl Projector {
             undecodable_channels: BTreeMap::new(),
             links: BTreeMap::new(),
             scenario_events: Vec::new(),
+            retired: std::collections::VecDeque::new(),
+            links_swept: 0,
             last_index: setup.duration / step_ns,
         }
     }
@@ -1596,9 +1623,9 @@ impl Projector {
                             }
                             history.push_back(LinkObservation {
                                 t: view.t_end,
-                                rssi_dbm: view.rssi_dbm,
-                                sinr_db: view.sinr_db,
-                                dist_m: view.dist_m,
+                                rssi_dbm: view.rssi_dbm.map(|v| v as f32),
+                                sinr_db: view.sinr_db.map(|v| v as f32),
+                                dist_m: view.dist_m.map(|v| v as f32),
                                 received: view.outcome == RxOutcome::Ok,
                             });
                         }
@@ -1914,6 +1941,7 @@ impl Projector {
             {
                 self.nodes.remove(&node);
                 self.counters.remove(&node);
+                self.retired.push_back((node, t));
             }
             self.slots.release(actor, t);
         }
@@ -2012,7 +2040,59 @@ impl Projector {
         out
     }
 
-    /// Keeps one dimensioned sample for the grouped `metrics.query`, bounded per metric.
+    /// Forgets what nothing can read any more, with the stream at `now`: the message feed
+    /// older than its window, the link histories of pairs silent for [`LINK_IDLE_NS`], and
+    /// the security rows of nodes that left the run [`RETIRED_GRACE_NS`] ago.
+    ///
+    /// Every store here is bounded by what is alive, not by what has ever been: a run of an
+    /// hour with vehicles arriving and leaving holds what a run of a minute holds.
+    fn prune(&mut self, now: SimTime) {
+        self.feed
+            .prune(now.saturating_sub(crate::feed::HISTORY_NS));
+        let grace = now.saturating_sub(RETIRED_GRACE_NS);
+        while let Some(&(node, at)) = self.retired.front() {
+            if at >= grace {
+                break;
+            }
+            self.retired.pop_front();
+            // A node id is never reused (`assigned_nodes`), so a retired node's rows are
+            // dead once the stream is past it.
+            self.security.remove(&node);
+        }
+        if now >= self.links_swept.saturating_add(LINK_SWEEP_NS) {
+            self.links_swept = now;
+            let idle = now.saturating_sub(LINK_IDLE_NS);
+            self.links
+                .retain(|_, h| h.back().is_some_and(|o| o.t >= idle));
+        }
+    }
+
+    /// The sizes of the projector's stores, for `run.status` (`engine.stores`): what a soak
+    /// asserts is flat, and what to read first when the server's memory is not.
+    fn stores(&self) -> Value {
+        let (frames, receptions) = self.feed.size();
+        json!({
+            "actors": self.actors.len(),
+            // Radios alive in the projector (roadside units and equipped actors), and every
+            // radio the run has had: what the stores below are bounded by, and not.
+            "nodes_live": self.nodes.len() + self.roadside_nodes as usize,
+            "nodes_ever": self.assigned_nodes.len() + self.roadside_nodes as usize,
+            "link_pairs": self.links.len(),
+            "link_observations": self.links.values().map(std::collections::VecDeque::len).sum::<usize>(),
+            "breakdown_metrics": self.breakdowns.lists.len(),
+            "breakdown_entries": self.breakdowns.total,
+            "breakdown_dim_sets": self.breakdowns.dim_sets.len(),
+            "security_nodes": self.security.len(),
+            "security_changes": self.security.values().map(|(_, c)| c.len()).sum::<usize>(),
+            "backend_snapshots": self.backend.len(),
+            "feed_nodes": self.feed.nodes(),
+            "feed_frames": frames,
+            "feed_receptions": receptions,
+            "retired_pending": self.retired.len(),
+        })
+    }
+
+    /// Keeps one dimensioned sample for the grouped `metrics.query`.
     fn keep_breakdown(&mut self, sample: &MetricSample) {
         let dims: BTreeMap<String, String> = sample
             .dims
@@ -2023,12 +2103,8 @@ impl Projector {
         if dims.is_empty() {
             return;
         }
-        let entry = BreakdownEntry::of(sample.t, dims, &sample.value);
-        let list = self.breakdowns.entry(sample.metric.clone()).or_default();
-        if list.len() >= BREAKDOWN_CAP {
-            list.pop_front();
-        }
-        list.push_back(entry);
+        self.breakdowns
+            .push(&sample.metric, sample.t, dims, &sample.value);
     }
 
     /// One metric's kept breakdown, grouped by `dim` and pooled over `[from, to]`, among
@@ -2041,20 +2117,7 @@ impl Projector {
         from: SimTime,
         to: SimTime,
     ) -> Vec<crate::introspect::GroupRow> {
-        let Some(list) = self.breakdowns.get(name) else {
-            return Vec::new();
-        };
-        let mut pools: BTreeMap<String, Pool> = BTreeMap::new();
-        for e in list.iter().filter(|e| e.t >= from && e.t <= to) {
-            let Some(key) = e.dims.get(dim) else { continue };
-            let others_match = e.dims.len() == filter.len() + 1
-                && filter.iter().all(|(k, v)| e.dims.get(k) == Some(v));
-            if !others_match {
-                continue;
-            }
-            pools.entry(key.clone()).or_default().add(e);
-        }
-        pools.into_iter().map(|(key, p)| p.row(key)).collect()
+        self.breakdowns.groups(name, dim, filter, from, to)
     }
 
     /// Appends the §3.7 rows one metric sample produces.
@@ -2132,11 +2195,119 @@ impl Projector {
 /// per-node figure on a large fleet. The oldest go first.
 const BREAKDOWN_CAP: usize = 200_000;
 
+/// How many dimensioned samples the breakdown store keeps across every metric: about
+/// 120 MB at an entry's ~120 bytes. The oldest go first, whichever metric they belong to.
+const BREAKDOWN_TOTAL_CAP: usize = 1_000_000;
+
+/// How many distinct dimension sets the breakdown store shares before it starts over.
+const DIM_SET_CACHE: usize = 50_000;
+
+/// A breakdown entry's dimensions, shared between the entries that have the same ones.
+type Dims = Arc<BTreeMap<String, String>>;
+
+/// Every dimensioned metric sample the run produced, by metric, for a grouped
+/// `metrics.query`, bounded per metric and across the store, oldest first.
+#[derive(Debug)]
+struct BreakdownStore {
+    lists: BTreeMap<String, std::collections::VecDeque<BreakdownEntry>>,
+    /// How many entries `lists` holds across every metric.
+    total: usize,
+    per_metric_cap: usize,
+    total_cap: usize,
+    /// The dimension sets the entries share, so a per-node sample repeated every window
+    /// holds one pointer and not two heap strings per dimension. Cleared when it passes
+    /// [`DIM_SET_CACHE`]: an entry keeps its own reference either way.
+    dim_sets: BTreeMap<BTreeMap<String, String>, Dims>,
+}
+
+impl BreakdownStore {
+    fn new(per_metric_cap: usize, total_cap: usize) -> Self {
+        Self {
+            lists: BTreeMap::new(),
+            total: 0,
+            per_metric_cap: per_metric_cap.max(1),
+            total_cap: total_cap.max(1),
+            dim_sets: BTreeMap::new(),
+        }
+    }
+
+    fn push(
+        &mut self,
+        metric: &str,
+        t: SimTime,
+        dims: BTreeMap<String, String>,
+        value: &v2xw_metrics::SampleValue,
+    ) {
+        let dims = match self.dim_sets.get(&dims) {
+            Some(shared) => Arc::clone(shared),
+            None => {
+                if self.dim_sets.len() >= DIM_SET_CACHE {
+                    self.dim_sets.clear();
+                }
+                let shared: Dims = Arc::new(dims.clone());
+                self.dim_sets.insert(dims, Arc::clone(&shared));
+                shared
+            }
+        };
+        let entry = BreakdownEntry::of(t, dims, value);
+        let list = match self.lists.get_mut(metric) {
+            Some(list) => list,
+            None => self.lists.entry(metric.to_string()).or_default(),
+        };
+        if list.len() >= self.per_metric_cap {
+            list.pop_front();
+        } else {
+            self.total += 1;
+        }
+        list.push_back(entry);
+        // The store as a whole: the oldest entry of any metric goes first. Bounded per
+        // metric alone, an hour of the credential lifecycle's per-node figures would fill
+        // every metric's 200,000 entries, gigabytes in all.
+        while self.total > self.total_cap {
+            let oldest = self
+                .lists
+                .iter()
+                .filter_map(|(name, l)| l.front().map(|e| (e.t, name)))
+                .min_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)))
+                .map(|(_, name)| name.clone());
+            let Some(name) = oldest else { break };
+            if let Some(l) = self.lists.get_mut(&name) {
+                l.pop_front();
+                self.total -= 1;
+            }
+        }
+    }
+
+    fn groups(
+        &self,
+        name: &str,
+        dim: &str,
+        filter: &BTreeMap<String, String>,
+        from: SimTime,
+        to: SimTime,
+    ) -> Vec<crate::introspect::GroupRow> {
+        let Some(list) = self.lists.get(name) else {
+            return Vec::new();
+        };
+        let mut pools: BTreeMap<String, Pool> = BTreeMap::new();
+        for e in list.iter().filter(|e| e.t >= from && e.t <= to) {
+            let Some(key) = e.dims.get(dim) else { continue };
+            let others_match = e.dims.len() == filter.len() + 1
+                && filter.iter().all(|(k, v)| e.dims.get(k) == Some(v));
+            if !others_match {
+                continue;
+            }
+            pools.entry(key.clone()).or_default().add(e);
+        }
+        pools.into_iter().map(|(key, p)| p.row(key)).collect()
+    }
+}
+
 /// One dimensioned metric sample, with what it takes to pool it with others.
 #[derive(Debug, Clone)]
 struct BreakdownEntry {
     t: SimTime,
-    dims: BTreeMap<String, String>,
+    dims: Dims,
     /// The sample's own point, when it has one.
     point: Option<f64>,
     /// Its sample count.
@@ -2153,7 +2324,7 @@ struct BreakdownEntry {
 }
 
 impl BreakdownEntry {
-    fn of(t: SimTime, dims: BTreeMap<String, String>, value: &v2xw_metrics::SampleValue) -> Self {
+    fn of(t: SimTime, dims: Dims, value: &v2xw_metrics::SampleValue) -> Self {
         use v2xw_metrics::{DistributionSummary, RatioEstimate, SampleValue};
         let (total, required) = match value {
             SampleValue::Distribution(DistributionSummary::Insufficient {
@@ -3932,9 +4103,7 @@ impl Engine for LiveEngine {
                 self.last_telemetry.insert(row.node_id, *row);
             }
             self.intern_labels(out);
-            self.projector
-                .feed
-                .prune(out.sim_time.saturating_sub(crate::feed::HISTORY_NS));
+            self.projector.prune(out.sim_time);
         }
         if let Some(out) = &out
             && out.end_of_run
@@ -4174,6 +4343,8 @@ impl Engine for LiveEngine {
                 "frames": self.projector.feed.size().0,
                 "receptions": self.projector.feed.size().1,
             },
+            "stores": self.projector.stores(),
+            "last_telemetry_nodes": self.last_telemetry.len(),
         })
     }
 
@@ -4510,11 +4681,11 @@ impl Introspect for LiveEngine {
             "frames": inside.len(),
             "pdr": v2xw_core::math::quantize((received as f64) / n, 6),
             "rssi_dbm": v2xw_core::math::quantize(
-                mean(inside.iter().filter_map(|o| o.rssi_dbm).collect()), 2),
+                mean(inside.iter().filter_map(|o| o.rssi_dbm.map(f64::from)).collect()), 2),
             "sinr_db": v2xw_core::math::quantize(
-                mean(inside.iter().filter_map(|o| o.sinr_db).collect()), 2),
+                mean(inside.iter().filter_map(|o| o.sinr_db.map(f64::from)).collect()), 2),
             "distance_m": v2xw_core::math::quantize(
-                mean(inside.iter().filter_map(|o| o.dist_m).collect()), 3),
+                mean(inside.iter().filter_map(|o| o.dist_m.map(f64::from)).collect()), 3),
             "los": {"class": "LOS", "walls_crossed": 0, "obstructed_len_m": 0.0},
         }))
     }
@@ -4773,5 +4944,54 @@ mod node_tx_payload_tests {
         );
         v.pseudonym = None;
         assert_eq!(&node_tx_payload(&v)[28..36], &[0u8; 8]);
+    }
+}
+
+#[cfg(test)]
+mod breakdown_store_tests {
+    use super::BreakdownStore;
+    use std::collections::BTreeMap;
+    use v2xw_metrics::SampleValue;
+
+    fn node(n: u64) -> BTreeMap<String, String> {
+        BTreeMap::from([("node".to_string(), n.to_string())])
+    }
+
+    /// The store is bounded as a whole, not only per metric, and what goes first is the
+    /// oldest entry whichever metric it belongs to. Per metric alone, forty per-node metrics
+    /// over an hour of churn would each have filled their own cap.
+    #[test]
+    fn the_store_is_bounded_across_metrics_and_sheds_the_oldest() {
+        let mut store = BreakdownStore::new(100, 250);
+        for t in 0..200u64 {
+            for metric in ["a", "b", "c"] {
+                store.push(metric, t, node(t % 7), &SampleValue::count(1));
+            }
+        }
+        assert_eq!(store.total, 250, "held to the store's cap");
+        let held: usize = store
+            .lists
+            .values()
+            .map(std::collections::VecDeque::len)
+            .sum();
+        assert_eq!(held, store.total, "the running total is the entries held");
+        for list in store.lists.values() {
+            assert!(list.len() <= 100, "held to the metric's cap");
+            assert_eq!(list.back().map(|e| e.t), Some(199), "the newest is kept");
+        }
+        // The oldest across the store went first, so what is left starts at about the same
+        // instant in every metric.
+        let fronts: Vec<u64> = store
+            .lists
+            .values()
+            .filter_map(|l| l.front().map(|e| e.t))
+            .collect();
+        let lo = fronts.iter().min().copied().unwrap_or(0);
+        let hi = fronts.iter().max().copied().unwrap_or(0);
+        assert!(hi - lo <= 1, "fronts {fronts:?}");
+        // Seven dimension sets, shared by 250 entries.
+        assert_eq!(store.dim_sets.len(), 7);
+        let groups = store.groups("a", "node", &BTreeMap::new(), 0, u64::MAX);
+        assert_eq!(groups.len(), 7, "every node still groups");
     }
 }

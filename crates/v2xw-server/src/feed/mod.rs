@@ -264,7 +264,9 @@ struct NodeLog {
     received: VecDeque<RxEntry>,
     /// Entries the per-node cap shed, per direction.
     shed: [u64; 2],
-    /// Attempts the receiver never detected, by cause, since the run began.
+    /// Attempts the receiver never detected since its log began (a log is dropped once
+    /// the node has neither sent nor heard anything for the feed's window, see
+    /// [`FeedStore::prune`]).
     undetected: u64,
 }
 
@@ -408,10 +410,22 @@ impl FeedStore {
                 log.received.pop_front();
             }
         }
+        // A node with nothing left in its window has left the run (a live radio sends and
+        // hears every second): its log goes, capacity and all. Kept, the logs of every
+        // vehicle that ever drove held up to 4,096 receptions' worth of capacity each,
+        // which the long soak measured as the server growing for as long as vehicles came
+        // and went.
+        self.logs
+            .retain(|_, log| !(log.sent.is_empty() && log.received.is_empty()));
         // A frame is kept while anything could still refer to it: its sender's log, or a
         // reception resolved after `before` (which is always later than its transmission).
         let horizon = before.saturating_sub(5_000_000_000);
         self.frames.retain(|_, f| f.t >= horizon);
+    }
+
+    /// How many nodes have a log.
+    pub fn nodes(&self) -> usize {
+        self.logs.len()
     }
 
     /// How many frames and receptions the store holds, for a memory figure.
@@ -1137,6 +1151,20 @@ mod tests {
                 .map(serde_json::Map::len),
             Some(0)
         );
+    }
+
+    /// A node that has left the run keeps no log: once its last entry is behind the window,
+    /// the log itself goes. The long soak found every departed vehicle's log kept, with its
+    /// capacity, for the rest of the run.
+    #[test]
+    fn a_log_with_nothing_in_the_window_is_dropped() {
+        let mut store = one_delivery();
+        assert!(store.nodes() > 0);
+        store.prune(10 * MS);
+        assert!(store.nodes() > 0, "the delivery is still inside the window");
+        store.prune(60_000 * MS);
+        assert_eq!(store.nodes(), 0, "nothing in the window, no log");
+        assert_eq!(store.size(), (0, 0));
     }
 
     #[test]

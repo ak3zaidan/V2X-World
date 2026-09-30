@@ -414,7 +414,9 @@ export class CompareController {
     this.#seeking = true;
     try {
       if (this.replay?.isOpen) {
-        const position = await this.replay.seekToNs(target);
+        // Body centres, as side A's live stream draws them (`toBodyCentres`), with the class
+        // table of the engine side A is connected to.
+        const position = await this.replay.seekToNs(target, engine.client?.hello?.classes.lengthM ?? null);
         this.#tNs = position.tNs;
         this.#captureReplay();
       } else if (this.client) {

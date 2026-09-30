@@ -509,6 +509,8 @@ export class StudioEngine {
   replay: LocalReplay | null = null;
 
   #replayBindings: ReplayBindings | null = null;
+  /** Whether the "drawn at the reference point" note has been logged for this page. */
+  #warnedReferencePoints = false;
   /** True once a world has been adopted from a file rather than verified against a `Hello`. */
   #worldUnverified = false;
 
@@ -589,7 +591,20 @@ export class StudioEngine {
   async seekLocalReplay(tNs: number): Promise<void> {
     const replay = this.replay;
     if (replay === null || !replay.isOpen) return;
-    const position = await replay.seekToNs(tNs);
+    // The recording keeps each vehicle's reference point and the live stream its body centre;
+    // the class table of the engine this page is connected to (the same `VehicleClass` table
+    // every recording indexes) says how far apart they are. See `toBodyCentres`.
+    const position = await replay.seekToNs(tNs, this.client?.hello?.classes.lengthM ?? null);
+    if (!position.bodyCentred && !this.#warnedReferencePoints) {
+      this.#warnedReferencePoints = true;
+      this.#log(
+        "warn",
+        "replay",
+        "no engine is connected to give the vehicle classes' lengths, so this recording's vehicles " +
+          "are drawn at their reference point (the rear bumper), up to half a length behind where a " +
+          "live run draws them",
+      );
+    }
     const viewer = this.viewer;
     if (viewer) {
       viewer.interpolator.reset();

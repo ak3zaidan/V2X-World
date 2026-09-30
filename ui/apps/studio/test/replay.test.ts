@@ -337,6 +337,30 @@ describe("LocalReplay", () => {
     await expect(new LocalReplay().openUrl("http://x.test/run.mcap", bindings, fake)).rejects.toThrow(/content-length/);
   });
 
+  it("draws a recorded vehicle at its body centre, as the live stream does, when the class lengths are known", async () => {
+    // A recording keeps the rear-bumper reference; the live server streams the body centre, half
+    // the class length ahead along the heading. Heading 16,384 brad is a quarter turn: north.
+    const gop = recordedGop(NS, [actor(1, 10_000, 20_000)], 0);
+    const { bindings } = fakeReader({ ...gop, spanNs: [0, NS] });
+    const replay = new LocalReplay();
+    await replay.openBlob({ arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)) }, bindings);
+
+    const raw = await replay.seekToNs(NS);
+    expect(raw.bodyCentred).toBe(false);
+    expect(replay.poses.positions[0]).toBeCloseTo(10, 5);
+    expect(replay.poses.positions[1]).toBeCloseTo(20, 5);
+
+    const centred = await replay.seekToNs(NS, Float32Array.of(5.0));
+    expect(centred.bodyCentred).toBe(true);
+    expect(replay.poses.positions[0]).toBeCloseTo(10, 4);
+    expect(replay.poses.positions[1]).toBeCloseTo(22.5, 4);
+    // The quantised state the deltas advance is the recording's own, so a later seek starts clean.
+    expect(replay.poses.yMm[0]).toBe(20_000);
+    const again = await replay.seekToNs(NS, Float32Array.of(5.0));
+    expect(again.bodyCentred).toBe(true);
+    expect(replay.poses.positions[1]).toBeCloseTo(22.5, 4);
+  });
+
   it("throws when no recording is open", async () => {
     await expect(new LocalReplay().seekToNs(0)).rejects.toThrow(/no recording is open/);
   });
