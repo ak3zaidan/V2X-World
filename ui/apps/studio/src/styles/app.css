@@ -590,6 +590,13 @@ kbd {
   min-width: 0;
   min-height: 0;
 }
+/*
+ * Placed by row, not by order: with no sentence to show the banner renders nothing, and the grid's
+ * auto-placement then put the viewport in the sentence's row and the time bar in the viewport's,
+ * where it stretched to 70-220 px of empty bar and took that height from the picture.
+ */
+.centre > .stage { grid-row: 2; }
+.centre > .timebar { grid-row: 3; }
 
 /* ------------------------------------------------------------------ tabs */
 
@@ -804,7 +811,24 @@ button.hud-field:focus-visible {
   flex-wrap: wrap;
 }
 .timebar .transport { display: flex; gap: 4px; }
-.scrub { position: relative; flex: 1; min-width: 200px; height: 26px; }
+/*
+ * One row down to a 900 px wide centre (a 1,280 px window with the inspector open). The row wraps
+ * where its items' flex bases do not fit, so the two items that can give way start from a basis of
+ * zero and grow into what is left: first the "of 1h 00m · Running" note, up to its own width (its
+ * large grow factor gives it the space before the bar gets any; when there is too little it is cut
+ * with an ellipsis rather than pushing the bar onto a second line), then the scrub bar, which is
+ * never under 120 px. A second row cost the viewport 150 px of height at 1280 x 720.
+ */
+.timebar select { max-width: 120px; }
+.timebar [data-testid="time-state"] {
+  flex: 1000 1 0;
+  min-width: 0;
+  max-width: max-content;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scrub { position: relative; flex: 1 1 0; min-width: 120px; height: 26px; }
 .scrub input[type="range"] { position: absolute; inset: 0; width: 100%; margin: 0; z-index: 2; background: transparent; }
 .scrub .track {
   position: absolute;

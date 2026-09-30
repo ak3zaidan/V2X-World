@@ -370,4 +370,21 @@ test("the viewport keeps a usable share of a small window", async ({ page }) => 
     );
     expect(clipped, `header controls outside a ${size.width} px window`).toEqual([]);
   }
+
+  // With nothing to say the status banner renders nothing, and the viewport and the time bar keep
+  // their rows: the time bar used to slide into the viewport's row and stretch to 220 px of empty
+  // bar. From 1280 px up the bar is one row, with the inspector open too.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/");
+  await expect(page.getByTestId("connection-state")).toHaveAttribute("data-state", "streaming", { timeout: 60_000 });
+  await expect(page.getByTestId("status-banner")).toHaveCount(0, { timeout: 30_000 });
+  for (const inspector of [false, true]) {
+    if (inspector) await page.getByTestId("inspector-toggle").click();
+    const bar = await page.getByTestId("time-controls").boundingBox();
+    const box = await page.getByTestId("viewport").boundingBox();
+    const where = `1280 x 720, no banner, inspector ${inspector ? "open" : "closed"}`;
+    console.warn(`time bar ${bar!.height} px, viewport ${box!.width} x ${box!.height} at ${where}`);
+    expect(bar!.height, `time bar height at ${where}`).toBeLessThanOrEqual(48);
+    expect(box!.height / 720, `viewport ${box!.height} px tall at ${where}`).toBeGreaterThanOrEqual(0.8);
+  }
 });
