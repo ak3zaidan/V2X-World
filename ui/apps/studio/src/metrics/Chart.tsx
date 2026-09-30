@@ -16,6 +16,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 
 import { useStudio } from "../state/store.js";
+import { slotColour } from "./tokens.js";
 import { axisUnit, decimate, formatNumber, formatWithUnit, type Series } from "./model.js";
 
 /** One line on the chart. `slot` is the categorical colour (1–8), fixed per series. */
@@ -24,11 +25,6 @@ export interface ChartLine {
   readonly label: string;
   readonly slot: number;
   readonly series: Series;
-}
-
-export function slotColour(slot: number): string {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(`--viz-${slot}`).trim();
-  return v === "" ? "#3987e5" : v;
 }
 
 function cssVar(name: string, fallback: string): string {

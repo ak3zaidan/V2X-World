@@ -38,7 +38,7 @@ import {
   type MetricsRoute,
 } from "./model.js";
 import { usePins } from "./pins.js";
-import { noteUnits } from "./Summary.js";
+import { noteUnits } from "./tokens.js";
 import "./metrics.css";
 
 /** The run's radio technology, from the scenario the engine is running (`radio.rat`). */

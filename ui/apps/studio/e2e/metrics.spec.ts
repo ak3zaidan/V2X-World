@@ -129,10 +129,15 @@ test("open, find, expand, brush, export and close the metrics dashboard", async 
   await page.getByTestId("metrics-close").click();
   await expect(page.getByTestId("metrics-panel")).toBeHidden();
 
-  // Unpin, so the next file starts from a clean header.
+  // Opened again, the dashboard is where it was left: the linked chart. Back to the cards, and
+  // unpin, so the next file starts from a clean header.
   await page.getByTestId("metrics-button").click();
+  await expect(page.getByTestId("metric-expanded")).toHaveAttribute("data-metric", "pdr");
+  await page.getByTestId("metric-back").click();
   await page.getByTestId("metric-pin-cbr").first().click();
+  await expect(page.getByTestId("metrics-group-pinned")).toHaveCount(0);
   await page.keyboard.press("Escape");
+  await expect(page.getByTestId("metrics-panel")).toBeHidden();
 
   const ignorable = (t: string): boolean => (t.includes("WebGL") && t.includes("deprecat")) || t.includes("GPU stall");
   expect(errors.filter((t) => !ignorable(t))).toEqual([]);

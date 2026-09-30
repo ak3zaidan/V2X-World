@@ -167,6 +167,32 @@ describe("downsampling for display", () => {
     for (let i = 1; i < xs.length; i++) expect(xs[i]).toBeGreaterThanOrEqual(xs[i - 1]);
   });
 
+  it("draws a ten-hour run of eight series in a bounded number of points", () => {
+    // What an expanded chart does on every range change: decimate each series to the plot's
+    // width, and compute the range's statistics from the full series.
+    const n = 36_000;
+    const all: Series[] = [];
+    for (let k = 0; k < 8; k++) {
+      const t = new Float64Array(n);
+      const v = new Float64Array(n);
+      for (let i = 0; i < n; i++) {
+        t[i] = i;
+        v[i] = Math.sin(i / (50 + k)) + k;
+      }
+      all.push({ t, v });
+    }
+    const started = performance.now();
+    let points = 0;
+    for (const s of all) {
+      points += decimate(s, 0, n, 1200)[0].length;
+      expect(rangeStats(s, 0, n)?.n).toBe(n);
+    }
+    const ms = performance.now() - started;
+    expect(points).toBeLessThanOrEqual(8 * (4 * 1200 + 2));
+    // eslint-disable-next-line no-console -- the measured number is evidence the report quotes
+    console.log(`ten hours x 8 series: ${points} points drawn of ${8 * n}, decimation and statistics in ${ms.toFixed(1)} ms`);
+  });
+
   it("returns a short series as it is, gaps included", () => {
     const [xs, ys] = decimate(series([[0, 1], [1, Number.NaN], [2, 3]]), 0, 2, 100);
     expect(xs).toEqual([0, 1, 2]);

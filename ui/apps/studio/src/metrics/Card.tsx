@@ -25,7 +25,7 @@ const W = 300;
 const H = 64;
 
 /** Why a card has no line, in a sentence. */
-export function emptyReason(f: MetricFamily, o: Overview, runState: string, profileNode: boolean): string {
+function emptyReason(f: MetricFamily, o: Overview, runState: string, profileNode: boolean): string {
   const names = cardSeries(f);
   if (f.groundTruth && profileNode) {
     return "Ground truth: a node-profile session sees only what a deployed device could measure.";

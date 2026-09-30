@@ -10,17 +10,7 @@ import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
 import { formatWithUnit } from "./model.js";
 import { DEFAULT_SUMMARY, usePins } from "./pins.js";
-
-/** The units the summary knows without a catalogue; the dashboard fills in the rest. */
-const units = new Map<string, string>([
-  ["pdr", "ratio"],
-  ["cbr", "ratio"],
-]);
-
-/** Called by the dashboard when it has the catalogue, so a pinned metric's unit is known here. */
-export function noteUnits(rows: readonly { readonly name: string; readonly unit: string }[]): void {
-  for (const r of rows) units.set(r.name, r.unit);
-}
+import { summaryUnits } from "./tokens.js";
 
 export function MetricsSummary(): React.JSX.Element | null {
   // Re-render on the store's 5 Hz series beat; the values themselves are read from the buffer.
@@ -32,7 +22,7 @@ export function MetricsSummary(): React.JSX.Element | null {
     <span className="metrics-summary" data-testid="metrics-summary" aria-label="Newest values">
       {names.map((n) => (
         <span key={n} className="metrics-summary-item">
-          <span className="dim">{n}</span> {formatWithUnit(engine.metrics.latest(n), units.get(n) ?? "")}
+          <span className="dim">{n}</span> {formatWithUnit(engine.metrics.latest(n), summaryUnits.get(n) ?? "")}
         </span>
       ))}
     </span>

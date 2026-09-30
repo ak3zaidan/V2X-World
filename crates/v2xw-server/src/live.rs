@@ -4116,7 +4116,6 @@ impl Introspect for LiveEngine {
         let to = to.min(self.sim_time());
         series_bins(rows, from, to, bin, limit)
     }
-    }
 
     fn provenance_chain(&self) -> Vec<Value> {
         self.setup.prov_chain.clone()
