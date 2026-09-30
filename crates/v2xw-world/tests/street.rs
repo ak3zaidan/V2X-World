@@ -170,9 +170,32 @@ fn an_avenue_carries_its_bus_lane_track_and_parking() {
         .all(|l| matches!(l.kind, LaneKind::Driving | LaneKind::Internal)));
 }
 
+/// A street with a painted cycle lane on its right, between the parking lane and traffic.
+const LANE_STREET: &[(&str, &str)] = &[
+    ("highway", "secondary"),
+    ("oneway", "yes"),
+    ("lanes", "2"),
+    ("cycleway:right", "lane"),
+    ("parking:right", "lane"),
+];
+
 #[test]
-fn a_car_turning_left_across_the_track_yields_to_it() {
-    let (world, _) = import_with(&document(&avenue_crossroads(false)), &opts());
+fn a_car_turning_across_the_cycle_lane_beside_it_yields_to_it() {
+    // A right turn off a street with a painted lane on its right crosses the lane's
+    // straight-on path. The two are not ranked by the opposing-traffic rule (neither crosses
+    // opposing traffic), so only the same-approach rule makes the car give way.
+    let body = [
+        node(1, -0.001, 0.0, &[]),
+        node(2, 0.0, 0.0, &[]),
+        node(3, 0.001, 0.0, &[]),
+        node(4, 0.0, -0.001, &[]),
+        node(5, 0.0, 0.001, &[]),
+        way(10, &[1, 2], LANE_STREET),
+        way(11, &[2, 3], LANE_STREET),
+        way(12, &[4, 2, 5], &[("highway", "residential"), ("lanes", "2")]),
+    ]
+    .concat();
+    let (world, _) = import_with(&document(&body), &opts());
     let junction = world
         .roads
         .junctions()
@@ -186,13 +209,13 @@ fn a_car_turning_left_across_the_track_yields_to_it() {
             })
         })
     };
-    let left = movement(&|k, d| k == LaneKind::Driving && d == TurnDirection::Left)
-        .expect("a left turn off the avenue");
-    let track = movement(&|k, d| k == LaneKind::Cycle && d == TurnDirection::Straight)
-        .expect("the track going straight on");
-    assert!(junction.conflicts.is_foe(left, track), "the left turn crosses the track");
-    assert!(junction.conflicts.must_yield(left, track));
-    assert!(!junction.conflicts.must_yield(track, left));
+    let right = movement(&|k, d| k == LaneKind::Driving && d == TurnDirection::Right)
+        .expect("a right turn off the street");
+    let bike = movement(&|k, d| k == LaneKind::Cycle && d == TurnDirection::Straight)
+        .expect("the cycle lane going straight on");
+    assert!(junction.conflicts.is_foe(right, bike), "the right turn crosses the cycle lane");
+    assert!(junction.conflicts.must_yield(right, bike));
+    assert!(!junction.conflicts.must_yield(bike, right));
 }
 
 #[test]
@@ -314,6 +337,36 @@ fn signals_along_an_avenue_run_a_green_wave() {
     let (world, report) = import_with(&xml, &off);
     assert_eq!(report.counts.signals_coordinated, 0);
     assert!(world.signals.iter().all(|p| p.offset_s == 0.0));
+}
+
+/// A newsstand mapped onto the carriageway is dropped; a building the road passes
+/// through is a passage and stays.
+#[test]
+fn a_kiosk_on_the_carriageway_is_dropped_and_a_real_building_kept() {
+    use v2xw_world::osm::Anomaly;
+    // A two-lane street running east along latitude 0; a 2 x 3 m kiosk straddling its
+    // right lane, and a 30 x 30 m block the street runs through further on.
+    let d = 0.000_009; // about 1 m
+    let body = [
+        node(1, 0.0, -0.001, &[]),
+        node(2, 0.0, 0.001, &[]),
+        way(10, &[1, 2], &[("highway", "residential"), ("oneway", "yes"), ("lanes", "2")]),
+        node(20, -2.0 * d, -0.0005, &[]),
+        node(21, -2.0 * d, -0.0005 + 3.0 * d, &[]),
+        node(22, 0.0, -0.0005 + 3.0 * d, &[]),
+        node(23, 0.0, -0.0005, &[]),
+        way(30, &[20, 21, 22, 23, 20], &[("building", "yes"), ("shop", "newsagent")]),
+        node(40, -15.0 * d, 0.0004, &[]),
+        node(41, -15.0 * d, 0.0004 + 30.0 * d, &[]),
+        node(42, 15.0 * d, 0.0004 + 30.0 * d, &[]),
+        node(43, 15.0 * d, 0.0004, &[]),
+        way(50, &[40, 41, 42, 43, 40], &[("building", "yes")]),
+    ]
+    .concat();
+    let (world, report) = import_with(&document(&body), &opts());
+    assert_eq!(report.anomaly(Anomaly::KioskOnCarriageway), 1, "{}", report.to_text());
+    assert_eq!(world.buildings.len(), 1, "the block stays");
+    assert!(world.validate().is_ok());
 }
 
 /// The world-validation gate (`v2xw_world::validate`, the `world_report --baseline`
