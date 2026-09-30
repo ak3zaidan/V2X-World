@@ -1125,6 +1125,7 @@ impl Engine {
                 crate::app_truth::AppTruth::default()
             } else {
                 crate::app_truth::AppTruth::new(crate::wiring::app_params(&scenario_for_radio))
+                    .with_signals(crate::app_truth::SignalIndex::build(&world))
             },
             glosa: GlosaDrivers {
                 compliance: if scenario_for_radio.apps.runs("glosa") {
@@ -2774,25 +2775,35 @@ impl Engine {
     }
 
     /// Every equipped vehicle's true state, for the application labeller.
-    fn truth_states(&self) -> BTreeMap<NodeId, crate::app_truth::TruthState> {
+    fn truth_states(&self, now: SimTime) -> BTreeMap<NodeId, crate::app_truth::TruthState> {
+        let now_s = v2xw_core::time::ns_to_secs(now);
         self.actors
             .iter()
             .filter_map(|(id, a)| {
                 let node = a.node?;
-                let left_turn = if a.class.is_vru() {
+                let intent = if a.class.is_vru() {
                     None
                 } else {
-                    self.mobility.intent(&self.world, *id).and_then(|i| {
-                        let left = matches!(
-                            i.turn,
-                            v2xw_world::TurnDirection::Left
-                                | v2xw_world::TurnDirection::SlightLeft
-                                | v2xw_world::TurnDirection::UTurn
-                        );
-                        let j = self.world.roads.try_junction(i.junction)?;
-                        left.then_some((j.position, i.distance_m))
-                    })
+                    self.mobility.intent(&self.world, *id)
                 };
+                let left_turn = intent.and_then(|i| {
+                    let left = matches!(
+                        i.turn,
+                        v2xw_world::TurnDirection::Left
+                            | v2xw_world::TurnDirection::SlightLeft
+                            | v2xw_world::TurnDirection::UTurn
+                    );
+                    let j = self.world.roads.try_junction(i.junction)?;
+                    left.then_some((j.position, i.distance_m))
+                });
+                // The signal its approach truly shows, while it is still short of the line.
+                let signal = intent.filter(|i| i.distance_m > 0.0).and_then(|i| {
+                    let (state, left_s) =
+                        self.app_truth
+                            .signals()
+                            .at(&self.world, i.connector, now_s)?;
+                    Some((crate::infra::movement_phase(state), left_s, i.distance_m))
+                });
                 Some((
                     node,
                     crate::app_truth::TruthState {
@@ -2801,6 +2812,7 @@ impl Engine {
                         width_m: a.last.dims.width_m,
                         vru: a.class.is_vru(),
                         left_turn,
+                        signal,
                     },
                 ))
             })
@@ -2813,7 +2825,7 @@ impl Engine {
         if !self.app_truth.enabled() {
             return;
         }
-        let states = self.truth_states();
+        let states = self.truth_states(now);
         let mut near: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
         for (node, s) in &states {
             if s.vru {
@@ -3156,7 +3168,7 @@ impl Engine {
                 .iter()
                 .any(|(_, _, recs, _)| recs.iter().any(|r| r.channel == "app.warning"))
         {
-            let states = self.truth_states();
+            let states = self.truth_states(now);
             for (_, _, records, _) in &results {
                 for rec in records.iter().filter(|r| r.channel == "app.warning") {
                     self.app_truth.on_warning(&rec.json, &states);

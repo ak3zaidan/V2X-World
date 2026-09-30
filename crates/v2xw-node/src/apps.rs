@@ -22,7 +22,7 @@
 //!
 //! | App | Fires when | Threshold | Source |
 //! |---|---|---|---|
-//! | FCW | a vehicle ahead in the ego's path would be hit within the TTC threshold, its own deceleration included | TTC ≤ 2.4 s | NHTSA's FCW confirmation test (NCAP, 2013): an alert no later than 2.4 s TTC for a decelerating lead (2.1 s stopped, 2.0 s slower) — the most demanding case |
+//! | FCW | a vehicle ahead in the ego's path would be hit within the TTC threshold, its own deceleration included, and the driver is not already braking as hard as avoiding it requires | TTC ≤ 2.4 s | NHTSA's FCW confirmation test (NCAP, 2013): an alert no later than 2.4 s TTC for a decelerating lead (2.1 s stopped, 2.0 s slower) — the most demanding case |
 //! | EEBL | a vehicle ahead in the same direction brakes hard (its BSM hard-braking flag or accelSet, or an EEBL DENM) | ≤ 300 m ahead, within one adjacent lane | the 0.4 g flag is J2735 §7.234; the 300 m reach is CAMP VSC-A's EEBL range as recalled, a parameter |
 //! | IMA | a crossing vehicle and the ego would reach the conflict point within a short time of each other | TTI ≤ 4 s and ΔT ≤ 1.5 s | ΔT is FHWA SSAM's 1.5 s conflict threshold; the 4 s look-ahead is this build's choice |
 //! | LTA | the ego is about to turn left and an opposing vehicle arrives inside the critical gap | 4.1 s | HCM 6th ed. Exhibit 20-11: base critical headway for a major-street left turn |
@@ -157,6 +157,29 @@ pub fn time_to_collision(gap_m: f64, ego_v: f64, lead_v: f64, lead_a: f64) -> f6
     f64::INFINITY
 }
 
+/// The constant deceleration that keeps `ego_v` from closing `gap_m` on a lead doing
+/// `lead_v` at `lead_a` (never reversing), m/s²: against a braking lead, stopping within
+/// the gap plus the lead's own stopping distance; otherwise matching its speed within the
+/// gap. Zero when the ego is not closing.
+pub fn required_decel(gap_m: f64, ego_v: f64, lead_v: f64, lead_a: f64) -> f64 {
+    if gap_m <= 0.0 {
+        return f64::INFINITY;
+    }
+    if lead_a < 0.0 && lead_v > 0.0 {
+        let lead_stop = lead_v * lead_v / (2.0 * -lead_a);
+        return ego_v * ego_v / (2.0 * (gap_m + lead_stop));
+    }
+    if lead_v <= 0.0 {
+        return ego_v * ego_v / (2.0 * gap_m);
+    }
+    let closing = ego_v - lead_v;
+    if closing <= 0.0 {
+        0.0
+    } else {
+        closing * closing / (2.0 * gap_m)
+    }
+}
+
 /// Lateral offset of a point at `(ahead, left)` from the ego's predicted arc of curvature
 /// `kappa` (1/m, positive left).
 fn off_path(ahead: f64, left: f64, kappa: f64) -> f64 {
@@ -210,6 +233,15 @@ pub fn fcw(ego: &Track, lead: &Track, p: &FcwParams) -> Option<Surrogates> {
     let gap = (ahead - 0.5 * (ego.length_m + lead.length_m)).max(0.0);
     let ttc = time_to_collision(gap, ego.speed_mps, lead.speed_mps, lead.accel_mps2);
     if ttc > p.ttc_s {
+        return None;
+    }
+    // A driver already braking hard enough to stop short of the lead is not warned: the
+    // TTC above holds the ego's speed, and approaching a stopped queue at a red, with the
+    // brake on, would otherwise alert at every junction. CAMP's V2V FCW threat assessment
+    // (the VSC-A final report, DOT HS 811 492, 2011, as recalled) weighs the deceleration
+    // the situation requires against what the driver is applying in the same way.
+    let required = required_decel(gap, ego.speed_mps, lead.speed_mps, lead.accel_mps2);
+    if ego.accel_mps2 < 0.0 && -ego.accel_mps2 >= required {
         return None;
     }
     let closing = ego.speed_mps - lead.speed_mps;
@@ -1601,6 +1633,22 @@ mod tests {
         let mut oncoming = lead;
         oncoming.heading_rad = deg(180.0);
         assert!(fcw(&ego, &oncoming, &FcwParams::default()).is_none());
+    }
+
+    /// Closing on a stopped queue with the brake on: warned while the driver brakes too
+    /// little to stop short, not once they brake enough.
+    #[test]
+    fn fcw_is_quiet_while_the_driver_already_brakes_enough() {
+        // 10 m/s, 22 m of gap to a stopped car: TTC 2.2 s, and a stop needs
+        // 100 / 44 = 2.27 m/s².
+        let mut ego = car(0.0, 0.0, 0.0, 10.0);
+        let queue = car(26.5, 0.0, 0.0, 0.0);
+        assert!(fcw(&ego, &queue, &FcwParams::default()).is_some(), "coasting");
+        ego.accel_mps2 = -1.0;
+        assert!(fcw(&ego, &queue, &FcwParams::default()).is_some(), "braking too little");
+        ego.accel_mps2 = -2.5;
+        assert!(fcw(&ego, &queue, &FcwParams::default()).is_none(), "braking enough");
+        assert!((required_decel(22.0, 10.0, 0.0, 0.0) - 100.0 / 44.0).abs() < 1e-9);
     }
 
     #[test]

@@ -70,8 +70,10 @@ impl AppsProvider {
             "A warning about an object another station reported in a CPM is counted as \
              issued and not labelled."
                 .to_string(),
-            "rlvw is counted and not labelled; blind-spot advisories (bsw) are neither \
-             matched nor missed."
+            "Blind-spot and lane-change advisories (bsw, lcw) are counted and neither \
+             matched nor missed. rlvw is labelled against the signal the ego's approach \
+             truly showed and the ego's true speed, not against whether it then entered \
+             on red."
                 .to_string(),
         ];
         card.validation.tests = vec!["apps::tests::labels_become_ratios".to_string()];

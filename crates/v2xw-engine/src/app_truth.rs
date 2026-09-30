@@ -23,20 +23,27 @@
 //!   instant (FCW, IMA, LTA, PCW), and the delay from the episode's start to the issue.
 //!
 //! `bsw` and `lcw` are advisory and are neither matched nor counted as missed (a car
-//! passing through a blind spot for 300 ms is not a missed warning anyone would miss);
-//! `rlvw` is not labelled here, since its truth needs the ego's signal state, which this
-//! module does not reconstruct. Both limits are stated in the run report.
+//! passing through a blind spot for 300 ms is not a missed warning anyone would miss).
+//!
+//! `rlvw` concerns the ego alone: its truth is the same decision run over the ego's true
+//! speed and acceleration and the signal its approach truly shows ([`SignalIndex`]: the
+//! controller's plan as it runs now, priority service included, read as the head over the
+//! approach shows it — the most permissive of the movements leaving that lane, which is
+//! the state the drivers obey). The warning's subject is the roadside unit that sent the
+//! SPaT; the truth episode's is the ego itself, and the two are matched as one.
 
 use std::collections::BTreeMap;
 
 use serde::Serialize;
 use v2xw_core::ctx::{Record, Visibility};
 use v2xw_core::geom::Vec3;
-use v2xw_core::ids::NodeId;
+use v2xw_core::ids::{LaneId, NodeId};
 use v2xw_core::kinematics::Kinematics;
 use v2xw_core::math;
 use v2xw_core::time::{Duration, SimTime};
-use v2xw_node::apps::{self, AppParams, Track};
+use v2xw_msg::j2735::spat::MovementPhaseState;
+use v2xw_node::apps::{self, AppParams, SignalSituation, Track};
+use v2xw_world::{SignalState, World};
 
 /// How far apart two vehicles may be for a truth episode to be looked for, metres.
 pub const TRUTH_RANGE_M: f64 = 150.0;
@@ -48,7 +55,10 @@ pub const MATCH_WINDOW: Duration = Duration::from_secs(1);
 pub const MIN_EPISODE: Duration = Duration::from_millis(300);
 
 /// The applications labelled against truth.
-pub const LABELLED: [&str; 5] = ["fcw", "eebl", "ima", "lta", "pcw"];
+pub const LABELLED: [&str; 6] = ["fcw", "eebl", "ima", "lta", "pcw", "rlvw"];
+
+/// The applications whose truth concerns the ego alone (its subject is the ego).
+const EGO_ONLY: [&str; 1] = ["rlvw"];
 
 /// `app.outcome` — one warning, or one missed warning, labelled against ground truth
 /// (GT: it names both vehicles' nodes and reads their true states).
@@ -89,6 +99,83 @@ pub struct TruthState {
     pub vru: bool,
     /// When it is about to turn left: the junction and the distance to it.
     pub left_turn: Option<(Vec3, f64)>,
+    /// When it approaches a signalised junction: what the head over its approach truly
+    /// shows, the seconds until that changes, and the metres to the stop line.
+    pub signal: Option<(MovementPhaseState, f64, f64)>,
+}
+
+/// Which movements' states the head over a junction connector's approach shows, per
+/// connector: `(plan index, movement indices in the plan's state vectors)`. Built once;
+/// the plans' timing is read from the world at each step, so a priority service that
+/// moves a plan is seen at once.
+#[derive(Debug, Default, Clone)]
+pub struct SignalIndex {
+    by_connector: BTreeMap<LaneId, (usize, Vec<usize>)>,
+}
+
+impl SignalIndex {
+    /// Indexes every signal plan of `world`.
+    pub fn build(world: &World) -> Self {
+        let mut approach_of: BTreeMap<LaneId, LaneId> = BTreeMap::new();
+        for c in world.roads.connections() {
+            if let Some(via) = c.via {
+                approach_of.entry(via).or_insert(c.from_lane);
+            }
+        }
+        let mut by_connector = BTreeMap::new();
+        for (pi, plan) in world.signals.iter().enumerate() {
+            let mut by_approach: BTreeMap<LaneId, Vec<usize>> = BTreeMap::new();
+            for (k, lane) in plan.controlled.iter().enumerate() {
+                if let Some(a) = approach_of.get(lane) {
+                    by_approach.entry(*a).or_default().push(k);
+                }
+            }
+            for lane in &plan.controlled {
+                if let Some(ks) = approach_of.get(lane).and_then(|a| by_approach.get(a)) {
+                    by_connector.insert(*lane, (pi, ks.clone()));
+                }
+            }
+        }
+        Self { by_connector }
+    }
+
+    /// What the head over `connector`'s approach shows at `t_s`, and the seconds until
+    /// that changes (at most one cycle); `None` for a connector no plan controls.
+    pub fn at(&self, world: &World, connector: LaneId, t_s: f64) -> Option<(SignalState, f64)> {
+        let (pi, ks) = self.by_connector.get(&connector)?;
+        let plan = world.signals.get(*pi)?;
+        let (i, into) = plan.phase_at(t_s)?;
+        let shown = |phase: usize| {
+            ks.iter()
+                .filter_map(|k| plan.phases[phase].states.get(*k).copied())
+                .max_by_key(|s| permissiveness(*s))
+        };
+        let state = shown(i)?;
+        let n = plan.phases.len();
+        let mut left = (plan.phases[i].duration_s - into).max(0.0);
+        for k in 1..n {
+            let j = (i + k) % n;
+            if shown(j) != Some(state) {
+                break;
+            }
+            left += plan.phases[j].duration_s;
+        }
+        Some((state, left.min(plan.cycle_s)))
+    }
+}
+
+/// A signal state's rank, most permissive highest (as `SignalPlan::group_timelines`
+/// ranks them).
+fn permissiveness(s: SignalState) -> u8 {
+    match s {
+        SignalState::Green => 6,
+        SignalState::GreenYield => 5,
+        SignalState::FlashingAmber => 4,
+        SignalState::Amber => 3,
+        SignalState::RedAmber => 2,
+        SignalState::Red => 1,
+        SignalState::Off => 0,
+    }
 }
 
 /// Per-application counts, for the run report.
@@ -135,6 +222,8 @@ pub struct AppTruth {
     closed: BTreeMap<Key, SimTime>,
     tallies: BTreeMap<String, AppTally>,
     out: Vec<AppOutcome>,
+    /// The signal plans, for RLVW's truth.
+    signals: SignalIndex,
 }
 
 impl AppTruth {
@@ -144,6 +233,18 @@ impl AppTruth {
             params: Some(params),
             ..Self::default()
         }
+    }
+
+    /// The labeller with `signals` indexed, for RLVW's truth.
+    #[must_use]
+    pub fn with_signals(mut self, signals: SignalIndex) -> Self {
+        self.signals = signals;
+        self
+    }
+
+    /// The signal index RLVW's truth reads.
+    pub fn signals(&self) -> &SignalIndex {
+        &self.signals
     }
 
     /// Whether it labels anything.
@@ -193,9 +294,13 @@ impl AppTruth {
         let Some(app) = LABELLED.iter().copied().find(|a| *a == app) else {
             return;
         };
-        let subject = v["subject"]
-            .as_str()
-            .and_then(|s| self.signer_node.get(s).copied());
+        let subject = if EGO_ONLY.contains(&app) {
+            Some(node)
+        } else {
+            v["subject"]
+                .as_str()
+                .and_then(|s| self.signer_node.get(s).copied())
+        };
         let Some(subject) = subject else {
             // A subject nobody signs under: a ghost, which no truth episode can match.
             let tally = self.tallies.entry(app.to_string()).or_default();
@@ -232,6 +337,20 @@ impl AppTruth {
         let Some(p) = self.params else {
             return;
         };
+        for (ego, e) in states {
+            for app in EGO_ONLY {
+                if truth(app, e, e, &p).is_some() {
+                    self.open
+                        .entry((*ego, *ego, app))
+                        .and_modify(|ep| ep.last = now)
+                        .or_insert(Episode {
+                            start: now,
+                            last: now,
+                            warned: false,
+                        });
+                }
+            }
+        }
         for (ego, subjects) in near {
             let Some(e) = states.get(ego) else { continue };
             for subject in subjects {
@@ -239,6 +358,9 @@ impl AppTruth {
                     continue;
                 };
                 for app in LABELLED {
+                    if EGO_ONLY.contains(&app) {
+                        continue;
+                    }
                     if truth(app, e, s, &p).is_some() {
                         self.open
                             .entry((*ego, *subject, app))
@@ -372,6 +494,19 @@ fn truth(
         "lta" if p.lta => e
             .left_turn
             .and_then(|(j, d)| apps::lta(&ego, j, d, &sub, &p.lta_params)),
+        "rlvw" if p.rlvw => e.signal.and_then(|(state, time_left_s, distance_m)| {
+            apps::rlvw(
+                &ego,
+                &SignalSituation {
+                    intersection: 0,
+                    signal_group: 0,
+                    distance_m,
+                    state,
+                    time_left_s,
+                },
+                &p.signal_params,
+            )
+        }),
         _ => None,
     }
 }
@@ -397,6 +532,7 @@ mod tests {
             width_m: 1.8,
             vru: false,
             left_turn: None,
+            signal: None,
         }
     }
 
@@ -438,5 +574,88 @@ mod tests {
         assert!(out.iter().any(|o| o.outcome == "false"), "{out:?}");
         let t = truth.tallies()["fcw"];
         assert_eq!((t.issued, t.true_warnings, t.false_warnings), (2, 1, 1));
+    }
+
+    /// RLVW is the ego's own: a warning naming the roadside unit is matched to the ego's
+    /// true approach to a red it cannot stop for, and the same approach unwarned is
+    /// missed; a warning while the ego could stop comfortably is false.
+    #[test]
+    fn a_red_light_warning_is_labelled_against_the_egos_own_approach() {
+        let ms = 1_000_000;
+        let mut truth = AppTruth::new(AppParams::default());
+        // 13 m/s, 20 m from a line that stays red for 30 s: stopping needs about 6 m/s²
+        // after the 1 s reaction, past the 3.4 m/s² of a comfortable stop.
+        let mut ego = state(0.0, 13.0, 0.0);
+        ego.signal = Some((MovementPhaseState::StopAndRemain, 30.0, 20.0));
+        let mut states = BTreeMap::from([(NodeId::new(1), ego)]);
+        let near = BTreeMap::new();
+        truth.step(0, &states, &near);
+        // The subject is the unit's pseudonym, which no vehicle signs under.
+        truth.on_warning(&warning(50 * ms, 1, "rlvw", "aaaaaaaaaaaaaaaa"), &states);
+        truth.step(100 * ms, &states, &near);
+        let out = truth.drain();
+        assert!(
+            out.iter().any(|o| o.app == "rlvw" && o.outcome == "true"),
+            "{out:?}"
+        );
+        // Node 2 makes the same approach and hears nothing: missed once it ends.
+        states.insert(NodeId::new(2), ego);
+        for k in 2..=6 {
+            truth.step(k * 100 * ms, &states, &near);
+        }
+        states.clear();
+        truth.step(700 * ms, &states, &near);
+        let out = truth.drain();
+        assert!(
+            out.iter()
+                .any(|o| o.app == "rlvw" && o.node == NodeId::new(2) && o.outcome == "missed"),
+            "{out:?}"
+        );
+        // 120 m out, a comfortable stop is still possible: a warning then is false.
+        let mut far = state(0.0, 13.0, 0.0);
+        far.signal = Some((MovementPhaseState::StopAndRemain, 30.0, 120.0));
+        states.insert(NodeId::new(3), far);
+        truth.on_warning(&warning(800 * ms, 3, "rlvw", "aaaaaaaaaaaaaaaa"), &states);
+        for k in 8..=20 {
+            truth.step(k * 100 * ms, &states, &near);
+        }
+        let out = truth.drain();
+        assert!(
+            out.iter()
+                .any(|o| o.app == "rlvw" && o.node == NodeId::new(3) && o.outcome == "false"),
+            "{out:?}"
+        );
+    }
+
+    /// The signal index reads the most permissive state of the movements leaving a
+    /// connector's approach, and the time to its next change across merged phases.
+    #[test]
+    fn the_signal_index_reads_what_the_approachs_head_shows() {
+        let world = v2xw_world::procedural::grid(
+            &v2xw_world::procedural::GridParams {
+                signalised: true,
+                ..v2xw_world::procedural::GridParams::legacy().with_size(3, 3)
+            },
+            &v2xw_world::ImportOptions::default().imported_at("2026-09-22"),
+        )
+        .expect("the grid builds");
+        let index = SignalIndex::build(&world);
+        let plan = world.signals.first().expect("the grid has a signal plan");
+        let mut checked = 0;
+        for lane in &plan.controlled {
+            let Some((state, left)) = index.at(&world, *lane, 3.0) else {
+                continue;
+            };
+            assert!(left > 0.0 && left <= plan.cycle_s, "{left}");
+            // Just before the change the state is the same; just after it differs.
+            let (before, _) = index.at(&world, *lane, 3.0 + left - 0.01).expect("state");
+            let (after, _) = index.at(&world, *lane, 3.0 + left + 0.01).expect("state");
+            assert_eq!(before, state);
+            if left < plan.cycle_s {
+                assert_ne!(after, state, "{lane:?} did not change after {left} s");
+            }
+            checked += 1;
+        }
+        assert!(checked > 0, "no controlled connector was indexed");
     }
 }
