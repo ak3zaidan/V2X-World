@@ -68,7 +68,7 @@ impl Timing<'_> {
 
 impl RunRecorder for Timing<'_> {
     fn write(&mut self, at: SimTime, record: &OwnedRecord) {
-        self.note(at, &record.channel);
+        self.note(at, record.channel);
         self.inner.write(at, record);
     }
     fn write_wire_frame(&mut self, frame: &v2xw_record::wire::Frame) {

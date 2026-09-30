@@ -226,10 +226,8 @@ impl FootprintBox {
         };
         for p in ring {
             let q = f.project(*p);
-            for k in 0..2 {
-                f.lo[k] = f.lo[k].min(q[k]);
-                f.hi[k] = f.hi[k].max(q[k]);
-            }
+            f.lo = [f.lo[0].min(q[0]), f.lo[1].min(q[1])];
+            f.hi = [f.hi[0].max(q[0]), f.hi[1].max(q[1])];
         }
         f
     }
@@ -2771,6 +2769,17 @@ mod tests {
         }
     }
 
+    /// A footprint's axis-aligned envelope, `(min, max)`.
+    fn footprint_envelope(ring: &[Vec3]) -> ([f64; 2], [f64; 2]) {
+        let mut lo = [f64::INFINITY; 2];
+        let mut hi = [f64::NEG_INFINITY; 2];
+        for p in ring {
+            lo = [lo[0].min(p.x), lo[1].min(p.y)];
+            hi = [hi[0].max(p.x), hi[1].max(p.y)];
+        }
+        (lo, hi)
+    }
+
     /// The TR 36.885 grid turned 29° — Manhattan's grid is 29° off north — so every
     /// footprint's axis-aligned envelope reaches into the streets beside it.
     fn rotated_city() -> World {
@@ -2827,11 +2836,24 @@ mod tests {
                 .count();
             boxed += along.len();
             for building in &world.buildings {
+                // The scan's own precondition, and every path's: a building whose
+                // envelope the segment's box does not overlap is not touched. It is
+                // stated because `ring_crossing`'s cross products are not robust for a
+                // segment on a wall's own line — rotated by 29°, a street segment that
+                // stops 10 m short of a corner, collinear with the wall beyond it, shows
+                // a "crossing" from a denominator made of rounding — and the index is
+                // right to leave that building out.
+                let (lo, hi) = footprint_envelope(&building.footprint);
+                let boxes_overlap = hi[0] >= a.x.min(b.x)
+                    && lo[0] <= a.x.max(b.x)
+                    && hi[1] >= a.y.min(b.y)
+                    && lo[1] <= a.y.max(b.y);
                 let r = ring_crossing(&building.footprint, a, b);
-                let touched = r.walls > 0
-                    || r.inside_len_m > 0.0
-                    || point_in_ring(&building.footprint, a)
-                    || point_in_ring(&building.footprint, b);
+                let touched = boxes_overlap
+                    && (r.walls > 0
+                        || r.inside_len_m > 0.0
+                        || point_in_ring(&building.footprint, a)
+                        || point_in_ring(&building.footprint, b));
                 assert!(
                     !touched || along.contains(&building.id),
                     "{a:?} -> {b:?} misses building {:?}",
