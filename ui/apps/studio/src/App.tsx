@@ -30,6 +30,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 
+import { BackendView } from "./components/BackendView.js";
 import { ComparePane } from "./components/ComparePane.js";
 import { ComparisonView } from "./components/ComparisonView.js";
 import { CopilotPanel } from "./components/CopilotPanel.js";
@@ -148,6 +149,7 @@ export function App(): React.JSX.Element {
         <HeaderClock />
         <span className="spacer grow" />
         <PrimaryAction onConnect={reconnect} />
+        <BackendView />
         <RunDetails />
         <button type="button" onClick={toggleTheme} data-testid="theme-toggle" title="Switch between the dark and light palette">
           {theme === "dark" ? "Light" : "Dark"}

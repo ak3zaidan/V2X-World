@@ -1005,8 +1005,19 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                TS 103 759 reports straight to the MA, and passive revocation only — the \
                authority's decision blocklists the enrolment credential at the EA, the \
                vehicle keeps its tickets until they expire and no reception is refused \
-               (TS 102 941 §6.1.4 NOTE 4). It needs security.envelope 'etsi103097'. The \
-               ETSI butterfly authorization and the ECTL/CA-CRL flows are not driven.",
+               (TS 102 941 §6.1.4 NOTE 4). It needs security.envelope 'etsi103097'; \
+               etsi_butterfly: 1 tops up with one butterfly authorization and a batch \
+               download (TS 102 941 V2 §6.2.3.5) instead of a request per ticket, and the \
+               AA never sees the enrolment identity. SCMS only: every vehicle is \
+               bootstrapped through the DCM with the electors' trust list and the RA's \
+               policy and chain files; enrolment_lifetime_s (six years, uncited) with \
+               reenrol_lead_s (a week) renews the enrolment certificate at the ECA; \
+               max_periods_ahead (156) caps what the RA provisions; a blocklisted or expired \
+               enrolment is refused its top-up. ETSI only: the TLM signs one ECTL and the \
+               Root CA one CA-CRL at the start, and every station fetches both from the \
+               Distribution Centre (the CPOC) when it joins and then every \
+               crl_fetch_interval_s, over its own access, receiving only what is newer \
+               (TS 102 941 §6.3.3); nothing re-issues either list during a run.",
     },
     KeyStatus {
         path: "security.signature",
@@ -1015,9 +1026,22 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                and hybrid-mldsa44-ecdsa-p256 change the octets of every signed message and \
                attached certificate on the air by their published sizes (FIPS 204, \
                Falcon-512, SEC 1). A hybrid SPDU above the network MTU is refused and \
-               counted until a fragmenter is selected. The node still signs and verifies \
-               with ECDSA P-256, so the post-quantum half's time is not charged; only \
-               ecdsa-p256 runs in real crypto mode.",
+               counted until a fragmenter is selected. A hybrid is also charged its time: \
+               every signature and every verification costs the profile's ECDSA P-256 \
+               figure plus its Falcon-512 or ML-DSA-44 figure, and a profile that does not \
+               publish both is refused by name (the reference OBU publishes no \
+               post-quantum figure; obu/cohda-mk6c-qualcomm-9150, \
+               obu/generic-automotive-soc-no-hsm and obu/pq-capable-hypothetical do). \
+               brainpool and P-384 are charged the P-256 time: no shipped profile publishes \
+               a brainpool figure. Only ecdsa-p256 runs in real crypto mode. A hybrid is the \
+               credential system's scheme too (SCMS and CCMS): every certificate carries the \
+               post-quantum key and issuer signature, every signed backend message the \
+               post-quantum signature, and each authority and device pays both halves \
+               (authorities at the Raspberry Pi 5 liboqs figure, an upper bound for a \
+               server; devices at the Cohda MK6 figure). There is no post-quantum butterfly, \
+               so a device generates one post-quantum key per pseudonym certificate or \
+               ticket (Raspberry Pi 4 liboqs rate, no MK6 figure published) and uploads each \
+               encrypted to the PCA or AA (v2xw_proto::hybrid).",
     },
     KeyStatus {
         path: "security.crypto_mode",
@@ -1116,10 +1140,23 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     },
     KeyStatus {
         path: "threats.compromised_rsus",
-        status: Status::Refused,
-        note: "Refused when non-empty: v2xw-threat's CompromisedRsu (drop, delay or forge \
-               what a unit forwards) is not yet driven by the engine's roadside path, so a \
-               list here would change nothing.",
+        status: Status::Wired,
+        note: "Roadside units under an attacker's control, by their position in actors.rsus \
+               (0 is the first). The unit keeps its trusted credentials and its backhaul, \
+               and does what threats.compromised_rsu_attack says to the misbehaviour \
+               reports vehicles hand it to forward, or to the CRL it repeats on the air.",
+    },
+    KeyStatus {
+        path: "threats.compromised_rsu_attack",
+        status: Status::Partial,
+        note: "'threat/attacker/compromised-rsu'. params.kind: PoisonForwardedReports \
+               (default: a relayed report is replaced, with poison_prob, by a forgery \
+               framing a vehicle the unit heard, and the authority trusts it as \
+               infrastructure), SuppressForwardedReports (dropped with suppress_prob) or \
+               FalseCrl (fabricated_entries added to each CRL frame; the unit has no CRL \
+               Generator key, so every vehicle discards the frame). from_s and to_s bound \
+               it. FalseSpat, FalseMap and FalseCtl are refused: nothing acts on SPaT or \
+               MAP content yet and units do not broadcast the trust list.",
     },
     KeyStatus {
         path: "detection.local",
@@ -1325,13 +1362,17 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ),
         ));
     }
-    if !s.threats.compromised_rsus.is_empty() {
-        e.push(conflict(
-            "threats.compromised_rsus",
-            "names roadside units, and v2xw-threat's CompromisedRsu is not driven by the \
-             engine's roadside path yet, so the list would change nothing; leave it empty"
-                .to_string(),
-        ));
+    for &unit in &s.threats.compromised_rsus {
+        if unit as usize >= s.actors.rsus.len() {
+            e.push(conflict(
+                "threats.compromised_rsus",
+                format!(
+                    "names roadside unit {unit}, and actors.rsus declares {}; a unit is \
+                     named by its position in that list, from 0",
+                    s.actors.rsus.len()
+                ),
+            ));
+        }
     }
     if s.detection.responder.is_some() {
         e.push(conflict(
@@ -2336,19 +2377,37 @@ fn nodes(s: &Scenario, e: &mut Vec<ScenarioError>) {
         .iter()
         .any(|m| matches!(m.as_str(), "bsm" | "cam" | "denm" | "srm" | "cpm"));
     if vehicles_send {
-        let op = v2xw_node::NodeConfig::default().sign_op;
-        let signs = |id: &str| v2xw_node::profiles::get(id).is_none_or(|p| p.op_cost(op).is_some());
+        // Under a hybrid signature the node makes and checks both signatures, so the
+        // profile must publish both halves' costs (`v2xw_node::profile::signature_ops`).
+        let (op, verify_op) = v2xw_node::profile::signature_ops(&s.security.signature);
+        let hybrid = op.starts_with("hybrid-");
+        let signs = |id: &str| {
+            v2xw_node::profiles::get(id).is_none_or(|p| {
+                p.op_cost(op).is_some() && (!hybrid || p.op_cost(verify_op).is_some())
+            })
+        };
         let signing: Vec<&str> = obus.iter().copied().filter(|id| signs(id)).collect();
         let unsigned = |field: &str, id: &str, e: &mut Vec<ScenarioError>| {
             e.push(conflict(
                 field,
-                format!(
-                    "'{id}' publishes no {op} cost (its sources give no signing rate or \
-                     latency for it), and a vehicle signs every message it sends on its own \
-                     hardware, so no vehicle on it could send anything; on-board units that \
-                     publish one: {}",
-                    signing.join(", ")
-                ),
+                if hybrid {
+                    format!(
+                        "'{id}' does not publish both halves of {}: a hybrid signature is \
+                         an ECDSA P-256 signature and a post-quantum one, made and checked \
+                         on the vehicle's own hardware, and its cost is the two published \
+                         costs together; on-board units that publish both: {}",
+                        s.security.signature,
+                        signing.join(", ")
+                    )
+                } else {
+                    format!(
+                        "'{id}' publishes no {op} cost (its sources give no signing rate or \
+                         latency for it), and a vehicle signs every message it sends on its \
+                         own hardware, so no vehicle on it could send anything; on-board \
+                         units that publish one: {}",
+                        signing.join(", ")
+                    )
+                },
             ));
         };
         if obus.contains(&s.nodes.default_obu.as_str()) && !signs(&s.nodes.default_obu) {

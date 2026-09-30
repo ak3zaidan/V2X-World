@@ -15,10 +15,11 @@
 //! | `hybrid-falcon512-ecdsa-p256` | +666 | +1,563 | the ECDSA signature stays and a Falcon-512 signature is concatenated (666 B padded, PQClean `falcon-padded-512`); the certificate adds the Falcon public key (897 B) and a Falcon signature by its issuer (666 B) — 04-models.md §9.4, 05-protocols.md §5.3 ("raw concat", derived) |
 //! | `hybrid-mldsa44-ecdsa-p256` | +2,420 | +3,732 | ML-DSA-44 signature 2,420 B, public key 1,312 B [FIPS 204 Table 2], concatenated the same way |
 //!
-//! What this does **not** model, and the key status says: the post-quantum half's signing
-//! and verification *time* (the node charges the ECDSA operation it performs), and the
-//! Partially-Hybrid design of NDSS 2024 that fragments the hybrid certificate across a
-//! certificate cycle — that is `net.fragmenter`'s job. A hybrid SPDU above the network
+//! The post-quantum half's signing and verification *time* is charged elsewhere: on the
+//! node by `v2xw_node::profile::signature_ops` (both halves' published costs), and in the
+//! credential system by `v2xw_proto::hybrid`. The Partially-Hybrid design of NDSS 2024
+//! that fragments the hybrid certificate across a certificate cycle is `net.fragmenter`'s
+//! job. A hybrid SPDU above the network
 //! layer's MTU is refused before the MAC and counted (`net_mtu_refusals`), which is the
 //! air-interface consequence 05-protocols.md §5.3 describes.
 

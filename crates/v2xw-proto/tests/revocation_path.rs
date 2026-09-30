@@ -48,6 +48,13 @@ fn revoke(run: &mut ScmsRun, to: v2xw_core::ids::NodeId, path: Transport) -> Rev
     run.run().expect("the reports run");
     let (resolution, issuance) = run.investigate(0, 1, 0, JMAX).expect("two reports");
     run.run().expect("the investigation runs");
+    // A vehicle that can enforce a CRL is one its DCM bootstrapped: without the trust
+    // bundle it holds no chain to the CRL Generator and refuses the list
+    // (`tests/governance.rs::an_unbootstrapped_device_refuses_the_crl`).
+    if run.state.devices.get(&to).is_some_and(|d| d.trust.chain.is_empty()) {
+        run.enrol(to);
+        run.run().expect("the bystander's bootstrap runs");
+    }
     let distribution = match path {
         Transport::V2xAir => {
             run.attach_rsu(to);

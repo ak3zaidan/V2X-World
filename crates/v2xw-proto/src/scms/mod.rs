@@ -11,6 +11,8 @@
 //! function, why a pre-linkage value is a type the RA cannot open, and why a Linkage
 //! Authority releases `ls(i)` and never `ls(0)`.
 
+pub mod governance;
+pub mod inspect;
 pub mod msg;
 pub mod params;
 pub mod run;
@@ -150,6 +152,16 @@ pub const FLOWS: &[FlowSpec] = &[
         id: FlowId::CrlDistribution,
         participants: &["CRL Store", "EE"],
         stages: &[StageId::Downloaded, StageId::Processed, StageId::Enforced],
+    },
+    FlowSpec {
+        id: FlowId::Reenrolment,
+        participants: &["EE", "ECA"],
+        stages: &[StageId::Requested, StageId::Certified, StageId::Installed],
+    },
+    FlowSpec {
+        id: FlowId::PolicyDistribution,
+        participants: &["SCMS Manager", "PG", "RA"],
+        stages: &[StageId::Decision, StageId::Issued, StageId::Published],
     },
 ];
 
@@ -364,10 +376,40 @@ impl CampScms {
                 storage_growth: Vec::new(),
                 offline: true,
             },
+            // Hosted, because a policy change is a message with a latency: the SCMS
+            // Manager decides, the Policy Generator signs, the RA re-issues its local file
+            // (`governance`, `FlowId::PolicyDistribution`).
             EntityRoleSpec {
                 name: "Policy Generator",
                 boundary: TrustBoundary::Policy,
                 central: Centrality::IntrinsicallyCentral,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: Vec::new(),
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "SCMS Manager",
+                boundary: TrustBoundary::Policy,
+                central: Centrality::IntrinsicallyCentral,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: Vec::new(),
+                offline: false,
+            },
+            EntityRoleSpec {
+                name: "Electors",
+                boundary: TrustBoundary::Policy,
+                central: Centrality::IntrinsicallyCentral,
+                default_profile: p.backend_profile,
+                default_service: svc,
+                storage_growth: Vec::new(),
+                offline: true,
+            },
+            EntityRoleSpec {
+                name: "ICA",
+                boundary: TrustBoundary::Issuer,
+                central: Centrality::Central,
                 default_profile: p.backend_profile,
                 default_service: svc,
                 storage_growth: Vec::new(),
@@ -551,6 +593,46 @@ fn card(p: &ScmsParams) -> ModelCard {
             paper("USDOT SCMS Technical Primer (FHWA-JPO-19-775) p.7: 3,120 = 20 × 52 × 3"),
         ),
         Parameter::new(
+            "max_periods_ahead",
+            "-",
+            serde_json::json!(p.max_periods_ahead),
+            paper(
+                "USDOT SCMS Technical Primer (FHWA-JPO-19-775) p.7: three years of weekly \
+                 batches, 3,120 = 20 × 156; the RA clips a request beyond it",
+            ),
+        ),
+        todo(
+            "enrolment_lifetime_s",
+            "s",
+            serde_json::json!(p.enrolment_lifetime.as_nanos() / 1_000_000_000),
+            "No document this build can read prints the SCMS enrolment certificate's \
+             lifetime; the ETSI equivalent is three years [EUCP Table 11]. Take it from the \
+             deployment's Global Policy File.",
+        ),
+        todo(
+            "reenrol_lead_s",
+            "s",
+            serde_json::json!(p.reenrol_lead.as_nanos() / 1_000_000_000),
+            "How early a device requests its successor enrolment certificate. An OEM \
+             setting; measure from a deployed OBU's configuration.",
+        ),
+        todo(
+            "electors",
+            "-",
+            serde_json::json!(p.electors),
+            "How many electors endorse the trust list. The CAMP governance names electors \
+             and a quorum without a number this build can cite; take both from the SCMS \
+             Manager's published governance.",
+        ),
+        todo(
+            "elector_quorum",
+            "-",
+            serde_json::json!(p.elector_quorum),
+            "Valid elector endorsements a device requires of a trust list (IEEE 1609.2.1 \
+             MultiSignedCtl); same source as electors. A device never accepts fewer than a \
+             majority of the anchors it holds.",
+        ),
+        Parameter::new(
             "shuffle_threshold_requests",
             "-",
             serde_json::json!(10_000),
@@ -625,6 +707,28 @@ fn card(p: &ScmsParams) -> ModelCard {
             Source::new(
                 SourceKind::Datasheet,
                 "Cohda MK6 with Botan [R5 §B.3]; 06-node-models.md §7.3",
+            ),
+        ),
+        Parameter::new(
+            "hybrid_backend_pq_profile",
+            "-",
+            serde_json::json!(crate::hybrid::BACKEND_PQ_PROFILE),
+            paper(
+                "arXiv 2503.10238 Table 8 (Raspberry Pi 5, liboqs): the one catalogue profile \
+                 publishing ML-DSA-44 and Falcon-512 sign, verify and keygen as times. Under a \
+                 hybrid security.signature the authorities' post-quantum half is charged here; \
+                 a server is faster, so it is an upper bound",
+            ),
+        ),
+        Parameter::new(
+            "hybrid_device_pq_keygen_profile",
+            "-",
+            serde_json::json!(crate::hybrid::DEVICE_PQ_KEYGEN_PROFILE),
+            paper(
+                "arXiv 2503.10238 Table 8 (Raspberry Pi 4, liboqs): no Cohda MK6 key-generation \
+                 figure is published, and there is no post-quantum butterfly, so a hybrid \
+                 device generates one post-quantum key per pseudonym certificate at this \
+                 rate; a lower bound for the MK6",
             ),
         ),
         todo(

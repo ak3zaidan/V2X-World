@@ -25,9 +25,10 @@ use crate::error::{ProtoError, Result};
 use crate::kernel::{Delivery, Kernel, Outbox};
 use crate::net::{BackendNet, Link, Transport};
 use crate::pseudonym::{CertEvent, PseudonymStore, PseudonymStrategy};
+use crate::scms::governance::{DeviceTrust, Governance, Policy};
 use crate::scms::msg::{
-    CertRequestItem, IssuedCredential, LaIndex, Lci, PcaLookup, PreLinkageBatch,
-    ProvisioningRequest, ReportSubmission, ScmsMsg, ScmsSizes, SealedForPca,
+    CertRequestItem, EnrolmentCert, IssuedCredential, LaIndex, Lci, PcaLookup, PreLinkageBatch,
+    ProvisioningRequest, Refusal, ReportSubmission, ScmsMsg, ScmsSizes, SealedForPca,
 };
 use crate::scms::params::{ScmsNodes, ScmsParams};
 use crate::sizes::{CertificateSizes, WireSize};
@@ -58,6 +59,28 @@ pub struct DeviceState {
     pub download_retries: u32,
     /// Which of its pseudonyms is active, and the rule that changes it.
     pub store: PseudonymStore,
+    /// Its enrolment certificate, once the ECA has issued one.
+    pub enrolment: Option<EnrolmentCert>,
+    /// Its trust store: anchors, trust list, chain and policy.
+    pub trust: DeviceTrust,
+    /// The last refusal the RA or the ECA answered it with.
+    pub refused: Option<Refusal>,
+    /// Why the RA refused its current provisioning or top-up request, if it did. Kept
+    /// apart from the ECA's answer: a successor enrolment refused while a top-up is in
+    /// flight says nothing about the top-up.
+    pub topup_refused: Option<Refusal>,
+    /// Why the ECA refused its current successor-enrolment request, if it did.
+    pub reenrol_refused: Option<Refusal>,
+    /// How many refusals it has received.
+    pub refusals: u32,
+    /// How many successor enrolment certificates it has installed.
+    pub reenrolments: u32,
+    /// CRL versions it refused because the signature did not verify.
+    pub crls_rejected: u32,
+    /// Whether an enrolment request is in flight.
+    enrolling: bool,
+    /// A provisioning request held until enrolment completes.
+    deferred: Option<(Box<ProvisioningRequest>, FlowId, FlowRun)>,
     /// The run of the provisioning flow in progress.
     provisioning: Option<ProvisioningProgress>,
 }
@@ -82,8 +105,24 @@ impl DeviceState {
             silenced: false,
             download_retries: 0,
             store: PseudonymStore::default(),
+            enrolment: None,
+            trust: DeviceTrust::default(),
+            refused: None,
+            topup_refused: None,
+            reenrol_refused: None,
+            refusals: 0,
+            reenrolments: 0,
+            crls_rejected: 0,
+            enrolling: false,
+            deferred: None,
             provisioning: None,
         }
+    }
+
+    /// The policy the device follows: its installed Local Policy File, if any.
+    #[must_use]
+    pub fn policy(&self) -> Option<Policy> {
+        self.trust.policy()
     }
 
     /// The `(i, j)` pairs this device could sign with at `now`, in ascending order.
@@ -158,6 +197,15 @@ pub struct RaState {
     pub requests: BTreeMap<[u8; 32], RequestRecord>,
     /// Requests refused because the device is blocklisted.
     pub refused: u32,
+    /// Requests refused because the enrolment certificate had expired or was unknown.
+    pub refused_enrolment: u32,
+    /// Requests the RA clipped to its policy (more certificates per period, or more
+    /// periods ahead, than the Local Policy File allows).
+    pub clipped: u32,
+    /// Local policy and chain files the RA served.
+    pub files_served: u32,
+    /// Provisioning requests the RA accepted.
+    pub accepted: u32,
     /// Provisioning jobs waiting for the shuffle window.
     jobs: Vec<ProvisioningJob>,
     /// Reports waiting for the report shuffle window.
@@ -166,6 +214,26 @@ pub struct RaState {
     repos: BTreeMap<NodeId, BTreeMap<u32, Vec<IssuedCredential>>>,
     shuffle_armed: bool,
     report_shuffle_armed: bool,
+}
+
+impl RaState {
+    /// Provisioning requests waiting for their pre-linkage values or the shuffle.
+    #[must_use]
+    pub fn pending_jobs(&self) -> usize {
+        self.jobs.len()
+    }
+
+    /// Reports waiting for the report shuffle.
+    #[must_use]
+    pub fn reports_waiting(&self) -> usize {
+        self.reports.len()
+    }
+
+    /// Batch files held for download, over every device.
+    #[must_use]
+    pub fn batches_held(&self) -> usize {
+        self.repos.values().map(BTreeMap::len).sum()
+    }
 }
 
 /// What the RA records about one provisioning request.
@@ -204,6 +272,8 @@ pub struct PcaState {
     pub issued: BTreeMap<(u32, [u8; 9]), PcaLookup>,
     /// How many certificates it has issued.
     pub issued_count: u64,
+    /// Linkage-value lookups it answered for the Misbehaviour Authority.
+    pub lookups: u32,
     certified_runs: BTreeSet<FlowRun>,
 }
 
@@ -220,6 +290,10 @@ pub struct LaState {
     /// Chain → the device it belongs to. The LA knows this and nothing else about the
     /// device: not its keys, not its certificates, not its linkage values.
     pub owner: BTreeMap<Lci, NodeId>,
+    /// Pre-linkage values it has computed and sealed for the PCA.
+    pub plv_issued: u64,
+    /// Seeds `ls(i)` it has released for a revocation.
+    pub seeds_released: u32,
     next_lci: u64,
 }
 
@@ -230,6 +304,8 @@ impl LaState {
             la_id,
             chains: BTreeMap::new(),
             owner: BTreeMap::new(),
+            plv_issued: 0,
+            seeds_released: 0,
             next_lci: 1,
         }
     }
@@ -285,6 +361,57 @@ pub struct CrlState {
     pub entries: Vec<CrlLinkageEntry>,
     /// Whether a cadence publication is already scheduled (CRL Generator only).
     pub publish_armed: bool,
+    /// The CRL Generator's signature over these entries: its certificate digest and the
+    /// ECDSA signature over [`crl_digest`].
+    pub signature: Option<([u8; 8], [u8; 64])>,
+    /// How many CRL versions this entity has signed or received.
+    pub versions: u32,
+}
+
+/// The SHA-256 a CRL Generator signs: every entry, in order.
+#[must_use]
+pub fn crl_digest(entries: &[CrlLinkageEntry]) -> [u8; 32] {
+    let mut b = Vec::with_capacity(entries.len() * 64);
+    for e in entries {
+        b.extend_from_slice(&e.i.to_be_bytes());
+        b.extend_from_slice(&e.la_id1.0.to_be_bytes());
+        b.extend_from_slice(&e.la_id2.0.to_be_bytes());
+        b.extend_from_slice(e.ls1_i.as_bytes());
+        b.extend_from_slice(e.ls2_i.as_bytes());
+        b.extend_from_slice(&e.jmax.to_be_bytes());
+    }
+    sha256(&b)
+}
+
+/// The Enrolment CA's state.
+#[derive(Debug, Default)]
+pub struct EcaState {
+    /// Enrolment certificates it has issued, successors included.
+    pub issued: u32,
+    /// Successor certificates it has issued.
+    pub successors: u32,
+    /// Successor requests it refused.
+    pub refused: u32,
+    /// Enrolment certificates the RA told it are blocklisted.
+    pub blocklist: BTreeSet<NodeId>,
+}
+
+/// The Device Configuration Manager's state.
+#[derive(Debug, Default)]
+pub struct DcmState {
+    /// Devices it bootstrapped.
+    pub bootstrapped: u32,
+    /// Trust bundles it delivered.
+    pub bundles: u32,
+}
+
+/// The Location Obscurer Proxy's state: what it relayed, and nothing about content.
+#[derive(Debug, Default)]
+pub struct LopState {
+    /// Messages relayed device → RA.
+    pub upstream: u64,
+    /// Messages relayed RA → device.
+    pub downstream: u64,
 }
 
 /// Everything the deployment knows.
@@ -311,6 +438,15 @@ pub struct ScmsState {
     pub crl_broadcast: CrlState,
     /// The devices.
     pub devices: BTreeMap<NodeId, DeviceState>,
+    /// The governance entities: SCMS Manager, Policy Generator, Root CA, electors,
+    /// Intermediate CA, and their artefacts.
+    pub gov: Governance,
+    /// The Enrolment CA.
+    pub eca: EcaState,
+    /// The Device Configuration Manager.
+    pub dcm: DcmState,
+    /// The Location Obscurer Proxy.
+    pub lop: LopState,
     /// The deterministic streams.
     pub rng: RngRegistry,
     /// Which devices the Enrolment CA has issued a certificate to.
@@ -350,7 +486,8 @@ impl ScmsRun {
     /// [`ProtoError::Size`] if the certificate profile does not encode.
     pub fn new_at(params: ScmsParams, t0: SimTime) -> Result<ScmsRun> {
         let nodes = ScmsNodes::default();
-        let sizes = ScmsSizes::new(CertificateSizes::measured()?, params.sizes);
+        let sizes = ScmsSizes::new(CertificateSizes::measured()?, params.sizes)
+            .with_hybrid(params.hybrid.as_ref());
         let mut net = BackendNet::new();
         let backend = Link {
             latency: params.backend_link_latency,
@@ -360,10 +497,16 @@ impl ScmsRun {
         for (a, b) in nodes.backend_links() {
             net.connect(a, b, backend);
         }
+        let rng = RngRegistry::new(params.master_seed);
+        let gov = Governance::ceremony(&params, &nodes, &rng, t0);
+        for (a, b) in governance_links(&nodes, &gov) {
+            net.connect(a, b, backend);
+        }
         let mut kernel = Kernel::new_at(net, t0);
         for (node, spec) in nodes.backend_service_models(&params) {
             kernel.host(node, &spec, params.backend_profile);
         }
+        host_governance(&mut kernel, &gov, &params);
         Ok(ScmsRun {
             state: ScmsState {
                 nodes,
@@ -380,7 +523,11 @@ impl ScmsRun {
                 crl_store: CrlState::default(),
                 crl_broadcast: CrlState::default(),
                 devices: BTreeMap::new(),
-                rng: RngRegistry::new(params.master_seed),
+                gov,
+                eca: EcaState::default(),
+                dcm: DcmState::default(),
+                lop: LopState::default(),
+                rng,
                 issued_enrolment: BTreeSet::new(),
                 next_run: 0,
             },
@@ -506,6 +653,79 @@ impl ScmsRun {
         FlowRun(self.state.next_run)
     }
 
+    /// Replaces a device's enrolment certificate: how a driver states the age of the
+    /// certificate a vehicle on the road already holds (it was issued before the run, at
+    /// the factory or at its last renewal), so that a run long enough — or a lifecycle
+    /// compressed enough — sees it renewed.
+    pub fn set_enrolment(&mut self, device: NodeId, cert: EnrolmentCert) {
+        if let Some(d) = self.state.devices.get_mut(&device) {
+            d.enrolment = Some(cert);
+        }
+    }
+
+    /// Starts IEEE 1609.2.1's successor enrolment at `at`: the device asks the ECA for a
+    /// new enrolment certificate, signing with the one it holds.
+    pub fn reenrol_at(&mut self, device: NodeId, at: SimTime) -> FlowRun {
+        let run = self.new_run();
+        let current = self
+            .state
+            .devices
+            .get(&device)
+            .and_then(|d| d.enrolment)
+            .unwrap_or(EnrolmentCert {
+                generation: 0,
+                valid_from: 0,
+                valid_until: 0,
+            });
+        let at = at.max(self.kernel.now());
+        if let Some(d) = self.state.devices.get_mut(&device) {
+            d.reenrol_refused = None;
+        }
+        self.inject_at(
+            at,
+            device,
+            ScmsMsg::SuccessorEnrolRequest { device, current },
+            FlowId::Reenrolment,
+            run,
+        );
+        run
+    }
+
+    /// The SCMS Manager decides a new policy at `at`: the Policy Generator signs a new
+    /// Global Policy File and the Registration Authority issues the Local Policy File its
+    /// devices fetch on their next connection.
+    pub fn decide_policy_at(&mut self, policy: Policy, at: SimTime) -> FlowRun {
+        let run = self.new_run();
+        let manager = self.state.gov.nodes.manager;
+        let at = at.max(self.kernel.now());
+        self.inject_at(
+            at,
+            manager,
+            ScmsMsg::PolicyUpdate(Box::new(policy)),
+            FlowId::PolicyDistribution,
+            run,
+        );
+        run
+    }
+
+    /// Why the RA or the ECA last refused `device`, if either did since its last request.
+    #[must_use]
+    pub fn refusal_of(&self, device: NodeId) -> Option<Refusal> {
+        self.state.devices.get(&device).and_then(|d| d.refused)
+    }
+
+    /// Why the RA refused `device`'s current provisioning or top-up request, if it did.
+    #[must_use]
+    pub fn topup_refusal_of(&self, device: NodeId) -> Option<Refusal> {
+        self.state.devices.get(&device).and_then(|d| d.topup_refused)
+    }
+
+    /// Why the ECA refused `device`'s current successor-enrolment request, if it did.
+    #[must_use]
+    pub fn reenrol_refusal_of(&self, device: NodeId) -> Option<Refusal> {
+        self.state.devices.get(&device).and_then(|d| d.reenrol_refused)
+    }
+
     fn inject(&mut self, to: NodeId, msg: ScmsMsg, flow: FlowId, run: FlowRun) {
         let at = self.kernel.now();
         self.inject_at(at, to, msg, flow, run);
@@ -540,6 +760,9 @@ impl ScmsRun {
     /// Starts the enrolment flow at `at`.
     pub fn enrol_at(&mut self, device: NodeId, at: SimTime) -> FlowRun {
         let run = self.new_run();
+        if let Some(d) = self.state.devices.get_mut(&device) {
+            d.enrolling = true;
+        }
         self.inject_at(
             at,
             device,
@@ -588,6 +811,8 @@ impl ScmsRun {
         }
         let cat = Caterpillar::from_seed(&seed).expect("64 bytes of seed");
         let request = ProvisioningRequest {
+            // Filled by the device when it signs the request (see its handler).
+            enrolment: None,
             device,
             signing_public: cat.signing_public(),
             encryption_public: cat.encryption_public(),
@@ -600,6 +825,8 @@ impl ScmsRun {
         if let Some(d) = self.state.devices.get_mut(&device) {
             d.caterpillar = Some(cat);
             d.download_retries = 0;
+            d.refused = None;
+            d.topup_refused = None;
             d.provisioning = Some(ProvisioningProgress {
                 start_i,
                 periods,
@@ -845,6 +1072,7 @@ impl ScmsRun {
         for (node, spec) in self.state.nodes.backend_service_models(&p) {
             scratch.host(node, &spec, p.backend_profile);
         }
+        host_governance(&mut scratch, &self.state.gov, &p);
         // Every device already hosted keeps a host on the scratch kernel too, so a device
         // that is being provisioned is never the only one the handlers can address.
         scratch.host(
@@ -874,7 +1102,7 @@ impl ScmsRun {
     fn drain_into(state: &mut ScmsState, kernel: &mut Kernel<ScmsMsg>) -> Result<()> {
         while let Some(d) = kernel.next_delivery() {
             let profile = kernel.profile_of(d.to);
-            let mut out = Outbox::new(profile);
+            let mut out = state.outbox(profile, d.to);
             let (at, to) = (d.at, d.to);
             state.handle(d, &mut out)?;
             kernel.dispatch(at, to, out)?;
@@ -923,7 +1151,7 @@ impl ScmsRun {
         let ScmsRun { state, kernel } = self;
         while let Some(d) = kernel.next_delivery_before(horizon) {
             let profile = kernel.profile_of(d.to);
-            let mut out = Outbox::new(profile);
+            let mut out = state.outbox(profile, d.to);
             let (at, to) = (d.at, d.to);
             state.handle(d, &mut out)?;
             kernel.dispatch(at, to, out)?;
@@ -945,7 +1173,7 @@ impl ScmsRun {
         let ScmsRun { state, kernel } = self;
         while let Some(d) = kernel.next_delivery() {
             let profile = kernel.profile_of(d.to);
-            let mut out = Outbox::new(profile);
+            let mut out = state.outbox(profile, d.to);
             let (at, to) = (d.at, d.to);
             state.handle(d, &mut out)?;
             kernel.dispatch(at, to, out)?;
@@ -955,12 +1183,27 @@ impl ScmsRun {
 }
 
 impl ScmsState {
-    fn sign(out: &mut Outbox<ScmsMsg>, n: u32) {
-        out.compute(OpDescriptor::new(ECDSA, PrimitiveOpKind::Sign, n));
+    /// An empty outbox for an entity hosted on `profile`. Under a hybrid scheme every
+    /// signature is two, and the post-quantum half is charged against the device's or the
+    /// authority's published figure (`crate::hybrid`).
+    fn outbox(&self, profile: &'static str, to: NodeId) -> Outbox<ScmsMsg> {
+        let pq = self
+            .params
+            .hybrid
+            .map(|h| h.charge(self.devices.contains_key(&to)));
+        Outbox::new(profile).with_pq(pq)
     }
 
+    /// `n` signatures: ECDSA, and under a hybrid scheme the post-quantum one as well.
+    fn sign(out: &mut Outbox<ScmsMsg>, n: u32) {
+        out.compute(OpDescriptor::new(ECDSA, PrimitiveOpKind::Sign, n));
+        out.charge_pq(PrimitiveOpKind::Sign, n);
+    }
+
+    /// `n` verifications, both halves under a hybrid scheme.
     fn verify(out: &mut Outbox<ScmsMsg>, n: u32) {
         out.compute(OpDescriptor::new(ECDSA, PrimitiveOpKind::Verify, n));
+        out.charge_pq(PrimitiveOpKind::Verify, n);
     }
 
     /// One elliptic-curve scalar multiplication, charged against the ECQV descriptor,
@@ -1016,15 +1259,60 @@ impl ScmsState {
                     flow,
                     run,
                 );
+                // The bootstrap's other half: the DCM hands the device the elector
+                // anchors, the trust list, the Local Certificate Chain File and the Local
+                // Policy File, without which it could verify nothing it will receive.
+                self.dcm.bootstrapped += 1;
+                self.dcm.bundles += 1;
+                let anchors = u32::try_from(self.gov.nodes.electors.len()).unwrap_or(0);
+                let ctl_certs =
+                    u32::try_from(self.gov.ctl.roots.len() + self.gov.ctl.electors.len())
+                        .unwrap_or(0);
+                let chain = u32::try_from(self.gov.lccf.certs.len()).unwrap_or(0);
+                out.send(
+                    device,
+                    ScmsMsg::TrustBundle { device },
+                    "trust-bundle",
+                    self.sizes.trust_bundle(anchors, ctl_certs, chain),
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::TrustBundle { device } => {
+                let (anchors, ctl, lccf, lpf) = (
+                    self.gov.anchors(),
+                    self.gov.ctl.clone(),
+                    self.gov.lccf.clone(),
+                    self.gov.lpf.clone(),
+                );
+                let Some(dev) = self.devices.get_mut(&device) else {
+                    return Err(ProtoError::NoEntity { node: device });
+                };
+                let before = dev.trust.verifications;
+                dev.trust.anchors = anchors;
+                // A refusal is recorded on the device's trust store and leaves it
+                // unable to verify what the refused artefact would have vouched for.
+                let _ = dev.trust.install_ctl(&ctl);
+                let _ = dev.trust.install_chain(&lccf, at);
+                let _ = dev.trust.install_policy(&lpf);
+                let checks = dev.trust.verifications.saturating_sub(before);
+                Self::verify(out, checks);
             }
             ScmsMsg::EnrolForward { device } => {
                 Self::verify(out, 1);
                 Self::sign(out, 1);
                 self.issued_enrolment.insert(device);
+                self.eca.issued += 1;
+                let cert = EnrolmentCert {
+                    generation: 0,
+                    valid_from: at,
+                    valid_until: self.params.enrolment_lifetime.after(at),
+                };
                 out.stage_at(StageId::Certified, to, None, flow, run);
                 out.send(
                     device,
-                    ScmsMsg::EnrolResponse { device },
+                    ScmsMsg::EnrolResponse { device, cert },
                     "enrol-response",
                     self.sizes.enrol_response(),
                     Transport::CellularUu,
@@ -1032,26 +1320,77 @@ impl ScmsState {
                     run,
                 );
             }
-            ScmsMsg::EnrolResponse { device } => {
+            ScmsMsg::EnrolResponse { device, cert } => {
                 Self::verify(out, 2);
-                if let Some(dev) = self.devices.get_mut(&device) {
+                let deferred = self.devices.get_mut(&device).and_then(|dev| {
                     dev.enrolled = true;
-                }
+                    dev.enrolment = Some(cert);
+                    dev.enrolling = false;
+                    dev.deferred.take()
+                });
                 out.stage_at(StageId::Installed, device, None, flow, run);
+                // A provisioning request made while enrolment was still in flight goes
+                // out now, signed with the certificate that just arrived.
+                if let Some((req, pflow, prun)) = deferred {
+                    out.start_timer(
+                        Duration::ZERO,
+                        ScmsMsg::ProvisioningRequest(req),
+                        pflow,
+                        prun,
+                    );
+                }
             }
 
             // ---------------- provisioning ----------------
-            ScmsMsg::ProvisioningRequest(req) if to == req.device => {
+            ScmsMsg::ProvisioningRequest(mut req) if to == req.device => {
+                // The request is signed with the enrolment certificate, so a device still
+                // waiting for one holds the request until it arrives.
+                if let Some(dev) = self.devices.get_mut(&req.device) {
+                    if dev.enrolment.is_none() && dev.enrolling {
+                        dev.deferred = Some((req, flow, run));
+                        return Ok(());
+                    }
+                    req.enrolment = dev.enrolment;
+                }
+                // Every connection to the RA first asks for newer local policy and chain
+                // files (IEEE 1609.2.1's LPF and LCCF download): a policy change reaches a
+                // device the next time it tops up.
+                let (lpf, lccf) = self.devices.get(&req.device).map_or((None, None), |d| {
+                    (d.trust.lpf.as_ref().map(|l| l.version), d.trust.lccf_version)
+                });
+                Self::sign(out, 1);
+                out.send(
+                    n.lop,
+                    ScmsMsg::FileRequest {
+                        device: req.device,
+                        lpf,
+                        lccf,
+                    },
+                    "file-request",
+                    self.sizes.file_request(),
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
                 // The device signs the request with its enrolment certificate and
                 // encrypts it to the RA.
                 Self::sign(out, 1);
                 Self::scalar_mults(out, 1);
+                // Under a hybrid scheme there is no post-quantum butterfly: the device
+                // generates one post-quantum key pair per certificate and encrypts each
+                // public key to the PCA (an ephemeral key and a point multiplication
+                // apiece), so the RA can shuffle them without reading them.
+                let certs = req.periods.saturating_mul(req.jmax);
+                if out.is_hybrid() {
+                    out.charge_pq(PrimitiveOpKind::KeyGen, certs);
+                    Self::scalar_mults(out, certs.saturating_mul(2));
+                }
                 out.stage_at(StageId::Requested, req.device, None, flow, run);
                 out.send(
                     n.lop,
                     ScmsMsg::ProvisioningRequest(req),
                     "provisioning-request",
-                    self.sizes.provisioning_request(),
+                    self.sizes.provisioning_request_for(certs),
                     Transport::CellularUu,
                     flow,
                     run,
@@ -1061,24 +1400,69 @@ impl ScmsState {
                 // The Location Obscurer Proxy strips the network identifiers. It performs
                 // no cryptography: the payload is encrypted to the RA and it cannot read
                 // it, which is the whole reason it is a separate organisation.
+                self.lop.upstream += 1;
                 out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
+                let size = self
+                    .sizes
+                    .provisioning_request_for(req.periods.saturating_mul(req.jmax));
                 out.send(
                     n.ra,
                     ScmsMsg::ProvisioningRequest(req),
                     "provisioning-request-proxied",
-                    self.sizes.provisioning_request(),
+                    size,
                     Transport::BackendNet,
                     flow,
                     run,
                 );
             }
-            ScmsMsg::ProvisioningRequest(req) => {
+            ScmsMsg::ProvisioningRequest(mut req) => {
                 Self::verify(out, 1);
-                if self.ra.blocklist.contains(&req.device) {
-                    // The passive half of revocation: the RA simply stops issuing.
-                    self.ra.refused += 1;
+                // The checks IEEE 1609.2.1 has the RA make before it spends anything: the
+                // enrolment certificate the request is signed with was issued by the ECA,
+                // is inside its validity, and is not blocklisted. A refusal is an answer,
+                // not silence, so the device knows whether to stop or to renew.
+                let refusal = if self.ra.blocklist.contains(&req.device) {
+                    Some(Refusal::Blocklisted)
+                } else {
+                    match req.enrolment {
+                        Some(ec) if self.issued_enrolment.contains(&req.device) => {
+                            (!ec.valid_at(at)).then_some(Refusal::EnrolmentExpired)
+                        }
+                        _ => Some(Refusal::UnknownEnrolment),
+                    }
+                };
+                if let Some(reason) = refusal {
+                    if reason == Refusal::Blocklisted {
+                        // The passive half of revocation: the RA stops issuing.
+                        self.ra.refused += 1;
+                    } else {
+                        self.ra.refused_enrolment += 1;
+                    }
+                    Self::sign(out, 1);
+                    out.send(
+                        n.lop,
+                        ScmsMsg::ProvisioningRefused {
+                            device: req.device,
+                            reason,
+                        },
+                        "provisioning-refused",
+                        self.sizes.refusal(),
+                        Transport::BackendNet,
+                        flow,
+                        run,
+                    );
                     return Ok(());
                 }
+                // The policy the RA serves is the policy it enforces.
+                let policy = self.gov.lpf.policy;
+                let jmax = req.jmax.min(policy.certs_per_period.max(1));
+                let periods = req.periods.min(policy.max_periods_ahead.max(1));
+                if jmax != req.jmax || periods != req.periods {
+                    self.ra.clipped += 1;
+                    req.jmax = jmax;
+                    req.periods = periods;
+                }
+                self.ra.accepted += 1;
                 self.ra.enrolled.insert(req.device);
                 let request_hash = request_hash(&req);
                 self.ra.requests.insert(
@@ -1129,10 +1513,12 @@ impl ScmsState {
                 });
 
                 out.send(
-                    req.device,
+                    n.lop,
                     ScmsMsg::ProvisioningAck {
                         device: req.device,
                         request_hash,
+                        periods: req.periods,
+                        jmax: req.jmax,
                     },
                     "provisioning-ack",
                     self.sizes.provisioning_ack(),
@@ -1158,7 +1544,39 @@ impl ScmsState {
                     );
                 }
             }
-            ScmsMsg::ProvisioningAck { device, .. } => {
+            ScmsMsg::ProvisioningAck {
+                device,
+                request_hash,
+                periods,
+                jmax,
+            } if to == n.lop => {
+                self.lop.downstream += 1;
+                out.send(
+                    device,
+                    ScmsMsg::ProvisioningAck {
+                        device,
+                        request_hash,
+                        periods,
+                        jmax,
+                    },
+                    "provisioning-ack-proxied",
+                    self.sizes.provisioning_ack(),
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::ProvisioningAck {
+                device, periods, ..
+            } => {
+                // What the RA accepted, which may be less than was asked.
+                if let Some(p) = self
+                    .devices
+                    .get_mut(&device)
+                    .and_then(|d| d.provisioning.as_mut())
+                {
+                    p.periods = periods;
+                }
                 // The device now waits for the first batch time and polls the repository.
                 out.start_timer(
                     self.params.first_batch_delay,
@@ -1220,6 +1638,7 @@ impl ScmsState {
                     }
                 }
                 let count = u32::try_from(values.len()).unwrap_or(u32::MAX);
+                self.la[idx].plv_issued += u64::from(count);
                 out.send(
                     n.ra,
                     ScmsMsg::PreLinkageResponse(Box::new(PreLinkageBatch {
@@ -1311,7 +1730,7 @@ impl ScmsState {
                                 items: Box::new(items),
                             },
                             "cert-request",
-                            self.sizes.cert_request(count),
+                            self.sizes.cert_request_for(count),
                             Transport::BackendNet,
                             job.flow,
                             job.run,
@@ -1327,6 +1746,11 @@ impl ScmsState {
                 // Per certificate: two ECIES decryptions of the pre-linkage values, one
                 // ECQV issuance, one ECIES encryption and one signature (05-protocols §3.2).
                 Self::scalar_mults(out, 4 * count);
+                // Under a hybrid scheme, one more decryption per certificate (the device's
+                // post-quantum key); `sign` adds the post-quantum signature on each.
+                if out.is_hybrid() {
+                    Self::scalar_mults(out, count);
+                }
                 Self::sign(out, count);
                 let mut credentials = Vec::new();
                 for item in items.into_iter() {
@@ -1414,11 +1838,23 @@ impl ScmsState {
             }
             ScmsMsg::BatchDownloadRequest { device, i } if to == device => {
                 out.send(
-                    n.ra,
+                    n.lop,
                     ScmsMsg::BatchDownloadRequest { device, i },
                     "batch-download-request",
                     self.sizes.batch_download_request(),
                     Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::BatchDownloadRequest { device, i } if to == n.lop => {
+                self.lop.upstream += 1;
+                out.send(
+                    n.ra,
+                    ScmsMsg::BatchDownloadRequest { device, i },
+                    "batch-download-request-proxied",
+                    self.sizes.batch_download_request(),
+                    Transport::BackendNet,
                     flow,
                     run,
                 );
@@ -1432,14 +1868,38 @@ impl ScmsState {
                     .cloned()
                     .unwrap_or_default();
                 let count = u32::try_from(credentials.len()).unwrap_or(u32::MAX);
+                // The batch file travels back through the proxy, encrypted end to end: each
+                // certificate to the device's butterfly encryption key, which neither the
+                // RA nor the LOP holds.
                 out.send(
-                    device,
+                    n.lop,
                     ScmsMsg::BatchDownload {
                         device,
                         i,
                         credentials: Box::new(credentials),
                     },
                     "batch-download",
+                    self.sizes.batch_download(count),
+                    Transport::BackendNet,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::BatchDownload {
+                device,
+                i,
+                credentials,
+            } if to == n.lop => {
+                self.lop.downstream += 1;
+                let count = u32::try_from(credentials.len()).unwrap_or(u32::MAX);
+                out.send(
+                    device,
+                    ScmsMsg::BatchDownload {
+                        device,
+                        i,
+                        credentials,
+                    },
+                    "batch-download-proxied",
                     self.sizes.batch_download(count),
                     Transport::CellularUu,
                     flow,
@@ -1471,6 +1931,9 @@ impl ScmsState {
                 // One ECQV reconstruction per certificate on download (05-protocols §3.2).
                 let count = u32::try_from(credentials.len()).unwrap_or(u32::MAX);
                 out.compute(OpDescriptor::new(ECQV, PrimitiveOpKind::Verify, count));
+                // Under a hybrid scheme each certificate's post-quantum half is explicit:
+                // the device checks the PCA's post-quantum signature on every one.
+                out.charge_pq(PrimitiveOpKind::Verify, count);
                 for cred in credentials.into_iter() {
                     dev.credentials.insert((cred.i, cred.j), cred);
                 }
@@ -1493,7 +1956,7 @@ impl ScmsState {
                     out.stage_at(StageId::Installed, device, None, flow, run);
                 } else if let Some(i_next) = next_i {
                     out.send(
-                        n.ra,
+                        n.lop,
                         ScmsMsg::BatchDownloadRequest { device, i: i_next },
                         "batch-download-request",
                         self.sizes.batch_download_request(),
@@ -1521,6 +1984,7 @@ impl ScmsState {
                 );
             }
             ScmsMsg::Report(r) if to == n.lop => {
+                self.lop.upstream += 1;
                 out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
                 out.send(
                     n.ra,
@@ -1580,6 +2044,7 @@ impl ScmsState {
                 );
             }
             ScmsMsg::PcaLookupRequest { i, lv } => {
+                self.pca.lookups += 1;
                 let found = self.pca.issued.get(&(i, *lv.as_bytes())).copied();
                 out.send(
                     n.ma,
@@ -1701,6 +2166,17 @@ impl ScmsState {
                 let rec = self.ra.requests.get(&request_hash).copied();
                 if let Some(r) = rec {
                     self.ra.blocklist.insert(r.device);
+                    // The ECA must not issue the blocklisted device a successor either,
+                    // or re-enrolment would undo the revocation.
+                    out.send(
+                        n.eca,
+                        ScmsMsg::BlocklistNotice { device: r.device },
+                        "blocklist-notice",
+                        self.sizes.blocklist_notice(),
+                        Transport::BackendNet,
+                        flow,
+                        run,
+                    );
                 }
                 out.stage_at(StageId::Blocklisted, to, None, flow, run);
                 out.send(
@@ -1752,6 +2228,7 @@ impl ScmsState {
                 Self::hashes(out, i);
                 let seed = linkage::linkage_seed_at(st.la_id, ls0, i);
                 let la_id = st.la_id;
+                self.la[la.idx()].seeds_released += 1;
                 out.send(
                     n.ma,
                     ScmsMsg::SeedResponse { la, la_id, seed, i },
@@ -1833,6 +2310,8 @@ impl ScmsState {
                     }
                     return Ok(());
                 }
+                self.crlg.signature = self.gov.sign_as("crlg", &crl_digest(&self.crlg.entries));
+                self.crlg.versions += 1;
                 // The store first, then the broadcast path, so that two links with the
                 // same parameters stamp `published` before `first_rsu_broadcast`.
                 out.send(
@@ -1857,6 +2336,8 @@ impl ScmsState {
             ScmsMsg::CrlPublishTimer => {
                 self.crlg.publish_armed = false;
                 Self::sign(out, 1);
+                self.crlg.signature = self.gov.sign_as("crlg", &crl_digest(&self.crlg.entries));
+                self.crlg.versions += 1;
                 let entries = u32::try_from(self.crlg.entries.len()).unwrap_or(u32::MAX);
                 out.send(
                     n.crl_store,
@@ -1880,11 +2361,16 @@ impl ScmsState {
             ScmsMsg::CrlPublish { entries } => {
                 let list = self.crlg.entries.clone();
                 let size = self.sizes.crl(entries).bytes();
+                let signature = self.crlg.signature;
                 if to == n.crl_store {
                     self.crl_store.entries = list;
+                    self.crl_store.signature = signature;
+                    self.crl_store.versions += 1;
                     out.stage_at(StageId::Published, to, Some(size), flow, run);
                 } else {
                     self.crl_broadcast.entries = list;
+                    self.crl_broadcast.signature = signature;
+                    self.crl_broadcast.versions += 1;
                     out.stage_at(StageId::FirstRsuBroadcast, to, Some(size), flow, run);
                 }
             }
@@ -1939,14 +2425,30 @@ impl ScmsState {
                 // delivered it. The two paths carry the same signed artefact, and reading
                 // the store's copy on the broadcast path would make an RSU-only vehicle
                 // silently enforce a CRL it never heard.
-                let list = if from == n.crl_broadcast {
-                    self.crl_broadcast.entries.clone()
+                let (list, signature) = if from == n.crl_broadcast {
+                    (
+                        self.crl_broadcast.entries.clone(),
+                        self.crl_broadcast.signature,
+                    )
                 } else {
-                    self.crl_store.entries.clone()
+                    (self.crl_store.entries.clone(), self.crl_store.signature)
                 };
                 let Some(dev) = self.devices.get_mut(&device) else {
                     return Err(ProtoError::NoEntity { node: device });
                 };
+                // The device checks the CRL Generator's signature against the chain it
+                // was given at bootstrap. An empty list has nothing to trust; a list that
+                // does not verify is discarded whole.
+                if !list.is_empty() {
+                    let digest = crl_digest(&list);
+                    let ok = signature.is_some_and(|(signer, sig)| {
+                        dev.trust.verify_signed(signer, &digest, &sig)
+                    });
+                    if !ok {
+                        dev.crls_rejected += 1;
+                        return Ok(());
+                    }
+                }
                 let periods: u32 = dev
                     .credentials
                     .keys()
@@ -1970,6 +2472,224 @@ impl ScmsState {
                 out.stage_at(StageId::Processed, device, None, flow, run);
                 out.stage_at(StageId::Enforced, device, None, flow, run);
                 let _ = at;
+            }
+
+            // ---------------- local policy and chain files ----------------
+            ScmsMsg::FileRequest { device, lpf, lccf } if to == n.lop => {
+                self.lop.upstream += 1;
+                out.send(
+                    n.ra,
+                    ScmsMsg::FileRequest { device, lpf, lccf },
+                    "file-request-proxied",
+                    self.sizes.file_request(),
+                    Transport::BackendNet,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::FileRequest { device, lpf, lccf } => {
+                // The RA serves what it has signed: the Local Policy File and the Local
+                // Certificate Chain File, each only if newer than the device's.
+                let newer_lpf = lpf
+                    .is_none_or(|v| v < self.gov.lpf.version)
+                    .then(|| Box::new(self.gov.lpf.clone()));
+                let newer_lccf = lccf
+                    .is_none_or(|v| v < self.gov.lccf.version)
+                    .then(|| Box::new(self.gov.lccf.clone()));
+                self.ra.files_served += u32::from(newer_lpf.is_some()) + u32::from(newer_lccf.is_some());
+                Self::sign(out, 1);
+                let size = self.sizes.file_response(
+                    newer_lpf.is_some(),
+                    newer_lccf
+                        .as_ref()
+                        .map(|c| u32::try_from(c.certs.len()).unwrap_or(0)),
+                );
+                out.send(
+                    n.lop,
+                    ScmsMsg::FileResponse {
+                        device,
+                        lpf: newer_lpf,
+                        lccf: newer_lccf,
+                    },
+                    "file-response",
+                    size,
+                    Transport::BackendNet,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::FileResponse { device, lpf, lccf } if to == n.lop => {
+                self.lop.downstream += 1;
+                let size = self.sizes.file_response(
+                    lpf.is_some(),
+                    lccf.as_ref()
+                        .map(|c| u32::try_from(c.certs.len()).unwrap_or(0)),
+                );
+                out.send(
+                    device,
+                    ScmsMsg::FileResponse { device, lpf, lccf },
+                    "file-response-proxied",
+                    size,
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::FileResponse { device, lpf, lccf } => {
+                let Some(dev) = self.devices.get_mut(&device) else {
+                    return Err(ProtoError::NoEntity { node: device });
+                };
+                let before = dev.trust.verifications;
+                if let Some(chain) = lccf {
+                    let _ = dev.trust.install_chain(&chain, at);
+                }
+                if let Some(policy) = lpf {
+                    let _ = dev.trust.install_policy(&policy);
+                }
+                let checks = dev.trust.verifications.saturating_sub(before);
+                Self::verify(out, checks);
+            }
+            ScmsMsg::ProvisioningRefused { device, reason } if to == n.lop => {
+                self.lop.downstream += 1;
+                out.send(
+                    device,
+                    ScmsMsg::ProvisioningRefused { device, reason },
+                    "provisioning-refused-proxied",
+                    self.sizes.refusal(),
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::ProvisioningRefused { device, reason } => {
+                Self::verify(out, 1);
+                if let Some(dev) = self.devices.get_mut(&device) {
+                    dev.refused = Some(reason);
+                    dev.topup_refused = Some(reason);
+                    dev.refusals += 1;
+                    dev.provisioning = None;
+                }
+            }
+
+            // ---------------- successor enrolment ----------------
+            ScmsMsg::SuccessorEnrolRequest { device, current } if to == device => {
+                // A new key pair, and the request signed with the certificate it replaces.
+                Self::scalar_mults(out, 1);
+                Self::sign(out, 1);
+                out.stage_at(StageId::Requested, device, None, flow, run);
+                out.send(
+                    n.eca,
+                    ScmsMsg::SuccessorEnrolRequest { device, current },
+                    "successor-enrol-request",
+                    self.sizes.successor_request(),
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::SuccessorEnrolRequest { device, current } => {
+                Self::verify(out, 1);
+                // The ECA renews only a certificate it issued, that is still valid — an
+                // expired one means the device goes back to its bootstrap channel — and
+                // that the RA has not blocklisted.
+                let reason = if self.eca.blocklist.contains(&device) {
+                    Some(Refusal::Blocklisted)
+                } else if !self.issued_enrolment.contains(&device) {
+                    Some(Refusal::UnknownEnrolment)
+                } else if !current.valid_at(at) {
+                    Some(Refusal::EnrolmentExpired)
+                } else {
+                    None
+                };
+                Self::sign(out, 1);
+                if let Some(reason) = reason {
+                    self.eca.refused += 1;
+                    out.send(
+                        device,
+                        ScmsMsg::EnrolRefused { device, reason },
+                        "enrol-refused",
+                        self.sizes.refusal(),
+                        Transport::CellularUu,
+                        flow,
+                        run,
+                    );
+                    return Ok(());
+                }
+                self.eca.issued += 1;
+                self.eca.successors += 1;
+                let cert = EnrolmentCert {
+                    generation: current.generation + 1,
+                    valid_from: at,
+                    valid_until: self.params.enrolment_lifetime.after(at),
+                };
+                out.stage_at(StageId::Certified, to, None, flow, run);
+                out.send(
+                    device,
+                    ScmsMsg::SuccessorEnrolResponse { device, cert },
+                    "successor-enrol-response",
+                    self.sizes.enrol_response(),
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::SuccessorEnrolResponse { device, cert } => {
+                Self::verify(out, 1);
+                if let Some(dev) = self.devices.get_mut(&device) {
+                    dev.enrolment = Some(cert);
+                    dev.reenrolments += 1;
+                    dev.refused = None;
+                }
+                out.stage_at(StageId::Installed, device, None, flow, run);
+            }
+            ScmsMsg::EnrolRefused { device, reason } => {
+                Self::verify(out, 1);
+                if let Some(dev) = self.devices.get_mut(&device) {
+                    dev.refused = Some(reason);
+                    dev.reenrol_refused = Some(reason);
+                    dev.refusals += 1;
+                }
+            }
+            ScmsMsg::BlocklistNotice { device } => {
+                Self::verify(out, 1);
+                self.eca.blocklist.insert(device);
+            }
+
+            // ---------------- policy ----------------
+            ScmsMsg::PolicyUpdate(policy) if to == self.gov.nodes.manager => {
+                self.gov.counters.manager_decisions += 1;
+                Self::sign(out, 1);
+                out.stage_at(StageId::Decision, to, None, flow, run);
+                out.send(
+                    self.gov.nodes.pg,
+                    ScmsMsg::PolicyUpdate(policy),
+                    "policy-update",
+                    self.sizes.policy_file(),
+                    Transport::BackendNet,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::PolicyUpdate(policy) if to == self.gov.nodes.pg => {
+                Self::verify(out, 1);
+                Self::sign(out, 2);
+                self.gov.sign_global(*policy);
+                out.stage_at(StageId::Issued, to, None, flow, run);
+                out.send(
+                    n.ra,
+                    ScmsMsg::PolicyUpdate(policy),
+                    "policy-publish",
+                    self.sizes.policy_file(),
+                    Transport::BackendNet,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::PolicyUpdate(_) => {
+                Self::verify(out, 1);
+                Self::sign(out, 2);
+                self.gov.sign_local();
+                out.stage_at(StageId::Published, to, None, flow, run);
             }
         }
         Ok(())
@@ -2022,4 +2742,18 @@ pub fn credential_lv(dev: &DeviceState, i: u32, j: u32) -> Option<LinkageValue> 
 /// The size, in bytes, of a CRL with `entries` entries under this deployment's size model.
 pub fn crl_bytes(sizes: &ScmsSizes, entries: u32) -> WireSize {
     sizes.crl(entries)
+}
+
+/// The links the governance entities need: the SCMS Manager to the Policy Generator, the
+/// Policy Generator to the Registration Authority it publishes to.
+fn governance_links(n: &ScmsNodes, gov: &Governance) -> Vec<(NodeId, NodeId)> {
+    vec![(gov.nodes.manager, gov.nodes.pg), (gov.nodes.pg, n.ra)]
+}
+
+/// Hosts the two governance entities that exchange messages during a run. The Root CA,
+/// the electors and the ICA are offline and have no queue.
+fn host_governance(kernel: &mut Kernel<ScmsMsg>, gov: &Governance, p: &ScmsParams) {
+    let spec = crate::service::ServiceModelSpec::new(1, p.backend_overhead);
+    kernel.host(gov.nodes.manager, &spec, p.backend_profile);
+    kernel.host(gov.nodes.pg, &spec, p.backend_profile);
 }

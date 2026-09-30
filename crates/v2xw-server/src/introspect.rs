@@ -132,10 +132,9 @@ pub trait Introspect: Engine {
     /// `-32008` when the export cannot be performed, with the stage it failed at.
     fn export(&mut self, query: &Query) -> Result<Value>;
 
-    /// The backend entity `inspect.entity` names, or `None` if the run has no backend.
-    ///
-    /// This build's kernel schedules no `Event::NetDeliver`, so no run has one yet; the
-    /// default says so rather than each engine repeating it.
+    /// The backend entity `inspect.entity` names, or `None` if the run has no backend or
+    /// no such entity. A live run answers from its `backend.state` snapshots
+    /// ([`entity_answer`]); the fixture and a replay have none.
     fn entity_facts(&self, _entity: &str, _t_ns: u64, _limit: usize) -> Option<Value> {
         None
     }
@@ -252,7 +251,6 @@ pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<V
             t_ns,
             limit,
         } => {
-            const ROLES: [&str; 5] = ["ra", "pca", "ma", "crlg", "ea"];
             let role = entity.split(':').next().unwrap_or(entity);
             if !ROLES.contains(&role) {
                 return Err(ServerError::UnknownId {
@@ -264,9 +262,11 @@ pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<V
             match engine.entity_facts(entity, at, *limit) {
                 Some(facts) => Ok(facts),
                 None => Err(ServerError::NotSupportedHere(format!(
-                    "`{entity}` is a backend role and this run has no backend: the kernel \
-                     schedules no `NetDeliver` or `FlowTimer` event, so there is nothing \
-                     at t={at} to report. The seam exists; the model does not."
+                    "`{entity}` is not in this run's backend at t={at}: either the run \
+                     has no credential system (set security.protocol to \
+                     protocol/scms/camp or protocol/etsi/ts102941) and so publishes no \
+                     `backend.state`, or its credential system has no such entity (the \
+                     SCMS has no EA, the CCMS no RA)."
                 ))),
             }
         }
@@ -611,4 +611,136 @@ pub fn telemetry_json(row: NodeTelemetry) -> Value {
         );
     }
     Value::Object(out)
+}
+
+/// Every role id `inspect.entity` answers for: `backend` (the whole diagram), the SCMS's
+/// and the CCMS's authorities, the roadside units and the pooled devices.
+pub const ROLES: [&str; 24] = [
+    "backend",
+    "manager",
+    "pg",
+    "electors",
+    "root",
+    "ica",
+    "dcm",
+    "eca",
+    "lop",
+    "ra",
+    "la1",
+    "la2",
+    "pca",
+    "ma",
+    "crlg",
+    "crl-store",
+    "crl-broadcast",
+    "tlm",
+    "cpoc",
+    "rca",
+    "ea",
+    "aa",
+    "rsu",
+    "ee",
+];
+
+/// `inspect.entity`'s answer from one `backend.state` snapshot (`v2xw_proto::view`):
+/// `backend` is the whole view; a role id is that entity, the edges it is on and its recent
+/// messages. `None` when the snapshot has no such entity (a CCMS run asked for the RA).
+#[must_use]
+pub fn entity_answer(
+    entity: &str,
+    t: u64,
+    view: &Value,
+    limit: usize,
+    provenance: Vec<Value>,
+) -> Option<Value> {
+    if entity == "backend" {
+        return Some(json!({
+            "entity": "backend",
+            "t_ns": t,
+            "role": view["system"],
+            "state": view,
+            "provenance": provenance,
+        }));
+    }
+    let e = view["entities"]
+        .as_array()?
+        .iter()
+        .find(|e| e["id"].as_str() == Some(entity))?;
+    let touches = |x: &&Value| x["from"].as_str() == Some(entity) || x["to"].as_str() == Some(entity);
+    let flows: Vec<Value> = view["edges"]
+        .as_array()
+        .map(|a| a.iter().filter(touches).take(limit).cloned().collect())
+        .unwrap_or_default();
+    let recent: Vec<Value> = view["recent"]
+        .as_array()
+        .map(|a| a.iter().rev().filter(touches).take(limit).cloned().collect())
+        .unwrap_or_default();
+    let mut out = json!({
+        "entity": entity,
+        "t_ns": t,
+        "role": e["name"],
+        "state": e["state"],
+        "online": e["online"],
+        "traffic": e["traffic"],
+        "ops": e["ops"],
+        "flows": flows,
+        "recent": recent,
+        "provenance": provenance,
+    });
+    if let Some(n) = e["node"].as_u64() {
+        out["node"] = json!(n);
+    }
+    if e["queue"].is_object() {
+        out["queue"] = e["queue"].clone();
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod entity_tests {
+    use super::*;
+
+    fn view() -> Value {
+        json!({
+            "system": "scms",
+            "t": 3_000_000_000u64,
+            "entities": [
+                {"id": "ra", "name": "Registration Authority", "online": true, "node": 7,
+                 "state": {"requests": 4}, "traffic": {}, "ops": {},
+                 "queue": {"depth": 1}},
+                {"id": "pca", "name": "Pseudonym CA", "online": true, "node": null,
+                 "state": {"certs_issued": 12}, "traffic": {}, "ops": {}, "queue": null},
+            ],
+            "edges": [
+                {"from": "lop", "to": "ra", "messages": 3},
+                {"from": "ra", "to": "pca", "messages": 2},
+                {"from": "la1", "to": "la2", "messages": 1},
+            ],
+            "recent": [
+                {"from": "ra", "to": "pca", "step": "a"},
+                {"from": "la1", "to": "la2", "step": "b"},
+            ],
+        })
+    }
+
+    #[test]
+    fn an_entity_answer_carries_its_state_and_only_its_own_flows() {
+        let v = view();
+        let ra = entity_answer("ra", 3, &v, 10, Vec::new()).expect("ra is in the view");
+        assert_eq!(ra["state"]["requests"], 4);
+        assert_eq!(ra["node"], 7);
+        assert_eq!(ra["queue"]["depth"], 1);
+        assert_eq!(ra["flows"].as_array().map(Vec::len), Some(2));
+        assert_eq!(ra["recent"].as_array().map(Vec::len), Some(1));
+        let pca = entity_answer("pca", 3, &v, 10, Vec::new()).expect("pca");
+        assert!(pca.get("node").is_none() && pca.get("queue").is_none());
+        // The whole diagram, and an entity this system does not have.
+        let all = entity_answer("backend", 3, &v, 10, Vec::new()).expect("backend");
+        assert_eq!(all["state"]["entities"].as_array().map(Vec::len), Some(2));
+        assert!(entity_answer("ea", 3, &v, 10, Vec::new()).is_none());
+        // Every role the views publish is one the method accepts.
+        for id in ["ra", "pca", "backend", "ea", "aa", "tlm", "cpoc", "rsu", "ee"] {
+            assert!(ROLES.contains(&id), "{id}");
+        }
+    }
 }

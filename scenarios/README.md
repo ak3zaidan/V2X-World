@@ -27,6 +27,8 @@ document rather than like a config: each states at the top what it measures, wha
 | [`phase1-grid.yaml`](phase1-grid.yaml) | the same on a procedural Midtown-shaped grid, so determinism cannot be blamed on the extract |
 | [`phase2-manhattan.yaml`](phase2-manhattan.yaml) | the Phase 2 *path*: a liar, a detector, a report, a roadside unit, the SCMS backend, a revocation |
 | [`portland-downtown.yaml`](portland-downtown.yaml) | a second city: downtown Portland, Oregon, with its own speed limits and its slow green wave — the file to copy for your own city (`worlds/fetch.sh`, then `world_report --baseline`) |
+| [`credential-lifecycle.yaml`](credential-lifecycle.yaml) | every US SCMS entity in the loop with the vehicles on a small grid — bootstrap, batches and top-ups through the LOP, renewal, reports, revocation, CRL — with the calendar compressed to five minutes; open the page's Backend view to watch it |
+| [`ccms-lifecycle.yaml`](ccms-lifecycle.yaml) | the European counterpart: CAMs over GeoNetworking, the ECTL and CA-CRL from the Distribution Centre, butterfly tickets the AA cannot link to the enrolment, TS 103 759 reports and passive revocation at the EA |
 | [`scale/`](scale/) | the wall-clock ladder, 2 to 10,000 vehicles, with what the bulk spawn costs in realism stated in `scale/base.yaml` |
 
 ## Running one

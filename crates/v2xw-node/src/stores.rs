@@ -1164,6 +1164,31 @@ mod tests {
         assert_eq!(s.credentials()[1].state, CredState::Active);
     }
 
+    /// A pseudonym past its validity cannot sign, and a node whose pool has run out does
+    /// not fall back to one: it has no active credential until a top-up installs one
+    /// (IEEE 1609.2 §5.2.3.2.2: a certificate is not used outside its validity period).
+    #[test]
+    fn an_expired_certificate_cannot_sign() {
+        let mut s = CertStore::new();
+        s.insert(cred(20, 0, 0, 100 * NS_PER_S));
+        let crl = CrlGate::new(10);
+        s.sweep(10 * NS_PER_S, &crl);
+        let _ = s.rotate(10 * NS_PER_S);
+        assert!(s.active().is_some());
+        // The instant the window closes, the sweep takes it out of use.
+        s.sweep(100 * NS_PER_S, &crl);
+        assert!(s.active().is_none(), "an expired pseudonym is still signing");
+        // A due change finds nothing usable, and the expired one is not put back.
+        assert!(s.rotate(100 * NS_PER_S).is_some());
+        assert!(s.active().is_none());
+        assert_eq!(s.active_count(100 * NS_PER_S), 0);
+        // A top-up's certificate for the new period makes the node able to sign again.
+        s.insert(cred(21, 1, 100 * NS_PER_S, 200 * NS_PER_S));
+        s.sweep(100 * NS_PER_S, &crl);
+        let _ = s.rotate(100 * NS_PER_S);
+        assert_eq!(s.active().map(|c| c.valid_from), Some(100 * NS_PER_S));
+    }
+
     // ---------------------------------------------------------------------------------
     // Neighbour ageing
     // ---------------------------------------------------------------------------------

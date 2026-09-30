@@ -1,0 +1,73 @@
+/* The Backend view (components/BackendView.tsx). Uses the page's tokens only, so both themes work. */
+
+.backend-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.backend-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.backend-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.backend-sub { color: var(--text-dim); font-size: 12px; }
+
+.backend-empty { padding: 32px 16px; max-width: 640px; }
+.backend-empty code { font-family: var(--mono); }
+
+.backend-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+@media (max-width: 900px) {
+  .backend-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 40%; }
+}
+
+.backend-diagram { overflow: auto; padding: 12px 16px; }
+.backend-legend { max-width: 720px; font-size: 12px; margin-top: 8px; }
+
+.backend-colhead { fill: var(--text-faint); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+.backend-box { cursor: pointer; }
+.backend-box rect:first-of-type { fill: var(--bg-panel); stroke: var(--border-strong); stroke-width: 1; }
+.backend-box:hover rect:first-of-type { stroke: var(--accent-dim); }
+.backend-box.on rect:first-of-type { stroke: var(--accent); stroke-width: 2; }
+.backend-box.offline rect:first-of-type { stroke-dasharray: 4 3; }
+.backend-name { fill: var(--text); font-size: 12px; font-weight: 600; }
+.backend-count { fill: var(--text-dim); font-size: 11px; }
+.backend-count-v { fill: var(--text); font-family: var(--mono); }
+.backend-queue { fill: var(--warn); }
+.backend-queue-t { fill: #000; font-size: 10px; font-family: var(--mono); }
+
+.backend-edge { fill: none; stroke: var(--border-strong); opacity: 0.55; cursor: pointer; }
+.backend-edge.live { stroke: var(--accent); opacity: 0.9; }
+.backend-edge.on { stroke: var(--ok); opacity: 1; }
+.backend-edge.v2x-air { stroke-dasharray: 5 4; }
+.backend-arrowhead { fill: var(--text-faint); }
+
+.backend-side {
+  overflow: auto;
+  padding: 12px 16px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-panel);
+  font-size: 12px;
+}
+.backend-side h3 { margin: 0 0 4px; font-size: 14px; }
+.backend-side h4 { margin: 14px 0 4px; font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.04em; }
+.backend-side .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+.backend-side .kv dt { color: var(--text-dim); }
+.backend-side .kv dd { margin: 0; font-family: var(--mono); text-align: right; }
+.backend-side .warn { color: var(--warn); }
+.backend-links, .backend-recent { margin: 0; padding-left: 16px; }
+.backend-recent li { font-family: var(--mono); font-size: 11px; }

@@ -128,9 +128,9 @@ fn uplink_bytes(run: &EtsiRun, flow: FlowId, from: NodeId) -> u64 {
 /// seven the module documents.
 #[test]
 fn every_deferred_flow_is_declared_once() {
-    assert_eq!(DEFERRED_FLOWS.len(), 5);
+    assert_eq!(DEFERRED_FLOWS.len(), 7);
     let all = all_flows();
-    assert_eq!(all.len(), 7, "two original plus five deferred");
+    assert_eq!(all.len(), 9, "two original plus seven deferred");
     let mut ids: Vec<&str> = all.iter().map(|f| f.id.as_str()).collect();
     let before = ids.len();
     ids.sort_unstable();
@@ -336,6 +336,81 @@ fn a_trust_list_reaches_the_station_and_is_installed() {
     assert!(run.kernel.stages.at(flow, StageId::Issued).is_some());
 }
 
+/// The Distribution Centre: the TLM and the Root CA each sign a list once, every station
+/// fetches it, and a station that already holds it is answered "current" without the list.
+#[test]
+fn a_list_is_signed_once_and_every_station_fetches_it() {
+    let mut run = deployment();
+    let other = NodeId::new(2_050);
+    run.add_station(other);
+    // Before anything is issued the Distribution Centre has nothing to send.
+    let early = run.fetch_trust_lists(STATION, 0);
+    run.run().expect("runs");
+    assert_eq!(run.installed_ctl_of(STATION), None);
+    assert_eq!(run.dc_not_modified, 1);
+    assert!(run.kernel.stages.at(early, StageId::Processed).is_some());
+
+    let (ectl, crl) = run.issue_trust_lists(run.kernel.now());
+    run.run().expect("runs");
+    let declared = |id: FlowId| {
+        DEFERRED_FLOWS
+            .iter()
+            .find(|f| f.id == id)
+            .map(|f| f.stages)
+            .expect("declared")
+    };
+    for r in [ectl, crl] {
+        assert_eq!(run.kernel.stages.stages(r), declared(FlowId::EtsiTrustIssue));
+    }
+    let signs_before = run.kernel.steps.iter().filter(|s| s.flow == FlowId::EtsiTrustIssue).count();
+    let mut fetches = Vec::new();
+    for station in [STATION, other] {
+        fetches.push(run.fetch_trust_lists(station, run.kernel.now()));
+    }
+    run.run().expect("runs");
+    for (station, f) in [STATION, other].into_iter().zip(&fetches) {
+        assert_eq!(run.installed_ctl_of(station), Some(1));
+        assert_eq!(run.installed_ca_crl_seq.get(&station), Some(&1));
+        assert_eq!(run.kernel.stages.stages(*f), declared(FlowId::EtsiTrustFetch));
+        assert!(run.kernel.stages.is_ordered(*f));
+    }
+    // Two stations served, and the TLM and the Root CA signed nothing more for them.
+    assert_eq!(
+        run.kernel.steps.iter().filter(|s| s.flow == FlowId::EtsiTrustIssue).count(),
+        signs_before
+    );
+    let full: Vec<u32> = run
+        .kernel
+        .steps
+        .iter()
+        .filter(|s| s.step == "etsi-trust-list-response")
+        .map(|s| s.bytes)
+        .collect();
+    assert_eq!(full.len(), 2);
+
+    // Fetching again: nothing newer, so the answer is the few-byte "current".
+    let again = run.fetch_trust_lists(STATION, run.kernel.now());
+    run.run().expect("runs");
+    let current: Vec<u32> = run
+        .kernel
+        .steps
+        .iter()
+        .filter(|s| s.run == again && s.step == "etsi-trust-list-current")
+        .map(|s| s.bytes)
+        .collect();
+    assert_eq!(current.len(), 1);
+    assert!(current[0] * 10 < full[0], "{current:?} vs {full:?}");
+    assert_eq!(run.dc_not_modified, 2);
+
+    // A new ECTL and CA-CRL reach a station on its next fetch.
+    run.issue_trust_lists(run.kernel.now());
+    run.run().expect("runs");
+    run.fetch_trust_lists(other, run.kernel.now());
+    run.run().expect("runs");
+    assert_eq!(run.installed_ctl_of(other), Some(2));
+    assert_eq!(run.installed_ctl_of(STATION), Some(1));
+}
+
 /// The CA-only CRL is the protocol's one active list, and it reaches `enforced`.
 #[test]
 fn the_ca_only_crl_is_the_one_active_list() {
@@ -481,4 +556,67 @@ fn every_deferred_step_is_in_the_size_table() {
         seen.len(),
         known.len()
     );
+}
+
+/// TS 102 941's privacy separation: the Authorization Authority certifies tickets for
+/// stations the EA vouches for, and never learns which enrolment credential it vouched
+/// for. The identity crosses the AA sealed for the EA, and what the AA keeps is counts.
+#[test]
+fn the_aa_cannot_learn_the_enrolment_identity() {
+    use v2xw_proto::etsi::{AaState, SealedForEa};
+    const OTHER: NodeId = NodeId::new(2_001);
+    let mut run = deployment();
+    run.add_station(OTHER);
+    // The seal: only the EA opens it.
+    let sealed = SealedForEa::seal(STATION);
+    assert_eq!(sealed.open(run.nodes.aa, run.nodes.ea), None);
+    assert_eq!(sealed.open(run.nodes.ma, run.nodes.ea), None);
+    assert_eq!(sealed.open(run.nodes.ea, run.nodes.ea), Some(STATION));
+
+    run.enrol(STATION);
+    run.enrol(OTHER);
+    run.run().expect("runs");
+    run.blocklist(OTHER);
+    run.authorize(STATION);
+    run.authorize(OTHER);
+    run.run().expect("runs");
+    // The EA told them apart — one ticket, one refusal — and the AA holds only counts.
+    // An exhaustive literal: a field naming a station would not compile here.
+    assert_eq!(
+        run.aa,
+        AaState {
+            tickets_issued: 1,
+            validations_requested: 2,
+            refused: 1,
+            butterfly_batches: 0,
+        }
+    );
+    assert_eq!(run.tickets.get(&STATION), Some(&1));
+    assert_eq!(run.tickets.get(&OTHER), None);
+
+    // The butterfly variant hands the AA a sealed handle it passes back unopened.
+    run.authorize_butterfly(STATION);
+    run.run().expect("runs");
+    assert_eq!(run.aa.butterfly_batches, 1);
+    assert!(run.pending_batches.contains_key(&STATION));
+}
+
+/// The CCMS's entities as the Backend view shows them.
+#[test]
+fn the_ccms_view_names_every_authority_and_its_flows() {
+    let mut run = deployment();
+    run.enrol(STATION);
+    run.run().expect("runs");
+    run.authorize(STATION);
+    run.publish_ectl(STATION);
+    run.run().expect("runs");
+    let mut tracker = v2xw_proto::view::EdgeTracker::default();
+    let view = run.backend_view(run.kernel.now(), &mut tracker);
+    let ids: Vec<&str> = view.entities.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, ["tlm", "cpoc", "rca", "ea", "aa", "ma", "ee"]);
+    let edge = |a: &str, b: &str| view.edges.iter().any(|e| e.from == a && e.to == b);
+    assert!(edge("ee", "aa") && edge("aa", "ea") && edge("ea", "aa") && edge("aa", "ee"));
+    assert!(edge("tlm", "cpoc") && edge("cpoc", "ee"));
+    let aa = view.entities.iter().find(|e| e.id == "aa").expect("aa");
+    assert_eq!(aa.state["tickets_issued"], 1);
 }

@@ -65,6 +65,12 @@ impl Default for EtsiNodes {
 }
 
 impl EtsiNodes {
+    /// Whether `node` is one of the authorities rather than a station.
+    #[must_use]
+    pub fn is_authority(&self, node: NodeId) -> bool {
+        [self.ea, self.aa, self.rca, self.tlm, self.cpoc, self.ma].contains(&node)
+    }
+
     /// The backend links the built flows need.
     ///
     /// `(RCA, CPOC)` and `(MA, CPOC)` are here for the trust-list and CA-CRL flows: the
@@ -138,8 +144,15 @@ pub struct EtsiParams {
     pub link_latency: Duration,
     /// Link bandwidth.
     pub link_bandwidth_bps: u64,
-    /// The hardware profile costs are read from.
+    /// The hardware profile the authorities' costs are read from.
     pub profile: &'static str,
+    /// The hardware profile a station's costs are read from: an on-board unit, not a
+    /// server. The Cohda MK6 under Botan, the unit the SCMS kernel charges its devices
+    /// against [R5 §B.3; 06-node-models.md §7.3].
+    pub station_profile: &'static str,
+    /// The hybrid post-quantum scheme every authority and station signs with, `None` for
+    /// ECDSA P-256 alone (`security.signature`; `crate::hybrid`).
+    pub hybrid: Option<crate::hybrid::HybridScheme>,
 }
 
 impl Default for EtsiParams {
@@ -172,8 +185,60 @@ impl Default for EtsiParams {
             link_latency: Duration::from_millis(10),
             link_bandwidth_bps: 1_000_000_000,
             profile: profiles::I9_11950H_WOLFSSL,
+            station_profile: profiles::COHDA_MK6_BOTAN,
+            hybrid: None,
         }
     }
+}
+
+/// A value only the Enrolment Authority may open: the station's enrolment identity as it
+/// travels through the Authorization Authority.
+///
+/// TS 102 941 §6.2.3.3 has the station encrypt its `ecSignature` to the EA inside the
+/// `InnerAtRequest`; the AA forwards it in the `AuthorizationValidationRequest` without
+/// being able to read it, and learns only that the EA vouched for *some* enrolled station.
+/// That is the privacy separation the scheme exists for, and making it a type means the
+/// AA's code cannot get the identity out: [`SealedForEa::open`] refuses every opener but
+/// the EA, and `tests/etsi.rs` checks the refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SealedForEa<T> {
+    inner: T,
+}
+
+impl<T> SealedForEa<T> {
+    /// Seals a value for the EA.
+    pub const fn seal(inner: T) -> SealedForEa<T> {
+        SealedForEa { inner }
+    }
+
+    /// Opens it, if `opener` is the EA.
+    pub fn open(self, opener: NodeId, ea: NodeId) -> Option<T> {
+        (opener == ea).then_some(self.inner)
+    }
+}
+
+/// What the Authorization Authority knows. **What is not here is the point**: no station
+/// identity, no enrolment credential, no map from a ticket to anything the EA holds. The AA
+/// counts what it did; `tests/etsi.rs` asserts that nothing in it names a station.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AaState {
+    /// Authorization tickets it certified.
+    pub tickets_issued: u64,
+    /// Validation requests it sent the EA.
+    pub validations_requested: u32,
+    /// Requests the EA's validation refused.
+    pub refused: u32,
+    /// Butterfly batches it certified.
+    pub butterfly_batches: u32,
+}
+
+/// The two lists a Distribution Centre serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustListKind {
+    /// The European Certificate Trust List, signed by the TLM.
+    Ectl,
+    /// A Root CA's CA-only certificate revocation list.
+    CaCrl,
 }
 
 /// The messages of the two built flows.
@@ -192,21 +257,25 @@ pub enum Ts102941Msg {
         /// Whether the EA issued one.
         granted: bool,
     },
-    /// ITS-S → AA: `InnerAtRequest`.
+    /// ITS-S → AA: `InnerAtRequest`. The enrolment identity is sealed for the EA; the AA
+    /// answers on the connection the request arrived on.
     AuthorizationRequest {
-        /// The station.
-        station: NodeId,
+        /// The `ecSignature`, encrypted to the EA.
+        ec: SealedForEa<NodeId>,
     },
-    /// AA → EA: `AuthorizationValidationRequest`.
+    /// AA → EA: `AuthorizationValidationRequest`: the sealed `ecSignature`, forwarded
+    /// unopened, and the connection the AA will answer on.
     ValidationRequest {
-        /// The station, carried for the simulation's bookkeeping. The AA never learns it:
-        /// it forwards the `ecSignature` encrypted to the EA and holds only the keyTag.
-        station: NodeId,
+        /// The `ecSignature`, still sealed.
+        ec: SealedForEa<NodeId>,
+        /// Where the AA sends the ticket: the network endpoint the request came from, not
+        /// an enrolment identity.
+        reply_to: NodeId,
     },
     /// EA → AA: `AuthorizationValidationResponse`.
     ValidationResponse {
-        /// The station.
-        station: NodeId,
+        /// The endpoint the AA answers on.
+        reply_to: NodeId,
         /// Whether the EA validated the enrolment credential.
         valid: bool,
     },
@@ -239,10 +308,9 @@ pub enum Ts102941Msg {
     },
     /// EA → AA: one `ButterflyCertRequest` per expanded cocoon key, batched.
     ButterflyCertRequest {
-        /// The station the batch belongs to. The AA never learns the enrolment identity;
-        /// this is the simulation's bookkeeping, exactly as on
-        /// [`Ts102941Msg::ValidationRequest`].
-        station: NodeId,
+        /// The station the batch belongs to, sealed: the AA certifies cocoon keys without
+        /// learning whose they are, and hands the handle back to the EA unopened.
+        station: SealedForEa<NodeId>,
         /// The i-period.
         current_i: u32,
         /// How many cocoon keys are in the batch.
@@ -250,8 +318,8 @@ pub enum Ts102941Msg {
     },
     /// AA → EA: the certified tickets, each encrypted to the station.
     ButterflyCertResponse {
-        /// The station.
-        station: NodeId,
+        /// The station, still sealed for the EA.
+        station: SealedForEa<NodeId>,
         /// The i-period.
         current_i: u32,
         /// How many were certified.
@@ -313,6 +381,37 @@ pub enum Ts102941Msg {
         entries: u32,
     },
 
+    /// TLM → DC, or RCA → DC: a newly signed list for the Distribution Centre to serve.
+    /// Injected at the signer, which signs it, and then sent to the CPOC, which serves as
+    /// the Distribution Centre for both lists here.
+    TrustListIssue {
+        /// Which list.
+        kind: TrustListKind,
+        /// Its sequence number (`ctlSequence`, or the CRL's own counter).
+        sequence: u32,
+        /// How many entries it carries.
+        entries: u32,
+    },
+    /// ITS-S → DC: the list versions the station holds (TS 102 941 §6.3.3: a station
+    /// retrieves the ECTL and the CRLs from the Distribution Centre and keeps them current).
+    TrustListRequest {
+        /// The station.
+        station: NodeId,
+        /// The `ctlSequence` it holds, 0 for none.
+        ctl_have: u32,
+        /// The CA-CRL sequence it holds, 0 for none.
+        crl_have: u32,
+    },
+    /// DC → ITS-S: whichever lists are newer than the station's, or neither.
+    TrustListResponse {
+        /// The station.
+        station: NodeId,
+        /// The ECTL, `(sequence, entries)`, if newer than the one held.
+        ctl: Option<(u32, u32)>,
+        /// The CA-CRL, `(sequence, entries)`, if newer than the one held.
+        ca_crl: Option<(u32, u32)>,
+    },
+
     // --- TS 103 759, misbehaviour reporting ----------------------------------------
     /// ITS-S → MA: an `EtsiTs103759Data` report, signed with the AT and encrypted to the
     /// MA.
@@ -363,6 +462,12 @@ pub struct EtsiSizes {
     butterfly_response_bytes: u32,
     ctl_framing_bytes: u32,
     report_payload_bytes: u32,
+    /// Under a hybrid scheme, the post-quantum signature every signed message carries.
+    hybrid_sig_bytes: u32,
+    /// Under a hybrid scheme, a ticket's post-quantum public key.
+    hybrid_pk_bytes: u32,
+    /// Under a hybrid scheme, one post-quantum key as a butterfly request uploads it.
+    hybrid_key_upload_bytes: u32,
 }
 
 impl EtsiSizes {
@@ -380,7 +485,55 @@ impl EtsiSizes {
             butterfly_response_bytes,
             ctl_framing_bytes,
             report_payload_bytes,
+            hybrid_sig_bytes: 0,
+            hybrid_pk_bytes: 0,
+            hybrid_key_upload_bytes: 0,
         }
+    }
+
+    /// The same sizes under a hybrid signature scheme: every certificate carries a
+    /// post-quantum key and its issuer's post-quantum signature, and every signed message
+    /// the post-quantum signature (`crate::hybrid`).
+    #[must_use]
+    pub fn with_hybrid(mut self, scheme: Option<&crate::hybrid::HybridScheme>) -> EtsiSizes {
+        if let Some(h) = scheme {
+            self.certs = self.certs.with_hybrid(h);
+            self.hybrid_sig_bytes = h.sig_bytes;
+            self.hybrid_pk_bytes = h.pk_bytes;
+            self.hybrid_key_upload_bytes = h.key_upload_bytes();
+        }
+        self
+    }
+
+    /// A digest-signed envelope's overhead, plus the post-quantum signature under a
+    /// hybrid scheme.
+    const fn env_digest(&self) -> u32 {
+        ENVELOPE_OVERHEAD_DIGEST_BYTES + self.hybrid_sig_bytes
+    }
+
+    /// A certificate-signed envelope's overhead, excluding the certificate.
+    const fn env_cert(&self) -> u32 {
+        ENVELOPE_OVERHEAD_CERT_BYTES + self.hybrid_sig_bytes
+    }
+
+    /// One signature carried inside a structure.
+    const fn sig_bytes(&self) -> u32 {
+        ECDSA_P256_SIG_COER_BYTES + self.hybrid_sig_bytes
+    }
+
+    /// A butterfly authorization request for a batch of `tickets`: under a hybrid scheme
+    /// there is no post-quantum butterfly, so it carries one post-quantum key per ticket,
+    /// each encrypted to the AA (`crate::hybrid`).
+    pub fn butterfly_authorization_request_for(&self, tickets: u32) -> WireSize {
+        let base = self.butterfly_authorization_request();
+        if self.hybrid_key_upload_bytes == 0 {
+            return base;
+        }
+        WireSize::parameter(
+            base.bytes()
+                .saturating_add(tickets.saturating_mul(self.hybrid_key_upload_bytes)),
+            "etsi_subject_attributes_bytes",
+        )
     }
 
     /// The sizes a whole [`EtsiParams`] implies.
@@ -393,6 +546,7 @@ impl EtsiSizes {
             params.ctl_framing_bytes,
             params.report_payload_bytes,
         )
+        .with_hybrid(params.hybrid.as_ref())
     }
 
     /// The sizes for a deployment, with the other two framing blocks defaulted from
@@ -415,11 +569,11 @@ impl EtsiSizes {
     /// `EnrolmentRequest`: `InnerEcRequest` + POP + outer signature, encrypted to the EA.
     pub const fn enrolment_request(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + HASHED_ID8_BYTES
                 + EC_POINT_COMPRESSED_BYTES
                 + self.subject_attributes_bytes
-                + 2 * ECDSA_P256_SIG_COER_BYTES
+                + 2 * self.sig_bytes()
                 + ECIES_P256_ENCRYPTED_KEY_BYTES,
             "etsi_subject_attributes_bytes",
         )
@@ -428,7 +582,7 @@ impl EtsiSizes {
     /// `EnrolmentResponse`: the EC under the EA's certificate.
     pub const fn enrolment_response(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + self.certs.enrolment.bytes()
                 + ECIES_P256_ENCRYPTED_KEY_BYTES,
@@ -440,30 +594,31 @@ impl EtsiSizes {
     /// `AuthorizationRequest`: `InnerAtRequest` encrypted to the AA.
     pub const fn authorization_request(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + 2 * EC_POINT_COMPRESSED_BYTES
                 + SHA256_BYTES
                 + HASHED_ID8_BYTES
                 + AES128_KEY_BYTES
                 + self.subject_attributes_bytes
                 + self.ec_signature_bytes()
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+                + ECIES_P256_ENCRYPTED_KEY_BYTES
+                + self.hybrid_pk_bytes,
             "etsi_subject_attributes_bytes",
         )
     }
 
     /// The `ecSignature` the AA cannot read: a signed, encrypted `SharedAtRequest` hash.
     const fn ec_signature_bytes(&self) -> u32 {
-        ENVELOPE_OVERHEAD_DIGEST_BYTES
+        self.env_digest()
             + SHA256_BYTES
-            + ECDSA_P256_SIG_COER_BYTES
+            + self.sig_bytes()
             + ECIES_P256_ENCRYPTED_KEY_BYTES
     }
 
     /// `AuthorizationValidationRequest`.
     pub const fn validation_request(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + HASHED_ID8_BYTES
                 + AES128_KEY_BYTES
@@ -477,7 +632,7 @@ impl EtsiSizes {
     /// `AuthorizationValidationResponse`.
     pub const fn validation_response(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + 1
                 + ECIES_P256_ENCRYPTED_KEY_BYTES,
@@ -489,7 +644,7 @@ impl EtsiSizes {
     /// `AuthorizationResponse`: the AT, encrypted to the station.
     pub const fn authorization_response(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + self.certs.pseudonym.bytes()
                 + ECIES_P256_ENCRYPTED_KEY_BYTES,
             "envelope(digest) + authorization ticket + ECIES wrapper",
@@ -506,11 +661,11 @@ impl EtsiSizes {
     /// this one request replaces the standard variant's one request per ticket.
     pub const fn butterfly_authorization_request(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + HASHED_ID8_BYTES
                 + 2 * EC_POINT_COMPRESSED_BYTES
                 + self.subject_attributes_bytes
-                + 2 * ECDSA_P256_SIG_COER_BYTES
+                + 2 * self.sig_bytes()
                 + ECIES_P256_ENCRYPTED_KEY_BYTES,
             "etsi_subject_attributes_bytes",
         )
@@ -519,7 +674,7 @@ impl EtsiSizes {
     /// `ButterflyAuthorizationResponse`: `currentI`, `requestHash` and `nextDlTime`.
     pub const fn butterfly_acknowledgement(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + self.butterfly_response_bytes
                 + ECIES_P256_ENCRYPTED_KEY_BYTES,
@@ -534,7 +689,7 @@ impl EtsiSizes {
     /// byte cost the whole comparison against the standard variant is about.
     pub const fn butterfly_cert_request(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + EC_POINT_COMPRESSED_BYTES
                 + AES128_KEY_BYTES
                 + self.subject_attributes_bytes
@@ -546,7 +701,7 @@ impl EtsiSizes {
     /// One `ButterflyCertResponse`, AA → EA: one authorization ticket, encrypted.
     pub const fn butterfly_cert_response(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + self.certs.pseudonym.bytes()
                 + ECIES_P256_ENCRYPTED_KEY_BYTES,
             "envelope(digest) + authorization ticket + ECIES wrapper",
@@ -557,10 +712,10 @@ impl EtsiSizes {
     /// `ButterflyAtDownloadRequest`: the station asks for its batch.
     pub const fn butterfly_at_download_request(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + HASHED_ID8_BYTES
                 + self.butterfly_response_bytes
-                + ECDSA_P256_SIG_COER_BYTES
+                + self.sig_bytes()
                 + ECIES_P256_ENCRYPTED_KEY_BYTES,
             "etsi_butterfly_response_bytes",
         )
@@ -569,7 +724,7 @@ impl EtsiSizes {
     /// `ButterflyAtDownloadResponse`: `count` tickets, each encrypted to the station.
     pub const fn butterfly_at_download_response(&self, count: u32) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + count * (self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES),
             "envelope(certificate) + EA certificate + count x (authorization ticket +              ECIES wrapper)",
@@ -585,7 +740,7 @@ impl EtsiSizes {
     /// certificate profile rather than with a constant.
     pub const fn ectl(&self, entries: u32) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + self.ctl_framing_bytes
                 + entries * (self.certs.authority.bytes() + HASHED_ID8_BYTES),
@@ -600,12 +755,44 @@ impl EtsiSizes {
     /// authorization tickets is not possible as passive revocation is preferred".
     pub const fn ca_crl(&self, entries: u32) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + self.ctl_framing_bytes
                 + entries * (HASHED_ID8_BYTES + TIME32_BYTES),
             "etsi_ctl_framing_bytes",
         )
+    }
+
+    /// ITS-S → DC: which list versions the station holds. Two list references, each the
+    /// signer's `HashedId8` and the sequence number held; the transport's own request
+    /// framing (an HTTP GET in §6.3.3) is not counted, as no other message counts it.
+    pub const fn trust_list_request(&self) -> WireSize {
+        WireSize::derived(
+            2 * (HASHED_ID8_BYTES + TIME32_BYTES),
+            "2 x (signer HashedId8 + 32-bit sequence held)",
+            STRUCTURE,
+        )
+    }
+
+    /// DC → ITS-S: whichever lists are newer, given their entry counts. `None` for both is
+    /// the "current" answer.
+    pub const fn trust_list_response(&self, ctl: Option<u32>, ca_crl: Option<u32>) -> WireSize {
+        let ctl = match ctl {
+            Some(e) => self.ectl(e).bytes(),
+            None => 0,
+        };
+        let crl = match ca_crl {
+            Some(e) => self.ca_crl(e).bytes(),
+            None => 0,
+        };
+        if ctl + crl == 0 {
+            return WireSize::derived(
+                2 * TIME32_BYTES,
+                "2 x 32-bit sequence: the lists held are current",
+                STRUCTURE,
+            );
+        }
+        WireSize::parameter(ctl + crl, "etsi_ctl_framing_bytes")
     }
 
     /// A TS 103 759 misbehaviour report: the payload, signed with the reporter's ticket
@@ -617,7 +804,7 @@ impl EtsiSizes {
     /// is a policy rather than a size.
     pub const fn misbehaviour_report(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.pseudonym.bytes()
                 + self.report_payload_bytes
                 + ECIES_P256_ENCRYPTED_KEY_BYTES,
@@ -631,7 +818,7 @@ impl EtsiSizes {
     /// vehicle is one identifier on an internal list, not a list broadcast to a fleet.
     pub const fn block_enrolment(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + HASHED_ID8_BYTES
                 + TIME32_BYTES
@@ -644,7 +831,7 @@ impl EtsiSizes {
     /// `count` cocoon keys in one EA -> AA batch.
     pub const fn butterfly_cert_request_batch(&self, count: u32) -> WireSize {
         WireSize::parameter(
-            self.butterfly_cert_request().bytes() * count,
+            (self.butterfly_cert_request().bytes() + self.hybrid_key_upload_bytes) * count,
             "etsi_subject_attributes_bytes",
         )
     }
@@ -698,6 +885,15 @@ impl EtsiSizes {
             ("etsi-ca-crl-distribute", self.ca_crl(1)),
             ("etsi-misbehaviour-report", self.misbehaviour_report()),
             ("etsi-block-enrolment", self.block_enrolment()),
+            ("etsi-trust-list-request", self.trust_list_request()),
+            (
+                "etsi-trust-list-response",
+                self.trust_list_response(Some(1), Some(1)),
+            ),
+            (
+                "etsi-trust-list-current",
+                self.trust_list_response(None, None),
+            ),
         ]
     }
 }
@@ -774,6 +970,16 @@ pub const DEFERRED_FLOWS: &[FlowSpec] = &[
             StageId::Decision,
             StageId::Blocklisted,
         ],
+    },
+    FlowSpec {
+        id: FlowId::EtsiTrustIssue,
+        participants: &["TLM", "RCA", "CPOC"],
+        stages: &[StageId::Issued, StageId::Published],
+    },
+    FlowSpec {
+        id: FlowId::EtsiTrustFetch,
+        participants: &["ITS-S", "CPOC"],
+        stages: &[StageId::Requested, StageId::Downloaded, StageId::Processed],
     },
 ];
 
@@ -996,6 +1202,8 @@ pub struct EtsiRun {
     pub tickets: BTreeMap<NodeId, u32>,
     /// AT requests the EA refused.
     pub refused: u32,
+    /// The Authorization Authority.
+    pub aa: AaState,
     /// Ticket batches the AA has certified and the EA holds, by station: the i-period and
     /// how many tickets are waiting for a `ButterflyAtDownloadRequest`.
     ///
@@ -1016,6 +1224,19 @@ pub struct EtsiRun {
     pub installed_ctl: BTreeMap<NodeId, u32>,
     /// How many CA-CRL entries each station is enforcing.
     pub installed_ca_crl: BTreeMap<NodeId, u32>,
+    /// The sequence number of the last CA-CRL the Root CA signed for the Distribution
+    /// Centre (the direct-push flow [`EtsiRun::publish_ca_crl`] carries none).
+    pub ca_crl_sequence: u32,
+    /// The Distribution Centre's current ECTL, `(sequence, entries)`, once issued.
+    pub dc_ectl: Option<(u32, u32)>,
+    /// The Distribution Centre's current CA-CRL, `(sequence, entries)`, once issued.
+    pub dc_ca_crl: Option<(u32, u32)>,
+    /// The CA-CRL sequence each station holds from the Distribution Centre.
+    pub installed_ca_crl_seq: BTreeMap<NodeId, u32>,
+    /// Fetches the Distribution Centre answered.
+    pub dc_fetches: u64,
+    /// Of those, how many were answered "current" (nothing newer to send).
+    pub dc_not_modified: u64,
     /// How many reports the Misbehaviour Authority has received about each subject.
     pub reports: BTreeMap<NodeId, u32>,
     /// How many reports went through the optional pre-processing stage.
@@ -1057,11 +1278,18 @@ impl EtsiRun {
             blocklist: BTreeSet::new(),
             tickets: BTreeMap::new(),
             refused: 0,
+            aa: AaState::default(),
             pending_batches: BTreeMap::new(),
             current_i: 0,
             ctl_sequence: 0,
             installed_ctl: BTreeMap::new(),
             installed_ca_crl: BTreeMap::new(),
+            ca_crl_sequence: 0,
+            dc_ectl: None,
+            dc_ca_crl: None,
+            installed_ca_crl_seq: BTreeMap::new(),
+            dc_fetches: 0,
+            dc_not_modified: 0,
             reports: BTreeMap::new(),
             pre_processed: 0,
             kernel,
@@ -1092,7 +1320,7 @@ impl EtsiRun {
         self.kernel.host(
             station,
             &ServiceModelSpec::new(1, self.params.overhead),
-            self.params.profile,
+            self.params.station_profile,
         );
     }
 
@@ -1133,7 +1361,9 @@ impl EtsiRun {
         let run = self.new_run();
         self.inject(
             station,
-            Ts102941Msg::AuthorizationRequest { station },
+            Ts102941Msg::AuthorizationRequest {
+                ec: SealedForEa::seal(station),
+            },
             FlowId::EtsiAuthorization,
             run,
         );
@@ -1226,6 +1456,77 @@ impl EtsiRun {
         run
     }
 
+    /// Signs a new ECTL at the TLM and a new CA-CRL at the Root CA, for the Distribution
+    /// Centre to serve from `at` onwards (TS 102 941 §6.3.1-6.3.5). Each list is signed
+    /// once and served to every station that asks, as a real TLM and Root CA do;
+    /// [`EtsiRun::publish_ectl`] re-signs per station and is kept for the direct-push
+    /// latency measurement.
+    pub fn issue_trust_lists(&mut self, at: SimTime) -> (FlowRun, FlowRun) {
+        let at = at.max(self.kernel.now());
+        self.ctl_sequence = self.ctl_sequence.saturating_add(1);
+        self.ca_crl_sequence = self.ca_crl_sequence.saturating_add(1);
+        let lists = [
+            (
+                self.nodes.tlm,
+                TrustListKind::Ectl,
+                self.ctl_sequence,
+                self.params.ctl_entries,
+            ),
+            (
+                self.nodes.rca,
+                TrustListKind::CaCrl,
+                self.ca_crl_sequence,
+                self.params.ca_crl_entries,
+            ),
+        ];
+        let mut runs = [FlowRun(0); 2];
+        for (k, (signer, kind, sequence, entries)) in lists.into_iter().enumerate() {
+            let run = self.new_run();
+            runs[k] = run;
+            self.kernel.inject_at(
+                at,
+                Delivery {
+                    at,
+                    from: signer,
+                    to: signer,
+                    msg: Ts102941Msg::TrustListIssue {
+                        kind,
+                        sequence,
+                        entries,
+                    },
+                    flow: FlowId::EtsiTrustIssue,
+                    run,
+                },
+            );
+        }
+        (runs[0], runs[1])
+    }
+
+    /// A station asks the Distribution Centre for whatever is newer than what it holds,
+    /// at `at`, over the access link [`EtsiRun::set_access`] gave it.
+    pub fn fetch_trust_lists(&mut self, station: NodeId, at: SimTime) -> FlowRun {
+        let run = self.new_run();
+        let at = at.max(self.kernel.now());
+        let ctl_have = self.installed_ctl.get(&station).copied().unwrap_or(0);
+        let crl_have = self.installed_ca_crl_seq.get(&station).copied().unwrap_or(0);
+        self.kernel.inject_at(
+            at,
+            Delivery {
+                at,
+                from: station,
+                to: station,
+                msg: Ts102941Msg::TrustListRequest {
+                    station,
+                    ctl_have,
+                    crl_have,
+                },
+                flow: FlowId::EtsiTrustFetch,
+                run,
+            },
+        );
+        run
+    }
+
     /// Starts a TS 103 759 misbehaviour report.
     ///
     /// The *decision* is taken on the first report, and that is a scope boundary rather
@@ -1283,7 +1584,9 @@ impl EtsiRun {
                 at,
                 from: station,
                 to: station,
-                msg: Ts102941Msg::AuthorizationRequest { station },
+                msg: Ts102941Msg::AuthorizationRequest {
+                    ec: SealedForEa::seal(station),
+                },
                 flow: FlowId::EtsiAuthorization,
                 run,
             },
@@ -1376,7 +1679,7 @@ impl EtsiRun {
     pub fn run_until(&mut self, horizon: SimTime) -> Result<()> {
         while let Some(d) = self.kernel.next_delivery_before(horizon) {
             let profile = self.kernel.profile_of(d.to);
-            let mut out = Outbox::new(profile);
+            let mut out = self.outbox(profile, d.to);
             let (at, to) = (d.at, d.to);
             self.handle(d, &mut out);
             self.kernel.dispatch(at, to, out)?;
@@ -1396,6 +1699,16 @@ impl EtsiRun {
         self.installed_ctl.get(&station).copied()
     }
 
+    /// An empty outbox for `to`, hosted on `profile`: under a hybrid scheme it also
+    /// charges the post-quantum half, a station's or an authority's.
+    fn outbox(&self, profile: &'static str, to: NodeId) -> Outbox<Ts102941Msg> {
+        let pq = self
+            .params
+            .hybrid
+            .map(|h| h.charge(!self.nodes.is_authority(to)));
+        Outbox::new(profile).with_pq(pq)
+    }
+
     /// Runs until nothing is scheduled.
     ///
     /// # Errors
@@ -1403,7 +1716,7 @@ impl EtsiRun {
     pub fn run(&mut self) -> Result<()> {
         while let Some(d) = self.kernel.next_delivery() {
             let profile = self.kernel.profile_of(d.to);
-            let mut out = Outbox::new(profile);
+            let mut out = self.outbox(profile, d.to);
             let (at, to) = (d.at, d.to);
             self.handle(d, &mut out);
             self.kernel.dispatch(at, to, out)?;
@@ -1413,13 +1726,17 @@ impl EtsiRun {
 
     fn handle(&mut self, d: Delivery<Ts102941Msg>, out: &mut Outbox<Ts102941Msg>) {
         use v2xw_sec::primitive::{PrimitiveId, PrimitiveOpKind};
-        let (flow, run, to) = (d.flow, d.run, d.to);
+        let (flow, run, to, from) = (d.flow, d.run, d.to, d.from);
         let n = self.nodes;
+        // Under a hybrid scheme each signature and verification is two: the outbox adds
+        // the post-quantum half against its own published figure (`crate::hybrid`).
         let sign = |out: &mut Outbox<Ts102941Msg>, k: u32| {
             out.charge(PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::Sign, k);
+            out.charge_pq(PrimitiveOpKind::Sign, k);
         };
         let verify = |out: &mut Outbox<Ts102941Msg>, k: u32| {
             out.charge(PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::Verify, k);
+            out.charge_pq(PrimitiveOpKind::Verify, k);
         };
         match d.msg {
             Ts102941Msg::EnrolmentRequest { station } if to == station => {
@@ -1460,15 +1777,17 @@ impl EtsiRun {
                     out.stage_at(StageId::Installed, station, None, flow, run);
                 }
             }
-            Ts102941Msg::AuthorizationRequest { station } if to == station => {
+            Ts102941Msg::AuthorizationRequest { ec } if to != n.aa => {
                 // A fresh key pair per ticket, an HMAC key tag, and the inner signature
                 // the EA will check — the AA sees none of the keys [TS 102 941 §6.1.4].
                 out.charge(PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::KeyGen, 1);
+                // The ticket's post-quantum key pair, under a hybrid scheme.
+                out.charge_pq(PrimitiveOpKind::KeyGen, 1);
                 sign(out, 2);
-                out.stage_at(StageId::Requested, station, None, flow, run);
+                out.stage_at(StageId::Requested, to, None, flow, run);
                 out.send(
                     n.aa,
-                    Ts102941Msg::AuthorizationRequest { station },
+                    Ts102941Msg::AuthorizationRequest { ec },
                     "etsi-authorization-request",
                     self.sizes.authorization_request(),
                     Transport::CellularUu,
@@ -1476,13 +1795,17 @@ impl EtsiRun {
                     run,
                 );
             }
-            Ts102941Msg::AuthorizationRequest { station } => {
+            Ts102941Msg::AuthorizationRequest { ec } => {
                 verify(out, 1);
                 sign(out, 1);
+                self.aa.validations_requested += 1;
                 out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
                 out.send(
                     n.ea,
-                    Ts102941Msg::ValidationRequest { station },
+                    Ts102941Msg::ValidationRequest {
+                        ec,
+                        reply_to: from,
+                    },
                     "etsi-validation-request",
                     self.sizes.validation_request(),
                     Transport::BackendNet,
@@ -1490,16 +1813,19 @@ impl EtsiRun {
                     run,
                 );
             }
-            Ts102941Msg::ValidationRequest { station } => {
+            Ts102941Msg::ValidationRequest { ec, reply_to } => {
                 verify(out, 2);
                 sign(out, 1);
-                let valid = self.enrolled.contains(&station) && !self.blocklist.contains(&station);
+                // Only the EA can open the sealed `ecSignature`, and it answers yes or no.
+                let valid = ec.open(to, n.ea).is_some_and(|station| {
+                    self.enrolled.contains(&station) && !self.blocklist.contains(&station)
+                });
                 if !valid {
                     self.refused += 1;
                 }
                 out.send(
                     n.aa,
-                    Ts102941Msg::ValidationResponse { station, valid },
+                    Ts102941Msg::ValidationResponse { reply_to, valid },
                     "etsi-validation-response",
                     self.sizes.validation_response(),
                     Transport::BackendNet,
@@ -1507,12 +1833,16 @@ impl EtsiRun {
                     run,
                 );
             }
-            Ts102941Msg::ValidationResponse { station, valid } => {
+            Ts102941Msg::ValidationResponse { reply_to, valid } => {
                 verify(out, 1);
                 if valid {
                     sign(out, 1);
+                    self.aa.tickets_issued += 1;
                     out.stage_at(StageId::Certified, to, None, flow, run);
+                } else {
+                    self.aa.refused += 1;
                 }
+                let station = reply_to;
                 out.send(
                     station,
                     Ts102941Msg::AuthorizationResponse {
@@ -1540,13 +1870,26 @@ impl EtsiRun {
                 // two signatures: the proof of possession and the outer one. Not one key
                 // pair per ticket — that is the whole economy of the construction.
                 out.charge(PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::KeyGen, 2);
+                // There is no post-quantum butterfly: under a hybrid scheme the station
+                // generates one post-quantum key pair per ticket of the batch and uploads
+                // each public key encrypted to the AA (`crate::hybrid`).
+                if out.is_hybrid() {
+                    let batch = self.params.butterfly_batch.max(1);
+                    out.charge_pq(PrimitiveOpKind::KeyGen, batch);
+                    out.charge(
+                        PrimitiveId::ECDSA_P256_SHA256,
+                        PrimitiveOpKind::KeyGen,
+                        batch.saturating_mul(2),
+                    );
+                }
                 sign(out, 2);
                 out.stage_at(StageId::Requested, station, None, flow, run);
                 out.send(
                     n.ea,
                     Ts102941Msg::ButterflyAuthorizationRequest { station },
                     "etsi-butterfly-authorization-request",
-                    self.sizes.butterfly_authorization_request(),
+                    self.sizes
+                        .butterfly_authorization_request_for(self.params.butterfly_batch.max(1)),
                     Transport::CellularUu,
                     flow,
                     run,
@@ -1592,7 +1935,7 @@ impl EtsiRun {
                     out.send(
                         n.aa,
                         Ts102941Msg::ButterflyCertRequest {
-                            station,
+                            station: SealedForEa::seal(station),
                             current_i,
                             count,
                         },
@@ -1620,6 +1963,8 @@ impl EtsiRun {
                 // the cost the butterfly variant does *not* save — it saves round trips and
                 // uplink bytes, not signatures.
                 sign(out, count);
+                self.aa.tickets_issued += u64::from(count);
+                self.aa.butterfly_batches += 1;
                 out.stage_at(StageId::Certified, to, None, flow, run);
                 out.send(
                     n.ea,
@@ -1641,6 +1986,9 @@ impl EtsiRun {
                 count,
             } => {
                 verify(out, 1);
+                let Some(station) = station.open(to, n.ea) else {
+                    return;
+                };
                 self.pending_batches.insert(station, (current_i, count));
                 let bytes = self.sizes.butterfly_at_download_response(count).bytes();
                 out.stage_at(StageId::BatchReady, to, Some(bytes), flow, run);
@@ -1806,6 +2154,126 @@ impl EtsiRun {
                 out.stage_at(StageId::Enforced, station, None, flow, run);
             }
 
+            // --- §6.3.3, the Distribution Centre ------------------------------------
+            Ts102941Msg::TrustListIssue {
+                kind,
+                sequence,
+                entries,
+            } if to != n.cpoc => {
+                sign(out, 1);
+                let size = match kind {
+                    TrustListKind::Ectl => self.sizes.ectl(entries),
+                    TrustListKind::CaCrl => self.sizes.ca_crl(entries),
+                };
+                out.stage_at(StageId::Issued, to, Some(size.bytes()), flow, run);
+                out.send(
+                    n.cpoc,
+                    Ts102941Msg::TrustListIssue {
+                        kind,
+                        sequence,
+                        entries,
+                    },
+                    match kind {
+                        TrustListKind::Ectl => "etsi-ectl-publish",
+                        TrustListKind::CaCrl => "etsi-ca-crl-publish",
+                    },
+                    size,
+                    Transport::BackendNet,
+                    flow,
+                    run,
+                );
+            }
+            Ts102941Msg::TrustListIssue {
+                kind,
+                sequence,
+                entries,
+            } => {
+                // The DC checks the signer's signature before it serves the list.
+                verify(out, 1);
+                let slot = match kind {
+                    TrustListKind::Ectl => &mut self.dc_ectl,
+                    TrustListKind::CaCrl => &mut self.dc_ca_crl,
+                };
+                if slot.is_none_or(|(s, _)| s < sequence) {
+                    *slot = Some((sequence, entries));
+                }
+                out.stage_at(StageId::Published, to, None, flow, run);
+            }
+            Ts102941Msg::TrustListRequest {
+                station,
+                ctl_have,
+                crl_have,
+            } if to == station => {
+                out.stage_at(StageId::Requested, station, None, flow, run);
+                out.send(
+                    n.cpoc,
+                    Ts102941Msg::TrustListRequest {
+                        station,
+                        ctl_have,
+                        crl_have,
+                    },
+                    "etsi-trust-list-request",
+                    self.sizes.trust_list_request(),
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            Ts102941Msg::TrustListRequest {
+                station,
+                ctl_have,
+                crl_have,
+            } => {
+                // Serving a signed file is a lookup: the DC signs nothing.
+                let ctl = self.dc_ectl.filter(|(s, _)| *s > ctl_have);
+                let ca_crl = self.dc_ca_crl.filter(|(s, _)| *s > crl_have);
+                self.dc_fetches += 1;
+                let current = ctl.is_none() && ca_crl.is_none();
+                if current {
+                    self.dc_not_modified += 1;
+                }
+                out.send(
+                    station,
+                    Ts102941Msg::TrustListResponse {
+                        station,
+                        ctl,
+                        ca_crl,
+                    },
+                    if current {
+                        "etsi-trust-list-current"
+                    } else {
+                        "etsi-trust-list-response"
+                    },
+                    self.sizes
+                        .trust_list_response(ctl.map(|c| c.1), ca_crl.map(|c| c.1)),
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            Ts102941Msg::TrustListResponse {
+                station,
+                ctl,
+                ca_crl,
+            } => {
+                let bytes = self
+                    .sizes
+                    .trust_list_response(ctl.map(|c| c.1), ca_crl.map(|c| c.1))
+                    .bytes();
+                out.stage_at(StageId::Downloaded, station, Some(bytes), flow, run);
+                if let Some((sequence, entries)) = ctl {
+                    // The TLM's signature and one per Root CA entry, as for a pushed list.
+                    verify(out, 1 + entries);
+                    self.installed_ctl.insert(station, sequence);
+                }
+                if let Some((sequence, entries)) = ca_crl {
+                    verify(out, 1);
+                    self.installed_ca_crl.insert(station, entries);
+                    self.installed_ca_crl_seq.insert(station, sequence);
+                }
+                out.stage_at(StageId::Processed, station, None, flow, run);
+            }
+
             // --- TS 103 759, misbehaviour reporting -------------------------------
             Ts102941Msg::MisbehaviourReport { station, subject } if to == station => {
                 sign(out, 1);
@@ -1885,6 +2353,7 @@ impl EtsiRun {
         use v2xw_sec::primitive::{PrimitiveId, PrimitiveOpKind};
         *self.reports.entry(subject).or_insert(0) += 1;
         out.charge(PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::Sign, 1);
+        out.charge_pq(PrimitiveOpKind::Sign, 1);
         out.stage_at(StageId::Decision, ma, None, flow, run);
         out.send(
             ea,
@@ -2123,6 +2592,26 @@ fn card(p: &EtsiParams) -> ModelCard {
             Source::new(
                 SourceKind::Standard,
                 "ETSI TS 103 759 §4: pre-processing before collection is optional, which                  is why this is a flag and not a stage every run emits",
+            ),
+        ),
+        Parameter::new(
+            "authority_hw_profile",
+            "-",
+            serde_json::json!(p.profile),
+            Source::new(
+                SourceKind::Datasheet,
+                "wolfSSL benchmark, Intel i9-11950H [R5 §B.5]: the authorities' ECDSA cost; \
+                 no EA or AA transaction rate is published",
+            ),
+        ),
+        Parameter::new(
+            "station_hw_profile",
+            "-",
+            serde_json::json!(p.station_profile),
+            Source::new(
+                SourceKind::Datasheet,
+                "Cohda MK6 with Botan [R5 §B.3]; 06-node-models.md §7.3: a station's \
+                 cryptography runs on its on-board unit, not on a server",
             ),
         ),
     ]);

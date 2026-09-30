@@ -94,6 +94,19 @@ struct PendingStage {
     run: FlowRun,
 }
 
+/// The post-quantum half of a hybrid signature scheme as one entity pays it: the
+/// primitive, and the hardware profiles its signing and verification, and its key
+/// generation, are charged against (`crate::hybrid`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PqCharge {
+    /// The post-quantum primitive.
+    pub primitive: PrimitiveId,
+    /// The profile signing and verification are charged against.
+    pub profile: &'static str,
+    /// The profile key generation is charged against.
+    pub keygen_profile: &'static str,
+}
+
 /// What an entity produced while handling one message.
 ///
 /// Built empty, filled by the entity, consumed by [`Kernel::dispatch`]. The entity never
@@ -102,6 +115,7 @@ struct PendingStage {
 /// free computation by forgetting to look at the time.
 pub struct Outbox<M> {
     profile: &'static str,
+    pq: Option<PqCharge>,
     work: Duration,
     ops: BTreeMap<(&'static str, &'static str), u64>,
     sends: Vec<PendingSend<M>>,
@@ -114,6 +128,7 @@ impl<M> Outbox<M> {
     pub fn new(profile: &'static str) -> Outbox<M> {
         Outbox {
             profile,
+            pq: None,
             work: Duration::ZERO,
             ops: BTreeMap::new(),
             sends: Vec::new(),
@@ -138,6 +153,43 @@ impl<M> Outbox<M> {
     /// Charges `count` operations of `kind` on `primitive`.
     pub fn charge(&mut self, primitive: PrimitiveId, kind: PrimitiveOpKind, count: u32) {
         self.compute(OpDescriptor::new(primitive, kind, count));
+    }
+
+    /// The post-quantum half this entity also pays under a hybrid signature scheme
+    /// (`crate::hybrid`); `None`, the default, for a classical one.
+    #[must_use]
+    pub fn with_pq(mut self, pq: Option<PqCharge>) -> Outbox<M> {
+        self.pq = pq;
+        self
+    }
+
+    /// Whether this entity's signatures are hybrid.
+    pub const fn is_hybrid(&self) -> bool {
+        self.pq.is_some()
+    }
+
+    /// Charges `count` operations of `kind` on the post-quantum half of a hybrid scheme,
+    /// against the profile that publishes it; nothing under a classical scheme. A
+    /// signature or verification is charged here *in addition to* its ECDSA half.
+    pub fn charge_pq(&mut self, kind: PrimitiveOpKind, count: u32) {
+        let Some(pq) = self.pq else {
+            return;
+        };
+        let profile = if kind == PrimitiveOpKind::KeyGen {
+            pq.keygen_profile
+        } else {
+            pq.profile
+        };
+        let op = OpDescriptor::new(pq.primitive, kind, count);
+        self.work = Duration::from_nanos(
+            self.work
+                .as_nanos()
+                .saturating_add(op.charge(profile).as_nanos()),
+        );
+        *self
+            .ops
+            .entry((pq.primitive.as_str(), op_kind_str(kind)))
+            .or_insert(0) += u64::from(count);
     }
 
     /// Queues a message (`Action::Send`).
@@ -217,6 +269,23 @@ const fn op_kind_str(kind: PrimitiveOpKind) -> &'static str {
     }
 }
 
+/// What one entity has put on and taken off its links, for an inspector.
+///
+/// Counted where the kernel already is — a send when it is dispatched, a receipt when it
+/// is delivered — so the numbers cannot drift from the wire log they summarise. A timer
+/// an entity set for itself crosses no link and is not a receipt.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct NodeTraffic {
+    /// Messages delivered to this entity by another one.
+    pub received: u64,
+    /// Messages this entity sent.
+    pub sent: u64,
+    /// Bytes it received.
+    pub bytes_in: u64,
+    /// Bytes it sent.
+    pub bytes_out: u64,
+}
+
 /// The event kernel: a schedule, one service queue per entity, and the two logs.
 pub struct Kernel<M> {
     now: SimTime,
@@ -231,6 +300,11 @@ pub struct Kernel<M> {
     pub steps: Vec<WireStep>,
     /// Operation counts per node, for the protocol metrics.
     pub ops: BTreeMap<(NodeId, &'static str, &'static str), u64>,
+    /// Messages and bytes per node.
+    traffic: BTreeMap<NodeId, NodeTraffic>,
+    /// Bytes of each message still in flight, by `(arrival, sequence)`, so a receipt can
+    /// be booked with the size its send was charged.
+    in_flight_bytes: BTreeMap<(SimTime, u64), u64>,
 }
 
 impl<M> Kernel<M> {
@@ -256,7 +330,30 @@ impl<M> Kernel<M> {
             stages: StageLog::new(),
             steps: Vec::new(),
             ops: BTreeMap::new(),
+            traffic: BTreeMap::new(),
+            in_flight_bytes: BTreeMap::new(),
         }
+    }
+
+    /// What `node` has sent and received so far.
+    pub fn traffic(&self, node: NodeId) -> NodeTraffic {
+        self.traffic.get(&node).copied().unwrap_or_default()
+    }
+
+    /// How many deliveries are scheduled *to* `node` — messages on a link towards it and
+    /// timers it set — which is its inbound backlog at this instant.
+    pub fn pending_to(&self, node: NodeId) -> usize {
+        self.heap.iter().filter(|q| q.0.delivery.to == node).count()
+    }
+
+    /// Every node that has a service model, in id order.
+    pub fn hosted(&self) -> Vec<NodeId> {
+        self.queues.keys().copied().collect()
+    }
+
+    /// How many requests `node` has in service or waiting at `t`.
+    pub fn depth_at(&self, node: NodeId, t: SimTime) -> usize {
+        self.queues.get(&node).map_or(0, |q| q.depth_at(t))
     }
 
     /// Gives `node` a service model and a hardware profile.
@@ -331,12 +428,17 @@ impl<M> Kernel<M> {
     }
 
     fn push(&mut self, at: SimTime, delivery: Delivery<M>) {
+        self.push_seq(at, delivery);
+    }
+
+    fn push_seq(&mut self, at: SimTime, delivery: Delivery<M>) -> u64 {
         self.seq += 1;
         self.heap.push(Reverse(Queued {
             at,
             seq: self.seq,
             delivery,
         }));
+        self.seq
     }
 
     /// The next delivery, advancing the clock to it.
@@ -347,6 +449,11 @@ impl<M> Kernel<M> {
     pub fn next_delivery(&mut self) -> Option<Delivery<M>> {
         let Reverse(q) = self.heap.pop()?;
         self.now = q.at;
+        if let Some(bytes) = self.in_flight_bytes.remove(&(q.at, q.seq)) {
+            let t = self.traffic.entry(q.delivery.to).or_default();
+            t.received += 1;
+            t.bytes_in = t.bytes_in.saturating_add(bytes);
+        }
         Some(q.delivery)
     }
 
@@ -473,7 +580,11 @@ impl<M> Kernel<M> {
                 flow: s.flow,
                 run: s.run,
             };
-            self.push(arrival, delivery);
+            let seq = self.push_seq(arrival, delivery);
+            self.in_flight_bytes.insert((arrival, seq), u64::from(bytes));
+            let t = self.traffic.entry(node).or_default();
+            t.sent += 1;
+            t.bytes_out = t.bytes_out.saturating_add(u64::from(bytes));
         }
 
         Ok(done)

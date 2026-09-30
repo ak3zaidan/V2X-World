@@ -52,7 +52,9 @@ impl ProtoRevocation {
     }
 }
 
-/// `sec.cert` — a credential lifecycle event: `change`, `expire`, `top-up`, `revoked`.
+/// `sec.cert` — a credential lifecycle event: `change`, `expire`, `top-up`, `revoked`,
+/// `topup-refused`, `reenrolled`, `reenrol-refused` and, under the CCMS,
+/// `trust-list-installed` (a newer ECTL or CA-CRL from the Distribution Centre).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(transparent)]
 pub struct SecCert(pub SecCertView);
@@ -195,4 +197,20 @@ pub struct NodeSecurity(pub NodeSecurityView);
 impl Record for NodeSecurity {
     const CHANNEL: &'static str = "node.security";
     const VISIBILITY: Visibility = Visibility::Node;
+}
+
+/// `backend.state` — every credential-system entity, the roadside units and the vehicles,
+/// with the traffic between them, as the Backend view draws it
+/// (`v2xw_proto::view::BackendView`). Published once a simulated second while a
+/// credential system runs.
+///
+/// PUBLIC: it carries counts and role ids, never a vehicle's identity or a ground-truth
+/// label (which vehicles were attackers is not in it).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+pub struct BackendState(pub v2xw_proto::view::BackendView);
+
+impl Record for BackendState {
+    const CHANNEL: &'static str = "backend.state";
+    const VISIBILITY: Visibility = Visibility::Public;
 }

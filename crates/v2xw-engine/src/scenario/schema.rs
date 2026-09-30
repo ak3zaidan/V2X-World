@@ -1191,9 +1191,14 @@ pub struct Threats {
     /// The jammers.
     #[serde(default)]
     pub jammers: Vec<ModelChoice>,
-    /// Roadside units under an attacker's control, by site id.
+    /// Roadside units under an attacker's control, by their position in `actors.rsus`
+    /// (0 is the first unit declared).
     #[serde(default)]
     pub compromised_rsus: Vec<u32>,
+    /// What a compromised unit does: `threat/attacker/compromised-rsu` with `params.kind`
+    /// `PoisonForwardedReports` (the default), `SuppressForwardedReports` or `FalseCrl`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compromised_rsu_attack: Option<ModelChoice>,
 }
 
 /// One attacker population.

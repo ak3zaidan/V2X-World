@@ -2476,8 +2476,11 @@ pub fn build_node(
             v2xw_radio::ActorClass::Car
         },
     );
+    let (sign_op, verify_op) = v2xw_node::profile::signature_ops(&scenario.security.signature);
     let config = NodeConfig {
         tx_power_dbm: device.tx_power_dbm,
+        sign_op,
+        verify_op,
         services: vehicle_services(scenario, class),
         etsi_facilities: etsi_facilities(scenario),
         crypto_mode: crypto_mode(scenario),
@@ -2810,8 +2813,11 @@ pub fn build_rsu(
                 .expect("the reference profile ships with v2xw-node")
                 .clone()
         });
+    let (sign_op, verify_op) = v2xw_node::profile::signature_ops(&scenario.security.signature);
     let config = NodeConfig {
         tx_power_dbm: device_for(scenario, v2xw_radio::ActorClass::Rsu).tx_power_dbm,
+        sign_op,
+        verify_op,
         // No awareness messages — a mast is not a vehicle — and the intersection
         // broadcasts its roles name ([`rsu_services`]).
         services: rsu_services(scenario, &spec.roles),
