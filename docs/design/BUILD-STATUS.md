@@ -4,7 +4,7 @@ Living record of what is built and what has actually been *measured*, as against
 the plan in `10-roadmap.md` and the decisions in `12-build-decisions.md`. Claims
 here carry their evidence; anything unmeasured says so.
 
-Last updated 2026-09-24 (QA section below). **The crate table below is stale**: `v2xw-record`,
+Last updated 2026-09-29 (road network section below; QA section of 2026-09-24 after it). **The crate table below is stale**: `v2xw-record`,
 `v2xw-metrics`, `v2xw-node` and `v2xw-engine` are no longer stubs, and the line counts
 predate several waves. It is left as written rather than rewritten from memory, because a
 status file whose numbers were re-estimated rather than re-measured is worse than one that
@@ -14,6 +14,174 @@ For the current release position — what must be true for a 1.0 tag, what is no
 what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKLIST.md)
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
+
+## 2026-09-29 — road network realism (roadnet track)
+
+Owner: `crates/v2xw-world`. Every number below comes from a command run on the shared
+machine: `world_report` (the new validation report, `crates/v2xw-world/examples/
+world_report.rs`) or `traffic_audit` on debug builds. Wall times are noisy (five engineers
+sharing one build lock) and none is claimed.
+
+### What the importer now builds
+
+- **The street's whole cross-section** (`crates/v2xw-world/src/section.rs`). Bus lanes
+  (`bus:lanes`, `lanes:bus`, `psv:*`, `busway`), painted cycle lanes and parking-protected
+  tracks (`cycleway*`, with `:oneway`, `:width`, `:buffer`, `:traffic_mode`), and parking
+  lanes (`parking*`, `parking:lane*`), laid out kerb to kerb: the carriageway centred on the
+  way, a track beyond the kerb with a 3 ft buffer, a painted lane between parking and
+  traffic. NYC DOT Street Design Manual widths (11 ft bus, 8 ft parking, 5.5 ft painted,
+  5 ft + 3 ft track); a `width` tag is shared by the general lanes after the parking and
+  painted cycle lanes are taken out of it. Bus lanes admit buses and emergency vehicles,
+  and bicycles only where there is no cycle lane (NYC's rule); parking lanes admit
+  nothing. Portland's Transit Mall (`lanes=1`, `psv:lanes=designated|`) is read as two lanes.
+- **Movements that respect the lanes.** A car's connector never enters a bus lane, a
+  track or a parking lane; a bus lane's connector is a bus path; a cycle lane runs on into
+  the next block's cycle lane through a connector (no teleport) and turns only towards its
+  own kerb. A movement that turns across a lane of its own approach yields to the traffic
+  going straight on in it (NY VTL §1160/§1146): a left turn off 1st Avenue gives way to the
+  track beside it.
+- **Signal plans shaped like Midtown's.** 90 s cycles (Manhattan's pre-timed range is
+  90-150 s, NYC DCP 61st Street FEIS ch. 14). The green is shared by the lanes each phase
+  serves (Webster with lanes as the flow proxy) — a four-lane avenue gets about twice the
+  green of a two-lane street — but never below the time a pedestrian needs to cross the
+  road that phase stops (MUTCD 2009 §4E.06: 7 s walk, 3.5 ft/s). The major phase runs first
+  and each plan is offset one travel time after its upstream neighbour: a green wave along
+  each avenue at the speed limit (NYC DOT's 25 MPH Signal Retiming), or at
+  `world.signals.progression_speed_mps` (NYC's 15 mph cyclist Green Wave, Portland's
+  11-13.5 mph downtown timing). New scenario keys `world.signals.coordinate` and
+  `world.signals.progression_speed_mps`.
+- **Junction geometry.** Junctions whose connecting road is shorter than both junction
+  areas are joined (netconvert `--junctions.join`, decided by what is left of the road, at
+  most 30 m and a 45 m spread); lanes of different roads laid over each other are moved
+  apart and pavements moved to the kerb of the carriageway the map implies
+  (`src/separate.rs`); fork and merge arms are cut back until they stop overlapping; dead
+  ends too tight for a U-turn become trip ends; continuation nodes (a name change) keep a
+  1 m area on a straight street and room for the design radius where it bends; movements
+  that are really U-turns across a divided street, or that start behind the approach, are
+  dropped; a junction's shape covers its connectors; two connectors closer than a car's
+  width conflict.
+- **Crossings and buildings.** A `highway=crossing` node with no crossing way gets a
+  synthesised crosswalk between the nearest pavements; a kiosk-sized building (under
+  25 m²) a car's body would enter on a drive lane is dropped (Midtown's newsstand).
+- **Two more jurisdictions.** `urban-us-portland` (ORS 811.111: 20 mph business district;
+  Portland's 20 mph residential streets) and `urban-de` (StVO §3: 50 km/h). A Portland
+  scenario, `scenarios/portland-downtown.yaml`, and `worlds/fetch.sh` to download any box.
+- **World validation** (`crates/v2xw-world/src/validate.rs`): geometry a car, a cyclist or
+  a pedestrian cannot use, and every imported attribute against the source tags — lane
+  counts, one-way, `turn:lanes`, bus, cycle and parking lanes, `width`, `maxspeed`,
+  crossing nodes — with a baseline gate (`world_report --baseline`,
+  `worlds/validation/<city>.json`) that exits 1 when a check gets worse.
+
+### Measured
+
+`world_report` on each city (checks count lanes, ways or nodes that fail, out of those
+examined). "Before" for Manhattan is this track's own earlier state on 2026-09-29, after
+the junction join and the pavement separation and before the cross-sections (the
+previous run's `world_report`, same extract, same box); the QA figures of 2026-09-24 are
+quoted where the QA measured the same thing.
+
+| Check (Manhattan, D7 box) | QA 2026-09-24 | before | now |
+|---|---|---|---|
+| sidewalk lanes on a drive lane, > 0.3 m | 811 of 7,741 (10.7 km) | 54 of 6,233 (98 m) | 36 of 6,233 (68 m) |
+| bus lanes against the tags | — | 174 of 175 wrong (none built) | 0 of 197 |
+| cycle lanes tagged, none built | — | 196 of 196 | 0 of 196 |
+| parking lanes tagged, none built | — | 77 of 77 | 0 of 82 |
+| `width` tag against the built carriageway, > 15 % | — | 27 of 44 † | 6 of 25 |
+| one-way against the tags | — | 19 | 1 |
+| car's body in a building (the newsstand) | 12 audit steps | 1 lane | 0 |
+| U-turn connectors tighter than a car | 118 | 0 | 0 |
+| connectors a car turns through faster than it can steer | — | 9 | 6 |
+| stub drive lanes (< 2 m) | — | 9 | 13 |
+| `turn:lanes` entries a movement violates | — | 31 of 339 | 35 of 329 |
+| pavement laid along a cycle track (new check) | — | — | 47 lanes (1.7 km) |
+
+† measured by the check before it was fixed: it summed every piece of a way (way
+458166897, three pieces of 21.3 m, "built 63.9 m").
+
+What Manhattan now carries: 225 bus lanes (12.0 km), 275 cycle lanes and tracks
+(16.3 km), 111 parking lanes (8.9 km); 269 signal plans on 90 s cycles, 213 of them
+offset for progression, the first (major) phase 56 % of the cycle on average.
+
+The other two cities, imported with nothing changed but the extract, the box and the
+preset:
+
+| | Portland (`urban-us-portland`) | Berlin-Mitte (`urban-de`) |
+|---|---|---|
+| extract (Overpass, 2026-09-30) | 6.8 MB | 11.4 MB |
+| lanes / junctions / signal plans / buildings | 9,845 / 2,334 / 186 / 640 | 6,989 / 2,319 / 37 / 710 |
+| bus, cycle, parking lanes built | 127, 315, 108 | 38, 104, 257 |
+| lanes, one-way, bus, parking against the tags | 0, 0, 1, 0 wrong | 0, 0, 0, 1 wrong |
+| cycle lanes tagged, none built | 0 of 135 | 2 of 91 |
+| sidewalk on a drive lane | 47 of 3,037 (287 m) | 43 of 3,990 (286 m) |
+| connectors turning faster than a car can | 62 of 2,363 | 10 of 1,123 |
+| car's body in a building | 4 lanes | 10 lanes |
+| `width` against the built carriageway | 0 of 1 | 16 of 165 |
+| signal plans offset for progression | 117 of 186 | 12 of 37 |
+
+`traffic_audit`, 300 s, debug build. Manhattan: `manhattan-5min.yaml --rate 6000
+--pedestrians 200 --cyclists 50` (the QA's dense run had the same rate; its VRU counts are
+not recorded, so the pedestrian classes are not strictly comparable). Portland:
+`portland-downtown.yaml --pedestrians 100 --cyclists 30`. Berlin: the same scenario with
+Berlin's extract, box and `urban-de`, `--rate 1500 --pedestrians 100 --cyclists 30`.
+
+| Class (vehicle-steps) | Manhattan QA 2026-09-24 | Manhattan now | Portland | Berlin |
+|---|---|---|---|---|
+| vehicles (peak) | — | 428 (420) | 41 (38) | 132 (107) |
+| heading jump | 147 | 3 | 5 | 6 |
+| in a building | 12 | 0 | 0 | 1 |
+| vehicle-vehicle overlap | 0 | 2 | 0 | 7 |
+| vehicle-pedestrian overlap | 15 | 12 | 0 | 10 |
+| gap below s0 | 217 | 245 | 0 | 0 |
+| jerk | 37 | 206 | 4 | 61 |
+| step vs reported speed | 18 | 8 | 0 | 28 |
+| conflict zone | 0 | 0 | 0 | 147 |
+| body outside its junction | 0 | 0 | 0 | 60 |
+| occupied-crosswalk entry | 0 | 1 | 0 | 0 |
+| every other class | 0 | 0 | 0 | 0 |
+
+Two identical Manhattan audits (before and after a 0.01 s change to the pedestrian
+minimum that moved no count) gave identical counts; so did every repeated Portland and
+Berlin audit.
+
+### Still open, most important first
+
+1. **Berlin's unsignalised junctions.** 147 conflict-zone steps, 60 body-outside-junction
+   steps and 7 overlap steps, at Mitte's unsignalised junctions (37 plans for the whole
+   box). Not diagnosed: the junctions and movements are named in the audit's
+   examples, and whether the cause is the priority rules (mobility) or the geometry of
+   Mitte's skewed, joined junctions (this track) is the next question.
+2. **Pavements on cycle tracks.** 47 Midtown pavement lanes (1.7 km) lie along a track.
+   The track is laid 3 ft beyond the parking lane, outside a carriageway centred on the
+   way, and where the mapped pavement is there the two share a band — the auditor sees
+   cyclists through pedestrians. Moving the pavements clear the way they are moved clear
+   of drive lanes was tried and reverted: pavements squeezed between a track and a drive
+   lane stayed where they were and pavement-on-roadway went from 53 lanes (95 m) to 69
+   (646 m). Counting the track inside the carriageway was tried and reverted too (648 m).
+3. **Jerk and gap below s0 on dense Manhattan** (206 and 245) are higher than the QA's
+   37 and 217. Both are car-following onsets (a follower creeping behind a stopped
+   leader, braking hard at a queue); the network changed under them — narrower 10 ft
+   lanes, bus lanes that cars cannot use, turning traffic now yielding to the cycle lane
+   beside it — and no class the importer controls moved with them. The mobility track
+   owns both.
+4. **Vehicle-pedestrian overlaps, 12 steps.** A left turn meeting a pedestrian on the
+   crosswalk it crosses (mobility's crosswalk yield) and a bus's right turn from the kerb
+   bus lane cutting a 1 m pavement stub at the corner (geometry: the stub is a trim
+   artefact).
+5. **Portland's connectors**: 62 turn faster than a car can steer, mostly by 1-2°; the
+   5 heading jumps are at driveways (`service` ways of 10-26 m) meeting the street at
+   short, sharp corners.
+6. **`turn:lanes` violated, 35 of 329**: the lane is tagged to turn and the junction the
+   way reaches has no departure that way (the turn is at a junction further on, or the
+   join moved it); the lane is given its straightest movement rather than none.
+7. **Crossing nodes with no crosswalk**: 85 Manhattan, 161 Portland, 21 Berlin — a
+   pavement on one side only, or none within 25 m.
+8. **The engine's build script shares its run directory between worktrees.** The
+   scenario-schema reflection (`crates/v2xw-engine/build.rs`) writes to one
+   `target/agents/debug/build/v2xw-engine-*/out` for every worktree, so an engineer's
+   engine tests can run against another worktree's schema: this track's first run of the
+   publish tests saw the radio track's `radio.region` fields and not its own
+   `world.signals`. Touching `src/scenario/schema.rs` before building makes it rerun.
+
 
 ## 2026-09-24 — QA of the website on the release build: final state
 
