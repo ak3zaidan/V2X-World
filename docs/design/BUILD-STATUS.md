@@ -15,6 +15,67 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-09-30 — the 3D traffic scene (traffic3d track)
+
+Owner: `ui/packages/viewer`, plus a versioned `lamps` byte through the engine and protocol.
+Branch `worktree-wf_9470e8ab-93a-8`. Every number below comes from a command run on this
+machine; wall times are not claimed (several engineers share one build lock).
+
+### A glitch hunter, and what it found
+
+`src/glitch.ts` watches every drawn frame and counts, per class and per camera mode: pop,
+teleport, stutter, heading snap, vehicle–vehicle, vehicle–building and vehicle–person
+interpenetration, z-fighting, flicker, LOD pop, camera clip, empty frame, a lost chase subject
+and a chase camera looking down instead of along the street. Each event is attributed to the
+viewer or to the engine's own data (a slot whose snapshots jump further than it could drive, or
+two agents the engine itself put in one place). `test/glitch-hunter.test.ts` injects each
+defect into a clean frame and asserts the hunter counts it, and asserts a clean synthetic run
+counts nothing.
+
+`test/glitch-capture.test.ts` replays a real engine stream (`scripts/capture-stream.mjs`) at
+60 fps with ±0.5 ms jitter and 1 % dropped frames, and tours aerial (20 s), chase over a car,
+the largest vehicle, a person and a two-wheeler (15 s each), then dashboard (20 s). The BEFORE
+viewer is `main` at `640ad91` with only the hooks the hunter reads. Both viewers replay the same
+captures and are judged by the same hunter:
+
+@@BEFORE_AFTER_TABLE@@
+
+### What changed
+
+- **Motion.** Critically damped springs replace the exponential lerp in the plan view (it
+  started every move at full speed, so every car on screen jumped with each re-aim) and follow
+  the subject in chase and dashboard, with its velocity fed forward. Flights between street
+  subjects climb over the roofs and descend in a time set by the height they fall. Actors fade
+  in and out over 0.3 s instead of appearing; a departed actor lingers to its last pose; a slot
+  whose snapshots jump further than it could have moved is snapped (and counted as the
+  engine's). People's headings turn at most 5 rad/s and their paths use Catmull-Rom tangents.
+- **Depth.** Road layers are 4 cm apart and ranked: the surface shader pulls each rank 2 depth
+  steps nearer, so a coloured bus lane over a carriageway, a kerb over a junction, and a
+  crossing over both keep their order at any range from a 0.35 m near plane.
+- **Road users.** Procedural models per class, three LODs each: sedan, crossover, NYC taxi
+  livery (20 % of cars, a stated choice), bus, coach, box truck, semi, delivery van, ambulance,
+  motorcycle, moped, delivery moped, bicycle, e-scooter and a walking person with a gait cycle.
+  Wheels spin and front wheels steer. Paint follows a published colour-popularity split; people
+  take a stature from NHANES.
+- **Lamps from the engine.** A new VWP v1.2 `lamps` byte (brake, left/right indicator, hazard,
+  low beam, reverse, emergency beacons) is written by `v2xw-mobility` (`src/lamps.rs`: brake on
+  at 1.0 m/s², off at 0.6, held at a standstill; indicators 100 ft before a turn or lane change,
+  NY VTL §1163, used by 75 % / 52 % of drivers per SAE 2012-01-0261; beacons on emergency
+  vehicles) and by `v2xw-engine` (`src/daylight.rs`: low beams below −6° sun elevation or
+  under 304.8 m visibility, NY VTL §375). The viewer lights brake lamps, flashes indicators at
+  1.5 Hz, and at night draws headlight pools and lamp points.
+- **Streets.** MUTCD lane lines, edge and centre lines, stop bars, lane-use arrows,
+  high-visibility crosswalks, and bus (red) and bike (green) lane colours. Signal heads face
+  their approach on mast arms or poles, with visors and the lamp shapes of their phase.
+
+### Evidence
+
+@@EVIDENCE@@
+
+### Open
+
+@@OPEN@@
+
 ## 2026-09-30 — six tracks merged: perf, roadnet, traffic, radio, scms, shell
 
 Six engineers worked in isolated worktrees on the owner's 2026-09-29 request (traffic and
