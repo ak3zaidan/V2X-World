@@ -286,6 +286,9 @@ impl StubEngine {
                 class_idx: plan.class_idx,
                 state,
                 verified_neighbors: verified_neighbours(i, step),
+                // The fixture's cars brake when they slow harder than a coast and stand
+                // on the brake when stopped, as `v2xw_mobility::lamps` rules it.
+                lamps: if pose.4 <= -1.0 || plan.speed_mps <= 0.3 { 0x01 } else { 0 },
             });
         }
 

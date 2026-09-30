@@ -51,6 +51,7 @@ import {
 import type { SignalBlock, VwpWorld } from "@vwp/protocol";
 import { SignalRenderer } from "./signals.js";
 import { findPortals } from "./passages.js";
+import { addCrosswalk, buildLaneMarkings, type MarkingReport } from "./markings.js";
 import { MeshBuilder, addBox, addCylinder, addDisc, addExtrudedRing, addPolygon, addRibbon } from "./geometry.js";
 import type { RingShading } from "./geometry.js";
 import type { ViewerTheme } from "./theme.js";
@@ -71,6 +72,8 @@ const Z_ROAD = 0.1;
 const Z_JUNCTION = 0.16;
 const Z_CROSSING = 0.2;
 const Z_MARKING = 0.24;
+/** A sidewalk ribbon sits this far above the carriageway. */
+const SIDEWALK_LIFT_M = 0.04;
 /** Width of a painted lane line, metres: `addOffsetLine`'s half-width 0.09 twice. */
 const MARKING_WIDTH_M = 0.18;
 
@@ -255,6 +258,12 @@ export class WorldRenderer {
   #ghost = -1;
   /** A second ghosted building: the one the camera itself is in; see {@link setGhostBuildings}. */
   #ghost2 = -1;
+  /** See {@link darkness}. */
+  #darkness = 0;
+  /** What the marking pass drew, for tests and the build report. */
+  #markingReport: MarkingReport | null = null;
+  /** Buildings a road runs through (indices), from `#buildPortals`. */
+  #portalBuildings = new Set<number>();
   /** The `lane_markings` overlay's choice; {@link fadeMarkings} only ever hides on top of it. */
   #markingsWanted = true;
   #buildingBackend: BuildingBackend = "none";
@@ -458,6 +467,7 @@ export class WorldRenderer {
     const dirY = Math.sin(azimuth) * ce;
     const dirZ = Math.sin(elevation);
     const daylight = Math.max(0, dirZ);
+    this.#darkness = 1 - Math.min(1, daylight * 4);
 
     this.#sunDir.set(dirX, dirY, Math.max(0.03, dirZ)).normalize();
     this.#placeSun();
@@ -663,7 +673,7 @@ export class WorldRenderer {
       let hex = th.road;
       let z = Z_ROAD;
       switch (type) {
-        case LANE_SIDEWALK: hex = th.sidewalk; z = Z_ROAD + 0.04; break;
+        case LANE_SIDEWALK: hex = th.sidewalk; z = Z_ROAD + SIDEWALK_LIFT_M; break;
         case LANE_BIKE: hex = th.bikeLane; break;
         case LANE_BUS: hex = th.busLane; break;
         case LANE_PARKING: hex = th.parking; break;
@@ -675,17 +685,19 @@ export class WorldRenderer {
       addRibbon(surface, pts.x, pts.y, pts.z, off, n, halfWidth, z, r, g, b);
       laneCount++;
 
-      if (this.#options.laneMarkings && (type === LANE_DRIVE || type === LANE_BUS)) {
-        const mb = markOf(t);
-        const edge = lanes.indexInEdge[i];
-        const [mr, mg, mb2] = colorTriple(edge === 0 ? th.laneMarking : th.laneMarking);
-        // Outer edge line on the rightmost lane, dashed separator elsewhere.
-        addOffsetLine(mb, pts.x, pts.y, pts.z, off, n, halfWidth - 0.12, 0.09, Z_MARKING, mr, mg, mb2);
-        if (edge === 0) {
-          const [cr, cg, cb] = colorTriple(th.laneMarkingCentre);
-          addOffsetLine(mb, pts.x, pts.y, pts.z, off, n, -(halfWidth - 0.12), 0.09, Z_MARKING, cr, cg, cb);
-        }
-      }
+    }
+
+    // Lane lines, edge lines, the centre line, stop lines and lane-use arrows, by the MUTCD's
+    // rules (`markings.ts`).
+    if (this.#options.laneMarkings) {
+      const white = [...colorTriple(th.laneMarking)] as [number, number, number];
+      const yellow = [...colorTriple(th.laneMarkingCentre)] as [number, number, number];
+      this.#markingReport = buildLaneMarkings(world, {
+        at: (x, y) => markOf(tileIndex(x, y)),
+        z: Z_MARKING,
+        white,
+        yellow,
+      });
     }
 
     for (let i = 0; i < world.junctions.count; i++) {
@@ -701,21 +713,9 @@ export class WorldRenderer {
       const dy = c.y2M - c.y1M;
       const len = Math.hypot(dx, dy);
       if (len < 0.2) continue;
-      const [cr, cg, cb] = colorTriple(th.crossing);
-      // Zebra: bars across the crossing axis.
-      const bars = Math.max(2, Math.min(14, Math.round(len / 0.9)));
-      const ux = dx / len;
-      const uy = dy / len;
-      const px = -uy;
-      const py = ux;
-      const hw = Math.max(0.6, c.widthM / 2);
-      const mb = markOf(tileIndex(c.x1M, c.y1M));
-      for (let k = 0; k < bars; k++) {
-        const f = (k + 0.5) / bars;
-        const bx = c.x1M + dx * f;
-        const by = c.y1M + dy * f;
-        addQuadStrip(mb, bx, by, ux, uy, px, py, len / bars * 0.45, hw, bbox.minZM + Z_CROSSING, cr, cg, cb);
-      }
+      // High-visibility ladder markings: NYC DOT's standard (`markings.ts`).
+      const col = [...colorTriple(th.crossing)] as [number, number, number];
+      addCrosswalk(markOf(tileIndex(c.x1M, c.y1M)), c.x1M, c.y1M, c.x2M, c.y2M, c.widthM, bbox.minZM + Z_CROSSING, col);
     }
 
     // ---- Buildings. ----
@@ -792,6 +792,7 @@ export class WorldRenderer {
   #buildPortals(world: VwpWorld): void {
     const portals = findPortals(world);
     this.#report = { ...this.#report, portals: portals.length };
+    this.#portalBuildings = new Set(portals.map((p) => p.building));
     if (portals.length === 0) return;
     const pos = new Float32Array(portals.length * 4 * 3);
     const idx = new Uint32Array(portals.length * 6);
@@ -1049,6 +1050,40 @@ export class WorldRenderer {
     return i >= 0 && i < this.#buildingCount ? this.#buildingCentroid[i * 4 + 2] : -Infinity;
   }
 
+  /** What the lane-marking pass drew, or null before a world (or with markings off). */
+  get markingReport(): MarkingReport | null {
+    return this.#markingReport;
+  }
+
+  /**
+   * How dark the scene is, `[0, 1]`: 0 in daylight, 1 at night, from the sun the time of day puts
+   * in the sky. Lamps glow in proportion (`actor-material.ts`).
+   */
+  get darkness(): number {
+    return this.#darkness;
+  }
+
+  /**
+   * The thinnest vertical gap between two road-surface layers that can overlap, metres: what the
+   * depth buffer has to resolve for the road not to z-fight (the glitch hunter checks it).
+   */
+  get minLayerGapM(): number {
+    const layers = [Z_LANDUSE, Z_ROAD, Z_ROAD + SIDEWALK_LIFT_M, Z_JUNCTION, Z_CROSSING];
+    let gap = Infinity;
+    for (let i = 0; i < layers.length; i++) {
+      for (let j = i + 1; j < layers.length; j++) gap = Math.min(gap, Math.abs(layers[i] - layers[j]));
+    }
+    return gap;
+  }
+
+  /**
+   * Whether a road runs through building `i` (it has a portal, `passages.ts`): a vehicle inside
+   * its footprint is in a real passage, not inside a wall.
+   */
+  hasPassage(i: number): boolean {
+    return this.#portalBuildings.has(i);
+  }
+
   /** The building currently ghosted, or −1. */
   get ghostBuilding(): number {
     return this.#ghost;
@@ -1273,6 +1308,7 @@ export class WorldRenderer {
   }
 
   #clearWorld(): void {
+    this.#portalBuildings = new Set<number>();
     // The signal renderer rebuilds itself in `setWorld`, keeping what the lamps showed when the
     // world is the same one (a theme swap).
     for (const g of [this.tiles, this.markings, this.buildingsGroup, this.sitesGroup]) {

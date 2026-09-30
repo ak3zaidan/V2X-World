@@ -281,6 +281,9 @@ export interface ActorRowInit {
   classIdx: number;
   state: number;
   verifiedNeighbors: number;
+  /** §3.3.5 `lamps` (v1.2). */
+  lamps?: number;
+  /** @deprecated the v1.0 name of {@link lamps}. */
   flags8?: number;
 }
 /** One signal row of §3.3.3. */
@@ -335,7 +338,7 @@ export function encodeKeyframeBody(init: KeyframeInit): Uint8Array {
     dv.setUint8(offActors + 24 * A + i, a.classIdx);
     dv.setUint8(offActors + 25 * A + i, a.state);
     dv.setUint8(offActors + 26 * A + i, a.verifiedNeighbors);
-    dv.setUint8(offActors + 27 * A + i, a.flags8 ?? 0);
+    dv.setUint8(offActors + 27 * A + i, a.lamps ?? a.flags8 ?? 0);
   }
   writeSignals(dv, offSignals, init.signals);
   return body;
@@ -367,6 +370,8 @@ export interface MovedRowInit {
   state: number;
   verifiedNeighbors: number;
   mflags: number;
+  /** §3.3.5 `lamps` (v1.2). */
+  lamps?: number;
 }
 /** One entry of the §3.4.3 absolute block. */
 export interface AbsoluteRowInit {
@@ -389,6 +394,8 @@ export interface SpawnRowInit {
   classIdx: number;
   state: number;
   verifiedNeighbors: number;
+  /** §3.3.5 `lamps` (v1.2). */
+  lamps?: number;
 }
 /** One despawn row of §3.4.6. */
 export interface DespawnRowInit {
@@ -468,7 +475,7 @@ export function encodeDeltaBody(init: DeltaInit): Uint8Array {
     dv.setUint8(offMoved + 16 * M + i, m.state);
     dv.setUint8(offMoved + 17 * M + i, m.verifiedNeighbors);
     dv.setUint8(offMoved + 18 * M + i, m.mflags);
-    dv.setUint8(offMoved + 19 * M + i, 0);
+    dv.setUint8(offMoved + 19 * M + i, m.lamps ?? 0);
   }
   for (let i = 0; i < Ab; i++) {
     const base = offAbs + 12 * i;
@@ -493,7 +500,7 @@ export function encodeDeltaBody(init: DeltaInit): Uint8Array {
     dv.setUint8(offSpawns + 32 * P + i, s.classIdx);
     dv.setUint8(offSpawns + 33 * P + i, s.state);
     dv.setUint8(offSpawns + 34 * P + i, s.verifiedNeighbors);
-    dv.setUint8(offSpawns + 35 * P + i, 0);
+    dv.setUint8(offSpawns + 35 * P + i, s.lamps ?? 0);
   }
   for (let i = 0; i < D; i++) {
     dv.setUint32(offDespawns + 0 * D + 4 * i, despawns[i].slot, true);

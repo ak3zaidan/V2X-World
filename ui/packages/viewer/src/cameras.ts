@@ -104,6 +104,29 @@ export type InputTarget = Pick<EventTarget, "addEventListener" | "removeEventLis
 
 const DEG = Math.PI / 180;
 
+/** Default chase elevation, degrees: a camera a little above the roof, looking down the street. */
+const CHASE_PITCH_DEG = 13;
+
+/**
+ * Natural frequency of the chase yaw's critically damped spring, rad/s. A critically damped
+ * second-order follow settles without overshoot in about `4.7 / ω` (to 1 %): 1.3 s here, so the
+ * camera swings round a corner with the car, a beat behind, and never oscillates.
+ */
+const CHASE_YAW_OMEGA = 3.6;
+
+/** The chase distance for a car, metres, that `distanceM` (the zoom) is relative to. */
+const CHASE_REFERENCE_M = 9;
+
+/**
+ * One exact step of a critically damped spring: error `e` and rate `v` after `dt` towards zero,
+ * `x(t) = (e + (v + ωe)t)·e^(−ωt)`. Exact, so it is frame-rate independent.
+ */
+function dampedStep(e: number, v: number, omega: number, dt: number): [number, number] {
+  const k = Math.exp(-omega * dt);
+  const a = v + omega * e;
+  return [(e + a * dt) * k, (v - omega * a * dt) * k];
+}
+
 /** Zero velocity and zero acceleration at both ends of [0, 1]. */
 function smootherstep(u: number): number {
   return u * u * u * (u * (u * 6 - 15) + 10);
@@ -176,6 +199,22 @@ export class CameraController {
   #occlusionRange: number;
   /** The heading the chase camera sits behind, smoothed; see `update`. NaN until seeded. */
   #chaseYaw = Number.NaN;
+  /** Its rate, rad/s: the yaw follows the heading as a critically damped spring. */
+  #chaseYawRate = 0;
+  /**
+   * The followed subject's body, metres, and whether it is a person or a rider: what the chase and
+   * dashboard framing is sized from ({@link setFollowSubject}). A car until told otherwise.
+   */
+  #subjectL = 4.5;
+  #subjectW = 1.8;
+  #subjectH = 1.5;
+  #subjectVru = false;
+  /**
+   * How far the chase camera may stand from its look point, after walls: follows the occlusion
+   * march's answer quickly inwards and slowly back out, so a lamp post of a façade corner passing
+   * behind the car is a glide, not a cut.
+   */
+  #clearDist = Number.POSITIVE_INFINITY;
   readonly yawLambda: number;
   /** Where the visible part of the viewport sits inside the canvas; see {@link setViewInsets}. */
   #insets = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -221,7 +260,7 @@ export class CameraController {
     this.lookLambda = options.lookLambda ?? 6;
     this.fovLambda = options.fovLambda ?? 5;
     this.#chaseDistance = options.chaseDistanceM ?? 9;
-    this.#orbitPitch = (options.chasePitchDeg ?? 16) * DEG;
+    this.#orbitPitch = (options.chasePitchDeg ?? CHASE_PITCH_DEG) * DEG;
     this.#chaseLookHeight = options.chaseLookHeightM ?? 1.4;
     this.#eyeHeight = options.dashboardEyeHeightM ?? 1.25;
     this.#altitude = options.mapAltitudeM ?? 700;
@@ -449,6 +488,8 @@ export class CameraController {
     if (actorId !== this.#followActorId) {
       this.#followPosKnown = false;
       this.#chaseYaw = Number.NaN;
+      this.#chaseYawRate = 0;
+      this.#clearDist = Number.POSITIVE_INFINITY;
       // Switching subject in a street mode is a journey across the city. The tracking law would
       // slide the camera there at street level — measured by the camera fuzz: lifted onto a 138 m
       // roof on the way, the frame one flat grey — so it is flown instead, over the roofs.
@@ -499,6 +540,36 @@ export class CameraController {
     return 2 * this.#altitude * Math.tan((this.camera.fov * DEG) / 2);
   }
 
+  /**
+   * Tell the controller how big the followed subject is: the chase camera stands off and looks at
+   * it in proportion (a bus from further back and higher up than a car, a person from closer and
+   * lower), and the dashboard camera sits at its driver's eye. `vru` is a person or a rider.
+   */
+  setFollowSubject(lengthM: number, widthM: number, heightM: number, vru: boolean): void {
+    if (!(lengthM > 0) || !(heightM > 0)) return;
+    this.#subjectL = lengthM;
+    this.#subjectW = widthM > 0 ? widthM : this.#subjectW;
+    this.#subjectH = heightM;
+    this.#subjectVru = vru;
+  }
+
+  /**
+   * The chase framing for the current subject: distance from its centre, look height and camera
+   * elevation. The subject fills about a quarter of the frame's height whatever its size: the
+   * distance is half its length plus a stand-off that grows with its height and length.
+   */
+  chaseFraming(): { distanceM: number; lookHeightM: number; pitchRad: number } {
+    const L = this.#subjectL;
+    const H = this.#subjectH;
+    const standOff = Math.max(this.#subjectVru ? 3.6 : 4.5, 1.5 * H + 0.35 * L);
+    const zoom = this.#chaseDistance / CHASE_REFERENCE_M;
+    return {
+      distanceM: (L / 2 + standOff) * zoom,
+      lookHeightM: Math.max(0.9, 0.72 * H),
+      pitchRad: this.#orbitPitch - (this.#subjectVru ? 3 * DEG : 0),
+    };
+  }
+
   /** Feed the followed actor's interpolated pose. Call once per frame before {@link update}. */
   setFollowPose(x: number, y: number, z: number, headingRad: number, speedMps: number): void {
     // A non-finite pose must never reach the camera: one NaN in the position and every matrix
@@ -535,7 +606,11 @@ export class CameraController {
   /** Cut to the desired pose with no animation. */
   snap(): void {
     this.#flyT = this.#flyDuration; // a cut is not a flight
-    if (this.#followPosKnown) this.#chaseYaw = this.#followHeading;
+    if (this.#followPosKnown) {
+      this.#chaseYaw = this.#followHeading;
+      this.#chaseYawRate = 0;
+    }
+    this.#clearDist = Number.POSITIVE_INFINITY;
     this.#computeDesired();
     // The building and ground constraints are applied by `update`, which always runs before a
     // frame is drawn; a cut only places the camera.
@@ -559,15 +634,23 @@ export class CameraController {
     // The chase camera sits behind a *smoothed* heading. Behind the raw one it rode every tenth of
     // a degree of heading noise at nine metres' lever arm, and a U-turn swung it straight through
     // the car; the smoothed yaw orbits round instead.
+    //
+    // It is a critically damped spring on the heading, not a first-order lag: a first-order lag
+    // starts turning at full rate the instant the car does, which reads as the camera being
+    // yanked, while the spring eases into the turn and out of it with no overshoot.
     if (Number.isFinite(this.#chaseYaw)) {
-      const ky = 1 - Math.exp(-step * this.yawLambda);
-      let d = this.#followHeading - this.#chaseYaw;
-      d -= Math.floor(d / (2 * Math.PI) + 0.5) * 2 * Math.PI;
-      this.#chaseYaw += d * ky;
+      let e = this.#chaseYaw - this.#followHeading;
+      e -= Math.floor(e / (2 * Math.PI) + 0.5) * 2 * Math.PI;
+      const [ne, nv] = dampedStep(e, this.#chaseYawRate, CHASE_YAW_OMEGA, step);
+      this.#chaseYaw = this.#followHeading + ne;
+      this.#chaseYawRate = nv;
     } else if (this.#followPosKnown) {
       this.#chaseYaw = this.#followHeading;
+      this.#chaseYawRate = 0;
     }
     this.#computeDesired();
+    const street = (this.#mode === "chase" || this.#mode === "dashboard") && this.#followPosKnown;
+    if (street && this.#mode === "chase") this.#applyClearance(this.#desiredPosition, this.#desiredLook, step);
     this.keepCameraOutsideBuildings(this.#desiredPosition, this.#desiredLook);
     this.#keepAboveGround(this.#desiredPosition);
 
@@ -577,6 +660,14 @@ export class CameraController {
     }
     if (this.#flyT < this.#flyDuration) {
       this.#advanceFlight(step);
+    } else if (street && !this.#pendingFlight) {
+      // Locked to the subject: the camera stands at its smoothed offset from the car's *drawn*
+      // position, so the car sits still in the frame at any speed. The old tracking law lerped the
+      // camera's world position towards that point, which at 15 m/s trailed it by v/λ = 3.75 m
+      // more than it meant to and pumped the car back and forth in the frame at every change of
+      // speed. The smoothing is in the offset (the yaw spring, the clearance), not the position.
+      this.camera.position.copy(this.#desiredPosition);
+      this.look.copy(this.#desiredLook);
     } else {
       const kp = 1 - Math.exp(-step * this.positionLambda);
       const kl = 1 - Math.exp(-step * this.lookLambda);
@@ -600,6 +691,44 @@ export class CameraController {
     if (this.camera.position.distanceToSquared(this.look) < 1e-6) this.look.z -= 0.01;
     this.camera.lookAt(this.look);
     this.camera.updateMatrixWorld();
+  }
+
+  /**
+   * Pull the chase camera in front of a wall between it and its subject — smoothly. The march of
+   * {@link keepCameraOutsideBuildings} answers "how far back can the camera stand"; that answer
+   * jumps as the car passes a façade corner, and applying it raw was a cut. The distance allowed
+   * follows it in 0.08 s when it shrinks (a wall must never be seen through for more than a frame
+   * or two) and in 0.6 s when it grows back.
+   */
+  #applyClearance(pos: Vector3, lookAt: Vector3, dt: number): void {
+    const world = this.#world;
+    const dir = this.#scratchB.copy(pos).sub(lookAt);
+    const want = dir.length();
+    if (want < 1e-3) return;
+    dir.multiplyScalar(1 / want);
+    let allowed = want;
+    if (world) {
+      const steps = Math.min(48, Math.max(6, Math.ceil(want * 2)));
+      const own = world.buildingTopAt(lookAt.x, lookAt.y) > lookAt.z ? world.buildingIndexAt(lookAt.x, lookAt.y) : -1;
+      for (let i = 1; i <= steps; i++) {
+        const t = (want * i) / steps;
+        const x = lookAt.x + dir.x * t;
+        const y = lookAt.y + dir.y * t;
+        const z = lookAt.z + dir.z * t;
+        if (own >= 0 && world.buildingIndexAt(x, y) === own) continue;
+        const top = world.buildingTopAt(x, y);
+        if (top > -Infinity && z < top) {
+          allowed = Math.max(0.8, t - 0.6);
+          break;
+        }
+      }
+    }
+    if (!Number.isFinite(this.#clearDist)) this.#clearDist = allowed;
+    const tau = allowed < this.#clearDist ? 0.08 : 0.6;
+    this.#clearDist += (allowed - this.#clearDist) * (1 - Math.exp(-dt / tau));
+    // Never further than the wall allows right now, whatever the smoothing says.
+    const d = Math.min(want, this.#clearDist, allowed);
+    pos.set(lookAt.x + dir.x * d, lookAt.y + dir.y * d, lookAt.z + dir.z * d);
   }
 
   /**
@@ -932,16 +1061,17 @@ export class CameraController {
         const base = this.#followPos;
         const heading = Number.isFinite(this.#chaseYaw) ? this.#chaseYaw : this.#followHeading;
         const yaw = heading + Math.PI + this.#orbitYaw;
-        // A little extra trail at speed; 0 at rest, +40 % at 30 m/s.
-        const dist = this.#chaseDistance * (1 + Math.min(0.4, this.#followSpeed / 75));
-        const cp = Math.cos(this.#orbitPitch);
-        const sp = Math.sin(this.#orbitPitch);
+        const f = this.chaseFraming();
+        // A little extra trail at speed, for the sense of it: 0 at rest, +20 % at 30 m/s.
+        const dist = f.distanceM * (1 + Math.min(0.2, this.#followSpeed / 150));
+        const cp = Math.cos(f.pitchRad);
+        const sp = Math.sin(f.pitchRad);
         d.set(
           base.x + Math.cos(yaw) * dist * cp,
           base.y + Math.sin(yaw) * dist * cp,
-          base.z + dist * sp + this.#chaseLookHeight,
+          base.z + dist * sp + f.lookHeightM,
         );
-        l.set(base.x, base.y, base.z + this.#chaseLookHeight);
+        l.set(base.x, base.y, base.z + f.lookHeightM);
         break;
       }
       case "dashboard": {
@@ -949,7 +1079,36 @@ export class CameraController {
         const h = this.#followHeading + this.#orbitYaw;
         const fx = Math.cos(h);
         const fy = Math.sin(h);
-        d.set(base.x + fx * 0.6, base.y + fy * 0.6, base.z + this.#eyeHeight);
+        // The driver's eye. A car's driver sits about 2 m behind the front bumper and 0.35 m left
+        // of the centre line (left-hand drive), a bus or truck driver right at the front and high,
+        // a rider over the saddle; a person's eyes are about 93 % of their height (the 1.60 m eye
+        // height of the 50th-percentile man, 1.75 m tall, NASA-STD-3000 anthropometry).
+        const L = this.#subjectL;
+        const H = this.#subjectH;
+        let ahead: number;
+        let left: number;
+        let eye: number;
+        if (this.#subjectVru) {
+          ahead = 0.12;
+          left = 0;
+          eye = Math.max(1.1, 0.93 * H);
+        } else if (L >= 6.8) {
+          ahead = L / 2 - 1.0;
+          left = Math.min(0.55, this.#subjectW * 0.25);
+          eye = Math.min(H - 0.3, Math.max(1.9, 0.72 * H));
+        } else if (L <= 2.6) {
+          ahead = -0.05;
+          left = 0;
+          eye = Math.max(1.2, 0.95 * H);
+        } else {
+          ahead = L / 2 - Math.min(2.0, 0.42 * L);
+          left = Math.min(0.37, this.#subjectW * 0.2);
+          eye = this.#eyeHeight * (H > 1.7 ? H / 1.5 : 1);
+          eye = Math.min(H - 0.12, eye);
+        }
+        const lx = -fy;
+        const ly = fx;
+        d.set(base.x + fx * ahead + lx * left, base.y + fy * ahead + ly * left, base.z + eye);
         const pitch = MathUtils.clamp(this.#orbitPitch - 16 * DEG, -0.5, 0.5);
         l.set(d.x + fx * 30, d.y + fy * 30, d.z + Math.tan(pitch) * 30);
         break;

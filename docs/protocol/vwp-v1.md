@@ -636,7 +636,7 @@ after despawn so that a late delta cannot be misapplied.
 | 9 | `u8[A]` | `class_idx` | index into the class table | PUBLIC |
 | 10 | `u8[A]` | `state` | §3.3.4 | mixed |
 | 11 | `u8[A]` | `verified_neighbors` | count of neighbours in state *verified*, saturating at 255 | NODE |
-| 12 | `u8[A]` | `flags8` | reserved, 0 | — |
+| 12 | `u8[A]` | `lamps` | §3.3.5 (v1.2; `flags8`, reserved, in v1.0) | PUBLIC |
 
 **The pose is the body's centre.** `x_mm`/`y_mm`/`z_cm` locate the centre of the class's
 bounding box (§4 class table `length_m` × `width_m`), not the kinematic reference point the
@@ -677,6 +677,36 @@ keys each head row by both its group id and its plain controller id.)
 
 This is the "benign / attacker / reported / revoked" state the palette of 09-ui §10 renders: benign =
 none of bits 0–2 set.
+
+#### 3.3.5 The `lamps` byte (v1.2)
+
+What the actor's exterior lamps show. PUBLIC: anyone at the roadside can see a car's lamps, so the
+`node` profile carries it unchanged. It lives in bytes a v1.0 reader was already required to ignore —
+the keyframe's `flags8` column and the moved and spawn rows' `reserved` byte — so it is a MINOR addition
+(§8.5); a v1.0 reader draws every vehicle dark, which is what v1.0 streams said.
+
+| Bit | Mask | Name | Meaning |
+|---|---|---|---|
+| 0 | `0x01` | `LAMP_BRAKE` | stop lamps lit: the driver is on the service brake, or holding the vehicle at a standstill |
+| 1 | `0x02` | `LAMP_TURN_LEFT` | left direction indicator operating |
+| 2 | `0x04` | `LAMP_TURN_RIGHT` | right direction indicator operating |
+| 3 | `0x08` | `LAMP_HAZARD` | hazard warning (both indicators) |
+| 4 | `0x10` | `LAMP_LOW_BEAM` | dipped headlamps (and so tail lamps) on |
+| 5 | `0x20` | `LAMP_REVERSE` | reversing lamps |
+| 6 | `0x40` | `LAMP_EMERGENCY` | an emergency vehicle's warning beacons in use (J2735 `LightbarInUse`) |
+| 7 | `0x80` | — | reserved, 0 |
+
+The bits follow SAE J2735's `ExteriorLights` (low beam, left and right turn signal, hazard) and
+`BrakeSystemStatus`. An indicator bit means "the indicator is on", not the flash phase: the stream runs
+at the mobility step and a flasher at 1–2 Hz (SAE J590), so the client flashes it. The engine's rules are
+on the `mobility/lamps/exterior` model card (`v2xw_mobility::lamps`) and in `v2xw_engine::daylight` for
+the headlamps; this build produces no hazard or reversing lamp, because no vehicle in it breaks down,
+double-parks or reverses. A change of `lamps` alone makes a moved row (§3.4.2): a car standing at a red
+releases its brake a step before it moves. `gt.kinematics` carries the same byte as `lamps` (omitted when
+zero), which is how the live server's stream gets it.
+
+The writer still announces `version_minor` 0: raising it moves the §9 worked examples, whose `Hello`
+bytes carry the minor, and is left to the release that re-blesses them.
 
 ---
 
@@ -722,9 +752,9 @@ every earlier `Delta` of the same GOP in `step_index` order. A client that sees 
 | 8 | `u8[M]` | `state` | absolute, §3.3.4 | mixed |
 | 9 | `u8[M]` | `verified_neighbors` | absolute | NODE |
 | 10 | `u8[M]` | `mflags` | §3.4.2.1 | — |
-| 11 | `u8[M]` | `reserved` | 0 | — |
+| 11 | `u8[M]` | `lamps` | absolute, §3.3.5 (v1.2; `reserved` in v1.0) | PUBLIC |
 
-Only actors whose quantised pose, `state`, `verified_neighbors` or lane changed appear. Heading, speed,
+Only actors whose quantised pose, `state`, `verified_neighbors`, `lamps` (v1.2) or lane changed appear. Heading, speed,
 acceleration, state and neighbour count are absolute because they are already 1–2 bytes: delta-coding them
 would save nothing and cost a reference.
 
@@ -770,7 +800,7 @@ clear.
 | 11 | `u8[P]` | `class_idx` | | PUBLIC |
 | 12 | `u8[P]` | `state` | | mixed |
 | 13 | `u8[P]` | `verified_neighbors` | | NODE |
-| 14 | `u8[P]` | `reserved` | 0 | — |
+| 14 | `u8[P]` | `lamps` | §3.3.5 (v1.2; `reserved` in v1.0) | PUBLIC |
 
 #### 3.4.6 Despawn block (8·D bytes, 4-aligned)
 

@@ -115,6 +115,8 @@ pub struct ActorPose {
     pub state: u8,
     /// Neighbours in state *verified*, saturating at 255.
     pub verified_neighbors: u8,
+    /// The exterior lamps (§3.3.5): brake, indicators, headlamps, beacons. PUBLIC.
+    pub lamps: u8,
 }
 
 impl ActorPose {
@@ -132,6 +134,7 @@ impl ActorPose {
             class_idx: 0,
             state: ST_EQUIPPED,
             verified_neighbors: 0,
+            lamps: 0,
         }
     }
 }
@@ -208,6 +211,8 @@ impl SnapshotFrame {
 #[derive(Debug, Clone, Copy)]
 struct SlotRef {
     pose: PoseRef,
+    /// The exterior lamps last transmitted (§3.3.5).
+    lamps: u8,
 }
 
 /// Produces `Keyframe` and `Delta` frames from snapshots (§3.3, §3.4).
@@ -368,6 +373,7 @@ impl SnapshotEncoder {
                 class_idx: a.class_idx,
                 state: a.state,
                 verified_neighbors: a.verified_neighbors,
+                lamps: a.lamps,
             };
             if out.insert(a.slot, target).is_some() {
                 return Err(RecordError::malformed(
@@ -398,7 +404,7 @@ impl SnapshotEncoder {
                 class_idx: t.class_idx,
                 state: t.state,
                 verified_neighbors: t.verified_neighbors,
-                flags8: 0,
+                lamps: t.lamps,
             };
             self.refs.insert(
                 *slot,
@@ -416,6 +422,7 @@ impl SnapshotEncoder {
                         verified_neighbors: t.verified_neighbors,
                         lane_id: t.lane_id,
                     },
+                    lamps: t.lamps,
                 },
             );
         }
@@ -460,6 +467,7 @@ impl SnapshotEncoder {
                     class_idx: t.class_idx,
                     state: t.state,
                     verified_neighbors: t.verified_neighbors,
+                    lamps: t.lamps,
                 });
                 let z_cm = quant::escape_z_cm(t.z_mm);
                 self.refs.insert(
@@ -476,6 +484,7 @@ impl SnapshotEncoder {
                             verified_neighbors: t.verified_neighbors,
                             lane_id: t.lane_id,
                         },
+                        lamps: t.lamps,
                     },
                 );
                 continue;
@@ -483,13 +492,16 @@ impl SnapshotEncoder {
             let step = r.pose.step(t.x_mm, t.y_mm, t.z_mm);
             let pose_changed = step.absolute || step.d_mm != [0, 0, 0];
             let lane_changed = t.lane_id != r.pose.lane_id;
-            // §3.4.2: "Only actors whose quantised pose, `state`, `verified_neighbors` or
-            // lane changed appear." Heading, speed and acceleration are absolute fields
-            // that ride along on a row; they do not, per the specification, trigger one.
+            // §3.4.2: "Only actors whose quantised pose, `state`, `verified_neighbors`,
+            // `lamps` or lane changed appear." Heading, speed and acceleration are absolute
+            // fields that ride along on a row; they do not, per the specification, trigger
+            // one. The lamps do (v1.2): a car stopped at a red whose brake lamps go out as
+            // it moves off must say so in the step it happens, not whenever it next moves.
             let changed = pose_changed
                 || lane_changed
                 || t.state != r.pose.state
-                || t.verified_neighbors != r.pose.verified_neighbors;
+                || t.verified_neighbors != r.pose.verified_neighbors
+                || t.lamps != r.lamps;
             let mut next = step.next;
             next.heading_brad = t.heading_brad;
             next.speed_cq = t.speed_cq;
@@ -498,7 +510,13 @@ impl SnapshotEncoder {
             next.verified_neighbors = t.verified_neighbors;
             next.lane_id = t.lane_id;
             if !changed {
-                self.refs.insert(*slot, SlotRef { pose: next });
+                self.refs.insert(
+                    *slot,
+                    SlotRef {
+                        pose: next,
+                        lamps: t.lamps,
+                    },
+                );
                 continue;
             }
             let mut mflags = 0u8;
@@ -525,8 +543,15 @@ impl SnapshotEncoder {
                 state: t.state,
                 verified_neighbors: t.verified_neighbors,
                 mflags,
+                lamps: t.lamps,
             });
-            self.refs.insert(*slot, SlotRef { pose: next });
+            self.refs.insert(
+                *slot,
+                SlotRef {
+                    pose: next,
+                    lamps: t.lamps,
+                },
+            );
         }
 
         let gone: Vec<u32> = self
@@ -618,6 +643,7 @@ struct Target {
     class_idx: u8,
     state: u8,
     verified_neighbors: u8,
+    lamps: u8,
 }
 
 /// Assigns actor slots the way §3.3.1 requires: the lowest free slot, and no reuse until

@@ -101,6 +101,8 @@ export interface PoseSnapshot {
   actorId: Uint32Array;
   classIdx: Uint8Array;
   state: Uint8Array;
+  /** §3.3.5 lamps. */
+  lamps: Uint8Array;
   occupied: Uint8Array;
   /** False before the first {@link PoseInterpolator.capture}. */
   valid: boolean;
@@ -199,6 +201,13 @@ export const HISTORY = 4;
 /** Time constant of the correction blend, seconds of viewer clock. */
 export const ERROR_BLEND_SECONDS = 0.12;
 
+/**
+ * How long an actor takes to fade in when it appears and out when it leaves, seconds of sim time.
+ * A quarter of a second: long enough that nobody sees a car blink into existence, short enough that
+ * a car leaving the map at its edge is gone by the time the next one arrives.
+ */
+export const FADE_SECONDS = 0.3;
+
 const NO_ACTOR = 0xffffffff;
 
 /** Coefficients cached per slot: x and y cubics, z linear, heading cubic. */
@@ -216,6 +225,7 @@ function makeSnapshot(capacity: number): PoseSnapshot {
     actorId: new Uint32Array(capacity).fill(NO_ACTOR),
     classIdx: new Uint8Array(capacity),
     state: new Uint8Array(capacity),
+    lamps: new Uint8Array(capacity),
     occupied: new Uint8Array(capacity),
     valid: false,
     seq: -1,
@@ -249,6 +259,7 @@ function growSnapshot(s: PoseSnapshot, capacity: number): void {
   s.actorId = id;
   s.classIdx = growU8(s.classIdx, capacity);
   s.state = growU8(s.state, capacity);
+  s.lamps = growU8(s.lamps, capacity);
   s.occupied = growU8(s.occupied, capacity);
 }
 
@@ -370,6 +381,20 @@ export class PoseInterpolator {
   outClassIdx: Uint8Array;
   outState: Uint8Array;
   outOccupied: Uint8Array;
+  /** 1 where this sample snapped the slot (a real discontinuity in the data) rather than interpolating it. */
+  outSnapped: Uint8Array;
+  /**
+   * The §3.3.5 lamps at the drawn instant: those of the older snapshot of the segment the render
+   * time is in, so a brake lamp lights when the car is drawn at the step it braked in, not a step
+   * before (the same alignment the signal lamps get, `scene.ts`).
+   */
+  outLamps: Uint8Array;
+  /**
+   * How much of each actor is there, `[0, 1]`: an actor fades in over {@link FADE_SECONDS} of render
+   * time from the instant it first exists, and out over the same from the instant it last existed,
+   * instead of popping into or out of the street (the glitch hunter's `pop`).
+   */
+  outFade: Float32Array;
 
   /** Snapshot ring; `#ring[#head]` is the newest, `#size` of them are valid. */
   #ring: PoseSnapshot[];
@@ -411,6 +436,11 @@ export class PoseInterpolator {
   #snapAll = false;
   /** Scratch for one slot's raw pose. */
   #raw = new Float64Array(4);
+  /** Per slot: the sim time the shown actor first existed (its first snapshot), for the fade-in. */
+  #bornAt: Float64Array;
+  /** Per slot: the sim time a departed actor last existed, and its id, for the fade-out. */
+  #goneAt: Float64Array;
+  #goneId: Uint32Array;
   #nextSeq = 0;
   /**
    * Per-slot curve cache. The cubic through a segment depends only on the two snapshots (and the
@@ -463,6 +493,12 @@ export class PoseInterpolator {
     this.outClassIdx = new Uint8Array(this.#capacity);
     this.outState = new Uint8Array(this.#capacity);
     this.outOccupied = new Uint8Array(this.#capacity);
+    this.outSnapped = new Uint8Array(this.#capacity);
+    this.outLamps = new Uint8Array(this.#capacity);
+    this.outFade = new Float32Array(this.#capacity);
+    this.#bornAt = new Float64Array(this.#capacity).fill(Number.NaN);
+    this.#goneAt = new Float64Array(this.#capacity).fill(Number.NaN);
+    this.#goneId = new Uint32Array(this.#capacity).fill(NO_ACTOR);
     this.#errPos = new Float32Array(this.#capacity * 3);
     this.#errHead = new Float32Array(this.#capacity);
     this.#errId = new Uint32Array(this.#capacity).fill(NO_ACTOR);
@@ -573,6 +609,18 @@ export class PoseInterpolator {
     this.outClassIdx = growU8(this.outClassIdx, n);
     this.outState = growU8(this.outState, n);
     this.outOccupied = growU8(this.outOccupied, n);
+    this.outSnapped = growU8(this.outSnapped, n);
+    this.outLamps = growU8(this.outLamps, n);
+    this.outFade = growF32(this.outFade, n);
+    const born = new Float64Array(n).fill(Number.NaN);
+    born.set(this.#bornAt, 0);
+    this.#bornAt = born;
+    const gone = new Float64Array(n).fill(Number.NaN);
+    gone.set(this.#goneAt, 0);
+    this.#goneAt = gone;
+    const gid = new Uint32Array(n).fill(NO_ACTOR);
+    gid.set(this.#goneId, 0);
+    this.#goneId = gid;
     this.#errPos = growF32(this.#errPos, n * 3);
     this.#errHead = growF32(this.#errHead, n);
     const eid = new Uint32Array(n).fill(NO_ACTOR);
@@ -703,6 +751,8 @@ export class PoseInterpolator {
       s.actorId.set(poses.actorId.subarray(0, count), 0);
       s.classIdx.set(poses.classIdx.subarray(0, count), 0);
       s.state.set(poses.state.subarray(0, count), 0);
+      if (poses.lamps) s.lamps.set(poses.lamps.subarray(0, count), 0);
+      else s.lamps.fill(0, 0, count);
       s.occupied.set(poses.occupied.subarray(0, count), 0);
       for (let i = 0; i < count; i++) {
         s.accel[i] = poses.accelCq[i] / ACCEL_SCALE;
@@ -852,8 +902,7 @@ export class PoseInterpolator {
     if (alpha > alphaCap) alpha = alphaCap;
     else if (alpha < -this.maxExtrapolationSteps) alpha = -this.maxExtrapolationSteps;
 
-    const count = newest.count;
-    this.#outCount = count;
+    this.#outCount = Math.max(newest.count, this.#dirtyTo);
     // The frame-wide segment the fast path evaluates: inside the history, between `a` and `b`.
     const inSegment = this.#size > 1 && renderSim >= a.simSeconds && renderSim <= b.simSeconds && segSpan > 1e-9;
     const segU = inSegment ? (renderSim - a.simSeconds) / segSpan : 0;
@@ -890,17 +939,90 @@ export class PoseInterpolator {
     const eHead = this.#errHead;
     const eId = this.#errId;
 
+    const oLamps = this.outLamps;
+    const oFade = this.outFade;
+    const bornAt = this.#bornAt;
+    const goneAt = this.#goneAt;
+    const goneId = this.#goneId;
+    const fadeSim = FADE_SECONDS * Math.max(0.05, Math.min(1, this.#rate));
+    const count = Math.max(newest.count, this.#dirtyTo);
     for (let i = 0; i < count; i++) {
-      const live = newest.occupied[i];
-      if (!live) {
-        this.outOccupied[i] = 0;
-        this.outActorId[i] = NO_ACTOR;
-        eId[i] = NO_ACTOR;
-        continue;
+      const live = i < newest.count && newest.occupied[i] === 1;
+      const shownId = this.outOccupied[i] === 1 ? this.outActorId[i] : NO_ACTOR;
+      if (!live || newest.actorId[i] !== shownId) {
+        // The actor this slot showed is not in the newest snapshot any more. Until the render
+        // clock reaches the last instant it existed it is drawn from the history as usual; then
+        // it fades out where it stopped. (A departure is a trip's end or the map's edge; the
+        // engine's last word on it is that snapshot.)
+        if (shownId !== NO_ACTOR && goneId[i] !== shownId) {
+          let last = Number.NaN;
+          for (let k = 1; k < this.#size; k++) {
+            const s = this.#at(k);
+            if (i < s.count && s.occupied[i] === 1 && s.actorId[i] === shownId) {
+              last = s.simSeconds;
+              break;
+            }
+          }
+          goneId[i] = shownId;
+          goneAt[i] = last;
+        }
+        if (!live && goneId[i] !== NO_ACTOR && goneId[i] === shownId && Number.isFinite(goneAt[i])) {
+          const id = goneId[i];
+          const p = i * 3;
+          const after = renderSim - goneAt[i];
+          if (after < fadeSim) {
+            if (after <= 0) {
+              const bk2 = this.#bracket(renderSim);
+              if (this.#evaluate(i, id, renderSim, bk2, raw) >= 0) {
+                oPos[p] = raw[0];
+                oPos[p + 1] = raw[1];
+                oPos[p + 2] = raw[2];
+                oHead[i] = wrapAngle(raw[3]);
+              }
+              oFade[i] = 1;
+            } else {
+              // Hold where it last was, fading.
+              oFade[i] = Math.max(0, 1 - after / fadeSim);
+            }
+            this.outSnapped[i] = 0;
+            continue;
+          }
+        }
+        if (!live) {
+          this.outOccupied[i] = 0;
+          this.outActorId[i] = NO_ACTOR;
+          oFade[i] = 0;
+          eId[i] = NO_ACTOR;
+          goneId[i] = NO_ACTOR;
+          bornAt[i] = Number.NaN;
+          continue;
+        }
       }
       const id = newest.actorId[i];
       const wasShown = this.outOccupied[i] === 1 && this.outActorId[i] === id;
       const p = i * 3;
+      if (!wasShown) {
+        // A newcomer: the first instant it exists is its earliest snapshot in the history.
+        let first = newest.simSeconds;
+        for (let k = 1; k < this.#size; k++) {
+          const s = this.#at(k);
+          if (i < s.count && s.occupied[i] === 1 && s.actorId[i] === id) first = s.simSeconds;
+          else break;
+        }
+        // The first picture of a stream (or of a seek) is shown whole; only later arrivals fade in.
+        bornAt[i] = snapAll || this.#size === 1 ? renderSim - fadeSim : first;
+        goneId[i] = NO_ACTOR;
+      }
+      if (!this.#held && renderSim < bornAt[i] - 1e-9) {
+        // Not born yet at the drawn instant: drawing it now would show it early, frozen at its
+        // spawn pose while the traffic around it is a step behind.
+        this.outOccupied[i] = 0;
+        this.outActorId[i] = NO_ACTOR;
+        oFade[i] = 0;
+        continue;
+      }
+      // A held (paused) run shows exactly its newest state, everyone in it whole.
+      oFade[i] = this.#held ? 1 : Math.min(1, (renderSim - bornAt[i]) / fadeSim);
 
       if (rebase && wasShown) {
         // What is on screen now, against what the new data says for the same instant.
@@ -942,6 +1064,8 @@ export class PoseInterpolator {
       this.outClassIdx[i] = newest.classIdx[i];
       this.outState[i] = newest.state[i];
       this.outSpeed[i] = newest.speed[i];
+      // The lamps of the snapshot whose interval the drawn instant is in.
+      oLamps[i] = inSegment && i < a.count && a.occupied[i] === 1 && a.actorId[i] === id ? a.lamps[i] : newest.lamps[i];
 
       let kind: number;
       if (inSegment && ((cKey[i] === segKey && cId[i] === id) || this.#fit(i, id, bk, segKey))) {
@@ -957,6 +1081,7 @@ export class PoseInterpolator {
       }
       if (snapAll) kind = 1;
       if (kind === 1) snapped++;
+      this.outSnapped[i] = kind === 1 ? 1 : 0;
       let x = raw[0];
       let y = raw[1];
       let z = raw[2];
@@ -991,7 +1116,7 @@ export class PoseInterpolator {
       oHead[i] = h > Math.PI || h < -Math.PI ? wrapAngle(h) : h;
     }
     this.#anyError = anyError;
-    this.#clearTo(count);
+    this.#clearTo(newest.count > count ? newest.count : count);
 
     this.#lastInfo = {
       alpha, delaySeconds: delay, intervalSeconds: interval, stalled, count, snapped,

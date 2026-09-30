@@ -28,6 +28,7 @@ export * from "./worker.js";
 
 /**
  * The protocol version this package implements. v1.1 added `view.follow {feed}` and the
- * `node.feed` notification (§8.4, additive).
+ * `node.feed` notification (§8.4, additive); v1.2 the actor `lamps` byte (§3.3.5), in bytes a
+ * v1.0 reader ignores.
  */
-export const VWP_PROTOCOL_VERSION = "1.1";
+export const VWP_PROTOCOL_VERSION = "1.2";

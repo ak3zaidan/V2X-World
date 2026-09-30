@@ -372,6 +372,11 @@ export class SignalRenderer {
     }
   }
 
+  /** The J2735 phase head `i` shows, or {@link PHASE_NO_DATA}; allocation-free, for per-frame checks. */
+  phaseAt(i: number): number {
+    return i >= 0 && i < this.#count ? this.#phase[i] : PHASE_NO_DATA;
+  }
+
   /** True if head `i` is a pedestrian head (§4.5 `kind` 1). */
   isPedestrianHead(i: number): boolean {
     return i >= 0 && i < this.#count && this.#pedestrian[i] === 1;

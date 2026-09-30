@@ -1245,6 +1245,8 @@ struct LiveActor {
     speed_mps: f64,
     accel_mps2: f64,
     lane: Option<LaneId>,
+    /// Its exterior lamps (vwp-v1 §3.3.5), as `gt.kinematics` carried them.
+    lamps: u8,
     /// The last step this actor published kinematics in.
     last_step: u64,
 }
@@ -1759,6 +1761,7 @@ impl Projector {
                 // this build emits, so the count is not known here. Zero is the §3.3.2
                 // encoding and the honest one: no neighbour is *known* to be verified.
                 verified_neighbors: 0,
+                lamps: live.lamps,
             });
         }
         let mut snapshot = Snapshot::new(t, poses);
@@ -1854,6 +1857,7 @@ impl Projector {
                     speed_mps: 0.0,
                     accel_mps2: 0.0,
                     lane: None,
+                    lamps: 0,
                     last_step: index,
                 },
             );
@@ -1871,6 +1875,7 @@ impl Projector {
                 live.speed_mps = view.speed_mps;
                 live.accel_mps2 = view.acc_mps2.unwrap_or(0.0);
                 live.lane = view.lane.map(LaneId::new);
+                live.lamps = view.lamps;
                 live.last_step = index;
             }
         }

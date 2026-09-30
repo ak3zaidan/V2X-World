@@ -706,6 +706,11 @@ pub struct Engine {
     /// `ST_TRANSMITTING` bit. A `BTreeSet`, so nothing about the frame depends on hash
     /// iteration order (02-architecture.md §6.1).
     transmitted_since_step: std::collections::BTreeSet<NodeId>,
+    /// Every vehicle's exterior lamps as the last mobility step left them (vwp-v1 §3.3.5):
+    /// the mobility model's brake, indicators and beacons, with the headlamps the time of
+    /// day and the weather call for ([`crate::daylight`]). Published on `gt.kinematics`
+    /// and in the snapshot stream.
+    lamps: BTreeMap<ActorId, u8>,
     providers: v2xw_metrics::ProviderSet,
     metric_period: Duration,
     reverse_node_walk: bool,
@@ -1051,6 +1056,7 @@ impl Engine {
             snapshots,
             snapshots_enabled: true,
             transmitted_since_step: std::collections::BTreeSet::new(),
+            lamps: BTreeMap::new(),
             providers,
             metric_period: Duration::from_secs(1),
             reverse_node_walk: false,
@@ -1894,10 +1900,16 @@ impl Engine {
                 scheduler, rng, world, snapshot, provenance, params, recorder,
             );
             let mut mob = crate::adapters::mobility(&mut ctx);
-            mobility.step(&mut mob, step).quantized()
+            let update = mobility.step(&mut mob, step).quantized();
+            // The lamps the step's new state shows. Read-only for the traffic: nothing in a
+            // step reads them back.
+            let lamps = mobility.exterior_lamps(&mut mob);
+            (update, lamps)
         };
+        let (update, lamps) = update;
 
         self.absorb(&update, now);
+        self.set_lamps(lamps, step.after(now));
         self.sweep_retired_links(now);
         self.recentre_focus(now);
         for orphan in core::mem::take(&mut self.orphaned_rx) {
@@ -2223,14 +2235,40 @@ impl Engine {
     /// filed at the time it is actually about, rather than at a time the engine asserted
     /// for it.
     fn publish_state_at(&mut self, recorder: &mut dyn RunRecorder) {
-        let states: Vec<(ActorId, Kinematics, &'static str, Option<NodeId>)> = self
+        let states: Vec<(ActorId, Kinematics, &'static str, Option<NodeId>, u8)> = self
             .actors
             .iter()
-            .map(|(actor, rec)| (*actor, rec.last, rec.class.as_str(), rec.node))
+            .map(|(actor, rec)| {
+                let lamps = self.lamps.get(actor).copied().unwrap_or(0);
+                (*actor, rec.last, rec.class.as_str(), rec.node, lamps)
+            })
             .collect();
-        for (actor, k, class, node) in states {
-            let rec = GtKinematics::new(actor, &k, class).with_node(node);
+        for (actor, k, class, node, lamps) in states {
+            let rec = GtKinematics::new(actor, &k, class)
+                .with_node(node)
+                .with_lamps(lamps);
             self.emit_at(recorder, k.t, &rec);
+        }
+    }
+
+    /// Takes the mobility model's lamps for the state at `at` and adds the headlamps
+    /// (vwp-v1 §3.3.5, [`crate::daylight`]).
+    fn set_lamps(&mut self, lamps: Vec<(ActorId, u8)>, at: SimTime) {
+        let origin = self.world.origin;
+        let unix_s = self.wall.unix_nanos_at(at) as f64 / 1e9;
+        let sun = crate::daylight::solar_elevation_deg(unix_s, origin.lat_deg, origin.lon_deg);
+        let headlamps = crate::daylight::headlamps_on(
+            sun,
+            &self.weather,
+            &crate::daylight::HeadlampParams::default(),
+        );
+        self.lamps.clear();
+        for (actor, mut bits) in lamps {
+            let class = self.actors.get(&actor).map(|r| r.class);
+            if headlamps && class.is_some_and(v2xw_mobility::lamps::has_lamps) {
+                bits |= v2xw_mobility::lamps::LAMP_LOW_BEAM;
+            }
+            self.lamps.insert(actor, bits);
         }
     }
 
@@ -2271,6 +2309,7 @@ impl Engine {
                 attacker,
                 transmitting,
                 verified_neighbors,
+                lamps: self.lamps.get(actor).copied().unwrap_or(0),
             });
         }
         let frame = self.snapshots.encode(at, &states)?;

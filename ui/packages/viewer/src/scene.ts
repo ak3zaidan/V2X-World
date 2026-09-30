@@ -42,6 +42,7 @@ import { Picker } from "./picking.js";
 import { FrameStats } from "./stats.js";
 import { DARK_THEME, themeByName, type ViewerTheme } from "./theme.js";
 import { WorldRenderer, type WorldRendererOptions } from "./world-render.js";
+import { LampGlow } from "./lamp-glow.js";
 import type { ActorClassDef, FrameScheduler, PickResult, ViewerCanvas, ViewerRenderer } from "./types.js";
 
 /**
@@ -64,6 +65,10 @@ export interface ViewerOptions {
   /** Device pixel ratio ceiling. Default 1.5 (09-ui §4). */
   readonly pixelRatioCap?: number;
   readonly antialias?: boolean;
+  /**
+   * Use a logarithmic depth buffer. See {@link Viewer.logarithmicDepth}. Default false.
+   */
+  readonly logarithmicDepthBuffer?: boolean;
   readonly shadows?: boolean;
   /** Shadow map edge. Default 2048. */
   readonly shadowMapSize?: number;
@@ -185,6 +190,7 @@ function defaultCreateRenderer(canvas: ViewerCanvas, options: ViewerOptions): Vi
     canvas,
     antialias: options.antialias ?? true,
     powerPreference: "high-performance",
+    logarithmicDepthBuffer: options.logarithmicDepthBuffer ?? false,
     alpha: false,
     stencil: false,
   });
@@ -220,6 +226,8 @@ export class Viewer {
   readonly picker: Picker;
   readonly interpolator: PoseInterpolator;
   readonly stats = new FrameStats(240);
+  /** Headlight pools and lamp points at night (`lamp-glow.ts`). */
+  readonly lampGlow = new LampGlow();
 
   #options: ViewerOptions;
   #theme: ViewerTheme;
@@ -326,7 +334,7 @@ export class Viewer {
     // connection, or a viewer opened on a recording would size every mark as a generic car.
     this.#publishClassRadii(this.actors.classes);
 
-    this.scene.add(this.worldRenderer.group, this.actors.group, this.overlays.group);
+    this.scene.add(this.worldRenderer.group, this.actors.group, this.lampGlow.group, this.overlays.group);
     this.#startMs = this.#scheduler.now();
 
     if (options.canvas) this.mount(options.canvas);
@@ -366,6 +374,11 @@ export class Viewer {
   /** The fixed-step pose clock plus its sub-step residual. */
   get renderClockSeconds(): number {
     return this.#fixedClock + this.#accumulator;
+  }
+
+  /** Whether the depth buffer is logarithmic (the renderer was created with one). */
+  get logarithmicDepth(): boolean {
+    return this.#options.logarithmicDepthBuffer ?? false;
   }
 
   /** The active theme. */
@@ -455,6 +468,7 @@ export class Viewer {
     this.unmount();
     this.cameras.dispose();
     this.overlays.dispose();
+    this.lampGlow.dispose();
     this.actors.dispose();
     this.worldRenderer.dispose();
     this.scene.clear();
@@ -499,6 +513,7 @@ export class Viewer {
 
   /** Adopt the class table, capacities and world origin a `Hello` announces (§3.1). */
   applyHello(hello: HelloMessage): void {
+    this.actors.setRegion(Viewer.isNewYork(hello.originLatDeg, hello.originLonDeg));
     const classes = classesFromHello(hello);
     if (classes.length > 0) {
       this.actors.setClasses(classes);
@@ -830,6 +845,14 @@ export class Viewer {
     this.cameras.setViewInsets(insets);
   }
 
+  /**
+   * Whether a `Hello`'s geodetic origin is in New York City (the five boroughs' bounding box):
+   * where the yellow cab livery applies.
+   */
+  static isNewYork(latDeg: number, lonDeg: number): boolean {
+    return latDeg > 40.49 && latDeg < 40.92 && lonDeg > -74.27 && lonDeg < -73.68;
+  }
+
   /** Hand the controller `actorId`'s current pose if it is in the stream. */
   #seedFollowPose(actorId: number): boolean {
     const ids = this.interpolator.outActorId;
@@ -1011,6 +1034,8 @@ export class Viewer {
     this.#updateGhost();
     if (this.#followSlot >= 0) {
       const p = this.#followSlot * 3;
+      const def = this.actors.classes[this.interpolator.outClassIdx[this.#followSlot]];
+      if (def) this.cameras.setFollowSubject(def.lengthM, def.widthM, def.heightM, def.category === 1);
       this.cameras.setFollowPose(
         this.interpolator.outPosition[p],
         this.interpolator.outPosition[p + 1],
@@ -1035,6 +1060,7 @@ export class Viewer {
     // that one instance is not written.
     this.actors.hiddenActorId = this.#cameraInsideFollowed() ? this.cameras.followActorId ?? -1 : -1;
     this.#syncActorLod();
+    this.actors.uniforms.uNight.value = this.worldRenderer.darkness;
     const actorStats = this.actors.update({
       position: this.interpolator.outPosition,
       heading: this.interpolator.outHeading,
@@ -1042,8 +1068,29 @@ export class Viewer {
       state: this.interpolator.outState,
       occupied: this.interpolator.outOccupied,
       actorId: this.interpolator.outActorId,
+      speed: this.interpolator.outSpeed,
+      lamps: this.interpolator.outLamps,
+      fade: this.interpolator.outFade,
+      dtSeconds: dt,
+      timeSeconds: renderClock,
       count: this.interpolator.count,
       camera: this.camera,
+    });
+
+    // 4b. Light thrown by the lit vehicles, at night.
+    this.lampGlow.update({
+      position: this.interpolator.outPosition,
+      heading: this.interpolator.outHeading,
+      classIdx: this.interpolator.outClassIdx,
+      occupied: this.interpolator.outOccupied,
+      lamps: this.interpolator.outLamps,
+      fade: this.interpolator.outFade,
+      count: this.interpolator.count,
+      classes: this.actors.classes,
+      camera: this.camera,
+      darkness: this.worldRenderer.darkness,
+      groundOffsetM: 0.1,
+      hiddenSlot: this.actors.hiddenActorId >= 0 ? this.#followSlot : -1,
     });
 
     // 5. Overlays, which reuse the actor renderer's visible-slot list.

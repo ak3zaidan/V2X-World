@@ -276,7 +276,7 @@ fn example_keyframe() -> KeyframeBody {
         class_idx,
         state,
         verified_neighbors: nbrs,
-        flags8: 0,
+        lamps: 0,
     };
     KeyframeBody {
         sim_time_ns: 1_000_000_000,
@@ -349,6 +349,7 @@ fn example_delta() -> DeltaBody {
             state: ST_EQUIPPED,
             verified_neighbors: 8,
             mflags: MFLAG_LANE_CHANGED,
+            lamps: 0,
         }],
         abs: Vec::new(),
         lanes: vec![44],
