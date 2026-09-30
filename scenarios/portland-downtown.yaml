@@ -1,0 +1,120 @@
+# Five minutes of downtown Portland, Oregon: the same simulator on a second city.
+#
+# Nothing in the engine is Manhattan-specific; the city lives in the extract and in three
+# lines of this file — the extract, its box and the jurisdiction's speed limits. This is
+# the file a researcher copies to bring their own city: fetch an extract with
+#
+#     worlds/fetch.sh portland            # or: worlds/fetch.sh mycity S,W,N,E
+#
+# then check what the importer made of it against the tags before trusting a run:
+#
+#     cargo run -p v2xw-world --example world_report -- worlds/cache/portland.osm.xml \
+#         --bbox 45.5120,-122.6860,45.5250,-122.6700 --preset urban-us-portland \
+#         --baseline worlds/validation/portland.json
+#
+# and run it with `v2xw run scenarios/portland-downtown.yaml --out runs/portland`.
+#
+# Downtown Portland is a grid of 200 ft (61 m) blocks, almost all one-way streets in
+# alternating directions, with the MAX light-rail mall on 5th and 6th Avenues, bus lanes,
+# protected cycle lanes and parking on most kerbs. Its blocks are half the length of
+# Manhattan's, so a car meets a signal every 80 m or so.
+schema: v2xw/scenario/1
+
+meta:
+  name: portland-downtown
+  description: >-
+    Downtown Portland, Oregon (OSM): a Poisson fleet on the real one-way grid with its bus
+    lanes, cycle lanes and parking lanes, signals coordinated for Portland's slow green
+    wave, IEEE 1609.2-signed BSMs at 10 Hz, every metric.
+  authors: [v2xw]
+  tags: [portland, osm, dsrc, signed, portability]
+  created: "2026-09-29"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  t0: "2027-03-04T08:00:00Z"
+  duration_s: 300.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: osm-xml
+    # Fetched by `worlds/fetch.sh portland` (the Overpass API, 2026-09-30): 6.8 MB.
+    path: worlds/cache/portland.osm.xml
+    # Downtown between the Willamette and I-405, SW Market Street to NW Everett Street.
+    # The box fixes the world frame: its south-west corner is the origin.
+    bbox:
+      min_lat_deg: 45.5120
+      min_lon_deg: -122.6860
+      max_lat_deg: 45.5250
+      max_lon_deg: -122.6700
+  imported_at: "2026-09-30T00:00:00Z"
+  # Oregon's statutory limits: 20 mph in a business district, which downtown is (ORS
+  # 811.111), and on the residential streets Portland has posted 5 mph below 25 (ORS
+  # 810.180). A street with a posted limit carries `maxspeed` in OSM, and the tag wins.
+  highway_preset: urban-us-portland
+  signals:
+    coordinate: true
+    # Downtown's signals are timed for a slow wave: "most signals in the central city are
+    # timed to reward users with a string of greens if they're going about 11-12 mph"
+    # (PBOT's signal engineer, BikePortland 2022-06-29), and PBOT's rest-in-red page
+    # cites 13.5 mph. 12 mph = 5.36 m/s.
+    progression_speed_mps: 5.36
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      # Downtown has 68 km of drive lanes to the Midtown box's 119 (world_report). Measured
+      # with traffic_audit over 300 s: 600 veh/h put a peak of 36 vehicles on the map and
+      # 1000 veh/h a peak of 38 — the rate is not what limits the fleet here: Portland's
+      # 61 m blocks leave short lanes, and the demand model spawns only on a lane long
+      # enough to take a vehicle. The thinned-Poisson acceptance is the mobility model's.
+      rate_veh_per_h: 1000.0
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  tiers:
+    propagation: high
+    phy: medium
+    mac: medium
+
+net:
+  layer: wsmp
+
+messages:
+  sets: [bsm]
+  codec_tier: uper
+
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: prioritized
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+metrics: [all]
+
+exporters: []

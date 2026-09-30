@@ -96,8 +96,10 @@ pub fn import_osm_extract(opts: &ImportOptions) -> Result<(ImportOutcome, String
         flag: "speed-preset",
         problem: format!(
             "'{}' is not a preset this build knows; the names are 'urban-us-nyc' (the legal \
-             defaults of a US city with a citywide limit) and 'sumo-german' (netconvert's \
-             table, for comparability with SUMO)",
+             defaults of a US city with a citywide limit), 'urban-us-portland' (Oregon's \
+             statutory limits and Portland's 20 mph streets), 'urban-de' (a German city's \
+             legal defaults) and 'sumo-german' (netconvert's table, for comparability with \
+             SUMO)",
             opts.speed_preset
         ),
     })?;

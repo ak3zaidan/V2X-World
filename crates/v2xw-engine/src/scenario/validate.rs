@@ -151,6 +151,14 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the storey height",
     },
+    // A walking pace to a motorway's: slower is no wave, faster is no street.
+    Bound {
+        path: "world.signals.progression_speed_mps",
+        lo: 1.0,
+        hi: 40.0,
+        exclusive_lo: false,
+        what: "the green-wave speed",
+    },
     Bound {
         path: "actors.vehicles.equipped_fraction",
         lo: 0.0,
@@ -558,8 +566,25 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "world.highway_preset",
         status: Status::Wired,
-        note: "Which jurisdiction's fallback speed limits the OpenStreetMap importer \
-               uses. An OSM import is refused without it.",
+        note: "Which jurisdiction's fallback speed limits (and, for urban-us-nyc, lane \
+               widths) the OpenStreetMap importer uses: urban-us-nyc, urban-us-portland, \
+               urban-de or sumo-german. An OSM import is refused without it.",
+    },
+    KeyStatus {
+        path: "world.signals.coordinate",
+        status: Status::Wired,
+        note: "Whether the OpenStreetMap importer offsets its synthesised signal plans for \
+               a green wave along each major road (each plan's major green starts one \
+               travel time after the one upstream). Off, every plan starts at t0, as \
+               netconvert's do.",
+    },
+    KeyStatus {
+        path: "world.signals.progression_speed_mps",
+        status: Status::Wired,
+        note: "The green wave's speed. Absent, each link's speed limit: 25 mph in \
+               Manhattan, NYC DOT's retimed progression. NYC DOT's cyclist Green Wave \
+               avenues run at 15 mph (6.7 m/s); downtown Portland's signals reward 11-13.5 \
+               mph.",
     },
     // --- what moves --------------------------------------------------------
     KeyStatus {
@@ -1597,6 +1622,14 @@ fn world(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "world.buildings.metres_per_level",
             "world.buildings.metres_per_level",
             mpl,
+            e,
+        );
+    }
+    if let Some(v) = s.world.signals.progression_speed_mps {
+        bounded_at(
+            "world.signals.progression_speed_mps",
+            "world.signals.progression_speed_mps",
+            v,
             e,
         );
     }

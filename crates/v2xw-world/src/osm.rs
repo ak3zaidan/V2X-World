@@ -226,11 +226,31 @@ pub enum Anomaly {
     /// exists — and marked as an untagged passage; the missing tag is the source's defect,
     /// the one the JOSM validator reports as "crossing highway/building".
     UntaggedBuildingPassage,
+    /// A closed `highway=*` way tagged `area=yes` — a pedestrian plaza, a parking area —
+    /// dropped as a path. Its outline is the edge of a surface, not a line anyone travels
+    /// along: imported as a footway it laid pavements down the middle of 6th Avenue beside
+    /// News Corp. Plaza.
+    HighwayArea,
+    /// A dead end whose lanes are too close together for a car to turn round on a
+    /// drivable path; it was given no U-turn and is a trip end
+    /// ([`OsmOptions::dead_end_turnarounds`]).
+    DeadEndWithoutTurnaround,
+    /// A `highway=crossing` node on a road with no `footway=crossing` way through it, and no
+    /// pavement within [`NODE_CROSSING_REACH_M`] on one side or the other to join a
+    /// synthesised crosswalk to; it gets no crosswalk ([`OsmOptions::crossings_from_nodes`]).
+    CrossingNodeUnconnected,
+    /// A kiosk-sized building (under [`KIOSK_MAX_AREA_M2`]) that a car on a drive lane
+    /// would drive into: street furniture mapped onto the carriageway, dropped.
+    KioskOnCarriageway,
+    /// A movement no car could drive as the lanes finally lie — a disguised U-turn across
+    /// a divided street, or a turn onto a lane that starts behind the approach — removed
+    /// because its approach lane has another movement to make.
+    InfeasibleTurn,
 }
 
 impl Anomaly {
     /// Every anomaly category, in report order.
-    pub const ALL: [Anomaly; 42] = [
+    pub const ALL: [Anomaly; 47] = [
         Anomaly::MissingNode,
         Anomaly::WayTooShort,
         Anomaly::DuplicateNode,
@@ -273,6 +293,11 @@ impl Anomaly {
         Anomaly::ClassDefaultsAboveTaggedSpeeds,
         Anomaly::RestrictionNoMovement,
         Anomaly::UntaggedBuildingPassage,
+        Anomaly::HighwayArea,
+        Anomaly::DeadEndWithoutTurnaround,
+        Anomaly::CrossingNodeUnconnected,
+        Anomaly::KioskOnCarriageway,
+        Anomaly::InfeasibleTurn,
     ];
 
     /// A stable kebab-case label, used by the report and the provenance record.
@@ -320,6 +345,11 @@ impl Anomaly {
             Anomaly::ClassDefaultsAboveTaggedSpeeds => "class-defaults-above-tagged-speeds",
             Anomaly::RestrictionNoMovement => "restriction-no-movement",
             Anomaly::UntaggedBuildingPassage => "untagged-building-passage",
+            Anomaly::HighwayArea => "highway-area",
+            Anomaly::DeadEndWithoutTurnaround => "dead-end-without-turnaround",
+            Anomaly::CrossingNodeUnconnected => "crossing-node-unconnected",
+            Anomaly::KioskOnCarriageway => "kiosk-on-carriageway",
+            Anomaly::InfeasibleTurn => "infeasible-turn",
         }
     }
 }
@@ -382,6 +412,14 @@ pub struct ImportReport {
     pub samples: BTreeMap<Anomaly, Vec<i64>>,
     /// The osm2streets simplifications this importer does not implement, by name.
     pub skipped_simplifications: Vec<String>,
+    /// Which OSM way each edge of the world came from, indexed by edge id; `None` for a
+    /// junction's internal edge. What [`crate::validate`] compares the tags against.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edge_sources: Vec<Option<crate::validate::EdgeSource>>,
+    /// The OSM node behind each junction, indexed by junction id (a negative id is a
+    /// boundary junction the bounding-box clip made).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub junction_nodes: Vec<i64>,
 }
 
 /// Whether the class-default speeds the [`HighwayPreset`] supplied look like the
@@ -458,6 +496,47 @@ pub struct ImportCounts {
     pub segments_after_collapse: u64,
     /// Junctions removed by the collapse.
     pub junctions_collapsed: u64,
+    /// Junctions merged into a neighbour by [`join_short_junctions`].
+    #[serde(default)]
+    pub junctions_joined: u64,
+    /// Road segments absorbed into a joined junction's area.
+    #[serde(default)]
+    pub segments_absorbed_by_join: u64,
+    /// Clusters a join would have made that were left unjoined because they spread
+    /// wider than [`JOIN_MAX_SPREAD_M`].
+    #[serde(default)]
+    pub joins_refused_too_wide: u64,
+    /// Drive lanes moved sideways because another road's lanes overlapped them
+    /// ([`crate::separate`]).
+    #[serde(default)]
+    pub carriageway_lanes_separated: u64,
+    /// Pavement and cycle lanes moved clear of the carriageway beside them.
+    #[serde(default)]
+    pub soft_lanes_moved_to_kerb: u64,
+    /// Lanes that overlap another road's by more than the separation will move them, left
+    /// where the map put them.
+    #[serde(default)]
+    pub overlaps_left_unresolved: u64,
+    /// Junctions whose fork, merge or carriageway-split arms were cut back until their lanes
+    /// no longer overlapped.
+    #[serde(default)]
+    pub junctions_with_cleared_arms: u64,
+    /// Bus lanes the cross-sections carry, counted once per way ([`crate::section`]).
+    #[serde(default)]
+    pub bus_lanes: u64,
+    /// Cycle lanes and tracks tagged on roads, counted once per way.
+    #[serde(default)]
+    pub cycle_lanes_on_roads: u64,
+    /// Parking lanes, counted once per way.
+    #[serde(default)]
+    pub parking_lanes: u64,
+    /// Signal plans given a progression offset ([`SignalDefaults::coordinate`]).
+    #[serde(default)]
+    pub signals_coordinated: u64,
+    /// Crosswalks synthesised across a road at a `highway=crossing` node that no
+    /// `footway=crossing` way passes through ([`OsmOptions::crossings_from_nodes`]).
+    #[serde(default)]
+    pub crossings_from_nodes: u64,
     /// Junctions in the world, of every kind — including the footway intersections of
     /// the sidewalk mesh, which are 77.6 % of them on the Phase 1 extract (V9).
     pub junctions: u64,
@@ -646,6 +725,18 @@ impl ImportReport {
             s,
             "segments          {} split -> {} after collapsing {} trivial junctions",
             c.segments_before_collapse, c.segments_after_collapse, c.junctions_collapsed
+        );
+        let _ = writeln!(
+            s,
+            "joins             {} junctions joined into a neighbour, {} short segments \
+             absorbed, {} clusters refused as too wide",
+            c.junctions_joined, c.segments_absorbed_by_join, c.joins_refused_too_wide
+        );
+        let _ = writeln!(
+            s,
+            "separation        {} drive lanes and {} pavement or cycle lanes moved clear of \
+             another road, {} overlaps left as mapped",
+            c.carriageway_lanes_separated, c.soft_lanes_moved_to_kerb, c.overlaps_left_unresolved
         );
         let _ = writeln!(
             s,
@@ -906,6 +997,15 @@ pub struct OsmSimplifications {
     /// Snap a footway or cycletrack that runs parallel to a road onto that road. **Not
     /// implemented**; asking for it records a skipped simplification.
     pub snap_parallel_footways: bool,
+    /// Join two junctions into one where the road between them is too short to leave a
+    /// usable lane once both junction areas are cut out of it (`netconvert
+    /// --junctions.join`). **Implemented** ([`join_short_junctions`]).
+    #[serde(default = "default_true")]
+    pub join_short_junctions: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for OsmSimplifications {
@@ -914,6 +1014,7 @@ impl Default for OsmSimplifications {
             collapse_trivial_junctions: true,
             merge_dual_carriageways: false,
             snap_parallel_footways: false,
+            join_short_junctions: true,
         }
     }
 }
@@ -959,6 +1060,52 @@ pub struct SignalDefaults {
     pub red_clearance_max_s: f64,
     /// Height of a signal lantern above the road surface, metres.
     pub head_height_m: f64,
+    /// Share the green between the phases by the lanes they serve rather than equally.
+    ///
+    /// Default `true`. Webster's method gives each phase green in proportion to its
+    /// critical flow ratio; an OSM extract carries no flows, and the number of lanes on a
+    /// phase's widest approach is the standing proxy for its capacity need (HCM 2016 Ch. 19,
+    /// saturation flow per lane). A four-lane Midtown avenue then gets about twice the green
+    /// of the two-lane cross street, as it does on the street; `false` is netconvert's equal
+    /// split.
+    #[serde(default = "default_true")]
+    pub split_by_lanes: bool,
+    /// Offset the plans along each major road so that its greens start one travel time
+    /// apart — a green wave (a coordinated progression).
+    ///
+    /// Default `true`. Manhattan's signals are pre-timed on a common cycle and offset for
+    /// progression along the avenues; NYC DOT's "25 MPH Signal Retiming" (2014 onward) set
+    /// that progression to the 25 mph limit on its priority corridors, and its 2026 "Green
+    /// Wave" timing to 15 mph on some avenues for cyclists. `false` starts every plan at
+    /// `t0`, as netconvert does.
+    #[serde(default = "default_true")]
+    pub coordinate: bool,
+    /// The progression speed of the green wave, m/s. `None` (the default) takes each
+    /// link's speed limit — 25 mph on an untagged Manhattan street, which is NYC DOT's
+    /// retimed progression; set 6.7 (15 mph) for NYC DOT's cyclist Green Wave.
+    #[serde(default)]
+    pub progression_speed_mps: Option<f64>,
+    /// Keep every phase's green long enough for a pedestrian to cross the road that phase
+    /// stops: the walk interval plus the crossing at [`SignalDefaults::pedestrian_speed_mps`],
+    /// less the phase's own yellow and all-red (MUTCD 2009 §4E.06 lets the pedestrian
+    /// clearance run through the yellow change interval and the red clearance).
+    #[serde(default = "default_true")]
+    pub pedestrian_min_green: bool,
+    /// The walk interval, seconds: 7 s, the MUTCD 2009 §4E.06 minimum.
+    #[serde(default = "default_walk_s")]
+    pub pedestrian_walk_s: f64,
+    /// The walking speed pedestrian clearance is timed for, m/s: 3.5 ft/s (1.067 m/s),
+    /// MUTCD 2009 §4E.06.
+    #[serde(default = "default_ped_speed")]
+    pub pedestrian_speed_mps: f64,
+}
+
+fn default_walk_s() -> f64 {
+    7.0
+}
+
+fn default_ped_speed() -> f64 {
+    1.067
 }
 
 impl Default for SignalDefaults {
@@ -976,6 +1123,12 @@ impl Default for SignalDefaults {
             red_clearance_vehicle_length_m: 6.1,
             red_clearance_max_s: 6.0,
             head_height_m: 5.0,
+            split_by_lanes: true,
+            coordinate: true,
+            progression_speed_mps: None,
+            pedestrian_min_green: true,
+            pedestrian_walk_s: default_walk_s(),
+            pedestrian_speed_mps: default_ped_speed(),
         }
     }
 }
@@ -1199,6 +1352,31 @@ pub struct OsmOptions {
     pub sidewalks_from_tags: bool,
     /// Let bicycles use motor-traffic lanes, unless the way says otherwise.
     pub bicycles_on_roads: bool,
+    /// Give a dead end a U-turn connector even where the lanes are too close together for
+    /// a car to drive round (a three-point turn in reality).
+    ///
+    /// Default `false`: such a dead end is a trip end — a garage entrance, a loading dock,
+    /// the edge of the map — and [`Anomaly::DeadEndWithoutTurnaround`] counts it. Set it
+    /// to keep every lane strongly connected at the cost of a turn no car can drive, which
+    /// is what `netconvert` does unless given `--no-turnarounds`.
+    #[serde(default)]
+    pub dead_end_turnarounds: bool,
+    /// Synthesise a crosswalk at every `highway=crossing` node on a road that no
+    /// `footway=crossing` way passes through.
+    ///
+    /// Default `true`. Mappers record a crossing either as a node on the road or as a
+    /// short `footway=crossing` way across it, and both are correct OSM (wiki,
+    /// Tag:highway=crossing); the pedestrian layer only reads ways, so a node-only
+    /// crossing was a place people cross in reality and could not in the simulation. The
+    /// crosswalk runs perpendicular to the road through the node, between the nearest
+    /// pavement on each side within [`NODE_CROSSING_REACH_M`], and takes the node's
+    /// `crossing=*` value.
+    #[serde(default = "default_true")]
+    pub crossings_from_nodes: bool,
+    /// Which bus, cycle and parking lanes are built from the tags, and how wide
+    /// ([`crate::section`]).
+    #[serde(default)]
+    pub cross_section: crate::section::CrossSectionOptions,
     /// The terrain grid to attach. `None` leaves the world flat at `z = 0`, which is what
     /// Phase 1 does; this is the hook for the DEM importers of 04-models.md §1.4.
     pub terrain: Option<Terrain>,
@@ -1224,6 +1402,9 @@ impl Default for OsmOptions {
             crossing_snap_m: 40.0,
             sidewalks_from_tags: false,
             bicycles_on_roads: true,
+            dead_end_turnarounds: false,
+            crossings_from_nodes: true,
+            cross_section: crate::section::CrossSectionOptions::default(),
             terrain: None,
         }
     }
@@ -1290,6 +1471,26 @@ impl OsmOptions {
             ("cycleway_width_m", self.cycleway_width_m),
             ("crossing_width_m", self.crossing_width_m),
             ("min_useful_lane_m", self.min_useful_lane_m.max(1.0)),
+            ("cross_section.bus_lane_width_m", self.cross_section.bus_lane_width_m),
+            ("cross_section.parking_lane_width_m", self.cross_section.parking_lane_width_m),
+            (
+                "cross_section.angled_parking_depth_m",
+                self.cross_section.angled_parking_depth_m,
+            ),
+            ("cross_section.cycle_lane_width_m", self.cross_section.cycle_lane_width_m),
+            ("cross_section.cycle_track_width_m", self.cross_section.cycle_track_width_m),
+            (
+                "cross_section.cycle_buffer_m",
+                self.cross_section.cycle_buffer_m.max(1e-3),
+            ),
+            (
+                "signals.pedestrian_speed_mps",
+                self.signals.pedestrian_speed_mps,
+            ),
+            (
+                "signals.progression_speed_mps",
+                self.signals.progression_speed_mps.unwrap_or(1.0),
+            ),
         ] {
             if !(v.is_finite() && v > 0.0) {
                 return Err(bad(name, format!("{v} m is not a positive width")));
@@ -1367,6 +1568,16 @@ impl OsmOptions {
 pub struct Tags(Vec<(String, String)>);
 
 impl Tags {
+    /// A tag set from `(key, value)` pairs; a repeated key keeps its first value, as the
+    /// parser does.
+    pub fn from_pairs<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
+        let mut tags = Tags::default();
+        for (k, v) in pairs {
+            tags.insert(k.to_string(), v.to_string());
+        }
+        tags
+    }
+
     /// The value of `key`, or `None`.
     pub fn get(&self, key: &str) -> Option<&str> {
         self.0
@@ -1821,11 +2032,26 @@ pub enum HighwayPreset {
     /// The class distinction almost disappears on purpose — the law makes none. A street
     /// with a different posted limit carries `maxspeed` in OSM, and the tag always wins.
     UrbanUsNyc,
+    /// Portland, Oregon: 20 mph in a business district (ORS 811.111), which is what a
+    /// city-centre extract is, and on the residential streets Portland has posted 5 mph
+    /// under the 25 mph statutory limit (ORS 810.180; PBOT "Setting safe speed limits on
+    /// Portland streets"); 55 mph on an untagged motorway (ORS 811.111).
+    UrbanUsPortland,
+    /// A German city: 50 km/h inside a built-up area (StVO §3(3) No. 1), walking pace in a
+    /// traffic-calmed area (StVO Anlage 3, sign 325.1), and on an untagged Autobahn the
+    /// 130 km/h advisory speed (Autobahn-Richtgeschwindigkeits-Verordnung), there being no
+    /// general limit.
+    UrbanDe,
 }
 
 impl HighwayPreset {
     /// Every preset, in a stable order.
-    pub const ALL: [HighwayPreset; 2] = [HighwayPreset::SumoGerman, HighwayPreset::UrbanUsNyc];
+    pub const ALL: [HighwayPreset; 4] = [
+        HighwayPreset::SumoGerman,
+        HighwayPreset::UrbanUsNyc,
+        HighwayPreset::UrbanUsPortland,
+        HighwayPreset::UrbanDe,
+    ];
 
     /// The preset's stable kebab-case name, as the report, the provenance and a scenario
     /// file spell it.
@@ -1833,6 +2059,8 @@ impl HighwayPreset {
         match self {
             HighwayPreset::SumoGerman => "sumo-german",
             HighwayPreset::UrbanUsNyc => "urban-us-nyc",
+            HighwayPreset::UrbanUsPortland => "urban-us-portland",
+            HighwayPreset::UrbanDe => "urban-de",
         }
     }
 
@@ -1853,6 +2081,15 @@ impl HighwayPreset {
                  2014, under NY Vehicle & Traffic Law §1643) and the NY State statutory \
                  maximum of 55 mph (NY VTL §1180(b))"
             }
+            HighwayPreset::UrbanUsPortland => {
+                "Oregon statutory limits (ORS 811.111: 20 mph in a business district, 55 mph \
+                 elsewhere) and Portland's 20 mph residential streets (ORS 810.180)"
+            }
+            HighwayPreset::UrbanDe => {
+                "German StVO §3(3) No. 1 (50 km/h in built-up areas), StVO Anlage 3 sign \
+                 325.1 (walking pace), Autobahn-Richtgeschwindigkeits-Verordnung (130 km/h \
+                 advisory)"
+            }
         }
     }
 
@@ -1861,6 +2098,8 @@ impl HighwayPreset {
         match self {
             HighwayPreset::SumoGerman => SUMO_GERMAN_TABLE,
             HighwayPreset::UrbanUsNyc => URBAN_US_NYC_TABLE,
+            HighwayPreset::UrbanUsPortland => URBAN_US_PORTLAND_TABLE,
+            HighwayPreset::UrbanDe => URBAN_DE_TABLE,
         }
     }
 
@@ -1982,6 +2221,93 @@ const URBAN_US_NYC_TABLE: &[HighwayDefault] = &[
     HighwayDefault { key: "steps",          class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 0.5,   speed_source: PACE_SOURCE, implicit_oneway: false },
 ];
 
+/// The citation every 20 mph row of `urban-us-portland` carries.
+const OR_20: &str = "Oregon statutory speed limit in a business district, 20 mph = 8.941 m/s \
+                     (ORS 811.111); Portland posts its residential streets at 20 mph too \
+                     (ORS 810.180)";
+
+/// The citation the motorway row of `urban-us-portland` carries.
+const OR_55: &str = "Oregon statutory speed limit outside a business or residence district, \
+                     55 mph = 24.587 m/s (ORS 811.111); a posted motorway carries maxspeed";
+
+/// `urban-us-portland`: Portland, Oregon's legal defaults; lane counts as
+/// [`URBAN_US_NYC_TABLE`].
+#[rustfmt::skip]
+const URBAN_US_PORTLAND_TABLE: &[HighwayDefault] = &[
+    // --- motor traffic ------------------------------------------------------
+    HighwayDefault { key: "motorway",       class: RoadClass::Motorway,     family: WayFamily::Motor, lanes: 2, speed_mps: 24.587, speed_source: OR_55, implicit_oneway: true },
+    HighwayDefault { key: "motorway_link",  class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: true },
+    HighwayDefault { key: "trunk",          class: RoadClass::Trunk,        family: WayFamily::Motor, lanes: 2, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "trunk_link",     class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "primary",        class: RoadClass::Primary,      family: WayFamily::Motor, lanes: 2, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "primary_link",   class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "secondary",      class: RoadClass::Secondary,    family: WayFamily::Motor, lanes: 2, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "secondary_link", class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "tertiary",       class: RoadClass::Tertiary,     family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "tertiary_link",  class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "unclassified",   class: RoadClass::Unclassified, family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "residential",    class: RoadClass::Residential,  family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "living_street",  class: RoadClass::Living,       family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "service",        class: RoadClass::Service,      family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "busway",         class: RoadClass::Service,      family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    HighwayDefault { key: "road",           class: RoadClass::Unclassified, family: WayFamily::Motor, lanes: 1, speed_mps: 8.941, speed_source: OR_20, implicit_oneway: false },
+    // --- cycle --------------------------------------------------------------
+    HighwayDefault { key: "cycleway",       class: RoadClass::Cycleway,     family: WayFamily::Cycle, lanes: 1, speed_mps: 5.56,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    // --- foot ---------------------------------------------------------------
+    HighwayDefault { key: "footway",        class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "pedestrian",     class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "corridor",       class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "path",           class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "track",          class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "bridleway",      class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "steps",          class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 0.5,   speed_source: PACE_SOURCE, implicit_oneway: false },
+];
+
+/// The citation every 50 km/h row of `urban-de` carries.
+const DE_50: &str = "German speed limit inside built-up areas, 50 km/h = 13.889 m/s (StVO §3(3) \
+                     No. 1)";
+
+/// The citation the living-street row of `urban-de` carries.
+const DE_WALK: &str = "walking pace in a traffic-calmed area (StVO Anlage 3, sign 325.1), taken \
+                       as 7 km/h = 1.944 m/s, the middle of the 4-10 km/h courts have read it as";
+
+/// The citation the motorway row of `urban-de` carries.
+const DE_130: &str = "German Autobahn advisory speed, 130 km/h = 36.111 m/s \
+                      (Autobahn-Richtgeschwindigkeits-Verordnung); there is no general limit, \
+                      and an urban Autobahn is posted and tagged";
+
+/// `urban-de`: a German city's legal defaults; lane counts as [`URBAN_US_NYC_TABLE`].
+#[rustfmt::skip]
+const URBAN_DE_TABLE: &[HighwayDefault] = &[
+    // --- motor traffic ------------------------------------------------------
+    HighwayDefault { key: "motorway",       class: RoadClass::Motorway,     family: WayFamily::Motor, lanes: 2, speed_mps: 36.111, speed_source: DE_130, implicit_oneway: true },
+    HighwayDefault { key: "motorway_link",  class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: true },
+    HighwayDefault { key: "trunk",          class: RoadClass::Trunk,        family: WayFamily::Motor, lanes: 2, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "trunk_link",     class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "primary",        class: RoadClass::Primary,      family: WayFamily::Motor, lanes: 2, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "primary_link",   class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "secondary",      class: RoadClass::Secondary,    family: WayFamily::Motor, lanes: 2, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "secondary_link", class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "tertiary",       class: RoadClass::Tertiary,     family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "tertiary_link",  class: RoadClass::Link,         family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "unclassified",   class: RoadClass::Unclassified, family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "residential",    class: RoadClass::Residential,  family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "living_street",  class: RoadClass::Living,       family: WayFamily::Motor, lanes: 1, speed_mps: 1.944, speed_source: DE_WALK, implicit_oneway: false },
+    HighwayDefault { key: "service",        class: RoadClass::Service,      family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "busway",         class: RoadClass::Service,      family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    HighwayDefault { key: "road",           class: RoadClass::Unclassified, family: WayFamily::Motor, lanes: 1, speed_mps: 13.889, speed_source: DE_50, implicit_oneway: false },
+    // --- cycle --------------------------------------------------------------
+    HighwayDefault { key: "cycleway",       class: RoadClass::Cycleway,     family: WayFamily::Cycle, lanes: 1, speed_mps: 5.56,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    // --- foot ---------------------------------------------------------------
+    HighwayDefault { key: "footway",        class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "pedestrian",     class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "corridor",       class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "path",           class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "track",          class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "bridleway",      class: RoadClass::Path,         family: WayFamily::Foot,  lanes: 1, speed_mps: 1.39,  speed_source: PACE_SOURCE, implicit_oneway: false },
+    HighwayDefault { key: "steps",          class: RoadClass::Footway,      family: WayFamily::Foot,  lanes: 1, speed_mps: 0.5,   speed_source: PACE_SOURCE, implicit_oneway: false },
+];
+
 /// The class-based carriageway lane width, metres, and its source (V6/W2).
 ///
 /// Reached only when the way carries neither `width:lanes` nor `width`. The widths are
@@ -2013,9 +2339,33 @@ const LANE_WIDTH_SOURCE: &str = "AASHTO Green Book (9-12 ft lanes; 12 ft on free
                                  major arterials) and NACTO Urban Street Design Guide \
                                  (10-11 ft urban street lanes)";
 
-/// The class-based lane width for `class`, or `None` for a class that carries no motor
+/// The class lane width a jurisdiction's own design standard sets, where the preset has
+/// one; [`CLASS_LANE_WIDTH_M`] otherwise; `None` for a class that carries no motor
 /// traffic.
-fn class_lane_width_m(class: RoadClass) -> Option<f64> {
+///
+/// `urban-us-nyc`: NYC DOT *Street Design Manual* ("Lanes"): "the typical lane width for
+/// moving vehicles is 10 feet" — 3.048 m on every city street class, against the 11 ft
+/// NACTO allows on an arterial. Ramps keep 11 ft and the highway classes 12 ft (the FDR
+/// and the approaches are state-designed). Bus lanes are 11 ft in every preset
+/// ([`crate::section::CrossSectionOptions::bus_lane_width_m`]).
+fn preset_lane_width_m(preset: Option<HighwayPreset>, class: RoadClass) -> Option<f64> {
+    if preset == Some(HighwayPreset::UrbanUsNyc)
+        && matches!(
+            class,
+            RoadClass::Primary
+                | RoadClass::Secondary
+                | RoadClass::Tertiary
+                | RoadClass::Unclassified
+                | RoadClass::Residential
+        )
+    {
+        return Some(3.048);
+    }
+    class_lane_width_table(class)
+}
+
+/// The row of [`CLASS_LANE_WIDTH_M`] for `class`.
+fn class_lane_width_table(class: RoadClass) -> Option<f64> {
     CLASS_LANE_WIDTH_M
         .iter()
         .find(|(c, _)| *c == class)
@@ -2116,7 +2466,7 @@ fn motor_lane_width(
         return (forced, WidthSource::Option);
     }
     (
-        class_lane_width_m(class).unwrap_or(FALLBACK_LANE_WIDTH_M),
+        preset_lane_width_m(options.highway_preset, class).unwrap_or(FALLBACK_LANE_WIDTH_M),
         WidthSource::Class,
     )
 }
@@ -2411,18 +2761,17 @@ pub struct WayPlan {
     /// How many levels above ground a bridge runs: its `layer` when positive, `0`
     /// otherwise (a bridge tagged at layer 0 crosses water or a gap, not a road).
     pub levels_above: u8,
+    /// Every lane across the way — general, bus, cycle, parking — and where it lies
+    /// ([`crate::section`]).
+    pub section: crate::section::CrossSection,
 }
 
 impl WayPlan {
-    /// Total lanes across both directions.
-    fn total_lanes(&self) -> u8 {
-        self.lanes_fwd.saturating_add(self.lanes_bwd)
-    }
-
-    /// Half the carriageway width, metres — the junction trimming radius this way
+    /// Half the street's width, kerb to kerb and beyond it to the far side of any cycle
+    /// track, metres, on its wider side — the junction trimming radius this way
     /// contributes.
     fn half_width_m(&self) -> f64 {
-        f64::from(self.total_lanes()) * self.lane_width_m * 0.5
+        self.section.half_width_m()
     }
 }
 
@@ -2445,6 +2794,13 @@ pub fn classify_way(
         report.note(Anomaly::UnknownHighwayValue, way.id);
         return None;
     };
+    // A closed way tagged `area=yes` is a surface — a plaza, a parking area — whose
+    // outline nobody walks or drives along (OSM wiki, Tag:area=yes on highway=pedestrian).
+    let closed = way.nodes.len() > 2 && way.nodes.first() == way.nodes.last();
+    if closed && way.tags.is("area", "yes") {
+        report.note(Anomaly::HighwayArea, way.id);
+        return None;
+    }
     let wanted = match defaults.family {
         WayFamily::Motor => options.layers.drivable,
         WayFamily::Cycle => options.layers.cycle,
@@ -2595,6 +2951,35 @@ pub fn classify_way(
         fwd = fwd.max(1);
         bwd = bwd.max(1);
     }
+    // `lanes` should count bus lanes (OSM wiki, Key:lanes), but a mapper sometimes counts
+    // only the general lanes and lists the bus lane in `bus:lanes` / `psv:lanes`: Portland's
+    // Transit Mall streets are `lanes=1` with `psv:lanes=designated|`. Where a per-lane
+    // list is longer than `lanes` by exactly its `designated` entries, the list is the
+    // street and `lanes` is read as the general lanes.
+    if options.cross_section.bus_lanes && defaults.family == WayFamily::Motor {
+        let one_way_fwd = matches!(oneway, Oneway::Forward);
+        let one_way_bwd = matches!(oneway, Oneway::Backward);
+        let widen = |n: u32, keys: &[&str]| -> u32 {
+            for key in keys {
+                let Some(raw) = way.tags.get(key) else { continue };
+                let entries: Vec<&str> = raw.split('|').map(str::trim).collect();
+                let designated = entries.iter().filter(|e| **e == "designated").count() as u32;
+                let len = entries.len() as u32;
+                if len > n && len - n == designated {
+                    return len;
+                }
+            }
+            n
+        };
+        if one_way_fwd {
+            fwd = widen(fwd, &["bus:lanes", "psv:lanes", "bus:lanes:forward", "psv:lanes:forward"]);
+        } else if one_way_bwd {
+            bwd = widen(bwd, &["bus:lanes", "psv:lanes", "bus:lanes:backward", "psv:lanes:backward"]);
+        } else {
+            fwd = widen(fwd, &["bus:lanes:forward", "psv:lanes:forward"]);
+            bwd = widen(bwd, &["bus:lanes:backward", "psv:lanes:backward"]);
+        }
+    }
     let fwd = fwd.clamp(0, MAX_LANES_PER_DIRECTION) as u8;
     let bwd = bwd.clamp(0, MAX_LANES_PER_DIRECTION) as u8;
     if fwd == 0 && bwd == 0 {
@@ -2694,6 +3079,68 @@ pub fn classify_way(
         WayFamily::Foot => (options.sidewalk_width_m, WidthSource::Option),
     };
 
+    // --- the cross-section: bus, cycle and parking lanes ------------------------
+    let kind = if defaults.family == WayFamily::Foot && is_crossing_way(&way.tags) {
+        LaneKind::Crossing
+    } else {
+        defaults.family.lane_kind()
+    };
+    let mut section_input = crate::section::SectionInput {
+        fwd,
+        bwd,
+        general_width_m: lane_width_m,
+        general_kind: kind,
+        general_allowed: allowed,
+        bicycles_on_roads: allowed.contains_all(ClassMask::BICYCLE),
+    };
+    let (section, lane_width_m) = if defaults.family == WayFamily::Motor {
+        let mut section = crate::section::build(&way.tags, &section_input, &options.cross_section);
+        let mut width = lane_width_m;
+        // A `width` tag is the carriageway kerb to kerb (OSM wiki, Key:width): the general
+        // lanes share what the parking and painted cycle lanes leave of it, rather than the
+        // whole of it — which made a one-lane street with parking on both sides a 9.2 m
+        // lane.
+        if width_source == WidthSource::WayTag && section.reserved_m > 0.0 {
+            let tagged = lane_width_m * f64::from(fwd.saturating_add(bwd).max(1));
+            let shared = crate::section::CrossSection::general_width_for(
+                tagged,
+                section.reserved_m,
+                u32::from(fwd.saturating_add(bwd)),
+            )
+            .filter(|w| (MIN_LANE_WIDTH_M..=MAX_LANE_WIDTH_M).contains(w));
+            width = shared.unwrap_or_else(|| {
+                report.note(Anomaly::UnparsableHeight, way.id);
+                preset_lane_width_m(options.highway_preset, defaults.class)
+                    .unwrap_or(FALLBACK_LANE_WIDTH_M)
+            });
+            section_input.general_width_m = width;
+            // The tag fixes the carriageway, bus lanes included: they share it equally.
+            let fixed = crate::section::CrossSectionOptions {
+                bus_lane_width_m: 0.0,
+                ..options.cross_section
+            };
+            section = crate::section::build(&way.tags, &section_input, &fixed);
+        }
+        report.counts.bus_lanes += u64::from(section.bus_lanes);
+        report.counts.cycle_lanes_on_roads += u64::from(section.cycle_lanes);
+        report.counts.parking_lanes += u64::from(section.parking_lanes);
+        if section.unusable_tags > 0 {
+            report.note(Anomaly::UnparsableTurnLanes, way.id);
+        }
+        (section, width)
+    } else {
+        let plain = crate::section::CrossSectionOptions {
+            bus_lanes: false,
+            cycle_lanes: false,
+            parking_lanes: false,
+            ..options.cross_section
+        };
+        (
+            crate::section::build(&Tags::default(), &section_input, &plain),
+            lane_width_m,
+        )
+    };
+
     Some(WayPlan {
         way: index,
         osm_id: way.id,
@@ -2709,11 +3156,8 @@ pub fn classify_way(
         // A `footway=crossing` way is the crosswalk itself: its lanes are crossing lanes,
         // which is what lets a pedestrian router, the vehicle yield rule and the signal
         // plan's pedestrian intervals find it.
-        kind: if defaults.family == WayFamily::Foot && is_crossing_way(&way.tags) {
-            LaneKind::Crossing
-        } else {
-            defaults.family.lane_kind()
-        },
+        kind,
+        section,
         turn_fwd,
         turn_bwd,
         roundabout,
@@ -2792,6 +3236,13 @@ struct Segment {
     start_way: i64,
     /// The OSM way that reaches this segment's **last** node.
     end_way: i64,
+    /// The OSM node this segment's geometry actually starts at. It is `nodes[0]` until a
+    /// junction join ([`join_short_junctions`]) re-points the segment at its cluster's
+    /// junction; the junction area is still measured from here, because this is where the
+    /// road meets the street it crosses.
+    start_anchor: i64,
+    /// The OSM node the geometry actually ends at; see [`Segment::start_anchor`].
+    end_anchor: i64,
     /// The node ids along it, first and last being junction nodes.
     nodes: Vec<i64>,
     /// Its geometry, world-local metres, parallel to `nodes`.
@@ -2800,6 +3251,11 @@ struct Segment {
     fwd: u8,
     /// Lanes running against `nodes`.
     bwd: u8,
+    /// Every lane running along `nodes` — general, bus, cycle and parking — rightmost
+    /// first, with its offset from the way ([`crate::section`]).
+    section_fwd: Vec<crate::section::LaneSpec>,
+    /// Every lane running against `nodes`, rightmost first in that direction.
+    section_bwd: Vec<crate::section::LaneSpec>,
     /// `turn:lanes` for the forward direction at this segment's far end, rightmost first.
     turn_fwd: Option<Vec<Vec<TurnDirection>>>,
     /// `turn:lanes` for the backward direction at this segment's near end.
@@ -2829,10 +3285,14 @@ impl Segment {
             key: self.key,
             start_way: self.end_way,
             end_way: self.start_way,
+            start_anchor: self.end_anchor,
+            end_anchor: self.start_anchor,
             nodes,
             points,
             fwd: self.bwd,
             bwd: self.fwd,
+            section_fwd: self.section_bwd.clone(),
+            section_bwd: self.section_fwd.clone(),
             turn_fwd: self.turn_bwd.clone(),
             turn_bwd: self.turn_fwd.clone(),
         }
@@ -2855,6 +3315,7 @@ impl Segment {
         self.points.extend_from_slice(&next.points[1..]);
         // The chain now reaches the far end of the piece that was appended.
         self.end_way = next.end_way;
+        self.end_anchor = next.end_anchor;
         // The downstream piece owns the turn assignment in each direction, because
         // `turn:lanes` describes the approach to the junction the piece *reaches*.
         self.turn_fwd = next.turn_fwd.clone();
@@ -3292,10 +3753,14 @@ fn split_ways(
                     key: (plan.osm_id, piece),
                     start_way: plan.osm_id,
                     end_way: plan.osm_id,
+                    start_anchor: nodes[start],
+                    end_anchor: nodes[i],
                     nodes: nodes[start..=i].to_vec(),
                     points: geometry[start..=i].to_vec(),
                     fwd: plan.lanes_fwd,
                     bwd: plan.lanes_bwd,
+                    section_fwd: plan.section.fwd.clone(),
+                    section_bwd: plan.section.bwd.clone(),
                     // Only the piece that reaches the way's far end carries the way's
                     // `turn:lanes`: the tag describes the approach to one junction.
                     turn_fwd: if nodes[i] == way_end {
@@ -3368,7 +3833,11 @@ fn collapse_trivial_junctions(
             a.reversed()
         };
         let b_out = b.oriented_from(node)?;
-        if a_in.fwd != b_out.fwd || a_in.bwd != b_out.bwd {
+        if a_in.fwd != b_out.fwd
+            || a_in.bwd != b_out.bwd
+            || a_in.section_fwd != b_out.section_fwd
+            || a_in.section_bwd != b_out.section_bwd
+        {
             return None;
         }
         if a_in.start_node() == b_out.end_node() {
@@ -3891,6 +4360,9 @@ struct EdgeInfo {
     /// The OSM way that reaches this edge's `to` junction — what a restriction's `from`
     /// member must name for this edge to be the approach (R4).
     far_way: i64,
+    /// True for a lane the way's tags placed beside its carriageway (a tagged sidewalk,
+    /// cycle lane or parking lane) rather than the carriageway itself.
+    side: bool,
 }
 
 /// One movement through a junction, while the junction is being built.
@@ -3959,6 +4431,9 @@ struct Net {
     junction_nodes: Vec<i64>,
     /// Junction id by OSM node id.
     junction_of: BTreeMap<i64, JunctionId>,
+    /// For a node a junction join folded into a neighbour, that neighbour's node — so a
+    /// turn restriction whose `via` names the folded node finds the joined junction.
+    joined_into: BTreeMap<i64, i64>,
 }
 
 /// True if `tagged` (from `turn:lanes`) should be taken to permit `actual` (the geometry).
@@ -4023,6 +4498,310 @@ fn target_lane(turn: TurnDirection, k: usize, sharing: &[usize], out_lanes: usiz
     }
 }
 
+/// The junction-area radius at each road end, metres, keyed by the OSM node the road's
+/// geometry ends at.
+struct JunctionRadii {
+    /// For motor lanes: the widest carriageway that meets there, plus the stop-line setback
+    /// where three or more roads meet; [`MIN_JUNCTION_RADIUS_M`] where one carriageway
+    /// merely continues.
+    motor: BTreeMap<i64, f64>,
+    /// For footways and cycleways: the widest soft way that meets there.
+    soft: BTreeMap<i64, f64>,
+}
+
+/// A fingerprint of a cross-section: equal sections give equal numbers (FNV-1a over the
+/// kinds, widths, masks and offsets, bit for bit).
+fn section_fingerprint(section: &[crate::section::LaneSpec]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut eat = |v: u64| {
+        for byte in v.to_le_bytes() {
+            h ^= u64::from(byte);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    eat(section.len() as u64);
+    for l in section {
+        eat(u64::from(l.kind.wire_code()));
+        eat(l.width_m.to_bits());
+        eat(u64::from(l.allowed.bits()));
+        eat(l.offset_m.to_bits());
+    }
+    h
+}
+
+/// The heading of a polyline leaving its start (`from_start`) or leaving its end backwards,
+/// measured over its first (last) 5 m, radians.
+fn leaving_heading(points: &[Vec3], from_start: bool) -> f64 {
+    let n = points.len();
+    let (origin, walk): (Vec3, Vec<Vec3>) = if from_start {
+        (points[0], points[1..].to_vec())
+    } else {
+        (points[n - 1], points[..n - 1].iter().rev().copied().collect())
+    };
+    let mut target = walk.first().copied().unwrap_or(origin);
+    for p in walk {
+        target = p;
+        if p.distance_2d(origin) >= 5.0 {
+            break;
+        }
+    }
+    math::atan2(target.y - origin.y, target.x - origin.x)
+}
+
+/// Computes [`JunctionRadii`] for every road end of `segments`.
+fn junction_radii(segments: &[Segment], plans: &[WayPlan], options: &OsmOptions) -> JunctionRadii {
+    let mut motor: BTreeMap<i64, f64> = BTreeMap::new();
+    let mut soft: BTreeMap<i64, f64> = BTreeMap::new();
+    // Each motor arm as seen leaving the node: (its lanes out, its lanes in — each the
+    // whole cross-section, fingerprinted — lane width bits, levels below, levels above).
+    let mut arms: BTreeMap<i64, Vec<(u64, u64, u64, u8, u8)>> = BTreeMap::new();
+    // Each motor arm's heading leaving the node, and its half width.
+    let mut arm_heading: BTreeMap<i64, Vec<(f64, f64)>> = BTreeMap::new();
+    for segment in segments {
+        let plan = &plans[segment.plan];
+        let half = plan.half_width_m();
+        for (node, leaving) in [(segment.start_anchor, true), (segment.end_anchor, false)] {
+            if plan.family == WayFamily::Motor {
+                let r = motor.entry(node).or_insert(0.0);
+                *r = r.max(half);
+                // The whole cross-section, not just the lane count: where a parking lane
+                // or a bus lane begins the lanes shift sideways, and a 1 m continuation
+                // connector cannot take that shift without a heading jump.
+                let (out, inn) = if leaving {
+                    (section_fingerprint(&segment.section_fwd), section_fingerprint(&segment.section_bwd))
+                } else {
+                    (section_fingerprint(&segment.section_bwd), section_fingerprint(&segment.section_fwd))
+                };
+                arms.entry(node).or_default().push((
+                    out,
+                    inn,
+                    plan.lane_width_m.to_bits(),
+                    plan.levels_below,
+                    plan.levels_above,
+                ));
+                arm_heading
+                    .entry(node)
+                    .or_default()
+                    .push((leaving_heading(&segment.points, leaving), half));
+            } else {
+                let r = soft.entry(node).or_insert(0.0);
+                *r = r.max(half);
+            }
+        }
+    }
+    for (node, r) in &mut motor {
+        let shapes = &arms[node];
+        if shapes.len() >= 3 {
+            *r += options.stop_line_setback_m.max(0.0);
+        }
+        // A place where one carriageway simply continues — the way was split because a
+        // tag other than its lanes changed (a name, a speed limit, a `maxheight`) — needs
+        // no junction area: every lane runs straight on into its twin. Trimming it by the
+        // half-width left a 7 m gap on a 4-lane avenue, and where two such splits or a
+        // split and a real junction were close, the lane between them was a 1 m stub a
+        // car's heading jumped across. The lanes are still cut back 1 m, so the connector
+        // exists, and `pull_back_for_turns` adds whatever room a bend needs.
+        if shapes.len() == 2
+            && shapes[0].0 == shapes[1].1
+            && shapes[0].1 == shapes[1].0
+            && shapes[0].2 == shapes[1].2
+            && shapes[0].3 == shapes[1].3
+            && shapes[0].4 == shapes[1].4
+        {
+            // Where the street bends at the split, the lanes' offset lines cross on the
+            // inside of the bend and part on the outside, and a 2 m connector joining them
+            // turned 10-12° in a car's length (Portland's split ways). Leave room for the
+            // design radius through the bend: `(R + d) tan(θ/2)`, `d` the half width.
+            let (h0, d0) = arm_heading[node][0];
+            let (h1, d1) = arm_heading[node][1];
+            let bend = normalise_angle(h1 - h0 - core::f64::consts::PI).abs().min(1.2);
+            let room = (TURN_DESIGN_RADIUS_M + d0.max(d1)) * math::tan(0.5 * bend);
+            *r = MIN_JUNCTION_RADIUS_M.max(room + 0.5 * f64::from(u8::from(bend > 0.02)));
+        }
+        *r = r.clamp(MIN_JUNCTION_RADIUS_M, MAX_JUNCTION_RADIUS_M);
+    }
+    for r in soft.values_mut() {
+        *r = r.clamp(MIN_JUNCTION_RADIUS_M, MAX_SOFT_JUNCTION_RADIUS_M);
+    }
+    JunctionRadii { motor, soft }
+}
+
+/// The longest road segment a junction join absorbs, metres.
+///
+/// **This importer's choice.** `netconvert --junctions.join` joins nodes within 10 m of
+/// each other (04-models.md §1.2). Measured between node *centres* that misses the case
+/// that matters here: the cross street between the two carriageways of a divided avenue
+/// (Park Avenue's are 20 m apart) is long enough to keep, centre to centre, and far too
+/// short once both carriageways' junction areas — half the carriageway plus the 4.2 m
+/// stop-line setback — are cut out of it, which left a 1 m stub lane. A join here is
+/// decided by what is *left* (under [`OsmOptions::min_useful_lane_m`]) and bounded by this
+/// length, so two junctions a block apart are never merged.
+pub const JOIN_MAX_SEGMENT_M: f64 = 30.0;
+
+/// The widest a joined junction may spread, metres: no two of its nodes further apart.
+/// A chain of short segments — a row of driveways every 4 m along a block — would
+/// otherwise grow one junction the length of the street.
+pub const JOIN_MAX_SPREAD_M: f64 = 45.0;
+
+/// What [`join_short_junctions`] decided.
+#[derive(Debug, Clone, Default)]
+struct JoinedJunctions {
+    /// Every node folded into a neighbour, to the node of the junction it now belongs to.
+    member_of: BTreeMap<i64, i64>,
+    /// Each joined junction's node, to the junction's position: the centroid of its
+    /// members.
+    position: BTreeMap<i64, Vec3>,
+}
+
+/// The root of `n` in a union-find forest stored as a parent map.
+fn find_root(parent: &BTreeMap<i64, i64>, mut n: i64) -> i64 {
+    while let Some(p) = parent.get(&n) {
+        if *p == n {
+            break;
+        }
+        n = *p;
+    }
+    n
+}
+
+/// Joins junctions whose connecting road is too short to hold a usable lane once both
+/// junction areas are cut out of it (`netconvert --junctions.join`, 04-models.md §1.2).
+///
+/// # The rule
+///
+/// 1. A motor segment at grade whose length, less both ends' junction radii
+///    ([`junction_radii`]), is under [`OsmOptions::min_useful_lane_m`], and which is at
+///    most [`JOIN_MAX_SEGMENT_M`] long, joins its two end nodes. Shortest first; a join
+///    that would spread a cluster wider than [`JOIN_MAX_SPREAD_M`] is refused and counted.
+/// 2. Each cluster becomes one junction, named by the member with the most motor arms (the
+///    lowest node id on a tie), at the centroid of its members.
+/// 3. Motor segments inside a cluster are dropped: their length becomes junction area, and
+///    the movements through the joined junction are built across it — the cross street
+///    over both carriageways of a divided avenue is one connector, not two connectors and
+///    a 1 m stub. Every other motor segment that ends at a member is re-pointed at the
+///    joined junction; its geometry is unchanged and its end is still trimmed by its own
+///    node's radius (the segment's anchor).
+/// 4. Footways, crossings and cycleways keep their own nodes. A pedestrian network hop is
+///    a direct connection with no connector lane, so moving a footway's end into a
+///    junction 20 m away would teleport the walker across it.
+fn join_short_junctions(
+    segments: Vec<Segment>,
+    plans: &[WayPlan],
+    options: &OsmOptions,
+    report: &mut ImportReport,
+) -> (Vec<Segment>, JoinedJunctions) {
+    let radii = junction_radii(&segments, plans, options);
+    let mut position: BTreeMap<i64, Vec3> = BTreeMap::new();
+    let mut motor_arms: BTreeMap<i64, u32> = BTreeMap::new();
+    for segment in &segments {
+        position.entry(segment.start_anchor).or_insert(segment.points[0]);
+        position
+            .entry(segment.end_anchor)
+            .or_insert(segment.points[segment.points.len() - 1]);
+        if plans[segment.plan].family == WayFamily::Motor {
+            *motor_arms.entry(segment.start_anchor).or_default() += 1;
+            *motor_arms.entry(segment.end_anchor).or_default() += 1;
+        }
+    }
+    let is_short = |segment: &Segment| -> Option<f64> {
+        let plan = &plans[segment.plan];
+        if plan.family != WayFamily::Motor || plan.levels_below > 0 || plan.levels_above > 0 {
+            return None;
+        }
+        if segment.start_anchor == segment.end_anchor {
+            return None;
+        }
+        let length = polyline_length(&segment.points);
+        let ra = radii.motor.get(&segment.start_anchor).copied().unwrap_or(0.0);
+        let rb = radii.motor.get(&segment.end_anchor).copied().unwrap_or(0.0);
+        (length <= JOIN_MAX_SEGMENT_M && length - ra - rb < options.min_useful_lane_m)
+            .then_some(length)
+    };
+    let mut candidates: Vec<(f64, (i64, u32), i64, i64)> = segments
+        .iter()
+        .filter_map(|s| is_short(s).map(|l| (l, s.key, s.start_anchor, s.end_anchor)))
+        .collect();
+    candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    // Union-find over node ids, each root holding its members.
+    let mut parent: BTreeMap<i64, i64> = BTreeMap::new();
+    let mut members: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    for (_, _, a, b) in candidates {
+        let (ra, rb) = (find_root(&parent, a), find_root(&parent, b));
+        if ra == rb {
+            continue;
+        }
+        let ma = members.get(&ra).cloned().unwrap_or_else(|| vec![ra]);
+        let mb = members.get(&rb).cloned().unwrap_or_else(|| vec![rb]);
+        let spread = ma
+            .iter()
+            .flat_map(|x| mb.iter().map(move |y| (*x, *y)))
+            .map(|(x, y)| position[&x].distance_2d(position[&y]))
+            .fold(0.0f64, f64::max);
+        if spread > JOIN_MAX_SPREAD_M {
+            report.counts.joins_refused_too_wide += 1;
+            continue;
+        }
+        let (root, other) = (ra.min(rb), ra.max(rb));
+        parent.insert(other, root);
+        parent.insert(root, root);
+        let mut all = ma;
+        all.extend(mb);
+        all.sort_unstable();
+        members.remove(&other);
+        members.insert(root, all);
+    }
+
+    let mut joined = JoinedJunctions::default();
+    for (root, list) in &members {
+        if find_root(&parent, *root) != *root || list.len() < 2 {
+            continue;
+        }
+        let head = *list
+            .iter()
+            .max_by(|x, y| {
+                motor_arms
+                    .get(*x)
+                    .cmp(&motor_arms.get(*y))
+                    .then(y.cmp(x))
+            })
+            .expect("a cluster has members");
+        let n = list.len() as f64;
+        let (sx, sy, sz) = list.iter().fold((0.0, 0.0, 0.0), |acc, m| {
+            let p = position[m];
+            (acc.0 + p.x, acc.1 + p.y, acc.2 + p.z)
+        });
+        joined.position.insert(head, Vec3::new(sx / n, sy / n, sz / n));
+        for m in list {
+            if *m != head {
+                joined.member_of.insert(*m, head);
+            }
+        }
+        report.counts.junctions_joined += list.len() as u64 - 1;
+    }
+    if joined.member_of.is_empty() {
+        return (segments, joined);
+    }
+    let head_of = |node: i64| joined.member_of.get(&node).copied().unwrap_or(node);
+    let mut out = Vec::with_capacity(segments.len());
+    for mut segment in segments {
+        if plans[segment.plan].family != WayFamily::Motor {
+            out.push(segment);
+            continue;
+        }
+        let (a, b) = (head_of(segment.start_anchor), head_of(segment.end_anchor));
+        if a == b && (a != segment.start_anchor || b != segment.end_anchor) {
+            report.counts.segments_absorbed_by_join += 1;
+            continue;
+        }
+        segment.nodes[0] = a;
+        let last = segment.nodes.len() - 1;
+        segment.nodes[last] = b;
+        out.push(segment);
+    }
+    (out, joined)
+}
+
 /// Builds the junctions, edges and lanes of the split-and-collapsed segment list.
 #[allow(clippy::too_many_lines)]
 fn build_network(
@@ -4030,6 +4809,7 @@ fn build_network(
     plans: &[WayPlan],
     file: &OsmFile,
     points: &[Vec3],
+    joined: &JoinedJunctions,
     options: &OsmOptions,
     report: &mut ImportReport,
 ) -> Result<Net> {
@@ -4051,35 +4831,13 @@ fn build_network(
         .map(|(i, node)| (*node, JunctionId::new(i as u32)))
         .collect();
 
-    // --- trimming radius per junction, per family --------------------------------
-    // The motor radius is the widest carriageway that meets here, so a lane stops clear of
-    // the crossing traffic. The soft radius is the widest *soft* way, so a footway is not
-    // cut back by the width of the avenue it crosses.
-    let mut motor_radius = vec![0.0f64; junction_nodes.len()];
-    let mut soft_radius = vec![0.0f64; junction_nodes.len()];
-    let mut motor_arms = vec![0usize; junction_nodes.len()];
-    for segment in segments {
-        let plan = &plans[segment.plan];
-        let half = plan.half_width_m();
-        for node in [segment.start_node(), segment.end_node()] {
-            let j = junction_of[&node].as_usize();
-            if plan.family == WayFamily::Motor {
-                motor_radius[j] = motor_radius[j].max(half);
-                motor_arms[j] += 1;
-            } else {
-                soft_radius[j] = soft_radius[j].max(half);
-            }
-        }
-    }
-    for (r, arms) in motor_radius.iter_mut().zip(&motor_arms) {
-        if *arms >= 3 {
-            *r += options.stop_line_setback_m.max(0.0);
-        }
-        *r = r.clamp(MIN_JUNCTION_RADIUS_M, MAX_JUNCTION_RADIUS_M);
-    }
-    for r in &mut soft_radius {
-        *r = r.clamp(MIN_JUNCTION_RADIUS_M, MAX_SOFT_JUNCTION_RADIUS_M);
-    }
+    // --- trimming radius per road end, per family ---------------------------------
+    // Keyed by the node a segment's geometry really ends at (its anchor), which is the
+    // junction's own node except where a join re-pointed the segment at its cluster.
+    let JunctionRadii {
+        motor: motor_radius,
+        soft: soft_radius,
+    } = junction_radii(segments, plans, options);
 
     let mut net = Net {
         lanes: Vec::new(),
@@ -4107,12 +4865,17 @@ fn build_network(
         movements: vec![Vec::new(); junction_nodes.len()],
         junction_nodes,
         junction_of,
+        joined_into: joined.member_of.clone(),
     };
     // A junction's position is its OSM node's, when the extract carries that node. A
     // boundary junction created by the bounding-box clip has a synthetic negative id and
     // no node, so its position comes from the segment end that made it — which for a real
     // node is the same value, because a segment's geometry *is* its nodes projected.
     for i in 0..net.junction_nodes.len() {
+        if let Some(position) = joined.position.get(&net.junction_nodes[i]) {
+            net.junctions[i].position = *position;
+            continue;
+        }
         if let Some(index) = file.node_index(net.junction_nodes[i]) {
             net.junctions[i].position = points[index];
             continue;
@@ -4153,8 +4916,8 @@ fn build_network(
         };
         let (cut_start, cut_end) = fit_trim(
             total,
-            radius[from_j.as_usize()],
-            radius[to_j.as_usize()],
+            radius.get(&segment.start_anchor).copied().unwrap_or(MIN_JUNCTION_RADIUS_M),
+            radius.get(&segment.end_anchor).copied().unwrap_or(MIN_JUNCTION_RADIUS_M),
             plan.osm_id,
             report,
         );
@@ -4166,10 +4929,9 @@ fn build_network(
         let mut reversed = core.clone();
         reversed.reverse();
 
-        let half_width = plan.half_width_m();
-        for (direction_lanes, geometry, from, to, turns, near_way, far_way) in [
+        for (section, geometry, from, to, turns, near_way, far_way) in [
             (
-                segment.fwd,
+                &segment.section_fwd,
                 &core,
                 from_j,
                 to_j,
@@ -4178,7 +4940,7 @@ fn build_network(
                 segment.end_way,
             ),
             (
-                segment.bwd,
+                &segment.section_bwd,
                 &reversed,
                 to_j,
                 from_j,
@@ -4187,14 +4949,14 @@ fn build_network(
                 segment.start_way,
             ),
         ] {
-            if direction_lanes == 0 {
+            if section.is_empty() {
                 continue;
             }
             let edge_id = EdgeId::new(net.edges.len() as u32);
-            let mut lane_ids = Vec::with_capacity(usize::from(direction_lanes));
-            for k in 0..direction_lanes {
-                let offset = -(half_width - (f64::from(k) + 0.5) * plan.lane_width_m);
-                let (offset_points, repaired) = offset_polyline(geometry, offset);
+            let mut lane_ids = Vec::with_capacity(section.len());
+            for (k, spec) in section.iter().enumerate() {
+                let k = u8::try_from(k).unwrap_or(u8::MAX);
+                let (offset_points, repaired) = offset_polyline(geometry, spec.offset_m);
                 let mut centreline = dedupe_points(offset_points);
                 // A motor lane is a path a vehicle drives: its corners are rounded into
                 // arcs, so its heading is continuous (see `crate::curve`), and a noisy
@@ -4232,11 +4994,11 @@ fn build_network(
                     edge_id,
                     None,
                     k,
-                    plan.kind,
+                    spec.kind,
                     centreline,
-                    plan.lane_width_m,
+                    spec.width_m,
                     plan.speed_mps,
-                    plan.allowed,
+                    spec.allowed,
                 ) {
                     Ok(lane) => {
                         net.lanes.push(lane);
@@ -4245,7 +5007,9 @@ fn build_network(
                             report.note(Anomaly::SelfIntersectingLane, plan.osm_id);
                             report.counts.lanes_repaired += 1;
                         }
-                        if plan.family == WayFamily::Motor {
+                        if plan.family == WayFamily::Motor
+                            && matches!(spec.kind, LaneKind::Driving | LaneKind::Bus)
+                        {
                             if plan.speed_from_preset {
                                 report.counts.speeds_defaulted += 1;
                                 defaulted_speeds.push(plan.speed_mps);
@@ -4299,6 +5063,7 @@ fn build_network(
                 turns: turns.cloned(),
                 near_way,
                 far_way,
+                side: false,
             };
             let index = net.edge_info.len();
             net.incoming[to.as_usize()].push(index);
@@ -4312,7 +5077,15 @@ fn build_network(
                 plan,
                 segment,
                 segment_index,
-                &base_for_sidewalks(&base, &soft_radius, from_j, to_j, plan.osm_id, report),
+                &base_for_sidewalks(
+                    &base,
+                    (
+                        soft_radius.get(&segment.start_anchor).copied().unwrap_or(MIN_JUNCTION_RADIUS_M),
+                        soft_radius.get(&segment.end_anchor).copied().unwrap_or(MIN_JUNCTION_RADIUS_M),
+                    ),
+                    plan.osm_id,
+                    report,
+                ),
                 (from_j, to_j),
                 options,
                 report,
@@ -4331,20 +5104,12 @@ fn build_network(
 /// stop line.
 fn base_for_sidewalks(
     base: &[Vec3],
-    soft_radius: &[f64],
-    from: JunctionId,
-    to: JunctionId,
+    soft_radius: (f64, f64),
     osm_id: i64,
     report: &mut ImportReport,
 ) -> Vec<Vec3> {
     let total = polyline_length(base);
-    let (cut_start, cut_end) = fit_trim(
-        total,
-        soft_radius[from.as_usize()],
-        soft_radius[to.as_usize()],
-        osm_id,
-        report,
-    );
+    let (cut_start, cut_end) = fit_trim(total, soft_radius.0, soft_radius.1, osm_id, report);
     trim_polyline(base, cut_start, total - cut_end).unwrap_or_else(|| base.to_vec())
 }
 
@@ -4381,7 +5146,12 @@ fn add_tagged_sidewalks(
         if !present {
             continue;
         }
-        let band = side * (plan.half_width_m() + width * 0.5);
+        let extent = if side > 0.0 {
+            plan.section.left_extent_m
+        } else {
+            plan.section.right_extent_m
+        };
+        let band = side * (extent + width * 0.5);
         for (geometry, offset, from, to) in [
             (base, band - quarter, from_j, to_j),
             (&reversed, -(band + quarter), to_j, from_j),
@@ -4434,6 +5204,7 @@ fn add_tagged_sidewalks(
                 turns: None,
                 near_way: segment.start_way,
                 far_way: segment.end_way,
+                side: true,
             });
         }
     }
@@ -4506,6 +5277,7 @@ fn fit_trim(
 fn build_movements(
     net: &mut Net,
     plans: &[WayPlan],
+    turnarounds: bool,
     report: &mut ImportReport,
 ) -> Vec<DirectMovement> {
     let mut direct: Vec<DirectMovement> = Vec::new();
@@ -4530,9 +5302,16 @@ fn build_movements(
 
         for &a in &approaches {
             let approach = net.edge_info[a].clone();
-            let in_lanes = approach.lanes.clone();
+            // The lanes that carry traffic through the junction: general and bus lanes, in
+            // index order (rightmost first) — the lanes `turn:lanes` describes. Parking lanes
+            // go nowhere; cycle lanes are connected on their own below.
+            let in_lanes = traffic_lanes(net, &approach.lanes);
+            let cycle_in = cycle_lanes_with_side(net, &approach.lanes);
+            if in_lanes.is_empty() && cycle_in.is_empty() {
+                continue;
+            }
             let approach_heading = {
-                let lane = &net.lanes[in_lanes[0].as_usize()];
+                let lane = &net.lanes[approach.lanes[0].as_usize()];
                 lane.heading_at(lane.length_m)
             };
             // Candidate departures, with the turn each one represents.
@@ -4548,20 +5327,82 @@ fn build_movements(
                 };
                 candidates.push((b, turn, delta));
             }
-            let has_non_uturn = candidates
-                .iter()
-                .any(|(b, _, _)| net.edge_info[*b].segment != approach.segment);
+            // A U-turn is the opposite carriageway of the approach's own segment, any
+            // departure that heads back the way the approach came, or one that leads back
+            // to the junction the approach came from — the other carriageway of a divided
+            // road, once a junction join has put both in one junction, whose angle a
+            // skewed join can make look like a sharp right. It is offered only where there
+            // is nothing else to do.
+            let approach_from =
+                net.edges[net.lanes[approach.lanes[0].as_usize()].edge.as_usize()].from;
+            let is_uturn = |b: usize, turn: TurnDirection| {
+                let departure_to = net.edges
+                    [net.lanes[net.edge_info[b].lanes[0].as_usize()].edge.as_usize()]
+                .to;
+                net.edge_info[b].segment == approach.segment
+                    || turn == TurnDirection::UTurn
+                    || departure_to == approach_from
+            };
+            let has_non_uturn = candidates.iter().any(|(b, t, _)| !is_uturn(*b, *t));
             if has_non_uturn {
-                candidates.retain(|(b, _, _)| net.edge_info[*b].segment != approach.segment);
+                candidates.retain(|(b, t, _)| !is_uturn(*b, *t));
+            } else if !turnarounds {
+                // A dead end. Turning a car round between two lanes a few metres apart is a
+                // three-point turn, not a path: the connector was a semicircle of half the
+                // lane spacing — 1.7 m for two 3.35 m lanes, against the 6.4 m a passenger
+                // car needs (AASHTO Green Book 2018, Table 2-2) — and a router would send
+                // traffic into the dead end to turn round in it. The lane is a trip end
+                // instead: traffic arrives there (a garage, a loading dock, the edge of the
+                // map) and none drives through.
+                let tight = candidates.iter().any(|(b, _, _)| {
+                    let to_lanes = traffic_lanes(net, &net.edge_info[*b].lanes);
+                    let (Some(from), Some(to)) = (in_lanes.last(), to_lanes.last()) else {
+                        return true;
+                    };
+                    let (from, to) = (&net.lanes[from.as_usize()], &net.lanes[to.as_usize()]);
+                    0.5 * from.end().distance_2d(to.start()) < TURN_DESIGN_RADIUS_M
+                });
+                if tight {
+                    report.note(Anomaly::DeadEndWithoutTurnaround, net.junction_nodes[j]);
+                    candidates.clear();
+                }
             }
             if candidates.is_empty() {
                 continue;
             }
 
+            // The general lanes (those a car may use), by index into `in_lanes`. The
+            // geometric rule — right turns from the rightmost, left from the leftmost — is
+            // applied to them; a bus lane goes straight on and turns towards its own kerb
+            // (NYC lets other traffic into a bus lane only to make the next turn, which the
+            // general lane beside it stands in for here).
+            let general: Vec<usize> = (0..in_lanes.len())
+                .filter(|k| net.lanes[in_lanes[*k].as_usize()].admits(ClassMask::CAR))
+                .collect();
             let tagged_or_geometric = |k: usize, turn: TurnDirection| -> bool {
                 match approach.turns.as_ref().and_then(|t| t.get(k)) {
                     Some(set) if !set.is_empty() => set.iter().any(|t| turn_matches(*t, turn)),
-                    _ => lanes_for_turn(turn, in_lanes.len()).contains(&k),
+                    _ => match general.iter().position(|g| *g == k) {
+                        Some(g) => lanes_for_turn(turn, general.len()).contains(&g),
+                        None if general.is_empty() => {
+                            lanes_for_turn(turn, in_lanes.len()).contains(&k)
+                        }
+                        None => {
+                            let right_of_all = general.iter().all(|g| k < *g);
+                            let left_of_all = general.iter().all(|g| k > *g);
+                            is_through(turn)
+                                || (right_of_all
+                                    && matches!(
+                                        turn,
+                                        TurnDirection::Right | TurnDirection::SlightRight
+                                    ))
+                                || (left_of_all
+                                    && matches!(
+                                        turn,
+                                        TurnDirection::Left | TurnDirection::SlightLeft
+                                    ))
+                        }
+                    },
                 }
             };
             let fork = fork_assignment(net, &candidates, in_lanes.len(), &tagged_or_geometric);
@@ -4578,15 +5419,20 @@ fn build_movements(
                 let mut made = 0usize;
                 let mut seen: Vec<LaneId> = Vec::new();
                 for &(b, turn, _) in &candidates {
-                    let departure = &net.edge_info[b];
-                    let out_lanes = departure.lanes.len();
                     if !permits(k, b, turn) {
+                        continue;
+                    }
+                    let out = traffic_lanes(net, &net.edge_info[b].lanes);
+                    if out.is_empty() {
                         continue;
                     }
                     let sharing: Vec<usize> = (0..in_lanes.len())
                         .filter(|j| permits(*j, b, turn))
                         .collect();
-                    let to_lane = departure.lanes[target_lane(turn, k, &sharing, out_lanes)];
+                    let target = target_lane(turn, k, &sharing, out.len());
+                    let Some(to_lane) = fitting_lane(net, from_lane, &out, target, k) else {
+                        continue;
+                    };
                     if seen.contains(&to_lane) {
                         continue;
                     }
@@ -4606,30 +5452,64 @@ fn build_movements(
                 if made == 0 {
                     // Give the lane the straightest candidate rather than leave it a dead
                     // end: a tag should never disconnect a lane from the network.
-                    let best = candidates
-                        .iter()
-                        .min_by(|x, y| x.2.abs().total_cmp(&y.2.abs()))
-                        .copied();
-                    if let Some((b, turn, _)) = best {
-                        let departure = &net.edge_info[b];
-                        let to_lane =
-                            departure.lanes[target_lane(turn, k, &[k], departure.lanes.len())];
-                        requests.push(MovementRequest {
-                            from_lane,
-                            to_lane,
-                            turn,
-                            approach_heading,
-                            from_edge: a,
-                            to_edge: b,
-                            plan: approach.plan,
-                            plans,
-                        });
+                    let mut ranked: Vec<(usize, TurnDirection, f64)> = candidates.clone();
+                    ranked.sort_by(|x, y| x.2.abs().total_cmp(&y.2.abs()).then(x.0.cmp(&y.0)));
+                    for (b, turn, _) in ranked {
+                        let out = traffic_lanes(net, &net.edge_info[b].lanes);
+                        if out.is_empty() {
+                            continue;
+                        }
+                        let t = target_lane(turn, k, &[k], out.len());
+                        if let Some(to_lane) = fitting_lane(net, from_lane, &out, t, k) {
+                            requests.push(MovementRequest {
+                                from_lane,
+                                to_lane,
+                                turn,
+                                approach_heading,
+                                from_edge: a,
+                                to_edge: b,
+                                plan: approach.plan,
+                                plans,
+                            });
+                            break;
+                        }
                     }
+                }
+            }
+
+            // Cycle lanes: straight on into the next cycle lane on the same side, and turns
+            // towards their own side only — a cyclist in a right-side lane turns right from
+            // it, one in a left-side track turns left from it; turning across the traffic
+            // is done as a pedestrian would, which is the VRU model's business.
+            for &(from_lane, on_right) in &cycle_in {
+                for &(b, turn, _) in &candidates {
+                    let towards_side = if on_right {
+                        matches!(turn, TurnDirection::Right | TurnDirection::SlightRight)
+                    } else {
+                        matches!(turn, TurnDirection::Left | TurnDirection::SlightLeft)
+                    };
+                    if !(is_through(turn) || towards_side) {
+                        continue;
+                    }
+                    let Some(to_lane) = cycle_target(net, b, on_right) else {
+                        continue;
+                    };
+                    requests.push(MovementRequest {
+                        from_lane,
+                        to_lane,
+                        turn,
+                        approach_heading,
+                        from_edge: a,
+                        to_edge: b,
+                        plan: approach.plan,
+                        plans,
+                    });
                 }
             }
         }
 
         pull_back_for_turns(net, j, &requests, report);
+        let requests = drop_infeasible_turns(net, j, requests, report);
         for mut request in requests {
             // The approach heading is re-read: pulling a lane end back along a curve turns
             // it a little, and the priority and phase rules should see the lane as built.
@@ -4661,6 +5541,140 @@ fn build_movements(
         net.movements[j] = movements;
     }
     direct
+}
+
+/// Removes the movements no car could drive, as the lanes finally lie, where the approach
+/// lane has another movement to make instead; each removed is counted as
+/// [`Anomaly::InfeasibleTurn`].
+///
+/// Two shapes, both from where a way's geometry meets a junction rather than from the
+/// turn itself:
+///
+/// * a "turn" that, measured on the lanes after they were cut back for the junction, is a
+///   U-turn: the two carriageways of a divided street joined into one junction, where the
+///   last metres of the approach bent and made the reversal look like a left turn
+///   (West Burnside Street, Portland);
+/// * a turn onto a departure that starts **behind** the approach's end or ends behind its
+///   own start (a tangent leg more than a metre negative): a parking aisle that leaves the
+///   junction 30 m back along the street, whose connector looped a full circle.
+fn drop_infeasible_turns<'a>(
+    net: &Net,
+    j: usize,
+    requests: Vec<MovementRequest<'a>>,
+    report: &mut ImportReport,
+) -> Vec<MovementRequest<'a>> {
+    let infeasible: Vec<bool> = requests
+        .iter()
+        .map(|r| {
+            if r.turn == TurnDirection::UTurn {
+                return false;
+            }
+            let from = &net.lanes[r.from_lane.as_usize()];
+            let to = &net.lanes[r.to_lane.as_usize()];
+            let (start, h_in) = (from.end(), from.heading_at(from.length_m));
+            let (end, h_out) = (to.start(), to.heading_at(0.0));
+            let delta = normalise_angle(h_out - h_in);
+            if TurnDirection::from_heading_change(delta) == TurnDirection::UTurn {
+                return true;
+            }
+            if delta.abs() < 0.3 {
+                return false;
+            }
+            matches!(tangent_legs_signed(start, h_in, end, h_out), Some((u, v)) if u < -1.0 || v < -1.0)
+        })
+        .collect();
+    if !infeasible.iter().any(|x| *x) {
+        return requests;
+    }
+    let keeps: BTreeSet<LaneId> = requests
+        .iter()
+        .zip(&infeasible)
+        .filter(|(_, bad)| !**bad)
+        .map(|(r, _)| r.from_lane)
+        .collect();
+    let mut out = Vec::with_capacity(requests.len());
+    for (r, bad) in requests.into_iter().zip(infeasible) {
+        if bad && keeps.contains(&r.from_lane) {
+            report.note(Anomaly::InfeasibleTurn, net.junction_nodes[j]);
+            continue;
+        }
+        out.push(r);
+    }
+    out
+}
+
+/// The lanes of `lanes` that carry traffic through a junction — general and bus lanes —
+/// in index order.
+fn traffic_lanes(net: &Net, lanes: &[LaneId]) -> Vec<LaneId> {
+    lanes
+        .iter()
+        .copied()
+        .filter(|l| matches!(net.lanes[l.as_usize()].kind, LaneKind::Driving | LaneKind::Bus))
+        .collect()
+}
+
+/// The cycle lanes of `lanes`, each with whether it is on the right of the edge's traffic
+/// lanes (true) or on their left. An edge with no traffic lanes — a one-way street's
+/// contraflow cycle lane — has its cycle lanes on the right.
+fn cycle_lanes_with_side(net: &Net, lanes: &[LaneId]) -> Vec<(LaneId, bool)> {
+    let first_traffic = lanes
+        .iter()
+        .map(|l| &net.lanes[l.as_usize()])
+        .filter(|l| matches!(l.kind, LaneKind::Driving | LaneKind::Bus))
+        .map(|l| l.index)
+        .min();
+    lanes
+        .iter()
+        .map(|l| &net.lanes[l.as_usize()])
+        .filter(|l| l.kind == LaneKind::Cycle)
+        .map(|l| (l.id, first_traffic.is_none_or(|f| l.index < f)))
+        .collect()
+}
+
+/// The class a lane is mainly for: a car for a general lane, a bus for a bus lane.
+fn main_class(lane: &Lane) -> ClassMask {
+    if lane.admits(ClassMask::CAR) {
+        ClassMask::CAR
+    } else if lane.admits(ClassMask::BUS) {
+        ClassMask::BUS
+    } else {
+        lane.allowed
+    }
+}
+
+/// The departure lane a movement from `from` enters: `out[target]` if the traffic on
+/// `from` may use it, else the nearest one it may (nearest to `target`, then to the
+/// approach lane's own index `k`), or `None` if none. A general lane's through movement
+/// that lines up with a bus lane on the far side moves over to the first general lane.
+fn fitting_lane(net: &Net, from: LaneId, out: &[LaneId], target: usize, k: usize) -> Option<LaneId> {
+    let need = main_class(&net.lanes[from.as_usize()]);
+    (0..out.len())
+        .filter(|i| net.lanes[out[*i].as_usize()].admits(need))
+        .min_by_key(|i| (i.abs_diff(target), i.abs_diff(k), *i))
+        .map(|i| out[i])
+}
+
+/// Where a cyclist leaving on departure edge `b` from a cycle lane on the right
+/// (`on_right`) or the left rides on: the departure's cycle lane on that side, else any
+/// cycle lane it has, else its outermost lane on that side that admits a bicycle.
+fn cycle_target(net: &Net, b: usize, on_right: bool) -> Option<LaneId> {
+    let lanes = &net.edge_info[b].lanes;
+    let cycles = cycle_lanes_with_side(net, lanes);
+    if let Some((l, _)) = cycles.iter().find(|(_, r)| *r == on_right) {
+        return Some(*l);
+    }
+    if let Some((l, _)) = cycles.first() {
+        return Some(*l);
+    }
+    let riding: Vec<LaneId> = traffic_lanes(net, lanes)
+        .into_iter()
+        .filter(|l| net.lanes[l.as_usize()].admits(ClassMask::BICYCLE))
+        .collect();
+    if on_right {
+        riding.first().copied()
+    } else {
+        riding.last().copied()
+    }
 }
 
 /// True for the "straight on" family of turns — straight, slight left, slight right — that
@@ -4708,7 +5722,7 @@ fn fork_assignment(
     }
     let weights: Vec<f64> = branches
         .iter()
-        .map(|(b, _, _)| net.edge_info[*b].lanes.len().max(1) as f64)
+        .map(|(b, _, _)| traffic_lanes(net, &net.edge_info[*b].lanes).len().max(1) as f64)
         .collect();
     let total: f64 = weights.iter().sum();
     let m = shared.len();
@@ -4749,10 +5763,12 @@ pub const TURN_DESIGN_RADIUS_M: f64 = 6.4;
 
 /// The furthest one lane end is pulled back to make room for a turn, metres.
 ///
-/// **This importer's choice**: two lane widths. A turn that still lacks room after that
-/// is at a junction a mapped network squeezed — a sliver of road between two junctions a
-/// metre apart — and pulling further would eat the approach.
-const MAX_TURN_PULL_BACK_M: f64 = 7.0;
+/// **This importer's choice**: three lane widths. A turn that still lacks room after that
+/// is at a junction a mapped network squeezed, and pulling further would eat the
+/// approach. 7 m (two lane widths) left the right turn from the Queens-Midtown Tunnel exit
+/// ramp onto 1st Avenue — 110° — at a 2.2 m radius; the tangent a 6.4 m arc needs through
+/// 110° is 9.1 m.
+const MAX_TURN_PULL_BACK_M: f64 = 10.0;
 
 /// Pulls the approach lane ends and departure lane starts at junction `j` back from the
 /// junction until every requested movement's corner has room for an arc of
@@ -4772,46 +5788,82 @@ fn pull_back_for_turns(
     requests: &[MovementRequest<'_>],
     report: &mut ImportReport,
 ) {
-    let mut need_end: BTreeMap<usize, f64> = BTreeMap::new();
-    let mut need_start: BTreeMap<usize, f64> = BTreeMap::new();
-    for r in requests {
-        if r.turn == TurnDirection::UTurn {
-            continue;
+    // How far each edge end has been pulled already, so two passes never exceed the cap.
+    let mut pulled_end: BTreeMap<usize, f64> = BTreeMap::new();
+    let mut pulled_start: BTreeMap<usize, f64> = BTreeMap::new();
+    // Two passes: pulling one edge back along a curve turns its end a little, which
+    // changes what the movements that share it need.
+    for _pass in 0..2 {
+        let mut need_end: BTreeMap<usize, f64> = BTreeMap::new();
+        let mut need_start: BTreeMap<usize, f64> = BTreeMap::new();
+        for r in requests {
+            if r.turn == TurnDirection::UTurn {
+                continue;
+            }
+            let from = &net.lanes[r.from_lane.as_usize()];
+            let to = &net.lanes[r.to_lane.as_usize()];
+            let (start, h_in) = (from.end(), from.heading_at(from.length_m));
+            let (end, h_out) = (to.start(), to.heading_at(0.0));
+            let turn = normalise_angle(h_out - h_in).abs();
+            if turn < 0.05 {
+                continue;
+            }
+            // The legs are signed: on the inside of a sharp bend the two lanes' offset
+            // lines cross *before* the junction, so the approach already ends past the
+            // corner (a negative leg) and the connector between them was a hook turning
+            // back on itself. That is the case with the least room, not a case to skip.
+            let Some((u, v)) = tangent_legs_signed(start, h_in, end, h_out) else {
+                continue;
+            };
+            if turn < 0.3 && (u <= 0.0 || v <= 0.0) {
+                // A nearly straight movement between offset lanes is a reverse curve,
+                // which needs length, not a corner.
+                continue;
+            }
+            let want = TURN_DESIGN_RADIUS_M * math::tan(0.5 * turn.min(2.8));
+            if want > u {
+                let e = need_end.entry(r.from_edge).or_insert(0.0);
+                *e = e.max(want - u);
+            }
+            if want > v {
+                let e = need_start.entry(r.to_edge).or_insert(0.0);
+                *e = e.max(want - v);
+            }
         }
-        let from = &net.lanes[r.from_lane.as_usize()];
-        let to = &net.lanes[r.to_lane.as_usize()];
-        let (start, h_in) = (from.end(), from.heading_at(from.length_m));
-        let (end, h_out) = (to.start(), to.heading_at(0.0));
-        let turn = normalise_angle(h_out - h_in).abs();
-        if turn < 0.05 {
-            continue;
+        let mut moved = false;
+        for (edge, need) in need_end {
+            let done = pulled_end.entry(edge).or_insert(0.0);
+            let cut = need.min(MAX_TURN_PULL_BACK_M - *done);
+            if cut >= 0.05 {
+                *done += pull_edge_end(net, edge, cut, true, report);
+                moved = true;
+            }
         }
-        let Some((u, v)) = tangent_legs(start, h_in, end, h_out) else {
-            continue;
-        };
-        let want = TURN_DESIGN_RADIUS_M * math::tan(0.5 * turn.min(2.8));
-        if want > u {
-            let e = need_end.entry(r.from_edge).or_insert(0.0);
-            *e = e.max(want - u);
+        for (edge, need) in need_start {
+            let done = pulled_start.entry(edge).or_insert(0.0);
+            let cut = need.min(MAX_TURN_PULL_BACK_M - *done);
+            if cut >= 0.05 {
+                *done += pull_edge_end(net, edge, cut, false, report);
+                moved = true;
+            }
         }
-        if want > v {
-            let e = need_start.entry(r.to_edge).or_insert(0.0);
-            *e = e.max(want - v);
+        if !moved {
+            break;
         }
-    }
-    for (edge, need) in need_end {
-        pull_edge_end(net, edge, need, true, report);
-    }
-    for (edge, need) in need_start {
-        pull_edge_end(net, edge, need, false, report);
     }
     let _ = j;
 }
 
 /// Where the tangent lines of `(start, heading_in)` and `(end, heading_out)` meet, as the
-/// distance from `start` forward along its heading and from `end` back along its heading;
-/// `None` when they are parallel or meet behind either end.
-fn tangent_legs(start: Vec3, heading_in: f64, end: Vec3, heading_out: f64) -> Option<(f64, f64)> {
+/// signed distance from `start` forward along its heading and from `end` back along its
+/// heading; either may be negative (the lines meet behind that end). `None` only when the
+/// lines are parallel.
+fn tangent_legs_signed(
+    start: Vec3,
+    heading_in: f64,
+    end: Vec3,
+    heading_out: f64,
+) -> Option<(f64, f64)> {
     let (sin_in, cos_in) = math::sin_cos(heading_in);
     let (sin_out, cos_out) = math::sin_cos(heading_out);
     let chord = end - start;
@@ -4823,12 +5875,18 @@ fn tangent_legs(start: Vec3, heading_in: f64, end: Vec3, heading_out: f64) -> Op
     let cx = start.x + cos_in * u;
     let cy = start.y + sin_in * u;
     let v = (end.x - cx) * cos_out + (end.y - cy) * sin_out;
-    (u > 0.0 && v > 0.0 && u.is_finite() && v.is_finite()).then_some((u, v))
+    (u.is_finite() && v.is_finite()).then_some((u, v))
 }
 
 /// Shortens every lane of edge `edge` by `need` metres at its end (`at_end`) or its start,
 /// capped as [`pull_back_for_turns`] describes.
-fn pull_edge_end(net: &mut Net, edge: usize, need: f64, at_end: bool, report: &mut ImportReport) {
+fn pull_edge_end(
+    net: &mut Net,
+    edge: usize,
+    need: f64,
+    at_end: bool,
+    report: &mut ImportReport,
+) -> f64 {
     let lanes = net.edge_info[edge].lanes.clone();
     let mut cut = need.min(MAX_TURN_PULL_BACK_M);
     for id in &lanes {
@@ -4838,7 +5896,7 @@ fn pull_edge_end(net: &mut Net, edge: usize, need: f64, at_end: bool, report: &m
             .min(0.5 * lane.length_m);
     }
     if cut < 0.05 {
-        return;
+        return 0.0;
     }
     for id in &lanes {
         let lane = &net.lanes[id.as_usize()];
@@ -4865,6 +5923,7 @@ fn pull_edge_end(net: &mut Net, edge: usize, need: f64, at_end: bool, report: &m
         }
     }
     report.counts.lane_ends_pulled_back += lanes.len() as u64;
+    cut
 }
 
 /// The arguments of [`add_movement`], grouped so the function takes one parameter block
@@ -4927,6 +5986,14 @@ fn add_movement(
     }
     let lane_id = LaneId::new(net.lanes.len() as u32);
     let index = u8::try_from(internal_lanes.len()).unwrap_or(u8::MAX);
+    // The connector carries what both its lanes carry: a bus lane's connector is a bus
+    // path, a cycle lane's a cycle path, and it is as wide as the lane it leaves.
+    let (width, allowed) = {
+        let from = &net.lanes[request.from_lane.as_usize()];
+        let to = &net.lanes[request.to_lane.as_usize()];
+        let both = from.allowed.intersection(to.allowed);
+        (from.width_m, if both.is_empty() { from.allowed } else { both })
+    };
     let Ok(lane) = Lane::new(
         lane_id,
         internal_edge,
@@ -4934,9 +6001,9 @@ fn add_movement(
         index,
         LaneKind::Internal,
         geometry,
-        plan.lane_width_m,
+        width,
         plan.speed_mps,
-        plan.allowed,
+        allowed,
     ) else {
         touching(direct, report);
         return;
@@ -5140,6 +6207,7 @@ fn apply_restrictions(
             }
             continue;
         };
+        let via = net.joined_into.get(&via).copied().unwrap_or(via);
         let Some(junction) = net.junction_of.get(&via).copied() else {
             report.note(Anomaly::RestrictionUnmatched, relation.id);
             continue;
@@ -5222,6 +6290,38 @@ fn restriction_via_nodes(file: &OsmFile) -> BTreeSet<i64> {
 /// * a pair the rules leave level — two opposing left turns — is recorded as a conflict
 ///   with no precedence either way, because no highway code settles it and inventing one
 ///   would be worse than telling the intersection model that it must.
+/// Two junction connectors whose centrelines pass closer than this conflict even where
+/// they do not cross, metres: a passenger car's width (1.8 m, the auditor's) plus 0.2 m.
+/// Side-by-side turning lanes run a lane width (2.7 m or more) apart and are unaffected.
+pub const CONNECTORS_TOUCH_M: f64 = 2.0;
+
+/// The least horizontal distance between two polylines.
+fn polylines_min_distance(a: &[Vec3], b: &[Vec3]) -> f64 {
+    let point_to_segment = |p: Vec3, s0: Vec3, s1: Vec3| {
+        let (dx, dy) = (s1.x - s0.x, s1.y - s0.y);
+        let len2 = dx * dx + dy * dy;
+        let t = if len2 <= 0.0 {
+            0.0
+        } else {
+            (((p.x - s0.x) * dx + (p.y - s0.y) * dy) / len2).clamp(0.0, 1.0)
+        };
+        let (ex, ey) = (p.x - (s0.x + t * dx), p.y - (s0.y + t * dy));
+        math::sqrt(ex * ex + ey * ey)
+    };
+    let mut best = f64::INFINITY;
+    for sa in a.windows(2) {
+        for sb in b.windows(2) {
+            // Two segments that do not cross are closest at an endpoint of one of them.
+            best = best
+                .min(point_to_segment(sa[0], sb[0], sb[1]))
+                .min(point_to_segment(sa[1], sb[0], sb[1]))
+                .min(point_to_segment(sb[0], sa[0], sa[1]))
+                .min(point_to_segment(sb[1], sa[0], sa[1]));
+        }
+    }
+    best
+}
+
 fn conflict_matrix(movements: &[Movement], lanes: &[Lane]) -> ConflictMatrix {
     let mut matrix = ConflictMatrix::new(movements.len());
     let rank = |m: &Movement| u8::from(!m.turn.crosses_opposing_traffic());
@@ -5243,21 +6343,39 @@ fn conflict_matrix(movements: &[Movement], lanes: &[Lane]) -> ConflictMatrix {
                 continue;
             }
             let merges = ma.to_lane == mb.to_lane;
-            let separated = boxes[a].1.x < boxes[b].0.x
-                || boxes[b].1.x < boxes[a].0.x
-                || boxes[a].1.y < boxes[b].0.y
-                || boxes[b].1.y < boxes[a].0.y;
-            let crosses = !separated
-                && crate::index::polylines_cross(
-                    &lanes[ma.internal.as_usize()].centreline,
-                    &lanes[mb.internal.as_usize()].centreline,
-                );
-            if !(merges || crosses) {
+            let separated = boxes[a].1.x + CONNECTORS_TOUCH_M < boxes[b].0.x
+                || boxes[b].1.x + CONNECTORS_TOUCH_M < boxes[a].0.x
+                || boxes[a].1.y + CONNECTORS_TOUCH_M < boxes[b].0.y
+                || boxes[b].1.y + CONNECTORS_TOUCH_M < boxes[a].0.y;
+            let (pa, pb) = (
+                &lanes[ma.internal.as_usize()].centreline,
+                &lanes[mb.internal.as_usize()].centreline,
+            );
+            // Crossing paths conflict, and so do two paths that pass closer than a car is
+            // wide without crossing: two cars on them would touch. Inside a joined junction
+            // (a divided avenue's two carriageways and the cross street as one junction) a
+            // turn off one carriageway and a through movement from the other ran 0.03 m
+            // apart without their centrelines crossing, and the auditor saw the two cars
+            // drive through each other.
+            let conflicts = !separated
+                && (crate::index::polylines_cross(pa, pb)
+                    || polylines_min_distance(pa, pb) < CONNECTORS_TOUCH_M);
+            if !(merges || conflicts) {
                 continue;
             }
             matrix.set_foe(a, b, true);
             let (ra, rb) = (rank(ma), rank(mb));
-            if ra < rb {
+            if ma.from_edge == mb.from_edge && is_through(ma.turn) != is_through(mb.turn) {
+                // Two movements off one approach that cross: a car turning across the
+                // cycle lane (or bus lane) beside it yields to the traffic going straight
+                // on in that lane, as every highway code requires of a turning driver
+                // (NY VTL §1160 and §1146 for cyclists).
+                if is_through(ma.turn) {
+                    matrix.set_response(b, a, true);
+                } else {
+                    matrix.set_response(a, b, true);
+                }
+            } else if ra < rb {
                 matrix.set_response(a, b, true);
             } else if rb < ra {
                 matrix.set_response(b, a, true);
@@ -5424,6 +6542,244 @@ fn split_phases(
         .collect()
 }
 
+/// The width of the road an approach belongs to, kerb to kerb in both directions, metres:
+/// the sum of every lane's width over the edges built from the approach's segment.
+fn road_width_m(net: &Net, edge_info: usize) -> f64 {
+    let segment = net.edge_info[edge_info].segment;
+    net.edge_info
+        .iter()
+        .filter(|e| e.segment == segment && e.family == WayFamily::Motor && !e.side)
+        .flat_map(|e| e.lanes.iter())
+        .map(|l| net.lanes[l.as_usize()].width_m)
+        .sum()
+}
+
+/// The greens of a plan's phase groups, and the groups reordered so the major one runs
+/// first (the phase a coordinated plan's offset refers to).
+///
+/// `timing` is `(group, yellow, all-red)` per group. Each group's weight is the number of
+/// general and bus lanes on its widest approach ([`SignalDefaults::split_by_lanes`]; 1
+/// each otherwise); the green left over by the change intervals is shared in proportion to
+/// it, and never below [`SignalDefaults::min_green_s`] nor, with
+/// [`SignalDefaults::pedestrian_min_green`], below what a pedestrian needs to cross the
+/// widest road the group stops: `walk + width / speed − yellow − all-red`. Where the
+/// minimums do not fit the target cycle they are kept and the cycle runs longer.
+fn phase_greens(
+    net: &Net,
+    movements: &[Movement],
+    groups: &[u16],
+    timing: Vec<(u16, f64, f64)>,
+    defaults: &SignalDefaults,
+) -> (Vec<(u16, f64, f64)>, Vec<f64>) {
+    let n = timing.len();
+    let weight: Vec<f64> = timing
+        .iter()
+        .map(|(g, _, _)| {
+            if !defaults.split_by_lanes {
+                return 1.0;
+            }
+            movements
+                .iter()
+                .zip(groups)
+                .filter(|(_, mg)| **mg == *g)
+                .map(|(m, _)| traffic_lanes(net, &net.edge_info[m.from_edge].lanes).len())
+                .max()
+                .unwrap_or(1)
+                .max(1) as f64
+        })
+        .collect();
+    let minimum: Vec<f64> = timing
+        .iter()
+        .map(|(g, yellow, red)| {
+            let mut least = defaults.min_green_s;
+            if defaults.pedestrian_min_green && defaults.pedestrian_speed_mps > 0.0 {
+                // The widest road this group's red stops: pedestrians cross it while this
+                // group has its green.
+                let widest = movements
+                    .iter()
+                    .zip(groups)
+                    .filter(|(_, mg)| **mg != *g)
+                    .map(|(m, _)| road_width_m(net, m.from_edge))
+                    .fold(0.0f64, f64::max);
+                if widest > 0.0 {
+                    let need = defaults.pedestrian_walk_s + widest / defaults.pedestrian_speed_mps
+                        - yellow
+                        - red;
+                    least = least.max(need);
+                }
+            }
+            // Rounded up, never down: a minimum rounded to the nearest step left a
+            // pedestrian 0.4 ms short of the far kerb (tests/street.rs caught it).
+            quantise((least / Q_TIME_S).ceil() * Q_TIME_S, Q_TIME_S)
+        })
+        .collect();
+    let fixed: f64 = timing.iter().map(|(_, y, r)| y + r).sum();
+    let available = defaults.cycle_s - fixed;
+    // Proportional shares, with any group held at its minimum taken out and the rest
+    // re-shared, until the shares are consistent (at most `n` rounds).
+    let mut green = vec![0.0f64; n];
+    let mut pinned = vec![false; n];
+    for _ in 0..=n {
+        let free: f64 = available
+            - (0..n).filter(|i| pinned[*i]).map(|i| minimum[i]).sum::<f64>();
+        let w: f64 = (0..n).filter(|i| !pinned[*i]).map(|i| weight[i]).sum();
+        let mut changed = false;
+        for i in 0..n {
+            if pinned[i] {
+                green[i] = minimum[i];
+                continue;
+            }
+            green[i] = if w > 0.0 { free * weight[i] / w } else { 0.0 };
+            if green[i] < minimum[i] {
+                pinned[i] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut green: Vec<f64> = (0..n)
+        .map(|i| quantise(green[i].max(minimum[i]), Q_TIME_S))
+        .collect();
+    // The major group — the heaviest, the first on a tie — runs first, and takes the
+    // rounding remainder so the plan fills its target cycle exactly when it can.
+    let major = (0..n)
+        .max_by(|a, b| weight[*a].total_cmp(&weight[*b]).then(b.cmp(a)))
+        .unwrap_or(0);
+    let total: f64 = green.iter().sum();
+    if total <= available + 1e-9 {
+        green[major] = quantise(green[major] + (available - total), Q_TIME_S);
+    }
+    let order: Vec<usize> = (major..n).chain(0..major).collect();
+    (
+        order.iter().map(|i| timing[*i]).collect(),
+        order.iter().map(|i| green[*i]).collect(),
+    )
+}
+
+/// Offsets the plans for progression along their major roads; returns how many plans were
+/// given a non-zero offset.
+///
+/// Each plan's first phase is its major road's green ([`phase_greens`]). A plan's
+/// *predecessor* is the signalised junction its major approach comes from — the approach
+/// with the most general lanes, the lowest index on a tie — provided that junction's own
+/// major green sends traffic onto that approach and runs on the same cycle. The plan's
+/// green then starts one travel time after its predecessor's: `offset = offset_up + d / v`
+/// modulo the cycle, `d` the approach lane plus the upstream connector, `v`
+/// [`SignalDefaults::progression_speed_mps`] or the approach's speed limit. A plan with no
+/// predecessor, or on a loop of predecessors, starts at `t0`. On a one-way avenue this is
+/// the textbook progression; on a two-way road it favours one direction, which is the
+/// usual compromise of a simple time-space design.
+fn coordinate_offsets(net: &Net, plans: &mut [SignalPlan], defaults: &SignalDefaults) -> u64 {
+    let plan_of: BTreeMap<usize, usize> = plans
+        .iter()
+        .enumerate()
+        .map(|(p, plan)| (plan.junction.as_usize(), p))
+        .collect();
+    // Each plan's major movements: those green in its first phase.
+    let major: Vec<Vec<&Movement>> = plans
+        .iter()
+        .map(|plan| {
+            let movements = &net.movements[plan.junction.as_usize()];
+            let Some(first) = plan.phases.first() else {
+                return Vec::new();
+            };
+            movements
+                .iter()
+                .zip(&first.states)
+                .filter(|(_, s)| matches!(s, SignalState::Green | SignalState::GreenYield))
+                .map(|(m, _)| m)
+                .collect()
+        })
+        .collect();
+    // The predecessor of each plan, and the travel time from it.
+    let mut pred: Vec<Option<(usize, f64)>> = vec![None; plans.len()];
+    for p in 0..plans.len() {
+        let mut approaches: Vec<usize> = major[p].iter().map(|m| m.from_edge).collect();
+        approaches.sort_unstable();
+        approaches.dedup();
+        approaches.sort_by_key(|e| {
+            (
+                std::cmp::Reverse(traffic_lanes(net, &net.edge_info[*e].lanes).len()),
+                *e,
+            )
+        });
+        for e in approaches {
+            let Some(first) = traffic_lanes(net, &net.edge_info[e].lanes).first().copied() else {
+                continue;
+            };
+            let lane = &net.lanes[first.as_usize()];
+            let up = net.edges[lane.edge.as_usize()].from.as_usize();
+            let Some(&q) = plan_of.get(&up) else {
+                continue;
+            };
+            if q == p || (plans[q].cycle_s - plans[p].cycle_s).abs() > 1e-9 {
+                continue;
+            }
+            let Some(feeder) = major[q].iter().find(|m| m.to_edge == e) else {
+                continue;
+            };
+            let d = lane.length_m + net.lanes[feeder.internal.as_usize()].length_m;
+            let v = defaults
+                .progression_speed_mps
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .unwrap_or(lane.speed_limit_mps)
+                .max(1.0);
+            pred[p] = Some((q, d / v));
+            break;
+        }
+    }
+    // Resolve in plan order, following predecessors; a loop is cut where it closes.
+    let mut offset: Vec<Option<f64>> = vec![None; plans.len()];
+    for start in 0..plans.len() {
+        if offset[start].is_some() {
+            continue;
+        }
+        // Walk upstream until a plan whose offset is known; `chain` holds the plans on
+        // the way, downstream first, each the predecessor-child of the next.
+        let mut chain: Vec<usize> = Vec::new();
+        let mut at = start;
+        loop {
+            if offset[at].is_some() {
+                break;
+            }
+            if let Some(k) = chain.iter().position(|x| *x == at) {
+                // A loop of predecessors: the plan where it closes is its root.
+                offset[at] = Some(0.0);
+                chain.truncate(k);
+                break;
+            }
+            chain.push(at);
+            match pred[at] {
+                Some((q, _)) => at = q,
+                None => {
+                    offset[at] = Some(0.0);
+                    chain.pop();
+                    break;
+                }
+            }
+        }
+        for &p in chain.iter().rev() {
+            let Some((q, t)) = pred[p] else { continue };
+            let cycle = plans[p].cycle_s;
+            let mut v = (offset[q].unwrap_or(0.0) + t) % cycle;
+            if v < 0.0 {
+                v += cycle;
+            }
+            offset[p] = Some(quantise(v, Q_TIME_S) % cycle);
+        }
+    }
+    let mut moved = 0u64;
+    for (p, plan) in plans.iter_mut().enumerate() {
+        plan.offset_s = offset[p].unwrap_or(0.0);
+        if plan.offset_s != 0.0 {
+            moved += 1;
+        }
+    }
+    moved
+}
+
 /// Standard gravity, m/s², for the grade term of the ITE amber formula.
 const GRAVITY_MPS2: f64 = 9.806_65;
 
@@ -5560,11 +6916,7 @@ fn synthesise_signals(
                 (*g, yellow, red)
             })
             .collect();
-        let fixed: f64 = timing.iter().map(|(_, y, r)| y + r).sum();
-        let green = quantise(
-            ((defaults.cycle_s - fixed) / present.len() as f64).max(defaults.min_green_s),
-            Q_TIME_S,
-        );
+        let (timing, greens) = phase_greens(net, &movements, &groups, timing, defaults);
 
         let state_of = |active: u16, amber: bool, index: usize| -> SignalState {
             if groups[index] != active {
@@ -5627,7 +6979,7 @@ fn synthesise_signals(
         // this list for a pedestrian walk interval (a phase whose states are all red for
         // vehicles while a crossing's head shows walk); this importer does not add one.
         let mut phases: Vec<SignalPhase> = Vec::new();
-        for &(active, yellow, all_red) in &timing {
+        for (&(active, yellow, all_red), &green) in timing.iter().zip(&greens) {
             phases.push(SignalPhase {
                 duration_s: green,
                 states: (0..movements.len())
@@ -5667,7 +7019,11 @@ fn synthesise_signals(
             heads.push(SignalHead {
                 lane: movement.from_lane,
                 position: Vec3::new(end.x, end.y, end.z + defaults.head_height_m),
-                kind: SignalHeadKind::Vehicle,
+                kind: if lane.kind == LaneKind::Cycle {
+                    SignalHeadKind::Bicycle
+                } else {
+                    SignalHeadKind::Vehicle
+                },
                 group: groups[index],
             });
         }
@@ -5683,6 +7039,9 @@ fn synthesise_signals(
             heads,
         });
         net.junctions[j].control = JunctionControl::Signalised { plan: id };
+    }
+    if defaults.coordinate {
+        report.counts.signals_coordinated = coordinate_offsets(net, &mut plans, defaults);
     }
     plans
 }
@@ -5927,6 +7286,275 @@ fn build_crossings(
             crossing
         })
         .collect()
+}
+
+/// How far from a `highway=crossing` node, perpendicular to its road, a pavement is looked
+/// for when a crosswalk is synthesised there ([`OsmOptions::crossings_from_nodes`]), metres.
+///
+/// **This importer's choice.** Half the widest Midtown carriageway (Park Avenue's two
+/// roadways and median, about 42 m kerb to kerb) plus a pavement's width.
+pub const NODE_CROSSING_REACH_M: f64 = 25.0;
+
+/// Where one end of a synthesised crosswalk meets a pavement way.
+struct PavementHit {
+    /// Index of the pavement way in [`OsmFile::ways`].
+    way: usize,
+    /// The segment of it, from node `segment` to `segment + 1`.
+    segment: usize,
+    /// How far along that segment, 0 to 1.
+    t: f64,
+}
+
+/// Adds a `footway=crossing` way at every `highway=crossing` node on a road that no
+/// crossing way passes through ([`OsmOptions::crossings_from_nodes`]); returns how many.
+///
+/// The crosswalk is the road's perpendicular through the node, from the nearest pavement
+/// (a non-crossing foot way running within 30° of the road's direction) on its left to the
+/// nearest on its right, each within [`NODE_CROSSING_REACH_M`]. Where it meets a pavement
+/// between two of its nodes a node is inserted there, which is how a mapped crossing way
+/// joins its pavement. A node with a pavement on one side only (a crossing to a median, or
+/// a road mapped without pavements) is counted as [`Anomaly::CrossingNodeUnconnected`].
+///
+/// New nodes and ways take ids counting down from below every id in the file; the
+/// geometry search is a local equirectangular plane about the first candidate, in node-id
+/// order, so the result is the same on every run.
+#[allow(clippy::too_many_lines)]
+fn synthesise_node_crossings(
+    file: &mut OsmFile,
+    options: &OsmOptions,
+    report: &mut ImportReport,
+) -> u64 {
+    const CELL: f64 = 20.0;
+    let Some(preset) = options.highway_preset else {
+        return 0;
+    };
+    let family_of = |tags: &Tags| {
+        tags.get("highway")
+            .and_then(|h| preset.row(h))
+            .map(|row| row.family)
+    };
+    let mut on_crossing_way: BTreeSet<i64> = BTreeSet::new();
+    for way in &file.ways {
+        if is_crossing_way(&way.tags) {
+            on_crossing_way.extend(way.nodes.iter().copied());
+        }
+    }
+    let candidates: BTreeSet<i64> = file
+        .node_tags
+        .iter()
+        .filter(|(id, t)| {
+            t.is("highway", "crossing") && !t.is("crossing", "no") && !on_crossing_way.contains(id)
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    let Some(first) = candidates.iter().find_map(|id| file.node(*id)) else {
+        return 0;
+    };
+    let (lat0, lon0) = (first.lat, first.lon);
+    let ky = 111_132.0;
+    let kx = 111_320.0 * math::cos(lat0.to_radians());
+    let xy = |n: &RawNode| ((n.lon - lon0) * kx, (n.lat - lat0) * ky);
+    let cell = |v: f64| (v / CELL).floor() as i64;
+
+    // The road through each candidate: the lowest-id motor way that carries it, and where.
+    let mut road_at: BTreeMap<i64, (usize, usize)> = BTreeMap::new();
+    for (w, way) in file.ways.iter().enumerate() {
+        if family_of(&way.tags) != Some(WayFamily::Motor) || is_crossing_way(&way.tags) {
+            continue;
+        }
+        for (i, n) in way.nodes.iter().enumerate() {
+            if candidates.contains(n) {
+                road_at.entry(*n).or_insert((w, i));
+            }
+        }
+    }
+    // Every pavement segment, by 20 m cell.
+    let mut grid: BTreeMap<(i64, i64), Vec<(usize, usize)>> = BTreeMap::new();
+    for (w, way) in file.ways.iter().enumerate() {
+        if family_of(&way.tags) != Some(WayFamily::Foot) || is_crossing_way(&way.tags) {
+            continue;
+        }
+        let closed = way.nodes.len() > 2 && way.nodes.first() == way.nodes.last();
+        if closed && way.tags.is("area", "yes") {
+            continue;
+        }
+        for k in 0..way.nodes.len().saturating_sub(1) {
+            let (Some(a), Some(b)) = (file.node(way.nodes[k]), file.node(way.nodes[k + 1])) else {
+                continue;
+            };
+            let (a, b) = (xy(a), xy(b));
+            for cx in cell(a.0.min(b.0))..=cell(a.0.max(b.0)) {
+                for cy in cell(a.1.min(b.1))..=cell(a.1.max(b.1)) {
+                    grid.entry((cx, cy)).or_default().push((w, k));
+                }
+            }
+        }
+    }
+
+    let mut crosswalks: Vec<(i64, PavementHit, PavementHit)> = Vec::new();
+    for (&node, &(w, i)) in &road_at {
+        let road = &file.ways[w];
+        let at = |k: usize| road.nodes.get(k).and_then(|n| file.node(*n)).map(xy);
+        let Some(p) = at(i) else {
+            continue;
+        };
+        let (a, b) = match (i.checked_sub(1).and_then(at), at(i + 1)) {
+            (Some(a), Some(b)) => (a, b),
+            (None, Some(b)) => (p, b),
+            (Some(a), None) => (a, p),
+            (None, None) => continue,
+        };
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len = math::sqrt(dx * dx + dy * dy);
+        if len < 1e-6 {
+            continue;
+        }
+        let (ux, uy) = (dx / len, dy / len);
+        // The nearest parallel pavement along the ray `p + u·(nx, ny)`, 0.5 m < u ≤ reach.
+        let search = |nx: f64, ny: f64| -> Option<PavementHit> {
+            let end = (
+                p.0 + nx * NODE_CROSSING_REACH_M,
+                p.1 + ny * NODE_CROSSING_REACH_M,
+            );
+            let mut seen: BTreeSet<(usize, usize)> = BTreeSet::new();
+            let mut best: Option<(f64, PavementHit)> = None;
+            for cx in cell(p.0.min(end.0))..=cell(p.0.max(end.0)) {
+                for cy in cell(p.1.min(end.1))..=cell(p.1.max(end.1)) {
+                    let Some(list) = grid.get(&(cx, cy)) else {
+                        continue;
+                    };
+                    for &(fw, k) in list {
+                        if !seen.insert((fw, k)) {
+                            continue;
+                        }
+                        let way = &file.ways[fw];
+                        let (Some(s0), Some(s1)) =
+                            (file.node(way.nodes[k]), file.node(way.nodes[k + 1]))
+                        else {
+                            continue;
+                        };
+                        let (s0, s1) = (xy(s0), xy(s1));
+                        let (ex, ey) = (s1.0 - s0.0, s1.1 - s0.1);
+                        let elen = math::sqrt(ex * ex + ey * ey);
+                        if elen < 1e-6 {
+                            continue;
+                        }
+                        // Parallel to the road within 30°: a pavement, not a crossing or the
+                        // cross street's pavement.
+                        if ((ux * ey - uy * ex) / elen).abs() > 0.5 {
+                            continue;
+                        }
+                        // Solve p + u·n = s0 + t·e.
+                        let den = nx * ey - ny * ex;
+                        if den.abs() < 1e-9 {
+                            continue;
+                        }
+                        let (qx, qy) = (s0.0 - p.0, s0.1 - p.1);
+                        let u = (qx * ey - qy * ex) / den;
+                        let t = (qx * ny - qy * nx) / den;
+                        if !(0.5..=NODE_CROSSING_REACH_M).contains(&u) || !(0.0..=1.0).contains(&t)
+                        {
+                            continue;
+                        }
+                        if best.as_ref().is_none_or(|(bu, _)| u < *bu) {
+                            best = Some((
+                                u,
+                                PavementHit {
+                                    way: fw,
+                                    segment: k,
+                                    t,
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+            best.map(|(_, h)| h)
+        };
+        match (search(-uy, ux), search(uy, -ux)) {
+            (Some(left), Some(right)) => crosswalks.push((node, left, right)),
+            _ => report.note(Anomaly::CrossingNodeUnconnected, node),
+        }
+    }
+    if crosswalks.is_empty() {
+        return 0;
+    }
+
+    // Where each pavement end lands: an existing node within half a metre, or a new node
+    // inserted into the pavement way.
+    let mut next_node = file.nodes.first().map_or(0, |n| n.id).min(0) - 1;
+    let mut next_way = file.ways.first().map_or(0, |w| w.id).min(0) - 1;
+    let mut inserts: BTreeMap<usize, Vec<(usize, f64, i64)>> = BTreeMap::new();
+    let mut new_nodes: Vec<RawNode> = Vec::new();
+    let mut new_ways: Vec<RawWay> = Vec::new();
+    for (node, left, right) in &crosswalks {
+        let mut ends = [0i64; 2];
+        for (slot, hit) in ends.iter_mut().zip([left, right]) {
+            let way = &file.ways[hit.way];
+            let a = file.node(way.nodes[hit.segment]).expect("resolved in the search");
+            let b = file.node(way.nodes[hit.segment + 1]).expect("resolved in the search");
+            let (pa, pb) = (xy(a), xy(b));
+            let seg = math::sqrt((pb.0 - pa.0) * (pb.0 - pa.0) + (pb.1 - pa.1) * (pb.1 - pa.1));
+            *slot = if hit.t * seg < 0.5 {
+                a.id
+            } else if (1.0 - hit.t) * seg < 0.5 {
+                b.id
+            } else {
+                let id = next_node;
+                next_node -= 1;
+                new_nodes.push(RawNode {
+                    id,
+                    lat: a.lat + (b.lat - a.lat) * hit.t,
+                    lon: a.lon + (b.lon - a.lon) * hit.t,
+                });
+                inserts
+                    .entry(hit.way)
+                    .or_default()
+                    .push((hit.segment, hit.t, id));
+                id
+            };
+        }
+        let mut tags = Tags::from_pairs([("highway", "footway"), ("footway", "crossing")]);
+        if let Some(node_tags) = file.node_tags.get(node) {
+            for key in [
+                "crossing",
+                "crossing:markings",
+                "crossing:signals",
+                "crossing_ref",
+                "button_operated",
+            ] {
+                if let Some(v) = node_tags.get(key) {
+                    tags.insert(key.to_string(), v.to_string());
+                }
+            }
+        }
+        tags.insert("v2xw:synthesised".to_string(), format!("crossing node {node}"));
+        new_ways.push(RawWay {
+            id: next_way,
+            nodes: vec![ends[0], *node, ends[1]],
+            tags,
+        });
+        next_way -= 1;
+    }
+    for (w, mut list) in inserts {
+        list.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+        let old = std::mem::take(&mut file.ways[w].nodes);
+        let mut nodes = Vec::with_capacity(old.len() + list.len());
+        let mut pending = list.into_iter().peekable();
+        for (k, n) in old.iter().enumerate() {
+            nodes.push(*n);
+            while let Some((_, _, id)) = pending.next_if(|(seg, _, _)| *seg == k) {
+                nodes.push(id);
+            }
+        }
+        file.ways[w].nodes = nodes;
+    }
+    let count = new_ways.len() as u64;
+    file.nodes.extend(new_nodes);
+    file.nodes.sort_by_key(|n| n.id);
+    file.ways.extend(new_ways);
+    file.ways.sort_by_key(|w| w.id);
+    count
 }
 
 // ---------------------------------------------------------------------------
@@ -7002,6 +8630,85 @@ fn triangle_overlap_m2(subject: [Vec3; 3], clip: [Vec3; 3]) -> f64 {
     (twice * 0.5).abs()
 }
 
+/// The largest footprint [`drop_kiosks_on_the_carriageway`] treats as street furniture, m²:
+/// a newsstand or a kiosk, well under any building a road could pass through. **This
+/// importer's choice.**
+pub const KIOSK_MAX_AREA_M2: f64 = 25.0;
+
+/// Drops the kiosk-sized buildings a car on a drive lane would drive into.
+///
+/// A newsstand stands on the pavement. Mapped a metre off — the Midtown extract's
+/// newsstand at way 1117866998 is 0.8 m from a lane's centreline — its footprint reaches
+/// into the carriageway, and cars were drawn driving through it (the auditor's 12
+/// in-building steps of 2026-09-24). The road is the better-surveyed feature, so the kiosk
+/// goes: a footprint under [`KIOSK_MAX_AREA_M2`] that a passenger car's body (half width
+/// 0.9 m either side of a drive or bus lane's centreline, sampled every half metre)
+/// enters is removed and counted as [`Anomaly::KioskOnCarriageway`] (its sample is the
+/// building's index in the import before the drop). Bigger buildings are
+/// passages ([`find_passages`]) and are never dropped.
+fn drop_kiosks_on_the_carriageway(
+    buildings: Vec<Building>,
+    net: &Net,
+    report: &mut ImportReport,
+) -> Vec<Building> {
+    const HALF_CAR_M: f64 = 0.9;
+    let small: Vec<usize> = (0..buildings.len())
+        .filter(|i| ring_area_m2(&buildings[*i].footprint) < KIOSK_MAX_AREA_M2)
+        .collect();
+    if small.is_empty() {
+        return buildings;
+    }
+    let mut hit = vec![false; buildings.len()];
+    for lane in &net.lanes {
+        let internal_motor = lane.kind == LaneKind::Internal
+            && lane.admits(ClassMask::CAR.union(ClassMask::BUS));
+        if !(matches!(lane.kind, LaneKind::Driving | LaneKind::Bus) || internal_motor) {
+            continue;
+        }
+        let (mut lo, mut hi) = (lane.centreline[0], lane.centreline[0]);
+        for p in &lane.centreline {
+            lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), 0.0);
+            hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), 0.0);
+        }
+        for &b in &small {
+            if hit[b] {
+                continue;
+            }
+            let building = &buildings[b];
+            if !crate::model::road_meets_building(building, lane.centreline[0].z) {
+                continue;
+            }
+            let bb = building.bbox();
+            if bb.max.x < lo.x - 2.0 || bb.min.x > hi.x + 2.0 || bb.max.y < lo.y - 2.0 || bb.min.y > hi.y + 2.0 {
+                continue;
+            }
+            let steps = (lane.length_m / 0.5).ceil().max(1.0) as usize;
+            'samples: for k in 0..=steps {
+                let s = (k as f64 * 0.5).min(lane.length_m);
+                let p = lane.point_at(s);
+                let (sin, cos) = math::sin_cos(lane.heading_at(s));
+                for side in [-1.0, 0.0, 1.0] {
+                    let q = Vec3::new(p.x - sin * HALF_CAR_M * side, p.y + cos * HALF_CAR_M * side, p.z);
+                    if building.contains_2d(q) {
+                        hit[b] = true;
+                        break 'samples;
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(buildings.len());
+    for (i, mut building) in buildings.into_iter().enumerate() {
+        if hit[i] {
+            report.note(Anomaly::KioskOnCarriageway, i as i64);
+            continue;
+        }
+        building.id = BuildingId::new(out.len() as u32);
+        out.push(building);
+    }
+    out
+}
+
 /// The area of a closed ring, m².
 ///
 /// Multiplications and additions only (crate rule 1: no std transcendental), so it is
@@ -7239,7 +8946,7 @@ pub fn import_osm_bytes(
     options: &OsmOptions,
 ) -> Result<(World, ImportReport)> {
     options.validate()?;
-    let file = parse_osm(xml)?;
+    let mut file = parse_osm(xml)?;
     let digest = {
         use sha2::Digest as _;
         let mut hasher = sha2::Sha256::new();
@@ -7252,6 +8959,10 @@ pub fn import_osm_bytes(
         source_bytes: xml.len() as u64,
         ..ImportReport::default()
     };
+    if options.crossings_from_nodes && options.layers.pedestrian {
+        report.counts.crossings_from_nodes =
+            synthesise_node_crossings(&mut file, options, &mut report);
+    }
     let world = import_parsed(&file, options, &mut report)?;
     Ok((world, report))
 }
@@ -7484,10 +9195,17 @@ fn import_parsed(file: &OsmFile, options: &OsmOptions, report: &mut ImportReport
     };
     report.counts.segments_after_collapse = segments.len() as u64;
     report.counts.junctions_collapsed = collapsed;
+    let (segments, joined) = if options.simplify.join_short_junctions {
+        join_short_junctions(segments, &plans, options, report)
+    } else {
+        (segments, JoinedJunctions::default())
+    };
 
     // --- stages 6 and 7: lanes, junctions, movements ------------------------------
-    let mut net = build_network(&segments, &plans, file, &points, options, report)?;
-    let mut direct = build_movements(&mut net, &plans, report);
+    let mut net = build_network(&segments, &plans, file, &points, &joined, options, report)?;
+    separate_lanes(&mut net, report);
+    clear_diverging_arms(&mut net, report);
+    let mut direct = build_movements(&mut net, &plans, options.dead_end_turnarounds, report);
     let (restrictions, _banned) = apply_restrictions(&mut net, &mut direct, file, report);
     report.counts.restrictions_applied = restrictions;
 
@@ -7580,6 +9298,8 @@ fn import_parsed(file: &OsmFile, options: &OsmOptions, report: &mut ImportReport
         Vec::new()
     };
 
+    let buildings = drop_kiosks_on_the_carriageway(buildings, &net, report);
+
     // --- stage 9b: passages ----------------------------------------------------------
     let passages = find_passages(&net, &plans, &buildings, report);
 
@@ -7591,6 +9311,28 @@ fn import_parsed(file: &OsmFile, options: &OsmOptions, report: &mut ImportReport
         junction.outgoing.dedup();
     }
     build_junction_shapes(&mut net);
+
+    // Which way each edge came from, for the source-fidelity checks of `crate::validate`.
+    report.junction_nodes = net.junction_nodes.clone();
+    report.edge_sources = vec![None; net.edges.len()];
+    for info in &net.edge_info {
+        let Some(first) = info.lanes.first() else {
+            continue;
+        };
+        let edge = net.lanes[first.as_usize()].edge.as_usize();
+        if let Some(slot) = report.edge_sources.get_mut(edge) {
+            *slot = Some(crate::validate::EdgeSource {
+                way: plans[info.plan].osm_id,
+                near_way: info.near_way,
+                far_way: info.far_way,
+                role: if info.side {
+                    crate::validate::EdgeRole::Side
+                } else {
+                    crate::validate::EdgeRole::Carriageway
+                },
+            });
+        }
+    }
 
     // --- counts ---------------------------------------------------------------------
     report.counts.junctions = net.junctions.len() as u64;
@@ -7661,6 +9403,160 @@ fn import_parsed(file: &OsmFile, options: &OsmOptions, report: &mut ImportReport
     Ok(world)
 }
 
+/// Moves lanes of different roads that the map laid over each other apart
+/// ([`crate::separate`]): pavements and cycle lanes to the kerb of the carriageway beside
+/// them, two carriageways too close together half each.
+fn separate_lanes(net: &mut Net, report: &mut ImportReport) {
+    use crate::separate::{LaneInfo, Role};
+    let mut info = vec![
+        LaneInfo {
+            role: Role::Fixed,
+            group: usize::MAX,
+            road: usize::MAX,
+        };
+        net.lanes.len()
+    ];
+    for (group, edge) in net.edge_info.iter().enumerate() {
+        for lane in &edge.lanes {
+            let kind = net.lanes[lane.as_usize()].kind;
+            // A cycle track stays a soft lane. Making it part of the carriageway, so that a
+            // pavement mapped where it lies moved clear of it, left the pavements squeezed
+            // between a track and a drive lane where they were: Midtown's pavement on the
+            // roadway went from 53 lanes (95 m) to 69 (646 m). `sidewalk-on-cycle-lane`
+            // counts what remains.
+            let role = if edge.family == WayFamily::Motor && !edge.side && kind.is_motorised() {
+                Role::Carriageway
+            } else if crate::separate::is_soft(kind) {
+                Role::Soft
+            } else {
+                Role::Fixed
+            };
+            info[lane.as_usize()] = LaneInfo {
+                role,
+                group,
+                road: edge.segment,
+            };
+        }
+    }
+    let done = crate::separate::separate(&mut net.lanes, &info);
+    report.counts.carriageway_lanes_separated = done.carriageway_lanes_moved;
+    report.counts.soft_lanes_moved_to_kerb = done.soft_lanes_moved;
+    report.counts.overlaps_left_unresolved = done.unresolved;
+}
+
+/// How far one arm of a junction may be cut back to clear a neighbouring arm, metres.
+const MAX_ARM_CLEARANCE_M: f64 = 15.0;
+
+/// Arms leaving a junction within this angle of each other are a fork, a merge or the
+/// split of a two-way road into two carriageways, radians (40°).
+const DIVERGING_ARMS_RAD: f64 = 0.7;
+
+/// Cuts back the arms of a fork, a merge or a two-way road's split into two carriageways
+/// until their lanes no longer overlap at the junction.
+///
+/// Such arms leave one node at a shallow angle, so for their first metres the lanes of one
+/// lie on the lanes of the other; `netconvert` makes the junction shape large enough to
+/// contain that, and this does the same by pulling both arms' ends back a metre at a time
+/// until neither end's lanes overlap the other arm's by more than 0.2 m, up to
+/// [`MAX_ARM_CLEARANCE_M`] and never leaving a lane shorter than
+/// [`OsmOptions::min_useful_lane_m`]'s default of 5 m. The connectors built afterwards join
+/// the cleared ends, side by side. Before this, the eastbound and westbound ramps where
+/// East 37th Street meets the Queens-Midtown Tunnel approach overlapped for 20 m, and the
+/// auditor counted 61 vehicle-vehicle overlaps there in five minutes.
+fn clear_diverging_arms(net: &mut Net, report: &mut ImportReport) {
+    const TOLERANCE_M: f64 = 0.2;
+    const KEEP_M: f64 = 5.0;
+    for j in 0..net.junctions.len() {
+        // (edge-info index, at its end?)
+        let mut arms: Vec<(usize, bool)> = Vec::new();
+        for &e in &net.incoming[j] {
+            if net.edge_info[e].family == WayFamily::Motor && !net.edge_info[e].side {
+                arms.push((e, true));
+            }
+        }
+        for &e in &net.outgoing[j] {
+            if net.edge_info[e].family == WayFamily::Motor && !net.edge_info[e].side {
+                arms.push((e, false));
+            }
+        }
+        if arms.len() < 2 {
+            continue;
+        }
+        let mut pulled = vec![0.0f64; arms.len()];
+        for _step in 0..(MAX_ARM_CLEARANCE_M as usize) {
+            // The end of each arm at this junction: its lanes' end points, and the direction
+            // pointing away from the junction.
+            let end_of = |net: &Net, (e, at_end): (usize, bool)| -> (Vec<(Vec3, f64)>, f64) {
+                let lanes = &net.edge_info[e].lanes;
+                let mut pts = Vec::with_capacity(lanes.len());
+                for l in lanes {
+                    let lane = &net.lanes[l.as_usize()];
+                    pts.push((if at_end { lane.end() } else { lane.start() }, lane.width_m));
+                }
+                let first = &net.lanes[lanes[0].as_usize()];
+                let away = if at_end {
+                    first.heading_at(first.length_m) + core::f64::consts::PI
+                } else {
+                    first.heading_at(0.0)
+                };
+                (pts, away)
+            };
+            let mut need = vec![false; arms.len()];
+            for a in 0..arms.len() {
+                for b in a + 1..arms.len() {
+                    if net.edge_info[arms[a].0].segment == net.edge_info[arms[b].0].segment {
+                        continue;
+                    }
+                    let (pa, ha) = end_of(net, arms[a]);
+                    let (pb, hb) = end_of(net, arms[b]);
+                    if normalise_angle(ha - hb).abs() > DIVERGING_ARMS_RAD {
+                        continue;
+                    }
+                    // Does either end lie on the other arm's lanes?
+                    let overlaps = |ends: &[(Vec3, f64)], other: usize| {
+                        ends.iter().any(|(p, w)| {
+                            net.edge_info[other].lanes.iter().any(|l| {
+                                let lane = &net.lanes[l.as_usize()];
+                                let d = lane.project_point(*p).distance_m;
+                                d < 0.5 * (w + lane.width_m) - TOLERANCE_M
+                            })
+                        })
+                    };
+                    if overlaps(&pa, arms[b].0) || overlaps(&pb, arms[a].0) {
+                        need[a] = true;
+                        need[b] = true;
+                    }
+                }
+            }
+            let mut moved = false;
+            for (k, &(e, at_end)) in arms.iter().enumerate() {
+                if !need[k] || pulled[k] >= MAX_ARM_CLEARANCE_M {
+                    continue;
+                }
+                let shortest = net.edge_info[e]
+                    .lanes
+                    .iter()
+                    .map(|l| net.lanes[l.as_usize()].length_m)
+                    .fold(f64::INFINITY, f64::min);
+                if shortest < KEEP_M + 1.0 {
+                    continue;
+                }
+                let cut = pull_edge_end(net, e, 1.0, at_end, report);
+                if cut > 0.0 {
+                    pulled[k] += cut;
+                    moved = true;
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+        if pulled.iter().any(|p| *p > 0.0) {
+            report.counts.junctions_with_cleared_arms += 1;
+        }
+    }
+}
+
 /// Gives every junction its area: the convex hull of the lane ends that meet there.
 ///
 /// 04-models.md §1.2 asks for "a polygon area from the incoming lane ends", which is what
@@ -7676,6 +9572,13 @@ fn build_junction_shapes(net: &mut Net) {
         }
         for lane in &net.junctions[j].outgoing {
             points.push(net.lanes[lane.as_usize()].start());
+        }
+        // And every connector's path: a turn's arc bulges past the hull of the lane ends
+        // (netconvert sizes a junction's shape to its internal lanes for the same reason),
+        // and the auditor found connectors running up to 3.8 m outside their junction on
+        // Portland's skewed corners and cars' bodies 2.5 m outside it in Berlin.
+        for lane in &net.junctions[j].internal {
+            points.extend(net.lanes[lane.as_usize()].centreline.iter().copied());
         }
         net.junctions[j].shape = convex_hull(&points);
     }
@@ -7887,6 +9790,27 @@ fn build_provenance(
             ),
     );
     provenance.record(
+        Transformation::new("cross-section")
+            .with(
+                "rule",
+                "bus lanes from bus:lanes / lanes:bus / busway, cycle lanes and tracks from \
+                 cycleway*, parking lanes from parking* and parking:lane*; carriageway \
+                 centred on the way, tracks and street-side bays beyond the kerb",
+            )
+            .with("bus_lanes", options.cross_section.bus_lanes)
+            .with("cycle_lanes", options.cross_section.cycle_lanes)
+            .with("parking_lanes", options.cross_section.parking_lanes)
+            .with("bus_lane_width_m", options.cross_section.bus_lane_width_m)
+            .with("parking_lane_width_m", options.cross_section.parking_lane_width_m)
+            .with("angled_parking_depth_m", options.cross_section.angled_parking_depth_m)
+            .with("cycle_lane_width_m", options.cross_section.cycle_lane_width_m)
+            .with("cycle_track_width_m", options.cross_section.cycle_track_width_m)
+            .with("cycle_buffer_m", options.cross_section.cycle_buffer_m)
+            .with("bus_lanes_built", report.counts.bus_lanes)
+            .with("cycle_lanes_built", report.counts.cycle_lanes_on_roads)
+            .with("parking_lanes_built", report.counts.parking_lanes),
+    );
+    provenance.record(
         Transformation::new("junction-trim")
             .with(
                 "rule",
@@ -7909,6 +9833,26 @@ fn build_provenance(
             .with("guess_signals_m", options.import.guess_signals_m)
             .with("cycle_s", options.signals.cycle_s)
             .with("green_s", options.signals.green_s)
+            .with(
+                "split_rule",
+                if options.signals.split_by_lanes {
+                    "green in proportion to the lanes on each phase's widest approach"
+                } else {
+                    "equal green per phase"
+                },
+            )
+            .with("pedestrian_min_green", options.signals.pedestrian_min_green)
+            .with("pedestrian_walk_s", options.signals.pedestrian_walk_s)
+            .with("pedestrian_speed_mps", options.signals.pedestrian_speed_mps)
+            .with("coordinate", options.signals.coordinate)
+            .with(
+                "progression_speed_mps",
+                options
+                    .signals
+                    .progression_speed_mps
+                    .map_or(serde_json::Value::Null, serde_json::Value::from),
+            )
+            .with("signals_coordinated", report.counts.signals_coordinated)
             .with("all_red_floor_s", options.signals.all_red_s)
             .with(
                 "yellow_rule",
@@ -8197,6 +10141,29 @@ pub fn card() -> ModelCard {
         )
     };
     let lane_geometry = || Source::new(SourceKind::Standard, LANE_WIDTH_SOURCE);
+    let nyc_sdm = || {
+        Source::new(
+            SourceKind::Standard,
+            "NYC DOT Street Design Manual (nycstreetdesign.info), 'Lanes': moving lanes \
+             typically 10 ft, buses and trucks need 11-12 ft, parking lanes typically 8 ft; \
+             'Curb Bus Lane': 11 ft minimum",
+        )
+    };
+    let nyc_bike_table = || {
+        Source::new(
+            SourceKind::Standard,
+            "NYC DOT Street Design Manual, Bike Lane Table: conventional lane 5-6 ft; \
+             one-way protected lane 4 ft minimum plus a 3 ft minimum buffer, 7-8 ft in all \
+             (lane 5.5 ft, the midpoint; track 5 ft plus 3 ft, the 8 ft end)",
+        )
+    };
+    let mutcd_ped = || {
+        Source::new(
+            SourceKind::Standard,
+            "MUTCD 2009 §4E.06: walk interval at least 7 s; pedestrian clearance timed at \
+             3.5 ft/s, which may run through the yellow change and red clearance intervals",
+        )
+    };
     let no_default_preset = || {
         Source::new(
             SourceKind::Code,
@@ -8307,6 +10274,50 @@ pub fn card() -> ModelCard {
         Parameter::new("yellow_min_decel_mps2", "m/s^2", 3.0.into(), netconvert()),
         Parameter::new("yellow_min_s", "s", 3.0.into(), fhwa()),
         Parameter::new("yellow_max_s", "s", 6.0.into(), fhwa()),
+        // The cross-section (crate::section): bus, cycle and parking lanes from the tags.
+        Parameter::new("bus_lane_width_m", "m", 3.353.into(), nyc_sdm()),
+        Parameter::new("lane_width_urban_us_nyc_m", "m", 3.048.into(), nyc_sdm()),
+        Parameter::new("parking_lane_width_m", "m", 2.438.into(), nyc_sdm()),
+        Parameter::new("cycle_lane_width_m", "m", 1.676.into(), nyc_bike_table()),
+        Parameter::new("cycle_track_width_m", "m", 1.524.into(), nyc_bike_table()),
+        Parameter::new("cycle_buffer_m", "m", 0.914.into(), nyc_bike_table()),
+        Parameter::new(
+            "angled_parking_depth_m",
+            "m",
+            5.5.into(),
+            Source::new(
+                SourceKind::Code,
+                "this importer's choice: an 18 ft stall depth for diagonal and \
+                 perpendicular parking, which the Manhattan extract does not have",
+            ),
+        ),
+        // Signal timing beyond netconvert's defaults.
+        Parameter::new(
+            "split_by_lanes",
+            "-",
+            true.into(),
+            Source::new(
+                SourceKind::Standard,
+                "Webster's method shares green by critical flow ratio; with no flows in an \
+                 OSM extract the lanes on each phase's widest approach stand in for its \
+                 capacity need (HCM 2016 Ch. 19 saturation flow is per lane)",
+            ),
+        ),
+        Parameter::new(
+            "progression_speed_mps",
+            "m/s",
+            serde_json::Value::Null,
+            Source::new(
+                SourceKind::Standard,
+                "null = each link's speed limit. NYC DOT '25 MPH Signal Retiming' (2014 \
+                 onward) sets avenue progression to the 25 mph limit; NYC DOT's Green Wave \
+                 (press release 2026-05-07) times 1st, 2nd and 8th Avenues and Hudson \
+                 Street for 15 mph. Manhattan's signals are pre-timed on 90-150 s cycles \
+                 (NYC DCP 61st Street FEIS ch. 14); 90 s, the low end, is the cycle_s default",
+            ),
+        ),
+        Parameter::new("pedestrian_walk_s", "s", 7.0.into(), mutcd_ped()),
+        Parameter::new("pedestrian_speed_mps", "m/s", 1.067.into(), mutcd_ped()),
         Parameter::new("height_tag_rule", "-", "height".into(), osm_wiki()),
         // V1: which outline a part is folded into, and on what evidence.
         Parameter::new(

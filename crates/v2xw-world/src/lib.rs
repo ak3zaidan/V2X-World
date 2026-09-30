@@ -19,6 +19,7 @@
 //! | The SUMO `net.xml` and OpenDRIVE importers | [`sumo`] | 04-models.md §1.1, §1.2 |
 //! | The DEM importers, and draping geometry onto one | [`dem`] | 04-models.md §1.4 |
 //! | Line of sight over terrain | [`los`] | 04-models.md §1.4, §3.5 |
+//! | World validation: geometry a vehicle or a pedestrian cannot use, and fidelity to the source tags | [`validate`] | — |
 //! | Errors | [`error`] | — |
 //!
 //! # Getting one
@@ -77,8 +78,11 @@ pub mod osm;
 pub mod procedural;
 pub mod quant;
 pub mod serde_native;
+pub mod section;
+pub mod separate;
 pub mod serde_vwp;
 pub mod sumo;
+pub mod validate;
 pub mod walk;
 
 use serde::{Deserialize, Serialize};

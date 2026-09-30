@@ -1,0 +1,26 @@
+{
+  "description": "worlds/cache/manhattan.osm.xml (preset urban-us-nyc, bbox 40.7440,-73.9900,40.7620,-73.9680), OsmOptions::default()",
+  "max": {
+    "bus-lanes-mismatch": 0,
+    "crossing-node-without-crosswalk": 85,
+    "cycle-crosses-roadway": 8,
+    "cycle-lane-missing": 0,
+    "cycle-on-roadway": 4,
+    "dead-end-uturn": 0,
+    "lanes-mismatch": 1,
+    "oneway-mismatch": 1,
+    "parking-lane-missing": 0,
+    "path-turns-faster-than-a-car": 6,
+    "roadway-overlap": 8,
+    "sidewalk-crosses-roadway": 94,
+    "sidewalk-in-vehicle-envelope": 7,
+    "sidewalk-on-cycle-lane": 47,
+    "sidewalk-on-roadway": 36,
+    "speed-mismatch": 0,
+    "stub-driving-lane": 13,
+    "turn-lanes-violated": 35,
+    "uturn-tighter-than-a-car": 0,
+    "vehicle-envelope-in-building": 0,
+    "width-mismatch": 6
+  }
+}
