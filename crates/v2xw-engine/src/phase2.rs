@@ -144,6 +144,27 @@ impl MaHost {
         }
     }
 
+    fn id(&self) -> &'static str {
+        match self {
+            MaHost::Legacy(_) => MA_LEGACY_WINDOW,
+            MaHost::Corroborated(_) => MA_CORROBORATED,
+        }
+    }
+
+    fn subjects(&self) -> usize {
+        match self {
+            MaHost::Legacy(m) => m.subjects(),
+            MaHost::Corroborated(m) => m.subjects(),
+        }
+    }
+
+    fn peak_unrevoked_events(&self) -> Option<u32> {
+        match self {
+            MaHost::Legacy(_) => None,
+            MaHost::Corroborated(m) => Some(m.peak_unrevoked_events()),
+        }
+    }
+
     fn trust_infrastructure(&mut self, digest: String) {
         match self {
             MaHost::Legacy(m) => m.trust_infrastructure(digest),
@@ -716,6 +737,11 @@ pub struct Phase2Report {
     pub revoked_honest: u64,
     /// Decisions about a certificate the published list already revoked.
     pub decisions_already_covered: u64,
+    /// Vehicles the pre-run provisioning left with no pseudonym certificate at all.
+    pub vehicles_unprovisioned: u64,
+    /// Receptions the live nodes' revocation gates refused for a certificate period
+    /// outside their plausibility window, at the end of the run (classified `Invalid`).
+    pub crl_period_refusals: u64,
     /// Checked messages whose stated positional accuracy the detector used.
     pub accuracy_stated: u64,
     /// Checked messages that stated their accuracy "unavailable".
@@ -1489,11 +1515,10 @@ impl Phase2 {
             self.creds.insert(node, out.clone());
             return out;
         }
-        if self
+        let preloaded = self
             .scms
-            .preload(device, start, self.params.pool_periods, self.params.jmax)
-            .is_err()
-        {
+            .preload(device, start, self.params.pool_periods, self.params.jmax);
+        if preloaded.is_err() {
             self.nodes.insert(
                 node,
                 NodeSec {
@@ -1504,6 +1529,14 @@ impl Phase2 {
             return Vec::new();
         }
         let out = self.creds_of_device(device, 0);
+        if out.is_empty() {
+            // The pre-run provisioning flows finished without an error and without a
+            // single certificate for this device. It then signs with the bootstrap
+            // stand-in (`wiring::bootstrap_credentials`), which carries no linkage value;
+            // counted so the gap is visible. Seen on `credential-lifecycle` (60 s
+            // i-periods) for vehicles joining a few seconds after a period boundary.
+            self.report.vehicles_unprovisioned += 1;
+        }
         let last = start + self.params.pool_periods.saturating_sub(1);
         // A vehicle on the road holds an enrolment certificate issued some time before the
         // run — at the factory or at its last renewal — so its remaining validity is
@@ -2368,6 +2401,13 @@ impl Phase2 {
                     e.set("reports_ingested", r.reports_at_ma);
                     e.set("revocation_decisions", r.ma_revoke_decisions);
                     e.set("cases_opened", r.cases_opened);
+                    e.set("decision_rule", self.ma.id());
+                    e.set("subjects_under_evidence", self.ma.subjects() as u64);
+                    if let Some(peak) = self.ma.peak_unrevoked_events() {
+                        // How close an unrevoked pseudonym came to the threshold: the
+                        // margin an honest fleet leaves.
+                        e.set("most_corroborated_events_unrevoked", u64::from(peak));
+                    }
                 }
                 "ee" => {
                     e.set("vehicles", self.nodes.len() as u64);

@@ -793,8 +793,9 @@ pub fn card(p: &ObserverParams) -> ModelCard {
          attacker does, and why a Sybil run's linkability is not comparable with an honest \
          run's."
             .to_string(),
-        "The observer's coverage is the hosting node's own receiver range; observer density \
-         is a scenario property."
+        "The observer's coverage is the host's: every frame (a global eavesdropper) or, with \
+         threats.eavesdropper, the frames sent within range of a sniffer at a fraction of \
+         the signalised intersections."
             .to_string(),
     ];
     card.limitations = vec![
@@ -807,10 +808,11 @@ pub fn card(p: &ObserverParams) -> ModelCard {
          a constant-velocity prediction admits, so a mapped observer tracks better than \
          this one. Declared as a capability (Knowledge::map) and not implemented here."
             .to_string(),
-        "Mix zones and silent periods are modelled only through the silence gate: a vehicle \
-         that stops transmitting for longer than max_silence_s is unlinkable by \
-         construction here, which makes the gate the most consequential parameter in the \
-         model and the one most in need of the WONS 2010 replication."
+        "Silent periods and mix zones reach the observer as what it does not hear: the host \
+         withholds a silent vehicle's frames and a mix zone's encrypted ones \
+         (v2xw-engine pseudonym_policy). A vehicle silent for longer than max_silence_s is \
+         unlinkable by construction, which makes the gate the most consequential parameter \
+         in the model and the one most in need of the WONS 2010 replication."
             .to_string(),
         "The four privacy metrics are emitted as records; the aggregation \
          (08-measurement-and-data.md §2.6) belongs to a metric provider in v2xw-metrics, \

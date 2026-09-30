@@ -183,6 +183,12 @@ impl CorroboratedMa {
         self.revoked.contains(subject)
     }
 
+    /// How many subjects the authority holds evidence about.
+    #[must_use]
+    pub fn subjects(&self) -> usize {
+        self.evidence.len()
+    }
+
     /// The most corroborated events a subject that was never revoked reached.
     #[must_use]
     pub fn peak_unrevoked_events(&self) -> u32 {

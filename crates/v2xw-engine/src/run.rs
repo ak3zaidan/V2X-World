@@ -1613,6 +1613,14 @@ impl Engine {
             }
             self.report.end_ns = key.time;
         }
+        let refusals: u64 = self
+            .nodes
+            .values()
+            .map(|n| u64::from(n.stores().crl.refusals()))
+            .sum();
+        if let Some(phase2) = self.phase2.as_mut() {
+            phase2.report_mut().crl_period_refusals = refusals;
+        }
         if let (Some(phase2), Some(policy)) =
             (self.phase2.as_mut(), self.pseudonym_policy.as_ref())
         {
@@ -2579,6 +2587,58 @@ impl Engine {
 
     /// The node phase's map and merge, over one node or all of them, as a periodic step or
     /// as a wake.
+    /// Before a node step: tells every node's revocation gate which i-period the
+    /// credential system is in, from the node's own clock.
+    ///
+    /// A node's revocation gate refuses a peer's certificate claiming a period more than
+    /// one away from its own (`v2xw_node::stores::PLAUSIBLE_PERIOD_SKEW`), and it learned
+    /// its own period only from its active certificate. Two kinds of node have none that
+    /// says: a vehicle left without a valid certificate (its top-up refused or late) and a
+    /// roadside unit, whose application certificate is the bootstrap stand-in stamped
+    /// period 0 for the whole run. Both went on refusing every newer certificate as
+    /// `Invalid`, and their detectors reported each as a signature failure: 22,336 of the
+    /// 22,997 verdicts an honest fleet drew at 6,000 veh/h on `credential-lifecycle`
+    /// (60 s i-periods). A real device computes the i-period from its clock (CAMP-EE
+    /// §2.1.5.3.2: periods are fixed calendar intervals from the SCMS epoch), which is what
+    /// this does; a unit's certificate is also moved to the period, as a unit's
+    /// application certificate belongs to the period the system is in.
+    fn sync_credential_periods(&mut self, only: Option<NodeId>, now: SimTime) {
+        let Some(phase2) = self.phase2.as_ref() else {
+            return;
+        };
+        let ids: Vec<NodeId> = match only {
+            Some(id) => vec![id],
+            None => self.nodes.keys().copied().collect(),
+        };
+        for id in ids {
+            let Some(runtime) = self.nodes.get_mut(&id) else {
+                continue;
+            };
+            if runtime.is_vru() {
+                continue;
+            }
+            let believed = runtime.clock().believed_time(now);
+            let period = phase2.params().period_at(believed);
+            let stores = runtime.stores_mut();
+            if stores.crl.current_period() != period {
+                stores.crl.set_period(period);
+            }
+            // A unit's application certificate, and the bootstrap stand-in a vehicle the
+            // credential system left without pseudonyms signs with, carry no linkage value
+            // and no period of their own: they belong to the period the system is in.
+            let issued = phase2.creds(id);
+            if let Some(cred) = stores.certs.active_mut()
+                && cred.i_period != period
+                && (self.rsus.contains_key(&id)
+                    || !issued
+                        .iter()
+                        .any(|c| c.i == cred.i_period && c.j == cred.j_index))
+            {
+                cred.i_period = period;
+            }
+        }
+    }
+
     /// Before a node step: asks each vehicle's store for the change its pseudonym strategy
     /// makes due now (`crate::pseudonym_policy`). The store then changes every identifier
     /// together at its own step, exactly as for a scheduled change.
@@ -2689,6 +2749,7 @@ impl Engine {
         }
         if !wake {
             self.apply_pseudonym_policy(only, now);
+            self.sync_credential_periods(only, now);
         }
         let mut inboxes = core::mem::take(&mut self.inboxes);
         let rng = &self.rng;

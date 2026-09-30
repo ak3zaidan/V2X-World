@@ -21,6 +21,8 @@
 //! joins of the run report (`Phase2Report`): which reports named an armed attacker, which
 //! decisions were about one. Nothing in the detection path reads them.
 
+#![recursion_limit = "256"]
+
 use std::time::Instant;
 
 use v2xw_engine::scenario::{Attacker, DilationWindow, ModelChoice};
@@ -169,6 +171,12 @@ fn main() {
         "messages_checked": p.messages_checked,
         "verdicts_fired": p.verdicts_fired,
         "verdicts_by_detector": p.verdicts_by_detector,
+        "verification_states": p.verification_states,
+        "spdu_signature_failures": p.spdu_signature_failures,
+        "spdu_parse_failures": p.spdu_parse_failures,
+        "crl_period_refusals": p.crl_period_refusals,
+        "vehicles_starved": p.vehicles_starved,
+        "vehicles_unprovisioned": p.vehicles_unprovisioned,
         "reports_sent": p.reports_sent,
         "reports_about_attackers": p.reports_about_attackers,
         "reports_about_honest": p.reports_about_honest,

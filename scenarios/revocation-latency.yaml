@@ -140,7 +140,11 @@ actors:
       # backhaul; `crl` is what makes it broadcast the revocation. A unit with neither
       # role hears both and does nothing, which is why the roles are named.
       roles: [report-forward, crl]
-      profile: rsu/cohda-mk5-rsu
+      # The Commsignia ITS-RS4: its datasheet publishes a verification rate (>2,000/s).
+      # The Cohda MK5 RSU publishes no compute figure, so a unit on it prices no
+      # verification and drops every frame it hears: it never saw a message, never
+      # ran its detectors, and relayed nothing.
+      profile: rsu/commsignia-its-rs4
 
   backend:
     # The CAMP SCMS of 05-protocols.md: eleven entities, butterfly key expansion, two

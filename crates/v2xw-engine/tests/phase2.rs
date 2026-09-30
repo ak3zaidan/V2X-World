@@ -366,6 +366,29 @@ fn a_role_belongs_to_the_unit_that_declares_it_and_not_to_the_scenario() {
     assert!(p.rsu_spec_of(v2xw_core::ids::NodeId::new(9_999)).is_none());
 }
 
+/// The owner's default scenario runs the credential system: the SCMS backend, roadside
+/// units, cellular access and the detection path, so the Backend view has something to
+/// show. Built, not run: the run is the page's.
+#[test]
+fn the_default_scenario_runs_the_credential_system_with_roadside_units() {
+    let s = rooted(
+        Scenario::load(scenarios().join("manhattan-5min.yaml")).expect("the scenario loads"),
+    );
+    assert!(v2xw_engine::scenario::validate::validate(&s).is_empty());
+    assert_eq!(
+        s.security.protocol.as_ref().map(|p| p.id.as_str()),
+        Some(v2xw_engine::phase2::CAMP_SCMS)
+    );
+    assert!(s.net.uu.is_some(), "the fleet reaches the backend over cellular");
+    let engine = Engine::build(s, "").expect("builds");
+    let p = engine
+        .phase2()
+        .expect("the credential system runs in the default scenario");
+    assert_eq!(p.rsu_nodes().len(), 8);
+    assert_eq!(p.rsus_with_role("crl").len(), 8);
+    assert!(p.detection_on());
+}
+
 #[test]
 #[ignore = "diagnostic"]
 fn diag_print_report() {
