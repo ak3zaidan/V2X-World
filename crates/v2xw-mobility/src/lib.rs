@@ -88,6 +88,7 @@
 #![forbid(unsafe_code)]
 
 pub mod audit;
+pub mod calibration;
 pub mod carfollowing;
 pub mod classes;
 pub mod clock;
@@ -101,6 +102,7 @@ pub mod intersection;
 pub mod kinematic;
 pub mod lanechange;
 pub mod routing;
+pub mod rules;
 pub mod snapshot;
 pub mod traits;
 pub mod views;

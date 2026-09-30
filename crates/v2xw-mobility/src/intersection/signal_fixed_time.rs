@@ -61,6 +61,24 @@ pub const MODEL_VERSION: &str = "1.0.0";
 /// those vehicles with.
 pub const OPPOSING_START_ACCEL_MPS2: f64 = 1.4;
 
+/// The speed an opposing car starting from the line is assumed to accelerate to, m/s: the
+/// New York City default limit, 25 mph. A car already faster keeps its own speed; one
+/// slower accelerates at [`OPPOSING_START_ACCEL_MPS2`] up to this and no further.
+pub const OPPOSING_CRUISE_CAP_MPS: f64 = 11.176;
+
+/// The HCM 6th edition's critical headway for a permitted left turn at a signal, seconds
+/// ([`SignalPlanParams::permitted_left_critical_headway_s`]).
+pub const HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S: f64 = 4.5;
+
+/// How close to the stop line a vehicle turning right on red must stand before it may
+/// go, metres (front bumper): the full stop "at the stop line" the rule requires, with
+/// room for where the car-following model parks the first car of a queue. **This crate's
+/// choice.**
+pub const RIGHT_ON_RED_AT_LINE_M: f64 = 3.0;
+
+/// Standing still, for the right-turn-on-red full stop, m/s.
+const RIGHT_ON_RED_STANDING_MPS: f64 = 0.1;
+
 /// The fixed-time plan generator's parameters (§2.3).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -98,6 +116,32 @@ pub struct SignalPlanParams {
     /// Whether a permitted left turn gets [`SignalState::GreenYield`] rather than
     /// [`SignalState::Green`].
     pub permissive_left: bool,
+    /// The critical headway a permitted left turn accepts in the opposing flow, seconds.
+    ///
+    /// HCM 6th edition (2016) Chapter 31's permitted left-turn saturation flow uses fixed
+    /// values of 4.5 s critical and 2.5 s follow-up headway (**secondary**: read in the
+    /// LTRC Report 715 technical summary, 2025, which re-measured them; not the HCM text).
+    /// The two-way-stop major-street left turn's 4.1 s, which this model used before, is
+    /// the unsignalised procedure's value, not the signalised one's.
+    pub permitted_left_critical_headway_s: f64,
+    /// Whether a right turn may be made against a steady red after a full stop at the
+    /// line, giving way to the traffic it joins and to pedestrians — the jurisdiction's
+    /// rule, not the junction's.
+    ///
+    /// * **Off** (the default) is New York City: New York State Vehicle and Traffic Law
+    ///   §1111(d)(2) permits the turn after a stop *except* in a city of one million or
+    ///   more, where it is allowed only where a sign permits it (**secondary**: the rule
+    ///   as NYC DOT states it; the statute text was not re-read). It is also the German
+    ///   rule (StVO §37(2): only with the green-arrow sign) and the legacy engine's.
+    /// * **On** is the rest of the United States: Uniform Vehicle Code §11-202(c)3 permits
+    ///   a right turn on red after a full stop unless a sign prohibits it.
+    ///
+    /// On, the turn is a minor-street right turn at a stop sign: stand at the line
+    /// ([`RIGHT_ON_RED_AT_LINE_M`]), then go when no conflicting claimant reaches the
+    /// junction within the HCM two-way-stop critical gap for a minor-street right turn
+    /// (6.2 s, 6.9 s against four or more lanes). Pedestrians are the crosswalk rule's, as
+    /// on any turn.
+    pub right_turn_on_red: bool,
     /// How far before the stop line a vehicle halts, metres.
     pub stop_line_offset_m: f64,
 }
@@ -120,6 +164,8 @@ impl Default for SignalPlanParams {
             max_dur_s: 50.0,
             match_cycle: true,
             permissive_left: true,
+            permitted_left_critical_headway_s: HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S,
+            right_turn_on_red: false,
             stop_line_offset_m: STOP_LINE_OFFSET_M,
         }
     }
@@ -326,6 +372,41 @@ impl FixedTimeSignals {
     }
 }
 
+impl FixedTimeSignals {
+    /// A right turn against a steady red where the jurisdiction permits it
+    /// ([`SignalPlanParams::right_turn_on_red`]): a full stop at the line first, then the
+    /// HCM minor-street right-turn gap in the traffic it joins.
+    fn right_on_red(
+        &self,
+        ego: &VehicleView,
+        j: &JunctionView,
+        conflicts: &[ConflictView],
+        gap: f64,
+    ) -> EntryDecision {
+        let stopped_at_line = ego.speed_mps < RIGHT_ON_RED_STANDING_MPS
+            && j.stop_line_gap_m <= RIGHT_ON_RED_AT_LINE_M;
+        if !stopped_at_line {
+            return EntryDecision::Stop { gap_m: gap };
+        }
+        // On red the turner has right of way over nobody: every conflicting claimant
+        // counts, whatever priority the matrix gives the two movements on a green.
+        let critical = crate::intersection::gap_acceptance::HcmGaps::of(
+            crate::intersection::gap_acceptance::Movement::MinorRight,
+        )
+        .critical_gap_s(j.major_lanes);
+        let closing = conflicts
+            .iter()
+            .filter(|c| c.conflicts)
+            .map(ConflictView::time_to_stop_line_s)
+            .fold(f64::INFINITY, f64::min);
+        if closing >= critical {
+            EntryDecision::Proceed
+        } else {
+            EntryDecision::Stop { gap_m: gap }
+        }
+    }
+}
+
 impl v2xw_core::model::Model for FixedTimeSignals {
     fn card(&self) -> &ModelCard {
         &self.card
@@ -349,6 +430,11 @@ impl IntersectionControl for FixedTimeSignals {
             // other controller (gap acceptance) decides.
             None => EntryDecision::Proceed,
             Some(SignalState::Green) => EntryDecision::Proceed,
+            Some(SignalState::Red)
+                if self.params.right_turn_on_red && j.movement == TurnDirection::Right =>
+            {
+                self.right_on_red(ego, j, conflicts, gap)
+            }
             Some(SignalState::Red) | Some(SignalState::RedAmber) => {
                 EntryDecision::Stop { gap_m: gap }
             }
@@ -365,16 +451,35 @@ impl IntersectionControl for FixedTimeSignals {
             }
             // A permissive green: proceed only if no conflicting claimant the ego must
             // give way to is closing on the junction. The critical gap is the HCM
-            // major-street left-turn value, which is the movement a permissive green is.
+            // signalised procedure's permitted left-turn critical headway.
             Some(SignalState::GreenYield) => {
-                let critical = crate::intersection::gap_acceptance::HcmGaps::of(
-                    crate::intersection::gap_acceptance::Movement::MajorLeft,
-                )
-                .critical_gap_s(j.major_lanes);
+                let critical = self.params.permitted_left_critical_headway_s;
+                // A left turner on a permissive green gives way to everything coming the
+                // other way that is not itself turning left (UVC §11-402), whatever the
+                // junction's matrix says. A matrix that leaves the two movements level
+                // handed the turner priority whenever it was nearer its line, and one took
+                // a 1.2 s lag in front of a car at 11 m/s (an overlap on the dense grid).
+                let turning_left = matches!(
+                    j.movement,
+                    TurnDirection::Left | TurnDirection::SlightLeft | TurnDirection::UTurn
+                );
                 let closing = conflicts
                     .iter()
-                    .filter(|c| c.conflicts && c.ego_must_yield)
-                    .map(|c| c.time_to_stop_line_accelerating_s(OPPOSING_START_ACCEL_MPS2))
+                    .filter(|c| {
+                        c.conflicts
+                            && (c.ego_must_yield
+                                || (turning_left
+                                    && !matches!(
+                                        c.movement,
+                                        TurnDirection::Left | TurnDirection::UTurn
+                                    )))
+                    })
+                    .map(|c| {
+                        c.time_to_stop_line_launching_s(
+                            OPPOSING_START_ACCEL_MPS2,
+                            OPPOSING_CRUISE_CAP_MPS,
+                        )
+                    })
                     .fold(f64::INFINITY, f64::min);
                 if closing >= critical {
                     EntryDecision::Proceed
@@ -534,6 +639,29 @@ pub fn card(params: &SignalPlanParams) -> ModelCard {
             netconvert,
         ),
         Parameter::new(
+            "permitted_left_critical_headway",
+            "s",
+            serde_json::json!(params.permitted_left_critical_headway_s),
+            Source::new(
+                SourceKind::Standard,
+                "HCM 6th ed. (2016) Ch. 31, permitted left-turn saturation flow: critical \
+                 headway 4.5 s, follow-up 2.5 s (secondary: LTRC Report 715 technical \
+                 summary, 2025)",
+            ),
+        ),
+        Parameter::new(
+            "right_turn_on_red",
+            "-",
+            serde_json::json!(params.right_turn_on_red),
+            Source::new(
+                SourceKind::Standard,
+                "Off: New York VTL §1111(d)(2), no turn on red in a city of one million or \
+                 more unless signed (secondary, as NYC DOT states it); StVO §37(2). On: \
+                 Uniform Vehicle Code §11-202(c)3. Gap: HCM two-way-stop minor-street \
+                 right-turn critical gap 6.2 s / 6.9 s (secondary, 04-models.md §2.3)",
+            ),
+        ),
+        Parameter::new(
             "stop_line_offset",
             "m",
             serde_json::json!(params.stop_line_offset_m),
@@ -549,8 +677,11 @@ pub fn card(params: &SignalPlanParams) -> ModelCard {
          approach, which is the two-phase plan netconvert generates for a crossroads."
             .to_string(),
         "The yellow interval assumes a flat grade (G = 0 in the ITE formula).".to_string(),
-        "A permitted left turn shows GreenYield and gives way by the HCM major-street \
-         left-turn critical gap."
+        "A permitted left turn shows GreenYield and gives way by the HCM signalised \
+         procedure's permitted left-turn critical headway (4.5 s)."
+            .to_string(),
+        "A right turn on red, where the jurisdiction permits it, stops fully within 3 m of \
+         the line and then takes the HCM minor-street right-turn critical gap."
             .to_string(),
     ];
     card.ignores = vec![
@@ -697,7 +828,7 @@ mod tests {
             conflicts: true,
             ego_must_yield: true,
         };
-        // Standing 3 m from the line: it reaches it in sqrt(2·3/1.4) ≈ 2.1 s < 4.1 s.
+        // Standing 3 m from the line: it reaches it in sqrt(2·3/1.4) ≈ 2.1 s < 4.5 s.
         assert_eq!(
             m.may_enter(&ego(5.0), &j, &[opposing(3.0, 0.0)], &WeatherState::CLEAR),
             EntryDecision::Stop { gap_m: 18.0 }
@@ -707,6 +838,104 @@ mod tests {
             m.may_enter(&ego(5.0), &j, &[opposing(60.0, 0.0)], &WeatherState::CLEAR),
             EntryDecision::Proceed
         );
+    }
+
+    #[test]
+    fn a_permitted_left_takes_the_hcm_signalised_critical_headway() {
+        // An opposing car at 10 m/s, accelerating at 1.4 m/s² up to the 25 mph city limit
+        // (11.18 m/s), 47 m from the line reaches it in 4.25 s: a gap the two-way-stop
+        // major-street value (4.1 s) accepts and the HCM signalised procedure's 4.5 s does
+        // not. From 53 m it takes 4.79 s. (Accelerating without the cap, it would have been
+        // judged to reach the line from 53 m in 4.1 s, and the turner refused it.)
+        let m = FixedTimeSignals::default();
+        let mut j = junction(Some(SignalState::GreenYield), 20.0);
+        j.movement = TurnDirection::Left;
+        let opposing = |gap: f64| ConflictView {
+            actor: ActorId::new(9),
+            stop_line_gap_m: gap,
+            speed_mps: 10.0,
+            heading_rad: core::f64::consts::PI,
+            movement: TurnDirection::Straight,
+            movement_lane: Some(LaneId::new(2)),
+            conflicts: true,
+            ego_must_yield: true,
+        };
+        assert_eq!(
+            m.may_enter(&ego(5.0), &j, &[opposing(47.0)], &WeatherState::CLEAR),
+            EntryDecision::Stop { gap_m: 18.0 }
+        );
+        assert_eq!(
+            m.may_enter(&ego(5.0), &j, &[opposing(53.0)], &WeatherState::CLEAR),
+            EntryDecision::Proceed
+        );
+    }
+
+    /// New York City's rule by default: red holds a right turn like any other movement.
+    /// Where the jurisdiction permits a turn on red, the turner stops fully at the line
+    /// first and then takes the HCM minor-street right-turn gap.
+    #[test]
+    fn a_right_turn_on_red_follows_the_jurisdiction() {
+        let mut j = junction(Some(SignalState::Red), 1.0);
+        j.movement = TurnDirection::Right;
+        let nyc = FixedTimeSignals::default();
+        assert!(!nyc.params().right_turn_on_red);
+        assert!(matches!(
+            nyc.may_enter(&ego(0.0), &j, &[], &WeatherState::CLEAR),
+            EntryDecision::Stop { .. }
+        ));
+        let us = FixedTimeSignals::new(SignalPlanParams {
+            right_turn_on_red: true,
+            ..SignalPlanParams::default()
+        });
+        // Standing at the line, nothing coming: it goes.
+        assert_eq!(
+            us.may_enter(&ego(0.0), &j, &[], &WeatherState::CLEAR),
+            EntryDecision::Proceed
+        );
+        // Rolling: the full stop comes first.
+        assert!(matches!(
+            us.may_enter(&ego(2.0), &j, &[], &WeatherState::CLEAR),
+            EntryDecision::Stop { .. }
+        ));
+        // Standing, but back in the queue: it has not stopped at the line.
+        let far = JunctionView {
+            stop_line_gap_m: 9.0,
+            ..j
+        };
+        assert!(matches!(
+            us.may_enter(&ego(0.0), &far, &[], &WeatherState::CLEAR),
+            EntryDecision::Stop { .. }
+        ));
+        // A car on the green cross street 40 m out at 11 m/s (3.6 s) is inside the 6.2 s
+        // critical gap, even though on a green the matrix would give the turner priority
+        // over nobody and the through car no reason to yield; 90 m out (8.2 s) is not.
+        let cross = |gap: f64| ConflictView {
+            actor: ActorId::new(9),
+            stop_line_gap_m: gap,
+            speed_mps: 11.0,
+            heading_rad: core::f64::consts::FRAC_PI_2,
+            movement: TurnDirection::Straight,
+            movement_lane: Some(LaneId::new(2)),
+            conflicts: true,
+            ego_must_yield: false,
+        };
+        assert!(matches!(
+            us.may_enter(&ego(0.0), &j, &[cross(40.0)], &WeatherState::CLEAR),
+            EntryDecision::Stop { .. }
+        ));
+        assert_eq!(
+            us.may_enter(&ego(0.0), &j, &[cross(90.0)], &WeatherState::CLEAR),
+            EntryDecision::Proceed
+        );
+        // A through movement on red is never released by the rule.
+        let through = JunctionView {
+            movement: TurnDirection::Straight,
+            ..j
+        };
+        assert!(matches!(
+            us.may_enter(&ego(0.0), &through, &[], &WeatherState::CLEAR),
+            EntryDecision::Stop { .. }
+        ));
     }
 
     #[test]

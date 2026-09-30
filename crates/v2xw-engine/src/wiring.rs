@@ -297,10 +297,15 @@ pub fn build_mobility(scenario: &Scenario) -> Box<dyn Mobility> {
 /// type — what the traffic-invariant auditor (`examples/traffic_audit.rs`) steps, so the
 /// run it audits is the run the kernel would drive.
 pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
-    let params = v2xw_mobility::EngineParams {
+    // The jurisdiction's rules of the road come with the highway preset that names it
+    // (`v2xw_mobility::rules`): New York City prohibits a right turn on red unless signed.
+    let rules = v2xw_mobility::rules::TrafficRules::of_highway_preset(
+        scenario.world.highway_preset.map(|p| p.label()),
+    );
+    let params = rules.apply(v2xw_mobility::EngineParams {
         step: scenario.time.mobility_step(),
         ..v2xw_mobility::EngineParams::default()
-    };
+    });
     NativeMobility::new(params).with_vru_population(v2xw_mobility::engine::VruPopulation {
         pedestrians: scenario.actors.vru.pedestrians,
         cyclists: scenario.actors.vru.cyclists,

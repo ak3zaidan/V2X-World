@@ -4,7 +4,7 @@ Living record of what is built and what has actually been *measured*, as against
 the plan in `10-roadmap.md` and the decisions in `12-build-decisions.md`. Claims
 here carry their evidence; anything unmeasured says so.
 
-Last updated 2026-09-29 (road network section below; QA section of 2026-09-24 after it). **The crate table below is stale**: `v2xw-record`,
+Last updated 2026-09-29 (road network and traffic behaviour sections below; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
 `v2xw-metrics`, `v2xw-node` and `v2xw-engine` are no longer stubs, and the line counts
 predate several waves. It is left as written rather than rewritten from memory, because a
 status file whose numbers were re-estimated rather than re-measured is worse than one that
@@ -182,6 +182,162 @@ Berlin audit.
    publish tests saw the radio track's `radio.region` fields and not its own
    `world.signals`. Touching `src/scenario/schema.rs` before building makes it rerun.
 
+
+## 2026-09-29 — traffic behaviour realism: a calibration harness, and the model held to it
+
+The traffic is now measured the way a traffic engineer measures a street, against the
+published figure for each measurement, and the car-following, junction and signal
+behaviour was changed where it did not match. The measures live in
+`v2xw_mobility::calibration`. Two tests in `crates/v2xw-mobility/tests/calibration.rs` hold
+the model to its bands. Every figure below comes from a run on this machine;
+`cargo run -p v2xw-engine --example traffic_calibration -- <scenario> --rate R --duration S
+--examples N` prints the whole table and the auditor's examples for any scenario.
+
+### What is measured
+
+| Figure | Reference (band) |
+|---|---|
+| saturation headway, through, from the 5th queued car | HCM base 1,900 pc/h/ln × CBD 0.90 → 2.11 s (1.80-2.40) |
+| start-up lost time over the first four | HCM 2.0 s (1-3) |
+| headways by queue position | Greenshields 1947: 3.8, 3.1, 2.7, 2.4, 2.2 s (secondary) |
+| queue spacing, front to front | HCM 7.6 m (6.5-8.5) |
+| free-flow speed over the limit: mean, and spread (p85 − p15)/2.07 | SUMO speedFactor N(1, 0.1) (0.93-1.07; 0.05-0.15) |
+| launch acceleration 0-8 m/s | Wang et al. 2004: 1.25 m/s² (0.9-2.0) |
+| stop deceleration, 85th percentile | AASHTO 3.4 m/s² (1.5-3.4) |
+| permitted-left critical gap, Raff's method on lags timed to the opposing car's arrival | HCM 6th ed. Ch. 31: 4.5 s (3.5-5.5) |
+| pedestrian walking speed, mean and 15th percentile | Knoblauch 1996 (1.2-1.6; 0.97-1.4) |
+| pedestrian signal compliance | Basch et al. 2015, Manhattan: about 89 % on Walk (secondary; reported) |
+| avenue and side-street volumes over signalised stop lines | NYC DOT automated counts, Midtown 08:00-19:00: avenues 970-1,890 veh/h, streets 330-640 (reported) |
+| turning speeds, travel speed | reported only |
+
+### Before and after
+
+**The saturation-flow field study** (`SaturationExperiment`: one signalised crossroads,
+approaches kept loaded, 600 s). The harness did not exist before this track. The "before"
+column is the engine's previous driver set, Kesting 2010 (T 1.5 s, a 1.4 m/s²), measured on
+the same experiment.
+
+| | Kesting 2010 drivers | city drivers (UrbanHcm) |
+|---|---|---|
+| saturation headway | 2.68 s (1,343 veh/h/ln) — OUT | **2.134 s** (1,687 veh/h/ln), n = 531 |
+| start-up lost time | 2.80 s | **2.85 s**, n = 49 |
+| headways 1-5 | 4.14, 3.43, 3.04, 2.86, 2.77 | **3.73, 2.89, 2.51, 2.34, 2.24** (10th: 2.09) |
+| launch acceleration | 0.95 m/s² | **1.16 m/s²** |
+
+**The Midtown-shaped grid test** (5 × 8 blocks of 274 × 80 m, 25 mph, 120 pedestrians, 300 s):
+free-flow mean 0.970 and spread 0.098, launch 1.47 m/s², stop deceleration p85 1.74 m/s²,
+walking speed 1.306 m/s mean and 0.981 m/s p15 — all in band and held by the test. Its
+permitted-left critical gap is 5.96 s over 15 accepted and 15 rejected lags, above the
+band; it is reported, not held (see Still open).
+
+**phase1-grid at 6,000 veh/h for 300 s, no pedestrians.** The before run used the harness
+binary built before any behaviour change.
+
+| | before | after |
+|---|---|---|
+| free-flow mean / p15-p50-p85 | 0.934 / 0.81-0.98-1.00 | 0.979 / 0.88-1.00-1.09 |
+| launch acceleration | 1.246 | 1.541 |
+| stop deceleration p85 | 2.794 | 1.722 |
+| first discharge headway (lone cars at green) | 3.03 s | 3.93 s (now includes the driver's reaction) |
+| permitted-left critical gap | — | 4.98 s, 8 accepted / 10 rejected lags |
+| auditor, non-zero classes | jerk 13 | jerk 2 |
+
+**manhattan-vru at 6,000 veh/h for 300 s** (the dense QA case).
+
+| | before (first run of this track, 10:33) | after |
+|---|---|---|
+| saturation headway | 2.788 s, n = 6 | 2.217 s, n = 3 |
+| start-up lost time | 0.93 s, n = 5 | 3.19 s, n = 3 (OUT; 3 queues) |
+| free-flow mean / spread | 0.801 / sd 0.218 | 0.957 / 0.090 |
+| stop deceleration p85 | 1.465 (OUT) | 1.783 |
+| launch acceleration | 1.151 | 1.454 |
+| walking speed mean / p15 | 1.310 / 1.027 | 1.312 / 1.031 |
+| gap below minimum | 217 | **0** |
+| jerk over 30 m/s³ | 37 | **3** |
+| step-speed | 18 | 11 |
+| overlap, red entry, conflict zone, queue jump, occupied-crosswalk entry | 0 | 0 |
+| pedestrian overlap | 15 | 29 |
+| heading jump / in building | 147 / 12 | 151 / 11 |
+| standstill (180 s) | 0 | 1 |
+
+On Midtown the queue figures rest on 3 queues: dense Manhattan at this demand hardly forms
+a queue of five, which is the demand gap below, not a model result.
+
+### What changed in the model
+
+- **City drivers** (`IdmPreset::UrbanHcm`, the native engine's set): car T = 1.0 s
+  (Treiber & Kesting's city value) and a = 1.7 m/s², calibrated here against the HCM
+  saturation flow and Wang's launch acceleration (swept T 1.0-1.5, a 1.0-2.0). Trucks keep
+  the Kesting 2010 column.
+- **Start-up reaction**: each driver draws a signal response (Taoka 1989 lognormal, median
+  1.15 s) and a queue start-up delay behind a moving car (median 0.5 s, calibrated, same
+  quantile). **Heterogeneity**: free speed N(1, 0.1) × limit per driver.
+- **Amber**: each driver has a time-to-line threshold across the Zegeer & Deen dilemma zone
+  (10 % stop at 2.5 s, 90 % at 5.5 s); a driver who could stop goes on only below it and
+  only if the line is reached 0.3 s before the red. The auditor's amber rule flags going
+  only from beyond 5.5 s.
+- **Right turn on red** is a jurisdiction rule (`rules::TrafficRules`, from the world's
+  highway preset): prohibited in New York City and by default, permitted after a full stop
+  where a preset says so. No shipped preset permits it.
+- **Permitted left turns** take the HCM signalised critical headway (4.5 s, was the
+  two-way-stop 4.1 s), judge an opposing car's arrival with it accelerating only up to the
+  25 mph limit, and yield to all opposing non-left traffic whatever the junction matrix
+  says; paths that cross are foes even where a matrix leaves them unmarked.
+- **Green onset**: a driver gives way to a conflicting car still entering on the end of its
+  amber. **Stops** end 0.5 m short of the line (were 4 m), a stop behind a standing car ends
+  exactly s0 short of it, and braking short of an emergency builds at 20 m/s³.
+- **Merges**: a car already in the converging stretch goes first; a merge partner binds
+  after the relaxed stop at a crosswalk. **Lane changes** need the target lane clear by
+  the follower's s0. A car off the centreline on a bend advances at its own speed.
+- **Closures**: the router's cost generation counts closure changes (a reopen and a close
+  in one step used to go unseen); a car cut off detours to its destination road or the
+  nearest reachable lane, and waits at the barrier rather than vanishing as RouteBlocked;
+  a driver without navigation sees a closure through the next two junctions.
+- **Harness fixes**: the procedures that measured wrongly on the first run (a free-flow
+  sample whose leader was on the next lane; lags offered to the second car in a queue;
+  an experiment signal with no all-red) are fixed and documented on the module.
+
+Each new rule has a test that was shown to fail with the rule broken (right on red in the
+signal model and in the auditor, amber heterogeneity and the reach-the-line margin, the
+auditor's amber rule). The pedestrian, traffic-invariant and closure tests went red on the
+intermediate states and pass now: `cargo test -p v2xw-mobility` — 229 unit tests and 9
+integration tests pass.
+
+### Still open
+
+1. **Demand is far below Midtown's.** At 6,000 veh/h the median signalised avenue approach
+   carries 36 veh/h and a side street 12; NYC DOT's counts are about 1,400 and 450. Matching
+   them needs roughly 30-40 times the demand, thousands of vehicles on the extract at once;
+   whether the engine and the page carry that is the scale track's question. No shipped
+   scenario was changed.
+2. **Geometry the mobility model cannot fix** (for the road-network track): sidewalks
+   drawn over the carriageway (sidewalk 602 converges to 2 m from driving lane 11649 at
+   (490, 1943); footway 587/511 within 1.1 m of lane 9117 at (665, 1662)), the main source
+   of the pedestrian overlaps; internal connectors tighter than a car can turn (14081 has a
+   1.2 m radius, 14143 2.7 m, 14276 and 14267 similar), all the heading jumps; lane 1011
+   passing inside building 2956's corner at (323, 1468), all the in-building steps; a lane
+   drop through junction 3591 into a 1 m exit lane (4772), and 1 m lanes between
+   junctions (3930); step-speed on connectors 14075, 14690 and 14687 at the approach-to-
+   connector hand-over; the procedural grid's plans have no all-red and its conflict
+   matrix leaves permitted lefts and opposing through movements unmarked.
+3. **One vehicle waits 180 s** on Midtown (actor 241, lane 537 → 14143): the movement is
+   always green, the crosswalk right after the line is never empty, and the model yields to
+   anyone on the whole crosswalk. UVC §11-502(a) asks only for the driver's half and a
+   pedestrian approaching close from the other; adopting it needs the auditor's
+   occupied-crosswalk rule changed with it.
+4. **No strategic lane changes**: routes are lane-level from the spawn lane and lane changes
+   are discretionary, so a car is always in its turn lane but never weaves to reach one,
+   and a trip that would need a change is dropped as unroutable.
+5. Pedestrian compliance is 100 % by default (`jaywalk_probability` 0); Manhattan's is
+   about 89 %. The auditor counts every don't-walk entry as a violation, so turning it on is
+   a decision about what the auditor holds the model to.
+6. Turning speeds (left 21 km/h, right 21 km/h mean on Midtown) are reported, not tested:
+   no single published figure fits every corner radius.
+7. **Permitted lefts are more cautious than the HCM on the Midtown grid** (Raff 5.96 s over
+   15 lags; 4.98 s on phase1-grid). The likely cause is the start-up reaction: a turner
+   waiting for a gap takes the signal-response reaction (median 1.15 s) once the gap opens,
+   where a driver watching for it anticipates. Not changed without a source for the
+   anticipatory response.
 
 ## 2026-09-24 — QA of the website on the release build: final state
 

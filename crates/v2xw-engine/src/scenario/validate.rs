@@ -568,7 +568,10 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "Which jurisdiction's fallback speed limits (and, for urban-us-nyc, lane \
                widths) the OpenStreetMap importer uses: urban-us-nyc, urban-us-portland, \
-               urban-de or sumo-german. An OSM import is refused without it.",
+               urban-de or sumo-german; it also selects the rules of the road the traffic \
+               follows (right turn on red: prohibited in New York City, which is also the \
+               rule without a preset, and in Germany; permitted after a stop in Portland). \
+               An OSM import is refused without it.",
     },
     KeyStatus {
         path: "world.signals.coordinate",

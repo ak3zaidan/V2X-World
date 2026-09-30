@@ -96,6 +96,18 @@ impl<'a> DynamicCost<'a> {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+
+    /// Continues the generation count of an owner that rebuilds its cost function from a
+    /// set of closures it keeps itself: the counter becomes `generation`.
+    ///
+    /// A cost function rebuilt from scratch counts only the closures it is handed, so a
+    /// lane reopened in the same step another closes would leave the count — and every
+    /// vehicle's view of whether anything changed — where it was. The owner counts each
+    /// change it applies and passes the total here.
+    pub fn with_generation(mut self, generation: u64) -> Self {
+        self.generation = generation;
+        self
+    }
 }
 
 impl EdgeCost for DynamicCost<'_> {

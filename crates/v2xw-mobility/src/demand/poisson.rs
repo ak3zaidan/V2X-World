@@ -70,6 +70,13 @@ pub struct PoissonParams {
     /// Which classes the fleet is drawn from.
     pub fleet: FleetMix,
     /// How a trip's desired speed is drawn.
+    ///
+    /// The default is [`SpeedLaw::ClassSpeedDev`], SUMO's per-vehicle maximum: the native
+    /// engine takes the speed a driver actually chooses on a lane as their speed factor
+    /// times the posted limit (`engine::DriverTraits`), and the trip's desired speed is
+    /// the ceiling over that. The legacy law — uniform 8-18 m/s — capped 43 % of drivers
+    /// below a 25 mph limit on an empty avenue, which is no city's free-speed distribution;
+    /// a scenario that wants it names it (`speed: {law: legacy-uniform, ...}`).
     pub speed: SpeedLaw,
 }
 
@@ -82,7 +89,7 @@ impl Default for PoissonParams {
             profile: DemandProfile::Uniform,
             duration: Duration::from_secs(600),
             fleet: FleetMix::CarsOnly,
-            speed: SpeedLaw::default(),
+            speed: SpeedLaw::ClassSpeedDev,
         }
     }
 }
