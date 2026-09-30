@@ -4,7 +4,7 @@ Living record of what is built and what has actually been *measured*, as against
 the plan in `10-roadmap.md` and the decisions in `12-build-decisions.md`. Claims
 here carry their evidence; anything unmeasured says so.
 
-Last updated 2026-09-29 (road network and traffic behaviour sections below; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
+Last updated 2026-09-30 (six-track merge section below, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
 `v2xw-metrics`, `v2xw-node` and `v2xw-engine` are no longer stubs, and the line counts
 predate several waves. It is left as written rather than rewritten from memory, because a
 status file whose numbers were re-estimated rather than re-measured is worse than one that
@@ -14,6 +14,211 @@ For the current release position — what must be true for a 1.0 tag, what is no
 what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKLIST.md)
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
+
+## 2026-09-30 — six tracks merged: perf, roadnet, traffic, radio, scms, shell
+
+Six engineers worked in isolated worktrees on the owner's 2026-09-29 request (traffic and
+network realism, every SCMS entity wired in, a simpler page with a settings window and a
+full-screen metrics panel). The integrator merged them into `main` in the order perf
+(`8c56ba3`), roadnet (`f2d8db2`), traffic (`9534729`), radio (`19ee03c`), scms (`026e2ae`)
+and shell (`4d3faf6`). After each merge it built and tested the crates that merge touched,
+and it fixed the seams between tracks in commits of their own. Every number below comes from
+a command run on this machine. A number marked *(track)* is the track's own measurement,
+repeated from its report and not re-measured here. The release binaries were built from
+`ad473c8` and driven in a browser.
+
+### What each track delivered
+
+- **Perf** (`crates/v2xw-core`, `v2xw-radio`, `v2xw-engine`, protocol and viewer packages).
+  - A frame's link geometries (antennas, focus placement, buildings, street corner, vehicles
+    on the path) are computed in parallel. The stateful budget half still runs in receiver
+    order, in `run/link.rs`.
+  - Building queries walk the R-tree once along the segment.
+  - The vehicles on a link's path come from a body grid.
+  - A despawned node's per-link RNG streams are swept.
+  - Link streams are parked as key and position beyond a live budget.
+  - SHA-256 uses the ARMv8 instructions.
+  - The page preallocates pose slots for the traffic it has, not for the 2^20 the engine
+    allows.
+  - No digest moved *(track)*.
+  - Still open: the 20 s TR 36.885 drop (1,250 vehicles) is a batch job, about 142 s of wall
+    clock per simulated second *(track)*.
+- **Roadnet** (`crates/v2xw-world`).
+  - Street cross-sections, including NYC's 10 ft lanes and pedestrian minimums rounded up.
+  - Lane-weighted, coordinated signal plans: `world.signals.coordinate` and
+    `progression_speed_mps`.
+  - Portland (`urban-us-portland`, `scenarios/portland-downtown.yaml`) and German (`urban-de`)
+    presets.
+  - Kiosks are taken off the carriageway, turns a car cannot make are dropped, right turns
+    yield to the cycle lane, and Transit Mall bus lanes are imported.
+  - Validation baselines for three cities are in `worlds/validation/`.
+  - Every OSM world's content hash changed.
+- **Traffic** (`crates/v2xw-mobility`).
+  - City drivers are calibrated to the HCM (`IdmPreset::UrbanHcm`), with reaction times and
+    amber heterogeneity; a stop is planned at up to AASHTO's 3.4 m/s².
+  - Rules of the road per jurisdiction (`TrafficRules`): right turn on red is prohibited in
+    NYC and allowed after a stop elsewhere.
+  - A calibration harness (`calibration.rs`, `examples/traffic_calibration.rs`) measures
+    saturation headway, Raff critical gap and free-flow spread against published figures.
+  - The auditor judges right-on-red and dilemma-zone ambers.
+- **Radio** (`crates/v2xw-radio`, engine radio wiring).
+  - SAE J2945/1 congestion control with its PER bookkeeping, and J3161/1 rate control on the
+    sidelink.
+  - Adjacent-channel interference (`radio.adjacent_channel`, ACIR at the rules' minima).
+  - TR 37.885 vehicle antenna patterns (`radio.devices.obu.antenna_pattern`).
+  - Region channel plans (`radio.region`, `radio.channel`).
+  - Field and lab checks: the Qualcomm CBR, and a field LOS range.
+  - Still open: the 5X CBR is 0.753 in the model against 0.875 measured in the lab *(track)*.
+- **SCMS** (`crates/v2xw-proto`, `v2xw-node`, engine backend step, Studio Backend view).
+  - Post-quantum hybrid credentials (`hybrid`), charged at liboqs costs.
+  - The backend step runs over cellular and RSU access.
+  - `backend.state` snapshots are served by `inspect.entity {entity: "backend"}` and drawn by
+    the Backend view: every entity, with live counters and the links between them.
+  - `scenarios/credential-lifecycle.yaml` (US SCMS) and `ccms-lifecycle.yaml` (ETSI CCMS).
+- **Shell** (`ui/apps/studio`).
+  - The left settings sidebar is gone. Settings open in a window modelled on VS Code's
+    settings (gear or Cmd/Ctrl+comma), with:
+    - search by name, description and path, and a group tree;
+    - Modified and Unsupported filters;
+    - edit, Undo and Reset to default;
+    - a JSON view;
+    - Check, Discard, Apply and Run;
+    - a detached-window mode.
+  - The header is reduced to run state, scenario, clock, the primary action, Metrics, the
+    inspector, the gear and a menu.
+  - Metrics is a full-screen panel.
+  - 106–113 labelled elements before, 33 after; the viewport went from 37% of the window to
+    86% *(track)*.
+
+### Seams fixed at integration, each in its own commit or merge
+
+- **Traffic × roadnet** (`9534729`). The traffic track's rules table did not know roadnet's
+  new presets, so a Portland world fell back to New York's rule (no right turn on red).
+  - `urban-us-portland` now permits right on red after a stop (ORS 811.360(1)(a)).
+  - `urban-de` follows StVO §37(2), as `sumo-german` does.
+  - The `world.highway_preset` note in KEY_STATUS carries both tracks' text.
+- **Radio × perf** (`19ee03c`). Perf split `link_budget` into a parallel pure half and a
+  sequential stateful half; radio added antenna-pattern gain to that function.
+  - The pattern gain moved into `LinkView::geometry`, right after the endpoints. It changes
+    gains only, never positions.
+  - The transmitter's heading and velocity come from perf's `node_actor` lookup.
+  - `link_budget` returns the LOS class the sidelink's curves need.
+- **Radio × roadnet** (`9493def`). Two sidelink tests broke on the new Manhattan geometry
+  with no radio file changed. Bisected by reverting merges: traffic reverted, still red;
+  roadnet reverted too, green.
+  - The bulk-spawned fleet now lands elsewhere: the nearest vehicle to the world's centre
+    went from 71 m to 405 m.
+  - The jammer test now places the jammer at the fleet's medoid: SCIs missed 0.055 quiet
+    against 0.192 jammed.
+  - The focus-region test now keeps buildings on, so marginal links exist.
+  - No assertion changed.
+- **SCMS × shell** (`4d3faf6`). The Backend button was written for the old header. It now
+  sits in the new header after Metrics, as a labelled icon button.
+- **Roadnet × signal streaming** (`14366f6`). On Manhattan, 35 of 1,452 head groups are red
+  in every phase. For two of them the phase durations sum to 90.00000000000001 s on a 90 s
+  cycle, so `signal_heads` failed. `GroupSignal::at` now caps the time to the next change at
+  one cycle.
+- **Golden** (`ad473c8`). `grid-traffic` was re-blessed from `edca51b8…` (15,967 records) to
+  `8c94ac18…` (15,957).
+  - `gt.kinematics` has the same record count and different bytes, which fits the new
+    drivers. The move was not bisected to a single merge.
+  - Before blessing, `v2xw-golden-digest grid-traffic --json` gave byte-identical output
+    twice at `RAYON_NUM_THREADS=1` and once at 4.
+- `cargo fmt --all` (`dadb1c0`): formatting only.
+
+### Evidence
+
+- **Rust, one crate at a time, debug, at `dadb1c0`:**
+
+  | Crate | Passed | Failed | Ignored |
+  |---|---|---|---|
+  | core | 217 | 0 | 0 |
+  | msg | 210 | 0 | 1 |
+  | net | 113 | 0 | 0 |
+  | sec | 99 | 0 | 0 |
+  | proto | 128 | 0 | 0 |
+  | node | 193 | 0 | 0 |
+  | radio | 316 | 0 | 9 |
+  | world | 242 | 0 | 4 |
+  | mobility | 238 | 0 | 0 |
+  | metrics | 251 | 0 | 0 |
+  | record | 239 | 0 | 0 |
+  | threat | 210 | 0 | 0 |
+  | experiment | 80 | 0 | 0 |
+  | copilot | 68 | 0 | 0 |
+  | server | 107 | 0 | 1 |
+  | cli | 16 | 0 | 0 |
+  | wasm | 6 | 0 | 0 |
+  | py | 16 | 0 | 0 |
+  | conformance | 68 | 1 | 0 |
+  | engine | 192 | 4 | 2 |
+
+  - The conformance failure was the golden. After `ad473c8` the kit's golden tests pass, 4
+    of 4.
+  - One engine failure was `signal_heads`. After `14366f6` it passes 2 of 2, and
+    `v2xw-world` passes in full again.
+  - The other three engine failures are open (below). The full engine suite was not run
+    again after `14366f6`.
+- **UI, at `dadb1c0`:**
+  - vitest: protocol 192, viewer 141, mock-server 45 and studio 183, all passing.
+  - Builds and typechecks are clean for all four packages.
+  - Studio eslint: 0 errors, 4 warnings, all of which predate this round.
+- **Playwright, one worker:**
+  - Engine suite against the release `v2xw-server`: 12 of 12 passed in 5.2 min.
+  - Mock suite: 24 passed, 1 failed. The failure was "buildings fill the upper frame at
+    street level" (signal 0, needs more than 0.05). Run again on its own, it passed, so it
+    is flaky: it depends on which actor is followed.
+- **Release build.** `cargo build --release -p v2xw-server -p v2xw-cli` at `ad473c8`
+  finished in 7 min 55 s.
+- **Live check**, release server on :8787 with `scenarios/manhattan-5min.yaml` and Studio dev
+  on :5173, with each screenshot looked at:
+  - Settings: Cmd+comma opens the window with 122 settings. The search "vehicles per hour"
+    finds 3. The rate was edited from 1500 to 2400. Apply said "Applied 1 change", Run
+    started generation 1, and `scenario.get` showed the running rate at 2400.
+  - Aerial view: 56 vehicles moving.
+  - Follow: `selectFirstActor` gave "follow: node 0". The inspector listed its BSMs with
+    pseudonym and position, and the HUD was full.
+  - Chase view: behind the car at a red, with the crosswalk and the signal heads drawn.
+  - Metrics: a full-screen panel with five plots, delivery against distance, the delay by
+    stage and the worst nodes.
+  - `manhattan-vru`: pedestrians drawn alongside the vehicles.
+  - Backend: `credential-lifecycle`, loaded from the settings window's ready-made list,
+    drew all 18 SCMS entities with 13 links in use. Counts moved while the run went on: the
+    PCA's certificates rose from 240 to 250 between 95 s and 105 s, and the RA's batches
+    from 48 to 50.
+
+### Open
+
+- **An honest vehicle is revoked in `phase2`.** Two tests fail:
+  `a_report_becomes_a_vehicle_that_cannot_sign` (`revoked_honest` 1) and
+  `the_revocation_latency_is_decomposed_by_stage` (`crl_past_horizon` 1).
+  - Bisected to the roadnet merge: green without it, red with or without traffic.
+  - Instrumented run: node 28 is honest. Eight reporters flagged it with
+    `headingInconsistency` between 257.1 and 257.9 s, then with
+    `positionSpeedInconsistency`, and the MA revoked it. Its ground truth over 256–263 s is
+    a straight line at 10.2 m/s with no heading change.
+  - So the detectors reacted to what its messages said, not to how it moved. Likely cause:
+    a GNSS outlier draw that the new world's timing moved onto this vehicle. That was not
+    verified.
+  - Needs a decision from the security owner: should one event heard by eight reporters
+    count as eight pieces of evidence at the MA?
+- **`message_sets::a_denm_is_raised_by_hard_braking_and_by_nothing_else` fails:** "no vehicle
+  braked hard". With the traffic track's drivers, 40 s at 20,000 veh/h on
+  `connected-intersections` has a hardest braking of −3.02 m/s², and 0 of 18,052 samples
+  reach the DENM threshold of 3.92 m/s². That is realistic, so the test needs a
+  deterministic emergency (a cut-in, a pedestrian stepping out), which the scenario format
+  cannot express yet.
+- **The owner's default scenario has no credential system.** `manhattan-5min.yaml` sets no
+  `security.protocol`, so its Backend view says "No backend to show". The SCMS runs only in
+  `credential-lifecycle`, `ccms-lifecycle`, `phase2-manhattan`, `pseudonym-privacy` and
+  `revocation-latency`.
+- **The Backend panel covers the header.** Metrics keeps the header visible; Backend hides
+  it.
+- 35 Manhattan head groups never show anything but red.
+- The chase camera on `manhattan-vru` looked steeply down at the car. On `manhattan-5min` it
+  sat behind the car.
+- Each track's own open list stands, in its section below (roadnet, traffic) and in its
+  report.
 
 ## 2026-09-29 — road network realism (roadnet track)
 
