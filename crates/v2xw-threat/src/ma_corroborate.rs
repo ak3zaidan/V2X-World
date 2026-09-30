@@ -90,7 +90,7 @@ pub struct CorroborationParams {
     pub event_window_s: f64,
     /// Distinct trusted reporters an event needs to count (2).
     pub event_min_reporters: usize,
-    /// Corroborated events needed inside the window (4).
+    /// Corroborated events needed inside the window (3).
     pub min_events: usize,
     /// The sliding window the events must fall in, seconds (60).
     pub window_s: f64,

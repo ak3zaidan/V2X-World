@@ -215,8 +215,9 @@ fn the_revocation_latency_is_decomposed_by_stage() {
 }
 
 /// With no attacker, nothing is revoked, at the legacy suite's default thresholds and the
-/// legacy authority's default gate. The suite still fires on honest traffic — that is
-/// printed, not hidden — and the gate is what holds.
+/// scenario's authority (`threat/ma/corroborated`). The suite still fires on honest
+/// traffic — that is printed, not hidden — and the authority's decision rule is what
+/// holds.
 #[test]
 fn with_no_attacker_nothing_is_revoked() {
     let mut scenario = phase2();
