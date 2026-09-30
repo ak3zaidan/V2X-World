@@ -10,13 +10,14 @@
 //!
 //! ```text
 //! cargo run -p v2xw-engine --example perf_probe -- <scenario.yaml>
-//!     [--duration S] [--rate VEH_PER_H] [--max-veh N] [--drop]
+//!     [--duration S] [--rate VEH_PER_H] [--max-veh N] [--drop [--drop-gap S]]
 //!     [--peds N] [--cyclists N] [--threads N] [--bin S] [--null] [--quiet]
 //! ```
 //!
 //! * `--threads N` runs the engine's phase-parallel maps on a pool of exactly `N` threads,
 //!   which is how "the same digest at 1, 2 and 4 threads" is checked.
-//! * `--drop` switches the demand to the 3GPP TR 36.885 drop (`mobility/demand/tr36885-drop`).
+//! * `--drop` switches the demand to the 3GPP TR 36.885 drop (`mobility/demand/tr36885-drop`);
+//!   `--drop-gap S` sets its mean gap in seconds (the TR's is 2.5), which scales the fleet.
 //! * `--null` skips the digest (a null recorder), to separate the hashing from the run.
 //!
 //! It is an example rather than a test because it is a measurement: the numbers are the
@@ -118,6 +119,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|a| a == "--drop") {
         scenario.actors.vehicles.demand.kind = "mobility/demand/tr36885-drop".into();
         scenario.actors.vehicles.demand.params = serde_json::Value::Null;
+        // The TR 36.885 law with another mean gap (2.5 s is the TR's): the same drop at a
+        // lower density, for cost against vehicle count.
+        if let Some(g) = flag(&args, "--drop-gap") {
+            let gap: f64 = g.parse()?;
+            scenario.actors.vehicles.demand.params = serde_json::json!({
+                "variant": { "variant": "tr36885", "mean_gap_time_s": gap }
+            });
+        }
     }
     if let Some(r) = flag(&args, "--rate") {
         scenario.actors.vehicles.demand.rate_veh_per_h = Some(r.parse()?);
