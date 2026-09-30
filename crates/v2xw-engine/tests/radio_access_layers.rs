@@ -99,6 +99,35 @@ fn centre(s: &Scenario) -> [f64; 2] {
     ]
 }
 
+/// The fleet's middle: the vehicle, at its first recorded position, whose summed distance
+/// to every other vehicle is least (the medoid). The world's centre stands in for it only
+/// when the demand model happens to put vehicles there, which a change to the road network
+/// can undo without anything about the radio changing.
+fn fleet_middle(recorder: &MemoryRecorder) -> [f64; 2] {
+    let mut first: std::collections::BTreeMap<u64, [f64; 2]> = std::collections::BTreeMap::new();
+    for (_, r) in recorder.records() {
+        if r.channel != "gt.kinematics" {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_slice(&r.json).expect("kinematics JSON");
+        if let (Some(a), Some(x), Some(y)) = (v["actor"].as_u64(), v["x_m"].as_f64(), v["y_m"].as_f64()) {
+            first.entry(a).or_insert([x, y]);
+        }
+    }
+    let points: Vec<[f64; 2]> = first.into_values().collect();
+    assert!(!points.is_empty(), "the run recorded no vehicle positions");
+    let cost = |p: &[f64; 2]| -> f64 {
+        points
+            .iter()
+            .map(|q| ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt())
+            .sum()
+    };
+    *points
+        .iter()
+        .min_by(|a, b| cost(a).total_cmp(&cost(b)))
+        .expect("points")
+}
+
 fn jammer(params: serde_json::Value) -> ModelChoice {
     ModelChoice {
         id: "attacker/jammer/constant".to_string(),
@@ -373,8 +402,10 @@ fn blind_retransmissions_raise_delivery_at_range() {
 #[test]
 fn sensing_records_only_the_scis_a_ue_decoded() {
     let base = with_rat(fleet(30, 2.0), "lte-v2x-pc5");
-    let c = centre(&base);
-    let (quiet, _) = run_recorded(base.clone());
+    let (quiet, quiet_rec) = run_recorded(base.clone());
+    // In the fleet's middle, found from where the quiet run put it: the same vehicles are
+    // placed the same way in the jammed run, since the jammer does not move them.
+    let c = fleet_middle(&quiet_rec);
     let mut jammed = base;
     jammed.threats.jammers = vec![jammer(serde_json::json!({ "position_m": c }))];
     let (loud, _) = run_recorded(jammed);
@@ -477,6 +508,13 @@ fn the_sidelink_senses_a_jammer_in_its_cbr() {
 #[test]
 fn a_focus_region_decides_sidelink_receivers_at_its_tier_and_tags_the_links() {
     let mut base = with_rat(fleet(30, 2.0), "lte-v2x-pc5");
+    // The SCI stage only matters on a marginal link, where the SCI fails and the block
+    // alone would have decoded. On the building-free extract, after the road-network
+    // track's 2026-09-29 cross-sections moved where the fleet spawns, no link of this fleet
+    // was marginal (6,587 receptions in both runs), so this test keeps the buildings: the
+    // log-distance law below does not own them, so the obstacle stack charges them and
+    // the links behind a block are the marginal ones.
+    base.world.buildings.enabled = true;
     // The region raises the propagation tier to its own as well as the PHY's, and since
     // the radioprop track the high propagation tier is the geometric city-street law,
     // which on this building-free extract is line of sight all the way (TR 37.885's
