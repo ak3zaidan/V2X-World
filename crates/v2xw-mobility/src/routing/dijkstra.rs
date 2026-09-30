@@ -276,6 +276,91 @@ impl Dijkstra {
         None
     }
 
+    /// The route to the reachable road lane that ends nearest `target`, U-turns allowed:
+    /// where a driver goes when the lane graph no longer reaches their destination — a
+    /// closure has cut it off — and they head for the nearest place they still can.
+    ///
+    /// Every lane the search settles (up to [`DijkstraParams::max_settled`]) is a
+    /// candidate except connectors and `from` itself; the nearest by straight-line
+    /// distance from its end to `target` wins, then the cheaper, then the lower id. `None`
+    /// if no lane but `from` is reachable.
+    pub fn search_nearest(
+        &self,
+        world: &World,
+        from: LaneId,
+        target: v2xw_core::geom::Vec3,
+        at: SimTime,
+        costs: &dyn EdgeCost,
+    ) -> Option<Route> {
+        if !self.admits(world, from) {
+            return None;
+        }
+        let start_cost = costs.lane_cost_s(from, at).unwrap_or(0.0);
+        let mut best: BTreeMap<LaneId, f64> = BTreeMap::new();
+        let mut previous: BTreeMap<LaneId, LaneId> = BTreeMap::new();
+        let mut heap: BinaryHeap<Frontier> = BinaryHeap::new();
+        best.insert(from, start_cost);
+        heap.push(Frontier {
+            cost_s: start_cost,
+            lane: from,
+        });
+        let mut settled = 0usize;
+        // (squared distance, cost, lane) of the best candidate so far.
+        let mut pick: Option<(f64, f64, LaneId)> = None;
+        while let Some(Frontier { cost_s, lane }) = heap.pop() {
+            if best.get(&lane).is_some_and(|b| cost_s > *b) {
+                continue;
+            }
+            settled += 1;
+            if settled > self.params.max_settled {
+                break;
+            }
+            let l = world.lane(lane);
+            if lane != from && l.kind != v2xw_world::LaneKind::Internal {
+                let end = l.end();
+                let (dx, dy) = (end.x - target.x, end.y - target.y);
+                let d2 = dx * dx + dy * dy;
+                let better = match pick {
+                    None => true,
+                    Some((pd, pc, pl)) => d2
+                        .total_cmp(&pd)
+                        .then(cost_s.total_cmp(&pc))
+                        .then(lane.cmp(&pl))
+                        .is_lt(),
+                };
+                if better {
+                    pick = Some((d2, cost_s, lane));
+                }
+            }
+            for c in world.successors(lane) {
+                if !c.permitted {
+                    continue;
+                }
+                let next = c.via.unwrap_or(c.to_lane);
+                if next == lane || !self.admits(world, next) {
+                    continue;
+                }
+                let Some(step) = costs.lane_cost_s(next, at) else {
+                    continue;
+                };
+                if !(step.is_finite() && step >= 0.0) {
+                    continue;
+                }
+                let candidate = cost_s + step;
+                if best.get(&next).is_none_or(|current| candidate < *current) {
+                    best.insert(next, candidate);
+                    previous.insert(next, lane);
+                    heap.push(Frontier {
+                        cost_s: candidate,
+                        lane: next,
+                    });
+                }
+            }
+        }
+        let (_, cost_s, to) = pick?;
+        Some(self.reconstruct(world, &previous, from, to, cost_s))
+    }
+
     /// Walks the predecessor map back and builds the route.
     fn reconstruct(
         &self,

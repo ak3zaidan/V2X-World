@@ -90,6 +90,11 @@ pub const MODEL_ID: &str = "mobility/native/medium";
 /// The model version.
 pub const MODEL_VERSION: &str = "1.0.0";
 
+/// How many lanes of its route ahead a driver without a navigation service sees a closure
+/// on: the connector and the road beyond the junction being approached. **This crate's
+/// choice**, standing for "the barrier is in sight".
+const CLOSURE_SIGHT_LANES: usize = 2;
+
 /// How far short of a stop line the first car of a queue stops, metres (front bumper).
 ///
 /// MUTCD 2009 §3B.16 places a stop line 4 ft (1.2 m) before the crosswalk it protects, and
@@ -1060,6 +1065,101 @@ impl NativeMobility {
             }
         }
         spawned
+    }
+
+    /// The route a vehicle on `from` bound for `destination` takes when closures may have
+    /// cut its way, and the destination it now heads for.
+    ///
+    /// In order: its own destination; another lane of the destination road; and, when the
+    /// closures leave neither reachable, the reachable road lane nearest the destination,
+    /// U-turns allowed ([`crate::routing::dijkstra::Dijkstra::search_nearest`]) — the
+    /// driver turns back or goes round the block and ends the trip as near as they can.
+    /// `None` only when nothing at all is reachable from `from`.
+    fn detour(
+        router: &DynamicReroute,
+        world: &World,
+        from: LaneId,
+        destination: LaneId,
+        t: SimTime,
+        costs: &DynamicCost<'_>,
+    ) -> Option<(Route, LaneId)> {
+        if let Some(r) = router.replan(world, from, destination, t, costs) {
+            return Some((r, destination));
+        }
+        let dest = world.try_lane(destination)?;
+        for lane in &world.edge(dest.edge).lanes {
+            if *lane != destination
+                && let Some(r) = router.replan(world, from, *lane, t, costs)
+            {
+                return Some((r, *lane));
+            }
+        }
+        let params = DijkstraParams {
+            allow_uturn: true,
+            ..*router.dijkstra().params()
+        };
+        let route = crate::routing::dijkstra::Dijkstra::new(params)
+            .search_nearest(world, from, dest.end(), t, costs)?;
+        let to = *route.lanes.last()?;
+        Some((route, to))
+    }
+
+    /// Gives every vehicle whose route runs into a closed lane a way round it
+    /// ([`Self::detour`]). With dynamic rerouting on, drivers know of a closure anywhere on
+    /// their route (a navigation service); with it off, only once it is on one of the
+    /// next [`CLOSURE_SIGHT_LANES`] lanes of their route — at the junction they are
+    /// approaching, where the barrier is in sight.
+    fn closure_detours(&mut self, world: &World, t: SimTime, costs: &DynamicCost<'_>) {
+        let sight = if self.params.dynamic_rerouting {
+            usize::MAX
+        } else {
+            CLOSURE_SIGHT_LANES
+        };
+        let cut: Vec<ActorId> = self
+            .actors
+            .values()
+            .filter(|a| {
+                a.route
+                    .lanes
+                    .iter()
+                    .skip(a.route_index + 1)
+                    .take(sight)
+                    .any(|l| self.closed.contains(l))
+            })
+            .map(|a| a.id)
+            .collect();
+        let generation = costs.generation();
+        for id in cut {
+            let (lane, destination, class) = {
+                let a = &self.actors[&id];
+                (a.lane, a.destination, a.class)
+            };
+            let found = Self::detour(self.router_for(class), world, lane, destination, t, costs);
+            if let Some((route, to)) = found {
+                let a = self.actors.get_mut(&id).expect("present");
+                a.route = route;
+                a.route_index = 0;
+                a.destination = to;
+                a.planned_at = t;
+                a.planned_generation = generation;
+            }
+        }
+    }
+
+    /// The distance from the vehicle's front to the start of the first closed lane on its
+    /// route within the look-ahead, metres, if there is one.
+    fn closure_gap(&self, world: &World, actor: &Actor) -> Option<f64> {
+        let mut dist = world.lane(actor.lane).length_m - actor.s_m;
+        for lane in actor.route.lanes.iter().skip(actor.route_index + 1) {
+            if dist > self.params.lookahead_m {
+                return None;
+            }
+            if self.closed.contains(lane) {
+                return Some(dist.max(0.0));
+            }
+            dist += world.lane(*lane).length_m;
+        }
+        None
     }
 
     /// The cost function in force, given the closures.
@@ -2689,6 +2789,20 @@ impl Mobility for NativeMobility {
                     }
                 }
             }
+            // A closed lane ahead on the route is a barrier, stopped short of like a stop
+            // line. The end-of-step detour ([`Self::closure_detours`]) has already looked
+            // for a way round it, so a vehicle still routed into one has none: it waits
+            // for the lane to reopen instead of driving up to the barrier and vanishing.
+            if along
+                && !self.closed.is_empty()
+                && let Some(gap) = self.closure_gap(world, actor)
+            {
+                let before = leader;
+                leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(gap, 0.0)));
+                if leader != before {
+                    binding_stop_line = None;
+                }
+            }
             // An external stop command is a virtual leader at zero gap.
             if actor.stopped_until.is_some_and(|until| t0 < until) {
                 leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(0.0, 0.0)));
@@ -3018,6 +3132,35 @@ impl Mobility for NativeMobility {
                         break;
                     }
                 }
+                // A closure met at the line: the driver takes another way from here if
+                // there is one ([`Self::detour`]) and otherwise waits at the line for the
+                // lane to reopen. Only the legacy parity mode still removes the vehicle.
+                if along
+                    && let Some(n) = next
+                    && self.closed.contains(&n)
+                {
+                    let router = if actor.class == VehicleClass::Bicycle {
+                        &self.bike_router
+                    } else {
+                        &self.router
+                    };
+                    match Self::detour(router, world, actor.lane, actor.destination, t1, &costs) {
+                        Some((route, to)) => {
+                            next = route.lanes.get(1).copied();
+                            actor.route = route;
+                            actor.route_index = 0;
+                            actor.destination = to;
+                            actor.planned_at = t1;
+                            actor.planned_generation = generation;
+                        }
+                        None => {
+                            actor.s_m = lane_length;
+                            actor.speed_mps = 0.0;
+                            actor.accel_mps2 = 0.0;
+                            break;
+                        }
+                    }
+                }
                 match next {
                     Some(next) => {
                         if self.closed.contains(&next) {
@@ -3081,6 +3224,9 @@ impl Mobility for NativeMobility {
         }
         for (id, _) in &despawned {
             self.actors.remove(id);
+        }
+        if along && !self.closed.is_empty() {
+            self.closure_detours(world, t1, &costs);
         }
         despawned.extend(vru_gone);
 
@@ -4541,6 +4687,119 @@ mod tests {
             t += 100 * NS_PER_MS;
         }
         assert!(!ever_on_closed, "the vehicle drove onto a closed lane");
+    }
+
+    /// A reopen and a close in the same step change the router's cost generation, so every
+    /// vehicle that planned before them knows to plan again. Counting the closed lanes, as
+    /// the engine did, left the generation where it was.
+    #[test]
+    fn a_reopen_and_a_close_in_one_step_change_the_cost_generation() {
+        let world = grid(false);
+        let rng = RngRegistry::new(13);
+        let params = EngineParams::default();
+        let mut engine = engine_on(&world, params, &rng);
+        let lanes: Vec<LaneId> = world
+            .roads
+            .lanes()
+            .iter()
+            .filter(|l| l.kind == LaneKind::Driving)
+            .map(|l| l.id)
+            .collect();
+        let close = |engine: &mut NativeMobility, t: u64, cmds: &[(LaneId, bool)]| {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            for (lane, closed) in cmds {
+                engine.command(
+                    &mut ctx,
+                    MobilityCommand::Closure {
+                        lane: *lane,
+                        closed: *closed,
+                    },
+                );
+            }
+            engine.step(&mut ctx, params.step);
+            engine.costs(&world).generation()
+        };
+        let first = close(&mut engine, 0, &[(lanes[1], true)]);
+        let second = close(&mut engine, 100 * NS_PER_MS, &[(lanes[1], false), (lanes[2], true)]);
+        assert_ne!(first, second, "the closure set changed and the generation did not");
+        // A command that changes nothing is not a change.
+        let third = close(&mut engine, 200 * NS_PER_MS, &[(lanes[2], true)]);
+        assert_eq!(second, third);
+    }
+
+    /// A vehicle whose destination a closure cuts off does not vanish at the barrier as
+    /// `RouteBlocked`: it goes round, and ends its trip as near its destination as it can.
+    #[test]
+    fn a_vehicle_cut_off_by_a_closure_detours_instead_of_vanishing() {
+        let world = grid(false);
+        let rng = RngRegistry::new(13);
+        for dynamic_rerouting in [true, false] {
+            let params = EngineParams {
+                dynamic_rerouting,
+                ..EngineParams::default()
+            };
+            let mut engine = engine_on(&world, params, &rng);
+            let lanes: Vec<LaneId> = world
+                .roads
+                .lanes()
+                .iter()
+                .filter(|l| l.kind == LaneKind::Driving)
+                .map(|l| l.id)
+                .collect();
+            let driver = IdmPreset::Kesting2010.profile(VehicleClass::Passenger);
+            let route = {
+                let costs = DynamicCost::new(&world);
+                engine
+                    .router
+                    .replan(&world, lanes[0], lanes[lanes.len() / 2], 0, &costs)
+                    .expect("a route")
+            };
+            let destination = *route.lanes.last().expect("a lane");
+            let id = engine
+                .spawn_with_route(
+                    &world,
+                    0,
+                    VehicleClass::Passenger,
+                    driver,
+                    route.lanes.clone(),
+                    1.0,
+                )
+                .expect("spawned");
+            {
+                // The destination itself closes: nothing can reach it any more.
+                let mut ctx = MobilityCtx::new(0, &world, &rng);
+                engine.command(
+                    &mut ctx,
+                    MobilityCommand::Closure {
+                        lane: destination,
+                        closed: true,
+                    },
+                );
+            }
+            let mut t = 0u64;
+            let mut left = None;
+            for _ in 0..3000 {
+                let mut ctx = MobilityCtx::new(t, &world, &rng);
+                let update = engine.step(&mut ctx, params.step);
+                if let Some((_, cause)) = update.despawned.iter().find(|(a, _)| *a == id) {
+                    left = Some(*cause);
+                    break;
+                }
+                assert!(
+                    !engine
+                        .longitudinal_states()
+                        .iter()
+                        .any(|(a, lane, _, _)| *a == id && *lane == destination),
+                    "the vehicle drove onto its closed destination"
+                );
+                t += 100 * NS_PER_MS;
+            }
+            assert_eq!(
+                left,
+                Some(DespawnCause::TripComplete),
+                "dynamic rerouting {dynamic_rerouting}: the cut-off vehicle left as {left:?}"
+            );
+        }
     }
 
     #[test]

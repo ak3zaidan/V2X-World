@@ -61,6 +61,10 @@ pub const MODEL_VERSION: &str = "1.0.0";
 /// those vehicles with.
 pub const OPPOSING_START_ACCEL_MPS2: f64 = 1.4;
 
+/// The HCM 6th edition's critical headway for a permitted left turn at a signal, seconds
+/// ([`SignalPlanParams::permitted_left_critical_headway_s`]).
+pub const HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S: f64 = 4.5;
+
 /// The fixed-time plan generator's parameters (§2.3).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -98,6 +102,14 @@ pub struct SignalPlanParams {
     /// Whether a permitted left turn gets [`SignalState::GreenYield`] rather than
     /// [`SignalState::Green`].
     pub permissive_left: bool,
+    /// The critical headway a permitted left turn accepts in the opposing flow, seconds.
+    ///
+    /// HCM 6th edition (2016) Chapter 31's permitted left-turn saturation flow uses fixed
+    /// values of 4.5 s critical and 2.5 s follow-up headway (**secondary**: read in the
+    /// LTRC Report 715 technical summary, 2025, which re-measured them; not the HCM text).
+    /// The two-way-stop major-street left turn's 4.1 s, which this model used before, is
+    /// the unsignalised procedure's value, not the signalised one's.
+    pub permitted_left_critical_headway_s: f64,
     /// How far before the stop line a vehicle halts, metres.
     pub stop_line_offset_m: f64,
 }
@@ -120,6 +132,7 @@ impl Default for SignalPlanParams {
             max_dur_s: 50.0,
             match_cycle: true,
             permissive_left: true,
+            permitted_left_critical_headway_s: HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S,
             stop_line_offset_m: STOP_LINE_OFFSET_M,
         }
     }
@@ -365,12 +378,9 @@ impl IntersectionControl for FixedTimeSignals {
             }
             // A permissive green: proceed only if no conflicting claimant the ego must
             // give way to is closing on the junction. The critical gap is the HCM
-            // major-street left-turn value, which is the movement a permissive green is.
+            // signalised procedure's permitted left-turn critical headway.
             Some(SignalState::GreenYield) => {
-                let critical = crate::intersection::gap_acceptance::HcmGaps::of(
-                    crate::intersection::gap_acceptance::Movement::MajorLeft,
-                )
-                .critical_gap_s(j.major_lanes);
+                let critical = self.params.permitted_left_critical_headway_s;
                 let closing = conflicts
                     .iter()
                     .filter(|c| c.conflicts && c.ego_must_yield)
@@ -534,6 +544,17 @@ pub fn card(params: &SignalPlanParams) -> ModelCard {
             netconvert,
         ),
         Parameter::new(
+            "permitted_left_critical_headway",
+            "s",
+            serde_json::json!(params.permitted_left_critical_headway_s),
+            Source::new(
+                SourceKind::Standard,
+                "HCM 6th ed. (2016) Ch. 31, permitted left-turn saturation flow: critical \
+                 headway 4.5 s, follow-up 2.5 s (secondary: LTRC Report 715 technical \
+                 summary, 2025)",
+            ),
+        ),
+        Parameter::new(
             "stop_line_offset",
             "m",
             serde_json::json!(params.stop_line_offset_m),
@@ -549,8 +570,8 @@ pub fn card(params: &SignalPlanParams) -> ModelCard {
          approach, which is the two-phase plan netconvert generates for a crossroads."
             .to_string(),
         "The yellow interval assumes a flat grade (G = 0 in the ITE formula).".to_string(),
-        "A permitted left turn shows GreenYield and gives way by the HCM major-street \
-         left-turn critical gap."
+        "A permitted left turn shows GreenYield and gives way by the HCM signalised \
+         procedure's permitted left-turn critical headway (4.5 s)."
             .to_string(),
     ];
     card.ignores = vec![
@@ -697,7 +718,7 @@ mod tests {
             conflicts: true,
             ego_must_yield: true,
         };
-        // Standing 3 m from the line: it reaches it in sqrt(2·3/1.4) ≈ 2.1 s < 4.1 s.
+        // Standing 3 m from the line: it reaches it in sqrt(2·3/1.4) ≈ 2.1 s < 4.5 s.
         assert_eq!(
             m.may_enter(&ego(5.0), &j, &[opposing(3.0, 0.0)], &WeatherState::CLEAR),
             EntryDecision::Stop { gap_m: 18.0 }
@@ -705,6 +726,34 @@ mod tests {
         // Standing 60 m back: 9.3 s away, a gap the turn can take.
         assert_eq!(
             m.may_enter(&ego(5.0), &j, &[opposing(60.0, 0.0)], &WeatherState::CLEAR),
+            EntryDecision::Proceed
+        );
+    }
+
+    #[test]
+    fn a_permitted_left_takes_the_hcm_signalised_critical_headway() {
+        // An opposing car at 10 m/s, accelerating at 1.4 m/s², 56 m from the line reaches
+        // it in 4.34 s: a gap the two-way-stop major-street value (4.1 s) accepts and the
+        // HCM signalised procedure's 4.5 s does not. From 61 m it takes 4.62 s.
+        let m = FixedTimeSignals::default();
+        let mut j = junction(Some(SignalState::GreenYield), 20.0);
+        j.movement = TurnDirection::Left;
+        let opposing = |gap: f64| ConflictView {
+            actor: ActorId::new(9),
+            stop_line_gap_m: gap,
+            speed_mps: 10.0,
+            heading_rad: core::f64::consts::PI,
+            movement: TurnDirection::Straight,
+            movement_lane: Some(LaneId::new(2)),
+            conflicts: true,
+            ego_must_yield: true,
+        };
+        assert_eq!(
+            m.may_enter(&ego(5.0), &j, &[opposing(56.0)], &WeatherState::CLEAR),
+            EntryDecision::Stop { gap_m: 18.0 }
+        );
+        assert_eq!(
+            m.may_enter(&ego(5.0), &j, &[opposing(61.0)], &WeatherState::CLEAR),
             EntryDecision::Proceed
         );
     }
