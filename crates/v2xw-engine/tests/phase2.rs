@@ -392,6 +392,33 @@ fn the_default_scenario_runs_the_credential_system_with_roadside_units() {
     assert!(p.detection_on());
 }
 
+/// The strategy study loads and builds under every strategy it sweeps, with and without a
+/// silent period, and a strategy or a silent period the engine cannot act on is refused
+/// rather than run as something else.
+#[test]
+fn the_strategy_study_builds_under_every_strategy_and_refuses_what_it_cannot_do() {
+    let base = rooted(
+        Scenario::load(scenarios().join("pseudonym-strategies.yaml")).expect("the study loads"),
+    );
+    for strategy in ["time", "distance", "c2c-cc", "mix-zone", "silent"] {
+        for silent in [None, Some(vec![3.0, 13.0])] {
+            let mut s = base.clone();
+            s.security.pseudonym_change.strategy = strategy.to_string();
+            s.security.pseudonym_change.silent_period_s = silent.clone();
+            let errors = v2xw_engine::scenario::validate::validate(&s);
+            assert!(errors.is_empty(), "{strategy} {silent:?}: {errors:?}");
+            Engine::build(s, "").unwrap_or_else(|e| panic!("{strategy} {silent:?}: {e}"));
+        }
+    }
+    let mut unknown = base.clone();
+    unknown.security.pseudonym_change.strategy = "adaptive".to_string();
+    assert!(!v2xw_engine::scenario::validate::validate(&unknown).is_empty());
+    let mut backwards = base.clone();
+    backwards.security.pseudonym_change.silent_period_s = Some(vec![13.0, 3.0]);
+    assert!(!v2xw_engine::scenario::validate::validate(&backwards).is_empty());
+    assert!(Engine::build(backwards, "").is_err());
+}
+
 #[test]
 #[ignore = "diagnostic"]
 fn diag_print_report() {
