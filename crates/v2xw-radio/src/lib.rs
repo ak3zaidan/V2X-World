@@ -103,6 +103,7 @@
 #![forbid(unsafe_code)]
 
 pub mod abstract_tier;
+pub mod antenna;
 pub mod bler;
 pub mod bler_nr;
 pub mod budget;
