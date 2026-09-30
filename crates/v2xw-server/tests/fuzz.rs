@@ -161,7 +161,11 @@ fn the_five_qa_causes_are_refused_by_their_setting_through_check_apply_and_run()
     let run = serve(&scenario("five", 2));
     let running = ok(&run, "scenario.get", json!({}))["scenario"].clone();
     let osm = |doc: &mut Value, path: &str| {
-        set_at(doc, "/world/source", json!({"kind": "osm-xml", "path": path}));
+        set_at(
+            doc,
+            "/world/source",
+            json!({"kind": "osm-xml", "path": path}),
+        );
         set_at(doc, "/world/highway_preset", json!("urban-us-nyc"));
     };
     type Edit = Box<dyn Fn(&mut Value)>;
@@ -228,13 +232,19 @@ fn the_five_qa_causes_are_refused_by_their_setting_through_check_apply_and_run()
             json!({"scenario": doc, "validate": false}),
         );
         assert_eq!(apply["valid"], false, "{what}: Apply accepted it: {apply}");
-        assert!(rows_of(&apply).iter().any(|(p, _)| p == field), "{what}: {apply}");
+        assert!(
+            rows_of(&apply).iter().any(|(p, _)| p == field),
+            "{what}: {apply}"
+        );
 
         // Run, with the document inline: `-32004` naming the field, never `-32603`.
         let refused = call(&run, "run.start", json!({"paused": true, "scenario": doc}))
             .expect_err(&format!("{what}: Run started"));
         assert_eq!(refused["code"], -32004, "{what}: {refused}");
-        assert!(rows_of(&refused).iter().any(|(p, _)| p == field), "{what}: {refused}");
+        assert!(
+            rows_of(&refused).iter().any(|(p, _)| p == field),
+            "{what}: {refused}"
+        );
 
         // And the run on screen is untouched: not in `error`, and it still steps.
         let status = ok(&run, "run.status", json!({}));
@@ -279,10 +289,69 @@ fn a_refusal_found_while_building_is_the_users_and_the_next_run_recovers() {
     assert_eq!(step["code"], -32002, "not an internal error: {step}");
 
     // Fixed, it runs.
-    ok(&run, "run.start", json!({"paused": true, "scenario": running}));
+    ok(
+        &run,
+        "run.start",
+        json!({"paused": true, "scenario": running}),
+    );
     ok(&run, "run.resume", json!({}));
     let done = drive_to_end(&run);
     assert_eq!(done["state"], "finished", "{done}");
+}
+
+/// The history kept for seeking is bounded by memory as well as by step count. Before the
+/// byte budget a step carried every reception record and the count alone let an hour of the
+/// SCMS lifecycle grow to gigabytes (the long soak measured 1.8 MB per simulated second).
+/// Here a 64 kB budget on a 20 s run: the run still streams to its end, the retained bytes
+/// stay within the budget plus one step, the oldest steps are dropped, and a seek before
+/// them is refused with the range (`-32003`) rather than failing.
+#[test]
+fn the_seek_history_is_bounded_by_memory_and_a_seek_before_it_is_refused() {
+    let path = scenario("retain-bytes", 20);
+    let engine = LiveEngine::open(
+        &path,
+        LiveOptions {
+            build_utc: "2026-09-30T00:00:00Z".to_string(),
+            paused: true,
+            speed: 0.0,
+            retain_bytes: 64 * 1024,
+            ..LiveOptions::default()
+        },
+    )
+    .expect("build");
+    let world_json = engine.world_json().to_string();
+    let run = Run::new(Box::new(engine), world_json).expect("run");
+    ok(&run, "run.start", json!({"paused": true, "speed": 0}));
+    ok(&run, "run.resume", json!({}));
+    let done = drive_to_end(&run);
+    assert_eq!(done["state"], "finished", "{done}");
+    assert!(done["engine"]["output_digest"].is_string(), "{done}");
+    let kept = done["engine"]["retained_bytes"]
+        .as_u64()
+        .expect("retained_bytes");
+    let steps = done["engine"]["retained_steps"]
+        .as_u64()
+        .expect("retained_steps");
+    assert!(
+        steps < 201,
+        "all 201 steps were kept under a 64 kB budget: {done}"
+    );
+    // Steps the stream has not reached yet are never dropped (the lookahead's worth may sit
+    // above the budget for a moment), so the bound checked is loose; the default 1 GiB
+    // budget would have kept every step of this run.
+    assert!(
+        kept <= 8 * 64 * 1024,
+        "{kept} bytes retained against a 64 kB budget: {done}"
+    );
+    let (min_ns, _) = run.seek_range();
+    assert!(min_ns > 0, "the oldest steps were dropped: {done}");
+    // A seek before the window, on a connection as the page makes it.
+    let mut session = Session::new(ConnectParams::default(), &run.descriptor());
+    session.regreet(&run).expect("greet");
+    let refused = call_on(&run, Some(&mut session), "run.seek", json!({"t_ns": 0}))
+        .expect_err("a seek before the retained window");
+    assert_eq!(refused["code"], -32003, "{refused}");
+    assert_eq!(refused["data"]["min_ns"], json!(min_ns), "{refused}");
 }
 
 // --- the fuzzer ------------------------------------------------------------------------
@@ -362,8 +431,8 @@ fn leaf_value(rng: &mut Rng, field: &Value) -> Value {
 
 /// The error codes §6.4 defines; anything else is a server bug.
 const CODES: [i64; 20] = [
-    -32700, -32600, -32601, -32602, -32000, -32001, -32002, -32003, -32004, -32005, -32006,
-    -32007, -32008, -32009, -32010, -32011, -32013, -32040, -32041, -32050,
+    -32700, -32600, -32601, -32602, -32000, -32001, -32002, -32003, -32004, -32005, -32006, -32007,
+    -32008, -32009, -32010, -32011, -32013, -32040, -32041, -32050,
 ];
 
 /// One random call: a method and its parameters, some well formed and some not.
@@ -391,7 +460,12 @@ fn random_call(rng: &mut Rng, fields: &[Value], out_dir: &Path, t_end_ns: u64) -
         12 => rng.pick(&["run.stop", "run.status", "scenario.get"]),
         13 => rng.pick(&["inspect.node", "inspect.link", "inspect.entity", "explain"]),
         14 => rng.pick(&["metrics.query", "metrics.plot"]),
-        15 => rng.pick(&["events.set", "scenario.load", "scenario.list", "scenario.schema"]),
+        15 => rng.pick(&[
+            "events.set",
+            "scenario.load",
+            "scenario.list",
+            "scenario.schema",
+        ]),
         16 => rng.pick(&["world.generate", "world.import_osm", "rpc.discover"]),
         17 => rng.pick(&[
             "export.dataset",
@@ -446,7 +520,13 @@ fn random_call(rng: &mut Rng, fields: &[Value], out_dir: &Path, t_end_ns: u64) -
             }
             if rng.chance(30) {
                 p["seed"] = rng
-                    .pick(&[json!(7), json!("0xBEEF"), json!("nope"), json!(-5), json!(1.5)])
+                    .pick(&[
+                        json!(7),
+                        json!("0xBEEF"),
+                        json!("nope"),
+                        json!(-5),
+                        json!(1.5),
+                    ])
                     .clone();
             }
             p
@@ -485,8 +565,12 @@ fn random_call(rng: &mut Rng, fields: &[Value], out_dir: &Path, t_end_ns: u64) -
             "t0_ns": 0, "t1_ns": t_end_ns,
         }),
         "events.set" => json!({"list": rng.chance(50), "subscribe": ["pdr"], "only": ["x"]}),
-        "scenario.load" => json!({"path": rng.pick(&["stub/grid", "no/such.yaml", "", "../../etc/passwd"])}),
-        "scenario.list" => json!({"kind": rng.pick(&["all", "presets", "bogus"]), "limit": rng.below(5)}),
+        "scenario.load" => {
+            json!({"path": rng.pick(&["stub/grid", "no/such.yaml", "", "../../etc/passwd"])})
+        }
+        "scenario.list" => {
+            json!({"kind": rng.pick(&["all", "presets", "bogus"]), "limit": rng.below(5)})
+        }
         "scenario.schema" => json!({"sections": [rng.pick(&["fields", "bogus", "version"])]}),
         "world.generate" => json!({
             "kind": rng.pick(&["grid", "ring", "bogus"]),
@@ -577,7 +661,10 @@ fn fuzz(seed: u64, iters: usize) {
                     if result["valid"] == true {
                         assert_eq!(after["hash"], result["hash"], "{line}\n{after}");
                     } else {
-                        assert_eq!(after["hash"], before["hash"], "a refused edit changed the next run: {line}");
+                        assert_eq!(
+                            after["hash"], before["hash"],
+                            "a refused edit changed the next run: {line}"
+                        );
                     }
                 }
             }
@@ -589,7 +676,10 @@ fn fuzz(seed: u64, iters: usize) {
                     "internal error for user input: {error}\nafter:\n{}",
                     log.join("\n")
                 );
-                assert!(CODES.contains(&code), "unknown error code {code}: {error}\n{line}");
+                assert!(
+                    CODES.contains(&code),
+                    "unknown error code {code}: {error}\n{line}"
+                );
                 if matches!(code, -32602 | -32004) {
                     // A refusal names what to fix.
                     let rows = error["data"]
@@ -601,7 +691,8 @@ fn fuzz(seed: u64, iters: usize) {
                     assert!(!rows.is_empty(), "a refusal with no row: {error}\n{line}");
                     for r in &rows {
                         assert!(
-                            r["path"].is_string() && !r["message"].as_str().unwrap_or("").is_empty(),
+                            r["path"].is_string()
+                                && !r["message"].as_str().unwrap_or("").is_empty(),
                             "a row with no path or message: {error}\n{line}"
                         );
                     }
@@ -632,7 +723,11 @@ fn fuzz(seed: u64, iters: usize) {
     // the digest it had before the fuzzing.
     let _ = call(&run, "run.pause", json!({}));
     ok(&run, "scenario.set", json!({"scenario": original}));
-    ok(&run, "run.start", json!({"paused": true, "speed": 0, "seed": original["seed"]}));
+    ok(
+        &run,
+        "run.start",
+        json!({"paused": true, "speed": 0, "seed": original["seed"]}),
+    );
     ok(&run, "run.resume", json!({}));
     let last = drive_to_end(&run);
     assert_eq!(last["state"], "finished", "{last}");

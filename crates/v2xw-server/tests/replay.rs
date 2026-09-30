@@ -338,8 +338,8 @@ async fn a_replay_server_serves_the_world_and_the_control_surface() {
 fn a_real_run_replays_byte_identically_from_its_recording() {
     use v2xw_server::live::{LiveEngine, LiveOptions};
 
-    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../scenarios/phase1-grid.yaml");
+    let source =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/phase1-grid.yaml");
     let text = std::fs::read_to_string(&source)
         .expect("phase1-grid.yaml")
         .replace("duration_s: 60.0", "duration_s: 3.0")
@@ -430,7 +430,11 @@ fn a_real_run_replays_byte_identically_from_its_recording() {
     };
     let a = comparable(poses(&streamed));
     let b = comparable(poses(&replayed));
-    assert!(a.len() > steps / 2, "{} pose frames for {steps} steps", a.len());
+    assert!(
+        a.len() > steps / 2,
+        "{} pose frames for {steps} steps",
+        a.len()
+    );
     assert_eq!(b.len(), a.len(), "the replay carries as many pose frames");
     for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
         assert_eq!(x, y, "canonical frame {i} differs between live and replay");
