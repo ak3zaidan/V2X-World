@@ -106,17 +106,13 @@ impl Track {
             return *self;
         }
         let a = self.accel_mps2;
-        let (t_stop, dist) = if a < 0.0 && self.speed_mps > 0.0 {
-            let t = self.speed_mps / -a;
-            if t < dt {
-                (t, self.speed_mps * t + 0.5 * a * t * t)
-            } else {
-                (dt, self.speed_mps * dt + 0.5 * a * dt * dt)
-            }
+        // A decelerating track stops and stays stopped; it never reverses.
+        let moving_for = if a < 0.0 && self.speed_mps > 0.0 {
+            dt.min(self.speed_mps / -a)
         } else {
-            (dt, self.speed_mps * dt + 0.5 * a * dt * dt)
+            dt
         };
-        let _ = t_stop;
+        let dist = (self.speed_mps * moving_for + 0.5 * a * moving_for * moving_for).max(0.0);
         let (c, s) = self.dir();
         Track {
             pos: Vec3::new(self.pos.x + c * dist, self.pos.y + s * dist, self.pos.z),
@@ -141,7 +137,7 @@ pub fn time_to_collision(gap_m: f64, ego_v: f64, lead_v: f64, lead_a: f64) -> f6
     if gap_m <= 0.0 {
         return 0.0;
     }
-    let mut t = 0.0;
+    let mut t: f64 = 0.0;
     let dt = 0.05;
     while t <= 10.0 {
         let lead_travel = if lead_a < 0.0 && lead_v > 0.0 {

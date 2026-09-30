@@ -1121,25 +1121,25 @@ impl Engine {
             dcc: crate::wiring::build_dcc(&scenario_for_radio),
             actors: BTreeMap::new(),
             node_actor: BTreeMap::new(),
-            app_truth: if scenario.apps.enabled.is_empty() {
+            app_truth: if scenario_for_radio.apps.enabled.is_empty() {
                 crate::app_truth::AppTruth::default()
             } else {
-                crate::app_truth::AppTruth::new(crate::wiring::app_params(&scenario))
+                crate::app_truth::AppTruth::new(crate::wiring::app_params(&scenario_for_radio))
             },
             glosa: GlosaDrivers {
-                compliance: if scenario.apps.runs("glosa") {
-                    scenario.apps.glosa_compliance
+                compliance: if scenario_for_radio.apps.runs("glosa") {
+                    scenario_for_radio.apps.glosa_compliance
                 } else {
                     0.0
                 },
-                seed: scenario.seed,
+                seed: scenario_for_radio.seed,
                 decided: BTreeMap::new(),
                 capped: BTreeMap::new(),
             },
             priority: crate::priority::PriorityControllers::new(
                 crate::priority::PriorityParams::default(),
             ),
-            perception: scenario
+            perception: scenario_for_radio
                 .messages
                 .sets
                 .iter()
@@ -1209,6 +1209,8 @@ impl Engine {
             multipliers: BTreeMap::new(),
             rate_ratio: 1.0,
             base_rate: crate::timeline::base_rate_veh_per_h(&engine.scenario),
+            broken_down: BTreeMap::new(),
+            hazard_lights: BTreeSet::new(),
         };
         let phase2 = crate::phase2::Phase2::build(&engine.scenario, &engine.world)?;
         engine.phase2 = phase2;
