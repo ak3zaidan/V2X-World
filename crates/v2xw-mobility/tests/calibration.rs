@@ -46,7 +46,15 @@ fn print(report: &CalibrationReport) {
     eprintln!(
         "free-flow ratio p15/p50/p85 {:.2}/{:.2}/{:.2}; permitted-left lags accepted mean {:.2} \
          p15 {:.2} [{}], rejected mean {:.2} p85 {:.2} [{}]; stop decel p50 {:.2}",
-        f.p15, f.p50, f.p85, acc.mean, acc.p15, acc.n, rej.mean, rej.p85, rej.n,
+        f.p15,
+        f.p50,
+        f.p85,
+        acc.mean,
+        acc.p15,
+        acc.n,
+        rej.mean,
+        rej.p85,
+        rej.n,
         report.stop_decel_mps2.p50
     );
     eprintln!(
@@ -78,7 +86,10 @@ fn hold(comparisons: &[Comparison], names: &[&str], min_samples: usize) {
             )
         })
         .collect();
-    assert!(failing.is_empty(), "outside the published band: {failing:#?}");
+    assert!(
+        failing.is_empty(),
+        "outside the published band: {failing:#?}"
+    );
 }
 
 #[test]

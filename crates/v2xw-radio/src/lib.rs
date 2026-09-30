@@ -184,13 +184,11 @@ pub use terrain::{
     radio_line_height_m,
 };
 
-pub use bler_nr::{
-    NrCurveSource, NrEnvironment, NrLinkCondition, NrLinkState, nr_mcs_table2,
-};
 pub use bler::{
     BlerCurve, CurveProvenance, SeAnchor, SeGapFit, SidelinkErrorModel, WILAB_LTE_SINR_AT_10PC,
     WilabRow, cited_anchors, wilab_sinr_at_10pc,
 };
+pub use bler_nr::{NrCurveSource, NrEnvironment, NrLinkCondition, NrLinkState, nr_mcs_table2};
 pub use cellular::{
     CellCapacityUu, CellPlan, CellQuality, CellView, CellularUu, Direction, FixedLatencyUu,
     HandoverKind, HandoverOutageUu, LatencySpec, MecPlacement, Qos, RadioLatencyClass, SendOutcome,

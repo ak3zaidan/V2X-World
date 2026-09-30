@@ -33,7 +33,10 @@ fn node(id: i64, lat: f64, lon: f64, tags: &[(&str, &str)]) -> String {
 }
 
 fn way(id: i64, nodes: &[i64], tags: &[(&str, &str)]) -> String {
-    let refs: String = nodes.iter().map(|n| format!("  <nd ref=\"{n}\"/>\n")).collect();
+    let refs: String = nodes
+        .iter()
+        .map(|n| format!("  <nd ref=\"{n}\"/>\n"))
+        .collect();
     let inner: String = tags
         .iter()
         .map(|(k, v)| format!("  <tag k=\"{k}\" v=\"{v}\"/>\n"))
@@ -57,7 +60,11 @@ const AVENUE: &[(&str, &str)] = &[
 /// A one-way avenue running north through a crossroads with a two-way street, the
 /// crossroads signalised when `signals`.
 fn avenue_crossroads(signals: bool) -> String {
-    let centre: &[(&str, &str)] = if signals { &[("highway", "traffic_signals")] } else { &[] };
+    let centre: &[(&str, &str)] = if signals {
+        &[("highway", "traffic_signals")]
+    } else {
+        &[]
+    };
     [
         node(1, -0.001, 0.0, &[]),
         node(2, 0.0, 0.0, centre),
@@ -69,7 +76,11 @@ fn avenue_crossroads(signals: bool) -> String {
         way(
             12,
             &[4, 2, 5],
-            &[("highway", "residential"), ("lanes", "2"), ("name", "East 50th Street")],
+            &[
+                ("highway", "residential"),
+                ("lanes", "2"),
+                ("name", "East 50th Street"),
+            ],
         ),
     ]
     .concat()
@@ -91,7 +102,11 @@ fn an_avenue_carries_its_bus_lane_track_and_parking() {
         .iter()
         .filter(|e| e.lanes.len() == 7)
         .min_by(|a, b| {
-            world.lane(a.lanes[0]).start().y.total_cmp(&world.lane(b.lanes[0]).start().y)
+            world
+                .lane(a.lanes[0])
+                .start()
+                .y
+                .total_cmp(&world.lane(b.lanes[0]).start().y)
         })
         .expect("the southern block's edge");
     let kinds: Vec<LaneKind> = edge.lanes.iter().map(|l| world.lane(*l).kind).collect();
@@ -116,14 +131,25 @@ fn an_avenue_carries_its_bus_lane_track_and_parking() {
     assert!((lane(6).width_m - 1.524).abs() < 1e-9);
     // Right to left along +x (the avenue runs north, so its left is west, -x).
     for k in 1..7 {
-        assert!(lane(k).start().x < lane(k - 1).start().x, "lane {k} is left of lane {}", k - 1);
+        assert!(
+            lane(k).start().x < lane(k - 1).start().x,
+            "lane {k} is left of lane {}",
+            k - 1
+        );
     }
-    let gap = (lane(5).start().x - 0.5 * lane(5).width_m) - (lane(6).start().x + 0.5 * lane(6).width_m);
-    assert!((gap - 0.914).abs() < 1e-6, "the track's buffer is 3 ft, got {gap}");
+    let gap =
+        (lane(5).start().x - 0.5 * lane(5).width_m) - (lane(6).start().x + 0.5 * lane(6).width_m);
+    assert!(
+        (gap - 0.914).abs() < 1e-6,
+        "the track's buffer is 3 ft, got {gap}"
+    );
     // Nobody drives in a parking lane; buses only in the bus lane; bicycles on the track.
     assert_eq!(lane(0).allowed, ClassMask::NONE);
     assert!(lane(1).admits(ClassMask::BUS) && !lane(1).admits(ClassMask::CAR));
-    assert!(!lane(1).admits(ClassMask::BICYCLE), "the avenue has a track, so no bikes in the bus lane");
+    assert!(
+        !lane(1).admits(ClassMask::BICYCLE),
+        "the avenue has a track, so no bikes in the bus lane"
+    );
     assert_eq!(lane(6).allowed, ClassMask::BICYCLE);
 
     // At the crossroads: no connection leaves a parking lane; cars never enter the bus lane
@@ -132,9 +158,18 @@ fn an_avenue_carries_its_bus_lane_track_and_parking() {
         let from = world.lane(c.from_lane);
         let to = world.lane(c.to_lane);
         assert_ne!(from.kind, LaneKind::Parking, "a parking lane goes nowhere");
-        assert_ne!(to.kind, LaneKind::Parking, "nothing drives into a parking lane");
+        assert_ne!(
+            to.kind,
+            LaneKind::Parking,
+            "nothing drives into a parking lane"
+        );
         if from.kind == LaneKind::Driving {
-            assert!(to.admits(ClassMask::CAR), "a car from lane {} is sent into {:?}", from.id.index(), to.kind);
+            assert!(
+                to.admits(ClassMask::CAR),
+                "a car from lane {} is sent into {:?}",
+                from.id.index(),
+                to.kind
+            );
         }
         if let Some(via) = c.via {
             let v = world.lane(via);
@@ -149,9 +184,11 @@ fn an_avenue_carries_its_bus_lane_track_and_parking() {
         .filter(|c| c.from_lane == edge.lanes[6])
         .collect();
     assert!(
-        track_out.iter().any(|c| c.direction == TurnDirection::Straight
-            && world.lane(c.to_lane).kind == LaneKind::Cycle
-            && c.via.is_some()),
+        track_out
+            .iter()
+            .any(|c| c.direction == TurnDirection::Straight
+                && world.lane(c.to_lane).kind == LaneKind::Cycle
+                && c.via.is_some()),
         "the track continues through the junction: {track_out:?}"
     );
     assert!(world.validate().is_ok());
@@ -163,11 +200,13 @@ fn an_avenue_carries_its_bus_lane_track_and_parking() {
     plain.cross_section.parking_lanes = false;
     let (world, report) = import_with(&document(&avenue_crossroads(false)), &plain);
     assert_eq!(report.counts.bus_lanes + report.counts.parking_lanes, 0);
-    assert!(world
-        .roads
-        .lanes()
-        .iter()
-        .all(|l| matches!(l.kind, LaneKind::Driving | LaneKind::Internal)));
+    assert!(
+        world
+            .roads
+            .lanes()
+            .iter()
+            .all(|l| matches!(l.kind, LaneKind::Driving | LaneKind::Internal))
+    );
 }
 
 /// A street with a painted cycle lane on its right, between the parking lane and traffic.
@@ -192,7 +231,11 @@ fn a_car_turning_across_the_cycle_lane_beside_it_yields_to_it() {
         node(5, 0.0, 0.001, &[]),
         way(10, &[1, 2], LANE_STREET),
         way(11, &[2, 3], LANE_STREET),
-        way(12, &[4, 2, 5], &[("highway", "residential"), ("lanes", "2")]),
+        way(
+            12,
+            &[4, 2, 5],
+            &[("highway", "residential"), ("lanes", "2")],
+        ),
     ]
     .concat();
     let (world, _) = import_with(&document(&body), &opts());
@@ -204,16 +247,21 @@ fn a_car_turning_across_the_cycle_lane_beside_it_yields_to_it() {
         .expect("the crossroads");
     let movement = |pred: &dyn Fn(LaneKind, TurnDirection) -> bool| {
         junction.internal.iter().position(|via| {
-            world.roads.connections().iter().any(|c| {
-                c.via == Some(*via) && pred(world.lane(c.from_lane).kind, c.direction)
-            })
+            world
+                .roads
+                .connections()
+                .iter()
+                .any(|c| c.via == Some(*via) && pred(world.lane(c.from_lane).kind, c.direction))
         })
     };
     let right = movement(&|k, d| k == LaneKind::Driving && d == TurnDirection::Right)
         .expect("a right turn off the street");
     let bike = movement(&|k, d| k == LaneKind::Cycle && d == TurnDirection::Straight)
         .expect("the cycle lane going straight on");
-    assert!(junction.conflicts.is_foe(right, bike), "the right turn crosses the cycle lane");
+    assert!(
+        junction.conflicts.is_foe(right, bike),
+        "the right turn crosses the cycle lane"
+    );
     assert!(junction.conflicts.must_yield(right, bike));
     assert!(!junction.conflicts.must_yield(bike, right));
 }
@@ -223,20 +271,34 @@ fn the_green_is_shared_by_lanes_and_leaves_pedestrians_time_to_cross() {
     let (world, _) = import_with(&document(&avenue_crossroads(true)), &opts());
     let plan = &world.signals[0];
     assert!((plan.total_phase_duration_s() - plan.cycle_s).abs() < 1e-6);
-    assert!((plan.cycle_s - 90.0).abs() < 1e-6, "the 90 s target cycle is met: {}", plan.cycle_s);
+    assert!(
+        (plan.cycle_s - 90.0).abs() < 1e-6,
+        "the 90 s target cycle is met: {}",
+        plan.cycle_s
+    );
     // Phase 0 is the avenue's green: its four traffic lanes outweigh the street's one.
     let greens: Vec<(usize, f64)> = plan
         .phases
         .iter()
         .enumerate()
-        .filter(|(_, p)| p.states.iter().any(|s| matches!(s, SignalState::Green | SignalState::GreenYield)))
+        .filter(|(_, p)| {
+            p.states
+                .iter()
+                .any(|s| matches!(s, SignalState::Green | SignalState::GreenYield))
+        })
         .map(|(i, p)| (i, p.duration_s))
         .collect();
     assert_eq!(greens.len(), 2);
     let movement_edge_is_avenue = |state_index: usize| {
         let via = plan.controlled[state_index];
-        let c = world.roads.connections().iter().find(|c| c.via == Some(via)).unwrap();
-        world.lane(c.from_lane).kind != LaneKind::Driving || world.edge(world.lane(c.from_lane).edge).lanes.len() > 3
+        let c = world
+            .roads
+            .connections()
+            .iter()
+            .find(|c| c.via == Some(via))
+            .unwrap();
+        world.lane(c.from_lane).kind != LaneKind::Driving
+            || world.edge(world.lane(c.from_lane).edge).lanes.len() > 3
     };
     let first_green_states = &plan.phases[greens[0].0].states;
     assert!(
@@ -248,13 +310,20 @@ fn the_green_is_shared_by_lanes_and_leaves_pedestrians_time_to_cross() {
         "the avenue runs first"
     );
     let (avenue, street) = (greens[0].1, greens[1].1);
-    assert!(avenue > 1.5 * street, "avenue {avenue} s against street {street} s");
+    assert!(
+        avenue > 1.5 * street,
+        "avenue {avenue} s against street {street} s"
+    );
     // The street's green lets a pedestrian cross the avenue: walk 7 s plus its width at
     // 3.5 ft/s, less the street phase's yellow and all-red.
     let street_phase = greens[1].0;
     let change: f64 = plan.phases[street_phase + 1..]
         .iter()
-        .take_while(|p| !p.states.iter().any(|s| matches!(s, SignalState::Green | SignalState::GreenYield)))
+        .take_while(|p| {
+            !p.states
+                .iter()
+                .any(|s| matches!(s, SignalState::Green | SignalState::GreenYield))
+        })
         .map(|p| p.duration_s)
         .sum();
     // Kerb to kerb: every lane of the avenue's edge (two parking lanes, the bus lane, three
@@ -268,7 +337,10 @@ fn the_green_is_shared_by_lanes_and_leaves_pedestrians_time_to_cross() {
         .fold(0.0, f64::max);
     assert!(avenue_width > 15.0, "{avenue_width}");
     let need = 7.0 + avenue_width / 1.067 - change;
-    assert!(street + 1e-6 >= need, "street green {street} s, pedestrians need {need} s");
+    assert!(
+        street + 1e-6 >= need,
+        "street green {street} s, pedestrians need {need} s"
+    );
 
     // Equal split, as netconvert: the avenue no longer outweighs the street.
     let mut equal = opts();
@@ -279,7 +351,11 @@ fn the_green_is_shared_by_lanes_and_leaves_pedestrians_time_to_cross() {
     let g: Vec<f64> = plan
         .phases
         .iter()
-        .filter(|p| p.states.iter().any(|s| matches!(s, SignalState::Green | SignalState::GreenYield)))
+        .filter(|p| {
+            p.states
+                .iter()
+                .any(|s| matches!(s, SignalState::Green | SignalState::GreenYield))
+        })
         .map(|p| p.duration_s)
         .collect();
     assert!((g[0] - g[1]).abs() < 1.0, "equal split {g:?}");
@@ -298,7 +374,11 @@ fn signals_along_an_avenue_run_a_green_wave() {
         body.push(way(
             c + 5,
             &[c + 1, c, c + 2],
-            &[("highway", "residential"), ("oneway", "yes"), ("lanes", "1")],
+            &[
+                ("highway", "residential"),
+                ("oneway", "yes"),
+                ("lanes", "1"),
+            ],
         ));
     }
     body.push(node(99, -0.003, 0.0, &[]));
@@ -306,7 +386,12 @@ fn signals_along_an_avenue_run_a_green_wave() {
     body.push(way(
         50,
         &[99, 100, 110, 120, 131],
-        &[("highway", "primary"), ("oneway", "yes"), ("lanes", "3"), ("maxspeed", "25 mph")],
+        &[
+            ("highway", "primary"),
+            ("oneway", "yes"),
+            ("lanes", "3"),
+            ("maxspeed", "25 mph"),
+        ],
     ));
     let xml = document(&body.concat());
     let (world, report) = import_with(&xml, &opts());
@@ -314,7 +399,11 @@ fn signals_along_an_avenue_run_a_green_wave() {
     assert_eq!(report.counts.signals_coordinated, 2);
     let mut plans: Vec<_> = world.signals.iter().collect();
     plans.sort_by(|a, b| {
-        world.junction(a.junction).position.y.total_cmp(&world.junction(b.junction).position.y)
+        world
+            .junction(a.junction)
+            .position
+            .y
+            .total_cmp(&world.junction(b.junction).position.y)
     });
     let v = 25.0 * 0.44704;
     for w in plans.windows(2) {
@@ -350,12 +439,24 @@ fn a_kiosk_on_the_carriageway_is_dropped_and_a_real_building_kept() {
     let body = [
         node(1, 0.0, -0.001, &[]),
         node(2, 0.0, 0.001, &[]),
-        way(10, &[1, 2], &[("highway", "residential"), ("oneway", "yes"), ("lanes", "2")]),
+        way(
+            10,
+            &[1, 2],
+            &[
+                ("highway", "residential"),
+                ("oneway", "yes"),
+                ("lanes", "2"),
+            ],
+        ),
         node(20, -2.0 * d, -0.0005, &[]),
         node(21, -2.0 * d, -0.0005 + 3.0 * d, &[]),
         node(22, 0.0, -0.0005 + 3.0 * d, &[]),
         node(23, 0.0, -0.0005, &[]),
-        way(30, &[20, 21, 22, 23, 20], &[("building", "yes"), ("shop", "newsagent")]),
+        way(
+            30,
+            &[20, 21, 22, 23, 20],
+            &[("building", "yes"), ("shop", "newsagent")],
+        ),
         node(40, -15.0 * d, 0.0004, &[]),
         node(41, -15.0 * d, 0.0004 + 30.0 * d, &[]),
         node(42, 15.0 * d, 0.0004 + 30.0 * d, &[]),
@@ -364,7 +465,12 @@ fn a_kiosk_on_the_carriageway_is_dropped_and_a_real_building_kept() {
     ]
     .concat();
     let (world, report) = import_with(&document(&body), &opts());
-    assert_eq!(report.anomaly(Anomaly::KioskOnCarriageway), 1, "{}", report.to_text());
+    assert_eq!(
+        report.anomaly(Anomaly::KioskOnCarriageway),
+        1,
+        "{}",
+        report.to_text()
+    );
     assert_eq!(world.buildings.len(), 1, "the block stays");
     assert!(world.validate().is_ok());
 }
@@ -380,7 +486,10 @@ fn the_validation_gate_fails_when_the_cross_section_regresses() {
     let (world, report) = import_with(&xml, &opts());
     let good = validate(
         &world,
-        Some(SourceLink { file: &file, edges: &report.edge_sources }),
+        Some(SourceLink {
+            file: &file,
+            edges: &report.edge_sources,
+        }),
         &ValidationParams::default(),
     );
     for check in [
@@ -404,11 +513,18 @@ fn the_validation_gate_fails_when_the_cross_section_regresses() {
     let (world, report) = import_with(&xml, &plain);
     let bad = validate(
         &world,
-        Some(SourceLink { file: &file, edges: &report.edge_sources }),
+        Some(SourceLink {
+            file: &file,
+            edges: &report.edge_sources,
+        }),
         &ValidationParams::default(),
     );
     let regressions = bad.regressions(&baseline);
-    for check in ["bus-lanes-mismatch", "cycle-lane-missing", "parking-lane-missing"] {
+    for check in [
+        "bus-lanes-mismatch",
+        "cycle-lane-missing",
+        "parking-lane-missing",
+    ] {
         assert!(
             regressions.iter().any(|r| r.starts_with(check)),
             "{check} did not regress: {regressions:?}"

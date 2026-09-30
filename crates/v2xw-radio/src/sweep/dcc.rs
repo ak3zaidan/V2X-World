@@ -102,8 +102,12 @@ impl Model {
         let t_off = match self {
             Model::Off => 0,
             Model::J(d) => d.itt(node).as_nanos(),
-            Model::A(d) => <AdaptiveDcc as Dcc<SweepCtx>>::state(d, node).t_off.as_nanos(),
-            Model::R(d) => <ReactiveDcc as Dcc<SweepCtx>>::state(d, node).t_off.as_nanos(),
+            Model::A(d) => <AdaptiveDcc as Dcc<SweepCtx>>::state(d, node)
+                .t_off
+                .as_nanos(),
+            Model::R(d) => <ReactiveDcc as Dcc<SweepCtx>>::state(d, node)
+                .t_off
+                .as_nanos(),
         };
         nominal.max(t_off)
     }
@@ -488,7 +492,11 @@ fn run(sweep: &HighwaySweep, cfg: DsrcConfig, dcc: SweepDcc, reception: bool) ->
         dcc: dcc.label(),
         density_veh_per_km: sweep.density_veh_per_km,
         vehicles: n,
-        mean_cbr: if cbr_n > 0 { cbr_sum / cbr_n as f64 } else { 0.0 },
+        mean_cbr: if cbr_n > 0 {
+            cbr_sum / cbr_n as f64
+        } else {
+            0.0
+        },
         peak_cbr,
         rate_hz: if n > 0 {
             counted as f64 / n as f64 / measured_s
@@ -559,10 +567,25 @@ mod tests {
             "off: light cbr {:.3}, heavy cbr {:.3} rate {:.2}",
             light.mean_cbr, heavy.mean_cbr, heavy.rate_hz
         );
-        assert!(light.mean_cbr < 0.3, "light unregulated load {}", light.mean_cbr);
-        assert!(heavy.mean_cbr > 0.75, "heavy unregulated load {}", heavy.mean_cbr);
-        assert!((heavy.rate_hz - 10.0).abs() < 0.5, "unregulated rate {}", heavy.rate_hz);
-        assert!(heavy.bins.iter().all(|b| b.evaluated == 0), "the load run evaluates no reception");
+        assert!(
+            light.mean_cbr < 0.3,
+            "light unregulated load {}",
+            light.mean_cbr
+        );
+        assert!(
+            heavy.mean_cbr > 0.75,
+            "heavy unregulated load {}",
+            heavy.mean_cbr
+        );
+        assert!(
+            (heavy.rate_hz - 10.0).abs() < 0.5,
+            "unregulated rate {}",
+            heavy.rate_hz
+        );
+        assert!(
+            heavy.bins.iter().all(|b| b.evaluated == 0),
+            "the load run evaluates no reception"
+        );
 
         let adaptive = load(400.0, SweepDcc::EtsiAdaptive);
         eprintln!(
@@ -582,7 +605,11 @@ mod tests {
             "reactive: cbr {:.3} peak {:.3} rate {:.2}",
             reactive.mean_cbr, reactive.peak_cbr, reactive.rate_hz
         );
-        assert!(reactive.mean_cbr < heavy.mean_cbr - 0.05, "{}", reactive.mean_cbr);
+        assert!(
+            reactive.mean_cbr < heavy.mean_cbr - 0.05,
+            "{}",
+            reactive.mean_cbr
+        );
         assert!(reactive.rate_hz < 5.5, "reactive rate {}", reactive.rate_hz);
 
         let j2945 = load(400.0, SweepDcc::SaeJ2945);
@@ -602,8 +629,8 @@ mod tests {
         );
         assert!(j2945.mean_cbr < heavy.mean_cbr - 0.05, "{}", j2945.mean_cbr);
         // Power follows Eq. 9 for the load it measured: 20 dBm up to 50 %, 10 dBm from 80 %.
-        let want_rp = J2945Params::J2945_1.rp_max_dbm
-            - 10.0 * ((j2945.mean_cbr - 0.5) / 0.3).clamp(0.0, 1.0);
+        let want_rp =
+            J2945Params::J2945_1.rp_max_dbm - 10.0 * ((j2945.mean_cbr - 0.5) / 0.3).clamp(0.0, 1.0);
         assert!(
             (j2945.mean_eirp_dbm - want_rp).abs() < 2.0,
             "J2945/1 power {:.1} dBm against f(CBP) {want_rp:.1} dBm",
@@ -611,9 +638,16 @@ mod tests {
         );
 
         // At a light load nobody is throttled.
-        for dcc in [SweepDcc::SaeJ2945, SweepDcc::EtsiAdaptive, SweepDcc::EtsiReactive] {
+        for dcc in [
+            SweepDcc::SaeJ2945,
+            SweepDcc::EtsiAdaptive,
+            SweepDcc::EtsiReactive,
+        ] {
             let r = load(40.0, dcc);
-            assert!((r.rate_hz - 10.0).abs() < 0.5, "{dcc:?} throttles a light load: {r:?}");
+            assert!(
+                (r.rate_hz - 10.0).abs() < 0.5,
+                "{dcc:?} throttles a light load: {r:?}"
+            );
         }
     }
 

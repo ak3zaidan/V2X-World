@@ -1263,7 +1263,9 @@ mod tests {
         let mut open = RngStream::derive(21, d, link);
         let mut state = 0x9E37_79B9_7F4A_7C15u64;
         for round in 0..400 {
-            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             let mut guard = reg.checkout(d, link);
             for k in 0..(state >> 58) {
                 match (state >> (k % 60)) & 3 {
@@ -1287,9 +1289,15 @@ mod tests {
         assert_eq!(reg.stream(d, link).u64(), open.u64());
         assert_eq!(reg.checkout(d, link).u64(), open.u64());
         // What the cache holds per key, against the stream it replaces.
-        let (slot, live) = (core::mem::size_of::<Slot>(), core::mem::size_of::<RngStream>());
+        let (slot, live) = (
+            core::mem::size_of::<Slot>(),
+            core::mem::size_of::<RngStream>(),
+        );
         eprintln!("cache value {slot} bytes; a live stream {live} bytes");
-        assert!(slot * 4 < live, "a parked slot ({slot} B) is not much smaller than a stream ({live} B)");
+        assert!(
+            slot * 4 < live,
+            "a parked slot ({slot} B) is not much smaller than a stream ({live} B)"
+        );
         // A node's stream is not a link's, and stays live.
         let node = EntityRef::Node(NodeId::new(3));
         let _ = reg.checkout(d, node).u64();
@@ -1315,19 +1323,30 @@ mod tests {
         let mut kept = RngRegistry::new(9);
         let mut swept = RngRegistry::new(9);
         for reg in [&mut kept, &mut swept] {
-            for e in [link(1, 2), link(2, 1), link(3, 4), EntityRef::Node(NodeId::new(1))] {
+            for e in [
+                link(1, 2),
+                link(2, 1),
+                link(3, 4),
+                EntityRef::Node(NodeId::new(1)),
+            ] {
                 let _ = reg.stream(d, e).u64();
             }
         }
         let _ = swept.stream(d, link(1, 5)).u64();
-        let dropped = swept.forget_where(|_, e| {
-            matches!(e, EntityRef::Link(l) if l.tx().index() == 1 || l.rx().index() == 1)
-        });
+        let dropped = swept.forget_where(
+            |_, e| matches!(e, EntityRef::Link(l) if l.tx().index() == 1 || l.rx().index() == 1),
+        );
         assert_eq!(dropped, 3, "(1,2), (2,1) and (1,5)");
         assert!(!swept.contains(d, link(1, 2)));
-        assert!(swept.contains(d, EntityRef::Node(NodeId::new(1))), "only links were asked for");
+        assert!(
+            swept.contains(d, EntityRef::Node(NodeId::new(1))),
+            "only links were asked for"
+        );
         // Every surviving stream continues exactly where the unswept registry's does.
-        assert_eq!(swept.stream(d, link(3, 4)).u64(), kept.stream(d, link(3, 4)).u64());
+        assert_eq!(
+            swept.stream(d, link(3, 4)).u64(),
+            kept.stream(d, link(3, 4)).u64()
+        );
         assert_eq!(
             swept.stream(d, EntityRef::Node(NodeId::new(1))).u64(),
             kept.stream(d, EntityRef::Node(NodeId::new(1))).u64()

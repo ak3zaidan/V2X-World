@@ -1177,7 +1177,10 @@ mod tests {
         assert!(s.active().is_some());
         // The instant the window closes, the sweep takes it out of use.
         s.sweep(100 * NS_PER_S, &crl);
-        assert!(s.active().is_none(), "an expired pseudonym is still signing");
+        assert!(
+            s.active().is_none(),
+            "an expired pseudonym is still signing"
+        );
         // A due change finds nothing usable, and the expired one is not put back.
         assert!(s.rotate(100 * NS_PER_S).is_some());
         assert!(s.active().is_none());

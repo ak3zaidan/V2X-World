@@ -78,7 +78,7 @@ pub mod inspect;
 pub mod ts102941;
 
 pub use ts102941::{
-    CA_CRL_REVOCATION, DEFERRED_FLOWS, ETSI_TS102941_ID, EtsiNodes, EtsiParams, EtsiRun, EtsiSizes,
-    AaState, EtsiTs102941, FLOWS, PASSIVE_REVOCATION, SEPARATIONS, SealedForEa, TrustListKind, Ts102941Msg,
-    all_flows,
+    AaState, CA_CRL_REVOCATION, DEFERRED_FLOWS, ETSI_TS102941_ID, EtsiNodes, EtsiParams, EtsiRun,
+    EtsiSizes, EtsiTs102941, FLOWS, PASSIVE_REVOCATION, SEPARATIONS, SealedForEa, TrustListKind,
+    Ts102941Msg, all_flows,
 };

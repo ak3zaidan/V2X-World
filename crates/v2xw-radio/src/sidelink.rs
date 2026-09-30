@@ -741,7 +741,11 @@ impl PoolConfig {
         (0..self.subchannels())
             .filter(|&sc| sc < res.subch || sc >= end)
             .filter_map(|sc| {
-                let sep = if sc < res.subch { res.subch - sc } else { sc + 1 - end };
+                let sep = if sc < res.subch {
+                    res.subch - sc
+                } else {
+                    sc + 1 - end
+                };
                 let att = self.ibe.attenuation_db(sep);
                 (att.is_finite() && power_dbm - att >= CBR_SRSSI_THRESHOLD_DBM - 30.0)
                     .then_some((sc, power_dbm - att))

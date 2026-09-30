@@ -1471,14 +1471,26 @@ impl OsmOptions {
             ("cycleway_width_m", self.cycleway_width_m),
             ("crossing_width_m", self.crossing_width_m),
             ("min_useful_lane_m", self.min_useful_lane_m.max(1.0)),
-            ("cross_section.bus_lane_width_m", self.cross_section.bus_lane_width_m),
-            ("cross_section.parking_lane_width_m", self.cross_section.parking_lane_width_m),
+            (
+                "cross_section.bus_lane_width_m",
+                self.cross_section.bus_lane_width_m,
+            ),
+            (
+                "cross_section.parking_lane_width_m",
+                self.cross_section.parking_lane_width_m,
+            ),
             (
                 "cross_section.angled_parking_depth_m",
                 self.cross_section.angled_parking_depth_m,
             ),
-            ("cross_section.cycle_lane_width_m", self.cross_section.cycle_lane_width_m),
-            ("cross_section.cycle_track_width_m", self.cross_section.cycle_track_width_m),
+            (
+                "cross_section.cycle_lane_width_m",
+                self.cross_section.cycle_lane_width_m,
+            ),
+            (
+                "cross_section.cycle_track_width_m",
+                self.cross_section.cycle_track_width_m,
+            ),
             (
                 "cross_section.cycle_buffer_m",
                 self.cross_section.cycle_buffer_m.max(1e-3),
@@ -2961,7 +2973,9 @@ pub fn classify_way(
         let one_way_bwd = matches!(oneway, Oneway::Backward);
         let widen = |n: u32, keys: &[&str]| -> u32 {
             for key in keys {
-                let Some(raw) = way.tags.get(key) else { continue };
+                let Some(raw) = way.tags.get(key) else {
+                    continue;
+                };
                 let entries: Vec<&str> = raw.split('|').map(str::trim).collect();
                 let designated = entries.iter().filter(|e| **e == "designated").count() as u32;
                 let len = entries.len() as u32;
@@ -2972,9 +2986,25 @@ pub fn classify_way(
             n
         };
         if one_way_fwd {
-            fwd = widen(fwd, &["bus:lanes", "psv:lanes", "bus:lanes:forward", "psv:lanes:forward"]);
+            fwd = widen(
+                fwd,
+                &[
+                    "bus:lanes",
+                    "psv:lanes",
+                    "bus:lanes:forward",
+                    "psv:lanes:forward",
+                ],
+            );
         } else if one_way_bwd {
-            bwd = widen(bwd, &["bus:lanes", "psv:lanes", "bus:lanes:backward", "psv:lanes:backward"]);
+            bwd = widen(
+                bwd,
+                &[
+                    "bus:lanes",
+                    "psv:lanes",
+                    "bus:lanes:backward",
+                    "psv:lanes:backward",
+                ],
+            );
         } else {
             fwd = widen(fwd, &["bus:lanes:forward", "psv:lanes:forward"]);
             bwd = widen(bwd, &["bus:lanes:backward", "psv:lanes:backward"]);
@@ -4536,7 +4566,10 @@ fn leaving_heading(points: &[Vec3], from_start: bool) -> f64 {
     let (origin, walk): (Vec3, Vec<Vec3>) = if from_start {
         (points[0], points[1..].to_vec())
     } else {
-        (points[n - 1], points[..n - 1].iter().rev().copied().collect())
+        (
+            points[n - 1],
+            points[..n - 1].iter().rev().copied().collect(),
+        )
     };
     let mut target = walk.first().copied().unwrap_or(origin);
     for p in walk {
@@ -4568,9 +4601,15 @@ fn junction_radii(segments: &[Segment], plans: &[WayPlan], options: &OsmOptions)
                 // or a bus lane begins the lanes shift sideways, and a 1 m continuation
                 // connector cannot take that shift without a heading jump.
                 let (out, inn) = if leaving {
-                    (section_fingerprint(&segment.section_fwd), section_fingerprint(&segment.section_bwd))
+                    (
+                        section_fingerprint(&segment.section_fwd),
+                        section_fingerprint(&segment.section_bwd),
+                    )
                 } else {
-                    (section_fingerprint(&segment.section_bwd), section_fingerprint(&segment.section_fwd))
+                    (
+                        section_fingerprint(&segment.section_bwd),
+                        section_fingerprint(&segment.section_fwd),
+                    )
                 };
                 arms.entry(node).or_default().push((
                     out,
@@ -4614,7 +4653,9 @@ fn junction_radii(segments: &[Segment], plans: &[WayPlan], options: &OsmOptions)
             // design radius through the bend: `(R + d) tan(θ/2)`, `d` the half width.
             let (h0, d0) = arm_heading[node][0];
             let (h1, d1) = arm_heading[node][1];
-            let bend = normalise_angle(h1 - h0 - core::f64::consts::PI).abs().min(1.2);
+            let bend = normalise_angle(h1 - h0 - core::f64::consts::PI)
+                .abs()
+                .min(1.2);
             let room = (TURN_DESIGN_RADIUS_M + d0.max(d1)) * math::tan(0.5 * bend);
             *r = MIN_JUNCTION_RADIUS_M.max(room + 0.5 * f64::from(u8::from(bend > 0.02)));
         }
@@ -4694,7 +4735,9 @@ fn join_short_junctions(
     let mut position: BTreeMap<i64, Vec3> = BTreeMap::new();
     let mut motor_arms: BTreeMap<i64, u32> = BTreeMap::new();
     for segment in &segments {
-        position.entry(segment.start_anchor).or_insert(segment.points[0]);
+        position
+            .entry(segment.start_anchor)
+            .or_insert(segment.points[0]);
         position
             .entry(segment.end_anchor)
             .or_insert(segment.points[segment.points.len() - 1]);
@@ -4712,7 +4755,11 @@ fn join_short_junctions(
             return None;
         }
         let length = polyline_length(&segment.points);
-        let ra = radii.motor.get(&segment.start_anchor).copied().unwrap_or(0.0);
+        let ra = radii
+            .motor
+            .get(&segment.start_anchor)
+            .copied()
+            .unwrap_or(0.0);
         let rb = radii.motor.get(&segment.end_anchor).copied().unwrap_or(0.0);
         (length <= JOIN_MAX_SEGMENT_M && length - ra - rb < options.min_useful_lane_m)
             .then_some(length)
@@ -4759,19 +4806,16 @@ fn join_short_junctions(
         }
         let head = *list
             .iter()
-            .max_by(|x, y| {
-                motor_arms
-                    .get(*x)
-                    .cmp(&motor_arms.get(*y))
-                    .then(y.cmp(x))
-            })
+            .max_by(|x, y| motor_arms.get(*x).cmp(&motor_arms.get(*y)).then(y.cmp(x)))
             .expect("a cluster has members");
         let n = list.len() as f64;
         let (sx, sy, sz) = list.iter().fold((0.0, 0.0, 0.0), |acc, m| {
             let p = position[m];
             (acc.0 + p.x, acc.1 + p.y, acc.2 + p.z)
         });
-        joined.position.insert(head, Vec3::new(sx / n, sy / n, sz / n));
+        joined
+            .position
+            .insert(head, Vec3::new(sx / n, sy / n, sz / n));
         for m in list {
             if *m != head {
                 joined.member_of.insert(*m, head);
@@ -4916,8 +4960,14 @@ fn build_network(
         };
         let (cut_start, cut_end) = fit_trim(
             total,
-            radius.get(&segment.start_anchor).copied().unwrap_or(MIN_JUNCTION_RADIUS_M),
-            radius.get(&segment.end_anchor).copied().unwrap_or(MIN_JUNCTION_RADIUS_M),
+            radius
+                .get(&segment.start_anchor)
+                .copied()
+                .unwrap_or(MIN_JUNCTION_RADIUS_M),
+            radius
+                .get(&segment.end_anchor)
+                .copied()
+                .unwrap_or(MIN_JUNCTION_RADIUS_M),
             plan.osm_id,
             report,
         );
@@ -5080,8 +5130,14 @@ fn build_network(
                 &base_for_sidewalks(
                     &base,
                     (
-                        soft_radius.get(&segment.start_anchor).copied().unwrap_or(MIN_JUNCTION_RADIUS_M),
-                        soft_radius.get(&segment.end_anchor).copied().unwrap_or(MIN_JUNCTION_RADIUS_M),
+                        soft_radius
+                            .get(&segment.start_anchor)
+                            .copied()
+                            .unwrap_or(MIN_JUNCTION_RADIUS_M),
+                        soft_radius
+                            .get(&segment.end_anchor)
+                            .copied()
+                            .unwrap_or(MIN_JUNCTION_RADIUS_M),
                     ),
                     plan.osm_id,
                     report,
@@ -5336,8 +5392,9 @@ fn build_movements(
             let approach_from =
                 net.edges[net.lanes[approach.lanes[0].as_usize()].edge.as_usize()].from;
             let is_uturn = |b: usize, turn: TurnDirection| {
-                let departure_to = net.edges
-                    [net.lanes[net.edge_info[b].lanes[0].as_usize()].edge.as_usize()]
+                let departure_to = net.edges[net.lanes[net.edge_info[b].lanes[0].as_usize()]
+                    .edge
+                    .as_usize()]
                 .to;
                 net.edge_info[b].segment == approach.segment
                     || turn == TurnDirection::UTurn
@@ -5609,7 +5666,12 @@ fn traffic_lanes(net: &Net, lanes: &[LaneId]) -> Vec<LaneId> {
     lanes
         .iter()
         .copied()
-        .filter(|l| matches!(net.lanes[l.as_usize()].kind, LaneKind::Driving | LaneKind::Bus))
+        .filter(|l| {
+            matches!(
+                net.lanes[l.as_usize()].kind,
+                LaneKind::Driving | LaneKind::Bus
+            )
+        })
         .collect()
 }
 
@@ -5646,7 +5708,13 @@ fn main_class(lane: &Lane) -> ClassMask {
 /// `from` may use it, else the nearest one it may (nearest to `target`, then to the
 /// approach lane's own index `k`), or `None` if none. A general lane's through movement
 /// that lines up with a bus lane on the far side moves over to the first general lane.
-fn fitting_lane(net: &Net, from: LaneId, out: &[LaneId], target: usize, k: usize) -> Option<LaneId> {
+fn fitting_lane(
+    net: &Net,
+    from: LaneId,
+    out: &[LaneId],
+    target: usize,
+    k: usize,
+) -> Option<LaneId> {
     let need = main_class(&net.lanes[from.as_usize()]);
     (0..out.len())
         .filter(|i| net.lanes[out[*i].as_usize()].admits(need))
@@ -5992,7 +6060,10 @@ fn add_movement(
         let from = &net.lanes[request.from_lane.as_usize()];
         let to = &net.lanes[request.to_lane.as_usize()];
         let both = from.allowed.intersection(to.allowed);
-        (from.width_m, if both.is_empty() { from.allowed } else { both })
+        (
+            from.width_m,
+            if both.is_empty() { from.allowed } else { both },
+        )
     };
     let Ok(lane) = Lane::new(
         lane_id,
@@ -6621,7 +6692,10 @@ fn phase_greens(
     let mut pinned = vec![false; n];
     for _ in 0..=n {
         let free: f64 = available
-            - (0..n).filter(|i| pinned[*i]).map(|i| minimum[i]).sum::<f64>();
+            - (0..n)
+                .filter(|i| pinned[*i])
+                .map(|i| minimum[i])
+                .sum::<f64>();
         let w: f64 = (0..n).filter(|i| !pinned[*i]).map(|i| weight[i]).sum();
         let mut changed = false;
         for i in 0..n {
@@ -7491,8 +7565,12 @@ fn synthesise_node_crossings(
         let mut ends = [0i64; 2];
         for (slot, hit) in ends.iter_mut().zip([left, right]) {
             let way = &file.ways[hit.way];
-            let a = file.node(way.nodes[hit.segment]).expect("resolved in the search");
-            let b = file.node(way.nodes[hit.segment + 1]).expect("resolved in the search");
+            let a = file
+                .node(way.nodes[hit.segment])
+                .expect("resolved in the search");
+            let b = file
+                .node(way.nodes[hit.segment + 1])
+                .expect("resolved in the search");
             let (pa, pb) = (xy(a), xy(b));
             let seg = math::sqrt((pb.0 - pa.0) * (pb.0 - pa.0) + (pb.1 - pa.1) * (pb.1 - pa.1));
             *slot = if hit.t * seg < 0.5 {
@@ -7528,7 +7606,10 @@ fn synthesise_node_crossings(
                 }
             }
         }
-        tags.insert("v2xw:synthesised".to_string(), format!("crossing node {node}"));
+        tags.insert(
+            "v2xw:synthesised".to_string(),
+            format!("crossing node {node}"),
+        );
         new_ways.push(RawWay {
             id: next_way,
             nodes: vec![ends[0], *node, ends[1]],
@@ -8660,8 +8741,8 @@ fn drop_kiosks_on_the_carriageway(
     }
     let mut hit = vec![false; buildings.len()];
     for lane in &net.lanes {
-        let internal_motor = lane.kind == LaneKind::Internal
-            && lane.admits(ClassMask::CAR.union(ClassMask::BUS));
+        let internal_motor =
+            lane.kind == LaneKind::Internal && lane.admits(ClassMask::CAR.union(ClassMask::BUS));
         if !(matches!(lane.kind, LaneKind::Driving | LaneKind::Bus) || internal_motor) {
             continue;
         }
@@ -8679,7 +8760,11 @@ fn drop_kiosks_on_the_carriageway(
                 continue;
             }
             let bb = building.bbox();
-            if bb.max.x < lo.x - 2.0 || bb.min.x > hi.x + 2.0 || bb.max.y < lo.y - 2.0 || bb.min.y > hi.y + 2.0 {
+            if bb.max.x < lo.x - 2.0
+                || bb.min.x > hi.x + 2.0
+                || bb.max.y < lo.y - 2.0
+                || bb.min.y > hi.y + 2.0
+            {
                 continue;
             }
             let steps = (lane.length_m / 0.5).ceil().max(1.0) as usize;
@@ -8688,7 +8773,11 @@ fn drop_kiosks_on_the_carriageway(
                 let p = lane.point_at(s);
                 let (sin, cos) = math::sin_cos(lane.heading_at(s));
                 for side in [-1.0, 0.0, 1.0] {
-                    let q = Vec3::new(p.x - sin * HALF_CAR_M * side, p.y + cos * HALF_CAR_M * side, p.z);
+                    let q = Vec3::new(
+                        p.x - sin * HALF_CAR_M * side,
+                        p.y + cos * HALF_CAR_M * side,
+                        p.z,
+                    );
                     if building.contains_2d(q) {
                         hit[b] = true;
                         break 'samples;
@@ -9801,10 +9890,22 @@ fn build_provenance(
             .with("cycle_lanes", options.cross_section.cycle_lanes)
             .with("parking_lanes", options.cross_section.parking_lanes)
             .with("bus_lane_width_m", options.cross_section.bus_lane_width_m)
-            .with("parking_lane_width_m", options.cross_section.parking_lane_width_m)
-            .with("angled_parking_depth_m", options.cross_section.angled_parking_depth_m)
-            .with("cycle_lane_width_m", options.cross_section.cycle_lane_width_m)
-            .with("cycle_track_width_m", options.cross_section.cycle_track_width_m)
+            .with(
+                "parking_lane_width_m",
+                options.cross_section.parking_lane_width_m,
+            )
+            .with(
+                "angled_parking_depth_m",
+                options.cross_section.angled_parking_depth_m,
+            )
+            .with(
+                "cycle_lane_width_m",
+                options.cross_section.cycle_lane_width_m,
+            )
+            .with(
+                "cycle_track_width_m",
+                options.cross_section.cycle_track_width_m,
+            )
             .with("cycle_buffer_m", options.cross_section.cycle_buffer_m)
             .with("bus_lanes_built", report.counts.bus_lanes)
             .with("cycle_lanes_built", report.counts.cycle_lanes_on_roads)

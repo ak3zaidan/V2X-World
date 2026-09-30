@@ -666,14 +666,22 @@ pub fn entity_answer(
         .as_array()?
         .iter()
         .find(|e| e["id"].as_str() == Some(entity))?;
-    let touches = |x: &&Value| x["from"].as_str() == Some(entity) || x["to"].as_str() == Some(entity);
+    let touches =
+        |x: &&Value| x["from"].as_str() == Some(entity) || x["to"].as_str() == Some(entity);
     let flows: Vec<Value> = view["edges"]
         .as_array()
         .map(|a| a.iter().filter(touches).take(limit).cloned().collect())
         .unwrap_or_default();
     let recent: Vec<Value> = view["recent"]
         .as_array()
-        .map(|a| a.iter().rev().filter(touches).take(limit).cloned().collect())
+        .map(|a| {
+            a.iter()
+                .rev()
+                .filter(touches)
+                .take(limit)
+                .cloned()
+                .collect()
+        })
         .unwrap_or_default();
     let mut out = json!({
         "entity": entity,
@@ -739,7 +747,9 @@ mod entity_tests {
         assert_eq!(all["state"]["entities"].as_array().map(Vec::len), Some(2));
         assert!(entity_answer("ea", 3, &v, 10, Vec::new()).is_none());
         // Every role the views publish is one the method accepts.
-        for id in ["ra", "pca", "backend", "ea", "aa", "tlm", "cpoc", "rsu", "ee"] {
+        for id in [
+            "ra", "pca", "backend", "ea", "aa", "tlm", "cpoc", "rsu", "ee",
+        ] {
             assert!(ROLES.contains(&id), "{id}");
         }
     }

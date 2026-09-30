@@ -717,13 +717,19 @@ impl ScmsRun {
     /// Why the RA refused `device`'s current provisioning or top-up request, if it did.
     #[must_use]
     pub fn topup_refusal_of(&self, device: NodeId) -> Option<Refusal> {
-        self.state.devices.get(&device).and_then(|d| d.topup_refused)
+        self.state
+            .devices
+            .get(&device)
+            .and_then(|d| d.topup_refused)
     }
 
     /// Why the ECA refused `device`'s current successor-enrolment request, if it did.
     #[must_use]
     pub fn reenrol_refusal_of(&self, device: NodeId) -> Option<Refusal> {
-        self.state.devices.get(&device).and_then(|d| d.reenrol_refused)
+        self.state
+            .devices
+            .get(&device)
+            .and_then(|d| d.reenrol_refused)
     }
 
     fn inject(&mut self, to: NodeId, msg: ScmsMsg, flow: FlowId, run: FlowRun) {
@@ -1356,7 +1362,10 @@ impl ScmsState {
                 // files (IEEE 1609.2.1's LPF and LCCF download): a policy change reaches a
                 // device the next time it tops up.
                 let (lpf, lccf) = self.devices.get(&req.device).map_or((None, None), |d| {
-                    (d.trust.lpf.as_ref().map(|l| l.version), d.trust.lccf_version)
+                    (
+                        d.trust.lpf.as_ref().map(|l| l.version),
+                        d.trust.lccf_version,
+                    )
                 });
                 Self::sign(out, 1);
                 out.send(
@@ -2496,7 +2505,8 @@ impl ScmsState {
                 let newer_lccf = lccf
                     .is_none_or(|v| v < self.gov.lccf.version)
                     .then(|| Box::new(self.gov.lccf.clone()));
-                self.ra.files_served += u32::from(newer_lpf.is_some()) + u32::from(newer_lccf.is_some());
+                self.ra.files_served +=
+                    u32::from(newer_lpf.is_some()) + u32::from(newer_lccf.is_some());
                 Self::sign(out, 1);
                 let size = self.sizes.file_response(
                     newer_lpf.is_some(),

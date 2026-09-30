@@ -360,9 +360,17 @@ fn a_list_is_signed_once_and_every_station_fetches_it() {
             .expect("declared")
     };
     for r in [ectl, crl] {
-        assert_eq!(run.kernel.stages.stages(r), declared(FlowId::EtsiTrustIssue));
+        assert_eq!(
+            run.kernel.stages.stages(r),
+            declared(FlowId::EtsiTrustIssue)
+        );
     }
-    let signs_before = run.kernel.steps.iter().filter(|s| s.flow == FlowId::EtsiTrustIssue).count();
+    let signs_before = run
+        .kernel
+        .steps
+        .iter()
+        .filter(|s| s.flow == FlowId::EtsiTrustIssue)
+        .count();
     let mut fetches = Vec::new();
     for station in [STATION, other] {
         fetches.push(run.fetch_trust_lists(station, run.kernel.now()));
@@ -371,12 +379,19 @@ fn a_list_is_signed_once_and_every_station_fetches_it() {
     for (station, f) in [STATION, other].into_iter().zip(&fetches) {
         assert_eq!(run.installed_ctl_of(station), Some(1));
         assert_eq!(run.installed_ca_crl_seq.get(&station), Some(&1));
-        assert_eq!(run.kernel.stages.stages(*f), declared(FlowId::EtsiTrustFetch));
+        assert_eq!(
+            run.kernel.stages.stages(*f),
+            declared(FlowId::EtsiTrustFetch)
+        );
         assert!(run.kernel.stages.is_ordered(*f));
     }
     // Two stations served, and the TLM and the Root CA signed nothing more for them.
     assert_eq!(
-        run.kernel.steps.iter().filter(|s| s.flow == FlowId::EtsiTrustIssue).count(),
+        run.kernel
+            .steps
+            .iter()
+            .filter(|s| s.flow == FlowId::EtsiTrustIssue)
+            .count(),
         signs_before
     );
     let full: Vec<u32> = run

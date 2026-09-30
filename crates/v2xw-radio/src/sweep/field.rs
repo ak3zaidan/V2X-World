@@ -162,8 +162,7 @@ impl RangeTest {
     #[must_use]
     pub fn five_gaa_adjacent(acir_db: f64) -> Self {
         // The interferer's 23 dBm is at its antenna cable's input, so its cable counts.
-        let own_channel_dbm =
-            23.0 + 2.0 * (6.0 - 3.0) - crate::prop::friis_loss_db(13.0, 5.910e9);
+        let own_channel_dbm = 23.0 + 2.0 * (6.0 - 3.0) - crate::prop::friis_loss_db(13.0, 5.910e9);
         Self {
             adjacent_interference_dbm: Some(own_channel_dbm - acir_db),
             ..Self::five_gaa_los()
@@ -479,11 +478,26 @@ mod tests {
         let lte5 = range_curve(&test, LTE, 5.0);
         let lte11 = range_curve(&test, LTE, 11.0);
         for c in [&dsrc5, &dsrc11, &lte5, &lte11] {
-            eprintln!("{} at {} dBm: 90 % range {:?}", c.radio, c.tx_power_dbm, c.range_90_m);
+            eprintln!(
+                "{} at {} dBm: 90 % range {:?}",
+                c.radio, c.tx_power_dbm, c.range_90_m
+            );
         }
-        assert!(within(&dsrc5, 625.0, 0.15), "DSRC 5 dBm: {:?} against 625 m", dsrc5.range_90_m);
-        assert!(within(&dsrc11, 925.0, 0.15), "DSRC 11 dBm: {:?} against 925 m", dsrc11.range_90_m);
-        assert!(within(&lte5, 1_050.0, 0.15), "C-V2X 5 dBm: {:?} against 1050 m", lte5.range_90_m);
+        assert!(
+            within(&dsrc5, 625.0, 0.15),
+            "DSRC 5 dBm: {:?} against 625 m",
+            dsrc5.range_90_m
+        );
+        assert!(
+            within(&dsrc11, 925.0, 0.15),
+            "DSRC 11 dBm: {:?} against 925 m",
+            dsrc11.range_90_m
+        );
+        assert!(
+            within(&lte5, 1_050.0, 0.15),
+            "C-V2X 5 dBm: {:?} against 1050 m",
+            lte5.range_90_m
+        );
         assert!(
             lte11.range_90_m.is_none_or(|r| r >= 0.85 * 1_350.0),
             "C-V2X 11 dBm: {:?} against > 1350 m",
@@ -502,9 +516,15 @@ mod tests {
     #[test]
     fn the_rules_minimum_acir_is_no_better_than_the_5gaa_adjacent_channel_field_test() {
         use crate::regulation::{Region, Technology, adjacent_acir_db};
-        let dsrc_acir =
-            adjacent_acir_db(Region::Us2016, Technology::Ieee80211p, 182, Technology::Ieee80211p, 184, 2)
-                .expect("182 and 184 are adjacent DSRC channels");
+        let dsrc_acir = adjacent_acir_db(
+            Region::Us2016,
+            Technology::Ieee80211p,
+            182,
+            Technology::Ieee80211p,
+            184,
+            2,
+        )
+        .expect("182 and 184 are adjacent DSRC channels");
         // The C-V2X unit ran 10 MHz on channel 184; its ACS is TS 36.101's 33 dB and the
         // interferer's leakage EN 302 571's mask.
         let lte_acir = crate::regulation::acir_db(
@@ -522,8 +542,16 @@ mod tests {
              C-V2X {lte_acir:.1} dB -> {:?} m (measured 950)",
             dsrc.range_90_m, lte.range_90_m
         );
-        assert!(dsrc.range_90_m.unwrap_or(0.0) <= 325.0, "{:?}", dsrc.range_90_m);
-        assert!(lte.range_90_m.unwrap_or(0.0) <= 950.0, "{:?}", lte.range_90_m);
+        assert!(
+            dsrc.range_90_m.unwrap_or(0.0) <= 325.0,
+            "{:?}",
+            dsrc.range_90_m
+        );
+        assert!(
+            lte.range_90_m.unwrap_or(0.0) <= 950.0,
+            "{:?}",
+            lte.range_90_m
+        );
     }
 
     /// The ACIR at which the simulator reproduces each measured adjacent-channel range.
@@ -540,7 +568,10 @@ mod tests {
                     radio,
                     11.0,
                 );
-                println!("{} ACIR {acir} dB: range {:?} (measured {measured})", c.radio, c.range_90_m);
+                println!(
+                    "{} ACIR {acir} dB: range {:?} (measured {measured})",
+                    c.radio, c.range_90_m
+                );
             }
         }
     }
@@ -568,10 +599,14 @@ mod tests {
     #[test]
     fn the_receivers_match_the_5gaa_awgn_lab_at_ten_percent() {
         let dsrc_bytes = 193 + DsrcConfig::default().overhead_bytes;
-        let dsrc_model = crate::per::PerModel::default().snr_for_per(dsrc_bytes, Mcs::R6Qpsk12, 0.1);
+        let dsrc_model =
+            crate::per::PerModel::default().snr_for_per(dsrc_bytes, Mcs::R6Qpsk12, 0.1);
         let dsrc_measured = -50.0 - (-122.66 + 70.0) + 3.01;
         let lte = crate::bler::SidelinkErrorModel::best_for(crate::sidelink::LTE_MCS5_J3161);
-        let lte_model = lte.data_curve().snr_at_bler(0.1).expect("the curve crosses 10 %");
+        let lte_model = lte
+            .data_curve()
+            .snr_at_bler(0.1)
+            .expect("the curve crosses 10 %");
         let alloc_db = 10.0 * math::log10(3.6e6);
         let lte_measured = -50.0 - (-114.31 + alloc_db);
         // Chase combining of two equal copies doubles the linear SNR: 3.01 dB.
@@ -584,7 +619,10 @@ mod tests {
              against {harq_measured:.2} dB",
             dsrc_measured - dsrc_model
         );
-        assert!((dsrc_model - dsrc_measured).abs() <= 3.0, "{dsrc_model} {dsrc_measured}");
+        assert!(
+            (dsrc_model - dsrc_measured).abs() <= 3.0,
+            "{dsrc_model} {dsrc_measured}"
+        );
         assert!(
             lte_model >= lte_measured && lte_model - lte_measured <= 4.0,
             "{lte_model} {lte_measured}"

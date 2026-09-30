@@ -59,7 +59,10 @@ fn a_despawned_nodes_link_state_is_swept_and_the_record_does_not_change() {
     // not passing because there was nothing to sweep.
     assert!(kept > 0, "no link of a despawned node held a stream");
     // Nothing the sweep has passed is still held.
-    assert_eq!(leaked, 0, "link streams held for nodes the sweep already retired");
+    assert_eq!(
+        leaked, 0,
+        "link streams held for nodes the sweep already retired"
+    );
     // And the sweep runs: what waits for it is the grace period's despawns plus one batch,
     // not the run's whole turnover.
     assert!(

@@ -1126,10 +1126,7 @@ mod tests {
         // 10 % near 11 dB, under the sensitivity again.)
         let hi_se = SidelinkPhy::new(
             Tier::High,
-            PoolConfig::todisco_nr(
-                Numerology::Mu0,
-                crate::bler_nr::nr_mcs_table2(27).unwrap(),
-            ),
+            PoolConfig::todisco_nr(Numerology::Mu0, crate::bler_nr::nr_mcs_table2(27).unwrap()),
         );
         let weak = hi_se.evaluate(&mut ctx, &arrival(-85.0));
         assert_eq!(weak, RxOutcome::Lost(LossCause::Fading));

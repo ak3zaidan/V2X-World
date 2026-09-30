@@ -223,11 +223,17 @@ fn metres(v: &str) -> Option<f64> {
     let v = v.trim();
     if let Some((ft, rest)) = v.split_once('\'') {
         let inches = rest.trim_end_matches('"').trim();
-        let inches = if inches.is_empty() { 0.0 } else { inches.parse::<f64>().ok()? };
+        let inches = if inches.is_empty() {
+            0.0
+        } else {
+            inches.parse::<f64>().ok()?
+        };
         return Some((ft.trim().parse::<f64>().ok()? * 12.0 + inches) * 0.0254);
     }
     let v = v.trim_end_matches('m').trim();
-    v.parse::<f64>().ok().filter(|x| x.is_finite() && *x > 0.3 && *x < 10.0)
+    v.parse::<f64>()
+        .ok()
+        .filter(|x| x.is_finite() && *x > 0.3 && *x < 10.0)
 }
 
 fn cycle_tag(tags: &Tags, side: &str, one_way_road: bool) -> Option<CycleTag> {
@@ -308,7 +314,13 @@ fn parking_tag(tags: &Tags, side: &str, options: &CrossSectionOptions) -> Option
 
 /// Which of `n` lanes (rightmost first) are bus lanes, or `None` if the tags say nothing
 /// usable about this direction.
-fn bus_positions(tags: &Tags, dir: &str, n: u8, one_way: bool, two_way_share: bool) -> Option<Vec<bool>> {
+fn bus_positions(
+    tags: &Tags,
+    dir: &str,
+    n: u8,
+    one_way: bool,
+    two_way_share: bool,
+) -> Option<Vec<bool>> {
     if n == 0 {
         return None;
     }
@@ -324,7 +336,13 @@ fn bus_positions(tags: &Tags, dir: &str, n: u8, one_way: bool, two_way_share: bo
     };
     let from_list = list(&format!("bus:lanes:{dir}"))
         .or_else(|| list(&format!("psv:lanes:{dir}")))
-        .or_else(|| if one_way { list("bus:lanes").or_else(|| list("psv:lanes")) } else { None });
+        .or_else(|| {
+            if one_way {
+                list("bus:lanes").or_else(|| list("psv:lanes"))
+            } else {
+                None
+            }
+        });
     if let Some(v) = from_list {
         return Some(v);
     }
@@ -353,7 +371,12 @@ fn bus_positions(tags: &Tags, dir: &str, n: u8, one_way: bool, two_way_share: bo
         } else if dir == "forward" {
             (right, false)
         } else {
-            (on_left || matches!(tags.get("busway:both"), Some("lane")) || matches!(tags.get("busway"), Some("lane")), false)
+            (
+                on_left
+                    || matches!(tags.get("busway:both"), Some("lane"))
+                    || matches!(tags.get("busway"), Some("lane")),
+                false,
+            )
         };
         if r {
             k = Some(1);
@@ -366,7 +389,11 @@ fn bus_positions(tags: &Tags, dir: &str, n: u8, one_way: bool, two_way_share: bo
     if k == 0 {
         return None;
     }
-    Some((0..n).map(|i| if left { i >= n - k } else { i < k }).collect())
+    Some(
+        (0..n)
+            .map(|i| if left { i >= n - k } else { i < k })
+            .collect(),
+    )
 }
 
 /// Lays out the road's cross-section; see the module documentation.
@@ -428,12 +455,20 @@ pub fn build(tags: &Tags, input: &SectionInput, options: &CrossSectionOptions) -
             let dirs: Vec<Dir> = if c.two_way {
                 // Right-hand traffic inside the track: on the right of the way the forward
                 // half is the outer one, on the left the backward half is.
-                if s == 0 { vec![Dir::Bwd, Dir::Fwd] } else { vec![Dir::Fwd, Dir::Bwd] }
+                if s == 0 {
+                    vec![Dir::Bwd, Dir::Fwd]
+                } else {
+                    vec![Dir::Fwd, Dir::Bwd]
+                }
             } else {
                 vec![main]
             };
             let width = c.width_m.map_or(
-                if c.track { options.cycle_track_width_m } else { options.cycle_lane_width_m },
+                if c.track {
+                    options.cycle_track_width_m
+                } else {
+                    options.cycle_lane_width_m
+                },
                 |w| if c.two_way { 0.5 * w } else { w },
             );
             // A track is laid beyond the carriageway the way is centred on. Counting a
@@ -513,7 +548,11 @@ pub fn build(tags: &Tags, input: &SectionInput, options: &CrossSectionOptions) -
     row.extend(sides[1].iter().copied());
     out.bus_lanes = (bus_f.iter().chain(&bus_b).filter(|b| **b).count()) as u32;
 
-    let carriageway: f64 = row.iter().filter(|e| e.on_carriageway).map(|e| e.width_m).sum();
+    let carriageway: f64 = row
+        .iter()
+        .filter(|e| e.on_carriageway)
+        .map(|e| e.width_m)
+        .sum();
     out.reserved_m = row
         .iter()
         .filter(|e| {
@@ -542,11 +581,21 @@ pub fn build(tags: &Tags, input: &SectionInput, options: &CrossSectionOptions) -
         match dir {
             Dir::Fwd => fwd.push((
                 centre,
-                LaneSpec { kind, width_m: e.width_m, allowed, offset_m: centre },
+                LaneSpec {
+                    kind,
+                    width_m: e.width_m,
+                    allowed,
+                    offset_m: centre,
+                },
             )),
             Dir::Bwd => bwd.push((
                 -centre,
-                LaneSpec { kind, width_m: e.width_m, allowed, offset_m: -centre },
+                LaneSpec {
+                    kind,
+                    width_m: e.width_m,
+                    allowed,
+                    offset_m: -centre,
+                },
             )),
         }
     }
@@ -634,7 +683,11 @@ mod tests {
         assert!((s.reserved_m - 2.0 * 2.438).abs() < 1e-9);
 
         // With no parking beside it, the same.
-        let t = tags(&[("oneway", "yes"), ("lanes", "2"), ("cycleway:left", "track")]);
+        let t = tags(&[
+            ("oneway", "yes"),
+            ("lanes", "2"),
+            ("cycleway:left", "track"),
+        ]);
         let s = build(&t, &input(2, 0), &o);
         let track = *s.fwd.last().unwrap();
         assert_eq!(track.kind, LaneKind::Cycle);
@@ -648,12 +701,19 @@ mod tests {
         let t = tags(&[("cycleway:right", "lane"), ("parking:right", "lane")]);
         let s = build(&t, &input(1, 1), &CrossSectionOptions::default());
         let kinds: Vec<LaneKind> = s.fwd.iter().map(|l| l.kind).collect();
-        assert_eq!(kinds, vec![LaneKind::Parking, LaneKind::Cycle, LaneKind::Driving]);
+        assert_eq!(
+            kinds,
+            vec![LaneKind::Parking, LaneKind::Cycle, LaneKind::Driving]
+        );
     }
 
     #[test]
     fn a_contraflow_lane_gives_a_one_way_street_a_backward_cycle_lane() {
-        let t = tags(&[("oneway", "yes"), ("cycleway:left", "lane"), ("cycleway:left:oneway", "-1")]);
+        let t = tags(&[
+            ("oneway", "yes"),
+            ("cycleway:left", "lane"),
+            ("cycleway:left:oneway", "-1"),
+        ]);
         let s = build(&t, &input(1, 0), &CrossSectionOptions::default());
         assert_eq!(s.fwd.len(), 1);
         assert_eq!(s.bwd.len(), 1);
@@ -664,7 +724,12 @@ mod tests {
 
     #[test]
     fn switched_off_nothing_but_general_lanes_is_built() {
-        let t = tags(&[("lanes:bus", "1"), ("oneway", "yes"), ("parking:both", "lane"), ("cycleway:left", "track")]);
+        let t = tags(&[
+            ("lanes:bus", "1"),
+            ("oneway", "yes"),
+            ("parking:both", "lane"),
+            ("cycleway:left", "track"),
+        ]);
         let o = CrossSectionOptions {
             bus_lanes: false,
             cycle_lanes: false,
@@ -681,7 +746,15 @@ mod tests {
         let t = tags(&[("oneway", "yes"), ("lanes:bus", "2")]);
         let s = build(&t, &input(4, 0), &CrossSectionOptions::default());
         let kinds: Vec<LaneKind> = s.fwd.iter().map(|l| l.kind).collect();
-        assert_eq!(kinds, vec![LaneKind::Bus, LaneKind::Bus, LaneKind::Driving, LaneKind::Driving]);
+        assert_eq!(
+            kinds,
+            vec![
+                LaneKind::Bus,
+                LaneKind::Bus,
+                LaneKind::Driving,
+                LaneKind::Driving
+            ]
+        );
     }
 
     #[test]

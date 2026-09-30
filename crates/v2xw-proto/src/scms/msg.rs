@@ -12,10 +12,10 @@ use v2xw_sec::ec::Point;
 use v2xw_sec::linkage::{LaId, LinkageSeed, LinkageValue, PreLinkageValue};
 
 use crate::sizes::{
-    AES128_KEY_BYTES, CRL_LINKAGE_ENTRY_BYTES, CertificateSizes, ECDSA_P256_SIG_COER_BYTES,
-    EC_POINT_COMPRESSED_BYTES,
-    ECIES_P256_ENCRYPTED_KEY_BYTES, ENVELOPE_OVERHEAD_CERT_BYTES, ENVELOPE_OVERHEAD_DIGEST_BYTES,
-    HASHED_ID8_BYTES, LINKAGE_VALUE_BYTES, SHA256_BYTES, SizeParams, TIME32_BYTES, WireSize,
+    AES128_KEY_BYTES, CRL_LINKAGE_ENTRY_BYTES, CertificateSizes, EC_POINT_COMPRESSED_BYTES,
+    ECDSA_P256_SIG_COER_BYTES, ECIES_P256_ENCRYPTED_KEY_BYTES, ENVELOPE_OVERHEAD_CERT_BYTES,
+    ENVELOPE_OVERHEAD_DIGEST_BYTES, HASHED_ID8_BYTES, LINKAGE_VALUE_BYTES, SHA256_BYTES,
+    SizeParams, TIME32_BYTES, WireSize,
 };
 
 /// A value only the Pseudonym Certificate Authority may open.
@@ -603,9 +603,7 @@ impl ScmsSizes {
     /// ECA → device: the enrolment certificate under the ECA's own certificate.
     pub fn enrol_response(&self) -> WireSize {
         WireSize::derived(
-            self.env_cert()
-                + self.certs.authority.bytes()
-                + self.certs.enrolment.bytes(),
+            self.env_cert() + self.certs.authority.bytes() + self.certs.enrolment.bytes(),
             "envelope(certificate) + ECA certificate + enrolment certificate",
             DERIVATION,
         )
@@ -633,10 +631,7 @@ impl ScmsSizes {
     /// `repo_url_bytes` parameter.
     pub const fn provisioning_ack(&self) -> WireSize {
         WireSize::parameter(
-            self.env_digest()
-                + HASHED_ID8_BYTES
-                + TIME32_BYTES
-                + self.params.repo_url_bytes,
+            self.env_digest() + HASHED_ID8_BYTES + TIME32_BYTES + self.params.repo_url_bytes,
             "repo_url_bytes",
         )
     }
@@ -644,9 +639,7 @@ impl ScmsSizes {
     /// RA → LA: a chain request.
     pub const fn pre_linkage_request(&self) -> WireSize {
         WireSize::parameter(
-            self.env_digest()
-                + self.params.linkage_chain_identifier_bytes
-                + 3 * TIME32_BYTES,
+            self.env_digest() + self.params.linkage_chain_identifier_bytes + 3 * TIME32_BYTES,
             "linkage_chain_identifier_bytes",
         )
     }
@@ -677,8 +670,7 @@ impl ScmsSizes {
     /// PCA → RA, and RA → device: `n` certificates, each with its sealed randomiser.
     pub const fn cert_batch(&self, n: u32) -> WireSize {
         WireSize::derived(
-            self.env_digest()
-                + n * (self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES),
+            self.env_digest() + n * (self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES),
             "envelope(digest) + n · (pseudonym certificate + ECIES wrapper)",
             DERIVATION,
         )
@@ -727,9 +719,7 @@ impl ScmsSizes {
     /// PCA → MA: two chain identifiers and a request hash.
     pub const fn pca_lookup_response(&self) -> WireSize {
         WireSize::parameter(
-            self.env_digest()
-                + 2 * self.params.linkage_chain_identifier_bytes
-                + SHA256_BYTES,
+            self.env_digest() + 2 * self.params.linkage_chain_identifier_bytes + SHA256_BYTES,
             "linkage_chain_identifier_bytes",
         )
     }
@@ -771,9 +761,7 @@ impl ScmsSizes {
     /// MA → LA: a seed request.
     pub const fn seed_request(&self) -> WireSize {
         WireSize::parameter(
-            self.env_digest()
-                + self.params.linkage_chain_identifier_bytes
-                + TIME32_BYTES,
+            self.env_digest() + self.params.linkage_chain_identifier_bytes + TIME32_BYTES,
             "linkage_chain_identifier_bytes",
         )
     }
@@ -802,9 +790,7 @@ impl ScmsSizes {
     /// and the 10,000-entry list it gives as ≈ 400 kB comes back out of this expression.
     pub const fn crl(&self, entries: u32) -> WireSize {
         WireSize::derived(
-            self.env_cert()
-                + self.certs.authority.bytes()
-                + entries * CRL_LINKAGE_ENTRY_BYTES,
+            self.env_cert() + self.certs.authority.bytes() + entries * CRL_LINKAGE_ENTRY_BYTES,
             "envelope(certificate) + CRLG certificate + entries · 40 B",
             DERIVATION,
         )
@@ -948,7 +934,10 @@ impl ScmsSizes {
             ("policy-update", self.policy_file()),
             ("policy-publish", self.policy_file()),
             ("provisioning-ack-proxied", self.provisioning_ack()),
-            ("batch-download-request-proxied", self.batch_download_request()),
+            (
+                "batch-download-request-proxied",
+                self.batch_download_request(),
+            ),
             ("batch-download-proxied", self.batch_download(1)),
             ("enrol-request", self.enrol_request()),
             ("enrol-forward", self.enrol_forward()),

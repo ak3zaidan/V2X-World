@@ -61,10 +61,7 @@ impl EtsiRun {
             true,
         );
         cpoc.set("stations_with_ectl", self.installed_ctl.len() as u64);
-        cpoc.set(
-            "stations_with_ca_crl",
-            self.installed_ca_crl.len() as u64,
-        );
+        cpoc.set("stations_with_ca_crl", self.installed_ca_crl.len() as u64);
         cpoc.set("ectl_served", self.dc_ectl.map_or(0, |(s, _)| s));
         cpoc.set("ca_crl_served", self.dc_ca_crl.map_or(0, |(s, _)| s));
         cpoc.set("fetches_answered", self.dc_fetches);
@@ -101,7 +98,10 @@ impl EtsiRun {
         ea.set("enrolled", self.enrolled.len() as u64);
         ea.set("blocklisted", self.blocklist.len() as u64);
         ea.set("requests_refused", self.refused);
-        ea.set("butterfly_batches_waiting", self.pending_batches.len() as u64);
+        ea.set(
+            "butterfly_batches_waiting",
+            self.pending_batches.len() as u64,
+        );
         ea.set("current_i", self.current_i);
         out.push(ea);
 

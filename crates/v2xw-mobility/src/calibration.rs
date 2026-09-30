@@ -194,7 +194,10 @@ impl CalibrationObserver {
                     if from.kind != LaneKind::Internal
                         && world.lane(c.to_lane).kind != LaneKind::Internal
                     {
-                        continues_into.entry(c.to_lane).or_default().push(c.from_lane);
+                        continues_into
+                            .entry(c.to_lane)
+                            .or_default()
+                            .push(c.from_lane);
                     }
                 }
             }
@@ -218,7 +221,10 @@ impl CalibrationObserver {
         let mut crossing_plan = BTreeMap::new();
         for (i, plan) in world.signals.iter().enumerate() {
             for l in &plan.controlled {
-                if world.try_lane(*l).is_some_and(|l| l.kind == LaneKind::Crossing) {
+                if world
+                    .try_lane(*l)
+                    .is_some_and(|l| l.kind == LaneKind::Crossing)
+                {
                     crossing_plan.insert(*l, i);
                 }
             }
@@ -490,8 +496,7 @@ impl CalibrationObserver {
                 let mut last_front: Option<f64> = None;
                 let mut offset = 0.0; // distance from `cur`'s end to the stop line
                 'walk: loop {
-                    let mut here: Vec<&AuditActor> =
-                        by_lane.get(&cur).cloned().unwrap_or_default();
+                    let mut here: Vec<&AuditActor> = by_lane.get(&cur).cloned().unwrap_or_default();
                     here.sort_by(|a, b| b.s_m.total_cmp(&a.s_m).then(a.actor.cmp(&b.actor)));
                     for a in here {
                         let front_behind = offset + (end_at - a.s_m);
@@ -616,11 +621,20 @@ impl CalibrationObserver {
                 }
             }
             // The green ended with vehicles still queued: they did not discharge on it.
-            let green = q.movements.iter().any(|mv| {
-                crate::audit::movement_state(world, *mv, t1).is_some_and(is_green)
-            });
+            let green = q
+                .movements
+                .iter()
+                .any(|mv| crate::audit::movement_state(world, *mv, t1).is_some_and(is_green));
             let waited_too_long = t1_s - q.onset_s > 120.0;
-            if done || waited_too_long || (!green && q.members.iter().all(|m| m.front_cross.is_some() || m.rear_cross.is_some() || !index.contains_key(&m.actor))) {
+            if done
+                || waited_too_long
+                || (!green
+                    && q.members.iter().all(|m| {
+                        m.front_cross.is_some()
+                            || m.rear_cross.is_some()
+                            || !index.contains_key(&m.actor)
+                    }))
+            {
                 self.closed.push(q);
             } else if !green {
                 // Anything that has not reached the line by the end of green is out.
@@ -658,7 +672,10 @@ impl CalibrationObserver {
             v.sort_by(|a, b| a.0.total_cmp(&b.0));
         }
         let t1_s = ns_to_secs(t1);
-        for a in actors.iter().filter(|a| a.class != crate::VehicleClass::Bicycle) {
+        for a in actors
+            .iter()
+            .filter(|a| a.class != crate::VehicleClass::Bicycle)
+        {
             self.total_m += a.speed_mps * dt;
             self.total_s += dt;
             let lane = world.lane(a.lane);
@@ -701,8 +718,7 @@ impl CalibrationObserver {
                 // adjusting to it, not choosing a free speed.
                 let signal_ahead = to_end < clear
                     && a.route_next.is_some_and(|next| {
-                        crate::audit::movement_state(world, next, t1)
-                            .is_some_and(|s| !is_green(s))
+                        crate::audit::movement_state(world, next, t1).is_some_and(|s| !is_green(s))
                     });
                 if !blocked && !blocked_ahead && !signal_ahead {
                     self.free_ratio.push(a.speed_mps / lane.speed_limit_mps);
@@ -795,7 +811,10 @@ impl CalibrationObserver {
                 TurnDirection::SlightLeft | TurnDirection::SlightRight => "slight",
                 TurnDirection::UTurn => "u-turn",
             };
-            self.turn_speeds.entry(key.to_string()).or_default().push(low);
+            self.turn_speeds
+                .entry(key.to_string())
+                .or_default()
+                .push(low);
         }
     }
 
@@ -812,7 +831,9 @@ impl CalibrationObserver {
         for p in pedestrians {
             if let Some(was) = self.ped_lane.get(&p.actor)
                 && *was != p.lane
-                && world.try_lane(*was).is_some_and(|l| l.kind != LaneKind::Crossing)
+                && world
+                    .try_lane(*was)
+                    .is_some_and(|l| l.kind != LaneKind::Crossing)
                 && let Some(plan) = self.crossing_plan.get(&p.lane)
                 && let Some(state) =
                     v2xw_world::walk::crossing_state(&world.signals[*plan], p.lane, t0_s)
@@ -919,7 +940,11 @@ impl CalibrationObserver {
             startup_lost_time_queues: first_four.len(),
             headway_by_position_s: by_pos.iter().map(|v| Summary::of(v)).collect(),
             queue_size: Summary::of(
-                &self.queue_sizes.iter().map(|n| *n as f64).collect::<Vec<_>>(),
+                &self
+                    .queue_sizes
+                    .iter()
+                    .map(|n| *n as f64)
+                    .collect::<Vec<_>>(),
             ),
             queue_spacing_m: Summary::of(&self.spacing_m),
             queue_head_gap_m: Summary::of(&self.head_gap_m),
@@ -968,7 +993,9 @@ fn add_all_red(plan: &mut v2xw_world::SignalPlan, all_red_s: f64) {
             take_from_next = false;
         }
         let ends_amber = phase.states.contains(&SignalState::Amber)
-            && !plan.phases[(i + 1) % n].states.contains(&SignalState::Amber);
+            && !plan.phases[(i + 1) % n]
+                .states
+                .contains(&SignalState::Amber);
         phases.push(phase.clone());
         if ends_amber {
             let red = v2xw_world::SignalPhase {

@@ -216,7 +216,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // is the flatness figure, reported beside the whole-run ratio.
     let head: f64 = per_bin.iter().skip(1).take(k).sum::<f64>() / k as f64;
     let tail: f64 = per_bin.iter().rev().take(k).sum::<f64>() / k as f64;
-    println!("\nrun total        {total:.2} s wall for {} s simulated", scenario.time.duration_s);
+    println!(
+        "\nrun total        {total:.2} s wall for {} s simulated",
+        scenario.time.duration_s
+    );
     println!(
         "wall per sim s   {:.4} (whole run)",
         total / scenario.time.duration_s

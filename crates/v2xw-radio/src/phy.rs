@@ -160,9 +160,7 @@ impl SensitivityPreset {
             SensitivityPreset::EtsiStatic => mcs.sensitivity_static_dbm(),
             SensitivityPreset::EtsiDynamic => mcs.sensitivity_dynamic_dbm(),
             SensitivityPreset::CohdaMk5 => mcs.sensitivity_cohda_mk5_dbm(),
-            SensitivityPreset::MeasuredObu => {
-                mcs.sensitivity_static_dbm() - MEASURED_OBU_MARGIN_DB
-            }
+            SensitivityPreset::MeasuredObu => mcs.sensitivity_static_dbm() - MEASURED_OBU_MARGIN_DB,
         }
     }
 

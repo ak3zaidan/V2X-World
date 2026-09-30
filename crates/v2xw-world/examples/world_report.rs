@@ -30,7 +30,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = args
         .first()
         .filter(|a| !a.starts_with("--"))
-        .ok_or("usage: world_report <extract.osm.xml> [--bbox a,b,c,d] [--preset P] [--baseline F]")?
+        .ok_or(
+            "usage: world_report <extract.osm.xml> [--bbox a,b,c,d] [--preset P] [--baseline F]",
+        )?
         .clone();
     let preset_name = value("--preset").unwrap_or_else(|| "urban-us-nyc".to_string());
     let preset = HighwayPreset::parse(&preset_name)
@@ -112,13 +114,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let succ: Vec<String> = world
                     .successors(lane.id)
                     .iter()
-                    .map(|c| format!("{}via{:?}{:?}", c.to_lane.index(), c.via.map(|v| v.index()), c.direction))
+                    .map(|c| {
+                        format!(
+                            "{}via{:?}{:?}",
+                            c.to_lane.index(),
+                            c.via.map(|v| v.index()),
+                            c.direction
+                        )
+                    })
                     .collect();
                 println!("    successors: {}", succ.join(" "));
             }
             if let Some(src) = src {
                 if let Some(way) = file.way(src.way) {
-                    let tags: Vec<String> = way.tags.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    let tags: Vec<String> =
+                        way.tags.iter().map(|(k, v)| format!("{k}={v}")).collect();
                     println!("    way {} ({:?}): {}", src.way, src.role, tags.join(" "));
                 }
             }
@@ -145,9 +155,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     else {
                         continue;
                     };
-                    let Some(way) = file.way(src.way) else { continue };
+                    let Some(way) = file.way(src.way) else {
+                        continue;
+                    };
                     let h = way.tags.get("highway").unwrap_or("?");
-                    let sv = way.tags.get("service").map(|s| format!(":{s}")).unwrap_or_default();
+                    let sv = way
+                        .tags
+                        .get("service")
+                        .map(|s| format!(":{s}"))
+                        .unwrap_or_default();
                     kinds.insert(format!("{h}{sv}"));
                 }
             }
@@ -159,7 +175,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .and_then(|s| file.way(s.way))
                 .map(|w| format!("{}", w.tags.get("highway").unwrap_or("?")))
                 .unwrap_or_default();
-            let key = format!("{own} | {}", kinds.into_iter().collect::<Vec<_>>().join(","));
+            let key = format!(
+                "{own} | {}",
+                kinds.into_iter().collect::<Vec<_>>().join(",")
+            );
             *tally.entry(key).or_default() += 1;
         }
         let mut rows: Vec<(u32, String)> = tally.into_iter().map(|(k, v)| (v, k)).collect();
@@ -171,7 +190,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `--describe-junction N[,M...]`: its OSM node, the node's tags and its arms.
     if let Some(list) = value("--describe-junction") {
         for id in list.split(',').filter_map(|x| x.trim().parse::<u32>().ok()) {
-            let Some(j) = world.roads.try_junction(v2xw_core::ids::JunctionId::new(id)) else {
+            let Some(j) = world
+                .roads
+                .try_junction(v2xw_core::ids::JunctionId::new(id))
+            else {
                 continue;
             };
             let node = report.junction_nodes.get(id as usize).copied().unwrap_or(0);

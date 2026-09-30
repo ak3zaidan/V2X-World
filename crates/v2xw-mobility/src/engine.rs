@@ -300,7 +300,10 @@ impl DriverTraits {
         let amber_go_tti_s = {
             let (near, far) = AMBER_DILEMMA_TTI_S;
             let u = ctx
-                .rng(RngDomain::ReactionTime, EntityRef::custom(AMBER_TRAIT_ID, seq))
+                .rng(
+                    RngDomain::ReactionTime,
+                    EntityRef::custom(AMBER_TRAIT_ID, seq),
+                )
                 .uniform(0.0, 1.0)
                 .clamp(1e-9, 1.0 - 1e-9);
             let median = 0.5 * (near + far);
@@ -1205,8 +1208,13 @@ impl NativeMobility {
             allow_uturn: true,
             ..*router.dijkstra().params()
         };
-        let route = crate::routing::dijkstra::Dijkstra::new(params)
-            .search_nearest(world, from, dest.end(), t, costs)?;
+        let route = crate::routing::dijkstra::Dijkstra::new(params).search_nearest(
+            world,
+            from,
+            dest.end(),
+            t,
+            costs,
+        )?;
         let to = *route.lanes.last()?;
         Some((route, to))
     }
@@ -2525,9 +2533,7 @@ impl NativeMobility {
                     let ahead = match (other_in, self_in) {
                         (true, false) => true,
                         (false, true) => false,
-                        (true, true) => {
-                            d_other < d_self || (d_other == d_self && other < actor.id)
-                        }
+                        (true, true) => d_other < d_self || (d_other == d_self && other < actor.id),
                         (false, false) => {
                             t_other < t_self || (t_other == t_self && other < actor.id)
                         }
@@ -2577,7 +2583,10 @@ impl NativeMobility {
             return None;
         };
         let plan = world.signal_plan(plan)?;
-        let k = plan.controlled.iter().position(|l| Some(*l) == movement_lane)?;
+        let k = plan
+            .controlled
+            .iter()
+            .position(|l| Some(*l) == movement_lane)?;
         let (i, into) = plan.phase_at(ns_to_secs(t))?;
         let amber = |p: usize| plan.phases[p].states.get(k) == Some(&SignalState::Amber);
         if !amber(i) {
@@ -2598,7 +2607,9 @@ impl NativeMobility {
     /// The speed a junction connector is driven at: its turn speed, or its limit.
     fn connector_speed(&self, world: &World, connector: LaneId) -> f64 {
         let limit = world.lane(connector).speed_limit_mps;
-        self.turn_speed.get(&connector).map_or(limit, |v| v.min(limit))
+        self.turn_speed
+            .get(&connector)
+            .map_or(limit, |v| v.min(limit))
     }
 
     /// The highest speed the vehicle should be doing now so that, braking at its
@@ -2917,7 +2928,8 @@ impl Mobility for NativeMobility {
                         // The slowest average speed that still reaches the line before
                         // the amber ends: a committed driver still slows for the turn
                         // beyond the line, but never below this.
-                        let left = self.amber_left_s(world, junction.id, junction.movement_lane, t0);
+                        let left =
+                            self.amber_left_s(world, junction.id, junction.movement_lane, t0);
                         commit_floor = Some(match left {
                             Some(r) if r > 0.05 => junction.stop_line_gap_m.max(0.0) / r,
                             _ => f64::INFINITY,
@@ -3104,7 +3116,9 @@ impl Mobility for NativeMobility {
                 && !l.is_vehicle()
                 && l.speed_mps == 0.0
             {
-                l.gap_m = l.gap_m.max(line - STOP_LINE_MARGIN_M + actor.driver.min_gap_m);
+                l.gap_m = l
+                    .gap_m
+                    .max(line - STOP_LINE_MARGIN_M + actor.driver.min_gap_m);
                 // The relaxed stop may use the room up to just short of the line, never
                 // past it — which, the obstacle now standing beyond the line, is a
                 // negative slack.
@@ -3164,7 +3178,11 @@ impl Mobility for NativeMobility {
                 // for seconds on end (the auditor's gap-below-s0 class, 308 vehicle-steps
                 // on the shipped Midtown run).
                 if let Some(v) = nearest_vehicle {
-                    accel = accel.min(self.cf.accel(&ego_capped, Some(&v), &lane_view, &self.weather));
+                    accel =
+                        accel.min(
+                            self.cf
+                                .accel(&ego_capped, Some(&v), &lane_view, &self.weather),
+                        );
                 }
                 // And so does a merge partner ahead: relaxed, two cars converging on a
                 // lane drop crept side by side towards the same crosswalk at 0.1 m/s,
@@ -5161,8 +5179,15 @@ mod tests {
             engine.costs(&world).generation()
         };
         let first = close(&mut engine, 0, &[(lanes[1], true)]);
-        let second = close(&mut engine, 100 * NS_PER_MS, &[(lanes[1], false), (lanes[2], true)]);
-        assert_ne!(first, second, "the closure set changed and the generation did not");
+        let second = close(
+            &mut engine,
+            100 * NS_PER_MS,
+            &[(lanes[1], false), (lanes[2], true)],
+        );
+        assert_ne!(
+            first, second,
+            "the closure set changed and the generation did not"
+        );
         // A command that changes nothing is not a change.
         let third = close(&mut engine, 200 * NS_PER_MS, &[(lanes[2], true)]);
         assert_eq!(second, third);

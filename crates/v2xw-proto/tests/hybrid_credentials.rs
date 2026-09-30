@@ -110,7 +110,10 @@ fn a_falcon_batch_costs_the_device_its_key_generation() {
         .expect("figure")
         .as_nanos();
     assert!(f > m, "falcon {f} ns vs ml-dsa {m} ns");
-    assert!(f >= CERTS * keygen, "falcon device time {f} ns < {CERTS} key generations");
+    assert!(
+        f >= CERTS * keygen,
+        "falcon device time {f} ns < {CERTS} key generations"
+    );
 }
 
 const STATION: NodeId = NodeId::new(2_000);

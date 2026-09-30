@@ -1199,10 +1199,9 @@ impl TrafficAuditor {
                 SignalState::Red
                     if self.params.right_turn_on_red
                         && self.stood_at_end.get(&a.actor) == Some(&p.lane)
-                        && world
-                            .successors(p.lane)
-                            .iter()
-                            .any(|c| c.via == Some(internal) && c.direction == TurnDirection::Right) =>
+                        && world.successors(p.lane).iter().any(|c| {
+                            c.via == Some(internal) && c.direction == TurnDirection::Right
+                        }) =>
                 {
                     self.stats.right_turns_on_red += 1;
                 }
@@ -2169,7 +2168,9 @@ mod tests {
         let red = (0..1200u64)
             .map(|k| k * step)
             .find(|t| {
-                (0..4).all(|i| movement_state(&world, internal, t + i * step) == Some(SignalState::Red))
+                (0..4).all(|i| {
+                    movement_state(&world, internal, t + i * step) == Some(SignalState::Red)
+                })
             })
             .expect("a red long enough");
         let len = world.lane(approach).length_m;
@@ -2182,7 +2183,13 @@ mod tests {
                 },
             );
             let first = if stops { 0.0 } else { 1.0 };
-            audit.observe(&world, red, red + step, &[at(&world, 0, approach, len - 1.0, first)], &[]);
+            audit.observe(
+                &world,
+                red,
+                red + step,
+                &[at(&world, 0, approach, len - 1.0, first)],
+                &[],
+            );
             audit.observe(
                 &world,
                 red + step,
@@ -2196,7 +2203,11 @@ mod tests {
             let r = audit.report();
             (r.count(Check::RedEntry), r.stats.right_turns_on_red)
         };
-        assert_eq!(run(false, true), (1, 0), "New York: a right on red is a red entry");
+        assert_eq!(
+            run(false, true),
+            (1, 0),
+            "New York: a right on red is a red entry"
+        );
         assert_eq!(run(true, true), (0, 1), "permitted, after a full stop");
         assert_eq!(run(true, false), (1, 0), "permitted, but it rolled through");
     }

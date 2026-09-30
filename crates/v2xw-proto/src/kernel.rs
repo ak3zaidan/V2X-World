@@ -581,7 +581,8 @@ impl<M> Kernel<M> {
                 run: s.run,
             };
             let seq = self.push_seq(arrival, delivery);
-            self.in_flight_bytes.insert((arrival, seq), u64::from(bytes));
+            self.in_flight_bytes
+                .insert((arrival, seq), u64::from(bytes));
             let t = self.traffic.entry(node).or_default();
             t.sent += 1;
             t.bytes_out = t.bytes_out.saturating_add(u64::from(bytes));

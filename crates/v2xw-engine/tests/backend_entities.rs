@@ -118,11 +118,29 @@ fn the_backend_state_names_every_scms_entity_once_a_second() {
     let last = views.last().expect("one");
     assert_eq!(last["system"], "scms");
     for id in [
-        "manager", "pg", "electors", "root", "ica", "dcm", "eca", "lop", "ra", "la1", "la2",
-        "pca", "ma", "crlg", "crl-store", "crl-broadcast", "ee",
+        "manager",
+        "pg",
+        "electors",
+        "root",
+        "ica",
+        "dcm",
+        "eca",
+        "lop",
+        "ra",
+        "la1",
+        "la2",
+        "pca",
+        "ma",
+        "crlg",
+        "crl-store",
+        "crl-broadcast",
+        "ee",
     ] {
         let e = entity(last, id);
-        assert!(e["name"].as_str().is_some_and(|n| !n.is_empty()), "{id} unnamed");
+        assert!(
+            e["name"].as_str().is_some_and(|n| !n.is_empty()),
+            "{id} unnamed"
+        );
     }
     assert!(entity(last, "root")["state"]["certs_issued"].as_u64() >= Some(5));
     assert_eq!(entity(last, "root")["online"], false);
@@ -146,7 +164,10 @@ fn the_backend_state_names_every_scms_entity_once_a_second() {
     ] {
         assert!(edge(last, a, b), "no {a} -> {b} edge");
     }
-    assert!(!edge(last, "ee", "ra"), "a vehicle reached the RA without the LOP");
+    assert!(
+        !edge(last, "ee", "ra"),
+        "a vehicle reached the RA without the LOP"
+    );
     let ra = entity(last, "ra");
     assert!(ra["queue"]["served"].as_u64() > Some(0));
     assert!(ra["traffic"]["received"].as_u64() > Some(0));
@@ -177,7 +198,10 @@ fn an_expiring_enrolment_is_renewed_and_an_expired_one_cannot_top_up() {
         "renewing: {} started, {} completed, {} refused; {} top-ups refused",
         p.reenrolments_started, p.reenrolments_completed, p.reenrolments_refused, p.topups_refused
     );
-    assert!(p.reenrolments_started > 0, "no certificate came within its lead");
+    assert!(
+        p.reenrolments_started > 0,
+        "no certificate came within its lead"
+    );
     assert!(p.reenrolments_completed > 0, "no successor was installed");
     assert!(
         records(&rec, "sec.cert")
@@ -203,7 +227,10 @@ fn an_expiring_enrolment_is_renewed_and_an_expired_one_cannot_top_up() {
         p.topups_completed,
         p.vehicles_starved
     );
-    assert!(q.reenrolments_refused > 0, "an expired certificate was renewed");
+    assert!(
+        q.reenrolments_refused > 0,
+        "an expired certificate was renewed"
+    );
     assert_eq!(q.reenrolments_completed, 0);
     assert_eq!(q.topups_refused_blocklisted, 0);
     assert!(
@@ -336,11 +363,17 @@ fn a_compromised_unit_drops_or_poisons_the_reports_it_forwards() {
         p.ma_revoke_decisions,
         p.revoked_honest
     );
-    assert!(h.reports_uploaded_relay > 0, "nothing was relayed, so this proves nothing");
+    assert!(
+        h.reports_uploaded_relay > 0,
+        "nothing was relayed, so this proves nothing"
+    );
     assert_eq!(h.compromised_rsus, 0);
     assert_eq!(h.rsu_reports_suppressed + h.rsu_reports_poisoned, 0);
     assert_eq!(s.compromised_rsus, 8);
-    assert!(s.rsu_reports_suppressed > 0, "no relayed report was dropped");
+    assert!(
+        s.rsu_reports_suppressed > 0,
+        "no relayed report was dropped"
+    );
     assert!(
         s.reports_received < h.reports_received,
         "suppression let as many reports through as honest units"
@@ -424,8 +457,14 @@ fn a_compromised_unit_cannot_forge_the_crl() {
         h.topups_refused_blocklisted >= 1,
         "a revoked enrolment got a top-up"
     );
-    assert!(h.crls_issued > 0 && h.crl_broadcasts > 0, "no list was broadcast");
-    assert!(h.crls_installed > 0, "honest units' lists must be installed");
+    assert!(
+        h.crls_issued > 0 && h.crl_broadcasts > 0,
+        "no list was broadcast"
+    );
+    assert!(
+        h.crls_installed > 0,
+        "honest units' lists must be installed"
+    );
     assert_eq!(h.crl_frames_rejected, 0, "an honest list was rejected");
     assert!(f.rsu_crl_frames_forged > 0, "no frame was forged");
     assert!(f.crl_frames_rejected > 0, "a forged frame was accepted");
@@ -456,7 +495,11 @@ fn a_hybrid_signature_costs_its_post_quantum_time() {
         let sign: Vec<u64> = records(rec, "node.tx")
             .iter()
             .filter_map(|r| {
-                Some(r["t_signed"].as_u64()?.saturating_sub(r["t_sign_start"].as_u64()?))
+                Some(
+                    r["t_signed"]
+                        .as_u64()?
+                        .saturating_sub(r["t_sign_start"].as_u64()?),
+                )
             })
             .collect();
         (verify, sign)
@@ -479,12 +522,20 @@ fn a_hybrid_signature_costs_its_post_quantum_time() {
     assert!(!cv.is_empty() && !hv.is_empty(), "nothing was verified");
     // The generic automotive SoC: ECDSA P-256 verify 645 us, Falcon-512 verify 127 us.
     assert!(cv.iter().all(|&c| c == 645), "{:?}", &cv[..cv.len().min(5)]);
-    assert!(hv.iter().all(|&c| c == 645 + 127), "{:?}", &hv[..hv.len().min(5)]);
+    assert!(
+        hv.iter().all(|&c| c == 645 + 127),
+        "{:?}",
+        &hv[..hv.len().min(5)]
+    );
     // Signing: 244 us against 244 + 1,625 us. The stamp includes the J2945/1 hand-off
     // jitter, which only adds, so the shortest frame bounds the service time from above
     // and a hybrid frame can never be shorter than its two signatures.
     let min = |v: &[u64]| v.iter().copied().min().unwrap_or(0);
-    assert!(min(&hs) >= 1_869_000, "a hybrid frame signed in {} ns", min(&hs));
+    assert!(
+        min(&hs) >= 1_869_000,
+        "a hybrid frame signed in {} ns",
+        min(&hs)
+    );
     assert!(min(&cs) < 1_869_000, "a P-256 frame took {} ns", min(&cs));
     assert!(
         mean(&hs) - mean(&cs) > 1_200_000.0,
@@ -570,7 +621,11 @@ fn a_hybrid_signature_is_the_credential_systems_scheme_too() {
         per(edge_bytes(v, "ee", "lop"), r.phase2.topups_started)
     };
     assert!(up(&hv, &hybrid) > up(&cv, &classic) + 3.0 * 897.0);
-    assert_eq!(hybrid.phase2.backend_errors, 0, "{}", hybrid.phase2.first_backend_error);
+    assert_eq!(
+        hybrid.phase2.backend_errors, 0,
+        "{}",
+        hybrid.phase2.first_backend_error
+    );
 }
 
 /// The shipped `scenarios/credential-lifecycle.yaml` — what a researcher opens to watch the
@@ -610,7 +665,13 @@ fn the_credential_lifecycle_scenario_shows_every_stage() {
     assert!(p.reports_at_ma > 0, "no report reached the MA");
     assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
     let last = records(&rec, "backend.state").pop().expect("a view");
-    for (a, b) in [("ee", "lop"), ("lop", "ra"), ("ra", "pca"), ("ra", "la1"), ("lop", "ee")] {
+    for (a, b) in [
+        ("ee", "lop"),
+        ("lop", "ra"),
+        ("ra", "pca"),
+        ("ra", "la1"),
+        ("lop", "ee"),
+    ] {
         assert!(edge(&last, a, b), "no {a} -> {b} edge");
     }
 }
@@ -652,7 +713,13 @@ fn the_ccms_lifecycle_scenario_shows_every_stage() {
     assert!(p.trust_lists_installed > 0, "no station installed the ECTL");
     assert!(p.reports_at_ma > 0, "no report reached the MA");
     assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
-    for (a, b) in [("ee", "ea"), ("ea", "aa"), ("aa", "ea"), ("ee", "cpoc"), ("cpoc", "ee")] {
+    for (a, b) in [
+        ("ee", "ea"),
+        ("ea", "aa"),
+        ("aa", "ea"),
+        ("ee", "cpoc"),
+        ("cpoc", "ee"),
+    ] {
         assert!(edge(&last, a, b), "no {a} -> {b} edge");
     }
 }

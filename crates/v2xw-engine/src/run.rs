@@ -101,9 +101,8 @@ use v2xw_msg::generator::DccState;
 use v2xw_node::stores::VerificationState;
 use v2xw_node::{NodeConfig, RxDisposition, RxFrame, RxReport, RxStamp, StepOutcome, Transmission};
 use v2xw_radio::{
-    AccessCategory, Arrival, ChannelId, EdcaOcbMac, FrameDescriptor, FrameKind,
-    InterferenceSource, LossCause, Mac, MacSdu, Mcs, OfdmPhy, Phy, RadioEndpoint, RxHandle,
-    SduRef, TxHandle,
+    AccessCategory, Arrival, ChannelId, EdcaOcbMac, FrameDescriptor, FrameKind, InterferenceSource,
+    LossCause, Mac, MacSdu, Mcs, OfdmPhy, Phy, RadioEndpoint, RxHandle, SduRef, TxHandle,
 };
 use v2xw_record::{Cadence, Profile};
 use v2xw_world::World;
@@ -847,7 +846,9 @@ impl Engine {
         let regulation = crate::wiring::radio_regulation(&scenario).ok();
         let (dsrc_channel, dsrc_freq_hz) = regulation
             .filter(|r| r.technology == v2xw_radio::regulation::Technology::Ieee80211p)
-            .map_or((SAFETY_CHANNEL, SAFETY_FREQ_HZ), |r| (r.channel(), r.centre_hz()));
+            .map_or((SAFETY_CHANNEL, SAFETY_FREQ_HZ), |r| {
+                (r.channel(), r.centre_hz())
+            });
         if let Some(r) = regulation.as_ref() {
             let card = v2xw_radio::regulation::card(r.region);
             if !registry.contains(&card.id) {
@@ -1011,8 +1012,7 @@ impl Engine {
                 crate::wiring::build_mac(&scenario_for_radio)
             },
             j2945_per: (sidelink.is_none()
-                && crate::wiring::build_dcc(&scenario_for_radio)
-                    .is_some_and(|d| d.is_j2945()))
+                && crate::wiring::build_dcc(&scenario_for_radio).is_some_and(|d| d.is_j2945()))
             .then(|| v2xw_radio::PerWindow::new(v2xw_radio::J2945Params::J2945_1)),
             j2945_quality_at: BTreeMap::new(),
             // On a sidelink `build_dcc` returns only SAE J3161/1's rate control, which
@@ -1348,14 +1348,11 @@ impl Engine {
             // A unit signs every SPaT and MAP on its own hardware, and a profile that
             // publishes no signing cost signs nothing (`ObuRuntime` never signs for free).
             // Refused here by name rather than left to broadcast silence.
-            let signs = self
-                .nodes
-                .get(&node)
-                .is_some_and(|n| {
-                    n.profile()
-                        .op_cost(v2xw_node::profile::signature_ops(&self.scenario.security.signature).0)
-                        .is_some()
-                });
+            let signs = self.nodes.get(&node).is_some_and(|n| {
+                n.profile()
+                    .op_cost(v2xw_node::profile::signature_ops(&self.scenario.security.signature).0)
+                    .is_some()
+            });
             if !signs {
                 let profile = self
                     .nodes
@@ -2396,8 +2393,7 @@ impl Engine {
                     window.average_per(node, now, |tx| {
                         nodes.get(&tx).is_some_and(|rv| {
                             let p = v2xw_core::NodeView::position(rv).pos;
-                            v2xw_core::math::hypot(p.x - me.x, p.y - me.y)
-                                <= J2945_DENSITY_RADIUS_M
+                            v2xw_core::math::hypot(p.x - me.x, p.y - me.y) <= J2945_DENSITY_RADIUS_M
                         })
                     })
                 }
@@ -3121,7 +3117,10 @@ impl Engine {
         if tx.msg_type == v2xw_msg::MsgType::Bsm
             && !self.rsus.contains_key(&node)
             && let Some(b) = belief
-            && self.dcc.as_ref().is_some_and(crate::wiring::EngineDcc::is_sae)
+            && self
+                .dcc
+                .as_ref()
+                .is_some_and(crate::wiring::EngineDcc::is_sae)
         {
             let sent = host_state(b, t_generated);
             let u = self
@@ -3560,7 +3559,11 @@ impl Engine {
             // the unit's T_off waits for the gate to open, and one the EN 302 571 floor
             // refuses outright (T_on above 4 ms) is dropped. J2945/1 has no gatekeeper; its
             // rate control is the generator's inter-transmit time.
-            if self.dcc.as_ref().is_some_and(crate::wiring::EngineDcc::gates) {
+            if self
+                .dcc
+                .as_ref()
+                .is_some_and(crate::wiring::EngineDcc::gates)
+            {
                 let req = v2xw_radio::TxRequest {
                     bytes: descriptor.bytes,
                     mcs: descriptor.mcs,
@@ -4014,7 +4017,9 @@ impl Engine {
             state.arrivals.insert(rx, (rssi, dist));
             if self.sidelink.is_some() {
                 let rx_vel = velocities.get(&rx).copied().unwrap_or(Vec3::ZERO);
-                state.sl.note_condition(self.radio_env, rx, los_class, tx_vel, rx_vel);
+                state
+                    .sl
+                    .note_condition(self.radio_env, rx, los_class, tx_vel, rx_vel);
             }
             if high {
                 state.focus_high.insert(rx);
@@ -4616,7 +4621,10 @@ impl Engine {
                     !self.rsus.contains_key(&state.tx)
                         && !matches!(
                             self.node_class.get(&state.tx),
-                            Some(v2xw_radio::ActorClass::Pedestrian | v2xw_radio::ActorClass::Bicycle)
+                            Some(
+                                v2xw_radio::ActorClass::Pedestrian
+                                    | v2xw_radio::ActorClass::Bicycle
+                            )
                         )
                 })
                 .map(|d| d.label::<EngineCtx<'_>>(state.tx, state.dcc_event)),
@@ -4671,7 +4679,12 @@ impl Engine {
                 let own = self
                     .nodes
                     .get(&rx)
-                    .and_then(|n| n.stores().certs.active().map(|c| hex_digest(&c.digest.0[..])))
+                    .and_then(|n| {
+                        n.stores()
+                            .certs
+                            .active()
+                            .map(|c| hex_digest(&c.digest.0[..]))
+                    })
                     .unwrap_or_default();
                 let forwarded = {
                     let Engine {
@@ -4960,9 +4973,9 @@ impl Engine {
                         let mut ctx = EngineCtx::new(
                             scheduler, rng, world, snapshot, provenance, params, &mut null,
                         );
-                        phase2
-                            .as_mut()
-                            .is_some_and(|p| p.forge_crl_frame(&mut ctx, rsu, &own, now, &mut frame))
+                        phase2.as_mut().is_some_and(|p| {
+                            p.forge_crl_frame(&mut ctx, rsu, &own, now, &mut frame)
+                        })
                     };
                     if forged {
                         bytes = self

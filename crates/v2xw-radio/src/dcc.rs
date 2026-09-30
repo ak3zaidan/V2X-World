@@ -1539,7 +1539,9 @@ impl SaeJ2945Dcc {
         let params = self.params;
         let state = self.entry(node);
         let received = u >= state.quality;
-        if received || state.inferred_losses >= params.max_inferred_losses || state.believed.is_none()
+        if received
+            || state.inferred_losses >= params.max_inferred_losses
+            || state.believed.is_none()
         {
             state.believed = Some(sent);
             state.inferred_losses = 0;
@@ -1572,8 +1574,7 @@ impl SaeJ2945Dcc {
         state.tracking_error_m = te;
         let trigger = if decel_mps2 > params.critical_decel_mps2 {
             Some(J2945Trigger::CriticalEvent)
-        } else if params.tracking_error_trigger
-            && u < Self::tracking_error_probability(params, te)
+        } else if params.tracking_error_trigger && u < Self::tracking_error_probability(params, te)
         {
             Some(J2945Trigger::TrackingError)
         } else {
@@ -1902,29 +1903,143 @@ fn j2945_card() -> ModelCard {
     let camp = camp_2019;
     let nprm = fmvss150_nprm;
     let mut params = vec![
-        j2945_parameter("lambda", "-", serde_json::json!(p.lambda), Some((0.0, 1.0)), camp()),
-        j2945_parameter("b_density", "vehicles", serde_json::json!(p.b_density), Some((1.0, 500.0)), camp()),
+        j2945_parameter(
+            "lambda",
+            "-",
+            serde_json::json!(p.lambda),
+            Some((0.0, 1.0)),
+            camp(),
+        ),
+        j2945_parameter(
+            "b_density",
+            "vehicles",
+            serde_json::json!(p.b_density),
+            Some((1.0, 500.0)),
+            camp(),
+        ),
         j2945_parameter("max_itt_ms", "ms", ms(p.max_itt), None, camp()),
         j2945_parameter("min_itt_ms", "ms", ms(p.min_itt), None, camp()),
-        j2945_parameter("rate_control_interval_ms", "ms", ms(p.rate_control_interval), None, camp()),
-        j2945_parameter("counting_radius_m", "m", serde_json::json!(p.counting_radius_m), None, camp()),
-        j2945_parameter("rp_max_dbm", "dBm", serde_json::json!(p.rp_max_dbm), Some((-10.0, 33.0)), camp()),
-        j2945_parameter("rp_min_dbm", "dBm", serde_json::json!(p.rp_min_dbm), Some((-10.0, 33.0)), camp()),
-        j2945_parameter("min_cu", "-", serde_json::json!(p.min_cu), Some((0.0, 1.0)), camp()),
-        j2945_parameter("max_cu", "-", serde_json::json!(p.max_cu), Some((0.0, 1.0)), camp()),
-        j2945_parameter("supra_gain", "-", serde_json::json!(p.supra_gain), Some((0.0, 1.0)), camp()),
-        j2945_parameter("rp_initial_dbm", "dBm", serde_json::json!(p.rp_initial_dbm), Some((-10.0, 33.0)), camp()),
-        j2945_parameter("te_min_m", "m", serde_json::json!(p.te_min_m), Some((0.0, 5.0)), camp()),
-        j2945_parameter("te_max_m", "m", serde_json::json!(p.te_max_m), Some((0.0, 5.0)), camp()),
-        j2945_parameter("te_alpha", "1/m^2", serde_json::json!(p.te_alpha), Some((0.0, 1000.0)), camp()),
-        j2945_parameter("critical_decel_mps2", "m/s^2", serde_json::json!(p.critical_decel_mps2), Some((0.0, 20.0)), camp()),
-        j2945_parameter("cert_attach_interval_ms", "ms", ms(p.cert_attach_interval), None, rostami()),
+        j2945_parameter(
+            "rate_control_interval_ms",
+            "ms",
+            ms(p.rate_control_interval),
+            None,
+            camp(),
+        ),
+        j2945_parameter(
+            "counting_radius_m",
+            "m",
+            serde_json::json!(p.counting_radius_m),
+            None,
+            camp(),
+        ),
+        j2945_parameter(
+            "rp_max_dbm",
+            "dBm",
+            serde_json::json!(p.rp_max_dbm),
+            Some((-10.0, 33.0)),
+            camp(),
+        ),
+        j2945_parameter(
+            "rp_min_dbm",
+            "dBm",
+            serde_json::json!(p.rp_min_dbm),
+            Some((-10.0, 33.0)),
+            camp(),
+        ),
+        j2945_parameter(
+            "min_cu",
+            "-",
+            serde_json::json!(p.min_cu),
+            Some((0.0, 1.0)),
+            camp(),
+        ),
+        j2945_parameter(
+            "max_cu",
+            "-",
+            serde_json::json!(p.max_cu),
+            Some((0.0, 1.0)),
+            camp(),
+        ),
+        j2945_parameter(
+            "supra_gain",
+            "-",
+            serde_json::json!(p.supra_gain),
+            Some((0.0, 1.0)),
+            camp(),
+        ),
+        j2945_parameter(
+            "rp_initial_dbm",
+            "dBm",
+            serde_json::json!(p.rp_initial_dbm),
+            Some((-10.0, 33.0)),
+            camp(),
+        ),
+        j2945_parameter(
+            "te_min_m",
+            "m",
+            serde_json::json!(p.te_min_m),
+            Some((0.0, 5.0)),
+            camp(),
+        ),
+        j2945_parameter(
+            "te_max_m",
+            "m",
+            serde_json::json!(p.te_max_m),
+            Some((0.0, 5.0)),
+            camp(),
+        ),
+        j2945_parameter(
+            "te_alpha",
+            "1/m^2",
+            serde_json::json!(p.te_alpha),
+            Some((0.0, 1000.0)),
+            camp(),
+        ),
+        j2945_parameter(
+            "critical_decel_mps2",
+            "m/s^2",
+            serde_json::json!(p.critical_decel_mps2),
+            Some((0.0, 20.0)),
+            camp(),
+        ),
+        j2945_parameter(
+            "cert_attach_interval_ms",
+            "ms",
+            ms(p.cert_attach_interval),
+            None,
+            rostami(),
+        ),
         j2945_parameter("tx_rand_ms", "ms", ms(p.tx_rand), Some((0.0, 50.0)), nprm()),
         j2945_parameter("per_interval_ms", "ms", ms(p.per_interval), None, nprm()),
-        j2945_parameter("per_sub_interval_ms", "ms", ms(p.per_sub_interval), None, nprm()),
-        j2945_parameter("per_weight", "-", serde_json::json!(p.per_weight), Some((0.0, 1.0)), nprm()),
-        j2945_parameter("per_max", "-", serde_json::json!(p.per_max), Some((0.0, 1.0)), nprm()),
-        j2945_parameter("max_inferred_losses", "-", serde_json::json!(p.max_inferred_losses), None, nprm()),
+        j2945_parameter(
+            "per_sub_interval_ms",
+            "ms",
+            ms(p.per_sub_interval),
+            None,
+            nprm(),
+        ),
+        j2945_parameter(
+            "per_weight",
+            "-",
+            serde_json::json!(p.per_weight),
+            Some((0.0, 1.0)),
+            nprm(),
+        ),
+        j2945_parameter(
+            "per_max",
+            "-",
+            serde_json::json!(p.per_max),
+            Some((0.0, 1.0)),
+            nprm(),
+        ),
+        j2945_parameter(
+            "max_inferred_losses",
+            "-",
+            serde_json::json!(p.max_inferred_losses),
+            None,
+            nprm(),
+        ),
     ];
     params.extend(floor_parameters());
     card.parameters = params;
@@ -2029,14 +2144,50 @@ fn j3161_card() -> ModelCard {
     let p = J2945Params::J3161_1;
     let ms = |d: Duration| serde_json::json!(d.as_nanos() / 1_000_000);
     card.parameters = vec![
-        j2945_parameter("lambda", "-", serde_json::json!(p.lambda), Some((0.0, 1.0)), fouda_2023()),
-        j2945_parameter("b_density", "vehicles", serde_json::json!(p.b_density), Some((1.0, 500.0)), fouda_2023()),
+        j2945_parameter(
+            "lambda",
+            "-",
+            serde_json::json!(p.lambda),
+            Some((0.0, 1.0)),
+            fouda_2023(),
+        ),
+        j2945_parameter(
+            "b_density",
+            "vehicles",
+            serde_json::json!(p.b_density),
+            Some((1.0, 500.0)),
+            fouda_2023(),
+        ),
         j2945_parameter("max_itt_ms", "ms", ms(p.max_itt), None, fouda_2023()),
         j2945_parameter("min_itt_ms", "ms", ms(p.min_itt), None, fouda_2023()),
-        j2945_parameter("counting_radius_m", "m", serde_json::json!(p.counting_radius_m), None, fouda_2023()),
-        j2945_parameter("critical_decel_mps2", "m/s^2", serde_json::json!(p.critical_decel_mps2), Some((0.0, 20.0)), camp_2019()),
-        j2945_parameter("power_control", "-", serde_json::json!(p.power_control), None, fouda_2023()),
-        j2945_parameter("tracking_error_trigger", "-", serde_json::json!(p.tracking_error_trigger), None, fouda_2023()),
+        j2945_parameter(
+            "counting_radius_m",
+            "m",
+            serde_json::json!(p.counting_radius_m),
+            None,
+            fouda_2023(),
+        ),
+        j2945_parameter(
+            "critical_decel_mps2",
+            "m/s^2",
+            serde_json::json!(p.critical_decel_mps2),
+            Some((0.0, 20.0)),
+            camp_2019(),
+        ),
+        j2945_parameter(
+            "power_control",
+            "-",
+            serde_json::json!(p.power_control),
+            None,
+            fouda_2023(),
+        ),
+        j2945_parameter(
+            "tracking_error_trigger",
+            "-",
+            serde_json::json!(p.tracking_error_trigger),
+            None,
+            fouda_2023(),
+        ),
     ];
     card.assumptions = vec![
         "The neighbour count is the unit's own: the peers in its neighbour table within \
@@ -2571,7 +2722,10 @@ mod tests {
         // Rostami 2018 Table 1 differs from CAMP's J2945/1 table in λ alone.
         assert_eq!(J2945Params::ROSTAMI.lambda, 0.5);
         assert_eq!(
-            J2945Params { lambda: 0.05, ..J2945Params::ROSTAMI },
+            J2945Params {
+                lambda: 0.05,
+                ..J2945Params::ROSTAMI
+            },
             J2945Params::J2945_1
         );
         assert_eq!(J2945Params::default(), J2945Params::J2945_1);
@@ -2730,12 +2884,23 @@ mod tests {
             // The paper prints its errors to two decimals from its own Eq. 10; this is the
             // exact geometry, 0.1936 m at 400 ms against a printed 0.2 and 0.3024 m at
             // 500 ms against 0.31, so the two agree to a centimetre.
-            assert!((te - te_want).abs() < 0.01, "TE at {} ms: {te} against {te_want}", (k + 1) * 100);
+            assert!(
+                (te - te_want).abs() < 0.01,
+                "TE at {} ms: {te} against {te_want}",
+                (k + 1) * 100
+            );
             let p_got = SaeJ2945Dcc::tracking_error_probability(p, te);
             // The paper evaluates Eq. 7 at its rounded errors; 0.31 m gives 0.596.
             let p_at_printed = SaeJ2945Dcc::tracking_error_probability(p, te_want);
-            assert!((p_at_printed - p_want).abs() < 0.03, "p({te_want}) = {p_at_printed}, printed {p_want}");
-            assert!((p_got - p_want).abs() < 0.05, "p at {} ms: {p_got} against {p_want}", (k + 1) * 100);
+            assert!(
+                (p_at_printed - p_want).abs() < 0.03,
+                "p({te_want}) = {p_at_printed}, printed {p_want}"
+            );
+            assert!(
+                (p_got - p_want).abs() < 0.05,
+                "p at {} ms: {p_got} against {p_want}",
+                (k + 1) * 100
+            );
         }
     }
 
@@ -2763,7 +2928,10 @@ mod tests {
         };
         dcc.on_transmitted(node, straight(0), 0.5);
         for k in 1..6u64 {
-            assert_eq!(dcc.on_tracking(node, straight(k * 100_000_000), 0.0, 0.0), None);
+            assert_eq!(
+                dcc.on_tracking(node, straight(k * 100_000_000), 0.0, 0.0),
+                None
+            );
         }
         assert!(dcc.tracking_error_m(node) < 1e-9);
 
@@ -2776,7 +2944,10 @@ mod tests {
         );
         assert_eq!(dcc.itt(node), Duration::from_millis(100));
         assert_eq!(dcc.power_dbm(node), 20.0);
-        assert_eq!(Dcc::<TestCtx>::state(&dcc, node).t_off, Duration::from_millis(100));
+        assert_eq!(
+            Dcc::<TestCtx>::state(&dcc, node).t_off,
+            Duration::from_millis(100)
+        );
         // Once sent, the exception is spent: back to MaxITT and the SUPRA power, and the
         // neighbours now hold the swerved state.
         dcc.on_transmitted(node, swerved, 0.5);
@@ -2833,13 +3004,21 @@ mod tests {
         assert!((dcc.tracking_error_m(node) - 3.0).abs() < 1e-12);
         dcc.on_transmitted(node, state(4.0, 6), 0.1);
         dcc.on_tracking(node, state(4.0, 7), 0.0, 1.0);
-        assert!(dcc.tracking_error_m(node) < 1e-12, "the fourth loss in a row is taken as received");
+        assert!(
+            dcc.tracking_error_m(node) < 1e-12,
+            "the fourth loss in a row is taken as received"
+        );
     }
 
     #[test]
     fn the_per_window_counts_what_each_host_heard_of_each_neighbour() {
         let mut w = PerWindow::new(J2945Params::J2945_1);
-        let (host, a, b, far) = (NodeId::new(0), NodeId::new(1), NodeId::new(2), NodeId::new(3));
+        let (host, a, b, far) = (
+            NodeId::new(0),
+            NodeId::new(1),
+            NodeId::new(2),
+            NodeId::new(3),
+        );
         let s = 1_000_000_000u64;
         // Five seconds: A sends 50 BSMs and the host decodes 40; B sends 50 and the host
         // decodes all of them; a far vehicle is heard but is outside 100 m.
@@ -2854,8 +3033,13 @@ mod tests {
             w.note_received(host, b, t + 1_000);
             w.note_received(host, far, t + 1_000);
         }
-        let avg = w.average_per(host, 5 * s, |tx| tx != far).expect("two neighbours");
-        assert!((avg - 0.1).abs() < 1e-12, "mean of 0.2 and 0.0 is 0.1, got {avg}");
+        let avg = w
+            .average_per(host, 5 * s, |tx| tx != far)
+            .expect("two neighbours");
+        assert!(
+            (avg - 0.1).abs() < 1e-12,
+            "mean of 0.2 and 0.0 is 0.1, got {avg}"
+        );
         // Nothing heard in the window: no average.
         assert_eq!(w.average_per(host, 20 * s, |_| true), None);
         // A vehicle never decoded is not in the average, whatever it sent.

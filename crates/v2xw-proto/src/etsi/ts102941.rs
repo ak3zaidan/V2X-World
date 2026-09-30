@@ -609,10 +609,7 @@ impl EtsiSizes {
 
     /// The `ecSignature` the AA cannot read: a signed, encrypted `SharedAtRequest` hash.
     const fn ec_signature_bytes(&self) -> u32 {
-        self.env_digest()
-            + SHA256_BYTES
-            + self.sig_bytes()
-            + ECIES_P256_ENCRYPTED_KEY_BYTES
+        self.env_digest() + SHA256_BYTES + self.sig_bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES
     }
 
     /// `AuthorizationValidationRequest`.
@@ -632,10 +629,7 @@ impl EtsiSizes {
     /// `AuthorizationValidationResponse`.
     pub const fn validation_response(&self) -> WireSize {
         WireSize::derived(
-            self.env_cert()
-                + self.certs.authority.bytes()
-                + 1
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+            self.env_cert() + self.certs.authority.bytes() + 1 + ECIES_P256_ENCRYPTED_KEY_BYTES,
             "envelope(certificate) + EA certificate + response code + ECIES wrapper",
             STRUCTURE,
         )
@@ -644,9 +638,7 @@ impl EtsiSizes {
     /// `AuthorizationResponse`: the AT, encrypted to the station.
     pub const fn authorization_response(&self) -> WireSize {
         WireSize::derived(
-            self.env_digest()
-                + self.certs.pseudonym.bytes()
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+            self.env_digest() + self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES,
             "envelope(digest) + authorization ticket + ECIES wrapper",
             STRUCTURE,
         )
@@ -701,9 +693,7 @@ impl EtsiSizes {
     /// One `ButterflyCertResponse`, AA → EA: one authorization ticket, encrypted.
     pub const fn butterfly_cert_response(&self) -> WireSize {
         WireSize::derived(
-            self.env_digest()
-                + self.certs.pseudonym.bytes()
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+            self.env_digest() + self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES,
             "envelope(digest) + authorization ticket + ECIES wrapper",
             STRUCTURE,
         )
@@ -1508,7 +1498,11 @@ impl EtsiRun {
         let run = self.new_run();
         let at = at.max(self.kernel.now());
         let ctl_have = self.installed_ctl.get(&station).copied().unwrap_or(0);
-        let crl_have = self.installed_ca_crl_seq.get(&station).copied().unwrap_or(0);
+        let crl_have = self
+            .installed_ca_crl_seq
+            .get(&station)
+            .copied()
+            .unwrap_or(0);
         self.kernel.inject_at(
             at,
             Delivery {
@@ -1802,10 +1796,7 @@ impl EtsiRun {
                 out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
                 out.send(
                     n.ea,
-                    Ts102941Msg::ValidationRequest {
-                        ec,
-                        reply_to: from,
-                    },
+                    Ts102941Msg::ValidationRequest { ec, reply_to: from },
                     "etsi-validation-request",
                     self.sizes.validation_request(),
                     Transport::BackendNet,

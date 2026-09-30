@@ -19,7 +19,8 @@ fn scenarios() -> PathBuf {
 /// The procedural Midtown grid (no external input), `secs` long, at `rate` vehicles an
 /// hour, with building obstruction off so the medium is shared.
 fn grid(rate: f64, secs: f64) -> Scenario {
-    let mut s = Scenario::load(scenarios().join("phase1-grid.yaml")).expect("the shipped scenario loads");
+    let mut s =
+        Scenario::load(scenarios().join("phase1-grid.yaml")).expect("the shipped scenario loads");
     s.time.duration_s = secs;
     s.actors.vehicles.demand.rate_veh_per_h = Some(rate);
     s.world.buildings.enabled = false;
@@ -65,7 +66,10 @@ fn a_sidelink_run_reports_its_channel_busy_ratio() {
         let (report, recorder) = run_recorded(with_rat(grid(6_000.0, 8.0), rat));
         assert!(report.frames_transmitted > 0, "{rat}: nothing was sent");
         let cbr = views::<MacCbrView>(&recorder);
-        assert!(!cbr.is_empty(), "{rat}: no mac.cbr record on a sidelink run");
+        assert!(
+            !cbr.is_empty(),
+            "{rat}: no mac.cbr record on a sidelink run"
+        );
         assert!(
             cbr.iter().all(|c| c.channel == Some(183)),
             "{rat}: mac.cbr must be on the sidelink's channel 183"
@@ -73,7 +77,10 @@ fn a_sidelink_run_reports_its_channel_busy_ratio() {
         let offered: u64 = cbr.iter().filter_map(|c| c.offered_frames).sum();
         assert!(offered > 0, "{rat}: the windows carry no offered load");
         let busy = cbr.iter().filter(|c| c.cbr > 0.0).count();
-        assert!(busy > 0, "{rat}: no UE ever measured a busy sub-channel: {cbr:?}");
+        assert!(
+            busy > 0,
+            "{rat}: no UE ever measured a busy sub-channel: {cbr:?}"
+        );
         assert!(cbr.iter().all(|c| (0.0..=1.0).contains(&c.cbr)));
     }
 }
@@ -183,7 +190,13 @@ fn the_region_decides_the_channel_and_refuses_what_its_rules_forbid() {
     let (lte, lte_rec) = run_recorded(with_region(with_rat(base.clone(), "lte-v2x-pc5"), "eu"));
     let sl = lte.sidelink.as_ref().expect("a sidelink report");
     assert_eq!(
-        (sl.profile.as_str(), sl.region.as_str(), sl.channel, sl.channel_mhz, sl.subchannels),
+        (
+            sl.profile.as_str(),
+            sl.region.as_str(),
+            sl.channel,
+            sl.channel_mhz,
+            sl.subchannels
+        ),
         ("etsi-en303613", "eu", 182, 10, 5)
     );
     assert_eq!(tx_channels(&lte_rec), [182].into_iter().collect());
@@ -191,7 +204,12 @@ fn the_region_decides_the_channel_and_refuses_what_its_rules_forbid() {
     let (nr, _) = run_recorded(with_region(with_rat(base.clone(), "nr-v2x-pc5"), "eu"));
     let sl = nr.sidelink.as_ref().expect("a sidelink report");
     assert_eq!(
-        (sl.profile.as_str(), sl.channel, sl.channel_mhz, sl.subchannels),
+        (
+            sl.profile.as_str(),
+            sl.channel,
+            sl.channel_mhz,
+            sl.subchannels
+        ),
         ("etsi-en303798", 178, 10, 2)
     );
 
@@ -199,7 +217,13 @@ fn the_region_decides_the_channel_and_refuses_what_its_rules_forbid() {
     let (us_lte, _) = run_recorded(with_rat(base.clone(), "lte-v2x-pc5"));
     let sl = us_lte.sidelink.as_ref().expect("a sidelink report");
     assert_eq!(
-        (sl.profile.as_str(), sl.region.as_str(), sl.channel, sl.channel_mhz, sl.subchannels),
+        (
+            sl.profile.as_str(),
+            sl.region.as_str(),
+            sl.channel,
+            sl.channel_mhz,
+            sl.subchannels
+        ),
         ("sae-j3161", "us", 183, 20, 10)
     );
 
@@ -219,7 +243,10 @@ fn the_region_decides_the_channel_and_refuses_what_its_rules_forbid() {
     let mut odd = with_region(base.clone(), "eu");
     odd.radio.channel = Some(184);
     let why = refusals(&odd);
-    assert!(why.contains("radio.channel") && why.contains("184"), "{why}");
+    assert!(
+        why.contains("radio.channel") && why.contains("184"),
+        "{why}"
+    );
     let mut odd = base;
     odd.radio.channel = Some(169);
     assert!(refusals(&odd).contains("radio.channel"));
@@ -244,9 +271,17 @@ fn a_unit_above_its_regions_eirp_limit_transmits_at_the_limit() {
             .collect()
     };
     let (_, us) = run_recorded(s.clone());
-    assert_eq!(powers(&us), [240].into_iter().collect(), "US: 27 dBm EIRP less 3 dBi");
+    assert_eq!(
+        powers(&us),
+        [240].into_iter().collect(),
+        "US: 27 dBm EIRP less 3 dBi"
+    );
     let (_, eu) = run_recorded(with_region(s, "eu"));
-    assert_eq!(powers(&eu), [300].into_iter().collect(), "EU: 33 dBm allows 30 + 3");
+    assert_eq!(
+        powers(&eu),
+        [300].into_iter().collect(),
+        "EU: 33 dBm allows 30 + 3"
+    );
 }
 
 // -----------------------------------------------------------------------------------------
@@ -272,9 +307,15 @@ fn dcc_labels(recorder: &MemoryRecorder) -> std::collections::BTreeSet<String> {
 fn each_region_runs_its_own_congestion_control() {
     let base = grid(3_000.0, 3.0);
     let (_, us) = run_recorded(base.clone());
-    assert_eq!(dcc_labels(&us), ["sae-j2945-1".to_string()].into_iter().collect());
+    assert_eq!(
+        dcc_labels(&us),
+        ["sae-j2945-1".to_string()].into_iter().collect()
+    );
     let (_, eu) = run_recorded(with_region(base.clone(), "eu"));
-    assert_eq!(dcc_labels(&eu), ["etsi-adaptive".to_string()].into_iter().collect());
+    assert_eq!(
+        dcc_labels(&eu),
+        ["etsi-adaptive".to_string()].into_iter().collect()
+    );
     let mut reactive = with_region(base.clone(), "eu");
     reactive.radio.models.insert(
         "dcc".to_string(),
@@ -284,7 +325,10 @@ fn each_region_runs_its_own_congestion_control() {
         },
     );
     let (_, re) = run_recorded(reactive);
-    assert_eq!(dcc_labels(&re), ["etsi-reactive".to_string()].into_iter().collect());
+    assert_eq!(
+        dcc_labels(&re),
+        ["etsi-reactive".to_string()].into_iter().collect()
+    );
     let mut sl = with_rat(base, "lte-v2x-pc5");
     sl.radio.models.insert(
         "dcc".to_string(),
@@ -336,7 +380,11 @@ fn an_lte_v2x_unit_runs_j3161_rate_control_without_power_control() {
         .filter_map(|v| v.power_dbm)
         .map(|p| (p * 10.0).round() as i64)
         .collect();
-    assert_eq!(powers.len(), 1, "every BSM at the configured power: {powers:?}");
+    assert_eq!(
+        powers.len(),
+        1,
+        "every BSM at the configured power: {powers:?}"
+    );
 
     let (_, off) = run_recorded(sidelink_params(
         base,
@@ -351,7 +399,11 @@ fn an_lte_v2x_unit_runs_j3161_rate_control_without_power_control() {
     let why = refusals(&nr);
     assert!(why.contains("rate_control"), "{why}");
     let (_, nr_default) = run_recorded(with_rat(grid(3_000.0, 1.0), "nr-v2x-pc5"));
-    assert!(dcc_labels(&nr_default).is_empty(), "{:?}", dcc_labels(&nr_default));
+    assert!(
+        dcc_labels(&nr_default).is_empty(),
+        "{:?}",
+        dcc_labels(&nr_default)
+    );
 }
 
 // -----------------------------------------------------------------------------------------
@@ -397,13 +449,19 @@ fn a_trucks_antenna_panels_are_weaker_to_its_side() {
     for (k, &r) in &roof {
         if let Some(&t) = tr.get(k) {
             matched += 1;
-            assert!(t <= r + 1e-9, "a pattern added gain on {k:?}: {t} against {r}");
+            assert!(
+                t <= r + 1e-9,
+                "a pattern added gain on {k:?}: {t} against {r}"
+            );
             if t < r - 1.0 {
                 weaker += 1;
             }
         }
         if let Some(&i) = iso.get(k) {
-            assert!(i >= r - 1e-9, "no pattern is weaker than a rooftop one on {k:?}");
+            assert!(
+                i >= r - 1e-9,
+                "no pattern is weaker than a rooftop one on {k:?}"
+            );
         }
     }
     eprintln!("{matched} links matched, {weaker} weaker by more than 1 dB");
@@ -460,13 +518,22 @@ fn an_adjacent_channel_transmitter_leaks_in_by_its_acir() {
     let (r, _) = run_recorded(leaky.clone());
     eprintln!("losses {:?}", r.rx_losses);
     let aci = r.rx_losses.get("adjacent-channel").copied().unwrap_or(0);
-    assert!(aci > 0, "no frame lost to the adjacent channel: {:?}", r.rx_losses);
+    assert!(
+        aci > 0,
+        "no frame lost to the adjacent channel: {:?}",
+        r.rx_losses
+    );
     assert_eq!(r.rx_losses.get("jammed"), None, "{:?}", r.rx_losses);
 
     let mut good = leaky.clone();
     good.radio.adjacent_channel[0].acir_db = Some(80.0);
     let (g, _) = run_recorded(good);
-    assert_eq!(g.rx_losses.get("adjacent-channel"), None, "{:?}", g.rx_losses);
+    assert_eq!(
+        g.rx_losses.get("adjacent-channel"),
+        None,
+        "{:?}",
+        g.rx_losses
+    );
 
     let mut co = leaky.clone();
     co.radio.adjacent_channel[0].channel = Some(180);

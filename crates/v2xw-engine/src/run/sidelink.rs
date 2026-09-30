@@ -1375,7 +1375,13 @@ mod tests {
             (LosClass::NlosV, east, Vec3::ZERO, NrLinkState::NlosV, 70.0),
             (LosClass::NlosB, east, west, NrLinkState::Nlos, 140.0),
             (LosClass::NlosBv, east, west, NrLinkState::Nlos, 140.0),
-            (LosClass::NlosT, Vec3::ZERO, Vec3::ZERO, NrLinkState::Nlos, 0.0),
+            (
+                LosClass::NlosT,
+                Vec3::ZERO,
+                Vec3::ZERO,
+                NrLinkState::Nlos,
+                0.0,
+            ),
         ];
         for (i, (los, a, b, state, kmh)) in cases.into_iter().enumerate() {
             let rx = NodeId::new(i as u32);

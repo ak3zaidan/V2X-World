@@ -248,7 +248,10 @@ fn adjacent_specs(
     for (i, e) in scenario.radio.adjacent_channel.iter().enumerate() {
         let path = format!("radio.adjacent_channel[{i}]");
         let Some(tech) = crate::wiring::technology_of(e.rat) else {
-            errors.push((format!("{path}.rat"), "names no single technology".to_string()));
+            errors.push((
+                format!("{path}.rat"),
+                "names no single technology".to_string(),
+            ));
             continue;
         };
         let channel = match e.channel {
@@ -452,7 +455,6 @@ fn parse_emitter(
         })
     }
 }
-
 
 /// One profile, as a closed set so the run can hold them without a generic context type.
 #[derive(Debug, Clone)]

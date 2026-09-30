@@ -190,7 +190,9 @@ fn verify(key: &VerifyingKey, hash: &[u8; 32], sig: &[u8; 64]) -> bool {
 fn sign(key: &SigningKey, hash: &[u8; 32]) -> [u8; 64] {
     // RFC 6979 deterministic nonces: the same key and hash give the same signature, which
     // is what keeps a run reproducible without a nonce stream.
-    let sig: Signature = key.sign_prehash(hash).expect("a 32-byte prehash always signs");
+    let sig: Signature = key
+        .sign_prehash(hash)
+        .expect("a 32-byte prehash always signs");
     let mut out = [0u8; 64];
     out.copy_from_slice(&sig.to_bytes());
     out
@@ -441,7 +443,10 @@ impl core::fmt::Debug for Governance {
 /// protocol role uses (the PCA's per-certificate randomiser, an LA's seeds) and adding the
 /// governance entities moves no credential a run already produced.
 fn key_scope(node: NodeId) -> EntityRef {
-    EntityRef::custom("protocol/scms/camp/governance-keys", u64::from(node.index()))
+    EntityRef::custom(
+        "protocol/scms/camp/governance-keys",
+        u64::from(node.index()),
+    )
 }
 
 fn key_for(rng: &RngRegistry, node: NodeId) -> SigningKey {
@@ -526,10 +531,10 @@ impl Governance {
         }
 
         let issue = |role: &'static str,
-                         node: NodeId,
-                         issuer_role: &str,
-                         certs: &mut BTreeMap<String, AuthorityCert>,
-                         keys: &mut BTreeMap<NodeId, SigningKey>|
+                     node: NodeId,
+                     issuer_role: &str,
+                     certs: &mut BTreeMap<String, AuthorityCert>,
+                     keys: &mut BTreeMap<NodeId, SigningKey>|
          -> [u8; 8] {
             let key = key_for(rng, node);
             let issuer = certs.get(issuer_role).expect("issuer exists").clone();
@@ -618,10 +623,7 @@ impl Governance {
 
     fn signer(&self, role: &str) -> (&SigningKey, [u8; 8]) {
         let cert = self.certs.get(role).expect("role certified at setup");
-        (
-            self.keys.get(&cert.node).expect("key held"),
-            cert.digest(),
-        )
+        (self.keys.get(&cert.node).expect("key held"), cert.digest())
     }
 
     /// The Policy Generator signs a new Global Policy File and Global Certificate Chain
@@ -898,8 +900,10 @@ mod tests {
             anchors: g.anchors(),
             ..DeviceTrust::default()
         };
-        t.install_ctl(&g.ctl).expect("the ceremony's list is endorsed by every elector");
-        t.install_chain(&g.lccf, 1).expect("the local chain verifies");
+        t.install_ctl(&g.ctl)
+            .expect("the ceremony's list is endorsed by every elector");
+        t.install_chain(&g.lccf, 1)
+            .expect("the local chain verifies");
         t.install_policy(&g.lpf).expect("the RA's policy verifies");
         t
     }
@@ -925,13 +929,13 @@ mod tests {
         let weak = g.ctl_endorsed_by(&[0]);
         assert_eq!(
             t.install_ctl(&weak),
-            Err(TrustError::CtlQuorum { valid: 1, needed: 2 })
+            Err(TrustError::CtlQuorum {
+                valid: 1,
+                needed: 2
+            })
         );
         // Without a trusted root nothing chains.
-        assert_eq!(
-            t.install_chain(&g.lccf, 1),
-            Err(TrustError::UnknownIssuer)
-        );
+        assert_eq!(t.install_chain(&g.lccf, 1), Err(TrustError::UnknownIssuer));
         // The same list with two endorsements is accepted.
         assert!(t.install_ctl(&g.ctl_endorsed_by(&[0, 2])).is_ok());
     }
@@ -994,6 +998,9 @@ mod tests {
             &RngRegistry::new(8),
             0,
         );
-        assert_ne!(a.ctl.roots, c.ctl.roots, "a different seed makes different keys");
+        assert_ne!(
+            a.ctl.roots, c.ctl.roots,
+            "a different seed makes different keys"
+        );
     }
 }

@@ -2729,7 +2729,11 @@ mod tests {
             assert_eq!(scanned, model.los_cached(&world, a, b), "{a:?} → {b:?}");
             // The shared-borrow form, prepared (the index) and not (the scan).
             assert_eq!(scanned, model.los_shared(&world, a, b), "{a:?} → {b:?}");
-            assert_eq!(scanned, unprepared.los_shared(&world, a, b), "{a:?} → {b:?}");
+            assert_eq!(
+                scanned,
+                unprepared.los_shared(&world, a, b),
+                "{a:?} → {b:?}"
+            );
             let blocked_scan = world.buildings.iter().any(|bl| {
                 bl.base_z_m + bl.height_m > a.z.min(b.z)
                     && (point_in_ring(&bl.footprint, a)
@@ -2739,7 +2743,11 @@ mod tests {
                             .windows(2)
                             .any(|w| segment_intersection_t(a, b, w[0], w[1]).is_some()))
             });
-            assert_eq!(segment_blocked(&world, &index, a, b), blocked_scan, "{a:?} → {b:?}");
+            assert_eq!(
+                segment_blocked(&world, &index, a, b),
+                blocked_scan,
+                "{a:?} → {b:?}"
+            );
             let len = a.distance_2d(b);
             if len > 0.0 {
                 let dir = ((b.x - a.x) / len, (b.y - a.y) / len);
@@ -2813,7 +2821,12 @@ mod tests {
         let turn = |x: f64, y: f64| at(c * x - s * y, s * x + c * y);
         let mut segments: Vec<(Vec3, Vec3)> = Vec::new();
         for _ in 0..1500 {
-            let (x0, y0, x1, y1) = (next() * 900.0, next() * 520.0, next() * 900.0, next() * 520.0);
+            let (x0, y0, x1, y1) = (
+                next() * 900.0,
+                next() * 520.0,
+                next() * 900.0,
+                next() * 520.0,
+            );
             segments.push((turn(x0, y0), turn(x1, y1)));
             // Down a street of the turned grid, and across one.
             segments.push((turn(x0, 257.0), turn(x1, 257.0)));

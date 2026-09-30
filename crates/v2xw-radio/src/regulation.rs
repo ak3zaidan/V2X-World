@@ -263,7 +263,11 @@ const fn ch(number: u16, lower_mhz: f64, upper_mhz: f64) -> ChannelSpec {
 
 const P: &[Technology] = &[Technology::Ieee80211p];
 const CV2X: &[Technology] = &[Technology::LteV2x, Technology::NrV2x];
-const ANY: &[Technology] = &[Technology::Ieee80211p, Technology::LteV2x, Technology::NrV2x];
+const ANY: &[Technology] = &[
+    Technology::Ieee80211p,
+    Technology::LteV2x,
+    Technology::NrV2x,
+];
 
 /// 47 CFR §90.390(a) (C-V2X band segments), §90.391(a) (RSU 33 dBm per 10, 20 and
 /// 30 MHz), §95.3204(a) (OBU without geofencing, or inside a coordination zone), as
@@ -509,7 +513,13 @@ pub struct SpectrumMask {
 /// defer to ASTM E2213-03, whose 802.11p class C mask is the same shape.
 pub const EN302571_10MHZ_MASK: SpectrumMask = SpectrumMask {
     label: "en302571-10mhz",
-    points: &[(4.5, 0.0), (5.0, -26.0), (5.5, -32.0), (10.0, -40.0), (15.0, -50.0)],
+    points: &[
+        (4.5, 0.0),
+        (5.0, -26.0),
+        (5.5, -32.0),
+        (10.0, -40.0),
+        (15.0, -50.0),
+    ],
     bandwidth_mhz: 10.0,
     clause: "ETSI EN 302 571 V2.1.1 §4.2.5.2.2 Table 6",
 };
@@ -611,7 +621,12 @@ impl SpectrumMask {
 /// * NR-V2X: TS 38.101-1 §7.5, ACS 33 dB for 5-20 MHz channels at 30 kHz (the 3GPP UE
 ///   minimum; NR-V2X sidelink reuses it).
 #[must_use]
-pub fn acs_db(victim: Technology, victim_bw_mhz: f64, victim_mcs_index: u8, alternate: bool) -> f64 {
+pub fn acs_db(
+    victim: Technology,
+    victim_bw_mhz: f64,
+    victim_mcs_index: u8,
+    alternate: bool,
+) -> f64 {
     match victim {
         Technology::Ieee80211p => {
             // Table 8 by the 802.11p rate index: 0 BPSK 1/2 (3 Mb/s) to 7 64-QAM 3/4.
@@ -669,9 +684,12 @@ pub fn adjacent_acir_db(
             region.channels_for(aggressor)
         )
     })?;
-    let v = region
-        .rule(victim, victim_ch)
-        .ok_or_else(|| format!("{} does not allow {victim:?} on channel {victim_ch}", region.id()))?;
+    let v = region.rule(victim, victim_ch).ok_or_else(|| {
+        format!(
+            "{} does not allow {victim:?} on channel {victim_ch}",
+            region.id()
+        )
+    })?;
     let gap = v.channel.edge_gap_mhz(&a.channel);
     if gap < 0.0 {
         return Err(format!(
@@ -846,7 +864,10 @@ mod tests {
         assert!(lte_victim > 25.0 && lte_victim < 33.0, "{lte_victim}");
         // One channel further out, the alternate-channel figures apply and it grows.
         let alt = adjacent_acir_db(Region::Eu, NrV2x, 178, Ieee80211p, 182, 2);
-        assert!(alt.is_err() || alt.unwrap() > g5_victim, "alternate channel");
+        assert!(
+            alt.is_err() || alt.unwrap() > g5_victim,
+            "alternate channel"
+        );
         let g5_alt = adjacent_acir_db(Region::Eu, LteV2x, 182, Ieee80211p, 178, 2);
         assert!(g5_alt.is_err() || g5_alt.unwrap() > g5_victim);
         // Co-channel is not adjacent; the US gives DSRC no channel.
@@ -887,10 +908,22 @@ mod tests {
         assert_eq!(p.channel.number, 172);
         assert!((p.channel.centre_hz() - 5.860e9).abs() < 1.0);
         // The §90.377(b) RSU column, general limits.
-        let rsu: Vec<(u16, f64)> = r.rules().iter().map(|x| (x.channel.number, x.rsu_eirp_dbm)).collect();
+        let rsu: Vec<(u16, f64)> = r
+            .rules()
+            .iter()
+            .map(|x| (x.channel.number, x.rsu_eirp_dbm))
+            .collect();
         assert_eq!(
             rsu,
-            vec![(172, 33.0), (174, 33.0), (176, 33.0), (178, 33.0), (180, 23.0), (182, 23.0), (184, 33.0)]
+            vec![
+                (172, 33.0),
+                (174, 33.0),
+                (176, 33.0),
+                (178, 33.0),
+                (180, 23.0),
+                (182, 23.0),
+                (184, 33.0)
+            ]
         );
         assert!(r.default_channel(Technology::LteV2x).is_err());
         assert_eq!(max_eirp_dbm(r, p, Station::Portable, 1.5), 0.0);

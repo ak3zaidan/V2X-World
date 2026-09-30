@@ -1055,7 +1055,8 @@ impl Phase2 {
                 self.report.rsu_reports_poisoned += 1;
                 // The forgery arrives as the unit's own report, and the authority trusts
                 // infrastructure: that is the attack.
-                self.ma.trust_infrastructure(forged.reporter_cert_digest.clone());
+                self.ma
+                    .trust_infrastructure(forged.reporter_cert_digest.clone());
                 Some(*forged)
             }
         }
@@ -2058,7 +2059,13 @@ impl Phase2 {
                     e.set("reports_filed", r.reports_sent);
                     e.set("reports_over_cellular", r.reports_uploaded_cellular);
                     e.set("reports_via_rsu", r.reports_uploaded_relay);
-                    e.set("reports_waiting_for_coverage", self.nodes.values().map(|n| n.outbox.len() as u64).sum::<u64>());
+                    e.set(
+                        "reports_waiting_for_coverage",
+                        self.nodes
+                            .values()
+                            .map(|n| n.outbox.len() as u64)
+                            .sum::<u64>(),
+                    );
                     e.set("topups_started", r.topups_started);
                     e.set("topups_completed", r.topups_completed);
                     e.set("topups_refused", r.topups_refused);
@@ -2126,7 +2133,13 @@ impl Phase2 {
                 steps: std::iter::once((step.to_string(), messages)).collect(),
             });
         };
-        extra("crl-store", "ee", r.crl_downloads, "crl-download", "cellular-uu");
+        extra(
+            "crl-store",
+            "ee",
+            r.crl_downloads,
+            "crl-download",
+            "cellular-uu",
+        );
         extra(
             "crl-broadcast",
             "rsu",
@@ -2134,8 +2147,20 @@ impl Phase2 {
             "crl-to-rsu",
             "rsu-backhaul",
         );
-        extra("rsu", "ee", r.crl_broadcasts, "crl-air-broadcast", "v2x-air");
-        extra("ee", "rsu", r.reports_uploaded_relay, "report-relay", "v2x-air");
+        extra(
+            "rsu",
+            "ee",
+            r.crl_broadcasts,
+            "crl-air-broadcast",
+            "v2x-air",
+        );
+        extra(
+            "ee",
+            "rsu",
+            r.reports_uploaded_relay,
+            "report-relay",
+            "v2x-air",
+        );
         view
     }
 
@@ -3323,7 +3348,9 @@ fn compromised_rsu_specs(
                     )
                 };
                 let prob = |v: &serde_json::Value| {
-                    v.as_f64().filter(|p| (0.0..=1.0).contains(p)).ok_or_else(bad)
+                    v.as_f64()
+                        .filter(|p| (0.0..=1.0).contains(p))
+                        .ok_or_else(bad)
                 };
                 match key.as_str() {
                     "kind" => {
@@ -3364,12 +3391,12 @@ fn compromised_rsu_specs(
                             value.as_f64().filter(|v| *v >= 1.0).ok_or_else(bad)?;
                     }
                     "from_s" => {
-                        from = (value.as_f64().filter(|v| *v >= 0.0).ok_or_else(bad)? * 1e9)
-                            .round() as u64;
+                        from = (value.as_f64().filter(|v| *v >= 0.0).ok_or_else(bad)? * 1e9).round()
+                            as u64;
                     }
                     "to_s" => {
-                        to = (value.as_f64().filter(|v| *v >= 0.0).ok_or_else(bad)? * 1e9)
-                            .round() as u64;
+                        to = (value.as_f64().filter(|v| *v >= 0.0).ok_or_else(bad)? * 1e9).round()
+                            as u64;
                     }
                     other => {
                         return Err(conflict(

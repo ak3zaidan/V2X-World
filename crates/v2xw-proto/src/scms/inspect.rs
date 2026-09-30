@@ -273,10 +273,7 @@ impl ScmsRun {
         );
         ma.set("reports_received", st.ma.reports.len() as u64);
         ma.set("revocations", st.ma.decisions.len() as u64);
-        ma.set(
-            "case_open",
-            st.ma.case.as_ref().is_some_and(|c| !c.done),
-        );
+        ma.set("case_open", st.ma.case.as_ref().is_some_and(|c| !c.done));
         out.push(ma);
 
         let mut crlg = entity(

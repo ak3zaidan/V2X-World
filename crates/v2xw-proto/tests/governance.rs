@@ -38,14 +38,24 @@ fn the_dcm_bootstrap_installs_the_trust_list_chain_and_policy() {
     run.enrol(DEVICE_A);
     run.run().expect("enrolment runs");
     let d = &run.state.devices[&DEVICE_A];
-    assert_eq!(d.trust.ctl_sequence, Some(1), "the electors' list is installed");
+    assert_eq!(
+        d.trust.ctl_sequence,
+        Some(1),
+        "the electors' list is installed"
+    );
     assert_eq!(d.trust.anchors.len(), 3, "three elector anchors");
     for role in ["root", "ica", "pca", "ra", "eca", "crlg", "ma", "pg"] {
-        assert!(d.trust.trusts_role(role), "{role} is not in the device's chain");
+        assert!(
+            d.trust.trusts_role(role),
+            "{role} is not in the device's chain"
+        );
     }
     assert_eq!(d.policy().map(|p| p.certs_per_period), Some(20));
     assert_eq!(d.trust.rejected, 0);
-    assert!(d.trust.verifications >= 3, "the bundle was verified, not accepted");
+    assert!(
+        d.trust.verifications >= 3,
+        "the bundle was verified, not accepted"
+    );
     assert_eq!(run.state.dcm.bundles, 1);
     let e = d.enrolment.expect("an enrolment certificate");
     assert_eq!(e.generation, 0);
@@ -61,7 +71,10 @@ fn an_unbootstrapped_device_refuses_the_crl_and_a_bootstrapped_one_enforces_it()
     provisioned(&mut run, DEVICE_A, 0, 1, JMAX);
     revoke_a(&mut run);
     assert_eq!(run.state.crl_store.entries.len(), 1, "one entry published");
-    assert!(run.state.crl_store.signature.is_some(), "and signed by the CRL Generator");
+    assert!(
+        run.state.crl_store.signature.is_some(),
+        "and signed by the CRL Generator"
+    );
 
     // DEVICE_C (1002) was never bootstrapped: no chain to the CRL Generator.
     let c = v2xw_core::ids::NodeId::new(1_002);
@@ -134,7 +147,11 @@ fn an_expired_enrolment_cannot_get_a_top_up_until_it_is_renewed() {
     run.run().expect("runs");
     assert!(run.kernel.stages.at(t, StageId::Installed).is_none());
     assert_eq!(run.refusal_of(DEVICE_A), Some(Refusal::EnrolmentExpired));
-    assert!(!run.state.devices[&DEVICE_A].credentials.contains_key(&(1, 0)));
+    assert!(
+        !run.state.devices[&DEVICE_A]
+            .credentials
+            .contains_key(&(1, 0))
+    );
 
     // An expired certificate cannot sign its own successor request either: the device
     // must go back to its bootstrap channel.
@@ -164,7 +181,11 @@ fn an_expired_enrolment_cannot_get_a_top_up_until_it_is_renewed() {
     let t = run.topup(DEVICE_A, 1, JMAX);
     run.run().expect("runs");
     assert!(run.kernel.stages.at(t, StageId::Installed).is_some());
-    assert!(run.state.devices[&DEVICE_A].credentials.contains_key(&(1, 1)));
+    assert!(
+        run.state.devices[&DEVICE_A]
+            .credentials
+            .contains_key(&(1, 1))
+    );
 }
 
 #[test]
@@ -194,7 +215,14 @@ fn a_revoked_enrolment_gets_neither_a_top_up_nor_a_successor() {
 fn a_policy_decision_reaches_devices_on_their_next_connection_and_the_ra_enforces_it() {
     let mut run = deployment(1);
     provisioned(&mut run, DEVICE_A, 0, 1, JMAX);
-    assert_eq!(run.state.devices[&DEVICE_A].trust.lpf.as_ref().map(|l| l.version), Some(1));
+    assert_eq!(
+        run.state.devices[&DEVICE_A]
+            .trust
+            .lpf
+            .as_ref()
+            .map(|l| l.version),
+        Some(1)
+    );
 
     let mut policy = run.state.gov.gpf.policy;
     policy.certs_per_period = 1;
@@ -207,7 +235,14 @@ fn a_policy_decision_reaches_devices_on_their_next_connection_and_the_ra_enforce
     assert_eq!(run.state.gov.gpf.version, 2);
     assert_eq!(run.state.gov.lpf.version, 2);
     // Not yet at the device: it has not connected since.
-    assert_eq!(run.state.devices[&DEVICE_A].trust.lpf.as_ref().map(|l| l.version), Some(1));
+    assert_eq!(
+        run.state.devices[&DEVICE_A]
+            .trust
+            .lpf
+            .as_ref()
+            .map(|l| l.version),
+        Some(1)
+    );
 
     // The next top-up asks for two certificates; the RA grants the policy's one, and the
     // device installs the new policy file on the same connection.
@@ -218,7 +253,10 @@ fn a_policy_decision_reaches_devices_on_their_next_connection_and_the_ra_enforce
     assert_eq!(d.trust.lpf.as_ref().map(|l| l.version), Some(2));
     assert_eq!(d.policy().map(|p| p.certs_per_period), Some(1));
     assert!(d.credentials.contains_key(&(1, 0)));
-    assert!(!d.credentials.contains_key(&(1, 1)), "clipped to the policy");
+    assert!(
+        !d.credentials.contains_key(&(1, 1)),
+        "clipped to the policy"
+    );
     assert_eq!(run.state.ra.clipped, 1);
 }
 
@@ -230,9 +268,13 @@ fn every_device_to_ra_message_goes_through_the_lop() {
     let (ra, lop) = (run.state.nodes.ra, run.state.nodes.lop);
     let devices = [DEVICE_A, DEVICE_B];
     for s in &run.kernel.steps {
-        let direct = (devices.contains(&s.from) && s.to == ra)
-            || (s.from == ra && devices.contains(&s.to));
-        assert!(!direct, "{} went between a device and the RA directly", s.step);
+        let direct =
+            (devices.contains(&s.from) && s.to == ra) || (s.from == ra && devices.contains(&s.to));
+        assert!(
+            !direct,
+            "{} went between a device and the RA directly",
+            s.step
+        );
     }
     let via_lop = run
         .kernel
@@ -240,7 +282,10 @@ fn every_device_to_ra_message_goes_through_the_lop() {
         .iter()
         .filter(|s| s.from == lop && s.to == ra)
         .count();
-    assert!(via_lop >= 5, "request, files, polls and reports relayed: {via_lop}");
+    assert!(
+        via_lop >= 5,
+        "request, files, polls and reports relayed: {via_lop}"
+    );
     assert!(run.state.lop.upstream as usize == via_lop);
     assert!(run.state.lop.downstream > 0);
     // The LOP only ever relays: it signs and verifies nothing.
@@ -265,8 +310,23 @@ fn the_backend_view_shows_every_entity_and_the_flows_between_them() {
     let view = run.backend_view(run.kernel.now(), &mut tracker);
     let ids: Vec<&str> = view.entities.iter().map(|e| e.id.as_str()).collect();
     for id in [
-        "manager", "pg", "electors", "root", "ica", "dcm", "eca", "lop", "ra", "la1", "la2",
-        "pca", "ma", "crlg", "crl-store", "crl-broadcast", "ee",
+        "manager",
+        "pg",
+        "electors",
+        "root",
+        "ica",
+        "dcm",
+        "eca",
+        "lop",
+        "ra",
+        "la1",
+        "la2",
+        "pca",
+        "ma",
+        "crlg",
+        "crl-store",
+        "crl-broadcast",
+        "ee",
     ] {
         assert!(ids.contains(&id), "{id} missing from {ids:?}");
     }
@@ -275,7 +335,14 @@ fn the_backend_view_shows_every_entity_and_the_flows_between_them() {
     assert_eq!(get("la1").state["seeds_released"], 1);
     assert_eq!(get("eca").state["enrolment_certs_issued"], 1);
     assert!(get("ra").traffic.received > 0);
-    assert!(get("ra").ops.get("ecdsa-p256-sha256 sign").copied().unwrap_or(0) > 0);
+    assert!(
+        get("ra")
+            .ops
+            .get("ecdsa-p256-sha256 sign")
+            .copied()
+            .unwrap_or(0)
+            > 0
+    );
     assert!(!get("root").online && get("root").state["certs_issued"].as_u64() >= Some(5));
     // Edges: devices talk to the LOP, the LOP to the RA, the RA to both LAs and the PCA.
     let edge = |a: &str, b: &str| view.edges.iter().any(|e| e.from == a && e.to == b);

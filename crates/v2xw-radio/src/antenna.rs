@@ -71,9 +71,13 @@ impl AntennaMount {
     /// The mount a scenario names.
     #[must_use]
     pub fn from_label(s: &str) -> Option<Self> {
-        [AntennaMount::Rooftop, AntennaMount::FrontRear, AntennaMount::Isotropic]
-            .into_iter()
-            .find(|m| m.label() == s)
+        [
+            AntennaMount::Rooftop,
+            AntennaMount::FrontRear,
+            AntennaMount::Isotropic,
+        ]
+        .into_iter()
+        .find(|m| m.label() == s)
     }
 
     /// The pattern toward a direction, dB relative to the element's maximum gain.
@@ -164,9 +168,19 @@ pub fn card() -> ModelCard {
         Equation::new("combined", "A(θ, φ) = −min{−(A_E,V + A_E,H), A_m}"),
     ];
     card.parameters = vec![
-        Parameter::new("theta_3db_deg", "deg", serde_json::json!(THETA_3DB_DEG), tr.clone()),
+        Parameter::new(
+            "theta_3db_deg",
+            "deg",
+            serde_json::json!(THETA_3DB_DEG),
+            tr.clone(),
+        ),
         Parameter::new("sla_v_db", "dB", serde_json::json!(SLA_V_DB), tr.clone()),
-        Parameter::new("phi_3db_deg", "deg", serde_json::json!(PHI_3DB_DEG), tr.clone()),
+        Parameter::new(
+            "phi_3db_deg",
+            "deg",
+            serde_json::json!(PHI_3DB_DEG),
+            tr.clone(),
+        ),
         Parameter::new("a_m_db", "dB", serde_json::json!(A_M_DB), tr.clone()),
     ];
     card.assumptions = vec![
@@ -225,9 +239,18 @@ mod tests {
             assert!(g <= 0.0 && g >= -A_M_DB);
         }
         // The class mapping.
-        assert_eq!(AntennaMount::for_class(ActorClass::Car), AntennaMount::Rooftop);
-        assert_eq!(AntennaMount::for_class(ActorClass::Truck), AntennaMount::FrontRear);
-        assert_eq!(AntennaMount::for_class(ActorClass::Rsu), AntennaMount::Isotropic);
+        assert_eq!(
+            AntennaMount::for_class(ActorClass::Car),
+            AntennaMount::Rooftop
+        );
+        assert_eq!(
+            AntennaMount::for_class(ActorClass::Truck),
+            AntennaMount::FrontRear
+        );
+        assert_eq!(
+            AntennaMount::for_class(ActorClass::Rsu),
+            AntennaMount::Isotropic
+        );
         assert_eq!(AntennaMount::Isotropic.relative_gain_db(1.0, 1.0), 0.0);
         card().validate().expect("the card validates");
     }

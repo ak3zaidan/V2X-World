@@ -131,7 +131,11 @@ impl HybridScheme {
     /// The modelled time of one operation of `kind` for an authority or a device, `None`
     /// when the catalogue publishes no figure for it on that profile.
     #[must_use]
-    pub fn op_time(&self, kind: PrimitiveOpKind, device: bool) -> Option<v2xw_core::time::Duration> {
+    pub fn op_time(
+        &self,
+        kind: PrimitiveOpKind,
+        device: bool,
+    ) -> Option<v2xw_core::time::Duration> {
         let c = self.charge(device);
         let profile = if kind == PrimitiveOpKind::KeyGen {
             c.keygen_profile
@@ -163,7 +167,11 @@ mod tests {
         for s in ["hybrid-mldsa44-ecdsa-p256", "hybrid-falcon512-ecdsa-p256"] {
             let h = HybridScheme::from_signature(s).expect("hybrid");
             for device in [false, true] {
-                for kind in [PrimitiveOpKind::Sign, PrimitiveOpKind::Verify, PrimitiveOpKind::KeyGen] {
+                for kind in [
+                    PrimitiveOpKind::Sign,
+                    PrimitiveOpKind::Verify,
+                    PrimitiveOpKind::KeyGen,
+                ] {
                     let t = h.op_time(kind, device);
                     assert!(
                         t.is_some_and(|t| t.as_nanos() > 0),

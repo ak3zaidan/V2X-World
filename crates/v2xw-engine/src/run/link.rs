@@ -80,10 +80,7 @@ impl LinkView<'_> {
         rx_end.gain_dbi += self.pattern_gain_db(&rx_end, rx_heading, tx_end.pos);
 
         let evaluation = self.focus.map(|plan| plan.evaluate(tx_end.pos, rx_end.pos));
-        let inside_focus = matches!(
-            evaluation.map(|e| e.placement),
-            Some(LinkPlacement::Inside)
-        );
+        let inside_focus = matches!(evaluation.map(|e| e.placement), Some(LinkPlacement::Inside));
         // The law that prices this link, and so who charges buildings and whether the
         // street geometry is needed.
         let law = match (inside_focus, self.focus_law) {
@@ -193,12 +190,19 @@ impl LinkView<'_> {
         if end.node.index() >= jamming::JAMMER_ID_BASE || self.rsus.contains_key(&end.node) {
             return 0.0;
         }
-        let mount = match (self.scenario.radio.devices.obu.antenna_pattern, AntennaMount::for_class(end.class)) {
+        let mount = match (
+            self.scenario.radio.devices.obu.antenna_pattern,
+            AntennaMount::for_class(end.class),
+        ) {
             (_, AntennaMount::Isotropic) | (ObuAntennaPattern::Isotropic, _) => return 0.0,
             (ObuAntennaPattern::Rooftop, _) => AntennaMount::Rooftop,
             (ObuAntennaPattern::Tr37885, m) => m,
         };
-        let (dx, dy, dz) = (toward.x - end.pos.x, toward.y - end.pos.y, toward.z - end.pos.z);
+        let (dx, dy, dz) = (
+            toward.x - end.pos.x,
+            toward.y - end.pos.y,
+            toward.z - end.pos.z,
+        );
         let horizontal = v2xw_core::math::hypot(dx, dy);
         let elevation = v2xw_core::math::atan2(dz, horizontal.max(1e-9));
         let azimuth = heading.map_or(0.0, |h| v2xw_core::math::atan2(dy, dx) - h);
@@ -478,6 +482,9 @@ mod tests {
                 }
             }
         }
-        assert!(checked > 1_000, "the segments must actually pass near bodies: {checked}");
+        assert!(
+            checked > 1_000,
+            "the segments must actually pass near bodies: {checked}"
+        );
     }
 }

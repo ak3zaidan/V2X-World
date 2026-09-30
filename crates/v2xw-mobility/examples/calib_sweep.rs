@@ -28,7 +28,13 @@ impl v2xw_core::model::Model for Swept {
 }
 
 impl CarFollowing for Swept {
-    fn accel(&self, e: &VehicleView, l: Option<&LeaderView>, lane: &LaneView, w: &WeatherState) -> f64 {
+    fn accel(
+        &self,
+        e: &VehicleView,
+        l: Option<&LeaderView>,
+        lane: &LaneView,
+        w: &WeatherState,
+    ) -> f64 {
         self.idm.accel(e, l, lane, w)
     }
     fn profile(&self, _class: VehicleClass) -> DriverProfile {
@@ -168,7 +174,11 @@ fn trace() {
                         || world.lane(a.lane).junction == Some(centre)
                 })
                 .map(|a| {
-                    let to_line = if a.lane == origin { len - a.s_m } else { -a.s_m };
+                    let to_line = if a.lane == origin {
+                        len - a.s_m
+                    } else {
+                        -a.s_m
+                    };
                     format!(
                         "#{}@{} line {:6.2} v {:5.2} a {:5.2}",
                         a.actor.index(),
@@ -179,7 +189,12 @@ fn trace() {
                     )
                 })
                 .collect();
-            println!("t={:.1} (+{:.1}) {}", v2xw_core::time::ns_to_secs(update.t), v2xw_core::time::ns_to_secs(update.t) - g, rows.join(" | "));
+            println!(
+                "t={:.1} (+{:.1}) {}",
+                v2xw_core::time::ns_to_secs(update.t),
+                v2xw_core::time::ns_to_secs(update.t) - g,
+                rows.join(" | ")
+            );
         }
         if green_at.is_some_and(|g| ts > g + 8.0) {
             break;
@@ -191,7 +206,12 @@ fn trace() {
 fn run(spec: &str) {
     let v: Vec<f64> = spec.split(',').filter_map(|x| x.parse().ok()).collect();
     let at = |i: usize, d: f64| v.get(i).copied().unwrap_or(d);
-    let env = |k: &str, d: f64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let env = |k: &str, d: f64| {
+        std::env::var(k)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(d)
+    };
     let base = IdmPreset::Kesting2010.profile(VehicleClass::Passenger);
     let driver = DriverProfile {
         time_headway_s: at(0, base.time_headway_s),

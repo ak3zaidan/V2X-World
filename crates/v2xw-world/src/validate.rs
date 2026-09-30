@@ -640,19 +640,32 @@ fn check_paths(world: &World, params: &ValidationParams, report: &mut Validation
         // Behind: the approach lane's last `lead` metres, and its predecessor's if it is
         // shorter than that. Ahead: the departure lane and whatever follows it, until the
         // path has run `lead` metres past the connector.
-        let mut behind: Vec<Piece> = vec![(from.id, (from.length_m - lead).max(0.0), from.length_m)];
+        let mut behind: Vec<Piece> =
+            vec![(from.id, (from.length_m - lead).max(0.0), from.length_m)];
         if from.length_m < lead {
             if let Some(p) = world.roads.connections().iter().find(|p| {
-                p.to_lane == from.id && p.via.is_none() && world.lane(p.from_lane).kind == LaneKind::Internal
+                p.to_lane == from.id
+                    && p.via.is_none()
+                    && world.lane(p.from_lane).kind == LaneKind::Internal
             }) {
                 let l = world.lane(p.from_lane);
-                behind.insert(0, (l.id, (l.length_m - (lead - from.length_m)).max(0.0), l.length_m));
+                behind.insert(
+                    0,
+                    (
+                        l.id,
+                        (l.length_m - (lead - from.length_m)).max(0.0),
+                        l.length_m,
+                    ),
+                );
             }
         }
         let mut heads: Vec<Vec<Piece>> = Vec::new();
         extend_ahead(
             world,
-            vec![(via, 0.0, connector.length_m), (to.id, 0.0, to.length_m.min(lead))],
+            vec![
+                (via, 0.0, connector.length_m),
+                (to.id, 0.0, to.length_m.min(lead)),
+            ],
             to.length_m,
             lead,
             &mut heads,
@@ -722,7 +735,11 @@ fn extend_ahead(world: &World, path: Vec<Piece>, run: f64, lead: f64, out: &mut 
 /// The largest amount, radians, by which a car's body heading along `path` turns faster
 /// than [`ValidationParams::min_path_radius_m`] allows, and where (metres along the path);
 /// `None` when the path is too short to hold the body.
-fn worst_turn_excess(world: &World, path: &[Piece], params: &ValidationParams) -> Option<(f64, f64)> {
+fn worst_turn_excess(
+    world: &World,
+    path: &[Piece],
+    params: &ValidationParams,
+) -> Option<(f64, f64)> {
     let total: f64 = path.iter().map(|p| p.2 - p.1).sum();
     if total < params.body_length_m + 1.0 {
         return None;
@@ -766,7 +783,11 @@ fn worst_turn_excess(world: &World, path: &[Piece], params: &ValidationParams) -
 // Stubs, and cars in buildings
 // ---------------------------------------------------------------------------------------
 
-fn check_stubs_and_buildings(world: &World, params: &ValidationParams, report: &mut ValidationReport) {
+fn check_stubs_and_buildings(
+    world: &World,
+    params: &ValidationParams,
+    report: &mut ValidationReport,
+) {
     let keep = params.examples;
     report.entry("stub-driving-lane");
     report.entry("vehicle-envelope-in-building");
@@ -874,7 +895,11 @@ fn figures(world: &World, report: &mut ValidationReport) {
     }
     report.figures.insert(
         "buildings.with_holes".to_string(),
-        world.buildings.iter().filter(|b| !b.holes.is_empty()).count() as f64,
+        world
+            .buildings
+            .iter()
+            .filter(|b| !b.holes.is_empty())
+            .count() as f64,
     );
 }
 
@@ -916,9 +941,7 @@ fn oneway_of(tags: &Tags) -> Option<bool> {
 
 /// How many entries of a `|`-separated per-lane list say `designated`.
 fn designated_in(list: &str) -> u32 {
-    list.split('|')
-        .filter(|t| t.trim() == "designated")
-        .count() as u32
+    list.split('|').filter(|t| t.trim() == "designated").count() as u32
 }
 
 fn expected(tags: &Tags, forward: bool) -> Expected {
@@ -1076,7 +1099,11 @@ fn parse_metres(v: &str) -> Option<f64> {
     let v = v.trim();
     if let Some((ft, rest)) = v.split_once('\'') {
         let inches = rest.trim_end_matches('"').trim();
-        let inches = if inches.is_empty() { 0.0 } else { inches.parse::<f64>().ok()? };
+        let inches = if inches.is_empty() {
+            0.0
+        } else {
+            inches.parse::<f64>().ok()?
+        };
         return Some((ft.trim().parse::<f64>().ok()? * 12.0 + inches) * 0.0254);
     }
     let v = v.trim_end_matches('m').trim();
@@ -1144,7 +1171,9 @@ fn check_source(
         }
     }
     for (way_id, edges) in &carriageways {
-        let Some(way) = file.way(*way_id) else { continue };
+        let Some(way) = file.way(*way_id) else {
+            continue;
+        };
         let tags = &way.tags;
         let motor_lanes = |e: EdgeId| -> Vec<&Lane> {
             world
@@ -1180,7 +1209,11 @@ fn check_source(
                 report.entry("lanes-mismatch").of += 1;
                 // A two-way street keeps a lane each way whatever `lanes=1` says; the
                 // importer's documented rule, so not a mismatch.
-                let n = if oneway_of(tags).is_none() { n.max(1) } else { n };
+                let n = if oneway_of(tags).is_none() {
+                    n.max(1)
+                } else {
+                    n
+                };
                 if lanes.len() as u32 != n.min(8) {
                     report.fail("lanes-mismatch", keep, || {
                         format!(
@@ -1235,16 +1268,19 @@ fn check_source(
                 .and_then(|s| *s)
                 .map_or(*way_id, |s| s.far_way);
             let far_tags = file.way(far).map(|w| &w.tags);
-            let raw = far_tags
-                .and_then(|t| {
-                    t.get(key).or_else(|| {
-                        if oneway_of(t) == Some(*forward) {
-                            t.get(if *forward { "turn:lanes:forward" } else { "turn:lanes:backward" })
+            let raw = far_tags.and_then(|t| {
+                t.get(key).or_else(|| {
+                    if oneway_of(t) == Some(*forward) {
+                        t.get(if *forward {
+                            "turn:lanes:forward"
                         } else {
-                            None
-                        }
-                    })
-                });
+                            "turn:lanes:backward"
+                        })
+                    } else {
+                        None
+                    }
+                })
+            });
             if let Some(raw) = raw {
                 let mut entries: Vec<&str> = raw.split('|').collect();
                 entries.reverse(); // rightmost first, as lane index 0 is
@@ -1386,9 +1422,23 @@ fn check_source(
         let mut want_parking = tagged_sides(
             tags,
             "parking",
-            &["lane", "yes", "street_side", "on_street", "half_on_kerb", "on_kerb", "parallel", "diagonal", "perpendicular"],
+            &[
+                "lane",
+                "yes",
+                "street_side",
+                "on_street",
+                "half_on_kerb",
+                "on_kerb",
+                "parallel",
+                "diagonal",
+                "perpendicular",
+            ],
         );
-        want_parking.extend(tagged_sides(tags, "parking:lane", &["parallel", "diagonal", "perpendicular", "marked"]));
+        want_parking.extend(tagged_sides(
+            tags,
+            "parking:lane",
+            &["parallel", "diagonal", "perpendicular", "marked"],
+        ));
         if !want_parking.is_empty() {
             let have = side_kinds(LaneKind::Parking);
             for side in &want_parking {
@@ -1407,7 +1457,17 @@ fn check_source(
         let motor = way.tags.get("highway").is_some_and(|h| {
             !matches!(
                 h,
-                "footway" | "pedestrian" | "path" | "cycleway" | "steps" | "corridor" | "track" | "bridleway" | "construction" | "proposed" | "platform"
+                "footway"
+                    | "pedestrian"
+                    | "path"
+                    | "cycleway"
+                    | "steps"
+                    | "corridor"
+                    | "track"
+                    | "bridleway"
+                    | "construction"
+                    | "proposed"
+                    | "platform"
             )
         });
         if motor {

@@ -330,7 +330,10 @@ pub(crate) fn separate(lanes: &mut [Lane], info: &[LaneInfo]) -> Separation {
                 .iter()
                 .filter_map(|(_, v)| *v)
                 .fold(0.0f64, |m, v| if v.abs() > m.abs() { v } else { m });
-            let lefts = merged.iter().filter(|(_, v)| v.is_some_and(|x| x > 0.0)).count();
+            let lefts = merged
+                .iter()
+                .filter(|(_, v)| v.is_some_and(|x| x > 0.0))
+                .count();
             let rights = merged.len() - lefts;
             if lefts > 0 && rights > 0 {
                 // Pushed both ways along its length: a road squeezed between two others.
@@ -341,7 +344,8 @@ pub(crate) fn separate(lanes: &mut [Lane], info: &[LaneInfo]) -> Separation {
                 report.unresolved += members.len() as u64;
                 continue;
             }
-            let samples: Vec<(f64, f64)> = merged.iter().map(|(t, v)| (*t, v.unwrap_or(0.0))).collect();
+            let samples: Vec<(f64, f64)> =
+                merged.iter().map(|(t, v)| (*t, v.unwrap_or(0.0))).collect();
             plans.push((members.clone(), samples, 0.0));
         }
         if plans.is_empty() {
@@ -430,14 +434,25 @@ mod tests {
             lane(1, 1, LaneKind::Sidewalk, 1.5, 2.0),
         ];
         let info = [
-            LaneInfo { role: Role::Carriageway, group: 0, road: 0 },
-            LaneInfo { role: Role::Soft, group: 1, road: 1 },
+            LaneInfo {
+                role: Role::Carriageway,
+                group: 0,
+                road: 0,
+            },
+            LaneInfo {
+                role: Role::Soft,
+                group: 1,
+                road: 1,
+            },
         ];
         let r = separate(&mut lanes, &info);
         assert_eq!(r.soft_lanes_moved, 1);
         // Mid-block it is now clear of the drive lane by the margin.
         let mid = lanes[1].point_at(50.0);
-        assert!((mid.y - (0.5 * (3.35 + 2.0) + MARGIN_M)).abs() < 1e-2, "{mid:?}");
+        assert!(
+            (mid.y - (0.5 * (3.35 + 2.0) + MARGIN_M)).abs() < 1e-2,
+            "{mid:?}"
+        );
         // Its ends are where they were, so it still meets what it connects to.
         assert!((lanes[1].start().y - 1.5).abs() < 1e-9);
         assert!((lanes[1].end().y - 1.5).abs() < 1e-9);
@@ -452,8 +467,16 @@ mod tests {
             lane(1, 1, LaneKind::Driving, 2.35, 3.35),
         ];
         let info = [
-            LaneInfo { role: Role::Carriageway, group: 0, road: 0 },
-            LaneInfo { role: Role::Carriageway, group: 1, road: 1 },
+            LaneInfo {
+                role: Role::Carriageway,
+                group: 0,
+                road: 0,
+            },
+            LaneInfo {
+                role: Role::Carriageway,
+                group: 1,
+                road: 1,
+            },
         ];
         let r = separate(&mut lanes, &info);
         assert_eq!(r.carriageway_lanes_moved, 2);
@@ -468,8 +491,16 @@ mod tests {
             lane(1, 1, LaneKind::Driving, 3.35, 3.35),
         ];
         let info = [
-            LaneInfo { role: Role::Carriageway, group: 0, road: 7 },
-            LaneInfo { role: Role::Carriageway, group: 1, road: 7 },
+            LaneInfo {
+                role: Role::Carriageway,
+                group: 0,
+                road: 7,
+            },
+            LaneInfo {
+                role: Role::Carriageway,
+                group: 1,
+                road: 7,
+            },
         ];
         let before = lanes.clone();
         let r = separate(&mut lanes, &info);

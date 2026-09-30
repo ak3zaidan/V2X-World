@@ -630,10 +630,9 @@ impl EngineDcc {
             None => "",
         };
         match self {
-            EngineDcc::J2945(d) if !d.controls_power() => format!(
-                "sae-j3161-1 itt={}ms{event}",
-                ms(s.itt.unwrap_or(s.t_off)),
-            ),
+            EngineDcc::J2945(d) if !d.controls_power() => {
+                format!("sae-j3161-1 itt={}ms{event}", ms(s.itt.unwrap_or(s.t_off)),)
+            }
             EngineDcc::J2945(_) => format!(
                 "sae-j2945-1 itt={}ms rp={:.1}dBm{event}",
                 ms(s.itt.unwrap_or(s.t_off)),
@@ -906,9 +905,11 @@ fn sidelink_choice(
         Some("off") => Some(false),
         Some(id) if id == v2xw_radio::SaeJ2945Dcc::J3161_ID || id == "sae-j3161" => {
             if !lte {
-                return Err("rate_control sae-j3161 is LTE-V2X's (SAE J3161/1); no NR-V2X \
+                return Err(
+                    "rate_control sae-j3161 is LTE-V2X's (SAE J3161/1); no NR-V2X \
                             rate control is published"
-                    .to_string());
+                        .to_string(),
+                );
             }
             Some(true)
         }
@@ -1337,18 +1338,18 @@ pub fn radio_regulation(
 ) -> core::result::Result<RadioRegulation, (&'static str, String)> {
     let (region, derived) = region_of(scenario);
     let Some(technology) = technology_of(scenario.radio.rat) else {
-        return Err(("radio.rat", "has no single technology to regulate".to_string()));
+        return Err((
+            "radio.rat",
+            "has no single technology to regulate".to_string(),
+        ));
     };
     // A sidelink profile defined for one channel width needs a channel of that width.
     let width = sidelink_profile(scenario).and_then(|p| p.fixed_bandwidth_mhz().map(|w| (p, w)));
     let rule = match scenario.radio.channel {
         None => {
-            let default = region.default_channel(technology).map_err(|why| {
-                (
-                    "radio.region",
-                    format!("is '{}': {why}", region.id()),
-                )
-            })?;
+            let default = region
+                .default_channel(technology)
+                .map_err(|why| ("radio.region", format!("is '{}': {why}", region.id())))?;
             match width {
                 Some((profile, w)) if default.channel.bandwidth_mhz() != w => {
                     // The region's channels of the profile's width, preferring those
@@ -2767,20 +2768,21 @@ pub fn build_dcc(scenario: &Scenario) -> Option<EngineDcc> {
         // runs the J2945/1 density rule without power control (`rate_control`).
         Some(_) => {
             let choice = radio_models(scenario).ok().and_then(|m| m.sidelink);
-            let on = choice.and_then(|c| c.rate_control).unwrap_or_else(|| {
-                sidelink_profile(scenario) == Some(SidelinkProfile::SaeJ3161)
-            });
+            let on = choice
+                .and_then(|c| c.rate_control)
+                .unwrap_or_else(|| sidelink_profile(scenario) == Some(SidelinkProfile::SaeJ3161));
             return on.then(|| EngineDcc::J2945(v2xw_radio::SaeJ2945Dcc::j3161()));
         }
         None => return None,
     }
-    let choice = radio_models(scenario)
-        .ok()
-        .and_then(|m| m.dcc)
-        .unwrap_or(match region_of(scenario).0 {
-            v2xw_radio::regulation::Region::Eu => DccChoice::EtsiAdaptive,
-            _ => DccChoice::SaeJ2945,
-        });
+    let choice =
+        radio_models(scenario)
+            .ok()
+            .and_then(|m| m.dcc)
+            .unwrap_or(match region_of(scenario).0 {
+                v2xw_radio::regulation::Region::Eu => DccChoice::EtsiAdaptive,
+                _ => DccChoice::SaeJ2945,
+            });
     Some(match choice {
         DccChoice::SaeJ2945 => EngineDcc::J2945(v2xw_radio::SaeJ2945Dcc::new()),
         DccChoice::EtsiAdaptive => EngineDcc::Adaptive(v2xw_radio::AdaptiveDcc::new()),

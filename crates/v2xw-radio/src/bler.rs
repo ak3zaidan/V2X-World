@@ -545,7 +545,10 @@ impl CurveProvenance {
     /// `unvalidated`.
     #[must_use]
     pub const fn is_fully_cited(self) -> bool {
-        matches!(self, CurveProvenance::Verbatim | CurveProvenance::Transcribed)
+        matches!(
+            self,
+            CurveProvenance::Verbatim | CurveProvenance::Transcribed
+        )
     }
 }
 
@@ -748,11 +751,7 @@ impl SidelinkErrorModel {
     /// The transport block's error probability at an effective SINR under a link
     /// condition. A model with one curve, or no condition, reads its reference curve.
     #[must_use]
-    pub fn tb_bler_in(
-        &self,
-        sinr_db: f64,
-        cond: Option<&crate::bler_nr::NrLinkCondition>,
-    ) -> f64 {
+    pub fn tb_bler_in(&self, sinr_db: f64, cond: Option<&crate::bler_nr::NrLinkCondition>) -> f64 {
         use crate::bler_nr::{NrEnvironment, NrLinkCondition, NrLinkState};
         if let (Some(map), Some(c)) = (self.by_condition.as_ref(), cond) {
             // TR 37.885 has no highway NLOS CDL: a building-blocked highway link reads
@@ -774,7 +773,6 @@ impl SidelinkErrorModel {
         }
         self.data.bler(sinr_db)
     }
-
 
     /// The shared-channel curve.
     #[must_use]
@@ -1064,8 +1062,7 @@ fn nr_card(
             }
         },
         calibration: (!provenance.is_fully_cited()).then(|| {
-            "Load the authors' released CSV for this MCS in place of the interpolation."
-                .to_string()
+            "Load the authors' released CSV for this MCS in place of the interpolation.".to_string()
         }),
     }];
     card.assumptions = vec![
@@ -1186,7 +1183,6 @@ mod tests {
 
     #[test]
     fn the_r1_160284_lut_reproduces_every_printed_point() {
-
         let c = BlerCurve::r1_160284_qpsk_r070();
         for (snr, bler) in [
             (0.0, 1.0),

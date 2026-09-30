@@ -110,7 +110,9 @@ fn fleet_middle(recorder: &MemoryRecorder) -> [f64; 2] {
             continue;
         }
         let v: serde_json::Value = serde_json::from_slice(&r.json).expect("kinematics JSON");
-        if let (Some(a), Some(x), Some(y)) = (v["actor"].as_u64(), v["x_m"].as_f64(), v["y_m"].as_f64()) {
+        if let (Some(a), Some(x), Some(y)) =
+            (v["actor"].as_u64(), v["x_m"].as_f64(), v["y_m"].as_f64())
+        {
             first.entry(a).or_insert([x, y]);
         }
     }
