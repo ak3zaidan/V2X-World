@@ -122,13 +122,56 @@ keepMounted?, render }`; adding one is an id in `PANEL_IDS` (`state/store.ts`) a
 `useStudio().panel` is the one open. The frames are `FullPanel` and `Sheet` in
 `shell/PanelFrame.tsx`.
 
-* **Metrics dashboard track** — replace the `metrics` entry's `render` (today `components/MetricsPanel.tsx`, hosting
-  the old `PlotsStrip`). It is `keepMounted`, so a chart the reader expanded is still expanded on a
-  second look. A chart that expands to more detail can be its own panel or a state inside the body.
+* **Metrics dashboard track** — done 2026-09-30: `metrics/Dashboard.tsx` is the `metrics` entry's
+  body (see §5.1). The old `PlotsStrip`, `Breakdowns` and `MetricsPanel` are gone; the header's
+  Metrics button carries a two-number live summary instead.
 * **Viewport and inspector track** — owns `components/Viewport.tsx` and `components/Inspector.tsx`,
   which `App.tsx` places in the viewport and inspector slots; `useStudio().inspectorOpen` is the
   inspector's visibility (selecting a radio, asking *why* and docking the HUD open it). Developer
   readouts over the viewport are shown when `useStudio().devDetails` is on.
+
+### 5.1 The metrics dashboard and its addresses
+
+The Metrics button, or the M key, opens every measurement of the run full screen, grouped by the
+question it answers (channel load; delivery and reliability; latency; security and PKI;
+misbehaviour detection; privacy; traffic; safety applications; overhead; simulator), searchable
+(`/` focuses the search), with pinned favourites first. A card is one metric (its catalogue `base`):
+its newest window's value with its unit, and its run so far as a line. Clicking it expands it:
+
+* a large chart (uPlot) with a crosshair readout of every series, drag-to-zoom and a time brush
+  under it over the whole run;
+* the statistics of the range in view (min, mean, p50, p95, p99, max, windows), computed from the
+  full-resolution series;
+* every breakdown the catalogue declares for the metric (distance with its 95 % band, nodes worst
+  first with their spread, message type, stage, cause, channel, radius…), pooled over the range by
+  the engine; a metric reported only together with another dimension offers it under "Within";
+* its definition, unit, reduction, visibility, source and what it does not account for;
+* CSV (the full-resolution series in range, or a breakdown's pooled rows) and PNG export;
+* with a second engine open in Compare, an overlay of the same series from run B and the
+  difference of their statistics.
+
+Every number comes from `metrics.query` (`metrics/data.ts`), never from the stream buffer, so a page
+opened late or reloaded after a run shows the whole run. The overview asks the engine for about 240
+points per line; an expanded chart asks for full resolution once and then only the new windows, and
+draws it decimated to its pixel width (M4, so spikes survive); nothing polls while the dashboard is
+closed.
+
+**Addresses.** The dashboard's state is the URL hash, stable from this version on, so the agent
+harness (and any link) can open a chart, a breakdown and a range directly. `metricsHash()` in
+`metrics/model.ts` writes them and `parseMetricsHash()` reads them:
+
+| Address | Opens |
+|---|---|
+| `#metrics` | the dashboard |
+| `#metrics?group=latency` | the dashboard at a group (`channel`, `delivery`, `latency`, `security`, `misbehaviour`, `privacy`, `traffic`, `safety`, `overhead`, `simulator`, `other`) |
+| `#metrics?q=verify` | the dashboard with a search |
+| `#metrics/e2e_latency` | one metric expanded |
+| `#metrics/e2e_latency.p95` | the same, with that series drawn |
+| `#metrics/pdr/dist_bin` | a metric with one breakdown scrolled to and highlighted |
+| `#metrics/pdr/node?from=30&to=90` | the same over simulated seconds 30–90 |
+
+Names are percent-encoded (`latency_stage%5Bairtime%5D`); a breakdown is a catalogue dimension
+name; times are simulated seconds. A link to a metric the run does not measure says so.
 
 ## 6. What is deliberately not changed
 

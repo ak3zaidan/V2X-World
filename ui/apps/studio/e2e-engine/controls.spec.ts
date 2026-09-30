@@ -85,7 +85,7 @@ test("every control does what it says", async ({ page }) => {
   await check("header: Metrics", "open the measurements full screen, and close them", async () => {
     await page.getByTestId("metrics-button").click();
     await expect(page.getByTestId("metrics-panel")).toBeVisible(quick);
-    await expect(page.getByTestId("plots-strip")).toBeVisible(quick);
+    await expect(page.getByTestId("metrics-search")).toBeVisible(quick);
     await page.getByTestId("metrics-close").click();
     await expect(page.getByTestId("metrics-panel")).toBeHidden(quick);
     return "opened, closed";

@@ -41,6 +41,12 @@ import { usePins } from "./pins.js";
 import { noteUnits } from "./Summary.js";
 import "./metrics.css";
 
+/** The run's radio technology, from the scenario the engine is running (`radio.rat`). */
+function radioTechnology(scenario: unknown): string | null {
+  const radio = (scenario as { radio?: { rat?: unknown } } | null)?.radio;
+  return typeof radio?.rat === "string" ? radio.rat : null;
+}
+
 /** Whether a card has anything to show, from the overview. */
 function measured(f: MetricFamily, series: ReadonlyMap<string, { t: Float64Array; v: Float64Array }>, latest: ReadonlyMap<string, number | null>): boolean {
   if (f.headline !== null) return observedCount(series.get(f.headline) ?? EMPTY_SERIES) > 0;
@@ -51,6 +57,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
   const active = useStudio((s) => s.panel === "metrics");
   const run = useStudio((s) => s.run);
   const hello = useStudio((s) => s.hello);
+  const rat = useStudio((s) => radioTechnology(s.scenario));
   const profileNode = run.profile === "node";
   const pins = usePins((s) => s.pins);
   const [route, setRouteState] = useState<MetricsRoute>(() => parseMetricsHash(location.hash) ?? DASHBOARD);
@@ -94,8 +101,10 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
   const catalogue = useCatalogue(active);
   useEffect(() => noteUnits(catalogue.defs), [catalogue.defs]);
   const families = useMemo(() => familiesOf(catalogue.defs), [catalogue.defs]);
-  const lineNames = useMemo(() => families.flatMap((f) => (f.headline === null ? [] : [f.headline])), [families]);
-  const barNames = useMemo(() => families.flatMap((f) => (f.headline === null ? cardSeries(f) : [])), [families]);
+  // A node-profile session is refused every ground-truth metric; not asking saves a refusal each.
+  const asked = useMemo(() => families.filter((f) => !(profileNode && f.groundTruth)), [families, profileNode]);
+  const lineNames = useMemo(() => asked.flatMap((f) => (f.headline === null ? [] : [f.headline])), [asked]);
+  const barNames = useMemo(() => asked.flatMap((f) => (f.headline === null ? cardSeries(f) : [])), [asked]);
   const expanded = route.metric === null ? null : (families.find((f) => f.base === route.metric || seriesOf(f).includes(route.metric as string)) ?? null);
   // The overview is idle while a chart is expanded: nothing on screen would show it.
   const overview = useOverview(lineNames, barNames, active && expanded === null);
@@ -160,7 +169,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
     requestAnimationFrame(() => document.getElementById(`metrics-group-${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
   };
 
-  const runLine = `${hello?.scenarioName ?? "run"} · ${formatNumber(run.tNs / 1e9)} s${run.tEndNs > 0 ? ` of ${formatNumber(run.tEndNs / 1e9)} s` : ""} · ${run.state}`;
+  const runLine = `${hello?.scenarioName ?? "run"} · ${formatNumber(run.tNs / 1e9)} s${run.tEndNs > 0 ? ` of ${formatNumber(run.tEndNs / 1e9)} s` : ""} · ${run.state}${rat ? ` · ${rat}` : ""}`;
 
   return (
     <div className="fullpanel-inner metrics-panel" data-testid="metrics-panel" onKeyDown={onKeyDown}>
@@ -222,7 +231,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
               This engine publishes no metric catalogue, so there is nothing to lay out. A run of the real engine measures delivery, latency, channel load and more.
             </p>
           ) : expanded !== null ? (
-            <Expanded f={expanded} route={route} setRoute={setRoute} active={active} onBack={back} />
+            <Expanded f={expanded} route={route} setRoute={setRoute} active={active} onBack={back} rat={rat} />
           ) : route.metric !== null ? (
             <p className="metrics-message" data-testid="metrics-message">
               This run does not measure <code>{route.metric}</code>, so the link has nothing to open.{" "}

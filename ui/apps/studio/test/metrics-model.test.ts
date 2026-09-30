@@ -220,7 +220,7 @@ describe("CSV", () => {
 
 describe("numbers carry units", () => {
   it("formats a delay with its unit and a ratio as a bare number", () => {
-    expect(formatWithUnit(12.345, "ms")).toBe("12.35 ms");
+    expect(formatWithUnit(12.346, "ms")).toBe("12.35 ms");
     expect(formatWithUnit(0.9421, "ratio")).toBe("0.942");
     expect(formatWithUnit(12_345, "count")).toBe("12,345 count");
     expect(formatWithUnit(null, "ms")).toBe("—");

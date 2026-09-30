@@ -233,7 +233,7 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   expect(made).toContain("view.follow");
   await page.keyboard.press("Escape");
 
-  // 13. The settings window rendered a form with units and help; the metrics panel the plots.
+  // 13. The settings window rendered a form with units and help; the metrics dashboard its cards.
   await page.getByTestId("settings-button").click();
   await expect(page.getByTestId("settings-window")).toBeVisible();
   await expect(page.getByTestId("schema-source")).toBeVisible();
@@ -244,7 +244,8 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("settings-window")).toHaveCount(0);
   await page.getByTestId("metrics-button").click();
-  await expect(page.getByTestId("plots-strip")).toBeVisible();
+  await expect(page.getByTestId("metrics-search")).toBeVisible();
+  await expect(page.getByTestId("metric-card-pdr")).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/04b-metrics.png` });
   await page.keyboard.press("Escape");
 

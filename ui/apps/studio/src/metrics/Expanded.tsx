@@ -9,6 +9,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type uPlot from "uplot";
 
+import { metricSubject } from "../lib/provenance.js";
+import { closePanel } from "../shell/route.js";
 import { useStudio } from "../state/store.js";
 import { BreakdownSection, type Range } from "./Breakdown.js";
 import { Brush, MainChart, slotColour, type ChartLine } from "./Chart.js";
@@ -22,6 +24,7 @@ import {
   formatNumber,
   formatWithUnit,
   metricsHash,
+  latestOf,
   observedCount,
   rangeStats,
   seriesCsv,
@@ -68,12 +71,15 @@ export function Expanded({
   setRoute,
   active,
   onBack,
+  rat,
 }: {
   f: MetricFamily;
   route: MetricsRoute;
   setRoute: (r: Partial<MetricsRoute>) => void;
   active: boolean;
   onBack: () => void;
+  /** The run's radio technology (`radio.rat`), when the scenario says. */
+  rat: string | null;
 }): React.JSX.Element {
   const run = useStudio((s) => s.run);
   const hello = useStudio((s) => s.hello);
@@ -91,7 +97,7 @@ export function Expanded({
   const bReady = compareView !== null && compareView.state === "ready" && sideBAvailable();
   const comparing = overlay && bReady;
   // Comparing overlays one series of each run: two runs × several series is a legend nobody reads.
-  const lines = comparing ? selected.slice(0, 1) : selected;
+  const lines = useMemo(() => (comparing ? selected.slice(0, 1) : selected), [comparing, selected]);
   const a = useFullSeries(lines, active);
   const b = useFullSeries(comparing ? lines : [], active && comparing, "b");
 
@@ -307,7 +313,14 @@ export function Expanded({
         ) : (
           <p className="dim">This metric has no breakdown: the engine measures it for the whole run only.</p>
         )}
-        <About f={f} />
+        {rat !== null && f.group !== "traffic" && f.group !== "simulator" ? (
+          <p className="dim bd-note" data-testid="metric-technology">
+            By radio technology: this run is all <code>{rat}</code>. The engine runs one technology per run (<code>radio.rat</code>), as a
+            deployment does on one channel. To compare technologies, run the scenario with each and overlay the two runs here (Compare,
+            then Overlay run B).
+          </p>
+        ) : null}
+        <About f={f} latest={lines.length > 0 ? latestOf(a.series.get(lines[0]) ?? EMPTY_SERIES) : null} />
       </div>
     </div>
   );
@@ -447,11 +460,22 @@ function MarkdownLite({ text }: { text: string }): React.JSX.Element {
   );
 }
 
-function About({ f }: { f: MetricFamily }): React.JSX.Element {
+function About({ f, latest }: { f: MetricFamily; latest: number | null }): React.JSX.Element {
+  const provenance = useStudio((s) => s.metricProvenance);
+  const name = f.headline ?? seriesOf(f)[0] ?? f.base;
+  // The inspector's Why tab: the model, its version and the parameter set that produced this
+  // metric. The inspector sits under this panel, so the panel closes to show it.
+  const why = (): void => {
+    useStudio.getState().setWhy(metricSubject(name, latest, f.unit, provenance[name]));
+    closePanel();
+  };
   return (
     <section className="mx-about" data-testid="metric-about" aria-label="What this metric is">
       <h4 className="mx-h">What it is</h4>
       <MarkdownLite text={f.definition === "" ? "The engine published no definition for this metric." : f.definition} />
+      <button type="button" className="small" onClick={why} data-testid="metric-why" title="Close the metrics and show, in the inspector, the model, version and parameters behind this measurement">
+        Which model produced it
+      </button>
       <dl>
         <dt>Unit</dt>
         <dd>{axisUnit(f.unit)}</dd>

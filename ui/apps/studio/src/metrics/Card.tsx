@@ -27,7 +27,7 @@ const H = 64;
 /** Why a card has no line, in a sentence. */
 export function emptyReason(f: MetricFamily, o: Overview, runState: string, profileNode: boolean): string {
   const names = cardSeries(f);
-  if (names.some((n) => o.refused.has(n)) && f.groundTruth && profileNode) {
+  if (f.groundTruth && profileNode) {
     return "Ground truth: a node-profile session sees only what a deployed device could measure.";
   }
   if (names.some((n) => o.refused.has(n))) return "The engine refused this measurement for this session.";

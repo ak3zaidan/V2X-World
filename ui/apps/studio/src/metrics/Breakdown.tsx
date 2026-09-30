@@ -112,7 +112,7 @@ export function BreakdownSection({
   const { rows, status, error, stale } = useGroups(f.base, dim, rangeNs(range), where, active);
   const shown = useMemo(() => ordered(dim, rows, f).filter((r) => r.value !== null || r.n > 0), [dim, rows, f]);
   const firstKey = rows.length > 0 ? rows[0].key : null;
-  const withinOptions = useWithin(f, dim, range, within === null ? firstKey : null, active);
+  const withinOptions = useWithin(f, dim, range, firstKey, active);
   const [copied, setCopied] = useState(false);
 
   const rangeText = `${formatNumber(range.fromS)}–${range.toS === null ? "now" : `${formatNumber(range.toS)}`} s`;
