@@ -95,7 +95,7 @@ function BackendPanel({ onClose }: { readonly onClose: () => void }): React.JSX.
         <h2>{snapshot ? systemTitle(snapshot.system) : "Backend"}</h2>
         {snapshot ? (
           <span className="backend-sub" data-testid="backend-time">
-            {snapshot.protocol} · state at {formatT(snapshot.t)} · {snapshot.entities.length} entities ·{" "}
+            {snapshot.protocol} · {snapshot.signature} · state at {formatT(snapshot.t)} · {snapshot.entities.length} entities ·{" "}
             {snapshot.edges.length} links in use
           </span>
         ) : null}

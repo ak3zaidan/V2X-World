@@ -77,6 +77,7 @@
 
 pub mod error;
 pub mod etsi;
+pub mod hybrid;
 pub mod kernel;
 pub mod net;
 pub mod overhead;
@@ -91,7 +92,8 @@ pub mod threshold;
 pub mod view;
 
 pub use error::{ProtoError, Result};
-pub use kernel::{Delivery, Kernel, Outbox};
+pub use hybrid::HybridScheme;
+pub use kernel::{Delivery, Kernel, Outbox, PqCharge};
 pub use net::{BackendNet, Link, Transport};
 pub use overhead::{AirInterface, MessageOverhead, OverheadProfile, Payload};
 pub use pseudonym::{CertEvent, ChangeReason, ChangeTrigger, PseudonymStore, PseudonymStrategy};

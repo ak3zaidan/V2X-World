@@ -391,6 +391,7 @@ impl ScmsRun {
         BackendView {
             system: sys,
             protocol: crate::scms::CAMP_SCMS_ID,
+            signature: self.state.params.hybrid.map_or("ecdsa-p256", |h| h.id),
             t: now,
             entities: out,
             edges: tracker.edges(),

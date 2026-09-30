@@ -493,22 +493,96 @@ pub struct ScmsSizes {
     pub certs: CertificateSizes,
     /// The five uncited sizes, as card parameters.
     pub params: SizeParams,
+    /// Under a hybrid signature scheme, the post-quantum signature every signed message
+    /// also carries; 0 under ECDSA (`crate::hybrid`).
+    pub hybrid_sig_bytes: u32,
+    /// Under a hybrid scheme, one post-quantum public key as a device uploads it for each
+    /// pseudonym certificate it requests; 0 under ECDSA.
+    pub hybrid_key_upload_bytes: u32,
 }
 
 const DERIVATION: &str = "components: 04-models.md §9.1 (measured envelope overhead), SEC 1 §2.3.3, FIPS 197 §5, \
      FIPS 180-4, IEEE 1609.2 §6.3.26, Ieee1609Dot2BaseTypes.asn; structure: 05-protocols.md \
-     §3.2 / Brecht 2018 §V-E, §VI-C, §VI-D";
+     §3.2 / Brecht 2018 §V-E, §VI-C, §VI-D; under a hybrid scheme every envelope signature \
+     and every certificate also carries its post-quantum half (05-protocols.md §5.3, \
+     crate::hybrid)";
 
 impl ScmsSizes {
     /// The sizes for a deployment.
     pub const fn new(certs: CertificateSizes, params: SizeParams) -> ScmsSizes {
-        ScmsSizes { certs, params }
+        ScmsSizes {
+            certs,
+            params,
+            hybrid_sig_bytes: 0,
+            hybrid_key_upload_bytes: 0,
+        }
+    }
+
+    /// The same deployment under a hybrid signature scheme: every certificate carries the
+    /// holder's post-quantum key and the issuer's post-quantum signature, and every signed
+    /// message the post-quantum signature.
+    #[must_use]
+    pub fn with_hybrid(mut self, scheme: Option<&crate::hybrid::HybridScheme>) -> ScmsSizes {
+        if let Some(h) = scheme {
+            self.certs = self.certs.with_hybrid(h);
+            self.hybrid_sig_bytes = h.sig_bytes;
+            self.hybrid_key_upload_bytes = h.key_upload_bytes();
+        }
+        self
+    }
+
+    /// A digest-signed envelope's overhead: measured for ECDSA, plus the post-quantum
+    /// signature under a hybrid scheme.
+    const fn env_digest(&self) -> u32 {
+        ENVELOPE_OVERHEAD_DIGEST_BYTES + self.hybrid_sig_bytes
+    }
+
+    /// A certificate-signed envelope's overhead, excluding the certificate.
+    const fn env_cert(&self) -> u32 {
+        ENVELOPE_OVERHEAD_CERT_BYTES + self.hybrid_sig_bytes
+    }
+
+    /// One signature as carried inside a structure (an elector's endorsement).
+    const fn sig_bytes(&self) -> u32 {
+        ECDSA_P256_SIG_COER_BYTES + self.hybrid_sig_bytes
+    }
+
+    /// Device → RA: a provisioning request for `certs` pseudonym certificates. Under
+    /// ECDSA the butterfly keys cover any number, so it is [`ScmsSizes::provisioning_request`];
+    /// under a hybrid scheme there is no post-quantum butterfly and the device uploads one
+    /// post-quantum key per certificate, encrypted to the PCA (`crate::hybrid`).
+    pub fn provisioning_request_for(&self, certs: u32) -> WireSize {
+        let base = self.provisioning_request();
+        if self.hybrid_key_upload_bytes == 0 {
+            return base;
+        }
+        WireSize::derived(
+            base.bytes()
+                .saturating_add(certs.saturating_mul(self.hybrid_key_upload_bytes)),
+            "the butterfly request + per certificate (post-quantum public key + ECIES key + \
+             CCM nonce + tag)",
+            DERIVATION,
+        )
+    }
+
+    /// RA → PCA: `n` certificate requests, with each one's post-quantum key under a
+    /// hybrid scheme.
+    pub fn cert_request_for(&self, n: u32) -> WireSize {
+        let base = self.cert_request(n);
+        if self.hybrid_key_upload_bytes == 0 {
+            return base;
+        }
+        WireSize::parameter(
+            base.bytes()
+                .saturating_add(n.saturating_mul(self.hybrid_key_upload_bytes)),
+            "linkage_chain_identifier_bytes",
+        )
     }
 
     /// Device → DCM: the canonical verification key under a digest-signed envelope.
     pub const fn enrol_request(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + EC_POINT_COMPRESSED_BYTES + TIME32_BYTES,
+            self.env_digest() + EC_POINT_COMPRESSED_BYTES + TIME32_BYTES,
             "envelope(digest) + canonical public key + time32",
             DERIVATION,
         )
@@ -517,7 +591,7 @@ impl ScmsSizes {
     /// DCM → ECA: the same, re-signed by the DCM with its certificate attached.
     pub fn enrol_forward(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + EC_POINT_COMPRESSED_BYTES
                 + TIME32_BYTES,
@@ -529,7 +603,7 @@ impl ScmsSizes {
     /// ECA → device: the enrolment certificate under the ECA's own certificate.
     pub fn enrol_response(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + self.certs.enrolment.bytes(),
             "envelope(certificate) + ECA certificate + enrolment certificate",
@@ -543,7 +617,7 @@ impl ScmsSizes {
     /// from its components with the certificate measured rather than estimated.
     pub fn provisioning_request(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.enrolment.bytes()
                 + 2 * EC_POINT_COMPRESSED_BYTES
                 + 2 * AES128_KEY_BYTES
@@ -559,7 +633,7 @@ impl ScmsSizes {
     /// `repo_url_bytes` parameter.
     pub const fn provisioning_ack(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + HASHED_ID8_BYTES
                 + TIME32_BYTES
                 + self.params.repo_url_bytes,
@@ -570,7 +644,7 @@ impl ScmsSizes {
     /// RA → LA: a chain request.
     pub const fn pre_linkage_request(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + self.params.linkage_chain_identifier_bytes
                 + 3 * TIME32_BYTES,
             "linkage_chain_identifier_bytes",
@@ -580,7 +654,7 @@ impl ScmsSizes {
     /// LA → RA: `n` sealed pre-linkage values.
     pub const fn pre_linkage_response(&self, n: u32) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + self.params.linkage_chain_identifier_bytes
                 + n * (LINKAGE_VALUE_BYTES + ECIES_P256_ENCRYPTED_KEY_BYTES),
             "linkage_chain_identifier_bytes",
@@ -590,7 +664,7 @@ impl ScmsSizes {
     /// RA → PCA: `n` certificate requests.
     pub const fn cert_request(&self, n: u32) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + n * (EC_POINT_COMPRESSED_BYTES
                     + 2 * (LINKAGE_VALUE_BYTES + ECIES_P256_ENCRYPTED_KEY_BYTES)
                     + 2 * (self.params.linkage_chain_identifier_bytes
@@ -603,7 +677,7 @@ impl ScmsSizes {
     /// PCA → RA, and RA → device: `n` certificates, each with its sealed randomiser.
     pub const fn cert_batch(&self, n: u32) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + n * (self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES),
             "envelope(digest) + n · (pseudonym certificate + ECIES wrapper)",
             DERIVATION,
@@ -614,7 +688,7 @@ impl ScmsSizes {
     pub const fn batch_download(&self, n: u32) -> WireSize {
         WireSize::parameter(
             self.params.batch_container_bytes
-                + ENVELOPE_OVERHEAD_DIGEST_BYTES
+                + self.env_digest()
                 + n * (self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES),
             "batch_container_bytes",
         )
@@ -623,7 +697,7 @@ impl ScmsSizes {
     /// Device → RA: a batch request.
     pub const fn batch_download_request(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + HASHED_ID8_BYTES + TIME32_BYTES,
+            self.env_digest() + HASHED_ID8_BYTES + TIME32_BYTES,
             "envelope(digest) + request hash8 + i-period",
             DERIVATION,
         )
@@ -633,7 +707,7 @@ impl ScmsSizes {
     /// encrypted to the MA.
     pub const fn report(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.pseudonym.bytes()
                 + self.params.report_payload_bytes
                 + ECIES_P256_ENCRYPTED_KEY_BYTES,
@@ -644,7 +718,7 @@ impl ScmsSizes {
     /// MA → PCA: `(i, lv)`.
     pub const fn pca_lookup_request(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + TIME32_BYTES + LINKAGE_VALUE_BYTES,
+            self.env_digest() + TIME32_BYTES + LINKAGE_VALUE_BYTES,
             "envelope(digest) + i-period + linkage value",
             DERIVATION,
         )
@@ -653,7 +727,7 @@ impl ScmsSizes {
     /// PCA → MA: two chain identifiers and a request hash.
     pub const fn pca_lookup_response(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + 2 * self.params.linkage_chain_identifier_bytes
                 + SHA256_BYTES,
             "linkage_chain_identifier_bytes",
@@ -663,7 +737,7 @@ impl ScmsSizes {
     /// MA → LA: "same device?".
     pub const fn same_device_request(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + 2 * self.params.linkage_chain_identifier_bytes,
+            self.env_digest() + 2 * self.params.linkage_chain_identifier_bytes,
             "linkage_chain_identifier_bytes",
         )
     }
@@ -671,7 +745,7 @@ impl ScmsSizes {
     /// LA → MA: one bit, in an envelope.
     pub const fn same_device_response(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + 1,
+            self.env_digest() + 1,
             "envelope(digest) + boolean",
             DERIVATION,
         )
@@ -680,7 +754,7 @@ impl ScmsSizes {
     /// MA → RA: a request hash.
     pub const fn blocklist_request(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + SHA256_BYTES,
+            self.env_digest() + SHA256_BYTES,
             "envelope(digest) + request hash",
             DERIVATION,
         )
@@ -689,7 +763,7 @@ impl ScmsSizes {
     /// RA → MA: the LA hosts and chains.
     pub const fn blocklist_response(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + 2 * self.params.linkage_chain_identifier_bytes,
+            self.env_digest() + 2 * self.params.linkage_chain_identifier_bytes,
             "linkage_chain_identifier_bytes",
         )
     }
@@ -697,7 +771,7 @@ impl ScmsSizes {
     /// MA → LA: a seed request.
     pub const fn seed_request(&self) -> WireSize {
         WireSize::parameter(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + self.params.linkage_chain_identifier_bytes
                 + TIME32_BYTES,
             "linkage_chain_identifier_bytes",
@@ -707,7 +781,7 @@ impl ScmsSizes {
     /// LA → MA: `ls_x(i)`.
     pub const fn seed_response(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + crate::sizes::LINKAGE_SEED_BYTES + 2 + TIME32_BYTES,
+            self.env_digest() + crate::sizes::LINKAGE_SEED_BYTES + 2 + TIME32_BYTES,
             "envelope(digest) + linkage seed + la_id + i-period",
             DERIVATION,
         )
@@ -716,7 +790,7 @@ impl ScmsSizes {
     /// MA → CRL Generator: one entry's worth of material.
     pub const fn crl_append(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + CRL_LINKAGE_ENTRY_BYTES,
+            self.env_digest() + CRL_LINKAGE_ENTRY_BYTES,
             "envelope(digest) + one linkage entry",
             DERIVATION,
         )
@@ -728,7 +802,7 @@ impl ScmsSizes {
     /// and the 10,000-entry list it gives as ≈ 400 kB comes back out of this expression.
     pub const fn crl(&self, entries: u32) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + entries * CRL_LINKAGE_ENTRY_BYTES,
             "envelope(certificate) + CRLG certificate + entries · 40 B",
@@ -739,7 +813,7 @@ impl ScmsSizes {
     /// Device → CRL Store: a fetch.
     pub const fn crl_request(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + TIME32_BYTES,
+            self.env_digest() + TIME32_BYTES,
             "envelope(digest) + last-known CRL time",
             DERIVATION,
         )
@@ -753,7 +827,7 @@ impl ScmsSizes {
             TIME32_BYTES
                 + 2
                 + certs * self.certs.authority.bytes()
-                + endorsements * (1 + ECDSA_P256_SIG_COER_BYTES),
+                + endorsements * (1 + self.sig_bytes()),
             "sequence + quorum + series + certs · authority certificate + endorsements · \
              (index + ECDSA signature)",
             DERIVATION,
@@ -764,7 +838,7 @@ impl ScmsSizes {
     /// signer's certificate attached.
     pub fn chain_file(&self, certs: u32) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + TIME32_BYTES
                 + certs * self.certs.authority.bytes(),
@@ -778,7 +852,7 @@ impl ScmsSizes {
     /// uint32, signed with the signer's certificate attached.
     pub fn policy_file(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + TIME32_BYTES
                 + crate::scms::governance::Policy::FIELDS * (1 + TIME32_BYTES),
@@ -790,7 +864,7 @@ impl ScmsSizes {
     /// DCM → device at bootstrap: the anchors, the trust list, the chain and the policy.
     pub fn trust_bundle(&self, anchors: u32, ctl_certs: u32, chain: u32) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.authority.bytes()
                 + anchors * self.certs.authority.bytes()
                 + self.ctl(ctl_certs, anchors).bytes()
@@ -805,7 +879,7 @@ impl ScmsSizes {
     /// Device → RA: the two file versions it holds.
     pub const fn file_request(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + 2 * (1 + TIME32_BYTES),
+            self.env_digest() + 2 * (1 + TIME32_BYTES),
             "envelope(digest) + 2 · (file id + version)",
             DERIVATION,
         )
@@ -814,7 +888,7 @@ impl ScmsSizes {
     /// RA → device: whichever files are newer.
     pub fn file_response(&self, lpf: bool, chain: Option<u32>) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES
+            self.env_digest()
                 + if lpf { self.policy_file().bytes() } else { 0 }
                 + chain.map_or(0, |n| self.chain_file(n).bytes()),
             "envelope(digest) + the newer policy file + the newer chain file",
@@ -825,7 +899,7 @@ impl ScmsSizes {
     /// RA or ECA → device: an error code and the request it answers.
     pub const fn refusal(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + 1 + HASHED_ID8_BYTES,
+            self.env_digest() + 1 + HASHED_ID8_BYTES,
             "envelope(digest) + error code + request hash8",
             DERIVATION,
         )
@@ -835,7 +909,7 @@ impl ScmsSizes {
     /// attached, carrying the new verification key.
     pub fn successor_request(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_CERT_BYTES
+            self.env_cert()
                 + self.certs.enrolment.bytes()
                 + EC_POINT_COMPRESSED_BYTES
                 + TIME32_BYTES,
@@ -847,7 +921,7 @@ impl ScmsSizes {
     /// RA → ECA: the blocklisted enrolment certificate's digest.
     pub const fn blocklist_notice(&self) -> WireSize {
         WireSize::derived(
-            ENVELOPE_OVERHEAD_DIGEST_BYTES + HASHED_ID8_BYTES,
+            self.env_digest() + HASHED_ID8_BYTES,
             "envelope(digest) + enrolment certificate hash8",
             DERIVATION,
         )

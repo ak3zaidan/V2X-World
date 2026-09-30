@@ -39,6 +39,9 @@ describe("backend snapshot", () => {
     expect(snap?.system).toBe("scms");
     expect(snap?.entities.map((e) => e.id)).toEqual(["ra"]);
     expect(snap?.flows["provision-batch"]).toBe(2);
+    // An engine that does not say which scheme it signs with signs with ECDSA.
+    expect(snap?.signature).toBe("ecdsa-p256");
+    expect(snapshotOf({ ...answer, state: { ...answer.state, signature: "hybrid-mldsa44-ecdsa-p256" } })?.signature).toBe("hybrid-mldsa44-ecdsa-p256");
     expect(snapshotOf({ entity: "ra", state: { issued: 3 } })).toBeNull();
     expect(snapshotOf(null)).toBeNull();
   });

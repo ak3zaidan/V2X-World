@@ -224,6 +224,9 @@ pub struct ScmsParams {
     pub device_profile: &'static str,
     /// The five wire sizes no standard publishes.
     pub sizes: SizeParams,
+    /// The hybrid post-quantum scheme every authority and device signs with, `None` for
+    /// ECDSA P-256 alone (`security.signature`; `crate::hybrid`).
+    pub hybrid: Option<crate::hybrid::HybridScheme>,
 }
 
 impl Default for ScmsParams {
@@ -259,6 +262,7 @@ impl Default for ScmsParams {
             backend_profile: profiles::I9_11950H_WOLFSSL,
             device_profile: profiles::COHDA_MK6_BOTAN,
             sizes: SizeParams::default(),
+            hybrid: None,
         }
     }
 }

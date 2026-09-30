@@ -62,6 +62,8 @@ export interface BackendStep {
 export interface BackendSnapshot {
   readonly system: "scms" | "ccms" | string;
   readonly protocol: string;
+  /** The signature scheme every certificate and signed message uses: `ecdsa-p256` or a hybrid post-quantum one. */
+  readonly signature: string;
   readonly t: number;
   readonly entities: readonly BackendEntity[];
   readonly edges: readonly BackendEdge[];
@@ -79,6 +81,7 @@ export function snapshotOf(answer: unknown): BackendSnapshot | null {
   return {
     system: typeof s.system === "string" ? s.system : "",
     protocol: typeof s.protocol === "string" ? s.protocol : "",
+    signature: typeof s.signature === "string" ? s.signature : "ecdsa-p256",
     t: typeof s.t === "number" ? s.t : 0,
     entities: s.entities,
     edges: s.edges,

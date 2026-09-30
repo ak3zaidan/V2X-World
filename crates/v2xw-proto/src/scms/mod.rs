@@ -709,6 +709,28 @@ fn card(p: &ScmsParams) -> ModelCard {
                 "Cohda MK6 with Botan [R5 §B.3]; 06-node-models.md §7.3",
             ),
         ),
+        Parameter::new(
+            "hybrid_backend_pq_profile",
+            "-",
+            serde_json::json!(crate::hybrid::BACKEND_PQ_PROFILE),
+            paper(
+                "arXiv 2503.10238 Table 8 (Raspberry Pi 5, liboqs): the one catalogue profile \
+                 publishing ML-DSA-44 and Falcon-512 sign, verify and keygen as times. Under a \
+                 hybrid security.signature the authorities' post-quantum half is charged here; \
+                 a server is faster, so it is an upper bound",
+            ),
+        ),
+        Parameter::new(
+            "hybrid_device_pq_keygen_profile",
+            "-",
+            serde_json::json!(crate::hybrid::DEVICE_PQ_KEYGEN_PROFILE),
+            paper(
+                "arXiv 2503.10238 Table 8 (Raspberry Pi 4, liboqs): no Cohda MK6 key-generation \
+                 figure is published, and there is no post-quantum butterfly, so a hybrid \
+                 device generates one post-quantum key per pseudonym certificate at this \
+                 rate; a lower bound for the MK6",
+            ),
+        ),
         todo(
             "backend_servers",
             "-",

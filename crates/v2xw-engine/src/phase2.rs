@@ -897,6 +897,11 @@ impl Phase2 {
         let params = LifecycleParams::from_scenario(scenario)?;
         let mut scms_params = params.scms;
         apply_backend_net(scenario, &mut scms_params)?;
+        // A hybrid `security.signature` is the credential system's scheme too: every
+        // certificate and every signed backend message carries the post-quantum half, and
+        // every entity pays for it (`v2xw_proto::hybrid`).
+        let hybrid = v2xw_proto::HybridScheme::from_signature(&scenario.security.signature);
+        scms_params.hybrid = hybrid;
         let mut scms = ScmsRun::new_at(scms_params, 0).map_err(|e| {
             conflict(
                 "actors.backend",
@@ -913,6 +918,7 @@ impl Phase2 {
             ep.decide_on_report = false;
             ep.at_validity = params.scms.cert_lifetime;
             ep.butterfly_batch = params.jmax;
+            ep.hybrid = hybrid;
             let mut run = v2xw_proto::etsi::ts102941::EtsiRun::new(ep).map_err(|e| {
                 conflict(
                     "security.protocol",

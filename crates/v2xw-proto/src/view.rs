@@ -120,6 +120,9 @@ pub struct BackendView {
     pub system: &'static str,
     /// The protocol's id.
     pub protocol: &'static str,
+    /// The signature scheme every certificate and signed message uses: `ecdsa-p256`, or
+    /// the hybrid post-quantum scheme's id (`crate::hybrid`).
+    pub signature: &'static str,
     /// The instant, ns.
     pub t: SimTime,
     /// Every entity, governance first.
@@ -240,13 +243,25 @@ pub fn queue_of<M>(kernel: &Kernel<M>, node: NodeId, now: SimTime) -> Option<Que
     })
 }
 
-/// An entity's cryptographic operations, by kind, summed over primitives.
+/// An entity's cryptographic operations, by primitive and kind: `ecdsa-p256-sha256 sign`,
+/// `falcon-512 verify`, `ml-dsa-44 keygen`. Kept apart by primitive so a hybrid
+/// scheme's post-quantum half is visible beside its ECDSA half. The kernel counts the
+/// uncosted AES and SHA-256 work under a nominal kind; here they read as blocks and hashes,
+/// and an ECQV "sign" is the scalar multiplication it stands for.
 #[must_use]
 pub fn ops_of<M>(kernel: &Kernel<M>, node: NodeId) -> BTreeMap<String, u64> {
     let mut out = BTreeMap::new();
-    for ((n, _primitive, kind), count) in &kernel.ops {
+    for ((n, primitive, kind), count) in &kernel.ops {
         if *n == node {
-            *out.entry((*kind).to_string()).or_insert(0) += count;
+            let short = primitive.strip_prefix("primitive/").unwrap_or(primitive);
+            let label = match short {
+                "aes-128" => "aes-128 block".to_string(),
+                "sha-256" => "sha-256 hash".to_string(),
+                "ecqv-p256" if *kind == "sign" => "ec scalar-mult".to_string(),
+                "ecqv-p256" => "ecqv-p256 reconstruct".to_string(),
+                _ => format!("{short} {kind}"),
+            };
+            *out.entry(label).or_insert(0) += count;
         }
     }
     out

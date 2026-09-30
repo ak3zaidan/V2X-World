@@ -94,6 +94,19 @@ struct PendingStage {
     run: FlowRun,
 }
 
+/// The post-quantum half of a hybrid signature scheme as one entity pays it: the
+/// primitive, and the hardware profiles its signing and verification, and its key
+/// generation, are charged against (`crate::hybrid`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PqCharge {
+    /// The post-quantum primitive.
+    pub primitive: PrimitiveId,
+    /// The profile signing and verification are charged against.
+    pub profile: &'static str,
+    /// The profile key generation is charged against.
+    pub keygen_profile: &'static str,
+}
+
 /// What an entity produced while handling one message.
 ///
 /// Built empty, filled by the entity, consumed by [`Kernel::dispatch`]. The entity never
@@ -102,6 +115,7 @@ struct PendingStage {
 /// free computation by forgetting to look at the time.
 pub struct Outbox<M> {
     profile: &'static str,
+    pq: Option<PqCharge>,
     work: Duration,
     ops: BTreeMap<(&'static str, &'static str), u64>,
     sends: Vec<PendingSend<M>>,
@@ -114,6 +128,7 @@ impl<M> Outbox<M> {
     pub fn new(profile: &'static str) -> Outbox<M> {
         Outbox {
             profile,
+            pq: None,
             work: Duration::ZERO,
             ops: BTreeMap::new(),
             sends: Vec::new(),
@@ -138,6 +153,43 @@ impl<M> Outbox<M> {
     /// Charges `count` operations of `kind` on `primitive`.
     pub fn charge(&mut self, primitive: PrimitiveId, kind: PrimitiveOpKind, count: u32) {
         self.compute(OpDescriptor::new(primitive, kind, count));
+    }
+
+    /// The post-quantum half this entity also pays under a hybrid signature scheme
+    /// (`crate::hybrid`); `None`, the default, for a classical one.
+    #[must_use]
+    pub fn with_pq(mut self, pq: Option<PqCharge>) -> Outbox<M> {
+        self.pq = pq;
+        self
+    }
+
+    /// Whether this entity's signatures are hybrid.
+    pub const fn is_hybrid(&self) -> bool {
+        self.pq.is_some()
+    }
+
+    /// Charges `count` operations of `kind` on the post-quantum half of a hybrid scheme,
+    /// against the profile that publishes it; nothing under a classical scheme. A
+    /// signature or verification is charged here *in addition to* its ECDSA half.
+    pub fn charge_pq(&mut self, kind: PrimitiveOpKind, count: u32) {
+        let Some(pq) = self.pq else {
+            return;
+        };
+        let profile = if kind == PrimitiveOpKind::KeyGen {
+            pq.keygen_profile
+        } else {
+            pq.profile
+        };
+        let op = OpDescriptor::new(pq.primitive, kind, count);
+        self.work = Duration::from_nanos(
+            self.work
+                .as_nanos()
+                .saturating_add(op.charge(profile).as_nanos()),
+        );
+        *self
+            .ops
+            .entry((pq.primitive.as_str(), op_kind_str(kind)))
+            .or_insert(0) += u64::from(count);
     }
 
     /// Queues a message (`Action::Send`).

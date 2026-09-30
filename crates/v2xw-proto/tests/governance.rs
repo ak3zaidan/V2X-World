@@ -275,7 +275,7 @@ fn the_backend_view_shows_every_entity_and_the_flows_between_them() {
     assert_eq!(get("la1").state["seeds_released"], 1);
     assert_eq!(get("eca").state["enrolment_certs_issued"], 1);
     assert!(get("ra").traffic.received > 0);
-    assert!(get("ra").ops.get("sign").copied().unwrap_or(0) > 0);
+    assert!(get("ra").ops.get("ecdsa-p256-sha256 sign").copied().unwrap_or(0) > 0);
     assert!(!get("root").online && get("root").state["certs_issued"].as_u64() >= Some(5));
     // Edges: devices talk to the LOP, the LOP to the RA, the RA to both LAs and the PCA.
     let edge = |a: &str, b: &str| view.edges.iter().any(|e| e.from == a && e.to == b);

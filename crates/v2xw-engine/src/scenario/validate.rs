@@ -927,7 +927,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                post-quantum figure; obu/cohda-mk6c-qualcomm-9150, \
                obu/generic-automotive-soc-no-hsm and obu/pq-capable-hypothetical do). \
                brainpool and P-384 are charged the P-256 time: no shipped profile publishes \
-               a brainpool figure. Only ecdsa-p256 runs in real crypto mode.",
+               a brainpool figure. Only ecdsa-p256 runs in real crypto mode. A hybrid is the \
+               credential system's scheme too (SCMS and CCMS): every certificate carries the \
+               post-quantum key and issuer signature, every signed backend message the \
+               post-quantum signature, and each authority and device pays both halves \
+               (authorities at the Raspberry Pi 5 liboqs figure, an upper bound for a \
+               server; devices at the Cohda MK6 figure). There is no post-quantum butterfly, \
+               so a device generates one post-quantum key per pseudonym certificate or \
+               ticket (Raspberry Pi 4 liboqs rate, no MK6 figure published) and uploads each \
+               encrypted to the PCA or AA (v2xw_proto::hybrid).",
     },
     KeyStatus {
         path: "security.crypto_mode",

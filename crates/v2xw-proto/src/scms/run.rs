@@ -486,7 +486,8 @@ impl ScmsRun {
     /// [`ProtoError::Size`] if the certificate profile does not encode.
     pub fn new_at(params: ScmsParams, t0: SimTime) -> Result<ScmsRun> {
         let nodes = ScmsNodes::default();
-        let sizes = ScmsSizes::new(CertificateSizes::measured()?, params.sizes);
+        let sizes = ScmsSizes::new(CertificateSizes::measured()?, params.sizes)
+            .with_hybrid(params.hybrid.as_ref());
         let mut net = BackendNet::new();
         let backend = Link {
             latency: params.backend_link_latency,
@@ -1101,7 +1102,7 @@ impl ScmsRun {
     fn drain_into(state: &mut ScmsState, kernel: &mut Kernel<ScmsMsg>) -> Result<()> {
         while let Some(d) = kernel.next_delivery() {
             let profile = kernel.profile_of(d.to);
-            let mut out = Outbox::new(profile);
+            let mut out = state.outbox(profile, d.to);
             let (at, to) = (d.at, d.to);
             state.handle(d, &mut out)?;
             kernel.dispatch(at, to, out)?;
@@ -1150,7 +1151,7 @@ impl ScmsRun {
         let ScmsRun { state, kernel } = self;
         while let Some(d) = kernel.next_delivery_before(horizon) {
             let profile = kernel.profile_of(d.to);
-            let mut out = Outbox::new(profile);
+            let mut out = state.outbox(profile, d.to);
             let (at, to) = (d.at, d.to);
             state.handle(d, &mut out)?;
             kernel.dispatch(at, to, out)?;
@@ -1172,7 +1173,7 @@ impl ScmsRun {
         let ScmsRun { state, kernel } = self;
         while let Some(d) = kernel.next_delivery() {
             let profile = kernel.profile_of(d.to);
-            let mut out = Outbox::new(profile);
+            let mut out = state.outbox(profile, d.to);
             let (at, to) = (d.at, d.to);
             state.handle(d, &mut out)?;
             kernel.dispatch(at, to, out)?;
@@ -1182,12 +1183,27 @@ impl ScmsRun {
 }
 
 impl ScmsState {
-    fn sign(out: &mut Outbox<ScmsMsg>, n: u32) {
-        out.compute(OpDescriptor::new(ECDSA, PrimitiveOpKind::Sign, n));
+    /// An empty outbox for an entity hosted on `profile`. Under a hybrid scheme every
+    /// signature is two, and the post-quantum half is charged against the device's or the
+    /// authority's published figure (`crate::hybrid`).
+    fn outbox(&self, profile: &'static str, to: NodeId) -> Outbox<ScmsMsg> {
+        let pq = self
+            .params
+            .hybrid
+            .map(|h| h.charge(self.devices.contains_key(&to)));
+        Outbox::new(profile).with_pq(pq)
     }
 
+    /// `n` signatures: ECDSA, and under a hybrid scheme the post-quantum one as well.
+    fn sign(out: &mut Outbox<ScmsMsg>, n: u32) {
+        out.compute(OpDescriptor::new(ECDSA, PrimitiveOpKind::Sign, n));
+        out.charge_pq(PrimitiveOpKind::Sign, n);
+    }
+
+    /// `n` verifications, both halves under a hybrid scheme.
     fn verify(out: &mut Outbox<ScmsMsg>, n: u32) {
         out.compute(OpDescriptor::new(ECDSA, PrimitiveOpKind::Verify, n));
+        out.charge_pq(PrimitiveOpKind::Verify, n);
     }
 
     /// One elliptic-curve scalar multiplication, charged against the ECQV descriptor,
@@ -1360,12 +1376,21 @@ impl ScmsState {
                 // encrypts it to the RA.
                 Self::sign(out, 1);
                 Self::scalar_mults(out, 1);
+                // Under a hybrid scheme there is no post-quantum butterfly: the device
+                // generates one post-quantum key pair per certificate and encrypts each
+                // public key to the PCA (an ephemeral key and a point multiplication
+                // apiece), so the RA can shuffle them without reading them.
+                let certs = req.periods.saturating_mul(req.jmax);
+                if out.is_hybrid() {
+                    out.charge_pq(PrimitiveOpKind::KeyGen, certs);
+                    Self::scalar_mults(out, certs.saturating_mul(2));
+                }
                 out.stage_at(StageId::Requested, req.device, None, flow, run);
                 out.send(
                     n.lop,
                     ScmsMsg::ProvisioningRequest(req),
                     "provisioning-request",
-                    self.sizes.provisioning_request(),
+                    self.sizes.provisioning_request_for(certs),
                     Transport::CellularUu,
                     flow,
                     run,
@@ -1377,11 +1402,14 @@ impl ScmsState {
                 // it, which is the whole reason it is a separate organisation.
                 self.lop.upstream += 1;
                 out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
+                let size = self
+                    .sizes
+                    .provisioning_request_for(req.periods.saturating_mul(req.jmax));
                 out.send(
                     n.ra,
                     ScmsMsg::ProvisioningRequest(req),
                     "provisioning-request-proxied",
-                    self.sizes.provisioning_request(),
+                    size,
                     Transport::BackendNet,
                     flow,
                     run,
@@ -1702,7 +1730,7 @@ impl ScmsState {
                                 items: Box::new(items),
                             },
                             "cert-request",
-                            self.sizes.cert_request(count),
+                            self.sizes.cert_request_for(count),
                             Transport::BackendNet,
                             job.flow,
                             job.run,
@@ -1718,6 +1746,11 @@ impl ScmsState {
                 // Per certificate: two ECIES decryptions of the pre-linkage values, one
                 // ECQV issuance, one ECIES encryption and one signature (05-protocols §3.2).
                 Self::scalar_mults(out, 4 * count);
+                // Under a hybrid scheme, one more decryption per certificate (the device's
+                // post-quantum key); `sign` adds the post-quantum signature on each.
+                if out.is_hybrid() {
+                    Self::scalar_mults(out, count);
+                }
                 Self::sign(out, count);
                 let mut credentials = Vec::new();
                 for item in items.into_iter() {
@@ -1898,6 +1931,9 @@ impl ScmsState {
                 // One ECQV reconstruction per certificate on download (05-protocols §3.2).
                 let count = u32::try_from(credentials.len()).unwrap_or(u32::MAX);
                 out.compute(OpDescriptor::new(ECQV, PrimitiveOpKind::Verify, count));
+                // Under a hybrid scheme each certificate's post-quantum half is explicit:
+                // the device checks the PCA's post-quantum signature on every one.
+                out.charge_pq(PrimitiveOpKind::Verify, count);
                 for cred in credentials.into_iter() {
                     dev.credentials.insert((cred.i, cred.j), cred);
                 }

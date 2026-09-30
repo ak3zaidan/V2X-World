@@ -504,3 +504,71 @@ fn a_hybrid_signature_costs_its_post_quantum_time() {
         "{errors:?}"
     );
 }
+
+/// A hybrid `security.signature` is the credential system's scheme too: the same top-ups
+/// run, but every certificate the PCA issues carries the post-quantum key and signature,
+/// the PCA signs each one twice, and the device generates a post-quantum key per
+/// certificate because there is no post-quantum butterfly (`v2xw_proto::hybrid`).
+#[test]
+fn a_hybrid_signature_is_the_credential_systems_scheme_too() {
+    let base = |signature: &str| {
+        let mut s = grid(30.0, 400.0);
+        lifecycle(&mut s, v2xw_engine::phase2::CAMP_SCMS, compressed());
+        cellular(&mut s);
+        s.nodes.default_obu = "obu/generic-automotive-soc-no-hsm".to_string();
+        s.security.signature = signature.to_string();
+        s.net.fragmenter = Some(ModelChoice::new("fragmenter/generic-sdu"));
+        s
+    };
+    let (classic, crec) = run(base("ecdsa-p256"));
+    let (hybrid, hrec) = run(base("hybrid-falcon512-ecdsa-p256"));
+    let last = |rec: &MemoryRecorder| records(rec, "backend.state").pop().expect("a view");
+    let (cv, hv) = (last(&crec), last(&hrec));
+    assert_eq!(cv["signature"], "ecdsa-p256");
+    assert_eq!(hv["signature"], "hybrid-falcon512-ecdsa-p256");
+    let op = |v: &Value, id: &str, key: &str| entity(v, id)["ops"][key].as_u64().unwrap_or(0);
+    let edge_bytes = |v: &Value, from: &str, to: &str| {
+        v["edges"]
+            .as_array()
+            .and_then(|a| a.iter().find(|e| e["from"] == from && e["to"] == to))
+            .and_then(|e| e["bytes"].as_u64())
+            .unwrap_or(0)
+    };
+    println!(
+        "top-ups: classic {} hybrid {}; LOP->device bytes classic {} hybrid {}; device->LOP \
+         classic {} hybrid {}; PCA falcon signs {}",
+        classic.phase2.topups_completed,
+        hybrid.phase2.topups_completed,
+        edge_bytes(&cv, "lop", "ee"),
+        edge_bytes(&hv, "lop", "ee"),
+        edge_bytes(&cv, "ee", "lop"),
+        edge_bytes(&hv, "ee", "lop"),
+        op(&hv, "pca", "falcon-512 sign"),
+    );
+    assert!(classic.phase2.topups_completed > 0 && hybrid.phase2.topups_completed > 0);
+    // Classical: no post-quantum operation anywhere in the backend.
+    assert_eq!(op(&cv, "pca", "falcon-512 sign"), 0);
+    // Hybrid: the PCA signed each certificate's post-quantum half, the device made a key
+    // for each and checked each signature.
+    assert!(op(&hv, "pca", "falcon-512 sign") >= hybrid.phase2.certs_topped_up);
+    assert!(op(&hv, "ee", "falcon-512 keygen") >= hybrid.phase2.certs_topped_up);
+    assert!(op(&hv, "ee", "falcon-512 verify") >= hybrid.phase2.certs_topped_up);
+    // Per top-up, the downloads and uploads over the device's cellular link grew by at
+    // least the post-quantum key and signature of each certificate.
+    let per = |bytes: u64, n: u64| bytes as f64 / n.max(1) as f64;
+    let extra = f64::from(897 + 666) * 3.0;
+    let down = |v: &Value, r: &v2xw_engine::RunReport| {
+        per(edge_bytes(v, "lop", "ee"), r.phase2.topups_completed)
+    };
+    assert!(
+        down(&hv, &hybrid) - down(&cv, &classic) >= extra,
+        "download per top-up {} vs {}",
+        down(&hv, &hybrid),
+        down(&cv, &classic)
+    );
+    let up = |v: &Value, r: &v2xw_engine::RunReport| {
+        per(edge_bytes(v, "ee", "lop"), r.phase2.topups_started)
+    };
+    assert!(up(&hv, &hybrid) > up(&cv, &classic) + 3.0 * 897.0);
+    assert_eq!(hybrid.phase2.backend_errors, 0, "{}", hybrid.phase2.first_backend_error);
+}

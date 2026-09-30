@@ -171,6 +171,7 @@ impl EtsiRun {
         BackendView {
             system: sys,
             protocol: ETSI_TS102941_ID,
+            signature: self.params.hybrid.map_or("ecdsa-p256", |h| h.id),
             t: now,
             entities: out,
             edges: tracker.edges(),

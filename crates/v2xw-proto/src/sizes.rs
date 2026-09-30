@@ -225,6 +225,37 @@ pub struct CertificateSizes {
 }
 
 impl CertificateSizes {
+    /// The same certificates under a hybrid signature scheme: each also carries the
+    /// holder's post-quantum public key and the issuer's post-quantum signature
+    /// (05-protocols.md §5.3, concatenated; `crate::hybrid`). The ECDSA part is still the
+    /// real encoder's length.
+    #[must_use]
+    pub const fn with_hybrid(self, h: &crate::hybrid::HybridScheme) -> CertificateSizes {
+        const WHY: &str = "05-protocols.md §5.3 (hybrid, concatenated); FIPS 204 Table 2 / \
+                           PQClean falcon-padded-512";
+        let extra = h.cert_extra_bytes();
+        CertificateSizes {
+            pseudonym: WireSize::derived(
+                self.pseudonym.bytes() + extra,
+                "real-encoder pseudonym certificate + post-quantum key + issuer's \
+                 post-quantum signature",
+                WHY,
+            ),
+            enrolment: WireSize::derived(
+                self.enrolment.bytes() + extra,
+                "real-encoder enrolment certificate + post-quantum key + issuer's \
+                 post-quantum signature",
+                WHY,
+            ),
+            authority: WireSize::derived(
+                self.authority.bytes() + extra,
+                "real-encoder authority certificate + post-quantum key + issuer's \
+                 post-quantum signature",
+                WHY,
+            ),
+        }
+    }
+
     /// Encodes one certificate of each shape and records the lengths.
     ///
     /// # Errors
