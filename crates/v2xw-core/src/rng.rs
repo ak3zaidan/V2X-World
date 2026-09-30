@@ -889,6 +889,33 @@ impl RngRegistry {
             .is_some()
     }
 
+    /// Drops every cached stream `gone` selects, in one pass over the cache; returns how
+    /// many were dropped.
+    ///
+    /// The batched form of [`RngRegistry::forget`], for keys that cannot be listed ahead —
+    /// every directed link a despawned node was ever on, which only a walk of the cache
+    /// finds. The same rule applies: only an entity that will never draw again may be
+    /// selected, and then dropping its stream changes no value any other key yields.
+    /// (`&mut self`: no guard can be out while the cache is walked.)
+    pub fn forget_where(&mut self, mut gone: impl FnMut(RngDomain, &EntityRef) -> bool) -> usize {
+        let mut dropped = 0;
+        for shard in self.shards.iter_mut() {
+            let shard = shard.get_mut().unwrap_or_else(|e| e.into_inner());
+            let before = shard.len();
+            shard.retain(|(domain, entity), _| !gone(*domain, entity));
+            dropped += before - shard.len();
+        }
+        dropped
+    }
+
+    /// How many cached streams `select` selects, for tests of what a run keeps.
+    pub fn count_where(&self, mut select: impl FnMut(RngDomain, &EntityRef) -> bool) -> usize {
+        self.shards
+            .iter()
+            .map(|s| lock(s).keys().filter(|(d, e)| select(*d, e)).count())
+            .sum()
+    }
+
     /// Puts a checked-out stream back into its shard.
     fn restore(&self, key: Key, stream: RngStream) {
         lock(&self.shards[shard_of(key.0, key.1)]).insert(key, Some(stream));
@@ -1145,6 +1172,33 @@ mod tests {
         assert_eq!(reg.stream(RngDomain::Spawn, EntityRef::Global).u64(), first);
         reg.clear();
         assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn forgetting_the_links_of_a_node_leaves_every_other_stream_where_it_was() {
+        let link = |a: u32, b: u32| EntityRef::Link(LinkKey::new(NodeId::new(a), NodeId::new(b)));
+        let d = RngDomain::Shadow;
+        // Two registries drawing the same keys; only `swept` forgets node 1's links.
+        let mut kept = RngRegistry::new(9);
+        let mut swept = RngRegistry::new(9);
+        for reg in [&mut kept, &mut swept] {
+            for e in [link(1, 2), link(2, 1), link(3, 4), EntityRef::Node(NodeId::new(1))] {
+                let _ = reg.stream(d, e).u64();
+            }
+        }
+        let _ = swept.stream(d, link(1, 5)).u64();
+        let dropped = swept.forget_where(|_, e| {
+            matches!(e, EntityRef::Link(l) if l.tx().index() == 1 || l.rx().index() == 1)
+        });
+        assert_eq!(dropped, 3, "(1,2), (2,1) and (1,5)");
+        assert!(!swept.contains(d, link(1, 2)));
+        assert!(swept.contains(d, EntityRef::Node(NodeId::new(1))), "only links were asked for");
+        // Every surviving stream continues exactly where the unswept registry's does.
+        assert_eq!(swept.stream(d, link(3, 4)).u64(), kept.stream(d, link(3, 4)).u64());
+        assert_eq!(
+            swept.stream(d, EntityRef::Node(NodeId::new(1))).u64(),
+            kept.stream(d, EntityRef::Node(NodeId::new(1))).u64()
+        );
     }
 
     #[test]

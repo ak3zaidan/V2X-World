@@ -166,6 +166,11 @@ const MAX_RANGE_M: f64 = 1000.0;
 /// of BSMs at the fastest cadence J2945/1 admits, so the bound is never the reason a frame
 /// waits, and a run that hit it would be a run whose MAC is not draining.
 const MAX_GRANTS_PER_TIMER: u32 = 8;
+
+/// How long a despawned node's per-link radio state is kept before
+/// [`Engine::sweep_retired_links`] may drop it. Far longer than anything that can still be
+/// in flight at a despawn — a frame lasts milliseconds — so the sweep never races one.
+const LINK_STATE_GRACE: Duration = Duration::from_secs(10);
 /// The radius J2945/1 counts neighbours inside, metres.
 ///
 /// [Rostami et al. 2018 Eq. 1, via 04-models.md §6.4]: `N` is "vehicles within 100 m". The
@@ -585,6 +590,9 @@ pub struct Engine {
     /// position is one lookup. It was a scan of every actor, made for every frame put on
     /// the air and every node position asked for: quadratic in the fleet.
     node_actor: BTreeMap<NodeId, ActorId>,
+    /// Nodes that have despawned and whose links' radio state has not been swept yet, in
+    /// despawn order ([`Engine::sweep_retired_links`]).
+    retired: Vec<(SimTime, NodeId)>,
     /// The actors' bodies at the last published state, for the vehicles-on-the-path
     /// test; rebuilt with the snapshot, and only when vehicle blockage is composed.
     bodies: link::BodyIndex,
@@ -657,6 +665,8 @@ pub struct Engine {
     providers: v2xw_metrics::ProviderSet,
     metric_period: Duration,
     reverse_node_walk: bool,
+    /// Whether [`Engine::sweep_retired_links`] runs; always, outside a test.
+    link_sweep: bool,
     /// Where each node's generator sits on the time axis (`v2xw_msg::GenerationTiming`).
     gen_timing: v2xw_msg::GenerationTiming,
     /// Each node's generation phase, drawn once when the node is created.
@@ -934,6 +944,7 @@ impl Engine {
             },
             actors: BTreeMap::new(),
             node_actor: BTreeMap::new(),
+            retired: Vec::new(),
             bodies: link::BodyIndex::default(),
             nodes: BTreeMap::new(),
             inboxes: BTreeMap::new(),
@@ -967,6 +978,7 @@ impl Engine {
             providers,
             metric_period: Duration::from_secs(1),
             reverse_node_walk: false,
+            link_sweep: true,
             gen_timing,
             node_phase: BTreeMap::new(),
             node_class: BTreeMap::new(),
@@ -1087,6 +1099,14 @@ impl Engine {
     /// same hook (`EngineParams::reverse_order`) for the same reason.
     pub fn set_reverse_node_walk(&mut self, reverse: bool) {
         self.reverse_node_walk = reverse;
+    }
+
+    /// **A test hook, not a model parameter.** Turns the link-state sweep
+    /// ([`Engine::sweep_retired_links`]) off, so a test can show that a run with it and a
+    /// run without it record exactly the same thing.
+    #[doc(hidden)]
+    pub fn set_link_sweep(&mut self, on: bool) {
+        self.link_sweep = on;
     }
 
     /// Runs `f` with an engine context over this engine's state.
@@ -1797,6 +1817,7 @@ impl Engine {
         };
 
         self.absorb(&update, now);
+        self.sweep_retired_links(now);
         self.recentre_focus(now);
         for orphan in core::mem::take(&mut self.orphaned_rx) {
             self.emit(recorder, &orphan);
@@ -1847,6 +1868,64 @@ impl Engine {
                 .schedule(next, EventClass::MobilityStep, Event::MobilityStep);
         }
         Ok(())
+    }
+
+    /// Drops the radio state kept per directed link — the cached shadowing RNG streams and
+    /// the propagation models' shadowing processes and link-state chains — for every link
+    /// with an end that despawned at least [`LINK_STATE_GRACE`] ago.
+    ///
+    /// That state is one entry per pair of nodes that ever heard each other, and nothing
+    /// else ever dropped it, so over a run with traffic coming and going it grew with the
+    /// number of vehicles the run had *ever* carried, not the number on the map: memory
+    /// without bound, and every lookup into the per-link maps paid for the dead pairs. Node
+    /// ids are never reused, and a despawned node neither transmits (`start_frame` finds no
+    /// position for it) nor is a candidate receiver (it is not in the snapshot), so a link
+    /// with a despawned end is never priced again and dropping its state changes no value
+    /// any surviving link draws. The grace covers anything in flight at the despawn.
+    ///
+    /// Swept in batches, because finding a node's links is a walk of every cached one: the
+    /// walk runs once at least an eighth as many nodes as are alive (and at least 4) are
+    /// ready, so its cost stays in proportion to the despawns it serves.
+    fn sweep_retired_links(&mut self, now: SimTime) {
+        let cutoff = now.saturating_sub(LINK_STATE_GRACE.as_nanos());
+        let ready = self.retired.partition_point(|&(t, _)| t <= cutoff);
+        if !self.link_sweep || ready == 0 || ready < (self.nodes.len() / 8).max(4) {
+            return;
+        }
+        let gone: std::collections::BTreeSet<NodeId> =
+            self.retired.drain(..ready).map(|(_, n)| n).collect();
+        let dead = |tx: NodeId, rx: NodeId| gone.contains(&tx) || gone.contains(&rx);
+        self.rng.forget_where(|_, entity| {
+            matches!(entity, v2xw_core::rng::EntityRef::Link(l) if dead(l.tx(), l.rx()))
+        });
+        self.propagation.forget_links(&dead);
+        if let Some(focus) = self.focus.as_mut() {
+            focus.propagation.forget_links(&dead);
+        }
+    }
+
+    /// What the link-state sweep has left, for tests: the despawned nodes still waiting
+    /// for a sweep; the cached per-link RNG streams with a despawned end that is *not*
+    /// among them — state the sweep should have dropped and did not; and the cached
+    /// per-link streams with any despawned end at all, waiting or not.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn link_sweep_backlog(&self) -> (usize, usize, usize) {
+        let pending: std::collections::BTreeSet<NodeId> =
+            self.retired.iter().map(|&(_, n)| n).collect();
+        let gone = |n: NodeId| {
+            !self.nodes.contains_key(&n)
+                && !self.rsus.contains_key(&n)
+                && n.index() < jamming::JAMMER_ID_BASE
+        };
+        let leaked_end = |n: NodeId| gone(n) && !pending.contains(&n);
+        let leaked = self.rng.count_where(|_, entity| {
+            matches!(entity, v2xw_core::rng::EntityRef::Link(l) if leaked_end(l.tx()) || leaked_end(l.rx()))
+        });
+        let held = self.rng.count_where(|_, entity| {
+            matches!(entity, v2xw_core::rng::EntityRef::Link(l) if gone(l.tx()) || gone(l.rx()))
+        });
+        (self.retired.len(), leaked, held)
     }
 
     /// Takes the spawns and despawns out of an update, creating and retiring nodes.
@@ -1978,6 +2057,7 @@ impl Engine {
                 && let Some(node) = rec.node
             {
                 self.node_actor.remove(&node);
+                self.retired.push((now, node));
                 if let Some(phase2) = self.phase2.as_mut() {
                     phase2.retire(node);
                 }

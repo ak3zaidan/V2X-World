@@ -149,6 +149,16 @@ pub trait BoxedPropagation {
 
     /// The model's card, for the registry and the manifest.
     fn card(&self) -> &v2xw_core::card::ModelCard;
+
+    /// Drops the per-link state of every link `gone` selects
+    /// ([`v2xw_radio::Propagation::forget_links`]). Nothing, for a model with none.
+    fn forget_links(
+        &mut self,
+        gone: &dyn Fn(v2xw_core::ids::NodeId, v2xw_core::ids::NodeId) -> bool,
+    ) -> usize {
+        let _ = gone;
+        0
+    }
 }
 
 impl<P> BoxedPropagation for P
@@ -173,6 +183,13 @@ where
 
     fn card(&self) -> &v2xw_core::card::ModelCard {
         v2xw_core::model::Model::card(self)
+    }
+
+    fn forget_links(
+        &mut self,
+        gone: &dyn Fn(v2xw_core::ids::NodeId, v2xw_core::ids::NodeId) -> bool,
+    ) -> usize {
+        v2xw_radio::Propagation::<EngineCtx<'_>>::forget_links(self, gone)
     }
 }
 
