@@ -53,7 +53,7 @@ use v2xw_core::card::{
 };
 use v2xw_core::ctx::Ctx;
 use v2xw_core::geom::Vec3;
-use v2xw_core::ids::LinkKey;
+use v2xw_core::ids::{LinkKey, NodeId};
 use v2xw_core::math;
 use v2xw_core::model::Model;
 use v2xw_core::rng::{EntityRef, RngDomain};
@@ -1301,9 +1301,24 @@ impl Model for LogDistanceShadowing {
     }
 }
 
+/// Drops the entries of a per-link state map, keyed `(tx, rx)` by node index, whose link
+/// `gone` selects; returns how many ([`Propagation::forget_links`]).
+fn forget_pairs<V>(
+    map: &mut BTreeMap<(u32, u32), V>,
+    gone: &dyn Fn(NodeId, NodeId) -> bool,
+) -> usize {
+    let before = map.len();
+    map.retain(|&(tx, rx), _| !gone(NodeId::new(tx), NodeId::new(rx)));
+    before - map.len()
+}
+
 impl<C: Ctx + ?Sized> Propagation<C> for LogDistanceShadowing {
     fn tier(&self) -> Tier {
         self.tier
+    }
+
+    fn forget_links(&mut self, gone: &dyn Fn(NodeId, NodeId) -> bool) -> usize {
+        forget_pairs(&mut self.shadows, gone)
     }
 
     fn loss_db(
@@ -1974,6 +1989,10 @@ impl<C: Ctx + ?Sized> Propagation<C> for Tr37885 {
         self.tier
     }
 
+    fn forget_links(&mut self, gone: &dyn Fn(NodeId, NodeId) -> bool) -> usize {
+        forget_pairs(&mut self.links, gone)
+    }
+
     fn loss_db(
         &mut self,
         ctx: &mut C,
@@ -2367,6 +2386,10 @@ impl Model for GeometricUrbanV2v {
 impl<C: Ctx + ?Sized> Propagation<C> for GeometricUrbanV2v {
     fn tier(&self) -> Tier {
         self.tier
+    }
+
+    fn forget_links(&mut self, gone: &dyn Fn(NodeId, NodeId) -> bool) -> usize {
+        forget_pairs(&mut self.shadows, gone)
     }
 
     fn loss_db(

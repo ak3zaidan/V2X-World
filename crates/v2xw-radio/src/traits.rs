@@ -82,6 +82,19 @@ pub trait Propagation<C: Ctx + ?Sized>: v2xw_core::model::Model {
     fn environment(&self, world: &World, p: Vec3) -> EnvClass {
         world.env_class_at(p)
     }
+
+    /// Drops the per-link state (a shadowing process, a link-state chain) of every link
+    /// `gone(tx, rx)` selects; returns how many links' state was dropped.
+    ///
+    /// For the engine's despawn path: node ids are never reused within a run, so a link
+    /// with a despawned end is never evaluated again, and its state is memory that only
+    /// grows — one entry per pair of nodes that ever heard each other. Dropping it changes
+    /// no loss any surviving link is priced at. Defaulted to nothing, for a model that
+    /// keeps no per-link state.
+    fn forget_links(&mut self, gone: &dyn Fn(NodeId, NodeId) -> bool) -> usize {
+        let _ = gone;
+        0
+    }
 }
 
 /// Small-scale fading (03-interfaces.md §4, 04-models.md §3.4).

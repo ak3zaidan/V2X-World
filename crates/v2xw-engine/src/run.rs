@@ -117,6 +117,7 @@ use crate::scenario::Scenario;
 use crate::snapshot::{ActorState, SnapshotStream};
 
 pub mod jamming;
+mod link;
 pub mod sidelink;
 
 /// The 5.9 GHz safety channel, and the frequency the link budget is evaluated at.
@@ -165,6 +166,22 @@ const MAX_RANGE_M: f64 = 1000.0;
 /// of BSMs at the fastest cadence J2945/1 admits, so the bound is never the reason a frame
 /// waits, and a run that hit it would be a run whose MAC is not draining.
 const MAX_GRANTS_PER_TIMER: u32 = 8;
+
+/// Below this many links a frame's geometry map runs on the calling thread.
+///
+/// The event loop runs outside the `rayon` pool, so every parallel map is a hand-off: the
+/// job is injected, a sleeping worker is woken, and the loop blocks on a latch until it is
+/// done — tens of microseconds on a loaded machine, against a few microseconds a link.
+/// Every map here is indexed or re-sorted before use, so the thread it ran on reaches no
+/// output; this is a cost choice and nothing else.
+const PAR_MIN_LINKS: usize = 8;
+/// [`PAR_MIN_LINKS`] for the reception decisions, which are cheaper per receiver.
+const PAR_MIN_DECISIONS: usize = 24;
+
+/// How long a despawned node's per-link radio state is kept before
+/// [`Engine::sweep_retired_links`] may drop it. Far longer than anything that can still be
+/// in flight at a despawn — a frame lasts milliseconds — so the sweep never races one.
+const LINK_STATE_GRACE: Duration = Duration::from_secs(10);
 /// The radius J2945/1 counts neighbours inside, metres.
 ///
 /// [Rostami et al. 2018 Eq. 1, via 04-models.md §6.4]: `N` is "vehicles within 100 m". The
@@ -580,6 +597,16 @@ pub struct Engine {
     dcc: Option<SaeJ2945Dcc>,
     weather: WeatherState,
     actors: BTreeMap<ActorId, ActorRecord>,
+    /// The actor each equipped node rides, kept beside [`Engine::actors`] so a node's
+    /// position is one lookup. It was a scan of every actor, made for every frame put on
+    /// the air and every node position asked for: quadratic in the fleet.
+    node_actor: BTreeMap<NodeId, ActorId>,
+    /// Nodes that have despawned and whose links' radio state has not been swept yet, in
+    /// despawn order ([`Engine::sweep_retired_links`]).
+    retired: Vec<(SimTime, NodeId)>,
+    /// The actors' bodies at the last published state, for the vehicles-on-the-path
+    /// test; rebuilt with the snapshot, and only when vehicle blockage is composed.
+    bodies: link::BodyIndex,
     /// Every hosted device: vehicles' OBUs and roadside units, and — when
     /// `actors.vru.device_fraction` equips them — pedestrians' and cyclists' handsets
     /// ([`crate::hosted::HostedNode`]).
@@ -649,6 +676,8 @@ pub struct Engine {
     providers: v2xw_metrics::ProviderSet,
     metric_period: Duration,
     reverse_node_walk: bool,
+    /// Whether [`Engine::sweep_retired_links`] runs; always, outside a test.
+    link_sweep: bool,
     /// Where each node's generator sits on the time axis (`v2xw_msg::GenerationTiming`).
     gen_timing: v2xw_msg::GenerationTiming,
     /// Each node's generation phase, drawn once when the node is created.
@@ -925,6 +954,9 @@ impl Engine {
                 crate::wiring::build_dcc(&scenario_for_radio)
             },
             actors: BTreeMap::new(),
+            node_actor: BTreeMap::new(),
+            retired: Vec::new(),
+            bodies: link::BodyIndex::default(),
             nodes: BTreeMap::new(),
             inboxes: BTreeMap::new(),
             // `validate` refuses any other name, so the fallback is unreachable from a
@@ -957,6 +989,7 @@ impl Engine {
             providers,
             metric_period: Duration::from_secs(1),
             reverse_node_walk: false,
+            link_sweep: true,
             gen_timing,
             node_phase: BTreeMap::new(),
             node_class: BTreeMap::new(),
@@ -1077,6 +1110,14 @@ impl Engine {
     /// same hook (`EngineParams::reverse_order`) for the same reason.
     pub fn set_reverse_node_walk(&mut self, reverse: bool) {
         self.reverse_node_walk = reverse;
+    }
+
+    /// **A test hook, not a model parameter.** Turns the link-state sweep
+    /// ([`Engine::sweep_retired_links`]) off, so a test can show that a run with it and a
+    /// run without it record exactly the same thing.
+    #[doc(hidden)]
+    pub fn set_link_sweep(&mut self, on: bool) {
+        self.link_sweep = on;
     }
 
     /// Runs `f` with an engine context over this engine's state.
@@ -1358,10 +1399,12 @@ impl Engine {
         if let Some(pos) = self.rsus.get(&node) {
             return Some(*pos);
         }
-        self.actors
-            .values()
-            .find(|a| a.node == Some(node))
-            .map(|a| a.last.extrapolate(at).pos)
+        self.actor_of(node).map(|a| a.last.extrapolate(at).pos)
+    }
+
+    /// The actor record of the vehicle or VRU a node rides, if it rides one.
+    fn actor_of(&self, node: NodeId) -> Option<&ActorRecord> {
+        self.node_actor.get(&node).and_then(|a| self.actors.get(a))
     }
 
     /// Puts the scheduled events that exist before the first dispatch on the heap.
@@ -1785,6 +1828,7 @@ impl Engine {
         };
 
         self.absorb(&update, now);
+        self.sweep_retired_links(now);
         self.recentre_focus(now);
         for orphan in core::mem::take(&mut self.orphaned_rx) {
             self.emit(recorder, &orphan);
@@ -1835,6 +1879,64 @@ impl Engine {
                 .schedule(next, EventClass::MobilityStep, Event::MobilityStep);
         }
         Ok(())
+    }
+
+    /// Drops the radio state kept per directed link — the cached shadowing RNG streams and
+    /// the propagation models' shadowing processes and link-state chains — for every link
+    /// with an end that despawned at least [`LINK_STATE_GRACE`] ago.
+    ///
+    /// That state is one entry per pair of nodes that ever heard each other, and nothing
+    /// else ever dropped it, so over a run with traffic coming and going it grew with the
+    /// number of vehicles the run had *ever* carried, not the number on the map: memory
+    /// without bound, and every lookup into the per-link maps paid for the dead pairs. Node
+    /// ids are never reused, and a despawned node neither transmits (`start_frame` finds no
+    /// position for it) nor is a candidate receiver (it is not in the snapshot), so a link
+    /// with a despawned end is never priced again and dropping its state changes no value
+    /// any surviving link draws. The grace covers anything in flight at the despawn.
+    ///
+    /// Swept in batches, because finding a node's links is a walk of every cached one: the
+    /// walk runs once at least an eighth as many nodes as are alive (and at least 4) are
+    /// ready, so its cost stays in proportion to the despawns it serves.
+    fn sweep_retired_links(&mut self, now: SimTime) {
+        let cutoff = now.saturating_sub(LINK_STATE_GRACE.as_nanos());
+        let ready = self.retired.partition_point(|&(t, _)| t <= cutoff);
+        if !self.link_sweep || ready == 0 || ready < (self.nodes.len() / 8).max(4) {
+            return;
+        }
+        let gone: std::collections::BTreeSet<NodeId> =
+            self.retired.drain(..ready).map(|(_, n)| n).collect();
+        let dead = |tx: NodeId, rx: NodeId| gone.contains(&tx) || gone.contains(&rx);
+        self.rng.forget_where(|_, entity| {
+            matches!(entity, v2xw_core::rng::EntityRef::Link(l) if dead(l.tx(), l.rx()))
+        });
+        self.propagation.forget_links(&dead);
+        if let Some(focus) = self.focus.as_mut() {
+            focus.propagation.forget_links(&dead);
+        }
+    }
+
+    /// What the link-state sweep has left, for tests: the despawned nodes still waiting
+    /// for a sweep; the cached per-link RNG streams with a despawned end that is *not*
+    /// among them — state the sweep should have dropped and did not; and the cached
+    /// per-link streams with any despawned end at all, waiting or not.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn link_sweep_backlog(&self) -> (usize, usize, usize) {
+        let pending: std::collections::BTreeSet<NodeId> =
+            self.retired.iter().map(|&(_, n)| n).collect();
+        let gone = |n: NodeId| {
+            !self.nodes.contains_key(&n)
+                && !self.rsus.contains_key(&n)
+                && n.index() < jamming::JAMMER_ID_BASE
+        };
+        let leaked_end = |n: NodeId| gone(n) && !pending.contains(&n);
+        let leaked = self.rng.count_where(|_, entity| {
+            matches!(entity, v2xw_core::rng::EntityRef::Link(l) if leaked_end(l.tx()) || leaked_end(l.rx()))
+        });
+        let held = self.rng.count_where(|_, entity| {
+            matches!(entity, v2xw_core::rng::EntityRef::Link(l) if gone(l.tx()) || gone(l.rx()))
+        });
+        (self.retired.len(), leaked, held)
     }
 
     /// Takes the spawns and despawns out of an update, creating and retiring nodes.
@@ -1938,6 +2040,9 @@ impl Engine {
             } else {
                 None
             };
+            if let Some(node) = node {
+                self.node_actor.insert(node, spawn.actor);
+            }
             self.actors.insert(
                 spawn.actor,
                 ActorRecord {
@@ -1962,6 +2067,8 @@ impl Engine {
             if let Some(rec) = self.actors.remove(actor)
                 && let Some(node) = rec.node
             {
+                self.node_actor.remove(&node);
+                self.retired.push((now, node));
                 if let Some(phase2) = self.phase2.as_mut() {
                     phase2.retire(node);
                 }
@@ -2031,6 +2138,9 @@ impl Engine {
             ));
         }
         self.snapshot = ActorSnapshot::build(update.t, MAX_RANGE_M, entries);
+        if self.obstacles.vehicles.is_some() {
+            self.bodies = link::BodyIndex::build(&self.snapshot);
+        }
     }
 
     /// Emits `gt.kinematics` for every live actor's current state, in actor order.
@@ -2342,17 +2452,15 @@ impl Engine {
         let rng = &self.rng;
 
         let reverse = self.reverse_node_walk;
-        let selected = move |id: &NodeId| only.is_none_or(|o| o == *id);
-        let walk: Box<dyn Iterator<Item = (&NodeId, &mut crate::hosted::HostedNode)>> = if reverse {
-            Box::new(
-                self.nodes
-                    .iter_mut()
-                    .rev()
-                    .filter(move |(id, _)| selected(id)),
-            )
-        } else {
-            Box::new(self.nodes.iter_mut().filter(move |(id, _)| selected(id)))
-        };
+        // One node — the per-node step of a desynchronised timing, and every wake — is a
+        // range of one key, not a filter over every node: there are as many of those
+        // events as nodes (and more), so the filter made each step quadratic in the fleet.
+        let walk: Box<dyn Iterator<Item = (&NodeId, &mut crate::hosted::HostedNode)>> =
+            match (only, reverse) {
+                (Some(id), _) => Box::new(self.nodes.range_mut(id..=id)),
+                (None, true) => Box::new(self.nodes.iter_mut().rev()),
+                (None, false) => Box::new(self.nodes.iter_mut()),
+            };
         let mut suppressed_by_vru = 0u64;
         let mut results: Vec<(NodeId, StepOutcome, Vec<v2xw_core::ctx::OwnedRecord>, f64)> = walk
             .map(|(id, runtime)| {
@@ -2757,10 +2865,9 @@ impl Engine {
         let mut signature_valid = true;
         if self.phase2.as_ref().is_some_and(|p| p.is_attacker(node)) {
             let actor = self
-                .actors
-                .iter()
-                .find(|(_, a)| a.node == Some(node))
-                .map(|(id, _)| *id)
+                .node_actor
+                .get(&node)
+                .copied()
                 .unwrap_or(ActorId::new(0));
             let believed = self
                 .nodes
@@ -3570,15 +3677,11 @@ impl Engine {
         // An arrival is an attempt when it would clear `N − margin` from a transmitter at
         // the reference EIRP: its link's loss is small enough, whatever this unit radiates.
         let floor_dbm = self.range.floor_dbm() - (reference - eirp_dbm);
-        let mut candidates: Vec<(NodeId, Vec3)> = Vec::new();
+        // Each full-range receiver with its heading — its street's direction — for the
+        // corner tracer; a roadside unit has none.
+        let mut within: Vec<(NodeId, Vec3, Option<f64>)> = Vec::new();
         let mut beyond: Vec<(NodeId, Vec3)> = Vec::new();
-        // Each receiver's heading — its street's direction — for the corner tracer.
-        let mut headings: BTreeMap<NodeId, f64> = BTreeMap::new();
-        state.tx_heading = self
-            .actors
-            .values()
-            .find(|a| a.node == Some(state.tx))
-            .map(|a| a.last.heading_rad);
+        state.tx_heading = self.actor_of(state.tx).map(|a| a.last.heading_rad);
         for actor in self.snapshot.actors_within(state.tx_pos, reach_m) {
             let Some(rec) = self.actors.get(&actor) else {
                 continue;
@@ -3588,9 +3691,8 @@ impl Engine {
                 continue;
             }
             let pos = rec.last.extrapolate(now).pos;
-            headings.insert(node, rec.last.heading_rad);
             if state.tx_pos.distance_2d(pos) <= full_m {
-                candidates.push((node, pos));
+                within.push((node, pos, Some(rec.last.heading_rad)));
             } else {
                 beyond.push((node, pos));
             }
@@ -3604,13 +3706,14 @@ impl Engine {
             }
             let d = state.tx_pos.distance_2d(rsu_pos);
             if d <= full_m {
-                candidates.push((rsu, rsu_pos));
+                within.push((rsu, rsu_pos, None));
             } else if d <= reach_m {
                 beyond.push((rsu, rsu_pos));
             }
         }
-        candidates.sort_by_key(|(n, _)| *n);
+        within.sort_by_key(|(n, _, _)| *n);
         beyond.sort_by_key(|(n, _)| *n);
+        let candidates: Vec<(NodeId, Vec3)> = within.iter().map(|&(n, p, _)| (n, p)).collect();
         state.census = self.reception_census(state.tx, state.tx_pos, now);
 
         // Stage 2: the link budgets, sequentially, because the models carry state — a
@@ -3618,9 +3721,26 @@ impl Engine {
         // at all. An arrival under the noise floor less the margin is not a reception
         // attempt: no receiver detects a frame that far under its own noise. It stays as
         // energy, which is what it is.
-        for &(rx, rx_pos) in &candidates {
-            let (rssi, dist, high, placement) =
-                self.link_budget(&state, rx, rx_pos, headings.get(&rx).copied());
+        //
+        // The geometry half of each budget — antennas, focus placement, buildings, the
+        // street corner, the vehicles on the path — is pure, and is computed first for
+        // every receiver in parallel (`link`); the stateful half then runs here in
+        // receiver order on those results.
+        self.obstacles.prepare(&self.world);
+        let geometry: Vec<link::LinkGeometry> = {
+            let view = self.link_view();
+            let (tx, tx_pos, tx_heading) = (state.tx, state.tx_pos, state.tx_heading);
+            let one = |&(rx, rx_pos, rx_heading): &(NodeId, Vec3, Option<f64>)| {
+                view.geometry(tx, tx_pos, tx_heading, rx, rx_pos, rx_heading, now)
+            };
+            if within.len() < PAR_MIN_LINKS {
+                within.iter().map(one).collect()
+            } else {
+                within.par_iter().map(one).collect()
+            }
+        };
+        for (&(rx, rx_pos), geometry) in candidates.iter().zip(geometry) {
+            let (rssi, dist, high, placement) = self.link_budget(&state, rx, rx_pos, geometry);
             if rssi < floor_dbm {
                 state.faint.insert(rx, rssi);
                 self.report.faint_arrivals += 1;
@@ -3636,19 +3756,36 @@ impl Engine {
         }
         // Beyond the cap: line-of-sight energy only, from the deterministic law. A path
         // through buildings that far out is under the margin in every NLOS law.
+        // A pure any-hit test per receiver, so in parallel too, merged in receiver order.
         let tx_antenna = self.endpoint(state.tx, state.tx_pos, now).pos;
-        for &(rx, rx_pos) in &beyond {
-            let rx_end = self.endpoint(rx, rx_pos, now);
-            if self
-                .obstacles
-                .blocked_by_buildings(&self.world, tx_antenna, rx_end.pos)
-            {
-                continue;
+        if !beyond.is_empty() {
+            self.obstacles.prepare_blocked(&self.world);
+        }
+        let beyond_power: Vec<Option<f64>> = {
+            let view = self.link_view();
+            let range = &self.range;
+            let one = |&(rx, rx_pos): &(NodeId, Vec3)| {
+                let rx_end = view.endpoint(rx, rx_pos, now);
+                if view
+                    .obstacles
+                    .blocked_shared(view.world, tx_antenna, rx_end.pos)
+                {
+                    return None;
+                }
+                let d = tx_antenna.distance(rx_end.pos);
+                Some(range.los_power_dbm(eirp_dbm, rx_end.gain_dbi, d))
+            };
+            if beyond.len() < PAR_MIN_LINKS {
+                beyond.iter().map(one).collect()
+            } else {
+                beyond.par_iter().map(one).collect()
             }
-            let d = tx_antenna.distance(rx_end.pos);
-            let power = self.range.los_power_dbm(eirp_dbm, rx_end.gain_dbi, d);
-            state.faint.insert(rx, power);
-            self.report.faint_arrivals += 1;
+        };
+        for (&(rx, _), power) in beyond.iter().zip(beyond_power) {
+            if let Some(power) = power {
+                state.faint.insert(rx, power);
+                self.report.faint_arrivals += 1;
+            }
         }
         // A reactive jammer that hears this frame jams it at its receivers.
         self.react_to_frame(
@@ -3840,61 +3977,64 @@ impl Engine {
         // A fragment's success probability is what 04-models.md §7.4's prediction is built
         // from; it costs one more pass over the SINR windows, so only fragments pay it.
         let fragment = state.frag.is_some() || state.cert_frag.is_some();
-        state
-            .arrivals
-            .par_iter()
-            .map(|(&rx, &(power_dbm, distance_m))| {
-                let mut out = LinkOutcome {
-                    rx,
-                    rssi_dbm: v2xw_radio::numeric::q_db(power_dbm),
-                    sinr_db: f64::NEG_INFINITY,
-                    distance_m,
-                    received: false,
-                    cause: Some(LossCause::OutOfRange),
-                    copies: None,
-                    psr: fragment.then_some(0.0),
-                };
-                let Some(arrival) = phy.arrival(RxHandle { tx: tx_id, rx }) else {
-                    // Nothing was registered for this receiver, which the PHY reports as
-                    // out of range rather than as a reception that failed.
-                    return out;
-                };
-                let windows = phy.sinr_windows(arrival);
-                // Reported, never used for the decision: the decision is per window.
-                let mean_sinr = if windows.is_empty() {
-                    f64::NEG_INFINITY
-                } else {
-                    v2xw_core::math::sum_ordered(windows.iter().map(|(_, _, s)| *s))
-                        / windows.len() as f64
-                };
-                out.sinr_db = v2xw_radio::numeric::q_db(mean_sinr);
-                // The draw is keyed by (link, frame), so a receiver's outcome depends on
-                // neither the thread that computed it nor how many frames the link has
-                // already carried.
-                let draw = rng.checkout(domain, OfdmPhy::frame_key(arrival)).f64();
-                let decided_high = high || state.focus_high.contains(&rx);
-                match phy.decide(arrival, decided_high, draw) {
-                    v2xw_radio::RxOutcome::Received { .. } => {
-                        out.received = true;
-                        out.cause = None;
-                    }
-                    v2xw_radio::RxOutcome::Lost(cause) => out.cause = Some(cause),
+        let one = |(&rx, &(power_dbm, distance_m)): (&NodeId, &(f64, f64))| {
+            let mut out = LinkOutcome {
+                rx,
+                rssi_dbm: v2xw_radio::numeric::q_db(power_dbm),
+                sinr_db: f64::NEG_INFINITY,
+                distance_m,
+                received: false,
+                cause: Some(LossCause::OutOfRange),
+                copies: None,
+                psr: fragment.then_some(0.0),
+            };
+            let Some(arrival) = phy.arrival(RxHandle { tx: tx_id, rx }) else {
+                // Nothing was registered for this receiver, which the PHY reports as
+                // out of range rather than as a reception that failed.
+                return out;
+            };
+            let windows = phy.sinr_windows(arrival);
+            // Reported, never used for the decision: the decision is per window.
+            let mean_sinr = if windows.is_empty() {
+                f64::NEG_INFINITY
+            } else {
+                v2xw_core::math::sum_ordered(windows.iter().map(|(_, _, s)| *s))
+                    / windows.len() as f64
+            };
+            out.sinr_db = v2xw_radio::numeric::q_db(mean_sinr);
+            // The draw is keyed by (link, frame), so a receiver's outcome depends on
+            // neither the thread that computed it nor how many frames the link has
+            // already carried.
+            let draw = rng.checkout(domain, OfdmPhy::frame_key(arrival)).f64();
+            let decided_high = high || state.focus_high.contains(&rx);
+            match phy.decide(arrival, decided_high, draw) {
+                v2xw_radio::RxOutcome::Received { .. } => {
+                    out.received = true;
+                    out.cause = None;
                 }
-                if fragment {
-                    // The deterministic refusals decode with probability zero; everything
-                    // else is the error model's probability under the interference present.
-                    out.psr = Some(match out.cause {
-                        Some(
-                            LossCause::HalfDuplex
-                            | LossCause::BelowSensitivity
-                            | LossCause::PreambleMissed,
-                        ) => 0.0,
-                        _ => phy.success_probability(arrival),
-                    });
-                }
-                out
-            })
-            .collect()
+                v2xw_radio::RxOutcome::Lost(cause) => out.cause = Some(cause),
+            }
+            if fragment {
+                // The deterministic refusals decode with probability zero; everything
+                // else is the error model's probability under the interference present.
+                out.psr = Some(match out.cause {
+                    Some(
+                        LossCause::HalfDuplex
+                        | LossCause::BelowSensitivity
+                        | LossCause::PreambleMissed,
+                    ) => 0.0,
+                    _ => phy.success_probability(arrival),
+                });
+            }
+            out
+        };
+        // Below a handful of receivers the pool's hand-off costs more than the decisions;
+        // the closure and the sort after it are the same either way.
+        if state.arrivals.len() < PAR_MIN_DECISIONS {
+            state.arrivals.iter().map(one).collect()
+        } else {
+            state.arrivals.par_iter().map(one).collect()
+        }
     }
 
     /// Records, delivers and retires one frame whose outcomes have been decided.
@@ -4832,11 +4972,7 @@ impl Engine {
         let Some(kind) = self.phase2.as_ref().map(|p| p.access_kind(node)) else {
             return;
         };
-        let pos = self
-            .actors
-            .values()
-            .find(|a| a.node == Some(node))
-            .map_or(Vec3::ZERO, |a| a.last.pos);
+        let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
         let bytes = crate::phase2::report_bytes();
         let sign = self.signing_cost(node);
         match kind {
@@ -5062,11 +5198,7 @@ impl Engine {
         if self.rsus.contains_key(&node) {
             return;
         }
-        let pos = self
-            .actors
-            .values()
-            .find(|a| a.node == Some(node))
-            .map_or(Vec3::ZERO, |a| a.last.pos);
+        let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
         let (Some(p), Some(runtime)) = (self.phase2.as_ref(), self.nodes.get(&node)) else {
             return;
         };
@@ -5116,73 +5248,20 @@ impl Engine {
         state: &FrameState,
         rx: NodeId,
         rx_pos: Vec3,
-        rx_heading: Option<f64>,
+        geometry: link::LinkGeometry,
     ) -> (f64, f64, bool, Option<&'static str>) {
         let now = self.scheduler.now();
         let link = LinkKey::new(state.tx, rx);
         let distance_m = state.tx_pos.distance(rx_pos);
         let freq_hz = self.carrier_hz();
-
-        // The antennas, not the ground points: a vehicle's phase centre stands at its
-        // class's antenna height above the road (1.5 m for a car, TR 36.885), and a
-        // roadside unit's position already carries its mast height. The building test
-        // below is 2.5-D and compares roof heights against these.
-        let tx_end = self.endpoint(state.tx, state.tx_pos, now);
-        let rx_end = self.endpoint(rx, rx_pos, now);
-
-        let evaluation = self
-            .focus
-            .as_ref()
-            .map(|f| f.plan.evaluate(tx_end.pos, rx_end.pos));
+        let link::LinkGeometry {
+            tx_end,
+            rx_end,
+            evaluation,
+            law,
+            los,
+        } = geometry;
         let high = evaluation.is_some_and(|e| e.phy_tier == Tier::High);
-        let inside_focus = matches!(
-            evaluation.map(|e| e.placement),
-            Some(v2xw_radio::LinkPlacement::Inside)
-        );
-        // The law that prices this link, and so who charges buildings and whether the
-        // street geometry is needed.
-        let law = match (inside_focus, self.focus_law) {
-            (true, Some(l)) => l,
-            _ => self.main_law,
-        };
-
-        // What obstructs the path (04-models.md §3.5): building footprints crossed
-        // (Sommer 2011), and for the geometric law the corner a blocked path turns round
-        // and the vehicles on a clear one; terrain knife edges (ITU-R P.526). Each only
-        // when the scenario turned it on and the world has it. A clear link costs nothing
-        // but the index query.
-        let dir = |h: Option<f64>| {
-            h.map(|h| {
-                let (s, c) = v2xw_core::math::sin_cos(h);
-                (c, s)
-            })
-        };
-        let mut los = self.obstacles.classify_directed(
-            &self.world,
-            tx_end.pos,
-            rx_end.pos,
-            law.traces_geometry(),
-            (dir(state.tx_heading), dir(rx_heading)),
-        );
-        // TR 37.885's NLOSv is a same-street state: the vehicles on the path are looked
-        // for only when no building is, and only near the line.
-        if law.traces_geometry()
-            && !los.class.has_building()
-            && let Some(vehicles) = self.obstacles.vehicles.as_ref()
-        {
-            let set = self.vehicles_between(state.tx, rx, tx_end.pos, rx_end.pos);
-            if !set.as_slice().is_empty() {
-                let blocked =
-                    <v2xw_radio::obstacle::VehicleBlockage as v2xw_radio::ObstacleModel<
-                        EngineCtx<'_>,
-                    >>::los(
-                        vehicles, &self.world, tx_end.pos, rx_end.pos, Some(&set)
-                    );
-                if blocked.class.has_vehicle() {
-                    los = v2xw_radio::merge_los(&[los, blocked]);
-                }
-            }
-        }
         let placement = evaluation.map(|e| e.placement.label());
 
         let (loss, fade, obstacle_db) = {
@@ -5247,44 +5326,6 @@ impl Engine {
         (rssi_dbm, distance_m, high, placement)
     }
 
-    /// The vehicles that may stand between two antennas: every actor whose body centre is
-    /// within 8 m of the straight path (half a 13 m truck and a lane), less the two ends'
-    /// own bodies, as obstacles with their actual dimensions.
-    fn vehicles_between(&self, tx: NodeId, rx: NodeId, a: Vec3, b: Vec3) -> v2xw_radio::ActorSet {
-        let mid = Vec3::new(0.5 * (a.x + b.x), 0.5 * (a.y + b.y), 0.0);
-        let radius = 0.5 * a.distance_2d(b) + 10.0;
-        let mut set = Vec::new();
-        for actor in self.snapshot.actors_within(mid, radius) {
-            let Some(rec) = self.actors.get(&actor) else {
-                continue;
-            };
-            if rec.node == Some(tx) || rec.node == Some(rx) {
-                continue;
-            }
-            let Some(entry) = self.snapshot.get(actor) else {
-                continue;
-            };
-            let class = radio_class(entry.view.class);
-            // The published reference is the rear bumper; the body is centred half a
-            // length ahead of it along the heading.
-            let k = &entry.kinematics;
-            let half = 0.5 * entry.view.dims.length_m;
-            let (s, c) = v2xw_core::math::sin_cos(k.heading_rad);
-            let centre = Vec3::new(k.pos.x + half * c, k.pos.y + half * s, k.pos.z);
-            if distance_to_segment_2d(centre, a, b) > 8.0 {
-                continue;
-            }
-            set.push(v2xw_radio::ActorObstacle {
-                actor,
-                pos: centre,
-                dims: entry.view.dims,
-                heading_rad: k.heading_rad,
-                class,
-            });
-        }
-        v2xw_radio::ActorSet::from_iter_sorted(set)
-    }
-
     /// The carrier the link budget is evaluated at, hertz.
     fn carrier_hz(&self) -> f64 {
         self.sidelink
@@ -5294,46 +5335,24 @@ impl Engine {
 
     /// One node's radio endpoint at an instant: its antenna position and class.
     fn endpoint(&self, node: NodeId, ground: Vec3, now: SimTime) -> RadioEndpoint {
-        if node.index() >= jamming::JAMMER_ID_BASE {
-            // A jammer's declared position is its antenna's.
-            return RadioEndpoint::isotropic(node, ground, v2xw_radio::ActorClass::Car, now);
+        self.link_view().endpoint(node, ground, now)
+    }
+
+    /// Shared borrows of what a link's geometry reads, for the parallel map in
+    /// [`Engine::start_frame`].
+    fn link_view(&self) -> link::LinkView<'_> {
+        link::LinkView {
+            scenario: &self.scenario,
+            world: &self.world,
+            actors: &self.actors,
+            rsus: &self.rsus,
+            node_class: &self.node_class,
+            obstacles: &self.obstacles,
+            bodies: &self.bodies,
+            focus: self.focus.as_ref().map(|f| &f.plan),
+            main_law: self.main_law,
+            focus_law: self.focus_law,
         }
-        if self.rsus.contains_key(&node) {
-            // A mast's position is its antenna's (`crate::phase2`'s mast height), unless
-            // `radio.devices.rsu.antenna_height_m` puts every roadside antenna at one
-            // height above the ground under it.
-            let device = crate::wiring::device_for(&self.scenario, v2xw_radio::ActorClass::Rsu);
-            let pos = match device.antenna_height_m {
-                Some(h) => Vec3::new(
-                    ground.x,
-                    ground.y,
-                    self.world.ground_height_at(ground.x, ground.y) + h,
-                ),
-                None => ground,
-            };
-            let mut end = RadioEndpoint::isotropic(node, pos, v2xw_radio::ActorClass::Rsu, now);
-            end.gain_dbi = device.net_gain_db();
-            return end;
-        }
-        let class = self
-            .node_class
-            .get(&node)
-            .copied()
-            .unwrap_or(v2xw_radio::ActorClass::Car);
-        // `radio.devices`: the class's antenna height, and its gain net of the cable
-        // between radio and antenna, at both ends of every link.
-        let device = crate::wiring::device_for(&self.scenario, class);
-        let pos = Vec3::new(
-            ground.x,
-            ground.y,
-            ground.z
-                + device
-                    .antenna_height_m
-                    .unwrap_or_else(|| class.default_antenna_height_m()),
-        );
-        let mut end = RadioEndpoint::isotropic(node, pos, class, now);
-        end.gain_dbi = device.net_gain_db();
-        end
     }
 
     /// The radio a node carries (`radio.devices`), by its class.

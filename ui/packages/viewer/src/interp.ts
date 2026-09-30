@@ -1280,8 +1280,9 @@ export class PoseInterpolator {
   /**
    * Zero the occupancy of every slot this interpolator wrote above `count`, and nothing else.
    *
-   * Capacity comes from `Hello.actor_capacity`, not from the live actor count, so clearing to
-   * capacity means a 20,000-slot run with 20 actors pays for 20,000 stores a frame (Q18).
+   * Capacity comes from the `Hello`'s preallocation and from growth, not from the live actor
+   * count, so clearing to capacity means a 20,000-slot run with 20 actors pays for 20,000 stores a
+   * frame (Q18).
    */
   #clearTo(count: number): void {
     if (this.#dirtyTo > count) {

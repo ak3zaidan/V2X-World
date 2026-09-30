@@ -280,7 +280,9 @@ pub trait ErasedRecord {
     /// # Errors
     /// Whatever [`ErasedRecord::write_json`] returns — a record whose `Serialize` fails.
     fn to_owned_record(&self) -> Result<OwnedRecord> {
-        let mut json = Vec::new();
+        // Most records encode to a few hundred bytes; starting there saves the three or four
+        // regrowths an empty vector goes through on every record a run writes.
+        let mut json = Vec::with_capacity(384);
         self.write_json(&mut json)?;
         Ok(OwnedRecord {
             channel: self.channel(),

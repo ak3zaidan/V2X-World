@@ -34,7 +34,7 @@ import {
   decodeFrameView,
   viewFrame,
 } from "./messages.js";
-import { PoseBuffer } from "./pose.js";
+import { PREALLOCATED_ACTOR_SLOTS, PoseBuffer } from "./pose.js";
 import { SlotTable } from "./slots.js";
 import {
   JsonRpcClient,
@@ -610,8 +610,15 @@ export class VwpClient implements VwpClientApi {
         this.#sessionToken = msg.sessionToken === "" ? null : msg.sessionToken;
         if (this.#trackPoses && msg.actorCapacity > 0) {
           const capacity = Math.min(msg.actorCapacity, 1 << 20);
-          this.poses.ensureCapacity(capacity);
-          this.slots.ensureCapacity(capacity);
+          // §3.1.1 makes `actor_capacity` both the slot bound and "a preallocation hint". The
+          // bound is enforced in full; the hint is taken only up to PREALLOCATED_ACTOR_SLOTS,
+          // because the engine announces 2^20 unless a scenario says otherwise, and allocating
+          // that up front held about 400 MB of pose, slot and interpolation buffers on a page
+          // drawing a few hundred actors. Both buffers grow on demand, by doubling, as the
+          // keyframes and spawns that need the room arrive.
+          const initial = Math.min(capacity, PREALLOCATED_ACTOR_SLOTS);
+          this.poses.ensureCapacity(initial);
+          this.slots.ensureCapacity(initial);
           // §3.1.1 / §3.4.5 — bound the slot ids a `Delta` may name (see PoseBuffer.slotLimit).
           this.poses.setSlotBound(capacity);
           this.slots.setSlotBound(capacity);

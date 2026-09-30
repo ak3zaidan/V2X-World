@@ -313,10 +313,13 @@ impl RunRecorder for DigestRecorder {
         self.hasher.update(record.visibility.to_string().as_bytes());
         self.hasher.update(&record.json);
         self.written += 1;
-        let entry = self
-            .per_channel
-            .entry(record.channel.to_string())
-            .or_insert((0, 0));
+        // Looked up by `&str` first: a channel's name is allocated once, not per record.
+        if !self.per_channel.contains_key(record.channel) {
+            self.per_channel.insert(record.channel.to_string(), (0, 0));
+        }
+        let Some(entry) = self.per_channel.get_mut(record.channel) else {
+            unreachable!("inserted above");
+        };
         entry.0 += 1;
         entry.1 += record.json.len() as u64;
     }
