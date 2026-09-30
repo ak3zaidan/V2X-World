@@ -15,6 +15,192 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-09-30 — robustness track: a refusal names its setting, nothing flaky, nothing leaks
+
+One engineer, owner of error handling in `crates/v2xw-server` and the engine's loader, the
+fuzz and soak suites and the Studio's error presentation. Every number below comes from a
+command run in the track's worktree on a shared, loaded machine (other tracks held the build
+lock for most of the session); timings are wall clock and noisy, counts are not.
+
+### User input no longer becomes "internal error"
+
+The five causes the 2026-09-24 QA found are refused at **Check** (`scenario.validate`),
+**Apply** (`scenario.set`) and **Run** (`run.start`) with `-32004` and a row naming the
+setting and the fix. A Run refused before the kernel is touched leaves the run on screen as
+it was (not `error`).
+
+| Cause | Now refused by | How |
+|---|---|---|
+| missing map file | `world.source.path` | new `scenario::preflight` (files on disk), run by the server at Check/Apply/Run, by `Engine::build` and by `v2xw validate` |
+| missing DEM | `world.terrain.dem` | the same preflight |
+| RSU `site` on an OSM world | `actors.rsus[i].site` | `validate` knows the world's site count before it is built (none on an import, one per junction with `rsu_at_junctions`) |
+| wrong `net.backend_net` id | `net.backend_net` | `validate` runs the run's own `apply_backend_net`, which now also refuses unknown and non-finite params |
+| unknown `detection.ma.params` key | `detection.ma.params.<key>` | `validate` runs the run's own `ma_params`, which lists the keys it takes; `detection.local[i].params` the same |
+
+Other user-reachable internal errors found and closed:
+
+- **Every build failure was `-32603`.** The server's setup channel carried a string; it now
+  carries the classified error (`setup_error`): anything the scenario caused is `-32004` with
+  its row, a file is `-32013`, and only engine faults are `-32603`. Import errors from the
+  map or the raster are reported against `world.source.path` / `world.terrain.dem`
+  (`wiring::source_error`, `terrain_error`). A refusal that only the built world can decide
+  (a closure naming an edge the grid lacks) leaves the engine in `error` with the reason in
+  `run.status`, `run.step` then answers `-32002` (no run), not `-32603`, and the next Run works.
+- **`time.mobility_step_ms: 30`** (inside the 10–100 ms bounds) failed Run with
+  "internal error: recording": the server built its cadence as `Cadence::new(1 s, step)`. It
+  now uses the kernel's own snapshot cadence.
+- **`world.generate`** with lanes and widths that leave no block was `-32603`; now `-32602`
+  naming the parameter.
+- **World source kinds this build cannot build** (sumo-net, opendrive, json-legacy,
+  osm-bbox), **grid parameters the generator refuses** (e.g. `cols: 1`), an **empty OSM path**
+  and a **missing `world.highway_preset`** on an OSM world: refused at Check by field.
+- **Guards** (stated as guards, not traffic figures): a procedural grid of more than 10,000
+  junctions (`MAX_GRID_JUNCTIONS`), and an arrival rate above 100,000,000 veh/h, including one
+  a `demand.multiplier` raises it to (`MAX_ARRIVAL_RATE_VEH_PER_H`). `rate_veh_per_h: 1e308` was
+  accepted and made the thinned-Poisson process draw a candidate per nanosecond. The first
+  ceiling, 1,000,000 veh/h, broke 38 engine tests and the CLI's shipped-scenario test, which
+  offer `scenarios/scale/`'s 3,600,000 veh/h on purpose (fill the grid at lane capacity); the
+  full engine suite caught it and the ceiling was raised.
+- Refusal rows are JSON Pointers (`/actors/rsus/0/site`, was `/actors/rsus[0]/site`, which
+  matched no field, so the page listed the refusal at the top instead of on the setting), and
+  their hint is the field's published range or choices instead of a generic sentence.
+- The server binary prints a refused scenario's rows at startup (it printed "scenario invalid").
+
+**The page.** `lib/errors.ts` turns a refusal into "The engine refused a setting:
+world.terrain.dem: … which does not exist …" and an internal error into "a fault in the
+engine, not in your settings". A refused Run marks the fields in Settings and resumes the run
+it paused. The header's Run button used to swallow every error (`PrimaryAction` discarded
+it); it now shows it beside the button. In `error` the status says the engine's reason.
+Keys the engine refuses whatever their value (`detection.responder`,
+`detection.perception_tier`) and `time.des_resolution` are now under **Unsupported** with the
+engine's note.
+
+### Fuzzing the control surface
+
+`crates/v2xw-server/tests/fuzz.rs`: seeded random sequences of every method, well-formed and
+malformed, half on a connection and half over HTTP, interleaved with producer ticks, and
+edits to every leaf of the published scenario surface (allowed values, bounds, past the
+bounds, wrong types). After every call: no panic, no `-32603`, a §6.4 code, a refusal with
+rows, a `run.status` in a known state with its clock inside its horizon, and a refused edit
+changes nothing; at the end the original scenario reproduces its pre-fuzz output digest.
+
+- `fuzz_short` (250 calls) runs in the suite. `fuzz_long` ran 2 × 20,000 and 3 × 2,000 calls
+  (seeds 11, 12, 1, 2, 3): **46,000 calls, 0 internal errors, 0 panics**, digest reproduced
+  each time; e.g. seed 11: 5,627 ok, 6,679 `-32602`, 508 `-32004`, 880 `-32009`.
+- Shown able to fail: with `run.pause` made to answer `-32603` the fuzzer failed ("internal
+  error for user input"); with the preflight removed from Check, and with `ma_params` removed
+  from `validate`, the five-cause tests failed (engine and server).
+- Found by the fuzzer itself: a random `world.cache` value made the server write world-cache
+  folders into the working directory; the fuzzer now points it at its scratch directory.
+
+### Soak
+
+- **50 consecutive runs through the page** (`lifecycle.spec.ts`, `VWP_SOAK_RUNS=50`, edits and
+  preset switches between runs): 50/50 finished and streamed to their end, no console error.
+  Engine physical footprint 137 MB at run 10 and 139 MB at run 50 (range 117–161 MB over the
+  eleven samples); tab heap 60.3 → 61.6 MB (range 43–62). A heap-snapshot diff of run 10
+  against run 50: 50.0 → 51.4 MB of self size, the growth V8 code and Chrome's performance
+  timeline, no application constructor growing. **No leak.**
+  - The check now reads the physical footprint, not `ps` RSS: in the first 50-run soak RSS
+    read 25.9 MB at run 20 and 132.9 MB at run 30 with the footprint flat — macOS compresses
+    a process's pages under pressure. The bound is unchanged.
+- **The long soak** (`soak.spec.ts`, `VWP_SOAK_SIM_S`): `credential-lifecycle` with 900
+  veh/h, 30 pedestrians, the SCMS lifecycle, attackers, a closure, a demand surge, a weather
+  front and the chase feed on a followed vehicle. Its first 240 s probe found a real defect:
+  - **A run declared itself finished one step early.** `LiveEngine::step` ended the stream
+    when the cursor reached the horizon's index rather than passed it, so a stream that caught
+    up with a slow kernel stopped at 239.9 s of 240 s, the last step never streamed and the
+    run published no digest. Fixed (`>` for `>=`).
+  - With that fixed, the 240 s probe passed: run to its end, no console or page error, tab
+    heap 28.5 → 44.1 MB and flat from 90 s (43.3–44.6 MB); 227 s of wall clock.
+  - **The live server's seek history had no memory bound.** The long run (1,800 s asked)
+    was stopped at 665 s: the engine's footprint grew linearly, 32 → 211 → 482 → 756 →
+    1,084 MB at 1, 154, 306, 457 and 608 s, and 1,231 MB at 665 s, while the tab heap stayed
+    at 43–45 MB. `run.status` showed why: 6,655 retained steps of a 36,000-step limit. A
+    step carries every reception record, about 180–270 kB here with 42 radios under
+    `verify-all`, so the step limit alone allowed about 6.5 GB for an hour. The history now
+    also has a byte budget (`LiveOptions::retain_bytes`, default 1 GiB, `--retain-mb`);
+    older steps are dropped and a seek before them is refused with its range
+    (`the_seek_history_is_bounded_by_memory…`). On the same soak with `--retain-mb 200`
+    the history held at 209.6 MB (1,988 steps at 456 s).
+  - **Open — something else grows too.** With the history capped, that 480 s soak still
+    failed its flatness check: footprint 132 MB at 97 s, 495 at 305 s, 659 at 480 s (tab
+    heap flat, 43–45 MB), so about 450 MB beyond the history. The run slowed the same way
+    (0.12–0.18× real time over the last 100 s, 1,381 s of wall clock for 480 s). Not located: the kernel's
+    per-vehicle SCMS and detection state (`phase2`, `ScmsRun`) is the first suspect, since
+    the 50-run soak on a scenario without the credential lifecycle is flat. The soak spec
+    (`VWP_SOAK_SIM_S=480 VWP_ENGINE_ARGS="--retain-mb 200"`) reproduces it in 23 minutes.
+  - **Open — the same run slowed as it went:** 154 simulated seconds in the first 61 s of
+    wall clock, then 152 s in 188 s, 151 s in 330 s and 151 s in 545 s (0.28× real time by
+    600 s, debug build, loaded machine). Not investigated for want of time: the retained
+    history (now bounded), the kernel's SCMS state and the page's polling are the
+    candidates. So the one-hour simulated soak the owner asked for was **not completed** on
+    this debug build; it needs this slowdown found first, or the release binary.
+
+### Resume and replay
+
+- **Random drops** (`resume.spec.ts`, new test): five cuts at seeded random instants in one
+  20 s run at real time, some while the page was still reconnecting: 5 resumed Hellos, 221
+  frames, seq 0–220 with no gap or duplicate, no page error. The single-drop test: 67 frames,
+  resumed at seq 19.
+- **Recorded runs could not be replayed by the replay server at all**: the live server wrote
+  no `Hello` into its recording ("holds no Hello frame"). It now writes the run's Hello first.
+- **Open — a replay does not draw what the live page drew.** `a_real_run_replays_…` (in
+  `tests/replay.rs`, ignored with the reason) compares a live run's stream with its recording
+  replayed: the recording lacks the MetricSample and Provenance frames (live {Keyframe 4,
+  Delta 27, MetricSample 2, Provenance 1}, replay {Keyframe 4, Delta 27}), and the pose
+  bodies differ — the live stream carries each vehicle's body centre (`live.rs`
+  `body_centre`) while the recording's frames come from the kernel's snapshot stream, which
+  keeps the rear-bumper reference (first difference 2,500 mm, half a passenger car). The fix
+  is one projection for both, which moves every recording's bytes.
+
+### Flakiness
+
+| Suite | Runs | Result |
+|---|---|---|
+| `cargo test -p v2xw-server` | 3 | all pass each time (the one failure each time was the replay test above, deterministic, now ignored) |
+| vitest protocol / viewer / mock-server / studio | 3 each | 192 / 141 / 45 / 188, all pass every time |
+| mock Playwright `scene-validation` (15 tests) | 2 full passes | 30/30 |
+| its building test alone, old subject vs new | 8 + 8 | 8/8 and 8/8 |
+| engine Playwright `resume` (2 tests) | 1 | 2/2 |
+| engine Playwright `settings` (3 tests) | 3 | 3/3 on the third run; the first two failed in the new refusal test's own steps (Check read a stale form; a cleanup click on a disabled button), fixed in the test |
+
+The wave-1 flake ("buildings fill the upper frame", signal 0) did not reproduce in 8
+isolated repeats with the old subject either, so its cause is not proven. The test now
+follows the equipped vehicle with the most tall buildings ahead of it, chosen from the
+decoded world, so its precondition (walls in front of the camera) holds whatever the clock
+is when it starts; a vehicle leaving the gridded blocks at the map's edge is the likely
+cause, not a demonstrated one.
+
+### Settings the engine does not fully apply (`KEY_STATUS`)
+
+No key is `not-implemented`. Three are `refused` and now sit under Unsupported with the
+engine's reason: `time.des_resolution` (the kernel keeps nanoseconds; only an unkeepable
+resolution is refused), `detection.responder` and `detection.perception_tier` (refused when
+set). Thirteen are `partial`, each with its note shown on the field: `time.time_dilation`,
+`actors.vru`, `actors.backend.entities`, `weather.surface`, `radio.tiers.focus`,
+`messages.sets`, `security.protocol`, `security.signature`,
+`security.verification_policy` (no key for its thresholds), `security.pseudonym_change.strategy`
+(mix-zone behaves as silent: no world has mix zones), `nodes.compute_tier`,
+`nodes.backend_tier` (high adds nothing over medium), `threats.compromised_rsu_attack`. None
+was small and safe to wire in this track without touching another track's models.
+`TimelineKind::Closure`'s doc now gives the three target spellings the loader reads
+(`123`/`lane:123`, `edge:45`, `street:NAME`).
+
+### Engine suite
+
+The integrator asked for one full run after `14366f6`. At `640ad91` (before this track):
+199 passed, 3 failed, 2 ignored — the three known failures (`message_sets`' DENM test and
+the two `phase2` honest-revocation tests). With this track's changes the full run found a
+regression of this track's own making: 38 tests in `measurement`, `propagation`,
+`radio_access`, `radio_access_layers` and `reception` offer `scenarios/scale/`'s 3.6 M veh/h,
+which the first arrival-rate ceiling refused. With the ceiling raised those five binaries
+pass (41 passed, 1 ignored), `scenario` passes 15/15 and every other binary passed in the
+full run; the same three known failures remain. `v2xw-cli`'s shipped-scenario test also
+failed: `v2xw validate` refused `phase1-manhattan.yaml` because its map path is relative and
+the test runs from the crate directory. A missing file is now a note from `v2xw validate`
+(the command answers whether the document is valid) and still a refusal from Run.
+
 ## 2026-09-30 — six tracks merged: perf, roadnet, traffic, radio, scms, shell
 
 Six engineers worked in isolated worktrees on the owner's 2026-09-29 request (traffic and
