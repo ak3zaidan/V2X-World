@@ -91,9 +91,12 @@ pub const MODEL_ID: &str = "mobility/native/medium";
 pub const MODEL_VERSION: &str = "1.0.0";
 
 /// How many lanes of its route ahead a driver without a navigation service sees a closure
-/// on: the connector and the road beyond the junction being approached. **This crate's
-/// choice**, standing for "the barrier is in sight".
-const CLOSURE_SIGHT_LANES: usize = 2;
+/// on: through the junction ahead and the one after it — a closed road is signed at the
+/// junction before it (MUTCD 2009 §6F.08, ROAD CLOSED AHEAD), which is where a driver can
+/// still turn off. **This crate's choice**: with only the connector and road beyond the
+/// next junction in sight, a driver who reached an approach whose only way on was the
+/// closed road had already passed the last turn and waited at the barrier for good.
+const CLOSURE_SIGHT_LANES: usize = 4;
 
 /// How far short of a stop line the first car of a queue stops, metres (front bumper).
 ///
@@ -200,6 +203,12 @@ const AMBER_TRAIT_ID: &str = "mobility/native/driver/amber";
 /// reach the line this long before it turns red at their present speed. **This crate's
 /// choice**, one 0.1 s step and a little more, so a vehicle that goes never meets the red.
 const AMBER_GO_MARGIN_S: f64 = 0.3;
+
+/// How soon a conflicting car still to enter on the end of its amber must reach its stop
+/// line for a driver on a fresh green to wait for it, seconds ([`NativeMobility::
+/// clearing_foe`]). **This crate's choice**: a little more than the dilemma zone's far
+/// edge at the speeds of a city street, beyond which that car can still stop.
+const CLEARING_WINDOW_S: f64 = 3.0;
 
 /// How close the car in front of a standing vehicle must be for its moving off to be
 /// what releases the vehicle — a queue — rather than a signal or a crosswalk, metres.
@@ -1935,9 +1944,21 @@ impl NativeMobility {
                 // the geometric rule of §2.3 and the legacy closest-first priority.
                 let ego_closer = junction.stop_line_gap_m < c.stop_line_gap_m
                     || (junction.stop_line_gap_m == c.stop_line_gap_m && ego.actor < c.actor);
+                // Two paths that cross are foes whatever the matrix says: the procedural
+                // grid's matrix left a permitted left turn and the opposing through
+                // movement unmarked, the turner never gave way, and the two collided inside
+                // the junction (an overlap and a −6 m/s² stop on the dense grid). The
+                // matrix still decides priority.
+                let crosses = self.along_path()
+                    && junction.movement_lane.is_some_and(|mine| {
+                        self.zones
+                            .of(mine)
+                            .iter()
+                            .any(|z| !z.merge && Some(z.other) == c.movement_lane)
+                    });
                 let (conflicts, ego_must_yield) = match (matrix.as_ref(), ego_row, other_row) {
                     (Some((_, m)), Some(a), Some(b)) => {
-                        let foe = m.is_foe(a, b);
+                        let foe = m.is_foe(a, b) || crosses;
                         let level = foe && !m.must_yield(a, b) && !m.must_yield(b, a);
                         // A conflicting pair the matrix leaves level — two opposing left
                         // turns, which no highway code ranks — used to be yielded by
@@ -1974,7 +1995,11 @@ impl NativeMobility {
             .collect()
     }
 
-    /// True if the claimant's own movement is showing red (or red-amber) at `t`.
+    /// True if the claimant's own movement is showing red (or red-amber) at `t` and it can
+    /// still stop for it. One that cannot — it went on the amber, and the red came up
+    /// while it was a car length from the line — is coming whatever the light says, and
+    /// counting it as held let the cross street's first car start into its path at the
+    /// green (an overlap and a −6 m/s² stop inside the junction on the dense grid).
     fn held_by_signal(
         &self,
         world: &World,
@@ -1993,10 +2018,48 @@ impl NativeMobility {
         let Some(plan) = world.signal_plan(plan) else {
             return false;
         };
-        matches!(
+        let red = matches!(
             self.signals.state_for(plan, lane, ns_to_secs(t)),
             Some(SignalState::Red | SignalState::RedAmber)
-        )
+        );
+        let can_stop = c.speed_mps * c.speed_mps / (2.0 * PLANNED_STOP_MAX_DECEL_MPS2)
+            <= c.stop_line_gap_m.max(0.0) + 0.5;
+        red && can_stop
+    }
+
+    /// True if a conflicting claimant whose own movement is not green — the last car in on
+    /// an amber — is about to enter the junction: within [`CLEARING_WINDOW_S`] of its stop
+    /// line and moving. A driver starting on a fresh green gives way to it, as UVC
+    /// §11-202(a)1 has every driver on a green give way to vehicles lawfully within the
+    /// junction; the all-red interval exists for the same car, and a plan without one (a
+    /// procedural grid) leaves only the driver to do it.
+    fn clearing_foe(
+        &self,
+        world: &World,
+        junction: JunctionId,
+        conflicts: &[ConflictView],
+        t: SimTime,
+    ) -> bool {
+        let Some(JunctionControl::Signalised { plan }) =
+            world.roads.try_junction(junction).map(|j| j.control)
+        else {
+            return false;
+        };
+        let Some(plan) = world.signal_plan(plan) else {
+            return false;
+        };
+        conflicts.iter().any(|c| {
+            c.conflicts
+                && c.speed_mps > 1.0
+                && c.stop_line_gap_m > 0.0
+                && c.stop_line_gap_m / c.speed_mps < CLEARING_WINDOW_S
+                && c.movement_lane.is_some_and(|l| {
+                    !matches!(
+                        self.signals.state_for(plan, l, ns_to_secs(t)),
+                        Some(SignalState::Green | SignalState::GreenYield) | None
+                    )
+                })
+        })
     }
 
     /// The intersection decision for one actor.
@@ -2113,7 +2176,24 @@ impl NativeMobility {
                 let gap = lead.s_m - lead.class.spec().length_m - follow.s_m;
                 gap < follow.driver.min_gap_m + follow.speed_mps * 1.0
             });
-            let route = if clash {
+            // Nor into a gap the vehicle does not fit: the neighbour query floors a gap at
+            // zero, and the car-following model judged a faster car cutting in with its rear
+            // 1.6 m *behind* a cyclist's front harmless — the cyclist need hardly brake for
+            // a leader pulling away — so the change began with the two side by side and the
+            // cyclist inside the car's standstill gap. The car must be clear of everything
+            // on the target lane by each follower's standstill gap.
+            let alongside = self.along_path()
+                && self.actors.values().any(|o| {
+                    if o.id == actor.id || o.lane != to {
+                        return false;
+                    }
+                    if o.s_m <= actor.s_m {
+                        actor.s_m - actor.class.spec().length_m - o.s_m < o.driver.min_gap_m
+                    } else {
+                        o.s_m - o.class.spec().length_m - actor.s_m < actor.driver.min_gap_m
+                    }
+                });
+            let route = if clash || alongside {
                 None
             } else {
                 self.route_after_change(world, actor, to, t, &costs)
@@ -2570,6 +2650,10 @@ struct Decision {
     /// When the standing vehicle's reaction to being let go began, carried to the next
     /// step.
     release_at: Option<SimTime>,
+    /// How far the front may advance this step without closing inside the standstill gap
+    /// of a vehicle standing ahead, metres; `None` when the car ahead is moving or there is
+    /// none.
+    advance_cap_m: Option<f64>,
 }
 
 impl v2xw_core::model::Model for NativeMobility {
@@ -2820,6 +2904,20 @@ impl Mobility for NativeMobility {
                         });
                     }
                 }
+                // On a green, the last car in on the cross street's amber goes first.
+                if along
+                    && decision == EntryDecision::Proceed
+                    && junction.stop_line_gap_m > 0.0
+                    && matches!(
+                        junction.signal,
+                        Some(SignalState::Green | SignalState::GreenYield)
+                    )
+                    && self.clearing_foe(world, junction.id, &conflicts, t0)
+                {
+                    decision = EntryDecision::Stop {
+                        gap_m: (junction.stop_line_gap_m - STOP_LINE_OFFSET_M).max(0.0),
+                    };
+                }
                 if along
                     && self.params.junction_clearance
                     && decision == EntryDecision::Proceed
@@ -2842,15 +2940,21 @@ impl Mobility for NativeMobility {
                 // rule of `junction_blocked`) and, inside, `junction_leader` settles the
                 // crossing. Signals keep their own rules: red has no commitment, and amber
                 // has its own (above).
+                //
+                // The room it has is to where a stop now ends, `STOP_LINE_MARGIN_M` short
+                // of the line — not the old 4 m short of it (the decision's 2 m offset and
+                // the standstill gap): judged by that, a turner 6.3 m out at 4.7 m/s
+                // "could not stop" at 1.9 m/s², took a 1.2 s lag in front of a car at
+                // 11 m/s, and the two collided inside the junction.
                 if along
-                    && let EntryDecision::Stop { gap_m } = decision
+                    && matches!(decision, EntryDecision::Stop { .. })
                     && !matches!(
                         junction.signal,
                         Some(SignalState::Red | SignalState::RedAmber | SignalState::Amber)
                     )
                     && ego.speed_mps > 0.0
                     && ego.speed_mps * ego.speed_mps
-                        / (2.0 * (gap_m - actor.driver.min_gap_m).max(0.1))
+                        / (2.0 * (junction.stop_line_gap_m - STOP_LINE_MARGIN_M).max(0.1))
                         > PLANNED_STOP_MAX_DECEL_MPS2
                 {
                     decision = EntryDecision::Proceed;
@@ -3047,7 +3151,14 @@ impl Mobility for NativeMobility {
             // new constraint stepped the deceleration from +1 to −3 m/s² in one 0.1 s step
             // (40 m/s³, the auditor's jerk class on the dense grid). Past
             // `PLANNED_STOP_MAX_DECEL_MPS2` it is an emergency, and nothing is limited.
-            if along && accel < actor.accel_mps2 && -accel <= PLANNED_STOP_MAX_DECEL_MPS2 {
+            // Not below 2 m/s, where the car-following model's last few centimetres into
+            // a queue are what keep a car out of its standstill gap: limited there, cars
+            // stopped 5 cm inside it (2,530 vehicle-steps on the dense grid).
+            if along
+                && ego.speed_mps > 2.0
+                && accel < actor.accel_mps2
+                && -accel <= PLANNED_STOP_MAX_DECEL_MPS2
+            {
                 accel = accel.max(actor.accel_mps2 - PLANNED_BRAKE_JERK_MPS3 * dt_s);
             }
             // Moving off takes the driver their reaction time: a vehicle standing still
@@ -3082,6 +3193,17 @@ impl Mobility for NativeMobility {
                 accel = accel.min(actor.accel_mps2 + RELEASE_JERK_MPS3 * dt_s);
             }
             let v0_effective = v0.min(lane_view.speed_limit_mps);
+            // A car stopping behind one that stands still stops its standstill gap short of
+            // it. The car-following model only approaches that gap asymptotically, and the
+            // 0.1 s integration of the calibrated city drivers overshot it by up to 5 cm and
+            // stood there (2,530 vehicle-steps under s0 on the dense grid).
+            let advance_cap_m = if along {
+                nearest_vehicle
+                    .filter(|v| v.speed_mps.abs() < 1e-6)
+                    .map(|v| (v.gap_m - actor.driver.min_gap_m).max(0.0))
+            } else {
+                None
+            };
             decisions.push(Decision {
                 actor: *id,
                 accel_mps2: accel,
@@ -3090,6 +3212,7 @@ impl Mobility for NativeMobility {
                 amber_commit,
                 amber_seen,
                 release_at,
+                advance_cap_m,
             });
             neighbours.insert(*id, (ego_capped, nbrs));
         }
@@ -3149,6 +3272,12 @@ impl Mobility for NativeMobility {
             };
             let before = actor.speed_mps;
             actor.speed_mps = (actor.speed_mps + decision.accel_mps2 * dt_s).clamp(0.0, ceiling);
+            if let Some(cap) = decision.advance_cap_m
+                && dt_s > 0.0
+                && actor.speed_mps * dt_s > cap
+            {
+                actor.speed_mps = cap / dt_s;
+            }
             // What is published is the acceleration the vehicle *had*, not the one the
             // model asked for: a car standing at a red line has a car-following
             // acceleration of up to −6 m/s² with its speed clamped at zero, and it was
@@ -4044,8 +4173,10 @@ mod tests {
                         );
                         if stopped_here {
                             ever_stopped_at_red = true;
-                            // And it is moving again.
-                            assert!(speed > 1.0, "it is going again: {speed} m/s");
+                            // And it is moving again: it stood half a metre short of the
+                            // line (`STOP_LINE_MARGIN_M`), so it crosses a few tenths of a
+                            // metre after moving off — slower than when stops ended 4 m back.
+                            assert!(speed > 0.5, "it is going again: {speed} m/s");
                         }
                     }
                     previous = Some((lane, state));
@@ -4681,7 +4812,7 @@ mod tests {
             (
                 "default",
                 NativeMobility::new(EngineParams::default()),
-                IdmPreset::Kesting2010,
+                IdmPreset::UrbanHcm,
             ),
             (
                 "treiber-2000",

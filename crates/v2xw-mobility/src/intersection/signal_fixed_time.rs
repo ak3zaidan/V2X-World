@@ -449,9 +449,26 @@ impl IntersectionControl for FixedTimeSignals {
             // signalised procedure's permitted left-turn critical headway.
             Some(SignalState::GreenYield) => {
                 let critical = self.params.permitted_left_critical_headway_s;
+                // A left turner on a permissive green gives way to everything coming the
+                // other way that is not itself turning left (UVC §11-402), whatever the
+                // junction's matrix says. A matrix that leaves the two movements level
+                // handed the turner priority whenever it was nearer its line, and one took
+                // a 1.2 s lag in front of a car at 11 m/s (an overlap on the dense grid).
+                let turning_left = matches!(
+                    j.movement,
+                    TurnDirection::Left | TurnDirection::SlightLeft | TurnDirection::UTurn
+                );
                 let closing = conflicts
                     .iter()
-                    .filter(|c| c.conflicts && c.ego_must_yield)
+                    .filter(|c| {
+                        c.conflicts
+                            && (c.ego_must_yield
+                                || (turning_left
+                                    && !matches!(
+                                        c.movement,
+                                        TurnDirection::Left | TurnDirection::UTurn
+                                    )))
+                    })
                     .map(|c| c.time_to_stop_line_accelerating_s(OPPOSING_START_ACCEL_MPS2))
                     .fold(f64::INFINITY, f64::min);
                 if closing >= critical {
