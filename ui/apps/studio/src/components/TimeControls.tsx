@@ -133,6 +133,16 @@ export function TimeControls(): React.JSX.Element {
   /** The range the engine reported the last time it refused a seek. */
   const [refused, setRefused] = useState<SeekRefusal | null>(null);
   const scrubRef = useRef<number | null>(null);
+  /**
+   * Where the last seek landed, until the stream's clock gets there.
+   *
+   * `run.seek` answers before the page's clock moves: the keyframe it streams reaches the store on
+   * the next 5 Hz flush. In that gap the bar still read the old instant, so a second Alt+← right
+   * after an Alt+→ looked for an event before the *previous* position — "No event before this
+   * point." at 00:00:18 with an event at 12 s — and the thumb snapped back for a moment after every
+   * drag. The bar reads this instead until the stream agrees, or for a second at most.
+   */
+  const [landingNs, setLandingNs] = useState<number | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
   /**
    * Which of the bar's controls had the keyboard when a call made the bar busy. Every control is
@@ -190,8 +200,19 @@ export function TimeControls(): React.JSX.Element {
 
   const { minNs: startNs, spanNs: endNs } = caps;
   // The clock, the fill and the thumb all read the dragged value, so the readout stays live while
-  // the gesture is in flight and no seek has been issued yet.
-  const nowNs = scrubNs ?? streamNs;
+  // the gesture is in flight and no seek has been issued yet; after a seek, the instant it landed on
+  // until the stream's clock reaches it.
+  const nowNs = scrubNs ?? landingNs ?? streamNs;
+  useEffect(() => {
+    if (landingNs === null) return;
+    const slackNs = (hello?.mobilityStepNs ?? 1e8) / 2;
+    if (Math.abs(streamNs - landingNs) <= slackNs) {
+      setLandingNs(null);
+      return;
+    }
+    const id = window.setTimeout(() => setLandingNs(null), 1000);
+    return () => window.clearTimeout(id);
+  }, [landingNs, streamNs, hello?.mobilityStepNs]);
   const span = endNs - startNs;
   const pct = useCallback(
     (tNs: number) => (span > 0 ? Math.min(100, Math.max(0, ((tNs - startNs) / span) * 100)) : 0),
@@ -297,6 +318,7 @@ export function TimeControls(): React.JSX.Element {
         // there; the engine reports `job.progress` meanwhile (shown below the bar), so the call
         // is allowed as long as a long jump on a large map takes rather than the usual 30 s.
         await engine.request("run.seek", { t_ns: target, pause_after: true }, { timeoutMs: SEEK_TIMEOUT_MS });
+        setLandingNs(target);
       } catch (err) {
         // §6.6's `-32003` carries the range that would have worked. Remembering it is how the bar
         // learns a bound `run.status` never publishes — and how the two engines in this repository,
