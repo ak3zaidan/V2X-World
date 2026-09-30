@@ -224,8 +224,7 @@ impl MaHost {
                                 value.as_u64().ok_or_else(|| bad(key, value))? as u32;
                         }
                         "report_budget" => {
-                            p.report_budget =
-                                value.as_u64().ok_or_else(|| bad(key, value))? as u32;
+                            p.report_budget = value.as_u64().ok_or_else(|| bad(key, value))? as u32;
                         }
                         other => return Err(unknown(other)),
                     }
@@ -247,8 +246,7 @@ impl MaHost {
                                 value.as_u64().ok_or_else(|| bad(key, value))? as u32;
                         }
                         "report_budget" => {
-                            p.report_budget =
-                                value.as_u64().ok_or_else(|| bad(key, value))? as u32;
+                            p.report_budget = value.as_u64().ok_or_else(|| bad(key, value))? as u32;
                         }
                         other => return Err(unknown(other)),
                     }
@@ -1524,9 +1522,9 @@ impl Phase2 {
             self.creds.insert(node, out.clone());
             return out;
         }
-        let preloaded = self
-            .scms
-            .preload(device, start, self.params.pool_periods, self.params.jmax);
+        let preloaded =
+            self.scms
+                .preload(device, start, self.params.pool_periods, self.params.jmax);
         if preloaded.is_err() {
             self.nodes.insert(
                 node,
@@ -1926,8 +1924,7 @@ impl Phase2 {
         } else {
             self.report.reports_about_honest += 1;
         }
-        if let std::collections::btree_map::Entry::Vacant(e) = self.first_reported.entry(subject)
-        {
+        if let std::collections::btree_map::Entry::Vacant(e) = self.first_reported.entry(subject) {
             e.insert(at);
             if attacker {
                 self.report.attackers_reported += 1;

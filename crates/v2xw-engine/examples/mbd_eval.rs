@@ -110,7 +110,8 @@ fn main() {
         choice.params = serde_json::from_str(&params).expect("--ma-params is JSON");
     }
     if let Some(params) = value("--proto-params") {
-        let extra: serde_json::Value = serde_json::from_str(&params).expect("--proto-params is JSON");
+        let extra: serde_json::Value =
+            serde_json::from_str(&params).expect("--proto-params is JSON");
         if let Some(choice) = s.security.protocol.as_mut() {
             if !choice.params.is_object() {
                 choice.params = serde_json::json!({});
@@ -163,7 +164,13 @@ fn main() {
     let wall = start.elapsed().as_secs_f64();
     let p = &report.phase2;
 
-    let ratio = |a: u64, b: u64| if b == 0 { None } else { Some(a as f64 / b as f64) };
+    let ratio = |a: u64, b: u64| {
+        if b == 0 {
+            None
+        } else {
+            Some(a as f64 / b as f64)
+        }
+    };
     let stats = |v: &[u64]| {
         if v.is_empty() {
             return serde_json::Value::Null;

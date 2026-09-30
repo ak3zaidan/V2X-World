@@ -379,7 +379,10 @@ fn the_default_scenario_runs_the_credential_system_with_roadside_units() {
         s.security.protocol.as_ref().map(|p| p.id.as_str()),
         Some(v2xw_engine::phase2::CAMP_SCMS)
     );
-    assert!(s.net.uu.is_some(), "the fleet reaches the backend over cellular");
+    assert!(
+        s.net.uu.is_some(),
+        "the fleet reaches the backend over cellular"
+    );
     let engine = Engine::build(s, "").expect("builds");
     let p = engine
         .phase2()

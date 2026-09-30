@@ -2719,8 +2719,7 @@ mod tests {
         // written into the one-sigma field, which overstated the error 2.45 times.)
         assert_eq!(bsm.core.accuracy.semi_major, 15);
         assert!(
-            (semi_axis_sigma_m(bsm.core.accuracy.semi_major).unwrap() * RADIUS_95_PER_SIGMA
-                - 1.8)
+            (semi_axis_sigma_m(bsm.core.accuracy.semi_major).unwrap() * RADIUS_95_PER_SIGMA - 1.8)
                 .abs()
                 < 0.05 * RADIUS_95_PER_SIGMA
         );

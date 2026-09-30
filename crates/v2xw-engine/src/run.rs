@@ -1094,8 +1094,10 @@ impl Engine {
         };
         let phase2 = crate::phase2::Phase2::build(&engine.scenario, &engine.world)?;
         engine.phase2 = phase2;
-        let policy =
-            crate::pseudonym_policy::PseudonymPolicy::from_scenario(&engine.scenario, &engine.world)?;
+        let policy = crate::pseudonym_policy::PseudonymPolicy::from_scenario(
+            &engine.scenario,
+            &engine.world,
+        )?;
         if policy.acts() || policy.sniffer_sites().is_some() {
             engine.pseudonym_policy = Some(policy);
         }
@@ -1621,8 +1623,7 @@ impl Engine {
         if let Some(phase2) = self.phase2.as_mut() {
             phase2.report_mut().crl_period_refusals = refusals;
         }
-        if let (Some(phase2), Some(policy)) =
-            (self.phase2.as_mut(), self.pseudonym_policy.as_ref())
+        if let (Some(phase2), Some(policy)) = (self.phase2.as_mut(), self.pseudonym_policy.as_ref())
         {
             phase2.note_policy_totals(policy.silenced_frames, policy.requested_changes);
         }

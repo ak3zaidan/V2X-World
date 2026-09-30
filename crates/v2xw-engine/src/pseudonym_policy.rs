@@ -189,9 +189,7 @@ impl PseudonymPolicy {
                 ));
             }
         };
-        let zone_radius_m = spec
-            .mix_zone_radius_m
-            .unwrap_or(DEFAULT_MIX_ZONE_RADIUS_M);
+        let zone_radius_m = spec.mix_zone_radius_m.unwrap_or(DEFAULT_MIX_ZONE_RADIUS_M);
         if !(zone_radius_m.is_finite() && zone_radius_m > 0.0) {
             return Err(conflict(
                 "security.pseudonym_change.mix_zone_radius_m",
@@ -275,10 +273,7 @@ impl PseudonymPolicy {
     fn c2c_target(rng: &RngRegistry, node: NodeId, changes: u32) -> (f64, f64) {
         match changes {
             0 => (Self::draw(rng, node, C2C_FIRST_M), 0.0),
-            1 => (
-                C2C_SECOND_MIN_M,
-                Self::draw(rng, node, C2C_SECOND_EXTRA_S),
-            ),
+            1 => (C2C_SECOND_MIN_M, Self::draw(rng, node, C2C_SECOND_EXTRA_S)),
             2 => (Self::draw(rng, node, C2C_THIRD_M), 0.0),
             _ => (Self::draw(rng, node, C2C_LATER_M), 0.0),
         }
@@ -420,7 +415,10 @@ mod tests {
         let mut p = policy(Rule::C2cCc, None);
         p.on_spawn(&rng, n, 0, 0.0);
         let far = Vec3::new(5_000.0, 0.0, 0.0);
-        assert!(!p.change_due(n, secs_to_ns(10.0), 799.0, far), "never before 800 m");
+        assert!(
+            !p.change_due(n, secs_to_ns(10.0), 799.0, far),
+            "never before 800 m"
+        );
         let first = (800..=1_500)
             .find(|m| p.change_due(n, secs_to_ns(60.0), f64::from(*m), far))
             .expect("due somewhere in [800 m, 1500 m]");
@@ -463,9 +461,15 @@ mod tests {
         let inside = Vec3::new(10.0, 0.0, 0.0);
         let outside = Vec3::new(100.0, 0.0, 0.0);
         assert!(!p.change_due(n, secs_to_ns(30.0), 0.0, inside), "too young");
-        assert!(!p.change_due(n, secs_to_ns(90.0), 0.0, outside), "outside a zone");
+        assert!(
+            !p.change_due(n, secs_to_ns(90.0), 0.0, outside),
+            "outside a zone"
+        );
         assert!(p.change_due(n, secs_to_ns(91.0), 0.0, inside));
-        assert!(!p.eavesdropper_reads(inside), "encrypted under the zone key");
+        assert!(
+            !p.eavesdropper_reads(inside),
+            "encrypted under the zone key"
+        );
         assert!(p.eavesdropper_reads(outside));
     }
 
