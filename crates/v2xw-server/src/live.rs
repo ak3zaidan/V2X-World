@@ -4722,6 +4722,14 @@ mod breakdown_store_tests {
         (small, whole)
     }
 
+    fn node(n: u64) -> BTreeMap<String, String> {
+        [("node".to_string(), n.to_string())].into()
+    }
+
+    fn bsm() -> BTreeMap<String, String> {
+        [("msg_type".to_string(), "bsm".to_string())].into()
+    }
+
     fn by_key(rows: Vec<GroupRow>) -> BTreeMap<String, GroupRow> {
         rows.into_iter().map(|r| (r.key.clone(), r)).collect()
     }
@@ -4745,8 +4753,9 @@ mod breakdown_store_tests {
             assert!(small.recent.len() <= 100, "kind {kind}: recent {}", small.recent.len());
             assert!(small.blocks.len() <= 400, "kind {kind}: blocks {}", small.blocks.len());
             assert!(small.block_ns > 10 * S, "kind {kind}: the blocks coarsened");
-            for filter in [BTreeMap::new(), [("msg_type".to_string(), "bsm".to_string())].into()] {
-                let dim = if filter.is_empty() { "msg_type" } else { "node" };
+            // A breakdown matches samples whose *other* dimensions are exactly the filter:
+            // one node's message types, and one message type's nodes.
+            for (dim, filter) in [("msg_type", node(2)), ("node", bsm())] {
                 let got = by_key(small.groups(dim, &filter, 0, u64::MAX));
                 let want = by_key(whole.groups(dim, &filter, 0, u64::MAX));
                 assert_eq!(got.keys().collect::<Vec<_>>(), want.keys().collect::<Vec<_>>());
@@ -4772,17 +4781,22 @@ mod breakdown_store_tests {
     #[test]
     fn a_range_pools_its_blocks_whole_and_says_so() {
         let (small, whole) = stores(0);
-        let none = BTreeMap::new();
+        let none = node(3);
+        // The other dimensions must match exactly: no filter matches no two-dimension sample.
+        assert!(small.groups("msg_type", &BTreeMap::new(), 0, u64::MAX).is_empty());
         let recent_from = (RUN_S - 10) * S;
         let got = by_key(small.groups("msg_type", &none, recent_from, u64::MAX));
         let want = by_key(whole.groups("msg_type", &none, recent_from, u64::MAX));
+        assert_eq!(want.len(), 2);
         for (k, w) in &want {
             assert_eq!((got[k].n, got[k].value, got[k].span), (w.n, w.value, w.span), "{k}");
             assert_eq!(got[k].block_ns, 0, "{k}: the newest samples are not merged");
         }
         let (from, to) = (500 * S, 1_500 * S);
         let block = small.block_ns;
-        for row in small.groups("msg_type", &none, from, to) {
+        let rows = small.groups("msg_type", &none, from, to);
+        assert_eq!(rows.len(), 2);
+        for row in rows {
             let (a, b) = row.span.expect("pooled something");
             assert!(a + block >= from && b <= to + block, "{}: {a}..{b} vs {from}..{to}", row.key);
             assert_eq!(row.block_ns, block);

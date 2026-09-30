@@ -265,7 +265,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
                   ) : null}
                   {missing.length > 0 ? (
                     <p className="mgroup-missing dim" data-testid={`metrics-missing-${g.id}`}>
-                      {run.state === "finished" ? "Not measured in this run" : "No data yet"}:{" "}
+                      {run.state === "finished" ? "No window reported a value" : "No data yet"}:{" "}
                       {missing.map((f, i) => (
                         <span key={f.base}>
                           {i > 0 ? ", " : ""}

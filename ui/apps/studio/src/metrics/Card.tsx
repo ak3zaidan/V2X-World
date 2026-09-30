@@ -34,7 +34,9 @@ function emptyReason(f: MetricFamily, o: Overview, runState: string, profileNode
   if (o.status === "loading") return "Asking the engine…";
   if (o.status === "error") return "The engine did not answer. It may be restarting; this retries on its own.";
   if (runState === "idle" || runState === "loading") return "No run yet. Press Run to start one.";
-  if (runState === "finished") return "Not measured in this run: nothing in the scenario exercised it.";
+  // Either nothing exercised it, or no one window reached the metric's minimum sample count;
+  // the expanded view tells the two apart (it asks the engine what the whole run pooled).
+  if (runState === "finished") return "No window of this run reported a value. Open it to see whether anything was measured at all.";
   return "No window has had enough samples yet. It appears once one has.";
 }
 

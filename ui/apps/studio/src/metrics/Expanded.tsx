@@ -17,7 +17,7 @@ import { Brush, MainChart, type ChartLine } from "./Chart.js";
 import { slotColour } from "./tokens.js";
 import { sideBAvailable } from "./data.js";
 import { chartPng, download, downloadCsv, fileName } from "./exporting.js";
-import { useFullSeries } from "./hooks.js";
+import { useFullSeries, useGroups } from "./hooks.js";
 import { usePins } from "./pins.js";
 import {
   axisUnit,
@@ -65,6 +65,9 @@ function initialSelection(f: MetricFamily, requested: string | null): string[] {
 }
 
 const MAX_LINES = 8;
+
+/** One identity for "no filter", so a hook keyed on it does not see a new object every render. */
+const NO_FILTER: Readonly<Record<string, string>> = Object.freeze({});
 
 export function Expanded({
   f,
@@ -131,6 +134,17 @@ export function Expanded({
     [chartLines, from, to],
   );
   const hasData = chartLines.some((l) => observedCount(l.series) > 0);
+  // With no window to draw, whether anything was measured at all: a metric too thin to report in
+  // any one window (fewer samples than its minimum) can still pool to a value over the run, which
+  // is a different finding from "nothing exercised it". Asked only when there is nothing to draw.
+  const thin = useGroups(
+    !hasData && a.status === "ready" && f.breakdowns.length > 0 ? f.base : null,
+    f.breakdowns[0] ?? "",
+    { fromNs: Math.round(from * 1e9), ...(following ? {} : { toNs: Math.round(to * 1e9) }) },
+    NO_FILTER,
+    active,
+  );
+  const pooledSamples = thin.status === "ready" ? thin.rows.reduce((s, r) => s + r.n, 0) : 0;
 
   const setRange = (a0: number, b0: number): void => {
     const lo = Math.max(0, Math.min(a0, b0));
@@ -293,9 +307,11 @@ export function Expanded({
             ? "Asking the engine for this metric's full series…"
             : lines.some((n) => a.refused.has(n))
               ? "The engine refused this measurement for this session. A node-profile session sees no ground truth."
-              : run.state === "finished"
-                ? "The run finished without producing this measurement: nothing in the scenario exercised it."
-                : "No window has had enough samples of this measurement yet. The chart appears once one has."}
+              : pooledSamples > 0
+                ? `No single window had enough samples to report a value — each needs the metric's minimum sample count — but the engine measured ${pooledSamples.toLocaleString("en-US")} samples ${dimLabel(f.breakdowns[0] ?? "").toLowerCase()} over this range. The breakdowns below pool them. A denser or longer run gives the chart windows of its own.`
+                : run.state === "finished"
+                  ? "The run finished without producing this measurement: nothing in the scenario exercised it."
+                  : "No window has had enough samples of this measurement yet. The chart appears once one has."}
         </p>
       )}
 
