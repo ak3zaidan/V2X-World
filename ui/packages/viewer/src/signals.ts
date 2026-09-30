@@ -142,8 +142,8 @@ const PED_WALK_COLOR = 0xf2f4f7;
 
 /** Stop bar depth along the lane, metres (MUTCD §3B.16: 12–24 inches). */
 const STOP_BAR_DEPTH = 0.5;
-/** Height of the stop bar above the lane centreline, metres: just above lane markings (0.24). */
-const STOP_BAR_Z = 0.26;
+/** Height of the stop bar above the lane centreline, metres: just above lane markings (0.26). */
+const STOP_BAR_Z = 0.28;
 
 export class SignalRenderer {
   readonly group = new Group();

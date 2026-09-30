@@ -67,13 +67,16 @@ const LANE_JUNCTION_INTERNAL = 5;
 const LANE_CROSSING = 6;
 
 /** Height offsets, metres above the terrain, chosen to stay clear of depth-buffer noise at 500 m. */
+// Every pair of surface layers that can overlap is at least 4 cm apart: at 2 km from a 20 m near
+// plane a 24-bit depth buffer resolves 1 cm, and the glitch hunter measured the old 2 cm gap
+// between a sidewalk (0.14) and a junction disc (0.16) z-fighting at that range.
 const Z_LANDUSE = 0.02;
 const Z_ROAD = 0.1;
-const Z_JUNCTION = 0.16;
-const Z_CROSSING = 0.2;
-const Z_MARKING = 0.24;
+const Z_JUNCTION = 0.14;
+const Z_CROSSING = 0.22;
+const Z_MARKING = 0.26;
 /** A sidewalk ribbon sits this far above the carriageway. */
-const SIDEWALK_LIFT_M = 0.04;
+const SIDEWALK_LIFT_M = 0.08;
 /** Width of a painted lane line, metres: `addOffsetLine`'s half-width 0.09 twice. */
 const MARKING_WIDTH_M = 0.18;
 

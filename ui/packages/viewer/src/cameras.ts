@@ -117,6 +117,11 @@ const CHASE_YAW_OMEGA = 3.6;
 /** The chase distance for a car, metres, that `distanceM` (the zoom) is relative to. */
 const CHASE_REFERENCE_M = 9;
 
+/** Eight directions round the camera, for {@link CameraController} wall proximity. */
+const NEAR_RING: readonly (readonly [number, number])[] = [
+  [1, 0], [0.7071, 0.7071], [0, 1], [-0.7071, 0.7071], [-1, 0], [-0.7071, -0.7071], [0, -1], [0.7071, -0.7071],
+];
+
 
 /**
  * One exact step of a critically damped spring: error `e` and rate `v` after `dt` towards zero,
@@ -818,7 +823,9 @@ export class CameraController {
         if (own >= 0 && world.buildingIndexAt(x, y) === own) continue;
         const top = world.buildingTopAt(x, y);
         if (top > -Infinity && z < top) {
-          allowed = Math.max(0.8, t - 0.6);
+          // Stand far enough off the wall that the near plane's corners (about a metre out to
+          // the side at street level) stay out of it.
+          allowed = Math.max(0.8, t - 1.3);
           break;
         }
       }
@@ -827,8 +834,28 @@ export class CameraController {
     const tau = allowed < this.#clearDist ? 0.08 : 0.6;
     this.#clearDist += (allowed - this.#clearDist) * (1 - Math.exp(-dt / tau));
     // Never further than the wall allows right now, whatever the smoothing says.
-    const d = Math.min(want, this.#clearDist, allowed);
+    let d = Math.min(want, this.#clearDist, allowed);
     pos.set(lookAt.x + dir.x * d, lookAt.y + dir.y * d, lookAt.z + dir.z * d);
+    // And not so close to a wall beside it that the near plane's corners reach into it: a car
+    // turning a corner swings a chase camera over the kerb, a metre from the building on it.
+    if (world) {
+      for (let k = 0; k < 12 && d > 0.8 && this.#nearWall(pos); k++) {
+        d = Math.max(0.8, d - 0.4);
+        pos.set(lookAt.x + dir.x * d, lookAt.y + dir.y * d, lookAt.z + dir.z * d);
+      }
+    }
+  }
+
+  /** Whether a point 0.9 m to any side of `pos` is inside a building (not a ghosted one). */
+  #nearWall(pos: Vector3): boolean {
+    const world = this.#world;
+    if (!world) return false;
+    const r = 0.9;
+    for (const [ox, oy] of NEAR_RING) {
+      const top = world.buildingTopAt(pos.x + ox * r, pos.y + oy * r);
+      if (top > -Infinity && pos.z < top) return true;
+    }
+    return false;
   }
 
   /**

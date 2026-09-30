@@ -950,6 +950,11 @@ export class GlitchHunter {
       const b = world.bbox;
       const span = Math.hypot(b.maxXM - b.minXM, b.maxYM - b.minYM);
       visibleM = Math.min(visibleM, span + p.z);
+      // Where two layers overlap — a junction disc over a sidewalk corner, a crossing over a lane —
+      // the overlap is a couple of metres across. Beyond the distance at which 2 m spans two
+      // pixels, a shimmer there is below a pixel and cannot be seen; that is as far as it is judged.
+      const focal = v.size.height / 2 / Math.tan((cam.fov * Math.PI) / 360);
+      visibleM = Math.min(visibleM, focal);
       // Resolvable depth step at distance d: d² / (near · 2^bits) for a standard buffer; a
       // logarithmic buffer resolves a constant fraction, d · ln(far/near) / 2^bits.
       const steps = 2 ** this.depthBits;
