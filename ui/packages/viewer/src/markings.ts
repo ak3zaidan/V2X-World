@@ -118,7 +118,9 @@ function laneLine(
       if (dashed) {
         const phase = (s + t) % period;
         on = phase < DASH_M;
-        next = Math.min(len, t + (on ? DASH_M - phase : period - phase));
+        // At least a millimetre of progress: at a pattern boundary the remainder can be smaller
+        // than the spacing of floats near `t`, and `t + remainder === t` would never advance.
+        next = Math.min(len, Math.max(t + 1e-3, t + (on ? DASH_M - phase : period - phase)));
       } else {
         on = true;
         next = len;

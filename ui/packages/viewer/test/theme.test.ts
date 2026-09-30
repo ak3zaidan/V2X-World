@@ -194,8 +194,8 @@ describe("legend and scene agree (Q13)", () => {
     const out = new Map<number, Color>();
     for (let c = 0; c < r.classes.length; c++) {
       for (const lod of [0, 1, 2] as const) {
-        const bucket = r.bucketAt(c, lod);
-        if (!bucket || bucket.count === 0) continue;
+        for (const bucket of r.bucketsAt(c, lod)) {
+        if (bucket.count === 0) continue;
         const colors = bucket.mesh.instanceColor?.array as Float32Array | undefined;
         if (!colors) continue;
         // `bucketAt` does not expose the slot list, so re-derive it from the instance matrices'
@@ -206,14 +206,40 @@ describe("legend and scene agree (Q13)", () => {
           const slot = Math.round(x / 6) + 2;
           out.set(slot, new Color(colors[i * 3], colors[i * 3 + 1], colors[i * 3 + 2]));
         }
+        }
       }
     }
     return out;
   }
 
+  it("in realistic paint, benign actors wear their own colours and the states keep theirs", () => {
+    const renderer = new ActorRenderer({ classes: [], theme: DARK_THEME });
+    const ctx = context(renderer);
+    renderer.update(ctx);
+    const legend = renderer.legend();
+    // A paint row for the bodies, the benign row for the aerial mark, and every non-benign state.
+    expect(legend.some((e) => e.kind === "state" && e.key === "benign")).toBe(true);
+    expect(legend.some((e) => e.kind === "paint")).toBe(true);
+    const painted = drawnColors(renderer);
+    const byKey = new Map(legend.filter((e) => e.kind === "state").map((e) => [e.key, e.color]));
+    for (const [slot, key] of [[1, "reported"], [2, "revoked"], [3, "attacker"], [4, "selected"]] as const) {
+      const want = new Color().setHex(byKey.get(key) as number);
+      const got = painted.get(slot) as Color;
+      expect(got.r, `slot ${slot} ${key}`).toBeCloseTo(want.r, 5);
+      expect(got.g).toBeCloseTo(want.g, 5);
+      expect(got.b).toBeCloseTo(want.b, 5);
+    }
+    // The benign one is drawn in a colour from the fleet's paint palette, not the benign grey.
+    const benign = new Color().setHex(DARK_THEME.actorState.benign);
+    const got = painted.get(0) as Color;
+    expect(Math.abs(got.r - benign.r) + Math.abs(got.g - benign.g) + Math.abs(got.b - benign.b)).toBeGreaterThan(1e-3);
+    renderer.dispose();
+  });
+
   for (const theme of THEMES) {
     it(`draws exactly the legend's colours (${theme.name})`, () => {
-      const renderer = new ActorRenderer({ classes: [], theme });
+      // The state palette (`paint: "state"`): every actor, benign included, in its state colour.
+      const renderer = new ActorRenderer({ classes: [], theme, paint: "state" });
       const ctx = context(renderer);
       renderer.update(ctx);
 
@@ -272,7 +298,7 @@ describe("legend and scene agree (Q13)", () => {
   });
 
   it("drops the attacker row when ground truth is locked off", () => {
-    const renderer = new ActorRenderer({ classes: [], theme: DARK_THEME });
+    const renderer = new ActorRenderer({ classes: [], theme: DARK_THEME, paint: "state" });
     renderer.showGroundTruth = false;
     expect(renderer.legend().some((e) => e.key === "attacker")).toBe(false);
     const ctx = context(renderer);

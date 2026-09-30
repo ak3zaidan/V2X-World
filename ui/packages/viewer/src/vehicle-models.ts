@@ -237,7 +237,8 @@ function wheel(
     const v1 = b.addVertex(x0, y1, z0, nx, 0, nz, 0, 0, TYRE[0], TYRE[1], TYRE[2]);
     const v2 = b.addVertex(x1, y1, z1, nx, 0, nz, 0, 0, TYRE[0], TYRE[1], TYRE[2]);
     const v3 = b.addVertex(x1, y0, z1, nx, 0, nz, 0, 0, TYRE[0], TYRE[1], TYRE[2]);
-    b.addQuad(v0, v3, v2, v1);
+    // (v0, v1, v2) turns counter-clockwise seen from outside the tread.
+    b.addQuad(v0, v1, v2, v3);
   }
   // Side walls (both faces), and on the outer side a hub with spokes.
   for (const side of [-1, 1]) {
@@ -302,9 +303,42 @@ function carLamps(
   }
 }
 
+/**
+ * The underside of a body from `x0` to `x1` (left to right) at height `z`, notched with a wheel
+ * arch — a half circle of radius `R` round each hub at `(ax, r)` — so the wheels show below the
+ * body line instead of being buried in it. Returned left to right, for the bottom edge of a
+ * counter-clockwise side profile.
+ */
+function underside(
+  x0: number, x1: number, z: number, axleXs: readonly number[], r: number, R: number,
+): [number, number][] {
+  const pts: [number, number][] = [[x0, z]];
+  const seg = 8;
+  for (const ax of [...axleXs].sort((a, b) => a - b)) {
+    if (r + R <= z) continue; // the wheel is below the body anyway
+    if (ax - R <= x0 + 0.02 || ax + R >= x1 - 0.02) continue; // not under this part of the body
+    // Where the arch meets the underside: the circle's intersection with the line z.
+    const dz = z - r;
+    const half = dz >= R ? 0 : Math.sqrt(R * R - dz * dz);
+    if (half <= 0) continue;
+    // Over the top of the wheel, whether the underside is above the hub or below it.
+    const theta = Math.asin(Math.max(-1, Math.min(1, dz / R)));
+    const a0 = Math.PI - theta;
+    const a1 = theta;
+    pts.push([ax - half, z]);
+    for (let k = 1; k < seg; k++) {
+      const a = a0 + ((a1 - a0) * k) / seg;
+      pts.push([ax + Math.cos(a) * R, r + Math.sin(a) * R]);
+    }
+    pts.push([ax + half, z]);
+  }
+  pts.push([x1, z]);
+  return pts;
+}
+
 /** The four wheels of a two-axle vehicle. */
 function axles(b: PartBuilder, xFront: number, xRear: number, W: number, r: number, tyreW: number, lod: LodLevel): void {
-  const y = W / 2 - tyreW / 2 - 0.02;
+  const y = W / 2 - tyreW / 2 - 0.03;
   for (const s of [1, -1]) {
     wheel(b, true, xFront, s * y, r, tyreW, lod);
     wheel(b, false, xRear, s * y, r, tyreW, lod);
@@ -324,7 +358,9 @@ function sedan(b: PartBuilder, L: number, W: number, H: number, lod: LodLevel, r
   // Lower body.
   b.as(ACTOR_PART.PAINT);
   profile(b, [
-    [-hl, clear + 0.1], [-hl + 0.12, clear], [hl - 0.12, clear], [hl, clear + 0.12],
+    [-hl, clear + 0.1],
+    ...underside(-hl + 0.12, hl - 0.12, clear, [xr, xf], r, r + 0.05),
+    [hl, clear + 0.12],
     [hl, hood - 0.12], [hl - 0.35, hood], [L * 0.16, belt], [-L * 0.3, belt],
     [-hl + 0.1, crossover ? belt : belt - 0.05], [-hl, belt - 0.2],
   ], -W / 2, W / 2);
@@ -372,9 +408,13 @@ function bus(b: PartBuilder, L: number, W: number, H: number, lod: LodLevel, coa
   const hl = L / 2;
   const floor = 0.32;
   const top = H - (coach ? 0.02 : 0.12);
+  const busWb = L * (coach ? 0.55 : 0.52);
+  const busXf = hl - L * 0.2;
+  const busAxles = coach ? [busXf, busXf - busWb, busXf - busWb - 1.3] : [busXf, busXf - busWb];
   b.as(ACTOR_PART.PAINT);
   profile(b, [
-    [-hl, floor], [hl, floor], [hl, top - 0.35], [hl - 0.25, top], [-hl + 0.1, top], [-hl, top - 0.15],
+    ...underside(-hl, hl, floor, busAxles, r, r + 0.06),
+    [hl, top - 0.35], [hl - 0.25, top], [-hl + 0.1, top], [-hl, top - 0.15],
   ], -W / 2, W / 2);
   // Window band down both sides and the windscreen.
   b.as(ACTOR_PART.GLASS);
@@ -393,8 +433,8 @@ function bus(b: PartBuilder, L: number, W: number, H: number, lod: LodLevel, coa
       for (const dx of [hl - 1.2, -0.4]) box(b, dx, -(W / 2 + 0.008), (floor + winHi) / 2, 1.1, 0.01, winHi - floor, lin(0x2a3440));
     }
   }
-  const wb = L * (coach ? 0.55 : 0.52);
-  const xf = hl - L * 0.2;
+  const wb = busWb;
+  const xf = busXf;
   carLamps(b, L, W, floor + 0.55, floor + 0.7, lod);
   axles(b, xf, xf - wb, W, r, 0.3, lod);
   if (coach) {
@@ -414,7 +454,8 @@ function truck(b: PartBuilder, L: number, W: number, H: number, lod: LodLevel, s
   // Cab.
   b.as(ACTOR_PART.PAINT);
   profile(b, [
-    [hl - cabL, frame], [hl, frame], [hl, cabH * 0.62], [hl - 0.35, cabH], [hl - cabL, cabH],
+    ...underside(hl - cabL, hl, frame, [hl - 1.1], r, r + 0.06),
+    [hl, cabH * 0.62], [hl - 0.35, cabH], [hl - cabL, cabH],
   ], -W / 2, W / 2);
   b.as(ACTOR_PART.GLASS);
   box(b, hl - 0.2, 0, cabH * 0.78, 0.3, W * 0.86, cabH * 0.26, GLASS);
@@ -447,14 +488,23 @@ function van(b: PartBuilder, L: number, W: number, H: number, lod: LodLevel, amb
   const r = Math.min(0.37, H * 0.13);
   const hl = L / 2;
   const floor = r + 0.12;
+  const vanWb = L * 0.55;
+  const vanXf = hl - L * 0.17;
+  const vanAxles = [vanXf, vanXf - vanWb];
+  const R = r + 0.05;
   b.as(ambulance ? ACTOR_PART.FIXED : ACTOR_PART.PAINT);
   if (ambulance) {
     // Type III: a van cab and a square module behind it, white.
     const white = lin(0xf1f1ee);
     profile(b, [
-      [hl - 1.9, floor], [hl, floor], [hl, H * 0.4], [hl - 0.7, H * 0.66], [hl - 1.9, H * 0.66],
+      ...underside(hl - 1.9, hl, floor, vanAxles, r, R),
+      [hl, H * 0.4], [hl - 0.7, H * 0.66], [hl - 1.9, H * 0.66],
     ], -W / 2 + 0.05, W / 2 - 0.05, white);
-    box(b, (hl - 1.9 - hl) / 2, 0, (floor + H - 0.12) / 2, hl - 1.9 + hl, W, H - 0.12 - floor, white);
+    // The module, from behind the cab to the rear, arched over the rear wheels.
+    profile(b, [
+      ...underside(-hl, hl - 1.9, floor, vanAxles, r, R),
+      [hl - 1.9, H - 0.12], [-hl, H - 0.12],
+    ], -W / 2, W / 2, white);
     // The red band round the module.
     for (const s of [1, -1]) box(b, -0.5, s * (W / 2 + 0.005), H * 0.42, L - 2.4, 0.01, 0.24, lin(0xc0231e));
     b.as(ACTOR_PART.GLASS);
@@ -469,14 +519,15 @@ function van(b: PartBuilder, L: number, W: number, H: number, lod: LodLevel, amb
   } else {
     // A high-roof delivery van.
     profile(b, [
-      [-hl, floor], [hl, floor], [hl, H * 0.38], [hl - 0.55, H * 0.55], [hl - 1.2, H * 0.97], [-hl, H * 0.97],
+      ...underside(-hl, hl, floor, vanAxles, r, R),
+      [hl, H * 0.38], [hl - 0.55, H * 0.55], [hl - 1.2, H * 0.97], [-hl, H * 0.97],
     ], -W / 2, W / 2);
     b.as(ACTOR_PART.GLASS);
     box(b, hl - 0.85, 0, H * 0.72, 0.5, W * 0.84, H * 0.22, GLASS);
     for (const s of [1, -1]) box(b, hl - 1.35, s * (W / 2 + 0.004), H * 0.66, 0.7, 0.01, H * 0.22, GLASS);
   }
-  const wb = L * 0.55;
-  const xf = hl - L * 0.17;
+  const wb = vanWb;
+  const xf = vanXf;
   carLamps(b, L, W, H * 0.3, H * 0.3, lod);
   axles(b, xf, xf - wb, W, r, 0.24, lod);
   return { wheelRadiusM: r, wheelbaseM: wb, strideM: 0 };
@@ -630,10 +681,11 @@ export function modelVariants(def: ActorClassDef, nyc: boolean, taxiShare: numbe
   if (n === "motorcycle" || n === "moto") return [{ kind: "motorcycle", weight: 1 }];
   if (n === "moped" || n === "delivery-moped") {
     const d = Math.max(0, Math.min(1, n === "delivery-moped" ? 1 : deliveryMopedShare));
-    return [
+    const both: { kind: ActorModelKind; weight: number }[] = [
       { kind: "moped-delivery", weight: d },
       { kind: "moped", weight: 1 - d },
-    ].filter((v) => v.weight > 0);
+    ];
+    return both.filter((v) => v.weight > 0);
   }
   if (n === "bicycle" || n === "cyclist") return [{ kind: "bicycle", weight: 1 }];
   if (n === "scooter" || n === "e-scooter") return [{ kind: "scooter", weight: 1 }];

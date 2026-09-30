@@ -311,6 +311,22 @@ function limitTangent2(mx: number, my: number, cx: number, cy: number): void {
 const MAX_YAW_RATE = 2;
 
 /**
+ * How fast a person's drawn heading may turn, rad/s: a brisk pivot about, 180° in 0.6 s. The
+ * social-force model's heading turns a standing pedestrian by up to 180° in one 0.1 s step; drawn
+ * as given, a crowd at a kerb spins on the spot.
+ */
+export const VRU_MAX_YAW_RATE = 5;
+
+/**
+ * A step longer than this, metres, whose length disagrees with the speeds reported at its ends, is
+ * a jump in the data rather than motion: 4× what the reported speeds cover, plus a metre, and at
+ * least 2 m.
+ */
+function dataJumpMetres(expected: number): number {
+  return Math.max(2, 4 * expected + 1);
+}
+
+/**
  * How much of a frame's advance may go into correcting the clock estimate. 0.1 means the render
  * clock runs at 90–110 % of the stream's rate while it converges — imperceptible, and never a stop.
  */
@@ -436,6 +452,8 @@ export class PoseInterpolator {
   #snapAll = false;
   /** Scratch for one slot's raw pose. */
   #raw = new Float64Array(4);
+  /** 1 for each class index that is a person or a rider; see {@link setVruClasses}. */
+  #vruClasses = new Uint8Array(0);
   /** Per slot: the sim time the shown actor first existed (its first snapshot), for the fade-in. */
   #bornAt: Float64Array;
   /** Per slot: the sim time a departed actor last existed, and its id, for the fade-out. */
@@ -636,6 +654,14 @@ export class PoseInterpolator {
     coef.set(this.#coef, 0);
     this.#coef = coef;
     this.#capacity = n;
+  }
+
+  /**
+   * Which class indices are people or riders (`Hello`'s category 1): their drawn heading turns at
+   * most {@link VRU_MAX_YAW_RATE}.
+   */
+  setVruClasses(flags: Uint8Array): void {
+    this.#vruClasses = flags.slice();
   }
 
   /** Forget every snapshot and the clock estimate (a resync, a seek, or a fresh `Hello`). */
@@ -966,7 +992,7 @@ export class PoseInterpolator {
           goneId[i] = shownId;
           goneAt[i] = last;
         }
-        if (!live && goneId[i] !== NO_ACTOR && goneId[i] === shownId && Number.isFinite(goneAt[i])) {
+        if (!live && !snapAll && goneId[i] !== NO_ACTOR && goneId[i] === shownId && Number.isFinite(goneAt[i])) {
           const id = goneId[i];
           const p = i * 3;
           const after = renderSim - goneAt[i];
@@ -1001,7 +1027,12 @@ export class PoseInterpolator {
       const id = newest.actorId[i];
       const wasShown = this.outOccupied[i] === 1 && this.outActorId[i] === id;
       const p = i * 3;
-      if (!wasShown) {
+      if (snapAll) {
+        // A seek or a new stream: whatever the slot held before belongs to another stretch of
+        // the run, and the new picture is shown whole.
+        bornAt[i] = renderSim - fadeSim;
+        goneId[i] = NO_ACTOR;
+      } else if (!wasShown) {
         // A newcomer: the first instant it exists is its earliest snapshot in the history.
         let first = newest.simSeconds;
         for (let k = 1; k < this.#size; k++) {
@@ -1009,8 +1040,8 @@ export class PoseInterpolator {
           if (i < s.count && s.occupied[i] === 1 && s.actorId[i] === id) first = s.simSeconds;
           else break;
         }
-        // The first picture of a stream (or of a seek) is shown whole; only later arrivals fade in.
-        bornAt[i] = snapAll || this.#size === 1 ? renderSim - fadeSim : first;
+        // The first picture of a stream is shown whole; only later arrivals fade in.
+        bornAt[i] = this.#size === 1 ? renderSim - fadeSim : first;
         goneId[i] = NO_ACTOR;
       }
       if (!this.#held && renderSim < bornAt[i] - 1e-9) {
@@ -1113,6 +1144,15 @@ export class PoseInterpolator {
       oPos[p] = x;
       oPos[p + 1] = y;
       oPos[p + 2] = z;
+      const vruFlags = this.#vruClasses;
+      const ci = newest.classIdx[i];
+      if (wasShown && kind !== 1 && frameDt > 0 && ci < vruFlags.length && vruFlags[ci] === 1) {
+        const prevH = oHead[i];
+        const d = wrapAngle(h - prevH);
+        const lim = VRU_MAX_YAW_RATE * frameDt;
+        if (d > lim) h = prevH + lim;
+        else if (d < -lim) h = prevH - lim;
+      }
       oHead[i] = h > Math.PI || h < -Math.PI ? wrapAngle(h) : h;
     }
     this.#anyError = anyError;
@@ -1178,7 +1218,9 @@ export class PoseInterpolator {
     const vmax = Math.max(Math.abs(a.speed[i]), Math.abs(b.speed[i]));
     const tele = Math.max(this.teleportMetres, 1.5 * vmax * T + 2);
     if (chord2 > tele * tele || !(T > 1e-9)) {
+      // Keep it moving at its own speed through the rest of the step, from where the data put it.
       this.#write(b, i, out);
+      this.#deadReckon(b, i, t, 0, out);
       return 1;
     }
 
@@ -1204,6 +1246,15 @@ export class PoseInterpolator {
     const chord = Math.sqrt(chord2);
     const expected = 0.5 * (Math.abs(a.speed[i]) + Math.abs(b.speed[i])) * T;
     const consistent = Math.abs(chord - expected) <= Math.max(0.3, 0.35 * expected);
+    if (!consistent && chord > dataJumpMetres(expected)) {
+      // The data jumped: no motion at the reported speed covers this chord. Drawing it as a
+      // slide across the step is a teleport at tens of metres a second anyway; it is shown as
+      // what it is, a discontinuity in the engine's data, at the instant of the newer snapshot.
+      // Keep it moving at its own speed through the rest of the step, from where the data put it.
+      this.#write(b, i, out);
+      this.#deadReckon(b, i, t, 0, out);
+      return 1;
+    }
     if (this.curve === "linear" || !consistent) {
       out[0] = ax + cx * u;
       out[1] = ay + cy * u;
@@ -1292,6 +1343,7 @@ export class PoseInterpolator {
     const chord = Math.sqrt(chord2);
     const expected = 0.5 * (Math.abs(va) + Math.abs(vb)) * T;
     const consistent = Math.abs(chord - expected) <= Math.max(0.3, 0.35 * expected);
+    if (!consistent && chord > dataJumpMetres(expected)) return false;
     co[c + 8] = az;
     co[c + 9] = cz;
     if (this.curve === "linear" || !consistent) {

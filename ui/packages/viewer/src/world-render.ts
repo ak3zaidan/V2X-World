@@ -761,7 +761,7 @@ export class WorldRenderer {
     this.signals.build(world);
     this.#buildSites(world);
     if (this.#buildings) drawables++;
-    if (this.signals.count > 0) drawables += 3;
+    if (this.signals.count > 0) drawables += 5;
     drawables += this.sitesGroup.children.length + 2; // ground and sky
 
     this.#report = {
@@ -1278,6 +1278,7 @@ export class WorldRenderer {
    * vertical field and height.
    */
   fadeMarkings(distanceM: number, fovDeg: number, viewportPx: number): void {
+    this.signals.setBarVisibility(distanceM);
     const mPerPx = (2 * Math.max(1, distanceM) * Math.tan((fovDeg * Math.PI) / 360)) / Math.max(1, viewportPx);
     const coverage = MARKING_WIDTH_M / mPerPx;
     const t = Math.min(1, Math.max(0, (coverage - 0.35) / (0.9 - 0.35)));

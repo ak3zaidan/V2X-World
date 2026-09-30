@@ -52,6 +52,41 @@ describe("road-user models", () => {
     }
   }
 
+  it("every face is wound to face out: its winding agrees with its normal", () => {
+    // A face wound the wrong way is culled from outside and drawn from inside: a tyre with no
+    // tread, a body you see through. Checked on every model at every LOD.
+    const bad: string[] = [];
+    for (const def of ENGINE) {
+      for (const v of modelVariants(def, true, 0.2, 0.5)) {
+        for (const lod of [0, 1, 2] as const) {
+          const { geometry } = buildActorModel(v.kind, def, lod);
+          const pos = geometry.getAttribute("position").array as Float32Array;
+          const nrm = geometry.getAttribute("normal").array as Float32Array;
+          const idx = geometry.getIndex()!.array;
+          let wrong = 0;
+          for (let t = 0; t < idx.length; t += 3) {
+            const [a, b, c] = [idx[t], idx[t + 1], idx[t + 2]];
+            const ux = pos[b * 3] - pos[a * 3];
+            const uy = pos[b * 3 + 1] - pos[a * 3 + 1];
+            const uz = pos[b * 3 + 2] - pos[a * 3 + 2];
+            const vx = pos[c * 3] - pos[a * 3];
+            const vy = pos[c * 3 + 1] - pos[a * 3 + 1];
+            const vz = pos[c * 3 + 2] - pos[a * 3 + 2];
+            const gx = uy * vz - uz * vy;
+            const gy = uz * vx - ux * vz;
+            const gz = ux * vy - uy * vx;
+            if (Math.hypot(gx, gy, gz) < 1e-9) continue;
+            const d = gx * nrm[a * 3] + gy * nrm[a * 3 + 1] + gz * nrm[a * 3 + 2];
+            if (d < 0) wrong++;
+          }
+          if (wrong > 0) bad.push(`${v.kind} lod${lod}: ${wrong} of ${idx.length / 3}`);
+          geometry.dispose();
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+
   it("a car has spinning and steering wheels, head, tail, stop and both indicators", () => {
     const car = ENGINE[0];
     const p = parts("sedan", car, 0);

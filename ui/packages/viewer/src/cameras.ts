@@ -132,6 +132,42 @@ function smootherstep(u: number): number {
   return u * u * u * (u * (u * 6 - 15) + 10);
 }
 
+/**
+ * Move `x` (with velocity `v`) towards `target` for `dt` seconds as a critically damped spring of
+ * natural frequency `omega`, exactly: `e(t) = (e₀ + (v₀ + ωe₀)t)·e^(−ωt)` per axis.
+ */
+function springTo(x: Vector3, v: Vector3, target: Vector3, omega: number, dt: number): void {
+  if (!(dt > 0)) return;
+  const k = Math.exp(-omega * dt);
+  for (const axis of ["x", "y", "z"] as const) {
+    const e = x[axis] - target[axis];
+    const a = v[axis] + omega * e;
+    x[axis] = target[axis] + (e + a * dt) * k;
+    v[axis] = (v[axis] - omega * a * dt) * k;
+  }
+}
+
+/**
+ * {@link springTo} towards a target moving at `(tvx, tvy, 0)`: the spring acts on the error and
+ * the relative velocity, so a target moving steadily is followed with no lag. `target` is where
+ * the target is at the end of the step; it was `tv·dt` behind at its start.
+ */
+function springFollow(x: Vector3, v: Vector3, target: Vector3, tvx: number, tvy: number, omega: number, dt: number): void {
+  if (!(dt > 0)) return;
+  const k = Math.exp(-omega * dt);
+  const tv = [tvx, tvy, 0];
+  const axes = ["x", "y", "z"] as const;
+  for (let n = 0; n < 3; n++) {
+    const axis = axes[n];
+    const start = target[axis] - tv[n] * dt;
+    const e = x[axis] - start;
+    const u = v[axis] - tv[n];
+    const a = u + omega * e;
+    x[axis] = target[axis] + (e + a * dt) * k;
+    v[axis] = tv[n] + (u - omega * a * dt) * k;
+  }
+}
+
 function finite3(v: Vector3): boolean {
   return Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z);
 }
@@ -215,12 +251,17 @@ export class CameraController {
    * behind the car is a glide, not a cut.
    */
   #clearDist = Number.POSITIVE_INFINITY;
+  /** Set by {@link setFollowPose} when the subject's pose jumped this frame. */
+  #subjectJumped = false;
   readonly yawLambda: number;
   /** Where the visible part of the viewport sits inside the canvas; see {@link setViewInsets}. */
   #insets = { top: 0, right: 0, bottom: 0, left: 0 };
   /** Frames on which the camera had to be recovered from a non-finite state (diagnostic). */
   recoveries = 0;
   #freeVelocity = new Vector3();
+  /** The spring's velocities for the camera position and its look point, m/s. */
+  #posVel = new Vector3();
+  #lookVel = new Vector3();
   #freeYaw = 0;
   #freePitch = -0.3;
 
@@ -571,7 +612,10 @@ export class CameraController {
   }
 
   /** Feed the followed actor's interpolated pose. Call once per frame before {@link update}. */
-  setFollowPose(x: number, y: number, z: number, headingRad: number, speedMps: number): void {
+  setFollowPose(x: number, y: number, z: number, headingRad: number, speedMps: number, jumped = false): void {
+    // A discontinuity in the subject's own data (the interpolator snapped it) is followed with a
+    // cut, not a whip: a spring chasing a car that jumped two metres swings the whole picture.
+    if (jumped) this.#subjectJumped = true;
     // A non-finite pose must never reach the camera: one NaN in the position and every matrix
     // downstream is NaN, which draws nothing at all — a black frame.
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
@@ -605,6 +649,8 @@ export class CameraController {
 
   /** Cut to the desired pose with no animation. */
   snap(): void {
+    this.#posVel.set(0, 0, 0);
+    this.#lookVel.set(0, 0, 0);
     this.#flyT = this.#flyDuration; // a cut is not a flight
     if (this.#followPosKnown) {
       this.#chaseYaw = this.#followHeading;
@@ -660,19 +706,60 @@ export class CameraController {
     }
     if (this.#flyT < this.#flyDuration) {
       this.#advanceFlight(step);
+      if (this.#flyT >= this.#flyDuration && street) {
+        // The flight lands on a subject that is moving: hand the follow its velocity, or the
+        // camera stalls for a beat after landing and then runs to catch up.
+        const v = this.#followValid ? this.#followSpeed : 0;
+        this.#posVel.set(Math.cos(this.#followHeading) * v, Math.sin(this.#followHeading) * v, 0);
+        this.#lookVel.copy(this.#posVel);
+      }
     } else if (street && !this.#pendingFlight) {
-      // Locked to the subject: the camera stands at its smoothed offset from the car's *drawn*
-      // position, so the car sits still in the frame at any speed. The old tracking law lerped the
-      // camera's world position towards that point, which at 15 m/s trailed it by v/λ = 3.75 m
-      // more than it meant to and pumped the car back and forth in the frame at every change of
-      // speed. The smoothing is in the offset (the yaw spring, the clearance), not the position.
-      this.camera.position.copy(this.#desiredPosition);
-      this.look.copy(this.#desiredLook);
+      // A critically damped follow with the subject's own velocity fed forward. The old law
+      // lerped the camera towards its desired point, which at 15 m/s trailed by v/λ = 3.75 m more
+      // than it meant to and pumped the car back and forth in the frame at every change of speed.
+      // Pinning the camera to the car rigidly instead passed every kink of the car's drawn path
+      // straight to the whole picture. With the velocity fed forward there is no lag at a steady
+      // speed; the spring (1/ω: 0.1 s behind a car, 0.04 s in the driver's seat) only smooths the
+      // departures from it. A jump bigger than the spring should hide is taken at once.
+      if (!finite3(this.camera.position) || !finite3(this.look)) {
+        this.recoveries++;
+        this.camera.position.copy(this.#desiredPosition);
+        this.look.copy(this.#desiredLook);
+        this.#posVel.set(0, 0, 0);
+        this.#lookVel.set(0, 0, 0);
+      }
+      const dash = this.#mode === "dashboard";
+      const omega = dash ? 25 : 10;
+      // A subject that has left the stream is standing where it was last seen.
+      const speed = this.#followValid ? this.#followSpeed : 0;
+      const c = Math.cos(this.#followHeading);
+      const sn = Math.sin(this.#followHeading);
+      const vx = c * speed;
+      const vy = sn * speed;
+      const cut = this.#subjectJumped;
+      this.#subjectJumped = false;
+      if (cut || this.camera.position.distanceToSquared(this.#desiredPosition) > 25) {
+        this.camera.position.copy(this.#desiredPosition);
+        this.#posVel.set(vx, vy, 0);
+      } else {
+        springFollow(this.camera.position, this.#posVel, this.#desiredPosition, vx, vy, omega, step);
+      }
+      if (cut || this.look.distanceToSquared(this.#desiredLook) > 25) {
+        this.look.copy(this.#desiredLook);
+        this.#lookVel.set(vx, vy, 0);
+      } else {
+        springFollow(this.look, this.#lookVel, this.#desiredLook, vx, vy, omega, step);
+      }
     } else {
-      const kp = 1 - Math.exp(-step * this.positionLambda);
-      const kl = 1 - Math.exp(-step * this.lookLambda);
-      this.camera.position.lerp(this.#desiredPosition, kp);
-      this.look.lerp(this.#desiredLook, kl);
+      // A critically damped spring per axis rather than the exponential lerp 09-ui §3 named. The
+      // lerp starts every move at its full speed, λ·distance, in one frame: each time the plan
+      // view's focus moved (following the traffic, or a click) every vehicle on screen jumped by
+      // the whole first step, which the glitch hunter counts as a stutter of every one of them.
+      // The spring starts from rest and arrives without overshoot; at ω = 2λ it
+      // covers 90 % of a move in about the same 0.55 s the lerp did. Exact per step, so it is
+      // frame-rate independent.
+      springTo(this.camera.position, this.#posVel, this.#desiredPosition, 2 * this.positionLambda, step);
+      springTo(this.look, this.#lookVel, this.#desiredLook, 2 * this.lookLambda, step);
     }
     const kf = 1 - Math.exp(-step * this.fovLambda);
 
@@ -762,6 +849,8 @@ export class CameraController {
     const l = this.look;
     if (finite3(p) && finite3(l) && Number.isFinite(this.camera.fov) && this.camera.fov > 1) return;
     this.recoveries++;
+    this.#posVel.set(0, 0, 0);
+    this.#lookVel.set(0, 0, 0);
     this.#flyT = this.#flyDuration;
     if (!Number.isFinite(this.camera.fov) || this.camera.fov <= 1) this.camera.fov = this.#desiredFov;
     if (finite3(this.#desiredPosition) && finite3(this.#desiredLook)) {
@@ -804,6 +893,8 @@ export class CameraController {
    * one 0.2 s step lands exactly where two 0.1 s steps do.
    */
   #beginFlight(): void {
+    this.#posVel.set(0, 0, 0);
+    this.#lookVel.set(0, 0, 0);
     this.#computeDesired();
     this.#flyStart.copy(this.camera.position);
     this.#flyStartLook.copy(this.look);
@@ -816,7 +907,11 @@ export class CameraController {
     // street, and the roof rule then parked the camera on that roof looking at it — the camera
     // fuzz measured frames of one flat colour at the end of the fly-down and of every change of
     // subject. A flight to anywhere else keeps the straight eased line.
-    this.#flyCruise = CameraController.needsFollowSubject(this.#mode)
+    // A hop at street level — chase to dashboard, a change of subject a few metres away — is a
+    // straight eased move: planning it over the roofs sent the camera 15 m above the tallest
+    // building and back down in half a second.
+    const hop = Math.hypot(this.#desiredPosition.x - this.#flyStart.x, this.#desiredPosition.y - this.#flyStart.y);
+    this.#flyCruise = CameraController.needsFollowSubject(this.#mode) && (hop > 60 || this.#flyStart.z > this.#desiredPosition.z + 40)
       ? this.#cruiseFor(this.#flyStart, this.#desiredPosition)
       : Number.NaN;
   }
@@ -861,7 +956,9 @@ export class CameraController {
     // straight descent, but never below cruise until the camera is over its destination, then
     // straight down.
     const a0 = startLow ? 0.2 : 0;
-    const c2 = startLow ? 0.75 : 0.8;
+    // The last 40 % of a flight to the street is the descent onto the subject: over the last
+    // fifth, as it was, a 50 m drop ended at 150 m/s in two frames.
+    const c2 = 0.6;
     const across = smootherstep(MathUtils.clamp((u - a0) / (c2 - a0), 0, 1));
     let z: number;
     if (startLow) {

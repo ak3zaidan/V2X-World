@@ -347,6 +347,8 @@ export class ActorRenderer {
   #slotModel = new Int16Array(0);
   #slotPaint = new Float32Array(0);
   #slotPhase = new Float32Array(0);
+  /** A person's drawn stature as a fraction of the class height (1 for anything else). */
+  #slotScale = new Float32Array(0);
   #slotBand = new Int8Array(0);
   #odo = new Float64Array(0);
   #gait = new Float64Array(0);
@@ -491,7 +493,8 @@ export class ActorRenderer {
   /**
    * Exactly the colours this renderer draws, as a legend: the state colours it can write, the
    * class colours when those are on, and — in realistic paint — one `"paint"` row saying that
-   * benign actors wear their own colours.
+   * benign actors wear their own colours at street level (from the air their mark is still the
+   * benign colour, so that row stays).
    */
   legend(): ActorLegendEntry[] {
     const out: ActorLegendEntry[] = [];
@@ -499,7 +502,9 @@ export class ActorRenderer {
     const realistic = this.#paint === "realistic" && !this.#benignByClass;
     for (const key of ACTOR_STATE_COLOR_KEYS) {
       if (key === "attacker" && !this.#showGroundTruth) continue;
-      if (key === "benign" && (this.#benignByClass || realistic)) continue;
+      // Benign keeps its row in realistic paint: the aerial mark (`overlays.ts`) still draws every
+      // benign vehicle in it from the air.
+      if (key === "benign" && this.#benignByClass) continue;
       out.push({ kind: "state", key, label: STATE_LABELS[key], color: s[key] });
     }
     if (realistic) {
@@ -698,12 +703,12 @@ export class ActorRenderer {
     if (n <= this.#slotCap) return;
     let c = Math.max(64, this.#slotCap);
     while (c < n) c *= 2;
-    const g64 = (a: Float64Array): Float64Array => {
+    const g64 = (a: Float64Array): Float64Array<ArrayBuffer> => {
       const o = new Float64Array(c);
       o.set(a);
       return o;
     };
-    const g32 = (a: Float32Array, k = 1): Float32Array => {
+    const g32 = (a: Float32Array, k = 1): Float32Array<ArrayBuffer> => {
       const o = new Float32Array(c * k);
       o.set(a);
       return o;
@@ -719,6 +724,7 @@ export class ActorRenderer {
     this.#slotBand = band;
     this.#slotPaint = g32(this.#slotPaint, 3);
     this.#slotPhase = g32(this.#slotPhase);
+    this.#slotScale = g32(this.#slotScale);
     this.#odo = g64(this.#odo);
     this.#gait = g64(this.#gait);
     this.#amp = g32(this.#amp);
@@ -770,6 +776,19 @@ export class ActorRenderer {
       this.#slotPaint[p + 2] = this.#color.b;
     }
     this.#slotPhase[s] = hashId(id, 3);
+    // People are not all one height. US adults: men 175.4 cm (SD 7.4), women 161.5 cm (SD 7.1),
+    // NHANES 2015–2018 (Fryar et al. 2021, NHSR 160); half and half, as a fraction of the class's
+    // 1.719 m, clamped to ±2.5 SD.
+    if (model.kind === "pedestrian") {
+      const man = hashId(id, 6) < 0.5;
+      const u1 = Math.max(1e-6, hashId(id, 7));
+      const u2 = hashId(id, 8);
+      const z = Math.max(-2.5, Math.min(2.5, Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)));
+      const cm = man ? 175.4 + 7.4 * z : 161.5 + 7.1 * z;
+      this.#slotScale[s] = cm / 100 / Math.max(0.5, this.#classes[c].heightM);
+    } else {
+      this.#slotScale[s] = 1;
+    }
     this.#slotBand[s] = -1;
     this.#odo[s] = hashId(id, 4) * 10;
     this.#gait[s] = hashId(id, 5) * TAU;
@@ -949,9 +968,11 @@ export class ActorRenderer {
       const sinH = Math.sin(h);
       // Column-major, identical to what `Matrix4.toArray` would write for
       // makeRotationZ(h) then setPosition(x, y, z).
-      m[o] = cosH; m[o + 1] = sinH; m[o + 2] = 0; m[o + 3] = 0;
-      m[o + 4] = -sinH; m[o + 5] = cosH; m[o + 6] = 0; m[o + 7] = 0;
-      m[o + 8] = 0; m[o + 9] = 0; m[o + 10] = 1; m[o + 11] = 0;
+      // A person's stature scales them uniformly (a shorter person is also narrower).
+      const k = this.#slotScale[s];
+      m[o] = cosH * k; m[o + 1] = sinH * k; m[o + 2] = 0; m[o + 3] = 0;
+      m[o + 4] = -sinH * k; m[o + 5] = cosH * k; m[o + 6] = 0; m[o + 7] = 0;
+      m[o + 8] = 0; m[o + 9] = 0; m[o + 10] = k; m[o + 11] = 0;
       m[o + 12] = x; m[o + 13] = y; m[o + 14] = z; m[o + 15] = 1;
 
       const a = b.anim;

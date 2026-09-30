@@ -33,13 +33,15 @@ describe.skipIf(!have)("glitch hunter — real engine capture", () => {
     const t0 = performance.now();
     const secs = Number(process.env.VWP_GLITCH_SECONDS ?? "20");
     const result = runTour(replay, {
+      // Start once the capture's traffic has built up (the engine fills an empty network first).
+      warmupS: Number(process.env.VWP_GLITCH_WARMUP ?? "60"),
       aerialS: secs, chaseS: secs * 0.75, dashboardS: secs, verbose: process.env.VWP_GLITCH_VERBOSE === "1",
     });
     const wallS = (performance.now() - t0) / 1000;
     const r = result.report;
     const out = {
       capture: dir,
-      frames: frames.length,
+      captureFrames: frames.length,
       simSeconds: replay.lastSimS - replay.firstSimS,
       subjects: result.subjects,
       wallSeconds: wallS,

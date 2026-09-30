@@ -34,7 +34,17 @@
  * J2735 (2016) DE_MovementPhaseState.
  *
  * A stop bar across the controlled lane repeats the state on the road surface, which is the only
- * place it can be read from map altitude where a 1 m lantern is a fraction of a pixel.
+ * place it can be read from map altitude where a 1 m lantern is a fraction of a pixel. At street
+ * level it fades out ({@link SignalRenderer.setBarVisibility}): there the lamps can be read, and the
+ * white stop line painted on the road (`markings.ts`) is what a driver sees.
+ *
+ * ## How a head is built and mounted
+ *
+ * Each section is a round 12-inch (300 mm) lens (MUTCD 2009 §4D.07) under a tunnel visor, in a
+ * dark housing. The engine places a head over its approach lane's stop line, 5 m up; it is hung
+ * from a mast arm that runs out from a pole on the kerb to the right of the approach (the usual
+ * US overhead mounting, MUTCD §4D.15 — bottom of the housing at least 15 ft above the road).
+ * Heads of one approach share a pole. A pedestrian head stands on its own post at the kerb.
  */
 
 import {
@@ -48,7 +58,7 @@ import {
   type Material,
 } from "three";
 import type { SignalBlock, VwpWorld } from "@vwp/protocol";
-import { MeshBuilder, addBox, withUnitVertexColors } from "./geometry.js";
+import { MeshBuilder, addBox, addCylinder, withUnitVertexColors } from "./geometry.js";
 import type { ViewerTheme } from "./theme.js";
 
 /**
@@ -112,7 +122,11 @@ const HOUSING_W = 0.36;
 const HOUSING_H = 1.05;
 const HOUSING_D = 0.26;
 const LAMP_SPACING = 0.32;
-const LAMP_SIZE = 0.24;
+/** A 12-inch lens (MUTCD 2009 §4D.07), metres of diameter. */
+const LENS_D = 0.3;
+/** Mounting: pole radius and the arm's section, metres. */
+const POLE_R = 0.13;
+const ARM_T = 0.16;
 /**
  * A pedestrian head (§4.5 `kind` 1), MUTCD 2009 §4E.04: two sections, the UPRAISED HAND above the
  * WALKING PERSON, each about 12 inches square. It shows walk while its crosswalk may be entered
@@ -137,10 +151,18 @@ export class SignalRenderer {
   #housing: InstancedMesh<BufferGeometry, Material> | null = null;
   #lamps: InstancedMesh<BufferGeometry, Material> | null = null;
   #bars: InstancedMesh<BufferGeometry, Material> | null = null;
+  #poles: InstancedMesh<BufferGeometry, Material> | null = null;
+  #arms: InstancedMesh<BufferGeometry, Material> | null = null;
+  #mountMaterial = new MeshLambertMaterial({ color: 0x3a3f45, name: "signal-mounts" });
+  /** How visible the coloured stop bars are, `[0, 1]`; see {@link setBarVisibility}. */
+  #barVisibility = 1;
+  /** Mast-arm poles built. */
+  poleCount = 0;
+  #anyBar = false;
   #housingMaterial = new MeshLambertMaterial({ color: 0x1b1e22, name: "signal-housing" });
   #lampMaterial = new MeshBasicMaterial({ vertexColors: true, toneMapped: false, name: "signal-lamps" });
   #barMaterial = new MeshBasicMaterial({
-    vertexColors: true, toneMapped: false, name: "signal-stop-bars",
+    vertexColors: true, toneMapped: false, name: "signal-stop-bars", transparent: true,
     polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
   });
   #geometries: BufferGeometry[] = [];
@@ -209,11 +231,13 @@ export class SignalRenderer {
     const laneIndex = new Map<number, number>();
     for (let i = 0; i < world.lanes.count; i++) laneIndex.set(world.lanes.laneId[i], i);
 
-    const housingGeom = boxGeometry(HOUSING_D, HOUSING_W, HOUSING_H);
-    // Lamps are thin slabs on the face towards the approach (local −x).
-    const lampGeom = withUnitVertexColors(boxGeometry(0.03, LAMP_SIZE, LAMP_SIZE));
+    const housingGeom = housingGeometry();
+    // Lenses are round discs on the face towards the approach (local −x).
+    const lampGeom = withUnitVertexColors(lensGeometry(LENS_D / 2, 16));
     const barGeom = withUnitVertexColors(boxGeometry(1, 1, 0.02));
-    this.#geometries.push(housingGeom, lampGeom, barGeom);
+    const poleGeom = cylinderGeometry();
+    const armGeom = boxGeometry(1, 1, 1);
+    this.#geometries.push(housingGeom, lampGeom, barGeom, poleGeom, armGeom);
 
     const housing = new InstancedMesh<BufferGeometry, Material>(housingGeom, this.#housingMaterial, n);
     const lamps = new InstancedMesh<BufferGeometry, Material>(lampGeom, this.#lampMaterial, n * 3);
@@ -230,6 +254,9 @@ export class SignalRenderer {
     const lx = world.lanePoints.x;
     const ly = world.lanePoints.y;
     const lz = world.lanePoints.z;
+    // Mounts: a pole per kerb spot (shared by the heads of one approach) and an arm per head.
+    const poleAt = new Map<string, { x: number; y: number; z0: number; top: number }>();
+    const arms: { x0: number; y0: number; x1: number; y1: number; z: number }[] = [];
     for (let i = 0; i < n; i++) {
       const s = world.signals.at(i);
       this.#headSignal[i] = s.signalId;
@@ -272,6 +299,30 @@ export class SignalRenderer {
         const off = world.lanes.pointOff[li];
         const last = off + world.lanes.pointCount[li] - 1;
         yaw = Math.atan2(ly[last] - ly[last - 1], lx[last] - lx[last - 1]);
+      }
+      // The mount. A vehicle head hangs from an arm out of a pole at the kerb to the right of its
+      // approach: the lane's right edge plus the lanes to its right, and a metre of footway. A
+      // pedestrian head is on its own post.
+      if (li !== undefined && world.lanes.pointCount[li] >= 2) {
+        const ground = s.zM - (ped ? 2.6 : 5.0);
+        const cs = Math.cos(yaw);
+        const sn = Math.sin(yaw);
+        if (ped) {
+          const key = `${Math.round(s.xM * 2)},${Math.round(s.yM * 2)}`;
+          if (!poleAt.has(key)) poleAt.set(key, { x: s.xM, y: s.yM, z0: ground, top: s.zM - PED_HOUSING_H / 2 });
+        } else {
+          const lanesRight = world.lanes.indexInEdge[li];
+          const kerb = (lanesRight + 0.5) * world.lanes.widthM[li] + 1.2;
+          // Right of the direction of travel is (sin, −cos).
+          const px = s.xM + sn * kerb;
+          const py = s.yM - cs * kerb;
+          const key = `${Math.round(px * 2)},${Math.round(py * 2)}`;
+          const armZ = s.zM + HOUSING_H / 2 + ARM_T / 2;
+          const pole = poleAt.get(key);
+          if (!pole) poleAt.set(key, { x: px, y: py, z0: ground, top: armZ + 0.4 });
+          else pole.top = Math.max(pole.top, armZ + 0.4);
+          arms.push({ x0: px, y0: py, x1: s.xM, y1: s.yM, z: armZ });
+        }
       }
       const c = Math.cos(yaw);
       const sn = Math.sin(yaw);
@@ -316,14 +367,49 @@ export class SignalRenderer {
       }
       bars.setMatrixAt(i, m);
     }
-    for (const mesh of [housing, lamps, bars]) {
+    // Poles and arms, instanced: a unit cylinder and a unit box, scaled and turned.
+    const poleList = [...poleAt.values()];
+    const poles = new InstancedMesh<BufferGeometry, Material>(poleGeom, this.#mountMaterial, Math.max(1, poleList.length));
+    const armMesh = new InstancedMesh<BufferGeometry, Material>(armGeom, this.#mountMaterial, Math.max(1, arms.length));
+    poles.name = "world/signal-poles";
+    armMesh.name = "world/signal-arms";
+    poleList.forEach((p, k) => {
+      const h = Math.max(0.5, p.top - p.z0);
+      m.set(
+        POLE_R, 0, 0, p.x,
+        0, POLE_R, 0, p.y,
+        0, 0, h, p.z0,
+        0, 0, 0, 1,
+      );
+      poles.setMatrixAt(k, m);
+    });
+    poles.count = poleList.length;
+    arms.forEach((a, k) => {
+      const dx = a.x1 - a.x0;
+      const dy = a.y1 - a.y0;
+      const len = Math.max(0.2, Math.hypot(dx, dy) + 0.2);
+      const c = dx / Math.max(1e-6, len - 0.2);
+      const sn = dy / Math.max(1e-6, len - 0.2);
+      m.set(
+        c * len, -sn * ARM_T, 0, (a.x0 + a.x1) / 2,
+        sn * len, c * ARM_T, 0, (a.y0 + a.y1) / 2,
+        0, 0, ARM_T, a.z,
+        0, 0, 0, 1,
+      );
+      armMesh.setMatrixAt(k, m);
+    });
+    armMesh.count = arms.length;
+    this.poleCount = poleList.length;
+    for (const mesh of [housing, lamps, bars, poles, armMesh]) {
       mesh.instanceMatrix.needsUpdate = true;
       mesh.computeBoundingSphere();
     }
     this.#housing = housing;
     this.#lamps = lamps;
     this.#bars = bars;
-    this.group.add(housing, lamps, bars);
+    this.#poles = poles;
+    this.#arms = armMesh;
+    this.group.add(housing, lamps, bars, poles, armMesh);
     for (let i = 0; i < n; i++) {
       const k = kept.get(i);
       if (k) {
@@ -402,6 +488,21 @@ export class SignalRenderer {
     return [a[o], a[o + 1], a[o + 2]];
   }
 
+  /**
+   * How visible the coloured stop bars are: 1 from the air, where a lantern is too small to read
+   * and the bar is how a state shows, fading to 0 at street level, where the lamps are read and
+   * the painted white stop line is what is on the road. `distanceM` is the camera's distance to
+   * what it looks at.
+   */
+  setBarVisibility(distanceM: number): void {
+    const t = Math.min(1, Math.max(0, (distanceM - 60) / (160 - 60)));
+    const v = t * t * (3 - 2 * t);
+    if (Math.abs(v - this.#barVisibility) < 0.01) return;
+    this.#barVisibility = v;
+    this.#barMaterial.opacity = v;
+    if (this.#bars) this.#bars.visible = v > 0.02 && this.#anyBar;
+  }
+
   /** Advance flashing aspects. Cheap: returns at once unless a head is flashing. */
   update(timeSeconds: number): void {
     if (!this.#anyFlashing) return;
@@ -468,11 +569,12 @@ export class SignalRenderer {
     // Bars with no state are hidden rather than painted grey.
     let anyBar = false;
     for (let i = 0; i < this.#count; i++) if (this.#hasBar[i] && aspectOf(this.#phase[i]).lamps !== 0) anyBar = true;
-    bars.visible = anyBar;
+    this.#anyBar = anyBar;
+    bars.visible = anyBar && this.#barVisibility > 0.02;
   }
 
   clear(): void {
-    for (const mesh of [this.#housing, this.#lamps, this.#bars]) {
+    for (const mesh of [this.#housing, this.#lamps, this.#bars, this.#poles, this.#arms]) {
       if (!mesh) continue;
       this.group.remove(mesh);
       mesh.dispose();
@@ -482,6 +584,8 @@ export class SignalRenderer {
     this.#housing = null;
     this.#lamps = null;
     this.#bars = null;
+    this.#poles = null;
+    this.#arms = null;
   }
 
   dispose(): void {
@@ -492,7 +596,55 @@ export class SignalRenderer {
     this.#housingMaterial.dispose();
     this.#lampMaterial.dispose();
     this.#barMaterial.dispose();
+    this.#mountMaterial.dispose();
   }
+}
+
+/**
+ * The housing: the box, and above each section a tunnel visor — a U-shaped hood of three thin
+ * slabs projecting 0.22 m towards the approach — so a lamp is lit inside a hood, as a real one is.
+ */
+function housingGeometry(): BufferGeometry {
+  const b = new MeshBuilder({ vertexCapacity: 256, indexCapacity: 512 });
+  addBox(b, 0, 0, 0, HOUSING_D, HOUSING_W, HOUSING_H, 0);
+  const visor = 0.22;
+  const r = LENS_D / 2 + 0.03;
+  for (let k = 0; k < 3; k++) {
+    const z = (1 - k) * LAMP_SPACING;
+    const x = -(HOUSING_D / 2 + visor / 2);
+    addBox(b, x, 0, z + r, visor, 2 * r, 0.02, 0);
+    addBox(b, x, r, z + r * 0.3, visor, 0.02, r * 1.4, 0);
+    addBox(b, x, -r, z + r * 0.3, visor, 0.02, r * 1.4, 0);
+  }
+  const g = b.toGeometry();
+  if (!g) throw new Error("signal housing geometry is empty");
+  return g;
+}
+
+/** A round lens of radius `r` in the y–z plane, facing −x. */
+function lensGeometry(r: number, segments: number): BufferGeometry {
+  const b = new MeshBuilder({ vertexCapacity: segments + 2, indexCapacity: segments * 3 });
+  const c = b.addVertex(0, 0, 0, -1, 0, 0);
+  for (let i = 0; i < segments; i++) {
+    const a = (i / segments) * Math.PI * 2;
+    b.addVertex(0, Math.cos(a) * r, Math.sin(a) * r, -1, 0, 0);
+  }
+  for (let i = 0; i < segments; i++) {
+    // Counter-clockwise seen from −x.
+    b.addTriangle(c, 1 + ((i + 1) % segments), 1 + i);
+  }
+  const g = b.toGeometry();
+  if (!g) throw new Error("lens geometry is empty");
+  return g;
+}
+
+/** A unit cylinder standing on the origin: radius 1, height 1, along +z. */
+function cylinderGeometry(): BufferGeometry {
+  const b = new MeshBuilder({ vertexCapacity: 64, indexCapacity: 128 });
+  addCylinder(b, 0, 0, 0, 1, 1, 8);
+  const g = b.toGeometry();
+  if (!g) throw new Error("pole geometry is empty");
+  return g;
 }
 
 function boxGeometry(sx: number, sy: number, sz: number): BufferGeometry {

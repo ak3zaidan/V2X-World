@@ -140,10 +140,11 @@ function colorAttributes(viewer: Viewer): BufferAttribute[] {
   const out: BufferAttribute[] = [];
   for (let c = 0; c < viewer.actors.classes.length; c++) {
     for (const lod of [0, 1, 2] as const) {
-      const b = viewer.actors.bucketAt(c, lod);
-      if (!b || b.count === 0) continue;
-      const ic = b.mesh.instanceColor;
-      if (ic) out.push(ic as unknown as BufferAttribute);
+      for (const b of viewer.actors.bucketsAt(c, lod)) {
+        if (b.count === 0) continue;
+        const ic = b.mesh.instanceColor;
+        if (ic) out.push(ic as unknown as BufferAttribute);
+      }
     }
   }
   return out;
@@ -262,10 +263,11 @@ describe("the render loop allocates nothing per frame (Q17)", () => {
       const out: object[] = [];
       for (let c = 0; c < viewer.actors.classes.length; c++) {
         for (const lod of [0, 1, 2] as const) {
-          const b = viewer.actors.bucketAt(c, lod);
-          if (!b || b.count === 0) continue;
-          for (const r of b.mesh.instanceMatrix.updateRanges) out.push(r);
-          for (const r of b.mesh.instanceColor?.updateRanges ?? []) out.push(r);
+          for (const b of viewer.actors.bucketsAt(c, lod)) {
+            if (b.count === 0) continue;
+            for (const r of b.mesh.instanceMatrix.updateRanges) out.push(r);
+            for (const r of b.mesh.instanceColor?.updateRanges ?? []) out.push(r);
+          }
         }
       }
       return out;

@@ -24,8 +24,10 @@ describe("WorldRenderer", () => {
     expect(r.crossings).toBe(grid.world.crossings.count);
     expect(w.tiles.children.length).toBeGreaterThan(0);
     expect(w.markings.children.length).toBeGreaterThan(0);
-    // Housings, lamps (three per head) and stop bars: three instanced drawables whatever the count.
-    expect(w.signalsGroup.children.length).toBe(3);
+    // Housings, lamps (three per head), stop bars, mast-arm poles and arms: five instanced
+    // drawables whatever the count.
+    expect(w.signalsGroup.children.length).toBe(5);
+    expect(w.signals.poleCount).toBeGreaterThan(0);
     expect(w.signals.count).toBe(grid.world.signals.count);
     expect(w.sitesGroup.children.length).toBe(1);
     expect(w.siteCount).toBe(grid.world.sites.count);
@@ -152,7 +154,10 @@ describe("CameraController", () => {
     world.dispose();
   });
 
-  it("smooths at 1 − exp(−λ·dt) and is frame-rate independent", () => {
+  it("follows as a critically damped spring from rest, and is frame-rate independent", () => {
+    // The plan view used to follow at 1 − exp(−λ·dt), which starts every move at full speed in
+    // one frame — every vehicle on screen lurched when the focus moved (the glitch hunter's
+    // aerial stutter). It is now a critically damped spring at ω = 2λ, which starts from rest.
     const { camera, ctl, world } = make();
     ctl.focusOn(0, 0, 0);
     ctl.altitudeM = 100;
@@ -160,8 +165,19 @@ describe("CameraController", () => {
     const start = camera.position.z;
     ctl.altitudeM = 1100;
     ctl.update(0.1);
-    const k = 1 - Math.exp(-0.1 * ctl.positionLambda);
-    expect(camera.position.z).toBeCloseTo(start + (1100 - start) * k, 2);
+    const w = 2 * ctl.positionLambda;
+    const e0 = start - 1100;
+    expect(camera.position.z).toBeCloseTo(1100 + e0 * (1 + w * 0.1) * Math.exp(-w * 0.1), 2);
+    // From rest: the first 60 Hz frame moves a fraction of what the exponential lerp moved.
+    const c2 = new CameraController({ camera: new PerspectiveCamera(45, 1.6, 0.35, 12_000) });
+    c2.focusOn(0, 0, 0);
+    c2.altitudeM = 100;
+    c2.setMode("map", true);
+    const z0 = c2.camera.position.z;
+    c2.altitudeM = 1100;
+    c2.update(1 / 60);
+    const lerpStep = (1100 - z0) * (1 - Math.exp(-c2.positionLambda / 60));
+    expect(c2.camera.position.z - z0).toBeLessThan(lerpStep * 0.2);
 
     // One 0.2 s step and two 0.1 s steps must land in the same place.
     const a = new CameraController({ camera: new PerspectiveCamera(45, 1.6, 0.35, 12_000) });

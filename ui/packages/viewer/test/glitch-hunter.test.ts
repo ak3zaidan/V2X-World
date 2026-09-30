@@ -25,7 +25,7 @@ interface Rig {
   frame: number;
 }
 
-function rig(actors = 40): Rig {
+function rig(actors = 160): Rig {
   const viewer = new Viewer({
     canvas: CANVAS, theme: "dark", autoStart: false, createRenderer: (c) => new NullRenderer(c),
   });
@@ -63,14 +63,15 @@ function viewerCaused(h: GlitchHunter, c: GlitchClass): number {
   return r.counts[c] - (r.engineCaused[c] ?? 0);
 }
 
-/** A slot drawn this frame, in the view's interior, and at least `minPx` tall. */
-function drawnSlot(r: Rig, category = 0): number {
+/** A slot drawn this frame, of `category` (and `name`, if given), moving. */
+function drawnSlot(r: Rig, category = 0, name?: string): number {
   const v = r.viewer;
   const it = v.interpolator;
   for (let s = 0; s < it.count; s++) {
     if (it.outOccupied[s] !== 1 || v.actors.slotLod[s] < 0) continue;
     const def = v.actors.classes[it.outClassIdx[s]];
     if (def.category !== category) continue;
+    if (name !== undefined && def.name !== name) continue;
     if (Math.abs(it.outSpeed[s]) < 1) continue;
     return s;
   }
@@ -80,8 +81,8 @@ function drawnSlot(r: Rig, category = 0): number {
 /** Put the camera close over the traffic, so actors are big enough to be judged. */
 function closeUp(r: Rig): void {
   r.viewer.setCameraMode("map", true);
-  r.viewer.cameras.fitExtent(160);
-  r.viewer.frameActors(20, 160);
+  r.viewer.cameras.fitExtent(80);
+  r.viewer.frameActors(20, 80);
   r.viewer.cameras.snap();
 }
 
@@ -127,7 +128,8 @@ describe("GlitchHunter — every class can go red", () => {
       r.viewer.actors.slotLod[s] = -1;
     }],
     ["lod_pop", (r) => {
-      const s = drawnSlot(r);
+      // A car, big enough on screen that a change of detail shows.
+      const s = drawnSlot(r, 0, "car");
       const lod = r.viewer.actors.slotLod;
       lod[s] = lod[s] === 2 ? 1 : 2;
     }],
@@ -145,7 +147,12 @@ describe("GlitchHunter — every class can go red", () => {
     ["overlap_pedestrian", (r) => {
       const it = r.viewer.interpolator;
       const a = drawnSlot(r, 0);
-      const p = drawnSlot(r, 1);
+      // Any person or rider, moved onto the car and marked drawn.
+      let p = -1;
+      for (let s = 0; s < it.count; s++) {
+        if (it.outOccupied[s] === 1 && r.viewer.actors.classes[it.outClassIdx[s]].category === 1) { p = s; break; }
+      }
+      r.viewer.actors.slotLod[p] = 0;
       it.outPosition[p * 3] = it.outPosition[a * 3];
       it.outPosition[p * 3 + 1] = it.outPosition[a * 3 + 1];
     }],

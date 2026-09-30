@@ -93,6 +93,8 @@ export interface GlitchReport {
   readonly engineCaused: Partial<Record<GlitchClass, number>>;
   /** The first few events of each class, for a human. */
   readonly examples: Partial<Record<GlitchClass, GlitchEvent[]>>;
+  /** The first few events of each class in each camera mode. */
+  readonly examplesByMode: Record<string, Partial<Record<GlitchClass, GlitchEvent[]>>>;
   /** Supporting measurements, not glitches. */
   readonly metrics: {
     /** Drawn actors examined, summed over frames. */
@@ -188,6 +190,7 @@ export class GlitchHunter {
   #byMode: Record<string, Partial<Record<GlitchClass, number>>> = {};
   #engine: Partial<Record<GlitchClass, number>> = {};
   #examples: Partial<Record<GlitchClass, GlitchEvent[]>> = {};
+  #examplesByMode: Record<string, Partial<Record<GlitchClass, GlitchEvent[]>>> = {};
   #listeners: ((e: GlitchEvent) => void)[] = [];
 
   // Per-slot tracking, indexed by slot.
@@ -204,6 +207,15 @@ export class GlitchHunter {
   #wy = new Float64Array(0);
   #wh = new Float64Array(0);
   #wv = new Float64Array(0);
+  /**
+   * This frame the street camera cut with its subject's data jump: every other actor moves on
+   * screen with it, and that stutter is the data's, not the drawing's.
+   */
+  #frameDataCut = false;
+  /** Whether the followed slot was snapped last frame. */
+  #followSnapPrev = false;
+  /** Whether the interpolator snapped each slot last frame. */
+  #snapPrev = new Uint8Array(0);
   /** The fade each slot was last drawn at. */
   #fade = new Float32Array(0);
   #lod = new Int8Array(0);
@@ -276,6 +288,7 @@ export class GlitchHunter {
     this.#byMode = {};
     this.#engine = {};
     this.#examples = {};
+    this.#examplesByMode = {};
     this.#drawn.fill(0);
     this.#interior.fill(0);
     this.#tracked.fill(0);
@@ -312,12 +325,12 @@ export class GlitchHunter {
     if (n <= this.#cap) return;
     let c = Math.max(64, this.#cap);
     while (c < n) c *= 2;
-    const g8 = (a: Uint8Array): Uint8Array => {
+    const g8 = (a: Uint8Array): Uint8Array<ArrayBuffer> => {
       const o = new Uint8Array(c);
       o.set(a);
       return o;
     };
-    const g64 = (a: Float64Array): Float64Array => {
+    const g64 = (a: Float64Array): Float64Array<ArrayBuffer> => {
       const o = new Float64Array(c);
       o.set(a);
       return o;
@@ -329,6 +342,7 @@ export class GlitchHunter {
     this.#drawn = g8(this.#drawn);
     this.#interior = g8(this.#interior);
     this.#buildingOverlap = g8(this.#buildingOverlap);
+    this.#snapPrev = g8(this.#snapPrev);
     this.#sx = g64(this.#sx);
     this.#sy = g64(this.#sy);
     this.#psx = g64(this.#psx);
@@ -356,6 +370,8 @@ export class GlitchHunter {
     if (e.cause === "engine") this.#engine[e.cls] = (this.#engine[e.cls] ?? 0) + 1;
     const ex = (this.#examples[e.cls] ??= []);
     if (ex.length < this.examplesPerClass) ex.push(e);
+    const exm = ((this.#examplesByMode[e.mode] ??= {})[e.cls] ??= []);
+    if (exm.length < 3) exm.push(e);
     for (const l of this.#listeners) l(e);
   }
 
@@ -561,7 +577,11 @@ export class GlitchHunter {
       }
 
       // Stutter: second difference of the screen position.
-      if (drawn && interior && this.#tracked[s] >= 2 && Number.isFinite(this.#psx[s])) {
+      // A frame the interpolator snapped (a discontinuity in the data, counted as a teleport) and
+      // the one after it are not judged for stutter: the jump is the event, already counted.
+      const snapNear = snappedArr[s] === 1 || this.#snapPrev[s] === 1;
+      this.#snapPrev[s] = snappedArr[s];
+      if (drawn && interior && !snapNear && this.#tracked[s] >= 2 && Number.isFinite(this.#psx[s])) {
         // Screen velocities per second, expressed in pixels per 60 Hz frame, so a frame the
         // display dropped (twice the time, twice the motion) is not mistaken for a jerk.
         const k1 = 1 / (60 * Math.max(dt, 1e-4));
@@ -583,7 +603,7 @@ export class GlitchHunter {
           }
           if (jerk > Math.max(1.5, 0.5 * sp) && !inTransit) {
             this.#emit({
-              cls: "stutter", frame, timeS: t, mode, actorId: id, cause: "viewer",
+              cls: "stutter", frame, timeS: t, mode, actorId: id, cause: this.#frameDataCut ? "engine" : "viewer",
               detail: `${def.name}${isFollow ? " (followed)" : ""} jerked ${jerk.toFixed(1)} px on screen moving ${sp.toFixed(1)} px/frame`,
             });
           }
@@ -841,7 +861,11 @@ export class GlitchHunter {
     // Camera stutter: second difference of the camera position against its motion.
     const c = this.#cam;
     if (finite) {
-      if (this.#camValid >= 2 && !v.cameras.inTransit) {
+      const fs = v.followSlot;
+      const subjectJumped = fs >= 0 && (v.interpolator.outSnapped[fs] === 1 || this.#followSnapPrev);
+      this.#followSnapPrev = fs >= 0 && v.interpolator.outSnapped[fs] === 1;
+      this.#frameDataCut = subjectJumped && (mode === "chase" || mode === "dashboard");
+      if (this.#camValid >= 2 && !v.cameras.inTransit && !subjectJumped) {
         const dtNow = Math.max(v.lastFrame.dtSeconds, 1e-4);
         const k1 = 1 / (60 * dtNow);
         const k0 = 1 / (60 * Math.max(this.#prevDt, 1e-4));
@@ -1025,6 +1049,7 @@ export class GlitchHunter {
       countsByMode: JSON.parse(JSON.stringify(this.#byMode)) as GlitchReport["countsByMode"],
       engineCaused: { ...this.#engine },
       examples: JSON.parse(JSON.stringify(this.#examples)) as GlitchReport["examples"],
+      examplesByMode: JSON.parse(JSON.stringify(this.#examplesByMode)) as GlitchReport["examplesByMode"],
       metrics: {
         actorFrames: this.#actorFrames,
         jerkRmsPx: this.#jerkN > 0 ? Math.sqrt(this.#jerkSum2 / this.#jerkN) : 0,

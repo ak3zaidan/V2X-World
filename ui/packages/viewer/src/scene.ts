@@ -43,6 +43,7 @@ import { FrameStats } from "./stats.js";
 import { DARK_THEME, themeByName, type ViewerTheme } from "./theme.js";
 import { WorldRenderer, type WorldRendererOptions } from "./world-render.js";
 import { LampGlow } from "./lamp-glow.js";
+import { GlitchHunter, type GlitchHunterOptions, type GlitchReport } from "./glitch.js";
 import type { ActorClassDef, FrameScheduler, PickResult, ViewerCanvas, ViewerRenderer } from "./types.js";
 
 /**
@@ -269,6 +270,9 @@ export class Viewer {
   /** Set by {@link setFog}, after which the mode stops driving the fog. */
   #fogUserSet = false;
   #detachClient: (() => void) | null = null;
+  #hunter: GlitchHunter | null = null;
+  #sunFromRun = false;
+  #sunMinute = Number.NaN;
   /**
    * Signal blocks waiting for the render clock to reach their sim time. Poses are drawn about one
    * mobility step in the past (`interp.ts`); a lamp applied the moment its frame arrives would
@@ -631,6 +635,29 @@ export class Viewer {
    */
   capture(poses: PoseBuffer, clockSeconds = this.renderClockSeconds): void {
     this.interpolator.capture(poses, clockSeconds);
+    this.#hunter?.observeSnapshot(poses);
+  }
+
+  /**
+   * Start counting visual defects in every frame this viewer draws (`glitch.ts`), from now on.
+   * The page and the Playwright pass use it; a test harness can build a {@link GlitchHunter}
+   * itself. Returns the hunter; {@link stopGlitchHunt} ends it.
+   */
+  huntGlitches(options?: GlitchHunterOptions): GlitchHunter {
+    this.#hunter = new GlitchHunter(this, options);
+    return this.#hunter;
+  }
+
+  /** Stop the hunt started by {@link huntGlitches} and return its report, or null if none ran. */
+  stopGlitchHunt(): GlitchReport | null {
+    const h = this.#hunter;
+    this.#hunter = null;
+    return h ? h.report() : null;
+  }
+
+  /** The running hunt, if any. */
+  get glitchHunter(): GlitchHunter | null {
+    return this.#hunter;
   }
 
   /**
@@ -684,7 +711,39 @@ export class Viewer {
 
   /** Hours in `[0, 24)`; drives the sun, the sky gradient and the fill light. */
   setTimeOfDay(hours: number): void {
+    this.#sunFromRun = false;
     this.worldRenderer.setTimeOfDay(hours);
+  }
+
+  /**
+   * Put the sun where the run's own clock says it is: local mean solar time at the world's
+   * origin, from `Hello.t0_wall_ns` (the scenario's `time.t0`) plus the drawn sim time plus the
+   * origin's longitude / 15° per hour. That is the clock the engine's headlamp rule reads
+   * (`v2xw_engine::daylight`), so a run the engine puts at night is drawn at night, headlamps
+   * and all. {@link setTimeOfDay} takes over again from a fixed hour. Updated once a sim minute.
+   */
+  setSunFromRun(enabled: boolean): void {
+    this.#sunFromRun = enabled;
+    this.#sunMinute = Number.NaN;
+  }
+
+  /** Whether the sun follows the run's clock (see {@link setSunFromRun}). */
+  get sunFromRun(): boolean {
+    return this.#sunFromRun;
+  }
+
+  #syncSun(): void {
+    const hello = this.#signalHello;
+    if (!this.#sunFromRun || !hello || hello.t0WallNs === 0n) return;
+    const sim = this.interpolator.renderSimSeconds;
+    if (!Number.isFinite(sim)) return;
+    const unix = Number(hello.t0WallNs / 1_000_000n) / 1000 + sim;
+    const minute = Math.floor(unix / 60);
+    if (minute === this.#sunMinute) return;
+    this.#sunMinute = minute;
+    const utcHours = ((unix / 3600) % 24 + 24) % 24;
+    const local = ((utcHours + hello.originLonDeg / 15) % 24 + 24) % 24;
+    this.worldRenderer.setTimeOfDay(local);
   }
 
   /**
@@ -1026,6 +1085,7 @@ export class Viewer {
     // 1. Poses, and the signal states for the instant they are drawn at.
     const sample = this.interpolator.sample(renderClock);
     this.#flushSignals();
+    this.#syncSun();
     this.worldRenderer.signals.update(renderClock);
 
     // 2. Camera. Exponential smoothing on the true frame dt (frame-rate independent by construction).
@@ -1042,6 +1102,7 @@ export class Viewer {
         this.interpolator.outPosition[p + 2],
         this.interpolator.outHeading[this.#followSlot],
         this.interpolator.outSpeed[this.#followSlot],
+        this.interpolator.outSnapped[this.#followSlot] === 1,
       );
     } else if (this.cameras.followActorId !== null) {
       this.cameras.clearFollowPose();
@@ -1142,6 +1203,7 @@ export class Viewer {
       interpolationAlpha: sample.alpha,
       stalled: sample.stalled,
     };
+    this.#hunter?.afterFrame();
     return this.#lastReport;
   }
 
@@ -1299,7 +1361,15 @@ export class Viewer {
     // traffic outside it (54 of 200 on the mock run at the fixed 1,400 m), and a vehicle entering
     // at the world's edge from being culled. Once anyone else sets the zoom — the user (checked
     // above), or a caller through `cameras` — the zoom is theirs and only the centre moves.
-    this.cameras.focusOn(f.centerX, f.centerY, f.centerZ);
+    // Once framed, the plan view holds still until the traffic's centre has drifted out of the
+    // middle half of the view: re-aiming five times a second at a centroid that wanders with every
+    // spawn and trip end kept the whole picture creeping, and each re-aim was a lurch of every
+    // vehicle on screen (the glitch hunter's aerial stutter).
+    const half = this.cameras.extentM * 0.25;
+    const t = this.cameras.target;
+    if (this.#autoFramePending || Math.abs(f.centerX - t.x) > half || Math.abs(f.centerY - t.y) > half) {
+      this.cameras.focusOn(f.centerX, f.centerY, f.centerZ);
+    }
     const own = this.#autoExtentM;
     if (own !== null && Math.abs(this.cameras.extentM - own) <= 1e-6 * Math.max(1, own)) {
       const w = this.worldRenderer.world;
@@ -1326,6 +1396,7 @@ export class Viewer {
    * thing look".
    */
   #publishClassRadii(classes: readonly ActorClassDef[]): void {
+    this.interpolator.setVruClasses(Uint8Array.from(classes, (d) => (d.category === 1 ? 1 : 0)));
     if (this.#classRadii.length !== classes.length) this.#classRadii = new Float32Array(classes.length);
     for (let i = 0; i < classes.length; i++) {
       const d = classes[i];
