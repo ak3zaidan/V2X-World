@@ -105,44 +105,63 @@ fn n(v: &Value, key: &str) -> u64 {
 
 /// A fleet that turns over several times leaves the server holding what is alive: the
 /// message feed's logs and the security rows are no more than the live radios plus those
-/// that left within the grace window, and the link histories are pairs of those. Before the
-/// pruning, each of these grew with every vehicle that had ever driven.
+/// that left within the last 40 simulated seconds (the 30 s grace, and the projector's lead
+/// over the stream), and the link histories are pairs of those. Before the pruning each of
+/// these grew with every vehicle that had ever driven.
+///
+/// The bound is computed from the reconstruction's own counts (radios live, radios ever),
+/// sampled every 5 s, and not from the pruning's bookkeeping, so a pruning that stopped
+/// working cannot also move the bound it is held to.
 #[test]
 fn the_projector_keeps_what_is_alive_not_what_has_been() {
     // A 2 × 2 grid: short trips, so the fleet turns over within the run while it stays small
     // enough for a debug build (the 3 × 3 grid needed 300 s and six minutes of wall clock).
     let run = serve(&churn_scenario(2, 2, 240), 64 * 1024 * 1024);
     let mut samples: Vec<(f64, Value)> = Vec::new();
-    stream(&run, 0.1, 30.0, |t, d| samples.push((t, d.clone())));
+    stream(&run, 0.1, 5.0, |t, d| samples.push((t, d.clone())));
     let (t_end, last) = samples.last().expect("a sample");
     assert!(*t_end >= 239.9, "the run reached its end: {t_end}");
-    let live = n(last, "nodes_live");
-    let ever = n(last, "nodes_ever");
-    let pending = n(last, "retired_pending");
+    let departed = |d: &Value| n(d, "nodes_ever") - n(d, "nodes_live");
     // The precondition: the fleet did turn over, so a store that kept every node would be
-    // well above the live population (measured: 39 radios ever, 33 live, at 150 s; this
-    // asks for at least as many departed as the slack below could hide, several times over).
+    // well above the live population (measured on this grid: 45 radios ever, 15 live).
+    let (live, ever) = (n(last, "nodes_live"), n(last, "nodes_ever"));
     assert!(
         ever >= live + 20,
         "the fleet did not turn over (ever {ever}, live {live}): {last}"
     );
-    let alive = live + pending;
     // A node's first step can name it before its actor is mapped; a handful of slack.
     let slack = 4;
-    for key in ["feed_nodes", "security_nodes"] {
-        let held = n(last, key);
-        assert!(
-            held <= alive + slack,
-            "{key} {held} is more than the live radios {live} and the {pending} that left \
-             within the grace window ({ever} ever): {last}"
-        );
-    }
-    let pairs = n(last, "link_pairs");
-    assert!(
-        pairs <= (alive + slack) * (alive + slack),
-        "{pairs} link histories among {alive} radios alive or recently retired ({ever} ever): {last}"
-    );
+    let mut checked = 0;
     for (t, d) in &samples {
+        if *t < 60.0 {
+            continue;
+        }
+        let Some((_, then)) = samples.iter().rev().find(|(u, _)| *u <= t - 40.0) else {
+            continue;
+        };
+        let recent = departed(d) - departed(then);
+        let bound = n(d, "nodes_live") + recent + slack;
+        for key in ["feed_nodes", "security_nodes"] {
+            let held = n(d, key);
+            assert!(
+                held <= bound,
+                "t = {t:.0} s: {key} {held} is more than the {} live radios and the {recent} \
+                 that left in the last 40 s ({} ever): {d}",
+                n(d, "nodes_live"),
+                n(d, "nodes_ever")
+            );
+        }
+        let pairs = n(d, "link_pairs");
+        assert!(
+            pairs <= bound * bound,
+            "t = {t:.0} s: {pairs} link histories among {bound} radios alive or recently \
+             retired ({} ever): {d}",
+            n(d, "nodes_ever")
+        );
+        checked += 1;
+    }
+    assert!(checked > 20, "{checked} samples checked");
+    for (t, d) in samples.iter().filter(|(t, _)| (*t as u64) % 30 == 0) {
         eprintln!("t={t:.0} s stores {}", d["stores"]);
     }
 }
