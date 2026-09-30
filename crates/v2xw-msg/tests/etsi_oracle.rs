@@ -182,6 +182,66 @@ fn vams(rng: &mut RngStream) -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
+fn cpms(rng: &mut RngStream) -> Vec<(String, Vec<u8>)> {
+    use v2xw_msg::cpm::{self, CpmInput, CpmObject, CpmObjectClass, CpmSensor};
+    (0..RANDOM / 2)
+        .map(|i| {
+            let p = belief(rng);
+            let objects: Vec<CpmObject> = (0..rng.below(12))
+                .map(|k| CpmObject {
+                    id: (k + 1) as u16,
+                    measurement_delta_ms: rng.below(200) as i32 - 100,
+                    pos: Vec3::new(
+                        p.pos.x + rng.uniform(-200.0, 200.0),
+                        p.pos.y + rng.uniform(-200.0, 200.0),
+                        p.pos.z,
+                    ),
+                    vel: Vec3::new(rng.uniform(-20.0, 20.0), rng.uniform(-20.0, 20.0), 0.0),
+                    length_m: rng.uniform(0.3, 12.0),
+                    width_m: rng.uniform(0.3, 2.6),
+                    age_ms: rng.below(5_000) as u32,
+                    class: match k % 3 {
+                        0 => CpmObjectClass::Vehicle,
+                        1 => CpmObjectClass::Pedestrian,
+                        _ => CpmObjectClass::Cyclist,
+                    },
+                    sigma_m: rng.uniform(0.1, 3.0),
+                    sensor_ids: [1, 3, 0],
+                    sensor_count: 2,
+                })
+                .collect();
+            let input = CpmInput {
+                station_id: rng.below(u64::from(u32::MAX)) as u32,
+                position: p,
+                origin: origin(),
+                reference_time: ts(rng),
+                objects,
+                sensors: (i % 2 == 0).then(|| {
+                    vec![
+                        CpmSensor {
+                            id: 1,
+                            sensor_type: 1,
+                            range_m: 250.0,
+                            half_fov_rad: 9f64.to_radians(),
+                        },
+                        CpmSensor {
+                            id: 3,
+                            sensor_type: 3,
+                            range_m: 80.0,
+                            half_fov_rad: 26f64.to_radians(),
+                        },
+                    ]
+                }),
+            };
+            let message = cpm::build_cpm(&input).expect("builds");
+            (
+                format!("cpm/random/{i:03}"),
+                cpm::encode_cpm(&message).expect("encodes").bytes,
+            )
+        })
+        .collect()
+}
+
 /// Every ETSI message the simulator sends decodes in an independent implementation and
 /// re-encodes to the same octets; and the fields this crate gives meaning to read back as
 /// meant.
@@ -205,6 +265,9 @@ fn etsi_encodings_are_read_identically_by_asn1tools() {
     for (n, b) in vams(&mut rng) {
         vectors.push((n, "VAM", b));
     }
+    for (n, b) in cpms(&mut rng) {
+        vectors.push((n, "CollectivePerceptionMessage", b));
+    }
     let payload: Vec<Value> = vectors
         .iter()
         .map(|(name, pdu, bytes)| json!({"name": name, "pdu": pdu, "rust_hex": hex(bytes)}))
@@ -215,13 +278,23 @@ fn etsi_encodings_are_read_identically_by_asn1tools() {
     let vpath = work.join("vectors.json");
     let rpath = work.join("results.json");
     std::fs::write(&vpath, serde_json::to_vec(&payload).expect("json")).expect("writes");
-    let output = Command::new(&python)
-        .arg(manifest.join("tests/oracle/etsi_oracle.py"))
-        .arg(manifest.join("../../third_party/asn1/etsi"))
+    let root = manifest.join("../../third_party/asn1/etsi");
+    let mut cmd = Command::new(&python);
+    cmd.arg(manifest.join("tests/oracle/etsi_oracle.py"))
+        .arg(&root)
         .arg(&vpath)
-        .arg(&rpath)
-        .output()
-        .expect("runs the oracle");
+        .arg(&rpath);
+    // The CPM's container modules, then its PDU, as the build compiles them.
+    for m in [
+        "CPM-OriginatingStationContainers.asn",
+        "CPM-SensorInformationContainer.asn",
+        "CPM-PerceptionRegionContainer.asn",
+        "CPM-PerceivedObjectContainer.asn",
+        "CPM-PDU-Descriptions.asn",
+    ] {
+        cmd.arg(format!("cpm_ts103324/{m}"));
+    }
+    let output = cmd.output().expect("runs the oracle");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     assert!(
         output.status.success(),

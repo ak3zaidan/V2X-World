@@ -287,12 +287,21 @@ struct GlosaDrivers {
     capped: BTreeMap<ActorId, f64>,
 }
 
+/// How fast a following driver eases down to the advised speed, m/s per second: a gentle
+/// lift off the throttle, not a brake. This build's choice (eco-driving guidance puts
+/// comfortable coasting decelerations near 1 m/s²); a cap dropped at once would have the
+/// car-following model brake as hard as its free-road term allows.
+pub const GLOSA_EASE_MPS2: f64 = 1.0;
+
 impl GlosaDrivers {
-    /// The command, if any, that applies `advice` to `actor`'s driver.
+    /// The command, if any, that applies `advice` to `actor`'s driver, who is doing
+    /// `speed_mps`, `dt_s` after the last advice.
     fn apply(
         &mut self,
         actor: ActorId,
         advice: Option<v2xw_node::apps::SpeedAdvice>,
+        speed_mps: f64,
+        dt_s: f64,
     ) -> Option<v2xw_mobility::MobilityCommand> {
         if self.compliance <= 0.0 {
             return None;
@@ -312,8 +321,16 @@ impl GlosaDrivers {
                 if !follows {
                     return None;
                 }
-                let v = v2xw_core::math::q3(v);
-                if self.capped.get(&actor).is_some_and(|c| (c - v).abs() < 0.25) {
+                // Ease the cap down from where the driver is, never faster than
+                // GLOSA_EASE_MPS2; raise it at once (a faster advice is not a hazard).
+                let from = self.capped.get(&actor).copied().unwrap_or(speed_mps.max(v));
+                let eased = if v < from {
+                    (from - GLOSA_EASE_MPS2 * dt_s).max(v)
+                } else {
+                    v
+                };
+                let v = v2xw_core::math::q3(eased);
+                if self.capped.get(&actor).is_some_and(|c| (c - v).abs() < 0.05) {
                     return None;
                 }
                 self.capped.insert(actor, v);
@@ -3191,13 +3208,18 @@ impl Engine {
             }
         }
 
-        // GLOSA's advice, followed by the drivers who follow it.
-        if self.glosa.compliance > 0.0 {
+        // GLOSA's advice, followed by the drivers who follow it. Only a periodic step
+        // runs the applications; a wake hands over finished checks and advises nothing.
+        if !wake && self.glosa.compliance > 0.0 {
             let mut commands = Vec::new();
             for (id, outcome, _, _) in &results {
-                if let Some(actor) = self.node_actor.get(id).copied()
-                    && let Some(c) = self.glosa.apply(actor, outcome.advice)
-                {
+                let Some(actor) = self.node_actor.get(id).copied() else {
+                    continue;
+                };
+                let speed = self.actors.get(&actor).map_or(0.0, |a| {
+                    v2xw_core::math::hypot(a.last.vel.x, a.last.vel.y)
+                });
+                if let Some(c) = self.glosa.apply(actor, outcome.advice, speed, step_s) {
                     commands.push(c);
                 }
             }

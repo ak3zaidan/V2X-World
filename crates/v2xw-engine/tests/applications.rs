@@ -157,6 +157,44 @@ fn glosa_advice_is_given_and_followed_by_the_drivers_who_follow_it() {
     );
 }
 
+/// Vehicles that send CPMs report what their sensors perceive at the TS 103 324 rules: a
+/// CPM at most ten times a second, carrying objects (so bigger than the management and
+/// station containers alone).
+#[test]
+fn vehicles_share_what_their_sensors_perceive_in_cpms() {
+    let mut s = connected(20.0);
+    s.net.layer = "gn-btp".to_string();
+    s.security.envelope = "etsi103097".to_string();
+    s.messages.sets = vec!["cam".into(), "cpm".into(), "spat".into(), "map".into()];
+    s.messages.codec_tier = "uper".to_string();
+    s.actors.vru.pedestrians = 40;
+    s.actors.vru.device_fraction = 0.0;
+    let (_, recorder) = run(s);
+    let tx = json(&recorder, "node.tx");
+    let cpm: Vec<&serde_json::Value> = tx.iter().filter(|t| t["msg_type"] == "cpm").collect();
+    let senders: BTreeSet<u64> = cpm.iter().filter_map(|t| t["node"].as_u64()).collect();
+    eprintln!("{} CPMs from {} vehicles", cpm.len(), senders.len());
+    assert!(!cpm.is_empty(), "no vehicle sent a CPM");
+    for n in &senders {
+        let k = cpm
+            .iter()
+            .filter(|t| t["node"].as_u64() == Some(*n))
+            .count();
+        assert!(k <= 200, "node {n} sent {k} CPMs in 20 s, more than 10 Hz");
+    }
+    // Some CPM carried objects: the management and originating-vehicle containers alone
+    // are about 30 octets; each object adds about 20 more.
+    let biggest = cpm
+        .iter()
+        .filter_map(|t| t["payload_bytes"].as_u64())
+        .max()
+        .unwrap_or(0);
+    assert!(
+        biggest > 60,
+        "the largest CPM payload is {biggest} B: no objects were shared"
+    );
+}
+
 /// An emergency vehicle's request moves its junction's plan: the controller extends a
 /// green or ends a conflicting one early, logs it on `signal.priority`, and walks the
 /// plan back afterwards.

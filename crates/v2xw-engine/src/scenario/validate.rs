@@ -946,15 +946,19 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "messages.sets",
         status: Status::Partial,
         note: "Which message sets are generated, each by the station that sends it in a \
-               deployment. bsm and cam: every equipped vehicle. denm (needs gn-btp): a \
-               vehicle braking at 0.4 g or harder raises a dangerous-situation DENM, \
-               repeated every 100 ms for 2 s. spat and map: roadside units with that role, \
-               from the signal plan the drivers obey and the junction's own lanes, at 10 Hz \
-               and 1 Hz (J2735 MessageFrame on wsmp, SPATEM and MAPEM on gn-btp). srm and \
+               deployment. bsm and cam: every equipped vehicle; a BSM carries J2945/1 path \
+               history and path prediction, and its event flags and lights when set; a CAM \
+               its low-frequency container every 500 ms. denm (needs gn-btp): a vehicle \
+               braking at 0.4 g or harder raises an emergency-brake DENM (every 100 ms for \
+               2 s), and a broken-down vehicle with its hazards on a stationary-vehicle \
+               DENM (every second, cancelled when it moves off). spat and map: roadside \
+               units with that role, from the signal plan the drivers obey (min, max and \
+               likely end times) and the junction's own lanes, at 10 Hz and 1 Hz. srm and \
                ssm (need codec_tier size-model): emergency vehicles ask the junction whose \
-               MAP they heard for priority and its unit answers; no controller grants it. \
-               cpm is refused: there is no perception model to fill one. psm and vam are \
-               refused until a VRU device is hosted.",
+               MAP they heard for priority, its unit answers, and its controller extends or \
+               ends greens for it (NTCIP 1211, signal.priority). cpm (needs gn-btp): each \
+               vehicle's radar and camera perception, shared at the TS 103 324 rules. psm \
+               and vam: VRU devices.",
     },
     KeyStatus {
         path: "messages.generator",
