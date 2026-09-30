@@ -42,7 +42,7 @@ use crate::asn1::cdd::{
 };
 use crate::asn1::cpm_asn1::{
     CollectivePerceptionMessage, ConstraintWrappedCpmContainers, CpmContainerId, CpmPayload,
-    ManagementContainer, WrappedCpmContainer, WrappedCpmContainers,
+    CpmManagementContainer as ManagementContainer, WrappedCpmContainer, WrappedCpmContainers,
 };
 use crate::asn1::cpm_objects::{PerceivedObjectContainer, PerceivedObjects};
 use crate::asn1::cpm_sensors::{SensorInformation, SensorInformationContainer};
