@@ -2099,6 +2099,52 @@ impl Projector {
     }
 }
 
+/// One metric's samples, `rows` in ascending time, binned onto `[from, to]` at `bin`: one
+/// `(edge, mean)` per bin, at most `limit` of them.
+///
+/// The bin's value is the mean of the samples whose instant falls in `[edge, edge + bin)`,
+/// reduced with `sum_ordered` so two builds agree to the last bit. A bin with no sample is
+/// `None` and is reported as JSON `null`: the metric was not observed there, which is not
+/// the same as being zero there.
+///
+/// One pass over the samples in range. The history is appended in step order and only
+/// ever cleared (a new run), so it is sorted, and each bin's slice is found by a binary
+/// search from the previous bin's end. Before this every bin scanned the whole history, so
+/// a query was bins x samples: the metrics dashboard asking for an hour of a 1 s metric
+/// at full resolution cost 3,600 x 3,600 comparisons per series, and a ten-hour run a
+/// hundred times that, on the thread that serves the stream.
+fn series_bins(
+    rows: &[(SimTime, f64)],
+    from: u64,
+    to: u64,
+    bin: u64,
+    limit: usize,
+) -> Vec<(u64, Option<f64>)> {
+    debug_assert!(
+        rows.windows(2).all(|w| w[0].0 <= w[1].0),
+        "a metric's history is appended in time order"
+    );
+    let bin = bin.max(1);
+    let mut out = Vec::new();
+    let mut edge = from - (from % bin);
+    let mut start = rows.partition_point(|(t, _)| *t < edge);
+    while edge <= to && out.len() < limit {
+        let upper = edge.saturating_add(bin);
+        let end = start + rows[start..].partition_point(|(t, _)| *t < upper);
+        let inside = &rows[start..end];
+        let value = (!inside.is_empty()).then(|| {
+            v2xw_core::math::sum_ordered(inside.iter().map(|(_, v)| *v)) / inside.len() as f64
+        });
+        out.push((edge, value));
+        start = end;
+        if upper == edge {
+            break;
+        }
+        edge = upper;
+    }
+    out
+}
+
 /// How many dimensioned samples the breakdown store keeps per metric: an hour of a
 /// 20 m-binned delivery ratio (fifty bins a second), and the most recent windows of a
 /// per-node figure on a large fleet. The oldest go first.
@@ -4063,36 +4109,13 @@ impl Introspect for LiveEngine {
         bin: u64,
         limit: usize,
     ) -> Vec<(u64, Option<f64>)> {
-        let samples = self.history.get(name);
+        let rows: &[(SimTime, f64)] = self.history.get(name).map_or(&[], Vec::as_slice);
         // Never past the stream: the projector has already computed metric bins the
         // client's `Keyframe` has not reached, and answering from them would tell a live
         // viewer the future.
         let to = to.min(self.sim_time());
-        let bin = bin.max(1);
-        let mut out = Vec::new();
-        let mut edge = from - (from % bin);
-        while edge <= to && out.len() < limit {
-            let upper = edge.saturating_add(bin);
-            let value = samples.and_then(|rows| {
-                // The bin's value is the mean of the samples whose instant falls in it,
-                // reduced with `sum_ordered` so two builds agree to the last bit. A bin
-                // with no sample is `None` and is reported as JSON `null`: the metric was
-                // not observed there, which is not the same as being zero there.
-                let inside: Vec<f64> = rows
-                    .iter()
-                    .filter(|(t, _)| *t >= edge && *t < upper)
-                    .map(|(_, v)| *v)
-                    .collect();
-                if inside.is_empty() {
-                    return None;
-                }
-                let n = inside.len() as f64;
-                Some(v2xw_core::math::sum_ordered(inside) / n)
-            });
-            out.push((edge, value));
-            edge = upper;
-        }
-        out
+        series_bins(rows, from, to, bin, limit)
+    }
     }
 
     fn provenance_chain(&self) -> Vec<Value> {
@@ -4426,6 +4449,78 @@ mod tests {
             units,
             "with {units} masts the first vehicle's node id is {units}, not 0"
         );
+    }
+}
+
+#[cfg(test)]
+mod series_bin_tests {
+    use super::series_bins;
+
+    /// What `series_bins` replaced: every bin scans every sample.
+    fn by_scanning(
+        rows: &[(u64, f64)],
+        from: u64,
+        to: u64,
+        bin: u64,
+        limit: usize,
+    ) -> Vec<(u64, Option<f64>)> {
+        let mut out = Vec::new();
+        let mut edge = from - (from % bin);
+        while edge <= to && out.len() < limit {
+            let upper = edge + bin;
+            let inside: Vec<f64> = rows
+                .iter()
+                .filter(|(t, _)| *t >= edge && *t < upper)
+                .map(|(_, v)| *v)
+                .collect();
+            let value = (!inside.is_empty())
+                .then(|| v2xw_core::math::sum_ordered(inside.iter().copied()) / inside.len() as f64);
+            out.push((edge, value));
+            edge = upper;
+        }
+        out
+    }
+
+    /// The single pass answers exactly what the scan answered: samples on a bin's edge go
+    /// to the bin they open, empty bins are `None`, several samples in one bin are averaged,
+    /// an unaligned `from` starts at its bin's edge, and `limit` cuts the answer.
+    #[test]
+    fn binning_in_one_pass_answers_what_the_scan_answered() {
+        // A 1 s metric with a gap (4-6 s), a bin with two samples (7.0 and 7.5 s), a
+        // repeated instant (9 s twice) and a sample at 0.
+        let rows: Vec<(u64, f64)> = vec![
+            (0, 0.5),
+            (1_000_000_000, 0.25),
+            (2_000_000_000, 1.0),
+            (3_000_000_000, 0.75),
+            (7_000_000_000, 0.125),
+            (7_500_000_000, 0.375),
+            (8_000_000_000, 0.0),
+            (9_000_000_000, 2.0),
+            (9_000_000_000, 4.0),
+            (10_000_000_000, 8.0),
+        ];
+        for (from, to, bin, limit) in [
+            (0, 10_000_000_000, 1_000_000_000, 10_000),
+            (0, 10_000_000_000, 2_000_000_000, 10_000),
+            (0, 10_000_000_000, 500_000_000, 10_000),
+            (1_500_000_000, 9_000_000_000, 1_000_000_000, 10_000),
+            (0, 10_000_000_000, 1_000_000_000, 3),
+            (0, 10_000_000_000, 3_000_000_000, 10_000),
+            (11_000_000_000, 20_000_000_000, 1_000_000_000, 10_000),
+        ] {
+            assert_eq!(
+                series_bins(&rows, from, to, bin, limit),
+                by_scanning(&rows, from, to, bin, limit),
+                "from {from} to {to} bin {bin} limit {limit}"
+            );
+        }
+        // Spot values, so the reference itself is pinned too.
+        let one = series_bins(&rows, 0, 10_000_000_000, 1_000_000_000, 10_000);
+        assert_eq!(one[4], (4_000_000_000, None), "the gap is a gap, not a zero");
+        assert_eq!(one[7], (7_000_000_000, Some(0.25)), "two samples in one bin average");
+        assert_eq!(one[9], (9_000_000_000, Some(3.0)));
+        assert_eq!(series_bins(&[], 0, 2_000_000_000, 1_000_000_000, 10).len(), 3);
     }
 }
 

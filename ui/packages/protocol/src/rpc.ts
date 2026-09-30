@@ -720,6 +720,8 @@ export interface MetricsQueryResult {
     source?: Record<string, unknown>;
     /** The metric a series is a view of: its own name for a headline, the metric's for `x.p95` or `x[label]`. */
     base?: string;
+    /** What the metric does not account for, one sentence each (08-measurement-and-data.md §1: "no black box"). */
+    not_accounted?: string[];
   }[];
   provenance?: ProvenanceInfo[];
 }

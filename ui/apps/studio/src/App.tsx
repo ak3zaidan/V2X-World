@@ -135,14 +135,26 @@ export function App(): React.JSX.Element {
     void connectResolved().catch((err: unknown) => setConnectError(err instanceof Error ? err.message : String(err)));
   }, [connectResolved]);
 
-  // The two keys that work anywhere: Ctrl/Cmd + , for the settings (VS Code's), Escape to close
-  // the panel on top. A menu or a search box that uses Escape itself stops it before it gets here.
+  // The keys that work anywhere: Ctrl/Cmd + , for the settings (VS Code's), M for the metrics, Escape
+  // to close the panel on top. A menu or a search box that uses Escape itself stops it before it gets here.
   useEffect(() => {
     const onKey = (ev: KeyboardEvent): void => {
       if ((ev.metaKey || ev.ctrlKey) && !ev.altKey && ev.key === ",") {
         ev.preventDefault();
         togglePanel("settings");
         return;
+      }
+      // M opens and closes the metrics dashboard, as F frames the traffic: a bare key, so never
+      // while typing, and not over another full-screen panel.
+      if ((ev.key === "m" || ev.key === "M") && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.defaultPrevented) {
+        const target = ev.target instanceof HTMLElement ? ev.target : null;
+        const typing = target?.closest("input, textarea, select, [contenteditable='true']") != null;
+        const panel = useStudio.getState().panel;
+        if (!typing && (panel === null || panel === "metrics" || PANELS[panel].kind === "sheet")) {
+          ev.preventDefault();
+          togglePanel("metrics");
+          return;
+        }
       }
       if (ev.key === "Escape" && !ev.defaultPrevented) {
         const state = useStudio.getState();

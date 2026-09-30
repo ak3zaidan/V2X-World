@@ -13,8 +13,13 @@ import { PANEL_IDS, useStudio, type PanelId } from "../state/store.js";
 
 export { PANEL_IDS };
 
+/**
+ * The panel a hash opens. A panel may carry a sub-address after a `/` or a `?` — the metrics
+ * dashboard's `#metrics/pdr/dist_bin?from=30&to=90` (`metrics/model.ts` `MetricsRoute`) — which is
+ * the panel's own to read.
+ */
 export function panelFromHash(hash: string): PanelId | null {
-  const id = hash.replace(/^#/, "");
+  const id = hash.replace(/^#/, "").split(/[/?]/, 1)[0];
   return (PANEL_IDS as readonly string[]).includes(id) ? (id as PanelId) : null;
 }
 
