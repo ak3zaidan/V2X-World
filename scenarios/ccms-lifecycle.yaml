@@ -1,0 +1,169 @@
+# ============================================================================
+# The European C-ITS credential system (CCMS) in one five-minute run.
+# ============================================================================
+#
+# The counterpart of credential-lifecycle.yaml for Europe: ETSI TS 102 941 and TS 103 097
+# under the C-ITS Certificate Policy, with CAMs over GeoNetworking/BTP. Open it in the page
+# and press Backend: the Trust List Manager, the Central Point of Contact (serving as the
+# Distribution Centre), the Root CA, the Enrolment Authority, the Authorization Authority and
+# the Misbehaviour Authority, each with its own queue, keys and messages, and the stations
+# reaching them over cellular Uu. What a run shows:
+#
+#  * trust lists: the TLM signs the ECTL and the Root CA the CA-CRL once; every station
+#    fetches both from the Distribution Centre when it joins and again on the fetch
+#    interval, and is answered "current" when it already holds them (TS 102 941 §6.3.3);
+#  * authorization tickets by the butterfly method (TS 102 941 V2 §6.2.3.5): one request
+#    per period, the EA expands the keys, the AA certifies the batch — and the AA never
+#    learns which enrolled station it is certifying: the enrolment identity crosses it
+#    sealed for the EA;
+#  * ticket change on the five-minute rule, and the move to the next period's tickets;
+#  * misbehaviour: a few stations broadcast a false position from 60 s and the others
+#    report them to the MA (TS 103 759). A decision blocklists the enrolment at the EA —
+#    passive revocation: there is no ticket CRL in the CCMS (TS 102 941 §6.1.4 NOTE 4), so
+#    a blocklisted station keeps its tickets until they expire and is refused its next
+#    batch. CAMs are sent at 1 to 10 Hz by the generation rules, not at a BSM's fixed
+#    10 Hz, so the detectors see fewer messages than on the SCMS grid: on this seed the
+#    first three minutes bring 25 reports to the MA and no decision yet.
+#
+# ## What is compressed
+#
+# The ticket period (a week under the Certificate Policy's rules) is a minute, so batches
+# are requested inside the run; the fetch interval is thirty seconds. Every size, cost and
+# protocol step is as cited. Quote no latency from this file without substituting the real
+# periods back.
+schema: v2xw/scenario/1
+
+meta:
+  name: ccms-lifecycle
+  description: >-
+    Every European CCMS authority in the loop with the stations on a small procedural
+    grid: ECTL and CA-CRL from the Distribution Centre, butterfly authorization tickets
+    the AA cannot link to the enrolment, ticket change, TS 103 759 reports and passive
+    revocation at the EA, with the ticket period compressed to a minute.
+  authors: [v2xw]
+  tags: [ccms, etsi, credentials, backend, revocation, procedural]
+  created: "2026-09-29"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  t0: "2027-03-04T08:00:00Z"
+  duration_s: 300.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: procedural
+    generator: world/source/procedural-grid
+    params:
+      # Five avenues by eight streets of the Midtown grid: 1.1 km by 0.6 km, small enough
+      # that the debug build runs it in real time and the one roadside unit reaches most of
+      # it.
+      cols: 5
+      rows: 8
+      block_x_m: 274.0
+      block_y_m: 80.0
+      lanes_per_direction: 2
+      lane_width_m: 3.5
+      sidewalk_m: 2.0
+      speed_limit_mps: 11.176
+      signalised: true
+      cycle_s: 60.0
+      amber_s: 3.0
+      crossings: true
+      block_buildings: true
+      building_height_m: 30.0
+      rsu_at_junctions: false
+      corner_radius_m: 4.5
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 1500.0
+
+  backend:
+    protocol: protocol/etsi/ts102941
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  tiers:
+    propagation: medium
+    phy: medium
+    mac: medium
+
+net:
+  # ITS-G5: GeoNetworking with BTP under every CAM.
+  layer: gn-btp
+  # Every station has a cellular modem: enrolment, tickets, trust lists and reports go
+  # over Uu.
+  uu:
+    id: cellular/uu/fixed-latency
+    params: {preset: 4g-east-coast}
+
+messages:
+  sets: [cam]
+  codec_tier: uper
+
+security:
+  envelope: etsi103097
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  # A detector only judges what the node verified; see revocation-latency.yaml.
+  verification_policy: verify-all
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+  protocol:
+    id: protocol/etsi/ts102941
+    params:
+      # One-minute ticket periods, five tickets a period, two periods held, a new batch
+      # when one is left, requested by the butterfly method.
+      i_period_s: 60
+      cert_lifetime_s: 61
+      certs_per_period: 5
+      pool_periods: 2
+      topup_below_periods: 1
+      first_batch_delay_s: 2
+      download_poll_interval_s: 2
+      etsi_butterfly: 1
+      # Under the CCMS this is how often a station asks the Distribution Centre for the
+      # ECTL and the CA-CRL.
+      crl_fetch_interval_s: 30
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.05
+      schedule:
+        from_s: 60.0
+        to_s: 300.0
+
+detection:
+  local:
+    - id: detect/legacy-12
+  ma:
+    id: threat/ma/legacy-window
+
+metrics: [all]
+exporters: []

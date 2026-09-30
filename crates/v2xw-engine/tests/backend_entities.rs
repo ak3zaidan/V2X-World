@@ -614,3 +614,45 @@ fn the_credential_lifecycle_scenario_shows_every_stage() {
         assert!(edge(&last, a, b), "no {a} -> {b} edge");
     }
 }
+
+/// The shipped `scenarios/ccms-lifecycle.yaml`, the European counterpart: CAMs over
+/// GeoNetworking, butterfly tickets, the Distribution Centre's trust lists and TS 103 759
+/// reports, in its first three minutes.
+#[test]
+fn the_ccms_lifecycle_scenario_shows_every_stage() {
+    let mut s = Scenario::load(scenarios().join("ccms-lifecycle.yaml"))
+        .expect("the shipped scenario loads");
+    assert!(v2xw_engine::scenario::validate::validate(&s).is_empty());
+    s.time.duration_s = 180.0;
+    if let Some(w) = s.threats.attackers[0].schedule.as_mut() {
+        w.to_s = 180.0;
+    }
+    let (report, rec) = run(s);
+    let p = &report.phase2;
+    let last = records(&rec, "backend.state").pop().expect("a view");
+    let aa = entity(&last, "aa");
+    println!(
+        "top-ups {}/{} ({} tickets), trust fetches {} ({} installed), reports {} sent {} at \
+         the MA, {} decisions, {} refused as blocklisted; AA {} batches, {} validations",
+        p.topups_completed,
+        p.topups_started,
+        p.certs_topped_up,
+        p.trust_fetches,
+        p.trust_lists_installed,
+        p.reports_sent,
+        p.reports_at_ma,
+        p.ma_revoke_decisions,
+        p.topups_refused_blocklisted,
+        aa["state"]["butterfly_batches"],
+        aa["state"]["validations_requested"]
+    );
+    assert_eq!(last["system"], "ccms");
+    assert!(p.topups_completed > 0, "no ticket batch was installed");
+    assert!(aa["state"]["butterfly_batches"].as_u64() > Some(0));
+    assert!(p.trust_lists_installed > 0, "no station installed the ECTL");
+    assert!(p.reports_at_ma > 0, "no report reached the MA");
+    assert_eq!(p.backend_errors, 0, "{}", p.first_backend_error);
+    for (a, b) in [("ee", "ea"), ("ea", "aa"), ("aa", "ea"), ("ee", "cpoc"), ("cpoc", "ee")] {
+        assert!(edge(&last, a, b), "no {a} -> {b} edge");
+    }
+}
