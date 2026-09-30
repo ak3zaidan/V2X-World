@@ -2650,6 +2650,7 @@ fn asking_for_an_unimplemented_simplification_records_that_it_did_not_run() {
             collapse_trivial_junctions: true,
             merge_dual_carriageways: true,
             snap_parallel_footways: true,
+            join_short_junctions: true,
         },
         ..opts()
     };

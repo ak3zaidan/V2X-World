@@ -235,11 +235,15 @@ pub enum Anomaly {
     /// drivable path; it was given no U-turn and is a trip end
     /// ([`OsmOptions::dead_end_turnarounds`]).
     DeadEndWithoutTurnaround,
+    /// A `highway=crossing` node on a road with no `footway=crossing` way through it, and no
+    /// pavement within [`NODE_CROSSING_REACH_M`] on one side or the other to join a
+    /// synthesised crosswalk to; it gets no crosswalk ([`OsmOptions::crossings_from_nodes`]).
+    CrossingNodeUnconnected,
 }
 
 impl Anomaly {
     /// Every anomaly category, in report order.
-    pub const ALL: [Anomaly; 44] = [
+    pub const ALL: [Anomaly; 45] = [
         Anomaly::MissingNode,
         Anomaly::WayTooShort,
         Anomaly::DuplicateNode,
@@ -284,6 +288,7 @@ impl Anomaly {
         Anomaly::UntaggedBuildingPassage,
         Anomaly::HighwayArea,
         Anomaly::DeadEndWithoutTurnaround,
+        Anomaly::CrossingNodeUnconnected,
     ];
 
     /// A stable kebab-case label, used by the report and the provenance record.
@@ -333,6 +338,7 @@ impl Anomaly {
             Anomaly::UntaggedBuildingPassage => "untagged-building-passage",
             Anomaly::HighwayArea => "highway-area",
             Anomaly::DeadEndWithoutTurnaround => "dead-end-without-turnaround",
+            Anomaly::CrossingNodeUnconnected => "crossing-node-unconnected",
         }
     }
 }
@@ -504,6 +510,10 @@ pub struct ImportCounts {
     /// no longer overlapped.
     #[serde(default)]
     pub junctions_with_cleared_arms: u64,
+    /// Crosswalks synthesised across a road at a `highway=crossing` node that no
+    /// `footway=crossing` way passes through ([`OsmOptions::crossings_from_nodes`]).
+    #[serde(default)]
+    pub crossings_from_nodes: u64,
     /// Junctions in the world, of every kind — including the footway intersections of
     /// the sidewalk mesh, which are 77.6 % of them on the Phase 1 extract (V9).
     pub junctions: u64,
@@ -1276,6 +1286,18 @@ pub struct OsmOptions {
     /// is what `netconvert` does unless given `--no-turnarounds`.
     #[serde(default)]
     pub dead_end_turnarounds: bool,
+    /// Synthesise a crosswalk at every `highway=crossing` node on a road that no
+    /// `footway=crossing` way passes through.
+    ///
+    /// Default `true`. Mappers record a crossing either as a node on the road or as a
+    /// short `footway=crossing` way across it, and both are correct OSM (wiki,
+    /// Tag:highway=crossing); the pedestrian layer only reads ways, so a node-only
+    /// crossing was a place people cross in reality and could not in the simulation. The
+    /// crosswalk runs perpendicular to the road through the node, between the nearest
+    /// pavement on each side within [`NODE_CROSSING_REACH_M`], and takes the node's
+    /// `crossing=*` value.
+    #[serde(default = "default_true")]
+    pub crossings_from_nodes: bool,
     /// The terrain grid to attach. `None` leaves the world flat at `z = 0`, which is what
     /// Phase 1 does; this is the hook for the DEM importers of 04-models.md §1.4.
     pub terrain: Option<Terrain>,
@@ -1302,6 +1324,7 @@ impl Default for OsmOptions {
             sidewalks_from_tags: false,
             bicycles_on_roads: true,
             dead_end_turnarounds: false,
+            crossings_from_nodes: true,
             terrain: None,
         }
     }
@@ -4191,7 +4214,7 @@ fn junction_radii(segments: &[Segment], plans: &[WayPlan], options: &OsmOptions)
         // split and a real junction were close, the lane between them was a 1 m stub a
         // car's heading jumped across. The lanes are still cut back 1 m, so the connector
         // exists, and `pull_back_for_turns` adds whatever room a bend needs.
-        if std::env::var("TMP_OLD_CONT").is_err() && shapes.len() == 2
+        if shapes.len() == 2
             && shapes[0].0 == shapes[1].1
             && shapes[0].1 == shapes[1].0
             && shapes[0].2 == shapes[1].2
@@ -5647,6 +5670,38 @@ fn restriction_via_nodes(file: &OsmFile) -> BTreeSet<i64> {
 /// * a pair the rules leave level — two opposing left turns — is recorded as a conflict
 ///   with no precedence either way, because no highway code settles it and inventing one
 ///   would be worse than telling the intersection model that it must.
+/// Two junction connectors whose centrelines pass closer than this conflict even where
+/// they do not cross, metres: a passenger car's width (1.8 m, the auditor's) plus 0.2 m.
+/// Side-by-side turning lanes run a lane width (2.7 m or more) apart and are unaffected.
+pub const CONNECTORS_TOUCH_M: f64 = 2.0;
+
+/// The least horizontal distance between two polylines.
+fn polylines_min_distance(a: &[Vec3], b: &[Vec3]) -> f64 {
+    let point_to_segment = |p: Vec3, s0: Vec3, s1: Vec3| {
+        let (dx, dy) = (s1.x - s0.x, s1.y - s0.y);
+        let len2 = dx * dx + dy * dy;
+        let t = if len2 <= 0.0 {
+            0.0
+        } else {
+            (((p.x - s0.x) * dx + (p.y - s0.y) * dy) / len2).clamp(0.0, 1.0)
+        };
+        let (ex, ey) = (p.x - (s0.x + t * dx), p.y - (s0.y + t * dy));
+        math::sqrt(ex * ex + ey * ey)
+    };
+    let mut best = f64::INFINITY;
+    for sa in a.windows(2) {
+        for sb in b.windows(2) {
+            // Two segments that do not cross are closest at an endpoint of one of them.
+            best = best
+                .min(point_to_segment(sa[0], sb[0], sb[1]))
+                .min(point_to_segment(sa[1], sb[0], sb[1]))
+                .min(point_to_segment(sb[0], sa[0], sa[1]))
+                .min(point_to_segment(sb[1], sa[0], sa[1]));
+        }
+    }
+    best
+}
+
 fn conflict_matrix(movements: &[Movement], lanes: &[Lane]) -> ConflictMatrix {
     let mut matrix = ConflictMatrix::new(movements.len());
     let rank = |m: &Movement| u8::from(!m.turn.crosses_opposing_traffic());
@@ -5668,16 +5723,24 @@ fn conflict_matrix(movements: &[Movement], lanes: &[Lane]) -> ConflictMatrix {
                 continue;
             }
             let merges = ma.to_lane == mb.to_lane;
-            let separated = boxes[a].1.x < boxes[b].0.x
-                || boxes[b].1.x < boxes[a].0.x
-                || boxes[a].1.y < boxes[b].0.y
-                || boxes[b].1.y < boxes[a].0.y;
-            let crosses = !separated
-                && crate::index::polylines_cross(
-                    &lanes[ma.internal.as_usize()].centreline,
-                    &lanes[mb.internal.as_usize()].centreline,
-                );
-            if !(merges || crosses) {
+            let separated = boxes[a].1.x + CONNECTORS_TOUCH_M < boxes[b].0.x
+                || boxes[b].1.x + CONNECTORS_TOUCH_M < boxes[a].0.x
+                || boxes[a].1.y + CONNECTORS_TOUCH_M < boxes[b].0.y
+                || boxes[b].1.y + CONNECTORS_TOUCH_M < boxes[a].0.y;
+            let (pa, pb) = (
+                &lanes[ma.internal.as_usize()].centreline,
+                &lanes[mb.internal.as_usize()].centreline,
+            );
+            // Crossing paths conflict, and so do two paths that pass closer than a car is
+            // wide without crossing: two cars on them would touch. Inside a joined junction
+            // (a divided avenue's two carriageways and the cross street as one junction) a
+            // turn off one carriageway and a through movement from the other ran 0.03 m
+            // apart without their centrelines crossing, and the auditor saw the two cars
+            // drive through each other.
+            let conflicts = !separated
+                && (crate::index::polylines_cross(pa, pb)
+                    || polylines_min_distance(pa, pb) < CONNECTORS_TOUCH_M);
+            if !(merges || conflicts) {
                 continue;
             }
             matrix.set_foe(a, b, true);
@@ -6352,6 +6415,275 @@ fn build_crossings(
             crossing
         })
         .collect()
+}
+
+/// How far from a `highway=crossing` node, perpendicular to its road, a pavement is looked
+/// for when a crosswalk is synthesised there ([`OsmOptions::crossings_from_nodes`]), metres.
+///
+/// **This importer's choice.** Half the widest Midtown carriageway (Park Avenue's two
+/// roadways and median, about 42 m kerb to kerb) plus a pavement's width.
+pub const NODE_CROSSING_REACH_M: f64 = 25.0;
+
+/// Where one end of a synthesised crosswalk meets a pavement way.
+struct PavementHit {
+    /// Index of the pavement way in [`OsmFile::ways`].
+    way: usize,
+    /// The segment of it, from node `segment` to `segment + 1`.
+    segment: usize,
+    /// How far along that segment, 0 to 1.
+    t: f64,
+}
+
+/// Adds a `footway=crossing` way at every `highway=crossing` node on a road that no
+/// crossing way passes through ([`OsmOptions::crossings_from_nodes`]); returns how many.
+///
+/// The crosswalk is the road's perpendicular through the node, from the nearest pavement
+/// (a non-crossing foot way running within 30° of the road's direction) on its left to the
+/// nearest on its right, each within [`NODE_CROSSING_REACH_M`]. Where it meets a pavement
+/// between two of its nodes a node is inserted there, which is how a mapped crossing way
+/// joins its pavement. A node with a pavement on one side only (a crossing to a median, or
+/// a road mapped without pavements) is counted as [`Anomaly::CrossingNodeUnconnected`].
+///
+/// New nodes and ways take ids counting down from below every id in the file; the
+/// geometry search is a local equirectangular plane about the first candidate, in node-id
+/// order, so the result is the same on every run.
+#[allow(clippy::too_many_lines)]
+fn synthesise_node_crossings(
+    file: &mut OsmFile,
+    options: &OsmOptions,
+    report: &mut ImportReport,
+) -> u64 {
+    const CELL: f64 = 20.0;
+    let Some(preset) = options.highway_preset else {
+        return 0;
+    };
+    let family_of = |tags: &Tags| {
+        tags.get("highway")
+            .and_then(|h| preset.row(h))
+            .map(|row| row.family)
+    };
+    let mut on_crossing_way: BTreeSet<i64> = BTreeSet::new();
+    for way in &file.ways {
+        if is_crossing_way(&way.tags) {
+            on_crossing_way.extend(way.nodes.iter().copied());
+        }
+    }
+    let candidates: BTreeSet<i64> = file
+        .node_tags
+        .iter()
+        .filter(|(id, t)| {
+            t.is("highway", "crossing") && !t.is("crossing", "no") && !on_crossing_way.contains(id)
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    let Some(first) = candidates.iter().find_map(|id| file.node(*id)) else {
+        return 0;
+    };
+    let (lat0, lon0) = (first.lat, first.lon);
+    let ky = 111_132.0;
+    let kx = 111_320.0 * math::cos(lat0.to_radians());
+    let xy = |n: &RawNode| ((n.lon - lon0) * kx, (n.lat - lat0) * ky);
+    let cell = |v: f64| (v / CELL).floor() as i64;
+
+    // The road through each candidate: the lowest-id motor way that carries it, and where.
+    let mut road_at: BTreeMap<i64, (usize, usize)> = BTreeMap::new();
+    for (w, way) in file.ways.iter().enumerate() {
+        if family_of(&way.tags) != Some(WayFamily::Motor) || is_crossing_way(&way.tags) {
+            continue;
+        }
+        for (i, n) in way.nodes.iter().enumerate() {
+            if candidates.contains(n) {
+                road_at.entry(*n).or_insert((w, i));
+            }
+        }
+    }
+    // Every pavement segment, by 20 m cell.
+    let mut grid: BTreeMap<(i64, i64), Vec<(usize, usize)>> = BTreeMap::new();
+    for (w, way) in file.ways.iter().enumerate() {
+        if family_of(&way.tags) != Some(WayFamily::Foot) || is_crossing_way(&way.tags) {
+            continue;
+        }
+        let closed = way.nodes.len() > 2 && way.nodes.first() == way.nodes.last();
+        if closed && way.tags.is("area", "yes") {
+            continue;
+        }
+        for k in 0..way.nodes.len().saturating_sub(1) {
+            let (Some(a), Some(b)) = (file.node(way.nodes[k]), file.node(way.nodes[k + 1])) else {
+                continue;
+            };
+            let (a, b) = (xy(a), xy(b));
+            for cx in cell(a.0.min(b.0))..=cell(a.0.max(b.0)) {
+                for cy in cell(a.1.min(b.1))..=cell(a.1.max(b.1)) {
+                    grid.entry((cx, cy)).or_default().push((w, k));
+                }
+            }
+        }
+    }
+
+    let mut crosswalks: Vec<(i64, PavementHit, PavementHit)> = Vec::new();
+    for (&node, &(w, i)) in &road_at {
+        let road = &file.ways[w];
+        let at = |k: usize| road.nodes.get(k).and_then(|n| file.node(*n)).map(xy);
+        let Some(p) = at(i) else {
+            continue;
+        };
+        let (a, b) = match (i.checked_sub(1).and_then(at), at(i + 1)) {
+            (Some(a), Some(b)) => (a, b),
+            (None, Some(b)) => (p, b),
+            (Some(a), None) => (a, p),
+            (None, None) => continue,
+        };
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len = math::sqrt(dx * dx + dy * dy);
+        if len < 1e-6 {
+            continue;
+        }
+        let (ux, uy) = (dx / len, dy / len);
+        // The nearest parallel pavement along the ray `p + u·(nx, ny)`, 0.5 m < u ≤ reach.
+        let search = |nx: f64, ny: f64| -> Option<PavementHit> {
+            let end = (
+                p.0 + nx * NODE_CROSSING_REACH_M,
+                p.1 + ny * NODE_CROSSING_REACH_M,
+            );
+            let mut seen: BTreeSet<(usize, usize)> = BTreeSet::new();
+            let mut best: Option<(f64, PavementHit)> = None;
+            for cx in cell(p.0.min(end.0))..=cell(p.0.max(end.0)) {
+                for cy in cell(p.1.min(end.1))..=cell(p.1.max(end.1)) {
+                    let Some(list) = grid.get(&(cx, cy)) else {
+                        continue;
+                    };
+                    for &(fw, k) in list {
+                        if !seen.insert((fw, k)) {
+                            continue;
+                        }
+                        let way = &file.ways[fw];
+                        let (Some(s0), Some(s1)) =
+                            (file.node(way.nodes[k]), file.node(way.nodes[k + 1]))
+                        else {
+                            continue;
+                        };
+                        let (s0, s1) = (xy(s0), xy(s1));
+                        let (ex, ey) = (s1.0 - s0.0, s1.1 - s0.1);
+                        let elen = math::sqrt(ex * ex + ey * ey);
+                        if elen < 1e-6 {
+                            continue;
+                        }
+                        // Parallel to the road within 30°: a pavement, not a crossing or the
+                        // cross street's pavement.
+                        if ((ux * ey - uy * ex) / elen).abs() > 0.5 {
+                            continue;
+                        }
+                        // Solve p + u·n = s0 + t·e.
+                        let den = nx * ey - ny * ex;
+                        if den.abs() < 1e-9 {
+                            continue;
+                        }
+                        let (qx, qy) = (s0.0 - p.0, s0.1 - p.1);
+                        let u = (qx * ey - qy * ex) / den;
+                        let t = (qx * ny - qy * nx) / den;
+                        if !(0.5..=NODE_CROSSING_REACH_M).contains(&u) || !(0.0..=1.0).contains(&t)
+                        {
+                            continue;
+                        }
+                        if best.as_ref().is_none_or(|(bu, _)| u < *bu) {
+                            best = Some((
+                                u,
+                                PavementHit {
+                                    way: fw,
+                                    segment: k,
+                                    t,
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+            best.map(|(_, h)| h)
+        };
+        match (search(-uy, ux), search(uy, -ux)) {
+            (Some(left), Some(right)) => crosswalks.push((node, left, right)),
+            _ => report.note(Anomaly::CrossingNodeUnconnected, node),
+        }
+    }
+    if crosswalks.is_empty() {
+        return 0;
+    }
+
+    // Where each pavement end lands: an existing node within half a metre, or a new node
+    // inserted into the pavement way.
+    let mut next_node = file.nodes.first().map_or(0, |n| n.id).min(0) - 1;
+    let mut next_way = file.ways.first().map_or(0, |w| w.id).min(0) - 1;
+    let mut inserts: BTreeMap<usize, Vec<(usize, f64, i64)>> = BTreeMap::new();
+    let mut new_nodes: Vec<RawNode> = Vec::new();
+    let mut new_ways: Vec<RawWay> = Vec::new();
+    for (node, left, right) in &crosswalks {
+        let mut ends = [0i64; 2];
+        for (slot, hit) in ends.iter_mut().zip([left, right]) {
+            let way = &file.ways[hit.way];
+            let a = file.node(way.nodes[hit.segment]).expect("resolved in the search");
+            let b = file.node(way.nodes[hit.segment + 1]).expect("resolved in the search");
+            let (pa, pb) = (xy(a), xy(b));
+            let seg = math::sqrt((pb.0 - pa.0) * (pb.0 - pa.0) + (pb.1 - pa.1) * (pb.1 - pa.1));
+            *slot = if hit.t * seg < 0.5 {
+                a.id
+            } else if (1.0 - hit.t) * seg < 0.5 {
+                b.id
+            } else {
+                let id = next_node;
+                next_node -= 1;
+                new_nodes.push(RawNode {
+                    id,
+                    lat: a.lat + (b.lat - a.lat) * hit.t,
+                    lon: a.lon + (b.lon - a.lon) * hit.t,
+                });
+                inserts
+                    .entry(hit.way)
+                    .or_default()
+                    .push((hit.segment, hit.t, id));
+                id
+            };
+        }
+        let mut tags = Tags::from_pairs([("highway", "footway"), ("footway", "crossing")]);
+        if let Some(node_tags) = file.node_tags.get(node) {
+            for key in [
+                "crossing",
+                "crossing:markings",
+                "crossing:signals",
+                "crossing_ref",
+                "button_operated",
+            ] {
+                if let Some(v) = node_tags.get(key) {
+                    tags.insert(key.to_string(), v.to_string());
+                }
+            }
+        }
+        tags.insert("v2xw:synthesised".to_string(), format!("crossing node {node}"));
+        new_ways.push(RawWay {
+            id: next_way,
+            nodes: vec![ends[0], *node, ends[1]],
+            tags,
+        });
+        next_way -= 1;
+    }
+    for (w, mut list) in inserts {
+        list.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2)));
+        let old = std::mem::take(&mut file.ways[w].nodes);
+        let mut nodes = Vec::with_capacity(old.len() + list.len());
+        let mut pending = list.into_iter().peekable();
+        for (k, n) in old.iter().enumerate() {
+            nodes.push(*n);
+            while let Some((_, _, id)) = pending.next_if(|(seg, _, _)| *seg == k) {
+                nodes.push(id);
+            }
+        }
+        file.ways[w].nodes = nodes;
+    }
+    let count = new_ways.len() as u64;
+    file.nodes.extend(new_nodes);
+    file.nodes.sort_by_key(|n| n.id);
+    file.ways.extend(new_ways);
+    file.ways.sort_by_key(|w| w.id);
+    count
 }
 
 // ---------------------------------------------------------------------------
@@ -7664,7 +7996,7 @@ pub fn import_osm_bytes(
     options: &OsmOptions,
 ) -> Result<(World, ImportReport)> {
     options.validate()?;
-    let file = parse_osm(xml)?;
+    let mut file = parse_osm(xml)?;
     let digest = {
         use sha2::Digest as _;
         let mut hasher = sha2::Sha256::new();
@@ -7677,6 +8009,10 @@ pub fn import_osm_bytes(
         source_bytes: xml.len() as u64,
         ..ImportReport::default()
     };
+    if options.crossings_from_nodes && options.layers.pedestrian {
+        report.counts.crossings_from_nodes =
+            synthesise_node_crossings(&mut file, options, &mut report);
+    }
     let world = import_parsed(&file, options, &mut report)?;
     Ok((world, report))
 }
@@ -7909,7 +8245,7 @@ fn import_parsed(file: &OsmFile, options: &OsmOptions, report: &mut ImportReport
     };
     report.counts.segments_after_collapse = segments.len() as u64;
     report.counts.junctions_collapsed = collapsed;
-    let (segments, joined) = if options.simplify.join_short_junctions && std::env::var("TMP_NO_JOIN").is_err() {
+    let (segments, joined) = if options.simplify.join_short_junctions {
         join_short_junctions(segments, &plans, options, report)
     } else {
         (segments, JoinedJunctions::default())
@@ -7917,8 +8253,8 @@ fn import_parsed(file: &OsmFile, options: &OsmOptions, report: &mut ImportReport
 
     // --- stages 6 and 7: lanes, junctions, movements ------------------------------
     let mut net = build_network(&segments, &plans, file, &points, &joined, options, report)?;
-    if std::env::var("TMP_NO_SEP").is_err() { separate_lanes(&mut net, report); }
-    if std::env::var("TMP_NO_CLEAR").is_err() { clear_diverging_arms(&mut net, report); }
+    separate_lanes(&mut net, report);
+    clear_diverging_arms(&mut net, report);
     let mut direct = build_movements(&mut net, &plans, options.dead_end_turnarounds, report);
     let (restrictions, _banned) = apply_restrictions(&mut net, &mut direct, file, report);
     report.counts.restrictions_applied = restrictions;
