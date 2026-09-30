@@ -3,8 +3,8 @@
  * 2026-09-30 layout, against the real engine on a credential-system run.
  *
  * The scenario is `credential-lifecycle.yaml` (the US SCMS on a Midtown-sized grid, one roadside
- * unit placed by `position_m`) cut to 40 s, with a pseudonym change every 10 s so the timeline has
- * certificate events on it. Each check names the defect it holds shut:
+ * unit placed by `position_m`), with two planned demand events at 12 s and 18 s so the timeline
+ * has ticks on it. Each check names the defect it holds shut:
  *
  *  * the HUD said "(indices pending — node.tx)" for a whole SCMS run — it now names i and j;
  *  * the inspector printed "n/a" for every field the engine does not model — it now hides them;
@@ -31,7 +31,17 @@ test.beforeAll(async () => {
   const dir = join(tmpdir(), `vwp-engine-e2e-inspector-${process.pid}`);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "e2e-inspector.yaml");
-  const text = source.replace("duration_s: 300.0", "duration_s: 40.0").replace("period_s: 300.0", "period_s: 10.0");
+  // Two planned events, so the timeline has ticks to click whatever the run does.
+  const text = `${source.replace("period_s: 300.0", "period_s: 10.0")}
+events:
+  - t: 12.0
+    until: 16.0
+    type: demand.multiplier
+    value: 1.5
+  - t: 18.0
+    type: demand.multiplier
+    value: 1.0
+`;
   expect(text, "the scenario template changed; this test's edits no longer apply").not.toBe(source);
   writeFileSync(path, text);
   engine = new EngineProcess(path);
@@ -154,23 +164,20 @@ test("the transport bar is one row and its event ticks jump to the event", async
   const scrub = await page.getByTestId("scrub").boundingBox();
   expect(Math.abs(scrub!.y + scrub!.height / 2 - (play!.y + play!.height / 2)), "the timeline is on the play button's row").toBeLessThan(8);
 
-  // Pseudonym changes every 10 s put certificate events on the timeline; a click on one moves the
-  // clock to it.
-  const marks = page.getByTestId("timeline-mark");
-  await expect.poll(async () => marks.count(), { timeout: 30_000 }).toBeGreaterThan(0);
-  const before = (await status(page)).t_ns;
-  const mark = marks.first();
-  const label = (await mark.getAttribute("aria-label")) ?? "";
-  await mark.click();
-  await expect.poll(async () => (await status(page)).t_ns, { timeout: 60_000 }).not.toBe(before);
-  const clock = (await page.getByTestId("sim-clock").innerText()).trim();
-  expect(label, `the tick says "${label}", the clock reads ${clock}`).toContain(clock.slice(0, 8));
+  // The scenario's two planned events are ticks on the timeline; a click on one moves the clock
+  // to it. (They used to sit under the range input, where no pointer could reach them.)
+  const marks = page.getByTestId("scenario-event-mark");
+  await expect(marks).toHaveCount(2);
+  await marks.first().click();
+  await expect.poll(async () => (await status(page)).t_ns, { timeout: 60_000 }).toBe(12_000_000_000);
+  await expect(page.getByTestId("sim-clock")).toHaveText(/^00:00:12/);
 
   // Alt+arrow on the timeline jumps between events from the keyboard.
-  const at = (await status(page)).t_ns;
   await page.getByTestId("scrub-range").focus();
   await page.keyboard.press("Alt+ArrowRight");
-  await expect.poll(async () => (await status(page)).t_ns, { timeout: 60_000 }).not.toBe(at);
+  await expect.poll(async () => (await status(page)).t_ns, { timeout: 60_000 }).toBe(18_000_000_000);
+  await page.keyboard.press("Alt+ArrowLeft");
+  await expect.poll(async () => (await status(page)).t_ns, { timeout: 60_000 }).toBe(12_000_000_000);
 });
 
 test("the Backend panel opens under the header, reads at a glance and links to the metrics", async ({ page }) => {

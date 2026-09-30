@@ -1388,7 +1388,8 @@ pre .feed-hex-key, pre span[class^="span-"] { border-left: none; }
 
 .hud { width: min(620px, calc(100% - 16px)); }
 .hud-head .hud-dock { height: 20px; min-width: 0; padding: 0 6px; font-size: 10px; font-family: var(--mono); }
-.hud-row { align-items: baseline; }
+.hud-row { align-items: baseline; flex-wrap: nowrap; }
+.hud-row-body { display: flex; flex-wrap: wrap; gap: 4px 14px; min-width: 0; }
 .hud-row-title {
   width: 58px;
   flex: none;
@@ -1421,7 +1422,15 @@ details.section > summary { cursor: pointer; list-style: none; display: flex; al
 details.section > summary::-webkit-details-marker { display: none; }
 details.section > summary::before { content: "▸"; color: var(--text-faint); font-size: 10px; }
 details.section[open] > summary::before { content: "▾"; }
-details.section > summary h3 { margin: 0; }
+details.section > summary h3 {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+details.section[open] > summary { margin-bottom: 5px; }
 
 /* ================================================================ transport bar (2026-09-30)
  * One row: play or pause, step, speed, the clock, the timeline with its events, the span. */

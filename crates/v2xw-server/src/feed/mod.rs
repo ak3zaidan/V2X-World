@@ -733,7 +733,7 @@ impl FeedStore {
                 .map(|(_, _, v)| v.clone())
                 .collect();
             let peak = peak_of(&q.spans, clock.step_lo, now).max(q.depth);
-            let mut row = json!({
+            let row = json!({
                 "id": id,
                 "label": label,
                 "what": what,

@@ -35,7 +35,7 @@ const fmt = (v: number | null | undefined, digits: number, unit = ""): string =>
   typeof v === "number" && Number.isFinite(v) ? `${v.toFixed(digits)}${unit}` : "";
 
 /** A value or blank. */
-const opt = (v: string | number | null | undefined): string => (v === null || v === undefined ? "" : String(v));
+const opt = (v: string | number | boolean | null | undefined): string => (v === null || v === undefined ? "" : String(v));
 
 /** The access layer's view of one transmission, on one line: the MCS by name and, on a
  * sidelink, the resource, the HARQ transmission and the congestion state it was granted under. */

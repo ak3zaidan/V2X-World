@@ -89,7 +89,7 @@ function Row({ title, testId, children }: { title: string; testId: string; child
   return (
     <div className="hud-row" data-testid={testId}>
       <span className="hud-row-title">{title}</span>
-      {children}
+      <span className="hud-row-body">{children}</span>
     </div>
   );
 }
