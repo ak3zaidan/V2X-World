@@ -413,8 +413,11 @@ const DEFAULT_SYNC: CompareSync = { time: true, camera: true, offsetNs: 0 };
  *
  * Full-screen ones cover everything under the header; sheets slide over the viewport's left edge.
  * One is open at a time, and it is mirrored in the URL hash so a reload keeps it and Back closes it.
+ * A new panel is one id here and one entry in `PANELS` (`shell/panels.tsx`), whose type makes the
+ * two agree.
  */
-export type PanelId = "settings" | "metrics" | "runs" | "compare" | "commands" | "details";
+export const PANEL_IDS = ["settings", "metrics", "runs", "compare", "commands", "details"] as const;
+export type PanelId = (typeof PANEL_IDS)[number];
 
 /** A sentence from the settings window's last action, and how to colour it. */
 export interface SettingsMessage {

@@ -9,9 +9,9 @@
 
 import { useEffect } from "react";
 
-import { useStudio, type PanelId } from "../state/store.js";
+import { PANEL_IDS, useStudio, type PanelId } from "../state/store.js";
 
-export const PANEL_IDS: readonly PanelId[] = ["settings", "metrics", "runs", "compare", "commands", "details"];
+export { PANEL_IDS };
 
 export function panelFromHash(hash: string): PanelId | null {
   const id = hash.replace(/^#/, "");

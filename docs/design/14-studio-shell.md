@@ -115,11 +115,20 @@ Modelled on VS Code's settings editor.
 
 ## 5. Plug-in points for the next tracks
 
-`src/shell/panels.ts` is the registry. A panel is `{ id, title, kind: "fullscreen" | "sheet",
-render }`; opening one is `usePanels().open(id)`. The metrics dashboard track replaces the
-`metrics` entry's `render` (today it hosts the old plots strip); the viewport/inspector track owns
-`components/Viewport.tsx` and `components/Inspector.tsx`, which the shell places in the `viewport`
-and `inspector` slots of `App.tsx`, and `useStudio().inspectorOpen` is the inspector's visibility.
+`src/shell/panels.tsx` is the registry. A panel is `{ id, title, kind: "fullscreen" | "sheet",
+keepMounted?, render }`; adding one is an id in `PANEL_IDS` (`state/store.ts`) and an entry in
+`PANELS`, whose `Record<PanelId, …>` type makes the two agree. Opening one is `openPanel(id)` from
+`shell/route.ts` (the hash follows, Escape and Back close it, focus returns to the opener);
+`useStudio().panel` is the one open. The frames are `FullPanel` and `Sheet` in
+`shell/PanelFrame.tsx`.
+
+* **Metrics dashboard track** — replace the `metrics` entry's `render` (today `MetricsBody`, hosting
+  the old `PlotsStrip`). It is `keepMounted`, so a chart the reader expanded is still expanded on a
+  second look. A chart that expands to more detail can be its own panel or a state inside the body.
+* **Viewport and inspector track** — owns `components/Viewport.tsx` and `components/Inspector.tsx`,
+  which `App.tsx` places in the viewport and inspector slots; `useStudio().inspectorOpen` is the
+  inspector's visibility (selecting a radio, asking *why* and docking the HUD open it). Developer
+  readouts over the viewport are shown when `useStudio().devDetails` is on.
 
 ## 6. What is deliberately not changed
 
