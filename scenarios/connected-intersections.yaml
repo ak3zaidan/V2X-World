@@ -7,10 +7,18 @@
 # the very signal plan the drivers obey, so a receiver's view of a light is the light. One
 # vehicle in ten is an emergency vehicle; when it has heard a junction's MAP and the
 # junction is within 300 m ahead, it sends a signal request (SRM) once a second, and the
-# junction's unit answers with a signal status (SSM). No controller in this build grants
-# the priority — it is acknowledged, not given — and the SRM and SSM are sized by the
-# validated size model because no real encoder for them exists (build decision D2), which is
-# why `codec_tier` is `size-model` here. The BSM, SPaT and MAP are still encoded for real.
+# junction's unit answers with a signal status (SSM) and hands the request to its controller,
+# which serves it (NTCIP 1211): it holds a green the vehicle is about to need, or ends a
+# conflicting green early once its minimum has run, and walks the plan back to its green wave
+# afterwards (`signal.priority` records each step; the SPaT's max and likely end times say
+# what the service may still do). The SRM and SSM are sized by the validated size model
+# because no real encoder for them exists (build decision D2), which is why `codec_tier` is
+# `size-model` here. The BSM, SPaT and MAP are still encoded for real.
+#
+# Every vehicle runs the V2X applications (`apps`): red-light violation warning and GLOSA
+# from the SPaT and MAP, forward collision, emergency brake light, intersection movement,
+# left-turn, blind-spot and pedestrian warnings from the BSMs and PSMs it hears. Set
+# `apps.glosa_compliance` to have drivers follow the green-light speed advice.
 #
 # Open it on the page, follow an emergency vehicle, and its broadcasts list the SRMs; follow
 # any car near one of the four junctions and its receptions list the SPaT and MAP.

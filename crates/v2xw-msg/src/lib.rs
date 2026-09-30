@@ -131,6 +131,7 @@
 pub mod asn1;
 pub mod cam;
 pub mod codec;
+pub mod cpm;
 pub mod denm;
 pub mod error;
 pub mod etsi_size;

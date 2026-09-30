@@ -87,6 +87,7 @@
 
 pub mod apps;
 pub mod clock;
+pub mod cpm;
 pub mod ctx;
 pub mod error;
 pub mod events;

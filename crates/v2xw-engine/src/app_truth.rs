@@ -106,6 +106,10 @@ pub struct AppTally {
     pub lead_ms_sum: u64,
     /// How many true warnings carried a TTC.
     pub lead_n: u64,
+    /// Warnings about an object another station perceived and reported in a CPM: counted
+    /// in `issued`, not labelled (the object may be a road user with no radio at all,
+    /// which the labeller's per-node truth does not cover).
+    pub via_cpm: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -182,6 +186,10 @@ impl AppTruth {
         };
         let node = NodeId::new(node);
         self.tallies.entry(app.to_string()).or_default().issued += 1;
+        if v["via"].as_str() == Some("cpm") {
+            self.tallies.entry(app.to_string()).or_default().via_cpm += 1;
+            return;
+        }
         let Some(app) = LABELLED.iter().copied().find(|a| *a == app) else {
             return;
         };

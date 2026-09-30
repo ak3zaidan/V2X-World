@@ -73,6 +73,13 @@ const FACILITIES: Unit = Unit {
         "denm_ts103831/DENM-PDU-Descriptions.asn",
         // TS 103 300-3 V2.2.1, the VRU awareness message a pedestrian's device sends.
         "vam_ts103300_3/VAM-PDU-Descriptions.asn",
+        // TS 103 324 V2.1.1, the collective perception message: its four container
+        // modules first, then the PDU that wraps them.
+        "cpm_ts103324/CPM-OriginatingStationContainers.asn",
+        "cpm_ts103324/CPM-SensorInformationContainer.asn",
+        "cpm_ts103324/CPM-PerceptionRegionContainer.asn",
+        "cpm_ts103324/CPM-PerceivedObjectContainer.asn",
+        "cpm_ts103324/CPM-PDU-Descriptions.asn",
     ],
 };
 

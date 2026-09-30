@@ -2241,6 +2241,10 @@ pub fn build_metrics(
         Box::new(v2xw_metrics::detection::DetectionProvider::new()),
         Box::new(v2xw_metrics::safety::SafetyProvider::new(0)),
     ];
+    // The applications' warnings, labelled against ground truth, when vehicles run any.
+    if !scenario.apps.enabled.is_empty() {
+        candidates.push(Box::new(v2xw_metrics::apps::AppsProvider::new()));
+    }
     // The pseudonym, pool, linkability and backend-link metrics read records only the
     // security path writes, so a run without it would publish a column of empty samples.
     let security_path = scenario.actors.backend.protocol.is_some()
@@ -2324,6 +2328,7 @@ pub fn service_set(scenario: &Scenario) -> ServiceSet {
         cam: has("cam"),
         bsm: has("bsm"),
         denm: has("denm"),
+        cpm: has("cpm"),
         ..ServiceSet::NONE
     }
 }

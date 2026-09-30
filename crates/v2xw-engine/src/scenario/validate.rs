@@ -1602,14 +1602,15 @@ fn unreachable_keys(s: &Scenario, e: &mut Vec<ScenarioError>) {
                     .to_string(),
             )),
             "ssm" => {}
-            "cpm" => e.push(conflict(
+            // The perception model (`crate::perception`) fills it now; the CPM is an ETSI
+            // message and rides GeoNetworking/BTP (port 2009).
+            "cpm" if s.net.layer != "gn-btp" => e.push(conflict(
                 &field,
-                "'cpm' (ETSI TS 103 324) reports the objects a station's sensors perceive, \
-                 and no perception model exists in this build to fill one: a CPM here would \
-                 be an empty container of the right size, which is not a collective \
-                 perception message"
+                "'cpm' (ETSI TS 103 324) is an ETSI facilities message carried over \
+                 GeoNetworking/BTP: set net.layer to gn-btp"
                     .to_string(),
             )),
+            "cpm" => {}
             _ => e.push(conflict(
                 &field,
                 format!(

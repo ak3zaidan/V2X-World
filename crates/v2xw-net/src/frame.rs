@@ -129,6 +129,9 @@ impl NetStack {
                 FrameMsg::Srm => {
                     NetMeta::wsmp(sdu_bytes, Psid::SIGNAL_REQUEST).with_llc_snap(false)
                 }
+                // A CPM is ETSI's and the scenario loader refuses it on WSMP; were one to
+                // reach here it would be addressed as the safety message it resembles.
+                FrameMsg::Cpm => NetMeta::for_bsm(sdu_bytes).with_llc_snap(false),
                 FrameMsg::Ssm => {
                     NetMeta::wsmp(sdu_bytes, Psid::SIGNAL_STATUS).with_llc_snap(false)
                 }
@@ -150,6 +153,10 @@ impl NetStack {
                 }
                 FrameMsg::Ssm => {
                     NetMeta::gn(sdu_bytes, GnTransport::Shb, BtpKind::B, BtpPort::SSEM)
+                        .with_llc_snap(false)
+                }
+                FrameMsg::Cpm => {
+                    NetMeta::gn(sdu_bytes, GnTransport::Shb, BtpKind::B, BtpPort::CPM)
                         .with_llc_snap(false)
                 }
             },
@@ -199,6 +206,8 @@ pub enum FrameMsg {
     Srm,
     /// A signal request's status (J2735 SSM, ETSI SSEM).
     Ssm,
+    /// A collective perception message (ETSI TS 103 324), single-hop to BTP port 2009.
+    Cpm,
 }
 
 /// Every octet of one frame's PSDU, by the layer it belongs to.

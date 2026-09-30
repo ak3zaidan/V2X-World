@@ -589,7 +589,15 @@ struct Heard {
     generated: SimTime,
     /// When this node heard it.
     heard: SimTime,
+    /// `Some("cpm")` for an object another station perceived and reported.
+    via: Option<&'static str>,
 }
+
+/// How close a perceived object may be to a station this node hears from its own
+/// awareness messages, or to this node itself, to be the same road user, metres: two
+/// reports of one vehicle, its BSM or CAM and another station's CPM, are fused into the
+/// one the vehicle sends itself (the self-announced one is the better estimate).
+pub const FUSION_GATE_M: f64 = 3.0;
 
 /// One ingress lane of a heard MAP, in world coordinates: the stop line first.
 #[derive(Debug, Clone, PartialEq)]
@@ -679,6 +687,8 @@ pub struct AppLayer {
     denms: BTreeMap<[u8; 8], DenmHeard>,
     standing: BTreeMap<(&'static str, [u8; 8]), (HashedId8, Standing)>,
     last_advice: Option<(SimTime, Option<f64>)>,
+    /// Where this node last believed it was, for fusing reported objects.
+    ego_pos: Option<Vec3>,
     origin: GeoOrigin,
     wall: WallClock,
     issued: u64,
@@ -695,6 +705,7 @@ impl AppLayer {
             denms: BTreeMap::new(),
             standing: BTreeMap::new(),
             last_advice: None,
+            ego_pos: None,
             origin,
             wall,
             issued: 0,
@@ -745,8 +756,14 @@ impl AppLayer {
                         track,
                         generated: m.claimed_generation_time,
                         heard: m.received_at,
+                        via: None,
                     },
                 );
+            }
+            MsgType::Cpm => {
+                if let Some(payload) = m.payload.as_deref() {
+                    self.on_cpm(payload, &signer, m);
+                }
             }
             MsgType::Map => {
                 if let Some(payload) = m.payload.as_deref() {
@@ -764,6 +781,63 @@ impl AppLayer {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Fuses the objects a CPM reports: each becomes a track unless a station this node
+    /// hears directly, or this node itself, is within [`FUSION_GATE_M`] of it — the same
+    /// road user, already known better.
+    fn on_cpm(&mut self, payload: &[u8], signer: &HashedId8, m: &VerifiedMessage) {
+        let Ok(cpm) = v2xw_msg::cpm::decode_cpm(payload) else {
+            return;
+        };
+        let Some((_, objects)) = v2xw_msg::cpm::objects_of(&cpm, self.origin) else {
+            return;
+        };
+        for (id, pos, vel, class, length_m, width_m) in objects {
+            if self
+                .ego_pos
+                .is_some_and(|e| e.distance_2d(pos) < FUSION_GATE_M)
+            {
+                continue;
+            }
+            let known = self.heard.values().any(|h| {
+                h.via.is_none() && h.track.pos.distance_2d(pos) < FUSION_GATE_M
+            });
+            if known {
+                continue;
+            }
+            // The object's key: the reporting station's pseudonym with the object id in
+            // its last two octets — stable while both are.
+            let mut key = digest_key(signer);
+            key[6] = (id >> 8) as u8;
+            key[7] = id as u8;
+            let speed = math::hypot(vel.x, vel.y);
+            let vru = !matches!(class, v2xw_msg::cpm::CpmObjectClass::Vehicle);
+            self.heard.insert(
+                key,
+                Heard {
+                    signer: HashedId8(key.into()),
+                    track: Track {
+                        pos,
+                        heading_rad: if speed > 0.2 {
+                            math::atan2(vel.y, vel.x)
+                        } else {
+                            0.0
+                        },
+                        speed_mps: speed,
+                        accel_mps2: 0.0,
+                        yaw_rate_rad_s: 0.0,
+                        length_m,
+                        width_m,
+                        hard_braking: false,
+                        vru,
+                    },
+                    generated: m.claimed_generation_time,
+                    heard: m.received_at,
+                    via: Some("cpm"),
+                },
+            );
         }
     }
 
@@ -919,6 +993,7 @@ impl AppLayer {
         if !belief.fix.has_position() {
             return None;
         }
+        self.ego_pos = Some(belief.pos);
         let ego = Track {
             pos: belief.pos,
             heading_rad: belief.heading_rad,
@@ -1088,7 +1163,8 @@ impl AppLayer {
                 }
             };
             if let Some(kind) = kind {
-                ctx.emit(record(node, now, app, &subject, kind, severity, s));
+                let via = self.heard.get(&key.1).and_then(|h| h.via);
+                ctx.emit(record(node, now, app, &subject, kind, severity, s, via));
             }
         }
         let hold = CLEAR_HOLD.as_nanos();
@@ -1100,6 +1176,7 @@ impl AppLayer {
             .collect();
         for key in gone {
             if let Some((subject, _)) = self.standing.remove(&key) {
+                let via = self.heard.get(&key.1).and_then(|h| h.via);
                 ctx.emit(record(
                     node,
                     now,
@@ -1108,6 +1185,7 @@ impl AppLayer {
                     WarningKind::Clear,
                     Severity::Info,
                     Surrogates::NONE,
+                    via,
                 ));
             }
         }
@@ -1141,7 +1219,9 @@ impl AppLayer {
                 {
                     continue;
                 }
-                let group = pick_group(lane, &x.egress, turn)?;
+                let Some(group) = pick_group(lane, &x.egress, turn) else {
+                    continue;
+                };
                 let Some(&(state, min_end, _)) = x.states.get(&group) else {
                     continue;
                 };
@@ -1459,6 +1539,7 @@ fn decode_dynamics(ty: MsgType, payload: &[u8], t: &mut Track) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record(
     node: NodeId,
     t: SimTime,
@@ -1467,6 +1548,7 @@ fn record(
     kind: WarningKind,
     severity: Severity,
     s: Surrogates,
+    via: Option<&'static str>,
 ) -> crate::safety::WarningRecord {
     let s = s.quantised();
     crate::safety::WarningRecord {
@@ -1482,6 +1564,7 @@ fn record(
         required_decel_mps2: s.required_decel_mps2,
         distance_m: s.distance_m,
         closing_mps: s.closing_mps,
+        via,
     }
 }
 

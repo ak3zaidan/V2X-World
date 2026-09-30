@@ -34,6 +34,11 @@ function newItem(type: string, t: number): EventItem {
       return { t, type, path: LIVE_PARAMS[0].path, value: "rain" };
     case "outage":
       return { t, type, target: 0 };
+    case "safety.hard-brake":
+    case "safety.breakdown":
+      return { t, type, target: "auto" };
+    case "safety.cut-in":
+      return { t, type, target: "auto", side: "left" };
     default:
       return { t, type, ids: [0] };
   }

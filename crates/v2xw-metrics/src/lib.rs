@@ -130,6 +130,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod apps;
 pub mod arrow_out;
 pub mod awareness;
 pub mod bins;

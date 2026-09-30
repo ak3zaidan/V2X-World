@@ -75,6 +75,9 @@ pub struct ServiceSet {
     pub srm: bool,
     /// Answer a signal request with a status (SSM).
     pub ssm: bool,
+    /// Share what the vehicle's sensors perceive (CPM, ETSI TS 103 324), at the
+    /// generation rules of [`crate::cpm`].
+    pub cpm: bool,
 }
 
 impl ServiceSet {
@@ -87,6 +90,7 @@ impl ServiceSet {
         map: false,
         srm: false,
         ssm: false,
+        cpm: false,
     };
     /// The ETSI stack: CAM only.
     pub const ETSI: ServiceSet = ServiceSet {

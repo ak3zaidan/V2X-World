@@ -411,6 +411,8 @@ impl BtpPort {
     pub const SREM: BtpPort = BtpPort(2007);
     /// SSEM, port 2008 [TS 103 248 via 04-models.md §7.2, UNVERIFIED].
     pub const SSEM: BtpPort = BtpPort(2008);
+    /// CPM (TS 103 248 well-known port 2009).
+    pub const CPM: BtpPort = BtpPort(2009);
     /// RTCMEM, port 2013 [TS 103 301 `CSP_PortNo`, VERIFIED].
     pub const RTCMEM: BtpPort = BtpPort(2013);
 

@@ -434,6 +434,10 @@ pub struct WarningRecord {
     pub distance_m: f64,
     /// The believed closing rate, m/s.
     pub closing_mps: f64,
+    /// What the subject was heard through when it was not its own awareness message:
+    /// `cpm` for an object another station perceived.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<&'static str>,
 }
 
 impl Record for WarningRecord {
@@ -459,6 +463,7 @@ impl WarningRecord {
             required_decel_mps2: s.required_decel_mps2,
             distance_m: s.distance_m,
             closing_mps: s.closing_mps,
+            via: None,
         }
     }
 }

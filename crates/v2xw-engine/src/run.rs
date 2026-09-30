@@ -707,6 +707,9 @@ pub struct Engine {
     glosa: GlosaDrivers,
     /// The junction controllers' priority service (`crate::priority`, NTCIP 1211).
     priority: crate::priority::PriorityControllers,
+    /// What the CPM-sending vehicles' sensors perceive (`crate::perception`), when the
+    /// scenario sends CPMs.
+    perception: Option<crate::perception::Perception>,
     /// Nodes that have despawned and whose links' radio state has not been swept yet, in
     /// despawn order ([`Engine::sweep_retired_links`]).
     retired: Vec<(SimTime, NodeId)>,
@@ -1119,6 +1122,12 @@ impl Engine {
             priority: crate::priority::PriorityControllers::new(
                 crate::priority::PriorityParams::default(),
             ),
+            perception: scenario
+                .messages
+                .sets
+                .iter()
+                .any(|s| s == "cpm")
+                .then(crate::perception::Perception::new),
             retired: Vec::new(),
             bodies: link::BodyIndex::default(),
             nodes: BTreeMap::new(),
@@ -2171,6 +2180,7 @@ impl Engine {
         self.rebuild_snapshot(&update);
         self.declare_jamming(now, step);
         self.update_beliefs(recorder, now);
+        self.step_perception(now);
         self.step_app_truth(recorder, now);
         self.on_backend_step(recorder, now, horizon);
 
@@ -2639,6 +2649,111 @@ impl Engine {
         }
     }
 
+    /// Each CPM-sending vehicle's sensors scan the road users around it
+    /// (`crate::perception`), and the vehicle is handed what they perceive — its own
+    /// sensors' output, as the GNSS model hands it its fix.
+    fn step_perception(&mut self, now: SimTime) {
+        let Engine {
+            perception,
+            rng,
+            world,
+            actors,
+            snapshot,
+            nodes,
+            ..
+        } = self;
+        let Some(perception) = perception.as_mut() else {
+            return;
+        };
+        let class_of = |c: VehicleClass| match c {
+            VehicleClass::Pedestrian => crate::perception::ObjectClass::Pedestrian,
+            VehicleClass::Bicycle | VehicleClass::Scooter => {
+                crate::perception::ObjectClass::Cyclist
+            }
+            _ => crate::perception::ObjectClass::Vehicle,
+        };
+        let observers: Vec<crate::perception::Observer> = actors
+            .iter()
+            .filter(|(_, a)| !a.class.is_vru())
+            .filter_map(|(id, a)| {
+                let node = a.node?;
+                let runs = nodes
+                    .get(&node)
+                    .and_then(|n| n.as_obu())
+                    .is_some_and(|o| o.schedule().services().cpm);
+                runs.then_some(crate::perception::Observer {
+                    node,
+                    actor: *id,
+                    k: a.last,
+                })
+            })
+            .collect();
+        let sensors: Vec<v2xw_node::cpm::SensorIn> = perception
+            .sensors()
+            .iter()
+            .map(|s| v2xw_node::cpm::SensorIn {
+                id: s.id,
+                sensor_type: match s.kind {
+                    crate::perception::SensorKind::Radar => 1,
+                    crate::perception::SensorKind::Camera => 3,
+                },
+                range_m: s.range_m,
+                half_fov_rad: s.half_fov_rad,
+            })
+            .collect();
+        let reach = perception
+            .sensors()
+            .iter()
+            .map(|s| s.range_m)
+            .fold(0.0_f64, f64::max);
+        for o in observers {
+            let mut near: Vec<ActorId> = snapshot.actors_within(o.k.pos, reach);
+            near.sort_unstable();
+            near.dedup();
+            let candidates: Vec<crate::perception::Subject> = near
+                .into_iter()
+                .filter_map(|id| {
+                    let a = actors.get(&id)?;
+                    Some(crate::perception::Subject {
+                        actor: id,
+                        k: a.last,
+                        class: class_of(a.class),
+                    })
+                })
+                .collect();
+            let seen = perception.scan(world, rng, now, &o, &candidates);
+            let objects: Vec<v2xw_node::cpm::ObjectIn> = seen
+                .iter()
+                .map(|p| v2xw_node::cpm::ObjectIn {
+                    id: p.id,
+                    pos: p.pos,
+                    vel: p.vel,
+                    heading_rad: p.heading_rad,
+                    length_m: p.dims.length_m,
+                    width_m: p.dims.width_m,
+                    kind: match p.class {
+                        crate::perception::ObjectClass::Vehicle => {
+                            v2xw_node::cpm::ObjectKind::Vehicle
+                        }
+                        crate::perception::ObjectClass::Pedestrian => {
+                            v2xw_node::cpm::ObjectKind::Pedestrian
+                        }
+                        crate::perception::ObjectClass::Cyclist => {
+                            v2xw_node::cpm::ObjectKind::Cyclist
+                        }
+                    },
+                    sigma_m: p.sigma_m,
+                    measured_at: p.measured_at,
+                    first_seen: p.first_seen,
+                    sensors: p.sensors,
+                })
+                .collect();
+            if let Some(obu) = nodes.get_mut(&o.node).and_then(|n| n.as_obu_mut()) {
+                obu.set_perception(objects, sensors.clone());
+            }
+        }
+    }
+
     /// Every equipped vehicle's true state, for the application labeller.
     fn truth_states(&self) -> BTreeMap<NodeId, crate::app_truth::TruthState> {
         self.actors
@@ -3052,7 +3167,7 @@ impl Engine {
                                     | v2xw_node::stores::VerificationState::Unverified
                             )
                     })
-                    .filter_map(move |m| {
+                    .filter_map(|m| {
                         let requester = v2xw_node::safety::digest_key(m.signer.as_ref()?);
                         let (group, eta) = crate::infra::requested_group(
                             &self.world,
@@ -7016,6 +7131,7 @@ const fn frame_msg(t: v2xw_msg::MsgType) -> v2xw_net::FrameMsg {
         v2xw_msg::MsgType::Map => v2xw_net::FrameMsg::Map,
         v2xw_msg::MsgType::Srm => v2xw_net::FrameMsg::Srm,
         v2xw_msg::MsgType::Ssm => v2xw_net::FrameMsg::Ssm,
+        v2xw_msg::MsgType::Cpm => v2xw_net::FrameMsg::Cpm,
         _ => v2xw_net::FrameMsg::Safety,
     }
 }

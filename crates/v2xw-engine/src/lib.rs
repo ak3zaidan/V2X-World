@@ -69,6 +69,7 @@ pub mod infra;
 pub mod manifest;
 pub mod phase2;
 pub mod priority;
+pub mod perception;
 pub mod privacy_metrics;
 pub mod records;
 pub mod run;

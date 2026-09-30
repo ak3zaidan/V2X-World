@@ -18,6 +18,24 @@ export const EVENT_KINDS: readonly { type: string; label: string; ends: boolean;
   { type: "param.change", label: "Change a setting", ends: false, help: "Set one setting the running simulation can take on the fly." },
   { type: "outage", label: "Node outage", ends: true, help: "A node stops transmitting and receiving; until brings it back." },
   { type: "attack.wave", label: "Attack wave", ends: true, help: "The named attacker populations act only while the wave lasts." },
+  {
+    type: "safety.hard-brake",
+    label: "Hard brake",
+    ends: false,
+    help: "A vehicle with a car close behind (or node 'target') brakes at 0.5 g to a stop, then drives on: what emergency brake light and forward collision warnings react to.",
+  },
+  {
+    type: "safety.breakdown",
+    label: "Breakdown",
+    ends: true,
+    help: "A vehicle stops with its hazard lights on and announces itself as a stationary vehicle; until clears it.",
+  },
+  {
+    type: "safety.cut-in",
+    label: "Cut-in",
+    ends: false,
+    help: "A vehicle changes lane at once into the gap ahead of the car beside it.",
+  },
 ];
 
 /** `crates/v2xw-engine/src/timeline.rs` `LIVE_PARAMS`: what a `param.change` may set, and how far it reaches. */

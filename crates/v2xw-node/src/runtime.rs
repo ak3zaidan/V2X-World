@@ -141,7 +141,7 @@ pub struct VerifiedMessage {
 fn wants_payload(ty: MsgType) -> bool {
     matches!(
         ty,
-        MsgType::Bsm | MsgType::Cam | MsgType::Spat | MsgType::Map | MsgType::Denm
+        MsgType::Bsm | MsgType::Cam | MsgType::Spat | MsgType::Map | MsgType::Denm | MsgType::Cpm
     )
 }
 
@@ -471,6 +471,8 @@ pub struct ObuRuntime {
     own: crate::vehicle::OwnVehicle,
     /// The V2X applications, when the node runs them ([`crate::apps`]).
     apps: Option<Box<crate::apps::AppLayer>>,
+    /// The collective perception service ([`crate::cpm`]).
+    cpm: crate::cpm::CpmService,
 }
 
 impl core::fmt::Debug for ObuRuntime {
@@ -540,6 +542,7 @@ impl ObuRuntime {
             gt_pos_error_m: f32::NAN,
             own: crate::vehicle::OwnVehicle::default(),
             apps: None,
+            cpm: crate::cpm::CpmService::default(),
             security: NodeSecurity::new(config.wall, config.crypto_mode, config.psid),
             etsi: EtsiUperCodec::new(),
             service,
@@ -671,6 +674,87 @@ impl ObuRuntime {
     /// The application layer, when the node runs one.
     pub fn apps(&self) -> Option<&crate::apps::AppLayer> {
         self.apps.as_deref()
+    }
+
+    /// Hands the node what its own sensors perceive now, for its CPMs ([`crate::cpm`]).
+    /// Like the position belief, it comes from the perception model outside the node.
+    pub fn set_perception(
+        &mut self,
+        objects: Vec<crate::cpm::ObjectIn>,
+        sensors: Vec<crate::cpm::SensorIn>,
+    ) {
+        self.cpm.set_perception(objects, sensors);
+    }
+
+    /// The collective perception service's state.
+    pub fn cpm_service(&self) -> &crate::cpm::CpmService {
+        &self.cpm
+    }
+
+    /// Encodes one CPM: the station's belief, the objects selected and, when due, the
+    /// sensors (ETSI TS 103 324 through the generated encoder, [`v2xw_msg::cpm`]).
+    fn encode_cpm(
+        &self,
+        content: &crate::cpm::CpmContent,
+        believed: SimTime,
+        cred: &CredentialHandle,
+    ) -> Option<Vec<u8>> {
+        let mut id = [0u8; 4];
+        id.copy_from_slice(&cred.digest.0[..4]);
+        let objects = content
+            .objects
+            .iter()
+            .map(|o| {
+                let mut sensor_ids = [0u8; 3];
+                let mut count = 0u8;
+                for bit in 1..8u8 {
+                    if o.sensors & (1 << bit) != 0 && usize::from(count) < sensor_ids.len() {
+                        sensor_ids[usize::from(count)] = bit;
+                        count += 1;
+                    }
+                }
+                v2xw_msg::cpm::CpmObject {
+                    id: o.id,
+                    measurement_delta_ms: ((o.measured_at as i128 - believed as i128)
+                        / 1_000_000) as i32,
+                    pos: o.pos,
+                    vel: o.vel,
+                    length_m: o.length_m,
+                    width_m: o.width_m,
+                    age_ms: (believed.saturating_sub(o.first_seen) / 1_000_000) as u32,
+                    class: match o.kind {
+                        crate::cpm::ObjectKind::Vehicle => v2xw_msg::cpm::CpmObjectClass::Vehicle,
+                        crate::cpm::ObjectKind::Pedestrian => {
+                            v2xw_msg::cpm::CpmObjectClass::Pedestrian
+                        }
+                        crate::cpm::ObjectKind::Cyclist => v2xw_msg::cpm::CpmObjectClass::Cyclist,
+                    },
+                    sigma_m: o.sigma_m,
+                    sensor_ids,
+                    sensor_count: count,
+                }
+            })
+            .collect();
+        let sensors = content.sensors.as_ref().map(|list| {
+            list.iter()
+                .map(|s| v2xw_msg::cpm::CpmSensor {
+                    id: s.id,
+                    sensor_type: s.sensor_type,
+                    range_m: s.range_m,
+                    half_fov_rad: s.half_fov_rad,
+                })
+                .collect()
+        });
+        let input = v2xw_msg::cpm::CpmInput {
+            station_id: u32::from_be_bytes(id),
+            position: self.belief,
+            origin: self.config.origin,
+            reference_time: cam::timestamp_its(self.config.wall, believed).ok()?,
+            objects,
+            sensors,
+        };
+        let message = v2xw_msg::cpm::build_cpm(&input).ok()?;
+        Some(v2xw_msg::cpm::encode_cpm(&message).ok()?.bytes)
     }
 
     /// The vehicle's role, which its CAM's low-frequency container states (an emergency
@@ -1348,7 +1432,15 @@ impl ObuRuntime {
             // The facilities payload, out of the SPDU as it arrived, for the messages an
             // application reads beyond the claims above (`crate::apps`). Only when the
             // node runs applications: the parse is not free and nothing else reads it.
-            payload: if self.apps.is_some() && wants_payload(frame.msg_type) {
+            // Beyond the farthest any application looks (EEBL's 300 m, GLOSA's 300 m to the
+            // stop line) the content is not read, which is also what keeps a dense run's
+            // cost down: the claims above still reach the neighbour table.
+            payload: if self.apps.is_some()
+                && wants_payload(frame.msg_type)
+                && frame
+                    .claimed_pos
+                    .is_none_or(|p| p.distance_2d(self.belief.pos) <= 320.0)
+            {
                 frame
                     .spdu
                     .as_deref()
@@ -1424,10 +1516,16 @@ impl ObuRuntime {
         let events = self
             .events
             .due(believed, &self.belief, self.schedule.services(), station_id);
-        if requests.is_empty() && events.is_empty() {
+        // The collective perception service: a CPM when its generation rules say so.
+        let cpm_content = if self.schedule.services().cpm {
+            self.cpm.due(believed)
+        } else {
+            None
+        };
+        if requests.is_empty() && events.is_empty() && cpm_content.is_none() {
             return;
         }
-        let wanted = (requests.len() + events.len()) as u32;
+        let wanted = (requests.len() + events.len() + usize::from(cpm_content.is_some())) as u32;
         let Some(cred) = self.stores.certs.active().cloned() else {
             // No usable credential: a node on the CRL, or one whose pool has run out.
             // [CAMP-EE §2.2.10.2] — it stops transmitting rather than sending unsigned.
@@ -1466,6 +1564,10 @@ impl ObuRuntime {
                 r.at,
                 self.encode_payload(r.msg_type, believed, &cred, r.include_low_frequency),
             ));
+        }
+        if let Some(content) = cpm_content {
+            let payload = self.encode_cpm(&content, believed, &cred);
+            built.push((MsgType::Cpm, believed, payload));
         }
         for e in events {
             let ty = e.msg_type();
