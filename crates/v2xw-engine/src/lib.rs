@@ -57,6 +57,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adapters;
+pub mod app_truth;
 pub mod backend;
 pub mod ctx;
 pub mod error;
@@ -67,6 +68,7 @@ pub mod hosted;
 pub mod infra;
 pub mod manifest;
 pub mod phase2;
+pub mod priority;
 pub mod privacy_metrics;
 pub mod records;
 pub mod run;

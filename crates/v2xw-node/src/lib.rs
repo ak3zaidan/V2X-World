@@ -85,6 +85,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod apps;
 pub mod clock;
 pub mod ctx;
 pub mod error;

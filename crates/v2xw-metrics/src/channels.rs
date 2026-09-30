@@ -44,6 +44,8 @@ use crate::error::{MetricError, Result};
 /// `net.bytes` is this crate's reader-side projection of the `net.*` accounting records and
 /// is listed as a NODE channel, which is what §14's `net.frag` row implies for the family.
 const CHANNEL_VISIBILITY: &[(&str, &[Visibility])] = &[
+    ("app.advice", &[Visibility::Node]),
+    ("app.outcome", &[Visibility::NodeAndGt]),
     ("app.warning", &[Visibility::Node]),
     ("det.observation", &[Visibility::Node]),
     ("gt.attack.action", &[Visibility::Gt]),
@@ -89,6 +91,7 @@ const CHANNEL_VISIBILITY: &[(&str, &[Visibility])] = &[
     ("proto.msg", &[Visibility::Node]),
     ("proto.revocation", &[Visibility::Public]),
     ("sec.cert", &[Visibility::Node]),
+    ("signal.priority", &[Visibility::Public]),
     ("snapshot.delta", &[Visibility::Mixed]),
     ("snapshot.keyframe", &[Visibility::Mixed]),
 ];

@@ -1219,7 +1219,70 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                security.verification_policy, security.pseudonym_change.*, \
                nodes.default_obu (vehicles that enter after the change); any other path is \
                refused. attack.wave: the named attacker populations act only inside the \
-               wave, and a population may be in one wave.",
+               wave, and a population may be in one wave. safety.hard-brake: a vehicle \
+               (target: a node id, or auto for the first moving equipped vehicle with a car \
+               close behind) brakes at decel_mps2 (default 0.5 g) to a stop and stands \
+               hold_s (default 2). safety.breakdown: a vehicle stops at decel_mps2 (default \
+               3) with its hazard lights on until 'until'. safety.cut-in: a vehicle changes \
+               lane to side (left or right) at once into the gap ahead of that lane's \
+               follower.",
+    },
+    KeyStatus {
+        path: "apps",
+        status: Status::Wired,
+        note: "The V2X applications every equipped vehicle runs over the messages it \
+               heard, decoded from their own octets, and its own vehicle's state; each \
+               warning is recorded on app.warning and labelled true, false or missed \
+               against ground truth (app.outcome).",
+    },
+    KeyStatus {
+        path: "apps.enabled",
+        status: Status::Wired,
+        note: "Which applications run: fcw (forward collision, TTC 2.4 s — NHTSA's FCW test \
+               timing), eebl (a vehicle ahead braking past 0.4 g, from its BSM or DENM), \
+               ima (crossing traffic), lta (oncoming traffic inside the 4.1 s critical gap \
+               when turning left, HCM), bsw (blind spot, ISO 17387; a lane-change warning \
+               when signalling), pcw (pedestrians and cyclists from their PSM or VAM), rlvw \
+               (running a red, from SPaT and MAP), glosa (the speed that meets the green, \
+               from SPaT and MAP, recorded on app.advice).",
+    },
+    KeyStatus {
+        path: "apps.glosa_compliance",
+        status: Status::Wired,
+        note: "The fraction of equipped drivers who follow GLOSA's advice: each driver \
+               decides once, and a follower slows to the advised speed as it approaches. \
+               No field compliance figure could be read for this build, so the default is \
+               0 (advice shown, not followed); a study sets it.",
+    },
+    KeyStatus {
+        path: "apps.fcw_ttc_s",
+        status: Status::Wired,
+        note: "FCW warns at or below this time to collision, seconds (default 2.4, NHTSA's \
+               FCW confirmation test for a decelerating lead).",
+    },
+    KeyStatus {
+        path: "apps.ima_tti_s",
+        status: Status::Wired,
+        note: "How far ahead IMA looks, as the ego's time to the conflict point, seconds \
+               (default 4, this build's choice).",
+    },
+    KeyStatus {
+        path: "apps.lta_gap_s",
+        status: Status::Wired,
+        note: "The gap LTA requires before a left turn, seconds (default 4.1, HCM 6th ed. \
+               Exhibit 20-11).",
+    },
+    KeyStatus {
+        path: "apps.pcw_ttc_s",
+        status: Status::Wired,
+        note: "PCW warns when a pedestrian or cyclist would be in the path within this \
+               time, seconds (default 3, this build's choice).",
+    },
+    KeyStatus {
+        path: "apps.rlvw_decel_mps2",
+        status: Status::Wired,
+        note: "RLVW warns once stopping would need more than this deceleration after a 1 s \
+               reaction, m/s² (default 3.4, AASHTO's comfortable deceleration).",
     },
     KeyStatus {
         path: "experiment",
@@ -1276,6 +1339,7 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     threats(s, &mut e);
     metrics_and_exporters(s, &mut e);
     timeline(s, &mut e);
+    apps(s, &mut e);
     experiment(s, &mut e);
     security_backend(s, &mut e);
     unreachable_keys(s, &mut e);
@@ -2734,6 +2798,22 @@ fn live_timeline_item(
                 e.push(conflict(&format!("{field}.ids"), why));
             }
         }
+        TimelineKind::HardBrake | TimelineKind::Breakdown | TimelineKind::CutIn => {
+            use crate::safety_events as se;
+            if let Err(why) = se::Pick::parse(item.params.get("target")) {
+                e.push(conflict(&format!("{field}.target"), why));
+            }
+            if item.kind == TimelineKind::CutIn
+                && let Err(why) = se::parse_side(item.params.get("side"))
+            {
+                e.push(conflict(&format!("{field}.side"), why));
+            }
+            for key in ["decel_mps2", "hold_s"] {
+                if let Err(why) = se::positive(item.params.get(key), 1.0) {
+                    e.push(conflict(&format!("{field}.{key}"), why));
+                }
+            }
+        }
         _ => {}
     }
     if item.kind == TimelineKind::ParamChange
@@ -2747,6 +2827,39 @@ fn live_timeline_item(
              actors.vehicles.demand.rate_veh_per_h"
                 .to_string(),
         ));
+    }
+}
+
+/// The applications: known names, a compliance fraction, positive thresholds.
+fn apps(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let a = &s.apps;
+    for (i, name) in a.enabled.iter().enumerate() {
+        one_of(
+            &format!("apps.enabled[{i}]"),
+            name,
+            &crate::scenario::Apps::ALL,
+            e,
+        );
+    }
+    if !(a.glosa_compliance.is_finite() && (0.0..=1.0).contains(&a.glosa_compliance)) {
+        e.push(conflict(
+            "apps.glosa_compliance",
+            format!("is {}, and a fraction of drivers is in [0, 1]", a.glosa_compliance),
+        ));
+    }
+    for (field, v) in [
+        ("apps.fcw_ttc_s", a.fcw_ttc_s),
+        ("apps.ima_tti_s", a.ima_tti_s),
+        ("apps.lta_gap_s", a.lta_gap_s),
+        ("apps.pcw_ttc_s", a.pcw_ttc_s),
+        ("apps.rlvw_decel_mps2", a.rlvw_decel_mps2),
+    ] {
+        if !(v.is_finite() && v > 0.0 && v <= 30.0) {
+            e.push(conflict(
+                field,
+                format!("is {v}; it must be a positive number no larger than 30"),
+            ));
+        }
     }
 }
 

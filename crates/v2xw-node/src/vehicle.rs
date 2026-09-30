@@ -89,6 +89,9 @@ pub struct VehicleBus {
     /// Whether this is a heavy vehicle for J2735's hard-braking rule (a Class 4 bus or a
     /// Class 7–13 truck).
     pub heavy: bool,
+    /// The speed limit of the road it is on, m/s, from its navigation map; zero when the
+    /// map has none.
+    pub speed_limit_mps: f64,
 }
 
 impl VehicleBus {
@@ -303,6 +306,7 @@ mod tests {
             low_beam: false,
             intent: None,
             heavy: false,
+            speed_limit_mps: 13.4,
         }
     }
 

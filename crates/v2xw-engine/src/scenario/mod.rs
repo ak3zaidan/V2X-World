@@ -45,7 +45,7 @@ pub use merge::merge as merge_documents;
 pub use migrate::{Chain, Migration};
 pub use publish::{schema as scenario_schema, surface as scenario_surface};
 pub use schema::{
-    Actors, Attacker, Backend, BackendEntity, BackendLink, BuildingOptions, CURRENT_SCHEMA,
+    Actors, Apps, Attacker, Backend, BackendEntity, BackendLink, BuildingOptions, CURRENT_SCHEMA,
     CryptoModeSpec, DemandSpec, Detection, DilationWindow, Experiment, ExporterSpec, Focus,
     FocusRegion, Messages, Meta, ModelChoice, Net, Nodes, PseudonymChangeSpec, Radio, RadioTiers,
     Rat, Rsu, Scenario, Security, SignerIdPolicySpec, TerrainOptions, Threats, Time, TimelineItem,
@@ -229,6 +229,7 @@ impl Scenario {
             metrics: Vec::new(),
             exporters: Vec::new(),
             events: Vec::new(),
+            apps: schema::Apps::default(),
             experiment: None,
         }
     }

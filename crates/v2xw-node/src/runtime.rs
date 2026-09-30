@@ -132,6 +132,17 @@ pub struct VerifiedMessage {
     pub claimed_heading_rad: f64,
     /// What this node concluded about the signature.
     pub verification: VerificationState,
+    /// The facilities-layer payload the SPDU carried, when the node's applications read
+    /// the message's content ([`crate::apps`]).
+    pub payload: Option<std::sync::Arc<[u8]>>,
+}
+
+/// Whether an application reads this message type's content beyond its claims.
+fn wants_payload(ty: MsgType) -> bool {
+    matches!(
+        ty,
+        MsgType::Bsm | MsgType::Cam | MsgType::Spat | MsgType::Map | MsgType::Denm
+    )
 }
 
 /// When and how a frame reached this node, handed in by the engine beside the frame.
@@ -300,6 +311,9 @@ pub struct StepOutcome {
     /// Every received frame whose fate was settled in this step, with the instants of its
     /// journey through the node.
     pub rx_reports: Vec<RxReport>,
+    /// GLOSA's advice to the driver at this step, when the applications gave one
+    /// ([`crate::apps`]).
+    pub advice: Option<crate::apps::SpeedAdvice>,
 }
 
 /// How a node is configured.
@@ -455,6 +469,8 @@ pub struct ObuRuntime {
     /// The vehicle's own bus and what the unit derives from it (path history, path
     /// prediction, lights, event flags): [`crate::vehicle`].
     own: crate::vehicle::OwnVehicle,
+    /// The V2X applications, when the node runs them ([`crate::apps`]).
+    apps: Option<Box<crate::apps::AppLayer>>,
 }
 
 impl core::fmt::Debug for ObuRuntime {
@@ -523,6 +539,7 @@ impl ObuRuntime {
             relevance: BTreeMap::new(),
             gt_pos_error_m: f32::NAN,
             own: crate::vehicle::OwnVehicle::default(),
+            apps: None,
             security: NodeSecurity::new(config.wall, config.crypto_mode, config.psid),
             etsi: EtsiUperCodec::new(),
             service,
@@ -640,6 +657,20 @@ impl ObuRuntime {
     /// The unit's view of its own vehicle.
     pub fn own_vehicle(&self) -> &crate::vehicle::OwnVehicle {
         &self.own
+    }
+
+    /// Runs the V2X applications ([`crate::apps`]) with `params` from the next step on.
+    pub fn enable_apps(&mut self, params: crate::apps::AppParams) {
+        self.apps = Some(Box::new(crate::apps::AppLayer::new(
+            params,
+            self.config.origin,
+            self.config.wall,
+        )));
+    }
+
+    /// The application layer, when the node runs one.
+    pub fn apps(&self) -> Option<&crate::apps::AppLayer> {
+        self.apps.as_deref()
     }
 
     /// The vehicle's role, which its CAM's low-frequency container states (an emergency
@@ -762,6 +793,20 @@ impl ObuRuntime {
 
         if self.state.transmits() {
             self.generate(ctx, believed, &mut out);
+        }
+
+        // The applications decide over what has been delivered so far, at the node's
+        // periodic step (10 Hz for an OBU): the rate a V2V application's threat
+        // assessment runs at (CAMP VSC-A).
+        if let Some(apps) = self.apps.as_mut() {
+            out.advice = apps.evaluate(
+                ctx,
+                self.node,
+                believed,
+                &self.belief,
+                &self.own,
+                self.config.dims,
+            );
         }
 
         if self.window.length(now) >= self.config.telemetry_period {
@@ -1300,6 +1345,18 @@ impl ObuRuntime {
             claimed_speed_mps: frame.claimed_speed_mps,
             claimed_heading_rad: frame.claimed_heading_rad,
             verification,
+            // The facilities payload, out of the SPDU as it arrived, for the messages an
+            // application reads beyond the claims above (`crate::apps`). Only when the
+            // node runs applications: the parse is not free and nothing else reads it.
+            payload: if self.apps.is_some() && wants_payload(frame.msg_type) {
+                frame
+                    .spdu
+                    .as_deref()
+                    .and_then(|b| self.security.parse(b))
+                    .map(|p| std::sync::Arc::<[u8]>::from(p.payload))
+            } else {
+                None
+            },
         }
     }
 
@@ -1307,6 +1364,9 @@ impl ObuRuntime {
         self.window
             .delivered(m.verification == VerificationState::Verified);
         self.events.on_delivered(&m);
+        if let Some(apps) = self.apps.as_mut() {
+            apps.on_message(&m);
+        }
         // The neighbour table is a table of *stations moving around this one*, and what
         // fills it is their awareness messages. A SPaT, a MAP or a signal request says
         // where a junction is, not where its sender is going, and a DENM describes an

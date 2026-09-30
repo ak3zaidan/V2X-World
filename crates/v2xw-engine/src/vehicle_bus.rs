@@ -105,6 +105,10 @@ pub fn bus_of(
         low_beam: night || visibility_m < HEADLIGHT_VISIBILITY_M,
         intent,
         heavy: is_heavy(class),
+        speed_limit_mps: truth
+            .lane
+            .and_then(|l| world.roads.try_lane(l.lane))
+            .map_or(0.0, |l| l.speed_limit_mps),
     }
 }
 

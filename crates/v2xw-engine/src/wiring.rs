@@ -2503,7 +2503,33 @@ pub fn build_node(
     apply_compute_tier(&mut runtime, scenario);
     apply_security_profile(&mut runtime, scenario, env);
     bootstrap_credentials(&mut runtime, scenario, node, at);
+    // The V2X applications (`v2xw_node::apps`), in every equipped vehicle.
+    if !scenario.apps.enabled.is_empty() && !is_vru_class(class) {
+        runtime.enable_apps(app_params(scenario));
+    }
     runtime
+}
+
+/// The applications' parameters `apps` sets over `v2xw_node::apps`'s cited defaults.
+pub fn app_params(scenario: &Scenario) -> v2xw_node::apps::AppParams {
+    let a = &scenario.apps;
+    let mut p = v2xw_node::apps::AppParams {
+        fcw: a.runs("fcw"),
+        eebl: a.runs("eebl"),
+        ima: a.runs("ima"),
+        lta: a.runs("lta"),
+        bsw: a.runs("bsw"),
+        pcw: a.runs("pcw"),
+        rlvw: a.runs("rlvw"),
+        glosa: a.runs("glosa"),
+        ..v2xw_node::apps::AppParams::default()
+    };
+    p.fcw_params.ttc_s = a.fcw_ttc_s;
+    p.ima_params.tti_s = a.ima_tti_s;
+    p.lta_params.gap_s = a.lta_gap_s;
+    p.pcw_params.ttc_s = a.pcw_ttc_s;
+    p.signal_params.rlvw_decel_mps2 = a.rlvw_decel_mps2;
+    p
 }
 
 /// `nodes.compute_tier`, the tiers of 06-node-models §2.1:

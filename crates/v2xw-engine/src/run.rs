@@ -272,6 +272,67 @@ enum Transfer {
     },
 }
 
+/// Which drivers follow GLOSA's speed advice, and the caps the followers drive under.
+///
+/// A driver decides once, the first time GLOSA advises them, with probability
+/// `apps.glosa_compliance`, on a stream keyed by the actor (so the decision is the same
+/// whatever else the run draws). A follower's speed is capped at the advised speed while
+/// the advice stands and uncapped when it ends; advice to stop is left to the driver, who
+/// stops at the red anyway.
+#[derive(Debug, Clone, Default)]
+struct GlosaDrivers {
+    compliance: f64,
+    seed: u64,
+    decided: BTreeMap<ActorId, bool>,
+    capped: BTreeMap<ActorId, f64>,
+}
+
+impl GlosaDrivers {
+    /// The command, if any, that applies `advice` to `actor`'s driver.
+    fn apply(
+        &mut self,
+        actor: ActorId,
+        advice: Option<v2xw_node::apps::SpeedAdvice>,
+    ) -> Option<v2xw_mobility::MobilityCommand> {
+        if self.compliance <= 0.0 {
+            return None;
+        }
+        let target = advice.and_then(|a| a.target_mps);
+        match target {
+            Some(v) => {
+                let (compliance, seed) = (self.compliance, self.seed);
+                let follows = *self.decided.entry(actor).or_insert_with(|| {
+                    v2xw_core::rng::RngStream::derive(
+                        seed,
+                        v2xw_core::rng::RngDomain::plugin(GLOSA_COMPLIANCE_ID),
+                        v2xw_core::rng::EntityRef::Actor(actor),
+                    )
+                    .bool(compliance)
+                });
+                if !follows {
+                    return None;
+                }
+                let v = v2xw_core::math::q3(v);
+                if self.capped.get(&actor).is_some_and(|c| (c - v).abs() < 0.25) {
+                    return None;
+                }
+                self.capped.insert(actor, v);
+                Some(v2xw_mobility::MobilityCommand::SpeedCap {
+                    actor,
+                    v_mps: Some(v),
+                })
+            }
+            None => self
+                .capped
+                .remove(&actor)
+                .map(|_| v2xw_mobility::MobilityCommand::SpeedCap { actor, v_mps: None }),
+        }
+    }
+}
+
+/// The model id GLOSA compliance draws under ([`v2xw_core::rng::RngDomain::plugin`]).
+pub const GLOSA_COMPLIANCE_ID: &str = "app/glosa/compliance";
+
 /// What one run produced.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct RunReport {
@@ -285,6 +346,9 @@ pub struct RunReport {
     /// order. A closure on the timeline shows here: a vehicle that could not avoid it
     /// leaves at the barrier as `RouteBlocked`.
     pub despawn_causes: BTreeMap<String, u64>,
+    /// Every application's warnings, labelled against ground truth
+    /// (`crate::app_truth`): issued, true, false, missed, and the lead time.
+    pub apps: BTreeMap<String, crate::app_truth::AppTally>,
     /// How many nodes were ever created.
     pub nodes_created: u64,
     /// How many frames went on the air.
@@ -637,6 +701,12 @@ pub struct Engine {
     /// position is one lookup. It was a scan of every actor, made for every frame put on
     /// the air and every node position asked for: quadratic in the fleet.
     node_actor: BTreeMap<NodeId, ActorId>,
+    /// Every application warning labelled against ground truth (`crate::app_truth`).
+    app_truth: crate::app_truth::AppTruth,
+    /// Which drivers follow GLOSA's advice, and the speed caps followers drive under.
+    glosa: GlosaDrivers,
+    /// The junction controllers' priority service (`crate::priority`, NTCIP 1211).
+    priority: crate::priority::PriorityControllers,
     /// Nodes that have despawned and whose links' radio state has not been swept yet, in
     /// despawn order ([`Engine::sweep_retired_links`]).
     retired: Vec<(SimTime, NodeId)>,
@@ -1031,6 +1101,24 @@ impl Engine {
             dcc: crate::wiring::build_dcc(&scenario_for_radio),
             actors: BTreeMap::new(),
             node_actor: BTreeMap::new(),
+            app_truth: if scenario.apps.enabled.is_empty() {
+                crate::app_truth::AppTruth::default()
+            } else {
+                crate::app_truth::AppTruth::new(crate::wiring::app_params(&scenario))
+            },
+            glosa: GlosaDrivers {
+                compliance: if scenario.apps.runs("glosa") {
+                    scenario.apps.glosa_compliance
+                } else {
+                    0.0
+                },
+                seed: scenario.seed,
+                decided: BTreeMap::new(),
+                capped: BTreeMap::new(),
+            },
+            priority: crate::priority::PriorityControllers::new(
+                crate::priority::PriorityParams::default(),
+            ),
             retired: Vec::new(),
             bodies: link::BodyIndex::default(),
             nodes: BTreeMap::new(),
@@ -1427,15 +1515,23 @@ impl Engine {
             .copied()
             .filter(|n| only.is_none_or(|o| o == *n))
             .collect();
+        let now_s = v2xw_core::time::ns_to_secs(now);
         for node in units {
             let framing = self.infra_framing(node);
-            let Some(feed) = self.infra_feeds.get(&node) else {
+            let Some(feed) = self.infra_feeds.get_mut(&node) else {
                 continue;
             };
+            // The controller's timing as it now runs (a priority service moves it), and
+            // what its service may still do (`crate::priority`).
+            let plan = feed.plan();
+            if let Some(p) = self.world.signals.get(plan) {
+                feed.sync(p);
+            }
+            let outlook = self.priority.outlook(&self.world, plan, now_s);
             // A SPaT that does not encode is a defect in the encoder, not in the run; the
             // unit keeps the last good one rather than sending a truncated message, and the
             // count is in the run report.
-            match feed.spat_bytes(now, self.wall, framing) {
+            match feed.spat_bytes_with(now, self.wall, framing, outlook) {
                 Ok(bytes) => {
                     if let Some(runtime) = self.nodes.get_mut(&node).and_then(|n| n.as_obu_mut()) {
                         runtime.set_infra_payload(v2xw_msg::MsgType::Spat, bytes);
@@ -2037,6 +2133,17 @@ impl Engine {
         // the frame that reports it.
         self.transmitted_since_step.clear();
 
+        // The controllers serve their priority requests before the drivers look at the
+        // lamps, so an extension or an early green takes effect this step.
+        let served = self.priority.step(
+            &mut self.world,
+            v2xw_core::time::ns_to_secs(now),
+            step.as_secs_f64(),
+        );
+        for rec in &served {
+            self.emit(recorder, rec);
+        }
+
         let update = {
             let Engine {
                 scheduler,
@@ -2064,6 +2171,7 @@ impl Engine {
         self.rebuild_snapshot(&update);
         self.declare_jamming(now, step);
         self.update_beliefs(recorder, now);
+        self.step_app_truth(recorder, now);
         self.on_backend_step(recorder, now, horizon);
 
         self.report.mobility_steps += 1;
@@ -2531,6 +2639,70 @@ impl Engine {
         }
     }
 
+    /// Every equipped vehicle's true state, for the application labeller.
+    fn truth_states(&self) -> BTreeMap<NodeId, crate::app_truth::TruthState> {
+        self.actors
+            .iter()
+            .filter_map(|(id, a)| {
+                let node = a.node?;
+                let left_turn = if a.class.is_vru() {
+                    None
+                } else {
+                    self.mobility.intent(&self.world, *id).and_then(|i| {
+                        let left = matches!(
+                            i.turn,
+                            v2xw_world::TurnDirection::Left
+                                | v2xw_world::TurnDirection::SlightLeft
+                                | v2xw_world::TurnDirection::UTurn
+                        );
+                        let j = self.world.roads.try_junction(i.junction)?;
+                        left.then_some((j.position, i.distance_m))
+                    })
+                };
+                Some((
+                    node,
+                    crate::app_truth::TruthState {
+                        k: a.last,
+                        length_m: a.last.dims.length_m,
+                        width_m: a.last.dims.width_m,
+                        vru: a.class.is_vru(),
+                        left_turn,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// The application labeller's step: truth episodes over every equipped pair within
+    /// its range, and the outcomes it settled, on `app.outcome`.
+    fn step_app_truth(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
+        if !self.app_truth.enabled() {
+            return;
+        }
+        let states = self.truth_states();
+        let mut near: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+        for (node, s) in &states {
+            if s.vru {
+                continue;
+            }
+            let mut subjects: Vec<NodeId> = self
+                .snapshot
+                .actors_within(s.k.pos, crate::app_truth::TRUTH_RANGE_M)
+                .into_iter()
+                .filter_map(|a| self.actors.get(&a).and_then(|r| r.node))
+                .filter(|n| n != node && states.contains_key(n))
+                .collect();
+            subjects.sort_unstable();
+            subjects.dedup();
+            near.insert(*node, subjects);
+        }
+        self.app_truth.step(now, &states, &near);
+        for outcome in self.app_truth.drain() {
+            self.emit(recorder, &outcome);
+        }
+        self.report.apps = self.app_truth.tallies().clone();
+    }
+
     /// Closes the congestion-control loop for one node.
     ///
     /// Two measurements go in and one state comes out. The channel busy ratio is the
@@ -2844,6 +3016,81 @@ impl Engine {
             }
         }
 
+        // Each warning issued, handed to the ground-truth labeller (`crate::app_truth`).
+        if self.app_truth.enabled()
+            && results
+                .iter()
+                .any(|(_, _, recs, _)| recs.iter().any(|r| r.channel == "app.warning"))
+        {
+            let states = self.truth_states();
+            for (_, _, records, _) in &results {
+                for rec in records.iter().filter(|r| r.channel == "app.warning") {
+                    self.app_truth.on_warning(&rec.json, &states);
+                }
+            }
+        }
+
+        // A signal request a roadside unit heard goes to its junction's controller
+        // (NTCIP 1211's priority request server). The request names the approach the
+        // vehicle is on: the unit matches the requester's position and heading, which the
+        // SRM's `requestor.position` carries, to the junction's approach heads.
+        let requests: Vec<(usize, [u8; 8], u16, f64)> = results
+            .iter()
+            .filter_map(|(id, outcome, _, _)| {
+                let feed = self.infra_feeds.get(id)?;
+                Some((id, feed.plan(), outcome))
+            })
+            .flat_map(|(_id, plan, outcome)| {
+                outcome
+                    .delivered
+                    .iter()
+                    .filter(|m| {
+                        m.msg_type == v2xw_msg::MsgType::Srm
+                            && matches!(
+                                m.verification,
+                                v2xw_node::stores::VerificationState::Verified
+                                    | v2xw_node::stores::VerificationState::Unverified
+                            )
+                    })
+                    .filter_map(move |m| {
+                        let requester = v2xw_node::safety::digest_key(m.signer.as_ref()?);
+                        let (group, eta) = crate::infra::requested_group(
+                            &self.world,
+                            plan,
+                            m.claimed_pos?,
+                            m.claimed_heading_rad,
+                            m.claimed_speed_mps,
+                        )?;
+                        Some((plan, requester, group, eta))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let now_s = v2xw_core::time::ns_to_secs(now);
+        for (plan, requester, group, eta) in requests {
+            if let Some(rec) = self
+                .priority
+                .request(&self.world, plan, requester, group, eta, now_s)
+            {
+                self.emit(recorder, &rec);
+            }
+        }
+
+        // GLOSA's advice, followed by the drivers who follow it.
+        if self.glosa.compliance > 0.0 {
+            let mut commands = Vec::new();
+            for (id, outcome, _, _) in &results {
+                if let Some(actor) = self.node_actor.get(id).copied()
+                    && let Some(c) = self.glosa.apply(actor, outcome.advice)
+                {
+                    commands.push(c);
+                }
+            }
+            if !commands.is_empty() {
+                self.command_mobility(commands);
+            }
+        }
+
         // Each node's own telemetry window, when one closed at this step: its queues, its
         // compute load and its stores. The node has always produced it (`StepOutcome::
         // telemetry`) and nothing published it, so the page's HUD and inspector showed
@@ -3066,6 +3313,19 @@ impl Engine {
         horizon: SimTime,
         app: Option<AppPayload>,
     ) {
+        // Which node signs under which pseudonym, for the application labeller: the
+        // engine's own knowledge, never handed to a node.
+        if matches!(
+            tx.msg_type,
+            v2xw_msg::MsgType::Bsm
+                | v2xw_msg::MsgType::Cam
+                | v2xw_msg::MsgType::Psm
+                | v2xw_msg::MsgType::Vam
+                | v2xw_msg::MsgType::Denm
+                | v2xw_msg::MsgType::Spat
+        ) {
+            self.app_truth.note_signer(&tx.signer.0[..], node);
+        }
         // The signing latency is a *duration* on the node's own clock, so it is
         // independent of the node's clock offset: `ready_at` and the believed instant are
         // both on that clock and the difference between them is a real interval.
