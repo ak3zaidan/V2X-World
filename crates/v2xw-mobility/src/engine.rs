@@ -3097,7 +3097,6 @@ impl Mobility for NativeMobility {
             // cover before the queue discharge began to count, which alone put a second on
             // the HCM's first headway. The obstacle is moved so the front stops
             // [`STOP_LINE_MARGIN_M`] short of the line.
-            let mut leader = leader;
             let mut line_slack = 0.0;
             if along
                 && let Some(line) = binding_stop_line

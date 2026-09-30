@@ -61,6 +61,11 @@ pub const MODEL_VERSION: &str = "1.0.0";
 /// those vehicles with.
 pub const OPPOSING_START_ACCEL_MPS2: f64 = 1.4;
 
+/// The speed an opposing car starting from the line is assumed to accelerate to, m/s: the
+/// New York City default limit, 25 mph. A car already faster keeps its own speed; one
+/// slower accelerates at [`OPPOSING_START_ACCEL_MPS2`] up to this and no further.
+pub const OPPOSING_CRUISE_CAP_MPS: f64 = 11.176;
+
 /// The HCM 6th edition's critical headway for a permitted left turn at a signal, seconds
 /// ([`SignalPlanParams::permitted_left_critical_headway_s`]).
 pub const HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S: f64 = 4.5;
@@ -469,7 +474,12 @@ impl IntersectionControl for FixedTimeSignals {
                                         TurnDirection::Left | TurnDirection::UTurn
                                     )))
                     })
-                    .map(|c| c.time_to_stop_line_accelerating_s(OPPOSING_START_ACCEL_MPS2))
+                    .map(|c| {
+                        c.time_to_stop_line_launching_s(
+                            OPPOSING_START_ACCEL_MPS2,
+                            OPPOSING_CRUISE_CAP_MPS,
+                        )
+                    })
                     .fold(f64::INFINITY, f64::min);
                 if closing >= critical {
                     EntryDecision::Proceed
@@ -832,9 +842,11 @@ mod tests {
 
     #[test]
     fn a_permitted_left_takes_the_hcm_signalised_critical_headway() {
-        // An opposing car at 10 m/s, accelerating at 1.4 m/s², 56 m from the line reaches
-        // it in 4.34 s: a gap the two-way-stop major-street value (4.1 s) accepts and the
-        // HCM signalised procedure's 4.5 s does not. From 61 m it takes 4.62 s.
+        // An opposing car at 10 m/s, accelerating at 1.4 m/s² up to the 25 mph city limit
+        // (11.18 m/s), 47 m from the line reaches it in 4.25 s: a gap the two-way-stop
+        // major-street value (4.1 s) accepts and the HCM signalised procedure's 4.5 s does
+        // not. From 53 m it takes 4.79 s. (Accelerating without the cap, it would have been
+        // judged to reach the line from 53 m in 4.1 s, and the turner refused it.)
         let m = FixedTimeSignals::default();
         let mut j = junction(Some(SignalState::GreenYield), 20.0);
         j.movement = TurnDirection::Left;
@@ -849,11 +861,11 @@ mod tests {
             ego_must_yield: true,
         };
         assert_eq!(
-            m.may_enter(&ego(5.0), &j, &[opposing(56.0)], &WeatherState::CLEAR),
+            m.may_enter(&ego(5.0), &j, &[opposing(47.0)], &WeatherState::CLEAR),
             EntryDecision::Stop { gap_m: 18.0 }
         );
         assert_eq!(
-            m.may_enter(&ego(5.0), &j, &[opposing(61.0)], &WeatherState::CLEAR),
+            m.may_enter(&ego(5.0), &j, &[opposing(53.0)], &WeatherState::CLEAR),
             EntryDecision::Proceed
         );
     }

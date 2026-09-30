@@ -357,12 +357,27 @@ impl ConflictView {
     /// turner cut across it the moment the light went green, braking the through traffic
     /// at −6 m/s² an instant after it had pulled away.
     pub fn time_to_stop_line_accelerating_s(&self, accel_mps2: f64) -> f64 {
+        self.time_to_stop_line_launching_s(accel_mps2, f64::INFINITY)
+    }
+
+    /// [`ConflictView::time_to_stop_line_accelerating_s`], with the acceleration ending at
+    /// `cap_mps` (or at the claimant's own speed, if it is already faster): a car
+    /// cruising at the limit does not speed up towards the junction, and assuming it did
+    /// had a permitted left turner refuse a 4.5 s lag as a 3.7 s one.
+    pub fn time_to_stop_line_launching_s(&self, accel_mps2: f64, cap_mps: f64) -> f64 {
         let d = self.stop_line_gap_m.max(0.0);
         let v = self.speed_mps.max(0.0);
         if accel_mps2 <= 0.0 {
             return self.time_to_stop_line_s();
         }
-        (-v + v2xw_core::math::sqrt(v * v + 2.0 * accel_mps2 * d)) / accel_mps2
+        let cap = cap_mps.max(v).max(0.1);
+        let t_acc = (cap - v) / accel_mps2;
+        let d_acc = 0.5 * (v + cap) * t_acc;
+        if d_acc >= d {
+            (-v + v2xw_core::math::sqrt(v * v + 2.0 * accel_mps2 * d)) / accel_mps2
+        } else {
+            t_acc + (d - d_acc) / cap
+        }
     }
 }
 

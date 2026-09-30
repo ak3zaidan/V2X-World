@@ -660,9 +660,8 @@ impl TrafficAuditor {
             if lane.kind == LaneKind::Internal {
                 continue;
             }
-            if a.speed_mps <= 0.1 && lane.length_m - a.s_m <= RIGHT_ON_RED_STOOD_M {
-                next.insert(a.actor, a.lane);
-            } else if self.stood_at_end.get(&a.actor) == Some(&a.lane) {
+            let stood_now = a.speed_mps <= 0.1 && lane.length_m - a.s_m <= RIGHT_ON_RED_STOOD_M;
+            if stood_now || self.stood_at_end.get(&a.actor) == Some(&a.lane) {
                 next.insert(a.actor, a.lane);
             }
         }
