@@ -2356,14 +2356,24 @@ fn security(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 ));
             }
         }
-        "mix-zone" | "silent" => {}
+        "c2c-cc" | "mix-zone" | "silent" => {}
         other => e.push(conflict(
             "security.pseudonym_change.strategy",
             format!(
-                "'{other}' is not one this build implements; allowed: time, distance, \
-                 mix-zone, silent"
+                "'{other}' is not one this build implements; allowed: {}",
+                STRATEGIES.join(", ")
             ),
         )),
+    }
+    if let Some(range) = &p.silent_period_s
+        && !(range.len() == 2
+            && range.iter().all(|v| v.is_finite() && *v >= 0.0)
+            && range[0] <= range[1])
+    {
+        e.push(conflict(
+            "security.pseudonym_change.silent_period_s",
+            format!("must be [min, max] seconds with 0 ≤ min ≤ max, got {range:?}"),
+        ));
     }
     if let Some(period) = p.period_s {
         bounded_at(

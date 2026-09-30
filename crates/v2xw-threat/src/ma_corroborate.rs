@@ -542,18 +542,21 @@ mod tests {
         let mut ma = CorroboratedMa::defaults();
         let mut legacy = crate::ma::LegacyWindow::legacy_defaults();
         let mut legacy_revoked = false;
+        // Two of the eight witnesses report each tenth of a second, for 4 s.
         for tenth in 0..40u64 {
             let t = 257 * NS_PER_S + tenth * NS_PER_S / 10;
-            let r = report((tenth % 8) as u32 + 1, "honest", t);
-            assert!(ma.on_report(&mut ctx, &r).is_empty());
-            legacy_revoked |= legacy.ingest_evidence(&r, t).is_some();
+            for witness in [tenth % 8, (tenth + 3) % 8] {
+                let r = report(witness as u32 + 1, "honest", t);
+                assert!(ma.on_report(&mut ctx, &r).is_empty());
+                legacy_revoked |= legacy.ingest_evidence(&r, t).is_some();
+            }
         }
         assert!(
             legacy_revoked,
             "the legacy gate revokes on this burst, which is the defect"
         );
         let s = ma.summary("honest");
-        assert_eq!(s.reports, 40);
+        assert_eq!(s.reports, 80);
         assert!(s.corroborated_events <= 1, "{s:?}");
         assert!(!ma.is_revoked("honest"));
     }

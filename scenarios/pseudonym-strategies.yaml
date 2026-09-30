@@ -4,7 +4,7 @@
 #
 # The same fleet on the same streets, run once per strategy, against the same adversary:
 # passive sniffers on poles at a quarter of the signalised intersections, each reading
-# every safety message sent within 200 m and linking pseudonyms across changes by
+# every safety message sent within 100 m and linking pseudonyms across changes by
 # kinematics and by any identifier that survives a change (Wiedersheim et al. 2010's
 # tracker). Run the comparison with
 #
@@ -137,7 +137,10 @@ security:
     digest_otherwise: true
   pseudonym_change:
     strategy: time
+    # J2945/1's five minutes for `time`, the NYC pilot's two kilometres for `distance`;
+    # `c2c-cc`, `mix-zone` and `silent` read neither.
     period_s: 300.0
+    distance_m: 2000.0
   protocol:
     id: protocol/scms/camp
     params: {}
@@ -148,12 +151,14 @@ nodes:
   backend_tier: medium
 
 threats:
-  # The adversary: sniffers at every fourth signalised intersection, 200 m each.
+  # The adversary: sniffers at every fourth signalised intersection, 100 m each: a pole
+  # receiver at a Midtown corner hears the two crossing streets and loses a car round the
+  # block. At 200 m ten sniffers already cover this small grid almost entirely.
   eavesdropper:
     id: threat/observer/passive-privacy
     params:
       sniffer_fraction: 0.25
-      range_m: 200.0
+      range_m: 100.0
 
 metrics: [all]
 exporters: []

@@ -154,6 +154,8 @@ fn main() {
     let rate = s.actors.vehicles.demand.rate_veh_per_h;
     let duration = s.time.duration_s;
     let attack = s.threats.attackers.first().map(|a| a.id.clone());
+    let strategy = s.security.pseudonym_change.strategy.clone();
+    let silent = s.security.pseudonym_change.silent_period_s.clone();
     let start = Instant::now();
     let mut engine = Engine::build(s, "").expect("the scenario builds");
     let mut recorder = NullRecorder::new();
@@ -182,6 +184,8 @@ fn main() {
         "rate_veh_per_h": rate,
         "duration_s": duration,
         "attack": attack,
+        "strategy": strategy,
+        "silent_period_s": silent,
         "wall_s": wall,
         "nodes_created": report.nodes_created,
         "attackers": p.attackers,
@@ -230,6 +234,7 @@ fn main() {
             "mean_anonymity_set": ratio(p.privacy_anonymity_set_sum, p.privacy_link_decisions),
             "mean_degree_of_anonymity": ratio(p.privacy_degree_micro_sum, p.privacy_link_decisions.saturating_mul(1_000_000)),
             "tracked_vehicles": p.privacy_tracked_vehicles,
+            "followed_across_change": p.privacy_followed_across_change,
             "mean_tracked_s": ratio(p.privacy_tracked_sum_ns, p.privacy_tracked_vehicles.saturating_mul(1_000_000_000)),
             "max_tracked_s": p.privacy_tracked_max_ns as f64 / 1e9,
         },

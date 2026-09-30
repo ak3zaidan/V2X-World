@@ -713,10 +713,13 @@ pub struct Phase2Report {
     pub privacy_anonymity_set_sum: u64,
     /// The degrees of anonymity d of those decisions, summed, in millionths.
     pub privacy_degree_micro_sum: u64,
-    /// Vehicles the eavesdropper followed correctly across at least one pseudonym change
-    /// (ground truth).
+    /// Vehicles the eavesdropper followed at all (ground truth): whose frames it read and
+    /// attributed to one continuous track for some time.
     pub privacy_tracked_vehicles: u64,
-    /// Over those vehicles, the longest time each was followed correctly across changes,
+    /// Of those, the vehicles it followed correctly across at least one pseudonym change.
+    pub privacy_followed_across_change: u64,
+    /// Over the followed vehicles, the longest time each was followed correctly — its
+    /// tracking duration, within one pseudonym and across correctly linked changes —
     /// summed and at its largest, ns.
     pub privacy_tracked_sum_ns: u64,
     /// See [`Phase2Report::privacy_tracked_sum_ns`].
@@ -874,8 +877,10 @@ pub struct Phase2 {
     /// The ground-truth side of the eavesdropper's chains, for the run report only: by the
     /// pseudonym at a chain's end, the vehicle it is truly following and since when.
     privacy_chains: BTreeMap<[u8; 8], (Option<NodeId>, SimTime)>,
-    /// Per vehicle, the longest it was followed correctly across a change, ns.
+    /// Per vehicle, the longest it was followed correctly, ns.
     privacy_tracked: BTreeMap<NodeId, u64>,
+    /// The vehicles followed correctly across at least one change.
+    privacy_across: BTreeSet<NodeId>,
 }
 
 /// The position confidence the detector host used for every message before it read each
@@ -1211,6 +1216,7 @@ impl Phase2 {
             broadcast_accuracy: BTreeMap::new(),
             privacy_chains: BTreeMap::new(),
             privacy_tracked: BTreeMap::new(),
+            privacy_across: BTreeSet::new(),
         }))
     }
 
@@ -3284,6 +3290,7 @@ impl Phase2 {
         self.report.ma_peak_unrevoked_events =
             u64::from(self.ma.peak_unrevoked_events().unwrap_or(0));
         self.report.privacy_tracked_vehicles = self.privacy_tracked.len() as u64;
+        self.report.privacy_followed_across_change = self.privacy_across.len() as u64;
         self.report.privacy_tracked_sum_ns = self.privacy_tracked.values().sum();
         self.report.privacy_tracked_max_ns =
             self.privacy_tracked.values().copied().max().unwrap_or(0);
@@ -3341,7 +3348,16 @@ impl Phase2 {
             radio_range_m: f64::INFINITY,
         };
         self.report.privacy_frames_read += 1;
-        if let Some(o) = self.observer.on_message_sequenced(ctx, &me, &m, seq) {
+        let decision = self.observer.on_message_sequenced(ctx, &me, &m, seq);
+        // Ground truth for the run report only: how long the eavesdropper's current track
+        // of this pseudonym has been following its true vehicle.
+        if decision.is_none()
+            && let Some((Some(vehicle), since)) = self.privacy_chains.get(&signer).copied()
+        {
+            let best = self.privacy_tracked.entry(vehicle).or_insert(0);
+            *best = (*best).max(at.saturating_sub(since));
+        }
+        if let Some(o) = decision {
             self.score_link(&o, at);
             self.link_claims
                 .push(v2xw_threat::records::PrivacyLinkClaim {
@@ -3402,6 +3418,7 @@ impl Phase2 {
                 let followed = at.saturating_sub(since);
                 let best = self.privacy_tracked.entry(vehicle).or_insert(0);
                 *best = (*best).max(followed);
+                self.privacy_across.insert(vehicle);
             }
         }
         if let Some(d) = succ {
