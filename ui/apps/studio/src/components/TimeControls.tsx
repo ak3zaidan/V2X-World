@@ -111,6 +111,16 @@ function seekRefusal(err: unknown): SeekRefusal | null {
   return { minNs: min, maxNs: max };
 }
 
+/**
+ * Where a `run.pause` or `run.step` reply (§6.6, `{state, t_ns}`) left a paused run, or `null` for
+ * any other reply — a resume, whose clock is moving, included.
+ */
+function pausedAt(reply: unknown): number | null {
+  if (reply === null || typeof reply !== "object") return null;
+  const { state, t_ns: t } = reply as { state?: unknown; t_ns?: unknown };
+  return state === "paused" && typeof t === "number" ? t : null;
+}
+
 export function TimeControls(): React.JSX.Element {
   const run = useStudio((s) => s.run);
   const simTimeNs = useStudio((s) => s.simTimeNs);
@@ -228,7 +238,10 @@ export function TimeControls(): React.JSX.Element {
       markBusy();
       setNotice(null);
       try {
-        await fn();
+        // A pause or a step answers with where the run now stands; that is where the bar is until
+        // the stream's own clock gets there (see `landingNs`).
+        const landed = pausedAt(await fn());
+        if (landed !== null && !drivingReplay) setLandingNs(landed);
       } catch (err) {
         setNotice(err instanceof Error ? err.message : String(err));
       } finally {

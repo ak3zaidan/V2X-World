@@ -492,9 +492,13 @@ export class Viewer {
    * ({@link WorldRenderer.setRoadsideUnits}). Returns how many masts were added.
    */
   setRoadsideUnits(units: readonly RoadsideUnitPlacement[]): number {
+    const before = this.worldRenderer.siteCount;
     const added = this.worldRenderer.setRoadsideUnits(units);
-    // The coverage rings are laid out from the site list when a world is set; lay them out again.
-    if (this.worldRenderer.world !== null) this.overlays.setWorld(this.worldRenderer);
+    // The coverage rings are laid out from the site list when a world is set; lay them out again
+    // when the list changed.
+    if (this.worldRenderer.world !== null && (added > 0 || this.worldRenderer.siteCount !== before)) {
+      this.overlays.setWorld(this.worldRenderer);
+    }
     return added;
   }
 

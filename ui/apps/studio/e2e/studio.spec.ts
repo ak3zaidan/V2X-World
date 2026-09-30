@@ -250,7 +250,7 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   await page.keyboard.press("Escape");
 
   // 14. The engine log the inspector shows carries no protocol, world or RPC errors.
-  await page.getByRole("button", { name: "log", exact: true }).click();
+  await page.getByTestId("tab-log").click();
   const logLines = await page.locator('[data-testid="inspector-log"] .line').allTextContents();
   expect(logLines.length).toBeGreaterThan(0);
   expect(logLines.filter((l) => l.startsWith("error"))).toEqual([]);

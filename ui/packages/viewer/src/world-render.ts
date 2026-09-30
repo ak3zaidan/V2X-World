@@ -1202,6 +1202,9 @@ export class WorldRenderer {
    */
   setRoadsideUnits(units: readonly RoadsideUnitPlacement[]): number {
     this.#units = units;
+    // A run with no units, after one with none placed off-site, changes nothing: every Hello (a
+    // reconnect, a re-attach) comes through here.
+    if (units.length === 0 && this.#unitMesh === null && this.#siteCount === this.#worldSiteCount) return 0;
     if (this.#unitMesh !== null) {
       this.sitesGroup.remove(this.#unitMesh);
       this.#unitMesh.geometry.dispose();
