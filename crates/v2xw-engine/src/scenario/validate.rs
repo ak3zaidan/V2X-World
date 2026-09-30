@@ -1323,7 +1323,10 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
     // from Run as an "internal error".
     take(crate::phase2::detection_params(s).map(|_| ()));
     take(crate::phase2::ma_params(s).map(|_| ()));
-    take(crate::phase2::apply_backend_net(s, &mut v2xw_proto::ScmsParams::default()));
+    take(crate::phase2::apply_backend_net(
+        s,
+        &mut v2xw_proto::ScmsParams::default(),
+    ));
     for (i, a) in s.threats.attackers.iter().enumerate() {
         if let Some(kind) =
             a.id.strip_prefix("threat/attacker/legacy/")
@@ -1834,8 +1837,7 @@ pub(crate) fn grid_params(
             )
         })?
     };
-    if let Err(v2xw_world::WorldError::InvalidParameter { parameter, problem }) = grid.validate()
-    {
+    if let Err(v2xw_world::WorldError::InvalidParameter { parameter, problem }) = grid.validate() {
         return Err(conflict(
             &format!("world.source.params.{parameter}"),
             problem,

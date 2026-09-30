@@ -63,7 +63,9 @@ pub fn validate(path: &Path) -> Result<ValidateOutcome> {
     // the first (`v2xw run` refuses a missing file by the same setting, through
     // `Engine::build`'s preflight).
     for missing in v2xw_engine::scenario::preflight(&scenario) {
-        notes.push(format!("{missing}; `v2xw run` will refuse it from this directory"));
+        notes.push(format!(
+            "{missing}; `v2xw run` will refuse it from this directory"
+        ));
     }
     // Three things the loader accepts that an author usually did not mean. Each is a note
     // and not an error, because each is a legitimate scenario.

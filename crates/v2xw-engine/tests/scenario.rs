@@ -567,7 +567,11 @@ fn the_five_internal_error_causes_are_refused_at_check_by_their_setting() {
         serde_json::json!({"id": "backend-net/fibre"}),
     )]);
     assert_eq!(refused_fields(&bad_net), ["net.backend_net"]);
-    assert!(validate(&bad_net)[0].to_string().contains("backend-net/fixed"));
+    assert!(
+        validate(&bad_net)[0]
+            .to_string()
+            .contains("backend-net/fixed")
+    );
     let good_net = edited(&[(
         "/net/backend_net",
         serde_json::json!({"id": "backend-net/fixed", "params": {"latency_ms": 5}}),

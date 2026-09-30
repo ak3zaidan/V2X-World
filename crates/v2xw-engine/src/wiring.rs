@@ -194,12 +194,9 @@ fn attach_terrain(scenario: &Scenario, world: World) -> Result<World> {
     let Some(path) = scenario.world.terrain.dem.as_deref() else {
         return Ok(world);
     };
-    let (terrain, report) = v2xw_world::dem::import_terrain_for_world(
-        &world,
-        path,
-        &v2xw_world::DemOptions::default(),
-    )
-    .map_err(|e| terrain_error(path, e))?;
+    let (terrain, report) =
+        v2xw_world::dem::import_terrain_for_world(&world, path, &v2xw_world::DemOptions::default())
+            .map_err(|e| terrain_error(path, e))?;
     let (world, _drape) =
         v2xw_world::dem::with_terrain(&world, terrain, &v2xw_world::DrapeOptions::none(), &report)?;
     Ok(world)
@@ -294,7 +291,9 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
                 osm = osm.bbox(*b);
             }
             let source = v2xw_world::osm::OsmSource::with_options(osm);
-            source.build(spec, &opts).map_err(|e| source_error(scenario, e))
+            source
+                .build(spec, &opts)
+                .map_err(|e| source_error(scenario, e))
         }
         other => {
             // Any remaining source is another importer's. `GridSource` refuses what it

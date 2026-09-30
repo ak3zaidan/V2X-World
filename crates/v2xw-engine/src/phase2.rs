@@ -682,7 +682,10 @@ pub(crate) fn detection_params(scenario: &Scenario) -> Result<(DetectorParams, D
                     .as_f64()
                     .filter(|v| v.is_finite() && *v >= 0.0)
                     .ok_or_else(|| {
-                        conflict(&field, format!("is {value}; it must be a finite number, 0 or more"))
+                        conflict(
+                            &field,
+                            format!("is {value}; it must be a finite number, 0 or more"),
+                        )
                     })?;
                 if key == "report_interval_s" {
                     report_interval = secs(v);
