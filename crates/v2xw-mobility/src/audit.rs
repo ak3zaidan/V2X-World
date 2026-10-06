@@ -871,8 +871,8 @@ impl TrafficAuditor {
                 continue;
             }
             let (sn, cs) = math::sin_cos(a.heading_rad);
-            // The front bumper, from the rear-axle reference point.
-            let front = (a.pos.x + cs * (a.length_m - 1.0), a.pos.y + sn * (a.length_m - 1.0));
+            // The front bumper: the published reference point is at the rear bumper.
+            let front = (a.pos.x + cs * a.length_m, a.pos.y + sn * a.length_m);
             for p in &in_road {
                 let (dx, dy) = (p.pos.x - front.0, p.pos.y - front.1);
                 let ahead = dx * cs + dy * sn;
@@ -1944,6 +1944,7 @@ mod tests {
             pos: l.point_at(rear),
             heading_rad: l.heading_at(rear),
             min_path_radius_m: crate::VehicleClass::Passenger.min_path_radius_m(),
+            lane_position_m: 0.0,
         }
     }
 
@@ -1972,6 +1973,40 @@ mod tests {
             length_m: 0.5,
             width_m: 0.5,
         }
+    }
+
+    /// A car at 10 m/s closing on a pedestrian standing in its lane mid-block: the time to
+    /// collision falls through 3 s and then 1.5 s — one conflict and one near miss for the
+    /// whole approach. The same pedestrian on the sidewalk side of the activity (walking,
+    /// not in the carriageway) is no conflict.
+    #[test]
+    fn a_car_closing_on_a_pedestrian_in_the_road_is_one_conflict_and_one_near_miss() {
+        let world = walk_grid();
+        let lane = straight_lane(&world).id;
+        let l = world.lane(lane);
+        let run = |activity: crate::vru::PedActivity| {
+            let mut audit = TrafficAuditor::new(&world, AuditParams::default());
+            let mut p = pedestrian(9, lane, 0.0, l.point_at((l.length_m - 1.0).min(45.0)));
+            p.activity = activity;
+            for k in 0..20u64 {
+                let car = at(&world, 0, lane, 8.0 + k as f64, 10.0);
+                audit.observe_with_pedestrians(
+                    &world,
+                    k * 100_000_000,
+                    (k + 1) * 100_000_000,
+                    &[car],
+                    &[],
+                    &[p],
+                );
+            }
+            audit.report().stats
+        };
+        let stats = run(crate::vru::PedActivity::CrossingMidblock);
+        assert_eq!(stats.pedestrian_conflicts, 1, "{stats:?}");
+        assert_eq!(stats.pedestrian_near_misses, 1, "{stats:?}");
+        assert!(stats.min_pedestrian_ttc_s > 0.0 && stats.min_pedestrian_ttc_s < 1.5);
+        let calm = run(crate::vru::PedActivity::Walking);
+        assert_eq!(calm.pedestrian_conflicts, 0, "{calm:?}");
     }
 
     #[test]

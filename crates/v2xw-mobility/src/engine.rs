@@ -455,6 +455,12 @@ pub struct CyclistSpeeds {
     pub ebike_share: f64,
     /// The spread of one rider's speed around their type's mean, as a fraction of it.
     pub relative_sd: f64,
+    /// How much longer a metre of lane shared with motor traffic feels to a cyclist than a
+    /// metre of cycle lane, for the route choice: revealed-preference studies of cyclists'
+    /// GPS routes (Broach, Dill & Gliebe, *Transp. Res. A* 46, 2012, in Portland) find
+    /// riders detour to use bicycle facilities. 1.5 is **a choice** in that direction; the
+    /// study's own coefficients depend on traffic volume and were not transcribed.
+    pub shared_lane_cost: f64,
 }
 
 impl Default for CyclistSpeeds {
@@ -465,7 +471,27 @@ impl Default for CyclistSpeeds {
             ebike_mps: 17.4 / 3.6,
             ebike_share: 0.3,
             relative_sd: 0.2,
+            shared_lane_cost: 1.5,
         }
+    }
+}
+
+/// A cyclist's route cost: free-flow (or observed) time, with a lane shared with motor
+/// traffic weighted by [`CyclistSpeeds::shared_lane_cost`] and a cycle lane not.
+struct CyclistCost<'a> {
+    inner: &'a DynamicCost<'a>,
+    world: &'a World,
+    shared_factor: f64,
+}
+
+impl crate::views::EdgeCost for CyclistCost<'_> {
+    fn lane_cost_s(&self, lane: LaneId, at: SimTime) -> Option<f64> {
+        let base = crate::views::EdgeCost::lane_cost_s(self.inner, lane, at)?;
+        let shared = self
+            .world
+            .try_lane(lane)
+            .is_some_and(|l| matches!(l.kind, LaneKind::Driving | LaneKind::Bus));
+        Some(if shared { base * self.shared_factor.max(1.0) } else { base })
     }
 }
 
@@ -1483,12 +1509,24 @@ impl NativeMobility {
         traits: DriverTraits,
     ) -> Insertion {
         let costs = self.costs(world);
+        // A cyclist prefers a cycle lane where one exists ([`CyclistSpeeds::shared_lane_cost`]).
+        let cyclist_costs = CyclistCost {
+            inner: &costs,
+            world,
+            shared_factor: self.params.cyclists.shared_lane_cost,
+        };
+        let edge_costs: &dyn crate::views::EdgeCost =
+            if trip.class == VehicleClass::Bicycle && self.params.cyclists.enabled {
+                &cyclist_costs
+            } else {
+                &costs
+            };
         let Some(route) = self.router_for(trip.class).replan(
             world,
             trip.origin,
             trip.destination,
             trip.t,
-            &costs,
+            edge_costs,
         ) else {
             return Insertion::Unroutable;
         };

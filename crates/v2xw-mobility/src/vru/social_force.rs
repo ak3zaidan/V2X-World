@@ -978,8 +978,10 @@ impl VruMobility for SocialForce {
                     MidblockStage::Approaching => person.s_m >= m.at_s_m - 2.0,
                     MidblockStage::Waiting(since) => {
                         if self.midblock_go.get(&actor).copied().unwrap_or(false) {
+                            // It steps off from where it stands: held on the sidewalk this
+                            // step, in the carriageway from the next.
                             mid_go = true;
-                            false
+                            true
                         } else if Duration::between(since, now).as_secs_f64()
                             >= self.params.midblock.max_wait_s
                         {
@@ -1229,6 +1231,12 @@ impl VruMobility for SocialForce {
             if left_lane || mid_abandon {
                 midblock = None;
             }
+            // Stepping off mid-block ends the wait.
+            let waiting_since = if mid_start.is_some() {
+                None
+            } else {
+                waiting_since
+            };
             let previous_wait = person.waiting_since;
             let walk_onset = if at_kerb && !left_lane { walk_onset } else { None };
             let activity = if mid_start.is_some() {
@@ -1285,7 +1293,7 @@ impl VruMobility for SocialForce {
             person.vel = velocity;
             person.route_index = route_index;
             person.arrived = arrived || gave_up;
-            person.waiting_since = if mid_start.is_some() { None } else { waiting_since };
+            person.waiting_since = waiting_since;
             person.against_signal = against;
             person.walk_onset = walk_onset;
             person.activity = activity;

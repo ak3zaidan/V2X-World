@@ -20,8 +20,8 @@
 //! surrogate safety literature (FHWA-HRT-08-051), applied to the two bodies' paths. The
 //! thresholds are the traffic auditor's: 1.5 s, the one verified surrogate threshold of
 //! 04-models.md §11, for a near miss; 3 s, the conventional upper bound of an encounter
-//! worth recording, for a conflict (a choice, stated). The vehicle's reference point is its
-//! rear axle; its front is taken one body length less a metre ahead of it.
+//! worth recording, for a conflict (a choice, stated). The record's reference point is at
+//! the vehicle's rear bumper, so its front is one body length (its class's) ahead.
 //!
 //! Requiring the pedestrian to walk across the vehicle's heading keeps out a pedestrian
 //! standing at a corner that a turning vehicle's heading happens to sweep over, and one
@@ -301,7 +301,7 @@ impl VruSafetyProvider {
                 }
                 let (sn, cs) = math::sin_cos(h);
                 let (len, wid) = body_of(veh.class.as_deref());
-                let front = (veh.x_m + cs * (len - 1.0), veh.y_m + sn * (len - 1.0));
+                let front = (veh.x_m + cs * len, veh.y_m + sn * len);
                 for p in &peds {
                     let (dx, dy) = (p.x_m - front.0, p.y_m - front.1);
                     let ahead = dx * cs + dy * sn;
