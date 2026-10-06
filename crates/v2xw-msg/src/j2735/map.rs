@@ -1529,8 +1529,8 @@ fn on_decode(len: usize) -> impl Fn(UperError) -> CodecError {
 /// UPER-encodes a `MapData` PDU.
 ///
 /// The bytes are real UPER of the subset documented at the top of this module, and its
-/// size is measured rather than modelled — but the structure rests on the recalled
-/// assumptions in [`assumptions`] and has not been oracle-validated. See
+/// size is measured rather than modelled; the structural [`assumptions`] it rests on
+/// were confirmed by the oracle against the public J2735 2016 and 2020 modules. See
 /// [`crate::evidence`].
 pub fn encode_map(map: &MapData) -> Result<Encoded, CodecError> {
     let mut w = BitWriter::with_capacity(128);

@@ -26,6 +26,12 @@
 //! margin), what a driver whose engine has died does on the way to the kerb. Both are
 //! parameters, and both are capped by the road surface's grip.
 //!
+//! The two stacks react differently to the same stop, as deployed vehicles do: on the US
+//! stack 0.5 g sets the BSM's hard-braking flag (J2735's 0.4 g), but on the European stack
+//! the emergency-brake-light DENM follows the vehicle's emergency stop signal, which UN
+//! R48 does not allow below 6 m/s² — so a scripted stop meant to raise a DENM sets
+//! `decel_mps2` to 6 or more (a full ABS stop on dry asphalt reaches 8–9 m/s²).
+//!
 //! # Which vehicle
 //!
 //! `target` names a node id. `"auto"` (the default) picks the first vehicle, in actor-id

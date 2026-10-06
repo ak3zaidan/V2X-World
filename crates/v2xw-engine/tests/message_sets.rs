@@ -499,7 +499,9 @@ fn what_a_scenario_cannot_have_is_refused_with_its_reason() {
     };
     refuse(&|s| s.messages.sets.push("denm".into()), "gn-btp");
     refuse(&|s| s.messages.codec_tier = "uper".into(), "size-model");
-    refuse(&|s| s.messages.sets.push("cpm".into()), "perception");
+    // The CPM has a perception model behind it now (crate::perception), so it is refused
+    // here only for the network it needs: it is an ETSI facilities message.
+    refuse(&|s| s.messages.sets.push("cpm".into()), "gn-btp");
     refuse(
         &|s| {
             for r in &mut s.actors.rsus {

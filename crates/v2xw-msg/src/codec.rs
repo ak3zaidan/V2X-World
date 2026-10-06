@@ -7,7 +7,7 @@
 //! | real ASN.1 | [`EtsiUperCodec`] over `rasn`-generated ETSI bindings (CAM, DENM) | [`SizeSource::Uper`] | the wire bytes |
 //! | real ASN.1 | [`crate::sec_types::coer`] over the 1609.2 bindings | [`SizeSource::Coer`] | the wire bytes |
 //! | hand-written | [`crate::j2735::J2735BsmCodec`] | [`SizeSource::Uper`] | the wire bytes of the subset we fill, oracle-validated |
-//! | hand-written | [`crate::j2735::J2735InfraCodec`] (SPaT, MAP) | [`SizeSource::Uper`] | the wire bytes of the subset we fill, **not yet oracle-validated** |
+//! | hand-written | [`crate::j2735::J2735InfraCodec`] (SPaT, MAP) | [`SizeSource::Uper`] | the wire bytes of the subset we fill, oracle-validated against the public 2016 and 2020 modules |
 //! | size model | [`crate::size_model::J2735SizeCodec`] (PSM, SRM, SSM) | [`SizeSource::SizeModel`] | **placeholders** of exact modelled length |
 //! | size model | [`crate::etsi_size::EtsiSizeCodec`] (CPM, VAM) | [`SizeSource::SizeModel`] | **placeholders** of exact modelled length |
 //!

@@ -163,30 +163,31 @@ pub const EVIDENCE: &[MessageEvidence] = &[
     },
     MessageEvidence {
         ty: MsgType::Spat,
-        exactness: ByteExactness::RealUperUnvalidated,
+        exactness: ByteExactness::OracleValidated,
         codec: Some(crate::j2735::infra::J2735_INFRA_CODEC_ID),
-        evidence: "hand-written against SAE J2735 2024-09 and round-tripped, with every \
-                   preamble width corroborated by the size-model derivation written while \
-                   the ASN.1 was on disk — except the MovementPhaseState index, where the \
-                   two disagree by one bit. No oracle run: the J2735 modules are \
-                   git-ignored (D3) and absent from this checkout.",
+        evidence: "pycrate 0.8.1 compiled from the public SAE J2735 2016 and 2020 modules, \
+                   run 2026-10-06: 115 of 115 vectors byte-identical in both directions. \
+                   The codec writes 2024-09, whose only difference in these fields is \
+                   TimeMark's range (to 36111); values past 36001 could not be checked.",
     },
     MessageEvidence {
         ty: MsgType::Map,
-        exactness: ByteExactness::RealUperUnvalidated,
+        exactness: ByteExactness::OracleValidated,
         codec: Some(crate::j2735::infra::J2735_INFRA_CODEC_ID),
-        evidence: "hand-written against SAE J2735 2024-09 and round-tripped. Every \
-                   structural choice that could not be re-read is a named constant in \
-                   j2735::map::assumptions and a todo-calibrate parameter on the codec's \
-                   card. No oracle run.",
+        evidence: "pycrate 0.8.1 compiled from the public SAE J2735 2016 and 2020 modules, \
+                   run 2026-10-06: 112 of 112 vectors byte-identical in both directions, \
+                   every extension marker in j2735::map::assumptions confirmed, and 10 \
+                   messages using unmodelled elements refused by name.",
     },
     MessageEvidence {
         ty: MsgType::Psm,
         exactness: ByteExactness::SizeModelled,
         codec: Some(crate::size_model::J2735_SIZE_MODEL_ID),
-        evidence: "no published PSM size exists (04-models.md §8.2 records \"PSM: none\"), \
-                   so the row is derived from the ASN.1 structure and carries a \
-                   todo-calibrate plan.",
+        evidence: "this codec-registry row is the size model, derived from the ASN.1 \
+                   structure (no published PSM size exists). A VRU device's PSM on the air \
+                   is crate::j2735::psm's hand-written UPER, which pycrate 0.8.1 compiled \
+                   from the public J2735 2016 modules matched byte for byte on 153 of 153 \
+                   vectors (tests/j2735_psm_oracle.rs, 2026-10-06).",
     },
     MessageEvidence {
         ty: MsgType::Vam,

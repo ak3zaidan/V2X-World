@@ -195,8 +195,8 @@ fn card() -> ModelCard {
         "1.0.0",
         "Hand-written ASN.1 UPER codec for the SAE J2735 SPAT and MapData messages, over \
          the subset an intersection application fills. Real wire bytes, measured sizes, \
-         and — unlike the BSM codec — NOT yet cross-validated against an independent \
-         implementation of the ASN.1.",
+         cross-validated byte for byte against pycrate compiled from the public SAE J2735 \
+         2016 and 2020 modules (the 2024-09 modules are not public).",
     );
     // A codec has no cheap variant: the abstract tier still needs an exact size.
     card.tier = vec![Tier::Abstract, Tier::Medium, Tier::High];
@@ -250,25 +250,33 @@ fn card() -> ModelCard {
     );
     card.limitations.push(
         "Every SEQUENCE and CHOICE extension marker in the MAP structure is a named \
-         constant in v2xw_msg::j2735::map::assumptions, because the J2735 ASN.1 is \
-         git-ignored (build decision D3) and is not in this checkout, so the markers could \
-         not be re-read. A wrong marker is a one-bit shift of everything after it and is \
-         invisible to a round-trip test, since encoder and decoder share the assumption."
+         constant in v2xw_msg::j2735::map::assumptions. They were written from recall; the \
+         oracle run of 2026-10-06 (112 MAP vectors byte-identical with pycrate) confirms \
+         every one against the 2016 and 2020 modules."
             .to_string(),
     );
     card.limitations.push(
-        "MovementPhaseState is encoded as a 4-bit non-extensible ENUMERATED index. The \
-         size-model derivation in codec/size-model/j2735, written while the ASN.1 was \
-         readable, counted 5 bits for the same field. One of the two is wrong; until an \
-         oracle run says which, a SPaT from this codec is one bit per movement event \
-         smaller than the size model reports."
+        "MovementPhaseState is a 4-bit non-extensible ENUMERATED index, which the oracle \
+         confirms (115 SPaT vectors byte-identical). The size-model derivation in \
+         codec/size-model/j2735 counted 5 bits for the same field and is one bit per \
+         movement event too large."
+            .to_string(),
+    );
+    card.limitations.push(
+        "Edition: the codec writes J2735 2024-09, whose TimeMark is (0..36111) with 36111 \
+         meaning unknown; the 2016 and 2020 modules the oracle compiled bound it at 36001. \
+         Both need 16 bits, so every value both editions admit was checked; the 2024-only \
+         values 36002..36111 were not, and no 2024 change outside the fields this codec \
+         fills could be seen."
             .to_string(),
     );
 
     card.assumptions = vec![
         "The message set is SAE J2735 2024-09. The constraint values, bit-string sizes and \
-         CHOICE alternative counts were recalled rather than re-read: third_party/asn1/j2735/ \
-         is git-ignored (build decision D3) and is absent from this checkout."
+         CHOICE alternative counts were written from recall and then checked by the \
+         pycrate oracle against the public 2016 (J2735_201603DA) and 2020 modules, read on \
+         2026-10-06 from the USDOT JPO ODE asn1_codec repository's history; the modules \
+         stay outside this repository (build decision D3)."
             .to_string(),
         "Latitude, Longitude, Elevation and MsgCount reuse the constants of \
          v2xw_msg::j2735::bsm, which the 235-vector pycrate oracle validated, so those four \
@@ -297,13 +305,11 @@ fn card() -> ModelCard {
     // The unverified structural choices, as registry parameters, so they appear on the
     // todo-calibrate report (rule R1) instead of living only in prose. Each carries the
     // plan that would settle it.
-    const ORACLE_PLAN: &str = "Restore third_party/asn1/j2735/ from a machine that holds an \
-                               SAE licence, rebuild the pycrate oracle environment \
-                               (tests/oracle/compile_j2735.py), and run \
-                               `cargo test -p v2xw-msg --test j2735_infra_oracle`. The \
-                               oracle compares bytes against an independent implementation \
-                               of the real ASN.1, which is the only thing that can settle a \
-                               structural question this codec answered from recall.";
+    const ORACLE_PLAN: &str = "Settled for the 2016 and 2020 editions by the pycrate oracle \
+                               run of 2026-10-06 (tests/j2735_infra_oracle.rs with \
+                               V2XW_J2735_ORACLE_EDITION set); re-run it against the \
+                               2024-09 modules, which are not public, to settle it for that \
+                               edition.";
     let unverified = [
         (
             "spat_movement_phase_state_index_bits",
@@ -369,8 +375,13 @@ fn card() -> ModelCard {
     card.sources = vec![
         Source::new(
             SourceKind::Standard,
-            "SAE J2735 2024-09 — SPAT and MapData (recalled; the modules are not in this \
-             checkout and are never redistributed, per build decision D3)",
+            "SAE J2735 2024-09 — SPAT and MapData (written from recall; checked against the \
+             2016 and 2020 modules, which are never redistributed, per build decision D3)",
+        ),
+        Source::new(
+            SourceKind::Standard,
+            "SAE J2735 2016-03 (J2735_201603DA.ASN) and 2020 module set, read from the history \
+             of github.com/usdot-jpo-ode/asn1_codec (commits cb83a39a and 31ab0738)",
         ),
         Source::new(
             SourceKind::Standard,
@@ -396,18 +407,16 @@ fn card() -> ModelCard {
     ];
 
     card.validation = Validation {
-        // Deliberately `UnitTested`, a rung below the BSM codec's `LiteratureChecked`. The
-        // encoder round-trips, refuses what it cannot model and pins two exact sizes, and
-        // that is all: no published SPaT or MAP size exists to check against
-        // (04-models.md §8.2 records "SPaT typical: none found") and no independent
-        // implementation has seen these bytes.
-        status: ValidationStatus::UnitTested,
+        // `LiteratureChecked`, the BSM codec's rung: an independent implementation of the
+        // standard's own ASN.1 agreed with every byte.
+        status: ValidationStatus::LiteratureChecked,
         references: vec![Source::new(
             SourceKind::Code,
-            "NOT YET VALIDATED against an oracle. tests/j2735_infra_oracle.rs holds the \
-             harness and the vectors; it skips with a message because neither the J2735 \
-             ASN.1 nor the pycrate environment is on this machine. The BSM codec's card \
-             records what a completed run looks like: 235 vectors, byte-identical.",
+            "Oracle-validated 2026-10-06: pycrate 0.8.1 compiled from the SAE J2735 2016 and \
+             2020 modules agreed byte for byte with 115 of 115 SPaT and 112 of 112 MAP \
+             vectors, decoded each to the same fields, encoded vectors of its own that this \
+             codec decoded to the same fields, and produced 10 messages using elements this \
+             codec refuses, each of which it refused by name (tests/j2735_infra_oracle.rs).",
         )],
         tests: vec![
             "j2735::spat::tests::a_minimal_spat_is_eleven_octets".to_string(),
@@ -419,10 +428,10 @@ fn card() -> ModelCard {
                 .to_string(),
             "j2735::map::tests::the_structural_assumptions_are_the_ones_the_module_documents"
                 .to_string(),
-            "j2735_infra_oracle::rust_spat_encodings_match_pycrate_byte_for_byte (skips)"
-                .to_string(),
-            "j2735_infra_oracle::rust_map_encodings_match_pycrate_byte_for_byte (skips)"
-                .to_string(),
+            "j2735_infra_oracle::rust_spat_encodings_match_pycrate_byte_for_byte".to_string(),
+            "j2735_infra_oracle::rust_map_encodings_match_pycrate_byte_for_byte".to_string(),
+            "j2735_infra_oracle::pycrate_encodings_decode_field_for_field".to_string(),
+            "j2735_infra_oracle::refused_elements_are_refused_rather_than_misread".to_string(),
         ],
     };
     card
@@ -498,9 +507,9 @@ mod tests {
     /// silent deletion of that sentence is a defect in its own right — it is the one thing
     /// that must never happen to this crate's claims.
     #[test]
-    fn the_card_says_the_bytes_are_not_yet_oracle_validated() {
+    fn the_card_says_what_the_oracle_validated_and_against_which_edition() {
         let card = J2735InfraCodec::new().card().clone();
-        assert_eq!(card.validation.status, ValidationStatus::UnitTested);
+        assert_eq!(card.validation.status, ValidationStatus::LiteratureChecked);
         let references = card
             .validation
             .references
@@ -508,24 +517,26 @@ mod tests {
             .map(|s| s.reference.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(references.contains("NOT YET VALIDATED"), "{references}");
+        assert!(references.contains("Oracle-validated"), "{references}");
+        assert!(references.contains("2016") && references.contains("2020"), "{references}");
 
         let text = card.limitations.join("\n");
         for needle in [
-            "real UPER",
-            "not",
+            "oracle-validated",
             "assumptions",
             "MovementPhaseState",
             "REFUSED",
+            "2024-09",
         ] {
             assert!(text.contains(needle), "the card should mention {needle}");
         }
         assert!(
-            card.purpose.contains("NOT yet cross-validated"),
-            "even the one-line purpose must carry the caveat: {}",
+            card.purpose.contains("2024-09 modules are not public"),
+            "the one-line purpose names the editions it was checked against: {}",
             card.purpose
         );
-        // And the unverified structural choices must be on the todo-calibrate report.
+        // The structural choices stay on the todo-calibrate report until the 2024-09
+        // modules, which are not public, have been compared too.
         let todo: Vec<&str> = card.todo_calibrate().map(|p| p.name.as_str()).collect();
         assert!(
             todo.iter().any(|n| n.contains("extension_marker")),

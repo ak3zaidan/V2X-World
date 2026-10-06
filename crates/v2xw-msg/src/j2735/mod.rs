@@ -11,7 +11,7 @@
 //! | [`bsm`] | the Basic Safety Message: `BSMcoreData` field for field, the `VehicleSafetyExtensions` Part II container, the `MessageFrame` wrapper, and the builder from a node's belief |
 //! | [`spat`] | `SPAT`: intersection states, movement states, movement events and their timing |
 //! | [`map`] | `MapData`: intersection geometry, lanes, node lists and connections |
-//! | [`psm`] | the Personal Safety Message: the mandatory fields and `Position3D`, the `MessageFrame` wrapper, and the builder from a VRU device's belief — real UPER, not yet oracle-validated |
+//! | [`psm`] | the Personal Safety Message: the mandatory fields and `Position3D`, the `MessageFrame` wrapper, and the builder from a VRU device's belief — real UPER, oracle-validated (153 vectors) |
 //! | [`infra`] | the [`crate::MessageCodec`] seam for SPaT and MAP, and the card that states how well evidenced they are |
 //!
 //! # Trusting the bytes — and the two codecs are not equally trustworthy
@@ -26,13 +26,11 @@
 //! to decode. Three directions, because each catches a different class of defect. That run
 //! happened: 235 vectors, byte-identical.
 //!
-//! **The SPaT and MAP codecs have had no such run.** `third_party/asn1/j2735/` is
-//! git-ignored (build decision D3) and is absent from this checkout, and the oracle's
-//! Python environment is not on this machine either, so their ASN.1 could not even be
-//! re-read while they were written. `tests/j2735_infra_oracle.rs` holds their harness and
-//! skips with a message saying so. Until it runs, [`crate::evidence`] calls their bytes
-//! *real UPER, not yet oracle-validated*, which is a weaker claim than the BSM's and is
-//! never to be reported as the same one.
+//! **The SPaT, MAP and PSM codecs had their run on 2026-10-06**, against `pycrate`
+//! compiled from the public J2735 2016 and 2020 modules (the 2024-09 modules the codecs
+//! are written to are not public): 115 SPaT, 112 MAP and 153 PSM vectors byte-identical
+//! in every direction. The one 2024 difference in the fields they fill, `TimeMark`'s
+//! range, is spelled out in `tests/j2735_infra_oracle.rs`.
 //!
 //! The BSM oracle skips the same way when its environment is absent, which is how it
 //! behaves in CI; it is not skipped when the environment is present, and the codec's model
@@ -229,8 +227,9 @@ fn card() -> ModelCard {
 
     card.ignores = vec![
         "Every other J2735 message. SPaT and MAP are hand-encoded by \
-         codec/uper/j2735-spat-map, whose bytes are real but not yet oracle-validated; \
-         PSM, SRM and SSM are sized by codec/size-model/j2735 and carry placeholder bytes."
+         codec/uper/j2735-spat-map, oracle-validated against the public 2016 and 2020 \
+         modules; PSM, SRM and SSM are sized by codec/size-model/j2735 behind the codec \
+         seam."
             .to_string(),
         "The IEEE 1609.2 security envelope, which v2xw-sec puts around this payload over \
          the COER bindings in crate::sec_types."

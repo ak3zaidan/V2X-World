@@ -162,9 +162,12 @@ impl OwnVehicle {
     pub fn set_bus(&mut self, bus: VehicleBus) {
         self.predictor.push(bus.t, bus.yaw_rate_rad_s);
         let bits = self.light_bits_of(&bus);
+        // The first reading is the lights' state, not a change of it: `at` 0 marks "never
+        // changed", so `eventLightsChanged` is not raised by the unit starting up.
         match self.lights {
             Some((old, _)) if old == bits => {}
-            _ => self.lights = Some((bits, bus.t)),
+            None => self.lights = Some((bits, 0)),
+            Some(_) => self.lights = Some((bits, bus.t)),
         }
         if bus.speed_mps < 0.1 {
             self.standing_since.get_or_insert(bus.t);
