@@ -143,7 +143,7 @@ pub struct LiveOptions {
     /// into recorded time).
     pub retain_steps: usize,
     /// The most memory the retained steps may take, bytes (approximately: see
-    /// `approx_step_bytes`). Whichever of this and `retain_steps` is reached first bounds
+    /// [`StepOutput::approx_bytes`]). Whichever of this and `retain_steps` is reached first bounds
     /// the history; a seek before the oldest retained step is refused with its range.
     pub retain_bytes: usize,
     /// `Hello.actor_capacity` (§3.1.1), and the **bound this run enforces on slot ids**.
@@ -1401,9 +1401,16 @@ struct Projector {
     /// backend link, CRL state) and its most recent `sec.pseudonym` changes, for
     /// `inspect.node`'s `certs` and `crl` sections.
     security: BTreeMap<NodeId, (Value, std::collections::VecDeque<Value>)>,
-    /// The credential system's recent `backend.state` snapshots, `(t, view)`, oldest
-    /// first, for `inspect.entity` and the Backend view. Bounded at [`BACKEND_HISTORY`].
-    backend: std::collections::VecDeque<(u64, Value)>,
+    /// The credential system's recent `backend.state` snapshots, `(t, record bytes)`,
+    /// oldest first, for `inspect.entity` and the Backend view. Bounded at
+    /// [`BACKEND_HISTORY`] snapshots and [`BACKEND_BYTES`] bytes.
+    ///
+    /// Kept as the record's JSON and parsed when asked: parsed, each snapshot was some
+    /// hundreds of `serde_json` maps (a 640-byte heap block apiece), and a heap census of
+    /// the long soak found ten minutes of them the largest thing the server grew by.
+    backend: std::collections::VecDeque<(u64, Box<[u8]>)>,
+    /// The bytes `backend` holds.
+    backend_bytes: usize,
     /// Every node's recent traffic, for the followed node's message feed and queues and for
     /// `inspect.node`'s `messages` section (`crate::feed`).
     feed: crate::feed::FeedStore,
@@ -1493,6 +1500,7 @@ impl Projector {
             breakdowns: BreakdownStore::new(BREAKDOWN_CAP, BREAKDOWN_TOTAL_CAP),
             security: BTreeMap::new(),
             backend: std::collections::VecDeque::new(),
+            backend_bytes: 0,
             feed: crate::feed::FeedStore::new(step_ns),
             unprojected_channels: BTreeSet::new(),
             undecodable_channels: BTreeMap::new(),
@@ -1768,13 +1776,20 @@ impl Projector {
                 "msg.latency" | "net.bytes" | "phy.prr" | "net.frag" | "net.reassembly" => {}
                 // The backend's entities and flows, kept for `inspect.entity`: one snapshot
                 // a simulated second, the newest few minutes of them.
-                "backend.state" => match serde_json::from_slice::<Value>(&record.json) {
-                    Ok(v) => {
-                        let at = v["t"].as_u64().unwrap_or(t);
-                        if self.backend.len() >= BACKEND_HISTORY {
-                            self.backend.pop_front();
+                "backend.state" => match serde_json::from_slice::<SnapshotTime>(&record.json) {
+                    Ok(stamp) => {
+                        let at = stamp.t.unwrap_or(t);
+                        let bytes: Box<[u8]> = record.json.as_slice().into();
+                        self.backend_bytes += bytes.len();
+                        self.backend.push_back((at, bytes));
+                        while self.backend.len() > 1
+                            && (self.backend.len() > BACKEND_HISTORY
+                                || self.backend_bytes > BACKEND_BYTES)
+                        {
+                            if let Some((_, old)) = self.backend.pop_front() {
+                                self.backend_bytes -= old.len();
+                            }
                         }
-                        self.backend.push_back((at, v));
                     }
                     Err(_) => self.undecodable(record.channel),
                 },
@@ -2097,6 +2112,7 @@ impl Projector {
             "security_nodes": self.security.len(),
             "security_changes": self.security.values().map(|(_, c)| c.len()).sum::<usize>(),
             "backend_snapshots": self.backend.len(),
+            "backend_bytes": self.backend_bytes,
             "feed_nodes": self.feed.nodes(),
             "feed_frames": frames,
             "feed_receptions": receptions,
@@ -2466,6 +2482,17 @@ impl Pool {
 
 /// How many `backend.state` snapshots the projector keeps: ten minutes at one a second.
 const BACKEND_HISTORY: usize = 600;
+
+/// How many bytes of `backend.state` snapshots the projector keeps, whatever their count:
+/// a snapshot grows with the fleet and the backend's queues, so the count alone does not
+/// bound the memory. The oldest go first.
+const BACKEND_BYTES: usize = 64 * 1024 * 1024;
+
+/// The one field of a `backend.state` record the projector reads as it arrives.
+#[derive(serde::Deserialize)]
+struct SnapshotTime {
+    t: Option<u64>,
+}
 
 /// How many of a node's pseudonym changes the security panel keeps (and, before the
 /// message feed replaced it, how many sent and received messages the evidence log kept).
@@ -2927,7 +2954,7 @@ pub struct LiveEngine {
     /// Every step produced and not yet dropped, oldest first. This is the "recorded time"
     /// §6.6 lets a live run seek backwards into.
     timeline: std::collections::VecDeque<StepOutput>,
-    /// `approx_step_bytes` summed over `timeline`.
+    /// [`StepOutput::approx_bytes`] summed over `timeline`.
     timeline_bytes: usize,
     /// The step index of `timeline.front()`.
     base_index: u64,
@@ -3367,7 +3394,9 @@ impl LiveEngine {
                 if self.timeline.is_empty() {
                     self.base_index = index;
                 }
-                self.timeline_bytes += approx_step_bytes(&out);
+                let mut out = out;
+                out.shrink();
+                self.timeline_bytes += out.approx_bytes();
                 self.timeline.push_back(out);
                 self.produced = index + 1;
                 let seeking = self.seek_goal.is_some();
@@ -3378,7 +3407,7 @@ impl LiveEngine {
                 {
                     if let Some(old) = self.timeline.pop_front() {
                         self.timeline_bytes =
-                            self.timeline_bytes.saturating_sub(approx_step_bytes(&old));
+                            self.timeline_bytes.saturating_sub(old.approx_bytes());
                     }
                     self.base_index += 1;
                 }
@@ -3763,25 +3792,42 @@ fn setup_error(e: v2xw_engine::EngineError) -> ServerError {
     }
 }
 
-/// What a retained step costs in memory, approximately: its containers and every payload
-/// byte. Events dominate on a radio-heavy run (every reception is one), so they are counted
-/// by their payloads; the rest by their element sizes. An estimate is enough: it bounds the
-/// history's order of magnitude, which the step count alone did not.
-fn approx_step_bytes(out: &StepOutput) -> usize {
-    use std::mem::size_of;
-    let events: usize = out
-        .events
-        .iter()
-        .map(|e| size_of::<v2xw_record::wire::event::EventEntry>() + e.payload.len())
-        .sum();
-    let recorded: usize = out.recorded.iter().map(|f| 64 + f.as_bytes().len()).sum();
-    size_of::<StepOutput>()
-        + out.snapshot.actors.len() * size_of::<ActorPose>()
-        + out.snapshot.signals.len() * size_of::<WireSignal>()
-        + out.telemetry.len() * size_of::<NodeTelemetry>()
-        + out.metrics.len() * size_of::<MetricRow>()
-        + events
-        + recorded
+/// The mean of `rows` in each `bin`-wide bin from `from`'s bin to `to`, at most `limit`
+/// bins: `(bin start, mean)`, with `None` for a bin no sample fell in.
+///
+/// `rows` are a metric's samples in the order the steps produced them, so sorted by
+/// instant, and each bin is one contiguous run of them: one walk over the samples answers
+/// every bin. Scanning every sample for every bin, as this did, made a plot's poll cost
+/// grow with the square of the run's length, under the lock the producer also needs, so
+/// the longer a run had gone the slower it streamed.
+fn binned_means(
+    rows: &[(SimTime, f64)],
+    from: u64,
+    to: u64,
+    bin: u64,
+    limit: usize,
+) -> Vec<(u64, Option<f64>)> {
+    let bin = bin.max(1);
+    let mut out = Vec::new();
+    let mut edge = from - (from % bin);
+    let mut lo = rows.partition_point(|(t, _)| *t < edge);
+    while edge <= to && out.len() < limit {
+        let upper = edge.saturating_add(bin);
+        let hi = lo + rows[lo..].partition_point(|(t, _)| *t < upper);
+        // The bin's value is the mean of the samples whose instant falls in it, reduced
+        // with `sum_ordered` so two builds agree to the last bit. A bin with no sample is
+        // `None` and is reported as JSON `null`: the metric was not observed there, which
+        // is not the same as being zero there.
+        let value = (hi > lo).then(|| {
+            let inside: Vec<f64> = rows[lo..hi].iter().map(|(_, v)| *v).collect();
+            let n = inside.len() as f64;
+            v2xw_core::math::sum_ordered(inside) / n
+        });
+        out.push((edge, value));
+        lo = hi;
+        edge = upper;
+    }
+    out
 }
 
 /// Lower-case hex of a digest.
@@ -4402,15 +4448,18 @@ impl Introspect for LiveEngine {
 
     fn entity_facts(&self, entity: &str, t_ns: u64, limit: usize) -> Option<Value> {
         let history = &self.projector.backend;
-        let (t, view) = history
+        let (t, bytes) = history
             .iter()
             .rev()
             .find(|(t, _)| *t <= t_ns)
             .or_else(|| history.front())?;
+        // It parsed once already, as it arrived (`SnapshotTime`), so this does not fail
+        // for a record the projector kept.
+        let view: Value = serde_json::from_slice(bytes).ok()?;
         Some(crate::introspect::entity_answer(
             entity,
             *t,
-            view,
+            &view,
             limit,
             self.provenance_chain(),
         )?)
@@ -4442,36 +4491,11 @@ impl Introspect for LiveEngine {
         bin: u64,
         limit: usize,
     ) -> Vec<(u64, Option<f64>)> {
-        let samples = self.history.get(name);
+        let rows: &[(SimTime, f64)] = self.history.get(name).map_or(&[], Vec::as_slice);
         // Never past the stream: the projector has already computed metric bins the
         // client's `Keyframe` has not reached, and answering from them would tell a live
         // viewer the future.
-        let to = to.min(self.sim_time());
-        let bin = bin.max(1);
-        let mut out = Vec::new();
-        let mut edge = from - (from % bin);
-        while edge <= to && out.len() < limit {
-            let upper = edge.saturating_add(bin);
-            let value = samples.and_then(|rows| {
-                // The bin's value is the mean of the samples whose instant falls in it,
-                // reduced with `sum_ordered` so two builds agree to the last bit. A bin
-                // with no sample is `None` and is reported as JSON `null`: the metric was
-                // not observed there, which is not the same as being zero there.
-                let inside: Vec<f64> = rows
-                    .iter()
-                    .filter(|(t, _)| *t >= edge && *t < upper)
-                    .map(|(_, v)| *v)
-                    .collect();
-                if inside.is_empty() {
-                    return None;
-                }
-                let n = inside.len() as f64;
-                Some(v2xw_core::math::sum_ordered(inside) / n)
-            });
-            out.push((edge, value));
-            edge = upper;
-        }
-        out
+        binned_means(rows, from, to.min(self.sim_time()), bin, limit)
     }
 
     fn provenance_chain(&self) -> Vec<Value> {
@@ -5005,5 +5029,61 @@ mod breakdown_store_tests {
         assert_eq!(store.dim_sets.len(), 7);
         let groups = store.groups("a", "node", &BTreeMap::new(), 0, u64::MAX);
         assert_eq!(groups.len(), 7, "every node still groups");
+    }
+}
+
+#[cfg(test)]
+mod binned_means_tests {
+    use super::binned_means;
+
+    /// The single walk answers exactly what filtering every sample for every bin answered:
+    /// bins with several samples, with none, a range starting mid-bin, samples on a bin's
+    /// edges, and the limit.
+    #[test]
+    fn one_walk_answers_what_a_scan_per_bin_answered() {
+        let scan = |rows: &[(u64, f64)], from: u64, to: u64, bin: u64, limit: usize| {
+            let mut out = Vec::new();
+            let mut edge = from - (from % bin);
+            while edge <= to && out.len() < limit {
+                let upper = edge + bin;
+                let inside: Vec<f64> = rows
+                    .iter()
+                    .filter(|(t, _)| *t >= edge && *t < upper)
+                    .map(|(_, v)| *v)
+                    .collect();
+                let value = (!inside.is_empty()).then(|| {
+                    let n = inside.len() as f64;
+                    v2xw_core::math::sum_ordered(inside) / n
+                });
+                out.push((edge, value));
+                edge = upper;
+            }
+            out
+        };
+        // Samples every 100 ms with gaps, and two at the same instant.
+        let mut rows: Vec<(u64, f64)> = (0..400u64)
+            .filter(|k| k % 37 > 5)
+            .map(|k| (k * 100, (k as f64).sqrt()))
+            .collect();
+        rows.insert(10, rows[10]);
+        for (from, to, bin, limit) in [
+            (0, 40_000, 1_000, 10_000),
+            (250, 39_999, 1_000, 10_000),
+            (0, 40_000, 100, 10_000),
+            (0, 40_000, 3_700, 10_000),
+            (12_345, 20_000, 500, 7),
+            (50_000, 60_000, 1_000, 100),
+        ] {
+            assert_eq!(
+                binned_means(&rows, from, to, bin, limit),
+                scan(&rows, from, to, bin, limit),
+                "from {from} to {to} bin {bin} limit {limit}"
+            );
+        }
+        assert!(
+            binned_means(&[], 0, 1_000, 100, 100)
+                .iter()
+                .all(|(_, v)| v.is_none())
+        );
     }
 }
