@@ -3566,3 +3566,30 @@ fn no_part_is_folded_onto_a_neighbouring_footprint() {
     assert_eq!(report.counts.building_parts_orphan, 9);
     assert_eq!(report.counts.building_parts_merged, 4364);
 }
+
+/// Every movement a Manhattan signal plan controls — vehicle connectors and crosswalks —
+/// and every head group it shows gets a green somewhere in its cycle. Before the
+/// signal-plan fix of 2026-10-06, 35 of 1,452 head groups (all pedestrian heads, 64
+/// crosswalk lanes) showed don't-walk all cycle: crosswalks every vehicle phase blocked.
+#[test]
+#[ignore = "needs worlds/cache/manhattan.osm.xml, which is gitignored and 30 MB"]
+fn every_manhattan_signal_group_shows_green() {
+    let bbox = v2xw_world::GeoBbox::new(40.7440, -73.9900, 40.7620, -73.9680);
+    let options = OsmOptions {
+        bbox: Some(bbox),
+        ..OsmOptions::default()
+            .imported_at("2026-09-18T00:00:00Z")
+            .highway_preset(HighwayPreset::UrbanUsNyc)
+    };
+    let (world, _) = import_osm(MANHATTAN, &options).expect("Manhattan imports");
+    let report = v2xw_world::validate::validate(
+        &world,
+        None,
+        &v2xw_world::validate::ValidationParams::default(),
+    );
+    for check in ["signal-group-never-green", "signal-movement-never-green"] {
+        let c = &report.checks[check];
+        assert!(c.of > 1000, "{check}: only {} examined", c.of);
+        assert_eq!(c.count, 0, "{check}: {:#?}", c.examples);
+    }
+}

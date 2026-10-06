@@ -395,7 +395,9 @@ pub struct PedestrianSignalReport {
     pub never_walk: u32,
     /// Turning movements given a permissive green (turn, yielding to pedestrians) in the
     /// phases where they alone kept a crosswalk from ever showing walk.
-    pub turns_made_permissive: u32,
+    pub turns_made_permissive: u32,    /// Exclusive pedestrian phases added to plans whose vehicle phases left a crosswalk
+    /// no window for a walk at all.
+    pub exclusive_phases: u32,
 }
 
 /// One pedestrian interval inside a cycle: `[start, end)` seconds from the cycle start
@@ -405,10 +407,12 @@ type Interval = (f64, f64, SignalState);
 /// Gives every signalised junction's crosswalks their pedestrian intervals.
 ///
 /// `junction_position` places a junction, to settle a crosswalk that two neighbouring
-/// plans both reach: it goes to the nearer junction. Vehicle states are changed in one case
-/// only: a crosswalk that no phase would let show walk, blocked in some phase by turning
-/// movements on a protected green alone, gets those turns made permissive there
-/// ([`PedestrianSignalReport::turns_made_permissive`]). Otherwise phases are split where a
+/// plans both reach: it goes to the nearer junction. A crosswalk that no phase would let
+/// show walk is given one: turning movements that alone block it in some phase are made
+/// permissive there ([`PedestrianSignalReport::turns_made_permissive`]), and where through
+/// traffic blocks it in every phase the plan gets an exclusive pedestrian phase
+/// ([`PedestrianSignalReport::exclusive_phases`]), which lengthens its cycle. Otherwise
+/// vehicle states are not changed: phases are split where a
 /// pedestrian interval starts or ends, and each crossing lane is
 /// appended to [`SignalPlan::controlled`] with a [`SignalHeadKind::Pedestrian`] head at
 /// its far end.
@@ -509,53 +513,80 @@ pub fn signalise_crossings(
                 })
                 .collect()
         };
+        // A crosswalk with no window for a walk (every phase blocks it, or the gaps are too
+        // short to hold the minimum walk).
+        let no_walk = |plan: &SignalPlan, cutters: &[usize], length_m: f64| -> bool {
+            let blocked = blocked_of(plan, cutters);
+            blocked.iter().all(|b| *b)
+                || (blocked.iter().any(|b| *b)
+                    && walk_intervals(plan, &blocked, length_m, timing).0.is_empty())
+        };
+        // 1. Where only turning movements on a protected green block such a crosswalk in
+        // some phase — a left turn from a one-way street onto a one-way avenue, which
+        // crosses no opposing traffic and so got a full green — those turns become
+        // permissive there: they turn yielding to pedestrians in the crosswalk (UVC
+        // §11-202(a)1, MUTCD §4E.06 concurrent phasing), and the crosswalk shows walk
+        // beside them. A through movement is never made to yield.
+        for (k, cutters) in &mine {
+            if !no_walk(plan, cutters, walks[*k].length_m) {
+                continue;
+            }
+            let blocked = blocked_of(plan, cutters);
+            for (ph, phase) in plan.phases.iter_mut().enumerate() {
+                if !blocked[ph] {
+                    continue;
+                }
+                let only_turns = cutters.iter().all(|mi| {
+                    !blocks_walk(phase.states[*mi], turns[*mi])
+                        || (phase.states[*mi] == SignalState::Green
+                            && turns[*mi] != TurnDirection::Straight)
+                });
+                if !only_turns {
+                    continue;
+                }
+                for mi in cutters {
+                    if phase.states[*mi] == SignalState::Green
+                        && turns[*mi] != TurnDirection::Straight
+                    {
+                        phase.states[*mi] = SignalState::GreenYield;
+                        report.turns_made_permissive += 1;
+                    }
+                }
+            }
+        }
+        // 2. A crosswalk a through movement blocks in every phase — a signal whose vehicle
+        // phases all run across it, as at a crossing of a one-way road whose only phase is
+        // its own green — gets an exclusive pedestrian phase at the end of the cycle: every
+        // vehicle movement red while walk shows (MUTCD 2009 §4E.06; the "pedestrian phase"
+        // of a pedestrian-actuated signal). It lasts the 7 s minimum walk, the clearance of
+        // the longest such crosswalk at 3.5 ft/s and the 3 s buffer, rounded up to a tenth
+        // of a second; the cycle grows by as much.
+        let longest = mine
+            .iter()
+            .filter(|(k, cutters)| no_walk(plan, cutters, walks[*k].length_m))
+            .map(|(k, _)| walks[*k].length_m)
+            .fold(0.0f64, f64::max);
+        if longest > 0.0 {
+            let need = timing.min_walk_s + timing.clearance_s(longest) + timing.buffer_s;
+            // Rounded up to a tenth of a second, as the change intervals are.
+            let duration = quantise((need / 0.1).ceil() * 0.1, Q_TIME_S);
+            let movements = plan.phases[0].states.len();
+            plan.phases.push(SignalPhase {
+                duration_s: duration,
+                states: vec![SignalState::Red; movements],
+                name: None,
+            });
+            plan.cycle_s = quantise(plan.cycle_s + duration, Q_TIME_S);
+            report.exclusive_phases += 1;
+        }
+        // 3. Every crosswalk's intervals.
         let mut added: Vec<(Vec<LaneId>, Vec<Interval>)> = Vec::new();
         for (k, cutters) in &mine {
-            let mut blocked = blocked_of(plan, cutters);
+            let blocked = blocked_of(plan, cutters);
             if blocked.iter().all(|b| !*b) {
                 // Nothing that cuts it ever has a protected indication: an unsignalised
                 // crosswalk inside a signalised junction, where turning traffic yields.
                 continue;
-            }
-            let mut intervals = if blocked.iter().all(|b| *b) {
-                Vec::new()
-            } else {
-                walk_intervals(plan, &blocked, walks[*k].length_m, timing).0
-            };
-            if intervals.is_empty() {
-                // No window for a walk: a crosswalk every phase blocks. Where only
-                // turning movements on a protected green block it in some phase — a left
-                // turn from a one-way street onto a one-way avenue, which crosses no
-                // opposing traffic and so got a full green — those turns become
-                // permissive there: they turn yielding to pedestrians in the crosswalk
-                // (UVC §11-202(a)1, MUTCD §4E.06 concurrent phasing), and the crosswalk
-                // shows walk beside them. A through movement is never made to yield.
-                let mut changed = 0u32;
-                for (pi, phase) in plan.phases.iter_mut().enumerate() {
-                    if !blocked[pi] {
-                        continue;
-                    }
-                    let only_turns = cutters.iter().all(|mi| {
-                        !blocks_walk(phase.states[*mi], turns[*mi])
-                            || (phase.states[*mi] == SignalState::Green
-                                && turns[*mi] != TurnDirection::Straight)
-                    });
-                    if !only_turns {
-                        continue;
-                    }
-                    for mi in cutters {
-                        if phase.states[*mi] == SignalState::Green
-                            && turns[*mi] != TurnDirection::Straight
-                        {
-                            phase.states[*mi] = SignalState::GreenYield;
-                            changed += 1;
-                        }
-                    }
-                }
-                if changed > 0 {
-                    report.turns_made_permissive += changed;
-                    blocked = blocked_of(plan, cutters);
-                }
             }
             let intervals = if blocked.iter().all(|b| *b) {
                 report.never_walk += 1;
@@ -570,7 +601,6 @@ pub fn signalise_crossings(
                     report.signalised -= 1;
                     report.never_walk += 1;
                 }
-                intervals.clear();
                 iv
             };
             added.push((walks[*k].lanes.clone(), intervals));
@@ -959,6 +989,123 @@ mod tests {
         }
         // The phases still fill the cycle.
         assert!((plan.total_phase_duration_s() - plan.cycle_s).abs() < 1e-6);
+    }
+
+    /// A plan whose only vehicle phase runs the movement across the crosswalk — the
+    /// crossroads with its north-south movement removed, green all cycle but for the change
+    /// interval — left the crosswalk on don't-walk for ever (35 Manhattan head groups did).
+    /// It now gets an exclusive pedestrian phase: every vehicle movement red while walk
+    /// shows, for the minimum walk, the clearance and the buffer.
+    #[test]
+    fn a_crosswalk_every_vehicle_phase_blocks_gets_an_exclusive_pedestrian_phase() {
+        let (lanes, connections, mut plan) = crossroads();
+        use SignalState::{Amber, Green, Red};
+        plan.controlled = vec![LaneId::new(1)];
+        plan.phases = vec![
+            SignalPhase {
+                duration_s: 55.0,
+                states: vec![Green],
+                name: None,
+            },
+            SignalPhase {
+                duration_s: 3.0,
+                states: vec![Amber],
+                name: None,
+            },
+            SignalPhase {
+                duration_s: 2.0,
+                states: vec![Red],
+                name: None,
+            },
+        ];
+        let mut plans = vec![plan];
+        let report = signalise_crossings(
+            &mut plans,
+            &lanes,
+            &connections,
+            |_| Vec3::ZERO,
+            &PedestrianTiming::mutcd(),
+        );
+        assert_eq!(report.never_walk, 0, "{report:?}");
+        assert_eq!(report.exclusive_phases, 1, "{report:?}");
+        assert_eq!(report.signalised, 1);
+        let plan = &plans[0];
+        // 7 s walk + 16 m / 1.0668 m/s (15.0 s) + 3 s buffer = 25.0 s more cycle.
+        assert!((plan.cycle_s - 85.0).abs() < 1e-6, "{}", plan.cycle_s);
+        assert!((plan.total_phase_duration_s() - plan.cycle_s).abs() < 1e-6);
+        let walk = |t: f64| crossing_state(plan, LaneId::new(6), t).unwrap();
+        assert_eq!(walk(10.0), SignalState::Red);
+        assert!(
+            (0..850).any(|k| walk(f64::from(k) * 0.1) == SignalState::Green),
+            "walk never shows"
+        );
+        // While walk shows, the movement across the crosswalk is red.
+        for k in 0..850 {
+            let t = f64::from(k) * 0.1;
+            if walk(t) == SignalState::Green {
+                assert_eq!(plan.states_at(t).unwrap()[0], SignalState::Red, "at {t}");
+            }
+        }
+    }
+
+    /// A left turn on a protected green — one that crosses no opposing traffic, as from a
+    /// one-way street onto a one-way avenue — that alone blocks a crosswalk in its phase
+    /// is made permissive there (it turns yielding to the pedestrians), and the crosswalk
+    /// shows walk beside it; the cycle is unchanged.
+    #[test]
+    fn a_protected_turn_that_alone_blocks_a_crosswalk_is_made_permissive() {
+        let (lanes, mut connections, mut plan) = crossroads();
+        use SignalState::{Amber, Green, Red};
+        // The north-bound movement becomes a left turn onto the crossed departure (lane 2):
+        // it now cuts the crosswalk too, in the phase where the east-bound through
+        // movement is red.
+        connections[1] = Connection {
+            from_lane: LaneId::new(3),
+            to_lane: LaneId::new(2),
+            via: Some(LaneId::new(4)),
+            direction: TurnDirection::Left,
+            permitted: true,
+        };
+        plan.phases = vec![
+            SignalPhase {
+                duration_s: 27.0,
+                states: vec![Green, Red],
+                name: None,
+            },
+            SignalPhase {
+                duration_s: 3.0,
+                states: vec![Amber, Red],
+                name: None,
+            },
+            SignalPhase {
+                duration_s: 27.0,
+                states: vec![Red, Green],
+                name: None,
+            },
+            SignalPhase {
+                duration_s: 3.0,
+                states: vec![Red, Amber],
+                name: None,
+            },
+        ];
+        // The turn's connector must reach the crosswalk's band on lane 2: the crosswalk is
+        // 2 m along lane 2, inside the reach of the departure lane.
+        let mut plans = vec![plan];
+        let report = signalise_crossings(
+            &mut plans,
+            &lanes,
+            &connections,
+            |_| Vec3::ZERO,
+            &PedestrianTiming::mutcd(),
+        );
+        assert_eq!(report.never_walk, 0, "{report:?}");
+        assert_eq!(report.exclusive_phases, 0, "{report:?}");
+        assert!(report.turns_made_permissive >= 1, "{report:?}");
+        let plan = &plans[0];
+        assert!((plan.cycle_s - 60.0).abs() < 1e-9);
+        let walk = |t: f64| crossing_state(plan, LaneId::new(6), t).unwrap();
+        assert_eq!(walk(35.0), SignalState::Green);
+        assert_eq!(plan.states_at(35.0).unwrap()[1], SignalState::GreenYield);
     }
 
     /// The procedural grid's pedestrian network: every crosswalk lane is reached from a

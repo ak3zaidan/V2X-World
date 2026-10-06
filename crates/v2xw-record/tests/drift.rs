@@ -90,8 +90,8 @@ fn pose(step: u32, pos: [f64; 3]) -> ActorPose {
         class_idx: 0,
         state: ST_EQUIPPED,
         verified_neighbors: 0,
+        activity: 0,
     }
-    activity: 0,
 }
 
 const STEPS: u32 = 10_000;
