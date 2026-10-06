@@ -4033,7 +4033,12 @@ impl Mobility for NativeMobility {
                 let mut exposure = BTreeMap::new();
                 for a in self.actors.values() {
                     let bands = self.crosswalks.ahead(world, &a.crosswalk_path());
-                    crate::vru::crosswalk::expose(&bands, a.speed_mps, &mut exposure);
+                    crate::vru::crosswalk::expose(
+                        &bands,
+                        a.speed_mps,
+                        a.class.spec().length_m,
+                        &mut exposure,
+                    );
                 }
                 vru.set_crossing_permits(self.crosswalks.permits_exposed(&signal_states, &exposure));
             }
@@ -5472,7 +5477,17 @@ mod tests {
                     )
                     .expect("a trip");
                 let got = engine.actors[&id].driver;
-                let want = preset.profile(class);
+                let mut want = preset.profile(class);
+                // Outside the legacy parity mode a motorcycle rides as one
+                // ([`TwoWheelerParams`]): its own acceleration, braking, headway and gap
+                // on the installed model's equations. The legacy mode keeps the preset's.
+                if label != "legacy" && class == VehicleClass::Motorcycle {
+                    let tw = TwoWheelerParams::default();
+                    want.max_accel_mps2 = tw.motorcycle_accel_mps2;
+                    want.comfort_decel_mps2 = tw.comfort_decel_mps2;
+                    want.time_headway_s = tw.time_headway_s;
+                    want.min_gap_m = tw.min_gap_m;
+                }
                 assert_eq!(
                     (
                         got.max_accel_mps2,

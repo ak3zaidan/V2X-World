@@ -1986,7 +1986,8 @@ mod tests {
         let l = world.lane(lane);
         let run = |activity: crate::vru::PedActivity| {
             let mut audit = TrafficAuditor::new(&world, AuditParams::default());
-            let mut p = pedestrian(9, lane, 0.0, l.point_at((l.length_m - 1.0).min(45.0)));
+            // 35 m along: the car's front closes from 27 m to 8 m at 10 m/s.
+            let mut p = pedestrian(9, lane, 0.0, l.point_at((l.length_m - 1.0).min(35.0)));
             p.activity = activity;
             for k in 0..20u64 {
                 let car = at(&world, 0, lane, 8.0 + k as f64, 10.0);

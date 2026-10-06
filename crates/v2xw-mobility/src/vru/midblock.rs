@@ -134,9 +134,12 @@ pub struct Site {
 #[derive(Debug, Clone, Default)]
 pub struct MidblockIndex {
     sites: BTreeMap<LaneId, Vec<Site>>,
+    grid: Grid,
+    margin_m: f64,
 }
 
 /// Lane segments by grid cell, for the ray casts.
+#[derive(Debug, Clone, Default)]
 struct Grid {
     cell: f64,
     cells: BTreeMap<(i64, i64), Vec<(u32, u32)>>,
@@ -189,7 +192,57 @@ impl MidblockIndex {
                 s += spacing;
             }
         }
-        Self { sites }
+        Self {
+            sites,
+            grid,
+            margin_m: params.end_margin_m,
+        }
+    }
+
+    /// The driven lanes the straight path `a→b` crosses, nearest first — or `None` if it
+    /// meets a junction connector or a crosswalk on the way, so is no mid-block crossing.
+    /// A diagonal path can cut lanes the straight-across ray of its site did not, a turn
+    /// pocket near the corner among them; the bands are cut on these.
+    pub fn path_lanes(&self, world: &World, a: Vec3, b: Vec3) -> Option<Vec<LaneId>> {
+        let grid = &self.grid;
+        let (x0, y0) = grid.key(a.x.min(b.x), a.y.min(b.y));
+        let (x1, y1) = grid.key(a.x.max(b.x), a.y.max(b.y));
+        let mut seen: Vec<(u32, u32)> = Vec::new();
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                if let Some(v) = grid.cells.get(&(x, y)) {
+                    seen.extend_from_slice(v);
+                }
+            }
+        }
+        seen.sort_unstable();
+        seen.dedup();
+        let mut hits: Vec<(f64, LaneId)> = Vec::new();
+        for (l, i) in seen {
+            let lane = world.lane(LaneId::new(l));
+            let (u0, u1) = (lane.centreline[i as usize], lane.centreline[i as usize + 1]);
+            if let Some((t, _)) = seg_intersect(a, b, u0, u1) {
+                match lane.kind {
+                    LaneKind::Internal | LaneKind::Crossing => return None,
+                    _ if v2xw_world::walk::is_driven(lane) => hits.push((t, lane.id)),
+                    _ => {}
+                }
+            }
+        }
+        hits.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+        let mut out: Vec<LaneId> = Vec::new();
+        for (_, id) in hits {
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+        Some(out)
+    }
+
+    /// The end margin the index was built with, metres: how far from a sidewalk lane's
+    /// ends a crossing may land.
+    pub fn margin_m(&self) -> f64 {
+        self.margin_m
     }
 
     /// The crossing points of one sidewalk lane, by arc length.

@@ -954,8 +954,10 @@ impl VruMobility for SocialForce {
                             let along = math::cos(far.heading_at(site.far_s_m) - heading);
                             let shift = site.width_m * math::tan(theta)
                                 * if along >= 0.0 { 1.0 } else { -1.0 };
-                            let lo = 1.0_f64.min(0.5 * far.length_m);
-                            let hi = (far.length_m - 1.0).max(lo);
+                            // The far end stays clear of the corners, as the near one does.
+                            let margin = index.margin_m().min(0.5 * far.length_m);
+                            let lo = margin;
+                            let hi = (far.length_m - margin).max(lo);
                             let far_s = (site.far_s_m + shift).clamp(lo, hi);
                             midblock = Some(Midblock {
                                 at_s_m: site.s_m,
@@ -1206,14 +1208,26 @@ impl VruMobility for SocialForce {
                     MidblockStage::Approaching if at_kerb && mid_hold => {
                         let from = lane.offset_point(s_m, lateral_m);
                         m.from = from;
-                        m.bands = path_bands(
-                            world,
-                            &m.crossed,
-                            from,
-                            m.to,
-                            self.params.midblock.corridor_width_m,
-                            actor.index() as usize,
-                        );
+                        // The lanes the actual path cuts, diagonal included; a path that
+                        // meets a junction connector or a crosswalk is given up.
+                        let crossed = self
+                            .midblock_index
+                            .as_ref()
+                            .map_or(Some(m.crossed.clone()), |ix| ix.path_lanes(world, from, m.to));
+                        m.bands = match crossed {
+                            Some(lanes) => {
+                                m.crossed = lanes;
+                                path_bands(
+                                    world,
+                                    &m.crossed,
+                                    from,
+                                    m.to,
+                                    self.params.midblock.corridor_width_m,
+                                    actor.index() as usize,
+                                )
+                            }
+                            None => Vec::new(),
+                        };
                         m.stage = MidblockStage::Waiting(now);
                         if m.bands.is_empty() {
                             // Nothing to cross after all (a lane the path misses).
@@ -2206,36 +2220,47 @@ mod tests {
         assert_eq!(m.stats().crossings_on_dont_walk, 0);
     }
 
-    /// One who waited at the kerb steps off its start-up time after walk comes on.
+    /// One who waited at the kerb steps off its start-up time after walk comes on: the
+    /// same pedestrian with a 2.5 s start-up reaches the crossing 25 steps later than with
+    /// none (both then walk the 0.3 m kerb margin from a standstill).
     #[test]
     fn a_waiting_pedestrian_steps_off_after_its_start_up_time() {
-        let traits = PedestrianTraits {
-            older: false,
-            violator: false,
-            startup_s: 2.5,
-            gap_margin_s: 2.0,
-        };
-        let (mut m, w, cycle, rng) = kerb_with(traits, 1.4);
-        let permit = |s| CrossingPermit {
-            signal: Some(s),
-            ..CrossingPermit::default()
-        };
-        m.set_crossing_permits([(cycle[1], permit(SignalState::Red))].into_iter().collect());
-        steps(&mut m, &w, &rng, 0, 150);
-        assert!(m.get(ActorId::new(1)).unwrap().waiting_since.is_some());
-        m.set_crossing_permits([(cycle[1], permit(SignalState::Green))].into_iter().collect());
-        let mut stepped = None;
-        for k in 150..250u64 {
-            steps(&mut m, &w, &rng, k, 1);
-            if stepped.is_none() && m.get(ActorId::new(1)).unwrap().lane != cycle[0] {
-                stepped = Some(k - 150);
+        let stepped_after = |startup_s: f64| -> (u64, PedestrianStats) {
+            let traits = PedestrianTraits {
+                older: false,
+                violator: false,
+                startup_s,
+                gap_margin_s: 2.0,
+            };
+            let (mut m, w, cycle, rng) = kerb_with(traits, 1.4);
+            let permit = |s| CrossingPermit {
+                signal: Some(s),
+                ..CrossingPermit::default()
+            };
+            m.set_crossing_permits([(cycle[1], permit(SignalState::Red))].into_iter().collect());
+            steps(&mut m, &w, &rng, 0, 150);
+            assert!(m.get(ActorId::new(1)).unwrap().waiting_since.is_some());
+            m.set_crossing_permits(
+                [(cycle[1], permit(SignalState::Green))].into_iter().collect(),
+            );
+            let mut stepped = None;
+            for k in 150..250u64 {
+                steps(&mut m, &w, &rng, k, 1);
+                if stepped.is_none() && m.get(ActorId::new(1)).unwrap().lane != cycle[0] {
+                    stepped = Some(k - 150);
+                }
             }
-        }
-        let stepped = stepped.expect("it crossed");
-        // 25 steps of start-up, give or take the step it notices walk on.
-        assert!((24..=27).contains(&stepped), "stepped off after {stepped} steps");
-        assert_eq!(m.stats().crossings_on_walk, 1);
-        assert_eq!(m.stats().waits, 1);
+            (stepped.expect("it crossed"), m.stats())
+        };
+        let (slow, stats) = stepped_after(2.5);
+        let (prompt, _) = stepped_after(0.0);
+        assert!(
+            (24..=26).contains(&(slow - prompt)),
+            "start-up of 2.5 s delayed the step off by {} steps ({slow} against {prompt})",
+            slow - prompt
+        );
+        assert_eq!(stats.crossings_on_walk, 1);
+        assert_eq!(stats.waits, 1);
     }
 
     /// A pedestrian who has waited `max_wait_s` at one kerb gives the walk up.

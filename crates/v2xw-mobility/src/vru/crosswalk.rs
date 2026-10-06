@@ -380,11 +380,18 @@ pub fn stopping_distance_m(speed_mps: f64) -> f64 {
         + STOP_BEFORE_CROSSWALK_M
 }
 
-/// Adds one vehicle's bands to each crosswalk's [`Exposure`].
-pub fn expose(bands: &[BandAhead], speed_mps: f64, out: &mut BTreeMap<usize, Exposure>) {
+/// Adds one vehicle's bands to each crosswalk's [`Exposure`]. A band is a hazard while
+/// any of the vehicle's body (`length_m` behind its front) is still on it, not only its
+/// front: a car whose front has just cleared the crosswalk still has its length across it.
+pub fn expose(
+    bands: &[BandAhead],
+    speed_mps: f64,
+    length_m: f64,
+    out: &mut BTreeMap<usize, Exposure>,
+) {
     let stop = stopping_distance_m(speed_mps);
     for b in bands {
-        let on_it = b.enter_m <= 0.0 && b.exit_m > 0.0;
+        let on_it = b.enter_m <= 0.0 && b.exit_m + length_m > 0.0;
         let e = out.entry(b.crosswalk).or_default();
         if on_it || (b.enter_m > 0.0 && b.enter_m <= stop) {
             e.hazard = true;

@@ -398,7 +398,16 @@ pub struct PedestrianSignalReport {
     pub turns_made_permissive: u32,    /// Exclusive pedestrian phases added to plans whose vehicle phases left a crosswalk
     /// no window for a walk at all.
     pub exclusive_phases: u32,
+    /// Of those, the plans whose greens were too short to give the phase its time, so
+    /// their cycle grew instead.
+    pub cycles_extended: u32,
 }
+
+/// The shortest green an exclusive pedestrian phase may leave the vehicle phase it takes
+/// its time from, seconds. **A choice** at the low end of the minimum greens the FHWA
+/// *Signal Timing Manual* discusses for a through movement (its values could not be
+/// re-read here).
+pub const MIN_VEHICLE_GREEN_S: f64 = 8.0;
 
 /// One pedestrian interval inside a cycle: `[start, end)` seconds from the cycle start
 /// (the end may exceed the cycle, which wraps), and the state shown.
@@ -411,7 +420,8 @@ type Interval = (f64, f64, SignalState);
 /// show walk is given one: turning movements that alone block it in some phase are made
 /// permissive there ([`PedestrianSignalReport::turns_made_permissive`]), and where through
 /// traffic blocks it in every phase the plan gets an exclusive pedestrian phase
-/// ([`PedestrianSignalReport::exclusive_phases`]), which lengthens its cycle. Otherwise
+/// ([`PedestrianSignalReport::exclusive_phases`]), taken out of its longest green (or, if
+/// that green is too short, added to its cycle). Otherwise
 /// vehicle states are not changed: phases are split where a
 /// pedestrian interval starts or ends, and each crossing lane is
 /// appended to [`SignalPlan::controlled`] with a [`SignalHeadKind::Pedestrian`] head at
@@ -560,7 +570,10 @@ pub fn signalise_crossings(
         // vehicle movement red while walk shows (MUTCD 2009 §4E.06; the "pedestrian phase"
         // of a pedestrian-actuated signal). It lasts the 7 s minimum walk, the clearance of
         // the longest such crosswalk at 3.5 ft/s and the 3 s buffer, rounded up to a tenth
-        // of a second; the cycle grows by as much.
+        // of a second. It is taken out of the plan's longest green when that leaves the
+        // green at least [`MIN_VEHICLE_GREEN_S`], so the cycle — and the plan's place in a
+        // coordinated corridor, every Midtown plan running 90 s — is unchanged; otherwise
+        // the cycle grows by as much.
         let longest = mine
             .iter()
             .filter(|(k, cutters)| no_walk(plan, cutters, walks[*k].length_m))
@@ -571,12 +584,31 @@ pub fn signalise_crossings(
             // Rounded up to a tenth of a second, as the change intervals are.
             let duration = quantise((need / 0.1).ceil() * 0.1, Q_TIME_S);
             let movements = plan.phases[0].states.len();
+            let donor = plan
+                .phases
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| {
+                    p.states
+                        .iter()
+                        .any(|s| matches!(s, SignalState::Green | SignalState::GreenYield))
+                })
+                .max_by(|a, b| a.1.duration_s.total_cmp(&b.1.duration_s).then(b.0.cmp(&a.0)))
+                .map(|(i, p)| (i, p.duration_s));
+            match donor {
+                Some((i, d)) if d - duration >= MIN_VEHICLE_GREEN_S => {
+                    plan.phases[i].duration_s = quantise(d - duration, Q_TIME_S);
+                }
+                _ => {
+                    plan.cycle_s = quantise(plan.cycle_s + duration, Q_TIME_S);
+                    report.cycles_extended += 1;
+                }
+            }
             plan.phases.push(SignalPhase {
                 duration_s: duration,
                 states: vec![SignalState::Red; movements],
                 name: None,
             });
-            plan.cycle_s = quantise(plan.cycle_s + duration, Q_TIME_S);
             report.exclusive_phases += 1;
         }
         // 3. Every crosswalk's intervals.
@@ -1030,17 +1062,19 @@ mod tests {
         assert_eq!(report.exclusive_phases, 1, "{report:?}");
         assert_eq!(report.signalised, 1);
         let plan = &plans[0];
-        // 7 s walk + 16 m / 1.0668 m/s (15.0 s) + 3 s buffer = 25.0 s more cycle.
-        assert!((plan.cycle_s - 85.0).abs() < 1e-6, "{}", plan.cycle_s);
+        // 7 s walk + 16 m / 1.0668 m/s (15.0 s) + 3 s buffer = 25.0 s, taken from the 55 s
+        // green: the cycle stays 60 s.
+        assert!((plan.cycle_s - 60.0).abs() < 1e-6, "{}", plan.cycle_s);
+        assert_eq!(report.cycles_extended, 0);
         assert!((plan.total_phase_duration_s() - plan.cycle_s).abs() < 1e-6);
         let walk = |t: f64| crossing_state(plan, LaneId::new(6), t).unwrap();
         assert_eq!(walk(10.0), SignalState::Red);
         assert!(
-            (0..850).any(|k| walk(f64::from(k) * 0.1) == SignalState::Green),
+            (0..600).any(|k| walk(f64::from(k) * 0.1) == SignalState::Green),
             "walk never shows"
         );
         // While walk shows, the movement across the crosswalk is red.
-        for k in 0..850 {
+        for k in 0..600 {
             let t = f64::from(k) * 0.1;
             if walk(t) == SignalState::Green {
                 assert_eq!(plan.states_at(t).unwrap()[0], SignalState::Red, "at {t}");
