@@ -374,6 +374,24 @@ impl CrlLinkageEntry {
         })
     }
 
+    /// Every linkage value this entry revokes in period `cert_i`: one per index `j < jmax`,
+    /// none for a period before the entry's or past its forward bound. The values
+    /// [`CrlLinkageEntry::matches_any_index`] compares against, for a verifier that
+    /// expands its CRL once per period.
+    pub fn values_at(&self, cert_i: u32) -> Vec<LinkageValue> {
+        let Some((ls1, ls2)) = self.seeds_at(cert_i) else {
+            return Vec::new();
+        };
+        (0..self.jmax)
+            .map(|j| {
+                linkage_value(
+                    pre_linkage_value(self.la_id1, ls1, j),
+                    pre_linkage_value(self.la_id2, ls2, j),
+                )
+            })
+            .collect()
+    }
+
     /// True if the certificate `(cert_i, cert_j, cert_lv)` is revoked by this entry.
     ///
     /// **Forward-only, and boundedly forward.** A certificate from a period *before* the
@@ -482,6 +500,57 @@ mod tests {
             }
         }
         assert_eq!(seen.len(), 15);
+    }
+
+    /// The store's per-period expansion answers exactly what walking every entry answers:
+    /// for revoked and honest certificates, before and after a new entry arrives (a new
+    /// CRL version must not be answered from the old expansion), across more periods than
+    /// the expansion keeps, and in either order of asking.
+    #[test]
+    fn the_crl_expansion_answers_what_walking_every_entry_answers() {
+        use crate::envelope::CrlStore;
+        let devices: Vec<DeviceLinkageContext> = (0..6u8)
+            .map(|k| {
+                DeviceLinkageContext::new(
+                    LA1,
+                    LA2,
+                    LinkageSeed::new([0x10 + k; LS_BYTES]),
+                    LinkageSeed::new([0x40 + k; LS_BYTES]),
+                )
+            })
+            .collect();
+        let walk = |entries: &[CrlLinkageEntry], i: u32, lv: LinkageValue| {
+            entries.iter().any(|e| e.matches_any_index(i, lv))
+        };
+        let mut store = CrlStore::new();
+        let mut entries: Vec<CrlLinkageEntry> = Vec::new();
+        let mut revoked_seen = 0;
+        // Devices 0..3 are revoked one at a time, from periods 2, 4 and 6; devices 3..6
+        // never are. Each round asks about every device in periods 0..10, in a scrambled
+        // order, so expansions are made, reused, evicted and rebuilt.
+        for (round, revoke_i) in [(0usize, 2u32), (1, 4), (2, 6)] {
+            let entry = CrlLinkageEntry::from_device(&devices[round], revoke_i, DEFAULT_JMAX);
+            store.add_linkage_entry(entry);
+            entries.push(entry);
+            for step in 0..60u32 {
+                let i = (step * 7 + round as u32) % 10;
+                let dev = &devices[(step as usize * 5) % devices.len()];
+                let lv = dev.linkage_value_for(i, (step * 3) % DEFAULT_JMAX);
+                let expected = walk(&entries, i, lv);
+                assert_eq!(
+                    store.revokes_linkage_at_period(i, lv),
+                    expected,
+                    "round {round}, period {i}"
+                );
+                revoked_seen += usize::from(expected);
+            }
+        }
+        assert!(revoked_seen > 10, "the check saw revoked certificates: {revoked_seen}");
+        // A clone answers from its own copy.
+        let copy = store.clone();
+        let lv = devices[0].linkage_value_for(5, 3);
+        assert!(copy.revokes_linkage_at_period(5, lv));
+        assert!(!copy.revokes_linkage_at_period(1, devices[0].linkage_value_for(1, 3)));
     }
 
     /// The legacy `test_crl_forward_match_and_backward_privacy` — the property that makes
