@@ -495,6 +495,11 @@ impl crate::views::EdgeCost for CyclistCost<'_> {
     }
 }
 
+/// The fastest a cyclist wants to ride, m/s: 25 km/h, where a pedelec's assistance stops
+/// (EU Regulation 168/2013, art. 2(2)(h)); few riders on a conventional bicycle hold more
+/// in city traffic. A cap on the draw, not a cited distribution's tail.
+const CYCLIST_MAX_DESIRED_MPS: f64 = 25.0 / 3.6;
+
 /// The custom entity a cyclist's speed is drawn under.
 const CYCLIST_SPEED_ID: &str = "mobility/vru/cyclist-speed";
 
@@ -1951,6 +1956,44 @@ impl NativeMobility {
         go
     }
 
+    /// Where each pedestrian in the carriageway mid-block must stop short, metres along its
+    /// path: just before the next lane whose band a vehicle's body is on, or that a moving
+    /// vehicle is too close to stop before. Drivers stop for a pedestrian in or entering
+    /// their lane; a pedestrian does not walk into one who could not, or into the side of
+    /// a car still crossing the path (a car that let the pedestrian go first and then
+    /// slowed in a queue) — they wait at the lane line, the rolling gap's other half.
+    fn midblock_holds(&self, world: &World, midblock: &MidblockBands) -> BTreeMap<ActorId, f64> {
+        let mut holds: BTreeMap<ActorId, f64> = BTreeMap::new();
+        for a in self.actors.values() {
+            let path = a.crosswalk_path();
+            let bands = crate::vru::crosswalk::bands_ahead(world, &path, &midblock.by_lane);
+            let length = a.class.spec().length_m;
+            for b in &bands {
+                let Some(&(ped, _)) = midblock.owner.get(&b.crosswalk) else {
+                    continue;
+                };
+                let Some(Some(d)) = midblock.progress.get(&ped).copied() else {
+                    continue;
+                };
+                let (d_near, _) = midblock.reach[&b.crosswalk];
+                let edge = d_near - MIDBLOCK_HOLD_MARGIN_M;
+                if d > edge {
+                    // Already at or in the lane: the drivers stop for it.
+                    continue;
+                }
+                let on_it = b.enter_m <= 0.0 && b.exit_m + length > 0.0;
+                let closing = b.enter_m > 0.0
+                    && a.speed_mps > crate::vru::crosswalk::APPROACHING_MPS
+                    && b.enter_m <= crate::vru::crosswalk::stopping_distance_m(a.speed_mps);
+                if on_it || closing {
+                    let h = holds.entry(ped).or_insert(f64::INFINITY);
+                    *h = h.min(edge);
+                }
+            }
+        }
+        holds
+    }
+
     /// The pedestrians on a sidewalk beside traffic that stands still: a vehicle within
     /// a few metres, and every vehicle there below walking pace.
     fn beside_queue(
@@ -1995,7 +2038,7 @@ impl NativeMobility {
             c.conventional_mps
         };
         rng.normal(mean, mean * c.relative_sd)
-            .clamp(0.4 * mean, VehicleClass::Bicycle.spec().max_speed_mps)
+            .clamp(0.4 * mean, CYCLIST_MAX_DESIRED_MPS)
     }
 
     /// The [`ActorSpawn`] announcing an actor this engine has just inserted.
@@ -4045,6 +4088,7 @@ impl Mobility for NativeMobility {
             if !midblock.is_empty() {
                 let go = self.midblock_permits(&*ctx, world, &vru, &midblock);
                 vru.set_midblock_permits(go);
+                vru.set_midblock_holds(self.midblock_holds(world, &midblock));
             } else {
                 self.midblock_yields.clear();
             }
@@ -4116,6 +4160,10 @@ struct MidblockBands {
     /// waiting at the kerb).
     progress: BTreeMap<ActorId, Option<f64>>,
 }
+
+/// How far short of a lane's edge a pedestrian crossing mid-block waits when that lane is
+/// not clear, metres.
+const MIDBLOCK_HOLD_MARGIN_M: f64 = 0.3;
 
 /// How far ahead of a crossing pedestrian a lane counts as occupied, metres: about a
 /// second and a half of walking, so a driver is stopping before the pedestrian reaches the

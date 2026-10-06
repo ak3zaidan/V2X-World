@@ -842,9 +842,13 @@ impl TrafficAuditor {
                 a,
                 Some(p.actor),
                 format!(
-                    "vehicle on lane {}, pedestrian on lane {}, centres {d:.2} m apart",
+                    "{} on lane {} at {:.2} m/s, pedestrian on lane {} ({:?}), centres \
+                     {d:.2} m apart",
+                    a.class,
                     a.lane.index(),
-                    p.lane.index()
+                    a.speed_mps,
+                    p.lane.index(),
+                    p.activity
                 ),
             );
             self.flag(Check::PedestrianOverlap, ex);
@@ -1325,10 +1329,13 @@ impl TrafficAuditor {
                         a,
                         None,
                         format!(
-                            "entered movement {} from lane {} on {state:?} at {:.2} m/s",
+                            "{} entered movement {} from lane {} on {state:?} at {:.2} m/s \
+                             ({:.2} m from the lane end a step before)",
+                            a.class,
                             internal.index(),
                             p.lane.index(),
-                            p.speed_mps
+                            p.speed_mps,
+                            world.lane(p.lane).length_m - p.s_m
                         ),
                     );
                     self.flag(Check::RedEntry, ex);

@@ -470,6 +470,9 @@ pub struct SocialForce {
     midblock_go: BTreeMap<ActorId, bool>,
     /// Whether the traffic beside each pedestrian stands still (set by the engine).
     beside_queue: std::collections::BTreeSet<ActorId>,
+    /// Where each pedestrian crossing mid-block must stop short along its path, because
+    /// the next lane is not clear (set by the engine).
+    midblock_holds: BTreeMap<ActorId, f64>,
     stats: PedestrianStats,
 }
 
@@ -490,6 +493,7 @@ impl SocialForce {
             midblock_index: None,
             midblock_go: BTreeMap::new(),
             beside_queue: std::collections::BTreeSet::new(),
+            midblock_holds: BTreeMap::new(),
             stats: PedestrianStats::default(),
         }
     }
@@ -503,6 +507,12 @@ impl SocialForce {
     /// it a gap now.
     pub fn set_midblock_permits(&mut self, go: BTreeMap<ActorId, bool>) {
         self.midblock_go = go;
+    }
+
+    /// Hands the model, for each pedestrian crossing mid-block, how far along its path it
+    /// may walk this step (the lane after that is not clear).
+    pub fn set_midblock_holds(&mut self, holds: BTreeMap<ActorId, f64>) {
+        self.midblock_holds = holds;
     }
 
     /// Hands the model the pedestrians beside traffic that stands still.
@@ -1339,8 +1349,16 @@ impl SocialForce {
         };
         let len = m.length_m().max(1e-6);
         let speed = person.vel.norm_2d();
-        let v = (speed + (person.desired_speed_mps - speed) * (dt_s / tau).min(1.0)).max(0.0);
-        let d = d + v * dt_s;
+        let mut v = (speed + (person.desired_speed_mps - speed) * (dt_s / tau).min(1.0)).max(0.0);
+        let mut d_next = d + v * dt_s;
+        // Waiting at a lane line for the lane ahead to clear.
+        if let Some(h) = self.midblock_holds.get(&actor).copied()
+            && d_next > h
+        {
+            d_next = d.max(h);
+            v = 0.0;
+        }
+        let d = d_next;
         let dir = Vec3::new_2d((m.to.x - m.from.x) / len, (m.to.y - m.from.y) / len);
         let landed = d >= len;
         let (far_lane, far_s) = (m.far_lane, m.far_s_m);
