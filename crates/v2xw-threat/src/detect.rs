@@ -439,9 +439,10 @@ pub struct DetectorParams {
     /// baseline for the baseline to count as straight (10).
     pub heading_straight_tol_deg: f64,
     /// The longest baseline the bounded heading check looks back over, seconds (10). A
-    /// longer straight baseline makes the bearing's own error smaller: at 11 m/s over
-    /// 10 s, two 5 m confidence radii leave 5 degrees, so a 45-degree heading lie
-    /// shows, where over the motion checks' 3.5 s history it needed more than 52.
+    /// longer straight baseline makes the bearing's own error smaller: at 11 m/s with
+    /// two stated 4.4 m radii it is under 5 degrees over 10 s and about 13 over the
+    /// motion checks' 3.5 s history, where a 45-degree heading lie stays under the
+    /// widened threshold (`tests/heading_bound.rs`).
     pub heading_baseline_max_s: f64,
     /// The alpha-beta tracker's position gain (`ScmsBeaconApp.java :: KF_ALPHA`, 0.5).
     pub kalman_alpha: f64,

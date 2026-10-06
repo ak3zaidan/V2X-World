@@ -140,8 +140,8 @@ fn a_turn_is_not_read_as_a_heading_lie() {
 fn a_45_degree_heading_offset_is_caught_over_a_long_straight_baseline() {
     // The legacy HeadingOffset attacker: the true heading plus 45 degrees, on a straight
     // road at 11 m/s. Over the motion checks' 3.5 s of history the bearing's own error
-    // (two 5 m radii over about 33 m) was 17.6 degrees, which put the threshold at 52.6
-    // and let the lie through; over a 10 s baseline it is 5.2 degrees.
+    // (two 4.4 m radii over about 38 m) is about 13 degrees, which puts the threshold
+    // near 48 and lets the lie through; over a 10 s baseline it is under 5.
     let trace: Vec<ObservedMessage> = (0..14)
         .map(|i| claim(i, 11.0 * i as f64, 0.0, 11.0, 45f64.to_radians()))
         .collect();

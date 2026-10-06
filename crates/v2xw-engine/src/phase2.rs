@@ -335,15 +335,20 @@ struct RoadMap<'a> {
 
 impl<'a> RoadMap<'a> {
     fn new(world: &'a World) -> Self {
-        use v2xw_world::model::ClassMask;
         Self {
             world,
-            vehicles: ClassMask::CAR
-                .union(ClassMask::TRUCK)
-                .union(ClassMask::BUS)
-                .union(ClassMask::MOTO)
-                .union(ClassMask::EMERGENCY),
+            vehicles: Self::vehicles(),
         }
+    }
+
+    /// The classes whose lanes are "the road" to the map check: motor vehicles.
+    fn vehicles() -> v2xw_world::model::ClassMask {
+        use v2xw_world::model::ClassMask;
+        ClassMask::CAR
+            .union(ClassMask::TRUCK)
+            .union(ClassMask::BUS)
+            .union(ClassMask::MOTO)
+            .union(ClassMask::EMERGENCY)
     }
 }
 
@@ -1316,7 +1321,14 @@ impl Phase2 {
             detector_params,
             detection_on: wants_detection,
             stated_accuracy,
-            map_check,
+            // A world with no motor-vehicle lane (a fixture, an empty extract) gives the
+            // receivers no map rather than one on which every claim is off the road.
+            map_check: map_check
+                && world
+                    .roads
+                    .lanes()
+                    .iter()
+                    .any(|l| l.admits(RoadMap::vehicles())),
             report_interval,
             ma,
             vehicles: 0,
