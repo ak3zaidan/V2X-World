@@ -31,9 +31,11 @@ import {
   axisUnit,
   binEdges,
   compareKeys,
+  confidentlyWorstFirst,
   dimLabel,
   formatNumber,
   formatWithUnit,
+  hasIntervals,
   histogram,
   metricsHash,
   niceTicks,
@@ -43,6 +45,7 @@ import {
   worstFirstLabel,
   type GroupRow,
   type MetricFamily,
+  type RankBy,
 } from "./model.js";
 
 /** The latency decomposition's stages, in the order a message lives them (`V2V_STAGES`). */
@@ -170,7 +173,7 @@ export function BreakdownSection({
         <h4>{dimLabel(dim)}</h4>
         <span className="dim">
           pooled over {told.span}
-          {dim === "node" ? ` · ${worstFirstLabel(f.polarity)}` : ""}
+          {dim === "node" ? " · worst first" : ""}
         </span>
         <span className="grow" />
         {withinOptions.length > 0 || within !== null ? (
@@ -341,7 +344,15 @@ function followNode(node: number): void {
 function NodeBreakdown({ rows, f }: { rows: readonly GroupRow[]; f: MetricFamily }): React.JSX.Element {
   const [limit, setLimit] = useState(NODE_PAGE);
   const [find, setFind] = useState("");
-  const ranked = useMemo(() => worstFirst(rows, f.polarity), [rows, f.polarity]);
+  const intervals = hasIntervals(rows) && f.polarity !== "neutral";
+  // Confidently worst first by default where the engine gives intervals: on a dense run the plain
+  // ranking leads with the nodes that sent least (0 delivered of 2), not the ones that are bad.
+  const [rankChoice, setRankBy] = useState<RankBy>("confident");
+  const rankBy: RankBy = intervals ? rankChoice : "value";
+  const ranked = useMemo(
+    () => (rankBy === "confident" ? confidentlyWorstFirst(rows, f.polarity) : worstFirst(rows, f.polarity)),
+    [rows, f.polarity, rankBy],
+  );
   const hist = useMemo(() => histogram(rows.map((r) => r.value).filter((v): v is number => v !== null), 24), [rows]);
   const list = find.trim() === "" ? ranked.slice(0, limit) : ranked.filter((r) => r.key === find.trim());
   const rank = new Map(ranked.map((r, i) => [r.key, i + 1]));
@@ -372,6 +383,15 @@ function NodeBreakdown({ rows, f }: { rows: readonly GroupRow[]; f: MetricFamily
         </figure>
       ) : null}
       <div className="bd-node-tools">
+        {intervals ? (
+          <label className="bd-within" title="By value: the pooled number alone. Confidently: by the best its 95 % interval allows, so a node with a handful of samples does not outrank one that is certainly bad.">
+            <span className="dim">Rank</span>
+            <select value={rankBy} onChange={(e) => setRankBy(e.target.value as RankBy)} data-testid="breakdown-node-rank">
+              <option value="confident">confidently worst first</option>
+              <option value="value">by value, {worstFirstLabel(f.polarity)}</option>
+            </select>
+          </label>
+        ) : null}
         <input
           type="search"
           placeholder="Find a node id"

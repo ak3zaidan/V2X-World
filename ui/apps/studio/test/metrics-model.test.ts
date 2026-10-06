@@ -10,6 +10,7 @@ import {
   appendSeries,
   chooseBinNs,
   compareKeys,
+  confidentlyWorstFirst,
   decimate,
   familiesOf,
   formatWithUnit,
@@ -20,6 +21,7 @@ import {
   niceTicks,
   parseMetricsHash,
   pooledText,
+  relatedOf,
   quantile7,
   rangeStats,
   seriesCsv,
@@ -27,6 +29,7 @@ import {
   toCsv,
   worstFirst,
   DASHBOARD,
+  type MetricFamily,
   type Series,
   type SeriesDef,
 } from "../src/metrics/model.js";
@@ -93,9 +96,25 @@ describe("cards from the catalogue", () => {
     expect(groupOf("det_recall")).toBe("misbehaviour");
     // A metric another track adds later lands somewhere sensible, not in "other".
     expect(groupOf("fcw_warning_lead_time")).toBe("safety");
-    expect(groupOf("pedestrian_delay")).toBe("latency");
+    // A road user's delay is traffic; a message's delay is latency.
+    expect(groupOf("pedestrian_delay")).toBe("traffic");
+    expect(groupOf("control_delay")).toBe("traffic");
+    expect(groupOf("sign_delay")).toBe("latency");
+    expect(groupOf("vru_warning_delay")).toBe("safety");
     expect(groupOf("jaywalk_count")).toBe("traffic");
     expect(groupOf("something_new")).toBe("other");
+  });
+
+  it("offers the related metrics the run measures, never itself or one it does not", () => {
+    const at = (b: string): MetricFamily => {
+      const f = byBase.get(b);
+      if (!f) throw new Error(`no ${b}`);
+      return f;
+    };
+    // latency_stage is measured; latency_stage_share, mac_access_delay and verify_* are not.
+    expect(relatedOf(at("e2e_latency"), families).map((f) => f.base)).toEqual(["latency_stage"]);
+    expect(relatedOf(at("latency_stage"), families).map((f) => f.base)).toEqual(["e2e_latency"]);
+    expect(relatedOf(at("mean_speed"), families)).toEqual([]);
   });
 
   it("finds a card by any word of its name, label, group, unit or definition", () => {
@@ -119,6 +138,26 @@ describe("worst first", () => {
   it("puts the lowest first where higher is better, the highest where lower is", () => {
     expect(worstFirst(rows, "higher-better").map((r) => r.key)).toEqual(["1", "10", "3", "2"]);
     expect(worstFirst(rows, "lower-better").map((r) => r.key)).toEqual(["3", "1", "10", "2"]);
+  });
+  it("ranks confidently: a node certainly bad leads one that sent too little to tell", () => {
+    // pdr per node as the engine pools it: value with its 95 % Wilson interval and trials.
+    const nodes = [
+      { key: "7", value: 0, lo: 0, hi: 0.658, n: 2 }, // unlucky or bad: two trials cannot say
+      { key: "3", value: 0.6, lo: 0.585, hi: 0.615, n: 4000 }, // certainly the worst
+      { key: "9", value: 0.95, lo: 0.94, hi: 0.96, n: 3000 },
+      { key: "4", value: null, lo: null, hi: null, n: 0 },
+    ];
+    expect(worstFirst(nodes, "higher-better").map((r) => r.key)).toEqual(["7", "3", "9", "4"]);
+    expect(confidentlyWorstFirst(nodes, "higher-better").map((r) => r.key)).toEqual(["3", "7", "9", "4"]);
+    // Lower is better (a delay): rank by the lower bound, highest first.
+    const delays = [
+      { key: "1", value: 0.9, lo: 0.1, hi: 1.7, n: 3 },
+      { key: "2", value: 0.5, lo: 0.45, hi: 0.55, n: 900 },
+    ];
+    expect(worstFirst(delays, "lower-better").map((r) => r.key)).toEqual(["1", "2"]);
+    expect(confidentlyWorstFirst(delays, "lower-better").map((r) => r.key)).toEqual(["2", "1"]);
+    // Without intervals it is the plain ranking.
+    expect(confidentlyWorstFirst(rows, "higher-better").map((r) => r.key)).toEqual(["1", "10", "3", "2"]);
   });
   it("orders keys by the number they start with, as the engine does", () => {
     expect(["100-150", "0-50", "1000+", "50-100", "unbinned"].sort(compareKeys)).toEqual(["0-50", "50-100", "100-150", "1000+", "unbinned"]);

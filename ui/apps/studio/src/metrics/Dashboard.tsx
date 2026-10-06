@@ -29,6 +29,7 @@ import {
   metricsHash,
   observedCount,
   parseMetricsHash,
+  relatedOf,
   seriesOf,
   DASHBOARD,
   EMPTY_SERIES,
@@ -132,25 +133,38 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
     document.getElementById(`metrics-group-${route.group}`)?.scrollIntoView({ block: "start" });
   }, [active, route.group, expanded, families.length]);
 
-  const onKeyDown = (ev: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (ev.key === "Escape") {
-      if (expanded !== null) {
-        back();
-        ev.preventDefault();
-      } else if (query !== "" && document.activeElement === search.current) {
-        setQuery("");
+  // The dashboard's keys, wherever the focus is while it is open: a click on the chart (a canvas)
+  // or on a control that then unmounts (a related metric) leaves the focus on the page body, and
+  // Escape there must still collapse the chart before it closes the dashboard. Captured on the
+  // window ahead of the shell's own Escape, which then sees it handled.
+  const keys = useRef({ expanded: false, query, back });
+  keys.current = { expanded: expanded !== null, query, back };
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      const k = keys.current;
+      const target = ev.target instanceof HTMLElement ? ev.target : null;
+      const typing = target?.closest("input, textarea, select, [contenteditable='true']") != null;
+      if (ev.key === "Escape") {
+        if (k.expanded) {
+          k.back();
+          ev.preventDefault();
+        } else if (k.query !== "" && target === search.current) {
+          setQuery("");
+          ev.preventDefault();
+        }
+        return;
+      }
+      if (ev.key === "/" && !typing) {
+        if (k.expanded) k.back();
+        search.current?.focus();
         ev.preventDefault();
       }
-      return;
-    }
-    const target = ev.target as HTMLElement;
-    const typing = target.closest("input, textarea, select, [contenteditable='true']") !== null;
-    if (ev.key === "/" && !typing && !ev.metaKey && !ev.ctrlKey) {
-      if (expanded !== null) back();
-      search.current?.focus();
-      ev.preventDefault();
-    }
-  };
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [active]);
 
   const ready = overview.status === "ready";
   const filtered = families.filter((f) => matchesSearch(f, query));
@@ -172,7 +186,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
   const runLine = `${hello?.scenarioName ?? "run"} · ${formatNumber(run.tNs / 1e9)} s${run.tEndNs > 0 ? ` of ${formatNumber(run.tEndNs / 1e9)} s` : ""} · ${run.state}${rat ? ` · ${rat}` : ""}`;
 
   return (
-    <div className="fullpanel-inner metrics-panel" data-testid="metrics-panel" onKeyDown={onKeyDown}>
+    <div className="fullpanel-inner metrics-panel" data-testid="metrics-panel">
       <div className="fullpanel-head">
         <h2>Metrics</h2>
         <span className="dim" data-testid="metrics-run">
@@ -231,7 +245,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
               This engine publishes no metric catalogue, so there is nothing to lay out. A run of the real engine measures delivery, latency, channel load and more.
             </p>
           ) : expanded !== null ? (
-            <Expanded f={expanded} route={route} setRoute={setRoute} active={active} onBack={back} rat={rat} />
+            <Expanded key={expanded.base} f={expanded} route={route} setRoute={setRoute} active={active} onBack={back} rat={rat} related={relatedOf(expanded, asked)} />
           ) : route.metric !== null ? (
             <p className="metrics-message" data-testid="metrics-message">
               This run does not measure <code>{route.metric}</code>, so the link has nothing to open.{" "}

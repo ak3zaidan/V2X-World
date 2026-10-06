@@ -76,6 +76,7 @@ export function Expanded({
   active,
   onBack,
   rat,
+  related = [],
 }: {
   f: MetricFamily;
   route: MetricsRoute;
@@ -84,6 +85,8 @@ export function Expanded({
   onBack: () => void;
   /** The run's radio technology (`radio.rat`), when the scenario says. */
   rat: string | null;
+  /** The metrics that explain or qualify this one and that the run measures (`model.ts` `relatedOf`). */
+  related?: readonly MetricFamily[];
 }): React.JSX.Element {
   const run = useStudio((s) => s.run);
   const hello = useStudio((s) => s.hello);
@@ -96,7 +99,11 @@ export function Expanded({
   const [note, setNote] = useState<string | null>(null);
   const plotRef = useRef<uPlot | null>(null);
 
-  useEffect(() => setSelected(initialSelection(f, route.metric)), [f.base]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Another metric (a related one, a link): its own series, and no note about the last one's export.
+  useEffect(() => {
+    setSelected(initialSelection(f, route.metric));
+    setNote(null);
+  }, [f.base]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const bReady = compareView !== null && compareView.state === "ready" && sideBAvailable();
   const comparing = overlay && bReady;
@@ -320,24 +327,44 @@ export function Expanded({
       {table && hasData ? <ValueTable lines={chartLines} unit={f.unit} from={from} to={to} /> : null}
 
       <div className="mx-sections">
-        {f.breakdowns.length > 0 ? (
-          <div className="mx-breakdowns">
-            <h4 className="mx-h">Breakdowns</h4>
-            {f.breakdowns.map((d) => (
-              <BreakdownSection key={d} f={f} dim={d} range={range} active={active} highlighted={route.breakdown === d} />
-            ))}
-          </div>
-        ) : (
-          <p className="dim">This metric has no breakdown: the engine measures it for the whole run only.</p>
-        )}
-        {rat !== null && f.group !== "traffic" && f.group !== "simulator" ? (
-          <p className="dim bd-note" data-testid="metric-technology">
-            By radio technology: this run is all <code>{rat}</code>. The engine runs one technology per run (<code>radio.rat</code>), as a
-            deployment does on one channel. To compare technologies, run the scenario with each and overlay the two runs here (Compare,
-            then Overlay run B).
-          </p>
-        ) : null}
-        <About f={f} latest={lines.length > 0 ? latestOf(a.series.get(lines[0]) ?? EMPTY_SERIES) : null} />
+        <div className="mx-breakdowns">
+          <h4 className="mx-h">Breakdowns</h4>
+          {f.breakdowns.length > 0 ? (
+            f.breakdowns.map((d) => <BreakdownSection key={d} f={f} dim={d} range={range} active={active} highlighted={route.breakdown === d} />)
+          ) : (
+            <p className="dim bd-note">This metric has no breakdown: the engine measures it for the whole run only.</p>
+          )}
+          {rat !== null && f.group !== "traffic" && f.group !== "simulator" ? (
+            <p className="dim bd-note" data-testid="metric-technology">
+              By radio technology: this run is all <code>{rat}</code>. The engine runs one technology per run (<code>radio.rat</code>), as a
+              deployment does on one channel. To compare technologies, run the scenario with each and overlay the two runs here (Compare,
+              then Overlay run B).
+            </p>
+          ) : null}
+        </div>
+        <div className="mx-side">
+          {related.length > 0 ? (
+            <nav className="mx-related" aria-label="Related metrics" data-testid="metric-related">
+              <h4 className="mx-h">Next to look at</h4>
+              <p className="dim">Over the same range.</p>
+              <div className="mx-related-list">
+                {related.map((r) => (
+                  <button
+                    key={r.base}
+                    type="button"
+                    className="small"
+                    onClick={() => setRoute({ metric: r.base, breakdown: null })}
+                    title={r.definition}
+                    data-testid={`metric-related-${r.base}`}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+            </nav>
+          ) : null}
+          <About f={f} latest={lines.length > 0 ? latestOf(a.series.get(lines[0]) ?? EMPTY_SERIES) : null} />
+        </div>
       </div>
     </div>
   );
@@ -368,7 +395,7 @@ function StatsTable({
       <table className="bd-table" data-testid="metric-stats">
         <thead>
           <tr>
-            <th>series</th>
+            <th data-testid="metric-stats-unit">series · {axisUnit(unit)}</th>
             <th title="Windows in the range that carry a value">windows</th>
             {STAT_KEYS.map((k) => (
               <th key={k}>{k}</th>

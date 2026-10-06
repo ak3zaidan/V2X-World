@@ -219,6 +219,10 @@ const EXPLICIT: Readonly<Record<string, GroupId>> = {
   acceleration: "traffic",
   headway_time: "traffic",
   headway_distance: "traffic",
+  app_warnings: "safety",
+  app_precision: "safety",
+  app_miss_ratio: "safety",
+  app_lead_time_s: "safety",
   ttc_min: "safety",
   ttc_conflicts: "safety",
   drac: "safety",
@@ -241,6 +245,11 @@ const PATTERNS: readonly (readonly [RegExp, GroupId])[] = [
   [/pseudonym|linkab|privacy|anonym|track(ing|ed)_/, "privacy"],
   [/^frag_/, "delivery"],
   [/^bytes_|overhead/, "overhead"],
+  // Warnings and conflicts are safety even when their name says "delay" or "time".
+  [/warning|alert|conflict|near_miss/, "safety"],
+  // A road user's delay (a pedestrian waiting to cross, a vehicle's control delay) is traffic, not
+  // a message's latency.
+  [/pedestrian|jaywalk|motorcycle|^travel_|control_delay|intersection_delay|vehicle_delay|queue_length|^stops/, "traffic"],
   [/latency|delay/, "latency"],
   [/cert|crl|^verify|^sign|scms|ccms|pki|revocation|enrol|^ra_|^pca_|^ma_/, "security"],
   [/warning|^app_|denm|eebl|^fcw|^ima|^lta|^vru_|collision_warning|alert|spat|map_|safety/, "safety"],
@@ -315,6 +324,10 @@ const LABELS: Readonly<Record<string, string>> = {
   acceleration: "Acceleration",
   headway_time: "Time headway",
   headway_distance: "Distance headway",
+  app_warnings: "Warnings raised",
+  app_precision: "Warning precision",
+  app_miss_ratio: "Missed warnings",
+  app_lead_time_s: "Warning lead time",
   ttc_min: "Minimum time to collision",
   ttc_conflicts: "Time-to-collision conflicts",
   drac: "Deceleration to avoid a crash",
@@ -326,6 +339,21 @@ const LABELS: Readonly<Record<string, string>> = {
   air_bytes_per_payload_byte: "Air bytes per payload byte",
   bytes_per_vehicle_hour: "Bytes per vehicle-hour",
   bytes_total: "Bytes by path",
+  bytes_air: "Bytes over the air (direct V2X radio)",
+  bytes_uu_ul: "Bytes on the cellular uplink",
+  bytes_uu_dl: "Bytes on the cellular downlink",
+  bytes_backhaul: "Bytes on the roadside backhaul",
+  bytes_backend: "Bytes to and from the PKI backend",
+  frag_fragment_loss: "Fragment loss",
+  frag_sdu_loss: "Fragmented message loss",
+  frag_sdu_loss_independent: "Fragmented message loss if fragments failed independently",
+  frag_sdu_loss_predicted: "Fragmented message loss, predicted by the PHY",
+  frag_content_loss: "Payload lost to fragmentation",
+  frag_content_loss_predicted: "Payload lost to fragmentation, predicted by the PHY",
+  det_tp: "Detections: true positives",
+  det_fp: "Detections: false positives",
+  det_tn: "Detections: true negatives",
+  det_fn: "Detections: missed attackers",
   events_processed: "Events processed",
   events_per_second: "Events per second",
   wall_clock_per_sim_second: "Wall clock per simulated second",
@@ -406,6 +434,48 @@ export function worstFirst<T extends { readonly key: string; readonly value: num
     const d = sign * (a.value - b.value);
     return d !== 0 ? d : compareKeys(a.key, b.key);
   });
+}
+
+/** How a node ranking orders: by the pooled value, or by how bad it is with 95 % confidence. */
+export type RankBy = "value" | "confident";
+
+/**
+ * The bound a row is ranked by when ranking confidently: the best its 95 % interval allows (the
+ * upper bound where higher is better, the lower where lower is better). A row with no interval
+ * ranks by its value. So a node whose delivery is 0 over two trials (Wilson interval 0–0.66) ranks
+ * after one at 0.60 over 4,000 trials (0.585–0.615): the second is certainly bad, the first may just
+ * be unlucky. This is how a ranking of thousands of nodes surfaces the ones worth following rather
+ * than the ones that sent least.
+ */
+export function confidentBound(r: { readonly value: number | null; readonly lo?: number | null; readonly hi?: number | null }, p: Polarity): number | null {
+  if (r.value === null) return null;
+  if (p === "higher-better") return r.hi ?? r.value;
+  if (p === "lower-better") return r.lo ?? r.value;
+  return r.value;
+}
+
+/** Rows worst first by {@link confidentBound}; ties by value, then by key. */
+export function confidentlyWorstFirst<T extends { readonly key: string; readonly value: number | null; readonly lo?: number | null; readonly hi?: number | null }>(
+  rows: readonly T[],
+  p: Polarity,
+): T[] {
+  const sign = p === "higher-better" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const ba = confidentBound(a, p);
+    const bb = confidentBound(b, p);
+    if (ba === null && bb === null) return compareKeys(a.key, b.key);
+    if (ba === null) return 1;
+    if (bb === null) return -1;
+    const d = sign * (ba - bb);
+    if (d !== 0) return d;
+    const dv = sign * ((a.value as number) - (b.value as number));
+    return dv !== 0 ? dv : compareKeys(a.key, b.key);
+  });
+}
+
+/** Whether a confident ranking means anything for these rows: some carry an interval. */
+export function hasIntervals(rows: readonly { readonly lo?: number | null; readonly hi?: number | null }[]): boolean {
+  return rows.some((r) => r.lo !== null && r.lo !== undefined && r.hi !== null && r.hi !== undefined);
 }
 
 /** Numeric keys (node ids) in number order, the rest as text. */
@@ -872,6 +942,79 @@ function splitOnce(s: string, sep: string): [string, string | undefined] {
 // ------------------------------------------------------------------------------------------------
 // Search
 // ------------------------------------------------------------------------------------------------
+
+// ------------------------------------------------------------------------------------------------
+// Related metrics: the next question a reader asks
+// ------------------------------------------------------------------------------------------------
+
+/**
+ * The metrics that explain or qualify another, in the order a study would look. Delivery leads to
+ * why packets were lost and to how loaded the channel was; latency to where the time went; channel
+ * load to what congestion control did about it. Only those the run measures are offered.
+ */
+const RELATED: Readonly<Record<string, readonly string[]>> = {
+  pdr: ["loss_rate", "pdr_by_cause", "cbr", "pir", "nar"],
+  pdr_all_pairs: ["pdr", "loss_rate", "cbr"],
+  per: ["pdr", "loss_rate", "collision_rate", "half_duplex_rate"],
+  loss_rate: ["pdr", "collision_rate", "half_duplex_rate", "cbr"],
+  pdr_by_cause: ["pdr", "loss_rate"],
+  pir: ["pdr", "aoi", "nar"],
+  aoi: ["pir", "pdr", "aoi_peak"],
+  aoi_peak: ["aoi", "pir"],
+  nar: ["pdr", "aoi"],
+  goodput: ["pdr", "envelope_overhead", "air_bytes_per_payload_byte"],
+  e2e_latency: ["latency_stage", "latency_stage_share", "mac_access_delay", "verify_wait", "verify_cost"],
+  latency_stage: ["e2e_latency", "latency_stage_share"],
+  latency_stage_share: ["latency_stage", "e2e_latency"],
+  mac_access_delay: ["cbr", "e2e_latency", "mac_queue_depth"],
+  cbr: ["channel_load", "offered_load", "carried_load", "mac_access_delay", "pdr"],
+  channel_load: ["cbr", "offered_load"],
+  channel_occupancy: ["cbr", "offered_load"],
+  offered_load: ["carried_load", "cbr", "mac_drops"],
+  carried_load: ["offered_load", "cbr"],
+  mac_queue_depth: ["mac_drops", "mac_access_delay"],
+  mac_drops: ["mac_queue_depth", "offered_load"],
+  collision_rate: ["cbr", "loss_rate", "half_duplex_rate"],
+  half_duplex_rate: ["collision_rate", "loss_rate"],
+  verify_rate: ["verify_cost", "verify_wait", "verify_queue_depth", "unverified_ratio"],
+  verify_cost: ["verify_rate", "verify_wait"],
+  verify_wait: ["verify_queue_depth", "verify_cost", "e2e_latency"],
+  verify_queue_depth: ["verify_wait", "verify_rate", "unverified_ratio"],
+  unverified_ratio: ["verify_queue_depth", "verify_rate"],
+  full_cert_share: ["envelope_overhead", "cert_bytes_share"],
+  envelope_overhead: ["full_cert_share", "security_overhead", "air_bytes_per_payload_byte"],
+  crl_entries: ["crl_bytes", "revocation_latency_stage"],
+  crl_bytes: ["crl_entries"],
+  cert_pool_valid: ["pseudonym_change_rate", "backend_link_up"],
+  backend_link_up: ["cert_pool_valid"],
+  pseudonym_change_rate: ["linkability", "cert_pool_valid"],
+  linkability: ["pseudonym_change_rate"],
+  time_to_detect: ["time_to_decision", "false_accusations", "det_recall"],
+  time_to_decision: ["time_to_detect", "revocation_latency_stage"],
+  det_recall: ["det_precision", "det_fpr", "time_to_detect"],
+  det_precision: ["det_recall", "false_accusations"],
+  mean_speed: ["density", "flow"],
+  density: ["mean_speed", "flow", "cbr"],
+  flow: ["density", "mean_speed"],
+  bytes_total: ["bytes_air", "bytes_uu_ul", "bytes_uu_dl", "bytes_backhaul", "bytes_backend", "bytes_per_vehicle_hour"],
+  bytes_air: ["bytes_total", "offered_load", "cbr"],
+  bytes_backend: ["bytes_total", "cert_pool_valid", "crl_bytes"],
+  frag_sdu_loss: ["frag_fragment_loss", "frag_sdu_loss_independent", "frag_sdu_loss_predicted", "frag_content_loss"],
+  frag_fragment_loss: ["frag_sdu_loss", "pdr"],
+  frag_content_loss: ["frag_sdu_loss", "frag_content_loss_predicted"],
+  app_warnings: ["app_precision", "app_miss_ratio", "app_lead_time_s"],
+  app_precision: ["app_miss_ratio", "app_warnings", "pdr"],
+  app_miss_ratio: ["app_precision", "pdr", "e2e_latency"],
+  app_lead_time_s: ["app_miss_ratio", "e2e_latency", "ttc_min"],
+  ttc_min: ["ttc_conflicts", "drac", "pet"],
+  ttc_conflicts: ["ttc_min", "drac"],
+};
+
+/** The families related to `f` that this run measures, in reading order. */
+export function relatedOf(f: MetricFamily, all: readonly MetricFamily[]): MetricFamily[] {
+  const byBase = new Map(all.map((x) => [x.base, x]));
+  return (RELATED[f.base] ?? []).map((b) => byBase.get(b)).filter((x): x is MetricFamily => x !== undefined && x.base !== f.base);
+}
 
 /** Whether a card matches a search: every word in its name, label, group, unit or definition. */
 export function matchesSearch(f: MetricFamily, query: string): boolean {

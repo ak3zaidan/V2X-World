@@ -149,7 +149,12 @@ its newest window's value with its unit, and its run so far as a line. Clicking 
   and merges older ones into time blocks (10 s, doubling whenever there are more than 100,000
   blocks) instead of dropping them, so a breakdown over the whole run pools the whole run; the
   answer carries the span it pooled and the block size (`pooled_from_ns`, `pooled_to_ns`,
-  `pooled_block_ns`), and the breakdown's header says so when that differs from the range asked;
+  `pooled_block_ns`), and the breakdown's header says so when that differs from the range asked.
+  Nodes rank *confidently* worst first by default: by the best their 95 % interval allows (the
+  upper bound where higher is better), so a node with 0 of 2 delivered does not outrank one
+  certainly at 0.6 over 4,000 trials; ranking by the bare value is one choice away;
+* the metrics that explain it, which the run measures, opened over the same range (delivery →
+  loss causes and channel load; latency → its stages; channel load → offered and carried load);
 * its definition, unit, reduction, visibility, source and what it does not account for;
 * CSV (the full-resolution series in range, or a breakdown's pooled rows) and PNG export;
 * with a second engine open in Compare, an overlay of the same series from run B and the

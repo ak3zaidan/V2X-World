@@ -17,7 +17,9 @@ function scenario(): string {
   const text = readFileSync(join(REPO, "scenarios/phase1-grid.yaml"), "utf8")
     .replace("name: phase1-grid", "name: e2e-metrics")
     .replace("duration_s: 60.0", `duration_s: ${SECONDS}.0`)
-    .replace("rate_veh_per_h: 30.0", "rate_veh_per_h: 1800.0")
+    // Three vehicles a second: at 1,800 an hour this grid had three vehicles in twelve seconds, and
+    // no one-second window reached pdr's 30-sample floor (it pooled 94 trials over the run).
+    .replace("rate_veh_per_h: 30.0", "rate_veh_per_h: 10800.0")
     .replace("cols: 13", "cols: 4")
     .replace("rows: 34", "rows: 4");
   const dir = join(tmpdir(), `vwp-engine-metrics-${process.pid}`);
@@ -56,11 +58,19 @@ test("the dashboard shows a finished run's measurements, and again after a reloa
     return { cards, windows };
   };
 
+  // What the engine itself holds: every one-second window of pdr that carried a value. The
+  // dashboard must show exactly these, no fewer (a page that only saw part of the stream) and no
+  // more. The first seconds, before the vehicles are in, are below the 30-sample floor.
+  const engineWindows = await page.evaluate(async () => {
+    const engine = window.__vwpStudio?.engine as unknown as { requestHttp(m: string, p: unknown, o: unknown): Promise<{ rows: unknown[][] }> };
+    const res = await engine.requestHttp("metrics.query", { metrics: ["pdr"], bin_ns: 1_000_000_000, limit: 10_000 }, { quiet: true });
+    return res.rows.filter((r) => typeof r[1] === "number").length;
+  });
+  expect(engineWindows, "the engine measured pdr in most windows").toBeGreaterThanOrEqual(SECONDS / 2);
+
   const after = await check("after the run");
   expect(after.cards).toBeGreaterThan(2);
-  // One window a second; the first may be too thin to report.
-  expect(after.windows).toBeGreaterThanOrEqual(SECONDS - 2);
-  expect(after.windows).toBeLessThanOrEqual(SECONDS + 1);
+  expect(after.windows, "the dashboard shows every window the engine holds").toBe(engineWindows);
 
   await page.reload();
   await expect.poll(async () => (await status(page)).state, { timeout: 60_000 }).toBe("finished");

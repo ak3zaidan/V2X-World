@@ -88,6 +88,15 @@ test("open, find, expand, brush, export and close the metrics dashboard", async 
   await expect(page.getByTestId("breakdown-dist_bin")).toBeVisible();
   await expect(page.getByTestId("breakdown-distance-chart")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("breakdown-node").locator("tbody tr").first()).toBeVisible();
+  // Nodes rank confidently worst first by default; by value, the first row is the lowest value.
+  await expect(page.getByTestId("breakdown-node-rank")).toHaveValue("confident");
+  await page.getByTestId("breakdown-node-rank").selectOption("value");
+  const nodeValues = await page
+    .getByTestId("breakdown-node")
+    .locator("tbody tr")
+    .evaluateAll((rows) => rows.map((r) => Number(r.querySelectorAll("td")[2]?.textContent ?? "NaN")));
+  expect(nodeValues.length).toBeGreaterThan(1);
+  expect(nodeValues[0]).toBe(Math.min(...nodeValues));
 
   // --- export ---------------------------------------------------------------------------------
   const [csv] = await Promise.all([page.waitForEvent("download"), page.getByTestId("metric-export-csv").click()]);
@@ -106,6 +115,14 @@ test("open, find, expand, brush, export and close the metrics dashboard", async 
   const bytes = readFileSync(await png.path());
   expect([...bytes.subarray(1, 4)].map((b) => String.fromCharCode(b)).join("")).toBe("PNG");
 
+  // --- a related metric opens over the same range, and leads back -----------------------------
+  await page.getByTestId("metric-related-cbr").click();
+  await expect(page.getByTestId("metric-expanded")).toHaveAttribute("data-metric", "cbr");
+  await expect.poll(() => page.url()).toMatch(/#metrics\/cbr\?from=[\d.]+&to=[\d.]+/);
+  await expect(page.getByTestId("metric-range-text")).toContainText(`${rangeText.split(" s of ")[0]} s of`);
+  await page.getByTestId("metric-related-pdr").click();
+  await expect(page.getByTestId("metric-expanded")).toHaveAttribute("data-metric", "pdr");
+
   // --- light theme: the same chart, readable --------------------------------------------------
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
   const inkLight = await page.getByTestId("metric-stats").evaluate((el) => getComputedStyle(el).color);
@@ -114,6 +131,9 @@ test("open, find, expand, brush, export and close the metrics dashboard", async 
   expect(inkLight).not.toBe(inkDark);
 
   // --- Escape collapses the chart, then closes the dashboard ----------------------------------
+  // Even with the focus on the page body, where a click on the chart or on a related metric (whose
+  // button unmounts) leaves it: the shell's own Escape would otherwise close the whole dashboard.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("metric-expanded")).toHaveCount(0);
   await expect(page.getByTestId("metrics-panel")).toBeVisible();
