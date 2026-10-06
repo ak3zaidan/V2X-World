@@ -60,6 +60,19 @@
 //! multipath spike, and a real fleet's detectors fire on it — and that is the honest
 //! behaviour: what must not follow is a revocation.
 //!
+//! # What the detectors check, and against what (2026-10-06)
+//!
+//! Every check that compares positions allows for the confidence each message states
+//! (CaTch, Kamel et al., IEEE WCNC 2019): the motion checks through the stated 95 %
+//! radius, the heading check through the bearing error two stated radii imply over the
+//! longest straight baseline the sender's own headings describe (up to 10 s), and the
+//! map check through the stated disc. Each receiver holds a map of the motor-vehicle
+//! lanes ([`RoadMap`]), as F2MD's position-plausibility check assumes, so a position
+//! lie that stays self-consistent (the legacy `ConstPosOffset`) is visible at all. A PSM
+//! sender is checked as a vulnerable road user. The authority's reporter budget is a
+//! rate inside its window, not a run-long count, so a receiver that follows one liar
+//! stays a witness against the next.
+//!
 //! # The joints, stated
 //!
 //! **1. The air credential is the SCMS credential's shape, with a stand-in key.** Each
@@ -301,6 +314,49 @@ pub const CRL_FETCH_INTERVAL_S: f64 = 3_600.0;
 /// without one. Five seconds keeps the broadcast a small share of the channel (one frame
 /// per unit per five seconds) while reaching a vehicle that drives past.
 pub const CRL_BROADCAST_INTERVAL_S: f64 = 5.0;
+
+/// How far a receiver's map search looks for a road, metres: a claim farther than this
+/// from every motor-vehicle lane scores as this far, which is several times the map
+/// check's tolerance, so the cap never turns a firing check into a quiet one.
+const MAP_SEARCH_M: f64 = 100.0;
+
+/// A receiver's map of the road network: the world's motor-vehicle lanes.
+///
+/// The position-plausibility check of the F2MD framework (Kamel et al., *Simulation
+/// framework for misbehavior detection in vehicular networks*, IEEE T-VT 69(6), 2020)
+/// asks whether a claimed position lies on a road of the receiver's own map; a
+/// navigation-grade map of the streets is what a production vehicle carries. The
+/// distance is to the nearest motor-vehicle lane's edge (its centreline less half its
+/// width), so a claim anywhere on the carriageway is on the road.
+struct RoadMap<'a> {
+    world: &'a World,
+    vehicles: v2xw_world::model::ClassMask,
+}
+
+impl<'a> RoadMap<'a> {
+    fn new(world: &'a World) -> Self {
+        use v2xw_world::model::ClassMask;
+        Self {
+            world,
+            vehicles: ClassMask::CAR
+                .union(ClassMask::TRUCK)
+                .union(ClassMask::BUS)
+                .union(ClassMask::MOTO)
+                .union(ClassMask::EMERGENCY),
+        }
+    }
+}
+
+impl v2xw_threat::obs::LocalEnvironment for RoadMap<'_> {
+    fn distance_to_road_m(&self, x_m: f64, y_m: f64) -> f64 {
+        self.world
+            .nearest_lane_within(Vec3::new(x_m, y_m, 0.0), MAP_SEARCH_M, Some(self.vehicles))
+            .map_or(MAP_SEARCH_M, |hit| {
+                let half = 0.5 * self.world.lane(hit.pos.lane).width_m;
+                (hit.distance_m - half).max(0.0)
+            })
+    }
+}
 
 /// The SCMS device id of an engine node.
 fn device_of(node: NodeId) -> NodeId {
@@ -741,10 +797,13 @@ pub struct Phase2Report {
     pub starved_node_steps: u64,
     /// The access legs.
     pub access: crate::backend::AccessReport,
-    /// Revocations whose subject was an armed attacker (ground truth).
+    /// Distinct armed attackers the backend revoked (ground truth).
     pub revoked_attackers: u64,
-    /// Revocations whose subject was honest (ground truth): false revocations.
+    /// Distinct honest devices the backend revoked (ground truth): false revocations.
     pub revoked_honest: u64,
+    /// Revocations issued for a device an earlier one had already revoked: two of its
+    /// pseudonyms decided before the first case reached the list. Counted once above.
+    pub revocations_repeated: u64,
     /// Decisions about a certificate the published list already revoked.
     pub decisions_already_covered: u64,
     /// The most corroborated events any pseudonym the authority did not revoke reached
@@ -869,6 +928,10 @@ pub struct Phase2 {
     /// the legacy constant 5 m (`detection.local[].params.use_stated_accuracy: 0`, kept to
     /// reproduce the runs before 2026-09-30).
     stated_accuracy: bool,
+    /// Whether each receiver checks a claimed position against its own map of the road
+    /// network (`true`, the default; `detection.local[].params.use_map: 0` is a receiver
+    /// with no map, whose `mapOffRoad` check cannot fire).
+    map_check: bool,
     report_interval: Duration,
     ma: MaHost,
     vehicles: u64,
@@ -915,6 +978,9 @@ pub struct Phase2 {
     attacker_reports: BTreeMap<NodeId, (u64, BTreeSet<[u8; 8]>)>,
     attacker_at_ma: BTreeMap<NodeId, u64>,
     attacker_peak_events: BTreeMap<NodeId, u32>,
+    /// The devices a revocation has been issued or decided for (ground truth, run report
+    /// only), so a device two of whose pseudonyms were decided is counted once.
+    revoked_devices: BTreeSet<NodeId>,
     /// The positional accuracy each safety message stated on the air, as a 95 % radius in
     /// metres, by signer and generation time: `None` when the message said "unavailable".
     /// `v2xw_node::VerifiedMessage` does not carry it, so the detector host joins it back
@@ -993,7 +1059,9 @@ fn apply_detector_param(p: &mut DetectorParams, key: &str, v: f64) -> bool {
         "heading_min_speed_mps" => p.heading_min_speed_mps = v,
         "heading_min_disp_m" => p.heading_min_disp_m = v,
         "heading_bearing_bound" => p.heading_bearing_bound = v != 0.0,
+        "offroad_confidence_bound" => p.offroad_confidence_bound = v != 0.0,
         "heading_straight_tol_deg" => p.heading_straight_tol_deg = v,
+        "heading_baseline_max_s" => p.heading_baseline_max_s = v,
         _ => return false,
     }
     true
@@ -1048,16 +1116,20 @@ impl Phase2 {
             ));
         }
 
-        // The host's defaults differ from the suite's legacy ones in one place: the heading
-        // check allows for the bearing error the stated accuracies imply
-        // (`Legacy12::heading_bounded`); `heading_bearing_bound: 0` restores the legacy
-        // one-step check, as `use_stated_accuracy: 0` restores the constant 5 m.
+        // The host's defaults differ from the suite's legacy ones in two places, both the
+        // confidence-range tolerance of CaTch (Kamel et al. 2019): the heading check allows
+        // for the bearing error the stated accuracies imply (`Legacy12::heading_bounded`),
+        // and the map check for the stated confidence disc. `heading_bearing_bound: 0` and
+        // `offroad_confidence_bound: 0` restore the legacy checks, as
+        // `use_stated_accuracy: 0` restores the constant 5 m.
         let mut detector_params = DetectorParams {
             heading_bearing_bound: true,
+            offroad_confidence_bound: true,
             ..DetectorParams::default()
         };
         let mut report_interval = secs(REPORT_INTERVAL_S);
         let mut stated_accuracy = true;
+        let mut map_check = true;
         for choice in &scenario.detection.local {
             if choice.id != LEGACY_12 {
                 return Err(conflict(
@@ -1083,6 +1155,8 @@ impl Phase2 {
                         report_interval = secs(v);
                     } else if key == "use_stated_accuracy" {
                         stated_accuracy = v != 0.0;
+                    } else if key == "use_map" {
+                        map_check = v != 0.0;
                     } else if !apply_detector_param(&mut detector_params, key, v) {
                         return Err(conflict(
                             &format!("detection.local[].params.{key}"),
@@ -1242,6 +1316,7 @@ impl Phase2 {
             detector_params,
             detection_on: wants_detection,
             stated_accuracy,
+            map_check,
             report_interval,
             ma,
             vehicles: 0,
@@ -1272,6 +1347,7 @@ impl Phase2 {
             attacker_reports: BTreeMap::new(),
             attacker_at_ma: BTreeMap::new(),
             attacker_peak_events: BTreeMap::new(),
+            revoked_devices: BTreeSet::new(),
             broadcast_accuracy: BTreeMap::new(),
             privacy_chains: BTreeMap::new(),
             privacy_tracked: BTreeMap::new(),
@@ -1842,6 +1918,7 @@ impl Phase2 {
     pub fn detect(
         &mut self,
         ctx: &mut dyn ThreatCtx,
+        world: &World,
         node: NodeId,
         me: &SelfBelief,
         reporter_digest: Option<String>,
@@ -1855,6 +1932,9 @@ impl Phase2 {
         let mut truths: Vec<(String, SimTime)> = Vec::new();
         let mut heard: Vec<ObservedMessage> = Vec::new();
         let compromised = self.compromised_nodes.contains_key(&node);
+        let map = RoadMap::new(world);
+        let env: &dyn v2xw_threat::obs::LocalEnvironment =
+            if self.map_check { &map } else { &NoMap };
         for m in delivered {
             let Some(signer) = &m.signer else { continue };
             let key = digest_key(signer);
@@ -1908,7 +1988,14 @@ impl Phase2 {
                 repetitions: 1,
                 cert_valid_from: 0,
                 cert_valid_to: SimTime::MAX,
-                station_type: StationType::Vehicle,
+                // A PSM is a vulnerable road user's own declaration (J2735 PSM; a CAM's
+                // stationType does the same in Europe): the suite then drops the vehicle
+                // kinematic and map checks a pedestrian would fail honestly.
+                station_type: if m.msg_type == v2xw_msg::MsgType::Psm {
+                    StationType::Vru
+                } else {
+                    StationType::Vehicle
+                },
                 verification: match m.verification {
                     v2xw_node::stores::VerificationState::Verified => VerificationState::Valid,
                     v2xw_node::stores::VerificationState::Invalid => {
@@ -1923,7 +2010,7 @@ impl Phase2 {
             if compromised {
                 heard.push(observed.clone());
             }
-            let verdict = v2xw_threat::Detector::on_message(detector, ctx, me, &observed, &NoMap);
+            let verdict = v2xw_threat::Detector::on_message(detector, ctx, me, &observed, env);
             self.report.messages_checked += 1;
             *self
                 .report
@@ -2185,7 +2272,9 @@ impl Phase2 {
                     self.report.crls_issued += 1;
                     // The ground-truth join, for the run report only: whether the device
                     // the authority revoked was the one that lied.
-                    if self.attackers.contains_key(&case.subject) {
+                    if !self.revoked_devices.insert(case.subject) {
+                        self.report.revocations_repeated += 1;
+                    } else if self.attackers.contains_key(&case.subject) {
                         self.report.revoked_attackers += 1;
                     } else {
                         self.report.revoked_honest += 1;
@@ -2740,7 +2829,9 @@ impl Phase2 {
                 .expect("checked")
                 .decide_block(device_of(subject), t);
             self.report.cases_opened += 1;
-            if self.attackers.contains_key(&subject) {
+            if !self.revoked_devices.insert(subject) {
+                self.report.revocations_repeated += 1;
+            } else if self.attackers.contains_key(&subject) {
                 self.report.revoked_attackers += 1;
             } else {
                 self.report.revoked_honest += 1;

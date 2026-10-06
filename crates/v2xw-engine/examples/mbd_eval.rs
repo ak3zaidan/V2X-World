@@ -223,6 +223,7 @@ fn main() {
         "decisions_honest": p.decisions_honest,
         "revoked_attackers": p.revoked_attackers,
         "revoked_honest": p.revoked_honest,
+        "revocations_repeated": p.revocations_repeated,
         "revocation_recall": ratio(p.revoked_attackers, p.attackers),
         "revocation_precision": ratio(p.revoked_attackers, p.revoked_attackers + p.revoked_honest),
         "onset_to_detection": stats(&p.onset_to_detection_ns),

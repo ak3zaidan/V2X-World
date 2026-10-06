@@ -31,10 +31,18 @@ fn claim(i: u64, x: f64, y: f64, speed: f64, heading_rad: f64) -> ObservedMessag
 
 /// Runs a trace through the suite; returns the peak heading score and whether it fired.
 fn heading(bounded: bool, trace: &[ObservedMessage]) -> (f64, bool) {
-    let mut det = Legacy12::new(DetectorParams {
-        heading_bearing_bound: bounded,
-        ..DetectorParams::default()
-    });
+    heading_with(
+        DetectorParams {
+            heading_bearing_bound: bounded,
+            ..DetectorParams::default()
+        },
+        trace,
+    )
+}
+
+/// [`heading`] at any operating point.
+fn heading_with(params: DetectorParams, trace: &[ObservedMessage]) -> (f64, bool) {
+    let mut det = Legacy12::new(params);
     let mut ctx = CollectingCtx::new(7);
     let mut peak = 0.0_f64;
     let mut fired = false;
@@ -126,4 +134,30 @@ fn a_turn_is_not_read_as_a_heading_lie() {
     println!("turn: bounded peak {bounded_peak:.2}");
     assert!(!bounded_fired, "a turn fired the bounded heading check");
     assert!(bounded_peak < 1.0, "a turn scored {bounded_peak:.2}");
+}
+
+#[test]
+fn a_45_degree_heading_offset_is_caught_over_a_long_straight_baseline() {
+    // The legacy HeadingOffset attacker: the true heading plus 45 degrees, on a straight
+    // road at 11 m/s. Over the motion checks' 3.5 s of history the bearing's own error
+    // (two 5 m radii over about 33 m) was 17.6 degrees, which put the threshold at 52.6
+    // and let the lie through; over a 10 s baseline it is 5.2 degrees.
+    let trace: Vec<ObservedMessage> = (0..14)
+        .map(|i| claim(i, 11.0 * i as f64, 0.0, 11.0, 45f64.to_radians()))
+        .collect();
+    let (bounded_peak, bounded_fired) = heading(true, &trace);
+    let (short_peak, short_fired) = heading_with(
+        DetectorParams {
+            heading_bearing_bound: true,
+            heading_baseline_max_s: 3.5,
+            ..DetectorParams::default()
+        },
+        &trace,
+    );
+    println!("45-degree offset: bounded peak {bounded_peak:.2}, over 3.5 s {short_peak:.2}");
+    assert!(bounded_fired, "a 45-degree heading lie went unreported");
+    assert!(
+        !short_fired,
+        "over the motion checks' 3.5 s history the bearing error was expected to hide it"
+    );
 }

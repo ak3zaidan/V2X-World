@@ -2999,7 +2999,7 @@ impl Engine {
                 .map(|c| v2xw_core::hash::hex_encode(&c.digest.0[..]));
             phase2
                 .as_mut()
-                .map(|p| p.detect(&mut ctx, node, &me, reporter, delivered))
+                .map(|p| p.detect(&mut ctx, world, node, &me, reporter, delivered))
                 .unwrap_or_default()
         };
         // The node's counters are cumulative, so take the running total rather than

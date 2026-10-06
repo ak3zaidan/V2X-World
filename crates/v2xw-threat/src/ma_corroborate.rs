@@ -98,9 +98,11 @@ pub struct CorroborationParams {
     pub min_reporters: usize,
     /// Whether the trusted-reporter gate is on (the legacy `ma_defense`, true).
     pub defence: bool,
-    /// A reporter itself reported more than this many times is distrusted (legacy, 40).
+    /// A reporter itself reported by this many (reporter, event) pairs inside the window
+    /// is distrusted (legacy, 40).
     pub reputation_max: u32,
-    /// A reporter filing more than this many reports is rate-limited (legacy, 30).
+    /// A reporter filing about more than this many (subject, event) pairs inside the
+    /// window is rate-limited (legacy, 30).
     pub report_budget: u32,
 }
 
@@ -139,8 +141,11 @@ pub struct CorroboratedMa {
     params: CorroborationParams,
     /// Per subject: `(observation instant, reporter digest)`, oldest first.
     evidence: BTreeMap<String, Vec<(SimTime, String)>>,
-    filed_by: BTreeMap<String, u32>,
-    reported: BTreeMap<String, u32>,
+    /// Per reporter: the `(event slot, subject)` pairs it filed about, for the budget.
+    filed_by: BTreeMap<String, BTreeSet<(u64, String)>>,
+    /// Per subject: the `(event slot, reporter)` pairs that filed about it, for the
+    /// reputation cap.
+    reported: BTreeMap<String, BTreeSet<(u64, String)>>,
     revoked: BTreeSet<String>,
     infrastructure: BTreeSet<String>,
     decisions: Vec<MaAction>,
@@ -201,15 +206,52 @@ impl CorroboratedMa {
         self.peak_unrevoked
     }
 
-    /// Whether a reporter's evidence counts (the legacy `trusted()`).
+    /// Whether a reporter's evidence counts at `at` (the legacy `trusted()`, as a rate).
+    ///
+    /// The legacy budget and reputation cap counted reports over the whole run, so an
+    /// honest receiver that followed a liar for half a minute at the one report a second
+    /// the hosts file was distrusted for the rest of the run, and its evidence about the
+    /// next liar never counted. Both are counted here inside the decision window and in
+    /// the unit the authority correlates in — one per (subject, event slot) — so a
+    /// reporter following one liar spends at most `window_s / event_window_s` (12) of its
+    /// budget a minute, and one slandering many subjects at once still exhausts it.
     #[must_use]
-    pub fn trusted(&self, reporter: &str) -> bool {
+    pub fn trusted_at(&self, reporter: &str, at: SimTime) -> bool {
         if !self.params.defence || self.infrastructure.contains(reporter) {
             return true;
         }
-        !self.revoked.contains(reporter)
-            && self.filed_by.get(reporter).copied().unwrap_or(0) <= self.params.report_budget
-            && self.reported.get(reporter).copied().unwrap_or(0) < self.params.reputation_max
+        if self.revoked.contains(reporter) {
+            return false;
+        }
+        let (from, to) = self.slot_range(at);
+        let in_window = |set: Option<&BTreeSet<(u64, String)>>| {
+            set.map_or(0, |s| s.iter().filter(|(slot, _)| *slot >= from && *slot <= to).count())
+        };
+        in_window(self.filed_by.get(reporter)) <= self.params.report_budget as usize
+            && in_window(self.reported.get(reporter)) < self.params.reputation_max as usize
+    }
+
+    /// Whether a reporter's evidence counts at its newest filing.
+    #[must_use]
+    pub fn trusted(&self, reporter: &str) -> bool {
+        let at = self
+            .filed_by
+            .get(reporter)
+            .and_then(|s| s.iter().map(|(slot, _)| *slot).max())
+            .map_or(0, |slot| slot.saturating_mul(self.slot_ns()));
+        self.trusted_at(reporter, at)
+    }
+
+    /// The length of one event slot, ns.
+    fn slot_ns(&self) -> u64 {
+        secs_to_ns(self.params.event_window_s).max(1)
+    }
+
+    /// The event slots inside the window ending at `at`, inclusive.
+    fn slot_range(&self, at: SimTime) -> (u64, u64) {
+        let slot = self.slot_ns();
+        let from = at.saturating_sub(secs_to_ns(self.params.window_s)) / slot;
+        (from, at / slot)
     }
 
     /// What the authority holds about `subject` right now, window applied at its newest
@@ -236,7 +278,7 @@ impl CorroboratedMa {
             let mut reporters: BTreeSet<&str> = BTreeSet::new();
             while i < inside.len() && inside[i].0 < opened.saturating_add(span) {
                 let r = inside[i].1.as_str();
-                if self.trusted(r) {
+                if self.trusted_at(r, latest) {
                     reporters.insert(r);
                 }
                 i += 1;
@@ -274,14 +316,22 @@ impl CorroboratedMa {
     /// observations), and decides, **emitting nothing**. The same contract as
     /// [`crate::ma::LegacyWindow::ingest_evidence`], so a host can swap one for the other.
     pub fn ingest_evidence(&mut self, r: &MisbehaviourReport, at: SimTime) -> Option<MaAction> {
-        *self
+        let slot = at / self.slot_ns();
+        // Pairs older than two windows can never be inside a window again that a later
+        // decision reads.
+        let keep_from = self.slot_range(at.saturating_sub(secs_to_ns(self.params.window_s))).0;
+        let filed = self
             .filed_by
             .entry(r.reporter_cert_digest.clone())
-            .or_insert(0) += 1;
-        *self
+            .or_default();
+        filed.insert((slot, r.subject_cert_digest.clone()));
+        filed.retain(|(s, _)| *s >= keep_from);
+        let about = self
             .reported
             .entry(r.subject_cert_digest.clone())
-            .or_insert(0) += 1;
+            .or_default();
+        about.insert((slot, r.reporter_cert_digest.clone()));
+        about.retain(|(s, _)| *s >= keep_from);
         let window = secs_to_ns(self.params.window_s);
         let ev = self
             .evidence
@@ -631,6 +681,32 @@ mod tests {
         assert_eq!(forward.iter().filter(|x| **x).count(), 1);
         assert_eq!(backward.iter().filter(|x| **x).count(), 1);
         assert_eq!(a.summary("x"), b.summary("x"));
+    }
+
+    /// The budget is a rate: a receiver that follows one liar for two minutes at the
+    /// hosts' one report a second stays a trusted witness, where the legacy run-long count
+    /// distrusted it after 30 reports.
+    #[test]
+    fn a_reporter_following_one_liar_for_minutes_stays_trusted() {
+        let mut ma = CorroboratedMa::defaults();
+        for s in 0..120u64 {
+            let r = report(1, "liar", s * NS_PER_S);
+            ma.ingest_evidence(&r, r.detection_time);
+        }
+        assert!(ma.trusted_at("rep0001", 119 * NS_PER_S));
+    }
+
+    /// ...and one that files about more subjects than the budget inside the window is
+    /// rate-limited, then trusted again once those filings leave it.
+    #[test]
+    fn a_reporter_slandering_many_subjects_at_once_is_rate_limited() {
+        let mut ma = CorroboratedMa::defaults();
+        for k in 0..40u64 {
+            let r = report(9, &format!("victim{k}"), 10 * NS_PER_S + k);
+            ma.ingest_evidence(&r, r.detection_time);
+        }
+        assert!(!ma.trusted_at("rep0009", 10 * NS_PER_S));
+        assert!(ma.trusted_at("rep0009", 200 * NS_PER_S));
     }
 
     #[test]

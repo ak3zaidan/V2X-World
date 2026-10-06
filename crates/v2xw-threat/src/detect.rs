@@ -396,6 +396,10 @@ pub struct DetectorParams {
     /// Tolerated distance from the nearest road, metres (`PipelineConfig.offroad_tol_m`,
     /// 15.0).
     pub offroad_tol_m: f64,
+    /// Whether the map check allows the message's own stated position confidence before
+    /// the tolerance: the claim is off the road only if the whole of its 95 % confidence
+    /// disc is (CaTch, Kamel et al. 2019). `false`, the legacy check on the point itself.
+    pub offroad_confidence_bound: bool,
     /// Implausible-acceleration threshold, m/s² (`PipelineConfig.max_accel_mps2`, 12.0).
     pub max_accel_mps2: f64,
     /// Beacon-rate normaliser, messages per interval (`PipelineConfig.freq_max`, 6.0).
@@ -434,6 +438,11 @@ pub struct DetectorParams {
     /// How far, degrees, the claimed heading may wander across the bounded check's
     /// baseline for the baseline to count as straight (10).
     pub heading_straight_tol_deg: f64,
+    /// The longest baseline the bounded heading check looks back over, seconds (10). A
+    /// longer straight baseline makes the bearing's own error smaller: at 11 m/s over
+    /// 10 s, two 5 m confidence radii leave 5 degrees, so a 45-degree heading lie
+    /// shows, where over the motion checks' 3.5 s history it needed more than 52.
+    pub heading_baseline_max_s: f64,
     /// The alpha-beta tracker's position gain (`ScmsBeaconApp.java :: KF_ALPHA`, 0.5).
     pub kalman_alpha: f64,
     /// Its velocity gain (`ScmsBeaconApp.java :: KF_BETA`, 0.3).
@@ -476,6 +485,7 @@ impl Default for DetectorParams {
             sybil_window_s: 1.0,
             art_max_m: 150.0,
             offroad_tol_m: 15.0,
+            offroad_confidence_bound: false,
             max_accel_mps2: 12.0,
             freq_max: 6.0,
             stale_max_s: 5.0,
@@ -492,6 +502,7 @@ impl Default for DetectorParams {
             heading_conf_factor: 2.5,
             heading_bearing_bound: false,
             heading_straight_tol_deg: 10.0,
+            heading_baseline_max_s: 10.0,
             kalman_alpha: 0.5,
             kalman_beta: 0.3,
             vru_max_plausible_speed_mps: 10.0,
@@ -847,10 +858,16 @@ impl Detector for Legacy12 {
             DetectorId::StaleOrReplay,
             ns_to_secs(t.saturating_sub(m.claimed_generation_time)) / p.stale_max_s,
         );
-        f.set(
-            DetectorId::MapOffRoad,
-            env.distance_to_road_m(m.claimed_x_m, m.claimed_y_m) / p.offroad_tol_m,
-        );
+        let off_road = env.distance_to_road_m(m.claimed_x_m, m.claimed_y_m);
+        let off_road = if p.offroad_confidence_bound {
+            (off_road
+                - m.claimed_pos_confidence_m
+                    .max(p.tolerance_floor_factor * p.consistency_threshold_m))
+            .max(0.0)
+        } else {
+            off_road
+        };
+        f.set(DetectorId::MapOffRoad, off_road / p.offroad_tol_m);
         let slack = v2xw_core::time::secs_to_ns(p.cert_slack_s);
         if t > m.cert_valid_to.saturating_add(slack) || t.saturating_add(slack) < m.cert_valid_from
         {
@@ -957,8 +974,14 @@ impl Detector for Legacy12 {
         });
 
         st.history.push(fix);
-        let keep_for =
-            v2xw_core::time::secs_to_ns(p.detector_lag_s + 2.0 * p.generation_interval_s);
+        // The motion checks read only the newest fix at least `detector_lag_s` old, so a
+        // longer history for the bounded heading check changes nothing they see.
+        let motion_keep = p.detector_lag_s + 2.0 * p.generation_interval_s;
+        let keep_for = v2xw_core::time::secs_to_ns(if p.heading_bearing_bound {
+            motion_keep.max(p.heading_baseline_max_s)
+        } else {
+            motion_keep
+        });
         while st.history.len() > 1 && t.saturating_sub(st.history[0].t) > keep_for {
             st.history.remove(0);
         }
@@ -1125,6 +1148,16 @@ pub fn card(p: &DetectorParams) -> ModelCard {
              error budget, so the tolerance is the map's accuracy and not a guess.",
         ),
         Parameter::new(
+            "offroad_confidence_bound",
+            "-",
+            json!(p.offroad_confidence_bound),
+            paper(
+                "Kamel et al., CaTch: a confidence range tolerant misbehavior detection \
+                 approach, IEEE WCNC 2019 (a position is implausible only if no point of \
+                 its confidence range is plausible)",
+            ),
+        ),
+        Parameter::new(
             "max_accel_mps2",
             "m/s^2",
             json!(p.max_accel_mps2),
@@ -1235,6 +1268,12 @@ pub fn card(p: &DetectorParams) -> ModelCard {
                  approach, IEEE WCNC 2019 (the bearing error the stated confidence \
                  ranges allow)",
             ),
+        ),
+        Parameter::new(
+            "heading_baseline_max_s",
+            "s",
+            json!(p.heading_baseline_max_s),
+            design("07-threats-and-detection.md §3.1"),
         ),
         Parameter::new(
             "heading_straight_tol_deg",
