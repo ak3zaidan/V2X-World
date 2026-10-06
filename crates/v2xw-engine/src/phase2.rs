@@ -158,6 +158,15 @@ impl MaHost {
         }
     }
 
+    /// The corroborated events the authority holds about one pseudonym right now (the
+    /// corroborating pipeline only).
+    fn corroborated_events(&self, subject: &str) -> Option<u32> {
+        match self {
+            MaHost::Legacy(_) => None,
+            MaHost::Corroborated(m) => Some(m.summary(subject).corroborated_events),
+        }
+    }
+
     fn peak_unrevoked_events(&self) -> Option<u32> {
         match self {
             MaHost::Legacy(_) => None,
@@ -775,6 +784,38 @@ pub struct Phase2Report {
     pub backend_errors: u64,
     /// The first of them, for the report.
     pub first_backend_error: String,
+    /// One row per armed attacker, in node order (ground truth, for the evaluation only):
+    /// how long it lied, what the fleet reported about it and what the authority made of
+    /// it, so a missed attacker can be told apart from one that was barely on the air.
+    pub attacker_outcomes: Vec<AttackerOutcome>,
+}
+
+/// What became of one armed attacker (ground truth, for the evaluation only).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct AttackerOutcome {
+    /// The engine node.
+    pub node: u32,
+    /// The attack model it ran.
+    pub attack: String,
+    /// Its first falsified claim, ns of simulated time.
+    pub onset_ns: Option<u64>,
+    /// Its last falsified claim, ns: with the onset, how long it was on the air lying.
+    pub last_falsified_ns: Option<u64>,
+    /// Falsified claims it signed.
+    pub falsified_claims: u64,
+    /// The first report any receiver filed about it, ns.
+    pub first_reported_ns: Option<u64>,
+    /// Reports filed about it.
+    pub reports: u64,
+    /// Distinct pseudonyms of its that those reports named.
+    pub pseudonyms_reported: u64,
+    /// Reports about it that reached the authority.
+    pub reports_at_ma: u64,
+    /// The most corroborated events the authority held about any one of its pseudonyms
+    /// inside the decision window.
+    pub peak_events: u32,
+    /// The authority's revocation decision, ns.
+    pub decided_ns: Option<u64>,
 }
 
 /// What the engine does after a backend step: records to write and changes to apply.
@@ -867,6 +908,13 @@ pub struct Phase2 {
     first_falsified: BTreeMap<NodeId, SimTime>,
     first_reported: BTreeMap<NodeId, SimTime>,
     decided: BTreeMap<NodeId, SimTime>,
+    /// Per attacker (ground truth, run report only): `(last falsified claim, falsified
+    /// claims)`, reports filed about it and the pseudonyms they named, reports about it
+    /// at the authority, and the most corroborated events it reached.
+    attacker_lies: BTreeMap<NodeId, (SimTime, u64)>,
+    attacker_reports: BTreeMap<NodeId, (u64, BTreeSet<[u8; 8]>)>,
+    attacker_at_ma: BTreeMap<NodeId, u64>,
+    attacker_peak_events: BTreeMap<NodeId, u32>,
     /// The positional accuracy each safety message stated on the air, as a 95 % radius in
     /// metres, by signer and generation time: `None` when the message said "unavailable".
     /// `v2xw_node::VerifiedMessage` does not carry it, so the detector host joins it back
@@ -1220,6 +1268,10 @@ impl Phase2 {
             first_falsified: BTreeMap::new(),
             first_reported: BTreeMap::new(),
             decided: BTreeMap::new(),
+            attacker_lies: BTreeMap::new(),
+            attacker_reports: BTreeMap::new(),
+            attacker_at_ma: BTreeMap::new(),
+            attacker_peak_events: BTreeMap::new(),
             broadcast_accuracy: BTreeMap::new(),
             privacy_chains: BTreeMap::new(),
             privacy_tracked: BTreeMap::new(),
@@ -1773,6 +1825,9 @@ impl Phase2 {
         if v2xw_threat::is_falsified(&honest, &out, believed_time, StationType::Vehicle) {
             self.report.falsified_claims += 1;
             self.first_falsified.entry(node).or_insert(believed_time);
+            let lies = self.attacker_lies.entry(node).or_insert((believed_time, 0));
+            lies.0 = lies.0.max(believed_time);
+            lies.1 += 1;
         }
         Some(out)
     }
@@ -1923,13 +1978,19 @@ impl Phase2 {
     /// The ground-truth join of a filed report, for the run report's precision and recall
     /// only: nothing here reaches a detector or the authority.
     fn note_report_truth(&mut self, subject_hex: &str, at: SimTime) {
-        let Some(subject) = decode_hex8(subject_hex).and_then(|d| self.by_digest.get(&d)) else {
+        let Some(digest) = decode_hex8(subject_hex) else {
+            return;
+        };
+        let Some(subject) = self.by_digest.get(&digest) else {
             return;
         };
         let subject = subject.0;
         let attacker = self.attackers.contains_key(&subject);
         if attacker {
             self.report.reports_about_attackers += 1;
+            let entry = self.attacker_reports.entry(subject).or_default();
+            entry.0 += 1;
+            entry.1.insert(digest);
         } else {
             self.report.reports_about_honest += 1;
         }
@@ -2572,9 +2633,15 @@ impl Phase2 {
                 subject: r.subject_cert_digest.clone(),
                 detector: r.leading_reason().map(str::to_string),
             });
-            if let Some(MaAction::Revoke { subject }) =
-                self.ma.ingest_evidence(&r, r.detection_time)
-            {
+            let action = self.ma.ingest_evidence(&r, r.detection_time);
+            if self.attackers.contains_key(&f.subject) {
+                *self.attacker_at_ma.entry(f.subject).or_insert(0) += 1;
+                if let Some(events) = self.ma.corroborated_events(&r.subject_cert_digest) {
+                    let peak = self.attacker_peak_events.entry(f.subject).or_insert(0);
+                    *peak = (*peak).max(events);
+                }
+            }
+            if let Some(MaAction::Revoke { subject }) = action {
                 self.report.ma_revoke_decisions += 1;
                 tick.ma_decisions
                     .push(v2xw_threat::records::MaDecisionRecord {
@@ -3300,6 +3367,26 @@ impl Phase2 {
         self.report.privacy_tracked_sum_ns = self.privacy_tracked.values().sum();
         self.report.privacy_tracked_max_ns =
             self.privacy_tracked.values().copied().max().unwrap_or(0);
+        self.report.attacker_outcomes = self
+            .attackers
+            .iter()
+            .map(|(node, slot)| {
+                let reports = self.attacker_reports.get(node);
+                AttackerOutcome {
+                    node: node.index(),
+                    attack: slot.id.clone(),
+                    onset_ns: self.first_falsified.get(node).copied(),
+                    last_falsified_ns: self.attacker_lies.get(node).map(|l| l.0),
+                    falsified_claims: self.attacker_lies.get(node).map_or(0, |l| l.1),
+                    first_reported_ns: self.first_reported.get(node).copied(),
+                    reports: reports.map_or(0, |r| r.0),
+                    pseudonyms_reported: reports.map_or(0, |r| r.1.len() as u64),
+                    reports_at_ma: self.attacker_at_ma.get(node).copied().unwrap_or(0),
+                    peak_events: self.attacker_peak_events.get(node).copied().unwrap_or(0),
+                    decided_ns: self.decided.get(node).copied(),
+                }
+            })
+            .collect();
     }
 
     /// The pseudonym policy's totals, for the run report.

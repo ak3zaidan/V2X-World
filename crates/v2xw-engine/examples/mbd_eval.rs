@@ -250,6 +250,21 @@ fn main() {
             "max_tracked_s": p.privacy_tracked_max_ns as f64 / 1e9,
         },
         "backend_errors": p.backend_errors,
+        "attacker_outcomes": p.attacker_outcomes.iter().map(|o| {
+            let s = |ns: Option<u64>| ns.map(|v| v as f64 / 1e9);
+            serde_json::json!({
+                "node": o.node,
+                "onset_s": s(o.onset_ns),
+                "last_falsified_s": s(o.last_falsified_ns),
+                "falsified_claims": o.falsified_claims,
+                "first_reported_s": s(o.first_reported_ns),
+                "reports": o.reports,
+                "pseudonyms_reported": o.pseudonyms_reported,
+                "reports_at_ma": o.reports_at_ma,
+                "peak_events": o.peak_events,
+                "decided_s": s(o.decided_ns),
+            })
+        }).collect::<Vec<_>>(),
     });
     println!("{}", serde_json::to_string(&out).expect("serialises"));
 }
