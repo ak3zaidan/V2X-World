@@ -121,7 +121,15 @@ Reading it:
   1.5 Hz, and at night draws headlight pools and lamp points.
 - **Streets.** MUTCD lane lines, edge and centre lines, stop bars, lane-use arrows,
   high-visibility crosswalks, and bus (red) and bike (green) lane colours. Signal heads face
-  their approach on mast arms or poles, with visors and the lamp shapes of their phase.
+  their approach on mast arms or poles, with visors. Lenses have the MUTCD's shapes: a head
+  over a lane that only turns, on a signal group no through lane of its approach uses, is a
+  separate turn face with arrow lenses (§4D.06, §4D.20) and shows a permissive turn as the
+  flashing yellow arrow (§4D.18); a pedestrian head shows the UPRAISED HAND and the WALKING
+  PERSON (§4E.04), not discs. The lane-movement reading behind the lane-use arrows is shared
+  with the heads, so a lane's arrow on the road and its lens on the mast agree.
+- **Level of detail by size.** LOD distances were a car's for every class, so the dense
+  Midtown tour caught buses changing model while 40 px tall. They now stretch with the class's
+  height (against 1.5 m) and length (against 5 m), at most threefold, never below a car's.
 
 ### Evidence
 
