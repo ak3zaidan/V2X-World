@@ -123,19 +123,45 @@ changes nothing; at the end the original scenario reproduces its pre-fuzz output
     older steps are dropped and a seek before them is refused with its range
     (`the_seek_history_is_bounded_by_memory…`). On the same soak with `--retain-mb 200`
     the history held at 209.6 MB (1,988 steps at 456 s).
-  - **Open — something else grows too.** With the history capped, that 480 s soak still
-    failed its flatness check: footprint 132 MB at 97 s, 495 at 305 s, 659 at 480 s (tab
-    heap flat, 43–45 MB), so about 450 MB beyond the history. The run slowed the same way
-    (0.12–0.18× real time over the last 100 s, 1,381 s of wall clock for 480 s). Not located: the kernel's
-    per-vehicle SCMS and detection state (`phase2`, `ScmsRun`) is the first suspect, since
-    the 50-run soak on a scenario without the credential lifecycle is flat. The soak spec
-    (`VWP_SOAK_SIM_S=480 VWP_ENGINE_ARGS="--retain-mb 200"`) reproduces it in 23 minutes.
-  - **Open — the same run slowed as it went:** 154 simulated seconds in the first 61 s of
-    wall clock, then 152 s in 188 s, 151 s in 330 s and 151 s in 545 s (0.28× real time by
-    600 s, debug build, loaded machine). Not investigated for want of time: the retained
-    history (now bounded), the kernel's SCMS state and the page's polling are the
-    candidates. So the one-hour simulated soak the owner asked for was **not completed** on
-    this debug build; it needs this slowdown found first, or the release binary.
+  - **Something else grew too, and the run slowed as it went.** With the history capped,
+    that 480 s soak still failed its flatness check (footprint 132 MB at 97 s, 495 at 305 s,
+    659 at 480 s, tab heap flat at 43–45 MB) and slowed from 154 simulated seconds in the
+    first 61 s of wall clock to 151 s in 545 s. Located and fixed on 2026-10-06 (below).
+
+### The long soak's growth and slowdown, located (2026-10-06)
+
+Found with `soak_probe` (`crates/v2xw-server/tests/soak.rs`) on the soak's own scenario
+(credential lifecycle, 900 veh/h, 30 pedestrians, attackers, a closure, a demand surge, a
+weather front; 600 s), which prints the projector's stores, the seek history and the
+process's physical footprint every 30 simulated seconds, with `sample` profiles of the
+kernel thread and `heap` censuses at 300 s and 570 s. Debug build, shared machine.
+
+| What | Cause | Fix |
+|---|---|---|
+| Kernel time growing with the CRL | every received certificate was checked against every linkage-CRL entry by walking its seed chain and hashing 20 indices (`CrlStore::revokes_linkage_at_period`): **30 % of the kernel's samples at 450 s** | the store expands its entries into each period's linkage values once per period and CRL version and looks certificates up (`CrlLinkageEntry::values_at`); the node model already treats CRL expansion as a background job (`crl_expansion_pm`) and charges a check by entries consulted (`CrlGate::work`), so no simulated quantity moves. Test: the expansion answers exactly what the walk answers, across new CRL versions and evicted periods; shown red with the cache not cleared on a new entry |
+| Kernel time growing with protocol history | `StageLog::run`/`at` filtered the whole log on every backend step (8 % of samples at 450 s) | each run's stamps are indexed by position |
+| Server footprint | each `backend.state` snapshot was kept parsed: hundreds of `serde_json` maps a second, the largest growth in the heap census (+50,000 640-byte blocks in 270 s, 32 MB) | kept as the record's bytes (17 kB each), parsed when `inspect.entity` asks; bounded at 600 snapshots and 64 MB |
+| Seek history over its budget | the byte estimate counted lengths, not capacities; a step's event list runs up to twice its length | steps are shrunk before they are kept and the estimate counts capacities and the allocator's 16-byte quantum (one estimator, `StepOutput::approx_bytes`, where there were two) |
+| Plot polls growing with the run | `metrics.query` scanned every sample of a metric for every bin, under the lock the producer needs | one walk over the (time-ordered) samples (`binned_means`); test against the old scan |
+| Departed vehicles' detectors | a retired vehicle kept its misbehaviour-detector suite and rate-limit stamps for the rest of the run | dropped at retirement (`Phase2::retire`) |
+
+Before → after, the same 600 s scenario through `soak_probe` (wall clock on a loaded
+machine, noisy; the counts are not):
+
+| | before | after |
+|---|---|---|
+| wall clock for 600 simulated s | 602–615 s | 314–373 s |
+| last 30 simulated s | 92–97 s | 25–29 s |
+| kernel samples in the CRL walk at 450 s | 3,410 of 11,528 | not among the top 70 frames |
+| footprint at 600 s, `--retain-mb 200` | 465 MB (history 199) | — |
+| footprint at 600 s, `--retain-mb 20` | 223 MB | 153 MB |
+| heap growth 300 → 570 s, `--retain-mb 20` | 124 → 204 MB | 91 → 140 MB |
+
+What still grows over that window is bounded: the grouped-metrics breakdown store (capped at
+1,000,000 entries, about 56 MB), the backend history (600 snapshots, 64 MB at most), each
+metric's plot series (16 bytes a sample, for the whole run by design) and the PCA's
+issuance table in `phase2` (every certificate issued, as a real PCA keeps them; it grows
+with certificates issued, not with time).
 
 ### Resume and replay
 
@@ -172,6 +198,20 @@ decoded world, so its precondition (walls in front of the camera) holds whatever
 is when it starts; a vehicle leaving the gridded blocks at the map's edge is the likely
 cause, not a demonstrated one.
 
+**A cause of wrong results across worktrees (2026-10-06).** The engine's lib tests failed
+in this worktree with `every_number_publishes_a_unit` naming three `actors.vru` keys that
+exist in no file of this worktree. They came from the pedestrians track's worktree: the
+engine's build-script output (`target/agents/debug/build/v2xw-engine-8c4e…/out/
+scenario_reflect.rs`, and the `V2XW_GIT_COMMIT` stamp) lives in one directory every
+worktree shares — the per-worktree `codegen-units` in `.cargo/config.toml` separates the
+crates' artifacts but not the build script's run — and cargo judged it fresh because this
+worktree's `schema.rs` was older than the other track's last run. Any engineer's binary
+could carry another track's scenario reflection. This track's builds now set
+`V2XW_GIT_COMMIT` to their own commit, which the script watches
+(`rerun-if-env-changed`), so cargo reruns it whenever another worktree ran it last; the
+lasting fix (a per-worktree `[profile.dev.build-override]` setting, or a target directory
+per worktree for build scripts) is the integrator's. With it, the lib tests pass 48/48.
+
 ### Settings the engine does not fully apply (`KEY_STATUS`)
 
 No key is `not-implemented`. Three are `refused` and now sit under Unsupported with the
@@ -200,6 +240,16 @@ full run; the same three known failures remain. `v2xw-cli`'s shipped-scenario te
 failed: `v2xw validate` refused `phase1-manhattan.yaml` because its map path is relative and
 the test runs from the crate directory. A missing file is now a note from `v2xw validate`
 (the command answers whether the document is valid) and still a refusal from Run.
+
+On 2026-10-06, after the CRL, stage-log and retirement changes: every engine test binary
+passes except the same three known failures (`message_sets`' DENM test, the two `phase2`
+honest-revocation tests, with the same counts as before); `the_phase_2_run_is_deterministic`
+passes. The first attempt failed 41 tests for two reasons of the environment, not the code:
+the Manhattan map was not linked into the worktree (each refusal now names
+`world.source.path`, the file and the fix — the five-cause work doing its job), and the
+shared build-script output described above. `v2xw-conformance`'s golden suite passes (4/4,
+the grid-traffic record unchanged). `v2xw-server`: 116 passed, 0 failed, 4 ignored.
+`v2xw-sec` and `v2xw-proto`: 228 passed.
 
 ## 2026-09-30 — six tracks merged: perf, roadnet, traffic, radio, scms, shell
 
