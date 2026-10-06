@@ -350,6 +350,24 @@ fn observed_pedestrians_and_two_wheelers_hold_every_invariant() {
     assert_eq!(report.count(Check::Standstill), 0, "{:?}", report.stats);
 }
 
+/// A diagnostic, ignored: the observed run with the amber-commitment lapse off, its counts
+/// printed for comparison.
+#[test]
+#[ignore = "a diagnostic comparison, not a gate"]
+fn observed_run_without_the_amber_lapse() {
+    let report = observed_run(
+        EngineParams {
+            amber_commit_lapse: false,
+            ..EngineParams::default()
+        },
+        180,
+    );
+    eprintln!("no lapse: {:?}", report.counts);
+    for e in report.examples.iter().take(8) {
+        eprintln!("  {:?} t={} {:?}->{:?}: {}", e.check, e.t_s, e.actor, e.other, e.detail);
+    }
+}
+
 /// The control: drivers who ignore pedestrians — on crosswalks and in the carriageway
 /// mid-block — must make the auditor count collisions with them.
 #[test]

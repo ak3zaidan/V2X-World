@@ -584,6 +584,10 @@ pub struct EngineParams {
     pub two_wheelers: TwoWheelerParams,
     /// How fast cyclists ride ([`CyclistSpeeds`]).
     pub cyclists: CyclistSpeeds,
+    /// Whether a driver who committed to an amber and has since been stopped short of the
+    /// line loses the commitment (on by default; off reproduces the earlier behaviour, for
+    /// an ablation).
+    pub amber_commit_lapse: bool,
     /// **A test hook, not a model parameter.** Walks the decision pass in reverse actor
     /// order. Because the pass reads only the frozen snapshot, the published result must be
     /// bit-identical either way; that is the ADR 0004 Jacobi property, and this is how the
@@ -611,6 +615,7 @@ impl Default for EngineParams {
             queue_start_delay_median_s: FOLLOW_REACTION_MEDIAN_S,
             two_wheelers: TwoWheelerParams::default(),
             cyclists: CyclistSpeeds::default(),
+            amber_commit_lapse: true,
             reverse_order: false,
         }
     }
@@ -1980,11 +1985,14 @@ impl NativeMobility {
                     continue;
                 };
                 let (d_near, _) = midblock.reach[&b.crosswalk];
-                let edge = d_near - MIDBLOCK_HOLD_MARGIN_M;
-                if d > edge {
-                    // Already at or in the lane: the drivers stop for it.
+                if d >= d_near {
+                    // Already in the lane: the drivers stop for it.
                     continue;
                 }
+                // Short of the lane: wait at its line, or where it stands if it is already
+                // closer than the line's margin (crossing the lane before, whose far edge
+                // is this one's near edge).
+                let edge = (d_near - MIDBLOCK_HOLD_MARGIN_M).max(d);
                 let on_it = b.enter_m <= 0.0 && b.exit_m + length > 0.0;
                 let closing = b.enter_m > 0.0
                     && a.speed_mps > crate::vru::crosswalk::APPROACHING_MPS
@@ -3381,7 +3389,8 @@ impl Mobility for NativeMobility {
                     // front — is no longer clearing the junction: the commitment lapses and
                     // the signal holds them like anyone else. Without this a car stopped for
                     // a pedestrian on amber drove on into the red once they had passed.
-                    let lapsed = ego.speed_mps < AMBER_COMMIT_LAPSE_MPS
+                    let lapsed = self.params.amber_commit_lapse
+                        && ego.speed_mps < AMBER_COMMIT_LAPSE_MPS
                         && junction.stop_line_gap_m > STOP_LINE_MARGIN_M;
                     let committed = if actor.amber_commit == Some(junction.id) && !lapsed {
                         decision = EntryDecision::Proceed;

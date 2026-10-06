@@ -1066,8 +1066,10 @@ impl TrafficAuditor {
                     f,
                     Some(l.actor),
                     format!(
-                        "net gap {gap:.2} m to leader on lane {} (s0 {:.2} m), speeds \
+                        "{} with net gap {gap:.2} m to {} on lane {} (s0 {:.2} m), speeds \
                          {:.2}/{:.2} m/s",
+                        f.class,
+                        l.class,
                         l.lane.index(),
                         f.min_gap_m,
                         f.speed_mps,
