@@ -308,6 +308,8 @@ export class ActorRenderer {
   readonly uniforms: ActorUniforms = makeActorUniforms();
 
   #classes: ActorClassDef[];
+  /** Per class, the square of the factor its LOD distances are stretched by (see `#rebuild`). */
+  #lodScale2 = new Float32Array(0);
   #theme: ViewerTheme;
   #models: Model[] = [];
   /** Per class: the first model index and how many models it has. */
@@ -587,6 +589,15 @@ export class ActorRenderer {
     this.#disposeBuckets();
     const n = this.#classes.length;
     this.#radius = new Float32Array(n);
+    // LOD distances are a car's; a bigger class keeps its detail proportionally further out, so
+    // the switch happens at about the same size on screen (a bus 80 m off is 40 px tall in the
+    // chase view, where a car switching there is 18). Never nearer than a car's.
+    this.#lodScale2 = new Float32Array(n);
+    for (let c = 0; c < n; c++) {
+      const d = this.#classes[c];
+      const k = Math.min(3, Math.max(1, d.heightM / 1.5, d.lengthM / 5.0));
+      this.#lodScale2[c] = k * k;
+    }
     this.#halfHeight = new Float32Array(n);
     this.#classColor = new Float32Array(n * 3);
     this.#refreshClassColors();
@@ -969,11 +980,12 @@ export class ActorRenderer {
       }
 
       const prevBand = this.#slotBand[s];
+      const ld2 = dist2 / this.#lodScale2[c];
       let lod: LodLevel;
-      if (prevBand === 0) lod = dist2 < lod0Out ? 0 : dist2 < lod1Out ? 1 : 2;
-      else if (prevBand === 1) lod = dist2 < lod0In ? 0 : dist2 < lod1Out ? 1 : 2;
-      else if (prevBand === 2) lod = dist2 < lod0In ? 0 : dist2 < lod1In ? 1 : 2;
-      else lod = dist2 < lod0Sq ? 0 : dist2 < lod1Sq ? 1 : 2;
+      if (prevBand === 0) lod = ld2 < lod0Out ? 0 : ld2 < lod1Out ? 1 : 2;
+      else if (prevBand === 1) lod = ld2 < lod0In ? 0 : ld2 < lod1Out ? 1 : 2;
+      else if (prevBand === 2) lod = ld2 < lod0In ? 0 : ld2 < lod1In ? 1 : 2;
+      else lod = ld2 < lod0Sq ? 0 : ld2 < lod1Sq ? 1 : 2;
       this.#slotBand[s] = lod;
       if (lod === 0) lod0n++;
       else if (lod === 1) lod1n++;
