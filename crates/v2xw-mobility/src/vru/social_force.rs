@@ -198,10 +198,11 @@ pub struct Pedestrian {
 
 /// How fast a lane-change offset ([`Pedestrian::carry`]) closes, m/s: well under a walking
 /// pace, so the extra apparent speed it adds is small.
-pub const CARRY_CLOSE_MPS: f64 = 0.5;
+pub const CARRY_CLOSE_MPS: f64 = 0.7;
 /// A lane change whose offset would exceed this is a real gap in the walkable network, not a
-/// corner, and is not carried, metres.
-const CARRY_MAX_M: f64 = 3.0;
+/// corner, and is not carried, metres. On the Midtown extract the corner offsets the glitch
+/// hunter measured were 2-4.2 m (a pavement's end to the crosswalk's start round the kerb).
+const CARRY_MAX_M: f64 = 5.0;
 
 impl Pedestrian {
     /// Its world position, given the world.
