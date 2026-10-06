@@ -188,6 +188,27 @@ pub static BOUNDS: &[Bound] = &[
         what: "the device fraction",
     },
     Bound {
+        path: "actors.vru.midblock_rate_per_100m",
+        lo: 0.0,
+        hi: 100.0,
+        exclusive_lo: false,
+        what: "the mid-block crossing rate",
+    },
+    Bound {
+        path: "actors.vru.red_crossing_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the share who cross against the signal",
+    },
+    Bound {
+        path: "actors.vru.ebike_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the e-bike share",
+    },
+    Bound {
         path: "actors.backend.links[].latency_ms",
         lo: 0.0,
         hi: f64::INFINITY,
@@ -634,18 +655,52 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "actors.vru",
         status: Status::Partial,
         note: "Pedestrians walk sidewalks and cross streets on crosswalk lanes \
-               (social-force model): they step off the kerb only on WALK or at an \
-               unsignalised crosswalk, and only when an approaching vehicle can still \
-               yield; vehicles yield to anyone on a crosswalk, turning traffic included, \
-               and never stop inside one. Signalised crosswalks get MUTCD walk, \
-               flashing don't-walk (3.5 ft/s clearance) and don't-walk intervals. \
-               Cyclists ride the lanes that admit bicycles (car-following on the SUMO \
-               bicycle vType). An OpenStreetMap import has the lanes (footway=crossing \
-               ways become crosswalks); the procedural grid has them when sidewalk_m > 0 \
-               and crossings is on, and cyclists ride its carriageway with \
-               bicycles_on_roads. Partial because: crossing nodes with no crossing way \
-               get no crosswalk, mid-block jaywalking is not modelled, and the grid has \
-               no separate cycle lanes.",
+               (social-force model), and away from them: with the default 'observed' \
+               behaviour they walk at speeds by age group (Knoblauch et al. 1996), step \
+               off after a start-up time when walk comes on, cross against flashing or \
+               steady don't-walk when they are among the share who do and the gap passes \
+               the HCM critical headway (calibrated to Midtown counts, Basch et al. 2015), \
+               walk in groups, and cross mid-block (jaywalk, straight or diagonal) where \
+               blocks are long, more often beside stopped traffic, with a lane-by-lane \
+               gap. Vehicles yield to anyone on a crosswalk, stop for anyone in or about \
+               to enter their lane mid-block, a few yield to a pedestrian waiting at the \
+               kerb, and never stop inside a crosswalk. Signalised crosswalks get MUTCD \
+               walk, flashing don't-walk (3.5 ft/s clearance) and don't-walk intervals. \
+               Cyclists ride the lanes that admit bicycles at naturalistic speeds \
+               (conventional and e-bike, Schleinitz et al. 2017). Partial because: \
+               crossing nodes with no crossing way get no crosswalk, the grid has no \
+               separate cycle lanes, and a cyclist rides the lane centre.",
+    },
+    KeyStatus {
+        path: "actors.vru.behaviour",
+        status: Status::Wired,
+        note: "'observed' (default) or 'document': the field-study behaviour described \
+               under actors.vru, or the social-force document defaults of 04-models.md \
+               §2.5 (one speed law, everyone waits for walk, nobody crosses mid-block, \
+               no groups).",
+    },
+    KeyStatus {
+        path: "actors.vru.midblock_rate_per_100m",
+        status: Status::Wired,
+        note: "Mid-block crossing decisions per 100 m of eligible sidewalk walked where \
+               traffic moves (four times as many beside a queue); 0 turns jaywalking off. \
+               Default 0.25 under 'observed', a choice: no observed rate per metre of \
+               sidewalk could be read, and the run reports the share of crossings made \
+               mid-block.",
+    },
+    KeyStatus {
+        path: "actors.vru.red_crossing_share",
+        status: Status::Wired,
+        note: "The share of pedestrians who cross on flashing or steady don't-walk when \
+               the traffic leaves a gap. Default 0.3 under 'observed', calibrated so that \
+               about a tenth of signalised crossings begin on don't-walk, as Basch et al. \
+               2015 counted at five Midtown intersections.",
+    },
+    KeyStatus {
+        path: "actors.vru.ebike_share",
+        status: Status::Wired,
+        note: "The share of cyclists on e-bikes (17.4 km/h mean against 15.3 km/h on a \
+               conventional bicycle, Schleinitz et al. 2017). Default 0.3, a choice.",
     },
     KeyStatus {
         path: "actors.vru.device_fraction",
@@ -1770,6 +1825,18 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
         s.actors.vru.device_fraction,
         e,
     );
+    for (path, value) in [
+        (
+            "actors.vru.midblock_rate_per_100m",
+            s.actors.vru.midblock_rate_per_100m,
+        ),
+        ("actors.vru.red_crossing_share", s.actors.vru.red_crossing_share),
+        ("actors.vru.ebike_share", s.actors.vru.ebike_share),
+    ] {
+        if let Some(v) = value {
+            bounded_at(path, path, v, e);
+        }
+    }
 
     if !s.actors.vehicles.classes.is_empty() {
         let mut total = 0.0;

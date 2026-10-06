@@ -76,6 +76,18 @@ use crate::views::DespawnCause;
 /// buildings above it), metres: half a tunnel level.
 const UNDERGROUND_Z_M: f64 = 3.0;
 
+/// The time to collision below which a vehicle approaching a pedestrian in the carriageway
+/// is a conflict, seconds. The Swedish Traffic Conflict Technique and its successors count
+/// an encounter whose time to collision falls to a few seconds as an interaction worth
+/// recording; 3 s is the common upper bound in vehicle-pedestrian conflict studies.
+/// **A choice** of the conventional value, as a parameter-free statistic.
+pub const PED_CONFLICT_TTC_S: f64 = 3.0;
+
+/// The time to collision below which a conflict is a near miss, seconds: 1.5 s, the one
+/// verified surrogate-safety threshold of 04-models.md §11 (FHWA-HRT-08-051), the same
+/// the metrics crate's `ttc_conflicts` uses.
+pub const TTC_NEAR_MISS_S: f64 = 1.5;
+
 /// One vehicle as the auditor sees it: the engine's internal state plus the published
 /// pose.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -115,6 +127,9 @@ pub struct AuditActor {
     pub min_path_radius_m: f64,
     /// The published heading, radians.
     pub heading_rad: f64,
+    /// Where in its lane this vehicle rides outside a lane change, metres left of the
+    /// centreline: zero for a car, the rider's lane position for a motorcycle or a moped.
+    pub lane_position_m: f64,
 }
 
 /// One pedestrian as the auditor sees it.
@@ -134,6 +149,14 @@ pub struct AuditPedestrian {
     pub length_m: f64,
     /// Body width (shoulder to shoulder), metres.
     pub width_m: f64,
+    /// What the pedestrian model says it is doing ([`crate::vru::PedActivity`]). A
+    /// crossing begun against the signal by the model's own choice
+    /// ([`crate::vru::PedActivity::CrossingAgainstSignal`]) and a mid-block crossing are
+    /// observed behaviour, counted in [`AuditStats`]; overlapping a vehicle is a violation
+    /// whatever the pedestrian is doing.
+    pub activity: crate::vru::PedActivity,
+    /// Velocity, m/s, world frame.
+    pub vel: Vec3,
 }
 
 /// A violation class.
@@ -443,6 +466,19 @@ pub struct AuditStats {
     /// Right turns entered on red after a full stop, where the jurisdiction permits them
     /// ([`AuditParams::right_turn_on_red`]).
     pub right_turns_on_red: u64,
+    /// Pedestrians who stepped onto a signalised crosswalk on flashing or steady
+    /// don't-walk by the model's own choice (a violator with a gap): observed behaviour,
+    /// not a model defect, so a statistic and not [`Check::PedestrianDontWalkEntry`].
+    pub pedestrian_red_crossings: u64,
+    /// Pedestrian-steps in the carriageway on a mid-block crossing.
+    pub pedestrian_midblock_steps: u64,
+    /// Vehicle-pedestrian conflicts: pairs whose time to collision fell below
+    /// [`PED_CONFLICT_TTC_S`], counted once per approach.
+    pub pedestrian_conflicts: u64,
+    /// Of those, near misses: below [`TTC_NEAR_MISS_S`].
+    pub pedestrian_near_misses: u64,
+    /// The smallest vehicle-pedestrian time to collision seen, seconds (0 when none).
+    pub min_pedestrian_ttc_s: f64,
     /// Sum of speeds, for the mean.
     #[serde(skip)]
     speed_sum: f64,
@@ -491,6 +527,9 @@ pub struct TrafficAuditor {
     /// The approach lane each vehicle last stood still near the end of, while it is still
     /// on it ([`AuditParams::right_turn_on_red`]).
     stood_at_end: BTreeMap<ActorId, LaneId>,
+    /// The vehicle-pedestrian pairs inside the conflict threshold at the last step, and
+    /// whether each had already been a near miss: an approach is counted once.
+    ped_conflicts: BTreeMap<(ActorId, ActorId), bool>,
 }
 
 impl TrafficAuditor {
@@ -513,6 +552,7 @@ impl TrafficAuditor {
             crosswalks: crate::vru::CrosswalkIndex::build(world),
             prev_peds: Vec::new(),
             stood_at_end: BTreeMap::new(),
+            ped_conflicts: BTreeMap::new(),
         }
     }
 
@@ -609,7 +649,12 @@ impl TrafficAuditor {
             .iter()
             .filter(|p| world.try_lane(p.lane).map(|l| l.kind) == Some(LaneKind::Crossing))
             .count() as u64;
+        self.stats.pedestrian_midblock_steps += pedestrians
+            .iter()
+            .filter(|p| p.activity == crate::vru::PedActivity::CrossingMidblock)
+            .count() as u64;
         self.check_pedestrian_overlaps(t1, actors, pedestrians);
+        self.count_pedestrian_conflicts(actors, pedestrians);
         self.check_crosswalk_entries(world, t1, actors);
         self.check_pedestrian_signals(world, t0, t1, pedestrians);
         self.observe(world, t0, t1, actors, despawned);
@@ -806,6 +851,64 @@ impl TrafficAuditor {
         }
     }
 
+    /// Counts vehicle-pedestrian conflicts and near misses: for each pedestrian in the
+    /// carriageway and each vehicle whose swept path (its body's width and a quarter metre
+    /// either side) it stands in ahead of the front bumper, the time to collision at the
+    /// two velocities. An approach is counted once, when it first falls below the conflict
+    /// threshold, and once more if it then falls below the near-miss threshold.
+    fn count_pedestrian_conflicts(&mut self, actors: &[AuditActor], pedestrians: &[AuditPedestrian]) {
+        let mut now: BTreeMap<(ActorId, ActorId), bool> = BTreeMap::new();
+        let in_road: Vec<&AuditPedestrian> = pedestrians
+            .iter()
+            .filter(|p| p.activity.in_carriageway())
+            .collect();
+        if in_road.is_empty() {
+            self.ped_conflicts.clear();
+            return;
+        }
+        for a in actors {
+            if a.speed_mps <= 0.5 {
+                continue;
+            }
+            let (sn, cs) = math::sin_cos(a.heading_rad);
+            // The front bumper, from the rear-axle reference point.
+            let front = (a.pos.x + cs * (a.length_m - 1.0), a.pos.y + sn * (a.length_m - 1.0));
+            for p in &in_road {
+                let (dx, dy) = (p.pos.x - front.0, p.pos.y - front.1);
+                let ahead = dx * cs + dy * sn;
+                let side = -dx * sn + dy * cs;
+                if ahead <= 0.0 || ahead > 60.0 {
+                    continue;
+                }
+                if side.abs() > 0.5 * a.width_m + 0.5 * p.width_m + 0.25 {
+                    continue;
+                }
+                let closing = a.speed_mps - (p.vel.x * cs + p.vel.y * sn);
+                if closing <= 0.1 {
+                    continue;
+                }
+                let ttc = (ahead - 0.5 * p.length_m) .max(0.0) / closing;
+                if ttc >= PED_CONFLICT_TTC_S {
+                    continue;
+                }
+                if self.stats.min_pedestrian_ttc_s == 0.0 || ttc < self.stats.min_pedestrian_ttc_s {
+                    self.stats.min_pedestrian_ttc_s = ttc.max(1e-6);
+                }
+                let key = (a.actor, p.actor);
+                let was = self.ped_conflicts.get(&key).copied();
+                let near = ttc < TTC_NEAR_MISS_S;
+                if was.is_none() {
+                    self.stats.pedestrian_conflicts += 1;
+                }
+                if near && was != Some(true) {
+                    self.stats.pedestrian_near_misses += 1;
+                }
+                now.insert(key, near || was == Some(true));
+            }
+        }
+        self.ped_conflicts = now;
+    }
+
     /// A pedestrian who was on a pavement at `t0` and is on a crossing lane at `t1`
     /// stepped off the kerb this step: the crossing's pedestrian signal at `t0`, the
     /// instant the decision was taken, must have shown walk.
@@ -837,6 +940,12 @@ impl TrafficAuditor {
             if let Some(state) = state
                 && state != SignalState::Green
             {
+                if p.activity == crate::vru::PedActivity::CrossingAgainstSignal {
+                    // The model's own choice to cross against the signal: observed
+                    // behaviour (Basch et al. 2015), counted, not a defect.
+                    self.stats.pedestrian_red_crossings += 1;
+                    continue;
+                }
                 flagged.push((i, state));
             }
         }
@@ -968,15 +1077,19 @@ impl TrafficAuditor {
 
     fn check_placement(&mut self, world: &World, t: SimTime, actors: &[AuditActor]) {
         for a in actors {
-            // Lateral offset: zero outside a transition, at most the two centrelines'
-            // separation inside one.
+            // Lateral offset: the class's lane position outside a transition (the
+            // centreline for a car), at most the two centrelines' separation from it inside
+            // one; and a rider's body inside its lane.
             let bound = match a.changing {
                 None => 1e-6,
                 Some((from, to)) => {
                     0.5 * (world.lane(from).width_m + world.lane(to).width_m) + 1e-6
                 }
             };
-            if a.lateral_m.abs() > bound {
+            let in_lane = a.changing.is_some()
+                || a.lane_position_m == 0.0
+                || a.lateral_m.abs() + 0.5 * a.width_m <= 0.5 * world.lane(a.lane).width_m + 0.05;
+            if (a.lateral_m - a.lane_position_m).abs() > bound || !in_lane {
                 let ex = Self::example(
                     Check::LateralOffset,
                     t,
@@ -1849,6 +1962,8 @@ mod tests {
 
     fn pedestrian(id: u32, lane: LaneId, s: f64, pos: Vec3) -> AuditPedestrian {
         AuditPedestrian {
+            activity: crate::vru::PedActivity::Walking,
+            vel: Vec3::ZERO,
             actor: ActorId::new(id),
             lane,
             s_m: s,

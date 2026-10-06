@@ -641,6 +641,26 @@ export const ActorState = {
   WARNING_ACTIVE: 0x80,
 } as const;
 
+/**
+ * §3.3.5 — the `activity` byte: what a road user is doing, for the viewer to draw. It is carried in
+ * `Keyframe.actors.flags8`, `Delta.moved.reserved` and `Delta.spawns.reserved`, which v1.0 wrote as 0,
+ * so `0` (walking, or a vehicle) is also what an older server sends. **Ground truth.**
+ */
+export const ActorActivity = {
+  /** a vehicle, or a pedestrian walking along a sidewalk */ NONE: 0,
+  /** standing at the kerb of a crosswalk, waiting for WALK or a gap */ WAITING_AT_KERB: 1,
+  /** on a signalised crosswalk, stepped off on WALK */ CROSSING_ON_WALK: 2,
+  /** on a signalised crosswalk, stepped off on flashing or steady DON'T WALK */ CROSSING_AGAINST_SIGNAL: 3,
+  /** on a crosswalk with no pedestrian signal */ CROSSING_UNSIGNALISED: 4,
+  /** standing at the kerb mid-block, waiting for a gap to cross away from any crosswalk */ WAITING_MIDBLOCK: 5,
+  /** in the carriageway mid-block ("jaywalking"); the pose's lane is `0xFFFFFFFF` */ CROSSING_MIDBLOCK: 6,
+} as const;
+
+/** True for an activity that puts the road user in the carriageway. */
+export function inCarriageway(activity: number): boolean {
+  return activity >= ActorActivity.CROSSING_ON_WALK && activity <= ActorActivity.CROSSING_MIDBLOCK && activity !== ActorActivity.WAITING_MIDBLOCK;
+}
+
 /** §3.3.4 — "benign" is the absence of bits 0–2 (conformance Q6). */
 export function isBenign(state: number): boolean {
   return (state & (ActorState.ATTACKER | ActorState.REPORTED | ActorState.REVOKED)) === 0;
@@ -661,6 +681,8 @@ export interface KeyframeActorBlock {
   readonly state: Uint8Array;
   readonly verifiedNeighbors: Uint8Array;
   readonly flags8: Uint8Array;
+  /** §3.3.5 — the same bytes as `flags8`: `ActorActivity`. */
+  readonly activity: Uint8Array;
 }
 
 /** §3.3.3 — signal block. */
@@ -730,6 +752,7 @@ export function decodeKeyframe(v: FrameView): KeyframeMessage {
           state: new Uint8Array(0),
           verifiedNeighbors: new Uint8Array(0),
           flags8: new Uint8Array(0),
+          activity: new Uint8Array(0),
         }
       : {
           count: A,
@@ -745,6 +768,7 @@ export function decodeKeyframe(v: FrameView): KeyframeMessage {
           state: u8s(v, offActors + 25 * A, A, "Keyframe.actors.state"),
           verifiedNeighbors: u8s(v, offActors + 26 * A, A, "Keyframe.actors.verified_neighbors"),
           flags8: u8s(v, offActors + 27 * A, A, "Keyframe.actors.flags8"),
+          activity: u8s(v, offActors + 27 * A, A, "Keyframe.actors.activity"),
         };
 
   return {
@@ -818,6 +842,8 @@ export interface DeltaMovedBlock {
   /** absolute */ readonly verifiedNeighbors: Uint8Array;
   readonly mflags: Uint8Array;
   readonly reserved: Uint8Array;
+  /** §3.3.5 — absolute; the same bytes as `reserved`: `ActorActivity`. */
+  readonly activity: Uint8Array;
 }
 
 /**
@@ -851,6 +877,8 @@ export interface DeltaSpawnBlock {
   readonly state: Uint8Array;
   readonly verifiedNeighbors: Uint8Array;
   readonly reserved: Uint8Array;
+  /** §3.3.5 — the same bytes as `reserved`: `ActorActivity`. */
+  readonly activity: Uint8Array;
 }
 
 /** §3.4.6 — despawn block. */
@@ -922,6 +950,7 @@ export function decodeDelta(v: FrameView): DeltaMessage {
           verifiedNeighbors: new Uint8Array(0),
           mflags: new Uint8Array(0),
           reserved: new Uint8Array(0),
+          activity: new Uint8Array(0),
         }
       : {
           count: M,
@@ -936,6 +965,7 @@ export function decodeDelta(v: FrameView): DeltaMessage {
           verifiedNeighbors: u8s(v, offMoved + 17 * M, M, "Delta.moved.verified_neighbors"),
           mflags: u8s(v, offMoved + 18 * M, M, "Delta.moved.mflags"),
           reserved: u8s(v, offMoved + 19 * M, M, "Delta.moved.reserved"),
+          activity: u8s(v, offMoved + 19 * M, M, "Delta.moved.activity"),
         };
 
   let absolute: DeltaAbsoluteBlock = EMPTY_ABS;
@@ -970,6 +1000,7 @@ export function decodeDelta(v: FrameView): DeltaMessage {
           state: new Uint8Array(0),
           verifiedNeighbors: new Uint8Array(0),
           reserved: new Uint8Array(0),
+          activity: new Uint8Array(0),
         }
       : {
           count: P,
@@ -987,6 +1018,7 @@ export function decodeDelta(v: FrameView): DeltaMessage {
           state: u8s(v, offSpawns + 33 * P, P, "Delta.spawns.state"),
           verifiedNeighbors: u8s(v, offSpawns + 34 * P, P, "Delta.spawns.verified_neighbors"),
           reserved: u8s(v, offSpawns + 35 * P, P, "Delta.spawns.reserved"),
+          activity: u8s(v, offSpawns + 35 * P, P, "Delta.spawns.activity"),
         };
 
   const despawns: DeltaDespawnBlock =

@@ -84,13 +84,30 @@ pub struct VehiclePath<'a> {
 }
 
 /// Whether a pedestrian may step onto one crossing lane now.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CrossingPermit {
     /// The pedestrian signal for this crossing lane, if a plan controls it.
     pub signal: Option<SignalState>,
     /// True if a vehicle is on the crosswalk or too close to yield to someone stepping
     /// onto it.
     pub hazard: bool,
+    /// The soonest a moving vehicle reaches the crosswalk at its present speed, seconds
+    /// (infinite if none approaches): the gap a pedestrian crossing against the signal
+    /// judges.
+    pub min_tta_s: f64,
+    /// The crosswalk's kerb-to-kerb length, metres.
+    pub length_m: f64,
+}
+
+impl Default for CrossingPermit {
+    fn default() -> Self {
+        Self {
+            signal: None,
+            hazard: false,
+            min_tta_s: f64::INFINITY,
+            length_m: 0.0,
+        }
+    }
 }
 
 /// Every crosswalk of a world, indexed for the two rules.
@@ -162,48 +179,10 @@ impl CrosswalkIndex {
     /// Every crosswalk band on the vehicle's path from its rear to [`HORIZON_M`] ahead of
     /// its front, nearest first.
     pub fn ahead(&self, world: &World, v: &VehiclePath<'_>) -> Vec<BandAhead> {
-        let mut out = Vec::new();
         if self.walks.is_empty() {
-            return out;
+            return Vec::new();
         }
-        // The lane it has just left, while the body overhangs it.
-        if let Some(prev) = v.prev_lane
-            && v.s_m < v.length_m
-            && let Some(l) = world.try_lane(prev)
-        {
-            for c in self.conflicts_on(prev) {
-                let base = -(v.s_m + (l.length_m - c.s_m));
-                push(&mut out, c, base, v.length_m);
-            }
-        }
-        // Its own lane, then the route ahead.
-        let mut offset = -v.s_m;
-        let mut lane = Some(v.lane);
-        let mut k = v.route_index;
-        while let Some(id) = lane {
-            let Some(l) = world.try_lane(id) else { break };
-            for c in self.conflicts_on(id) {
-                push(&mut out, c, offset + c.s_m, v.length_m);
-            }
-            offset += l.length_m;
-            if offset > HORIZON_M {
-                break;
-            }
-            k += 1;
-            lane = v.route.get(k).copied();
-            // A vehicle not at its route position (the route index lags a lane change)
-            // still looks along the route from the next lane.
-            if k == v.route_index + 1 && v.route.get(v.route_index) != Some(&v.lane) {
-                lane = v
-                    .route
-                    .iter()
-                    .position(|r| *r == v.lane)
-                    .and_then(|i| v.route.get(i + 1))
-                    .copied();
-            }
-        }
-        out.sort_by(|a, b| a.enter_m.total_cmp(&b.enter_m));
-        out
+        bands_ahead(world, v, &self.by_lane)
     }
 
     /// Which crosswalks have a pedestrian on them.
@@ -253,9 +232,7 @@ impl CrosswalkIndex {
     /// The crosswalks a pedestrian may not step onto because of this vehicle: the one its
     /// body is on, and every one it could not stop before.
     pub fn hazards_from(&self, bands: &[BandAhead], speed_mps: f64, out: &mut BTreeSet<usize>) {
-        let stop = speed_mps * PEDESTRIAN_REACTION_MARGIN_S
-            + speed_mps * speed_mps / (2.0 * YIELD_DECEL_MPS2)
-            + STOP_BEFORE_CROSSWALK_M;
+        let stop = stopping_distance_m(speed_mps);
         for b in bands {
             let on_it = b.enter_m <= 0.0 && b.exit_m > 0.0;
             if on_it || (b.enter_m > 0.0 && b.enter_m <= stop) {
@@ -271,6 +248,28 @@ impl CrosswalkIndex {
         signal_states: &[(SignalId, PhaseState)],
         hazards: &BTreeSet<usize>,
     ) -> BTreeMap<LaneId, CrossingPermit> {
+        let exposure: BTreeMap<usize, Exposure> = hazards
+            .iter()
+            .map(|k| {
+                (
+                    *k,
+                    Exposure {
+                        hazard: true,
+                        min_tta_s: f64::INFINITY,
+                    },
+                )
+            })
+            .collect();
+        self.permits_exposed(signal_states, &exposure)
+    }
+
+    /// [`CrosswalkIndex::permits`] with each crosswalk's whole [`Exposure`]: the hazard and
+    /// the soonest arrival, which a pedestrian crossing against the signal judges a gap by.
+    pub fn permits_exposed(
+        &self,
+        signal_states: &[(SignalId, PhaseState)],
+        exposure: &BTreeMap<usize, Exposure>,
+    ) -> BTreeMap<LaneId, CrossingPermit> {
         let states: BTreeMap<SignalId, &PhaseState> =
             signal_states.iter().map(|(id, s)| (*id, s)).collect();
         self.walk_of
@@ -281,16 +280,128 @@ impl CrosswalkIndex {
                     .get(lane)
                     .and_then(|(plan, i)| states.get(plan).and_then(|s| s.states.get(*i)))
                     .copied();
+                let e = exposure.get(k).copied().unwrap_or_default();
                 (
                     *lane,
                     CrossingPermit {
                         signal,
-                        hazard: hazards.contains(k),
+                        hazard: e.hazard,
+                        min_tta_s: e.min_tta_s,
+                        length_m: self.walks[*k].length_m,
                     },
                 )
             })
             .collect()
     }
+}
+
+/// Every band of `by_lane` on the vehicle's path from its rear to [`HORIZON_M`] ahead of
+/// its front, nearest first: [`CrosswalkIndex::ahead`] over any set of bands, the painted
+/// crosswalks' or the mid-block paths' ([`crate::vru::midblock`]).
+pub fn bands_ahead(
+    world: &World,
+    v: &VehiclePath<'_>,
+    by_lane: &BTreeMap<LaneId, Vec<CrosswalkConflict>>,
+) -> Vec<BandAhead> {
+    let mut out = Vec::new();
+    if by_lane.is_empty() {
+        return out;
+    }
+    let conflicts_on = |l: LaneId| by_lane.get(&l).map_or(&[][..], Vec::as_slice);
+    // The lane it has just left, while the body overhangs it.
+    if let Some(prev) = v.prev_lane
+        && v.s_m < v.length_m
+        && let Some(l) = world.try_lane(prev)
+    {
+        for c in conflicts_on(prev) {
+            let base = -(v.s_m + (l.length_m - c.s_m));
+            push(&mut out, c, base, v.length_m);
+        }
+    }
+    // Its own lane, then the route ahead.
+    let mut offset = -v.s_m;
+    let mut lane = Some(v.lane);
+    let mut k = v.route_index;
+    while let Some(id) = lane {
+        let Some(l) = world.try_lane(id) else { break };
+        for c in conflicts_on(id) {
+            push(&mut out, c, offset + c.s_m, v.length_m);
+        }
+        offset += l.length_m;
+        if offset > HORIZON_M {
+            break;
+        }
+        k += 1;
+        lane = v.route.get(k).copied();
+        // A vehicle not at its route position (the route index lags a lane change)
+        // still looks along the route from the next lane.
+        if k == v.route_index + 1 && v.route.get(v.route_index) != Some(&v.lane) {
+            lane = v
+                .route
+                .iter()
+                .position(|r| *r == v.lane)
+                .and_then(|i| v.route.get(i + 1))
+                .copied();
+        }
+    }
+    out.sort_by(|a, b| a.enter_m.total_cmp(&b.enter_m));
+    out
+}
+
+/// What the vehicles approaching one crosswalk mean for a pedestrian about to step onto
+/// it, after the vehicles have moved.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Exposure {
+    /// A vehicle is on the band, or so close it could not stop for someone stepping out.
+    pub hazard: bool,
+    /// The soonest any moving vehicle reaches the band's near edge at its present speed,
+    /// seconds; infinite when none approaches within the horizon.
+    pub min_tta_s: f64,
+}
+
+impl Default for Exposure {
+    fn default() -> Self {
+        Self {
+            hazard: false,
+            min_tta_s: f64::INFINITY,
+        }
+    }
+}
+
+/// Below this speed a vehicle is not approaching, for the time-to-arrival: m/s.
+pub const APPROACHING_MPS: f64 = 0.5;
+
+/// The distance a vehicle at `speed_mps` needs to stop for a pedestrian who steps out now,
+/// as a pedestrian judges it, metres: [`PEDESTRIAN_REACTION_MARGIN_S`] of reaction, then
+/// [`YIELD_DECEL_MPS2`], stopping [`STOP_BEFORE_CROSSWALK_M`] short.
+pub fn stopping_distance_m(speed_mps: f64) -> f64 {
+    speed_mps * PEDESTRIAN_REACTION_MARGIN_S
+        + speed_mps * speed_mps / (2.0 * YIELD_DECEL_MPS2)
+        + STOP_BEFORE_CROSSWALK_M
+}
+
+/// Adds one vehicle's bands to each crosswalk's [`Exposure`].
+pub fn expose(bands: &[BandAhead], speed_mps: f64, out: &mut BTreeMap<usize, Exposure>) {
+    let stop = stopping_distance_m(speed_mps);
+    for b in bands {
+        let on_it = b.enter_m <= 0.0 && b.exit_m > 0.0;
+        let e = out.entry(b.crosswalk).or_default();
+        if on_it || (b.enter_m > 0.0 && b.enter_m <= stop) {
+            e.hazard = true;
+        }
+        if b.enter_m > 0.0 && speed_mps > APPROACHING_MPS {
+            e.min_tta_s = e.min_tta_s.min(b.enter_m / speed_mps);
+        }
+    }
+}
+
+/// The yield rule alone: the gap to the nearest band ahead whose crosswalk is in
+/// `occupied`, less the stop-line setback — or `None`.
+pub fn yield_gap(bands: &[BandAhead], occupied: &BTreeSet<usize>) -> Option<f64> {
+    bands
+        .iter()
+        .find(|b| b.enter_m > 0.0 && occupied.contains(&b.crosswalk))
+        .map(|b| (b.enter_m - STOP_BEFORE_CROSSWALK_M).max(0.0))
 }
 
 /// Adds one band, `base` metres from the vehicle's front to the crossing point, if any of

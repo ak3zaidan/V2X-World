@@ -12,7 +12,11 @@
 //! [`crate::classes::VehicleClass::Bicycle`] and needs no model of its own.
 
 pub mod crosswalk;
+pub mod midblock;
 pub mod social_force;
 
 pub use crosswalk::{CrossingPermit, CrosswalkIndex};
-pub use social_force::{SocialForce, SocialForceParams};
+pub use midblock::{MidblockIndex, MidblockParams};
+pub use social_force::{
+    PedActivity, PedestrianStats, PedestrianTraits, SocialForce, SocialForceParams, SpeedLaw,
+};

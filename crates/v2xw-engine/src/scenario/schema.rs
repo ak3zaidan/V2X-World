@@ -436,6 +436,34 @@ pub struct Vru {
     /// What fraction of them carry a device that transmits.
     #[serde(default)]
     pub device_fraction: f64,
+    /// How the pedestrians behave: `observed` (the default — walking speeds by age group,
+    /// start-up at walk, a share who cross against the signal into a gap, groups, and
+    /// mid-block crossing) or `document` (the 1995 social-force defaults of 04-models.md
+    /// §2.5: one speed law, everyone waits for walk, nobody crosses mid-block).
+    #[serde(default)]
+    pub behaviour: VruBehaviour,
+    /// Overrides the observed behaviour's mid-block crossing rate, decisions per 100 m of
+    /// eligible sidewalk walked; 0 turns mid-block crossing off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub midblock_rate_per_100m: Option<f64>,
+    /// Overrides the observed behaviour's share of pedestrians who cross against the
+    /// signal when the traffic leaves a gap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_crossing_share: Option<f64>,
+    /// Overrides the share of cyclists on e-bikes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ebike_share: Option<f64>,
+}
+
+/// How the pedestrians of `actors.vru` behave.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VruBehaviour {
+    /// As observed in the field studies the mobility crate cites.
+    #[default]
+    Observed,
+    /// The social-force model's document defaults.
+    Document,
 }
 
 /// A roadside unit.

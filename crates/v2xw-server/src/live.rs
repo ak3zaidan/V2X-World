@@ -1245,6 +1245,8 @@ struct LiveActor {
     speed_mps: f64,
     accel_mps2: f64,
     lane: Option<LaneId>,
+    /// What the road user is doing (§3.3.5).
+    activity: u8,
     /// The last step this actor published kinematics in.
     last_step: u64,
 }
@@ -1759,6 +1761,7 @@ impl Projector {
                 // this build emits, so the count is not known here. Zero is the §3.3.2
                 // encoding and the honest one: no neighbour is *known* to be verified.
                 verified_neighbors: 0,
+                activity: live.activity,
             });
         }
         let mut snapshot = Snapshot::new(t, poses);
@@ -1854,6 +1857,7 @@ impl Projector {
                     speed_mps: 0.0,
                     accel_mps2: 0.0,
                     lane: None,
+                    activity: 0,
                     last_step: index,
                 },
             );
@@ -1871,6 +1875,7 @@ impl Projector {
                 live.speed_mps = view.speed_mps;
                 live.accel_mps2 = view.acc_mps2.unwrap_or(0.0);
                 live.lane = view.lane.map(LaneId::new);
+                live.activity = view.activity.unwrap_or(0);
                 live.last_step = index;
             }
         }

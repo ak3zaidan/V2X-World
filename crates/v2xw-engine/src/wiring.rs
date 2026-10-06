@@ -310,13 +310,35 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     let rules = v2xw_mobility::rules::TrafficRules::of_highway_preset(
         scenario.world.highway_preset.map(|p| p.label()),
     );
-    let params = rules.apply(v2xw_mobility::EngineParams {
+    let vru = &scenario.actors.vru;
+    let mut params = rules.apply(v2xw_mobility::EngineParams {
         step: scenario.time.mobility_step(),
         ..v2xw_mobility::EngineParams::default()
     });
-    NativeMobility::new(params).with_vru_population(v2xw_mobility::engine::VruPopulation {
-        pedestrians: scenario.actors.vru.pedestrians,
-        cyclists: scenario.actors.vru.cyclists,
+    if let Some(share) = vru.ebike_share {
+        params.cyclists.ebike_share = share;
+    }
+    let mut people = match vru.behaviour {
+        crate::scenario::schema::VruBehaviour::Observed => {
+            v2xw_mobility::SocialForceParams::observed()
+        }
+        crate::scenario::schema::VruBehaviour::Document => {
+            v2xw_mobility::SocialForceParams::default()
+        }
+    };
+    if let Some(rate) = vru.midblock_rate_per_100m {
+        people.midblock.rate_per_100m = rate;
+    }
+    if let Some(share) = vru.red_crossing_share {
+        people.red_crossing_share = share;
+    }
+    let mut mobility = NativeMobility::new(params);
+    if vru.pedestrians > 0 {
+        mobility = mobility.with_vru(v2xw_mobility::SocialForce::new(people));
+    }
+    mobility.with_vru_population(v2xw_mobility::engine::VruPopulation {
+        pedestrians: vru.pedestrians,
+        cyclists: vru.cyclists,
     })
 }
 
@@ -2240,6 +2262,7 @@ pub fn build_metrics(
         Box::new(v2xw_metrics::security::SecurityProvider::new(0)),
         Box::new(v2xw_metrics::detection::DetectionProvider::new()),
         Box::new(v2xw_metrics::safety::SafetyProvider::new(0)),
+        Box::new(v2xw_metrics::vru::VruSafetyProvider::new()),
     ];
     // The pseudonym, pool, linkability and backend-link metrics read records only the
     // security path writes, so a run without it would publish a column of empty samples.

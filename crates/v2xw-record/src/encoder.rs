@@ -115,6 +115,8 @@ pub struct ActorPose {
     pub state: u8,
     /// Neighbours in state *verified*, saturating at 255.
     pub verified_neighbors: u8,
+    /// What the road user is doing (§3.3.5; `0` for a vehicle).
+    pub activity: u8,
 }
 
 impl ActorPose {
@@ -132,6 +134,7 @@ impl ActorPose {
             class_idx: 0,
             state: ST_EQUIPPED,
             verified_neighbors: 0,
+            activity: 0,
         }
     }
 }
@@ -222,6 +225,8 @@ pub struct SnapshotEncoder {
     last_keyframe_time: Option<SimTime>,
     last_time: Option<SimTime>,
     refs: BTreeMap<u32, SlotRef>,
+    /// The activity each slot last transmitted (§3.3.5): a change is a reason for a row.
+    activity: BTreeMap<u32, u8>,
     signals: BTreeMap<u32, (u8, u16)>,
     force_keyframe: bool,
 }
@@ -240,6 +245,7 @@ impl SnapshotEncoder {
             last_keyframe_time: None,
             last_time: None,
             refs: BTreeMap::new(),
+            activity: BTreeMap::new(),
             signals: BTreeMap::new(),
             force_keyframe: false,
         }
@@ -341,6 +347,8 @@ impl SnapshotEncoder {
                     lane: None,
                     accel_mps2: 0.0,
                     state: a.state & !ST_ATTACKER,
+                    // The activity is ground truth (vwp-v1 §3.3.5).
+                    activity: 0,
                     ..*a
                 })
                 .collect(),
@@ -368,6 +376,7 @@ impl SnapshotEncoder {
                 class_idx: a.class_idx,
                 state: a.state,
                 verified_neighbors: a.verified_neighbors,
+                activity: a.activity,
             };
             if out.insert(a.slot, target).is_some() {
                 return Err(RecordError::malformed(
@@ -384,7 +393,9 @@ impl SnapshotEncoder {
         let actor_count = rows.keys().next_back().map_or(0, |s| *s as usize + 1);
         let mut actors = vec![ActorRow::EMPTY; actor_count];
         self.refs.clear();
+        self.activity.clear();
         for (slot, t) in rows {
+            self.activity.insert(*slot, t.activity);
             let z_cm = quant::escape_z_cm(t.z_mm);
             actors[*slot as usize] = ActorRow {
                 actor_id: t.actor_id,
@@ -398,7 +409,7 @@ impl SnapshotEncoder {
                 class_idx: t.class_idx,
                 state: t.state,
                 verified_neighbors: t.verified_neighbors,
-                flags8: 0,
+                flags8: t.activity,
             };
             self.refs.insert(
                 *slot,
@@ -446,6 +457,7 @@ impl SnapshotEncoder {
 
         for (slot, t) in rows {
             let Some(r) = self.refs.get(slot).copied() else {
+                self.activity.insert(*slot, t.activity);
                 spawns.push(SpawnRow {
                     slot: *slot,
                     actor_id: t.actor_id,
@@ -460,6 +472,7 @@ impl SnapshotEncoder {
                     class_idx: t.class_idx,
                     state: t.state,
                     verified_neighbors: t.verified_neighbors,
+                    activity: t.activity,
                 });
                 let z_cm = quant::escape_z_cm(t.z_mm);
                 self.refs.insert(
@@ -486,10 +499,13 @@ impl SnapshotEncoder {
             // §3.4.2: "Only actors whose quantised pose, `state`, `verified_neighbors` or
             // lane changed appear." Heading, speed and acceleration are absolute fields
             // that ride along on a row; they do not, per the specification, trigger one.
+            let activity_changed = self.activity.get(slot).copied().unwrap_or(0) != t.activity;
             let changed = pose_changed
                 || lane_changed
+                || activity_changed
                 || t.state != r.pose.state
                 || t.verified_neighbors != r.pose.verified_neighbors;
+            self.activity.insert(*slot, t.activity);
             let mut next = step.next;
             next.heading_brad = t.heading_brad;
             next.speed_cq = t.speed_cq;
@@ -525,6 +541,7 @@ impl SnapshotEncoder {
                 state: t.state,
                 verified_neighbors: t.verified_neighbors,
                 mflags,
+                activity: t.activity,
             });
             self.refs.insert(*slot, SlotRef { pose: next });
         }
@@ -537,6 +554,7 @@ impl SnapshotEncoder {
             .collect();
         for slot in gone {
             self.refs.remove(&slot);
+            self.activity.remove(&slot);
             despawns.push(DespawnRow {
                 slot,
                 cause: snap.despawn_causes.get(&slot).copied().unwrap_or(U16_NONE),
@@ -618,6 +636,7 @@ struct Target {
     class_idx: u8,
     state: u8,
     verified_neighbors: u8,
+    activity: u8,
 }
 
 /// Assigns actor slots the way §3.3.1 requires: the lowest free slot, and no reuse until

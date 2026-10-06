@@ -123,6 +123,8 @@ pub struct ActorState {
     pub transmitting: bool,
     /// How many peers its own neighbour table holds in state *verified*.
     pub verified_neighbors: u32,
+    /// What the road user is doing (vwp-v1 §3.3.5; `0` for a vehicle).
+    pub activity: u8,
 }
 
 /// The engine's producer of `Keyframe` and `Delta` frames.
@@ -224,6 +226,7 @@ impl SnapshotStream {
                 class_idx: class_index(s.class),
                 state: state_byte(s),
                 verified_neighbors: u8::try_from(s.verified_neighbors).unwrap_or(u8::MAX),
+                activity: s.activity,
             });
         }
         let mut snap = Snapshot::new(at, actors);
@@ -334,6 +337,7 @@ mod tests {
             attacker: false,
             transmitting: false,
             verified_neighbors: 0,
+            activity: 0,
         };
         assert_eq!(state_byte(&base), 0);
         let equipped = ActorState {
@@ -382,6 +386,7 @@ mod tests {
                 attacker: false,
                 transmitting: true,
                 verified_neighbors: 0,
+                activity: 0,
             };
             let frame = stream.encode(at, &[state]).expect("encodes");
             let kind = frame.header().expect("header").kind().expect("known kind");

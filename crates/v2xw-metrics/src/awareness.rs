@@ -686,6 +686,7 @@ mod tests {
             lane_pos_m: None,
             class: None,
             node: Some(NodeId::new(node)),
+            activity: None,
         };
         OwnedRecord {
             channel: "gt.kinematics",

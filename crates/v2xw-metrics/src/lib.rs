@@ -154,6 +154,7 @@ pub mod security;
 pub mod stats;
 pub mod summary;
 pub mod vis;
+pub mod vru;
 
 pub use def::{Agg, Dim, DimValue, Dims, MetricDef, MetricSample, SampleValue};
 pub use detection::{Cell, ConfusionMatrix, DetectionLevel};

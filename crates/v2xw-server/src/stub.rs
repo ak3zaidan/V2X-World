@@ -286,6 +286,7 @@ impl StubEngine {
                 class_idx: plan.class_idx,
                 state,
                 verified_neighbors: verified_neighbours(i, step),
+                activity: 0,
             });
         }
 

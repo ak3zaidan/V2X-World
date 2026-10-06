@@ -349,6 +349,7 @@ fn example_delta() -> DeltaBody {
             state: ST_EQUIPPED,
             verified_neighbors: 8,
             mflags: MFLAG_LANE_CHANGED,
+            activity: 0,
         }],
         abs: Vec::new(),
         lanes: vec![44],

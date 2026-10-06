@@ -573,6 +573,12 @@ pub struct MobilityUpdate {
     pub despawned: Vec<(ActorId, DespawnCause)>,
     /// Every signal controller's state, ordered by signal id.
     pub signal_states: Vec<(SignalId, PhaseState)>,
+    /// What each road user with a behaviour worth drawing is doing (a pedestrian waiting
+    /// at a kerb, crossing on walk, against the signal or mid-block:
+    /// [`crate::vru::PedActivity::code`]), ordered by actor id. Empty when the run has no
+    /// such road user, and then not serialised.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activities: Vec<(ActorId, u8)>,
 }
 
 impl MobilityUpdate {
@@ -584,6 +590,7 @@ impl MobilityUpdate {
             spawned: Vec::new(),
             despawned: Vec::new(),
             signal_states: Vec::new(),
+            activities: Vec::new(),
         }
     }
 

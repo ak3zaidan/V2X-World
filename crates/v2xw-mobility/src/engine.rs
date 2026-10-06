@@ -344,6 +344,13 @@ const DIVERGED_M: f64 = 2.5;
 /// How many walkable lanes a pedestrian's walk strings together at most.
 const PEDESTRIAN_WALK_LANES: usize = 12;
 
+/// The custom entity a pedestrian group's size is drawn under.
+const VRU_GROUP_ID: &str = "mobility/vru/group";
+
+/// How far apart the members of a group walk side by side, metres: shoulder to shoulder
+/// with a little room (a body is 0.48 m wide). **A choice.**
+const GROUP_SPACING_M: f64 = 0.7;
+
 /// The driver of a bicycle: the SUMO vType defaults for vClass `bicycle` (the class
 /// table's [`crate::classes::ClassSpec`]: desired 20 km/h, acceleration 1.2 m/s²,
 /// deceleration 3.0 m/s², gap 0.5 m) with SUMO's default `tau` of 1 s as the time
@@ -358,6 +365,112 @@ pub fn bicycle_driver() -> DriverProfile {
         min_gap_m: spec.min_gap_m,
     }
 }
+
+/// How motorcycles and mopeds ride, where they differ from a car.
+///
+/// | What | Default | Source |
+/// |---|---|---|
+/// | acceleration in traffic | motorcycle 2.5 m/s², moped 1.1 m/s² | the moped's is the SUMO vType default (R10 §B4); for the motorcycle, French naturalistic riding data (26 instrumented motorcycles over 18 months) found accelerations beyond ±4 m/s² only 0.5 % of the time, and the SUMO default of 6 m/s² is a sports machine's capability, not how a rider moves off in a city: 2.5 m/s² is **a choice** inside that envelope |
+/// | comfortable deceleration | 3.0 m/s² (both) | **a choice** inside the same ±4 m/s² envelope; emergency braking stays the class's 10 m/s² (SUMO) |
+/// | time headway, standstill gap | 1.2 s, 1.5 m | **a choice**: a smaller vehicle stops closer behind a car; no urban motorcycle headway distribution was read |
+/// | cornering | `v = sqrt(g·R·tan φ)`, `φ` ≤ 25° | the steady-turn balance of a leaning two-wheeler (Cossalter, *Motorcycle Dynamics*, 2006); riders keep well inside the tyres' 45–50° limit in traffic, and 25° (0.47 g) is **a choice** |
+/// | lane position | the left tyre track, 0.5 m left of the centreline | the Motorcycle Safety Foundation's default lane position (the left third of the lane) in right-hand traffic |
+///
+/// Filtering between stopped vehicles is a jurisdiction's rule
+/// ([`crate::rules::TrafficRules::motorcycle_filtering`]): every jurisdiction this engine
+/// has rules for prohibits it, so a motorcycle keeps its place in the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TwoWheelerParams {
+    /// Whether motorcycles and mopeds get their own dynamics, cornering and lane position
+    /// (otherwise they drive as the car-following preset's cars do).
+    pub enabled: bool,
+    /// A motorcycle's acceleration, m/s².
+    pub motorcycle_accel_mps2: f64,
+    /// A moped's acceleration, m/s².
+    pub moped_accel_mps2: f64,
+    /// The comfortable deceleration of either, m/s².
+    pub comfort_decel_mps2: f64,
+    /// Their time headway, seconds.
+    pub time_headway_s: f64,
+    /// Their standstill gap, metres.
+    pub min_gap_m: f64,
+    /// The largest lean angle a rider takes a junction turn at, degrees.
+    pub max_lean_deg: f64,
+    /// How far left of the lane centreline they ride, metres.
+    pub lane_position_m: f64,
+}
+
+impl Default for TwoWheelerParams {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            motorcycle_accel_mps2: 2.5,
+            moped_accel_mps2: VehicleClass::Moped.spec().accel_mps2,
+            comfort_decel_mps2: 3.0,
+            time_headway_s: 1.2,
+            min_gap_m: 1.5,
+            max_lean_deg: 25.0,
+            lane_position_m: 0.5,
+        }
+    }
+}
+
+/// Standard gravity, m/s².
+const GRAVITY_MPS2: f64 = 9.80665;
+
+/// [`NativeMobility::lane_position_m`] from the parameters alone.
+fn lane_position_for(params: &EngineParams, class: VehicleClass) -> f64 {
+    let tw = params.two_wheelers;
+    if tw.enabled
+        && params.intersections != IntersectionMode::TwoColoringLegacy
+        && matches!(class, VehicleClass::Motorcycle | VehicleClass::Moped)
+    {
+        tw.lane_position_m
+    } else {
+        0.0
+    }
+}
+
+/// How cyclists' desired speeds are drawn.
+///
+/// The German Naturalistic Cycling Study (Schleinitz, Petzoldt, Franke-Bartholdt, Krems &
+/// Gehlert, *Safety Science* 92:290–297, 2017; 90 riders, nearly 17,000 km) measured mean
+/// speeds of 15.3 km/h on conventional bicycles and 17.4 km/h on pedelecs (assisted to
+/// 25 km/h) — the abstract states the 2 km/h difference. Each cyclist draws a bicycle type
+/// with [`CyclistSpeeds::ebike_share`] and a speed around its type's mean with
+/// [`CyclistSpeeds::relative_sd`]. The share of e-bikes in a city's cycle traffic and the
+/// spread are **choices**: no count of either for Midtown was read.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CyclistSpeeds {
+    /// Whether cyclists draw their own speeds (otherwise every one rides at the SUMO
+    /// bicycle vType's 20 km/h).
+    pub enabled: bool,
+    /// Mean speed on a conventional bicycle, m/s.
+    pub conventional_mps: f64,
+    /// Mean speed on an e-bike, m/s.
+    pub ebike_mps: f64,
+    /// The share of cyclists on e-bikes.
+    pub ebike_share: f64,
+    /// The spread of one rider's speed around their type's mean, as a fraction of it.
+    pub relative_sd: f64,
+}
+
+impl Default for CyclistSpeeds {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            conventional_mps: 15.3 / 3.6,
+            ebike_mps: 17.4 / 3.6,
+            ebike_share: 0.3,
+            relative_sd: 0.2,
+        }
+    }
+}
+
+/// The custom entity a cyclist's speed is drawn under.
+const CYCLIST_SPEED_ID: &str = "mobility/vru/cyclist-speed";
 
 /// Which intersection rule the engine applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -431,6 +544,11 @@ pub struct EngineParams {
     /// The median of a queued driver's start-up delay behind the car in front, seconds
     /// ([`FOLLOW_REACTION_MEDIAN_S`], a calibrated value).
     pub queue_start_delay_median_s: f64,
+    /// How motorcycles and mopeds ride ([`TwoWheelerParams`]). Not applied in the legacy
+    /// parity mode.
+    pub two_wheelers: TwoWheelerParams,
+    /// How fast cyclists ride ([`CyclistSpeeds`]).
+    pub cyclists: CyclistSpeeds,
     /// **A test hook, not a model parameter.** Walks the decision pass in reverse actor
     /// order. Because the pass reads only the frozen snapshot, the published result must be
     /// bit-identical either way; that is the ADR 0004 Jacobi property, and this is how the
@@ -456,6 +574,8 @@ impl Default for EngineParams {
             driver_heterogeneity: true,
             right_turn_on_red: false,
             queue_start_delay_median_s: FOLLOW_REACTION_MEDIAN_S,
+            two_wheelers: TwoWheelerParams::default(),
+            cyclists: CyclistSpeeds::default(),
             reverse_order: false,
         }
     }
@@ -749,6 +869,9 @@ pub struct NativeMobility {
     /// part (`diverging_connectors`). Built in `init`.
     diverging: BTreeMap<LaneId, Vec<(LaneId, f64)>>,
     vru: Option<SocialForce>,
+    /// Whether each vehicle that met a pedestrian waiting mid-block yields to them, drawn
+    /// once per pair: `(pedestrian, vehicle) → yields`.
+    midblock_yields: BTreeMap<(ActorId, ActorId), bool>,
     clock: Option<Box<dyn ClockModel>>,
     actors: BTreeMap<ActorId, Actor>,
     published: BTreeMap<ActorId, Kinematics>,
@@ -860,6 +983,7 @@ impl NativeMobility {
             crosswalks: CrosswalkIndex::default(),
             diverging: BTreeMap::new(),
             vru: None,
+            midblock_yields: BTreeMap::new(),
             clock: None,
             actors: BTreeMap::new(),
             published: BTreeMap::new(),
@@ -918,6 +1042,27 @@ impl NativeMobility {
     /// integration and junction rules are kept exactly as the reference engine had them.
     fn along_path(&self) -> bool {
         self.params.intersections != IntersectionMode::TwoColoringLegacy
+    }
+
+    /// Where in its lane a vehicle of `class` rides when not changing lanes: metres left
+    /// of the centreline ([`TwoWheelerParams::lane_position_m`] for a motorcycle or a
+    /// moped, the centreline for everyone else and in the legacy parity mode).
+    pub fn lane_position_m(&self, class: VehicleClass) -> f64 {
+        lane_position_for(&self.params, class)
+    }
+
+    /// The factor on a junction connector's car turn speed for `class`: a two-wheeler's
+    /// lean limit, `sqrt(g·tan φ / a_lat)`, when that is the tighter (never above 1).
+    fn turn_factor(&self, class: VehicleClass) -> f64 {
+        let tw = self.params.two_wheelers;
+        if !(tw.enabled && matches!(class, VehicleClass::Motorcycle | VehicleClass::Moped))
+            || self.params.turn_lateral_accel_mps2 <= 0.0
+        {
+            return 1.0;
+        }
+        let lean = tw.max_lean_deg.clamp(1.0, 60.0) * core::f64::consts::PI / 180.0;
+        let a_lean = GRAVITY_MPS2 * math::tan(lean);
+        math::sqrt(a_lean / self.params.turn_lateral_accel_mps2).min(1.0)
     }
 
     /// Sets the weather every vehicle drives in.
@@ -995,6 +1140,7 @@ impl NativeMobility {
                     pos: k.pos,
                     heading_rad: k.heading_rad,
                     min_path_radius_m: a.class.min_path_radius_m(),
+                    lane_position_m: self.lane_position_m(a.class),
                 }
             })
             .collect()
@@ -1018,6 +1164,8 @@ impl NativeMobility {
                     heading_rad: k.map_or(0.0, |k| k.heading_rad),
                     length_m: dims.length_m,
                     width_m: dims.width_m,
+                    activity: p.activity,
+                    vel: p.vel,
                 }
             })
             .collect()
@@ -1088,7 +1236,7 @@ impl NativeMobility {
                 destination,
                 lane: first,
                 s_m: s_m.clamp(0.0, lane.length_m),
-                lateral_m: 0.0,
+                lateral_m: self.lane_position_m(class),
                 speed_mps: 0.0,
                 accel_mps2: 0.0,
                 spawned: t,
@@ -1432,7 +1580,7 @@ impl NativeMobility {
                 destination: trip.destination,
                 lane: trip.origin,
                 s_m: front,
-                lateral_m: 0.0,
+                lateral_m: self.lane_position_m(trip.class),
                 speed_mps: 0.0,
                 accel_mps2: 0.0,
                 spawned: trip.t.max(now),
@@ -1538,18 +1686,79 @@ impl NativeMobility {
                 let Some(mut vru) = self.vru.take() else {
                     break;
                 };
-                let placed = vru.spawn(ctx, id, route.clone(), s_m).is_ok();
-                if placed && let Some(p) = vru.get(id) {
+                // A group walks together (Moussaïd et al. 2010): drawn only when the
+                // parameters ask for groups, so a run without them draws what it drew.
+                let shares = vru.params().group_shares;
+                let size = if shares[1..].iter().any(|x| *x > 0.0) {
+                    let total: f64 = shares.iter().sum();
+                    let mut u = ctx
+                        .rng(
+                            RngDomain::plugin(VRU_PLACEMENT_ID),
+                            EntityRef::custom(VRU_GROUP_ID, u64::from(id.index())),
+                        )
+                        .uniform(0.0, total.max(1e-9));
+                    let mut k = 1;
+                    for (i, x) in shares.iter().enumerate() {
+                        if u < *x {
+                            k = i + 1;
+                            break;
+                        }
+                        u -= x;
+                    }
+                    let room = (target.pedestrians as usize)
+                        .saturating_sub(vru.len())
+                        .max(1);
+                    k.min(room)
+                } else {
+                    1
+                };
+                let mut members = vec![id];
+                for _ in 1..size {
+                    members.push(ActorId::new(self.next_actor));
+                    self.next_actor += 1;
+                }
+                let placed = if size == 1 {
+                    vru.spawn(ctx, id, route.clone(), s_m).is_ok()
+                } else {
+                    // The leader's compliance and gap judgement; the slowest member's pace.
+                    let (traits, _) = vru.draw_traits(&*ctx, id);
+                    let pace = members
+                        .iter()
+                        .map(|m| vru.draw_traits(&*ctx, *m).1)
+                        .fold(f64::INFINITY, f64::min);
+                    let mut ok = true;
+                    for (i, m) in members.iter().enumerate() {
+                        let lateral = (i as f64 - 0.5 * (size as f64 - 1.0)) * GROUP_SPACING_M;
+                        ok &= vru
+                            .spawn_with(
+                                ctx,
+                                *m,
+                                route.clone(),
+                                s_m,
+                                lateral,
+                                traits,
+                                pace,
+                                Some(id.index()),
+                            )
+                            .is_ok();
+                    }
+                    ok
+                };
+                for m in &members {
+                    if !placed {
+                        break;
+                    }
+                    let Some(p) = vru.get(*m) else { continue };
                     let world = ctx.world();
                     let mut k = Kinematics::at_rest(now, p.position(world));
                     k.dims = VehicleClass::Pedestrian.dims();
                     k.heading_rad = world.lane(p.lane).heading_at(p.s_m);
                     spawned.push(ActorSpawn {
-                        actor: id,
+                        actor: *m,
                         t: now,
                         class: VehicleClass::Pedestrian,
                         kinematics: k,
-                        route: Self::route_of(world, route),
+                        route: Self::route_of(world, route.clone()),
                         driver: DriverProfile {
                             desired_speed_mps: p.desired_speed_mps,
                             max_accel_mps2: 0.0,
@@ -1601,7 +1810,7 @@ impl NativeMobility {
                     origin_s_m: s_m,
                     destination,
                     class: VehicleClass::Bicycle,
-                    desired_speed_mps: bicycle_driver().desired_speed_mps,
+                    desired_speed_mps: self.cyclist_speed(&*ctx, key),
                 };
                 self.next_seq += 1;
                 let traits = self.traits_for(&*ctx, &trip);
@@ -1612,6 +1821,136 @@ impl NativeMobility {
                 }
             }
         }
+    }
+
+    /// Which pedestrians waiting mid-block may step off now, judged on the vehicles as
+    /// they are after this step's move (`crate::vru::midblock`): no vehicle on a band of
+    /// the path, none too close to stop, and every approaching one either arriving after
+    /// the pedestrian has cleared its lane, gone past before they reach it (the rolling
+    /// gap), or a driver who yields and has slowed. Draws each new driver's yield.
+    fn midblock_permits(
+        &mut self,
+        ctx: &dyn MobCtx,
+        world: &World,
+        vru: &SocialForce,
+        midblock: &MidblockBands,
+    ) -> BTreeMap<ActorId, bool> {
+        let p = vru.params().midblock;
+        let mut go: BTreeMap<ActorId, bool> = midblock
+            .waiting
+            .iter()
+            .map(|a| (*a, true))
+            .collect();
+        let mut seen: BTreeSet<(ActorId, ActorId)> = BTreeSet::new();
+        for a in self.actors.values() {
+            let path = a.crosswalk_path();
+            let bands = crate::vru::crosswalk::bands_ahead(world, &path, &midblock.by_lane);
+            let length = a.class.spec().length_m;
+            for b in &bands {
+                let Some(&(ped, band)) = midblock.owner.get(&b.crosswalk) else {
+                    continue;
+                };
+                if !midblock.waiting.contains(&ped) {
+                    continue;
+                }
+                let Some(person) = vru.get(ped) else { continue };
+                seen.insert((ped, a.id));
+                // A driver who has not yet met this pedestrian decides once whether to
+                // yield, if they could stop comfortably.
+                let comfortable = a.speed_mps * 1.0
+                    + a.speed_mps * a.speed_mps / (2.0 * a.driver.comfort_decel_mps2.max(0.5))
+                    + crate::vru::crosswalk::STOP_BEFORE_CROSSWALK_M;
+                if b.enter_m > comfortable && !self.midblock_yields.contains_key(&(ped, a.id)) {
+                    let key = (u64::from(ped.index()) << 32) | u64::from(a.id.index());
+                    let u = ctx
+                        .rng(
+                            RngDomain::plugin(MIDBLOCK_YIELD_ID),
+                            EntityRef::custom(MIDBLOCK_YIELD_ID, key),
+                        )
+                        .uniform(0.0, 1.0);
+                    self.midblock_yields
+                        .insert((ped, a.id), u < p.driver_yield_probability);
+                }
+                let yields = self.midblock_yields.get(&(ped, a.id)).copied() == Some(true);
+                let on_it = b.enter_m <= 0.0 && b.exit_m + length > 0.0;
+                let ok = if on_it {
+                    false
+                } else if b.enter_m <= 0.0 {
+                    true
+                } else if b.enter_m <= crate::vru::crosswalk::stopping_distance_m(a.speed_mps) {
+                    false
+                } else if yields && a.speed_mps < 1.0 {
+                    true
+                } else if a.speed_mps <= crate::vru::crosswalk::APPROACHING_MPS {
+                    true
+                } else {
+                    let (d_near, d_far) = midblock.reach[&b.crosswalk];
+                    let v = person.desired_speed_mps.max(0.1);
+                    let t_s = person.traits.gap_margin_s;
+                    let tta = b.enter_m / a.speed_mps;
+                    let clears = tta > d_far / v + t_s;
+                    let passes = (b.exit_m + length) / a.speed_mps + t_s.min(1.0)
+                        < (d_near - 0.5).max(0.0) / v;
+                    clears || passes
+                };
+                let _ = band;
+                if !ok {
+                    go.insert(ped, false);
+                }
+            }
+        }
+        // Forget the drivers who have passed, and the pedestrians who have crossed.
+        let live: BTreeSet<ActorId> = midblock.waiting.iter().copied().collect();
+        self.midblock_yields
+            .retain(|(ped, veh), _| live.contains(ped) && seen.contains(&(*ped, *veh)));
+        go
+    }
+
+    /// The pedestrians on a sidewalk beside traffic that stands still: a vehicle within
+    /// a few metres, and every vehicle there below walking pace.
+    fn beside_queue(
+        world: &World,
+        vru: &SocialForce,
+        snapshot: &ActorSnapshot,
+    ) -> BTreeSet<ActorId> {
+        let mut out = BTreeSet::new();
+        for p in vru.people() {
+            if p.arrived || p.midblock.is_some() {
+                continue;
+            }
+            let pos = p.position(world);
+            let near = snapshot.actors_within(pos, 8.0);
+            if near.is_empty() {
+                continue;
+            }
+            if near.iter().all(|a| {
+                snapshot
+                    .kinematics(*a)
+                    .is_some_and(|k| k.vel.norm_2d() < crate::vru::crosswalk::APPROACHING_MPS)
+            }) {
+                out.insert(p.actor);
+            }
+        }
+        out
+    }
+
+    /// A cyclist's desired speed ([`CyclistSpeeds`]), from the trip's own stream.
+    fn cyclist_speed(&self, ctx: &dyn MobCtx, key: u64) -> f64 {
+        let c = self.params.cyclists;
+        if !c.enabled {
+            return bicycle_driver().desired_speed_mps;
+        }
+        let mut rng = ctx.rng(
+            RngDomain::plugin(VRU_PLACEMENT_ID),
+            EntityRef::custom(CYCLIST_SPEED_ID, key),
+        );
+        let mean = if rng.uniform(0.0, 1.0) < c.ebike_share {
+            c.ebike_mps
+        } else {
+            c.conventional_mps
+        };
+        rng.normal(mean, mean * c.relative_sd)
+            .clamp(0.4 * mean, VehicleClass::Bicycle.spec().max_speed_mps)
     }
 
     /// The [`ActorSpawn`] announcing an actor this engine has just inserted.
@@ -1636,6 +1975,24 @@ impl NativeMobility {
     fn driver_for(&self, class: VehicleClass) -> DriverProfile {
         if class == VehicleClass::Bicycle {
             return bicycle_driver();
+        }
+        let tw = self.params.two_wheelers;
+        if tw.enabled
+            && self.along_path()
+            && matches!(class, VehicleClass::Motorcycle | VehicleClass::Moped)
+        {
+            let base = self.cf.profile(class);
+            return DriverProfile {
+                max_accel_mps2: if class == VehicleClass::Moped {
+                    tw.moped_accel_mps2
+                } else {
+                    tw.motorcycle_accel_mps2
+                },
+                comfort_decel_mps2: tw.comfort_decel_mps2,
+                time_headway_s: tw.time_headway_s,
+                min_gap_m: tw.min_gap_m,
+                ..base
+            };
         }
         // [`CarFollowing::profile`] exists for this. Hard-coding a set here instead meant
         // `NativeMobility::legacy()` — the documented legacy-parity configuration — ran
@@ -2631,7 +2988,7 @@ impl NativeMobility {
             };
             let mut cap = lane.speed_limit_mps * actor.traits.speed_factor;
             if let Some(v) = self.turn_speed.get(&next) {
-                cap = cap.min(*v);
+                cap = cap.min(*v * self.turn_factor(actor.class));
             }
             best = best.min(math::sqrt(cap * cap + 2.0 * b * dist.max(0.0)));
             dist += lane.length_m;
@@ -2733,6 +3090,14 @@ impl Mobility for NativeMobility {
             .map(|l| l.id)
             .collect();
         self.crosswalks = CrosswalkIndex::build(world);
+        if let Some(vru) = self.vru.as_mut()
+            && vru.params().midblock.rate_per_100m > 0.0
+        {
+            vru.set_midblock_index(Arc::new(crate::vru::MidblockIndex::build(
+                world,
+                &vru.params().midblock,
+            )));
+        }
         self.diverging = Self::diverging_connectors(world);
         self.bike_lanes = world
             .roads
@@ -2826,6 +3191,10 @@ impl Mobility for NativeMobility {
                 .iter()
                 .flat_map(|v| v.people().filter(|p| !p.arrived).map(|p| p.lane)),
         );
+        // The mid-block paths in use, from the start-of-step positions: each band, the
+        // pedestrian it belongs to, and whether that pedestrian is in (or about to step
+        // into) the lane it cuts.
+        let midblock = MidblockBands::of(self.vru.as_ref());
 
         // --- pass 6: decide -------------------------------------------------
         // Every input is the frozen snapshot; every output is buffered. The iteration order
@@ -2854,7 +3223,8 @@ impl Mobility for NativeMobility {
             lane_view.speed_limit_mps *= actor.traits.speed_factor;
             // A junction connector is driven no faster than its curvature allows.
             if along && let Some(v) = self.turn_speed.get(&actor.lane) {
-                lane_view.speed_limit_mps = lane_view.speed_limit_mps.min(*v);
+                lane_view.speed_limit_mps =
+                    lane_view.speed_limit_mps.min(*v * self.turn_factor(actor.class));
             }
             let options = NeighborOptions {
                 lookahead_m: self.params.lookahead_m,
@@ -3051,6 +3421,20 @@ impl Mobility for NativeMobility {
                     leader.map(|l| (l.gap_m, l.speed_mps)),
                     actor.driver.min_gap_m,
                 ) {
+                    let before = leader;
+                    leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(gap, 0.0)));
+                    if leader != before {
+                        binding_stop_line = None;
+                    }
+                }
+            }
+            // A pedestrian crossing mid-block: every driver stops for one in, or about to
+            // enter, their lane (UVC §11-504, due care), and one who chose to yield stops
+            // for one waiting at the kerb (`crate::vru::midblock`).
+            if along && self.params.crosswalk_yield && !midblock.is_empty() {
+                let path = actor.crosswalk_path();
+                let bands = crate::vru::crosswalk::bands_ahead(world, &path, &midblock.by_lane);
+                if let Some(gap) = midblock.stop_gap(&bands, actor.id, &self.midblock_yields) {
                     let before = leader;
                     leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(gap, 0.0)));
                     if leader != before {
@@ -3374,19 +3758,21 @@ impl Mobility for NativeMobility {
             } = decision.lane_change
             {
                 let separation = 0.5 * (world.lane(actor.lane).width_m + world.lane(to).width_m);
-                let from_offset_m = match side {
-                    // Moving left puts the vehicle to the *right* of the target lane's
-                    // centreline, and the offset closes from there.
-                    Side::Left => -separation,
-                    Side::Right => separation,
-                };
+                let home = lane_position_for(&self.params, actor.class);
+                let from_offset_m = actor.lateral_m
+                    + match side {
+                        // Moving left puts the vehicle to the *right* of the target lane's
+                        // centreline, and the offset closes from there.
+                        Side::Left => -separation,
+                        Side::Right => separation,
+                    };
                 actor.transition = Some(Transition {
                     from: actor.lane,
                     to,
                     started: t0,
                     duration,
                     from_offset_m,
-                    to_offset_m: 0.0,
+                    to_offset_m: home,
                     switched: false,
                     from_s_delta: 0.0,
                 });
@@ -3599,13 +3985,21 @@ impl Mobility for NativeMobility {
         // now, having moved this step — is on the crosswalk or too close to yield.
         if let Some(mut vru) = self.vru.take() {
             if !self.crosswalks.is_empty() {
-                let mut hazards = std::collections::BTreeSet::new();
+                let mut exposure = BTreeMap::new();
                 for a in self.actors.values() {
                     let bands = self.crosswalks.ahead(world, &a.crosswalk_path());
-                    self.crosswalks
-                        .hazards_from(&bands, a.speed_mps, &mut hazards);
+                    crate::vru::crosswalk::expose(&bands, a.speed_mps, &mut exposure);
                 }
-                vru.set_crossing_permits(self.crosswalks.permits(&signal_states, &hazards));
+                vru.set_crossing_permits(self.crosswalks.permits_exposed(&signal_states, &exposure));
+            }
+            if !midblock.is_empty() {
+                let go = self.midblock_permits(&*ctx, world, &vru, &midblock);
+                vru.set_midblock_permits(go);
+            } else {
+                self.midblock_yields.clear();
+            }
+            if vru.params().midblock.rate_per_100m > 0.0 {
+                vru.set_beside_queue(Self::beside_queue(world, &vru, &snapshot));
             }
             let mut people = vru.step(ctx, dt, &snapshot);
             states.append(&mut people);
@@ -3615,12 +4009,23 @@ impl Mobility for NativeMobility {
         self.published = states.iter().copied().collect();
         spawned.sort_by_key(|s| s.actor);
         despawned.sort_by_key(|(a, _)| *a);
+        let activities = self
+            .vru
+            .as_ref()
+            .map(|v| {
+                v.people()
+                    .filter(|p| !p.arrived)
+                    .map(|p| (p.actor, p.activity.code()))
+                    .collect()
+            })
+            .unwrap_or_default();
         MobilityUpdate {
             t: t1,
             states,
             spawned,
             despawned,
             signal_states,
+            activities,
         }
     }
 
@@ -3638,6 +4043,87 @@ impl Mobility for NativeMobility {
 
     fn set_demand_multiplier(&mut self, m: f64) -> bool {
         self.demand.as_mut().is_some_and(|d| d.set_multiplier(m))
+    }
+}
+
+/// The stream a driver's decision to yield to a pedestrian waiting mid-block is drawn from.
+const MIDBLOCK_YIELD_ID: &str = "vru/midblock/yield";
+
+/// The mid-block paths in use at a step's start, as the vehicles read them.
+#[derive(Debug, Default)]
+struct MidblockBands {
+    /// Each band on each driven lane; its `crosswalk` number is unique to the band.
+    by_lane: BTreeMap<LaneId, Vec<v2xw_world::walk::CrosswalkConflict>>,
+    /// Band number → (pedestrian, index of the band on its path).
+    owner: BTreeMap<usize, (ActorId, usize)>,
+    /// Band number → where along the path the lane's near and far edges are, metres.
+    reach: BTreeMap<usize, (f64, f64)>,
+    /// The bands a pedestrian is in, or about to step into: every driver stops for them.
+    occupied: BTreeSet<usize>,
+    /// The pedestrians waiting at the kerb for a gap.
+    waiting: Vec<ActorId>,
+}
+
+/// How far ahead of a crossing pedestrian a lane counts as occupied, metres: about two
+/// seconds of walking, so a driver is stopping before the pedestrian reaches the lane.
+const MIDBLOCK_LOOKAHEAD_M: f64 = 3.0;
+
+impl MidblockBands {
+    fn of(vru: Option<&SocialForce>) -> Self {
+        let mut out = MidblockBands::default();
+        let Some(vru) = vru else { return out };
+        for (ped, m) in vru.midblock_paths() {
+            let progress = match m.stage {
+                crate::vru::social_force::MidblockStage::Crossing(d) => Some(d),
+                crate::vru::social_force::MidblockStage::Waiting(_) => {
+                    out.waiting.push(ped);
+                    None
+                }
+                crate::vru::social_force::MidblockStage::Approaching => continue,
+            };
+            for (i, b) in m.bands.iter().enumerate() {
+                let id = crate::vru::midblock::DYNAMIC_BASE + ped.as_usize() * 16 + i.min(15);
+                let mut c = b.conflict;
+                c.crosswalk = id;
+                out.by_lane.entry(c.lane).or_default().push(c);
+                out.owner.insert(id, (ped, i));
+                out.reach.insert(id, (b.d_near_m, b.d_far_m));
+                if let Some(d) = progress
+                    && d + MIDBLOCK_LOOKAHEAD_M >= b.d_near_m
+                    && d <= b.d_far_m + 0.5
+                {
+                    out.occupied.insert(id);
+                }
+            }
+        }
+        for v in out.by_lane.values_mut() {
+            v.sort_by(|a, b| a.s_m.total_cmp(&b.s_m).then(a.crosswalk.cmp(&b.crosswalk)));
+        }
+        out
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_lane.is_empty()
+    }
+
+    /// The gap to the nearest band ahead that this vehicle must stop for: one a pedestrian
+    /// is in or about to enter, or one whose waiting pedestrian this driver yields to.
+    fn stop_gap(
+        &self,
+        bands: &[crate::vru::crosswalk::BandAhead],
+        vehicle: ActorId,
+        yields: &BTreeMap<(ActorId, ActorId), bool>,
+    ) -> Option<f64> {
+        bands
+            .iter()
+            .find(|b| {
+                b.enter_m > 0.0
+                    && (self.occupied.contains(&b.crosswalk)
+                        || self.owner.get(&b.crosswalk).is_some_and(|(ped, _)| {
+                            yields.get(&(*ped, vehicle)).copied() == Some(true)
+                        }))
+            })
+            .map(|b| (b.enter_m - crate::vru::crosswalk::STOP_BEFORE_CROSSWALK_M).max(0.0))
     }
 }
 

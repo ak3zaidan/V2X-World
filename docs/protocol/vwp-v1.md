@@ -636,7 +636,7 @@ after despawn so that a late delta cannot be misapplied.
 | 9 | `u8[A]` | `class_idx` | index into the class table | PUBLIC |
 | 10 | `u8[A]` | `state` | §3.3.4 | mixed |
 | 11 | `u8[A]` | `verified_neighbors` | count of neighbours in state *verified*, saturating at 255 | NODE |
-| 12 | `u8[A]` | `flags8` | reserved, 0 | — |
+| 12 | `u8[A]` | `flags8` | the activity byte, §3.3.5 (reserved and 0 in v1.0) | **GT** |
 
 **The pose is the body's centre.** `x_mm`/`y_mm`/`z_cm` locate the centre of the class's
 bounding box (§4 class table `length_m` × `width_m`), not the kinematic reference point the
@@ -677,6 +677,30 @@ keys each head row by both its group id and its plain controller id.)
 
 This is the "benign / attacker / reported / revoked" state the palette of 09-ui §10 renders: benign =
 none of bits 0–2 set.
+
+#### 3.3.5 The `activity` byte
+
+What a road user is doing, for a viewer to draw (a pedestrian standing at the kerb, crossing on walk,
+crossing against the signal, jaywalking). It lives in bytes v1.0 reserved and wrote as zero: the
+keyframe's `flags8` (§3.3.2 column 12), the `Delta` moved row's `reserved` (§3.4.2 column 11) and the
+spawn row's `reserved` (§3.4.5 column 14). A v1.0 reader ignores those bytes, so it loses only this
+information (§8.5); `0` is both "a vehicle, or a pedestrian walking" and what a server that predates it
+sends. A change of activity alone is a reason for a moved row (§3.4.2). **Ground truth**: a node-profile
+stream writes 0.
+
+| Value | Name | Meaning |
+|---|---|---|
+| 0 | `NONE` | a vehicle; a pedestrian walking along a sidewalk |
+| 1 | `WAITING_AT_KERB` | standing at a crosswalk's kerb, waiting for WALK or for a gap |
+| 2 | `CROSSING_ON_WALK` | on a signalised crosswalk, having stepped off on WALK |
+| 3 | `CROSSING_AGAINST_SIGNAL` | on a signalised crosswalk, having stepped off on flashing or steady DON'T WALK |
+| 4 | `CROSSING_UNSIGNALISED` | on a crosswalk with no pedestrian signal |
+| 5 | `WAITING_MIDBLOCK` | standing at the kerb away from any crosswalk, waiting for a gap to cross |
+| 6 | `CROSSING_MIDBLOCK` | in the carriageway away from any crosswalk; the pose's `lane_id` is `0xFFFFFFFF` |
+
+Values 7–255 are reserved; a reader maps them to `NONE`. A motorcycle's lean is not carried: it follows
+from the pose stream (`φ = atan(v·ψ̇/g)`, with `ψ̇` the change of `heading_brad` over a step), which is
+how the engine's own cornering model relates speed, turn radius and lean.
 
 ---
 
@@ -722,9 +746,9 @@ every earlier `Delta` of the same GOP in `step_index` order. A client that sees 
 | 8 | `u8[M]` | `state` | absolute, §3.3.4 | mixed |
 | 9 | `u8[M]` | `verified_neighbors` | absolute | NODE |
 | 10 | `u8[M]` | `mflags` | §3.4.2.1 | — |
-| 11 | `u8[M]` | `reserved` | 0 | — |
+| 11 | `u8[M]` | `reserved` | the activity byte, absolute, §3.3.5 (0 in v1.0) | **GT** |
 
-Only actors whose quantised pose, `state`, `verified_neighbors` or lane changed appear. Heading, speed,
+Only actors whose quantised pose, `state`, `verified_neighbors`, lane or activity (§3.3.5) changed appear. Heading, speed,
 acceleration, state and neighbour count are absolute because they are already 1–2 bytes: delta-coding them
 would save nothing and cost a reference.
 
@@ -770,7 +794,7 @@ clear.
 | 11 | `u8[P]` | `class_idx` | | PUBLIC |
 | 12 | `u8[P]` | `state` | | mixed |
 | 13 | `u8[P]` | `verified_neighbors` | | NODE |
-| 14 | `u8[P]` | `reserved` | 0 | — |
+| 14 | `u8[P]` | `reserved` | the activity byte, §3.3.5 (0 in v1.0) | **GT** |
 
 #### 3.4.6 Despawn block (8·D bytes, 4-aligned)
 

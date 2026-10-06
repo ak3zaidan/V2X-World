@@ -70,6 +70,8 @@ use crate::error::{MobError, Result};
 use crate::snapshot::ActorSnapshot;
 use crate::traits::VruMobility;
 use crate::vru::crosswalk::CrossingPermit;
+use crate::vru::midblock::{MidblockIndex, MidblockParams, PathBand, path_bands};
+use std::sync::Arc;
 use v2xw_world::SignalState;
 
 /// The model id.
@@ -83,6 +85,150 @@ pub const CROSSING_GAP_M: f64 = 10.0;
 
 /// The stream a pedestrian's decision to cross against the signal is drawn from.
 pub const JAYWALK_ID: &str = "vru/pedestrian/jaywalk";
+
+/// The stream a pedestrian's own traits (age group, compliance, start-up and gap times)
+/// are drawn from, once, at spawn.
+pub const TRAITS_ID: &str = "vru/pedestrian/traits";
+
+/// The stream a pedestrian's mid-block crossing decisions are drawn from: one draw per
+/// step while it walks an eligible stretch, and the crossing's angle and next walk.
+pub const MIDBLOCK_ID: &str = "vru/pedestrian/midblock";
+
+/// How a pedestrian's desired walking speed is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SpeedLaw {
+    /// One Gaussian for everyone: Helbing & Molnár's 1.34 ± 0.26 m/s (§2.5).
+    #[default]
+    Helbing1995,
+    /// Two age groups, each Gaussian, from the crosswalk field study of Knoblauch,
+    /// Pietrucha & Nitzburg (TRR 1538, 1996): pedestrians 14–64 walk at a mean of
+    /// 4.95 ft/s (1.51 m/s) with a 15th percentile of 4.09 ft/s (1.25 m/s); those 65 and
+    /// over at 4.11 ft/s (1.25 m/s), 15th percentile 3.19 ft/s (0.97 m/s). The standard
+    /// deviations are derived from the mean and the 15th percentile assuming normality
+    /// (`σ = (mean − p15)/1.036`): 0.25 and 0.27 m/s. The MUTCD's 3.5 ft/s (1.07 m/s)
+    /// clearance speed sits below both groups' 15th percentiles, as it is meant to.
+    Knoblauch1996,
+}
+
+/// What a pedestrian is doing, for the viewer and the safety statistics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[repr(u8)]
+pub enum PedActivity {
+    /// Walking along a sidewalk.
+    #[default]
+    Walking = 0,
+    /// Standing at the kerb of a crosswalk, waiting for walk or for a gap.
+    WaitingAtKerb = 1,
+    /// On a signalised crosswalk, having stepped off on walk.
+    CrossingOnWalk = 2,
+    /// On a signalised crosswalk, having stepped off on flashing or steady don't-walk.
+    CrossingAgainstSignal = 3,
+    /// On a crosswalk with no pedestrian signal.
+    CrossingUnsignalised = 4,
+    /// Standing at the kerb mid-block, waiting for a gap to jaywalk.
+    WaitingMidblock = 5,
+    /// In the carriageway mid-block, away from any crosswalk.
+    CrossingMidblock = 6,
+}
+
+impl PedActivity {
+    /// The one-byte code the live stream carries.
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+
+    /// True while the pedestrian is in the carriageway.
+    pub const fn in_carriageway(self) -> bool {
+        matches!(
+            self,
+            PedActivity::CrossingOnWalk
+                | PedActivity::CrossingAgainstSignal
+                | PedActivity::CrossingUnsignalised
+                | PedActivity::CrossingMidblock
+        )
+    }
+}
+
+/// What makes one pedestrian unlike another, drawn once at spawn ([`TRAITS_ID`]).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PedestrianTraits {
+    /// 65 or over ([`SocialForceParams::older_share`]).
+    pub older: bool,
+    /// Crosses on flashing or steady don't-walk when the gap allows
+    /// ([`SocialForceParams::red_crossing_share`]).
+    pub violator: bool,
+    /// Time from the onset of walk to stepping off the kerb, for one who was waiting,
+    /// seconds ([`SocialForceParams::startup_median_s`]).
+    pub startup_s: f64,
+    /// The HCM's `t_s` for this pedestrian: the margin, beyond the time to walk across,
+    /// that a gap must leave, seconds ([`SocialForceParams::gap_margin_s`]).
+    pub gap_margin_s: f64,
+}
+
+/// Where a mid-block crossing is in its life.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MidblockStage {
+    /// Walking to the crossing point.
+    Approaching,
+    /// Standing at the kerb at the crossing point, since then.
+    Waiting(v2xw_core::time::SimTime),
+    /// In the carriageway, this far along the path, metres.
+    Crossing(f64),
+}
+
+/// One pedestrian's mid-block crossing, from the decision to the far kerb.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Midblock {
+    /// Arc length on the near sidewalk lane where it steps off.
+    pub at_s_m: f64,
+    /// The far sidewalk lane.
+    pub far_lane: LaneId,
+    /// Where on it the path ends (diagonal included).
+    pub far_s_m: f64,
+    /// The driven lanes the path crosses.
+    pub crossed: Vec<LaneId>,
+    /// The path's start, set when the pedestrian reaches the crossing point.
+    pub from: Vec3,
+    /// The path's end, on the far sidewalk's centreline.
+    pub to: Vec3,
+    /// The bands the path cuts across the driven lanes (empty until it reaches the point).
+    pub bands: Vec<PathBand>,
+    /// Where it is.
+    pub stage: MidblockStage,
+}
+
+impl Midblock {
+    /// The path's length, metres.
+    pub fn length_m(&self) -> f64 {
+        self.from.distance_2d(self.to)
+    }
+}
+
+/// Counts of what the pedestrians did, for the run's safety and delay statistics.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize)]
+pub struct PedestrianStats {
+    /// Crossings started on walk.
+    pub crossings_on_walk: u64,
+    /// Crossings started on flashing don't-walk.
+    pub crossings_on_flashing: u64,
+    /// Crossings started on steady don't-walk.
+    pub crossings_on_dont_walk: u64,
+    /// Crossings of a crosswalk with no pedestrian signal.
+    pub crossings_unsignalised: u64,
+    /// Mid-block crossings started.
+    pub midblock_crossings: u64,
+    /// Mid-block crossings given up for want of a gap.
+    pub midblock_abandoned: u64,
+    /// Kerb waits completed (the pedestrian stepped off or gave up), at crosswalks and
+    /// mid-block.
+    pub waits: u64,
+    /// Their total, seconds.
+    pub wait_total_s: f64,
+    /// The longest, seconds.
+    pub wait_max_s: f64,
+}
 
 /// The model's parameters (§2.5).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -136,6 +282,54 @@ pub struct SocialForceParams {
     /// Standard deviation of the fluctuation acceleration, m/s². **`TODO: calibrate`** —
     /// zero by default.
     pub fluctuation_mps2: f64,
+    /// How desired speeds are drawn ([`SpeedLaw`]).
+    pub speed_law: SpeedLaw,
+    /// Under [`SpeedLaw::Knoblauch1996`], the share of pedestrians 65 or over. **A choice**:
+    /// about one New Yorker in six is 65 or over (US Census), and no count of the age mix
+    /// on Midtown's sidewalks was read, so 0.15.
+    pub older_share: f64,
+    /// Mean walking speed of pedestrians 14–64, m/s (Knoblauch et al. 1996: 4.95 ft/s).
+    pub younger_speed_mean_mps: f64,
+    /// Its standard deviation, m/s (derived, see [`SpeedLaw::Knoblauch1996`]).
+    pub younger_speed_std_mps: f64,
+    /// Mean walking speed of pedestrians 65 and over, m/s (Knoblauch et al. 1996:
+    /// 4.11 ft/s).
+    pub older_speed_mean_mps: f64,
+    /// Its standard deviation, m/s (derived).
+    pub older_speed_std_mps: f64,
+    /// The share of pedestrians who cross on flashing or steady don't-walk when the
+    /// traffic leaves them a gap ([`PedestrianTraits::violator`]). Zero by default; the
+    /// observed preset's value is calibrated to Basch et al. 2015 (*J. Community Health*
+    /// 40:789), who watched 21,760 pedestrians at five Midtown Manhattan intersections:
+    /// 5,414 crossing on walk were 27.8 % of the walk crossers and 974 crossing on don't
+    /// walk were 42.0 % of those, so about 2,319 of 21,794 crossings (10.6 %) began on
+    /// don't-walk.
+    pub red_crossing_share: f64,
+    /// Median start-up time, from the onset of walk to stepping off the kerb, for a
+    /// pedestrian who was waiting, seconds; zero for none. Knoblauch et al. 1996 measured
+    /// it but their values could not be read; the observed preset's 2 s is **a choice**
+    /// below the HCM's 3.2 s platoon start-up time, which includes the platoon's
+    /// queue discharge.
+    pub startup_median_s: f64,
+    /// The lognormal shape of the start-up time.
+    pub startup_sigma: f64,
+    /// The HCM's pedestrian start-up and end clearance time `t_s` in its critical headway
+    /// `t_c = L/S_p + t_s`, seconds: what a gap must leave beyond the time to walk across.
+    /// **Not re-verified**: the HCM asks for a local measurement; 2 s is used here.
+    pub gap_margin_s: f64,
+    /// The lognormal spread of `t_s` between pedestrians.
+    pub gap_margin_sigma: f64,
+    /// Mid-block crossing ([`crate::vru::midblock`]); off by default.
+    pub midblock: MidblockParams,
+    /// The share of *groups* of one, two, three and four walkers the engine places. A
+    /// group shares one walk, walks at its slowest member's pace and side by side, and
+    /// takes its leader's decisions at the kerb. All singles by default. The observed
+    /// preset's split, 0.65 / 0.27 / 0.06 / 0.02, puts 55 % of pedestrians in groups —
+    /// Moussaïd et al. (*PLoS ONE* 5:e10047, 2010) counted more than half of the
+    /// pedestrians in a commercial street walking in groups on a workday (70 % at the
+    /// weekend) and slower the larger the group. The split itself is **a choice** that
+    /// matches that share; the per-size counts could not be read.
+    pub group_shares: [f64; 4],
 }
 
 impl Default for SocialForceParams {
@@ -159,6 +353,36 @@ impl Default for SocialForceParams {
             jaywalk_probability: 0.0,
             max_wait_s: 120.0,
             kerb_margin_m: 0.3,
+            speed_law: SpeedLaw::Helbing1995,
+            older_share: 0.15,
+            younger_speed_mean_mps: 1.51,
+            younger_speed_std_mps: 0.25,
+            older_speed_mean_mps: 1.25,
+            older_speed_std_mps: 0.27,
+            red_crossing_share: 0.0,
+            startup_median_s: 0.0,
+            startup_sigma: 0.5,
+            gap_margin_s: 2.0,
+            gap_margin_sigma: 0.3,
+            midblock: MidblockParams::default(),
+            group_shares: [1.0, 0.0, 0.0, 0.0],
+        }
+    }
+}
+
+impl SocialForceParams {
+    /// Pedestrians as they are observed rather than as the 1995 model's defaults: walking
+    /// speeds by age group (Knoblauch et al. 1996), a start-up delay at the onset of walk,
+    /// a share who cross against the signal when traffic allows (calibrated to Midtown
+    /// Manhattan, Basch et al. 2015), and mid-block crossing ([`MidblockParams::urban`]).
+    pub fn observed() -> Self {
+        Self {
+            speed_law: SpeedLaw::Knoblauch1996,
+            red_crossing_share: 0.3,
+            startup_median_s: 2.0,
+            midblock: MidblockParams::urban(),
+            group_shares: [0.65, 0.27, 0.06, 0.02],
+            ..Self::default()
         }
     }
 }
@@ -188,15 +412,43 @@ pub struct Pedestrian {
     pub waiting_since: Option<v2xw_core::time::SimTime>,
     /// Its decision to cross against the signal at one crossing lane, once drawn.
     pub against_signal: Option<(LaneId, bool)>,
+    /// Its own traits.
+    pub traits: PedestrianTraits,
+    /// The group it walks with (the leader's actor index), if any.
+    pub group: Option<u32>,
+    /// When walk came on while it stood at this kerb: its start-up runs from here.
+    pub walk_onset: Option<v2xw_core::time::SimTime>,
+    /// What it is doing.
+    pub activity: PedActivity,
+    /// Its mid-block crossing, from the decision to the far kerb.
+    pub midblock: Option<Midblock>,
+    /// The sidewalk lane on which it last gave a mid-block crossing up (it does not try
+    /// again on the same lane).
+    pub midblock_declined: Option<LaneId>,
+    /// How many walks it has been given (its route is replaced after a mid-block crossing).
+    pub walks: u32,
 }
 
 impl Pedestrian {
     /// Its world position, given the world.
     pub fn position(&self, world: &World) -> Vec3 {
+        if let Some(m) = &self.midblock
+            && let MidblockStage::Crossing(d) = m.stage
+        {
+            let len = m.length_m().max(1e-9);
+            return m.from.lerp(m.to, (d / len).clamp(0.0, 1.0));
+        }
         world
             .try_lane(self.lane)
             .map(|l| l.offset_point(self.s_m, self.lateral_m))
             .unwrap_or(Vec3::ZERO)
+    }
+
+    /// True while it is in the carriageway on a mid-block crossing.
+    pub fn crossing_midblock(&self) -> bool {
+        self.midblock
+            .as_ref()
+            .is_some_and(|m| matches!(m.stage, MidblockStage::Crossing(_)))
     }
 }
 
@@ -211,6 +463,14 @@ pub struct SocialForce {
     /// ([`SocialForce::set_crossing_permits`]); a crossing lane with no entry has no signal
     /// and no hazard.
     permits: BTreeMap<LaneId, CrossingPermit>,
+    /// The world's mid-block crossing points, when mid-block crossing is on.
+    midblock_index: Option<Arc<MidblockIndex>>,
+    /// Which pedestrians waiting mid-block may step off now (set by the engine, from the
+    /// vehicles' positions after they moved).
+    midblock_go: BTreeMap<ActorId, bool>,
+    /// Whether the traffic beside each pedestrian stands still (set by the engine).
+    beside_queue: std::collections::BTreeSet<ActorId>,
+    stats: PedestrianStats,
 }
 
 impl Default for SocialForce {
@@ -227,7 +487,89 @@ impl SocialForce {
             params,
             people: BTreeMap::new(),
             permits: BTreeMap::new(),
+            midblock_index: None,
+            midblock_go: BTreeMap::new(),
+            beside_queue: std::collections::BTreeSet::new(),
+            stats: PedestrianStats::default(),
         }
+    }
+
+    /// Hands the model the world's mid-block crossing points.
+    pub fn set_midblock_index(&mut self, index: Arc<MidblockIndex>) {
+        self.midblock_index = Some(index);
+    }
+
+    /// Hands the model, for each pedestrian waiting mid-block, whether the traffic leaves
+    /// it a gap now.
+    pub fn set_midblock_permits(&mut self, go: BTreeMap<ActorId, bool>) {
+        self.midblock_go = go;
+    }
+
+    /// Hands the model the pedestrians beside traffic that stands still.
+    pub fn set_beside_queue(&mut self, ids: std::collections::BTreeSet<ActorId>) {
+        self.beside_queue = ids;
+    }
+
+    /// What the pedestrians have done so far.
+    pub fn stats(&self) -> PedestrianStats {
+        self.stats
+    }
+
+    /// The mid-block paths in use: each pedestrian waiting at, or walking, one, with its
+    /// bands and — while it is in the carriageway — how far along it is.
+    pub fn midblock_paths(&self) -> impl Iterator<Item = (ActorId, &Midblock)> + '_ {
+        self.people.values().filter_map(|p| {
+            p.midblock
+                .as_ref()
+                .filter(|m| !m.bands.is_empty())
+                .map(|m| (p.actor, m))
+        })
+    }
+
+    /// Draws a pedestrian's traits from its own stream ([`TRAITS_ID`]) and its desired
+    /// speed under the speed law.
+    pub fn draw_traits(&self, ctx: &dyn MobCtx, actor: ActorId) -> (PedestrianTraits, f64) {
+        let p = &self.params;
+        let mut rng = ctx.rng(RngDomain::plugin(TRAITS_ID), EntityRef::Actor(actor));
+        let older = rng.uniform(0.0, 1.0) < p.older_share;
+        let violator = rng.uniform(0.0, 1.0) < p.red_crossing_share;
+        let z1 = rng.normal(0.0, 1.0);
+        let z2 = rng.normal(0.0, 1.0);
+        let startup_s = if p.startup_median_s > 0.0 {
+            math::exp(math::ln(p.startup_median_s) + p.startup_sigma * z1).clamp(0.2, 8.0)
+        } else {
+            0.0
+        };
+        let gap_margin_s = if p.gap_margin_s > 0.0 {
+            math::exp(math::ln(p.gap_margin_s) + p.gap_margin_sigma * z2).clamp(0.5, 6.0)
+        } else {
+            0.0
+        };
+        let speed = match p.speed_law {
+            SpeedLaw::Helbing1995 => None,
+            SpeedLaw::Knoblauch1996 => {
+                let (m, sd) = if older {
+                    (p.older_speed_mean_mps, p.older_speed_std_mps)
+                } else {
+                    (p.younger_speed_mean_mps, p.younger_speed_std_mps)
+                };
+                Some(rng.normal(m, sd).clamp(0.5, 2.5))
+            }
+        };
+        let speed = speed.unwrap_or_else(|| {
+            ctx.rng(RngDomain::DesiredSpeed, EntityRef::Actor(actor))
+                .normal(p.desired_speed_mean_mps, p.desired_speed_std_mps)
+                .max(0.1)
+        });
+        (
+            PedestrianTraits {
+                older,
+                violator,
+                startup_s,
+                gap_margin_s,
+            },
+            speed,
+        )
     }
 
     /// The parameters in force.
@@ -281,14 +623,65 @@ impl SocialForce {
                 });
             }
         }
-        let desired = {
+        let (traits, desired) = if self.params.speed_law == SpeedLaw::Helbing1995
+            && self.params.red_crossing_share <= 0.0
+            && self.params.startup_median_s <= 0.0
+            && self.params.midblock.rate_per_100m <= 0.0
+        {
+            // The document model draws only the speed, from the one stream it always
+            // drew from, so its runs are unchanged.
             let mut rng = ctx.rng(RngDomain::DesiredSpeed, EntityRef::Actor(actor));
-            rng.normal(
-                self.params.desired_speed_mean_mps,
-                self.params.desired_speed_std_mps,
-            )
-            .max(0.1)
+            let v = rng
+                .normal(
+                    self.params.desired_speed_mean_mps,
+                    self.params.desired_speed_std_mps,
+                )
+                .max(0.1);
+            (PedestrianTraits::default(), v)
+        } else {
+            self.draw_traits(&*ctx, actor)
         };
+        self.spawn_with(ctx, actor, route, s_m, 0.0, traits, desired, None)
+    }
+
+    /// [`SocialForce::spawn`] with the traits, desired speed, lateral offset and group
+    /// given: how the engine puts a group on a sidewalk together, sharing the slowest
+    /// member's speed and the leader's compliance.
+    ///
+    /// # Errors
+    ///
+    /// As [`SocialForce::spawn`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_with(
+        &mut self,
+        ctx: &mut dyn MobCtx,
+        actor: ActorId,
+        route: Vec<LaneId>,
+        s_m: f64,
+        lateral_m: f64,
+        traits: PedestrianTraits,
+        desired: f64,
+        group: Option<u32>,
+    ) -> Result<()> {
+        let world = ctx.world();
+        let first = *route.first().ok_or(MobError::EmptyWorld {
+            what: "lane in the pedestrian's route",
+        })?;
+        for lane in &route {
+            let l = world
+                .try_lane(*lane)
+                .ok_or(MobError::NoSuchLane { lane: *lane })?;
+            if !Self::is_walkable(world, *lane) {
+                return Err(MobError::LaneNotAdmitted {
+                    lane: *lane,
+                    kind: l.kind.wire_name(),
+                    classes: "pedestrian".to_string(),
+                });
+            }
+        }
+        let half = (0.5 * world.lane(first).width_m
+            - 0.5 * VehicleClass::Pedestrian.spec().width_m)
+            .max(0.0);
         self.people.insert(
             actor,
             Pedestrian {
@@ -297,14 +690,24 @@ impl SocialForce {
                 s_m,
                 lateral_m: 0.0,
                 vel: Vec3::ZERO,
-                desired_speed_mps: desired,
+                desired_speed_mps: desired.max(0.1),
                 route,
                 route_index: 0,
                 arrived: false,
                 waiting_since: None,
                 against_signal: None,
+                traits,
+                group,
+                walk_onset: None,
+                activity: PedActivity::Walking,
+                midblock: None,
+                midblock_declined: None,
+                walks: 0,
             },
         );
+        if let Some(p) = self.people.get_mut(&actor) {
+            p.lateral_m = lateral_m.clamp(-half, half);
+        }
         Ok(())
     }
 
@@ -434,7 +837,32 @@ impl VruMobility for SocialForce {
                 .map(|p| (p.actor, p.position(world), p.vel))
                 .collect()
         };
+        // The frozen positions by grid cell, one interaction radius across, so the pairwise
+        // term looks at the neighbours only (it was every pair: a quadratic step that made
+        // a few thousand pedestrians the slowest part of a run). Candidates are visited in
+        // ascending index — actor order — exactly as the full scan visited them, so the
+        // sum is the same to the last bit.
+        let cell = self.params.interaction_radius_m.max(1.0);
+        let key = |p: Vec3| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+        let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
+        for (i, (_, pos, _)) in frozen.iter().enumerate() {
+            grid.entry(key(*pos)).or_default().push(i);
+        }
+        // Each group leader's mid-block plan at the step's start: a follower adopts it.
+        let leader_plans: BTreeMap<u32, (LaneId, Midblock)> = self
+            .people
+            .values()
+            .filter(|p| p.group.is_none_or(|g| g == p.actor.index()))
+            .filter_map(|p| {
+                p.midblock
+                    .as_ref()
+                    .filter(|m| !matches!(m.stage, MidblockStage::Crossing(_)))
+                    .map(|m| (p.actor.index(), (p.lane, m.clone())))
+            })
+            .collect();
         let fluctuation = self.params.fluctuation_mps2;
+        let midblock_on =
+            self.params.midblock.rate_per_100m > 0.0 && self.midblock_index.is_some();
         let mut out: Vec<(ActorId, Kinematics)> = Vec::with_capacity(self.people.len());
         let actors: Vec<ActorId> = self.people.keys().copied().collect();
         for actor in actors {
@@ -454,11 +882,25 @@ impl VruMobility for SocialForce {
             } else {
                 1.0
             };
+            // The mid-block decision draw, one per step for the same reason.
+            let mid_draw = if midblock_on {
+                ctx.rng(RngDomain::plugin(MIDBLOCK_ID), EntityRef::Actor(actor))
+                    .uniform(0.0, 1.0)
+            } else {
+                1.0
+            };
             let world = ctx.world();
             let Some(person) = self.people.get(&actor) else {
                 continue;
             };
             if person.arrived {
+                out.push((actor, self.kinematics_of(person, world, t_end)));
+                continue;
+            }
+            if person.crossing_midblock() {
+                self.step_midblock_crossing(ctx, actor, dt_s, now);
+                let world = ctx.world();
+                let person = &self.people[&actor];
                 out.push((actor, self.kinematics_of(person, world, t_end)));
                 continue;
             }
@@ -470,38 +912,169 @@ impl VruMobility for SocialForce {
             let (sin_h, cos_h) = math::sin_cos(heading);
             let forward = Vec3::new_2d(cos_h, sin_h);
 
+            // --- a mid-block crossing: plan, approach, wait ---------------------
+            let mut midblock = person.midblock.clone().filter(|_| lane.kind == LaneKind::Sidewalk);
+            if midblock.is_none()
+                && lane.kind == LaneKind::Sidewalk
+                && person.midblock_declined != Some(person.lane)
+            {
+                let leader = person.group.filter(|g| *g != actor.index());
+                if let Some(g) = leader {
+                    // A follower crosses where its group's leader does.
+                    if let Some((l, plan)) = leader_plans.get(&g)
+                        && *l == person.lane
+                        && plan.at_s_m > person.s_m
+                    {
+                        midblock = Some(Midblock {
+                            from: Vec3::ZERO,
+                            bands: Vec::new(),
+                            stage: MidblockStage::Approaching,
+                            ..plan.clone()
+                        });
+                    }
+                } else if midblock_on {
+                    let p = &self.params.midblock;
+                    let factor = if self.beside_queue.contains(&actor) {
+                        p.stopped_traffic_factor
+                    } else {
+                        1.0
+                    };
+                    let chance = p.rate_per_100m / 100.0 * person.desired_speed_mps * dt_s * factor;
+                    if mid_draw < chance
+                        && let Some(index) = self.midblock_index.as_ref()
+                    {
+                        let ahead: Vec<&crate::vru::midblock::Site> = index
+                            .sites_on(person.lane)
+                            .iter()
+                            .filter(|s| s.s_m > person.s_m + 3.0)
+                            .collect();
+                        if let Some(first) = ahead.first() {
+                            let same: Vec<&&crate::vru::midblock::Site> =
+                                ahead.iter().filter(|s| s.s_m == first.s_m).collect();
+                            let mut rng =
+                                ctx.rng(RngDomain::plugin(MIDBLOCK_ID), EntityRef::Actor(actor));
+                            let site = *same[rng.below(same.len() as u64) as usize];
+                            let max = p.diagonal_max_deg.clamp(0.0, 60.0) * core::f64::consts::PI
+                                / 180.0;
+                            let theta = rng.uniform(0.0, max);
+                            let far = world.lane(site.far_lane);
+                            let along = math::cos(far.heading_at(site.far_s_m) - heading);
+                            let shift = site.width_m * math::tan(theta)
+                                * if along >= 0.0 { 1.0 } else { -1.0 };
+                            let far_s = (site.far_s_m + shift)
+                                .clamp(1.0_f64.min(far.length_m), (far.length_m - 1.0).max(0.0));
+                            midblock = Some(Midblock {
+                                at_s_m: site.s_m,
+                                far_lane: site.far_lane,
+                                far_s_m: far_s,
+                                crossed: site.crossed.clone(),
+                                from: Vec3::ZERO,
+                                to: far.point_at(far_s),
+                                bands: Vec::new(),
+                                stage: MidblockStage::Approaching,
+                            });
+                        }
+                    }
+                }
+            }
+            let mut mid_go = false;
+            let mut mid_abandon = false;
+            let mid_hold = match &midblock {
+                Some(m) => match m.stage {
+                    MidblockStage::Approaching => person.s_m >= m.at_s_m - 2.0,
+                    MidblockStage::Waiting(since) => {
+                        if self.midblock_go.get(&actor).copied().unwrap_or(false) {
+                            mid_go = true;
+                            false
+                        } else if Duration::between(since, now).as_secs_f64()
+                            >= self.params.midblock.max_wait_s
+                        {
+                            mid_abandon = true;
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                    MidblockStage::Crossing(_) => false,
+                },
+                None => false,
+            };
+
             // --- the kerb ----------------------------------------------------
             // A pedestrian whose next lane is a crossing steps onto it only on walk (or
             // at an unsignalised crosswalk) and only when no vehicle is on it or too close
             // to yield (UVC §11-502(b), §11-203): the permit says both. One already on a
             // crossing always walks on — stopping in the carriageway is what a pedestrian
-            // caught by a change to don't-walk does not do.
+            // caught by a change to don't-walk does not do. Under the observed behaviour a
+            // pedestrian who was waiting steps off only after their start-up time, and one
+            // who crosses against the signal (a violator) does so only into a gap that the
+            // HCM's critical headway accepts.
             let next = self.next_lane(person);
             let mut against = person.against_signal;
-            let hold = match next {
+            let mut walk_onset = person.walk_onset;
+            let mut how = PedActivity::Walking;
+            let kerb_hold = match next {
                 Some(n)
-                    if lane.kind != LaneKind::Crossing
+                    if midblock.is_none()
+                        && lane.kind != LaneKind::Crossing
                         && world
                             .try_lane(n)
                             .is_some_and(|l| l.kind == LaneKind::Crossing) =>
                 {
                     let permit = self.permits.get(&n).copied().unwrap_or_default();
-                    let signal_ok = match permit.signal {
-                        None | Some(SignalState::Green) | Some(SignalState::Off) => true,
-                        Some(_) => match against {
-                            Some((l, d)) if l == n => d,
-                            _ => {
-                                let d = jaywalk_draw < self.params.jaywalk_probability;
-                                against = Some((n, d));
-                                d
-                            }
-                        },
-                    };
-                    permit.hazard || !signal_ok
+                    let t_c = permit.length_m / person.desired_speed_mps.max(0.1)
+                        + person.traits.gap_margin_s;
+                    let gap_ok = permit.min_tta_s > t_c;
+                    match permit.signal {
+                        None | Some(SignalState::Off) => {
+                            how = PedActivity::CrossingUnsignalised;
+                            permit.hazard
+                        }
+                        Some(SignalState::Green) | Some(SignalState::GreenYield) => {
+                            how = PedActivity::CrossingOnWalk;
+                            // Start-up: one who stood here when walk came on steps off
+                            // after their own start-up time.
+                            let ready = match (person.waiting_since, walk_onset) {
+                                (Some(_), None) => {
+                                    walk_onset = Some(now);
+                                    person.traits.startup_s <= 0.0
+                                }
+                                (Some(_), Some(t)) => {
+                                    Duration::between(t, now).as_secs_f64()
+                                        >= person.traits.startup_s
+                                }
+                                (None, _) => true,
+                            };
+                            permit.hazard || !ready
+                        }
+                        Some(state) => {
+                            how = PedActivity::CrossingAgainstSignal;
+                            walk_onset = None;
+                            let legacy = match against {
+                                Some((l, d)) if l == n => d,
+                                _ if self.params.jaywalk_probability > 0.0 => {
+                                    let d = jaywalk_draw < self.params.jaywalk_probability;
+                                    against = Some((n, d));
+                                    d
+                                }
+                                _ => false,
+                            };
+                            // A violator also starts on flashing don't-walk only if the
+                            // gap is there; nobody starts on it otherwise (MUTCD §4E.02).
+                            let violates = person.traits.violator && gap_ok;
+                            let _ = state;
+                            permit.hazard || !(legacy || violates)
+                        }
+                    }
                 }
                 _ => false,
             };
-            let to_kerb = lane.length_m - self.params.kerb_margin_m - person.s_m;
+            let hold = kerb_hold || mid_hold;
+            let stop_s = match &midblock {
+                Some(m) if mid_hold => m.at_s_m.min(lane.length_m - self.params.kerb_margin_m),
+                _ => lane.length_m - self.params.kerb_margin_m,
+            };
+            let to_kerb = stop_s - person.s_m;
             // Slowing into the kerb over the last two metres rather than stopping on it.
             let desired_speed = if hold {
                 person.desired_speed_mps * (to_kerb / 2.0).clamp(0.0, 1.0)
@@ -514,7 +1087,17 @@ impl VruMobility for SocialForce {
             );
 
             // --- pairwise repulsion ---------------------------------------
-            for (other, other_pos, other_vel) in &frozen {
+            let (cx, cy) = key(position);
+            let mut near: Vec<usize> = Vec::new();
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    if let Some(v) = grid.get(&(cx + dx, cy + dy)) {
+                        near.extend_from_slice(v);
+                    }
+                }
+            }
+            near.sort_unstable();
+            for (other, other_pos, other_vel) in near.iter().map(|i| &frozen[*i]) {
                 if *other == actor {
                     continue;
                 }
@@ -575,7 +1158,7 @@ impl VruMobility for SocialForce {
             // --- put it back on its lane -----------------------------------
             let projection = lane.project_point(moved);
             let mut s_m = projection.s_m;
-            let kerb = (lane.length_m - self.params.kerb_margin_m).max(0.0);
+            let kerb = stop_s.max(0.0);
             if hold && s_m > kerb {
                 // Standing at the kerb: no further along the pavement, and no velocity
                 // carrying it into the road.
@@ -620,6 +1203,87 @@ impl VruMobility for SocialForce {
             let gave_up = waiting_since.is_some_and(|since| {
                 Duration::between(since, now).as_secs_f64() >= self.params.max_wait_s
             });
+            // The mid-block plan's next stage.
+            let mut mid_start: Option<Vec3> = None;
+            if let Some(m) = midblock.as_mut() {
+                match m.stage {
+                    MidblockStage::Approaching if at_kerb && mid_hold => {
+                        let from = lane.offset_point(s_m, lateral_m);
+                        m.from = from;
+                        m.bands = path_bands(
+                            world,
+                            &m.crossed,
+                            from,
+                            m.to,
+                            self.params.midblock.corridor_width_m,
+                            actor.index() as usize,
+                        );
+                        m.stage = MidblockStage::Waiting(now);
+                        if m.bands.is_empty() {
+                            // Nothing to cross after all (a lane the path misses).
+                            mid_abandon = true;
+                        }
+                    }
+                    MidblockStage::Waiting(_) if mid_go => {
+                        mid_start = Some(m.from);
+                        m.stage = MidblockStage::Crossing(0.0);
+                    }
+                    _ => {}
+                }
+            }
+            let left_lane = current != person.lane;
+            if left_lane || mid_abandon {
+                midblock = None;
+            }
+            let previous_wait = person.waiting_since;
+            let walk_onset = if at_kerb && !left_lane { walk_onset } else { None };
+            let activity = if mid_start.is_some() {
+                PedActivity::CrossingMidblock
+            } else if left_lane && world.lane(current).kind == LaneKind::Crossing {
+                how
+            } else if left_lane {
+                PedActivity::Walking
+            } else if at_kerb && mid_hold {
+                PedActivity::WaitingMidblock
+            } else if at_kerb {
+                PedActivity::WaitingAtKerb
+            } else if lane.kind == LaneKind::Crossing {
+                person.activity
+            } else {
+                PedActivity::Walking
+            };
+            // --- statistics ------------------------------------------------
+            let ended_wait = previous_wait.filter(|_| waiting_since.is_none() || gave_up);
+            if let Some(since) = ended_wait {
+                let w = Duration::between(since, now).as_secs_f64();
+                self.stats.waits += 1;
+                self.stats.wait_total_s += w;
+                self.stats.wait_max_s = self.stats.wait_max_s.max(w);
+            }
+            if left_lane && world.lane(current).kind == LaneKind::Crossing {
+                let signal = self.permits.get(&current).and_then(|p| p.signal);
+                match (how, signal) {
+                    (PedActivity::CrossingOnWalk, _) => self.stats.crossings_on_walk += 1,
+                    (PedActivity::CrossingAgainstSignal, Some(SignalState::Amber)) => {
+                        self.stats.crossings_on_flashing += 1;
+                    }
+                    (PedActivity::CrossingAgainstSignal, _) => {
+                        self.stats.crossings_on_dont_walk += 1;
+                    }
+                    _ => self.stats.crossings_unsignalised += 1,
+                }
+            }
+            if mid_start.is_some() {
+                self.stats.midblock_crossings += 1;
+            }
+            if mid_abandon {
+                self.stats.midblock_abandoned += 1;
+            }
+            let declined = if mid_abandon {
+                Some(person.lane)
+            } else {
+                person.midblock_declined
+            };
             let person = self.people.get_mut(&actor).expect("present above");
             person.lane = current;
             person.s_m = s_m;
@@ -627,8 +1291,12 @@ impl VruMobility for SocialForce {
             person.vel = velocity;
             person.route_index = route_index;
             person.arrived = arrived || gave_up;
-            person.waiting_since = waiting_since;
+            person.waiting_since = if mid_start.is_some() { None } else { waiting_since };
             person.against_signal = against;
+            person.walk_onset = walk_onset;
+            person.activity = activity;
+            person.midblock = midblock;
+            person.midblock_declined = declined;
             let person = &self.people[&actor];
             let world = ctx.world();
             out.push((actor, self.kinematics_of(person, world, t_end)));
@@ -637,6 +1305,78 @@ impl VruMobility for SocialForce {
         out
     }
 }
+
+impl SocialForce {
+    /// One step of a pedestrian in the carriageway on a mid-block crossing: it walks the
+    /// straight path at its desired speed (relaxing towards it with `τ`) and, at the far
+    /// kerb, steps onto the far sidewalk and is given a new walk from there.
+    fn step_midblock_crossing(&mut self, ctx: &mut dyn MobCtx, actor: ActorId, dt_s: f64, now: v2xw_core::time::SimTime) {
+        let tau = self.params.tau_s.max(1e-3);
+        let Some(person) = self.people.get(&actor) else {
+            return;
+        };
+        let Some(m) = person.midblock.as_ref() else {
+            return;
+        };
+        let MidblockStage::Crossing(d) = m.stage else {
+            return;
+        };
+        let len = m.length_m().max(1e-6);
+        let speed = person.vel.norm_2d();
+        let v = (speed + (person.desired_speed_mps - speed) * (dt_s / tau).min(1.0)).max(0.0);
+        let d = d + v * dt_s;
+        let dir = Vec3::new_2d((m.to.x - m.from.x) / len, (m.to.y - m.from.y) / len);
+        let landed = d >= len;
+        let (far_lane, far_s) = (m.far_lane, m.far_s_m);
+        let route = if landed {
+            let world = ctx.world();
+            let mut rng = ctx.rng(RngDomain::plugin(MIDBLOCK_ID), EntityRef::Actor(actor));
+            Some(random_walk(world, far_lane, &mut |n| rng.below(n)))
+        } else {
+            None
+        };
+        let _ = now;
+        let person = self.people.get_mut(&actor).expect("present above");
+        person.vel = Vec3::new_2d(dir.x * v, dir.y * v);
+        if let Some(route) = route {
+            person.lane = far_lane;
+            person.s_m = far_s;
+            person.lateral_m = 0.0;
+            person.route = route;
+            person.route_index = 0;
+            person.midblock = None;
+            person.activity = PedActivity::Walking;
+            person.walks += 1;
+            person.walk_onset = None;
+            person.waiting_since = None;
+        } else if let Some(m) = person.midblock.as_mut() {
+            m.stage = MidblockStage::Crossing(d);
+            person.activity = PedActivity::CrossingMidblock;
+        }
+    }
+}
+
+/// A walk of up to [`MAX_WALK_LANES`] walkable lanes from `first`, each next lane chosen by
+/// `pick(n)` among the walkable successors not yet on it.
+pub fn random_walk(world: &World, first: LaneId, pick: &mut dyn FnMut(u64) -> u64) -> Vec<LaneId> {
+    let mut route = vec![first];
+    while route.len() < MAX_WALK_LANES {
+        let last = *route.last().expect("non-empty");
+        let next: Vec<LaneId> = world
+            .successor_lanes(last)
+            .into_iter()
+            .filter(|l| SocialForce::is_walkable(world, *l) && !route.contains(l))
+            .collect();
+        if next.is_empty() {
+            break;
+        }
+        route.push(next[pick(next.len() as u64) as usize]);
+    }
+    route
+}
+
+/// How many walkable lanes a walk strings together at most.
+pub const MAX_WALK_LANES: usize = 12;
 
 impl SocialForce {
     /// The lane after the pedestrian's current one, if its route continues.
@@ -667,7 +1407,11 @@ impl SocialForce {
             acc: Vec3::ZERO,
             heading_rad: heading,
             yaw_rate_rad_s: 0.0,
-            lane: Some(LanePos::new(person.lane, person.s_m, person.lateral_m)),
+            lane: if person.crossing_midblock() {
+                None
+            } else {
+                Some(LanePos::new(person.lane, person.s_m, person.lateral_m))
+            },
             dims: Dims::new(
                 VehicleClass::Pedestrian.spec().length_m,
                 VehicleClass::Pedestrian.spec().width_m,
