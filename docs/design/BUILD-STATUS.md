@@ -15,7 +15,7 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
-## 2026-09-30 — the 3D traffic scene (traffic3d track)
+## 2026-09-30, resumed 2026-10-06 — the 3D traffic scene (traffic3d track)
 
 Owner: `ui/packages/viewer`, plus a versioned `lamps` byte through the engine and protocol.
 Branch `worktree-wf_9470e8ab-93a-8`. Every number below comes from a command run on this
@@ -205,17 +205,45 @@ All from this branch at the commits named; wall times are from a loaded, shared 
   (108,943 → 111,733; 619 records either way). `cargo test -p v2xw-conformance --test kit golden`: 4 pass against
   the new record; `cargo test -p v2xw-record`: 241 pass.
 - **Protocol package**: 13 files, 194 tests pass (the lamps round trip in `test/lamps.test.ts`).
-@@PLAYWRIGHT@@
+- **Signal lenses**: `test/signal-lenses.test.ts` (3 tests) fails 2 of 3 with the group check
+  or the flashing-yellow-arrow rule removed. **LOD by size**: `test/lod-by-size.test.ts` fails
+  with the stretch removed. **People's paths**: `test/vru-path.test.ts` measures a 1.34 m/s
+  velocity jump between 1 ms samples with the old one-chord limiting, under 0.15 with the new.
+  **Pedestrian lane changes**: `a_pedestrian_never_jumps_at_a_lane_change` in
+  `v2xw-mobility` fails on the old lane change ("a12 moved 0.27 m in one step, limit 0.24 m");
+  `cargo test -p v2xw-mobility --lib vru`: 16 pass.
+- **The page, dense Midtown** (`e2e-engine/traffic3d.spec.ts` against this branch's debug engine
+  on a 600-pedestrian, 60-cyclist, 20,000 veh/h copy of the peak scenario, 25 s per view;
+  pictures in chase over a car, a box truck, a person and a motorcycle, dashboard and aerial,
+  BEFORE from `main`'s viewer source on the same engine and scenario). Headless Chromium draws
+  through SwiftShader, a software rasteriser, and on this loaded machine it drew that scene at
+  4 frames a second (every view's mean frame time 247–250 ms, the hunter's cap). At 4 fps the
+  per-frame classes cannot be judged — a person walking 1.3 m/s moves 0.33 m between frames and
+  turns up to 72° — so that run's teleport, stutter and heading-snap counts (976, 781 and 4,618
+  in the worst views) say how slow the rasteriser was, not how the scene moves; the 60 fps replay
+  above is the measurement of motion. The pixel class is valid at any rate: 394 frames sampled
+  over six views, one empty (luminance σ 0.8, in the chase view during the fly-down from the
+  plan view), and the hidden-scene control read as empty as it must. That empty frame is not
+  explained yet (see Open).
+
 
 ### Open
 
-- **The engine's pedestrian jumps** (359 cuts at Midtown). `v2xw_mobility::vru::social_force`
-  moves a person to the next lane of their route with `lateral_m = 0.0` (about line 603), so a
-  person walking 1–2 m off a wide pavement's centreline jumps to it, and any gap between one
-  walkable lane's end and the next one's start is jumped too. Projecting the person's position
-  onto the next lane instead would remove both; it is the pedestrian track's code, and it moves
-  every pedestrian scenario's digest, so it is left to them. The viewer shows each jump as a
-  cut, which is honest; it will not smooth a person across 3 m in a frame.
+- **Pedestrian jumps: 41 left on peak Midtown, and a change in the pedestrian track's file.** This
+  session fixed the lane change in `v2xw_mobility::vru::social_force` (projection plus a corner
+  carry, see "Peak Midtown"); the integrator should expect it to meet the pedestrian track's
+  edits in the same block. What is left are 5.3–6.6 m gaps in the walkable network, above the
+  5 m carry (`CARRY_MAX_M`), drawn as cuts. Raising the cap would draw a person sliding across
+  what may be a road; joining those gaps belongs in the importer or the router. No golden holds
+  pedestrians, so no digest moved; any pedestrian scenario's output did.
+- **One empty frame in the page's chase view** (dense Midtown, SwiftShader at 4 fps): σ 0.8 on
+  one of 86 sampled frames, while the camera flew down from the plan view. The 60 fps replay of
+  the same kind of scene counts no `empty_frame` and no `camera_clip`, so it is either a frame
+  in mid-flight looking at one flat roof, or something only real pixels show. Not resolved.
+- **Landing stutter.** 2 of the 3 stutter frames left on peak Midtown are the frame a camera
+  flight hands over to the follow: 2.0 px of jerk against the 1.5 px threshold, counted once per
+  actor on screen. The flight ends at the subject's velocity; the jerk is the follow spring
+  meeting a person's own wobble.
 - **Night in the Studio.** Every NYC scenario starts at `2027-03-04T08:00:00Z`, which is 03:00
   EST, so the engine's headlamp rule turns every low beam on. The Studio pins the viewer's sun at
   11:00, so the page draws lit headlamps (dimly, as by day) under a noon sky. Either the
@@ -228,12 +256,8 @@ All from this branch at the commits named; wall times are from a loaded, shared 
   where the engine puts them. If that track adds a class (e-bike, cargo bike, wheelchair), a
   model per class name in `vehicle-models.ts` `modelVariants` is the one place to add it;
   unknown names fall back by size.
-- **Remaining stutter** is 5 frames over two 70-second tours, all of pedestrians near the
-  camera: 1.5–1.9 px of jerk just after a landing on the grid, and one dashboard frame at
-  Midtown. Not chased further.
-- **The Midtown tour found no large vehicle** moving near the densest cell, so its chase
-  subjects were a car, a person and a cyclist; the grid capture's tour was the same. A bus or
-  truck is covered by the unit tests of the framing, not by a capture.
+- **Large vehicles in the tour.** The peak capture's tour followed a delivery van (and the page
+  a box truck); a bus has been followed only by the framing's unit tests.
 - **The capture test is skipped in CI**: a capture is tens of megabytes and needs a running
   engine. The hunter's own tests run everywhere; the Playwright spec
   (`e2e-engine/traffic3d.spec.ts`) runs the hunt in the real page against the real engine.
