@@ -151,7 +151,7 @@ function Glance({ snapshot }: { readonly snapshot: BackendSnapshot }): React.JSX
   return (
     <div className="backend-glance" data-testid="backend-glance">
       <Tile k="entities active" v={`${g.activeEntities} of ${g.entities}`} hint="Entities that sent or received a message in the last two simulated seconds" />
-      <Tile k="links active" v={`${g.liveEdges} of ${g.edges}`} hint="Pairs that exchanged a message in the last two simulated seconds, of those that ever have" />
+      <Tile k="links active" v={g.edges > 0 ? `${g.liveEdges} of ${g.edges}` : "0"} hint="Pairs that exchanged a message in the last two simulated seconds, of those that ever have" />
       <Tile k="messages" v={formatValue(g.messages)} hint="Every message between entities and devices since the run began" />
       <Tile k="carried" v={formatBytes(g.bytes)} hint="Their bytes, all transports" />
       <Tile k="waiting" v={formatValue(g.queued)} tone={g.queued > 0 ? "warn" : undefined} hint="Requests waiting in the entities' queues now" />
@@ -264,9 +264,11 @@ function Diagram({
             >
               <title>{e.role}</title>
               <rect width={p.w} height={p.h} rx={6} />
-              <circle cx={12} cy={13} r={4} className="backend-dot" />
-              <text x={22} y={17} className="backend-name">
-                {e.name.length > 21 ? `${e.name.slice(0, 20)}…` : e.name}
+              {/* The activity dot sits in the bottom-right corner, where it costs the name nothing:
+                  before the name it pushed "Registration Authority" to "Registration Authori…". */}
+              <circle cx={p.w - 11} cy={p.h - 11} r={4} className="backend-dot" />
+              <text x={10} y={17} className="backend-name">
+                {e.name.length > 24 ? `${e.name.slice(0, 23)}…` : e.name}
               </text>
               {counts.map(([k, v], i) => (
                 <text key={k} x={10} y={38 + i * 16} className="backend-count">

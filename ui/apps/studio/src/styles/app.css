@@ -785,11 +785,14 @@ button.hud-field:focus-visible {
 .sparkrow {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
+  gap: 10px;
   padding: 6px 8px;
   border-top: 1px solid var(--border);
 }
 .spark { min-width: 0; }
+/* A rule between the cells: with only a gap, one cell's value ran into the next one's name
+   ("10.00 verify q"), and a reader could not tell which number belonged to which series. */
+.spark + .spark { border-left: 1px solid var(--border); padding-left: 10px; }
 .spark .label {
   display: flex;
   justify-content: space-between;
