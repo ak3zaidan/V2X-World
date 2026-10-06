@@ -1088,6 +1088,13 @@ impl Engine {
                 EngineError::Scenario(crate::error::ScenarioError::conflict("net.fragmenter", why))
             })?,
         };
+        // The labeller reads the world's signal plans; built before the literal moves it.
+        let app_truth = if scenario_for_radio.apps.enabled.is_empty() {
+            crate::app_truth::AppTruth::default()
+        } else {
+            crate::app_truth::AppTruth::new(crate::wiring::app_params(&scenario_for_radio))
+                .with_signals(crate::app_truth::SignalIndex::build(&world))
+        };
         let mut engine = Engine {
             snapshot: ActorSnapshot::new(0, MAX_RANGE_M),
             weather: crate::wiring::initial_weather(&scenario),
@@ -1121,12 +1128,7 @@ impl Engine {
             dcc: crate::wiring::build_dcc(&scenario_for_radio),
             actors: BTreeMap::new(),
             node_actor: BTreeMap::new(),
-            app_truth: if scenario_for_radio.apps.enabled.is_empty() {
-                crate::app_truth::AppTruth::default()
-            } else {
-                crate::app_truth::AppTruth::new(crate::wiring::app_params(&scenario_for_radio))
-                    .with_signals(crate::app_truth::SignalIndex::build(&world))
-            },
+            app_truth,
             glosa: GlosaDrivers {
                 compliance: if scenario_for_radio.apps.runs("glosa") {
                     scenario_for_radio.apps.glosa_compliance
