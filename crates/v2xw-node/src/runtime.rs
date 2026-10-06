@@ -701,6 +701,12 @@ impl ObuRuntime {
     ) -> Option<Vec<u8>> {
         let mut id = [0u8; 4];
         id.copy_from_slice(&cred.digest.0[..4]);
+        // TS 103 324 V2.1.1 §7.1.8.2: an object keeps its objectId "as long as an object is
+        // perceived ... and there is no pseudonym change". The ids are re-keyed by the
+        // pseudonym (a bijection on 0..=65535, so no two objects collide), so an object's
+        // id does not link the station across a pseudonym change, as its station id does
+        // not.
+        let salt = u16::from_be_bytes([cred.digest.0[4], cred.digest.0[5]]);
         let objects = content
             .objects
             .iter()
@@ -714,7 +720,7 @@ impl ObuRuntime {
                     }
                 }
                 v2xw_msg::cpm::CpmObject {
-                    id: o.id,
+                    id: o.id ^ salt,
                     measurement_delta_ms: ((o.measured_at as i128 - believed as i128)
                         / 1_000_000) as i32,
                     pos: o.pos,
@@ -1908,21 +1914,31 @@ impl ObuRuntime {
 /// The 1609.2 `ThreeDLocation` a DENM's envelope carries, from the node's own belief.
 ///
 /// Latitude and longitude in tenths of a microdegree (1609.2 `NinetyDegreeInt`,
-/// `OneEightyDegreeInt`). The 16-bit `Elevation` is decimetres with an offset of 4 096 so
-/// that 0 is −409.6 m — **recalled, UNVERIFIED** against 1609.2 §6.4; it is clamped into
-/// the range rather than wrapped.
+/// `OneEightyDegreeInt`); the elevation as [`elevation_1609`].
 fn generation_location(
     belief: &PositionEstimate,
     origin: v2xw_core::geo::GeoOrigin,
 ) -> v2xw_sec::envelope::GenerationLocation {
     let (lat, lon, alt) = origin.to_geodetic(belief.pos);
     let tenth_micro = |deg: f64, lim: f64| (deg.clamp(-lim, lim) * 1e7).round() as i32;
-    let elevation = ((alt * 10.0).round() + 4_096.0).clamp(0.0, 61_439.0) as u16;
     v2xw_sec::envelope::GenerationLocation {
         lat_tenth_microdeg: tenth_micro(lat, 90.0),
         lon_tenth_microdeg: tenth_micro(lon, 180.0),
-        elevation,
+        elevation: elevation_1609(alt),
     }
+}
+
+/// The IEEE 1609.2 `Elevation` of a height above the WGS84 ellipsoid: "an integer number
+/// of decimeters representing the height above a minimum height of −409.5 m, with the
+/// maximum height being 6143.9 m" (`Ieee1609Dot2BaseTypes`, read from the module in
+/// `third_party/asn1/etsi/`). So 0 is −409.5 m and 65 534 is 6 143.9 m; a height outside
+/// that is clamped to the nearer end rather than wrapped.
+///
+/// Before 2026-10-06 the offset was a recalled 4 096 (0 at −409.6 m) and the top was
+/// clamped at 61 439, so every envelope's elevation was 0.1 m low and heights above
+/// 5 734.3 m were cut short.
+pub fn elevation_1609(height_m: f64) -> u16 {
+    ((height_m * 10.0).round() + 4_095.0).clamp(0.0, 65_534.0) as u16
 }
 
 fn policy_id(code: u8) -> &'static str {
@@ -1995,4 +2011,18 @@ pub fn reference_obu(node: NodeId, at: SimTime) -> ObuRuntime {
         NodeConfig::default(),
         at,
     )
+}
+
+#[cfg(test)]
+mod elevation_tests {
+    /// 1609.2's `Elevation`: decimetres above −409.5 m, up to 6 143.9 m.
+    #[test]
+    fn the_envelope_elevation_is_1609_2s() {
+        assert_eq!(super::elevation_1609(-409.5), 0);
+        assert_eq!(super::elevation_1609(0.0), 4_095);
+        assert_eq!(super::elevation_1609(10.0), 4_195);
+        assert_eq!(super::elevation_1609(6_143.9), 65_534);
+        assert_eq!(super::elevation_1609(9_000.0), 65_534);
+        assert_eq!(super::elevation_1609(-500.0), 0);
+    }
 }

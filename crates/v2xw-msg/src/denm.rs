@@ -590,8 +590,14 @@ struct ActiveEvent {
     /// When the next transmission is due, if any.
     next_tx: Option<SimTime>,
     /// Set once the application cancels or another station negates; transmitted once and
-    /// then the event is dropped.
+    /// then the event is dropped — or, when the termination came with a repetition
+    /// instruction, repeated for its duration first.
     pending_termination: Option<TerminationKind>,
+    /// The repetition instruction the termination came with, if any.
+    termination_repetition: Option<Repetition>,
+    /// Where the current repetition window starts: the detection, or the latest update or
+    /// termination (each of which the application may ask to have repeated afresh).
+    repetition_from: SimTime,
     /// Set when the application updates the event; the next poll reports an update.
     pending_update: bool,
     /// Whether the original has gone out yet.
@@ -655,6 +661,8 @@ impl DenmService {
             repetition: repetition.filter(|r| !r.interval.is_zero() && !r.duration.is_zero()),
             next_tx: Some(now),
             pending_termination: None,
+            termination_repetition: None,
+            repetition_from: now,
             pending_update: false,
             sent_original: false,
         });
@@ -666,13 +674,55 @@ impl DenmService {
     /// The caller advances `referenceTime` when it builds the message — §6.1.2 says the
     /// update increments it, and the value is a [`TimestampIts`] the node reads from its own
     /// clock, not something this timetable can invent.
+    ///
+    /// The update's repetition window starts afresh at `now`: a repetition the application
+    /// asked for is a repetition of the latest version.
     pub fn update(&mut self, id: EventId, now: SimTime) -> bool {
         let Some(event) = self.events.iter_mut().find(|e| e.id == id) else {
             return false;
         };
         event.pending_update = true;
         event.next_tx = Some(now);
+        event.repetition_from = now;
         true
+    }
+
+    /// An update that also refreshes the event's `detectionTime` to `now`, so its validity
+    /// runs from the update — what the C2C-CC triggering conditions ask of the electronic
+    /// emergency brake light and the stationary-vehicle services ("detectionTime … shall be
+    /// refreshed for an update DENM", RS_tcDaSi_177 and RS_tcStVe_133). The caller builds
+    /// the DENM with the refreshed detection instant.
+    pub fn refresh(&mut self, id: EventId, now: SimTime) -> bool {
+        let Some(event) = self.events.iter_mut().find(|e| e.id == id) else {
+            return false;
+        };
+        event.detection_time = now;
+        self.update(id, now)
+    }
+
+    /// Cancels `id` and has the cancellation repeated at `repetition`'s interval for its
+    /// duration — the C2C-CC stationary-vehicle rule that a cancelled DENM, like a new or
+    /// an updated one, is repeated every 1 s for 15 s (RS_tcStVe_131).
+    pub fn cancel_repeated(&mut self, id: EventId, now: SimTime, repetition: Repetition) -> bool {
+        if !self.terminate(id, now, TerminationKind::Cancellation) {
+            return false;
+        }
+        if let Some(event) = self.events.iter_mut().find(|e| e.id == id) {
+            event.termination_repetition =
+                Some(repetition).filter(|r| !r.interval.is_zero() && !r.duration.is_zero());
+            event.repetition_from = now;
+        }
+        true
+    }
+
+    /// Stops `id` without a termination DENM: the event is dropped and nothing more is
+    /// sent for it. The C2C-CC electronic emergency brake light ends this way — "a
+    /// cancellation DENM shall not be used", the updates simply stop (RS_tcDaSi_171–172) —
+    /// and receivers let it lapse at its validity.
+    pub fn stop(&mut self, id: EventId) -> bool {
+        let before = self.events.len();
+        self.events.retain(|e| e.id != id);
+        self.events.len() != before
     }
 
     /// Cancels `id` as its originator. The termination goes out on the next poll.
@@ -714,11 +764,20 @@ impl DenmService {
         for mut event in std::mem::take(&mut self.events) {
             let expires_at = event.validity.after(event.detection_time);
 
-            if let Some(kind) = event.pending_termination
-                && event.next_tx.is_some_and(|t| t <= now)
-            {
-                // §8.3.2.5: transmitted at least once, and then the event is gone.
-                actions.push(DenmAction::Termination(event.id, kind));
+            if let Some(kind) = event.pending_termination {
+                if event.next_tx.is_some_and(|t| t <= now) {
+                    // §8.3.2.5: transmitted at least once, and then the event is gone —
+                    // after its own repetitions, when the termination asked for them.
+                    actions.push(DenmAction::Termination(event.id, kind));
+                    event.next_tx = event.termination_repetition.and_then(|r| {
+                        let next = r.interval.after(now);
+                        (next < r.duration.after(event.repetition_from)).then_some(next)
+                    });
+                    if event.next_tx.is_none() {
+                        continue;
+                    }
+                }
+                keep.push(event);
                 continue;
             }
 
@@ -741,7 +800,7 @@ impl DenmService {
 
                 event.next_tx = event.repetition.and_then(|r| {
                     let next = r.interval.after(now);
-                    let repetition_ends = r.duration.after(event.detection_time);
+                    let repetition_ends = r.duration.after(event.repetition_from);
                     (next < repetition_ends && next < expires_at).then_some(next)
                 });
             }
@@ -1007,6 +1066,48 @@ mod tests {
         );
         assert!(!s.is_active(id));
         assert!(s.poll(ms(2_000)).is_empty());
+    }
+
+    /// C2C-CC RS_tcStVe_131: a cancellation asked to be repeated goes out every interval
+    /// for the duration, then the event is gone.
+    #[test]
+    fn a_repeated_cancellation_repeats_then_ends() {
+        let mut s = DenmService::new(1);
+        let id = s.create(0, DEFAULT_VALIDITY, None);
+        s.poll(0);
+        let rep = Repetition::new(Duration::from_secs(1), Duration::from_secs(3));
+        assert!(s.cancel_repeated(id, ms(1_000), rep));
+        let mut seen = Vec::new();
+        for step in 0..=12u64 {
+            let t = ms(1_000 + step * 500);
+            seen.extend(s.poll(t).into_iter().map(|a| (t / NS_PER_MS, a)));
+        }
+        let c = DenmAction::Termination(id, TerminationKind::Cancellation);
+        assert_eq!(seen, vec![(1_000, c), (2_000, c), (3_000, c)]);
+        assert!(!s.is_active(id));
+    }
+
+    /// An update restarts the repetition window, and a refresh also moves the validity.
+    #[test]
+    fn an_update_restarts_the_repetition_and_a_refresh_the_validity() {
+        let mut s = DenmService::new(1);
+        let rep = Repetition::new(Duration::from_secs(1), Duration::from_secs(2));
+        let id = s.create(0, Duration::from_secs(3), Some(rep));
+        assert_eq!(s.poll(0), vec![DenmAction::Original(id)]);
+        assert_eq!(s.poll(ms(1_000)), vec![DenmAction::Repetition(id)]);
+        // Without the refresh the event would expire at 3 s; refreshed at 1.5 s it lives
+        // to 4.5 s and repeats to 3.5 s.
+        assert!(s.refresh(id, ms(1_500)));
+        assert_eq!(s.poll(ms(1_500)), vec![DenmAction::Update(id)]);
+        assert_eq!(s.poll(ms(2_500)), vec![DenmAction::Repetition(id)]);
+        assert!(s.poll(ms(3_500)).is_empty(), "the repetition window ended at 3.5 s");
+        assert!(s.is_active(id), "and the refreshed validity holds it to 4.5 s");
+        assert!(s.poll(ms(4_500)).is_empty());
+        assert!(!s.is_active(id));
+        // A stopped event says nothing more.
+        let other = s.create(ms(5_000), Duration::from_secs(2), None);
+        assert!(s.stop(other));
+        assert!(s.poll(ms(5_000)).is_empty());
     }
 
     #[test]

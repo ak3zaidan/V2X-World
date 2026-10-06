@@ -191,7 +191,9 @@ fn emergency_vehicles_request_priority_and_the_units_answer() {
 /// The ETSI stack with DENM on, and a timeline of safety events.
 fn etsi_with_events(duration_s: f64, events: serde_json::Value) -> Scenario {
     let mut s = connected(duration_s);
-    s.actors.vehicles.demand.rate_veh_per_h = Some(6_000.0);
+    // Dense enough that a moving car with another close behind it exists when a hard
+    // brake is scripted: at 6,000 veh/h this grid often had none.
+    s.actors.vehicles.demand.rate_veh_per_h = Some(12_000.0);
     s.net.layer = "gn-btp".to_string();
     s.security.envelope = "etsi103097".to_string();
     s.messages.sets = vec!["cam".into(), "denm".into(), "spat".into(), "map".into()];
@@ -226,21 +228,23 @@ fn event_nodes(recorder: &MemoryRecorder, kind: &str) -> Vec<(u64, Option<u64>, 
         .collect()
 }
 
-/// A DENM is raised once per hard-braking episode — the rising edge of the vehicle's own
-/// longitudinal deceleration through 0.4 g — and never otherwise. The episodes come from
-/// the ground truth's own record of each vehicle's acceleration.
+/// An electronic-emergency-brake-light DENM is raised once per emergency-stop episode —
+/// the vehicle's emergency stop signal coming on at 6 m/s² (UN R48, the C2C-CC trigger) —
+/// and never otherwise, and is updated every 100 ms while the signal stays on (off below
+/// 2.5 m/s²), with no repetition and no cancellation. The episodes come from the ground
+/// truth's own record of each vehicle's acceleration.
 ///
 /// The calibrated drivers do not brake that hard on their own (the hardest of 18,052
 /// samples of a dense 40 s run was −3.02 m/s²), which is realistic, so the emergencies are
-/// scripted: two `safety.hard-brake` events on the timeline, each on a vehicle with a car
-/// close behind it.
+/// scripted: two `safety.hard-brake` events at 7 m/s² on the timeline, each on a vehicle
+/// with a car close behind it.
 #[test]
 fn a_denm_is_raised_by_hard_braking_and_by_nothing_else() {
     let s = etsi_with_events(
         40.0,
         serde_json::json!([
-            {"t": 15.0, "type": "safety.hard-brake"},
-            {"t": 25.0, "type": "safety.hard-brake", "decel_mps2": 6.0},
+            {"t": 15.0, "type": "safety.hard-brake", "decel_mps2": 7.0},
+            {"t": 25.0, "type": "safety.hard-brake", "decel_mps2": 7.0},
         ]),
     );
     let (_, recorder, _) = run(s);
@@ -254,18 +258,25 @@ fn a_denm_is_raised_by_hard_braking_and_by_nothing_else() {
                 as u32)
         })
         .collect();
-    // Hard-braking rising edges per node, from gt.kinematics.
+    // Emergency-stop-signal episodes per node, from gt.kinematics: on at 6 m/s², off
+    // below 2.5 m/s²; and how many steps each node's signal was on.
     let mut last: BTreeMap<NodeId, bool> = BTreeMap::new();
     let mut edges: BTreeMap<NodeId, u32> = BTreeMap::new();
+    let mut on_steps: BTreeMap<NodeId, u32> = BTreeMap::new();
     for (_, r) in recorder.records() {
         if r.channel != "gt.kinematics" {
             continue;
         }
         let k: GtKinematicsView = decode(r).expect("decodes");
         let Some(node) = k.node else { continue };
-        let hard = k.acc_mps2.is_some_and(|a| a <= -3.92);
-        let was = last.insert(node, hard).unwrap_or(false);
-        if hard && !was {
+        let was = last.get(&node).copied().unwrap_or(false);
+        let a = k.acc_mps2.unwrap_or(0.0);
+        let on = if was { a <= -2.5 } else { a <= -6.0 };
+        last.insert(node, on);
+        if on {
+            *on_steps.entry(node).or_insert(0) += 1;
+        }
+        if on && !was {
             *edges.entry(node).or_insert(0) += 1;
         }
     }
@@ -294,7 +305,17 @@ fn a_denm_is_raised_by_hard_braking_and_by_nothing_else() {
         assert!(edges.contains_key(n), "scripted {n:?} never braked hard");
         assert!(senders.contains(n), "scripted {n:?} sent no DENM");
     }
-    // Repetition: every 100 ms for 2 s, so about twenty frames per episode.
+    // Updates: one frame per 100 ms step the signal is on, give or take the step the
+    // node's clock and the truth's straddle.
+    for n in &senders {
+        let frames = denm.iter().filter(|t| t.node == *n).count() as i64;
+        let steps = i64::from(on_steps.get(n).copied().unwrap_or(0));
+        let episodes_n = i64::from(edges.get(n).copied().unwrap_or(0));
+        assert!(
+            (frames - steps).abs() <= 2 * episodes_n,
+            "{n:?}: {frames} DENM frames over {steps} steps of emergency stop signal"
+        );
+    }
     let episodes: u32 = edges.values().sum();
     assert!(
         episodes > 0,
@@ -306,19 +327,12 @@ fn a_denm_is_raised_by_hard_braking_and_by_nothing_else() {
         denm.len(),
         senders.len()
     );
-    if episodes > 0 {
-        let per = denm.len() as f64 / f64::from(episodes);
-        assert!(
-            (10.0..=21.0).contains(&per),
-            "{per} DENM frames per episode ({} over {episodes})",
-            denm.len()
-        );
-    }
 }
 
 /// A broken-down vehicle stops, switches its hazards on and, once it has stood for the
-/// dwell, announces itself as a stationary vehicle once a second until it is cleared —
-/// when it sends one cancellation and falls silent.
+/// C2C-CC Triggering Timer (10 s: 30 s less park and parking brake), announces itself as
+/// a stationary vehicle once a second until it is cleared — when its cancellation is
+/// repeated once a second for 15 s (RS_tcStVe_131).
 #[test]
 fn a_broken_down_vehicle_announces_itself_until_it_is_cleared() {
     let s = etsi_with_events(
@@ -343,20 +357,27 @@ fn a_broken_down_vehicle_announces_itself_until_it_is_cleared() {
         .map(|t| t.t as f64 * 1e-9)
         .collect();
     eprintln!("DENMs from the broken-down {node:?} at {denm:?}");
-    // Nothing before it has stopped and stood the dwell (5 s), at 1 Hz while it stands,
-    // and after the clearing at 30 s exactly one: the cancellation.
+    // Nothing before it has stopped and stood the Triggering Timer (10 s after the event
+    // at 10 s), then 1 Hz while it stands, and from the clearing at 30 s the
+    // cancellation, repeated at 1 Hz to the end of the run.
     let during: Vec<f64> = denm.iter().copied().filter(|t| *t < 30.0).collect();
     let after: Vec<f64> = denm.iter().copied().filter(|t| *t >= 30.0).collect();
     assert!(
-        during.first().is_some_and(|t| *t >= 15.0),
-        "a DENM before the vehicle could have stood 5 s: {during:?}"
+        during.first().is_some_and(|t| *t >= 20.0),
+        "a DENM before the vehicle could have stood 10 s: {during:?}"
     );
     assert!(
-        (8..=16).contains(&during.len()),
+        (3..=10).contains(&during.len()),
         "{} stationary-vehicle DENMs while it stood",
         during.len()
     );
-    assert_eq!(after.len(), 1, "one cancellation after clearing: {after:?}");
+    assert!(
+        (8..=11).contains(&after.len()),
+        "the cancellation repeated once a second for the run's last 10 s: {after:?}"
+    );
+    for w in during.windows(2).chain(after.windows(2)) {
+        assert!(w[1] - w[0] >= 0.9, "two DENMs closer than the 1 s interval: {denm:?}");
+    }
     // Only the broken-down vehicle announced anything.
     let others = txs
         .iter()

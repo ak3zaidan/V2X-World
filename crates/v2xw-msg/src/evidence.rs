@@ -192,18 +192,23 @@ pub const EVIDENCE: &[MessageEvidence] = &[
         ty: MsgType::Vam,
         exactness: ByteExactness::SizeModelled,
         codec: Some(crate::etsi_size::ETSI_SIZE_MODEL_ID),
-        evidence: "the VAM PDU module is not in third_party/asn1/etsi, so there is nothing \
-                   to generate from; the row is fitted to four published planning sizes \
-                   (TR 2050 Fig. 12, 5GAA, C2C-CC, arXiv 2506.22052) and carries the plan \
-                   that would replace it with a real encoder.",
+        evidence: "this codec-registry row is the size model the size-model tier uses, \
+                   fitted to four published planning sizes (TR 2050 Fig. 12, 5GAA, C2C-CC, \
+                   arXiv 2506.22052). A device's VAM on the air is real UPER from rasn \
+                   bindings generated from the committed TS 103 300-3 module \
+                   (crate::vam), which asn1tools 0.169 decoded and re-encoded identically \
+                   (tests/etsi_oracle.rs, 2026-10-06).",
     },
     MessageEvidence {
         ty: MsgType::Cpm,
         exactness: ByteExactness::SizeModelled,
         codec: Some(crate::etsi_size::ETSI_SIZE_MODEL_ID),
-        evidence: "the CPM PDU module is not in third_party/asn1/etsi; the row is built \
-                   from TR 103 562 Table 3's measured container sizes and bounded by TR \
-                   2050 Fig. 13's planning size.",
+        evidence: "this codec-registry row is the size model the size-model tier uses, \
+                   built from TR 103 562 Table 3's measured container sizes and bounded by \
+                   TR 2050 Fig. 13's planning size. A vehicle's CPM on the air is real UPER \
+                   from rasn bindings generated from the committed TS 103 324 V2.1.1 \
+                   modules (crate::cpm), which asn1tools 0.169 decoded and re-encoded \
+                   identically (tests/etsi_oracle.rs, 2026-10-06).",
     },
     MessageEvidence {
         ty: MsgType::Srm,

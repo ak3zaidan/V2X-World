@@ -43,6 +43,20 @@
 //! V2XW_J2735_ORACLE_DIR=/tmp/j2735-oracle cargo test -p v2xw-msg --test j2735_infra_oracle
 //! ```
 //!
+//! # Which edition the oracle compiled
+//!
+//! The codec writes J2735 2024-09. The SAE modules of that edition are not public; the
+//! 2016 (`J2735_201603DA`) and 2020 modules are (the USDOT JPO ODE `asn1_codec` repository
+//! carried them until 2024). The only SPaT or MAP constraint this codec touches that differs
+//! between them is `TimeMark`: `(0..36001)` up to 2020, `(0..36111)` in 2024-09, with
+//! "unknown" moving from 36001 to 36111. Both bounds need 16 bits, so a value both admit
+//! encodes to the same octets in either edition, and only a value past 36001 cannot be
+//! checked against an older oracle. Set `V2XW_J2735_ORACLE_EDITION` to `2016` or `2020`
+//! when the oracle was compiled from those modules: the generated `TimeMark`s then stay
+//! within `0..=36001` (the 2024 "unknown", 36111, is replaced by 36001), so every vector
+//! is one both editions define, and the run says which edition validated it. Without the
+//! variable the vectors span the whole 2024 range.
+//!
 //! # When it fails
 //!
 //! A failure here is information, not a defect to paper over. The likely causes, in order:
@@ -448,7 +462,7 @@ fn spat_boundary_vectors() -> Vec<(String, Spat)> {
             max_end_time: Some(spat::TIME_MARK_TENTHS_PER_HOUR),
             likely_time: Some(100),
             confidence: Some(spat::TIME_INTERVAL_CONFIDENCE_MAX as u8),
-            next_time: Some(spat::TIME_MARK_UNKNOWN),
+            next_time: Some(time_mark_unknown()),
         })
     });
     add("timing-min-end-only", &|s| {
@@ -618,9 +632,32 @@ fn maybe<T>(rng: &mut RngStream, f: impl FnOnce(&mut RngStream) -> T) -> Option<
     }
 }
 
-/// A `TimeMark`, boundary-biased.
+/// The J2735 edition the oracle compiled, from `V2XW_J2735_ORACLE_EDITION` (default
+/// 2024).
+fn oracle_edition() -> u32 {
+    std::env::var("V2XW_J2735_ORACLE_EDITION")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(2024)
+}
+
+/// The largest `TimeMark` the oracle's edition admits: 36001 up to 2020, 36111 in 2024.
+fn time_mark_max() -> u16 {
+    if oracle_edition() < 2024 {
+        36_001
+    } else {
+        spat::TIME_MARK_MAX as u16
+    }
+}
+
+/// "Unknown" as a `TimeMark` the oracle's edition admits (see the module notes).
+fn time_mark_unknown() -> u16 {
+    spat::TIME_MARK_UNKNOWN.min(time_mark_max())
+}
+
+/// A `TimeMark`, boundary-biased, within the oracle's edition.
 fn time_mark(rng: &mut RngStream) -> u16 {
-    pick(rng, spat::TIME_MARK_MIN, spat::TIME_MARK_MAX) as u16
+    pick(rng, spat::TIME_MARK_MIN, i64::from(time_mark_max())) as u16
 }
 
 /// A `MinuteOfTheYear`, boundary-biased.
@@ -1031,7 +1068,8 @@ fn rust_spat_encodings_match_pycrate_byte_for_byte() {
         failures.join("\n")
     );
     println!(
-        "pycrate oracle: {} SPaT vectors, byte-identical encodings\n{}",
+        "pycrate oracle (J2735 {} modules): {} SPaT vectors, byte-identical encodings\n{}",
+        oracle_edition(),
         run.spats.len(),
         run.stdout.trim()
     );
@@ -1078,7 +1116,8 @@ fn rust_map_encodings_match_pycrate_byte_for_byte() {
         failures.join("\n")
     );
     println!(
-        "pycrate oracle: {} MAP vectors, byte-identical encodings",
+        "pycrate oracle (J2735 {} modules): {} MAP vectors, byte-identical encodings",
+        oracle_edition(),
         run.maps.len()
     );
 }

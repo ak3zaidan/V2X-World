@@ -331,14 +331,10 @@ impl Default for EtsiUperCodec {
 impl EtsiUperCodec {
     /// The types this codec implements today.
     ///
-    /// CPM and VAM are generatable from the same forge modules (the asset survey compiled
-    /// both) and are still not here, for one reason: **their modules are not in this
-    /// checkout**. `third_party/asn1/etsi/` holds the CDD, CAM, DENM, 1609.2 and
-    /// TS 103 097 modules and nothing else, and adding a missing file to the `FACILITIES`
-    /// unit would fail the build rather than generate anything. They arrive by committing
-    /// the two modules, adding them to that unit, and adding a variant to [`Message`];
-    /// until then [`crate::etsi_size`] sizes them and says so. Its module documentation
-    /// lists the steps.
+    /// CPM and VAM are generated from their committed forge modules too and are encoded
+    /// for real by [`crate::cpm`] and [`crate::vam`], which is what the nodes put on the
+    /// air; they are not claimed here only because [`Message`] has no variant for them
+    /// yet, so the size-model tier still sizes them through [`crate::etsi_size`].
     pub const TYPES: [MsgType; 2] = [MsgType::Cam, MsgType::Denm];
 
     /// Builds the codec and its card.
@@ -385,10 +381,10 @@ fn card() -> v2xw_core::card::ModelCard {
          crate::evidence calls CAM and DENM `generated-from-module` rather than \
          oracle-validated: a defect in rasn itself would not show."
             .to_string(),
-        "CPM and VAM are generatable from the same forge modules and are NOT encoded here, \
-         because CPM-PDU-Descriptions.asn and VAM-PDU-Descriptions.asn are absent from \
-         third_party/asn1/etsi in this checkout. They are sized by codec/size-model/etsi \
-         instead, whose documentation lists the four steps that make them real."
+        "CPM and VAM are not claimed by this codec: the nodes encode them for real through \
+         v2xw_msg::cpm and v2xw_msg::vam (rasn bindings generated from the committed TS \
+         103 324 and TS 103 300-3 modules, checked against asn1tools), and the size-model \
+         tier sizes them through codec/size-model/etsi."
             .to_string(),
     ]);
     card.ignores = vec![

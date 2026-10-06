@@ -15,9 +15,12 @@
 //!   type and a radial perception-region shape (its range and horizontal opening).
 //! * **Perceived object container**: each object's id, `measurementDeltaTime`, position
 //!   and velocity **relative to the reference position** in a Cartesian frame whose x axis
-//!   points east and y axis north (TS 103 324 V2.1.1's coordinate system for a vehicle
-//!   originating station, recalled; the document is not in this repository), its
-//!   dimensions, age and classification, and the sensors that saw it.
+//!   points east and y axis north — TS 103 324 V2.1.1 §7.1.8.1: "an East-North-Up
+//!   coordinate system centred around the vehicle reference position shall be used for
+//!   the description of the perceived object's state variables" (read 2026-10-06) — its
+//!   dimensions, age and classification, and the sensors that saw it. A vehicle sensor's
+//!   perception region, by contrast, is in the vehicle's body-fixed frame (§7.1.4, which
+//!   says it overrides the CDD's ENU `Shape`), so its x axis points ahead.
 //!
 //! Every value is converted on the CDD's own units: centimetres for coordinates, 0.01 m/s
 //! for velocity components, decimetres for dimensions, milliseconds for time.

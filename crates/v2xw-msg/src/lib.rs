@@ -47,9 +47,10 @@
 //!   is corroborated where an artefact in this repository corroborates it and recalled
 //!   where nothing does, every recalled choice is a named constant, and their card says
 //!   the bytes are unvalidated.
-//! * `CPM-PDU-Descriptions.asn` is **not committed**, so the CPM is sized instead
-//!   ([`etsi_size`], which lists the steps that fix it). `VAM-PDU-Descriptions.asn` was
-//!   committed on 2026-09-23 and the VAM is generated ([`vam`]).
+//! * `VAM-PDU-Descriptions.asn` was committed on 2026-09-23 and the TS 103 324 CPM
+//!   modules on 2026-09-30, so both are generated ([`vam`], [`cpm`]) and checked against
+//!   `asn1tools`; only the generic codec seam ([`codec::Message`]) still sizes them
+//!   ([`etsi_size`]) for the size-model tier.
 //!
 //! # Where to look
 //!
@@ -230,10 +231,9 @@ pub mod provenance {
         "SAE J2735 PSM, SRM, SSM (codec/size-model/j2735) — the J2735 ASN.1 cannot be \
          code-generated (build decision D2). The VRU device does not use this row for its \
          PSM: it sends crate::j2735::psm's hand-written UPER (not oracle-validated)",
-        "ETSI CPM (codec/size-model/etsi) — generatable from the published forge module, \
-         but CPM-PDU-Descriptions.asn is not committed to third_party/asn1/etsi in this \
-         checkout. The VAM row stays behind the generic codec seam; the VRU device sends \
-         crate::vam's bytes, generated from the committed TS 103 300-3 module",
+        "ETSI CPM and VAM (codec/size-model/etsi) behind the generic codec seam only: a \
+         vehicle sends crate::cpm's bytes and a VRU device crate::vam's, both generated \
+         from the committed TS 103 324 and TS 103 300-3 modules",
     ];
 }
 

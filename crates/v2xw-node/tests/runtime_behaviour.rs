@@ -953,8 +953,10 @@ fn a_roadside_unit_sends_what_its_controller_gave_it_at_the_standard_rates() {
     );
 }
 
-/// Hard braking raises one DENM event per episode, repeated every 100 ms for 2 s, and the
-/// DENM decodes as a dangerous situation at the position the vehicle braked at.
+/// An emergency stop raises one electronic-emergency-brake-light DENM per episode, updated
+/// every 100 ms while the emergency stop signal is on and silent once it goes off (C2C-CC
+/// RS 2003 §3.1: no repetition, no cancellation), and the DENM decodes as a dangerous
+/// situation. Braking short of the signal's 6 m/s² raises nothing.
 #[test]
 fn hard_braking_raises_a_dangerous_situation_denm() {
     let services = ServiceSet {
@@ -963,10 +965,11 @@ fn hard_braking_raises_a_dangerous_situation_denm() {
         ..ServiceSet::NONE
     };
     let mut rt = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
-    // Cruising, then braking at 5 m/s² for half a second, then cruising: one episode.
+    // Cruising, then braking at 7 m/s² for half a second, then easing to 1 m/s² (the
+    // signal goes off below 2.5 m/s²): one episode of five steps.
     rt.set_own_acceleration(0.0);
     let mut outs = run(&mut rt, 10, 100 * NS_PER_MS, |_| Vec::new());
-    rt.set_own_acceleration(-5.0);
+    rt.set_own_acceleration(-7.0);
     outs.extend(run_from(&mut rt, 10, 5, 100 * NS_PER_MS, |_| Vec::new()));
     rt.set_own_acceleration(-1.0);
     outs.extend(run_from(&mut rt, 15, 30, 100 * NS_PER_MS, |_| Vec::new()));
@@ -977,17 +980,19 @@ fn hard_braking_raises_a_dangerous_situation_denm() {
         .collect();
     assert_eq!(rt.events().denm_raised(), 1, "one episode, one event");
     assert!(
-        (19..=21).contains(&denms.len()),
-        "every 100 ms for 2 s: {} frames",
+        (4..=6).contains(&denms.len()),
+        "the new DENM and an update every 100 ms while the signal is on, then nothing: \
+         {} frames",
         denms.len()
     );
     let decoded = v2xw_msg::denm::decode_denm(&denms[0].signed.as_ref().unwrap().payload)
         .expect("a real DENM");
     let cause = format!("{:?}", decoded.denm.situation.as_ref().unwrap().event_type);
     assert!(cause.contains("dangerousSituation"), "{cause}");
-    // Gentle braking raises nothing.
+    // Firm braking short of the emergency stop signal raises nothing — 5 m/s², past
+    // J2735's 0.4 g hard-braking flag but under UN R48's 6 m/s².
     let mut calm = node_on(v2xw_node::profiles::REFERENCE_OBU, services);
-    calm.set_own_acceleration(-3.0);
+    calm.set_own_acceleration(-5.0);
     let quiet = run(&mut calm, 30, 100 * NS_PER_MS, |_| Vec::new());
     assert_eq!(calm.events().denm_raised(), 0);
     assert!(
