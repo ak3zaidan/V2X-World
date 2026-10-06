@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { FeedReceived, FeedSent, NodeFeedNotification } from "@vwp/protocol";
 
-import { EMPTY_FEED, applyPush, followFeed, hexRows, keyOf, openMessage, setHovering, setPaused, visibleRows } from "../src/lib/feed.js";
+import { EMPTY_FEED, HOLD, applyPush, followFeed, hexRows, keyOf, openMessage, setHovering, setPaused, visibleRows } from "../src/lib/feed.js";
 import { StudioEngine } from "../src/state/engine.js";
 import { useStudio } from "../src/state/store.js";
 
@@ -100,6 +100,18 @@ describe("the feed model", () => {
     expect(f.held).toHaveLength(1);
     f = setHovering(f, false);
     expect(f.sent.map((e) => e.msg)).toEqual([3, 2, 1, 0]);
+    expect(f.held).toHaveLength(0);
+  });
+
+  // A pointer resting on the list holds every push; past HOLD of them the oldest are let go, and
+  // their rows used to vanish without a count.
+  it("counts the rows of pushes that overflow the hold as dropped", () => {
+    let f = setHovering(followFeed(EMPTY_FEED, 7), true);
+    for (let i = 0; i < HOLD + 3; i += 1) f = applyPush(f, push(7, i * 2, 2));
+    expect(f.held).toHaveLength(HOLD);
+    expect(f.dropped, "the overflowed pushes' rows were lost without a count").toEqual({ sent: 6, received: 3 });
+    f = setHovering(f, false);
+    expect(f.sent[0]?.msg).toBe((HOLD + 2) * 2 + 1);
     expect(f.held).toHaveLength(0);
   });
 

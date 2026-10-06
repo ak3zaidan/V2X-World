@@ -37,6 +37,9 @@ import type { FeedQueues, FeedReceived, FeedSent, FeedSpan, NodeFeedNotification
 /** Newest entries kept per direction. */
 export const RING = 200;
 
+/** Pushes held at most while the feed is paused or under the pointer. */
+export const HOLD = 64;
+
 /** A row's direction. */
 export type FeedDir = "sent" | "received";
 
@@ -131,7 +134,20 @@ function merge<T extends FeedSent | FeedReceived>(
 /** Apply one push. A push for another node, or of another schema version, changes nothing. */
 export function applyPush(state: FeedView, push: NodeFeedNotification, ring = RING): FeedView {
   if (state.node === null || push.node !== state.node) return state;
-  if (state.paused || state.hovering) return { ...state, held: [...state.held, push].slice(-64) };
+  if (state.paused || state.hovering) {
+    // At most HOLD pushes wait (about 13 s of a 5 Hz feed). The rows of one pushed out of the hold
+    // are never shown, so they are counted with the ring's own drops rather than lost silently: a
+    // pointer resting on the list for a minute used to drop most of that minute without a word.
+    const held = [...state.held, push];
+    const out = held.slice(0, Math.max(0, held.length - HOLD));
+    if (out.length === 0) return { ...state, held };
+    const lost = out.reduce((a, p) => ({ sent: a.sent + p.sent.length, received: a.received + p.received.length }), { sent: 0, received: 0 });
+    return {
+      ...state,
+      held: held.slice(-HOLD),
+      dropped: { sent: state.dropped.sent + lost.sent, received: state.dropped.received + lost.received },
+    };
+  }
   const base = push.reset ? { ...state, sent: [], received: [] } : state;
   const s = merge("sent", push.sent, base.sent, ring);
   const r = merge("received", push.received, base.received, ring);
