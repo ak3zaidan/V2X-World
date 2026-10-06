@@ -193,6 +193,17 @@ test("the traffic scene has no geometric glitch and no empty frame in aerial, ch
   await shot(page, "chase-car");
   results.chase = await stopHunt(page);
 
+  // The largest kind of vehicle on the road: the framing has to fit a bus or a truck, not only a car.
+  const large = await aVehicle(page, (n) => ["bus", "coach", "truck", "trailer", "delivery", "emergency"].includes(n));
+  if (large >= 0) {
+    await page.evaluate((id) => (window.__vwpStudio?.engine as unknown as { selectActor(i: number, m: string): Promise<void> }).selectActor(id, "chase"), large);
+    await page.waitForTimeout(3000);
+    await startHunt(page);
+    await page.waitForTimeout(SECONDS * 1000);
+    await shot(page, "chase-large");
+    results.chaseLarge = await stopHunt(page);
+  }
+
   const person = await aVehicle(page, (n) => n === "pedestrian");
   if (person >= 0) {
     await page.evaluate((id) => (window.__vwpStudio?.engine as unknown as { selectActor(i: number, m: string): Promise<void> }).selectActor(id, "chase"), person);
