@@ -84,7 +84,9 @@
 use std::collections::BTreeMap;
 
 use crate::capability::{angle_diff_rad, bearing_rad};
-use crate::cards::{LEGACY_JVM, LEGACY_PY, design, legacy, legacy_param, legacy_uncited, standard};
+use crate::cards::{
+    LEGACY_JVM, LEGACY_PY, design, legacy, legacy_param, legacy_uncited, paper, standard,
+};
 use crate::ctx::{ThreatCtx, ThreatCtxExt};
 use crate::obs::{
     LocalEnvironment, ObservedKind, ObservedMessage, SelfBelief, StationType, VerificationState,
@@ -425,6 +427,13 @@ pub struct DetectorParams {
     pub heading_min_disp_m: f64,
     /// The same, as a multiple of the broadcast confidence (`run.py`, `2.5 * conf`).
     pub heading_conf_factor: f64,
+    /// Whether the heading check allows for the bearing error its own position errors
+    /// imply, over the longest straight baseline the history holds (`false`, the legacy
+    /// one-step check with a fixed displacement gate). See [`Legacy12::heading_bounded`].
+    pub heading_bearing_bound: bool,
+    /// How far, degrees, the claimed heading may wander across the bounded check's
+    /// baseline for the baseline to count as straight (10).
+    pub heading_straight_tol_deg: f64,
     /// The alpha-beta tracker's position gain (`ScmsBeaconApp.java :: KF_ALPHA`, 0.5).
     pub kalman_alpha: f64,
     /// Its velocity gain (`ScmsBeaconApp.java :: KF_BETA`, 0.3).
@@ -481,6 +490,8 @@ impl Default for DetectorParams {
             heading_min_speed_mps: 3.0,
             heading_min_disp_m: 5.0,
             heading_conf_factor: 2.5,
+            heading_bearing_bound: false,
+            heading_straight_tol_deg: 10.0,
             kalman_alpha: 0.5,
             kalman_beta: 0.3,
             vru_max_plausible_speed_mps: 10.0,
@@ -511,6 +522,8 @@ struct Fix {
     speed: f64,
     heading: f64,
     t: SimTime,
+    /// The 95 % position confidence the message stated, metres.
+    conf: f64,
 }
 
 /// Per-subject tracker state.
@@ -656,6 +669,70 @@ impl Legacy12 {
         r
     }
 
+    /// The heading check with the bearing error its own inputs imply.
+    ///
+    /// The legacy check compares the claimed heading with the bearing from the previous
+    /// claimed position over one step, and runs only when that step is longer than
+    /// `max(5 m, 2.5 · conf)`. That gate is blind in both directions: at urban speed a
+    /// one-second step (about 11 m) rarely clears it, so a sender claiming the opposite
+    /// heading is almost never checked, while one GNSS outlier that stretches a step past
+    /// it is scored against the full 35° as if the bearing were exact — the largest
+    /// source of honest verdicts in a dense fleet.
+    ///
+    /// Here the bearing's own error is allowed for. Two claimed positions each within
+    /// their stated 95 % radius `c₁`, `c₂` of the truth put the true displacement within
+    /// `c = c₁ + c₂` of the measured one, so the true direction of travel is within
+    /// `asin(c / Δs)` of the measured bearing when `Δs > c` (the tangent to the error
+    /// disc). The score is `angle(heading, bearing) / (heading_threshold + asin(c / Δs))`.
+    /// The baseline is the oldest kept fix from which the sender's claimed heading has
+    /// stayed within `heading_straight_tol_deg` of the current one — a straight stretch by
+    /// the sender's own account, over which the chord and the heading agree — so a turn is
+    /// never scored and a longer straight baseline makes the bound tighter. Each stated
+    /// radius is floored at `tolerance_floor_factor · consistency_threshold_m`, so a
+    /// sender cannot tighten its own check by claiming centimetre accuracy, and one that
+    /// states nothing is held to the floor.
+    ///
+    /// The geometry is the one F2MD's confidence-aware checks use (Kamel, Kaiser, Ben
+    /// Jemaa, Cincilla, Urien, *CaTch: a confidence range tolerant misbehavior detection
+    /// approach*, IEEE WCNC 2019): a claim is inconsistent only if no pair of positions
+    /// inside the stated confidence ranges makes it consistent.
+    fn heading_bounded(&self, history: &[Fix], m: &ObservedMessage, t: SimTime, f: &mut Fingerprint) {
+        let p = &self.params;
+        if m.claimed_speed_mps <= p.heading_min_speed_mps {
+            return;
+        }
+        let max_gap = 2.0 * p.generation_interval_s;
+        let mut base: Option<Fix> = None;
+        let mut later = t;
+        for fix in history.iter().rev() {
+            if ns_to_secs(later.saturating_sub(fix.t)) > max_gap {
+                break;
+            }
+            let turned = angle_diff_rad(fix.heading, m.claimed_heading_rad).to_degrees();
+            if turned > p.heading_straight_tol_deg {
+                break;
+            }
+            base = Some(*fix);
+            later = fix.t;
+        }
+        let Some(b) = base else {
+            return;
+        };
+        let floor = p.tolerance_floor_factor * p.consistency_threshold_m;
+        let c = b.conf.max(floor) + m.claimed_pos_confidence_m.max(floor);
+        let disp = math::hypot(m.claimed_x_m - b.x, m.claimed_y_m - b.y);
+        if disp <= c.max(p.heading_min_disp_m) {
+            return;
+        }
+        let bound_deg = math::asin((c / disp).min(1.0)).to_degrees();
+        let bearing = bearing_rad(b.x, b.y, m.claimed_x_m, m.claimed_y_m);
+        let d = angle_diff_rad(m.claimed_heading_rad, bearing).to_degrees();
+        f.set(
+            DetectorId::HeadingInconsistency,
+            d / (p.heading_threshold_deg + bound_deg),
+        );
+    }
+
     /// The event-message plausibility check, which is the whole of the DENM path.
     fn denm_verdict(&self, m: &ObservedMessage, event_type: &str, t: SimTime) -> Verdict {
         let mut f = Fingerprint::default();
@@ -717,6 +794,7 @@ impl Detector for Legacy12 {
             speed: m.claimed_speed_mps,
             heading: m.claimed_heading_rad,
             t,
+            conf: m.claimed_pos_confidence_m,
         };
         let cell_count = self.census(m, t);
 
@@ -727,21 +805,25 @@ impl Detector for Legacy12 {
             let history = &self.subjects[&m.signer].history;
             let r = self.reference(history, t);
             self.motion(r, m, t, &mut f);
-            // The heading check runs over a ONE-STEP baseline, not the lagged reference:
-            // a 1.5 s baseline spans a road turn and reads it as a heading lie.
-            let prev = *history.last().unwrap_or(&r);
-            let dprev = math::hypot(m.claimed_x_m - prev.x, m.claimed_y_m - prev.y);
-            let gap_ok = ns_to_secs(t.saturating_sub(prev.t)) <= 2.0 * p.generation_interval_s;
-            let disp_ok = dprev
-                > p.heading_min_disp_m
-                    .max(p.heading_conf_factor * m.claimed_pos_confidence_m);
-            if m.claimed_speed_mps > p.heading_min_speed_mps && gap_ok && disp_ok {
-                let bearing = bearing_rad(prev.x, prev.y, m.claimed_x_m, m.claimed_y_m);
-                let d = angle_diff_rad(m.claimed_heading_rad, bearing).to_degrees();
-                f.set(
-                    DetectorId::HeadingInconsistency,
-                    d / p.heading_threshold_deg,
-                );
+            if p.heading_bearing_bound {
+                self.heading_bounded(history, m, t, &mut f);
+            } else {
+                // The heading check runs over a ONE-STEP baseline, not the lagged reference:
+                // a 1.5 s baseline spans a road turn and reads it as a heading lie.
+                let prev = *history.last().unwrap_or(&r);
+                let dprev = math::hypot(m.claimed_x_m - prev.x, m.claimed_y_m - prev.y);
+                let gap_ok = ns_to_secs(t.saturating_sub(prev.t)) <= 2.0 * p.generation_interval_s;
+                let disp_ok = dprev
+                    > p.heading_min_disp_m
+                        .max(p.heading_conf_factor * m.claimed_pos_confidence_m);
+                if m.claimed_speed_mps > p.heading_min_speed_mps && gap_ok && disp_ok {
+                    let bearing = bearing_rad(prev.x, prev.y, m.claimed_x_m, m.claimed_y_m);
+                    let d = angle_diff_rad(m.claimed_heading_rad, bearing).to_degrees();
+                    f.set(
+                        DetectorId::HeadingInconsistency,
+                        d / p.heading_threshold_deg,
+                    );
+                }
             }
             r
         };
@@ -1143,6 +1225,22 @@ pub fn card(p: &DetectorParams) -> ModelCard {
             json!(p.heading_conf_factor),
             LEGACY_PY,
             "the detection pass (2.5 * conf)",
+        ),
+        Parameter::new(
+            "heading_bearing_bound",
+            "-",
+            json!(p.heading_bearing_bound),
+            paper(
+                "Kamel et al., CaTch: a confidence range tolerant misbehavior detection \
+                 approach, IEEE WCNC 2019 (the bearing error the stated confidence \
+                 ranges allow)",
+            ),
+        ),
+        Parameter::new(
+            "heading_straight_tol_deg",
+            "deg",
+            json!(p.heading_straight_tol_deg),
+            design("07-threats-and-detection.md §3.1"),
         ),
         legacy_param(
             "kalman_alpha",

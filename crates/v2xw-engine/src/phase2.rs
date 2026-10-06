@@ -944,6 +944,8 @@ fn apply_detector_param(p: &mut DetectorParams, key: &str, v: f64) -> bool {
         "stale_max_s" => p.stale_max_s = v,
         "heading_min_speed_mps" => p.heading_min_speed_mps = v,
         "heading_min_disp_m" => p.heading_min_disp_m = v,
+        "heading_bearing_bound" => p.heading_bearing_bound = v != 0.0,
+        "heading_straight_tol_deg" => p.heading_straight_tol_deg = v,
         _ => return false,
     }
     true
@@ -998,7 +1000,14 @@ impl Phase2 {
             ));
         }
 
-        let mut detector_params = DetectorParams::default();
+        // The host's defaults differ from the suite's legacy ones in one place: the heading
+        // check allows for the bearing error the stated accuracies imply
+        // (`Legacy12::heading_bounded`); `heading_bearing_bound: 0` restores the legacy
+        // one-step check, as `use_stated_accuracy: 0` restores the constant 5 m.
+        let mut detector_params = DetectorParams {
+            heading_bearing_bound: true,
+            ..DetectorParams::default()
+        };
         let mut report_interval = secs(REPORT_INTERVAL_S);
         let mut stated_accuracy = true;
         for choice in &scenario.detection.local {

@@ -1199,7 +1199,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                unit is trusted infrastructure to the authority). Each message is judged \
                against the positional accuracy it states on the air (a BSM's J2735 \
                PositionalAccuracy, one sigma, scaled to 95 %; a CAM's 95 % confidence \
-               ellipse); use_stated_accuracy: 0 restores the legacy constant 5 m. params \
+               ellipse); use_stated_accuracy: 0 restores the legacy constant 5 m. The \
+               heading check allows for the bearing error those stated accuracies imply \
+               over the longest straight baseline the sender's own headings describe \
+               (CaTch, Kamel et al. 2019); heading_bearing_bound: 0 restores the legacy \
+               one-step check, heading_straight_tol_deg (10) sets 'straight'. params \
                override the suite's thresholds by name (consistency_threshold_m, \
                heading_threshold_deg, detector_lag_s, z_threshold, min_consecutive, \
                sybil_min_certs, art_max_m, max_accel_mps2, stale_max_s, …) and \
