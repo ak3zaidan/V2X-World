@@ -1353,25 +1353,52 @@ export class PoseInterpolator {
       // reported speed. The social-force model's speed changes by half in a step and back; drawn
       // through those speeds a crowd pulsed. Positions are what the model integrated, so the
       // curve through them is continuous in velocity whatever the speeds say.
+      //
+      // Each knot's tangent is limited against *both* chords that meet at it, earlier first, so
+      // the segment that ends at a knot and the one that starts there use the same tangent and
+      // the drawn velocity is continuous through it. Limiting it against only the current chord
+      // (as before) gave a person zig-zagging in a crowd a zero tangent at the end of one segment
+      // and a full one at the start of the next: a kink every 0.1 s, which the glitch hunter saw
+      // as people near a chase camera jerking several pixels.
       let m0x = cx;
       let m0y = cy;
       let m1x = cx;
       let m1y = cy;
+      let prevOk = false;
+      let pcx = 0;
+      let pcy = 0;
       if (bk + 2 < this.#size) {
         const o = this.#at(bk + 2);
         const dt = b.simSeconds - o.simSeconds;
-        if (i < o.count && o.occupied[i] === 1 && o.actorId[i] === id && dt > 1e-9) {
+        const dPrev = a.simSeconds - o.simSeconds;
+        if (i < o.count && o.occupied[i] === 1 && o.actorId[i] === id && dt > 1e-9 && dPrev > 1e-9) {
           m0x = ((b.position[p] - o.position[p]) / dt) * T;
           m0y = ((b.position[p + 1] - o.position[p + 1]) / dt) * T;
+          // The previous chord, in this segment's time units.
+          pcx = ((ax - o.position[p]) / dPrev) * T;
+          pcy = ((ay - o.position[p + 1]) / dPrev) * T;
+          prevOk = true;
         }
       }
+      let nextOk = false;
+      let ncx = 0;
+      let ncy = 0;
       if (bk >= 1) {
         const nx = this.#at(bk - 1);
         const dt = nx.simSeconds - a.simSeconds;
-        if (i < nx.count && nx.occupied[i] === 1 && nx.actorId[i] === id && dt > 1e-9) {
+        const dNext = nx.simSeconds - b.simSeconds;
+        if (i < nx.count && nx.occupied[i] === 1 && nx.actorId[i] === id && dt > 1e-9 && dNext > 1e-9) {
           m1x = ((nx.position[p] - ax) / dt) * T;
           m1y = ((nx.position[p + 1] - ay) / dt) * T;
+          ncx = ((nx.position[p] - b.position[p]) / dNext) * T;
+          ncy = ((nx.position[p + 1] - b.position[p + 1]) / dNext) * T;
+          nextOk = true;
         }
+      }
+      if (prevOk) {
+        limitTangent2(m0x, m0y, pcx, pcy);
+        m0x = TAN[0];
+        m0y = TAN[1];
       }
       limitTangent2(m0x, m0y, cx, cy);
       m0x = TAN[0];
@@ -1379,6 +1406,11 @@ export class PoseInterpolator {
       limitTangent2(m1x, m1y, cx, cy);
       m1x = TAN[0];
       m1y = TAN[1];
+      if (nextOk) {
+        limitTangent2(m1x, m1y, ncx, ncy);
+        m1x = TAN[0];
+        m1y = TAN[1];
+      }
       co[c] = ax; co[c + 1] = m0x; co[c + 2] = 3 * cx - 2 * m0x - m1x; co[c + 3] = -2 * cx + m0x + m1x;
       co[c + 4] = ay; co[c + 5] = m0y; co[c + 6] = 3 * cy - 2 * m0y - m1y; co[c + 7] = -2 * cy + m0y + m1y;
       co[c + 10] = ha; co[c + 11] = dh; co[c + 12] = 0; co[c + 13] = 0;
