@@ -1448,6 +1448,19 @@ impl Phase2 {
             // the vehicle took them out of the run.
             self.report.reports_lost += n.outbox.len() as u64;
         }
+        // Its own detector suite and the rate-limit stamps of what it checked go too: a
+        // node id is never reused, and nothing but the node's own receptions reads them.
+        // Kept, every vehicle that ever drove held its suite (every pseudonym it had heard,
+        // and its co-location census) for the rest of the run.
+        self.detectors.remove(&node);
+        let checked: Vec<(NodeId, [u8; 8])> = self
+            .checked_at
+            .range((node, [0u8; 8])..=(node, [0xffu8; 8]))
+            .map(|(k, _)| *k)
+            .collect();
+        for key in checked {
+            self.checked_at.remove(&key);
+        }
     }
 
     /// Registers the air digest one provisioned credential is carried under (joint 2).
