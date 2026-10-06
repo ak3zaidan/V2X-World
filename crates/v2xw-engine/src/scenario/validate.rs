@@ -1259,8 +1259,10 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "The fraction of equipped drivers who follow GLOSA's advice: each driver \
                decides once, and a follower slows to the advised speed as it approaches. \
-               No field compliance figure could be read for this build, so the default is \
-               0 (advice shown, not followed); a study sets it.",
+               No field compliance figure could be read for this build (the field \
+               evaluations found, e.g. Stahlmann et al., IEEE VNC 2016, report that \
+               simulations are too optimistic but give no rate), so the default is 0 \
+               (advice shown, not followed); a study sets it and sweeps it.",
     },
     KeyStatus {
         path: "apps.fcw_ttc_s",
