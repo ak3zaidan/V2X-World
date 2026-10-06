@@ -43,7 +43,11 @@ fn belief(rng: &mut RngStream) -> PositionEstimate {
     let speed = rng.uniform(0.0, 35.0);
     let (s, c) = v2xw_core::math::sin_cos(heading);
     PositionEstimate {
-        pos: Vec3::new(rng.uniform(-3_000.0, 3_000.0), rng.uniform(-3_000.0, 3_000.0), 3.0),
+        pos: Vec3::new(
+            rng.uniform(-3_000.0, 3_000.0),
+            rng.uniform(-3_000.0, 3_000.0),
+            3.0,
+        ),
         vel: Vec3::new(speed * c, speed * s, 0.0),
         heading_rad: heading,
         semi_major_m: rng.uniform(0.5, 8.0),
@@ -84,7 +88,11 @@ fn cams(rng: &mut RngStream) -> Vec<(String, Vec<u8>)> {
                 exterior_lights: ExteriorLightMask(rng.below(256) as u8),
                 path_history: (1..=n)
                     .map(|k| {
-                        pos = Vec3::new(pos.x - rng.uniform(1.0, 40.0), pos.y + rng.uniform(-5.0, 5.0), pos.z);
+                        pos = Vec3::new(
+                            pos.x - rng.uniform(1.0, 40.0),
+                            pos.y + rng.uniform(-5.0, 5.0),
+                            pos.z,
+                        );
                         cam::PathHistoryPoint {
                             pos,
                             age: Duration::from_millis(k * rng.uniform(100.0, 900.0) as u64),
@@ -302,8 +310,8 @@ fn etsi_encodings_are_read_identically_by_asn1tools() {
         String::from_utf8_lossy(&output.stderr)
     );
     eprintln!("{stdout}");
-    let report: Value = serde_json::from_slice(&std::fs::read(&rpath).expect("results"))
-        .expect("json");
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(&rpath).expect("results")).expect("json");
     let results = report["results"].as_array().expect("results");
     assert_eq!(results.len(), vectors.len());
     let failures: Vec<String> = results

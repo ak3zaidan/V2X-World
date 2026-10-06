@@ -176,7 +176,10 @@ pub fn pick(
     let mut by_lane: BTreeMap<u32, Vec<(f64, ActorId)>> = BTreeMap::new();
     for c in candidates.values() {
         if let Some(l) = c.state.lane {
-            by_lane.entry(l.lane.index()).or_default().push((l.s_m, c.actor));
+            by_lane
+                .entry(l.lane.index())
+                .or_default()
+                .push((l.s_m, c.actor));
         }
     }
     let follower_on = |lane: u32, s: f64, min_gap: f64| {
@@ -188,35 +191,35 @@ pub fn pick(
     // An equipped vehicle first: a scripted emergency is there to be announced and
     // reacted to, so the pick is a vehicle with an on-board unit when one fits.
     let fits = |c: &&Candidate| {
-            if speed(&c.state) < AUTO_MIN_SPEED_MPS {
-                return false;
-            }
-            let Some(l) = c.state.lane else {
-                return false;
-            };
-            match purpose {
-                Purpose::Breakdown => true,
-                Purpose::HardBrake => follower_on(l.lane.index(), l.s_m, 0.0),
-                Purpose::CutIn(side) => {
-                    let Some(lane) = world.roads.try_lane(l.lane) else {
-                        return false;
-                    };
-                    let want = match side {
-                        v2xw_mobility::Side::Left => i32::from(lane.index) + 1,
-                        v2xw_mobility::Side::Right => i32::from(lane.index) - 1,
-                    };
-                    let Some(edge) = world.roads.try_edge(lane.edge) else {
-                        return false;
-                    };
-                    edge.lanes.iter().any(|other| {
-                        world.roads.try_lane(*other).is_some_and(|o| {
-                            i32::from(o.index) == want
-                                && o.kind == lane.kind
-                                && follower_on(o.id.index(), l.s_m, CUT_IN_MIN_GAP_M)
-                        })
+        if speed(&c.state) < AUTO_MIN_SPEED_MPS {
+            return false;
+        }
+        let Some(l) = c.state.lane else {
+            return false;
+        };
+        match purpose {
+            Purpose::Breakdown => true,
+            Purpose::HardBrake => follower_on(l.lane.index(), l.s_m, 0.0),
+            Purpose::CutIn(side) => {
+                let Some(lane) = world.roads.try_lane(l.lane) else {
+                    return false;
+                };
+                let want = match side {
+                    v2xw_mobility::Side::Left => i32::from(lane.index) + 1,
+                    v2xw_mobility::Side::Right => i32::from(lane.index) - 1,
+                };
+                let Some(edge) = world.roads.try_edge(lane.edge) else {
+                    return false;
+                };
+                edge.lanes.iter().any(|other| {
+                    world.roads.try_lane(*other).is_some_and(|o| {
+                        i32::from(o.index) == want
+                            && o.kind == lane.kind
+                            && follower_on(o.id.index(), l.s_m, CUT_IN_MIN_GAP_M)
                     })
-                }
+                })
             }
+        }
     };
     candidates
         .values()

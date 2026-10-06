@@ -721,8 +721,8 @@ impl ObuRuntime {
                 }
                 v2xw_msg::cpm::CpmObject {
                     id: o.id ^ salt,
-                    measurement_delta_ms: ((o.measured_at as i128 - believed as i128)
-                        / 1_000_000) as i32,
+                    measurement_delta_ms: ((o.measured_at as i128 - believed as i128) / 1_000_000)
+                        as i32,
                     pos: o.pos,
                     vel: o.vel,
                     length_m: o.length_m,
@@ -1560,7 +1560,8 @@ impl ObuRuntime {
             return;
         };
         // A new pseudonym starts a new path history.
-        self.own.set_identity(crate::safety::digest_key(&cred.digest));
+        self.own
+            .set_identity(crate::safety::digest_key(&cred.digest));
 
         let mut built: Vec<(MsgType, SimTime, Option<Vec<u8>>)> =
             Vec::with_capacity(wanted as usize);
@@ -1577,7 +1578,9 @@ impl ObuRuntime {
         }
         for e in events {
             let ty = e.msg_type();
-            let payload = self.events.encode(&e, believed, &cred, &self.config, &self.own);
+            let payload = self
+                .events
+                .encode(&e, believed, &cred, &self.config, &self.own);
             built.push((ty, believed, payload));
         }
         for (msg_type, at, payload) in built {
@@ -1753,13 +1756,19 @@ impl ObuRuntime {
                         use v2xw_msg::j2735::bsm::ExteriorLights as J;
                         let has = |bit: J| l.0 & bit.0 != 0;
                         if has(J::LOW_BEAM) {
-                            lights = cam::ExteriorLightMask(lights.0 | cam::ExteriorLightMask::LOW_BEAM.0);
+                            lights = cam::ExteriorLightMask(
+                                lights.0 | cam::ExteriorLightMask::LOW_BEAM.0,
+                            );
                         }
                         if has(J::LEFT_TURN) || has(J::HAZARD) {
-                            lights = cam::ExteriorLightMask(lights.0 | cam::ExteriorLightMask::LEFT_TURN.0);
+                            lights = cam::ExteriorLightMask(
+                                lights.0 | cam::ExteriorLightMask::LEFT_TURN.0,
+                            );
                         }
                         if has(J::RIGHT_TURN) || has(J::HAZARD) {
-                            lights = cam::ExteriorLightMask(lights.0 | cam::ExteriorLightMask::RIGHT_TURN.0);
+                            lights = cam::ExteriorLightMask(
+                                lights.0 | cam::ExteriorLightMask::RIGHT_TURN.0,
+                            );
                         }
                     }
                     input.low_frequency = Some(cam::CamLowFrequency {

@@ -99,7 +99,11 @@ impl AppsProvider {
             )
             .with_dims([Dim::T, Dim::App])
             .with_source(src.clone())
-            .with_min_samples(1),
+            .with_min_samples(1)
+            .not_accounting_for(
+                "whether the driver noticed or acted on the warning: an issued warning is \
+                 the HMI's output, not the driver's response",
+            ),
             MetricDef::new(
                 "app_precision",
                 "ratio",
@@ -127,7 +131,11 @@ impl AppsProvider {
             .with_dims([Dim::T, Dim::App])
             .with_source(src.clone())
             .with_min_samples(1)
-            .with_range(0.0, 1.0),
+            .with_range(0.0, 1.0)
+            .not_accounting_for(
+                "advisory applications (blind spot, lane change) and episodes shorter than \
+                 300 ms, which are neither matched nor counted as missed",
+            ),
             MetricDef::new(
                 "app_lead_time_s",
                 "s",
@@ -139,7 +147,10 @@ impl AppsProvider {
             )
             .with_dims([Dim::T, Dim::App])
             .with_source(src)
-            .with_min_samples(1),
+            .with_min_samples(1)
+            .not_accounting_for(
+                "applications without a time to collision (EEBL, RLVW report no lead time)",
+            ),
         ]
     }
 
@@ -279,5 +290,14 @@ mod tests {
         assert!(out.iter().any(|s| s.metric == "app_precision"));
         assert!(out.iter().any(|s| s.metric == "app_miss_ratio"));
         assert_eq!(p.rejected(), 0);
+    }
+
+    /// Every definition passes the registry's own validation; one that did not stopped
+    /// every scenario with `metrics: [all]` from building (the golden case found it).
+    #[test]
+    fn every_definition_validates() {
+        for d in AppsProvider::definitions() {
+            d.validate().unwrap_or_else(|e| panic!("{}: {e}", d.name));
+        }
     }
 }

@@ -396,9 +396,9 @@ impl EventServices {
             }
             Some(id)
                 if standing
-                    && self.stationary_updated.is_some_and(|t| {
-                        now.saturating_sub(t) >= STATIONARY_UPDATE.as_nanos()
-                    }) =>
+                    && self
+                        .stationary_updated
+                        .is_some_and(|t| now.saturating_sub(t) >= STATIONARY_UPDATE.as_nanos()) =>
             {
                 if service.refresh(id, now) {
                     self.denm_events.insert(id, (now, *belief));

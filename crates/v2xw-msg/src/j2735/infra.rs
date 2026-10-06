@@ -518,7 +518,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(references.contains("Oracle-validated"), "{references}");
-        assert!(references.contains("2016") && references.contains("2020"), "{references}");
+        assert!(
+            references.contains("2016") && references.contains("2020"),
+            "{references}"
+        );
 
         let text = card.limitations.join("\n");
         for needle in [

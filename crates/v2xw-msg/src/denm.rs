@@ -1100,8 +1100,14 @@ mod tests {
         assert!(s.refresh(id, ms(1_500)));
         assert_eq!(s.poll(ms(1_500)), vec![DenmAction::Update(id)]);
         assert_eq!(s.poll(ms(2_500)), vec![DenmAction::Repetition(id)]);
-        assert!(s.poll(ms(3_500)).is_empty(), "the repetition window ended at 3.5 s");
-        assert!(s.is_active(id), "and the refreshed validity holds it to 4.5 s");
+        assert!(
+            s.poll(ms(3_500)).is_empty(),
+            "the repetition window ended at 3.5 s"
+        );
+        assert!(
+            s.is_active(id),
+            "and the refreshed validity holds it to 4.5 s"
+        );
         assert!(s.poll(ms(4_500)).is_empty());
         assert!(!s.is_active(id));
         // A stopped event says nothing more.

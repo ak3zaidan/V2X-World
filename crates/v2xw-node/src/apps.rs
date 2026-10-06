@@ -830,9 +830,10 @@ impl AppLayer {
             {
                 continue;
             }
-            let known = self.heard.values().any(|h| {
-                h.via.is_none() && h.track.pos.distance_2d(pos) < FUSION_GATE_M
-            });
+            let known = self
+                .heard
+                .values()
+                .any(|h| h.via.is_none() && h.track.pos.distance_2d(pos) < FUSION_GATE_M);
             if known {
                 continue;
             }
@@ -887,10 +888,7 @@ impl AppLayer {
                 0.0,
             );
             let default_half = f64::from(g.lane_width_cm.unwrap_or(366)) * 0.005;
-            let mut entry = self
-                .intersections
-                .remove(&g.id.id)
-                .unwrap_or_default();
+            let mut entry = self.intersections.remove(&g.id.id).unwrap_or_default();
             entry.signer = Some(signer.clone());
             entry.map_heard = at;
             entry.ingress.clear();
@@ -1107,7 +1105,8 @@ impl AppLayer {
         // The signalised-intersection applications.
         let mut advice = None;
         if (p.rlvw || p.glosa)
-            && let Some((signer, sit)) = self.signal_situation(&ego, bus.intent.map(|i| i.turn), now)
+            && let Some((signer, sit)) =
+                self.signal_situation(&ego, bus.intent.map(|i| i.turn), now)
         {
             if p.rlvw
                 && let Some(s) = rlvw(&ego, &sit, &p.signal_params)
@@ -1235,7 +1234,9 @@ impl AppLayer {
             let Some(signer) = x.signer.clone() else {
                 continue;
             };
-            if x.spat_heard.is_none_or(|t| now.saturating_sub(t) > 1_000_000_000) {
+            if x.spat_heard
+                .is_none_or(|t| now.saturating_sub(t) > 1_000_000_000)
+            {
                 continue;
             }
             for lane in &x.ingress {
@@ -1346,7 +1347,8 @@ impl SignalSituation {
 pub fn is_go(s: MovementPhaseState) -> bool {
     matches!(
         s,
-        MovementPhaseState::ProtectedMovementAllowed | MovementPhaseState::PermissiveMovementAllowed
+        MovementPhaseState::ProtectedMovementAllowed
+            | MovementPhaseState::PermissiveMovementAllowed
     )
 }
 
@@ -1696,11 +1698,20 @@ mod tests {
         // 100 / 44 = 2.27 m/s².
         let mut ego = car(0.0, 0.0, 0.0, 10.0);
         let queue = car(26.5, 0.0, 0.0, 0.0);
-        assert!(fcw(&ego, &queue, &FcwParams::default()).is_some(), "coasting");
+        assert!(
+            fcw(&ego, &queue, &FcwParams::default()).is_some(),
+            "coasting"
+        );
         ego.accel_mps2 = -1.0;
-        assert!(fcw(&ego, &queue, &FcwParams::default()).is_some(), "braking too little");
+        assert!(
+            fcw(&ego, &queue, &FcwParams::default()).is_some(),
+            "braking too little"
+        );
         ego.accel_mps2 = -2.5;
-        assert!(fcw(&ego, &queue, &FcwParams::default()).is_none(), "braking enough");
+        assert!(
+            fcw(&ego, &queue, &FcwParams::default()).is_none(),
+            "braking enough"
+        );
         assert!((required_decel(22.0, 10.0, 0.0, 0.0) - 100.0 / 44.0).abs() < 1e-9);
     }
 
@@ -1785,7 +1796,10 @@ mod tests {
             MovementPhaseState::ProtectedMovementAllowed,
             15.0,
         );
-        assert_eq!(glosa(&ego, &green, 13.4, &p).and_then(|a| a.target_mps), Some(12.0));
+        assert_eq!(
+            glosa(&ego, &green, 13.4, &p).and_then(|a| a.target_mps),
+            Some(12.0)
+        );
         // GLOSA reads the likely change, not the earliest: a red that may end in 5 s but
         // most likely ends in 20 s is met at the slower speed.
         let likely = SignalSituation {

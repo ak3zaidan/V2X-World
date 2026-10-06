@@ -948,10 +948,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Which message sets are generated, each by the station that sends it in a \
                deployment. bsm and cam: every equipped vehicle; a BSM carries J2945/1 path \
                history and path prediction, and its event flags and lights when set; a CAM \
-               its low-frequency container every 500 ms. denm (needs gn-btp): a vehicle \
-               braking at 0.4 g or harder raises an emergency-brake DENM (every 100 ms for \
-               2 s), and a broken-down vehicle with its hazards on a stationary-vehicle \
-               DENM (every second, cancelled when it moves off). spat and map: roadside \
+               its low-frequency container every 500 ms. denm (needs gn-btp), at the C2C-CC \
+               triggering conditions: a vehicle whose emergency stop signal comes on (6 \
+               m/s2, UN R48) raises an emergency-brake-light DENM updated every 100 ms \
+               while it stays on, and a broken-down vehicle with its hazards on, once it \
+               has stood 10 s, a stationary-vehicle DENM repeated every second, updated \
+               every 15 s and cancelled (the cancellation repeated for 15 s) when the \
+               hazards go out. spat and map: roadside \
                units with that role, from the signal plan the drivers obey (min, max and \
                likely end times) and the junction's own lanes, at 10 Hz and 1 Hz. srm and \
                ssm (need codec_tier size-model): emergency vehicles ask the junction whose \
@@ -976,9 +979,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "messages.codec_tier",
         status: Status::Wired,
-        note: "'uper': every message is encoded for real — BSM, SPaT and MAP by the \
-               hand-written J2735 encoders (SPaT and MAP not yet checked against an \
-               independent decoder), CAM and DENM by the generated ETSI ones — and a set \
+        note: "'uper': every message is encoded for real — BSM, SPaT, MAP and PSM by the \
+               hand-written J2735 encoders (each checked byte for byte against pycrate), \
+               CAM, DENM, CPM and VAM by the generated ETSI ones — and a set \
                with no real encoder (srm, ssm) is refused. 'size-model': those sets are \
                carried as payloads of the validated modelled length (build decision D2), \
                and every message that has a real encoder is still encoded for real.",
@@ -2850,7 +2853,10 @@ fn apps(s: &Scenario, e: &mut Vec<ScenarioError>) {
     if !(a.glosa_compliance.is_finite() && (0.0..=1.0).contains(&a.glosa_compliance)) {
         e.push(conflict(
             "apps.glosa_compliance",
-            format!("is {}, and a fraction of drivers is in [0, 1]", a.glosa_compliance),
+            format!(
+                "is {}, and a fraction of drivers is in [0, 1]",
+                a.glosa_compliance
+            ),
         ));
     }
     for (field, v) in [

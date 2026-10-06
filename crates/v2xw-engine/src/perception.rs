@@ -330,8 +330,7 @@ impl Perception {
 
     /// Forgets an observer that left the run.
     pub fn forget(&mut self, observer: NodeId) {
-        self.tracks
-            .retain(|(n, _), _| *n != observer);
+        self.tracks.retain(|(n, _), _| *n != observer);
         self.next_id.remove(&observer);
     }
 }

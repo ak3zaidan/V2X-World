@@ -338,9 +338,7 @@ impl PathPredictor {
         if speed_mps < p.min_speed_mps || !yaw_rate_rad_s.is_finite() {
             return PathPrediction::straight(200);
         }
-        let departure = self
-            .mean_yaw
-            .map_or(0.0, |m| (yaw_rate_rad_s - m).abs());
+        let departure = self.mean_yaw.map_or(0.0, |m| (yaw_rate_rad_s - m).abs());
         let confidence =
             (200.0 * (1.0 - departure / p.zero_confidence_departure_rad_s)).clamp(0.0, 200.0);
         let confidence = f64::round(confidence) as u8;
@@ -435,13 +433,22 @@ mod tests {
         let mut all = Vec::new();
         for i in 0..400 {
             let a = f64::from(i) * 0.02; // 1 m per step
-            let p = crumb(t, r * math::cos(a), r * math::sin(a), a + core::f64::consts::FRAC_PI_2);
+            let p = crumb(
+                t,
+                r * math::cos(a),
+                r * math::sin(a),
+                a + core::f64::consts::FRAC_PI_2,
+            );
             all.push(p.pos);
             ph.push(p);
             t += 0.1;
         }
         let kept: Vec<Vec3> = ph.kept.iter().map(|b| b.pos).collect();
-        assert!(kept.len() > 10, "{} kept points on a 400 m circle", kept.len());
+        assert!(
+            kept.len() > 10,
+            "{} kept points on a 400 m circle",
+            kept.len()
+        );
         // Every recorded position lies within 1.2 m of the polyline through kept points
         // (1 m, plus the 1 m step's own discretisation).
         for p in &all[..all.len() - 2] {

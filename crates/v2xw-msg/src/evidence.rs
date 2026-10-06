@@ -387,9 +387,10 @@ mod tests {
         assert!(ByteExactness::RealUperUnvalidated.has_real_bytes());
         assert!(!ByteExactness::SizeModelled.has_real_bytes());
 
+        // SPaT and MAP moved up on 2026-10-06, when the pycrate oracle agreed with them.
         for ty in [MsgType::Spat, MsgType::Map] {
-            assert!(!byte_exactness(ty).is_byte_exact(), "{ty}");
-            assert!(byte_exactness(ty).has_real_bytes(), "{ty}");
+            assert!(byte_exactness(ty).is_byte_exact(), "{ty}");
+            assert!(byte_exactness(ty).has_independent_check(), "{ty}");
         }
         for ty in [
             MsgType::Psm,

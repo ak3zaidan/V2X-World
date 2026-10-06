@@ -32,20 +32,20 @@ use v2xw_core::geom::Vec3;
 
 use crate::asn1::cdd::{
     AngleConfidence, CardinalNumber1B, CartesianAngle, CartesianAngleValue,
-    CartesianCoordinateLarge, CartesianCoordinateWithConfidence,
-    CartesianPosition3dWithConfidence, ConfidenceLevel, CoordinateConfidence,
-    DeltaTimeMilliSecondSigned, Identifier1B, Identifier2B, ItsPduHeader, MessageId,
-    ObjectClass, ObjectClassDescription, ObjectClassWithConfidence, ObjectDimension,
-    ObjectDimensionConfidence, ObjectDimensionValue, ObjectPerceptionQuality, OrdinalNumber1B,
-    PerceivedObject, RadialShape, SensorType, SequenceOfIdentifier1B, Shape, SpeedConfidence,
-    StandardLength12b, StationId, TimestampIts, TrafficParticipantType, Velocity3dWithConfidence,
-    VelocityCartesian, VelocityComponent, VelocityComponentValue, VruProfileAndSubprofile,
-    VruSubProfileBicyclist, VruSubProfilePedestrian, Wgs84Angle, Wgs84AngleConfidence,
-    Wgs84AngleValue,
+    CartesianCoordinateLarge, CartesianCoordinateWithConfidence, CartesianPosition3dWithConfidence,
+    ConfidenceLevel, CoordinateConfidence, DeltaTimeMilliSecondSigned, Identifier1B, Identifier2B,
+    ItsPduHeader, MessageId, ObjectClass, ObjectClassDescription, ObjectClassWithConfidence,
+    ObjectDimension, ObjectDimensionConfidence, ObjectDimensionValue, ObjectPerceptionQuality,
+    OrdinalNumber1B, PerceivedObject, RadialShape, SensorType, SequenceOfIdentifier1B, Shape,
+    SpeedConfidence, StandardLength12b, StationId, TimestampIts, TrafficParticipantType,
+    Velocity3dWithConfidence, VelocityCartesian, VelocityComponent, VelocityComponentValue,
+    VruProfileAndSubprofile, VruSubProfileBicyclist, VruSubProfilePedestrian, Wgs84Angle,
+    Wgs84AngleConfidence, Wgs84AngleValue,
 };
 use crate::asn1::cpm_asn1::{
-    CollectivePerceptionMessage, ConstraintWrappedCpmContainers, CpmContainerId, CpmPayload,
-    CpmManagementContainer as ManagementContainer, WrappedCpmContainer, WrappedCpmContainers,
+    CollectivePerceptionMessage, ConstraintWrappedCpmContainers, CpmContainerId,
+    CpmManagementContainer as ManagementContainer, CpmPayload, WrappedCpmContainer,
+    WrappedCpmContainers,
 };
 use crate::asn1::cpm_objects::{PerceivedObjectContainer, PerceivedObjects};
 use crate::asn1::cpm_sensors::{SensorInformation, SensorInformationContainer};
@@ -142,7 +142,11 @@ fn cm(m: f64) -> i32 {
 fn coordinate_confidence(sigma_m: f64) -> u16 {
     // CoordinateConfidence ::= INTEGER (1..4096), centimetres at 95 %: 4095 out of range.
     let c = (sigma_m * 1.96 * 100.0).round();
-    if c > 4_094.0 { 4_095 } else { c.max(1.0) as u16 }
+    if c > 4_094.0 {
+        4_095
+    } else {
+        c.max(1.0) as u16
+    }
 }
 
 fn velocity_component(v: f64) -> VelocityComponent {
@@ -229,12 +233,8 @@ pub fn build_cpm(input: &CpmInput) -> Result<CollectivePerceptionMessage, CodecE
         StationId(input.station_id),
     );
     let reference_position = reference_position(&input.position, input.origin)?;
-    let management = ManagementContainer::new(
-        input.reference_time.clone(),
-        reference_position,
-        None,
-        None,
-    );
+    let management =
+        ManagementContainer::new(input.reference_time.clone(), reference_position, None, None);
     let mut containers: Vec<WrappedCpmContainer> = Vec::new();
     let vehicle = OriginatingVehicleContainer::new(
         Wgs84Angle::new(
@@ -278,7 +278,9 @@ pub fn build_cpm(input: &CpmInput) -> Result<CollectivePerceptionMessage, CodecE
             .collect();
         containers.push(WrappedCpmContainer::new(
             CpmContainerId(CONTAINER_SENSOR_INFORMATION),
-            Any::new(encode_part(&SensorInformationContainer(SequenceOf::from(list)))?),
+            Any::new(encode_part(&SensorInformationContainer(SequenceOf::from(
+                list,
+            )))?),
         ));
     }
     if !input.objects.is_empty() {
@@ -396,7 +398,8 @@ pub fn objects_of(
         if c.container_id.0 != CONTAINER_PERCEIVED_OBJECTS {
             continue;
         }
-        let Ok(container) = rasn::uper::decode::<PerceivedObjectContainer>(c.container_data.as_bytes())
+        let Ok(container) =
+            rasn::uper::decode::<PerceivedObjectContainer>(c.container_data.as_bytes())
         else {
             continue;
         };
@@ -411,17 +414,16 @@ pub fn objects_of(
                 ),
                 _ => Vec3::ZERO,
             };
-            let class = o
-                .classification
-                .as_ref()
-                .and_then(|c| c.0.first())
-                .map_or(CpmObjectClass::Vehicle, |c| match &c.object_class {
+            let class = o.classification.as_ref().and_then(|c| c.0.first()).map_or(
+                CpmObjectClass::Vehicle,
+                |c| match &c.object_class {
                     ObjectClass::vruSubClass(VruProfileAndSubprofile::pedestrian(_)) => {
                         CpmObjectClass::Pedestrian
                     }
                     ObjectClass::vruSubClass(_) => CpmObjectClass::Cyclist,
                     _ => CpmObjectClass::Vehicle,
-                });
+                },
+            );
             let length = o
                 .object_dimension_x
                 .as_ref()

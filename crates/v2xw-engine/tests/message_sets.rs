@@ -212,18 +212,18 @@ fn event_nodes(recorder: &MemoryRecorder, kind: &str) -> Vec<(u64, Option<u64>, 
             let v: serde_json::Value = serde_json::from_slice(&r.json).ok()?;
             // The record that acted: an `"auto"` item that waited for a vehicle wrote a
             // `waiting` record first.
-            (v.get("kind")?.as_str()? == kind
-                && v.get("phase")?.as_str()? != "waiting")
-                .then(|| {
-                (
-                    v.get("t").and_then(serde_json::Value::as_u64).unwrap_or(0),
-                    v.get("node").and_then(serde_json::Value::as_u64),
-                    v.get("effect")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                )
-            })
+            (v.get("kind")?.as_str()? == kind && v.get("phase")?.as_str()? != "waiting").then(
+                || {
+                    (
+                        v.get("t").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                        v.get("node").and_then(serde_json::Value::as_u64),
+                        v.get("effect")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    )
+                },
+            )
         })
         .collect()
 }
@@ -254,8 +254,9 @@ fn a_denm_is_raised_by_hard_braking_and_by_nothing_else() {
     let scripted_nodes: BTreeSet<NodeId> = scripted
         .iter()
         .map(|(_, n, why)| {
-            NodeId::new(n.unwrap_or_else(|| panic!("an event found no equipped vehicle: {why}"))
-                as u32)
+            NodeId::new(
+                n.unwrap_or_else(|| panic!("an event found no equipped vehicle: {why}")) as u32,
+            )
         })
         .collect();
     // Emergency-stop-signal episodes per node, from gt.kinematics: on at 6 m/s², off
@@ -376,14 +377,20 @@ fn a_broken_down_vehicle_announces_itself_until_it_is_cleared() {
         "the cancellation repeated once a second for the run's last 10 s: {after:?}"
     );
     for w in during.windows(2).chain(after.windows(2)) {
-        assert!(w[1] - w[0] >= 0.9, "two DENMs closer than the 1 s interval: {denm:?}");
+        assert!(
+            w[1] - w[0] >= 0.9,
+            "two DENMs closer than the 1 s interval: {denm:?}"
+        );
     }
     // Only the broken-down vehicle announced anything.
     let others = txs
         .iter()
         .filter(|t| t.node != node && t.msg_type.as_deref() == Some("denm"))
         .count();
-    assert_eq!(others, 0, "{others} DENMs from vehicles that did not break down");
+    assert_eq!(
+        others, 0,
+        "{others} DENMs from vehicles that did not break down"
+    );
 }
 
 /// A SPaT says what the light is: for every junction, every signal group and a minute of

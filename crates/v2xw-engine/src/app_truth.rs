@@ -45,8 +45,11 @@ use v2xw_msg::j2735::spat::MovementPhaseState;
 use v2xw_node::apps::{self, AppParams, SignalSituation, Track};
 use v2xw_world::{SignalState, World};
 
-/// How far apart two vehicles may be for a truth episode to be looked for, metres.
-pub const TRUTH_RANGE_M: f64 = 150.0;
+/// How far apart two vehicles may be for a truth episode to be looked for, metres: the
+/// longest reach of any labelled application, EEBL's 300 m
+/// ([`v2xw_node::apps::EeblParams`]). At 150 m, as before 2026-10-06, a true warning about
+/// a vehicle braking 150–300 m ahead had no truth to match and was labelled false.
+pub const TRUTH_RANGE_M: f64 = 300.0;
 
 /// How close in time an issue and a truth episode must be to match.
 pub const MATCH_WINDOW: Duration = Duration::from_secs(1);
@@ -97,6 +100,9 @@ pub struct TruthState {
     pub width_m: f64,
     /// Whether it is a pedestrian or cyclist.
     pub vru: bool,
+    /// Whether it is a heavy vehicle, whose BSM sets its hard-braking flag at J2735's 0.2 g
+    /// rather than 0.4 g; the truth uses the same threshold its own unit does.
+    pub heavy: bool,
     /// When it is about to turn left: the junction and the distance to it.
     pub left_turn: Option<(Vec3, f64)>,
     /// When it approaches a signalised junction: what the head over its approach truly
@@ -457,7 +463,7 @@ impl AppTruth {
 }
 
 /// A true state as an application track.
-pub fn track_of(k: &Kinematics, length_m: f64, width_m: f64, vru: bool) -> Track {
+pub fn track_of(k: &Kinematics, length_m: f64, width_m: f64, vru: bool, heavy: bool) -> Track {
     let (s, c) = math::sin_cos(k.heading_rad);
     let a_long = k.acc.x * c + k.acc.y * s;
     Track {
@@ -468,7 +474,7 @@ pub fn track_of(k: &Kinematics, length_m: f64, width_m: f64, vru: bool) -> Track
         yaw_rate_rad_s: k.yaw_rate_rad_s,
         length_m,
         width_m,
-        hard_braking: a_long <= -v2xw_node::safety::EEBL_DECEL_THRESHOLD_MPS2,
+        hard_braking: a_long <= -v2xw_msg::j2945::hard_braking_threshold_mps2(heavy),
         vru,
     }
 }
@@ -484,8 +490,8 @@ fn truth(
     if e.vru {
         return None;
     }
-    let ego = track_of(&e.k, e.length_m, e.width_m, false);
-    let sub = track_of(&s.k, s.length_m, s.width_m, s.vru);
+    let ego = track_of(&e.k, e.length_m, e.width_m, false, e.heavy);
+    let sub = track_of(&s.k, s.length_m, s.width_m, s.vru, s.heavy);
     match app {
         "fcw" if p.fcw => apps::fcw(&ego, &sub, &p.fcw_params),
         "eebl" if p.eebl => apps::eebl(&ego, &sub, &p.eebl_params),
@@ -526,6 +532,7 @@ mod tests {
             length_m: 4.5,
             width_m: 1.8,
             vru: false,
+            heavy: false,
             left_turn: None,
             signal: None,
         }
@@ -555,14 +562,20 @@ mod tests {
             truth.step(k * 100 * ms, &states, &near);
         }
         let out = truth.drain();
-        assert!(out.iter().any(|o| o.app == "fcw" && o.outcome == "true"), "{out:?}");
+        assert!(
+            out.iter().any(|o| o.app == "fcw" && o.outcome == "true"),
+            "{out:?}"
+        );
         // EEBL fired in truth for 400 ms but no EEBL warning came: once the episode ends,
         // it is missed.
         states.insert(NodeId::new(2), state(25.0, 5.0, 0.0));
         truth.step(500 * ms, &states, &near);
         truth.step(600 * ms, &states, &near);
         let out = truth.drain();
-        assert!(out.iter().any(|o| o.app == "eebl" && o.outcome == "missed"), "{out:?}");
+        assert!(
+            out.iter().any(|o| o.app == "eebl" && o.outcome == "missed"),
+            "{out:?}"
+        );
         // A warning about nobody's pseudonym is false at once.
         truth.on_warning(&warning(700 * ms, 1, "fcw", "ffffffffffffffff"), &states);
         let out = truth.drain();

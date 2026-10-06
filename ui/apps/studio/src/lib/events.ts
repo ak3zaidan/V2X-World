@@ -22,7 +22,7 @@ export const EVENT_KINDS: readonly { type: string; label: string; ends: boolean;
     type: "safety.hard-brake",
     label: "Hard brake",
     ends: false,
-    help: "A vehicle with a car close behind (or node 'target') brakes at 0.5 g to a stop, then drives on: what emergency brake light and forward collision warnings react to.",
+    help: "A vehicle with a car close behind (or node 'target') brakes at 0.5 g (decel_mps2) to a stop, then drives on: what emergency brake light and forward collision warnings react to. A European DENM needs 6 m/s² or more. With no fitting vehicle it waits up to within_s (10 s).",
   },
   {
     type: "safety.breakdown",

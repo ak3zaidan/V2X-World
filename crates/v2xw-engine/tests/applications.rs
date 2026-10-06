@@ -69,17 +69,18 @@ fn a_hard_brake_warns_the_vehicles_behind_and_the_warnings_are_true() {
         .expect("the hard brake found an equipped vehicle with a follower");
     let t_brake = fired["t"].as_u64().expect("a time") as f64;
     let warnings = json(&recorder, "app.warning");
-    let issued: Vec<&serde_json::Value> = warnings
-        .iter()
-        .filter(|w| w["kind"] == "issue")
-        .collect();
+    let issued: Vec<&serde_json::Value> =
+        warnings.iter().filter(|w| w["kind"] == "issue").collect();
     eprintln!(
         "braked node {braked}; {} warnings issued, by app {:?}; report {:?}",
         issued.len(),
-        issued.iter().fold(BTreeMap::<String, u32>::new(), |mut m, w| {
-            *m.entry(w["app"].as_str().unwrap_or("?").to_string()).or_default() += 1;
-            m
-        }),
+        issued
+            .iter()
+            .fold(BTreeMap::<String, u32>::new(), |mut m, w| {
+                *m.entry(w["app"].as_str().unwrap_or("?").to_string())
+                    .or_default() += 1;
+                m
+            }),
         report.apps
     );
     let eebl_after: Vec<&&serde_json::Value> = issued
@@ -101,7 +102,10 @@ fn a_hard_brake_warns_the_vehicles_behind_and_the_warnings_are_true() {
         .iter()
         .filter(|o| o["app"] == "eebl" && o["outcome"] == "true")
         .count();
-    assert!(true_eebl > 0, "no EEBL warning was labelled true: {outcomes:?}");
+    assert!(
+        true_eebl > 0,
+        "no EEBL warning was labelled true: {outcomes:?}"
+    );
     let tally = report.apps.get("eebl").copied().unwrap_or_default();
     assert!(tally.issued >= tally.true_warnings + tally.false_warnings);
     assert!(tally.true_warnings > 0);
@@ -120,9 +124,9 @@ fn glosa_advice_is_given_and_followed_by_the_drivers_who_follow_it() {
     let slowed: Vec<&serde_json::Value> = advice
         .iter()
         .filter(|a| {
-            a["advised_mps"].as_f64().is_some_and(|v| {
-                v + 0.5 < a["speed_mps"].as_f64().unwrap_or(0.0)
-            })
+            a["advised_mps"]
+                .as_f64()
+                .is_some_and(|v| v + 0.5 < a["speed_mps"].as_f64().unwrap_or(0.0))
         })
         .collect();
     eprintln!(
@@ -131,7 +135,10 @@ fn glosa_advice_is_given_and_followed_by_the_drivers_who_follow_it() {
         slowed.len()
     );
     assert!(!advice.is_empty(), "no vehicle was advised");
-    assert!(!slowed.is_empty(), "no advisory asked a vehicle to slow for the green");
+    assert!(
+        !slowed.is_empty(),
+        "no advisory asked a vehicle to slow for the green"
+    );
     // The node's true speed a few seconds after an advice to slow is at or under it.
     let mut speeds: BTreeMap<u64, Vec<(u64, f64)>> = BTreeMap::new();
     for (_, r) in recorder.records() {
@@ -147,9 +154,11 @@ fn glosa_advice_is_given_and_followed_by_the_drivers_who_follow_it() {
     }
     let mut followed = 0;
     for a in &slowed {
-        let (Some(node), Some(t), Some(v)) =
-            (a["node"].as_u64(), a["t"].as_u64(), a["advised_mps"].as_f64())
-        else {
+        let (Some(node), Some(t), Some(v)) = (
+            a["node"].as_u64(),
+            a["t"].as_u64(),
+            a["advised_mps"].as_f64(),
+        ) else {
             continue;
         };
         let later = speeds.get(&node).and_then(|s| {
@@ -218,15 +227,24 @@ fn an_emergency_vehicles_request_changes_the_signal_plan() {
     s.actors.vehicles.demand.rate_veh_per_h = Some(4_000.0);
     let (_, recorder) = run(s);
     let priority = json(&recorder, "signal.priority");
-    let by_action = priority.iter().fold(BTreeMap::<String, u32>::new(), |mut m, p| {
-        *m.entry(p["action"].as_str().unwrap_or("?").to_string()).or_default() += 1;
-        m
-    });
+    let by_action = priority
+        .iter()
+        .fold(BTreeMap::<String, u32>::new(), |mut m, p| {
+            *m.entry(p["action"].as_str().unwrap_or("?").to_string())
+                .or_default() += 1;
+            m
+        });
     eprintln!("signal.priority by action: {by_action:?}");
-    assert!(by_action.get("request").copied().unwrap_or(0) > 0, "no request reached a controller");
+    assert!(
+        by_action.get("request").copied().unwrap_or(0) > 0,
+        "no request reached a controller"
+    );
     let acted = by_action.get("extend").copied().unwrap_or(0)
         + by_action.get("early-green").copied().unwrap_or(0);
-    assert!(acted > 0, "no controller extended or cut a green for a request");
+    assert!(
+        acted > 0,
+        "no controller extended or cut a green for a request"
+    );
     // The requesters are emergency vehicles' pseudonyms: every request names a signer, and
     // there are no more distinct requesters than emergency vehicles.
     let emergency: BTreeSet<NodeId> = recorder
@@ -235,7 +253,9 @@ fn an_emergency_vehicles_request_changes_the_signal_plan() {
         .filter(|(_, r)| r.channel == "gt.kinematics")
         .filter_map(|(_, r)| {
             let k: GtKinematicsView = decode(r).ok()?;
-            (k.class.as_deref() == Some("emergency")).then_some(k.node).flatten()
+            (k.class.as_deref() == Some("emergency"))
+                .then_some(k.node)
+                .flatten()
         })
         .collect();
     assert!(!emergency.is_empty());

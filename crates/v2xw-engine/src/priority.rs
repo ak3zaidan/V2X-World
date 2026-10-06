@@ -167,7 +167,10 @@ impl PriorityControllers {
         now_s: f64,
     ) -> Option<PriorityRecord> {
         let p = world.signals.get(plan)?;
-        let st = self.plans.entry(plan).or_insert_with(|| plan_state(world, p));
+        let st = self
+            .plans
+            .entry(plan)
+            .or_insert_with(|| plan_state(world, p));
         st.base_offset.get_or_insert(p.offset_s);
         let new = !st.requests.contains_key(&requester);
         st.requests.insert(
@@ -412,8 +415,7 @@ fn clears_pedestrians(plan: &SignalPlan, st: &PlanState, i: usize) -> bool {
 /// The per-plan bookkeeping: each signal group's movements and the crossings.
 fn plan_state(world: &World, plan: &SignalPlan) -> PlanState {
     // A movement belongs to the group of the head over the lane that approaches it.
-    let mut approach_of: BTreeMap<v2xw_core::ids::LaneId, v2xw_core::ids::LaneId> =
-        BTreeMap::new();
+    let mut approach_of: BTreeMap<v2xw_core::ids::LaneId, v2xw_core::ids::LaneId> = BTreeMap::new();
     for c in world.roads.connections() {
         if let Some(via) = c.via {
             approach_of.entry(via).or_insert(c.from_lane);
@@ -430,7 +432,11 @@ fn plan_state(world: &World, plan: &SignalPlan) -> PlanState {
             crossings.push(k);
         }
         let approach = approach_of.get(lane).copied().unwrap_or(*lane);
-        for h in plan.heads.iter().filter(|h| h.lane == approach || h.lane == *lane) {
+        for h in plan
+            .heads
+            .iter()
+            .filter(|h| h.lane == approach || h.lane == *lane)
+        {
             groups.entry(h.group).or_default().push(k);
         }
     }

@@ -330,7 +330,11 @@ impl GlosaDrivers {
                     v
                 };
                 let v = v2xw_core::math::q3(eased);
-                if self.capped.get(&actor).is_some_and(|c| (c - v).abs() < 0.05) {
+                if self
+                    .capped
+                    .get(&actor)
+                    .is_some_and(|c| (c - v).abs() < 0.05)
+                {
                     return None;
                 }
                 self.capped.insert(actor, v);
@@ -1939,8 +1943,7 @@ impl Engine {
                         crate::safety_events::AUTO_WAIT_DEFAULT_S,
                     )
                     .unwrap_or(crate::safety_events::AUTO_WAIT_DEFAULT_S);
-                    let deadline =
-                        now.saturating_add(Duration::from_secs_f64(within).as_nanos());
+                    let deadline = now.saturating_add(Duration::from_secs_f64(within).as_nanos());
                     self.timeline.waiting_safety.insert(index, deadline);
                     note.phase = "waiting".to_string();
                     note.effect = format!(
@@ -2062,10 +2065,8 @@ impl Engine {
                     .unwrap_or(se::HARD_BRAKE_DEFAULT_HOLD_S);
                 // The hold runs from when it stands; a stop from `speed` at `decel` takes
                 // `speed / decel` plus the onset, so the release is placed after that.
-                let stop_s =
-                    speed / decel + decel / v2xw_mobility::EMERGENCY_BRAKE_ONSET_JERK_MPS3;
-                let release =
-                    now.saturating_add(Duration::from_secs_f64(stop_s + hold).as_nanos());
+                let stop_s = speed / decel + decel / v2xw_mobility::EMERGENCY_BRAKE_ONSET_JERK_MPS3;
+                let release = now.saturating_add(Duration::from_secs_f64(stop_s + hold).as_nanos());
                 self.command_mobility(vec![v2xw_mobility::MobilityCommand::Brake {
                     actor: chosen.actor,
                     decel_mps2: decel,
@@ -2881,6 +2882,7 @@ impl Engine {
                         length_m: a.last.dims.length_m,
                         width_m: a.last.dims.width_m,
                         vru: a.class.is_vru(),
+                        heavy: crate::vehicle_bus::is_heavy(a.class),
                         left_turn,
                         signal,
                     },
@@ -3284,9 +3286,9 @@ impl Engine {
             .collect();
         let now_s = v2xw_core::time::ns_to_secs(now);
         for (plan, requester, group, eta) in requests {
-            if let Some(rec) = self
-                .priority
-                .request(&self.world, plan, requester, group, eta, now_s)
+            if let Some(rec) =
+                self.priority
+                    .request(&self.world, plan, requester, group, eta, now_s)
             {
                 self.emit(recorder, &rec);
             }
@@ -3300,9 +3302,10 @@ impl Engine {
                 let Some(actor) = self.node_actor.get(id).copied() else {
                     continue;
                 };
-                let speed = self.actors.get(&actor).map_or(0.0, |a| {
-                    v2xw_core::math::hypot(a.last.vel.x, a.last.vel.y)
-                });
+                let speed = self
+                    .actors
+                    .get(&actor)
+                    .map_or(0.0, |a| v2xw_core::math::hypot(a.last.vel.x, a.last.vel.y));
                 if let Some(c) = self.glosa.apply(actor, outcome.advice, speed, step_s) {
                     commands.push(c);
                 }
