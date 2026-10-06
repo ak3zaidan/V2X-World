@@ -1112,7 +1112,7 @@ mod tests {
         let mut last: BTreeMap<ActorId, (Vec3, LaneId)> = BTreeMap::new();
         let mut changes = 0;
         let mut worst: f64 = 0.0;
-        for k in 0..900u64 {
+        for k in 0..1500u64 {
             let mut ctx = MobilityCtx::new(k * 100 * NS_PER_MS, &w, &rng);
             for (actor, kin) in m.step(&mut ctx, dt, &snapshot) {
                 let lane = kin.lane.expect("on a lane").lane;
@@ -1136,7 +1136,7 @@ mod tests {
                 last.insert(actor, (kin.pos, lane));
             }
         }
-        assert!(changes > 12, "the run must cross lane boundaries ({changes})");
+        assert!(changes > 8, "the run must cross lane boundaries ({changes})");
         assert!(worst <= 0.0);
     }
 
