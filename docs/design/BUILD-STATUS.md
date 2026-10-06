@@ -85,6 +85,50 @@ Reading it:
   where they are, inside roofs; with the camera's own axes neither viewer clips, so they are
   counted as the hunter's error, not fixed defects.
 
+### Peak Midtown (resumed 2026-10-06)
+
+A third capture at real peak density: `ui/packages/viewer/test/glitch/midtown-peak.yaml`, the
+Manhattan network with 1,500 pedestrians, 150 cyclists and 60,000 veh/h offered in a mixed fleet
+(68 % cars, 9 % delivery vans, 6 % motorcycles, 5 % trucks, 5 % buses, 4 % mopeds, 2 % emergency,
+1 % coaches). Counted from the capture's own keyframes (`ui/packages/viewer/scripts/census.mjs`): on the end-of-session
+capture, 2,372 live actors when the tour starts at 60 s and 3,405 at 150 s — 1,160 cars, 175
+vans, 118 motorcycles, 95 trucks, 88 buses, 72 mopeds, 31 emergency vehicles, 16 coaches, 1,500
+people and 150 cyclists.
+150 s of sim, 1,652 frames, 82 MB; the tour as above (aerial 20 s, chase over a car, a delivery
+van, a person and a motorcycle 15 s each, dashboard 20 s), 5,354 frames.
+
+| class | start of this session | end of this session |
+|---|---|---|
+| `pop` | 45 (45 engine) | 45 (45 engine) |
+| `teleport` | 808 (808 engine) | 41 (41 engine) |
+| `stutter` | 573 in 20 frames (322 engine) | 235 in 3 frames |
+| `heading_snap` | 19 (18 engine) | 0 |
+| `overlap_vehicle` | 1 (1 engine) | 1 (1 engine) |
+| `overlap_pedestrian` | 2 (2 engine) | 2 (2 engine) |
+| `lod_pop` | 4 | 0 |
+| `overlap_building`, `z_fighting`, `flicker`, `camera_clip`, `empty_frame`, `subject_lost`, `chase_framing` | 0 | 0 |
+
+What moved them (each its own commit, each with a test shown to fail without it):
+
+- **Pedestrian jumps, 808 → 41.** `v2xw_mobility::vru::social_force` put a person on the next
+  lane's centreline at every lane change. A person is now projected onto the next lane where they
+  stand, and at a corner — where centreline lanes leave someone on the outside of the turn off the
+  next lane's band — an offset (`Pedestrian::carry`) keeps them where they were and closes at
+  0.7 m/s, so they walk round the corner. Projection alone took the count to 704; a 3 m carry to
+  439; 5 m to 41. The 41 left are 5.3–6.6 m gaps in the extract's walkable network, still drawn
+  as cuts. This is the pedestrian track's file: the change is the lane-change block and one field.
+- **People jerking near the camera.** Each knot of a person's Catmull-Rom path is now limited
+  against both chords that meet at it, so its velocity is continuous; before, a person stepping
+  back in a crowd had a zero tangent at one segment's end and a full one at the next's start.
+  Stutter frames 20 → 3.
+- **LOD pops on buses** (above, "Level of detail by size"): 4 → 0.
+
+Left: 2 of the 3 stutter frames are the frame a camera flight lands (2.0 px of jerk against a
+1.5 px threshold, every actor on screen counted at once, hence 235 events), the third is the
+followed person at 1.8 px. The 45 pops are vehicles the engine spawns inside the view 2.7 km
+away at the tour's first frame. The overlaps are the engine's own (bodies overlapping in the
+snapshot).
+
 ### What changed
 
 - **Motion.** Critically damped springs replace the exponential lerp in the plan view (it

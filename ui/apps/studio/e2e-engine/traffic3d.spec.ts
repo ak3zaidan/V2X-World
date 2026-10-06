@@ -169,7 +169,11 @@ test("the traffic scene has no geometric glitch and no empty frame in aerial, ch
     await page.evaluate(() => {
       (window.__vwpStudio?.engine as unknown as { viewer: { scene: { visible: boolean } } }).viewer.scene.visible = false;
     });
-    await page.waitForTimeout(1500);
+    // Until the sampler has read a few frames: SwiftShader draws dense Midtown at a frame or two a
+    // second, so a fixed 1.5 s saw only two.
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __t3d?: { stats: PixelStats } }).__t3d?.stats.frames ?? 0), { timeout: 30_000 })
+      .toBeGreaterThan(3);
     await page.evaluate(() => {
       (window.__vwpStudio?.engine as unknown as { viewer: { scene: { visible: boolean } } }).viewer.scene.visible = true;
     });
