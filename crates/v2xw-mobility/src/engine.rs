@@ -500,6 +500,10 @@ impl crate::views::EdgeCost for CyclistCost<'_> {
 /// in city traffic. A cap on the draw, not a cited distribution's tail.
 const CYCLIST_MAX_DESIRED_MPS: f64 = 25.0 / 3.6;
 
+/// Below this speed, short of the stop line, a driver who committed to an amber is no
+/// longer clearing the junction, m/s: walking pace.
+const AMBER_COMMIT_LAPSE_MPS: f64 = 1.0;
+
 /// The custom entity a cyclist's speed is drawn under.
 const CYCLIST_SPEED_ID: &str = "mobility/vru/cyclist-speed";
 
@@ -3372,7 +3376,14 @@ impl Mobility for NativeMobility {
                 // it has slowed for the turn ahead, which is what left drivers braking into
                 // the junction on red. It keeps its speed and clears.
                 if along && matches!(junction.signal, Some(SignalState::Amber | SignalState::Red)) {
-                    let committed = if actor.amber_commit == Some(junction.id) {
+                    // A committed driver who has since been brought (almost) to a stop short
+                    // of the line — by someone stepping onto a crosswalk or into the road in
+                    // front — is no longer clearing the junction: the commitment lapses and
+                    // the signal holds them like anyone else. Without this a car stopped for
+                    // a pedestrian on amber drove on into the red once they had passed.
+                    let lapsed = ego.speed_mps < AMBER_COMMIT_LAPSE_MPS
+                        && junction.stop_line_gap_m > STOP_LINE_MARGIN_M;
+                    let committed = if actor.amber_commit == Some(junction.id) && !lapsed {
                         decision = EntryDecision::Proceed;
                         true
                     } else {
