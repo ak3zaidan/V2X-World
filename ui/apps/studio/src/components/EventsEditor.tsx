@@ -309,7 +309,14 @@ export function EventsEditor({
             <div className="help">{kind?.help ?? `The engine does not know '${it.type}'.`}</div>
             {done.map((f) => (
               <div className="help fired" data-testid="event-fired" key={`${f.phase}-${f.t}`}>
-                {f.phase === "end" ? "Ended" : "Fired"} at {(f.t / 1e9).toFixed(1)} s: {f.effect}
+                {f.phase === "end"
+                  ? "Ended"
+                  : f.phase === "waiting"
+                    ? "Waiting for a vehicle"
+                    : f.phase === "expired"
+                      ? "Gave up"
+                      : "Fired"}{" "}
+                at {(f.t / 1e9).toFixed(1)} s: {f.effect}
               </div>
             ))}
           </div>

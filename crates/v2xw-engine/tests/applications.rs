@@ -49,19 +49,25 @@ fn json(recorder: &MemoryRecorder, channel: &str) -> Vec<serde_json::Value> {
 /// true states, and every warning is from a vehicle that heard the braking one.
 #[test]
 fn a_hard_brake_warns_the_vehicles_behind_and_the_warnings_are_true() {
-    let mut s = connected(24.0);
-    s.actors.vehicles.demand.rate_veh_per_h = Some(6_000.0);
+    // Dense enough that, a quarter-minute in, some moving car has another close behind
+    // it: at 6,000 veh/h this grid had none between 14 and 24 s (at most 16 vehicles on
+    // 1.6 km of avenues), so the `"auto"` pick waited out its 10 s and gave up.
+    let mut s = connected(32.0);
+    s.actors.vehicles.demand.rate_veh_per_h = Some(12_000.0);
     s.events = serde_json::from_value(serde_json::json!([
-        {"t": 14.0, "type": "safety.hard-brake", "decel_mps2": 6.0},
+        {"t": 16.0, "type": "safety.hard-brake", "decel_mps2": 6.0, "within_s": 12.0},
     ]))
     .expect("timeline");
     let (report, recorder) = run(s);
     let events = json(&recorder, "scenario.event");
-    let braked = events
+    let fired = events
         .iter()
-        .find(|e| e["kind"] == "safety.hard-brake")
-        .and_then(|e| e["node"].as_u64())
+        .find(|e| e["kind"] == "safety.hard-brake" && e["phase"] == "start")
+        .unwrap_or_else(|| panic!("the hard brake never fired: {events:?}"));
+    let braked = fired["node"]
+        .as_u64()
         .expect("the hard brake found an equipped vehicle with a follower");
+    let t_brake = fired["t"].as_u64().expect("a time") as f64;
     let warnings = json(&recorder, "app.warning");
     let issued: Vec<&serde_json::Value> = warnings
         .iter()
@@ -79,7 +85,10 @@ fn a_hard_brake_warns_the_vehicles_behind_and_the_warnings_are_true() {
     let eebl_after: Vec<&&serde_json::Value> = issued
         .iter()
         .filter(|w| {
-            w["app"] == "eebl" && w["t"].as_u64().is_some_and(|t| (14e9..17e9).contains(&(t as f64)))
+            w["app"] == "eebl"
+                && w["t"]
+                    .as_u64()
+                    .is_some_and(|t| (t_brake..t_brake + 3e9).contains(&(t as f64)))
         })
         .collect();
     assert!(
@@ -102,7 +111,9 @@ fn a_hard_brake_warns_the_vehicles_behind_and_the_warnings_are_true() {
 /// while it stands; with none following, the advice is given and nobody's speed is capped.
 #[test]
 fn glosa_advice_is_given_and_followed_by_the_drivers_who_follow_it() {
-    let mut s = connected(40.0);
+    // A minute, so that vehicles approach the four units' junctions on red as well as on green.
+    let mut s = connected(60.0);
+    s.actors.vehicles.demand.rate_veh_per_h = Some(6_000.0);
     s.apps.glosa_compliance = 1.0;
     let (_, recorder) = run(s);
     let advice = json(&recorder, "app.advice");

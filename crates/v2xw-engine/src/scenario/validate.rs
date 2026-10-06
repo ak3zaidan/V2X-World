@@ -1229,7 +1229,8 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                hold_s (default 2). safety.breakdown: a vehicle stops at decel_mps2 (default \
                3) with its hazard lights on until 'until'. safety.cut-in: a vehicle changes \
                lane to side (left or right) at once into the gap ahead of that lane's \
-               follower.",
+               follower. An auto safety event that finds no vehicle fitting waits up to \
+               within_s (default 10) and fires at the first step one does.",
     },
     KeyStatus {
         path: "apps",
@@ -2813,7 +2814,7 @@ fn live_timeline_item(
             {
                 e.push(conflict(&format!("{field}.side"), why));
             }
-            for key in ["decel_mps2", "hold_s"] {
+            for key in ["decel_mps2", "hold_s", "within_s"] {
                 if let Err(why) = se::positive(item.params.get(key), 1.0) {
                     e.push(conflict(&format!("{field}.{key}"), why));
                 }

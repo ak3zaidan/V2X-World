@@ -39,6 +39,13 @@
 //!   between [`CUT_IN_MIN_GAP_M`] and [`AUTO_FOLLOWER_RANGE_M`] behind it.
 //!
 //! The pick reads ground truth, which is the scenario author's hand, not any node's view.
+//!
+//! When no vehicle fits at the item's instant, an `"auto"` item **waits**: it is tried
+//! again at every mobility step for up to `within_s` (default [`AUTO_WAIT_DEFAULT_S`]) and
+//! fires at the first step a vehicle fits, so its `scenario.event` record says `waiting`
+//! first and then `start` with the node it acted on (or `expired`, with nothing done).
+//! A light-traffic run therefore still gets its emergency, a little later, rather than
+//! none; a named `target` that is not in the run does not wait.
 
 use std::collections::BTreeMap;
 
@@ -54,6 +61,9 @@ pub const HARD_BRAKE_DEFAULT_HOLD_S: f64 = 2.0;
 
 /// Default deceleration of a `safety.breakdown`, m/s².
 pub const BREAKDOWN_DEFAULT_DECEL_MPS2: f64 = 3.0;
+
+/// How long an `"auto"` safety event waits for a vehicle that fits, seconds.
+pub const AUTO_WAIT_DEFAULT_S: f64 = 10.0;
 
 /// The slowest a vehicle `"auto"` may pick is moving, m/s (about 29 km/h): an emergency
 /// stop from a crawl is not an emergency.

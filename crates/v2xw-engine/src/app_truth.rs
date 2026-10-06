@@ -497,13 +497,8 @@ fn truth(
         "rlvw" if p.rlvw => e.signal.and_then(|(state, time_left_s, distance_m)| {
             apps::rlvw(
                 &ego,
-                &SignalSituation {
-                    intersection: 0,
-                    signal_group: 0,
-                    distance_m,
-                    state,
-                    time_left_s,
-                },
+                // The truth knows the plan as it runs: its change is certain.
+                &SignalSituation::certain(0, 0, distance_m, state, time_left_s),
                 &p.signal_params,
             )
         }),

@@ -644,8 +644,8 @@ struct Intersection {
     /// Egress lanes' first two points, for classifying a connection's turn.
     egress: BTreeMap<u8, (Vec3, Vec3)>,
     map_heard: SimTime,
-    /// Signal group → (state, min end, max end), TimeMarks.
-    states: BTreeMap<u8, (MovementPhaseState, u16, Option<u16>)>,
+    /// Signal group → (state, min end, max end, likely), TimeMarks.
+    states: BTreeMap<u8, (MovementPhaseState, u16, Option<u16>, Option<u16>)>,
     /// Seconds into the UTC hour when the SPaT was heard, and when (node clock).
     spat_heard: Option<SimTime>,
 }
@@ -685,7 +685,8 @@ pub struct AdviceRecord {
     pub distance_m: f64,
     /// The movement's state, as J2735 names it.
     pub state: &'static str,
-    /// Seconds until it changes, as the SPaT said.
+    /// Seconds until it most likely changes, as the SPaT said (`likelyTime`, else
+    /// `minEndTime`).
     pub time_to_change_s: f64,
     /// The advised speed, m/s; `NaN` advises a stop.
     pub advised_mps: f64,
@@ -955,13 +956,13 @@ impl AppLayer {
             entry.states.clear();
             for s in &i.states {
                 if let Some(e) = s.events.first() {
-                    let (min_end, max_end) = e.timing.map_or(
-                        (v2xw_msg::j2735::spat::TIME_MARK_UNKNOWN, None),
-                        |t| (t.min_end_time, t.max_end_time),
+                    let (min_end, max_end, likely) = e.timing.map_or(
+                        (v2xw_msg::j2735::spat::TIME_MARK_UNKNOWN, None, None),
+                        |t| (t.min_end_time, t.max_end_time, t.likely_time),
                     );
                     entry
                         .states
-                        .insert(s.signal_group, (e.event_state, min_end, max_end));
+                        .insert(s.signal_group, (e.event_state, min_end, max_end, likely));
                 }
             }
             entry.spat_heard = Some(at);
@@ -1135,7 +1136,7 @@ impl AppLayer {
                         signal_group: sit.signal_group,
                         distance_m: q(sit.distance_m),
                         state: phase_name(sit.state),
-                        time_to_change_s: q(sit.time_left_s),
+                        time_to_change_s: q(sit.best_left_s()),
                         advised_mps: a.target_mps.map_or(f64::NAN, q),
                         speed_mps: q(ego.speed_mps),
                     });
@@ -1250,17 +1251,21 @@ impl AppLayer {
                 let Some(group) = pick_group(lane, &x.egress, turn) else {
                     continue;
                 };
-                let Some(&(state, min_end, _)) = x.states.get(&group) else {
+                let Some(&(state, min_end, max_end, likely)) = x.states.get(&group) else {
                     continue;
                 };
-                let time_left =
-                    v2xw_msg::j2735::spat::seconds_until(min_end, now_hour_s).unwrap_or(f64::NAN);
+                let until = |mark: Option<u16>| {
+                    mark.and_then(|m| v2xw_msg::j2735::spat::seconds_until(m, now_hour_s))
+                        .unwrap_or(f64::NAN)
+                };
                 let sit = SignalSituation {
                     intersection: *id,
                     signal_group: group,
                     distance_m: dist,
                     state,
-                    time_left_s: time_left,
+                    time_left_s: until(Some(min_end)),
+                    max_left_s: until(max_end),
+                    likely_left_s: until(likely),
                 };
                 if best.as_ref().is_none_or(|(l, ..)| lateral.abs() < *l) {
                     best = Some((lateral.abs(), signer.clone(), sit));
@@ -1291,8 +1296,50 @@ pub struct SignalSituation {
     pub distance_m: f64,
     /// The movement's state now.
     pub state: MovementPhaseState,
-    /// Seconds until it changes (its `minEndTime`), `NaN` when unknown.
+    /// Seconds until it can change at the earliest (its `minEndTime`), `NaN` when
+    /// unknown.
     pub time_left_s: f64,
+    /// Seconds until it changes at the latest (`maxEndTime`), `NaN` when not sent.
+    pub max_left_s: f64,
+    /// Seconds until it most likely changes (`likelyTime`), `NaN` when not sent.
+    pub likely_left_s: f64,
+}
+
+impl SignalSituation {
+    /// A situation whose change is certain: earliest, latest and likely are one instant
+    /// (a fixed-time plan, or ground truth).
+    pub fn certain(
+        intersection: u16,
+        signal_group: u8,
+        distance_m: f64,
+        state: MovementPhaseState,
+        time_left_s: f64,
+    ) -> Self {
+        Self {
+            intersection,
+            signal_group,
+            distance_m,
+            state,
+            time_left_s,
+            max_left_s: time_left_s,
+            likely_left_s: time_left_s,
+        }
+    }
+
+    /// The best estimate of when it changes: `likelyTime` when sent, which J2735 defines
+    /// as the most likely instant between the two bounds, else `minEndTime`.
+    pub fn best_left_s(&self) -> f64 {
+        if self.likely_left_s.is_finite() {
+            self.likely_left_s
+        } else {
+            self.time_left_s
+        }
+    }
+
+    /// The latest it may change: `maxEndTime` when sent, else unknown (`NaN`).
+    pub fn latest_left_s(&self) -> f64 {
+        self.max_left_s
+    }
 }
 
 /// Whether a state lets the movement go.
@@ -1344,8 +1391,12 @@ pub fn rlvw(ego: &Track, sit: &SignalSituation, p: &SignalAppParams) -> Option<S
     }
     let t_arrive = d / v;
     let violation = if is_red(sit.state) {
-        // Red now: a violation unless the red ends before the vehicle gets there.
-        !(sit.time_left_s.is_finite() && sit.time_left_s < t_arrive)
+        // Red now: a violation unless the red is sure to have ended before the vehicle
+        // gets there — its latest end (`maxEndTime`), since a controller serving a
+        // priority request or an actuated call may hold it to then; with no latest end
+        // sent, the red is taken to last.
+        let latest = sit.latest_left_s();
+        !(latest.is_finite() && latest < t_arrive)
     } else if is_amber(sit.state) {
         sit.time_left_s.is_finite() && t_arrive > sit.time_left_s
     } else {
@@ -1382,11 +1433,13 @@ pub fn glosa(
     p: &SignalAppParams,
 ) -> Option<SpeedAdvice> {
     let d = sit.distance_m;
-    if d <= 5.0 || d > p.glosa_range_m || !sit.time_left_s.is_finite() {
+    // The likely change instant, as deployed GLOSA reads a SPaT (CTI 4501 has a unit send
+    // `likelyTime` with its confidence for this use); `minEndTime` when it is not sent.
+    let t_left = sit.best_left_s();
+    if d <= 5.0 || d > p.glosa_range_m || !t_left.is_finite() {
         return None;
     }
     let v = ego.speed_mps.max(0.1);
-    let t_left = sit.time_left_s;
     if is_go(sit.state) {
         // Green: can the ego clear before it ends, at up to the limit?
         let t_need = d / limit_mps;
@@ -1713,35 +1766,50 @@ mod tests {
         let p = SignalAppParams::default();
         let ego = car(0.0, 0.0, 0.0, 12.0);
         // 25 m from a red that lasts 10 s more, not braking: warn.
-        let red = SignalSituation {
-            intersection: 1,
-            signal_group: 2,
-            distance_m: 25.0,
-            state: MovementPhaseState::StopAndRemain,
-            time_left_s: 10.0,
-        };
+        let red = SignalSituation::certain(1, 2, 25.0, MovementPhaseState::StopAndRemain, 10.0);
         assert!(rlvw(&ego, &red, &p).is_some());
         // Braking as needed: no warning.
         let mut braking = ego;
         braking.accel_mps2 = -3.2;
         assert!(rlvw(&braking, &red, &p).is_none());
         // 200 m out from the same red: GLOSA advises arriving at the green.
-        let far = SignalSituation {
-            distance_m: 200.0,
-            time_left_s: 20.0,
-            ..red
-        };
+        let far = SignalSituation::certain(1, 2, 200.0, MovementPhaseState::StopAndRemain, 20.0);
         let a = glosa(&ego, &far, 13.4, &p).expect("advice");
         let v = a.target_mps.expect("a speed");
         assert!((v - 200.0 / 21.0).abs() < 1e-9, "{v}");
         // On a green it can clear, it keeps its speed.
-        let green = SignalSituation {
-            state: MovementPhaseState::ProtectedMovementAllowed,
-            distance_m: 60.0,
-            time_left_s: 15.0,
+        let green = SignalSituation::certain(
+            1,
+            2,
+            60.0,
+            MovementPhaseState::ProtectedMovementAllowed,
+            15.0,
+        );
+        assert_eq!(glosa(&ego, &green, 13.4, &p).and_then(|a| a.target_mps), Some(12.0));
+        // GLOSA reads the likely change, not the earliest: a red that may end in 5 s but
+        // most likely ends in 20 s is met at the slower speed.
+        let likely = SignalSituation {
+            time_left_s: 5.0,
+            ..far
+        };
+        let v = glosa(&ego, &likely, 13.4, &p)
+            .and_then(|a| a.target_mps)
+            .expect("a speed");
+        assert!((v - 200.0 / 21.0).abs() < 1e-9, "{v}");
+        // RLVW takes a red to last until its latest end: one that may end before the
+        // ego arrives but may also be held past it still warns.
+        let held = SignalSituation {
+            time_left_s: 0.5,
+            likely_left_s: 0.5,
+            max_left_s: 10.0,
             ..red
         };
-        assert_eq!(glosa(&ego, &green, 13.4, &p).and_then(|a| a.target_mps), Some(12.0));
+        assert!(rlvw(&ego, &held, &p).is_some());
+        let ends = SignalSituation {
+            max_left_s: 0.5,
+            ..held
+        };
+        assert!(rlvw(&ego, &ends, &p).is_none());
     }
 
     #[test]

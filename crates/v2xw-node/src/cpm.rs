@@ -7,17 +7,24 @@
 //!
 //! # The rules
 //!
+//! Read on 2026-10-06 from ETSI TS 103 324 V2.1.1 (2023-06), clause 6.1.2 and Annex F
+//! (Table F.1, the recommended values), downloaded from etsi.org:
+//!
 //! | Rule | Value | Source |
 //! |---|---|---|
-//! | Generation is checked every `T_GenCpm` | 100 ms | TS 103 324 §6.1.2 (`T_GenCpmMin`), recalled |
-//! | A CPM goes at least every `T_GenCpmMax` | 1,000 ms | TS 103 324 §6.1.2, recalled |
-//! | A vehicle-class object is included when first perceived, or it moved more than 4 m, or its speed changed more than 0.5 m/s, or its heading more than 4°, since it was last included, or it was last included 1 s ago or more | 4 m, 0.5 m/s, 4°, 1 s | TS 103 324 §6.1.2.2 object inclusion rules, recalled |
-//! | A person or animal is included when it was not included in the last 500 ms | 500 ms | TS 103 324 §6.1.2.2 (VRU objects), recalled |
-//! | The sensor information container goes with a CPM when it was last sent 1 s ago or more | 1,000 ms | TS 103 324 §6.1.2.3 (`T_AddSensorInformation`), recalled |
+//! | Generation events every `T_GenCpm`, with `T_GenCpmMin ≤ T_GenCpm ≤ T_GenCpmMax` | 100 ms | §6.1.2.1; Table F.1 recommends `T_GenCpmMin` = 100 ms for a vehicle |
+//! | A CPM goes at least every `T_GenCpmMax` | 1,000 ms | Table F.1 |
+//! | **Type-B** (vehicles, and motorcyclists): included when first detected since the last generation event, or its position moved more than `minPositionChangeThreshold`, or its ground speed changed more than `minGroundSpeedChangeThreshold`, or its ground velocity's orientation by at least `minGroundVelocityOrientationChangeThreshold`, since it was last included, or it was last included `T_GenCpmMax` ago or more | 4 m, 0.5 m/s, 4°, 1 s | §6.1.2.3 rule 2 a–e; Table F.1 |
+//! | **Type-A** (pedestrians, cyclists, animals): included when first detected since the last generation event; and when any Type-A object has gone `T_GenCpmMax / 2` without inclusion, **all** Type-A objects are included | 500 ms | §6.1.2.3 rule 1 a–b |
+//! | The sensor information container goes in the first CPM and whenever it was last sent `T_AddSensorInformation` ago or more | 1,000 ms | §6.1.2.2; Table F.1 |
 //! | At most 255 perceived objects per CPM (`PerceivedObjects SIZE(0..255)`) | 255 | the ASN.1, read |
 //!
-//! The standard is not in this repository, so the "recalled" rows are this build's reading
-//! of it; every value is a constant here, named, so a study can change it.
+//! Not modelled: the object perception quality threshold (Table F.1's
+//! `ObjectPerceptionQualityThreshold` of 3, computed per §7.1.8.6 — the perception model
+//! hands in confirmed tracks only, which stands in for it), perception regions, the
+//! look-ahead that pulls next event's Type-B objects into this one (a "may"), and the
+//! multi-channel operation of Annex D. Every value is a named constant, so a study can
+//! change it.
 
 use std::collections::BTreeMap;
 
@@ -36,7 +43,8 @@ pub const SPEED_CHANGE_MPS: f64 = 0.5;
 pub const HEADING_CHANGE_RAD: f64 = 4.0 * core::f64::consts::PI / 180.0;
 /// ... or that was last included this long ago.
 pub const OBJECT_REFRESH: Duration = Duration::from_millis(1_000);
-/// A person or animal is included when not included in this long.
+/// `T_GenCpmMax / 2`: when any Type-A object (a person, cyclist or animal) has gone
+/// this long without inclusion, every Type-A object is included.
 pub const VRU_REFRESH: Duration = Duration::from_millis(500);
 /// `T_AddSensorInformation`.
 pub const SENSOR_INFORMATION_EVERY: Duration = Duration::from_millis(1_000);
@@ -55,7 +63,8 @@ pub enum ObjectKind {
 }
 
 impl ObjectKind {
-    /// Whether the VRU inclusion rule applies.
+    /// Whether the object is Type-A in TS 103 324 §6.1.2.3 (a VRU whose profile is a
+    /// pedestrian or a cyclist; a motorcyclist is Type-B, like a vehicle).
     pub const fn is_vru(self) -> bool {
         matches!(self, ObjectKind::Pedestrian | ObjectKind::Cyclist)
     }
@@ -118,6 +127,16 @@ struct Included {
     heading: f64,
 }
 
+/// The orientation of an object's ground velocity, which rule 2 d compares; its body
+/// heading when it stands (a standing object's velocity has no direction).
+fn ground_course(o: &ObjectIn) -> f64 {
+    if v2xw_core::math::hypot(o.vel.x, o.vel.y) > 0.1 {
+        v2xw_core::math::atan2(o.vel.y, o.vel.x)
+    } else {
+        o.heading_rad
+    }
+}
+
 /// A vehicle's CP basic service.
 #[derive(Debug, Clone, Default)]
 pub struct CpmService {
@@ -155,19 +174,25 @@ impl CpmService {
             return None;
         }
         self.last_check = Some(now);
+        // Rule 1 b: one Type-A object overdue brings every Type-A object along.
+        let type_a_due = self.objects.iter().any(|o| {
+            o.kind.is_vru()
+                && self
+                    .included
+                    .get(&o.id)
+                    .is_some_and(|last| now.saturating_sub(last.at) >= VRU_REFRESH.as_nanos())
+        });
         let mut chosen: Vec<ObjectIn> = Vec::new();
         for o in &self.objects {
             let speed = v2xw_core::math::hypot(o.vel.x, o.vel.y);
             let include = match self.included.get(&o.id) {
                 None => true,
-                Some(last) if o.kind.is_vru() => {
-                    now.saturating_sub(last.at) >= VRU_REFRESH.as_nanos()
-                }
+                Some(_) if o.kind.is_vru() => type_a_due,
                 Some(last) => {
                     o.pos.distance_2d(last.pos) > POSITION_CHANGE_M
                         || (speed - last.speed).abs() > SPEED_CHANGE_MPS
-                        || v2xw_msg::j2945::wrap_pi(o.heading_rad - last.heading).abs()
-                            > HEADING_CHANGE_RAD
+                        || v2xw_msg::j2945::wrap_pi(ground_course(o) - last.heading).abs()
+                            >= HEADING_CHANGE_RAD
                         || now.saturating_sub(last.at) >= OBJECT_REFRESH.as_nanos()
                 }
             };
@@ -191,7 +216,7 @@ impl CpmService {
                     at: now,
                     pos: o.pos,
                     speed: v2xw_core::math::hypot(o.vel.x, o.vel.y),
-                    heading: o.heading_rad,
+                    heading: ground_course(o),
                 },
             );
         }
@@ -255,5 +280,44 @@ mod tests {
         assert!(p.due(0).is_some());
         assert!(p.due(300 * MS).is_none());
         assert_eq!(p.due(500 * MS).expect("VRU refresh").objects.len(), 1);
+    }
+
+    /// TS 103 324 §6.1.2.3 rule 1 b: when one pedestrian is overdue, every pedestrian goes
+    /// with it, even one included 200 ms ago; vehicles keep their own rules.
+    #[test]
+    fn an_overdue_pedestrian_brings_every_pedestrian() {
+        let mut s = CpmService::default();
+        s.set_perception(vec![object(1, 10.0, 1.4, ObjectKind::Pedestrian)], vec![]);
+        assert_eq!(s.due(0).expect("first").objects.len(), 1);
+        // A second pedestrian appears at 300 ms: it alone is new.
+        let both = vec![
+            object(1, 10.0, 1.4, ObjectKind::Pedestrian),
+            object(2, 12.0, 1.4, ObjectKind::Pedestrian),
+            object(3, 30.0, 10.0, ObjectKind::Vehicle),
+        ];
+        s.set_perception(both.clone(), vec![]);
+        let at300 = s.due(300 * MS).expect("new objects");
+        let ids: Vec<u16> = at300.objects.iter().map(|o| o.id).collect();
+        assert_eq!(ids, vec![2, 3]);
+        // At 500 ms pedestrian 1 is overdue, so both pedestrians go; the vehicle, steady
+        // since 300 ms, does not.
+        s.set_perception(both, vec![]);
+        let at500 = s.due(500 * MS).expect("Type-A refresh");
+        let ids: Vec<u16> = at500.objects.iter().map(|o| o.id).collect();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    /// Rule 2 d compares the ground velocity's orientation, not the body's heading: a car
+    /// whose velocity turns 5° is included though its reported heading did not change.
+    #[test]
+    fn a_turning_velocity_includes_a_vehicle() {
+        let mut s = CpmService::default();
+        s.set_perception(vec![object(1, 20.0, 10.0, ObjectKind::Vehicle)], vec![]);
+        assert!(s.due(0).is_some());
+        let mut turned = object(1, 21.0, 10.0, ObjectKind::Vehicle);
+        let (sn, cs) = v2xw_core::math::sin_cos(5.0_f64.to_radians());
+        turned.vel = Vec3::new(10.0 * cs, 10.0 * sn, 0.0);
+        s.set_perception(vec![turned], vec![]);
+        assert_eq!(s.due(100 * MS).expect("turned").objects.len(), 1);
     }
 }

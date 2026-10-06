@@ -862,6 +862,16 @@ pub struct Engine {
     report: RunReport,
 }
 
+/// Whether a `safety.*` item waits for a vehicle that fits when none does at its instant:
+/// an `"auto"` pick does (a scenario cannot know where the demand will have put its
+/// vehicles); a named node does not.
+fn se_waits(item: &crate::scenario::schema::TimelineItem) -> bool {
+    matches!(
+        crate::safety_events::Pick::parse(item.params.get("target")),
+        Ok(crate::safety_events::Pick::Auto)
+    )
+}
+
 /// What the scenario timeline has put in force, as the control events leave it.
 #[derive(Debug, Default)]
 struct TimelineState {
@@ -881,6 +891,9 @@ struct TimelineState {
     /// The nodes whose hazard warning lights are on: the vehicle's own switch, which its
     /// facilities read like its own accelerometer.
     hazard_lights: BTreeSet<NodeId>,
+    /// `safety.*` items whose `"auto"` pick found no vehicle that fits yet, by item, with
+    /// the instant they stop waiting: each mobility step tries them again.
+    waiting_safety: BTreeMap<usize, SimTime>,
 }
 
 impl TimelineState {
@@ -1214,6 +1227,7 @@ impl Engine {
             base_rate: crate::timeline::base_rate_veh_per_h(&engine.scenario),
             broken_down: BTreeMap::new(),
             hazard_lights: BTreeSet::new(),
+            waiting_safety: BTreeMap::new(),
         };
         let phase2 = crate::phase2::Phase2::build(&engine.scenario, &engine.world)?;
         engine.phase2 = phase2;
@@ -1918,7 +1932,22 @@ impl Engine {
                 }
             }
             TimelineKind::HardBrake | TimelineKind::Breakdown | TimelineKind::CutIn => {
-                self.on_safety_event(&item, index, end, now, &mut note);
+                let applied = self.on_safety_event(&item, index, end, now, &mut note);
+                if !applied && !end && se_waits(&item) {
+                    let within = crate::safety_events::positive(
+                        item.params.get("within_s"),
+                        crate::safety_events::AUTO_WAIT_DEFAULT_S,
+                    )
+                    .unwrap_or(crate::safety_events::AUTO_WAIT_DEFAULT_S);
+                    let deadline =
+                        now.saturating_add(Duration::from_secs_f64(within).as_nanos());
+                    self.timeline.waiting_safety.insert(index, deadline);
+                    note.phase = "waiting".to_string();
+                    note.effect = format!(
+                        "no vehicle fits this event yet; it fires on the first mobility step \
+                         within {within} s at which one does"
+                    );
+                }
             }
             TimelineKind::AttackWave => {
                 // The wave's window is each named population's schedule (see
@@ -1942,6 +1971,8 @@ impl Engine {
     /// A scripted safety event (`safety.hard-brake`, `safety.breakdown`, `safety.cut-in`):
     /// picks its vehicle and tells the traffic model what the driver does. See
     /// [`crate::safety_events`].
+    ///
+    /// Returns whether it acted on a vehicle (an end always counts as acted).
     fn on_safety_event(
         &mut self,
         item: &crate::scenario::schema::TimelineItem,
@@ -1949,7 +1980,7 @@ impl Engine {
         end: bool,
         now: SimTime,
         note: &mut crate::records::ScenarioEventView,
-    ) {
+    ) -> bool {
         use crate::safety_events as se;
         use crate::scenario::TimelineKind;
         if end {
@@ -1969,15 +2000,17 @@ impl Engine {
                 }
                 note.effect = "the broken-down vehicle is cleared and drives on".to_string();
             } else {
+                // A breakdown still waiting for a vehicle stops waiting at its end.
+                self.timeline.waiting_safety.remove(&index);
                 note.effect = "no vehicle had broken down, so nothing was cleared".to_string();
             }
-            return;
+            return true;
         }
         let target = match se::Pick::parse(item.params.get("target")) {
             Ok(t) => t,
             Err(why) => {
                 note.effect = format!("not applied: {why}");
-                return;
+                return true;
             }
         };
         let purpose = match item.kind {
@@ -1987,7 +2020,7 @@ impl Engine {
                 Ok(side) => se::Purpose::CutIn(side),
                 Err(why) => {
                     note.effect = format!("not applied: {why}");
-                    return;
+                    return true;
                 }
             },
         };
@@ -2010,7 +2043,7 @@ impl Engine {
             note.effect = "no vehicle in the run fits this event at this instant, so nothing \
                            happened"
                 .to_string();
-            return;
+            return false;
         };
         note.node = chosen.node.map(|n| n.index());
         let who = match chosen.node {
@@ -2078,6 +2111,40 @@ impl Engine {
                     "{who} cuts in to the {} lane at {speed:.1} m/s",
                     side.label()
                 );
+            }
+        }
+        true
+    }
+
+    /// Tries again each `safety.*` item still waiting for a vehicle that fits, at the
+    /// state this mobility step publishes; one that fires, or whose wait runs out, writes
+    /// its `scenario.event`.
+    fn retry_waiting_safety(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
+        if self.timeline.waiting_safety.is_empty() {
+            return;
+        }
+        let waiting: Vec<(usize, SimTime)> = self
+            .timeline
+            .waiting_safety
+            .iter()
+            .map(|(i, d)| (*i, *d))
+            .collect();
+        for (index, deadline) in waiting {
+            let Some(item) = self.scenario.events.get(index).cloned() else {
+                self.timeline.waiting_safety.remove(&index);
+                continue;
+            };
+            let mut note = crate::records::ScenarioEventView::new(now, index, item.kind, false);
+            if self.on_safety_event(&item, index, false, now, &mut note) {
+                self.timeline.waiting_safety.remove(&index);
+                self.emit(recorder, &crate::records::ScenarioEvent(note));
+            } else if now >= deadline {
+                self.timeline.waiting_safety.remove(&index);
+                note.phase = "expired".to_string();
+                note.effect = "no vehicle fit this event before its wait ran out, so nothing \
+                               happened"
+                    .to_string();
+                self.emit(recorder, &crate::records::ScenarioEvent(note));
             }
         }
     }
@@ -2160,6 +2227,7 @@ impl Engine {
         // of which carries `k.t == now`.
         self.publish_state_at(recorder);
         self.emit_snapshot(recorder, now)?;
+        self.retry_waiting_safety(recorder, now);
         // The transmit bit is "since the last mobility step", so the window closes with
         // the frame that reports it.
         self.transmitted_since_step.clear();

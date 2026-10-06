@@ -208,7 +208,11 @@ fn event_nodes(recorder: &MemoryRecorder, kind: &str) -> Vec<(u64, Option<u64>, 
         .filter(|(_, r)| r.channel == "scenario.event")
         .filter_map(|(_, r)| {
             let v: serde_json::Value = serde_json::from_slice(&r.json).ok()?;
-            (v.get("kind")?.as_str()? == kind).then(|| {
+            // The record that acted: an `"auto"` item that waited for a vehicle wrote a
+            // `waiting` record first.
+            (v.get("kind")?.as_str()? == kind
+                && v.get("phase")?.as_str()? != "waiting")
+                .then(|| {
                 (
                     v.get("t").and_then(serde_json::Value::as_u64).unwrap_or(0),
                     v.get("node").and_then(serde_json::Value::as_u64),
