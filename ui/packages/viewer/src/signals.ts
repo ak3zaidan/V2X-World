@@ -45,6 +45,17 @@
  * from a mast arm that runs out from a pole on the kerb to the right of the approach (the usual
  * US overhead mounting, MUTCD §4D.15 — bottom of the housing at least 15 ft above the road).
  * Heads of one approach share a pole. A pedestrian head stands on its own post at the kerb.
+ *
+ * ## Lens shapes
+ *
+ * A head over a lane that only turns (left, or left and U-turn; or right) and whose signal group is
+ * not the group of a through lane on the same approach is a separate turn signal face, and its
+ * lenses are arrows pointing the way the lane turns: a steady red arrow, a yellow arrow and a green
+ * arrow (MUTCD 2009 §4D.06 and §4D.20). When such a face's group is in a permissive state (J2735
+ * `permissive-Movement-Allowed`) it shows the flashing yellow arrow, which is how a separate face
+ * says "turn, but yield" (§4D.18 and §4D.20); a circular green is never shown in an arrow-only
+ * face. Every other head has round lenses. A pedestrian head's sections are its symbols, the
+ * UPRAISED HAND and the WALKING PERSON (§4E.04), not discs.
  */
 
 import {
@@ -60,6 +71,7 @@ import {
 import type { SignalBlock, VwpWorld } from "@vwp/protocol";
 import { MeshBuilder, addBox, addCylinder, withUnitVertexColors } from "./geometry.js";
 import type { ViewerTheme } from "./theme.js";
+import { MOVE, laneMovements } from "./markings.js";
 
 /**
  * The stream id of one signal group's row: `(controller + 1) · 65536 + group` (vwp-v1 §3.3.3,
@@ -102,6 +114,18 @@ export function aspectOf(phase: number): SignalAspect {
     default: return { lamps: 0, flashing: false, name: "no-data" };
   }
 }
+
+/**
+ * The flashing yellow arrow: what a separate turn face shows for a permissive movement (MUTCD 2009
+ * §4D.18, §4D.20).
+ */
+const FLASHING_YELLOW_ARROW: SignalAspect = { lamps: AMBER, flashing: true, name: "amber-flashing" };
+
+/** A lens's shape. */
+export const LENS = { BALL: 0, LEFT_ARROW: 1, RIGHT_ARROW: 2, HAND: 3, WALKER: 4 } as const;
+const LENS_SHAPES = 5;
+/** "No lens here" in the per-lamp shape table (the hidden middle slot of a pedestrian head). */
+const NO_LENS = 0xff;
 
 /** One head's state, as {@link SignalRenderer.headState} reports it. */
 export interface SignalHeadState {
@@ -151,7 +175,13 @@ export class SignalRenderer {
   readonly group = new Group();
 
   #housing: InstancedMesh<BufferGeometry, Material> | null = null;
-  #lamps: InstancedMesh<BufferGeometry, Material> | null = null;
+  /** One instanced mesh per lens shape ({@link LENS}); null where no lamp has that shape. */
+  #lampMeshes: (InstancedMesh<BufferGeometry, Material> | null)[] = [];
+  /** Per lamp `i * 3 + k`: its shape ({@link LENS}, or {@link NO_LENS}) and its slot in that mesh. */
+  #lampShape = new Uint8Array(0);
+  #lampSlot = new Uint32Array(0);
+  /** 1 for a separate turn face (arrow lenses). */
+  #arrowFace = new Uint8Array(0);
   #bars: InstancedMesh<BufferGeometry, Material> | null = null;
   #poles: InstancedMesh<BufferGeometry, Material> | null = null;
   #arms: InstancedMesh<BufferGeometry, Material> | null = null;
@@ -228,6 +258,9 @@ export class SignalRenderer {
     this.#ttc = new Uint16Array(n).fill(0xffff);
     this.#hasBar = new Uint8Array(n);
     this.#pedestrian = new Uint8Array(n);
+    this.#arrowFace = new Uint8Array(n);
+    this.#lampShape = new Uint8Array(n * 3).fill(NO_LENS);
+    this.#lampSlot = new Uint32Array(n * 3);
     this.#heads.clear();
     if (n === 0) return;
 
@@ -235,21 +268,45 @@ export class SignalRenderer {
     const laneIndex = new Map<number, number>();
     for (let i = 0; i < world.lanes.count; i++) laneIndex.set(world.lanes.laneId[i], i);
 
+    // Which lens each lamp has: arrows on a separate turn face, symbols on a pedestrian head.
+    const shapes = lensShapes(world, laneIndex);
     const housingGeom = housingGeometry();
-    // Lenses are round discs on the face towards the approach (local −x).
-    const lampGeom = withUnitVertexColors(lensGeometry(LENS_D / 2, 16));
+    // Lenses are flat shapes on the face towards the approach (local −x).
+    const lensGeoms = [
+      withUnitVertexColors(lensGeometry(LENS_D / 2, 16)),
+      withUnitVertexColors(arrowLensGeometry(1)),
+      withUnitVertexColors(arrowLensGeometry(-1)),
+      withUnitVertexColors(handLensGeometry()),
+      withUnitVertexColors(walkerLensGeometry()),
+    ];
     const barGeom = withUnitVertexColors(boxGeometry(1, 1, 0.02));
     const poleGeom = cylinderGeometry();
     const armGeom = boxGeometry(1, 1, 1);
-    this.#geometries.push(housingGeom, lampGeom, barGeom, poleGeom, armGeom);
+    this.#geometries.push(housingGeom, ...lensGeoms, barGeom, poleGeom, armGeom);
 
     const housing = new InstancedMesh<BufferGeometry, Material>(housingGeom, this.#housingMaterial, n);
-    const lamps = new InstancedMesh<BufferGeometry, Material>(lampGeom, this.#lampMaterial, n * 3);
+    // Lamp (i, k) → its shape's mesh and a slot in it.
+    const perShape = new Array<number>(LENS_SHAPES).fill(0);
+    for (let i = 0; i < n; i++) {
+      for (let k = 0; k < 3; k++) {
+        const shape = shapes.lamp[i * 3 + k];
+        this.#lampShape[i * 3 + k] = shape;
+        if (shape === NO_LENS) continue;
+        this.#lampSlot[i * 3 + k] = perShape[shape]++;
+      }
+      this.#arrowFace[i] = shapes.arrowFace[i];
+    }
+    const lampMeshes = perShape.map((count, shape) => {
+      if (count === 0) return null;
+      const mesh = new InstancedMesh<BufferGeometry, Material>(lensGeoms[shape], this.#lampMaterial, count);
+      mesh.name = shape === LENS.BALL ? "world/signal-lamps" : `world/signal-lamps-${LENS_NAMES[shape]}`;
+      return mesh;
+    });
     const bars = new InstancedMesh<BufferGeometry, Material>(barGeom, this.#barMaterial, n);
     housing.name = "world/signal-housings";
-    lamps.name = "world/signal-lamps";
     bars.name = "world/signal-stop-bars";
-    for (const m of [housing, lamps, bars]) {
+    for (const m of [housing, bars, ...lampMeshes]) {
+      if (!m) continue;
       m.castShadow = false;
       m.receiveShadow = false;
     }
@@ -344,18 +401,19 @@ export class SignalRenderer {
       housing.setMatrixAt(i, m);
       for (let k = 0; k < 3; k++) {
         // A pedestrian head has two sections: the hand in the red lamp's slot, the walking
-        // person in the green one's; the amber slot is not drawn.
-        const hidden = ped && k === 1;
+        // person in the green one's; the amber slot has no lens.
+        const shape = this.#lampShape[i * 3 + k];
+        const mesh = shape === NO_LENS ? null : lampMeshes[shape];
+        if (!mesh) continue;
         const dz = ped ? (k === 0 ? 0.5 : -0.5) * PED_LAMP_SPACING : (1 - k) * LAMP_SPACING;
         const fx = -(HOUSING_D / 2 + 0.02);
-        const sc = hidden ? 0 : 1;
         m.set(
-          c * sc, -sn * sc, 0, s.xM + c * fx,
-          sn * sc, c * sc, 0, s.yM + sn * fx,
-          0, 0, sc, s.zM + dz,
+          c, -sn, 0, s.xM + c * fx,
+          sn, c, 0, s.yM + sn * fx,
+          0, 0, 1, s.zM + dz,
           0, 0, 0, 1,
         );
-        lamps.setMatrixAt(i * 3 + k, m);
+        mesh.setMatrixAt(this.#lampSlot[i * 3 + k], m);
       }
       if (bar) {
         // Unit box scaled to the bar: depth along the lane, width across it.
@@ -404,16 +462,18 @@ export class SignalRenderer {
     });
     armMesh.count = arms.length;
     this.poleCount = poleList.length;
-    for (const mesh of [housing, lamps, bars, poles, armMesh]) {
+    for (const mesh of [housing, bars, poles, armMesh, ...lampMeshes]) {
+      if (!mesh) continue;
       mesh.instanceMatrix.needsUpdate = true;
       mesh.computeBoundingSphere();
     }
     this.#housing = housing;
-    this.#lamps = lamps;
+    this.#lampMeshes = lampMeshes;
     this.#bars = bars;
     this.#poles = poles;
     this.#arms = armMesh;
-    this.group.add(housing, lamps, bars, poles, armMesh);
+    this.group.add(housing, bars, poles, armMesh);
+    for (const mesh of lampMeshes) if (mesh) this.group.add(mesh);
     for (let i = 0; i < n; i++) {
       const k = kept.get(i);
       if (k) {
@@ -478,18 +538,41 @@ export class SignalRenderer {
     return {
       signalId: this.#headSignal[i],
       phase: this.#phase[i],
-      aspect: aspectOf(this.#phase[i]),
+      aspect: this.#aspectAt(i),
       timeToChangeDs: this.#ttc[i],
     };
   }
 
   /** The colour actually written for head `i`'s lamp `k` (0 red, 1 amber, 2 green), for tests. */
   lampColor(i: number, k: number): [number, number, number] | null {
-    const lamps = this.#lamps;
-    if (!lamps?.instanceColor || i < 0 || i >= this.#count) return null;
-    const a = lamps.instanceColor.array as Float32Array;
-    const o = (i * 3 + k) * 3;
+    if (i < 0 || i >= this.#count) return null;
+    const shape = this.#lampShape[i * 3 + k];
+    const mesh = shape === NO_LENS ? null : this.#lampMeshes[shape];
+    if (!mesh?.instanceColor) return null;
+    const a = mesh.instanceColor.array as Float32Array;
+    const o = this.#lampSlot[i * 3 + k] * 3;
     return [a[o], a[o + 1], a[o + 2]];
+  }
+
+  /** The shape of head `i`'s lamp `k` ({@link LENS}), or null where it has none. */
+  lensShape(i: number, k: number): number | null {
+    if (i < 0 || i >= this.#count) return null;
+    const shape = this.#lampShape[i * 3 + k];
+    return shape === NO_LENS ? null : shape;
+  }
+
+  /** What head `i` shows: its phase's aspect, or the flashing yellow arrow on a turn face. */
+  #aspectAt(i: number): SignalAspect {
+    const phase = this.#phase[i];
+    // J2735 5 = permissive-Movement-Allowed.
+    if (this.#arrowFace[i] && phase === 5) return FLASHING_YELLOW_ARROW;
+    return aspectOf(phase);
+  }
+
+  #setLamp(i: number, k: number, c: Color): void {
+    const shape = this.#lampShape[i * 3 + k];
+    const mesh = shape === NO_LENS ? null : this.#lampMeshes[shape];
+    if (mesh) mesh.setColorAt(this.#lampSlot[i * 3 + k], c);
   }
 
   /**
@@ -517,14 +600,13 @@ export class SignalRenderer {
   }
 
   #repaint(): void {
-    const lamps = this.#lamps;
     const bars = this.#bars;
-    if (!lamps || !bars) return;
+    if (!bars) return;
     const c = this.#scratch;
     const off = this.#theme.signalDark;
     let flashing = false;
     for (let i = 0; i < this.#count; i++) {
-      const aspect = aspectOf(this.#phase[i]);
+      const aspect = this.#aspectAt(i);
       if (this.#pedestrian[i]) {
         // Walk (movement allowed) lights the walking person; clearance flashes the hand; stop
         // shows it steady (MUTCD §4E.02). The hand is the amber theme colour, the nearest the
@@ -534,12 +616,10 @@ export class SignalRenderer {
         const hand = (aspect.lamps & (RED | AMBER)) !== 0 && !(clearing && !this.#flashOn);
         c.copy(this.#colors.amber);
         if (!hand) c.multiplyScalar(UNLIT);
-        lamps.setColorAt(i * 3, c);
-        c.setHex(off);
-        lamps.setColorAt(i * 3 + 1, c);
+        this.#setLamp(i, 0, c);
         c.setHex(PED_WALK_COLOR);
         if (!(aspect.lamps & GREEN)) c.multiplyScalar(UNLIT);
-        lamps.setColorAt(i * 3 + 2, c);
+        this.#setLamp(i, 2, c);
         c.setHex(off);
         bars.setColorAt(i, c);
         continue;
@@ -551,7 +631,7 @@ export class SignalRenderer {
         const bit = k === 0 ? RED : k === 1 ? AMBER : GREEN;
         c.copy(lampColors[k]);
         if (!(lit & bit)) c.multiplyScalar(UNLIT);
-        lamps.setColorAt(i * 3 + k, c);
+        this.#setLamp(i, k, c);
       }
       // The bar says the same thing on the road. "No data" and "dark" draw no bar at all: a grey
       // bar would read as a state.
@@ -568,17 +648,17 @@ export class SignalRenderer {
       bars.setColorAt(i, c);
     }
     this.#anyFlashing = flashing;
-    if (lamps.instanceColor) lamps.instanceColor.needsUpdate = true;
+    for (const mesh of this.#lampMeshes) if (mesh?.instanceColor) mesh.instanceColor.needsUpdate = true;
     if (bars.instanceColor) bars.instanceColor.needsUpdate = true;
     // Bars with no state are hidden rather than painted grey.
     let anyBar = false;
-    for (let i = 0; i < this.#count; i++) if (this.#hasBar[i] && aspectOf(this.#phase[i]).lamps !== 0) anyBar = true;
+    for (let i = 0; i < this.#count; i++) if (this.#hasBar[i] && this.#aspectAt(i).lamps !== 0) anyBar = true;
     this.#anyBar = anyBar;
     bars.visible = anyBar && this.#barVisibility > 0.02;
   }
 
   clear(): void {
-    for (const mesh of [this.#housing, this.#lamps, this.#bars, this.#poles, this.#arms]) {
+    for (const mesh of [this.#housing, this.#bars, this.#poles, this.#arms, ...this.#lampMeshes]) {
       if (!mesh) continue;
       this.group.remove(mesh);
       mesh.dispose();
@@ -586,7 +666,7 @@ export class SignalRenderer {
     for (const g of this.#geometries) g.dispose();
     this.#geometries = [];
     this.#housing = null;
-    this.#lamps = null;
+    this.#lampMeshes = [];
     this.#bars = null;
     this.#poles = null;
     this.#arms = null;
@@ -657,4 +737,131 @@ function boxGeometry(sx: number, sy: number, sz: number): BufferGeometry {
   const g = b.toGeometry();
   if (!g) throw new Error("signal geometry is empty");
   return g;
+}
+
+const LENS_NAMES = ["ball", "left-arrow", "right-arrow", "hand", "walker"] as const;
+
+/**
+ * Each lamp's lens shape. A pedestrian head: the hand, no middle lens, the walking person. A vehicle
+ * head is a separate turn face (arrows) when its lane only turns one way and its signal group
+ * controls no through lane of the same approach (same controller, same edge); otherwise balls.
+ */
+function lensShapes(world: VwpWorld, laneIndex: Map<number, number>): { lamp: Uint8Array; arrowFace: Uint8Array } {
+  const n = world.signals.count;
+  const lamp = new Uint8Array(n * 3).fill(LENS.BALL);
+  const arrowFace = new Uint8Array(n);
+  const { moves } = laneMovements(world);
+  const key = (signal: number, li: number): string => `${signal}:${world.lanes.edgeId[li]}`;
+  // The groups that control a through movement, per controller and approach edge.
+  const through = new Map<string, Set<number>>();
+  for (let i = 0; i < n; i++) {
+    const s = world.signals.at(i);
+    if (s.kind === 1) continue;
+    const li = laneIndex.get(s.laneId);
+    if (li === undefined || !(moves[li] & MOVE.STRAIGHT)) continue;
+    const k = key(s.signalId, li);
+    let set = through.get(k);
+    if (!set) {
+      set = new Set();
+      through.set(k, set);
+    }
+    set.add(s.group);
+  }
+  for (let i = 0; i < n; i++) {
+    const s = world.signals.at(i);
+    if (s.kind === 1) {
+      lamp[i * 3] = LENS.HAND;
+      lamp[i * 3 + 1] = NO_LENS;
+      lamp[i * 3 + 2] = LENS.WALKER;
+      continue;
+    }
+    const li = laneIndex.get(s.laneId);
+    if (li === undefined) continue;
+    const m = moves[li];
+    const left = (m & MOVE.LEFT) !== 0 && (m & ~(MOVE.LEFT | MOVE.UTURN)) === 0;
+    const right = m === MOVE.RIGHT;
+    if (!left && !right) continue;
+    const groups = through.get(key(s.signalId, li));
+    if (!groups || groups.has(s.group)) continue;
+    arrowFace[i] = 1;
+    lamp.fill(left ? LENS.LEFT_ARROW : LENS.RIGHT_ARROW, i * 3, i * 3 + 3);
+  }
+  return { lamp, arrowFace };
+}
+
+/**
+ * A flat convex polygon on a lens face (the y–z plane, facing −x), as a fan from its first point.
+ * A viewer at −x looking along +x with z up has +y on their left, so a polygon counter-clockwise
+ * in (y, z) is clockwise to them: such a polygon is reversed before it is added.
+ */
+function addFacePolygon(b: MeshBuilder, pts: readonly (readonly [number, number])[]): void {
+  let area = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [y0, z0] = pts[i];
+    const [y1, z1] = pts[(i + 1) % pts.length];
+    area += y0 * z1 - y1 * z0;
+  }
+  const ordered = area > 0 ? [...pts].reverse() : pts;
+  const base = ordered.map(([y, z]) => b.addVertex(0, y, z, -1, 0, 0));
+  for (let i = 1; i + 1 < base.length; i++) b.addTriangle(base[0], base[i], base[i + 1]);
+}
+
+/** A bar on the lens face from `(y0, z0)` to `(y1, z1)`, `w` wide. */
+function addFaceBar(b: MeshBuilder, y0: number, z0: number, y1: number, z1: number, w: number): void {
+  const dy = y1 - y0;
+  const dz = z1 - z0;
+  const len = Math.hypot(dy, dz) || 1;
+  const py = (-dz / len) * (w / 2);
+  const pz = (dy / len) * (w / 2);
+  addFacePolygon(b, [[y0 + py, z0 + pz], [y1 + py, z1 + pz], [y1 - py, z1 - pz], [y0 - py, z0 - pz]]);
+}
+
+function lensFromBuilder(b: MeshBuilder, what: string): BufferGeometry {
+  const g = b.toGeometry();
+  if (!g) throw new Error(`${what} lens geometry is empty`);
+  return g;
+}
+
+/**
+ * An arrow lens (MUTCD 2009 §4D.06): only the arrow is lit, a shaft and a head filling most of a
+ * 12-inch lens. `side` +1 points to the driver's left (local +y: the face looks back along −x at a
+ * driver travelling +x, whose left is +y), −1 to their right.
+ */
+function arrowLensGeometry(side: 1 | -1): BufferGeometry {
+  const b = new MeshBuilder({ vertexCapacity: 16, indexCapacity: 24 });
+  const r = LENS_D / 2;
+  addFaceBar(b, -side * r * 0.75, 0, side * r * 0.1, 0, r * 0.38);
+  addFacePolygon(b, [[side * r * 0.05, r * 0.55], [side * r * 0.8, 0], [side * r * 0.05, -r * 0.55]]);
+  return lensFromBuilder(b, "arrow");
+}
+
+/** The UPRAISED HAND (MUTCD 2009 §4E.04): a palm, four fingers and a thumb, about 0.24 m tall. */
+function handLensGeometry(): BufferGeometry {
+  const b = new MeshBuilder({ vertexCapacity: 32, indexCapacity: 48 });
+  addFacePolygon(b, [[-0.06, -0.12], [0.06, -0.12], [0.065, 0.0], [-0.065, 0.0]]);
+  for (let f = 0; f < 4; f++) {
+    const y = -0.048 + f * 0.032;
+    const top = f === 1 || f === 2 ? 0.11 : 0.085;
+    addFaceBar(b, y, -0.01, y, top, 0.026);
+  }
+  // The thumb, out to the side and up.
+  addFaceBar(b, 0.055, -0.07, 0.1, -0.005, 0.028);
+  return lensFromBuilder(b, "hand");
+}
+
+/** The WALKING PERSON (MUTCD 2009 §4E.04): head, body, arms and legs mid-stride, about 0.26 m tall. */
+function walkerLensGeometry(): BufferGeometry {
+  const b = new MeshBuilder({ vertexCapacity: 48, indexCapacity: 72 });
+  const head: [number, number][] = [];
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    head.push([0.012 + Math.cos(a) * 0.026, 0.1 + Math.sin(a) * 0.026]);
+  }
+  addFacePolygon(b, head);
+  addFaceBar(b, 0.008, 0.065, -0.004, -0.02, 0.04); // body
+  addFaceBar(b, 0.004, 0.05, 0.05, 0.0, 0.022); // forward arm
+  addFaceBar(b, 0.0, 0.05, -0.045, 0.01, 0.022); // back arm
+  addFaceBar(b, -0.004, -0.015, 0.045, -0.12, 0.026); // forward leg
+  addFaceBar(b, -0.004, -0.015, -0.05, -0.12, 0.026); // back leg
+  return lensFromBuilder(b, "walker");
 }

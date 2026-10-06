@@ -85,6 +85,73 @@ function wrap(a: number): number {
   return a - Math.floor(a / (2 * Math.PI) + 0.5) * 2 * Math.PI;
 }
 
+/** What {@link laneMovements} finds: per lane index, its movements and the junction it enters. */
+export interface LaneMovements {
+  /** {@link MOVE} bits of the connectors that leave lane `i`'s end; 0 for a lane that is not an approach. */
+  readonly moves: Int32Array;
+  /** The junction id lane `i` enters, or −1. */
+  readonly approachJunction: Int32Array;
+}
+
+/**
+ * The movements each travel lane makes at its end, read from the internal connector lanes that
+ * start where it ends and leave in its direction: left, straight, right or U-turn by the angle
+ * the connector turns through. Shared by the lane-use arrows here and the signal heads' lens
+ * shapes (`signals.ts`), which must agree on what a lane is for.
+ */
+export function laneMovements(world: VwpWorld): LaneMovements {
+  const lanes = world.lanes;
+  const xs = world.lanePoints.x;
+  const ys = world.lanePoints.y;
+  const L = lanes.count;
+  const carries = (t: number): boolean => t === LANE_TYPE.DRIVE || t === LANE_TYPE.BUS;
+  const conStart = new Map<string, number[]>();
+  const key1 = (x: number, y: number): string => `${Math.round(x)},${Math.round(y)}`;
+  for (let i = 0; i < L; i++) {
+    if (lanes.laneType[i] !== LANE_TYPE.INTERNAL || lanes.pointCount[i] < 2) continue;
+    const o = lanes.pointOff[i];
+    const k = key1(xs[o], ys[o]);
+    let list = conStart.get(k);
+    if (!list) {
+      list = [];
+      conStart.set(k, list);
+    }
+    list.push(i);
+  }
+  const moves = new Int32Array(L);
+  const approachJunction = new Int32Array(L).fill(-1);
+  for (let i = 0; i < L; i++) {
+    if (!carries(lanes.laneType[i]) || lanes.pointCount[i] < 2) continue;
+    const o = lanes.pointOff[i];
+    const last = o + lanes.pointCount[i] - 1;
+    const hIn = heading(xs, ys, last - 1, last);
+    const rx = Math.round(xs[last]);
+    const ry = Math.round(ys[last]);
+    let m = 0;
+    for (let ox = -1; ox <= 1; ox++) {
+      for (let oy = -1; oy <= 1; oy++) {
+        for (const c of conStart.get(`${rx + ox},${ry + oy}`) ?? []) {
+          const co = lanes.pointOff[c];
+          const cn = lanes.pointCount[c];
+          if (Math.hypot(xs[co] - xs[last], ys[co] - ys[last]) > 1.2) continue;
+          const h0 = heading(xs, ys, co, co + 1);
+          if (Math.cos(h0 - hIn) < 0.5) continue;
+          const h1 = heading(xs, ys, co + cn - 2, co + cn - 1);
+          const d = wrap(h1 - hIn);
+          if (Math.abs(d) > 2.6) m |= MOVE.UTURN;
+          else if (d > 0.5) m |= MOVE.LEFT;
+          else if (d < -0.5) m |= MOVE.RIGHT;
+          else m |= MOVE.STRAIGHT;
+          const jid = lanes.junctionId[c];
+          if (jid !== 0xffffffff) approachJunction[i] = jid;
+        }
+      }
+    }
+    moves[i] = m;
+  }
+  return { moves, approachJunction };
+}
+
 /**
  * A line `offset` metres left of lane `l`'s centreline, solid or dashed, `LINE_W` wide.
  * `phase` shifts the dash pattern so adjacent lines do not all start at the same point.
@@ -336,57 +403,14 @@ export function buildLaneMarkings(world: VwpWorld, sink: MarkingSink): MarkingRe
   }
 
   // Approach lanes and their movements, from the connectors that start where they end.
-  const conStart = new Map<string, number[]>();
-  const key1 = (x: number, y: number): string => `${Math.round(x)},${Math.round(y)}`;
-  for (let i = 0; i < L; i++) {
-    if (lanes.laneType[i] !== LANE_TYPE.INTERNAL || lanes.pointCount[i] < 2) continue;
-    const o = lanes.pointOff[i];
-    const k = key1(xs[o], ys[o]);
-    let list = conStart.get(k);
-    if (!list) {
-      list = [];
-      conStart.set(k, list);
-    }
-    list.push(i);
-  }
   const junctionControl = new Map<number, number>();
   for (let j = 0; j < world.junctions.count; j++) {
     const jn = world.junctions.at(j);
     junctionControl.set(jn.junctionId, jn.control);
   }
-  const moves = new Int32Array(L);
-  const approachJunction = new Int32Array(L).fill(-1);
+  const { moves, approachJunction } = laneMovements(world);
   let approaches = 0;
-  for (let i = 0; i < L; i++) {
-    if (!carries(lanes.laneType[i]) || lanes.pointCount[i] < 2) continue;
-    const o = lanes.pointOff[i];
-    const last = o + lanes.pointCount[i] - 1;
-    const hIn = heading(xs, ys, last - 1, last);
-    const rx = Math.round(xs[last]);
-    const ry = Math.round(ys[last]);
-    let m = 0;
-    for (let ox = -1; ox <= 1; ox++) {
-      for (let oy = -1; oy <= 1; oy++) {
-        for (const c of conStart.get(`${rx + ox},${ry + oy}`) ?? []) {
-          const co = lanes.pointOff[c];
-          const cn = lanes.pointCount[c];
-          if (Math.hypot(xs[co] - xs[last], ys[co] - ys[last]) > 1.2) continue;
-          const h0 = heading(xs, ys, co, co + 1);
-          if (Math.cos(h0 - hIn) < 0.5) continue;
-          const h1 = heading(xs, ys, co + cn - 2, co + cn - 1);
-          const d = wrap(h1 - hIn);
-          if (Math.abs(d) > 2.6) m |= MOVE.UTURN;
-          else if (d > 0.5) m |= MOVE.LEFT;
-          else if (d < -0.5) m |= MOVE.RIGHT;
-          else m |= MOVE.STRAIGHT;
-          const jid = lanes.junctionId[c];
-          if (jid !== 0xffffffff) approachJunction[i] = jid;
-        }
-      }
-    }
-    moves[i] = m;
-    if (m !== 0) approaches++;
-  }
+  for (let i = 0; i < L; i++) if (moves[i] !== 0) approaches++;
 
   // Stop lines and arrows.
   let stopBars = 0;
