@@ -209,15 +209,19 @@ test("the Backend panel opens under the header, reads at a glance and links to t
   // Click the RA and follow its link to the metrics.
   await page.getByTestId("backend-entity-ra").click();
   await expect(page.getByTestId("backend-side")).toBeVisible();
+  // The link appears once this page holds one of the RA's metrics, which a page that has just
+  // joined a running engine receives at the next metric sample. It used to be optional here, and
+  // when the sample had not arrived yet the test went on with the Backend panel still open, so the
+  // button below closed it instead of opening it (2026-10-06): the link is now waited for.
   const link = page.getByTestId("backend-metrics-link");
-  if ((await link.count()) > 0) {
-    await link.click();
-    await expect(page.getByTestId("panel-metrics")).toBeVisible();
-    await expect(page.getByTestId("plots-strip")).toContainText("Measurements for");
-    await page.keyboard.press("Escape");
-  }
+  await expect(link, "the RA offers no link to its metrics").toBeVisible({ timeout: 60_000 });
+  await link.click();
+  await expect(page.getByTestId("panel-metrics")).toBeVisible();
+  await expect(page.getByTestId("plots-strip")).toContainText("Measurements for");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("panel-metrics")).toBeHidden();
 
-  // Escape closes the panel, as it does the others.
+  // The header's button opens the panel again, and Escape closes it, as it does the others.
   await page.getByTestId("backend-button").click();
   await expect(panel).toBeVisible();
   await page.keyboard.press("Escape");
