@@ -308,20 +308,40 @@ impl Record for WireStep {
 /// the decomposition wants the stages of a run in the order they happened. Lookups group
 /// by [`FlowRun`] with a [`BTreeMap`], never a `HashMap`, so any iteration that reaches a
 /// report is ordered.
+///
+/// Each run's stamps are also indexed by position, so a run's lookup costs its own stamps
+/// and not the whole log: the kernel asks for one run's stages on every backend step, and
+/// over an hour of the credential lifecycle a scan of the whole log on each of those
+/// questions was a growing share of the run's time.
 #[derive(Debug, Clone, Default)]
 pub struct StageLog {
     stamps: Vec<StageStamp>,
+    /// Positions in `stamps` of each run's stamps, in stamping order.
+    by_run: BTreeMap<FlowRun, Vec<usize>>,
 }
 
 impl StageLog {
     /// An empty log.
     pub fn new() -> StageLog {
-        StageLog { stamps: Vec::new() }
+        StageLog::default()
     }
 
     /// Appends a stamp.
     pub fn push(&mut self, stamp: StageStamp) {
+        self.by_run
+            .entry(stamp.run)
+            .or_default()
+            .push(self.stamps.len());
         self.stamps.push(stamp);
+    }
+
+    /// One run's stamps, in stamping order, without collecting them.
+    fn of_run(&self, run: FlowRun) -> impl Iterator<Item = StageStamp> + '_ {
+        self.by_run
+            .get(&run)
+            .into_iter()
+            .flatten()
+            .map(|&k| self.stamps[k])
     }
 
     /// Every stamp, in stamping order.
@@ -331,11 +351,7 @@ impl StageLog {
 
     /// The stamps of one run, in stamping order.
     pub fn run(&self, run: FlowRun) -> Vec<StageStamp> {
-        self.stamps
-            .iter()
-            .copied()
-            .filter(|s| s.run == run)
-            .collect()
+        self.of_run(run).collect()
     }
 
     /// The stage ids of one run, in stamping order.
@@ -362,16 +378,12 @@ impl StageLog {
 
     /// The first time `stage` was stamped in `run`.
     pub fn at(&self, run: FlowRun, stage: StageId) -> Option<SimTime> {
-        self.run(run)
-            .into_iter()
-            .find(|s| s.stage == stage)
-            .map(|s| s.t)
+        self.of_run(run).find(|s| s.stage == stage).map(|s| s.t)
     }
 
     /// The first time `stage` was stamped in `run` at `node`.
     pub fn at_node(&self, run: FlowRun, stage: StageId, node: NodeId) -> Option<SimTime> {
-        self.run(run)
-            .into_iter()
+        self.of_run(run)
             .find(|s| s.stage == stage && s.node == Some(node))
             .map(|s| s.t)
     }
