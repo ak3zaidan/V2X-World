@@ -251,6 +251,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::write(&out, &json)?;
     }
     println!("{}", serde_json::to_string_pretty(&report.stats)?);
+    // What the pedestrians did: crossings by signal state, mid-block crossings, kerb waits.
+    if let Some(vru) = mobility.vru() {
+        let p = vru.stats();
+        let signalised = p.crossings_on_walk + p.crossings_on_flashing + p.crossings_on_dont_walk;
+        println!("pedestrians: {}", serde_json::to_string(&p)?);
+        if signalised > 0 {
+            println!(
+                "  signalised crossings begun on don't-walk (flashing or steady): {:.1} %",
+                100.0 * (p.crossings_on_flashing + p.crossings_on_dont_walk) as f64
+                    / signalised as f64
+            );
+        }
+        let all = signalised + p.crossings_unsignalised + p.midblock_crossings;
+        if all > 0 {
+            println!(
+                "  crossings made mid-block: {:.1} %; mean kerb wait {:.1} s over {} waits",
+                100.0 * p.midblock_crossings as f64 / all as f64,
+                if p.waits > 0 { p.wait_total_s / p.waits as f64 } else { 0.0 },
+                p.waits
+            );
+        }
+    }
     for (k, v) in &report.counts {
         println!("{k:<34} {v}");
     }

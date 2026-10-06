@@ -607,22 +607,9 @@ impl SocialForce {
         route: Vec<LaneId>,
         s_m: f64,
     ) -> Result<()> {
-        let world = ctx.world();
-        let first = *route.first().ok_or(MobError::EmptyWorld {
-            what: "lane in the pedestrian's route",
-        })?;
-        for lane in &route {
-            let l = world
-                .try_lane(*lane)
-                .ok_or(MobError::NoSuchLane { lane: *lane })?;
-            if !Self::is_walkable(world, *lane) {
-                return Err(MobError::LaneNotAdmitted {
-                    lane: *lane,
-                    kind: l.kind.wire_name(),
-                    classes: "pedestrian".to_string(),
-                });
-            }
-        }
+        // A route that is not walkable is refused by `spawn_with`, before anything is
+        // drawn.
+        Self::check_route(ctx.world(), &route)?;
         let (traits, desired) = if self.params.speed_law == SpeedLaw::Helbing1995
             && self.params.red_crossing_share <= 0.0
             && self.params.startup_median_s <= 0.0
@@ -664,21 +651,7 @@ impl SocialForce {
         group: Option<u32>,
     ) -> Result<()> {
         let world = ctx.world();
-        let first = *route.first().ok_or(MobError::EmptyWorld {
-            what: "lane in the pedestrian's route",
-        })?;
-        for lane in &route {
-            let l = world
-                .try_lane(*lane)
-                .ok_or(MobError::NoSuchLane { lane: *lane })?;
-            if !Self::is_walkable(world, *lane) {
-                return Err(MobError::LaneNotAdmitted {
-                    lane: *lane,
-                    kind: l.kind.wire_name(),
-                    classes: "pedestrian".to_string(),
-                });
-            }
-        }
+        let first = Self::check_route(world, &route)?;
         let half = (0.5 * world.lane(first).width_m
             - 0.5 * VehicleClass::Pedestrian.spec().width_m)
             .max(0.0);
@@ -709,6 +682,26 @@ impl SocialForce {
             p.lateral_m = lateral_m.clamp(-half, half);
         }
         Ok(())
+    }
+
+    /// The route's first lane, if every lane of it is walkable.
+    fn check_route(world: &World, route: &[LaneId]) -> Result<LaneId> {
+        let first = *route.first().ok_or(MobError::EmptyWorld {
+            what: "lane in the pedestrian's route",
+        })?;
+        for lane in route {
+            let l = world
+                .try_lane(*lane)
+                .ok_or(MobError::NoSuchLane { lane: *lane })?;
+            if !Self::is_walkable(world, *lane) {
+                return Err(MobError::LaneNotAdmitted {
+                    lane: *lane,
+                    kind: l.kind.wire_name(),
+                    classes: "pedestrian".to_string(),
+                });
+            }
+        }
+        Ok(first)
     }
 
     /// Removes a pedestrian.
@@ -961,8 +954,9 @@ impl VruMobility for SocialForce {
                             let along = math::cos(far.heading_at(site.far_s_m) - heading);
                             let shift = site.width_m * math::tan(theta)
                                 * if along >= 0.0 { 1.0 } else { -1.0 };
-                            let far_s = (site.far_s_m + shift)
-                                .clamp(1.0_f64.min(far.length_m), (far.length_m - 1.0).max(0.0));
+                            let lo = 1.0_f64.min(0.5 * far.length_m);
+                            let hi = (far.length_m - 1.0).max(lo);
+                            let far_s = (site.far_s_m + shift).clamp(lo, hi);
                             midblock = Some(Midblock {
                                 at_s_m: site.s_m,
                                 far_lane: site.far_lane,
@@ -1589,6 +1583,84 @@ pub fn card(params: &SocialForceParams) -> ModelCard {
                  numerically zero",
             ),
         ),
+        Parameter::new(
+            "speed_law",
+            "-",
+            serde_json::json!(params.speed_law),
+            Source::new(
+                SourceKind::Paper,
+                "Knoblauch, Pietrucha & Nitzburg, Field studies of pedestrian walking speed \
+                 and start-up time, TRR 1538 (1996): means 4.95 / 4.11 ft/s, 15th \
+                 percentiles 4.09 / 3.19 ft/s for pedestrians under 65 / 65 and over; σ \
+                 derived assuming normality",
+            ),
+        ),
+        Parameter::new(
+            "older_share",
+            "1",
+            serde_json::json!(params.older_share),
+            Source::new(
+                SourceKind::Code,
+                "a choice near New York City's share of residents 65 and over (about one in \
+                 six); no age count of Midtown's sidewalks was read",
+            ),
+        ),
+        Parameter::new(
+            "red_crossing_share",
+            "1",
+            serde_json::json!(params.red_crossing_share),
+            Source::new(
+                SourceKind::Paper,
+                "calibrated against Basch, Ethan, Zybert & Basch, Pedestrian behavior at five \
+                 dangerous and busy Manhattan intersections, J. Community Health 40:789 \
+                 (2015): of 21,760 pedestrians, about 2,319 crossings (10.6 %) began on \
+                 don't-walk",
+            ),
+        ),
+        Parameter::new(
+            "startup_median_s",
+            "s",
+            serde_json::json!(params.startup_median_s),
+            Source::new(
+                SourceKind::Code,
+                "a choice below the HCM's 3.2 s pedestrian platoon start-up time; Knoblauch \
+                 et al. 1996 measured start-up time but their values could not be read",
+            ),
+        ),
+        Parameter::new(
+            "gap_margin_s",
+            "s",
+            serde_json::json!(params.gap_margin_s),
+            Source::new(
+                SourceKind::Standard,
+                "HCM pedestrian critical headway t_c = L/S_p + t_s (two-way stop-controlled \
+                 pedestrian mode); t_s, the start-up and end clearance time, is to be \
+                 measured locally and is not re-verified here",
+            ),
+        ),
+        Parameter::new(
+            "group_shares",
+            "1",
+            serde_json::json!(params.group_shares),
+            Source::new(
+                SourceKind::Paper,
+                "Moussaïd, Perozo, Garnier, Helbing & Theraulaz, The walking behaviour of \
+                 pedestrian social groups and its impact on crowd dynamics, PLoS ONE \
+                 5:e10047 (2010): more than half of pedestrians walk in groups on a \
+                 workday; the per-size split is a choice matching that share",
+            ),
+        ),
+        Parameter::new(
+            "midblock",
+            "-",
+            serde_json::json!(params.midblock),
+            Source::new(
+                SourceKind::Code,
+                "crate::vru::midblock: the rate, the stopped-traffic factor and the driver \
+                 yield probability are choices; the gap rule is the HCM critical headway, \
+                 lane by lane",
+            ),
+        ),
         Parameter {
             name: "fluctuation".to_string(),
             unit: "m/s²".to_string(),
@@ -1621,16 +1693,33 @@ pub fn card(params: &SocialForceParams) -> ModelCard {
          vru::crosswalk). One already on a crossing walks on. The wait is a desired speed \
          that falls to zero over the last 2 m, and the kerb is a hard stop."
             .to_string(),
-        "Crossing against the signal (`jaywalk_probability`) is off by default. It is \
-         drawn once per pedestrian per crosswalk and still requires no vehicle hazard; \
-         mid-block crossing away from a crosswalk is not modelled."
+        "Crossing against the signal: the legacy switch `jaywalk_probability` (off by \
+         default) draws once per pedestrian per crosswalk; the observed behaviour instead \
+         makes `red_crossing_share` of pedestrians violators, who start on flashing or \
+         steady don't-walk only into a gap the HCM critical headway t_c = L/S_p + t_s \
+         accepts (L the crosswalk, S_p their own speed). Either still requires no vehicle \
+         hazard."
+            .to_string(),
+        "Mid-block crossing (crate::vru::midblock): a constant hazard per metre of eligible \
+         sidewalk walked, raised beside stopped traffic; straight or diagonal; the \
+         pedestrian waits at the kerb for a lane-by-lane (rolling) gap and walks a straight \
+         path to the far sidewalk, off every lane."
+            .to_string(),
+        "Groups (observed behaviour): a group shares one walk, starts side by side, walks \
+         at its slowest member's pace and takes its leader's compliance; a follower crosses \
+         mid-block where its leader does."
             .to_string(),
         "Every pedestrian reads the start-of-step positions of the others and of the \
          vehicles, so the update is the same Jacobi update the vehicles use."
             .to_string(),
     ];
     card.limitations = vec![
-        "No group behaviour and no jam state (§2.5 ignores both).".to_string(),
+        "No jam state (§2.5 ignores it). A group is held together only by its shared walk \
+         and pace, not by an attraction term."
+            .to_string(),
+        "A pedestrian crossing mid-block walks a straight line at its desired speed and does \
+         not stop or run in the carriageway; the vehicles stop for it."
+            .to_string(),
         "The attraction term of the 1995 model (shop windows, companions) is not \
          implemented: it is optional in the paper and has no cited parameters."
             .to_string(),
@@ -1647,6 +1736,8 @@ pub fn card(params: &SocialForceParams) -> ModelCard {
             RngDomain::DesiredSpeed.as_str().to_string(),
             RngDomain::plugin(MODEL_ID).as_str().to_string(),
             RngDomain::plugin(JAYWALK_ID).as_str().to_string(),
+            RngDomain::plugin(TRAITS_ID).as_str().to_string(),
+            RngDomain::plugin(MIDBLOCK_ID).as_str().to_string(),
         ],
     };
     card.validation = Validation {
@@ -1901,18 +1992,22 @@ mod tests {
             CrossingPermit {
                 signal: None,
                 hazard: true,
+                ..CrossingPermit::default()
             },
             CrossingPermit {
                 signal: Some(SignalState::Green),
                 hazard: true,
+                ..CrossingPermit::default()
             },
             CrossingPermit {
                 signal: Some(SignalState::Red),
                 hazard: false,
+                ..CrossingPermit::default()
             },
             CrossingPermit {
                 signal: Some(SignalState::Amber),
                 hazard: false,
+                ..CrossingPermit::default()
             },
         ] {
             let (m, w, cycle) = walk_to_kerb(SocialForceParams::default(), permit, 90.0, 0, 200);
@@ -1934,6 +2029,7 @@ mod tests {
             CrossingPermit {
                 signal: Some(SignalState::Green),
                 hazard: false,
+                ..CrossingPermit::default()
             },
             90.0,
             0,
@@ -1953,6 +2049,7 @@ mod tests {
             CrossingPermit {
                 signal: Some(SignalState::Red),
                 hazard: true,
+                ..CrossingPermit::default()
             },
             2.0,
             1,
@@ -1975,6 +2072,7 @@ mod tests {
         let red = CrossingPermit {
             signal: Some(SignalState::Red),
             hazard: false,
+            ..CrossingPermit::default()
         };
         let (m, _, cycle) = walk_to_kerb(reckless, red, 90.0, 0, 200);
         assert_ne!(m.get(ActorId::new(1)).unwrap().lane, cycle[0]);
@@ -1983,6 +2081,7 @@ mod tests {
             CrossingPermit {
                 signal: Some(SignalState::Red),
                 hazard: true,
+                ..CrossingPermit::default()
             },
             90.0,
             0,
@@ -2017,6 +2116,120 @@ mod tests {
         }
     }
 
+    /// Spawns one pedestrian with the given traits and speed 90 m along the first quarter
+    /// of the kerb ring, and returns the model and the world.
+    fn kerb_with(traits: PedestrianTraits, speed: f64) -> (SocialForce, World, Vec<LaneId>, RngRegistry) {
+        let (w, cycle) = kerb_ring();
+        let rng = RngRegistry::new(5);
+        let mut m = SocialForce::new(SocialForceParams::observed());
+        {
+            let mut ctx = MobilityCtx::new(0, &w, &rng);
+            m.spawn_with(&mut ctx, ActorId::new(1), cycle.clone(), 90.0, 0.0, traits, speed, None)
+                .expect("spawned");
+        }
+        (m, w, cycle, rng)
+    }
+
+    fn steps(m: &mut SocialForce, w: &World, rng: &RngRegistry, from: u64, n: u64) {
+        let empty = ActorSnapshot::new(0, 50.0);
+        for k in from..from + n {
+            let mut ctx = MobilityCtx::new(k * 100 * NS_PER_MS, w, rng);
+            m.step(&mut ctx, Duration::from_millis(100), &empty);
+        }
+    }
+
+    /// Knoblauch et al. 1996: pedestrians under 65 walk at 1.51 m/s on average, those 65
+    /// and over at 1.25 m/s; the observed preset draws 15 % older walkers.
+    #[test]
+    fn observed_walking_speeds_follow_the_age_groups() {
+        let (w, _) = pavement_ring();
+        let rng = RngRegistry::new(11);
+        let m = SocialForce::new(SocialForceParams::observed());
+        let ctx = MobilityCtx::new(0, &w, &rng);
+        let (mut young, mut old) = (Vec::new(), Vec::new());
+        for a in 0..6000u32 {
+            let (t, v) = m.draw_traits(&ctx, ActorId::new(a));
+            if t.older { old.push(v) } else { young.push(v) }
+        }
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        let share = old.len() as f64 / 6000.0;
+        assert!((share - 0.15).abs() < 0.015, "older share {share}");
+        assert!((mean(&young) - 1.51).abs() < 0.02, "younger mean {}", mean(&young));
+        assert!((mean(&old) - 1.25).abs() < 0.03, "older mean {}", mean(&old));
+        // The MUTCD clearance speed (1.07 m/s) is below most of either group.
+        let below = young.iter().filter(|v| **v < 1.0668).count() as f64 / young.len() as f64;
+        assert!(below < 0.1, "{below}");
+    }
+
+    /// A violator steps off on don't-walk into a gap the HCM critical headway accepts —
+    /// and not into one it does not, though no vehicle is close enough to be a hazard.
+    #[test]
+    fn a_violator_crosses_on_dont_walk_only_into_a_gap() {
+        let traits = PedestrianTraits {
+            older: false,
+            violator: true,
+            startup_s: 0.0,
+            gap_margin_s: 2.0,
+        };
+        let red = |tta: f64| CrossingPermit {
+            signal: Some(SignalState::Red),
+            hazard: false,
+            min_tta_s: tta,
+            length_m: 10.0,
+        };
+        // t_c = 10 m / 1.4 m/s + 2 s = 9.1 s.
+        for (tta, crosses) in [(f64::INFINITY, true), (12.0, true), (5.0, false)] {
+            let (mut m, w, cycle, rng) = kerb_with(traits, 1.4);
+            m.set_crossing_permits([(cycle[1], red(tta))].into_iter().collect());
+            steps(&mut m, &w, &rng, 0, 200);
+            let p = m.get(ActorId::new(1)).unwrap();
+            assert_eq!(p.lane != cycle[0], crosses, "tta {tta}: lane {:?}", p.lane);
+            if crosses {
+                assert_eq!(p.activity, PedActivity::CrossingAgainstSignal);
+            } else {
+                assert_eq!(p.activity, PedActivity::WaitingAtKerb);
+            }
+        }
+        // A compliant pedestrian waits whatever the gap.
+        let (mut m, w, cycle, rng) = kerb_with(PedestrianTraits { violator: false, ..traits }, 1.4);
+        m.set_crossing_permits([(cycle[1], red(f64::INFINITY))].into_iter().collect());
+        steps(&mut m, &w, &rng, 0, 200);
+        assert_eq!(m.get(ActorId::new(1)).unwrap().lane, cycle[0]);
+        assert_eq!(m.stats().crossings_on_dont_walk, 0);
+    }
+
+    /// One who waited at the kerb steps off its start-up time after walk comes on.
+    #[test]
+    fn a_waiting_pedestrian_steps_off_after_its_start_up_time() {
+        let traits = PedestrianTraits {
+            older: false,
+            violator: false,
+            startup_s: 2.5,
+            gap_margin_s: 2.0,
+        };
+        let (mut m, w, cycle, rng) = kerb_with(traits, 1.4);
+        let permit = |s| CrossingPermit {
+            signal: Some(s),
+            ..CrossingPermit::default()
+        };
+        m.set_crossing_permits([(cycle[1], permit(SignalState::Red))].into_iter().collect());
+        steps(&mut m, &w, &rng, 0, 150);
+        assert!(m.get(ActorId::new(1)).unwrap().waiting_since.is_some());
+        m.set_crossing_permits([(cycle[1], permit(SignalState::Green))].into_iter().collect());
+        let mut stepped = None;
+        for k in 150..250u64 {
+            steps(&mut m, &w, &rng, k, 1);
+            if stepped.is_none() && m.get(ActorId::new(1)).unwrap().lane != cycle[0] {
+                stepped = Some(k - 150);
+            }
+        }
+        let stepped = stepped.expect("it crossed");
+        // 25 steps of start-up, give or take the step it notices walk on.
+        assert!((24..=27).contains(&stepped), "stepped off after {stepped} steps");
+        assert_eq!(m.stats().crossings_on_walk, 1);
+        assert_eq!(m.stats().waits, 1);
+    }
+
     /// A pedestrian who has waited `max_wait_s` at one kerb gives the walk up.
     #[test]
     fn a_pedestrian_gives_up_after_the_longest_wait() {
@@ -2027,6 +2240,7 @@ mod tests {
         let red = CrossingPermit {
             signal: Some(SignalState::Red),
             hazard: false,
+            ..CrossingPermit::default()
         };
         let (m, _, _) = walk_to_kerb(impatient, red, 95.0, 0, 150);
         assert!(m.get(ActorId::new(1)).unwrap().arrived);

@@ -393,6 +393,9 @@ pub struct PedestrianSignalReport {
     /// Crosswalks that cut a signalised junction's movements but have no window at all:
     /// they show don't-walk throughout.
     pub never_walk: u32,
+    /// Turning movements given a permissive green (turn, yielding to pedestrians) in the
+    /// phases where they alone kept a crosswalk from ever showing walk.
+    pub turns_made_permissive: u32,
 }
 
 /// One pedestrian interval inside a cycle: `[start, end)` seconds from the cycle start
@@ -402,8 +405,11 @@ type Interval = (f64, f64, SignalState);
 /// Gives every signalised junction's crosswalks their pedestrian intervals.
 ///
 /// `junction_position` places a junction, to settle a crosswalk that two neighbouring
-/// plans both reach: it goes to the nearer junction. Vehicle states are never changed;
-/// phases are split where a pedestrian interval starts or ends, and each crossing lane is
+/// plans both reach: it goes to the nearer junction. Vehicle states are changed in one case
+/// only: a crosswalk that no phase would let show walk, blocked in some phase by turning
+/// movements on a protected green alone, gets those turns made permissive there
+/// ([`PedestrianSignalReport::turns_made_permissive`]). Otherwise phases are split where a
+/// pedestrian interval starts or ends, and each crossing lane is
 /// appended to [`SignalPlan::controlled`] with a [`SignalHeadKind::Pedestrian`] head at
 /// its far end.
 pub fn signalise_crossings(
@@ -486,26 +492,70 @@ pub fn signalise_crossings(
         if mine.is_empty() || plan.phases.is_empty() {
             continue;
         }
-        let turn_of = |mi: usize| -> TurnDirection {
-            movement
-                .get(&plan.controlled[mi])
-                .map_or(TurnDirection::Straight, |m| m.2)
-        };
-        let mut added: Vec<(Vec<LaneId>, Vec<Interval>)> = Vec::new();
-        for (k, cutters) in &mine {
-            let blocked: Vec<bool> = plan
-                .phases
+        let turns: Vec<TurnDirection> = (0..plan.controlled.len())
+            .map(|mi| {
+                movement
+                    .get(&plan.controlled[mi])
+                    .map_or(TurnDirection::Straight, |m| m.2)
+            })
+            .collect();
+        let blocked_of = |plan: &SignalPlan, cutters: &[usize]| -> Vec<bool> {
+            plan.phases
                 .iter()
                 .map(|p| {
                     cutters
                         .iter()
-                        .any(|mi| blocks_walk(p.states[*mi], turn_of(*mi)))
+                        .any(|mi| blocks_walk(p.states[*mi], turns[*mi]))
                 })
-                .collect();
+                .collect()
+        };
+        let mut added: Vec<(Vec<LaneId>, Vec<Interval>)> = Vec::new();
+        for (k, cutters) in &mine {
+            let mut blocked = blocked_of(plan, cutters);
             if blocked.iter().all(|b| !*b) {
                 // Nothing that cuts it ever has a protected indication: an unsignalised
                 // crosswalk inside a signalised junction, where turning traffic yields.
                 continue;
+            }
+            let mut intervals = if blocked.iter().all(|b| *b) {
+                Vec::new()
+            } else {
+                walk_intervals(plan, &blocked, walks[*k].length_m, timing).0
+            };
+            if intervals.is_empty() {
+                // No window for a walk: a crosswalk every phase blocks. Where only
+                // turning movements on a protected green block it in some phase — a left
+                // turn from a one-way street onto a one-way avenue, which crosses no
+                // opposing traffic and so got a full green — those turns become
+                // permissive there: they turn yielding to pedestrians in the crosswalk
+                // (UVC §11-202(a)1, MUTCD §4E.06 concurrent phasing), and the crosswalk
+                // shows walk beside them. A through movement is never made to yield.
+                let mut changed = 0u32;
+                for (pi, phase) in plan.phases.iter_mut().enumerate() {
+                    if !blocked[pi] {
+                        continue;
+                    }
+                    let only_turns = cutters.iter().all(|mi| {
+                        !blocks_walk(phase.states[*mi], turns[*mi])
+                            || (phase.states[*mi] == SignalState::Green
+                                && turns[*mi] != TurnDirection::Straight)
+                    });
+                    if !only_turns {
+                        continue;
+                    }
+                    for mi in cutters {
+                        if phase.states[*mi] == SignalState::Green
+                            && turns[*mi] != TurnDirection::Straight
+                        {
+                            phase.states[*mi] = SignalState::GreenYield;
+                            changed += 1;
+                        }
+                    }
+                }
+                if changed > 0 {
+                    report.turns_made_permissive += changed;
+                    blocked = blocked_of(plan, cutters);
+                }
             }
             let intervals = if blocked.iter().all(|b| *b) {
                 report.never_walk += 1;
@@ -520,6 +570,7 @@ pub fn signalise_crossings(
                     report.signalised -= 1;
                     report.never_walk += 1;
                 }
+                intervals.clear();
                 iv
             };
             added.push((walks[*k].lanes.clone(), intervals));

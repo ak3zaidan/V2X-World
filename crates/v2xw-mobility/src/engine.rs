@@ -1877,10 +1877,12 @@ impl NativeMobility {
                     false
                 } else if b.enter_m <= 0.0 {
                     true
+                } else if yields && a.speed_mps < 1.0 && b.enter_m > 0.5 {
+                    // A driver who chose to yield has stopped (or all but) short of the
+                    // path, where the yield rule holds them while the pedestrian crosses.
+                    true
                 } else if b.enter_m <= crate::vru::crosswalk::stopping_distance_m(a.speed_mps) {
                     false
-                } else if yields && a.speed_mps < 1.0 {
-                    true
                 } else if a.speed_mps <= crate::vru::crosswalk::APPROACHING_MPS {
                     true
                 } else {
@@ -1890,7 +1892,7 @@ impl NativeMobility {
                     let tta = b.enter_m / a.speed_mps;
                     let clears = tta > d_far / v + t_s;
                     let passes = (b.exit_m + length) / a.speed_mps + t_s.min(1.0)
-                        < (d_near - 0.5).max(0.0) / v;
+                        < (d_near - MIDBLOCK_LOOKAHEAD_M).max(0.0) / v;
                     clears || passes
                 };
                 let _ = band;
@@ -1899,10 +1901,15 @@ impl NativeMobility {
                 }
             }
         }
-        // Forget the drivers who have passed, and the pedestrians who have crossed.
-        let live: BTreeSet<ActorId> = midblock.waiting.iter().copied().collect();
-        self.midblock_yields
-            .retain(|(ped, veh), _| live.contains(ped) && seen.contains(&(*ped, *veh)));
+        // Forget the drivers who have passed, and the pedestrians who have crossed; a
+        // driver who yielded is remembered until the pedestrian is across.
+        self.midblock_yields.retain(|(ped, veh), yields| {
+            match midblock.progress.get(ped) {
+                None => false,
+                Some(None) => seen.contains(&(*ped, *veh)),
+                Some(Some(_)) => *yields,
+            }
+        });
         go
     }
 
@@ -4062,11 +4069,16 @@ struct MidblockBands {
     occupied: BTreeSet<usize>,
     /// The pedestrians waiting at the kerb for a gap.
     waiting: Vec<ActorId>,
+    /// Every pedestrian with a path in use, and how far along it they are (`None` while
+    /// waiting at the kerb).
+    progress: BTreeMap<ActorId, Option<f64>>,
 }
 
-/// How far ahead of a crossing pedestrian a lane counts as occupied, metres: about two
-/// seconds of walking, so a driver is stopping before the pedestrian reaches the lane.
-const MIDBLOCK_LOOKAHEAD_M: f64 = 3.0;
+/// How far ahead of a crossing pedestrian a lane counts as occupied, metres: about a
+/// second and a half of walking, so a driver is stopping before the pedestrian reaches the
+/// lane. The rolling-gap test lets a vehicle go first only if its rear is past before the
+/// pedestrian is this close, so no driver it let through meets the lane occupied.
+const MIDBLOCK_LOOKAHEAD_M: f64 = 2.0;
 
 impl MidblockBands {
     fn of(vru: Option<&SocialForce>) -> Self {
@@ -4081,6 +4093,7 @@ impl MidblockBands {
                 }
                 crate::vru::social_force::MidblockStage::Approaching => continue,
             };
+            out.progress.insert(ped, progress);
             for (i, b) in m.bands.iter().enumerate() {
                 let id = crate::vru::midblock::DYNAMIC_BASE + ped.as_usize() * 16 + i.min(15);
                 let mut c = b.conflict;
@@ -4120,7 +4133,16 @@ impl MidblockBands {
                 b.enter_m > 0.0
                     && (self.occupied.contains(&b.crosswalk)
                         || self.owner.get(&b.crosswalk).is_some_and(|(ped, _)| {
+                            // A driver who yielded holds until the pedestrian is past
+                            // their lane.
+                            let (_, d_far) = self.reach[&b.crosswalk];
                             yields.get(&(*ped, vehicle)).copied() == Some(true)
+                                && self
+                                    .progress
+                                    .get(ped)
+                                    .copied()
+                                    .flatten()
+                                    .is_none_or(|d| d <= d_far + 0.5)
                         }))
             })
             .map(|b| (b.enter_m - crate::vru::crosswalk::STOP_BEFORE_CROSSWALK_M).max(0.0))

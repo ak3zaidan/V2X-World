@@ -649,7 +649,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "The fleet mix: each vehicle's class is drawn with these shares, and its \
                size, driver, hardware profile and CAM station type follow from the class. \
-               Only motorised classes; cyclists and pedestrians are actors.vru.",
+               Only motorised classes; cyclists and pedestrians are actors.vru. A \
+               'motorcycle' or 'moped' rides as one: its own acceleration and braking, \
+               junction turns within a 25° lean, the left tyre track of its lane; it \
+               queues behind stopped traffic, because every jurisdiction with rules here \
+               (New York VTL §1252(c) among them) prohibits filtering between lanes.",
     },
     KeyStatus {
         path: "actors.vru",
