@@ -9,6 +9,8 @@
 //!   itself refuses scripted access, so the values were read on 2026-09-30 from Wireshark's
 //!   transcription of it (`epan/dissectors/asn1/ieee1609dot2/IEEE1609dot12.asn`, whose first
 //!   line cites that URL). Every value below is on that list with the owner named there.
+//!   Re-checked 2026-10-06 against the same file fetched again (114 lines): every value
+//!   in the table matched, and the ETSI misbehaviour report's ITS-AID was corrected.
 //! * **BTP ports.** ETSI TS 103 248's well-known ports, read on 2026-09-30 from Wireshark's
 //!   ITS dissector (`epan/dissectors/asn1/its/packet-its-template.c`, `ITS_WKP_*`).
 //!
@@ -28,7 +30,8 @@
 //! | SSEM | EU | 637 | traffic-light-control-status-service | 2008 |
 //! | CPM | EU | 639 | collective-perception-service (TS 103 324) | 2009 |
 //! | VAM | EU | 638 | vru-awareness-basic-service (TS 103 300-3) | 2018 |
-//! | misbehaviour report | both | 38 | misbehavior-reporting-for-common-applications (CAMP) | — |
+//! | misbehaviour report | US | 38 | misbehavior-reporting-for-common-applications (CAMP) | — |
+//! | misbehaviour report | EU | 1618 | mr-service (ETSI TS 103 759) | — |
 //! | CRL | both | 256 | certificate-revocation-list-application | 2015 |
 //!
 //! **MAP.** The registry also lists `map-distribution` (2113687, `0x204097`); US
@@ -74,6 +77,10 @@ pub const ITS_AID_VAM: u64 = 638;
 pub const ITS_AID_CPM: u64 = 639;
 /// Misbehaviour reporting: `psid-misbehavior-reporting-for-common-applications` (38).
 pub const PSID_MISBEHAVIOUR_REPORT: u64 = 38;
+/// ETSI misbehaviour reporting: `psid-mr-service` (1618), the ITS-AID ETSI TS 103 759
+/// registered for its MR service. Before 2026-10-06 the European stack sent its reports
+/// under CAMP's 38, which the registry assigns to the US common-applications reporting.
+pub const ITS_AID_MISBEHAVIOUR_REPORT: u64 = 1_618;
 /// CRLs: `psid-certificate-revocation-list-application` (256).
 pub const PSID_CRL: u64 = 256;
 /// WSA: `psid-wave-service-advertisement` (135).
@@ -98,7 +105,8 @@ pub const fn psid(msg: MsgType, etsi: bool) -> u64 {
         (MsgType::Ssm, true) => ITS_AID_SSEM,
         (MsgType::Wsa, _) => PSID_WSA,
         (MsgType::Crl, _) => PSID_CRL,
-        (MsgType::Mbr, _) => PSID_MISBEHAVIOUR_REPORT,
+        (MsgType::Mbr, false) => PSID_MISBEHAVIOUR_REPORT,
+        (MsgType::Mbr, true) => ITS_AID_MISBEHAVIOUR_REPORT,
     }
 }
 
@@ -151,6 +159,8 @@ mod tests {
         assert_eq!(psid(MsgType::Ssm, true), 637);
         assert_eq!(psid(MsgType::Vam, true), 638);
         assert_eq!(psid(MsgType::Cpm, true), 639);
+        assert_eq!(psid(MsgType::Mbr, false), 38);
+        assert_eq!(psid(MsgType::Mbr, true), 1_618);
         assert_eq!(btp_port(MsgType::Cpm), Some(2009));
         assert_eq!(btp_port(MsgType::Vam), Some(2018));
         assert_eq!(
