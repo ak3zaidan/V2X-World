@@ -142,6 +142,11 @@ export interface Status {
   engine: {
     kernel_threads: number;
     output_digest: string | null;
+    /** The live seek history's size and its budget (`--retain-mb`), bytes. */
+    retained_bytes?: number;
+    retain_limit_bytes?: number;
+    /** The projector's store sizes (`Projector::stores`): what a soak holds flat. */
+    stores?: Record<string, number>;
     stats: {
       actors_seen: number;
       tx_by_type: Record<string, number>;

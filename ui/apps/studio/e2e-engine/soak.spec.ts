@@ -7,8 +7,10 @@
  * whenever the one it was on leaves the map. The page plays it as fast as the engine goes.
  *
  * Asserted: the run reaches its end; the engine never enters `error`; the page logs no error and
- * the console shows none; the engine's resident memory and the tab's heap are flat from a warm
- * sample (a quarter of the way in) to the end.
+ * the console shows none; the seek history keeps to its byte budget; the engine's physical footprint
+ * beside that history, and the tab's heap, are flat from a warm sample (a quarter of the way in) to
+ * the end. Each sample prints the projector's store sizes (`run.status` `engine.stores`), so a soak
+ * that fails says which store grew.
  *
  * It runs only on purpose, because it takes a long time on a debug build:
  *
@@ -122,7 +124,7 @@ test("an hour of everything, through the page: no crash, no leak, no console err
   await page.getByTestId("primary-action").click();
   await expect.poll(async () => (await status(page)).state, { timeout: 120_000 }).toMatch(/running|finished/);
 
-  const samples: { simS: number; footprintMb: number; heapMb: number; wallS: number }[] = [];
+  const samples: { simS: number; footprintMb: number; retainedMb: number; restMb: number; heapMb: number; wallS: number }[] = [];
   const started = Date.now();
   let followed: number | null = null;
   let follows = 0;
@@ -139,9 +141,27 @@ test("an hour of everything, through the page: no crash, no leak, no console err
       // The physical footprint, not RSS, which macOS compression moves on its own (see
       // `EngineProcess.footprintKb`). Printed as it is taken, so a soak stopped early still
       // leaves its trend behind.
-      const sample = { simS, footprintMb: engine.footprintKb() / 1024, heapMb: (await heapBytes(page)) / 2 ** 20, wallS: (Date.now() - started) / 1000 };
+      // The seek history is a cache with a byte budget (`--retain-mb`) that fills over the first
+      // minutes of a run by design; what is measured for a leak is the footprint beside it.
+      const retainedMb = (s.engine.retained_bytes ?? 0) / 2 ** 20;
+      expect(s.engine.retained_bytes ?? 0, "the seek history keeps to its budget").toBeLessThanOrEqual(
+        (s.engine.retain_limit_bytes ?? Infinity) * 1.05,
+      );
+      const footprintMb = engine.footprintKb() / 1024;
+      const sample = {
+        simS,
+        footprintMb,
+        retainedMb,
+        restMb: footprintMb - retainedMb,
+        heapMb: (await heapBytes(page)) / 2 ** 20,
+        wallS: (Date.now() - started) / 1000,
+      };
       samples.push(sample);
-      console.warn(`soak sample: t=${sample.simS.toFixed(0)} s (wall ${sample.wallS.toFixed(0)} s): engine footprint ${sample.footprintMb.toFixed(1)} MB, tab heap ${sample.heapMb.toFixed(1)} MB`);
+      console.warn(
+        `soak sample: t=${sample.simS.toFixed(0)} s (wall ${sample.wallS.toFixed(0)} s): engine footprint ` +
+          `${sample.footprintMb.toFixed(1)} MB (seek history ${retainedMb.toFixed(1)} MB), tab heap ` +
+          `${sample.heapMb.toFixed(1)} MB; stores ${JSON.stringify(s.engine.stores ?? {})}`,
+      );
       lastSample = simS;
     }
     if (s.state === "finished") {
@@ -164,13 +184,21 @@ test("an hour of everything, through the page: no crash, no leak, no console err
 
   console.warn(
     `soak of ${SIM_S} simulated s, ${follows} vehicles followed in turn:\n` +
-      samples.map((x) => `  t=${x.simS.toFixed(0)} s (wall ${x.wallS.toFixed(0)} s): engine footprint ${x.footprintMb.toFixed(1)} MB, tab heap ${x.heapMb.toFixed(1)} MB`).join("\n"),
+      samples
+        .map(
+          (x) =>
+            `  t=${x.simS.toFixed(0)} s (wall ${x.wallS.toFixed(0)} s): engine footprint ${x.footprintMb.toFixed(1)} MB ` +
+            `(seek history ${x.retainedMb.toFixed(1)} MB), tab heap ${x.heapMb.toFixed(1)} MB`,
+        )
+        .join("\n"),
   );
   expect(pageErrors, "the page logged no error").toEqual([]);
   expect(consoleErrors, "the console shows no error").toEqual([]);
   expect(follows, "a vehicle was followed with its feed").toBeGreaterThan(0);
   const warm = samples.find((x) => x.simS >= SIM_S / 4) ?? samples[0];
   const last = samples[samples.length - 1];
-  expect(last.footprintMb, "engine memory is flat from a quarter of the way in to the end").toBeLessThan(warm.footprintMb * 1.3 + 50);
+  expect(last.restMb, "engine memory beside the seek history is flat from a quarter of the way in to the end").toBeLessThan(
+    warm.restMb * 1.3 + 50,
+  );
   expect(last.heapMb, "tab memory is flat from a quarter of the way in to the end").toBeLessThan(warm.heapMb * 1.3 + 20);
 });

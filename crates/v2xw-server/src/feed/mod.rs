@@ -1175,9 +1175,6 @@ mod tests {
         );
     }
 
-    /// A node that has left the run keeps no log: once its last entry is behind the window,
-    /// the log itself goes. The long soak found every departed vehicle's log kept, with its
-    /// capacity, for the rest of the run.
     /// Up to 64 logging nodes each keep the full per-node cap; beyond that each keeps its
     /// share of the store-wide budget, so the store stops growing with the fleet.
     #[test]
@@ -1203,6 +1200,9 @@ mod tests {
         assert!(receptions >= MAX_RECEPTIONS / 2, "{receptions}: the budget is used");
     }
 
+    /// A node that has left the run keeps no log: once its last entry is behind the window,
+    /// the log itself goes. The long soak found every departed vehicle's log kept, with its
+    /// capacity, for the rest of the run.
     #[test]
     fn a_log_with_nothing_in_the_window_is_dropped() {
         let mut store = one_delivery();
