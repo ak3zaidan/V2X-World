@@ -25,7 +25,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::{CopilotError, Result};
 use crate::http::{HttpPost, HttpRequest};
-use crate::provider::{ChatMessage, ChatRequest, Completion, LlmProvider, Role, ToolCall};
+use crate::provider::{ChatMessage, ChatRequest, Completion, LlmProvider, Role, ToolCall, Usage};
 use crate::secret::Secret;
 
 /// The environment variable the key is read from.
@@ -34,6 +34,10 @@ pub const KEY_VARIABLE: &str = "OPENAI_API_KEY";
 pub const MODEL_VARIABLE: &str = "OPENAI_MODEL";
 /// The environment variable that overrides [`DEFAULT_URL`].
 pub const URL_VARIABLE: &str = "OPENAI_BASE_URL";
+/// The environment variable that sets `reasoning_effort` (`minimal`, `low`, `medium`,
+/// `high`) for a reasoning tier. Unset, the field is not sent and the model's own default
+/// applies.
+pub const EFFORT_VARIABLE: &str = "OPENAI_REASONING_EFFORT";
 /// The default endpoint.
 pub const DEFAULT_URL: &str = "https://api.openai.com/v1/chat/completions";
 /// The default model: the cheapest tier that calls tools reliably.
@@ -47,7 +51,11 @@ pub struct OpenAi<H: HttpPost> {
     model: String,
     url: String,
     temperature: Option<f64>,
+    reasoning_effort: Option<String>,
     name: String,
+    retries: u32,
+    pause_s: u64,
+    last_usage: Option<Usage>,
 }
 
 impl<H: HttpPost> OpenAi<H> {
@@ -66,6 +74,10 @@ impl<H: HttpPost> OpenAi<H> {
             // nothing about a hosted model is deterministic, and nothing this returns
             // reaches a result — but it is the least variance available.
             temperature: Some(0.0),
+            reasoning_effort: None,
+            retries: 2,
+            pause_s: 2,
+            last_usage: None,
         }
     }
 
@@ -86,6 +98,12 @@ impl<H: HttpPost> OpenAi<H> {
             let url = url.trim();
             if !url.is_empty() {
                 provider = provider.with_url(url);
+            }
+        }
+        if let Ok(effort) = std::env::var(EFFORT_VARIABLE) {
+            let effort = effort.trim();
+            if !effort.is_empty() {
+                provider.reasoning_effort = Some(effort.to_string());
             }
         }
         Ok(provider)
@@ -113,26 +131,68 @@ impl<H: HttpPost> OpenAi<H> {
         self
     }
 
+    /// The same, with a `reasoning_effort`, or none.
+    #[must_use]
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+
+    /// The same, with no retries of a busy or failed endpoint (tests).
+    #[must_use]
+    pub fn without_retries(mut self) -> Self {
+        self.retries = 0;
+        self
+    }
+
     /// The model this provider talks to.
     #[must_use]
     pub fn model(&self) -> &str {
         &self.model
     }
 
-    /// One round trip, with the body already encoded.
+    /// One round trip, with the body already encoded. A rate limit (429) or a server error
+    /// (5xx) is tried again after a pause, up to `retries` times; anything else is the
+    /// request's fault and would fail the same way again.
     fn round_trip(&mut self, body: String) -> Result<Value> {
-        let request = HttpRequest::json(self.url.clone(), body, self.key.clone());
-        let response = self.http.post_json(&request)?;
-        let text = self.key.redact(&response.body);
-        if response.is_success() {
-            return serde_json::from_str(&text)
-                .map_err(|e| CopilotError::Decode(format!("the reply is not JSON: {e}")));
+        let mut attempt = 0;
+        loop {
+            let request = HttpRequest::json(self.url.clone(), body.clone(), self.key.clone());
+            let response = self.http.post_json(&request)?;
+            let text = self.key.redact(&response.body);
+            if response.is_success() {
+                return serde_json::from_str(&text)
+                    .map_err(|e| CopilotError::Decode(format!("the reply is not JSON: {e}")));
+            }
+            let retryable = response.status == 429 || response.status >= 500;
+            if retryable && attempt < self.retries {
+                attempt += 1;
+                // A pause between attempts is not a reading of the clock: nothing is
+                // derived from it.
+                std::thread::sleep(std::time::Duration::from_secs(
+                    u64::from(attempt) * self.pause_s,
+                ));
+                continue;
+            }
+            return Err(CopilotError::Provider(format!(
+                "HTTP {}: {}",
+                response.status,
+                api_error_message(&text)
+            )));
         }
-        Err(CopilotError::Provider(format!(
-            "HTTP {}: {}",
-            response.status,
-            api_error_message(&text)
-        )))
+    }
+
+    /// The body for one request, with `reasoning_effort` when one is set.
+    fn encode(&self, request: &ChatRequest) -> Result<String> {
+        let body = encode_request(&self.model, request, self.temperature)?;
+        match &self.reasoning_effort {
+            None => Ok(body),
+            Some(effort) => {
+                let mut value: Value = serde_json::from_str(&body)?;
+                value["reasoning_effort"] = json!(effort);
+                Ok(serde_json::to_string(&value)?)
+            }
+        }
     }
 }
 
@@ -142,26 +202,49 @@ impl<H: HttpPost> LlmProvider for OpenAi<H> {
     }
 
     fn complete(&mut self, request: &ChatRequest) -> Result<Completion> {
-        let body = encode_request(&self.model, request, self.temperature)?;
+        self.last_usage = None;
+        let body = self.encode(request)?;
         // Bound before the match: a `&mut self` borrow held in a match scrutinee lasts the
         // whole match, and the arms below read `self.temperature` and `self.model`.
         let first = self.round_trip(body);
-        match first {
-            Ok(value) => decode_completion(&value),
+        let value = match first {
+            Ok(value) => value,
             Err(CopilotError::Provider(message))
                 if self.temperature.is_some()
                     && message.starts_with("HTTP 400")
                     && message.contains("temperature") =>
             {
                 // A reasoning tier that refuses a non-default temperature. Drop the field
-                // and ask once more, so one build works across model generations.
-                let retry = encode_request(&self.model, request, None)?;
-                let value = self.round_trip(retry)?;
-                decode_completion(&value)
+                // for good — every later request would be refused the same way, and each
+                // refusal costs a whole round trip — and ask once more, so one build works
+                // across model generations.
+                self.temperature = None;
+                let retry = self.encode(request)?;
+                self.round_trip(retry)?
             }
-            Err(e) => Err(e),
-        }
+            Err(e) => return Err(e),
+        };
+        let completion = decode_completion(&value)?;
+        self.last_usage = decode_usage(&value);
+        Ok(completion)
     }
+
+    fn last_usage(&self) -> Option<Usage> {
+        self.last_usage
+    }
+}
+
+/// The `usage` block of a reply: `prompt_tokens` (cached ones included, and counted again
+/// in `prompt_tokens_details.cached_tokens`) and `completion_tokens` (reasoning included).
+#[must_use]
+pub fn decode_usage(value: &Value) -> Option<Usage> {
+    let u = value.get("usage")?;
+    let n = |p: &str| u.pointer(p).and_then(Value::as_u64).unwrap_or(0);
+    Some(Usage {
+        input_tokens: n("/prompt_tokens"),
+        cached_input_tokens: n("/prompt_tokens_details/cached_tokens"),
+        output_tokens: n("/completion_tokens"),
+    })
 }
 
 /// The request body for one completion.
@@ -428,5 +511,56 @@ mod tests {
         assert_eq!(provider.http.calls(), 2);
         assert!(provider.http.seen[0].body.contains("temperature"));
         assert!(!provider.http.seen[1].body.contains("temperature"));
+    }
+
+    #[test]
+    fn a_temperature_refusal_is_remembered_so_the_next_request_is_not_refused_again() {
+        let post = ScriptedPost::new(vec![
+            HttpResponse::new(
+                400,
+                r#"{"error":{"message":"Unsupported value: 'temperature' does not support 0.0"}}"#,
+            ),
+            HttpResponse::new(200, one_tool_call_reply()),
+            HttpResponse::new(200, one_tool_call_reply()),
+        ]);
+        let mut provider = OpenAi::new(post, Secret::new("sk-secret"));
+        provider.complete(&ChatRequest::default()).expect("the retry succeeds");
+        provider.complete(&ChatRequest::default()).expect("the second request succeeds");
+        assert_eq!(provider.http.calls(), 3, "the second request was refused and retried");
+        assert!(!provider.http.seen[2].body.contains("temperature"));
+    }
+
+    #[test]
+    fn usage_is_read_from_the_reply_and_a_busy_endpoint_is_retried() {
+        let reply = r#"{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant",
+        "content":"ok"}}],"usage":{"prompt_tokens":1200,"completion_tokens":80,
+        "prompt_tokens_details":{"cached_tokens":1024}}}"#;
+        let post = ScriptedPost::new(vec![
+            HttpResponse::new(429, r#"{"error":{"message":"slow down"}}"#),
+            HttpResponse::new(200, reply),
+        ]);
+        let mut provider = OpenAi::new(post, Secret::new("sk-secret"));
+        provider.pause_s = 0;
+        provider.complete(&ChatRequest::default()).expect("the retry succeeds");
+        assert_eq!(provider.http.calls(), 2);
+        assert_eq!(
+            provider.last_usage(),
+            Some(Usage { input_tokens: 1200, cached_input_tokens: 1024, output_tokens: 80 })
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_is_sent_only_when_asked_for() {
+        let post = ScriptedPost::new(vec![
+            HttpResponse::new(200, one_tool_call_reply()),
+            HttpResponse::new(200, one_tool_call_reply()),
+        ]);
+        let mut provider =
+            OpenAi::new(post, Secret::new("k")).with_reasoning_effort(Some("low".into()));
+        provider.complete(&ChatRequest::default()).expect("decodes");
+        assert!(provider.http.seen[0].body.contains("\"reasoning_effort\":\"low\""));
+        provider = provider.with_reasoning_effort(None);
+        provider.complete(&ChatRequest::default()).expect("decodes");
+        assert!(!provider.http.seen[1].body.contains("reasoning_effort"));
     }
 }

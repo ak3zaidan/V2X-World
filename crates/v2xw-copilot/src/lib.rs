@@ -149,7 +149,7 @@ pub use explain::{Explanation, ModelExplanation};
 pub use grounding::{Citation, Grounding, MetricAnswer, ModelEntry, NotKnown, ParameterAnswer};
 pub use http::{CurlPost, HttpPost, HttpRequest, HttpResponse};
 pub use openai::OpenAi;
-pub use provider::{ChatMessage, ChatRequest, Completion, LlmProvider, Role, ToolCall};
+pub use provider::{ChatMessage, ChatRequest, Completion, LlmProvider, Role, ToolCall, Usage};
 pub use scenario::{DraftError, DraftReport, Stage, check_draft};
 pub use secret::Secret;
 pub use session::{Copilot, Policy, Step, ToolOutcome, Turn};

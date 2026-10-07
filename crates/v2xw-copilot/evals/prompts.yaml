@@ -1,0 +1,403 @@
+# The agent's evaluation suite: what a person asks the simulator agent, what the scenario
+# should become, and what the answer must say.
+#
+# Run it with `examples/agent_eval.rs` (see crates/v2xw-copilot/evals/README.md). Each case
+# is scored on:
+#
+#   config     every `expect` check holds on at least one run the case made (or on every
+#              run, with `all: true`), `differ` keys take two or more values across the runs,
+#              and the run count is inside `runs`;
+#   completed  every run reached its end and was analysed, and the agent did not fail;
+#   grounded   every number in the answer appears in the runs' data (the report's tables,
+#              not the agent's own conversation) — the strict form of the agent's own check;
+#   conclusions  `mentions` (each group: at least one of its words, case-insensitive),
+#              `findings` (at least one of these analyst finding ids in some run) and
+#              `asks` (the answer asks or explains and starts no run).
+#
+# Check vocabulary for `expect`:
+#   equals: v | one_of: [..] | approx: x (tol: relative, default 0.02) | min: x | max: x
+#   has_id: s   an array of {id: ...} (attackers, jammers, detectors) contains this id prefix
+#   has_type: s an array of timeline items contains this `type`
+#   present: true   the key is set (not null)
+#
+# Bases: the engine the suite starts serves `scenarios/phase1-grid.yaml`; "the grid" in a
+# prompt means that procedural Midtown-shaped grid. Cases that need a credential system,
+# pedestrians or signal priority name a shipped scenario that has one.
+
+cases:
+  # ------------------------------------------------------------------ normal traffic
+  - id: normal-baseline
+    category: normal
+    prompt: Run the procedural grid for 30 seconds at 1500 vehicles per hour and tell me how the V2X network performs.
+    runs: {min: 1, max: 1}
+    expect:
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 1500}
+      - {key: time.duration_s, approx: 30}
+    mentions: [[pdr, delivery, reception]]
+
+  - id: normal-channel
+    category: normal
+    prompt: How busy is the radio channel on the Midtown grid with moderate traffic, about 2000 vehicles per hour? Keep the run to 30 s.
+    runs: {min: 1, max: 1}
+    expect:
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 2000, tol: 0.1}
+      - {key: time.duration_s, approx: 30}
+    mentions: [[cbr, channel busy, busy ratio, channel load]]
+
+  - id: normal-lte
+    category: normal
+    prompt: Simulate the grid with LTE-V2X sidelink instead of DSRC for 30 s at 1500 veh/h and summarise delivery and latency.
+    runs: {min: 1, max: 2}
+    expect:
+      - {key: radio.rat, equals: lte-v2x-pc5}
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 1500}
+    mentions: [[latency, delay], [pdr, delivery, reception]]
+
+  # ------------------------------------------------------------------ congestion
+  - id: congestion-rush
+    category: congestion
+    prompt: Rush hour on the grid - 20,000 vehicles per hour for 40 seconds. Find the bottlenecks.
+    runs: {min: 1, max: 1}
+    expect:
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 20000, tol: 0.05}
+      - {key: time.duration_s, approx: 40}
+    mentions: [[bottleneck, congest, queue, busy, delay, saturat]]
+
+  - id: congestion-light-vs-rush
+    category: multi-variant
+    prompt: Compare light traffic (500 veh/h) against rush hour (15,000 veh/h) on the grid, 30 s each. What changes?
+    runs: {min: 2, max: 2}
+    compares: true
+    differ: [actors.vehicles.demand.rate_veh_per_h]
+    expect:
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 500}
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 15000}
+    mentions: [[cbr, channel, delivery, pdr, queue]]
+
+  # ------------------------------------------------------------------ attackers
+  - id: attack-constpos
+    category: attack
+    prompt: Add a ConstPos attacker population (5% of vehicles) to the grid at 3000 veh/h for 60 s with misbehaviour detection on. Does detection catch them?
+    runs: {min: 1, max: 2}
+    expect:
+      - {key: threats.attackers, has_id: threat/attacker/legacy/ConstPos}
+      - {key: detection.local, present: true}
+    mentions: [[detect, misbehav, recall, caught]]
+
+  - id: attack-randompos-vs-baseline
+    category: attack
+    prompt: Run a baseline and the same scenario with 10% RandomPos attackers, same seed, 40 s at 3000 veh/h on the grid, and report the differences.
+    runs: {min: 2, max: 2}
+    compares: true
+    expect:
+      - {key: threats.attackers, has_id: threat/attacker/legacy/RandomPos}
+    mentions: [[attack, randompos, random position]]
+
+  - id: attack-speed
+    category: attack
+    prompt: What does a ConstSpeedOffset attacker (10% of vehicles) do to the grid network at 3000 veh/h over 40 s?
+    runs: {min: 1, max: 2}
+    expect:
+      - {key: threats.attackers, has_id: threat/attacker/legacy/ConstSpeedOffset}
+    mentions: [[speed, attack]]
+
+  - id: attack-replay
+    category: attack
+    prompt: Simulate a data replay attack by 5% of vehicles on the grid for 40 s at 3000 veh/h and say whether the detectors notice.
+    runs: {min: 1, max: 2}
+    expect:
+      - {key: threats.attackers, has_id: threat/attacker/legacy/DataReplay}
+    mentions: [[replay], [detect, notice, misbehav]]
+
+  - id: attack-signature
+    category: attack
+    prompt: What happens to signature verification when 10% of vehicles on the grid send messages with invalid signatures? 40 s at 3000 veh/h.
+    runs: {min: 1, max: 2}
+    expect:
+      - {key: threats.attackers, has_id: threat/attacker/legacy/InvalidSignature}
+    mentions: [[verif, signature]]
+
+  - id: attack-expired-cert
+    category: attack
+    prompt: Give 10% of the grid's vehicles expired certificates for 40 s at 3000 veh/h. How many of their messages are accepted?
+    runs: {min: 1, max: 2}
+    expect:
+      - {key: threats.attackers, has_id: threat/attacker/legacy/ExpiredCert}
+    mentions: [[certificate, cert, expired]]
+
+  - id: attack-wave
+    category: attack
+    prompt: Schedule an attack wave on the grid - 10% StopAndGo attackers active only from 20 s to 40 s of a 60 s run at 3000 veh/h.
+    runs: {min: 1, max: 2}
+    expect:
+      - {key: threats.attackers, has_id: threat/attacker/legacy/StopAndGo}
+      - {key: time.duration_s, approx: 60}
+    mentions: [[20], [40]]
+
+  - id: attack-sybil
+    category: impossible
+    prompt: Simulate a Sybil attack where one car fakes twenty ghost vehicles.
+    runs: {min: 0, max: 1}
+    mentions: [[sybil], [not, cannot, can't, refus, unsupported, isn't, does not]]
+
+  # ------------------------------------------------------------------ jamming
+  - id: jam-constant
+    category: jamming
+    prompt: Put a constant jammer in the middle of the grid (3000 veh/h, 30 s) and tell me how many frames it kills.
+    runs: {min: 1, max: 2}
+    expect:
+      - {key: threats.jammers, has_id: attacker/jammer/constant}
+    findings: [channel.jamming]
+    mentions: [[jam]]
+
+  - id: jam-dsrc-vs-lte
+    category: jamming
+    prompt: Is LTE-V2X more robust to a reactive jammer than DSRC? Compare both on the grid with the same jammer, 30 s at 3000 veh/h.
+    runs: {min: 2, max: 3}
+    compares: true
+    differ: [radio.rat]
+    expect:
+      - {key: threats.jammers, has_id: attacker/jammer/reactive, all: true}
+    mentions: [[jam], [lte, sidelink, c-v2x]]
+
+  # ------------------------------------------------------------------ revocation
+  - id: revocation
+    category: revocation
+    prompt: How long does it take to revoke a misbehaving vehicle's certificates in the credential-lifecycle scenario? Run it and break the time down by stage.
+    runs: {min: 1, max: 1}
+    expect:
+      - {key: meta.name, equals: credential-lifecycle}
+    findings: [security.revocation-latency, security.protocol]
+    mentions: [[revoc], [stage, detect, report, crl]]
+
+  # ------------------------------------------------------------------ privacy
+  - id: privacy-period
+    category: privacy
+    prompt: How linkable are vehicles to a roadside eavesdropper with 300 s pseudonym changes versus 60 s? Use the pseudonym-strategies scenario.
+    runs: {min: 2, max: 2}
+    compares: true
+    differ: [security.pseudonym_change.period_s]
+    expect:
+      - {key: security.pseudonym_change.period_s, approx: 60}
+      - {key: security.pseudonym_change.period_s, approx: 300}
+    mentions: [[link, track, privacy]]
+
+  - id: privacy-mixzone
+    category: privacy
+    prompt: Compare the mix-zone pseudonym strategy with the J2945/1 time-based strategy against the eavesdropper in the pseudonym-strategies scenario.
+    runs: {min: 2, max: 2}
+    compares: true
+    differ: [security.pseudonym_change.strategy]
+    expect:
+      - {key: security.pseudonym_change.strategy, equals: mix-zone}
+      - {key: security.pseudonym_change.strategy, equals: time}
+    mentions: [[mix], [link, track, privacy]]
+
+  # ------------------------------------------------------------------ radio technology
+  - id: rat-three-way
+    category: radio
+    prompt: DSRC vs LTE-V2X vs NR-V2X on the grid at 3000 veh/h for 30 s - who delivers further?
+    runs: {min: 3, max: 3}
+    compares: true
+    differ: [radio.rat]
+    expect:
+      - {key: radio.rat, equals: nr-v2x-pc5}
+      - {key: radio.rat, equals: lte-v2x-pc5}
+      - {key: radio.rat, equals: dsrc-80211p}
+    mentions: [[pdr, delivery, range, reception]]
+
+  - id: radio-region-eu
+    category: radio
+    prompt: Run the grid under European regulation instead of the US band plan, 30 s at 3000 veh/h, and compare the channel load with the US setup.
+    runs: {min: 2, max: 2}
+    compares: true
+    expect:
+      - {key: radio.region, equals: eu}
+    mentions: [[cbr, channel, load, busy]]
+
+  # ------------------------------------------------------------------ protocol overhead
+  - id: overhead-cert-cadence
+    category: overhead
+    prompt: What share of the air bytes is security overhead on the grid (3000 veh/h, 30 s) when the full certificate is attached every 1000 ms versus every 450 ms?
+    runs: {min: 2, max: 2}
+    compares: true
+    differ: [security.signer_id_policy.full_cert_every_ms]
+    expect:
+      - {key: security.signer_id_policy.full_cert_every_ms, approx: 450}
+    mentions: [[overhead, bytes, certificate]]
+
+  - id: overhead-pq-mldsa
+    category: overhead
+    prompt: Classical ECDSA versus post-quantum hybrid ML-DSA-44 signatures on the grid at 3000 veh/h for 30 s - what does PQ cost in channel load and verification?
+    runs: {min: 2, max: 2}
+    compares: true
+    differ: [security.signature]
+    expect:
+      - {key: security.signature, equals: hybrid-mldsa44-ecdsa-p256}
+    mentions: [[cbr, channel, load, bytes], [verif, signature, ml-dsa]]
+
+  - id: overhead-falcon
+    category: overhead
+    prompt: Would hybrid Falcon-512 signatures fit on DSRC at 5000 veh/h? Check it on the grid for 30 s.
+    runs: {min: 1, max: 2}
+    expect:
+      - {key: security.signature, equals: hybrid-falcon512-ecdsa-p256}
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 5000}
+    mentions: [[falcon], [cbr, channel, load, bytes, delivery]]
+
+  # ------------------------------------------------------------------ emergency priority
+  - id: emergency-priority
+    category: emergency
+    prompt: Run the connected-intersections scenario for 60 s and tell me whether emergency vehicle priority requests get through to the signals.
+    runs: {min: 1, max: 1}
+    expect:
+      - {key: meta.name, equals: connected-intersections}
+    mentions: [[priority, srm, ssm, emergency]]
+
+  # ------------------------------------------------------------------ pedestrians
+  - id: pedestrians
+    category: pedestrians
+    prompt: Simulate 200 pedestrians on the VRU grid scenario for 60 s and tell me about conflicts between pedestrians and vehicles.
+    runs: {min: 1, max: 1}
+    expect:
+      - {key: meta.name, equals: vru-grid}
+      - {key: actors.vru.pedestrians, approx: 200}
+    mentions: [[pedestrian, vru], [conflict, ttc, near miss, safety]]
+
+  # ------------------------------------------------------------------ weather
+  - id: weather-rain
+    category: weather
+    prompt: Heavy rain (intensity 0.8) on the grid at 3000 veh/h for 30 s - how does it change delivery and traffic speed compared with clear weather?
+    runs: {min: 2, max: 2}
+    compares: true
+    differ: [weather.initial]
+    expect:
+      - {key: weather.initial, equals: rain}
+      - {key: weather.intensity, approx: 0.8}
+    mentions: [[rain, weather], [speed, delivery, pdr]]
+
+  - id: weather-fog-front
+    category: weather
+    prompt: Start the grid in clear weather and have a fog front arrive at 20 s in a 40 s run at 3000 veh/h.
+    runs: {min: 1, max: 1}
+    expect:
+      - {key: events, has_type: weather.front}
+      - {key: time.duration_s, approx: 40}
+    mentions: [[fog]]
+
+  # ------------------------------------------------------------------ events
+  - id: event-closure
+    category: events
+    prompt: Close a street on the grid at 10 s and reopen it at 30 s in a 40 s run at 4000 veh/h, and tell me the traffic impact.
+    runs: {min: 1, max: 2}
+    expect:
+      - {key: events, has_type: closure}
+    mentions: [[closure, closed, close]]
+
+  - id: event-hard-brake
+    category: events
+    prompt: Script an emergency hard brake at 15 s on the grid (3000 veh/h, 30 s) and check whether forward collision warnings fire.
+    runs: {min: 1, max: 1}
+    expect:
+      - {key: events, has_type: safety.hard-brake}
+    mentions: [[brak], [warn, fcw]]
+
+  # ------------------------------------------------------------------ multi-variant
+  - id: multi-four-variants
+    category: multi-variant
+    prompt: "Run four variants on the grid at 3000 veh/h for 30 s, same seed: baseline, 5% ConstPos attackers, NR-V2X instead of DSRC, and heavy rain. Rank what hurts delivery most."
+    runs: {min: 4, max: 4}
+    compares: true
+    expect:
+      - {key: threats.attackers, has_id: threat/attacker/legacy/ConstPos}
+      - {key: radio.rat, equals: nr-v2x-pc5}
+      - {key: weather.initial, equals: rain}
+    mentions: [[pdr, delivery]]
+
+  - id: multi-density-sweep
+    category: multi-variant
+    prompt: Sweep demand over 1000, 5000 and 10000 veh/h on the grid (30 s each) and tell me where the channel starts to saturate.
+    runs: {min: 3, max: 3}
+    compares: true
+    differ: [actors.vehicles.demand.rate_veh_per_h]
+    expect:
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 1000}
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 5000}
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 10000}
+    mentions: [[cbr, channel, saturat, busy]]
+
+  # ------------------------------------------------------------------ follow-ups
+  - id: followup-base
+    category: follow-up
+    prompt: Run the grid at 2000 veh/h for 30 s.
+    runs: {min: 1, max: 1}
+    expect:
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 2000}
+
+  - id: followup-double
+    category: follow-up
+    follow_up_of: followup-base
+    prompt: Now double the density.
+    runs: {min: 1, max: 1}
+    compares: true
+    expect:
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 4000}
+      - {key: time.duration_s, approx: 30}
+
+  - id: followup-lte
+    category: follow-up
+    follow_up_of: followup-double
+    prompt: Switch that to LTE-V2X and compare with the previous run.
+    runs: {min: 1, max: 1}
+    compares: true
+    expect:
+      - {key: radio.rat, equals: lte-v2x-pc5}
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 4000}
+
+  # ------------------------------------------------------------------ vague
+  - id: vague-healthy
+    category: vague
+    prompt: Is the network healthy?
+    runs: {min: 0, max: 1}
+    mentions: [[health, within, threshold, fine, problem, bottleneck, warning]]
+
+  - id: vague-bottleneck
+    category: vague
+    prompt: Where's the bottleneck at rush hour on the grid?
+    runs: {min: 1, max: 2}
+    mentions: [[bottleneck, congest, queue, busy, delay]]
+
+  - id: vague-better
+    category: ambiguous
+    prompt: Make it better.
+    asks: true
+
+  # ------------------------------------------------------------------ impossible or ambiguous
+  - id: impossible-wifi7
+    category: impossible
+    prompt: Simulate Wi-Fi 7 between vehicles at 6 GHz.
+    asks: true
+    mentions: [[dsrc, lte, nr, 802.11p, supported, support]]
+
+  - id: impossible-tokyo
+    category: impossible
+    prompt: Run the scenario in downtown Tokyo.
+    asks: true
+    mentions: [[tokyo]]
+
+  - id: impossible-huge
+    category: impossible
+    prompt: Simulate one million vehicles in Manhattan for 24 hours.
+    runs: {min: 0, max: 1}
+    mentions: [[hour, duration, long, large, too, minutes, 300]]
+
+  - id: ambiguous-compare
+    category: ambiguous
+    prompt: Compare them.
+    asks: true
+
+  - id: ambiguous-attack
+    category: ambiguous
+    prompt: Attack the network.
+    runs: {min: 0, max: 2}
+    mentions: [[attack, which, kind]]
