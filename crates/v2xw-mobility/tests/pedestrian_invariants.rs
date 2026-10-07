@@ -408,3 +408,98 @@ fn the_world_has_a_walk_network_and_bicycle_lanes() {
             .all(|l| l.admits(ClassMask::BICYCLE))
     );
 }
+
+/// A diagnostic, ignored: the observed run's state around one recorded overlap — each
+/// pedestrian in the carriageway within 8 m of a vehicle, and that vehicle, between
+/// `V2XW_TRACE_T0` and `V2XW_TRACE_T1` seconds (environment; defaults 41.0 and 42.1).
+#[test]
+#[ignore = "a diagnostic trace, not a gate"]
+fn trace_the_observed_run() {
+    let t0: f64 = std::env::var("V2XW_TRACE_T0").ok().and_then(|v| v.parse().ok()).unwrap_or(41.0);
+    let t1: f64 = std::env::var("V2XW_TRACE_T1").ok().and_then(|v| v.parse().ok()).unwrap_or(42.1);
+    let world = world();
+    let rng = RngRegistry::new(0x0B5E_57ED);
+    let mut people = SocialForceParams::observed();
+    people.midblock.rate_per_100m = 3.0;
+    let params = EngineParams::default();
+    let mut engine = NativeMobility::new(params)
+        .with_vru(SocialForce::new(people))
+        .with_vru_population(VruPopulation {
+            pedestrians: 220,
+            cyclists: 16,
+        });
+    let demand = PoissonDemand::new(
+        &world,
+        PoissonParams {
+            arrival_rate_per_s: 1.2,
+            duration: Duration::from_secs(180),
+            fleet: FleetMix::from_shares(&[
+                (VehicleClass::Passenger, 0.8),
+                (VehicleClass::Motorcycle, 0.1),
+                (VehicleClass::Moped, 0.1),
+            ]),
+            ..PoissonParams::default()
+        },
+        OdParams::default(),
+    )
+    .expect("demand");
+    {
+        let mut ctx = MobilityCtx::new(0, &world, &rng);
+        engine.init(&mut ctx, Box::new(demand)).expect("init");
+    }
+    let mut t = 0u64;
+    while (t as f64) / 1e9 < t1 {
+        let mut ctx = MobilityCtx::new(t, &world, &rng);
+        let update = engine.step(&mut ctx, params.step);
+        let ts = update.t as f64 / 1e9;
+        if ts >= t0 {
+            let actors = engine.audit_actors(&world, update.t);
+            let vru = engine.vru().expect("pedestrians");
+            for p in vru.people() {
+                let Some(m) = p.midblock.as_ref() else { continue };
+                let pos = p.position(&world);
+                let near: Vec<&v2xw_mobility::audit::AuditActor> = actors
+                    .iter()
+                    .filter(|a| a.pos.distance_2d(pos) < 8.0)
+                    .collect();
+                if near.is_empty() {
+                    continue;
+                }
+                eprintln!(
+                    "t={ts:.1} ped {} {:?} stage {:?} pos ({:.2},{:.2}) bands {:?}",
+                    p.actor.index(),
+                    p.activity,
+                    m.stage,
+                    pos.x,
+                    pos.y,
+                    m.bands
+                        .iter()
+                        .map(|b| (
+                            b.conflict.lane.index(),
+                            (b.conflict.s_m * 100.0).round() / 100.0,
+                            (b.conflict.half_extent_m * 100.0).round() / 100.0,
+                            (b.d_near_m * 100.0).round() / 100.0,
+                            (b.d_far_m * 100.0).round() / 100.0
+                        ))
+                        .collect::<Vec<_>>()
+                );
+                for a in near {
+                    eprintln!(
+                        "      veh {} {:?} lane {} s {:.2} v {:.2} pos ({:.2},{:.2}) len {:.1} changing {:?} next {:?}",
+                        a.actor.index(),
+                        a.class,
+                        a.lane.index(),
+                        a.s_m,
+                        a.speed_mps,
+                        a.pos.x,
+                        a.pos.y,
+                        a.length_m,
+                        a.changing.map(|(f, to)| (f.index(), to.index())),
+                        a.route_next.map(|l| l.index())
+                    );
+                }
+            }
+        }
+        t = update.t;
+    }
+}

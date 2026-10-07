@@ -752,8 +752,37 @@ impl Actor {
         // ended.
         let lateral_rate = self.lateral_rate_at(t);
         let s_front = self.s_m.clamp(0.0, lane.length_m);
-        let front = smooth_offset_point(lane, s_front, self.lateral_m);
         let s_rear = self.s_m - length;
+        // A rider holding a lane position (a constant offset, no lane change under way):
+        // the body is placed on the centreline and moved sideways along its own normal, so
+        // the pose is as continuous as the centreline is. Offsetting each point along its
+        // own lane's normal jumped by `d·Δψ` wherever two lanes meet at an angle — 4.5 cm
+        // at a moped's rear crossing a joint, which the auditor saw as a step the speed did
+        // not explain.
+        if self.transition.is_none() && self.lateral_m != 0.0 {
+            let front0 = smooth_offset_point(lane, s_front, 0.0);
+            let (rear0, rear_lane, rear_s) = self.rear_point_at(world, s_rear, 0.0);
+            let chord = Vec3::new(front0.x - rear0.x, front0.y - rear0.y, 0.0);
+            let body = if chord.norm_2d() > 0.25 * length.max(0.1) {
+                math::atan2(chord.y, chord.x)
+            } else {
+                lane.heading_at(s_rear.max(0.0))
+            };
+            let (sin_h, cos_h) = math::sin_cos(body);
+            let d = self.lateral_m;
+            let pos = Vec3::new(rear0.x - d * sin_h, rear0.y + d * cos_h, rear0.z);
+            return Kinematics {
+                t,
+                pos,
+                vel: Vec3::new(self.speed_mps * cos_h, self.speed_mps * sin_h, 0.0),
+                acc: Vec3::new(self.accel_mps2 * cos_h, self.accel_mps2 * sin_h, 0.0),
+                heading_rad: v2xw_world::model::normalise_angle(body),
+                yaw_rate_rad_s: 0.0,
+                lane: Some(LanePos::new(rear_lane, rear_s, self.lateral_m)),
+                dims: self.class.dims(),
+            };
+        }
+        let front = smooth_offset_point(lane, s_front, self.lateral_m);
         let (pos, rear_lane, rear_s) = self.rear_point(world, s_rear);
         let chord = Vec3::new(front.x - pos.x, front.y - pos.y, 0.0);
         let body = if chord.norm_2d() > 0.25 * length.max(0.1) {
@@ -785,10 +814,15 @@ impl Actor {
     /// vehicle came by. Past the end of the trail (a spawn, or a lane change right at a
     /// lane start) the first lane's first segment is extended backwards.
     fn rear_point(&self, world: &World, s_rear: f64) -> (Vec3, LaneId, f64) {
+        self.rear_point_at(world, s_rear, self.lateral_m)
+    }
+
+    /// [`Self::rear_point`] at a lateral offset `lateral_m` rather than the vehicle's own.
+    fn rear_point_at(&self, world: &World, s_rear: f64, lateral_m: f64) -> (Vec3, LaneId, f64) {
         let lane = world.lane(self.lane);
         if s_rear >= 0.0 {
             return (
-                smooth_offset_point(lane, s_rear, self.lateral_m),
+                smooth_offset_point(lane, s_rear, lateral_m),
                 self.lane,
                 s_rear,
             );
@@ -801,12 +835,12 @@ impl Actor {
             };
             if behind <= prev.length_m {
                 let s = prev.length_m - behind;
-                return (smooth_offset_point(prev, s, self.lateral_m), prev.id, s);
+                return (smooth_offset_point(prev, s, lateral_m), prev.id, s);
             }
             behind -= prev.length_m;
             earliest = prev;
         }
-        let start = earliest.offset_point(0.0, self.lateral_m);
+        let start = earliest.offset_point(0.0, lateral_m);
         let (sin0, cos0) = math::sin_cos(earliest.heading_at(0.0));
         (
             Vec3::new(start.x - behind * cos0, start.y - behind * sin0, start.z),
