@@ -85,7 +85,9 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod apps;
 pub mod clock;
+pub mod cpm;
 pub mod ctx;
 pub mod error;
 pub mod events;
@@ -102,6 +104,7 @@ pub mod secure;
 pub mod server;
 pub mod stores;
 pub mod telemetry;
+pub mod vehicle;
 pub mod vru;
 
 pub use clock::ClockModel;

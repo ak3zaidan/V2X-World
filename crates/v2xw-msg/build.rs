@@ -73,8 +73,50 @@ const FACILITIES: Unit = Unit {
         "denm_ts103831/DENM-PDU-Descriptions.asn",
         // TS 103 300-3 V2.2.1, the VRU awareness message a pedestrian's device sends.
         "vam_ts103300_3/VAM-PDU-Descriptions.asn",
+        // TS 103 324 V2.1.1, the collective perception message: its four container
+        // modules first, then the PDU that wraps them.
+        "cpm_ts103324/CPM-OriginatingStationContainers.asn",
+        "cpm_ts103324/CPM-SensorInformationContainer.asn",
+        "cpm_ts103324/CPM-PerceptionRegionContainer.asn",
+        "cpm_ts103324/CPM-PerceivedObjectContainer.asn",
+        "cpm_ts103324/CPM-PDU-Descriptions.asn",
     ],
 };
+
+/// Type renames applied to one source's text before it is compiled: `(source, from, to)`.
+///
+/// `rasn-compiler` 0.16 generates one Rust module per ASN.1 module but resolves type names
+/// across the whole unit, and when two modules define the same name it keeps one and
+/// silently drops the other. `DENM-PDU-Descriptions` and `CPM-PDU-Descriptions` both define
+/// `ManagementContainer` (different types), and compiling both left the DENM without its
+/// own. A type's name is not on the wire in UPER, so renaming the CPM's copy, whole words
+/// only, changes no encoding; the committed module stays byte-exact.
+const RENAMES: &[(&str, &str, &str)] = &[(
+    "cpm_ts103324/CPM-PDU-Descriptions.asn",
+    "ManagementContainer",
+    "CpmManagementContainer",
+)];
+
+/// `text` with every whole-word `from` replaced by `to` (a word being ASN.1's identifier
+/// characters: letters, digits and hyphens).
+fn rename_word(text: &str, from: &str, to: &str) -> String {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '-';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find(from) {
+        let before = rest[..i].chars().next_back();
+        let after = rest[i + from.len()..].chars().next();
+        out.push_str(&rest[..i]);
+        if before.is_some_and(word) || after.is_some_and(word) {
+            out.push_str(from);
+        } else {
+            out.push_str(to);
+        }
+        rest = &rest[i + from.len()..];
+    }
+    out.push_str(rest);
+    out
+}
 
 /// IEEE 1609.2 plus the ETSI TS 103 097 profile of it. Consumed by `v2xw-sec`.
 const SECURITY: Unit = Unit {
@@ -180,7 +222,20 @@ fn generate(unit: &Unit, asn_root: &Path, out_dir: &Path, patches: &[Patch]) -> 
         .ok_or_else(|| format!("generation unit `{}` has no sources", unit.label))?;
     let mut compiler = Compiler::<RasnBackend, _>::new().add_asn_by_path(first);
     for path in rest {
-        compiler = compiler.add_asn_by_path(path);
+        let renames: Vec<_> = RENAMES
+            .iter()
+            .filter(|(src, _, _)| asn_root.join(src) == *path)
+            .collect();
+        if renames.is_empty() {
+            compiler = compiler.add_asn_by_path(path);
+            continue;
+        }
+        let mut text = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        for (_, from, to) in renames {
+            text = rename_word(&text, from, to);
+        }
+        compiler = compiler.add_asn_literal(text);
     }
 
     let result = compiler.compile_to_string().map_err(|e| {

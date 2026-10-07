@@ -78,7 +78,7 @@ use crate::traits::{
 use crate::views::{
     ActorSpawn, ConflictView, DespawnCause, DriverProfile, EntryDecision, JunctionView,
     LaneChangeDecision, LaneNeighbors, LaneView, LeaderView, MobilityCommand, MobilityUpdate,
-    PhaseState, Route, Side, TripRequest, VehicleView,
+    EMERGENCY_BRAKE_ONSET_JERK_MPS3, PhaseState, Route, Side, TripRequest, VehicleView,
 };
 use crate::vru::crosswalk::{CrosswalkIndex, VehiclePath};
 use crate::vru::social_force::SocialForce;
@@ -518,6 +518,11 @@ struct Actor {
     traits: DriverTraits,
     /// While standing: when what held it first let it go (the start of its reaction).
     release_at: Option<SimTime>,
+    /// A scripted emergency stop in progress ([`MobilityCommand::Brake`]): the
+    /// deceleration, and when the vehicle may move off once it stands.
+    forced_brake: Option<(f64, Option<SimTime>)>,
+    /// A scripted cut-in pending ([`MobilityCommand::CutIn`]): the side, and until when.
+    forced_cut_in: Option<(Side, SimTime)>,
 }
 
 impl Actor {
@@ -1103,6 +1108,8 @@ impl NativeMobility {
                 amber_seen: None,
                 traits: DriverTraits::NEUTRAL,
                 release_at: None,
+                forced_brake: None,
+                forced_cut_in: None,
             },
         );
         Ok(id)
@@ -1164,6 +1171,23 @@ impl NativeMobility {
                     };
                     if changed {
                         self.closure_changes += 1;
+                    }
+                }
+                MobilityCommand::Brake {
+                    actor,
+                    decel_mps2,
+                    hold_until,
+                } => {
+                    if let Some(a) = self.actors.get_mut(&actor)
+                        && decel_mps2.is_finite()
+                        && decel_mps2 > 0.0
+                    {
+                        a.forced_brake = Some((decel_mps2, hold_until));
+                    }
+                }
+                MobilityCommand::CutIn { actor, side, until } => {
+                    if let Some(a) = self.actors.get_mut(&actor) {
+                        a.forced_cut_in = Some((side, until));
                     }
                 }
                 MobilityCommand::Spawn(trip) => {
@@ -1447,6 +1471,8 @@ impl NativeMobility {
                 amber_seen: None,
                 traits,
                 release_at: None,
+                forced_brake: None,
+                forced_cut_in: None,
             },
         );
         self.next_seq = self.next_seq.max(trip.seq + 1);
@@ -3208,6 +3234,18 @@ impl Mobility for NativeMobility {
             {
                 accel = accel.max(actor.accel_mps2 - PLANNED_BRAKE_JERK_MPS3 * dt_s);
             }
+            // A scripted emergency stop: the driver stands on the brake. The deceleration
+            // builds at the brake system's onset rate and then holds, capped by the road's
+            // grip; whatever else binds harder (a car ahead stopping shorter) still binds.
+            if let Some((decel, _)) = actor.forced_brake
+                && ego.speed_mps > STANDSTILL_MPS
+            {
+                let grip = crate::weather::surface_friction(self.weather.surface)
+                    .map_or(f64::INFINITY, |mu| mu * 9.806_65);
+                let target = -decel.min(grip.max(0.5));
+                let onset = actor.accel_mps2.min(0.0) - EMERGENCY_BRAKE_ONSET_JERK_MPS3 * dt_s;
+                accel = accel.min(onset.max(target));
+            }
             // Moving off takes the driver their reaction time: a vehicle standing still
             // goes only once what held it has let it go for `reaction_s` ([`DriverTraits`]).
             // This is the start-up wave of a queue at green — the source of the HCM's
@@ -3279,6 +3317,29 @@ impl Mobility for NativeMobility {
                 let Some((ego, nbrs)) = neighbours.get(&decision.actor) else {
                     continue;
                 };
+                // A scripted cut-in takes the side it was told to, into the gap ahead of
+                // that lane's follower, whatever MOBIL's incentive or its safety
+                // criterion say — that is what makes it a cut-in. The resolution below
+                // still refuses a gap the body does not fit.
+                if let Some((side, until)) = actor.forced_cut_in
+                    && t0 < until
+                    && let Some(target) = nbrs.side(side)
+                    && let Some(target_lane) = ctx.world().try_lane(target.lane)
+                {
+                    let from_w = ctx.world().lane(actor.lane).width_m;
+                    let lateral = 0.5 * (from_w + target_lane.width_m);
+                    decision.lane_change = LaneChangeDecision::Change {
+                        to: target.lane,
+                        side,
+                        incentive_mps2: 0.0,
+                        duration: crate::lanechange::mobil::transition_duration(
+                            mobil.params(),
+                            lateral,
+                            ego.speed_mps,
+                        ),
+                    };
+                    continue;
+                }
                 decision.lane_change = mobil.decide(ctx, ego, nbrs, &self.weather);
             }
             self.lane_change = Some(mobil);
@@ -3361,6 +3422,14 @@ impl Mobility for NativeMobility {
                 base
             };
             actor.s_m += advance;
+            if let Some((_, hold_until)) = actor.forced_brake
+                && actor.speed_mps <= STANDSTILL_MPS
+            {
+                // Standing: the emergency stop becomes a hold, released when the script
+                // says (the driver moves off with their own reaction time after that).
+                actor.forced_brake = None;
+                actor.stopped_until = Some(hold_until.unwrap_or(SimTime::MAX));
+            }
             if actor.stopped_until.is_some_and(|until| t0 >= until) {
                 actor.stopped_until = None;
             }
@@ -3380,6 +3449,7 @@ impl Mobility for NativeMobility {
                     Side::Left => -separation,
                     Side::Right => separation,
                 };
+                actor.forced_cut_in = None;
                 actor.transition = Some(Transition {
                     from: actor.lane,
                     to,
@@ -3638,6 +3708,52 @@ impl Mobility for NativeMobility {
 
     fn set_demand_multiplier(&mut self, m: f64) -> bool {
         self.demand.as_mut().is_some_and(|d| d.set_multiplier(m))
+    }
+
+    fn intent(&self, world: &World, a: ActorId) -> Option<crate::views::Intent> {
+        let actor = self.actors.get(&a)?;
+        let here = world.try_lane(actor.lane)?;
+        let movement = |approach: LaneId, connector: LaneId, distance_m: f64| {
+            let lane = world.try_lane(connector)?;
+            let c = world
+                .successors(approach)
+                .iter()
+                .find(|c| c.via == Some(connector))?;
+            Some(crate::views::Intent {
+                junction: lane.junction?,
+                turn: c.direction,
+                distance_m,
+                approach,
+                connector,
+            })
+        };
+        if here.kind == LaneKind::Internal {
+            let approach = actor
+                .trail
+                .last()
+                .copied()
+                .or_else(|| {
+                    actor
+                        .route_index
+                        .checked_sub(1)
+                        .and_then(|i| actor.route.lanes.get(i).copied())
+                })?;
+            return movement(approach, actor.lane, -actor.s_m);
+        }
+        let mut distance = (here.length_m - actor.s_m).max(0.0);
+        let mut prev = actor.lane;
+        for lane in actor.route.lanes.iter().skip(actor.route_index + 1) {
+            let l = world.try_lane(*lane)?;
+            if l.kind == LaneKind::Internal {
+                return movement(prev, *lane, distance);
+            }
+            distance += l.length_m;
+            prev = *lane;
+            if distance > crate::views::INTENT_HORIZON_M {
+                return None;
+            }
+        }
+        None
     }
 }
 

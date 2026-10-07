@@ -12,8 +12,7 @@
 //! | Tier | Messages | What [`codec::Encoded::bytes`] contains | `size_source` |
 //! |---|---|---|---|
 //! | **Real ASN.1, generated** | ETSI CAM, DENM, VAM ([`vam`]) (this crate); IEEE 1609.2 / TS 103 097 envelope and certificates (`v2xw-sec`, over [`sec_types`]) | the wire bytes, from `rasn` bindings generated at build time from the ETSI forge modules | [`codec::SizeSource::Uper`] / [`codec::SizeSource::Coer`] |
-//! | **Hand-written, oracle-validated** | SAE J2735 BSM ([`j2735::bsm`]) | the wire bytes of the subset the simulator fills | [`codec::SizeSource::Uper`] |
-//! | **Hand-written, not yet validated** | SAE J2735 SPaT ([`j2735::spat`]), MAP ([`j2735::map`]) and PSM ([`j2735::psm`]) | the wire bytes of the subset the simulator fills | [`codec::SizeSource::Uper`] |
+//! | **Hand-written, oracle-validated** | SAE J2735 BSM ([`j2735::bsm`]); SPaT ([`j2735::spat`]), MAP ([`j2735::map`]) and PSM ([`j2735::psm`]), against the public 2016 and 2020 modules | the wire bytes of the subset the simulator fills | [`codec::SizeSource::Uper`] |
 //! | **Size model** | J2735 PSM, SRM, SSM ([`size_model`]); ETSI CPM, VAM ([`etsi_size`]) — the PSM and VAM rows are what the generic codec seam (and [`evidence`]) still register; the VRU device sends the real [`j2735::psm`] and [`vam`] bytes | **a fill pattern of exactly the modelled length** | [`codec::SizeSource::SizeModel`] |
 //!
 //! [`evidence`] is the machine-readable form of that table — one row per
@@ -41,15 +40,14 @@
 //! Two gaps in that story are worth stating at the top rather than in a module nobody
 //! opens, because both are about *this checkout* rather than about the design:
 //!
-//! * `third_party/asn1/j2735/` **does not exist here** (it is git-ignored by D3), and
-//!   neither does the `pycrate` oracle environment. The BSM codec was written and
-//!   validated when both were present. The SPaT and MAP codecs were not: their structure
-//!   is corroborated where an artefact in this repository corroborates it and recalled
-//!   where nothing does, every recalled choice is a named constant, and their card says
-//!   the bytes are unvalidated.
-//! * `CPM-PDU-Descriptions.asn` is **not committed**, so the CPM is sized instead
-//!   ([`etsi_size`], which lists the steps that fix it). `VAM-PDU-Descriptions.asn` was
-//!   committed on 2026-09-23 and the VAM is generated ([`vam`]).
+//! * `third_party/asn1/j2735/` **does not exist here** (it is git-ignored by D3). The BSM
+//!   codec was validated against the 2024-09 modules when they were present; the SPaT,
+//!   MAP and PSM codecs were validated on 2026-10-06 against the public 2016 and 2020
+//!   modules (see each oracle test's notes on editions).
+//! * `VAM-PDU-Descriptions.asn` was committed on 2026-09-23 and the TS 103 324 CPM
+//!   modules on 2026-09-30, so both are generated ([`vam`], [`cpm`]) and checked against
+//!   `asn1tools`; only the generic codec seam ([`codec::Message`]) still sizes them
+//!   ([`etsi_size`]) for the size-model tier.
 //!
 //! # Where to look
 //!
@@ -131,12 +129,15 @@
 pub mod asn1;
 pub mod cam;
 pub mod codec;
+pub mod cpm;
 pub mod denm;
 pub mod error;
 pub mod etsi_size;
 pub mod evidence;
 pub mod generator;
 pub mod j2735;
+pub mod j2945;
+pub mod registry;
 pub mod sec_types;
 pub mod size_model;
 pub mod units;
@@ -208,13 +209,14 @@ pub mod provenance {
          ASN.1, 235 vectors, byte-identical",
         "SAE J2735 2024-09 SPAT — timeStamp, IntersectionState (id, revision, status, \
          moy, timeStamp), MovementState, MovementEvent and TimeChangeDetails, plus the \
-         MessageFrame wrapper (crate::j2735::spat); NOT cross-validated: no oracle run, the \
-         ASN.1 is absent from this checkout",
+         MessageFrame wrapper (crate::j2735::spat); cross-validated against pycrate 0.8.1 \
+         compiled from the public J2735 2016 and 2020 modules, 115 vectors, \
+         byte-identical",
         "SAE J2735 2024-09 MapData — msgIssueRevision, timeStamp, IntersectionGeometry \
          (id, revision, refPoint, laneWidth), GenericLane (attributes, maneuvers, node list, \
-         connections), plus the MessageFrame wrapper (crate::j2735::map); NOT \
-         cross-validated, and its extension markers are recalled rather than read — see \
-         crate::j2735::map::assumptions",
+         connections), plus the MessageFrame wrapper (crate::j2735::map); cross-validated \
+         against pycrate 0.8.1 compiled from the public J2735 2016 and 2020 modules, 112 \
+         vectors, byte-identical, which confirms crate::j2735::map::assumptions",
     ];
 
     /// Message formats a **size model** stands in for, and why each is not encoded.
@@ -226,11 +228,11 @@ pub mod provenance {
     pub const SIZE_MODELLED: &[&str] = &[
         "SAE J2735 PSM, SRM, SSM (codec/size-model/j2735) — the J2735 ASN.1 cannot be \
          code-generated (build decision D2). The VRU device does not use this row for its \
-         PSM: it sends crate::j2735::psm's hand-written UPER (not oracle-validated)",
-        "ETSI CPM (codec/size-model/etsi) — generatable from the published forge module, \
-         but CPM-PDU-Descriptions.asn is not committed to third_party/asn1/etsi in this \
-         checkout. The VAM row stays behind the generic codec seam; the VRU device sends \
-         crate::vam's bytes, generated from the committed TS 103 300-3 module",
+         PSM: it sends crate::j2735::psm's hand-written UPER (oracle-validated, 153 \
+         vectors)",
+        "ETSI CPM and VAM (codec/size-model/etsi) behind the generic codec seam only: a \
+         vehicle sends crate::cpm's bytes and a VRU device crate::vam's, both generated \
+         from the committed TS 103 324 and TS 103 300-3 modules",
     ];
 }
 

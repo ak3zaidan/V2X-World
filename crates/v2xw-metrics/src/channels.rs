@@ -44,6 +44,8 @@ use crate::error::{MetricError, Result};
 /// `net.bytes` is this crate's reader-side projection of the `net.*` accounting records and
 /// is listed as a NODE channel, which is what §14's `net.frag` row implies for the family.
 const CHANNEL_VISIBILITY: &[(&str, &[Visibility])] = &[
+    ("app.advice", &[Visibility::Node]),
+    ("app.outcome", &[Visibility::NodeAndGt]),
     ("app.warning", &[Visibility::Node]),
     ("det.observation", &[Visibility::Node]),
     ("gt.attack.action", &[Visibility::Gt]),
@@ -89,6 +91,7 @@ const CHANNEL_VISIBILITY: &[(&str, &[Visibility])] = &[
     ("proto.msg", &[Visibility::Node]),
     ("proto.revocation", &[Visibility::Public]),
     ("sec.cert", &[Visibility::Node]),
+    ("signal.priority", &[Visibility::Public]),
     ("snapshot.delta", &[Visibility::Mixed]),
     ("snapshot.keyframe", &[Visibility::Mixed]),
 ];
@@ -306,10 +309,15 @@ pub struct NodeTxView {
     /// When the signer picked the message up — the end of the signing-queue wait.
     #[serde(default)]
     pub t_sign_start: Option<SimTime>,
-    /// When the signature completed and the frame was handed to the MAC.
+    /// When the signature completed.
     #[serde(default)]
     pub t_signed: Option<SimTime>,
-    /// How much of the channel-access delay (`t − t_signed`) was the AIFS, ns.
+    /// When the signed frame reached the MAC: the signature plus the station's hand-off
+    /// (host and stack latency, SAE J2945/1's randomised transmit-time offset). Absent in
+    /// recordings older than the split, where `t_signed` was this instant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub t_handoff: Option<SimTime>,
+    /// How much of the channel-access delay (`t − t_handoff`) was the AIFS, ns.
     #[serde(default)]
     pub mac_aifs_ns: Option<u64>,
     /// How much of it was the backoff countdown the MAC reported, ns.
@@ -672,9 +680,10 @@ pub mod rx_cause {
 /// The stages a V2V message's end-to-end latency is decomposed into, in the order they
 /// happen. [`NodeRxView::latency_trace`] builds them; their durations sum to the
 /// end-to-end latency exactly, in integer nanoseconds.
-pub const V2V_STAGES: [&str; 10] = [
+pub const V2V_STAGES: [&str; 11] = [
     "sign_queue",
     "sign",
+    "handoff",
     "mac_aifs",
     "mac_backoff",
     "mac_defer",
@@ -747,9 +756,13 @@ pub struct NodeRxView {
     /// The sender's signer picked it up.
     #[serde(default)]
     pub t_sign_start: Option<SimTime>,
-    /// The signature completed and the frame reached the MAC.
+    /// The signature completed.
     #[serde(default)]
     pub t_signed: Option<SimTime>,
+    /// The signed frame reached the MAC, after the sender's hand-off. Absent in
+    /// recordings older than the split, where `t_signed` was this instant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub t_handoff: Option<SimTime>,
     /// Of the channel-access delay, the AIFS, ns.
     #[serde(default)]
     pub mac_aifs_ns: Option<u64>,
@@ -807,6 +820,10 @@ impl NodeRxView {
         let g0 = self.t_generated?;
         let sign_start = self.t_sign_start?;
         let signed = self.t_signed?;
+        // The hand-off between the signature and the MAC (the sender's host latency and
+        // J2945/1's transmit-time offset). A recording older than the split has none, and
+        // its `t_signed` already includes it.
+        let handoff = self.t_handoff.unwrap_or(signed).max(signed);
         let tx_start = self.t_tx_start?;
         let tx_end = self.t_tx_end?;
         let arrival = self.t_arrival?;
@@ -820,14 +837,15 @@ impl NodeRxView {
         // deferral to a busy medium, including the AIFS a node repeats after each busy
         // period. The apportionment is an accounting order, not a claim that the medium
         // was idle for the first AIFS: `saturating_sub` keeps each part within the whole.
-        let access = tx_start.saturating_sub(signed);
+        let access = tx_start.saturating_sub(handoff);
         let aifs = self.mac_aifs_ns.unwrap_or(0).min(access);
         let backoff = self.mac_backoff_ns.unwrap_or(0).min(access - aifs);
         let mut b = crate::latency::TraceBuilder::new("v2v", self.msg_type.clone(), self.msg, g0);
         b.to("sign_queue", sign_start);
         b.to("sign", signed);
-        b.to("mac_aifs", signed.saturating_add(aifs));
-        b.to("mac_backoff", signed.saturating_add(aifs + backoff));
+        b.to("handoff", handoff);
+        b.to("mac_aifs", handoff.saturating_add(aifs));
+        b.to("mac_backoff", handoff.saturating_add(aifs + backoff));
         b.to("mac_defer", tx_start);
         b.to("airtime", tx_end);
         b.to("propagation", arrival);

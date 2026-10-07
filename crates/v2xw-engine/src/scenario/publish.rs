@@ -194,6 +194,12 @@ const GROUPS: &[(&str, &str, &str)] = &[
         "What is measured, exported and swept.",
     ),
     (
+        "apps",
+        "Applications",
+        "The V2X applications vehicles run on what they hear, and how drivers follow \
+         their advice.",
+    ),
+    (
         "events",
         "Timeline",
         "Things that happen at a stated instant during the run.",
@@ -212,6 +218,7 @@ const UNIT_SUFFIXES: &[(&str, &str)] = &[
     ("_veh_per_h", "veh/h"),
     ("_mbps", "Mbit/s"),
     ("_kbps", "kbit/s"),
+    ("_mps2", "m/s²"),
     ("_mps", "m/s"),
     ("_dbm", "dBm"),
     ("_dbi", "dBi"),
@@ -262,6 +269,7 @@ const DIMENSIONLESS: &[&str] = &[
     "actors.vehicles.classes.*.fraction",
     "actors.vru.device_fraction",
     "threats.attackers[].fraction",
+    "apps.glosa_compliance",
 ];
 
 /// One place the scenario picks a model, and which registry family fills it.

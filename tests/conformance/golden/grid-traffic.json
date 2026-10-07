@@ -4,8 +4,8 @@
   "world_hash": "5f87bbe41a0f1bd2b76ee9a5c886103e5b15274f45c52382f683482ad5c5e0ef",
   "master_seed": 26719282226331630,
   "end_ns": 10000000000,
-  "records": 15957,
-  "record_digest": "8c94ac18d65105fbc52962ae60e5d08f759e12279490c78d53d3bf12406eb286",
+  "records": 15993,
+  "record_digest": "50522bc9c90cc0ac97cd9820001802c017a75222bca70f864cf00503eaad7aca",
   "per_channel": {
     "gt.kinematics": [
       619,
@@ -13,15 +13,15 @@
     ],
     "mac.cbr": [
       57,
-      11463
+      11473
     ],
     "metric.sample": [
-      1524,
-      397425
+      1560,
+      408400
     ],
     "node.rx": [
       4157,
-      2098798
+      2194397
     ],
     "node.telemetry": [
       55,
@@ -29,7 +29,7 @@
     ],
     "node.tx": [
       618,
-      506624
+      520831
     ],
     "node.verify": [
       4157,
@@ -41,7 +41,7 @@
     ],
     "phy.rx": [
       4157,
-      804608
+      804597
     ],
     "scenario.event": [
       1,

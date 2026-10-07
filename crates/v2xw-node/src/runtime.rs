@@ -132,6 +132,17 @@ pub struct VerifiedMessage {
     pub claimed_heading_rad: f64,
     /// What this node concluded about the signature.
     pub verification: VerificationState,
+    /// The facilities-layer payload the SPDU carried, when the node's applications read
+    /// the message's content ([`crate::apps`]).
+    pub payload: Option<std::sync::Arc<[u8]>>,
+}
+
+/// Whether an application reads this message type's content beyond its claims.
+fn wants_payload(ty: MsgType) -> bool {
+    matches!(
+        ty,
+        MsgType::Bsm | MsgType::Cam | MsgType::Spat | MsgType::Map | MsgType::Denm | MsgType::Cpm
+    )
 }
 
 /// When and how a frame reached this node, handed in by the engine beside the frame.
@@ -300,6 +311,9 @@ pub struct StepOutcome {
     /// Every received frame whose fate was settled in this step, with the instants of its
     /// journey through the node.
     pub rx_reports: Vec<RxReport>,
+    /// GLOSA's advice to the driver at this step, when the applications gave one
+    /// ([`crate::apps`]).
+    pub advice: Option<crate::apps::SpeedAdvice>,
 }
 
 /// How a node is configured.
@@ -452,6 +466,13 @@ pub struct ObuRuntime {
     /// The two §3.5.2 fields marked **GT**, handed in from outside the firewall by
     /// [`ObuRuntime::observe_truth`] and read by nothing but the telemetry path.
     gt_pos_error_m: f32,
+    /// The vehicle's own bus and what the unit derives from it (path history, path
+    /// prediction, lights, event flags): [`crate::vehicle`].
+    own: crate::vehicle::OwnVehicle,
+    /// The V2X applications, when the node runs them ([`crate::apps`]).
+    apps: Option<Box<crate::apps::AppLayer>>,
+    /// The collective perception service ([`crate::cpm`]).
+    cpm: crate::cpm::CpmService,
 }
 
 impl core::fmt::Debug for ObuRuntime {
@@ -519,6 +540,9 @@ impl ObuRuntime {
             dcc_state_code: v2xw_record::wire::U16_NONE,
             relevance: BTreeMap::new(),
             gt_pos_error_m: f32::NAN,
+            own: crate::vehicle::OwnVehicle::default(),
+            apps: None,
+            cpm: crate::cpm::CpmService::default(),
             security: NodeSecurity::new(config.wall, config.crypto_mode, config.psid),
             etsi: EtsiUperCodec::new(),
             service,
@@ -615,6 +639,134 @@ impl ObuRuntime {
     /// derived from.
     pub fn set_belief(&mut self, belief: PositionEstimate) {
         self.belief = belief;
+        self.own.on_fix(&belief);
+    }
+
+    /// Hands the node this step's reading of its own vehicle's bus ([`crate::vehicle`]):
+    /// the dynamics, the lights and the navigation's next movement. What its BSM's Part II,
+    /// its CAM's dynamics and its event triggers are built from.
+    pub fn set_vehicle_bus(&mut self, bus: crate::vehicle::VehicleBus) {
+        self.events.set_own_acceleration(bus.a_long_mps2);
+        self.events.set_vehicle_bus(&bus);
+        self.own.set_bus(bus);
+    }
+
+    /// Switches the vehicle's hazard warning lights, which its stationary-vehicle DENM
+    /// and its BSM's event flags read.
+    pub fn set_hazard_lights(&mut self, on: bool) {
+        self.events.set_hazard_lights(on);
+    }
+
+    /// The unit's view of its own vehicle.
+    pub fn own_vehicle(&self) -> &crate::vehicle::OwnVehicle {
+        &self.own
+    }
+
+    /// Runs the V2X applications ([`crate::apps`]) with `params` from the next step on.
+    pub fn enable_apps(&mut self, params: crate::apps::AppParams) {
+        self.apps = Some(Box::new(crate::apps::AppLayer::new(
+            params,
+            self.config.origin,
+            self.config.wall,
+        )));
+    }
+
+    /// The application layer, when the node runs one.
+    pub fn apps(&self) -> Option<&crate::apps::AppLayer> {
+        self.apps.as_deref()
+    }
+
+    /// Hands the node what its own sensors perceive now, for its CPMs ([`crate::cpm`]).
+    /// Like the position belief, it comes from the perception model outside the node.
+    pub fn set_perception(
+        &mut self,
+        objects: Vec<crate::cpm::ObjectIn>,
+        sensors: Vec<crate::cpm::SensorIn>,
+    ) {
+        self.cpm.set_perception(objects, sensors);
+    }
+
+    /// The collective perception service's state.
+    pub fn cpm_service(&self) -> &crate::cpm::CpmService {
+        &self.cpm
+    }
+
+    /// Encodes one CPM: the station's belief, the objects selected and, when due, the
+    /// sensors (ETSI TS 103 324 through the generated encoder, [`v2xw_msg::cpm`]).
+    fn encode_cpm(
+        &self,
+        content: &crate::cpm::CpmContent,
+        believed: SimTime,
+        cred: &CredentialHandle,
+    ) -> Option<Vec<u8>> {
+        let mut id = [0u8; 4];
+        id.copy_from_slice(&cred.digest.0[..4]);
+        // TS 103 324 V2.1.1 §7.1.8.2: an object keeps its objectId "as long as an object is
+        // perceived ... and there is no pseudonym change". The ids are re-keyed by the
+        // pseudonym (a bijection on 0..=65535, so no two objects collide), so an object's
+        // id does not link the station across a pseudonym change, as its station id does
+        // not.
+        let salt = u16::from_be_bytes([cred.digest.0[4], cred.digest.0[5]]);
+        let objects = content
+            .objects
+            .iter()
+            .map(|o| {
+                let mut sensor_ids = [0u8; 3];
+                let mut count = 0u8;
+                for bit in 1..8u8 {
+                    if o.sensors & (1 << bit) != 0 && usize::from(count) < sensor_ids.len() {
+                        sensor_ids[usize::from(count)] = bit;
+                        count += 1;
+                    }
+                }
+                v2xw_msg::cpm::CpmObject {
+                    id: o.id ^ salt,
+                    measurement_delta_ms: ((o.measured_at as i128 - believed as i128) / 1_000_000)
+                        as i32,
+                    pos: o.pos,
+                    vel: o.vel,
+                    length_m: o.length_m,
+                    width_m: o.width_m,
+                    age_ms: (believed.saturating_sub(o.first_seen) / 1_000_000) as u32,
+                    class: match o.kind {
+                        crate::cpm::ObjectKind::Vehicle => v2xw_msg::cpm::CpmObjectClass::Vehicle,
+                        crate::cpm::ObjectKind::Pedestrian => {
+                            v2xw_msg::cpm::CpmObjectClass::Pedestrian
+                        }
+                        crate::cpm::ObjectKind::Cyclist => v2xw_msg::cpm::CpmObjectClass::Cyclist,
+                    },
+                    sigma_m: o.sigma_m,
+                    sensor_ids,
+                    sensor_count: count,
+                }
+            })
+            .collect();
+        let sensors = content.sensors.as_ref().map(|list| {
+            list.iter()
+                .map(|s| v2xw_msg::cpm::CpmSensor {
+                    id: s.id,
+                    sensor_type: s.sensor_type,
+                    range_m: s.range_m,
+                    half_fov_rad: s.half_fov_rad,
+                })
+                .collect()
+        });
+        let input = v2xw_msg::cpm::CpmInput {
+            station_id: u32::from_be_bytes(id),
+            position: self.belief,
+            origin: self.config.origin,
+            reference_time: cam::timestamp_its(self.config.wall, believed).ok()?,
+            objects,
+            sensors,
+        };
+        let message = v2xw_msg::cpm::build_cpm(&input).ok()?;
+        Some(v2xw_msg::cpm::encode_cpm(&message).ok()?.bytes)
+    }
+
+    /// The vehicle's role, which its CAM's low-frequency container states (an emergency
+    /// vehicle, public transport...).
+    pub fn set_vehicle_role(&mut self, role: cam::VehicleRole) {
+        self.own.set_role(role);
     }
 
     /// Sets the DCC state the generators honour.
@@ -731,6 +883,20 @@ impl ObuRuntime {
 
         if self.state.transmits() {
             self.generate(ctx, believed, &mut out);
+        }
+
+        // The applications decide over what has been delivered so far, at the node's
+        // periodic step (10 Hz for an OBU): the rate a V2V application's threat
+        // assessment runs at (CAMP VSC-A).
+        if let Some(apps) = self.apps.as_mut() {
+            out.advice = apps.evaluate(
+                ctx,
+                self.node,
+                believed,
+                &self.belief,
+                &self.own,
+                self.config.dims,
+            );
         }
 
         if self.window.length(now) >= self.config.telemetry_period {
@@ -1269,6 +1435,26 @@ impl ObuRuntime {
             claimed_speed_mps: frame.claimed_speed_mps,
             claimed_heading_rad: frame.claimed_heading_rad,
             verification,
+            // The facilities payload, out of the SPDU as it arrived, for the messages an
+            // application reads beyond the claims above (`crate::apps`). Only when the
+            // node runs applications: the parse is not free and nothing else reads it.
+            // Beyond the farthest any application looks (EEBL's 300 m, GLOSA's 300 m to the
+            // stop line) the content is not read, which is also what keeps a dense run's
+            // cost down: the claims above still reach the neighbour table.
+            payload: if self.apps.is_some()
+                && wants_payload(frame.msg_type)
+                && frame
+                    .claimed_pos
+                    .is_none_or(|p| p.distance_2d(self.belief.pos) <= 320.0)
+            {
+                frame
+                    .spdu
+                    .as_deref()
+                    .and_then(|b| self.security.parse(b))
+                    .map(|p| std::sync::Arc::<[u8]>::from(p.payload))
+            } else {
+                None
+            },
         }
     }
 
@@ -1276,6 +1462,9 @@ impl ObuRuntime {
         self.window
             .delivered(m.verification == VerificationState::Verified);
         self.events.on_delivered(&m);
+        if let Some(apps) = self.apps.as_mut() {
+            apps.on_message(&m);
+        }
         // The neighbour table is a table of *stations moving around this one*, and what
         // fills it is their awareness messages. A SPaT, a MAP or a signal request says
         // where a junction is, not where its sender is going, and a DENM describes an
@@ -1333,10 +1522,16 @@ impl ObuRuntime {
         let events = self
             .events
             .due(believed, &self.belief, self.schedule.services(), station_id);
-        if requests.is_empty() && events.is_empty() {
+        // The collective perception service: a CPM when its generation rules say so.
+        let cpm_content = if self.schedule.services().cpm {
+            self.cpm.due(believed)
+        } else {
+            None
+        };
+        if requests.is_empty() && events.is_empty() && cpm_content.is_none() {
             return;
         }
-        let wanted = (requests.len() + events.len()) as u32;
+        let wanted = (requests.len() + events.len() + usize::from(cpm_content.is_some())) as u32;
         let Some(cred) = self.stores.certs.active().cloned() else {
             // No usable credential: a node on the CRL, or one whose pool has run out.
             // [CAMP-EE §2.2.10.2] — it stops transmitting rather than sending unsigned.
@@ -1364,6 +1559,9 @@ impl ObuRuntime {
             self.drops.record_n(DropCause::TxOverflow, wanted);
             return;
         };
+        // A new pseudonym starts a new path history.
+        self.own
+            .set_identity(crate::safety::digest_key(&cred.digest));
 
         let mut built: Vec<(MsgType, SimTime, Option<Vec<u8>>)> =
             Vec::with_capacity(wanted as usize);
@@ -1371,12 +1569,18 @@ impl ObuRuntime {
             built.push((
                 r.msg_type,
                 r.at,
-                self.encode_payload(r.msg_type, believed, &cred),
+                self.encode_payload(r.msg_type, believed, &cred, r.include_low_frequency),
             ));
+        }
+        if let Some(content) = cpm_content {
+            let payload = self.encode_cpm(&content, believed, &cred);
+            built.push((MsgType::Cpm, believed, payload));
         }
         for e in events {
             let ty = e.msg_type();
-            let payload = self.events.encode(&e, believed, &cred, &self.config);
+            let payload = self
+                .events
+                .encode(&e, believed, &cred, &self.config, &self.own);
             built.push((ty, believed, payload));
         }
         for (msg_type, at, payload) in built {
@@ -1515,13 +1719,15 @@ impl ObuRuntime {
         msg_type: MsgType,
         believed: SimTime,
         cred: &CredentialHandle,
+        low_frequency: bool,
     ) -> Option<Vec<u8>> {
         let mut id = [0u8; 4];
         id.copy_from_slice(&cred.digest.0[..4]);
+        let bus = self.own.bus().copied();
         match msg_type {
             MsgType::Cam => {
                 let generation_time = cam::timestamp_its(self.config.wall, believed).ok()?;
-                let input = cam::CamInput::new(
+                let mut input = cam::CamInput::new(
                     u32::from_be_bytes(id),
                     self.config.station_type,
                     self.belief,
@@ -1529,13 +1735,61 @@ impl ObuRuntime {
                     self.config.dims,
                     generation_time,
                 );
+                // The high-frequency container's dynamics, from the vehicle's own sensors.
+                if let Some(b) = bus {
+                    input.longitudinal_acceleration_mps2 = Some(b.a_long_mps2);
+                    input.lateral_acceleration_mps2 = Some(b.a_lat_mps2);
+                    input.yaw_rate_rad_s = Some(b.yaw_rate_rad_s);
+                    if b.speed_mps > 1.0 {
+                        input.curvature_inv_m = Some(b.yaw_rate_rad_s / b.speed_mps);
+                        input.curvature_from_yaw_rate = true;
+                    }
+                }
+                // The low-frequency container at EN 302 637-2's cadence (the first CAM,
+                // then every 500 ms or more, `generator::CamGenerator`): role, lights and
+                // the path history.
+                if low_frequency {
+                    let now = believed;
+                    let points = self.own.history_points(&self.belief);
+                    let mut lights = cam::ExteriorLightMask::NONE;
+                    if let Some(l) = self.own.lights(now) {
+                        use v2xw_msg::j2735::bsm::ExteriorLights as J;
+                        let has = |bit: J| l.0 & bit.0 != 0;
+                        if has(J::LOW_BEAM) {
+                            lights = cam::ExteriorLightMask(
+                                lights.0 | cam::ExteriorLightMask::LOW_BEAM.0,
+                            );
+                        }
+                        if has(J::LEFT_TURN) || has(J::HAZARD) {
+                            lights = cam::ExteriorLightMask(
+                                lights.0 | cam::ExteriorLightMask::LEFT_TURN.0,
+                            );
+                        }
+                        if has(J::RIGHT_TURN) || has(J::HAZARD) {
+                            lights = cam::ExteriorLightMask(
+                                lights.0 | cam::ExteriorLightMask::RIGHT_TURN.0,
+                            );
+                        }
+                    }
+                    input.low_frequency = Some(cam::CamLowFrequency {
+                        vehicle_role: self.own.role(),
+                        exterior_lights: lights,
+                        path_history: points
+                            .iter()
+                            .map(|p| cam::PathHistoryPoint {
+                                pos: p.pos,
+                                age: Duration::from_nanos(self.belief.time_ns.saturating_sub(p.t)),
+                            })
+                            .collect(),
+                    });
+                }
                 let message = cam::build_cam(&input).ok()?;
                 let encoded = self.etsi.encode(&Message::Cam(Box::new(message))).ok()?;
                 debug_assert!(encoded.is_real(), "the ETSI codec produces real UPER bytes");
                 Some(encoded.bytes)
             }
             MsgType::Bsm => {
-                let input = bsm::BsmInput::new(
+                let mut input = bsm::BsmInput::new(
                     self.schedule.bsm_msg_count(),
                     id,
                     self.belief,
@@ -1543,7 +1797,25 @@ impl ObuRuntime {
                     self.config.dims,
                     bsm::sec_mark(self.config.wall, believed),
                 );
-                let message = bsm::build_bsm(&input).ok()?;
+                // Part I's dynamics from the vehicle's own sensors, which J2945/1 requires
+                // an OBU to fill (`accelSet`, `brakes`); `transmission` is forward gears
+                // for a vehicle that is moving or standing in traffic.
+                if let Some(b) = bus {
+                    input.longitudinal_acceleration_mps2 = Some(b.a_long_mps2);
+                    input.lateral_acceleration_mps2 = Some(b.a_lat_mps2);
+                    input.yaw_rate_rad_s = Some(b.yaw_rate_rad_s);
+                    input.brakes = self.own.brakes();
+                    input.transmission = bsm::TransmissionState::ForwardGears;
+                }
+                let mut message = bsm::build_bsm(&input).ok()?;
+                // Part II: J2945/1's path history and path prediction on every message,
+                // the event flags and lights when there are any (`crate::vehicle`).
+                if let Some(ext) =
+                    self.own
+                        .safety_extensions(&self.belief, believed, self.config.origin)
+                {
+                    message = message.with_vehicle_safety(ext);
+                }
                 // A `MessageFrame`, because that is what goes in a WSM payload; the bare
                 // PDU is three octets shorter and is not what a receiver decodes.
                 let encoded = bsm::encode_message_frame(&message).ok()?;
@@ -1651,21 +1923,31 @@ impl ObuRuntime {
 /// The 1609.2 `ThreeDLocation` a DENM's envelope carries, from the node's own belief.
 ///
 /// Latitude and longitude in tenths of a microdegree (1609.2 `NinetyDegreeInt`,
-/// `OneEightyDegreeInt`). The 16-bit `Elevation` is decimetres with an offset of 4 096 so
-/// that 0 is −409.6 m — **recalled, UNVERIFIED** against 1609.2 §6.4; it is clamped into
-/// the range rather than wrapped.
+/// `OneEightyDegreeInt`); the elevation as [`elevation_1609`].
 fn generation_location(
     belief: &PositionEstimate,
     origin: v2xw_core::geo::GeoOrigin,
 ) -> v2xw_sec::envelope::GenerationLocation {
     let (lat, lon, alt) = origin.to_geodetic(belief.pos);
     let tenth_micro = |deg: f64, lim: f64| (deg.clamp(-lim, lim) * 1e7).round() as i32;
-    let elevation = ((alt * 10.0).round() + 4_096.0).clamp(0.0, 61_439.0) as u16;
     v2xw_sec::envelope::GenerationLocation {
         lat_tenth_microdeg: tenth_micro(lat, 90.0),
         lon_tenth_microdeg: tenth_micro(lon, 180.0),
-        elevation,
+        elevation: elevation_1609(alt),
     }
+}
+
+/// The IEEE 1609.2 `Elevation` of a height above the WGS84 ellipsoid: "an integer number
+/// of decimeters representing the height above a minimum height of −409.5 m, with the
+/// maximum height being 6143.9 m" (`Ieee1609Dot2BaseTypes`, read from the module in
+/// `third_party/asn1/etsi/`). So 0 is −409.5 m and 65 534 is 6 143.9 m; a height outside
+/// that is clamped to the nearer end rather than wrapped.
+///
+/// Before 2026-10-06 the offset was a recalled 4 096 (0 at −409.6 m) and the top was
+/// clamped at 61 439, so every envelope's elevation was 0.1 m low and heights above
+/// 5 734.3 m were cut short.
+pub fn elevation_1609(height_m: f64) -> u16 {
+    ((height_m * 10.0).round() + 4_095.0).clamp(0.0, 65_534.0) as u16
 }
 
 fn policy_id(code: u8) -> &'static str {
@@ -1738,4 +2020,18 @@ pub fn reference_obu(node: NodeId, at: SimTime) -> ObuRuntime {
         NodeConfig::default(),
         at,
     )
+}
+
+#[cfg(test)]
+mod elevation_tests {
+    /// 1609.2's `Elevation`: decimetres above −409.5 m, up to 6 143.9 m.
+    #[test]
+    fn the_envelope_elevation_is_1609_2s() {
+        assert_eq!(super::elevation_1609(-409.5), 0);
+        assert_eq!(super::elevation_1609(0.0), 4_095);
+        assert_eq!(super::elevation_1609(10.0), 4_195);
+        assert_eq!(super::elevation_1609(6_143.9), 65_534);
+        assert_eq!(super::elevation_1609(9_000.0), 65_534);
+        assert_eq!(super::elevation_1609(-500.0), 0);
+    }
 }

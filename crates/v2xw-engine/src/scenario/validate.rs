@@ -953,15 +953,22 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "messages.sets",
         status: Status::Partial,
         note: "Which message sets are generated, each by the station that sends it in a \
-               deployment. bsm and cam: every equipped vehicle. denm (needs gn-btp): a \
-               vehicle braking at 0.4 g or harder raises a dangerous-situation DENM, \
-               repeated every 100 ms for 2 s. spat and map: roadside units with that role, \
-               from the signal plan the drivers obey and the junction's own lanes, at 10 Hz \
-               and 1 Hz (J2735 MessageFrame on wsmp, SPATEM and MAPEM on gn-btp). srm and \
+               deployment. bsm and cam: every equipped vehicle; a BSM carries J2945/1 path \
+               history and path prediction, and its event flags and lights when set; a CAM \
+               its low-frequency container every 500 ms. denm (needs gn-btp), at the C2C-CC \
+               triggering conditions: a vehicle whose emergency stop signal comes on (6 \
+               m/s2, UN R48) raises an emergency-brake-light DENM updated every 100 ms \
+               while it stays on, and a broken-down vehicle with its hazards on, once it \
+               has stood 10 s, a stationary-vehicle DENM repeated every second, updated \
+               every 15 s and cancelled (the cancellation repeated for 15 s) when the \
+               hazards go out. spat and map: roadside \
+               units with that role, from the signal plan the drivers obey (min, max and \
+               likely end times) and the junction's own lanes, at 10 Hz and 1 Hz. srm and \
                ssm (need codec_tier size-model): emergency vehicles ask the junction whose \
-               MAP they heard for priority and its unit answers; no controller grants it. \
-               cpm is refused: there is no perception model to fill one. psm and vam are \
-               refused until a VRU device is hosted.",
+               MAP they heard for priority, its unit answers, and its controller extends or \
+               ends greens for it (NTCIP 1211, signal.priority). cpm (needs gn-btp): each \
+               vehicle's radar and camera perception, shared at the TS 103 324 rules. psm \
+               and vam: VRU devices.",
     },
     KeyStatus {
         path: "messages.generator",
@@ -979,9 +986,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "messages.codec_tier",
         status: Status::Wired,
-        note: "'uper': every message is encoded for real — BSM, SPaT and MAP by the \
-               hand-written J2735 encoders (SPaT and MAP not yet checked against an \
-               independent decoder), CAM and DENM by the generated ETSI ones — and a set \
+        note: "'uper': every message is encoded for real — BSM, SPaT, MAP and PSM by the \
+               hand-written J2735 encoders (each checked byte for byte against pycrate), \
+               CAM, DENM, CPM and VAM by the generated ETSI ones — and a set \
                with no real encoder (srm, ssm) is refused. 'size-model': those sets are \
                carried as payloads of the validated modelled length (build decision D2), \
                and every message that has a real encoder is still encoded for real.",
@@ -1226,7 +1233,73 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                security.verification_policy, security.pseudonym_change.*, \
                nodes.default_obu (vehicles that enter after the change); any other path is \
                refused. attack.wave: the named attacker populations act only inside the \
-               wave, and a population may be in one wave.",
+               wave, and a population may be in one wave. safety.hard-brake: a vehicle \
+               (target: a node id, or auto for the first moving equipped vehicle with a car \
+               close behind) brakes at decel_mps2 (default 0.5 g) to a stop and stands \
+               hold_s (default 2). safety.breakdown: a vehicle stops at decel_mps2 (default \
+               3) with its hazard lights on until 'until'. safety.cut-in: a vehicle changes \
+               lane to side (left or right) at once into the gap ahead of that lane's \
+               follower. An auto safety event that finds no vehicle fitting waits up to \
+               within_s (default 10) and fires at the first step one does.",
+    },
+    KeyStatus {
+        path: "apps",
+        status: Status::Wired,
+        note: "The V2X applications every equipped vehicle runs over the messages it \
+               heard, decoded from their own octets, and its own vehicle's state; each \
+               warning is recorded on app.warning and labelled true, false or missed \
+               against ground truth (app.outcome).",
+    },
+    KeyStatus {
+        path: "apps.enabled",
+        status: Status::Wired,
+        note: "Which applications run: fcw (forward collision, TTC 2.4 s — NHTSA's FCW test \
+               timing), eebl (a vehicle ahead braking past 0.4 g, from its BSM or DENM), \
+               ima (crossing traffic), lta (oncoming traffic inside the 4.1 s critical gap \
+               when turning left, HCM), bsw (blind spot, ISO 17387; a lane-change warning \
+               when signalling), pcw (pedestrians and cyclists from their PSM or VAM), rlvw \
+               (running a red, from SPaT and MAP), glosa (the speed that meets the green, \
+               from SPaT and MAP, recorded on app.advice).",
+    },
+    KeyStatus {
+        path: "apps.glosa_compliance",
+        status: Status::Wired,
+        note: "The fraction of equipped drivers who follow GLOSA's advice: each driver \
+               decides once, and a follower slows to the advised speed as it approaches. \
+               No field compliance figure could be read for this build (the field \
+               evaluations found, e.g. Stahlmann et al., IEEE VNC 2016, report that \
+               simulations are too optimistic but give no rate), so the default is 0 \
+               (advice shown, not followed); a study sets it and sweeps it.",
+    },
+    KeyStatus {
+        path: "apps.fcw_ttc_s",
+        status: Status::Wired,
+        note: "FCW warns at or below this time to collision, seconds (default 2.4, NHTSA's \
+               FCW confirmation test for a decelerating lead).",
+    },
+    KeyStatus {
+        path: "apps.ima_tti_s",
+        status: Status::Wired,
+        note: "How far ahead IMA looks, as the ego's time to the conflict point, seconds \
+               (default 4, this build's choice).",
+    },
+    KeyStatus {
+        path: "apps.lta_gap_s",
+        status: Status::Wired,
+        note: "The gap LTA requires before a left turn, seconds (default 4.1, HCM 6th ed. \
+               Exhibit 20-11).",
+    },
+    KeyStatus {
+        path: "apps.pcw_ttc_s",
+        status: Status::Wired,
+        note: "PCW warns when a pedestrian or cyclist would be in the path within this \
+               time, seconds (default 3, this build's choice).",
+    },
+    KeyStatus {
+        path: "apps.rlvw_decel_mps2",
+        status: Status::Wired,
+        note: "RLVW warns once stopping would need more than this deceleration after a 1 s \
+               reaction, m/s² (default 3.4, AASHTO's comfortable deceleration).",
     },
     KeyStatus {
         path: "experiment",
@@ -1283,6 +1356,7 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     threats(s, &mut e);
     metrics_and_exporters(s, &mut e);
     timeline(s, &mut e);
+    apps(s, &mut e);
     experiment(s, &mut e);
     security_backend(s, &mut e);
     unreachable_keys(s, &mut e);
@@ -1543,14 +1617,15 @@ fn unreachable_keys(s: &Scenario, e: &mut Vec<ScenarioError>) {
                     .to_string(),
             )),
             "ssm" => {}
-            "cpm" => e.push(conflict(
+            // The perception model (`crate::perception`) fills it now; the CPM is an ETSI
+            // message and rides GeoNetworking/BTP (port 2009).
+            "cpm" if s.net.layer != "gn-btp" => e.push(conflict(
                 &field,
-                "'cpm' (ETSI TS 103 324) reports the objects a station's sensors perceive, \
-                 and no perception model exists in this build to fill one: a CPM here would \
-                 be an empty container of the right size, which is not a collective \
-                 perception message"
+                "'cpm' (ETSI TS 103 324) is an ETSI facilities message carried over \
+                 GeoNetworking/BTP: set net.layer to gn-btp"
                     .to_string(),
             )),
+            "cpm" => {}
             _ => e.push(conflict(
                 &field,
                 format!(
@@ -2962,6 +3037,22 @@ fn live_timeline_item(
                 e.push(conflict(&format!("{field}.ids"), why));
             }
         }
+        TimelineKind::HardBrake | TimelineKind::Breakdown | TimelineKind::CutIn => {
+            use crate::safety_events as se;
+            if let Err(why) = se::Pick::parse(item.params.get("target")) {
+                e.push(conflict(&format!("{field}.target"), why));
+            }
+            if item.kind == TimelineKind::CutIn
+                && let Err(why) = se::parse_side(item.params.get("side"))
+            {
+                e.push(conflict(&format!("{field}.side"), why));
+            }
+            for key in ["decel_mps2", "hold_s", "within_s"] {
+                if let Err(why) = se::positive(item.params.get(key), 1.0) {
+                    e.push(conflict(&format!("{field}.{key}"), why));
+                }
+            }
+        }
         _ => {}
     }
     if item.kind == TimelineKind::ParamChange
@@ -2975,6 +3066,42 @@ fn live_timeline_item(
              actors.vehicles.demand.rate_veh_per_h"
                 .to_string(),
         ));
+    }
+}
+
+/// The applications: known names, a compliance fraction, positive thresholds.
+fn apps(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let a = &s.apps;
+    for (i, name) in a.enabled.iter().enumerate() {
+        one_of(
+            &format!("apps.enabled[{i}]"),
+            name,
+            &crate::scenario::Apps::ALL,
+            e,
+        );
+    }
+    if !(a.glosa_compliance.is_finite() && (0.0..=1.0).contains(&a.glosa_compliance)) {
+        e.push(conflict(
+            "apps.glosa_compliance",
+            format!(
+                "is {}, and a fraction of drivers is in [0, 1]",
+                a.glosa_compliance
+            ),
+        ));
+    }
+    for (field, v) in [
+        ("apps.fcw_ttc_s", a.fcw_ttc_s),
+        ("apps.ima_tti_s", a.ima_tti_s),
+        ("apps.lta_gap_s", a.lta_gap_s),
+        ("apps.pcw_ttc_s", a.pcw_ttc_s),
+        ("apps.rlvw_decel_mps2", a.rlvw_decel_mps2),
+    ] {
+        if !(v.is_finite() && v > 0.0 && v <= 30.0) {
+            e.push(conflict(
+                field,
+                format!("is {v}; it must be a positive number no larger than 30"),
+            ));
+        }
     }
 }
 

@@ -248,7 +248,8 @@ fn nothing_size_modelled_is_reported_as_byte_exact() {
     assert!(v2xw_msg::byte_exactness(MsgType::Bsm).has_independent_check());
     assert!(v2xw_msg::byte_exactness(MsgType::Cam).is_byte_exact());
     assert!(!v2xw_msg::byte_exactness(MsgType::Cam).has_independent_check());
-    assert!(!v2xw_msg::byte_exactness(MsgType::Spat).is_byte_exact());
+    // SPaT is oracle-validated since 2026-10-06 (tests/j2735_infra_oracle.rs).
+    assert!(v2xw_msg::byte_exactness(MsgType::Spat).has_independent_check());
     assert!(v2xw_msg::byte_exactness(MsgType::Spat).has_real_bytes());
     assert!(!v2xw_msg::byte_exactness(MsgType::Cpm).has_real_bytes());
 }

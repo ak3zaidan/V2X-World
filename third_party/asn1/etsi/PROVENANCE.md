@@ -22,7 +22,7 @@ Build decision references are to `docs/design/12-build-decisions.md`.
 | IEEE 1609.2 comes from the **ETSI forge mirror**, not the copy bundled with SAE J2735 | The J2735 mirror's copies differ in line endings and comments, its `EtsiTs103097ExtensionModule.asn` is an older revision, and the whole J2735 bundle is unlicensed (build decision D3). The forge copies carry the forge's BSD-3-Clause repository licence. |
 | **No** ETSI TS 102 941 (PKI) | `rasn-compiler` 0.16 cannot parse `WITH COMPONENTS` inner subtyping on a CHOICE (`EtsiTs102941MessagesItss.asn:105:6`). PKI is a Phase 4 need, so it is deferred rather than worked around (build decision D5). |
 | VAM is **TS 103 300-3 V2.2.1** (forge `master`) | The VRU devices' awareness message. It imports `ETSI-ITS-CDD` major-version-3 `WITH SUCCESSORS`, which the Release 2 CDD here (major-version-4) satisfies: every one of its 34 imported types is defined in it. Added to the `FACILITIES` unit on 2026-09-23. |
-| **No** CPM, TS 103 301 | Out of this crate's current scope. CPM generates and compiles cleanly and can be added by extending the `FACILITIES` unit in `build.rs`; TS 103 301 does **not** compile (it shares the J2735 regional-extension problem and needs the ISO TS 19321 IVI module, which ETSI does not publish). |
+| CPM is **TS 103 324 V2.1.1**; **no** TS 103 301 | CPM added 2026-09-30 (§3.3b). TS 103 301 does **not** compile (it shares the J2735 regional-extension problem and needs the ISO TS 19321 IVI module, which ETSI does not publish). |
 | **No** SAE J2735 anywhere in this repository | Its embedded licence forbids redistribution, and the generated Rust does not compile anyway (build decisions D2 and D3). `third_party/asn1/j2735/` is git-ignored. |
 
 ## 2. The CP1252 problem and the `normalized-utf8/` copies
@@ -90,6 +90,22 @@ The file is UTF-8 as fetched, so it needs no `normalized-utf8/` copy. It still l
 `SequenceOfTrajectoryInterceptionIndication` twice in its `IMPORTS`; `rasn-compiler` 0.16
 generates and compiles it regardless, so no patch is carried for it (the build would fail if
 that stopped being true).
+
+### 3.3b CPM — ETSI TS 103 324 V2.1.1
+
+| File | ASN.1 module | Bytes | sha256 | Source (pinned) |
+|---|---|---:|---|---|
+| `cpm_ts103324/CPM-PDU-Descriptions.asn` | `CPM-PDU-Descriptions` | 6 015 | `90c6b015bdc99917dd36bc8e7d1ede9355374f5d3a1c12e14bb4d560340fdfa2` | <https://forge.etsi.org/rep/ITS/asn1/cpm_ts103324> tag `v2.1.1` (commit `73043d4f5b`), `asn/`, fetched 2026-09-30 |
+| `cpm_ts103324/CPM-OriginatingStationContainers.asn` | `CPM-OriginatingStationContainers` | 2 077 | `333146879622e54a75969ee5d18c0b839ca5426f9f42c05744fc996ba921e10d` | the same tag |
+| `cpm_ts103324/CPM-SensorInformationContainer.asn` | `CPM-SensorInformationContainer` | 1 830 | `662653e5854b3d4057b98be70277d12fae2d14e8ea61808a9325b947201da462` | the same tag |
+| `cpm_ts103324/CPM-PerceptionRegionContainer.asn` | `CPM-PerceptionRegionContainer` | 2 544 | `e8fc77e0b10fe8cec191192f49d2049add8f3c1c3c4c63a364e6b64f77750910` | the same tag |
+| `cpm_ts103324/CPM-PerceivedObjectContainer.asn` | `CPM-PerceivedObjectContainer` | 1 223 | `71f3482ba2a43f874aaa5dce990baeb37c892f277529de83d1275f577ce2d533` | the same tag |
+| `cpm_ts103324/LICENSE.txt` | — | 1 476 | `a2138586a9114057d86342dee602154c3e7ab050cd7725d4f7ea2620888223d4` | repository `LICENSE`, BSD-3-Clause, "Copyright 2019 ETSI" |
+
+The CPM imports `ETSI-ITS-CDD` major-version-3 `WITH SUCCESSORS`, which the Release 2 CDD
+here satisfies; `PerceivedObject` and every data frame the containers use are the CDD's.
+UTF-8 as fetched. Added to the `FACILITIES` unit on 2026-09-30, when a perception model
+existed to fill it (`v2xw-engine::perception`).
 
 ### 3.4 Security header — ETSI TS 103 097, Release 2
 

@@ -112,33 +112,41 @@ impl DenmCause {
     /// not distinguish, say, a multi-vehicle accident from a heavy-accident, and encoding a
     /// specific sub-cause would be inventing detail the model does not have.
     pub fn to_cause_code(self) -> CauseCodeV2 {
+        self.to_cause_code_with(0)
+    }
+
+    /// The `CauseCodeV2` for this cause with sub-cause `sub`, for the triggers that know
+    /// it: `dangerousSituation(99)` / `emergencyElectronicBrakeEngaged(1)` for a hard
+    /// brake and `stationaryVehicle(94)` / `vehicleBreakdown(2)` for a breakdown (ETSI TS
+    /// 102 894-2, `DangerousSituationSubCauseCode`, `StationaryVehicleSubCauseCode`).
+    pub fn to_cause_code_with(self, sub: u8) -> CauseCodeV2 {
         use crate::asn1::cdd as c;
         let choice = match self {
             DenmCause::TrafficCondition => {
-                CauseCodeChoice::trafficCondition1(c::TrafficConditionSubCauseCode(0))
+                CauseCodeChoice::trafficCondition1(c::TrafficConditionSubCauseCode(sub))
             }
-            DenmCause::Accident => CauseCodeChoice::accident2(c::AccidentSubCauseCode(0)),
-            DenmCause::Roadworks => CauseCodeChoice::roadworks3(c::RoadworksSubCauseCode(0)),
-            DenmCause::Adhesion => CauseCodeChoice::adhesion6(c::AdhesionSubCauseCode(0)),
+            DenmCause::Accident => CauseCodeChoice::accident2(c::AccidentSubCauseCode(sub)),
+            DenmCause::Roadworks => CauseCodeChoice::roadworks3(c::RoadworksSubCauseCode(sub)),
+            DenmCause::Adhesion => CauseCodeChoice::adhesion6(c::AdhesionSubCauseCode(sub)),
             DenmCause::ObstacleOnTheRoad => CauseCodeChoice::hazardousLocation_ObstacleOnTheRoad10(
-                c::HazardousLocationObstacleOnTheRoadSubCauseCode(0),
+                c::HazardousLocationObstacleOnTheRoadSubCauseCode(sub),
             ),
-            DenmCause::HumanPresenceOnTheRoad => {
-                CauseCodeChoice::humanPresenceOnTheRoad12(c::HumanPresenceOnTheRoadSubCauseCode(0))
-            }
+            DenmCause::HumanPresenceOnTheRoad => CauseCodeChoice::humanPresenceOnTheRoad12(
+                c::HumanPresenceOnTheRoadSubCauseCode(sub),
+            ),
             DenmCause::DangerousEndOfQueue => {
-                CauseCodeChoice::dangerousEndOfQueue27(c::DangerousEndOfQueueSubCauseCode(0))
+                CauseCodeChoice::dangerousEndOfQueue27(c::DangerousEndOfQueueSubCauseCode(sub))
             }
             DenmCause::StationaryVehicle => {
-                CauseCodeChoice::stationaryVehicle94(c::StationaryVehicleSubCauseCode(0))
+                CauseCodeChoice::stationaryVehicle94(c::StationaryVehicleSubCauseCode(sub))
             }
             DenmCause::EmergencyVehicleApproaching => {
                 CauseCodeChoice::emergencyVehicleApproaching95(
-                    c::EmergencyVehicleApproachingSubCauseCode(0),
+                    c::EmergencyVehicleApproachingSubCauseCode(sub),
                 )
             }
             DenmCause::DangerousSituation => {
-                CauseCodeChoice::dangerousSituation99(c::DangerousSituationSubCauseCode(0))
+                CauseCodeChoice::dangerousSituation99(c::DangerousSituationSubCauseCode(sub))
             }
         };
         CauseCodeV2::new(choice)
@@ -178,6 +186,36 @@ impl AwarenessDistance {
             AwarenessDistance::LessThan5km => StandardLength3b::lessThan5km,
             AwarenessDistance::LessThan10km => StandardLength3b::lessThan10km,
             AwarenessDistance::Over10km => StandardLength3b::over10km,
+        }
+    }
+}
+
+/// Which traffic a DENM is relevant to (`TrafficDirection`, ETSI TS 102 894-2), relative
+/// to the event's reference direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RelevanceDirection {
+    /// `allTrafficDirections(0)`.
+    All,
+    /// `sameAsReferenceDirection-upstreamOfReferencePosition(1)`: traffic coming up behind
+    /// the event, which is who an emergency brake or a stationary vehicle endangers.
+    Upstream,
+    /// `sameAsReferenceDirection-downstreamOfReferencePosition(2)`.
+    Downstream,
+    /// `oppositeToReferenceDirection(3)`.
+    Opposite,
+}
+
+impl RelevanceDirection {
+    fn to_cdd(self) -> crate::asn1::cdd::TrafficDirection {
+        use crate::asn1::cdd::TrafficDirection as T;
+        match self {
+            RelevanceDirection::All => T::allTrafficDirections,
+            RelevanceDirection::Upstream => T::sameAsReferenceDirection_upstreamOfReferencePosition,
+            RelevanceDirection::Downstream => {
+                T::sameAsReferenceDirection_downstreamOfReferencePosition
+            }
+            RelevanceDirection::Opposite => T::oppositeToReferenceDirection,
         }
     }
 }
@@ -293,6 +331,15 @@ pub struct DenmInput {
     /// `transmissionInterval`, the interval the originator says it is transmitting at. It
     /// **is** carried in the message, unlike the repetition parameters.
     pub transmission_interval: Option<Duration>,
+    /// The sub-cause, `0` (`unavailable`) unless the trigger knows it.
+    pub sub_cause: u8,
+    /// `trafficDirection`: which traffic the event is relevant to.
+    pub traffic_direction: Option<RelevanceDirection>,
+    /// `detectionZonesToEventPosition`: the path the detecting vehicle drove up to the
+    /// event, as ETSI `Path` deltas — `(Δlat, Δlon` in 0.1 microdegree, `Δalt` in cm,
+    /// `Δt` in 10 ms`)`, each from the point before it and the first from the event
+    /// position ([`crate::j2945::etsi_path_deltas`]). Empty is an empty trace.
+    pub trace: Vec<(i32, i32, i16, u16)>,
 }
 
 impl DenmInput {
@@ -320,6 +367,9 @@ impl DenmInput {
             awareness_distance: Some(AwarenessDistance::LessThan500m),
             validity: DEFAULT_VALIDITY,
             transmission_interval: None,
+            sub_cause: 0,
+            traffic_direction: None,
+            trace: Vec::new(),
         }
     }
 }
@@ -339,17 +389,34 @@ pub fn build_denm(input: &DenmInput) -> Result<DENM, CodecError> {
         input
             .cause_code
             .clone()
-            .unwrap_or_else(|| input.cause.to_cause_code()),
+            .unwrap_or_else(|| input.cause.to_cause_code_with(input.sub_cause)),
         None,
         None,
         None,
         None,
     );
-    // `detectionZonesToEventPosition` is mandatory and is `SEQUENCE SIZE(1..7) OF Path`.
-    // The simulator does not model the trace a detecting vehicle drove, so the one Path is
-    // empty — which `Path ::= SEQUENCE (SIZE(0..40)) OF PathPoint` allows, and which is the
-    // truthful encoding of "no trace recorded".
-    let location = LocationContainer::new(None, None, Traces(vec![Path(Vec::new())]), None, None);
+    // `detectionZonesToEventPosition` is mandatory and is `SEQUENCE SIZE(1..7) OF Path`:
+    // the path the detecting vehicle drove to the event (its own path history), which is
+    // what a receiver matches its own path against to decide the event is on its way. An
+    // empty trace is the truthful encoding of "no trace recorded".
+    let points: Vec<crate::asn1::cdd::PathPoint> = input
+        .trace
+        .iter()
+        .take(crate::cam::MAX_PATH_POINTS)
+        .map(|(dlat, dlon, dalt, dt)| {
+            crate::asn1::cdd::PathPoint::new(
+                crate::asn1::cdd::DeltaReferencePosition::new(
+                    crate::asn1::cdd::DeltaLatitude(*dlat),
+                    crate::asn1::cdd::DeltaLongitude(*dlon),
+                    crate::asn1::cdd::DeltaAltitude(*dalt),
+                ),
+                Some(crate::asn1::cdd::PathDeltaTime(rasn::types::Integer::from(
+                    u64::from((*dt).max(1)),
+                ))),
+            )
+        })
+        .collect();
+    let location = LocationContainer::new(None, None, Traces(vec![Path(points)]), None, None);
 
     Ok(DENM::new(
         header,
@@ -442,7 +509,7 @@ fn management_container(
         termination,
         event_position,
         input.awareness_distance.map(|d| d.to_cdd()),
-        None,
+        input.traffic_direction.map(RelevanceDirection::to_cdd),
         DeltaTimeSecond(validity_s),
         input.transmission_interval.map(|d| {
             // `DeltaTimeMilliSecondPositive ::= INTEGER (1..10000)`.
@@ -523,8 +590,14 @@ struct ActiveEvent {
     /// When the next transmission is due, if any.
     next_tx: Option<SimTime>,
     /// Set once the application cancels or another station negates; transmitted once and
-    /// then the event is dropped.
+    /// then the event is dropped — or, when the termination came with a repetition
+    /// instruction, repeated for its duration first.
     pending_termination: Option<TerminationKind>,
+    /// The repetition instruction the termination came with, if any.
+    termination_repetition: Option<Repetition>,
+    /// Where the current repetition window starts: the detection, or the latest update or
+    /// termination (each of which the application may ask to have repeated afresh).
+    repetition_from: SimTime,
     /// Set when the application updates the event; the next poll reports an update.
     pending_update: bool,
     /// Whether the original has gone out yet.
@@ -588,6 +661,8 @@ impl DenmService {
             repetition: repetition.filter(|r| !r.interval.is_zero() && !r.duration.is_zero()),
             next_tx: Some(now),
             pending_termination: None,
+            termination_repetition: None,
+            repetition_from: now,
             pending_update: false,
             sent_original: false,
         });
@@ -599,13 +674,55 @@ impl DenmService {
     /// The caller advances `referenceTime` when it builds the message — §6.1.2 says the
     /// update increments it, and the value is a [`TimestampIts`] the node reads from its own
     /// clock, not something this timetable can invent.
+    ///
+    /// The update's repetition window starts afresh at `now`: a repetition the application
+    /// asked for is a repetition of the latest version.
     pub fn update(&mut self, id: EventId, now: SimTime) -> bool {
         let Some(event) = self.events.iter_mut().find(|e| e.id == id) else {
             return false;
         };
         event.pending_update = true;
         event.next_tx = Some(now);
+        event.repetition_from = now;
         true
+    }
+
+    /// An update that also refreshes the event's `detectionTime` to `now`, so its validity
+    /// runs from the update — what the C2C-CC triggering conditions ask of the electronic
+    /// emergency brake light and the stationary-vehicle services ("detectionTime … shall be
+    /// refreshed for an update DENM", RS_tcDaSi_177 and RS_tcStVe_133). The caller builds
+    /// the DENM with the refreshed detection instant.
+    pub fn refresh(&mut self, id: EventId, now: SimTime) -> bool {
+        let Some(event) = self.events.iter_mut().find(|e| e.id == id) else {
+            return false;
+        };
+        event.detection_time = now;
+        self.update(id, now)
+    }
+
+    /// Cancels `id` and has the cancellation repeated at `repetition`'s interval for its
+    /// duration — the C2C-CC stationary-vehicle rule that a cancelled DENM, like a new or
+    /// an updated one, is repeated every 1 s for 15 s (RS_tcStVe_131).
+    pub fn cancel_repeated(&mut self, id: EventId, now: SimTime, repetition: Repetition) -> bool {
+        if !self.terminate(id, now, TerminationKind::Cancellation) {
+            return false;
+        }
+        if let Some(event) = self.events.iter_mut().find(|e| e.id == id) {
+            event.termination_repetition =
+                Some(repetition).filter(|r| !r.interval.is_zero() && !r.duration.is_zero());
+            event.repetition_from = now;
+        }
+        true
+    }
+
+    /// Stops `id` without a termination DENM: the event is dropped and nothing more is
+    /// sent for it. The C2C-CC electronic emergency brake light ends this way — "a
+    /// cancellation DENM shall not be used", the updates simply stop (RS_tcDaSi_171–172) —
+    /// and receivers let it lapse at its validity.
+    pub fn stop(&mut self, id: EventId) -> bool {
+        let before = self.events.len();
+        self.events.retain(|e| e.id != id);
+        self.events.len() != before
     }
 
     /// Cancels `id` as its originator. The termination goes out on the next poll.
@@ -647,11 +764,20 @@ impl DenmService {
         for mut event in std::mem::take(&mut self.events) {
             let expires_at = event.validity.after(event.detection_time);
 
-            if let Some(kind) = event.pending_termination
-                && event.next_tx.is_some_and(|t| t <= now)
-            {
-                // §8.3.2.5: transmitted at least once, and then the event is gone.
-                actions.push(DenmAction::Termination(event.id, kind));
+            if let Some(kind) = event.pending_termination {
+                if event.next_tx.is_some_and(|t| t <= now) {
+                    // §8.3.2.5: transmitted at least once, and then the event is gone —
+                    // after its own repetitions, when the termination asked for them.
+                    actions.push(DenmAction::Termination(event.id, kind));
+                    event.next_tx = event.termination_repetition.and_then(|r| {
+                        let next = r.interval.after(now);
+                        (next < r.duration.after(event.repetition_from)).then_some(next)
+                    });
+                    if event.next_tx.is_none() {
+                        continue;
+                    }
+                }
+                keep.push(event);
                 continue;
             }
 
@@ -674,7 +800,7 @@ impl DenmService {
 
                 event.next_tx = event.repetition.and_then(|r| {
                     let next = r.interval.after(now);
-                    let repetition_ends = r.duration.after(event.detection_time);
+                    let repetition_ends = r.duration.after(event.repetition_from);
                     (next < repetition_ends && next < expires_at).then_some(next)
                 });
             }
@@ -940,6 +1066,54 @@ mod tests {
         );
         assert!(!s.is_active(id));
         assert!(s.poll(ms(2_000)).is_empty());
+    }
+
+    /// C2C-CC RS_tcStVe_131: a cancellation asked to be repeated goes out every interval
+    /// for the duration, then the event is gone.
+    #[test]
+    fn a_repeated_cancellation_repeats_then_ends() {
+        let mut s = DenmService::new(1);
+        let id = s.create(0, DEFAULT_VALIDITY, None);
+        s.poll(0);
+        let rep = Repetition::new(Duration::from_secs(1), Duration::from_secs(3));
+        assert!(s.cancel_repeated(id, ms(1_000), rep));
+        let mut seen = Vec::new();
+        for step in 0..=12u64 {
+            let t = ms(1_000 + step * 500);
+            seen.extend(s.poll(t).into_iter().map(|a| (t / NS_PER_MS, a)));
+        }
+        let c = DenmAction::Termination(id, TerminationKind::Cancellation);
+        assert_eq!(seen, vec![(1_000, c), (2_000, c), (3_000, c)]);
+        assert!(!s.is_active(id));
+    }
+
+    /// An update restarts the repetition window, and a refresh also moves the validity.
+    #[test]
+    fn an_update_restarts_the_repetition_and_a_refresh_the_validity() {
+        let mut s = DenmService::new(1);
+        let rep = Repetition::new(Duration::from_secs(1), Duration::from_secs(2));
+        let id = s.create(0, Duration::from_secs(3), Some(rep));
+        assert_eq!(s.poll(0), vec![DenmAction::Original(id)]);
+        assert_eq!(s.poll(ms(1_000)), vec![DenmAction::Repetition(id)]);
+        // Without the refresh the event would expire at 3 s; refreshed at 1.5 s it lives
+        // to 4.5 s and repeats to 3.5 s.
+        assert!(s.refresh(id, ms(1_500)));
+        assert_eq!(s.poll(ms(1_500)), vec![DenmAction::Update(id)]);
+        assert_eq!(s.poll(ms(2_500)), vec![DenmAction::Repetition(id)]);
+        assert!(
+            s.poll(ms(3_500)).is_empty(),
+            "the repetition window ended at 3.5 s"
+        );
+        assert!(
+            s.is_active(id),
+            "and the refreshed validity holds it to 4.5 s"
+        );
+        assert!(s.poll(ms(4_500)).is_empty());
+        assert!(!s.is_active(id));
+        // A stopped event says nothing more.
+        let other = s.create(ms(5_000), Duration::from_secs(2), None);
+        assert!(s.stop(other));
+        assert!(s.poll(ms(5_000)).is_empty());
     }
 
     #[test]

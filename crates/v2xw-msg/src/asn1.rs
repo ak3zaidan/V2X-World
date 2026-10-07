@@ -44,6 +44,10 @@ pub mod facilities {
 }
 
 pub use facilities::cam_pdu_descriptions as cam_asn1;
+pub use facilities::cpm_originating_station_containers as cpm_stations;
+pub use facilities::cpm_pdu_descriptions as cpm_asn1;
+pub use facilities::cpm_perceived_object_container as cpm_objects;
+pub use facilities::cpm_sensor_information_container as cpm_sensors;
 pub use facilities::denm_pdu_description as denm_asn1;
 pub use facilities::etsi_its_cdd as cdd;
 pub use facilities::vam_pdu_descriptions as vam_asn1;

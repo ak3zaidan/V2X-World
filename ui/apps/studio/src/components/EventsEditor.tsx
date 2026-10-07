@@ -34,6 +34,11 @@ function newItem(type: string, t: number): EventItem {
       return { t, type, path: LIVE_PARAMS[0].path, value: "rain" };
     case "outage":
       return { t, type, target: 0 };
+    case "safety.hard-brake":
+    case "safety.breakdown":
+      return { t, type, target: "auto" };
+    case "safety.cut-in":
+      return { t, type, target: "auto", side: "left" };
     default:
       return { t, type, ids: [0] };
   }
@@ -304,7 +309,14 @@ export function EventsEditor({
             <div className="help">{kind?.help ?? `The engine does not know '${it.type}'.`}</div>
             {done.map((f) => (
               <div className="help fired" data-testid="event-fired" key={`${f.phase}-${f.t}`}>
-                {f.phase === "end" ? "Ended" : "Fired"} at {(f.t / 1e9).toFixed(1)} s: {f.effect}
+                {f.phase === "end"
+                  ? "Ended"
+                  : f.phase === "waiting"
+                    ? "Waiting for a vehicle"
+                    : f.phase === "expired"
+                      ? "Gave up"
+                      : "Fired"}{" "}
+                at {(f.t / 1e9).toFixed(1)} s: {f.effect}
               </div>
             ))}
           </div>

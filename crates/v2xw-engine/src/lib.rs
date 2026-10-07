@@ -57,6 +57,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adapters;
+pub mod app_truth;
 pub mod backend;
 pub mod ctx;
 pub mod error;
@@ -66,15 +67,19 @@ pub mod frag;
 pub mod hosted;
 pub mod infra;
 pub mod manifest;
+pub mod perception;
 pub mod phase2;
+pub mod priority;
 pub mod privacy_metrics;
 pub mod records;
 pub mod run;
+pub mod safety_events;
 pub mod scenario;
 pub mod sec_records;
 pub mod signature;
 pub mod snapshot;
 pub mod timeline;
+pub mod vehicle_bus;
 pub mod wiring;
 
 pub use ctx::{DigestRecorder, EngineCtx, MemoryRecorder, NullRecorder, RunRecorder};

@@ -73,6 +73,21 @@ impl ChannelSpec {
 /// their wire id; they are delivered as `Keyframe` and `Delta` frames, never as `Event`
 /// payloads, so their `payload_bytes` is `None`.
 pub const CHANNELS: &[ChannelSpec] = &[
+    // GLOSA's speed advice to one driver (`v2xw_node::apps`): a recording channel.
+    ChannelSpec {
+        name: "app.advice",
+        wire_id: None,
+        visibility: Visibility::Node,
+        payload_bytes: None,
+    },
+    // Each application warning, or missed warning, labelled against ground truth
+    // (`v2xw_engine::app_truth`): it names both vehicles' nodes, so it is ground truth.
+    ChannelSpec {
+        name: "app.outcome",
+        wire_id: None,
+        visibility: Visibility::NodeAndGt,
+        payload_bytes: None,
+    },
     ChannelSpec {
         name: "app.warning",
         wire_id: Some(40),
@@ -294,6 +309,14 @@ pub const CHANNELS: &[ChannelSpec] = &[
         name: "sec.pseudonym",
         wire_id: None,
         visibility: Visibility::Node,
+        payload_bytes: None,
+    },
+    // What a junction controller did for a priority request (`v2xw_engine::priority`):
+    // the controller's own log, public like the signal state it changes.
+    ChannelSpec {
+        name: "signal.priority",
+        wire_id: None,
+        visibility: Visibility::Public,
         payload_bytes: None,
     },
     ChannelSpec {

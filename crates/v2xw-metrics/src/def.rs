@@ -90,6 +90,9 @@ pub enum Dim {
     /// names the summaries and not the cells; this crate reports the matrix itself, so it
     /// needs a dimension to report it along.
     Cell,
+    /// A V2X application (`fcw`, `eebl`, `ima`, `lta`, `bsw`, `lcw`, `pcw`, `rlvw`), for
+    /// the application metrics ([`crate::apps`]).
+    App,
 }
 
 impl core::fmt::Display for Dim {

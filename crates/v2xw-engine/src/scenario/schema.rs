@@ -88,6 +88,11 @@ pub struct Scenario {
     /// The timeline: things that happen at a stated instant.
     #[serde(default)]
     pub events: Vec<TimelineItem>,
+    /// The V2X applications equipped vehicles run (`v2xw_node::apps`). Left out of the
+    /// serialised scenario when it is the default, so a scenario that does not mention it
+    /// keeps its content hash.
+    #[serde(default, skip_serializing_if = "Apps::is_default")]
+    pub apps: Apps,
     /// A parameter sweep, when this file describes one (08-measurement-and-data.md §4).
     #[serde(default)]
     pub experiment: Option<Experiment>,
@@ -1254,6 +1259,83 @@ pub struct ExporterSpec {
     pub opts: serde_json::Value,
 }
 
+/// The V2X applications every equipped vehicle runs over what it hears, and how drivers
+/// respond to the one that advises (`v2xw_node::apps`, whose table cites each threshold).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Apps {
+    /// Which applications run: any of `fcw`, `eebl`, `ima`, `lta`, `bsw` (blind spot and
+    /// lane change), `pcw`, `rlvw`, `glosa`. Empty runs none.
+    #[serde(default = "Apps::default_enabled")]
+    pub enabled: Vec<String>,
+    /// The fraction of equipped drivers who follow GLOSA's speed advice, `0..=1`.
+    #[serde(default)]
+    pub glosa_compliance: f64,
+    /// FCW's time-to-collision threshold, seconds.
+    #[serde(default = "Apps::default_fcw_ttc_s")]
+    pub fcw_ttc_s: f64,
+    /// IMA's look-ahead to the conflict point, seconds.
+    #[serde(default = "Apps::default_ima_tti_s")]
+    pub ima_tti_s: f64,
+    /// LTA's critical gap, seconds.
+    #[serde(default = "Apps::default_lta_gap_s")]
+    pub lta_gap_s: f64,
+    /// PCW's time threshold, seconds.
+    #[serde(default = "Apps::default_pcw_ttc_s")]
+    pub pcw_ttc_s: f64,
+    /// RLVW's comfortable-stop deceleration, m/s².
+    #[serde(default = "Apps::default_rlvw_decel_mps2")]
+    pub rlvw_decel_mps2: f64,
+}
+
+impl Apps {
+    /// Every application.
+    pub const ALL: [&'static str; 8] = ["fcw", "eebl", "ima", "lta", "bsw", "pcw", "rlvw", "glosa"];
+
+    fn default_enabled() -> Vec<String> {
+        Self::ALL.iter().map(|s| (*s).to_string()).collect()
+    }
+    fn default_fcw_ttc_s() -> f64 {
+        2.4
+    }
+    fn default_ima_tti_s() -> f64 {
+        4.0
+    }
+    fn default_lta_gap_s() -> f64 {
+        4.1
+    }
+    fn default_pcw_ttc_s() -> f64 {
+        3.0
+    }
+    fn default_rlvw_decel_mps2() -> f64 {
+        3.4
+    }
+
+    /// Whether this is the default.
+    pub fn is_default(&self) -> bool {
+        *self == Apps::default()
+    }
+
+    /// Whether `app` runs.
+    pub fn runs(&self, app: &str) -> bool {
+        self.enabled.iter().any(|a| a == app)
+    }
+}
+
+impl Default for Apps {
+    fn default() -> Self {
+        Self {
+            enabled: Self::default_enabled(),
+            glosa_compliance: 0.0,
+            fcw_ttc_s: Self::default_fcw_ttc_s(),
+            ima_tti_s: Self::default_ima_tti_s(),
+            lta_gap_s: Self::default_lta_gap_s(),
+            pcw_ttc_s: Self::default_pcw_ttc_s(),
+            rlvw_decel_mps2: Self::default_rlvw_decel_mps2(),
+        }
+    }
+}
+
 /// One item on the scenario timeline.
 ///
 /// §13 writes these as `{t, until?, type, params}`; `type` is a Rust keyword, so the field
@@ -1304,6 +1386,24 @@ pub enum TimelineKind {
     /// open. With `until`, the road reopens then.
     #[serde(rename = "closure")]
     Closure,
+    /// A scripted emergency stop: the vehicle `target` names (a node id, or `"auto"` for
+    /// the first moving vehicle with a vehicle close behind it) brakes at `decel_mps2`
+    /// (default 0.5 g) to a standstill, stands for `hold_s` (default 2 s) and drives on.
+    /// The traffic model's own drivers almost never brake past the 0.4 g event threshold
+    /// (none did in 18,052 samples of a dense run), so a hard-braking warning needs one.
+    #[serde(rename = "safety.hard-brake")]
+    HardBrake,
+    /// A vehicle breaks down: `target` (as for a hard brake, `"auto"` picking the first
+    /// moving vehicle) brakes to a stop at `decel_mps2` (default 3 m/s²), switches its
+    /// hazard warning lights on, and stands until `until` (or the end of the run).
+    #[serde(rename = "safety.breakdown")]
+    Breakdown,
+    /// A cut-in: `target` (a node id, or `"auto"` for the first vehicle with a car on the
+    /// `side` lane just behind it) changes lane to `side` (`left` or `right`, default
+    /// `left`) at once, into the gap ahead of that lane's follower, whatever its
+    /// lane-change model would have chosen.
+    #[serde(rename = "safety.cut-in")]
+    CutIn,
 }
 
 impl TimelineKind {
@@ -1316,6 +1416,7 @@ impl TimelineKind {
             TimelineKind::Outage => &["target"],
             TimelineKind::ParamChange => &["path", "value"],
             TimelineKind::Closure => &["target"],
+            TimelineKind::HardBrake | TimelineKind::Breakdown | TimelineKind::CutIn => &[],
         }
     }
 
@@ -1330,6 +1431,7 @@ impl TimelineKind {
                 | TimelineKind::Outage
                 | TimelineKind::AttackWave
                 | TimelineKind::Closure
+                | TimelineKind::Breakdown
         )
     }
 }

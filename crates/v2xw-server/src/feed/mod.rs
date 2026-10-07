@@ -184,8 +184,9 @@ pub struct RxEntry {
     /// PSDU octets.
     pub bytes_on_wire: Option<u32>,
     /// The journey: generated, sign start, signed, tx start, tx end, arrival, parsed,
-    /// verify start, verify done, delivered.
-    pub stamps: [Option<SimTime>; 10],
+    /// verify start, verify done, delivered, and (last, since it was split out of the
+    /// signature later) the hand-off to the radio.
+    pub stamps: [Option<SimTime>; 11],
     /// AIFS and backoff shares of channel access, ns.
     pub mac: [Option<u64>; 2],
     /// Airtime, µs, and payload octets.
@@ -204,6 +205,7 @@ const S_RX_DONE: usize = 6;
 const S_VERIFY_START: usize = 7;
 const S_VERIFY_DONE: usize = 8;
 const S_DELIVERED: usize = 9;
+const S_HANDOFF: usize = 10;
 
 impl RxEntry {
     fn of(v: &NodeRxView) -> Self {
@@ -232,6 +234,7 @@ impl RxEntry {
                 v.t_verify_start,
                 v.t_verify_done,
                 v.t_delivered,
+                v.t_handoff,
             ],
             mac: [v.mac_aifs_ns, v.mac_backoff_ns],
             airtime_us: v.airtime_us,
@@ -262,6 +265,7 @@ impl RxEntry {
             t_generated: s[S_GEN],
             t_sign_start: s[S_SIGN_START],
             t_signed: s[S_SIGNED],
+            t_handoff: s[S_HANDOFF],
             mac_aifs_ns: self.mac[0],
             mac_backoff_ns: self.mac[1],
             t_tx_start: s[S_TX_START],
@@ -1044,6 +1048,7 @@ mod tests {
             t_generated: stamps[0],
             t_sign_start: stamps[1],
             t_signed: stamps[2],
+            t_handoff: None,
             mac_aifs_ns: Some(58_000),
             mac_backoff_ns: Some(0),
             t_tx_start: stamps[3],

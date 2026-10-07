@@ -78,7 +78,7 @@
 //! Each gap is a missing *model*, not a missing seam: the event class, the phase and the
 //! record channel for each already exist.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rayon::prelude::*;
 use v2xw_core::card::Tier;
@@ -272,6 +272,88 @@ enum Transfer {
     },
 }
 
+/// Which drivers follow GLOSA's speed advice, and the caps the followers drive under.
+///
+/// A driver decides once, the first time GLOSA advises them, with probability
+/// `apps.glosa_compliance`, on a stream keyed by the actor (so the decision is the same
+/// whatever else the run draws). A follower's speed is capped at the advised speed while
+/// the advice stands and uncapped when it ends; advice to stop is left to the driver, who
+/// stops at the red anyway.
+#[derive(Debug, Clone, Default)]
+struct GlosaDrivers {
+    compliance: f64,
+    seed: u64,
+    decided: BTreeMap<ActorId, bool>,
+    capped: BTreeMap<ActorId, f64>,
+}
+
+/// How fast a following driver eases down to the advised speed, m/s per second: a gentle
+/// lift off the throttle, not a brake. This build's choice (eco-driving guidance puts
+/// comfortable coasting decelerations near 1 m/s²); a cap dropped at once would have the
+/// car-following model brake as hard as its free-road term allows.
+pub const GLOSA_EASE_MPS2: f64 = 1.0;
+
+impl GlosaDrivers {
+    /// The command, if any, that applies `advice` to `actor`'s driver, who is doing
+    /// `speed_mps`, `dt_s` after the last advice.
+    fn apply(
+        &mut self,
+        actor: ActorId,
+        advice: Option<v2xw_node::apps::SpeedAdvice>,
+        speed_mps: f64,
+        dt_s: f64,
+    ) -> Option<v2xw_mobility::MobilityCommand> {
+        if self.compliance <= 0.0 {
+            return None;
+        }
+        let target = advice.and_then(|a| a.target_mps);
+        match target {
+            Some(v) => {
+                let (compliance, seed) = (self.compliance, self.seed);
+                let follows = *self.decided.entry(actor).or_insert_with(|| {
+                    v2xw_core::rng::RngStream::derive(
+                        seed,
+                        v2xw_core::rng::RngDomain::plugin(GLOSA_COMPLIANCE_ID),
+                        v2xw_core::rng::EntityRef::Actor(actor),
+                    )
+                    .bool(compliance)
+                });
+                if !follows {
+                    return None;
+                }
+                // Ease the cap down from where the driver is, never faster than
+                // GLOSA_EASE_MPS2; raise it at once (a faster advice is not a hazard).
+                let from = self.capped.get(&actor).copied().unwrap_or(speed_mps.max(v));
+                let eased = if v < from {
+                    (from - GLOSA_EASE_MPS2 * dt_s).max(v)
+                } else {
+                    v
+                };
+                let v = v2xw_core::math::q3(eased);
+                if self
+                    .capped
+                    .get(&actor)
+                    .is_some_and(|c| (c - v).abs() < 0.05)
+                {
+                    return None;
+                }
+                self.capped.insert(actor, v);
+                Some(v2xw_mobility::MobilityCommand::SpeedCap {
+                    actor,
+                    v_mps: Some(v),
+                })
+            }
+            None => self
+                .capped
+                .remove(&actor)
+                .map(|_| v2xw_mobility::MobilityCommand::SpeedCap { actor, v_mps: None }),
+        }
+    }
+}
+
+/// The model id GLOSA compliance draws under ([`v2xw_core::rng::RngDomain::plugin`]).
+pub const GLOSA_COMPLIANCE_ID: &str = "app/glosa/compliance";
+
 /// What one run produced.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct RunReport {
@@ -285,6 +367,9 @@ pub struct RunReport {
     /// order. A closure on the timeline shows here: a vehicle that could not avoid it
     /// leaves at the barrier as `RouteBlocked`.
     pub despawn_causes: BTreeMap<String, u64>,
+    /// Every application's warnings, labelled against ground truth
+    /// (`crate::app_truth`): issued, true, false, missed, and the lead time.
+    pub apps: BTreeMap<String, crate::app_truth::AppTally>,
     /// How many nodes were ever created.
     pub nodes_created: u64,
     /// How many frames went on the air.
@@ -559,6 +644,9 @@ struct FrameState {
     t_generated: SimTime,
     /// When the sender's signer picked the message up, on the simulation's timeline.
     t_sign_start: SimTime,
+    /// When the signature finished, on the simulation's timeline: `ready_at` less the
+    /// hand-off ([`Engine::hand_down`]).
+    t_signed: SimTime,
     /// Of the channel-access delay, the AIFS, ns.
     mac_aifs_ns: u64,
     /// Of the channel-access delay, the backoff slots the MAC counted, ns.
@@ -634,6 +722,15 @@ pub struct Engine {
     /// position is one lookup. It was a scan of every actor, made for every frame put on
     /// the air and every node position asked for: quadratic in the fleet.
     node_actor: BTreeMap<NodeId, ActorId>,
+    /// Every application warning labelled against ground truth (`crate::app_truth`).
+    app_truth: crate::app_truth::AppTruth,
+    /// Which drivers follow GLOSA's advice, and the speed caps followers drive under.
+    glosa: GlosaDrivers,
+    /// The junction controllers' priority service (`crate::priority`, NTCIP 1211).
+    priority: crate::priority::PriorityControllers,
+    /// What the CPM-sending vehicles' sensors perceive (`crate::perception`), when the
+    /// scenario sends CPMs.
+    perception: Option<crate::perception::Perception>,
     /// Nodes that have despawned and whose links' radio state has not been swept yet, in
     /// despawn order ([`Engine::sweep_retired_links`]).
     retired: Vec<(SimTime, NodeId)>,
@@ -756,6 +853,9 @@ pub struct Engine {
     /// The scenario timeline's state: which lanes are closed and by whom, which demand
     /// multipliers are in force. See [`crate::timeline`].
     timeline: TimelineState,
+    /// The hand-off [`Engine::hand_down`] is adding to the frame being handed down, ns,
+    /// so [`Engine::hand_down_app`] can record the signature's own end apart from it.
+    pending_handoff: u64,
     /// The 20 m bins of the reception census (`phy.prr`), the very bins the metric reads.
     prr_bins: v2xw_metrics::bins::Bins,
     /// When each node is next woken to hand over a finished signature check
@@ -764,6 +864,16 @@ pub struct Engine {
     /// The junction each SPaT- or MAP-broadcasting roadside unit is wired to.
     infra_feeds: BTreeMap<NodeId, crate::infra::IntersectionFeed>,
     report: RunReport,
+}
+
+/// Whether a `safety.*` item waits for a vehicle that fits when none does at its instant:
+/// an `"auto"` pick does (a scenario cannot know where the demand will have put its
+/// vehicles); a named node does not.
+fn se_waits(item: &crate::scenario::schema::TimelineItem) -> bool {
+    matches!(
+        crate::safety_events::Pick::parse(item.params.get("target")),
+        Ok(crate::safety_events::Pick::Auto)
+    )
 }
 
 /// What the scenario timeline has put in force, as the control events leave it.
@@ -780,6 +890,14 @@ struct TimelineState {
     rate_ratio: f64,
     /// The scenario's own arrival rate, veh/h, when its demand model takes one.
     base_rate: Option<f64>,
+    /// The vehicle each `safety.breakdown` item stopped, so its `until` releases it.
+    broken_down: BTreeMap<usize, (ActorId, Option<NodeId>)>,
+    /// The nodes whose hazard warning lights are on: the vehicle's own switch, which its
+    /// facilities read like its own accelerometer.
+    hazard_lights: BTreeSet<NodeId>,
+    /// `safety.*` items whose `"auto"` pick found no vehicle that fits yet, by item, with
+    /// the instant they stop waiting: each mobility step tries them again.
+    waiting_safety: BTreeMap<usize, SimTime>,
 }
 
 impl TimelineState {
@@ -995,6 +1113,13 @@ impl Engine {
                 EngineError::Scenario(crate::error::ScenarioError::conflict("net.fragmenter", why))
             })?,
         };
+        // The labeller reads the world's signal plans; built before the literal moves it.
+        let app_truth = if scenario_for_radio.apps.enabled.is_empty() {
+            crate::app_truth::AppTruth::default()
+        } else {
+            crate::app_truth::AppTruth::new(crate::wiring::app_params(&scenario_for_radio))
+                .with_signals(crate::app_truth::SignalIndex::build(&world))
+        };
         let mut engine = Engine {
             snapshot: ActorSnapshot::new(0, MAX_RANGE_M),
             weather: crate::wiring::initial_weather(&scenario),
@@ -1028,6 +1153,26 @@ impl Engine {
             dcc: crate::wiring::build_dcc(&scenario_for_radio),
             actors: BTreeMap::new(),
             node_actor: BTreeMap::new(),
+            app_truth,
+            glosa: GlosaDrivers {
+                compliance: if scenario_for_radio.apps.runs("glosa") {
+                    scenario_for_radio.apps.glosa_compliance
+                } else {
+                    0.0
+                },
+                seed: scenario_for_radio.seed,
+                decided: BTreeMap::new(),
+                capped: BTreeMap::new(),
+            },
+            priority: crate::priority::PriorityControllers::new(
+                crate::priority::PriorityParams::default(),
+            ),
+            perception: scenario_for_radio
+                .messages
+                .sets
+                .iter()
+                .any(|s| s == "cpm")
+                .then(crate::perception::Perception::new),
             retired: Vec::new(),
             bodies: link::BodyIndex::default(),
             nodes: BTreeMap::new(),
@@ -1080,6 +1225,7 @@ impl Engine {
             focus,
             jamming: jammers,
             timeline: TimelineState::default(),
+            pending_handoff: 0,
             prr_bins: v2xw_metrics::comms::prr_bins(),
             node_wake: BTreeMap::new(),
             infra_feeds: BTreeMap::new(),
@@ -1091,6 +1237,9 @@ impl Engine {
             multipliers: BTreeMap::new(),
             rate_ratio: 1.0,
             base_rate: crate::timeline::base_rate_veh_per_h(&engine.scenario),
+            broken_down: BTreeMap::new(),
+            hazard_lights: BTreeSet::new(),
+            waiting_safety: BTreeMap::new(),
         };
         let phase2 = crate::phase2::Phase2::build(&engine.scenario, &engine.world)?;
         engine.phase2 = phase2;
@@ -1423,15 +1572,23 @@ impl Engine {
             .copied()
             .filter(|n| only.is_none_or(|o| o == *n))
             .collect();
+        let now_s = v2xw_core::time::ns_to_secs(now);
         for node in units {
             let framing = self.infra_framing(node);
-            let Some(feed) = self.infra_feeds.get(&node) else {
+            let Some(feed) = self.infra_feeds.get_mut(&node) else {
                 continue;
             };
+            // The controller's timing as it now runs (a priority service moves it), and
+            // what its service may still do (`crate::priority`).
+            let plan = feed.plan();
+            if let Some(p) = self.world.signals.get(plan) {
+                feed.sync(p);
+            }
+            let outlook = self.priority.outlook(&self.world, plan, now_s);
             // A SPaT that does not encode is a defect in the encoder, not in the run; the
             // unit keeps the last good one rather than sending a truncated message, and the
             // count is in the run report.
-            match feed.spat_bytes(now, self.wall, framing) {
+            match feed.spat_bytes_with(now, self.wall, framing, outlook) {
                 Ok(bytes) => {
                     if let Some(runtime) = self.nodes.get_mut(&node).and_then(|n| n.as_obu_mut()) {
                         runtime.set_infra_payload(v2xw_msg::MsgType::Spat, bytes);
@@ -1786,6 +1943,23 @@ impl Engine {
                     }
                 }
             }
+            TimelineKind::HardBrake | TimelineKind::Breakdown | TimelineKind::CutIn => {
+                let applied = self.on_safety_event(&item, index, end, now, &mut note);
+                if !applied && !end && se_waits(&item) {
+                    let within = crate::safety_events::positive(
+                        item.params.get("within_s"),
+                        crate::safety_events::AUTO_WAIT_DEFAULT_S,
+                    )
+                    .unwrap_or(crate::safety_events::AUTO_WAIT_DEFAULT_S);
+                    let deadline = now.saturating_add(Duration::from_secs_f64(within).as_nanos());
+                    self.timeline.waiting_safety.insert(index, deadline);
+                    note.phase = "waiting".to_string();
+                    note.effect = format!(
+                        "no vehicle fits this event yet; it fires on the first mobility step \
+                         within {within} s at which one does"
+                    );
+                }
+            }
             TimelineKind::AttackWave => {
                 // The wave's window is each named population's schedule (see
                 // `crate::timeline::attack_windows`, applied where Phase 2 arms attackers),
@@ -1803,6 +1977,185 @@ impl Engine {
             }
         }
         self.emit(recorder, &crate::records::ScenarioEvent(note));
+    }
+
+    /// A scripted safety event (`safety.hard-brake`, `safety.breakdown`, `safety.cut-in`):
+    /// picks its vehicle and tells the traffic model what the driver does. See
+    /// [`crate::safety_events`].
+    ///
+    /// Returns whether it acted on a vehicle (an end always counts as acted).
+    fn on_safety_event(
+        &mut self,
+        item: &crate::scenario::schema::TimelineItem,
+        index: usize,
+        end: bool,
+        now: SimTime,
+        note: &mut crate::records::ScenarioEventView,
+    ) -> bool {
+        use crate::safety_events as se;
+        use crate::scenario::TimelineKind;
+        if end {
+            // Only a breakdown has an end: the vehicle is cleared away, i.e. its hold lifts
+            // and its hazard lights go out.
+            if let Some((actor, node)) = self.timeline.broken_down.remove(&index) {
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::Stop {
+                    actor,
+                    until: Some(now),
+                }]);
+                if let Some(n) = node {
+                    self.timeline.hazard_lights.remove(&n);
+                    if let Some(obu) = self.nodes.get_mut(&n).and_then(|r| r.as_obu_mut()) {
+                        obu.set_hazard_lights(false);
+                    }
+                    note.node = Some(n.index());
+                }
+                note.effect = "the broken-down vehicle is cleared and drives on".to_string();
+            } else {
+                // A breakdown still waiting for a vehicle stops waiting at its end.
+                self.timeline.waiting_safety.remove(&index);
+                note.effect = "no vehicle had broken down, so nothing was cleared".to_string();
+            }
+            return true;
+        }
+        let target = match se::Pick::parse(item.params.get("target")) {
+            Ok(t) => t,
+            Err(why) => {
+                note.effect = format!("not applied: {why}");
+                return true;
+            }
+        };
+        let purpose = match item.kind {
+            TimelineKind::HardBrake => se::Purpose::HardBrake,
+            TimelineKind::Breakdown => se::Purpose::Breakdown,
+            _ => match se::parse_side(item.params.get("side")) {
+                Ok(side) => se::Purpose::CutIn(side),
+                Err(why) => {
+                    note.effect = format!("not applied: {why}");
+                    return true;
+                }
+            },
+        };
+        let candidates: BTreeMap<ActorId, se::Candidate> = self
+            .actors
+            .iter()
+            .filter(|(_, a)| !a.class.is_vru())
+            .map(|(id, a)| {
+                (
+                    *id,
+                    se::Candidate {
+                        actor: *id,
+                        node: a.node,
+                        state: a.last,
+                    },
+                )
+            })
+            .collect();
+        let Some(chosen) = se::pick(&self.world, &candidates, target, purpose) else {
+            note.effect = "no vehicle in the run fits this event at this instant, so nothing \
+                           happened"
+                .to_string();
+            return false;
+        };
+        note.node = chosen.node.map(|n| n.index());
+        let who = match chosen.node {
+            Some(n) => format!("vehicle {} (node {})", chosen.actor.index(), n.index()),
+            None => format!("vehicle {} (no on-board unit)", chosen.actor.index()),
+        };
+        let speed = v2xw_core::math::hypot(chosen.state.vel.x, chosen.state.vel.y);
+        match purpose {
+            se::Purpose::HardBrake => {
+                let decel = se::positive(
+                    item.params.get("decel_mps2"),
+                    se::HARD_BRAKE_DEFAULT_DECEL_MPS2,
+                )
+                .unwrap_or(se::HARD_BRAKE_DEFAULT_DECEL_MPS2);
+                let hold = se::positive(item.params.get("hold_s"), se::HARD_BRAKE_DEFAULT_HOLD_S)
+                    .unwrap_or(se::HARD_BRAKE_DEFAULT_HOLD_S);
+                // The hold runs from when it stands; a stop from `speed` at `decel` takes
+                // `speed / decel` plus the onset, so the release is placed after that.
+                let stop_s = speed / decel + decel / v2xw_mobility::EMERGENCY_BRAKE_ONSET_JERK_MPS3;
+                let release = now.saturating_add(Duration::from_secs_f64(stop_s + hold).as_nanos());
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::Brake {
+                    actor: chosen.actor,
+                    decel_mps2: decel,
+                    hold_until: Some(release),
+                }]);
+                note.effect = format!(
+                    "{who} brakes hard at {decel:.2} m/s² from {speed:.1} m/s and stands \
+                     {hold} s"
+                );
+            }
+            se::Purpose::Breakdown => {
+                let decel = se::positive(
+                    item.params.get("decel_mps2"),
+                    se::BREAKDOWN_DEFAULT_DECEL_MPS2,
+                )
+                .unwrap_or(se::BREAKDOWN_DEFAULT_DECEL_MPS2);
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::Brake {
+                    actor: chosen.actor,
+                    decel_mps2: decel,
+                    hold_until: None,
+                }]);
+                self.timeline
+                    .broken_down
+                    .insert(index, (chosen.actor, chosen.node));
+                if let Some(n) = chosen.node {
+                    self.timeline.hazard_lights.insert(n);
+                    if let Some(obu) = self.nodes.get_mut(&n).and_then(|r| r.as_obu_mut()) {
+                        obu.set_hazard_lights(true);
+                    }
+                }
+                note.effect = format!(
+                    "{who} breaks down: it stops at {decel:.2} m/s² from {speed:.1} m/s with \
+                     its hazard lights on"
+                );
+            }
+            se::Purpose::CutIn(side) => {
+                self.command_mobility(vec![v2xw_mobility::MobilityCommand::CutIn {
+                    actor: chosen.actor,
+                    side,
+                    until: now.saturating_add(Duration::from_secs(5).as_nanos()),
+                }]);
+                note.effect = format!(
+                    "{who} cuts in to the {} lane at {speed:.1} m/s",
+                    side.label()
+                );
+            }
+        }
+        true
+    }
+
+    /// Tries again each `safety.*` item still waiting for a vehicle that fits, at the
+    /// state this mobility step publishes; one that fires, or whose wait runs out, writes
+    /// its `scenario.event`.
+    fn retry_waiting_safety(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
+        if self.timeline.waiting_safety.is_empty() {
+            return;
+        }
+        let waiting: Vec<(usize, SimTime)> = self
+            .timeline
+            .waiting_safety
+            .iter()
+            .map(|(i, d)| (*i, *d))
+            .collect();
+        for (index, deadline) in waiting {
+            let Some(item) = self.scenario.events.get(index).cloned() else {
+                self.timeline.waiting_safety.remove(&index);
+                continue;
+            };
+            let mut note = crate::records::ScenarioEventView::new(now, index, item.kind, false);
+            if self.on_safety_event(&item, index, false, now, &mut note) {
+                self.timeline.waiting_safety.remove(&index);
+                self.emit(recorder, &crate::records::ScenarioEvent(note));
+            } else if now >= deadline {
+                self.timeline.waiting_safety.remove(&index);
+                note.phase = "expired".to_string();
+                note.effect = "no vehicle fit this event before its wait ran out, so nothing \
+                               happened"
+                    .to_string();
+                self.emit(recorder, &crate::records::ScenarioEvent(note));
+            }
+        }
     }
 
     /// Applies a parameter a `param.change` has just written into `self.scenario`.
@@ -1883,9 +2236,21 @@ impl Engine {
         // of which carries `k.t == now`.
         self.publish_state_at(recorder);
         self.emit_snapshot(recorder, now)?;
+        self.retry_waiting_safety(recorder, now);
         // The transmit bit is "since the last mobility step", so the window closes with
         // the frame that reports it.
         self.transmitted_since_step.clear();
+
+        // The controllers serve their priority requests before the drivers look at the
+        // lamps, so an extension or an early green takes effect this step.
+        let served = self.priority.step(
+            &mut self.world,
+            v2xw_core::time::ns_to_secs(now),
+            step.as_secs_f64(),
+        );
+        for rec in &served {
+            self.emit(recorder, rec);
+        }
 
         let update = {
             let Engine {
@@ -1914,6 +2279,8 @@ impl Engine {
         self.rebuild_snapshot(&update);
         self.declare_jamming(now, step);
         self.update_beliefs(recorder, now);
+        self.step_perception(now);
+        self.step_app_truth(recorder, now);
         self.on_backend_step(recorder, now, horizon);
 
         self.report.mobility_steps += 1;
@@ -2300,6 +2667,36 @@ impl Engine {
             .values()
             .filter_map(|a| a.node.map(|n| (n, a.last)))
             .collect();
+        // Each equipped vehicle's own bus: its dynamics, lights and next turn
+        // (`crate::vehicle_bus`). The vehicle's own sensors, like its GNSS fix.
+        let origin: v2xw_core::geo::GeoOrigin = self.world.origin.into();
+        let night = crate::vehicle_bus::is_night(self.wall, now, origin);
+        let buses: Vec<(NodeId, v2xw_node::vehicle::VehicleBus)> = self
+            .actors
+            .iter()
+            .filter(|(_, a)| !a.class.is_vru())
+            .filter_map(|(id, a)| {
+                let node = a.node?;
+                Some((
+                    node,
+                    crate::vehicle_bus::bus_of(
+                        &self.world,
+                        &a.last,
+                        a.class,
+                        self.mobility.intent(&self.world, *id),
+                        self.timeline.hazard_lights.contains(&node),
+                        night,
+                        self.weather.visibility_m,
+                        now,
+                    ),
+                ))
+            })
+            .collect();
+        for (node, bus) in buses {
+            if let Some(obu) = self.nodes.get_mut(&node).and_then(|r| r.as_obu_mut()) {
+                obu.set_vehicle_bus(bus);
+            }
+        }
         let env = GnssEnv {
             weather: self.weather,
             ..GnssEnv::OPEN_SKY
@@ -2349,6 +2746,187 @@ impl Engine {
             }
             self.update_dcc(node, now, a_long);
         }
+    }
+
+    /// Each CPM-sending vehicle's sensors scan the road users around it
+    /// (`crate::perception`), and the vehicle is handed what they perceive — its own
+    /// sensors' output, as the GNSS model hands it its fix.
+    fn step_perception(&mut self, now: SimTime) {
+        let Engine {
+            perception,
+            rng,
+            world,
+            actors,
+            snapshot,
+            nodes,
+            ..
+        } = self;
+        let Some(perception) = perception.as_mut() else {
+            return;
+        };
+        let class_of = |c: VehicleClass| match c {
+            VehicleClass::Pedestrian => crate::perception::ObjectClass::Pedestrian,
+            VehicleClass::Bicycle | VehicleClass::Scooter => {
+                crate::perception::ObjectClass::Cyclist
+            }
+            _ => crate::perception::ObjectClass::Vehicle,
+        };
+        let observers: Vec<crate::perception::Observer> = actors
+            .iter()
+            .filter(|(_, a)| !a.class.is_vru())
+            .filter_map(|(id, a)| {
+                let node = a.node?;
+                let runs = nodes
+                    .get(&node)
+                    .and_then(|n| n.as_obu())
+                    .is_some_and(|o| o.schedule().services().cpm);
+                runs.then_some(crate::perception::Observer {
+                    node,
+                    actor: *id,
+                    k: a.last,
+                })
+            })
+            .collect();
+        let sensors: Vec<v2xw_node::cpm::SensorIn> = perception
+            .sensors()
+            .iter()
+            .map(|s| v2xw_node::cpm::SensorIn {
+                id: s.id,
+                sensor_type: match s.kind {
+                    crate::perception::SensorKind::Radar => 1,
+                    crate::perception::SensorKind::Camera => 3,
+                },
+                range_m: s.range_m,
+                half_fov_rad: s.half_fov_rad,
+            })
+            .collect();
+        let reach = perception
+            .sensors()
+            .iter()
+            .map(|s| s.range_m)
+            .fold(0.0_f64, f64::max);
+        for o in observers {
+            let mut near: Vec<ActorId> = snapshot.actors_within(o.k.pos, reach);
+            near.sort_unstable();
+            near.dedup();
+            let candidates: Vec<crate::perception::Subject> = near
+                .into_iter()
+                .filter_map(|id| {
+                    let a = actors.get(&id)?;
+                    Some(crate::perception::Subject {
+                        actor: id,
+                        k: a.last,
+                        class: class_of(a.class),
+                    })
+                })
+                .collect();
+            let seen = perception.scan(world, rng, now, &o, &candidates);
+            let objects: Vec<v2xw_node::cpm::ObjectIn> = seen
+                .iter()
+                .map(|p| v2xw_node::cpm::ObjectIn {
+                    id: p.id,
+                    pos: p.pos,
+                    vel: p.vel,
+                    heading_rad: p.heading_rad,
+                    length_m: p.dims.length_m,
+                    width_m: p.dims.width_m,
+                    kind: match p.class {
+                        crate::perception::ObjectClass::Vehicle => {
+                            v2xw_node::cpm::ObjectKind::Vehicle
+                        }
+                        crate::perception::ObjectClass::Pedestrian => {
+                            v2xw_node::cpm::ObjectKind::Pedestrian
+                        }
+                        crate::perception::ObjectClass::Cyclist => {
+                            v2xw_node::cpm::ObjectKind::Cyclist
+                        }
+                    },
+                    sigma_m: p.sigma_m,
+                    measured_at: p.measured_at,
+                    first_seen: p.first_seen,
+                    sensors: p.sensors,
+                })
+                .collect();
+            if let Some(obu) = nodes.get_mut(&o.node).and_then(|n| n.as_obu_mut()) {
+                obu.set_perception(objects, sensors.clone());
+            }
+        }
+    }
+
+    /// Every equipped vehicle's true state, for the application labeller.
+    fn truth_states(&self, now: SimTime) -> BTreeMap<NodeId, crate::app_truth::TruthState> {
+        let now_s = v2xw_core::time::ns_to_secs(now);
+        self.actors
+            .iter()
+            .filter_map(|(id, a)| {
+                let node = a.node?;
+                let intent = if a.class.is_vru() {
+                    None
+                } else {
+                    self.mobility.intent(&self.world, *id)
+                };
+                let left_turn = intent.and_then(|i| {
+                    let left = matches!(
+                        i.turn,
+                        v2xw_world::TurnDirection::Left
+                            | v2xw_world::TurnDirection::SlightLeft
+                            | v2xw_world::TurnDirection::UTurn
+                    );
+                    let j = self.world.roads.try_junction(i.junction)?;
+                    left.then_some((j.position, i.distance_m))
+                });
+                // The signal its approach truly shows, while it is still short of the line.
+                let signal = intent.filter(|i| i.distance_m > 0.0).and_then(|i| {
+                    let (state, left_s) =
+                        self.app_truth
+                            .signals()
+                            .at(&self.world, i.connector, now_s)?;
+                    Some((crate::infra::movement_phase(state), left_s, i.distance_m))
+                });
+                Some((
+                    node,
+                    crate::app_truth::TruthState {
+                        k: a.last,
+                        length_m: a.last.dims.length_m,
+                        width_m: a.last.dims.width_m,
+                        vru: a.class.is_vru(),
+                        heavy: crate::vehicle_bus::is_heavy(a.class),
+                        left_turn,
+                        signal,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// The application labeller's step: truth episodes over every equipped pair within
+    /// its range, and the outcomes it settled, on `app.outcome`.
+    fn step_app_truth(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
+        if !self.app_truth.enabled() {
+            return;
+        }
+        let states = self.truth_states(now);
+        let mut near: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+        for (node, s) in &states {
+            if s.vru {
+                continue;
+            }
+            let mut subjects: Vec<NodeId> = self
+                .snapshot
+                .actors_within(s.k.pos, crate::app_truth::TRUTH_RANGE_M)
+                .into_iter()
+                .filter_map(|a| self.actors.get(&a).and_then(|r| r.node))
+                .filter(|n| n != node && states.contains_key(n))
+                .collect();
+            subjects.sort_unstable();
+            subjects.dedup();
+            near.insert(*node, subjects);
+        }
+        self.app_truth.step(now, &states, &near);
+        for outcome in self.app_truth.drain() {
+            self.emit(recorder, &outcome);
+        }
+        self.report.apps = self.app_truth.tallies().clone();
     }
 
     /// Closes the congestion-control loop for one node.
@@ -2664,6 +3242,87 @@ impl Engine {
             }
         }
 
+        // Each warning issued, handed to the ground-truth labeller (`crate::app_truth`).
+        if self.app_truth.enabled()
+            && results
+                .iter()
+                .any(|(_, _, recs, _)| recs.iter().any(|r| r.channel == "app.warning"))
+        {
+            let states = self.truth_states(now);
+            for (_, _, records, _) in &results {
+                for rec in records.iter().filter(|r| r.channel == "app.warning") {
+                    self.app_truth.on_warning(&rec.json, &states);
+                }
+            }
+        }
+
+        // A signal request a roadside unit heard goes to its junction's controller
+        // (NTCIP 1211's priority request server). The request names the approach the
+        // vehicle is on: the unit matches the requester's position and heading, which the
+        // SRM's `requestor.position` carries, to the junction's approach heads.
+        let requests: Vec<(usize, [u8; 8], u16, f64)> = results
+            .iter()
+            .filter_map(|(id, outcome, _, _)| {
+                let feed = self.infra_feeds.get(id)?;
+                Some((id, feed.plan(), outcome))
+            })
+            .flat_map(|(_id, plan, outcome)| {
+                outcome
+                    .delivered
+                    .iter()
+                    .filter(|m| {
+                        m.msg_type == v2xw_msg::MsgType::Srm
+                            && matches!(
+                                m.verification,
+                                v2xw_node::stores::VerificationState::Verified
+                                    | v2xw_node::stores::VerificationState::Unverified
+                            )
+                    })
+                    .filter_map(|m| {
+                        let requester = v2xw_node::safety::digest_key(m.signer.as_ref()?);
+                        let (group, eta) = crate::infra::requested_group(
+                            &self.world,
+                            plan,
+                            m.claimed_pos?,
+                            m.claimed_heading_rad,
+                            m.claimed_speed_mps,
+                        )?;
+                        Some((plan, requester, group, eta))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let now_s = v2xw_core::time::ns_to_secs(now);
+        for (plan, requester, group, eta) in requests {
+            if let Some(rec) =
+                self.priority
+                    .request(&self.world, plan, requester, group, eta, now_s)
+            {
+                self.emit(recorder, &rec);
+            }
+        }
+
+        // GLOSA's advice, followed by the drivers who follow it. Only a periodic step
+        // runs the applications; a wake hands over finished checks and advises nothing.
+        if !wake && self.glosa.compliance > 0.0 {
+            let mut commands = Vec::new();
+            for (id, outcome, _, _) in &results {
+                let Some(actor) = self.node_actor.get(id).copied() else {
+                    continue;
+                };
+                let speed = self
+                    .actors
+                    .get(&actor)
+                    .map_or(0.0, |a| v2xw_core::math::hypot(a.last.vel.x, a.last.vel.y));
+                if let Some(c) = self.glosa.apply(actor, outcome.advice, speed, step_s) {
+                    commands.push(c);
+                }
+            }
+            if !commands.is_empty() {
+                self.command_mobility(commands);
+            }
+        }
+
         // Each node's own telemetry window, when one closed at this step: its queues, its
         // compute load and its stores. The node has always produced it (`StepOutcome::
         // telemetry`) and nothing published it, so the page's HUD and inspector showed
@@ -2870,7 +3529,11 @@ impl Engine {
         }
         let mut delayed = tx.clone();
         delayed.ready_at = jitter.after(tx.ready_at);
+        // The jitter is the hand-off, not the signature: it is recorded apart
+        // (`t_handoff`) so the `sign` stage is the signer's own time.
+        self.pending_handoff = jitter.as_nanos();
         self.hand_down_app(node, &delayed, now, horizon, None);
+        self.pending_handoff = 0;
     }
 
     /// [`Engine::hand_down`] with an application payload attached.
@@ -2882,6 +3545,19 @@ impl Engine {
         horizon: SimTime,
         app: Option<AppPayload>,
     ) {
+        // Which node signs under which pseudonym, for the application labeller: the
+        // engine's own knowledge, never handed to a node.
+        if matches!(
+            tx.msg_type,
+            v2xw_msg::MsgType::Bsm
+                | v2xw_msg::MsgType::Cam
+                | v2xw_msg::MsgType::Psm
+                | v2xw_msg::MsgType::Vam
+                | v2xw_msg::MsgType::Denm
+                | v2xw_msg::MsgType::Spat
+        ) {
+            self.app_truth.note_signer(&tx.signer.0[..], node);
+        }
         // The signing latency is a *duration* on the node's own clock, so it is
         // independent of the node's clock offset: `ready_at` and the believed instant are
         // both on that clock and the difference between them is a real interval.
@@ -2903,6 +3579,8 @@ impl Engine {
         };
         let t_generated = on_timeline(tx.generation_time);
         let t_sign_start = on_timeline(tx.sign_start).max(t_generated);
+        // The signature's end, before the hand-off [`Engine::hand_down`] added.
+        let t_signed = ready.saturating_sub(self.pending_handoff).max(t_sign_start);
         if ready > horizon {
             return;
         }
@@ -3260,6 +3938,7 @@ impl Engine {
                 .or((cert_extra > 0).then_some(cert_extra)),
             t_generated,
             t_sign_start,
+            t_signed,
             // The abstract tier's frame waits exactly one AIFS and counts no backoff;
             // the MAC's grant overwrites both at the medium and high tiers.
             mac_aifs_ns: AIFS.as_nanos(),
@@ -4453,6 +5132,7 @@ impl Engine {
             .journey(
                 state.t_generated,
                 state.t_sign_start,
+                state.t_signed,
                 state.ready_at,
                 state.mac_aifs_ns,
                 state.mac_backoff_ns,
@@ -4523,7 +5203,7 @@ impl Engine {
                     msg: frame_index,
                     t_generated: state.t_generated,
                     t_sign_start: state.t_sign_start,
-                    t_signed: state.ready_at,
+                    t_signed: state.t_signed,
                     t_tx_start: state.start,
                     t_tx_end: state.end,
                     t_arrival: arrival,
@@ -4615,6 +5295,7 @@ impl Engine {
         .with_sizes(state.payload_bytes, state.envelope_bytes)
         .with_journey(
             state.t_sign_start,
+            state.t_signed,
             state.ready_at,
             state.mac_aifs_ns,
             state.mac_backoff_ns,
@@ -6567,6 +7248,7 @@ const fn frame_msg(t: v2xw_msg::MsgType) -> v2xw_net::FrameMsg {
         v2xw_msg::MsgType::Map => v2xw_net::FrameMsg::Map,
         v2xw_msg::MsgType::Srm => v2xw_net::FrameMsg::Srm,
         v2xw_msg::MsgType::Ssm => v2xw_net::FrameMsg::Ssm,
+        v2xw_msg::MsgType::Cpm => v2xw_net::FrameMsg::Cpm,
         _ => v2xw_net::FrameMsg::Safety,
     }
 }

@@ -1683,6 +1683,7 @@ impl VruDeviceRuntime {
             claimed_speed_mps: frame.claimed_speed_mps,
             claimed_heading_rad: frame.claimed_heading_rad,
             verification,
+            payload: None,
         }
     }
 

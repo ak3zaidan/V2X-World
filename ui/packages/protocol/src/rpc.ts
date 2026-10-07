@@ -697,6 +697,7 @@ export interface MetricsQueryParams {
     | "radius"
     | "bucket"
     | "channel"
+    | "app"
   )[];
   where?: Record<string, string | number | (string | number)[]>;
   runs?: RunId[];

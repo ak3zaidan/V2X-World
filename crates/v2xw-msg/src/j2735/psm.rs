@@ -35,11 +35,8 @@
 //! Written against the J2735 PSM definition (2016-03 onwards; the root of the SEQUENCE is
 //! unchanged through 2024-09) with the types, ranges and sentinels the [`crate::j2735::bsm`]
 //! codec already uses for the same data elements, and the field order and optional count
-//! above. It has **not** been checked against the `pycrate` oracle the BSM was checked
-//! against: the J2735 ASN.1 is not in this repository (build decision D3) and the oracle's
-//! environment is not on this machine. So its bytes are real UPER of the structure above,
-//! *not yet oracle-validated* — the claim `crate::evidence` makes for SPaT and MAP, and
-//! weaker than the BSM's.
+//! above. On 2026-10-06 `tests/j2735_psm_oracle.rs` checked it against `pycrate` compiled
+//! from the public J2735 2016 modules: 153 of 153 vectors byte-identical.
 
 use v2xw_core::belief::PositionEstimate;
 use v2xw_core::geo::GeoOrigin;

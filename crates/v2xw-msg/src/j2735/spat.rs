@@ -28,9 +28,9 @@
 //! | `MovementList` `SIZE(1..255)` → 8-bit determinant | corroborated: same table, "`MovementList` length 8" |
 //! | `MovementState`: 1 + 3 optional bits, `signalGroup` 8 bits, `MovementEventList` 4-bit determinant | corroborated: same table, "`MovementState` 1+3+8+4 b" |
 //! | `MovementEvent`: 1 + 3 optional bits | corroborated: same table, "`MovementEvent` 1+3+…" |
-//! | `MovementPhaseState`: 10 root values, **4 bits** | **recalled, and it contradicts the size model**, which counted 5 bits for `eventState`. A non-extensible 10-value `ENUMERATED` is 4 bits under X.691 clause 14.3, so either the type carries an extension marker (making it 1 + 4) or the size model's derivation is one bit out. See [`MOVEMENT_PHASE_STATE_WIDTH_IS_DISPUTED`]. |
+//! | `MovementPhaseState`: 10 root values, **4 bits** | recalled, and **confirmed by the 2026-10-06 oracle** against the 2016 and 2020 modules; the size model's 5 bits for `eventState` was one bit out. See [`MOVEMENT_PHASE_STATE_WIDTH_IS_DISPUTED`]. |
 //! | `TimeChangeDetails`: 5 optional bits, no extension bit; `TimeMark` 16 bits | corroborated: same table, "`TimeChangeDetails` 5 optional bits + three `TimeMark` at 16 b" |
-//! | `MinuteOfTheYear (0..527040)`, `TimeMark (0..36001)`, `SignalGroupID (0..255)`, `IntersectionID`/`RoadRegulatorID (0..65535)`, `TimeIntervalConfidence (0..15)` | recalled from SAE J2735 2024-09; **not re-read** from the module |
+//! | `MinuteOfTheYear (0..527040)`, `TimeMark (0..36111)`, `SignalGroupID (0..255)`, `IntersectionID`/`RoadRegulatorID (0..65535)`, `TimeIntervalConfidence (0..15)` | read in the 2016 and 2020 modules and checked by the oracle (which bounds `TimeMark` at 36001, the pre-2024 range; see `TIME_MARK_MAX`) |
 //! | `DSRCmsgID signalPhaseAndTimingMessage(19)` | recalled; anchored by `basicSafetyMessage(20)` in [`crate::j2735::bsm::BSM_MESSAGE_ID`], which the oracle validated, and 18/19/20 are consecutive in the same list |
 //!
 //! So: the bytes this module produces are **real UPER of a real structure**, not a fill
@@ -120,15 +120,20 @@ pub const SIGNAL_GROUP_ID_MIN: i64 = 0;
 /// `SignalGroupID`, upper bound.
 pub const SIGNAL_GROUP_ID_MAX: i64 = 255;
 
-/// `TimeMark ::= INTEGER (0..36001)`, lower bound. The unit is tenths of a second within
-/// the current or the next hour.
+/// `TimeMark ::= INTEGER (0..36111)`, lower bound (SAE J2735 2024-09 §7.213, re-read from
+/// the standard's text on 2026-09-30). The unit is tenths of a second within the current
+/// or the next hour: "if the value of TimeMark is greater than the current time, it applies
+/// in the current hour, and if it is less than the current time, it applies in the next
+/// hour".
 pub const TIME_MARK_MIN: i64 = 0;
-/// `TimeMark`, upper bound.
-pub const TIME_MARK_MAX: i64 = 36_001;
-/// `TimeMark` value for "the time is not known", per the standard's comment on the type.
-pub const TIME_MARK_UNKNOWN: u16 = 36_001;
-/// Tenths of a second in an hour: the largest *meaningful* [`TimeMark`], one past which is
-/// [`TIME_MARK_UNKNOWN`].
+/// `TimeMark`, upper bound: 36111 (J2735 2024-09). The 2016 edition's bound was 36001;
+/// both widths are 16 bits, so the octets of a value both admit are the same.
+pub const TIME_MARK_MAX: i64 = 36_111;
+/// `TimeMark` value for "undefined or unknown": 36111 in J2735 2024-09 §7.213. (36001, the
+/// 2016 edition's unknown, is a leap-second value in 2024: 36000..36009.)
+pub const TIME_MARK_UNKNOWN: u16 = 36_111;
+/// Tenths of a second in an hour: `0..=35999` covers the hour, and a boundary at or past
+/// the top of the hour wraps into the next one.
 pub const TIME_MARK_TENTHS_PER_HOUR: u16 = 36_000;
 
 /// `TimeIntervalConfidence ::= INTEGER (0..15)`, lower bound.
@@ -168,11 +173,11 @@ pub const MINIMAL_SPAT_MESSAGE_FRAME_SIZE_B: u32 = 14;
 /// the ASN.1 *was* readable — counted 5 bits for the same field, which is what an
 /// *extensible* ten-value enumeration costs (one extension bit plus a 4-bit index).
 ///
-/// One of the two is wrong and the module is not here to arbitrate. If the oracle run
-/// disagrees with this codec, the fix is one line: encode the extension bit first. Until
-/// then every SPaT this codec emits is one bit per movement event smaller than the size
-/// model says, which is exactly the kind of discrepancy that must not be papered over.
-pub const MOVEMENT_PHASE_STATE_WIDTH_IS_DISPUTED: bool = true;
+/// Settled on 2026-10-06: the pycrate oracle, compiled from the public J2735 2016 and 2020
+/// modules, encoded 115 SPaT vectors to the same octets as this codec, so the
+/// enumeration is not extensible and 4 bits is right; the size-model row was one bit per
+/// movement event too large.
+pub const MOVEMENT_PHASE_STATE_WIDTH_IS_DISPUTED: bool = false;
 
 /// Root values of `MovementPhaseState`, hence the width of its `ENUMERATED` index.
 pub const MOVEMENT_PHASE_STATE_COUNT: u64 = 10;
@@ -1036,7 +1041,8 @@ fn on_decode(len: usize) -> impl Fn(UperError) -> CodecError {
 ///
 /// The bytes are real UPER of the subset documented at the top of this module —
 /// [`Encoded::size_source`] is [`crate::SizeSource::Uper`] and the size is measured, not
-/// modelled — but they are not yet oracle-validated. See [`crate::evidence`].
+/// modelled — and oracle-validated against the public J2735 2016 and 2020 modules. See
+/// [`crate::evidence`].
 pub fn encode_spat(spat: &Spat) -> Result<Encoded, CodecError> {
     let mut w = BitWriter::with_capacity(64);
     write_spat(&mut w, spat).map_err(on_encode)?;
@@ -1140,12 +1146,14 @@ pub fn d_second(clock: WallClock, t: SimTime) -> u16 {
     crate::j2735::bsm::sec_mark(clock, t)
 }
 
-/// `TimeMark` from a phase boundary expressed in seconds since the top of the hour.
+/// `TimeMark` from a phase boundary expressed in seconds since the top of the current
+/// hour.
 ///
-/// The unit is tenths of a second. Values at or beyond the hour fold into the next hour the
-/// way the standard intends — 36 000 is "the top of the next hour" — and anything not
-/// finite, negative, or beyond that becomes [`TIME_MARK_UNKNOWN`] rather than a plausible
-/// wrong time.
+/// The unit is tenths of a second, `0..=35999`. A boundary at or past the top of the hour
+/// wraps into the next hour (`3_600.0` s is `0`, `3_610.0` s is `100`): J2735 2024-09
+/// §7.213 has a receiver read a value less than the current time as the next hour's. A
+/// boundary more than an hour ahead cannot be written and becomes [`TIME_MARK_UNKNOWN`],
+/// as does anything not finite or negative, rather than a plausible wrong time.
 ///
 /// Quantises on the D9 second grid before scaling, so the integer is a function of the
 /// quantised value rather than of an `f64`'s last bit.
@@ -1154,10 +1162,27 @@ pub fn time_mark(seconds_into_hour: f64) -> u16 {
         return TIME_MARK_UNKNOWN;
     }
     let tenths = (math::quantize_to(seconds_into_hour, Q_S) / 0.1).round();
-    if !(0.0..=f64::from(TIME_MARK_TENTHS_PER_HOUR)).contains(&tenths) {
+    let hour = f64::from(TIME_MARK_TENTHS_PER_HOUR);
+    if tenths >= 2.0 * hour {
         return TIME_MARK_UNKNOWN;
     }
-    tenths as u16
+    (tenths % hour) as u16
+}
+
+/// Seconds from `now_s_into_hour` (seconds since the top of the current hour) until a
+/// `TimeMark`, reading a mark earlier than now as the next hour's (J2735 2024-09 §7.213).
+/// `None` for [`TIME_MARK_UNKNOWN`] or a leap-second value.
+pub fn seconds_until(mark: u16, now_s_into_hour: f64) -> Option<f64> {
+    if mark >= TIME_MARK_TENTHS_PER_HOUR {
+        return None;
+    }
+    let at = f64::from(mark) * 0.1;
+    let mut d = at - now_s_into_hour;
+    // A mark a hair behind now (the message's own rounding) is now, not an hour away.
+    if d < -0.05 {
+        d += 3_600.0;
+    }
+    Some(d.max(0.0))
 }
 
 #[cfg(test)]
@@ -1394,16 +1419,25 @@ mod tests {
         assert_eq!(time_mark(0.0), 0);
         assert_eq!(time_mark(1.0), 10);
         assert_eq!(time_mark(27.5), 275);
-        assert_eq!(time_mark(3_600.0), TIME_MARK_TENTHS_PER_HOUR);
-        assert_eq!(time_mark(3_600.1), TIME_MARK_UNKNOWN);
+        // Past the top of the hour a mark wraps into the next hour (J2735 2024-09 §7.213);
+        // this test used to expect 36000 for 3,600 s and "unknown" for 3,600.1 s, and
+        // 36000 is a leap-second value in the 2024 edition.
+        assert_eq!(time_mark(3_600.0), 0);
+        assert_eq!(time_mark(3_600.1), 1);
+        assert_eq!(time_mark(7_200.0), TIME_MARK_UNKNOWN);
         assert_eq!(time_mark(-1.0), TIME_MARK_UNKNOWN);
         assert_eq!(time_mark(f64::NAN), TIME_MARK_UNKNOWN);
+        assert_eq!(TIME_MARK_UNKNOWN, 36_111);
+        // And a receiver reads a mark behind now as the next hour's.
+        assert_eq!(seconds_until(100, 3_590.0), Some(20.0));
+        assert_eq!(seconds_until(35_950, 3_590.0), Some(5.0));
+        assert_eq!(seconds_until(TIME_MARK_UNKNOWN, 0.0), None);
     }
 
-    /// The disputed width, pinned as a test so the oracle run has something to contradict.
+    /// The width the oracle settled, pinned as a test.
     #[test]
     fn the_movement_phase_state_index_is_four_bits_here() {
-        assert!(MOVEMENT_PHASE_STATE_WIDTH_IS_DISPUTED);
+        assert!(!MOVEMENT_PHASE_STATE_WIDTH_IS_DISPUTED);
         let mut w = BitWriter::new();
         write_enumerated(
             &mut w,

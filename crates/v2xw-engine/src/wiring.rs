@@ -2296,6 +2296,10 @@ pub fn build_metrics(
         Box::new(v2xw_metrics::detection::DetectionProvider::new()),
         Box::new(v2xw_metrics::safety::SafetyProvider::new(0)),
     ];
+    // The applications' warnings, labelled against ground truth, when vehicles run any.
+    if !scenario.apps.enabled.is_empty() {
+        candidates.push(Box::new(v2xw_metrics::apps::AppsProvider::new()));
+    }
     // The pseudonym, pool, linkability and backend-link metrics read records only the
     // security path writes, so a run without it would publish a column of empty samples.
     let security_path = scenario.actors.backend.protocol.is_some()
@@ -2379,6 +2383,7 @@ pub fn service_set(scenario: &Scenario) -> ServiceSet {
         cam: has("cam"),
         bsm: has("bsm"),
         denm: has("denm"),
+        cpm: has("cpm"),
         ..ServiceSet::NONE
     }
 }
@@ -2549,10 +2554,42 @@ pub fn build_node(
         ..NodeConfig::default()
     };
     let mut runtime = ObuRuntime::new(node, profile, policy, config, at);
+    // The role a CAM's low-frequency container states (EN 302 637-2, `VehicleRole`).
+    runtime.set_vehicle_role(match class {
+        VehicleClass::Emergency => v2xw_msg::cam::VehicleRole::Emergency,
+        VehicleClass::Bus | VehicleClass::Coach => v2xw_msg::cam::VehicleRole::PublicTransport,
+        _ => v2xw_msg::cam::VehicleRole::Default,
+    });
     apply_compute_tier(&mut runtime, scenario);
     apply_security_profile(&mut runtime, scenario, env);
     bootstrap_credentials(&mut runtime, scenario, node, at);
+    // The V2X applications (`v2xw_node::apps`), in every equipped vehicle.
+    if !scenario.apps.enabled.is_empty() && !is_vru_class(class) {
+        runtime.enable_apps(app_params(scenario));
+    }
     runtime
+}
+
+/// The applications' parameters `apps` sets over `v2xw_node::apps`'s cited defaults.
+pub fn app_params(scenario: &Scenario) -> v2xw_node::apps::AppParams {
+    let a = &scenario.apps;
+    let mut p = v2xw_node::apps::AppParams {
+        fcw: a.runs("fcw"),
+        eebl: a.runs("eebl"),
+        ima: a.runs("ima"),
+        lta: a.runs("lta"),
+        bsw: a.runs("bsw"),
+        pcw: a.runs("pcw"),
+        rlvw: a.runs("rlvw"),
+        glosa: a.runs("glosa"),
+        ..v2xw_node::apps::AppParams::default()
+    };
+    p.fcw_params.ttc_s = a.fcw_ttc_s;
+    p.ima_params.tti_s = a.ima_tti_s;
+    p.lta_params.gap_s = a.lta_gap_s;
+    p.pcw_params.ttc_s = a.pcw_ttc_s;
+    p.signal_params.rlvw_decel_mps2 = a.rlvw_decel_mps2;
+    p
 }
 
 /// `nodes.compute_tier`, the tiers of 06-node-models §2.1:
@@ -2665,6 +2702,33 @@ fn apply_security_profile(runtime: &mut ObuRuntime, scenario: &Scenario, env: No
     // different message types with nothing saying so.
     .with_signer_id_policies(policy, policy);
     *runtime.security_mut() = configured;
+    // Each message under its registered PSID / ITS-AID, and certificates that permit
+    // exactly what the node sends (`v2xw_msg::registry`, the IEEE PSID registry).
+    let s = runtime.schedule().services();
+    let mut sends = Vec::new();
+    for (on, msg) in [
+        (s.bsm, v2xw_msg::MsgType::Bsm),
+        (s.cam, v2xw_msg::MsgType::Cam),
+        (s.denm, v2xw_msg::MsgType::Denm),
+        (s.spat, v2xw_msg::MsgType::Spat),
+        (s.map, v2xw_msg::MsgType::Map),
+        (s.srm, v2xw_msg::MsgType::Srm),
+        (s.ssm, v2xw_msg::MsgType::Ssm),
+    ] {
+        if on {
+            sends.push(msg);
+        }
+    }
+    if sends.is_empty() {
+        sends.push(if etsi_facilities(scenario) {
+            v2xw_msg::MsgType::Cam
+        } else {
+            v2xw_msg::MsgType::Bsm
+        });
+    }
+    runtime
+        .security_mut()
+        .set_stack(etsi_facilities(scenario), &sends);
 }
 
 /// The pseudonym-rotation rule the scenario states (`security.pseudonym_change`).

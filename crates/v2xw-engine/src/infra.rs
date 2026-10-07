@@ -108,6 +108,8 @@ pub const fn movement_phase(state: SignalState) -> MovementPhaseState {
 /// adjacent equal states merged, as [`SignalPlan::group_timelines`] returns them.
 #[derive(Debug, Clone)]
 struct GroupTimeline {
+    /// The plan's own group number.
+    group: u16,
     signal_group: u8,
     segments: Vec<(SignalState, f64)>,
 }
@@ -218,6 +220,7 @@ impl IntersectionFeed {
             .group_timelines(|l| approach_of.get(&l).copied())
             .into_iter()
             .map(|(group, segments)| GroupTimeline {
+                group,
                 signal_group: signal_group_id(group),
                 segments,
             })
@@ -257,8 +260,31 @@ impl IntersectionFeed {
         self.plan
     }
 
+    /// Takes the controller's current timing: a plan whose offset a priority service
+    /// moved (`crate::priority`) is reported as it now runs.
+    pub fn sync(&mut self, plan: &SignalPlan) {
+        self.offset_s = plan.offset_s;
+        self.cycle_s = plan.cycle_s;
+    }
+
     /// The SPaT for this junction at `t`: every signal group's state and when it changes.
     pub fn spat_at(&self, t: SimTime, wall: WallClock) -> Spat {
+        self.spat_with(t, wall, None)
+    }
+
+    /// The SPaT at `t` with the controller's priority outlook: while a request is served,
+    /// the served group's green may run on (`maxEndTime` is the extension still
+    /// available, `likelyTime` when the service needs it to end), and a conflicting green
+    /// may end as soon as its minimum has run (`minEndTime` and `likelyTime` then).
+    /// Without a request, a fixed-time plan's changes are certain: `minEndTime`,
+    /// `maxEndTime` and `likelyTime` are the same instant (CTI 4501's guidance for a
+    /// fixed-time controller).
+    pub fn spat_with(
+        &self,
+        t: SimTime,
+        wall: WallClock,
+        outlook: Option<crate::priority::Outlook>,
+    ) -> Spat {
         let t_s = (t as f64) * 1e-9;
         let mut into = if self.cycle_s > 0.0 {
             (t_s - self.offset_s) % self.cycle_s
@@ -277,17 +303,30 @@ impl IntersectionFeed {
             .iter()
             .map(|g| {
                 let (state, remaining) = g.at(into, self.cycle_s);
-                let end = time_mark(hour_s + remaining);
+                let green = matches!(state, SignalState::Green | SignalState::GreenYield);
+                let (min_s, max_s, likely_s) = match outlook {
+                    Some(o) if o.group == g.group && green => {
+                        let max = remaining + o.extension_left_s;
+                        (remaining, max, o.needed_s.clamp(remaining, max))
+                    }
+                    Some(o) if o.group != g.group && green => {
+                        let earliest = o.earliest_cut_s.min(remaining);
+                        (earliest, remaining, earliest)
+                    }
+                    _ => (remaining, remaining, remaining),
+                };
                 MovementState::current(
                     g.signal_group,
                     MovementEvent::timed(
                         movement_phase(state),
                         TimeChangeDetails {
                             start_time: None,
-                            min_end_time: end,
-                            max_end_time: Some(end),
-                            likely_time: None,
-                            confidence: None,
+                            min_end_time: time_mark(hour_s + min_s),
+                            max_end_time: Some(time_mark(hour_s + max_s)),
+                            likely_time: Some(time_mark(hour_s + likely_s)),
+                            // `TimeIntervalConfidence` 15 is 100 %: a fixed-time change is
+                            // certain; under a priority service it is not stated.
+                            confidence: (outlook.is_none()).then_some(15),
                             next_time: None,
                         },
                     ),
@@ -490,6 +529,44 @@ fn build_map(
     })
 }
 
+/// The signal group a priority request is for, and the requester's arrival time, from
+/// where the requester says it is: the approach head of `world.signals[plan]` it is
+/// driving towards (heading within 45° of the approach lane's, the head ahead of it),
+/// the nearest such. `None` when it is on no approach of this junction.
+pub fn requested_group(
+    world: &World,
+    plan: usize,
+    pos: Vec3,
+    heading_rad: f64,
+    speed_mps: f64,
+) -> Option<(u16, f64)> {
+    let p = world.signals.get(plan)?;
+    let (s, c) = v2xw_core::math::sin_cos(heading_rad);
+    let mut best: Option<(f64, u16)> = None;
+    for h in &p.heads {
+        if h.kind != v2xw_world::SignalHeadKind::Vehicle {
+            continue;
+        }
+        let Some(lane) = world.roads.try_lane(h.lane) else {
+            continue;
+        };
+        let lane_heading = lane.heading_at(lane.length_m);
+        if v2xw_msg::j2945::wrap_pi(lane_heading - heading_rad).abs() > 45f64.to_radians() {
+            continue;
+        }
+        let (dx, dy) = (h.position.x - pos.x, h.position.y - pos.y);
+        let ahead = dx * c + dy * s;
+        if ahead <= 0.0 || ahead > 400.0 {
+            continue;
+        }
+        let d = v2xw_core::math::hypot(dx, dy);
+        if best.is_none_or(|(b, _)| d < b) {
+            best = Some((d, h.group));
+        }
+    }
+    best.map(|(d, g)| (g, d / speed_mps.max(1.0)))
+}
+
 /// How one unit's intersection messages go on the air: the J2735 `MessageFrame` of the US
 /// stack, or the ETSI SPATEM and MAPEM of the European one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -515,7 +592,21 @@ impl IntersectionFeed {
         wall: WallClock,
         framing: InfraFraming,
     ) -> Result<Vec<u8>, String> {
-        let spat = self.spat_at(t, wall);
+        self.spat_bytes_with(t, wall, framing, None)
+    }
+
+    /// [`IntersectionFeed::spat_bytes`] with the controller's priority outlook.
+    ///
+    /// # Errors
+    /// The encoder's refusal, which names the field.
+    pub fn spat_bytes_with(
+        &self,
+        t: SimTime,
+        wall: WallClock,
+        framing: InfraFraming,
+        outlook: Option<crate::priority::Outlook>,
+    ) -> Result<Vec<u8>, String> {
+        let spat = self.spat_with(t, wall, outlook);
         match framing {
             InfraFraming::J2735 => v2xw_msg::j2735::spat::encode_message_frame(&spat)
                 .map(|e| e.bytes)

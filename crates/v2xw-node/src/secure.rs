@@ -375,6 +375,13 @@ pub struct NodeSecurity {
     envelope: Envelope,
     crypto: NodeCrypto,
     psid: u64,
+    /// Whether the node is on the European stack, which picks each message's ITS-AID
+    /// ([`v2xw_msg::registry::psid`]); `None` signs every message under `psid`, as the
+    /// stack did before the registry was wired in.
+    stack: Option<bool>,
+    /// The PSIDs the node's certificates permit ([`v2xw_msg::registry::permissions`]);
+    /// empty means `[psid]`.
+    permissions: Vec<u64>,
     issuer: Option<Issuer>,
     /// One signer handle per pseudonym, keyed by `(i_period, j_index)`.
     ///
@@ -403,6 +410,8 @@ impl NodeSecurity {
             envelope: Envelope::ieee1609(wall),
             crypto: NodeCrypto::new(mode),
             psid,
+            stack: None,
+            permissions: Vec::new(),
             issuer: None,
             signers: BTreeMap::new(),
             active: None,
@@ -473,9 +482,36 @@ impl NodeSecurity {
         }
     }
 
-    /// The PSID messages are signed under.
+    /// The PSID messages are signed under when no stack is set
+    /// ([`NodeSecurity::set_stack`]).
     pub fn psid(&self) -> u64 {
         self.psid
+    }
+
+    /// Signs each message under its registered PSID / ITS-AID on the US (`etsi` false) or
+    /// the European stack, and makes the certificates permit exactly the messages in
+    /// `sends` ([`v2xw_msg::registry`]). Call before the first credential is provisioned:
+    /// a certificate already issued keeps its permissions.
+    pub fn set_stack(&mut self, etsi: bool, sends: &[MsgType]) {
+        self.stack = Some(etsi);
+        self.permissions = v2xw_msg::registry::permissions(sends, etsi);
+    }
+
+    /// The PSID / ITS-AID `msg_type` is signed under.
+    pub fn psid_for(&self, msg_type: MsgType) -> u64 {
+        match self.stack {
+            Some(etsi) => v2xw_msg::registry::psid(msg_type, etsi),
+            None => self.psid,
+        }
+    }
+
+    /// The PSIDs a certificate this stack issues permits.
+    fn cert_permissions(&self) -> Vec<u64> {
+        if self.permissions.is_empty() {
+            vec![self.psid]
+        } else {
+            self.permissions.clone()
+        }
     }
 
     /// Seconds from the IEEE 1609.2 epoch to `at` on this stack's wall clock.
@@ -511,8 +547,9 @@ impl NodeSecurity {
         if self.issuer.is_none() {
             let key = self.crypto.keygen(ctx, node)?;
             let material = self.crypto.public_material_of(&key)?;
-            let certificate =
-                cert::trust_anchor(&CertSpec::authority(valid_from, self.psid), &material)?;
+            let mut authority = CertSpec::authority(valid_from, self.psid);
+            authority.app_permissions = self.cert_permissions();
+            let certificate = cert::trust_anchor(&authority, &material)?;
             let coer = cert::encode(&certificate)?;
             let digest = hashedid::hashed_id8(&coer);
             self.issuer = Some(Issuer { key, coer, digest });
@@ -525,7 +562,7 @@ impl NodeSecurity {
         // node id, so a linked CRL that revokes `(i, j)` revokes exactly this certificate
         // and the revocation path has something true to match on.
         let device = device_linkage(node);
-        let spec = CertSpec::pseudonym(
+        let mut spec = CertSpec::pseudonym(
             issuer.digest.clone(),
             HolderId::Linkage {
                 i_cert: u16::try_from(i_period % u32::from(u16::MAX)).unwrap_or(0),
@@ -534,6 +571,7 @@ impl NodeSecurity {
             valid_from,
             self.psid,
         );
+        spec.app_permissions = self.cert_permissions();
         let issuer_key = issuer.key;
         let issuer_coer = issuer.coer.clone();
         // Two steps because the signature covers `toBeSigned`: the certificate cannot
@@ -584,7 +622,7 @@ impl NodeSecurity {
                     transmitting rather than sending unsigned [CAMP-EE §2.2.10.2]",
         })?;
         let hdr = HeaderInfoSpec {
-            psid: self.psid,
+            psid: self.psid_for(msg_type),
             msg_type: Some(msg_type),
             generation_location: location,
             ..HeaderInfoSpec::default()

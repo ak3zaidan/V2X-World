@@ -465,7 +465,9 @@ impl LatencyProvider {
                 Visibility::Node,
                 Quantum::TIME_MS,
                 "The time each delivered message spent in one stage of its journey. For V2V: \
-                 sign_queue, sign, mac_aifs, mac_backoff, mac_defer (deferral to a busy \
+                 sign_queue, sign (the signer's own time), handoff (the sender's host \
+                 latency and J2945/1 transmit-time offset between the signature and the \
+                 MAC), mac_aifs, mac_backoff, mac_defer (deferral to a busy \
                  medium, including repeated AIFS), airtime, propagation, reception (parsing \
                  and the verification policy), verify_queue, verify. The stages tile the \
                  journey, so they sum to e2e_latency message by message.",
@@ -709,7 +711,8 @@ mod tests {
             payload_bytes: Some(40),
             t_generated: Some(g0),
             t_sign_start: Some(g0 + 1_000),
-            t_signed: Some(g0 + 4_000),
+            t_signed: Some(g0 + 3_000),
+            t_handoff: Some(g0 + 4_000),
             mac_aifs_ns: Some(58_000),
             mac_backoff_ns: Some(39_000),
             t_tx_start: Some(g0 + 4_000 + 150_000),
@@ -745,6 +748,9 @@ mod tests {
         assert_eq!(s["mac_aifs"] + s["mac_backoff"] + s["mac_defer"], 150_000);
         assert_eq!(s["mac_aifs"], 58_000);
         assert_eq!(s["propagation"], 167);
+        // The signature and the hand-off are two stages.
+        assert_eq!(s["sign"], 2_000);
+        assert_eq!(s["handoff"], 1_000);
     }
 
     #[test]
