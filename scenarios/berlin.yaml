@@ -1,0 +1,94 @@
+# Berlin-Mitte: a European city on the European stack.
+#
+# The Friedrichstraße-Museumsinsel box worlds/fetch.sh downloads (`berlin`), German rules of
+# the road (`urban-de`: 50 km/h in built-up areas, StVO §3(3); no right turn on red, StVO §37(2)),
+# and the European V2X stack end to end: ITS-G5 (802.11p) on channel 180 under ETSI EN 302 571,
+# CAMs triggered by EN 302 637-2's rules, carried over GeoNetworking and BTP, signed under the
+# ETSI TS 103 097 profile.
+#
+# 1,500 veh/h is the rate the road-network track ran this extract at (BUILD-STATUS, road
+# network realism: 132 vehicles at peak). Needs worlds/cache/berlin.osm.xml, which is not in
+# git: `worlds/fetch.sh berlin`.
+schema: v2xw/scenario/1
+
+meta:
+  name: Berlin-Mitte (European ITS-G5 and CAMs)
+  description: >-
+    Central Berlin at midday on the European stack: ITS-G5 radios on channel 180, CAMs over
+    GeoNetworking signed under ETSI TS 103 097, German speed limits and no right turn on red.
+  authors: [v2xw]
+  tags: [berlin, europe, its-g5, cam, gn-btp, etsi, city]
+  created: "2026-10-06"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  # 12:00 in Berlin (CET, UTC+1).
+  t0: "2027-03-04T11:00:00Z"
+  duration_s: 300.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: osm-xml
+    path: worlds/cache/berlin.osm.xml
+    bbox:
+      min_lat_deg: 52.5140
+      min_lon_deg: 13.3880
+      max_lat_deg: 52.5250
+      max_lon_deg: 13.4080
+  highway_preset: urban-de
+  imported_at: "2026-09-30T00:00:00Z"
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 1500.0
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  region: eu
+  tiers:
+    propagation: high
+    phy: medium
+    mac: medium
+
+net:
+  layer: gn-btp
+
+messages:
+  sets: [cam]
+  codec_tier: uper
+
+security:
+  envelope: etsi103097
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: prioritized
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    # The C2C-CC Basic System Profile's change rule, the European car makers' own.
+    strategy: c2c-cc
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+metrics: [all]
+
+exporters: []

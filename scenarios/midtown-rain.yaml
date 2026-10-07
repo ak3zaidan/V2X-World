@@ -1,0 +1,27 @@
+# Midtown Manhattan in heavy rain.
+#
+# midtown-normal.yaml with heavy rain from the start and a wet road:
+#
+#  * drivers lower their desired speed and stretch their headways by the FHWA Road Weather
+#    Management heavy-rain row (intensity 0.5 and over is "heavy", a stated choice);
+#  * braking is capped at a wet road's grip (mu 0.5, a secondary figure);
+#  * the radio barely notices: ITU-R P.838-3 prices rain at 5.9 GHz at about 0.2 dB per km
+#    at 40 mm/h, a twentieth of a decibel on a 300 m link — which is the real answer, and
+#    worth seeing next to the dry baseline's delivery curve.
+#
+# The traffic is where the difference is: slower, more spread out, more vehicles on the map
+# at once for the same demand.
+schema: v2xw/scenario/1
+
+meta:
+  base: midtown-normal.yaml
+  name: Midtown Manhattan - heavy rain
+  description: >-
+    Midday Midtown in heavy rain on a wet road: drivers slow down, keep longer gaps and brake
+    on less grip, while the radio links lose almost nothing. Compare with the dry baseline.
+  tags: [manhattan, traffic, weather, rain, scms, dsrc]
+
+weather:
+  initial: rain
+  intensity: 0.8
+  surface: wet

@@ -11,8 +11,12 @@
 midtown-normal.yaml
 midtown-rush-hour.yaml
 midtown-pedestrians.yaml
+midtown-rain.yaml
 highway-congestion.yaml
+
+## Other cities
 portland.yaml
+berlin.yaml
 
 ## Radio technology
 radio-dsrc.yaml
