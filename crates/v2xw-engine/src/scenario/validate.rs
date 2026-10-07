@@ -2166,8 +2166,22 @@ fn world(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ));
     }
     match &s.world.source {
-        v2xw_world::WorldSourceSpec::Procedural { .. } => {
-            if let Err(why) = grid_params(s) {
+        v2xw_world::WorldSourceSpec::Procedural { generator, .. } => {
+            // The generator is a choice, not a label: the engine used to build a grid
+            // whatever it named, so choosing the radial city in the settings did nothing.
+            let built = match generator.as_str() {
+                v2xw_world::procedural::MODEL_ID => grid_params(s).map(|_| ()),
+                v2xw_world::procedural::radial::MODEL_ID => radial_params(s).map(|_| ()),
+                other => Err(conflict(
+                    "world.source.generator",
+                    format!(
+                        "'{other}' is not a world generator this build ships; use {} or {}",
+                        v2xw_world::procedural::MODEL_ID,
+                        v2xw_world::procedural::radial::MODEL_ID
+                    ),
+                )),
+            };
+            if let Err(why) = built {
                 e.push(why);
             }
         }
@@ -2236,6 +2250,37 @@ pub const MAX_GRID_JUNCTIONS: u64 = 10_000;
 ///
 /// # Errors
 /// A conflict at `world.source.params` (or one of its keys) the page can mark.
+/// The radial generator's parameters, as `world.source.params` gives them (`null` is its
+/// legacy preset).
+pub(crate) fn radial_params(
+    s: &Scenario,
+) -> core::result::Result<v2xw_world::procedural::radial::RadialParams, ScenarioError> {
+    let v2xw_world::WorldSourceSpec::Procedural { params, .. } = &s.world.source else {
+        return Err(conflict("world.source", "is not a procedural world".to_string()));
+    };
+    let radial: v2xw_world::procedural::radial::RadialParams = if params.is_null() {
+        v2xw_world::procedural::radial::RadialParams::default()
+    } else {
+        serde_json::from_value(params.clone()).map_err(|why| {
+            conflict(
+                "world.source.params",
+                format!(
+                    "does not fit the radial generator: {why}. Its parameters are listed on \
+                     the world/source/procedural-radial model card"
+                ),
+            )
+        })?
+    };
+    if let Err(v2xw_world::WorldError::InvalidParameter { parameter, problem }) = radial.validate()
+    {
+        return Err(conflict(
+            &format!("world.source.params.{parameter}"),
+            problem,
+        ));
+    }
+    Ok(radial)
+}
+
 pub(crate) fn grid_params(
     s: &Scenario,
 ) -> core::result::Result<v2xw_world::procedural::GridParams, ScenarioError> {
@@ -2284,6 +2329,11 @@ pub(crate) fn grid_params(
 /// are themselves wrong, which is reported on its own.
 fn world_site_count(s: &Scenario) -> Option<usize> {
     match &s.world.source {
+        v2xw_world::WorldSourceSpec::Procedural { generator, .. }
+            if generator == v2xw_world::procedural::radial::MODEL_ID =>
+        {
+            None
+        }
         v2xw_world::WorldSourceSpec::Procedural { .. } => {
             let grid = grid_params(s).ok()?;
             Some(if grid.rsu_at_junctions {

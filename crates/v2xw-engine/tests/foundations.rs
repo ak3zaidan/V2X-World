@@ -687,3 +687,247 @@ fn one_attacker_among_six_is_reported_revoked_and_refused_and_the_crl_reaches_ev
         .count();
     assert_eq!(refused as u64, p.revoked_receptions);
 }
+
+// -----------------------------------------------------------------------------------------
+// Every setting changes the run
+// -----------------------------------------------------------------------------------------
+
+/// Sets `pointer` in `doc`, creating the objects on the way.
+fn set_pointer(doc: &mut serde_json::Value, pointer: &str, value: serde_json::Value) -> bool {
+    let mut at = doc;
+    let parts: Vec<String> = pointer
+        .trim_start_matches('/')
+        .split('/')
+        .map(|p| p.replace("~1", "/").replace("~0", "~"))
+        .collect();
+    for (i, part) in parts.iter().enumerate() {
+        if at.is_null() {
+            *at = serde_json::Value::Object(serde_json::Map::new());
+        }
+        let Some(obj) = at.as_object_mut() else {
+            return false;
+        };
+        if i == parts.len() - 1 {
+            obj.insert(part.clone(), value);
+            return true;
+        }
+        at = obj
+            .entry(part.clone())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    }
+    false
+}
+
+/// A value for `row` other than `current`: another available option, another preset, the
+/// other boolean, or a number moved inside its range.
+fn another_value(row: &serde_json::Value, current: &serde_json::Value) -> Option<serde_json::Value> {
+    use serde_json::Value as V;
+    let differs = |v: &V| v != current && !(current.is_null() && Some(v) == row.get("default"));
+    if let Some(opts) = row.get("x-options").and_then(V::as_array) {
+        return opts
+            .iter()
+            .filter(|o| o.get("available").and_then(V::as_bool) != Some(false))
+            .filter_map(|o| o.get("value").cloned())
+            .find(|v| !v.is_null() && differs(v));
+    }
+    if let Some(e) = row.get("enum").and_then(V::as_array) {
+        return e.iter().find(|v| !v.is_null() && differs(v)).cloned();
+    }
+    if let Some(p) = row.get("x-presets").and_then(V::as_array) {
+        if let Some(v) = p.iter().filter_map(|o| o.get("value").cloned()).find(differs) {
+            return Some(v);
+        }
+    }
+    match row.get("kind").and_then(V::as_str).or(row.get("type").and_then(V::as_str)) {
+        Some("boolean") => Some(V::Bool(!current.as_bool().unwrap_or(
+            row.get("default").and_then(V::as_bool).unwrap_or(false),
+        ))),
+        Some("number" | "integer") => {
+            let base = current
+                .as_f64()
+                .or_else(|| row.get("default").and_then(V::as_f64))
+                .unwrap_or(1.0);
+            let max = row.get("maximum").and_then(V::as_f64);
+            let min = row
+                .get("minimum")
+                .or(row.get("exclusiveMinimum"))
+                .and_then(V::as_f64);
+            let mut v = if base == 0.0 { 1.0 } else { base * 2.0 };
+            if max.is_some_and(|m| v > m) {
+                v = (base + min.unwrap_or(0.0)) / 2.0;
+            }
+            let integer = row.get("type").and_then(V::as_str) == Some("integer")
+                || row.get("kind").and_then(V::as_str) == Some("integer");
+            Some(if integer {
+                V::from(v.round() as i64)
+            } else {
+                V::from(v)
+            })
+        }
+        _ => None,
+    }
+}
+
+/// A fingerprint of everything the run recorded.
+fn fingerprint(rec: &MemoryRecorder) -> (usize, u64) {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for (t, r) in rec.records() {
+        t.hash(&mut h);
+        r.channel.hash(&mut h);
+        r.json.hash(&mut h);
+    }
+    (rec.records().len(), h.finish())
+}
+
+/// Runs `doc` with `pointer` set to `value`: whether the run differs from `reference`, or
+/// why it could not run.
+fn audit_one(
+    doc: &serde_json::Value,
+    pointer: &str,
+    value: serde_json::Value,
+    reference: (usize, u64),
+) -> Result<bool, String> {
+    let mut edited = doc.clone();
+    if !set_pointer(&mut edited, pointer, value) {
+        return Err("cannot set".into());
+    }
+    let s: Scenario = serde_json::from_value(edited).map_err(|e| e.to_string())?;
+    let mut engine = Engine::build(s, "").map_err(|e| e.to_string())?;
+    let mut r = MemoryRecorder::new();
+    engine.run(&mut r).map_err(|e| format!("run failed: {e}"))?;
+    Ok(fingerprint(&r) != reference)
+}
+
+/// The settings audit: every field the settings window offers and the engine says it acts
+/// on (`x-status: wired`), changed one at a time on a five-vehicle run with a roadside unit
+/// and the backend, run for 4 s, and compared with the unchanged run record for record.
+///
+/// Ignored by default: 200 short runs take two minutes in a debug build. Run it with
+/// `cargo test -p v2xw-engine --test foundations -- --ignored --nocapture settings_audit`;
+/// docs/validation/foundations.md lists what it found.
+#[test]
+#[ignore = "two minutes; run by hand for the settings audit"]
+fn settings_audit() {
+    let mut base = with_backend(fleet(5, 4.0));
+    base.messages.sets = vec!["bsm".into(), "spat".into(), "map".into()];
+    base.actors.rsus = vec![
+        serde_json::from_value(serde_json::json!({
+            "position_m": [548.0, 240.0, 0.0],
+            "roles": ["spat", "map", "crl", "provisioning-proxy", "report-forward"],
+            "profile": "rsu/commsignia-its-rs4",
+        }))
+        .expect("an RSU"),
+    ];
+    let (_, rec) = run(base.clone());
+    let reference = fingerprint(&rec);
+    let doc = serde_json::to_value(&base).expect("serialises");
+    let surface = v2xw_engine::scenario::scenario_surface();
+    let mut changed = Vec::new();
+    let mut inert = Vec::new();
+    let mut refused = Vec::new();
+    let mut skipped = Vec::new();
+    for row in surface["fields"].as_array().expect("fields") {
+        let path = row["x-path"].as_str().unwrap_or_default().to_string();
+        let pointer = row["x-pointer"].as_str().unwrap_or_default();
+        if row["x-status"].as_str() != Some("wired") || path.contains("[]")
+            || path.contains('*')
+            || pointer.is_empty()
+        {
+            continue;
+        }
+        let current = doc.pointer(pointer).cloned().unwrap_or(serde_json::Value::Null);
+        let Some(value) = another_value(row, &current) else {
+            skipped.push(format!("{path} (no value to try)"));
+            continue;
+        };
+        // A second value for a number, the other way from the first: a doubled power can
+        // sit above a cap the halved one is below.
+        let mut values = vec![value.clone()];
+        if let (Some(v), Some(c)) = (
+            value.as_f64(),
+            current.as_f64().or(row["default"].as_f64()),
+        ) && c != 0.0
+            && v > c
+        {
+            values.push(if value.is_i64() || value.is_u64() {
+                serde_json::Value::from((c / 2.0).round() as i64)
+            } else {
+                serde_json::Value::from(c / 2.0)
+            });
+        }
+        let mut outcome = Ok(false);
+        for v in &values {
+            outcome = audit_one(&doc, pointer, v.clone(), reference);
+            if !matches!(outcome, Ok(false)) {
+                break;
+            }
+        }
+        match outcome {
+            Ok(true) => changed.push(path),
+            Ok(false) => inert.push(format!("{path}: {current} -> {values:?}")),
+            Err(e) => refused.push(format!("{path} = {value}: {e}")),
+        }
+    }
+    println!("CHANGED {} fields", changed.len());
+    for p in &inert {
+        println!("INERT {p}");
+    }
+    for p in &refused {
+        println!("REFUSED {p}");
+    }
+    for p in &skipped {
+        println!("SKIPPED {p}");
+    }
+}
+
+/// Three settings the audit found doing nothing, each now doing what it says or saying why
+/// it cannot.
+#[test]
+fn settings_that_did_nothing_now_act_or_refuse() {
+    // The radial city generator builds a radial city (it used to build the grid).
+    let mut s = fleet(2, 1.0);
+    let grid = v2xw_engine::wiring::build_world(&s).expect("grid");
+    if let v2xw_world::WorldSourceSpec::Procedural { generator, params } = &mut s.world.source
+    {
+        *generator = "world/source/procedural-radial".into();
+        *params = serde_json::Value::Null;
+    }
+    let radial = v2xw_engine::wiring::build_world(&s).expect("radial");
+    assert_ne!(
+        v2xw_world::hash::content_hash_hex(&radial),
+        v2xw_world::hash::content_hash_hex(&grid)
+    );
+    if let v2xw_world::WorldSourceSpec::Procedural { generator, .. } = &mut s.world.source {
+        *generator = "world/source/procedural-hex".into();
+    }
+    assert!(s.validate().is_err(), "an unknown generator was accepted");
+
+    // A SPaT role without SPaT in messages.sets is refused, naming the fix.
+    let mut s = fleet(2, 1.0);
+    s.actors.rsus = vec![
+        serde_json::from_value(serde_json::json!({
+            "position_m": [548.0, 240.0, 0.0], "roles": ["spat"],
+            "profile": "rsu/commsignia-its-rs4",
+        }))
+        .expect("an RSU"),
+    ];
+    let why = format!("{:?}", s.validate().expect_err("refused"));
+    assert!(why.contains("messages.sets"), "{why}");
+
+    // An on-board unit that cannot sign is offered as unavailable.
+    let surface = v2xw_engine::scenario::scenario_surface();
+    let row = surface["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["x-path"] == "nodes.default_obu")
+        .expect("the OBU field");
+    let mk5 = row["x-options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["value"] == "obu/cohda-mk5")
+        .expect("the MK5 is listed");
+    assert_eq!(mk5["available"], false);
+}

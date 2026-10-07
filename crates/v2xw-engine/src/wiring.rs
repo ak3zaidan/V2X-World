@@ -263,6 +263,12 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
         ..opts
     };
     match &scenario.world.source {
+        WorldSourceSpec::Procedural { generator, .. }
+            if generator == v2xw_world::procedural::radial::MODEL_ID =>
+        {
+            let radial = crate::scenario::validate::radial_params(scenario)?;
+            Ok(v2xw_world::procedural::radial::radial(&radial, &opts)?)
+        }
         WorldSourceSpec::Procedural { .. } => {
             let grid = crate::scenario::validate::grid_params(scenario)?;
             Ok(v2xw_world::procedural::grid(&grid, &opts)?)
