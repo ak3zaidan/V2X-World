@@ -31,10 +31,12 @@ pub mod access;
 pub mod ctx;
 pub mod differential;
 pub mod e2e;
+pub mod linklevel;
 pub mod net;
 pub mod phy;
 pub mod report;
 pub mod sec;
+pub mod sps;
 pub mod stats;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -274,7 +276,9 @@ pub fn run(check: &Check) -> Verdict {
 pub fn all() -> Vec<Check> {
     let mut v = Vec::new();
     v.extend(phy::checks());
+    v.extend(linklevel::checks());
     v.extend(access::checks());
+    v.extend(sps::checks());
     v.extend(net::checks());
     v.extend(sec::checks());
     v.extend(e2e::checks());

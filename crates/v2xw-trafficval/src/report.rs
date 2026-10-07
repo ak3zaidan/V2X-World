@@ -179,5 +179,51 @@ pub fn markdown(results: &[CheckResult], command: &str, quick: bool) -> String {
             }
         }
     }
+    let _ = writeln!(out, "## Defects found by this suite\n");
+    let _ = writeln!(out, "| Found by | Defect | Resolution |\n|---|---|---|");
+    for (id, what, done) in FINDINGS {
+        let _ = writeln!(out, "| `{id}` | {} | {} |", cell(what), cell(done));
+    }
+    let _ = writeln!(out);
     out
 }
+
+/// Defects this suite found, and what was done about them. Maintained by hand beside the
+/// checks: the checks prove the current state, this records the history a reader needs.
+pub const FINDINGS: &[(&str, &str, &str)] = &[
+    (
+        "model/idm-stops-at-s0 (suite)",
+        "The check held the stopping gap to s0 − 0.05 m, but the IDM with speeds floored at zero is underdamped near standstill and stops short of s0 even in continuous time (1.916 m at a 1 ms step for the city driver; 1.927 m at the engine's 0.1 s). The engine was right; the band encoded a property the equation does not have.",
+        "Fixed in the check: the engine's approach is held to an independent integration of the equation at the same step (to 1e-9 m), and the gap at rest to s0 within the continuous model's own shortfall (band from s0 − 0.1 m).",
+    ),
+    (
+        "model/string-stability (suite)",
+        "The check probed stability with a single 4 s dip and judged growth from the peak at car 59 over car 5; the dip's spectrum lies mostly outside the narrow unstable band, so weakly unstable platoons damped it and 6 of 22 densities disagreed with theory.",
+        "Fixed in the check: the leader oscillates at a frequency inside the unstable band (ω = √|criterion|), the per-car gain is read by projection onto sin and cos, and it is held to the linear transfer function |G(iω)| within 0.003 as well as on the side of 1.",
+    ),
+    (
+        "calibration/turning",
+        "Two things. (1) The measurement: a junction connector is a polyline and the published heading steps at each vertex, so one step's v·Δψ/Δt reported 11 m/s² (above 1 g). (2) The model: the engine sizes turn speeds for an average lateral acceleration of 5.5 m/s² (`DEFAULT_TURN_LATERAL_ACCEL_MPS2`, SUMO's netconvert default), above AASHTO's side-friction limit for low-speed intersection curves (0.32–0.38 g, 3.1–3.7 m/s²).",
+        "(1) Fixed in the check: lateral acceleration is averaged over a 1 s window. (2) Open, recorded: lowering the engine default moves every trajectory and every recorded golden, which is larger than this track's remit; the suggested value is 3.4 m/s² (AASHTO), to be taken with the goldens regenerated.",
+    ),
+    (
+        "model/sugiyama-ring",
+        "22 city drivers (UrbanHcm) on Sugiyama's 230 m circuit at 30 km/h do not form a jam: the slowest car keeps 3.4 m/s and the speed spread stays at 0.002 m/s. At this density the drivers are only marginally string-unstable (per-car gain 1.001–1.004), and the ring's discrete modes damp; Sugiyama's human drivers jammed within minutes.",
+        "Open, recorded: the shipped city drivers are calibrated to the HCM saturation flow and launch figures, and are too stable to reproduce stop-and-go waves without a bottleneck. Matching Sugiyama needs driver noise or reaction delay (e.g. Treiber & Kesting's human-driver extension), which changes every calibrated figure and is a mobility-track decision.",
+    ),
+    (
+        "cities/manhattan",
+        "One passenger car drove across an unsignalised crosswalk (lane 7690) while a pedestrian was on it, centres 1.4–2.3 m apart for 0.4 s (90 s quick run at 1,500 veh/h, t ≈ 68.6 s, near (265, 1158)): the auditor's pedestrian-overlap class.",
+        "Open, recorded for the mobility owner with the example: the yield rule (`vru::crosswalk`) and the pedestrian's kerb permit disagree for this crossing.",
+    ),
+    (
+        "cities/berlin",
+        "Vehicles on Berlin-Mitte junction connectors have their body centre about 2 m outside the junction's area (outside-junction 6, with 6 step-speed flags in the same steps): the imported junction polygon is smaller than the connector geometry the vehicles drive.",
+        "Open, recorded for the world owner: the junction-area polygon for OSM imports should cover its connectors (the auditor's outside-junction test reads it as given).",
+    ),
+    (
+        "invariants (suite)",
+        "Three held figures could not fail: the gridlock row on runs shorter than the auditor's 180 s standstill limit, the jerk-rate row (no fault reached it), and the closure check's entries (the lane closed carried no traffic, so losing the closure changed nothing).",
+        "Fixed in the checks: the standstill row is held only on runs longer than the limit and reported otherwise; a second fault (acceleration jitter) proves the jerk row; the closure is applied to the busiest lane of the 15 s before it, with a held row that it met traffic.",
+    ),
+];

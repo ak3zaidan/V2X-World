@@ -14,7 +14,6 @@
 use std::sync::Arc;
 
 use v2xw_core::card::ModelCard;
-use v2xw_core::model::Model as _;
 use v2xw_core::time::Duration;
 use v2xw_core::weather::WeatherState;
 use v2xw_mobility::audit::AuditParams;
@@ -247,7 +246,8 @@ pub fn checks() -> Vec<Check> {
             title: "Cars turn at corners no faster than AASHTO's side friction allows",
             procedure: "The Midtown-grid study: for every traversal of a junction connector \
                 above 2 m/s, the peak lateral acceleration `v·dψ/dt` from the published \
-                heading; its 85th percentile against the side-friction factor AASHTO's \
+                heading, averaged over a 1 s window (a connector is a polyline, so a single \
+                step's heading change is a vertex angle, not a curve); its 85th percentile against the side-friction factor AASHTO's \
                 Green Book uses for low-speed intersection curves. Turning speeds by turn \
                 are reported (no single published figure fits every corner radius).",
             faults: &["drivers who accept 6 m/s² of lateral acceleration in a turn"],

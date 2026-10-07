@@ -55,7 +55,11 @@ pub const RATE: [Class; 2] = [Class::Jerk, Class::HeadingJump];
 
 /// The rows an audit report gives: the safety classes' total, the rate classes, and the
 /// standstill class.
-pub fn audit_rows(label: &str, a: &AuditReport) -> (Vec<Row>, Vec<String>) {
+///
+/// `run_s` is the run's simulated length: the standstill class can only fire once a vehicle
+/// has stood longer than the auditor's limit, so on a shorter run it is reported (with the
+/// longest standstill seen) rather than held, because a held row there could not fail.
+pub fn audit_rows(label: &str, a: &AuditReport, run_s: f64) -> (Vec<Row>, Vec<String>) {
     let total: u64 = SAFETY.iter().map(|c| a.count(*c)).sum();
     let nonzero: Vec<String> = SAFETY
         .iter()
@@ -77,8 +81,17 @@ pub fn audit_rows(label: &str, a: &AuditReport) -> (Vec<Row>, Vec<String>) {
             (0.0, 1e-3),
             "tests/traffic_invariants.rs: under one vehicle-step in a thousand",
         ),
-        Row::zero(format!("{label}: vehicles standing past the standstill limit"), a.count(Class::Standstill), "no gridlock"),
     ];
+    let limit = v2xw_mobility::audit::AuditParams::default().standstill_limit_s;
+    if run_s > limit {
+        rows.push(Row::zero(format!("{label}: vehicles standing past the standstill limit"), a.count(Class::Standstill), "no gridlock (auditor limit 180 s: two cycles of the longest generated plan)"));
+    } else {
+        rows.push(Row::reported(
+            format!("{label}: longest standstill, s"),
+            a.stats.max_standstill_s,
+            format!("gridlock is judged at the auditor's {limit:.0} s limit, longer than this {run_s:.0} s run, so it is reported, not held"),
+        ));
+    }
     rows.push(Row::reported(format!("{label}: peak vehicles"), a.stats.peak_vehicles as f64, "—"));
     let mut notes = Vec::new();
     if !nonzero.is_empty() {
@@ -236,15 +249,43 @@ pub fn scenario_study(
     lab.study(&k, |_| Ok(r.clone()))
 }
 
-/// One vehicle's published position jumps 30 m along its lane for one step at step 300.
+/// A moving vehicle's published position jumps 30 m along its lane for one step, every
+/// 10 s from step 300 (a single jump can land on a step when nothing is moving).
 pub fn teleport(step: u64, actors: &mut Vec<AuditActor>) {
-    if step == 300 {
+    if step >= 300 && step % 100 == 0 {
         if let Some(a) = actors.iter_mut().find(|a| a.speed_mps > 1.0) {
             a.s_m += 30.0;
             a.pos.x += 30.0;
         }
     }
 }
+
+/// Every vehicle's published acceleration alternates ±3 m/s² about its true value each
+/// step for 2 s from step 400 (60 m/s³ of jerk, twice the auditor's limit): the signature of
+/// a sign error in an acceleration filter.
+pub fn jitter(step: u64, actors: &mut Vec<AuditActor>) {
+    if (400..420).contains(&step) {
+        let d = if step % 2 == 0 { 3.0 } else { -3.0 };
+        for a in actors.iter_mut() {
+            a.accel_mps2 += d;
+        }
+    }
+}
+
+/// The tamper of fault `i` for the checks whose faults are `[teleport, jitter]`.
+pub fn tamper_of(variant: Variant) -> Option<Tamper> {
+    match variant {
+        Variant::Fault(0) => Some(teleport as Tamper),
+        Variant::Fault(1) => Some(jitter as Tamper),
+        _ => None,
+    }
+}
+
+/// The two faults of every scenario and city check, as the report lists them.
+pub const TAMPER_FAULTS: [&str; 2] = [
+    "a moving vehicle's published position jumps 30 m for one step, every 10 s from 30 s",
+    "every vehicle's published acceleration alternates ±3 m/s² each step for 2 s from 40 s",
+];
 
 /// The scenarios of `scenarios/` that put traffic on the road, by file name.
 pub fn shipped_scenarios(cfg: &Config) -> Vec<String> {
@@ -274,7 +315,7 @@ pub fn checks() -> Vec<Check> {
                 under the auditor, with the jurisdiction's right-turn-on-red rule. Scenarios \
                 on an OpenStreetMap world are run in full mode only (group 5 runs each city \
                 in quick mode too).",
-            faults: &["one vehicle's published position jumps 30 m for one step at 30 s, in every scenario"],
+            faults: &TAMPER_FAULTS,
             run: shipped,
         },
         Check {
@@ -284,7 +325,7 @@ pub fn checks() -> Vec<Check> {
             procedure: "`phase1-grid.yaml` at 20,000 veh/h offered (667 times its shipped \
                 30 veh/h; the thinned-Poisson demand places what fits) for 180 s (90 s in \
                 quick mode).",
-            faults: &["junction control switched off (no signals, no yielding)"],
+            faults: &["junction control switched off (no signals, no yielding)", TAMPER_FAULTS[1]],
             run: peak_density,
         },
         Check {
@@ -307,7 +348,8 @@ pub fn checks() -> Vec<Check> {
                 lane are counted from vehicles that were not already committed to it (on \
                 it, or on a connector into it) when it closed, from 10 s after the closure; \
                 vehicles whose next lane was the closed one at the closure and later drove \
-                elsewhere count as rerouted; the auditor counts teleports, illegal \
+                elsewhere count as rerouted; the lane is the busiest driving lane of the \
+                15 s before the closure; the auditor counts teleports, illegal \
                 transitions and mid-road despawns. 120 s (90 s in quick mode).",
             faults: &[
                 "the closure is never sent to the engine (the check still treats the lane as closed)",
@@ -348,11 +390,11 @@ fn shipped(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
             notes.push(format!("{name}: OpenStreetMap world, skipped in quick mode."));
             continue;
         }
-        let tamper: Option<Tamper> = variant.is_fault().then_some(teleport as Tamper);
+        let tamper = tamper_of(variant);
         let key = name.trim_end_matches(".yaml").to_string();
         match scenario_study(lab, &key, &s, Engine::Shipped, tamper) {
             Ok(r) => {
-                let (mut rr, nn) = audit_rows(&key, &r.audit);
+                let (mut rr, nn) = audit_rows(&key, &r.audit, seconds);
                 // Only the safety total and the rate are held per scenario; the rest is noted.
                 rows.append(&mut rr);
                 notes.extend(nn);
@@ -380,10 +422,11 @@ fn grid_scenario(lab: &Lab, rate: f64, seconds: f64) -> Result<Scenario, String>
 fn peak_density(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     let seconds = lab.cfg.secs(180, 90) as f64;
     let s = grid_scenario(lab, 20_000.0, seconds)?;
-    let engine = if variant.is_fault() { Engine::NoJunctionControl } else { Engine::Shipped };
-    let r = scenario_study(lab, &format!("grid-20000-{seconds}"), &s, engine, None)?;
+    let engine = if variant == Variant::Fault(0) { Engine::NoJunctionControl } else { Engine::Shipped };
+    let tamper = (variant == Variant::Fault(1)).then_some(jitter as Tamper);
+    let r = scenario_study(lab, &format!("grid-20000-{seconds}"), &s, engine, tamper)?;
     let a = &r.audit;
-    let (mut rows, notes) = audit_rows("phase1-grid at 20,000 veh/h", a);
+    let (mut rows, notes) = audit_rows("phase1-grid at 20,000 veh/h", a, seconds);
     rows.insert(0, Row::zero("junction entries on red", a.count(Class::RedEntry), "UVC §11-202(c) / MUTCD §4D.04: steady red, do not enter"));
     rows.insert(1, Row::zero("two conflicting movements in one zone at once", a.count(Class::ConflictZone), "UVC §11-202(a)1"));
     rows.insert(2, Row::zero("overlapping vehicles", a.count(Class::Overlap), "no collision"));
@@ -463,8 +506,38 @@ fn closure(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     let seconds = lab.cfg.secs(120, 90) as f64;
     let s = grid_scenario(lab, 6_000.0, seconds)?;
     let world = world_of(lab, &s)?;
-    let lane = central_lane(&world).ok_or("no driving lane")?;
     let close_at = 40.0;
+    // The lane closed is the busiest driving lane over the 15 s before the closure, read
+    // from the same run's first 40 s (the run is deterministic, so they are identical): a
+    // closed lane nobody uses cannot show a reroute, nor an entry when the closure is lost.
+    let mut pre = s.clone();
+    pre.time.duration_s = close_at;
+    let mut use_count: BTreeMap<LaneId, u64> = BTreeMap::new();
+    let driving: BTreeSet<LaneId> = world
+        .roads
+        .lanes()
+        .iter()
+        .filter(|l| l.kind == v2xw_world::LaneKind::Driving && l.junction.is_none())
+        .map(|l| l.id)
+        .collect();
+    scenario_run(lab, &pre, Engine::Shipped, &[], None, |t, actors| {
+        if t >= close_at - 15.0 {
+            for a in actors {
+                if driving.contains(&a.lane) {
+                    *use_count.entry(a.lane).or_default() += 1;
+                }
+                if let Some(n) = a.route_next.filter(|n| driving.contains(n)) {
+                    *use_count.entry(n).or_default() += 1;
+                }
+            }
+        }
+    })?;
+    let lane = use_count
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+        .map(|(l, _)| *l)
+        .or_else(|| central_lane(&world))
+        .ok_or("no driving lane")?;
     let events = if variant == Variant::Fault(0) {
         vec![]
     } else {
@@ -525,6 +598,12 @@ fn closure(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
                 "a reroute is a new path from where the car is, never a jump",
             ),
             Row::reported("vehicles bound for the lane that drove elsewhere", w.rerouted.len() as f64, "—"),
+            Row::held(
+                "vehicles on, entering or bound for the lane when it closed",
+                (w.committed.len() + w.bound.len()) as f64,
+                (1.0, f64::INFINITY),
+                "the closure must meet traffic, or no entry and no reroute proves anything",
+            ),
             Row::zero("safety-class violations", SAFETY.iter().map(|c| a.count(*c)).sum::<u64>(), "v2xw_mobility::audit"),
         ],
         notes,

@@ -93,6 +93,11 @@ clean-incremental:
 run SCENARIO:
     cargo run --release --quiet -p v2xw-cli -- run {{SCENARIO}}
 
+[doc("Run the network and traffic validation suites and write docs/validation/network.md and traffic.md (--quick: leave out the whole-run and city-scale checks)")]
+validation-report *ARGS:
+    -cargo run --release --quiet -p v2xw-netval --bin netval-report -- {{ARGS}}
+    cargo run --release --quiet -p v2xw-trafficval --bin traffic_validation -- {{ARGS}}
+
 [doc("Check a scenario without running it; prints the field-level errors")]
 validate SCENARIO:
     cargo run --release --quiet -p v2xw-cli -- validate {{SCENARIO}}

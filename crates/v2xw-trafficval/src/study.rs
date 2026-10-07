@@ -27,8 +27,9 @@ use crate::safety::{SafetyObserver, SafetyStats};
 #[derive(Debug, Clone, Default)]
 pub struct MotionObserver {
     prev: BTreeMap<ActorId, (LaneId, f64, f64)>,
-    /// Per traversal of a junction connector: the actor's peak lateral acceleration.
-    turn_peak: BTreeMap<ActorId, (LaneId, f64)>,
+    /// Per traversal of a junction connector: the actor's peak lateral acceleration, and
+    /// the last second of `(v·|Δψ|, Δt)` it is averaged over.
+    turn_peak: BTreeMap<ActorId, (LaneId, f64, std::collections::VecDeque<(f64, f64)>)>,
     turn_peaks: Vec<f64>,
     /// Launch in progress: start time and class.
     launch: BTreeMap<ActorId, (f64, VehicleClass, bool)>,
@@ -60,6 +61,11 @@ fn quantile(sorted: &[f64], q: f64) -> f64 {
     sorted[i.min(sorted.len() - 1)]
 }
 
+/// The window lateral acceleration is averaged over, s: a car at 7 m/s covers 7 m, several
+/// vertices of a junction connector, so a vertex's heading step is spread over the arc it
+/// stands for. A traversal shorter than this contributes no figure.
+pub const TURN_WINDOW_S: f64 = 1.0;
+
 fn wrap(a: f64) -> f64 {
     let tau = 2.0 * core::f64::consts::PI;
     let mut x = a % tau;
@@ -81,17 +87,33 @@ impl MotionObserver {
             if let Some((plane, _ps, ph)) = self.prev.get(&a.actor) {
                 // Lateral acceleration on a connector: speed × heading rate.
                 if internal && *plane == a.lane && a.speed_mps > 2.0 && a.changing.is_none() {
-                    let lat = (a.speed_mps * wrap(a.heading_rad - ph) / dt_s).abs();
-                    let e = self.turn_peak.entry(a.actor).or_insert((a.lane, 0.0));
+                    // A connector is a polyline and the published heading is its segment's
+                    // tangent, so the heading turns in steps at each vertex: one step's
+                    // v·Δψ/Δt is the vertex angle over 0.1 s, not a lateral acceleration.
+                    // The figure is v·Δψ averaged over the last second (TURN_WINDOW_S), the
+                    // time a car takes to cover several vertices at turning speed.
+                    let e = self
+                        .turn_peak
+                        .entry(a.actor)
+                        .or_insert((a.lane, 0.0, std::collections::VecDeque::new()));
                     if e.0 != a.lane {
                         self.turn_peaks.push(e.1);
-                        *e = (a.lane, 0.0);
+                        *e = (a.lane, 0.0, std::collections::VecDeque::new());
                     }
-                    e.1 = e.1.max(lat);
+                    e.2.push_back(((a.speed_mps * wrap(a.heading_rad - ph)).abs(), dt_s));
+                    let mut span: f64 = e.2.iter().map(|x| x.1).sum();
+                    while span > TURN_WINDOW_S + 1e-9 {
+                        let (_, d) = e.2.pop_front().expect("non-empty while span > 0");
+                        span -= d;
+                    }
+                    if span >= TURN_WINDOW_S - 1e-9 {
+                        let lat = e.2.iter().map(|x| x.0).sum::<f64>() / span;
+                        e.1 = e.1.max(lat);
+                    }
                 }
             }
             if !internal {
-                if let Some((_, peak)) = self.turn_peak.remove(&a.actor) {
+                if let Some((_, peak, _)) = self.turn_peak.remove(&a.actor) {
                     if peak > 0.0 {
                         self.turn_peaks.push(peak);
                     }
