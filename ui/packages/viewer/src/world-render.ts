@@ -1512,7 +1512,7 @@ export class WorldRenderer {
     // And the ground under it, as far as the far plane reaches: a quad centred on the world ended
     // at three world radii, so a camera near the world's edge, or high in the free camera, saw
     // the sky's underside through the gap between the quad's edge and the horizon.
-    const far = (camera as { far?: number }).far;
+    const far = (camera as unknown as { far?: number }).far;
     // Half-edge 2.5 far planes: a corner ray of a 68°, 2.5:1 view reaches 2.07 far planes out
     // horizontally before its depth passes the far plane.
     if (far !== undefined && Number.isFinite(far)) this.#resizeGround((Math.max(far, 100) * 5) / 6);

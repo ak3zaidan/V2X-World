@@ -132,6 +132,7 @@ const FREE_MAX_SPEED_MPS = 600;
 /** Shift's boost, and the time constant the velocity eases to the keys with, seconds. */
 const FREE_BOOST = 4;
 const FREE_EASE_S = 0.12;
+const FREE_STOP_S = 0.07;
 /** How far from a wall the free camera stops, metres: past the near plane's ~1 m corners. */
 const FREE_WALL_MARGIN_M = 1.2;
 
@@ -1374,12 +1375,14 @@ export class CameraController {
     const tx = ((cy * kf + sy * kr) / norm) * speed;
     const ty = ((sy * kf - cy * kr) / norm) * speed;
     const tz = ku * speed;
-    const a = 1 - Math.exp(-dt / FREE_EASE_S);
+    const idle = tx === 0 && ty === 0 && tz === 0;
+    // Stopping is quicker than starting: a released key that let the camera coast reads as drift.
+    const a = 1 - Math.exp(-dt / (idle ? FREE_STOP_S : FREE_EASE_S));
     const kv = this.#keyVel;
     kv.x += (tx - kv.x) * a;
     kv.y += (ty - kv.y) * a;
     kv.z += (tz - kv.z) * a;
-    if (kv.lengthSq() < 1e-6 && tx === 0 && ty === 0 && tz === 0) kv.set(0, 0, 0);
+    if (idle && kv.lengthSq() < 0.05 * 0.05) kv.set(0, 0, 0);
 
     let dx = kv.x * dt;
     let dy = kv.y * dt;
