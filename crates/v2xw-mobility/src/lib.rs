@@ -22,6 +22,9 @@
 //! | Demand (thinned Poisson, origin-destination, 3GPP drops) | [`demand`] | 04-models.md §2.4 |
 //! | VRUs (social force) | [`vru`] | 04-models.md §2.5 |
 //! | Weather's effect on driving | [`weather`] | 04-models.md §2.6 |
+//! | Kerbside stops: buses, taxis, double-parked deliveries | [`kerbside`] | TCQSM 2nd ed. Part 4; HCM bus blockage |
+//! | Driving styles; heavy vehicles at a turn | [`style`] | Evans & Wasielewski 1982-83; AASHTO Green Book §2.1.3 |
+//! | Network-level measures: MFD, stops, kerbside dwell, cyclist conflicts | [`network`] | Daganzo & Geroliminis 2008; Edie 1963 |
 //! | GNSS error | [`gnss`] | 04-models.md §2.10, §3.8 |
 //! | Clock drift | [`clock`] | 04-models.md §2.10, §3.8 |
 //! | The abstract tier | [`kinematic`] | 04-models.md §2.1 |
@@ -99,12 +102,15 @@ pub mod error;
 pub mod fd;
 pub mod gnss;
 pub mod intersection;
+pub mod kerbside;
 pub mod kinematic;
 pub mod lamps;
 pub mod lanechange;
+pub mod network;
 pub mod routing;
 pub mod rules;
 pub mod snapshot;
+pub mod style;
 pub mod traits;
 pub mod views;
 pub mod vru;

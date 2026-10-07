@@ -227,6 +227,22 @@ const GO_ACCEL_MPS2: f64 = 0.2;
 /// Standing still, for the start-up reaction, m/s.
 const STANDSTILL_MPS: f64 = 0.1;
 
+/// How far ahead a vehicle standing at the kerb is seen as something to go round, metres:
+/// about a short block's worth of sight. **A choice.**
+const KERB_PASS_LOOK_M: f64 = 60.0;
+
+/// The hardest the traffic in the lane beside may have to brake for a vehicle pulling out
+/// round one at the kerb, m/s²: the IDM's comfortable deceleration of a city driver (2.0,
+/// [`crate::carfollowing::idm::IdmPreset::UrbanHcm`]). A pull-out that asks more waits
+/// for the next gap.
+const PULL_OUT_FOLLOWER_DECEL_MPS2: f64 = 2.0;
+
+/// The speed a pull-out from behind a vehicle at the kerb is planned and shown at, at
+/// least, m/s: the transition is stretched to MOBIL's 12° heading cap at this speed (about
+/// 12 s across a 3.35 m lane), so a car nosing out from a standstill angles out over that
+/// time rather than swinging round on the spot. **A choice**: a walking-to-jogging pace.
+const PULL_OUT_SPEED_MPS: f64 = 2.0;
+
 /// What makes one driver unlike another, beyond the car-following parameters.
 ///
 /// * `speed_factor` — the speed the driver chooses on a free road as a multiple of the
@@ -263,6 +279,9 @@ pub struct DriverTraits {
     /// The time to the stop line below which this driver goes on amber rather than stops,
     /// seconds; zero never goes where it could stop.
     pub amber_go_tti_s: f64,
+    /// How the driver follows ([`crate::style::DriverStyle`]), read from the same latent
+    /// as `speed_factor`.
+    pub style: crate::style::DriverStyle,
 }
 
 impl DriverTraits {
@@ -272,6 +291,7 @@ impl DriverTraits {
         reaction_s: 0.0,
         follow_reaction_s: 0.0,
         amber_go_tti_s: 0.0,
+        style: crate::style::DriverStyle::Normal,
     };
 
     /// The traits of the driver of trip `seq` in a vehicle of `class`, with the queue
@@ -318,6 +338,7 @@ impl DriverTraits {
             reaction_s,
             follow_reaction_s,
             amber_go_tti_s,
+            style: crate::style::DriverStyle::of_speed_factor(speed_factor, class.spec().speed_dev),
         }
     }
 }
@@ -591,6 +612,22 @@ pub struct EngineParams {
     /// line loses the commitment (on by default; off reproduces the earlier behaviour, for
     /// an ablation).
     pub amber_commit_lapse: bool,
+    /// Kerbside stops: buses at stops, taxis, double-parked deliveries
+    /// ([`crate::kerbside`]). Not applied in the legacy parity mode, nor to a vehicle
+    /// placed by a command.
+    pub kerbside: crate::kerbside::KerbsideParams,
+    /// Whether each driver follows in their own style ([`crate::style::DriverStyle`]):
+    /// assertive drivers keep shorter gaps and accelerate harder, cautious ones the
+    /// opposite. Needs `driver_heterogeneity`; not applied in the legacy parity mode.
+    pub driver_styles: bool,
+    /// Whether a heavy vehicle takes a turning connector at no more than the AASHTO design
+    /// turning speed ([`crate::style::HEAVY_TURN_SPEED_MPS`]). Not applied in the legacy
+    /// parity mode.
+    pub heavy_turns: bool,
+    /// Whether each class is routed on the lanes its own class may use (a car not on a
+    /// bus-only lane), falling back to the engine-wide router only when its own has no
+    /// route. Not applied in the legacy parity mode.
+    pub class_routing: bool,
     /// **A test hook, not a model parameter.** Walks the decision pass in reverse actor
     /// order. Because the pass reads only the frozen snapshot, the published result must be
     /// bit-identical either way; that is the ADR 0004 Jacobi property, and this is how the
@@ -619,6 +656,10 @@ impl Default for EngineParams {
             two_wheelers: TwoWheelerParams::default(),
             cyclists: CyclistSpeeds::default(),
             amber_commit_lapse: true,
+            kerbside: crate::kerbside::KerbsideParams::default(),
+            driver_styles: true,
+            heavy_turns: true,
+            class_routing: true,
             reverse_order: false,
         }
     }
@@ -644,6 +685,10 @@ struct Transition {
     /// `s` on the lane being left minus `s` on the lane being entered, at the switch:
     /// where the body still is on the lane it is leaving.
     from_s_delta: f64,
+    /// A pull-out from behind a vehicle standing at the kerb, started at a crawl: its
+    /// heading swing is taken at [`PULL_OUT_SPEED_MPS`] at least, so a car nosing out
+    /// from a standstill angles out instead of swinging round on the spot.
+    pull_out: bool,
 }
 
 /// One actor the engine drives.
@@ -686,6 +731,8 @@ struct Actor {
     forced_brake: Option<(f64, Option<SimTime>)>,
     /// A scripted cut-in pending ([`MobilityCommand::CutIn`]): the side, and until when.
     forced_cut_in: Option<(Side, SimTime)>,
+    /// Its kerbside stops ([`crate::kerbside`]).
+    kerb: crate::kerbside::KerbState,
 }
 
 impl Actor {
@@ -870,7 +917,14 @@ impl Actor {
             ),
             acc: Vec3::new(self.accel_mps2 * cos_h, self.accel_mps2 * sin_h, 0.0),
             heading_rad: v2xw_world::model::normalise_angle(
-                body + lateral_heading_offset(lateral_rate, self.speed_mps),
+                body + lateral_heading_offset(
+                    lateral_rate,
+                    if self.transition.is_some_and(|t| t.pull_out) {
+                        self.speed_mps.max(PULL_OUT_SPEED_MPS)
+                    } else {
+                        self.speed_mps
+                    },
+                ),
             ),
             yaw_rate_rad_s: 0.0,
             lane: Some(LanePos::new(rear_lane, rear_s, self.lateral_m)),
@@ -999,6 +1053,9 @@ pub struct NativeMobility {
     router: DynamicReroute,
     /// Routes riders over the lanes that admit bicycles.
     bike_router: DynamicReroute,
+    /// One router per motor class's own lane-access bit ([`EngineParams::class_routing`]),
+    /// keyed by the bit; empty when class routing is off.
+    class_routers: BTreeMap<u16, DynamicReroute>,
     demand: Option<Box<dyn Demand>>,
     /// The VRU population to keep.
     vru_population: VruPopulation,
@@ -1103,10 +1160,30 @@ impl NativeMobility {
         mobil_params.step_s = params.step.as_secs_f64();
         let mobil = Mobil::with_params(lane_change, mobil_params, Arc::clone(&cf));
         let router_params = DijkstraParams::for_classes(params.classes);
-        let router = if params.dynamic_rerouting {
-            DynamicReroute::on_change(router_params)
+        let make_router = |p: DijkstraParams| {
+            if params.dynamic_rerouting {
+                DynamicReroute::on_change(p)
+            } else {
+                DynamicReroute::new(p, crate::views::ReroutePolicy::STATIC)
+            }
+        };
+        let router = make_router(router_params);
+        let class_routers: BTreeMap<u16, DynamicReroute> = if params.class_routing
+            && params.intersections != IntersectionMode::TwoColoringLegacy
+        {
+            [
+                ClassMask::CAR,
+                ClassMask::TRUCK,
+                ClassMask::BUS,
+                ClassMask::MOTO,
+                ClassMask::EMERGENCY,
+            ]
+            .into_iter()
+            .filter(|m| params.classes.contains_any(*m))
+            .map(|m| (m.bits(), make_router(DijkstraParams::for_classes(m))))
+            .collect()
         } else {
-            DynamicReroute::new(router_params, crate::views::ReroutePolicy::STATIC)
+            BTreeMap::new()
         };
         Self {
             card: card(&params, &cf.card().id),
@@ -1124,6 +1201,7 @@ impl NativeMobility {
                 DijkstraParams::for_classes(ClassMask::BICYCLE),
                 crate::views::ReroutePolicy::STATIC,
             ),
+            class_routers,
             demand: None,
             vru_population: VruPopulation::default(),
             walkable: Vec::new(),
@@ -1203,14 +1281,32 @@ impl NativeMobility {
         self
     }
 
-    /// The router for a class: riders on the bicycle lane graph, everyone else on the
-    /// engine's own.
+    /// The router for a class: riders on the bicycle lane graph, every other class on the
+    /// lanes its own class may use ([`EngineParams::class_routing`]), or the engine's own.
     fn router_for(&self, class: VehicleClass) -> &DynamicReroute {
-        if class == VehicleClass::Bicycle {
-            &self.bike_router
-        } else {
-            &self.router
-        }
+        router_of(&self.router, &self.bike_router, &self.class_routers, class)
+    }
+
+    /// A route for a vehicle of `class` from `from` to `to`: on its own class's lanes, and
+    /// on the engine-wide lanes only when its own class has no route (a trip that starts or
+    /// ends on a lane its class is not signed for).
+    fn plan_route(
+        &self,
+        class: VehicleClass,
+        world: &World,
+        from: LaneId,
+        to: LaneId,
+        t: SimTime,
+        costs: &dyn crate::views::EdgeCost,
+    ) -> Option<Route> {
+        let own = self.router_for(class);
+        own.replan(world, from, to, t, costs).or_else(|| {
+            if class != VehicleClass::Bicycle && !core::ptr::eq(own, &self.router) {
+                self.router.replan(world, from, to, t, costs)
+            } else {
+                None
+            }
+        })
     }
 
     /// Adds a clock model. The engine does not read it — believed time belongs to the node
@@ -1247,6 +1343,18 @@ impl NativeMobility {
         let lean = tw.max_lean_deg.clamp(1.0, 60.0) * core::f64::consts::PI / 180.0;
         let a_lean = GRAVITY_MPS2 * math::tan(lean);
         math::sqrt(a_lean / self.params.turn_lateral_accel_mps2).min(1.0)
+    }
+
+    /// The speed a vehicle of `class` takes a curved junction connector at whose car turn
+    /// speed is `car_turn_mps`: a two-wheeler's lean limit ([`Self::turn_factor`]) and a
+    /// heavy vehicle's design turning speed ([`crate::style::turn_speed_cap`]).
+    fn class_turn_speed(&self, class: VehicleClass, car_turn_mps: f64) -> f64 {
+        let v = car_turn_mps * self.turn_factor(class);
+        if self.params.heavy_turns {
+            crate::style::turn_speed_cap(class, v)
+        } else {
+            v
+        }
     }
 
     /// Sets the weather every vehicle drives in.
@@ -1325,6 +1433,7 @@ impl NativeMobility {
                     heading_rad: k.heading_rad,
                     min_path_radius_m: a.class.min_path_radius_m(),
                     lane_position_m: self.lane_position_m(a.class),
+                    kerbside: a.kerb.at_kerb_as(),
                 }
             })
             .collect()
@@ -1437,6 +1546,7 @@ impl NativeMobility {
                 release_at: None,
                 forced_brake: None,
                 forced_cut_in: None,
+                kerb: crate::kerbside::KerbState::NONE,
             },
         );
         Ok(id)
@@ -1698,7 +1808,8 @@ impl NativeMobility {
             } else {
                 &costs
             };
-        let Some(route) = self.router_for(trip.class).replan(
+        let Some(route) = self.plan_route(
+            trip.class,
             world,
             trip.origin,
             trip.destination,
@@ -1809,10 +1920,19 @@ impl NativeMobility {
             self.next_actor += 1;
             id
         });
-        let driver = DriverProfile {
+        let mut driver = DriverProfile {
             desired_speed_mps: trip.desired_speed_mps,
             ..self.driver_for(trip.class)
         };
+        // How this driver follows: assertive or cautious drivers keep their own gaps
+        // ([`crate::style`]). A rider keeps the bicycle vType.
+        if self.along_path()
+            && self.params.driver_styles
+            && self.params.driver_heterogeneity
+            && trip.class != VehicleClass::Bicycle
+        {
+            driver = traits.style.apply(driver);
+        }
         self.actors.insert(
             id,
             Actor {
@@ -1842,6 +1962,7 @@ impl NativeMobility {
                 release_at: None,
                 forced_brake: None,
                 forced_cut_in: None,
+                kerb: crate::kerbside::KerbState::NONE,
             },
         );
         self.next_seq = self.next_seq.max(trip.seq + 1);
@@ -2252,6 +2373,25 @@ impl NativeMobility {
     ///
     /// One builder for both spawn paths — commanded and demand-driven — so the two cannot
     /// announce different things about the same kind of event.
+    /// Gives a demand trip's vehicle its kerbside role ([`crate::kerbside`]). Only demand
+    /// trips stop at the kerb: a vehicle placed by a command (a scripted test, the
+    /// saturation-flow field study's base conditions) does not.
+    fn assign_kerbside(&mut self, ctx: &dyn MobCtx, id: ActorId) {
+        if !self.along_path() || !self.params.kerbside.enabled {
+            return;
+        }
+        let params = self.params.kerbside;
+        if let Some(a) = self.actors.get_mut(&id) {
+            a.kerb = crate::kerbside::KerbState::assign(
+                ctx,
+                &params,
+                a.class,
+                a.seq,
+                a.route.length_m,
+            );
+        }
+    }
+
     fn actor_spawn(&self, world: &World, id: ActorId, t: SimTime) -> ActorSpawn {
         let actor = &self.actors[&id];
         ActorSpawn {
@@ -2856,7 +2996,13 @@ impl NativeMobility {
             let route = if clash || alongside {
                 None
             } else {
-                self.route_after_change(world, actor, to, t, &costs)
+                self.route_after_change(world, actor, to, t, &costs).or_else(|| {
+                    if decisions[i].detour_ok {
+                        self.replan_from(world, actor, to, t, &costs)
+                    } else {
+                        None
+                    }
+                })
             };
             match route {
                 Some(r) => {
@@ -2945,6 +3091,103 @@ impl NativeMobility {
                 lanes.extend(rest.lanes.into_iter().skip(1));
                 return Some((Self::route_of(world, lanes), d));
             }
+        }
+        None
+    }
+
+    /// A route from `from` to the vehicle's destination road, whatever its old route was:
+    /// what a driver who had to leave their lane to get round an obstruction does when the
+    /// lane they are now in cannot make the turn they meant to take.
+    fn replan_from(
+        &self,
+        world: &World,
+        actor: &Actor,
+        from: LaneId,
+        t: SimTime,
+        costs: &DynamicCost<'_>,
+    ) -> Option<(Route, LaneId)> {
+        let dest_lanes: Vec<LaneId> = world
+            .try_lane(actor.destination)
+            .map(|l| world.edge(l.edge).lanes.clone())
+            .unwrap_or_default();
+        for d in std::iter::once(actor.destination).chain(dest_lanes) {
+            if let Some(r) = self.plan_route(actor.class, world, from, d, t, costs) {
+                return Some((r, d));
+            }
+        }
+        None
+    }
+
+    /// The lane change that takes a vehicle round the vehicle standing at the kerb ahead
+    /// of it, if there is room for it now.
+    ///
+    /// The leader must be standing at the kerb ([`crate::kerbside`]) and within
+    /// [`KERB_PASS_LOOK_M`]. A side qualifies when the lane beside has no standing vehicle
+    /// closer than the far end of the one being passed, the ego fits ahead of that lane's
+    /// follower, and that follower need brake no harder than
+    /// [`PULL_OUT_FOLLOWER_DECEL_MPS2`] for it. Left before right. MOBIL's minimum speed
+    /// and reconsideration rate do not apply: a driver stuck behind a double-parked van
+    /// pulls out the moment a gap comes, and a moving one changes lanes well before
+    /// reaching it.
+    fn pass_kerbside(
+        &self,
+        world: &World,
+        mobil: &Mobil,
+        at_kerb: &BTreeSet<ActorId>,
+        ego: &VehicleView,
+        nbrs: &LaneNeighbors,
+    ) -> Option<LaneChangeDecision> {
+        let lead = nbrs.leader?;
+        let blocker = lead.vehicle?;
+        if !at_kerb.contains(&blocker.actor) || lead.gap_m > KERB_PASS_LOOK_M {
+            return None;
+        }
+        for side in [Side::Left, Side::Right] {
+            let Some(target) = nbrs.side(side) else {
+                continue;
+            };
+            let Some(target_lane) = world.try_lane(target.lane) else {
+                continue;
+            };
+            if let Some(t_lead) = target.leader {
+                if t_lead.gap_m < ego.driver.min_gap_m + 1.0 {
+                    continue;
+                }
+                if t_lead.vehicle.is_some_and(|v| at_kerb.contains(&v.actor)) {
+                    continue;
+                }
+                if t_lead.speed_mps < 1.0 && t_lead.gap_m < lead.gap_m + blocker.dims.length_m + 2.0
+                {
+                    continue;
+                }
+            }
+            if let Some(f) = target.follower
+                && let Some(fv) = f.vehicle.as_ref()
+            {
+                if f.gap_m < fv.driver.min_gap_m {
+                    continue;
+                }
+                let a = self.cf.accel(
+                    fv,
+                    Some(&LeaderView::of(*ego, f.gap_m)),
+                    &LaneView::of(target_lane),
+                    &self.weather,
+                );
+                if a < -PULL_OUT_FOLLOWER_DECEL_MPS2 {
+                    continue;
+                }
+            }
+            let lateral = 0.5 * (world.lane(ego.lane).width_m + target_lane.width_m);
+            return Some(LaneChangeDecision::Change {
+                to: target.lane,
+                side,
+                incentive_mps2: 0.0,
+                duration: crate::lanechange::mobil::transition_duration(
+                    mobil.params(),
+                    lateral,
+                    ego.speed_mps.max(PULL_OUT_SPEED_MPS),
+                ),
+            });
         }
         None
     }
@@ -3283,7 +3526,7 @@ impl NativeMobility {
             };
             let mut cap = lane.speed_limit_mps * actor.traits.speed_factor;
             if let Some(v) = self.turn_speed.get(&next) {
-                cap = cap.min(*v * self.turn_factor(actor.class));
+                cap = cap.min(self.class_turn_speed(actor.class, *v));
             }
             best = best.min(math::sqrt(cap * cap + 2.0 * b * dist.max(0.0)));
             dist += lane.length_m;
@@ -3337,6 +3580,10 @@ struct Decision {
     /// of a vehicle standing ahead, metres; `None` when the car ahead is moving or there is
     /// none.
     advance_cap_m: Option<f64>,
+    /// A lane change round a vehicle at the kerb: when the lane beside cannot make the
+    /// route's next movement, the trip is re-planned from it rather than the change
+    /// refused.
+    detour_ok: bool,
 }
 
 impl v2xw_core::model::Model for NativeMobility {
@@ -3444,7 +3691,10 @@ impl Mobility for NativeMobility {
                 for (trip, since, reserved) in queue {
                     let traits = self.traits_for(&*ctx, &trip);
                     match self.try_insert(world, &trip, t0, reserved, traits) {
-                        Insertion::Placed(id) => spawned.push(self.actor_spawn(world, id, t0)),
+                        Insertion::Placed(id) => {
+                            self.assign_kerbside(&*ctx, id);
+                            spawned.push(self.actor_spawn(world, id, t0));
+                        }
                         Insertion::Occupied
                             if t0.saturating_sub(since) < MAX_DEPART_DELAY.as_nanos() =>
                         {
@@ -3519,7 +3769,7 @@ impl Mobility for NativeMobility {
             // A junction connector is driven no faster than its curvature allows.
             if along && let Some(v) = self.turn_speed.get(&actor.lane) {
                 lane_view.speed_limit_mps =
-                    lane_view.speed_limit_mps.min(*v * self.turn_factor(actor.class));
+                    lane_view.speed_limit_mps.min(self.class_turn_speed(actor.class, *v));
             }
             let options = NeighborOptions {
                 lookahead_m: self.params.lookahead_m,
@@ -3764,6 +4014,26 @@ impl Mobility for NativeMobility {
                 leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(0.0, 0.0)));
                 binding_stop_line = None;
             }
+            // A kerbside stop ([`crate::kerbside`]) is braked into like a stop line: an
+            // obstacle the standstill gap beyond the point the front stops at, held until
+            // the dwell is over.
+            if along
+                && actor.kerb.holds(t0)
+                && let Some(d) = actor.kerb.stop_distance(
+                    world,
+                    actor.lane,
+                    actor.s_m,
+                    &actor.route.lanes,
+                    actor.route_index,
+                )
+            {
+                let gap = (d + actor.driver.min_gap_m).max(0.0);
+                let before = leader;
+                leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(gap, 0.0)));
+                if leader != before {
+                    binding_stop_line = None;
+                }
+            }
             let v0 = match actor.speed_cap_mps {
                 Some(cap) => actor.driver.desired_speed_mps.min(cap),
                 None => actor.driver.desired_speed_mps,
@@ -3971,12 +4241,20 @@ impl Mobility for NativeMobility {
                 amber_seen,
                 release_at,
                 advance_cap_m,
+                detour_ok: false,
             });
             neighbours.insert(*id, (ego_capped, nbrs));
         }
         // Lane-change decisions: a second walk, because MOBIL needs the context for its
         // reconsideration draw and the borrow of the world above is shared.
         if let Some(mobil) = self.lane_change.take() {
+            // The vehicles standing at the kerb, from the start-of-step state.
+            let at_kerb: BTreeSet<ActorId> = self
+                .actors
+                .values()
+                .filter(|a| a.kerb.at_kerb())
+                .map(|a| a.id)
+                .collect();
             for decision in &mut decisions {
                 let Some(actor) = self.actors.get(&decision.actor) else {
                     continue;
@@ -3987,9 +4265,25 @@ impl Mobility for NativeMobility {
                 if self.along_path() && !self.may_consider_lane_change(ctx.world(), actor, &mobil) {
                     continue;
                 }
+                // A vehicle making for its kerbside stop keeps to the kerb lane.
+                if actor.kerb.stop.is_some() {
+                    continue;
+                }
                 let Some((ego, nbrs)) = neighbours.get(&decision.actor) else {
                     continue;
                 };
+                // Round a vehicle standing at the kerb: the driver behind goes past it when
+                // the lane beside has room, however slowly they are moving, and detours if
+                // that lane cannot make their next turn ([`Self::pass_kerbside`]).
+                if self.along_path()
+                    && !at_kerb.is_empty()
+                    && let Some(change) =
+                        self.pass_kerbside(ctx.world(), &mobil, &at_kerb, ego, nbrs)
+                {
+                    decision.lane_change = change;
+                    decision.detour_ok = true;
+                    continue;
+                }
                 // A scripted cut-in takes the side it was told to, into the gap ahead of
                 // that lane's follower, whatever MOBIL's incentive or its safety
                 // criterion say — that is what makes it a cut-in. The resolution below
@@ -4029,6 +4323,8 @@ impl Mobility for NativeMobility {
         let generation = costs.generation();
         let mut despawned: Vec<(ActorId, DespawnCause)> = Vec::new();
         let along = self.along_path();
+        let kerb_params = self.params.kerbside;
+        let no_change_zone_m = self.params.no_change_zone_m;
         for decision in &decisions {
             let Some(actor) = self.actors.get_mut(&decision.actor) else {
                 continue;
@@ -4134,6 +4430,7 @@ impl Mobility for NativeMobility {
                     to_offset_m: home,
                     switched: false,
                     from_s_delta: 0.0,
+                    pull_out: decision.detour_ok && actor.speed_mps < PULL_OUT_SPEED_MPS,
                 });
                 // The route is re-planned from the lane being entered, so the vehicle's
                 // next movement is one that lane actually has. Keeping the old route
@@ -4213,13 +4510,18 @@ impl Mobility for NativeMobility {
                     && let Some(n) = next
                     && !world.successor_lanes(actor.lane).contains(&n)
                 {
-                    let router = if actor.class == VehicleClass::Bicycle {
-                        &self.bike_router
-                    } else {
-                        &self.router
-                    };
+                    let router =
+                        router_of(&self.router, &self.bike_router, &self.class_routers, actor.class);
                     next = router
                         .replan(world, actor.lane, actor.destination, t1, &costs)
+                        .or_else(|| {
+                            (actor.class != VehicleClass::Bicycle)
+                                .then(|| {
+                                    self.router
+                                        .replan(world, actor.lane, actor.destination, t1, &costs)
+                                })
+                                .flatten()
+                        })
                         .and_then(|route| {
                             let n = route.lanes.get(1).copied();
                             actor.route = route;
@@ -4286,6 +4588,28 @@ impl Mobility for NativeMobility {
                     }
                 }
             }
+            // Kerbside stops: arrive, dwell, leave, and plan the next one
+            // ([`crate::kerbside`]) — from this vehicle's own state at the step's end.
+            if along && cause.is_none() && actor.kerb.role.is_some() {
+                let changing = actor.transition.is_some();
+                let length_m = actor.class.spec().length_m;
+                actor.kerb.advance(
+                    &*ctx,
+                    &kerb_params,
+                    world,
+                    actor.seq,
+                    length_m,
+                    t1,
+                    actor.lane,
+                    actor.s_m,
+                    actor.speed_mps,
+                    advance,
+                    &actor.route.lanes,
+                    actor.route_index,
+                    changing,
+                    no_change_zone_m,
+                );
+            }
             if cause.is_none()
                 && let Some(limit) = self.params.max_lifetime
                 && t1.saturating_sub(actor.spawned) >= limit.as_nanos()
@@ -4312,9 +4636,7 @@ impl Mobility for NativeMobility {
                     let a = &self.actors[&id];
                     (a.lane, a.destination, a.class)
                 };
-                let replanned = self
-                    .router_for(class)
-                    .replan(world, lane, destination, t1, &costs);
+                let replanned = self.plan_route(class, world, lane, destination, t1, &costs);
                 let a = self.actors.get_mut(&id).expect("present");
                 a.planned_at = t1;
                 a.planned_generation = generation;
@@ -4611,6 +4933,21 @@ pub fn smooth_offset_point(lane: &v2xw_world::Lane, s_m: f64, d_m: f64) -> Vec3 
 /// connector's average radius (length over total heading change), which is how SUMO's
 /// `netconvert --junctions.limit-turn-speed` limits a turn. A connector that turns less
 /// than 0.1 rad is not limited.
+/// The router a vehicle of `class` plans with (see [`NativeMobility::router_for`]); a free
+/// function so the integration pass can call it while it holds an actor mutably.
+fn router_of<'r>(
+    general: &'r DynamicReroute,
+    bike: &'r DynamicReroute,
+    by_class: &'r BTreeMap<u16, DynamicReroute>,
+    class: VehicleClass,
+) -> &'r DynamicReroute {
+    if class == VehicleClass::Bicycle {
+        bike
+    } else {
+        by_class.get(&class.class_mask().bits()).unwrap_or(general)
+    }
+}
+
 fn turn_speeds(world: &World, a_lat_mps2: f64) -> BTreeMap<LaneId, f64> {
     let mut out = BTreeMap::new();
     for lane in world.roads.lanes() {
