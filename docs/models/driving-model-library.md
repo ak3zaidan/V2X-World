@@ -92,6 +92,39 @@ cargo run -p v2xw-mobility --example platoon_sweep            # loss × latency 
 cargo run -p v2xw-mobility --example platoon_sweep -- --burst 4
 ```
 
+### What the sweep shows (2026-10-07, this build)
+
+Eight vehicles at 25 m/s, leader brakes 2 m/s² for 3 s, 10 Hz beacons, 10 ms latency,
+independent loss. "Gain" is the acceleration L2 gain (string stable at ≤ 1); "flow" is
+veh/h/lane.
+
+| Model | loss 0 gain / flow | loss 0.1 | loss 0.3 | loss 0.5 |
+|---|---|---|---|---|
+| `acc` (radar only) | 0.967 / 2,582 | same | same | same |
+| `cacc-ploeg` | **0.966 / 3,643** | 0.970 / 3,643 | 1.029 / 3,614 | 1.043 / 3,558 |
+| `cacc-ploeg`, abrupt switch | 0.966 / 3,643 | 1.142 / 3,293 | 1.099 / 2,816 | 1.057 / 2,683 |
+| `cacc-milanes` | 1.003 / 3,872 | 1.015 / 3,875 | 1.010 / 3,739 | 1.078 / 3,625 |
+| `cacc-milanes`, abrupt switch | 1.003 / 3,872 | 1.249 / 3,646 | 1.095 / 2,980 | 1.085 / 2,724 |
+| `cacc-path` (5 m spacing) | 1.022 / 8,745 | 1.206 / 3,244 | 1.054 / 2,690 | 1.015 / 2,632 |
+
+What it says:
+
+* With every message arriving, Ploeg's feed-forward CACC damps the disturbance and carries
+  41 % more than ACC; the 5 m PATH platoon carries 3.4 times as much.
+* **Switching abruptly to ACC on a lost message is what destabilises a CACC platoon**:
+  10 % loss takes Ploeg's gain from 0.97 to 1.14 and costs 10 % of the flow. With the
+  graceful ramp (`degrade_ramp_s`, 5 s) the same 10 % loss leaves it string stable at
+  full flow. PATH keeps the abrupt switch by default: ramping a 5 m platoon's fallback up
+  from a 0.2 s gap produced collisions at 50 % loss.
+* Latency is judged by message age, so `coop.max_age_s` (0.3 s) sets a hard limit: at
+  300 ms one-way latency every message is stale on arrival and every CACC drives as ACC.
+  The constant-spacing PATH law is the most latency-sensitive: at 200 ms its RMS gap error
+  is 22 m against 0.4 m at 10 ms.
+* The ACC baseline is string stable in this test (gain 0.967). Milanés & Shladover 2014
+  found the production ACCs they measured string-unstable; the multi-mode model's heavily
+  damped gap-closing mode is what makes it stable here, and that difference is recorded as
+  a limitation rather than tuned away.
+
 The controlled channel isolates the controller. In a full run the same `CoopLink` is fed by
 the radio, MAC, congestion control and security stack, so a scenario that jams the channel,
 congests it, revokes a certificate or forges an acceleration moves the platoon's numbers —

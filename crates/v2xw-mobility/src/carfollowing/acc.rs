@@ -374,6 +374,11 @@ pub fn card(params: &AccParams) -> ModelCard {
         "Virtual leaders (stop lines, signals, yields) are handed to the IDM with the same \
          driver: the ACC law was identified on vehicle targets only."
             .to_string(),
+        "String stable in the platoon experiment at 1.1 s (acceleration L2 gain 0.967), \
+         where Milanés & Shladover 2014 measured production ACCs to be string-unstable: the \
+         heavily damped gap-closing mode (0.8·Δv) dominates the response. Not tuned away; \
+         a calibration against their trajectories is the open item."
+            .to_string(),
     ];
     card.sources = src;
     card.validation = Validation {
