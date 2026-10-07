@@ -106,6 +106,14 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "GeoNetworking + BTP (ETSI, Europe)",
             "The European network and transport layers: 44 octets of headers on a CAM.",
         ),
+        ("net.channel_access", "continuous") => w(
+            "Continuous (one channel)",
+            "The deployed US profile: safety messages go out on one channel as soon as they are made.",
+        ),
+        ("net.channel_access", "alternating") => w(
+            "Alternating (IEEE 1609.4)",
+            "One radio switches channel every 50 ms; a message made on the wrong half waits up to 54 ms.",
+        ),
         ("net.geonet.area_forwarding", "cbf") => w(
             "Contention-based (CBF)",
             "The farthest receiver rebroadcasts first and the nearer ones stand down: few transmissions, the standard's choice.",
@@ -1061,6 +1069,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "messages.codec_tier" => "Message encoding",
         "net.layer" => "Network layer",
         "net.geonet" => "Multi-hop hazard warnings",
+        "net.channel_access" => "Channel switching",
         "net.geonet.area_forwarding" => "Forwarding inside the area",
         "net.geonet.non_area_forwarding" => "Forwarding towards the area",
         "net.geonet.cbf_variant" => "When a contender stands down",

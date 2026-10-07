@@ -31,6 +31,39 @@ fn run(s: Scenario) -> RunReport {
     engine.run(&mut recorder).expect("runs")
 }
 
+/// The share of BSM transmissions that start inside a 1609.4 control-channel interval
+/// (4-50 ms of each 100 ms sync interval, with 1 ms of slack for the MAC).
+fn bsm_share_in_cch(access: Option<&str>) -> f64 {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/connected-intersections.yaml");
+    let mut s = Scenario::load(path).expect("loads");
+    s.time.duration_s = 8.0;
+    s.metrics = vec![];
+    s.net.channel_access = access.map(str::to_string);
+    let mut engine = Engine::build(s, "").expect("builds");
+    let mut rec = MemoryRecorder::new();
+    engine.run(&mut rec).expect("runs");
+    let ts: Vec<u64> = rec
+        .records()
+        .iter()
+        .filter(|(_, r)| r.channel == "node.tx")
+        .filter_map(|(_, r)| v2xw_metrics::channels::decode::<v2xw_metrics::channels::NodeTxView>(r).ok())
+        .filter(|t| t.msg_type.as_deref() == Some("bsm"))
+        .map(|t| t.t)
+        .collect();
+    assert!(ts.len() > 50, "{} BSMs", ts.len());
+    let inside = ts.iter().filter(|&&t| (4_000_000..51_000_000).contains(&(t % 100_000_000))).count();
+    inside as f64 / ts.len() as f64
+}
+
+#[test]
+fn alternating_channel_access_holds_bsms_to_the_control_channel_interval() {
+    let cont = bsm_share_in_cch(None);
+    let alt = bsm_share_in_cch(Some("alternating"));
+    eprintln!("continuous {cont:.3} alternating {alt:.3}");
+    assert!(alt > 0.97, "{alt}");
+    assert!(cont < 0.8, "without switching BSMs go out across the whole interval: {cont}");
+}
+
 #[test]
 fn a_breakdown_warning_spreads_multi_hop_and_the_forwarding_setting_matters() {
     assert!(run(scenario(None)).geonet.is_empty());

@@ -37,6 +37,7 @@ const NET_LAYERS: [&str; 2] = ["wsmp", "gn-btp"];
 const GN_AREA_FORWARDING: [&str; 2] = ["cbf", "simple"];
 const GN_NON_AREA_FORWARDING: [&str; 2] = ["greedy", "cbf"];
 const GN_CBF_VARIANTS: [&str; 3] = ["etsi", "dpd", "gpc"];
+const CHANNEL_ACCESS: [&str; 2] = ["continuous", "alternating"];
 /// The envelope profiles `v2xw-sec` implements.
 const ENVELOPES: [&str; 2] = ["ieee1609.2", "etsi103097"];
 /// The verification policies `v2xw-node` registers.
@@ -546,6 +547,7 @@ pub static CHOICES: &[Choices] = &[
     choices("net.geonet.area_forwarding", &GN_AREA_FORWARDING),
     choices("net.geonet.non_area_forwarding", &GN_NON_AREA_FORWARDING),
     choices("net.geonet.cbf_variant", &GN_CBF_VARIANTS),
+    choices("net.channel_access", &CHANNEL_ACCESS),
     choices("messages.codec_tier", &CODEC_TIERS),
     choices("messages.sets[]", &MESSAGE_SETS),
     choices("security.envelope", &ENVELOPES),
@@ -1131,6 +1133,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                CAM). LLC/SNAP, the 802.11 MAC header and the FCS are added below either, \
                and the air time and the overhead metrics are computed over the whole \
                frame.",
+    },
+    KeyStatus {
+        path: "net.channel_access",
+        status: Status::Wired,
+        note: "IEEE 1609.4 on wsmp. 'continuous' (default): every message goes out when \
+               generated. 'alternating': a single radio spends 50 ms of every 100 ms on the \
+               control channel, less a 4 ms guard at each switch, so a BSM generated in \
+               the service-channel interval waits for the next control-channel interval; \
+               the wait shows in the end-to-end latency.",
     },
     KeyStatus {
         path: "net.geonet",
@@ -2846,6 +2857,16 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
 
 fn net(s: &Scenario, e: &mut Vec<ScenarioError>) {
     one_of("net.layer", &s.net.layer, &NET_LAYERS, e);
+    if let Some(a) = &s.net.channel_access {
+        one_of("net.channel_access", a, &CHANNEL_ACCESS, e);
+        if a == "alternating" && s.net.layer != "wsmp" {
+            e.push(conflict(
+                "net.channel_access",
+                "channel switching is IEEE 1609.4, the US stack's; set net.layer to 'wsmp'"
+                    .to_string(),
+            ));
+        }
+    }
     if let Some(g) = &s.net.geonet {
         if s.net.layer != "gn-btp" {
             e.push(conflict(

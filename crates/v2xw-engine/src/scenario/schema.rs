@@ -1082,6 +1082,12 @@ pub struct Net {
     /// Unset, a DENM travels one hop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub geonet: Option<Geonet>,
+    /// IEEE 1609.4 channel access on `wsmp`: `continuous` (one channel all the time, the
+    /// deployed SAE J2945/1 profile; the default) or `alternating` (50 ms on the control
+    /// channel, 50 ms on a service channel, a 4 ms guard at each switch: a safety message
+    /// waits for the next control-channel interval).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_access: Option<String>,
 }
 
 /// Multi-hop GeoNetworking forwarding of hazard warnings ([`Net::geonet`]), EN 302 636-4-1
@@ -1189,6 +1195,7 @@ impl Default for Net {
             uu: None,
             backend_net: None,
             geonet: None,
+            channel_access: None,
         }
     }
 }

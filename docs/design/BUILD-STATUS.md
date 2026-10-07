@@ -15,6 +15,52 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-07 — V2X networking stacks as protocols (networking track)
+
+New module `crates/v2xw-net/src/stack/` (Artery/Vanetza as reference); the rest of
+`v2xw-net` still only counts header octets.
+
+| Piece | Module | What runs |
+|---|---|---|
+| GN MIB (EN 302 636-4-1 Annex H) | `stack::mib` | hop limit 10, LocTE 20 s, beacon 3 s + 750 ms jitter, CBF 1-100 ms over `DIST_MAX` 1 000 m |
+| Areas, function F (EN 302 931) | `stack::area` | circle / rectangle / ellipse |
+| Location table + DPL (Annex A.2) | `stack::loct` | expiry, neighbour flag, 8-entry duplicate list |
+| GeoAdhoc router (§10, Annexes E-F) | `stack::router` | beacons, SHB, TSB, GBC, GUC; greedy, non-area CBF, simple and CBF area forwarding; CBF variants `etsi` / `dpd` / `gpc` |
+| BTP (EN 302 636-5-1) | `stack::btp` | BTP-A/B header, port demux |
+| CA service (EN 302 637-2 §6.1.3) | `stack::ca` | T_GenCam 100-1 000 ms, 4°/4 m/0.5 m/s, N_GenCam, LF container |
+| DEN service (EN 302 637-3) | `stack::den` | trigger/update/terminate, repetition, receiver new/update/repetition/termination, keep-alive forwarding |
+| 1609.3 WSA, 1609.4 switching | `stack::wave` | 50/50 ms CCH/SCH, 4 ms guard, next opportunity; WSA provider/user |
+| Dissemination run + metrics | `stack::dissem` | event-driven, beacons fill tables, 802.11p air time; reach, reach by 500 m bin, tx (originated/forwarded/KAF), latency p50/p95/max, hops |
+| Published comparison | `stack::eval` | Amador et al., Veh. Commun. 34 (2022), arXiv:2403.05994, Tables 1-3 |
+
+**In the scenario.** `net.geonet` (gn-btp only; validated, dropdowns and labels in
+`options.rs`): when a `safety.hard-brake` or `safety.breakdown` fires, its DENM is
+GeoBroadcast to a circle (`area_radius_m`) and forwarded over the equipped vehicles'
+positions at that instant; the event's note says reached/in-area, p50/p95 latency, hops
+and transmissions, and `RunReport::geonet` keeps the numbers. `net.channel_access:
+alternating` (wsmp only) holds every BSM to the 1609.4 CCH interval.
+
+**Measured** (each test run once):
+* Amador highway, 10 veh/km/lane, 5 DENMs, seed 7 — ETSI / DPD / GPC transmissions per
+  DENM 183.8 / 6.6 / 18.4 (published Table 2 ÷ 30: 275 / 16.2 / 19.9; ETSI÷DPD 27.8× vs
+  17.0×); PDR 0.787 / 0.667 / 1.000 (published 0.9998 / 0.9500 / 0.9917). The orderings
+  reproduce; ETSI and DPD lose more reach here because the overlay has no MAC/DCC, so two
+  near-tied contenders both send and the second copy cancels every downstream contender.
+  Table 2's per-DENM vs per-run meaning is not stated in the paper; ÷ 30 is our reading.
+* 10-node chain, 400 m spacing, 500 m range: 9/9 reached in 8 forwarded hops; CBF hop
+  delay 60.4 ms as the timer formula gives. KAF: a car arriving 66 s later is reached only
+  with KAF on.
+* Engine, connected-intersections, breakdown at 10 s, 200 m hops: 15 vehicles, 4 of 14 in
+  the area reached (the grid is not connected at 200 m that early), flooding's p95 latency
+  below CBF's. Alternating access: 100 % of BSMs start inside the CCH interval vs 20.6 %
+  continuous.
+
+**Not done.** Forwarded copies do not contend for the MAC or count in channel load; the
+overlay uses a unit disk at `range_m`, not the run's link budget; no location service for
+GeoUnicast; no GN security header processing; WSA is not sent as frames in the engine.
+`scenario::publish` tests `every_number_publishes_a_unit` (`actors.rsu_placement.count`)
+and `every_section_has_a_group` (`city`) fail on the base commit too.
+
 ## 2026-10-06 — settings as dropdowns, and a ready-made list a person can read (settings track)
 
 The owner's review: settings fields were free text nobody knew how to fill, and the

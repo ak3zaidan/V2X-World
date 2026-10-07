@@ -3917,7 +3917,15 @@ impl Engine {
             policy.silenced_frames += 1;
             return;
         }
-        let jitter = self.gen_timing.jitter(&self.rng, node, tx.generation_time);
+        let mut jitter = self.gen_timing.jitter(&self.rng, node, tx.generation_time);
+        // IEEE 1609.4 alternating access: wait for the control-channel interval.
+        if self.scenario.net.channel_access.as_deref() == Some("alternating") {
+            let sched = v2xw_net::stack::wave::ChannelSchedule {
+                access: v2xw_net::stack::wave::ChannelAccess::Alternating,
+            };
+            let at = jitter.after(tx.ready_at);
+            jitter = Duration::from_nanos(jitter.as_nanos() + sched.access_delay_ns(at, true));
+        }
         if jitter.as_nanos() == 0 {
             self.hand_down_app(node, tx, now, horizon, None);
             return;
