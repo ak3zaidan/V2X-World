@@ -340,7 +340,7 @@ pub struct SocialForceParams {
     /// Whether a crowd slows its walkers: each pedestrian's desired speed is scaled by
     /// Weidmann's speed-density relation at its local density
     /// ([`crate::network::weidmann_factor`], [`crate::network::local_density`]: others
-    /// within 2 m over the walkable part of that circle). The social force alone only
+    /// within 5 m over the walkable part of that circle). The social force alone only
     /// steers people round each other, so a packed Midtown corner walked at free speed.
     /// Off by default (the 1995 model has no such term); on in [`Self::observed`].
     pub crowd_slowing: bool,
@@ -1767,7 +1767,7 @@ pub fn card(params: &SocialForceParams) -> ModelCard {
                 SourceKind::Paper,
                 "Weidmann 1993, Transporttechnik der Fussgänger (ETH IVT Schriftenreihe 90): \
                  v = v0·(1 − exp(−1.913·(1/ρ − 1/5.4))) (secondary: the parameters as the \
-                 pedestrian-flow literature quotes them); local density over a 2 m circle \
+                 pedestrian-flow literature quotes them); local density over a 5 m circle \
                  clipped to the walkway, a choice",
             ),
         ),

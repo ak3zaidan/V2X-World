@@ -65,8 +65,12 @@ pub fn fruin_level(space_m2: f64) -> usize {
         .unwrap_or(FRUIN_SPACE_M2.len())
 }
 
-/// The radius a pedestrian's local density is counted over, metres.
-pub const CROWD_RADIUS_M: f64 = 2.0;
+/// The radius a pedestrian's local density is counted over, metres: five, so that on a
+/// Midtown-width pavement (2-3 m) the area counted over is a stretch about 10 m long —
+/// the scale Fruin's and Weidmann's densities are measured at, a walkway section rather
+/// than the person brushing past. With 2 m, every overtake and every passing walker read
+/// as a crowd, and the relation slowed people at random instead of in crowds.
+pub const CROWD_RADIUS_M: f64 = 5.0;
 
 /// A pedestrian's local density, ped/m²: itself and the `others` within
 /// [`CROWD_RADIUS_M`], over the part of that circle a walkway `width_m` wide covers.
@@ -750,7 +754,7 @@ impl NetworkReport {
                 measured: c_ratio,
                 samples: c_n,
                 reference: mid(2),
-                band: (mid(2) - 0.1, mid(2) + 0.1),
+                band: (mid(2) - 0.04, mid(2) + 0.04),
                 source: "Weidmann 1993 speed-density relation at the middle of Fruin's LOS C \
                          (15-25 ft²/person), relative to free walking (secondary)",
                 tested: false,
@@ -760,7 +764,7 @@ impl NetworkReport {
                 measured: d_ratio,
                 samples: d_n,
                 reference: mid(3),
-                band: (mid(3) - 0.1, mid(3) + 0.1),
+                band: (mid(3) - 0.08, mid(3) + 0.08),
                 source: "Weidmann 1993 speed-density relation at the middle of Fruin's LOS D \
                          (10-15 ft²/person), relative to free walking (secondary)",
                 tested: false,
@@ -787,7 +791,7 @@ mod tests {
         assert_eq!(fruin_level(1.0), 3);
         assert_eq!(fruin_level(0.5), 4);
         assert_eq!(fruin_level(0.2), 5);
-        // A walker alone on a 2.5 m pavement has 10 m² to themself.
-        assert!((local_density(0, 2.5) - 0.1).abs() < 1e-12);
+        // A walker alone on a 2.5 m pavement has 25 m² (a 10 m stretch) to themself.
+        assert!((local_density(0, 2.5) - 0.04).abs() < 1e-12);
     }
 }

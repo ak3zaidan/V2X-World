@@ -3967,6 +3967,17 @@ impl Mobility for NativeMobility {
                     decision = EntryDecision::Stop {
                         gap_m: (junction.stop_line_gap_m - STOP_LINE_OFFSET_M).max(0.0),
                     };
+                    // A driver who committed to an amber and is now held at the line
+                    // because the junction's exit is full is no longer clearing it: the
+                    // commitment ends, and the signal holds them once the exit frees. Kept,
+                    // it sent buses and trucks — whose length needs the most room on the
+                    // exit — creeping into the junction on the red that had come while
+                    // they waited (75 red entries in five minutes of a mixed fleet on the
+                    // dense grid, `tests/realism.rs`).
+                    if along && amber_commit == Some(junction.id) {
+                        amber_commit = None;
+                        commit_floor = None;
+                    }
                 }
                 // Committed: a give-way decision that turns to "stop" when the vehicle is
                 // already too close to stop without an emergency brake is not taken. A

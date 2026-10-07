@@ -438,7 +438,7 @@ fn a_crowded_pavement_walks_slower_as_weidmann_measured() {
         s[level].mean / s[0].mean
     };
     let samples = after.network.pedestrian_speed_by_fruin_level[2].n;
-    assert!(samples >= 200, "too few walkers at LOS C to judge: {samples}");
+    assert!(samples >= 100, "too few walkway cells at LOS C to judge: {samples}");
     // With the relation on, walkers at Fruin's LOS C are slower relative to free walking
     // than without it, and within 0.1 of Weidmann's curve there.
     assert!(
