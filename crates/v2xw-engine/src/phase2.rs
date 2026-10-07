@@ -202,29 +202,56 @@ impl MaHost {
         };
         let empty = serde_json::Map::new();
         let map = choice.params.as_object().unwrap_or(&empty);
-        let bad = |key: &str, value: &serde_json::Value| {
+        // Every refusal names the key it is about (`detection.ma.params.<key>`), so the page
+        // marks the setting rather than the whole block, and says what the key must be. The
+        // two-pipeline rewrite (mbd track) had reported unknown keys against
+        // `detection.ma.params` and accepted a negative `revoke_window_s`; the robustness
+        // track's Check tests pin both.
+        let bad = |key: &str, value: &serde_json::Value, must: &str| {
             conflict(
                 &format!("detection.ma.params.{key}"),
-                format!("has an unusable value {value}"),
+                format!("is {value}; it must be {must}"),
             )
         };
         let count = |key: &str, value: &serde_json::Value| {
             value
                 .as_u64()
                 .filter(|v| *v >= 1)
-                .map(|v| v as usize)
-                .ok_or_else(|| bad(key, value))
+                .map(|v| usize::try_from(v).unwrap_or(usize::MAX))
+                .ok_or_else(|| bad(key, value, "a whole number of at least 1"))
+        };
+        let whole_u32 = |key: &str, value: &serde_json::Value| {
+            value
+                .as_u64()
+                .map(|v| u32::try_from(v).unwrap_or(u32::MAX))
+                .ok_or_else(|| bad(key, value, "a whole number, 0 or more"))
         };
         let seconds = |key: &str, value: &serde_json::Value| {
             value
                 .as_f64()
                 .filter(|v| v.is_finite() && *v > 0.0)
-                .ok_or_else(|| bad(key, value))
+                .ok_or_else(|| bad(key, value, "a number of seconds above 0"))
         };
-        let unknown = |other: &str| {
+        let seconds_or_zero = |key: &str, value: &serde_json::Value| {
+            value
+                .as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .ok_or_else(|| bad(key, value, "a number of seconds, 0 or more"))
+        };
+        let flag = |key: &str, value: &serde_json::Value| {
+            value
+                .as_bool()
+                .ok_or_else(|| bad(key, value, "true or false"))
+        };
+        let unknown = |other: &str, takes: &[&str]| {
             conflict(
-                "detection.ma.params",
-                format!("'{other}' is not a {} parameter", choice.id),
+                &format!("detection.ma.params.{other}"),
+                format!(
+                    "'{other}' is not a parameter of {}; it takes {}. Remove the key or \
+                     correct its spelling",
+                    choice.id,
+                    takes.join(", ")
+                ),
             )
         };
         match choice.id.as_str() {
@@ -234,21 +261,12 @@ impl MaHost {
                     match key.as_str() {
                         "report_threshold_k" => p.report_threshold_k = count(key, value)?,
                         "revoke_min_seconds" => p.revoke_min_seconds = count(key, value)?,
-                        "revoke_persist_s" => {
-                            p.revoke_persist_s = value.as_f64().ok_or_else(|| bad(key, value))?;
-                        }
-                        "revoke_window_s" => {
-                            p.revoke_window_s = value.as_f64().ok_or_else(|| bad(key, value))?;
-                        }
-                        "defence" => p.defence = value.as_bool().ok_or_else(|| bad(key, value))?,
-                        "reputation_max" => {
-                            p.reputation_max =
-                                value.as_u64().ok_or_else(|| bad(key, value))? as u32;
-                        }
-                        "report_budget" => {
-                            p.report_budget = value.as_u64().ok_or_else(|| bad(key, value))? as u32;
-                        }
-                        other => return Err(unknown(other)),
+                        "revoke_persist_s" => p.revoke_persist_s = seconds_or_zero(key, value)?,
+                        "revoke_window_s" => p.revoke_window_s = seconds_or_zero(key, value)?,
+                        "defence" => p.defence = flag(key, value)?,
+                        "reputation_max" => p.reputation_max = whole_u32(key, value)?,
+                        "report_budget" => p.report_budget = whole_u32(key, value)?,
+                        other => return Err(unknown(other, MA_LEGACY_PARAM_KEYS)),
                     }
                 }
                 Ok(MaHost::Legacy(LegacyWindow::new(p)))
@@ -262,15 +280,10 @@ impl MaHost {
                         "min_events" => p.min_events = count(key, value)?,
                         "window_s" => p.window_s = seconds(key, value)?,
                         "min_reporters" => p.min_reporters = count(key, value)?,
-                        "defence" => p.defence = value.as_bool().ok_or_else(|| bad(key, value))?,
-                        "reputation_max" => {
-                            p.reputation_max =
-                                value.as_u64().ok_or_else(|| bad(key, value))? as u32;
-                        }
-                        "report_budget" => {
-                            p.report_budget = value.as_u64().ok_or_else(|| bad(key, value))? as u32;
-                        }
-                        other => return Err(unknown(other)),
+                        "defence" => p.defence = flag(key, value)?,
+                        "reputation_max" => p.reputation_max = whole_u32(key, value)?,
+                        "report_budget" => p.report_budget = whole_u32(key, value)?,
+                        other => return Err(unknown(other, MA_CORROBORATED_PARAM_KEYS)),
                     }
                 }
                 Ok(MaHost::Corroborated(v2xw_threat::CorroboratedMa::new(p)))
@@ -285,6 +298,29 @@ impl MaHost {
         }
     }
 }
+
+/// The parameters `threat/ma/legacy-window` takes (`detection.ma.params`).
+pub const MA_LEGACY_PARAM_KEYS: &[&str] = &[
+    "report_threshold_k",
+    "revoke_min_seconds",
+    "revoke_persist_s",
+    "revoke_window_s",
+    "defence",
+    "reputation_max",
+    "report_budget",
+];
+
+/// The parameters `threat/ma/corroborated` takes (`detection.ma.params`).
+pub const MA_CORROBORATED_PARAM_KEYS: &[&str] = &[
+    "event_window_s",
+    "event_min_reporters",
+    "min_events",
+    "window_s",
+    "min_reporters",
+    "defence",
+    "reputation_max",
+    "report_budget",
+];
 
 /// How the SCMS's device numbering is kept clear of the engine's.
 pub const SCMS_DEVICE_BASE: u32 = 1_000_000;
