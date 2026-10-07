@@ -2680,6 +2680,7 @@ dependencies = [
  "v2xw-core",
  "v2xw-demand",
  "v2xw-energy",
+ "v2xw-interop",
  "v2xw-metrics",
  "v2xw-mobility",
  "v2xw-msg",

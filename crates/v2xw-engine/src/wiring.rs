@@ -297,6 +297,15 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
                 .build(spec, &opts)
                 .map_err(|e| source_error(scenario, e))
         }
+        spec @ WorldSourceSpec::SumoNet { .. } => {
+            let options = v2xw_world::sumo::SumoOptions {
+                import: opts.clone(),
+                ..v2xw_world::sumo::SumoOptions::default()
+            };
+            v2xw_world::sumo::SumoSource::with_options(options)
+                .build(spec, &opts)
+                .map_err(|e| source_error(scenario, e))
+        }
         other => {
             // Any remaining source is another importer's. `GridSource` refuses what it
             // does not know rather than pretending, which is the error the caller sees
@@ -356,6 +365,65 @@ pub fn register_all(registry: &mut Registry) -> Result<()> {
 /// The mobility provider the scenario names.
 pub fn build_mobility(scenario: &Scenario) -> Box<dyn Mobility> {
     Box::new(native_mobility(scenario))
+}
+
+/// The mobility provider the scenario names, on its world: SUMO over TraCI when
+/// `mobility.provider` is `sumo` (`v2xw_interop::sumo`), the native engine otherwise.
+///
+/// # Errors
+/// `mobility.provider: sumo` on a world that is not a `sumo-net` import, or with no SUMO
+/// installation to be found.
+pub fn build_mobility_for(scenario: &Scenario, world: &World) -> Result<Box<dyn Mobility>> {
+    let Some(spec) = scenario.mobility.as_ref().filter(|m| m.provider == "sumo") else {
+        return Ok(build_mobility(scenario));
+    };
+    let conflict = |what: String| {
+        EngineError::Scenario(crate::ScenarioError::conflict("mobility.provider", what))
+    };
+    let WorldSourceSpec::SumoNet { path } = &scenario.world.source else {
+        return Err(conflict(
+            "SUMO can drive the traffic only on the network it runs: set world.source to \
+             { kind: sumo-net, path: <the .net.xml> }"
+                .to_string(),
+        ));
+    };
+    let home = spec
+        .sumo_home
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .or_else(v2xw_interop::sumo_home)
+        .ok_or_else(|| {
+            conflict(
+                "no SUMO installation found: set mobility.sumo_home, $SUMO_HOME or \
+                 $V2XW_SUMO_VENV (pip install eclipse-sumo)"
+                    .to_string(),
+            )
+        })?;
+    let mut cfg = v2xw_interop::sumo::SumoConfig::new(&home, path);
+    cfg.route_files = spec.route_files.iter().map(std::path::PathBuf::from).collect();
+    cfg.extra_args = spec.sumo_args.clone();
+    cfg.seed = scenario.seed;
+    cfg.shift_m = sumo_shift(world);
+    Ok(Box::new(v2xw_interop::sumo::SumoMobility::new(
+        cfg,
+        v2xw_interop::SumoIds::new(world),
+    )))
+}
+
+/// The translation the SUMO importer applied (its `frame` transformation in the world's
+/// provenance), `(0, 0)` when there is none.
+fn sumo_shift(world: &World) -> (f64, f64) {
+    let get = |key: &str| {
+        world
+            .provenance
+            .transformations
+            .iter()
+            .find(|t| t.name == "frame")
+            .and_then(|t| t.params.get(key))
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0)
+    };
+    (get("shift_x_m"), get("shift_y_m"))
 }
 
 /// The native mobility engine exactly as [`build_mobility`] configures it, as its concrete

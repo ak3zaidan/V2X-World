@@ -120,7 +120,7 @@ fn main() {
     let timing = if a.quick {
         Timing { step: Duration::from_millis(100), demand_s: 300.0, total_s: 480.0, warm_s: 120.0 }
     } else {
-        Timing { step: Duration::from_millis(100), demand_s: 600.0, total_s: 900.0, warm_s: 120.0 }
+        Timing { step: Duration::from_millis(100), demand_s: 900.0, total_s: 1200.0, warm_s: 180.0 }
     };
     let seed = 20_261_007;
     let mut doc = String::new();
@@ -249,8 +249,9 @@ fn main() {
     eprintln!("wrote {}", a.out.display());
 }
 
-/// Midtown: 34th to 42nd Street between roughly 5th and 8th Avenue.
-const MANHATTAN_BBOX: [f64; 4] = [-73.9890, 40.7500, -73.9810, 40.7560];
+/// Midtown: about 1.1 km by 1.1 km around Herald Square and Bryant Park (32nd to 42nd
+/// Street, 5th to 8th Avenue).
+const MANHATTAN_BBOX: [f64; 4] = [-73.9920, 40.7480, -73.9790, 40.7580];
 
 const METHOD: &str = "## Method\n\n\
 Both simulators drive **the same network, the same trips and the same routes**, and are measured by **the same code**:\n\n\

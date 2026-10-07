@@ -185,7 +185,11 @@ pub fn export_net(
         std::fs::write(p(ext), body).map_err(|e| e.to_string())?;
     }
     let out = p("net.xml");
-    let o = Command::new(netconvert)
+    let mut cmd = Command::new(netconvert);
+    if let Some(home) = netconvert.parent().and_then(Path::parent) {
+        cmd.env("SUMO_HOME", home);
+    }
+    let o = cmd
         .arg("--node-files")
         .arg(p("nod.xml"))
         .arg("--edge-files")

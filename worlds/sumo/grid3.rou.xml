@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Demand for grid3.net.xml: two crossing flows and one turning flow, 1,200 veh/h in all.
+     SUMO reads and routes this file itself when a scenario names it in mobility.route_files;
+     v2xw_interop::routes::RouteFileDemand reads the same file as this engine's demand. -->
+<routes>
+  <vType id="car" vClass="passenger"/>
+  <flow id="we" type="car" begin="0" end="3600" vehsPerHour="500" from="A1B1" to="B1C1" departLane="best" departSpeed="max"/>
+  <flow id="sn" type="car" begin="0" end="3600" vehsPerHour="500" from="B0B1" to="B1B2" departLane="best" departSpeed="max"/>
+  <flow id="turn" type="car" begin="0" end="3600" vehsPerHour="200" from="C2C1" to="C1C0" departLane="best" departSpeed="max"/>
+</routes>

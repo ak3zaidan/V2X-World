@@ -248,6 +248,7 @@ impl Scenario {
             events: Vec::new(),
             apps: schema::Apps::default(),
             energy: None,
+            mobility: None,
             experiment: None,
         }
     }

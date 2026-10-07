@@ -148,7 +148,7 @@ pub fn make_trips(world: &World, ids: &SumoIds, rate_vph: f64, demand_s: f64, se
             continue;
         };
         // Short trips say little about either model.
-        if route.length_m < 300.0 {
+        if route.length_m < 200.0 {
             continue;
         }
         out.push((
@@ -376,6 +376,9 @@ pub struct Study {
 }
 
 fn run_tool(cmd: &mut Command) -> Result<String, String> {
+    if let Some(home) = crate::sumo_home() {
+        cmd.env("SUMO_HOME", home);
+    }
     let o = cmd.output().map_err(|e| format!("{cmd:?}: {e}"))?;
     let log = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
     if o.status.success() { Ok(log) } else { Err(format!("{cmd:?} failed: {log}")) }

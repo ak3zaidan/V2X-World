@@ -2190,15 +2190,43 @@ fn world(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 ));
             }
         }
+        v2xw_world::WorldSourceSpec::SumoNet { path } => {
+            if path.trim().is_empty() {
+                e.push(conflict(
+                    "world.source.path",
+                    "is empty; name the SUMO network to import, e.g. worlds/sumo/grid3.net.xml"
+                        .to_string(),
+                ));
+            }
+        }
         other => e.push(conflict(
             "world.source",
             format!(
                 "is {}, and this build builds worlds only from a procedural grid \
-                 (kind: procedural) or an OpenStreetMap XML extract (kind: osm-xml); \
-                 convert the network to OSM XML or use one of those",
+                 (kind: procedural), an OpenStreetMap XML extract (kind: osm-xml) or a \
+                 SUMO network (kind: sumo-net); convert the network or use one of those",
                 other.label()
             ),
         )),
+    }
+    if let Some(m) = &s.mobility {
+        match m.provider.as_str() {
+            "native" => {}
+            "sumo" => {
+                if !matches!(s.world.source, v2xw_world::WorldSourceSpec::SumoNet { .. }) {
+                    e.push(conflict(
+                        "mobility.provider",
+                        "is sumo, which drives traffic only on the network SUMO runs: set \
+                         world.source to { kind: sumo-net, path: <the .net.xml> }"
+                            .to_string(),
+                    ));
+                }
+            }
+            other => e.push(conflict(
+                "mobility.provider",
+                format!("is {other}; choose native (this engine) or sumo (SUMO over TraCI)"),
+            )),
+        }
     }
     if let Some(mpl) = s.world.buildings.metres_per_level {
         bounded_at(

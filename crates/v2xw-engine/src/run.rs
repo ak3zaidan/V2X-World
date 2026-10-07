@@ -990,7 +990,7 @@ impl Engine {
         let wall = WallClock::parse_rfc3339(&scenario.time.t0)
             .map_err(|e| EngineError::Core(v2xw_core::error::CoreError::Time(e)))?;
         let rng = RngRegistry::new(scenario.seed);
-        let mut mobility = crate::wiring::build_mobility(&scenario);
+        let mut mobility = crate::wiring::build_mobility_for(&scenario, &world)?;
         // The drivers see the weather the run starts in (FHWA speed and headway, sight
         // distance, surface grip — v2xw_mobility::weather).
         mobility.set_weather(crate::wiring::initial_weather(&scenario));

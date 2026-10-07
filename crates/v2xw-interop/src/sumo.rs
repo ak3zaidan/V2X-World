@@ -135,6 +135,7 @@ pub struct SumoMobility {
     pub counters: SumoCounters,
     /// The last error SUMO or the socket reported; once set, the plug-in stops stepping.
     pub error: Option<String>,
+    error_reported: bool,
 }
 
 /// The model card.
@@ -197,6 +198,7 @@ impl SumoMobility {
             queued: Vec::new(),
             counters: SumoCounters::default(),
             error: None,
+            error_reported: false,
         }
     }
 
@@ -215,6 +217,9 @@ impl SumoMobility {
             self.cfg.port
         };
         let mut c = Command::new(&self.cfg.sumo_binary);
+        if let Some(home) = self.cfg.sumo_binary.parent().and_then(std::path::Path::parent) {
+            c.env("SUMO_HOME", home);
+        }
         c.arg("-n").arg(&self.cfg.net_file);
         if !self.cfg.route_files.is_empty() {
             let files: Vec<String> = self
@@ -230,7 +235,8 @@ impl SumoMobility {
             .arg("--step-length")
             .arg(format!("{}", step.as_secs_f64()))
             .arg("--seed")
-            .arg(self.cfg.seed.to_string())
+            // SUMO's --seed is a 32-bit integer; a 64-bit scenario seed is folded into it.
+            .arg(((self.cfg.seed ^ (self.cfg.seed >> 32)) & 0x7fff_ffff).to_string())
             .arg("--no-step-log")
             .arg("true")
             .arg("--no-warnings")
@@ -239,12 +245,16 @@ impl SumoMobility {
             .arg("true")
             .args(&self.cfg.extra_args)
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            // SUMO's errors (a bad network, a route it refuses) are the only explanation a
+            // failed launch has, so they reach the terminal; warnings are off above.
+            .stderr(Stdio::inherit());
         let child = c
             .spawn()
             .map_err(|e| format!("{}: {e}", self.cfg.sumo_binary.display()))?;
         self.child = Some(child);
-        let conn = Traci::connect(port, std::time::Duration::from_secs(30)).map_err(|e| e.to_string())?;
+        let conn = Traci::connect(port, std::time::Duration::from_secs(30)).map_err(|e| {
+            format!("could not connect to SUMO on port {port} (did it exit? its errors are above): {e}")
+        })?;
         self.conn = Some(conn);
         Ok(())
     }
@@ -508,6 +518,27 @@ impl Mobility for SumoMobility {
     }
 
     fn step(&mut self, ctx: &mut dyn MobCtx, dt: Duration) -> MobilityUpdate {
+        let update = self.step_inner(ctx, dt);
+        if let Some(e) = &self.error
+            && !self.error_reported
+        {
+            self.error_reported = true;
+            eprintln!("mobility/sumo-traci stopped: {e}");
+        }
+        update
+    }
+
+    fn command(&mut self, ctx: &mut dyn MobCtx, cmd_: MobilityCommand) {
+        self.command_inner(ctx, cmd_);
+    }
+
+    fn kinematics(&self, a: ActorId) -> Option<&Kinematics> {
+        self.kin.get(&a)
+    }
+}
+
+impl SumoMobility {
+    fn step_inner(&mut self, ctx: &mut dyn MobCtx, dt: Duration) -> MobilityUpdate {
         let t0 = self.t;
         let t1 = t0 + dt;
         if self.error.is_some() {
@@ -551,7 +582,7 @@ impl Mobility for SumoMobility {
         }
     }
 
-    fn command(&mut self, ctx: &mut dyn MobCtx, cmd_: MobilityCommand) {
+    fn command_inner(&mut self, ctx: &mut dyn MobCtx, cmd_: MobilityCommand) {
         let world = ctx.world();
         match cmd_ {
             MobilityCommand::SpeedCap { actor, v_mps } => {
@@ -590,10 +621,6 @@ impl Mobility for SumoMobility {
             }
             _ => {}
         }
-    }
-
-    fn kinematics(&self, a: ActorId) -> Option<&Kinematics> {
-        self.kin.get(&a)
     }
 }
 

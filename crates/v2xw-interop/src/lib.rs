@@ -55,7 +55,12 @@ impl SumoIds {
         let mut ids = Self::default();
         let mut used = BTreeSet::new();
         for e in world.roads.edges() {
-            if e.is_internal() {
+            // Junction connectors and self-loops (a procedural world's turning lanes) are
+            // not SUMO edges: netconvert builds its own internal lanes.
+            if e.is_internal()
+                || e.from == e.to
+                || e.lanes.iter().any(|l| world.lane(*l).junction.is_some())
+            {
                 continue;
             }
             let name = e.name.map(|n| world.symbols.resolve(n).to_string());
