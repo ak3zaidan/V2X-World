@@ -100,7 +100,7 @@ async function followFirstActor(page: Page): Promise<void> {
   });
   expect(clicked, "no drawn actor is backed by a Hello node").not.toBeNull();
   await expect(page.getByTestId("hud-identity")).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByTestId("hud-cpu_util_pm")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("hud-row-radio")).toBeVisible({ timeout: 60_000 });
 }
 
 /** Put the mock engine back the way `studio.spec.ts` expects to find it. */
@@ -190,112 +190,43 @@ test("Q3 — arrow keys on the scrub bar commit once per gesture, not once per r
   await expect.poll(async () => page.evaluate(() => window.__vwpProbe?.seeks ?? 0), { timeout: 20_000 }).toBe(2);
 });
 
-test("Q16/Q15 — every HUD value is a keyboard-reachable button with a visible focus ring", async ({ page }) => {
+test("Q16/Q15 — the HUD shows only what has a value, and its Details button opens the overlay by keyboard", async ({ page }) => {
   await streaming(page);
 
   // The HUD only populates for a followed node (§6.7 `view.follow` is the Telemetry subscription).
   await followFirstActor(page);
 
-  // 1. Every clickable value is a real button, named, described and in the tab order.
-  //    Since the 2026-09-30 redesign the HUD draws only the values that have data (at most 15
-  //    telemetry buttons across its radio, security and queue rows), so the count depends on what
-  //    the engine models; what may not vary is that each one is a proper button. The plain
-  //    `.hud-field` spans are the security row's facts and "dropped", which have no provenance.
-  const shape = await page.evaluate(() => {
-    const fields = Array.from(document.querySelectorAll('[data-testid="obu-hud"] .hud-field'));
-    const clickable = fields.filter((e) => e.tagName === "BUTTON");
-    return {
-      total: fields.length,
-      buttons: clickable.length,
-      spans: fields.filter((e) => e.tagName !== "BUTTON").length,
-      labelled: clickable.filter((e) => (e.getAttribute("aria-label") ?? "") !== "").length,
-      described: clickable.filter((e) => {
-        const id = e.getAttribute("aria-describedby");
-        return id !== null && document.getElementById(id) !== null;
-      }).length,
-      tabbable: clickable.filter((e) => (e as HTMLButtonElement).tabIndex >= 0).length,
-      testids: clickable.filter((e) => (e.getAttribute("data-testid") ?? "").startsWith("hud-")).length,
-    };
-  });
-  expect(shape.buttons).toBeGreaterThanOrEqual(6);
-  expect(shape.buttons).toBeLessThanOrEqual(15);
-  expect(shape.labelled).toBe(shape.buttons);
-  expect(shape.described).toBe(shape.buttons);
-  expect(shape.tabbable).toBe(shape.buttons);
-  expect(shape.testids).toBe(shape.buttons);
-  // No value is drawn as "n/a": one with no data is not drawn.
-  expect(await page.getByTestId("obu-hud").innerText()).not.toMatch(/\bn\/a\b/);
+  // 1. Since the owner's review of 2026-10-06 the HUD is a read-out, not a row of buttons into a
+  //    "why" tab: its values are plain text, none reads "n/a", and none is a bare zero count.
+  const hud = page.getByTestId("obu-hud");
+  expect(await hud.locator("button.hud-field").count()).toBe(0);
+  expect(await hud.innerText()).not.toMatch(/\bn\/a\b/);
+  await expect(page.getByTestId("hud-health")).toBeVisible();
 
-  // 2. Tab reaches the next one, which is what "in the tab order" means. The radio row reads
-  //    transmit, then receive.
-  await page.getByTestId("hud-msgs_out_per_s").focus();
-  await page.keyboard.press("Tab");
-  const afterTab = await page.evaluate(() => document.activeElement?.getAttribute("data-testid") ?? "");
-  expect(afterTab).toBe("hud-msgs_in_per_s");
-  await page.getByTestId("hud-msgs_out_per_s").focus();
-
-  // 3. The focus ring is actually painted (WCAG 2.1 SC 2.4.7).
+  // 2. The Details button is a real, tabbable button with a painted focus ring (WCAG 2.1 SC 2.4.7).
+  const details = page.getByTestId("hud-details");
+  await details.focus();
   const outline = await page.evaluate(() => {
     const el = document.activeElement as HTMLElement | null;
     if (!el) return null;
     const cs = getComputedStyle(el);
-    return { style: cs.outlineStyle, width: cs.outlineWidth, matches: el.matches(":focus-visible") };
+    return { testid: el.getAttribute("data-testid"), style: cs.outlineStyle, width: cs.outlineWidth, matches: el.matches(":focus-visible") };
   });
-  expect(outline).not.toBeNull();
+  expect(outline?.testid).toBe("hud-details");
   expect(outline!.matches).toBe(true);
   expect(outline!.style).not.toBe("none");
   expect(Number.parseFloat(outline!.width)).toBeGreaterThanOrEqual(2);
 
-  // 4. The keyboard activates it, and that is what opens the "why" tab the explainability story
-  //    depends on (09-ui §7).
+  // 3. Enter opens the overlay, Escape closes it, and I toggles it.
   await page.keyboard.press("Enter");
-  await expect(page.getByTestId("why-tab")).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByTestId("why-value")).toContainText("tx =");
-
-  // 5. Space works too, on a different field, and re-targets the tab.
-  await page.getByTestId("hud-cpu_util_pm").focus();
-  await page.keyboard.press("Space");
-  await expect(page.getByTestId("why-value")).toContainText("CPU =", { timeout: 10_000 });
-
-});
-
-test("Q15 — the inspector's field labels keep a visible focus indicator", async ({ page }) => {
-  await streaming(page);
-  await followFirstActor(page);
-
-  await page.getByTestId("tab-state").click();
+  await expect(page.getByTestId("inspector-panel")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId("state-field-cbr_pm")).toBeVisible({ timeout: 30_000 });
-
-  // No inline style may compete with the stylesheet's :focus-visible rule.
-  const inline = await page.evaluate(
-    () => document.querySelector('[data-testid="state-field-cbr_pm"]')?.getAttribute("style") ?? "",
-  );
-  expect(inline).toBe("");
-
-  // Shift+Tab from one field label must land on the previous one — the overview's Radio section
-  // lists the transmit and receive rates before the channel load.
-  await page.getByTestId("state-field-cbr_pm").focus();
-  await page.keyboard.press("Shift+Tab");
-  const focused = await page.evaluate(() => {
-    const el = document.activeElement as HTMLElement | null;
-    if (!el) return null;
-    const cs = getComputedStyle(el);
-    return {
-      testid: el.getAttribute("data-testid") ?? "",
-      style: cs.outlineStyle,
-      width: cs.outlineWidth,
-      matches: el.matches(":focus-visible"),
-    };
-  });
-  expect(focused).not.toBeNull();
-  expect(focused!.testid).toMatch(/^state-field-/);
-  expect(focused!.matches).toBe(true);
-  expect(focused!.style).not.toBe("none");
-  expect(Number.parseFloat(focused!.width)).toBeGreaterThanOrEqual(2);
-
-  await page.keyboard.press("Enter");
-  await expect(page.getByTestId("why-tab")).toBeVisible({ timeout: 10_000 });
-
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("inspector-panel")).toHaveCount(0);
+  await page.locator("body").press("i");
+  await expect(page.getByTestId("inspector-panel")).toBeVisible();
+  await page.locator("body").press("i");
+  await expect(page.getByTestId("inspector-panel")).toHaveCount(0);
 });
 
 test("Q14 — the marker overlay's shape channels are on from the first frame", async ({ page }) => {

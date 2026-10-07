@@ -86,7 +86,7 @@ test("the inspector and the chase HUD show identity, radio, security and queues,
   // --- the empty state counts what it says it counts ---------------------------------------------
   await playTo(page, 6);
   await page.getByTestId("inspector-toggle").click();
-  await page.getByTestId("tab-state").click();
+  await page.getByTestId("tab-overview").click();
   const radios = page.getByTestId("inspector-radios");
   await expect(radios).toContainText("roadside unit", { timeout: 30_000 });
   await expect(page.getByTestId("inspector-road-users")).toContainText("road user");
@@ -94,6 +94,8 @@ test("the inspector and the chase HUD show identity, radio, security and queues,
   await expect(page.getByTestId("world-chip")).toContainText("1 RSU");
 
   // --- follow a vehicle ----------------------------------------------------------------------------
+  // The overlay replaces the HUD while open, so close it to read the HUD.
+  await page.getByTestId("inspector-close").click();
   await followARadio(page);
   await expect(page.getByTestId("obu-hud")).toBeVisible({ timeout: 30_000 });
   // The pseudonym is named with its certificate's indices, from the node's own security row.
@@ -101,8 +103,10 @@ test("the inspector and the chase HUD show identity, radio, security and queues,
   await expect(page.getByTestId("hud-pseudonym")).not.toContainText("pending");
   await expect(page.getByTestId("hud-sec-pool")).toContainText("valid");
   await expect(page.getByTestId("hud-row-radio")).toBeVisible();
+  const hudText = await page.getByTestId("obu-hud").innerText();
 
-  await page.getByTestId("tab-state").click();
+  await page.getByTestId("hud-details").click();
+  await page.getByTestId("tab-overview").click();
   await expect(page.getByTestId("insp-identity")).toBeVisible();
   await expect(page.getByTestId("inspector-cert-indices")).toHaveText(/^i \d+ · j \d+$/);
   await expect(page.getByTestId("insp-radio")).toBeVisible();
@@ -112,7 +116,7 @@ test("the inspector and the chase HUD show identity, radio, security and queues,
   await expect(page.getByTestId("inspector-topup")).toHaveText(/in flight|in \d|expired/);
 
   // Nothing is drawn as "n/a", in the overview or in the HUD.
-  const overview = (await page.getByTestId("inspector-state").innerText()) + (await page.getByTestId("obu-hud").innerText());
+  const overview = (await page.getByTestId("inspector-state").innerText()) + hudText;
   expect(overview, "a field with no data was drawn as n/a").not.toMatch(/\bn\/a\b/);
   expect(overview).not.toContain("not on the wire");
   await page.screenshot({ path: join(tmpdir(), "vwp-e2e-inspector-overview.png") });
@@ -122,8 +126,8 @@ test("the message feed holds still under the pointer and catches up when it leav
   await open(page);
   await playTo(page, 3);
   await followARadio(page);
-  await page.getByTestId("tab-messages").click();
-  await page.getByTestId("feed-tab-sent").click();
+  await page.getByTestId("hud-details").click();
+  await page.getByTestId("tab-sent").click();
   const scroll = page.getByTestId("feed-scroll-sent");
   await expect(scroll).toBeVisible({ timeout: 60_000 });
   const firstMsg = async (): Promise<string | null> => page.getByTestId("feed-row-sent").first().getAttribute("data-msg");
@@ -142,7 +146,7 @@ test("the message feed holds still under the pointer and catches up when it leav
   await expect(page.getByTestId("feed-status")).toContainText("live");
 
   // Queues: every cell says something or is blank; none says "n/o" or "n/a".
-  await page.getByTestId("feed-tab-queues").click();
+  await page.getByTestId("tab-queues").click();
   await expect(page.getByTestId("feed-queues")).toBeVisible();
   const queues = await page.getByTestId("feed-queues").innerText();
   expect(queues).not.toMatch(/\bn\/[ao]\b/);

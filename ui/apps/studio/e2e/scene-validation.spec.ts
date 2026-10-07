@@ -998,7 +998,7 @@ test("the inspector's radio count agrees with the nodes the engine announced", a
   await streaming(page);
   // The inspector shows on demand: nothing is selected, so open it from the header.
   await page.getByTestId("inspector-toggle").click();
-  await page.getByTestId("tab-state").click();
+  await page.getByTestId("tab-overview").click();
   await expect(page.getByTestId("inspector-empty")).toBeVisible({ timeout: 30_000 });
 
   // A live run gains radios as vehicles join, so `run.status` read once is a moving number. Bracket

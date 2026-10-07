@@ -311,11 +311,6 @@ kbd {
   box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
 }
 
-/* The inspector's own close button, over its tab row. */
-.inspector-dock { position: relative; }
-.inspector-close { position: absolute; top: 3px; right: 4px; z-index: 2; height: 26px; min-width: 26px; }
-.inspector-dock > .panel-head { padding-right: 36px; }
-
 /* ------------------------------------------------------------- the settings window */
 
 .settings-window { display: flex; flex-direction: column; min-height: 0; height: 100%; flex: 1; background: var(--bg); }
@@ -522,8 +517,8 @@ kbd {
 .ident:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /*
- * The viewport and, when it is open, the inspector. Nothing else takes width from the simulator:
- * with nothing selected the viewport is the whole window.
+ * The viewport. Nothing takes width from the simulator: the vehicle details are an overlay over it
+ * (`styles/vehicle.css`), not a column beside it.
  */
 .body {
   display: grid;
@@ -531,19 +526,7 @@ kbd {
   min-height: 0;
   position: relative;
 }
-.body.with-inspector { grid-template-columns: minmax(0, 1fr) 360px; }
-/*
- * A narrower inspector on smaller windows, so the viewport keeps at least half of the width
- * (measured by `e2e/regressions.spec.ts` at 800 x 520 up to 1280 x 800).
- */
-@media (max-width: 1280px) {
-  .body.with-inspector { grid-template-columns: minmax(0, 1fr) 320px; }
-}
-@media (max-width: 1000px) {
-  .body.with-inspector { grid-template-columns: minmax(0, 1fr) 260px; }
-}
 @media (max-width: 900px) {
-  .body.with-inspector { grid-template-columns: minmax(0, 1fr) 220px; }
   .topbar .headline-clock .faint, .icon-button.labelled span { display: none; }
 }
 @media (max-height: 640px) {
@@ -704,16 +687,6 @@ kbd {
   /* Never over the toolbar, however short the viewport (at 800 x 520 the HUD covered its buttons). */
   max-height: min(52%, calc(100% - var(--vp-toolbar-bottom, 38px) - 16px));
   overflow: auto;
-}
-.hud.docked {
-  position: static;
-  width: auto;
-  max-height: none;
-  border: none;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-  backdrop-filter: none;
-  background: var(--bg-panel);
 }
 .hud-head {
   display: flex;
@@ -1306,7 +1279,6 @@ pre .feed-hex-key, pre span[class^="span-"] { border-left: none; }
 /* ================================================================ chase HUD (2026-09-30) */
 
 .hud { width: min(620px, calc(100% - 16px)); }
-.hud-head .hud-dock { height: 20px; min-width: 0; padding: 0 6px; font-size: 10px; font-family: var(--mono); }
 .hud-row { align-items: baseline; flex-wrap: nowrap; }
 .hud-row-body { display: flex; flex-wrap: wrap; gap: 4px 14px; min-width: 0; }
 .hud-row-title {

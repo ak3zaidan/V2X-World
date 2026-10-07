@@ -35,6 +35,7 @@ declare global {
       selectFirstActor: () => number | null;
       fps: () => number;
       actorCount: () => number;
+      logs: () => readonly { level: string; target: string; message: string }[];
     };
   }
 }
@@ -118,34 +119,29 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   await expect(page.getByTestId("follow-chip")).not.toHaveText("follow: —", { timeout: 20_000 });
   await expect.poll(async () => (await probe(page)).cameraMode, { timeout: 20_000 }).toBe("chase");
 
-  // 7. The HUD populates with non-zero telemetry from the §3.5 frames.
+  // 7. The HUD populates with non-zero telemetry from the §3.5 frames, and keeps to what a
+  //    person following a vehicle needs: who, moving, radio, security and health.
   await expect(page.getByTestId("obu-hud")).toBeVisible();
-  await expect(page.getByTestId("hud-identity")).toContainText(/OBU|RSU/, { timeout: 30_000 });
+  await expect(page.getByTestId("hud-identity")).toContainText(/Vehicle|Roadside unit|Pedestrian device/, { timeout: 30_000 });
   await expect(page.getByTestId("hud-msgs_in_per_s")).toBeVisible({ timeout: 30_000 });
 
   const hudNumbers = await page.evaluate(() => {
     const read = (key: string): string => document.querySelector(`[data-testid="hud-${key}"]`)?.textContent ?? "";
-    return {
-      rx: read("msgs_in_per_s"),
-      cpu: read("cpu_util_pm"),
-      cbr: read("cbr_pm"),
-      neighbours: read("nbr_total"),
-      txPower: read("tx_power_cdbm"),
-    };
+    return { rx: read("msgs_in_per_s"), neighbours: read("nbr_total"), cpu: read("cpu_util_pm") };
   });
   // Non-zero, non-"n/a" telemetry: rx rate and neighbour count are the two the HUD leads with.
   expect(hudNumbers.rx).toMatch(/[1-9]/);
-  expect(hudNumbers.cpu).toMatch(/[1-9]/);
   expect(hudNumbers.neighbours).toMatch(/\d/);
-  expect(hudNumbers.txPower).toContain("dBm");
-  // The rest of the record — the certificate store, GNSS and the clock — is in the inspector's
-  // overview, the HUD keeping to radio, security and queues.
-  await page.getByTestId("tab-state").click();
-  await expect(page.getByTestId("insp-security")).toContainText(/Certificates stored|certificates/i);
-  await expect(page.getByTestId("insp-more")).toContainText(/Fix|GNSS/);
-  await page.getByTestId("tab-messages").click();
+  // Compute is detail, not HUD material: it is in the overlay.
+  expect(hudNumbers.cpu).toBe("");
+  await expect(page.getByTestId("hud-health")).toBeVisible();
 
-  // 8. The sparkline row has drawn something.
+  // 8. The rest of the record is in the vehicle overlay the HUD's Details button opens.
+  await page.getByTestId("hud-details").click();
+  await expect(page.getByTestId("inspector-panel")).toBeVisible();
+  await expect(page.getByTestId("insp-radio")).toContainText(/TX power/);
+  await expect(page.getByTestId("insp-security")).toContainText(/certificates/i);
+  await expect(page.getByTestId("insp-more")).toContainText(/fix/i);
   await expect(page.getByTestId("hud-sparklines")).toBeVisible();
   await expect
     .poll(async () => page.locator('[data-testid="hud-sparklines"] canvas').count(), { timeout: 20_000 })
@@ -154,15 +150,14 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   await page.waitForTimeout(2500);
   await page.screenshot({ path: `${SHOTS}/02-chase-view-hud.png`, fullPage: false });
 
-  // 9. The "why" tab resolves (or explicitly does not resolve) provenance for a HUD value.
-  await page.getByTestId("hud-cpu_util_pm").click();
-  await expect(page.getByTestId("why-tab")).toBeVisible();
-  // The same fact, said in the language of someone who has not read the protocol: the stream does
-  // not label this number with a model, so the engine has to be asked.
-  await expect(page.getByTestId("why-absent")).toContainText("does not say which model produced");
-  await page.getByTestId("why-explain").click();
-  await expect(page.getByTestId("why-explain-result")).toBeVisible({ timeout: 20_000 });
-  await page.screenshot({ path: `${SHOTS}/03-why-tab.png` });
+  // 9. Its sent and received messages, one row each; then it closes and the viewport is whole again.
+  await page.getByTestId("tab-sent").click();
+  await expect(page.locator('[data-testid="feed-row-sent"]').first()).toBeVisible({ timeout: 20_000 });
+  await page.getByTestId("tab-received").click();
+  await expect(page.locator('[data-testid="feed-row-received"]').first()).toBeVisible({ timeout: 20_000 });
+  await page.screenshot({ path: `${SHOTS}/03-vehicle-overlay.png` });
+  await page.getByTestId("inspector-close").click();
+  await expect(page.getByTestId("inspector-panel")).toHaveCount(0);
 
   // 10. Overlay toggles round-trip through the viewer and `overlay.set` (§6.7).
   await page.getByTestId("overlays-button").click();
@@ -250,11 +245,11 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   await page.screenshot({ path: `${SHOTS}/04b-metrics.png` });
   await page.keyboard.press("Escape");
 
-  // 14. The engine log the inspector shows carries no protocol, world or RPC errors.
-  await page.getByTestId("tab-log").click();
-  const logLines = await page.locator('[data-testid="inspector-log"] .line').allTextContents();
+  // 14. The page's log carries no protocol, world or RPC errors (the Log tab is gone; the lines
+  //     are still collected, and the test handle reads them).
+  const logLines = await page.evaluate(() => window.__vwpStudio?.logs() ?? []);
   expect(logLines.length).toBeGreaterThan(0);
-  expect(logLines.filter((l) => l.startsWith("error"))).toEqual([]);
+  expect(logLines.filter((l) => l.level === "error")).toEqual([]);
 
   // 15. No uncaught errors along the way.
   const ignorable = (t: string): boolean => t.includes("WebGL") && t.includes("deprecat");

@@ -292,18 +292,23 @@ test("every control does what it says", async ({ page }) => {
     await expect(page.getByTestId("state-legend")).toHaveCount(open ? 1 : 0, quick);
     return open ? "open → folded → open" : "folded → open → folded";
   });
-  await check("viewport: HUD dock", "dock and float the radio HUD", async () => {
-    // The dock button lives in the HUD's own header, which shows while a vehicle is followed.
-    if ((await page.getByTestId("hud-dock").count()) === 0) {
+  await check("viewport: HUD details", "open and close the vehicle overlay from the HUD", async () => {
+    // The Details button lives in the HUD's own header, which shows while a vehicle is followed and
+    // the overlay is closed (the overlay replaces the HUD while it is open).
+    const wasOpen = (await page.getByTestId("inspector-panel").count()) > 0;
+    if (wasOpen) await page.getByTestId("inspector-close").click();
+    if ((await page.getByTestId("hud-details").count()) === 0) {
       await page.evaluate(() => window.__vwpStudio?.selectFirstActor());
     }
-    await expect(page.getByTestId("hud-dock")).toBeVisible(quick);
-    const before = await page.getByTestId("hud-dock").innerText();
-    await page.getByTestId("hud-dock").click();
-    const after = await page.getByTestId("hud-dock").innerText();
-    expect(after).not.toBe(before);
-    await page.getByTestId("hud-dock").click();
-    return `${before} → ${after}`;
+    await expect(page.getByTestId("hud-details")).toBeVisible(quick);
+    await page.getByTestId("hud-details").click();
+    await expect(page.getByTestId("inspector-panel")).toHaveCount(1, quick);
+    await expect(page.getByTestId("obu-hud")).toHaveCount(0, quick);
+    await page.getByTestId("inspector-close").click();
+    await expect(page.getByTestId("inspector-panel")).toHaveCount(0, quick);
+    await expect(page.getByTestId("hud-details")).toBeVisible(quick);
+    if (wasOpen) await page.getByTestId("inspector-toggle").click();
+    return "closed → open (HUD hidden) → closed (HUD back)";
   });
 
   const table = [

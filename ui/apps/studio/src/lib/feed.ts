@@ -68,6 +68,11 @@ export interface FeedView {
   /** Attempts the receiver never detected, as the server counts them. */
   readonly undetected: number;
   readonly paused: boolean;
+  /**
+   * Whether `paused` was set by opening a message rather than by the Pause button: closing the
+   * message then resumes, and a reader who paused on purpose is not resumed behind their back.
+   */
+  readonly pausedForReading: boolean;
   /** Whether the pointer is over the rows; pushes are held meanwhile, like a pause. */
   readonly hovering: boolean;
   /** Pushes received while paused or hovered, applied on resume. */
@@ -93,6 +98,7 @@ export const EMPTY_FEED: FeedView = {
   dropped: { sent: 0, received: 0 },
   undetected: 0,
   paused: false,
+  pausedForReading: false,
   hovering: false,
   held: [],
   open: null,
@@ -178,8 +184,23 @@ function release(state: FeedView): FeedView {
 
 /** Pause or resume. Resuming applies every held push in order (unless the pointer still holds them). */
 export function setPaused(state: FeedView, paused: boolean): FeedView {
-  if (paused) return state.paused ? state : { ...state, paused: true };
-  return release({ ...state, paused: false });
+  if (paused) return state.paused && !state.pausedForReading ? state : { ...state, paused: true, pausedForReading: false };
+  return release({ ...state, paused: false, pausedForReading: false });
+}
+
+/**
+ * Open a message to read it, holding the feed still meanwhile (the owner, 2026-10-06: "pause the
+ * feed while reading"). Opening pauses unless the reader already had; closing (`key` `null`)
+ * resumes only a pause that opening made.
+ */
+export function readMessage(state: FeedView, dir: FeedDir, key: string | null): FeedView {
+  if (key === null) {
+    const closed = { ...state, open: null };
+    return state.pausedForReading ? setPaused(closed, false) : closed;
+  }
+  const opened = openMessage(state, dir, key);
+  if (opened === state) return state;
+  return opened.paused ? opened : { ...opened, paused: true, pausedForReading: true };
 }
 
 /** The pointer entered or left the rows. Leaving applies what arrived meanwhile, unless paused. */

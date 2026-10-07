@@ -15,12 +15,12 @@
  *  * **The engine.** It carries a `prov_id` on the wire (§3.7 metric samples, several §3.6 event
  *    payloads) and resolves through the `Provenance` frames of §3.8 into a model id, a version, a
  *    parameter set and a model-card URL; or it carries none and `explain` (§6.9) resolves it
- *    server-side. `WhyTab` already handles both.
+ *    server-side. `SourceNote` already handles both.
  *  * **The browser.** Frames per second, draw calls, the interpolation the viewer does between two
  *    deltas, the shape of a pulse ring — these are computed *here*, by `@vwp/viewer` or by this
  *    app, from engine inputs. They have no model card because there is no model: naming one would
  *    invent a citation. {@link ClientProvenance} states the producer, the computation, the inputs
- *    it was computed from and the rule it follows, and `WhyTab` renders it as what it is.
+ *    it was computed from and the rule it follows, and `SourceNote` renders it as what it is.
  *
  * Every entry below names a specification section or a source file. Nothing here says "computed
  * from telemetry" without saying which field.
@@ -64,7 +64,7 @@ export interface ClientProvenance {
  *
  * Keys are the field names the readouts use, so a new readout that reuses a key inherits its
  * provenance and a new key with no entry is visible as a gap rather than silently unexplained
- * ({@link clientProvenance} returns `null`, and `WhyTab` says so).
+ * ({@link clientProvenance} returns `null`, and `SourceNote` says so).
  */
 export const CLIENT_PROVENANCE: Readonly<Record<string, ClientProvenance>> = {
   fps: {

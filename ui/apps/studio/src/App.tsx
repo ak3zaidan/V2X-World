@@ -10,8 +10,9 @@
  * The owner found it cluttered, and it was: two of the five were empty most of the time, and the
  * settings column was too narrow to read a setting in. Now the viewport takes the page; the
  * settings are a window of their own (the gear, or Ctrl/Cmd + ,), the measurements a full-screen
- * panel (Metrics), the occasional panels are in the menu, and the inspector appears when you select
- * something or ask why a value is what it is.
+ * panel (Metrics), the occasional panels are in the menu, and everything about the selected vehicle
+ * is a large overlay over the viewport (the HUD's Details button, the header's inspector button or
+ * I), which takes nothing from the picture while it is closed.
  *
  * # The header
  *
@@ -36,13 +37,13 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ComparePane } from "./components/ComparePane.js";
 import { Inspector } from "./components/Inspector.js";
+import { SourceNote } from "./components/SourceNote.js";
 import { StatusBanner } from "./components/Status.js";
 import { TimeControls } from "./components/TimeControls.js";
 import { Viewport } from "./components/Viewport.js";
 import { SettingsWindow } from "./settings/SettingsWindow.js";
 import { RunSummary } from "./metrics/RunSummary.js";
 import { Header } from "./shell/Header.js";
-import { CloseIcon } from "./shell/Icons.js";
 import { FullPanel, Sheet } from "./shell/PanelFrame.js";
 import { PANELS } from "./shell/panels.js";
 import { closePanel, togglePanel, usePanelRoute } from "./shell/route.js";
@@ -157,6 +158,17 @@ export function App(): React.JSX.Element {
           return;
         }
       }
+      // I opens and closes the vehicle overlay, under the same rules as M.
+      if ((ev.key === "i" || ev.key === "I") && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.defaultPrevented) {
+        const target = ev.target instanceof HTMLElement ? ev.target : null;
+        const typing = target?.closest("input, textarea, select, [contenteditable='true']") != null;
+        const state = useStudio.getState();
+        if (!typing && (state.panel === null || PANELS[state.panel].kind === "sheet")) {
+          ev.preventDefault();
+          state.setInspectorOpen(!state.inspectorOpen);
+          return;
+        }
+      }
       if (ev.key === "Escape" && !ev.defaultPrevented) {
         const state = useStudio.getState();
         if (state.mapPick !== null) {
@@ -164,6 +176,9 @@ export function App(): React.JSX.Element {
           ev.preventDefault();
         } else if (state.panel !== null) {
           closePanel();
+          ev.preventDefault();
+        } else if (state.inspectorOpen) {
+          state.setInspectorOpen(false);
           ev.preventDefault();
         }
       }
@@ -182,7 +197,7 @@ export function App(): React.JSX.Element {
     <div className="app">
       <Header onConnect={reconnect} />
 
-      <div className={inspectorOpen ? "body with-inspector" : "body"}>
+      <div className="body">
         <main className="centre">
           <StatusBanner onConnect={reconnect} note={connectError} />
           <div className="stage">
@@ -190,6 +205,8 @@ export function App(): React.JSX.Element {
               <Viewport />
               {compare === null ? null : <ComparePane />}
             </div>
+            {inspectorOpen ? <Inspector onClose={() => setInspectorOpen(false)} /> : null}
+            <SourceNote />
             {sheet !== null ? <Sheet key={sheet.id} spec={sheet} close={closePanel} retarget={reconnect} /> : null}
             {picking !== null ? (
               <div className="pick-banner" role="status" data-testid="map-pick-banner">
@@ -202,22 +219,6 @@ export function App(): React.JSX.Element {
           </div>
           <TimeControls />
         </main>
-
-        {inspectorOpen ? (
-          <aside className="panel right inspector-dock" data-testid="inspector-panel" aria-label="Inspector">
-            <button
-              type="button"
-              className="icon-button inspector-close"
-              onClick={() => setInspectorOpen(false)}
-              aria-label="Hide the inspector"
-              title="Hide the inspector"
-              data-testid="inspector-close"
-            >
-              <CloseIcon />
-            </button>
-            <Inspector />
-          </aside>
-        ) : null}
       </div>
 
       {panel === "settings" ? (

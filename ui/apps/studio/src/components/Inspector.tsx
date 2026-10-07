@@ -1,56 +1,65 @@
 /**
- * The right-hand inspector: what one radio is doing, why a number is what it is, and the log.
+ * The vehicle overlay: everything about the selected radio, in a dialog over the viewport.
  *
- * # The overview
+ * # Why an overlay
  *
- * Laid out around what a researcher looks at when they select a vehicle, in this order:
+ * This used to be a 220–360 px column beside the viewport with four tabs (Overview, Messages, Why,
+ * Log). The owner's review of 2026-10-06: the column was "kind of tight on information… it can show
+ * the BSMs, all the received and sent BSMs, but it's really small and compressed", the Log tab "doesn't
+ * really show anything" and the Why tab "doesn't really make sense". So the column is now a large,
+ * resizable dialog over the simulator, opened from the chase HUD's Details button, the header's
+ * inspector button or the I key, and closed with its x or Escape. Closed, it takes nothing from the
+ * viewport. It does not open by itself on selection: it would cover the vehicle being followed.
  *
- *  1. **Identity** — what it is, its hardware profile, and the pseudonym it is signing with now, with
- *     the certificate's i-period and j index and the temporary id its messages carry.
- *  2. **Radio** — what it sends and hears per second, the channel load and the congestion state it
- *     is under, its power, and its neighbours.
- *  3. **Security** — the certificate pool, when it next tops up, the backend it reaches, the CRL it
- *     holds, and how fast it verifies.
- *  4. **Queues** — its five queues' depths and what each dropped, and a door to the live queue
- *     contents under Messages.
- *  5. **More** — compute, storage, GNSS and the clock, folded away.
+ * # Sections
  *
- * A field with no data behind it — a value at its "not modelled" sentinel, a security row in a run
- * with no credential system — is not drawn. It used to be drawn as "n/a", which on most runs was a
- * third of the panel, and a JSON dump of the node's stores sat under it. A section with nothing in
- * it is not drawn either.
+ *  1. **Overview** — identity, health, radio, security, queues, recent trends, and the neighbours
+ *     heard; compute, GNSS and clock folded away. A field with no data behind it is not drawn.
+ *  2. **Sent** and **Received** — every message, one row each, click a row to read it
+ *     (`components/MessagePanel.tsx`).
+ *  3. **Queues** — the five queues and what is waiting in them.
  *
- * # The empty state
- *
- * It says what is on the map, with each number named for what it counts: road users (every vehicle,
- * pedestrian and cyclist) and radios (on vehicles, carried, roadside), so "82 radios" beside "106
- * road users" is two true statements and not a contradiction (QA, 2026-09-24).
+ * The Log tab's lines are still collected (`state.logs`, which the test handle reads) and anything a
+ * user must act on is already a sentence in the status banner. The Why tab's question — which model
+ * produced a number — survives as a small source note for the places that offer it (the metrics and
+ * the overlay menu, `components/SourceNote.tsx`).
  */
 
-import { Fragment, useMemo } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { MessagePanel } from "./MessagePanel.js";
-import { ObuHud } from "./ObuHud.js";
-import { WhyTab } from "./WhyTab.js";
+import { MessageList, QueueList } from "./MessagePanel.js";
+import { Sparkline } from "./Sparkline.js";
+import { CloseIcon } from "../shell/Icons.js";
 import { engine } from "../state/engine.js";
-import { useStudio } from "../state/store.js";
-import { int, radioBreakdown, radioSentence, simClock } from "../lib/format.js";
-import { hasData, hudGroups, queueRows, type HudField } from "../lib/telemetry.js";
+import { useStudio, type InspectorTab } from "../state/store.js";
+import { int, radioBreakdown, radioSentence, shortDigest, simClock } from "../lib/format.js";
+import { SPARKLINE_SERIES, hasData, hudGroups, queueRows, type HudField } from "../lib/telemetry.js";
 import { linkText, pseudonymLine, untilText } from "../lib/security.js";
+import { vehicleHealth } from "../lib/vehicleHealth.js";
+
+import "../styles/vehicle.css";
 
 /**
- * The overview's own names for fields whose telemetry label only reads right inside the HUD's
- * group: "verified" under a "neighbours" heading is a count of neighbours, but in the overview's
- * Radio section, beside "tx" and "CBR", it has to say so. Everything else keeps its label, in the
- * section's lower case.
+ * The overview's own names for fields whose telemetry label reads right only inside the HUD's
+ * group. Everything else keeps its label, in lower case.
  */
 const OVERVIEW_LABEL: Readonly<Record<string, string>> = {
+  msgs_out_per_s: "sent",
+  msgs_in_per_s: "heard",
+  cbr_pm: "channel busy ratio",
+  dcc_state: "congestion control state",
   nbr_total: "neighbours",
   nbr_verified: "verified neighbours",
   nbr_unverified: "unverified neighbours",
   nbr_revoked: "revoked neighbours",
   verifications_per_s: "verifications",
+  verify_wait_p50_ms: "wait before verifying, median",
+  verify_wait_p95_ms: "wait before verifying, p95",
+  unverified_ratio_pm: "delivered unverified",
   crl_bytes: "CRL size",
+  crl_expansion_pm: "CRL expansion done",
+  full_cert_msgs: "sent with full certificate",
+  p2pcd_requests: "certificate requests (P2PCD)",
 };
 
 /** A label in the overview's lower case, acronyms (CBR, TX, CPU, HSM…) left as they are. */
@@ -62,28 +71,19 @@ function overviewLabel(f: Pick<HudField, "key" | "label">): string {
   return [lower, ...rest].join(" ");
 }
 
-/** One telemetry field as a definition-list row whose name opens its provenance. */
-function FieldRow({ f: raw, node }: { f: HudField; node: number }): React.JSX.Element {
-  const setWhy = useStudio((s) => s.setWhy);
-  const f = { ...raw, label: overviewLabel(raw) };
+/** One telemetry field as a definition-list row. */
+function FieldRow({ f }: { f: HudField }): React.JSX.Element {
+  const label = overviewLabel(f);
   return (
     <>
-      <dt>
-        <button
-          type="button"
-          className="linklike"
-          data-testid={`state-field-${f.key}`}
-          aria-label={`${f.label}: ${f.value} — explain`}
-          aria-describedby={`state-help-${f.key}`}
-          onClick={() => setWhy({ kind: "node_field", id: f.key, label: f.label, node, value: f.value, unit: f.unit })}
-        >
-          {f.label}
-          {f.visibility === "GT" ? <span className="gt-tag"> GT</span> : null}
-          <span className="sr-only" id={`state-help-${f.key}`}>
-            {f.key} · {f.unit}
-            {f.help ? ` — ${f.help}` : ""}
+      <dt data-testid={`state-field-${f.key}`} title={f.help}>
+        {label}
+        {f.visibility === "GT" ? (
+          <span className="gt-tag" title="Ground truth: only the simulation knows this, no radio could">
+            {" "}
+            GT
           </span>
-        </button>
+        ) : null}
       </dt>
       <dd>{f.value}</dd>
     </>
@@ -91,12 +91,13 @@ function FieldRow({ f: raw, node }: { f: HudField; node: number }): React.JSX.El
 }
 
 /** A plain fact (not a telemetry field): drawn only when there is a value. */
-function Fact({ k, v, testId }: { k: string; v: string | null | undefined; testId?: string }): React.JSX.Element | null {
-  if (v === null || v === undefined || v === "") return null;
+function Fact({ k, v, testId, tone }: { k: string; v: string; testId?: string; tone?: "warn" | "err" }): React.JSX.Element {
   return (
     <>
       <dt>{k}</dt>
-      <dd data-testid={testId}>{v}</dd>
+      <dd data-testid={testId} className={tone === "warn" ? "warn-text" : tone === "err" ? "err-text" : undefined}>
+        {v}
+      </dd>
     </>
   );
 }
@@ -105,7 +106,7 @@ function Fact({ k, v, testId }: { k: string; v: string | null | undefined; testI
 function Section({ title, testId, children }: { title: string; testId: string; children: (React.JSX.Element | null)[] }): React.JSX.Element | null {
   if (children.every((c) => c === null)) return null;
   return (
-    <div className="section insp-section" data-testid={testId}>
+    <div className="section vo-card" data-testid={testId}>
       <h3>{title}</h3>
       <dl className="kv">{children}</dl>
     </div>
@@ -128,10 +129,10 @@ function EmptyState(): React.JSX.Element {
     <div className="panel-body" data-testid="inspector-empty">
       <p className="dim" data-testid="inspector-empty-message">
         {!hello
-          ? "Nothing to inspect yet — no run has been loaded."
+          ? "Nothing to inspect yet: no run has been loaded."
           : roadUsers > 0 || breakdown.total > 0
-            ? "Select a vehicle or a roadside unit on the map and what its radio is doing appears here: its pseudonym, what it sends and hears, its certificates and its queues."
-            : "There is nothing on the map to select yet. Once the run has vehicles in it, choose one and what its radio is doing appears here."}
+            ? "Select a vehicle or a roadside unit on the map to see what its radio is doing: its pseudonym, every message it sends and receives, its certificates and its queues."
+            : "There is nothing on the map to select yet. Once the run has vehicles in it, choose one to see what its radio is doing."}
       </p>
       {hello ? (
         <div className="section">
@@ -160,7 +161,7 @@ function EmptyState(): React.JSX.Element {
   );
 }
 
-function StateTab(): React.JSX.Element {
+function Overview(): React.JSX.Element {
   const telemetry = useStudio((s) => s.telemetry);
   const telemetryNode = useStudio((s) => s.telemetryNode);
   const inspect = useStudio((s) => s.inspect);
@@ -170,12 +171,13 @@ function StateTab(): React.JSX.Element {
   const selectedActor = useStudio((s) => s.selectedActor);
   const polledNeighbors = useStudio((s) => s.neighbors);
   const setTab = useStudio((s) => s.setInspectorTab);
-  const setFeedTab = useStudio((s) => s.setFeedTab);
   const devDetails = useStudio((s) => s.devDetails);
+  const seriesTick = useStudio((s) => s.seriesTick);
 
   const groups = useMemo(() => (telemetry ? hudGroups(telemetry) : []), [telemetry]);
   const byKey = useMemo(() => new Map(groups.flatMap((g) => g.fields.map((f) => [f.key, f] as const))), [groups]);
   const queues = useMemo(() => (telemetry ? queueRows(telemetry) : []), [telemetry]);
+  const health = useMemo(() => vehicleHealth(telemetry, security), [telemetry, security]);
 
   if (telemetryNode === null) return <EmptyState />;
   const node = telemetryNode;
@@ -183,10 +185,10 @@ function StateTab(): React.JSX.Element {
 
   const field = (key: string): React.JSX.Element | null => {
     const f = byKey.get(key);
-    return hasData(f) ? <FieldRow key={key} f={f} node={node} /> : null;
+    return hasData(f) ? <FieldRow key={key} f={f} /> : null;
   };
-  const fact = (k: string, v: string | null | undefined, testId?: string): React.JSX.Element | null =>
-    v === null || v === undefined || v === "" ? null : <Fact key={k} k={k} v={v} testId={testId} />;
+  const fact = (k: string, v: string | null | undefined, testId?: string, tone?: "warn" | "err"): React.JSX.Element | null =>
+    v === null || v === undefined || v === "" ? null : <Fact key={k} k={k} v={v} testId={testId} tone={tone} />;
 
   const neighbors = polledNeighbors ?? inspect?.neighbors ?? [];
   // The actor this radio rides on: the node table knows it for every radio the stream announced,
@@ -197,7 +199,7 @@ function StateTab(): React.JSX.Element {
   const line = pseudonymLine(security, pseudonym);
   const pool =
     security && typeof security.pool_valid === "number"
-      ? `${int(security.pool_valid)} valid${typeof security.pool_preloaded === "number" ? `, ${int(security.pool_preloaded)} for later periods` : ""}${typeof security.pool_stored === "number" ? `, ${int(security.pool_stored)} stored` : ""}`
+      ? `${int(security.pool_valid)} valid${typeof security.pool_preloaded === "number" && security.pool_preloaded > 0 ? `, ${int(security.pool_preloaded)} for later periods` : ""}${typeof security.pool_stored === "number" ? `, ${int(security.pool_stored)} stored` : ""}`
       : null;
   const topup = security?.topup_in_flight === true ? "in flight" : untilText(security?.next_topup ?? null, simTimeNs);
   const crl =
@@ -205,25 +207,41 @@ function StateTab(): React.JSX.Element {
       ? `${int(security.crl_entries)} entr${security.crl_entries === 1 ? "y" : "ies"}${typeof security.crl_version === "number" && security.crl_version > 0 ? `, version ${security.crl_version}` : ""}`
       : null;
   const reports =
-    security && (typeof security.outbox_reports === "number" || typeof security.reports_uploaded === "number")
+    security && ((security.outbox_reports ?? 0) > 0 || (security.reports_uploaded ?? 0) > 0)
       ? `${int(security.reports_uploaded ?? 0)} uploaded, ${int(security.outbox_reports ?? 0)} waiting`
       : null;
-  const shownQueues = queues.filter((q) => q.p50 !== null || q.p95 !== null || q.drops.some((d) => d.value !== null && d.value > 0));
+  const shownQueues = queues.filter((q) => (q.p50 ?? 0) > 0 || (q.p95 ?? 0) > 0 || q.drops.some((d) => d.value !== null && d.value > 0));
 
   return (
-    <div className="panel-body" data-testid="inspector-state">
+    <div className="panel-body vo-overview" data-testid="inspector-state">
+      <div className="section vo-card vo-health" data-testid="insp-health">
+        <h3>Health</h3>
+        {health.length === 0 ? (
+          <p className="ok-text" data-testid="insp-healthy">
+            Healthy: no dropped messages, the channel below the ETSI congestion threshold (CBR 0.30), valid certificates and the backend in reach.
+          </p>
+        ) : (
+          <ul className="vo-issues">
+            {health.map((h) => (
+              <li key={h.key} data-testid={`insp-issue-${h.key}`}>
+                <b className={h.level === "bad" ? "err-text" : "warn-text"}>{h.text}.</b> <span className="dim">{h.why}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       <Section title="Identity" testId="insp-identity">
         {[
           fact("kind", kindText),
-          fact("profile", inspect?.profile_id || info?.profileId || null),
-          fact("node", String(node)),
-          fact("actor", actorId === null || actorId === undefined ? null : String(actorId), "inspector-actor-id"),
-          fact("pseudonym", line ? `${line.digest.slice(0, 16)}${line.digest.length > 16 ? "…" : ""}` : null, "inspector-pseudonym"),
+          fact("hardware profile", inspect?.profile_id || info?.profileId || null),
+          fact("radio", `node ${node}`),
+          fact("road user", actorId === null || actorId === undefined ? null : `actor ${actorId}`, "inspector-actor-id"),
+          fact("pseudonym", line ? shortDigest(line.digest) : null, "inspector-pseudonym"),
           fact("certificate", line?.indices ?? null, "inspector-cert-indices"),
           fact("temporary id", line?.tempId ?? null),
-          fact("changes so far", typeof security?.changes === "number" ? int(security.changes) : null),
-          security?.self_revoked === true ? fact("revoked", "on the CRL: it stopped sending", "inspector-self-revoked") : null,
-          devDetails && inspect ? fact("sampled at", simClock(inspect.t_ns)) : null,
+          fact("identity changes", typeof security?.changes === "number" && security.changes > 0 ? int(security.changes) : null),
+          security?.self_revoked === true ? fact("revoked", "on the CRL: it stopped sending", "inspector-self-revoked", "err") : null,
         ]}
       </Section>
 
@@ -235,64 +253,28 @@ function StateTab(): React.JSX.Element {
           field("dcc_state"),
           field("tx_power_cdbm"),
           field("airtime_ms_per_s"),
-          field("full_cert_msgs"),
-          field("p2pcd_requests"),
           field("nbr_total"),
           field("nbr_verified"),
           field("nbr_unverified"),
-          field("nbr_revoked"),
+          (byKey.get("nbr_revoked")?.raw ?? 0) > 0 ? field("nbr_revoked") : null,
+          (byKey.get("full_cert_msgs")?.raw ?? 0) > 0 ? field("full_cert_msgs") : null,
+          (byKey.get("p2pcd_requests")?.raw ?? 0) > 0 ? field("p2pcd_requests") : null,
         ]}
       </Section>
 
-      {neighbors.length > 0 ? (
-        <details className="section insp-neighbours">
-          <summary>
-            <h3>Neighbours heard ({neighbors.length})</h3>
-          </summary>
-          <table className="table" data-testid="neighbour-table">
-            <thead>
-              <tr>
-                <th>neighbour</th>
-                <th>state</th>
-                <th>msgs / RSSI</th>
-                <th>last seen</th>
-              </tr>
-            </thead>
-            <tbody>
-              {neighbors.slice(0, 20).map((n, i) => (
-                // The live engine answers from its link history (node, heard/lost, RSSI); the
-                // spec's row names a certificate digest and a verification state. Show either.
-                <tr key={n.digest ?? `node-${n.node ?? i}`}>
-                  <td>{n.digest ?? (n.node !== undefined ? `node ${n.node}` : "")}</td>
-                  <td>{n.verify_state ?? n.state ?? ""}</td>
-                  <td>
-                    {n.messages !== undefined ? n.messages : typeof n.rssi_dbm === "number" ? `${n.rssi_dbm.toFixed(1)} dBm` : ""}
-                  </td>
-                  <td>{simClock(n.last_seen_ns)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {neighbors.length > 20 ? <p className="faint">{neighbors.length - 20} more…</p> : null}
-        </details>
-      ) : null}
-
       <Section title="Security" testId="insp-security">
         {[
-          fact("certificates", pool, "inspector-pool"),
+          fact("certificates", pool, "inspector-pool", security?.pool_valid === 0 ? "err" : undefined),
           fact("this one expires", untilText(security?.cert_valid_until ?? null, simTimeNs)),
           fact("next top-up", topup, "inspector-topup"),
-          fact("backend", security ? linkText(security) : null),
-          fact("CRL", crl, "inspector-crl"),
-          field("crl_bytes"),
-          field("crl_expansion_pm"),
+          fact("backend", security ? linkText(security) : null, undefined, security?.link_up === false ? "warn" : undefined),
+          fact("revocation list", crl, "inspector-crl"),
           fact("misbehaviour reports", reports),
           field("verifications_per_s"),
           field("verify_wait_p50_ms"),
           field("verify_wait_p95_ms"),
           field("verify_policy"),
-          field("unverified_ratio_pm"),
-          field("peer_cache_entries"),
+          (byKey.get("unverified_ratio_pm")?.raw ?? 0) > 0 ? field("unverified_ratio_pm") : null,
           // Without a security row, the telemetry's own counts are what there is.
           security === null ? field("cert_active") : null,
           security === null ? field("cert_stored") : null,
@@ -300,16 +282,18 @@ function StateTab(): React.JSX.Element {
         ]}
       </Section>
 
-      {shownQueues.length > 0 ? (
-        <div className="section insp-section" data-testid="insp-queues">
-          <h3>Queues</h3>
+      <div className="section vo-card" data-testid="insp-queues">
+        <h3>Queues</h3>
+        {shownQueues.length === 0 ? (
+          <p className="dim">All five queues empty, nothing dropped.</p>
+        ) : (
           <table className="table" data-testid="inspector-queues">
             <thead>
               <tr>
                 <th>queue</th>
-                <th title="depth, median over the telemetry window">p50</th>
-                <th title="depth, 95th percentile over the telemetry window">p95</th>
-                <th title="dropped in the window, by cause">dropped</th>
+                <th className="num" title="Depth, median over the telemetry window">median</th>
+                <th className="num" title="Depth, 95th percentile over the telemetry window">p95</th>
+                <th title="Dropped in the window, by cause">dropped</th>
               </tr>
             </thead>
             <tbody>
@@ -318,8 +302,8 @@ function StateTab(): React.JSX.Element {
                 return (
                   <tr key={q.id} data-testid={`inspector-queue-${q.id}`}>
                     <td>{q.label}</td>
-                    <td>{q.p50 ?? ""}</td>
-                    <td>{q.p95 ?? ""}</td>
+                    <td className="num">{q.p50 ?? ""}</td>
+                    <td className="num">{q.p95 ?? ""}</td>
                     <td className={dropped.length > 0 ? "warn-text" : undefined}>
                       {dropped.length === 0 ? "0" : dropped.map((d) => `${d.label} ${int(d.value ?? 0)}`).join(", ")}
                     </td>
@@ -328,28 +312,58 @@ function StateTab(): React.JSX.Element {
               })}
             </tbody>
           </table>
-          <p className="help">
-            What is in them now, message by message:{" "}
-            <button
-              type="button"
-              className="linklike"
-              data-testid="open-queues"
-              onClick={() => {
-                setFeedTab("queues");
-                setTab("messages");
-              }}
-            >
-              Messages → Queues
-            </button>
-            .
-          </p>
+        )}
+        <p className="help">
+          <button type="button" className="linklike" data-testid="open-queues" onClick={() => setTab("queues")}>
+            What is in them now →
+          </button>
+        </p>
+      </div>
+
+      <div className="section vo-card vo-trends" data-testid="hud-sparklines">
+        <h3>Recent trend</h3>
+        <div className="sparkrow">
+          {SPARKLINE_SERIES.map((s, i) => (
+            <Sparkline key={s.key} seriesIndex={i} label={s.label} unit={s.unit} tick={seriesTick} />
+          ))}
         </div>
+      </div>
+
+      {neighbors.length > 0 ? (
+        <details className="section vo-card vo-wide insp-neighbours">
+          <summary>
+            <h3>Neighbours heard ({neighbors.length})</h3>
+          </summary>
+          <table className="table" data-testid="neighbour-table">
+            <thead>
+              <tr>
+                <th>neighbour</th>
+                <th>state</th>
+                <th>messages / signal</th>
+                <th>last heard</th>
+              </tr>
+            </thead>
+            <tbody>
+              {neighbors.slice(0, 40).map((n, i) => (
+                // The live engine answers from its link history (node, heard/lost, RSSI); the
+                // spec's row names a certificate digest and a verification state. Show either.
+                <tr key={n.digest ?? `node-${n.node ?? i}`}>
+                  <td>{n.digest ?? (n.node !== undefined ? `node ${n.node}` : "")}</td>
+                  <td>{n.verify_state ?? n.state ?? ""}</td>
+                  <td>{n.messages !== undefined ? n.messages : typeof n.rssi_dbm === "number" ? `${n.rssi_dbm.toFixed(1)} dBm` : ""}</td>
+                  <td>{simClock(n.last_seen_ns)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {neighbors.length > 40 ? <p className="faint">{neighbors.length - 40} more…</p> : null}
+        </details>
       ) : null}
 
-      <MoreSection byKey={byKey} node={node} />
+      <MoreSection byKey={byKey} />
 
       {inspect?.stores && devDetails ? (
-        <details className="section">
+        <details className="section vo-card vo-wide">
           <summary>
             <h3>Stored on this radio (raw)</h3>
           </summary>
@@ -363,7 +377,7 @@ function StateTab(): React.JSX.Element {
 }
 
 /** Compute, storage, GNSS and the clock: folded away, and only what has data. */
-function MoreSection({ byKey, node }: { byKey: ReadonlyMap<string, HudField>; node: number }): React.JSX.Element | null {
+function MoreSection({ byKey }: { byKey: ReadonlyMap<string, HudField> }): React.JSX.Element | null {
   const keys = [
     "cpu_util_pm",
     "hsm_util_pm",
@@ -376,19 +390,21 @@ function MoreSection({ byKey, node }: { byKey: ReadonlyMap<string, HudField>; no
     "clock_drift_ppm",
     "clock_offset_ns",
     "pos_error_m",
-    "outbox_bytes",
+    "peer_cache_entries",
+    "crl_bytes",
+    "crl_expansion_pm",
   ];
   const rows = keys.map((k) => byKey.get(k)).filter(hasData);
   if (rows.length === 0) return null;
   return (
-    <details className="section insp-more" data-testid="insp-more">
+    <details className="section vo-card vo-wide insp-more" data-testid="insp-more">
       <summary>
-        <h3>Compute, GNSS and clock</h3>
+        <h3>Compute, positioning and clock</h3>
       </summary>
-      <dl className="kv">
+      <dl className="kv vo-kv-columns">
         {rows.map((f) => (
           <Fragment key={f.key}>
-            <FieldRow f={f} node={node} />
+            <FieldRow f={f} />
           </Fragment>
         ))}
       </dl>
@@ -396,75 +412,167 @@ function MoreSection({ byKey, node }: { byKey: ReadonlyMap<string, HudField>; no
   );
 }
 
-function LogTab(): React.JSX.Element {
-  const logs = useStudio((s) => s.logs);
-  return (
-    <div className="panel-body log" data-testid="inspector-log">
-      {logs.length === 0 ? (
-        <p className="dim">
-          Nothing to report. Anything the engine or this page has to say about a run — a refused frame, a
-          failed command, a world that did not match — appears here as it happens.
-        </p>
-      ) : null}
-      {logs.map((l, i) => (
-        <div className="line" key={`${l.at}-${i}`}>
-          <span className={`lvl ${l.level}`}>{l.level}</span>
-          <span className="tgt">{l.target}</span>
-          <span className="grow">{l.message}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-const TABS: readonly { id: "state" | "messages" | "why" | "log"; label: string; hint: string }[] = [
-  { id: "state", label: "Overview", hint: "The selected radio: identity, radio, security and queues" },
-  { id: "messages", label: "Messages", hint: "What the followed radio sends and hears, message by message, and its queues" },
-  { id: "why", label: "Why", hint: "Where the last number you clicked came from" },
-  { id: "log", label: "Log", hint: "What the engine and this page have reported during this session" },
+const TABS: readonly { id: InspectorTab; label: string; hint: string }[] = [
+  { id: "overview", label: "Overview", hint: "Identity, health, radio, security and queues" },
+  { id: "sent", label: "Sent", hint: "Every message this radio put on the air" },
+  { id: "received", label: "Received", hint: "Every message this radio received or lost" },
+  { id: "queues", label: "Queues", hint: "What is waiting inside this radio now" },
 ];
 
-export function Inspector(): React.JSX.Element {
+/** Overlay width, remembered per viewer. */
+const WIDTH_KEY = "vwp.studio.vehicleOverlayWidth";
+const MIN_WIDTH = 420;
+
+function readWidth(): number | null {
+  try {
+    const v = Number(localStorage.getItem(WIDTH_KEY));
+    return Number.isFinite(v) && v >= MIN_WIDTH ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeWidth(w: number): void {
+  try {
+    localStorage.setItem(WIDTH_KEY, String(Math.round(w)));
+  } catch {
+    // A private window or blocked storage: the width is only a convenience.
+  }
+}
+
+/** The dialog frame: a title with the radio's identity, the tabs, the body, and a drag handle on its left edge. */
+export function Inspector({ onClose }: { onClose: () => void }): React.JSX.Element {
   const tab = useStudio((s) => s.inspectorTab);
   const setTab = useStudio((s) => s.setInspectorTab);
   const selectedNode = useStudio((s) => s.selectedNode);
-  const hudDocked = useStudio((s) => s.hudDocked);
-  const logs = useStudio((s) => s.logs.length);
-  const label = selectedNode !== null ? engine.nodes.get(selectedNode)?.label || `node ${selectedNode}` : "Inspector";
+  const feed = useStudio((s) => s.feed);
+  const telemetry = useStudio((s) => s.telemetry);
+  const security = useStudio((s) => s.security);
+  const pseudonym = useStudio((s) => s.pseudonym);
+  const [width, setWidth] = useState<number | null>(readWidth);
+  const host = useRef<HTMLElement | null>(null);
+  const health = useMemo(() => vehicleHealth(telemetry, security), [telemetry, security]);
+
+  const info = selectedNode !== null ? engine.nodes.get(selectedNode) : undefined;
+  const kind = info?.kind === 2 ? "Roadside unit" : info?.kind === 1 ? "Pedestrian device" : "Vehicle";
+  const label = selectedNode !== null ? `${kind} ${info?.label || `node ${selectedNode}`}` : "Vehicle details";
+  const line = pseudonymLine(security, pseudonym);
+
+  // Focus moves into the dialog when it opens, so Escape and the tab keys work at once. Closing it
+  // closes the message being read, which resumes the feed that reading paused.
+  useEffect(() => {
+    const el = host.current;
+    if (el && !el.contains(document.activeElement)) el.focus();
+    return () => {
+      const open = useStudio.getState().feed.open;
+      if (open) useStudio.getState().readFeedMessage(open.dir, null);
+    };
+  }, []);
+
+  // A message opens inline in its own list, so leaving that list is done reading it: the message
+  // closes and a pause that opening it made ends (the Queues tab would otherwise sit frozen).
+  const switchTab = (t: InspectorTab): void => {
+    const open = useStudio.getState().feed.open;
+    if (open && open.dir !== t) useStudio.getState().readFeedMessage(open.dir, null);
+    setTab(t);
+  };
+
+  const onDrag = useCallback((ev: React.PointerEvent<HTMLDivElement>) => {
+    const el = host.current;
+    const stage = el?.parentElement;
+    if (!el || !stage) return;
+    ev.preventDefault();
+    const right = el.getBoundingClientRect().right;
+    const max = stage.getBoundingClientRect().width - 16;
+    const move = (e: PointerEvent): void => {
+      const w = Math.min(max, Math.max(MIN_WIDTH, right - e.clientX));
+      setWidth(w);
+    };
+    const up = (e: PointerEvent): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      writeWidth(Math.min(max, Math.max(MIN_WIDTH, right - e.clientX)));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }, []);
+
+  const count = (t: InspectorTab): string | null =>
+    selectedNode === null ? null : t === "sent" ? String(feed.sent.length) : t === "received" ? String(feed.received.length) : null;
 
   return (
-    <>
-      <div className="panel-head insp-head">
-        <span className="insp-title" data-testid="inspector-title">
-          {label}
-        </span>
-      </div>
-      <div className="insp-tabs tabs" role="tablist" aria-label="Inspector">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            className={tab === t.id ? "active" : ""}
-            onClick={() => setTab(t.id)}
-            data-testid={`tab-${t.id}`}
-            title={t.hint}
-          >
-            {t.label}
-            {t.id === "log" && logs > 0 ? <span className="count">{logs}</span> : null}
-          </button>
-        ))}
-      </div>
-      {tab === "state" ? <StateTab /> : null}
-      {tab === "messages" ? <MessagePanel /> : null}
-      {tab === "why" ? <WhyTab /> : null}
-      {tab === "log" ? <LogTab /> : null}
-      {hudDocked ? (
-        <div className="panel-foot" style={{ display: "block", padding: 0 }}>
-          <ObuHud docked />
+    <section
+      ref={host}
+      className="vehicle-overlay"
+      role="dialog"
+      aria-label={label}
+      tabIndex={-1}
+      data-testid="inspector-panel"
+      style={width !== null ? { width } : undefined}
+    >
+      <div
+        className="vo-resize"
+        onPointerDown={onDrag}
+        onDoubleClick={() => {
+          setWidth(null);
+          writeWidth(0);
+        }}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Drag to resize; double-click to reset"
+        title="Drag to resize; double-click to reset"
+      />
+      <header className="vo-head">
+        <div className="vo-title">
+          <h2 data-testid="inspector-title">{label}</h2>
+          {line ? (
+            <span className="dim mono" title={line.digest}>
+              pseudonym {shortDigest(line.digest)}
+              {line.indices ? ` (${line.indices})` : ""}
+            </span>
+          ) : null}
+          {selectedNode !== null && telemetry ? (
+            health.length === 0 ? (
+              <span className="vo-chip ok" data-testid="inspector-health">
+                healthy
+              </span>
+            ) : (
+              <span className={`vo-chip ${health[0].level}`} data-testid="inspector-health" title={health.map((h) => h.text).join("\n")}>
+                {health.length === 1 ? health[0].text : `${health.length} issues`}
+              </span>
+            )
+          ) : null}
         </div>
-      ) : null}
-    </>
+        <button type="button" className="icon-button" onClick={onClose} aria-label="Close the vehicle details" title="Close (Esc)" data-testid="inspector-close">
+          <CloseIcon />
+        </button>
+      </header>
+      <div className="vo-tabs tabs" role="tablist" aria-label="Vehicle details">
+        {TABS.map((t) => {
+          const n = count(t.id);
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.id}
+              className={tab === t.id ? "active" : ""}
+              onClick={() => switchTab(t.id)}
+              data-testid={`tab-${t.id}`}
+              title={t.hint}
+            >
+              {t.label}
+              {n !== null ? <span className="count">{n}</span> : null}
+            </button>
+          );
+        })}
+      </div>
+      <div className="vo-body">
+        {tab === "overview" ? <Overview /> : null}
+        {tab === "sent" ? <MessageList dir="sent" /> : null}
+        {tab === "received" ? <MessageList dir="received" /> : null}
+        {tab === "queues" ? <QueueList /> : null}
+      </div>
+    </section>
   );
 }

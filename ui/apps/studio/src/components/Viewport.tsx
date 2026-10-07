@@ -84,8 +84,8 @@ export function Viewport(): React.JSX.Element {
   const selectedActor = useStudio((s) => s.selectedActor);
   const selectedNode = useStudio((s) => s.selectedNode);
   const world = useStudio((s) => s.world);
-  const hudDocked = useStudio((s) => s.hudDocked);
   const runState = useStudio((s) => s.run.state);
+  const overlayOpen = useStudio((s) => s.inspectorOpen);
   const devDetails = useStudio((s) => s.devDetails);
 
   useEffect(() => {
@@ -304,10 +304,10 @@ export function Viewport(): React.JSX.Element {
         flow above the viewport where it does not cover anything.
       */}
 
-      {/* With nothing selected the HUD only said "No radio selected" over the picture; the
-          inspector's empty state says it where it covers nothing. */}
       {cameraMode === "free" ? <FreeCameraHint canvas={canvasRef.current} /> : null}
-      {hudDocked || (selectedActor === null && selectedNode === null) ? null : <ObuHud />}
+      {/* The selected vehicle's HUD, only while something is selected and the vehicle overlay (which
+          says all of it and more, and would cut it in half) is closed. */}
+      {(selectedActor === null && selectedNode === null) || overlayOpen ? null : <ObuHud />}
     </div>
   );
 }

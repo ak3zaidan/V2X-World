@@ -19,23 +19,16 @@ export function Sparkline({
   label,
   unit,
   tick,
-  fieldKey,
-  node,
 }: {
   seriesIndex: number;
   label: string;
   unit: string;
   tick: number;
-  /** The telemetry field this series is sampled from, which is what the engine is asked to explain. */
-  fieldKey?: string;
-  /** The followed node, so the provenance question is about a node and not about "a vehicle". */
-  node?: number | null;
 }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const plotRef = useRef<uPlot | null>(null);
   const valueRef = useRef<HTMLElement | null>(null);
   const theme = useStudio((s) => s.theme);
-  const setWhy = useStudio((s) => s.setWhy);
 
   useLayoutEffect(() => {
     const host = hostRef.current;
@@ -88,29 +81,7 @@ export function Sparkline({
   return (
     <div className="spark">
       <div className="label">
-        {/*
-          The sparkline is the same telemetry field the HUD shows, plotted over the retained window,
-          so it resolves to the same provenance — and it has to be reachable here too, because this
-          row is where the shape of a value is read rather than its latest number.
-        */}
-        <button
-          type="button"
-          className="linklike"
-          title={`${label} in ${unit} — where does this come from?`}
-          data-testid={`spark-why-${seriesIndex}`}
-          aria-label={`${label} in ${unit} — explain`}
-          onClick={() =>
-            setWhy({
-              kind: "node_field",
-              id: fieldKey ?? label,
-              label,
-              ...(node === null || node === undefined ? {} : { node }),
-              unit,
-            })
-          }
-        >
-          {label}
-        </button>
+        <span title={unit}>{label}</span>
         <b ref={valueRef} data-testid={`spark-value-${seriesIndex}`}>
           —
         </b>

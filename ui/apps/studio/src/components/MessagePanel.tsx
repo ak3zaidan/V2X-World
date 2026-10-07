@@ -1,22 +1,24 @@
 /**
- * The followed vehicle's messages and queues: the owner's chase-view ask.
+ * The followed radio's messages and queues, as the vehicle overlay shows them.
  *
- * "When you go down into a specific chase view for a vehicle, the user should be able to see the
- * broadcast messages being sent out and their content, along with the queue of that specific node."
+ * The owner asked to see "the broadcast messages being sent out and their content, along with the
+ * queue of that specific node" (2026-09-30), and then found the right-hand column too narrow to read
+ * them in (2026-10-06). The column became an overlay over the viewport (`components/Inspector.tsx`),
+ * and these tables were laid out for it: one column per thing a reader compares between rows.
  *
- * Three tabs. **Sent** lists every frame the vehicle put on the air; **Received** every reception it
- * resolved, with the sender, the fate or the loss cause, the signal and the delay; **Queues** its five
- * queues at this instant with the messages waiting in them. The rows stream in from the engine's
- * `node.feed` push (`lib/feed.ts`) while the vehicle is followed. Clicking a row opens it underneath:
- * every field decoded from the frame's own octets, the 1609.2 envelope, the delay stage by stage, and
- * the SPDU in hex with its header, payload, headerInfo, signer and signature marked.
+ *  * **Sent** — every frame the radio put on the air: time, type, the identity it carried (its
+ *    temporary id and message count), what it said (speed, heading, position), its size, the power
+ *    it went out at, and how long it took from generation to the air.
+ *  * **Received** — every reception resolved at the radio: time, sender, type, its fate (delivered
+ *    and verified, or lost and why), signal strength and SINR, the sender's distance, size, and the
+ *    end-to-end delay.
+ *  * **Queues** — the radio's five queues at this instant and the messages that passed through them.
  *
- * It lives in the right-hand panel, beside the viewport rather than over it, so it never covers the
- * vehicle the chase camera is following.
- *
- * The rows hold still while the pointer is over them (`lib/feed.ts`, "Hover"): newest-first rows used
- * to slide down under the cursor several times a second, so the row aimed at was not the row clicked.
- * A cell with nothing to say is blank, not "n/a".
+ * Clicking a row opens it in place, under the row: every field decoded from the frame's own octets,
+ * the IEEE 1609.2 envelope, the delay stage by stage, and the SPDU in hex with its parts marked.
+ * Opening a message pauses the feed while it is read, and closing it resumes (`lib/feed.ts`,
+ * `readMessage`); the rows also hold still while the pointer is over them. A cell with nothing to
+ * say is blank, not "n/a".
  */
 
 import { Fragment, useEffect, useMemo } from "react";
@@ -28,7 +30,7 @@ import { shortDigest, simClock } from "../lib/format.js";
 import { fieldOf, fieldText, hexRows, keyOf, typesSeen, visibleRows, type FeedDir } from "../lib/feed.js";
 
 /** Rows drawn per table; the ring keeps more, and the count says so. */
-const DRAWN = 60;
+const DRAWN = 150;
 
 /** A number with its unit, or blank when there is none: an empty cell, not "n/a". */
 const fmt = (v: number | null | undefined, digits: number, unit = ""): string =>
@@ -37,8 +39,10 @@ const fmt = (v: number | null | undefined, digits: number, unit = ""): string =>
 /** A value or blank. */
 const opt = (v: string | number | boolean | null | undefined): string => (v === null || v === undefined ? "" : String(v));
 
-/** The access layer's view of one transmission, on one line: the MCS by name and, on a
- * sidelink, the resource, the HARQ transmission and the congestion state it was granted under. */
+/** The stream clock without its hours, which a run of minutes never reaches. */
+const clock = (tNs: number): string => simClock(tNs).slice(3);
+
+/** The access layer's view of one transmission, on one line. */
 function accessLine(a: FeedAccess): string {
   const parts = [`${a.rat} ${a.mcs}`];
   if (a.slot !== undefined) {
@@ -51,61 +55,96 @@ function accessLine(a: FeedAccess): string {
 }
 
 /** A decoded field for a table cell: blank when the message has no such field, "—" when its octets say "unavailable". */
-function num(e: FeedSent | FeedReceived, k: string, digits: number): string {
+function num(e: FeedSent | FeedReceived, k: string, digits: number, scale = 1): string {
   const f = fieldOf(e, k);
   if (!f) return "";
   if (f.na) return "—";
-  return typeof f.v === "number" ? f.v.toFixed(digits) : opt(f.v);
+  return typeof f.v === "number" ? (f.v * scale).toFixed(digits) : opt(f.v);
 }
 
+/** Generation to the air, ms: the sum of the stages the engine timed, or the two instants' difference. */
+function sendLatencyMs(e: FeedSent): number | null {
+  const t = e.timing;
+  if (typeof t.generated_ns === "number") return (t.on_air_ns - t.generated_ns) / 1e6;
+  const parts = [t.sign_queue_ms, t.sign_ms, t.channel_access_ms].filter((x): x is number => typeof x === "number");
+  return parts.length === 0 ? null : parts.reduce((a, b) => a + b, 0);
+}
+
+function fate(e: FeedReceived): string {
+  if (e.outcome === "delivered") return e.verification ? `delivered, ${e.verification}` : "delivered";
+  if (e.outcome === "in-flight") return "in flight";
+  return `lost: ${(e.cause ?? "unknown").replace(/[_-]/g, " ")}`;
+}
+
+/** Row props shared by both tables: click or Enter/Space opens the message under the row. */
+function rowProps(dir: FeedDir, key: string, openKey: string | null, read: (dir: FeedDir, key: string | null) => void): React.HTMLAttributes<HTMLTableRowElement> {
+  const toggle = (): void => read(dir, openKey === key ? null : key);
+  return {
+    "aria-expanded": openKey === key,
+    tabIndex: 0,
+    onClick: toggle,
+    onKeyDown: (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        toggle();
+      }
+    },
+  };
+}
+
+const SENT_COLUMNS = 9;
+
 function SentTable({ rows, openKey }: { rows: readonly FeedSent[]; openKey: string | null }): React.JSX.Element {
-  const open = useStudio((s) => s.openFeedMessage);
+  const read = useStudio((s) => s.readFeedMessage);
   return (
     <table className="table feed-table" data-testid="feed-table-sent">
       <thead>
         <tr>
-          <th>time</th>
-          <th>type</th>
-          <th title="msgCnt · temporary id, as decoded from the payload">cnt · id</th>
-          <th title="latitude, longitude decoded from the payload">position</th>
-          <th title="speed, m/s">m/s</th>
-          <th title="heading, degrees from north">hdg</th>
-          <th title="octets on the air">B</th>
+          <th>Time</th>
+          <th>Type</th>
+          <th title="The temporary id the message carried, and its message count">Identity</th>
+          <th className="num" title="Speed the message reported">Speed</th>
+          <th className="num" title="Heading the message reported, degrees from north">Heading</th>
+          <th title="Position the message reported (the radio's GNSS belief)">Position</th>
+          <th className="num" title="Octets on the air">Size</th>
+          <th className="num" title="Transmit power">Power</th>
+          <th className="num" title="From generation to the air: signing queue, signing and channel access">Latency</th>
         </tr>
       </thead>
       <tbody>
         {rows.slice(0, DRAWN).map((e, i) => {
           const key = keyOf("sent", e);
           const rotated = i + 1 < rows.length && rows[i + 1].pseudonym !== e.pseudonym;
+          const lat = sendLatencyMs(e);
           return (
-            <tr
-              key={key}
-              data-testid="feed-row-sent"
-              data-msg={e.msg}
-              className={`${openKey === key ? "open" : ""}${rotated ? " rotated" : ""}`}
-              aria-selected={openKey === key}
-              tabIndex={0}
-              onClick={() => open("sent", openKey === key ? null : key)}
-              onKeyDown={(ev) => {
-                if (ev.key === "Enter" || ev.key === " ") {
-                  ev.preventDefault();
-                  open("sent", openKey === key ? null : key);
-                }
-              }}
-            >
-              <td>{simClock(e.t_ns).slice(3)}</td>
-              <td>
-                {e.type.toUpperCase()}
-                {rotated ? <span className="feed-badge" title="the pseudonym changed on this frame"> new id</span> : null}
-              </td>
-              <td>
-                {[num(e, "msg_cnt", 0), opt(fieldOf(e, "temp_id")?.v)].filter((x) => x !== "").join(" · ")}
-              </td>
-              <td>{fieldOf(e, "lat") ? `${num(e, "lat", 5)}, ${num(e, "lon", 5)}` : ""}</td>
-              <td>{num(e, "speed", 1)}</td>
-              <td>{num(e, "heading", 0)}</td>
-              <td>{e.bytes.on_wire}</td>
-            </tr>
+            <Fragment key={key}>
+              <tr
+                data-testid="feed-row-sent"
+                data-msg={e.msg}
+                className={`${openKey === key ? "open" : ""}${rotated ? " rotated" : ""}`}
+                {...rowProps("sent", key, openKey, read)}
+              >
+                <td className="mono">{clock(e.t_ns)}</td>
+                <td>
+                  {e.type.toUpperCase()}
+                  {rotated ? <span className="feed-badge" title="The pseudonym changed on this frame"> new identity</span> : null}
+                </td>
+                <td className="mono">{[opt(fieldOf(e, "temp_id")?.v), num(e, "msg_cnt", 0) === "" ? "" : `#${num(e, "msg_cnt", 0)}`].filter((x) => x !== "").join(" ")}</td>
+                <td className="num">{fieldOf(e, "speed") ? `${num(e, "speed", 0, 3.6)} km/h` : ""}</td>
+                <td className="num">{fieldOf(e, "heading") ? `${num(e, "heading", 0)}°` : ""}</td>
+                <td className="mono">{fieldOf(e, "lat") ? `${num(e, "lat", 5)}, ${num(e, "lon", 5)}` : ""}</td>
+                <td className="num">{e.bytes.on_wire} B</td>
+                <td className="num">{fmt(e.radio.power_dbm, 0, " dBm")}</td>
+                <td className="num">{fmt(lat, 2, " ms")}</td>
+              </tr>
+              {openKey === key ? (
+                <tr className="feed-expand">
+                  <td colSpan={SENT_COLUMNS}>
+                    <Detail />
+                  </td>
+                </tr>
+              ) : null}
+            </Fragment>
           );
         })}
       </tbody>
@@ -113,55 +152,58 @@ function SentTable({ rows, openKey }: { rows: readonly FeedSent[]; openKey: stri
   );
 }
 
-function fate(e: FeedReceived): string {
-  if (e.outcome === "delivered") return e.verification ? `delivered · ${e.verification}` : "delivered";
-  if (e.outcome === "in-flight") return "in flight";
-  return `lost · ${e.cause ?? "unknown"}`;
-}
+const RECEIVED_COLUMNS = 9;
 
 function ReceivedTable({ rows, openKey }: { rows: readonly FeedReceived[]; openKey: string | null }): React.JSX.Element {
-  const open = useStudio((s) => s.openFeedMessage);
+  const read = useStudio((s) => s.readFeedMessage);
   return (
     <table className="table feed-table" data-testid="feed-table-received">
       <thead>
         <tr>
-          <th>time</th>
-          <th title="the sending node (ground truth), or its temporary id on a node-profile connection">from</th>
-          <th>type</th>
-          <th>fate</th>
-          <th title="received power, dBm / SINR, dB">RSSI / SINR</th>
-          <th title="sender distance, m (ground truth)">m</th>
-          <th title="end-to-end delay, generation to delivery, ms">ms</th>
+          <th>Time</th>
+          <th title="The sending radio (ground truth), or the temporary id its message carried">From</th>
+          <th>Type</th>
+          <th>Outcome</th>
+          <th className="num" title="Received signal strength">Signal</th>
+          <th className="num" title="Signal to interference and noise ratio">SINR</th>
+          <th className="num" title="Distance to the sender (ground truth)">Distance</th>
+          <th className="num" title="Octets on the air">Size</th>
+          <th className="num" title="End to end: generation at the sender to delivery here">Latency</th>
         </tr>
       </thead>
       <tbody>
         {rows.slice(0, DRAWN).map((e) => {
           const key = keyOf("received", e);
           const from = e.from !== undefined && e.from !== null ? `node ${e.from}` : opt(fieldOf(e, "temp_id")?.v);
+          const outcome = e.outcome === "delivered" ? (e.verification === "unverified" ? "warn" : "ok") : e.outcome === "lost" ? "lost" : "";
           return (
-            <tr
-              key={key}
-              data-testid="feed-row-received"
-              data-outcome={e.outcome}
-              className={`${openKey === key ? "open" : ""}${e.outcome === "delivered" ? "" : " lost"}`}
-              aria-selected={openKey === key}
-              tabIndex={0}
-              onClick={() => open("received", openKey === key ? null : key)}
-              onKeyDown={(ev) => {
-                if (ev.key === "Enter" || ev.key === " ") {
-                  ev.preventDefault();
-                  open("received", openKey === key ? null : key);
-                }
-              }}
-            >
-              <td>{simClock(e.t_ns).slice(3)}</td>
-              <td data-testid="feed-from">{from}</td>
-              <td>{e.type.toUpperCase()}</td>
-              <td>{fate(e)}</td>
-              <td>{[fmt(e.rssi_dbm, 0), fmt(e.sinr_db, 0)].filter((x) => x !== "").join(" / ")}</td>
-              <td>{fmt(e.dist_m, 0)}</td>
-              <td>{fmt(e.e2e_ms, 1)}</td>
-            </tr>
+            <Fragment key={key}>
+              <tr
+                data-testid="feed-row-received"
+                data-outcome={e.outcome}
+                className={`${openKey === key ? "open" : ""}${e.outcome === "delivered" ? "" : " lost"}`}
+                {...rowProps("received", key, openKey, read)}
+              >
+                <td className="mono">{clock(e.t_ns)}</td>
+                <td data-testid="feed-from">{from}</td>
+                <td>{e.type.toUpperCase()}</td>
+                <td>
+                  <span className={`feed-outcome ${outcome}`}>{fate(e)}</span>
+                </td>
+                <td className="num">{fmt(e.rssi_dbm, 0, " dBm")}</td>
+                <td className="num">{fmt(e.sinr_db, 1, " dB")}</td>
+                <td className="num">{fmt(e.dist_m, 0, " m")}</td>
+                <td className="num">{e.bytes_on_wire === null ? "" : `${e.bytes_on_wire} B`}</td>
+                <td className="num">{fmt(e.e2e_ms, 2, " ms")}</td>
+              </tr>
+              {openKey === key ? (
+                <tr className="feed-expand">
+                  <td colSpan={RECEIVED_COLUMNS}>
+                    <Detail />
+                  </td>
+                </tr>
+              ) : null}
+            </Fragment>
           );
         })}
       </tbody>
@@ -169,24 +211,23 @@ function ReceivedTable({ rows, openKey }: { rows: readonly FeedReceived[]; openK
   );
 }
 
-/** The SPDU in hex, eight octets a line, each octet tinted by the span it belongs to. */
+/** The SPDU in hex, sixteen octets a line, each octet tinted by the span it belongs to. */
 function HexDump({ decoded }: { decoded: FeedDecoded }): React.JSX.Element | null {
-  const rows = useMemo(() => hexRows(decoded.hex, decoded.spans, 8), [decoded.hex, decoded.spans]);
+  const rows = useMemo(() => hexRows(decoded.hex, decoded.spans, 16), [decoded.hex, decoded.spans]);
   if (rows.length === 0) return null;
   const spans = decoded.spans ?? [];
   const cls = (i: number): string => (i < 0 ? "" : `span-${spans[i].name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`);
   return (
     <div className="feed-hex" data-testid="feed-hex">
+      <h4>Bytes</h4>
       <div className="feed-hex-legend">
         {spans.map((s, i) => (
           <span key={s.name} className={`feed-hex-key ${cls(i)}`} data-testid={`feed-${cls(i)}`}>
-            {s.name} <span className="faint">
-              {s.start}–{s.end - 1} ({s.end - s.start} B)
-            </span>
+            {s.name} <span className="faint">({s.end - s.start} B)</span>
           </span>
         ))}
       </div>
-      <pre className="mono" aria-label={`the SPDU, ${decoded.spdu_bytes ?? rows.length * 8} octets in hex`}>
+      <pre className="mono" aria-label={`the SPDU, ${decoded.spdu_bytes ?? rows.length * 16} octets in hex`}>
         {rows.map((r) => (
           <Fragment key={r.offset}>
             <span className="faint">{r.offset.toString(16).padStart(4, "0")} </span>
@@ -221,8 +262,8 @@ function Decoded({ d }: { d: FeedDecoded }): React.JSX.Element {
       {d.note ? <p className="dim">{d.note}</p> : null}
       {d.error ? <p className="warn-text">{d.error}</p> : null}
       {m ? (
-        <div className="section">
-          <h4>{m.format}</h4>
+        <div className="feed-detail-col">
+          <h4>Decoded fields · {m.format}</h4>
           {m.error ? <p className="warn-text">{m.error}</p> : null}
           {m.note ? <p className="dim">{m.note}</p> : null}
           <dl className="kv" data-testid="feed-fields">
@@ -239,8 +280,8 @@ function Decoded({ d }: { d: FeedDecoded }): React.JSX.Element {
         </div>
       ) : null}
       {sec ? (
-        <div className="section">
-          <h4>{sec.standard}</h4>
+        <div className="feed-detail-col">
+          <h4>Security envelope · {sec.standard}</h4>
           <dl className="kv" data-testid="feed-security">
             <KV k="PSID" v={`${sec.psid} (0x${sec.psid.toString(16)})`} />
             <KV k="generation time" v={sec.generation_time_us === null ? "" : `${sec.generation_time_us} µs since 2004-01-01`} />
@@ -258,14 +299,14 @@ function Decoded({ d }: { d: FeedDecoded }): React.JSX.Element {
           </dl>
         </div>
       ) : null}
-      <HexDump decoded={d} />
     </>
   );
 }
 
+/** The open message: how it travelled, what it said, and its bytes. */
 function Detail(): React.JSX.Element | null {
   const open = useStudio((s) => s.feed.open);
-  const close = useStudio((s) => s.openFeedMessage);
+  const read = useStudio((s) => s.readFeedMessage);
   if (!open) return null;
   const e = open.entry;
   const sent = open.dir === "sent" ? (e as FeedSent) : null;
@@ -275,72 +316,73 @@ function Detail(): React.JSX.Element | null {
       <div className="feed-detail-head">
         <b>
           {e.type.toUpperCase()}
-          {e.msg !== undefined && e.msg !== null ? ` · message ${String(e.msg)}` : ""} · {open.dir === "sent" ? "sent" : "resolved"} {simClock(e.t_ns)}
+          {e.msg !== undefined && e.msg !== null ? ` · message ${String(e.msg)}` : ""} · {open.dir === "sent" ? "sent" : "received"} at {simClock(e.t_ns)}
         </b>
-        <button type="button" className="linklike" onClick={() => close(open.dir, null)} title="Close this message">
-          close
+        <button type="button" className="small" onClick={() => read(open.dir, null)} title="Close this message and resume the feed" data-testid="feed-detail-close">
+          Close
         </button>
       </div>
-      {sent ? (
-        <dl className="kv">
-          <KV k="pseudonym" v={opt(sent.pseudonym)} />
-          <KV k="signer id" v={opt(sent.signer)} />
-          <KV
-            k="octets"
-            v={[
-              sent.bytes.payload !== undefined && sent.bytes.payload !== null ? `payload ${sent.bytes.payload}` : "",
-              sent.bytes.envelope !== undefined && sent.bytes.envelope !== null
-                ? `envelope ${sent.bytes.envelope}${sent.bytes.certificate ? ` (cert ${sent.bytes.certificate})` : ""}`
-                : "",
-              sent.bytes.network !== undefined && sent.bytes.network !== null ? `network ${sent.bytes.network}` : "",
-              sent.bytes.link !== undefined && sent.bytes.link !== null ? `link ${sent.bytes.link}` : "",
-            ]
-              .filter((x) => x !== "")
-              .join(" + ")
-              .concat(` = ${sent.bytes.on_wire} B`)}
-          />
-          <KV
-            k="radio"
-            v={[
-              fmt(sent.radio.power_dbm, 1, " dBm"),
-              sent.radio.channel !== undefined && sent.radio.channel !== null ? `channel ${sent.radio.channel}` : "",
-              sent.radio.airtime_us !== undefined && sent.radio.airtime_us !== null ? `${sent.radio.airtime_us} µs on air` : "",
-            ]
-              .filter((x) => x !== "")
-              .join(" · ")}
-          />
-          {sent.radio.access ? <KV k="access" v={accessLine(sent.radio.access)} /> : null}
-          <KV
-            k="timing"
-            v={[
-              sent.timing.sign_queue_ms !== undefined && sent.timing.sign_queue_ms !== null ? `sign queue ${fmt(sent.timing.sign_queue_ms, 3, " ms")}` : "",
-              sent.timing.sign_ms !== undefined && sent.timing.sign_ms !== null ? `signing ${fmt(sent.timing.sign_ms, 3, " ms")}` : "",
-              sent.timing.channel_access_ms !== undefined && sent.timing.channel_access_ms !== null
-                ? `channel access ${fmt(sent.timing.channel_access_ms, 3, " ms")}`
-                : "",
-            ]
-              .filter((x) => x !== "")
-              .join(" · ")}
-          />
-        </dl>
-      ) : null}
-      {rx ? (
-        <dl className="kv">
-          <KV k="from" v={rx.from !== undefined && rx.from !== null ? `node ${rx.from}` : "not shown on a node-profile connection"} />
-          <KV k="fate" v={fate(rx)} testid="feed-fate" />
-          <KV
-            k="signal"
-            v={[fmt(rx.rssi_dbm, 1, " dBm"), rx.sinr_db !== undefined && rx.sinr_db !== null ? `SINR ${fmt(rx.sinr_db, 1, " dB")}` : "", fmt(rx.dist_m, 1, " m")]
-              .filter((x) => x !== "")
-              .join(" · ")}
-          />
-          <KV k="end to end" v={fmt(rx.e2e_ms, 3, " ms")} />
-          {Object.entries(rx.stages_ms).map(([k, v]) => (
-            <KV key={k} k={`· ${k.replace(/_/g, " ")}`} v={`${v.toFixed(3)} ms`} />
-          ))}
-        </dl>
-      ) : null}
-      {e.decoded ? <Decoded d={e.decoded} /> : <p className="dim">The receiver never had these octets: the frame was lost before it reached the application.</p>}
+      <div className="feed-detail-grid">
+        <div className="feed-detail-col">
+          <h4>{sent ? "Transmission" : "Reception"}</h4>
+          {sent ? (
+            <dl className="kv">
+              <KV k="pseudonym" v={opt(sent.pseudonym)} />
+              <KV k="signed with" v={opt(sent.signer)} />
+              <KV
+                k="size"
+                v={[
+                  sent.bytes.payload !== undefined && sent.bytes.payload !== null ? `payload ${sent.bytes.payload}` : "",
+                  sent.bytes.envelope !== undefined && sent.bytes.envelope !== null
+                    ? `security ${sent.bytes.envelope}${sent.bytes.certificate ? ` (certificate ${sent.bytes.certificate})` : ""}`
+                    : "",
+                  sent.bytes.network !== undefined && sent.bytes.network !== null ? `network ${sent.bytes.network}` : "",
+                  sent.bytes.link !== undefined && sent.bytes.link !== null ? `link ${sent.bytes.link}` : "",
+                ]
+                  .filter((x) => x !== "")
+                  .join(" + ")
+                  .concat(` = ${sent.bytes.on_wire} B`)}
+              />
+              <KV
+                k="radio"
+                v={[
+                  fmt(sent.radio.power_dbm, 1, " dBm"),
+                  sent.radio.channel !== undefined && sent.radio.channel !== null ? `channel ${sent.radio.channel}` : "",
+                  sent.radio.airtime_us !== undefined && sent.radio.airtime_us !== null ? `${sent.radio.airtime_us} µs on air` : "",
+                ]
+                  .filter((x) => x !== "")
+                  .join(" · ")}
+              />
+              {sent.radio.access ? <KV k="access" v={accessLine(sent.radio.access)} /> : null}
+              <KV k="signing queue" v={fmt(sent.timing.sign_queue_ms, 3, " ms")} />
+              <KV k="signing" v={fmt(sent.timing.sign_ms, 3, " ms")} />
+              <KV k="channel access" v={fmt(sent.timing.channel_access_ms, 3, " ms")} />
+            </dl>
+          ) : null}
+          {rx ? (
+            <dl className="kv">
+              <KV k="from" v={rx.from !== undefined && rx.from !== null ? `node ${rx.from}` : "not shown on a node-profile connection"} />
+              <KV k="outcome" v={fate(rx)} testid="feed-fate" />
+              <KV
+                k="signal"
+                v={[fmt(rx.rssi_dbm, 1, " dBm"), rx.sinr_db !== undefined && rx.sinr_db !== null ? `SINR ${fmt(rx.sinr_db, 1, " dB")}` : "", fmt(rx.dist_m, 1, " m away")]
+                  .filter((x) => x !== "")
+                  .join(" · ")}
+              />
+              <KV k="end to end" v={fmt(rx.e2e_ms, 3, " ms")} />
+              {Object.entries(rx.stages_ms).map(([k, v]) => (
+                <KV key={k} k={`· ${k.replace(/_/g, " ")}`} v={`${v.toFixed(3)} ms`} />
+              ))}
+            </dl>
+          ) : null}
+        </div>
+        {e.decoded ? (
+          <Decoded d={e.decoded} />
+        ) : (
+          <p className="dim">This radio never had the octets: the frame was lost before it reached the application.</p>
+        )}
+      </div>
+      {e.decoded ? <HexDump decoded={e.decoded} /> : null}
     </div>
   );
 }
@@ -351,25 +393,26 @@ function QueueTable({ queues, stepMs }: { queues: readonly FeedQueue[]; stepMs: 
       <table className="table feed-table" data-testid="feed-queues">
         <thead>
           <tr>
-            <th>queue</th>
-            <th title={`messages waiting at this instant / the most at once during the last ${stepMs} ms`}>now/peak</th>
-            <th title="being served now">srv</th>
-            <th title="wait, median over the last second, ms">p50</th>
-            <th title="wait, 95th percentile over the last second, ms">p95</th>
-            <th title="drops over the last ten seconds">drops</th>
-            <th title="the node's own telemetry window: depth p50 / p95">node</th>
+            <th>Queue</th>
+            <th>What it holds</th>
+            <th className="num" title={`Messages waiting at this instant / the most at once during the last ${stepMs} ms`}>Waiting now / peak</th>
+            <th className="num" title="Being served now">In service</th>
+            <th className="num" title="Wait, median over the last second">Wait p50</th>
+            <th className="num" title="Wait, 95th percentile over the last second">Wait p95</th>
+            <th title="Dropped over the last ten seconds, by cause">Dropped</th>
           </tr>
         </thead>
         <tbody>
           {queues.map((q) => (
-            <tr key={q.id} data-testid={`queue-${q.id}`} title={q.what}>
+            <tr key={q.id} data-testid={`queue-${q.id}`}>
               <td>{q.label}</td>
-              <td data-testid={`queue-${q.id}-depth`} data-depth={q.depth ?? ""} data-peak={q.peak ?? ""}>
-                {q.depth === null ? "—" : `${q.depth}/${q.peak ?? q.depth}`}
+              <td className="dim">{q.what}</td>
+              <td className="num" data-testid={`queue-${q.id}-depth`} data-depth={q.depth ?? ""} data-peak={q.peak ?? ""}>
+                {q.depth === null ? "—" : `${q.depth} / ${q.peak ?? q.depth}`}
               </td>
-              <td>{q.in_service}</td>
-              <td>{fmt(q.wait_p50_ms, 2)}</td>
-              <td>{fmt(q.wait_p95_ms, 2)}</td>
+              <td className="num">{q.in_service}</td>
+              <td className="num">{fmt(q.wait_p50_ms, 2, " ms")}</td>
+              <td className="num">{fmt(q.wait_p95_ms, 2, " ms")}</td>
               <td title={q.drops_note} className={Object.keys(q.drops).length > 0 ? "warn-text" : undefined} data-testid={`queue-${q.id}-drops`}>
                 {Object.keys(q.drops).length === 0
                   ? q.drops_note
@@ -379,7 +422,6 @@ function QueueTable({ queues, stepMs }: { queues: readonly FeedQueue[]; stepMs: 
                       .map(([k, v]) => `${k.replace(/_/g, " ")} ${v}`)
                       .join(", ")}
               </td>
-              <td>{q.reported_depth ? `${opt(q.reported_depth.p50)}/${opt(q.reported_depth.p95)}` : ""}</td>
             </tr>
           ))}
         </tbody>
@@ -389,18 +431,18 @@ function QueueTable({ queues, stepMs }: { queues: readonly FeedQueue[]; stepMs: 
         .map((q) => (
           <div className="section" key={q.id} data-testid={`queue-waiting-${q.id}`}>
             <h4>
-              {q.label} queue in the last {stepMs} ms: {q.depth ?? 0} waiting now, {q.waiting.length + q.waiting_omitted} passed through
+              {q.label}: {q.depth ?? 0} waiting now, {q.waiting.length + q.waiting_omitted} passed through in the last {stepMs} ms
               {q.waiting_omitted > 0 ? ` (${q.waiting_omitted} not listed)` : ""}
             </h4>
             <table className="table feed-table">
               <thead>
                 <tr>
-                  <th>message</th>
-                  <th>type</th>
-                  <th>from</th>
-                  <th>enqueued</th>
-                  <th>waited</th>
-                  <th>now</th>
+                  <th>Message</th>
+                  <th>Type</th>
+                  <th>From</th>
+                  <th>Queued at</th>
+                  <th className="num">Waited</th>
+                  <th>Now</th>
                 </tr>
               </thead>
               <tbody>
@@ -411,12 +453,12 @@ function QueueTable({ queues, stepMs }: { queues: readonly FeedQueue[]; stepMs: 
                     data-waiting={w.left_ns === null ? "yes" : "no"}
                     className={w.left_ns === null ? undefined : "lost"}
                   >
-                    <td>{opt(w.msg)}</td>
+                    <td className="mono">{opt(w.msg)}</td>
                     <td>{w.type.toUpperCase()}</td>
-                    <td>{w.from === null ? "self" : `node ${w.from}`}</td>
-                    <td>{simClock(w.enqueued_ns).slice(3)}</td>
-                    <td>{w.waited_ms.toFixed(2)} ms</td>
-                    <td>{w.left_ns === null ? w.stage : `left at ${simClock(w.left_ns).slice(6)} · ${w.stage}`}</td>
+                    <td>{w.from === null ? "itself" : `node ${w.from}`}</td>
+                    <td className="mono">{clock(w.enqueued_ns)}</td>
+                    <td className="num">{w.waited_ms.toFixed(2)} ms</td>
+                    <td>{w.left_ns === null ? w.stage : `left at ${simClock(w.left_ns).slice(6)}, ${w.stage}`}</td>
                   </tr>
                 ))}
               </tbody>
@@ -427,33 +469,17 @@ function QueueTable({ queues, stepMs }: { queues: readonly FeedQueue[]; stepMs: 
   );
 }
 
-export function MessagePanel(): React.JSX.Element {
+/**
+ * The line over a table: whether the list is moving, the Pause button, and the filters. The
+ * bookkeeping (rows the push limit left out, rows the ring let go, frames never detected) is in the
+ * status line's tooltip.
+ */
+function FeedBar({ dir }: { dir: FeedDir | null }): React.JSX.Element {
   const feed = useStudio((s) => s.feed);
-  const tab = useStudio((s) => s.feedTab);
-  const setTab = useStudio((s) => s.setFeedTab);
   const setPaused = useStudio((s) => s.setFeedPaused);
+  const read = useStudio((s) => s.readFeedMessage);
   const setFilter = useStudio((s) => s.setFeedFilter);
-  const setHover = useStudio((s) => s.setFeedHover);
-  const selectedNode = useStudio((s) => s.selectedNode);
-  // A list that unmounts under the pointer (a tab switch) never sees the pointer leave.
-  useEffect(() => () => setHover(false), [setHover]);
-  const hold = {
-    onPointerEnter: () => setHover(true),
-    onPointerLeave: () => setHover(false),
-  };
-
-  if (selectedNode === null) {
-    return (
-      <div className="panel-body" data-testid="message-panel">
-        <p className="dim">Follow a vehicle and what it broadcasts, what it hears and what is queued inside it appears here, message by message.</p>
-      </div>
-    );
-  }
-
   const types = typesSeen(feed);
-  const sent = visibleRows(feed, "sent");
-  const received = visibleRows(feed, "received");
-  const openKey = feed.open?.key ?? null;
   const latest = feed.sent[0];
   const toggleType = (t: string): void => {
     const on = new Set(feed.types);
@@ -461,44 +487,25 @@ export function MessagePanel(): React.JSX.Element {
     else on.add(t);
     setFilter({ types: [...on] });
   };
-  const dir: FeedDir | null = tab === "queues" ? null : tab;
-
+  const holding = feed.paused || feed.hovering;
   return (
-    <div className="panel-body feed" data-testid="message-panel">
-      <div className="feed-bar">
-        <div className="tabs feed-tabs" role="tablist">
-          {(["sent", "received", "queues"] as const).map((t) => (
-            <button
-              key={t}
-              type="button"
-              role="tab"
-              aria-selected={tab === t}
-              className={tab === t ? "active" : ""}
-              data-testid={`feed-tab-${t}`}
-              onClick={() => setTab(t)}
-            >
-              {t === "sent" ? `Sent ${feed.sent.length}` : t === "received" ? `Received ${feed.received.length}` : "Queues"}
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          data-testid="feed-pause"
-          aria-pressed={feed.paused}
-          onClick={() => setPaused(!feed.paused)}
-          title={feed.paused ? "Show what arrived while paused and keep streaming" : "Freeze the tables; messages keep arriving and are shown on resume"}
-        >
-          {feed.paused ? `Resume${feed.held.length > 0 ? ` (${feed.held.length})` : ""}` : "Pause"}
-        </button>
-      </div>
-
-      {/*
-        One short line: whose messages, and whether the list is moving. The bookkeeping — rows the
-        push limit left out, rows the ring let go, frames the receiver never detected — is in the
-        line's tooltip; it used to be spelled out here and ran to three lines at the panel's width.
-      */}
-      <div
-        className="feed-status faint"
+    <div className="feed-bar">
+      <button
+        type="button"
+        data-testid="feed-pause"
+        aria-pressed={feed.paused}
+        className={feed.paused ? "active" : undefined}
+        onClick={() => {
+          // Resuming a pause that opening a message made also closes the message.
+          if (feed.paused && feed.pausedForReading && feed.open) read(feed.open.dir, null);
+          else setPaused(!feed.paused);
+        }}
+        title={feed.paused ? "Show what arrived while paused and keep streaming" : "Freeze the tables; messages keep arriving and are shown on resume"}
+      >
+        {feed.paused ? `Resume${feed.held.length > 0 ? ` (${feed.held.length} waiting)` : ""}` : "Pause"}
+      </button>
+      <span
+        className={`feed-status${holding ? " held" : ""}`}
         data-testid="feed-status"
         title={
           [
@@ -516,15 +523,15 @@ export function MessagePanel(): React.JSX.Element {
           "waiting for the engine's first push…"
         ) : (
           <>
-            {latest?.pseudonym ? <>pseudonym {shortDigest(latest.pseudonym)} · </> : null}
-            {feed.paused ? "paused" : feed.hovering ? "held while the pointer is over the list" : "live"} at {simClock(feed.tNs)}
-            {(feed.paused || feed.hovering) && feed.held.length > 0 ? ` · ${feed.held.length} update${feed.held.length === 1 ? "" : "s"} waiting` : ""}
+            {feed.paused ? (feed.pausedForReading ? "paused while you read a message" : "paused") : feed.hovering ? "held while the pointer is over the list" : "live"} at {simClock(feed.tNs)}
+            {holding && feed.held.length > 0 ? ` · ${feed.held.length} update${feed.held.length === 1 ? "" : "s"} waiting` : ""}
+            {latest?.pseudonym ? <> · pseudonym {shortDigest(latest.pseudonym)}</> : null}
           </>
         )}
-      </div>
-
+      </span>
+      <span className="grow" />
       {dir !== null && types.length > 1 ? (
-        <div className="feed-filters" data-testid="feed-filters">
+        <span className="feed-filters" data-testid="feed-filters">
           {types.map((t) => (
             <button
               key={t}
@@ -537,60 +544,98 @@ export function MessagePanel(): React.JSX.Element {
               {t.toUpperCase()}
             </button>
           ))}
-        </div>
+        </span>
       ) : null}
       {dir === "received" ? (
-        <div className="feed-filters">
-          <label>
-            show{" "}
-            <select
-              value={feed.outcome}
-              data-testid="feed-outcome"
-              onChange={(ev) => setFilter({ outcome: ev.target.value as "all" | "delivered" | "lost" })}
-            >
-              <option value="all">every fate</option>
-              <option value="delivered">delivered</option>
-              <option value="lost">lost</option>
-            </select>
-          </label>
+        <label className="feed-filters">
+          Show{" "}
+          <select
+            value={feed.outcome}
+            data-testid="feed-outcome"
+            onChange={(ev) => setFilter({ outcome: ev.target.value as "all" | "delivered" | "lost" })}
+          >
+            <option value="all">every outcome</option>
+            <option value="delivered">delivered only</option>
+            <option value="lost">lost only</option>
+          </select>
+        </label>
+      ) : null}
+    </div>
+  );
+}
+
+/** The rows hold still while the pointer is over them; a list that unmounts under it never sees it leave. */
+function useHoverHold(): { onPointerEnter: () => void; onPointerLeave: () => void } {
+  const setHover = useStudio((s) => s.setFeedHover);
+  useEffect(() => () => setHover(false), [setHover]);
+  return { onPointerEnter: () => setHover(true), onPointerLeave: () => setHover(false) };
+}
+
+/** The open message when its row is not drawn (filtered out, or past the drawn rows): shown above the table. */
+function OrphanDetail({ dir, drawnKeys }: { dir: FeedDir; drawnKeys: ReadonlySet<string> }): React.JSX.Element | null {
+  const open = useStudio((s) => s.feed.open);
+  if (!open || open.dir !== dir || drawnKeys.has(open.key)) return null;
+  return <Detail />;
+}
+
+function NoRadio(): React.JSX.Element {
+  return (
+    <div className="panel-body" data-testid="message-panel">
+      <p className="dim">Select a vehicle and every message it sends and receives appears here.</p>
+    </div>
+  );
+}
+
+/** One direction of the feed: the bar, the open message if its row is not drawn, and the table. */
+export function MessageList({ dir }: { dir: FeedDir }): React.JSX.Element {
+  const feed = useStudio((s) => s.feed);
+  const selectedNode = useStudio((s) => s.selectedNode);
+  const hold = useHoverHold();
+  if (selectedNode === null) return <NoRadio />;
+  const openKey = feed.open?.key ?? null;
+  const rows: readonly (FeedSent | FeedReceived)[] = dir === "sent" ? visibleRows(feed, "sent") : visibleRows(feed, "received");
+  const drawnKeys = new Set(rows.slice(0, DRAWN).map((e) => keyOf(dir, e)));
+  return (
+    <div className="panel-body feed" data-testid="message-panel">
+      <FeedBar dir={dir} />
+      <OrphanDetail dir={dir} drawnKeys={drawnKeys} />
+      {rows.length === 0 ? (
+        <p className="dim">{dir === "sent" ? "Nothing sent by this radio yet in the part of the run played so far." : "Nothing received that passes the filters."}</p>
+      ) : (
+        <div className="feed-scroll" data-testid={`feed-scroll-${dir}`} {...hold}>
+          {dir === "sent" ? (
+            <SentTable rows={rows as readonly FeedSent[]} openKey={openKey} />
+          ) : (
+            <ReceivedTable rows={rows as readonly FeedReceived[]} openKey={openKey} />
+          )}
         </div>
-      ) : null}
+      )}
+      {rows.length > DRAWN ? <p className="faint">Showing the newest {DRAWN} of {rows.length}.</p> : null}
+    </div>
+  );
+}
 
-      {dir === "sent" ? (
-        sent.length === 0 ? (
-          <p className="dim">Nothing sent yet by this radio in the part of the run played so far.</p>
-        ) : (
-          <div className="feed-scroll" data-testid="feed-scroll-sent" {...hold}>
-            <SentTable rows={sent} openKey={openKey} />
-          </div>
-        )
-      ) : null}
-      {dir === "received" ? (
-        received.length === 0 ? (
-          <p className="dim">Nothing received that passes the filters.</p>
-        ) : (
-          <div className="feed-scroll" data-testid="feed-scroll-received" {...hold}>
-            <ReceivedTable rows={received} openKey={openKey} />
-          </div>
-        )
-      ) : null}
-      {dir === null ? (
-        feed.queues ? (
-          <>
-            <QueueTable queues={feed.queues.list} stepMs={feed.queues.step_ms} />
-            <p className="help">
-              {feed.queues.source}.
-              {typeof feed.queues.kernel_lead_ms === "number" && feed.queues.kernel_lead_ms < 2 * feed.queues.step_ms
-                ? ` The engine is only ${feed.queues.kernel_lead_ms.toFixed(0)} ms ahead of this instant, so a message still queued past that is not yet known and "now" may read low.`
-                : ""}
-            </p>
-          </>
-        ) : (
-          <p className="dim">No queue reading yet.</p>
-        )
-      ) : null}
-
-      <Detail />
+/** The radio's queues at this instant and what passed through them. */
+export function QueueList(): React.JSX.Element {
+  const feed = useStudio((s) => s.feed);
+  const selectedNode = useStudio((s) => s.selectedNode);
+  if (selectedNode === null) return <NoRadio />;
+  return (
+    <div className="panel-body feed" data-testid="message-panel">
+      <FeedBar dir={null} />
+      {feed.queues ? (
+        <>
+          <QueueTable queues={feed.queues.list} stepMs={feed.queues.step_ms} />
+          <p className="help">
+            {feed.queues.source}.
+            {typeof feed.queues.kernel_lead_ms === "number" && feed.queues.kernel_lead_ms < 2 * feed.queues.step_ms
+              ? ` The engine is only ${feed.queues.kernel_lead_ms.toFixed(0)} ms ahead of this instant, so a message still queued past that is not yet known and "now" may read low.`
+              : ""}
+          </p>
+        </>
+      ) : (
+        <p className="dim">No queue reading yet.</p>
+      )}
     </div>
   );
 }

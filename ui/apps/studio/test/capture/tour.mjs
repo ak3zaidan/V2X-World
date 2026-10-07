@@ -11,7 +11,7 @@
  *   2. aerial-framed     the same altitude, framed on the traffic (the `f` key)
  *   3. fly-down          mid-flight, one second after the click
  *   4. chase             behind the vehicle, settled, as the app ships it
- *   5. chase-hud-docked  the same frame with the HUD moved out of the viewport
+ *   5. (retired: the HUD no longer docks)
  *   6. dashboard         from the driver's seat
  *   7. back-out          returned to the map with the follow kept
  *
@@ -401,14 +401,8 @@ async function main() {
   const motion = await page.evaluate(measureMotion);
   const signals = await page.evaluate(signalAgreement);
 
-  // 5. The same frame with the HUD out of the way, through the app's own "HUD dock" control rather
-  //    than by hiding DOM from underneath it: if the car appears here and not in the picture
-  //    before, the renderer is right and the panel is in front of it.
-  await page.getByTestId("hud-dock").click();
-  await page.waitForTimeout(1200);
-  await shot("chase-hud-docked", "the same chase frame with the OBU HUD docked into the inspector");
-  await page.getByTestId("hud-dock").click();
-  await page.waitForTimeout(600);
+  // 5. (The "HUD docked" frame is gone: the HUD no longer docks, and the vehicle details are an
+  //    overlay opened on demand, so the chase frame above already shows the HUD at its smallest.)
 
   // 6. The driver's seat.
   await page.evaluate(() => window.__vwpStudio.engine.viewer.cameras.setMode("dashboard", false));
