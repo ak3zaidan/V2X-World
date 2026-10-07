@@ -2391,3 +2391,30 @@ document was amended and the reason recorded:
   with an assertion so they cannot drift again.
 - **The staged Phase 0 cleanup would have deleted three files** that
   `01-inventory.md` §3.7 explicitly preserves. Rescued into `legacy/reference/`.
+
+## 2026-10-07 — everything merged after the account's spend limit stopped all agents
+
+Every agent stopped at once when the account hit its spend limit. Each track's work was
+committed (a wip snapshot where it was mid-change) and merged into main by the PM, with
+conflicts resolved by hand and the whole workspace compile-checked:
+
+- Merged: the owner-review round (stabilise, validation, settings and scenarios, health
+  bands and run summary, always-on agent, scene and cameras, vehicle overlay, UI cleanup),
+  the agent specialist, the US city library with scenario/city separation (64 extracts in
+  worlds/cache; `v2xw cities`; `cities.list` over the API), threshold and post-quantum,
+  long runs (checkpoint and resume, record levels, progress), traffic realism, emissions
+  and energy, the driving-model library (ACC/CACC, sub-lane), and demand and route choice.
+- NOT merged: the city-scale track (branch wrap2/scale). It rewrote the mobility step to
+  run in parallel at the same time as traffic realism changed it and long runs restructured
+  the CLI runner; untangling it needs its own pass. The V2X-networking, cellular/IP and SUMO
+  interop tracks never started.
+- Verified: `cargo check --workspace` passes, release binaries rebuilt, Studio typecheck
+  clean, default scenarios validate, the engine starts and serves `cities.list`.
+- Not verified: no test suite was run after these merges. Several merged tracks were
+  mid-change, so expect rough edges.
+- Known issues: resuming a checkpointed run that used `--city` falls back to the scenario's
+  own world (the checkpoint does not record the city yet); the network validation suite
+  reported real findings for their owners (CAM PSID 0x20 vs registry 36, an 802.11p noise
+  floor off by 0.025 dB, an OpenSSL signature interop check, an analytical-collision
+  mismatch at N=20); the trafficval IDM rest gap is 1.927 m against [1.95, 2.5]; the
+  see-through-ground fix shipped in the scene track but is unconfirmed by the owner.
