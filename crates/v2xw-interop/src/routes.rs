@@ -507,12 +507,18 @@ pub fn write_rou_xml(trips: &[(TripRequest, Vec<String>)], ids: &SumoIds, world:
             "id=\"t{}\" type=\"{ty}\" depart=\"{depart:.3}\" departLane=\"{lane_index}\" departPos=\"{:.2}\" departSpeed=\"max\"",
             t.seq, t.origin_s_m
         );
-        if edges.len() >= 2 || (edges.len() == 1 && ids.edge_of_lane(world, t.destination) == Some(edges[0].as_str())) {
+        if !edges.is_empty() {
             let _ = writeln!(s, "  <vehicle {common}>\n    <route edges=\"{}\"/>\n  </vehicle>", edges.join(" "));
         } else {
-            let from = ids.edge_of_lane(world, t.origin).unwrap_or("");
-            let to = ids.edge_of_lane(world, t.destination).unwrap_or("");
-            let _ = writeln!(s, "  <trip {common} from=\"{from}\" to=\"{to}\"/>");
+            match (ids.edge_of_lane(world, t.origin), ids.edge_of_lane(world, t.destination)) {
+                (Some(from), Some(to)) => {
+                    let _ = writeln!(s, "  <trip {common} from=\"{from}\" to=\"{to}\"/>");
+                }
+                // An endpoint inside a junction has no SUMO edge: said, not written.
+                _ => {
+                    let _ = writeln!(s, "  <!-- trip {} left out: an endpoint is not on a SUMO edge -->", t.seq);
+                }
+            }
         }
     }
     s.push_str("</routes>\n");

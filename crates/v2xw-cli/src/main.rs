@@ -92,6 +92,14 @@ fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
                 Ok(fmt::info(&outcome))
             }
         }
+        Command::ExportSumo(args) => {
+            let outcome = v2xw_cli::export_sumo::export(&args.scenario, &args.out)?;
+            if args.json {
+                json(&outcome, "export outcome")
+            } else {
+                Ok(v2xw_cli::export_sumo::format(&outcome))
+            }
+        }
         Command::Energy(args) => {
             let outcome = energy::energy(&args.to_options())?;
             if args.json {

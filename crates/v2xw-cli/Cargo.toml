@@ -36,6 +36,8 @@ v2xw-server = { workspace = true }
 # The kernel. Not a `workspace = true` entry because `v2xw-engine` is a workspace member
 # that the root manifest's shared dependency table does not list.
 v2xw-engine = { path = "../v2xw-engine", version = "0.1.0" }
+# `v2xw export-sumo`.
+v2xw-interop = { path = "../v2xw-interop", version = "0.1.0" }
 # The experiment runner behind `v2xw experiment`. Same reason it is a path dependency: the
 # root manifest's shared table does not list it. The dependency goes this way round on
 # purpose — the runner does not know about the command line, it takes a `RunExecutor`, and

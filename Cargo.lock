@@ -2575,6 +2575,7 @@ dependencies = [
  "v2xw-energy",
  "v2xw-engine",
  "v2xw-experiment",
+ "v2xw-interop",
  "v2xw-metrics",
  "v2xw-mobility",
  "v2xw-msg",

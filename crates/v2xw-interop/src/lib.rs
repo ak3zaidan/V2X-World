@@ -136,3 +136,38 @@ pub fn sumo_home() -> Option<PathBuf> {
 pub fn sumo_tool(home: &std::path::Path, tool: &str) -> PathBuf {
     home.join("bin").join(tool)
 }
+
+/// Routes `trip` with this engine's free-flow Dijkstra, from its origin lane or, when that
+/// lane has no path (a left lane that only turns left, say), from any sibling lane of the
+/// same edge, to any lane of the destination's edge the class may use. The lane-level
+/// router does not change lanes within an edge; a vehicle does, so for an edge-level route
+/// (what SUMO and a `.rou.xml` need) the siblings are as good as the origin lane.
+pub fn route_trip(
+    world: &World,
+    trip: &v2xw_mobility::views::TripRequest,
+) -> Option<Vec<LaneId>> {
+    use v2xw_mobility::routing::dijkstra::DijkstraParams;
+    let mask = trip.class.class_mask();
+    let router = v2xw_mobility::Dijkstra::new(DijkstraParams::for_classes(mask));
+    let cost = v2xw_mobility::FreeFlowCost::new(world);
+    let siblings = |l: LaneId| {
+        let mut v = vec![l];
+        v.extend(
+            world
+                .edge(world.lane(l).edge)
+                .lanes
+                .iter()
+                .copied()
+                .filter(|x| *x != l && world.lane(*x).admits(mask)),
+        );
+        v
+    };
+    for o in siblings(trip.origin) {
+        for d in siblings(trip.destination) {
+            if let Some(r) = router.search(world, o, d, trip.t, &cost) {
+                return Some(r.lanes);
+            }
+        }
+    }
+    None
+}

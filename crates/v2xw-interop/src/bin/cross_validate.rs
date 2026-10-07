@@ -206,6 +206,31 @@ fn main() {
     for n in &setup_notes {
         let _ = writeln!(body, "- {n}");
     }
+    if !cases.is_empty() {
+        // The headline, over every case: this engine against SUMO's default.
+        let mut flow = (f64::MAX, f64::MIN);
+        let mut speed = (f64::MAX, f64::MIN);
+        let mut geh_min = f64::MAX;
+        let mut r_min = f64::MAX;
+        let mut tt = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+        for c in cases.iter().filter(|c| c.runs.len() >= 2) {
+            let (a, b) = (&c.runs[0], &c.runs[1]);
+            let df = (a.flow() / b.flow() - 1.0) * 100.0;
+            let dv = (a.speed_kmh() / b.speed_kmh() - 1.0) * 100.0;
+            flow = (flow.0.min(df), flow.1.max(df));
+            speed = (speed.0.min(dv), speed.1.max(dv));
+            let (share, _, r, _) = edge_agreement(a, b);
+            geh_min = geh_min.min(share * 100.0);
+            r_min = r_min.min(r);
+            let (_, mr, md) = paired_tt(a, b);
+            tt = (tt.0.min(mr), tt.1.max(mr), tt.2.min(md), tt.3.max(md));
+        }
+        let _ = writeln!(
+            body,
+            "\n**Summary, this engine against SUMO's default model, over all {} cases:** network flow {:+.0} to {:+.0} %, space-mean speed {:+.0} to {:+.0} %; at least {:.0} % of edges within GEH 5 (acceptance: 85 %); edge-speed correlation at least {:.2}; paired travel-time ratio {:.2}–{:.2} on the mean and {:.2}–{:.2} on the median.\n",
+            cases.len(), flow.0, flow.1, speed.0, speed.1, geh_min, r_min, tt.0, tt.1, tt.2, tt.3
+        );
+    }
     for c in &cases {
         let _ = writeln!(body, "\n### {} at {:.0} veh/h offered\n", c.study_name, c.rate);
         metrics_table(&mut body, &c.runs);
@@ -261,14 +286,17 @@ Both simulators drive **the same network, the same trips and the same routes**, 
 4. One observer (`crates/v2xw-interop/src/xval.rs`) reads the published states of both: Edie's generalised flow, density and speed over the measurement window and the whole network's lane length; travel time from insertion to arrival, paired by trip; vehicles below 0.1 m/s (SUMO's halting threshold) as the queue; per-edge entries compared with the GEH statistic (acceptance customarily GEH < 5 on 85 % of links, UK DMRB Vol. 12).\n\n";
 
 const EXPLANATIONS: &str = "\n## Why the simulators differ\n\n\
-The differences above come from the driving models, because network, demand, routes and measurement are shared. The mechanisms, each with the direction it pushes:\n\n\
-- **Car following.** SUMO's default is Krauss with driver imperfection σ = 0.5 (SUMO vType defaults: accel 2.6 m/s², decel 4.5 m/s², τ = 1 s, minGap 2.5 m); its random dawdling lowers free speeds and discharge rates. This engine's native drivers are calibrated IDM-family drivers with heterogeneous desired speeds and no dawdling, which discharge from a stop line faster. Expect SUMO-Krauss to show lower space-mean speed and longer queues at the same demand; SUMO-IDM sits between the two.\n\
-- **Desired speed.** SUMO draws each vehicle's speed factor from N(1, 0.1) of the lane limit (SUMO `speedFactor` default `norm(1,0.1)`), so about half of its vehicles exceed the 50 km/h limit; this engine caps at its own per-class desired speeds. Free-flow speeds on long links differ by a few km/h for that reason.\n\
-- **Junctions.** Both simulators run netconvert's signal programmes from the same `net.xml`, but yield behaviour differs: SUMO uses its junction model with impatience and look-ahead over internal lanes; this engine uses gap acceptance on the connector lanes the importer builds. Permissive left turns are where per-edge speeds disagree most.\n\
-- **Lane changing.** SUMO's LC2013 makes strategic lane changes far ahead of a turn; this engine's MOBIL with strategic urgency changes later, which produces more blocking near junction approaches at high demand.\n\
-- **Insertion.** SUMO delays an insertion until the departure position is free (`departSpeed=max` picks the highest safe speed); this engine's insertion rule differs, visible as the insertion-delay row.\n\
-- **Teleports.** SUMO removes a vehicle stuck for 300 s and re-inserts it downstream (`--time-to-teleport` default 300 s); at the highest demand this shortens SUMO's measured queues and travel times relative to a gridlock this engine would keep.\n\
-- **Reference point.** Positions are compared at the rear bumper in both (SUMO's front bumper minus vehicle length), which matters only to per-edge entry times, not to the network measures.\n";
+Network, trips, routes, signal programmes and measurement are shared, so what remains is the driving models. Two calibrations of the comparison come first:\n\n\
+- **The same simulator with a different car-following equation moves the results by a few per cent.** SUMO-IDM against SUMO-Krauss (rows above) agrees within about 1–4 % on speed and travel time, with edge-speed correlation 0.95–0.99. Where this engine differs from SUMO by more than that, the difference is not the car-following equation alone: it is the rest of the driver model (lane changing, junction behaviour, insertion).\n\
+- **Mean and median travel-time ratios separate a tail from a shift.** Where the paired mean ratio is well above the median ratio, most trips take about as long in both simulators and a minority take much longer in one of them.\n\n\
+The mechanisms that can produce the observed differences, with what each predicts:\n\n\
+- **Lane changing before turns.** SUMO's LC2013 makes strategic lane changes far ahead of a turn; this engine's MOBIL with strategic urgency changes later. A vehicle that reaches the end of its lane in the wrong lane waits for a gap, which slows a minority of trips a great deal and the rest not at all: the tail signature. Not yet isolated by an experiment (next step: rerun with turning trips only, and with SUMO's `--lanechange.duration` and `lcStrategic` varied).\n\
+- **Junctions.** Both run netconvert's signal programmes from the same `net.xml`, but yield behaviour differs: SUMO uses its junction model with impatience and look-ahead over internal lanes; this engine uses gap acceptance on the connector lanes the importer builds. The traffic validation report already records this engine's permitted-left critical gap at 5.99 s against the HCM's 4.5 s (`docs/validation/traffic.md`, `calibration/permitted-left-gap`), which lengthens left-turn delays in this engine specifically.\n\
+- **Car following.** SUMO's default Krauss has driver imperfection σ = 0.5 (SUMO vType defaults: accel 2.6 m/s², decel 4.5 m/s², τ = 1 s, minGap 2.5 m); its dawdling makes vehicles stop fully more often. Fewer vehicles below 0.1 m/s in this engine at equal or longer travel time is consistent with queues that creep rather than stand.\n\
+- **Desired speed.** SUMO draws each vehicle's speed factor from N(1, 0.1) of the lane limit (SUMO `speedFactor` default `norm(1,0.1)`), so about half its vehicles exceed the limit on open links; this engine uses its own per-class desired speeds. This raises SUMO's free-flow link speeds by a few km/h.\n\
+- **Insertion.** SUMO inserts at the highest safe speed (`departSpeed=max`); this engine's insertion waits longer for space (the insertion-delay row), though by under a second.\n\
+- **Teleports.** SUMO removes a vehicle stuck for 300 s (`--time-to-teleport` default 300 s); none of these runs approaches gridlock, so this does not explain the differences here, but it would at higher demand.\n\
+- **Reference point.** Positions are compared at the rear bumper in both (SUMO's front bumper minus vehicle length); this shifts per-edge entry times by under a second and nothing else.\n";
 
 const RADIO_INTRO: &str = "This engine's 802.11p and LTE-V2X Mode 4 stacks are run through the radio crate's highway sweep harness (`v2xw_radio::sweep`) in each study's configuration. Published curves are figures, not tables, so every reference value below was **digitised**: the Veins curve by colour-tracing the rendered figure (±0.01), the OpenCV2X curves by reading the plotted markers (±0.02). OpenCV2X is built on Artery, so it stands in for Artery here.\n\n";
 
@@ -276,4 +304,5 @@ const RADIO_EXPLAIN: &str = "\n### Why the radio curves differ\n\n\
 - **Channel.** All three studies used WINNER+ B1. This workspace has no calibrated WINNER+ B1 (04-models.md §3.3: the WINNER II D1.1.2 coefficients are not in the cache), only a shaped stand-in (`winner-b1-shaped-todo-calibrate`); the fully cited TR 37.885 highway-LOS channel is shown beside it so the channel's share of the difference is visible. The range at which delivery collapses is set almost entirely by the path-loss slope and breakpoint, which is exactly the uncalibrated part.\n\
 - **Geometry.** The harness is a ring with 3 lanes per direction; Veins used 2 lanes per direction on a 5 km straight road, OpenCV2X 3 per direction over 2 km. At equal veh/km the per-lane spacing and so the interferer geometry differ.\n\
 - **Error model.** Veins used the link-level FER-vs-Eb/N0 tables of the analytical paper's reference [32]; this engine uses the NIST PER bound for 802.11p and its BLER tables for the sidelink (04-models.md §5).\n\
+- **802.11p range.** The largest disagreement in this report: at 300–400 m this engine's 802.11p still delivers most packets on both of its channels, where the Veins study's delivery has collapsed (the Veins curve falls from 0.86 at 200 m to 0.02 at 400 m). On one shared geometry the cut-off distance is set by path loss against receiver sensitivity and the FER table's threshold; WINNER+ B1 is an urban micro-cell model with a steeper loss than either highway-LOS channel this engine can run. Until WINNER+ B1 is calibrated this is a finding about the channel, not yet about the 802.11p implementation (next step: run the sweep with a WINNER+ B1 implementation and the paper's FER table, then compare again).\n\
 - **OpenCV2X sub-channelisation.** The paper uses 2 sub-channels of 12 RB in 10 MHz; the harness keeps its 50-PRB pool with 12-PRB sub-channels and sets only MCS (QPSK r0.5) and the −126 dBm RSRP threshold, so its resource pool is larger and its collision rate at 120 veh/km lower.\n";

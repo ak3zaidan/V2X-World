@@ -51,7 +51,7 @@ use v2xw_mobility::traits::{Demand, Mobility};
 use v2xw_mobility::views::{
     ActorSpawn, DespawnCause, DriverProfile, MobilityCommand, MobilityUpdate, Route,
 };
-use v2xw_mobility::{Dijkstra, FreeFlowCost, VehicleClass};
+use v2xw_mobility::{Dijkstra, VehicleClass};
 
 use crate::SumoIds;
 use crate::traci::{Content, Get, Traci, cmd, var};
@@ -273,11 +273,7 @@ impl SumoMobility {
             let lanes = demand
                 .planned_route(world, trip)
                 .filter(|r| v2xw_mobility::demand::hooks::planned_route_is_drivable(world, trip.class, r, false))
-                .or_else(|| {
-                    Dijkstra::new(DijkstraParams::for_classes(trip.class.class_mask()))
-                        .search(world, trip.origin, trip.destination, trip.t, &FreeFlowCost::new(world))
-                        .map(|r| r.lanes)
-                });
+                .or_else(|| crate::route_trip(world, trip));
             let edges = lanes.map(|l| self.ids.edges_of_route(world, &l)).unwrap_or_default();
             if edges.is_empty() {
                 self.counters.refused += 1;

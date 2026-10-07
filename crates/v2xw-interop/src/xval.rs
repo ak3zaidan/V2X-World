@@ -603,7 +603,7 @@ pub fn export_round_trip(home: &Path, dir: &Path) -> Result<RoundTrip, String> {
     let stats = |w: &World| {
         let normal: Vec<_> = w.roads.lanes().iter().filter(|l| l.junction.is_none() && l.kind.is_motorised()).collect();
         let sig = w.roads.junctions().iter().filter(|j| matches!(j.control, v2xw_world::model::JunctionControl::Signalised { .. })).count();
-        let edges = w.roads.edges().iter().filter(|e| !e.is_internal()).count();
+        let edges = SumoIds::new(w).edge_id.len();
         (normal.len(), normal.iter().map(|l| l.length_m).sum::<f64>() / 1000.0, sig, edges)
     };
     let a = stats(&world);
