@@ -45,7 +45,7 @@
 //!
 //! | Preset | Source |
 //! |---|---|
-//! | [`IdmPreset::UrbanHcm`] (**the native engine's drivers**) | car: `T` = 1.0 s (Treiber & Kesting's city set) and `a` = 1.7 m/s², calibrated so a signalised stop line discharges at the HCM's CBD saturation flow; truck: the Kesting 2010 column |
+//! | [`IdmPreset::UrbanHcm`] (**the native engine's drivers**) | car: `T` = 1.0 s (Treiber & Kesting's city set) and `a` = 1.7 m/s², calibrated so a signalised stop line discharges at the HCM's CBD saturation flow; truck: the Kesting 2010 column with the city time gap (1.33 s), checked against the HCM heavy-vehicle equivalent |
 //! | [`IdmPreset::Kesting2010`] (the enum's default) | Kesting, Treiber and Helbing 2010, car and truck columns [R10 §B2] |
 //! | [`IdmPreset::Treiber2000`] | Treiber, Hennecke and Helbing 2000, freeway calibration [R10 §B1] |
 //! | [`IdmPreset::Kesting2007`] | the IDM set the MOBIL study used [R10 §B3] |
@@ -113,6 +113,14 @@ pub const URBAN_HCM_TIME_HEADWAY_S: f64 = 1.0;
 /// [`IdmPreset::UrbanHcm`]'s car maximum acceleration, m/s², calibrated to the HCM
 /// saturation flow (see the preset).
 pub const URBAN_HCM_MAX_ACCEL_MPS2: f64 = 1.7;
+
+/// [`IdmPreset::UrbanHcm`]'s truck time gap, seconds: the city car's 1.0 s scaled by the
+/// truck-to-car ratio of the Kesting 2010 columns (2.0 / 1.5), so a city truck keeps the
+/// same proportion more room than a city car as a freeway truck keeps over a freeway car.
+/// **Derived, then checked**: with the Kesting 2010 truck's 2.0 s a truck in a saturated
+/// queue was worth 2.38 cars, against the HCM's heavy-vehicle equivalent `E_T` = 2.0
+/// (`tests/realism.rs`, the saturation-flow study with a fifth of the queue trucks).
+pub const URBAN_HCM_TRUCK_TIME_HEADWAY_S: f64 = URBAN_HCM_TIME_HEADWAY_S * (2.0 / 1.5);
 
 /// The model-wide constants: everything that is not per vehicle.
 ///
@@ -206,7 +214,9 @@ pub enum IdmPreset {
     /// set (`T` 1.5 s, `a` 1.4 m/s²) discharged a queue at 2.68 s a vehicle (1,340
     /// veh/h/ln), far below the HCM's 1,710 for a CBD lane, and `a` = 1.7 with `T` = 1.0
     /// gives 2.17 s (1,657 veh/h/ln) with a mean launch acceleration of 1.24 m/s², Wang et
-    /// al. 2004's field mean of 1.25. The truck is the Kesting 2010 truck column.
+    /// al. 2004's field mean of 1.25. The truck is the Kesting 2010 truck column with its
+    /// time gap scaled to the city's ([`URBAN_HCM_TRUCK_TIME_HEADWAY_S`], 1.33 s), checked
+    /// against the HCM's heavy-vehicle equivalent of 2.0.
     UrbanHcm,
 }
 
@@ -272,7 +282,9 @@ impl IdmPreset {
                             (2013) Table 11.2 city traffic (secondary); a = 1.7 m/s² calibrated \
                             to the HCM CBD saturation flow (1,900 × 0.90 pc/h/ln) and Wang, \
                             Dixon, Li & Ogle 2004 (TRR 1883) launch acceleration on \
-                            calibration::SaturationExperiment; truck: Kesting 2010 column"
+                            calibration::SaturationExperiment; truck: Kesting 2010 column \
+                            with T scaled to the city car's (1.0 × 2.0/1.5 = 1.33 s), checked \
+                            against the HCM heavy-vehicle equivalent E_T = 2.0"
                     .to_string(),
                 accessed: Some("2026-09-29".to_string()),
                 note: Some(
@@ -322,11 +334,18 @@ impl IdmPreset {
                 | VehicleClass::Delivery
         );
         match self {
-            IdmPreset::Kesting2010 | IdmPreset::UrbanHcm if heavy => DriverProfile {
+            IdmPreset::Kesting2010 if heavy => DriverProfile {
                 desired_speed_mps: 23.6,
                 max_accel_mps2: 0.7,
                 comfort_decel_mps2: 2.0,
                 time_headway_s: 2.0,
+                min_gap_m: 4.0,
+            },
+            IdmPreset::UrbanHcm if heavy => DriverProfile {
+                desired_speed_mps: 23.6,
+                max_accel_mps2: 0.7,
+                comfort_decel_mps2: 2.0,
+                time_headway_s: URBAN_HCM_TRUCK_TIME_HEADWAY_S,
                 min_gap_m: 4.0,
             },
             IdmPreset::Kesting2010 => DriverProfile {

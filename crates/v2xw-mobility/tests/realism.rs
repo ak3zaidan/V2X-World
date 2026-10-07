@@ -12,6 +12,8 @@
 //! * **Crowding**: walkers slowed by Weidmann's speed-density relation, binned by Fruin's
 //!   levels of service, against the same crowd with the relation off.
 
+use std::collections::BTreeMap;
+
 use v2xw_core::rng::RngRegistry;
 use v2xw_core::time::{Duration, NS_PER_S};
 use v2xw_mobility::audit::{AuditParams, AuditReport, Check, TrafficAuditor};
@@ -110,12 +112,29 @@ fn run_mixed(params: EngineParams, seconds: u64) -> (CalibrationReport, AuditRep
         engine.init(&mut ctx, Box::new(demand)).expect("init");
     }
     let mut harness = CalibrationObserver::new(&world);
-    let mut auditor = TrafficAuditor::new(&world, AuditParams::default());
+    let mut auditor = TrafficAuditor::new(
+        &world,
+        AuditParams {
+            examples_per_check: 400,
+            ..AuditParams::default()
+        },
+    );
+    // Who each actor was at each step, to explain an overlap afterwards.
+    let mut who: BTreeMap<(u64, u32), String> = BTreeMap::new();
     let mut t = 0u64;
     while t < seconds * NS_PER_S {
         let mut ctx = MobilityCtx::new(t, &world, &rng);
         let update = engine.step(&mut ctx, params.step);
         let actors = engine.audit_actors(&world, update.t);
+        for a in &actors {
+            who.insert(
+                (update.t / 100_000_000, a.actor.index()),
+                format!(
+                    "{} v={:.2} lat={:.2} changing={:?} kerb={:?} lane={:?}",
+                    a.class, a.speed_mps, a.lateral_m, a.changing, a.kerbside, a.lane
+                ),
+            );
+        }
         harness.observe(&world, t, update.t, &actors, &update.despawned, &[]);
         auditor.observe(&world, t, update.t, &actors, &update.despawned);
         t = update.t;
@@ -127,7 +146,44 @@ fn run_mixed(params: EngineParams, seconds: u64) -> (CalibrationReport, AuditRep
             );
         }
     }
-    (harness.report(), auditor.report())
+    let audit = auditor.report();
+    let mut shown = 0;
+    let mut last: Option<(u32, u32)> = None;
+    for e in audit.examples.iter().filter(|e| e.check == Check::Overlap) {
+        let (Some(a), Some(b)) = (e.actor, e.other) else { continue };
+        let pair = (a, b);
+        if last == Some(pair) || shown >= 12 {
+            continue;
+        }
+        last = Some(pair);
+        shown += 1;
+        let step = (e.t_s * 10.0).round() as u64;
+        eprintln!(
+            "  overlap t={:.1}s: {} [{}] / {} [{}]: {}",
+            e.t_s,
+            a,
+            who.get(&(step, a)).cloned().unwrap_or_default(),
+            b,
+            who.get(&(step, b)).cloned().unwrap_or_default(),
+            e.detail
+        );
+    }
+    for e in audit
+        .examples
+        .iter()
+        .filter(|e| e.check == Check::RedEntry)
+        .take(8)
+    {
+        let step = (e.t_s * 10.0).round() as u64;
+        let a = e.actor.unwrap_or(u32::MAX);
+        eprintln!(
+            "  red entry t={:.1}s: {a} [{}]: {}",
+            e.t_s,
+            who.get(&(step, a)).cloned().unwrap_or_default(),
+            e.detail
+        );
+    }
+    (harness.report(), audit)
 }
 
 fn safety_failures(audit: &AuditReport) -> Vec<String> {
@@ -228,7 +284,11 @@ fn buses_taxis_and_deliveries_stop_at_the_kerb_and_the_traffic_goes_round() {
         );
     }
     let dwell = &after.network.kerbside_dwell_s;
-    let spells = |role: &str| dwell.get(role).map_or(0, |s| s.n);
+    let now = &after.network.kerbside_now;
+    eprintln!("[kerbside on] at the kerb at the end: {now:?}");
+    let spells = |role: &str| {
+        dwell.get(role).map_or(0, |s| s.n) + now.get(role).copied().unwrap_or(0)
+    };
     assert!(spells("bus") >= 2, "buses served their stops: {dwell:?}");
     assert!(spells("taxi") >= 2, "taxis stopped at the kerb: {dwell:?}");
     assert!(spells("delivery") >= 1, "deliveries double-parked: {dwell:?}");

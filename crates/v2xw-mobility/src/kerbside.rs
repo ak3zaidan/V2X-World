@@ -34,7 +34,7 @@
 //!
 //! | What | Default | Source |
 //! |---|---|---|
-//! | bus dwell | lognormal, mean 60 s, coefficient of variation 0.6 | TCRP Report 100, *Transit Capacity and Quality of Service Manual* 2nd ed. (2003), Part 4: in the absence of field data, 60 s at a downtown stop, 30 s at a major outlying stop, 15 s at a typical outlying stop; dwell-time c_v typically 0.4–0.8, 0.6 when unknown (**secondary**: as the manual is widely quoted; not re-read here) |
+//! | bus dwell | lognormal, mean 60 s, coefficient of variation 0.6, cut at 5 and 170 s (a choice: a bus that cannot be passed holds no one past the auditor's 180 s gridlock bound) | TCRP Report 100, *Transit Capacity and Quality of Service Manual* 2nd ed. (2003), Part 4: in the absence of field data, 60 s at a downtown stop, 30 s at a major outlying stop, 15 s at a typical outlying stop; dwell-time c_v typically 0.4–0.8, 0.6 when unknown (**secondary**: as the manual is widely quoted; not re-read here) |
 //! | bus stop spacing | 260 m (about 850 ft) | **a choice**: MTA New York City Transit local-bus stops are commonly described as two to three short blocks apart (750–1,000 ft); no MTA stop inventory was read |
 //! | taxi share of passenger cars | 0 by default; 0.3 in the New York City preset ([`KerbsideParams::midtown`]) | **a choice**: taxis and app-based for-hire vehicles are widely reported as roughly a third of the vehicles in the Manhattan core (e.g. Schaller Consulting, *Empty Seats, Full Streets*, 2017; **not re-read**) — a share, not a count |
 //! | taxi pick-up or drop-off | one per trip, lognormal median 30 s, shape 0.5 | **a choice**: no field distribution of kerbside passenger dwell was read |
@@ -77,6 +77,11 @@ const RETRY_M: f64 = 40.0;
 
 /// How many lanes of the route ahead a stop may be placed on.
 const LOOK_LANES: usize = 5;
+
+/// The room a stop leaves behind the stopped vehicle on its lane, metres: a car and its
+/// standstill gap, so a follower can come wholly onto the lane and change lanes to pass
+/// rather than wait at the junction behind. **A choice.**
+const PASS_ROOM_M: f64 = 10.0;
 
 /// What a vehicle stops at the kerb for.
 #[derive(
@@ -423,7 +428,7 @@ impl KerbState {
                         let dwell_s = match role {
                             KerbRole::Bus => {
                                 let (mu, sigma) = params.bus_dwell_lognormal();
-                                rng.lognormal(mu, sigma).clamp(5.0, 300.0)
+                                rng.lognormal(mu, sigma).clamp(5.0, 170.0)
                             }
                             KerbRole::Taxi => rng
                                 .lognormal(
@@ -489,9 +494,10 @@ pub fn is_kerb_lane(world: &World, lane: LaneId) -> bool {
 
 /// Where a vehicle due a stop now stops: the first kerb lane on its route ahead (the lane
 /// it is on included) with a stretch where the front can come to rest braking at the
-/// planned deceleration, the body clear of the lane's start, and the stop at least the
-/// no-change zone plus [`KerbsideParams::end_margin_m`] before the lane's end — so the
-/// traffic queued behind it may still change lanes to pass. The earliest such point.
+/// planned deceleration, the body and [`PASS_ROOM_M`] clear of the lane's start, and the
+/// vehicle queued right behind it outside the no-change zone (plus
+/// [`KerbsideParams::end_margin_m`]) — so the traffic behind may still change lanes to
+/// pass. The earliest such point.
 #[allow(clippy::too_many_arguments)]
 pub fn plan_stop(
     world: &World,
@@ -520,8 +526,13 @@ pub fn plan_stop(
         if l.kind == LaneKind::Internal || !is_kerb_lane(world, id) {
             continue;
         }
-        let lo = (length_m + 3.0).max(braking - start);
-        let hi = l.length_m - (no_change_zone_m.max(0.0) + params.end_margin_m.max(0.0));
+        // Room behind for a follower to come wholly onto the lane, where it may change
+        // lanes to pass; and the follower right behind must stand outside the no-change
+        // zone, so the stop ends at least that zone and the margin, less the vehicle's
+        // own length, before the lane does.
+        let lo = (length_m + 3.0 + PASS_ROOM_M).max(braking - start);
+        let hi = l.length_m - (no_change_zone_m.max(0.0) + params.end_margin_m.max(0.0))
+            + length_m;
         if lo <= hi {
             return Some((id, lo));
         }

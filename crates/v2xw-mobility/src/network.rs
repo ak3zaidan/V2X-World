@@ -19,7 +19,7 @@
 //! | dooring exposures | a cyclist passing within a door's reach (1 m) of a taxi standing at the kerb | reported |
 //! | blocking the box | vehicle-seconds standing inside a signalised junction on a movement showing red | NY VTL §1175 and NYC's "Don't Block the Box": no driver enters a junction without room to leave it; the expected figure is zero |
 //! | queue spillback | lane-seconds during which a standing queue on a signalised approach reaches back to the lane's start — the upstream junction | reported: how often a queue blocks the junction behind it |
-//! | pedestrian speed by crowding | each walking pedestrian's local density (others within 2 m over the walkable area of that circle), binned by Fruin's walkway levels of service — space per person ≥ 3.25 m² (A), 2.32 (B), 1.39 (C), 0.93 (D), 0.46 (E), less (F), i.e. 35/25/15/10/5 ft² (Fruin 1971, *Pedestrian Planning and Design*) | Weidmann 1993's speed-density relation `v/v₀ = 1 − exp(−1.913·(1/ρ − 1/5.4))` (**secondary**: the parameters as the pedestrian literature quotes them) |
+//! | pedestrian speed by crowding | walkway cells 10 m long (clear of the kerb ends) over 5 s intervals: density `k = Σ tᵢ / (A·T)` and space-mean speed `Σ dᵢ / Σ tᵢ` of the walkers in them (Edie), binned by Fruin's walkway levels of service — space per person ≥ 3.25 m² (A), 2.32 (B), 1.39 (C), 0.93 (D), 0.46 (E), less (F), i.e. 35/25/15/10/5 ft² (Fruin 1971, *Pedestrian Planning and Design*) | Weidmann 1993's speed-density relation `v/v₀ = 1 − exp(−1.913·(1/ρ − 1/5.4))` (**secondary**: the parameters as the pedestrian literature quotes them) |
 //!
 //! # Determinism
 //!
@@ -87,10 +87,15 @@ const RIGHT_HOOK_M: f64 = 12.0;
 const DOOR_ZONE_M: f64 = 1.0;
 /// The fewest stop-line crossings an approach needs before its lane utilisation counts.
 const LANE_UTIL_MIN: usize = 20;
-/// How far from either end of a pavement a walker must be for its speed to count towards
-/// the speed-density measure, metres: beyond the two metres a walker slows over into a
-/// kerb, and the first steps off one.
+/// How far from either end of a pavement a walkway cell must be for the speed-density
+/// measure, metres: beyond the two metres a walker slows over into a kerb, and the first
+/// steps off one.
 const STEADY_MARGIN_M: f64 = 4.0;
+/// The length of a walkway cell the pedestrian speed-density relation is measured over,
+/// metres.
+const PED_CELL_M: f64 = 10.0;
+/// The interval it is measured over, seconds.
+const PED_INTERVAL_S: f64 = 5.0;
 
 /// One interval's point on the macroscopic fundamental diagram.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -131,8 +136,12 @@ pub struct NetworkObserver {
     right_turns: usize,
     right_hooks: usize,
     door_pairs: BTreeSet<(ActorId, ActorId)>,
-    ped_by_level: [Vec<f64>; 6],
+    /// Per Fruin level: Σ person-seconds × speed, Σ person-seconds, cell-intervals.
+    ped_by_level: [(f64, f64, usize); 6],
     ped_density: Vec<f64>,
+    /// The current pedestrian interval's walkway cells: person-seconds and metres walked.
+    ped_cells: BTreeMap<(LaneId, u32), (f64, f64)>,
+    ped_interval_start_s: Option<f64>,
     /// The signalised approach lanes (those feeding a signal-controlled connector).
     signal_approaches: BTreeSet<LaneId>,
     box_blocking_s: f64,
@@ -233,6 +242,8 @@ impl NetworkObserver {
             door_pairs: BTreeSet::new(),
             ped_by_level: Default::default(),
             ped_density: Vec::new(),
+            ped_cells: BTreeMap::new(),
+            ped_interval_start_s: None,
             signal_approaches,
             box_blocking_s: 0.0,
             spillback_lane_s: 0.0,
@@ -380,7 +391,9 @@ impl NetworkObserver {
                 }
             }
         }
-        // Pedestrians: local density and speed.
+        // Pedestrians: each walker's local density (a summary), and the walkway cells'
+        // density and speed by Edie's definitions over short intervals — the
+        // speed-density relation, binned by Fruin's levels of service.
         if !pedestrians.is_empty() {
             let cell = CROWD_RADIUS_M;
             let key = |x: f64, y: f64| ((x / cell).floor() as i64, (y / cell).floor() as i64);
@@ -390,19 +403,27 @@ impl NetworkObserver {
             }
             for (i, p) in pedestrians.iter().enumerate() {
                 let v = p.vel.norm_2d();
-                if !(0.3..4.0).contains(&v) {
+                // Walking along a pavement, clear of its ends, where a walker slows into
+                // a kerb or picks up speed off one.
+                let Some(lane) = world.try_lane(p.lane) else {
+                    continue;
+                };
+                if p.activity != crate::vru::PedActivity::Walking
+                    || lane.kind != LaneKind::Sidewalk
+                {
                     continue;
                 }
-                // Steady walking only: along a pavement, clear of its ends, where a walker
-                // slows into a kerb or picks up speed off one. Those are not the
-                // speed-density relation, and they crowd the dense bins.
-                let steady = p.activity == crate::vru::PedActivity::Walking
-                    && world.try_lane(p.lane).is_some_and(|l| {
-                        l.kind == LaneKind::Sidewalk
-                            && p.s_m > STEADY_MARGIN_M
-                            && p.s_m < l.length_m - STEADY_MARGIN_M
-                    });
-                if !steady {
+                let k = (p.s_m / PED_CELL_M).floor();
+                let (lo, hi) = (k * PED_CELL_M, (k + 1.0) * PED_CELL_M);
+                if lo >= STEADY_MARGIN_M && hi <= lane.length_m - STEADY_MARGIN_M && k >= 0.0 {
+                    let e = self
+                        .ped_cells
+                        .entry((p.lane, k as u32))
+                        .or_insert((0.0, 0.0));
+                    e.0 += dt;
+                    e.1 += v.min(4.0) * dt;
+                }
+                if !(0.3..4.0).contains(&v) {
                     continue;
                 }
                 let (cx, cy) = key(p.pos.x, p.pos.y);
@@ -420,11 +441,25 @@ impl NetworkObserver {
                         }
                     }
                 }
-                let width = world.try_lane(p.lane).map_or(2.0, |l| l.width_m);
-                let rho = local_density(others, width);
-                self.ped_density.push(rho);
-                self.ped_by_level[fruin_level(1.0 / rho)].push(v);
+                self.ped_density.push(local_density(others, lane.width_m));
             }
+        }
+        let ped_start = *self.ped_interval_start_s.get_or_insert(ns_to_secs(t0));
+        if t1_s - ped_start >= PED_INTERVAL_S - 1e-9 {
+            let span = t1_s - ped_start;
+            for ((lane, _), (person_s, metres)) in core::mem::take(&mut self.ped_cells) {
+                let width = world.try_lane(lane).map_or(2.0, |l| l.width_m);
+                let k = person_s / (PED_CELL_M * width * span);
+                if person_s > 0.0 && k > 0.0 {
+                    let level = fruin_level(1.0 / k);
+                    let v = metres / person_s;
+                    let acc = &mut self.ped_by_level[level];
+                    acc.0 += person_s * v;
+                    acc.1 += person_s;
+                    acc.2 += 1;
+                }
+            }
+            self.ped_interval_start_s = Some(t1_s);
         }
         // Close the MFD interval.
         if t1_s - start >= self.interval_s - 1e-9 {
@@ -479,7 +514,19 @@ impl NetworkObserver {
         for (role, v) in &self.dwell {
             dwell.insert(role.label().to_string(), Summary::of(v));
         }
-        let level_speed: Vec<Summary> = self.ped_by_level.iter().map(|v| Summary::of(v)).collect();
+        let level_speed: Vec<Summary> = self
+            .ped_by_level
+            .iter()
+            .map(|(sum, weight, n)| Summary {
+                n: *n,
+                mean: if *weight > 0.0 { sum / weight } else { f64::NAN },
+                sd: f64::NAN,
+                p15: f64::NAN,
+                p50: f64::NAN,
+                p85: f64::NAN,
+                max: f64::NAN,
+            })
+            .collect();
         let max_flow = self
             .samples
             .iter()
@@ -508,6 +555,13 @@ impl NetworkObserver {
                 f64::NAN
             },
             kerbside_dwell_s: dwell,
+            kerbside_now: {
+                let mut now: BTreeMap<String, usize> = BTreeMap::new();
+                for (role, _) in self.kerb_since.values() {
+                    *now.entry(role.label().to_string()).or_insert(0) += 1;
+                }
+                now
+            },
             lane_utilisation_2: lu2,
             lane_utilisation_2_vehicles: lu2_n,
             lane_utilisation_3: lu3,
@@ -565,8 +619,11 @@ pub struct NetworkReport {
     pub vehicle_km: f64,
     /// Stops per vehicle-kilometre.
     pub stops_per_km: f64,
-    /// Each kerbside spell's length, by role, seconds.
+    /// Each completed kerbside spell's length, by role, seconds.
     pub kerbside_dwell_s: BTreeMap<String, Summary>,
+    /// Vehicles at the kerb when the report was taken, by role (spells not yet over, so
+    /// not in `kerbside_dwell_s`).
+    pub kerbside_now: BTreeMap<String, usize>,
     /// HCM lane utilisation factor on two-lane approaches.
     pub lane_utilisation_2: f64,
     /// Stop-line crossings behind it.
@@ -582,7 +639,9 @@ pub struct NetworkReport {
     /// Distinct (taxi, cyclist) pairs where the cyclist passed within a door's reach of a
     /// taxi at the kerb.
     pub dooring_exposures: usize,
-    /// Walking speed by Fruin level of service, A..F.
+    /// Space-mean walking speed by Fruin level of service, A..F, over walkway cells 10 m
+    /// long and 5 s intervals (Edie): `n` is the cell-intervals, `mean` the speed weighted
+    /// by person-time.
     pub pedestrian_speed_by_fruin_level: Vec<Summary>,
     /// Pedestrians' local density, ped/m².
     pub pedestrian_density: Summary,
