@@ -260,6 +260,31 @@ fn a_member_that_comes_back_lets_a_waiting_session_finish() {
 }
 
 #[test]
+fn a_slow_member_the_quorum_depends_on_is_waited_for_not_excluded() {
+    // Two of five down and a third slower than the round timeout: excluding the slow one
+    // would leave no quorum, so the coordinator waits for it.
+    let mut run = deployment(Some(pca_only(true)));
+    let m = run.committee_members("pca");
+    run.set_faults(vec![
+        forever(m[0], FaultKind::Offline),
+        forever(m[1], FaultKind::Offline),
+        forever(
+            m[2],
+            FaultKind::Slow {
+                extra: Duration::from_millis(800),
+            },
+        ),
+    ]);
+    provisioned(&mut run, DEVICE_A, 0, PERIODS, JMAX);
+    assert_eq!(held(&run), (PERIODS * JMAX) as usize);
+    let s = stats(&run, "pca");
+    assert_eq!(s.failed, 0, "{s:?}");
+    assert!(s.timeouts > 0);
+    // Every round waited on the slow member: at least two of its 800 ms per session.
+    assert!(s.mean_latency_ns() >= Duration::from_millis(1_600).as_nanos(), "{s:?}");
+}
+
+#[test]
 fn a_malicious_member_is_caught_by_its_share_excluded_and_the_session_restarts() {
     let mut run = deployment(Some(pca_only(true)));
     let liar = run.committee_members("pca")[0];
@@ -267,9 +292,15 @@ fn a_malicious_member_is_caught_by_its_share_excluded_and_the_session_restarts()
     provisioned(&mut run, DEVICE_A, 0, PERIODS, JMAX);
     assert_eq!(held(&run), (PERIODS * JMAX) as usize);
     let s = stats(&run, "pca");
-    assert_eq!(s.invalid_shares, u64::from(PERIODS), "caught once per session");
-    assert!(s.restarts >= u64::from(PERIODS));
+    // Caught once: identifiable abort names the cheater, and the committee leaves it out of
+    // every later session rather than letting it spoil each one.
+    assert_eq!(s.invalid_shares, 1, "{s:?}");
+    assert!(s.restarts >= 1);
     assert_eq!(s.failed, 0);
+    assert_eq!(
+        run.state.committees.caught.values().map(|c| c.len()).sum::<usize>(),
+        1
+    );
 }
 
 #[test]

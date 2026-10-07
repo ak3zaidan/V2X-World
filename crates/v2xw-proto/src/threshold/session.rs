@@ -17,15 +17,19 @@
 //!   others carry the round, and the session pays only if fewer than `quorum` are fast.
 //! * **Offline.** Its requests are dropped. When a round's timer fires short of quorum,
 //!   the silent members are excluded and the session restarts from round one with the
-//!   rest (a new attempt).
+//!   rest (a new attempt) — unless excluding them would leave fewer than a quorum, in
+//!   which case the coordinator cannot tell a slow member from a dead one and waits one
+//!   more timeout instead, up to `max_attempts` times.
 //! * **Malicious.** It returns an invalid share. In the round that verifies shares the
-//!   coordinator detects it; with identifiable abort the member is excluded and the
-//!   session restarts without it; without, the coordinator cannot tell who lied and
-//!   restarts with the signing set rotated.
+//!   coordinator detects it; with identifiable abort the member is excluded — from this
+//!   session and from every later one of the committee, since identifying a cheater is
+//!   what identifiable abort is for — and the session restarts without it; without
+//!   attribution the coordinator cannot tell who lied and restarts with the signing set
+//!   rotated.
 //! * **Too few.** When fewer than `quorum` members remain, the attempt fails; the session
-//!   waits `retry_after` (members may come back) and tries again with nobody excluded,
-//!   up to `max_attempts`, then fails for good and hands the continuation back as
-//!   [`Outcome::Failed`].
+//!   waits `retry_after` (members may come back) and tries again with the timed-out
+//!   members readmitted (never a caught cheater), up to `max_attempts`, then fails for
+//!   good and hands the continuation back as [`Outcome::Failed`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -178,6 +182,7 @@ struct Session<C> {
     responded: Vec<u16>,
     excluded: BTreeSet<u16>,
     rotation: u16,
+    waits: u16,
     started: SimTime,
     cont: Option<C>,
 }
@@ -193,6 +198,9 @@ pub struct Committees<C> {
     pub envelope: u32,
     /// Per-role statistics, by role name.
     pub stats: BTreeMap<&'static str, CommitteeStats>,
+    /// Members each committee has caught returning an invalid share, by role index:
+    /// excluded from every later session.
+    pub caught: BTreeMap<usize, BTreeSet<u16>>,
 }
 
 impl<C> Default for Committees<C> {
@@ -203,6 +211,7 @@ impl<C> Default for Committees<C> {
             next: 0,
             envelope: 0,
             stats: BTreeMap::new(),
+            caught: BTreeMap::new(),
         }
     }
 }
@@ -274,6 +283,7 @@ impl<C> Committees<C> {
                 responded: Vec::new(),
                 excluded: BTreeSet::new(),
                 rotation: 0,
+                waits: 0,
                 started: now,
                 cont: Some(cont),
             },
@@ -292,10 +302,12 @@ impl<C> Committees<C> {
         };
         let r = &self.roles[s.role];
         let n = u16::try_from(r.members.len()).unwrap_or(u16::MAX);
+        let caught = self.caught.get(&s.role);
         let live: Vec<u16> = (0..n)
             .map(|k| (k + s.rotation) % n.max(1))
-            .filter(|k| !s.excluded.contains(k))
+            .filter(|k| !s.excluded.contains(k) && !caught.is_some_and(|c| c.contains(k)))
             .collect();
+        s.waits = 0;
         s.round = 0;
         s.responded.clear();
         s.asked = if r.fanout_all {
@@ -493,6 +505,7 @@ impl<C> Committees<C> {
             if identifiable {
                 s.excluded.insert(member);
                 st.exclusions += 1;
+                self.caught.entry(role).or_default().insert(member);
             } else {
                 s.rotation = s.rotation.wrapping_add(1);
             }
@@ -507,6 +520,18 @@ impl<C> Committees<C> {
             for op in &plan.coordinator_ops {
                 out.compute(*op);
             }
+        }
+        if s.waits > 0 {
+            // The round needed extra timeouts: whoever is still silent missed a whole one,
+            // and is presumed down for the rest of the session.
+            let silent: Vec<u16> = s
+                .asked
+                .iter()
+                .copied()
+                .filter(|k| !s.responded.contains(k))
+                .collect();
+            s.excluded.extend(silent);
+            s.waits = 0;
         }
         if round == 0 {
             // The first `quorum` to answer are the signing set from here on.
@@ -553,6 +578,30 @@ impl<C> Committees<C> {
             .filter(|k| !s.responded.contains(k))
             .collect();
         let role = s.role;
+        let r = &self.roles[role];
+        let caught = self.caught.get(&role).map_or(0, |c| c.iter().filter(|k| !s.excluded.contains(k)).count());
+        let left = r
+            .members
+            .len()
+            .saturating_sub(s.excluded.len() + caught + silent.len());
+        if left < usize::from(r.quorum) && s.waits < r.max_attempts {
+            // Excluding the silent would leave no quorum, and a slow member cannot be told
+            // from a dead one: wait one more timeout for this round.
+            s.waits += 1;
+            let (flow, run, wait, round, attempt) = (s.flow, s.run, r.round_timeout, s.round, s.attempt);
+            out.start_timer(
+                wait,
+                wrap(CommitteeMsg::Timeout {
+                    session: id,
+                    round,
+                    attempt,
+                }),
+                flow,
+                run,
+            );
+            self.stats.entry(self.roles[role].role).or_default().timeouts += 1;
+            return None;
+        }
         for k in &silent {
             s.excluded.insert(*k);
         }
@@ -569,8 +618,12 @@ impl<C> Committees<C> {
         let r = &self.roles[s.role];
         let n = r.members.len();
         s.attempt = s.attempt.wrapping_add(1);
-        let remaining = n.saturating_sub(s.excluded.len());
         let role = s.role;
+        let caught = self.caught.get(&role);
+        let remaining = n.saturating_sub(
+            s.excluded.len()
+                + caught.map_or(0, |c| c.iter().filter(|k| !s.excluded.contains(k)).count()),
+        );
         // A bound on restarts that exclude nobody (a lie that cannot be attributed rotates
         // the signing set instead): after `max_attempts` passes over the committee the
         // session fails rather than spinning.

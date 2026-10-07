@@ -259,6 +259,14 @@ fn fleet_costs_by_scheme() {
         ("ml-dsa-87", "ml-kem-1024", "fragmenter/generic-sdu"),
         ("slh-dsa-sha2-128f", "ml-kem-768", "fragmenter/generic-sdu"),
     ] {
+        // `PQ_FLEET_ONLY=<substring>` runs only the cells whose scheme or fragmenter
+        // contains it.
+        if let Ok(only) = std::env::var("PQ_FLEET_ONLY")
+            && !sig.contains(&only)
+            && !fragmenter.contains(&only)
+        {
+            continue;
+        }
         let mut s = grid(sig);
         s.time.duration_s = 60.0;
         s.actors.vehicles.demand.rate_veh_per_h = Some(1500.0);
