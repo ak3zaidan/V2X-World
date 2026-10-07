@@ -53,6 +53,9 @@ use v2xw_msg::sec_types::HashedId8;
 use v2xw_record::wire::telemetry::NodeTelemetry;
 
 use crate::clock::ClockModel;
+
+/// The keyed stream a change of identity draws its new BSM `msgCnt` from.
+pub const IDENTITY_CHANGE_STREAM: &str = "node/identity-change";
 use crate::ctx::{NodeCtx, NodeCtxExt};
 use crate::generate::{MessageSchedule, ServiceSet};
 use crate::policy::{
@@ -879,7 +882,23 @@ impl ObuRuntime {
         self.stores.neighbors.age(believed);
         self.stores.certs.travelled(distance_travelled_m);
         self.stores.certs.sweep(believed, &self.stores.crl);
+        let changes_before = self.stores.certs.changes();
         let _ = self.stores.certs.rotate(believed);
+        if self.stores.certs.changes() > changes_before {
+            // Every identifier on the air changes together (C2C-CC BSP RS_BSP_182; SAE
+            // J2945/1). The certificate carries the `TemporaryID` and the link-layer
+            // address with it; the BSM `msgCnt` does not, so it restarts at a random value,
+            // which J2735 allows "if the sender has changed identity". Counting on would
+            // name the old pseudonym to anyone listening.
+            let restart = ctx
+                .rng(
+                    v2xw_core::rng::RngDomain::plugin(IDENTITY_CHANGE_STREAM),
+                    v2xw_core::rng::EntityRef::Node(self.node),
+                )
+                .below(128);
+            self.schedule
+                .restart_bsm_count(u8::try_from(restart).unwrap_or(0));
+        }
 
         if self.state.transmits() {
             self.generate(ctx, believed, &mut out);

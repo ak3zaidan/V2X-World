@@ -1115,7 +1115,8 @@ impl Default for SignerIdPolicySpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PseudonymChangeSpec {
-    /// `time`, `distance`, `mix-zone` or `silent`.
+    /// `time`, `distance`, `c2c-cc`, `mix-zone` or `silent`
+    /// (`crate::pseudonym_policy`).
     #[serde(default = "PseudonymChangeSpec::default_strategy")]
     pub strategy: String,
     /// The period, seconds, when the strategy is time-based.
@@ -1124,6 +1125,16 @@ pub struct PseudonymChangeSpec {
     /// The distance, metres, when the strategy is distance-based.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distance_m: Option<f64>,
+    /// A random silent period after every change, `[min, max]` seconds: no safety message
+    /// for a uniform draw from the range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silent_period_s: Option<Vec<f64>>,
+    /// The mix zone's radius around a signalised intersection, metres (`mix-zone`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mix_zone_radius_m: Option<f64>,
+    /// The age a pseudonym must reach before a mix zone changes it, seconds (`mix-zone`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mix_zone_min_age_s: Option<f64>,
 }
 
 impl PseudonymChangeSpec {
@@ -1138,6 +1149,9 @@ impl Default for PseudonymChangeSpec {
             strategy: PseudonymChangeSpec::default_strategy(),
             period_s: Some(300.0),
             distance_m: None,
+            silent_period_s: None,
+            mix_zone_radius_m: None,
+            mix_zone_min_age_s: None,
         }
     }
 }
@@ -1204,6 +1218,11 @@ pub struct Threats {
     /// `PoisonForwardedReports` (the default), `SuppressForwardedReports` or `FalseCrl`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compromised_rsu_attack: Option<ModelChoice>,
+    /// The passive eavesdropper's coverage: `threat/observer/passive-privacy` with
+    /// `params.sniffer_fraction` (the share of signalised intersections with a sniffer)
+    /// and `params.range_m`. Absent, the observer hears every safety frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eavesdropper: Option<ModelChoice>,
 }
 
 /// One attacker population.

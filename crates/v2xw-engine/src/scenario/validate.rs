@@ -51,7 +51,7 @@ const MESSAGE_SETS: [&str; 10] = [
 /// 05-protocols.md are sized, not computed).
 const REAL_SIGNATURES: [&str; 1] = ["ecdsa-p256"];
 /// The pseudonym-change strategies 05-protocols.md §2.6 names.
-const STRATEGIES: [&str; 4] = ["time", "distance", "mix-zone", "silent"];
+const STRATEGIES: [&str; 5] = ["time", "distance", "c2c-cc", "mix-zone", "silent"];
 
 /// The on-board-unit hardware profiles that ship with `v2xw-node`.
 ///
@@ -1077,12 +1077,36 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     },
     KeyStatus {
         path: "security.pseudonym_change.strategy",
-        status: Status::Partial,
-        note: "time changes pseudonym at period_s of age and distance after distance_m of \
-               travel (v2xw_proto::pseudonym); silent makes no scheduled change. \
-               mix-zone changes only on leaving a mix zone, and no world has mix zones yet, \
-               so it behaves as silent. Expiry and revocation force a change under every \
-               strategy.",
+        status: Status::Wired,
+        note: "time changes pseudonym at period_s of age (SAE J2945/1 CERTCHG, 300 s) and \
+               distance after distance_m of travel (NYC pilot, 2 km). c2c-cc is the C2C-CC \
+               Basic System Profile's RS_BSP_521-524: a first change after a random \
+               800-1,500 m, the second at least 800 m on plus a random 120-360 s, the third \
+               after a random 10-20 km, then every 25-35 km. mix-zone changes inside a \
+               30 m zone around a signalised intersection once the pseudonym is \
+               mix_zone_min_age_s old (default 60 s), and frames sent inside a zone are encrypted to the \
+               eavesdropper (CMIX, Freudiger et al. 2007). silent makes no scheduled change. \
+               Every change moves the certificate, the BSM TemporaryID and the link-layer \
+               address together; expiry and revocation force a change under every strategy.",
+    },
+    KeyStatus {
+        path: "security.pseudonym_change.silent_period_s",
+        status: Status::Wired,
+        note: "[min, max] seconds: after every change the vehicle sends no safety message \
+               for a uniform draw from the range (Huang et al. 2005; PRESERVE's 3-13 s). \
+               Absent, no silent period.",
+    },
+    KeyStatus {
+        path: "security.pseudonym_change.mix_zone_min_age_s",
+        status: Status::Wired,
+        note: "The age a pseudonym must reach before a mix zone changes it, seconds \
+               (mix-zone; default 60).",
+    },
+    KeyStatus {
+        path: "security.pseudonym_change.mix_zone_radius_m",
+        status: Status::Wired,
+        note: "The mix zone's radius around each signalised intersection's centre for the \
+               mix-zone strategy, metres (default 30).",
     },
     KeyStatus {
         path: "security.pseudonym_change.period_s",
@@ -1132,7 +1156,14 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "threats.attackers",
         status: Status::Wired,
-        note: "Attacker populations: which model, how many, and when they are active.",
+        note: "Attacker populations: which model, how many, and when they are active. \
+               On the air the engine renders an attacker's claimed position, speed, \
+               heading and generation time, a forged signature (the SPDU's signature \
+               octets are corrupted, so a receiver checking the bytes finds it) and a \
+               certificate outside its validity window. DoS, DoSRandom, Sybil, \
+               VruImpersonation, VruPositionSpoof, FakeHazard and SelectiveDrop change \
+               none of those and are refused by name rather than counted as lies nobody \
+               could hear.",
     },
     KeyStatus {
         path: "threats.attackers[].params",
@@ -1173,23 +1204,54 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                MAP content yet and units do not broadcast the trust list.",
     },
     KeyStatus {
+        path: "threats.eavesdropper",
+        status: Status::Wired,
+        note: "'threat/observer/passive-privacy': passive sniffers at an evenly spread \
+               params.sniffer_fraction of the signalised intersections (default 1), each \
+               reading every safety frame sent within params.range_m (default 200 m) and \
+               linking pseudonyms across changes by kinematics (Wiedersheim et al. 2010). \
+               Absent, the observer hears every frame (a global eavesdropper). Its \
+               linkability, anonymity set and tracking duration are in the run report.",
+    },
+    KeyStatus {
         path: "detection.local",
         status: Status::Wired,
         note: "'detect/legacy-12' on every honest vehicle and every roadside unit (a \
-               unit is trusted infrastructure to the authority). params override the suite's \
-               thresholds by name (consistency_threshold_m, heading_threshold_deg, \
-               detector_lag_s, z_threshold, min_consecutive, sybil_min_certs, art_max_m, \
-               max_accel_mps2, stale_max_s, …) and report_interval_s (default 1: a \
-               reporter files about one subject at most once a second).",
+               unit is trusted infrastructure to the authority). Each message is judged \
+               against the positional accuracy it states on the air (a BSM's J2735 \
+               PositionalAccuracy, one sigma, scaled to 95 %; a CAM's 95 % confidence \
+               ellipse); use_stated_accuracy: 0 restores the legacy constant 5 m. The \
+               heading check allows for the bearing error those stated accuracies imply \
+               over the longest straight baseline the sender's own headings describe \
+               (CaTch, Kamel et al. 2019); heading_bearing_bound: 0 restores the legacy \
+               one-step check, heading_straight_tol_deg (10) sets 'straight'. Each \
+               receiver holds a map of the motor-vehicle lanes (F2MD's position \
+               plausibility check): a claim whose whole stated confidence disc lies more \
+               than offroad_tol_m (15 m) beyond the carriageway edge is off the road; \
+               use_map: 0 is a receiver with no map, offroad_confidence_bound: 0 the \
+               legacy check on the point. A PSM sender is checked as a vulnerable road \
+               user (no vehicle kinematic or map check). params \
+               override the suite's thresholds by name (consistency_threshold_m, \
+               heading_threshold_deg, detector_lag_s, z_threshold, min_consecutive, \
+               sybil_min_certs, art_max_m, max_accel_mps2, stale_max_s, …) and \
+               report_interval_s (default 1: a reporter files about one subject at most \
+               once a second).",
     },
     KeyStatus {
         path: "detection.ma",
         status: Status::Wired,
-        note: "'threat/ma/legacy-window', the authority's persistence gate: it revokes \
-               only when report_threshold_k trusted reporters (3) filed in \
-               revoke_min_seconds distinct seconds (4) spanning revoke_persist_s (3 s) \
-               inside revoke_window_s (15 s); defence, reputation_max (40) and \
-               report_budget (30) gate reporters. It runs with or without this key.",
+        note: "'threat/ma/corroborated' (the default when the key is absent): reports \
+               about one pseudonym are correlated into events (every report observed \
+               within event_window_s, 5 s, of an event's first is that one event, however \
+               many reporters), an event counts when event_min_reporters (2) distinct \
+               trusted reporters witnessed it, and the authority revokes on min_events (3) \
+               such events inside window_s (60 s) from min_reporters (3) trusted \
+               reporters. 'threat/ma/legacy-window', the legacy persistence gate, is kept \
+               for parity with the legacy corpus: report_threshold_k trusted reporters (3) \
+               in revoke_min_seconds distinct seconds (4) spanning revoke_persist_s (3 s) \
+               inside revoke_window_s (15 s); it counts one event heard by many as many \
+               and revokes honest vehicles in dense traffic. Both take defence, \
+               reputation_max (40) and report_budget (30).",
     },
     KeyStatus {
         path: "detection.responder",
@@ -1396,7 +1458,7 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
     // `detection.ma.params` key or a wrong `net.backend_net` id passed Check and came back
     // from Run as an "internal error".
     take(crate::phase2::detection_params(s).map(|_| ()));
-    take(crate::phase2::ma_params(s).map(|_| ()));
+    take(crate::phase2::MaHost::from_scenario(s).map(|_| ()));
     take(crate::phase2::apply_backend_net(
         s,
         &mut v2xw_proto::ScmsParams::default(),
@@ -2614,14 +2676,24 @@ fn security(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 ));
             }
         }
-        "mix-zone" | "silent" => {}
+        "c2c-cc" | "mix-zone" | "silent" => {}
         other => e.push(conflict(
             "security.pseudonym_change.strategy",
             format!(
-                "'{other}' is not one this build implements; allowed: time, distance, \
-                 mix-zone, silent"
+                "'{other}' is not one this build implements; allowed: {}",
+                STRATEGIES.join(", ")
             ),
         )),
+    }
+    if let Some(range) = &p.silent_period_s
+        && !(range.len() == 2
+            && range.iter().all(|v| v.is_finite() && *v >= 0.0)
+            && range[0] <= range[1])
+    {
+        e.push(conflict(
+            "security.pseudonym_change.silent_period_s",
+            format!("must be [min, max] seconds with 0 ≤ min ≤ max, got {range:?}"),
+        ));
     }
     if let Some(period) = p.period_s {
         bounded_at(

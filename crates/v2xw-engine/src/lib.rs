@@ -71,6 +71,7 @@ pub mod perception;
 pub mod phase2;
 pub mod priority;
 pub mod privacy_metrics;
+pub mod pseudonym_policy;
 pub mod records;
 pub mod run;
 pub mod safety_events;

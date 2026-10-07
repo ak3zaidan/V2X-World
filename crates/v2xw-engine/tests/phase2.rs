@@ -215,8 +215,9 @@ fn the_revocation_latency_is_decomposed_by_stage() {
 }
 
 /// With no attacker, nothing is revoked, at the legacy suite's default thresholds and the
-/// legacy authority's default gate. The suite still fires on honest traffic — that is
-/// printed, not hidden — and the gate is what holds.
+/// scenario's authority (`threat/ma/corroborated`). The suite still fires on honest
+/// traffic — that is printed, not hidden — and the authority's decision rule is what
+/// holds.
 #[test]
 fn with_no_attacker_nothing_is_revoked() {
     let mut scenario = phase2();
@@ -364,6 +365,59 @@ fn a_role_belongs_to_the_unit_that_declares_it_and_not_to_the_scenario() {
     );
     assert!(!p.rsu_has_role(v2xw_core::ids::NodeId::new(9_999), "crl"));
     assert!(p.rsu_spec_of(v2xw_core::ids::NodeId::new(9_999)).is_none());
+}
+
+/// The owner's default scenario runs the credential system: the SCMS backend, roadside
+/// units, cellular access and the detection path, so the Backend view has something to
+/// show. Built, not run: the run is the page's.
+#[test]
+fn the_default_scenario_runs_the_credential_system_with_roadside_units() {
+    let s = rooted(
+        Scenario::load(scenarios().join("manhattan-5min.yaml")).expect("the scenario loads"),
+    );
+    assert!(v2xw_engine::scenario::validate::validate(&s).is_empty());
+    assert_eq!(
+        s.security.protocol.as_ref().map(|p| p.id.as_str()),
+        Some(v2xw_engine::phase2::CAMP_SCMS)
+    );
+    assert!(
+        s.net.uu.is_some(),
+        "the fleet reaches the backend over cellular"
+    );
+    let engine = Engine::build(s, "").expect("builds");
+    let p = engine
+        .phase2()
+        .expect("the credential system runs in the default scenario");
+    assert_eq!(p.rsu_nodes().len(), 8);
+    assert_eq!(p.rsus_with_role("crl").len(), 8);
+    assert!(p.detection_on());
+}
+
+/// The strategy study loads and builds under every strategy it sweeps, with and without a
+/// silent period, and a strategy or a silent period the engine cannot act on is refused
+/// rather than run as something else.
+#[test]
+fn the_strategy_study_builds_under_every_strategy_and_refuses_what_it_cannot_do() {
+    let base = rooted(
+        Scenario::load(scenarios().join("pseudonym-strategies.yaml")).expect("the study loads"),
+    );
+    for strategy in ["time", "distance", "c2c-cc", "mix-zone", "silent"] {
+        for silent in [None, Some(vec![3.0, 13.0])] {
+            let mut s = base.clone();
+            s.security.pseudonym_change.strategy = strategy.to_string();
+            s.security.pseudonym_change.silent_period_s = silent.clone();
+            let errors = v2xw_engine::scenario::validate::validate(&s);
+            assert!(errors.is_empty(), "{strategy} {silent:?}: {errors:?}");
+            Engine::build(s, "").unwrap_or_else(|e| panic!("{strategy} {silent:?}: {e}"));
+        }
+    }
+    let mut unknown = base.clone();
+    unknown.security.pseudonym_change.strategy = "adaptive".to_string();
+    assert!(!v2xw_engine::scenario::validate::validate(&unknown).is_empty());
+    let mut backwards = base.clone();
+    backwards.security.pseudonym_change.silent_period_s = Some(vec![13.0, 3.0]);
+    assert!(!v2xw_engine::scenario::validate::validate(&backwards).is_empty());
+    assert!(Engine::build(backwards, "").is_err());
 }
 
 #[test]

@@ -776,6 +776,13 @@ impl BsmGenerator {
         self.last_tx
     }
 
+    /// Restarts the counter at `value` (taken modulo 128): J2735 lets a sender initialise
+    /// `MsgCount` to any value "if the sender has changed identity", and a pseudonym change
+    /// that kept counting would link the old identity to the new one in the clear.
+    pub fn restart_count(&mut self, value: u8) {
+        self.msg_count = value % 128;
+    }
+
     /// The decision, with no engine attached — the testable core.
     pub fn check(&mut self, now: SimTime, dcc: &DccState) -> Option<GenReason> {
         let reason = match self.last_tx {

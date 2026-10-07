@@ -175,6 +175,11 @@ impl MessageSchedule {
         self.bsm.msg_count()
     }
 
+    /// Restarts the BSM counter at `value`, for a change of identity.
+    pub fn restart_bsm_count(&mut self, value: u8) {
+        self.bsm.restart_count(value);
+    }
+
     /// How many messages this schedule has asked for.
     pub fn generated(&self) -> u32 {
         self.generated

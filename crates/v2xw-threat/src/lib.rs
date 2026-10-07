@@ -18,6 +18,7 @@
 //! | The TS 103 759 classes 1–5, the F2MD checks, the perception cross-check | [`ts103759`] | 07-threats §3.1, 04-models §14 |
 //! | The misbehaviour report and its forged variant | [`report`] | 07-threats §2.1, §3.2 |
 //! | The misbehaviour-authority pipeline | [`ma`] | 07-threats §3.2 |
+//! | The authority's decision on independent evidence over time | [`ma_corroborate`] | 07-threats §3.2 |
 //! | Two-authority identity resolution, and what it is worth | [`resolve`] | 07-threats §3.2 |
 //! | The records the metrics crate scores | [`records`] | 08-measurement-and-data.md §2.4, §2.6 |
 //! | The narrow context a node-resident plug-in gets | [`ctx`] | 03-interfaces.md §1.1 |
@@ -157,6 +158,7 @@ pub mod catalog;
 pub mod ctx;
 pub mod detect;
 pub mod ma;
+pub mod ma_corroborate;
 pub mod obs;
 pub mod poison;
 pub mod privacy;
@@ -182,6 +184,7 @@ pub use detect::{
     Detector, DetectorCost, DetectorId, DetectorParams, Fingerprint, Legacy12, Observation, Verdict,
 };
 pub use ma::{LegacyWindow, MaAction, MaParams, MaPipeline};
+pub use ma_corroborate::{CorroboratedMa, CorroborationParams, EvidenceSummary};
 pub use obs::{
     DiscSensor, EnvelopeExtras, LocalEnvironment, LocalPerception, NoMap, NoPerception,
     ObservedKind, ObservedMessage, PeerBelief, PerceivedObject, RegionId, SelfBelief, SensedObject,

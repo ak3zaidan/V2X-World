@@ -109,6 +109,13 @@ fn a_pool_is_topped_up_over_the_link_and_runs_dry_without_one() {
     );
     assert!(p.topups_completed > 0, "no top-up batch was installed");
     assert!(p.certs_topped_up >= 3, "a top-up installs a whole period");
+    // A connected fleet whose top-ups keep up never leaves a vehicle unable to sign; a
+    // vehicle that has just joined, whose pool is not yet swept into use, is not starved.
+    assert_eq!(
+        p.vehicles_starved, 0,
+        "a vehicle with a working link was counted unable to sign ({} node-steps)",
+        p.starved_node_steps
+    );
     assert!(
         records(&rec, "sec.cert")
             .iter()
@@ -242,7 +249,8 @@ fn the_change_period_reaches_the_run_and_the_observer_measures_it() {
 
 /// Honest traffic is never revoked at the default thresholds, and it is the authority's
 /// persistence gate that prevents it: with the gate opened to a single report, the same
-/// honest fleet's false positives do revoke a device.
+/// honest fleet's false positives (at the legacy detector operating point, which files
+/// them in a fleet this small) do revoke a device.
 #[test]
 fn honest_traffic_is_not_revoked_and_the_gate_is_why() {
     let base = || {
@@ -276,7 +284,20 @@ fn honest_traffic_is_not_revoked_and_the_gate_is_why() {
     assert_eq!(p.crls_issued, 0);
 
     // The control: the same fleet with the gate opened to one report from one reporter.
+    // Its receivers run the legacy operating point (the constant 5 m, the one-step
+    // heading check, no map): the confidence-tolerant checks file nothing about this
+    // small fleet in 90 s, and a control with no false report proves nothing about the
+    // gate. A dense fleet's do file them (docs/design/07 §8.2).
     let mut open = base();
+    open.detection.local = vec![ModelChoice {
+        id: v2xw_engine::phase2::LEGACY_12.to_string(),
+        params: json!({
+            "use_stated_accuracy": 0,
+            "heading_bearing_bound": 0,
+            "offroad_confidence_bound": 0,
+            "use_map": 0
+        }),
+    }];
     open.detection.ma = Some(ModelChoice {
         id: v2xw_engine::phase2::MA_LEGACY_WINDOW.to_string(),
         params: json!({"report_threshold_k": 1, "revoke_min_seconds": 1, "revoke_persist_s": 0.0}),
@@ -297,6 +318,54 @@ fn honest_traffic_is_not_revoked_and_the_gate_is_why() {
     );
     assert!(q.revoked_honest > 0, "the control revoked no honest device");
     assert_eq!(p.revoked_honest, 0);
+}
+
+/// An attacker's forged signature reaches the air: receivers that check the bytes find it
+/// invalid and report it. Before the host rendered the envelope, the InvalidSignature
+/// attacker was counted as lying while every frame it sent verified.
+#[test]
+fn a_forged_signature_is_on_the_air_and_reported() {
+    let mut s = grid(40.0, 900.0);
+    s.security.verification_policy = "verify-all".to_string();
+    s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+    s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+        id: "threat/attacker/legacy/InvalidSignature".to_string(),
+        count: Some(1),
+        schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+            from_s: 5.0,
+            to_s: 40.0,
+        }),
+        ..Default::default()
+    }];
+    cellular(&mut s);
+    let (report, _) = run(s);
+    let p = &report.phase2;
+    println!(
+        "verification states {:?}, verdicts {:?}, {} reports about the attacker",
+        p.verification_states, p.verdicts_by_detector, p.reports_about_attackers
+    );
+    assert!(p.falsified_claims > 0, "the attacker never acted");
+    assert!(
+        p.verification_states.get("Invalid").copied().unwrap_or(0) > 0,
+        "no receiver found a forged signature invalid"
+    );
+    assert!(p.reports_about_attackers > 0, "nobody reported the forger");
+}
+
+/// An attack the engine cannot put on the air is refused by name, not run silently.
+#[test]
+fn an_attack_the_engine_cannot_render_is_refused() {
+    for kind in ["Sybil", "DoS", "VruImpersonation"] {
+        let mut s = grid(10.0, 900.0);
+        s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+        s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+            id: format!("threat/attacker/legacy/{kind}"),
+            count: Some(1),
+            ..Default::default()
+        }];
+        let err = Engine::build(s, "").expect_err(kind).to_string();
+        assert!(err.contains("does not put it on the air"), "{kind}: {err}");
+    }
 }
 
 /// A report is backend traffic: with a modem it goes over the cellular uplink and never

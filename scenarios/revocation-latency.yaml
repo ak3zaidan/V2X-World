@@ -140,7 +140,11 @@ actors:
       # backhaul; `crl` is what makes it broadcast the revocation. A unit with neither
       # role hears both and does nothing, which is why the roles are named.
       roles: [report-forward, crl]
-      profile: rsu/cohda-mk5-rsu
+      # The Commsignia ITS-RS4: its datasheet publishes a verification rate (>2,000/s).
+      # The Cohda MK5 RSU publishes no compute figure, so a unit on it prices no
+      # verification and drops every frame it hears: it never saw a message, never
+      # ran its detectors, and relayed nothing.
+      profile: rsu/commsignia-its-rs4
 
   backend:
     # The CAMP SCMS of 05-protocols.md: eleven entities, butterfly key expansion, two
@@ -228,8 +232,15 @@ threats:
 detection:
   local:
     - id: detect/legacy-12
+  # The Misbehaviour Authority decides on independent evidence over time
+  # (threat/ma/corroborated): reports about one pseudonym are correlated into events — one
+  # glitch heard by ten receivers is one piece of evidence, not ten — an event counts when
+  # two independent trusted reporters witnessed it, and revocation takes three such events
+  # inside a minute from at least three reporters. The legacy persistence gate
+  # (threat/ma/legacy-window) counted one event heard by many as many and revoked honest
+  # vehicles in dense traffic.
   ma:
-    id: threat/ma/legacy-window
+    id: threat/ma/corroborated
 
 metrics: [all]
 exporters: []

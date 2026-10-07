@@ -16,6 +16,7 @@ document rather than like a config: each states at the top what it measures, wha
 | [`pdr-vs-distance.yaml`](pdr-vs-distance.yaml) | How does delivery fall off with distance, and what does the propagation tier do to the curve? | propagation tier × 5 seeds | 10 |
 | [`density-sweep-congestion.yaml`](density-sweep-congestion.yaml) | At what vehicle density does the channel congest, and where does the load land first? | 5 demand rates × 3 seeds | 15 |
 | [`pseudonym-privacy.yaml`](pseudonym-privacy.yaml) | What does a pseudonym-change period cost in bytes, verification and detection? | 4 periods × 3 seeds | 12 |
+| [`pseudonym-strategies.yaml`](pseudonym-strategies.yaml) | Which pseudonym-change strategy stops a roadside eavesdropper — J2945/1, the NYC pilot, C2C-CC, CMIX mix zones or none — and at what cost? | 5 strategies | 5 |
 | [`revocation-latency.yaml`](revocation-latency.yaml) | How long does each stage of a revocation take, and how big is the list? | 3 demand rates × 2 attacker fractions × 3 seeds | 18 |
 | [`rat-comparison.yaml`](rat-comparison.yaml) | DSRC vs LTE-V2X vs NR-V2X: who delivers further, and what each loses frames to | radio technology × 5 seeds | 15 |
 
@@ -28,6 +29,7 @@ document rather than like a config: each states at the top what it measures, wha
 | [`phase2-manhattan.yaml`](phase2-manhattan.yaml) | the Phase 2 *path*: a liar, a detector, a report, a roadside unit, the SCMS backend, a revocation |
 | [`portland-downtown.yaml`](portland-downtown.yaml) | a second city: downtown Portland, Oregon, with its own speed limits and its slow green wave — the file to copy for your own city (`worlds/fetch.sh`, then `world_report --baseline`) |
 | [`credential-lifecycle.yaml`](credential-lifecycle.yaml) | every US SCMS entity in the loop with the vehicles on a small grid — bootstrap, batches and top-ups through the LOP, renewal, reports, revocation, CRL — with the calendar compressed to five minutes; open the page's Backend view to watch it |
+| [`manhattan-5min.yaml`](manhattan-5min.yaml) | the default: five minutes of Midtown with a fleet, the SCMS in the loop through eight roadside units and every car's modem, and misbehaviour detection reporting to the corroborating authority; open the Backend view |
 | [`ccms-lifecycle.yaml`](ccms-lifecycle.yaml) | the European counterpart: CAMs over GeoNetworking, the ECTL and CA-CRL from the Distribution Centre, butterfly tickets the AA cannot link to the enrolment, TS 103 759 reports and passive revocation at the EA |
 | [`scale/`](scale/) | the wall-clock ladder, 2 to 10,000 vehicles, with what the bulk spawn costs in realism stated in `scale/base.yaml` |
 

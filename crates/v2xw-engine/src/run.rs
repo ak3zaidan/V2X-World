@@ -602,6 +602,11 @@ struct FrameState {
     /// The application payload a Phase 2 message carries, for the two messages the
     /// revocation path needs and no node runtime generates.
     app: Option<AppPayload>,
+    /// Whether the frame's signature verifies. `false` only for an attacker's forged or
+    /// tampered message, or one signed under a certificate outside its validity window;
+    /// the SPDU's signature octets are then corrupted, so a receiver that checks the bytes
+    /// finds it out by checking them, and one that has no bytes reads this field.
+    signature_valid: bool,
     /// The signed SPDU as it goes on the air, when the node's own generator built one.
     ///
     /// `None` for the two frames the engine synthesises on a node's behalf (the
@@ -776,6 +781,12 @@ pub struct Engine {
     pending_tx: BTreeMap<NodeId, Vec<(SimTime, FrameSeq)>>,
     /// The Phase 2 path, when the scenario declared one.
     phase2: Option<crate::phase2::Phase2>,
+    /// The pseudonym-change strategy's engine half and the eavesdropper's coverage
+    /// (`crate::pseudonym_policy`), when the scenario asks for either.
+    pseudonym_policy: Option<crate::pseudonym_policy::PseudonymPolicy>,
+    /// Each vehicle's odometer and the store's change count at its last step, for the
+    /// policy.
+    policy_odometer: BTreeMap<NodeId, (f64, u32)>,
     /// The roadside units' positions. They are nodes but not actors, so they are not in
     /// the mobility snapshot and the reception phase has to find them here.
     rsus: BTreeMap<NodeId, Vec3>,
@@ -1194,6 +1205,8 @@ impl Engine {
             live_at_rx: BTreeMap::new(),
             pending_tx: BTreeMap::new(),
             phase2: None,
+            pseudonym_policy: None,
+            policy_odometer: BTreeMap::new(),
             rsus: BTreeMap::new(),
             transfers: BTreeMap::new(),
             next_sdu: 0,
@@ -1243,6 +1256,13 @@ impl Engine {
         };
         let phase2 = crate::phase2::Phase2::build(&engine.scenario, &engine.world)?;
         engine.phase2 = phase2;
+        let policy = crate::pseudonym_policy::PseudonymPolicy::from_scenario(
+            &engine.scenario,
+            &engine.world,
+        )?;
+        if policy.acts() || policy.sniffer_sites().is_some() {
+            engine.pseudonym_policy = Some(policy);
+        }
         engine.create_rsus();
         engine.attach_intersection_feeds()?;
         engine.seed_timeline();
@@ -1764,6 +1784,18 @@ impl Engine {
                 Event::SignalPhase { .. } | Event::NodeTask { .. } | Event::Observe { .. } => {}
             }
             self.report.end_ns = key.time;
+        }
+        let refusals: u64 = self
+            .nodes
+            .values()
+            .map(|n| u64::from(n.stores().crl.refusals()))
+            .sum();
+        if let Some(phase2) = self.phase2.as_mut() {
+            phase2.report_mut().crl_period_refusals = refusals;
+        }
+        if let (Some(phase2), Some(policy)) = (self.phase2.as_mut(), self.pseudonym_policy.as_ref())
+        {
+            phase2.note_policy_totals(policy.silenced_frames, policy.requested_changes);
         }
         if let Some(phase2) = self.phase2.as_mut() {
             phase2.finish();
@@ -2517,6 +2549,10 @@ impl Engine {
                 if let Some(phase2) = self.phase2.as_mut() {
                     phase2.retire(node);
                 }
+                if let Some(policy) = self.pseudonym_policy.as_mut() {
+                    policy.on_retire(node);
+                }
+                self.policy_odometer.remove(&node);
                 self.nodes.remove(&node);
                 self.inboxes.remove(&node);
                 self.node_phase.remove(&node);
@@ -3143,6 +3179,141 @@ impl Engine {
 
     /// The node phase's map and merge, over one node or all of them, as a periodic step or
     /// as a wake.
+    /// Before a node step: tells every node's revocation gate which i-period the
+    /// credential system is in, from the node's own clock.
+    ///
+    /// A node's revocation gate refuses a peer's certificate claiming a period more than
+    /// one away from its own (`v2xw_node::stores::PLAUSIBLE_PERIOD_SKEW`), and it learned
+    /// its own period only from its active certificate. Two kinds of node have none that
+    /// says: a vehicle left without a valid certificate (its top-up refused or late) and a
+    /// roadside unit, whose application certificate is the bootstrap stand-in stamped
+    /// period 0 for the whole run. Both went on refusing every newer certificate as
+    /// `Invalid`, and their detectors reported each as a signature failure: 22,336 of the
+    /// 22,997 verdicts an honest fleet drew at 6,000 veh/h on `credential-lifecycle`
+    /// (60 s i-periods). A real device computes the i-period from its clock (CAMP-EE
+    /// §2.1.5.3.2: periods are fixed calendar intervals from the SCMS epoch), which is what
+    /// this does; a unit's certificate is also moved to the period, as a unit's
+    /// application certificate belongs to the period the system is in.
+    fn sync_credential_periods(&mut self, only: Option<NodeId>, now: SimTime) {
+        let Some(phase2) = self.phase2.as_ref() else {
+            return;
+        };
+        let ids: Vec<NodeId> = match only {
+            Some(id) => vec![id],
+            None => self.nodes.keys().copied().collect(),
+        };
+        for id in ids {
+            let Some(runtime) = self.nodes.get_mut(&id) else {
+                continue;
+            };
+            if runtime.is_vru() {
+                continue;
+            }
+            let believed = runtime.clock().believed_time(now);
+            let period = phase2.params().period_at(believed);
+            let stores = runtime.stores_mut();
+            if stores.crl.current_period() != period {
+                stores.crl.set_period(period);
+            }
+            // A unit's application certificate, and the bootstrap stand-in a vehicle the
+            // credential system left without pseudonyms signs with, carry no linkage value
+            // and no period of their own: they belong to the period the system is in.
+            let issued = phase2.creds(id);
+            if let Some(cred) = stores.certs.active_mut()
+                && cred.i_period != period
+                && (self.rsus.contains_key(&id)
+                    || !issued
+                        .iter()
+                        .any(|c| c.i == cred.i_period && c.j == cred.j_index))
+            {
+                cred.i_period = period;
+            }
+        }
+    }
+
+    /// Before a node step: asks each vehicle's store for the change its pseudonym strategy
+    /// makes due now (`crate::pseudonym_policy`). The store then changes every identifier
+    /// together at its own step, exactly as for a scheduled change.
+    fn apply_pseudonym_policy(&mut self, only: Option<NodeId>, now: SimTime) {
+        let Some(policy) = self.pseudonym_policy.as_mut() else {
+            return;
+        };
+        if !policy.acts() {
+            return;
+        }
+        let ids: Vec<NodeId> = match only {
+            Some(id) => vec![id],
+            None => self.nodes.keys().copied().collect(),
+        };
+        for id in ids {
+            if self.rsus.contains_key(&id) {
+                continue;
+            }
+            let Some(runtime) = self.nodes.get_mut(&id) else {
+                continue;
+            };
+            if runtime.is_vru() || !runtime.state().transmits() {
+                continue;
+            }
+            let (odometer, changes) = match self.policy_odometer.get(&id) {
+                Some(v) => *v,
+                None => {
+                    let changes = runtime.stores().certs.changes();
+                    policy.on_spawn(&self.rng, id, now, 0.0);
+                    self.policy_odometer.insert(id, (0.0, changes));
+                    (0.0, changes)
+                }
+            };
+            let _ = changes;
+            let pos = v2xw_core::NodeView::position(runtime).pos;
+            if policy.change_due(id, now, odometer, pos) {
+                let store = runtime.stores_mut();
+                let certs = core::mem::take(&mut store.certs);
+                store.certs = certs.with_policy(v2xw_node::stores::RotationPolicy {
+                    min_age: Duration::ZERO,
+                    min_distance_m: f64::INFINITY,
+                    require_both: false,
+                });
+            }
+        }
+    }
+
+    /// After a node step: each vehicle's odometry, and the changes its store made, for the
+    /// pseudonym policy (the next stage's draw, a silent period) — and the store's own rule
+    /// put back once an asked-for change is made.
+    fn note_policy_changes(&mut self, travelled: &[(NodeId, f64)], now: SimTime) {
+        let Some(policy) = self.pseudonym_policy.as_mut() else {
+            return;
+        };
+        let own_rule = crate::wiring::rotation_policy(&self.scenario);
+        for (id, d) in travelled {
+            if self.rsus.contains_key(id) {
+                continue;
+            }
+            let Some(runtime) = self.nodes.get_mut(id) else {
+                continue;
+            };
+            if runtime.is_vru() {
+                continue;
+            }
+            let changes = runtime.stores().certs.changes();
+            let entry = self.policy_odometer.entry(*id).or_insert_with(|| {
+                policy.on_spawn(&self.rng, *id, now, 0.0);
+                (0.0, changes)
+            });
+            entry.0 += d;
+            if changes > entry.1 {
+                entry.1 = changes;
+                policy.on_changed(&self.rng, *id, now, entry.0);
+                if policy.acts() {
+                    let store = runtime.stores_mut();
+                    let certs = core::mem::take(&mut store.certs);
+                    store.certs = certs.with_policy(own_rule);
+                }
+            }
+        }
+    }
+
     fn run_nodes(
         &mut self,
         recorder: &mut dyn RunRecorder,
@@ -3167,6 +3338,10 @@ impl Engine {
         }
         if !wake {
             self.feed_controllers(only, now);
+        }
+        if !wake {
+            self.apply_pseudonym_policy(only, now);
+            self.sync_credential_periods(only, now);
         }
         let mut inboxes = core::mem::take(&mut self.inboxes);
         let rng = &self.rng;
@@ -3364,6 +3539,12 @@ impl Engine {
             self.emit(recorder, &fate);
         }
 
+        if self.pseudonym_policy.is_some() {
+            let travelled: Vec<(NodeId, f64)> =
+                results.iter().map(|(id, _, _, d)| (*id, *d)).collect();
+            self.note_policy_changes(&travelled, now);
+        }
+
         for (id, outcome, _, _) in &results {
             for tx in &outcome.transmissions {
                 self.hand_down(*id, tx, now, horizon);
@@ -3490,7 +3671,7 @@ impl Engine {
                 .map(|c| v2xw_core::hash::hex_encode(&c.digest.0[..]));
             phase2
                 .as_mut()
-                .map(|p| p.detect(&mut ctx, node, &me, reporter, delivered))
+                .map(|p| p.detect(&mut ctx, world, node, &me, reporter, delivered))
                 .unwrap_or_default()
         };
         // The node's counters are cumulative, so take the running total rather than
@@ -3522,6 +3703,14 @@ impl Engine {
     /// colliding on every period. The engine's own application frames (a misbehaviour
     /// report, a CRL broadcast) go through [`Engine::hand_down_app`] directly and do not.
     fn hand_down(&mut self, node: NodeId, tx: &Transmission, now: SimTime, horizon: SimTime) {
+        // A silent period after a pseudonym change: no safety message at all.
+        if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+            && let Some(policy) = self.pseudonym_policy.as_mut()
+            && policy.is_silent(node, now)
+        {
+            policy.silenced_frames += 1;
+            return;
+        }
         let jitter = self.gen_timing.jitter(&self.rng, node, tx.generation_time);
         if jitter.as_nanos() == 0 {
             self.hand_down_app(node, tx, now, horizon, None);
@@ -3683,6 +3872,7 @@ impl Engine {
             belief.map_or(0.0, |b| b.heading_rad),
         );
         let mut signature_valid = true;
+        let mut claimed_generation = tx.generation_time;
         if self.phase2.as_ref().is_some_and(|p| p.is_attacker(node)) {
             let actor = self
                 .node_actor
@@ -3747,18 +3937,49 @@ impl Engine {
                     e.speed_mps,
                     e.heading_rad,
                 );
-                signature_valid = e.signature_valid;
+                // What the attacker's edit does to the envelope, rendered on the air: a
+                // forged signature, a certificate outside its validity window (the
+                // receiver's IEEE 1609.2 validity check refuses it as surely as a bad
+                // signature), and the generation time the message claims (a delayed,
+                // replayed or out-of-order message).
+                let window_forged = (e.cert_valid_from, e.cert_valid_to) != cert
+                    && !(e.cert_valid_from..=e.cert_valid_to).contains(&believed);
+                signature_valid = e.signature_valid && !window_forged;
+                // The model edits the time it was handed (`believed`); its edit moves the
+                // message's own stamp by the same amount, so an attack that leaves the
+                // time alone leaves the frame's generation time exactly as it was.
+                claimed_generation = if e.generation_time >= believed {
+                    tx.generation_time
+                        .saturating_add(e.generation_time - believed)
+                } else {
+                    tx.generation_time
+                        .saturating_sub(believed - e.generation_time)
+                };
             }
         }
-        let _ = signature_valid;
         // The passive privacy observer hears the safety frame as it goes on the air.
+        // Only what a sniffer hears, when the scenario limits the eavesdropper's coverage:
+        // where the transmitter physically is decides that, as it decides reception.
+        let heard_by_eavesdropper = self.pseudonym_policy.as_ref().is_none_or(|p| {
+            let at = self
+                .actor_of(node)
+                .map_or_else(|| belief.map_or(Vec3::ZERO, |b| b.pos), |a| a.last.pos);
+            p.eavesdropper_reads(at)
+        });
         if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+            && heard_by_eavesdropper
             && let Some(signer) = credential
                 .as_ref()
                 .map(|c| crate::phase2::digest_bytes(&c.digest))
             && self.phase2.is_some()
         {
             let confidence = belief.map_or(5.0, |b| b.semi_major_m.max(0.0));
+            // A BSM's `msgCnt` is on the air in the clear, and the eavesdropper reads it.
+            let seq = (tx.msg_type == v2xw_msg::MsgType::Bsm)
+                .then(|| tx.signed.as_ref())
+                .flatten()
+                .and_then(|f| v2xw_msg::j2735::bsm::decode_message_frame(&f.payload).ok())
+                .map(|m| m.core.msg_cnt);
             let Engine {
                 scheduler,
                 rng,
@@ -3783,8 +4004,23 @@ impl Engine {
                     claim.1,
                     claim.2,
                     confidence,
+                    seq,
                 );
             }
+        }
+        // The positional accuracy the safety message states on the air, for the receivers'
+        // detectors: they judge a claim against the sender's own stated accuracy (a BSM's
+        // PositionalAccuracy, a CAM's confidence ellipse), not against a constant.
+        if matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam)
+            && let Some(p) = self.phase2.as_mut()
+            && p.detection_on()
+            && let (Some(cred), Some(b)) = (credential.as_ref(), belief)
+        {
+            p.note_broadcast_accuracy(
+                crate::phase2::digest_bytes(&cred.digest),
+                claimed_generation,
+                crate::phase2::broadcast_accuracy_95_m(tx.msg_type, b),
+            );
         }
         // The transmit power is congestion control's, not the scenario's: J2945/1 controls
         // power as well as rate, and the SUPRA filter's output is what the link budget has
@@ -3904,7 +4140,7 @@ impl Engine {
             msg_type: tx.msg_type,
             signer: tx.signer.clone(),
             full_certificate: tx.full_certificate,
-            generation_time: tx.generation_time,
+            generation_time: claimed_generation,
             claimed_pos: claim.0,
             claimed_speed_mps: claim.1,
             claimed_heading_rad: claim.2,
@@ -3920,7 +4156,17 @@ impl Engine {
             claimed_cert_period,
             claimed_linkage,
             app,
-            spdu: tx.signed.as_ref().map(|f| f.spdu.clone()),
+            signature_valid,
+            spdu: tx.signed.as_ref().map(|f| {
+                let mut spdu = f.spdu.clone();
+                // The signature is the SPDU's last field (IEEE 1609.2 SignedData), so
+                // flipping its final octet leaves the frame parseable and the signature
+                // wrong.
+                if !signature_valid && let Some(last) = spdu.last_mut() {
+                    *last ^= 0x01;
+                }
+                spdu
+            }),
             // Read from the node's own `SignedFrame`, not recomputed here: the split
             // between payload and envelope is the security stack's answer and the
             // engine has no business having a second one.
@@ -6269,7 +6515,14 @@ impl Engine {
             let Some(p) = self.phase2.as_mut() else {
                 return;
             };
-            if active.is_none() {
+            // Starved means the node cannot sign at its next periodic step: nothing in its
+            // pool is valid now. A pool installed since the node's last periodic step (a
+            // vehicle that has just joined, a top-up that has just landed) is not yet swept
+            // into `Active`, and a wake between steps (`wake_timed`) does not sweep, so
+            // `active()` alone read every newly joined vehicle as starved for up to one
+            // step: 26 of 55 vehicles on `credential-lifecycle`, none of which ever missed
+            // a signature.
+            if active.is_none() && pool_valid == 0 {
                 p.note_starved(*id);
             }
             if let Some(old) = p.note_change(*id, n_changes, digest) {
@@ -6992,10 +7245,10 @@ fn rx_frame(state: &FrameState, bytes: u32) -> RxFrame {
         claimed_heading_rad: state.claimed_heading_rad,
         claimed_generation_time: state.generation_time,
         full_certificate: state.full_certificate,
-        // Modelled crypto: the engine knows the sender's key is genuine, so the signature
-        // is valid. The receiver only learns it by *spending* the verification time, which
-        // `ObuRuntime::step` charges against its servers.
-        signature_valid: true,
+        // Modelled crypto: the engine knows whether the sender's signature is genuine (it
+        // is, unless an attacker forged it). The receiver only learns it by *spending* the
+        // verification time, which `ObuRuntime::step` charges against its servers.
+        signature_valid: state.signature_valid,
         claimed_cert_period: state.claimed_cert_period,
         claimed_linkage: state.claimed_linkage,
         spdu: state.spdu.clone(),

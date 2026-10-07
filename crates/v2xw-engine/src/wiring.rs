@@ -2739,8 +2739,8 @@ fn apply_security_profile(runtime: &mut ObuRuntime, scenario: &Scenario, env: No
 /// * `time` — change when the active pseudonym is `period_s` old (default 300 s, the
 ///   J2945/1 `CERTCHG` interval), however far the vehicle drove.
 /// * `distance` — change after `distance_m` of travel (default 2 km, the NYC-pilot rule).
-/// * `mix-zone` — change only on leaving a mix zone. No world in this build has mix zones,
-///   so no scheduled change happens; forced changes (expiry, revocation) still do.
+/// * `mix-zone` and `c2c-cc` — no rule of the store's own: the engine asks for each change
+///   (`crate::pseudonym_policy`). Forced changes (expiry, revocation) still happen.
 /// * `silent` — no scheduled change; forced changes still happen.
 ///
 /// This used to ignore the numbers: a period of exactly 300 s selected "5 min *and* 2 km"
@@ -2754,6 +2754,12 @@ pub fn rotation_policy(scenario: &Scenario) -> RotationPolicy {
         min_distance_m: f64::INFINITY,
         require_both: false,
     };
+    // C2C-CC's staged rule and the mix zones are the engine's to decide
+    // (`crate::pseudonym_policy`), which asks the store for each change; the store keeps no
+    // schedule of its own for them.
+    if p.strategy == "c2c-cc" {
+        return never;
+    }
     match PseudonymStrategy::from_scenario(&p.strategy, p.period_s, p.distance_m) {
         Some(PseudonymStrategy::Time { period }) => RotationPolicy {
             min_age: period,

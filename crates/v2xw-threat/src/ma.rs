@@ -188,6 +188,12 @@ impl LegacyWindow {
         self.revoked.contains(subject)
     }
 
+    /// How many subjects the authority holds evidence about.
+    #[must_use]
+    pub fn subjects(&self) -> usize {
+        self.evidence.len()
+    }
+
     /// How many subjects have been revoked.
     #[must_use]
     pub fn revoked_count(&self) -> usize {

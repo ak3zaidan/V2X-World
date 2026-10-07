@@ -118,6 +118,17 @@ pub struct ObserverParams {
     /// observer that only follows verified traffic — and the difference between the two is
     /// how much a decoy transmitter buys a vehicle's privacy.
     pub track_unverifiable: bool,
+    /// Whether the observer links by message-counter continuity: a BSM's `msgCnt`
+    /// (J2735 `MsgCount`, 0–127, one step per message) is on the air in the clear, and a
+    /// sender that changes pseudonym without restarting it at a random value (which J2735
+    /// allows "if the sender has changed identity", and the C2C-CC's RS_BSP_182 requires
+    /// of every identifier) continues its old count under its new name. `true`: an
+    /// eavesdropper reads everything on the air.
+    pub link_by_sequence: bool,
+    /// The shortest interval between two messages of one sender, seconds: J2945/1's
+    /// 100 ms. The counter can have advanced at most `⌊Δt / this⌋ + 1` across a silence of
+    /// `Δt`.
+    pub min_message_interval_s: f64,
 }
 
 impl Default for ObserverParams {
@@ -129,6 +140,8 @@ impl Default for ObserverParams {
             max_silence_s: 13.0,
             min_fixes_for_velocity: 2,
             track_unverifiable: true,
+            link_by_sequence: true,
+            min_message_interval_s: 0.1,
         }
     }
 }
@@ -151,6 +164,8 @@ struct Track {
     links: u32,
     /// How many receptions the whole chain is built from.
     chain_fixes: u32,
+    /// The message counter its last message carried, when the message has one.
+    seq: Option<u8>,
 }
 
 /// What the observer concluded about one new pseudonym.
@@ -401,8 +416,25 @@ impl PrivacyObserver {
     pub fn on_message(
         &mut self,
         ctx: &mut dyn ThreatCtx,
+        me: &SelfBelief,
+        m: &ObservedMessage,
+    ) -> Option<LinkOutcome> {
+        self.on_message_sequenced(ctx, me, m, None)
+    }
+
+    /// [`PrivacyObserver::on_message`] with the message counter the frame carried in the
+    /// clear (a BSM's `msgCnt`; `None` for a message without one, such as a CAM).
+    ///
+    /// When [`ObserverParams::link_by_sequence`] is on and exactly one recently silent
+    /// track's counter continues into this one — it advanced by at least one and by no more
+    /// than the elapsed time allows — and its kinematics also admit it, the link is certain:
+    /// posterior 1, an anonymity set of one. That is what an unsynchronised identifier costs.
+    pub fn on_message_sequenced(
+        &mut self,
+        ctx: &mut dyn ThreatCtx,
         _me: &SelfBelief,
         m: &ObservedMessage,
+        seq: Option<u8>,
     ) -> Option<LinkOutcome> {
         if !self.will_track(m) {
             return None;
@@ -421,6 +453,7 @@ impl PrivacyObserver {
             next.last_seen = t;
             next.fixes = tr.fixes.saturating_add(1);
             next.chain_fixes = tr.chain_fixes.saturating_add(1);
+            next.seq = seq;
             self.tracks.insert(m.signer, next);
             return None;
         }
@@ -447,6 +480,31 @@ impl PrivacyObserver {
             candidates.push((*digest, math::exp(-0.5 * z * z)));
         }
 
+        // Counter continuity, when the frame carries a counter: the candidates whose count
+        // this one continues. One such candidate is a certain link.
+        if self.params.link_by_sequence
+            && let Some(now_seq) = seq
+        {
+            let continuing: Vec<([u8; 8], f64)> = candidates
+                .iter()
+                .copied()
+                .filter(|(digest, _)| {
+                    let Some(tr) = self.tracks.get(digest) else {
+                        return false;
+                    };
+                    let Some(last) = tr.seq else {
+                        return false;
+                    };
+                    let dt = ns_to_secs(t.saturating_sub(tr.last_seen));
+                    let most = (dt / self.params.min_message_interval_s.max(1e-3)).floor() + 1.0;
+                    let advanced = f64::from(now_seq.wrapping_sub(last) % 128);
+                    advanced >= 1.0 && advanced <= most
+                })
+                .collect();
+            if continuing.len() == 1 {
+                candidates = vec![(continuing[0].0, 1.0)];
+            }
+        }
         let total = math::sum_ordered(candidates.iter().map(|(_, w)| *w));
         let posteriors: Vec<([u8; 8], f64)> = if total > 0.0 {
             candidates.iter().map(|(d, w)| (*d, w / total)).collect()
@@ -497,6 +555,9 @@ impl PrivacyObserver {
                     self.longest_chain_links = links;
                 }
                 self.insert_track(m, t, origin, chain_start, links, chain_fixes);
+                if let Some(tr) = self.tracks.get_mut(&m.signer) {
+                    tr.seq = seq;
+                }
                 let predecessor_hex = v2xw_core::hash::hex_encode(&predecessor);
                 ctx.emit(PrivacyLinkClaim {
                     t,
@@ -524,6 +585,9 @@ impl PrivacyObserver {
                 // because a linkage rate needs its denominator.
                 self.declined += 1;
                 self.insert_track(m, t, m.signer, t, 0, 0);
+                if let Some(tr) = self.tracks.get_mut(&m.signer) {
+                    tr.seq = seq;
+                }
                 ctx.emit(PrivacyLinkClaim {
                     t,
                     observer: self.node,
@@ -572,6 +636,7 @@ impl PrivacyObserver {
                 chain_start,
                 links,
                 chain_fixes: chain_fixes.saturating_add(1),
+                seq: None,
             },
         );
     }
@@ -669,6 +734,22 @@ pub fn card(p: &ObserverParams) -> ModelCard {
             },
         ),
         Parameter::new(
+            "link_by_sequence",
+            "-",
+            json!(p.link_by_sequence),
+            standard(
+                "SAE J2735 MsgCount: \"a sender may initialize this element to any value \
+                 ... if the sender has changed identity\"; C2C-CC BSP R1.5.1 RS_BSP_182: \
+                 at an AT change all identifiers shall be changed",
+            ),
+        ),
+        Parameter::new(
+            "min_message_interval_s",
+            "s",
+            json!(p.min_message_interval_s),
+            standard("SAE J2945/1: BSMs at 10 Hz, 100 ms nominal interval"),
+        ),
+        Parameter::new(
             "track_unverifiable",
             "-",
             json!(p.track_unverifiable),
@@ -712,8 +793,9 @@ pub fn card(p: &ObserverParams) -> ModelCard {
          attacker does, and why a Sybil run's linkability is not comparable with an honest \
          run's."
             .to_string(),
-        "The observer's coverage is the hosting node's own receiver range; observer density \
-         is a scenario property."
+        "The observer's coverage is the host's: every frame (a global eavesdropper) or, with \
+         threats.eavesdropper, the frames sent within range of a sniffer at a fraction of \
+         the signalised intersections."
             .to_string(),
     ];
     card.limitations = vec![
@@ -726,10 +808,11 @@ pub fn card(p: &ObserverParams) -> ModelCard {
          a constant-velocity prediction admits, so a mapped observer tracks better than \
          this one. Declared as a capability (Knowledge::map) and not implemented here."
             .to_string(),
-        "Mix zones and silent periods are modelled only through the silence gate: a vehicle \
-         that stops transmitting for longer than max_silence_s is unlinkable by \
-         construction here, which makes the gate the most consequential parameter in the \
-         model and the one most in need of the WONS 2010 replication."
+        "Silent periods and mix zones reach the observer as what it does not hear: the host \
+         withholds a silent vehicle's frames and a mix zone's encrypted ones \
+         (v2xw-engine pseudonym_policy). A vehicle silent for longer than max_silence_s is \
+         unlinkable by construction, which makes the gate the most consequential parameter \
+         in the model and the one most in need of the WONS 2010 replication."
             .to_string(),
         "The four privacy metrics are emitted as records; the aggregation \
          (08-measurement-and-data.md §2.6) belongs to a metric provider in v2xw-metrics, \
