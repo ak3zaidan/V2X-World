@@ -119,6 +119,10 @@ pub struct Checkpoint {
     pub wall_s: f64,
     /// How many times this run has been resumed.
     pub resumes: u32,
+    /// What the container had written in the finished segments, so the run report's totals
+    /// cover the whole run after a resume.
+    #[serde(default)]
+    pub container: SinkTotals,
 }
 
 impl Checkpoint {
@@ -174,7 +178,7 @@ pub fn segment_name(i: u32) -> String {
 }
 
 /// What the container did with the bytes, summed over every segment.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SinkTotals {
     /// Messages written.
     pub message_count: u64,
@@ -302,6 +306,17 @@ impl Sink {
         self.close_writer()?;
         self.open_segment()?;
         Ok(self.segments_done())
+    }
+
+    /// The container's totals over the segments finished so far.
+    #[must_use]
+    pub fn totals(&self) -> SinkTotals {
+        self.totals
+    }
+
+    /// Starts the totals from what earlier segments wrote (a resumed run).
+    pub fn carry_totals(&mut self, totals: SinkTotals) {
+        self.totals = totals;
     }
 
     /// Segments finished so far.

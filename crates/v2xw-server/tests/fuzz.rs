@@ -354,6 +354,64 @@ fn the_seek_history_is_bounded_by_memory_and_a_seek_before_it_is_refused() {
     assert_eq!(refused["data"]["min_ns"], json!(min_ns), "{refused}");
 }
 
+/// A run of days keeps only its last stretch for seeking, so the page's seek before it
+/// computes the run again from the start (`Run::rewind`, then `extend_to` as a forward
+/// seek does): after a rewind the earliest instant is seekable again, the run is the same
+/// run — its output digest over every step, run to the end a second time, is the first
+/// pass's — and its identity (the run id, so no page is sent a new `Hello`) is kept.
+///
+/// Shown able to fail: with `LiveEngine::rewind` returning `Ok(false)` (the trait's
+/// default) the seek after it is refused with -32003, as before.
+#[test]
+fn a_seek_before_the_history_computes_the_same_run_again() {
+    let path = scenario("rewind", 20);
+    let engine = LiveEngine::open(
+        &path,
+        LiveOptions {
+            build_utc: "2026-09-30T00:00:00Z".to_string(),
+            paused: true,
+            speed: 0.0,
+            retain_bytes: 64 * 1024,
+            ..LiveOptions::default()
+        },
+    )
+    .expect("build");
+    let world_json = engine.world_json().to_string();
+    let run = Run::new(Box::new(engine), world_json).expect("run");
+    ok(&run, "run.start", json!({"paused": true, "speed": 0}));
+    ok(&run, "run.resume", json!({}));
+    let first = drive_to_end(&run);
+    let digest = first["engine"]["output_digest"].clone();
+    assert!(digest.is_string(), "{first}");
+    let run_id = run.descriptor().run_id.clone();
+    let (min_ns, _) = run.seek_range();
+    assert!(min_ns > 0, "the oldest steps were dropped: {first}");
+
+    assert!(run.rewind().expect("rewind"), "a live run rewinds");
+    assert_eq!(run.descriptor().run_id, run_id, "the same run");
+    let target = 2_000_000_000;
+    let mut reached = 0;
+    for _ in 0..1_000 {
+        reached = run.extend_to(target, std::time::Duration::from_millis(200));
+        if reached >= target {
+            break;
+        }
+    }
+    assert!(reached >= target, "computed again to {reached} ns");
+    let mut session = Session::new(ConnectParams::default(), &run.descriptor());
+    session.regreet(&run).expect("greet");
+    call_on(&run, Some(&mut session), "run.seek", json!({"t_ns": target}))
+        .expect("a seek the rewind made possible");
+
+    ok(&run, "run.resume", json!({}));
+    let second = drive_to_end(&run);
+    assert_eq!(second["state"], "finished", "{second}");
+    assert_eq!(
+        second["engine"]["output_digest"], digest,
+        "the run computed again is the run: {second}"
+    );
+}
+
 // --- the fuzzer ------------------------------------------------------------------------
 
 /// xorshift64*: the fuzzer's own generator, seeded, so a failure reproduces from its seed.

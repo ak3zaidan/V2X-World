@@ -2673,6 +2673,9 @@ impl Engine {
                 self.node_class.remove(&node);
                 self.mac_window.remove(&node);
                 self.node_wake.remove(&node);
+                // Node ids are never reused, so a retired node's J2945/1 sub-interval is
+                // read by nothing again; kept, it grew with every vehicle of a run of days.
+                self.j2945_quality_at.remove(&node);
                 // Frames the retired node had been handed and not yet processed never
                 // reach an application: each attempt is settled here rather than left
                 // without a fate.

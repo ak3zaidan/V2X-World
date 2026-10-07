@@ -560,6 +560,10 @@ fn execute(
         }
         None => crate::stream::MetricsStream::create(&metrics_path)?,
     };
+    let mut sink = sink;
+    if let Some(ck) = resume.as_ref() {
+        sink.carry_totals(ck.container);
+    }
     let (mut tally, _) = replay.rewrap(sink);
     tally.stream_metrics(metrics);
 
@@ -635,6 +639,7 @@ fn execute(
                     progress_bytes: progress.bytes(),
                     wall_s: progress.wall_s(),
                     resumes,
+                    container: tally.inner_mut().totals(),
                 }
                 .write(out_dir)?;
                 progress.note(&format!(

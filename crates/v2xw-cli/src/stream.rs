@@ -26,6 +26,16 @@ pub struct MetricsStream {
     failed: Option<std::io::Error>,
 }
 
+impl std::fmt::Debug for MetricsStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MetricsStream")
+            .field("path", &self.path)
+            .field("count", &self.count)
+            .field("bytes", &self.hasher.bytes_written())
+            .finish_non_exhaustive()
+    }
+}
+
 impl MetricsStream {
     /// Creates the file and writes its opening.
     ///
@@ -133,7 +143,17 @@ impl MetricsStream {
 }
 
 /// How much of a run reaches its recording.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, serde::Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    clap::ValueEnum,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum RecordLevel {
     /// Every record and the binary snapshot stream: what the page replays.
