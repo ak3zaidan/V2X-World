@@ -47,6 +47,10 @@ const CHANNEL_VISIBILITY: &[(&str, &[Visibility])] = &[
     ("app.advice", &[Visibility::Node]),
     ("app.outcome", &[Visibility::NodeAndGt]),
     ("app.warning", &[Visibility::Node]),
+    // PUBLIC as declared by the record (`v2xw_engine::sec_records::BackendState`) and the
+    // channel registry (`v2xw_record::channels`): counts and role ids, no identity, no
+    // ground-truth label.
+    ("backend.state", &[Visibility::Public]),
     ("det.observation", &[Visibility::Node]),
     ("gt.attack.action", &[Visibility::Gt]),
     ("gt.despawn", &[Visibility::Gt]),

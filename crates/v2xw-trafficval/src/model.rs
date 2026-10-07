@@ -420,8 +420,8 @@ fn platoon_gain(idm: &Idm, d: &DriverProfile, v0: f64, s: f64, length: f64, dela
     // sinks under what slow transients leak into the projection, so the ratio is taken
     // from the leader to the last car still carrying a hundredth of the probe (below that,
     // a residue of about 1e-4 of the probe from the settling transient dominates).
-    let floor = AMP * 1e-2;
     let a0 = amp(0);
+    let floor = a0 * 1e-2;
     let k = (1..N).take_while(|&i| amp(i) >= floor).last();
     let ratios: Vec<f64> = (1..5.min(N)).map(|i| amp(i) / amp(i - 1).max(1e-300)).collect();
     let g = match k {

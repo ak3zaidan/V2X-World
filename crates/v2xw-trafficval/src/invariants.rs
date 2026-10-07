@@ -606,8 +606,8 @@ fn closure(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
             ),
             Row::reported("vehicles bound for the lane that drove elsewhere", w.rerouted.len() as f64, "—"),
             Row::held(
-                "vehicles on, entering or bound for the lane when it closed",
-                (w.committed.len() + w.bound.len()) as f64,
+                "vehicles that would enter the lane after the closure were it left open",
+                entrants_open as f64,
                 (1.0, f64::INFINITY),
                 "the closure must meet traffic, or no entry and no reroute proves anything",
             ),
