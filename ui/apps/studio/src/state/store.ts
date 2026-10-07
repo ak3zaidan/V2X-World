@@ -25,7 +25,7 @@ import type {
   VwpConnectionState,
   RunState,
 } from "@vwp/protocol";
-import type { CameraMode } from "@vwp/viewer";
+import type { CameraMode, LightingMode } from "@vwp/viewer";
 import {
   EMPTY_FEED,
   applyPush,
@@ -534,6 +534,11 @@ interface StudioState {
    * and nothing is deleted — every value keeps its explanation either way.
    */
   devDetails: boolean;
+  /**
+   * How the 3D scene is lit: always day (the default), always night, or following the run's clock.
+   * The top-down map view is drawn in daylight whatever this says, so the streets stay readable.
+   */
+  lighting: LightingMode;
   seriesTick: number;
   target: EngineTargetView;
   replay: ReplayView | null;
@@ -632,6 +637,7 @@ interface StudioState {
   setWhy: (w: WhySubject | null) => void;
   setInspectorTab: (t: InspectorTab) => void;
   setDevDetails: (v: boolean) => void;
+  setLighting: (v: LightingMode) => void;
   bumpSeries: () => void;
   setTarget: (t: EngineTargetView) => void;
   /** Publish (or clear) the local recording's state; `null` means no recording is open. */
@@ -683,6 +689,18 @@ function writeDevDetails(v: boolean): void {
 }
 
 const LEGEND_KEY = "vwp.studio.legendOpen";
+
+const LIGHTING_KEY = "vwp.studio.lighting";
+
+/** The remembered lighting choice; day when there is none, or storage refuses. */
+function readLighting(): LightingMode {
+  try {
+    const v = typeof localStorage !== "undefined" ? localStorage.getItem(LIGHTING_KEY) : null;
+    return v === "night" || v === "clock" ? v : "day";
+  } catch {
+    return "day";
+  }
+}
 
 /** A remembered on/off preference. Storage can throw (a private window); the default is used then. */
 function readFlag(key: string, fallback: boolean): boolean {
@@ -860,6 +878,7 @@ export const useStudio = create<StudioState>((set) => ({
   why: null,
   inspectorTab: "overview",
   devDetails: readDevDetails(),
+  lighting: readLighting(),
   seriesTick: 0,
   target: UNRESOLVED_TARGET,
   replay: null,
@@ -998,6 +1017,14 @@ export const useStudio = create<StudioState>((set) => ({
   setDevDetails: (v) => {
     writeDevDetails(v);
     set({ devDetails: v });
+  },
+  setLighting: (v) => {
+    try {
+      if (typeof localStorage !== "undefined") localStorage.setItem(LIGHTING_KEY, v);
+    } catch {
+      /* still applied, just not remembered */
+    }
+    set({ lighting: v });
   },
   bumpSeries: () => set((state) => ({ seriesTick: state.seriesTick + 1 })),
   setTarget: (t) => set({ target: t }),

@@ -58,7 +58,7 @@ test("an edited setting reaches the next run: duration, seed, arrival rate, radi
 
   // --- duration: the horizon of the next run ----------------------------------------------------
   await setField(page, "/time/duration_s", "4");
-  expect(await apply(page)).toContain("Applied 1 change");
+  expect(await apply(page)).toContain("Changes take effect when you restart");
   await expect(page.getByTestId("staged-note")).toContainText("waiting for the next run");
   const first = await runToEnd(page);
   expect(first.t_end_ns).toBe(4_000_000_000);

@@ -32,7 +32,9 @@ import {
   runSettingsAction,
   runWithDraft,
   undoEdit,
+  RESTART_NOTE,
 } from "../state/settings.js";
+import { RestartNow } from "../components/RestartNow.js";
 import { useRevealSetting } from "../lib/links.js";
 import { changedPointers, getPointer } from "../lib/schema.js";
 import {
@@ -506,6 +508,12 @@ export function SettingsWindow({
           {message ? (
             <div className={`settings-message ${message.tone === "err" ? "err-text" : ""}`} data-testid="scenario-message" role="status">
               {message.text}
+              {message.tone !== "err" && message.text.startsWith(RESTART_NOTE) ? (
+                <>
+                  {" "}
+                  <RestartNow onDone={() => useStudio.getState().setSettingsMessage(null)} />
+                </>
+              ) : null}
             </div>
           ) : null}
         </div>

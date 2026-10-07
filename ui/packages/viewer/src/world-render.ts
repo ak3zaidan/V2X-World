@@ -303,6 +303,8 @@ export class WorldRenderer {
   #ghost2 = -1;
   /** See {@link darkness}. */
   #darkness = 0;
+  /** See {@link setLightLift}. */
+  #lightLift = 1;
   /** What the marking pass drew, for tests and the build report. */
   #markingReport: MarkingReport | null = null;
   /** Buildings a road runs through (indices), from `#buildPortals`. */
@@ -535,7 +537,7 @@ export class WorldRenderer {
 
     this.#sunDir.set(dirX, dirY, Math.max(0.03, dirZ)).normalize();
     this.#placeSun();
-    this.sun.intensity = 0.15 + daylight * 2.6;
+    this.sun.intensity = (0.15 + daylight * 2.6) * this.#lightLift;
     // Warm near the horizon, neutral at noon.
     const warmth = 1 - Math.min(1, daylight * 2.4);
     this.sun.color.copy(SUN_NOON).lerp(SUN_LOW, warmth);
@@ -547,7 +549,7 @@ export class WorldRenderer {
     this.fill.intensity = this.sun.intensity * this.#options.fillLightFraction;
 
     // The sky is the only light a shadowed surface gets besides the fill, so it carries the shade.
-    this.hemisphere.intensity = 0.45 + daylight * 1.35;
+    this.hemisphere.intensity = (0.45 + daylight * 1.35) * this.#lightLift;
 
     const u = this.sky.material.uniforms;
     const night = 1 - Math.min(1, daylight * 3);
@@ -558,6 +560,20 @@ export class WorldRenderer {
     (u.uBottom.value as Color).setHex(this.#theme.skyBottom);
     (u.uSun.value as Vector3).set(dirX, dirY, dirZ);
     u.uSunIntensity.value = daylight;
+  }
+
+  /**
+   * Multiply the sun, fill and sky light by `lift` (1 = as the time of day sets them). The plan view
+   * uses it: seen from straight above, the dark theme's asphalt and ground under the late-morning
+   * sun came out near #1d2a37 on #15212e — streets the owner could not pick out. A lift of about 2
+   * puts them where the theme's own hex values say they are. Unlit layers (overlays, markers) are
+   * untouched, so their colour-blind-safe contrast against the road is not changed by it.
+   */
+  setLightLift(lift: number): void {
+    const l = Math.max(0.1, lift);
+    if (l === this.#lightLift) return;
+    this.#lightLift = l;
+    this.setTimeOfDay(this.#timeOfDay);
   }
 
   /** Swap the palette. Rebuilds vertex colours only if a world is loaded. */

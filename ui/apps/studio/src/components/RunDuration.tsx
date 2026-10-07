@@ -16,7 +16,8 @@
 import { useCallback, useState } from "react";
 
 import { useStudio } from "../state/store.js";
-import { applyDraft } from "../state/settings.js";
+import { applyDraft, RESTART_NOTE } from "../state/settings.js";
+import { RestartNow } from "./RestartNow.js";
 import { getPointer, setPointer } from "../lib/schema.js";
 import { describeError } from "../lib/errors.js";
 import { durationNs } from "../lib/format.js";
@@ -43,12 +44,7 @@ export function RunDuration(): React.JSX.Element | null {
       setBusy(true);
       setNote(null);
       try {
-        const said = await applyDraft();
-        setNote(
-          edits.length > 1
-            ? `${said} Metrics are sampled once a minute for a run this long; set time.metric_period_s to change that.`
-            : said,
-        );
+        setNote(await applyDraft());
       } catch (err) {
         setNote(`The duration was not applied: ${describeError(err)}`);
       } finally {
@@ -86,6 +82,7 @@ export function RunDuration(): React.JSX.Element | null {
       {note !== null ? (
         <span className="timebar-notice" role="status" data-testid="run-duration-note">
           {note}
+          {note.startsWith(RESTART_NOTE) ? <RestartNow onDone={() => setNote(null)} /> : null}
           <button type="button" className="linklike" onClick={() => setNote(null)} aria-label="Dismiss">
             ✕
           </button>

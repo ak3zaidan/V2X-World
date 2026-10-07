@@ -36,6 +36,19 @@ import type {
 } from "@vwp/protocol";
 import { ActorRenderer, DEFAULT_ACTOR_CLASSES, classesFromHello } from "./actors.js";
 import { CameraController, type CameraMode } from "./cameras.js";
+
+/** How the scene is lit; see {@link Viewer.setLighting}. */
+export type LightingMode = "day" | "night" | "clock";
+/** The hour `"day"` lighting draws at: the late-morning sun the viewer has always defaulted to. */
+const DAY_HOUR = 11;
+/** The hour `"night"` lighting draws at: well after civil dusk anywhere the simulator has a map. */
+const NIGHT_HOUR = 22;
+/**
+ * How much brighter the plan view is lit than the street-level views. A design value, not a
+ * physical one: chosen by reading the screenshot, where 2.0 brought the dark theme's roads from
+ * about #1d2a37 to clearly separate from the ground and the background.
+ */
+const MAP_LIGHT_LIFT = 2.0;
 import { PoseInterpolator, type PoseInterpolatorOptions } from "./interp.js";
 import { OverlayManager, VRU_MARK_SCALE } from "./overlays.js";
 import { Picker } from "./picking.js";
@@ -275,8 +288,9 @@ export class Viewer {
   #fogUserSet = false;
   #detachClient: (() => void) | null = null;
   #hunter: GlitchHunter | null = null;
-  #sunFromRun = false;
-  #sunMinute = Number.NaN;
+  /** See {@link setLighting}; `null` while a fixed hour from {@link setTimeOfDay} is in charge. */
+  #lighting: LightingMode | null = null;
+  #appliedHour = Number.NaN;
   /**
    * Signal blocks waiting for the render clock to reach their sim time. Poses are drawn about one
    * mobility step in the past (`interp.ts`); a lamp applied the moment its frame arrives would
@@ -742,39 +756,69 @@ export class Viewer {
 
   /** Hours in `[0, 24)`; drives the sun, the sky gradient and the fill light. */
   setTimeOfDay(hours: number): void {
-    this.#sunFromRun = false;
+    this.#lighting = null;
+    this.#appliedHour = Number.NaN;
     this.worldRenderer.setTimeOfDay(hours);
   }
 
   /**
-   * Put the sun where the run's own clock says it is: local mean solar time at the world's
-   * origin, from `Hello.t0_wall_ns` (the scenario's `time.t0`) plus the drawn sim time plus the
-   * origin's longitude / 15° per hour. That is the clock the engine's headlamp rule reads
-   * (`v2xw_engine::daylight`), so a run the engine puts at night is drawn at night, headlamps
-   * and all. {@link setTimeOfDay} takes over again from a fixed hour. Updated once a sim minute.
+   * Choose how the scene is lit.
+   *
+   *  * `"day"` — always the 11:00 sun. The default the Studio uses, because a map has to be
+   *    readable whatever hour the scenario starts at.
+   *  * `"night"` — always 22:00: dark sky, headlamps and lamp pools on.
+   *  * `"clock"` — the run's own clock: local mean solar time at the world's origin, from
+   *    `Hello.t0_wall_ns` (the scenario's `time.t0`) plus the drawn sim time plus the origin's
+   *    longitude / 15° per hour. That is the clock the engine's headlamp rule reads
+   *    (`v2xw_engine::daylight`), so a run the engine puts at night is drawn at night.
+   *
+   * Whatever the choice, the top-down `map` camera is always drawn in daylight: it is the view a
+   * person reads the street network from, and an evening scenario made it too dark to read. The
+   * street-level views (chase, dashboard, free, …) keep the chosen lighting.
    */
-  setSunFromRun(enabled: boolean): void {
-    this.#sunFromRun = enabled;
-    this.#sunMinute = Number.NaN;
+  setLighting(mode: LightingMode): void {
+    this.#lighting = mode;
+    this.#appliedHour = Number.NaN;
   }
 
-  /** Whether the sun follows the run's clock (see {@link setSunFromRun}). */
+  /** The lighting choice (see {@link setLighting}), or `null` under a fixed {@link setTimeOfDay}. */
+  get lighting(): LightingMode | null {
+    return this.#lighting;
+  }
+
+  /** Back-compat shorthand: `true` is `setLighting("clock")`, `false` is `setLighting("day")`. */
+  setSunFromRun(enabled: boolean): void {
+    this.setLighting(enabled ? "clock" : "day");
+  }
+
+  /** Whether the sun follows the run's clock. */
   get sunFromRun(): boolean {
-    return this.#sunFromRun;
+    return this.#lighting === "clock";
+  }
+
+  /** The hour the scene is lit at this frame, or null to leave it as it is. */
+  #lightingHour(): number | null {
+    const mode = this.#lighting;
+    if (mode === null) return null;
+    if (mode === "day" || this.cameras.mode === "map") return DAY_HOUR;
+    if (mode === "night") return NIGHT_HOUR;
+    const hello = this.#signalHello;
+    if (!hello || hello.t0WallNs === 0n) return DAY_HOUR;
+    const sim = this.interpolator.renderSimSeconds;
+    if (!Number.isFinite(sim)) return null;
+    // Whole minutes, so the sun is moved (and the sky repainted) once a sim minute, not per frame.
+    const unix = Math.floor((Number(hello.t0WallNs / 1_000_000n) / 1000 + sim) / 60) * 60;
+    const utcHours = ((unix / 3600) % 24 + 24) % 24;
+    return ((utcHours + hello.originLonDeg / 15) % 24 + 24) % 24;
   }
 
   #syncSun(): void {
-    const hello = this.#signalHello;
-    if (!this.#sunFromRun || !hello || hello.t0WallNs === 0n) return;
-    const sim = this.interpolator.renderSimSeconds;
-    if (!Number.isFinite(sim)) return;
-    const unix = Number(hello.t0WallNs / 1_000_000n) / 1000 + sim;
-    const minute = Math.floor(unix / 60);
-    if (minute === this.#sunMinute) return;
-    this.#sunMinute = minute;
-    const utcHours = ((unix / 3600) % 24 + 24) % 24;
-    const local = ((utcHours + hello.originLonDeg / 15) % 24 + 24) % 24;
-    this.worldRenderer.setTimeOfDay(local);
+    // The plan view is lit brighter than street level whatever the hour (see `setLightLift`).
+    this.worldRenderer.setLightLift(this.#lighting !== null && this.cameras.mode === "map" ? MAP_LIGHT_LIFT : 1);
+    const hour = this.#lightingHour();
+    if (hour === null || hour === this.#appliedHour) return;
+    this.#appliedHour = hour;
+    this.worldRenderer.setTimeOfDay(hour);
   }
 
   /**

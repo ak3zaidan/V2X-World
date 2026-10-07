@@ -789,10 +789,13 @@ export class StudioEngine {
         maxActors: 20_000,
         autoStart: true,
       });
-      // The sun, the sky and the headlamps follow the run's own clock (`time.t0` plus the
-      // simulated time), so a run of a day goes dark at dusk the way the engine's headlamp rule
-      // does; a fixed 11:00 drew every night-time run in daylight.
-      this.viewer.setSunFromRun(true);
+      // Day by default: an evening scenario drew the map too dark to read. "Follow the clock"
+      // (Layers menu) puts the sun where the run's own `time.t0` says, the way the engine's
+      // headlamp rule does; the map view is lit as day whichever is chosen.
+      this.viewer.setLighting(useStudio.getState().lighting);
+      useStudio.subscribe((s, prev) => {
+        if (s.lighting !== prev.lighting) this.viewer?.setLighting(s.lighting);
+      });
     }
     this.viewer.mount(canvas);
     this.viewer.setTheme(studioTheme(theme));
