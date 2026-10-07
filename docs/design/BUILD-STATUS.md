@@ -212,7 +212,7 @@ server must fit a smaller budget.
 |---|---|---|
 | `cargo test -p v2xw-server` | 3 | all pass each time (the one failure each time was the replay test above, deterministic, now ignored) |
 | `cargo test -p v2xw-server`, 2026-10-06 | 2 | 116 passed, 0 failed, 4 ignored, both times |
-| `soak` churn test (`the_projector_keeps_what_is_alive…`) | 2 | 2/2; red with the feed's dropping of empty logs disabled |
+| `soak` churn test (`the_projector_keeps_what_is_alive…`) | 3 | 3/3 (alone and in both suite runs); red with the feed's dropping of empty logs disabled |
 | vitest protocol / viewer / mock-server / studio | 3 each | 192 / 141 / 45 / 188, all pass every time |
 | mock Playwright `scene-validation` (15 tests) | 2 full passes | 30/30 |
 | its building test alone, old subject vs new | 8 + 8 | 8/8 and 8/8 |
