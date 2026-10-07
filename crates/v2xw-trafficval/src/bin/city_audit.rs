@@ -116,6 +116,53 @@ fn audit_city(path: &str, id: &str, seconds: f64) -> serde_json::Value {
         Err(e) => return fail(format!("import: {e}")),
     };
     let import_s = t.elapsed().as_secs_f64();
+    // `CITY_AUDIT_OD=1`: how many of the connected OD law's pairs the router can drive.
+    if std::env::var("CITY_AUDIT_OD").is_ok() {
+        use v2xw_mobility::demand::{OdModel, OdParams};
+        use v2xw_mobility::routing::{Dijkstra, DijkstraParams, FreeFlowCost};
+        let od = OdModel::build(&world, OdParams { connected_only: true, ..OdParams::default() });
+        if let Ok(od) = od {
+            let router = Dijkstra::new(DijkstraParams::default());
+            let cost = FreeFlowCost::new(&world);
+            let (o, d) = (od.origins(), od.destinations());
+            let mut fail = 0;
+            for i in 0..300usize {
+                let a = o[(i * 7919) % o.len()];
+                let b = d[(i * 104_729 + 13) % d.len()];
+                if router.search(&world, a, b, 0, &cost).is_none() {
+                    fail += 1;
+                    if fail <= 3 {
+                        let (la, lb) = (world.lane(a), world.lane(b));
+                        eprintln!(
+                            "{id}: no route {} ({:?} {:.1} m) -> {} ({:?} {:.1} m, allowed {:?})",
+                            a.index(), la.kind, la.length_m, b.index(), lb.kind, lb.length_m, lb.allowed
+                        );
+                    }
+                }
+            }
+            eprintln!("{id}: {} origins, {} destinations, {fail}/300 sampled pairs unroutable", o.len(), d.len());
+        }
+    }
+    // `CITY_AUDIT_LANES=id,id`: print those lanes' geometry, to read an example off the map.
+    if let Ok(list) = std::env::var("CITY_AUDIT_LANES") {
+        for id in list.split(',').filter_map(|x| x.trim().parse::<u32>().ok()) {
+            if let Some(lane) = world.try_lane(v2xw_core::ids::LaneId::new(id)) {
+                let pts: Vec<String> = lane
+                    .centreline
+                    .iter()
+                    .map(|p| format!("({:.2},{:.2})", p.x, p.y))
+                    .collect();
+                eprintln!(
+                    "{id_city} lane {id}: {:?} len {:.2} junction {:?} pts {}",
+                    lane.kind,
+                    lane.length_m,
+                    lane.junction.map(|j| j.index()),
+                    pts.join(" "),
+                    id_city = id
+                );
+            }
+        }
+    }
     let scenario = v2xw_engine::city::adapt_to_world(scenario, &world);
     let drive_lane_km = v2xw_engine::city::drive_lane_km(&world);
     let signals = world
@@ -220,6 +267,8 @@ fn audit_city(path: &str, id: &str, seconds: f64) -> serde_json::Value {
         "vehicles": report.stats.vehicles,
         "trips_completed": trips,
         "dropped_trips": mobility.dropped_trips(),
+        "unroutable_trips": mobility.unroutable_trips(),
+        "od_connected": scenario.actors.vehicles.demand.params.pointer("/od/connected_only").cloned(),
         "mean_speed_mps": report.stats.mean_speed_mps,
         "safety_violations": safety,
         "rate_exceedances": rate,

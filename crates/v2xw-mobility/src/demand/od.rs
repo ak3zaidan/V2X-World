@@ -345,7 +345,13 @@ fn largest_car_component(world: &World) -> BTreeSet<LaneId> {
     let mut fwd: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut rev: Vec<Vec<usize>> = vec![Vec::new(); n];
     for c in world.roads.connections() {
-        if !c.permitted || !car(c.from_lane) || !car(c.to_lane) {
+        // The router turns down a U-turn unless told otherwise (`DijkstraParams::allow_uturn`),
+        // so a lane reachable only by one is not reachable.
+        if !c.permitted
+            || c.direction == v2xw_world::model::TurnDirection::UTurn
+            || !car(c.from_lane)
+            || !car(c.to_lane)
+        {
             continue;
         }
         if c.via.is_some_and(|v| !world.lane(v).admits(ClassMask::CAR)) {
