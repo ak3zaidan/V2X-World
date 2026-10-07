@@ -35,6 +35,7 @@ declare global {
       selectFirstActor: () => number | null;
       fps: () => number;
       actorCount: () => number;
+      logs: () => readonly { level: string; target: string; message: string }[];
     };
   }
 }

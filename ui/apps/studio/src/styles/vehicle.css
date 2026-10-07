@@ -108,6 +108,12 @@
 .vo-trends .sparkrow { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; border: none; padding: 0; }
 .vo-kv-columns { grid-template-columns: repeat(auto-fill, minmax(130px, max-content) minmax(90px, 1fr)) !important; }
 .table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* Text columns read left to right; only numbers align right, so a column of them lines up. */
+.vehicle-overlay .table th, .vehicle-overlay .table td { text-align: left; }
+.vehicle-overlay .table th.num, .vehicle-overlay .table td.num { text-align: right; }
+.vehicle-overlay .feed-table { font-family: var(--sans); }
+.vehicle-overlay .feed-filters select { width: auto; margin-left: 4px; }
+.vehicle-overlay label.feed-filters { flex-wrap: nowrap; white-space: nowrap; }
 
 /* ------------------------------------------------------------------ the message tables */
 

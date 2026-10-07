@@ -94,6 +94,8 @@ test("the inspector and the chase HUD show identity, radio, security and queues,
   await expect(page.getByTestId("world-chip")).toContainText("1 RSU");
 
   // --- follow a vehicle ----------------------------------------------------------------------------
+  // The overlay replaces the HUD while open, so close it to read the HUD.
+  await page.getByTestId("inspector-close").click();
   await followARadio(page);
   await expect(page.getByTestId("obu-hud")).toBeVisible({ timeout: 30_000 });
   // The pseudonym is named with its certificate's indices, from the node's own security row.
@@ -101,7 +103,9 @@ test("the inspector and the chase HUD show identity, radio, security and queues,
   await expect(page.getByTestId("hud-pseudonym")).not.toContainText("pending");
   await expect(page.getByTestId("hud-sec-pool")).toContainText("valid");
   await expect(page.getByTestId("hud-row-radio")).toBeVisible();
+  const hudText = await page.getByTestId("obu-hud").innerText();
 
+  await page.getByTestId("hud-details").click();
   await page.getByTestId("tab-overview").click();
   await expect(page.getByTestId("insp-identity")).toBeVisible();
   await expect(page.getByTestId("inspector-cert-indices")).toHaveText(/^i \d+ · j \d+$/);
@@ -112,7 +116,7 @@ test("the inspector and the chase HUD show identity, radio, security and queues,
   await expect(page.getByTestId("inspector-topup")).toHaveText(/in flight|in \d|expired/);
 
   // Nothing is drawn as "n/a", in the overview or in the HUD.
-  const overview = (await page.getByTestId("inspector-state").innerText()) + (await page.getByTestId("obu-hud").innerText());
+  const overview = (await page.getByTestId("inspector-state").innerText()) + hudText;
   expect(overview, "a field with no data was drawn as n/a").not.toMatch(/\bn\/a\b/);
   expect(overview).not.toContain("not on the wire");
   await page.screenshot({ path: join(tmpdir(), "vwp-e2e-inspector-overview.png") });

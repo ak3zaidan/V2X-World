@@ -110,7 +110,18 @@ test("follow a vehicle: its BSMs, what it hears and its queues", async ({ page }
   await page.getByTestId("pause").click();
   await expect.poll(async () => (await status(page)).state, { timeout: 15_000 }).toBe("paused");
   await page.waitForTimeout(800);
+  // The overlay replaces the HUD while it is open: close it to read the pose, then reopen it on the
+  // same (remembered) Sent tab.
+  await page.getByTestId("inspector-close").click();
   await expect(page.getByTestId("hud-pose")).toBeVisible();
+  const hud = {
+    lat: await num(page, "hud-pose-lat"),
+    lon: await num(page, "hud-pose-lon"),
+    speed: await num(page, "hud-pose-speed"),
+    heading: await num(page, "hud-pose-heading"),
+  };
+  await page.getByTestId("hud-details").click();
+  await expect(page.getByTestId("tab-sent")).toHaveAttribute("aria-selected", "true");
   await page.getByTestId("feed-row-sent").first().click();
   const detail = page.getByTestId("feed-detail");
   await expect(detail).toBeVisible();
@@ -122,12 +133,6 @@ test("follow a vehicle: its BSMs, what it hears and its queues", async ({ page }
     lon: await num(page, "feed-field-lon"),
     speed: await num(page, "feed-field-speed"),
     heading: await num(page, "feed-field-heading"),
-  };
-  const hud = {
-    lat: await num(page, "hud-pose-lat"),
-    lon: await num(page, "hud-pose-lon"),
-    speed: await num(page, "hud-pose-speed"),
-    heading: await num(page, "hud-pose-heading"),
   };
   const gap = metres(hud.lat, hud.lon, bsm.lat, bsm.lon);
   // The BSM carries the vehicle's GNSS belief of its reference point, the HUD the stream's body

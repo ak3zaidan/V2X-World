@@ -72,7 +72,6 @@ export function ObuHud(): React.JSX.Element | null {
   const inspect = useStudio((s) => s.inspect);
   const hello = useStudio((s) => s.hello);
   const pose = useStudio((s) => s.followedPose);
-  const overlayOpen = useStudio((s) => s.inspectorOpen);
   const setOverlayOpen = useStudio((s) => s.setInspectorOpen);
 
   const byKey = useMemo(() => {
@@ -86,12 +85,11 @@ export function ObuHud(): React.JSX.Element | null {
     <button
       type="button"
       className="small hud-details"
-      onClick={() => setOverlayOpen(!overlayOpen)}
-      aria-pressed={overlayOpen}
+      onClick={() => setOverlayOpen(true)}
       data-testid="hud-details"
       title="Everything about this radio: every message it sent and received, its queues and its certificates (I)"
     >
-      {overlayOpen ? "Hide details" : "Details"}
+      Details
     </button>
   );
 
