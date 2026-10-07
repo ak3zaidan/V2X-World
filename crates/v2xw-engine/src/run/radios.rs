@@ -146,10 +146,17 @@ mod tests {
         for i in 0..900u32 {
             let x = f64::from((i * 7919) % 2000) + if i % 5 == 0 { 0.0 } else { 0.37 };
             let y = f64::from((i * 104_729) % 1500) - 200.0;
-            entries.push((ActorId::new(i * 3), NodeId::new(10_000 + i), Vec3::new(x, y, 0.0)));
+            entries.push((
+                ActorId::new(i * 3),
+                NodeId::new(10_000 + i),
+                Vec3::new(x, y, 0.0),
+            ));
         }
         let index = RadioIndex::build(entries.clone());
-        for (k, r) in [0.0, 5.0, 127.9, 128.0, 300.0, 500.0, 2_600.0, 1e9].into_iter().enumerate() {
+        for (k, r) in [0.0, 5.0, 127.9, 128.0, 300.0, 500.0, 2_600.0, 1e9]
+            .into_iter()
+            .enumerate()
+        {
             for p in [
                 Vec3::new(0.0, 0.0, 0.0),
                 Vec3::new(1_000.37, 500.0, 0.0),
@@ -157,7 +164,11 @@ mod tests {
                 Vec3::new(1_999.37, -200.0, 0.0),
                 entries[k * 97].2,
             ] {
-                assert_eq!(index.within(p, r), brute(&entries, p, r), "r = {r}, p = {p:?}");
+                assert_eq!(
+                    index.within(p, r),
+                    brute(&entries, p, r),
+                    "r = {r}, p = {p:?}"
+                );
             }
         }
         assert!(RadioIndex::default().within(Vec3::ZERO, 1e9).is_empty());

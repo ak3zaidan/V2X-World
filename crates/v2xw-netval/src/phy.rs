@@ -4,9 +4,9 @@
 //! `f64` functions, never by calling back into `v2xw-radio`.
 
 use v2xw_core::card::Tier;
-use v2xw_core::math;
 use v2xw_core::geom::Vec3;
 use v2xw_core::ids::{LinkKey, NodeId};
+use v2xw_core::math;
 use v2xw_core::weather::WeatherState;
 use v2xw_radio::fading::{NakagamiFading, NakagamiPreset};
 use v2xw_radio::obstacle::{NlosvCase, knife_edge_loss_db, knife_edge_loss_exact_db};
