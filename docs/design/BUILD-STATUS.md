@@ -158,10 +158,26 @@ machine, noisy; the counts are not):
 | heap growth 300 → 570 s, `--retain-mb 20` | 124 → 204 MB | 91 → 140 MB |
 
 What still grows over that window is bounded: the grouped-metrics breakdown store (capped at
-1,000,000 entries, about 56 MB), the backend history (600 snapshots, 64 MB at most), each
-metric's plot series (16 bytes a sample, for the whole run by design) and the PCA's
-issuance table in `phase2` (every certificate issued, as a real PCA keeps them; it grows
-with certificates issued, not with time).
+1,000,000 entries), the backend history (600 snapshots, 64 MB at most), each metric's plot
+series (16 bytes a sample, for the whole run by design) and the PCA's issuance table in
+`phase2` (every certificate issued, as a real PCA keeps them; it grows with certificates
+issued, not with time).
+
+**The one-hour soak through the page passed** (`soak.spec.ts`, `VWP_SOAK_SIM_S=3600`,
+`--retain-mb 200`, debug engine, software-rendered headless Chromium, 1.6 h of wall clock on
+the shared machine): the run reached 3,600 s with its digest, the engine never entered
+`error`, no page or console error, 15 vehicles followed in turn in the chase view with
+their message feed. The seek history held at 199.9–200.0 MB from 606 s. The engine's
+footprint beside it: 152, 203, 209, 208, 221, 266, 274, 249, 269, 324, 329 and 249 MB at
+305 … 3,600 s — the rise from 1,800 s is the demand surge (live radios 52–55 against 29–40)
+and the breakdown store filling to its cap (313,495 entries at 908 s, 1,000,000 from
+3,021 s); the end is 249 MB against 209 MB at the warm sample (bound 322). The projector's
+stores stayed with the live fleet: 419 radios had driven by 3,021 s, the feed and security
+rows held 45–46. Tab heap 44.1–47.7 MB throughout. A `heap` census of the engine at
+3,322 s: 557 MB malloced, of which the seek history's events (≈2,200 steps' lists and
+their payloads, ≈200 MB) and the breakdown store's deques (≈130 MB at its cap, a deque's
+spare capacity included) are the two largest; the latter is the next thing to trim if the
+server must fit a smaller budget.
 
 ### Resume and replay
 
@@ -179,12 +195,24 @@ with certificates issued, not with time).
   `body_centre`) while the recording's frames come from the kernel's snapshot stream, which
   keeps the rear-bumper reference (first difference 2,500 mm, half a passenger car). The fix
   is one projection for both, which moves every recording's bytes.
+  - The page's own replay (the WebAssembly reader) now applies the live stream's projection
+    to what it decodes (`toBodyCentres` in `lib/replay.ts`, with the connected engine's class
+    lengths, and a logged note when no engine is connected to give them), so a recording
+    opened in the page draws each vehicle where the live page drew it; `replay.test.ts`
+    holds it. It is not exercised end to end in the page here: the reader's WebAssembly
+    build needs `wasm-bindgen` and a clang with a wasm32 target, which this machine lacks
+    (`ui/apps/studio/public/wasm/README.md`). The replay *server* still forwards the
+    recorded frames unchanged (§7.2), so it stays half a length off and without the
+    MetricSample and Provenance frames until the recording carries the live projection —
+    the integrator's decision, since it moves every recording's bytes.
 
 ### Flakiness
 
 | Suite | Runs | Result |
 |---|---|---|
 | `cargo test -p v2xw-server` | 3 | all pass each time (the one failure each time was the replay test above, deterministic, now ignored) |
+| `cargo test -p v2xw-server`, 2026-10-06 | 2 | 116 passed, 0 failed, 4 ignored, both times |
+| `soak` churn test (`the_projector_keeps_what_is_alive…`) | 2 | 2/2; red with the feed's dropping of empty logs disabled |
 | vitest protocol / viewer / mock-server / studio | 3 each | 192 / 141 / 45 / 188, all pass every time |
 | mock Playwright `scene-validation` (15 tests) | 2 full passes | 30/30 |
 | its building test alone, old subject vs new | 8 + 8 | 8/8 and 8/8 |
