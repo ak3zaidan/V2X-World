@@ -43,6 +43,7 @@ import { FrameStats } from "./stats.js";
 import { DARK_THEME, themeByName, type ViewerTheme } from "./theme.js";
 import { WorldRenderer, type RoadsideUnitPlacement, type WorldRendererOptions } from "./world-render.js";
 import { LampGlow } from "./lamp-glow.js";
+import { SURFACE_TOP_M, nearPlaneLimit } from "./ground.js";
 import { GlitchHunter, type GlitchHunterOptions, type GlitchReport } from "./glitch.js";
 import type { ActorClassDef, FrameScheduler, PickResult, ViewerCanvas, ViewerRenderer } from "./types.js";
 
@@ -52,6 +53,9 @@ import type { ActorClassDef, FrameScheduler, PickResult, ViewerCanvas, ViewerRen
  * types from that package.
  */
 const PREALLOCATED_SLOTS = 4096;
+
+/** Smallest near plane the clip-plane sync will set, metres: a camera on the road keeps some depth range. */
+const MIN_NEAR_M = 0.03;
 
 /** Options for {@link Viewer}. */
 export interface ViewerOptions {
@@ -495,7 +499,7 @@ export class Viewer {
     this.picker.setWorld(this.worldRenderer);
     this.cameras.setWorld(this.worldRenderer);
     const b = world.bbox;
-    this.cameras.focusOn((b.minXM + b.maxXM) / 2, (b.minYM + b.maxYM) / 2, b.minZM);
+    this.cameras.focusOn((b.minXM + b.maxXM) / 2, (b.minYM + b.maxYM) / 2, this.worldRenderer.groundZ);
     this.cameras.fitExtent(Math.max(b.maxXM - b.minXM, b.maxYM - b.minYM) * 1.05);
     this.#autoExtentM = this.cameras.extentM;
     if (this.cameras.mode === "map") this.cameras.snap();
@@ -1299,13 +1303,24 @@ export class Viewer {
       const dist = cam.position.distanceTo(look);
       const top = Math.max(world.bbox.maxZM, look.z + dist * 0.08 + 12);
       const above = cam.position.z - top;
+      const grade = this.worldRenderer.groundZ;
       if (above > 0) {
         near = Math.max(base, above * 0.8);
       } else if (this.cameras.mode !== "dashboard") {
-        const height = cam.position.z - world.bbox.minZM;
+        // Height above the *ground*, not above `bbox.minZM`: a tunnel puts that 6 m or more lower,
+        // which pushed a street camera's near plane to a metre (`ground.ts`).
+        const height = cam.position.z - grade;
         near = Math.min(1, Math.max(base, height * 0.2));
       }
       far = Math.max(far, this.worldRenderer.sky.scale.x * 1.05);
+      // And never so far out that the near-plane rectangle reaches down into the road. A camera low
+      // over the street and pitched down — the chase orbit dragged below its default, a VRU's
+      // 3.7 m chase, the free camera skimming the road — had its near plane's lower corners under
+      // the surface: the road was cut away along the bottom of the frame and the ground plane, or
+      // nothing, showed through. The limit is exact for the projection in use (`ground.ts`); the
+      // floor keeps a camera lying on the road from collapsing the depth range.
+      const limit = nearPlaneLimit(cam, grade + SURFACE_TOP_M);
+      if (Number.isFinite(limit)) near = Math.min(near, Math.max(MIN_NEAR_M, limit * 0.9));
     }
     if (!Number.isFinite(near) || near <= 0) near = base;
     if (Math.abs(near - cam.near) > cam.near * 0.02 || far !== cam.far) {

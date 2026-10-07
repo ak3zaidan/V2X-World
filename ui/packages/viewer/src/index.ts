@@ -37,7 +37,8 @@ export type {
 export { PoseInterpolator, lerpAngle, wrapAngle, extrapolationEase, HISTORY as POSE_HISTORY } from "./interp.js";
 export type { PoseInterpolatorOptions, PoseSnapshot, SampleInfo } from "./interp.js";
 
-export { CameraController, CAMERA_MODES } from "./cameras.js";
+export { CameraController, CAMERA_MODES, FREE_CAMERA_HINT } from "./cameras.js";
+export { groundLevelOf, nearPlaneLimit, nearPlaneDropPerMetre, SURFACE_TOP_M } from "./ground.js";
 export type { CameraControllerOptions, CameraState, CameraMode, InputTarget } from "./cameras.js";
 
 export {

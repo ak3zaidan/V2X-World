@@ -202,7 +202,7 @@ export class Picker {
 
   /** The ground hit for the ray built by the last {@link pickAtNdc} or {@link pickGround}. */
   pickGroundFromRay(): PickResult {
-    const groundZ = this.#world?.world?.bbox.minZM ?? 0;
+    const groundZ = this.#world?.world ? this.#world.groundZ : 0;
     const dz = this.#dir.z;
     if (Math.abs(dz) < 1e-6) return null;
     const t = (groundZ - this.#origin.z) / dz;

@@ -848,7 +848,7 @@ export class GlitchHunter {
       const b = w.buildingIndexAt(p.x, p.y);
       if (b >= 0 && p.z < w.buildingTopOf(b) && b !== w.ghostBuilding && b !== w.ghostBuilding2) {
         clip = `the camera is inside building ${w.buildingIdOf(b)}`;
-      } else if (p.z < world.bbox.minZM + 0.15) {
+      } else if (p.z < w.groundZ + 0.15) {
         clip = "the camera is under the ground";
       } else {
         // Near-plane corners.
