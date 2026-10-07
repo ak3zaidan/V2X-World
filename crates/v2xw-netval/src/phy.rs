@@ -238,7 +238,7 @@ fn tr37885_pathloss(mode: Mode) -> Outcome {
 
 fn tr37885_plos(mode: Mode) -> Outcome {
     let mut worst: f64 = 0.0;
-    let mut d = 0.0;
+    let mut d = 0.0f64;
     while d <= 1_200.0 {
         let hw = if d <= 475.0 {
             (2.1013e-6 * d * d - 0.002 * d + 1.0193).min(1.0)
@@ -385,7 +385,7 @@ fn fresnel(x: f64) -> (f64, f64) {
 fn knife_edge(mode: Mode) -> Outcome {
     let mut worst_approx: f64 = 0.0;
     let mut worst_exact: f64 = 0.0;
-    let mut nu = -0.7;
+    let mut nu = -0.7f64;
     while nu <= 3.0 {
         let eq31 = 6.9 + 20.0 * log10(((nu - 0.1) * (nu - 0.1) + 1.0).sqrt() + nu - 0.1);
         worst_approx = worst_approx.max((knife_edge_loss_db(nu) - eq31).abs());

@@ -2708,6 +2708,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "v2xw-netval"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "serde_json",
+ "v2xw-core",
+ "v2xw-engine",
+ "v2xw-metrics",
+ "v2xw-msg",
+ "v2xw-net",
+ "v2xw-node",
+ "v2xw-radio",
+ "v2xw-sec",
+ "v2xw-world",
+]
+
+[[package]]
 name = "v2xw-node"
 version = "0.1.0"
 dependencies = [

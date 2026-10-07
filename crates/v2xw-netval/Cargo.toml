@@ -19,7 +19,8 @@ v2xw-net = { workspace = true }
 v2xw-msg = { workspace = true }
 v2xw-sec = { workspace = true }
 v2xw-node = { workspace = true }
-v2xw-engine = { workspace = true }
+# Not a `workspace = true` entry: the root lists no `v2xw-engine` (see v2xw-cli's manifest).
+v2xw-engine = { path = "../v2xw-engine", version = "0.1.0" }
 v2xw-metrics = { workspace = true }
 serde_json = { workspace = true }
 rayon = { workspace = true }

@@ -1372,7 +1372,7 @@ mod tests {
             Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
             let expected = 3_000_000 + aifs + (drawn - 3) * slot;
             assert_eq!(
-                Mac::next_poll_at(&mac, node, CH),
+                Mac::<TestCtx>::next_poll_at(&mac, node, CH),
                 Some(expected),
                 "late report {late_report}: drawn {drawn}, 3 slots counted before the busy medium"
             );

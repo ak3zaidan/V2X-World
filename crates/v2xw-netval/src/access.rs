@@ -246,7 +246,7 @@ fn backoff_freeze(mode: Mode) -> Outcome {
         ctx.set_now(t3);
         Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
         let expected = t3 + aifs + (drawn - elapsed_slots) * slot;
-        let due = Mac::next_poll_at(&mac, node, CH);
+        let due = Mac::<TestCtx>::next_poll_at(&mac, node, CH);
         ctx.set_now(expected);
         let grant = Mac::poll(&mut mac, &mut ctx, node, CH);
         let at = grant.as_ref().map(|g| g.at);
@@ -286,7 +286,7 @@ fn saturated(n: u32, ac: AccessCategory, target_tx: u64, seed: u64) -> (u64, u64
     let mut guard = 0;
     while tx < target_tx && guard < 10 * target_tx {
         guard += 1;
-        let Some(next) = nodes.iter().filter_map(|&nd| Mac::next_poll_at(&mac, nd, CH)).min() else {
+        let Some(next) = nodes.iter().filter_map(|&nd| Mac::<TestCtx>::next_poll_at(&mac, nd, CH)).min() else {
             break;
         };
         ctx.set_now(next);
@@ -442,7 +442,7 @@ fn j2945(mode: Mode) -> Outcome {
     let model_p = if mode.faulted() { J2945Params { b_density: 20.0, ..p } } else { p };
     let mut bad = Vec::new();
     // MaxITT: 100 ms to B, 100·N/B ms above, capped at 600 ms (reached at 150 vehicles).
-    for n in [0.0, 10.0, 25.0, 30.0, 50.0, 100.0, 149.0, 150.0, 400.0] {
+    for n in [0.0f64, 10.0, 25.0, 30.0, 50.0, 100.0, 149.0, 150.0, 400.0] {
         let want = (100.0 * n / 25.0).clamp(100.0, 600.0);
         let got = SaeJ2945Dcc::max_itt_for(model_p, n).as_secs_f64() * 1_000.0;
         if (got - want).abs() > 1e-6 {
