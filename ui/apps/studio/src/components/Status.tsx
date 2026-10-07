@@ -117,7 +117,15 @@ export function PrimaryAction({ onConnect }: { onConnect: () => void }): React.J
   const status = useStatus();
   const runState = useStudio((s) => s.run.state);
   const replay = useStudio((s) => s.replay);
-  const { perform, busy, error } = useStatusAction(onConnect);
+  const { perform, busy, error: ownError } = useStatusAction(onConnect);
+  // The ⋯ menu's Restart and Stop report a refusal to the page log, which has no tab any more; the
+  // newest one, while recent, is shown here beside the button the run is driven from.
+  const lastLog = useStudio((s) => s.logs[0]);
+  const menuError =
+    lastLog !== undefined && lastLog.level === "error" && lastLog.target === "run" && Date.now() - lastLog.at < 20_000
+      ? lastLog.message
+      : null;
+  const error = ownError ?? menuError;
 
   // A recording has no transport: there is nothing to start, pause or resume, only a position.
   if (replay !== null) return null;
