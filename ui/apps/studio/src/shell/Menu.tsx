@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const ITEM = '[role="menuitem"]:not([disabled]), [role="menuitemcheckbox"]:not([disabled])';
+const ITEM = '[role="menuitem"]:not([disabled]), [role="menuitemcheckbox"]:not([disabled]), [role="menuitemradio"]:not([disabled])';
 
 export function MenuButton({
   label,

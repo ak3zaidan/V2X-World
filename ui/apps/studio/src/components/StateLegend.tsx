@@ -10,6 +10,7 @@ import { VRU_MARK_SCALE } from "@vwp/viewer";
 
 import { useStudio } from "../state/store.js";
 import { actorStatePalette } from "../lib/theme.js";
+import { LegendIcon } from "../shell/Icons.js";
 
 /**
  * The road-user key: at map altitude every actor is a dot in its state colour, and a pedestrian's
@@ -24,13 +25,13 @@ function RoadUserKey({ color }: { color: string }): React.JSX.Element {
         <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true" focusable="false">
           <circle r={r} fill={color} />
         </svg>
-        vehicle
+        Vehicle
       </span>
       <span className="item" data-testid="legend-vru">
         <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true" focusable="false">
           <circle r={r * VRU_MARK_SCALE} fill={color} />
         </svg>
-        pedestrian / cyclist
+        Pedestrian or cyclist
       </span>
     </>
   );
@@ -52,7 +53,7 @@ function Glyph({ shape, color }: { shape: string; color: string }): React.JSX.El
 }
 
 /**
- * The key, folded to one chip at the viewport's top right until it is asked for, and remembered
+ * The legend, folded to one button at the viewport's top right until it is asked for, and remembered
  * open or shut across a reload. It used to be a column of eight rows over the picture at all times;
  * a researcher needs it the first few minutes and then not at all.
  */
@@ -65,28 +66,26 @@ export function StateLegend(): React.JSX.Element {
     <div className="vp-legend">
       <button
         type="button"
-        className={open ? "chip vp-legend-toggle on" : "chip vp-legend-toggle"}
+        className={open ? "vp-button vp-legend-toggle on" : "vp-button vp-legend-toggle"}
         aria-expanded={open}
         aria-controls="vp-legend-body"
         onClick={() => setOpen(!open)}
         data-testid="legend-toggle"
-        title={open ? "Hide the key" : "What the colours and shapes mean"}
+        title={open ? "Hide the legend" : "What the colours and shapes on the map mean"}
       >
-        <span className="vp-legend-swatches" aria-hidden="true">
-          {palette.slice(0, 4).map((p) => (
-            <i key={p.key} style={{ background: p.color }} />
-          ))}
-        </span>
-        key
+        <LegendIcon />
+        <span>Legend</span>
       </button>
       {open ? (
-        <div className="chip legend vp-legend-body" id="vp-legend-body" data-testid="state-legend">
+        <div className="legend vp-legend-body" id="vp-legend-body" data-testid="state-legend">
+          <div className="vp-legend-title">Vehicle colours</div>
           {palette.map((p) => (
             <span className="item" key={p.key}>
               <Glyph shape={p.shape} color={p.color} />
               {p.label}
             </span>
           ))}
+          <div className="vp-legend-title">Seen from above</div>
           <RoadUserKey color={palette[0]?.color ?? "currentColor"} />
         </div>
       ) : null}

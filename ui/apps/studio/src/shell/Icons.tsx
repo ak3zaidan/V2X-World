@@ -19,8 +19,9 @@ const common = {
 export function GearIcon(): React.JSX.Element {
   return (
     <svg {...common}>
-      <circle cx="8" cy="8" r="2.2" />
-      <path d="M8 1.5v1.7M8 12.8v1.7M1.5 8h1.7M12.8 8h1.7M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M3.4 12.6l1.2-1.2M11.4 4.6l1.2-1.2" />
+      {/* A cog with six teeth: the old one, eight thin rays round a circle, read as a sun. */}
+      <path d="M6.9 1.6h2.2l.4 1.8 1.2.7 1.8-.6 1.1 1.9-1.4 1.3v1.4l1.4 1.3-1.1 1.9-1.8-.6-1.2.7-.4 1.8H6.9l-.4-1.8-1.2-.7-1.8.6-1.1-1.9 1.4-1.3V7.3L2.4 6l1.1-1.9 1.8.6 1.2-.7z" />
+      <circle cx="8" cy="8" r="2" />
     </svg>
   );
 }
@@ -77,6 +78,38 @@ export function AgentIcon(): React.JSX.Element {
     <svg {...common}>
       <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
       <path d="M8 5.2v2.6M6.7 6.5h2.6" />
+    </svg>
+  );
+}
+
+/** A camera body and lens: the camera picker over the viewport. */
+export function CameraIcon(): React.JSX.Element {
+  return (
+    <svg {...common}>
+      <path d="M1.8 5h2.6l1.2-1.8h4.8L11.6 5h2.6v7.8H1.8z" />
+      <circle cx="8" cy="8.8" r="2.3" />
+    </svg>
+  );
+}
+
+/** Three stacked sheets: what is drawn over the map. */
+export function LayersIcon(): React.JSX.Element {
+  return (
+    <svg {...common}>
+      <path d="M8 2l6 3-6 3-6-3z" />
+      <path d="M2 8l6 3 6-3" />
+      <path d="M2 11l6 3 6-3" />
+    </svg>
+  );
+}
+
+/** A small key: the legend. */
+export function LegendIcon(): React.JSX.Element {
+  return (
+    <svg {...common}>
+      <circle cx="4" cy="4.5" r="1.4" />
+      <circle cx="4" cy="11.5" r="1.4" />
+      <path d="M7.5 4.5h6M7.5 11.5h6" />
     </svg>
   );
 }

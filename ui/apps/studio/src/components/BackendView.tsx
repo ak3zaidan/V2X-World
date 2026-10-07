@@ -60,13 +60,13 @@ export function BackendButton(): React.JSX.Element {
       type="button"
       className={open ? "icon-button labelled on" : "icon-button labelled"}
       aria-pressed={open}
-      aria-label="Backend"
+      aria-label="Certificate system"
       onClick={() => togglePanel("backend")}
       data-testid="backend-button"
-      title="The credential system's authorities and roadside units, with the traffic between them and the vehicles"
+      title="The certificate system (SCMS): the authorities that issue and revoke certificates, the roadside units, and the messages between them and the vehicles"
     >
       <NetworkIcon />
-      <span>Backend</span>
+      <span>Certificates</span>
     </button>
   );
 }

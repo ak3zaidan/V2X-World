@@ -47,6 +47,7 @@ export function useStatus(): StatusView {
       targetReachable: target.reachable,
       ...(span > 0 ? { spanText: durationNs(span) } : {}),
       clockText: simClock(tNs),
+      atStart: tNs === 0,
       reconnectAttempts,
       ...(failure !== null ? { failure } : {}),
     });
@@ -176,6 +177,11 @@ export function StatusPill(): React.JSX.Element {
  * Deliberately in the flow above the viewport rather than floating over it: a message that covers
  * the picture is a message people dismiss, and this one is often the only thing on the page worth
  * reading.
+ *
+ * It has no button of its own. It used to repeat the header's primary action — two Run buttons a
+ * few pixels apart, which made a first-time user wonder whether they did different things (UI
+ * cleanup, 2026-10-06). The sentence names the button; the header holds it, and shows its refusal.
+ * `onConnect` stays in the signature so the shell's call does not change.
  */
 export function StatusBanner({
   onConnect,
@@ -193,7 +199,7 @@ export function StatusBanner({
   note?: string | null;
 }): React.JSX.Element | null {
   const status = useStatus();
-  const { perform, busy, error } = useStatusAction(onConnect);
+  void onConnect;
   if (!status.banner) return null;
 
   return (
@@ -201,25 +207,12 @@ export function StatusBanner({
       <div className="statusbar-text">
         <strong data-testid="status-headline">{status.headline}</strong>
         {status.detail ? <span className="dim"> {status.detail}</span> : null}
-        {error ? <span className="statusbar-error"> That did not work: {error}</span> : null}
         {note ? (
           <div className="faint" data-testid="status-note">
             The last attempt reported: {note}
           </div>
         ) : null}
       </div>
-      {status.action ? (
-        <button
-          type="button"
-          className="primary"
-          disabled={busy}
-          title={status.action.hint}
-          data-testid="status-action"
-          onClick={() => perform(status.action?.kind ?? "none")}
-        >
-          {busy ? "working…" : status.action.label}
-        </button>
-      ) : null}
     </div>
   );
 }

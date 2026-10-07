@@ -8,6 +8,7 @@ import { isDetachedSettings } from "./state/settings.js";
 import { readTheme } from "./state/store.js";
 import "uplot/dist/uPlot.min.css";
 import "./styles/app.css";
+import "./styles/chrome.css";
 
 applyThemeToDocument(readTheme());
 

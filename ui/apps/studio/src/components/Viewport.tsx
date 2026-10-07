@@ -9,9 +9,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { CAMERA_MODES, type CameraMode } from "@vwp/viewer";
+import { CAMERA_MODES } from "@vwp/viewer";
 
 import { FreeCameraHint } from "./FreeCameraHint.js";
+import { CameraPicker } from "./CameraPicker.js";
 import { ObuHud } from "./ObuHud.js";
 import { OverlayMenu } from "./OverlayMenu.js";
 import { StateLegend } from "./StateLegend.js";
@@ -20,15 +21,6 @@ import { rsuCount } from "../lib/security.js";
 import { radioBreakdown } from "../lib/format.js";
 import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
-
-/** The camera modes in words. */
-const CAMERA_LABEL: Partial<Record<CameraMode, string>> = {
-  map: "Map",
-  chase: "Chase",
-  dashboard: "Dashboard",
-  free: "Free",
-  rsu: "Roadside unit",
-};
 
 /**
  * The world build report, for developer mode: lanes, buildings and roadside units.
@@ -80,7 +72,6 @@ export function Viewport(): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const theme = useStudio((s) => s.theme);
-  const cameraMode = useStudio((s) => s.cameraMode);
   const selectedActor = useStudio((s) => s.selectedActor);
   const selectedNode = useStudio((s) => s.selectedNode);
   const world = useStudio((s) => s.world);
@@ -220,8 +211,15 @@ export function Viewport(): React.JSX.Element {
     // 09-ui §10 — keyboard control for the camera.
     const index = CAMERA_MODES.indexOf(useStudio.getState().cameraMode);
     if (ev.key === "[" || ev.key === "]") {
-      const next = CAMERA_MODES[(index + (ev.key === "]" ? 1 : CAMERA_MODES.length - 1)) % CAMERA_MODES.length];
-      engine.setCameraMode(next);
+      // Step past a view the viewer refuses (a street-level view before any vehicle exists, the
+      // roadside view on a map without masts). Trying only the next one left the keys stuck:
+      // Map → Chase was refused, the view stayed on Map, and the next press tried Chase again.
+      const step = ev.key === "]" ? 1 : CAMERA_MODES.length - 1;
+      for (let k = 1; k < CAMERA_MODES.length; k++) {
+        const next = CAMERA_MODES[(index + step * k) % CAMERA_MODES.length];
+        engine.setCameraMode(next);
+        if (useStudio.getState().cameraMode === next) break;
+      }
       ev.preventDefault();
     } else if (ev.key === "Escape") {
       void engine.selectActor(null);
@@ -229,7 +227,7 @@ export function Viewport(): React.JSX.Element {
   }, []);
 
   const followLabel = selectedNode !== null ? engine.nodes.get(selectedNode)?.label || `node ${selectedNode}` : null;
-  const following = followLabel ?? (selectedActor !== null ? `actor ${selectedActor}` : null);
+  const following = followLabel ?? (selectedActor !== null ? `vehicle ${selectedActor}` : null);
 
   return (
     <div className="viewport" ref={hostRef} data-testid="viewport">
@@ -240,7 +238,7 @@ export function Viewport(): React.JSX.Element {
         onPointerDown={onPointerDown}
         onClick={onClick}
         onKeyDown={onKeyDown}
-        aria-label="2D/3D viewport"
+        aria-label="Simulation view. Click a vehicle to follow it; [ and ] switch camera views."
       />
 
       {/*
@@ -254,35 +252,21 @@ export function Viewport(): React.JSX.Element {
         <OverlayMenu />
 
         <div className="vp-group" role="group" aria-label="Camera" data-testid="camera-group">
-          <select
-            className="vp-select"
-            data-testid="camera-mode"
-            value={cameraMode}
-            onChange={(e) => engine.setCameraMode(e.target.value as CameraMode)}
-            aria-label="Camera mode"
-            title="Camera ( [ and ] cycle through them )"
-          >
-            {CAMERA_MODES.map((m) => (
-              <option key={m} value={m}>
-                {CAMERA_LABEL[m] ?? m}
-              </option>
-            ))}
-          </select>
-          <span className="vp-sep" aria-hidden="true" />
-          <span className={following ? "vp-follow on" : "vp-follow"} data-testid="follow-chip" title={following ? `The camera follows ${following}` : "Click a vehicle to follow it"}>
-            follow: {following ?? "—"}
-          </span>
+          <CameraPicker />
           {following ? (
-            <button
-              type="button"
-              className="vp-clear"
-              onClick={() => void engine.selectActor(null)}
-              aria-label="Stop following"
-              title="Stop following (Esc)"
-              data-testid="follow-clear"
-            >
-              ×
-            </button>
+            <span className="vp-follow on" data-testid="follow-chip" title={`The camera follows ${following}`}>
+              <span className="vp-follow-label">Following</span> {following}
+              <button
+                type="button"
+                className="vp-clear"
+                onClick={() => void engine.selectActor(null)}
+                aria-label="Stop following"
+                title="Stop following (Esc)"
+                data-testid="follow-clear"
+              >
+                ×
+              </button>
+            </span>
           ) : null}
         </div>
 
