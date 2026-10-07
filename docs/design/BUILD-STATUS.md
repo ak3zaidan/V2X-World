@@ -60,7 +60,7 @@ signatures that FIPS 186-4 accepts (a deliberate I-S1 policy, an interop note); 
 punctured-rate spectrum coefficients ns-3 publishes differ from an exhaustive search in
 their high-order terms (≤ 6e-4 relative in Pe, under 0.001 dB).
 
-### Traffic: 23 checks
+### Traffic: 23 checks — 86 held figures pass, 20 pass but are not proved, 15 fail (full run, 10 min debug)
 
 The suite's own defects were the larger share: a cached study keyed on whether a tamper was
 present (so a check's second fault reused its first fault's run, and the jerk rows could
@@ -76,19 +76,25 @@ Model defects the suite finds and records (the report's FAIL rows, open):
 
 | Check | Finding | Owner |
 |---|---|---|
-| `calibration/turning` | turns driven at the SUMO default 5.5 m/s² average lateral acceleration; 85th percentile 8.4 m/s² against AASHTO's 3.7 | mobility (changing the default moves every golden) |
+| `calibration/turning` | turns driven at the SUMO default 5.5 m/s² average lateral acceleration; 85th percentile 8.2 m/s² against AASHTO's 3.7 | mobility (changing the default moves every golden) |
 | `model/sugiyama-ring` | the calibrated city drivers are too string-stable to form Sugiyama's jam (slowest car 3.4 m/s) | mobility |
 | `cities/manhattan` | one car crossed an unsignalised crosswalk a pedestrian was on (5 vehicle-steps) | mobility (`vru::crosswalk`) |
-| `cities/berlin` | junction areas of the OSM import smaller than their connectors (body centre ~2 m outside, 6 steps) | world |
-| `cities/portland` | the scenario puts at most 2 vehicles on the road at its 1,000 veh/h | demand / world |
+| `cities/berlin` | junction areas of the OSM import smaller than their connectors (body centre ~2 m outside; 34 outside-junction and 16 step-speed steps in 180 s) | world |
+| `cities/portland` | the scenario puts at most 6 vehicles on the road at its 1,000 veh/h (2 in the quick run) | demand / world |
+| `invariants/peak-density` (180 s) | one lane-change overlap and one red entry at 20,000 veh/h | mobility |
+| `invariants/shipped-scenarios` (120 s) | midtown-street-life: 56 outside-junction, 17 pedestrian-overlap steps; a 21 m/s published-speed spike in two Manhattan scenarios; jerk rate 0.0011 against the 0.001 gate on two | world, mobility |
+| `calibration/permitted-left-gap` | Raff critical gap 5.99 s against the HCM's 4.5 s (15 turners) | mobility |
 
 ### What is not done
 
-- 21 traffic held figures are still *pass, not proved* (the ring fundamental diagram's
+- 20 traffic held figures are still *pass, not proved* (the ring fundamental diagram's
   truck fault does not move its bands; several calibration rows have no fault yet).
 - No J2735 SPaT/MAP independent decoder (the J2735 ASN.1 is not in the repository), no
   re-derivation of the LTE/NR BLER tables against 3GPP link-level results, no J2945/1 CAMP
   worked examples (not obtainable).
+- `docs/validation/traffic.md` was generated before the three full-run findings above were
+  added to the report's findings table (`report::FINDINGS`); the FAIL rows themselves are in
+  it, and the next `just validation-report` adds the table rows.
 - NET-06 needs `asn1tools` (`pip install asn1tools`, or `NETVAL_PYTHON` naming an
   interpreter that has it); without it the check reports a skip.
 

@@ -227,6 +227,21 @@ pub const FINDINGS: &[(&str, &str, &str)] = &[
         "Open, recorded for the demand/world owner: compare offered against placed trips for `portland-downtown.yaml` (`dropped_trips`), and the trip length distribution.",
     ),
     (
+        "invariants/peak-density (full run)",
+        "At 20,000 veh/h offered for 180 s, phase1-grid shows two vehicles overlapping across adjacent lanes 2212/2213 for three steps at t ≈ 167 s (a lane change into an occupied gap) and one red entry at 3.5 m/s from 0.02 m before the stop line at t = 90.4 s. The 90 s quick run is clean.",
+        "Open, recorded for the mobility owner with the examples in the report.",
+    ),
+    (
+        "invariants/shipped-scenarios (full run)",
+        "On the OSM scenarios run for 120 s: midtown-street-life has 56 outside-junction steps (body centre ~3 m outside the junction area, the Berlin pattern), 17 pedestrian-overlap steps and one occupied-crosswalk entry; pseudonym-privacy and revocation-latency share one step-speed flag (actor 103 reported 21.2 m/s while moving 1.86 m in 0.1 s at t = 114.3 s); pdr-vs-distance and rat-comparison sit at 0.0011 jerk and heading-rate exceedances per vehicle-step against the 0.001 gate.",
+        "Open, recorded: junction areas (world), crosswalk yielding and the published-speed spike (mobility). The jerk gate is the mobility crate's own (`tests/traffic_invariants.rs`) and is not loosened here.",
+    ),
+    (
+        "calibration/permitted-left-gap (full run)",
+        "With 15 left turners observed, Raff's critical gap is 5.99 s against the HCM's 4.5 s (field 3.9–5.1 s): permitted left turners are too cautious. The quick run saw one turner and could not judge.",
+        "Open, recorded for the mobility owner (gap acceptance on a permissive green).",
+    ),
+    (
         "invariants (suite)",
         "Three held figures could not fail: the gridlock row on runs shorter than the auditor's 180 s standstill limit, the jerk-rate row (no fault reached it), and the closure check's entries (the lane closed carried no traffic, so losing the closure changed nothing).",
         "Fixed in the checks: the standstill row is held only on runs longer than the limit and reported otherwise; a second fault (acceleration jitter) proves the jerk row; the closure is applied to the lane most vehicles would enter after it were it left open, watched for 120 s, with a held row that it met traffic.",
