@@ -1,0 +1,46 @@
+# Downtown Portland with its real public transport: TriMet buses, MAX light rail on the
+# transit mall and the Portland Streetcar, from TriMet's GTFS feed, among Poisson cars.
+#
+# Fetch the world and the feed first (the feed clipped to this box and one weekday):
+#
+#     worlds/fetch.sh portland
+#     worlds/fetch-gtfs.sh portland 20261007
+#
+# then check what the stop matcher made of the feed before running:
+#
+#     cargo run -p v2xw-demand-cli -- gtfs --scenario scenarios/portland-transit.yaml \
+#         --feed worlds/cache/portland.gtfs --date 20261007 --start 08:00
+#
+# The feed is local time (America/Los_Angeles); 15:00 UTC on 7 October 2026 is 08:00
+# Pacific daylight time, hence `utc_offset_s: -25200`. Everything else is the
+# portland-downtown scenario.
+schema: v2xw/scenario/1
+
+meta:
+  name: portland-transit
+  base: portland-downtown.yaml
+  description: >-
+    Downtown Portland at the morning peak with TriMet's timetabled buses, MAX and
+    Streetcar (GTFS) stopping and dwelling at their real stops among Poisson cars.
+  tags: [portland, osm, gtfs, transit, demand]
+  created: "2026-10-07"
+
+time:
+  t0: "2026-10-07T15:00:00Z"
+  duration_s: 900.0
+
+actors:
+  vehicles:
+    demand:
+      kind: mobility/demand/composite
+      params:
+        utc_offset_s: -25200
+        parts:
+          - kind: mobility/demand/poisson
+            rate_veh_per_h: 1000.0
+          - kind: mobility/demand/gtfs
+            params:
+              feed: worlds/cache/portland.gtfs
+              date: 20261007
+              dwell: { model: scheduled, min_s: 4.0 }
+              hold_early: true

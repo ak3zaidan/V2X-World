@@ -1856,15 +1856,55 @@ impl NativeMobility {
             } else {
                 &costs
             };
-        let Some(route) = self.plan_route(
-            trip.class,
-            world,
-            trip.origin,
-            trip.destination,
-            trip.t,
-            edge_costs,
-        ) else {
-            return Insertion::Unroutable;
+        // A demand model that planned the route itself (an assignment's saved route, a bus
+        // line through its stops) supplies it; one that fails the drivability check, or
+        // runs into a closed lane, is ignored and the router plans the trip instead
+        // ([`crate::demand::hooks`]). With no such model this is the router alone, as
+        // before.
+        let planned = self
+            .demand
+            .as_ref()
+            .and_then(|d| d.planned_route(world, trip))
+            .filter(|lanes| {
+                lanes.first() == Some(&trip.origin)
+                    && lanes.last() == Some(&trip.destination)
+                    && lanes.iter().all(|l| !self.closed.contains(l))
+                    && crate::demand::hooks::planned_route_is_drivable(
+                        world, trip.class, lanes, false,
+                    )
+            });
+        let route = match planned {
+            Some(lanes) => {
+                let length_m =
+                    math::sum_ordered(lanes.iter().map(|l| world.lane(*l).length_m).collect::<Vec<_>>());
+                let cost_s = math::sum_ordered(
+                    lanes
+                        .iter()
+                        .map(|l| {
+                            let l = world.lane(*l);
+                            l.length_m / l.speed_limit_mps.max(1e-9)
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                Route {
+                    lanes,
+                    length_m,
+                    cost_s,
+                }
+            }
+            None => {
+                let Some(route) = self.plan_route(
+                    trip.class,
+                    world,
+                    trip.origin,
+                    trip.destination,
+                    trip.t,
+                    edge_costs,
+                ) else {
+                    return Insertion::Unroutable;
+                };
+                route
+            }
         };
         // An occupied origin: drop the trip rather than overlap two vehicles.
         //
@@ -4880,6 +4920,28 @@ impl Mobility for NativeMobility {
                     .collect()
             })
             .unwrap_or_default();
+        // A demand model that follows its own vehicles (a bus that stops at its stops) is
+        // shown where every vehicle is now; its commands apply at the next step's pass 1
+        // ([`crate::demand::hooks`]). Nothing is built for a model that does not ask.
+        if self.demand.as_ref().is_some_and(|d| d.wants_progress()) {
+            let progress: Vec<crate::demand::hooks::ActorProgress> = self
+                .actors
+                .values()
+                .map(|a| crate::demand::hooks::ActorProgress {
+                    actor: a.id,
+                    seq: a.seq,
+                    class: a.class,
+                    lane: a.lane,
+                    s_m: a.s_m,
+                    speed_mps: a.speed_mps,
+                    route_index: a.route_index,
+                })
+                .collect();
+            if let Some(d) = self.demand.as_mut() {
+                let commands = d.observe(t1, &progress);
+                self.pending.extend(commands);
+            }
+        }
         MobilityUpdate {
             t: t1,
             states,

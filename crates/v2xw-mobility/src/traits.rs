@@ -230,6 +230,38 @@ pub trait Demand: Model {
     fn set_multiplier(&mut self, _m: f64) -> bool {
         false
     }
+
+    /// The route this model planned for `trip`, when it plans routes itself — an
+    /// assignment's saved route, a bus line through its stops ([`crate::demand::hooks`]).
+    ///
+    /// `None` (the default) lets the engine's router plan the trip. A returned route must
+    /// start on `trip.origin`; the engine checks it with
+    /// [`crate::demand::hooks::planned_route_is_drivable`] and routes the trip itself when
+    /// the check fails.
+    fn planned_route(
+        &self,
+        _world: &v2xw_world::World,
+        _trip: &TripRequest,
+    ) -> Option<Vec<LaneId>> {
+        None
+    }
+
+    /// True if this model wants [`Demand::observe`] called after every step. `false` by
+    /// default, and then the engine builds nothing for it.
+    fn wants_progress(&self) -> bool {
+        false
+    }
+
+    /// Every vehicle on the road at `t`, the end of a step, in actor-id order; the
+    /// commands returned are applied at the start of the next step. Called only when
+    /// [`Demand::wants_progress`] is true.
+    fn observe(
+        &mut self,
+        _t: SimTime,
+        _progress: &[crate::demand::hooks::ActorProgress],
+    ) -> Vec<MobilityCommand> {
+        Vec::new()
+    }
 }
 
 /// Vulnerable road users (03-interfaces.md §3, 04-models.md §2.5).

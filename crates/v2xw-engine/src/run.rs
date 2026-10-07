@@ -1111,6 +1111,7 @@ impl Engine {
                 &mut recorder,
             );
             let demand = crate::wiring::build_demand(&scenario, &world)?;
+            crate::wiring::register_demand(&mut registry, &scenario, demand.as_ref())?;
             mobility.init(&mut crate::adapters::mobility(&mut ctx), demand)?;
         }
 

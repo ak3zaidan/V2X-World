@@ -28,6 +28,11 @@ v2xw-metrics = { workspace = true }
 # Emission, fuel and battery-electric energy models and their metric provider, selected by
 # the scenario's `energy:` section. Depends only on core and metrics, below this crate.
 v2xw-energy = { workspace = true }
+# Demand and route choice (dynamic traffic assignment, OD matrices, counts, GTFS, trip
+# purposes): the extra `actors.vehicles.demand.kind`s. It sits beside `v2xw-mobility` and
+# below this crate. A path entry, as `v2xw-trafficval` names this crate, so the root
+# manifest the other tracks also edit stays untouched.
+v2xw-demand = { path = "../v2xw-demand", version = "0.1.0" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
