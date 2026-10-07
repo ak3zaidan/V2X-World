@@ -2418,3 +2418,38 @@ conflicts resolved by hand and the whole workspace compile-checked:
   floor off by 0.025 dB, an OpenSSL signature interop check, an analytical-collision
   mismatch at N=20); the trafficval IDM rest gap is 1.927 m against [1.95, 2.5]; the
   see-through-ground fix shipped in the scene track but is unconfirmed by the owner.
+
+## 2026-10-07 — city scale merged onto main (branch wrap2/scale)
+
+- Merged: the mesoscopic queue tier (`v2xw-mobility::meso`, Eissfeldt 2003 / SUMO MESO),
+  the meso-micro tiering and its focus-region radio gate (`v2xw-engine::scale`), and the
+  ordered parallel decide pass (`v2xw-mobility::par`). Conflicts resolved: the parallel
+  decide closure now carries traffic realism's `detour_ok` and the drivers track's lateral
+  decision; the gate's "dormant radios do not receive" check uses the radio index's
+  `(actor, node)` pairs; `scale::normalise` runs after `city::adapt_to_world`; `v2xw run
+  --no-recording --digest` reports the long-runs tally's record digest as `stream_digest`.
+- Default behaviour: with no `scale` section nothing tiers, the holds set stays empty, and
+  the decide pass runs serially below 64 vehicles or on one thread; at or above that it is
+  an indexed rayon collect, so its output is in id order whatever the thread count.
+- Verified: mobility `meso`/`par`/`tiering` unit tests, `v2xw-engine --test scale`
+  (1/2/4 threads identical), and release CLI runs with the same digest at 1 and 2 threads:
+  `scale/1000.yaml` (1,050 vehicles) `024937e0727cf796…` both; city rung at a 1,600 cap
+  (1,166 vehicles) `bd087fc4e158f570…` both.
+- Measured (release, LTO off, 16 codegen units, 2 s simulated, owner's 8 GB machine,
+  `RAYON_NUM_THREADS` as stated). Real-time ratio = simulated s / wall s:
+
+  | run | vehicles | threads | real-time ratio |
+  |---|---|---|---|
+  | `scale/100.yaml`, all microscopic | 106 | 2 | 0.82 |
+  | `scale/1000.yaml`, all microscopic (before) | 1,050 | 1 | 0.011 |
+  | `scale/1000.yaml`, all microscopic | 1,050 | 2 | 0.016 |
+  | city rung, cap 1,600 (after) | 1,166 | 1 | 0.20 |
+  | city rung, cap 1,600 (after) | 1,166 | 2 | 0.23 |
+  | `scale/city.yaml` (cap 30,000) | 1,539 | 2 | 0.21 |
+
+  At about 0.2x real time the all-microscopic engine carries roughly 250 vehicles (the
+  page measurement above) and the tiered city carries at least 1,539, the most this
+  Midtown box inserts in 2 s; at about 1,000 vehicles tiering is about 15x faster. The
+  remaining cost at 1,000+ vehicles is the radio, not the decide pass (two threads: 1.4x).
+- Not done: a longer run where the fleet keeps growing past the 2 s insertion limit, and a
+  Studio control for the `scale` section.
