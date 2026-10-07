@@ -73,6 +73,7 @@ export function Viewport(): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const theme = useStudio((s) => s.theme);
   const selectedActor = useStudio((s) => s.selectedActor);
+  const cameraMode = useStudio((s) => s.cameraMode);
   const selectedNode = useStudio((s) => s.selectedNode);
   const world = useStudio((s) => s.world);
   const runState = useStudio((s) => s.run.state);
