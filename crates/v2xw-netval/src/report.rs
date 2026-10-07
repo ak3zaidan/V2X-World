@@ -22,6 +22,26 @@ pub const FINDINGS: &[(&str, &str, &str)] = &[
         "Fixed in `Rri::c_resel_range`.",
     ),
     (
+        "PHY-09",
+        "The sidelink thermal-noise density `cv2x::THERMAL_NOISE_DBM_PER_HZ` was −173.9750935 dBm/Hz; its own documented formula, 10·log10(k·290·1000) with the SI-exact k, gives −173.9751872. A 9.4e-5 dB error, physically negligible, but a constant that disagrees with the formula printed above it.",
+        "Fixed: the constant is the formula's value to nine decimals.",
+    ),
+    (
+        "SEC-01",
+        "The real crypto backend refuses high-s ECDSA signatures (`(r, n − s)`), which FIPS 186-4 and IEEE 1609.2 both accept; OpenSSL emits high s about half the time, so 14 of 32 OpenSSL signatures were refused. This is a deliberate policy (crates/v2xw-sec/src/crypto.rs: refusing the malleated form keeps verdicts independent of crypto mode, invariant I-S1), so it is not changed here; it does mean a simulated receiver would reject a real third-party OBU that signs with high s.",
+        "Recorded, not changed. SEC-01 now sends OpenSSL's signatures in their low-s form (the same signature to any ECDSA verifier) and separately confirms every raw high-s form is refused, so the policy is visible in the report.",
+    ),
+    (
+        "ACC-04 (suite)",
+        "The suite's own reference was wrong at high load: Bianchi's Eq. 7 rests on a decoupling approximation that overstates broadcast collisions at small W and large N (0.907 against 0.871 for the exact slotted process at N = 20, W = 16), so the check failed a MAC that was right.",
+        "Fixed in the check: the slotted process Eq. 7 models is simulated exactly, independently of the MAC, and held at every N within 0.02; Eq. 7 itself is held where it is accurate (N ≤ 10).",
+    ),
+    (
+        "SEC-03 (suite)",
+        "The check signed period 8's SPDU with a fresh backend that did not hold the signing key, so it panicked before it judged anything.",
+        "Fixed in the check: period 8's PKI keeps its own backend.",
+    ),
+    (
         "NET-03",
         "Every message is signed under one PSID, 0x20 (`v2xw_node::secure::PSID_SAFETY`), including ETSI CAMs and DENMs (ITS-AID 36 and 37 in TS 102 965 Table A.1) and SPATEM/MAPEM (137, 138). A receiver filtering on ITS-AID, and the SPDU size (a 2-octet ITS-AID for 137/138), differ from a real stack.",
         "Open, recorded for the V2X-applications track that owns `crates/v2xw-node` this round: the PSID must follow the message type and the envelope profile.",

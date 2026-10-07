@@ -105,8 +105,15 @@ def op_ecdsa(req):
         key = ec.generate_private_key(ec.SECP256R1())
         der = key.sign(bytes.fromhex(d), ec.ECDSA(utils.Prehashed(hashes.SHA256())))
         r, s = utils.decode_dss_signature(der)
+        # OpenSSL emits either representative of s. The simulator's real backend accepts
+        # only the low-s one (crates/v2xw-sec/src/crypto.rs: malleability refused, I-S1);
+        # (r, n - s) is the same signature to every ECDSA verifier, so it is sent as the
+        # interop case and the raw high-s form is reported separately.
+        high = s > N // 2
+        low_s = N - s if high else s
         pub = key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.CompressedPoint)
-        signed.append({"pub": pub.hex(), "digest": d, "r": "%064x" % r, "s": "%064x" % s})
+        signed.append({"pub": pub.hex(), "digest": d, "r": "%064x" % r, "s": "%064x" % low_s,
+                       "raw_s": "%064x" % s, "high_s": high})
     return {"verify": results, "signed": signed}
 
 

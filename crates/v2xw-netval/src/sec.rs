@@ -37,7 +37,7 @@ pub fn checks() -> Vec<Check> {
             id: "SEC-01",
             layer: Layer::Security,
             title: "ECDSA P-256 interoperates with OpenSSL in both directions",
-            reference: "FIPS 186-4 ECDSA over P-256 with SHA-256 (IEEE 1609.2 §5.3.1); OpenSSL through Python `cryptography` as the independent implementation: 32 Rust signatures verified by OpenSSL, 32 OpenSSL signatures verified by the Rust backend, 32 tampered digests rejected by both",
+            reference: "FIPS 186-4 ECDSA over P-256 with SHA-256 (IEEE 1609.2 §5.3.1); OpenSSL through Python `cryptography` as the independent implementation: 32 Rust signatures verified by OpenSSL, 32 OpenSSL signatures (normalised to low s, the form the simulator's backend accepts; see the findings) verified by the Rust backend, 32 tampered digests rejected by both",
             tolerance: "every verdict as expected",
             fault: "The signature's r and s halves swapped on export",
             cost: Cost::Fast,
@@ -185,6 +185,7 @@ fn ecdsa_interop(mode: Mode) -> Outcome {
     let openssl_tamper_rejected = verdicts.iter().skip(1).step_by(2).filter(|v| !**v).count();
     let mut rust_ok = 0;
     let mut rust_tamper_rejected = 0;
+    let (mut high_s, mut high_s_refused) = (0, 0);
     for (k, item) in out["signed"].as_array().into_iter().flatten().enumerate() {
         let pubm = unhex(item["pub"].as_str().unwrap_or(""));
         let Ok(pk) = backend.import_public(p, NodeId::new(500 + k as u32), &pubm) else {
@@ -202,10 +203,20 @@ fn ecdsa_interop(mode: Mode) -> Outcome {
         if !backend.verify_prehashed(&mut ctx, &pk, &t, &token) {
             rust_tamper_rejected += 1;
         }
+        // OpenSSL's raw high-s representative: refused by policy (malleability, I-S1).
+        if item["high_s"].as_bool() == Some(true) {
+            high_s += 1;
+            let mut raw = unhex(item["r"].as_str().unwrap_or(""));
+            raw.extend(unhex(item["raw_s"].as_str().unwrap_or("")));
+            let raw_token = SigToken { primitive: p, bytes: raw };
+            if !backend.verify_prehashed(&mut ctx, &pk, &d, &raw_token) {
+                high_s_refused += 1;
+            }
+        }
     }
     Outcome::judge(
-        openssl_ok == 32 && openssl_tamper_rejected == 32 && rust_ok == 32 && rust_tamper_rejected == 32,
-        format!("OpenSSL accepted {openssl_ok}/32 Rust signatures and rejected {openssl_tamper_rejected}/32 tampered; Rust accepted {rust_ok}/32 OpenSSL signatures and rejected {rust_tamper_rejected}/32 tampered"),
+        openssl_ok == 32 && openssl_tamper_rejected == 32 && rust_ok == 32 && rust_tamper_rejected == 32 && high_s_refused == high_s,
+        format!("OpenSSL accepted {openssl_ok}/32 Rust signatures and rejected {openssl_tamper_rejected}/32 tampered; Rust accepted {rust_ok}/32 OpenSSL signatures (low-s form) and rejected {rust_tamper_rejected}/32 tampered; {high_s_refused}/{high_s} raw high-s forms refused by the low-s policy"),
     )
 }
 
@@ -266,7 +277,11 @@ fn receiver_decisions(mode: Mode) -> Outcome {
     let mut ctx = TestCtx::new(13);
     let mut backend = Real::new();
     let pki = build_pki(&mut ctx, &mut backend, 2, 7);
-    let pki8 = build_pki(&mut TestCtx::new(14), &mut Real::new(), 1, 8);
+    // Period 8's PKI keeps its own backend: the signing key lives in the backend that
+    // generated it.
+    let mut backend8 = Real::new();
+    let mut ctx8 = TestCtx::new(14);
+    let pki8 = build_pki(&mut ctx8, &mut backend8, 1, 8);
     let envelope = Envelope::ieee1609(WallClock::new(T0_UNIX));
     let mut anchors = TrustStore::new();
     anchors.insert(pki.root.clone()).expect("root");
@@ -277,7 +292,7 @@ fn receiver_decisions(mode: Mode) -> Outcome {
     let mut cache8 = PeerCertCache::new();
     cache8.insert(pki8.pca.clone(), true).expect("pca");
     let hdr = HeaderInfoSpec { psid: PSID_BSM, msg_type: Some(MsgType::Bsm), ..HeaderInfoSpec::default() };
-    let mut sign = |ctx: &mut TestCtx, backend: &mut Real, signer: &SignerHandle, at: u64| {
+    let sign = |ctx: &mut TestCtx, backend: &mut Real, signer: &SignerHandle, at: u64| {
         ctx.set_now(at);
         let pdu = envelope.sign(ctx, backend, signer, b"bsm", &hdr, SignerIdChoice::Certificate).expect("signs");
         envelope.parse(pdu.bytes()).expect("parses")
@@ -303,7 +318,7 @@ fn receiver_decisions(mode: Mode) -> Outcome {
     let o = plan(&p1, &cache, &anchors, &crl);
     parts.push((o == PlanOutcome::Verifiable, format!("other device under the same CRL: {o:?}")));
     // Period 8: the same device's seeds stepped forward one period.
-    let p8 = sign(&mut ctx, &mut Real::new(), &pki8.entities[0].signer, 1_000_000_000);
+    let p8 = sign(&mut ctx8, &mut backend8, &pki8.entities[0].signer, 1_000_000_000);
     let o = plan(&p8, &cache8, &anchors8, &crl);
     parts.push((o == PlanOutcome::Reject(RejectReason::Revoked), format!("revoked device, next period: {o:?}")));
     let lv = dev.linkage_value_for(9, 3);
