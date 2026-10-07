@@ -116,6 +116,8 @@ use crate::scenario::Scenario;
 use crate::snapshot::{ActorState, SnapshotStream};
 
 mod coop;
+mod geonet;
+pub use geonet::GeonetWarning;
 pub mod jamming;
 mod link;
 mod radios;
@@ -470,6 +472,9 @@ pub struct RunReport {
     /// How many PSMs and VAMs a VRU device wanted to send and did not: the EN 302 571 duty
     /// cycle, the energy budget, or no credential (`v2xw_node::vru`).
     pub vru_suppressed: u64,
+    /// Each multi-hop hazard warning (`net.geonet`): reach, latency, hops, overhead.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub geonet: Vec<GeonetWarning>,
 }
 
 impl RunReport {
@@ -2278,6 +2283,11 @@ impl Engine {
                     "{who} cuts in to the {} lane at {speed:.1} m/s",
                     side.label()
                 );
+            }
+        }
+        if !matches!(purpose, se::Purpose::CutIn(_)) {
+            if let Some(more) = self.geonet_warning(index, chosen.actor, chosen.node, now) {
+                note.effect.push_str(&more);
             }
         }
         true

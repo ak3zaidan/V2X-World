@@ -34,6 +34,9 @@ use crate::scenario::schema::{Scenario, TimelineKind};
 const RESOLUTIONS: [&str; 3] = ["1ns", "1us", "1ms"];
 /// The network layers `v2xw-net` implements.
 const NET_LAYERS: [&str; 2] = ["wsmp", "gn-btp"];
+const GN_AREA_FORWARDING: [&str; 2] = ["cbf", "simple"];
+const GN_NON_AREA_FORWARDING: [&str; 2] = ["greedy", "cbf"];
+const GN_CBF_VARIANTS: [&str; 3] = ["etsi", "dpd", "gpc"];
 /// The envelope profiles `v2xw-sec` implements.
 const ENVELOPES: [&str; 2] = ["ieee1609.2", "etsi103097"];
 /// The verification policies `v2xw-node` registers.
@@ -239,6 +242,50 @@ pub static BOUNDS: &[Bound] = &[
         hi: 1000.0,
         exclusive_lo: false,
         what: "the arrival rate per kilometre of driving lane",
+    },
+    // EN 302 636-4-1 Annex H: the hop limit is an 8-bit field, default 10.
+    Bound {
+        path: "net.geonet.hop_limit",
+        lo: 1.0,
+        hi: 255.0,
+        exclusive_lo: false,
+        what: "the GeoNetworking hop limit",
+    },
+    // Annex H: itsGnMaxGeoAreaSize is 10 km², a circle of about 1 784 m radius.
+    Bound {
+        path: "net.geonet.area_radius_m",
+        lo: 0.0,
+        hi: 1784.0,
+        exclusive_lo: true,
+        what: "the warning area's radius",
+    },
+    Bound {
+        path: "net.geonet.range_m",
+        lo: 0.0,
+        hi: 3000.0,
+        exclusive_lo: true,
+        what: "the single-hop range the forwarding sees",
+    },
+    Bound {
+        path: "net.geonet.repetition_interval_ms",
+        lo: 0.0,
+        hi: 60000.0,
+        exclusive_lo: false,
+        what: "the warning's repetition interval",
+    },
+    Bound {
+        path: "net.geonet.repetition_duration_ms",
+        lo: 0.0,
+        hi: 600000.0,
+        exclusive_lo: false,
+        what: "how long the warning repeats",
+    },
+    Bound {
+        path: "net.geonet.window_s",
+        lo: 0.0,
+        hi: 600.0,
+        exclusive_lo: true,
+        what: "how long each warning is followed",
     },
     Bound {
         path: "actors.rsu_placement.count",
@@ -496,6 +543,9 @@ const fn choices(path: &'static str, values: &'static [&'static str]) -> Choices
 pub static CHOICES: &[Choices] = &[
     choices("time.des_resolution", &RESOLUTIONS),
     choices("net.layer", &NET_LAYERS),
+    choices("net.geonet.area_forwarding", &GN_AREA_FORWARDING),
+    choices("net.geonet.non_area_forwarding", &GN_NON_AREA_FORWARDING),
+    choices("net.geonet.cbf_variant", &GN_CBF_VARIANTS),
     choices("messages.codec_tier", &CODEC_TIERS),
     choices("messages.sets[]", &MESSAGE_SETS),
     choices("security.envelope", &ENVELOPES),
@@ -1081,6 +1131,19 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                CAM). LLC/SNAP, the 802.11 MAC header and the FCS are added below either, \
                and the air time and the overhead metrics are computed over the whole \
                frame.",
+    },
+    KeyStatus {
+        path: "net.geonet",
+        status: Status::Wired,
+        note: "Multi-hop hazard warnings (gn-btp only). When a hard-brake or breakdown \
+               fires, its DENM is GeoBroadcast to a circle around the vehicle and forwarded \
+               hop by hop by the GeoNetworking router of EN 302 636-4-1 (beacons, location \
+               table, duplicate detection, hop limit, greedy and contention-based \
+               forwarding) with the DEN service's repetition and keep-alive forwarding. The \
+               equipped vehicles' positions at that instant are the network; the hop range \
+               is range_m, and forwarded copies do not contend for the MAC. The event's \
+               note and the run summary say how many vehicles in the area it reached, how \
+               fast, over how many hops and at how many transmissions.",
     },
     KeyStatus {
         path: "net.fragmenter",
@@ -2783,6 +2846,35 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
 
 fn net(s: &Scenario, e: &mut Vec<ScenarioError>) {
     one_of("net.layer", &s.net.layer, &NET_LAYERS, e);
+    if let Some(g) = &s.net.geonet {
+        if s.net.layer != "gn-btp" {
+            e.push(conflict(
+                "net.geonet",
+                "multi-hop forwarding is GeoNetworking's; WSMP has no forwarding. Set \
+                 net.layer to 'gn-btp', or remove net.geonet"
+                    .to_string(),
+            ));
+        }
+        one_of("net.geonet.area_forwarding", &g.area_forwarding, &GN_AREA_FORWARDING, e);
+        one_of("net.geonet.non_area_forwarding", &g.non_area_forwarding, &GN_NON_AREA_FORWARDING, e);
+        one_of("net.geonet.cbf_variant", &g.cbf_variant, &GN_CBF_VARIANTS, e);
+        bounded_at("net.geonet.hop_limit", "net.geonet.hop_limit", f64::from(g.hop_limit), e);
+        bounded_at("net.geonet.area_radius_m", "net.geonet.area_radius_m", g.area_radius_m, e);
+        bounded_at("net.geonet.range_m", "net.geonet.range_m", g.range_m, e);
+        bounded_at(
+            "net.geonet.repetition_interval_ms",
+            "net.geonet.repetition_interval_ms",
+            g.repetition_interval_ms as f64,
+            e,
+        );
+        bounded_at(
+            "net.geonet.repetition_duration_ms",
+            "net.geonet.repetition_duration_ms",
+            g.repetition_duration_ms as f64,
+            e,
+        );
+        bounded_at("net.geonet.window_s", "net.geonet.window_s", g.window_s, e);
+    }
 }
 
 fn messages(s: &Scenario, e: &mut Vec<ScenarioError>) {
