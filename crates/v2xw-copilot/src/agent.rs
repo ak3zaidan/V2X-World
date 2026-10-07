@@ -44,10 +44,11 @@ use crate::transport::RpcTransport;
 
 /// Every server method the agent calls. Each is one of the server's published methods
 /// (asserted in the tests), so the agent can do nothing a person in the Studio cannot.
-pub const AGENT_METHODS: [&str; 8] = [
+pub const AGENT_METHODS: [&str; 9] = [
     "scenario.list",
     "scenario.load",
     "scenario.get",
+    "scenario.set",
     "run.start",
     "run.status",
     "run.pause",
@@ -649,10 +650,29 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                 method: "get_scenario".into(),
                 message: "nothing has run in this conversation yet; use a preset id".into(),
             }),
-            id => self
-                .rpc
-                .call("scenario.load", &json!({"path": id}))
-                .map(|v| v.get("scenario").cloned().unwrap_or(Value::Null)),
+            id => {
+                // `scenario.load` is the only method that hands back a preset's document, and
+                // it stages that preset for the page's next Run as a side effect. Reading a
+                // base must not change what the person's Run button does, so whatever was
+                // staged before is put back: their own edits, or nothing (loading the running
+                // scenario's hash withdraws a staged one).
+                let before = self.rpc.call("scenario.get", &json!({})).ok();
+                let doc = self
+                    .rpc
+                    .call("scenario.load", &json!({"path": id}))
+                    .map(|v| v.get("scenario").cloned().unwrap_or(Value::Null))?;
+                if let Some(b) = before {
+                    if b.get("staged").is_some_and(|s| !s.is_null()) {
+                        let _ = self.rpc.call(
+                            "scenario.set",
+                            &json!({"scenario": b.get("scenario"), "validate": false}),
+                        );
+                    } else if let Some(h) = b.get("running_hash").and_then(Value::as_str) {
+                        let _ = self.rpc.call("scenario.load", &json!({"path": h}));
+                    }
+                }
+                Ok(doc)
+            }
         }
     }
 
