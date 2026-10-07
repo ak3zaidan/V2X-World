@@ -545,7 +545,10 @@ mod tests {
                 revoked_seen += usize::from(expected);
             }
         }
-        assert!(revoked_seen > 10, "the check saw revoked certificates: {revoked_seen}");
+        assert!(
+            revoked_seen > 10,
+            "the check saw revoked certificates: {revoked_seen}"
+        );
         // A clone answers from its own copy.
         let copy = store.clone();
         let lv = devices[0].linkage_value_for(5, 3);

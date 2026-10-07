@@ -2074,8 +2074,7 @@ impl Projector {
     /// Every store here is bounded by what is alive, not by what has ever been: a run of an
     /// hour with vehicles arriving and leaving holds what a run of a minute holds.
     fn prune(&mut self, now: SimTime) {
-        self.feed
-            .prune(now.saturating_sub(crate::feed::HISTORY_NS));
+        self.feed.prune(now.saturating_sub(crate::feed::HISTORY_NS));
         let grace = now.saturating_sub(RETIRED_GRACE_NS);
         while let Some(&(node, at)) = self.retired.front() {
             if at >= grace {

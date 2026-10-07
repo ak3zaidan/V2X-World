@@ -211,9 +211,12 @@ impl StepOutput {
         let provenance = self.provenance.as_ref().map_or(0, |p| {
             block(p.entries.capacity() * size_of::<v2xw_record::wire::provenance::ProvEntry>())
                 + block(p.dims.capacity() * size_of::<v2xw_record::wire::provenance::DimEntry>())
-                + p.strings
-                    .as_ref()
-                    .map_or(0, |t| t.strings.iter().map(|s| block(s.capacity()) + size_of::<String>()).sum())
+                + p.strings.as_ref().map_or(0, |t| {
+                    t.strings
+                        .iter()
+                        .map(|s| block(s.capacity()) + size_of::<String>())
+                        .sum()
+                })
         });
         let recorded = block(self.recorded.capacity() * size_of::<v2xw_record::wire::Frame>())
             + self

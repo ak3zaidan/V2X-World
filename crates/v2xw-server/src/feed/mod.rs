@@ -1187,7 +1187,13 @@ mod tests {
         let nodes = 200u32;
         for i in 0..2_000u64 {
             for rx_node in 0..nodes {
-                let mut v = rx(u64::from(rx_node) + 1, RxFate::Delivered, None, [None; 10], i * MS);
+                let mut v = rx(
+                    u64::from(rx_node) + 1,
+                    RxFate::Delivered,
+                    None,
+                    [None; 10],
+                    i * MS,
+                );
                 v.rx = NodeId::new(rx_node);
                 store.on_rx(&v);
             }
@@ -1197,7 +1203,10 @@ mod tests {
             receptions <= MAX_RECEPTIONS + MAX_PER_NODE,
             "{receptions} receptions held for {nodes} nodes"
         );
-        assert!(receptions >= MAX_RECEPTIONS / 2, "{receptions}: the budget is used");
+        assert!(
+            receptions >= MAX_RECEPTIONS / 2,
+            "{receptions}: the budget is used"
+        );
     }
 
     /// A node that has left the run keeps no log: once its last entry is behind the window,

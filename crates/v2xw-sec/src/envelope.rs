@@ -831,11 +831,8 @@ impl CrlStore {
         if let Some(values) = expanded.get(&i) {
             return values.contains(&lv);
         }
-        let values: BTreeSet<LinkageValue> = self
-            .linkage
-            .iter()
-            .flat_map(|e| e.values_at(i))
-            .collect();
+        let values: BTreeSet<LinkageValue> =
+            self.linkage.iter().flat_map(|e| e.values_at(i)).collect();
         let revoked = values.contains(&lv);
         // The window moves forward with the clock: the oldest period goes first.
         while expanded.len() >= EXPANDED_PERIODS {
