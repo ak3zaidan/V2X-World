@@ -724,8 +724,20 @@ export interface MetricsQueryResult {
     source?: Record<string, unknown>;
     /** The metric a series is a view of: its own name for a headline, the metric's for `x.p95` or `x[label]`. */
     base?: string;
+    /** What the metric does not account for, one sentence each (08-measurement-and-data.md §1: "no black box"). */
+    not_accounted?: string[];
   }[];
   provenance?: ProvenanceInfo[];
+  /**
+   * A grouped query only: the simulated span the pooled rows actually cover — the earliest and
+   * latest sample instants that went into them — which on a long, dense run can be narrower or
+   * coarser than the span asked for. `pooled_block_ns` is non-zero when some of it came from
+   * the engine's time blocks (older samples it keeps merged per block rather than one by one);
+   * a block is included when its middle falls in the asked span.
+   */
+  pooled_from_ns?: number | null;
+  pooled_to_ns?: number | null;
+  pooled_block_ns?: number;
 }
 /** §6.12 `metrics.plot` params. */
 export interface MetricsPlotParams {

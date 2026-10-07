@@ -10,7 +10,7 @@
  *    inspector usable. Runs, Compare, Commands, Details.
  *
  * `keepMounted` keeps a panel's body alive after it is first closed, for a body that holds state a
- * reader would not want to lose between two looks (the metrics' chosen plots).
+ * reader would not want to lose between two looks (the metrics dashboard's expanded chart and range).
  *
  * Open one with `openPanel(id)` from `shell/route.ts`; the URL hash follows. The frames a panel is
  * drawn in (`FullPanel`, `Sheet`) are in `shell/PanelFrame.tsx`.
@@ -19,9 +19,9 @@
 import { BackendPanel } from "../components/BackendView.js";
 import { ComparisonView } from "../components/ComparisonView.js";
 import { CopilotPanel } from "../components/CopilotPanel.js";
-import { MetricsPanel } from "../components/MetricsPanel.js";
 import { RunBrowser } from "../components/RunBrowser.js";
 import { RunDetails } from "../components/RunDetails.js";
+import { MetricsDashboard } from "../metrics/Dashboard.js";
 import type { PanelId } from "../state/store.js";
 
 export interface PanelSpec {
@@ -37,7 +37,7 @@ export const PANELS: Readonly<Record<PanelId, PanelSpec>> = {
   // The settings window is rendered by the shell itself (it has its own header and footer and can
   // open in a window of its own), so its entry here only names it.
   settings: { id: "settings", title: "Settings", kind: "fullscreen", render: () => null },
-  metrics: { id: "metrics", title: "Metrics", kind: "fullscreen", keepMounted: true, render: ({ close }) => <MetricsPanel close={close} /> },
+  metrics: { id: "metrics", title: "Metrics", kind: "fullscreen", keepMounted: true, render: ({ close }) => <MetricsDashboard close={close} /> },
   backend: { id: "backend", title: "Backend", kind: "fullscreen", render: ({ close }) => <BackendPanel close={close} /> },
   runs: { id: "runs", title: "Runs and recordings", kind: "sheet", render: () => <RunBrowser /> },
   compare: { id: "compare", title: "Compare two runs", kind: "sheet", render: () => <ComparisonView /> },

@@ -265,14 +265,6 @@ kbd {
 .fullpanel-head h2, .sheet-head h2, .settings-head h2 { font-size: 15px; margin: 0; font-weight: 600; }
 .fullpanel-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px; }
 
-/* The measurements strip, given the page: its cards wrap instead of scrolling sideways. */
-.metrics-panel .plots { border-top: none; background: transparent; grid-template-rows: auto minmax(0, 1fr); }
-.metrics-panel .plots-head { border-bottom: none; padding: 0 0 8px; overflow: visible; }
-.metrics-panel .plots-body { flex-wrap: wrap; overflow: visible; padding: 0; gap: 12px; }
-/* The picker opened upwards from a strip at the bottom of the page; at the top of a panel it opens
-   downwards, under the row that opens it. */
-.metrics-panel .metric-picker.up { top: 34px; bottom: auto; left: 0; max-height: 70vh; }
-
 /* A sheet slides over the viewport's left edge; the time controls and the inspector stay usable. */
 .stage { position: relative; min-height: 0; display: grid; }
 .sheet {
@@ -856,24 +848,6 @@ button.hud-field:focus-visible {
 }
 .timebar .clock { font-family: var(--mono); min-width: 90px; text-align: right; }
 
-/* ------------------------------------------------------------------ plots strip */
-
-.plots {
-  border-top: 1px solid var(--border);
-  background: var(--bg-panel);
-  display: grid;
-  grid-template-rows: 26px minmax(0, 1fr);
-  min-height: 0;
-}
-.plots-head {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-}
-.plots-body { display: flex; gap: 10px; padding: 6px 10px; overflow-x: auto; min-height: 0; }
 .plot-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1044,37 +1018,6 @@ button.stat:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 }
 .plot-card.wide { min-width: 320px; }
 
-/* ------------------------------------------------------------------ breakdown cards */
-
-.breakdown { display: flex; flex-direction: column; gap: 2px; }
-.breakdown-empty { margin: 8px 4px; font-size: 11px; }
-.breakdown svg { display: block; }
-.breakdown svg .grid { stroke: var(--border); stroke-width: 1; }
-.breakdown svg .axis { fill: var(--text-faint); font: 9px var(--sans); }
-.breakdown svg .band { fill: var(--accent); opacity: 0.18; stroke: none; }
-.breakdown svg .line { fill: none; stroke-width: 1.5; }
-.breakdown svg .line.prr { stroke: var(--accent); }
-.breakdown svg .line.app { stroke: var(--warn); stroke-dasharray: 3 2; }
-.breakdown svg .dot.prr { fill: var(--accent); }
-.breakdown svg .dot.app { fill: var(--warn); }
-.breakdown .legend { font-size: 9px; }
-.breakdown .legend::before { content: ""; display: inline-block; width: 10px; height: 2px; margin-right: 4px; vertical-align: middle; }
-.breakdown .legend.prr::before { background: var(--accent); }
-.breakdown .legend.app::before { background: var(--warn); }
-.stage-rows { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px; }
-.stage-row { display: flex; align-items: center; gap: 6px; font-size: 10px; }
-.stage-type { width: 34px; color: var(--text-dim); }
-.stage-bar { display: flex; height: 10px; border-radius: 2px; overflow: hidden; background: var(--bg-input); }
-.stage-seg { display: block; height: 100%; }
-.stage-legend { display: flex; flex-wrap: wrap; gap: 2px 8px; max-width: 300px; font-size: 9px; }
-.stage-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 3px; border-radius: 1px; vertical-align: -1px; }
-.node-rank { border-collapse: collapse; font-size: 10px; }
-.node-rank th, .node-rank td { padding: 1px 6px; text-align: right; }
-.node-rank th:first-child, .node-rank td:first-child { text-align: left; }
-.node-rank tbody tr { cursor: pointer; }
-.node-rank tbody tr:hover { background: var(--bg-panel); }
-.node-rank .active-sort { color: var(--accent); }
-
 /* A checkbox row in a panel body. */
 .check { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 2px 0; }
 .check input { flex: none; }
@@ -1101,38 +1044,6 @@ button.stat:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 /* Identifiers in a header disclosure: the labels are short, so the value column can start early. */
 .menu-pop .kv { grid-template-columns: minmax(64px, max-content) 1fr; }
 .menu-pop.wide { min-width: 340px; max-width: 460px; }
-
-/* ------------------------------------------------------------------ measurement picker */
-
-/* The strip is the picker's anchor: it opens upwards over the viewport, above the plots. */
-.plots { position: relative; }
-.metric-picker { left: 10px; width: min(560px, calc(100vw - 32px)); max-width: none; max-height: 55vh; }
-.metric-picker-head {
-  display: flex;
-  gap: 6px;
-  position: sticky;
-  top: -6px;
-  background: var(--bg-panel);
-  padding: 2px 0 6px;
-  z-index: 1;
-}
-.metric-picker-head input { flex: 1; min-width: 0; }
-.metric-family { margin-bottom: 6px; }
-.metric-family-name {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  padding: 4px 0 2px;
-}
-.metric-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
-  gap: 8px;
-  font-size: 11px;
-}
-.metric-row .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.metric-live { color: var(--accent); font-size: 10px; }
 
 .note.warn-note { border-left-color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 

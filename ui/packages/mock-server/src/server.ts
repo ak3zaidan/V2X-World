@@ -40,6 +40,7 @@ import {
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { MANHATTAN_BBOX, generateManhattan, type GeneratedWorld } from "./manhattan.js";
+import { MOCK_CATALOGUE, MockMetricHistory, catalogueAnswer } from "./metrics.js";
 import { ACTOR_CLASSES, ACTOR_NODE_BASE, MockRun, type Profile } from "./sim.js";
 import type { GeoBbox } from "./geo.js";
 
@@ -125,6 +126,8 @@ export class MockEngineServer {
   #sync: "free" | "client" = "free";
   #stepsSinceTelemetry = 0;
   #stepsSinceMetric = 0;
+  /** Every metric bin sent, for `metrics.query` (§6.12). */
+  readonly #metricHistory = new MockMetricHistory();
   #worldJson: string;
   #scenario: Record<string, unknown>;
   #scenarioHash: Uint8Array;
@@ -713,6 +716,14 @@ export class MockEngineServer {
   }
 
   #sendMetrics(): void {
+    // Kept whether or not anyone is watching: a page that connects later, or after the run, asks
+    // `metrics.query` for the whole run.
+    const all = this.run.buildMetrics(this.#strIds.metricNames, "full");
+    const names = new Map([...this.#strIds.metricNames].map(([name, id]) => [id, name]));
+    this.#metricHistory.record(
+      Number(this.run.simTimeNs),
+      all.map((s) => ({ name: names.get(s.strMetric) ?? "", value: s.value })).filter((s) => s.name !== ""),
+    );
     if (this.#conns.size === 0) return;
     const seq = this.#seq;
     for (const conn of this.#conns.values()) {
@@ -820,6 +831,7 @@ export class MockEngineServer {
     switch (request.method) {
       case "run.start": {
         this.#state = params.paused === true ? "paused" : "running";
+        this.#metricHistory.clear();
         for (const c of this.#conns.values()) this.#sendHello(c, false, null);
         this.#emitKeyframe(FrameFlags.RESYNC);
         return ok({
@@ -862,6 +874,7 @@ export class MockEngineServer {
         const stepNs = Number(this.run.timing.mobilityStepNs);
         const aligned = BigInt(Math.floor(target / stepNs) * stepNs);
         this.run.seekTo(aligned);
+        this.#metricHistory.truncateAfter(Number(aligned));
         // §6.6 ordering guarantee: the keyframe (RESYNC | SEEK_RESULT) goes out before the reply.
         // §6.6 ordering guarantee: the keyframe goes out before this reply, and it carries
         // FLAG_SEEK_RESULT | FLAG_RESYNC.
@@ -1102,30 +1115,40 @@ export class MockEngineServer {
       }
       case "metrics.query": {
         const names = Array.isArray(params.metrics) ? (params.metrics as string[]) : [];
-        if (names.length === 0) {
-          return ok({
-            columns: [], rows: [],
-            catalogue: MockRun.metricNames().map((name) => ({
-              name, unit: name === "pdr" ? "ratio" : name === "cbr" ? "ratio" : name.endsWith("_ms") ? "ms" : "1",
-              dims: ["t"], agg: "mean",
-              visibility: ["mean_speed", "ttc_min", "det_precision"].includes(name) ? "GT" : "NODE",
-              definition_md: `The mock server's synthetic ${name}.`,
-            })),
-          });
+        if (names.length === 0 && !Array.isArray(params.metrics)) {
+          return ok({ columns: [], rows: [], catalogue: catalogueAnswer() });
         }
-        const unknownMetric = names.find((n) => !MockRun.metricNames().includes(n));
+        const unknownMetric = names.find((n) => !MOCK_CATALOGUE.some((m) => m.name === n));
         if (unknownMetric) return err(RpcErrorCode.UNKNOWN_METRIC, "unknown metric", { metric: unknownMetric, did_you_mean: MockRun.metricNames().slice(0, 3) });
-        const gt = names.find((n) => ["mean_speed", "ttc_min", "det_precision"].includes(n));
+        const gt = names.find((n) => MOCK_CATALOGUE.find((m) => m.name === n)?.visibility === "GT");
         if (conn?.profile === "node" && gt) return err(RpcErrorCode.VISIBILITY_DENIED, "metric is ground truth", { field: gt, visibility: "GT" });
-        const samples = this.run.buildMetrics(this.#strIds.metricNames, conn?.profile ?? "full");
-        const wanted = new Set(names.map((n) => this.#strIds.metricNames.get(n)));
+        const from = typeof params.t_from_ns === "number" ? params.t_from_ns : 0;
+        const to = Math.min(tNs, typeof params.t_to_ns === "number" ? params.t_to_ns : tNs);
+        const limit = typeof params.limit === "number" ? Math.max(1, Math.min(1_000_000, params.limit)) : 10_000;
+        const groupBy = Array.isArray(params.group_by) ? (params.group_by as string[]).find((d) => d !== "t") : undefined;
+        if (groupBy !== undefined) {
+          const columns: unknown[] = [{ name: groupBy, type: "string", visibility: "META" }];
+          const perMetric = names.map((n) => {
+            const def = MOCK_CATALOGUE.find((m) => m.name === n);
+            for (const suffix of ["", ".lo", ".hi", ".n"]) columns.push({ name: `${n}${suffix}`, type: suffix === ".n" ? "int" : "float", unit: suffix === ".n" ? "count" : def?.unit });
+            return this.#metricHistory.groups(n, groupBy, from, Math.max(from, to), this.run.nodeIds());
+          });
+          const keys = [...new Set(perMetric.flatMap((rows) => rows.map((r) => String(r[0]))))];
+          const rows = keys.slice(0, limit).map((k) => [k, ...perMetric.flatMap((rows) => {
+            const r = rows.find((x) => x[0] === k);
+            return r ? r.slice(1) : [null, null, null, 0];
+          })]);
+          return ok({ columns, rows, truncated: keys.length > limit, group_by: params.group_by });
+        }
+        const bin = typeof params.bin_ns === "number" && params.bin_ns > 0 ? params.bin_ns : 1_000_000_000;
+        const rows = this.#metricHistory.series(names, from, Math.max(from, to), bin, limit);
         return ok({
           columns: [
-            { name: "t_ns", type: "time_ns", unit: "ns" },
-            { name: "metric", type: "string" },
-            { name: "value", type: "float" },
+            { name: "t_ns", type: "time_ns", unit: "ns", visibility: "META" },
+            ...names.map((n) => ({ name: n, type: "float", unit: MOCK_CATALOGUE.find((m) => m.name === n)?.unit })),
           ],
-          rows: samples.filter((s) => wanted.has(s.strMetric)).map((s) => [tNs, names.find((n) => this.#strIds.metricNames.get(n) === s.strMetric) ?? "", s.value]),
+          rows,
+          truncated: rows.length >= limit,
         });
       }
       case "rpc.discover":
