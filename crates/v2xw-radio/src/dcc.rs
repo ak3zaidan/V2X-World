@@ -2719,6 +2719,12 @@ mod tests {
         let mut ctx = TestCtx::new(5);
         let mut dcc = ReactiveDcc::new();
         let node = NodeId::new(0);
+        // A load in Active 2's band is reached through Active 1, one state per T_CBR
+        // (TS 102 687 §5.3's neighbour rule).
+        Dcc::on_cbr(&mut dcc, &mut ctx, node, 0.45);
+        assert_eq!(dcc.state_of(node), ReactiveState::Active1);
+        let t1 = dcc.hold.as_nanos();
+        ctx.set_now(t1);
         Dcc::on_cbr(&mut dcc, &mut ctx, node, 0.45);
         assert_eq!(dcc.state_of(node), ReactiveState::Active2);
         let req = request(300, 0);
@@ -2730,7 +2736,7 @@ mod tests {
         let decision = Dcc::gate(&mut dcc, &mut ctx, node, &req);
         assert_eq!(
             decision,
-            GateDecision::DelayUntil(Duration::from_millis(400).as_nanos())
+            GateDecision::DelayUntil(t1 + Duration::from_millis(400).as_nanos())
         );
         let state = Dcc::<TestCtx>::state(&dcc, node);
         assert_eq!(state.algorithm, DccAlgorithm::ReactiveTs102687);
