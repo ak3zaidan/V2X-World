@@ -285,12 +285,12 @@ cities:
     state_name: "Illinois"
     region: midwest
     role: largest
-    bbox: [41.8743, -87.6390, 41.8877, -87.6210]
+    bbox: [41.8773, -87.6390, 41.8907, -87.6210]
     area_km2: 2.23
     utc_offset_h: -6
     highway_preset: urban-us-il
     fetched: "2026-10-07"
-    description: "Chicago's Loop: State, Dearborn and LaSalle Streets under and around the elevated tracks"
+    description: "Chicago's Loop north of Congress Parkway: State, Dearborn and LaSalle Streets under and around the elevated tracks"
   - id: indianapolis
     name: "Indianapolis"
     state: IN
@@ -609,12 +609,12 @@ cities:
     state_name: "Pennsylvania"
     region: northeast
     role: largest
-    bbox: [39.9453, -75.1728, 39.9587, -75.1552]
+    bbox: [39.9478, -75.1748, 39.9612, -75.1572]
     area_km2: 2.24
     utc_offset_h: -5
     highway_preset: urban-us-pa
     fetched: "2026-10-07"
-    description: "Center City Philadelphia: Market Street, Broad Street and City Hall in Penn's grid"
+    description: "Center City Philadelphia: Market Street, Broad Street and City Hall in Penn's grid, from Rittenhouse Square to Chinatown"
   - id: pittsburgh
     name: "Pittsburgh"
     state: PA

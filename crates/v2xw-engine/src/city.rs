@@ -600,7 +600,8 @@ mod tests {
             assert!(s < n && w < e, "{}", c.id);
             assert!((0.5..=5.0).contains(&c.area_km2), "{}: {} km²", c.id, c.area_km2);
         }
-        // Every state and DC has a city.
+        // Every state and DC had a city; the ones the audit took out are listed with the
+        // reason and the box they had, so they can be fetched and audited again.
         let mut states: Vec<&str> = r
             .cities
             .iter()
@@ -609,7 +610,12 @@ mod tests {
             .collect();
         states.sort_unstable();
         states.dedup();
-        assert_eq!(states.len(), 51, "{states:?}");
+        assert!(states.len() >= 45, "{} states: {states:?}", states.len());
+        assert_eq!(r.cities.len() + r.dropped.len(), 64, "the library's 64 cities");
+        for d in &r.dropped {
+            assert!(!d.reason.is_empty(), "{} has a reason", d.id);
+            assert!(find(&d.id).is_none(), "{} is not offered", d.id);
+        }
     }
 
     #[test]
