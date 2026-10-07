@@ -113,6 +113,11 @@ pub enum Family {
     Metric,
     /// Exporter.
     Exporter,
+    /// Tailpipe emission and fuel consumption of a combustion-engined vehicle
+    /// (`v2xw-energy`: HBEFA, PHEMlight, MOVES operating modes).
+    Emission,
+    /// Traction-battery energy of a battery-electric vehicle (`v2xw-energy`).
+    Energy,
 }
 
 impl core::fmt::Display for Family {

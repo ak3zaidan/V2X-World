@@ -182,6 +182,41 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the class share",
     },
+    Bound {
+        path: "energy.fleet.*.ev_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the segment's battery-electric share",
+    },
+    Bound {
+        path: "energy.fleet.*.diesel_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the segment's diesel share among combustion vehicles",
+    },
+    Bound {
+        path: "energy.fleet.*.euro",
+        lo: 0.0,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the Euro emission standard",
+    },
+    Bound {
+        path: "energy.ev.initial_soc",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the initial state of charge",
+    },
+    Bound {
+        path: "energy.stop_speed_mps",
+        lo: 0.0,
+        hi: 5.0,
+        exclusive_lo: true,
+        what: "the stop speed",
+    },
     // The ceiling is a guard, not a traffic figure. `scenarios/scale/` offers 3,600,000
     // veh/h on purpose — a thousand candidates a second, so the grid fills as fast as lane
     // capacity admits them — and the guard sits well above that: 100,000,000 veh/h is
@@ -1536,6 +1571,51 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                reaction, m/s² (default 3.4, AASHTO's comfortable deceleration).",
     },
     KeyStatus {
+        path: "energy",
+        status: Status::Wired,
+        note: "Emissions, fuel and electric-vehicle energy of the traffic, integrated over \
+               every vehicle's true trajectory and reported per window, class, lane and \
+               vehicle (metrics/energy). Absent: no energy metrics. It changes no driving.",
+    },
+    KeyStatus {
+        path: "energy.emission_model",
+        status: Status::Wired,
+        note: "The tailpipe model for combustion vehicles: hbefa3 (HBEFA 3.1 fit, 45 \
+               classes, SUMO's HBEFA3), phemlight (power-based, the two published Euro 4 \
+               cars) or moves-opmode (US EPA MOVES operating modes, light-duty).",
+    },
+    KeyStatus {
+        path: "energy.emission_model_by_segment",
+        status: Status::Wired,
+        note: "A different emission model for some segments, e.g. passenger-car: phemlight \
+               with hbefa3 for the rest; a segment not listed uses emission_model.",
+    },
+    KeyStatus {
+        path: "energy.ev_model",
+        status: Status::Wired,
+        note: "The battery model for electric vehicles: kurczveil (SUMO's battery device) \
+               or vt-cpem (Fiori et al. 2016, deceleration-dependent regeneration).",
+    },
+    KeyStatus {
+        path: "energy.fleet",
+        status: Status::Wired,
+        note: "Per segment (passenger-car, light-commercial, heavy-truck, urban-bus, coach, \
+               motorcycle): the electric share, the diesel share of the rest and the Euro \
+               class. Each vehicle draws its powertrain once, keyed by its id.",
+    },
+    KeyStatus {
+        path: "energy.ev",
+        status: Status::Wired,
+        note: "Electric vehicles' starting state of charge and overrides of the EV model's \
+               card parameters (mass_kg, capacity_wh, ...); an unknown name is refused.",
+    },
+    KeyStatus {
+        path: "energy.stop_speed_mps",
+        status: Status::Wired,
+        note: "Below this speed a vehicle counts as stopped (default 0.1 m/s, SUMO's \
+               halting threshold); the stops metrics read it.",
+    },
+    KeyStatus {
         path: "experiment",
         status: Status::Wired,
         note: "The parameter sweep. Expanded by the experiment runner, not by a single \
@@ -1591,6 +1671,7 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     metrics_and_exporters(s, &mut e);
     timeline(s, &mut e);
     apps(s, &mut e);
+    energy(s, &mut e);
     experiment(s, &mut e);
     security_backend(s, &mut e);
     unreachable_keys(s, &mut e);
@@ -3427,6 +3508,39 @@ fn apps(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 format!("is {v}; it must be a positive number no larger than 30"),
             ));
         }
+    }
+}
+
+/// The energy section: the ranges from [`BOUNDS`], then the models and their parameter
+/// overrides, checked by the very registry that builds them (`v2xw_energy::registry`).
+fn energy(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let Some(en) = &s.energy else { return };
+    for (seg, m) in &en.fleet {
+        let at = |leaf: &str| format!("energy.fleet.{}.{leaf}", seg.as_str());
+        bounded_at("energy.fleet.*.ev_share", &at("ev_share"), m.ev_share, e);
+        bounded_at("energy.fleet.*.diesel_share", &at("diesel_share"), m.diesel_share, e);
+        bounded_at("energy.fleet.*.euro", &at("euro"), f64::from(m.euro), e);
+    }
+    bounded_at("energy.ev.initial_soc", "energy.ev.initial_soc", en.ev.initial_soc, e);
+    bounded_at("energy.stop_speed_mps", "energy.stop_speed_mps", en.stop_speed_mps, e);
+    if let Err(why) = v2xw_energy::registry::emission_model(&en.emission_model) {
+        e.push(conflict("energy.emission_model", why));
+    }
+    for (seg, model) in &en.emission_model_by_segment {
+        if let Err(why) = v2xw_energy::registry::emission_model(model) {
+            e.push(conflict(
+                &format!("energy.emission_model_by_segment.{}", seg.as_str()),
+                why,
+            ));
+        }
+    }
+    if let Err(why) = v2xw_energy::registry::ev_model(&en.ev_model, &en.ev.params) {
+        let field = if v2xw_energy::registry::ev_model(&en.ev_model, &Default::default()).is_ok() {
+            "energy.ev.params"
+        } else {
+            "energy.ev_model"
+        };
+        e.push(conflict(field, why));
     }
 }
 

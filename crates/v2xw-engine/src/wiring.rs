@@ -2322,6 +2322,20 @@ pub fn build_metrics(
     registry: &mut Registry,
 ) -> Result<v2xw_metrics::ProviderSet> {
     let mut set = v2xw_metrics::ProviderSet::new();
+    // Emissions and energy (`v2xw_energy`): whenever the scenario has an `energy:`
+    // section, or with the section's defaults when the metric list names one of its
+    // metrics. Not under a bare `all`: the numbers describe a fleet, and a scenario that
+    // says nothing about its fleet keeps exactly the metrics — and the digests — it had
+    // before the crate existed.
+    let energy_named = v2xw_energy::provider::defs()
+        .iter()
+        .any(|d| scenario.metrics.contains(&d.name));
+    if scenario.energy.is_some() || energy_named {
+        let spec = scenario.energy.clone().unwrap_or_default();
+        let provider = v2xw_energy::EnergyProvider::new(spec, scenario.seed)
+            .map_err(|why| crate::ScenarioError::conflict("energy", why))?;
+        set.register(registry, Box::new(provider))?;
+    }
     if scenario.metrics.is_empty() {
         return Ok(set);
     }

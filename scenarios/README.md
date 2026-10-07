@@ -77,6 +77,7 @@ traffic, as it does in the city.
 | [`pseudonym-privacy.yaml`](pseudonym-privacy.yaml) | What does a pseudonym-change period cost in bytes, verification and detection? | 4 periods × 3 seeds | 12 |
 | [`pseudonym-strategies.yaml`](pseudonym-strategies.yaml) | Which pseudonym-change strategy stops a roadside eavesdropper — J2945/1, the NYC pilot, C2C-CC, CMIX mix zones or none — and at what cost? | 5 strategies | 5 |
 | [`revocation-latency.yaml`](revocation-latency.yaml) | How long does each stage of a revocation take, and how big is the list? | 3 demand rates × 2 attacker fractions × 3 seeds | 18 |
+| [`glosa-energy.yaml`](glosa-energy.yaml) | Does green-light speed advice cut stops, fuel, CO2 and EV energy, and by how much as more drivers follow it? | GLOSA compliance × 3 seeds | 9 |
 | [`rat-comparison.yaml`](rat-comparison.yaml) | DSRC vs LTE-V2X vs NR-V2X: who delivers further, and what each loses frames to | radio technology × 5 seeds | 15 |
 
 ## The vertical slices and the scaling ladder

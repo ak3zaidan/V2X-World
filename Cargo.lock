@@ -2567,10 +2567,12 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "serde_yml",
  "thiserror",
  "tokio",
  "v2xw-copilot",
  "v2xw-core",
+ "v2xw-energy",
  "v2xw-engine",
  "v2xw-experiment",
  "v2xw-metrics",
@@ -2632,6 +2634,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "v2xw-energy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "v2xw-core",
+ "v2xw-metrics",
+]
+
+[[package]]
 name = "v2xw-engine"
 version = "0.1.0"
 dependencies = [
@@ -2641,6 +2654,7 @@ dependencies = [
  "serde_yml",
  "thiserror",
  "v2xw-core",
+ "v2xw-energy",
  "v2xw-metrics",
  "v2xw-mobility",
  "v2xw-msg",

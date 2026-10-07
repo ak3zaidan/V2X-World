@@ -51,4 +51,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # `proc_pid_rusage`, for the memory footprint a long run reports per slice (`progress.rs`).
 libc = "0.2"
+# `v2xw energy`: scores a recording with the energy models; reads a YAML `--spec`.
+v2xw-energy = { workspace = true }
+serde_yml = { workspace = true }
 thiserror = { workspace = true }

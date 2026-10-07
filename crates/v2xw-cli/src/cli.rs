@@ -40,6 +40,8 @@ pub enum Command {
     ImportOsm(ImportArgs),
     /// Print a recording's manifest, channels and verification report.
     Info(InfoArgs),
+    /// Score a recording's traffic for emissions, fuel and EV energy, with health bands.
+    Energy(EnergyArgs),
     /// Expand a scenario's `experiment` block into runs, execute them and aggregate them.
     Experiment(ExperimentArgs),
     /// Prompt the agent: it builds a scenario, runs it, analyses it and prints a report.
@@ -348,6 +350,46 @@ pub struct ImportArgs {
     /// Print the outcome as JSON instead of the importer's report.
     #[arg(long)]
     pub json: bool,
+}
+
+/// `v2xw energy`.
+#[derive(Debug, clap::Args)]
+pub struct EnergyArgs {
+    /// The recording (full profile: it reads gt.kinematics).
+    pub recording: PathBuf,
+    /// A JSON or YAML file holding an `energy:` section's body; replaces the scenario's.
+    #[arg(long, value_name = "FILE")]
+    pub spec: Option<PathBuf>,
+    /// The emission model: hbefa3, phemlight, moves-opmode (or a full id).
+    #[arg(long, value_name = "ID")]
+    pub emission_model: Option<String>,
+    /// The EV model: kurczveil, vt-cpem (or a full id).
+    #[arg(long, value_name = "ID")]
+    pub ev_model: Option<String>,
+    /// Write one CSV row per vehicle here.
+    #[arg(long, value_name = "FILE")]
+    pub vehicles_csv: Option<PathBuf>,
+    /// Write the MOVES operating-mode distribution per lane (opModeDistribution) here.
+    #[arg(long, value_name = "FILE")]
+    pub opmode_csv: Option<PathBuf>,
+    /// Print the outcome as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl EnergyArgs {
+    /// The library options these arguments describe.
+    #[must_use]
+    pub fn to_options(&self) -> crate::energy::EnergyOptions {
+        crate::energy::EnergyOptions {
+            recording: self.recording.clone(),
+            spec: self.spec.clone(),
+            emission_model: self.emission_model.clone(),
+            ev_model: self.ev_model.clone(),
+            vehicles_csv: self.vehicles_csv.clone(),
+            opmode_csv: self.opmode_csv.clone(),
+        }
+    }
 }
 
 /// `v2xw info`.

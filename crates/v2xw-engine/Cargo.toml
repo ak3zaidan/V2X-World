@@ -25,6 +25,9 @@ v2xw-proto = { workspace = true }
 v2xw-threat = { workspace = true }
 v2xw-record = { workspace = true }
 v2xw-metrics = { workspace = true }
+# Emission, fuel and battery-electric energy models and their metric provider, selected by
+# the scenario's `energy:` section. Depends only on core and metrics, below this crate.
+v2xw-energy = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

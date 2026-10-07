@@ -247,6 +247,7 @@ impl Scenario {
             exporters: Vec::new(),
             events: Vec::new(),
             apps: schema::Apps::default(),
+            energy: None,
             experiment: None,
         }
     }
