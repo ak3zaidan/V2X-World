@@ -117,6 +117,7 @@ use crate::snapshot::{ActorState, SnapshotStream};
 
 pub mod jamming;
 mod link;
+mod radios;
 pub mod sidelink;
 
 /// The 5.9 GHz safety channel an 802.11p run transmits on when no regulation resolves,
@@ -744,6 +745,9 @@ pub struct Engine {
     /// The actors' bodies at the last published state, for the vehicles-on-the-path
     /// test; rebuilt with the snapshot, and only when vehicle blockage is composed.
     bodies: link::BodyIndex,
+    /// The actors carrying a radio at the last published state, gridded: a frame's
+    /// candidate receivers and its census ([`radios`]).
+    radios: radios::RadioIndex,
     /// Every hosted device: vehicles' OBUs and roadside units, and — when
     /// `actors.vru.device_fraction` equips them — pedestrians' and cyclists' handsets
     /// ([`crate::hosted::HostedNode`]).
@@ -1193,6 +1197,7 @@ impl Engine {
                 .then(crate::perception::Perception::new),
             retired: Vec::new(),
             bodies: link::BodyIndex::default(),
+            radios: radios::RadioIndex::default(),
             nodes: BTreeMap::new(),
             inboxes: BTreeMap::new(),
             // `validate` refuses any other name, so the fallback is unreachable from a
@@ -2642,6 +2647,18 @@ impl Engine {
         if self.obstacles.vehicles.is_some() {
             self.bodies = link::BodyIndex::build(&self.snapshot);
         }
+        // Nodes are mounted and retired in `absorb`, before this, and nowhere else, so the
+        // equipped set is fixed until the next rebuild.
+        let actors = &self.actors;
+        self.radios = radios::RadioIndex::build(
+            self.snapshot
+                .iter()
+                .filter_map(|e| {
+                    let node = actors.get(&e.view.actor)?.node?;
+                    Some((e.view.actor, node, e.kinematics.pos))
+                })
+                .collect(),
+        );
     }
 
     /// Emits `gt.kinematics` for every live actor's current state, in actor order.
@@ -4990,11 +5007,10 @@ impl Engine {
         // Each receiver's velocity, for a sidelink link-level curve indexed by relative
         // speed; a roadside unit has none and stands still.
         let mut velocities: BTreeMap<NodeId, Vec3> = BTreeMap::new();
-        for actor in self.snapshot.actors_within(state.tx_pos, reach_m) {
+        for (actor, node) in self.equipped_within(state.tx_pos, reach_m) {
             let Some(rec) = self.actors.get(&actor) else {
                 continue;
             };
-            let Some(node) = rec.node else { continue };
             if node == state.tx {
                 continue;
             }
@@ -5215,6 +5231,27 @@ impl Engine {
         self.frames.insert(frame, state);
     }
 
+    /// Every actor carrying a radio within `radius_m` of `p` at the last published state, in
+    /// actor-id order, with its node: the equipped subset of
+    /// [`ActorSnapshot::actors_within`], from the index of equipped actors ([`radios`]).
+    ///
+    /// A debug build answers it both ways and asserts they agree, so every engine test run in
+    /// debug checks the index against the query it replaces, on its own scenario.
+    fn equipped_within(&self, p: Vec3, radius_m: f64) -> Vec<(ActorId, NodeId)> {
+        let fast = self.radios.within(p, radius_m);
+        #[cfg(debug_assertions)]
+        {
+            let slow: Vec<(ActorId, NodeId)> = self
+                .snapshot
+                .actors_within(p, radius_m)
+                .into_iter()
+                .filter_map(|a| Some((a, self.actors.get(&a)?.node?)))
+                .collect();
+            debug_assert_eq!(fast, slow, "the radio index disagrees with the actor query");
+        }
+        fast
+    }
+
     /// How many equipped receivers are truly within each 20 m range of a transmitter at
     /// `now`, out to [`v2xw_metrics::channels::PRR_MAX_M`] — the `Y` of 3GPP TR 36.885
     /// §A.2.1.4's packet reception ratio.
@@ -5234,13 +5271,12 @@ impl Engine {
                 *census.entry(bin as u32).or_insert(0) += 1;
             }
         };
-        for actor in self.snapshot.actors_within(tx_pos, max) {
+        for (actor, node) in self.equipped_within(tx_pos, max) {
             let Some(rec) = self.actors.get(&actor) else {
                 continue;
             };
-            match rec.node {
-                Some(node) if node != tx => count(tx_pos.distance(rec.last.extrapolate(now).pos)),
-                _ => {}
+            if node != tx {
+                count(tx_pos.distance(rec.last.extrapolate(now).pos));
             }
         }
         for (&rsu, &rsu_pos) in &self.rsus {
