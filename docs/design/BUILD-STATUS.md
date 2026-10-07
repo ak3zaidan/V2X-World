@@ -225,6 +225,13 @@ All from this branch at the commits named; wall times are from a loaded, shared 
   over six views, one empty (luminance σ 0.8, in the chase view during the fly-down from the
   plan view), and the hidden-scene control read as empty as it must. That empty frame is not
   explained yet (see Open).
+- **The page, the spec's own scenario** (`vru-grid.yaml` at 6,000 veh/h, 12 s per view): the
+  same rasteriser managed 4–8 frames a second here too (mean frame time 126–245 ms by view), so
+  again only the pixel class is judged: 197 frames sampled over five views, none empty (lowest
+  luminance σ 10.1). The motion classes it reports at that rate (e.g. "pedestrian turned 23.9° in
+  one frame": the viewer's people turn at up to 5 rad/s, 36° in a 126 ms frame, against the
+  hunter's 20° per-frame limit, which assumes 60 fps) are the frame rate's, and the spec fails on
+  them; a headed run on a GPU (`VWP_HEADED=1`) is what the page check needs to judge motion.
 
 
 ### Open
