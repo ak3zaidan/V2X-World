@@ -2708,6 +2708,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "v2xw-interop"
+version = "0.1.0"
+dependencies = [
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "v2xw-core",
+ "v2xw-mobility",
+ "v2xw-radio",
+ "v2xw-world",
+]
+
+[[package]]
 name = "v2xw-metrics"
 version = "0.1.0"
 dependencies = [
