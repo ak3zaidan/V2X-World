@@ -85,7 +85,9 @@ pub struct ActorRow {
     pub state: u8,
     /// Neighbours in state *verified*, saturating at 255.
     pub verified_neighbors: u8,
-    /// Reserved, written as zero.
+    /// The road user's activity (§3.3.5): what a pedestrian is doing, `0` for everything
+    /// else. The byte was reserved and written as zero in v1.0, so a reader that ignores
+    /// it loses only the activity.
     pub flags8: u8,
 }
 
@@ -340,6 +342,8 @@ pub struct MovedRow {
     pub verified_neighbors: u8,
     /// Row flags (§3.4.2.1).
     pub mflags: u8,
+    /// Absolute activity (§3.3.5), in the byte v1.0 reserved.
+    pub activity: u8,
 }
 
 /// One absolute-escape entry (§3.4.3), in the order of the moved rows that set
@@ -383,6 +387,8 @@ pub struct SpawnRow {
     pub state: u8,
     /// Verified-neighbour count.
     pub verified_neighbors: u8,
+    /// Activity (§3.3.5), in the byte v1.0 reserved.
+    pub activity: u8,
 }
 
 /// One despawn row (§3.4.6).
@@ -502,7 +508,10 @@ impl DeltaBody {
             put_u8(&mut out, p, r.mflags);
             p += 1;
         }
-        p += self.moved.len(); // the per-row `reserved` byte, already zero
+        for r in &self.moved {
+            put_u8(&mut out, p, r.activity);
+            p += 1;
+        }
 
         for r in &self.abs {
             put_i32(&mut out, p, r.x_mm);
@@ -566,7 +575,10 @@ impl DeltaBody {
             put_u8(&mut out, p, r.verified_neighbors);
             p += 1;
         }
-        p += self.spawns.len(); // per-row `reserved`
+        for r in &self.spawns {
+            put_u8(&mut out, p, r.activity);
+            p += 1;
+        }
 
         for r in &self.despawns {
             put_u32(&mut out, p, r.slot);
@@ -660,6 +672,7 @@ impl DeltaBody {
                 state: 0,
                 verified_neighbors: 0,
                 mflags: 0,
+                activity: 0,
             };
             m
         ];
@@ -702,6 +715,10 @@ impl DeltaBody {
         }
         for r in moved.iter_mut() {
             r.mflags = get_u8(body, p, WHAT)?;
+            p += 1;
+        }
+        for r in moved.iter_mut() {
+            r.activity = get_u8(body, p, WHAT)?;
             p += 1;
         }
 
@@ -759,6 +776,7 @@ impl DeltaBody {
                 class_idx: 0,
                 state: 0,
                 verified_neighbors: 0,
+                activity: 0,
             };
             spawn_count
         ];
@@ -813,6 +831,10 @@ impl DeltaBody {
         }
         for r in spawns.iter_mut() {
             r.verified_neighbors = get_u8(body, p, WHAT)?;
+            p += 1;
+        }
+        for r in spawns.iter_mut() {
+            r.activity = get_u8(body, p, WHAT)?;
             p += 1;
         }
 

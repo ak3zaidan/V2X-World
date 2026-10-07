@@ -323,6 +323,7 @@ impl Mobility for KinematicLaneFollow {
         spawned.sort_by_key(|s| s.actor);
         despawned.sort_by_key(|(a, _)| *a);
         MobilityUpdate {
+            activities: Vec::new(),
             t: t1,
             states,
             spawned,

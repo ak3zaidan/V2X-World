@@ -1580,3 +1580,33 @@ fn a_signal_groups_timeline_is_its_movements_most_permissive_state() {
     assert!(checked > 1000);
     assert!(v2xw_world::signal_group_wire_id(v2xw_core::ids::SignalId::new(0), 0) >= 65536);
 }
+
+/// Every movement a grid's signal plans control, crosswalks included, and every head group
+/// they show, gets a green in the cycle — and the check that says so can fail: a plan with
+/// one movement held red all cycle is counted.
+#[test]
+fn every_signal_group_of_the_grid_shows_green_and_the_check_can_fail() {
+    use v2xw_world::procedural::GridParams;
+    use v2xw_world::validate::{ValidationParams, validate};
+    let mut world = v2xw_world::procedural::grid(
+        &GridParams {
+            sidewalk_m: 2.0,
+            crossings: true,
+            ..GridParams::legacy().with_size(3, 3).with_signals(true)
+        },
+        &v2xw_world::ImportOptions::default(),
+    )
+    .expect("grid");
+    let report = validate(&world, None, &ValidationParams::default());
+    for check in ["signal-group-never-green", "signal-movement-never-green"] {
+        let c = &report.checks[check];
+        assert!(c.of > 0, "{check} examined nothing");
+        assert_eq!(c.count, 0, "{check}: {:#?}", c.examples);
+    }
+    // The fault: one movement of the first plan red in every phase.
+    for phase in &mut world.signals[0].phases {
+        phase.states[0] = v2xw_world::SignalState::Red;
+    }
+    let broken = validate(&world, None, &ValidationParams::default());
+    assert!(broken.count("signal-movement-never-green") >= 1, "{:?}", broken.checks);
+}

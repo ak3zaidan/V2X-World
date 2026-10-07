@@ -135,7 +135,7 @@ pub use views::{
     Intent, INTENT_HORIZON_M, EMERGENCY_BRAKE_ONSET_JERK_MPS3,
     VehicleView,
 };
-pub use vru::SocialForce;
+pub use vru::{SocialForce, SocialForceParams};
 pub use weather::{RoadContext, WeatherResponse};
 
 /// Every model this crate registers, as `(id, card)` in id order.

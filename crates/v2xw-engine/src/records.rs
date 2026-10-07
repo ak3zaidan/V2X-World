@@ -204,7 +204,17 @@ impl GtKinematics {
             lane_pos_m: q.lane.map(|l| q3(l.s_m)),
             class: Some(class.to_string()),
             node: None,
+            activity: None,
         })
+    }
+
+    /// The same record carrying a road user's activity (vwp-v1 §3.3.5); a zero — a vehicle,
+    /// or a pedestrian walking — is left out, so a run with no pedestrians records exactly
+    /// the bytes it did before the field existed.
+    #[must_use]
+    pub fn with_activity(mut self, activity: u8) -> Self {
+        self.0.activity = (activity != 0).then_some(activity);
+        self
     }
 
     /// The same record naming the node mounted on the actor.

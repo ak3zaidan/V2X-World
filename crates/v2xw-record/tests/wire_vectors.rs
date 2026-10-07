@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use v2xw_record::wire::hello::{ChannelRow, ClassRow, HELLO_LIVE, HelloBody, NodeRow, WorldRef};
 use v2xw_record::wire::snapshot::{
     ActorRow, DeltaBody, KeyframeBody, MFLAG_LANE_CHANGED, MovedRow, ST_ATTACKER, ST_EQUIPPED,
-    SignalRow,
+    SignalRow, SpawnRow,
 };
 use v2xw_record::wire::{Frame, MsgType, StrTable, U32_NONE};
 use v2xw_record::{grid, quant};
@@ -349,6 +349,7 @@ fn example_delta() -> DeltaBody {
             state: ST_EQUIPPED,
             verified_neighbors: 8,
             mflags: MFLAG_LANE_CHANGED,
+            activity: 0,
         }],
         abs: Vec::new(),
         lanes: vec![44],
@@ -597,4 +598,37 @@ fn the_vertical_delta_of_section_9_4_decodes_in_millimetres() {
             "slot {row}: a centimetre reading must not coincide with the right answer, or this                  vector would prove nothing"
         );
     }
+}
+
+/// vwp-v1 §3.3.5: the activity byte rides in the bytes v1.0 reserved — the moved row's and
+/// the spawn row's `reserved` — and round-trips; with every activity zero the frame is the
+/// §9.3 frame byte for byte, so v1.0's vectors still hold.
+#[test]
+fn the_activity_byte_round_trips_in_the_reserved_bytes() {
+    let mut d = example_delta();
+    d.moved[0].activity = 6;
+    d.spawns.push(SpawnRow {
+        slot: 1,
+        actor_id: 9,
+        node_id: u32::MAX,
+        x_mm: 10,
+        y_mm: 20,
+        lane_id: 3,
+        z_cm: 0,
+        heading_brad: 0,
+        speed_cq: 0,
+        cause: 0,
+        class_idx: 2,
+        state: 0,
+        verified_neighbors: 0,
+        activity: 3,
+    });
+    let frame = d.to_frame(11, 0).expect("the body fits a frame");
+    let back = DeltaBody::decode(frame.body()).expect("it decodes");
+    assert_eq!(back.moved[0].activity, 6);
+    assert_eq!(back.spawns[0].activity, 3);
+    assert_eq!(back, d);
+    let (_, _, want) = spec_example();
+    let plain = example_delta().to_frame(11, 0).expect("the body fits a frame");
+    diff("Delta with activity 0", plain.as_bytes(), &want);
 }

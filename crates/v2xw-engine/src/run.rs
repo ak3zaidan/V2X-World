@@ -545,6 +545,8 @@ struct ActorRecord {
     driver: DriverProfile,
     node: Option<NodeId>,
     last: Kinematics,
+    /// What the road user is doing (vwp-v1 §3.3.5), from the mobility update.
+    activity: u8,
 }
 
 /// A frame between the signature finishing and the last symbol arriving.
@@ -2527,6 +2529,7 @@ impl Engine {
                     driver: spawn.driver,
                     node,
                     last: spawn.kinematics,
+                    activity: 0,
                 },
             );
         }
@@ -2578,6 +2581,11 @@ impl Engine {
         for (actor, k) in &update.states {
             if let Some(rec) = self.actors.get_mut(actor) {
                 rec.last = *k;
+            }
+        }
+        for (actor, code) in &update.activities {
+            if let Some(rec) = self.actors.get_mut(actor) {
+                rec.activity = *code;
             }
         }
     }
@@ -2634,13 +2642,15 @@ impl Engine {
     /// filed at the time it is actually about, rather than at a time the engine asserted
     /// for it.
     fn publish_state_at(&mut self, recorder: &mut dyn RunRecorder) {
-        let states: Vec<(ActorId, Kinematics, &'static str, Option<NodeId>)> = self
+        let states: Vec<(ActorId, Kinematics, &'static str, Option<NodeId>, u8)> = self
             .actors
             .iter()
-            .map(|(actor, rec)| (*actor, rec.last, rec.class.as_str(), rec.node))
+            .map(|(actor, rec)| (*actor, rec.last, rec.class.as_str(), rec.node, rec.activity))
             .collect();
-        for (actor, k, class, node) in states {
-            let rec = GtKinematics::new(actor, &k, class).with_node(node);
+        for (actor, k, class, node, activity) in states {
+            let rec = GtKinematics::new(actor, &k, class)
+                .with_node(node)
+                .with_activity(activity);
             self.emit_at(recorder, k.t, &rec);
         }
     }
@@ -2682,6 +2692,7 @@ impl Engine {
                 attacker,
                 transmitting,
                 verified_neighbors,
+                activity: rec.activity,
             });
         }
         let frame = self.snapshots.encode(at, &states)?;

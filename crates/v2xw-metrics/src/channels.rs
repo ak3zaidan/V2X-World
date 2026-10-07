@@ -1159,6 +1159,11 @@ pub struct GtKinematicsView {
     /// `node.rx`, which the neighbour-awareness ratio needs.
     #[serde(default)]
     pub node: Option<NodeId>,
+    /// What the road user is doing, for a pedestrian (vwp-v1 §3.3.5:
+    /// `v2xw_mobility::vru::PedActivity`); absent for a vehicle and for a pedestrian
+    /// walking along a sidewalk. Ground truth, like the rest of the record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<u8>,
 }
 
 impl ChannelView for GtKinematicsView {

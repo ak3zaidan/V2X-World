@@ -243,6 +243,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("world.buildings.metres_per_level", "m/storey"),
     ("actors.vru.pedestrians", "people"),
     ("actors.vru.cyclists", "people"),
+    ("actors.vru.midblock_rate_per_100m", "per 100 m"),
     ("actors.rsus[].site", "site id"),
     ("radio.tiers.focus.region.node", "node id"),
     ("threats.attackers[].count", "vehicles"),
@@ -268,6 +269,8 @@ const DIMENSIONLESS: &[&str] = &[
     "actors.vehicles.equipped_fraction",
     "actors.vehicles.classes.*.fraction",
     "actors.vru.device_fraction",
+    "actors.vru.red_crossing_share",
+    "actors.vru.ebike_share",
     "threats.attackers[].fraction",
     "apps.glosa_compliance",
 ];

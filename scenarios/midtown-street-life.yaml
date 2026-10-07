@@ -1,0 +1,143 @@
+# Midtown Manhattan as people use it: cars, delivery vans, buses and trucks, plus the
+# motorcycles, delivery mopeds, cyclists and pedestrians that share its streets, behaving
+# as they are observed to rather than as the rule book says.
+#
+# What is in it, and where each number comes from (the model cards carry the full
+# citations; a value marked "choice" is this scenario's, not a measurement):
+#
+#  * Pedestrians (actors.vru.behaviour: observed).
+#    - Walking speeds by age group, Knoblauch, Pietrucha & Nitzburg 1996: 1.51 m/s mean
+#      under 65, 1.25 m/s at 65 and over (15th percentiles 1.25 and 0.97 m/s); 15 % of
+#      walkers are 65 or over (choice, about New York's population share).
+#    - A start-up time at the onset of WALK for those who were waiting (median 2 s, choice
+#      below the HCM's 3.2 s platoon start-up).
+#    - 10 % of pedestrians cross on flashing or steady DON'T WALK when the traffic leaves
+#      them the HCM critical headway (t_c = L/S_p + t_s): calibrated against Basch et al.
+#      2015, who counted about one Midtown crossing in ten beginning on DON'T WALK.
+#    - Groups: 55 % of pedestrians walk in groups of two to four (Moussaïd et al. 2010
+#      counted more than half on a workday), side by side at the slowest member's pace.
+#    - Mid-block crossing: on blocks longer than 50 m, away from the corners, a pedestrian
+#      decides to cross straight or diagonally at 0.25 decisions per 100 m walked, four
+#      times as often beside stopped traffic (choice), and goes lane by lane when the gap
+#      passes the HCM critical headway. Drivers stop for anyone in or about to enter their
+#      lane; one in ten stops for someone waiting at the kerb (choice). Since autumn 2024
+#      crossing mid-block or against the signal is lawful in New York City (Int. 346-A),
+#      without right of way.
+#    - 1,500 pedestrians at once. Midtown's sidewalks hold far more at the peak: this is a
+#      sample sized for a laptop run, not a count. Raise it to load the model.
+#  * Cyclists: 150 at once, 40 % on e-bikes (choice: delivery riders are a large share of
+#    Midtown's cycle traffic), at the German Naturalistic Cycling Study's mean speeds
+#    (15.3 km/h conventional, 17.4 km/h pedelec), on the bike lanes and the carriageway.
+#  * The fleet: 82 % cars and taxis, 7 % delivery vans, 3 % trucks, 2 % buses, 2 %
+#    motorcycles and 4 % mopeds (delivery). The shares are choices: no classified count of
+#    Midtown traffic was read. Motorcycles accelerate at 2.5 m/s², corner within a 25°
+#    lean and ride the left tyre track; New York prohibits filtering between lanes
+#    (VTL §1252(c)), so they queue like cars.
+#  * Every motor vehicle and a quarter of pedestrians and cyclists carry V2X: BSMs from
+#    vehicles (motorcycles and mopeds included), PSMs from handsets.
+#
+# Safety is measured: the traffic auditor counts vehicle-pedestrian conflicts (time to
+# collision under 3 s) and near misses (under 1.5 s), crossings by signal state and
+# mid-block, and kerb waits; overlapping a pedestrian is a violation whatever they were
+# doing.
+schema: v2xw/scenario/1
+
+meta:
+  name: midtown-street-life
+  description: >-
+    Midtown Manhattan with pedestrians who jaywalk and cross on DON'T WALK as observed,
+    groups, cyclists on conventional and e-bikes, motorcycles and delivery mopeds among the
+    cars, vans, trucks and buses; every motor vehicle equipped with signed BSMs.
+  authors: [v2xw]
+  tags: [manhattan, osm, vru, pedestrians, jaywalking, motorcycles, cyclists, dsrc]
+  created: "2026-10-06"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  t0: "2027-03-04T17:00:00Z"
+  duration_s: 300.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: osm-xml
+    path: worlds/cache/manhattan.osm.xml
+    bbox:
+      min_lat_deg: 40.7440
+      min_lon_deg: -73.9900
+      max_lat_deg: 40.7620
+      max_lon_deg: -73.9680
+  highway_preset: urban-us-nyc
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  vru:
+    pedestrians: 1500
+    cyclists: 150
+    device_fraction: 0.25
+    behaviour: observed
+    ebike_share: 0.4
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 2400.0
+    classes:
+      passenger:
+        fraction: 0.82
+      delivery:
+        fraction: 0.07
+      truck:
+        fraction: 0.03
+      bus:
+        fraction: 0.02
+      motorcycle:
+        fraction: 0.02
+      moped:
+        fraction: 0.04
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  tiers:
+    propagation: medium
+    phy: medium
+    mac: medium
+
+net:
+  layer: wsmp
+
+messages:
+  sets: [bsm]
+  codec_tier: uper
+
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: prioritized
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+metrics: [all]
+
+exporters: []

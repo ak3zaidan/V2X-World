@@ -64,17 +64,31 @@ fn pedestrians_and_cyclists_walk_and_ride_on_an_osm_world() {
             match classes.get(&id) {
                 Some(VehicleClass::Pedestrian) => {
                     pedestrians_now += 1;
-                    // On a walkable lane, always.
-                    let lane = k.lane.expect("a pedestrian is on a lane").lane;
-                    assert!(
-                        SocialForce::is_walkable(&world, lane),
-                        "pedestrian {id} on lane {lane:?}, which is not walkable"
-                    );
+                    // On a walkable lane — or, off every lane, crossing the street
+                    // mid-block, which the model must say it is doing.
+                    match k.lane {
+                        Some(l) => assert!(
+                            SocialForce::is_walkable(&world, l.lane),
+                            "pedestrian {id} on lane {:?}, which is not walkable",
+                            l.lane
+                        ),
+                        None => assert!(
+                            mobility
+                                .vru()
+                                .and_then(|v| v.get(*actor))
+                                .is_some_and(|p| p.crossing_midblock()),
+                            "pedestrian {id} is off every lane and not crossing mid-block"
+                        ),
+                    }
                 }
                 Some(VehicleClass::Bicycle) => {
                     cyclists_now += 1;
+                    // Riders draw their own speeds (conventional 15.3 km/h, pedelec
+                    // 17.4 km/h on average, Schleinitz et al. 2017), capped at the 25 km/h
+                    // a pedelec's assistance stops at; a little over it for the speed
+                    // controller's overshoot.
                     assert!(
-                        k.ground_speed_mps() <= 6.0,
+                        k.ground_speed_mps() <= 25.0 / 3.6 + 0.1,
                         "cyclist {id} at {} m/s",
                         k.ground_speed_mps()
                     );

@@ -16,6 +16,8 @@
     "sidewalk-in-vehicle-envelope": 7,
     "sidewalk-on-cycle-lane": 47,
     "sidewalk-on-roadway": 36,
+    "signal-group-never-green": 0,
+    "signal-movement-never-green": 0,
     "speed-mismatch": 0,
     "stub-driving-lane": 13,
     "turn-lanes-violated": 35,

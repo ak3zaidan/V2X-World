@@ -2,6 +2,8 @@
 //!
 //! * [`social_force`] — `vru/pedestrian/social-force`, the medium tier: the Helbing and
 //!   Molnár 1995 force model, walking the world's sidewalk and crossing lanes.
+//! * [`midblock`] — crossing away from any crosswalk: where a pedestrian can, how often,
+//!   the gap it waits for, and the band its path cuts across each lane for the drivers.
 //! * [`crosswalk`] — the crosswalk rules both sides obey: a vehicle yields to a pedestrian
 //!   on a crosswalk and does not stop in one; a pedestrian steps off the kerb only on walk
 //!   and only when an approaching vehicle can still yield.
@@ -12,7 +14,11 @@
 //! [`crate::classes::VehicleClass::Bicycle`] and needs no model of its own.
 
 pub mod crosswalk;
+pub mod midblock;
 pub mod social_force;
 
 pub use crosswalk::{CrossingPermit, CrosswalkIndex};
-pub use social_force::{SocialForce, SocialForceParams};
+pub use midblock::{MidblockIndex, MidblockParams};
+pub use social_force::{
+    PedActivity, PedestrianStats, PedestrianTraits, SocialForce, SocialForceParams, SpeedLaw,
+};

@@ -29,6 +29,8 @@
 //! | `dead-end-uturn` | U-turn connectors at a junction with one road arm |
 //! | `stub-driving-lane` | driving lanes shorter than [`ValidationParams::stub_lane_m`] |
 //! | `vehicle-envelope-in-building` | driving lanes along which a car's body (centreline ± half its width) enters a building, outside any mapped passage |
+//! | `signal-movement-never-green` | movements of a signal plan (vehicle connectors and crosswalk lanes alike) that no phase shows green or permissive green: a lane whose movement a plan holds on red all cycle |
+//! | `signal-group-never-green` | signal head groups ([`World::group_signals`]) that show no green in the whole cycle: a head a driver or a pedestrian would wait at for ever |
 //!
 //! Source fidelity, when the OSM file and the importer's edge-to-way table are supplied
 //! ([`SourceLink`]):
@@ -257,6 +259,7 @@ pub fn validate(
     check_roadway_overlaps(world, &index, params, &mut report);
     check_paths(world, params, &mut report);
     check_stubs_and_buildings(world, params, &mut report);
+    check_signals(world, params, &mut report);
     figures(world, &mut report);
     if let Some(link) = source {
         check_source(world, link, params, &mut report);
@@ -844,6 +847,50 @@ fn check_stubs_and_buildings(
                     lane.id.index(),
                     p.x,
                     p.y
+                )
+            });
+        }
+    }
+}
+
+/// `signal-movement-never-green` and `signal-group-never-green`: every movement a signal
+/// plan controls, and every head group it shows, gets a green somewhere in the cycle.
+fn check_signals(world: &World, params: &ValidationParams, report: &mut ValidationReport) {
+    use crate::model::SignalState;
+    let keep = params.examples;
+    report.entry("signal-movement-never-green");
+    report.entry("signal-group-never-green");
+    let go = |s: SignalState| matches!(s, SignalState::Green | SignalState::GreenYield);
+    for plan in &world.signals {
+        for (i, lane) in plan.controlled.iter().enumerate() {
+            report.entry("signal-movement-never-green").of += 1;
+            if !plan
+                .phases
+                .iter()
+                .any(|p| p.states.get(i).copied().is_some_and(go))
+            {
+                report.fail("signal-movement-never-green", keep, || {
+                    let kind = world.try_lane(*lane).map_or("?", |l| l.kind.wire_name());
+                    format!(
+                        "plan {} (junction {}) movement {i}: {kind} lane {} is red all cycle",
+                        plan.id.index(),
+                        plan.junction.index(),
+                        lane.index()
+                    )
+                });
+            }
+        }
+    }
+    for g in world.group_signals() {
+        report.entry("signal-group-never-green").of += 1;
+        if !g.timeline.iter().any(|(s, _)| go(*s)) {
+            report.fail("signal-group-never-green", keep, || {
+                format!(
+                    "group {} (plan {}, group {}) shows {:?} all cycle",
+                    g.wire_id,
+                    (g.wire_id >> 16).wrapping_sub(1),
+                    g.wire_id & 0xFFFF,
+                    g.timeline.iter().map(|(s, _)| *s).collect::<Vec<_>>()
                 )
             });
         }

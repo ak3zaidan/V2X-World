@@ -339,9 +339,21 @@ with `f = t / duration` in [0, 1]. Parameters: `arrival_rate` 2.0 veh/s, `max_to
 
 Pedestrians walk on sidewalk lanes and crossings from the world; vehicles are borders with `jmCrossingGap` 10 m as the vehicle-side blocking threshold [R10 §B13]. Ignores (medium relative to high): group behavior, jam states, SUMO's stripe discretization.
 
+**Observed behaviour** (`SocialForceParams::observed()`, the scenario default `actors.vru.behaviour: observed`, added 2026-10-06). The force model above moves the body; these decide where it goes and when.
+
+| Behaviour | Default | Source |
+|---|---|---|
+| walking speed by age group | under 65: 1.51 ± 0.25 m/s; 65 and over: 1.25 ± 0.27 m/s; 15 % older | Knoblauch, Pietrucha & Nitzburg, TRR 1538 (1996): means 4.95 / 4.11 ft/s, 15th percentiles 4.09 / 3.19 ft/s; σ derived assuming normality; the older share is a choice |
+| start-up at the onset of WALK | lognormal, median 2 s, shape 0.5, for a pedestrian who was waiting | a choice below the HCM's 3.2 s platoon start-up |
+| crossing against the signal | 10 % of pedestrians start on flashing or steady DON'T WALK when the gap passes `t_c = L/S_p + t_s` (`t_s` lognormal, median 2 s) | calibrated to Basch et al., J. Community Health 40:789 (2015): about 10.6 % of Midtown crossings began on DON'T WALK |
+| groups | groups of 1–4 with shares 0.65 / 0.27 / 0.06 / 0.02 (55 % of pedestrians in groups), one walk, side by side, slowest member's pace | Moussaïd et al., PLoS ONE 5:e10047 (2010): more than half walk in groups on a workday |
+| mid-block crossing | 0.25 decisions per 100 m of eligible sidewalk (blocks over 50 m, 12 m from the corners), ×4 beside stopped traffic; straight or up to 35° diagonal; lane-by-lane HCM gap; drivers stop for a pedestrian in or entering their lane, 10 % yield to one waiting | rate, factor and yield share are choices; the gap rule is the HCM's; legality is a jurisdiction rule (NYC Int. 346-A, 2024) |
+
+Mid-block paths are bands on the lanes they cross (`vru::midblock`), read by the same crosswalk rules the vehicles obey; the traffic auditor holds every vehicle off every pedestrian whatever they are doing and counts conflicts (time to collision under 3 s) and near misses (under 1.5 s).
+
 **`vru/pedestrian/striping-sumo`** (`VruMobility`, high via SUMO) [SUMO pedestrian docs, R10 §B13]: `--pedestrian.model striping` (alternatives `nonInteracting`, `jupedsim`); stripe width 0.65 m; dawdling 0.2; jam time 300 s (crossing 10 s, narrow 1 s), jammed pedestrians move at a quarter of maximum speed ignoring obstacles; oncoming reservation 1/3 of width at junctions and crossings, off on normal lanes.
 
-**`vru/cyclist/lane-follow`** (`VruMobility`, all): cyclists use bike lanes or the rightmost lane with the IDM and the `bicycle` class of §2.7 (desired 20 km/h, physical 50 km/h) [R10 §B12]; e-scooter desired 20 km/h, max 25 km/h; moped 45 km/h. Legacy VRU (straight-line wander at `vru_speed_mps` 1.8 m/s, no bounds) is reference only (01-inventory §3.3).
+**`vru/cyclist/lane-follow`** (`VruMobility`, all): cyclists use bike lanes or the rightmost lane with the IDM and the `bicycle` class of §2.7 (desired 20 km/h, physical 50 km/h) [R10 §B12]; e-scooter desired 20 km/h, max 25 km/h; moped 45 km/h. Since 2026-10-06 each cyclist draws a bicycle type (30 % e-bikes by default, a choice) and a desired speed around its type's mean — 15.3 km/h conventional, 17.4 km/h pedelec (Schleinitz et al., Safety Science 92, 2017) — with a 20 % spread (a choice). Motorcycles and mopeds (`EngineParams::two_wheelers`) accelerate at 2.5 / 1.1 m/s², brake comfortably at 3 m/s², take junction turns within a 25° lean (`v = sqrt(g·R·tan φ)`), ride the left tyre track 0.5 m left of the lane centre, and never filter between lanes where the jurisdiction forbids it (every preset here does: NY VTL §1252(c)). Legacy VRU (straight-line wander at `vru_speed_mps` 1.8 m/s, no bounds) is reference only (01-inventory §3.3).
 
 ### 2.6 Weather effects on driving
 
