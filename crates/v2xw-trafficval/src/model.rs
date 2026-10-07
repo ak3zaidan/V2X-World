@@ -57,6 +57,7 @@ pub fn checks() -> Vec<Check> {
             faults: &[
                 "the acceleration exponent δ set to 2 instead of 4",
                 "the Kesting 2010 drivers (T 1.5 s, a 1.4, b 2.0) read as the Treiber 2000 set",
+                "the paper's 120 km/h entered as a rounded 33 m/s and s0 taken from the truck column (4 m)",
             ],
             run: idm_equation,
         },
@@ -147,7 +148,10 @@ pub fn checks() -> Vec<Check> {
                 road 4.1 s (follow-up 2.2), right from the minor 6.2 / 6.9 s on a 2- / 4-lane \
                 major (3.3), through from the minor 6.5 s (4.0), left from the minor 7.1 / \
                 7.5 s (3.5). The values are the model's own table, so the fault replaces it.",
-            faults: &["the minor-road left and through rows swapped"],
+            faults: &[
+                "the minor-road left and through rows swapped",
+                "the base values adjusted as if every vehicle were heavy (HCM 2010 Eq. 19-30/19-31, Exhibit 19-11)",
+            ],
             run: hcm_gaps,
         },
         Check {
@@ -159,7 +163,7 @@ pub fn checks() -> Vec<Check> {
                 relaxation time τ 0.5 s, pedestrian repulsion V0 2.1 m²/s² over σ 0.3 m, \
                 border repulsion U0 10 m²/s² over R 0.2 m, step Δt 2 s, field of view 200° \
                 with weight c 0.5 behind. Walking speeds in a run are group 2's.",
-            faults: &["a parameter set with τ = 1.0 s and σ = 0.5 m"],
+            faults: &["a parameter set with τ = 1.0 s and σ = 0.5 m", "the parameter table transcribed one row out of step"],
             run: social_force,
         },
     ]
@@ -201,6 +205,11 @@ fn idm_equation(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     };
     let driver = match variant {
         Variant::Fault(1) => IdmPreset::Kesting2010.profile(VehicleClass::Passenger),
+        Variant::Fault(2) => DriverProfile {
+            desired_speed_mps: 33.0,
+            min_gap_m: 4.0,
+            ..IdmPreset::Treiber2000.profile(VehicleClass::Passenger)
+        },
         _ => IdmPreset::Treiber2000.profile(VehicleClass::Passenger),
     };
     let mut worst = 0.0f64;
@@ -956,6 +965,17 @@ fn hcm_gaps(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         match (variant, m) {
             (Variant::Fault(0), Movement::MinorLeft) => HcmGaps::of(Movement::MinorThrough),
             (Variant::Fault(0), Movement::MinorThrough) => HcmGaps::of(Movement::MinorLeft),
+            (Variant::Fault(1), m) => {
+                // HCM 2010 Eq. 19-30/19-31 with Exhibit 19-11's heavy-vehicle terms applied as
+                // if every vehicle were heavy: +1.0 s (2-lane) / +2.0 s (4-lane) critical,
+                // +0.9 s follow-up.
+                let g = HcmGaps::of(m);
+                HcmGaps {
+                    critical_gap_narrow_s: g.critical_gap_narrow_s + 1.0,
+                    critical_gap_wide_s: g.critical_gap_wide_s + 2.0,
+                    follow_up_s: g.follow_up_s + 0.9,
+                }
+            }
             _ => HcmGaps::of(m),
         }
     };
@@ -982,21 +1002,42 @@ fn social_force(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         p.sigma_m = 0.5;
     }
     let src = "Helbing & Molnár 1995, Phys. Rev. E 51, 4282";
-    let exact = |name: &str, v: f64, want: f64| Row::held(name, v, (want, want), src);
+    let mut values = [
+        p.desired_speed_mean_mps,
+        p.desired_speed_std_mps,
+        p.max_speed_factor,
+        p.tau_s,
+        p.v0_m2_s2,
+        p.sigma_m,
+        p.u0_m2_s2,
+        p.r_m,
+        p.step_width_s,
+        p.field_of_view_deg,
+        p.behind_weight,
+    ];
+    if variant == Variant::Fault(1) {
+        // The table transcribed one row out of step.
+        values.rotate_left(1);
+    }
+    let names = [
+        ("desired speed mean, m/s", 1.34),
+        ("desired speed standard deviation, m/s", 0.26),
+        ("maximum speed / desired speed", 1.3),
+        ("relaxation time τ, s", 0.5),
+        ("pedestrian repulsion V0, m²/s²", 2.1),
+        ("pedestrian repulsion range σ, m", 0.3),
+        ("border repulsion U0, m²/s²", 10.0),
+        ("border repulsion range R, m", 0.2),
+        ("step width Δt, s", 2.0),
+        ("field of view 2φ, degrees", 200.0),
+        ("weight behind c", 0.5),
+    ];
     Ok(Outcome {
-        rows: vec![
-            exact("desired speed mean, m/s", p.desired_speed_mean_mps, 1.34),
-            exact("desired speed standard deviation, m/s", p.desired_speed_std_mps, 0.26),
-            exact("maximum speed / desired speed", p.max_speed_factor, 1.3),
-            exact("relaxation time τ, s", p.tau_s, 0.5),
-            exact("pedestrian repulsion V0, m²/s²", p.v0_m2_s2, 2.1),
-            exact("pedestrian repulsion range σ, m", p.sigma_m, 0.3),
-            exact("border repulsion U0, m²/s²", p.u0_m2_s2, 10.0),
-            exact("border repulsion range R, m", p.r_m, 0.2),
-            exact("step width Δt, s", p.step_width_s, 2.0),
-            exact("field of view 2φ, degrees", p.field_of_view_deg, 200.0),
-            exact("weight behind c", p.behind_weight, 0.5),
-        ],
+        rows: names
+            .iter()
+            .zip(values)
+            .map(|((name, want), v)| Row::held(*name, v, (*want, *want), src))
+            .collect(),
         notes: vec![],
     })
 }

@@ -229,6 +229,6 @@ pub const FINDINGS: &[(&str, &str, &str)] = &[
     (
         "invariants (suite)",
         "Three held figures could not fail: the gridlock row on runs shorter than the auditor's 180 s standstill limit, the jerk-rate row (no fault reached it), and the closure check's entries (the lane closed carried no traffic, so losing the closure changed nothing).",
-        "Fixed in the checks: the standstill row is held only on runs longer than the limit and reported otherwise; a second fault (acceleration jitter) proves the jerk row; the closure is applied to the lane most vehicles entered in the 25 s before it, watched for 120 s after, with a held row that it met traffic.",
+        "Fixed in the checks: the standstill row is held only on runs longer than the limit and reported otherwise; a second fault (acceleration jitter) proves the jerk row; the closure is applied to the lane most vehicles would enter after it were it left open, watched for 120 s, with a held row that it met traffic.",
     ),
 ];

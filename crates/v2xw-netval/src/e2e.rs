@@ -43,7 +43,7 @@ pub fn checks() -> Vec<Check> {
             layer: Layer::EndToEnd,
             title: "Metamorphic: more transmit power never shortens range — the set of vehicle pairs that ever deliver does not shrink at +6 dB",
             reference: "Monotonicity of the link budget in transmit power (Friis; every PER model here is monotone in SINR)",
-            tolerance: "pairs(+6 dB) ⊇-count ≥ pairs(0 dB) on the 10-vehicle Manhattan rung",
+            tolerance: "pairs(+6 dB) count ≥ pairs(0 dB) on the 10-vehicle Manhattan rung run 20 dB below its configured power, where the base set is not already every pair",
             fault: "The comparison run made at −6 dB instead of +6 dB",
             cost: Cost::Slow,
             run: more_power,
@@ -134,6 +134,16 @@ fn conservation(mode: Mode) -> Outcome {
             }
         };
         s.time.duration_s = s.time.duration_s.min(SHORT_S);
+        // An attack scheduled later than the short run is moved into it, so the run still
+        // carries attack traffic and the loader does not refuse a window outside the run.
+        for a in &mut s.threats.attackers {
+            if let Some(w) = a.schedule.as_mut()
+                && (w.from_s >= SHORT_S || w.to_s > SHORT_S)
+            {
+                w.from_s = 0.0;
+                w.to_s = SHORT_S;
+            }
+        }
         s.metrics = vec!["all".to_string()];
         let catalog_ok = v2xw_engine::wiring::build_metrics(&s, &mut Registry::new()).is_ok();
         let (report, rec) = match run_memory(s) {
@@ -164,7 +174,10 @@ fn conservation(mode: Mode) -> Outcome {
             .outcomes
             .iter()
             .filter(|o| !o.violations.is_empty())
-            .map(|o| format!("{} ({} violations)", o.invariant, o.violations.len()))
+            .map(|o| {
+                let first = o.violations.first().map(|v| format!(": {} {}", v.subject.clone().unwrap_or_default(), v.detail)).unwrap_or_default();
+                format!("{} ({} violations{})", o.invariant, o.violations.len(), first.chars().take(160).collect::<String>())
+            })
             .collect();
         let losses: u64 = report.rx_losses.values().sum();
         let identity = report.reception_attempts == report.receptions_ok + losses;
@@ -233,7 +246,11 @@ fn delivered_pairs(rec: &MemoryRecorder) -> BTreeSet<(u32, u32)> {
 
 fn more_power(mode: Mode) -> Outcome {
     let result = (|| -> Result<(usize, usize, f64), String> {
-        let base = load("scale/10.yaml")?;
+        let mut base = load("scale/10.yaml")?;
+        // 20 dB below the scenario's power, so the base run does not already deliver between
+        // every pair (at full power all ten vehicles hear each other, and then no change of
+        // power can show in the delivering set).
+        base.radio.devices.obu.tx_power_dbm -= 20.0;
         let p0 = base.radio.devices.obu.tx_power_dbm;
         let mut louder = base.clone();
         louder.radio.devices.obu.tx_power_dbm = p0 + if mode.faulted() { -6.0 } else { 6.0 };

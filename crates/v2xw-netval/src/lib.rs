@@ -154,7 +154,7 @@ impl Outcome {
                     parts.len(),
                     failed
                         .iter()
-                        .take(4)
+                        .take(8)
                         .map(|s| s.as_str())
                         .collect::<Vec<_>>()
                         .join("; ")

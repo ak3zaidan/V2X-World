@@ -130,9 +130,10 @@ pub fn render(results: &[(Check, Verdict)], commit: &str, quick: bool) -> String
          - IEEE 1609.2.1 linkage-value test vectors: the standard's own vectors were not obtainable; the \
            linkage arithmetic is pinned instead to the CAMP reference implementation's outputs \
            (`crates/v2xw-sec/tests/legacy_vectors.rs`), and SEC-03 checks the revocation decisions it drives.\n\
-         - CAM, DENM, SPaT and MAP encoders against an independent decoder: only the BSM's Part I has one \
-           here (NET-05). `crates/v2xw-msg/tests/j2735_oracle.rs` runs `pycrate` against the BSM, SPaT and MAP \
-           when the J2735 ASN.1 modules are supplied, which they are not in this repository.\n\
+         - The J2735 SPaT and MAP encoders against an independent decoder: the BSM's Part I has one \
+           (NET-05) and the ETSI CAM, DENM and VAM have asn1tools (NET-06, which needs `pip install \
+           asn1tools` or `NETVAL_PYTHON` naming an interpreter that has it, and otherwise reports a skip); \
+           the J2735 ASN.1 modules are not in this repository.\n\
          - The SAE J2945/1 CAMP worked examples: the CAMP report was not obtainable; ACC-08 holds the \
            equations to J2945/1's published constants (Ahmad et al. 2019).\n\
          - LTE-V2X and NR-V2X block-error curves against the 3GPP link-level results: the crate pins its \

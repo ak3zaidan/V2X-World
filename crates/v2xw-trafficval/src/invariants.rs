@@ -241,7 +241,8 @@ pub fn scenario_study(
     engine: Engine,
     tamper: Option<Tamper>,
 ) -> Result<StudyResult, String> {
-    let k = format!("scenario-{key}-{engine:?}-{}", tamper.is_some());
+    // The tamper is part of the key: two faults of one check must not share a cached run.
+    let k = format!("scenario-{key}-{engine:?}-{:?}", tamper.map(|f| f as usize));
     if let Some(r) = lab.get::<StudyResult>(&k) {
         return Ok(r);
     }
@@ -348,7 +349,7 @@ pub fn checks() -> Vec<Check> {
                 it, or on a connector into it) when it closed, from 10 s after the closure; \
                 vehicles whose next lane was the closed one at the closure and later drove \
                 elsewhere count as rerouted; the lane is the driving lane the most vehicles \
-                entered in the 25 s before the closure; the auditor counts teleports, illegal \
+                would enter after the closure were it left open; the auditor counts teleports, illegal \
                 transitions and mid-road despawns. 180 s in both modes.",
             faults: &[
                 "the closure is never sent to the engine (the check still treats the lane as closed)",
@@ -508,13 +509,14 @@ fn closure(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     let s = grid_scenario(lab, 6_000.0, seconds)?;
     let world = world_of(lab, &s)?;
     let close_at = 60.0;
-    // The lane closed is the driving lane the most vehicles entered over the 25 s before the
-    // closure, read from the same run's first 60 s (the run is deterministic, so they are
-    // identical): a closed lane nobody uses cannot show a reroute, nor an entry when the
-    // closure is lost.
-    let mut pre = s.clone();
-    pre.time.duration_s = close_at;
+    // The lane closed is the driving lane that the most vehicles not already on it would
+    // enter from 10 s after the closure, had it stayed open: read from the run with no
+    // closure (the first fault's run; the engine is deterministic, so up to the closure it
+    // is the shipped run too). A closed lane nobody would use cannot show a reroute, nor an
+    // entry when the closure is lost.
     let mut entered_by: BTreeMap<LaneId, BTreeSet<ActorId>> = BTreeMap::new();
+    let mut at_close: BTreeMap<ActorId, LaneId> = BTreeMap::new();
+    let mut snapped = false;
     let driving: BTreeSet<LaneId> = world
         .roads
         .lanes()
@@ -522,10 +524,14 @@ fn closure(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         .filter(|l| l.kind == v2xw_world::LaneKind::Driving && l.junction.is_none())
         .map(|l| l.id)
         .collect();
-    scenario_run(lab, &pre, Engine::Shipped, &[], None, |t, actors| {
-        if t >= close_at - 25.0 {
+    scenario_run(lab, &s, Engine::Shipped, &[], None, |t, actors| {
+        if t >= close_at && !snapped {
+            snapped = true;
+            at_close = actors.iter().map(|a| (a.actor, a.lane)).collect();
+        }
+        if t >= close_at + 10.0 {
             for a in actors {
-                if driving.contains(&a.lane) {
+                if driving.contains(&a.lane) && at_close.get(&a.actor) != Some(&a.lane) {
                     entered_by.entry(a.lane).or_default().insert(a.actor);
                 }
             }
@@ -537,7 +543,7 @@ fn closure(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         .map(|(l, _)| *l)
         .or_else(|| central_lane(&world))
         .ok_or("no driving lane")?;
-    let entrants_before = entered_by.get(&lane).map_or(0, BTreeSet::len);
+    let entrants_open = entered_by.get(&lane).map_or(0, BTreeSet::len);
     let events = if variant == Variant::Fault(0) {
         vec![]
     } else {
@@ -583,8 +589,9 @@ fn closure(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     })?;
     let a = &r.audit;
     let mut notes = vec![format!(
-        "closed lane {} at {close_at} s ({entrants_before} vehicles entered it in the 25 s before); {} vehicles were committed to it, {} were bound for it next.",
+        "closed lane {} at {close_at} s ({entrants_open} vehicles would enter it after the closure with the lane open; {} lanes carried any); {} vehicles were committed to it, {} were bound for it next.",
         lane.index(),
+        entered_by.len(),
         w.committed.len(),
         w.bound.len()
     )];
