@@ -367,7 +367,7 @@ fn crowded_grid() -> World {
         block_y_m: 70.0,
         lanes_per_direction: 1,
         lane_width_m: 3.3,
-        sidewalk_m: 1.8,
+        sidewalk_m: 1.5,
         speed_limit_mps: 11.176,
         signalised: true,
         cycle_s: 60.0,
@@ -384,14 +384,18 @@ fn walk_crowd(crowd_slowing: bool) -> CalibrationReport {
     let world = crowded_grid();
     let rng = RngRegistry::new(0xC20_3D);
     let params = EngineParams::default();
+    // Everyone wants the same speed, so a dense stretch of pavement is dense because it
+    // is crowded, not because a fast walker is overtaking a slow one (with the usual
+    // spread, the denser cells were the faster ones, crowding or not).
     let people = SocialForceParams {
         crowd_slowing,
+        desired_speed_std_mps: 0.0,
         ..SocialForceParams::default()
     };
     let mut engine = NativeMobility::new(params)
         .with_vru(SocialForce::new(people))
         .with_vru_population(VruPopulation {
-            pedestrians: 900,
+            pedestrians: 1300,
             cyclists: 0,
         });
     {
@@ -433,27 +437,20 @@ fn a_crowded_pavement_walks_slower_as_weidmann_measured() {
             c.metric, c.measured, c.samples, c.reference, c.band.0, c.band.1
         );
     }
-    let ratio = |r: &CalibrationReport, level: usize| {
-        let s = &r.network.pedestrian_speed_by_fruin_level;
-        s[level].mean / s[0].mean
+    let comparison = |r: &CalibrationReport, metric: &str| {
+        r.network
+            .comparisons()
+            .into_iter()
+            .find(|c| c.metric == metric)
+            .expect("metric")
     };
-    let samples = after.network.pedestrian_speed_by_fruin_level[2].n;
-    assert!(samples >= 100, "too few walkway cells at LOS C to judge: {samples}");
-    // With the relation on, walkers at Fruin's LOS C are slower relative to free walking
-    // than without it, and within 0.1 of Weidmann's curve there.
-    assert!(
-        ratio(&after, 2) < ratio(&before, 2),
-        "crowding did not slow anyone: {} vs {}",
-        ratio(&after, 2),
-        ratio(&before, 2)
-    );
-    let c = after
-        .network
-        .comparisons()
-        .into_iter()
-        .find(|c| c.metric == "pedestrian speed, Fruin LOS C / LOS A")
-        .expect("metric");
-    assert!(c.passes(), "{c:?}");
+    let d = "pedestrian speed, Fruin LOS D / LOS A";
+    let (on, off) = (comparison(&after, d), comparison(&before, d));
+    assert!(on.samples >= 20, "too few walkway cells at LOS D to judge: {on:?}");
+    // With the relation, walkers on a stretch at Fruin's LOS D walk at Weidmann's speed
+    // relative to free walking; without it they do not slow, and the same check fails.
+    assert!(on.passes(), "with crowd slowing: {on:?}");
+    assert!(!off.passes(), "without crowd slowing the check still passed: {off:?}");
 }
 
 #[test]

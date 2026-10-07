@@ -5187,10 +5187,22 @@ pub fn static_obstacle_accel(
     }
     let need = |room: f64| -(speed_mps * speed_mps) / (2.0 * room);
     let room = gap_m - s0_m;
-    if room > 0.05 && -need(room) <= PLANNED_STOP_MAX_DECEL_MPS2 {
-        return a_model.max(need(room));
-    }
     let to_line = gap_m + slack_m;
+    // Whatever the car-following model asks, never less braking than stops the vehicle
+    // short of the line itself. The IDM's braking scales with its `a`, and a heavy
+    // vehicle's (0.7 m/s²) creeping up to the line asked for −0.34 m/s² at 0.6 m/s with
+    // 0.35 m left: buses and trucks rolled over the stop line on red at walking pace, and
+    // the cross traffic's green then met them in the junction.
+    let at_least = |a: f64| {
+        if to_line > 0.05 {
+            a.min(need(to_line))
+        } else {
+            a
+        }
+    };
+    if room > 0.05 && -need(room) <= PLANNED_STOP_MAX_DECEL_MPS2 {
+        return at_least(a_model.max(need(room)));
+    }
     if to_line <= 0.05 {
         return a_model;
     }
@@ -5199,7 +5211,7 @@ pub fn static_obstacle_accel(
     } else {
         f64::NEG_INFINITY
     };
-    a_model.max(tight.max(need(to_line)))
+    at_least(a_model.max(tight.max(need(to_line))))
 }
 
 /// The model card.
