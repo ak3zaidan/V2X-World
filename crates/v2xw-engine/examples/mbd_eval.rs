@@ -56,6 +56,9 @@ fn main() {
     if !flag("--keep-metrics") {
         s.metrics.clear();
     }
+    // One run, not the scenario's sweep: a sweep over a field this measurement removes
+    // (the attackers' fraction) would otherwise refuse to build.
+    s.experiment = None;
     if flag("--no-attackers") {
         s.threats.attackers.clear();
         s.events
