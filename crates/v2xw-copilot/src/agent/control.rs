@@ -122,6 +122,21 @@ impl Harness {
         self.scenarios = scenarios;
     }
 
+    /// The extra metrics of runs `from..to`, as Markdown: run data the analyst's sections do
+    /// not show (detection, overhead, loss counts, pedestrians, applications).
+    pub(super) fn extras_markdown(&self, runs: &[RunRecord], from: usize) -> String {
+        let mut md = String::new();
+        for (i, r) in runs.iter().enumerate().skip(from) {
+            let Some(m) = self.meta.get(&i).filter(|m| !m.extra.is_empty()) else { continue };
+            md.push_str(&format!("## Other measured values: {}\n\n| Metric | Value | Unit |\n|---|---|---|\n", r.label));
+            for (k, v) in &m.extra {
+                md.push_str(&format!("| `{k}` | {} | {} |\n", fmt(*v), m.units.get(k).map_or("", String::as_str)));
+            }
+            md.push('\n');
+        }
+        md
+    }
+
     /// The experiments of one turn, as Markdown.
     pub(super) fn markdown_for_turn(&self, turn: usize) -> String {
         self.experiments

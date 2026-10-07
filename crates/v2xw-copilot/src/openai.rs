@@ -38,6 +38,12 @@ pub const URL_VARIABLE: &str = "OPENAI_BASE_URL";
 /// `high`) for a reasoning tier. Unset, the field is not sent and the model's own default
 /// applies.
 pub const EFFORT_VARIABLE: &str = "OPENAI_REASONING_EFFORT";
+/// The reasoning effort sent on the Responses API when [`EFFORT_VARIABLE`] is unset:
+/// `low`. Measured on the agent's suite with `gpt-6.1-sol` (2026-10-07): a model call took
+/// about 5 s at `low` against about 8 s at the model's default, with the same scores — the
+/// expensive judgement (bottlenecks, numbers) is the deterministic analyst's, and the model
+/// mostly plans one tool call and writes.
+pub const RESPONSES_EFFORT: &str = "low";
 /// The default endpoint.
 pub const DEFAULT_URL: &str = "https://api.openai.com/v1/chat/completions";
 /// The default model: the cheapest tier that calls tools reliably.
@@ -226,7 +232,7 @@ impl<H: HttpPost> OpenAi<H> {
                 &self.model,
                 request,
                 self.temperature,
-                self.reasoning_effort.as_deref(),
+                Some(self.reasoning_effort.as_deref().unwrap_or(RESPONSES_EFFORT)),
             );
         }
         let body = encode_request(&self.model, request, self.temperature)?;

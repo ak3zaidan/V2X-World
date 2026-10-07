@@ -261,8 +261,12 @@ pub fn serve(opts: &ServeOptions) -> Result<String> {
 }
 
 fn print_key_line() {
-    match v2xw_copilot::claude::key_source() {
-        Some(src) => println!("  model    Anthropic key from {src}"),
-        None => println!("  model    none: set ANTHROPIC_API_KEY to let the agent plan and write"),
+    // The provider the agent will actually use (V2XW_AGENT_PROVIDER, with the fallback to
+    // the other vendor's key), named and never shown.
+    match v2xw_copilot::claude::provider_from_env() {
+        Ok(p) => println!("  model    {}", p.name()),
+        Err(_) => println!(
+            "  model    none: set OPENAI_API_KEY or ANTHROPIC_API_KEY to let the agent plan and write"
+        ),
     }
 }

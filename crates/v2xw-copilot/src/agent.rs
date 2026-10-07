@@ -262,7 +262,10 @@ pub fn poll_delay_ms(poll_ms: u64, n: usize) -> u64 {
 pub fn agent_tools() -> Vec<Value> {
     let mut tools = control::tools();
     tools.extend(base_tools().into_iter().filter(|t| {
-        t.pointer("/function/name").and_then(Value::as_str) != Some("list_scenarios")
+        !matches!(
+            t.pointer("/function/name").and_then(Value::as_str),
+            Some("list_scenarios" | "run_prepared")
+        )
     }));
     tools
 }
@@ -291,12 +294,11 @@ fn base_tools() -> Vec<Value> {
         ),
         tool(
             "prepare_scenario",
-            "Build the scenario to run: start from `base` (a preset id, `current` or `last`) \
-             and apply only the changes the request implies. Each change is a dotted key \
-             (e.g. `radio.rat`, `actors.vehicles.demand.rate_veh_per_h`, `time.duration_s`) \
-             with the new value, or {\"multiply\": k} to scale a number, and why. The \
-             result is validated by the engine's own loader; fix and retry on errors. \
-             `metrics` is set to [all] so every layer is measured.",
+            "Stage a scenario for step-by-step control (then run_control start / run_to / \
+             seek). To run a scenario to its end and analyse it, use simulate instead. \
+             Start from `base` (a preset id, `current` or `last`) and apply only the changes \
+             the request implies (same change format as simulate). Validated by the \
+             engine's own loader; fix and retry on errors.",
             json!({"type": "object", "additionalProperties": false,
                    "required": ["base", "reason", "changes"],
                    "properties": {
@@ -369,8 +371,10 @@ pub fn agent_system_prompt() -> String {
      1. In the same reply as your first tool call, say in one short line what you will do.\n\
      2. One `simulate` call answers most requests. It builds, validates, runs and analyses; \
      for a comparison put every arm in `variants` (the first is the baseline; same seed \
-     for all) and the shared changes in `changes`. Do not chain prepare_scenario and \
-     run_prepared when simulate will do.\n\
+     for all) and the shared changes in `changes`. Timeline events (weather fronts, \
+     closures, attack waves, hard brakes) are changes too (`events` append). Use \
+     prepare_scenario + run_control only when the person wants to drive a run by hand; \
+     a run started that way is not analysed until you call analyse_current_run.\n\
      3. Base: the shipped scenario closest to the request (list below). Default to \
      scenarios/phase1-grid.yaml (\"the grid\"); use credential-lifecycle or \
      ccms-lifecycle for credentials and revocation, pseudonym-strategies for privacy \
@@ -1024,7 +1028,8 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         };
         report.markdown = to_markdown(&report);
         // This turn's experiments (a sweep, an A/B), each metric across every arm.
-        let experiments = self.harness.markdown_for_turn(self.harness.turn);
+        let mut experiments = self.harness.markdown_for_turn(self.harness.turn);
+        experiments.push_str(&self.harness.extras_markdown(&self.runs, runs_before));
         if !experiments.is_empty() {
             let at = report.markdown.find("## Thresholds").unwrap_or(report.markdown.len());
             report.markdown.insert_str(at, &experiments);

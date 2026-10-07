@@ -12,7 +12,10 @@
 //! | is this scenario valid | the engine's own loader and validator, [`scenario`] |
 //! | where did this number come from | the run's provenance chain joined to the cards, [`explain`] |
 //! | where are this run's bottlenecks | the run's own metrics and backend view, judged by the deterministic [`analyst`] |
-//! | set it up, run it, explain it | the [`agent`] loop: Claude ([`claude`]) plans, the server runs, the analyst measures |
+//! | set it up, run it, explain it | the [`agent`] loop: Claude ([`claude`]) or OpenAI ([`openai`], [`openai_responses`]) plans, the server runs, the analyst measures |
+//! | what can be set, to what | the build's own settings index and attacker / jammer catalogue, [`catalog`] |
+//! | how do two or more runs differ, and why | same-seed experiments compared metric by metric with health bands, [`experiment`] |
+//! | did the detectors catch the attack, what did security cost | findings from the metrics the analyst does not read, [`insight`] |
 //! | what is happening in the run on screen, and how did it go | the always-on [`watch`]er: the analyst over the live run, a summary at its end |
 //!
 //! Nothing here is a second implementation of any of those. The tool surface is

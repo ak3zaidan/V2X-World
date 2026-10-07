@@ -479,8 +479,14 @@ fn score(case: &Case, report: &AgentReport, prompts: &str, r: &mut CaseResult) {
     r.config_ok = notes.is_empty();
     r.config_notes = notes;
 
+    // Runs the agent started must reach their end; analysing a run the engine was already
+    // serving (paused part-way, or never started) is not a run that failed to complete.
     r.completed = r.error.is_none()
-        && report.runs.iter().all(|run| run.analysis.finding("simulation.incomplete").is_none());
+        && report
+            .runs
+            .iter()
+            .filter(|run| run.prepared.is_some())
+            .all(|run| run.analysis.finding("simulation.incomplete").is_none());
 
     // Strict grounding: the overview against the report's tables (the overview itself cut
     // out) and the person's own words, not against the agent's conversation.
