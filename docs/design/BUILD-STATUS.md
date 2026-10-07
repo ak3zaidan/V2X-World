@@ -247,6 +247,14 @@ All from this branch at the commits named; wall times are from a loaded, shared 
   one of 86 sampled frames, while the camera flew down from the plan view. The 60 fps replay of
   the same kind of scene counts no `empty_frame` and no `camera_clip`, so it is either a frame
   in mid-flight looking at one flat roof, or something only real pixels show. Not resolved.
+- **The allocation witness is near its bound.** End of session, `vitest run` over the whole
+  viewer package (`--maxWorkers=1`): 25 files, 191 tests pass, 1 skipped (the capture test), 1
+  fails — `render-perf.test.ts` "holds its per-frame allocation near zero". Run alone with
+  `--expose-gc` it passes at 58.4 B/frame against its 60 B/frame bound (6.2 B/frame in the
+  viewer's own sources; largest site in the protocol's compiled `messages.js`), where the test's
+  own comment records 11–15 on `main`. Its deterministic guards pass (0 `addUpdateRange` calls,
+  0 of 24 update ranges reallocated). Which change since `main` added the bytes — this branch's
+  lamps column through the protocol is the first suspect — was not found.
 - **Landing stutter.** 2 of the 3 stutter frames left on peak Midtown are the frame a camera
   flight hands over to the follow: 2.0 px of jerk against the 1.5 px threshold, counted once per
   actor on screen. The flight ends at the subject's velocity; the jerk is the follow spring
