@@ -208,6 +208,39 @@ export function TimeControls(): React.JSX.Element {
     [connection, run.state, run.tNs, run.tEndNs, hello?.simDurationNs, streamNs, replay, busy],
   );
 
+  /**
+   * Whether the timeline itself takes input, which unlike the buttons does not wait for a call in
+   * flight. It used to be disabled with them, so an arrow key pressed while the previous press's
+   * seek was still out was dropped: two quick presses moved one step (regressions e2e, "arrow keys
+   * on the scrub bar", on a loaded machine where a seek takes longer). A gesture that ends while
+   * a call is out now waits for it (`serial`) and then seeks, so each press is still one seek.
+   */
+  const scrubCaps = useMemo(
+    () =>
+      transportCaps({
+        connection,
+        runState: run.state,
+        tNs: run.tNs,
+        tEndNs: run.tEndNs > 0 ? run.tEndNs : hello?.simDurationNs ?? 0,
+        streamNs,
+        recording: replay === null ? null : { startNs: replay.startNs, endNs: replay.endNs },
+        busy: false,
+      }).seek,
+    [connection, run.state, run.tNs, run.tEndNs, hello?.simDurationNs, streamNs, replay],
+  );
+  /** The bar's calls, one after another: the tail of the chain, and how many are in it. */
+  const chainRef = useRef<Promise<void>>(Promise.resolve());
+  const queuedRef = useRef(0);
+  const serial = useCallback(<T,>(fn: () => Promise<T>): Promise<T> => {
+    queuedRef.current += 1;
+    const run = chainRef.current.then(fn);
+    const settle = (): void => {
+      queuedRef.current -= 1;
+    };
+    chainRef.current = run.then(settle, settle);
+    return run;
+  }, []);
+
   const { minNs: startNs, spanNs: endNs } = caps;
   // The clock, the fill and the thumb all read the dragged value, so the readout stays live while
   // the gesture is in flight and no seek has been issued yet; after a seek, the instant it landed on
@@ -234,28 +267,29 @@ export function TimeControls(): React.JSX.Element {
   const showSeekable = caps.partial && seekableNs > startNs;
 
   const call = useCallback(
-    async (fn: () => Promise<unknown>) => {
-      markBusy();
-      setNotice(null);
-      try {
-        // A pause or a step answers with where the run now stands; that is where the bar is until
-        // the stream's own clock gets there (see `landingNs`).
-        const landed = pausedAt(await fn());
-        if (landed !== null && !drivingReplay) setLandingNs(landed);
-      } catch (err) {
-        setNotice(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-        if (!drivingReplay) await engine.refreshStatus();
-        // A step, a pause or a resume moves side A's clock too, so side B follows it here rather
-        // than only on a scrub: `run.status` has just been refreshed, so this reads the new time.
-        if (compareSide !== null && compareSync.time) {
-          const state = useStudio.getState();
-          await compare.seekTo(state.simTimeNs > 0 ? state.simTimeNs : state.run.tNs);
+    (fn: () => Promise<unknown>) =>
+      serial(async () => {
+        markBusy();
+        setNotice(null);
+        try {
+          // A pause or a step answers with where the run now stands; that is where the bar is until
+          // the stream's own clock gets there (see `landingNs`).
+          const landed = pausedAt(await fn());
+          if (landed !== null && !drivingReplay) setLandingNs(landed);
+        } catch (err) {
+          setNotice(err instanceof Error ? err.message : String(err));
+        } finally {
+          setBusy(false);
+          if (!drivingReplay) await engine.refreshStatus();
+          // A step, a pause or a resume moves side A's clock too, so side B follows it here rather
+          // than only on a scrub: `run.status` has just been refreshed, so this reads the new time.
+          if (compareSide !== null && compareSync.time) {
+            const state = useStudio.getState();
+            await compare.seekTo(state.simTimeNs > 0 ? state.simTimeNs : state.run.tNs);
+          }
         }
-      }
-    },
-    [compareSide, compareSync.time, drivingReplay, markBusy],
+      }),
+    [compareSide, compareSync.time, drivingReplay, markBusy, serial],
   );
 
   /**
@@ -365,22 +399,27 @@ export function TimeControls(): React.JSX.Element {
     const value = scrubRef.current;
     scrubRef.current = null;
     if (value === null) {
-      setScrubNs(null);
+      if (queuedRef.current === 0) setScrubNs(null);
       return;
     }
-    markBusy();
-    setNotice(null);
-    try {
-      await seekOne(value);
-      if (compareSide !== null && compareSync.time) await compare.seekTo(Math.round(value));
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-      if (!drivingReplay) await engine.refreshStatus();
-      setScrubNs(null);
-    }
-  }, [compareSide, compareSync.time, seekOne, drivingReplay, markBusy]);
+    await serial(async () => {
+      markBusy();
+      setNotice(null);
+      try {
+        await seekOne(value);
+        if (compareSide !== null && compareSync.time) await compare.seekTo(Math.round(value));
+      } catch (err) {
+        setNotice(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+        if (!drivingReplay) await engine.refreshStatus();
+        // The thumb lets go of the gesture's value only when nothing else is queued behind this
+        // seek and no new gesture has started: otherwise it would snap back to this landing for
+        // the length of the next seek.
+        if (queuedRef.current <= 1 && scrubRef.current === null) setScrubNs(null);
+      }
+    });
+  }, [compareSide, compareSync.time, seekOne, drivingReplay, markBusy, serial]);
 
   // A range thumb dragged past the edge of the input releases the pointer somewhere else, so the
   // release is caught on the window rather than on the element.
@@ -503,11 +542,11 @@ export function TimeControls(): React.JSX.Element {
           max={Math.max(startNs + 1, endNs)}
           step={hello?.mobilityStepNs ?? 1e8}
           value={nowNs}
-          disabled={!caps.seek.enabled}
+          disabled={!scrubCaps.enabled}
           aria-label="Position in simulated time"
           aria-valuetext={simClock(nowNs)}
           aria-keyshortcuts="Alt+ArrowRight Alt+ArrowLeft"
-          title={caps.seek.enabled ? "Drag to move in time; Home goes to the start, Alt+arrow to the next or previous event" : caps.seek.why}
+          title={scrubCaps.enabled ? "Drag to move in time; Home goes to the start, Alt+arrow to the next or previous event" : scrubCaps.why}
           data-testid="scrub-range"
           onPointerDown={() => {
             scrubRef.current = nowNs;
@@ -565,7 +604,7 @@ export function TimeControls(): React.JSX.Element {
               style={{ left: `${p.left}%` }}
               title={p.title}
               aria-label={p.title}
-              disabled={!caps.seek.enabled}
+              disabled={!scrubCaps.enabled}
               onClick={() => seekTo(p.tNs)}
             />
           ))}
@@ -580,7 +619,7 @@ export function TimeControls(): React.JSX.Element {
               style={{ left: `${m.left}%`, background: MARK_COLOR[m.channel] ?? "var(--accent)" }}
               title={`${CHANNEL_LABEL[m.channel] ?? m.channel} at ${simClock(m.tNs)} — ${m.label}`}
               aria-label={`${CHANNEL_LABEL[m.channel] ?? m.channel} at ${simClock(m.tNs)}`}
-              disabled={!caps.seek.enabled}
+              disabled={!scrubCaps.enabled}
               onClick={() => seekTo(m.tNs)}
             />
           ))}
