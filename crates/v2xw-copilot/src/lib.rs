@@ -133,6 +133,7 @@ pub mod gather;
 pub mod grounding;
 pub mod http;
 pub mod openai;
+pub mod openai_responses;
 pub mod provider;
 pub mod scenario;
 pub mod secret;

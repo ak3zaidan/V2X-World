@@ -355,6 +355,7 @@ struct Args {
     label: String,
     only: Vec<String>,
     category: Vec<String>,
+    append: bool,
 }
 
 fn args() -> Args {
@@ -370,11 +371,17 @@ fn args() -> Args {
         label: "run".to_string(),
         only: Vec::new(),
         category: Vec::new(),
+        append: false,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < argv.len() {
         let next = argv.get(i + 1).cloned().unwrap_or_default();
+        if argv[i] == "--append" {
+            a.append = true;
+            i += 1;
+            continue;
+        }
         match argv[i].as_str() {
             "--suite" => a.suite = PathBuf::from(&next),
             "--engine" => a.engine = Some(next),
@@ -650,8 +657,15 @@ fn main() {
     eprintln!("engine at {}", engine.origin);
 
     let mut agents: BTreeMap<String, (Agent<Metered<Box<dyn LlmProvider + Send>>, HttpRpc<CurlPost>>, Arc<Mutex<Vec<CallStat>>>, String)> = BTreeMap::new();
-    let mut result = SuiteResult { label: args.label.clone(), ..SuiteResult::default() };
     let json_path = args.out.with_extension("json");
+    // `--append`: keep the cases an earlier invocation wrote to the same file and replace
+    // only the ones this one runs, so a suite can be run in parts (the machine's lock on
+    // heavy commands is released between them).
+    let mut result = match args.append.then(|| std::fs::read_to_string(&json_path).ok()).flatten() {
+        Some(text) => serde_json::from_str::<SuiteResult>(&text).unwrap_or_default(),
+        None => SuiteResult::default(),
+    };
+    result.label = args.label.clone();
     if let Some(dir) = args.out.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -767,7 +781,10 @@ fn main() {
             if r.config_notes.is_empty() && r.conclusion_notes.is_empty() && r.ungrounded.is_empty() { String::new() }
             else { format!("\n     {:?} {:?} {:?}", r.config_notes, r.conclusion_notes, r.ungrounded) }
         );
+        result.cases.retain(|c| c.id != r.id);
         result.cases.push(r);
+        let order: Vec<&str> = suite.cases.iter().map(|c| c.id.as_str()).collect();
+        result.cases.sort_by_key(|c| order.iter().position(|id| *id == c.id).unwrap_or(usize::MAX));
         agents.insert(case.id.clone(), (agent, calls, prompts));
         let _ = std::fs::write(&json_path, serde_json::to_string_pretty(&result).unwrap_or_default());
         let _ = std::fs::write(&args.out, markdown(&result, before.as_ref()));
