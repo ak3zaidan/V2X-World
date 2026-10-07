@@ -847,6 +847,8 @@ const fn family_code(family: Family) -> u16 {
         Family::Responder => 31,
         Family::Metric => 32,
         Family::Exporter => 33,
+        Family::Emission => 34,
+        Family::Energy => 35,
     }
 }
 

@@ -49,4 +49,7 @@ tokio = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `v2xw energy`: scores a recording with the energy models; reads a YAML `--spec`.
+v2xw-energy = { workspace = true }
+serde_yml = { workspace = true }
 thiserror = { workspace = true }

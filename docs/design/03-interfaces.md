@@ -970,7 +970,7 @@ type: object
 required: [id, family, version, tier, purpose, equations, parameters, assumptions, limitations, sources, validation, api_version]
 properties:
   id:            {type: string, pattern: "^[a-z0-9][a-z0-9-]*(/[a-z0-9-]+)*$"}   # e.g. "radio/propagation/log-distance-shadowing"
-  family:        {enum: [world, mobility, vru, weather, gnss, clock, propagation, fading, obstacle, phy, mac, dcc, net, fragmenter, backhaul, cellular, backend-net, codec, generator, envelope, primitive, crypto-backend, verification-policy, safety-app, protocol, service-model, hardware-profile, perception, attacker, detector, ma-pipeline, responder, metric, exporter]}
+  family:        {enum: [world, mobility, vru, weather, gnss, clock, propagation, fading, obstacle, phy, mac, dcc, net, fragmenter, backhaul, cellular, backend-net, codec, generator, envelope, primitive, crypto-backend, verification-policy, safety-app, protocol, service-model, hardware-profile, perception, attacker, detector, ma-pipeline, responder, metric, exporter, emission, energy]}
   version:       {type: string, description: semver}
   api_version:   {type: string, description: plug-in API semver the card targets}
   tier:          {type: array, minItems: 1, items: {enum: [abstract, medium, high]}}   # required, and may not be empty

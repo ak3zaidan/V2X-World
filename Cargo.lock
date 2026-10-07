@@ -2631,6 +2631,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "v2xw-energy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "v2xw-core",
+ "v2xw-metrics",
+]
+
+[[package]]
 name = "v2xw-engine"
 version = "0.1.0"
 dependencies = [

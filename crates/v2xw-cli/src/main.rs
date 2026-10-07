@@ -12,7 +12,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use v2xw_cli::cli::{Cli, Command, ExperimentCommand};
-use v2xw_cli::{agent, experiment, fmt, import, info, run, validate};
+use v2xw_cli::{agent, energy, experiment, fmt, import, info, run, validate};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -81,6 +81,14 @@ fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
                 json(&outcome, "recording info")
             } else {
                 Ok(fmt::info(&outcome))
+            }
+        }
+        Command::Energy(args) => {
+            let outcome = energy::energy(&args.to_options())?;
+            if args.json {
+                json(&outcome, "energy outcome")
+            } else {
+                Ok(energy::format(&outcome))
             }
         }
         Command::Experiment(args) => match &args.command {

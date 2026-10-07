@@ -93,6 +93,11 @@ pub struct Scenario {
     /// keeps its content hash.
     #[serde(default, skip_serializing_if = "Apps::is_default")]
     pub apps: Apps,
+    /// Emission, fuel and battery-electric energy of the traffic (`v2xw_energy`): which
+    /// models, which fleet. Absent computes no energy metrics, and is left out of the
+    /// serialised scenario so a scenario that does not mention it keeps its content hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub energy: Option<v2xw_energy::EnergySpec>,
     /// A parameter sweep, when this file describes one (08-measurement-and-data.md §4).
     #[serde(default)]
     pub experiment: Option<Experiment>,

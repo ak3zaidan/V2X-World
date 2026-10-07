@@ -31,6 +31,7 @@ pub mod error;
 pub mod experiment;
 pub mod fmt;
 pub mod import;
+pub mod energy;
 pub mod info;
 pub mod run;
 pub mod tally;

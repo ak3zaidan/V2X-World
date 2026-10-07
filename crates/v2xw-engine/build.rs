@@ -168,13 +168,16 @@ fn main() {
 /// embeds: a scenario field typed `v2xw_core::weather::WeatherKind` publishes that
 /// enum's variants, and it publishes them from that enum rather than from a copy, so a
 /// variant added upstream appears in the form without anyone editing this list.
-const REFLECT_SOURCES: [&str; 6] = [
+const REFLECT_SOURCES: [&str; 8] = [
     "src/scenario/schema.rs",
     "../v2xw-core/src/card.rs",
     "../v2xw-core/src/weather.rs",
     "../v2xw-world/src/lib.rs",
     "../v2xw-world/src/model.rs",
     "../v2xw-world/src/osm.rs",
+    // The `energy:` section's types (`v2xw_energy::EnergySpec` and its fleet mix).
+    "../v2xw-energy/src/spec.rs",
+    "../v2xw-energy/src/powertrain.rs",
 ];
 
 /// One field of a reflected struct or struct-like enum variant.

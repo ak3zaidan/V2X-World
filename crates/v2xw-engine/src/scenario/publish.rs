@@ -200,6 +200,11 @@ const GROUPS: &[(&str, &str, &str)] = &[
          their advice.",
     ),
     (
+        "energy",
+        "Energy",
+        "Emissions, fuel and electric-vehicle energy: which models, which fleet.",
+    ),
+    (
         "events",
         "Timeline",
         "Things that happen at a stated instant during the run.",
@@ -240,6 +245,8 @@ const UNIT_SUFFIXES: &[(&str, &str)] = &[
 /// cannot reach the page without a unit beside it, which is what
 /// 13-product-direction.md §2 requires of every field.
 const UNIT_OVERRIDES: &[(&str, &str)] = &[
+    ("energy.fleet.*.euro", "Euro class"),
+    ("energy.ev.params.*", "the EV model card's unit"),
     ("world.buildings.metres_per_level", "m/storey"),
     ("actors.vru.pedestrians", "people"),
     ("actors.vru.cyclists", "people"),
@@ -273,6 +280,9 @@ const DIMENSIONLESS: &[&str] = &[
     "actors.vru.ebike_share",
     "threats.attackers[].fraction",
     "apps.glosa_compliance",
+    "energy.fleet.*.ev_share",
+    "energy.fleet.*.diesel_share",
+    "energy.ev.initial_soc",
 ];
 
 /// One place the scenario picks a model, and which registry family fills it.
@@ -425,6 +435,18 @@ pub static SLOTS: &[Slot] = &[
         label: "Response model",
         family: Family::Responder,
         bare_id: false,
+    },
+    Slot {
+        path: "energy.emission_model",
+        label: "Emission model",
+        family: Family::Emission,
+        bare_id: true,
+    },
+    Slot {
+        path: "energy.ev_model",
+        label: "Electric-vehicle energy model",
+        family: Family::Energy,
+        bare_id: true,
     },
 ];
 
@@ -1067,6 +1089,12 @@ fn catalogue() -> Registry {
         }
     }
     let _ = v2xw_proto::register_all(&mut registry);
+    // The emission and EV energy models the `energy` section selects, and their provider.
+    for card in v2xw_energy::model_cards() {
+        if !registry.contains(&card.id) {
+            let _ = registry.register(card);
+        }
+    }
     // The security crate's registration takes a civil clock because a certificate has a
     // validity window. The schema's own default `time.t0` is used, so the catalogue is a
     // property of the build and not of a wall clock.

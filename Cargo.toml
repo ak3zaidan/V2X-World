@@ -94,6 +94,7 @@ v2xw-node = { path = "crates/v2xw-node", version = "0.1.0" }
 v2xw-proto = { path = "crates/v2xw-proto", version = "0.1.0" }
 v2xw-threat = { path = "crates/v2xw-threat", version = "0.1.0" }
 v2xw-metrics = { path = "crates/v2xw-metrics", version = "0.1.0" }
+v2xw-energy = { path = "crates/v2xw-energy", version = "0.1.0" }
 v2xw-record = { path = "crates/v2xw-record", version = "0.1.0" }
 v2xw-server = { path = "crates/v2xw-server", version = "0.1.0" }
 
