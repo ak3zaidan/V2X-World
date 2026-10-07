@@ -70,6 +70,11 @@ export interface StatusInput {
   readonly spanText?: string;
   /** Where the clock is, already formatted. */
   readonly clockText?: string;
+  /**
+   * True when the clock has not moved: an engine started `--paused` holds the run at 0 s, and a
+   * first-time user then sees "Paused" and an empty map with nothing saying that Play starts it.
+   */
+  readonly atStart?: boolean;
   /** Reconnect attempts since the engine was last reached. */
   readonly reconnectAttempts?: number;
   /** Why the engine is in `error`, in its words, when it said. */
@@ -253,6 +258,16 @@ export function describeStatus(input: StatusInput): StatusView {
       };
 
     case "paused":
+      if (input.atStart === true) {
+        return {
+          tone: "idle",
+          chip: "Ready",
+          headline: input.scenarioName ? `Ready to run ${input.scenarioName}.` : "The scenario is loaded and ready.",
+          detail: "Press Play to start the run, or pick another scenario from the list beside the logo.",
+          action: PLAY,
+          banner: true,
+        };
+      }
       return {
         tone: "ok",
         chip: "Paused",
@@ -268,7 +283,7 @@ export function describeStatus(input: StatusInput): StatusView {
       return {
         tone: "idle",
         chip: "Ready",
-        headline: input.scenarioName ? `${input.scenarioName} is loaded and ready.` : "Connected to the engine. No run has been started yet.",
+        headline: input.scenarioName ? `Ready to run ${input.scenarioName}.` : "Connected to the engine. No run has been started yet.",
         detail: "Press Run to start it, or pick another scenario from the list beside the logo.",
         action: RUN,
         banner: true,

@@ -58,7 +58,7 @@ const GROUPS: readonly { id: Group; title: string }[] = [
 ];
 
 /** A layer's plain name, falling back to the viewer's for one this table does not know. */
-export function layerLabel(name: string): string {
+function layerLabel(name: string): string {
   return LAYER_COPY[name as OverlayName]?.label ?? overlayLabel(name as OverlayName).replace(/ \(GT\)$/, "");
 }
 

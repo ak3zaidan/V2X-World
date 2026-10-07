@@ -19,8 +19,9 @@ const common = {
 export function GearIcon(): React.JSX.Element {
   return (
     <svg {...common}>
-      <circle cx="8" cy="8" r="2.2" />
-      <path d="M8 1.5v1.7M8 12.8v1.7M1.5 8h1.7M12.8 8h1.7M3.4 3.4l1.2 1.2M11.4 11.4l1.2 1.2M3.4 12.6l1.2-1.2M11.4 4.6l1.2-1.2" />
+      {/* A cog with six teeth: the old one, eight thin rays round a circle, read as a sun. */}
+      <path d="M6.9 1.6h2.2l.4 1.8 1.2.7 1.8-.6 1.1 1.9-1.4 1.3v1.4l1.4 1.3-1.1 1.9-1.8-.6-1.2.7-.4 1.8H6.9l-.4-1.8-1.2-.7-1.8.6-1.1-1.9 1.4-1.3V7.3L2.4 6l1.1-1.9 1.8.6 1.2-.7z" />
+      <circle cx="8" cy="8" r="2" />
     </svg>
   );
 }

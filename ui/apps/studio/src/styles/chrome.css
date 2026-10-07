@@ -183,3 +183,10 @@
 
 .statusbar { padding: 8px 14px; font-size: 12.5px; }
 .statusbar button.primary { height: 28px; padding: 0 14px; font-weight: 600; }
+
+/* Carets that read as a caret, not a dot. */
+.vp-button .caret, .scenario-switch .caret { font-size: 11px; }
+
+/* The shortcut list: names on the left, keys sized to their text on the right. */
+.menu-note.shortcuts { gap: 4px 16px; padding: 6px 8px; font-size: 11.5px; }
+.menu-note.shortcuts kbd { justify-self: end; white-space: nowrap; }

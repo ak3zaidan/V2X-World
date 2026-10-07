@@ -47,6 +47,7 @@ export function useStatus(): StatusView {
       targetReachable: target.reachable,
       ...(span > 0 ? { spanText: durationNs(span) } : {}),
       clockText: simClock(tNs),
+      atStart: tNs === 0,
       reconnectAttempts,
       ...(failure !== null ? { failure } : {}),
     });

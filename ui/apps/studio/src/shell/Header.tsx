@@ -216,6 +216,7 @@ function AppMenu(): React.JSX.Element {
             }}
             title="Switch between the dark and light palette"
           >
+            <span className="check-mark" aria-hidden="true" />
             <span className="grow">{theme === "dark" ? "Light theme" : "Dark theme"}</span>
           </button>
           <button

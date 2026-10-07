@@ -25,13 +25,13 @@ function RoadUserKey({ color }: { color: string }): React.JSX.Element {
         <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true" focusable="false">
           <circle r={r} fill={color} />
         </svg>
-        vehicle
+        Vehicle
       </span>
       <span className="item" data-testid="legend-vru">
         <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true" focusable="false">
           <circle r={r * VRU_MARK_SCALE} fill={color} />
         </svg>
-        pedestrian or cyclist
+        Pedestrian or cyclist
       </span>
     </>
   );

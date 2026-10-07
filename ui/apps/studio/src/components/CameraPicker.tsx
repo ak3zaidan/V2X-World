@@ -17,25 +17,12 @@ import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
 import { MenuButton } from "../shell/Menu.js";
 import { CameraIcon } from "../shell/Icons.js";
-
-/** A view's name and the sentence that says what it shows. Exported for the free-camera help. */
-export const CAMERA_VIEWS: Readonly<Record<string, { readonly label: string; readonly hint: string }>> = {
-  map: { label: "Map", hint: "The whole area from above. Click a vehicle to follow it." },
-  chase: { label: "Chase", hint: "Ride just behind the selected vehicle." },
-  dashboard: { label: "Driver's view", hint: "The road as the selected vehicle's driver sees it." },
-  free: { label: "Free", hint: "Move the camera anywhere, not tied to a vehicle." },
-  rsu: { label: "Roadside unit", hint: "Look out from a roadside radio mast." },
-};
-
-/** The name of a view, for any other part of the page that mentions one. */
-export function cameraLabel(mode: CameraMode): string {
-  return CAMERA_VIEWS[mode]?.label ?? mode;
-}
+import { CAMERA_VIEWS, cameraLabel } from "../lib/views.js";
 
 /** Why a view cannot be chosen right now, or `null` when it can. */
 function unavailable(mode: CameraMode, vehicles: number, sites: number | null): string | null {
   if ((mode === "chase" || mode === "dashboard") && vehicles === 0) {
-    return "Needs a vehicle on the road. Press Run first.";
+    return "Needs a vehicle on the road. Start the run first.";
   }
   if (mode === "rsu" && sites === 0) return "This map has no roadside units.";
   return null;

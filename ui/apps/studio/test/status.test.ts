@@ -133,6 +133,17 @@ describe("describeStatus", () => {
     expect(describeStatus(input({ runState: "idle" })).banner).toBe(true);
   });
 
+  it("says that Play starts a run held at 0 s, as an engine started --paused holds it", () => {
+    const view = describeStatus(input({ runState: "paused", atStart: true }));
+    expect(view.chip).toBe("Ready");
+    expect(view.banner).toBe(true);
+    expect(view.headline).toContain("phase1-manhattan");
+    expect(view.detail).toContain("Press Play");
+    expect(view.action?.kind).toBe("resume");
+    // Once the clock has moved, a pause is an ordinary pause again.
+    expect(describeStatus(input({ runState: "paused", atStart: false })).chip).toBe("Paused");
+  });
+
   it("maps every tone onto a pill class", () => {
     expect(toneClass("ok")).toBe("ok");
     expect(toneClass("busy")).toBe("warn");
