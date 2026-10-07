@@ -15,6 +15,83 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-07 — network and traffic validation suites finished (validation track)
+
+One engineer, owner of `crates/v2xw-netval` and `crates/v2xw-trafficval` (both merged as
+early work on 2026-10-06) and of the small defects they find. Every number below comes from
+the debug build in the track's worktree; the two reports are the record and are regenerated,
+not edited.
+
+**One command:** `just validation-report` (add `--quick` to leave out the whole-run and
+city-scale checks) runs `netval-report` and `traffic_validation` and writes
+[`docs/validation/network.md`](../validation/network.md) and
+[`docs/validation/traffic.md`](../validation/traffic.md). Every check runs as shipped and
+again with an injected fault that must turn it red; a check its fault cannot turn red is
+reported as such (`CANNOT FAIL` / *pass, not proved*), never as a pass.
+
+### Network: 45 checks
+
+New this round: **PHY-14** (the 802.11 convolutional code's distance spectrum recomputed
+from its generator polynomials and puncturing patterns by a trellis search, against the
+NIST union bound's coefficients), **PHY-15** (uncoded BER formulas against the exact
+Gray-mapped BER), **PHY-16** (PER against a Monte-Carlo hard-decision Viterbi link written
+in the suite: the NIST bound is 1.2–1.8 dB pessimistic at 10 % PER, as a bound must be),
+**ACC-12** (sidelink selection window and candidate set, TS 36.213 §14.1.1.6 / TS 38.214
+§8.1.4), **ACC-13** (S-RSSI ranking, step 8), **NET-06** (ETSI CAM, DENM and VAM encoders
+against asn1tools compiled from the ETSI modules: 240 of 240 messages decode, re-encode to
+the same octets and carry the station id and position sent).
+
+Fixed checks: ACC-04 now holds the EDCA machine to the exact slotted broadcast process as
+well as Bianchi's Eq. 7 (the approximation overstates collisions at N = 20); SEC-01 sends
+OpenSSL's signatures in low-s form and confirms the high-s refusal; SEC-03 no longer panics;
+E2E-01 moves attack windows inside its 3 s runs; E2E-03 runs below saturation so a power
+fault can show.
+
+Defects found and fixed:
+
+| Where | Defect | Fix |
+|---|---|---|
+| `v2xw-radio` `cv2x::THERMAL_NOISE_DBM_PER_HZ` | −173.9750935 against its own formula's −173.9751872 dBm/Hz | constant corrected |
+| `v2xw-metrics` channel table (outside this track's crates) | I-T2 called `backend.state`, `node.drop`, `node.security`, `privacy.link`, `privacy.track`, `scenario.event`, `sec.pseudonym` undeclared, failing conservation on 8 shipped scenarios | listed with the visibility `v2xw_record::channels` declares |
+
+Recorded, not changed: NET-03 (every message signed under PSID 0x20, including CAMs, DENMs,
+SPATEM/MAPEM; `v2xw-node`, another track's crate); the real backend refuses high-s ECDSA
+signatures that FIPS 186-4 accepts (a deliberate I-S1 policy, an interop note); the
+punctured-rate spectrum coefficients ns-3 publishes differ from an exhaustive search in
+their high-order terms (≤ 6e-4 relative in Pe, under 0.001 dB).
+
+### Traffic: 23 checks
+
+The suite's own defects were the larger share: a cached study keyed on whether a tamper was
+present (so a check's second fault reused its first fault's run, and the jerk rows could
+never go red); a gridlock row held on runs shorter than the auditor's 180 s limit; a closure
+applied to a lane nobody used; an IDM band encoding a property the equation does not have
+(the continuous IDM stops 0.084 m short of s0); a string-stability probe whose spectrum lay
+outside the unstable band; a lateral-acceleration reading that turned a polyline vertex into
+11 m/s². Each is fixed in the check and listed in the report's findings table. String
+stability is now held to the linear transfer function |G(iω)| within 0.003 at 22 densities
+(measured within 0.0005).
+
+Model defects the suite finds and records (the report's FAIL rows, open):
+
+| Check | Finding | Owner |
+|---|---|---|
+| `calibration/turning` | turns driven at the SUMO default 5.5 m/s² average lateral acceleration; 85th percentile 8.4 m/s² against AASHTO's 3.7 | mobility (changing the default moves every golden) |
+| `model/sugiyama-ring` | the calibrated city drivers are too string-stable to form Sugiyama's jam (slowest car 3.4 m/s) | mobility |
+| `cities/manhattan` | one car crossed an unsignalised crosswalk a pedestrian was on (5 vehicle-steps) | mobility (`vru::crosswalk`) |
+| `cities/berlin` | junction areas of the OSM import smaller than their connectors (body centre ~2 m outside, 6 steps) | world |
+| `cities/portland` | the scenario puts at most 2 vehicles on the road at its 1,000 veh/h | demand / world |
+
+### What is not done
+
+- 21 traffic held figures are still *pass, not proved* (the ring fundamental diagram's
+  truck fault does not move its bands; several calibration rows have no fault yet).
+- No J2735 SPaT/MAP independent decoder (the J2735 ASN.1 is not in the repository), no
+  re-derivation of the LTE/NR BLER tables against 3GPP link-level results, no J2945/1 CAMP
+  worked examples (not obtainable).
+- NET-06 needs `asn1tools` (`pip install asn1tools`, or `NETVAL_PYTHON` naming an
+  interpreter that has it); without it the check reports a skip.
+
 ## 2026-09-30 — robustness track: a refusal names its setting, nothing flaky, nothing leaks
 
 One engineer, owner of error handling in `crates/v2xw-server` and the engine's loader, the
