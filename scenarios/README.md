@@ -26,7 +26,7 @@ US SCMS, eight roadside units, detection) and [`base/radio-faceoff.yaml`](base/r
 | [`midtown-pedestrians.yaml`](midtown-pedestrians.yaml) | Midtown Manhattan - pedestrians, jaywalkers and motorcycles | `midtown-street-life.yaml` at a size the page draws smoothly |
 | [`midtown-rain.yaml`](midtown-rain.yaml) | Midtown Manhattan - heavy rain | slower, more cautious traffic; the radio loses almost nothing (ITU-R P.838-3) |
 | [`berlin.yaml`](berlin.yaml) | Berlin-Mitte (European ITS-G5 and CAMs) | the European stack end to end on a German city; needs `worlds/fetch.sh berlin` |
-| [`highway-congestion.yaml`](highway-congestion.yaml) | Highway - congestion behind a breakdown | a six-lane highway above the capacity left by two breakdowns |
+| [`highway-congestion.yaml`](highway-congestion.yaml) | Highway - heavy traffic and breakdowns | a busy open-road channel; two breakdowns block lanes (not a level-of-service F jam: see the file) |
 | [`portland.yaml`](portland.yaml) | Downtown Portland, Oregon | `portland-downtown.yaml` by day |
 | [`radio-dsrc.yaml`](radio-dsrc.yaml), [`radio-lte.yaml`](radio-lte.yaml), [`radio-nr.yaml`](radio-nr.yaml) | Radio comparison - DSRC / LTE / NR | identical traffic, only the radio differs |
 | [`attack-fake-positions.yaml`](attack-fake-positions.yaml) | Attack - fake positions at rush hour | ConstPos and RandomPos attackers detected, reported and revoked |

@@ -1,27 +1,30 @@
-# A congested six-lane highway: heavy traffic and two breakdowns that block lanes.
+# A six-lane highway at heavy load, with two breakdowns that block lanes.
 #
 # The road: two parallel 1.5 km highways, three 12 ft lanes each way (3.66 m, the AASHTO
 # freeway lane), 65 mph limit, joined at the ends — a procedural grid of 2 × 2 junctions with
-# no signals, no sidewalks and no buildings. Two 1.5 km carriageways keep the fleet to a few
-# hundred vehicles, which is what this machine runs interactively (TR 36.885's freeway case
-# is a 2 km road with wrap-around).
+# no signals, no sidewalks and no buildings (TR 36.885's freeway case is a 2 km road with
+# wrap-around).
 #
-# The traffic: 16,000 veh/h offered to the whole network. Spread over its four directional
-# carriageways that is about 4,000 veh/h each way on a highway, above the 3,450 veh/h left
-# when a breakdown blocks one of three lanes: the HCM gives 2,350 pc/h/ln for a 65 mph
-# basic freeway segment and 49 % of capacity with one of three lanes blocked by an
-# incident (HCM 2010 Exhibit 10-17; both recalled, not re-read). So each breakdown is a bottleneck with a queue behind
-# it — stop-and-go waves, the densest the radio channel gets on a highway.
+# The traffic: 48,000 veh/h is *offered*; the spawner admits only what fits at the entries, and
+# a 120 s run of this file admitted 164 vehicles (about 4,900 veh/h, some 1,200 veh/h per
+# direction on each carriageway, measured 2026-10-06), at 0.79 s of wall time per simulated
+# second. That is busy, not jammed: the HCM puts a 65 mph basic segment's capacity at
+# 2,350 pc/h/ln and leaves 49 % of a three-lane segment when an incident blocks one lane
+# (HCM 2010 Exhibit 10-17; both recalled, not re-read), so the breakdowns slow the lane they
+# block without building a long queue. A highway at level of service F needs a spawner that
+# admits more than this geometry lets it — stated here rather than claimed.
 #
-# What to read: the channel busy ratio and the delivery ratio along the queue, and the
-# hard-braking (EEBL) warnings as the queue forms.
+# On an open road every vehicle hears every other, so this is the densest radio channel per
+# vehicle of the ready-made set. What to read: the channel busy ratio, delivery against
+# distance, and the hard-braking warnings when the breakdowns stop.
 schema: v2xw/scenario/1
 
 meta:
-  name: Highway - congestion behind a breakdown
+  name: Highway - heavy traffic and breakdowns
   description: >-
-    A six-lane highway at heavy load where two broken-down cars block lanes: queues and
-    stop-and-go waves form behind them, and the radio channel is at its busiest.
+    A busy six-lane highway where two cars break down and block lanes: traffic slows
+    around them, and with every car in radio range of every other the channel is at its
+    busiest.
   authors: [v2xw]
   tags: [highway, traffic, congestion, incident, dsrc, procedural]
   created: "2026-10-06"
@@ -65,7 +68,7 @@ actors:
     equipped_fraction: 1.0
     demand:
       kind: mobility/demand/poisson
-      rate_veh_per_h: 16000.0
+      rate_veh_per_h: 48000.0
     # A US freeway mix: FHWA's vehicle-class counts put single-unit and combination trucks
     # near a tenth of rural-interstate traffic (Traffic Monitoring Guide 2016, secondary).
     classes:
