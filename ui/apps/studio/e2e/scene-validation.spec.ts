@@ -570,6 +570,80 @@ async function followEquippedActor(page: Page): Promise<number> {
   return id as number;
 }
 
+/**
+ * Follow the equipped actor whose chase view looks into the most building frontage.
+ *
+ * The building check measures what the walls add to the top of a street-level frame, so its
+ * precondition is a subject with walls ahead of it. `followEquippedActor` takes the first equipped
+ * actor in slot order, and which one that is depends on when the test starts: in the full suite the
+ * earlier tests leave the live mock run at a different time on every pass, and a car heading out of
+ * the gridded blocks at the edge of the map, with open ground ahead, gave a differential of 0 — the
+ * flake the wave-1 integrator saw ("signal 0, needs more than 0.05"; alone, it passed). Choosing by
+ * geometry makes the precondition true by construction, whatever the clock says.
+ */
+async function followActorFacingBuildings(page: Page): Promise<number> {
+  const id = await page.evaluate(() => {
+    type W = {
+      buildings: { count: number; ringOff: Uint32Array; ringCount: Uint32Array; heightM: Float32Array };
+      ringPoints: { x: Float32Array; y: Float32Array };
+    };
+    const engine = (window as unknown as { __vwpStudio: { engine: Record<string, unknown> } }).__vwpStudio.engine as {
+      client: { poses: { count: number; occupied: Uint8Array; actorId: Uint32Array; positions: Float32Array; headings: Float32Array } } | null;
+      nodeByActor: Map<number, number>;
+      world: W | null;
+      selectActor(id: number | null, mode?: string): Promise<void>;
+    };
+    const poses = engine.client?.poses;
+    const world = engine.world;
+    if (!poses || !world) return null;
+    // Building centroids, once.
+    const cx: number[] = [];
+    const cy: number[] = [];
+    const tall: boolean[] = [];
+    for (let b = 0; b < world.buildings.count; b++) {
+      const off = world.buildings.ringOff[b];
+      const n = world.buildings.ringCount[b];
+      let sx = 0;
+      let sy = 0;
+      for (let k = 0; k < n; k++) {
+        sx += world.ringPoints.x[off + k];
+        sy += world.ringPoints.y[off + k];
+      }
+      cx.push(sx / n);
+      cy.push(sy / n);
+      tall.push(world.buildings.heightM[b] >= 12);
+    }
+    let best: { id: number; score: number } | null = null;
+    for (let slot = 0; slot < poses.count; slot++) {
+      if (poses.occupied[slot] !== 1) continue;
+      const actor = poses.actorId[slot];
+      if (engine.nodeByActor.get(actor) === undefined) continue;
+      const px = poses.positions[slot * 3];
+      const py = poses.positions[slot * 3 + 1];
+      const fx = Math.cos(poses.headings[slot]);
+      const fy = Math.sin(poses.headings[slot]);
+      // Tall buildings in the chase camera's view: ahead of the car within 150 m, within 45 m of
+      // its line of travel.
+      let score = 0;
+      for (let b = 0; b < cx.length; b++) {
+        if (!tall[b]) continue;
+        const dx = cx[b] - px;
+        const dy = cy[b] - py;
+        const along = dx * fx + dy * fy;
+        const across = Math.abs(dx * fy - dy * fx);
+        if (along > 5 && along < 150 && across < 45) score++;
+      }
+      if (best === null || score > best.score || (score === best.score && actor < best.id)) best = { id: actor, score };
+    }
+    if (best === null || best.score === 0) return null;
+    void engine.selectActor(best.id, "chase");
+    return best.id;
+  });
+  expect(id, "no equipped actor has buildings ahead of it").not.toBeNull();
+  await expect.poll(async () => (await sceneFacts(page)).mode, { timeout: 30_000 }).toBe("chase");
+  return id as number;
+}
+
 /** Leave the engine the way `studio.spec.ts` expects to find it: running, at t = 0. */
 test.afterEach(async ({ page }) => {
   await rpc(page, "run.seek", { t_ns: 0, pause_after: false }).catch(() => undefined);
@@ -865,7 +939,7 @@ test("the camera is inside the world and looking at what it says it is", async (
 
 test("buildings fill the upper frame at street level and read as more than a flat wash", async ({ page }) => {
   await streaming(page);
-  await followEquippedActor(page);
+  await followActorFacingBuildings(page);
   await freeze(page);
 
   // The upper third: at street level in a city, that band is walls, not sky. The unlit-buildings

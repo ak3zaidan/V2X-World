@@ -21,6 +21,7 @@
 import { engine } from "./engine.js";
 import { useStudio, type ScenarioListItem } from "./store.js";
 import { changedPointers, getPointer, setPointer } from "../lib/schema.js";
+import { describeError } from "../lib/errors.js";
 import { isUnsupported, settingsFields, type Field } from "../settings/model.js";
 
 /** The message shape on the settings channel. */
@@ -59,7 +60,7 @@ export function listenForOtherWindow(onRun?: () => Promise<string>): () => void 
     } else if (m.kind === "run" && onRun) {
       onRun().then(
         (state) => post({ kind: "run-ack", id: m.id, state }),
-        (err: unknown) => post({ kind: "run-ack", id: m.id, error: err instanceof Error ? err.message : String(err) }),
+        (err: unknown) => post({ kind: "run-ack", id: m.id, error: describeError(err) }),
       );
     }
   };
@@ -115,7 +116,7 @@ export async function runSettingsAction(name: string, fn: () => Promise<string>)
   } catch (err) {
     useStudio
       .getState()
-      .setSettingsMessage({ text: `${name} did not work: ${err instanceof Error ? err.message : String(err)}`, tone: "err" });
+      .setSettingsMessage({ text: `${name} did not work: ${describeError(err)}`, tone: "err" });
   } finally {
     useStudio.getState().setSettingsBusy(null);
   }

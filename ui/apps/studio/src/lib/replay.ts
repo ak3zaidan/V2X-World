@@ -248,6 +248,40 @@ export interface ReplayPosition {
   readonly totalBytes: number;
   /** Why a delta was refused, when one was. */
   readonly refused: readonly DeltaApplyResult[];
+  /**
+   * Whether the poses were moved to their bodies' centres ({@link toBodyCentres}), as the live
+   * stream draws them. `false` when no class table was at hand to know the lengths.
+   */
+  readonly bodyCentred: boolean;
+}
+
+/**
+ * Move every recorded pose from the vehicle's reference point to its body's centre: half the
+ * class's length ahead along the heading. Returns how many poses moved.
+ *
+ * A recording keeps the kernel's reference point (the rear bumper), which is what every metric and
+ * exporter reads. The live server streams the body centre instead (`body_centre` in
+ * `crates/v2xw-server/src/live.rs`), because the renderer draws a body centred on its pose; a
+ * recording replayed without this drew every vehicle half a length behind where the live page had
+ * drawn it (2.5 m for a passenger car, measured on a real run), short of its stop line and swung
+ * outwards through turns. Only the dequantised `positions` move: the quantised state the deltas
+ * advance is left as recorded, so the next seek starts from the recording's own values.
+ *
+ * `lengthM` is the class table's `length_m` column (`Hello.classes`), indexed by `classIdx`.
+ */
+export function toBodyCentres(poses: PoseBuffer, lengthM: ArrayLike<number>): number {
+  let moved = 0;
+  for (let slot = 0; slot < poses.count; slot++) {
+    if (poses.occupied[slot] !== 1) continue;
+    const length = lengthM[poses.classIdx[slot]];
+    if (length === undefined || !(length > 0)) continue;
+    const half = 0.5 * length;
+    const heading = poses.headings[slot];
+    poses.positions[3 * slot] += half * Math.cos(heading);
+    poses.positions[3 * slot + 1] += half * Math.sin(heading);
+    moved++;
+  }
+  return moved;
 }
 
 /** The recorded span, in nanoseconds of simulated time. */
@@ -349,7 +383,7 @@ export class LocalReplay {
    * from a different GOP: `applyDelta` refuses a `gop_index` mismatch (§3.4) and a stale
    * `step_index` would make every delta after a backwards seek a no-op.
    */
-  async seekToNs(tNs: number): Promise<ReplayPosition> {
+  async seekToNs(tNs: number, classLengthsM: ArrayLike<number> | null = null): Promise<ReplayPosition> {
     const reader = this.#require();
     const target = BigInt(Math.max(0, Math.round(tNs)));
     await drive(() => reader.seekNs(target), this.#fetchRange, reader);
@@ -383,6 +417,7 @@ export class LocalReplay {
       else refused.push(outcome);
     }
 
+    if (classLengthsM !== null) toBodyCentres(this.poses, classLengthsM);
     const position: ReplayPosition = {
       tNs: Number(reader.positionNs),
       keyframeNs: Number(reader.keyframeTimeNs),
@@ -393,6 +428,7 @@ export class LocalReplay {
       residentBytes: reader.residentBytes,
       totalBytes: reader.totalBytes,
       refused,
+      bodyCentred: classLengthsM !== null,
     };
     this.#lastPosition = position;
     return position;

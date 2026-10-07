@@ -173,34 +173,82 @@ pub struct StepOutput {
 impl StepOutput {
     /// Roughly how much memory this step occupies, in bytes.
     ///
-    /// An estimate, and it says so: it counts the fixed size of every row plus the length
-    /// of every variable-length payload, and it does not count an allocator's slack or a
-    /// `Vec`'s spare capacity. It exists because the retained-history window has to be
-    /// bounded in **bytes** and not only in steps — a step is one scene plus that step's
-    /// events, so its size scales with the fleet, and 36 000 steps of a thousand vehicles
-    /// is not the same quantity of memory as 36 000 steps of ten. Under-counting by a
-    /// constant factor is acceptable for a budget; not counting at all is not.
+    /// An estimate, and it says so, but one that counts what the allocator holds rather
+    /// than what the rows need: every `Vec` by its **capacity**, and every heap block
+    /// rounded up to the allocator's 16-byte quantum. It exists because the retained-history
+    /// window has to be bounded in **bytes** and not only in steps — a step is one scene
+    /// plus that step's events, so its size scales with the fleet, and 36 000 steps of a
+    /// thousand vehicles is not the same quantity of memory as 36 000 steps of ten.
+    ///
+    /// It used to count lengths only. A step's event list is built by pushing, so its
+    /// capacity runs up to twice its length, and an hour's soak measured the server's
+    /// footprint beside a "full" 200 MB history still climbing: the history held more
+    /// than its budget said. [`StepOutput::shrink`] trims the slack before a step is kept,
+    /// so the figure here and the memory agree.
     pub fn approx_bytes(&self) -> usize {
         use core::mem::size_of;
-        let poses = self.snapshot.actors.len() * size_of::<v2xw_record::encoder::ActorPose>();
-        let signals = self.snapshot.signals.len() * size_of::<v2xw_record::encoder::SignalState>();
+        /// One heap block of `bytes`, as the allocator rounds it.
+        fn block(bytes: usize) -> usize {
+            bytes.div_ceil(16) * 16
+        }
+        let poses =
+            block(self.snapshot.actors.capacity() * size_of::<v2xw_record::encoder::ActorPose>());
+        let signals = block(
+            self.snapshot.signals.capacity() * size_of::<v2xw_record::encoder::SignalState>(),
+        );
         // A `BTreeMap` node is bigger than its entries, so a per-entry estimate of the
         // key, the value and two pointers is a floor rather than a figure.
         let causes = (self.snapshot.spawn_causes.len() + self.snapshot.despawn_causes.len())
             * (size_of::<u32>() + size_of::<u16>() + 2 * size_of::<usize>());
-        let telemetry = self.telemetry.len() * size_of::<NodeTelemetry>();
-        let events: usize = self
-            .events
-            .iter()
-            .map(|e| size_of::<EventEntry>() + e.payload.len())
-            .sum();
-        let metrics = self.metrics.len() * size_of::<MetricRow>();
-        let recorded: usize = self
-            .recorded
-            .iter()
-            .map(|f| size_of::<v2xw_record::wire::Frame>() + f.as_bytes().len())
-            .sum();
-        size_of::<StepOutput>() + poses + signals + causes + telemetry + events + metrics + recorded
+        let telemetry = block(self.telemetry.capacity() * size_of::<NodeTelemetry>());
+        let events = block(self.events.capacity() * size_of::<EventEntry>())
+            + self
+                .events
+                .iter()
+                .map(|e| block(e.payload.capacity()))
+                .sum::<usize>();
+        let metrics = block(self.metrics.capacity() * size_of::<MetricRow>());
+        let provenance = self.provenance.as_ref().map_or(0, |p| {
+            block(p.entries.capacity() * size_of::<v2xw_record::wire::provenance::ProvEntry>())
+                + block(p.dims.capacity() * size_of::<v2xw_record::wire::provenance::DimEntry>())
+                + p.strings.as_ref().map_or(0, |t| {
+                    t.strings
+                        .iter()
+                        .map(|s| block(s.capacity()) + size_of::<String>())
+                        .sum()
+                })
+        });
+        let recorded = block(self.recorded.capacity() * size_of::<v2xw_record::wire::Frame>())
+            + self
+                .recorded
+                .iter()
+                .map(|f| block(f.as_bytes().len()))
+                .sum::<usize>();
+        size_of::<StepOutput>()
+            + poses
+            + signals
+            + causes
+            + telemetry
+            + events
+            + metrics
+            + provenance
+            + recorded
+    }
+
+    /// Gives back the spare capacity of the step's lists, before it is kept for seeking.
+    ///
+    /// The lists are built by pushing, so each can hold up to twice what it uses; a step
+    /// kept in the seek history for minutes should hold what it needs.
+    pub fn shrink(&mut self) {
+        self.snapshot.actors.shrink_to_fit();
+        self.snapshot.signals.shrink_to_fit();
+        self.telemetry.shrink_to_fit();
+        self.events.shrink_to_fit();
+        for e in &mut self.events {
+            e.payload.shrink_to_fit();
+        }
+        self.metrics.shrink_to_fit();
+        self.recorded.shrink_to_fit();
     }
 }
 

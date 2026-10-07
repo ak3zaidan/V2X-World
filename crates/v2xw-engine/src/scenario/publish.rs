@@ -229,7 +229,7 @@ const UNIT_SUFFIXES: &[(&str, &str)] = &[
 /// The numeric leaves whose unit their name does not carry.
 ///
 /// Short on purpose. `every_number_publishes_a_unit` fails the build when a numeric leaf
-/// is neither suffixed, listed here, nor listed in [`DIMENSIONLESS`] — so a new number
+/// is neither suffixed, listed here, nor listed in `DIMENSIONLESS` — so a new number
 /// cannot reach the page without a unit beside it, which is what
 /// 13-product-direction.md §2 requires of every field.
 const UNIT_OVERRIDES: &[(&str, &str)] = &[
@@ -250,6 +250,10 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
 ];
 
 /// The numeric leaves that genuinely have no unit, declared rather than left blank.
+///
+/// Read only by the build-time check (`every_number_publishes_a_unit`): a dimensionless
+/// leaf publishes an empty unit, which is what it would publish without this list.
+#[cfg(test)]
 const DIMENSIONLESS: &[&str] = &[
     "seed",
     "experiment.seeds[]",

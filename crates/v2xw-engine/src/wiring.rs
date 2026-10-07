@@ -84,7 +84,8 @@ pub const IMPORTER_REVISION: u32 = 4;
 /// extract costs a fraction of importing it, which is the whole trade.
 ///
 /// # Errors
-/// [`EngineError::Io`] if the source file cannot be read.
+/// [`EngineError::Scenario`] naming `world.source.path` or `world.terrain.dem` if the
+/// file it names cannot be read.
 pub fn world_cache_key(scenario: &Scenario) -> Result<String> {
     let mut section = serde_json::to_value(&scenario.world).map_err(|e| {
         EngineError::Scenario(crate::ScenarioError::conflict("world", e.to_string()))
@@ -106,9 +107,14 @@ pub fn world_cache_key(scenario: &Scenario) -> Result<String> {
         .and_then(|s| s.get("path"))
         .and_then(serde_json::Value::as_str)
     {
-        let bytes = std::fs::read(path).map_err(|e| EngineError::Io {
-            path: path.to_string(),
-            source: e,
+        let bytes = std::fs::read(path).map_err(|e| {
+            EngineError::Scenario(crate::ScenarioError::conflict(
+                "world.source.path",
+                format!(
+                    "names the map {path}, which cannot be read: {e}. Put the OpenStreetMap \
+                     extract there, or point world.source.path at one that exists"
+                ),
+            ))
         })?;
         material.extend_from_slice(b"\nsource-sha256=");
         material.extend_from_slice(v2xw_core::hash::sha256_hex(&bytes).as_bytes());
@@ -120,9 +126,15 @@ pub fn world_cache_key(scenario: &Scenario) -> Result<String> {
         .and_then(|t| t.get("dem"))
         .and_then(serde_json::Value::as_str)
     {
-        let bytes = std::fs::read(path).map_err(|e| EngineError::Io {
-            path: path.to_string(),
-            source: e,
+        let bytes = std::fs::read(path).map_err(|e| {
+            EngineError::Scenario(crate::ScenarioError::conflict(
+                "world.terrain.dem",
+                format!(
+                    "names the terrain raster {path}, which cannot be read: {e}. Point it at \
+                     an SRTM .hgt tile or an ESRI ASCII grid, or set it to null for flat \
+                     ground"
+                ),
+            ))
         })?;
         material.extend_from_slice(b"\nterrain-sha256=");
         material.extend_from_slice(v2xw_core::hash::sha256_hex(&bytes).as_bytes());
@@ -182,14 +194,61 @@ fn attach_terrain(scenario: &Scenario, world: World) -> Result<World> {
     let Some(path) = scenario.world.terrain.dem.as_deref() else {
         return Ok(world);
     };
-    let (terrain, report) = v2xw_world::dem::import_terrain_for_world(
-        &world,
-        path,
-        &v2xw_world::DemOptions::default(),
-    )?;
+    let (terrain, report) =
+        v2xw_world::dem::import_terrain_for_world(&world, path, &v2xw_world::DemOptions::default())
+            .map_err(|e| terrain_error(path, e))?;
     let (world, _drape) =
         v2xw_world::dem::with_terrain(&world, terrain, &v2xw_world::DrapeOptions::none(), &report)?;
     Ok(world)
+}
+
+/// Whether a world error is about the input the user named — the file, its contents, a
+/// parameter — rather than about the importer's own output. Only these are reported
+/// against a setting; the rest (a dangling id, a broken invariant) are the importer's
+/// fault and stay [`EngineError::World`].
+fn is_input_error(e: &v2xw_world::WorldError) -> bool {
+    use v2xw_world::WorldError as W;
+    matches!(
+        e,
+        W::Io(_)
+            | W::Malformed { .. }
+            | W::InvalidParameter { .. }
+            | W::UnsupportedSource { .. }
+            | W::UnknownSource { .. }
+            | W::Json(_)
+    )
+}
+
+/// An import failure caused by `world.source`, reported against it.
+fn source_error(scenario: &Scenario, e: v2xw_world::WorldError) -> EngineError {
+    if !is_input_error(&e) {
+        return EngineError::World(e);
+    }
+    let (field, what) = match &scenario.world.source {
+        WorldSourceSpec::OsmXml { path, .. } => ("world.source.path", format!("the map {path}")),
+        other => ("world.source", other.label()),
+    };
+    EngineError::Scenario(crate::ScenarioError::conflict(
+        field,
+        format!(
+            "{what} could not be imported: {e}. Check that the file is an OpenStreetMap XML \
+             extract and that world.source.bbox overlaps it"
+        ),
+    ))
+}
+
+/// A terrain failure caused by `world.terrain.dem`, reported against it.
+fn terrain_error(path: &str, e: v2xw_world::WorldError) -> EngineError {
+    if !is_input_error(&e) {
+        return EngineError::World(e);
+    }
+    EngineError::Scenario(crate::ScenarioError::conflict(
+        "world.terrain.dem",
+        format!(
+            "the terrain raster {path} could not be used: {e}. Point it at an SRTM .hgt tile \
+             or an ESRI ASCII grid covering the world, or set it to null for flat ground"
+        ),
+    ))
 }
 
 fn build_world_geometry(scenario: &Scenario) -> Result<World> {
@@ -204,17 +263,8 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
         ..opts
     };
     match &scenario.world.source {
-        WorldSourceSpec::Procedural { params, .. } => {
-            let grid: v2xw_world::procedural::GridParams = if params.is_null() {
-                v2xw_world::procedural::GridParams::legacy()
-            } else {
-                serde_json::from_value(params.clone()).map_err(|e| {
-                    EngineError::Scenario(crate::ScenarioError::conflict(
-                        "world.source.params",
-                        format!("does not fit the procedural grid generator's parameters: {e}"),
-                    ))
-                })?
-            };
+        WorldSourceSpec::Procedural { .. } => {
+            let grid = crate::scenario::validate::grid_params(scenario)?;
             Ok(v2xw_world::procedural::grid(&grid, &opts)?)
         }
         spec @ WorldSourceSpec::OsmXml { bbox, .. } => {
@@ -241,13 +291,18 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
                 osm = osm.bbox(*b);
             }
             let source = v2xw_world::osm::OsmSource::with_options(osm);
-            Ok(source.build(spec, &opts)?)
+            source
+                .build(spec, &opts)
+                .map_err(|e| source_error(scenario, e))
         }
         other => {
             // Any remaining source is another importer's. `GridSource` refuses what it
-            // does not know rather than pretending, which is the error the caller sees.
+            // does not know rather than pretending, which is the error the caller sees
+            // (the loader refuses these kinds first, by name).
             let source = v2xw_world::procedural::GridSource::new();
-            Ok(source.build(other, &opts)?)
+            source
+                .build(other, &opts)
+                .map_err(|e| source_error(scenario, e))
         }
     }
 }

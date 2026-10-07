@@ -449,7 +449,8 @@ impl Run {
     /// and §6.6 makes `run.start` the method that changes a run's world.
     ///
     /// # Errors
-    /// [`ServerError::Internal`] if the generator refuses the parameters.
+    /// [`ServerError::InvalidParams`] naming the parameter if the generator refuses the
+    /// combination; [`ServerError::Internal`] only if the world it built does not encode.
     pub fn generate_world(
         &self,
         kind: &str,
@@ -476,7 +477,27 @@ impl Run {
             rsu_at_junctions: true,
             ..v2xw_world::procedural::GridParams::legacy()
         };
-        let world = v2xw_world::procedural::grid(&params, &v2xw_world::ImportOptions::default())?;
+        // A combination the generator refuses — six 5 m lanes a side leave no 20 m block — is
+        // the caller's to fix, so it is a `-32602` naming the parameter, not an internal error.
+        let world = v2xw_world::procedural::grid(&params, &v2xw_world::ImportOptions::default())
+            .map_err(|e| match e {
+                v2xw_world::WorldError::InvalidParameter { parameter, problem } => {
+                    let (at, hint) = match parameter.as_str() {
+                        "block_x_m" | "block_y_m" => {
+                            ("/block_m", "a longer block, or fewer or narrower lanes")
+                        }
+                        "lanes_per_direction" => ("/lanes_per_direction", "at least one lane"),
+                        "lane_width_m" => ("/lane_width_m", "a positive lane width"),
+                        _ => ("/", "change the generator's parameters"),
+                    };
+                    crate::error::ServerError::param(
+                        at,
+                        &format!("the grid generator refuses {parameter}: {problem}"),
+                        hint,
+                    )
+                }
+                other => other.into(),
+            })?;
         let payload = v2xw_world::serde_vwp::write(&world)?;
         let bbox = world.bbox;
         Ok(json!({

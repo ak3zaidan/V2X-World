@@ -72,6 +72,8 @@ export interface StatusInput {
   readonly clockText?: string;
   /** Reconnect attempts since the engine was last reached. */
   readonly reconnectAttempts?: number;
+  /** Why the engine is in `error`, in its words, when it said. */
+  readonly failure?: string;
 }
 
 const RUN: StatusAction = {
@@ -297,7 +299,10 @@ export function describeStatus(input: StatusInput): StatusView {
         tone: "err",
         chip: "Engine error",
         headline: "The engine stopped with an error and cannot continue this run.",
-        detail: "The Log tab of the inspector has what it reported. Press Run again to start over.",
+        detail:
+          input.failure !== undefined
+            ? `It said: ${input.failure}. Press Run again to start over.`
+            : "The Log tab of the inspector has what it reported. Press Run again to start over.",
         action: RUN_AGAIN,
         banner: true,
       };

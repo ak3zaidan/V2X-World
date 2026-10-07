@@ -142,6 +142,10 @@ pub struct LiveOptions {
     /// How many produced steps to retain for `run.seek` (§6.6: a live run seeks backwards
     /// into recorded time).
     pub retain_steps: usize,
+    /// The most memory the retained steps may take, bytes (approximately: see
+    /// [`StepOutput::approx_bytes`]). Whichever of this and `retain_steps` is reached first bounds
+    /// the history; a seek before the oldest retained step is refused with its range.
+    pub retain_bytes: usize,
     /// `Hello.actor_capacity` (§3.1.1), and the **bound this run enforces on slot ids**.
     ///
     /// §3.1.1 calls the field "max concurrent actor slots for the run; a preallocation
@@ -170,6 +174,12 @@ impl Default for LiveOptions {
             // the scene plus that step's events, so this is bounded by the scenario's
             // actor count rather than by its length.
             retain_steps: 36_000,
+            // The step count alone did not bound memory: a step carries every reception
+            // record, and on the SCMS lifecycle with 42 radios one step is about 180 kB, so
+            // an hour's 36 000 steps would have been 6.5 GB on an 8 GB machine (measured:
+            // 1.2 GB at 655 s of the long soak). 1 GiB keeps minutes of seekable history on
+            // such a run and the whole run on a small one.
+            retain_bytes: 1 << 30,
             // `@vwp/protocol`'s own ceiling (`MAX_ACTOR_SLOTS`, 1 << 20) clamps anything
             // larger, so this is the largest number that means anything on the wire. A
             // scenario that knows its own fleet size should set it smaller: it is what a
@@ -564,7 +574,7 @@ fn spawn_host(
     memo: Option<WorldMemo>,
 ) -> Result<(Box<Setup>, Host)> {
     let (setup_tx, setup_rx) =
-        std::sync::mpsc::channel::<std::result::Result<Box<Setup>, String>>();
+        std::sync::mpsc::channel::<std::result::Result<Box<Setup>, ServerError>>();
     let (step_tx, step_rx) = std::sync::mpsc::sync_channel::<HostMsg>(lookahead.max(1));
     let stop = Arc::new(AtomicBool::new(false));
 
@@ -609,7 +619,7 @@ fn spawn_host(
                         (world, bytes)
                     }
                     Err(e) => {
-                        let _ = setup_tx.send(Err(e.to_string()));
+                        let _ = setup_tx.send(Err(setup_error(e)));
                         return;
                     }
                 },
@@ -641,7 +651,7 @@ fn spawn_host(
                 match v2xw_engine::Engine::build_with_world(scenario, world, &build_utc) {
                     Ok(e) => e,
                     Err(e) => {
-                        let _ = setup_tx.send(Err(e.to_string()));
+                        let _ = setup_tx.send(Err(setup_error(e)));
                         return;
                     }
                 };
@@ -657,14 +667,29 @@ fn spawn_host(
                     s
                 }
                 Err(e) => {
-                    let _ = setup_tx.send(Err(e.to_string()));
+                    let _ = setup_tx.send(Err(e));
                     return;
                 }
             };
             let step_ns = setup.cadence.mobility_step.as_nanos().max(1);
             let last_index = setup.duration / step_ns;
             let writer = recording.as_deref().and_then(|path| {
-                open_recording(path, setup.cadence, &setup.manifest, &setup.scenario_doc).ok()
+                let mut writer =
+                    open_recording(path, setup.cadence, &setup.manifest, &setup.scenario_doc)
+                        .ok()?;
+                // The run's `Hello` first, as a connection would receive it at t = 0: the
+                // replay server (§7) builds its run from the recording's `Hello`, and without
+                // one it refused every recording this server wrote ("holds no Hello frame").
+                let descriptor = descriptor_of(&setup);
+                if let Ok(hello) = crate::session::Session::new(
+                    crate::session::ConnectParams::default(),
+                    &descriptor,
+                )
+                .hello_frame(&descriptor, RunState::Paused, 0, "")
+                {
+                    let _ = v2xw_record::RecordingWriter::write_frame(&mut writer, &hello);
+                }
+                Some(writer)
             });
             if setup_tx.send(Ok(setup)).is_err() {
                 return;
@@ -706,7 +731,7 @@ fn spawn_host(
 
     let setup = match setup_rx.recv() {
         Ok(Ok(setup)) => setup,
-        Ok(Err(message)) => return Err(ServerError::Internal(message)),
+        Ok(Err(e)) => return Err(e),
         Err(_) => {
             return Err(ServerError::Internal(
                 "the engine thread ended before it reported a run".to_string(),
@@ -848,8 +873,11 @@ fn assemble_setup(
     let world_json = v2xw_world::serde_vwp::to_json_string(world)?;
     let manifest = engine.manifest();
 
-    let mobility_step = scenario.time.mobility_step();
-    let cadence = Cadence::new(Duration::from_millis(1000), mobility_step)?;
+    // The kernel's own snapshot cadence: a keyframe every simulated second, rounded up to a
+    // whole number of steps. This was `Cadence::new(1 s, step)`, which refuses a step that
+    // does not divide a second — a 30 ms `time.mobility_step_ms`, inside the loader's
+    // 10–100 ms bounds, came back from Run as "internal error: recording: …".
+    let cadence = engine.snapshot_cadence();
     let duration = scenario.time.horizon_ns();
 
     let scenario_doc: Value = serde_json::from_str(
@@ -1027,7 +1055,7 @@ fn assemble_setup(
         world_hash: payload.content_hash,
         t0_wall_ns: i64::try_from(engine.wall_clock().unix_nanos_at(0)).unwrap_or(0),
         sim_duration_ns: duration,
-        mobility_step_ns: mobility_step.as_nanos(),
+        mobility_step_ns: cadence.mobility_step.as_nanos(),
         keyframe_period_ns: cadence.keyframe_period.as_nanos(),
         telemetry_period_ns: 1_000_000_000,
         metric_period_ns: 1_000_000_000,
@@ -1274,15 +1302,40 @@ struct WindowCounters {
 }
 
 /// How many reception attempts per node pair the projector keeps for `inspect.link`.
-const LINK_HISTORY: usize = 512;
+const LINK_HISTORY: usize = 256;
+
+/// How far behind a pair's newest attempt its older ones are kept, ns. `inspect.link`
+/// averages over `window_ns` (1 s by default) ending at the stream's instant, which trails
+/// the projector by at most its lookahead (6.4 s at the default cadence), so 15 s covers
+/// the default window with room. Kept for as long as the count cap alone allowed (512
+/// attempts, 51 s of a 10 Hz sender), the store held 1.7 million attempts, 70 MB, for 61
+/// radios on a 3 × 3 grid, and grows with the square of the fleet.
+const LINK_KEEP_NS: u64 = 15_000_000_000;
+
+/// A node pair not heard for this long behind the stream has its link history dropped:
+/// the pair is out of range, or one of them has left the run. The same as
+/// [`RETIRED_GRACE_NS`], so a pair still held has both ends alive or recently retired.
+const LINK_IDLE_NS: u64 = RETIRED_GRACE_NS;
+
+/// How long behind the stream a retired node's rows are kept: the projector runs ahead of
+/// the stream by its lookahead, so a node that retired in the projector may still be on the
+/// page's screen. Past this, nothing reads them.
+const RETIRED_GRACE_NS: u64 = 30_000_000_000;
+
+/// How often, in stream time, [`Projector::prune`] sweeps the link histories.
+const LINK_SWEEP_NS: u64 = 1_000_000_000;
 
 /// One reception attempt, kept so `inspect.link` can answer from measurements.
+///
+/// Single precision: 40 bytes an attempt instead of 64, for a store that holds up to 512
+/// per node pair (a dense street has thousands of pairs). `inspect.link` reports these to
+/// two and three decimals, well inside an `f32`'s seven digits.
 #[derive(Debug, Clone, Copy)]
 struct LinkObservation {
     t: SimTime,
-    rssi_dbm: Option<f64>,
-    sinr_db: Option<f64>,
-    dist_m: Option<f64>,
+    rssi_dbm: Option<f32>,
+    sinr_db: Option<f32>,
+    dist_m: Option<f32>,
     received: bool,
 }
 
@@ -1343,14 +1396,21 @@ struct Projector {
     /// declared breakdown as series; everything else a metric measures reaches a client
     /// through this store. Each entry keeps the counts that let windows be *pooled*
     /// ([`BreakdownEntry`]), and the store is bounded per metric.
-    breakdowns: BTreeMap<String, std::collections::VecDeque<BreakdownEntry>>,
+    breakdowns: BreakdownStore,
     /// Per node, its latest `node.security` row (certificate pool, current pseudonym,
     /// backend link, CRL state) and its most recent `sec.pseudonym` changes, for
     /// `inspect.node`'s `certs` and `crl` sections.
     security: BTreeMap<NodeId, (Value, std::collections::VecDeque<Value>)>,
-    /// The credential system's recent `backend.state` snapshots, `(t, view)`, oldest
-    /// first, for `inspect.entity` and the Backend view. Bounded at [`BACKEND_HISTORY`].
-    backend: std::collections::VecDeque<(u64, Value)>,
+    /// The credential system's recent `backend.state` snapshots, `(t, record bytes)`,
+    /// oldest first, for `inspect.entity` and the Backend view. Bounded at
+    /// [`BACKEND_HISTORY`] snapshots and [`BACKEND_BYTES`] bytes.
+    ///
+    /// Kept as the record's JSON and parsed when asked: parsed, each snapshot was some
+    /// hundreds of `serde_json` maps (a 640-byte heap block apiece), and a heap census of
+    /// the long soak found ten minutes of them the largest thing the server grew by.
+    backend: std::collections::VecDeque<(u64, Box<[u8]>)>,
+    /// The bytes `backend` holds.
+    backend_bytes: usize,
     /// Every node's recent traffic, for the followed node's message feed and queues and for
     /// `inspect.node`'s `messages` section (`crate::feed`).
     feed: crate::feed::FeedStore,
@@ -1371,6 +1431,14 @@ struct Projector {
     /// `scenario.event` records seen since the owner last took them: the scenario
     /// timeline's items as they fired, with what each did.
     scenario_events: Vec<Value>,
+    /// Nodes whose actor left the run, with the instant it left, oldest first: their
+    /// security rows and link histories are dropped once the stream is past that instant by
+    /// [`RETIRED_GRACE_NS`] (see [`Projector::prune`]). Without it every vehicle that ever
+    /// drove kept its rows for the rest of the run: the long soak measured the server
+    /// growing by hundreds of megabytes over eight simulated minutes of churn.
+    retired: std::collections::VecDeque<(NodeId, SimTime)>,
+    /// The stream instant of the last [`Projector::prune`] sweep of the link histories.
+    links_swept: SimTime,
     last_index: u64,
 }
 
@@ -1429,14 +1497,17 @@ impl Projector {
             over_capacity: BTreeSet::new(),
             unmapped_nodes: BTreeSet::new(),
             unnamed_metrics: BTreeSet::new(),
-            breakdowns: BTreeMap::new(),
+            breakdowns: BreakdownStore::new(BREAKDOWN_CAP, BREAKDOWN_TOTAL_CAP),
             security: BTreeMap::new(),
             backend: std::collections::VecDeque::new(),
+            backend_bytes: 0,
             feed: crate::feed::FeedStore::new(step_ns),
             unprojected_channels: BTreeSet::new(),
             undecodable_channels: BTreeMap::new(),
             links: BTreeMap::new(),
             scenario_events: Vec::new(),
+            retired: std::collections::VecDeque::new(),
+            links_swept: 0,
             last_index: setup.duration / step_ns,
         }
     }
@@ -1566,11 +1637,15 @@ impl Projector {
                             if history.len() >= LINK_HISTORY {
                                 history.pop_front();
                             }
+                            let keep_from = view.t_end.saturating_sub(LINK_KEEP_NS);
+                            while history.front().is_some_and(|o| o.t < keep_from) {
+                                history.pop_front();
+                            }
                             history.push_back(LinkObservation {
                                 t: view.t_end,
-                                rssi_dbm: view.rssi_dbm,
-                                sinr_db: view.sinr_db,
-                                dist_m: view.dist_m,
+                                rssi_dbm: view.rssi_dbm.map(|v| v as f32),
+                                sinr_db: view.sinr_db.map(|v| v as f32),
+                                dist_m: view.dist_m.map(|v| v as f32),
                                 received: view.outcome == RxOutcome::Ok,
                             });
                         }
@@ -1701,13 +1776,20 @@ impl Projector {
                 "msg.latency" | "net.bytes" | "phy.prr" | "net.frag" | "net.reassembly" => {}
                 // The backend's entities and flows, kept for `inspect.entity`: one snapshot
                 // a simulated second, the newest few minutes of them.
-                "backend.state" => match serde_json::from_slice::<Value>(&record.json) {
-                    Ok(v) => {
-                        let at = v["t"].as_u64().unwrap_or(t);
-                        if self.backend.len() >= BACKEND_HISTORY {
-                            self.backend.pop_front();
+                "backend.state" => match serde_json::from_slice::<SnapshotTime>(&record.json) {
+                    Ok(stamp) => {
+                        let at = stamp.t.unwrap_or(t);
+                        let bytes: Box<[u8]> = record.json.as_slice().into();
+                        self.backend_bytes += bytes.len();
+                        self.backend.push_back((at, bytes));
+                        while self.backend.len() > 1
+                            && (self.backend.len() > BACKEND_HISTORY
+                                || self.backend_bytes > BACKEND_BYTES)
+                        {
+                            if let Some((_, old)) = self.backend.pop_front() {
+                                self.backend_bytes -= old.len();
+                            }
                         }
-                        self.backend.push_back((at, v));
                     }
                     Err(_) => self.undecodable(record.channel),
                 },
@@ -1886,6 +1968,7 @@ impl Projector {
             {
                 self.nodes.remove(&node);
                 self.counters.remove(&node);
+                self.retired.push_back((node, t));
             }
             self.slots.release(actor, t);
         }
@@ -1984,7 +2067,59 @@ impl Projector {
         out
     }
 
-    /// Keeps one dimensioned sample for the grouped `metrics.query`, bounded per metric.
+    /// Forgets what nothing can read any more, with the stream at `now`: the message feed
+    /// older than its window, the link histories of pairs silent for [`LINK_IDLE_NS`], and
+    /// the security rows of nodes that left the run [`RETIRED_GRACE_NS`] ago.
+    ///
+    /// Every store here is bounded by what is alive, not by what has ever been: a run of an
+    /// hour with vehicles arriving and leaving holds what a run of a minute holds.
+    fn prune(&mut self, now: SimTime) {
+        self.feed.prune(now.saturating_sub(crate::feed::HISTORY_NS));
+        let grace = now.saturating_sub(RETIRED_GRACE_NS);
+        while let Some(&(node, at)) = self.retired.front() {
+            if at >= grace {
+                break;
+            }
+            self.retired.pop_front();
+            // A node id is never reused (`assigned_nodes`), so a retired node's rows are
+            // dead once the stream is past it.
+            self.security.remove(&node);
+        }
+        if now >= self.links_swept.saturating_add(LINK_SWEEP_NS) {
+            self.links_swept = now;
+            let idle = now.saturating_sub(LINK_IDLE_NS);
+            self.links
+                .retain(|_, h| h.back().is_some_and(|o| o.t >= idle));
+        }
+    }
+
+    /// The sizes of the projector's stores, for `run.status` (`engine.stores`): what a soak
+    /// asserts is flat, and what to read first when the server's memory is not.
+    fn stores(&self) -> Value {
+        let (frames, receptions) = self.feed.size();
+        json!({
+            "actors": self.actors.len(),
+            // Radios alive in the projector (roadside units and equipped actors), and every
+            // radio the run has had: what the stores below are bounded by, and not.
+            "nodes_live": self.nodes.len() + self.roadside_nodes as usize,
+            "nodes_ever": self.assigned_nodes.len() + self.roadside_nodes as usize,
+            "link_pairs": self.links.len(),
+            "link_observations": self.links.values().map(std::collections::VecDeque::len).sum::<usize>(),
+            "breakdown_metrics": self.breakdowns.lists.len(),
+            "breakdown_entries": self.breakdowns.total,
+            "breakdown_dim_sets": self.breakdowns.dim_sets.len(),
+            "security_nodes": self.security.len(),
+            "security_changes": self.security.values().map(|(_, c)| c.len()).sum::<usize>(),
+            "backend_snapshots": self.backend.len(),
+            "backend_bytes": self.backend_bytes,
+            "feed_nodes": self.feed.nodes(),
+            "feed_frames": frames,
+            "feed_receptions": receptions,
+            "retired_pending": self.retired.len(),
+        })
+    }
+
+    /// Keeps one dimensioned sample for the grouped `metrics.query`.
     fn keep_breakdown(&mut self, sample: &MetricSample) {
         let dims: BTreeMap<String, String> = sample
             .dims
@@ -1995,12 +2130,8 @@ impl Projector {
         if dims.is_empty() {
             return;
         }
-        let entry = BreakdownEntry::of(sample.t, dims, &sample.value);
-        let list = self.breakdowns.entry(sample.metric.clone()).or_default();
-        if list.len() >= BREAKDOWN_CAP {
-            list.pop_front();
-        }
-        list.push_back(entry);
+        self.breakdowns
+            .push(&sample.metric, sample.t, dims, &sample.value);
     }
 
     /// One metric's kept breakdown, grouped by `dim` and pooled over `[from, to]`, among
@@ -2013,20 +2144,7 @@ impl Projector {
         from: SimTime,
         to: SimTime,
     ) -> Vec<crate::introspect::GroupRow> {
-        let Some(list) = self.breakdowns.get(name) else {
-            return Vec::new();
-        };
-        let mut pools: BTreeMap<String, Pool> = BTreeMap::new();
-        for e in list.iter().filter(|e| e.t >= from && e.t <= to) {
-            let Some(key) = e.dims.get(dim) else { continue };
-            let others_match = e.dims.len() == filter.len() + 1
-                && filter.iter().all(|(k, v)| e.dims.get(k) == Some(v));
-            if !others_match {
-                continue;
-            }
-            pools.entry(key.clone()).or_default().add(e);
-        }
-        pools.into_iter().map(|(key, p)| p.row(key)).collect()
+        self.breakdowns.groups(name, dim, filter, from, to)
     }
 
     /// Appends the §3.7 rows one metric sample produces.
@@ -2104,11 +2222,119 @@ impl Projector {
 /// per-node figure on a large fleet. The oldest go first.
 const BREAKDOWN_CAP: usize = 200_000;
 
+/// How many dimensioned samples the breakdown store keeps across every metric: about
+/// 120 MB at an entry's ~120 bytes. The oldest go first, whichever metric they belong to.
+const BREAKDOWN_TOTAL_CAP: usize = 1_000_000;
+
+/// How many distinct dimension sets the breakdown store shares before it starts over.
+const DIM_SET_CACHE: usize = 50_000;
+
+/// A breakdown entry's dimensions, shared between the entries that have the same ones.
+type Dims = Arc<BTreeMap<String, String>>;
+
+/// Every dimensioned metric sample the run produced, by metric, for a grouped
+/// `metrics.query`, bounded per metric and across the store, oldest first.
+#[derive(Debug)]
+struct BreakdownStore {
+    lists: BTreeMap<String, std::collections::VecDeque<BreakdownEntry>>,
+    /// How many entries `lists` holds across every metric.
+    total: usize,
+    per_metric_cap: usize,
+    total_cap: usize,
+    /// The dimension sets the entries share, so a per-node sample repeated every window
+    /// holds one pointer and not two heap strings per dimension. Cleared when it passes
+    /// [`DIM_SET_CACHE`]: an entry keeps its own reference either way.
+    dim_sets: BTreeMap<BTreeMap<String, String>, Dims>,
+}
+
+impl BreakdownStore {
+    fn new(per_metric_cap: usize, total_cap: usize) -> Self {
+        Self {
+            lists: BTreeMap::new(),
+            total: 0,
+            per_metric_cap: per_metric_cap.max(1),
+            total_cap: total_cap.max(1),
+            dim_sets: BTreeMap::new(),
+        }
+    }
+
+    fn push(
+        &mut self,
+        metric: &str,
+        t: SimTime,
+        dims: BTreeMap<String, String>,
+        value: &v2xw_metrics::SampleValue,
+    ) {
+        let dims = match self.dim_sets.get(&dims) {
+            Some(shared) => Arc::clone(shared),
+            None => {
+                if self.dim_sets.len() >= DIM_SET_CACHE {
+                    self.dim_sets.clear();
+                }
+                let shared: Dims = Arc::new(dims.clone());
+                self.dim_sets.insert(dims, Arc::clone(&shared));
+                shared
+            }
+        };
+        let entry = BreakdownEntry::of(t, dims, value);
+        let list = match self.lists.get_mut(metric) {
+            Some(list) => list,
+            None => self.lists.entry(metric.to_string()).or_default(),
+        };
+        if list.len() >= self.per_metric_cap {
+            list.pop_front();
+        } else {
+            self.total += 1;
+        }
+        list.push_back(entry);
+        // The store as a whole: the oldest entry of any metric goes first. Bounded per
+        // metric alone, an hour of the credential lifecycle's per-node figures would fill
+        // every metric's 200,000 entries, gigabytes in all.
+        while self.total > self.total_cap {
+            let oldest = self
+                .lists
+                .iter()
+                .filter_map(|(name, l)| l.front().map(|e| (e.t, name)))
+                .min_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)))
+                .map(|(_, name)| name.clone());
+            let Some(name) = oldest else { break };
+            if let Some(l) = self.lists.get_mut(&name) {
+                l.pop_front();
+                self.total -= 1;
+            }
+        }
+    }
+
+    fn groups(
+        &self,
+        name: &str,
+        dim: &str,
+        filter: &BTreeMap<String, String>,
+        from: SimTime,
+        to: SimTime,
+    ) -> Vec<crate::introspect::GroupRow> {
+        let Some(list) = self.lists.get(name) else {
+            return Vec::new();
+        };
+        let mut pools: BTreeMap<String, Pool> = BTreeMap::new();
+        for e in list.iter().filter(|e| e.t >= from && e.t <= to) {
+            let Some(key) = e.dims.get(dim) else { continue };
+            let others_match = e.dims.len() == filter.len() + 1
+                && filter.iter().all(|(k, v)| e.dims.get(k) == Some(v));
+            if !others_match {
+                continue;
+            }
+            pools.entry(key.clone()).or_default().add(e);
+        }
+        pools.into_iter().map(|(key, p)| p.row(key)).collect()
+    }
+}
+
 /// One dimensioned metric sample, with what it takes to pool it with others.
 #[derive(Debug, Clone)]
 struct BreakdownEntry {
     t: SimTime,
-    dims: BTreeMap<String, String>,
+    dims: Dims,
     /// The sample's own point, when it has one.
     point: Option<f64>,
     /// Its sample count.
@@ -2125,7 +2351,7 @@ struct BreakdownEntry {
 }
 
 impl BreakdownEntry {
-    fn of(t: SimTime, dims: BTreeMap<String, String>, value: &v2xw_metrics::SampleValue) -> Self {
+    fn of(t: SimTime, dims: Dims, value: &v2xw_metrics::SampleValue) -> Self {
         use v2xw_metrics::{DistributionSummary, RatioEstimate, SampleValue};
         let (total, required) = match value {
             SampleValue::Distribution(DistributionSummary::Insufficient {
@@ -2255,6 +2481,17 @@ impl Pool {
 
 /// How many `backend.state` snapshots the projector keeps: ten minutes at one a second.
 const BACKEND_HISTORY: usize = 600;
+
+/// How many bytes of `backend.state` snapshots the projector keeps, whatever their count:
+/// a snapshot grows with the fleet and the backend's queues, so the count alone does not
+/// bound the memory. The oldest go first.
+const BACKEND_BYTES: usize = 64 * 1024 * 1024;
+
+/// The one field of a `backend.state` record the projector reads as it arrives.
+#[derive(serde::Deserialize)]
+struct SnapshotTime {
+    t: Option<u64>,
+}
 
 /// How many of a node's pseudonym changes the security panel keeps (and, before the
 /// message feed replaced it, how many sent and received messages the evidence log kept).
@@ -2716,6 +2953,8 @@ pub struct LiveEngine {
     /// Every step produced and not yet dropped, oldest first. This is the "recorded time"
     /// §6.6 lets a live run seek backwards into.
     timeline: std::collections::VecDeque<StepOutput>,
+    /// [`StepOutput::approx_bytes`] summed over `timeline`.
+    timeline_bytes: usize,
     /// The step index of `timeline.front()`.
     base_index: u64,
     /// The next step index the stream will emit.
@@ -2733,6 +2972,10 @@ pub struct LiveEngine {
     client_sync: bool,
     report: Option<RunReport>,
     failure: Option<String>,
+    /// True when `failure` is a run the user's settings could not build (a refused
+    /// `run.start`), false when the engine itself failed. It decides whether a later
+    /// `run.step` is told there is no run (`-32002`) or that the engine broke (`-32603`).
+    failure_is_input: bool,
     /// Every metric sample produced, by name, for `metrics.query` (§6.12).
     history: BTreeMap<String, Vec<(SimTime, f64)>>,
     /// string id → metric name, for reading a produced row back.
@@ -2861,13 +3104,31 @@ impl LiveEngine {
     /// Loads a scenario, builds the kernel and starts it.
     ///
     /// # Errors
-    /// Whatever the scenario loader, the world importer or the kernel refuses, as
-    /// [`ServerError::Internal`] carrying the engine's own message; or
-    /// [`ServerError::Io`] if the host thread cannot be spawned.
+    /// [`ServerError::ScenarioInvalid`] naming the setting for anything the scenario file
+    /// causes — a refused value, a map or terrain file that is not there — with the file's
+    /// path in the message; [`ServerError::Io`] if the file cannot be read or the host
+    /// thread cannot be spawned; [`ServerError::Internal`] only for what the engine itself
+    /// fails at.
     pub fn open(path: impl AsRef<std::path::Path>, options: LiveOptions) -> Result<Self> {
-        let scenario = Scenario::load(path.as_ref())
-            .map_err(|e| ServerError::Internal(format!("{}: {e}", path.as_ref().display())))?;
-        let mut engine = Self::new(scenario, options)?;
+        let at = path.as_ref().display().to_string();
+        let in_file = |e: ServerError| match e {
+            ServerError::ScenarioInvalid(mut rows) => {
+                for row in &mut rows {
+                    row.message = format!("{at}: {}", row.message);
+                }
+                ServerError::ScenarioInvalid(rows)
+            }
+            other => other,
+        };
+        let scenario = Scenario::load(path.as_ref()).map_err(|e| in_file(setup_error(e)))?;
+        let missing: Vec<ParamError> = v2xw_engine::scenario::preflight(&scenario)
+            .iter()
+            .map(scenario_error)
+            .collect();
+        if !missing.is_empty() {
+            return Err(in_file(ServerError::ScenarioInvalid(missing)));
+        }
+        let mut engine = Self::new(scenario, options).map_err(in_file)?;
         engine.source = Some(path.as_ref().to_path_buf());
         Ok(engine)
     }
@@ -2905,6 +3166,7 @@ impl LiveEngine {
             projector,
             host,
             timeline: std::collections::VecDeque::new(),
+            timeline_bytes: 0,
             base_index: 0,
             cursor: 0,
             produced: 0,
@@ -2913,6 +3175,7 @@ impl LiveEngine {
             client_sync: false,
             report: None,
             failure: None,
+            failure_is_input: false,
             history: BTreeMap::new(),
             metric_names,
             last_telemetry: BTreeMap::new(),
@@ -3064,7 +3327,8 @@ impl LiveEngine {
             // because the seek is about to move the stream there anyway.
             let seeking = self.seek_goal.is_some_and(|goal| self.produced <= goal);
             if !seeking
-                && self.timeline.len() >= self.options.retain_steps
+                && (self.timeline.len() >= self.options.retain_steps
+                    || self.timeline_bytes >= self.options.retain_bytes)
                 && self.base_index >= self.cursor
             {
                 break;
@@ -3129,13 +3393,21 @@ impl LiveEngine {
                 if self.timeline.is_empty() {
                     self.base_index = index;
                 }
+                let mut out = out;
+                out.shrink();
+                self.timeline_bytes += out.approx_bytes();
                 self.timeline.push_back(out);
                 self.produced = index + 1;
                 let seeking = self.seek_goal.is_some();
-                while self.timeline.len() > self.options.retain_steps
+                while (self.timeline.len() > self.options.retain_steps
+                    || self.timeline_bytes > self.options.retain_bytes)
+                    && self.timeline.len() > 1
                     && (self.base_index < self.cursor || seeking)
                 {
-                    self.timeline.pop_front();
+                    if let Some(old) = self.timeline.pop_front() {
+                        self.timeline_bytes =
+                            self.timeline_bytes.saturating_sub(old.approx_bytes());
+                    }
                     self.base_index += 1;
                 }
                 // Only while seeking can the window have slid past the stream position; the
@@ -3153,6 +3425,7 @@ impl LiveEngine {
             }
             HostMsg::Failed(message) => {
                 self.failure = Some(message);
+                self.failure_is_input = false;
                 self.state = RunState::Error;
                 false
             }
@@ -3253,7 +3526,8 @@ impl LiveEngine {
         ) {
             Ok(pair) => pair,
             Err(e) => {
-                self.failure = Some(e.to_string());
+                self.failure = Some(crate::error::describe(&e));
+                self.failure_is_input = e.code() != -32603;
                 self.state = RunState::Error;
                 return Err(e);
             }
@@ -3272,6 +3546,7 @@ impl LiveEngine {
         self.host = host;
         self.scenario = scenario;
         self.timeline.clear();
+        self.timeline_bytes = 0;
         self.base_index = 0;
         self.cursor = 0;
         self.produced = 0;
@@ -3279,6 +3554,7 @@ impl LiveEngine {
         self.seek_goal = None;
         self.report = None;
         self.failure = None;
+        self.failure_is_input = false;
         self.history.clear();
         self.last_telemetry.clear();
         // Every connection gets a fresh `Hello` for the new run (`Run` moves to a new
@@ -3353,7 +3629,19 @@ impl LiveEngine {
             .map_err(|e| vec![ParamError::new("/", e.to_string(), "pass a JSON object")])?;
         let base = self.source.as_ref().and_then(|p| p.parent());
         match Scenario::parse(&text, base) {
-            Ok(s) => Ok(s),
+            // The files it names are checked here too, so Check, Apply and Run all refuse a
+            // missing map by its setting, and a refused Run leaves the run on screen alone.
+            Ok(s) => {
+                let missing: Vec<ParamError> = v2xw_engine::scenario::preflight(&s)
+                    .iter()
+                    .map(scenario_error)
+                    .collect();
+                if missing.is_empty() {
+                    Ok(s)
+                } else {
+                    Err(missing)
+                }
+            }
             Err(first) => {
                 // `parse` stops at the first problem. Collect all of them when the
                 // document at least deserialises, so a form can mark every bad field.
@@ -3363,6 +3651,7 @@ impl LiveEngine {
                     Ok(s) => {
                         let all: Vec<ParamError> = v2xw_engine::scenario::validate(&s)
                             .iter()
+                            .chain(v2xw_engine::scenario::preflight(&s).iter())
                             .map(scenario_error)
                             .collect();
                         if all.is_empty() {
@@ -3410,16 +3699,68 @@ fn preset_id(path: &std::path::Path) -> String {
 }
 
 /// A loader error as a `{path, message, hint}` row (§6.4).
+///
+/// The path is a JSON Pointer: `actors.rsus[0].site` becomes `/actors/rsus/0/site`, which is
+/// what the page matches against its fields (it was `/actors/rsus[0]/site`, which matched no
+/// field, so the refusal was listed at the top instead of marked on the setting). The hint is
+/// the field's published range or choices when it has one; the loader's message already says
+/// what to change, so a row with neither carries no hint rather than a generic one.
 fn scenario_error(e: &v2xw_engine::ScenarioError) -> ParamError {
-    let path = e
-        .field()
-        .map(|f| format!("/{}", f.replace('.', "/")))
-        .unwrap_or_else(|| "/".to_string());
-    ParamError::new(
+    let dotted = e.field().unwrap_or("");
+    let path = dotted_to_pointer(dotted);
+    let bare_path: String = {
+        // `actors.rsus[0].site` → `actors.rsus[].site`, the spelling the tables use.
+        let mut out = String::with_capacity(dotted.len());
+        let mut in_index = false;
+        for c in dotted.chars() {
+            match c {
+                '[' => {
+                    in_index = true;
+                    out.push('[');
+                }
+                ']' => {
+                    in_index = false;
+                    out.push(']');
+                }
+                _ if in_index => {}
+                _ => out.push(c),
+            }
+        }
+        out
+    };
+    let hint = v2xw_engine::scenario::validate::bound_of(&bare_path)
+        .map(|b| format!("allowed: {}", b.describe()))
+        .or_else(|| {
+            v2xw_engine::scenario::validate::choices_of(&bare_path)
+                .map(|c| format!("one of: {}", c.values.join(", ")))
+        });
+    ParamError {
         path,
-        e.to_string(),
-        "see the field's help text for its allowed values",
-    )
+        message: e.to_string(),
+        hint,
+        severity: None,
+    }
+}
+
+/// `a.b[2].c` as the JSON Pointer `/a/b/2/c`; the empty path as `/`.
+fn dotted_to_pointer(dotted: &str) -> String {
+    if dotted.is_empty() {
+        return "/".to_string();
+    }
+    let mut out = String::new();
+    for segment in dotted.split('.') {
+        let (name, rest) = match segment.find('[') {
+            Some(i) => (&segment[..i], &segment[i..]),
+            None => (segment, ""),
+        };
+        out.push('/');
+        out.push_str(&name.replace('~', "~0").replace('/', "~1"));
+        for index in rest.split(['[', ']']).filter(|s| !s.is_empty()) {
+            out.push('/');
+            out.push_str(index);
+        }
+    }
+    out
 }
 
 /// An engine error from the loader as a `{path, message, hint}` row.
@@ -3428,6 +3769,64 @@ fn engine_error(e: &v2xw_engine::EngineError) -> ParamError {
         v2xw_engine::EngineError::Scenario(inner) => scenario_error(inner),
         other => ParamError::new("/", other.to_string(), "check the scenario document"),
     }
+}
+
+/// A failure to build a run, as the JSON-RPC error the caller gets.
+///
+/// Whatever the scenario caused — a value the loader refuses, a file it names that is not
+/// there, a world site the world does not have — is `-32004` with the setting's row, so the
+/// page marks the field and says how to fix it. Only what the user cannot have caused (a
+/// model card that does not register, an importer invariant) is `-32603`. Before this every
+/// build failure was `-32603 internal error`, including a missing map file.
+fn setup_error(e: v2xw_engine::EngineError) -> ServerError {
+    match e {
+        v2xw_engine::EngineError::Scenario(inner) => {
+            ServerError::ScenarioInvalid(vec![scenario_error(&inner)])
+        }
+        v2xw_engine::EngineError::Io { path, source } => ServerError::Io {
+            path,
+            errno: source.to_string(),
+        },
+        other => ServerError::Internal(other.to_string()),
+    }
+}
+
+/// The mean of `rows` in each `bin`-wide bin from `from`'s bin to `to`, at most `limit`
+/// bins: `(bin start, mean)`, with `None` for a bin no sample fell in.
+///
+/// `rows` are a metric's samples in the order the steps produced them, so sorted by
+/// instant, and each bin is one contiguous run of them: one walk over the samples answers
+/// every bin. Scanning every sample for every bin, as this did, made a plot's poll cost
+/// grow with the square of the run's length, under the lock the producer also needs, so
+/// the longer a run had gone the slower it streamed.
+fn binned_means(
+    rows: &[(SimTime, f64)],
+    from: u64,
+    to: u64,
+    bin: u64,
+    limit: usize,
+) -> Vec<(u64, Option<f64>)> {
+    let bin = bin.max(1);
+    let mut out = Vec::new();
+    let mut edge = from - (from % bin);
+    let mut lo = rows.partition_point(|(t, _)| *t < edge);
+    while edge <= to && out.len() < limit {
+        let upper = edge.saturating_add(bin);
+        let hi = lo + rows[lo..].partition_point(|(t, _)| *t < upper);
+        // The bin's value is the mean of the samples whose instant falls in it, reduced
+        // with `sum_ordered` so two builds agree to the last bit. A bin with no sample is
+        // `None` and is reported as JSON `null`: the metric was not observed there, which
+        // is not the same as being zero there.
+        let value = (hi > lo).then(|| {
+            let inside: Vec<f64> = rows[lo..hi].iter().map(|(_, v)| *v).collect();
+            let n = inside.len() as f64;
+            v2xw_core::math::sum_ordered(inside) / n
+        });
+        out.push((edge, value));
+        lo = hi;
+        edge = upper;
+    }
+    out
 }
 
 /// Lower-case hex of a digest.
@@ -3643,6 +4042,16 @@ impl Engine for LiveEngine {
                 if let Some(seed) = seed {
                     next.seed = seed;
                 }
+                // Refused before the run on screen is stopped: a map deleted since Apply, or
+                // a preset naming one that was never there, is the user's to fix, and the
+                // page keeps what it was showing rather than going to `error`.
+                let missing: Vec<ParamError> = v2xw_engine::scenario::preflight(&next)
+                    .iter()
+                    .map(scenario_error)
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(ServerError::ScenarioInvalid(missing));
+                }
                 self.restart(next)?;
                 // Staged edits are consumed by the run that runs them; the form then shows
                 // the running scenario, which is now the edited one.
@@ -3717,15 +4126,28 @@ impl Engine for LiveEngine {
 
     fn step(&mut self) -> Result<Option<StepOutput>> {
         if let Some(message) = &self.failure {
-            return Err(ServerError::Internal(message.clone()));
+            return Err(if self.failure_is_input {
+                ServerError::RunNotRunning(format!(
+                    "the last run.start was refused ({message}); fix the setting and start \
+                     again"
+                ))
+            } else {
+                ServerError::Internal(message.clone())
+            });
         }
         // 60 ms is longer than the 50 ms the producer sleeps on an empty step and shorter
         // than any client's stall deadline, so `run.step` gets its step and a producer
         // that finds nothing does not hold the run lock.
         self.pump_blocking(std::time::Duration::from_millis(60));
         if !self.has(self.cursor) {
+            // Steps run from index 0 to `duration / step` inclusive: the one *at* the horizon
+            // is the last, and it carries `end_of_run`. So the stream has ended when the
+            // cursor is past it, not on it. With `>=` a stream that caught up with a slow
+            // kernel (the SCMS lifecycle with a followed vehicle, measured: 239.9 s of a
+            // 240 s run) was declared finished one step early; the transport then stopped
+            // stepping, the final step never streamed, and the run published no digest.
             if self.report.is_some()
-                || self.cursor.saturating_mul(self.step_ns()) >= self.descriptor.duration
+                || self.cursor.saturating_mul(self.step_ns()) > self.descriptor.duration
             {
                 self.state = RunState::Finished;
             }
@@ -3738,9 +4160,7 @@ impl Engine for LiveEngine {
                 self.last_telemetry.insert(row.node_id, *row);
             }
             self.intern_labels(out);
-            self.projector
-                .feed
-                .prune(out.sim_time.saturating_sub(crate::feed::HISTORY_NS));
+            self.projector.prune(out.sim_time);
         }
         if let Some(out) = &out
             && out.end_of_run
@@ -3965,6 +4385,8 @@ impl Engine for LiveEngine {
             },
             "retained_steps": self.timeline.len(),
             "retain_limit_steps": self.options.retain_steps,
+            "retained_bytes": self.timeline_bytes,
+            "retain_limit_bytes": self.options.retain_bytes,
             // The scenario timeline's items that have fired by the stream position, with
             // what each did (`scenario.event`). The kernel is ahead of the stream, so an
             // item it has fired but the page has not reached yet is not reported.
@@ -3978,6 +4400,8 @@ impl Engine for LiveEngine {
                 "frames": self.projector.feed.size().0,
                 "receptions": self.projector.feed.size().1,
             },
+            "stores": self.projector.stores(),
+            "last_telemetry_nodes": self.last_telemetry.len(),
         })
     }
 
@@ -4023,15 +4447,18 @@ impl Introspect for LiveEngine {
 
     fn entity_facts(&self, entity: &str, t_ns: u64, limit: usize) -> Option<Value> {
         let history = &self.projector.backend;
-        let (t, view) = history
+        let (t, bytes) = history
             .iter()
             .rev()
             .find(|(t, _)| *t <= t_ns)
             .or_else(|| history.front())?;
+        // It parsed once already, as it arrived (`SnapshotTime`), so this does not fail
+        // for a record the projector kept.
+        let view: Value = serde_json::from_slice(bytes).ok()?;
         Some(crate::introspect::entity_answer(
             entity,
             *t,
-            view,
+            &view,
             limit,
             self.provenance_chain(),
         )?)
@@ -4063,36 +4490,11 @@ impl Introspect for LiveEngine {
         bin: u64,
         limit: usize,
     ) -> Vec<(u64, Option<f64>)> {
-        let samples = self.history.get(name);
+        let rows: &[(SimTime, f64)] = self.history.get(name).map_or(&[], Vec::as_slice);
         // Never past the stream: the projector has already computed metric bins the
         // client's `Keyframe` has not reached, and answering from them would tell a live
         // viewer the future.
-        let to = to.min(self.sim_time());
-        let bin = bin.max(1);
-        let mut out = Vec::new();
-        let mut edge = from - (from % bin);
-        while edge <= to && out.len() < limit {
-            let upper = edge.saturating_add(bin);
-            let value = samples.and_then(|rows| {
-                // The bin's value is the mean of the samples whose instant falls in it,
-                // reduced with `sum_ordered` so two builds agree to the last bit. A bin
-                // with no sample is `None` and is reported as JSON `null`: the metric was
-                // not observed there, which is not the same as being zero there.
-                let inside: Vec<f64> = rows
-                    .iter()
-                    .filter(|(t, _)| *t >= edge && *t < upper)
-                    .map(|(_, v)| *v)
-                    .collect();
-                if inside.is_empty() {
-                    return None;
-                }
-                let n = inside.len() as f64;
-                Some(v2xw_core::math::sum_ordered(inside) / n)
-            });
-            out.push((edge, value));
-            edge = upper;
-        }
-        out
+        binned_means(rows, from, to.min(self.sim_time()), bin, limit)
     }
 
     fn provenance_chain(&self) -> Vec<Value> {
@@ -4314,11 +4716,11 @@ impl Introspect for LiveEngine {
             "frames": inside.len(),
             "pdr": v2xw_core::math::quantize((received as f64) / n, 6),
             "rssi_dbm": v2xw_core::math::quantize(
-                mean(inside.iter().filter_map(|o| o.rssi_dbm).collect()), 2),
+                mean(inside.iter().filter_map(|o| o.rssi_dbm.map(f64::from)).collect()), 2),
             "sinr_db": v2xw_core::math::quantize(
-                mean(inside.iter().filter_map(|o| o.sinr_db).collect()), 2),
+                mean(inside.iter().filter_map(|o| o.sinr_db.map(f64::from)).collect()), 2),
             "distance_m": v2xw_core::math::quantize(
-                mean(inside.iter().filter_map(|o| o.dist_m).collect()), 3),
+                mean(inside.iter().filter_map(|o| o.dist_m.map(f64::from)).collect()), 3),
             "los": {"class": "LOS", "walls_crossed": 0, "obstructed_len_m": 0.0},
         }))
     }
@@ -4577,5 +4979,110 @@ mod node_tx_payload_tests {
         );
         v.pseudonym = None;
         assert_eq!(&node_tx_payload(&v)[28..36], &[0u8; 8]);
+    }
+}
+
+#[cfg(test)]
+mod breakdown_store_tests {
+    use super::BreakdownStore;
+    use std::collections::BTreeMap;
+    use v2xw_metrics::SampleValue;
+
+    fn node(n: u64) -> BTreeMap<String, String> {
+        BTreeMap::from([("node".to_string(), n.to_string())])
+    }
+
+    /// The store is bounded as a whole, not only per metric, and what goes first is the
+    /// oldest entry whichever metric it belongs to. Per metric alone, forty per-node metrics
+    /// over an hour of churn would each have filled their own cap.
+    #[test]
+    fn the_store_is_bounded_across_metrics_and_sheds_the_oldest() {
+        let mut store = BreakdownStore::new(100, 250);
+        for t in 0..200u64 {
+            for metric in ["a", "b", "c"] {
+                store.push(metric, t, node(t % 7), &SampleValue::count(1));
+            }
+        }
+        assert_eq!(store.total, 250, "held to the store's cap");
+        let held: usize = store
+            .lists
+            .values()
+            .map(std::collections::VecDeque::len)
+            .sum();
+        assert_eq!(held, store.total, "the running total is the entries held");
+        for list in store.lists.values() {
+            assert!(list.len() <= 100, "held to the metric's cap");
+            assert_eq!(list.back().map(|e| e.t), Some(199), "the newest is kept");
+        }
+        // The oldest across the store went first, so what is left starts at about the same
+        // instant in every metric.
+        let fronts: Vec<u64> = store
+            .lists
+            .values()
+            .filter_map(|l| l.front().map(|e| e.t))
+            .collect();
+        let lo = fronts.iter().min().copied().unwrap_or(0);
+        let hi = fronts.iter().max().copied().unwrap_or(0);
+        assert!(hi - lo <= 1, "fronts {fronts:?}");
+        // Seven dimension sets, shared by 250 entries.
+        assert_eq!(store.dim_sets.len(), 7);
+        let groups = store.groups("a", "node", &BTreeMap::new(), 0, u64::MAX);
+        assert_eq!(groups.len(), 7, "every node still groups");
+    }
+}
+
+#[cfg(test)]
+mod binned_means_tests {
+    use super::binned_means;
+
+    /// The single walk answers exactly what filtering every sample for every bin answered:
+    /// bins with several samples, with none, a range starting mid-bin, samples on a bin's
+    /// edges, and the limit.
+    #[test]
+    fn one_walk_answers_what_a_scan_per_bin_answered() {
+        let scan = |rows: &[(u64, f64)], from: u64, to: u64, bin: u64, limit: usize| {
+            let mut out = Vec::new();
+            let mut edge = from - (from % bin);
+            while edge <= to && out.len() < limit {
+                let upper = edge + bin;
+                let inside: Vec<f64> = rows
+                    .iter()
+                    .filter(|(t, _)| *t >= edge && *t < upper)
+                    .map(|(_, v)| *v)
+                    .collect();
+                let value = (!inside.is_empty()).then(|| {
+                    let n = inside.len() as f64;
+                    v2xw_core::math::sum_ordered(inside) / n
+                });
+                out.push((edge, value));
+                edge = upper;
+            }
+            out
+        };
+        // Samples every 100 ms with gaps, and two at the same instant.
+        let mut rows: Vec<(u64, f64)> = (0..400u64)
+            .filter(|k| k % 37 > 5)
+            .map(|k| (k * 100, (k as f64).sqrt()))
+            .collect();
+        rows.insert(10, rows[10]);
+        for (from, to, bin, limit) in [
+            (0, 40_000, 1_000, 10_000),
+            (250, 39_999, 1_000, 10_000),
+            (0, 40_000, 100, 10_000),
+            (0, 40_000, 3_700, 10_000),
+            (12_345, 20_000, 500, 7),
+            (50_000, 60_000, 1_000, 100),
+        ] {
+            assert_eq!(
+                binned_means(&rows, from, to, bin, limit),
+                scan(&rows, from, to, bin, limit),
+                "from {from} to {to} bin {bin} limit {limit}"
+            );
+        }
+        assert!(
+            binned_means(&[], 0, 1_000, 100, 100)
+                .iter()
+                .all(|(_, v)| v.is_none())
+        );
     }
 }

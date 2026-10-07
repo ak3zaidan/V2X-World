@@ -498,6 +498,11 @@ kbd {
 .statusbar-text { flex: 1; min-width: 0; }
 .statusbar-text strong { font-weight: 600; }
 .statusbar-error { color: var(--err); }
+/* A refusal of the header's Run, beside the button: two lines at most, the rest on hover. */
+.primary-error {
+  color: var(--err); font-size: 12px; max-width: 46ch; line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 
 /*
  * A long identifier, shown short and copied in full.

@@ -720,6 +720,42 @@ impl TrustStore {
 pub struct CrlStore {
     hashes: BTreeSet<[u8; 10]>,
     linkage: Vec<CrlLinkageEntry>,
+    /// Every linkage value the entries yield in a period, per period asked about: the
+    /// expansion a real verifier keeps (see [`CrlStore::revokes_linkage_at_period`]).
+    expanded: LinkageExpansion,
+}
+
+/// How many i-periods' expansions a store keeps at once: the node's plausibility window
+/// (the current period and one either side) with one to spare.
+const EXPANDED_PERIODS: usize = 4;
+
+/// The linkage values a CRL's entries yield, by i-period, computed once per period and
+/// CRL version and then looked up.
+///
+/// Behind a mutex because the check is a `&self` question and the store is shared by
+/// reference; the lock is never contended (one node, one thread). Cloning a store clones
+/// what it has expanded.
+#[derive(Debug, Default)]
+struct LinkageExpansion(std::sync::Mutex<BTreeMap<u32, BTreeSet<LinkageValue>>>);
+
+impl Clone for LinkageExpansion {
+    fn clone(&self) -> Self {
+        let inner = self
+            .0
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
+        LinkageExpansion(std::sync::Mutex::new(inner))
+    }
+}
+
+impl LinkageExpansion {
+    fn clear(&mut self) {
+        match self.0.get_mut() {
+            Ok(m) => m.clear(),
+            Err(poisoned) => poisoned.into_inner().clear(),
+        }
+    }
 }
 
 impl CrlStore {
@@ -738,6 +774,8 @@ impl CrlStore {
     /// Adds a linkage entry, revoking a device from its period forward.
     pub fn add_linkage_entry(&mut self, entry: CrlLinkageEntry) {
         self.linkage.push(entry);
+        // A new CRL version: every period's expansion is recomputed when next asked.
+        self.expanded.clear();
     }
 
     /// True when a certificate is revoked by a hash entry.
@@ -764,7 +802,18 @@ impl CrlStore {
     ///
     /// The cost — one hash-chain walk and two AES blocks per candidate index per entry —
     /// is a real property of linkage-based revocation and one the simulator exists to
-    /// measure, so it is not cached away.
+    /// measure. Here it is paid once per i-period and CRL version: the store expands its
+    /// entries into the period's linkage values when first asked and then looks each
+    /// certificate up in that table. That is the shape the node model already gives a
+    /// device — CRL expansion is a background job of its own (`v2xw_node::queue`, the
+    /// `crl_expansion_pm` telemetry), and the simulated cost of a check is the gate's
+    /// count of entries consulted (`v2xw_node::stores::CrlGate::work`), not this host's
+    /// CPU time. The answer is the same as walking every entry on every check — the
+    /// expansion is exactly the set of values that walk compares against — and nothing
+    /// simulated reads how the host computed it.
+    /// Walked on every check, an hour of the credential lifecycle slowed as its CRL grew:
+    /// a profile of the long soak found this walk taking 30 % of the kernel's time by
+    /// 450 s, with the stream falling from 7.5× to 0.3× real time.
     ///
     /// What it is *not* is one chain walk per index. The walk depends on the period alone,
     /// so [`CrlLinkageEntry::matches_any_index`] does it once per entry and then costs two
@@ -772,7 +821,28 @@ impl CrlStore {
     /// in a loop over `j`, as this used to, repeated the walk `jmax` times for nothing,
     /// and `jmax × delta` is the product an attacker who controls `iCert` was multiplying.
     pub fn revokes_linkage_at_period(&self, i: u32, lv: LinkageValue) -> bool {
-        self.linkage.iter().any(|e| e.matches_any_index(i, lv))
+        if self.linkage.is_empty() {
+            return false;
+        }
+        let mut expanded = match self.expanded.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(values) = expanded.get(&i) {
+            return values.contains(&lv);
+        }
+        let values: BTreeSet<LinkageValue> =
+            self.linkage.iter().flat_map(|e| e.values_at(i)).collect();
+        let revoked = values.contains(&lv);
+        // The window moves forward with the clock: the oldest period goes first.
+        while expanded.len() >= EXPANDED_PERIODS {
+            let Some(oldest) = expanded.keys().next().copied() else {
+                break;
+            };
+            expanded.remove(&oldest);
+        }
+        expanded.insert(i, values);
+        revoked
     }
 
     /// How many entries of both kinds.

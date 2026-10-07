@@ -14,6 +14,9 @@
  *     restarted engine is reconnected to with a plain-language message in between.
  */
 
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { expect, test, type Page } from "@playwright/test";
 
 import {
@@ -240,12 +243,20 @@ test("every transport control does what it says, and a stopped run leaves no ker
 
 test("run after run keeps working, with edits and scenario switches between runs", async ({ page }) => {
   const runs = Number(process.env.VWP_SOAK_RUNS ?? "4");
+  // Whatever the console says across all the runs: a soak that stays up while the page throws is
+  // not a clean soak.
+  const consoleErrors: string[] = [];
+  page.on("console", (m) => {
+    if (m.type() === "error") consoleErrors.push(m.text());
+  });
+  page.on("pageerror", (e) => consoleErrors.push(`pageerror: ${e.message}`));
   await open(page);
   await setField(page, "/time/duration_s", "3");
   await closeSettings(page);
   await page.getByTestId("speed").selectOption("0");
-  const samples: { run: number; rssKb: number; heapMb: number; threads: number }[] = [];
-  const sampleAt = new Set([1, 2, 10, 20, 30, runs]);
+  const samples: { run: number; rssKb: number; footprintKb: number; heapMb: number; threads: number }[] = [];
+  // Every fifth run, so a trend (a plateau or a slope) is visible and not just two end points.
+  const sampleAt = new Set([1, 2, runs, ...Array.from({ length: Math.floor(runs / 5) }, (_, k) => (k + 1) * 5)]);
   let previous: Status | null = null;
   for (let i = 1; i <= runs; i++) {
     if (i % 5 === 0) {
@@ -273,17 +284,46 @@ test("run after run keeps working, with edits and scenario switches between runs
     await expect(page.getByTestId("connection-state")).toHaveAttribute("data-state", "streaming");
     previous = done;
     if (sampleAt.has(i)) {
-      samples.push({ run: i, rssKb: engine.rssKb(), heapMb: (await heapBytes(page)) / 2 ** 20, threads: engine.threads() });
+      samples.push({
+        run: i,
+        rssKb: engine.rssKb(),
+        footprintKb: engine.footprintKb(),
+        heapMb: (await heapBytes(page)) / 2 ** 20,
+        threads: engine.threads(),
+      });
+    }
+    // `VWP_SOAK_SNAPSHOTS=<dir>`: a heap snapshot of the tab at run 10 and at the last run, for
+    // telling a leak (a constructor whose count grows with the runs) from a cache filling up.
+    const snapshots = process.env.VWP_SOAK_SNAPSHOTS;
+    if (snapshots && (i === 10 || i === runs)) {
+      const cdp = await page.context().newCDPSession(page);
+      const chunks: string[] = [];
+      cdp.on("HeapProfiler.addHeapSnapshotChunk", (e: { chunk: string }) => chunks.push(e.chunk));
+      await cdp.send("HeapProfiler.collectGarbage");
+      await cdp.send("HeapProfiler.takeHeapSnapshot", { reportProgress: false });
+      writeFileSync(join(snapshots, `run-${i}.heapsnapshot`), chunks.join(""));
+      await cdp.detach();
     }
   }
-  console.warn(`soak of ${runs} runs:\n${samples.map((s) => `  run ${s.run}: engine RSS ${(s.rssKb / 1024).toFixed(1)} MB, tab heap ${s.heapMb.toFixed(1)} MB, threads ${s.threads}`).join("\n")}`);
+  console.warn(
+    `soak of ${runs} runs:\n${samples
+      .map(
+        (s) =>
+          `  run ${s.run}: engine footprint ${(s.footprintKb / 1024).toFixed(1)} MB (RSS ${(s.rssKb / 1024).toFixed(1)} MB), tab heap ${s.heapMb.toFixed(1)} MB, threads ${s.threads}`,
+      )
+      .join("\n")}`,
+  );
+  expect(consoleErrors, "the console showed no error across the runs").toEqual([]);
   if (samples.length >= 2) {
     // Flat: measured from a warm sample — run 10 in the long soak, run 2 in the short one — so
     // the one-off costs of the first run (the world payload, the shaders, the allocator's first
     // arenas, the retained timeline filling) are not counted as growth.
     const warm = samples.find((s) => s.run === 10) ?? samples.find((s) => s.run === 2) ?? samples[0];
     const last = samples[samples.length - 1];
-    expect(last.rssKb, "engine memory is flat across runs").toBeLessThan(warm.rssKb * 1.25 + 20_000);
+    // The physical footprint, not RSS: macOS compresses pages under pressure and RSS falls and
+    // rises with that (25.9 MB at run 20, 132.9 MB at run 30 in one soak), which is not the
+    // engine's memory changing. The bound is the one this check always had.
+    expect(last.footprintKb, "engine memory is flat across runs").toBeLessThan(warm.footprintKb * 1.25 + 20_000);
     expect(last.heapMb, "tab memory is flat across runs").toBeLessThan(warm.heapMb * 1.25 + 10);
     expect(last.threads, "no thread accumulates across runs").toBeLessThanOrEqual(warm.threads);
   }

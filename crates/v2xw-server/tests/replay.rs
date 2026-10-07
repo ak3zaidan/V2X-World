@@ -316,6 +316,136 @@ async fn a_replay_server_serves_the_world_and_the_control_surface() {
     server.stop().await;
 }
 
+/// §7.2 on a **real** run rather than the record crate's fixture: a live engine run with a
+/// recording, streamed to a connection frame by frame, and the same recording replayed to a
+/// second connection, give byte-identical pose frames — every Keyframe and Delta the page
+/// applies. Before this round the replay server could not open such a recording at all: the
+/// server wrote no `Hello` into it ("holds no Hello frame"). The metric samples and the
+/// provenance are not in the recording yet, which the assertion below states rather than hides.
+///
+/// **Open, and ignored for that reason:** the pose bodies differ too. The live stream draws a
+/// vehicle at its body centre (`live.rs` `body_centre`, half the class length ahead of the
+/// rear-bumper reference), and the recording's Keyframe and Delta frames come from the
+/// kernel's own snapshot stream, which keeps the reference point. Measured on this run: the
+/// first difference is a 32-bit field of the step-9 delta's rows, 367 738 live against
+/// 370 238 recorded — 2 500 units, which at the stream's millimetre grid is the 2.5 m of half
+/// a passenger car (not decoded field by field). A recorded run would then replay vehicles
+/// half a length from where the live page drew them.
+///
+/// The page's replay (the WebAssembly reader, `ui/apps/studio/src/lib/replay.ts`) now applies
+/// the same display projection to what it decodes (`toBodyCentres`, with the connected
+/// engine's class lengths), so the page draws a recorded vehicle where the live page drew it.
+/// This server's own replay forwards the recorded frames unchanged, as §7.2 has it, so this
+/// test stays open until the recording itself carries body centres — which moves every
+/// recording's bytes and every golden digest built on them, a decision for the integrator.
+#[test]
+#[ignore = "open: the recording keeps the rear-bumper reference, the live stream the body centre"]
+fn a_real_run_replays_byte_identically_from_its_recording() {
+    use v2xw_server::live::{LiveEngine, LiveOptions};
+
+    let source =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/phase1-grid.yaml");
+    let text = std::fs::read_to_string(&source)
+        .expect("phase1-grid.yaml")
+        .replace("duration_s: 60.0", "duration_s: 3.0")
+        .replace("rate_veh_per_h: 30.0", "rate_veh_per_h: 3000.0")
+        .replace("      cols: 13\n", "      cols: 4\n")
+        .replace("      rows: 34\n", "      rows: 4\n");
+    let dir = fixture::scratch_dir("replay-real-run").expect("scratch dir");
+    let scenario = dir.join("real.yaml");
+    std::fs::write(&scenario, text).expect("write scenario");
+    let recording = dir.join("real.mcap");
+    let _ = std::fs::remove_file(&recording);
+
+    let mut live = LiveEngine::open(
+        &scenario,
+        LiveOptions {
+            build_utc: String::new(),
+            paused: true,
+            speed: 0.0,
+            recording: Some(recording.clone()),
+            ..LiveOptions::default()
+        },
+    )
+    .expect("build");
+    let d = live.descriptor().clone();
+    let world = Arc::clone(live.world());
+    let mut session = Session::new(ConnectParams::default(), &d);
+    session
+        .hello_frame(&d, RunState::Paused, 0, "")
+        .expect("hello");
+    let mut streamed = Vec::new();
+    let mut steps = 0usize;
+    for _ in 0..10_000 {
+        match live.step().expect("step") {
+            Some(out) => {
+                steps += 1;
+                let end = out.end_of_run;
+                streamed.extend(session.encode_step(&out).expect("encode").frames);
+                if end {
+                    break;
+                }
+            }
+            None if live.state() == RunState::Finished => break,
+            None => {}
+        }
+    }
+    assert!(steps > 20, "the live run produced {steps} steps");
+    // The host thread closes the recording when its run ends; dropping the engine joins it.
+    drop(live);
+
+    let mut replay = ReplayEngine::open(&recording, world).expect("open the recording");
+    let rd = replay.descriptor().clone();
+    let mut session = Session::new(ConnectParams::default(), &rd);
+    session
+        .hello_frame(&rd, RunState::Paused, 0, "")
+        .expect("hello");
+    let mut replayed = Vec::new();
+    while let Some(out) = replay.step().expect("step") {
+        replayed.extend(session.encode_step(&out).expect("encode").frames);
+    }
+
+    // The pose stream: every Keyframe and Delta. The live connection also carries MetricSample
+    // and Provenance frames that the server's recording does not hold (measured on this run:
+    // live {Keyframe 4, Delta 27, MetricSample 2, Provenance 1}, replay {Keyframe 4, Delta
+    // 27}) — open, see BUILD-STATUS — so the claim this test makes is the pose stream's.
+    let poses = |frames: &[v2xw_record::Frame]| -> Vec<v2xw_record::Frame> {
+        frames
+            .iter()
+            .filter(|f| {
+                f.header().is_ok_and(|h| {
+                    h.msg_type == MsgType::Keyframe.id() || h.msg_type == MsgType::Delta.id()
+                })
+            })
+            .cloned()
+            .collect()
+    };
+    // Compared as (type, canonical flag bits, body): the header's `seq` numbers every canonical
+    // frame of the stream, so while the recording lacks the metric and provenance frames the
+    // replay's pose frames carry smaller sequence numbers (measured: 1 where live has 2) over
+    // byte-identical bodies.
+    let comparable = |frames: Vec<v2xw_record::Frame>| -> Vec<(u16, u16, Vec<u8>)> {
+        frames
+            .iter()
+            .filter_map(|f| {
+                let h = f.header().ok()?;
+                Some((h.msg_type, h.flags & CANONICAL_FLAG_MASK, f.body().to_vec()))
+            })
+            .collect()
+    };
+    let a = comparable(poses(&streamed));
+    let b = comparable(poses(&replayed));
+    assert!(
+        a.len() > steps / 2,
+        "{} pose frames for {steps} steps",
+        a.len()
+    );
+    assert_eq!(b.len(), a.len(), "the replay carries as many pose frames");
+    for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+        assert_eq!(x, y, "canonical frame {i} differs between live and replay");
+    }
+}
+
 /// A minimal HTTP GET, so the test needs no HTTP client dependency.
 async fn reqwest_get(url: &str) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

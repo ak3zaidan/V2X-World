@@ -173,10 +173,17 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the class share",
     },
+    // The ceiling is a guard, not a traffic figure. `scenarios/scale/` offers 3,600,000
+    // veh/h on purpose — a thousand candidates a second, so the grid fills as fast as lane
+    // capacity admits them — and the guard sits well above that: 100,000,000 veh/h is
+    // 2,778 candidates per 100 ms step, still bounded work. Far above it the thinned-Poisson
+    // process draws a candidate per nanosecond and one step allocates millions of trips,
+    // which took the server's memory rather than being refused (`rate_veh_per_h: 1e308` was
+    // accepted).
     Bound {
         path: "actors.vehicles.demand.rate_veh_per_h",
         lo: 0.0,
-        hi: f64::INFINITY,
+        hi: MAX_ARRIVAL_RATE_VEH_PER_H,
         exclusive_lo: false,
         what: "the arrival rate",
     },
@@ -1310,6 +1317,16 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
         }),
     );
     take(crate::phase2::LifecycleParams::from_scenario(s).map(|_| ()));
+    // The detectors', the authority's and the backend network's parameters, read by the
+    // very functions the run builds them with. Before these were here, an unknown
+    // `detection.ma.params` key or a wrong `net.backend_net` id passed Check and came back
+    // from Run as an "internal error".
+    take(crate::phase2::detection_params(s).map(|_| ()));
+    take(crate::phase2::ma_params(s).map(|_| ()));
+    take(crate::phase2::apply_backend_net(
+        s,
+        &mut v2xw_proto::ScmsParams::default(),
+    ));
     for (i, a) in s.threats.attackers.iter().enumerate() {
         if let Some(kind) =
             a.id.strip_prefix("threat/attacker/legacy/")
@@ -1324,18 +1341,6 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 why,
             ));
         }
-    }
-    if let Some(ma) = &s.detection.ma
-        && ma.id != crate::phase2::MA_LEGACY_WINDOW
-    {
-        e.push(conflict(
-            "detection.ma",
-            format!(
-                "'{}' is not an authority pipeline this build ships; one: {}",
-                ma.id,
-                crate::phase2::MA_LEGACY_WINDOW
-            ),
-        ));
     }
     let etsi = s.actors.backend.protocol.as_deref() == Some(crate::phase2::ETSI_PKI)
         || s.security
@@ -1575,7 +1580,7 @@ fn bounded_at(path: &str, field: &str, value: f64, e: &mut Vec<ScenarioError>) {
         e.push(conflict(
             field,
             format!(
-                "cannot be range-checked: `{path}` has no row in `validate::BOUNDS`, which                  is a defect in the engine rather than in this scenario"
+                "cannot be range-checked: `{path}` has no row in `validate::BOUNDS`, which is a defect in the engine rather than in this scenario"
             ),
         ));
         return;
@@ -1739,6 +1744,41 @@ fn world(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ),
         ));
     }
+    match &s.world.source {
+        v2xw_world::WorldSourceSpec::Procedural { .. } => {
+            if let Err(why) = grid_params(s) {
+                e.push(why);
+            }
+        }
+        v2xw_world::WorldSourceSpec::OsmXml { path, .. } => {
+            if path.trim().is_empty() {
+                e.push(conflict(
+                    "world.source.path",
+                    "is empty; name the OpenStreetMap XML extract to import, e.g. \
+                     worlds/cache/manhattan.osm.xml"
+                        .to_string(),
+                ));
+            }
+            if s.world.highway_preset.is_none() {
+                e.push(conflict(
+                    "world.highway_preset",
+                    "is not set, and an osm-xml world needs one: the importer's fallback \
+                     speed limits and lane counts are a statement about a jurisdiction. \
+                     Choose sumo-german, urban-us-nyc, urban-us-portland or urban-de"
+                        .to_string(),
+                ));
+            }
+        }
+        other => e.push(conflict(
+            "world.source",
+            format!(
+                "is {}, and this build builds worlds only from a procedural grid \
+                 (kind: procedural) or an OpenStreetMap XML extract (kind: osm-xml); \
+                 convert the network to OSM XML or use one of those",
+                other.label()
+            ),
+        )),
+    }
     if let Some(mpl) = s.world.buildings.metres_per_level {
         bounded_at(
             "world.buildings.metres_per_level",
@@ -1755,6 +1795,141 @@ fn world(s: &Scenario, e: &mut Vec<ScenarioError>) {
             e,
         );
     }
+}
+
+/// The highest arrival rate the loader accepts, vehicles per hour, including a rate a
+/// `demand.multiplier` event raises it to. See the bound on
+/// `actors.vehicles.demand.rate_veh_per_h`.
+pub const MAX_ARRIVAL_RATE_VEH_PER_H: f64 = 100_000_000.0;
+
+/// The most junctions a procedural grid may have.
+///
+/// A guard, not a model parameter: a lattice's memory grows with its junction count, and a
+/// typo in `cols` (1300 for 13) would otherwise take the machine's memory rather than be
+/// refused. 10,000 junctions is a 100 × 100 grid, about 27 km × 8 km at Midtown spacing,
+/// 23 times the shipped `phase1-grid`'s 442.
+pub const MAX_GRID_JUNCTIONS: u64 = 10_000;
+
+/// The procedural grid's parameters as the world builder reads them
+/// (`crate::wiring::build_world`), checked by the generator's own rules.
+///
+/// # Errors
+/// A conflict at `world.source.params` (or one of its keys) the page can mark.
+pub(crate) fn grid_params(
+    s: &Scenario,
+) -> core::result::Result<v2xw_world::procedural::GridParams, ScenarioError> {
+    let v2xw_world::WorldSourceSpec::Procedural { params, .. } = &s.world.source else {
+        return Err(conflict(
+            "world.source",
+            "is not a procedural grid".to_string(),
+        ));
+    };
+    let grid: v2xw_world::procedural::GridParams = if params.is_null() {
+        v2xw_world::procedural::GridParams::legacy()
+    } else {
+        serde_json::from_value(params.clone()).map_err(|why| {
+            conflict(
+                "world.source.params",
+                format!(
+                    "does not fit the procedural grid generator: {why}. Its parameters are \
+                     listed on the world/source/procedural-grid model card"
+                ),
+            )
+        })?
+    };
+    if let Err(v2xw_world::WorldError::InvalidParameter { parameter, problem }) = grid.validate() {
+        return Err(conflict(
+            &format!("world.source.params.{parameter}"),
+            problem,
+        ));
+    }
+    let junctions = u64::from(grid.cols) * u64::from(grid.rows);
+    if junctions > MAX_GRID_JUNCTIONS {
+        return Err(conflict(
+            "world.source.params.cols",
+            format!(
+                "{} × {} is {junctions} junctions, over this build's limit of \
+                 {MAX_GRID_JUNCTIONS} for one procedural grid; use fewer columns or rows",
+                grid.cols, grid.rows
+            ),
+        ));
+    }
+    Ok(grid)
+}
+
+/// How many infrastructure sites the scenario's world will have, when that is known before
+/// the world is built: one per junction on a grid with `rsu_at_junctions`, none on any
+/// imported city (OpenStreetMap has no mast inventory). `None` when the grid's parameters
+/// are themselves wrong, which is reported on its own.
+fn world_site_count(s: &Scenario) -> Option<usize> {
+    match &s.world.source {
+        v2xw_world::WorldSourceSpec::Procedural { .. } => {
+            let grid = grid_params(s).ok()?;
+            Some(if grid.rsu_at_junctions {
+                (u64::from(grid.cols) * u64::from(grid.rows)) as usize
+            } else {
+                0
+            })
+        }
+        _ => Some(0),
+    }
+}
+
+/// The inputs the scenario names **on disk**, checked before anything is built: the map
+/// extract and the terrain raster.
+///
+/// Separate from [`validate`] on purpose. `validate` is a function of the document, which
+/// is what makes a scenario's verdict the same on every machine; this is a function of the
+/// machine it will run on. The server runs both at Check, Apply and Run, the command line
+/// at `v2xw validate`, and [`crate::Engine::build`] before it imports, so a missing file
+/// is named with its setting rather than reported by the importer as an internal error.
+/// A relative path is resolved against the process's working directory, exactly as the
+/// importer resolves it.
+pub fn preflight(s: &Scenario) -> Vec<ScenarioError> {
+    let mut e = Vec::new();
+    let readable = |path: &str| -> core::result::Result<(), String> {
+        let p = std::path::Path::new(path);
+        match std::fs::metadata(p) {
+            Ok(m) if m.is_file() => std::fs::File::open(p)
+                .map(|_| ())
+                .map_err(|why| format!("cannot be opened: {why}")),
+            Ok(_) => Err("is a directory, not a file".to_string()),
+            Err(why) if why.kind() == std::io::ErrorKind::NotFound => {
+                let cwd = std::env::current_dir()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_else(|_| "the working directory".to_string());
+                Err(format!(
+                    "does not exist (a relative path is read from the directory the \
+                     engine was started in, {cwd})"
+                ))
+            }
+            Err(why) => Err(format!("cannot be read: {why}")),
+        }
+    };
+    if let v2xw_world::WorldSourceSpec::OsmXml { path, .. } = &s.world.source
+        && !path.trim().is_empty()
+        && let Err(why) = readable(path)
+    {
+        e.push(conflict(
+            "world.source.path",
+            format!(
+                "names the map {path}, which {why}. Put the OpenStreetMap extract there, or \
+                 point world.source.path at one that exists"
+            ),
+        ));
+    }
+    if let Some(dem) = s.world.terrain.dem.as_deref()
+        && let Err(why) = readable(dem)
+    {
+        e.push(conflict(
+            "world.terrain.dem",
+            format!(
+                "names the terrain raster {dem}, which {why}. Point it at an SRTM .hgt tile \
+                 or an ESRI ASCII grid, or set it to null for flat ground"
+            ),
+        ));
+    }
+    e
 }
 
 fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
@@ -1824,18 +1999,71 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ));
     }
 
-    if let Some(rate) = s.actors.vehicles.demand.rate_veh_per_h
-        && !(rate.is_finite() && rate >= 0.0)
-    {
-        e.push(conflict(
-            "actors.vehicles.demand.rate_veh_per_h",
-            format!("is {rate}, and an arrival rate is a finite non-negative number"),
-        ));
+    if let Some(rate) = s.actors.vehicles.demand.rate_veh_per_h {
+        if !(rate.is_finite() && rate >= 0.0) {
+            e.push(conflict(
+                "actors.vehicles.demand.rate_veh_per_h",
+                format!("is {rate}, and an arrival rate is a finite non-negative number"),
+            ));
+        } else if rate > MAX_ARRIVAL_RATE_VEH_PER_H {
+            bounded_at(
+                "actors.vehicles.demand.rate_veh_per_h",
+                "actors.vehicles.demand.rate_veh_per_h",
+                rate,
+                e,
+            );
+        } else {
+            // Demand multipliers compose by product where they overlap, so the product of
+            // every multiplier above 1 bounds the peak the arrival process is sized to.
+            let peak: f64 = s
+                .events
+                .iter()
+                .filter(|i| i.kind == TimelineKind::DemandMultiplier)
+                .filter_map(|i| i.params.get("value").and_then(Value::as_f64))
+                .filter(|v| v.is_finite() && *v > 1.0)
+                .product();
+            if rate * peak > MAX_ARRIVAL_RATE_VEH_PER_H {
+                e.push(conflict(
+                    "events",
+                    format!(
+                        "the demand multipliers raise the arrival rate of {rate} veh/h to as \
+                         much as {:.0} veh/h, over the {MAX_ARRIVAL_RATE_VEH_PER_H} veh/h the \
+                         loader accepts; lower the rate or the multipliers",
+                        rate * peak
+                    ),
+                ));
+            }
+        }
     }
 
     let profiles = all_profile_ids();
     let mut seen_sites = BTreeSet::new();
+    let sites = world_site_count(s);
     for (i, r) in s.actors.rsus.iter().enumerate() {
+        if let (Some(site), Some(count)) = (r.site, sites)
+            && site as usize >= count
+        {
+            e.push(conflict(
+                &format!("actors.rsus[{i}].site"),
+                match &s.world.source {
+                    v2xw_world::WorldSourceSpec::Procedural { .. } if count == 0 => format!(
+                        "names site {site}, and this grid has no roadside sites: set \
+                         world.source.params.rsu_at_junctions to true for one site per \
+                         junction, or give this unit a position_m [x, y, z] instead"
+                    ),
+                    v2xw_world::WorldSourceSpec::Procedural { .. } => format!(
+                        "names site {site}, and this grid has {count} (one per junction, \
+                         numbered from 0); pick one below {count}, or give a position_m"
+                    ),
+                    other => format!(
+                        "names site {site}, and an imported city ({}) has no roadside sites: \
+                         OpenStreetMap carries no mast inventory. Remove `site` and give this \
+                         unit a position_m [x, y, z] in world metres instead",
+                        other.label()
+                    ),
+                },
+            ));
+        }
         if let Some(profile) = &r.profile
             && !profiles.contains(&profile.as_str())
         {
