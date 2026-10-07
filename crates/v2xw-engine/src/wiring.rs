@@ -408,11 +408,22 @@ pub const fn is_vru_class(class: VehicleClass) -> bool {
 ///
 /// `mobility/demand/poisson` is the scenario spelling of the thinned-Poisson model, whose
 /// card id is `mobility/demand/poisson-thinned`; both are accepted.
-pub const DEMAND_KINDS: [&str; 4] = [
+///
+/// The last seven are the `v2xw-demand` crate's ([`v2xw_demand::scenario::KINDS`]): saved
+/// routes, trip files, OD matrices, link counts, GTFS transit, trip purposes and a
+/// composite of several.
+pub const DEMAND_KINDS: [&str; 11] = [
     "mobility/demand/none",
     "mobility/demand/poisson",
     v2xw_mobility::demand::poisson::MODEL_ID,
     v2xw_mobility::demand::tr36885::MODEL_ID,
+    v2xw_demand::scenario::KINDS[0],
+    v2xw_demand::scenario::KINDS[1],
+    v2xw_demand::scenario::KINDS[2],
+    v2xw_demand::scenario::KINDS[3],
+    v2xw_demand::scenario::KINDS[4],
+    v2xw_demand::scenario::KINDS[5],
+    v2xw_demand::scenario::KINDS[6],
 ];
 
 /// The vehicle classes `actors.vehicles.classes` may name: the motorised ones. A cyclist
@@ -456,6 +467,43 @@ pub fn build_demand(scenario: &Scenario, world: &World) -> Result<Box<dyn Demand
         .collect();
     match d.kind.as_str() {
         "mobility/demand/none" => Ok(Box::new(NoDemand::new())),
+        // The demand-and-route-choice crate's kinds: everything it needs from the scenario
+        // is in the context, and its errors name the parameter that is wrong.
+        k if v2xw_demand::scenario::KINDS.contains(&k) => {
+            // A composite may hold this engine's own kinds (Poisson cars beside GTFS
+            // buses); it builds them through this function, on a copy of the scenario that
+            // names the part.
+            let other = |kind: &str,
+                         params: &serde_json::Value,
+                         rate: Option<f64>|
+             -> std::result::Result<Box<dyn Demand>, String> {
+                if !DEMAND_KINDS.contains(&kind) {
+                    return Err(format!(
+                        "'{kind}' is not a demand model this build ships; use one of {}",
+                        DEMAND_KINDS.join(", ")
+                    ));
+                }
+                let mut part = scenario.clone();
+                part.actors.vehicles.demand.kind = kind.to_string();
+                part.actors.vehicles.demand.params = params.clone();
+                part.actors.vehicles.demand.rate_veh_per_h = rate;
+                build_demand(&part, world).map_err(|e| e.to_string())
+            };
+            let ctx = v2xw_demand::scenario::BuildContext {
+                world,
+                seed: scenario.seed,
+                t0: scenario.time.t0.clone(),
+                duration_s: scenario.time.duration_s,
+                fleet: shares.clone(),
+                other: Some(&other),
+            };
+            v2xw_demand::scenario::build(k, &d.params, &ctx).map_err(|e| {
+                EngineError::Scenario(crate::ScenarioError::conflict(
+                    "actors.vehicles.demand.params",
+                    e.to_string(),
+                ))
+            })
+        }
         k if k == v2xw_mobility::demand::tr36885::MODEL_ID => {
             let mut params: v2xw_mobility::demand::DropParams = if d.params.is_null() {
                 v2xw_mobility::demand::DropParams::default()
@@ -506,6 +554,27 @@ pub fn build_demand(scenario: &Scenario, world: &World) -> Result<Box<dyn Demand
             Ok(Box::new(PoissonDemand::new(world, params, od)?))
         }
     }
+}
+
+/// Registers the card of the demand model a scenario built, when it is one of the
+/// `v2xw-demand` kinds, so the manifest pins it. The built-in kinds are registered as
+/// before ([`register_all`]) and nothing changes for them.
+///
+/// # Errors
+/// A registry refusal.
+pub fn register_demand(
+    registry: &mut Registry,
+    scenario: &Scenario,
+    demand: &dyn Demand,
+) -> Result<()> {
+    if !v2xw_demand::scenario::KINDS.contains(&scenario.actors.vehicles.demand.kind.as_str()) {
+        return Ok(());
+    }
+    let card = v2xw_core::model::Model::card(demand).clone();
+    if !registry.contains(&card.id) {
+        registry.register(card)?;
+    }
+    Ok(())
 }
 
 /// The GNSS model the scenario names.

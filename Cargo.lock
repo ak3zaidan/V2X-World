@@ -2631,6 +2631,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "v2xw-demand"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "v2xw-core",
+ "v2xw-mobility",
+ "v2xw-world",
+]
+
+[[package]]
+name = "v2xw-demand-cli"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "v2xw-core",
+ "v2xw-demand",
+ "v2xw-engine",
+ "v2xw-mobility",
+ "v2xw-world",
+]
+
+[[package]]
 name = "v2xw-engine"
 version = "0.1.0"
 dependencies = [
@@ -2640,6 +2664,7 @@ dependencies = [
  "serde_yml",
  "thiserror",
  "v2xw-core",
+ "v2xw-demand",
  "v2xw-metrics",
  "v2xw-mobility",
  "v2xw-msg",

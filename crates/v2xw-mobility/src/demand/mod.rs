@@ -5,10 +5,13 @@
 //! * [`od`] — `mobility/demand/od-gravity`: where a trip starts and ends.
 //! * [`tr36885`] — `mobility/demand/tr36885-drop`: the 3GPP evaluation drops, for radio
 //!   validation runs.
+//! * [`hooks`] — the planned-route and progress seams a demand model may opt into
+//!   (used by the `v2xw-demand` crate's assignment, OD, count and transit demand).
 //!
 //! This module holds what all three share: the shape functions, the fleet mix and the
 //! desired-speed law.
 
+pub mod hooks;
 pub mod od;
 pub mod poisson;
 pub mod tr36885;
