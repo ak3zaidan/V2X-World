@@ -55,11 +55,25 @@ fn checkpointed(stop_at_s: Option<f64>) -> LongRun {
     }
 }
 
-fn data_digest(dir: &Path) -> String {
+/// The manifest's file digests, less the recordings': an MCAP file's own bytes are not
+/// reproducible (its summary section is written from a `HashMap`; `crate::run`'s module
+/// note), which is why the content digest exists.
+fn file_digests(dir: &Path) -> Vec<(String, String)> {
     let m: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).expect("manifest"))
             .expect("json");
-    m["data_digest"].as_str().expect("data_digest").to_string()
+    m["files"]
+        .as_array()
+        .expect("files")
+        .iter()
+        .map(|f| {
+            (
+                f["path"].as_str().unwrap_or_default().to_string(),
+                f["sha256"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .filter(|(p, _)| !p.ends_with(".mcap"))
+        .collect()
 }
 
 fn read(dir: &Path, name: &str) -> Vec<u8> {
@@ -145,7 +159,9 @@ fn a_resumed_run_is_the_run_that_was_never_interrupted() {
         read(&whole_dir, "run-report.json"),
         "run-report.json"
     );
-    assert_eq!(data_digest(&cut_dir), data_digest(&whole_dir), "data digest");
+    let digests = file_digests(&whole_dir);
+    assert_eq!(digests.len(), 3, "scenario, metrics and report: {digests:?}");
+    assert_eq!(file_digests(&cut_dir), digests, "the manifest's file digests");
     // The progress file carries on rather than starting again.
     let lines = |d: &Path| {
         String::from_utf8(read(d, "progress.jsonl"))
