@@ -177,6 +177,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         report.network_speed_mps,
         report.network_speed_mps / 0.44704
     );
+    let n = &report.network;
+    println!(
+        "network: {:.1} lane-km, {:.1} min/km, {:.2} stops/veh-km over {:.1} veh-km; MFD max \
+         flow {:.0} veh/h/ln vs s·g/C bound {:.0} (g/C {:.2}); box blocking {:.1} veh-s; \
+         spillback {:.0} lane-s/h",
+        n.lane_km,
+        n.travel_time_min_per_km,
+        n.stops_per_km,
+        n.vehicle_km,
+        n.mfd_max_flow_veh_per_h,
+        n.capacity_bound_veh_per_h,
+        n.mean_through_green_ratio,
+        n.box_blocking_s,
+        n.spillback_lane_s_per_h
+    );
+    for m in &n.mfd {
+        println!(
+            "  MFD t={:.0}s k={:.2} veh/km/ln q={:.1} veh/h/ln v={:.2} m/s",
+            m.t_s, m.density_veh_per_km, m.flow_veh_per_h, m.speed_mps
+        );
+    }
+    for (role, s) in &n.kerbside_dwell_s {
+        println!(
+            "kerbside {role}: {} spells, mean {:.1} s, p50 {:.1} s, max {:.1} s",
+            s.n, s.mean, s.p50, s.max
+        );
+    }
+    println!(
+        "lane utilisation f_LU 2-lane {:.3} [{}], 3-lane {:.3} [{}]; right turns {} with a \
+         cyclist alongside {}; dooring exposures {}; start-up wave {:.2} m/s [{}]",
+        n.lane_utilisation_2,
+        n.lane_utilisation_2_vehicles,
+        n.lane_utilisation_3,
+        n.lane_utilisation_3_vehicles,
+        n.right_turns,
+        n.right_hook_conflicts,
+        n.dooring_exposures,
+        report.startup_wave_mps.mean,
+        report.startup_wave_mps.n
+    );
+    println!(
+        "pedestrian speed by Fruin LOS A-F: {}",
+        n.pedestrian_speed_by_fruin_level
+            .iter()
+            .map(|s| format!("{:.2}[{}]", s.mean, s.n))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
     let nonzero: Vec<String> = Check::ALL
         .iter()
         .filter(|c| audit.count(**c) > 0)

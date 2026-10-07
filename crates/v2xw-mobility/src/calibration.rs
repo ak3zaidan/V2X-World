@@ -152,6 +152,8 @@ pub struct CalibrationObserver {
     head_gap_m: Vec<f64>,
     free_ratio: Vec<f64>,
     launch_mps2: Vec<f64>,
+    /// Launches of heavy vehicles, kept apart (they are not in `launch_mps2`).
+    launch_heavy_mps2: Vec<f64>,
     stop_decel_mps2: Vec<f64>,
     turn_speeds: BTreeMap<String, Vec<f64>>,
     trip_speed_mps: Vec<f64>,
@@ -267,6 +269,7 @@ impl CalibrationObserver {
             head_gap_m: Vec::new(),
             free_ratio: Vec::new(),
             launch_mps2: Vec::new(),
+            launch_heavy_mps2: Vec::new(),
             stop_decel_mps2: Vec::new(),
             turn_speeds: BTreeMap::new(),
             trip_speed_mps: Vec::new(),
@@ -757,7 +760,12 @@ impl CalibrationObserver {
                 let held = held || a.accel_mps2 <= 0.0;
                 if a.speed_mps >= LAUNCH_TO_MPS {
                     if !held {
-                        self.launch_mps2.push(a.speed_mps / (t1_s - start).max(dt));
+                        let launch = a.speed_mps / (t1_s - start).max(dt);
+                        if crate::style::is_heavy(a.class) {
+                            self.launch_heavy_mps2.push(launch);
+                        } else {
+                            self.launch_mps2.push(launch);
+                        }
                     }
                     p.launch = None;
                 } else if a.speed_mps < STANDING_MPS {
@@ -999,6 +1007,7 @@ impl CalibrationObserver {
             queue_head_gap_m: Summary::of(&self.head_gap_m),
             free_flow_speed_ratio: Summary::of(&self.free_ratio),
             launch_accel_mps2: Summary::of(&self.launch_mps2),
+            launch_accel_heavy_mps2: Summary::of(&self.launch_heavy_mps2),
             stop_decel_mps2: Summary::of(&self.stop_decel_mps2),
             turn_speed_mps: turns,
             network_speed_mps: if self.total_s > 0.0 {
@@ -1205,8 +1214,10 @@ pub struct CalibrationReport {
     pub queue_head_gap_m: Summary,
     /// Free-flow mid-block speed over the posted limit.
     pub free_flow_speed_ratio: Summary,
-    /// Mean acceleration from standstill to 8 m/s, m/s².
+    /// Mean acceleration from standstill to 8 m/s, m/s² (heavy vehicles apart).
     pub launch_accel_mps2: Summary,
+    /// The same for trucks, buses and coaches, m/s².
+    pub launch_accel_heavy_mps2: Summary,
     /// Peak deceleration of each stop, m/s².
     pub stop_decel_mps2: Summary,
     /// Lowest speed through a connector, by turn, m/s.

@@ -17,7 +17,7 @@
 //! At spawn, a vehicle of a class that makes kerbside stops gets a [`KerbRole`] and the
 //! distance into its trip at which its first stop falls due ([`KerbState::assign`]). Once
 //! it has driven that far, it looks along its route — the lane it is on and the next few
-//! — for the first stretch of **kerb lane** where it can stop: the rightmost motorised lane
+//! — for the first stretch of **kerb lane** where it can stop (changing lanes to the right towards it first, when it is further out): the rightmost motorised lane
 //! of its road, with another motorised lane beside it that the traffic behind can pass in,
 //! and room to brake at [`KerbsideParams::stop_decel_mps2`] before the stop and to clear
 //! the no-change zone after it ([`KerbState::advance`]). The stop is a virtual obstacle the
@@ -277,6 +277,12 @@ impl KerbState {
         }
     }
 
+    /// True when a stop is due and none is planned yet: the vehicle is looking for the
+    /// kerb, and moves towards it ([`crate::engine`] changes it to the right).
+    pub fn due(&self) -> bool {
+        self.role.is_some() && self.stop.is_none() && self.driven_m >= self.next_due_m
+    }
+
     /// True while the vehicle stands at the kerb for its stop.
     pub fn at_kerb(&self) -> bool {
         self.stop.is_some_and(|s| s.since.is_some())
@@ -439,7 +445,13 @@ impl KerbState {
                             since: None,
                         });
                     }
-                    None => self.next_due_m = self.driven_m + RETRY_M,
+                    // On the kerb lane with no room left on it: looked for again a little
+                    // further on. In a lane further out: still due, so the vehicle keeps
+                    // moving towards the kerb.
+                    None if is_kerb_lane(world, lane) => {
+                        self.next_due_m = self.driven_m + RETRY_M;
+                    }
+                    None => {}
                 }
             }
         }

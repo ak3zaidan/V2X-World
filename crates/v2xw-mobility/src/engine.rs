@@ -1397,6 +1397,28 @@ impl NativeMobility {
         self.vru.as_mut()
     }
 
+    /// One vehicle's kerbside state ([`crate::kerbside`]).
+    pub fn kerbside_state(&self, actor: ActorId) -> Option<crate::kerbside::KerbState> {
+        self.actors.get(&actor).map(|a| a.kerb)
+    }
+
+    /// A census of the kerbside stops now ([`crate::kerbside`]): `(vehicles with a role,
+    /// stops planned and not yet reached, vehicles standing at the kerb, stops completed by
+    /// the vehicles still on the road)`.
+    pub fn kerbside_census(&self) -> (usize, usize, usize, u32) {
+        let mut out = (0, 0, 0, 0);
+        for a in self.actors.values().filter(|a| a.kerb.role.is_some()) {
+            out.0 += 1;
+            match a.kerb.stop {
+                Some(s) if s.since.is_some() => out.2 += 1,
+                Some(_) => out.1 += 1,
+                None => {}
+            }
+            out.3 += a.kerb.stops_made;
+        }
+        out
+    }
+
     /// Every actor's `(lane, front arc length, speed)`, in actor-id order: what a
     /// validation run measures.
     pub fn longitudinal_states(&self) -> Vec<(ActorId, LaneId, f64, f64)> {
@@ -3192,6 +3214,66 @@ impl NativeMobility {
         None
     }
 
+    /// The lane change to the right that takes a vehicle due a kerbside stop towards the
+    /// kerb, if the lane to its right has room for it now: the ego fits behind that lane's
+    /// leader without braking harder than [`PULL_OUT_FOLLOWER_DECEL_MPS2`], and that lane's
+    /// follower need brake no harder than that for it. The route must still make its next
+    /// movement from the new lane (the usual lane-change rule): a driver about to turn left
+    /// does not pull over to the right first.
+    fn move_to_kerb(
+        &self,
+        world: &World,
+        mobil: &Mobil,
+        ego: &VehicleView,
+        nbrs: &LaneNeighbors,
+    ) -> Option<LaneChangeDecision> {
+        let target = nbrs.right?;
+        let target_lane = world.try_lane(target.lane)?;
+        if !matches!(target_lane.kind, LaneKind::Driving | LaneKind::Bus) {
+            return None;
+        }
+        let lane_view = LaneView::of(target_lane);
+        if let Some(l) = target.leader {
+            if l.gap_m < ego.driver.min_gap_m + 1.0 {
+                return None;
+            }
+            let mut moved = *ego;
+            moved.lane = target.lane;
+            if self.cf.accel(&moved, Some(&l), &lane_view, &self.weather)
+                < -PULL_OUT_FOLLOWER_DECEL_MPS2
+            {
+                return None;
+            }
+        }
+        if let Some(f) = target.follower
+            && let Some(fv) = f.vehicle.as_ref()
+        {
+            if f.gap_m < fv.driver.min_gap_m {
+                return None;
+            }
+            let a = self.cf.accel(
+                fv,
+                Some(&LeaderView::of(*ego, f.gap_m)),
+                &lane_view,
+                &self.weather,
+            );
+            if a < -PULL_OUT_FOLLOWER_DECEL_MPS2 {
+                return None;
+            }
+        }
+        let lateral = 0.5 * (world.lane(ego.lane).width_m + target_lane.width_m);
+        Some(LaneChangeDecision::Change {
+            to: target.lane,
+            side: Side::Right,
+            incentive_mps2: 0.0,
+            duration: crate::lanechange::mobil::transition_duration(
+                mobil.params(),
+                lateral,
+                ego.speed_mps.max(PULL_OUT_SPEED_MPS),
+            ),
+        })
+    }
+
     /// A route over `lanes`, with its length and free-flow cost.
     fn route_of(world: &World, lanes: Vec<LaneId>) -> Route {
         let length_m = math::sum_ordered(
@@ -4031,7 +4113,11 @@ impl Mobility for NativeMobility {
                 let before = leader;
                 leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(gap, 0.0)));
                 if leader != before {
-                    binding_stop_line = None;
+                    // Stopped at like a stop line, so the relaxed stop below may use no
+                    // room beyond the stop point: as a plain obstacle it let the vehicle
+                    // creep on into its own standstill gap, past the stop, at half a metre
+                    // a second.
+                    binding_stop_line = Some(d + STOP_LINE_MARGIN_M);
                 }
             }
             let v0 = match actor.speed_cap_mps {
@@ -4272,18 +4358,6 @@ impl Mobility for NativeMobility {
                 let Some((ego, nbrs)) = neighbours.get(&decision.actor) else {
                     continue;
                 };
-                // Round a vehicle standing at the kerb: the driver behind goes past it when
-                // the lane beside has room, however slowly they are moving, and detours if
-                // that lane cannot make their next turn ([`Self::pass_kerbside`]).
-                if self.along_path()
-                    && !at_kerb.is_empty()
-                    && let Some(change) =
-                        self.pass_kerbside(ctx.world(), &mobil, &at_kerb, ego, nbrs)
-                {
-                    decision.lane_change = change;
-                    decision.detour_ok = true;
-                    continue;
-                }
                 // A scripted cut-in takes the side it was told to, into the gap ahead of
                 // that lane's follower, whatever MOBIL's incentive or its safety
                 // criterion say — that is what makes it a cut-in. The resolution below
@@ -4305,6 +4379,27 @@ impl Mobility for NativeMobility {
                             ego.speed_mps,
                         ),
                     };
+                    continue;
+                }
+                // Round a vehicle standing at the kerb: the driver behind goes past it when
+                // the lane beside has room, however slowly they are moving, and detours if
+                // that lane cannot make their next turn ([`Self::pass_kerbside`]).
+                if self.along_path()
+                    && !at_kerb.is_empty()
+                    && let Some(change) =
+                        self.pass_kerbside(ctx.world(), &mobil, &at_kerb, ego, nbrs)
+                {
+                    decision.lane_change = change;
+                    decision.detour_ok = true;
+                    continue;
+                }
+                // A vehicle due a kerbside stop moves right, towards the kerb, when the lane
+                // to its right has room ([`Self::move_to_kerb`]); while it looks for the kerb
+                // it makes no discretionary change away from it.
+                if self.along_path() && actor.kerb.due() {
+                    if let Some(change) = self.move_to_kerb(ctx.world(), &mobil, ego, nbrs) {
+                        decision.lane_change = change;
+                    }
                     continue;
                 }
                 decision.lane_change = mobil.decide(ctx, ego, nbrs, &self.weather);
@@ -4430,7 +4525,9 @@ impl Mobility for NativeMobility {
                     to_offset_m: home,
                     switched: false,
                     from_s_delta: 0.0,
-                    pull_out: decision.detour_ok && actor.speed_mps < PULL_OUT_SPEED_MPS,
+                    // Only the kerbside rules change lanes this slowly (MOBIL's own minimum
+                    // is 3 m/s): a pull-out round a vehicle at the kerb, or a move to it.
+                    pull_out: actor.speed_mps < PULL_OUT_SPEED_MPS,
                 });
                 // The route is re-planned from the lane being entered, so the vehicle's
                 // next movement is one that lane actually has. Keeping the old route
@@ -5273,6 +5370,49 @@ pub fn card(params: &EngineParams, car_following: &str) -> ModelCard {
                 "UVC §11-202(a)1 / NY VTL §1111(a)1: a driver facing a green shall yield to \
                  vehicles lawfully within the intersection; NY VTL §1175: no driver shall \
                  enter an intersection unless there is space on the opposite side",
+            ),
+        ),
+        Parameter::new(
+            "kerbside",
+            "s, m, 1",
+            serde_json::json!(params.kerbside),
+            Source::new(
+                SourceKind::Standard,
+                "crate::kerbside: bus dwell TCRP Report 100 (TCQSM 2nd ed.) Part 4, 60 s \
+                 downtown default, c_v 0.6 (secondary); stop spacing, taxi share and dwell, \
+                 delivery share and dwell are choices recorded on the module",
+            ),
+        ),
+        Parameter::new(
+            "driver_styles",
+            "-",
+            serde_json::json!(params.driver_styles),
+            Source::new(
+                SourceKind::Paper,
+                "crate::style: cautious / normal / assertive below the 15th, between, and \
+                 above the 85th percentile of the free-speed draw; faster drivers follow \
+                 closer (Evans & Wasielewski 1982, 1983; secondary); multipliers a choice \
+                 that keeps the fleet means",
+            ),
+        ),
+        Parameter::new(
+            "heavy_turns",
+            "-",
+            serde_json::json!(params.heavy_turns),
+            Source::new(
+                SourceKind::Standard,
+                "AASHTO Green Book 2018 §2.1.3: minimum turning paths drawn for 10 mph or \
+                 less (secondary)",
+            ),
+        ),
+        Parameter::new(
+            "class_routing",
+            "-",
+            serde_json::json!(params.class_routing),
+            Source::new(
+                SourceKind::Standard,
+                "the world's per-lane class masks (a bus lane admits buses and emergency \
+                 vehicles, NYC Traffic Rules §4-12(m)); each class is routed on its own",
             ),
         ),
         Parameter::new(

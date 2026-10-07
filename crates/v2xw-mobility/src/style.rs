@@ -46,9 +46,46 @@
 //! acceleration) let a 12 m bus take a 9 m-radius corner at 7 m/s. [`turn_speed_cap`]
 //! holds a heavy vehicle on a turning connector to [`HEAVY_TURN_SPEED_MPS`].
 
+//!
+//! # Heavy-vehicle dimensions against the US design vehicles
+//!
+//! The bodies come from the SUMO vType table ([`crate::classes`]); set beside the AASHTO
+//! design vehicles a US street is laid out for (Green Book 2018, Table 2-1b; **secondary**:
+//! as the table is widely reproduced), they are the vehicles a Midtown street sees:
+//!
+//! | Class | SUMO body | AASHTO design vehicle | its length × width |
+//! |---|---|---|---|
+//! | `bus` | 12.0 × 2.5 m | CITY-BUS | 40 ft × 8.5 ft (12.2 × 2.6 m) |
+//! | `coach` | 14.0 × 2.6 m | BUS-45 (BUS-14) | 45 ft × 8.5 ft (13.7 × 2.6 m) |
+//! | `trailer` | 16.5 × 2.55 m | WB-50 (WB-15) | 55 ft × 8.5 ft (16.8 × 2.6 m) |
+//! | `truck` | 7.1 × 2.4 m | (SU-30 is 30 ft, 9.1 m) | a 24-ft box truck, the common Manhattan delivery truck, shorter than the SU-30 the turning radii are taken from |
+//! | `delivery` | 6.5 × 2.16 m | (none) | a large van |
+//!
+//! [`DESIGN_VEHICLE_LENGTH_M`] holds the design lengths, and the crate's test holds the bus,
+//! coach and trailer bodies within 5 % of them.
+
 use serde::{Deserialize, Serialize};
 
 use crate::classes::VehicleClass;
+
+/// The AASHTO design vehicle length a heavy class stands for, metres (see the module
+/// table): CITY-BUS 40 ft, BUS-45 45 ft, WB-50 55 ft, SU-30 30 ft.
+pub const fn design_vehicle_length_m(class: VehicleClass) -> Option<f64> {
+    match class {
+        VehicleClass::Bus => Some(40.0 * 0.3048),
+        VehicleClass::Coach => Some(45.0 * 0.3048),
+        VehicleClass::Trailer => Some(55.0 * 0.3048),
+        VehicleClass::Truck => Some(30.0 * 0.3048),
+        _ => None,
+    }
+}
+
+/// [`design_vehicle_length_m`] for the classes the module table checks.
+pub const DESIGN_VEHICLE_LENGTH_M: [(VehicleClass, f64); 3] = [
+    (VehicleClass::Bus, 40.0 * 0.3048),
+    (VehicleClass::Coach, 45.0 * 0.3048),
+    (VehicleClass::Trailer, 55.0 * 0.3048),
+];
 use crate::views::DriverProfile;
 
 /// The 85th percentile of the standard normal, the cut between normal and assertive
@@ -169,6 +206,19 @@ mod tests {
         for k in 0..4 {
             assert!((mean(k) - 1.0).abs() < 0.01, "{k}: {}", mean(k));
         }
+    }
+
+    #[test]
+    fn buses_coaches_and_trailers_are_the_length_of_their_design_vehicles() {
+        for (class, design) in DESIGN_VEHICLE_LENGTH_M {
+            let body = class.spec().length_m;
+            assert!(
+                (body - design).abs() / design < 0.05,
+                "{class}: body {body} m against design {design} m"
+            );
+            assert_eq!(design_vehicle_length_m(class), Some(design));
+        }
+        assert!(VehicleClass::Truck.spec().length_m < design_vehicle_length_m(VehicleClass::Truck).unwrap());
     }
 
     #[test]

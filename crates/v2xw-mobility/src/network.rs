@@ -17,6 +17,8 @@
 //! | lane utilisation | HCM `f_LU = v / (N·v_max)` on every approach with two or three general lanes, from the vehicles crossing each lane's stop line | HCM 2000 Exhibit 10-23 defaults: 0.952 for two lanes, 0.908 for three (**secondary**: as the HCM default table is widely reproduced) |
 //! | right-hook conflicts | a motor vehicle entering a right-turn connector with a cyclist going straight on within 12 m of its front, on the same approach | reported (NACTO and NYC DOT treat the right hook as the leading turning conflict with cyclists; no rate is cited) |
 //! | dooring exposures | a cyclist passing within a door's reach (1 m) of a taxi standing at the kerb | reported |
+//! | blocking the box | vehicle-seconds standing inside a signalised junction on a movement showing red | NY VTL §1175 and NYC's "Don't Block the Box": no driver enters a junction without room to leave it; the expected figure is zero |
+//! | queue spillback | lane-seconds during which a standing queue on a signalised approach reaches back to the lane's start — the upstream junction | reported: how often a queue blocks the junction behind it |
 //! | pedestrian speed by crowding | each walking pedestrian's local density (others within 2 m over the walkable area of that circle), binned by Fruin's walkway levels of service — space per person ≥ 3.25 m² (A), 2.32 (B), 1.39 (C), 0.93 (D), 0.46 (E), less (F), i.e. 35/25/15/10/5 ft² (Fruin 1971, *Pedestrian Planning and Design*) | Weidmann 1993's speed-density relation `v/v₀ = 1 − exp(−1.913·(1/ρ − 1/5.4))` (**secondary**: the parameters as the pedestrian literature quotes them) |
 //!
 //! # Determinism
@@ -85,6 +87,10 @@ const RIGHT_HOOK_M: f64 = 12.0;
 const DOOR_ZONE_M: f64 = 1.0;
 /// The fewest stop-line crossings an approach needs before its lane utilisation counts.
 const LANE_UTIL_MIN: usize = 20;
+/// How far from either end of a pavement a walker must be for its speed to count towards
+/// the speed-density measure, metres: beyond the two metres a walker slows over into a
+/// kerb, and the first steps off one.
+const STEADY_MARGIN_M: f64 = 4.0;
 
 /// One interval's point on the macroscopic fundamental diagram.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -127,6 +133,11 @@ pub struct NetworkObserver {
     door_pairs: BTreeSet<(ActorId, ActorId)>,
     ped_by_level: [Vec<f64>; 6],
     ped_density: Vec<f64>,
+    /// The signalised approach lanes (those feeding a signal-controlled connector).
+    signal_approaches: BTreeSet<LaneId>,
+    box_blocking_s: f64,
+    spillback_lane_s: f64,
+    observed_s: f64,
 }
 
 impl NetworkObserver {
@@ -183,6 +194,16 @@ impl NetworkObserver {
                 ratios.push((green / plan.cycle_s).clamp(0.0, 1.0));
             }
         }
+        let mut signal_approaches = BTreeSet::new();
+        for plan in &world.signals {
+            for l in &plan.controlled {
+                if let Some((approach, _)) = movement_of.get(l)
+                    && world.try_lane(*approach).is_some_and(|x| x.kind.is_motorised())
+                {
+                    signal_approaches.insert(*approach);
+                }
+            }
+        }
         let green_ratio = if ratios.is_empty() {
             f64::NAN
         } else {
@@ -212,6 +233,10 @@ impl NetworkObserver {
             door_pairs: BTreeSet::new(),
             ped_by_level: Default::default(),
             ped_density: Vec::new(),
+            signal_approaches,
+            box_blocking_s: 0.0,
+            spillback_lane_s: 0.0,
+            observed_s: 0.0,
         }
     }
 
@@ -228,7 +253,24 @@ impl NetworkObserver {
         let dt = ns_to_secs(t1.saturating_sub(t0)).max(1e-9);
         let t1_s = ns_to_secs(t1);
         let start = *self.interval_start_s.get_or_insert(ns_to_secs(t0));
+        self.observed_s += dt;
         let motor = |a: &&AuditActor| a.class != crate::VehicleClass::Bicycle;
+        // Blocking the box, and queues reaching back to the junction behind.
+        let mut spilled: BTreeSet<LaneId> = BTreeSet::new();
+        for a in actors.iter().filter(motor) {
+            if a.speed_mps >= STOPPED_MPS {
+                continue;
+            }
+            if crate::audit::movement_state(world, a.lane, t1)
+                .is_some_and(|st| matches!(st, SignalState::Red | SignalState::RedAmber))
+            {
+                self.box_blocking_s += dt;
+            }
+            if self.signal_approaches.contains(&a.lane) && a.s_m - a.length_m < 2.0 {
+                spilled.insert(a.lane);
+            }
+        }
+        self.spillback_lane_s += dt * spilled.len() as f64;
         for a in actors.iter().filter(motor) {
             if self.measured.contains(&a.lane) {
                 self.acc_dist_m += a.speed_mps * dt;
@@ -351,6 +393,18 @@ impl NetworkObserver {
                 if !(0.3..4.0).contains(&v) {
                     continue;
                 }
+                // Steady walking only: along a pavement, clear of its ends, where a walker
+                // slows into a kerb or picks up speed off one. Those are not the
+                // speed-density relation, and they crowd the dense bins.
+                let steady = p.activity == crate::vru::PedActivity::Walking
+                    && world.try_lane(p.lane).is_some_and(|l| {
+                        l.kind == LaneKind::Sidewalk
+                            && p.s_m > STEADY_MARGIN_M
+                            && p.s_m < l.length_m - STEADY_MARGIN_M
+                    });
+                if !steady {
+                    continue;
+                }
                 let (cx, cy) = key(p.pos.x, p.pos.y);
                 let mut others = 0usize;
                 for dx in -1..=1 {
@@ -463,6 +517,12 @@ impl NetworkObserver {
             dooring_exposures: self.door_pairs.len(),
             pedestrian_speed_by_fruin_level: level_speed,
             pedestrian_density: Summary::of(&self.ped_density),
+            box_blocking_s: self.box_blocking_s,
+            spillback_lane_s_per_h: if self.observed_s > 0.0 {
+                self.spillback_lane_s * 3600.0 / self.observed_s
+            } else {
+                f64::NAN
+            },
         }
     }
 }
@@ -526,6 +586,11 @@ pub struct NetworkReport {
     pub pedestrian_speed_by_fruin_level: Vec<Summary>,
     /// Pedestrians' local density, ped/m².
     pub pedestrian_density: Summary,
+    /// Vehicle-seconds stood inside a signalised junction on a red movement.
+    pub box_blocking_s: f64,
+    /// Lane-seconds per hour a standing queue reached back to a signalised approach's
+    /// start.
+    pub spillback_lane_s_per_h: f64,
 }
 
 impl NetworkReport {
@@ -570,6 +635,16 @@ impl NetworkReport {
                 band: (1000.0 / 4.0 / 60.0, 1000.0 / 1.8 / 60.0),
                 source: "NYC DOT Mobility Report 2019: Midtown core ≈ 5 mph (2017 taxi GPS, \
                          all-day; secondary); depends on demand, reported only",
+                tested: false,
+            },
+            Comparison {
+                metric: "blocking the box, vehicle-seconds",
+                measured: self.box_blocking_s,
+                samples: self.mfd.len(),
+                reference: 0.0,
+                band: (0.0, 0.0),
+                source: "NY VTL §1175 (\"Don't Block the Box\"): no driver enters an \
+                         intersection without room to leave it",
                 tested: false,
             },
             Comparison {
