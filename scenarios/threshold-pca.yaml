@@ -1,0 +1,70 @@
+# ============================================================================
+# A distributed PCA and CRL Generator with members failing: no single server can issue
+# a certificate or sign the list — what does that cost, and what survives?
+# ============================================================================
+#
+#     v2xw experiment run scenarios/threshold-pca.yaml --out runs/threshold-pca
+#
+# The credential-lifecycle fleet with its pseudonym top-ups inside the run (one-minute
+# i-periods), and the PCA and the CRL Generator each replaced by a 3-of-5 committee
+# (`security.threshold`, `v2xw_proto::threshold::session`). Three of the five PCA members
+# misbehave, one each way:
+#
+# * `pca-member-0` goes **offline** at 60 s: its requests are dropped; a round that was
+#   waiting on it times out (500 ms), it is excluded and the session restarts;
+# * `pca-member-1` is **malicious** throughout: its signature share is invalid, the
+#   coordinator catches it when it verifies shares (identifiable abort), excludes it and
+#   restarts;
+# * `pca-member-2` is **slow** by 200 ms per message: with `ask_all` the first three
+#   answers carry each round, so it costs only when it is one of the three.
+#
+# The sweep is the protocol, so the same failures are seen by each:
+#
+# * `frost-p256` — RFC 9591's two-round threshold Schnorr. Cheap, but its output is a
+#   Schnorr signature, not one an unmodified IEEE 1609.2 verifier accepts;
+# * `cggmp21-ecdsa` — threshold ECDSA whose output *is* a 1609.2 signature, at CGGMP21's
+#   measured cost (≈ 2.6 s of presigning per signature per party, 88 KiB per
+#   presignature; Silence Laboratories' benchmark, cited in the module);
+# * `umbrella` — the t-of-n umbrella authority of 05-protocols.md §5.4's placeholder:
+#   one FROST signature per umbrella covering `umbrella_leaves` (5, one period's batch)
+#   pseudonyms the device derives itself.
+#
+# Read: `phase2.committees.pca` (sessions, restarts, timeouts, invalid shares, bytes,
+# mean and max latency), `phase2.committee_failures`, top-up completion
+# (`phase2.topups_completed`, `vehicles_starved`) and the provisioning-stage latency.
+schema: v2xw/scenario/1
+
+meta:
+  name: threshold-pca
+  base: threshold-revocation-2of2.yaml
+  description: >-
+    The PCA and CRL Generator as 3-of-5 committees with one offline, one malicious and
+    one slow member, under FROST, threshold ECDSA and an umbrella authority.
+  tags: [study, threshold, frost, cggmp21, umbrella, pca, robustness, scms]
+  created: "2026-10-07"
+
+actors:
+  backend:
+    failures:
+      - {node: pca-member-0, mode: offline, from_s: 60.0}
+      - {node: pca-member-1, mode: malicious}
+      - {node: pca-member-2, mode: slow, extra_ms: 200.0}
+
+security:
+  threshold:
+    protocol: frost-p256
+    members: 5
+    quorum: 3
+    roles: [pca, crl]
+    umbrella_leaves: 5
+    umbrella_inner: frost-p256
+    round_timeout_ms: 500.0
+    retry_after_s: 10.0
+    ask_all: true
+    member_latency_ms: 20.0
+
+experiment:
+  sweep:
+    security.threshold.protocol: [frost-p256, cggmp21-ecdsa, umbrella]
+  seeds: [1]
+  replications: 1

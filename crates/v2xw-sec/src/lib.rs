@@ -66,6 +66,7 @@ pub mod error;
 pub mod hashedid;
 pub mod linkage;
 pub mod primitive;
+pub mod scheme;
 pub mod testctx;
 
 pub use crypto::{

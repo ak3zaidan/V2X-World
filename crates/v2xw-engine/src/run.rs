@@ -1135,9 +1135,17 @@ impl Engine {
         let scenario_for_radio = scenario.clone();
         let frag_plan = match scenario_for_radio.net.fragmenter.as_ref() {
             None => crate::frag::FragPlan::none(),
-            Some(choice) => crate::frag::FragPlan::from_choice(choice).map_err(|why| {
-                EngineError::Scenario(crate::error::ScenarioError::conflict("net.fragmenter", why))
-            })?,
+            Some(choice) => crate::frag::FragPlan::from_choice(choice)
+                .map_err(|why| {
+                    EngineError::Scenario(crate::error::ScenarioError::conflict(
+                        "net.fragmenter",
+                        why,
+                    ))
+                })?
+                .for_signature(
+                    &scenario_for_radio.security.signature,
+                    choice.params.get("hybrid_cert_bytes").is_some(),
+                ),
         };
         // The labeller reads the world's signal plans; built before the literal moves it.
         let app_truth = if scenario_for_radio.apps.enabled.is_empty() {
@@ -3862,12 +3870,17 @@ impl Engine {
         // `security.signature`: a scheme other than P-256 changes the octets on the air
         // (`crate::signature`); the SPDU the node built is the P-256 one. Everything below
         // — padding, fragmentation, the MTU check — sees the resized SPDU.
+        // Under the NDSS 2024 certificate cycle the post-quantum certificate travels in the
+        // cycle's fragments (`cert_cycle_piece` below), so an SPDU that attaches the
+        // classical certificate does not attach the post-quantum growth as well: counting
+        // it twice made every once-a-second certificate SPDU exceed the MTU.
+        let pq_cert_attached = tx.full_certificate && self.frag_plan.cert_cycle().is_none();
         let (tx_bytes, tx_envelope, tx_cert) = crate::signature::resize(
             &self.scenario.security.signature,
             tx.bytes,
             tx.envelope_bytes(),
             tx.cert_bytes(),
-            tx.full_certificate,
+            pq_cert_attached,
         );
         // Neither WSMP nor GeoNetworking can split an SDU, so everything that splits one
         // happens here, above the network layer (04-models.md §7.3, `crate::frag`). The

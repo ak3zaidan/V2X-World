@@ -464,6 +464,7 @@ pub static CHOICES: &[Choices] = &[
         narrowed_when: "real",
         narrowed_to: &REAL_SIGNATURES,
     },
+    choices("security.kem", &crate::signature::KEMS),
 ];
 
 /// How much of a scenario key this build actually acts on.
@@ -1031,9 +1032,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                'fragmenter/cert-cycle-partial-hybrid' carries the hybrid certificate in \
                the first α SPDUs of each 5-SPDU cycle. Every fragmented SDU is followed \
                per receiver to net.reassembly beside the loss 1 − Π(1 − p_i) its \
-               fragments' PHY success probabilities predict. No selectable signature \
-               makes a message that large yet, so params.sdu_padding_bytes pads every \
-               signed message (counted as payload) to stand in for a post-quantum one. \
+               fragments' PHY success probabilities predict. The post-quantum security.signature schemes produce messages \
+               that need it (an ML-DSA-44 BSM is several frames); \
+               params.sdu_padding_bytes still pads every signed message (counted as \
+               payload) to study a size no registered scheme has. The certificate cycle \
+               carries the selected post-quantum scheme's certificate unless \
+               params.hybrid_cert_bytes is set. \
                802.11p only.",
     },
     KeyStatus {
@@ -1151,26 +1155,64 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "security.signature",
         status: Status::Partial,
-        note: "ecdsa-p256, ecdsa-brainpoolp256r1, ecdsa-p384, hybrid-falcon512-ecdsa-p256 \
-               and hybrid-mldsa44-ecdsa-p256 change the octets of every signed message and \
-               attached certificate on the air by their published sizes (FIPS 204, \
-               Falcon-512, SEC 1). A hybrid SPDU above the network MTU is refused and \
-               counted until a fragmenter is selected. A hybrid is also charged its time: \
-               every signature and every verification costs the profile's ECDSA P-256 \
-               figure plus its Falcon-512 or ML-DSA-44 figure, and a profile that does not \
-               publish both is refused by name (the reference OBU publishes no \
-               post-quantum figure; obu/cohda-mk6c-qualcomm-9150, \
-               obu/generic-automotive-soc-no-hsm and obu/pq-capable-hypothetical do). \
-               brainpool and P-384 are charged the P-256 time: no shipped profile publishes \
-               a brainpool figure. Only ecdsa-p256 runs in real crypto mode. A hybrid is the \
-               credential system's scheme too (SCMS and CCMS): every certificate carries the \
-               post-quantum key and issuer signature, every signed backend message the \
-               post-quantum signature, and each authority and device pays both halves \
-               (authorities at the Raspberry Pi 5 liboqs figure, an upper bound for a \
-               server; devices at the Cohda MK6 figure). There is no post-quantum butterfly, \
-               so a device generates one post-quantum key per pseudonym certificate or \
-               ticket (Raspberry Pi 4 liboqs rate, no MK6 figure published) and uploads each \
+        note: "Any scheme in the registry (v2xw_sec::scheme::SIGNATURE_IDS; adding one is one \
+               module, docs/design/extending-crypto.md): classical ecdsa-p256, \
+               ecdsa-brainpoolp256r1, ecdsa-p384; hybrids (ECDSA P-256 with Falcon-512, \
+               ML-DSA-44 or ML-DSA-65 concatenated); pure ML-DSA-44/65/87, Falcon-512/1024 \
+               and SLH-DSA-SHA2-128s/128f. Each changes the octets of every signed message \
+               and attached certificate on the air by its parts' published sizes (FIPS 204, \
+               FIPS 205, Falcon, SEC 1; a pure scheme replaces the ECDSA fields); an SPDU \
+               above the network MTU is refused and counted unless a fragmenter is selected. \
+               Each is charged its time: every signature and verification costs the sum of \
+               its parts on the hardware profile, a profile with no figure for a part falls \
+               back to the catalogue anchor it names (crypto_anchors; derived by cycle ratio \
+               where nothing is published, and flagged), and a profile that prices none is \
+               refused by name (the reference OBU publishes no post-quantum figure). \
+               brainpool and P-384 are charged the P-256 time. Only ecdsa-p256 runs in real \
+               crypto mode. A post-quantum scheme is the credential system's too (SCMS and \
+               CCMS): every certificate carries the post-quantum key and issuer signature, \
+               every signed backend message the post-quantum signature, authorities pay at \
+               the Raspberry Pi 5 liboqs figure (an upper bound for a server) and devices at \
+               the Cohda MK6's; there is no post-quantum butterfly, so a device generates one \
+               post-quantum key per pseudonym certificate or ticket and uploads each \
                encrypted to the PCA or AA (v2xw_proto::hybrid).",
+    },
+    KeyStatus {
+        path: "security.kem",
+        status: Status::Wired,
+        note: "The key-encapsulation scheme wherever the credential system encrypts to the \
+               PCA or to a device (v2xw_sec::scheme::KEM_IDS): ecies-p256 (IEEE 1609.2's \
+               65-byte EciesP256EncryptedKey), ml-kem-512/768/1024 (FIPS 203: the ML-KEM \
+               ciphertext replaces the ephemeral point) or hybrid-ecies-p256-ml-kem-768 \
+               (both travel). Every encrypted-key structure grows by the ciphertext and every \
+               encryption and decryption pays an encapsulation or decapsulation (liboqs on a \
+               Raspberry Pi 5 for authorities, the Cohda MK6 or a cycle-ratio derivation for \
+               devices).",
+    },
+    KeyStatus {
+        path: "security.threshold",
+        status: Status::Wired,
+        note: "Committees replace single authorities (v2xw_proto::threshold): 'roles' picks \
+               the PCA (no single server can issue a certificate), the CRL Generator (the list \
+               is threshold-signed) and the linkage authorities (any quorum of a t-of-n \
+               committee releases a revoked device's seeds, instead of both of two). \
+               'protocol' is any registered one: frost-p256 (RFC 9591), cggmp21-ecdsa \
+               (threshold ECDSA, 1609.2-compatible output) or umbrella (one committee \
+               signature per umbrella_leaves derived pseudonyms; 05-protocols.md §5.4's \
+               placeholder binding). Every round crosses a member link (member_latency_ms) \
+               with its bytes and is charged per member; a member that misses \
+               round_timeout_ms is excluded and the session restarts, a malicious one is \
+               caught by its share, and fewer than a quorum fail the session until members \
+               return (retry_after_s). ETSI is refused.",
+    },
+    KeyStatus {
+        path: "actors.backend.failures",
+        status: Status::Wired,
+        note: "Backend servers that are 'offline' (deliveries dropped), 'slow' (extra_ms \
+               more service time per message) or 'malicious' (invalid threshold shares) \
+               between from_s and to_s. 'node' is a role (pca, la1, la2, ma, crlg, …) or a \
+               committee member, '<role>-member-<k>'. Two-of-two linkage with an LA down \
+               cannot revoke; a t-of-n committee with fewer than n − t + 1 down can.",
     },
     KeyStatus {
         path: "security.crypto_mode",
@@ -1578,6 +1620,7 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
         s,
         &mut v2xw_proto::ScmsParams::default(),
     ));
+    take(crate::crypto_config::check(s));
     for (i, a) in s.threats.attackers.iter().enumerate() {
         if let Some(kind) =
             a.id.strip_prefix("threat/attacker/legacy/")
@@ -1605,6 +1648,16 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 "is '{}', and the ETSI ITS PKI issues TS 103 097 certificates and \
                  authorization tickets; a station on it signs 'etsi103097' envelopes",
                 s.security.envelope
+            ),
+        ));
+    }
+    if !crate::signature::KEMS.contains(&s.security.kem.as_str()) {
+        e.push(conflict(
+            "security.kem",
+            format!(
+                "'{}' is not a key-encapsulation scheme this build models; allowed: {}",
+                s.security.kem,
+                crate::signature::KEMS.join(", ")
             ),
         ));
     }
@@ -2926,10 +2979,14 @@ fn nodes(s: &Scenario, e: &mut Vec<ScenarioError>) {
         // Under a hybrid signature the node makes and checks both signatures, so the
         // profile must publish both halves' costs (`v2xw_node::profile::signature_ops`).
         let (op, verify_op) = v2xw_node::profile::signature_ops(&s.security.signature);
-        let hybrid = op.starts_with("hybrid-");
+        let hybrid = v2xw_sec::scheme::op_components(op).is_some();
+        // A post-quantum scheme, hybrid or pure, must be priced both ways: no classical
+        // fallback exists for its verification.
+        let pq = v2xw_sec::scheme::signature(&s.security.signature)
+            .is_some_and(|x| x.mode != v2xw_sec::scheme::SchemeMode::Classical);
         let signs = |id: &str| {
             v2xw_node::profiles::get(id).is_none_or(|p| {
-                p.op_cost(op).is_some() && (!hybrid || p.op_cost(verify_op).is_some())
+                p.op_cost(op).is_some() && (!pq || p.op_cost(verify_op).is_some())
             })
         };
         let signing: Vec<&str> = obus.iter().copied().filter(|id| signs(id)).collect();
@@ -2943,6 +3000,13 @@ fn nodes(s: &Scenario, e: &mut Vec<ScenarioError>) {
                          on the vehicle's own hardware, and its cost is the two published \
                          costs together; on-board units that publish both: {}",
                         s.security.signature,
+                        signing.join(", ")
+                    )
+                } else if pq {
+                    format!(
+                        "'{id}' prices neither {op} nor {verify_op} (no published figure, and \
+                         no crypto_anchors entry the catalogue prices it on); on-board units \
+                         that price both: {}",
                         signing.join(", ")
                     )
                 } else {

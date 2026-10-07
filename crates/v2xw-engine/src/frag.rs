@@ -177,6 +177,43 @@ impl FragPlan {
         })
     }
 
+    /// The plan with the certificate cycle carrying the scenario's own post-quantum
+    /// certificate, unless the scenario set `hybrid_cert_bytes` itself.
+    ///
+    /// The cycle's default is NDSS 2024's measured Falcon-512 hybrid certificate (858 B,
+    /// Fig. 4). Another scheme's certificate is that one plus the difference between the
+    /// two schemes' certificate growth, both derived from their cited sizes
+    /// (`v2xw_sec::scheme::SignatureScheme::extra_octets`): ML-DSA-44 hybrid is 858 +
+    /// (3,732 − 1,563) = 3,027 B. A classical scheme keeps the default, which is the NDSS
+    /// study as published.
+    #[must_use]
+    pub fn for_signature(mut self, signature: &str, overridden: bool) -> Self {
+        if overridden {
+            return self;
+        }
+        let Some(Strategy::CertCycle(c)) = self.strategy.as_ref() else {
+            return self;
+        };
+        let (Some(scheme), Some(falcon)) = (
+            v2xw_sec::scheme::signature(signature),
+            v2xw_sec::scheme::signature("hybrid-falcon512-ecdsa-p256"),
+        ) else {
+            return self;
+        };
+        if scheme.mode == v2xw_sec::scheme::SchemeMode::Classical {
+            return self;
+        }
+        let mut p = *c.params();
+        let delta = i64::from(scheme.extra_octets().1) - i64::from(falcon.extra_octets().1);
+        p.hybrid_cert_bytes = u32::try_from(
+            (i64::from(v2xw_net::frag::cert_cycle::FALCON512_HYBRID_CERTIFICATE_BYTES) + delta)
+                .max(1),
+        )
+        .unwrap_or(u32::MAX);
+        self.strategy = Some(Strategy::CertCycle(CertCyclePartialHybrid::new(p)));
+        self
+    }
+
     /// How an SDU of `bytes` octets goes on the air over a network layer of MTU `mtu`: as
     /// one whole frame or as `n` pieces or segments. `None` for the strategies that never
     /// split a message (`none`, and the certificate cycle, which splits the certificate).

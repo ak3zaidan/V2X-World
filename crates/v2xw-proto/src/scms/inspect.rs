@@ -38,6 +38,14 @@ impl ScmsRun {
             .find(|(id, _)| *id == node)
             .map(|(_, r)| (*r).to_string())
             .or_else(|| g.electors.contains(&node).then(|| "electors".to_string()))
+            .or_else(|| {
+                self.state
+                    .committees
+                    .roles
+                    .iter()
+                    .find(|r| r.members.contains(&node))
+                    .map(|r| format!("{}-committee", r.role))
+            })
             .unwrap_or_else(|| "ee".to_string())
     }
 
@@ -294,6 +302,53 @@ impl ScmsRun {
             st.params.crl_cadence.as_nanos() / 1_000_000_000,
         );
         out.push(crlg);
+
+        // A committee that replaces a single authority: one entity per role, with what its
+        // sessions cost and how they went (`crate::threshold::session`).
+        for r in &st.committees.roles {
+            let id = format!("{}-committee", r.role);
+            let name = format!(
+                "{} committee ({}-of-{}, {})",
+                r.role.to_uppercase(),
+                r.quorum,
+                r.members.len(),
+                r.protocol.id()
+            );
+            let live = r
+                .members
+                .iter()
+                .filter(|m| !st.faults.offline(**m, now))
+                .count();
+            let mut e = entity(
+                k,
+                now,
+                sys,
+                &id,
+                &name,
+                // Drawn in the tier of the authority it replaces.
+                if r.role == "pca" { "ra" } else { "revocation" },
+                "Holds shares of the role's key; any quorum of members, coordinated over the \
+                 WAN, does what one server did, and fewer than a quorum can do nothing.",
+                None,
+                live >= usize::from(r.quorum),
+            );
+            let s = st.committees.stats.get(r.role).copied().unwrap_or_default();
+            e.set("protocol", r.protocol.id());
+            e.set("members", r.members.len() as u64);
+            e.set("members_live", live as u64);
+            e.set("quorum", u64::from(r.quorum));
+            e.set("sessions", s.sessions);
+            e.set("completed", s.completed);
+            e.set("failed", s.failed);
+            e.set("restarts", s.restarts);
+            e.set("timeouts", s.timeouts);
+            e.set("invalid_shares", s.invalid_shares);
+            e.set("rounds", s.rounds);
+            e.set("bytes", s.bytes);
+            e.set("mean_latency_ms", s.mean_latency_ns() / 1_000_000);
+            e.set("verifies_as", r.protocol.verifies_as());
+            out.push(e);
+        }
 
         let mut store = entity(
             k,

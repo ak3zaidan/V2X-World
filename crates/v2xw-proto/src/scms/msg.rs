@@ -484,6 +484,20 @@ pub enum ScmsMsg {
     },
     /// SCMS Manager → Policy Generator → RA: a new policy.
     PolicyUpdate(Box<crate::scms::governance::Policy>),
+    /// A committee round between a coordinator and a member (`crate::threshold::session`):
+    /// sized by the protocol, not by [`ScmsSizes`].
+    Committee(crate::threshold::session::CommitteeMsg),
+    /// The MA's timer: ask again any Linkage Authority whose seed has not arrived.
+    SeedRetry {
+        /// LA 1's chain.
+        lci1: Lci,
+        /// LA 2's chain.
+        lci2: Lci,
+        /// The revocation period.
+        i: u32,
+        /// How many times it has asked again.
+        tries: u32,
+    },
 }
 
 /// Every SCMS message size, in one place.
@@ -499,6 +513,14 @@ pub struct ScmsSizes {
     /// Under a hybrid scheme, one post-quantum public key as a device uploads it for each
     /// pseudonym certificate it requests; 0 under ECDSA.
     pub hybrid_key_upload_bytes: u32,
+    /// One encrypted-key structure wherever something is encrypted to the PCA or to a
+    /// device: 65 B for ECIES (`EciesP256EncryptedKey`), the ML-KEM layout under a
+    /// post-quantum `security.kem` (`crate::hybrid::KemSpec`).
+    pub enc_key_bytes: u32,
+    /// Leaf pseudonyms per issued credential: 1 normally, `k` under an umbrella authority,
+    /// where the PCA issues one umbrella per `k` leaves and the device derives the leaves
+    /// (`crate::threshold::umbrella`).
+    pub umbrella_leaves: u32,
 }
 
 const DERIVATION: &str = "components: 04-models.md §9.1 (measured envelope overhead), SEC 1 §2.3.3, FIPS 197 §5, \
@@ -515,6 +537,8 @@ impl ScmsSizes {
             params,
             hybrid_sig_bytes: 0,
             hybrid_key_upload_bytes: 0,
+            enc_key_bytes: ECIES_P256_ENCRYPTED_KEY_BYTES,
+            umbrella_leaves: 1,
         }
     }
 
@@ -525,10 +549,38 @@ impl ScmsSizes {
     pub fn with_hybrid(mut self, scheme: Option<&crate::hybrid::HybridScheme>) -> ScmsSizes {
         if let Some(h) = scheme {
             self.certs = self.certs.with_hybrid(h);
-            self.hybrid_sig_bytes = h.sig_bytes;
+            self.hybrid_sig_bytes = h.envelope_extra_bytes();
             self.hybrid_key_upload_bytes = h.key_upload_bytes();
         }
         self
+    }
+
+    /// The same deployment with a post-quantum KEM (`security.kem`): every encrypted-key
+    /// structure is the KEM's.
+    #[must_use]
+    pub const fn with_kem(mut self, kem: Option<&crate::hybrid::KemSpec>) -> ScmsSizes {
+        if let Some(k) = kem {
+            self.enc_key_bytes = k.wrapped_key_bytes;
+        }
+        self
+    }
+
+    /// The same deployment under an umbrella authority covering `leaves` pseudonyms per
+    /// issued credential.
+    #[must_use]
+    pub const fn with_umbrella(mut self, leaves: u32) -> ScmsSizes {
+        self.umbrella_leaves = if leaves == 0 { 1 } else { leaves };
+        self
+    }
+
+    /// How many issued credentials carry `n` pseudonyms.
+    const fn issued(&self, n: u32) -> u32 {
+        n.div_ceil(self.umbrella_leaves)
+    }
+
+    /// The digest-signed envelope every committee message carries.
+    pub const fn envelope_digest(&self) -> u32 {
+        self.env_digest()
     }
 
     /// A digest-signed envelope's overhead: measured for ECDSA, plus the post-quantum
@@ -649,7 +701,7 @@ impl ScmsSizes {
         WireSize::parameter(
             self.env_digest()
                 + self.params.linkage_chain_identifier_bytes
-                + n * (LINKAGE_VALUE_BYTES + ECIES_P256_ENCRYPTED_KEY_BYTES),
+                + n * (LINKAGE_VALUE_BYTES + self.enc_key_bytes),
             "linkage_chain_identifier_bytes",
         )
     }
@@ -659,9 +711,9 @@ impl ScmsSizes {
         WireSize::parameter(
             self.env_digest()
                 + n * (EC_POINT_COMPRESSED_BYTES
-                    + 2 * (LINKAGE_VALUE_BYTES + ECIES_P256_ENCRYPTED_KEY_BYTES)
+                    + 2 * (LINKAGE_VALUE_BYTES + self.enc_key_bytes)
                     + 2 * (self.params.linkage_chain_identifier_bytes
-                        + ECIES_P256_ENCRYPTED_KEY_BYTES)
+                        + self.enc_key_bytes)
                     + SHA256_BYTES),
             "linkage_chain_identifier_bytes",
         )
@@ -670,8 +722,9 @@ impl ScmsSizes {
     /// PCA → RA, and RA → device: `n` certificates, each with its sealed randomiser.
     pub const fn cert_batch(&self, n: u32) -> WireSize {
         WireSize::derived(
-            self.env_digest() + n * (self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES),
-            "envelope(digest) + n · (pseudonym certificate + ECIES wrapper)",
+            self.env_digest() + self.issued(n) * (self.certs.pseudonym.bytes() + self.enc_key_bytes),
+            "envelope(digest) + n · (pseudonym certificate + encrypted-key wrapper), n counted \
+             in issued credentials (one per umbrella under an umbrella authority)",
             DERIVATION,
         )
     }
@@ -681,7 +734,7 @@ impl ScmsSizes {
         WireSize::parameter(
             self.params.batch_container_bytes
                 + self.env_digest()
-                + n * (self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES),
+                + self.issued(n) * (self.certs.pseudonym.bytes() + self.enc_key_bytes),
             "batch_container_bytes",
         )
     }
@@ -702,7 +755,7 @@ impl ScmsSizes {
             self.env_cert()
                 + self.certs.pseudonym.bytes()
                 + self.params.report_payload_bytes
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+                + self.enc_key_bytes,
             "report_payload_bytes",
         )
     }

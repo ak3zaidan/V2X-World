@@ -1,0 +1,152 @@
+# ============================================================================
+# Two-of-two revocation with a Linkage Authority down — the baseline that
+# `threshold-revocation-3of5.yaml` is compared against.
+# ============================================================================
+#
+#     v2xw run scenarios/threshold-revocation-2of2.yaml --out runs/revoke-2of2
+#     v2xw run scenarios/threshold-revocation-3of5.yaml --out runs/revoke-3of5
+#
+# The credential-lifecycle fleet and calendar with liars on the road, the corroborating
+# Misbehaviour Authority deciding, and **LA2 offline from t = 90 s**. In the CAMP design a
+# CRL entry needs both chains' seeds at the revocation period (Brecht 2018 §VI-D), one at
+# each Linkage Authority, so with LA2 down every revocation decided after 90 s stalls: the
+# MA asks again every `seed_retry` (30 s, a model parameter) and gives up after ten tries.
+# Compare `phase2.crls_issued`, `revocation_latency_*` and `backend_deliveries_dropped`
+# with the 3-of-5 file, where the seeds are Shamir-shared over five linkage servers and
+# any three release them.
+#
+# What it does NOT measure: the LAs' other job. Provisioning still asks LA1 and LA2 for
+# pre-linkage values, so a top-up after 90 s fails here and in the 3-of-5 file alike —
+# the comparison is the revocation path, which is the one the owner's question is about.
+schema: v2xw/scenario/1
+
+meta:
+  name: threshold-revocation-2of2
+  description: >-
+    Revocation with CAMP's two Linkage Authorities, one of them down from 90 s: the
+    baseline for t-of-n linkage.
+  authors: [v2xw]
+  tags: [study, threshold, revocation, linkage, robustness, scms]
+  created: "2026-10-07"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  t0: "2027-03-04T08:00:00Z"
+  duration_s: 300.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: procedural
+    generator: world/source/procedural-grid
+    params:
+      cols: 5
+      rows: 8
+      block_x_m: 274.0
+      block_y_m: 80.0
+      lanes_per_direction: 2
+      lane_width_m: 3.5
+      sidewalk_m: 2.0
+      speed_limit_mps: 11.176
+      signalised: true
+      cycle_s: 60.0
+      amber_s: 3.0
+      crossings: true
+      block_buildings: true
+      building_height_m: 30.0
+      rsu_at_junctions: false
+      corner_radius_m: 4.5
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 1500.0
+  rsus:
+    - position_m: [548.0, 280.0, 0.0]
+      roles: [report-forward, crl, provisioning-proxy]
+      profile: rsu/commsignia-its-rs4
+  backend:
+    protocol: protocol/scms/camp
+    failures:
+      - {node: la2, mode: offline, from_s: 90.0}
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  tiers:
+    propagation: medium
+    phy: medium
+    mac: medium
+
+net:
+  layer: wsmp
+  uu:
+    id: cellular/uu/fixed-latency
+    params: {preset: 4g-east-coast}
+
+messages:
+  sets: [bsm]
+  codec_tier: uper
+
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: verify-all
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+  protocol:
+    id: protocol/scms/camp
+    params:
+      i_period_s: 60
+      cert_lifetime_s: 61
+      certs_per_period: 5
+      pool_periods: 2
+      topup_below_periods: 1
+      cert_shuffle_window_s: 5
+      first_batch_delay_s: 2
+      download_poll_interval_s: 2
+      enrolment_lifetime_s: 600
+      reenrol_lead_s: 120
+      report_shuffle_window_s: 30
+      crl_cadence_s: 30
+      crl_fetch_interval_s: 30
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.05
+      schedule:
+        from_s: 60.0
+        to_s: 300.0
+
+detection:
+  local:
+    - id: detect/legacy-12
+  ma:
+    id: threat/ma/corroborated
+
+metrics: [all]
+exporters: []

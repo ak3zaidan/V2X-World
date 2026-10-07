@@ -22,7 +22,9 @@ use v2xw_sec::linkage::{self, CrlLinkageEntry, LaId, LinkageSeed, LinkageValue, 
 use v2xw_sec::primitive::{PrimitiveId, PrimitiveOpKind};
 
 use crate::error::{ProtoError, Result};
+use crate::fault::{Fault, FaultPlan};
 use crate::kernel::{Delivery, Kernel, Outbox};
+use crate::threshold::session::{CommitteeMsg, Committees, Outcome, RoleSpec};
 use crate::net::{BackendNet, Link, Transport};
 use crate::pseudonym::{CertEvent, PseudonymStore, PseudonymStrategy};
 use crate::scms::governance::{DeviceTrust, Governance, Policy};
@@ -455,7 +457,62 @@ pub struct ScmsState {
     /// enrolled by verifying the signature on its provisioning request, which is charged
     /// where that happens.
     pub issued_enrolment: BTreeSet<NodeId>,
+    /// Backend servers that are down, slow or lying (`crate::fault`).
+    pub faults: FaultPlan,
+    /// The committees that replace single authorities, and their sessions
+    /// (`crate::threshold::session`); empty for the CAMP deployment.
+    pub committees: Committees<Pending>,
+    /// Committee sessions that failed for good, by role: work that never happened.
+    pub threshold_failures: BTreeMap<&'static str, u64>,
     next_run: u32,
+}
+
+/// What an authority does once its committee has signed: the continuation a committee
+/// session hands back.
+#[derive(Debug)]
+pub enum Pending {
+    /// The PCA sends the certified batch to the RA.
+    IssueBatch {
+        /// The device.
+        device: NodeId,
+        /// The i-period.
+        i: u32,
+        /// The certificates, computed before the committee signed.
+        credentials: Box<Vec<IssuedCredential>>,
+        /// The flow.
+        flow: FlowId,
+        /// Its run.
+        run: FlowRun,
+    },
+    /// The CRL Generator publishes the list it has.
+    PublishCrl {
+        /// The flow.
+        flow: FlowId,
+        /// Its run.
+        run: FlowRun,
+    },
+    /// The Misbehaviour Authority has reconstructed both chains' seeds.
+    SeedsReleased {
+        /// LA 1's chain.
+        lci1: Lci,
+        /// LA 2's chain.
+        lci2: Lci,
+        /// The revocation period.
+        i: u32,
+    },
+}
+
+/// How many times the MA asks a silent Linkage Authority again before giving the case up:
+/// with `ScmsParams::seed_retry` at 30 s, five minutes. A model parameter, uncited.
+pub const SEED_RETRY_MAX: u32 = 10;
+
+/// Committee member node ids start here, `COMMITTEE_STRIDE` apart per role.
+pub const COMMITTEE_NODE_BASE: u32 = 200;
+/// The id space each role's committee occupies.
+pub const COMMITTEE_STRIDE: u32 = 64;
+
+fn wrap_committee(m: CommitteeMsg) -> ScmsMsg {
+    ScmsMsg::Committee(m)
 }
 
 /// A deployment and the kernel it runs on.
@@ -486,8 +543,14 @@ impl ScmsRun {
     /// [`ProtoError::Size`] if the certificate profile does not encode.
     pub fn new_at(params: ScmsParams, t0: SimTime) -> Result<ScmsRun> {
         let nodes = ScmsNodes::default();
+        let umbrella_leaves = params
+            .threshold
+            .filter(|t| t.pca && t.protocol == crate::threshold::umbrella::ID)
+            .map_or(1, |t| t.protocol_params.umbrella_leaves);
         let sizes = ScmsSizes::new(CertificateSizes::measured()?, params.sizes)
-            .with_hybrid(params.hybrid.as_ref());
+            .with_hybrid(params.hybrid.as_ref())
+            .with_kem(params.kem.as_ref())
+            .with_umbrella(umbrella_leaves);
         let mut net = BackendNet::new();
         let backend = Link {
             latency: params.backend_link_latency,
@@ -507,6 +570,7 @@ impl ScmsRun {
             kernel.host(node, &spec, params.backend_profile);
         }
         host_governance(&mut kernel, &gov, &params);
+        let committees = build_committees(&params, &nodes, &mut kernel, sizes.envelope_digest());
         Ok(ScmsRun {
             state: ScmsState {
                 nodes,
@@ -529,10 +593,27 @@ impl ScmsRun {
                 lop: LopState::default(),
                 rng,
                 issued_enrolment: BTreeSet::new(),
+                faults: FaultPlan::default(),
+                committees,
+                threshold_failures: BTreeMap::new(),
                 next_run: 0,
             },
             kernel,
         })
+    }
+
+    /// Declares which backend servers are down, slow or lying, and when.
+    pub fn set_faults(&mut self, faults: Vec<Fault>) {
+        self.state.faults.faults = faults;
+    }
+
+    /// The committee member nodes of `role` (`pca`, `crl`, `linkage`), in index order.
+    pub fn committee_members(&self, role: &str) -> Vec<NodeId> {
+        self.state
+            .committees
+            .role(role)
+            .map(|r| self.state.committees.roles[r].members.clone())
+            .unwrap_or_default()
     }
 
     /// Adds a device, with its uplink to the privacy proxy and to the CRL store.
@@ -1079,6 +1160,7 @@ impl ScmsRun {
             scratch.host(node, &spec, p.backend_profile);
         }
         host_governance(&mut scratch, &self.state.gov, &p);
+        host_committees(&mut scratch, &self.state.committees, &p);
         // Every device already hosted keeps a host on the scratch kernel too, so a device
         // that is being provisioned is never the only one the handlers can address.
         scratch.host(
@@ -1102,6 +1184,8 @@ impl ScmsRun {
         // jobs where the run never sees them. The scratch run gets an empty shuffle; the
         // run's queue and its timer are put back untouched.
         let run_jobs = core::mem::take(&mut self.state.ra.jobs);
+        // A pre-run pool was issued long before the run's faults: they do not apply.
+        let run_faults = core::mem::take(&mut self.state.faults);
         let run_armed = core::mem::replace(&mut self.state.ra.shuffle_armed, false);
         self.enrol_at(device, 0);
         let mut outcome = Self::drain_into(&mut self.state, &mut self.kernel);
@@ -1115,17 +1199,29 @@ impl ScmsRun {
         let leftover = core::mem::replace(&mut self.state.ra.jobs, run_jobs);
         self.state.ra.jobs.extend(leftover);
         self.state.ra.shuffle_armed = run_armed;
+        self.state.faults = run_faults;
         outcome
     }
 
     fn drain_into(state: &mut ScmsState, kernel: &mut Kernel<ScmsMsg>) -> Result<()> {
         while let Some(d) = kernel.next_delivery() {
-            let profile = kernel.profile_of(d.to);
-            let mut out = state.outbox(profile, d.to);
-            let (at, to) = (d.at, d.to);
-            state.handle(d, &mut out)?;
-            kernel.dispatch(at, to, out)?;
+            Self::step(state, kernel, d)?;
         }
+        Ok(())
+    }
+
+    /// Handles one delivery: dropped if its receiver is offline, otherwise handled and
+    /// dispatched, with a slow receiver's extra time charged.
+    fn step(state: &mut ScmsState, kernel: &mut Kernel<ScmsMsg>, d: Delivery<ScmsMsg>) -> Result<()> {
+        if state.faults.offline(d.to, d.at) {
+            state.faults.dropped += 1;
+            return Ok(());
+        }
+        let profile = kernel.profile_of(d.to);
+        let mut out = state.outbox(profile, d.to, d.at);
+        let (at, to) = (d.at, d.to);
+        state.handle(d, &mut out)?;
+        kernel.dispatch(at, to, out)?;
         Ok(())
     }
 
@@ -1169,11 +1265,7 @@ impl ScmsRun {
     pub fn run_until(&mut self, horizon: SimTime) -> Result<()> {
         let ScmsRun { state, kernel } = self;
         while let Some(d) = kernel.next_delivery_before(horizon) {
-            let profile = kernel.profile_of(d.to);
-            let mut out = state.outbox(profile, d.to);
-            let (at, to) = (d.at, d.to);
-            state.handle(d, &mut out)?;
-            kernel.dispatch(at, to, out)?;
+            Self::step(state, kernel, d)?;
         }
         Ok(())
     }
@@ -1191,11 +1283,7 @@ impl ScmsRun {
     pub fn run(&mut self) -> Result<()> {
         let ScmsRun { state, kernel } = self;
         while let Some(d) = kernel.next_delivery() {
-            let profile = kernel.profile_of(d.to);
-            let mut out = state.outbox(profile, d.to);
-            let (at, to) = (d.at, d.to);
-            state.handle(d, &mut out)?;
-            kernel.dispatch(at, to, out)?;
+            Self::step(state, kernel, d)?;
         }
         Ok(())
     }
@@ -1205,24 +1293,153 @@ impl ScmsState {
     /// An empty outbox for an entity hosted on `profile`. Under a hybrid scheme every
     /// signature is two, and the post-quantum half is charged against the device's or the
     /// authority's published figure (`crate::hybrid`).
-    fn outbox(&self, profile: &'static str, to: NodeId) -> Outbox<ScmsMsg> {
-        let pq = self
-            .params
-            .hybrid
-            .map(|h| h.charge(self.devices.contains_key(&to)));
-        Outbox::new(profile).with_pq(pq)
+    fn outbox(&self, profile: &'static str, to: NodeId, at: SimTime) -> Outbox<ScmsMsg> {
+        let device = self.devices.contains_key(&to);
+        let pq = self.params.hybrid.map(|h| h.charge(device));
+        let kem = self.params.kem.map(|k| k.charge(device));
+        let mut out = Outbox::new(profile).with_pq(pq).with_kem(kem);
+        // A slow backend server pays its extra time on everything it handles
+        // (`crate::fault`).
+        let extra = self.faults.slow_extra(to, at);
+        if extra > Duration::ZERO {
+            out.charge_time("fault/slow", extra);
+        }
+        out
     }
 
-    /// `n` signatures: ECDSA, and under a hybrid scheme the post-quantum one as well.
+    /// The PCA's answer to the RA: the certified batch.
+    fn send_batch(
+        &mut self,
+        device: NodeId,
+        i: u32,
+        credentials: Vec<IssuedCredential>,
+        flow: FlowId,
+        run: FlowRun,
+        out: &mut Outbox<ScmsMsg>,
+    ) {
+        let n = self.nodes;
+        let count = u32::try_from(credentials.len()).unwrap_or(u32::MAX);
+        if self.pca.certified_runs.insert(run) {
+            out.stage_at(StageId::Certified, n.pca, None, flow, run);
+        }
+        out.send(
+            n.ra,
+            ScmsMsg::CertResponse {
+                device,
+                i,
+                credentials: Box::new(credentials),
+            },
+            "cert-response",
+            self.sizes.cert_batch(count),
+            Transport::BackendNet,
+            flow,
+            run,
+        );
+    }
+
+    /// What an authority does once its committee has signed.
+    fn resume(&mut self, cont: Pending, _at: SimTime, out: &mut Outbox<ScmsMsg>) -> Result<()> {
+        let n = self.nodes;
+        match cont {
+            Pending::IssueBatch {
+                device,
+                i,
+                credentials,
+                flow,
+                run,
+            } => self.send_batch(device, i, *credentials, flow, run, out),
+            Pending::PublishCrl { flow, run } => {
+                // The simulation's real ECDSA signature stands in for the committee's (a
+                // CGGMP21 output *is* one; a FROST one is a Schnorr signature the size
+                // model carries).
+                self.crlg.signature = self.gov.sign_as("crlg", &crl_digest(&self.crlg.entries));
+                self.crlg.versions += 1;
+                let entries = u32::try_from(self.crlg.entries.len()).unwrap_or(u32::MAX);
+                for (to, step) in [(n.crl_store, "crl-publish"), (n.crl_broadcast, "crl-broadcast")] {
+                    out.send(
+                        to,
+                        ScmsMsg::CrlPublish { entries },
+                        step,
+                        self.sizes.crl(entries),
+                        Transport::BackendNet,
+                        flow,
+                        run,
+                    );
+                }
+            }
+            Pending::SeedsReleased { lci1, lci2, i } => {
+                // The MA holds a quorum of verified shares of each chain's `ls(i)` and
+                // interpolates them. The value it obtains is the one the dealer shared:
+                // the LA's own `ls(i)`, computed here from the chain it dealt.
+                let mut seeds = [None, None];
+                for (k, (la, lci)) in [(LaIndex::One, lci1), (LaIndex::Two, lci2)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let st = &self.la[la.idx()];
+                    if let Some(ls0) = st.chains.get(&lci).copied() {
+                        seeds[k] = Some((st.la_id, linkage::linkage_seed_at(st.la_id, ls0, i)));
+                    }
+                }
+                let (Some(la1), Some(la2)) = (seeds[0], seeds[1]) else {
+                    if let Some(case) = self.ma.case.as_mut() {
+                        case.done = true;
+                    }
+                    return Ok(());
+                };
+                let Some(case) = self.ma.case.as_mut() else {
+                    return Ok(());
+                };
+                case.seeds = [Some(la1), Some(la2)];
+                let (jmax, crl_run) = (case.jmax, case.crl_run);
+                out.send(
+                    n.crlg,
+                    ScmsMsg::CrlAppend { i, la1, la2, jmax },
+                    "crl-append",
+                    self.sizes.crl_append(),
+                    Transport::BackendNet,
+                    FlowId::CrlIssuance,
+                    crl_run,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// `n` signatures: ECDSA unless the scheme is pure post-quantum, and the
+    /// post-quantum one under a hybrid or pure scheme.
     fn sign(out: &mut Outbox<ScmsMsg>, n: u32) {
-        out.compute(OpDescriptor::new(ECDSA, PrimitiveOpKind::Sign, n));
+        if out.classical_signs() {
+            out.compute(OpDescriptor::new(ECDSA, PrimitiveOpKind::Sign, n));
+        }
         out.charge_pq(PrimitiveOpKind::Sign, n);
     }
 
     /// `n` verifications, both halves under a hybrid scheme.
     fn verify(out: &mut Outbox<ScmsMsg>, n: u32) {
-        out.compute(OpDescriptor::new(ECDSA, PrimitiveOpKind::Verify, n));
+        if out.classical_signs() {
+            out.compute(OpDescriptor::new(ECDSA, PrimitiveOpKind::Verify, n));
+        }
         out.charge_pq(PrimitiveOpKind::Verify, n);
+    }
+
+    /// `n` decryptions of an encrypted-key structure: one ECIES scalar multiplication
+    /// unless the KEM is pure post-quantum, plus an ML-KEM decapsulation under a
+    /// post-quantum or hybrid `security.kem`.
+    fn decrypt(out: &mut Outbox<ScmsMsg>, n: u32) {
+        if out.ecies() {
+            Self::scalar_mults(out, n);
+        }
+        out.charge_kem(PrimitiveOpKind::Verify, n);
+    }
+
+    /// `n` encryptions to a recipient: the ECIES scalar multiplication and/or an ML-KEM
+    /// encapsulation, as [`ScmsState::decrypt`].
+    fn encrypt(out: &mut Outbox<ScmsMsg>, n: u32) {
+        if out.ecies() {
+            Self::scalar_mults(out, n);
+        }
+        out.charge_kem(PrimitiveOpKind::Sign, n);
     }
 
     /// One elliptic-curve scalar multiplication, charged against the ECQV descriptor,
@@ -1405,7 +1622,12 @@ impl ScmsState {
                 let certs = req.periods.saturating_mul(req.jmax);
                 if out.is_hybrid() {
                     out.charge_pq(PrimitiveOpKind::KeyGen, certs);
-                    Self::scalar_mults(out, certs.saturating_mul(2));
+                    // Each upload is encrypted to the PCA: an ECIES ephemeral key and a
+                    // point multiplication, and/or an ML-KEM encapsulation.
+                    if out.ecies() {
+                        Self::scalar_mults(out, certs.saturating_mul(2));
+                    }
+                    out.charge_kem(PrimitiveOpKind::Sign, certs);
                 }
                 out.stage_at(StageId::Requested, req.device, None, flow, run);
                 out.send(
@@ -1497,10 +1719,13 @@ impl ScmsState {
                 );
                 out.stage_at(StageId::Acknowledged, to, None, flow, run);
 
-                // Butterfly expansion: two scalar multiplications per certificate, and
+                // Butterfly expansion (none under a pure post-quantum scheme, which has no
+                // elliptic-curve key to expand): two scalar multiplications per certificate, and
                 // nothing that reveals the certified key, which only the PCA's `c` fixes.
                 let total = req.periods.saturating_mul(req.jmax);
-                Self::scalar_mults(out, 2 * total);
+                if out.classical_signs() {
+                    Self::scalar_mults(out, 2 * total);
+                }
                 let mut cocoons = BTreeMap::new();
                 for i in req.start_i..req.start_i + req.periods {
                     for j in 0..req.jmax {
@@ -1765,15 +1990,27 @@ impl ScmsState {
             }
             ScmsMsg::CertRequest { device, i, items } => {
                 let count = u32::try_from(items.len()).unwrap_or(u32::MAX);
-                // Per certificate: two ECIES decryptions of the pre-linkage values, one
-                // ECQV issuance, one ECIES encryption and one signature (05-protocols §3.2).
-                Self::scalar_mults(out, 4 * count);
-                // Under a hybrid scheme, one more decryption per certificate (the device's
-                // post-quantum key); `sign` adds the post-quantum signature on each.
-                if out.is_hybrid() {
+                // Per certificate: two decryptions of the pre-linkage values, one ECQV
+                // issuance, one encryption to the device and one signature (05-protocols
+                // §3.2). The decryptions and the encryption are ECIES scalar
+                // multiplications, ML-KEM operations under a post-quantum `security.kem`, or
+                // both under a hybrid one; a pure post-quantum certificate is explicit, so
+                // it has no ECQV issuance.
+                Self::decrypt(out, 2 * count);
+                if out.classical_signs() {
                     Self::scalar_mults(out, count);
                 }
-                Self::sign(out, count);
+                Self::encrypt(out, count);
+                // Under a post-quantum scheme, one more decryption per certificate (the
+                // device's post-quantum key); `sign` adds the post-quantum signature.
+                if out.is_hybrid() {
+                    Self::decrypt(out, count);
+                }
+                // A committee PCA signs through its session instead (below).
+                let committee = self.committees.role("pca");
+                if committee.is_none() {
+                    Self::sign(out, count);
+                }
                 let mut credentials = Vec::new();
                 for item in items.into_iter() {
                     let (Some(plv1), Some(plv2), Some(lci1), Some(lci2)) = (
@@ -1813,22 +2050,29 @@ impl ScmsState {
                         c,
                     });
                 }
-                if self.pca.certified_runs.insert(run) {
-                    out.stage_at(StageId::Certified, to, None, flow, run);
+                if let Some(role) = committee {
+                    // No single server can issue: the batch waits for the committee's
+                    // signatures, one per certificate (one per umbrella under an umbrella
+                    // authority, which the protocol accounts for).
+                    self.committees.start(
+                        role,
+                        count,
+                        Pending::IssueBatch {
+                            device,
+                            i,
+                            credentials: Box::new(credentials),
+                            flow,
+                            run,
+                        },
+                        at,
+                        flow,
+                        run,
+                        out,
+                        wrap_committee,
+                    );
+                    return Ok(());
                 }
-                out.send(
-                    n.ra,
-                    ScmsMsg::CertResponse {
-                        device,
-                        i,
-                        credentials: Box::new(credentials),
-                    },
-                    "cert-response",
-                    self.sizes.cert_batch(count),
-                    Transport::BackendNet,
-                    flow,
-                    run,
-                );
+                self.send_batch(device, i, credentials, flow, run, out);
             }
             ScmsMsg::CertResponse {
                 device,
@@ -1952,10 +2196,21 @@ impl ScmsState {
                 }
                 // One ECQV reconstruction per certificate on download (05-protocols §3.2).
                 let count = u32::try_from(credentials.len()).unwrap_or(u32::MAX);
-                out.compute(OpDescriptor::new(ECQV, PrimitiveOpKind::Verify, count));
-                // Under a hybrid scheme each certificate's post-quantum half is explicit:
-                // the device checks the PCA's post-quantum signature on every one.
-                out.charge_pq(PrimitiveOpKind::Verify, count);
+                if out.classical_signs() {
+                    out.compute(OpDescriptor::new(ECQV, PrimitiveOpKind::Verify, count));
+                }
+                // Under a post-quantum scheme each certificate's post-quantum half is
+                // explicit: the device checks the PCA's post-quantum signature on every one.
+                // Under a post-quantum KEM it decapsulates each certificate's wrapper.
+                let leaves = self.sizes.umbrella_leaves;
+                let issued = count.div_ceil(leaves.max(1));
+                out.charge_pq(PrimitiveOpKind::Verify, issued);
+                out.charge_kem(PrimitiveOpKind::Verify, issued);
+                if leaves > 1 {
+                    // Umbrella: the device derives each leaf and certifies it with its
+                    // umbrella key, one signature per leaf (`threshold::umbrella`).
+                    Self::sign(out, count);
+                }
                 for cred in credentials.into_iter() {
                     dev.credentials.insert((cred.i, cred.j), cred);
                 }
@@ -2226,6 +2481,38 @@ impl ScmsState {
                     return Ok(());
                 };
                 let i_rev = case.i_rev;
+                if let Some(role) = self.committees.role("linkage") {
+                    // t-of-n linkage: the seeds are released by any quorum of the
+                    // committee, two secrets per revocation (`threshold::linkage`).
+                    self.committees.start(
+                        role,
+                        2,
+                        Pending::SeedsReleased {
+                            lci1,
+                            lci2,
+                            i: i_rev,
+                        },
+                        at,
+                        flow,
+                        run,
+                        out,
+                        wrap_committee,
+                    );
+                    return Ok(());
+                }
+                // Two-of-two: both LAs must answer; the MA asks again after `seed_retry`
+                // if one has not (a down LA blocks the revocation until it returns).
+                out.start_timer(
+                    self.params.seed_retry,
+                    ScmsMsg::SeedRetry {
+                        lci1,
+                        lci2,
+                        i: i_rev,
+                        tries: 0,
+                    },
+                    flow,
+                    run,
+                );
                 for (la, lci) in [(LaIndex::One, lci1), (LaIndex::Two, lci2)] {
                     out.send(
                         self.nodes.la(la),
@@ -2290,6 +2577,61 @@ impl ScmsState {
                     );
                 }
             }
+            ScmsMsg::SeedRetry { lci1, lci2, i, tries } => {
+                let Some(case) = self.ma.case.as_ref() else {
+                    return Ok(());
+                };
+                // A timer from an earlier case, a case already complete, or one that has
+                // asked enough: nothing to do.
+                if case.run != run
+                    || case.done
+                    || (case.seeds[0].is_some() && case.seeds[1].is_some())
+                    || tries >= SEED_RETRY_MAX
+                {
+                    return Ok(());
+                }
+                let missing: Vec<(LaIndex, Lci)> = [(LaIndex::One, lci1), (LaIndex::Two, lci2)]
+                    .into_iter()
+                    .filter(|(la, _)| case.seeds[la.idx()].is_none())
+                    .collect();
+                out.start_timer(
+                    self.params.seed_retry,
+                    ScmsMsg::SeedRetry {
+                        lci1,
+                        lci2,
+                        i,
+                        tries: tries + 1,
+                    },
+                    flow,
+                    run,
+                );
+                for (la, lci) in missing {
+                    out.send(
+                        self.nodes.la(la),
+                        ScmsMsg::SeedRequest { la, lci, i },
+                        "seed-request",
+                        self.sizes.seed_request(),
+                        Transport::BackendNet,
+                        flow,
+                        run,
+                    );
+                }
+            }
+            ScmsMsg::Committee(m) => {
+                let outcome = self.committees.handle(m, at, to, &self.faults, out, wrap_committee);
+                match outcome {
+                    Some(Outcome::Done { cont, .. }) => self.resume(cont, at, out)?,
+                    Some(Outcome::Failed { cont }) => {
+                        let role = match cont {
+                            Pending::IssueBatch { .. } => "pca",
+                            Pending::PublishCrl { .. } => "crl",
+                            Pending::SeedsReleased { .. } => "linkage",
+                        };
+                        *self.threshold_failures.entry(role).or_insert(0) += 1;
+                    }
+                    None => {}
+                }
+            }
             ScmsMsg::CrlAppend { i, la1, la2, jmax } => {
                 let entry = CrlLinkageEntry {
                     i,
@@ -2304,7 +2646,10 @@ impl ScmsState {
                 if let Some(case) = self.ma.case.as_mut() {
                     case.done = true;
                 }
-                Self::sign(out, 1);
+                let crl_committee = self.committees.role("crl");
+                if crl_committee.is_none() {
+                    Self::sign(out, 1);
+                }
                 let entries = u32::try_from(self.crlg.entries.len()).unwrap_or(u32::MAX);
                 out.stage_at(
                     StageId::Issued,
@@ -2332,6 +2677,21 @@ impl ScmsState {
                     }
                     return Ok(());
                 }
+                if let Some(role) = crl_committee {
+                    // A t-of-n CRL Generator: the list is published once the committee
+                    // has signed it.
+                    self.committees.start(
+                        role,
+                        1,
+                        Pending::PublishCrl { flow, run },
+                        at,
+                        flow,
+                        run,
+                        out,
+                        wrap_committee,
+                    );
+                    return Ok(());
+                }
                 self.crlg.signature = self.gov.sign_as("crlg", &crl_digest(&self.crlg.entries));
                 self.crlg.versions += 1;
                 // The store first, then the broadcast path, so that two links with the
@@ -2357,6 +2717,19 @@ impl ScmsState {
             }
             ScmsMsg::CrlPublishTimer => {
                 self.crlg.publish_armed = false;
+                if let Some(role) = self.committees.role("crl") {
+                    self.committees.start(
+                        role,
+                        1,
+                        Pending::PublishCrl { flow, run },
+                        at,
+                        flow,
+                        run,
+                        out,
+                        wrap_committee,
+                    );
+                    return Ok(());
+                }
                 Self::sign(out, 1);
                 self.crlg.signature = self.gov.sign_as("crlg", &crl_digest(&self.crlg.entries));
                 self.crlg.versions += 1;
@@ -2769,6 +3142,84 @@ pub fn crl_bytes(sizes: &ScmsSizes, entries: u32) -> WireSize {
 
 /// The links the governance entities need: the SCMS Manager to the Policy Generator, the
 /// Policy Generator to the Registration Authority it publishes to.
+/// The committees a deployment's `threshold` field asks for, their member nodes hosted on
+/// `kernel` and linked to their coordinator over the inter-organisation WAN.
+fn build_committees(
+    params: &ScmsParams,
+    nodes: &ScmsNodes,
+    kernel: &mut Kernel<ScmsMsg>,
+    envelope: u32,
+) -> Committees<Pending> {
+    let Some(t) = params.threshold else {
+        return Committees::default();
+    };
+    let mut roles = Vec::new();
+    let mut add = |role: &'static str,
+                   slot: u32,
+                   coordinator: NodeId,
+                   members: u16,
+                   quorum: u16,
+                   protocol: &str| {
+        let Some(protocol) = crate::threshold::build(protocol, &t.protocol_params) else {
+            return;
+        };
+        let base = COMMITTEE_NODE_BASE + slot * COMMITTEE_STRIDE;
+        let members: Vec<NodeId> = (0..u32::from(members.min(64)))
+            .map(|k| NodeId::new(base + k))
+            .collect();
+        roles.push(RoleSpec {
+            role,
+            coordinator,
+            members,
+            quorum,
+            protocol,
+            round_timeout: t.round_timeout,
+            fanout_all: t.fanout_all,
+            max_attempts: t.max_attempts.max(1),
+            retry_after: t.retry_after,
+        });
+    };
+    if t.pca {
+        add("pca", 0, nodes.pca, t.members, t.quorum, t.protocol);
+    }
+    if t.crl {
+        // An umbrella is a credential-issuance structure; the CRL committee signs a list
+        // with the umbrella's inner protocol.
+        let p = if t.protocol == crate::threshold::umbrella::ID {
+            t.protocol_params.umbrella_inner
+        } else {
+            t.protocol
+        };
+        add("crl", 1, nodes.crlg, t.members, t.quorum, p);
+    }
+    if let Some((members, quorum)) = t.linkage {
+        add("linkage", 2, nodes.ma, members, quorum, crate::threshold::linkage::ID);
+    }
+    let committees = Committees::new(roles, envelope);
+    let link = Link {
+        latency: t.member_link_latency,
+        bandwidth_bps: params.backend_link_bandwidth_bps,
+        transport: Transport::BackendNet,
+    };
+    for r in &committees.roles {
+        for m in &r.members {
+            kernel.net_mut().connect(r.coordinator, *m, link);
+        }
+    }
+    host_committees(kernel, &committees, params);
+    committees
+}
+
+/// Hosts every committee member on `kernel` with the backend's service model and profile.
+fn host_committees(kernel: &mut Kernel<ScmsMsg>, committees: &Committees<Pending>, p: &ScmsParams) {
+    let spec = crate::service::ServiceModelSpec::new(p.backend_servers, p.backend_overhead);
+    for r in &committees.roles {
+        for m in &r.members {
+            kernel.host(*m, &spec, p.backend_profile);
+        }
+    }
+}
+
 fn governance_links(n: &ScmsNodes, gov: &Governance) -> Vec<(NodeId, NodeId)> {
     vec![(gov.nodes.manager, gov.nodes.pg), (gov.nodes.pg, n.ra)]
 }

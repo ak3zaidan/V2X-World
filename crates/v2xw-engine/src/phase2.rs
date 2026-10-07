@@ -934,6 +934,22 @@ pub struct Phase2Report {
     pub backend_errors: u64,
     /// The first of them, for the report.
     pub first_backend_error: String,
+    /// The `security.signature` scheme the credential system ran, and its mode
+    /// (`classical`, `hybrid`, `post-quantum`).
+    pub signature_scheme: String,
+    /// See [`Phase2Report::signature_scheme`].
+    pub signature_mode: String,
+    /// The `security.kem` scheme.
+    pub kem_scheme: String,
+    /// Per committee role (`pca`, `crl`, `linkage`): sessions, rounds, bytes, restarts,
+    /// timeouts, invalid shares, failures and latency (`v2xw_proto::threshold::session`).
+    pub committees: std::collections::BTreeMap<String, v2xw_proto::threshold::session::CommitteeStats>,
+    /// Committee sessions that failed for good, by role: certificates never issued, CRLs
+    /// never signed, revocations never resolved.
+    pub committee_failures: std::collections::BTreeMap<String, u64>,
+    /// Backend deliveries dropped because their receiver was offline
+    /// (`actors.backend.failures`).
+    pub backend_deliveries_dropped: u64,
     /// One row per armed attacker, in node order (ground truth, for the evaluation only):
     /// how long it lied, what the fleet reported about it and what the authority made of
     /// it, so a missed attacker can be told apart from one that was barely on the air.
@@ -1447,8 +1463,15 @@ impl Phase2 {
         // A hybrid `security.signature` is the credential system's scheme too: every
         // certificate and every signed backend message carries the post-quantum half, and
         // every entity pays for it (`v2xw_proto::hybrid`).
-        let hybrid = v2xw_proto::HybridScheme::from_signature(&scenario.security.signature);
+        // A post-quantum `security.kem` wraps every key encrypted to the PCA or a device;
+        // `security.threshold` puts committees in place of single authorities; and
+        // `actors.backend.failures` takes servers down (`crate::crypto_config`).
+        let kem = crate::crypto_config::kem_spec(scenario);
+        let hybrid = v2xw_proto::HybridScheme::from_signature(&scenario.security.signature)
+            .map(|h| h.with_kem(kem.as_ref()));
         scms_params.hybrid = hybrid;
+        scms_params.kem = kem;
+        scms_params.threshold = crate::crypto_config::threshold_deployment(scenario)?;
         let mut scms = ScmsRun::new_at(scms_params, 0).map_err(|e| {
             conflict(
                 "actors.backend",
@@ -1456,6 +1479,8 @@ impl Phase2 {
             )
         })?;
         apply_backend_topology(scenario, &mut scms)?;
+        let faults = crate::crypto_config::backend_faults(scenario, &scms)?;
+        scms.set_faults(faults);
         let params = LifecycleParams {
             scms: scms_params,
             ..params
@@ -1466,6 +1491,7 @@ impl Phase2 {
             ep.at_validity = params.scms.cert_lifetime;
             ep.butterfly_batch = params.jmax;
             ep.hybrid = hybrid;
+            ep.kem = kem;
             let mut run = v2xw_proto::etsi::ts102941::EtsiRun::new(ep).map_err(|e| {
                 conflict(
                     "security.protocol",
@@ -1519,7 +1545,14 @@ impl Phase2 {
             broadcast_version: 0,
             nodes: BTreeMap::new(),
             revocation: None,
-            report: Phase2Report::default(),
+            report: Phase2Report {
+                signature_scheme: scenario.security.signature.clone(),
+                signature_mode: v2xw_sec::scheme::signature(&scenario.security.signature)
+                    .map_or("classical", |x| x.mode.as_str())
+                    .to_string(),
+                kem_scheme: scenario.security.kem.clone(),
+                ..Phase2Report::default()
+            },
             observer: v2xw_threat::PrivacyObserver::cited_defaults(NodeId::new(u32::MAX)),
             link_claims: Vec::new(),
             tracker: EdgeTracker::default(),
@@ -1746,6 +1779,19 @@ impl Phase2 {
     pub fn report(&self) -> Phase2Report {
         let mut r = self.report.clone();
         r.access = self.access.report.clone();
+        let st = &self.scms.state;
+        r.committees = st
+            .committees
+            .stats
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), *v))
+            .collect();
+        r.committee_failures = st
+            .threshold_failures
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), *v))
+            .collect();
+        r.backend_deliveries_dropped = st.faults.dropped;
         r.reports_unsent = self.nodes.values().map(|n| n.outbox.len() as u64).sum();
         r
     }

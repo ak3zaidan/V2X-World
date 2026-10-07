@@ -17,7 +17,7 @@
 //! |---|---|---|
 //! | [`scms`] | `protocol/scms/camp` — the CAMP SCMS / IEEE 1609.2.1 | complete for the seven flows of 05-protocols §3.2 |
 //! | [`etsi`] | `protocol/etsi/ts102941` — the ETSI ITS PKI | enrolment, standard and butterfly authorization, ticket download, ECTL and CA-CRL distribution, TS 103 759 reporting; hand-written framing around real encoder certificate sizes (build decision D5) |
-//! | [`threshold`] | the surface an interactive threshold/umbrella protocol needs | trait surface plus one shape proof; the owner's scheme is pending |
+//! | [`threshold`] | interactive multi-party protocols: FROST (RFC 9591), threshold ECDSA (CGGMP21), a t-of-n umbrella authority, t-of-n linkage release — run by a protocol-agnostic session engine as committees replacing the SCMS PCA, CRL Generator and Linkage Authorities | the umbrella binding is 05-protocols §5.4's placeholder; the owner's scheme replaces that one module |
 //!
 //! # The invariants this crate is responsible for
 //!
@@ -77,6 +77,7 @@
 
 pub mod error;
 pub mod etsi;
+pub mod fault;
 pub mod hybrid;
 pub mod kernel;
 pub mod net;
@@ -93,7 +94,7 @@ pub mod view;
 
 pub use error::{ProtoError, Result};
 pub use hybrid::HybridScheme;
-pub use kernel::{Delivery, Kernel, Outbox, PqCharge};
+pub use kernel::{Delivery, Kernel, KemCharge, Outbox, PqCharge};
 pub use net::{BackendNet, Link, Transport};
 pub use overhead::{AirInterface, MessageOverhead, OverheadProfile, Payload};
 pub use pseudonym::{CertEvent, ChangeReason, ChangeTrigger, PseudonymStore, PseudonymStrategy};
@@ -109,8 +110,10 @@ pub use spec::{
     StorageCounter, TrustBoundary, ValidityPolicy, separation_violations,
 };
 pub use stage::{FlowId, FlowRun, StageId, StageLog, StageStamp, WireStep};
+pub use fault::{Fault, FaultKind, FaultPlan};
+pub use hybrid::KemSpec;
 pub use threshold::{
-    Committee, FrostShapedPlaceholder, RefreshPolicy, RoundMessage, RoundPlan, ThresholdOp,
+    Committee, ProtocolParams, RefreshPolicy, RoundMessage, RoundPlan, StarRound, ThresholdOp,
     ThresholdProtocol, UmbrellaScheme,
 };
 

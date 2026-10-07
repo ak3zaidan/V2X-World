@@ -1,0 +1,179 @@
+# ============================================================================
+# What does post-quantum signing cost a fleet? Classical against hybrid against
+# pure post-quantum, on the same traffic.
+# ============================================================================
+#
+#     v2xw experiment run scenarios/pq-signatures.yaml --out runs/pq-signatures
+#
+# One grid, one fleet, one SCMS, the same seed in every cell; only `security.signature`
+# changes. Each scheme is described once in `v2xw_sec::scheme` and the sweep values are
+# its registry ids, so a scheme someone registers (docs/design/extending-crypto.md) can be
+# appended to the list below and nothing else changes.
+#
+# ## What it measures
+#
+# * **Airtime and channel load** — `cbr`, `mac_*`, `frame_bytes`: a BSM signed with
+#   ML-DSA-44 is ~2.5 kB before its certificate, so every message is several fragments.
+# * **Delivery at distance** — `pdr_by_distance`, `net.reassembly`: a fragmented SDU is
+#   lost if any fragment is, so its loss is 1 − Π(1 − pᵢ) of its fragments'.
+# * **Latency** — `e2e_latency`, `sign_queue_*`, `verify_queue_*`: both halves of a hybrid
+#   are made and checked on the OBU (Raspberry Pi 4 liboqs figures; parameter sets with no
+#   published Pi 4 figure are derived by the pqm4 cycle ratio and flagged).
+# * **Backend load and certificate provisioning bytes** — the run report's backend view
+#   (`backend.state`) and `phase2.*`: with no post-quantum butterfly the device uploads
+#   one post-quantum key per certificate, every certificate carries a post-quantum key and
+#   issuer signature, and every backend message a post-quantum signature.
+#
+# ## What it does NOT measure
+#
+# * **Real post-quantum arithmetic.** Sizes and costs are the standards' and the cited
+#   benchmarks'; `crypto_mode: real` runs ECDSA P-256 only and refuses the others.
+# * **A standardised wire format.** No IEEE 1609.2 or TS 103 097 structure for a
+#   post-quantum signature exists; the hybrids are raw concatenation (05-protocols.md
+#   §5.3) and the pure schemes replace the ECDSA fields in place.
+# * **The NDSS 2024 certificate cycle** — that is `pq-certificate-cycle.yaml`. Here every
+#   message is split by the generic fragmenter, because an ML-DSA signature alone is
+#   larger than the 1,400-octet WSMP MTU and the cycle only moves the certificate.
+# * **Post-quantum encryption to the PCA** — this file keeps ECIES so the signature is the
+#   only variable; `pq-full-stack.yaml` adds ML-KEM-768.
+schema: v2xw/scenario/1
+
+meta:
+  name: pq-signatures
+  description: >-
+    The same fleet and SCMS under classical, hybrid and pure post-quantum signatures:
+    airtime, delivery at distance, signing and verification latency, backend load and
+    provisioning bytes.
+  authors: [v2xw]
+  tags: [study, post-quantum, pq, hybrid, ml-dsa, falcon, fragmentation, scms]
+  created: "2026-10-07"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  t0: "2027-03-04T08:00:00Z"
+  duration_s: 120.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: procedural
+    generator: world/source/procedural-grid
+    params:
+      cols: 5
+      rows: 8
+      block_x_m: 274.0
+      block_y_m: 80.0
+      lanes_per_direction: 2
+      lane_width_m: 3.5
+      sidewalk_m: 2.0
+      speed_limit_mps: 11.176
+      signalised: true
+      cycle_s: 60.0
+      amber_s: 3.0
+      crossings: true
+      block_buildings: true
+      building_height_m: 30.0
+      rsu_at_junctions: false
+      corner_radius_m: 4.5
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 1500.0
+  rsus:
+    - position_m: [548.0, 280.0, 0.0]
+      roles: [report-forward, crl, provisioning-proxy]
+      profile: rsu/commsignia-its-rs4
+  backend:
+    protocol: protocol/scms/camp
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  tiers:
+    propagation: medium
+    phy: medium
+    mac: medium
+
+net:
+  layer: wsmp
+  # Every scheme's message has to get on the air: generic SDU fragmentation, reassembled
+  # per sender, so the cost of a scheme shows as fragments and reassembly loss rather than
+  # as refusals at the MTU.
+  fragmenter:
+    id: fragmenter/generic-sdu
+  uu:
+    id: cellular/uu/fixed-latency
+    params: {preset: 4g-east-coast}
+
+messages:
+  sets: [bsm]
+  codec_tier: uper
+
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  kem: ecies-p256
+  crypto_mode: modeled
+  verification_policy: verify-all
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+  # The credential-lifecycle calendar, compressed so top-ups happen inside the run.
+  protocol:
+    id: protocol/scms/camp
+    params:
+      i_period_s: 60
+      cert_lifetime_s: 61
+      certs_per_period: 5
+      pool_periods: 2
+      topup_below_periods: 1
+      cert_shuffle_window_s: 5
+      first_batch_delay_s: 2
+      download_poll_interval_s: 2
+      report_shuffle_window_s: 30
+      crl_cadence_s: 30
+      crl_fetch_interval_s: 30
+
+nodes:
+  # A Cortex-A72 automotive SoC with no HSM: it publishes ECDSA, Falcon-512 and ML-DSA-44
+  # timings (Raspberry Pi 4, arXiv 2503.10238 Table 8) and names the Pi 4 liboqs anchor
+  # for the parameter sets it does not, which the catalogue derives and flags.
+  default_obu: obu/generic-automotive-soc-no-hsm
+  compute_tier: medium
+  backend_tier: medium
+
+threats:
+  attackers: []
+
+metrics: [all]
+exporters: []
+
+experiment:
+  sweep:
+    security.signature:
+      - ecdsa-p256
+      - hybrid-falcon512-ecdsa-p256
+      - falcon-512
+      - hybrid-mldsa44-ecdsa-p256
+      - ml-dsa-44
+      - hybrid-mldsa65-ecdsa-p256
+      - ml-dsa-87
+  seeds: [1]
+  replications: 1
