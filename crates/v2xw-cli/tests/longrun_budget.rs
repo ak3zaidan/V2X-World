@@ -42,6 +42,8 @@ fn a_long_run_holds_its_memory_and_its_cost_flat() {
         record: false,
         attach_world: false,
         verify: false,
+        stream_digest: false,
+        city: None,
         duration_s: Some(240.0),
         rate_veh_per_h: None,
         json: false,

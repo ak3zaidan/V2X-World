@@ -206,6 +206,12 @@ pub struct RunArgs {
     #[arg(long)]
     pub no_verify: bool,
 
+    /// With `--no-recording`: hash every record as it is produced (SHA-256, streaming,
+    /// nothing kept) and report it as `stream_digest`, so two scaling runs — at different
+    /// thread counts, say — can be compared bit for bit without writing either.
+    #[arg(long)]
+    pub digest: bool,
+
     /// Override `time.duration_s`. Changes the scenario hash.
     #[arg(long, value_name = "S")]
     pub duration_s: Option<f64>,
@@ -274,6 +280,7 @@ impl RunArgs {
             record: !self.no_recording,
             attach_world: self.attach_world,
             verify: !self.no_verify && !self.no_recording,
+            stream_digest: self.digest,
             duration_s: self.duration.or(self.duration_s),
             rate_veh_per_h: self.rate_veh_per_h,
             city: self.city.clone(),

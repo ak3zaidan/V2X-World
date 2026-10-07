@@ -93,7 +93,7 @@ traffic, as it does in the city.
 | [`manhattan-day.yaml`](manhattan-day.yaml) | a whole day of Midtown from midnight: demand by the hour from NYC DOT's counts (the night lull, the 08:00 peak, the afternoon plateau), the SCMS on its deployment calendar (weekly i-periods, a daily CRL), pseudonym changes all day, a few position liars from 06:00 to 20:00, metrics once a minute. Run it headless with `--record-level metrics --checkpoint-every 1h`; `docs/design/findings/long-runs.md` has what a day costs |
 | [`ccms-lifecycle.yaml`](ccms-lifecycle.yaml) | the European counterpart: CAMs over GeoNetworking, the ECTL and CA-CRL from the Distribution Centre, butterfly tickets the AA cannot link to the enrolment, TS 103 759 reports and passive revocation at the EA |
 | [`midtown-street-life.yaml`](midtown-street-life.yaml) | Midtown with its road users as they behave: pedestrians by age group who cross on DON'T WALK into a gap and jaywalk mid-block (more beside stopped traffic), groups, cyclists on conventional and e-bikes, motorcycles and delivery mopeds among the cars, vans, trucks and buses; the auditor counts conflicts and near misses, the `ped_*` metrics measure them |
-| [`scale/`](scale/) | the wall-clock ladder, 2 to 10,000 vehicles, with what the bulk spawn costs in realism stated in `scale/base.yaml` |
+| [`scale/`](scale/) | the wall-clock ladder, 2 to 10,000 vehicles, with what the bulk spawn costs in realism stated in `scale/base.yaml`; `scale/city.yaml` is the city-scale rung: a microscopic box in a mesoscopic Midtown with the radio following it (the `scale` section) |
 
 ## Running one
 

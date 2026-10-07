@@ -112,6 +112,99 @@ pub struct Scenario {
     /// A parameter sweep, when this file describes one (08-measurement-and-data.md §4).
     #[serde(default)]
     pub experiment: Option<Experiment>,
+    /// City scale (`crate::scale`): a microscopic focus region inside a mesoscopic city,
+    /// and the radio matched to it. Left out of the serialised scenario when absent, so a
+    /// scenario that does not mention it keeps its content hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<Scale>,
+}
+
+/// City scale: which traffic tier runs where, and how the radio follows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Scale {
+    /// The traffic tiers.
+    pub traffic: ScaleTraffic,
+    /// The radio's place in them.
+    #[serde(default)]
+    pub radio: ScaleRadio,
+}
+
+/// The traffic tiers of a city-scale run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScaleTraffic {
+    /// `mobility/tiered/meso-micro` — microscopic inside `region`, a queue network
+    /// outside — or `mobility/meso/queue`, the whole world as queues.
+    pub model: String,
+    /// The microscopic region, a geodetic box. The tiered model needs one.
+    #[serde(default)]
+    pub region: Option<GeoBbox>,
+    /// The queue network's parameters, SUMO MESO's defaults unless set.
+    #[serde(default)]
+    pub meso: ScaleMeso,
+}
+
+/// The queue network's parameters (Eissfeldt 2003; SUMO MESO's options).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ScaleMeso {
+    /// The longest a queue segment may be, metres (`--meso-edgelength`, 98).
+    pub segment_length_m: f64,
+    /// Headway from a free segment into a free one, seconds (`--meso-tauff`, 1.13).
+    pub tau_ff_s: f64,
+    /// Headway from a free segment into a jammed one, seconds (`--meso-taufj`, 1.13).
+    pub tau_fj_s: f64,
+    /// Headway from a jammed segment into a free one, seconds (`--meso-taujf`, 1.73).
+    pub tau_jf_s: f64,
+    /// Headway from a jammed segment into a jammed one, seconds (`--meso-taujj`, 1.4).
+    pub tau_jj_s: f64,
+    /// The occupancy share above which a segment is jammed; absent, SUMO's speed rule.
+    pub jam_threshold: Option<f64>,
+    /// Whether a signal holds the head of a queue while its movement is not green.
+    pub junction_control: bool,
+}
+
+impl Default for ScaleMeso {
+    fn default() -> Self {
+        Self {
+            segment_length_m: 98.0,
+            tau_ff_s: 1.13,
+            tau_fj_s: 1.13,
+            tau_jf_s: 1.73,
+            tau_jj_s: 1.4,
+            jam_threshold: None,
+            junction_control: true,
+        }
+    }
+}
+
+/// How the radio follows the traffic tiers.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ScaleRadio {
+    /// Whether the radio's focus region is the microscopic region: the declared tiers
+    /// inside it and the abstract propagation tier outside. Ignored when
+    /// `radio.tiers.focus` names a region of its own.
+    pub follows: bool,
+    /// How far outside the microscopic region a vehicle's radio stays on, metres; past it
+    /// a vehicle in the queue network neither transmits nor receives. Absent, the radio's
+    /// own reach (`radio.range`).
+    pub margin_m: Option<f64>,
+    /// Whether a vehicle in the margin (queued, within `margin_m` of the region) is also
+    /// a receiver. Off, it only transmits: the region hears it, and its own receptions —
+    /// most of a city's reception work — are not evaluated.
+    pub receive_in_margin: bool,
+}
+
+impl Default for ScaleRadio {
+    fn default() -> Self {
+        Self {
+            follows: true,
+            margin_m: None,
+            receive_in_margin: false,
+        }
+    }
 }
 
 /// `seed: 0x…`, `seed: "0x…"` or `seed: 12345`.
