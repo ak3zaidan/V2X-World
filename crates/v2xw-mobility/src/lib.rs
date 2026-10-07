@@ -15,7 +15,9 @@
 //! | The context slice a model may read | [`ctx`] | 03-interfaces.md §1.1 |
 //! | The start-of-step snapshot and the one neighbour query | [`snapshot`] | ADR 0004 §5-6 |
 //! | Vehicle classes and dimensions | [`classes`] | 04-models.md §2.7 |
-//! | Car-following (IDM) | [`carfollowing`] | 04-models.md §2.1 |
+//! | Car-following (IDM, EIDM, Krauss, Gipps, W99, ACC, CACC, platooning) | [`carfollowing`] | 04-models.md §2.1, `docs/models/driving-model-library.md` |
+//! | Cooperative awareness for CACC (what V2X delivered) | [`coop`] | — |
+//! | Sub-lane lateral model (SL2015) | [`lateral`] | — |
 //! | Lane change (MOBIL) | [`lanechange`] | 04-models.md §2.2 |
 //! | Intersections (gap acceptance, fixed-time signals, two-colouring) | [`intersection`] | 04-models.md §2.3 |
 //! | Routing (Dijkstra, dynamic rerouting) | [`routing`] | 04-models.md §2.4 |
@@ -95,6 +97,7 @@ pub mod calibration;
 pub mod carfollowing;
 pub mod classes;
 pub mod clock;
+pub mod coop;
 pub mod ctx;
 pub mod demand;
 pub mod engine;
@@ -107,6 +110,7 @@ pub mod kinematic;
 pub mod lamps;
 pub mod lanechange;
 pub mod network;
+pub mod lateral;
 pub mod routing;
 pub mod rules;
 pub mod snapshot;
@@ -196,7 +200,10 @@ pub fn model_cards() -> Vec<(String, v2xw_core::card::ModelCard)> {
         clock::none::card(),
         kinematic::card(&kinematic::LaneFollowParams::default()),
         engine::card(&engine_params, carfollowing::idm::MODEL_ID),
+        lateral::sl2015::card(&lateral::Sl2015Params::default()),
     ];
+    // The driving-model library: every selectable car-following model at its defaults.
+    cards.extend(carfollowing::library::cards());
     cards.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.version.cmp(&b.version)));
     cards.into_iter().map(|c| (c.id.clone(), c)).collect()
 }

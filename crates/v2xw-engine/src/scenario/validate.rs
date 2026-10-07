@@ -759,6 +759,18 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "What share of vehicles carry a radio. 0 is a legal pure-traffic run.",
     },
     KeyStatus {
+        path: "actors.vehicles.driving",
+        status: Status::Wired,
+        note: "The driving-model library: 'car_following' (every class) and 'by_class' \
+               each pick a model — idm, eidm, krauss, gipps, w99, acc, or the cooperative \
+               cacc-milanes, cacc-ploeg and cacc-path, which drive on the BSMs and CAMs the \
+               network actually delivered and fall back to ACC when they are lost or late \
+               — with optional 'params' and a 'share' of the class; 'cooperative' sets the \
+               message age limit and association gate; 'lateral' turns on the SL2015 \
+               sub-lane model. Left out, the engine's own IDM drives. See \
+               docs/models/driving-model-library.md.",
+    },
+    KeyStatus {
         path: "actors.vehicles.classes",
         status: Status::Wired,
         note: "The fleet mix: each vehicle's class is drawn with these shares, and its \
@@ -1674,6 +1686,7 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     energy(s, &mut e);
     experiment(s, &mut e);
     security_backend(s, &mut e);
+    e.extend(crate::driving::validate(s));
     unreachable_keys(s, &mut e);
     e
 }

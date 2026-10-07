@@ -440,6 +440,17 @@ pub struct Vehicles {
     /// run with no radio.
     #[serde(default = "Vehicles::default_equipped")]
     pub equipped_fraction: f64,
+    /// The driving-model library: which car-following model each class drives (IDM,
+    /// EIDM, Krauss, Gipps, Wiedemann 99, ACC, the V2X-dependent CACC and platoon laws),
+    /// how cooperative vehicles age and associate what they hear, and the sub-lane lateral
+    /// model ([`v2xw_mobility::carfollowing::library::DrivingSpec`]). Left out of the
+    /// serialised scenario when it is the default, so a scenario that does not mention it
+    /// keeps its content hash and its behaviour.
+    #[serde(
+        default,
+        skip_serializing_if = "v2xw_mobility::carfollowing::library::DrivingSpec::is_default"
+    )]
+    pub driving: v2xw_mobility::carfollowing::library::DrivingSpec,
 }
 
 impl Vehicles {
@@ -454,6 +465,7 @@ impl Default for Vehicles {
             demand: DemandSpec::default(),
             classes: BTreeMap::new(),
             equipped_fraction: Vehicles::default_equipped(),
+            driving: v2xw_mobility::carfollowing::library::DrivingSpec::default(),
         }
     }
 }

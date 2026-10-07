@@ -107,6 +107,14 @@ pub trait Mobility: Model {
     fn exterior_lamps(&mut self, _ctx: &mut dyn MobCtx) -> Vec<(ActorId, u8)> {
         Vec::new()
     }
+
+    /// The cooperative-awareness link the tier's car-following models read
+    /// ([`crate::coop`]), which the kernel fills from what each node delivered. A provided
+    /// method: a tier without cooperative driving returns `None` and the kernel feeds
+    /// nothing.
+    fn cooperative(&self) -> Option<std::sync::Arc<crate::coop::CoopLink>> {
+        None
+    }
 }
 
 /// Longitudinal acceleration from the gap and the speed difference to the leader
@@ -141,6 +149,22 @@ pub trait CarFollowing: Model {
     /// per-class calibration of its own is explicit about which one it borrows.
     fn profile(&self, class: VehicleClass) -> DriverProfile {
         crate::carfollowing::idm::IdmPreset::Kesting2010.profile(class)
+    }
+
+    /// Called by the engine once per mobility step, before any `accel` of that step, with
+    /// the instant the step starts at and its length.
+    ///
+    /// Added for the driving-model library (`crate::carfollowing::library`): a
+    /// discrete-time model (Krauss, Gipps, the PATH and Ploeg controllers) needs the step
+    /// length, and a model with per-step noise needs the step index for its keyed stream.
+    /// Defaulted to nothing, so the IDM and every model outside this crate are unaffected.
+    fn begin_step(&self, _now: SimTime, _dt: Duration) {}
+
+    /// The cooperative-awareness link this model drives on, when it is a cooperative model
+    /// ([`crate::coop`]): the kernel writes the BSMs and CAMs each follower's node
+    /// delivered into it. Defaulted to `None`.
+    fn cooperative(&self) -> Option<std::sync::Arc<crate::coop::CoopLink>> {
+        None
     }
 }
 

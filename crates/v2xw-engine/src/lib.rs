@@ -63,6 +63,7 @@ pub mod city;
 pub mod crypto_config;
 pub mod ctx;
 pub mod daylight;
+pub mod driving;
 pub mod error;
 pub mod event;
 pub mod export;

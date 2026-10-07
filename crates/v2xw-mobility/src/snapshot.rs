@@ -72,6 +72,10 @@ pub struct NeighborOptions {
     /// Whether to classify the adjacent lanes as well. The lane-change model needs it;
     /// a single-lane road does not.
     pub sides: bool,
+    /// The sub-lane pair rule ([`crate::lateral::SublaneFilter`]), when a lateral model is
+    /// in force: a vehicle ahead in the lane that the ego can pass with the lawful lateral
+    /// clearance is not its leader. `None` (the default) is the lane-based search.
+    pub sublane: Option<crate::lateral::SublaneFilter>,
 }
 
 impl Default for NeighborOptions {
@@ -82,6 +86,7 @@ impl Default for NeighborOptions {
             max_lane_hops: 8,
             classes: ClassMask::MOTOR_TRAFFIC,
             sides: true,
+            sublane: None,
         }
     }
 }
@@ -284,7 +289,9 @@ impl ActorSnapshot {
         opts: NeighborOptions,
     ) -> Option<LeaderView> {
         // Leg one: the ego's own lane, ahead of the ego.
-        if let Some((s_front, actor)) = self.first_ahead(ego.lane, ego.s_m, Some(ego.actor)) {
+        if let Some((s_front, actor)) =
+            self.first_ahead_for(ego, ego.lane, ego.s_m, Some(ego.actor), opts)
+        {
             let cand = &self.get(actor)?.view;
             let gap = (s_front - cand.dims.length_m) - ego.s_m;
             if gap <= opts.lookahead_m {
@@ -303,7 +310,9 @@ impl ActorSnapshot {
             }
             let next = self.next_lane(world, lane, route, index, opts.classes)?;
             index = index.saturating_add(1);
-            if let Some((s_front, actor)) = self.first_ahead(next, f64::NEG_INFINITY, None) {
+            if let Some((s_front, actor)) =
+                self.first_ahead_for(ego, next, f64::NEG_INFINITY, None, opts)
+            {
                 let cand = &self.get(actor)?.view;
                 let gap = base + (s_front - cand.dims.length_m);
                 if gap <= opts.lookahead_m {
@@ -472,6 +481,28 @@ impl ActorSnapshot {
         list[start..]
             .iter()
             .find(|(_, a)| Some(*a) != skip)
+            .copied()
+    }
+
+    /// [`Self::first_ahead`], skipping vehicles the sub-lane rule lets the ego pass
+    /// ([`NeighborOptions::sublane`]); the plain search when no rule is set.
+    fn first_ahead_for(
+        &self,
+        ego: &VehicleView,
+        lane: LaneId,
+        s_m: f64,
+        skip: Option<ActorId>,
+        opts: NeighborOptions,
+    ) -> Option<(f64, ActorId)> {
+        let Some(filter) = opts.sublane else {
+            return self.first_ahead(lane, s_m, skip);
+        };
+        let list = self.on_lane(lane);
+        let start = list.partition_point(|(s, _)| *s <= s_m);
+        list[start..]
+            .iter()
+            .filter(|(_, a)| Some(*a) != skip)
+            .find(|(_, a)| self.get(*a).is_none_or(|c| filter.is_leader(ego, &c.view)))
             .copied()
     }
 
