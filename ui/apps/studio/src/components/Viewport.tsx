@@ -199,8 +199,15 @@ export function Viewport(): React.JSX.Element {
     // 09-ui §10 — keyboard control for the camera.
     const index = CAMERA_MODES.indexOf(useStudio.getState().cameraMode);
     if (ev.key === "[" || ev.key === "]") {
-      const next = CAMERA_MODES[(index + (ev.key === "]" ? 1 : CAMERA_MODES.length - 1)) % CAMERA_MODES.length];
-      engine.setCameraMode(next);
+      // Step past a view the viewer refuses (a street-level view before any vehicle exists, the
+      // roadside view on a map without masts). Trying only the next one left the keys stuck:
+      // Map → Chase was refused, the view stayed on Map, and the next press tried Chase again.
+      const step = ev.key === "]" ? 1 : CAMERA_MODES.length - 1;
+      for (let k = 1; k < CAMERA_MODES.length; k++) {
+        const next = CAMERA_MODES[(index + step * k) % CAMERA_MODES.length];
+        engine.setCameraMode(next);
+        if (useStudio.getState().cameraMode === next) break;
+      }
       ev.preventDefault();
     } else if (ev.key === "Escape") {
       void engine.selectActor(null);
