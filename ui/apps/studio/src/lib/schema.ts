@@ -11,19 +11,100 @@
  * an edit in the form is one patch operation with no translation layer.
  */
 
+/**
+ * One value a closed set offers, as the engine publishes it (`x-options`): the value the document
+ * holds, the words a person reads, one sentence on what choosing it does, and whether this build
+ * accepts it (a value the schema names and the loader refuses is shown, disabled, with its reason).
+ */
+export interface Choice {
+  readonly value: string | number;
+  readonly label: string;
+  readonly description?: string;
+  readonly available: boolean;
+}
+
+/** A named value for a number (`x-presets`): "Rush hour", "5 minutes (SAE J2945/1)". */
+export interface NumberPreset {
+  readonly label: string;
+  readonly value: number;
+  readonly note?: string;
+}
+
+/** One field of a list element, for a list edited row by row (attackers, detectors, jammers). */
+export interface ItemField {
+  /** The pointer inside the element: `/id`, `/fraction`, `/schedule/from_s`. */
+  readonly key: string;
+  readonly label: string;
+  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json";
+  readonly unit?: string;
+  readonly help?: string;
+  readonly min?: number;
+  readonly max?: number;
+  readonly choices?: readonly Choice[];
+  readonly choicesOpen?: boolean;
+}
+
 /** A widget in the scenario form. */
 export interface FormField {
   /** RFC 6901 JSON Pointer into the scenario document. */
   readonly pointer: string;
   readonly label: string;
   readonly group: string;
-  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json";
+  /**
+   * `multi` is a list of strings from a closed set (message sets, applications), edited as
+   * checkboxes; `list` is a list of objects edited element by element.
+   */
+  readonly kind: "string" | "number" | "integer" | "boolean" | "enum" | "json" | "multi" | "list";
   readonly unit?: string;
   readonly help?: string;
   readonly options?: readonly string[];
+  /** The options in words, when the engine published them. */
+  readonly choices?: readonly Choice[];
+  /** Whether a value outside `choices` may be typed (a model id the registry does not list). */
+  readonly choicesOpen?: boolean;
+  /** Whether the field may be left unset, which means "the engine's default". */
+  readonly nullable?: boolean;
+  readonly presets?: readonly NumberPreset[];
+  /** For a `list`: the fields of one element, and what "Add" appends. */
+  readonly itemFields?: readonly ItemField[];
+  readonly itemTemplate?: unknown;
   readonly min?: number;
   readonly max?: number;
   readonly step?: number;
+}
+
+/** The `x-options` rows of a published node, or `undefined`. */
+export function choicesOf(row: Record<string, unknown>): Choice[] | undefined {
+  const raw = row["x-options"];
+  if (!Array.isArray(raw)) return undefined;
+  const out: Choice[] = [];
+  for (const r of raw as unknown[]) {
+    if (r === null || typeof r !== "object") continue;
+    const o = r as Record<string, unknown>;
+    const value = o.value;
+    if (typeof value !== "string" && typeof value !== "number") continue;
+    out.push({
+      value,
+      label: typeof o.label === "string" && o.label !== "" ? o.label : String(value),
+      ...(typeof o.description === "string" && o.description !== "" ? { description: o.description } : {}),
+      available: o.available !== false,
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** The `x-presets` rows of a published node, or `undefined`. */
+export function presetsOf(row: Record<string, unknown>): NumberPreset[] | undefined {
+  const raw = row["x-presets"];
+  if (!Array.isArray(raw)) return undefined;
+  const out: NumberPreset[] = [];
+  for (const r of raw as unknown[]) {
+    if (r === null || typeof r !== "object") continue;
+    const o = r as Record<string, unknown>;
+    if (typeof o.label !== "string" || typeof o.value !== "number") continue;
+    out.push({ label: o.label, value: o.value, ...(typeof o.note === "string" ? { note: o.note } : {}) });
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 /** Read a JSON Pointer out of a document; `undefined` when any step is missing. */
@@ -321,6 +402,11 @@ export function fieldsFromPublished(
     ...(typeof row.unit === "string" && row.unit !== "" ? { unit: row.unit } : {}),
     ...(typeof row.description === "string" ? { help: row.description } : {}),
     ...(kind === "enum" && Array.isArray(row.enum) ? { options: row.enum.map(String) } : {}),
+    ...(kind === "enum" && !Array.isArray(row.enum) && choicesOf(row) ? { options: (choicesOf(row) ?? []).map((c) => String(c.value)) } : {}),
+    ...(kind === "enum" && choicesOf(row) ? { choices: choicesOf(row), choicesOpen: row["x-options-open"] === true } : {}),
+    ...(presetsOf(row) ? { presets: presetsOf(row) } : {}),
+    // An `Option` is marked on the schema node, after its leaf row was indexed.
+    ...(row["x-nullable"] === true || index.get(pointer)?.["x-nullable"] === true ? { nullable: true } : {}),
     ...(typeof row.minimum === "number" ? { min: row.minimum } : {}),
     ...(typeof row.exclusiveMinimum === "number" ? { min: row.exclusiveMinimum } : {}),
     ...(typeof row.maximum === "number" ? { max: row.maximum } : {}),
@@ -333,6 +419,10 @@ export function fieldsFromPublished(
     ...(typeof row["x-range"] === "string" ? { range: row["x-range"] } : {}),
   });
 
+  // What a list's element rows say about it: a list of strings from a closed set becomes
+  // checkboxes, a list of objects whose fields are leaves becomes a row-by-row editor.
+  const multi = new Map<string, { choices: Choice[]; open: boolean }>();
+  const items = new Map<string, ItemField[]>();
   for (const row of fields) {
     const pointer = row["x-pointer"];
     if (typeof pointer !== "string" || pointer === "") continue;
@@ -341,6 +431,29 @@ export function fieldsFromPublished(
       const root = pointer.slice(0, cut);
       const rootRow = index.get(root) ?? row;
       push(fromRow({ ...rootRow, "x-group": rootRow["x-group"] ?? row["x-group"] }, root, true, "json"));
+      // Only a list (`/-`), and only one level deep: a nested list or map stays inside the JSON.
+      if (pointer.charAt(cut + 1) !== "-") continue;
+      const rel = pointer.slice(cut + 2);
+      if (/\/[-*](\/|$)/.test(rel)) continue;
+      const choices = choicesOf(row);
+      if (rel === "" && choices && (row.kind === "enum" || row.kind === "string")) {
+        multi.set(root, { choices, open: row["x-options-open"] === true });
+      } else if (rel !== "") {
+        const list = items.get(root) ?? [];
+        const kind = kindOfRow(row);
+        list.push({
+          key: rel,
+          label: typeof row.title === "string" ? row.title : humanise(rel.split("/").pop() ?? rel),
+          kind,
+          ...(typeof row.unit === "string" && row.unit !== "" ? { unit: row.unit } : {}),
+          ...(typeof row.description === "string" ? { help: row.description } : {}),
+          ...(typeof row.minimum === "number" ? { min: row.minimum } : {}),
+          ...(typeof row.exclusiveMinimum === "number" ? { min: row.exclusiveMinimum } : {}),
+          ...(typeof row.maximum === "number" ? { max: row.maximum } : {}),
+          ...(choices ? { choices, choicesOpen: row["x-options-open"] === true } : {}),
+        });
+        items.set(root, list);
+      }
       continue;
     }
     // A tagged union's tag sits beside its variants' leaves; offer it where its first leaf is.
@@ -348,13 +461,33 @@ export function fieldsFromPublished(
       if (typeof node["x-tag"] !== "string" || !Array.isArray(node["x-variants"])) continue;
       if (!pointer.startsWith(`${unionPointer}/`)) continue;
       const name = typeof node.title === "string" ? node.title : humanise(unionPointer.split("/").pop() ?? "");
+      const variantChoices = choicesOf({ "x-options": node["x-variant-options"] });
       push({
         ...fromRow(node, `${unionPointer}/${node["x-tag"]}`, false, "enum"),
         label: `${name}: kind`,
         options: (node["x-variants"] as unknown[]).map(String),
+        ...(variantChoices ? { choices: variantChoices, choicesOpen: false } : {}),
       });
     }
     push(fromRow(row, pointer, false, kindOfRow(row)));
+  }
+
+  // Upgrade the lists the element rows describe. A list of objects is edited row by row only when
+  // one of its fields is a choice (a model id): that is the case — attackers, detectors, jammers —
+  // where typing JSON was the problem, and every other field of the element is still shown.
+  for (let i = 0; i < out.length; i++) {
+    const f = out[i];
+    if (!f.collection) continue;
+    const m = multi.get(f.pointer);
+    if (m) {
+      out[i] = { ...f, kind: "multi", choices: m.choices, choicesOpen: m.open };
+      continue;
+    }
+    const fieldsOf = items.get(f.pointer);
+    if (fieldsOf && fieldsOf.some((x) => x.choices !== undefined)) {
+      const template = index.get(f.pointer)?.["x-item-template"];
+      out[i] = { ...f, kind: "list", itemFields: fieldsOf, ...(template !== undefined ? { itemTemplate: template } : {}) };
+    }
   }
 
   // A top-level section the index has no leaf for (a plain list of names, say) is still a setting.

@@ -517,6 +517,36 @@ fn a_preset_can_be_loaded_and_run() {
     );
 }
 
+/// A folder with a `ready-made.txt` offers exactly the files it names, in its order, under
+/// its headings; a file it does not name still loads by path.
+#[test]
+fn the_ready_made_catalogue_is_the_list() {
+    let path = scenario("catalogue", 2, 30);
+    let dir = path.parent().expect("a folder").to_path_buf();
+    let text = std::fs::read_to_string(&path).expect("read");
+    for (file, name) in [("listed.yaml", "listed"), ("unlisted.yaml", "unlisted")] {
+        std::fs::write(
+            dir.join(file),
+            text.replace("name: phase1-grid", &format!("name: {name}")),
+        )
+        .expect("write");
+    }
+    std::fs::write(
+        dir.join("ready-made.txt"),
+        "# comment\n## Everyday traffic\nlisted.yaml\n",
+    )
+    .expect("write");
+    let run = serve(&path);
+    let list = ok(&run, "scenario.list", json!({"kind": "presets"}));
+    let items = list["items"].as_array().expect("items");
+    let names: Vec<&str> = items.iter().filter_map(|i| i["name"].as_str()).collect();
+    assert_eq!(names, ["listed"], "only the catalogue's files are offered: {list}");
+    assert_eq!(items[0]["group"], "Everyday traffic");
+    let unlisted = dir.join("unlisted.yaml").display().to_string();
+    let loaded = ok(&run, "scenario.load", json!({"path": unlisted}));
+    assert_eq!(loaded["valid"], true, "an unlisted file still loads by path");
+}
+
 #[test]
 fn run_seek_over_http_is_refused_without_moving_the_run() {
     let run = serve(&scenario("seek-http", 3, 30));

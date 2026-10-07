@@ -406,6 +406,9 @@ export function SettingsWindow({
                           {item.name ?? item.id}
                           {presets.filter((o) => o.name === item.name).length > 1 ? <span className="faint"> ({item.id.split("/").pop()})</span> : null}
                           {(item as { running?: boolean }).running ? <span className="faint"> (running)</span> : null}
+                          {item.description ? (
+                            <span className="faint preset-row-desc"> — {/^(.+?[.!?])(\s|$)/.exec(item.description.trim())?.[1] ?? item.description}</span>
+                          ) : null}
                         </span>
                         <button
                           type="button"

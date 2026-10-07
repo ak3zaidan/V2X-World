@@ -186,3 +186,50 @@ describe("the draft", () => {
     expect(rebaseDraft(null, doc, null)).toBe(doc);
   });
 });
+
+describe("choices the engine publishes in words", () => {
+  const opt = (value: string, label: string, available = true): Record<string, unknown> => ({ value, label, description: `${label}.`, available });
+  const rows = [
+    row("radio.rat", { "x-group": "Radio", kind: "enum", enum: ["dsrc-80211p", "hybrid"], "x-options": [opt("dsrc-80211p", "DSRC"), opt("hybrid", "Hybrid", false)], "x-options-open": false }),
+    // A model slot: no `enum` (the loader resolves the id), but options from the registry.
+    row("nodes.default_obu", { "x-group": "Nodes", kind: "enum", "x-options": [opt("obu/a", "Unit A")], "x-options-open": false }),
+    row("actors.vehicles.demand.rate_veh_per_h", { "x-group": "Traffic", "x-presets": [{ label: "Rush hour", value: 4500, note: "1.5 × midday." }] }),
+    { ...row("messages.sets[]", { "x-group": "Messages", kind: "enum", enum: ["bsm", "cam"], "x-options": [opt("bsm", "BSM"), opt("cam", "CAM")] }), "x-pointer": "/messages/sets/-" },
+    { ...row("threats.attackers[].id", { "x-group": "Threats", kind: "enum", "x-options": [opt("threat/attacker/legacy/ConstPos", "Fake position")] }), "x-pointer": "/threats/attackers/-/id" },
+    { ...row("threats.attackers[].fraction", { "x-group": "Threats", minimum: 0, maximum: 1 }), "x-pointer": "/threats/attackers/-/fraction" },
+  ];
+  const schema = { properties: { threats: { properties: { attackers: { "x-pointer": "/threats/attackers", "x-item-template": { id: "threat/attacker/legacy/ConstPos", fraction: 0.05 } } } } } };
+  const out = fieldsFromPublished(rows, schema, {});
+  const at = (p: string): Field => {
+    const f = out.find((x) => x.pointer === p);
+    if (!f) throw new Error(`no field ${p}`);
+    return f;
+  };
+
+  it("labels every option and keeps a refused one, marked unavailable", () => {
+    const rat = at("/radio/rat");
+    expect(rat.kind).toBe("enum");
+    expect(rat.choices?.map((c) => [c.label, c.available])).toEqual([["DSRC", true], ["Hybrid", false]]);
+  });
+
+  it("turns a model slot into a dropdown even though the schema has no enum for it", () => {
+    const obu = at("/nodes/default_obu");
+    expect(obu.kind).toBe("enum");
+    expect(obu.options).toEqual(["obu/a"]);
+    expect(obu.choicesOpen).toBe(false);
+  });
+
+  it("offers a number's presets", () => {
+    expect(at("/actors/vehicles/demand/rate_veh_per_h").presets?.[0]).toEqual({ label: "Rush hour", value: 4500, note: "1.5 × midday." });
+  });
+
+  it("edits a list of known strings as checkboxes and a list of model choices row by row", () => {
+    const sets = at("/messages/sets");
+    expect(sets.kind).toBe("multi");
+    expect(sets.choices?.map((c) => c.value)).toEqual(["bsm", "cam"]);
+    const attackers = at("/threats/attackers");
+    expect(attackers.kind).toBe("list");
+    expect(attackers.itemFields?.map((f) => f.key)).toEqual(["/id", "/fraction"]);
+    expect(attackers.itemTemplate).toEqual({ id: "threat/attacker/legacy/ConstPos", fraction: 0.05 });
+  });
+});

@@ -31,6 +31,7 @@
 
 pub mod merge;
 pub mod migrate;
+pub mod options;
 pub mod publish;
 pub mod schema;
 pub mod validate;

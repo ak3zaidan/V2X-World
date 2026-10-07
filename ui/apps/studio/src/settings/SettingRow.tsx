@@ -16,6 +16,14 @@ import type { ValidationError } from "@vwp/protocol";
 
 import { EventsEditor } from "../components/EventsEditor.js";
 import { STATUS_BADGE, breadcrumbOf, describeValue, fieldPath, isUnsupported, type Field } from "./model.js";
+import { ChoiceSelect, ListEditor, MultiCheck, NumberWithPresets } from "./widgets.js";
+
+/** What one element of a list is called, from the list's title: "Attackers" → "Attacker". */
+function nounOf(label: string): string {
+  const word = label.trim().split(/\s+/)[0] || "Item";
+  const singular = word.endsWith("ies") ? `${word.slice(0, -3)}y` : word.endsWith("s") ? word.slice(0, -1) : word;
+  return singular.charAt(0).toUpperCase() + singular.slice(1);
+}
 
 function fieldId(field: Field): string {
   return `f${field.pointer.replace(/\W/g, "_")}`;
@@ -37,6 +45,33 @@ function Widget({
   if (field.kind === "boolean") {
     return <input {...common} type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} />;
   }
+  if (field.kind === "multi" && field.choices) {
+    return <MultiCheck common={common} choices={field.choices} value={value} onChange={onChange} />;
+  }
+  if (field.kind === "list" && field.itemFields) {
+    return (
+      <ListEditor
+        idBase={id}
+        fields={field.itemFields}
+        template={field.itemTemplate}
+        value={value}
+        onChange={onChange}
+        noun={nounOf(field.label)}
+      />
+    );
+  }
+  if (field.kind === "enum" && field.choices) {
+    return (
+      <ChoiceSelect
+        common={common}
+        choices={field.choices}
+        open={field.choicesOpen === true}
+        nullable={field.nullable === true}
+        value={value}
+        onChange={onChange}
+      />
+    );
+  }
   if (field.kind === "enum") {
     const options = field.options ?? [];
     const current = value === undefined || value === null ? "" : String(value);
@@ -55,18 +90,20 @@ function Widget({
   // cannot hold "0x…": a numeric kind with a string value is edited as text.
   if ((field.kind === "number" || field.kind === "integer") && typeof value !== "string") {
     return (
-      <input
-        {...common}
-        type="number"
-        value={typeof value === "number" ? value : ""}
+      <NumberWithPresets
+        common={common}
+        value={value}
+        kind={field.kind}
         min={field.min}
         max={field.max}
-        step={field.step ?? (field.kind === "integer" ? 1 : "any")}
-        onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+        step={field.step}
+        presets={field.presets}
+        unit={field.unit}
+        onChange={onChange}
       />
     );
   }
-  if (field.kind === "json") return <JsonWidget {...common} value={value} onChange={onChange} />;
+  if (field.kind === "json" || field.kind === "multi" || field.kind === "list") return <JsonWidget {...common} value={value} onChange={onChange} />;
   return (
     <input {...common} type="text" value={value === undefined || value === null ? "" : String(value)} onChange={(e) => onChange(e.target.value)} />
   );
@@ -228,7 +265,7 @@ function SettingRowImpl({
             </div>
           ) : null}
         </div>
-        <div className={f.kind === "boolean" ? "setting-control inline" : "setting-control"}>
+        <div className={f.kind === "boolean" ? "setting-control inline" : f.kind === "list" || f.kind === "multi" ? "setting-control wide" : "setting-control"}>
           {f.pointer === "/events" ? (
             <EventsEditor value={value} onChange={(v) => onEdit(f.pointer, v)} durationS={durationS} canPick={canPick} />
           ) : (
