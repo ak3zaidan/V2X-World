@@ -161,6 +161,15 @@ const AIFS: Duration = Duration::from_micros(58);
 /// link budget's (`radio.range`, [`crate::wiring::CandidateRangePlan`]); this constant
 /// only sizes the grid, whose query cost depends on the cell size and not its answer.
 const MAX_RANGE_M: f64 = 1000.0;
+
+/// The engine snapshot's grid cell, metres: a quarter of [`MAX_RANGE_M`].
+///
+/// A radius query's answer does not depend on the cell (it is filtered by distance and
+/// sorted), only its cost does. At 1 km a city extract of a few kilometres was nine
+/// cells, so every transmission's candidate query walked almost every actor in the city —
+/// at city scale (`crate::scale`) mostly vehicles whose radio is off. At 250 m a query
+/// visits the cells its circle touches and little else.
+const SNAPSHOT_CELL_M: f64 = MAX_RANGE_M / 4.0;
 /// How many frames one [`Event::MacTimer`] may grant before it reschedules itself.
 ///
 /// A bound, not a model: `Mac::poll` drains one frame per call and re-arms the queue, so a
@@ -468,6 +477,26 @@ pub struct RunReport {
     /// How many PSMs and VAMs a VRU device wanted to send and did not: the EN 302 571 duty
     /// cycle, the energy budget, or no credential (`v2xw_node::vru`).
     pub vru_suppressed: u64,
+    /// What the city-scale radio gate did, when the scenario has a `scale` section with a
+    /// microscopic box ([`crate::scale::RadioGate`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale: Option<ScaleTally>,
+}
+
+/// The city-scale radio gate's totals ([`crate::scale`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ScaleTally {
+    /// The radio margin around the microscopic box, metres (rounded).
+    pub margin_m: u64,
+    /// Node-steps a dormant node did not take.
+    pub dormant_node_steps: u64,
+    /// The most nodes awake at once.
+    pub peak_awake_nodes: u64,
+    /// The most nodes dormant at once.
+    pub peak_dormant_nodes: u64,
+    /// The most equipped vehicles at once whose node was not yet created (spawned beyond
+    /// the margin and never within it since).
+    pub peak_deferred_nodes: u64,
 }
 
 impl RunReport {
@@ -881,6 +910,11 @@ pub struct Engine {
     node_wake: BTreeMap<NodeId, SimTime>,
     /// The junction each SPaT- or MAP-broadcasting roadside unit is wired to.
     infra_feeds: BTreeMap<NodeId, crate::infra::IntersectionFeed>,
+    /// Which nodes are dormant this step, when `scale` declares a microscopic box
+    /// ([`crate::scale::RadioGate`]).
+    radio_gate: Option<crate::scale::RadioGate>,
+    /// Equipped actors whose node is not created yet: spawned dormant (`crate::scale`).
+    deferred_nodes: BTreeSet<ActorId>,
     report: RunReport,
 }
 
@@ -973,13 +1007,16 @@ impl Engine {
     /// As [`Engine::build`], less the world import.
     pub fn build_with_world(scenario: Scenario, world: World, build_utc: &str) -> Result<Engine> {
         scenario.validate()?;
+        // City scale: the radio's focus region follows the microscopic box.
+        let scenario = crate::scale::normalise(scenario);
         let mut registry = Registry::new();
         crate::wiring::register_all(&mut registry)?;
 
         let wall = WallClock::parse_rfc3339(&scenario.time.t0)
             .map_err(|e| EngineError::Core(v2xw_core::error::CoreError::Time(e)))?;
         let rng = RngRegistry::new(scenario.seed);
-        let mut mobility = crate::wiring::build_mobility(&scenario);
+        let mut mobility = crate::scale::build_mobility(&scenario, &world)
+            .unwrap_or_else(|| crate::wiring::build_mobility(&scenario));
         // The drivers see the weather the run starts in (FHWA speed and headway, sight
         // distance, surface grip — v2xw_mobility::weather).
         mobility.set_weather(crate::wiring::initial_weather(&scenario));
@@ -1088,7 +1125,7 @@ impl Engine {
             let mut scheduler: Scheduler<Event> = Scheduler::new();
             let mut provenance = ProvenanceLog::new();
             let params = ParamSet::new();
-            let empty = ActorSnapshot::new(0, MAX_RANGE_M);
+            let empty = ActorSnapshot::new(0, SNAPSHOT_CELL_M);
             let mut recorder = crate::ctx::NullRecorder::new();
             let mut ctx = EngineCtx::new(
                 &mut scheduler,
@@ -1139,7 +1176,7 @@ impl Engine {
                 .with_signals(crate::app_truth::SignalIndex::build(&world))
         };
         let mut engine = Engine {
-            snapshot: ActorSnapshot::new(0, MAX_RANGE_M),
+            snapshot: ActorSnapshot::new(0, SNAPSHOT_CELL_M),
             weather: crate::wiring::initial_weather(&scenario),
             scenario,
             world,
@@ -1250,8 +1287,17 @@ impl Engine {
             prr_bins: v2xw_metrics::comms::prr_bins(),
             node_wake: BTreeMap::new(),
             infra_feeds: BTreeMap::new(),
+            radio_gate: None,
+            deferred_nodes: BTreeSet::new(),
             report: RunReport::default(),
         };
+        engine.radio_gate = crate::scale::RadioGate::for_scenario(
+            &engine.scenario,
+            &engine.world,
+            engine
+                .range
+                .reach_m(crate::wiring::CandidateRangePlan::REFERENCE_EIRP_DBM),
+        );
         engine.timeline = TimelineState {
             closures: resolve_closures(&engine.scenario, &engine.world)?,
             closed: BTreeMap::new(),
@@ -1810,6 +1856,13 @@ impl Engine {
             self.report.phase2 = phase2.report();
         }
         self.report.sidelink = self.sidelink_report();
+        self.report.scale = self.radio_gate.as_ref().map(|g| ScaleTally {
+            margin_m: g.margin_m().round() as u64,
+            dormant_node_steps: g.dormant_node_steps,
+            peak_awake_nodes: g.peak_awake,
+            peak_dormant_nodes: g.peak_dormant,
+            peak_deferred_nodes: g.peak_deferred,
+        });
         // What the *recorder* says it kept, asked once at the end and never inferred from
         // what the engine handed over. The two numbers sitting side by side is the point:
         // a run report that quoted only the emitted count could contradict the artefact
@@ -2316,6 +2369,7 @@ impl Engine {
         let (update, lamps) = update;
 
         self.absorb(&update, now);
+        self.update_radio_gate(now);
         self.set_lamps(lamps, step.after(now));
         self.sweep_retired_links(now);
         self.recentre_focus(now);
@@ -2345,6 +2399,7 @@ impl Engine {
             let due: Vec<(NodeId, SimTime)> = self
                 .nodes
                 .keys()
+                .filter(|n| !self.is_dormant(**n))
                 .map(|n| {
                     let phase = self.node_phase.get(n).map_or(0, |d| d.as_nanos() % step_ns);
                     (*n, now + phase)
@@ -2370,6 +2425,45 @@ impl Engine {
                 .schedule(next, EventClass::MobilityStep, Event::MobilityStep);
         }
         Ok(())
+    }
+
+    /// Recomputes which nodes are dormant ([`crate::scale::RadioGate`]).
+    fn update_radio_gate(&mut self, now: SimTime) {
+        let Some(gate) = self.radio_gate.as_ref() else {
+            return;
+        };
+        // A deferred node is created the step its vehicle comes within the margin, in
+        // actor order.
+        let waking: Vec<(ActorId, VehicleClass, v2xw_core::geom::Dims)> = self
+            .deferred_nodes
+            .iter()
+            .filter_map(|a| {
+                let rec = self.actors.get(a)?;
+                (!gate.would_be_dormant(rec.last.pos, self.mobility.tier_of(*a)))
+                    .then_some((*a, rec.class, rec.last.dims))
+            })
+            .collect();
+        for (actor, class, dims) in waking {
+            self.deferred_nodes.remove(&actor);
+            let id = self.create_node(actor, class, dims, now);
+            if let Some(rec) = self.actors.get_mut(&actor) {
+                rec.node = Some(id);
+            }
+        }
+        let Some(gate) = self.radio_gate.as_mut() else {
+            return;
+        };
+        gate.deferred = self.deferred_nodes.len() as u64;
+        let mobility = &self.mobility;
+        gate.update(self.actors.iter().filter_map(|(actor, rec)| {
+            rec.node.map(|n| (n, rec.last.pos, mobility.tier_of(*actor)))
+        }));
+    }
+
+    /// Whether `node` is dormant this step: its vehicle is queued far from the city-scale
+    /// box, and its radio is off.
+    fn is_dormant(&self, node: NodeId) -> bool {
+        self.radio_gate.as_ref().is_some_and(|g| g.is_dormant(node))
     }
 
     /// Drops the radio state kept per directed link — the cached shadowing RNG streams and
@@ -2430,6 +2524,101 @@ impl Engine {
         (self.retired.len(), leaked, held)
     }
 
+    /// Creates the node an equipped actor carries: its runtime, its credentials and, for
+    /// an attacker, its arming. Called at the spawn, or — for a vehicle spawned dormant in
+    /// a city-scale run (`crate::scale`) — when it first comes within the radio margin.
+    fn create_node(
+        &mut self,
+        actor: ActorId,
+        class: VehicleClass,
+        dims: v2xw_core::geom::Dims,
+        now: SimTime,
+    ) -> NodeId {
+        let id = NodeId::new(self.next_node);
+        self.next_node += 1;
+        let env = crate::wiring::NodeEnv::new(&self.world, self.wall);
+        // A pedestrian or a cyclist carries a VRU device (PSM / VAM), a vehicle an
+        // OBU; both are hosted the same way from here on.
+        let mut runtime: crate::hosted::HostedNode =
+            if crate::wiring::is_vru_class(class) {
+                self.report.vru_devices_created += 1;
+                crate::hosted::build_vru_device(
+                    &self.scenario,
+                    env,
+                    id,
+                    now,
+                    class,
+                    dims,
+                )
+                .into()
+            } else {
+                crate::wiring::build_node(
+                    &self.scenario,
+                    env,
+                    id,
+                    now,
+                    class,
+                    dims,
+                )
+                .into()
+            };
+        // Phase 2: the backend enrols and provisions the device, and the
+        // credentials it installs carry the linkage values a CRL revokes. The
+        // digest stays the `pseudo_signer` stand-in — see `crate::phase2`, joint 1
+        // — so the *pool* is the protocol's and the *identity* is not.
+        //
+        // The digest the certificate is *announced under* is not knowable here:
+        // `ObuRuntime` issues a real certificate for each pseudonym on its first
+        // transmission and writes that certificate's own `HashedId8` back into the
+        // store, replacing the stand-in this installs. So the digest → pseudonym
+        // map is filled in `hand_down_app`, at the instant a frame carries one.
+        if let Some(phase2) = self.phase2.as_mut() {
+            let creds = phase2.provision(id, now, &self.rng);
+            phase2.phase_crl_poll(id, &self.rng, now);
+            if !creds.is_empty() {
+                match runtime.as_obu_mut() {
+                    Some(obu) => {
+                        crate::wiring::install_provisioned(obu, &self.scenario, id, &creds)
+                    }
+                    None => crate::hosted::install_credentials(
+                        runtime.stores_mut(),
+                        &self.scenario,
+                        id,
+                        creds
+                            .iter()
+                            .map(|c| (c.i, c.j, c.valid_from, c.valid_until)),
+                    ),
+                }
+            }
+        }
+        self.nodes.insert(id, runtime);
+        self.inboxes.insert(id, Vec::new());
+        self.note_node_created(id);
+        self.node_class.insert(id, radio_class(class));
+        self.report.nodes_created += 1;
+        if self.phase2.is_some() {
+            let Engine {
+                scheduler,
+                rng,
+                world,
+                snapshot,
+                provenance,
+                params,
+                phase2,
+                ..
+            } = self;
+            let mut null = crate::ctx::NullRecorder::new();
+            let mut ctx = EngineCtx::new(
+                scheduler, rng, world, snapshot, provenance, params, &mut null,
+            );
+            if let Some(p) = phase2.as_mut() {
+                p.arm_attacker(&mut ctx, id, actor);
+            }
+        }
+        self.node_actor.insert(id, actor);
+        id
+    }
+
     /// Takes the spawns and despawns out of an update, creating and retiring nodes.
     fn absorb(&mut self, update: &MobilityUpdate, now: SimTime) {
         for spawn in &update.spawned {
@@ -2445,95 +2634,19 @@ impl Engine {
                 .rng
                 .checkout(RngDomain::Spawn, EntityRef::Actor(spawn.actor))
                 .bool(fraction);
-            let node = if equipped {
-                let id = NodeId::new(self.next_node);
-                self.next_node += 1;
-                let env = crate::wiring::NodeEnv::new(&self.world, self.wall);
-                // A pedestrian or a cyclist carries a VRU device (PSM / VAM), a vehicle an
-                // OBU; both are hosted the same way from here on.
-                let mut runtime: crate::hosted::HostedNode =
-                    if crate::wiring::is_vru_class(spawn.class) {
-                        self.report.vru_devices_created += 1;
-                        crate::hosted::build_vru_device(
-                            &self.scenario,
-                            env,
-                            id,
-                            now,
-                            spawn.class,
-                            spawn.kinematics.dims,
-                        )
-                        .into()
-                    } else {
-                        crate::wiring::build_node(
-                            &self.scenario,
-                            env,
-                            id,
-                            now,
-                            spawn.class,
-                            spawn.kinematics.dims,
-                        )
-                        .into()
-                    };
-                // Phase 2: the backend enrols and provisions the device, and the
-                // credentials it installs carry the linkage values a CRL revokes. The
-                // digest stays the `pseudo_signer` stand-in — see `crate::phase2`, joint 1
-                // — so the *pool* is the protocol's and the *identity* is not.
-                //
-                // The digest the certificate is *announced under* is not knowable here:
-                // `ObuRuntime` issues a real certificate for each pseudonym on its first
-                // transmission and writes that certificate's own `HashedId8` back into the
-                // store, replacing the stand-in this installs. So the digest → pseudonym
-                // map is filled in `hand_down_app`, at the instant a frame carries one.
-                if let Some(phase2) = self.phase2.as_mut() {
-                    let creds = phase2.provision(id, now, &self.rng);
-                    phase2.phase_crl_poll(id, &self.rng, now);
-                    if !creds.is_empty() {
-                        match runtime.as_obu_mut() {
-                            Some(obu) => {
-                                crate::wiring::install_provisioned(obu, &self.scenario, id, &creds)
-                            }
-                            None => crate::hosted::install_credentials(
-                                runtime.stores_mut(),
-                                &self.scenario,
-                                id,
-                                creds
-                                    .iter()
-                                    .map(|c| (c.i, c.j, c.valid_from, c.valid_until)),
-                            ),
-                        }
-                    }
-                }
-                self.nodes.insert(id, runtime);
-                self.inboxes.insert(id, Vec::new());
-                self.note_node_created(id);
-                self.node_class.insert(id, radio_class(spawn.class));
-                self.report.nodes_created += 1;
-                if self.phase2.is_some() {
-                    let Engine {
-                        scheduler,
-                        rng,
-                        world,
-                        snapshot,
-                        provenance,
-                        params,
-                        phase2,
-                        ..
-                    } = self;
-                    let mut null = crate::ctx::NullRecorder::new();
-                    let mut ctx = EngineCtx::new(
-                        scheduler, rng, world, snapshot, provenance, params, &mut null,
-                    );
-                    if let Some(p) = phase2.as_mut() {
-                        p.arm_attacker(&mut ctx, id, spawn.actor);
-                    }
-                }
-                Some(id)
-            } else {
-                None
-            };
-            if let Some(node) = node {
-                self.node_actor.insert(node, spawn.actor);
+            // In a city-scale run a vehicle spawned in the queue network beyond the radio
+            // margin carries its node only from when it first comes within it
+            // (`crate::scale`): until then it would neither transmit nor receive, and a
+            // city of idle radios is memory the run cannot afford.
+            let defer = equipped
+                && self.radio_gate.as_ref().is_some_and(|g| {
+                    g.would_be_dormant(spawn.kinematics.pos, self.mobility.tier_of(spawn.actor))
+                });
+            if defer {
+                self.deferred_nodes.insert(spawn.actor);
             }
+            let node = (equipped && !defer)
+                .then(|| self.create_node(spawn.actor, spawn.class, spawn.kinematics.dims, now));
             self.actors.insert(
                 spawn.actor,
                 ActorRecord {
@@ -2556,6 +2669,7 @@ impl Engine {
             // one keyframe period after a despawn, so a delta that arrives late cannot be
             // applied to whichever actor inherited the row.
             self.snapshots.retire(*actor, now);
+            self.deferred_nodes.remove(actor);
             if let Some(rec) = self.actors.remove(actor)
                 && let Some(node) = rec.node
             {
@@ -2638,7 +2752,7 @@ impl Engine {
                 *k,
             ));
         }
-        self.snapshot = ActorSnapshot::build(update.t, MAX_RANGE_M, entries);
+        self.snapshot = ActorSnapshot::build(update.t, SNAPSHOT_CELL_M, entries);
         if self.obstacles.vehicles.is_some() {
             self.bodies = link::BodyIndex::build(&self.snapshot);
         }
@@ -2751,6 +2865,7 @@ impl Engine {
             .actors
             .values()
             .filter_map(|a| a.node.map(|n| (n, a.last)))
+            .filter(|(n, _)| !self.is_dormant(*n))
             .collect();
         // Each equipped vehicle's own bus: its dynamics, lights and next turn
         // (`crate::vehicle_bus`). The vehicle's own sensors, like its GNSS fix.
@@ -2761,7 +2876,7 @@ impl Engine {
             .iter()
             .filter(|(_, a)| !a.class.is_vru())
             .filter_map(|(id, a)| {
-                let node = a.node?;
+                let node = a.node.filter(|n| !self.is_dormant(*n))?;
                 Some((
                     node,
                     crate::vehicle_bus::bus_of(
@@ -3405,6 +3520,9 @@ impl Engine {
                 (None, true) => Box::new(self.nodes.iter_mut().rev()),
                 (None, false) => Box::new(self.nodes.iter_mut()),
             };
+        // A dormant node (`crate::scale`) takes no step: its radio is off.
+        let gate = self.radio_gate.as_ref();
+        let walk = walk.filter(|(id, _)| !gate.is_some_and(|g| g.is_dormant(**id)));
         let mut suppressed_by_vru = 0u64;
         let mut results: Vec<(NodeId, StepOutcome, Vec<v2xw_core::ctx::OwnedRecord>, f64)> = walk
             .map(|(id, runtime)| {
@@ -4995,7 +5113,7 @@ impl Engine {
                 continue;
             };
             let Some(node) = rec.node else { continue };
-            if node == state.tx {
+            if node == state.tx || self.is_dormant(node) {
                 continue;
             }
             let pos = rec.last.extrapolate(now).pos;
@@ -5239,7 +5357,10 @@ impl Engine {
                 continue;
             };
             match rec.node {
-                Some(node) if node != tx => count(tx_pos.distance(rec.last.extrapolate(now).pos)),
+                // A dormant radio (`crate::scale`) is off, and could not have received.
+                Some(node) if node != tx && !self.is_dormant(node) => {
+                    count(tx_pos.distance(rec.last.extrapolate(now).pos));
+                }
                 _ => {}
             }
         }

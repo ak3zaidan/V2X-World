@@ -107,6 +107,14 @@ pub trait Mobility: Model {
     fn exterior_lamps(&mut self, _ctx: &mut dyn MobCtx) -> Vec<(ActorId, u8)> {
         Vec::new()
     }
+
+    /// Which tier is driving `a` now, for a provider that runs more than one
+    /// (`crate::meso::tiered`): the engine matches the radio's focus region to it and
+    /// keeps the full node stack where the traffic is microscopic. `None` — the default —
+    /// means the provider is one tier throughout, [`Mobility::tier`].
+    fn tier_of(&self, _a: ActorId) -> Option<Tier> {
+        None
+    }
 }
 
 /// Longitudinal acceleration from the gap and the speed difference to the leader
@@ -190,7 +198,7 @@ pub trait Router: Model {
 }
 
 /// A source of trips (03-interfaces.md §3, 04-models.md §2.4).
-pub trait Demand: Model {
+pub trait Demand: Model + Send + Sync {
     /// Every trip that starts in `[from, to)`, in stream order (invariant I-M2).
     ///
     /// Called once per mobility step with consecutive, non-overlapping windows. A model
@@ -240,7 +248,7 @@ pub trait GnssModel: Model {
 }
 
 /// A node's clock (03-interfaces.md §3, 04-models.md §3.8).
-pub trait ClockModel: Model {
+pub trait ClockModel: Model + Send + Sync {
     /// The time `node` believes it is, including drift during holdover.
     fn read(&mut self, ctx: &mut dyn MobCtx, node: NodeId, gnss: &FixQuality) -> SimTime;
 }

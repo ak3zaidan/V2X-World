@@ -246,6 +246,55 @@ pub static BOUNDS: &[Bound] = &[
         what: "the meteorological visibility",
     },
     Bound {
+        path: "scale.traffic.meso.segment_length_m",
+        lo: 1.0,
+        hi: 10_000.0,
+        exclusive_lo: false,
+        what: "the queue segment length",
+    },
+    Bound {
+        path: "scale.traffic.meso.tau_ff_s",
+        lo: 0.0,
+        hi: 60.0,
+        exclusive_lo: true,
+        what: "the free-free headway",
+    },
+    Bound {
+        path: "scale.traffic.meso.tau_fj_s",
+        lo: 0.0,
+        hi: 60.0,
+        exclusive_lo: true,
+        what: "the free-jam headway",
+    },
+    Bound {
+        path: "scale.traffic.meso.tau_jf_s",
+        lo: 0.0,
+        hi: 60.0,
+        exclusive_lo: true,
+        what: "the jam-free headway",
+    },
+    Bound {
+        path: "scale.traffic.meso.tau_jj_s",
+        lo: 0.0,
+        hi: 60.0,
+        exclusive_lo: true,
+        what: "the jam-jam headway",
+    },
+    Bound {
+        path: "scale.traffic.meso.jam_threshold",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the jam occupancy share",
+    },
+    Bound {
+        path: "scale.radio.margin_m",
+        lo: 0.0,
+        hi: f64::INFINITY,
+        exclusive_lo: false,
+        what: "the radio margin around the microscopic region",
+    },
+    Bound {
         path: "radio.tiers.focus.region.radius_m",
         lo: 0.0,
         hi: f64::INFINITY,
@@ -434,6 +483,7 @@ pub static CHOICES: &[Choices] = &[
     choices("security.envelope", &ENVELOPES),
     choices("security.verification_policy", &POLICIES),
     choices("security.pseudonym_change.strategy", &STRATEGIES),
+    choices("scale.traffic.model", &crate::scale::TRAFFIC_MODELS),
     Choices {
         path: "security.signature",
         values: &crate::signature::SIGNATURES,
@@ -848,6 +898,43 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Medium-access fidelity. Abstract has no MAC (reception comes from a \
                table); medium and high run the same 802.11p EDCA/OCB CSMA model with the \
                region's congestion control, so high adds nothing over medium.",
+    },
+    KeyStatus {
+        path: "scale",
+        status: Status::Wired,
+        note: "City scale: microscopic traffic inside a map box and a queue network (SUMO \
+               MESO's model) everywhere else, vehicles handed across under one identity, \
+               and the radio's focus region matched to the box.",
+    },
+    KeyStatus {
+        path: "scale.traffic.model",
+        status: Status::Wired,
+        note: "mobility/tiered/meso-micro drives the box microscopically and the rest as \
+               queues; mobility/meso/queue drives the whole map as queues.",
+    },
+    KeyStatus {
+        path: "scale.traffic.region",
+        status: Status::Wired,
+        note: "The map box driven microscopically. A lane belongs to it when its midpoint \
+               is inside.",
+    },
+    KeyStatus {
+        path: "scale.traffic.meso",
+        status: Status::Wired,
+        note: "The queue network: segment length, the four headways, the jam threshold and \
+               whether signals hold the queue head.",
+    },
+    KeyStatus {
+        path: "scale.radio.follows",
+        status: Status::Wired,
+        note: "On, the radio's focus region is the microscopic box: the declared tiers \
+               inside it, abstract propagation outside.",
+    },
+    KeyStatus {
+        path: "scale.radio.margin_m",
+        status: Status::Wired,
+        note: "How far outside the box a queued vehicle's radio stays on; past it the \
+               vehicle neither transmits nor receives.",
     },
     KeyStatus {
         path: "radio.tiers.focus",
@@ -1479,6 +1566,7 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     timeline(s, &mut e);
     apps(s, &mut e);
     experiment(s, &mut e);
+    scale(s, &mut e);
     security_backend(s, &mut e);
     unreachable_keys(s, &mut e);
     e
@@ -1790,6 +1878,39 @@ fn bounded_at(path: &str, field: &str, value: f64, e: &mut Vec<ScenarioError>) {
                 b.describe()
             ),
         ));
+    }
+}
+
+/// `scale`: the model is one this build has, the tiered model has a region, and every
+/// number is in range (`crate::scale`).
+fn scale(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let Some(scale) = s.scale.as_ref() else {
+        return;
+    };
+    let t = &scale.traffic;
+    one_of("scale.traffic.model", &t.model, &crate::scale::TRAFFIC_MODELS, e);
+    if t.model == v2xw_mobility::meso::tiered::MODEL_ID && t.region.is_none() {
+        e.push(conflict(
+            "scale.traffic.region",
+            "the tiered model needs the box it drives microscopically".to_string(),
+        ));
+    }
+    let m = &t.meso;
+    for (leaf, value) in [
+        ("segment_length_m", Some(m.segment_length_m)),
+        ("tau_ff_s", Some(m.tau_ff_s)),
+        ("tau_fj_s", Some(m.tau_fj_s)),
+        ("tau_jf_s", Some(m.tau_jf_s)),
+        ("tau_jj_s", Some(m.tau_jj_s)),
+        ("jam_threshold", m.jam_threshold),
+    ] {
+        if let Some(v) = value {
+            let path = format!("scale.traffic.meso.{leaf}");
+            bounded_at(&path, &path, v, e);
+        }
+    }
+    if let Some(margin) = scale.radio.margin_m {
+        bounded_at("scale.radio.margin_m", "scale.radio.margin_m", margin, e);
     }
 }
 

@@ -102,6 +102,8 @@ pub mod intersection;
 pub mod kinematic;
 pub mod lamps;
 pub mod lanechange;
+pub mod meso;
+pub mod par;
 pub mod routing;
 pub mod rules;
 pub mod snapshot;
@@ -190,6 +192,14 @@ pub fn model_cards() -> Vec<(String, v2xw_core::card::ModelCard)> {
         clock::none::card(),
         kinematic::card(&kinematic::LaneFollowParams::default()),
         engine::card(&engine_params, carfollowing::idm::MODEL_ID),
+        meso::card(&meso::MesoParams::default()),
+        meso::tiered::card(&meso::tiered::TieredParams {
+            region: meso::tiered::TierRegion::Circle {
+                centre_m: [0.0, 0.0],
+                radius_m: 500.0,
+            },
+            meso: meso::MesoParams::default(),
+        }),
     ];
     cards.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| a.version.cmp(&b.version)));
     cards.into_iter().map(|c| (c.id.clone(), c)).collect()

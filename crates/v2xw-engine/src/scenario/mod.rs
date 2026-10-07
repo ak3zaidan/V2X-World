@@ -231,6 +231,7 @@ impl Scenario {
             events: Vec::new(),
             apps: schema::Apps::default(),
             experiment: None,
+            scale: None,
         }
     }
 }
