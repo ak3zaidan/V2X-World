@@ -155,6 +155,33 @@ pub struct Completion {
     pub finish_reason: String,
 }
 
+/// The tokens one completion used, as the provider's own reply counted them.
+///
+/// Read from the reply's `usage` block and nothing else: this crate estimates no token
+/// count. A provider that does not report one reports `None` from
+/// [`LlmProvider::last_usage`], and a cost table built from it says so.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    /// Every input token the request was billed for, cached ones included.
+    pub input_tokens: u64,
+    /// Of those, the ones read from the provider's prompt cache.
+    pub cached_input_tokens: u64,
+    /// Output tokens, reasoning included.
+    pub output_tokens: u64,
+}
+
+impl Usage {
+    /// The sum of two counts.
+    #[must_use]
+    pub fn plus(self, other: Usage) -> Usage {
+        Usage {
+            input_tokens: self.input_tokens + other.input_tokens,
+            cached_input_tokens: self.cached_input_tokens + other.cached_input_tokens,
+            output_tokens: self.output_tokens + other.output_tokens,
+        }
+    }
+}
+
 /// A language model the copilot can talk to.
 pub trait LlmProvider {
     /// A name for transcripts and errors, e.g. `openai:gpt-4o-mini`.
@@ -167,6 +194,12 @@ pub trait LlmProvider {
     /// [`crate::CopilotError::Transport`] if the request could not be sent, and
     /// [`crate::CopilotError::Decode`] for a reply that could not be read.
     fn complete(&mut self, request: &ChatRequest) -> Result<Completion>;
+
+    /// The tokens the last successful [`LlmProvider::complete`] used, when the provider
+    /// reported them.
+    fn last_usage(&self) -> Option<Usage> {
+        None
+    }
 }
 
 /// A boxed provider is a provider, so a host can pick one at start-up (Claude, OpenAI)
@@ -178,6 +211,10 @@ impl LlmProvider for Box<dyn LlmProvider + Send> {
 
     fn complete(&mut self, request: &ChatRequest) -> Result<Completion> {
         (**self).complete(request)
+    }
+
+    fn last_usage(&self) -> Option<Usage> {
+        (**self).last_usage()
     }
 }
 

@@ -42,6 +42,9 @@ use crate::scenario::{DraftError, check_document};
 use crate::session::{ToolOutcome, local_call};
 use crate::transport::RpcTransport;
 
+mod control;
+pub use control::CONTROL_METHODS;
+
 /// Every server method the agent calls. Each is one of the server's published methods
 /// (asserted in the tests), so the agent can do nothing a person in the Studio cannot.
 pub const AGENT_METHODS: [&str; 9] = [
@@ -236,11 +239,39 @@ pub struct Agent<P: LlmProvider, T: RpcTransport> {
     last_document: Option<Value>,
     cancel: Arc<AtomicBool>,
     corpus: String,
+    harness: control::Harness,
 }
 
-/// The tools the model is offered, in the chat-completions shape both providers take.
+/// How long to wait before poll `n` of a running simulation: 25 ms, doubling, up to
+/// `poll_ms`. A grid run finishes in well under a second, so a fixed half-second poll was
+/// most of its wall time; a long run still settles at `poll_ms`.
+#[must_use]
+pub fn poll_delay_ms(poll_ms: u64, n: usize) -> u64 {
+    if poll_ms == 0 {
+        return 0;
+    }
+    let step = 25u64.saturating_mul(1u64 << n.min(16));
+    step.min(poll_ms)
+}
+
+/// The tools the model is offered, in the chat-completions shape both providers take: the
+/// control tools ([`control::tools`], `simulate` first) and the original ones.
+/// `list_scenarios` is not offered — the list is in the instructions — but is still
+/// carried out if called.
 #[must_use]
 pub fn agent_tools() -> Vec<Value> {
+    let mut tools = control::tools();
+    tools.extend(base_tools().into_iter().filter(|t| {
+        !matches!(
+            t.pointer("/function/name").and_then(Value::as_str),
+            Some("list_scenarios" | "run_prepared")
+        )
+    }));
+    tools
+}
+
+/// The original nine tools.
+fn base_tools() -> Vec<Value> {
     let tool = |name: &str, description: &str, parameters: Value| {
         json!({"type": "function", "function": {
             "name": name, "description": description, "parameters": parameters}})
@@ -255,9 +286,11 @@ pub fn agent_tools() -> Vec<Value> {
         tool(
             "get_scenario",
             "A scenario's settings: a preset id, `current` (what the engine has loaded) or \
-             `last` (the last scenario this conversation ran). Returns the document.",
+             `last` (the last scenario this conversation ran). Pass `paths` (dotted keys) to \
+             read only those; without it the whole document comes back, which is long.",
             json!({"type": "object", "additionalProperties": false, "required": ["base"],
-                   "properties": {"base": {"type": "string"}}}),
+                   "properties": {"base": {"type": "string"},
+                                  "paths": {"type": "array", "items": {"type": "string"}}}}),
         ),
         tool(
             "find_settings",
@@ -270,12 +303,11 @@ pub fn agent_tools() -> Vec<Value> {
         ),
         tool(
             "prepare_scenario",
-            "Build the scenario to run: start from `base` (a preset id, `current` or `last`) \
-             and apply only the changes the request implies. Each change is a dotted key \
-             (e.g. `radio.rat`, `actors.vehicles.demand.rate_veh_per_h`, `time.duration_s`) \
-             with the new value, or {\"multiply\": k} to scale a number, and why. The \
-             result is validated by the engine's own loader; fix and retry on errors. \
-             `metrics` is set to [all] so every layer is measured.",
+            "Stage a scenario for step-by-step control (then run_control start / run_to / \
+             seek). To run a scenario to its end and analyse it, use simulate instead. \
+             Start from `base` (a preset id, `current` or `last`) and apply only the changes \
+             the request implies (same change format as simulate). Validated by the \
+             engine's own loader; fix and retry on errors.",
             json!({"type": "object", "additionalProperties": false,
                    "required": ["base", "reason", "changes"],
                    "properties": {
@@ -307,11 +339,12 @@ pub fn agent_tools() -> Vec<Value> {
         ),
         tool(
             "compare_runs",
-            "Compare two analysed runs of this conversation (default: the last two): the \
-             change in every headline number both measured, and the findings each has \
-             that the other does not.",
+            "Compare analysed runs of this conversation (default: the last two; `runs` for \
+             any two or more, first = baseline): every metric's change, the significant ones \
+             with health and the findings that explain them.",
             json!({"type": "object", "additionalProperties": false,
-                   "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}}),
+                   "properties": {"a": {"type": "integer"}, "b": {"type": "integer"},
+                                  "runs": {"type": "array", "items": {"type": "integer"}}}}),
         ),
         tool(
             "finding_detail",
@@ -334,39 +367,82 @@ pub fn agent_tools() -> Vec<Value> {
     ]
 }
 
-/// The agent's instructions. Stable byte for byte, so the prompt cache holds.
+/// The agent's instructions, without the build's scenario list and settings reference
+/// ([`system_prompt`] adds them). Stable byte for byte, so the prompt cache holds.
 #[must_use]
 pub fn agent_system_prompt() -> String {
-    "You run a V2X world simulator for the person you are talking to: you set up a \
-     scenario, run it, and explain how it went. You know nothing about this simulator from \
-     training; everything you say about it comes from a tool result in this conversation.\n\
+    "You run a V2X world simulator for the person you are talking to: you set up \
+     scenarios, run them, and explain the results. You know nothing about this simulator \
+     from training; everything you say about it comes from a tool result in this \
+     conversation or from the reference below.\n\
      \n\
-     How to work:\n\
-     1. Before your first tool call, say in two to four short lines what you will do.\n\
-     2. Pick a base with list_scenarios: the ready-made scenario whose description is \
-     closest to the request. Prefer a small, fast one unless the request names a city, a \
-     credential system, attackers, pedestrians or a scale that needs another. If a change \
-     needs a setting the base does not show, find its key with find_settings. Then call \
-     prepare_scenario with ONLY the changes the request implies, and say in `reason` and \
-     in each `why` what you chose and why. Keep the base's duration unless asked; long \
-     runs take minutes.\n\
-     3. If prepare_scenario reports errors, fix the change it names and try again. Never \
+     How to work (be quick: every extra tool call costs the person seconds):\n\
+     1. In the same reply as your first tool call, say in one short line what you will do.\n\
+     2. One `simulate` call answers most requests. It builds, validates, runs and analyses; \
+     for a comparison put every arm in `variants` (the first is the baseline; same seed \
+     for all) and the shared changes in `changes`. Timeline events (weather fronts, \
+     closures, attack waves, hard brakes) are changes too (`events` append). Use \
+     prepare_scenario + run_control only when the person wants to drive a run by hand; \
+     a run started that way is not analysed until you call analyse_current_run.\n\
+     3. Base: the shipped scenario closest to the request (list below). Default to \
+     scenarios/phase1-grid.yaml (\"the grid\"); use credential-lifecycle or \
+     ccms-lifecycle for credentials and revocation, pseudonym-strategies for privacy \
+     against an eavesdropper, vru-grid or midtown-street-life for pedestrians, \
+     connected-intersections for signals and emergency priority, a city scenario only \
+     when the person names the city. Change only what the request implies, using the \
+     settings reference; find_settings has the rest.\n\
+     4. Duration: what the person asks for; otherwise the base's own, or 30 s for a radio \
+     or traffic question on the grid with several arms. Credential, revocation and \
+     pseudonym questions need the base's full length.\n\
+     5. If simulate reports invalid fields, fix exactly those and call it again. Never \
      run an invalid scenario.\n\
-     4. run_prepared runs it and returns the analyst's findings.\n\
-     5. Follow-ups (\"now double the density\", \"compare with LTE-V2X\"): prepare from \
-     base `last` with the one change, run it with a new label, then compare_runs.\n\
-     6. Then write the overview, in Markdown, short: a two-sentence summary; the \
-     bottlenecks, most severe first, each naming its finding id in square brackets, e.g. \
-     [channel.congested], with where and its numbers; for a comparison, what changed; and \
-     which layers were not measured.\n\
+     6. Follow-ups (\"now double the density\", \"switch to LTE-V2X\"): simulate with \
+     base `last`, the one change, and compare_to_last: true.\n\
+     7. Ask instead of running when the request has no clear subject (\"make it better\", \
+     \"compare them\" with nothing run yet) or cannot be done here (a radio, place, \
+     attack or scale this simulator does not have): say in one or two sentences what is \
+     possible and ask one question. Do not substitute something else silently. A run \
+     longer than 300 simulated seconds needs the person's say-so: ask first, without a \
+     tool call.\n\
+     8. A vague question about the current state (\"is the network healthy?\") is about \
+     the run the engine is serving: analyse_current_run or live_metrics, not a new run.\n\
+     9. For step-by-step control (pause at a time, seek, inspect a node) use run_control, \
+     live_metrics, query_metric and inspect.\n\
+     The simulate result is usually all you need: answer from it. Dig further only for a \
+     number the person asked for that it does not have, and say so if the simulator does \
+     not measure it. A finding marked critical (e.g. simulation.silent) changes what \
+     the other numbers mean: say it first.\n\
+     10. Then answer in Markdown, short: two sentences of summary; the bottlenecks or \
+     differences, most important first, each naming its finding id in square brackets, \
+     e.g. [channel.congested], with its numbers; for an experiment, the significant \
+     changes with the values of each arm and the change; what was not measured.\n\
      \n\
      The one hard rule: NEVER state a number that is not in a tool result of this \
      conversation, and never compute one (no differences, ratios or percentages of your \
-     own: compare_runs gives the changes). Quote numbers with their units exactly as the \
-     tools give them. If something was not measured, say so; do not guess.\n\
+     own: the experiment gives `change` and `pct`). Quote numbers with their units exactly \
+     as the tools give them. If something was not measured, say so; do not guess.\n\
      \n\
      The person can stop you at any time. Do not start runs the request did not ask for."
         .to_string()
+}
+
+/// The full instructions: [`agent_system_prompt`], the shipped scenarios and the settings
+/// reference. Both lists are fixed for a build and a server, so the text is the same on
+/// every request of a conversation and the provider's prompt cache holds.
+#[must_use]
+pub fn system_prompt(scenarios: &Value) -> String {
+    let list: Vec<String> = scenarios
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(|s| format!("- {s}")))
+        .collect();
+    format!(
+        "{}\n\nShipped scenarios (base ids):\n{}\n\n{}",
+        agent_system_prompt(),
+        if list.is_empty() { "(the engine did not list them; call list_scenarios)".to_string() } else { list.join("\n") },
+        crate::catalog::quick_reference()
+    )
 }
 
 impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
@@ -387,6 +463,7 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             last_document: None,
             cancel: Arc::new(AtomicBool::new(false)),
             corpus: String::new(),
+            harness: control::Harness::default(),
         })
     }
 
@@ -418,6 +495,19 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             .map_or_else(|| "none".to_string(), |p| p.name().to_string())
     }
 
+    /// The conversation so far: the person's prompts, the model's replies and every tool
+    /// result, in order (an evaluation keeps it as a transcript).
+    #[must_use]
+    pub fn history(&self) -> &[ChatMessage] {
+        &self.history
+    }
+
+    /// The model, when one is attached (a test reads what a scripted one was sent).
+    #[must_use]
+    pub fn provider(&self) -> Option<&P> {
+        self.provider.as_ref()
+    }
+
     /// The runs of this conversation.
     #[must_use]
     pub fn runs(&self) -> &[RunRecord] {
@@ -431,6 +521,7 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         self.prepared = None;
         self.last_document = None;
         self.corpus.clear();
+        self.harness.reset();
     }
 
     fn cancelled(&self) -> bool {
@@ -452,12 +543,18 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             });
         }
         let runs_before = self.runs.len();
+        self.harness.turn += 1;
+        // Something on screen at once: the first model reply takes seconds.
+        sink(AgentEvent::Status {
+            text: format!("Working on it with {}.", self.provider_name()),
+        });
         let mut comparison: Option<Comparison> = None;
         self.history.push(ChatMessage::user(prompt));
         self.corpus.push_str(prompt);
         self.corpus.push('\n');
         let tools = agent_tools();
-        let system = agent_system_prompt();
+        let scenarios = control::scenario_list(self);
+        let system = system_prompt(&scenarios);
         let mut calls = 0usize;
         let mut rewrite_asked = false;
 
@@ -589,7 +686,19 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                         .collect();
                     json!({"scenarios": items})
                 }),
-            "get_scenario" => self.base_document(&s("base")).map(|d| json!({"scenario": d})),
+            "get_scenario" => self.base_document(&s("base")).map(|d| {
+                match args.get("paths").and_then(Value::as_array).filter(|p| !p.is_empty()) {
+                    Some(paths) => {
+                        let picked: Map<String, Value> = paths
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(|p| (p.to_string(), d.pointer(&to_pointer(p)).cloned().unwrap_or(Value::Null)))
+                            .collect();
+                        json!({"scenario": picked})
+                    }
+                    None => json!({"scenario": d}),
+                }
+            }),
             "find_settings" => Ok(find_settings(&s("query"))),
             "prepare_scenario" => {
                 let changes = args.get("changes").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -597,35 +706,13 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             }
             "run_prepared" => {
                 let label = if s("label").is_empty() { format!("run {}", self.runs.len() + 1) } else { s("label") };
-                self.run_prepared(&label, sink).map(|r| r.analysis.compact())
+                self.run_prepared(&label, sink).map(|_| control::run_summary(self, self.runs.len() - 1))
             }
             "analyse_current_run" => {
                 let label = if s("label").is_empty() { "current run".to_string() } else { s("label") };
-                self.analyse_current(&label, sink).map(|r| r.analysis.compact())
+                self.analyse_current(&label, sink).map(|_| control::run_summary(self, self.runs.len() - 1))
             }
-            "compare_runs" => {
-                let n = self.runs.len();
-                let idx = |k: &str, d: usize| args.get(k).and_then(Value::as_u64).map_or(d, |v| v as usize);
-                if n < 2 {
-                    Err(CopilotError::Rpc { method: "compare_runs".into(),
-                        message: "fewer than two runs in this conversation".into() })
-                } else {
-                    let (a, b) = (idx("a", n - 2), idx("b", n - 1));
-                    match (self.runs.get(a), self.runs.get(b)) {
-                        (Some(ra), Some(rb)) => {
-                            let c = analyst::compare(&ra.analysis, &rb.analysis);
-                            *comparison = Some(c.clone());
-                            Ok(json!({"a": ra.label, "b": rb.label,
-                                      "deltas": c.deltas.iter().map(|d| json!({
-                                          "metric": d.metric, "a": fmt(d.a), "b": fmt(d.b),
-                                          "change": fmt(d.change)})).collect::<Vec<_>>(),
-                                      "only_in_a": c.only_in_a, "only_in_b": c.only_in_b}))
-                        }
-                        _ => Err(CopilotError::Rpc { method: "compare_runs".into(),
-                            message: format!("there are {n} runs, numbered from 0") }),
-                    }
-                }
-            }
+            "compare_runs" => control::compare_runs(self, args, comparison),
             "finding_detail" => {
                 let run = args.get("run").and_then(Value::as_u64).map(|v| v as usize)
                     .unwrap_or_else(|| self.runs.len().saturating_sub(1));
@@ -639,9 +726,11 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                 return local_call(&self.grounding, tool, args);
             }
             other => {
-                return ToolOutcome::Refused {
-                    reason: format!("{other:?} is not one of this agent's tools"),
-                };
+                return control::dispatch(self, other, args, sink, comparison).unwrap_or_else(|| {
+                    ToolOutcome::Refused {
+                        reason: format!("{other:?} is not one of this agent's tools"),
+                    }
+                });
             }
         };
         match result {
@@ -707,20 +796,8 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             let key = c.get("key").and_then(Value::as_str).unwrap_or("").to_string();
             let why = c.get("why").and_then(Value::as_str).unwrap_or("").to_string();
             let value = c.get("value").cloned().unwrap_or(Value::Null);
-            let pointer = to_pointer(&key);
-            let before = doc.pointer(&pointer).cloned().unwrap_or(Value::Null);
-            let after = match value.get("multiply").and_then(Value::as_f64) {
-                Some(k) if value.as_object().is_some_and(|o| o.len() == 1) => {
-                    let Some(b) = before.as_f64() else {
-                        return Err(CopilotError::Rpc {
-                            method: "prepare_scenario".into(),
-                            message: format!("`{key}` is not a number in the base, so it cannot be multiplied"),
-                        });
-                    };
-                    json!(b * k)
-                }
-                _ => value,
-            };
+            // Set, {multiply}, {add}, {append}, {remove}, and a jammer's "centre".
+            let (before, after) = control::apply_change(&mut doc, &key, &value)?;
             if let Some(d) = after.as_f64().filter(|_| key == "time.duration_s") {
                 if d > self.policy.max_duration_s {
                     return Err(CopilotError::Rpc {
@@ -733,7 +810,6 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                     });
                 }
             }
-            set_pointer(&mut doc, &pointer, after.clone());
             applied.push(Change { key, before, after, why });
         }
         let all = json!(["all"]);
@@ -800,8 +876,13 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             analysis,
             t_s,
         };
+        // The extra metrics (detection, overhead, pedestrians, apps) and the findings they
+        // support join the analysis before anyone sees it.
+        self.runs.push(record);
+        let index = self.runs.len() - 1;
+        control::record_meta(self, index);
+        let record = self.runs[index].clone();
         sink(AgentEvent::Analysed { label: label.into(), analysis: record.analysis.compact() });
-        self.runs.push(record.clone());
         Ok(record)
     }
 
@@ -870,7 +951,10 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                 last_t = t;
             }
             if self.policy.poll_ms > 0 {
-                std::thread::sleep(std::time::Duration::from_millis(self.policy.poll_ms));
+                std::thread::sleep(std::time::Duration::from_millis(poll_delay_ms(
+                    self.policy.poll_ms,
+                    poll,
+                )));
             }
         }
         Err(CopilotError::Budget { what: "poll", budget: self.policy.max_polls })
@@ -889,8 +973,11 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             t_s: evidence.t_reached_s,
             analysis,
         };
+        self.runs.push(record);
+        let index = self.runs.len() - 1;
+        control::record_meta(self, index);
+        let record = self.runs[index].clone();
         sink(AgentEvent::Analysed { label: label.into(), analysis: record.analysis.compact() });
-        self.runs.push(record.clone());
         Ok(record)
     }
 
@@ -952,6 +1039,13 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             markdown: String::new(),
         };
         report.markdown = to_markdown(&report);
+        // This turn's experiments (a sweep, an A/B), each metric across every arm.
+        let mut experiments = self.harness.markdown_for_turn(self.harness.turn);
+        experiments.push_str(&self.harness.extras_markdown(&self.runs, runs_before));
+        if !experiments.is_empty() {
+            let at = report.markdown.find("## Thresholds").unwrap_or(report.markdown.len());
+            report.markdown.insert_str(at, &experiments);
+        }
         report
     }
 }

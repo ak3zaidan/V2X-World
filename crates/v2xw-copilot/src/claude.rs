@@ -184,6 +184,7 @@ pub struct Claude<H: HttpPost> {
     name: String,
     retries: u32,
     pause_s: u64,
+    last_usage: Option<crate::provider::Usage>,
 }
 
 impl Claude<CurlPost> {
@@ -212,6 +213,7 @@ impl<H: HttpPost> Claude<H> {
             effort: DEFAULT_EFFORT.to_string(),
             retries: 2,
             pause_s: 3,
+            last_usage: None,
         }
     }
 
@@ -309,8 +311,13 @@ impl<H: HttpPost> LlmProvider for Claude<H> {
         &self.name
     }
 
+    fn last_usage(&self) -> Option<crate::provider::Usage> {
+        self.last_usage
+    }
+
     fn complete(&mut self, request: &ChatRequest) -> Result<Completion> {
         let body = encode_request(&self.model, &self.effort, self.fallbacks, request)?;
+        self.last_usage = None;
         let mut attempt = 0;
         loop {
             let http_request = self.request(body.clone());
@@ -319,7 +326,9 @@ impl<H: HttpPost> LlmProvider for Claude<H> {
             if response.is_success() {
                 let value: Value = serde_json::from_str(&text)
                     .map_err(|e| CopilotError::Decode(format!("the reply is not JSON: {e}")))?;
-                return decode_completion(&value);
+                let completion = decode_completion(&value)?;
+                self.last_usage = decode_usage(&value);
+                return Ok(completion);
             }
             // 429 (rate limit), 529 (overloaded) and 5xx are worth a second try; anything
             // else is the request's fault and would fail the same way again.
@@ -546,18 +555,60 @@ fn api_error_message(text: &str) -> String {
         .unwrap_or_else(|| text.trim().to_string())
 }
 
+/// The tokens of a Messages API reply: `input_tokens` counts only the uncached part, so the
+/// billed input is it plus the cache writes and the cache reads.
+#[must_use]
+pub fn decode_usage(value: &Value) -> Option<crate::provider::Usage> {
+    let u = value.get("usage")?;
+    let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let read = n("cache_read_input_tokens");
+    Some(crate::provider::Usage {
+        input_tokens: n("input_tokens") + n("cache_creation_input_tokens") + read,
+        cached_input_tokens: read,
+        output_tokens: n("output_tokens"),
+    })
+}
+
 /// The provider the harness uses, chosen from the server's environment: Claude unless
-/// `V2XW_AGENT_PROVIDER=openai` asks for the OpenAI provider. `Err` carries the sentence a
-/// person reads when there is no key ([`HOW_TO_ADD_A_KEY`], or why a key was refused).
+/// `V2XW_AGENT_PROVIDER=openai` asks for the OpenAI provider. When the provider asked for
+/// has no key and the other one has, the other one is used — `openai` with only an
+/// Anthropic key falls back to Claude, and the default with only `OPENAI_API_KEY` set uses
+/// OpenAI — so a missing key degrades to the other vendor rather than to no model. `Err`
+/// carries the sentence a person reads when neither has a key ([`HOW_TO_ADD_A_KEY`], or
+/// why a key was refused).
 ///
 /// # Errors
 /// As above; never a key.
 pub fn provider_from_env() -> core::result::Result<Box<dyn LlmProvider + Send>, String> {
     let wanted = env_value("V2XW_AGENT_PROVIDER").unwrap_or_else(|| "anthropic".to_string());
-    if wanted.eq_ignore_ascii_case("openai") {
-        return crate::openai::OpenAi::from_env(CurlPost::new())
+    let openai = || {
+        crate::openai::OpenAi::from_env(CurlPost::new())
             .map(|p| Box::new(p) as Box<dyn LlmProvider + Send>)
-            .map_err(|e| e.to_string());
+    };
+    if wanted.eq_ignore_ascii_case("openai") {
+        return match openai() {
+            Ok(p) => Ok(p),
+            Err(CopilotError::MissingApiKey { .. }) => match Claude::from_env_curl() {
+                Ok(p) => Ok(Box::new(p)),
+                Err(_) => Err(format!(
+                    "V2XW_AGENT_PROVIDER=openai, but {} is not set and there is no Anthropic \
+                     key to fall back to. {HOW_TO_ADD_A_KEY}",
+                    crate::openai::KEY_VARIABLE
+                )),
+            },
+            Err(e) => Err(e.to_string()),
+        };
+    }
+    if !wanted.eq_ignore_ascii_case("anthropic") && !wanted.eq_ignore_ascii_case("claude") {
+        return Err(format!(
+            "V2XW_AGENT_PROVIDER={wanted:?} is not a provider this build has; use `anthropic` \
+             or `openai`"
+        ));
+    }
+    if resolve_key().is_err() {
+        if let Ok(p) = openai() {
+            return Ok(p);
+        }
     }
     match Claude::from_env_curl() {
         Ok(p) => Ok(Box::new(p)),
