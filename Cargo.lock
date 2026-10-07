@@ -2608,6 +2608,7 @@ dependencies = [
  "serde_json",
  "serde_yml",
  "thiserror",
+ "tokio",
  "v2xw-core",
  "v2xw-engine",
  "v2xw-metrics",

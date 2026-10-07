@@ -103,7 +103,7 @@ fn q4_keyframe_actor_rows_are_indexed_by_slot() {
         class_idx: 0,
         state: ST_EQUIPPED,
         verified_neighbors: 0,
-        flags8: 0,
+        lamps: 0,
     };
 
     let body = KeyframeBody {
