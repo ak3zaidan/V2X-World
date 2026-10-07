@@ -1,0 +1,51 @@
+/* The settings window's choice controls (settings/widgets.tsx) and the ready-made scenario list. */
+
+.setting-control.wide { max-width: 760px; }
+
+.choice { display: flex; flex-direction: column; gap: 4px; }
+.choice select { max-width: 420px; }
+.choice-desc { color: var(--text-dim); font-size: 12px; line-height: 1.4; }
+.choice.compact select { width: 100%; }
+.choice-custom { display: flex; gap: 8px; align-items: center; }
+
+.number-presets { display: flex; flex-direction: column; gap: 6px; }
+.preset-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.preset-chip {
+  padding: 2px 9px;
+  font-size: 12px;
+  border-radius: 999px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.preset-chip.active { color: var(--text); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.preset-custom { display: flex; gap: 8px; align-items: center; }
+.preset-custom input { max-width: 160px; }
+.preset-custom .faint { font-size: 12px; }
+
+.multi-check { display: flex; flex-direction: column; gap: 3px; }
+.multi-item { display: flex; gap: 8px; align-items: baseline; font-size: 13px; cursor: pointer; }
+.multi-item input { width: auto; flex: none; }
+.multi-item.off { opacity: 0.55; cursor: default; }
+
+.list-editor { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.list-item {
+  align-self: stretch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px 10px;
+  background: var(--bg-raised);
+}
+.list-item-head { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 4px; }
+.list-item-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 10px; }
+.list-cell { display: flex; flex-direction: column; gap: 2px; font-size: 12px; min-width: 0; }
+.list-cell.wide { grid-column: 1 / -1; }
+.list-cell-label { color: var(--text-dim); }
+.list-cell input, .list-cell select { width: 100%; }
+
+/* The ready-made scenario picker: a heading per group, each entry with its one-line description. */
+.scenario-menu-list { max-height: min(70vh, 640px); overflow-y: auto; min-width: 360px; max-width: 460px; }
+.scenario-menu-list .sec.group { margin-top: 6px; }
+.menu-item.preset { flex-direction: column; align-items: flex-start; gap: 1px; white-space: normal; text-align: left; }
+.menu-item.preset .preset-title { display: flex; width: 100%; gap: 8px; }
+.menu-item.preset .preset-desc { color: var(--text-dim); font-size: 11.5px; line-height: 1.35; }

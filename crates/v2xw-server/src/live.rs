@@ -3868,8 +3868,20 @@ impl LiveEngine {
         })
     }
 
-    /// The scenario files beside the one this engine was opened on, sorted.
+    /// The ready-made scenarios offered beside the one this engine was opened on.
     fn preset_paths(&self) -> Vec<std::path::PathBuf> {
+        self.preset_entries().into_iter().map(|(p, _)| p).collect()
+    }
+
+    /// The ready-made scenarios with the heading each is listed under.
+    ///
+    /// When the folder has a `ready-made.txt` catalogue, it is the list, in its order:
+    /// one file name per line, `## Heading` starting a group, `#` a comment. That is how
+    /// the page offers a curated set while the folder also holds the study and test
+    /// scenarios other code loads by path (those still load by path through
+    /// `scenario.load`; they are just not listed). Without a catalogue every scenario
+    /// file in the folder is listed, sorted, with no heading.
+    fn preset_entries(&self) -> Vec<(std::path::PathBuf, Option<String>)> {
         let Some(dir) = self.source.as_ref().and_then(|p| p.parent()) else {
             return Vec::new();
         };
@@ -3878,6 +3890,18 @@ impl LiveEngine {
         } else {
             dir
         };
+        if let Ok(text) = std::fs::read_to_string(dir.join("ready-made.txt")) {
+            let mut out = Vec::new();
+            let mut group: Option<String> = None;
+            for line in text.lines().map(str::trim) {
+                if let Some(heading) = line.strip_prefix("##") {
+                    group = Some(heading.trim().to_string());
+                } else if !line.is_empty() && !line.starts_with('#') {
+                    out.push((dir.join(line), group.clone()));
+                }
+            }
+            return out;
+        }
         let Ok(entries) = std::fs::read_dir(dir) else {
             return Vec::new();
         };
@@ -3889,7 +3913,7 @@ impl LiveEngine {
             })
             .collect();
         paths.sort();
-        paths
+        paths.into_iter().map(|p| (p, None)).collect()
     }
 
     /// Parses, migrates and validates an inline document the way the loader does a file.
@@ -4587,9 +4611,9 @@ impl Engine for LiveEngine {
 
     fn presets(&self) -> Vec<Value> {
         let running = self.descriptor.scenario_hash_hex.clone();
-        self.preset_paths()
+        self.preset_entries()
             .iter()
-            .map(|path| {
+            .map(|(path, group)| {
                 let id = preset_id(path);
                 match Scenario::load(path) {
                     Ok(s) => json!({
@@ -4598,6 +4622,7 @@ impl Engine for LiveEngine {
                         "name": s.meta.name,
                         "description": s.meta.description,
                         "tags": s.meta.tags,
+                        "group": group,
                         "hash": s.content_hash().unwrap_or_default(),
                         "running": s.content_hash().is_ok_and(|h| h == running),
                     }),
@@ -4609,6 +4634,7 @@ impl Engine for LiveEngine {
                         "name": path.file_stem().map(|s| s.to_string_lossy().to_string()),
                         "description": format!("does not load: {e}"),
                         "tags": ["invalid"],
+                        "group": group,
                     }),
                 }
             })

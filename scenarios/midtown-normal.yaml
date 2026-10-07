@@ -1,0 +1,19 @@
+# Midtown Manhattan, normal midday traffic — the default ready-made scenario.
+#
+# Everything is in base/midtown.yaml: a connected fleet at the "Normal (midday)" arrival rate,
+# the US credential system in the loop, eight roadside units on Fifth and Sixth Avenues and
+# misbehaviour detection on every vehicle. This file only names it.
+#
+# Use it as the honest baseline: no attackers, no incidents. The interesting numbers are the
+# delivery ratio against distance, the channel busy ratio and the end-to-end latency; compare
+# them with midtown-rush-hour.yaml, which is this deployment under more traffic.
+schema: v2xw/scenario/1
+
+meta:
+  base: base/midtown.yaml
+  name: Midtown Manhattan - normal traffic
+  description: >-
+    A weekday midday in Midtown Manhattan: connected cars signing safety messages ten times a
+    second, the US credential system running, eight roadside units on Fifth and Sixth
+    Avenues and misbehaviour detection on every vehicle. The honest baseline.
+  tags: [manhattan, traffic, baseline, scms, dsrc]

@@ -1,0 +1,37 @@
+# Rush hour with attackers who lie about where they are — detected, reported and revoked.
+#
+# midtown-rush-hour.yaml (heavy demand, a breakdown, a closed street, the US SCMS in the
+# loop) plus two attacker populations from the 30th second:
+#
+#  * 2 % of vehicles freeze their claimed position (VeReMi "ConstPos", Kamel et al. 2020);
+#  * 2 % claim a random position near themselves, redrawn every message ("RandomPos").
+#
+# Every honest vehicle and roadside unit runs the twelve-check detector suite; reports cross
+# the RA's shuffle to the Misbehaviour Authority, which revokes only on independent,
+# corroborated evidence sustained over time; the CRL then reaches vehicles over cellular and
+# from the roadside units each minute (the base file's compressed calendar). Watch the
+# Backend view's Misbehaviour Authority and CRL counters, and the detection metrics: reports,
+# true and false positives, and the time from the first lie to the revocation.
+schema: v2xw/scenario/1
+
+meta:
+  base: midtown-rush-hour.yaml
+  name: Attack - fake positions at rush hour (detected and revoked)
+  description: >-
+    Rush-hour Midtown where 4 % of cars broadcast false positions. Nearby cars and roadside
+    units detect the lies, report them, and the credential system revokes the attackers'
+    certificates while the traffic keeps flowing.
+  tags: [attack, misbehaviour, position-falsification, detection, revocation, scms, rush-hour]
+
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.02
+      schedule:
+        from_s: 30.0
+        to_s: 300.0
+    - id: threat/attacker/legacy/RandomPos
+      fraction: 0.02
+      schedule:
+        from_s: 30.0
+        to_s: 300.0

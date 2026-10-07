@@ -1,0 +1,17 @@
+# Radio comparison, part 3 of 3: C-V2X over the 5G NR sidelink (PC5 Mode 2).
+#
+# The same traffic as radio-dsrc.yaml (base/radio-faceoff.yaml). NR-V2X runs Mode 2 at
+# 30 kHz with re-evaluation and pre-emption on the ETSI EN 303 798 pool; there is no US
+# NR-V2X deployment profile yet, so this is the European pool under the US 2024 band rules.
+schema: v2xw/scenario/1
+
+meta:
+  base: base/radio-faceoff.yaml
+  name: Radio comparison - C-V2X (5G NR sidelink)
+  description: >-
+    Rush-hour Midtown with every car on the 5G NR sidelink (PC5 Mode 2). The traffic is
+    identical to the DSRC and LTE versions.
+  tags: [radio, comparison, cv2x, nr]
+
+radio:
+  rat: nr-v2x-pc5

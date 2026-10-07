@@ -1,0 +1,30 @@
+# Radio jamming at a busy junction.
+#
+# midtown-normal.yaml plus one constant jammer at Fifth Avenue and 42nd Street, on the air
+# from the first to the fourth minute, at 23 dBm (3GPP TR 36.885's vehicle power: a jammer
+# no stronger than a car's radio). Before it starts and after it stops the junction is the
+# baseline, so the run shows the drop and the recovery in one timeline.
+#
+# What to read: delivery against distance around the junction, the channel busy ratio (a
+# constant jammer holds the channel busy for every listener in range), and the frames lost
+# to interference. The settings window's Jammers list offers the pulsed and the reactive
+# (transmit only when it hears a frame) jammers too.
+schema: v2xw/scenario/1
+
+meta:
+  base: midtown-normal.yaml
+  name: Attack - radio jamming at Fifth Avenue and 42nd Street
+  description: >-
+    Midday Midtown with a jammer switched on at Fifth Avenue and 42nd Street for three
+    minutes: safety messages around the junction are drowned out, then recover when it
+    stops.
+  tags: [attack, jamming, radio, dsrc, scms]
+
+threats:
+  jammers:
+    - id: attacker/jammer/constant
+      params:
+        position_m: [770.3, 1052.8]
+        power_dbm: 23
+        from_s: 60.0
+        to_s: 240.0

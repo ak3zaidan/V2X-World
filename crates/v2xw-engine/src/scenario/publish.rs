@@ -44,6 +44,7 @@ use serde_json::{Map, Value, json};
 use v2xw_core::card::Family;
 use v2xw_core::registry::Registry;
 
+use crate::scenario::options;
 use crate::scenario::validate::{self, Status};
 
 /// One field of a reflected struct or struct-like enum variant.
@@ -415,6 +416,18 @@ pub static SLOTS: &[Slot] = &[
         bare_id: false,
     },
     Slot {
+        path: "threats.eavesdropper",
+        label: "Eavesdropper",
+        family: Family::Attacker,
+        bare_id: false,
+    },
+    Slot {
+        path: "threats.compromised_rsu_attack",
+        label: "Compromised roadside unit attack",
+        family: Family::Attacker,
+        bare_id: false,
+    },
+    Slot {
         path: "detection.ma",
         label: "Misbehaviour-authority pipeline",
         family: Family::MaPipeline,
@@ -561,6 +574,8 @@ struct Walk<'a> {
     /// The defaults document: `Scenario::minimal()` serialised, which is the loader's own
     /// answer to "what happens if the author writes nothing".
     defaults: &'a Value,
+    /// The catalogue, for the ids a model slot offers (`options::slot_values`).
+    registry: &'a Registry,
     /// Every leaf the walk produced, for the flat index and for the tests.
     leaves: Vec<Value>,
 }
@@ -611,6 +626,9 @@ impl Walk<'_> {
                 "items".into(),
                 self.node(t, &format!("{path}[]"), "", depth + 1),
             );
+            if let Some(template) = options::item_template(path) {
+                out.insert("x-item-template".into(), template);
+            }
             self.with_meta(path, &mut out);
             return Value::Object(out);
         }
@@ -654,7 +672,7 @@ impl Walk<'_> {
                 out.insert("type".into(), json!(kind));
             }
             self.with_meta(path, &mut out);
-            let widget = if out.contains_key("enum") {
+            let widget = if out.contains_key("enum") || out.contains_key("x-options") {
                 "enum"
             } else {
                 kind
@@ -782,6 +800,16 @@ impl Walk<'_> {
             "x-variants".into(),
             Value::Array(t.variants.iter().map(|v| json!(v.wire_name)).collect()),
         );
+        let tag_path = format!("{path}.{tag}");
+        out.insert(
+            "x-variant-options".into(),
+            Value::Array(
+                t.variants
+                    .iter()
+                    .map(|v| options::option_row(&tag_path, v.wire_name, v.doc))
+                    .collect(),
+            ),
+        );
         out.insert("oneOf".into(), Value::Array(branches));
         self.with_meta(path, &mut out);
         Value::Object(out)
@@ -805,7 +833,11 @@ impl Walk<'_> {
             out.insert("unit".into(), json!(unit));
         }
         let leaf = path.rsplit('.').next().unwrap_or(path);
-        out.insert("title".into(), json!(label_for(leaf, unit)));
+        let title = options::title(path).map_or_else(|| label_for(leaf, unit), str::to_string);
+        out.insert("title".into(), json!(title));
+        if let Some(presets) = options::presets(path) {
+            out.insert("x-presets".into(), presets);
+        }
 
         if let Some(default) = self.default_at(path) {
             out.insert("default".into(), default);
@@ -834,6 +866,7 @@ impl Walk<'_> {
         if let Some(slot) = SLOTS.iter().find(|s| s.path == path) {
             out.insert("x-slot".into(), json!(slot.family.to_string()));
         }
+        self.with_options(path, out);
         match validate::status_of(path) {
             Some(k) => {
                 out.insert("x-status".into(), json!(k.status));
@@ -856,6 +889,39 @@ impl Walk<'_> {
                 );
             }
         }
+    }
+
+    /// Publishes `x-options` — every selectable value with a label and a description —
+    /// and `x-options-open` (whether a value outside them may be typed), for any node
+    /// whose values are a known set: a `CHOICES` row or reflected enum (closed), a model
+    /// slot's id (the registry's ids), or one of `options::extra_values`.
+    ///
+    /// `enum` stays what it was — the loader's closed set — so a JSON Schema validator
+    /// reads the schema exactly as before; `x-options` is the form's richer copy.
+    fn with_options(&self, path: &str, out: &mut Map<String, Value>) {
+        let (rows, open) = if let Some(Value::Array(values)) = out.get("enum") {
+            let docs = out.get("x-enum-descriptions").cloned().unwrap_or(Value::Null);
+            let rows = values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|v| {
+                    let doc = docs.get(v).and_then(Value::as_str).unwrap_or("");
+                    options::option_row(path, v, doc)
+                })
+                .collect::<Vec<_>>();
+            (rows, false)
+        } else if let Some(found) = options::slot_values(path, self.registry) {
+            (found.0, !found.1)
+        } else if let Some(found) = options::extra_values(path) {
+            (found.0, !found.1)
+        } else {
+            return;
+        };
+        if rows.is_empty() {
+            return;
+        }
+        out.insert("x-options".into(), Value::Array(rows));
+        out.insert("x-options-open".into(), json!(open));
     }
 
     /// The loader's default at `path`, read out of the serialised minimal scenario.
@@ -889,8 +955,10 @@ impl Walk<'_> {
 /// the leaves the schema walk found.
 fn walk() -> (Value, Vec<Value>) {
     let defaults = serde_json::to_value(crate::Scenario::minimal()).unwrap_or(Value::Null);
+    let registry = catalogue();
     let mut walk = Walk {
         defaults: &defaults,
+        registry: &registry,
         leaves: Vec::new(),
     };
     let mut root = walk.node("Scenario", "", "", 0);

@@ -1,0 +1,17 @@
+# Radio comparison, part 1 of 3: DSRC (IEEE 802.11p) at rush-hour density.
+#
+# The same traffic as radio-lte.yaml and radio-nr.yaml (base/radio-faceoff.yaml). 802.11p
+# contends for the channel by listening before it talks (CSMA/CA) on channel 172 of the 2016
+# US band plan, with SAE J2945/1 congestion control setting each car's interval and power.
+schema: v2xw/scenario/1
+
+meta:
+  base: base/radio-faceoff.yaml
+  name: Radio comparison - DSRC (802.11p)
+  description: >-
+    Rush-hour Midtown with every car on DSRC (802.11p) and J2945/1 congestion control. Run
+    it, then the C-V2X versions: the traffic is identical, only the radio changes.
+  tags: [radio, comparison, dsrc]
+
+radio:
+  rat: dsrc-80211p

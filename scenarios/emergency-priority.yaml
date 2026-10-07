@@ -1,0 +1,25 @@
+# Emergency vehicles get green lights: signal priority over V2X.
+#
+# connected-intersections.yaml: four roadside units broadcast each junction's signal phase
+# and timing (SPaT) and its lane map (MAP) from the engine's own signal plans; one vehicle
+# in ten is an emergency vehicle that asks the junction ahead for priority (SRM) once it
+# has the junction's map, and the unit answers (SSM) while the controller extends a green or
+# ends a conflicting one early (NTCIP 1211; crates/v2xw-engine/src/priority.rs has the
+# limits and their sources). This file runs it for three minutes, by day.
+#
+# Follow an emergency vehicle: its broadcasts list the requests, and the junction's lamps
+# change for it.
+schema: v2xw/scenario/1
+
+meta:
+  base: connected-intersections.yaml
+  name: Emergency vehicles get green lights (signal priority)
+  description: >-
+    Roadside units broadcast signal timing and intersection maps; ambulances and fire
+    engines ask the junction ahead for a green and the signals change for them, then
+    return to their green wave.
+  tags: [emergency, signal-priority, spat, map, srm, ssm, rsu, dsrc]
+
+time:
+  t0: "2027-03-04T17:00:00Z"
+  duration_s: 180.0

@@ -15,6 +15,76 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-06 — settings as dropdowns, and a ready-made list a person can read (settings track)
+
+The owner's review: settings fields were free text nobody knew how to fill, and the
+ready-made list was every file in `scenarios/` under names like `phase1-manhattan`.
+
+### What changed
+
+- **The engine publishes words for every known set** (`crates/v2xw-engine/src/scenario/options.rs`,
+  hooked into `publish.rs`). A node whose values are known carries `x-options` (value, label,
+  one sentence, available) and `x-options-open`. Sources, so the page names no model id:
+  `CHOICES` and the reflected enums; the loader's own tables where it is narrower than the
+  registry (demand models, OBU and RSU profiles, the three jammers, `detect/legacy-12`, the two
+  authorities, backhaul and backend-net models, the eavesdropper, the compromised-RSU attack);
+  `AttackKind::ALL` as `threat/attacker/legacy/<Kind>`, the six `phase2::unrendered` types listed
+  but unavailable with their reason; `Apps::ALL`, the RSU roles, every channel any region's band
+  plan opens. Numbers carry `x-presets` with sources (demand night / light / midday / rush hour /
+  gridlock, run length, penetration, pseudonym period, transmit power); lists of model choices
+  carry `x-item-template`. `enum` is unchanged, so the JSON Schema means what it meant.
+- **The catalogue was missing most security-path ids.** The registry slot for
+  `detection.local[]` offered nothing, `detection.ma` only `threat/ma/legacy-window` (every
+  shipped scenario uses `threat/ma/corroborated`), `threats.attackers[].id` offered the three
+  jammers. Each now comes from the constant the engine builds by.
+- **Studio**: a dropdown with the chosen option's sentence beneath it ("Engine default" for an
+  optional field, "Other…" for an open set, refused values disabled); preset chips beside a
+  number box that still takes any value; checkboxes for message sets and applications; a
+  row-by-row editor with Add/Remove for attackers, detectors, jammers and adjacent-channel
+  emitters (fields it has no control for stay visible as one small JSON box).
+- **Ready-made list**: `scenarios/ready-made.txt` is the picker's list, grouped; the server reads
+  it (`preset_entries`) and sends each entry's `group`; unlisted files still load by path. The
+  picker shows the groups and each scenario's first sentence. Seventeen entries — Midtown normal,
+  evening rush hour, pedestrians and jaywalkers, heavy rain; a highway; Portland; Berlin on the
+  European stack; DSRC / LTE / NR on identical traffic; fake positions at rush hour; replay;
+  jamming; certificates and pseudonym privacy; the ETSI CCMS; post-quantum signatures; emergency
+  signal priority. Each is an overlay on `scenarios/base/` or on the study file it builds on.
+  `manhattan-vru.yaml` (loaded by nothing) is removed. Start the server on
+  `scenarios/midtown-normal.yaml`.
+
+### Evidence
+
+- `v2xw validate` (release CLI from `main`): all 17 listed files and both bases pass.
+- `cargo test -p v2xw-engine --lib scenario::`: 24 passed, including the two new tests in
+  `options.rs` (the typed fields are choices; ids read as words).
+- `cargo test -p v2xw-server --test apply -- the_ready_made_catalogue_is_the_list
+  a_preset_can_be_loaded_and_run`: 2 passed.
+- Studio `tsc` clean; `vitest run test/settings.test.ts` 17 passed (4 new); eslint clean on the
+  changed files.
+- Playwright, one pass on the debug server of this branch: the picker shows 6 groups and 17
+  entries; the settings window has 53 dropdowns, 24 preset chips and 5 list editors; Add in
+  Attackers appends a valid "Fake position: frozen" row at 5 %; no page errors. The text inputs
+  left are names, descriptions, dates, file paths, the seed and the list editors' advanced JSON.
+- Short runs, release CLI, `--no-recording`:
+  - rush hour with the fake-position attackers, 200 s: 211 vehicles, 9 attackers, 9 revocation
+    decisions, CRL enforced 57 s after the first detection, 1,993 receptions refused as revoked;
+    **1.83 s of wall time per simulated second** — the page plays it slower than real time.
+  - post-quantum, 20 s: 192 SDUs fragmented; Berlin, LTE, emergency priority, 20 s: run clean.
+  - highway, 120 s at 48,000 veh/h offered: 164 vehicles admitted (about 4,900 veh/h), 0.79 s/s.
+
+### Open
+
+- **The highway is busy, not jammed.** The spawner admits about a tenth of the offered rate on
+  the 2 × 2 grid, so per-direction flow (~1,200 veh/h) stays below what one blocked lane leaves.
+  A TR 36.885 drop at 70 km/h (336 vehicles) ran at 5.1 s/s and emptied as trips completed. A
+  level-of-service F highway needs more admission than this geometry gives.
+- **Midtown volumes are scaled** (the presets' ratios are cited, their level is not NYC DOT's);
+  the rush-hour congestion comes from the breakdown and the closure.
+- No Sybil scenario: the engine refuses Sybil (no concurrent pseudonyms for an attacker); the
+  replay scenario covers a validly signed lie instead. No PSM generator, so the pedestrian
+  scenario's devices do not transmit.
+- `radio.models.*.id` and the procedural world parameters are still free text / JSON.
+
 ## 2026-09-30 — robustness track: a refusal names its setting, nothing flaky, nothing leaks
 
 One engineer, owner of error handling in `crates/v2xw-server` and the engine's loader, the
