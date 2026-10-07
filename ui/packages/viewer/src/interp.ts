@@ -101,6 +101,8 @@ export interface PoseSnapshot {
   actorId: Uint32Array;
   classIdx: Uint8Array;
   state: Uint8Array;
+  /** §3.3.5 lamps. */
+  lamps: Uint8Array;
   occupied: Uint8Array;
   /** False before the first {@link PoseInterpolator.capture}. */
   valid: boolean;
@@ -199,6 +201,13 @@ export const HISTORY = 4;
 /** Time constant of the correction blend, seconds of viewer clock. */
 export const ERROR_BLEND_SECONDS = 0.12;
 
+/**
+ * How long an actor takes to fade in when it appears and out when it leaves, seconds of sim time.
+ * A quarter of a second: long enough that nobody sees a car blink into existence, short enough that
+ * a car leaving the map at its edge is gone by the time the next one arrives.
+ */
+export const FADE_SECONDS = 0.3;
+
 const NO_ACTOR = 0xffffffff;
 
 /** Coefficients cached per slot: x and y cubics, z linear, heading cubic. */
@@ -216,6 +225,7 @@ function makeSnapshot(capacity: number): PoseSnapshot {
     actorId: new Uint32Array(capacity).fill(NO_ACTOR),
     classIdx: new Uint8Array(capacity),
     state: new Uint8Array(capacity),
+    lamps: new Uint8Array(capacity),
     occupied: new Uint8Array(capacity),
     valid: false,
     seq: -1,
@@ -249,6 +259,7 @@ function growSnapshot(s: PoseSnapshot, capacity: number): void {
   s.actorId = id;
   s.classIdx = growU8(s.classIdx, capacity);
   s.state = growU8(s.state, capacity);
+  s.lamps = growU8(s.lamps, capacity);
   s.occupied = growU8(s.occupied, capacity);
 }
 
@@ -298,6 +309,22 @@ function limitTangent2(mx: number, my: number, cx: number, cy: number): void {
 
 /** Largest yaw rate dead reckoning will extrapolate with, rad/s: a car at walking pace on a 3 m radius. */
 const MAX_YAW_RATE = 2;
+
+/**
+ * How fast a person's drawn heading may turn, rad/s: a brisk pivot about, 180° in 0.6 s. The
+ * social-force model's heading turns a standing pedestrian by up to 180° in one 0.1 s step; drawn
+ * as given, a crowd at a kerb spins on the spot.
+ */
+export const VRU_MAX_YAW_RATE = 5;
+
+/**
+ * A step longer than this, metres, whose length disagrees with the speeds reported at its ends, is
+ * a jump in the data rather than motion: 4× what the reported speeds cover, plus a metre, and at
+ * least 2 m.
+ */
+function dataJumpMetres(expected: number): number {
+  return Math.max(2, 4 * expected + 1);
+}
 
 /**
  * How much of a frame's advance may go into correcting the clock estimate. 0.1 means the render
@@ -370,6 +397,20 @@ export class PoseInterpolator {
   outClassIdx: Uint8Array;
   outState: Uint8Array;
   outOccupied: Uint8Array;
+  /** 1 where this sample snapped the slot (a real discontinuity in the data) rather than interpolating it. */
+  outSnapped: Uint8Array;
+  /**
+   * The §3.3.5 lamps at the drawn instant: those of the older snapshot of the segment the render
+   * time is in, so a brake lamp lights when the car is drawn at the step it braked in, not a step
+   * before (the same alignment the signal lamps get, `scene.ts`).
+   */
+  outLamps: Uint8Array;
+  /**
+   * How much of each actor is there, `[0, 1]`: an actor fades in over {@link FADE_SECONDS} of render
+   * time from the instant it first exists, and out over the same from the instant it last existed,
+   * instead of popping into or out of the street (the glitch hunter's `pop`).
+   */
+  outFade: Float32Array;
 
   /** Snapshot ring; `#ring[#head]` is the newest, `#size` of them are valid. */
   #ring: PoseSnapshot[];
@@ -411,6 +452,13 @@ export class PoseInterpolator {
   #snapAll = false;
   /** Scratch for one slot's raw pose. */
   #raw = new Float64Array(4);
+  /** 1 for each class index that is a person or a rider; see {@link setVruClasses}. */
+  #vruClasses = new Uint8Array(0);
+  /** Per slot: the sim time the shown actor first existed (its first snapshot), for the fade-in. */
+  #bornAt: Float64Array;
+  /** Per slot: the sim time a departed actor last existed, and its id, for the fade-out. */
+  #goneAt: Float64Array;
+  #goneId: Uint32Array;
   #nextSeq = 0;
   /**
    * Per-slot curve cache. The cubic through a segment depends only on the two snapshots (and the
@@ -463,6 +511,12 @@ export class PoseInterpolator {
     this.outClassIdx = new Uint8Array(this.#capacity);
     this.outState = new Uint8Array(this.#capacity);
     this.outOccupied = new Uint8Array(this.#capacity);
+    this.outSnapped = new Uint8Array(this.#capacity);
+    this.outLamps = new Uint8Array(this.#capacity);
+    this.outFade = new Float32Array(this.#capacity);
+    this.#bornAt = new Float64Array(this.#capacity).fill(Number.NaN);
+    this.#goneAt = new Float64Array(this.#capacity).fill(Number.NaN);
+    this.#goneId = new Uint32Array(this.#capacity).fill(NO_ACTOR);
     this.#errPos = new Float32Array(this.#capacity * 3);
     this.#errHead = new Float32Array(this.#capacity);
     this.#errId = new Uint32Array(this.#capacity).fill(NO_ACTOR);
@@ -573,6 +627,18 @@ export class PoseInterpolator {
     this.outClassIdx = growU8(this.outClassIdx, n);
     this.outState = growU8(this.outState, n);
     this.outOccupied = growU8(this.outOccupied, n);
+    this.outSnapped = growU8(this.outSnapped, n);
+    this.outLamps = growU8(this.outLamps, n);
+    this.outFade = growF32(this.outFade, n);
+    const born = new Float64Array(n).fill(Number.NaN);
+    born.set(this.#bornAt, 0);
+    this.#bornAt = born;
+    const gone = new Float64Array(n).fill(Number.NaN);
+    gone.set(this.#goneAt, 0);
+    this.#goneAt = gone;
+    const gid = new Uint32Array(n).fill(NO_ACTOR);
+    gid.set(this.#goneId, 0);
+    this.#goneId = gid;
     this.#errPos = growF32(this.#errPos, n * 3);
     this.#errHead = growF32(this.#errHead, n);
     const eid = new Uint32Array(n).fill(NO_ACTOR);
@@ -588,6 +654,14 @@ export class PoseInterpolator {
     coef.set(this.#coef, 0);
     this.#coef = coef;
     this.#capacity = n;
+  }
+
+  /**
+   * Which class indices are people or riders (`Hello`'s category 1): their drawn heading turns at
+   * most {@link VRU_MAX_YAW_RATE}.
+   */
+  setVruClasses(flags: Uint8Array): void {
+    this.#vruClasses = flags.slice();
   }
 
   /** Forget every snapshot and the clock estimate (a resync, a seek, or a fresh `Hello`). */
@@ -703,6 +777,8 @@ export class PoseInterpolator {
       s.actorId.set(poses.actorId.subarray(0, count), 0);
       s.classIdx.set(poses.classIdx.subarray(0, count), 0);
       s.state.set(poses.state.subarray(0, count), 0);
+      if (poses.lamps) s.lamps.set(poses.lamps.subarray(0, count), 0);
+      else s.lamps.fill(0, 0, count);
       s.occupied.set(poses.occupied.subarray(0, count), 0);
       for (let i = 0; i < count; i++) {
         s.accel[i] = poses.accelCq[i] / ACCEL_SCALE;
@@ -852,8 +928,7 @@ export class PoseInterpolator {
     if (alpha > alphaCap) alpha = alphaCap;
     else if (alpha < -this.maxExtrapolationSteps) alpha = -this.maxExtrapolationSteps;
 
-    const count = newest.count;
-    this.#outCount = count;
+    this.#outCount = Math.max(newest.count, this.#dirtyTo);
     // The frame-wide segment the fast path evaluates: inside the history, between `a` and `b`.
     const inSegment = this.#size > 1 && renderSim >= a.simSeconds && renderSim <= b.simSeconds && segSpan > 1e-9;
     const segU = inSegment ? (renderSim - a.simSeconds) / segSpan : 0;
@@ -890,17 +965,95 @@ export class PoseInterpolator {
     const eHead = this.#errHead;
     const eId = this.#errId;
 
+    const oLamps = this.outLamps;
+    const oFade = this.outFade;
+    const bornAt = this.#bornAt;
+    const goneAt = this.#goneAt;
+    const goneId = this.#goneId;
+    const fadeSim = FADE_SECONDS * Math.max(0.05, Math.min(1, this.#rate));
+    const count = Math.max(newest.count, this.#dirtyTo);
     for (let i = 0; i < count; i++) {
-      const live = newest.occupied[i];
-      if (!live) {
-        this.outOccupied[i] = 0;
-        this.outActorId[i] = NO_ACTOR;
-        eId[i] = NO_ACTOR;
-        continue;
+      const live = i < newest.count && newest.occupied[i] === 1;
+      const shownId = this.outOccupied[i] === 1 ? this.outActorId[i] : NO_ACTOR;
+      if (!live || newest.actorId[i] !== shownId) {
+        // The actor this slot showed is not in the newest snapshot any more. Until the render
+        // clock reaches the last instant it existed it is drawn from the history as usual; then
+        // it fades out where it stopped. (A departure is a trip's end or the map's edge; the
+        // engine's last word on it is that snapshot.)
+        if (shownId !== NO_ACTOR && goneId[i] !== shownId) {
+          let last = Number.NaN;
+          for (let k = 1; k < this.#size; k++) {
+            const s = this.#at(k);
+            if (i < s.count && s.occupied[i] === 1 && s.actorId[i] === shownId) {
+              last = s.simSeconds;
+              break;
+            }
+          }
+          goneId[i] = shownId;
+          goneAt[i] = last;
+        }
+        if (!live && !snapAll && goneId[i] !== NO_ACTOR && goneId[i] === shownId && Number.isFinite(goneAt[i])) {
+          const id = goneId[i];
+          const p = i * 3;
+          const after = renderSim - goneAt[i];
+          if (after < fadeSim) {
+            if (after <= 0) {
+              const bk2 = this.#bracket(renderSim);
+              if (this.#evaluate(i, id, renderSim, bk2, raw) >= 0) {
+                oPos[p] = raw[0];
+                oPos[p + 1] = raw[1];
+                oPos[p + 2] = raw[2];
+                oHead[i] = wrapAngle(raw[3]);
+              }
+              oFade[i] = 1;
+            } else {
+              // Hold where it last was, fading.
+              oFade[i] = Math.max(0, 1 - after / fadeSim);
+            }
+            this.outSnapped[i] = 0;
+            continue;
+          }
+        }
+        if (!live) {
+          this.outOccupied[i] = 0;
+          this.outActorId[i] = NO_ACTOR;
+          oFade[i] = 0;
+          eId[i] = NO_ACTOR;
+          goneId[i] = NO_ACTOR;
+          bornAt[i] = Number.NaN;
+          continue;
+        }
       }
       const id = newest.actorId[i];
       const wasShown = this.outOccupied[i] === 1 && this.outActorId[i] === id;
       const p = i * 3;
+      if (snapAll) {
+        // A seek or a new stream: whatever the slot held before belongs to another stretch of
+        // the run, and the new picture is shown whole.
+        bornAt[i] = renderSim - fadeSim;
+        goneId[i] = NO_ACTOR;
+      } else if (!wasShown) {
+        // A newcomer: the first instant it exists is its earliest snapshot in the history.
+        let first = newest.simSeconds;
+        for (let k = 1; k < this.#size; k++) {
+          const s = this.#at(k);
+          if (i < s.count && s.occupied[i] === 1 && s.actorId[i] === id) first = s.simSeconds;
+          else break;
+        }
+        // The first picture of a stream is shown whole; only later arrivals fade in.
+        bornAt[i] = this.#size === 1 ? renderSim - fadeSim : first;
+        goneId[i] = NO_ACTOR;
+      }
+      if (!this.#held && renderSim < bornAt[i] - 1e-9) {
+        // Not born yet at the drawn instant: drawing it now would show it early, frozen at its
+        // spawn pose while the traffic around it is a step behind.
+        this.outOccupied[i] = 0;
+        this.outActorId[i] = NO_ACTOR;
+        oFade[i] = 0;
+        continue;
+      }
+      // A held (paused) run shows exactly its newest state, everyone in it whole.
+      oFade[i] = this.#held ? 1 : Math.min(1, (renderSim - bornAt[i]) / fadeSim);
 
       if (rebase && wasShown) {
         // What is on screen now, against what the new data says for the same instant.
@@ -942,6 +1095,8 @@ export class PoseInterpolator {
       this.outClassIdx[i] = newest.classIdx[i];
       this.outState[i] = newest.state[i];
       this.outSpeed[i] = newest.speed[i];
+      // The lamps of the snapshot whose interval the drawn instant is in.
+      oLamps[i] = inSegment && i < a.count && a.occupied[i] === 1 && a.actorId[i] === id ? a.lamps[i] : newest.lamps[i];
 
       let kind: number;
       if (inSegment && ((cKey[i] === segKey && cId[i] === id) || this.#fit(i, id, bk, segKey))) {
@@ -957,6 +1112,7 @@ export class PoseInterpolator {
       }
       if (snapAll) kind = 1;
       if (kind === 1) snapped++;
+      this.outSnapped[i] = kind === 1 ? 1 : 0;
       let x = raw[0];
       let y = raw[1];
       let z = raw[2];
@@ -988,10 +1144,19 @@ export class PoseInterpolator {
       oPos[p] = x;
       oPos[p + 1] = y;
       oPos[p + 2] = z;
+      const vruFlags = this.#vruClasses;
+      const ci = newest.classIdx[i];
+      if (wasShown && kind !== 1 && frameDt > 0 && ci < vruFlags.length && vruFlags[ci] === 1) {
+        const prevH = oHead[i];
+        const d = wrapAngle(h - prevH);
+        const lim = VRU_MAX_YAW_RATE * frameDt;
+        if (d > lim) h = prevH + lim;
+        else if (d < -lim) h = prevH - lim;
+      }
       oHead[i] = h > Math.PI || h < -Math.PI ? wrapAngle(h) : h;
     }
     this.#anyError = anyError;
-    this.#clearTo(count);
+    this.#clearTo(newest.count > count ? newest.count : count);
 
     this.#lastInfo = {
       alpha, delaySeconds: delay, intervalSeconds: interval, stalled, count, snapped,
@@ -1053,7 +1218,9 @@ export class PoseInterpolator {
     const vmax = Math.max(Math.abs(a.speed[i]), Math.abs(b.speed[i]));
     const tele = Math.max(this.teleportMetres, 1.5 * vmax * T + 2);
     if (chord2 > tele * tele || !(T > 1e-9)) {
+      // Keep it moving at its own speed through the rest of the step, from where the data put it.
       this.#write(b, i, out);
+      this.#deadReckon(b, i, t, 0, out);
       return 1;
     }
 
@@ -1079,6 +1246,15 @@ export class PoseInterpolator {
     const chord = Math.sqrt(chord2);
     const expected = 0.5 * (Math.abs(a.speed[i]) + Math.abs(b.speed[i])) * T;
     const consistent = Math.abs(chord - expected) <= Math.max(0.3, 0.35 * expected);
+    if (!consistent && chord > dataJumpMetres(expected)) {
+      // The data jumped: no motion at the reported speed covers this chord. Drawing it as a
+      // slide across the step is a teleport at tens of metres a second anyway; it is shown as
+      // what it is, a discontinuity in the engine's data, at the instant of the newer snapshot.
+      // Keep it moving at its own speed through the rest of the step, from where the data put it.
+      this.#write(b, i, out);
+      this.#deadReckon(b, i, t, 0, out);
+      return 1;
+    }
     if (this.curve === "linear" || !consistent) {
       out[0] = ax + cx * u;
       out[1] = ay + cy * u;
@@ -1167,9 +1343,78 @@ export class PoseInterpolator {
     const chord = Math.sqrt(chord2);
     const expected = 0.5 * (Math.abs(va) + Math.abs(vb)) * T;
     const consistent = Math.abs(chord - expected) <= Math.max(0.3, 0.35 * expected);
+    if (!consistent && chord > dataJumpMetres(expected)) return false;
     co[c + 8] = az;
     co[c + 9] = cz;
-    if (this.curve === "linear" || !consistent) {
+    const ci = b.classIdx[i];
+    const vru = ci < this.#vruClasses.length && this.#vruClasses[ci] === 1;
+    if (vru && this.curve !== "linear") {
+      // People and riders: tangents from the neighbouring positions (Catmull–Rom), not from the
+      // reported speed. The social-force model's speed changes by half in a step and back; drawn
+      // through those speeds a crowd pulsed. Positions are what the model integrated, so the
+      // curve through them is continuous in velocity whatever the speeds say.
+      //
+      // Each knot's tangent is limited against *both* chords that meet at it, earlier first, so
+      // the segment that ends at a knot and the one that starts there use the same tangent and
+      // the drawn velocity is continuous through it. Limiting it against only the current chord
+      // (as before) gave a person zig-zagging in a crowd a zero tangent at the end of one segment
+      // and a full one at the start of the next: a kink every 0.1 s, which the glitch hunter saw
+      // as people near a chase camera jerking several pixels.
+      let m0x = cx;
+      let m0y = cy;
+      let m1x = cx;
+      let m1y = cy;
+      let prevOk = false;
+      let pcx = 0;
+      let pcy = 0;
+      if (bk + 2 < this.#size) {
+        const o = this.#at(bk + 2);
+        const dt = b.simSeconds - o.simSeconds;
+        const dPrev = a.simSeconds - o.simSeconds;
+        if (i < o.count && o.occupied[i] === 1 && o.actorId[i] === id && dt > 1e-9 && dPrev > 1e-9) {
+          m0x = ((b.position[p] - o.position[p]) / dt) * T;
+          m0y = ((b.position[p + 1] - o.position[p + 1]) / dt) * T;
+          // The previous chord, in this segment's time units.
+          pcx = ((ax - o.position[p]) / dPrev) * T;
+          pcy = ((ay - o.position[p + 1]) / dPrev) * T;
+          prevOk = true;
+        }
+      }
+      let nextOk = false;
+      let ncx = 0;
+      let ncy = 0;
+      if (bk >= 1) {
+        const nx = this.#at(bk - 1);
+        const dt = nx.simSeconds - a.simSeconds;
+        const dNext = nx.simSeconds - b.simSeconds;
+        if (i < nx.count && nx.occupied[i] === 1 && nx.actorId[i] === id && dt > 1e-9 && dNext > 1e-9) {
+          m1x = ((nx.position[p] - ax) / dt) * T;
+          m1y = ((nx.position[p + 1] - ay) / dt) * T;
+          ncx = ((nx.position[p] - b.position[p]) / dNext) * T;
+          ncy = ((nx.position[p + 1] - b.position[p + 1]) / dNext) * T;
+          nextOk = true;
+        }
+      }
+      if (prevOk) {
+        limitTangent2(m0x, m0y, pcx, pcy);
+        m0x = TAN[0];
+        m0y = TAN[1];
+      }
+      limitTangent2(m0x, m0y, cx, cy);
+      m0x = TAN[0];
+      m0y = TAN[1];
+      limitTangent2(m1x, m1y, cx, cy);
+      m1x = TAN[0];
+      m1y = TAN[1];
+      if (nextOk) {
+        limitTangent2(m1x, m1y, ncx, ncy);
+        m1x = TAN[0];
+        m1y = TAN[1];
+      }
+      co[c] = ax; co[c + 1] = m0x; co[c + 2] = 3 * cx - 2 * m0x - m1x; co[c + 3] = -2 * cx + m0x + m1x;
+      co[c + 4] = ay; co[c + 5] = m0y; co[c + 6] = 3 * cy - 2 * m0y - m1y; co[c + 7] = -2 * cy + m0y + m1y;
+      co[c + 10] = ha; co[c + 11] = dh; co[c + 12] = 0; co[c + 13] = 0;
+    } else if (this.curve === "linear" || !consistent) {
       co[c] = ax; co[c + 1] = cx; co[c + 2] = 0; co[c + 3] = 0;
       co[c + 4] = ay; co[c + 5] = cy; co[c + 6] = 0; co[c + 7] = 0;
       co[c + 10] = ha; co[c + 11] = dh; co[c + 12] = 0; co[c + 13] = 0;

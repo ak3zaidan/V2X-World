@@ -85,10 +85,9 @@ pub struct ActorRow {
     pub state: u8,
     /// Neighbours in state *verified*, saturating at 255.
     pub verified_neighbors: u8,
-    /// The road user's activity (§3.3.5): what a pedestrian is doing, `0` for everything
-    /// else. The byte was reserved and written as zero in v1.0, so a reader that ignores
-    /// it loses only the activity.
-    pub flags8: u8,
+    /// The actor byte (§3.3.5, v1.2; the column v1.0 reserved as `flags8`): a vehicle's
+    /// exterior lamps, or a pedestrian's activity, by class.
+    pub lamps: u8,
 }
 
 impl ActorRow {
@@ -106,7 +105,7 @@ impl ActorRow {
         class_idx: 0,
         state: 0,
         verified_neighbors: 0,
-        flags8: 0,
+        lamps: 0,
     };
 
     /// True if the slot is occupied.
@@ -220,7 +219,7 @@ impl KeyframeBody {
             p += 1;
         }
         for r in &self.actors {
-            put_u8(&mut out, p, r.flags8);
+            put_u8(&mut out, p, r.lamps);
             p += 1;
         }
         encode_signals(&mut out, p, &self.signals);
@@ -304,7 +303,7 @@ impl KeyframeBody {
             p += 1;
         }
         for r in actors.iter_mut() {
-            r.flags8 = get_u8(body, p, WHAT)?;
+            r.lamps = get_u8(body, p, WHAT)?;
             p += 1;
         }
         let signals = decode_signals(body, off_signals, s, WHAT)?;
@@ -342,8 +341,8 @@ pub struct MovedRow {
     pub verified_neighbors: u8,
     /// Row flags (§3.4.2.1).
     pub mflags: u8,
-    /// Absolute activity (§3.3.5), in the byte v1.0 reserved.
-    pub activity: u8,
+    /// Absolute exterior lamps (§3.3.5, v1.2; the byte v1.0 reserved). PUBLIC.
+    pub lamps: u8,
 }
 
 /// One absolute-escape entry (§3.4.3), in the order of the moved rows that set
@@ -387,8 +386,8 @@ pub struct SpawnRow {
     pub state: u8,
     /// Verified-neighbour count.
     pub verified_neighbors: u8,
-    /// Activity (§3.3.5), in the byte v1.0 reserved.
-    pub activity: u8,
+    /// Exterior lamps (§3.3.5, v1.2; the byte v1.0 reserved). PUBLIC.
+    pub lamps: u8,
 }
 
 /// One despawn row (§3.4.6).
@@ -509,7 +508,7 @@ impl DeltaBody {
             p += 1;
         }
         for r in &self.moved {
-            put_u8(&mut out, p, r.activity);
+            put_u8(&mut out, p, r.lamps);
             p += 1;
         }
 
@@ -576,7 +575,7 @@ impl DeltaBody {
             p += 1;
         }
         for r in &self.spawns {
-            put_u8(&mut out, p, r.activity);
+            put_u8(&mut out, p, r.lamps);
             p += 1;
         }
 
@@ -672,7 +671,7 @@ impl DeltaBody {
                 state: 0,
                 verified_neighbors: 0,
                 mflags: 0,
-                activity: 0,
+                lamps: 0,
             };
             m
         ];
@@ -718,7 +717,7 @@ impl DeltaBody {
             p += 1;
         }
         for r in moved.iter_mut() {
-            r.activity = get_u8(body, p, WHAT)?;
+            r.lamps = get_u8(body, p, WHAT)?;
             p += 1;
         }
 
@@ -776,7 +775,7 @@ impl DeltaBody {
                 class_idx: 0,
                 state: 0,
                 verified_neighbors: 0,
-                activity: 0,
+                lamps: 0,
             };
             spawn_count
         ];
@@ -834,7 +833,7 @@ impl DeltaBody {
             p += 1;
         }
         for r in spawns.iter_mut() {
-            r.activity = get_u8(body, p, WHAT)?;
+            r.lamps = get_u8(body, p, WHAT)?;
             p += 1;
         }
 

@@ -36,6 +36,11 @@ export interface MeshBuilderOptions {
   readonly uv?: boolean;
   /** Emit a per-vertex `color` attribute. Default false. */
   readonly color?: boolean;
+  /**
+   * Emit a per-vertex `aLayer` attribute: the value of {@link MeshBuilder.layer} when the vertex
+   * was added. Default false.
+   */
+  readonly layer?: boolean;
   /** Initial vertex capacity. */
   readonly vertexCapacity?: number;
   /** Initial index capacity. */
@@ -52,6 +57,9 @@ export class MeshBuilder {
   normals: Float32Array;
   uvs: Float32Array | null;
   colors: Float32Array | null;
+  layers: Float32Array | null;
+  /** Written into `aLayer` for every vertex added from now on (when built with `layer`). */
+  layer = 0;
   indices: Uint32Array;
   vertexCount = 0;
   indexCount = 0;
@@ -63,6 +71,7 @@ export class MeshBuilder {
     this.normals = new Float32Array(v * 3);
     this.uvs = options.uv ? new Float32Array(v * 2) : null;
     this.colors = options.color ? new Float32Array(v * 3) : null;
+    this.layers = options.layer ? new Float32Array(v) : null;
     this.indices = new Uint32Array(i);
   }
 
@@ -78,6 +87,7 @@ export class MeshBuilder {
     this.normals = growF32(this.normals, v);
     if (this.uvs) this.uvs = growF32(this.uvs, (this.vertexCount + vertices) * 2);
     if (this.colors) this.colors = growF32(this.colors, v);
+    if (this.layers) this.layers = growF32(this.layers, this.vertexCount + vertices);
     this.indices = growU32(this.indices, this.indexCount + indices);
   }
 
@@ -106,6 +116,7 @@ export class MeshBuilder {
       this.colors[p + 1] = g;
       this.colors[p + 2] = b;
     }
+    if (this.layers) this.layers[i] = this.layer;
     this.vertexCount = i + 1;
     return i;
   }
@@ -141,6 +152,7 @@ export class MeshBuilder {
     g.setAttribute("normal", new BufferAttribute(this.normals.slice(0, this.vertexCount * 3), 3));
     if (this.uvs) g.setAttribute("uv", new BufferAttribute(this.uvs.slice(0, this.vertexCount * 2), 2));
     if (this.colors) g.setAttribute("color", new BufferAttribute(this.colors.slice(0, this.vertexCount * 3), 3));
+    if (this.layers) g.setAttribute("aLayer", new BufferAttribute(this.layers.slice(0, this.vertexCount), 1));
     const idx = this.vertexCount > 65535
       ? new BufferAttribute(this.indices.slice(0, this.indexCount), 1)
       : new BufferAttribute(Uint16Array.from(this.indices.subarray(0, this.indexCount)), 1);

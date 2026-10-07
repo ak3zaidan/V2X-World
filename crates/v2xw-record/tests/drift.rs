@@ -91,6 +91,7 @@ fn pose(step: u32, pos: [f64; 3]) -> ActorPose {
         state: ST_EQUIPPED,
         verified_neighbors: 0,
         activity: 0,
+        lamps: 0,
     }
 }
 

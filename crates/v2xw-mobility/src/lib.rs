@@ -100,6 +100,7 @@ pub mod fd;
 pub mod gnss;
 pub mod intersection;
 pub mod kinematic;
+pub mod lamps;
 pub mod lanechange;
 pub mod routing;
 pub mod rules;

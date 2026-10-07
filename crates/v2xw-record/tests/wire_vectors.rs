@@ -276,7 +276,7 @@ fn example_keyframe() -> KeyframeBody {
         class_idx,
         state,
         verified_neighbors: nbrs,
-        flags8: 0,
+        lamps: 0,
     };
     KeyframeBody {
         sim_time_ns: 1_000_000_000,
@@ -349,7 +349,7 @@ fn example_delta() -> DeltaBody {
             state: ST_EQUIPPED,
             verified_neighbors: 8,
             mflags: MFLAG_LANE_CHANGED,
-            activity: 0,
+            lamps: 0,
         }],
         abs: Vec::new(),
         lanes: vec![44],
@@ -600,13 +600,14 @@ fn the_vertical_delta_of_section_9_4_decodes_in_millimetres() {
     }
 }
 
-/// vwp-v1 §3.3.5: the activity byte rides in the bytes v1.0 reserved — the moved row's and
-/// the spawn row's `reserved` — and round-trips; with every activity zero the frame is the
+/// vwp-v1 §3.3.5: a pedestrian's activity rides in the bytes v1.0 reserved — the moved row's
+/// and the spawn row's `reserved`, the field the crate names `lamps` after the vehicle's use of
+/// the same byte — and round-trips; with every activity zero the frame is the
 /// §9.3 frame byte for byte, so v1.0's vectors still hold.
 #[test]
 fn the_activity_byte_round_trips_in_the_reserved_bytes() {
     let mut d = example_delta();
-    d.moved[0].activity = 6;
+    d.moved[0].lamps = 6;
     d.spawns.push(SpawnRow {
         slot: 1,
         actor_id: 9,
@@ -621,12 +622,12 @@ fn the_activity_byte_round_trips_in_the_reserved_bytes() {
         class_idx: 2,
         state: 0,
         verified_neighbors: 0,
-        activity: 3,
+        lamps: 3,
     });
     let frame = d.to_frame(11, 0).expect("the body fits a frame");
     let back = DeltaBody::decode(frame.body()).expect("it decodes");
-    assert_eq!(back.moved[0].activity, 6);
-    assert_eq!(back.spawns[0].activity, 3);
+    assert_eq!(back.moved[0].lamps, 6);
+    assert_eq!(back.spawns[0].lamps, 3);
     assert_eq!(back, d);
     let (_, _, want) = spec_example();
     let plain = example_delta().to_frame(11, 0).expect("the body fits a frame");

@@ -205,6 +205,7 @@ impl GtKinematics {
             class: Some(class.to_string()),
             node: None,
             activity: None,
+            lamps: 0,
         })
     }
 
@@ -221,6 +222,13 @@ impl GtKinematics {
     #[must_use]
     pub fn with_node(mut self, node: Option<NodeId>) -> Self {
         self.0.node = node;
+        self
+    }
+
+    /// The same record carrying the actor's exterior lamps (vwp-v1 §3.3.5).
+    #[must_use]
+    pub fn with_lamps(mut self, lamps: u8) -> Self {
+        self.0.lamps = lamps;
         self
     }
 }

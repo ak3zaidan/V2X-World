@@ -51,6 +51,7 @@ import {
 import type { SignalBlock, VwpWorld } from "@vwp/protocol";
 import { SignalRenderer } from "./signals.js";
 import { findPortals } from "./passages.js";
+import { addCrosswalk, buildLaneMarkings, type MarkingReport } from "./markings.js";
 import { MeshBuilder, addBox, addCylinder, addDisc, addExtrudedRing, addPolygon, addRibbon } from "./geometry.js";
 import type { RingShading } from "./geometry.js";
 import type { ViewerTheme } from "./theme.js";
@@ -66,11 +67,39 @@ const LANE_JUNCTION_INTERNAL = 5;
 const LANE_CROSSING = 6;
 
 /** Height offsets, metres above the terrain, chosen to stay clear of depth-buffer noise at 500 m. */
+// Every pair of surface layers that can overlap is at least 4 cm apart: at 2 km from a 20 m near
+// plane a 24-bit depth buffer resolves 1 cm, and the glitch hunter measured the old 2 cm gap
+// between a sidewalk (0.14) and a junction disc (0.16) z-fighting at that range.
 const Z_LANDUSE = 0.02;
 const Z_ROAD = 0.1;
-const Z_JUNCTION = 0.16;
-const Z_CROSSING = 0.2;
-const Z_MARKING = 0.24;
+const Z_JUNCTION = 0.14;
+const Z_CROSSING = 0.22;
+const Z_MARKING = 0.26;
+/** A sidewalk ribbon sits this far above the carriageway. */
+const SIDEWALK_LIFT_M = 0.08;
+/**
+ * Draw-order ranks of the road-surface layers, lowest first. The gaps above are not enough on
+ * their own at street level: from a chase camera's 0.7 m near plane a 24-bit depth buffer resolves
+ * 13 cm at 870 m, and a coloured bus lane lies exactly on the carriageway it overlaps. Each rank
+ * is therefore also pulled towards the camera by {@link LAYER_BIAS_STEPS} depth-buffer steps in
+ * the surface shader — a per-vertex `polygonOffsetUnits` — so an upper layer wins by a whole
+ * number of steps at any distance, and the order holds wherever the gap alone would not.
+ */
+const RANK_LANDUSE = -1;
+const RANK_ROAD = 0;
+const RANK_COLOURED_LANE = 1;
+const RANK_JUNCTION = 2;
+const RANK_SIDEWALK = 3;
+const RANK_CROSSING = 4;
+/** Depth-buffer steps (of a 24-bit buffer) between adjacent ranks. */
+export const LAYER_BIAS_STEPS = 2;
+/**
+ * Markings, stop bars and headlight pools must stay above the highest rank's bias: their polygon
+ * offset in units, which is `polygonOffsetUnits` (≈ one depth step each).
+ */
+export const ABOVE_SURFACE_OFFSET_UNITS = -(RANK_CROSSING * LAYER_BIAS_STEPS + 4);
+/** Pulls a surface vertex towards the camera by its rank's bias, after projection. */
+export const SURFACE_LAYER_BIAS_GLSL = "gl_Position.z -= uLayerBias * aLayer * gl_Position.w;";
 /** Width of a painted lane line, metres: `addOffsetLine`'s half-width 0.09 twice. */
 const MARKING_WIDTH_M = 0.18;
 
@@ -236,6 +265,8 @@ export class WorldRenderer {
   };
 
   #surfaceMaterial: MeshLambertMaterial;
+  /** The surface shader's per-rank depth bias, in NDC depth (a 24-bit step is 2⁻²³ of it). */
+  #layerBias = { value: LAYER_BIAS_STEPS * 2 ** -23 };
   #markingMaterial: MeshBasicMaterial;
   #buildingMaterial: MeshLambertMaterial;
   #siteMaterial: MeshLambertMaterial;
@@ -255,6 +286,12 @@ export class WorldRenderer {
   #ghost = -1;
   /** A second ghosted building: the one the camera itself is in; see {@link setGhostBuildings}. */
   #ghost2 = -1;
+  /** See {@link darkness}. */
+  #darkness = 0;
+  /** What the marking pass drew, for tests and the build report. */
+  #markingReport: MarkingReport | null = null;
+  /** Buildings a road runs through (indices), from `#buildPortals`. */
+  #portalBuildings = new Set<number>();
   /** The `lane_markings` overlay's choice; {@link fadeMarkings} only ever hides on top of it. */
   #markingsWanted = true;
   #buildingBackend: BuildingBackend = "none";
@@ -314,13 +351,22 @@ export class WorldRenderer {
     this.lights.name = "world/lights";
 
     this.#surfaceMaterial = new MeshLambertMaterial({ vertexColors: true, name: "world-surface" });
+    const layerBias = this.#layerBias;
+    this.#surfaceMaterial.onBeforeCompile = (shader) => {
+      shader.uniforms.uLayerBias = layerBias;
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nattribute float aLayer;\nuniform float uLayerBias;")
+        .replace("#include <project_vertex>", `#include <project_vertex>\n${SURFACE_LAYER_BIAS_GLSL}`);
+    };
+    this.#surfaceMaterial.customProgramCacheKey = () => "vwp-surface-layers";
     // Markings test depth against the road but never write it, and draw after it: where two
     // markings overlap — the edge lines of the two directions meet on the centre line, a white and a
     // yellow strip at exactly the same height — the later one wins, every frame, instead of the two
     // trading places as the camera moves (measured: 1.8 % of a 1,680 x 1,050 plan view changing
     // under a 1 cm camera move, all of it markings).
     this.#markingMaterial = new MeshBasicMaterial({
-      vertexColors: true, name: "lane-markings", polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+      vertexColors: true, name: "lane-markings", polygonOffset: true, polygonOffsetFactor: -2,
+      polygonOffsetUnits: ABOVE_SURFACE_OFFSET_UNITS,
       toneMapped: false, depthWrite: false,
     });
     this.markings.renderOrder = 1;
@@ -458,6 +504,7 @@ export class WorldRenderer {
     const dirY = Math.sin(azimuth) * ce;
     const dirZ = Math.sin(elevation);
     const daylight = Math.max(0, dirZ);
+    this.#darkness = 1 - Math.min(1, daylight * 4);
 
     this.#sunDir.set(dirX, dirY, Math.max(0.03, dirZ)).normalize();
     this.#placeSun();
@@ -618,14 +665,17 @@ export class WorldRenderer {
     const nTiles = tilesX * tilesY;
     const surfaces: (MeshBuilder | null)[] = new Array<MeshBuilder | null>(nTiles).fill(null);
     const marks: (MeshBuilder | null)[] = new Array<MeshBuilder | null>(nTiles).fill(null);
-    const surfaceOf = (i: number): MeshBuilder => {
+    /** Tile `i`'s surface builder, stamping what is added next with draw-order `rank`. */
+    const surfaceAt = (i: number, rank: number): MeshBuilder => {
       let b = surfaces[i];
       if (!b) {
-        b = new MeshBuilder({ color: true, vertexCapacity: 4096, indexCapacity: 8192 });
+        b = new MeshBuilder({ color: true, layer: true, vertexCapacity: 4096, indexCapacity: 8192 });
         surfaces[i] = b;
       }
+      b.layer = rank;
       return b;
     };
+    const surfaceOf = (i: number): MeshBuilder => surfaceAt(i, RANK_ROAD);
     const markOf = (i: number): MeshBuilder => {
       let b = marks[i];
       if (!b) {
@@ -646,7 +696,7 @@ export class WorldRenderer {
       const hex = landuseColor(th, lu.classIdx);
       const [r, g, b] = colorTriple(hex);
       const t = tileIndex(ring.x[lu.ringOff], ring.y[lu.ringOff]);
-      addPolygon(surfaceOf(t), ring.x, ring.y, lu.ringOff, lu.ringCount, bbox.minZM + Z_LANDUSE, scratch, r, g, b);
+      addPolygon(surfaceAt(t, RANK_LANDUSE), ring.x, ring.y, lu.ringOff, lu.ringCount, bbox.minZM + Z_LANDUSE, scratch, r, g, b);
     }
 
     const lanes = world.lanes;
@@ -659,40 +709,42 @@ export class WorldRenderer {
       const type = lanes.laneType[i];
       const halfWidth = Math.max(0.4, lanes.widthM[i] / 2);
       const t = tileIndex(pts.x[off], pts.y[off]);
-      const surface = surfaceOf(t);
       let hex = th.road;
       let z = Z_ROAD;
+      let rank = RANK_ROAD;
       switch (type) {
-        case LANE_SIDEWALK: hex = th.sidewalk; z = Z_ROAD + 0.04; break;
-        case LANE_BIKE: hex = th.bikeLane; break;
-        case LANE_BUS: hex = th.busLane; break;
-        case LANE_PARKING: hex = th.parking; break;
-        case LANE_JUNCTION_INTERNAL: hex = th.junction; z = Z_JUNCTION; break;
-        case LANE_CROSSING: hex = th.crossing; z = Z_CROSSING; break;
+        case LANE_SIDEWALK: hex = th.sidewalk; z = Z_ROAD + SIDEWALK_LIFT_M; rank = RANK_SIDEWALK; break;
+        case LANE_BIKE: hex = th.bikeLane; rank = RANK_COLOURED_LANE; break;
+        case LANE_BUS: hex = th.busLane; rank = RANK_COLOURED_LANE; break;
+        case LANE_PARKING: hex = th.parking; rank = RANK_COLOURED_LANE; break;
+        case LANE_JUNCTION_INTERNAL: hex = th.junction; z = Z_JUNCTION; rank = RANK_JUNCTION; break;
+        case LANE_CROSSING: hex = th.crossing; z = Z_CROSSING; rank = RANK_CROSSING; break;
         default: break;
       }
       const [r, g, b] = colorTriple(hex);
-      addRibbon(surface, pts.x, pts.y, pts.z, off, n, halfWidth, z, r, g, b);
+      addRibbon(surfaceAt(t, rank), pts.x, pts.y, pts.z, off, n, halfWidth, z, r, g, b);
       laneCount++;
 
-      if (this.#options.laneMarkings && (type === LANE_DRIVE || type === LANE_BUS)) {
-        const mb = markOf(t);
-        const edge = lanes.indexInEdge[i];
-        const [mr, mg, mb2] = colorTriple(edge === 0 ? th.laneMarking : th.laneMarking);
-        // Outer edge line on the rightmost lane, dashed separator elsewhere.
-        addOffsetLine(mb, pts.x, pts.y, pts.z, off, n, halfWidth - 0.12, 0.09, Z_MARKING, mr, mg, mb2);
-        if (edge === 0) {
-          const [cr, cg, cb] = colorTriple(th.laneMarkingCentre);
-          addOffsetLine(mb, pts.x, pts.y, pts.z, off, n, -(halfWidth - 0.12), 0.09, Z_MARKING, cr, cg, cb);
-        }
-      }
+    }
+
+    // Lane lines, edge lines, the centre line, stop lines and lane-use arrows, by the MUTCD's
+    // rules (`markings.ts`).
+    if (this.#options.laneMarkings) {
+      const white = [...colorTriple(th.laneMarking)] as [number, number, number];
+      const yellow = [...colorTriple(th.laneMarkingCentre)] as [number, number, number];
+      this.#markingReport = buildLaneMarkings(world, {
+        at: (x, y) => markOf(tileIndex(x, y)),
+        z: Z_MARKING,
+        white,
+        yellow,
+      });
     }
 
     for (let i = 0; i < world.junctions.count; i++) {
       const j = world.junctions.at(i);
       const r = Math.max(4, Math.min(30, 2.2 + j.laneCount * 1.1));
       const [cr, cg, cb] = colorTriple(th.junction);
-      addDisc(surfaceOf(tileIndex(j.xM, j.yM)), j.xM, j.yM, bbox.minZM + Z_JUNCTION, r, 16, cr, cg, cb);
+      addDisc(surfaceAt(tileIndex(j.xM, j.yM), RANK_JUNCTION), j.xM, j.yM, bbox.minZM + Z_JUNCTION, r, 16, cr, cg, cb);
     }
 
     for (let i = 0; i < world.crossings.count; i++) {
@@ -701,21 +753,9 @@ export class WorldRenderer {
       const dy = c.y2M - c.y1M;
       const len = Math.hypot(dx, dy);
       if (len < 0.2) continue;
-      const [cr, cg, cb] = colorTriple(th.crossing);
-      // Zebra: bars across the crossing axis.
-      const bars = Math.max(2, Math.min(14, Math.round(len / 0.9)));
-      const ux = dx / len;
-      const uy = dy / len;
-      const px = -uy;
-      const py = ux;
-      const hw = Math.max(0.6, c.widthM / 2);
-      const mb = markOf(tileIndex(c.x1M, c.y1M));
-      for (let k = 0; k < bars; k++) {
-        const f = (k + 0.5) / bars;
-        const bx = c.x1M + dx * f;
-        const by = c.y1M + dy * f;
-        addQuadStrip(mb, bx, by, ux, uy, px, py, len / bars * 0.45, hw, bbox.minZM + Z_CROSSING, cr, cg, cb);
-      }
+      // High-visibility ladder markings: NYC DOT's standard (`markings.ts`).
+      const col = [...colorTriple(th.crossing)] as [number, number, number];
+      addCrosswalk(markOf(tileIndex(c.x1M, c.y1M)), c.x1M, c.y1M, c.x2M, c.y2M, c.widthM, bbox.minZM + Z_CROSSING, col);
     }
 
     // ---- Buildings. ----
@@ -761,7 +801,7 @@ export class WorldRenderer {
     this.signals.build(world);
     this.#buildSites(world);
     if (this.#buildings) drawables++;
-    if (this.signals.count > 0) drawables += 3;
+    if (this.signals.count > 0) drawables += 5;
     drawables += this.sitesGroup.children.length + 2; // ground and sky
 
     this.#report = {
@@ -792,6 +832,7 @@ export class WorldRenderer {
   #buildPortals(world: VwpWorld): void {
     const portals = findPortals(world);
     this.#report = { ...this.#report, portals: portals.length };
+    this.#portalBuildings = new Set(portals.map((p) => p.building));
     if (portals.length === 0) return;
     const pos = new Float32Array(portals.length * 4 * 3);
     const idx = new Uint32Array(portals.length * 6);
@@ -1049,6 +1090,56 @@ export class WorldRenderer {
     return i >= 0 && i < this.#buildingCount ? this.#buildingCentroid[i * 4 + 2] : -Infinity;
   }
 
+  /** What the lane-marking pass drew, or null before a world (or with markings off). */
+  get markingReport(): MarkingReport | null {
+    return this.#markingReport;
+  }
+
+  /**
+   * How dark the scene is, `[0, 1]`: 0 in daylight, 1 at night, from the sun the time of day puts
+   * in the sky. Lamps glow in proportion (`actor-material.ts`).
+   */
+  get darkness(): number {
+    return this.#darkness;
+  }
+
+  /**
+   * The thinnest vertical gap between two road-surface layers that can overlap, metres: what the
+   * depth buffer has to resolve for the road not to z-fight (the glitch hunter checks it).
+   */
+  get minLayerGapM(): number {
+    return this.#minLayerGapM();
+  }
+
+  /**
+   * Depth-buffer steps (24-bit) the surface shader separates adjacent layer ranks by, read back
+   * from the uniform the shader actually uses. Settable, so a test can take the bias away.
+   */
+  get layerBiasSteps(): number {
+    return this.#layerBias.value / 2 ** -23;
+  }
+
+  set layerBiasSteps(steps: number) {
+    this.#layerBias.value = steps * 2 ** -23;
+  }
+
+  #minLayerGapM(): number {
+    const layers = [Z_LANDUSE, Z_ROAD, Z_ROAD + SIDEWALK_LIFT_M, Z_JUNCTION, Z_CROSSING];
+    let gap = Infinity;
+    for (let i = 0; i < layers.length; i++) {
+      for (let j = i + 1; j < layers.length; j++) gap = Math.min(gap, Math.abs(layers[i] - layers[j]));
+    }
+    return gap;
+  }
+
+  /**
+   * Whether a road runs through building `i` (it has a portal, `passages.ts`): a vehicle inside
+   * its footprint is in a real passage, not inside a wall.
+   */
+  hasPassage(i: number): boolean {
+    return this.#portalBuildings.has(i);
+  }
+
   /** The building currently ghosted, or −1. */
   get ghostBuilding(): number {
     return this.#ghost;
@@ -1243,6 +1334,7 @@ export class WorldRenderer {
    * vertical field and height.
    */
   fadeMarkings(distanceM: number, fovDeg: number, viewportPx: number): void {
+    this.signals.setBarVisibility(distanceM);
     const mPerPx = (2 * Math.max(1, distanceM) * Math.tan((fovDeg * Math.PI) / 360)) / Math.max(1, viewportPx);
     const coverage = MARKING_WIDTH_M / mPerPx;
     const t = Math.min(1, Math.max(0, (coverage - 0.35) / (0.9 - 0.35)));
@@ -1273,6 +1365,7 @@ export class WorldRenderer {
   }
 
   #clearWorld(): void {
+    this.#portalBuildings = new Set<number>();
     // The signal renderer rebuilds itself in `setWorld`, keeping what the lamps showed when the
     // world is the same one (a theme swap).
     for (const g of [this.tiles, this.markings, this.buildingsGroup, this.sitesGroup]) {

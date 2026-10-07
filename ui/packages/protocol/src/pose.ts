@@ -212,6 +212,8 @@ export class PoseBuffer {
   classIdx: Uint8Array;
   state: Uint8Array;
   verifiedNeighbors: Uint8Array;
+  /** §3.3.5 exterior lamps ({@link ActorLamps}); 0 from a v1.0/1.1 server. */
+  lamps: Uint8Array;
 
   /** Dequantised world-local ENU metres, 3 floats (x, y, z) per slot. */ positions: Float32Array;
   /** Dequantised heading in radians, 1 float per slot. */ headings: Float32Array;
@@ -233,6 +235,7 @@ export class PoseBuffer {
     this.classIdx = new Uint8Array(c);
     this.state = new Uint8Array(c);
     this.verifiedNeighbors = new Uint8Array(c);
+    this.lamps = new Uint8Array(c);
     this.positions = new Float32Array(c * 3);
     this.headings = new Float32Array(c);
     this.speeds = new Float32Array(c);
@@ -335,6 +338,8 @@ export class PoseBuffer {
     state.set(this.state, 0);
     const verifiedNeighbors = new Uint8Array(next);
     verifiedNeighbors.set(this.verifiedNeighbors, 0);
+    const lamps = new Uint8Array(next);
+    lamps.set(this.lamps, 0);
     const positions = new Float32Array(next * 3);
     positions.set(this.positions, 0);
     const headings = new Float32Array(next);
@@ -356,6 +361,7 @@ export class PoseBuffer {
     this.classIdx = classIdx;
     this.state = state;
     this.verifiedNeighbors = verifiedNeighbors;
+    this.lamps = lamps;
     this.positions = positions;
     this.headings = headings;
     this.speeds = speeds;
@@ -411,6 +417,7 @@ export class PoseBuffer {
       this.classIdx[s] = a.classIdx[s];
       this.state[s] = a.state[s];
       this.verifiedNeighbors[s] = a.verifiedNeighbors[s];
+      this.lamps[s] = a.lamps[s];
       this.occupied[s] = id === SENTINEL_U32 ? 0 : 1;
       this.#refresh(s);
     }
@@ -506,6 +513,7 @@ export class PoseBuffer {
       this.classIdx[s] = sp.classIdx[i];
       this.state[s] = sp.state[i];
       this.verifiedNeighbors[s] = sp.verifiedNeighbors[i];
+      this.lamps[s] = sp.lamps[i];
       this.occupied[s] = 1;
       if (s + 1 > this.#count) this.#count = s + 1;
       this.#refresh(s);
@@ -537,6 +545,7 @@ export class PoseBuffer {
       this.accelCq[s] = m.accelCq[i];
       this.state[s] = m.state[i];
       this.verifiedNeighbors[s] = m.verifiedNeighbors[i];
+      this.lamps[s] = m.lamps[i];
       this.occupied[s] = 1;
       this.#refresh(s);
     }

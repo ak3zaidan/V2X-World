@@ -687,6 +687,7 @@ mod tests {
             class: None,
             node: Some(NodeId::new(node)),
             activity: None,
+            lamps: 0,
         };
         OwnedRecord {
             channel: "gt.kinematics",

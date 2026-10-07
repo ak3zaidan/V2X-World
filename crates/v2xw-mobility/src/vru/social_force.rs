@@ -434,7 +434,21 @@ pub struct Pedestrian {
     pub midblock_declined: Option<LaneId>,
     /// How many walks it has been given (its route is replaced after a mid-block crossing).
     pub walks: u32,
+    /// Where it stands relative to its lane position, metres (horizontal). Zero except just
+    /// after a lane change at a corner: the lanes are centrelines, so a person on the outside
+    /// of a corner is not on the next lane's band when the route moves on to it. The offset
+    /// carries them from where they stood and shrinks at [`CARRY_CLOSE_MPS`], so they walk
+    /// round the corner instead of jumping onto the next lane.
+    pub carry: Vec3,
 }
+
+/// How fast a lane-change offset ([`Pedestrian::carry`]) closes, m/s: well under a walking
+/// pace, so the extra apparent speed it adds is small.
+pub const CARRY_CLOSE_MPS: f64 = 0.7;
+/// A lane change whose offset would exceed this is a real gap in the walkable network, not a
+/// corner, and is not carried, metres. On the Midtown extract the corner offsets the glitch
+/// hunter measured were 2-4.2 m (a pavement's end to the crosswalk's start round the kerb).
+const CARRY_MAX_M: f64 = 5.0;
 
 impl Pedestrian {
     /// Its world position, given the world.
@@ -447,7 +461,7 @@ impl Pedestrian {
         }
         world
             .try_lane(self.lane)
-            .map(|l| l.offset_point(self.s_m, self.lateral_m))
+            .map(|l| l.offset_point(self.s_m, self.lateral_m) + self.carry)
             .unwrap_or(Vec3::ZERO)
     }
 
@@ -693,6 +707,7 @@ impl SocialForce {
                 midblock: None,
                 midblock_declined: None,
                 walks: 0,
+                carry: Vec3::ZERO,
             },
         );
         if let Some(p) = self.people.get_mut(&actor) {
@@ -917,7 +932,8 @@ impl VruMobility for SocialForce {
             let Some(lane) = world.try_lane(person.lane) else {
                 continue;
             };
-            let position = lane.offset_point(person.s_m, person.lateral_m);
+            let carry = person.carry;
+            let position = lane.offset_point(person.s_m, person.lateral_m) + carry;
             let heading = lane.heading_at(person.s_m);
             let (sin_h, cos_h) = math::sin_cos(heading);
             let forward = Vec3::new_2d(cos_h, sin_h);
@@ -1171,7 +1187,8 @@ impl VruMobility for SocialForce {
             );
 
             // --- put it back on its lane -----------------------------------
-            let projection = lane.project_point(moved);
+            // The lane position moves with the person; the carry is closed separately below.
+            let projection = lane.project_point(moved - carry);
             let mut s_m = projection.s_m;
             let kerb = stop_s.max(0.0);
             if hold && s_m > kerb {
@@ -1190,14 +1207,30 @@ impl VruMobility for SocialForce {
             let mut current = person.lane;
             let mut route_index = person.route_index;
             let mut arrived = false;
+            let mut carry_next = carry;
             if s_m >= lane.length_m {
                 match self.next_lane(person) {
                     Some(next) if Self::is_walkable(world, next) => {
-                        let overshoot = s_m - lane.length_m;
+                        // Carry the person onto the next lane where they actually stand: the
+                        // moved position projected onto it, kept inside its walkable width.
+                        // Putting them on its centreline (the old `lateral_m = 0`) made anyone
+                        // walking off a wide pavement's centreline jump 1-4 m sideways in one
+                        // step at every lane change, which the 3D view's glitch hunter counted
+                        // as hundreds of pedestrian teleports a minute on Midtown.
+                        let next_lane = world.lane(next);
+                        let onto = next_lane.project_point(moved);
+                        let next_half = (0.5 * next_lane.width_m - body).max(0.0);
                         current = next;
                         route_index += 1;
-                        s_m = overshoot.min(world.lane(next).length_m);
-                        lateral_m = 0.0;
+                        s_m = onto.s_m.clamp(0.0, next_lane.length_m);
+                        lateral_m = onto.d_m.clamp(-next_half, next_half);
+                        let landed = next_lane.offset_point(s_m, lateral_m);
+                        let gap = Vec3::new_2d(moved.x - landed.x, moved.y - landed.y);
+                        carry_next = if gap.norm_2d() <= CARRY_MAX_M {
+                            gap
+                        } else {
+                            Vec3::ZERO
+                        };
                     }
                     _ => {
                         s_m = lane.length_m;
@@ -1321,6 +1354,12 @@ impl VruMobility for SocialForce {
             person.lane = current;
             person.s_m = s_m;
             person.lateral_m = lateral_m;
+            let gap = carry_next.norm_2d();
+            person.carry = if gap > 0.0 {
+                carry_next.scale((gap - CARRY_CLOSE_MPS * dt_s).max(0.0) / gap)
+            } else {
+                Vec3::ZERO
+            };
             person.vel = velocity;
             person.route_index = route_index;
             person.arrived = arrived || gave_up;
@@ -1928,6 +1967,60 @@ mod tests {
                 assert!((lane_pos.s_m - person.s_m).abs() < 1e-9);
             }
         }
+    }
+
+    #[test]
+    fn a_pedestrian_never_jumps_at_a_lane_change() {
+        // A person walking off the pavement's centreline keeps where they stand when the route
+        // moves on to the next lane: no step is longer than the fastest walk allows. (Before,
+        // the next lane was entered on its centreline, a sideways jump of up to the lateral
+        // offset in one 0.1 s step; the 3D view's glitch hunter counted hundreds a minute.)
+        let (w, cycle) = pavement_ring();
+        let rng = RngRegistry::new(5);
+        let params = SocialForceParams {
+            // A strong random push, so people wander well off the centreline of a 4 m pavement.
+            fluctuation_mps2: 5.0,
+            ..SocialForceParams::default()
+        };
+        let mut m = SocialForce::new(params);
+        {
+            let mut ctx = MobilityCtx::new(0, &w, &rng);
+            for id in 1..=12u32 {
+                m.spawn(&mut ctx, ActorId::new(id), cycle.clone(), f64::from(id) * 7.0)
+                    .expect("spawned");
+            }
+        }
+        let snapshot = ActorSnapshot::new(0, 50.0);
+        let dt = Duration::from_millis(100);
+        let mut last: BTreeMap<ActorId, (Vec3, LaneId)> = BTreeMap::new();
+        let mut changes = 0;
+        let mut worst: f64 = 0.0;
+        for k in 0..1500u64 {
+            let mut ctx = MobilityCtx::new(k * 100 * NS_PER_MS, &w, &rng);
+            for (actor, kin) in m.step(&mut ctx, dt, &snapshot) {
+                let lane = kin.lane.expect("on a lane").lane;
+                if let Some((p, prev_lane)) = last.get(&actor) {
+                    let person = m.get(actor).expect("here");
+                    let limit = (params.max_speed_factor * person.desired_speed_mps
+                        + CARRY_CLOSE_MPS)
+                        * 0.1
+                        + 0.05;
+                    let step = ((kin.pos.x - p.x).powi(2) + (kin.pos.y - p.y).powi(2)).sqrt();
+                    if lane != *prev_lane {
+                        changes += 1;
+                        worst = worst.max(step - limit);
+                    }
+                    assert!(
+                        step <= limit,
+                        "{actor} moved {step:.2} m in one step (limit {limit:.2} m) going {:?} -> {lane:?}",
+                        prev_lane
+                    );
+                }
+                last.insert(actor, (kin.pos, lane));
+            }
+        }
+        assert!(changes > 8, "the run must cross lane boundaries ({changes})");
+        assert!(worst <= 0.0);
     }
 
     #[test]

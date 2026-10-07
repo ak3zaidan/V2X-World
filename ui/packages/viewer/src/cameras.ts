@@ -104,9 +104,76 @@ export type InputTarget = Pick<EventTarget, "addEventListener" | "removeEventLis
 
 const DEG = Math.PI / 180;
 
+/** Default chase elevation, degrees: a camera a little above the roof, looking down the street. */
+const CHASE_PITCH_DEG = 13;
+
+/**
+ * Natural frequency of the chase yaw's critically damped spring, rad/s. A critically damped
+ * second-order follow settles without overshoot in about `4.7 / ω` (to 1 %): 1.3 s here, so the
+ * camera swings round a corner with the car, a beat behind, and never oscillates.
+ */
+const CHASE_YAW_OMEGA = 3.6;
+
+/** The chase distance for a car, metres, that `distanceM` (the zoom) is relative to. */
+const CHASE_REFERENCE_M = 9;
+/** Where in a street flight's progress `u` its final descent onto the subject begins. */
+const FLY_DESCENT_AT = 0.6;
+
+/** Eight directions round the camera, for {@link CameraController} wall proximity. */
+const NEAR_RING: readonly (readonly [number, number])[] = [
+  [1, 0], [0.7071, 0.7071], [0, 1], [-0.7071, 0.7071], [-1, 0], [-0.7071, -0.7071], [0, -1], [0.7071, -0.7071],
+];
+
+
+/**
+ * One exact step of a critically damped spring: error `e` and rate `v` after `dt` towards zero,
+ * `x(t) = (e + (v + ωe)t)·e^(−ωt)`. Exact, so it is frame-rate independent.
+ */
+function dampedStep(e: number, v: number, omega: number, dt: number): [number, number] {
+  const k = Math.exp(-omega * dt);
+  const a = v + omega * e;
+  return [(e + a * dt) * k, (v - omega * a * dt) * k];
+}
+
 /** Zero velocity and zero acceleration at both ends of [0, 1]. */
 function smootherstep(u: number): number {
   return u * u * u * (u * (u * 6 - 15) + 10);
+}
+
+/**
+ * Move `x` (with velocity `v`) towards `target` for `dt` seconds as a critically damped spring of
+ * natural frequency `omega`, exactly: `e(t) = (e₀ + (v₀ + ωe₀)t)·e^(−ωt)` per axis.
+ */
+function springTo(x: Vector3, v: Vector3, target: Vector3, omega: number, dt: number): void {
+  if (!(dt > 0)) return;
+  const k = Math.exp(-omega * dt);
+  for (const axis of ["x", "y", "z"] as const) {
+    const e = x[axis] - target[axis];
+    const a = v[axis] + omega * e;
+    x[axis] = target[axis] + (e + a * dt) * k;
+    v[axis] = (v[axis] - omega * a * dt) * k;
+  }
+}
+
+/**
+ * {@link springTo} towards a target moving at `(tvx, tvy, 0)`: the spring acts on the error and
+ * the relative velocity, so a target moving steadily is followed with no lag. `target` is where
+ * the target is at the end of the step; it was `tv·dt` behind at its start.
+ */
+function springFollow(x: Vector3, v: Vector3, target: Vector3, tvx: number, tvy: number, omega: number, dt: number): void {
+  if (!(dt > 0)) return;
+  const k = Math.exp(-omega * dt);
+  const tv = [tvx, tvy, 0];
+  const axes = ["x", "y", "z"] as const;
+  for (let n = 0; n < 3; n++) {
+    const axis = axes[n];
+    const start = target[axis] - tv[n] * dt;
+    const e = x[axis] - start;
+    const u = v[axis] - tv[n];
+    const a = u + omega * e;
+    x[axis] = target[axis] + (e + a * dt) * k;
+    v[axis] = tv[n] + (u - omega * a * dt) * k;
+  }
 }
 
 function finite3(v: Vector3): boolean {
@@ -176,12 +243,33 @@ export class CameraController {
   #occlusionRange: number;
   /** The heading the chase camera sits behind, smoothed; see `update`. NaN until seeded. */
   #chaseYaw = Number.NaN;
+  /** Its rate, rad/s: the yaw follows the heading as a critically damped spring. */
+  #chaseYawRate = 0;
+  /**
+   * The followed subject's body, metres, and whether it is a person or a rider: what the chase and
+   * dashboard framing is sized from ({@link setFollowSubject}). A car until told otherwise.
+   */
+  #subjectL = 4.5;
+  #subjectW = 1.8;
+  #subjectH = 1.5;
+  #subjectVru = false;
+  /**
+   * How far the chase camera may stand from its look point, after walls: follows the occlusion
+   * march's answer quickly inwards and slowly back out, so a lamp post of a façade corner passing
+   * behind the car is a glide, not a cut.
+   */
+  #clearDist = Number.POSITIVE_INFINITY;
+  /** Set by {@link setFollowPose} when the subject's pose jumped this frame. */
+  #subjectJumped = false;
   readonly yawLambda: number;
   /** Where the visible part of the viewport sits inside the canvas; see {@link setViewInsets}. */
   #insets = { top: 0, right: 0, bottom: 0, left: 0 };
   /** Frames on which the camera had to be recovered from a non-finite state (diagnostic). */
   recoveries = 0;
   #freeVelocity = new Vector3();
+  /** The spring's velocities for the camera position and its look point, m/s. */
+  #posVel = new Vector3();
+  #lookVel = new Vector3();
   #freeYaw = 0;
   #freePitch = -0.3;
 
@@ -192,6 +280,8 @@ export class CameraController {
   /** Seconds elapsed in the current flight, and its total; equal means "not flying". */
   #flyT = 0;
   #flyDuration = 0;
+  /** Seconds of a street flight before its final descent begins (`FLY_DESCENT_AT` of `u`). */
+  #flyAcrossS = 0;
   #flyStart = new Vector3();
   /** Cruise height of a flight to street level, or NaN for a straight flight; see `#beginFlight`. */
   #flyCruise = Number.NaN;
@@ -221,7 +311,7 @@ export class CameraController {
     this.lookLambda = options.lookLambda ?? 6;
     this.fovLambda = options.fovLambda ?? 5;
     this.#chaseDistance = options.chaseDistanceM ?? 9;
-    this.#orbitPitch = (options.chasePitchDeg ?? 16) * DEG;
+    this.#orbitPitch = (options.chasePitchDeg ?? CHASE_PITCH_DEG) * DEG;
     this.#chaseLookHeight = options.chaseLookHeightM ?? 1.4;
     this.#eyeHeight = options.dashboardEyeHeightM ?? 1.25;
     this.#altitude = options.mapAltitudeM ?? 700;
@@ -449,6 +539,8 @@ export class CameraController {
     if (actorId !== this.#followActorId) {
       this.#followPosKnown = false;
       this.#chaseYaw = Number.NaN;
+      this.#chaseYawRate = 0;
+      this.#clearDist = Number.POSITIVE_INFINITY;
       // Switching subject in a street mode is a journey across the city. The tracking law would
       // slide the camera there at street level — measured by the camera fuzz: lifted onto a 138 m
       // roof on the way, the frame one flat grey — so it is flown instead, over the roofs.
@@ -499,8 +591,41 @@ export class CameraController {
     return 2 * this.#altitude * Math.tan((this.camera.fov * DEG) / 2);
   }
 
+  /**
+   * Tell the controller how big the followed subject is: the chase camera stands off and looks at
+   * it in proportion (a bus from further back and higher up than a car, a person from closer and
+   * lower), and the dashboard camera sits at its driver's eye. `vru` is a person or a rider.
+   */
+  setFollowSubject(lengthM: number, widthM: number, heightM: number, vru: boolean): void {
+    if (!(lengthM > 0) || !(heightM > 0)) return;
+    this.#subjectL = lengthM;
+    this.#subjectW = widthM > 0 ? widthM : this.#subjectW;
+    this.#subjectH = heightM;
+    this.#subjectVru = vru;
+  }
+
+  /**
+   * The chase framing for the current subject: distance from its centre, look height and camera
+   * elevation. The subject fills about a quarter of the frame's height whatever its size: the
+   * distance is half its length plus a stand-off that grows with its height and length.
+   */
+  chaseFraming(): { distanceM: number; lookHeightM: number; pitchRad: number } {
+    const L = this.#subjectL;
+    const H = this.#subjectH;
+    const standOff = Math.max(this.#subjectVru ? 3.6 : 4.5, 1.5 * H + 0.35 * L);
+    const zoom = this.#chaseDistance / CHASE_REFERENCE_M;
+    return {
+      distanceM: (L / 2 + standOff) * zoom,
+      lookHeightM: Math.max(0.9, 0.72 * H),
+      pitchRad: this.#orbitPitch - (this.#subjectVru ? 3 * DEG : 0),
+    };
+  }
+
   /** Feed the followed actor's interpolated pose. Call once per frame before {@link update}. */
-  setFollowPose(x: number, y: number, z: number, headingRad: number, speedMps: number): void {
+  setFollowPose(x: number, y: number, z: number, headingRad: number, speedMps: number, jumped = false): void {
+    // A discontinuity in the subject's own data (the interpolator snapped it) is followed with a
+    // cut, not a whip: a spring chasing a car that jumped two metres swings the whole picture.
+    if (jumped) this.#subjectJumped = true;
     // A non-finite pose must never reach the camera: one NaN in the position and every matrix
     // downstream is NaN, which draws nothing at all — a black frame.
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
@@ -534,8 +659,14 @@ export class CameraController {
 
   /** Cut to the desired pose with no animation. */
   snap(): void {
+    this.#posVel.set(0, 0, 0);
+    this.#lookVel.set(0, 0, 0);
     this.#flyT = this.#flyDuration; // a cut is not a flight
-    if (this.#followPosKnown) this.#chaseYaw = this.#followHeading;
+    if (this.#followPosKnown) {
+      this.#chaseYaw = this.#followHeading;
+      this.#chaseYawRate = 0;
+    }
+    this.#clearDist = Number.POSITIVE_INFINITY;
     this.#computeDesired();
     // The building and ground constraints are applied by `update`, which always runs before a
     // frame is drawn; a cut only places the camera.
@@ -559,15 +690,23 @@ export class CameraController {
     // The chase camera sits behind a *smoothed* heading. Behind the raw one it rode every tenth of
     // a degree of heading noise at nine metres' lever arm, and a U-turn swung it straight through
     // the car; the smoothed yaw orbits round instead.
+    //
+    // It is a critically damped spring on the heading, not a first-order lag: a first-order lag
+    // starts turning at full rate the instant the car does, which reads as the camera being
+    // yanked, while the spring eases into the turn and out of it with no overshoot.
     if (Number.isFinite(this.#chaseYaw)) {
-      const ky = 1 - Math.exp(-step * this.yawLambda);
-      let d = this.#followHeading - this.#chaseYaw;
-      d -= Math.floor(d / (2 * Math.PI) + 0.5) * 2 * Math.PI;
-      this.#chaseYaw += d * ky;
+      let e = this.#chaseYaw - this.#followHeading;
+      e -= Math.floor(e / (2 * Math.PI) + 0.5) * 2 * Math.PI;
+      const [ne, nv] = dampedStep(e, this.#chaseYawRate, CHASE_YAW_OMEGA, step);
+      this.#chaseYaw = this.#followHeading + ne;
+      this.#chaseYawRate = nv;
     } else if (this.#followPosKnown) {
       this.#chaseYaw = this.#followHeading;
+      this.#chaseYawRate = 0;
     }
     this.#computeDesired();
+    const street = (this.#mode === "chase" || this.#mode === "dashboard") && this.#followPosKnown;
+    if (street && this.#mode === "chase") this.#applyClearance(this.#desiredPosition, this.#desiredLook, step);
     this.keepCameraOutsideBuildings(this.#desiredPosition, this.#desiredLook);
     this.#keepAboveGround(this.#desiredPosition);
 
@@ -575,13 +714,74 @@ export class CameraController {
       this.#pendingFlight = false;
       this.#beginFlight();
     }
+    const followStep = step;
+    let flew = false;
     if (this.#flyT < this.#flyDuration) {
+      const px = this.camera.position.x;
+      const py = this.camera.position.y;
+      const pz = this.camera.position.z;
+      const lx = this.look.x;
+      const ly = this.look.y;
+      const lz = this.look.z;
       this.#advanceFlight(step);
+      flew = true;
+      if (this.#flyT >= this.#flyDuration && street && step > 0) {
+        // Landed. The follow takes over with the velocity the flight had on its last frame, so
+        // the camera's velocity is continuous through the landing; the spring absorbs the
+        // difference from the subject's own (a few centimetres of overshoot, not a stop).
+        this.#posVel.set((this.camera.position.x - px) / step, (this.camera.position.y - py) / step, (this.camera.position.z - pz) / step);
+        this.#lookVel.set((this.look.x - lx) / step, (this.look.y - ly) / step, (this.look.z - lz) / step);
+      }
+    }
+    if (flew) {
+      // (the flight moved the camera this frame)
+    } else if (street && !this.#pendingFlight) {
+      // A critically damped follow with the subject's own velocity fed forward. The old law
+      // lerped the camera towards its desired point, which at 15 m/s trailed by v/λ = 3.75 m more
+      // than it meant to and pumped the car back and forth in the frame at every change of speed.
+      // Pinning the camera to the car rigidly instead passed every kink of the car's drawn path
+      // straight to the whole picture. With the velocity fed forward there is no lag at a steady
+      // speed; the spring (1/ω: 0.1 s behind a car, 0.04 s in the driver's seat) only smooths the
+      // departures from it. A jump bigger than the spring should hide is taken at once.
+      if (!finite3(this.camera.position) || !finite3(this.look)) {
+        this.recoveries++;
+        this.camera.position.copy(this.#desiredPosition);
+        this.look.copy(this.#desiredLook);
+        this.#posVel.set(0, 0, 0);
+        this.#lookVel.set(0, 0, 0);
+      }
+      const dash = this.#mode === "dashboard";
+      const omega = dash ? 25 : 10;
+      // A subject that has left the stream is standing where it was last seen.
+      const speed = this.#followValid ? this.#followSpeed : 0;
+      const c = Math.cos(this.#followHeading);
+      const sn = Math.sin(this.#followHeading);
+      const vx = c * speed;
+      const vy = sn * speed;
+      const cut = this.#subjectJumped;
+      this.#subjectJumped = false;
+      if (cut || this.camera.position.distanceToSquared(this.#desiredPosition) > 3600) {
+        this.camera.position.copy(this.#desiredPosition);
+        this.#posVel.set(vx, vy, 0);
+      } else {
+        springFollow(this.camera.position, this.#posVel, this.#desiredPosition, vx, vy, omega, followStep);
+      }
+      if (cut || this.look.distanceToSquared(this.#desiredLook) > 3600) {
+        this.look.copy(this.#desiredLook);
+        this.#lookVel.set(vx, vy, 0);
+      } else {
+        springFollow(this.look, this.#lookVel, this.#desiredLook, vx, vy, omega, followStep);
+      }
     } else {
-      const kp = 1 - Math.exp(-step * this.positionLambda);
-      const kl = 1 - Math.exp(-step * this.lookLambda);
-      this.camera.position.lerp(this.#desiredPosition, kp);
-      this.look.lerp(this.#desiredLook, kl);
+      // A critically damped spring per axis rather than the exponential lerp 09-ui §3 named. The
+      // lerp starts every move at its full speed, λ·distance, in one frame: each time the plan
+      // view's focus moved (following the traffic, or a click) every vehicle on screen jumped by
+      // the whole first step, which the glitch hunter counts as a stutter of every one of them.
+      // The spring starts from rest and arrives without overshoot; at ω = 2λ it
+      // covers 90 % of a move in about the same 0.55 s the lerp did. Exact per step, so it is
+      // frame-rate independent.
+      springTo(this.camera.position, this.#posVel, this.#desiredPosition, 2 * this.positionLambda, step);
+      springTo(this.look, this.#lookVel, this.#desiredLook, 2 * this.lookLambda, step);
     }
     const kf = 1 - Math.exp(-step * this.fovLambda);
 
@@ -600,6 +800,66 @@ export class CameraController {
     if (this.camera.position.distanceToSquared(this.look) < 1e-6) this.look.z -= 0.01;
     this.camera.lookAt(this.look);
     this.camera.updateMatrixWorld();
+  }
+
+  /**
+   * Pull the chase camera in front of a wall between it and its subject — smoothly. The march of
+   * {@link keepCameraOutsideBuildings} answers "how far back can the camera stand"; that answer
+   * jumps as the car passes a façade corner, and applying it raw was a cut. The distance allowed
+   * follows it in 0.08 s when it shrinks (a wall must never be seen through for more than a frame
+   * or two) and in 0.6 s when it grows back.
+   */
+  #applyClearance(pos: Vector3, lookAt: Vector3, dt: number): void {
+    const world = this.#world;
+    const dir = this.#scratchB.copy(pos).sub(lookAt);
+    const want = dir.length();
+    if (want < 1e-3) return;
+    dir.multiplyScalar(1 / want);
+    let allowed = want;
+    if (world) {
+      const steps = Math.min(48, Math.max(6, Math.ceil(want * 2)));
+      const own = world.buildingTopAt(lookAt.x, lookAt.y) > lookAt.z ? world.buildingIndexAt(lookAt.x, lookAt.y) : -1;
+      for (let i = 1; i <= steps; i++) {
+        const t = (want * i) / steps;
+        const x = lookAt.x + dir.x * t;
+        const y = lookAt.y + dir.y * t;
+        const z = lookAt.z + dir.z * t;
+        if (own >= 0 && world.buildingIndexAt(x, y) === own) continue;
+        const top = world.buildingTopAt(x, y);
+        if (top > -Infinity && z < top) {
+          // Stand far enough off the wall that the near plane's corners (about a metre out to
+          // the side at street level) stay out of it.
+          allowed = Math.max(0.8, t - 1.3);
+          break;
+        }
+      }
+    }
+    if (!Number.isFinite(this.#clearDist)) this.#clearDist = allowed;
+    const tau = allowed < this.#clearDist ? 0.08 : 0.6;
+    this.#clearDist += (allowed - this.#clearDist) * (1 - Math.exp(-dt / tau));
+    // Never further than the wall allows right now, whatever the smoothing says.
+    let d = Math.min(want, this.#clearDist, allowed);
+    pos.set(lookAt.x + dir.x * d, lookAt.y + dir.y * d, lookAt.z + dir.z * d);
+    // And not so close to a wall beside it that the near plane's corners reach into it: a car
+    // turning a corner swings a chase camera over the kerb, a metre from the building on it.
+    if (world) {
+      for (let k = 0; k < 12 && d > 0.8 && this.#nearWall(pos); k++) {
+        d = Math.max(0.8, d - 0.4);
+        pos.set(lookAt.x + dir.x * d, lookAt.y + dir.y * d, lookAt.z + dir.z * d);
+      }
+    }
+  }
+
+  /** Whether a point 0.9 m to any side of `pos` is inside a building (not a ghosted one). */
+  #nearWall(pos: Vector3): boolean {
+    const world = this.#world;
+    if (!world) return false;
+    const r = 0.9;
+    for (const [ox, oy] of NEAR_RING) {
+      const top = world.buildingTopAt(pos.x + ox * r, pos.y + oy * r);
+      if (top > -Infinity && pos.z < top) return true;
+    }
+    return false;
   }
 
   /**
@@ -633,6 +893,8 @@ export class CameraController {
     const l = this.look;
     if (finite3(p) && finite3(l) && Number.isFinite(this.camera.fov) && this.camera.fov > 1) return;
     this.recoveries++;
+    this.#posVel.set(0, 0, 0);
+    this.#lookVel.set(0, 0, 0);
     this.#flyT = this.#flyDuration;
     if (!Number.isFinite(this.camera.fov) || this.camera.fov <= 1) this.camera.fov = this.#desiredFov;
     if (finite3(this.#desiredPosition) && finite3(this.#desiredLook)) {
@@ -675,6 +937,8 @@ export class CameraController {
    * one 0.2 s step lands exactly where two 0.1 s steps do.
    */
   #beginFlight(): void {
+    this.#posVel.set(0, 0, 0);
+    this.#lookVel.set(0, 0, 0);
     this.#computeDesired();
     this.#flyStart.copy(this.camera.position);
     this.#flyStartLook.copy(this.look);
@@ -687,9 +951,26 @@ export class CameraController {
     // street, and the roof rule then parked the camera on that roof looking at it — the camera
     // fuzz measured frames of one flat colour at the end of the fly-down and of every change of
     // subject. A flight to anywhere else keeps the straight eased line.
-    this.#flyCruise = CameraController.needsFollowSubject(this.#mode)
+    // A hop at street level — chase to dashboard, a change of subject a few metres away — is a
+    // straight eased move: planning it over the roofs sent the camera 15 m above the tallest
+    // building and back down in half a second.
+    const hop = Math.hypot(this.#desiredPosition.x - this.#flyStart.x, this.#desiredPosition.y - this.#flyStart.y);
+    this.#flyCruise = CameraController.needsFollowSubject(this.#mode) && (hop > 60 || this.#flyStart.z > this.#desiredPosition.z + 40)
       ? this.#cruiseFor(this.#flyStart, this.#desiredPosition)
       : Number.NaN;
+    this.#flyAcrossS = this.#flyDuration * FLY_DESCENT_AT;
+    if (Number.isFinite(this.#flyCruise)) {
+      // The final descent gets time of its own, by the height it falls. In 40 % of a 1.2 s flight
+      // a 62 m drop came to rest at 400 m/s² — the last three frames before the follow took over
+      // stepped 34, 12 and 1 cm, which the glitch hunter counted as a stutter at every landing.
+      // √h keeps the peak deceleration of the smootherstep, 5.8·h/T², under about 130 m/s².
+      const cruise = this.#flyCruise;
+      const startLow = this.#flyStart.z < cruise - 1;
+      const straightAtC2 = this.#flyStart.z + (this.#desiredPosition.z - this.#flyStart.z) * smootherstep(FLY_DESCENT_AT);
+      const fall = (startLow ? cruise : Math.max(straightAtC2, cruise)) - this.#desiredPosition.z;
+      const descent = Math.max(this.#flyDuration * (1 - FLY_DESCENT_AT), MathUtils.clamp(0.21 * Math.sqrt(Math.max(0, fall)), 0.35, 1.8));
+      this.#flyDuration = this.#flyAcrossS + descent;
+    }
   }
 
   /**
@@ -717,9 +998,16 @@ export class CameraController {
   /** One step of the flight begun by {@link #beginFlight}. */
   #advanceFlight(step: number): void {
     this.#flyT += step;
-    const u = MathUtils.clamp(this.#flyT / this.#flyDuration, 0, 1);
-    const p = this.camera.position;
     const cruise = this.#flyCruise;
+    // `u` runs 0 → FLY_DESCENT_AT over the flight's first part and on to 1 over its descent, which
+    // `#beginFlight` may have given longer than the rest of `u` would.
+    const acrossS = this.#flyAcrossS;
+    const u = !Number.isFinite(cruise) || acrossS <= 0 || this.#flyDuration <= acrossS
+      ? MathUtils.clamp(this.#flyT / this.#flyDuration, 0, 1)
+      : this.#flyT < acrossS
+        ? (this.#flyT / acrossS) * FLY_DESCENT_AT
+        : Math.min(1, FLY_DESCENT_AT + ((this.#flyT - acrossS) / (this.#flyDuration - acrossS)) * (1 - FLY_DESCENT_AT));
+    const p = this.camera.position;
     if (!Number.isFinite(cruise)) {
       // Smootherstep: zero velocity *and* zero acceleration at both ends.
       const e = smootherstep(u);
@@ -732,7 +1020,9 @@ export class CameraController {
     // straight descent, but never below cruise until the camera is over its destination, then
     // straight down.
     const a0 = startLow ? 0.2 : 0;
-    const c2 = startLow ? 0.75 : 0.8;
+    // The last 40 % of a flight to the street is the descent onto the subject: over the last
+    // fifth, as it was, a 50 m drop ended at 150 m/s in two frames.
+    const c2 = FLY_DESCENT_AT;
     const across = smootherstep(MathUtils.clamp((u - a0) / (c2 - a0), 0, 1));
     let z: number;
     if (startLow) {
@@ -932,16 +1222,17 @@ export class CameraController {
         const base = this.#followPos;
         const heading = Number.isFinite(this.#chaseYaw) ? this.#chaseYaw : this.#followHeading;
         const yaw = heading + Math.PI + this.#orbitYaw;
-        // A little extra trail at speed; 0 at rest, +40 % at 30 m/s.
-        const dist = this.#chaseDistance * (1 + Math.min(0.4, this.#followSpeed / 75));
-        const cp = Math.cos(this.#orbitPitch);
-        const sp = Math.sin(this.#orbitPitch);
+        const f = this.chaseFraming();
+        // A little extra trail at speed, for the sense of it: 0 at rest, +20 % at 30 m/s.
+        const dist = f.distanceM * (1 + Math.min(0.2, this.#followSpeed / 150));
+        const cp = Math.cos(f.pitchRad);
+        const sp = Math.sin(f.pitchRad);
         d.set(
           base.x + Math.cos(yaw) * dist * cp,
           base.y + Math.sin(yaw) * dist * cp,
-          base.z + dist * sp + this.#chaseLookHeight,
+          base.z + dist * sp + f.lookHeightM,
         );
-        l.set(base.x, base.y, base.z + this.#chaseLookHeight);
+        l.set(base.x, base.y, base.z + f.lookHeightM);
         break;
       }
       case "dashboard": {
@@ -949,7 +1240,36 @@ export class CameraController {
         const h = this.#followHeading + this.#orbitYaw;
         const fx = Math.cos(h);
         const fy = Math.sin(h);
-        d.set(base.x + fx * 0.6, base.y + fy * 0.6, base.z + this.#eyeHeight);
+        // The driver's eye. A car's driver sits about 2 m behind the front bumper and 0.35 m left
+        // of the centre line (left-hand drive), a bus or truck driver right at the front and high,
+        // a rider over the saddle; a person's eyes are about 93 % of their height (the 1.60 m eye
+        // height of the 50th-percentile man, 1.75 m tall, NASA-STD-3000 anthropometry).
+        const L = this.#subjectL;
+        const H = this.#subjectH;
+        let ahead: number;
+        let left: number;
+        let eye: number;
+        if (this.#subjectVru) {
+          ahead = 0.12;
+          left = 0;
+          eye = Math.max(1.1, 0.93 * H);
+        } else if (L >= 6.8) {
+          ahead = L / 2 - 1.0;
+          left = Math.min(0.55, this.#subjectW * 0.25);
+          eye = Math.min(H - 0.3, Math.max(1.9, 0.72 * H));
+        } else if (L <= 2.6) {
+          ahead = -0.05;
+          left = 0;
+          eye = Math.max(1.2, 0.95 * H);
+        } else {
+          ahead = L / 2 - Math.min(2.0, 0.42 * L);
+          left = Math.min(0.37, this.#subjectW * 0.2);
+          eye = this.#eyeHeight * (H > 1.7 ? H / 1.5 : 1);
+          eye = Math.min(H - 0.12, eye);
+        }
+        const lx = -fy;
+        const ly = fx;
+        d.set(base.x + fx * ahead + lx * left, base.y + fy * ahead + ly * left, base.z + eye);
         const pitch = MathUtils.clamp(this.#orbitPitch - 16 * DEG, -0.5, 0.5);
         l.set(d.x + fx * 30, d.y + fy * 30, d.z + Math.tan(pitch) * 30);
         break;

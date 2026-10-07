@@ -4,42 +4,55 @@
  * 09-ui §4: "one `InstancedMesh` per (class × LOD level); capacity preallocated, `count` set to the
  * visible instances after CPU frustum culling; instances moved between LOD meshes by distance",
  * citing the measurement that count-based culling plus per-LOD meshes almost doubled the frame rate
- * on an integrated GPU. That is exactly the loop below:
+ * on an integrated GPU. The loop below is that, with one refinement: a class can be drawn with more
+ * than one **model** (a passenger car is a sedan, a crossover or, in New York, a yellow cab;
+ * `vehicle-models.ts`), so a bucket is one (model × LOD) and an actor's model is a stable function
+ * of its id.
  *
- * 1. one pass over the live slots computes distance and the LOD band, then tests a bounding sphere
+ * 1. one pass over the live slots computes distance and the LOD band (with hysteresis, so an actor
+ *    sitting on a band edge does not change detail every frame), then tests a bounding sphere
  *    against the six frustum planes with plain arithmetic (no `Sphere`, no `Vector3`, no allocation);
- * 2. survivors are appended to their `(class, lod)` bucket — the 16 floats of the instance matrix are
- *    written straight into `instanceMatrix.array`, because the matrix is only a yaw about +z and a
- *    translation, so composing it through `Matrix4`/`Quaternion` would be pure overhead;
- * 3. each bucket's `count` is set to the number written and only that prefix of the buffer is
- *    uploaded, via `addUpdateRange`.
+ * 2. survivors are appended to their bucket — the 16 floats of the instance matrix are written
+ *    straight into `instanceMatrix.array`, because the matrix is only a yaw about +z (a
+ *    two-wheeler's lean into a turn after it) and a translation — and the four floats of the animation attribute next to them: the wheels' roll and
+ *    steer, the gait phase, and the packed lamps (`actor-material.ts`);
+ * 3. each bucket's `count` is set to the number written and only that prefix of each buffer is
+ *    uploaded.
  *
  * Nothing in {@link ActorRenderer.update} allocates once the buckets have reached their steady-state
  * capacity: no `Object3D`, no `Matrix4`, no array, no closure — and no `{start, count}` either,
  * which is what `BufferAttribute.addUpdateRange` would push on every call, so each attribute owns
- * one range object that is mutated and re-pushed instead (three clears `updateRanges` after every
- * upload, so it has to be pushed again each frame).
+ * one range object that is mutated and re-pushed instead.
  *
- * Instance *colours* are uploaded only when they change. A colour is a function of selection and of
- * the §3.3.4 state bits, neither of which changes most frames, unlike the matrices; each bucket
- * remembers the colour key it last wrote per instance slot and skips both the write and the upload
- * while they match. {@link ActorRenderer.legend} is the same decision, evaluated for a legend, so
- * the DOM and the scene cannot disagree about what a state looks like.
+ * ## Colour
+ *
+ * By default a benign vehicle is drawn in its own paint — a colour drawn once per vehicle from the
+ * fleet's colour distribution, or its livery (the yellow cab, the transit bus) — and a person in
+ * their own clothes, because a street of identical grey boxes is not traffic. An actor in any
+ * §3.3.4 state the palette names (attacker, reported, revoked) or the selected one is painted in
+ * that state's colour, as before, so the network's story still reads at street level; the aerial
+ * mark (`overlays.ts`) keeps the state palette for every actor. `paint: "state"` restores the
+ * all-state colouring. Instance colours are written, and uploaded, only when an instance's colour
+ * actually changes.
  */
 
 import {
   Color,
   DynamicDrawUsage,
   Group,
+  InstancedBufferAttribute,
   InstancedMesh,
   Matrix4,
-  MeshLambertMaterial,
   type BufferGeometry,
   type Camera,
   type Material,
 } from "three";
 import { ActorState } from "@vwp/protocol";
-import { buildActorGeometry } from "./geometry.js";
+import { makeActorMaterial, makeActorUniforms, packLamps, type ActorUniforms } from "./actor-material.js";
+import {
+  CLOTHING_PALETTE, PAINT_PALETTE, buildActorModel, hashId, liveryOf, modelVariants,
+  type ActorModelInfo, type ActorModelKind,
+} from "./vehicle-models.js";
 import type { ActorClassDef, LodLevel } from "./types.js";
 import type { ActorStateColorKey, ViewerTheme } from "./theme.js";
 
@@ -50,7 +63,7 @@ export interface ActorRendererOptions {
   readonly theme: ViewerTheme;
   /** Hard ceiling on drawn instances across all buckets. Default 20,000. */
   readonly maxActors?: number;
-  /** Starting capacity of each `(class, LOD)` bucket. Default 128. */
+  /** Starting capacity of each bucket. Default 128. */
   readonly initialCapacity?: number;
   /** `[LOD0→LOD1, LOD1→LOD2]` switch distances in metres. Default `[90, 400]`. */
   readonly lodDistancesM?: readonly [number, number];
@@ -67,15 +80,16 @@ export interface ActorRendererOptions {
   /** Draw ground-truth-only state (the `ATTACKER` bit) in the actor colour. Default true. */
   readonly showGroundTruth?: boolean;
   /**
-   * Paint actors with no state bit set in their *class* colour instead of `theme.actorState.benign`.
-   *
-   * Default false. 09-ui §10 names benign as one of the four categorical state colours, and the
-   * legend and the `--state-benign` custom property are drawn from `theme.actorState.benign`, so
-   * the scene has to use it too or the legend is a lie (finding Q13). Class identity is carried by
-   * the per-class silhouette `buildActorGeometry` builds, and by the class colours
-   * {@link ActorRenderer.legend} reports when this is on.
+   * Paint actors with no state bit set in their *class* colour instead of their own paint.
+   * Default false. Kept for the class-coloured legend (09-ui §10, finding Q13).
    */
   readonly colorBenignByClass?: boolean;
+  /**
+   * `"realistic"` (default): a benign vehicle in its own paint or livery, a person in their own
+   * clothes, and any other state in its state colour. `"state"`: every actor in its state colour,
+   * benign in `theme.actorState.benign`.
+   */
+  readonly paint?: "realistic" | "state";
 }
 
 /**
@@ -88,6 +102,8 @@ export const ACTOR_STATE_COLOR_KEYS: readonly ActorStateColorKey[] = [
 
 /** Colour key for "this actor's class colour", one past the state keys. */
 const CLASS_COLOR_KEY = ACTOR_STATE_COLOR_KEYS.length;
+/** Colour key for "this actor's own paint". */
+const PAINT_COLOR_KEY = CLASS_COLOR_KEY + 1;
 
 /**
  * Which colour bucket an actor falls into, as an index into {@link ACTOR_STATE_COLOR_KEYS}:
@@ -95,12 +111,7 @@ const CLASS_COLOR_KEY = ACTOR_STATE_COLOR_KEYS.length;
  *
  * This is the single decision every place that paints an actor shares — {@link ActorRenderer.update}
  * writing instance colours, {@link ActorRenderer.legend} describing them, and the aerial vehicle
- * mark in `overlays.ts`, which is the *only* thing on screen at map altitude and would otherwise
- * have to re-derive the state colour for itself. A second copy of these four lines is how the
- * legend and the scene come to disagree, so there is one.
- *
- * It returns a number rather than a key because the callers index packed colour tables with it;
- * {@link actorColorKey} is the same answer named.
+ * mark in `overlays.ts`.
  */
 export function actorStateColorIndex(
   state: number,
@@ -114,11 +125,7 @@ export function actorStateColorIndex(
   return 0;
 }
 
-/**
- * Which colour bucket an actor falls into: §3.3.4 bits 0–2, selection first, and `benign` when no
- * bit is set. This is the single decision {@link ActorRenderer.update} and
- * {@link ActorRenderer.legend} share; nothing else may re-implement it.
- */
+/** {@link actorStateColorIndex}, named. */
 export function actorColorKey(
   state: number,
   selected: boolean,
@@ -129,12 +136,15 @@ export function actorColorKey(
 
 /** One row of {@link ActorRenderer.legend}: a colour the scene really draws, and what it means. */
 export interface ActorLegendEntry {
-  /** A state bucket, or `"class"` for a per-class row. */
-  readonly kind: "state" | "class";
+  /**
+   * A state bucket, a per-class row, or `"paint"`: benign actors drawn in their own paint, whose
+   * `color` is the commonest paint and stands for the whole palette.
+   */
+  readonly kind: "state" | "class" | "paint";
   /** The `theme.actorState` key, or the class name. */
   readonly key: string;
   readonly label: string;
-  /** Packed `0xRRGGBB`, exactly the value written into `instanceColor`. */
+  /** Packed `0xRRGGBB`, exactly the value written into `instanceColor` (for `"paint"`, one of them). */
   readonly color: number;
   /** Set on `kind: "class"` rows. */
   readonly classIndex?: number;
@@ -156,6 +166,16 @@ export interface ActorUpdateContext {
   readonly state: Uint8Array;
   readonly occupied: Uint8Array;
   readonly actorId: Uint32Array;
+  /** Speed along the heading, m/s. Without it the walking amplitude comes from displacement. */
+  readonly speed?: Float32Array;
+  /** The §3.3.5 lamps byte per slot. Without it every lamp is dark. */
+  readonly lamps?: Uint8Array;
+  /** How much of each actor is there, `[0, 1]` (the interpolator's fade-in and fade-out). Default 1. */
+  readonly fade?: Float32Array;
+  /** Seconds since the previous update, for the steering filter. Default 1/60. */
+  readonly dtSeconds?: number;
+  /** A monotonic clock, seconds, for flashing lamps. */
+  readonly timeSeconds?: number;
   /** Slot high-water mark. */
   readonly count: number;
   /** Camera whose `matrixWorld` and `projectionMatrix` are already up to date. */
@@ -181,20 +201,36 @@ export interface ActorUpdateStats {
   readonly lod2: number;
 }
 
+/** One drawable model: a class drawn one way. */
+interface Model {
+  readonly classIndex: number;
+  readonly kind: ActorModelKind;
+  readonly info: ActorModelInfo;
+  /** Upper edge of this model's share of its class, in `[0, 1]`. */
+  readonly cumulative: number;
+  /** The fixed livery, linear RGB, or null for a palette draw. */
+  readonly livery: [number, number, number] | null;
+}
+
 interface Bucket {
   mesh: InstancedMesh<BufferGeometry, Material>;
   capacity: number;
   cursor: number;
   matrix: Float32Array;
+  anim: Float32Array;
+  animAttr: InstancedBufferAttribute;
   /** Slot that produced each written instance, for picking and hover read-back. */
   slots: Int32Array;
   /** Colour key last written into each instance slot; `0xff` means "never written". */
   colorKey: Uint8Array;
+  /** Actor whose paint was last written into each instance slot (paint colours are per actor). */
+  colorActor: Uint32Array;
   /** Set when an instance colour actually changed, cleared when the colours are uploaded. */
   colorDirty: boolean;
-  /** Preallocated upload ranges, mutated and re-pushed each frame instead of allocated. */
   readonly matrixRange: { start: number; count: number };
   readonly colorRange: { start: number; count: number };
+  readonly animRange: { start: number; count: number };
+  readonly modelIndex: number;
   readonly classIndex: number;
   readonly lod: LodLevel;
 }
@@ -244,20 +280,43 @@ export const DEFAULT_ACTOR_CLASSES: readonly ActorClassDef[] = [
   { index: 7, name: "rail", lengthM: 24.0, widthM: 3.0, heightM: 3.8, color: 0x9090a8, category: 0 },
 ];
 
+const TAU = Math.PI * 2;
+/** Standard gravity, m/s². */
+const GRAVITY = 9.80665;
 /**
- * Draws every actor the stream reports, as instanced meshes grouped by class and LOD.
+ * The most a drawn two-wheeler leans, radians (30°). Road riding stays well inside it — everyday
+ * cornering is 10–25°, a sports machine's limit near 50° — so the cap only catches a heading the
+ * data turned faster than any rider could.
+ */
+const LEAN_MAX_RAD = 0.52;
+/** Time constant of the drawn roll, seconds. */
+const LEAN_TAU_S = 0.25;
+
+function wrap(a: number): number {
+  return a - Math.floor(a / TAU + 0.5) * TAU;
+}
+
+/**
+ * Draws every actor the stream reports, as instanced meshes grouped by model and LOD.
  *
  * The renderer owns one `Group`; add it to the scene once and never touch the children.
  */
 export class ActorRenderer {
   /** The scene node holding every actor bucket. */
   readonly group = new Group();
+  /** Shared by every actor material; the viewer sets `uNight`, `update` sets `uTime`. */
+  readonly uniforms: ActorUniforms = makeActorUniforms();
 
   #classes: ActorClassDef[];
+  /** Per class, the square of the factor its LOD distances are stretched by (see `#rebuild`). */
+  #lodScale2 = new Float32Array(0);
   #theme: ViewerTheme;
+  #models: Model[] = [];
+  /** Per class: the first model index and how many models it has. */
+  #classModels: Int32Array = new Int32Array(0);
   #buckets: Bucket[] = [];
   #geometries: BufferGeometry[] = [];
-  #materials: MeshLambertMaterial[] = [];
+  #materials: Material[] = [];
   #radius = new Float32Array(0);
   #halfHeight = new Float32Array(0);
   #classColor = new Float32Array(0);
@@ -271,6 +330,10 @@ export class ActorRenderer {
   #castShadows: boolean;
   #showGroundTruth: boolean;
   #benignByClass: boolean;
+  #paint: "realistic" | "state";
+  #nyc = false;
+  #taxiShare = 0.2;
+  #deliveryMopedShare = 0.5;
   #selectedActorId = -1;
   #hiddenActorId = -1;
   #color = new Color();
@@ -283,7 +346,31 @@ export class ActorRenderer {
   #viewProjection = new Matrix4();
   /** Slots drawn this frame, in bucket order; `overlays.ts` reuses them instead of re-culling. */
   readonly visibleSlots: Int32Array;
+  /**
+   * The LOD band each slot was drawn at this frame, −1 when it was not drawn (culled, hidden,
+   * empty). Indexed by slot up to the last update's `count`; read by the glitch hunter.
+   */
+  slotLod = new Int8Array(0);
   #visibleCount = 0;
+
+  // Per-slot memory, keyed by the actor id it was computed for.
+  #slotCap = 0;
+  #slotId = new Uint32Array(0);
+  #slotModel = new Int16Array(0);
+  #slotPaint = new Float32Array(0);
+  #slotPhase = new Float32Array(0);
+  /** A person's drawn stature as a fraction of the class height (1 for anything else). */
+  #slotScale = new Float32Array(0);
+  #slotBand = new Int8Array(0);
+  #odo = new Float64Array(0);
+  #gait = new Float64Array(0);
+  #amp = new Float32Array(0);
+  #steer = new Float32Array(0);
+  /** A single-track vehicle's drawn roll, radians (positive leans to its right). */
+  #lean = new Float32Array(0);
+  #px = new Float64Array(0);
+  #py = new Float64Array(0);
+  #ph = new Float32Array(0);
 
   constructor(options: ActorRendererOptions) {
     this.#theme = options.theme;
@@ -294,6 +381,7 @@ export class ActorRenderer {
     this.#castShadows = options.castShadows ?? false;
     this.#showGroundTruth = options.showGroundTruth ?? true;
     this.#benignByClass = options.colorBenignByClass ?? false;
+    this.#paint = options.paint ?? "realistic";
     if (options.lodDistancesM) {
       this.#lod0 = options.lodDistancesM[0];
       this.#lod1 = options.lodDistancesM[1];
@@ -347,7 +435,7 @@ export class ActorRenderer {
     this.#invalidateColors();
   }
 
-  /** Whether benign actors are painted in their class colour instead of the benign state colour. */
+  /** Whether benign actors are painted in their class colour instead of their own paint. */
   get colorBenignByClass(): boolean {
     return this.#benignByClass;
   }
@@ -358,18 +446,51 @@ export class ActorRenderer {
     this.#invalidateColors();
   }
 
+  /** `"realistic"` or `"state"`; see {@link ActorRendererOptions.paint}. */
+  get paint(): "realistic" | "state" {
+    return this.#paint;
+  }
+
+  set paint(v: "realistic" | "state") {
+    if (v === this.#paint) return;
+    this.#paint = v;
+    this.#invalidateColors();
+  }
+
+  /**
+   * Whether the world is in New York City, where a share of passenger cars are drawn as yellow
+   * cabs. The viewer decides it from `Hello`'s geodetic origin.
+   */
+  get newYork(): boolean {
+    return this.#nyc;
+  }
+
+  /**
+   * Set the region-dependent liveries: New York's yellow cabs and their share of passenger cars,
+   * and the share of mopeds with a delivery box. Rebuilds the models if anything changed.
+   *
+   * The taxi share is a *drawing* parameter: the engine's classes have no taxi, so a yellow cab is
+   * a passenger car in a medallion livery. Its default, 0.2, is a round figure — medallion cabs
+   * were a quarter to a third of Midtown's vehicles before app-based for-hire vehicles, and fewer
+   * since — stated as a choice, not a count. The delivery-box share of mopeds (0.5) is the same
+   * kind of choice.
+   */
+  setRegion(nyc: boolean, taxiShare = this.#taxiShare, deliveryMopedShare = this.#deliveryMopedShare): void {
+    if (nyc === this.#nyc && taxiShare === this.#taxiShare && deliveryMopedShare === this.#deliveryMopedShare) return;
+    this.#nyc = nyc;
+    this.#taxiShare = taxiShare;
+    this.#deliveryMopedShare = deliveryMopedShare;
+    this.#rebuild();
+  }
+
   /** Actor id drawn in the selection colour, or −1. */
   get selectedActorId(): number {
     return this.#selectedActorId;
   }
 
   /**
-   * One actor whose instance is not written this frame, or −1.
-   *
-   * This exists for the dashboard camera. The driver's eye sits 0.6 m ahead of the actor's origin
-   * and a car is four metres long, so the camera is *inside* its own body: the view was a slab of
-   * vehicle paint with the city visible above it. Culling the followed actor is what a driver's-eye
-   * view means, and it is a slot skipped in a loop rather than a second pass.
+   * One actor whose instance is not written this frame, or −1: the camera is inside its body (the
+   * dashboard view), so drawing it would fill the frame with the inside of its own paint.
    */
   get hiddenActorId(): number {
     return this.#hiddenActorId;
@@ -384,20 +505,24 @@ export class ActorRenderer {
   }
 
   /**
-   * Exactly the colours this renderer draws, as a legend.
-   *
-   * The Studio's `StateLegend`, the inspector chips and the `--state-*` CSS properties are all
-   * meant to be this list (`apps/studio/src/lib/theme.ts`: "the DOM and the WebGL scene can never
-   * drift apart"), so it is derived from the same {@link actorColorKey} decision and the same
-   * colour tables the write loop uses — not re-declared.
+   * Exactly the colours this renderer draws, as a legend: the state colours it can write, the
+   * class colours when those are on, and — in realistic paint — one `"paint"` row saying that
+   * benign actors wear their own colours at street level (from the air their mark is still the
+   * benign colour, so that row stays).
    */
   legend(): ActorLegendEntry[] {
     const out: ActorLegendEntry[] = [];
     const s = this.#theme.actorState;
+    const realistic = this.#paint === "realistic" && !this.#benignByClass;
     for (const key of ACTOR_STATE_COLOR_KEYS) {
       if (key === "attacker" && !this.#showGroundTruth) continue;
+      // Benign keeps its row in realistic paint: the aerial mark (`overlays.ts`) still draws every
+      // benign vehicle in it from the air.
       if (key === "benign" && this.#benignByClass) continue;
       out.push({ kind: "state", key, label: STATE_LABELS[key], color: s[key] });
+    }
+    if (realistic) {
+      out.push({ kind: "paint", key: "benign", label: "Benign (own paint)", color: PAINT_PALETTE[0].hex });
     }
     if (this.#benignByClass) {
       for (let i = 0; i < this.#classes.length; i++) {
@@ -464,37 +589,58 @@ export class ActorRenderer {
     this.#disposeBuckets();
     const n = this.#classes.length;
     this.#radius = new Float32Array(n);
+    // LOD distances are a car's; a bigger class keeps its detail proportionally further out, so
+    // the switch happens at about the same size on screen (a bus 80 m off is 40 px tall in the
+    // chase view, where a car switching there is 18). Never nearer than a car's.
+    this.#lodScale2 = new Float32Array(n);
+    for (let c = 0; c < n; c++) {
+      const d = this.#classes[c];
+      const k = Math.min(3, Math.max(1, d.heightM / 1.5, d.lengthM / 5.0));
+      this.#lodScale2[c] = k * k;
+    }
     this.#halfHeight = new Float32Array(n);
     this.#classColor = new Float32Array(n * 3);
     this.#refreshClassColors();
-    this.#materials = [0, 1, 2].map((lod) =>
-      new MeshLambertMaterial({
-        vertexColors: true,
-        // LOD 2 is a flat box seen from far away; flat shading keeps it from shimmering.
-        flatShading: lod === 2,
-        name: `actor-lod${lod}`,
-      }),
-    );
-    this.#geometries = new Array<BufferGeometry>(n * 3);
+    this.#materials = [0, 1, 2].map((lod) => makeActorMaterial(lod as LodLevel, this.uniforms));
+    this.#models = [];
+    this.#classModels = new Int32Array(n * 2);
+    this.#slotId.fill(0xffffffff);
     for (let c = 0; c < n; c++) {
       const def = this.#classes[c];
       this.#radius[c] = Math.hypot(def.lengthM, def.widthM, def.heightM) * 0.5 + this.#cullMargin;
       this.#halfHeight[c] = def.heightM * 0.5;
-      for (let lod = 0; lod <= 2; lod++) {
-        this.#geometries[c * 3 + lod] = buildActorGeometry(def, lod as LodLevel);
-      }
-      for (let lod = 0; lod <= 2; lod++) {
-        this.#buckets.push(this.#makeBucket(c, lod as LodLevel, this.#initialCapacity));
+      const variants = modelVariants(def, this.#nyc, this.#taxiShare, this.#deliveryMopedShare);
+      this.#classModels[c * 2] = this.#models.length;
+      this.#classModels[c * 2 + 1] = variants.length;
+      let total = 0;
+      for (const v of variants) total += v.weight;
+      let acc = 0;
+      for (const v of variants) {
+        acc += total > 0 ? v.weight / total : 1 / variants.length;
+        const modelIndex = this.#models.length;
+        const livery = liveryOf(v.kind);
+        let lin: [number, number, number] | null = null;
+        if (livery !== null) {
+          this.#color.setHex(livery);
+          lin = [this.#color.r, this.#color.g, this.#color.b];
+        }
+        const built = [0, 1, 2].map((lod) => buildActorModel(v.kind, def, lod as LodLevel));
+        this.#models.push({ classIndex: c, kind: v.kind, info: built[0].info, cumulative: acc, livery: lin });
+        for (let lod = 0; lod <= 2; lod++) {
+          this.#geometries.push(built[lod].geometry);
+          this.#buckets.push(this.#makeBucket(modelIndex, c, lod as LodLevel, this.#initialCapacity, built[lod].geometry));
+        }
       }
     }
   }
 
-  #makeBucket(classIndex: number, lod: LodLevel, capacity: number): Bucket {
+  #makeBucket(
+    modelIndex: number, classIndex: number, lod: LodLevel, capacity: number, geometry: BufferGeometry,
+  ): Bucket {
     const def = this.#classes[classIndex];
-    const geometry = this.#geometries[classIndex * 3 + lod];
     const material = this.#materials[lod];
     const mesh = new InstancedMesh<BufferGeometry, Material>(geometry, material, capacity);
-    mesh.name = `actors/${def.name}/lod${lod}`;
+    mesh.name = `actors/${def.name}/${this.#models[modelIndex]?.kind ?? "model"}/lod${lod}`;
     // We do our own culling; three's bounding sphere would be stale the moment an instance moves.
     mesh.frustumCulled = false;
     mesh.matrixAutoUpdate = false;
@@ -508,17 +654,26 @@ export class ActorRenderer {
     mesh.setColorAt(0, this.#color);
     mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     if (mesh.instanceColor) mesh.instanceColor.setUsage(DynamicDrawUsage);
+    const anim = new Float32Array(capacity * 4);
+    const animAttr = new InstancedBufferAttribute(anim, 4);
+    animAttr.setUsage(DynamicDrawUsage);
+    geometry.setAttribute("iAnim", animAttr);
     this.group.add(mesh);
     return {
       mesh,
       capacity,
       cursor: 0,
       matrix: mesh.instanceMatrix.array as Float32Array,
+      anim,
+      animAttr,
       slots: new Int32Array(capacity),
       colorKey: new Uint8Array(capacity).fill(0xff),
+      colorActor: new Uint32Array(capacity).fill(0xffffffff),
       colorDirty: true,
       matrixRange: { start: 0, count: 0 },
       colorRange: { start: 0, count: 0 },
+      animRange: { start: 0, count: 0 },
+      modelIndex,
       classIndex,
       lod,
     };
@@ -529,39 +684,144 @@ export class ActorRenderer {
    * the instances **already written this frame** are copied across, because growth happens in the
    * middle of {@link update}'s write loop and leaving them behind would flash that bucket's earlier
    * instances at the origin for one frame.
-   *
-   * Growth is amortised: a stream that settles at a stable actor count stops growing after the first
-   * few frames, which the budget test asserts.
    */
   #grow(b: Bucket): void {
     const next = Math.min(this.#maxActors, b.capacity * 2);
     if (next <= b.capacity) return;
     const oldMesh = b.mesh;
     const oldMatrix = b.matrix;
+    const oldAnim = b.anim;
     const oldColor = (oldMesh.instanceColor?.array ?? null) as Float32Array | null;
     const oldSlots = b.slots;
     const oldKeys = b.colorKey;
+    const oldActors = b.colorActor;
     const written = Math.min(b.cursor, b.capacity);
 
     this.group.remove(oldMesh);
-    const fresh = this.#makeBucket(b.classIndex, b.lod, next);
+    const fresh = this.#makeBucket(b.modelIndex, b.classIndex, b.lod, next, oldMesh.geometry);
     if (written > 0) {
       fresh.matrix.set(oldMatrix.subarray(0, written * 16), 0);
+      fresh.anim.set(oldAnim.subarray(0, written * 4), 0);
       const freshColor = (fresh.mesh.instanceColor?.array ?? null) as Float32Array | null;
       if (freshColor && oldColor) freshColor.set(oldColor.subarray(0, written * 3), 0);
       fresh.slots.set(oldSlots.subarray(0, written), 0);
       fresh.colorKey.set(oldKeys.subarray(0, written), 0);
+      fresh.colorActor.set(oldActors.subarray(0, written), 0);
     }
+    // The geometry is shared with the fresh mesh; only the old mesh's instance buffers go.
     oldMesh.dispose();
 
     b.mesh = fresh.mesh;
     b.capacity = next;
     b.matrix = fresh.matrix;
+    b.anim = fresh.anim;
+    b.animAttr = fresh.animAttr;
     b.slots = fresh.slots;
     b.colorKey = fresh.colorKey;
-    // A brand-new attribute has never been uploaded, whatever the colours say.
+    b.colorActor = fresh.colorActor;
     b.colorDirty = true;
-    // `#makeBucket` only added the new mesh to the group; the bucket list itself is unchanged.
+  }
+
+  #ensureSlots(n: number): void {
+    if (n <= this.#slotCap) return;
+    let c = Math.max(64, this.#slotCap);
+    while (c < n) c *= 2;
+    const g64 = (a: Float64Array): Float64Array<ArrayBuffer> => {
+      const o = new Float64Array(c);
+      o.set(a);
+      return o;
+    };
+    const g32 = (a: Float32Array, k = 1): Float32Array<ArrayBuffer> => {
+      const o = new Float32Array(c * k);
+      o.set(a);
+      return o;
+    };
+    const id = new Uint32Array(c).fill(0xffffffff);
+    id.set(this.#slotId);
+    this.#slotId = id;
+    const m = new Int16Array(c);
+    m.set(this.#slotModel);
+    this.#slotModel = m;
+    const band = new Int8Array(c).fill(-1);
+    band.set(this.#slotBand);
+    this.#slotBand = band;
+    this.#slotPaint = g32(this.#slotPaint, 3);
+    this.#slotPhase = g32(this.#slotPhase);
+    this.#slotScale = g32(this.#slotScale);
+    this.#odo = g64(this.#odo);
+    this.#gait = g64(this.#gait);
+    this.#amp = g32(this.#amp);
+    this.#steer = g32(this.#steer);
+    this.#lean = g32(this.#lean);
+    this.#px = g64(this.#px);
+    this.#py = g64(this.#py);
+    this.#ph = g32(this.#ph);
+    this.#slotCap = c;
+  }
+
+  /** Adopt a slot for a (new) actor: its model, its paint, its flash phase, a fresh odometer. */
+  #adopt(s: number, id: number, c: number, x: number, y: number, h: number): void {
+    this.#slotId[s] = id;
+    const first = this.#classModels[c * 2];
+    const count = this.#classModels[c * 2 + 1];
+    const u = hashId(id, 1);
+    let mi = first;
+    for (let k = 0; k < count; k++) {
+      mi = first + k;
+      if (u < this.#models[mi].cumulative) break;
+    }
+    this.#slotModel[s] = mi;
+    const model = this.#models[mi];
+    const p = s * 3;
+    if (model.livery) {
+      this.#slotPaint[p] = model.livery[0];
+      this.#slotPaint[p + 1] = model.livery[1];
+      this.#slotPaint[p + 2] = model.livery[2];
+    } else {
+      const def = this.#classes[c];
+      let hex: number;
+      if (def.category === 1 || model.kind === "pedestrian") {
+        hex = CLOTHING_PALETTE[Math.floor(hashId(id, 2) * CLOTHING_PALETTE.length)];
+      } else {
+        const v = hashId(id, 2);
+        let acc = 0;
+        hex = PAINT_PALETTE[0].hex;
+        for (const e of PAINT_PALETTE) {
+          acc += e.weight;
+          if (v < acc) {
+            hex = e.hex;
+            break;
+          }
+        }
+      }
+      this.#color.setHex(hex);
+      this.#slotPaint[p] = this.#color.r;
+      this.#slotPaint[p + 1] = this.#color.g;
+      this.#slotPaint[p + 2] = this.#color.b;
+    }
+    this.#slotPhase[s] = hashId(id, 3);
+    // People are not all one height. US adults: men 175.4 cm (SD 7.4), women 161.5 cm (SD 7.1),
+    // NHANES 2015–2018 (Fryar et al. 2021, NHSR 160); half and half, as a fraction of the class's
+    // 1.719 m, clamped to ±2.5 SD.
+    if (model.kind === "pedestrian") {
+      const man = hashId(id, 6) < 0.5;
+      const u1 = Math.max(1e-6, hashId(id, 7));
+      const u2 = hashId(id, 8);
+      const z = Math.max(-2.5, Math.min(2.5, Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)));
+      const cm = man ? 175.4 + 7.4 * z : 161.5 + 7.1 * z;
+      this.#slotScale[s] = cm / 100 / Math.max(0.5, this.#classes[c].heightM);
+    } else {
+      this.#slotScale[s] = 1;
+    }
+    this.#slotBand[s] = -1;
+    this.#odo[s] = hashId(id, 4) * 10;
+    this.#gait[s] = hashId(id, 5) * TAU;
+    this.#amp[s] = 0;
+    this.#steer[s] = 0;
+    this.#lean[s] = 0;
+    this.#px[s] = x;
+    this.#py[s] = y;
+    this.#ph[s] = h;
   }
 
   /**
@@ -573,14 +833,29 @@ export class ActorRenderer {
     const buckets = this.#buckets;
     for (let i = 0; i < buckets.length; i++) buckets[i].cursor = 0;
     this.#visibleCount = 0;
+    this.#ensureSlots(ctx.count);
+    const dt = ctx.dtSeconds !== undefined && ctx.dtSeconds > 0 ? Math.min(0.25, ctx.dtSeconds) : 1 / 60;
+    if (ctx.timeSeconds !== undefined) this.uniforms.uTime.value = ctx.timeSeconds % 3600;
+    // The steering filter: a first-order lag of 0.15 s, about the time a driver takes to wind the
+    // wheel into a turn, so the drawn angle follows the path's curvature without its noise.
+    const steerK = 1 - Math.exp(-dt / 0.15);
+    const ampK = 1 - Math.exp(-dt / 0.25);
+    // A two-wheeler's roll settles in about a quarter of a second: the capsize-and-weave time
+    // scale of a bicycle or motorcycle at town speeds (Cossalter, Motorcycle Dynamics, 2006, ch. 4).
+    const leanK = 1 - Math.exp(-dt / LEAN_TAU_S);
 
-    // Frustum planes, extracted by hand from the view-projection matrix so the test below can run on
-    // plain numbers. Same algebra as `Frustum.setFromProjectionMatrix`.
     if (cull) this.#extractPlanes(cam);
 
     const camX = cam.matrixWorld.elements[12];
     const camY = cam.matrixWorld.elements[13];
     const camZ = cam.matrixWorld.elements[14];
+    // Hysteresis on the LOD bands: an actor changes detail 10 % past a boundary on the way out and
+    // 10 % inside it on the way back, so one parked on a boundary under a jittering camera does
+    // not change model every frame (the glitch hunter's `lod_pop`).
+    const lod0In = (this.#lod0 * 0.9) ** 2;
+    const lod0Out = (this.#lod0 * 1.1) ** 2;
+    const lod1In = (this.#lod1 * 0.9) ** 2;
+    const lod1Out = (this.#lod1 * 1.1) ** 2;
     const lod0Sq = this.#lod0 * this.#lod0;
     const lod1Sq = this.#lod1 * this.#lod1;
 
@@ -590,6 +865,9 @@ export class ActorRenderer {
     const st = ctx.state;
     const occ = ctx.occupied;
     const ids = ctx.actorId;
+    const spd = ctx.speed;
+    const lampsIn = ctx.lamps;
+    const fadeIn = ctx.fade;
     const nClasses = this.#classes.length;
     const planes = this.#planes;
     const lift = this.#groundOffset;
@@ -601,7 +879,17 @@ export class ActorRenderer {
     const hiddenU = hidden >>> 0;
     const gt = this.#showGroundTruth;
     const benignByClass = this.#benignByClass;
+    const realistic = this.#paint === "realistic";
     const col = this.#color;
+    const models = this.#models;
+
+    if (this.slotLod.length < ctx.count) {
+      let n = Math.max(64, this.slotLod.length);
+      while (n < ctx.count) n *= 2;
+      this.slotLod = new Int8Array(n);
+    }
+    const slotLod = this.slotLod;
+    slotLod.fill(-1, 0, ctx.count);
 
     let live = 0;
     let drawn = 0;
@@ -614,13 +902,54 @@ export class ActorRenderer {
     for (let s = 0; s < ctx.count; s++) {
       if (occ[s] === 0) continue;
       live++;
-      // Still live and still pickable; just not drawn. See `hiddenActorId`.
-      if (hidden >= 0 && ids[s] === hiddenU) continue;
       let c = cls[s];
       if (c >= nClasses) c = 0;
       const p = s * 3;
       const x = pos[p];
       const y = pos[p + 1];
+      const h = head[s];
+      const id = ids[s];
+      if (this.#slotId[s] !== id || models[this.#slotModel[s]]?.classIndex !== c) this.#adopt(s, id, c, x, y, h);
+      const model = models[this.#slotModel[s]];
+
+      // Animation state, for every live actor, so one entering the view is already rolling.
+      const mx = x - this.#px[s];
+      const my = y - this.#py[s];
+      const moved = Math.hypot(mx, my);
+      if (moved < 8) {
+        // Signed along the heading, so a vehicle that reverses rolls its wheels backwards.
+        const along = mx * Math.cos(h) + my * Math.sin(h);
+        this.#odo[s] += along;
+        const v = spd ? Math.abs(spd[s]) : moved / dt;
+        if (model.info.strideM > 0) this.#gait[s] += (Math.abs(along) / model.info.strideM) * TAU;
+        // Swing amplitude: full at a normal walk (1.3 m/s), none standing.
+        const target = Math.min(1, v / 1.3);
+        this.#amp[s] += (target - this.#amp[s]) * ampK;
+        if (model.info.wheelbaseM > 0 && v > 0.8) {
+          const yaw = wrap(h - this.#ph[s]) / dt;
+          // Kinematic bicycle model: tan δ = wheelbase · yaw rate / speed.
+          let delta = Math.atan((model.info.wheelbaseM * yaw) / v);
+          if (delta > 0.6) delta = 0.6;
+          else if (delta < -0.6) delta = -0.6;
+          this.#steer[s] += (delta - this.#steer[s]) * steerK;
+        }
+        if (model.info.singleTrack) {
+          // A single-track vehicle balances a turn by leaning into it: in a steady turn the lean
+          // φ satisfies tan φ = v²/(g·R) = v·ω/g (Cossalter 2006, §4.1), for rider and machine
+          // together. Below walking pace the rider balances with the bars and a foot, not a lean.
+          const yaw = wrap(h - this.#ph[s]) / dt;
+          let phi = v > 1.5 ? -Math.atan((v * yaw) / GRAVITY) : 0;
+          if (phi > LEAN_MAX_RAD) phi = LEAN_MAX_RAD;
+          else if (phi < -LEAN_MAX_RAD) phi = -LEAN_MAX_RAD;
+          this.#lean[s] += (phi - this.#lean[s]) * leanK;
+        }
+      }
+      this.#px[s] = x;
+      this.#py[s] = y;
+      this.#ph[s] = h;
+
+      // Still live and still pickable; just not drawn. See `hiddenActorId`.
+      if (hidden >= 0 && id === hiddenU) continue;
       const z = pos[p + 2] + lift;
       const dx = x - camX;
       const dy = y - camY;
@@ -640,6 +969,7 @@ export class ActorRenderer {
         }
         if (outside) {
           culled++;
+          this.#slotBand[s] = -1;
           continue;
         }
       }
@@ -649,12 +979,19 @@ export class ActorRenderer {
         continue;
       }
 
-      const lod: LodLevel = dist2 < lod0Sq ? 0 : dist2 < lod1Sq ? 1 : 2;
+      const prevBand = this.#slotBand[s];
+      const ld2 = dist2 / this.#lodScale2[c];
+      let lod: LodLevel;
+      if (prevBand === 0) lod = ld2 < lod0Out ? 0 : ld2 < lod1Out ? 1 : 2;
+      else if (prevBand === 1) lod = ld2 < lod0In ? 0 : ld2 < lod1Out ? 1 : 2;
+      else if (prevBand === 2) lod = ld2 < lod0In ? 0 : ld2 < lod1In ? 1 : 2;
+      else lod = ld2 < lod0Sq ? 0 : ld2 < lod1Sq ? 1 : 2;
+      this.#slotBand[s] = lod;
       if (lod === 0) lod0n++;
       else if (lod === 1) lod1n++;
       else lod2n++;
 
-      const b = buckets[c * 3 + lod];
+      const b = buckets[this.#slotModel[s] * 3 + lod];
       if (b.cursor >= b.capacity) {
         if (b.capacity >= this.#maxActors) {
           dropped++;
@@ -666,26 +1003,55 @@ export class ActorRenderer {
       const i = b.cursor++;
       const m = b.matrix;
       const o = i * 16;
-      const h = head[s];
       const cosH = Math.cos(h);
       const sinH = Math.sin(h);
       // Column-major, identical to what `Matrix4.toArray` would write for
       // makeRotationZ(h) then setPosition(x, y, z).
-      m[o] = cosH; m[o + 1] = sinH; m[o + 2] = 0; m[o + 3] = 0;
-      m[o + 4] = -sinH; m[o + 5] = cosH; m[o + 6] = 0; m[o + 7] = 0;
-      m[o + 8] = 0; m[o + 9] = 0; m[o + 10] = 1; m[o + 11] = 0;
+      // A person's stature scales them uniformly (a shorter person is also narrower).
+      const k = this.#slotScale[s];
+      const lean = this.#lean[s];
+      if (lean === 0) {
+        m[o] = cosH * k; m[o + 1] = sinH * k; m[o + 2] = 0; m[o + 3] = 0;
+        m[o + 4] = -sinH * k; m[o + 5] = cosH * k; m[o + 6] = 0; m[o + 7] = 0;
+        m[o + 8] = 0; m[o + 9] = 0; m[o + 10] = k; m[o + 11] = 0;
+      } else {
+        // Rz(h)·Rx(lean): the roll about the vehicle's own long axis through its tyre contacts
+        // (the model's origin is on the ground), so the wheels stay on the road as it leans.
+        const cl = Math.cos(lean);
+        const sl = Math.sin(lean);
+        m[o] = cosH * k; m[o + 1] = sinH * k; m[o + 2] = 0; m[o + 3] = 0;
+        m[o + 4] = -sinH * cl * k; m[o + 5] = cosH * cl * k; m[o + 6] = sl * k; m[o + 7] = 0;
+        m[o + 8] = sinH * sl * k; m[o + 9] = -cosH * sl * k; m[o + 10] = cl * k; m[o + 11] = 0;
+      }
       m[o + 12] = x; m[o + 13] = y; m[o + 14] = z; m[o + 15] = 1;
 
-      // Colour by state (§3.3.4 bits 0–2), selection first. Same order as `actorColorKey`, which
-      // `legend()` reports from — keep the two in step. Written, and uploaded, only on a change:
-      // the matrices move every frame but a colour is a function of selection and state bits.
+      const a = b.anim;
+      const ao = i * 4;
+      const wr = model.info.wheelRadiusM;
+      a[ao] = wr > 0 ? (this.#odo[s] / wr) % TAU : 0;
+      a[ao + 1] = this.#steer[s];
+      // A cyclist's legs follow the crank: one turn per 6.5 m, a mid gear's development.
+      a[ao + 2] = model.info.strideM > 0 ? this.#gait[s] % TAU : ((this.#odo[s] / 6.5) * TAU) % TAU;
+      a[ao + 3] = packLamps(
+        lampsIn ? lampsIn[s] : 0, this.#slotPhase[s], model.info.strideM > 0 ? this.#amp[s] : 0.8,
+        fadeIn ? fadeIn[s] : 1,
+      );
+
+      // Colour: selection and §3.3.4 state first (the order `actorColorKey` gives, which `legend()`
+      // reports from); a benign actor in its own paint, or its class colour, or the benign colour.
+      // Written, and uploaded, only on a change.
       const state = st[s];
-      let ci = actorStateColorIndex(state, selected >= 0 && ids[s] === selectedU, gt);
+      let ci = actorStateColorIndex(state, selected >= 0 && id === selectedU, gt);
       if (ci === 0 && benignByClass) ci = CLASS_COLOR_KEY;
-      if (b.colorKey[i] !== ci) {
+      else if (ci === 0 && realistic) ci = PAINT_COLOR_KEY;
+      const paintOwner = ci === PAINT_COLOR_KEY ? id : 0xffffffff;
+      if (b.colorKey[i] !== ci || b.colorActor[i] !== paintOwner) {
         b.colorKey[i] = ci;
+        b.colorActor[i] = paintOwner;
         b.colorDirty = true;
-        if (ci === CLASS_COLOR_KEY) {
+        if (ci === PAINT_COLOR_KEY) {
+          col.setRGB(this.#slotPaint[p], this.#slotPaint[p + 1], this.#slotPaint[p + 2]);
+        } else if (ci === CLASS_COLOR_KEY) {
           col.setRGB(classColor[c * 3], classColor[c * 3 + 1], classColor[c * 3 + 2]);
         } else {
           col.setRGB(stateColor[ci * 3], stateColor[ci * 3 + 1], stateColor[ci * 3 + 2]);
@@ -694,6 +1060,7 @@ export class ActorRenderer {
       }
 
       b.slots[i] = s;
+      slotLod[s] = lod;
       this.visibleSlots[this.#visibleCount++] = s;
       drawn++;
     }
@@ -715,6 +1082,12 @@ export class ActorRenderer {
         // the same object is re-pushed rather than kept.
         im.updateRanges.push(b.matrixRange);
         im.needsUpdate = true;
+        const aa = b.animAttr;
+        aa.clearUpdateRanges();
+        b.animRange.start = 0;
+        b.animRange.count = n * 4;
+        aa.updateRanges.push(b.animRange);
+        aa.needsUpdate = true;
         const ic = b.mesh.instanceColor;
         if (ic && b.colorDirty) {
           ic.clearUpdateRanges();
@@ -733,14 +1106,47 @@ export class ActorRenderer {
     return this.#stats;
   }
 
-  /** The bucket a `(class, lod)` pair draws into, for tests and the picker. */
+  /** The first bucket a `(class, lod)` pair draws into — the class's first model. */
   bucketAt(classIndex: number, lod: LodLevel): {
     readonly mesh: InstancedMesh<BufferGeometry, Material>;
     readonly count: number;
     readonly capacity: number;
   } | null {
-    const b = this.#buckets[classIndex * 3 + lod];
-    return b ? { mesh: b.mesh, count: b.cursor, capacity: b.capacity } : null;
+    return this.bucketsAt(classIndex, lod)[0] ?? null;
+  }
+
+  /** Every bucket a `(class, lod)` pair draws into, one per model of the class. */
+  bucketsAt(classIndex: number, lod: LodLevel): {
+    readonly mesh: InstancedMesh<BufferGeometry, Material>;
+    readonly count: number;
+    readonly capacity: number;
+    readonly model: ActorModelKind;
+  }[] {
+    const out: { mesh: InstancedMesh<BufferGeometry, Material>; count: number; capacity: number; model: ActorModelKind }[] = [];
+    if (classIndex < 0 || classIndex * 2 + 1 >= this.#classModels.length) return out;
+    const first = this.#classModels[classIndex * 2];
+    const count = this.#classModels[classIndex * 2 + 1];
+    for (let k = 0; k < count; k++) {
+      const b = this.#buckets[(first + k) * 3 + lod];
+      if (b) out.push({ mesh: b.mesh, count: b.cursor, capacity: b.capacity, model: this.#models[first + k].kind });
+    }
+    return out;
+  }
+
+  /** The model an actor in `slot` was last drawn as, or null. */
+  modelOfSlot(slot: number): ActorModelKind | null {
+    if (slot < 0 || slot >= this.#slotCap || this.#slotId[slot] === 0xffffffff) return null;
+    return this.#models[this.#slotModel[slot]]?.kind ?? null;
+  }
+
+  /** The roll drawn for `slot`, radians: a two-wheeler turning left leans left (negative). */
+  leanOfSlot(slot: number): number {
+    return slot >= 0 && slot < this.#slotCap ? this.#lean[slot] : 0;
+  }
+
+  /** The steering angle drawn for `slot`, radians (left positive). */
+  steerOfSlot(slot: number): number {
+    return slot >= 0 && slot < this.#slotCap ? this.#steer[slot] : 0;
   }
 
   /** Total instance capacity currently allocated across all buckets. */

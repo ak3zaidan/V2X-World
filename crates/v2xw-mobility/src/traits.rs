@@ -98,6 +98,15 @@ pub trait Mobility: Model {
     fn intent(&self, _world: &v2xw_world::World, _a: ActorId) -> Option<crate::views::Intent> {
         None
     }
+
+    /// Every vehicle's exterior lamps after the last step (vwp-v1 §3.3.5,
+    /// [`crate::lamps`]), in actor-id order. Headlamps are not decided here.
+    ///
+    /// A provided method: a tier that models no lamps returns nothing and every vehicle
+    /// is streamed dark, which is what the stream carried before the byte existed.
+    fn exterior_lamps(&mut self, _ctx: &mut dyn MobCtx) -> Vec<(ActorId, u8)> {
+        Vec::new()
+    }
 }
 
 /// Longitudinal acceleration from the gap and the speed difference to the leader

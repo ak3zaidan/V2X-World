@@ -153,6 +153,7 @@ pub fn snapshots(shape: &RunShape) -> Vec<Snapshot> {
                 },
                 verified_neighbors: (i % 16) as u8,
                 activity: 0,
+                lamps: 0,
             });
         }
         if shape.parked_attacker {
@@ -172,6 +173,7 @@ pub fn snapshots(shape: &RunShape) -> Vec<Snapshot> {
                 state: ST_EQUIPPED | ST_TRANSMITTING | if k >= 6 { ST_ATTACKER } else { 0 },
                 verified_neighbors: 3,
                 activity: 0,
+                lamps: 0,
             });
         }
         let signals = (0..shape.signals)

@@ -281,7 +281,11 @@ export interface ActorRowInit {
   classIdx: number;
   state: number;
   verifiedNeighbors: number;
-  /** §3.3.5 activity (the byte v1.0 reserved as `flags8`). */
+  /** §3.3.5 `lamps` (v1.2): a vehicle's lamps; for a pedestrian the same byte is its activity. */
+  lamps?: number;
+  /** §3.3.5 a pedestrian's activity, in the same byte as {@link lamps}. */
+  activity?: number;
+  /** @deprecated the v1.0 name of the byte. */
   flags8?: number;
 }
 /** One signal row of §3.3.3. */
@@ -336,7 +340,7 @@ export function encodeKeyframeBody(init: KeyframeInit): Uint8Array {
     dv.setUint8(offActors + 24 * A + i, a.classIdx);
     dv.setUint8(offActors + 25 * A + i, a.state);
     dv.setUint8(offActors + 26 * A + i, a.verifiedNeighbors);
-    dv.setUint8(offActors + 27 * A + i, a.flags8 ?? 0);
+    dv.setUint8(offActors + 27 * A + i, a.lamps || a.activity || a.flags8 || 0);
   }
   writeSignals(dv, offSignals, init.signals);
   return body;
@@ -368,8 +372,10 @@ export interface MovedRowInit {
   state: number;
   verifiedNeighbors: number;
   mflags: number;
-  /** §3.3.5 activity, in the byte v1.0 reserved; 0 when absent. */
+  /** §3.3.5 a pedestrian's activity, in the byte v1.0 reserved; 0 when absent. */
   activity?: number;
+  /** §3.3.5 `lamps` (v1.2): a vehicle's; the same byte as {@link activity}. */
+  lamps?: number;
 }
 /** One entry of the §3.4.3 absolute block. */
 export interface AbsoluteRowInit {
@@ -392,8 +398,10 @@ export interface SpawnRowInit {
   classIdx: number;
   state: number;
   verifiedNeighbors: number;
-  /** §3.3.5 activity, in the byte v1.0 reserved; 0 when absent. */
+  /** §3.3.5 a pedestrian's activity, in the byte v1.0 reserved; 0 when absent. */
   activity?: number;
+  /** §3.3.5 `lamps` (v1.2): a vehicle's; the same byte as {@link activity}. */
+  lamps?: number;
 }
 /** One despawn row of §3.4.6. */
 export interface DespawnRowInit {
@@ -473,7 +481,7 @@ export function encodeDeltaBody(init: DeltaInit): Uint8Array {
     dv.setUint8(offMoved + 16 * M + i, m.state);
     dv.setUint8(offMoved + 17 * M + i, m.verifiedNeighbors);
     dv.setUint8(offMoved + 18 * M + i, m.mflags);
-    dv.setUint8(offMoved + 19 * M + i, m.activity ?? 0);
+    dv.setUint8(offMoved + 19 * M + i, m.lamps || m.activity || 0);
   }
   for (let i = 0; i < Ab; i++) {
     const base = offAbs + 12 * i;
@@ -498,7 +506,7 @@ export function encodeDeltaBody(init: DeltaInit): Uint8Array {
     dv.setUint8(offSpawns + 32 * P + i, s.classIdx);
     dv.setUint8(offSpawns + 33 * P + i, s.state);
     dv.setUint8(offSpawns + 34 * P + i, s.verifiedNeighbors);
-    dv.setUint8(offSpawns + 35 * P + i, s.activity ?? 0);
+    dv.setUint8(offSpawns + 35 * P + i, s.lamps || s.activity || 0);
   }
   for (let i = 0; i < D; i++) {
     dv.setUint32(offDespawns + 0 * D + 4 * i, despawns[i].slot, true);

@@ -636,7 +636,7 @@ after despawn so that a late delta cannot be misapplied.
 | 9 | `u8[A]` | `class_idx` | index into the class table | PUBLIC |
 | 10 | `u8[A]` | `state` | §3.3.4 | mixed |
 | 11 | `u8[A]` | `verified_neighbors` | count of neighbours in state *verified*, saturating at 255 | NODE |
-| 12 | `u8[A]` | `flags8` | the activity byte, §3.3.5 (reserved and 0 in v1.0) | **GT** |
+| 12 | `u8[A]` | `flags8` | the actor byte, §3.3.5: `lamps` for a vehicle, `activity` for a pedestrian (reserved and 0 in v1.0) | PUBLIC (lamps) / **GT** (activity) |
 
 **The pose is the body's centre.** `x_mm`/`y_mm`/`z_cm` locate the centre of the class's
 bounding box (§4 class table `length_m` × `width_m`), not the kinematic reference point the
@@ -678,7 +678,22 @@ keys each head row by both its group id and its plain controller id.)
 This is the "benign / attacker / reported / revoked" state the palette of 09-ui §10 renders: benign =
 none of bits 0–2 set.
 
-#### 3.3.5 The `activity` byte
+#### 3.3.5 The actor byte: `lamps` for a vehicle, `activity` for a pedestrian (v1.2)
+
+One byte per actor, in bytes v1.0 reserved and wrote as zero: the keyframe's `flags8` (§3.3.2 column 12),
+the `Delta` moved row's `reserved` (§3.4.2 column 11) and the spawn row's `reserved` (§3.4.5 column 14).
+Its meaning follows the actor's class (§4 class table): for a **pedestrian** it is the `activity` value
+below; for every **vehicle** (motorcycles included) it is the `lamps` bit field below. A pedestrian has no
+lamps and a vehicle no activity, so the two never compete for the byte; a reader decodes it by class. A
+change of the byte alone makes a moved row (§3.4.2). Under the `node` profile the producer writes a
+pedestrian's activity as 0 (it is ground truth) and a vehicle's lamps unchanged (they are PUBLIC: anyone
+at the roadside can see them).
+
+(Two tracks claimed this byte at once, the pedestrian track for `activity` and the 3D-scene track for
+`lamps`; the merge of 2026-10-06 shares it by class rather than moving either to a new column, which
+would have broken the §9 worked examples.)
+
+##### 3.3.5.1 `activity` (pedestrians)
 
 What a road user is doing, for a viewer to draw (a pedestrian standing at the kerb, crossing on walk,
 crossing against the signal, jaywalking). It lives in bytes v1.0 reserved and wrote as zero: the
@@ -701,6 +716,36 @@ stream writes 0.
 Values 7–255 are reserved; a reader maps them to `NONE`. A motorcycle's lean is not carried: it follows
 from the pose stream (`φ = atan(v·ψ̇/g)`, with `ψ̇` the change of `heading_brad` over a step), which is
 how the engine's own cornering model relates speed, turn radius and lean.
+
+##### 3.3.5.2 `lamps` (vehicles)
+
+What the actor's exterior lamps show. PUBLIC: anyone at the roadside can see a car's lamps, so the
+`node` profile carries it unchanged. It lives in bytes a v1.0 reader was already required to ignore —
+the keyframe's `flags8` column and the moved and spawn rows' `reserved` byte — so it is a MINOR addition
+(§8.5); a v1.0 reader draws every vehicle dark, which is what v1.0 streams said.
+
+| Bit | Mask | Name | Meaning |
+|---|---|---|---|
+| 0 | `0x01` | `LAMP_BRAKE` | stop lamps lit: the driver is on the service brake, or holding the vehicle at a standstill |
+| 1 | `0x02` | `LAMP_TURN_LEFT` | left direction indicator operating |
+| 2 | `0x04` | `LAMP_TURN_RIGHT` | right direction indicator operating |
+| 3 | `0x08` | `LAMP_HAZARD` | hazard warning (both indicators) |
+| 4 | `0x10` | `LAMP_LOW_BEAM` | dipped headlamps (and so tail lamps) on |
+| 5 | `0x20` | `LAMP_REVERSE` | reversing lamps |
+| 6 | `0x40` | `LAMP_EMERGENCY` | an emergency vehicle's warning beacons in use (J2735 `LightbarInUse`) |
+| 7 | `0x80` | — | reserved, 0 |
+
+The bits follow SAE J2735's `ExteriorLights` (low beam, left and right turn signal, hazard) and
+`BrakeSystemStatus`. An indicator bit means "the indicator is on", not the flash phase: the stream runs
+at the mobility step and a flasher at 1–2 Hz (SAE J590), so the client flashes it. The engine's rules are
+on the `mobility/lamps/exterior` model card (`v2xw_mobility::lamps`) and in `v2xw_engine::daylight` for
+the headlamps; this build produces no hazard or reversing lamp, because no vehicle in it breaks down,
+double-parks or reverses. A change of `lamps` alone makes a moved row (§3.4.2): a car standing at a red
+releases its brake a step before it moves. `gt.kinematics` carries the same byte as `lamps` (omitted when
+zero), which is how the live server's stream gets it.
+
+The writer still announces `version_minor` 0: raising it moves the §9 worked examples, whose `Hello`
+bytes carry the minor, and is left to the release that re-blesses them.
 
 ---
 
@@ -746,9 +791,9 @@ every earlier `Delta` of the same GOP in `step_index` order. A client that sees 
 | 8 | `u8[M]` | `state` | absolute, §3.3.4 | mixed |
 | 9 | `u8[M]` | `verified_neighbors` | absolute | NODE |
 | 10 | `u8[M]` | `mflags` | §3.4.2.1 | — |
-| 11 | `u8[M]` | `reserved` | the activity byte, absolute, §3.3.5 (0 in v1.0) | **GT** |
+| 11 | `u8[M]` | `reserved` | the actor byte, absolute, §3.3.5 (`lamps` / `activity`; 0 in v1.0) | PUBLIC / **GT** |
 
-Only actors whose quantised pose, `state`, `verified_neighbors`, lane or activity (§3.3.5) changed appear. Heading, speed,
+Only actors whose quantised pose, `state`, `verified_neighbors`, actor byte (§3.3.5) or lane changed appear. Heading, speed,
 acceleration, state and neighbour count are absolute because they are already 1–2 bytes: delta-coding them
 would save nothing and cost a reference.
 
@@ -794,7 +839,7 @@ clear.
 | 11 | `u8[P]` | `class_idx` | | PUBLIC |
 | 12 | `u8[P]` | `state` | | mixed |
 | 13 | `u8[P]` | `verified_neighbors` | | NODE |
-| 14 | `u8[P]` | `reserved` | the activity byte, §3.3.5 (0 in v1.0) | **GT** |
+| 14 | `u8[P]` | `reserved` | the actor byte, §3.3.5 (`lamps` / `activity`; 0 in v1.0) | PUBLIC / **GT** |
 
 #### 3.4.6 Despawn block (8·D bytes, 4-aligned)
 

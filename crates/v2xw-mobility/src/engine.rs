@@ -199,6 +199,9 @@ pub const AMBER_DILEMMA_TTI_S: (f64, f64) = (2.5, 5.5);
 /// The model id a driver's amber threshold is drawn under ([`DriverTraits`]).
 const AMBER_TRAIT_ID: &str = "mobility/native/driver/amber";
 
+/// The keyed stream a driver's signalling habit is drawn from ([`crate::lamps`]).
+const LAMP_HABIT_ID: &str = "mobility/native/driver/lamps";
+
 /// How much of the amber a driver who goes leaves in hand, seconds: they go only if they
 /// reach the line this long before it turns red at their present speed. **This crate's
 /// choice**, one 0.1 s step and a little more, so a vehicle that goes never meets the red.
@@ -686,6 +689,67 @@ struct Actor {
 }
 
 impl Actor {
+    /// What the exterior-lamp rules need to know about this vehicle ([`crate::lamps`]):
+    /// its speed and acceleration, the lane change under way, the turn it is making, and
+    /// the next turn on its route with the distance to where it starts.
+    fn lamp_input(&self, world: &World) -> crate::lamps::LampInput {
+        let lane = world.lane(self.lane);
+        let direction = |from: LaneId, to: LaneId| -> Option<TurnDirection> {
+            world
+                .successors(from)
+                .iter()
+                .find(|c| c.via == Some(to) || c.to_lane == to)
+                .map(|c| c.direction)
+        };
+        let turning = if lane.kind == LaneKind::Internal {
+            self.trail.last().and_then(|from| direction(*from, self.lane))
+        } else {
+            None
+        };
+        let mut next_turn = None;
+        if turning.is_none() {
+            // Walk the route ahead a short way: the first movement that is not straight on
+            // is the one a driver would be signalling for.
+            let mut prev = self
+                .route
+                .lanes
+                .get(self.route_index)
+                .copied()
+                .unwrap_or(self.lane);
+            let mut dist = (lane.length_m - self.s_m).max(0.0);
+            for &next in self.route.lanes.iter().skip(self.route_index + 1).take(8) {
+                let Some(next_lane) = world.try_lane(next) else {
+                    break;
+                };
+                if let Some(d) = direction(prev, next)
+                    && d != TurnDirection::Straight
+                {
+                    next_turn = Some((d, dist));
+                    break;
+                }
+                dist += next_lane.length_m;
+                if dist > 200.0 {
+                    break;
+                }
+                prev = next;
+            }
+        }
+        let lane_change_left = self.transition.map(|t| {
+            let from = world.lane(t.from).index;
+            let to = world.lane(t.to).index;
+            // Index 0 is the rightmost lane, so a higher index is further left.
+            to > from
+        });
+        crate::lamps::LampInput {
+            class: self.class,
+            speed_mps: self.speed_mps,
+            accel_mps2: self.accel_mps2,
+            lane_change_left,
+            next_turn,
+            turning,
+        }
+    }
+
     /// Where the vehicle is, as the crosswalk rules read it.
     fn crosswalk_path(&self) -> VehiclePath<'_> {
         VehiclePath {
@@ -972,6 +1036,11 @@ pub struct NativeMobility {
     next_seq: u64,
     dropped_trips: u64,
     card: ModelCard,
+    /// The exterior lamp model's parameters ([`crate::lamps`]).
+    lamp_params: crate::lamps::LampParams,
+    /// Per vehicle: the lamps shown last step (for the brake hysteresis) and the driver's
+    /// signalling habit, drawn the first time the vehicle is asked about.
+    lamp_memory: BTreeMap<ActorId, (u8, crate::lamps::SignalHabit)>,
 }
 
 impl core::fmt::Debug for NativeMobility {
@@ -1076,7 +1145,43 @@ impl NativeMobility {
             next_actor: 0,
             next_seq: 0,
             dropped_trips: 0,
+            lamp_params: crate::lamps::LampParams::default(),
+            lamp_memory: BTreeMap::new(),
         }
+    }
+
+    /// The same engine with these exterior-lamp parameters ([`crate::lamps`]).
+    #[must_use]
+    pub fn with_lamp_params(mut self, params: crate::lamps::LampParams) -> Self {
+        self.lamp_params = params;
+        self
+    }
+
+    /// Every vehicle's exterior lamps after the last step, in actor-id order
+    /// ([`crate::lamps`], vwp-v1 §3.3.5). Headlamps are the caller's.
+    ///
+    /// Read-only with respect to the traffic: the lamps are an output, nothing in a step
+    /// reads them, so asking for them — or not — changes no position. The memory kept is
+    /// the lamps shown last time (the brake hysteresis) and each driver's signalling
+    /// habit, drawn on first sight from the driver's own keyed stream.
+    pub fn exterior_lamps(&mut self, ctx: &mut dyn MobCtx) -> Vec<(ActorId, u8)> {
+        let world = ctx.world();
+        let p = self.lamp_params;
+        let mut previous = core::mem::take(&mut self.lamp_memory);
+        let mut out = Vec::with_capacity(self.actors.len());
+        for a in self.actors.values() {
+            let (last, habit) = previous.remove(&a.id).unwrap_or_else(|| {
+                let key = EntityRef::custom(LAMP_HABIT_ID, a.seq);
+                let mut rng = ctx.rng(RngDomain::ReactionTime, key);
+                let turns = rng.uniform(0.0, 1.0) < p.turn_signal_use;
+                let lane_changes = rng.uniform(0.0, 1.0) < p.lane_change_signal_use;
+                (0, crate::lamps::SignalHabit { turns, lane_changes })
+            });
+            let bits = crate::lamps::lamps(&a.lamp_input(world), last, habit, &p);
+            self.lamp_memory.insert(a.id, (bits, habit));
+            out.push((a.id, bits));
+        }
+        out
     }
 
     /// Adds a pedestrian model, which is stepped with the same frozen snapshot the
@@ -4303,6 +4408,10 @@ impl Mobility for NativeMobility {
 
     fn set_demand_multiplier(&mut self, m: f64) -> bool {
         self.demand.as_mut().is_some_and(|d| d.set_multiplier(m))
+    }
+
+    fn exterior_lamps(&mut self, ctx: &mut dyn MobCtx) -> Vec<(ActorId, u8)> {
+        NativeMobility::exterior_lamps(self, ctx)
     }
 
     fn intent(&self, world: &World, a: ActorId) -> Option<crate::views::Intent> {

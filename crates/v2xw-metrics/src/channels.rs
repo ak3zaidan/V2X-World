@@ -1164,6 +1164,15 @@ pub struct GtKinematicsView {
     /// walking along a sidewalk. Ground truth, like the rest of the record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<u8>,
+    /// The exterior lamps (vwp-v1 §3.3.5): brake, indicators, headlamps, beacons.
+    /// PUBLIC — anyone can see a car's lamps — though it rides on a GT record. Written
+    /// only when a lamp is lit, so a dark vehicle's record is what it always was.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub lamps: u8,
+}
+
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
 }
 
 impl ChannelView for GtKinematicsView {

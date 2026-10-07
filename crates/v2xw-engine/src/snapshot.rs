@@ -125,6 +125,8 @@ pub struct ActorState {
     pub verified_neighbors: u32,
     /// What the road user is doing (vwp-v1 §3.3.5; `0` for a vehicle).
     pub activity: u8,
+    /// Its exterior lamps (§3.3.5).
+    pub lamps: u8,
 }
 
 /// The engine's producer of `Keyframe` and `Delta` frames.
@@ -227,6 +229,7 @@ impl SnapshotStream {
                 state: state_byte(s),
                 verified_neighbors: u8::try_from(s.verified_neighbors).unwrap_or(u8::MAX),
                 activity: s.activity,
+                lamps: s.lamps,
             });
         }
         let mut snap = Snapshot::new(at, actors);
@@ -338,6 +341,7 @@ mod tests {
             transmitting: false,
             verified_neighbors: 0,
             activity: 0,
+            lamps: 0,
         };
         assert_eq!(state_byte(&base), 0);
         let equipped = ActorState {
@@ -387,6 +391,7 @@ mod tests {
                 transmitting: true,
                 verified_neighbors: 0,
                 activity: 0,
+                lamps: 0,
             };
             let frame = stream.encode(at, &[state]).expect("encodes");
             let kind = frame.header().expect("header").kind().expect("known kind");

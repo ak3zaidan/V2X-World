@@ -51,6 +51,9 @@ export type {
 export { Picker } from "./picking.js";
 export type { PickerOptions, PickerPoses } from "./picking.js";
 
+export { GlitchHunter, GLITCH_CLASSES, obbPenetration } from "./glitch.js";
+export type { GlitchClass, GlitchEvent, GlitchReport, GlitchHunterOptions } from "./glitch.js";
+
 export { FrameStats } from "./stats.js";
 export type { FrameStatsSnapshot, FrameCounters } from "./stats.js";
 

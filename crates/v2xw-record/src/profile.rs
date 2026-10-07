@@ -319,10 +319,12 @@ pub fn blank_event_payload(channel_id: u16, payload: &mut [u8]) -> PayloadVerdic
 #[derive(Debug, Default)]
 pub struct NodeProfileStripper {
     occupied: BTreeSet<u32>,
-    /// The `(state, verified_neighbors)` last *transmitted* in the blanked stream, per
-    /// slot. §3.4.2's change predicate is evaluated against this, which is what the live
-    /// blind producer evaluates it against (see the module note).
-    refs: BTreeMap<u32, (u8, u8)>,
+    /// The `(state, verified_neighbors, lamps)` last *transmitted* in the blanked stream,
+    /// per slot. §3.4.2's change predicate is evaluated against this, which is what the
+    /// live blind producer evaluates it against (see the module note). The lamps are
+    /// PUBLIC (§3.3.5), so a row whose only change is a brake lamp is a row the blind
+    /// producer emits too.
+    refs: BTreeMap<u32, (u8, u8, u8)>,
     next_seq: u64,
 }
 
@@ -367,8 +369,10 @@ impl NodeProfileStripper {
                 self.refs.clear();
                 for (slot, row) in b.actors.iter().enumerate() {
                     if row.is_occupied() {
-                        self.refs
-                            .insert(slot as u32, (row.state, row.verified_neighbors));
+                        self.refs.insert(
+                            slot as u32,
+                            (row.state, row.verified_neighbors, row.lamps),
+                        );
                     }
                 }
                 Some(b.to_frame(seq, flags)?)
@@ -441,7 +445,8 @@ impl NodeProfileStripper {
             };
             let says_nothing = row.mflags == 0
                 && (row.dx_mm, row.dy_mm, row.dz_mm) == (0, 0, 0)
-                && self.refs.get(&row.slot) == Some(&(row.state, row.verified_neighbors));
+                && self.refs.get(&row.slot)
+                    == Some(&(row.state, row.verified_neighbors, row.lamps));
             if says_nothing {
                 continue;
             }
@@ -449,13 +454,14 @@ impl NodeProfileStripper {
                 abs.push(e);
             }
             self.refs
-                .insert(row.slot, (row.state, row.verified_neighbors));
+                .insert(row.slot, (row.state, row.verified_neighbors, row.lamps));
             kept.push(*row);
         }
         d.moved = kept;
         d.abs = abs;
         for s in &d.spawns {
-            self.refs.insert(s.slot, (s.state, s.verified_neighbors));
+            self.refs
+                .insert(s.slot, (s.state, s.verified_neighbors, s.lamps));
         }
         for x in &d.despawns {
             self.refs.remove(&x.slot);
