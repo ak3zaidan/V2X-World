@@ -201,6 +201,11 @@ const GROUPS: &[(&str, &str, &str)] = &[
          their advice.",
     ),
     (
+        "mobility",
+        "Traffic",
+        "Who drives the vehicles: this engine, or SUMO over TraCI.",
+    ),
+    (
         "energy",
         "Energy",
         "Emissions, fuel and electric-vehicle energy: which models, which fleet.",

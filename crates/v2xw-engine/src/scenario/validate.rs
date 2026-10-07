@@ -1583,6 +1583,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                reaction, m/s² (default 3.4, AASHTO's comfortable deceleration).",
     },
     KeyStatus {
+        path: "mobility",
+        status: Status::Wired,
+        note: "Who drives the traffic. provider: sumo hands every vehicle to SUMO over \
+               TraCI (needs SUMO installed and a sumo-net world); absent or native is this \
+               engine's own driving.",
+    },
+    KeyStatus {
         path: "energy",
         status: Status::Wired,
         note: "Emissions, fuel and electric-vehicle energy of the traffic, integrated over \
