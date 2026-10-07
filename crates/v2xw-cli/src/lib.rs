@@ -28,6 +28,7 @@
 
 pub mod agent;
 pub mod agent_host;
+pub mod checkpoint;
 pub mod cli;
 pub mod error;
 pub mod experiment;
@@ -36,6 +37,7 @@ pub mod import;
 pub mod info;
 pub mod progress;
 pub mod run;
+pub mod stream;
 pub mod tally;
 pub mod validate;
 pub mod wall;

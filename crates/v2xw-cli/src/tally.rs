@@ -36,9 +36,17 @@ pub struct Tally<R: RunRecorder> {
     frames: u64,
     inner: R,
     by_channel: BTreeMap<String, ChannelTally>,
-    /// Every `metric.sample` record, kept whole: a run's metrics are the one output a
-    /// caller wants next to the recording rather than inside it.
-    metric_samples: Vec<serde_json::Value>,
+    /// Where every `metric.sample` record goes, whole: a run's metrics are the one output
+    /// a caller wants next to the recording rather than inside it. Streamed to
+    /// `metrics.json` as they arrive ([`crate::stream::MetricsStream`]) — they were a
+    /// `Vec` held for the whole run, which a day-long run could not afford.
+    metrics: Option<crate::stream::MetricsStream>,
+    metric_count: u64,
+    /// The record digest over every record that went past, in order — the same
+    /// `SHA-256(t ‖ channel ‖ visibility ‖ json)*` [`v2xw_engine::DigestRecorder`] computes.
+    /// It is taken in front of any filter, so it names what the engine emitted whatever
+    /// reached the recording, and a resumed run is checked against it.
+    digest: v2xw_core::hash::Sha256Writer,
     records: u64,
 }
 
@@ -48,7 +56,9 @@ impl<R: RunRecorder> Tally<R> {
         Tally {
             inner,
             by_channel: BTreeMap::new(),
-            metric_samples: Vec::new(),
+            metrics: None,
+            metric_count: 0,
+            digest: v2xw_core::hash::Sha256Writer::new(),
             records: 0,
             frames: 0,
         }
@@ -64,9 +74,29 @@ impl<R: RunRecorder> Tally<R> {
         &self.by_channel
     }
 
-    /// Every metric sample the run emitted, in emission order.
-    pub fn metric_samples(&self) -> &[serde_json::Value] {
-        &self.metric_samples
+    /// Streams every metric sample to `metrics` from now on.
+    pub fn stream_metrics(&mut self, metrics: crate::stream::MetricsStream) {
+        self.metrics = Some(metrics);
+    }
+
+    /// The metrics stream, to flush at a checkpoint.
+    pub fn metrics_mut(&mut self) -> Option<&mut crate::stream::MetricsStream> {
+        self.metrics.as_mut()
+    }
+
+    /// Hands the metrics stream back, to be finished.
+    pub fn take_metrics(&mut self) -> Option<crate::stream::MetricsStream> {
+        self.metrics.take()
+    }
+
+    /// How many metric samples went past.
+    pub fn metric_count(&self) -> u64 {
+        self.metric_count
+    }
+
+    /// The record digest so far, hex.
+    pub fn record_digest_hex(&self) -> String {
+        self.digest.clone().finish_hex()
     }
 
     /// How many records went past, over every channel.
@@ -85,6 +115,24 @@ impl<R: RunRecorder> Tally<R> {
     pub fn into_inner(self) -> R {
         self.inner
     }
+
+    /// The same counts and digest in front of a different recorder, and the old recorder
+    /// back: how a resumed run carries on from its silent replay into its real outputs
+    /// without the digest or the per-channel counts starting again.
+    pub fn rewrap<R2: RunRecorder>(self, inner: R2) -> (Tally<R2>, R) {
+        (
+            Tally {
+                frames: self.frames,
+                inner,
+                by_channel: self.by_channel,
+                metrics: self.metrics,
+                metric_count: self.metric_count,
+                digest: self.digest,
+                records: self.records,
+            },
+            self.inner,
+        )
+    }
 }
 
 impl<R: RunRecorder> RunRecorder for Tally<R> {
@@ -100,10 +148,17 @@ impl<R: RunRecorder> RunRecorder for Tally<R> {
         e.json_bytes += record.json.len() as u64;
         e.last_ns = at;
         self.records += 1;
-        if record.channel == "metric.sample"
-            && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&record.json)
-        {
-            self.metric_samples.push(v);
+        self.digest.update(&at.to_le_bytes());
+        self.digest.update(record.channel.as_bytes());
+        self.digest.update(record.visibility.to_string().as_bytes());
+        self.digest.update(&record.json);
+        if record.channel == "metric.sample" {
+            self.metric_count += 1;
+            if let Some(m) = self.metrics.as_mut()
+                && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&record.json)
+            {
+                m.push(&v);
+            }
         }
         self.inner.write(at, record);
     }
@@ -120,5 +175,9 @@ impl<R: RunRecorder> RunRecorder for Tally<R> {
 
     fn refused(&self) -> u64 {
         self.inner.refused()
+    }
+
+    fn cancelled(&self) -> bool {
+        self.inner.cancelled()
     }
 }

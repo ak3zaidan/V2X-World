@@ -31,6 +31,9 @@ pub struct Cli {
 pub enum Command {
     /// Run a scenario and write its recording, metrics and manifest.
     Run(RunArgs),
+    /// Carry on a run from its checkpoint (`v2xw run --checkpoint-every`), verified to be
+    /// the same run, and finish its outputs.
+    Resume(ResumeArgs),
     /// Check a scenario without running it.
     Validate(ValidateArgs),
     /// Import an OpenStreetMap extract into the three world formats.
@@ -212,6 +215,23 @@ pub struct RunArgs {
     #[arg(long)]
     pub quiet: bool,
 
+    /// Write a checkpoint every this much simulated time (`checkpoint.json` in the output
+    /// directory), recording in segments closed at each one, so a run of days survives a
+    /// crash: `v2xw resume <out>/checkpoint.json` carries it on.
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
+    pub checkpoint_every: Option<f64>,
+
+    /// How much of the run reaches the recording: `full` (the scene and every record),
+    /// `events` (every record, no scene) or `metrics` (metric samples and the run's
+    /// summary records only — what a run of days wants).
+    #[arg(long, value_enum, default_value = "full")]
+    pub record_level: crate::stream::RecordLevel,
+
+    /// Stop at the first checkpoint at or after this simulated time, as a crash would.
+    /// For testing `v2xw resume`.
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration, hide = true)]
+    pub stop_at: Option<f64>,
+
     /// Print the outcome as JSON.
     #[arg(long)]
     pub json: bool,
@@ -240,10 +260,27 @@ impl RunArgs {
             long: crate::run::LongRun {
                 progress_every_s: self.progress_every,
                 quiet: self.quiet,
-                ..crate::run::LongRun::default()
+                checkpoint_every_s: self.checkpoint_every,
+                record_level: self.record_level,
+                stop_at_s: self.stop_at,
             },
         }
     }
+}
+
+/// `v2xw resume`.
+#[derive(Debug, clap::Args)]
+pub struct ResumeArgs {
+    /// The checkpoint: `checkpoint.json` in the interrupted run's output directory.
+    pub checkpoint: PathBuf,
+
+    /// Keep `progress.jsonl` but print no progress lines on stderr.
+    #[arg(long)]
+    pub quiet: bool,
+
+    /// Print the outcome as JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// `v2xw validate`.

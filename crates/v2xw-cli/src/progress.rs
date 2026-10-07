@@ -57,6 +57,8 @@ pub struct Progress {
     started: Stopwatch,
     last_wall_s: f64,
     last_t_s: f64,
+    wall_offset_s: f64,
+    bytes: u64,
     quiet: bool,
 }
 
@@ -72,7 +74,61 @@ impl Progress {
             started: Stopwatch::start(),
             last_wall_s: 0.0,
             last_t_s: 0.0,
+            wall_offset_s: 0.0,
+            bytes: 0,
             quiet,
+        }
+    }
+
+    /// Carries on `progress.jsonl` from a checkpoint: cut back to the `bytes` that were
+    /// complete at simulated second `t_s`, after `wall_s` of earlier wall clock.
+    pub fn resume(dir: &Path, quiet: bool, bytes: u64, t_s: f64, wall_s: f64) -> Progress {
+        let path = dir.join("progress.jsonl");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .ok()
+            .and_then(|f| f.set_len(bytes).ok().map(|()| f))
+            .and_then(|f| {
+                drop(f);
+                std::fs::OpenOptions::new().append(true).open(&path).ok()
+            })
+            .map(std::io::BufWriter::new);
+        Progress {
+            file,
+            started: Stopwatch::start(),
+            last_wall_s: 0.0,
+            last_t_s: t_s,
+            wall_offset_s: wall_s,
+            bytes,
+            quiet,
+        }
+    }
+
+    /// Bytes of `progress.jsonl` written so far, for a checkpoint.
+    #[must_use]
+    pub fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
+    /// Wall-clock seconds the run has spent driving the engine, across resumes.
+    #[must_use]
+    pub fn wall_s(&self) -> f64 {
+        self.wall_offset_s + self.started.elapsed_s()
+    }
+
+    /// Restarts the slice clock, after a resume's replay, so the first slice after it is
+    /// not charged with the replay.
+    pub fn restart_slice(&mut self) {
+        self.last_wall_s = self.started.elapsed_s();
+    }
+
+    /// One line on stderr only, for a resume's replay.
+    pub fn note(&self, text: &str) {
+        if !self.quiet {
+            eprintln!("v2xw: {text}");
         }
     }
 
@@ -85,8 +141,9 @@ impl Progress {
         census: &[(&'static str, u64)],
         extra: serde_json::Map<String, serde_json::Value>,
     ) {
-        let wall_s = self.started.elapsed_s();
-        let slice_wall = wall_s - self.last_wall_s;
+        let elapsed = self.started.elapsed_s();
+        let slice_wall = elapsed - self.last_wall_s;
+        let wall_s = self.wall_offset_s + elapsed;
         let slice_sim = (t_s - self.last_t_s).max(f64::MIN_POSITIVE);
         let footprint = phys_footprint_bytes();
         let mut obj = serde_json::Map::new();
@@ -107,9 +164,11 @@ impl Progress {
             .collect();
         obj.insert("census".into(), sizes.into());
         if let Some(f) = self.file.as_mut() {
-            let _ = serde_json::to_writer(&mut *f, &serde_json::Value::Object(obj));
-            let _ = f.write_all(b"\n");
-            let _ = f.flush();
+            let mut line = serde_json::to_vec(&serde_json::Value::Object(obj)).unwrap_or_default();
+            line.push(b'\n');
+            if f.write_all(&line).and_then(|()| f.flush()).is_ok() {
+                self.bytes += line.len() as u64;
+            }
         }
         if !self.quiet {
             let actors = census
@@ -136,7 +195,7 @@ impl Progress {
                 fmt_sim(eta),
             );
         }
-        self.last_wall_s = wall_s;
+        self.last_wall_s = elapsed;
         self.last_t_s = t_s;
     }
 }
