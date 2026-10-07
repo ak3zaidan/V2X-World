@@ -238,6 +238,90 @@ mod tests {
         v
     }
 
+    /// The engine end to end: on a 5.0 m ring lane a car closes on a slow motorcycle.
+    /// Lane-based (no lateral model) it queues behind; with the sub-lane model and lawful
+    /// filtering it steers across and passes within the lane. Returns how far the car got
+    /// past the motorcycle, metres (negative: still behind).
+    fn car_gain_over_motorcycle(lateral: bool) -> f64 {
+        use crate::carfollowing::idm::{Idm, IdmPreset};
+        use crate::ctx::MobilityCtx;
+        use crate::traits::Mobility;
+        use crate::worlds::{RingParams, ring, ring_cycle};
+        use crate::{EngineParams, IntersectionMode, MobilPreset, NativeMobility, NoDemand};
+        use std::sync::Arc;
+        use v2xw_core::rng::RngRegistry;
+        use v2xw_core::time::Duration;
+
+        let world = ring(&RingParams {
+            lane_width_m: 5.0,
+            speed_limit_mps: 13.9,
+            ..RingParams::default()
+        })
+        .unwrap();
+        let cycle = ring_cycle(&world, 0);
+        let route: Vec<_> = cycle.iter().cycle().take(cycle.len() * 4).copied().collect();
+        let rng = RngRegistry::new(7);
+        let step = Duration::from_millis(100);
+        let mut engine = NativeMobility::with_models(
+            EngineParams {
+                step,
+                intersections: IntersectionMode::None,
+                lane_changes: false,
+                dynamic_rerouting: false,
+                ..EngineParams::default()
+            },
+            Arc::new(Idm::new(IdmPreset::UrbanHcm)),
+            MobilPreset::Kesting2007,
+        );
+        if lateral {
+            engine = engine.with_lateral(Arc::new(Sl2015::new(Sl2015Params {
+                filter: SublaneFilter {
+                    motorcycles_share: true,
+                    ..SublaneFilter::default()
+                },
+                ..Sl2015Params::default()
+            })));
+        }
+        engine
+            .init(&mut MobilityCtx::new(0, &world, &rng), Box::new(NoDemand::new()))
+            .unwrap();
+        let mut moto_driver = IdmPreset::UrbanHcm.profile(VehicleClass::Motorcycle);
+        moto_driver.desired_speed_mps = 4.0;
+        let mut car_driver = IdmPreset::UrbanHcm.profile(VehicleClass::Passenger);
+        car_driver.desired_speed_mps = 13.9;
+        let moto = engine
+            .spawn_with_route(&world, 0, VehicleClass::Motorcycle, moto_driver, route.clone(), 45.0)
+            .unwrap();
+        let car = engine
+            .spawn_with_route(&world, 0, VehicleClass::Passenger, car_driver, route, 5.0)
+            .unwrap();
+        engine.set_speed(moto, 4.0).unwrap();
+        engine.set_speed(car, 8.0).unwrap();
+        let (mut d_moto, mut d_car) = (0.0, 0.0);
+        let mut t = 0;
+        for _ in 0..400 {
+            engine.step(&mut MobilityCtx::new(t, &world, &rng), step);
+            t += step.as_nanos();
+            for (id, _, _, v) in engine.longitudinal_states() {
+                if id == moto {
+                    d_moto += v * 0.1;
+                } else if id == car {
+                    d_car += v * 0.1;
+                }
+            }
+        }
+        // The car's front started 40 m behind the motorcycle's front.
+        d_car - d_moto - 40.0
+    }
+
+    #[test]
+    fn the_sub_lane_model_lets_a_car_pass_a_filtering_motorcycle_in_lane() {
+        let queued = car_gain_over_motorcycle(false);
+        let passed = car_gain_over_motorcycle(true);
+        assert!(queued < 0.0, "lane-based: the car should stay behind, gained {queued}");
+        assert!(passed > 10.0, "sub-lane: the car should pass, gained {passed}");
+    }
+
     #[test]
     fn cars_never_share_and_a_cyclist_is_passed_only_with_three_feet() {
         let f = SublaneFilter::default();

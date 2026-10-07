@@ -368,7 +368,11 @@ pub fn run(setup: &PlatoonSetup) -> Result<PlatoonResult, String> {
         max_gap_error_m: e_max.iter().copied().fold(0.0, f64::max),
         cruise_gap_m: cruise_gap,
         throughput_veh_h: flow_sum / flow_n.max(1) as f64,
-        cooperative_share: coop_steps as f64 / follower_steps.max(1) as f64,
+        cooperative_share: if model.cooperative().is_some() {
+            coop_steps as f64 / follower_steps.max(1) as f64
+        } else {
+            0.0
+        },
         min_gap_m: min_gap,
         max_decel_mps2: max_decel,
     })
@@ -394,7 +398,7 @@ pub struct SweepRow {
 /// The first model a run refuses.
 pub fn sweep(
     base: &PlatoonSetup,
-    models: &[&str],
+    models: &[CfChoice],
     losses: &[f64],
     latencies_s: &[f64],
 ) -> Result<Vec<SweepRow>, String> {
@@ -403,7 +407,7 @@ pub fn sweep(
         for &loss in losses {
             for &lat in latencies_s {
                 let setup = PlatoonSetup {
-                    model: CfChoice::of(m),
+                    model: m.clone(),
                     channel: Channel {
                         loss,
                         latency_s: lat,
@@ -412,7 +416,11 @@ pub fn sweep(
                     ..base.clone()
                 };
                 rows.push(SweepRow {
-                    model: (*m).to_string(),
+                    model: if m.params.is_null() {
+                        m.model.clone()
+                    } else {
+                        format!("{} {}", m.model, m.params)
+                    },
                     loss,
                     latency_s: lat,
                     result: run(&setup)?,
@@ -450,9 +458,13 @@ mod tests {
         assert_eq!(dead.cooperative_share, 0.0, "{dead:?}");
         assert!(good.string_stable(), "{good:?}");
         assert!(good.min_gap_m > 0.0 && dead.min_gap_m > 0.0, "{good:?} {dead:?}");
-        // The cooperative platoon carries more and damps more than its ACC fallback.
-        assert!(good.throughput_veh_h > dead.throughput_veh_h, "{good:?} {dead:?}");
-        assert!(good.accel_amplification < dead.accel_amplification, "{good:?} {dead:?}");
+        // The cooperative platoon holds a tighter gap (0.7 s against the fallback's 1.1 s),
+        // so it carries more, and it holds that gap more closely through the disturbance.
+        assert!(
+            good.throughput_veh_h > 1.2 * dead.throughput_veh_h,
+            "{good:?} {dead:?}"
+        );
+        assert!(good.rms_gap_error_m < dead.rms_gap_error_m, "{good:?} {dead:?}");
     }
 
     #[test]

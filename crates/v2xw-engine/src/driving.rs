@@ -7,7 +7,7 @@
 //! a scenario without the block exactly as it was.
 
 use v2xw_mobility::carfollowing::library;
-use v2xw_mobility::lanechange::MobilPreset;
+use v2xw_mobility::MobilPreset;
 use v2xw_mobility::rules::TrafficRules;
 use v2xw_mobility::{EngineParams, NativeMobility};
 

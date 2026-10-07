@@ -419,9 +419,11 @@ mod tests {
     #[test]
     fn a_car_stays_behind_a_cyclist_on_a_narrow_lane() {
         let m = Sl2015::new(Sl2015Params::default());
-        let l = lane(13.9); // 3.5 m
+        // A 3.5 m lane, the cyclist a metre right of centre: even at the lane's left edge
+        // (+0.85 m) the car would pass at 1.85 − 1.225 = 0.625 m, under three feet.
+        let l = lane(13.9);
         let car = vehicle(1, 10.0, driver());
-        let d = m.decide(&car, 13.9, &l, &[cyclist(-1.4, 20.0)], 0.0);
+        let d = m.decide(&car, 13.9, &l, &[cyclist(-1.0, 20.0)], 0.0);
         assert_eq!(d.target_m, 0.0, "{d:?}");
     }
 }

@@ -131,6 +131,10 @@ pub struct CaccParams {
     pub path_spacing_m: f64,
     /// PATH: the longest predecessor chain followed to find the head.
     pub path_max_platoon: usize,
+    /// Graceful degradation: how long, after the last message went stale, the fallback
+    /// ACC takes to open the gap from the cooperative time gap to its own, seconds. 0 is
+    /// the abrupt switch.
+    pub degrade_ramp_s: f64,
     /// First-order driveline lag applied to the law's output, seconds (0 = none).
     pub actuator_lag_s: f64,
     /// The ACC this law degrades to.
@@ -161,6 +165,7 @@ impl CaccParams {
             path_omega_n: 0.2,
             path_spacing_m: 5.0,
             path_max_platoon: 32,
+            degrade_ramp_s: 5.0,
             actuator_lag_s: 0.0,
             acc: AccParams::default(),
         };
@@ -171,8 +176,13 @@ impl CaccParams {
                 actuator_lag_s: 0.1,
                 ..base
             },
+            // A 5 m platoon that loses its messages must open the gap at once: ramping
+            // the fallback ACC up from the platoon's ~0.2 s equivalent time gap left it
+            // too close to brake for its predecessor, and the platoon sweep recorded
+            // collisions at 50 % loss. The abrupt switch is the safe default here.
             CaccLaw::Path => Self {
                 actuator_lag_s: 0.5,
+                degrade_ramp_s: 0.0,
                 ..base
             },
         }
@@ -287,6 +297,39 @@ impl Cacc {
         }
     }
 
+    /// The fallback ACC's time gap while degraded — graceful degradation.
+    ///
+    /// An abrupt switch from a 0.6–0.7 s cooperative gap to the ACC's 1.1 s makes every
+    /// lost message a braking transient (the ACC sees a large negative spacing error and
+    /// enters collision avoidance), and with 10 % loss the platoon goes string-unstable on
+    /// the switching alone (the platoon sweep shows it). That is the problem of Ploeg,
+    /// Semsar-Kazerooni, Lijster, van de Wouw & Nijmeijer 2015, "Graceful degradation of
+    /// cooperative adaptive cruise
+    /// control", IEEE T-ITS 16(1):488-497. Here the gap opens linearly from the
+    /// cooperative one to the ACC's over [`CaccParams::degrade_ramp_s`], timed from when
+    /// the last message from this leader went stale: stateless, because the link's record
+    /// age is the timer. A leader never heard from gets the ACC gap at once.
+    fn degraded_time_gap(&self, ego: &VehicleView, l: &LeaderView, h_coop: f64) -> f64 {
+        let h_acc = self.acc.params().time_gap_s;
+        let h_start = match self.law {
+            CaccLaw::Path => self.params.path_spacing_m / ego.speed_mps.max(5.0),
+            _ => h_coop,
+        }
+        .min(h_acc);
+        let Some(lead) = l.vehicle.as_ref() else {
+            return h_acc;
+        };
+        let Some(rec) = self.link.latest(ego.actor, lead.actor) else {
+            return h_acc;
+        };
+        let ramp = self.params.degrade_ramp_s;
+        if ramp <= 0.0 {
+            return h_acc;
+        }
+        let stale_for = rec.age_s(self.clock.now()) - self.link.params().max_age_s;
+        h_start + (h_acc - h_start) * (stale_for / ramp).clamp(0.0, 1.0)
+    }
+
     /// What the step's data allow: the law's output, or `None` to degrade.
     fn cooperative_accel(
         &self,
@@ -357,7 +400,7 @@ impl CarFollowing for Cacc {
         };
         let h = self.params.time_gap_s * factor;
         match self.cooperative_accel(ego, l, &sit.driver, h, dt) {
-            None => degrade(ap.time_gap_s * factor),
+            None => degrade(self.degraded_time_gap(ego, l, self.params.time_gap_s) * factor),
             Some(u) => {
                 let emergency = ego.class.spec().emergency_decel_mps2;
                 let g = l.gap_m - sit.driver.min_gap_m;
@@ -548,9 +591,26 @@ pub fn card(law: CaccLaw, p: &CaccParams, coop: &crate::coop::CoopParams) -> Mod
     card.equations.push(Equation::new(
         "degradation",
         "no BSM/CAM from the radar target younger than coop.max_age_s (generation time) → \
-         the ACC law (mobility/car-following/acc) at its 1.1 s gap",
+         the ACC law (mobility/car-following/acc), its time gap opening from the \
+         cooperative one to 1.1 s over degrade_ramp_s after the last message went stale",
     ));
     card.parameters = params;
+    card.parameters.push(Parameter {
+        name: "degrade_ramp_s".to_string(),
+        unit: "s".to_string(),
+        default: serde_json::json!(p.degrade_ramp_s),
+        range: Some(vec![serde_json::json!(0.0), serde_json::json!(60.0)]),
+        source: Source::todo_calibrate(
+            "graceful degradation (Ploeg et al. 2015, IEEE T-ITS 16(1)): the gap opens from \
+             the cooperative to the ACC time gap over this ramp; 5 s is a choice",
+        ),
+        calibration: Some(
+            "sweep degrade_ramp_s in crate::carfollowing::platoon at 1-30 % loss; take the \
+             shortest ramp whose string-stability gain stays <= 1, and compare with the \
+             transition times of Ploeg et al. 2015"
+                .to_string(),
+        ),
+    });
     card.parameters.extend(coop.card_parameters());
     card.parameters.extend(crate::weather::fhwa_parameters());
     card.assumptions = vec![

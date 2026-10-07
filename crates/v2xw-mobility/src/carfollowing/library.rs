@@ -499,7 +499,9 @@ mod tests {
             car_following: Some(CfChoice::of("no-such-model")),
             ..DrivingSpec::default()
         };
-        let err = build(&spec, 1).unwrap_err();
+        let Err(err) = build(&spec, 1) else {
+            panic!("an unknown model was accepted")
+        };
         assert!(err.contains("no-such-model") && err.contains("krauss"), "{err}");
     }
 

@@ -5,12 +5,14 @@
 //! cargo run -p v2xw-mobility --example platoon_sweep            # markdown table
 //! cargo run -p v2xw-mobility --example platoon_sweep -- --csv   # CSV
 //! cargo run -p v2xw-mobility --example platoon_sweep -- --burst 4
+//! cargo run -p v2xw-mobility --example platoon_sweep -- --abrupt   # also without graceful degradation
 //! ```
 //!
 //! Every row is one eight-vehicle platoon at 25 m/s whose leader brakes at 2 m/s² for 3 s
 //! and recovers at 1 m/s², with every member broadcasting at 10 Hz through a channel of the
 //! row's loss and latency. `acc` is the radar-only baseline every CACC degrades to.
 
+use v2xw_mobility::carfollowing::library::CfChoice;
 use v2xw_mobility::carfollowing::platoon::{Channel, PlatoonSetup, sweep};
 
 fn main() {
@@ -29,9 +31,22 @@ fn main() {
         },
         ..PlatoonSetup::default()
     };
-    let models = ["acc", "cacc-milanes", "cacc-ploeg", "cacc-path"];
+    // `--abrupt` also runs every CACC with the abrupt switch to ACC (no graceful ramp).
+    let abrupt = args.iter().any(|a| a == "--abrupt");
+    let mut models: Vec<CfChoice> = ["acc", "cacc-milanes", "cacc-ploeg", "cacc-path"]
+        .iter()
+        .map(|m| CfChoice::of(m))
+        .collect();
+    if abrupt {
+        for m in ["cacc-milanes", "cacc-ploeg", "cacc-path"] {
+            models.push(CfChoice {
+                params: serde_json::json!({"degrade_ramp_s": 0.0}),
+                ..CfChoice::of(m)
+            });
+        }
+    }
     let losses = [0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0];
-    let latencies = [0.01, 0.1, 0.3];
+    let latencies = [0.01, 0.1, 0.2, 0.3];
     let rows = sweep(&base, &models, &losses, &latencies).expect("every model builds");
     if csv {
         println!(
