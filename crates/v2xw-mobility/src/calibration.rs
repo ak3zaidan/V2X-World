@@ -1075,7 +1075,7 @@ fn mean(v: &[f64]) -> f64 {
 }
 
 /// A sample's size, mean, standard deviation and percentiles.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Default)]
 pub struct Summary {
     /// Samples.
     pub n: usize,

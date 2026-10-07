@@ -204,7 +204,7 @@ fn idm_equation(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     for v in [0.0, 2.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0] {
         for gap in [3.0, 5.0, 10.0, 20.0, 40.0, 80.0, 150.0, f64::INFINITY] {
             for dv in [-5.0, -1.0, 0.0, 1.0, 5.0] {
-                let v_lead = (v - dv).max(0.0);
+                let v_lead = f64::max(v - dv, 0.0);
                 let got = model.accel_of(v, driver.desired_speed_mps, gap, v_lead, &driver);
                 let want = idm_reference(&reference_params, &driver, v, driver.desired_speed_mps, gap, v_lead);
                 worst = worst.max((got - want).abs());
@@ -415,7 +415,7 @@ fn ring_fd(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     } else {
         VehicleClass::Passenger
     };
-    let key = format!("ring-fd-{}", class.label());
+    let key = format!("ring-fd-{}", class.as_str());
     let r = lab.study(&key, |_| {
         fd::measure(&FdParams {
             class,

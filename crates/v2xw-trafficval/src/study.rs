@@ -111,7 +111,7 @@ impl MotionObserver {
                     }
                     if a.speed_mps >= 8.0 {
                         if l.2 && t1_s > l.0 {
-                            self.launches.entry(a.class.label()).or_default().push(8.0 / (t1_s - l.0));
+                            self.launches.entry(a.class.as_str()).or_default().push(8.0 / (t1_s - l.0));
                         }
                         self.launch.remove(&a.actor);
                     }

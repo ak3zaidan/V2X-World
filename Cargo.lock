@@ -2836,6 +2836,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "v2xw-trafficval"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "v2xw-core",
+ "v2xw-engine",
+ "v2xw-mobility",
+ "v2xw-world",
+]
+
+[[package]]
 name = "v2xw-wasm"
 version = "0.1.0"
 dependencies = [

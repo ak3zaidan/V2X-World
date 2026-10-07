@@ -437,8 +437,8 @@ fn pedestrian_compliance(lab: &mut Lab, variant: Variant) -> Result<Outcome, Str
 fn motorcycles(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     let gv = if variant.is_fault() { GridVariant::MotorcyclesAsCars } else { GridVariant::Motorcycles };
     let s = grid_study(lab, gv, None)?;
-    let car = s.motion.launch_by_class.get(VehicleClass::Passenger.label()).cloned().unwrap_or_default();
-    let moto = s.motion.launch_by_class.get(VehicleClass::Motorcycle.label()).cloned().unwrap_or_default();
+    let car = s.motion.launch_by_class.get(VehicleClass::Passenger.as_str()).cloned().unwrap_or_default();
+    let moto = s.motion.launch_by_class.get(VehicleClass::Motorcycle.as_str()).cloned().unwrap_or_default();
     let ratio = if car.n > 0 && moto.n > 0 { moto.mean / car.mean } else { f64::NAN };
     Ok(Outcome {
         rows: vec![
