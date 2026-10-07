@@ -392,6 +392,10 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Cellular with handovers",
             "Adds the interruption and loss of handovers between cells.",
         ),
+        (_, "cellular/uu/packet-pf") => w(
+            "Cellular, packet level",
+            "Real base stations, a shared scheduler, retransmissions and TCP/TLS for backend traffic; slower to run.",
+        ),
         (_, "fragmenter/none") => w(
             "No fragmentation",
             "A signed message larger than the network's limit is refused.",

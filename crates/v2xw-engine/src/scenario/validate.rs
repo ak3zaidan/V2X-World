@@ -1118,7 +1118,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                default 4g-east-coast), 'cellular/uu/cell-capacity-mm1' (per-cell capacity, \
                an M/M/1 queue per UE, isd_m, uplink_mbps, downlink_mbps) or \
                'cellular/uu/handover-outage' (adds handover interruption and loss, \
-               loss_percentile). params.penetration is the share of vehicles with a modem \
+               loss_percentile) or 'cellular/uu/packet-pf' (packet level: base stations \
+               per city from params.sites or params.city_bbox, else a lattice at isd_m; a \
+               proportional-fair scheduler per cell, HARQ, RLC AM, measured handover gaps \
+               and every backend message over TCP CUBIC with TLS 1.3; params.rat lte|nr, \
+               background_load; the run report says when it differs from the simple \
+               model). params.penetration is the share of vehicles with a modem \
                (default 1); the rest relay through roadside units or are offline. Without \
                net.uu no vehicle has a modem.",
     },
