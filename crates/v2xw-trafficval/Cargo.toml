@@ -1,0 +1,25 @@
+[package]
+name = "v2xw-trafficval"
+description = "The traffic validation suite: every traffic model held to its paper, its published field measurements and the traffic invariants, with the fault that proves each check can fail."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+v2xw-core = { workspace = true }
+v2xw-world = { workspace = true }
+v2xw-mobility = { workspace = true }
+# The scenario loader and the wiring the kernel uses, so a shipped scenario's traffic is
+# validated exactly as the page runs it. Not a `workspace = true` entry because
+# `v2xw-engine` is a workspace member the root does not list (see v2xw-cli's manifest).
+v2xw-engine = { path = "../v2xw-engine", version = "0.1.0" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[[bin]]
+name = "traffic_validation"
+path = "src/bin/traffic_validation.rs"
