@@ -946,7 +946,8 @@ test("the inspector's radio count agrees with the nodes the engine announced", a
   // until they agree; a count that never agrees ("radios 82" beside 106) still fails.
   const read = (): Promise<{ printed: string | null; table: number }> =>
     page.evaluate(() => {
-      const table = window.__vwpStudio?.engine.nodes.size ?? -1;
+      const studio = (window as unknown as { __vwpStudio?: { engine: { nodes: Map<number, unknown> } } }).__vwpStudio;
+      const table = studio?.engine.nodes.size ?? -1;
       const dl = document.querySelector('[data-testid="inspector-empty"] dl.kv');
       if (!dl) return { printed: null, table };
       const terms = Array.from(dl.querySelectorAll("dt"));
