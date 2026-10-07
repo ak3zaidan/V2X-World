@@ -1,0 +1,50 @@
+# The reference OBU of 06-node-models.md §7.2 with ECDSA in software (rule H2: hsm.kind
+# none sends every operation to the CPU through the software cost table).
+id: obu/unex-obu-301-craton2-software
+kind: obu
+version: 2026-09-18.1
+reference_profile: false
+purpose: >-
+  The reference OBU (Unex OBU-301E, Autotalks CRATON2) with its security hardware set
+  aside: every ECDSA operation runs in software on the application cores. This is the
+  profile for studying verify-dominated cost — on one processor ECDSA verification costs
+  about twice signing — where the hardware variant signs in a slow secure element and
+  verifies on a line-rate accelerator. The software figures are Cortex-A53 proxies,
+  flagged as such.
+sources:
+  - {kind: info-sheet, ref: "Unex OBU-301E information sheet [R7 §A4, §A10: pdftxt/unex_obu301e.txt]", accessed: 2026-09-18}
+  - {kind: info-sheet, ref: "Unex OBU-351U information sheet [R7 §A4, §A10: pdftxt/unex_obu351u.txt]", accessed: 2026-09-18}
+  - {kind: security-policy, ref: "Autotalks CRATON2/SECTON eHSM FIPS 140-2 Security Policy, CMVP #3556 [R7 §A4; §7.10 #6]", accessed: 2026-09-18}
+  - {kind: fcc-filing, ref: "Unex OBU-201U spec v2.03 (CRATON gen-1, per-MCS sensitivity proxy) [R7 §A5; §7.10 #5]", accessed: 2026-09-18}
+cpu:
+  cores: {value: 2, source: "\"dual 600 MHz ARM Cortex-A7 cores\" [R7 §A4]"}
+  clock_hz: {value: 6.0e8, source: "[R7 §A4]"}
+  arch: {value: armv7-a, source: "Cortex-A7 [R7 §A4]"}
+  dmips: {value: 2280, source: "1140 DMIPS per core x 2 cores (derived from the per-core rating) [R7 §A4]"}
+ram_bytes: {value: 134217728, source: "128 MB DDR3 as integrated in the OBU-301E [R7 §A4]"}
+flash_bytes: {value: 134217728, source: "128 MB NAND [R7 §A4]"}
+hsm:
+  kind: none
+  part: {value: null, status: not-applicable, calibration: "rule H2: this variant declares no security hardware on purpose, to model the same OBU with ECDSA in software on its application cores. The hardware-crypto variant is obu/unex-obu-301-craton2"}
+  ops: {}
+  queue_depth: {value: null, status: not-applicable, calibration: "rule H2: no HSM queue exists on this profile; the CPU queue of 06-node-models §2.1 carries the work"}
+  servers: {value: null, status: not-applicable, calibration: "rule H2: no HSM server exists on this profile"}
+# Placement: sign and verify both run in software on the application processor.
+software_crypto:
+  ecdsa-p256-sign: {us: 613, status: proxy, ops_per_s: 1631.1, source: "PROXY, flagged: no OpenSSL benchmark on the OBU-301's Cortex-A7 exists in R7/R5; Raspberry Pi 3B Cortex-A53 @ 1.2 GHz, OpenSSL, 1631.1 sign/s (613 us, derived) [R7 §D8], the slowest benchmarked Cortex-A class. Run `openssl speed ecdsap256` on the device"}
+  ecdsa-p256-verify: {us: 1290, status: proxy, ops_per_s: 775.3, source: "PROXY, flagged: as ecdsa-p256-sign; Pi 3B 775.3 verify/s (1290 us, derived) [R7 §D8]"}
+radio:
+  rat: [dsrc-80211p]
+  chipset: {value: "Autotalks CRATON2 + PLUTON2 RF transceiver", source: "[R7 §A4]"}
+  tx_power_dbm:
+    min: {value: null, status: not-published, calibration: "not stated for CRATON2; the gen-1 CRATON unit had a 4.5-25 dBm dynamic range [R7 §A5], a different generation; measure or request from Unex"}
+    max: {value: 20.0, status: lower-bound, source: "\">+20 dBm, Class C mask\" (OBU-301E); \"max +20 dBm\" (OBU-351U) [R7 §A10]"}
+    default: {value: 20.0, source: "J2945/1 constant-rate baseline [R7 §H3]"}
+  sensitivity_dbm: {value: -92.0, source: "\"RX threshold <-92 dBm, SAE J2945-compliant\" [R7 §A10]; per-MCS table only exists for CRATON gen-1 [R7 §A5], carried as a previous-generation proxy in the sheet"}
+  noise_figure_db: {value: 9.0, status: evaluation-assumption, source: "NOT PUBLISHED for CRATON2/PLUTON2; 3GPP TR 36.885 Annex A.1.1 UE receiver noise figure 9 dB [R2 Topic A; R2c] (schema default, §1)"}
+  antenna:
+    gain_dbi: {value: 5.0, source: "\"2x detachable FAKRA-Z, 5 dBi omni dipole\" [R7 §A10]"}
+    height_m: {value: 1.5, status: evaluation-assumption, source: "3GPP TR 36.885 Annex A.1.1 [R2 Topic A; R2c]; override per vehicle type"}
+    pattern: {value: omni, source: "[R7 §A10]"}
+power_w: {value: null, status: not-published, calibration: "not stated; input 6-48 V DC [R7 §A10]; measure at 12 V"}
+storage_model: inherit

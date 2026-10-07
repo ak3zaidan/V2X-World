@@ -23,7 +23,7 @@
 
 import { Fragment, useEffect, useMemo } from "react";
 
-import type { FeedAccess, FeedDecoded, FeedQueue, FeedReceived, FeedSent } from "@vwp/protocol";
+import type { FeedAccess, FeedCrypto, FeedCryptoOp, FeedDecoded, FeedQueue, FeedReceived, FeedSent } from "@vwp/protocol";
 
 import { useStudio } from "../state/store.js";
 import { shortDigest, simClock } from "../lib/format.js";
@@ -303,10 +303,30 @@ function Decoded({ d }: { d: FeedDecoded }): React.JSX.Element {
   );
 }
 
+/** A crypto time with where it ran: "9.000 ms · signed in the secure element". */
+function withPlacement(time: string, op: FeedCryptoOp | null | undefined): string {
+  return op ? `${time} · ${op.label}` : time;
+}
+
+/**
+ * Why sign and verify compare as they do on this node's hardware. On the reference OBU the
+ * signature is made in a slow secure element and verification runs on a line-rate accelerator, so
+ * verify reads faster than sign — the reverse of ECDSA on one processor, which the note says.
+ */
+function CryptoNote({ crypto }: { crypto: FeedCrypto | null }): React.JSX.Element | null {
+  if (!crypto || (!crypto.sign && !crypto.verify)) return null;
+  return (
+    <p className="dim feed-crypto-note" data-testid="feed-crypto-note" title={`hardware profile ${crypto.profile}`}>
+      {crypto.explanation}
+    </p>
+  );
+}
+
 /** The open message: how it travelled, what it said, and its bytes. */
 function Detail(): React.JSX.Element | null {
   const open = useStudio((s) => s.feed.open);
   const read = useStudio((s) => s.readFeedMessage);
+  const crypto = useStudio((s) => s.feed.crypto);
   if (!open) return null;
   const e = open.entry;
   const sent = open.dir === "sent" ? (e as FeedSent) : null;
@@ -355,7 +375,8 @@ function Detail(): React.JSX.Element | null {
               />
               {sent.radio.access ? <KV k="access" v={accessLine(sent.radio.access)} /> : null}
               <KV k="signing queue" v={fmt(sent.timing.sign_queue_ms, 3, " ms")} />
-              <KV k="signing" v={fmt(sent.timing.sign_ms, 3, " ms")} />
+              <KV k="signing" v={withPlacement(fmt(sent.timing.sign_ms, 3, " ms"), crypto?.sign)} testid="feed-sign-time" />
+              {crypto?.sign ? <KV k="· figure" v={crypto.sign.basis_text} testid="feed-sign-basis" /> : null}
               <KV k="channel access" v={fmt(sent.timing.channel_access_ms, 3, " ms")} />
             </dl>
           ) : null}
@@ -371,10 +392,16 @@ function Detail(): React.JSX.Element | null {
               />
               <KV k="end to end" v={fmt(rx.e2e_ms, 3, " ms")} />
               {Object.entries(rx.stages_ms).map(([k, v]) => (
-                <KV key={k} k={`· ${k.replace(/_/g, " ")}`} v={`${v.toFixed(3)} ms`} />
+                <KV
+                  key={k}
+                  k={`· ${k.replace(/_/g, " ")}`}
+                  v={/^verif/.test(k) && !/wait|queue/.test(k) ? withPlacement(`${v.toFixed(3)} ms`, crypto?.verify) : `${v.toFixed(3)} ms`}
+                />
               ))}
+              {crypto?.verify ? <KV k="· verify figure" v={crypto.verify.basis_text} testid="feed-verify-basis" /> : null}
             </dl>
           ) : null}
+          <CryptoNote crypto={crypto} />
         </div>
         {e.decoded ? (
           <Decoded d={e.decoded} />

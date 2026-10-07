@@ -46,6 +46,12 @@ pub const PROFILE_SOURCES: &[(&str, &str)] = &[
         "obu/unex-obu-301-craton2",
         include_str!("../profiles/hardware/obu-unex-obu-301-craton2.yaml"),
     ),
+    // The reference OBU with ECDSA in software on its application cores: where verify
+    // costs about twice sign, for studying verify-dominated load.
+    (
+        "obu/unex-obu-301-craton2-software",
+        include_str!("../profiles/hardware/obu-unex-obu-301-craton2-software.yaml"),
+    ),
     (
         "rsu/cohda-mk5-rsu",
         include_str!("../profiles/hardware/rsu-cohda-mk5-rsu.yaml"),

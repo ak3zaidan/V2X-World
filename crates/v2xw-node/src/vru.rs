@@ -1139,7 +1139,7 @@ impl VruDeviceRuntime {
     ) -> VruDeviceRuntime {
         let cpu_servers = profile.cpu.cores.or(1).max(1);
         let hsm_servers = profile.hsm.servers.or(1).max(1);
-        let service = ProfileServiceModel::new(profile.clone());
+        let service = ProfileServiceModel::new(profile.clone()).for_node(node);
         let stores = Stores {
             peers: PeerCertCache::new(config.peer_cache_capacity),
             neighbors: NeighborTable::new(config.neighbor_capacity),

@@ -260,7 +260,8 @@ pub fn serve(opts: &ServeOptions) -> Result<String> {
     Ok(String::new())
 }
 
-fn print_key_line() {
+/// Prints the banner line naming the model provider the agent will use, never its key.
+pub fn print_key_line() {
     // The provider the agent will actually use (V2XW_AGENT_PROVIDER, with the fallback to
     // the other vendor's key), named and never shown.
     match v2xw_copilot::claude::provider_from_env() {

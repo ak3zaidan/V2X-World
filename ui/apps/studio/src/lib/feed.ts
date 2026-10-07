@@ -32,7 +32,7 @@
  * Framework- and DOM-free, so it is tested in plain Node (test/feed.test.ts).
  */
 
-import type { FeedQueues, FeedReceived, FeedSent, FeedSpan, NodeFeedNotification } from "@vwp/protocol";
+import type { FeedCrypto, FeedQueues, FeedReceived, FeedSent, FeedSpan, NodeFeedNotification } from "@vwp/protocol";
 
 /** Newest entries kept per direction. */
 export const RING = 200;
@@ -59,6 +59,8 @@ export interface FeedView {
   /** Newest first. */
   readonly received: readonly FeedReceived[];
   readonly queues: FeedQueues | null;
+  /** Where this node signs and verifies, and what each timing figure is. */
+  readonly crypto: FeedCrypto | null;
   /** The stream instant of the newest push applied. */
   readonly tNs: number;
   /** New entries the pushes left out (the server's per-push bound), since following began. */
@@ -93,6 +95,7 @@ export const EMPTY_FEED: FeedView = {
   sent: [],
   received: [],
   queues: null,
+  crypto: null,
   tNs: 0,
   omitted: { sent: 0, received: 0 },
   dropped: { sent: 0, received: 0 },
@@ -162,6 +165,7 @@ export function applyPush(state: FeedView, push: NodeFeedNotification, ring = RI
     sent: s.rows,
     received: r.rows,
     queues: push.queues,
+    crypto: push.crypto ?? base.crypto,
     tNs: push.t_ns,
     omitted: {
       sent: base.omitted.sent + push.omitted.sent,

@@ -262,6 +262,8 @@ struct Setup {
     seed: u64,
     run_id_bytes: [u8; 16],
     obu_profile: String,
+    /// `security.signature`: which sign and verify operations a node's profile is asked for.
+    signature: String,
     recording_path: Option<String>,
     /// The `prov_id` a `MetricSample` resolves through: the registered metric-family
     /// model, or `0` when the run installed none.
@@ -1166,6 +1168,7 @@ fn assemble_setup(
         seed: scenario.seed,
         run_id_bytes,
         obu_profile: scenario.nodes.default_obu.clone(),
+        signature: scenario.security.signature.clone(),
         recording_path: recording.map(|p| p.display().to_string()),
         metric_prov,
     }))
@@ -4734,6 +4737,18 @@ impl Engine for LiveEngine {
             self.last_telemetry.get(&node),
         );
         feed["reset"] = json!(reset);
+        // Where this node signs and verifies, and what each timing figure is (a published
+        // latency, a vendor bound, a figure derived from a rate), so a reader never takes
+        // "sign 9 ms, verify 0.4 ms" for a measurement of one processor.
+        feed["crypto"] = self
+            .node_rows()
+            .into_iter()
+            .find(|f| f.node_id == node)
+            .and_then(|f| v2xw_node::profiles::get(&f.profile_id))
+            .map_or(Value::Null, |p| {
+                let (sign, verify) = v2xw_node::profile::signature_ops(&self.setup.signature);
+                json!(p.crypto_placement(sign, verify))
+            });
         // How far past the shown instant the kernel has run. A message's record is written
         // when its journey ends, so one still in a queue at the shown instant is known only if
         // the kernel has passed the instant it leaves; with a kernel slower than real time the

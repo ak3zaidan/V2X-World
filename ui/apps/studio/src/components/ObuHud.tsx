@@ -72,6 +72,8 @@ export function ObuHud(): React.JSX.Element | null {
   const inspect = useStudio((s) => s.inspect);
   const hello = useStudio((s) => s.hello);
   const pose = useStudio((s) => s.followedPose);
+  const feedNode = useStudio((s) => s.feed.node);
+  const feedCrypto = useStudio((s) => s.feed.crypto);
   const setOverlayOpen = useStudio((s) => s.setInspectorOpen);
 
   const byKey = useMemo(() => {
@@ -152,6 +154,14 @@ export function ObuHud(): React.JSX.Element | null {
   };
   const pool = security && typeof security.pool_valid === "number" ? security.pool_valid : null;
   const link = security ? linkText(security) : null;
+  // Where this radio signs and verifies: on the reference OBU the two run on different
+  // hardware, which is why verify reads faster than sign there.
+  const crypto = feedCrypto && feedNode !== null && Number(feedNode) === Number(telemetryNode) ? feedCrypto : null;
+  const cryptoText = crypto
+    ? [crypto.sign ? `signs in ${crypto.sign.runs_on === "cpu" ? "software" : crypto.sign.runs_on === "hsm" ? "the secure element" : "the accelerator"}` : "", crypto.verify ? `verifies ${crypto.verify.runs_on === "cpu" ? "in software" : crypto.verify.runs_on === "hsm" ? "in the secure element" : "on the hardware accelerator"}` : ""]
+        .filter((x) => x !== "")
+        .join(", ")
+    : null;
 
   return (
     <div className="hud" data-testid="obu-hud">
@@ -174,6 +184,11 @@ export function ObuHud(): React.JSX.Element | null {
             link === null ? null : (
               <Plain key="link" k="backend" v={link} testId="hud-sec-link" tone={security?.link_up === false ? "warn" : undefined} />
             ),
+            cryptoText ? (
+              <span key="crypto" className="hud-field plain" data-testid="hud-sec-crypto" title={crypto ? `${crypto.sign ? `sign: ${crypto.sign.basis_text}. ` : ""}${crypto.verify ? `verify: ${crypto.verify.basis_text}. ` : ""}${crypto.explanation}` : undefined}>
+                <span className="v">{cryptoText}</span>
+              </span>
+            ) : null,
           ]}
         </Row>
         <div className="hud-row" data-testid="hud-health">

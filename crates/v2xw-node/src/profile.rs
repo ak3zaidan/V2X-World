@@ -73,6 +73,13 @@ pub enum FieldStatus {
     Unverified,
     /// A published lower bound (`>2500/s`), not a measured rate.
     LowerBound,
+    /// A published upper bound (`<9 ms`), not a measured latency. The model uses the
+    /// bound itself unless the field's operation also states a lower edge
+    /// ([`HsmOp::latency_lower_us`]), and every view of the figure says it is a bound.
+    UpperBound,
+    /// Computed from other published figures (a latency taken as 1/throughput, say), not
+    /// published itself.
+    Derived,
     /// A vendor claim that reads as system-level rather than silicon-level.
     VendorClaimSystemLevel,
     /// Published, but the sheet flags it as implausible.
@@ -115,6 +122,8 @@ impl FieldStatus {
             FieldStatus::EvaluationAssumption => "evaluation-assumption",
             FieldStatus::Unverified => "unverified",
             FieldStatus::LowerBound => "lower-bound",
+            FieldStatus::UpperBound => "upper-bound",
+            FieldStatus::Derived => "derived",
             FieldStatus::VendorClaimSystemLevel => "vendor-claim-system-level",
             FieldStatus::AnomalousAsPublished => "anomalous-as-published",
             FieldStatus::NotApplicable => "not-applicable",
@@ -327,9 +336,186 @@ pub struct HsmOp {
     /// Which engine runs it.
     #[serde(default)]
     pub runs_on: Field<RunsOn>,
+    /// The lower edge of the latency, microseconds, when `latency_us` is an upper bound
+    /// and a lower edge is known. With both, each call's service time is drawn uniformly
+    /// between them (`RngDomain::ServiceTime`, per node), rather than every call costing
+    /// the worst case. Absent in a profile whose source publishes no lower edge: inventing
+    /// one would set the load of every run.
+    #[serde(default)]
+    pub latency_lower_us: Field<f64>,
+}
+
+/// How a modelled operation cost was arrived at: what a reader may and may not conclude
+/// from the number. Shown beside every crypto timing the Studio prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CostBasis {
+    /// A published per-operation latency.
+    Published,
+    /// A vendor upper bound ("<9 ms"), modelled at the bound: a worst case.
+    UpperBound,
+    /// An upper bound with a stated lower edge: drawn uniformly between them per call.
+    WithinBound,
+    /// No latency is published; the service time is 1 / the published rate. When the
+    /// rate is itself a lower bound (">2500/s") this is an upper bound on the service
+    /// time of one engine, and says nothing about pipeline depth.
+    DerivedFromThroughput,
+    /// A software benchmark of this device or its class of core, cited in the profile.
+    SoftwareBenchmark,
+    /// A software figure from another board, flagged as a proxy in the profile.
+    SoftwareProxy,
+    /// The primitive catalogue's figure for a comparable core, scaled (derived).
+    Catalogue,
+    /// A hybrid signature: the sum of its components' costs.
+    Composite,
+}
+
+impl CostBasis {
+    /// The kebab-case spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CostBasis::Published => "published",
+            CostBasis::UpperBound => "upper-bound",
+            CostBasis::WithinBound => "within-bound",
+            CostBasis::DerivedFromThroughput => "derived-from-throughput",
+            CostBasis::SoftwareBenchmark => "software-benchmark",
+            CostBasis::SoftwareProxy => "software-proxy",
+            CostBasis::Catalogue => "catalogue",
+            CostBasis::Composite => "composite",
+        }
+    }
+
+    /// Whether the number is exact for this device (a published latency or benchmark).
+    pub fn is_exact(self) -> bool {
+        matches!(self, CostBasis::Published | CostBasis::SoftwareBenchmark)
+    }
+}
+
+/// One operation's modelled cost on a profile, with where it runs and how the figure was
+/// arrived at ([`HardwareProfile::op_cost_facts`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OpCostFacts {
+    /// The operation id (`ecdsa-p256-sign`, …).
+    pub op: String,
+    /// The modelled service time of one call, µs (the bound, for an upper bound; the
+    /// midpoint of the range, for a range).
+    pub service_us: f64,
+    /// `[low, high]`, µs, when each call is drawn from a range.
+    pub range_us: Option<[f64; 2]>,
+    /// Which engine runs it.
+    pub runs_on: RunsOn,
+    /// How the figure was arrived at.
+    pub basis: CostBasis,
+    /// The profile's citation for the figure, when it has one.
+    pub source: Option<String>,
+}
+
+impl OpCostFacts {
+    /// Where the operation runs, in plain words.
+    pub fn where_text(&self, hsm: HsmKind) -> &'static str {
+        match (self.runs_on, hsm) {
+            (RunsOn::Hsm, HsmKind::SocHsm) => "the SoC's secure element (hardware security module)",
+            (RunsOn::Hsm, _) => "the secure element (hardware security module)",
+            (RunsOn::Accelerator, _) => "the hardware verification accelerator",
+            (RunsOn::Cpu, _) => "the application processor, in software",
+        }
+    }
+
+    /// What the figure is, in plain words: a sentence a reader can quote.
+    pub fn basis_text(&self) -> String {
+        let ms = self.service_us / 1000.0;
+        match self.basis {
+            CostBasis::Published => format!("{ms:.3} ms, the published latency"),
+            CostBasis::UpperBound => format!(
+                "at most {ms:.3} ms: the vendor publishes only an upper bound, and the model \
+                 charges the bound (a worst case, not a measurement)"
+            ),
+            CostBasis::WithinBound => {
+                let [lo, hi] = self.range_us.unwrap_or([self.service_us; 2]);
+                format!(
+                    "drawn per call between {:.3} and {:.3} ms (the published upper bound and \
+                     the profile's stated lower edge)",
+                    lo / 1000.0,
+                    hi / 1000.0
+                )
+            }
+            CostBasis::DerivedFromThroughput => format!(
+                "{ms:.3} ms, derived as 1 / the published rate ({:.0}/s): an estimate for one \
+                 engine, not a published latency",
+                1e6 / self.service_us.max(1e-9)
+            ),
+            CostBasis::SoftwareBenchmark => format!("{ms:.3} ms, a cited software benchmark"),
+            CostBasis::SoftwareProxy => format!(
+                "{ms:.3} ms, a software benchmark from a comparable board (a flagged proxy)"
+            ),
+            CostBasis::Catalogue => format!(
+                "{ms:.3} ms, the primitive catalogue's figure for a comparable core (derived)"
+            ),
+            CostBasis::Composite => format!("{ms:.3} ms, the sum of the hybrid's components"),
+        }
+    }
+}
+
+/// Software ECDSA P-256 on a Cortex-A53 (Raspberry Pi 3B @ 1.2 GHz, OpenSSL `speed`):
+/// 1631.1 sign/s and 775.3 verify/s, i.e. 613 µs and 1290 µs [R7 §D8]. The reference point
+/// for "on one processor, ECDSA verify costs about twice sign".
+pub const SOFTWARE_ECDSA_P256_A53_US: (f64, f64) = (613.0, 1290.0);
+
+/// Where a profile signs and verifies, and why the two compare as they do.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CryptoPlacement {
+    /// The profile id.
+    pub profile: String,
+    /// The signing operation, when the profile costs it.
+    pub sign: Option<OpPlacement>,
+    /// The verification operation, when the profile costs it.
+    pub verify: Option<OpPlacement>,
+    /// One paragraph: why verify is faster or slower than sign on this hardware.
+    pub explanation: String,
+}
+
+/// One operation's placement as the Studio shows it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OpPlacement {
+    /// The facts behind it.
+    #[serde(flatten)]
+    pub facts: OpCostFacts,
+    /// `signed in the secure element`, `verified by the hardware accelerator`, ….
+    pub label: String,
+    /// Where it runs, in plain words.
+    pub where_text: String,
+    /// What the figure is, in plain words.
+    pub basis_text: String,
+    /// The modelled time, ms.
+    pub modelled_ms: f64,
 }
 
 impl HsmOp {
+    /// How [`HsmOp::service_time`]'s figure was arrived at, or `None` when there is none.
+    pub fn basis(&self) -> Option<CostBasis> {
+        if self.latency_us.value.is_some() {
+            return Some(match (&self.latency_us.status, self.latency_lower_us.value) {
+                (Some(FieldStatus::UpperBound), Some(_)) => CostBasis::WithinBound,
+                (Some(FieldStatus::UpperBound), None) => CostBasis::UpperBound,
+                (Some(FieldStatus::Derived), _) => CostBasis::DerivedFromThroughput,
+                _ => CostBasis::Published,
+            });
+        }
+        self.throughput_per_s
+            .value
+            .filter(|r| *r > 0.0)
+            .map(|_| CostBasis::DerivedFromThroughput)
+    }
+
+    /// `[low, high]`, µs, when each call is drawn from a range: an upper-bound latency
+    /// with a lower edge below it.
+    pub fn range_us(&self) -> Option<[f64; 2]> {
+        let hi = self.latency_us.value?;
+        let lo = self.latency_lower_us.value?;
+        (matches!(self.latency_us.status, Some(FieldStatus::UpperBound)) && lo > 0.0 && lo < hi)
+            .then_some([lo, hi])
+    }
+
     /// The modelled service time for one call.
     ///
     /// The published latency when there is one; otherwise the reciprocal of the published
@@ -814,6 +1000,107 @@ impl HardwareProfile {
         self.crypto_anchors
             .iter()
             .find_map(|a| d.cost_duration(kind, a, c))
+    }
+
+    /// `op`'s modelled cost with where it runs and how the figure was arrived at, or
+    /// `None` when [`HardwareProfile::op_cost`] has none. The same resolution order.
+    pub fn op_cost_facts(&self, op: &str) -> Option<OpCostFacts> {
+        let (t, runs_on) = self.op_cost(op)?;
+        let us = t.as_nanos() as f64 / 1e3;
+        let mut facts = OpCostFacts {
+            op: op.to_string(),
+            service_us: us,
+            range_us: None,
+            runs_on,
+            basis: CostBasis::Catalogue,
+            source: None,
+        };
+        if v2xw_sec::scheme::op_components(op).is_some() {
+            facts.basis = CostBasis::Composite;
+            return Some(facts);
+        }
+        if self.hsm.kind != HsmKind::None
+            && let Some(spec) = self.hsm.ops.get(op)
+            && let Some(basis) = spec.basis()
+        {
+            facts.basis = basis;
+            facts.range_us = spec.range_us();
+            if let Some([lo, hi]) = facts.range_us {
+                facts.service_us = 0.5 * (lo + hi);
+            }
+            facts.source = spec
+                .latency_us
+                .source
+                .clone()
+                .or_else(|| spec.throughput_per_s.source.clone());
+            return Some(facts);
+        }
+        if let Some(c) = self.software_crypto.get(op).filter(|c| c.us.is_some()) {
+            facts.basis = if matches!(c.status, Some(FieldStatus::Proxy)) {
+                CostBasis::SoftwareProxy
+            } else {
+                CostBasis::SoftwareBenchmark
+            };
+            facts.source = c.source.clone();
+        }
+        Some(facts)
+    }
+
+    /// Where this profile signs and verifies with `sign_op` and `verify_op`, labelled for
+    /// the Studio, and one paragraph on why the two compare as they do here.
+    pub fn crypto_placement(&self, sign_op: &str, verify_op: &str) -> CryptoPlacement {
+        let place = |op: &str, verb: &str| {
+            self.op_cost_facts(op).map(|facts| {
+                let where_text = facts.where_text(self.hsm.kind).to_string();
+                let label = match facts.runs_on {
+                    RunsOn::Hsm => format!("{verb} in the secure element"),
+                    RunsOn::Accelerator => format!("{verb} by the hardware accelerator"),
+                    RunsOn::Cpu => format!("{verb} in software on the application processor"),
+                };
+                OpPlacement {
+                    basis_text: facts.basis_text(),
+                    modelled_ms: facts.service_us / 1000.0,
+                    label,
+                    where_text,
+                    facts,
+                }
+            })
+        };
+        let sign = place(sign_op, "signed");
+        let verify = place(verify_op, "verified");
+        let (sw_sign, sw_verify) = SOFTWARE_ECDSA_P256_A53_US;
+        let software_rule = format!(
+            "On one processor in software, ECDSA verification costs about twice signing \
+             (OpenSSL on a Cortex-A53: sign {sw_sign:.0} us, verify {sw_verify:.0} us [R7 §D8])."
+        );
+        let explanation = match (&sign, &verify) {
+            (Some(s), Some(v)) if s.facts.runs_on != v.facts.runs_on => format!(
+                "Signing and verification run on different hardware here: {} and {}. \
+                 Signing needs the private key, so it stays inside the tamper-resistant \
+                 element, a small, slow core; verification needs no secret and runs on {}. \
+                 That is why verify can be faster than sign on this device. {software_rule} \
+                 To study verify-dominated cost, pick a software-crypto profile such as \
+                 obu/unex-obu-301-craton2-software or obu/generic-automotive-soc-no-hsm.",
+                s.where_text, v.where_text, v.where_text
+            ),
+            (Some(s), Some(v)) if v.facts.service_us >= s.facts.service_us => format!(
+                "Both run on {}: verification costs more than signing, as ECDSA does on one \
+                 processor. {software_rule}",
+                s.where_text
+            ),
+            (Some(s), Some(_)) => format!(
+                "Both run on {}, and this profile's figures put verification below signing; \
+                 check their sources. {software_rule}",
+                s.where_text
+            ),
+            _ => format!("This profile does not cost both operations. {software_rule}"),
+        };
+        CryptoPlacement {
+            profile: self.id.clone(),
+            sign,
+            verify,
+            explanation,
+        }
     }
 
     /// Whether `op`'s cost on this profile is a figure derived rather than published for

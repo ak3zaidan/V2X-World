@@ -1,4 +1,12 @@
-//! `v2xw-server` — serve one run over VWP v1.
+//! `v2xw-server` — serve one run over VWP v1, with the agent always on.
+//!
+//! This is the same program as `v2xw serve`: the agent's endpoints (`/agent/*`,
+//! `v2xw_cli::agent_host`) are served on the engine's own origin and the always-on watcher
+//! follows every run from the first second, so starting a simulation always starts the
+//! agent and its end-of-run analysis. There is no second command to remember. Model keys
+//! come from the environment or, when unset there, from a `.env` file in the working
+//! directory (`V2XW_AGENT_PROVIDER`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `ANTHROPIC_API_KEY`);
+//! the banner names the provider, never a key. `--no-agent` serves the engine alone.
 //!
 //! Two modes. `--scenario <path>` runs the real kernel: the scenario is loaded, the world
 //! is imported and `v2xw-engine` produces the stream. With no `--scenario`, the synthetic
@@ -7,6 +15,7 @@
 
 use std::net::{IpAddr, SocketAddr};
 
+use v2xw_cli::agent_host::AgentHost;
 use v2xw_server::{LiveOptions, ServerOptions, StubOptions, serve_scenario, serve_stub};
 
 const USAGE: &str = "\
@@ -40,6 +49,8 @@ v2xw-server — the VWP v1 control surface and stream (docs/protocol/vwp-v1.md)
   --paused        start the run paused at t = 0
   --label <s>     human label for Hello.str_run_label
   --quiet         do not print the banner
+  --no-agent      serve the engine without the agent's endpoints and watcher
+  --env-file <p>  read model keys from this file (default ./.env, when present)
   --help          this message
 ";
 
@@ -72,8 +83,76 @@ fn read_checkpoint(path: &std::path::Path) -> Result<(String, String, u64), Stri
     Ok((scenario.display().to_string(), build_utc, t_ns))
 }
 
-#[tokio::main]
-async fn main() -> std::process::ExitCode {
+/// The variables the agent reads its provider and keys from. Only these are taken from a
+/// `.env` file; anything else in it is left alone.
+const AGENT_VARIABLES: [&str; 4] = [
+    "V2XW_AGENT_PROVIDER",
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+    "ANTHROPIC_API_KEY",
+];
+
+/// Reads `KEY=value` lines (an optional `export ` prefix, optional quotes) from `path` and
+/// returns the agent variables that are set there and not already set, non-empty, in the
+/// environment. Values are never printed.
+fn dotenv_agent_vars(path: &std::path::Path) -> Vec<(String, String)> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let Some((key, value)) = line.split_once('=') else { continue };
+        let key = key.trim();
+        if !AGENT_VARIABLES.contains(&key) {
+            continue;
+        }
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+            .unwrap_or(value);
+        let already = std::env::var(key).is_ok_and(|v| !v.is_empty());
+        if !value.is_empty() && !already {
+            out.push((key.to_string(), value.to_string()));
+        }
+    }
+    out
+}
+
+fn main() -> std::process::ExitCode {
+    // Keys first, before any thread exists: `set_var` is only sound single-threaded.
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let env_file = argv
+        .iter()
+        .position(|a| a == "--env-file")
+        .and_then(|i| argv.get(i + 1))
+        .map_or_else(|| std::path::PathBuf::from(".env"), std::path::PathBuf::from);
+    for key in AGENT_VARIABLES {
+        // An empty value would look like a key that is set; drop it.
+        if std::env::var(key).is_ok_and(|v| v.is_empty()) {
+            // SAFETY: no other thread exists yet; the runtime is built below.
+            unsafe { std::env::remove_var(key) };
+        }
+    }
+    for (key, value) in dotenv_agent_vars(&env_file) {
+        // SAFETY: as above, still single-threaded.
+        unsafe { std::env::set_var(key, value) };
+    }
+    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("v2xw-server: cannot start the async runtime: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    rt.block_on(serve(argv))
+}
+
+async fn serve(argv: Vec<String>) -> std::process::ExitCode {
     let mut options = ServerOptions::default();
     let mut stub = StubOptions::default();
     let mut live = LiveOptions::default();
@@ -82,8 +161,7 @@ async fn main() -> std::process::ExitCode {
     let mut host: IpAddr = [127, 0, 0, 1].into();
     let mut port: u16 = 8787;
     let mut quiet = false;
-
-    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut agent = true;
     let mut i = 0;
     while i < argv.len() {
         let arg = argv[i].as_str();
@@ -100,6 +178,11 @@ async fn main() -> std::process::ExitCode {
                 quiet = true;
                 Ok(())
             }
+            "--no-agent" => {
+                agent = false;
+                Ok(())
+            }
+            "--env-file" => next().map(|_| ()).ok_or("--env-file needs a path"),
             "--paused" => {
                 stub.paused = true;
                 live.paused = true;
@@ -186,6 +269,14 @@ async fn main() -> std::process::ExitCode {
         i += 1;
     }
     options.bind = SocketAddr::new(host, port);
+    // The agent rides on the engine's own origin and starts watching at once: every run
+    // this process serves gets its watcher notes and its end-of-run analysis.
+    let agent_host = agent.then(|| {
+        let h = AgentHost::new(options.token.clone());
+        h.start_watcher(v2xw_copilot::watch::WatchCadence::default());
+        options.extension = Some(h.router());
+        h
+    });
 
     // A checkpoint names its run: the resolved scenario beside it and the build timestamp.
     // The run is served paused at the checkpoint's instant, computed there again (the
@@ -217,6 +308,10 @@ async fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
+    if let Some(h) = &agent_host {
+        // The agent reaches the engine over loopback even when it is bound wider.
+        h.set_origin(format!("http://127.0.0.1:{}", server.address().port()));
+    }
     if let Some(t_ns) = resume_at {
         let run = std::sync::Arc::clone(server.run());
         let target = t_ns.saturating_add(1);
@@ -278,6 +373,12 @@ async fn main() -> std::process::ExitCode {
             println!("  record   {path}");
         }
         println!("  traffic  {actors} actors, {nodes} nodes");
+        if agent_host.is_some() {
+            println!("  agent    {}/agent/status (watching every run)", server.http_url());
+            v2xw_cli::agent::print_key_line();
+        } else {
+            println!("  agent    off (--no-agent)");
+        }
         // The banner is the readiness signal a test harness waits on, so it must be
         // flushed before the process starts serving quietly.
         use std::io::Write;
