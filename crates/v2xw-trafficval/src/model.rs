@@ -28,10 +28,10 @@ use v2xw_mobility::ctx::MobilityCtx;
 use v2xw_mobility::demand::NoDemand;
 use v2xw_mobility::fd::{self, FdParams};
 use v2xw_mobility::intersection::gap_acceptance::{HcmGaps, Movement};
-use v2xw_mobility::lanechange::mobil::{Mobil, MobilPreset};
+use v2xw_mobility::lanechange::mobil::{Mobil, MobilParams, MobilPreset};
 use v2xw_mobility::traits::{CarFollowing, LaneChange, Mobility};
 use v2xw_mobility::views::{
-    DriverProfile, LaneChangeDecision, LaneNeighbors, LaneView, LeaderView, Side, SideNeighbors,
+    DriverProfile, LaneChangeDecision, LaneNeighbors, LeaderView, Side, SideNeighbors,
     VehicleView,
 };
 use v2xw_mobility::vru::social_force::SocialForceParams;
@@ -57,6 +57,7 @@ pub fn checks() -> Vec<Check> {
             faults: &[
                 "the acceleration exponent δ set to 2 instead of 4",
                 "the Kesting 2010 drivers (T 1.5 s, a 1.4, b 2.0) read as the Treiber 2000 set",
+                "the paper's 120 km/h entered as a rounded 33 m/s and s0 taken from the truck column (4 m)",
             ],
             run: idm_equation,
         },
@@ -80,10 +81,13 @@ pub fn checks() -> Vec<Check> {
                 string stable iff `f_v²/2 + f_v·f_Δv − f_s ≥ 0` (Wilson & Ward 2011, Transp. \
                 Res. C 19; Treiber & Kesting 2013 §15.5: |G(iω)| ≤ 1 for all ω). The partial \
                 derivatives are taken numerically from the engine's IDM at each density's \
-                equilibrium. A 60-car platoon at that equilibrium is then simulated with \
-                the model; the leader dips 0.5 m/s for 4 s; the disturbance's amplitude at \
-                car 59 over car 5 says whether it grew. Densities where theory and \
-                simulation disagree are counted; densities where the criterion is within \
+                equilibrium, and give the linearised per-car gain |G(iω)|. A 16-car platoon \
+                at that equilibrium is then simulated with the model while the leader's \
+                speed oscillates 0.05 m/s at ω = √|criterion| (inside the unstable band \
+                when there is one); the per-car amplitude gain, read by projecting the \
+                speeds onto sin and cos at ω, is held to |G(iω)| and must agree on growth. \
+                (A single dip is not used: its spectrum is mostly outside the band, so a \
+                weakly unstable platoon damps it.) Densities where the criterion is within \
                 0.01 s⁻² of zero are marginal and skipped.",
             faults: &[
                 "the simulated drivers react 0.8 s late (a delay the ODE criterion does not have)",
@@ -131,6 +135,7 @@ pub fn checks() -> Vec<Check> {
             faults: &[
                 "the engine's MOBIL run with politeness 0 (a selfish driver) against the paper's p",
                 "the engine's MOBIL run with b_safe = 9 m/s² against the paper's 4",
+                "the preset's table misread: Δa_th and Δa_bias swapped, b_safe read from the comfortable deceleration b (2 m/s²)",
             ],
             run: mobil_criterion,
         },
@@ -143,7 +148,10 @@ pub fn checks() -> Vec<Check> {
                 road 4.1 s (follow-up 2.2), right from the minor 6.2 / 6.9 s on a 2- / 4-lane \
                 major (3.3), through from the minor 6.5 s (4.0), left from the minor 7.1 / \
                 7.5 s (3.5). The values are the model's own table, so the fault replaces it.",
-            faults: &["the minor-road left and through rows swapped"],
+            faults: &[
+                "the minor-road left and through rows swapped",
+                "the base values adjusted as if every vehicle were heavy (HCM 2010 Eq. 19-30/19-31, Exhibit 19-11)",
+            ],
             run: hcm_gaps,
         },
         Check {
@@ -155,7 +163,7 @@ pub fn checks() -> Vec<Check> {
                 relaxation time τ 0.5 s, pedestrian repulsion V0 2.1 m²/s² over σ 0.3 m, \
                 border repulsion U0 10 m²/s² over R 0.2 m, step Δt 2 s, field of view 200° \
                 with weight c 0.5 behind. Walking speeds in a run are group 2's.",
-            faults: &["a parameter set with τ = 1.0 s and σ = 0.5 m"],
+            faults: &["a parameter set with τ = 1.0 s and σ = 0.5 m", "the parameter table transcribed one row out of step"],
             run: social_force,
         },
     ]
@@ -197,6 +205,11 @@ fn idm_equation(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     };
     let driver = match variant {
         Variant::Fault(1) => IdmPreset::Kesting2010.profile(VehicleClass::Passenger),
+        Variant::Fault(2) => DriverProfile {
+            desired_speed_mps: 33.0,
+            min_gap_m: 4.0,
+            ..IdmPreset::Treiber2000.profile(VehicleClass::Passenger)
+        },
         _ => IdmPreset::Treiber2000.profile(VehicleClass::Passenger),
     };
     let mut worst = 0.0f64;
@@ -242,6 +255,21 @@ fn ballistic(x: &mut f64, v: &mut f64, a: f64, dt: f64) {
     *v = v1;
 }
 
+/// Integrates the approach to a standing obstacle `obstacle` m ahead from `v_start`, with
+/// `accel(v, gap)`, and returns `(gap at the end, smallest gap, final speed, peak decel)`.
+fn approach(accel: impl Fn(f64, f64) -> f64, v_start: f64, obstacle: f64, dt: f64, t_end: f64) -> (f64, f64, f64, f64) {
+    let (mut x, mut v) = (0.0, v_start);
+    let mut min_gap = f64::INFINITY;
+    let mut peak_decel = 0.0f64;
+    for _ in 0..(t_end / dt).round() as usize {
+        let a = accel(v, obstacle - x);
+        peak_decel = peak_decel.max(-a);
+        ballistic(&mut x, &mut v, a, dt);
+        min_gap = min_gap.min(obstacle - x);
+    }
+    (obstacle - x, min_gap, v, peak_decel)
+}
+
 fn idm_stop(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     let idm = Idm::new(IdmPreset::UrbanHcm);
     let driver = IdmPreset::UrbanHcm.profile(VehicleClass::Passenger);
@@ -251,23 +279,30 @@ fn idm_stop(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     }
     let v0 = 13.9;
     let obstacle = 150.0;
-    let (mut x, mut v) = (0.0, v0);
-    let dt = 0.1;
-    let mut min_gap = f64::INFINITY;
-    let mut peak_decel = 0.0f64;
-    for _ in 0..1200 {
-        let gap = obstacle - x;
-        let a = idm.accel_of(v, v0, gap, 0.0, &model_driver);
-        peak_decel = peak_decel.max(-a);
-        ballistic(&mut x, &mut v, a, dt);
-        min_gap = min_gap.min(obstacle - x);
-    }
+    let (gap, min_gap, v, peak_decel) =
+        approach(|v, gap| idm.accel_of(v, v0, gap, 0.0, &model_driver), v0, obstacle, 0.1, 120.0);
+    // The same approach through the equation written out here, at the engine's step and at
+    // 1 ms (the continuous limit). With speeds floored at zero the IDM does not reach s0
+    // from above: it is underdamped near standstill and stops a little short (Treiber &
+    // Kesting 2013 §11.3.6 on the negative-speed guard), so the gap at rest is held to the
+    // independent integration, and to s0 only within the continuous model's own shortfall.
+    let params = IdmParams::default();
+    let reference = |v: f64, gap: f64| idm_reference(&params, &driver, v, v0, gap, 0.0);
+    let (ref_gap, _, _, _) = approach(reference, v0, obstacle, 0.1, 120.0);
+    let (limit_gap, _, _, _) = approach(reference, v0, obstacle, 0.001, 120.0);
     let s0 = driver.min_gap_m;
-    let reference = "Treiber 2000 §II: s*(v→0) = s0";
+    let shortfall = (s0 - limit_gap).max(0.0);
+    let cite = "Treiber 2000 §II: s*(v→0) = s0";
     Ok(Outcome {
         rows: vec![
-            Row::held("gap at rest, m", obstacle - x, (s0 - 0.05, s0 + 0.5), reference),
-            Row::held("smallest gap on the approach, m", min_gap, (s0 - 0.05, f64::INFINITY), reference),
+            Row::held(
+                "gap at rest, |engine − independent IDM integration at 0.1 s|, m",
+                (gap - ref_gap).abs(),
+                (0.0, 1e-9),
+                "Treiber 2000 Eq. 1–2 integrated ballistically (Treiber & Kanagaraj 2015) by the check itself",
+            ),
+            Row::held("gap at rest, m", gap, (s0 - 0.1, s0 + 0.5), format!("{cite}; the continuous model with v ≥ 0 stops {shortfall:.3} m short of s0 (1 ms integration), so the band opens 0.1 m below s0")),
+            Row::held("smallest gap on the approach, m", min_gap, (s0 - 0.1, f64::INFINITY), cite),
             Row::held("speed after 120 s, m/s", v, (0.0, 0.05), "at rest"),
             Row::reported(
                 "peak deceleration, m/s²",
@@ -275,7 +310,9 @@ fn idm_stop(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
                 "IDM: about b = 2 m/s² when the kinematic deceleration v²/2s is below b (Treiber & Kesting 2013 §11.3.5)",
             ),
         ],
-        notes: vec![],
+        notes: vec![format!(
+            "independent integration: {ref_gap:.4} m at 0.1 s, {limit_gap:.4} m at 1 ms"
+        )],
     })
 }
 
@@ -283,10 +320,27 @@ fn idm_stop(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
 // String stability
 // ---------------------------------------------------------------------------------------
 
-/// The linear string-stability criterion `f_v²/2 + f_v·f_Δv − f_s` at the equilibrium of
-/// gap `s`, from central differences of the model.
-fn criterion(idm: &Idm, d: &DriverProfile, v0: f64, s: f64) -> (f64, f64) {
-    let v = fd::equilibrium_speed_mps(idm, d, v0, s);
+/// The equilibrium speed at gap `s`, `f(s, v, v) = 0`, by bisection to 1e-13 m/s on the
+/// engine's own function: a platoon started a hair off it relaxes over minutes at low
+/// density (the gap mode's time constant is |f_v|/f_s), and that slow drift would leak into
+/// the frequency-response reading.
+fn equilibrium(idm: &Idm, d: &DriverProfile, v0: f64, s: f64) -> f64 {
+    let (mut lo, mut hi) = (0.0f64, v0.max(0.1) * 1.5);
+    for _ in 0..80 {
+        let mid = 0.5 * (lo + hi);
+        if idm.accel_of(mid, v0, s, mid, d) > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
+/// The partial derivatives `(f_s, f_v, f_Δv)` of the model at the equilibrium of gap `s`
+/// (Δv = v − v_leader; f_v with Δv held), from central differences.
+fn partials(idm: &Idm, d: &DriverProfile, v0: f64, s: f64) -> (f64, f64, f64) {
+    let v = equilibrium(idm, d, v0, s);
     let h = 1e-4;
     let f = |s: f64, v: f64, vl: f64| idm.accel_of(v, v0, s, vl, d);
     let fs = (f(s + h, v, v) - f(s - h, v, v)) / (2.0 * h);
@@ -294,52 +348,87 @@ fn criterion(idm: &Idm, d: &DriverProfile, v0: f64, s: f64) -> (f64, f64) {
     let fv = (f(s, v + h, v + h) - f(s, v - h, v - h)) / (2.0 * h);
     // ∂/∂Δv: move the leader the other way.
     let fdv = (f(s, v, v - h) - f(s, v, v + h)) / (2.0 * h);
+    (fs, fv, fdv)
+}
+
+/// The linear string-stability criterion `f_v²/2 + f_v·f_Δv − f_s` at the equilibrium of
+/// gap `s`.
+fn criterion(idm: &Idm, d: &DriverProfile, v0: f64, s: f64) -> (f64, f64) {
+    let v = equilibrium(idm, d, v0, s);
+    let (fs, fv, fdv) = partials(idm, d, v0, s);
     (v, fv * fv / 2.0 + fv * fdv - fs)
 }
 
-/// The amplitude growth of a leader's 0.5 m/s dip through a 60-car platoon at gap `s`:
-/// the peak speed deviation of car 59 over that of car 5.
-fn platoon_growth(idm: &Idm, d: &DriverProfile, v0: f64, s: f64, length: f64, delay_s: f64) -> f64 {
-    const N: usize = 60;
-    let dt = 0.05;
-    let ve = fd::equilibrium_speed_mps(idm, d, v0, s);
-    let dip = 0.5f64.min(0.5 * ve);
+/// The linearised platoon's per-car transfer-function gain `|G(iω)|`,
+/// `G(λ) = (f_s − f_Δv·λ) / (λ² − (f_v + f_Δv)·λ + f_s)` (Treiber & Kesting 2013 §15.5;
+/// Wilson & Ward 2011 Eq. 9 in this sign convention).
+fn transfer_gain(fs: f64, fv: f64, fdv: f64, omega: f64) -> f64 {
+    let num = fs * fs + fdv * fdv * omega * omega;
+    let re = fs - omega * omega;
+    let im = (fv + fdv) * omega;
+    math::sqrt(num / (re * re + im * im))
+}
+
+/// A platoon of `N` cars at the equilibrium of gap `s` whose leader's speed oscillates
+/// `0.05·sin(ωt)` m/s: the speed amplitude at each car is read by projecting the last
+/// whole periods onto sin and cos at ω, and the per-car gain is the geometric mean of the
+/// ratios from the leader to the last car the probe still reaches. `delay_s` makes every follower see the platoon that
+/// long ago (the fault).
+fn platoon_gain(idm: &Idm, d: &DriverProfile, v0: f64, s: f64, length: f64, delay_s: f64, omega: f64) -> (f64, Vec<f64>) {
+    const N: usize = 16;
+    const AMP: f64 = 0.05;
+    let dt = 0.02;
+    let ve = equilibrium(idm, d, v0, s);
+    let period = 2.0 * core::f64::consts::PI / omega;
+    let settle = 200.0f64.max(4.0 * period);
+    let cycles = (3.0f64).max((200.0 / period).floor());
+    let t_end = settle + cycles * period;
     let mut x: Vec<f64> = (0..N).map(|i| -(i as f64) * (s + length)).collect();
     let mut v = vec![ve; N];
     let delay_steps = (delay_s / dt).round() as usize;
-    // History of (x, v) per step for the delayed drivers.
-    let mut history: Vec<(Vec<f64>, Vec<f64>)> = Vec::new();
-    let mut dev = vec![0.0f64; N];
-    let steps = (250.0 / dt) as usize;
+    let mut history: std::collections::VecDeque<(Vec<f64>, Vec<f64>)> = std::collections::VecDeque::new();
+    let (mut sin_acc, mut cos_acc) = (vec![0.0f64; N], vec![0.0f64; N]);
+    let steps = (t_end / dt).round() as usize;
     for k in 0..steps {
         let t = k as f64 * dt;
-        history.push((x.clone(), v.clone()));
-        let seen = if history.len() > delay_steps {
-            &history[history.len() - 1 - delay_steps]
-        } else {
-            &history[0]
-        };
+        history.push_back((x.clone(), v.clone()));
+        while history.len() > delay_steps + 1 {
+            history.pop_front();
+        }
+        let seen = &history[0];
         let mut acc = vec![0.0; N];
         for i in 1..N {
             let gap = seen.0[i - 1] - seen.0[i] - length;
             acc[i] = idm.accel_of(seen.1[i], v0, gap, seen.1[i - 1], d);
         }
-        // The leader: a smooth dip, 1 − cos over 4 s, starting at t = 5 s.
-        let target = if (5.0..9.0).contains(&t) {
-            ve - dip * 0.5 * (1.0 - math::cos(2.0 * core::f64::consts::PI * (t - 5.0) / 4.0))
-        } else {
-            ve
-        };
+        let target = ve + AMP * math::sin(omega * (t + dt));
         acc[0] = (target - v[0]) / dt;
         for i in 0..N {
             ballistic(&mut x[i], &mut v[i], acc[i], dt);
-            dev[i] = dev[i].max((v[i] - ve).abs());
         }
-        if history.len() > delay_steps + 2 {
-            history.remove(0);
+        let t1 = t + dt;
+        if t1 > settle {
+            #[allow(clippy::needless_range_loop)]
+            for i in 0..N {
+                sin_acc[i] += (v[i] - ve) * math::sin(omega * t1) * dt;
+                cos_acc[i] += (v[i] - ve) * math::cos(omega * t1) * dt;
+            }
         }
     }
-    if dev[5] <= 0.0 { f64::NAN } else { dev[N - 1] / dev[5] }
+    let amp = |i: usize| math::sqrt(sin_acc[i] * sin_acc[i] + cos_acc[i] * cos_acc[i]);
+    // A strongly damped platoon carries the probe only a few cars before its amplitude
+    // sinks under what slow transients leak into the projection, so the ratio is taken
+    // from the leader to the last car still carrying a hundredth of the probe (below that,
+    // a residue of about 1e-4 of the probe from the settling transient dominates).
+    let a0 = amp(0);
+    let floor = a0 * 1e-2;
+    let k = (1..N).take_while(|&i| amp(i) >= floor).last();
+    let ratios: Vec<f64> = (1..5.min(N)).map(|i| amp(i) / amp(i - 1).max(1e-300)).collect();
+    let g = match k {
+        Some(k) if a0 > 0.0 => math::pow(amp(k) / a0, 1.0 / k as f64),
+        _ => f64::NAN,
+    };
+    (g, ratios)
 }
 
 fn string_stability(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
@@ -348,6 +437,7 @@ fn string_stability(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String>
     let mut rows = Vec::new();
     let mut notes = Vec::new();
     let mut total_disagree = 0u64;
+    let mut worst_gain_err = 0.0f64;
     let mut compared = 0usize;
     for (preset, v0, label) in [
         (IdmPreset::UrbanHcm, 11.176, "city drivers (UrbanHcm), 25 mph"),
@@ -366,17 +456,24 @@ fn string_stability(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String>
             if c < 0.0 {
                 unstable.push(rho);
             }
-            let growth = platoon_growth(&idm, &d, v0, s, length, delay);
-            line.push(format!("{rho:.0}: criterion {c:+.3}, growth {growth:.2}"));
             if c.abs() < 0.01 {
+                line.push(format!("{rho:.0}: criterion {c:+.3} (marginal, not compared)"));
                 continue;
             }
+            // ω inside the unstable band ω² < −2c when c < 0, at the same distance from 0
+            // when c > 0, so both verdicts are probed where |G| differs from 1 the most.
+            let omega = math::sqrt(c.abs());
+            let (fs, fv, fdv) = partials(&idm, &d, v0, s);
+            let theory = transfer_gain(fs, fv, fdv, omega);
+            let (sim, ratios) = platoon_gain(&idm, &d, v0, s, length, delay, omega);
+            let r: Vec<String> = ratios.iter().map(|x| format!("{x:.4}")).collect();
+            line.push(format!("{rho:.0}: criterion {c:+.3}, ω {omega:.3} rad/s, |G| theory {theory:.4}, simulated {sim:.4} (car-to-car {})", r.join(" ")));
             compared += 1;
-            let theory_stable = c >= 0.0;
-            let sim_stable = growth <= 1.0;
-            if theory_stable != sim_stable {
+            if (theory > 1.0) != (sim > 1.0) || !sim.is_finite() {
                 total_disagree += 1;
             }
+            let err = if sim.is_finite() { (sim - theory).abs() } else { f64::INFINITY };
+            worst_gain_err = worst_gain_err.max(err);
         }
         rows.push(Row::reported(
             format!("{label}: lowest unstable density, veh/km"),
@@ -395,8 +492,18 @@ fn string_stability(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String>
     }
     rows.insert(
         0,
+        Row::held(
+            "largest |simulated − linear-theory| per-car gain at the probe frequency",
+            worst_gain_err,
+            (0.0, 0.003),
+            "Treiber & Kesting 2013 §15.5 transfer function; tolerance: the ballistic step's phase error at 0.02 s and the 0.05 m/s probe's nonlinearity, both under 0.1 % of the gain",
+        )
+        .n(compared),
+    );
+    rows.insert(
+        0,
         Row::zero(
-            "densities where simulation and theory disagree",
+            "densities where simulation and theory disagree on growth (|G| > 1)",
             total_disagree,
             "Wilson & Ward 2011; Treiber & Kesting 2013 §15.5",
         )
@@ -682,7 +789,6 @@ fn mobil_criterion(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> 
     let driver = IdmPreset::UrbanHcm.profile(VehicleClass::Passenger);
     let rng = RngRegistry::new(11);
     let w = WeatherState::CLEAR;
-    let view_of = |lane: LaneId| LaneView::of(world.lane(lane));
     let veh = |id: u32, lane: LaneId, idx: u8, v: f64| VehicleView {
         actor: ActorId::new(id),
         class: VehicleClass::Passenger,
@@ -708,24 +814,43 @@ fn mobil_criterion(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> 
     let mut seq = Lcg(0x0B11_7E57);
     let mut disagree = 0u64;
     let mut changes = 0u64;
-    let n = 400;
+    // 400 random situations, then 100 built on the safety boundary: a slow leader close
+    // ahead (a strong incentive), an empty left lane but for a follower closing at a gap
+    // that puts its post-change deceleration either side of b_safe, and a right lane
+    // blocked outright. The random draws seldom land there, and without them a wrong
+    // b_safe would go unseen.
+    let n = 500;
     let mut examples = Vec::new();
     for case in 0..n {
-        let v_ego = seq.range(4.0, 14.0);
+        let boundary = case >= 400;
+        let v_ego = if boundary { 8.0 } else { seq.range(4.0, 14.0) };
         let ego = veh(0, mid, 1, v_ego);
-        let mut lv = |id: u32, lane: LaneId, idx: u8, seq: &mut Lcg| -> Option<LeaderView> {
+        let lv = |id: u32, lane: LaneId, idx: u8, seq: &mut Lcg| -> Option<LeaderView> {
             if seq.next() < 0.15 {
                 return None;
             }
             let v = seq.range(0.0, 14.0);
             Some(LeaderView::of(veh(id, lane, idx, v), seq.range(2.0, 80.0)))
         };
-        let leader = lv(1, mid, 1, &mut seq);
-        let follower = lv(2, mid, 1, &mut seq);
-        let l_leader = lv(3, left, 2, &mut seq);
-        let l_follower = lv(4, left, 2, &mut seq);
-        let r_leader = lv(5, right, 0, &mut seq);
-        let r_follower = lv(6, right, 0, &mut seq);
+        let (leader, follower, l_leader, l_follower, r_leader, r_follower) = if boundary {
+            (
+                Some(LeaderView::of(veh(1, mid, 1, 2.0), 6.0)),
+                None,
+                None,
+                Some(LeaderView::of(veh(4, left, 2, seq.range(9.0, 14.0)), seq.range(2.0, 20.0))),
+                None,
+                Some(LeaderView::of(veh(6, right, 0, 14.0), 1.0)),
+            )
+        } else {
+            (
+                lv(1, mid, 1, &mut seq),
+                lv(2, mid, 1, &mut seq),
+                lv(3, left, 2, &mut seq),
+                lv(4, left, 2, &mut seq),
+                lv(5, right, 0, &mut seq),
+                lv(6, right, 0, &mut seq),
+            )
+        };
         let nbrs = LaneNeighbors {
             lane: mid,
             leader,
@@ -796,6 +921,17 @@ fn mobil_criterion(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> 
         }
     }
     let k07 = "Kesting, Treiber & Helbing 2007, TRR 1999, Table 1";
+    // The table rows as the preset carries them, or misread (the third fault).
+    let table = if variant == Variant::Fault(2) {
+        MobilParams {
+            threshold_mps2: paper.right_bias_mps2,
+            right_bias_mps2: paper.threshold_mps2,
+            b_safe_mps2: driver.comfort_decel_mps2,
+            ..paper
+        }
+    } else {
+        paper
+    };
     let mut notes = vec![format!("{changes} of {n} situations call for a change by the criterion.")];
     notes.extend(examples);
     Ok(Outcome {
@@ -807,9 +943,9 @@ fn mobil_criterion(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> 
                 (0.05, 0.95),
                 "the sample must exercise both verdicts, or agreement proves nothing",
             ),
-            Row::held("changing threshold Δa_th, m/s²", paper.threshold_mps2, (0.1, 0.1), k07),
-            Row::held("safe deceleration b_safe, m/s²", paper.b_safe_mps2, (4.0, 4.0), k07),
-            Row::held("keep-right bias Δa_bias, m/s²", paper.right_bias_mps2, (0.3, 0.3), k07),
+            Row::held("changing threshold Δa_th, m/s²", table.threshold_mps2, (0.1, 0.1), k07),
+            Row::held("safe deceleration b_safe, m/s²", table.b_safe_mps2, (4.0, 4.0), k07),
+            Row::held("keep-right bias Δa_bias, m/s²", table.right_bias_mps2, (0.3, 0.3), k07),
             Row::reported(
                 "politeness p",
                 paper.politeness,
@@ -829,6 +965,17 @@ fn hcm_gaps(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         match (variant, m) {
             (Variant::Fault(0), Movement::MinorLeft) => HcmGaps::of(Movement::MinorThrough),
             (Variant::Fault(0), Movement::MinorThrough) => HcmGaps::of(Movement::MinorLeft),
+            (Variant::Fault(1), m) => {
+                // HCM 2010 Eq. 19-30/19-31 with Exhibit 19-11's heavy-vehicle terms applied as
+                // if every vehicle were heavy: +1.0 s (2-lane) / +2.0 s (4-lane) critical,
+                // +0.9 s follow-up.
+                let g = HcmGaps::of(m);
+                HcmGaps {
+                    critical_gap_narrow_s: g.critical_gap_narrow_s + 1.0,
+                    critical_gap_wide_s: g.critical_gap_wide_s + 2.0,
+                    follow_up_s: g.follow_up_s + 0.9,
+                }
+            }
             _ => HcmGaps::of(m),
         }
     };
@@ -855,21 +1002,42 @@ fn social_force(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         p.sigma_m = 0.5;
     }
     let src = "Helbing & Molnár 1995, Phys. Rev. E 51, 4282";
-    let exact = |name: &str, v: f64, want: f64| Row::held(name, v, (want, want), src);
+    let mut values = [
+        p.desired_speed_mean_mps,
+        p.desired_speed_std_mps,
+        p.max_speed_factor,
+        p.tau_s,
+        p.v0_m2_s2,
+        p.sigma_m,
+        p.u0_m2_s2,
+        p.r_m,
+        p.step_width_s,
+        p.field_of_view_deg,
+        p.behind_weight,
+    ];
+    if variant == Variant::Fault(1) {
+        // The table transcribed one row out of step.
+        values.rotate_left(1);
+    }
+    let names = [
+        ("desired speed mean, m/s", 1.34),
+        ("desired speed standard deviation, m/s", 0.26),
+        ("maximum speed / desired speed", 1.3),
+        ("relaxation time τ, s", 0.5),
+        ("pedestrian repulsion V0, m²/s²", 2.1),
+        ("pedestrian repulsion range σ, m", 0.3),
+        ("border repulsion U0, m²/s²", 10.0),
+        ("border repulsion range R, m", 0.2),
+        ("step width Δt, s", 2.0),
+        ("field of view 2φ, degrees", 200.0),
+        ("weight behind c", 0.5),
+    ];
     Ok(Outcome {
-        rows: vec![
-            exact("desired speed mean, m/s", p.desired_speed_mean_mps, 1.34),
-            exact("desired speed standard deviation, m/s", p.desired_speed_std_mps, 0.26),
-            exact("maximum speed / desired speed", p.max_speed_factor, 1.3),
-            exact("relaxation time τ, s", p.tau_s, 0.5),
-            exact("pedestrian repulsion V0, m²/s²", p.v0_m2_s2, 2.1),
-            exact("pedestrian repulsion range σ, m", p.sigma_m, 0.3),
-            exact("border repulsion U0, m²/s²", p.u0_m2_s2, 10.0),
-            exact("border repulsion range R, m", p.r_m, 0.2),
-            exact("step width Δt, s", p.step_width_s, 2.0),
-            exact("field of view 2φ, degrees", p.field_of_view_deg, 200.0),
-            exact("weight behind c", p.behind_weight, 0.5),
-        ],
+        rows: names
+            .iter()
+            .zip(values)
+            .map(|((name, want), v)| Row::held(*name, v, (*want, *want), src))
+            .collect(),
         notes: vec![],
     })
 }

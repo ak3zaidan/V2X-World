@@ -31,10 +31,13 @@ pub mod access;
 pub mod ctx;
 pub mod differential;
 pub mod e2e;
+pub mod etsi;
+pub mod linklevel;
 pub mod net;
 pub mod phy;
 pub mod report;
 pub mod sec;
+pub mod sps;
 pub mod stats;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -151,7 +154,7 @@ impl Outcome {
                     parts.len(),
                     failed
                         .iter()
-                        .take(4)
+                        .take(8)
                         .map(|s| s.as_str())
                         .collect::<Vec<_>>()
                         .join("; ")
@@ -274,8 +277,11 @@ pub fn run(check: &Check) -> Verdict {
 pub fn all() -> Vec<Check> {
     let mut v = Vec::new();
     v.extend(phy::checks());
+    v.extend(linklevel::checks());
     v.extend(access::checks());
+    v.extend(sps::checks());
     v.extend(net::checks());
+    v.extend(etsi::checks());
     v.extend(sec::checks());
     v.extend(e2e::checks());
     v.extend(differential::checks());
@@ -300,7 +306,10 @@ pub fn python(script: &str, input: &serde_json::Value) -> Result<serde_json::Val
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("reference")
         .join(script);
-    let mut child = Command::new("python3")
+    // `NETVAL_PYTHON` names another interpreter (a virtual environment holding the
+    // optional `asn1tools`, say); the default is the `python3` on the path.
+    let interpreter = std::env::var("NETVAL_PYTHON").unwrap_or_else(|_| "python3".to_string());
+    let mut child = Command::new(interpreter)
         .arg("-I")
         .arg(&path)
         .stdin(Stdio::piped())

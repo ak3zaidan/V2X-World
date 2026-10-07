@@ -60,8 +60,8 @@ pub fn checks() -> Vec<Check> {
             id: "ACC-04",
             layer: Layer::Access,
             title: "Saturated single-hop broadcast: the collision probability of the EDCA state machine against the analytical broadcast model, for 2 to 20 stations",
-            reference: "Bianchi, IEEE JSAC 18(3) 2000, Eq. 7 with m = 0 (no contention-window doubling in broadcast): τ = 2/(W + 1), W = CWmin + 1; p_coll = 1 − (1 − τ)^(N−1). Ma and Chen, 'Saturation performance of IEEE 802.11 broadcast networks', IEEE Commun. Lett. 11(8) 2007",
-            tolerance: "|simulated − analytical| < 0.03 absolute with 4,000 transmissions per density",
+            reference: "Bianchi, IEEE JSAC 18(3) 2000, Eq. 7 with m = 0 (no contention-window doubling in broadcast): τ = 2/(W + 1), W = CWmin + 1; p_coll = 1 − (1 − τ)^(N−1). Ma and Chen, 'Saturation performance of IEEE 802.11 broadcast networks', IEEE Commun. Lett. 11(8) 2007. The decoupling assumption behind Eq. 7 overstates collisions at high load (0.907 against the exact process's 0.871 at N = 20, W = 16), so the slotted process the equation models is also simulated exactly, independently of the MAC, and held at every N",
+            tolerance: "|simulated − exact slotted process| < 0.02 at every N (≈ 2.7 σ at 4,000 transmissions); |simulated − Bianchi| < 0.03 for N ≤ 10, where the approximation is within 0.016 of exact",
             fault: "Frames queued on AC_VO (CWmin 3) where the analysis and configuration say AC_BE (CWmin 15)",
             cost: Cost::Fast,
             run: broadcast_collisions,
@@ -318,6 +318,39 @@ fn saturated(n: u32, ac: AccessCategory, target_tx: u64, seed: u64) -> (u64, u64
     (tx, collided)
 }
 
+/// The slotted broadcast process Bianchi's model analyses, simulated exactly rather than
+/// through its decoupling approximation: N stations, each counter uniform on [0, W − 1],
+/// every idle slot decrements every counter, a counter at zero transmits and redraws, and
+/// counters freeze while the medium is busy. Independent of the MAC under test (a SplitMix64
+/// stream, its own loop), so it is the exact reference the state machine must match.
+fn slotted_reference(n: u32, w: u64, target_tx: u64, seed: u64) -> f64 {
+    let mut state = seed;
+    let mut next = move || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    let mut c: Vec<u64> = (0..n).map(|_| next() % w).collect();
+    let (mut tx, mut coll) = (0u64, 0u64);
+    while tx < target_tx {
+        let zero = c.iter().filter(|x| **x == 0).count() as u64;
+        if zero == 0 {
+            c.iter_mut().for_each(|x| *x -= 1);
+            continue;
+        }
+        tx += zero;
+        if zero > 1 {
+            coll += zero;
+        }
+        for x in c.iter_mut().filter(|x| **x == 0) {
+            *x = next() % w;
+        }
+    }
+    coll as f64 / tx as f64
+}
+
 fn broadcast_collisions(mode: Mode) -> Outcome {
     let configured = AccessCategory::Be;
     let queued_on = if mode.faulted() { AccessCategory::Vo } else { configured };
@@ -328,7 +361,12 @@ fn broadcast_collisions(mode: Mode) -> Outcome {
         let (tx, coll) = saturated(n, queued_on, 4_000, 0xB1A2 + u64::from(n));
         let sim = coll as f64 / tx.max(1) as f64;
         let analytic = 1.0 - (1.0 - tau).powi(n as i32 - 1);
-        parts.push(((sim - analytic).abs() < 0.03, format!("N={n}: {sim:.3} simulated vs {analytic:.3} analytical")));
+        let exact = slotted_reference(n, u64::from(configured.cw_min()) + 1, 400_000, 0x5107 + u64::from(n));
+        // Bianchi's decoupling approximation is held only where it is accurate (N <= 10:
+        // within 0.016 of the exact process); the exact process is held at every N.
+        let ok_exact = (sim - exact).abs() < 0.02;
+        let ok_bianchi = n > 10 || (sim - analytic).abs() < 0.03;
+        parts.push((ok_exact && ok_bianchi, format!("N={n}: {sim:.3} simulated vs {exact:.3} exact slotted process, {analytic:.3} Bianchi")));
     }
     Outcome::all(parts)
 }

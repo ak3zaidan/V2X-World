@@ -65,7 +65,7 @@ use crate::types::{
 ///
 /// `10·log10(k·T·1000)` with `k = 1.380649e−23 J/K` (the SI-exact Boltzmann constant) and
 /// `T = 290 K`, which is the reference temperature 3GPP noise figures are quoted against.
-pub const THERMAL_NOISE_DBM_PER_HZ: f64 = -173.975_093_5;
+pub const THERMAL_NOISE_DBM_PER_HZ: f64 = -173.975_187_194;
 
 /// The 3GPP evaluation noise figure for a UE, dB [TR 36.885 Annex A.1.1, and TR 37.885
 /// Table 6.1.1-1 for NR, via 04-models.md §5.1].

@@ -22,6 +22,36 @@ pub const FINDINGS: &[(&str, &str, &str)] = &[
         "Fixed in `Rri::c_resel_range`.",
     ),
     (
+        "PHY-09",
+        "The sidelink thermal-noise density `cv2x::THERMAL_NOISE_DBM_PER_HZ` was −173.9750935 dBm/Hz; its own documented formula, 10·log10(k·290·1000) with the SI-exact k, gives −173.9751872. A 9.4e-5 dB error, physically negligible, but a constant that disagrees with the formula printed above it.",
+        "Fixed: the constant is the formula's value to nine decimals.",
+    ),
+    (
+        "SEC-01",
+        "The real crypto backend refuses high-s ECDSA signatures (`(r, n − s)`), which FIPS 186-4 and IEEE 1609.2 both accept; OpenSSL emits high s about half the time, so 14 of 32 OpenSSL signatures were refused. This is a deliberate policy (crates/v2xw-sec/src/crypto.rs: refusing the malleated form keeps verdicts independent of crypto mode, invariant I-S1), so it is not changed here; it does mean a simulated receiver would reject a real third-party OBU that signs with high s.",
+        "Recorded, not changed. SEC-01 now sends OpenSSL's signatures in their low-s form (the same signature to any ECDSA verifier) and separately confirms every raw high-s form is refused, so the policy is visible in the report.",
+    ),
+    (
+        "ACC-04 (suite)",
+        "The suite's own reference was wrong at high load: Bianchi's Eq. 7 rests on a decoupling approximation that overstates broadcast collisions at small W and large N (0.907 against 0.871 for the exact slotted process at N = 20, W = 16), so the check failed a MAC that was right.",
+        "Fixed in the check: the slotted process Eq. 7 models is simulated exactly, independently of the MAC, and held at every N within 0.02; Eq. 7 itself is held where it is accurate (N ≤ 10).",
+    ),
+    (
+        "SEC-03 (suite)",
+        "The check signed period 8's SPDU with a fresh backend that did not hold the signing key, so it panicked before it judged anything.",
+        "Fixed in the check: period 8's PKI keeps its own backend.",
+    ),
+    (
+        "PHY-14",
+        "The union bound's distance-spectrum coefficients for the punctured rates (copied from ns-3's `NistErrorRateModel`, after Haccoun & Bégin 1989) differ from an exhaustive trellis search of the 802.11 code with its 802.11 puncturing patterns in their high-order terms: rate 2/3 c13–c15 498 860 / 2 103 891 / 8 784 123 against 498 835 / 2 103 480 / 8 781 268, rate 3/4 c10–c14 379 644 … 428 005 675 against 379 546 … 427 474 864. The search reproduces every rate-1/2 coefficient exactly and every lower-order punctured one. The effect on the coded error probability is at most 6e-4 relative, under 0.001 dB.",
+        "Recorded, not changed: below any physical significance, and the published values are what other simulators use. PHY-14 holds the model within 1e-3 relative.",
+    ),
+    (
+        "PHY-16",
+        "Not a defect: the NIST model is 1.2–1.8 dB pessimistic against a hard-decision Viterbi decoder at 10 % PER (100-byte frames, BPSK and QPSK), as a union bound must be. A soft-decision receiver gains about 2 dB more, so against real hardware the model's ideal-receiver optimism (Sjöberg et al., ~5 dB) and the bound's pessimism partly cancel.",
+        "Recorded for readers choosing `rx_impl_loss_db`.",
+    ),
+    (
         "NET-03",
         "Every message is signed under one PSID, 0x20 (`v2xw_node::secure::PSID_SAFETY`), including ETSI CAMs and DENMs (ITS-AID 36 and 37 in TS 102 965 Table A.1) and SPATEM/MAPEM (137, 138). A receiver filtering on ITS-AID, and the SPDU size (a 2-octet ITS-AID for 137/138), differ from a real stack.",
         "Open, recorded for the V2X-applications track that owns `crates/v2xw-node` this round: the PSID must follow the message type and the envelope profile.",
@@ -100,9 +130,10 @@ pub fn render(results: &[(Check, Verdict)], commit: &str, quick: bool) -> String
          - IEEE 1609.2.1 linkage-value test vectors: the standard's own vectors were not obtainable; the \
            linkage arithmetic is pinned instead to the CAMP reference implementation's outputs \
            (`crates/v2xw-sec/tests/legacy_vectors.rs`), and SEC-03 checks the revocation decisions it drives.\n\
-         - CAM, DENM, SPaT and MAP encoders against an independent decoder: only the BSM's Part I has one \
-           here (NET-05). `crates/v2xw-msg/tests/j2735_oracle.rs` runs `pycrate` against the BSM, SPaT and MAP \
-           when the J2735 ASN.1 modules are supplied, which they are not in this repository.\n\
+         - The J2735 SPaT and MAP encoders against an independent decoder: the BSM's Part I has one \
+           (NET-05) and the ETSI CAM, DENM and VAM have asn1tools (NET-06, which needs `pip install \
+           asn1tools` or `NETVAL_PYTHON` naming an interpreter that has it, and otherwise reports a skip); \
+           the J2735 ASN.1 modules are not in this repository.\n\
          - The SAE J2945/1 CAMP worked examples: the CAMP report was not obtainable; ACC-08 holds the \
            equations to J2945/1's published constants (Ahmad et al. 2019).\n\
          - LTE-V2X and NR-V2X block-error curves against the 3GPP link-level results: the crate pins its \

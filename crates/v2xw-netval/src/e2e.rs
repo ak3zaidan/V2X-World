@@ -43,8 +43,8 @@ pub fn checks() -> Vec<Check> {
             layer: Layer::EndToEnd,
             title: "Metamorphic: more transmit power never shortens range — the set of vehicle pairs that ever deliver does not shrink at +6 dB",
             reference: "Monotonicity of the link budget in transmit power (Friis; every PER model here is monotone in SINR)",
-            tolerance: "pairs(+6 dB) ⊇-count ≥ pairs(0 dB) on the 10-vehicle Manhattan rung",
-            fault: "The comparison run made at −6 dB instead of +6 dB",
+            tolerance: "pairs(+6 dB) count ≥ pairs(0 dB) on the 10-vehicle Manhattan rung run 10 dB below its configured power, where the base set is not already every pair",
+            fault: "The comparison run made at −10 dB instead of +6 dB",
             cost: Cost::Slow,
             run: more_power,
         },
@@ -134,6 +134,16 @@ fn conservation(mode: Mode) -> Outcome {
             }
         };
         s.time.duration_s = s.time.duration_s.min(SHORT_S);
+        // An attack scheduled later than the short run is moved into it, so the run still
+        // carries attack traffic and the loader does not refuse a window outside the run.
+        for a in &mut s.threats.attackers {
+            if let Some(w) = a.schedule.as_mut()
+                && (w.from_s >= SHORT_S || w.to_s > SHORT_S)
+            {
+                w.from_s = 0.0;
+                w.to_s = SHORT_S;
+            }
+        }
         s.metrics = vec!["all".to_string()];
         let catalog_ok = v2xw_engine::wiring::build_metrics(&s, &mut Registry::new()).is_ok();
         let (report, rec) = match run_memory(s) {
@@ -164,7 +174,11 @@ fn conservation(mode: Mode) -> Outcome {
             .outcomes
             .iter()
             .filter(|o| !o.violations.is_empty())
-            .map(|o| format!("{} ({} violations)", o.invariant, o.violations.len()))
+            .map(|o| {
+                let subjects: BTreeSet<String> = o.violations.iter().map(|v| v.subject.clone().unwrap_or_default()).collect();
+                let first = o.violations.first().map(|v| v.detail.chars().take(120).collect::<String>()).unwrap_or_default();
+                format!("{} ({} violations on {}: {first})", o.invariant, o.violations.len(), subjects.into_iter().collect::<Vec<_>>().join(", "))
+            })
             .collect();
         let losses: u64 = report.rx_losses.values().sum();
         let identity = report.reception_attempts == report.receptions_ok + losses;
@@ -233,10 +247,14 @@ fn delivered_pairs(rec: &MemoryRecorder) -> BTreeSet<(u32, u32)> {
 
 fn more_power(mode: Mode) -> Outcome {
     let result = (|| -> Result<(usize, usize, f64), String> {
-        let base = load("scale/10.yaml")?;
+        let mut base = load("scale/10.yaml")?;
+        // 10 dB below the scenario's power, so the base run does not already deliver between
+        // every pair (at full power all ten vehicles hear each other, and then no change of
+        // power can show in the delivering set).
+        base.radio.devices.obu.tx_power_dbm -= 10.0;
         let p0 = base.radio.devices.obu.tx_power_dbm;
         let mut louder = base.clone();
-        louder.radio.devices.obu.tx_power_dbm = p0 + if mode.faulted() { -6.0 } else { 6.0 };
+        louder.radio.devices.obu.tx_power_dbm = p0 + if mode.faulted() { -10.0 } else { 6.0 };
         let (_, r0) = run_memory(base)?;
         let (_, r1) = run_memory(louder)?;
         Ok((delivered_pairs(&r0).len(), delivered_pairs(&r1).len(), p0))

@@ -9,8 +9,7 @@
 
 use v2xw_engine::Scenario;
 
-use crate::invariants::{Engine, Overrides, apply, audit_rows, load, scenario_study, teleport};
-use crate::study::Tamper;
+use crate::invariants::{Engine, Overrides, TAMPER_FAULTS, apply, audit_rows, load, scenario_study, tamper_of};
 use crate::{Check, Group, Lab, Outcome, Row, Variant};
 
 /// The checks of this group.
@@ -22,7 +21,7 @@ pub fn checks() -> Vec<Check> {
             title: "Manhattan imports and its traffic runs with every safety invariant held",
             procedure: "`scenarios/manhattan-5min.yaml` at 1,500 veh/h with 150 pedestrians \
                 and its jurisdiction's rules, 180 s (90 s in quick mode).",
-            faults: &["one vehicle's published position jumps 30 m for one step at 30 s"],
+            faults: &TAMPER_FAULTS,
             run: manhattan,
         },
         Check {
@@ -32,7 +31,7 @@ pub fn checks() -> Vec<Check> {
             procedure: "`scenarios/portland-downtown.yaml` at its 1,000 veh/h with 100 \
                 pedestrians, Oregon's rules (right on red after a stop), 180 s (90 s in quick \
                 mode).",
-            faults: &["one vehicle's published position jumps 30 m for one step at 30 s"],
+            faults: &TAMPER_FAULTS,
             run: portland,
         },
         Check {
@@ -42,16 +41,23 @@ pub fn checks() -> Vec<Check> {
             procedure: "The Portland scenario with `worlds/cache/berlin.osm.xml`, the box \
                 52.5140,13.3880–52.5250,13.4080 and `urban-de` (StVO), 1,500 veh/h, 100 \
                 pedestrians, 180 s (90 s in quick mode).",
-            faults: &["one vehicle's published position jumps 30 m for one step at 30 s"],
+            faults: &TAMPER_FAULTS,
             run: berlin,
         },
     ]
 }
 
 fn city(lab: &mut Lab, key: &str, s: Scenario, variant: Variant) -> Result<Outcome, String> {
-    let tamper: Option<Tamper> = variant.is_fault().then_some(teleport as Tamper);
+    let tamper = tamper_of(variant);
+    let run_s = s.time.duration_s;
     let r = scenario_study(lab, key, &s, Engine::Shipped, tamper)?;
-    let (mut rows, notes) = audit_rows(key, &r.audit);
+    let (mut rows, notes) = audit_rows(key, &r.audit, run_s);
+    rows.push(Row::held(
+        format!("{key}: peak vehicles on the road"),
+        r.audit.stats.peak_vehicles as f64,
+        (10.0, f64::INFINITY),
+        "the run must load the city: a handful of cars proves nothing about its junctions",
+    ));
     rows.push(Row::held(
         format!("{key}: trips completed"),
         r.audit.stats.trips_completed as f64,
