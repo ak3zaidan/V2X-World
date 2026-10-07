@@ -83,6 +83,11 @@ pub const MODEL_VERSION: &str = "1.0.0";
 /// The vehicle-side blocking threshold, metres (SUMO `jmCrossingGap`, R10 §B13).
 pub const CROSSING_GAP_M: f64 = 10.0;
 
+/// How far over their Weidmann speed a walker in a crowd may be pushed along, as a multiple
+/// of it ([`SocialForceParams::crowd_slowing`]). **A choice**: room for the scatter of a
+/// real crowd's speeds about the relation's mean.
+pub const CROWD_SPEED_CAP: f64 = 1.1;
+
 /// The stream a pedestrian's decision to cross against the signal is drawn from.
 pub const JAYWALK_ID: &str = "vru/pedestrian/jaywalk";
 
@@ -339,10 +344,14 @@ pub struct SocialForceParams {
     pub group_shares: [f64; 4],
     /// Whether a crowd slows its walkers: each pedestrian's desired speed is scaled by
     /// Weidmann's speed-density relation at its local density
-    /// ([`crate::network::weidmann_factor`], [`crate::network::local_density`]: others
-    /// within 5 m over the walkable part of that circle). The social force alone only
+    /// ([`crate::network::weidmann_factor`], [`crate::network::local_density`]: the others
+    /// on its own pavement within 5 m, over the walkable part of that circle — a 10 m
+    /// stretch; counting the people on the pavement round the corner and on the crossing
+    /// too slowed the walkers near every corner as if they were in a crowd). The social force alone only
     /// steers people round each other, so a packed Midtown corner walked at free speed.
-    /// Off by default (the 1995 model has no such term); on in [`Self::observed`].
+    /// The walker's speed is also held to [`CROWD_SPEED_CAP`] times that Weidmann speed:
+    /// the pushes of the walkers behind otherwise carried a crowd along above it. Off by
+    /// default (the 1995 model has no such term); on in [`Self::observed`].
     pub crowd_slowing: bool,
 }
 
@@ -876,6 +885,9 @@ impl VruMobility for SocialForce {
         // a few thousand pedestrians the slowest part of a run). Candidates are visited in
         // ascending index — actor order — exactly as the full scan visited them, so the
         // sum is the same to the last bit.
+        // Each frozen pedestrian's lane, index for index: crowding is counted along a
+        // walker's own pavement.
+        let frozen_lane: Vec<LaneId> = self.people.values().map(|p| p.lane).collect();
         let cell = self.params.interaction_radius_m.max(1.0);
         let key = |p: Vec3| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
         let mut grid: BTreeMap<(i64, i64), Vec<usize>> = BTreeMap::new();
@@ -1126,6 +1138,7 @@ impl VruMobility for SocialForce {
                                 .iter()
                                 .filter(|i| {
                                     frozen[**i].0 != actor
+                                        && frozen_lane[**i] == person.lane
                                         && frozen[**i].1.distance_2d(position)
                                             <= crate::network::CROWD_RADIUS_M
                                 })
@@ -1208,7 +1221,14 @@ impl VruMobility for SocialForce {
             // --- integrate -------------------------------------------------
             let mut velocity =
                 Vec3::new_2d(person.vel.x + accel.x * dt_s, person.vel.y + accel.y * dt_s);
-            let max_speed = self.params.max_speed_factor * person.desired_speed_mps;
+            let mut max_speed = self.params.max_speed_factor * person.desired_speed_mps;
+            if self.params.crowd_slowing {
+                // In a crowd the repulsion of the walkers behind pushes the ones ahead
+                // along faster than they mean to walk: a slower desired speed alone left
+                // a packed pavement walking as fast as an empty one. A walker is held to a
+                // little over their own Weidmann speed.
+                max_speed = max_speed.min(CROWD_SPEED_CAP * crowd * person.desired_speed_mps);
+            }
             let speed = velocity.norm_2d();
             if speed > max_speed && speed > 0.0 {
                 velocity = Vec3::new_2d(

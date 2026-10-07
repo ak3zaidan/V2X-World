@@ -168,6 +168,28 @@ fn run_mixed(params: EngineParams, seconds: u64) -> (CalibrationReport, AuditRep
             e.detail
         );
     }
+    let mut last_gap: Option<(u32, u32)> = None;
+    let mut shown_gap = 0;
+    for e in audit
+        .examples
+        .iter()
+        .filter(|e| e.check == Check::GapBelowMinimum)
+    {
+        let (Some(a), Some(b)) = (e.actor, e.other) else { continue };
+        if last_gap == Some((a, b)) || shown_gap >= 10 {
+            continue;
+        }
+        last_gap = Some((a, b));
+        shown_gap += 1;
+        let step = (e.t_s * 10.0).round() as u64;
+        eprintln!(
+            "  gap t={:.1}s: {a} [{}] / {b} [{}]: {}",
+            e.t_s,
+            who.get(&(step, a)).cloned().unwrap_or_default(),
+            who.get(&(step, b)).cloned().unwrap_or_default(),
+            e.detail
+        );
+    }
     for e in audit
         .examples
         .iter()

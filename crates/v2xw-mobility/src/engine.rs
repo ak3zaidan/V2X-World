@@ -227,6 +227,11 @@ const GO_ACCEL_MPS2: f64 = 0.2;
 /// Standing still, for the start-up reaction, m/s.
 const STANDSTILL_MPS: f64 = 0.1;
 
+/// Below this speed a leader counts as standing for the standstill-gap cap of a driver
+/// whose car-following acceleration is under 1 m/s² (the heavy-vehicle columns), m/s.
+/// **A choice**: a walking pace, at which the cap's one-step slow-down stays gentle.
+const HEAVY_CRAWL_MPS: f64 = 1.0;
+
 /// How far ahead a vehicle standing at the kerb is seen as something to go round, metres:
 /// about a short block's worth of sight. **A choice.**
 const KERB_PASS_LOOK_M: f64 = 60.0;
@@ -4316,12 +4321,20 @@ impl Mobility for NativeMobility {
             // because its leader was not at exactly zero, stop 5 cm inside its 2 m gap. Such
             // a leader's own advance this step is added to the room. A follower moving off
             // behind a leader that is moving off is not capped.
+            // A truck or a bus (the IDM's braking scales with `a`, 0.7 m/s² for them) closing
+            // on a leader that is creeping to a stop crept on into its own 4 m standstill
+            // gap: for those drivers a leader crawling below `HEAVY_CRAWL_MPS` counts as
+            // standing too.
+            let crawl = if actor.driver.max_accel_mps2 < 1.0 {
+                HEAVY_CRAWL_MPS
+            } else {
+                STANDSTILL_MPS
+            };
             let advance_cap_m = if along {
                 nearest_vehicle
                     .filter(|v| {
                         v.speed_mps.abs() < 1e-6
-                            || (v.speed_mps.abs() < STANDSTILL_MPS
-                                && actor.speed_mps > v.speed_mps)
+                            || (v.speed_mps.abs() < crawl && actor.speed_mps > v.speed_mps)
                     })
                     .map(|v| {
                         (v.gap_m + v.speed_mps.max(0.0) * dt_s - actor.driver.min_gap_m).max(0.0)
