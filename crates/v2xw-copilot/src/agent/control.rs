@@ -112,6 +112,9 @@ struct RunMeta {
     extra: BTreeMap<String, f64>,
     units: BTreeMap<String, String>,
     seed: String,
+    /// Every other metric the run's catalogue has, as `base[dim|dim]` (its breakdown
+    /// dimensions), so the model asks query_metric for a name that exists.
+    catalogue: Vec<String>,
 }
 
 impl Harness {
@@ -168,7 +171,8 @@ pub fn tools() -> Vec<Value> {
              (no variants), an A/B or a sweep (variants, the first is the baseline). Returns \
              the analyst's findings and, for 2+ arms, every metric's change with the \
              significant ones called out, their health and the findings that explain them. \
-             Nothing runs if any variant is invalid; the errors come back to fix.",
+             A single run also lists `other_metrics` (name[breakdown dims]) for \
+             query_metric. Nothing runs if any variant is invalid; the errors come back.",
             json!({"type": "object", "additionalProperties": false,
                    "required": ["base", "reason"],
                    "properties": {
@@ -596,6 +600,9 @@ pub(super) fn run_summary<P: LlmProvider, T: RpcTransport>(agent: &Agent<P, T>, 
     if !health.is_empty() {
         out["out_of_band"] = json!(health);
     }
+    if !m.catalogue.is_empty() {
+        out["other_metrics"] = json!(m.catalogue);
+    }
     out
 }
 
@@ -739,6 +746,24 @@ pub(super) fn record_meta<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, 
                 Some((r.get("name")?.as_str()?.to_string(), r.get("unit").and_then(Value::as_str).unwrap_or("").to_string()))
             })
             .collect();
+        for r in cat.get("catalogue").and_then(Value::as_array).into_iter().flatten() {
+            let base = r.get("base").or_else(|| r.get("name")).and_then(Value::as_str).unwrap_or("");
+            if base.is_empty() || agent.runs[index].analysis.headline.contains_key(base) {
+                continue;
+            }
+            let dims: Vec<&str> = r
+                .get("dims")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .filter(|d| *d != "t")
+                .collect();
+            let entry = if dims.is_empty() { base.to_string() } else { format!("{base}[{}]", dims.join("|")) };
+            if !meta.catalogue.contains(&entry) && meta.catalogue.len() < 120 {
+                meta.catalogue.push(entry);
+            }
+        }
         for (name, unit) in &rows {
             meta.units.insert(name.clone(), unit.clone());
         }

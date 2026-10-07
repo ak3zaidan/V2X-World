@@ -350,7 +350,14 @@ impl Experiment {
                 o
             })
             .collect();
-        let unchanged: Vec<&str> = self.rows.iter().filter(|r| !r.significant).map(|r| r.metric.as_str()).collect();
+        // The unchanged metrics with their values too (one short string per arm): the
+        // person often asks about one of them, and a value here saves a round trip.
+        let unchanged: serde_json::Map<String, Value> = self
+            .rows
+            .iter()
+            .filter(|r| !r.significant)
+            .map(|r| (r.metric.clone(), json!(r.values.iter().map(opt).collect::<Vec<_>>().join(" / "))))
+            .collect();
         json!({
             "arms": self.labels,
             "significant": sig,
@@ -467,7 +474,7 @@ mod tests {
         assert_eq!(x.caveats.len(), 1, "same seed: one caveat");
         let c = x.compact();
         assert_eq!(c["significant"][0]["pct"][0], "+140%");
-        assert!(c["unchanged"].as_array().is_some_and(|u| u.iter().any(|m| m == "pdr")));
+        assert_eq!(c["unchanged"]["pdr"], "0.95 / 0.952");
     }
 
     #[test]

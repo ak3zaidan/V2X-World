@@ -392,7 +392,9 @@ pub fn agent_system_prompt() -> String {
      7. Ask instead of running when the request has no clear subject (\"make it better\", \
      \"compare them\" with nothing run yet) or cannot be done here (a radio, place, \
      attack or scale this simulator does not have): say in one or two sentences what is \
-     possible and ask one question. Do not substitute something else silently.\n\
+     possible and ask one question. Do not substitute something else silently. A run \
+     longer than 300 simulated seconds needs the person's say-so: ask first, without a \
+     tool call.\n\
      8. A vague question about the current state (\"is the network healthy?\") is about \
      the run the engine is serving: analyse_current_run or live_metrics, not a new run.\n\
      9. For step-by-step control (pause at a time, seek, inspect a node) use run_control, \
