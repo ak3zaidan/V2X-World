@@ -78,6 +78,19 @@ pub enum CliError {
         what: String,
     },
 
+    /// The run was asked to stop (Ctrl-C, `kill`, the terminal closing) and stopped at a
+    /// checkpoint, every output up to it complete.
+    #[error(
+        "stopped on request at {at_s} simulated seconds, with a checkpoint; carry on with \
+         `v2xw resume {checkpoint}`"
+    )]
+    StoppedOnRequest {
+        /// The simulated second it stopped at.
+        at_s: f64,
+        /// The checkpoint it wrote.
+        checkpoint: String,
+    },
+
     /// The run stopped at `--stop-at`, after writing its checkpoint, as a crash would stop
     /// it: the open recording segment is left unfinished. For testing resume.
     #[error("stopped at {at_s} simulated seconds, as asked (--stop-at); resume it with `v2xw resume`")]

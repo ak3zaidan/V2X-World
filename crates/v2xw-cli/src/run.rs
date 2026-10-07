@@ -578,14 +578,61 @@ fn execute(
     let mut next_progress = progress_every_ns.map(|e| next_multiple_after(start_ns, e));
     let mut next_checkpoint =
         checkpoint_every_ns.map(|e| next_multiple_after(start_ns.saturating_add(1), e) - 1);
+    // A checkpoint on request (Ctrl-C, `kill`, the terminal closing: `crate::signal`) is
+    // looked for once a simulated second, at the same one-nanosecond-early boundary.
+    const POLL_NS: u64 = 1_000_000_000;
+    let mut next_poll = checkpoint_every_ns.map(|_| next_multiple_after(start_ns.saturating_add(1), POLL_NS) - 1);
+    if checkpoint_every_ns.is_some() {
+        crate::signal::install();
+    }
     let stop_at_ns = opts.long.stop_at_s.map(|s| (s * 1e9).round() as u64);
+    let every_s = checkpoint_every_ns.map_or(0.0, |e| e as f64 / 1e9);
+    let cwd = std::env::current_dir()
+        .map(|d| d.display().to_string())
+        .unwrap_or_default();
+    // Everything a checkpoint at `c` records, once the segment is rolled and the metrics
+    // flushed.
+    let checkpoint_at = |c: u64,
+                         segments_done: u32,
+                         metrics_bytes: u64,
+                         tally: &mut Tally<Sink>,
+                         progress: &crate::progress::Progress| Checkpoint {
+        format: crate::checkpoint::FORMAT.to_string(),
+        method: "replay".to_string(),
+        scenario_name: name.clone(),
+        scenario_hash: manifest.scenario_hash.clone(),
+        world_hash: manifest.world_hash.clone(),
+        build_utc: inv.build_utc.clone(),
+        scenario_path: opts.scenario.display().to_string(),
+        duration_override_s: opts.duration_s,
+        rate_override_veh_per_h: opts.rate_veh_per_h,
+        cwd: cwd.clone(),
+        keyframe_ms: opts.keyframe_ms,
+        node_only: opts.node_only,
+        record: opts.record,
+        record_level: level,
+        attach_world: opts.attach_world,
+        verify: opts.verify,
+        every_s,
+        progress_every_s: progress_every_ns.map(|e| e as f64 / 1e9),
+        t_ns: c,
+        record_digest: tally.record_digest_hex(),
+        records: tally.records(),
+        metric_samples: tally.metric_count(),
+        metrics_bytes,
+        segments_done,
+        progress_bytes: progress.bytes(),
+        wall_s: progress.wall_s(),
+        resumes,
+        container: tally.inner_mut().totals(),
+    };
     let run_watch = Stopwatch::start();
     loop {
-        let target = match (next_progress, next_checkpoint) {
-            (Some(a), Some(b)) => a.min(b),
-            (Some(a), None) | (None, Some(a)) => a,
-            (None, None) => u64::MAX,
-        };
+        let target = [next_progress, next_checkpoint, next_poll]
+            .into_iter()
+            .flatten()
+            .min()
+            .unwrap_or(u64::MAX);
         let done = engine.advance(target, &mut tally)?;
         let t_ns = if done { engine.now() } else { target };
         if let Some(p) = next_progress
@@ -600,56 +647,37 @@ fn execute(
             progress.line(t_ns as f64 / 1e9, duration_s, &engine.census(), extra);
             next_progress = progress_every_ns.map(|e| next_multiple_after(p, e));
         }
-        if !done
-            && let (Some(c), Some(every)) = (next_checkpoint, checkpoint_every_ns)
-            && c == target
-        {
-            if c.saturating_add(1) < horizon_ns {
-                let segments_done = tally.inner_mut().roll()?;
-                let metrics_bytes = match tally.metrics_mut() {
-                    Some(m) => m.flush()?,
-                    None => 0,
-                };
-                Checkpoint {
-                    format: crate::checkpoint::FORMAT.to_string(),
-                    method: "replay".to_string(),
-                    scenario_name: name.clone(),
-                    scenario_hash: manifest.scenario_hash.clone(),
-                    world_hash: manifest.world_hash.clone(),
-                    build_utc: inv.build_utc.clone(),
-                    scenario_path: opts.scenario.display().to_string(),
-                    duration_override_s: opts.duration_s,
-                    rate_override_veh_per_h: opts.rate_veh_per_h,
-                    cwd: std::env::current_dir()
-                        .map(|d| d.display().to_string())
-                        .unwrap_or_default(),
-                    keyframe_ms: opts.keyframe_ms,
-                    node_only: opts.node_only,
-                    record: opts.record,
-                    record_level: level,
-                    attach_world: opts.attach_world,
-                    verify: opts.verify,
-                    every_s: every as f64 / 1e9,
-                    progress_every_s: progress_every_ns.map(|e| e as f64 / 1e9),
-                    t_ns: c,
-                    record_digest: tally.record_digest_hex(),
-                    records: tally.records(),
-                    metric_samples: tally.metric_count(),
-                    metrics_bytes,
-                    segments_done,
-                    progress_bytes: progress.bytes(),
-                    wall_s: progress.wall_s(),
-                    resumes,
-                    container: tally.inner_mut().totals(),
-                }
+        let scheduled = !done && next_checkpoint == Some(target);
+        let asked = !done && next_poll == Some(target) && crate::signal::requested();
+        if (scheduled || asked) && target.saturating_add(1) < horizon_ns {
+            let segments_done = tally.inner_mut().roll()?;
+            let metrics_bytes = match tally.metrics_mut() {
+                Some(m) => m.flush()?,
+                None => 0,
+            };
+            checkpoint_at(target, segments_done, metrics_bytes, &mut tally, &progress)
                 .write(out_dir)?;
-                progress.note(&format!(
-                    "checkpoint at {} ({})",
-                    crate::progress::fmt_sim((c + 1) as f64 / 1e9),
-                    out_dir.join(crate::checkpoint::FILE).display()
-                ));
+            progress.note(&format!(
+                "checkpoint at {} ({})",
+                crate::progress::fmt_sim((target + 1) as f64 / 1e9),
+                out_dir.join(crate::checkpoint::FILE).display()
+            ));
+            if asked {
+                // Stopped on request: every output up to the checkpoint is complete, the
+                // segment opened by the roll holds nothing and is removed.
+                let _ = progress.flush();
+                tally.into_inner().discard_open();
+                return Err(CliError::StoppedOnRequest {
+                    at_s: (target + 1) as f64 / 1e9,
+                    checkpoint: out_dir.join(crate::checkpoint::FILE).display().to_string(),
+                });
             }
-            next_checkpoint = Some(c.saturating_add(every));
+        }
+        if scheduled {
+            next_checkpoint = checkpoint_every_ns.map(|e| target.saturating_add(e));
+        }
+        if !done && next_poll == Some(target) {
+            next_poll = Some(target.saturating_add(POLL_NS));
         }
         // `--stop-at`: stop here as a crash would, after the outputs have moved on past the
         // last checkpoint — the metrics written so far are on disk, the progress line is

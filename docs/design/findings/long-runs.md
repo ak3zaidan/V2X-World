@@ -75,9 +75,12 @@ has the whole design):
   `metrics.json` and `progress.jsonl` back to the checkpoint and carries on.
 
 The finished run equals the uninterrupted one by digest — record digest, content digest over
-every recorded message, `metrics.json`, `run-report.json`, the manifest's data digest
-(`crates/v2xw-cli/tests/longrun.rs`, and RESUME_MEASURED with the release binary and a real
-`kill -9`).
+every recorded message, `metrics.json`, `run-report.json` and every file digest in the
+manifest except the MCAP files' own bytes, which are not reproducible even between two
+uninterrupted runs (the container writes its summary from a `HashMap`; that is why the content
+digest exists). `crates/v2xw-cli/tests/longrun.rs` proves it on a 90 s run stopped 15 s past
+its 30 s checkpoint, with the metrics and the progress of those 15 s already on disk; with the
+resume not cutting `metrics.json` back, it fails. RESUME_MEASURED
 
 **What it does not do: store the engine's memory.** Resuming at hour 40 replays 40 hours
 (REPLAY_COST). A memory-image checkpoint needs every type the engine's state reaches to be
@@ -100,4 +103,26 @@ GROWTH_SECTION
 
 ## Not done
 
-NOT_DONE_SECTION
+* **A memory-image checkpoint** (above). Resume replays.
+* **Signal plans by time of day.** The plan data does not allow it: the worlds come from
+  OpenStreetMap, which carries where the signals are and not their timing; the importer
+  derives one fixed, coordinated plan per junction (`world.signals.coordinate`). NYC DOT
+  does not publish per-intersection time-of-day timing as open data. A mechanism for
+  scenario-declared plan windows (`{from: "22:00", cycle_s: …}`) without the data behind it
+  would be an invented night plan, so none was added.
+* **Vehicles that come back.** Every vehicle is a new device that drives once and leaves; a
+  real fleet is the same cars every day. So the SCMS sees a new enrolment for every trip, its
+  device records grow with trips (about 2,300 a day at the manhattan-day rate) rather than
+  with the fleet, and a weekly i-period's top-up — which a car needs once a week — happens in
+  a run only because every new device fetches its next period on joining. A device pool that
+  spawned trips onto returning devices is the change that would make a week of credentials
+  look like a week; it touches the node-id contract the live server's projector relies on.
+* **An i-period boundary inside a day.** The SCMS epoch is the run's start, so a run shorter
+  than a week never crosses a weekly i-period boundary; a run of eight days does.
+* **Downsampling stored data.** Nothing stored is downsampled: the engine's metric history
+  keeps every sample (16 bytes each), the charts ask for a binned display (`metrics.query`
+  with a bin count) and the expanded chart decimates only its drawing.
+* **The page attaching to a running CLI run.** A headless `v2xw run` serves nothing; the page
+  watches it through its finished recording segments (open one in the run browser) or by
+  `v2xw-server --resume <out>/checkpoint.json`, which computes to the checkpoint and serves
+  the run from there.

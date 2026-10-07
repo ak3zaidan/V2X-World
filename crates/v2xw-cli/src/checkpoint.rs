@@ -359,6 +359,15 @@ impl Sink {
         Ok((files, had_writer.then_some(self.totals)))
     }
 
+    /// Finishes nothing more: the open segment, which holds nothing yet (it was opened by the
+    /// roll at a checkpoint taken on request), is closed and removed.
+    pub fn discard_open(mut self) {
+        if let (Some(w), Some(seg)) = (self.writer.take(), self.segmented.as_ref()) {
+            let _ = w.finish();
+            let _ = std::fs::remove_file(seg.dir.join(segment_name(seg.next.saturating_sub(1))));
+        }
+    }
+
     /// Drops the open segment without finishing it — what a crash leaves behind. Test use.
     pub fn abandon(mut self) {
         if let Some(w) = self.writer.take() {

@@ -37,6 +37,7 @@ pub mod import;
 pub mod info;
 pub mod progress;
 pub mod run;
+pub mod signal;
 pub mod stream;
 pub mod tally;
 pub mod validate;

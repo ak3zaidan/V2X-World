@@ -107,6 +107,17 @@ impl Progress {
         }
     }
 
+    /// Flushes `progress.jsonl`.
+    ///
+    /// # Errors
+    /// The I/O error, if the flush failed.
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        match self.file.as_mut() {
+            Some(f) => f.flush(),
+            None => Ok(()),
+        }
+    }
+
     /// Bytes of `progress.jsonl` written so far, for a checkpoint.
     #[must_use]
     pub fn bytes(&self) -> u64 {
