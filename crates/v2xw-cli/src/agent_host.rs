@@ -12,6 +12,8 @@
 //! | `POST /agent/reset` | forgets the conversation |
 //! | `GET  /agent/watch?after=` | the always-on watcher: what it noticed about the runs since `after`, and where it is |
 //! | `GET  /agent/summary` | the last finished run's summary: verdict, layers, problems, overview, analysis |
+//! | `POST /agent/compare-signatures {document?, scenario?, schemes?, duration_s?}` | runs one scenario under several signature schemes on a thread (`crate::sigcompare`) |
+//! | `GET  /agent/compare-signatures` | where that comparison is, and its result once finished |
 //!
 //! # Always on
 //!
@@ -231,6 +233,10 @@ impl AgentHost {
             .route("/agent/reset", post(reset))
             .route("/agent/watch", get(watch))
             .route("/agent/summary", get(summary))
+            .route(
+                "/agent/compare-signatures",
+                get(compare_status).post(compare_start),
+            )
             .with_state(self.clone())
     }
 
@@ -563,4 +569,28 @@ async fn summary(State(host): State<AgentHost>, headers: HeaderMap) -> Response 
                    "note": "no run has finished since the engine started"}),
         ),
     }
+}
+
+async fn compare_start(
+    State(host): State<AgentHost>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if !host.authorized(&headers) {
+        return unauthorized();
+    }
+    let req =
+        serde_json::from_slice::<crate::sigcompare::CompareRequest>(&body).unwrap_or_default();
+    match tokio::task::spawn_blocking(move || crate::sigcompare::start(req)).await {
+        Ok(Ok(job)) => reply(StatusCode::ACCEPTED, json!(job)),
+        Ok(Err(e)) => reply(StatusCode::CONFLICT, json!({"error": e})),
+        Err(e) => reply(StatusCode::INTERNAL_SERVER_ERROR, json!({"error": e.to_string()})),
+    }
+}
+
+async fn compare_status(State(host): State<AgentHost>, headers: HeaderMap) -> Response {
+    if !host.authorized(&headers) {
+        return unauthorized();
+    }
+    reply(StatusCode::OK, json!({"job": crate::sigcompare::job()}))
 }

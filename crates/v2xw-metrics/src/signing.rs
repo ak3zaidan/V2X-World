@@ -16,7 +16,7 @@
 //! | `sig_cert_airtime_share` | Σ certificate octets / Σ octets on the air | ratio |
 //! | `sig_signer_id_airtime_share` | Σ signer-identifier octets / Σ octets on the air | ratio |
 //! | `sig_security_airtime_share` | Σ envelope octets / Σ octets on the air | ratio |
-//! | `sig_security_airtime_share_nocert` | Σ (envelope − certificate) octets / Σ octets on the air | ratio |
+//! | `sig_security_airtime_share_nocert` | Σ (envelope − certificate) octets / Σ (octets on the air − certificate) | ratio |
 //! | `sig_sign_latency` | t_signed − t_sign_start, per scheme@engine | ms |
 //! | `sig_sign_wait` | t_sign_start − t_generated | ms |
 //! | `sig_verify_latency` | t_done − t_start of a verification, per scheme@engine | ms |
@@ -57,7 +57,7 @@ use v2xw_core::time::{Duration, SimTime};
 
 use crate::cards;
 use crate::channels::{
-    ChannelView, MacCbrView, NetFragView, NodeRxView, NodeTxView, NodeVerifyView, RxFate,
+    ChannelView, MacCbrView, NetFragView, NodeRxView, NodeTxView, RxFate,
     SignerId, VerifyOutcome, decode, FragOutcome,
 };
 use crate::def::{Agg, DEFAULT_LEVEL, Dim, DimValue, Dims, MetricDef, MetricSample, SampleValue};
@@ -112,6 +112,30 @@ pub fn metric_names() -> Vec<String> {
         .into_iter()
         .map(|d| d.name)
         .collect()
+}
+
+/// The drop reason a full verification queue records (`v2xw_node::queue::DropCause`).
+pub const VERIFY_OVERFLOW: &str = "verify_overflow";
+
+/// `node.verify` as this provider reads it: the shared view plus the drop reason, which
+/// tells a full queue from a policy choice.
+#[derive(Debug, Clone, Deserialize)]
+struct VerifyRec {
+    t_enqueue: SimTime,
+    #[serde(default)]
+    t_start: Option<SimTime>,
+    #[serde(default)]
+    t_done: Option<SimTime>,
+    node: NodeId,
+    #[serde(default)]
+    cost_us: Option<u64>,
+    outcome: VerifyOutcome,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+impl ChannelView for VerifyRec {
+    const CHANNEL: &'static str = "node.verify";
 }
 
 /// The subset of `backend.state` this provider reads.
@@ -340,9 +364,9 @@ impl SigningProvider {
                   "security is over 60 % of the air: most of the channel carries signatures"],
                   "engineering choice anchored on the ECDSA P-256 BSM of SAE J2945/1")),
             share("sig_security_airtime_share_nocert", "Σ envelope octets less certificates",
-              "Σ octets on the air",
-              "The share of the octets on the air that are the security envelope, not counting \
-               attached certificates: what signing alone costs.",
+              "Σ octets on the air less certificates",
+              "The security envelope's share of the air had no certificate been attached: \
+               what signing alone costs.",
               "the PHY preamble"),
             m("sig_sign_latency", "ms", Agg::Distribution, Quantum::TIME_MS,
               "Time to make one signature (signer start to signature done), labelled \
@@ -500,7 +524,9 @@ impl SigningProvider {
         let w = &mut self.w;
         w.air += v.bytes_on_wire;
         w.frames += 1;
-        let key = (v.node, v.msg.unwrap_or(u64::MAX - w.frames));
+        // The fragments of one message are separate frames with separate frame ids; what
+        // they share is the sender and the generation instant.
+        let key = (v.node, v.t_generated.unwrap_or(u64::MAX - w.frames));
         let n = w.messages.entry(key).or_insert(0);
         *n += 1;
         if *n > 1 {
@@ -530,7 +556,7 @@ impl SigningProvider {
         }
     }
 
-    fn on_verify(&mut self, v: &NodeVerifyView) {
+    fn on_verify(&mut self, v: &VerifyRec) {
         let w = &mut self.w;
         *w.verify_arrivals.entry(v.node).or_insert(0) += 1;
         match v.outcome {
@@ -550,7 +576,12 @@ impl SigningProvider {
                     w.late.observe((d - v.t_enqueue) as f64 / 1e6 > LATE_MS);
                 }
             }
-            VerifyOutcome::Dropped => w.dropped.observe(true),
+            // Only a full queue is the verifier failing to keep up; a policy drop is a choice.
+            VerifyOutcome::Dropped => {
+                if v.reason.as_deref() == Some(VERIFY_OVERFLOW) {
+                    w.dropped.observe(true);
+                }
+            }
             VerifyOutcome::Skipped => {}
         }
     }
@@ -592,7 +623,12 @@ impl SigningProvider {
         }
         for e in &v.entities {
             if e.tier == "ca" {
-                t.ca_signs += e.ops.get("sign").copied().unwrap_or(0);
+                t.ca_signs += e
+                    .ops
+                    .iter()
+                    .filter(|(k, _)| k.ends_with(" sign"))
+                    .map(|(_, n)| *n)
+                    .sum::<u64>();
                 t.ca_busy_ns += e.queue.as_ref().map_or(0, |q| q.busy_ns);
             }
         }
@@ -676,7 +712,7 @@ impl MetricProvider for SigningProvider {
     fn subscribe(&self) -> Vec<ChannelName> {
         vec![
             NodeTxView::channel_name(),
-            NodeVerifyView::channel_name(),
+            VerifyRec::channel_name(),
             NodeRxView::channel_name(),
             NetFragView::channel_name(),
             MacCbrView::channel_name(),
@@ -695,7 +731,7 @@ impl MetricProvider for SigningProvider {
                 Some(v) => self.on_tx(v),
                 None => self.rejected += 1,
             }),
-            NodeVerifyView::CHANNEL => match decode::<NodeVerifyView>(ev) {
+            VerifyRec::CHANNEL => match decode::<VerifyRec>(ev) {
                 Ok(v) => self.on_verify(&v),
                 Err(_) => self.rejected += 1,
             },
@@ -741,7 +777,7 @@ impl MetricProvider for SigningProvider {
         out.push(self.ratio("sig_signer_id_airtime_share", at, w.signer_id as f64, w.air as f64, w.frames));
         out.push(self.ratio("sig_security_airtime_share", at, w.envelope as f64, w.air as f64, w.frames));
         out.push(self.ratio("sig_security_airtime_share_nocert", at,
-            w.envelope.saturating_sub(w.cert) as f64, w.air as f64, w.frames));
+            w.envelope.saturating_sub(w.cert) as f64, w.air.saturating_sub(w.cert) as f64, w.frames));
 
         let label = |engine: &str| {
             let mut d = Dims::new();
@@ -863,7 +899,7 @@ mod tests {
         let tx = |msg: u64, bytes: u64, env: u64, cert: u64, signer: &str| {
             rec("node.tx", json!({"t": 10_000_000, "node": 1, "msg": msg, "bytes_on_wire": bytes,
                 "payload_bytes": 100, "envelope_bytes": env, "cert_bytes": cert, "signer": signer,
-                "t_generated": 0, "t_sign_start": 1_000_000, "t_signed": 3_000_000}))
+                "t_generated": msg, "t_sign_start": 1_000_000, "t_signed": 3_000_000}))
         };
         for r in [tx(7, 1000, 1500, 0, "digest"), tx(7, 1000, 1500, 0, "digest"), tx(8, 400, 200, 100, "certificate")] {
             p.on_event(&r);

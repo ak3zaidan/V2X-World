@@ -195,7 +195,7 @@ const ROWS: &[(&str, &str, Stat, &str)] = &[
     ("Latency and channel", "e2e_latency", Stat::P95, "End-to-end latency p95 (all flows)"),
     ("Latency and channel", "cbr", Stat::Point, "Channel busy ratio (measured)"),
     ("Latency and channel", "sig_cbr_extra", Stat::Point, "Channel busy ratio from security bytes (estimate)"),
-    ("Latency and channel", "pdr", Stat::Point, "Packet delivery ratio (all distances)"),
+    ("Latency and channel", "pdr", Stat::Point, "Packet delivery ratio within 100 m"),
     ("Backend", "sig_backend_bytes", Stat::Point, "Credential bytes to and from devices per second"),
     ("Backend", "sig_ca_sign_rate", Stat::Point, "CA signatures per second"),
     ("Backend", "sig_ca_busy", Stat::Point, "CA service time per second"),
@@ -207,7 +207,19 @@ const ROWS: &[(&str, &str, Stat, &str)] = &[
 /// [`CliError::BadArgument`] for an unknown scheme or one the scenario's hardware cannot
 /// price, and whatever the runner or a run reports.
 pub fn run(options: &CompareOptions) -> Result<Comparison> {
-    let mut scenario = v2xw_engine::Scenario::load(&options.scenario)?;
+    let scenario = v2xw_engine::Scenario::load(&options.scenario)?;
+    run_scenario(scenario, options)
+}
+
+/// [`run`] over a scenario already in memory — what the Studio's button sends, the
+/// scenario the engine is serving. `options.scenario` is not read.
+///
+/// # Errors
+/// As [`run`].
+pub fn run_scenario(
+    mut scenario: v2xw_engine::Scenario,
+    options: &CompareOptions,
+) -> Result<Comparison> {
     let mut schemes: Vec<String> = if options.schemes.is_empty() {
         DEFAULT_SCHEMES.iter().map(|s| (*s).to_string()).collect()
     } else {
@@ -362,7 +374,10 @@ pub fn build(
         let values: Vec<Option<f64>> = samples
             .iter()
             .map(|run| {
-                let mine: Vec<&MetricSample> = run.iter().filter(|s| s.metric == *metric).collect();
+                let mine: Vec<&MetricSample> = run
+                    .iter()
+                    .filter(|s| s.metric == *metric && dims_match(metric, s))
+                    .collect();
                 if let Some(s) = mine.first() {
                     unit.clone_from(&s.unit);
                 }
@@ -442,6 +457,15 @@ pub fn build(
                 .to_string(),
         ],
         files: Vec::new(),
+    }
+}
+
+/// Which of a metric's dimension bins a row reads: delivery within 100 m, the radius the
+/// 3GPP reliability requirement is read at; every bin otherwise.
+fn dims_match(metric: &str, s: &MetricSample) -> bool {
+    match metric {
+        "pdr" => s.dims.iter().any(|(d, v)| d.to_string() == "radius" && v.to_string() == "100m"),
+        _ => true,
     }
 }
 
@@ -620,4 +644,126 @@ pub fn format(c: &Comparison) -> String {
         s.push_str(&format!("  {f}\n"));
     }
     s
+}
+
+/// The comparison the Studio started, if any: `POST /agent/compare-signatures` starts one
+/// on a thread, `GET /agent/compare-signatures` reads where it is.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct CompareJob {
+    /// Whether a comparison is running.
+    pub running: bool,
+    /// The schemes it compares.
+    pub schemes: Vec<String>,
+    /// How many runs have finished, read from the runs directory.
+    pub done: usize,
+    /// Where it writes.
+    pub out: Option<String>,
+    /// Why it failed.
+    pub error: Option<String>,
+    /// The finished comparison.
+    pub result: Option<Comparison>,
+}
+
+static JOB: std::sync::Mutex<Option<CompareJob>> = std::sync::Mutex::new(None);
+
+/// What the Studio's button asks for.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CompareRequest {
+    /// A scenario path the server can read, relative to where it was started.
+    #[serde(default)]
+    pub scenario: Option<String>,
+    /// The scenario document itself, as the engine serves it.
+    #[serde(default)]
+    pub document: Option<serde_json::Value>,
+    /// The scheme ids; the default four when empty.
+    #[serde(default)]
+    pub schemes: Vec<String>,
+    /// Simulated seconds per run.
+    #[serde(default)]
+    pub duration_s: Option<f64>,
+}
+
+/// The shipped scenario a request with no scenario compares.
+pub const SHIPPED: &str = "scenarios/compare-signature-schemes.yaml";
+
+/// Starts a comparison on a thread, refusing while one runs.
+///
+/// # Errors
+/// A message when one is already running or the scenario cannot be read.
+pub fn start(req: CompareRequest) -> core::result::Result<CompareJob, String> {
+    let scenario = match (&req.document, &req.scenario) {
+        (Some(doc), _) => serde_json::from_value::<v2xw_engine::Scenario>(doc.clone())
+            .map_err(|e| format!("the scenario the engine serves did not parse: {e}"))?,
+        (None, Some(path)) => v2xw_engine::Scenario::load(path).map_err(|e| e.to_string())?,
+        (None, None) => v2xw_engine::Scenario::load(SHIPPED).map_err(|e| e.to_string())?,
+    };
+    let mut guard = JOB
+        .lock()
+        .map_err(|_| "the comparison's lock is poisoned".to_string())?;
+    if guard.as_ref().is_some_and(|j| j.running) {
+        return Err("a comparison is already running".to_string());
+    }
+    let schemes: Vec<String> = if req.schemes.is_empty() {
+        DEFAULT_SCHEMES.iter().map(|s| (*s).to_string()).collect()
+    } else {
+        req.schemes.clone()
+    };
+    // One directory per scheme list and duration, so the runner's journal resumes a repeat
+    // of the same request and never refuses a different one.
+    let tag = v2xw_core::hash::sha256_hex(
+        format!("{}|{:?}|{:?}", scenario.meta.name, schemes, req.duration_s).as_bytes(),
+    );
+    let out = PathBuf::from("runs").join(format!("signatures-{}", &tag[..12]));
+    let job = CompareJob {
+        running: true,
+        schemes: schemes.clone(),
+        done: 0,
+        out: Some(out.display().to_string()),
+        error: None,
+        result: None,
+    };
+    *guard = Some(job.clone());
+    drop(guard);
+    let options = CompareOptions {
+        scenario: PathBuf::new(),
+        schemes,
+        out: Some(out),
+        duration_s: req.duration_s,
+        build_utc: None,
+        record: false,
+    };
+    std::thread::spawn(move || {
+        let outcome = run_scenario(scenario, &options);
+        if let Ok(mut g) = JOB.lock()
+            && let Some(j) = g.as_mut()
+        {
+            j.running = false;
+            match outcome {
+                Ok(c) => {
+                    j.done = c.schemes.len();
+                    j.result = Some(c);
+                }
+                Err(e) => j.error = Some(e.to_string()),
+            }
+        }
+    });
+    Ok(job)
+}
+
+/// Where the Studio's comparison is.
+#[must_use]
+pub fn job() -> Option<CompareJob> {
+    let mut j = JOB.lock().ok()?.clone()?;
+    if j.running
+        && let Some(out) = &j.out
+    {
+        j.done = std::fs::read_dir(Path::new(out).join(RUNS_DIR))
+            .map(|d| {
+                d.filter_map(core::result::Result::ok)
+                    .filter(|e| e.path().join("metrics.json").exists())
+                    .count()
+            })
+            .unwrap_or(0);
+    }
+    Some(j)
 }

@@ -48,8 +48,13 @@ time:
 actors:
   vehicles:
     demand:
+      # A fleet on the map within seconds rather than a trickle: a high arrival rate capped
+      # at 40 trips (scenarios/scale/base.yaml explains the arrangement), so a short run
+      # already has neighbours to verify.
       kind: mobility/demand/poisson
-      rate_veh_per_h: 900.0
+      rate_veh_per_h: 20000.0
+      params:
+        max_total_vehicles: 40
 
 metrics: [all, signing]
 
