@@ -39,6 +39,116 @@ pub enum Command {
     Info(InfoArgs),
     /// Expand a scenario's `experiment` block into runs, execute them and aggregate them.
     Experiment(ExperimentArgs),
+    /// Prompt the agent: it builds a scenario, runs it, analyses it and prints a report.
+    Agent(AgentArgs),
+    /// Serve a run with the agent's endpoints beside the engine's (what the Studio uses).
+    Serve(ServeArgs),
+}
+
+/// `v2xw agent`.
+#[derive(Debug, clap::Args)]
+pub struct AgentArgs {
+    /// What to simulate and find out, in plain words.
+    #[arg(default_value = "")]
+    pub prompt: String,
+
+    /// A running engine to drive, e.g. http://127.0.0.1:8787. Without it an engine is
+    /// started in this process with --scenario and stopped afterwards.
+    #[arg(long, value_name = "URL")]
+    pub engine: Option<String>,
+
+    /// The scenario an in-process engine starts with.
+    #[arg(long, default_value = "scenarios/phase1-grid.yaml")]
+    pub scenario: PathBuf,
+
+    /// Run without a language model even when ANTHROPIC_API_KEY is set: the scenario runs
+    /// as shipped and the report is the analyst's alone.
+    #[arg(long)]
+    pub no_model: bool,
+
+    /// Only analyse the run the engine is serving; start nothing.
+    #[arg(long)]
+    pub analyse: bool,
+
+    /// The scenario a model-less run uses: `current` or a preset id.
+    #[arg(long, default_value = "current")]
+    pub base: String,
+
+    /// The engine's bearer token, when it requires one.
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Print the report as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl AgentArgs {
+    /// The library options this asks for.
+    pub fn to_options(&self) -> crate::agent::AgentOptions {
+        crate::agent::AgentOptions {
+            prompt: self.prompt.clone(),
+            engine: self.engine.clone(),
+            scenario: self.scenario.clone(),
+            no_model: self.no_model,
+            analyse_only: self.analyse,
+            base: self.base.clone(),
+            token: self.token.clone(),
+            json: self.json,
+        }
+    }
+}
+
+/// `v2xw serve`.
+#[derive(Debug, clap::Args)]
+pub struct ServeArgs {
+    /// The scenario to serve; without it the synthetic fixture runs.
+    #[arg(long)]
+    pub scenario: Option<PathBuf>,
+
+    /// Serve only the agent's endpoints, in front of an engine already running here.
+    #[arg(long, value_name = "URL")]
+    pub attach: Option<String>,
+
+    /// Bind address (a non-loopback bind needs --token).
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: std::net::IpAddr,
+
+    /// TCP port.
+    #[arg(long, default_value_t = 8787)]
+    pub port: u16,
+
+    /// Bearer token required on every request.
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Start the run paused at t = 0.
+    #[arg(long)]
+    pub paused: bool,
+
+    /// Multiple of real time; 0 is unthrottled.
+    #[arg(long, default_value_t = 1.0)]
+    pub speed: f64,
+
+    /// Write the MCAP recording here.
+    #[arg(long)]
+    pub record: Option<PathBuf>,
+}
+
+impl ServeArgs {
+    /// The library options this asks for.
+    pub fn to_options(&self) -> crate::agent::ServeOptions {
+        crate::agent::ServeOptions {
+            scenario: self.scenario.clone(),
+            attach: self.attach.clone(),
+            host: self.host,
+            port: self.port,
+            token: self.token.clone(),
+            paused: self.paused,
+            speed: self.speed,
+            record: self.record.clone(),
+        }
+    }
 }
 
 /// `v2xw run`.

@@ -9,6 +9,7 @@
 //! | [`import`] | imports an OpenStreetMap extract into the three world formats |
 //! | [`info`] | prints a recording's manifest, channels and verification report |
 //! | [`experiment`] | expands a scenario's sweep, runs it, aggregates it, resumes it |
+//! | [`agent`] | `v2xw agent "<prompt>"`: the agent harness end to end; `v2xw serve`: the engine with the agent's endpoints |
 //!
 //! Everything the tool does is a call into a library crate. The one thing it adds is the
 //! clock: [`v2xw_engine::Engine::build`] takes its manifest timestamp as an argument and
@@ -23,6 +24,8 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod agent;
+pub mod agent_host;
 pub mod cli;
 pub mod error;
 pub mod experiment;

@@ -12,7 +12,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use v2xw_cli::cli::{Cli, Command, ExperimentCommand};
-use v2xw_cli::{experiment, fmt, import, info, run, validate};
+use v2xw_cli::{agent, experiment, fmt, import, info, run, validate};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -43,6 +43,8 @@ fn main() -> ExitCode {
 
 fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
     match &cli.command {
+        Command::Agent(args) => agent::agent(&args.to_options()),
+        Command::Serve(args) => agent::serve(&args.to_options()),
         Command::Run(args) => {
             let outcome = run::run(&args.to_options())?;
             if args.json {

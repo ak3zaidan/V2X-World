@@ -52,6 +52,10 @@ pub enum CliError {
         problem: String,
     },
 
+    /// The agent harness or the server it drives failed.
+    #[error("agent: {0}")]
+    Agent(String),
+
     /// JSON could not be produced.
     #[error("cannot serialise {what}: {source}")]
     Json {

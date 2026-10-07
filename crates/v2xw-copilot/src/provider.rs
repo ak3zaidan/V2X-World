@@ -66,6 +66,13 @@ pub struct ChatMessage {
     pub tool_calls: Vec<ToolCall>,
     /// The call this message answers, on a tool message.
     pub tool_call_id: Option<String>,
+    /// The provider's own content blocks for an assistant message, kept verbatim so they
+    /// can be sent back unchanged on the next request. Claude's Messages API needs this:
+    /// a reply's `thinking` and `fallback` blocks must be replayed exactly as they came,
+    /// and a history rebuilt from the text and tool calls alone would break the prefix
+    /// the API checks. `None` for anything not produced by a provider that sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_blocks: Option<Value>,
 }
 
 impl ChatMessage {
@@ -77,6 +84,7 @@ impl ChatMessage {
             content: Some(text.into()),
             tool_calls: Vec::new(),
             tool_call_id: None,
+            provider_blocks: None,
         }
     }
 
@@ -106,6 +114,7 @@ impl ChatMessage {
             content: text,
             tool_calls,
             tool_call_id: None,
+            provider_blocks: None,
         }
     }
 
@@ -117,6 +126,7 @@ impl ChatMessage {
             content: Some(text.into()),
             tool_calls: Vec::new(),
             tool_call_id: Some(call_id.into()),
+            provider_blocks: None,
         }
     }
 
@@ -157,6 +167,18 @@ pub trait LlmProvider {
     /// [`crate::CopilotError::Transport`] if the request could not be sent, and
     /// [`crate::CopilotError::Decode`] for a reply that could not be read.
     fn complete(&mut self, request: &ChatRequest) -> Result<Completion>;
+}
+
+/// A boxed provider is a provider, so a host can pick one at start-up (Claude, OpenAI)
+/// and hold it behind one type.
+impl LlmProvider for Box<dyn LlmProvider + Send> {
+    fn name(&self) -> &str {
+        (**self).name()
+    }
+
+    fn complete(&mut self, request: &ChatRequest) -> Result<Completion> {
+        (**self).complete(request)
+    }
 }
 
 /// A provider that hands back prepared completions, in order.
