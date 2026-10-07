@@ -488,7 +488,7 @@ export function TimeControls(): React.JSX.Element {
       <button
         type="button"
         className="icon"
-        title={caps.step.enabled ? "Advance one mobility step and stop" : caps.step.why}
+        title={caps.step.enabled ? `Step forward ${Math.round((hello?.mobilityStepNs ?? 1e8) / 1e6)} ms of simulated time, then stop` : caps.step.why}
         disabled={!caps.step.enabled}
         onClick={() => void call(() => engine.request("run.step", { unit: "step", count: 1 }))}
         data-testid="step"
@@ -501,8 +501,8 @@ export function TimeControls(): React.JSX.Element {
         className="tb-speed"
         value={String(run.speed)}
         onChange={(e) => void call(() => engine.request("run.speed", { speed: Number(e.target.value) }))}
-        aria-label="Speed"
-        title={caps.speed.why}
+        aria-label="Playback speed"
+        title={caps.speed.enabled ? "Playback speed: how fast simulated time runs against real time" : caps.speed.why}
         data-testid="speed"
         disabled={!caps.speed.enabled}
       >

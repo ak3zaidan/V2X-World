@@ -21,6 +21,7 @@ import { describeError } from "../lib/errors.js";
 import { MetricsSummary } from "../metrics/Summary.js";
 import { AgentIcon, ChartIcon, GearIcon, InspectorIcon, MoreIcon } from "./Icons.js";
 import { MenuButton } from "./Menu.js";
+import { PANELS } from "./panels.js";
 import { openPanel, togglePanel } from "./route.js";
 
 const MOD = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
@@ -196,13 +197,14 @@ function AppMenu(): React.JSX.Element {
           {item(
             "runs",
             "Runs and recordings",
-            "The run on screen, recordings opened from files, and the world under them",
+            "Open a recording from a file, or look at the run on screen",
             close,
             recordings > 0 ? <span className="count">{recordings}</span> : null,
           )}
           {item("compare", "Compare two runs", "Put a second run or a recording beside this one, on one clock", close, compare !== null ? <span className="count">B</span> : null)}
-          {item("commands", "Commands", "Every command this engine accepts, and every one this page has sent", close)}
-          {item("details", "Run details", "Run identity, engine build, timing and stream counters", close, null, "run-details-button")}
+          {item("details", "Run details", "Which engine and build ran this, its timing, and the stream counters", close, null, "run-details-button")}
+          {/* The engine's raw command catalogue is for whoever is developing or scripting it. */}
+          {devDetails ? item("commands", "Engine commands", "Every command this engine accepts, and every one this page has sent", close) : null}
           <div className="menu-rule" />
           <button
             type="button"
@@ -223,21 +225,27 @@ function AppMenu(): React.JSX.Element {
             className="menu-item"
             data-testid="dev-details-toggle"
             onClick={() => useStudio.getState().setDevDetails(!devDetails)}
-            title="Show frame rate, draw calls and the world build report over the viewport, and protocol names and specification references in the explanations"
+            title="Show frame rate, draw calls and the map build report over the scene, the engine's command list, and protocol names and specification references"
           >
             <span className="check-mark" aria-hidden="true">{devDetails ? "✓" : ""}</span>
             <span className="grow">Developer mode</span>
           </button>
           <div className="menu-rule" />
           <div className="menu-note faint shortcuts" aria-label="Keyboard shortcuts">
+            <span>Metrics</span>
+            <kbd>M</kbd>
             <span>Settings</span>
             <kbd>{MOD},</kbd>
             <span>Search the settings</span>
             <kbd>{MOD}F</kbd>
+            <span>Switch camera view</span>
+            <kbd>[ ]</kbd>
+            <span>Frame the traffic</span>
+            <kbd>F</kbd>
+            <span>Next or previous event</span>
+            <kbd>Alt ← →</kbd>
             <span>Close a panel</span>
             <kbd>Esc</kbd>
-            <span>Camera mode</span>
-            <kbd>[ ]</kbd>
           </div>
         </>
       )}
@@ -255,13 +263,19 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
   // Computed on a change of either document, not on every store beat (the store flushes at 5 Hz).
   const edits = useMemo(() => (draft === null ? 0 : changedPointers(scenario, draft).length), [draft, scenario]);
   const pending = edits > 0 || staged;
+  const coversTimebar = panel !== null && PANELS[panel].kind === "fullscreen";
 
   return (
     <header className="topbar">
-      <h1 title="V2X World Simulator">V2X</h1>
+      <h1 title="V2X World Simulator">
+        V2X<span className="brand-sub">Simulator</span>
+      </h1>
       <StatusPill />
       <ScenarioSwitcher />
-      <HeaderClock />
+      {/* The transport bar under the scene shows the clock; a full-screen panel covers that bar,
+          so the header carries it then and only then — two clocks a few hundred pixels apart said
+          the same thing twice. */}
+      {coversTimebar ? <HeaderClock /> : null}
       <span className="grow" />
       <PrimaryAction onConnect={onConnect} />
       <span className="topbar-rule" aria-hidden="true" />
@@ -271,7 +285,7 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
         aria-pressed={panel === "metrics"}
         onClick={() => togglePanel("metrics")}
         data-testid="metrics-button"
-        title="Every measurement of the run, full screen (M)"
+        title="Charts of every measurement in this run, and whether each is in a healthy range (M)"
       >
         <ChartIcon />
         <span>Metrics</span>
@@ -283,7 +297,7 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
         aria-pressed={panel === "agent"}
         onClick={() => togglePanel("agent")}
         data-testid="agent-button"
-        title="Ask the agent to set up, run and explain a simulation"
+        title="Ask the assistant to set up, run or explain a simulation"
       >
         <AgentIcon />
         <span>Agent</span>
@@ -296,7 +310,7 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
         aria-label="Inspector"
         onClick={() => setInspectorOpen(!inspectorOpen)}
         data-testid="inspector-toggle"
-        title={inspectorOpen ? "Hide the inspector" : "Show the inspector: the selected radio, why a value is what it is, and the log"}
+        title={inspectorOpen ? "Hide the details" : "Details of the selected vehicle or roadside unit"}
       >
         <InspectorIcon />
       </button>

@@ -275,13 +275,19 @@ test("every control does what it says", async ({ page }) => {
     return `lane markings ${before} → ${!before} → ${before}`;
   });
   await check("viewport: camera mode", "change the view; a street-level view adopts a vehicle", async () => {
-    await page.getByTestId("camera-mode").selectOption("free");
-    await expect(page.getByTestId("camera-mode")).toHaveValue("free", quick);
-    await page.getByTestId("camera-mode").selectOption("chase");
-    const mode = await page.getByTestId("camera-mode").inputValue();
+    // The camera picker is a menu: each view has a name and a one-line hint (UI cleanup, 2026-10-06).
+    const pick = async (m: string): Promise<void> => {
+      await page.getByTestId("camera-mode").click();
+      await page.getByTestId(`camera-mode-${m}`).click();
+    };
+    const label = page.getByTestId("camera-mode-label");
+    await pick("free");
+    await expect(label).toHaveAttribute("data-mode", "free", quick);
+    await pick("chase");
+    const mode = await label.getAttribute("data-mode");
     const follow = await page.getByTestId("follow-chip").innerText();
-    await page.getByTestId("camera-mode").selectOption("map");
-    await expect(page.getByTestId("camera-mode")).toHaveValue("map", quick);
+    await pick("map");
+    await expect(label).toHaveAttribute("data-mode", "map", quick);
     return `free ok; chase → ${mode} (${follow}); map ok`;
   });
   await check("viewport: key", "fold and unfold the legend", async () => {

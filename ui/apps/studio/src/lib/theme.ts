@@ -38,10 +38,10 @@ export const STATE_SHAPES: Readonly<Record<ActorStateColorKey, "circle" | "trian
 
 /** Human labels for the state palette, in the order 09-ui §10 lists them. */
 export const STATE_LABELS: Readonly<Record<ActorStateColorKey, string>> = {
-  benign: "Benign",
-  attacker: "Attacker (GT)",
-  reported: "Reported",
-  revoked: "Revoked",
+  benign: "Normal",
+  attacker: "Attacker (truth)",
+  reported: "Reported as suspicious",
+  revoked: "Certificates revoked",
   selected: "Selected",
 };
 

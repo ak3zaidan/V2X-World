@@ -157,7 +157,7 @@ export function describeStatus(input: StatusInput): StatusView {
         ? `Nothing is answering at ${input.targetLabel}.`
         : "No engine is answering.",
       detail:
-        "Start a simulator and press Connect. The Details panel lists every address the page tried.",
+        "Start the engine (v2xw-server) and press Connect. Run details, in the ⋯ menu, lists every address the page tried.",
       action: CONNECT,
       banner: true,
     };
@@ -220,7 +220,7 @@ export function describeStatus(input: StatusInput): StatusView {
         headline: input.targetLabel
           ? `No engine answered at ${input.targetLabel}.`
           : "No engine answered.",
-        detail: "Start the engine, then press Connect. The Details panel lists everywhere the page looked.",
+        detail: "Start the engine, then press Connect. Run details, in the ⋯ menu, lists everywhere the page looked.",
         action: CONNECT,
         banner: true,
       };
@@ -259,7 +259,7 @@ export function describeStatus(input: StatusInput): StatusView {
         headline: input.clockText
           ? `Paused at ${input.clockText} of simulated time.`
           : "The run is paused.",
-        detail: "Press Play to let it advance, or step forward one interval at a time.",
+        detail: "Press Play to carry on, or step forward one moment at a time.",
         action: PLAY,
         banner: false,
       };
@@ -268,8 +268,8 @@ export function describeStatus(input: StatusInput): StatusView {
       return {
         tone: "idle",
         chip: "Ready",
-        headline: "Connected to the engine. No run has been started yet.",
-        detail: "Press Run to start the scenario in the panel on the left.",
+        headline: input.scenarioName ? `${input.scenarioName} is loaded and ready.` : "Connected to the engine. No run has been started yet.",
+        detail: "Press Run to start it, or pick another scenario from the list beside the logo.",
         action: RUN,
         banner: true,
       };

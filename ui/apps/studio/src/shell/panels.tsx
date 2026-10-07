@@ -39,7 +39,7 @@ export const PANELS: Readonly<Record<PanelId, PanelSpec>> = {
   // open in a window of its own), so its entry here only names it.
   settings: { id: "settings", title: "Settings", kind: "fullscreen", render: () => null },
   metrics: { id: "metrics", title: "Metrics", kind: "fullscreen", keepMounted: true, render: ({ close }) => <MetricsDashboard close={close} /> },
-  backend: { id: "backend", title: "Backend", kind: "fullscreen", render: ({ close }) => <BackendPanel close={close} /> },
+  backend: { id: "backend", title: "Certificate system", kind: "fullscreen", render: ({ close }) => <BackendPanel close={close} /> },
   // The agent keeps its conversation in its own store (state/agent.ts), so the sheet can unmount.
   agent: { id: "agent", title: "Agent", kind: "sheet", render: () => <AgentPanel /> },
   runs: { id: "runs", title: "Runs and recordings", kind: "sheet", render: () => <RunBrowser /> },

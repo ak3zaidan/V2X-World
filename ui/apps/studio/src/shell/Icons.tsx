@@ -80,3 +80,35 @@ export function AgentIcon(): React.JSX.Element {
     </svg>
   );
 }
+
+/** A camera body and lens: the camera picker over the viewport. */
+export function CameraIcon(): React.JSX.Element {
+  return (
+    <svg {...common}>
+      <path d="M1.8 5h2.6l1.2-1.8h4.8L11.6 5h2.6v7.8H1.8z" />
+      <circle cx="8" cy="8.8" r="2.3" />
+    </svg>
+  );
+}
+
+/** Three stacked sheets: what is drawn over the map. */
+export function LayersIcon(): React.JSX.Element {
+  return (
+    <svg {...common}>
+      <path d="M8 2l6 3-6 3-6-3z" />
+      <path d="M2 8l6 3 6-3" />
+      <path d="M2 11l6 3 6-3" />
+    </svg>
+  );
+}
+
+/** A small key: the legend. */
+export function LegendIcon(): React.JSX.Element {
+  return (
+    <svg {...common}>
+      <circle cx="4" cy="4.5" r="1.4" />
+      <circle cx="4" cy="11.5" r="1.4" />
+      <path d="M7.5 4.5h6M7.5 11.5h6" />
+    </svg>
+  );
+}

@@ -115,7 +115,8 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   });
   expect(clicked).not.toBeNull();
 
-  await expect(page.getByTestId("follow-chip")).not.toHaveText("follow: —", { timeout: 20_000 });
+  // The chip appears only while the camera follows someone.
+  await expect(page.getByTestId("follow-chip")).toBeVisible({ timeout: 20_000 });
   await expect.poll(async () => (await probe(page)).cameraMode, { timeout: 20_000 }).toBe("chase");
 
   // 7. The HUD populates with non-zero telemetry from the §3.5 frames.
