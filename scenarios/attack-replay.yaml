@@ -17,7 +17,7 @@ meta:
   base: midtown-normal.yaml
   name: Attack - replayed and delayed messages
   description: >-
-    Midday Midtown where some cars re-send their old, validly signed messages and others
+    Midday downtown where some cars re-send their old, validly signed messages and others
     send stale timestamps. Signatures check out, so only the plausibility detectors can
     tell; see whether they do, and whether the authority revokes.
   tags: [attack, misbehaviour, replay, detection, revocation, scms]

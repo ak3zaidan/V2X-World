@@ -12,10 +12,10 @@ schema: v2xw/scenario/1
 meta:
   name: radio-faceoff-base
   description: >-
-    Midtown at rush-hour density with signed BSMs and no backend, for comparing radio
+    A downtown at rush-hour density with signed BSMs and no backend, for comparing radio
     technologies on identical traffic.
   authors: [v2xw]
-  tags: [manhattan, radio, comparison, base]
+  tags: [city, radio, comparison, base]
   created: "2026-10-06"
 
 seed: "0xC0FFEE_5EED"
@@ -26,29 +26,16 @@ time:
   mobility_step_ms: 100
   des_resolution: 1us
 
-world:
-  source:
-    kind: osm-xml
-    path: worlds/cache/manhattan.osm.xml
-    bbox:
-      min_lat_deg: 40.7440
-      min_lon_deg: -73.9900
-      max_lat_deg: 40.7620
-      max_lon_deg: -73.9680
-  highway_preset: urban-us-nyc
-  imported_at: "2026-09-18T00:00:00Z"
-  buildings:
-    enabled: true
-    keep_holes: true
-  terrain:
-    dem: null
+# Midtown by default; the picker or --city puts the comparison on any city.
+city: manhattan
 
 actors:
   vehicles:
     equipped_fraction: 1.0
     demand:
       kind: mobility/demand/poisson
-      rate_veh_per_h: 4500.0
+      # Rush-hour density: 4,500 veh/h on Midtown's 119 km of driving lane.
+      rate_veh_per_h_per_lane_km: 37.8
 
 weather:
   initial: clear

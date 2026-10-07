@@ -352,7 +352,10 @@ impl Scenario {
         // A fixed arrival rate was written for the old network's size; restate it per
         // kilometre of driving lane so the new city gets the same density, not the same
         // count. Crowds scale the same way.
-        let old_km = old.and_then(|o| o.drive_lane_km).unwrap_or(REFERENCE_LANE_KM);
+        // A world outside the library (a procedural grid) has no measured size here, so its
+        // fixed rate is kept as written; a library city without a measurement yet is taken
+        // to be the size of Midtown.
+        let old_km = old.map(|o| o.drive_lane_km.unwrap_or(REFERENCE_LANE_KM)).unwrap_or(0.0);
         let demand = &mut self.actors.vehicles.demand;
         if demand.rate_veh_per_h_per_lane_km.is_none()
             && let Some(rate) = demand.rate_veh_per_h
@@ -410,6 +413,21 @@ impl Scenario {
                 && target.as_str().is_some_and(|t| t.trim_start().starts_with("street:"))
             {
                 *target = Value::String("auto".into());
+            }
+        }
+
+        // A jammer standing at the old city's coordinates moves to the new city's busiest
+        // signalised intersection; one following a node or a path keeps doing so (a path in
+        // the old city's metres is dropped to the same intersection).
+        for jammer in &mut self.threats.jammers {
+            if let Some(params) = jammer.params.as_object_mut()
+                && (params.contains_key("position_m") || params.contains_key("path_m"))
+            {
+                params.remove("position_m");
+                params.remove("path_m");
+                params.remove("speed_mps");
+                params.remove("loop_path");
+                params.insert("at".into(), Value::String("busiest-junction".into()));
             }
         }
 
@@ -510,6 +528,24 @@ pub fn adapt_to_world(mut scenario: Scenario, world: &World) -> Scenario {
         scenario.actors.vehicles.demand.rate_veh_per_h_per_lane_km = None;
     }
     place_rsus(&mut scenario, world);
+    let busiest = signalised_by_rank(world)
+        .first()
+        .map(|(p, _)| *p)
+        .unwrap_or_else(|| world.bbox.center());
+    for jammer in &mut scenario.threats.jammers {
+        if let Some(params) = jammer.params.as_object_mut()
+            && params.get("at").and_then(Value::as_str) == Some("busiest-junction")
+        {
+            params.remove("at");
+            params.insert(
+                "position_m".into(),
+                serde_json::json!([
+                    (busiest.x * 10.0).round() / 10.0,
+                    (busiest.y * 10.0).round() / 10.0
+                ]),
+            );
+        }
+    }
     scenario
 }
 

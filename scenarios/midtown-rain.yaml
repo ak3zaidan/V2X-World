@@ -15,11 +15,12 @@ schema: v2xw/scenario/1
 
 meta:
   base: midtown-normal.yaml
-  name: Midtown Manhattan - heavy rain
+  name: Heavy rain
   description: >-
-    Midday Midtown in heavy rain on a wet road: drivers slow down, keep longer gaps and brake
-    on less grip, while the radio links lose almost nothing. Compare with the dry baseline.
-  tags: [manhattan, traffic, weather, rain, scms, dsrc]
+    Midday downtown in heavy rain on a wet road: drivers slow down, keep longer gaps and
+    brake on less grip, while the radio links lose almost nothing. Compare with the dry
+    baseline.
+  tags: [traffic, weather, rain, scms, dsrc]
 
 weather:
   initial: rain

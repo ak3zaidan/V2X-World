@@ -118,12 +118,22 @@ impl Scenario {
     /// [`ScenarioError::Parse`] if the document does not match the schema.
     pub fn from_document(mut doc: Value) -> Result<Scenario> {
         crate::city::fill_world_from_city(&mut doc)?;
-        serde_json::from_value(doc).map_err(|e| {
+        let mut scenario: Scenario = serde_json::from_value(doc).map_err(|e| {
             EngineError::Scenario(ScenarioError::Parse {
                 path: "<document>".to_string(),
                 message: e.to_string(),
             })
-        })
+        })?;
+        // A file whose `city` is not the city its world is — a ready-made scenario that
+        // inherits a world from its base and names its own city — runs on the city it
+        // names, with everything placed in the old world moved (`Scenario::with_city`).
+        if let Some(id) = scenario.city.clone()
+            && crate::city::city_of_world(&scenario.world).is_none_or(|c| c.id != id)
+        {
+            scenario.city = None;
+            scenario = scenario.with_city(&id).map_err(EngineError::Scenario)?;
+        }
+        Ok(scenario)
     }
 
     /// The first thing wrong with this scenario, if anything is.

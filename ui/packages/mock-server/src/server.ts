@@ -1063,6 +1063,24 @@ export class MockEngineServer {
             { id: "manhattan-midtown-mock", kind: "preset", name: "Manhattan midtown (mock)", description: "The synthetic grid this fixture serves", tags: ["mock", "urban"] },
           ],
         });
+      case "cities.list": {
+        const city = (id: string, name: string, state: string, state_name: string, region: string, description: string) => ({
+          id, name, state, state_name, region, role: "largest", bbox: [0, 0, 0.01, 0.01], area_km2: 2.2,
+          utc_offset_h: -5, highway_preset: `urban-us-${state.toLowerCase()}`, fetched: "2026-10-07",
+          description, present: true, fetch: `worlds/fetch.sh ${id}`,
+        });
+        return ok({
+          cities: [
+            city("manhattan", "New York (Midtown Manhattan)", "NY", "New York", "northeast", "Midtown Manhattan (mock)"),
+            city("houston", "Houston", "TX", "Texas", "south", "Downtown Houston (mock)"),
+            city("seattle", "Seattle", "WA", "Washington", "west", "Downtown Seattle (mock)"),
+          ],
+          dropped: [],
+          current: "manhattan",
+          staged: null,
+          attribution: "(c) OpenStreetMap contributors, ODbL 1.0",
+        });
+      }
       case "scenario.validate":
         return ok({ valid: true, errors: [], warnings: [{ path: "/radio/tiers/phy", message: "the mock server's radio is not calibrated", severity: "warning" }] });
 

@@ -6,120 +6,65 @@
  * digests, the frame counters — is one click away behind those doors (docs/design/14-studio-shell.md).
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { BackendButton } from "../components/BackendView.js";
+import { ScenarioPicker } from "../components/ScenarioPicker.js";
+import { cityById, cityLabel, refreshCities, useCities } from "../state/cities.js";
 import { HeaderClock } from "../components/HeaderClock.js";
 import { PrimaryAction, StatusPill } from "../components/Status.js";
 import { engine } from "../state/engine.js";
-import { presetsOf, loadPreset } from "../state/settings.js";
 import { useStudio } from "../state/store.js";
 import { transport } from "../state/transport.js";
 import { applyThemeToDocument } from "../lib/theme.js";
 import { changedPointers } from "../lib/schema.js";
-import { describeError } from "../lib/errors.js";
 import { MetricsSummary } from "../metrics/Summary.js";
 import { AgentIcon, ChartIcon, GearIcon, InspectorIcon, MoreIcon } from "./Icons.js";
 import { MenuButton } from "./Menu.js";
 import { openPanel, togglePanel } from "./route.js";
 
 import "../styles/settings-widgets.css";
+import "../styles/picker.css";
 
 const MOD = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
 
-/** A scenario description's first sentence: the one line the picker has room for. */
-function firstSentence(text: string): string {
-  const t = text.trim();
-  const m = /^(.+?[.!?])(\s|$)/.exec(t);
-  return m ? m[1] : t;
-}
-
-/** The scenario's name, which opens the list of ready-made scenarios and the settings. */
+/**
+ * The scenario's name and the city it runs on. Pressing it opens the picker: a ready-made scenario
+ * first, then a city of the engine's library, then Run (`components/ScenarioPicker.tsx`).
+ */
 function ScenarioSwitcher(): React.JSX.Element {
   const name = useStudio((s) => s.hello?.scenarioName ?? null);
-  const list = useStudio((s) => s.scenarioList);
   const runningHash = useStudio((s) => s.scenarioExtras.runningHash);
-  const [note, setNote] = useState<{ text: string; err: boolean } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const presets = presetsOf(list);
-
+  const cities = useCities((s) => s.cities);
+  const current = useCities((s) => s.current);
+  const [open, setOpen] = useState(false);
+  // The city follows the run: asked again whenever a different scenario starts running.
+  useEffect(() => {
+    void refreshCities();
+  }, [runningHash, name]);
+  const city = cityById(cities, current);
   return (
-    <MenuButton
-      className="scenario-switch"
-      title={name ? `Scenario ${name}: switch to another, or change its settings` : "Choose a scenario"}
-      testId="scenario-switcher"
-      menuTestId="scenario-menu"
-      align="left"
-      label={
-        <>
-          <span className="topbar-scenario" data-testid="header-scenario">
-            {name ?? <span className="faint">no scenario loaded</span>}
+    <>
+      <button
+        type="button"
+        className="scenario-switch"
+        title={name ? `Scenario ${name}${city ? ` on ${cityLabel(city)}` : ""}: choose another scenario or city` : "Choose a scenario and a city"}
+        data-testid="scenario-switcher"
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
+      >
+        <span className="topbar-scenario" data-testid="header-scenario">
+          {name ?? <span className="faint">no scenario loaded</span>}
+        </span>
+        {city ? (
+          <span className="topbar-city" data-testid="header-city" title={city.description}>
+            {cityLabel(city)}
           </span>
-          <span className="caret" aria-hidden="true">▾</span>
-        </>
-      }
-    >
-      {(close) => (
-        <>
-          <div className="sec">Ready-made scenarios</div>
-          {presets.length === 0 ? <div className="dim menu-note">This engine lists none.</div> : null}
-          {/* Grouped as the engine's catalogue groups them, each with the one line that says what it
-              shows, so a scenario can be chosen without knowing its file name. */}
-          <div className="scenario-menu-list">
-            {presets.map((item, i) => (
-              <div key={item.id}>
-                {item.group && item.group !== presets[i - 1]?.group ? (
-                  <div className="sec group" data-testid="switcher-group">
-                    {item.group}
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="menu-item preset"
-                  disabled={busy}
-                  data-testid="switcher-load"
-                  data-preset={item.name ?? item.id}
-                  title="Load these settings; the next run uses them"
-                  onClick={() => {
-                    setBusy(true);
-                    setNote(null);
-                    loadPreset(item)
-                      .then((text) => setNote({ text, err: false }))
-                      .catch((err: unknown) => setNote({ text: describeError(err), err: true }))
-                      .finally(() => setBusy(false));
-                  }}
-                >
-                  <span className="preset-title">
-                    <span className="grow">{item.name ?? item.id}</span>
-                    {item.hash !== undefined && item.hash === runningHash ? <span className="faint">running</span> : null}
-                  </span>
-                  {item.description ? <span className="preset-desc">{firstSentence(item.description)}</span> : null}
-                </button>
-              </div>
-            ))}
-          </div>
-          {note ? (
-            <div className={note.err ? "menu-note err-text" : "menu-note"} data-testid="switcher-message" role="status">
-              {note.text}
-            </div>
-          ) : null}
-          <div className="menu-rule" />
-          <button
-            type="button"
-            role="menuitem"
-            className="menu-item"
-            onClick={() => {
-              close();
-              openPanel("settings");
-            }}
-          >
-            <span className="grow">Edit settings…</span>
-            <kbd>{MOD},</kbd>
-          </button>
-        </>
-      )}
-    </MenuButton>
+        ) : null}
+        <span className="caret" aria-hidden="true">▾</span>
+      </button>
+      {open ? <ScenarioPicker onClose={() => setOpen(false)} /> : null}
+    </>
   );
 }
 

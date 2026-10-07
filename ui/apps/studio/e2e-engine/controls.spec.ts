@@ -135,14 +135,15 @@ test("every control does what it says", async ({ page }) => {
     await page.keyboard.press("Escape");
     return "off: no fps chip; on: fps and world chips; off again";
   });
-  await check("header: scenario switcher", "list the ready-made scenarios", async () => {
+  await check("header: scenario picker", "list the ready-made scenarios, then the cities", async () => {
     await page.getByTestId("scenario-switcher").click();
-    await expect(page.getByTestId("scenario-menu")).toBeVisible(quick);
-    const n = await page.getByTestId("switcher-load").count();
+    await expect(page.getByTestId("scenario-picker")).toBeVisible(quick);
+    const n = await page.getByTestId("picker-scenario").count();
     expect(n).toBeGreaterThanOrEqual(2);
+    const cities = await page.getByTestId("picker-city").count();
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("scenario-menu")).toHaveCount(0, quick);
-    return `${n} scenarios listed`;
+    await expect(page.getByTestId("scenario-picker")).toHaveCount(0, quick);
+    return `${n} scenarios and ${cities} cities listed`;
   });
   await check("header: primary action (Play on a paused run)", "start the paused run moving", async () => {
     // At real-time speed, so the run is still moving when Pause is pressed: the harness starts

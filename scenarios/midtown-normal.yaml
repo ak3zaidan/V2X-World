@@ -10,10 +10,10 @@
 schema: v2xw/scenario/1
 
 meta:
-  base: base/midtown.yaml
-  name: Midtown Manhattan - normal traffic
+  base: base/city.yaml
+  name: Normal traffic
   description: >-
-    A weekday midday in Midtown Manhattan: connected cars signing safety messages ten times a
-    second, the US credential system running, eight roadside units on Fifth and Sixth
-    Avenues and misbehaviour detection on every vehicle. The honest baseline.
-  tags: [manhattan, traffic, baseline, scms, dsrc]
+    A weekday midday downtown: connected cars signing safety messages ten times a second,
+    the US credential system running, eight roadside units at the busiest signalised
+    intersections and misbehaviour detection on every vehicle. The honest baseline.
+  tags: [traffic, baseline, scms, dsrc]

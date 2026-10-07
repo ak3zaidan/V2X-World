@@ -9,7 +9,7 @@ meta:
   base: base/radio-faceoff.yaml
   name: Radio comparison - C-V2X (5G NR sidelink)
   description: >-
-    Rush-hour Midtown with every car on the 5G NR sidelink (PC5 Mode 2). The traffic is
+    Rush hour downtown with every car on the 5G NR sidelink (PC5 Mode 2). The traffic is
     identical to the DSRC and LTE versions.
   tags: [radio, comparison, cv2x, nr]
 

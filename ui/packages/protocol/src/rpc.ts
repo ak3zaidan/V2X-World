@@ -138,6 +138,8 @@ export type RpcErrorCode = (typeof RpcErrorCode)[keyof typeof RpcErrorCode];
 /** §6.6 `run.start` params. */
 export interface RunStartParams {
   scenario?: string | Record<string, unknown>;
+  /** A `cities.list` id: run the scenario on that city instead of the world it names. */
+  city?: string;
   seed?: number;
   speed?: number;
   paused?: boolean;
@@ -595,7 +597,10 @@ export interface ScenarioSaveResult {
 }
 /** §6.10 `scenario.load` params. */
 export interface ScenarioLoadParams {
-  path: string;
+  /** A preset id or a file; absent with `city`, the next run's scenario moves to the city. */
+  path?: string;
+  /** A `cities.list` id: the scenario on that city. */
+  city?: string;
   validate?: boolean;
 }
 /** §6.10 `scenario.load` result. */
@@ -623,6 +628,47 @@ export interface ScenarioListResult {
     hash?: Sha256Hex;
     modified?: string;
   }[];
+}
+
+/** One city of the library (`worlds/cities.yaml`). */
+export interface CityEntry {
+  id: string;
+  name: string;
+  /** USPS state code (or the region's code outside the US). */
+  state: string;
+  state_name: string;
+  region: string;
+  /** largest | studied | metro | international */
+  role: string;
+  /** [south, west, north, east], degrees. */
+  bbox: [number, number, number, number];
+  area_km2: number;
+  utc_offset_h: number;
+  highway_preset: string;
+  fetched: string;
+  description: string;
+  drive_lane_km?: number;
+  signals?: number;
+  /** Whether the OpenStreetMap extract is on the engine's machine. */
+  present: boolean;
+  /** The command that fetches it. */
+  fetch: string;
+}
+/** `cities.list` params. */
+export interface CitiesListParams {
+  query?: string;
+}
+/** `cities.list` result. */
+export interface CitiesListResult {
+  cities: CityEntry[];
+  dropped?: { id: string; name?: string; reason: string }[];
+  /** The city the running scenario is on, when it is a library city. */
+  current?: string | null;
+  /** The city the staged scenario is on. */
+  staged?: string | null;
+  attribution?: string;
+  licence?: string;
+  source?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -901,6 +947,7 @@ export interface VwpMethods {
   "scenario.save": { params: ScenarioSaveParams; result: ScenarioSaveResult };
   "scenario.load": { params: ScenarioLoadParams; result: ScenarioLoadResult };
   "scenario.list": { params: ScenarioListParams; result: ScenarioListResult };
+  "cities.list": { params: CitiesListParams; result: CitiesListResult };
   "world.import_osm": { params: WorldImportOsmParams; result: Job | WorldImportResult };
   "world.generate": { params: WorldGenerateParams; result: Job | WorldImportResult };
   "events.set": { params: EventsSetParams; result: EventsSetResult };
@@ -917,12 +964,13 @@ export interface VwpMethods {
 /** Every method name of §6.15. */
 export type VwpMethodName = keyof VwpMethods;
 
-/** §6.15 — the method names as a runtime array (32 entries), in the order the table lists them. */
+/** §6.15 — the method names as a runtime array (33 entries), in the order the table lists them. */
 export const VWP_METHODS: readonly VwpMethodName[] = [
   "run.start", "run.pause", "run.resume", "run.step", "run.seek", "run.speed", "run.stop", "run.status",
   "view.follow", "view.camera", "overlay.set",
   "inspect.node", "inspect.link", "inspect.entity", "explain",
   "scenario.get", "scenario.set", "scenario.validate", "scenario.save", "scenario.load", "scenario.list",
+  "cities.list",
   "world.import_osm", "world.generate",
   "events.set",
   "metrics.query", "metrics.plot",

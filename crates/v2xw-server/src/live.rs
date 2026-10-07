@@ -4625,6 +4625,8 @@ impl Engine for LiveEngine {
                         "group": group,
                         "hash": s.content_hash().unwrap_or_default(),
                         "running": s.content_hash().is_ok_and(|h| h == running),
+                        // The city it runs on unless another is chosen (the picker's default).
+                        "city": s.current_city().map(|c| c.id.clone()),
                     }),
                     // Listed, not hidden: a scenario in the folder that does not load is
                     // something the user should hear about, with the loader's reason.

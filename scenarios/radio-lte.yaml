@@ -9,7 +9,7 @@ meta:
   base: base/radio-faceoff.yaml
   name: Radio comparison - C-V2X (LTE sidelink)
   description: >-
-    Rush-hour Midtown with every car on LTE-V2X (PC5 Mode 4, SAE J3161/1 profile). The
+    Rush hour downtown with every car on LTE-V2X (PC5 Mode 4, SAE J3161/1 profile). The
     traffic is identical to the DSRC version, so the difference is the radio.
   tags: [radio, comparison, cv2x, lte]
 
