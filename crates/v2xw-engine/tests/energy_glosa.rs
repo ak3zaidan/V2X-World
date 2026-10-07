@@ -63,21 +63,24 @@ fn totals_of(p: &EnergyProvider) -> BTreeMap<ActorId, Totals> {
     p.vehicles().into_iter().map(|v| (v.actor, v.totals)).collect()
 }
 
-/// A signalised arterial as the published single-route evaluations build one: a 5 × 2
-/// grid of 400 m blocks at 50 km/h, every junction signalised on a 60 s cycle and every
-/// one carrying a SPaT/MAP roadside unit, so an advised vehicle meets advice at each
-/// signal it reaches rather than at four of the connected grid's thirty-six.
+/// A signalised arterial as the published single-route evaluations build one: a 7 × 3
+/// grid of 300 m blocks at 50 km/h on a 60 s cycle, whose middle row's five four-way
+/// junctions each carry a SPaT/MAP roadside unit, so an advised vehicle along the arterial
+/// meets advice at every signal 300 m apart (a MAP describes lanes up to about 327 m,
+/// J2735 Node-XY-32b) rather than at four of the connected grid's
+/// thirty-six junctions 80 m apart.
 fn corridor(compliance: f64, rate_veh_per_h: f64) -> Scenario {
     let mut s = scenario(compliance, rate_veh_per_h);
     s.time.duration_s = 180.0;
     let mut doc = serde_json::to_value(&s).expect("serialises");
     let p = &mut doc["world"]["source"]["params"];
-    p["cols"] = serde_json::json!(5);
-    p["rows"] = serde_json::json!(2);
-    p["block_x_m"] = serde_json::json!(400.0);
-    p["block_y_m"] = serde_json::json!(400.0);
+    p["cols"] = serde_json::json!(7);
+    p["rows"] = serde_json::json!(3);
+    p["block_x_m"] = serde_json::json!(300.0);
+    p["block_y_m"] = serde_json::json!(300.0);
     p["speed_limit_mps"] = serde_json::json!(13.89);
-    let rsus: Vec<serde_json::Value> = (0..10)
+    // The middle row's five interior four-way junctions (site = row * cols + col).
+    let rsus: Vec<serde_json::Value> = (8..13)
         .map(|site| {
             serde_json::json!({"site": site, "roles": ["spat", "map"],
                                "profile": "rsu/commsignia-its-rs4"})
@@ -240,8 +243,42 @@ fn compare(rate: f64, make: fn(f64, f64) -> Scenario) -> Comparison {
     c
 }
 
+/// The check: on the arterial at 2,400 veh/h, every driver following GLOSA cuts the
+/// advised vehicles' stops per km by at least 5 % and burns no more fuel per km, under the
+/// run's own model and re-scored under PHEMlight.
+///
+/// Measured in this build (2026-10-07): stops −15.2 % (0.896 → 0.759 per km), fuel −0.8 %
+/// under HBEFA 3 and −0.3 % under PHEMlight, 28 advised vehicles over 21 km; the fleet's
+/// stops −7.7 %. The stop reduction is in line with Treiber and Kesting's ~15 %; the fuel
+/// saving is well below their ~4 %, because a follower is held at the advised speed (at
+/// least 20 km/h) for the whole approach and only part of each trip is advised.
+///
+/// It can fail: with the same compliance in both runs the two results are bit-identical
+/// (the engine is deterministic), so a 5 % stop reduction is impossible.
+#[test]
+fn glosa_reduces_stops_on_an_arterial_without_costing_fuel() {
+    let c = compare(2_400.0, corridor);
+    assert!(c.advised >= 20, "only {} advised vehicles", c.advised);
+    assert!(
+        c.on.2 <= 0.95 * c.off.2,
+        "stops/km {} -> {}: under a 5 % reduction",
+        c.off.2,
+        c.on.2
+    );
+    assert!(c.on.0 <= c.off.0, "HBEFA 3 fuel rose: {} -> {}", c.off.0, c.on.0);
+    assert!(c.phem.1 <= c.phem.0, "PHEMlight fuel rose: {} -> {}", c.phem.0, c.phem.1);
+}
+
 /// A measurement, not a check: GLOSA's effect across demand. Run it with
 /// `cargo test -p v2xw-engine --test energy_glosa -- --ignored --nocapture`.
+///
+/// Measured in this build (2026-10-07) on the connected grid, advised vehicles, HBEFA 3:
+/// 1,500 veh/h stops +0.1 %, fuel +0.1 %; 3,000 veh/h stops −5.1 %, fuel +2.5 %
+/// (PHEMlight +2.6 %); 6,000 veh/h stops +0.9 %, fuel +5.5 % (PHEMlight +2.2 %). Junctions
+/// 80 m apart, advice at four of thirty-six and queues that discharge at the green the
+/// advice aims for leave nothing for GLOSA to remove, and a capped approach costs fuel:
+/// the density limit Katsaros et al. (2011) report, and a reason not to quote a GLOSA
+/// saving without the network it was measured on.
 #[test]
 #[ignore = "a measurement over six runs; minutes in a debug build"]
 fn glosa_effect_across_demand() {

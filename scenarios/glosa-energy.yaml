@@ -2,16 +2,17 @@
 # RQ: Does green-light speed advice (GLOSA) change what the traffic burns?
 # ============================================================================
 #
-# The connected intersections of `connected-intersections.yaml` — four roadside units on
-# the middle avenue broadcasting SPaT and MAP from the engine's own signal plans — with
-# the energy layer on (`energy:`) and the share of drivers who follow GLOSA's advice swept
-# from none to all.
+# A signalised arterial — five SPaT/MAP roadside units 300 m apart along the middle row of
+# a procedural grid, fixed-time signals, 50 km/h — with the energy layer on (`energy:`)
+# and the share of drivers who follow GLOSA's advice swept from none to all.
 #
 #     v2xw experiment run scenarios/glosa-energy.yaml --out runs/glosa-energy
 #     v2xw energy runs/glosa-energy/<cell>/recording.mcap --vehicles-csv vehicles.csv
 #
 # The second line re-scores a finished recording — under another emission model
-# (`--emission-model phemlight`), EV model or fleet (`--spec`) — without re-running it.
+# (`--emission-model phemlight`), EV model or fleet (`--spec`) — without re-running it,
+# and `--opmode-csv` writes the MOVES operating-mode distribution per lane, the activity
+# input of a MOVES project-level run.
 #
 # ## What it measures
 #
@@ -23,31 +24,36 @@
 #
 # The models: HBEFA 3.1 (Krajzewicz et al. 2015) for the combustion cars, a Euro 6 mix
 # with a third diesel; SUMO's battery model (Kurczveil et al. 2014) for the one car in
-# five that is electric. Every number's source is on the model cards.
+# five that is electric. Every number's source is on the model cards. HBEFA 3's
+# standstill rate is high (its card says by how much), which inflates what removing idling
+# saves; re-score under PHEMlight to see the model's share of an answer.
 #
 # ## What it does not measure
 #
 # * Cold starts, evaporative and non-exhaust emissions (the models' cards list what each
 #   ignores).
 # * Charging, and the upstream emissions of fuel and electricity.
-# * Anything about drivers who ignore the advice beyond the compliance share: a follower
-#   eases to the advised speed at 1 m/s² (`v2xw_engine::run::GLOSA_EASE_MPS2`).
+# * Driver behaviour beyond the compliance share: a follower eases to the advised speed at
+#   1 m/s² (`v2xw_engine::run::GLOSA_EASE_MPS2`) and holds it while the advice stands.
 #
 # ## What to expect
 #
-# Published GLOSA evaluations put the saving at a few per cent to over twenty per cent,
-# depending on penetration, signal timing and how much stopping there was to remove:
-# Treiber and Kesting (2014, arXiv:1408.5498) about 15 % fewer stops and 4 % on fuel at
-# 50 km/h; Tielert et al. (2012, ITST) up to 20 % battery energy for electric vehicles;
-# Katsaros et al. (2011, IWCMC) fuel and stop time falling as penetration rises.
-# `crates/v2xw-engine/tests/energy_glosa.rs` runs the two ends of this sweep and checks
-# that the advised vehicles stop less and burn less.
+# Published evaluations: Treiber and Kesting (2014, arXiv:1408.5498) about 15 % fewer
+# stops and 4 % on fuel at 50 km/h; Tielert et al. (2012, ITST) up to 20 % battery energy;
+# Katsaros et al. (2011, IWCMC) savings growing with penetration and shrinking with
+# density. This build, measured on this arterial at 2,400 veh/h (energy section left at
+# its defaults: a Euro 4 petrol fleet) with every driver
+# following (`crates/v2xw-engine/tests/energy_glosa.rs`): the advised vehicles stop 15 %
+# less per km, as Treiber and Kesting found, but save under 1 % of their fuel — a follower
+# is held at the advised speed for the whole approach. On the 80 m-block connected grid
+# (four advising junctions of thirty-six) GLOSA removes no stops and costs up to 5 % fuel.
+
 schema: v2xw/scenario/1
 meta:
   name: glosa-energy
   description: >-
-    GLOSA from four SPaT/MAP roadside units, with the share of drivers following its
-    advice swept, and emissions, fuel and EV energy measured (metrics/energy).
+    GLOSA from five SPaT/MAP roadside units along an arterial, with the share of drivers
+    following it swept, and emissions, fuel and EV energy measured (metrics/energy).
   authors: [v2xw]
   tags: [glosa, energy, emissions, spat, map, rsu, procedural, dsrc]
   created: "2026-10-07"
@@ -56,23 +62,29 @@ seed: "0xC0FFEE_5EED"
 
 time:
   t0: "2027-03-04T08:00:00Z"
-  duration_s: 120.0
+  # Three minutes: a vehicle at 50 km/h crosses the 1.8 km arterial and its six signals.
+  duration_s: 180.0
   mobility_step_ms: 100
   des_resolution: 1us
 
+# A signalised arterial as the published single-route GLOSA evaluations build one: the
+# middle row of a 7 x 3 grid, 300 m blocks, 50 km/h, fixed-time signals on a 60 s cycle.
+# 300 m rather than the 400-500 m of some studies because a MAP describes a lane only up to
+# about 327 m from its reference point (J2735 Node-XY offsets), and the engine refuses a
+# unit whose junction it cannot describe.
 world:
   source:
     kind: procedural
     generator: world/source/procedural-grid
     params:
-      cols: 6
-      rows: 6
-      block_x_m: 274.0
-      block_y_m: 80.0
+      cols: 7
+      rows: 3
+      block_x_m: 300.0
+      block_y_m: 300.0
       lanes_per_direction: 2
       lane_width_m: 3.5
       sidewalk_m: 2.0
-      speed_limit_mps: 11.176
+      speed_limit_mps: 13.89
       signalised: true
       cycle_s: 60.0
       amber_s: 3.0
@@ -83,7 +95,7 @@ world:
       # row: site = row * cols + col.
       rsu_at_junctions: true
       corner_radius_m: 4.5
-  imported_at: "2026-09-18T00:00:00Z"
+  imported_at: "2026-10-07T00:00:00Z"
   buildings:
     enabled: true
     keep_holes: true
@@ -95,32 +107,33 @@ actors:
     equipped_fraction: 1.0
     demand:
       kind: mobility/demand/poisson
-      rate_veh_per_h: 3000.0
+      # The demand at which GLOSA measurably cut stops in this build's own measurement
+      # (crates/v2xw-engine/tests/energy_glosa.rs); at 1,200 veh/h too few vehicles meet
+      # a red for advice to matter.
+      rate_veh_per_h: 2400.0
     classes:
       passenger:
         fraction: 0.9
       emergency:
         fraction: 0.1
-  # Four units on the middle avenue (column 2), rows 1 to 4. `spat` puts the junction's SPaT
-  # on the air and answers signal requests; `map` its geometry.
-  #
-  # The Commsignia ITS-RS4 profile, because a unit signs every SPaT and MAP on its own HSM
-  # and the RS4 is the roadside profile that publishes a signing cost. Its figure — 50 ms
-  # per ECDSA signature — is the flagged upper bound from its brief (the profile says why);
-  # at 11 signatures a second it keeps the unit's HSM about half busy. The Cohda MK5 RSU
-  # profile publishes none, and the engine refuses to build a SPaT unit on it rather than
-  # let it sign for free.
+  # A unit on each of the middle row's five interior four-way junctions (sites 8 to 12),
+  # broadcasting its junction's SPaT at 10 Hz and MAP at 1 Hz. The Commsignia ITS-RS4
+  # profile, because it is the roadside profile that publishes a signing cost (see
+  # connected-intersections.yaml).
   rsus:
     - site: 8
       roles: [spat, map]
       profile: rsu/commsignia-its-rs4
-    - site: 14
+    - site: 9
       roles: [spat, map]
       profile: rsu/commsignia-its-rs4
-    - site: 20
+    - site: 10
       roles: [spat, map]
       profile: rsu/commsignia-its-rs4
-    - site: 26
+    - site: 11
+      roles: [spat, map]
+      profile: rsu/commsignia-its-rs4
+    - site: 12
       roles: [spat, map]
       profile: rsu/commsignia-its-rs4
 
