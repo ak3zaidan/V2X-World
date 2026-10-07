@@ -153,3 +153,15 @@ nodes:
 metrics: [all]
 
 exporters: []
+
+# The streets fill first. The demand model starts from an empty network, and at the
+# steady rate a vehicle entering the box takes minutes to leave it, so the rush would
+# only build up near the end of a five-minute run. For the first 90 s the offered demand
+# is four times the steady rate (the lanes' insertion gap, not the multiplier, then
+# limits how fast vehicles enter); after that it is the rate above. The fill is a
+# choice to reach the peak inside the run, not a model of how traffic arrives.
+events:
+  - t: 0.0
+    until: 90.0
+    type: demand.multiplier
+    value: 4.0
