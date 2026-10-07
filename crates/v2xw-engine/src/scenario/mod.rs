@@ -29,6 +29,7 @@
 //! (02-architecture.md §6.5). `meta.base` is resolved relative to the **including file's**
 //! directory, so a scenario tree relocates without editing.
 
+pub mod guide;
 pub mod merge;
 pub mod migrate;
 pub mod options;

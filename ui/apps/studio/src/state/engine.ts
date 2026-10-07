@@ -64,6 +64,8 @@ import {
   type NodeInfo,
   type ProvEntry,
   type PseudonymInfo,
+  type QuickSetting,
+  type Study,
   type TimelineMark,
 } from "./store.js";
 
@@ -1244,12 +1246,16 @@ export class StudioEngine {
   async refreshScenario(): Promise<void> {
     try {
       const res = await this.request("scenario.get", { with_schema: true, resolved: true });
+      // The newcomer's surface (`scenario/guide.rs`): an engine without it sends neither key.
+      const guide = res as unknown as { quick?: unknown; studies?: unknown };
       useStudio.getState().setScenario(res.scenario, res.hash, res.schema ?? null, {
         runningHash: typeof res.running_hash === "string" ? res.running_hash : res.hash,
         staged: res.staged ?? null,
         fields: Array.isArray(res.fields) ? res.fields : [],
         statuses: Array.isArray(res.statuses) ? res.statuses : [],
         groups: Array.isArray(res.groups) ? res.groups : [],
+        quick: Array.isArray(guide.quick) ? (guide.quick as QuickSetting[]) : [],
+        studies: Array.isArray(guide.studies) ? (guide.studies as Study[]) : [],
       });
     } catch (err) {
       this.#log("warn", "scenario", `scenario.get failed: ${errText(err)}`);

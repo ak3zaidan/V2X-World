@@ -135,6 +135,11 @@ const GROUPS: &[(&str, &str, &str)] = &[
         "What this scenario is, who wrote it, and what it is based on.",
     ),
     (
+        "city",
+        "World",
+        "The map: where it comes from, its buildings and its terrain.",
+    ),
+    (
         "world",
         "World",
         "The map: where it comes from, its buildings and its terrain.",
@@ -253,6 +258,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("actors.vru.cyclists", "people"),
     ("actors.vru.midblock_rate_per_100m", "per 100 m"),
     ("actors.rsus[].site", "site id"),
+    ("actors.rsu_placement.count", "roadside units"),
     ("radio.tiers.focus.region.node", "node id"),
     ("threats.attackers[].count", "vehicles"),
     ("threats.attackers[].actor_ids[]", "actor id"),
@@ -584,7 +590,7 @@ fn group_for(path: &str) -> (&'static str, &'static str) {
 /// The JSON Pointer (RFC 6901) for a dotted path, which is what `scenario.set {patch}`
 /// takes. `*` and `[]` stay as they are: they are placeholders, and a page substitutes
 /// the concrete key or index before it patches.
-fn pointer_for(path: &str) -> String {
+pub(crate) fn pointer_for(path: &str) -> String {
     let mut out = String::new();
     for segment in path.split('.') {
         let (name, rest) = match segment.find('[') {
@@ -868,6 +874,13 @@ impl Walk<'_> {
         let leaf = path.rsplit('.').next().unwrap_or(path);
         let title = options::title(path).map_or_else(|| label_for(leaf, unit), str::to_string);
         out.insert("title".into(), json!(title));
+        out.insert("x-level".into(), json!(super::guide::level_of(path)));
+        if let Some(explain) = super::guide::explain(path) {
+            out.insert("x-explain".into(), json!(explain));
+        }
+        if let Some(rec) = super::guide::recommended(path) {
+            out.insert("x-recommended".into(), json!(rec));
+        }
         if let Some(presets) = options::presets(path) {
             out.insert("x-presets".into(), presets);
         }
@@ -1038,6 +1051,8 @@ pub fn surface() -> Value {
         "fields": fields,
         "slots": slots(),
         "models": models(),
+        "quick": super::guide::quick(),
+        "studies": super::guide::studies(),
     })
 }
 
@@ -1138,6 +1153,11 @@ pub fn slots() -> Value {
 /// offers a registration entry point and records what it could not register rather than
 /// failing.
 fn catalogue() -> Registry {
+    catalogue_for_guide()
+}
+
+/// The catalogue registry, for `guide`'s attacker choices.
+pub(crate) fn catalogue_for_guide() -> Registry {
     let mut registry = Registry::new();
     let _ = crate::wiring::register_all(&mut registry);
     for card in v2xw_world::model_cards() {

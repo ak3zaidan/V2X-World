@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgentBadge } from "../components/AgentBadge.js";
 import { BackendButton } from "../components/BackendView.js";
 import { ScenarioPicker } from "../components/ScenarioPicker.js";
+import { QuickSettings } from "../settings/QuickSettings.js";
 import { cityById, cityLabel, refreshCities, useCities } from "../state/cities.js";
 import { HeaderClock } from "../components/HeaderClock.js";
 import { PrimaryAction, StatusPill } from "../components/Status.js";
@@ -28,6 +29,7 @@ import { openPanel, togglePanel } from "./route.js";
 
 import "../styles/settings-widgets.css";
 import "../styles/picker.css";
+import "../styles/quick.css";
 
 const MOD = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
 
@@ -228,6 +230,7 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
   const inspectorOpen = useStudio((s) => s.inspectorOpen);
   const setInspectorOpen = useStudio((s) => s.setInspectorOpen);
   const staged = useStudio((s) => s.scenarioExtras.staged !== null);
+  const [quickOpen, setQuickOpen] = useState(false);
   const draft = useStudio((s) => s.draft);
   const scenario = useStudio((s) => s.scenario);
   // Computed on a change of either document, not on every store beat (the store flushes at 5 Hz).
@@ -286,6 +289,26 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
       >
         <InspectorIcon />
       </button>
+      <button
+        type="button"
+        className={quickOpen ? "icon-button labelled on" : "icon-button labelled"}
+        aria-pressed={quickOpen}
+        aria-expanded={quickOpen}
+        onClick={() => setQuickOpen((v) => !v)}
+        data-testid="quick-button"
+        title="The main choices for the next run: scenario, city, traffic, radio, security, attackers, run length, files"
+      >
+        <span>Quick settings</span>
+      </button>
+      {quickOpen ? (
+        <QuickSettings
+          onClose={() => setQuickOpen(false)}
+          onOpenSettings={() => {
+            setQuickOpen(false);
+            openPanel("settings");
+          }}
+        />
+      ) : null}
       <button
         type="button"
         className={panel === "settings" ? "icon-button on" : "icon-button"}

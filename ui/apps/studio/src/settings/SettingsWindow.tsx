@@ -41,12 +41,15 @@ import {
   errorsByField,
   isEdited,
   isModified,
+  isBasic,
   isUnsupported,
   matches,
   settingsFields,
   type Field,
 } from "./model.js";
 import { JsonView } from "./JsonView.js";
+import { applyPatch } from "./quick.js";
+import "../styles/quick.css";
 import { SettingRow } from "./SettingRow.js";
 
 const SCENARIO_SECTION = "settings-scenario";
@@ -96,6 +99,24 @@ export function SettingsWindow({
   const [modifiedOnly, setModifiedOnly] = useState(false);
   const [showUnsupported, setShowUnsupported] = useState(false);
   const [view, setView] = useState<"form" | "json">("form");
+  // Basic first: the settings that decide what a run models, each explained. Advanced adds model
+  // internals and developer switches. Remembered per browser.
+  const [level, setLevelState] = useState<"basic" | "advanced">(() => {
+    try {
+      return localStorage.getItem("v2xw.settings.level") === "advanced" ? "advanced" : "basic";
+    } catch {
+      return "basic";
+    }
+  });
+  const setLevel = (l: "basic" | "advanced"): void => {
+    setLevelState(l);
+    try {
+      localStorage.setItem("v2xw.settings.level", l);
+    } catch {
+      /* private window: the choice lasts this session */
+    }
+  };
+  const studies = useStudio((s) => s.scenarioExtras.studies);
   const [active, setActive] = useState<string>(SCENARIO_SECTION);
   const search = useRef<HTMLInputElement | null>(null);
   const content = useRef<HTMLDivElement | null>(null);
@@ -115,15 +136,19 @@ export function SettingsWindow({
     () => fields.filter((f) => isEdited(f, edits) || isModified(f, getPointer(draft, f.pointer))).length,
     [fields, edits, draft],
   );
+  const anyLevels = useMemo(() => fields.some((f) => f.level !== undefined), [fields]);
+  const basicCount = useMemo(() => fields.filter((f) => isBasic(f, anyLevels)).length, [fields, anyLevels]);
   const shown = useMemo(
     () =>
       fields.filter(
         (f) =>
+          // A search looks through every setting; an edited one stays in view on either page.
+          (level === "advanced" || query.trim() !== "" || isBasic(f, anyLevels) || isEdited(f, edits)) &&
           (showUnsupported || !isUnsupported(f)) &&
           matches(f, query) &&
           (!modifiedOnly || isEdited(f, edits) || isModified(f, getPointer(draft, f.pointer))),
       ),
-    [fields, showUnsupported, query, modifiedOnly, edits, draft],
+    [fields, showUnsupported, query, modifiedOnly, edits, draft, level, anyLevels],
   );
   const tree = useMemo(() => buildTree(shown, extras.groups), [shown, extras.groups]);
   const filtering = query.trim() !== "" || modifiedOnly;
@@ -272,6 +297,30 @@ export function SettingsWindow({
             Unsupported <span className="count">{unsupportedCount}</span>
           </button>
         </div>
+        {anyLevels ? (
+          <div className="segmented" role="group" aria-label="Which settings">
+            <button
+              type="button"
+              className={level === "basic" ? "on" : ""}
+              aria-pressed={level === "basic"}
+              onClick={() => setLevel("basic")}
+              data-testid="settings-level-basic"
+              title="The settings that decide what a run models, each explained in plain words"
+            >
+              Basic <span className="count">{basicCount}</span>
+            </button>
+            <button
+              type="button"
+              className={level === "advanced" ? "on" : ""}
+              aria-pressed={level === "advanced"}
+              onClick={() => setLevel("advanced")}
+              data-testid="settings-level-advanced"
+              title="Every setting, including model internals, fidelity and developer switches"
+            >
+              Advanced <span className="count">{fields.length}</span>
+            </button>
+          </div>
+        ) : null}
         <div className="segmented" role="group" aria-label="View">
           <button type="button" className={view === "form" ? "on" : ""} aria-pressed={view === "form"} onClick={() => setView("form")} data-testid="settings-view-form">
             Form
@@ -396,6 +445,36 @@ export function SettingsWindow({
                     </>
                   ) : null}
                 </dl>
+                {studies.length > 0 ? (
+                  <div className="studies" data-testid="studies">
+                    <div className="dim">What would you like to study? Each sets a coherent group of settings, which you can then adjust:</div>
+                    <div className="study-grid">
+                      {studies.map((st) => (
+                        <button
+                          key={st.id}
+                          type="button"
+                          className="study-card"
+                          data-testid="study"
+                          data-study={st.id}
+                          disabled={busy !== null}
+                          title={st.patch.map((w) => w.path).join(", ")}
+                          onClick={() => {
+                            const s0 = useStudio.getState();
+                            const next = applyPatch(s0.draft ?? s0.scenario, st.patch);
+                            for (const w of st.patch) editSetting(w.pointer, getPointer(next, w.pointer));
+                            s0.setSettingsMessage({
+                              text: `${st.label}: set ${st.patch.length} settings (${st.patch.map((w) => w.path).join(", ")}). ${st.look_at ? `Watch: ${st.look_at} ` : ""}Press Run when ready.`,
+                              tone: "info",
+                            });
+                          }}
+                        >
+                          <b>{st.label}</b>
+                          <span>{st.question}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 {presets.length > 0 ? (
                   <div className="presets" data-testid="presets">
                     <div className="dim">Start from a ready-made scenario:</div>
@@ -433,6 +512,7 @@ export function SettingsWindow({
                   No setting matches{query !== "" ? ` “${query}”` : ""}
                   {modifiedOnly ? " among the modified ones" : ""}.
                   {!showUnsupported && unsupportedCount > 0 ? " Unsupported settings are hidden; turn on Unsupported to search them too." : ""}
+                  {level === "basic" && anyLevels && query.trim() === "" ? " Switch to Advanced to see every setting." : ""}
                 </p>
               ) : null}
 
