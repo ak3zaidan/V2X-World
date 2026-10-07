@@ -228,8 +228,9 @@ function SummaryDialog(): React.JSX.Element {
   const out = outOfBand(judged);
   const counts = { unhealthy: 0, caution: 0, healthy: 0 } as Record<HealthLevel, number>;
   for (const j of judged) counts[j.level]++;
-  const overall: HealthLevel = counts.unhealthy > 0 ? "unhealthy" : counts.caution > 0 ? "caution" : "healthy";
   const healthy = judged.filter((j) => j.level === "healthy" && j.worstLevel === "healthy");
+  const atTimes = counts.healthy - healthy.length;
+  const overall: HealthLevel = counts.unhealthy > 0 ? "unhealthy" : counts.caution > 0 || atTimes > 0 ? "caution" : "healthy";
 
   return (
     <div className="rsum-backdrop" onMouseDown={(e) => e.target === e.currentTarget && closeRunSummary()} data-testid="run-summary-backdrop">
@@ -275,11 +276,8 @@ function SummaryDialog(): React.JSX.Element {
                   <span>No metric with a published healthy range was measured in this run.</span>
                 ) : (
                   <span>
-                    <strong>
-                      {counts.unhealthy > 0 ? `${counts.unhealthy} unhealthy` : counts.caution > 0 ? "No unhealthy metric" : "Every judged metric is healthy"}
-                    </strong>
-                    {counts.unhealthy > 0 || counts.caution > 0 ? `, ${counts.caution} to watch, ${counts.healthy} healthy` : ""} — of {judged.length} metrics with a published healthy range,
-                    judged on the mean of the run's windows.
+                    <strong>{verdictText(counts.unhealthy, counts.caution, atTimes, healthy.length)}</strong> — of {judged.length} metrics with a published healthy
+                    range, judged on the run's windows.
                   </span>
                 )}
               </div>
@@ -288,7 +286,7 @@ function SummaryDialog(): React.JSX.Element {
                 <h3>Headline results</h3>
                 <div className="rsum-tiles">
                   {HEADLINES.map((g) => {
-                    const items = g.items.filter((i) => data.headline.has(i.series));
+                    const items = g.items.filter((i) => (data.headline.get(i.series) ?? null) !== null);
                     return (
                       <div key={g.id} className="rsum-tile" data-testid={`run-summary-tile-${g.id}`}>
                         <h4>{g.title}</h4>
@@ -390,17 +388,30 @@ function SummaryDialog(): React.JSX.Element {
   );
 }
 
+/** "1 unhealthy on average, 1 to watch, 2 out of range at times, 11 healthy throughout". */
+function verdictText(unhealthy: number, caution: number, atTimes: number, healthy: number): string {
+  if (unhealthy + caution + atTimes === 0) return `All ${healthy} healthy throughout`;
+  const parts: string[] = [];
+  parts.push(unhealthy > 0 ? `${unhealthy} unhealthy on average` : "None unhealthy on average");
+  if (caution > 0) parts.push(`${caution} to watch`);
+  if (atTimes > 0) parts.push(`${atTimes} out of range at times`);
+  parts.push(`${healthy} healthy throughout`);
+  return parts.join(", ");
+}
+
 /** A row's colour: the worse of the run mean's level and the worst window's. */
 function worse(j: Judgement): HealthLevel {
   return worseLevel(j.level, j.worstLevel);
 }
 
 function Bottlenecks({ data }: { data: SummaryData }): React.JSX.Element {
-  const lines: { key: string; level: HealthLevel; text: React.ReactNode }[] = [];
+  // A dominant stage or loss cause is a fact about where time and messages go, not a verdict: it is
+  // shown neutral. Only an entity past its utilisation ceiling or a metric out of band is coloured.
+  const lines: { key: string; level: HealthLevel | "info"; text: React.ReactNode }[] = [];
   if (data.stage !== null) {
     lines.push({
       key: "stage",
-      level: data.stage.share >= 0.5 ? "caution" : "healthy",
+      level: "info",
       text: (
         <>
           <strong>{stageName(data.stage.key)}</strong> takes the largest share of end-to-end latency: {Math.round(data.stage.share * 100)} %.
@@ -411,7 +422,7 @@ function Bottlenecks({ data }: { data: SummaryData }): React.JSX.Element {
   if (data.cause !== null) {
     lines.push({
       key: "cause",
-      level: data.cause.share >= 0.3 ? "caution" : "healthy",
+      level: "info",
       text: (
         <>
           Most lost messages were lost to <strong>{causeName(data.cause.key)}</strong>: {Math.round(data.cause.share * 100)} % of losses.
@@ -460,7 +471,7 @@ function Bottlenecks({ data }: { data: SummaryData }): React.JSX.Element {
     <ul className="rsum-bottlenecks">
       {lines.map((l) => (
         <li key={l.key}>
-          <HealthDot level={l.level} /> {l.text}
+          <span className={`hdot ${l.level}`} aria-hidden="true" /> {l.text}
         </li>
       ))}
     </ul>

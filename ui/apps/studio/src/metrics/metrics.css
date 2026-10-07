@@ -246,6 +246,7 @@ button.small.active { border-color: var(--accent); }
 .hdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; margin-right: 5px; vertical-align: baseline; }
 .hdot.healthy { background: var(--ok); }
 .hdot.caution { background: var(--warn); }
+.hdot.info { background: var(--text-faint); }
 .hdot.unhealthy { background: var(--err); box-shadow: 0 0 0 2px color-mix(in srgb, var(--err) 30%, transparent); }
 
 .hline { display: flex; align-items: baseline; gap: 4px; font-size: 12px; line-height: 1.4; margin-top: 4px; }
