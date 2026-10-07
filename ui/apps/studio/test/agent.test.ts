@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { cellText, foldEvents, keyToPointer, notable, parseInline, parseMarkdown, progressFraction, type AgentEvent, type Finding } from "../src/lib/agent.js";
+import {
+  cellText,
+  clock,
+  foldEvents,
+  keyToPointer,
+  mergeObservations,
+  notable,
+  observationsOf,
+  parseInline,
+  parseMarkdown,
+  progressFraction,
+  unseenCount,
+  type AgentEvent,
+  type Finding,
+  type Observation,
+} from "../src/lib/agent.js";
 
 describe("the agent panel's view of a job", () => {
   const events: AgentEvent[] = [
@@ -73,5 +88,44 @@ describe("the overview's Markdown", () => {
   it("splits headings, list items and paragraphs", () => {
     const b = parseMarkdown("## Bottlenecks\n\n- one [traffic.delay]\n- two\n\nA paragraph\ncontinued.");
     expect(b.map((x) => x.t)).toEqual(["h", "li", "li", "p"]);
+  });
+});
+
+describe("the always-on watcher's feed", () => {
+  const obs = (seq: number, run: string, severity: Observation["severity"] = "info"): Observation => ({
+    seq,
+    run_id: run,
+    generation: run === "r1" ? 1 : 2,
+    t_s: seq,
+    severity,
+    kind: "finding",
+    text: `o${seq}`,
+    evidence: [],
+  });
+
+  it("merges pages by seq, so a page read twice shows each line once", () => {
+    const a = mergeObservations([], [obs(1, "r1"), obs(2, "r1")]);
+    const b = mergeObservations(a, [obs(2, "r1"), obs(3, "r1")]);
+    expect(b.map((o) => o.seq)).toEqual([1, 2, 3]);
+    expect(mergeObservations(b, [obs(1, "r1")]).map((o) => o.seq)).toEqual([1, 2, 3]);
+  });
+
+  it("keeps one run's lines apart from the next run's", () => {
+    const all = [obs(1, "r1"), obs(2, "r1"), obs(3, "r2")];
+    expect(observationsOf(all, "r2", 2).map((o) => o.seq)).toEqual([3]);
+    expect(observationsOf(all, null, null)).toEqual([]);
+  });
+
+  it("counts only unseen warnings for the header badge", () => {
+    const all = [obs(1, "r1", "warning"), obs(2, "r1", "info"), obs(3, "r1", "critical"), obs(4, "r1", "notice")];
+    expect(unseenCount(all, 0)).toBe(2);
+    expect(unseenCount(all, 1)).toBe(1);
+    expect(unseenCount(all, 4)).toBe(0);
+  });
+
+  it("writes simulated time as minutes and seconds", () => {
+    expect(clock(65.9)).toBe("1:05");
+    expect(clock(0)).toBe("0:00");
+    expect(clock(Number.NaN)).toBe("0:00");
   });
 });

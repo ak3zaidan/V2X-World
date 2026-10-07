@@ -12,7 +12,17 @@
 
 import { create } from "zustand";
 
-import type { AgentEvent, AgentStatus, EventsPage } from "../lib/agent.js";
+import {
+  AGENT_SERVE_HINT,
+  mergeObservations,
+  type AgentEvent,
+  type AgentStatus,
+  type EventsPage,
+  type Observation,
+  type RunSummary,
+  type SummaryPage,
+  type WatchPage,
+} from "../lib/agent.js";
 import { useStudio } from "./store.js";
 
 export interface Turn {
@@ -137,7 +147,7 @@ export const useAgent = create<AgentState>((set, get) => {
             status: null,
             statusError:
               r.status === 404
-                ? "This engine has no agent. Start it with `v2xw serve --scenario <file>` (or put `v2xw serve --attach <engine>` in front of it) to use the agent."
+                ? AGENT_SERVE_HINT
                 : ((r.body as { error?: string }).error ?? `HTTP ${r.status}`),
           });
       } catch (e) {
@@ -166,3 +176,107 @@ export const useAgent = create<AgentState>((set, get) => {
 export function agentBusy(turns: readonly Turn[]): boolean {
   return turns.some((t) => t.running);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The always-on watcher. The server's agent follows every run by itself (crates/v2xw-cli
+// agent_host.rs); the page only reads what it noticed. Polling starts once, when the header
+// mounts, and never stops: the feed is small and a read costs the engine nothing.
+
+interface WatchState {
+  /** `null` until the first read; `false` when this engine has no agent. */
+  available: boolean | null;
+  /** Why not, in words. */
+  unavailable: string | null;
+  page: Omit<WatchPage, "observations"> | null;
+  /** Every observation since the engine started, oldest first. */
+  observations: Observation[];
+  /** The last finished run's summary. */
+  summary: RunSummary | null;
+  summaryMarkdown: string;
+  /** The model is still writing the summary's overview. */
+  overviewPending: boolean;
+  /** The highest `seq` the person has seen (the agent panel was open). */
+  seenSeq: number;
+  /** Bumped when a new summary arrives, so a run-summary overlay can open itself once. */
+  summaryArrivals: number;
+  markSeen: () => void;
+  start: () => void;
+  refreshSummary: () => Promise<void>;
+}
+
+const WATCH_MS = 1500;
+const WATCH_RETRY_MS = 10_000;
+let watchStarted = false;
+
+export const useAgentWatch = create<WatchState>((set, get) => {
+  const summaryKey = (s: RunSummary | null): string => (s === null ? "" : `${s.run_id}#${s.generation}`);
+
+  const poll = async (): Promise<void> => {
+    let delay = WATCH_MS;
+    try {
+      const after = get().observations.length;
+      const r = await call<WatchPage>(`/agent/watch?after=${after}`);
+      if (r.status === 404) {
+        set({ available: false, unavailable: AGENT_SERVE_HINT });
+        delay = WATCH_RETRY_MS;
+      } else if (!r.ok) {
+        set({ available: false, unavailable: (r.body as { error?: string }).error ?? `HTTP ${r.status}` });
+        delay = WATCH_RETRY_MS;
+      } else {
+        const page = r.body as WatchPage;
+        const { observations, ...rest } = page;
+        // A restarted engine numbers its feed from 1 again.
+        const held = page.next < get().observations.length ? [] : get().observations;
+        const merged = mergeObservations(held, observations);
+        const wasPending = get().overviewPending;
+        set({ available: true, unavailable: null, page: rest, observations: merged, overviewPending: page.overview_pending });
+        const want = page.summary_run_id === null ? "" : `${page.summary_run_id}#${page.summary_generation ?? 0}`;
+        if (want !== "" && (want !== summaryKey(get().summary) || (wasPending && !page.overview_pending))) {
+          await get().refreshSummary();
+        }
+      }
+    } catch (e) {
+      set({ available: false, unavailable: `The engine could not be reached: ${String(e)}` });
+      delay = WATCH_RETRY_MS;
+    }
+    setTimeout(() => void poll(), delay);
+  };
+
+  return {
+    available: null,
+    unavailable: null,
+    page: null,
+    observations: [],
+    summary: null,
+    summaryMarkdown: "",
+    overviewPending: false,
+    seenSeq: 0,
+    summaryArrivals: 0,
+    markSeen: () => {
+      const last = get().observations.at(-1)?.seq ?? 0;
+      if (last !== get().seenSeq) set({ seenSeq: last });
+    },
+    start: () => {
+      if (watchStarted) return;
+      watchStarted = true;
+      void poll();
+    },
+    refreshSummary: async () => {
+      try {
+        const r = await call<SummaryPage>("/agent/summary");
+        if (!r.ok) return;
+        const body = r.body as SummaryPage;
+        if (body.summary === null) return;
+        const fresh = summaryKey(body.summary) !== summaryKey(get().summary);
+        set((s) => ({
+          summary: body.summary,
+          summaryMarkdown: body.markdown ?? "",
+          overviewPending: body.overview_pending === true,
+          summaryArrivals: fresh ? s.summaryArrivals + 1 : s.summaryArrivals,
+        }));
+      } catch {
+        // The next poll tries again.
+      }
+    },
+  };
+});

@@ -13,6 +13,7 @@
 //! | where did this number come from | the run's provenance chain joined to the cards, [`explain`] |
 //! | where are this run's bottlenecks | the run's own metrics and backend view, judged by the deterministic [`analyst`] |
 //! | set it up, run it, explain it | the [`agent`] loop: Claude ([`claude`]) plans, the server runs, the analyst measures |
+//! | what is happening in the run on screen, and how did it go | the always-on [`watch`]er: the analyst over the live run, a summary at its end |
 //!
 //! Nothing here is a second implementation of any of those. The tool surface is
 //! *generated* from [`v2xw_server::openrpc::document`]; the scenario check is
@@ -138,6 +139,7 @@ pub mod secret;
 pub mod session;
 pub mod tools;
 pub mod transport;
+pub mod watch;
 
 pub use error::{CopilotError, Result};
 pub use agent::{Agent, AgentEvent, AgentPolicy, AgentReport};
@@ -153,3 +155,4 @@ pub use secret::Secret;
 pub use session::{Copilot, Policy, Step, ToolOutcome, Turn};
 pub use tools::{Effect, ToolSpec, ToolSurface};
 pub use transport::{HttpRpc, NoEngine, RpcTransport};
+pub use watch::{Observation, RunSummary, Verdict, Watcher};

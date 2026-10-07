@@ -341,3 +341,123 @@ export const SUGGESTIONS: readonly string[] = [
   "Compare DSRC with LTE-V2X on the same scenario.",
   "Run the credential lifecycle and check pseudonym top-ups and revocation.",
 ];
+
+// ---------------------------------------------------------------------------------------------
+// The always-on watcher (`GET /agent/watch`, `GET /agent/summary`; crates/v2xw-copilot/src/watch.rs).
+// The agent follows every run the engine serves without being asked: it posts short plain-language
+// observations while the run moves and writes the run's summary when it ends.
+
+export type ObservationKind = "started" | "finding" | "worse" | "cleared" | "trend" | "event" | "finished" | "failed";
+
+/** One thing the watcher noticed (`Observation` in watch.rs). */
+export interface Observation {
+  readonly seq: number;
+  readonly run_id: string;
+  readonly generation: number;
+  readonly t_s: number;
+  readonly severity: Severity;
+  readonly kind: ObservationKind;
+  readonly finding?: string;
+  readonly layer?: string;
+  readonly text: string;
+  readonly evidence: readonly Evidence[];
+}
+
+export type WatchPhase = "idle" | "watching" | "analysing" | "done";
+
+/** `GET /agent/watch?after=`. */
+export interface WatchPage {
+  readonly watching: boolean;
+  readonly phase: WatchPhase;
+  readonly run_id: string | null;
+  readonly generation: number | null;
+  readonly t_s: number;
+  readonly t_end_s: number;
+  readonly observations: readonly Observation[];
+  readonly next: number;
+  readonly summary_run_id: string | null;
+  readonly summary_generation: number | null;
+  readonly overview_pending: boolean;
+  readonly model: boolean;
+  readonly how_to_add_key: string | null;
+  readonly unreachable: string | null;
+}
+
+export type Verdict = "healthy" | "attention" | "unhealthy";
+export type LayerState = "healthy" | "attention" | "unhealthy" | "not-measured";
+
+export interface LayerVerdict {
+  readonly layer: string;
+  readonly title: string;
+  readonly state: LayerState;
+  readonly findings: readonly string[];
+}
+
+/** A finished run, as the agent sums it up (`RunSummary` in watch.rs). */
+export interface RunSummary {
+  readonly run_id: string;
+  readonly generation: number;
+  readonly scenario: string;
+  readonly scenario_hash: string;
+  readonly t_s: number;
+  readonly t_end_s: number;
+  readonly verdict: Verdict;
+  readonly headline: string;
+  readonly overview: string;
+  readonly overview_by: string;
+  readonly overview_note?: string | null;
+  readonly layers: readonly LayerVerdict[];
+  readonly problems: readonly Finding[];
+  readonly analysis: RunRecord["analysis"];
+  readonly observations: readonly Observation[];
+}
+
+/** `GET /agent/summary`. */
+export interface SummaryPage {
+  readonly summary: RunSummary | null;
+  readonly markdown?: string;
+  readonly overview_pending?: boolean;
+  readonly note?: string;
+}
+
+/** A verdict in words a person reads at a glance. */
+export function verdictLabel(v: Verdict): string {
+  return v === "healthy" ? "Healthy" : v === "attention" ? "Needs attention" : "Unhealthy";
+}
+
+/** A layer state in words. */
+export function layerStateLabel(s: LayerState): string {
+  return s === "healthy" ? "Within limits" : s === "attention" ? "Needs attention" : s === "unhealthy" ? "Unhealthy" : "Not measured";
+}
+
+/**
+ * Appends a page of observations to what the page already holds, by `seq`, so a page read twice
+ * (a retry, a slow poll overtaken by the next) never shows a line twice and order is kept.
+ */
+export function mergeObservations(held: readonly Observation[], page: readonly Observation[]): Observation[] {
+  const last = held.length > 0 ? held[held.length - 1]!.seq : 0;
+  const fresh = page.filter((o) => o.seq > last);
+  return fresh.length === 0 ? [...held] : [...held, ...fresh];
+}
+
+/** The observations of one run, oldest first. */
+export function observationsOf(all: readonly Observation[], runId: string | null, generation: number | null): Observation[] {
+  if (runId === null) return [];
+  return all.filter((o) => o.run_id === runId && (generation === null || o.generation === generation));
+}
+
+/** How many observations at warning level or above arrived after `seenSeq` (the header badge). */
+export function unseenCount(all: readonly Observation[], seenSeq: number): number {
+  return all.filter((o) => o.seq > seenSeq && (o.severity === "warning" || o.severity === "critical")).length;
+}
+
+/** "1:05" for 65 simulated seconds. */
+export function clock(tS: number): string {
+  if (!Number.isFinite(tS) || tS < 0) return "0:00";
+  const s = Math.floor(tS);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** The command that starts an engine with the agent, for the message shown when it has none. */
+export const AGENT_SERVE_HINT =
+  "The agent runs inside `v2xw serve`. Start the engine with `./target/release/v2xw serve --scenario <file> --port 8787 --paused --speed 0` (the same flags as v2xw-server) and reload this page.";

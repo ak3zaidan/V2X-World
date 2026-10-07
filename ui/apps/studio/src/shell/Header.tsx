@@ -8,6 +8,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 
+import { AgentBadge } from "../components/AgentBadge.js";
 import { BackendButton } from "../components/BackendView.js";
 import { HeaderClock } from "../components/HeaderClock.js";
 import { PrimaryAction, StatusPill } from "../components/Status.js";
@@ -283,10 +284,11 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
         aria-pressed={panel === "agent"}
         onClick={() => togglePanel("agent")}
         data-testid="agent-button"
-        title="Ask the agent to set up, run and explain a simulation"
+        title="The agent watches every run and sums it up at the end; ask it to set up, run and explain a simulation"
       >
         <AgentIcon />
         <span>Agent</span>
+        <AgentBadge />
       </button>
       <BackendButton />
       <button

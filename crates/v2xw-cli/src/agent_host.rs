@@ -10,6 +10,19 @@
 //! | `GET  /agent/events?job=&after=` | the job's events from `after` on: plan, changes, progress, analysis, report |
 //! | `POST /agent/stop` | stops the job at its next check, pausing a run it started |
 //! | `POST /agent/reset` | forgets the conversation |
+//! | `GET  /agent/watch?after=` | the always-on watcher: what it noticed about the runs since `after`, and where it is |
+//! | `GET  /agent/summary` | the last finished run's summary: verdict, layers, problems, overview, analysis |
+//!
+//! # Always on
+//!
+//! [`AgentHost::start_watcher`] starts a thread that follows every run the engine serves,
+//! with no request from anyone: it reads `run.status` once a second and, while a run
+//! moves, the run's evidence every few seconds, and hands both to
+//! [`v2xw_copilot::watch::Watcher`], which says in plain words when something notable
+//! happens and writes the run's summary when it ends. With a model key the summary's
+//! overview is the model's, checked number by number against the analysis; without one
+//! it is the analyst's, and the status says how to add a key. The watcher only reads; it
+//! never pauses, steps or changes the run, and the run never waits for it.
 //!
 //! The agent runs on a thread of its own and reaches the engine the way every other
 //! client does, JSON-RPC over HTTP to the engine's origin, so it has exactly the authority
@@ -34,7 +47,8 @@ use axum::routing::{get, post};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use v2xw_copilot::agent::{Agent, AgentEvent};
-use v2xw_copilot::{CurlPost, HttpRpc, LlmProvider, Secret};
+use v2xw_copilot::watch::{Next, WatchCadence, Watcher, model_overview, summary_markdown};
+use v2xw_copilot::{CurlPost, HttpRpc, LlmProvider, RpcTransport, Secret};
 
 type HostAgent = Agent<Box<dyn LlmProvider + Send>, HttpRpc<CurlPost>>;
 
@@ -59,6 +73,19 @@ pub struct AgentHost {
     /// `(model attached, provider name, runs)`, refreshed after every job, so a status
     /// request never waits on the agent while a job holds it.
     info: Arc<Mutex<(bool, String, usize)>>,
+    /// The always-on watcher's state.
+    watch: Arc<Mutex<WatchState>>,
+    watching: Arc<AtomicBool>,
+}
+
+/// The watcher and what the host knows around it.
+#[derive(Debug, Default)]
+struct WatchState {
+    watcher: Watcher,
+    /// The engine could not be read on the last try.
+    unreachable: Option<String>,
+    /// The model is writing the last summary's overview.
+    overview_pending: bool,
 }
 
 impl AgentHost {
@@ -73,6 +100,115 @@ impl AgentHost {
             job: Arc::new(Mutex::new(Job::default())),
             provider_error: Arc::new(Mutex::new(None)),
             info: Arc::new(Mutex::new((false, "none".to_string(), 0))),
+            watch: Arc::new(Mutex::new(WatchState::default())),
+            watching: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The engine transport, as every client of the engine gets it.
+    fn rpc(&self, origin: &str) -> HttpRpc<CurlPost> {
+        let mut rpc = HttpRpc::new(CurlPost::new().with_timeout_s(60), origin);
+        if let Some(t) = &self.token {
+            rpc = rpc.with_token(Secret::new(t.as_str()));
+        }
+        rpc
+    }
+
+    /// Starts the always-on watcher, once. It waits for the engine's origin, then follows
+    /// every run until the process ends.
+    pub fn start_watcher(&self, cadence: WatchCadence) {
+        if self.watching.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let host = self.clone();
+        std::thread::spawn(move || host.watch_loop(cadence));
+    }
+
+    fn watch_loop(&self, cadence: WatchCadence) {
+        let pause = std::time::Duration::from_millis(cadence.status_ms.max(100));
+        let origin = loop {
+            if let Some(o) = self.origin.get() {
+                break o.clone();
+            }
+            std::thread::sleep(pause);
+        };
+        let mut rpc = self.rpc(&origin);
+        // Evidence is read every `every` status reads while a run moves; counting reads
+        // keeps the host off a wall clock it does not need.
+        let every = (cadence.gather_ms / cadence.status_ms.max(1)).max(1);
+        let mut since_gather = every;
+        loop {
+            std::thread::sleep(pause);
+            let status = match rpc.call("run.status", &json!({})) {
+                Ok(s) => s,
+                Err(e) => {
+                    if let Ok(mut w) = self.watch.lock() {
+                        w.unreachable = Some(e.to_string());
+                    }
+                    continue;
+                }
+            };
+            let next = match self.watch.lock() {
+                Ok(mut w) => {
+                    w.unreachable = None;
+                    w.watcher.on_status(&status)
+                }
+                Err(_) => return,
+            };
+            match next {
+                Next::Idle => since_gather = every,
+                Next::Gather => {
+                    since_gather += 1;
+                    if since_gather < every {
+                        continue;
+                    }
+                    since_gather = 0;
+                    if let Ok(evidence) = v2xw_copilot::gather::gather(&mut rpc) {
+                        if let Ok(mut w) = self.watch.lock() {
+                            let _ = w.watcher.on_evidence(&evidence);
+                        }
+                    }
+                }
+                Next::Finish => {
+                    since_gather = every;
+                    let Ok(evidence) = v2xw_copilot::gather::gather(&mut rpc) else { continue };
+                    let summary = match self.watch.lock() {
+                        Ok(mut w) => {
+                            let s = w.watcher.finish(&evidence);
+                            w.overview_pending = v2xw_copilot::claude::key_source().is_some();
+                            s
+                        }
+                        Err(_) => return,
+                    };
+                    self.write_overview(&summary);
+                }
+            }
+        }
+    }
+
+    /// The model's overview of a finished run, when a model is attached. Runs on the
+    /// watcher's thread, after the analyst's summary is already readable.
+    fn write_overview(&self, summary: &v2xw_copilot::RunSummary) {
+        let (overview, by, note) = match v2xw_copilot::claude::provider_from_env() {
+            Err(_) => (String::new(), String::new(), None),
+            Ok(mut provider) => {
+                let name = provider.name().to_string();
+                match model_overview(&mut provider, summary) {
+                    Ok(Ok(text)) => (text, name, None),
+                    Ok(Err(why)) => (String::new(), String::new(), Some(why)),
+                    Err(e) => (
+                        String::new(),
+                        String::new(),
+                        Some(format!(
+                            "the model could not write the overview ({e}); the analyst's is shown"
+                        )),
+                    ),
+                }
+            }
+        };
+        if let Ok(mut w) = self.watch.lock() {
+            w.watcher.set_overview(&summary.run_id, overview, by, note);
+            w.overview_pending = false;
         }
     }
 
@@ -93,6 +229,8 @@ impl AgentHost {
             .route("/agent/events", get(events))
             .route("/agent/stop", post(stop))
             .route("/agent/reset", post(reset))
+            .route("/agent/watch", get(watch))
+            .route("/agent/summary", get(summary))
             .with_state(self.clone())
     }
 
@@ -105,10 +243,7 @@ impl AgentHost {
                 .get()
                 .cloned()
                 .ok_or_else(|| "the engine's address is not known yet".to_string())?;
-            let mut rpc = HttpRpc::new(CurlPost::new().with_timeout_s(60), &origin);
-            if let Some(t) = &self.token {
-                rpc = rpc.with_token(Secret::new(t.as_str()));
-            }
+            let rpc = self.rpc(&origin);
             let provider = match v2xw_copilot::claude::provider_from_env() {
                 Ok(p) => Some(p),
                 Err(why) => {
@@ -367,4 +502,65 @@ async fn reset(State(host): State<AgentHost>, headers: HeaderMap) -> Response {
     }
     let _ = host.with_agent(HostAgent::reset);
     reply(StatusCode::OK, json!({"reset": true}))
+}
+
+#[derive(Debug, Deserialize)]
+struct WatchQuery {
+    #[serde(default)]
+    after: Option<usize>,
+}
+
+async fn watch(State(host): State<AgentHost>, headers: HeaderMap, Query(q): Query<WatchQuery>) -> Response {
+    if !host.authorized(&headers) {
+        return unauthorized();
+    }
+    let Ok(w) = host.watch.lock() else {
+        return reply(StatusCode::INTERNAL_SERVER_ERROR, json!({"error": "lock poisoned"}));
+    };
+    let feed = w.watcher.feed();
+    let after = q.after.unwrap_or(0).min(feed.len());
+    let (t_s, t_end_s) = w.watcher.progress();
+    let model = v2xw_copilot::claude::key_source().is_some();
+    reply(
+        StatusCode::OK,
+        json!({
+            "watching": host.watching.load(Ordering::SeqCst),
+            "phase": w.watcher.phase(),
+            "run_id": w.watcher.run().map(|r| r.0),
+            "generation": w.watcher.run().map(|r| r.1),
+            "t_s": t_s,
+            "t_end_s": t_end_s,
+            "observations": &feed[after..],
+            "next": feed.len(),
+            "summary_run_id": w.watcher.summary().map(|s| s.run_id.clone()),
+            "summary_generation": w.watcher.summary().map(|s| s.generation),
+            "overview_pending": w.overview_pending,
+            "model": model,
+            "how_to_add_key": if model { Value::Null } else {
+                json!(v2xw_copilot::claude::HOW_TO_ADD_A_KEY)
+            },
+            "unreachable": w.unreachable,
+        }),
+    )
+}
+
+async fn summary(State(host): State<AgentHost>, headers: HeaderMap) -> Response {
+    if !host.authorized(&headers) {
+        return unauthorized();
+    }
+    let Ok(w) = host.watch.lock() else {
+        return reply(StatusCode::INTERNAL_SERVER_ERROR, json!({"error": "lock poisoned"}));
+    };
+    match w.watcher.summary() {
+        Some(s) => reply(
+            StatusCode::OK,
+            json!({"summary": s, "markdown": summary_markdown(s),
+                   "overview_pending": w.overview_pending}),
+        ),
+        None => reply(
+            StatusCode::OK,
+            json!({"summary": Value::Null, "phase": w.watcher.phase(),
+                   "note": "no run has finished since the engine started"}),
+        ),
+    }
 }

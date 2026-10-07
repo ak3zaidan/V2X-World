@@ -196,6 +196,9 @@ pub fn agent(opts: &AgentOptions) -> Result<String> {
 pub fn serve(opts: &ServeOptions) -> Result<String> {
     let rt = runtime()?;
     let host = AgentHost::new(opts.token.clone());
+    // Always on: the watcher follows every run from the moment the engine's address is
+    // known, whether or not anyone opens the agent panel.
+    host.start_watcher(v2xw_copilot::watch::WatchCadence::default());
     let bind = SocketAddr::new(opts.host, opts.port);
     if let Some(engine) = &opts.attach {
         host.set_origin(engine.trim_end_matches('/'));
@@ -246,7 +249,7 @@ pub fn serve(opts: &ServeOptions) -> Result<String> {
         host.set_origin(format!("http://127.0.0.1:{}", server.address().port()));
         println!("v2xw serve listening on {}", server.http_url());
         println!("  rpc      POST {}/rpc", server.http_url());
-        println!("  agent    {}/agent/status", server.http_url());
+        println!("  agent    {}/agent/status (watching every run)", server.http_url());
         print_key_line();
         use std::io::Write;
         let _ = std::io::stdout().flush();
