@@ -266,7 +266,9 @@ test(`the camera survives a random walk through every control (seed ${SEED})`, a
     },
     hud: async () => {
       // The control has to be usable at every window size the walk visits: at 960 x 600 the state
-      // legend used to sit on it, and at 800 x 520 the HUD itself.
+      // legend used to sit on it, and at 800 x 520 the HUD itself. The button is in the HUD's own
+      // header, so with nothing followed there is no HUD and nothing to press.
+      if ((await page.getByTestId("hud-dock").count()) === 0) return "no HUD to dock (nothing followed)";
       try {
         await page.getByTestId("hud-dock").click({ timeout: 5000 });
         return "toggle HUD dock";

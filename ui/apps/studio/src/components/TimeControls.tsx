@@ -15,21 +15,21 @@
  *
  * # What it says now
  *
- *  * **The state in words**, from the same description the header chip reads (`lib/status.ts`), so
- *    the two cannot disagree. Never a wire token: `idle` is not a word about a simulation.
+ *  * **One row, five things**: play or pause, step, the speed, the clock, and the timeline with its
+ *    events on it. Restart and Stop are in the header's menu (and Restart is the header's own button
+ *    once a run has finished); going to the start or one step back is Home and the left arrow on the
+ *    timeline. The bar used to carry thirteen controls, a step-unit menu and an events menu.
  *  * **A disabled control says why.** Which controls the engine will accept depends on the state it
  *    is in, and `state/transport.ts` holds those rules with the engine's own refusals beside them.
- *    A greyed button with no tooltip is a dead end; "Pause first — the engine refuses a step while
- *    the run is moving" is an instruction.
  *  * **How much of the span exists.** The bar draws the part of the run that has been simulated
  *    separately from the part that has not, because dragging into the second one is refused.
+ *  * **The events are on the timeline and can be clicked.** Each certificate change, detection,
+ *    revocation and safety warning is a tick above the track, and the scenario's own planned events a
+ *    taller one; a click jumps there, and Alt with an arrow key jumps to the next or previous one. The
+ *    ticks used to sit under the range input, where no pointer could reach them.
  *  * **A refused seek is reported.** `run.seek` outside the produced range fails with `-32003`,
- *    whose `data` carries the range that *would* have worked. That used to be swallowed by a bare
- *    `catch`, so the thumb snapped back and nothing was said. It is now shown, and the range it
+ *    whose `data` carries the range that *would* have worked. That is shown, and the range it
  *    reports is remembered and drawn.
- *  * **Restart is here**, not only in the header, because this is the bar you are looking at when a
- *    run ends. It rewinds, reopens the closed stream and resumes, in that order
- *    (`StudioEngine.startRun`).
  *
  * The scrub bar commits on release, not on change. React maps `onChange` on an
  * `<input type="range">` onto the DOM `input` event, so a plain `onChange={seek}` fires once for
@@ -58,7 +58,6 @@ import { useStudio } from "../state/store.js";
 import { transport as transportCaps } from "../state/transport.js";
 import { durationNs, simClock } from "../lib/format.js";
 import { describeError } from "../lib/errors.js";
-import { eventSubject } from "../lib/provenance.js";
 import { useStatus } from "./Status.js";
 
 /**
@@ -74,13 +73,6 @@ const SPEEDS = [0, 0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50, 100];
 function speedLabel(speed: number): string {
   return speed === 0 ? "as fast as possible" : `${speed}×`;
 }
-
-/** What one press of Step advances, in words. */
-const STEP_UNITS: readonly { value: "step" | "keyframe" | "second"; label: string }[] = [
-  { value: "step", label: "one step" },
-  { value: "keyframe", label: "one keyframe" },
-  { value: "second", label: "one second" },
-];
 
 const MARK_COLOR: Record<string, string> = {
   "sec.cert": "var(--state-reported, #e69f00)",
@@ -120,6 +112,16 @@ function seekRefusal(err: unknown): SeekRefusal | null {
   return { minNs: min, maxNs: max };
 }
 
+/**
+ * Where a `run.pause` or `run.step` reply (§6.6, `{state, t_ns}`) left a paused run, or `null` for
+ * any other reply — a resume, whose clock is moving, included.
+ */
+function pausedAt(reply: unknown): number | null {
+  if (reply === null || typeof reply !== "object") return null;
+  const { state, t_ns: t } = reply as { state?: unknown; t_ns?: unknown };
+  return state === "paused" && typeof t === "number" ? t : null;
+}
+
 export function TimeControls(): React.JSX.Element {
   const run = useStudio((s) => s.run);
   const simTimeNs = useStudio((s) => s.simTimeNs);
@@ -129,22 +131,58 @@ export function TimeControls(): React.JSX.Element {
   const replay = useStudio((s) => s.replay);
   const compareSide = useStudio((s) => s.compare);
   const compareSync = useStudio((s) => s.compareSync);
-  const setWhy = useStudio((s) => s.setWhy);
   const status = useStatus();
   const seekProgress = useStudio((s) => s.seekProgress);
   const scenarioDoc = useStudio((s) => s.scenario);
   const stagedScenario = useStudio((s) => s.scenarioExtras.staged);
   const firedEvents = useStudio((s) => s.firedEvents);
-  const [stepUnit, setStepUnit] = useState<"step" | "keyframe" | "second">("step");
   const [busy, setBusy] = useState(false);
   /** The value under the thumb while a scrub gesture is in flight; `null` when it is not. */
   const [scrubNs, setScrubNs] = useState<number | null>(null);
-  const [eventsOpen, setEventsOpen] = useState(false);
   /** The last thing a control said, when it was not what the user asked for. */
   const [notice, setNotice] = useState<string | null>(null);
   /** The range the engine reported the last time it refused a seek. */
   const [refused, setRefused] = useState<SeekRefusal | null>(null);
   const scrubRef = useRef<number | null>(null);
+  /**
+   * Where the last seek landed, until the stream's clock gets there.
+   *
+   * `run.seek` answers before the page's clock moves: the keyframe it streams reaches the store on
+   * the next 5 Hz flush. In that gap the bar still read the old instant, so a second Alt+← right
+   * after an Alt+→ looked for an event before the *previous* position — "No event before this
+   * point." at 00:00:18 with an event at 12 s — and the thumb snapped back for a moment after every
+   * drag. The bar reads this instead until the stream agrees, or for a second at most.
+   */
+  const [landingNs, setLandingNs] = useState<number | null>(null);
+  const barRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Which of the bar's controls had the keyboard when a call made the bar busy. Every control is
+   * disabled while a call is in flight, and a disabled element drops the focus to the page: Alt+→
+   * jumped to the next event and the Alt+← after it went nowhere, and Space on Play started the run
+   * and a second Space did not pause it. The focus goes back once the call is over — to the same
+   * control, or from Play to the Pause that replaced it and back.
+   */
+  const refocusRef = useRef<string | null>(null);
+  const markBusy = useCallback(() => {
+    const active = typeof document === "undefined" ? null : document.activeElement;
+    const bar = barRef.current;
+    if (active instanceof HTMLElement && bar !== null && bar.contains(active)) {
+      refocusRef.current = active.dataset.testid ?? null;
+    }
+    setBusy(true);
+  }, []);
+  useEffect(() => {
+    const was = refocusRef.current;
+    if (busy || was === null) return;
+    refocusRef.current = null;
+    const bar = barRef.current;
+    if (bar === null) return;
+    const swap: Record<string, string> = { play: "pause", pause: "play" };
+    const target =
+      bar.querySelector<HTMLElement>(`[data-testid="${was}"]`) ??
+      (swap[was] !== undefined ? bar.querySelector<HTMLElement>(`[data-testid="${swap[was]}"]`) : null);
+    target?.focus();
+  }, [busy]);
 
   /**
    * Which clock the bar is driving.
@@ -171,10 +209,54 @@ export function TimeControls(): React.JSX.Element {
     [connection, run.state, run.tNs, run.tEndNs, hello?.simDurationNs, streamNs, replay, busy],
   );
 
+  /**
+   * Whether the timeline itself takes input, which unlike the buttons does not wait for a call in
+   * flight. It used to be disabled with them, so an arrow key pressed while the previous press's
+   * seek was still out was dropped: two quick presses moved one step (regressions e2e, "arrow keys
+   * on the scrub bar", on a loaded machine where a seek takes longer). A gesture that ends while
+   * a call is out now waits for it (`serial`) and then seeks, so each press is still one seek.
+   */
+  const scrubCaps = useMemo(
+    () =>
+      transportCaps({
+        connection,
+        runState: run.state,
+        tNs: run.tNs,
+        tEndNs: run.tEndNs > 0 ? run.tEndNs : hello?.simDurationNs ?? 0,
+        streamNs,
+        recording: replay === null ? null : { startNs: replay.startNs, endNs: replay.endNs },
+        busy: false,
+      }).seek,
+    [connection, run.state, run.tNs, run.tEndNs, hello?.simDurationNs, streamNs, replay],
+  );
+  /** The bar's calls, one after another: the tail of the chain, and how many are in it. */
+  const chainRef = useRef<Promise<void>>(Promise.resolve());
+  const queuedRef = useRef(0);
+  const serial = useCallback(<T,>(fn: () => Promise<T>): Promise<T> => {
+    queuedRef.current += 1;
+    const run = chainRef.current.then(fn);
+    const settle = (): void => {
+      queuedRef.current -= 1;
+    };
+    chainRef.current = run.then(settle, settle);
+    return run;
+  }, []);
+
   const { minNs: startNs, spanNs: endNs } = caps;
   // The clock, the fill and the thumb all read the dragged value, so the readout stays live while
-  // the gesture is in flight and no seek has been issued yet.
-  const nowNs = scrubNs ?? streamNs;
+  // the gesture is in flight and no seek has been issued yet; after a seek, the instant it landed on
+  // until the stream's clock reaches it.
+  const nowNs = scrubNs ?? landingNs ?? streamNs;
+  useEffect(() => {
+    if (landingNs === null) return;
+    const slackNs = (hello?.mobilityStepNs ?? 1e8) / 2;
+    if (Math.abs(streamNs - landingNs) <= slackNs) {
+      setLandingNs(null);
+      return;
+    }
+    const id = window.setTimeout(() => setLandingNs(null), 1000);
+    return () => window.clearTimeout(id);
+  }, [landingNs, streamNs, hello?.mobilityStepNs]);
   const span = endNs - startNs;
   const pct = useCallback(
     (tNs: number) => (span > 0 ? Math.min(100, Math.max(0, ((tNs - startNs) / span) * 100)) : 0),
@@ -186,25 +268,29 @@ export function TimeControls(): React.JSX.Element {
   const showSeekable = caps.partial && seekableNs > startNs;
 
   const call = useCallback(
-    async (fn: () => Promise<unknown>) => {
-      setBusy(true);
-      setNotice(null);
-      try {
-        await fn();
-      } catch (err) {
-        setNotice(describeError(err));
-      } finally {
-        setBusy(false);
-        if (!drivingReplay) await engine.refreshStatus();
-        // A step, a pause or a resume moves side A's clock too, so side B follows it here rather
-        // than only on a scrub: `run.status` has just been refreshed, so this reads the new time.
-        if (compareSide !== null && compareSync.time) {
-          const state = useStudio.getState();
-          await compare.seekTo(state.simTimeNs > 0 ? state.simTimeNs : state.run.tNs);
+    (fn: () => Promise<unknown>) =>
+      serial(async () => {
+        markBusy();
+        setNotice(null);
+        try {
+          // A pause or a step answers with where the run now stands; that is where the bar is until
+          // the stream's own clock gets there (see `landingNs`).
+          const landed = pausedAt(await fn());
+          if (landed !== null && !drivingReplay) setLandingNs(landed);
+        } catch (err) {
+          setNotice(describeError(err));
+        } finally {
+          setBusy(false);
+          if (!drivingReplay) await engine.refreshStatus();
+          // A step, a pause or a resume moves side A's clock too, so side B follows it here rather
+          // than only on a scrub: `run.status` has just been refreshed, so this reads the new time.
+          if (compareSide !== null && compareSync.time) {
+            const state = useStudio.getState();
+            await compare.seekTo(state.simTimeNs > 0 ? state.simTimeNs : state.run.tNs);
+          }
         }
-      }
-    },
-    [compareSide, compareSync.time, drivingReplay],
+      }),
+    [compareSide, compareSync.time, drivingReplay, markBusy, serial],
   );
 
   /**
@@ -280,6 +366,7 @@ export function TimeControls(): React.JSX.Element {
         // there; the engine reports `job.progress` meanwhile (shown below the bar), so the call
         // is allowed as long as a long jump on a large map takes rather than the usual 30 s.
         await engine.request("run.seek", { t_ns: target, pause_after: true }, { timeoutMs: SEEK_TIMEOUT_MS });
+        setLandingNs(target);
       } catch (err) {
         // §6.6's `-32003` carries the range that would have worked. Remembering it is how the bar
         // learns a bound `run.status` never publishes — and how the two engines in this repository,
@@ -313,22 +400,27 @@ export function TimeControls(): React.JSX.Element {
     const value = scrubRef.current;
     scrubRef.current = null;
     if (value === null) {
-      setScrubNs(null);
+      if (queuedRef.current === 0) setScrubNs(null);
       return;
     }
-    setBusy(true);
-    setNotice(null);
-    try {
-      await seekOne(value);
-      if (compareSide !== null && compareSync.time) await compare.seekTo(Math.round(value));
-    } catch (err) {
-      setNotice(describeError(err));
-    } finally {
-      setBusy(false);
-      if (!drivingReplay) await engine.refreshStatus();
-      setScrubNs(null);
-    }
-  }, [compareSide, compareSync.time, seekOne, drivingReplay]);
+    await serial(async () => {
+      markBusy();
+      setNotice(null);
+      try {
+        await seekOne(value);
+        if (compareSide !== null && compareSync.time) await compare.seekTo(Math.round(value));
+      } catch (err) {
+        setNotice(describeError(err));
+      } finally {
+        setBusy(false);
+        if (!drivingReplay) await engine.refreshStatus();
+        // The thumb lets go of the gesture's value only when nothing else is queued behind this
+        // seek and no new gesture has started: otherwise it would snap back to this landing for
+        // the length of the next seek.
+        if (queuedRef.current <= 1 && scrubRef.current === null) setScrubNs(null);
+      }
+    });
+  }, [compareSide, compareSync.time, seekOne, drivingReplay, markBusy, serial]);
 
   // A range thumb dragged past the edge of the input releases the pointer somewhere else, so the
   // release is caught on the window rather than on the element.
@@ -349,123 +441,81 @@ export function TimeControls(): React.JSX.Element {
     if (run.state === "idle" || run.tNs === 0) setRefused(null);
   }, [run.state, run.tNs]);
 
+  /** Every event on the timeline, oldest first: the engine's marks and the scenario's plan. */
+  const eventTimes = useMemo(
+    () => [...new Set([...timeline.map((m) => m.tNs), ...planned.map((p) => p.tNs)])].sort((a, b) => a - b),
+    [timeline, planned],
+  );
+  const jumpEvent = useCallback(
+    (dir: 1 | -1) => {
+      // Half a mobility step of slack, so standing on an event and asking for the next one moves on.
+      const slack = (hello?.mobilityStepNs ?? 1e8) / 2;
+      const next = dir > 0 ? eventTimes.find((t) => t > nowNs + slack) : [...eventTimes].reverse().find((t) => t < nowNs - slack);
+      if (next !== undefined) seekTo(next);
+      else setNotice(dir > 0 ? "No event after this point." : "No event before this point.");
+    },
+    [eventTimes, nowNs, seekTo, hello?.mobilityStepNs],
+  );
+
   return (
-    <div className="timebar" data-testid="time-controls">
-      <div className="transport">
+    <div className="timebar" data-testid="time-controls" ref={barRef}>
+      {run.state === "running" ? (
         <button
           type="button"
-          className={run.state === "finished" ? "icon primary" : "icon"}
-          title={caps.restart.why}
-          disabled={!caps.restart.enabled}
-          onClick={() => void call(() => engine.startRun())}
-          data-testid="restart"
-          aria-label="Restart the run from the beginning"
+          className="icon primary tb-play"
+          title={caps.pause.why}
+          disabled={!caps.pause.enabled}
+          onClick={() => void call(() => engine.request("run.pause", {}))}
+          data-testid="pause"
+          aria-label="Pause"
         >
-          ↺
+          ❚❚
         </button>
+      ) : (
         <button
           type="button"
-          className="icon"
-          title={caps.seek.enabled ? "Go back to the start of the span" : caps.seek.why}
-          disabled={!caps.seek.enabled}
-          onClick={() => seekTo(startNs)}
-          data-testid="seek-start"
-          aria-label="Go to the start"
+          // Not `primary` while it is disabled: an accented button reads as the thing to press.
+          className={caps.play.enabled ? "icon primary tb-play" : "icon tb-play"}
+          title={caps.play.why}
+          disabled={!caps.play.enabled}
+          onClick={() => void call(() => engine.request("run.resume", {}))}
+          data-testid="play"
+          aria-label="Play"
         >
-          ◀◀
+          ▶
         </button>
-        <button
-          type="button"
-          className="icon"
-          title={caps.seek.enabled ? "Go back one mobility step" : caps.seek.why}
-          disabled={!caps.seek.enabled}
-          onClick={() => seekTo(Math.max(startNs, nowNs - (hello?.mobilityStepNs ?? 1e8)))}
-          data-testid="step-back"
-          aria-label="Back one step"
-        >
-          ◀
-        </button>
-        {run.state === "running" ? (
-          <button
-            type="button"
-            className="icon primary"
-            title={caps.pause.why}
-            disabled={!caps.pause.enabled}
-            onClick={() => void call(() => engine.request("run.pause", {}))}
-            data-testid="pause"
-            aria-label="Pause"
-          >
-            ❚❚
-          </button>
-        ) : (
-          <button
-            type="button"
-            // Not `primary` while it is disabled: an accented button reads as the thing to press,
-            // and on a finished run the thing to press is Restart.
-            className={caps.play.enabled ? "icon primary" : "icon"}
-            title={caps.play.why}
-            disabled={!caps.play.enabled}
-            onClick={() => void call(() => engine.request("run.resume", {}))}
-            data-testid="play"
-            aria-label="Play"
-          >
-            ▶
-          </button>
-        )}
-        <button
-          type="button"
-          className="icon"
-          title={caps.step.enabled ? `Advance ${STEP_UNITS.find((u) => u.value === stepUnit)?.label ?? "one step"} and stop` : caps.step.why}
-          disabled={!caps.step.enabled}
-          onClick={() => void call(() => engine.request("run.step", { unit: stepUnit, count: 1 }))}
-          data-testid="step"
-          aria-label="Step forward"
-        >
-          ▶▶
-        </button>
-        <button
-          type="button"
-          className="icon"
-          title={caps.stop.why}
-          disabled={!caps.stop.enabled}
-          onClick={() => void call(() => engine.request("run.stop", {}))}
-          data-testid="stop"
-          aria-label="Stop the run"
-        >
-          ■
-        </button>
-      </div>
-
-      <select
-        value={stepUnit}
-        onChange={(e) => setStepUnit(e.target.value as "step" | "keyframe" | "second")}
-        style={{ width: "auto" }}
-        aria-label="How far one press of Step advances"
-        title="How far one press of Step advances"
-        data-testid="step-unit"
+      )}
+      <button
+        type="button"
+        className="icon"
+        title={caps.step.enabled ? "Advance one mobility step and stop" : caps.step.why}
+        disabled={!caps.step.enabled}
+        onClick={() => void call(() => engine.request("run.step", { unit: "step", count: 1 }))}
+        data-testid="step"
+        aria-label="Step forward"
       >
-        {STEP_UNITS.map((u) => (
-          <option key={u.value} value={u.value}>
-            {u.label}
-          </option>
-        ))}
-      </select>
+        ▶|
+      </button>
 
       <select
+        className="tb-speed"
         value={String(run.speed)}
         onChange={(e) => void call(() => engine.request("run.speed", { speed: Number(e.target.value) }))}
-        style={{ width: "auto" }}
         aria-label="Speed"
         title={caps.speed.why}
         data-testid="speed"
         disabled={!caps.speed.enabled}
       >
-        {(SPEEDS.includes(run.speed) ? SPEEDS : [run.speed, ...SPEEDS]).map((s) => (
-          <option key={s} value={String(s)}>
-            {speedLabel(s)}
+        {(SPEEDS.includes(run.speed) ? SPEEDS : [run.speed, ...SPEEDS]).map((sp) => (
+          <option key={sp} value={String(sp)}>
+            {speedLabel(sp)}
           </option>
         ))}
       </select>
+
+      <span className="clock" data-testid="sim-clock" title={drivingReplay ? "The recording's own span" : status.headline}>
+        {simClock(nowNs)}
+      </span>
 
       <div className="scrub" data-testid="scrub">
         <div className="track" />
@@ -482,55 +532,34 @@ export function TimeControls(): React.JSX.Element {
           />
         ) : null}
         <div className="fill" style={{ width: `${pct(nowNs)}%` }} />
-        {/*
-          Decorative: the range input sits above the track and owns every pointer event in this
-          box, so a marker cannot be clicked however it is marked up. The same events are reachable
-          by keyboard — and explainable — through the `events ▾` list at the end of the bar, which
-          is the accessible surface for them rather than a focusable element that cannot be
-          activated with a pointer.
-        */}
         {planned.map((p) =>
           p.width > 0 ? (
             <div key={`band-${p.index}`} className="event-band" aria-hidden="true" style={{ left: `${p.left}%`, width: `${p.width}%` }} title={p.title} />
           ) : null,
         )}
-        {planned.map((p) => (
-          <div
-            key={`scenario-${p.index}`}
-            className="scenario-mark"
-            aria-hidden="true"
-            data-testid="scenario-event-mark"
-            data-kind={p.type}
-            data-fired={p.fired ? "true" : "false"}
-            style={{ left: `${p.left}%` }}
-            title={p.title}
-          />
-        ))}
-        {marks.map((m) => (
-          <div
-            key={`${m.channel}-${m.left}`}
-            className="mark"
-            aria-hidden="true"
-            style={{ left: `${m.left}%`, background: MARK_COLOR[m.channel] ?? "var(--accent)" }}
-            title={`${CHANNEL_LABEL[m.channel] ?? m.channel} at ${simClock(m.tNs)} — ${m.label}`}
-          />
-        ))}
         <input
           type="range"
           min={startNs}
           max={Math.max(startNs + 1, endNs)}
           step={hello?.mobilityStepNs ?? 1e8}
           value={nowNs}
-          disabled={!caps.seek.enabled}
+          disabled={!scrubCaps.enabled}
           aria-label="Position in simulated time"
           aria-valuetext={simClock(nowNs)}
-          title={caps.seek.why}
+          aria-keyshortcuts="Alt+ArrowRight Alt+ArrowLeft"
+          title={scrubCaps.enabled ? "Drag to move in time; Home goes to the start, Alt+arrow to the next or previous event" : scrubCaps.why}
           data-testid="scrub-range"
           onPointerDown={() => {
             scrubRef.current = nowNs;
             setScrubNs(nowNs);
           }}
           onKeyDown={(e) => {
+            // Alt+arrow jumps between events, the keyboard's way to the ticks a pointer clicks.
+            if (e.altKey && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
+              e.preventDefault();
+              jumpEvent(e.key === "ArrowRight" ? 1 : -1);
+              return;
+            }
             // Arrow/Home/End move the thumb; the seek waits for the key to come back up, so
             // holding an arrow down is still one call.
             if (e.key.startsWith("Arrow") || e.key === "Home" || e.key === "End" || e.key === "PageUp" || e.key === "PageDown") {
@@ -558,93 +587,53 @@ export function TimeControls(): React.JSX.Element {
             if (scrubRef.current !== null) void commitScrub();
           }}
         />
+        {/*
+          The events, above the range input so a pointer reaches them: a tick per event, which jumps
+          there when clicked. Out of the tab order (a long run has hundreds); the keyboard's way to
+          them is Alt+arrow on the timeline, announced by `aria-keyshortcuts`.
+        */}
+        <div className="scrub-events" data-testid="timeline-events">
+          {planned.map((p) => (
+            <button
+              key={`scenario-${p.index}`}
+              type="button"
+              tabIndex={-1}
+              className="scenario-mark"
+              data-testid="scenario-event-mark"
+              data-kind={p.type}
+              data-fired={p.fired ? "true" : "false"}
+              style={{ left: `${p.left}%` }}
+              title={p.title}
+              aria-label={p.title}
+              disabled={!scrubCaps.enabled}
+              onClick={() => seekTo(p.tNs)}
+            />
+          ))}
+          {marks.map((m) => (
+            <button
+              key={`${m.channel}-${m.left}`}
+              type="button"
+              tabIndex={-1}
+              className="mark"
+              data-testid="timeline-mark"
+              data-channel={m.channel}
+              style={{ left: `${m.left}%`, background: MARK_COLOR[m.channel] ?? "var(--accent)" }}
+              title={`${CHANNEL_LABEL[m.channel] ?? m.channel} at ${simClock(m.tNs)} — ${m.label}`}
+              aria-label={`${CHANNEL_LABEL[m.channel] ?? m.channel} at ${simClock(m.tNs)}`}
+              disabled={!scrubCaps.enabled}
+              onClick={() => seekTo(m.tNs)}
+            />
+          ))}
+        </div>
       </div>
 
-      <span className="clock" data-testid="sim-clock">
-        {simClock(nowNs)}
-      </span>
-      <span
-        className="dim"
-        data-testid="time-state"
-        title={
-          drivingReplay
-            ? "The recording's own span"
-            : `Simulated time, out of the ${durationNs(endNs)} this run covers. ${status.headline}`
-        }
-      >
-        of {durationNs(endNs)} · {drivingReplay ? "recording" : status.chip}
+      <span className="dim tb-end" data-testid="time-state" title={drivingReplay ? "The recording's own span" : `This run covers ${durationNs(endNs)}. ${status.headline}`}>
+        {durationNs(endNs)}
       </span>
       {syncB ? (
         <span className="chip" data-testid="sync-chip" title="A scrub moves both runs; see the Compare panel">
           B synced{compareSync.offsetNs === 0 ? "" : ` ${(compareSync.offsetNs / 1e9).toFixed(1)} s`}
         </span>
-      ) : null}
-
-      {timeline.length > 0 ? (
-        <button
-          type="button"
-          className="icon"
-          title={caps.seek.enabled ? "Jump to the next marked event" : caps.seek.why}
-          disabled={!caps.seek.enabled}
-          onClick={() => {
-            const next = timeline.map((m) => m.tNs).filter((t) => t > nowNs).sort((a, b) => a - b)[0];
-            if (next !== undefined) seekTo(next);
-            else setNotice("No marked event after this point.");
-          }}
-          data-testid="next-event"
-        >
-          ⤼ event
-        </button>
-      ) : null}
-
-      {timeline.length > 0 ? (
-        <div className="menu">
-          <button
-            type="button"
-            className="icon"
-            onClick={() => setEventsOpen((v) => !v)}
-            aria-expanded={eventsOpen}
-            data-testid="event-list-button"
-          >
-            events ▾ <span className="dim">{timeline.length}</span>
-          </button>
-          {eventsOpen ? (
-            <div className="menu-pop up wide" data-testid="event-list">
-              <div className="sec">Latest events — the time jumps there, the description explains it</div>
-              {[...timeline]
-                .slice(-25)
-                .reverse()
-                .map((m, i) => (
-                  <div className="row" key={`${m.tNs}-${m.channel}-${m.nodeId}-${i}`}>
-                    <button
-                      type="button"
-                      className="linklike"
-                      disabled={!caps.seek.enabled}
-                      onClick={() => seekTo(m.tNs)}
-                      aria-label={`Go to ${simClock(m.tNs)} — ${m.channel}, ${m.label}`}
-                    >
-                      {simClock(m.tNs)}
-                    </button>
-                    <span
-                      className="dim"
-                      style={{ color: MARK_COLOR[m.channel] ?? "var(--accent)" }}
-                      title={m.channel}
-                    >
-                      {CHANNEL_LABEL[m.channel] ?? m.channel}
-                    </span>
-                    <button
-                      type="button"
-                      className="linklike grow"
-                      onClick={() => setWhy(eventSubject(m.channel, m.label, m.nodeId, m.provId))}
-                      aria-label={`Explain ${m.label} on node ${m.nodeId}`}
-                    >
-                      {m.label}
-                    </button>
-                  </div>
-                ))}
-            </div>
-          ) : null}
-        </div>
       ) : null}
 
       {seekProgress !== null ? (

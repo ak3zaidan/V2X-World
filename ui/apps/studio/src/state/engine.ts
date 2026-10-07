@@ -53,6 +53,7 @@ import {
 import { SPARKLINE_SERIES } from "../lib/telemetry.js";
 import { hex, shortDigest } from "../lib/format.js";
 import { describeError, refusedRows } from "../lib/errors.js";
+import { securityOf } from "../lib/security.js";
 import { resolveEngineUrl } from "../lib/target.js";
 import { studioTheme, type ThemeName } from "../lib/theme.js";
 import {
@@ -1021,8 +1022,13 @@ export class StudioEngine {
     try {
       if (quiet) {
         if (!this.streaming) return;
-        const res = await this.client.request("inspect.node", { node, include: ["neighbors"], limit: 50 });
-        if (this.#followedNode === node) useStudio.getState().setNeighbors(res.neighbors ?? null);
+        // The credential state rides along: `node.security` changes once a telemetry window, and
+        // the HUD's pseudonym, pool and top-up lines read it.
+        const res = await this.client.request("inspect.node", { node, include: ["neighbors", "certs", "crl"], limit: 50 });
+        if (this.#followedNode === node) {
+          useStudio.getState().setNeighbors(res.neighbors ?? null);
+          useStudio.getState().setSecurity(securityOf(res));
+        }
         return;
       }
       const res = await this.request("inspect.node", {
@@ -1032,6 +1038,7 @@ export class StudioEngine {
       });
       if (this.#followedNode !== node) return;
       useStudio.getState().setInspect(res);
+      useStudio.getState().setSecurity(securityOf(res));
     } catch {
       if (!quiet) useStudio.getState().setInspect(null);
     }

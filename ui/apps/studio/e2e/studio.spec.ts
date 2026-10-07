@@ -130,21 +130,20 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
       cpu: read("cpu_util_pm"),
       cbr: read("cbr_pm"),
       neighbours: read("nbr_total"),
-      certs: read("cert_stored"),
-      crl: read("crl_entries"),
-      gnss: read("gnss_fix"),
       txPower: read("tx_power_cdbm"),
-      posError: read("pos_error_m"),
     };
   });
   // Non-zero, non-"n/a" telemetry: rx rate and neighbour count are the two the HUD leads with.
   expect(hudNumbers.rx).toMatch(/[1-9]/);
   expect(hudNumbers.cpu).toMatch(/[1-9]/);
-  expect(hudNumbers.neighbours).not.toContain("n/a");
-  expect(hudNumbers.certs).toMatch(/[1-9]/);
-  expect(hudNumbers.gnss).toMatch(/2D|3D|DGNSS|RTK|none|dead/);
+  expect(hudNumbers.neighbours).toMatch(/\d/);
   expect(hudNumbers.txPower).toContain("dBm");
-  expect(hudNumbers.posError).toContain("m");
+  // The rest of the record — the certificate store, GNSS and the clock — is in the inspector's
+  // overview, the HUD keeping to radio, security and queues.
+  await page.getByTestId("tab-state").click();
+  await expect(page.getByTestId("insp-security")).toContainText(/Certificates stored|certificates/i);
+  await expect(page.getByTestId("insp-more")).toContainText(/Fix|GNSS/);
+  await page.getByTestId("tab-messages").click();
 
   // 8. The sparkline row has drawn something.
   await expect(page.getByTestId("hud-sparklines")).toBeVisible();
@@ -214,8 +213,10 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   await page.getByTestId("play").click();
   await expect(page.getByTestId("pause")).toBeVisible({ timeout: 20_000 });
 
-  // A seek back to the start must move the clock backwards (§6.6 run.seek).
-  await page.getByTestId("seek-start").click();
+  // A seek back to the start must move the clock backwards (§6.6 run.seek). The bar has no
+  // start button any more: Home on the timeline goes there.
+  await page.getByTestId("scrub-range").focus();
+  await page.keyboard.press("Home");
   await expect.poll(async () => {
     const text = (await page.getByTestId("sim-clock").textContent()) ?? "";
     return text.startsWith("00:00:0");
@@ -249,7 +250,7 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   await page.keyboard.press("Escape");
 
   // 14. The engine log the inspector shows carries no protocol, world or RPC errors.
-  await page.getByRole("button", { name: "log", exact: true }).click();
+  await page.getByTestId("tab-log").click();
   const logLines = await page.locator('[data-testid="inspector-log"] .line').allTextContents();
   expect(logLines.length).toBeGreaterThan(0);
   expect(logLines.filter((l) => l.startsWith("error"))).toEqual([]);
@@ -275,6 +276,9 @@ test("light theme renders and the actor-state legend keeps shape redundancy", as
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("app-menu")).toHaveCount(0);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  // The key is folded to one chip until it is asked for.
+  await expect(page.getByTestId("state-legend")).toHaveCount(0);
+  await page.getByTestId("legend-toggle").click();
   await expect(page.getByTestId("state-legend")).toBeVisible();
   // Five state glyphs, each its own shape; the road-user key the vru track added (a vehicle dot
   // and a smaller pedestrian/cyclist dot) is a size key, not a state, and is counted apart.

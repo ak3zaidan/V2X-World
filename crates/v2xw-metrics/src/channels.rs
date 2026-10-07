@@ -1319,6 +1319,30 @@ impl ChannelView for NodeTelemetryView {
     const CHANNEL: &'static str = "node.telemetry";
 }
 
+/// `node.drop` — what one node discarded in one step with no frame to record it on (NODE).
+///
+/// A receive-side drop is on `node.rx`, attached to the attempt it ended. A transmit-side
+/// drop — a message the node could not build, sign or queue for the MAC — and a CRL
+/// backlog shed have no attempt, so before this channel they were only in the telemetry
+/// window's counters (06-node-models.md §2.4) and on no record: a reader could see that a
+/// node's transmit queue had dropped something but not when. One row per node, step and
+/// cause, with the count; causes spelled as `DropCause::as_str` spells them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeDropView {
+    /// The step's instant.
+    pub t: SimTime,
+    /// The node.
+    pub node: NodeId,
+    /// The cause: `tx_overflow` or `crl_processing_backlog`.
+    pub cause: String,
+    /// How many were dropped in the step.
+    pub count: u32,
+}
+
+impl ChannelView for NodeDropView {
+    const CHANNEL: &'static str = "node.drop";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

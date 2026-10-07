@@ -8,12 +8,13 @@
 
 import { useCallback, useMemo, useState } from "react";
 
-import { BackendView } from "../components/BackendView.js";
+import { BackendButton } from "../components/BackendView.js";
 import { HeaderClock } from "../components/HeaderClock.js";
 import { PrimaryAction, StatusPill } from "../components/Status.js";
 import { engine } from "../state/engine.js";
 import { presetsOf, loadPreset } from "../state/settings.js";
 import { useStudio } from "../state/store.js";
+import { transport } from "../state/transport.js";
 import { applyThemeToDocument } from "../lib/theme.js";
 import { changedPointers } from "../lib/schema.js";
 import { describeError } from "../lib/errors.js";
@@ -99,7 +100,62 @@ function ScenarioSwitcher(): React.JSX.Element {
   );
 }
 
-/** The menu: the occasional panels, the theme, developer mode. */
+/**
+ * Restart and Stop: the two run controls that left the transport bar, which keeps play, step, speed
+ * and the timeline. They are the same calls with the same rules (`state/transport.ts`), so a
+ * disabled item says why exactly as the bar's buttons did.
+ */
+function RunItems({ close }: { close: () => void }): React.JSX.Element | null {
+  const connection = useStudio((s) => s.connection);
+  const run = useStudio((s) => s.run);
+  const replay = useStudio((s) => s.replay);
+  const hello = useStudio((s) => s.hello);
+  const simTimeNs = useStudio((s) => s.simTimeNs);
+  if (replay !== null) return null;
+  const caps = transport({
+    connection,
+    runState: run.state,
+    tNs: run.tNs,
+    tEndNs: run.tEndNs > 0 ? run.tEndNs : hello?.simDurationNs ?? 0,
+    streamNs: simTimeNs > 0 ? simTimeNs : run.tNs,
+    recording: null,
+    busy: false,
+  });
+  const act = (fn: () => Promise<unknown>): void => {
+    close();
+    void fn()
+      .catch((err: unknown) => useStudio.getState().addLog({ at: Date.now(), level: "error", target: "run", message: err instanceof Error ? err.message : String(err) }))
+      .finally(() => void engine.refreshStatus());
+  };
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        className="menu-item"
+        disabled={!caps.restart.enabled}
+        title={caps.restart.why}
+        data-testid="restart"
+        onClick={() => act(() => engine.startRun())}
+      >
+        <span className="grow">Restart from the beginning</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="menu-item"
+        disabled={!caps.stop.enabled}
+        title={caps.stop.why}
+        data-testid="stop"
+        onClick={() => act(() => engine.request("run.stop", {}))}
+      >
+        <span className="grow">Stop the run</span>
+      </button>
+    </>
+  );
+}
+
+/** The menu: the run's restart and stop, the occasional panels, the theme, developer mode. */
 function AppMenu(): React.JSX.Element {
   const theme = useStudio((s) => s.theme);
   const devDetails = useStudio((s) => s.devDetails);
@@ -134,6 +190,8 @@ function AppMenu(): React.JSX.Element {
     <MenuButton className="icon-button" title="More" testId="app-menu-button" menuTestId="app-menu" label={<MoreIcon />}>
       {(close) => (
         <>
+          <RunItems close={close} />
+          <div className="menu-rule" />
           {item(
             "runs",
             "Runs and recordings",
@@ -217,7 +275,7 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
         <ChartIcon />
         <span>Metrics</span>
       </button>
-      <BackendView />
+      <BackendButton />
       <button
         type="button"
         className={inspectorOpen ? "icon-button on" : "icon-button"}

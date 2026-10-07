@@ -81,8 +81,8 @@ use v2xw_core::ids::{ActorId, LaneId, NodeId, SignalId};
 use v2xw_core::time::{Duration, SimTime};
 use v2xw_engine::{Scenario, run::RunReport};
 use v2xw_metrics::channels::{
-    DetObservationView, GtKinematicsView, MacCbrView, NodeRxView, NodeTelemetryView, NodeTxView,
-    NodeVerifyView, PhyRxView, ProtoRevocationView, RxOutcome, SecCertView, SignerId,
+    DetObservationView, GtKinematicsView, MacCbrView, NodeDropView, NodeRxView, NodeTelemetryView,
+    NodeTxView, NodeVerifyView, PhyRxView, ProtoRevocationView, RxOutcome, SecCertView, SignerId,
     VerifyOutcome, decode,
 };
 use v2xw_metrics::def::MetricSample;
@@ -92,7 +92,7 @@ use v2xw_record::encoder::{
 };
 use v2xw_record::wire::event::EventEntry;
 use v2xw_record::wire::hello::{
-    ChannelRow, ClassRow, HELLO_LIVE, HELLO_SEEKABLE, HelloBody, NODE_HAS_HSM, WorldRef,
+    ChannelRow, ClassRow, HELLO_LIVE, HELLO_SEEKABLE, HelloBody, NODE_HAS_HSM, NodeRow, WorldRef,
 };
 use v2xw_record::wire::metric::MetricRow;
 use v2xw_record::wire::provenance::{PROV_FINAL, ProvEntry, ProvenanceBody};
@@ -255,6 +255,9 @@ struct Setup {
     /// that site and vehicle spawn take ids from **one** counter, so the first vehicle's
     /// node id is the roadside count rather than zero. See [`roadside_node_count`].
     roadside_nodes: u32,
+    /// The roadside units' node rows, which every `Hello` lists ahead of the vehicles:
+    /// a unit never spawns, so no stream frame would ever announce it.
+    rsu_facts: Vec<crate::engine::NodeFacts>,
     actor_capacity: u32,
     seed: u64,
     run_id_bytes: [u8; 16],
@@ -914,6 +917,56 @@ fn assemble_setup(
     let str_session_token = strings.intern(session_token);
     let str_url = strings.intern(&payload.url_path());
 
+    // §3.1.3: the node table the connection opens with. A vehicle's radio is announced by
+    // its spawn row, but a roadside unit never spawns, so a live Hello that listed nothing
+    // left every unit out of the page's node table: the inspector could not count them and
+    // the developer chip said "0 RSUs" beside one. They are created before any vehicle,
+    // in the scenario's order, so unit `i` is node `i` ([`roadside_node_count`]).
+    let rsu_facts: Vec<crate::engine::NodeFacts> = scenario
+        .actors
+        .rsus
+        .iter()
+        .enumerate()
+        .filter_map(|(i, spec)| {
+            let pos = match (spec.site, spec.position_m) {
+                (Some(site), None) => world.sites.get(site as usize)?.antenna_position(),
+                (None, Some(p)) => v2xw_core::geom::Vec3::new(
+                    p[0],
+                    p[1],
+                    p[2] + v2xw_engine::phase2::RSU_MAST_HEIGHT_M,
+                ),
+                _ => return None,
+            };
+            let profile = spec
+                .profile
+                .as_deref()
+                .unwrap_or(v2xw_engine::phase2::DEFAULT_RSU_PROFILE);
+            Some(crate::engine::NodeFacts {
+                node_id: u32::try_from(i).ok()?,
+                actor_id: U32_NONE,
+                pos_m: [pos.x as f32, pos.y as f32, pos.z as f32],
+                label: format!("rsu_{i:04}"),
+                profile_id: profile.to_string(),
+                flags: NODE_HAS_HSM,
+                kind: 2,
+                class_idx: 0xFF,
+            })
+        })
+        .collect();
+    let rsu_rows: Vec<NodeRow> = rsu_facts
+        .iter()
+        .map(|f| NodeRow {
+            node_id: f.node_id,
+            actor_id: f.actor_id,
+            pos_m: f.pos_m,
+            str_label: strings.intern(&f.label),
+            str_profile_id: strings.intern(&f.profile_id),
+            flags: f.flags,
+            kind: f.kind,
+            class_idx: f.class_idx,
+        })
+        .collect();
+
     let mut class_names = Vec::with_capacity(VehicleClass::ALL.len());
     let classes: Vec<ClassRow> = VehicleClass::ALL
         .iter()
@@ -1066,7 +1119,7 @@ fn assemble_setup(
         origin_alt_m: world.origin.alt_m,
         bbox_m: [bbox.min.x, bbox.min.y, bbox.max.x, bbox.max.y],
         actor_capacity,
-        nodes: Vec::new(),
+        nodes: rsu_rows,
         classes,
         channels,
         world_ref: WorldRef {
@@ -1102,6 +1155,7 @@ fn assemble_setup(
         equipped_fraction: scenario.actors.vehicles.equipped_fraction,
         vru_device_fraction: scenario.actors.vru.device_fraction,
         roadside_nodes: roadside_node_count(scenario),
+        rsu_facts,
         actor_capacity,
         seed: scenario.seed,
         run_id_bytes,
@@ -1750,6 +1804,11 @@ impl Projector {
                 "node.rx" => match decode::<NodeRxView>(record) {
                     Err(_) => self.undecodable(record.channel),
                     Ok(view) => self.feed.on_rx(&view),
+                },
+                // Drops no frame carries, for the followed node's queue table.
+                "node.drop" => match decode::<NodeDropView>(record) {
+                    Err(_) => self.undecodable(record.channel),
+                    Ok(view) => self.feed.on_drop(&view),
                 },
                 // The security panel's rows: the newest `node.security` per node, and a
                 // short history of its pseudonym changes.
@@ -3280,39 +3339,37 @@ impl LiveEngine {
 
     /// The node table as of the emitted step, for `Hello` (§3.1.3) and `inspect.node`.
     fn node_rows(&self) -> Vec<crate::engine::NodeFacts> {
+        // The roadside units first: they hold node ids `0..n` and never spawn, so this
+        // table is the only place a client learns of them.
+        let mut rows: Vec<crate::engine::NodeFacts> = self.setup.rsu_facts.clone();
         let Some(step) = self.emitted() else {
-            return Vec::new();
+            return rows;
         };
-        let mut rows: Vec<crate::engine::NodeFacts> = step
-            .snapshot
-            .actors
-            .iter()
-            .filter_map(|pose| {
-                let node = pose.node?;
-                Some(crate::engine::NodeFacts {
-                    node_id: node.index(),
-                    actor_id: pose.actor.index(),
-                    pos_m: [
-                        pose.pos_m[0] as f32,
-                        pose.pos_m[1] as f32,
-                        // 1.5 m: the antenna height `v2xw-radio`'s isotropic endpoint uses
-                        // for a car. A rendering offset, not a model input.
-                        (pose.pos_m[2] + 1.5) as f32,
-                    ],
-                    label: self.node_label(pose.actor, pose.class_idx),
-                    profile_id: self.node_profile(pose.class_idx),
-                    flags: NODE_HAS_HSM,
-                    // §3.1.3 `kind`: a pedestrian's or a cyclist's handset is a
-                    // `vru-device` (1), everything else riding an actor an OBU (0).
-                    kind: if self.is_vru_class(pose.class_idx) {
-                        1
-                    } else {
-                        0
-                    },
-                    class_idx: pose.class_idx,
-                })
+        rows.extend(step.snapshot.actors.iter().filter_map(|pose| {
+            let node = pose.node?;
+            Some(crate::engine::NodeFacts {
+                node_id: node.index(),
+                actor_id: pose.actor.index(),
+                pos_m: [
+                    pose.pos_m[0] as f32,
+                    pose.pos_m[1] as f32,
+                    // 1.5 m: the antenna height `v2xw-radio`'s isotropic endpoint uses
+                    // for a car. A rendering offset, not a model input.
+                    (pose.pos_m[2] + 1.5) as f32,
+                ],
+                label: self.node_label(pose.actor, pose.class_idx),
+                profile_id: self.node_profile(pose.class_idx),
+                flags: NODE_HAS_HSM,
+                // §3.1.3 `kind`: a pedestrian's or a cyclist's handset is a
+                // `vru-device` (1), everything else riding an actor an OBU (0).
+                kind: if self.is_vru_class(pose.class_idx) {
+                    1
+                } else {
+                    0
+                },
+                class_idx: pose.class_idx,
             })
-            .collect();
+        }));
         // §3.1.3: "node_id ascending, dense where possible".
         rows.sort_by_key(|row| row.node_id);
         rows

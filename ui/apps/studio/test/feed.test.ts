@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { FeedReceived, FeedSent, NodeFeedNotification } from "@vwp/protocol";
 
-import { EMPTY_FEED, applyPush, followFeed, hexRows, keyOf, openMessage, setPaused, visibleRows } from "../src/lib/feed.js";
+import { EMPTY_FEED, HOLD, applyPush, followFeed, hexRows, keyOf, openMessage, setHovering, setPaused, visibleRows } from "../src/lib/feed.js";
 import { StudioEngine } from "../src/state/engine.js";
 import { useStudio } from "../src/state/store.js";
 
@@ -88,6 +88,46 @@ describe("the feed model", () => {
     f = setPaused(f, false);
     expect(f.sent.map((e) => e.msg)).toEqual([5, 4, 3, 2, 1, 0]);
     expect(f.held).toHaveLength(0);
+  });
+
+  // QA 2026-09-24: newest-first rows slid down under the pointer several times a second, so the
+  // row a reader aimed at was not the row they clicked.
+  it("holds the rows still while the pointer is over them, and catches up when it leaves", () => {
+    let f = applyPush(followFeed(EMPTY_FEED, 7), push(7, 0, 2));
+    f = setHovering(f, true);
+    f = applyPush(f, push(7, 2, 2));
+    expect(f.sent.map((e) => e.msg), "a push moved the rows under the pointer").toEqual([1, 0]);
+    expect(f.held).toHaveLength(1);
+    f = setHovering(f, false);
+    expect(f.sent.map((e) => e.msg)).toEqual([3, 2, 1, 0]);
+    expect(f.held).toHaveLength(0);
+  });
+
+  // A pointer resting on the list holds every push; past HOLD of them the oldest are let go, and
+  // their rows used to vanish without a count.
+  it("counts the rows of pushes that overflow the hold as dropped", () => {
+    let f = setHovering(followFeed(EMPTY_FEED, 7), true);
+    for (let i = 0; i < HOLD + 3; i += 1) f = applyPush(f, push(7, i * 2, 2));
+    expect(f.held).toHaveLength(HOLD);
+    expect(f.dropped, "the overflowed pushes' rows were lost without a count").toEqual({ sent: 6, received: 3 });
+    f = setHovering(f, false);
+    expect(f.sent[0]?.msg).toBe((HOLD + 2) * 2 + 1);
+    expect(f.held).toHaveLength(0);
+  });
+
+  it("does not resume a paused feed when the pointer leaves, nor release a hovered one on resume", () => {
+    let f = applyPush(followFeed(EMPTY_FEED, 7), push(7, 0, 2));
+    f = setPaused(f, true);
+    f = setHovering(f, true);
+    f = applyPush(f, push(7, 2, 2));
+    f = setHovering(f, false);
+    expect(f.paused).toBe(true);
+    expect(f.sent.map((e) => e.msg), "leaving the list resumed a paused feed").toEqual([1, 0]);
+    f = setHovering(f, true);
+    f = setPaused(f, false);
+    expect(f.sent.map((e) => e.msg), "resuming released rows while the pointer was still over them").toEqual([1, 0]);
+    f = setHovering(f, false);
+    expect(f.sent.map((e) => e.msg)).toEqual([3, 2, 1, 0]);
   });
 
   it("filters by type and by outcome", () => {

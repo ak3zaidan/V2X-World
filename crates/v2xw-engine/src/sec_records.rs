@@ -173,6 +173,11 @@ pub struct NodeSecurityView {
     pub changes: u32,
     /// Whether a top-up is in flight.
     pub topup_in_flight: bool,
+    /// When the device next asks for a batch, ns: the start of the i-period at which its
+    /// pool would reach `topup_below_periods` periods ahead. `None` while one is in flight,
+    /// for a device that is revoked or blocklisted, or with top-ups turned off.
+    #[serde(default)]
+    pub next_topup: Option<SimTime>,
     /// The backend access: `cellular`, `rsu-relay`, `offline`.
     pub link: String,
     /// Whether that access is usable now (a serving cell, a relay in range).

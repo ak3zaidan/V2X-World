@@ -8,15 +8,58 @@
  * subscribes the node to `Telemetry` frames and therefore what populates the OBU HUD.
  */
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { CAMERA_MODES, type CameraMode } from "@vwp/viewer";
 
 import { ObuHud } from "./ObuHud.js";
 import { OverlayMenu } from "./OverlayMenu.js";
 import { StateLegend } from "./StateLegend.js";
 import { StatsChip } from "./StatsReadout.js";
+import { rsuCount } from "../lib/security.js";
+import { radioBreakdown } from "../lib/format.js";
 import { engine } from "../state/engine.js";
 import { useStudio } from "../state/store.js";
+
+/** The camera modes in words. */
+const CAMERA_LABEL: Partial<Record<CameraMode, string>> = {
+  map: "Map",
+  chase: "Chase",
+  dashboard: "Dashboard",
+  free: "Free",
+  rsu: "Roadside unit",
+};
+
+/**
+ * The world build report, for developer mode: lanes, buildings and roadside units.
+ *
+ * The roadside units are the run's radios of kind "rsu" in the node table, which is what the
+ * inspector counts too. It used to print the world's mounting sites, and a unit placed by
+ * `position_m` stands on no site, so the chip said "0 RSUs" beside one (QA, 2026-09-24). An engine
+ * whose Hello does not list its roadside units falls back to the scenario's `actors.rsus`, and with
+ * neither the chip names what it is counting: sites.
+ */
+function WorldChip({ world }: { world: { lanes: number; buildings: number; sites: number } | null }): React.JSX.Element {
+  const scenario = useStudio((s) => s.scenario);
+  const radios = useStudio((s) => s.radios);
+  const roadside = useMemo(() => {
+    void radios;
+    return radioBreakdown(engine.nodes.values()).roadside;
+  }, [radios]);
+  if (!world) {
+    return (
+      <span className="chip" title="World build report from @vwp/viewer" data-testid="world-chip">
+        world loading…
+      </span>
+    );
+  }
+  const rsus = roadside > 0 ? roadside : rsuCount(scenario);
+  return (
+    <span className="chip" title="World build report from @vwp/viewer" data-testid="world-chip">
+      {world.lanes} lanes · {world.buildings} buildings ·{" "}
+      {rsus !== null ? `${rsus} RSU${rsus === 1 ? "" : "s"}` : `${world.sites} RSU sites`}
+    </span>
+  );
+}
 
 /** A handle for Playwright and for notebooks driving the Studio (09-ui §8). */
 declare global {
@@ -41,7 +84,6 @@ export function Viewport(): React.JSX.Element {
   const selectedNode = useStudio((s) => s.selectedNode);
   const world = useStudio((s) => s.world);
   const hudDocked = useStudio((s) => s.hudDocked);
-  const setHudDocked = useStudio((s) => s.setHudDocked);
   const runState = useStudio((s) => s.run.state);
   const devDetails = useStudio((s) => s.devDetails);
 
@@ -174,7 +216,8 @@ export function Viewport(): React.JSX.Element {
     }
   }, []);
 
-  const followLabel = selectedNode !== null ? engine.nodes.get(selectedNode)?.label ?? `node ${selectedNode}` : null;
+  const followLabel = selectedNode !== null ? engine.nodes.get(selectedNode)?.label || `node ${selectedNode}` : null;
+  const following = followLabel ?? (selectedActor !== null ? `actor ${selectedActor}` : null);
 
   return (
     <div className="viewport" ref={hostRef} data-testid="viewport">
@@ -187,44 +230,58 @@ export function Viewport(): React.JSX.Element {
         aria-label="2D/3D viewport"
       />
 
+      {/*
+        The viewport shows the simulation, not chrome. Two small groups float over it: what is drawn
+        and how it is looked at on the left (the overlays, the camera and who it follows, as one
+        group), and on the right the key, folded to one chip until it is asked for. The world build
+        report and the renderer's frame counters are for whoever is debugging the page, so they
+        appear in developer mode only.
+      */}
       <div className="viewport-toolbar">
         <OverlayMenu />
 
-        <div className="menu">
+        <div className="vp-group" role="group" aria-label="Camera" data-testid="camera-group">
           <select
-            className="chip"
+            className="vp-select"
             data-testid="camera-mode"
             value={cameraMode}
             onChange={(e) => engine.setCameraMode(e.target.value as CameraMode)}
             aria-label="Camera mode"
+            title="Camera ( [ and ] cycle through them )"
           >
             {CAMERA_MODES.map((m) => (
               <option key={m} value={m}>
-                camera: {m}
+                {CAMERA_LABEL[m] ?? m}
               </option>
             ))}
           </select>
+          <span className="vp-sep" aria-hidden="true" />
+          <span className={following ? "vp-follow on" : "vp-follow"} data-testid="follow-chip" title={following ? `The camera follows ${following}` : "Click a vehicle to follow it"}>
+            follow: {following ?? "—"}
+          </span>
+          {following ? (
+            <button
+              type="button"
+              className="vp-clear"
+              onClick={() => void engine.selectActor(null)}
+              aria-label="Stop following"
+              title="Stop following (Esc)"
+              data-testid="follow-clear"
+            >
+              ×
+            </button>
+          ) : null}
         </div>
-
-        <span className="chip" data-testid="follow-chip">
-          follow: {followLabel ?? (selectedActor !== null ? `actor ${selectedActor}` : "—")}
-        </span>
 
         <span className="spacer grow" />
 
-        {/* A build report and a renderer readout: for whoever is debugging the page, so they are
-            shown in developer mode (the menu) and are not decoration over everyone else's picture. */}
         {devDetails ? (
           <>
-            <span className="chip" title="World build report from @vwp/viewer" data-testid="world-chip">
-              {world ? `${world.lanes} lanes · ${world.buildings} buildings · ${world.sites} RSUs` : "world loading…"}
-            </span>
+            <WorldChip world={world} />
             <StatsChip />
           </>
         ) : null}
-        <button type="button" className="chip" onClick={() => setHudDocked(!hudDocked)} data-testid="hud-dock">
-          HUD {hudDocked ? "float" : "dock"}
-        </button>
+        <StateLegend />
       </div>
 
       {/*
@@ -234,7 +291,6 @@ export function Viewport(): React.JSX.Element {
         flow above the viewport where it does not cover anything.
       */}
 
-      <StateLegend />
       {/* With nothing selected the HUD only said "No radio selected" over the picture; the
           inspector's empty state says it where it covers nothing. */}
       {hudDocked || (selectedActor === null && selectedNode === null) ? null : <ObuHud />}

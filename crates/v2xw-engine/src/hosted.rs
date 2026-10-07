@@ -204,6 +204,7 @@ impl HostedNode {
                         telemetry: out.telemetry,
                         rx_reports: out.rx_reports,
                         advice: None,
+                        drops: out.drops,
                     },
                     suppressed,
                 )

@@ -26,6 +26,9 @@
 //!   instants (`v2xw-node`, moved onto the simulation's timeline by the engine), so the
 //!   depth and the waits are the model's, not a second model of it. The CRL task queue has
 //!   no per-task stamps on any channel; its depth is the node's own telemetry window.
+//! * **Drops.** A receive-side drop is a `node.rx` record's loss cause. A transmit-side
+//!   drop and a CRL backlog shed have no frame, and come from `node.drop`, one row per
+//!   node, step and cause ([`FeedStore::on_drop`]).
 //!
 //! # Bounds
 //!
@@ -44,7 +47,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use v2xw_core::ids::NodeId;
 use v2xw_core::time::SimTime;
-use v2xw_metrics::channels::{NodeRxView, NodeTxView, RxFate, SignerId, rx_cause};
+use v2xw_metrics::channels::{NodeDropView, NodeRxView, NodeTxView, RxFate, SignerId, rx_cause};
 
 /// The feed's schema version, carried in every `node.feed` notification as `v`.
 ///
@@ -78,6 +81,12 @@ pub const QUEUE_WINDOW_NS: u64 = 1_000_000_000;
 
 /// The window the drop counts cover, ns.
 pub const DROP_WINDOW_NS: u64 = 10_000_000_000;
+
+/// `node.drop`'s transmit-queue cause (`v2xw_node::DropCause::TxOverflow`).
+const TX_OVERFLOW: &str = "tx_overflow";
+
+/// `node.drop`'s CRL cause (`v2xw_node::DropCause::CrlBacklog`).
+const CRL_BACKLOG: &str = "crl_processing_backlog";
 
 /// PHY causes the receiver cannot observe: the frame was never detected.
 const UNDETECTED: [&str; 2] = ["out-of-range", "below-sensitivity"];
@@ -292,6 +301,8 @@ struct NodeLog {
     /// the node has neither sent nor heard anything for the feed's window, see
     /// [`FeedStore::prune`]).
     undetected: u64,
+    /// Drops with no frame (`node.drop`): the step's instant, the cause and the count.
+    dropped: VecDeque<(SimTime, &'static str, u32)>,
 }
 
 /// How much one push carries.
@@ -416,6 +427,21 @@ impl FeedStore {
         log.received.push_back(RxEntry::of(v));
     }
 
+    /// Takes one `node.drop` record: a transmit-side drop or a CRL backlog shed, which have
+    /// no frame and so no `node.rx` row. An unknown cause is ignored rather than guessed at.
+    pub fn on_drop(&mut self, v: &NodeDropView) {
+        let cause = match v.cause.as_str() {
+            TX_OVERFLOW => TX_OVERFLOW,
+            CRL_BACKLOG => CRL_BACKLOG,
+            _ => return,
+        };
+        let log = self.logs.entry(v.node.index()).or_default();
+        if log.dropped.len() >= MAX_PER_NODE {
+            log.dropped.pop_front();
+        }
+        log.dropped.push_back((v.t, cause, v.count));
+    }
+
     /// Ends a projected step: taps whose record never came are dropped.
     pub fn end_step(&mut self) {
         self.pending_taps.clear();
@@ -434,6 +460,9 @@ impl FeedStore {
             }
             while log.received.front().is_some_and(|r| r.t < before) {
                 log.received.pop_front();
+            }
+            while log.dropped.front().is_some_and(|d| d.0 < before) {
+                log.dropped.pop_front();
             }
         }
         // A node with nothing left in its window has left the run (a live radio sends and
@@ -687,6 +716,16 @@ impl FeedStore {
                     );
                 }
             }
+            // Drops no frame carries (`node.drop`): the transmit queue's and the CRL queue's.
+            for &(t, cause, n) in &log.dropped {
+                if t <= drop_lo || t > now {
+                    continue;
+                }
+                let q = if cause == TX_OVERFLOW { "tx" } else { "crl" };
+                if let Some(q) = qs.get_mut(q) {
+                    *q.drops.entry(cause).or_insert(0) += u64::from(n);
+                }
+            }
             for f in log.sent.iter().filter_map(|m| self.frames.get(m)) {
                 let Some(g) = f.t_generated else { continue };
                 let stage_name = match (f.t_sign_start, f.t_signed) {
@@ -734,7 +773,7 @@ impl FeedStore {
                 .map(|(_, _, v)| v.clone())
                 .collect();
             let peak = peak_of(&q.spans, clock.step_lo, now).max(q.depth);
-            let mut row = json!({
+            let row = json!({
                 "id": id,
                 "label": label,
                 "what": what,
@@ -749,12 +788,6 @@ impl FeedStore {
                 "waiting_omitted": seen.saturating_sub(waiting_limit),
                 "reported_depth": rep(id),
             });
-            if id == "tx" {
-                row["drops_note"] = json!(
-                    "a frame the transmit queue refuses is on no channel, so transmit drops are \
-                     not observable here"
-                );
-            }
             list.push(row);
         }
         json!({
@@ -1151,6 +1184,40 @@ mod tests {
         let q = store.queues_json(7, 1_200 * MS, None, 8);
         assert_eq!(queue(&q, "verify")["served"].as_u64(), Some(0));
         assert!(queue(&q, "verify")["wait_p50_ms"].is_null());
+    }
+
+    /// A transmit-side drop has no frame; it reaches the transmit queue's row from
+    /// `node.drop`, and a CRL shed reaches the CRL queue's. The row used to say transmit
+    /// drops were "not observable here" (QA 2026-09-24).
+    #[test]
+    fn a_node_drop_row_is_a_drop_of_the_transmit_or_crl_queue() {
+        let mut store = FeedStore::new(100 * MS);
+        let drop = |t: u64, cause: &str, count: u32| NodeDropView {
+            t,
+            node: NodeId::new(7),
+            cause: cause.to_string(),
+            count,
+        };
+        store.on_drop(&drop(10 * MS, TX_OVERFLOW, 2));
+        store.on_drop(&drop(20 * MS, TX_OVERFLOW, 1));
+        store.on_drop(&drop(30 * MS, CRL_BACKLOG, 4));
+        store.on_drop(&drop(40 * MS, "rx_overflow", 9));
+        let q = store.queues_json(7, 50 * MS, None, 8);
+        assert_eq!(queue(&q, "tx")["drops"][TX_OVERFLOW].as_u64(), Some(3));
+        assert_eq!(queue(&q, "crl")["drops"][CRL_BACKLOG].as_u64(), Some(4));
+        assert!(queue(&q, "tx").get("drops_note").is_none());
+        // A cause that has a frame (and so a node.rx row) is not counted from here.
+        assert_eq!(
+            queue(&q, "rx")["drops"]
+                .as_object()
+                .map(serde_json::Map::len),
+            Some(0)
+        );
+        // Outside the drop window, and before it happened, it is not counted.
+        let later = store.queues_json(7, 10 * MS + DROP_WINDOW_NS + 1, None, 8);
+        assert_eq!(queue(&later, "tx")["drops"][TX_OVERFLOW].as_u64(), Some(1));
+        let before = store.queues_json(7, 5 * MS, None, 8);
+        assert!(queue(&before, "tx")["drops"].get(TX_OVERFLOW).is_none());
     }
 
     #[test]

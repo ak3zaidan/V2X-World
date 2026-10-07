@@ -335,6 +335,17 @@ export function PlotsStrip(): React.JSX.Element {
   const seenVersion = useRef(-1);
   // Once the user has chosen, the strip stops choosing for them.
   const userChose = useRef(false);
+  // Another view asked for a set of metrics (the Backend view's "Metrics for the RA"): it becomes
+  // the selection, as if the user had ticked those boxes, and the request is consumed.
+  const focus = useStudio((s) => s.metricsFocus);
+  const [focusTitle, setFocusTitle] = useState<string | null>(null);
+  useEffect(() => {
+    if (focus === null) return;
+    userChose.current = true;
+    setSelected([...focus.metrics]);
+    setFocusTitle(focus.title);
+    useStudio.getState().setMetricsFocus(null);
+  }, [focus]);
 
   useEffect(() => {
     // `MetricHistory.seriesVersion` moves only when a series appears or is evicted, so the name
@@ -403,6 +414,7 @@ export function PlotsStrip(): React.JSX.Element {
 
   const toggle = useCallback((name: string) => {
     userChose.current = true;
+    setFocusTitle(null);
     setSelected((s) => (s.includes(name) ? s.filter((n) => n !== name) : [...s, name]));
   }, []);
 
@@ -411,7 +423,7 @@ export function PlotsStrip(): React.JSX.Element {
   return (
     <section className="plots" data-testid="plots-strip">
       <div className="plots-head">
-        <span className="dim">Measurements</span>
+        <span className="dim">{focusTitle ? `Measurements for ${focusTitle}` : "Measurements"}</span>
         <button
           type="button"
           onClick={() => {

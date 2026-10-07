@@ -25,8 +25,8 @@ use v2xw_core::kinematics::Kinematics;
 use v2xw_core::math::{q3, quantize_to};
 use v2xw_core::time::SimTime;
 use v2xw_metrics::channels::{
-    ByteBucket, GtKinematicsView, MacCbrView, NetBytesView, NodeRxView, NodeTelemetryView,
-    NodeTxView, PhyRxView, RxFate, RxOutcome, SignerId,
+    ByteBucket, GtKinematicsView, MacCbrView, NetBytesView, NodeDropView, NodeRxView,
+    NodeTelemetryView, NodeTxView, PhyRxView, RxFate, RxOutcome, SignerId,
 };
 
 /// The dB grid every received-power and ratio field is written on (build decision D9).
@@ -47,6 +47,46 @@ macro_rules! channel_record {
             const VISIBILITY: Visibility = $vis;
         }
     };
+}
+
+channel_record!(
+    /// `node.drop` — what a node discarded in one step with no frame to carry it
+    /// ([`NodeDropView`]).
+    NodeDrop,
+    NodeDropView,
+    "node.drop",
+    Visibility::Node
+);
+
+impl NodeDrop {
+    /// The causes that ride on no other channel, with their spelling: the receive-side ones
+    /// are on `node.rx` with the attempt they ended, so recording them here too would count
+    /// them twice.
+    pub const CAUSES: [v2xw_node::DropCause; 2] = [
+        v2xw_node::DropCause::TxOverflow,
+        v2xw_node::DropCause::CrlBacklog,
+    ];
+
+    /// One row per cause in [`NodeDrop::CAUSES`] that `drops` (a step's counts, in
+    /// `DropCause::ALL` order) has a non-zero count for, in that order.
+    #[must_use]
+    pub fn from_step(t: SimTime, node: NodeId, drops: &[u32; 6]) -> Vec<NodeDrop> {
+        Self::CAUSES
+            .iter()
+            .filter_map(|cause| {
+                let i = v2xw_node::DropCause::ALL.iter().position(|c| c == cause)?;
+                let count = drops[i];
+                (count > 0).then(|| {
+                    NodeDrop(NodeDropView {
+                        t,
+                        node,
+                        cause: cause.as_str().to_string(),
+                        count,
+                    })
+                })
+            })
+            .collect()
+    }
 }
 
 channel_record!(
@@ -592,6 +632,33 @@ mod tests {
     use v2xw_core::ctx::ErasedRecord;
     use v2xw_core::geom::Vec3;
     use v2xw_metrics::channels::decode;
+
+    /// `node.drop` carries only the causes no other channel does, one row per cause with a
+    /// count, and reads back as its view: the transmit queue's drops used to be on no record.
+    #[test]
+    fn a_steps_transmit_and_crl_drops_become_node_drop_rows() {
+        // DropCause::ALL order: rx, verify-policy, verify-overflow, tx, reassembly, crl.
+        let rows = NodeDrop::from_step(5_000, NodeId::new(9), &[4, 1, 2, 3, 0, 7]);
+        let causes: Vec<(&str, u32)> = rows
+            .iter()
+            .map(|r| (r.0.cause.as_str(), r.0.count))
+            .collect();
+        assert_eq!(
+            causes,
+            vec![("tx_overflow", 3), ("crl_processing_backlog", 7)],
+            "receive-side causes are on node.rx and must not be counted twice"
+        );
+        assert!(NodeDrop::from_step(0, NodeId::new(1), &[5, 0, 0, 0, 0, 0]).is_empty());
+        let owned = rows[0].to_owned_record().expect("serialises");
+        assert_eq!(owned.channel, "node.drop");
+        assert_eq!(owned.visibility, Visibility::Node);
+        let view: NodeDropView = decode(&owned).expect("decodes");
+        assert_eq!(view, rows[0].0);
+        assert!(
+            v2xw_record::channels::by_name("node.drop").is_some(),
+            "node.drop is not in the channel catalogue"
+        );
+    }
 
     /// Every record this crate writes decodes back into the reader-side view of its own
     /// channel, with the values intact. This is the guard against a writer and a reader

@@ -900,13 +900,9 @@ export interface DeltaSpawnBlock {
   readonly classIdx: Uint8Array;
   readonly state: Uint8Array;
   readonly verifiedNeighbors: Uint8Array;
-          lamps: u8s(v, offMoved + 19 * M, M, "Delta.moved.lamps"),
-          get reserved(): Uint8Array {
-            return this.lamps;
-          },
-          get activity(): Uint8Array {
-            return this.lamps;
-          },
+  /** §3.3.5 {@link ActorLamps} for a vehicle (v1.2; the v1.0 `reserved` byte). */ readonly lamps: Uint8Array;
+  /** §3.3.5 {@link ActorActivity} for a pedestrian; the same array as `lamps`. */ readonly activity: Uint8Array;
+  /** @deprecated the v1.0 name of {@link lamps}; the same array. */ readonly reserved: Uint8Array;
 }
 
 /** §3.4.6 — despawn block. */
@@ -993,9 +989,13 @@ export function decodeDelta(v: FrameView): DeltaMessage {
           state: u8s(v, offMoved + 16 * M, M, "Delta.moved.state"),
           verifiedNeighbors: u8s(v, offMoved + 17 * M, M, "Delta.moved.verified_neighbors"),
           mflags: u8s(v, offMoved + 18 * M, M, "Delta.moved.mflags"),
-  /** §3.3.5 {@link ActorLamps} for a vehicle (v1.2; the v1.0 `reserved` byte). */ readonly lamps: Uint8Array;
-  /** §3.3.5 {@link ActorActivity} for a pedestrian; the same array as `lamps`. */ readonly activity: Uint8Array;
-  /** @deprecated the v1.0 name of {@link lamps}; the same array. */ readonly reserved: Uint8Array;
+          lamps: u8s(v, offMoved + 19 * M, M, "Delta.moved.lamps"),
+          get reserved(): Uint8Array {
+            return this.lamps;
+          },
+          get activity(): Uint8Array {
+            return this.lamps;
+          },
         };
 
   let absolute: DeltaAbsoluteBlock = EMPTY_ABS;

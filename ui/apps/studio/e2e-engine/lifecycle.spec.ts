@@ -212,16 +212,20 @@ test("every transport control does what it says, and a stopped run leaves no ker
   await page.getByTestId("step").click();
   await expect.poll(async () => (await status(page)).t_ns).toBe(held + 100_000_000);
 
-  await page.getByTestId("step-back").click();
+  // Back one step and to the start are the timeline's own keys: the left arrow and Home.
+  await page.getByTestId("scrub-range").focus();
+  await page.keyboard.press("ArrowLeft");
   await expect.poll(async () => (await status(page)).t_ns).toBe(held);
 
-  await page.getByTestId("seek-start").click();
+  await page.keyboard.press("Home");
   await expect.poll(async () => (await status(page)).t_ns).toBe(0);
 
   await page.getByTestId("play").click();
   await expect.poll(async () => (await status(page)).state).toBe("running");
   await expect.poll(async () => (await status(page)).t_ns).toBeGreaterThan(held);
 
+  // Stop is in the header's menu; the transport bar keeps play, step, speed and the timeline.
+  await page.getByTestId("app-menu-button").click();
   await page.getByTestId("stop").click();
   await expect.poll(async () => (await status(page)).state).toBe("finished");
   expect((await status(page)).engine.kernel_threads, "run.stop joins the kernel").toBe(0);
@@ -231,12 +235,13 @@ test("every transport control does what it says, and a stopped run leaves no ker
     "streaming",
   );
 
-  // Restart from the transport bar, at full speed, to the end.
+  // Restart from the header's menu, at full speed, to the end.
   await page.getByTestId("speed").selectOption("0");
   const restarted = await runToEnd(page, "restart");
   expect(restarted.t_ns).toBe(restarted.t_end_ns);
   // After the end the socket is still open, so the bar can still seek back through the run.
-  await page.getByTestId("seek-start").click();
+  await page.getByTestId("scrub-range").focus();
+  await page.keyboard.press("Home");
   await expect.poll(async () => (await status(page)).t_ns).toBe(0);
   await expect(page.getByTestId("time-notice")).toHaveCount(0);
 });

@@ -235,12 +235,21 @@ export async function runToEnd(page: Page, button = "run-start", timeoutMs = 180
   const before = (await status(page)).generation;
   // The settings window's Run applies unapplied edits; it closes the window once the run starts.
   if (button === "run-start") await openSettings(page);
+  // Restart and Stop are items in the header's menu.
+  if (button === "restart" || button === "stop") await page.getByTestId("app-menu-button").click();
   await page.getByTestId(button).click();
   const deadline = Date.now() + timeoutMs;
   let last: Status = await status(page);
   while (Date.now() < deadline) {
     last = await status(page);
-    if (last.generation > before && last.state === "finished" && last.engine.output_digest !== null) return last;
+    if (last.generation > before && last.state === "finished" && last.engine.output_digest !== null) {
+      // Run closes the settings window once its call returns, which on a short run at full speed
+      // can be after the run has already finished. A caller that went straight on to open the
+      // window found it still open, typed into it, and lost it under the keystroke (controls
+      // e2e, "settings: Run", 2026-10-06). Return when the window is gone.
+      if (button === "run-start") await expect(page.getByTestId("settings-window")).toHaveCount(0, { timeout: 30_000 });
+      return last;
+    }
     await page.waitForTimeout(250);
   }
   throw new Error(`the run did not finish: ${JSON.stringify(last)}`);

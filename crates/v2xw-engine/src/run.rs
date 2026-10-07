@@ -3594,6 +3594,18 @@ impl Engine {
             self.note_policy_changes(&travelled, now);
         }
 
+        // What each node dropped with no frame to record it on — a message it could not
+        // build, sign or queue, a CRL backlog shed — on `node.drop`, in node order.
+        let drops: Vec<crate::records::NodeDrop> = results
+            .iter()
+            .flat_map(|(id, outcome, _, _)| {
+                crate::records::NodeDrop::from_step(now, *id, &outcome.drops)
+            })
+            .collect();
+        for record in &drops {
+            self.emit(recorder, record);
+        }
+
         for (id, outcome, _, _) in &results {
             for tx in &outcome.transmissions {
                 self.hand_down(*id, tx, now, horizon);

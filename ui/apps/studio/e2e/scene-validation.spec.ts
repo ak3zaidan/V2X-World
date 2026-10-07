@@ -998,7 +998,7 @@ test("the inspector's radio count agrees with the nodes the engine announced", a
   await streaming(page);
   // The inspector shows on demand: nothing is selected, so open it from the header.
   await page.getByTestId("inspector-toggle").click();
-  await page.getByRole("button", { name: "state", exact: true }).click();
+  await page.getByTestId("tab-state").click();
   await expect(page.getByTestId("inspector-empty")).toBeVisible({ timeout: 30_000 });
 
   // A live run gains radios as vehicles join, so `run.status` read once is a moving number. Bracket
@@ -1014,22 +1014,37 @@ test("the inspector's radio count agrees with the nodes the engine announced", a
     `the client's node table holds ${f.nodeTableSize}, run.status said ${before.nodes}…${after.nodes}`,
   ).toBeGreaterThanOrEqual(Math.min(before.nodes, after.nodes));
 
-  const printed = await page.evaluate(() => {
-    const dl = document.querySelector('[data-testid="inspector-empty"] dl.kv');
-    if (!dl) return null;
-    const terms = Array.from(dl.querySelectorAll("dt"));
-    const i = terms.findIndex((t) => (t.textContent ?? "").trim() === "radios");
-    if (i < 0) return null;
-    return (dl.querySelectorAll("dd")[i]?.textContent ?? "").trim();
-  });
-  expect(printed, "the inspector does not print a radio count").not.toBeNull();
+  // The printed count and the node table, read in one go: on a live run the table gains a radio
+  // whenever a vehicle joins, and reading them apart compared 193 printed with 192 held a moment
+  // earlier (2026-10-06). The page re-renders a frame after the table moves, so the two are polled
+  // until they agree; a count that never agrees ("radios 82" beside 106) still fails.
+  const read = (): Promise<{ printed: string | null; table: number }> =>
+    page.evaluate(() => {
+      const studio = (window as unknown as { __vwpStudio?: { engine: { nodes: Map<number, unknown> } } }).__vwpStudio;
+      const table = studio?.engine.nodes.size ?? -1;
+      const dl = document.querySelector('[data-testid="inspector-empty"] dl.kv');
+      if (!dl) return { printed: null, table };
+      const terms = Array.from(dl.querySelectorAll("dt"));
+      const i = terms.findIndex((t) => (t.textContent ?? "").trim() === "radios");
+      if (i < 0) return { printed: null, table };
+      return { printed: (dl.querySelectorAll("dd")[i]?.textContent ?? "").trim(), table };
+    });
   // `radios 0` beside a panel reading `bytes_air 1468 B/s` was the defect. A count that contradicts
   // the stream beside it is worse than a blank, so it has to be the count the stream carries.
-  const shown = Number(printed!.replace(/[^0-9]/g, ""));
-  expect(shown, `the inspector says "radios ${printed}" for a run with ${before.nodes} radios`).toBeGreaterThan(0);
-  expect(shown, `the inspector says "radios ${printed}"; the client's node table holds ${f.nodeTableSize}`).toBe(
-    f.nodeTableSize,
-  );
+  // "82 radios: 80 on vehicles, 2 roadside units" — the total leads.
+  const count = (printed: string | null): number => Number(/^([\d,]+)/.exec(printed ?? "")?.[1]?.replace(/,/g, "") ?? "NaN");
+  let last = await read();
+  expect(last.printed, "the inspector does not print a radio count").not.toBeNull();
+  expect(count(last.printed), `the inspector says "radios ${last.printed}" for a run with ${before.nodes} radios`).toBeGreaterThan(0);
+  await expect
+    .poll(
+      async () => {
+        last = await read();
+        return count(last.printed) - last.table;
+      },
+      { message: `the inspector's radio count disagrees with the client's node table`, timeout: 10_000 },
+    )
+    .toBe(0);
 });
 
 test("the world chip agrees with the world that was decoded", async ({ page }) => {

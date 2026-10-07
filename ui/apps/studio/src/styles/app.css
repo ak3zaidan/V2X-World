@@ -790,11 +790,14 @@ button.hud-field:focus-visible {
 .sparkrow {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
+  gap: 10px;
   padding: 6px 8px;
   border-top: 1px solid var(--border);
 }
 .spark { min-width: 0; }
+/* A rule between the cells: with only a gap, one cell's value ran into the next one's name
+   ("10.00 verify q"), and a reader could not tell which number belonged to which series. */
+.spark + .spark { border-left: 1px solid var(--border); padding-left: 10px; }
 .spark .label {
   display: flex;
   justify-content: space-between;
@@ -1330,3 +1333,147 @@ button.stat:focus-visible { outline: 2px solid var(--accent); outline-offset: 1p
 .feed-hex .span-envelope, .feed-hex .span-undecoded { background: color-mix(in srgb, var(--span-header) 18%, transparent); border-left-color: var(--span-header); }
 pre .feed-hex-key, pre span[class^="span-"] { border-left: none; }
 .warn-text { color: var(--warn); }
+
+/* ================================================================ viewport chrome (2026-09-30)
+ * The viewport shows the simulation, not chrome: the overlays and the camera group on the left,
+ * the key folded to one chip on the right, developer readouts only in developer mode. */
+
+.vp-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  height: 24px;
+  background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 11px;
+  font-family: var(--mono);
+  backdrop-filter: blur(6px);
+  overflow: hidden;
+}
+.vp-group .vp-select {
+  width: auto;
+  height: 22px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font: inherit;
+  padding: 0 4px 0 8px;
+  color: var(--text);
+}
+.vp-sep { width: 1px; align-self: stretch; background: var(--border); }
+.vp-follow { padding: 0 8px; color: var(--text-dim); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.vp-follow.on { color: var(--text); }
+.vp-clear {
+  height: 22px;
+  min-width: 22px;
+  padding: 0 6px;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+}
+.vp-clear:hover:not(:disabled) { color: var(--text); background: var(--bg-raised); border-color: var(--border); }
+
+.vp-legend { position: relative; display: flex; flex-direction: column; align-items: flex-end; }
+.vp-legend-toggle { cursor: pointer; color: var(--text-dim); }
+.vp-legend-toggle.on, .vp-legend-toggle:hover { color: var(--text); }
+.vp-legend-swatches { display: inline-flex; gap: 2px; }
+.vp-legend-swatches i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; }
+.vp-legend-body {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 5;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  white-space: nowrap;
+}
+
+/* ================================================================ chase HUD (2026-09-30) */
+
+.hud { width: min(620px, calc(100% - 16px)); }
+.hud-head .hud-dock { height: 20px; min-width: 0; padding: 0 6px; font-size: 10px; font-family: var(--mono); }
+.hud-row { align-items: baseline; flex-wrap: nowrap; }
+.hud-row-body { display: flex; flex-wrap: wrap; gap: 4px 14px; min-width: 0; }
+.hud-row-title {
+  width: 58px;
+  flex: none;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.hud-field.plain { cursor: default; }
+.hud-field.plain .k { color: var(--text-dim); }
+.hud-field.plain:hover .k { color: var(--text-dim); }
+
+/* ================================================================ inspector (2026-09-30) */
+
+.insp-head { text-transform: none; letter-spacing: 0; }
+.insp-title { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp-tabs { padding: 0 6px; border-bottom: 1px solid var(--border); flex: none; }
+.insp-tabs button { padding: 5px 9px; font-size: 12px; }
+.insp-tabs .count {
+  margin-left: 5px;
+  font-size: 9.5px;
+  font-family: var(--mono);
+  padding: 0 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.insp-section .kv { grid-template-columns: minmax(110px, max-content) 1fr; }
+details.section > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+details.section > summary::-webkit-details-marker { display: none; }
+details.section > summary::before { content: "▸"; color: var(--text-faint); font-size: 10px; }
+details.section[open] > summary::before { content: "▾"; }
+details.section > summary h3 {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+details.section[open] > summary { margin-bottom: 5px; }
+
+/* ================================================================ transport bar (2026-09-30)
+ * One row: play or pause, step, speed, the clock, the timeline with its events, the span. */
+
+.timebar { gap: 8px; flex-wrap: nowrap; }
+.timebar .tb-play { min-width: 34px; }
+.timebar .tb-speed { width: auto; max-width: 150px; }
+.timebar .clock { min-width: 0; text-align: left; font-size: 12px; }
+.timebar .tb-end { font-family: var(--mono); font-size: 11px; white-space: nowrap; flex: none; max-width: none; }
+.timebar:has(.timebar-notice) { flex-wrap: wrap; }
+.scrub { height: 28px; }
+.scrub .track { top: 15px; }
+.scrub .fill { top: 16px; }
+.scrub .produced { top: 15px; }
+.scrub .event-band { top: 20px; }
+.scrub-events { position: absolute; left: 0; right: 0; top: 0; height: 12px; z-index: 3; pointer-events: none; }
+.scrub-events button {
+  pointer-events: auto;
+  position: absolute;
+  padding: 0;
+  min-width: 0;
+  border: none;
+  cursor: pointer;
+}
+.scrub-events button:disabled { cursor: not-allowed; }
+.scrub .scrub-events .mark {
+  top: 2px;
+  width: 3px;
+  height: 10px;
+  margin-left: -1.5px;
+  border-radius: 1px;
+  /* A wider hit area than the tick it draws. */
+  box-shadow: 0 0 0 3px transparent;
+  outline: none;
+}
+.scrub .scrub-events .mark:hover { transform: scaleY(1.3); box-shadow: 0 0 0 1px var(--text); }
+.scrub .scrub-events .scenario-mark { top: 1px; }
+.scrub .scrub-events .scenario-mark:hover { box-shadow: 0 0 0 1px var(--text); }

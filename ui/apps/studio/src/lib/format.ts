@@ -42,6 +42,49 @@ export function radioCount(liveNodes: number, helloNodes: number, runState: stri
   return runState === "idle" || runState === "paused" ? "none yet" : int(0);
 }
 
+/** The radios in the node table, by what they are mounted on. */
+export interface RadioBreakdown {
+  readonly total: number;
+  /** On-board units: a radio on a vehicle. */
+  readonly vehicles: number;
+  /** A pedestrian's or a cyclist's device. */
+  readonly vru: number;
+  readonly roadside: number;
+}
+
+/**
+ * Count the node table's radios by kind (`NodeKind`: 0 on-board, 1 VRU device, 2 roadside).
+ *
+ * The inspector used to print "radios 82" beside "Select any of the 106 vehicles or roadside
+ * units": two numbers from two sources (the stream's node table and the engine's polled actor
+ * count) under words that made them sound like the same thing. Not every road user carries a radio
+ * — the equipped fraction, pedestrians without a device — and a roadside unit is a radio that is
+ * not a road user. The two are now named for what they count, and the radios are broken down.
+ */
+export function radioBreakdown(nodes: Iterable<{ readonly kind: number }>): RadioBreakdown {
+  let total = 0;
+  let vehicles = 0;
+  let vru = 0;
+  let roadside = 0;
+  for (const n of nodes) {
+    total++;
+    if (n.kind === 2) roadside++;
+    else if (n.kind === 1) vru++;
+    else vehicles++;
+  }
+  return { total, vehicles, vru, roadside };
+}
+
+/** "82 radios: 80 on vehicles, 2 roadside units" — only the parts that are there. */
+export function radioSentence(b: RadioBreakdown): string {
+  const parts: string[] = [];
+  if (b.vehicles > 0) parts.push(`${int(b.vehicles)} on vehicles`);
+  if (b.vru > 0) parts.push(`${int(b.vru)} carried by pedestrians or cyclists`);
+  if (b.roadside > 0) parts.push(`${int(b.roadside)} roadside unit${b.roadside === 1 ? "" : "s"}`);
+  const head = `${int(b.total)} radio${b.total === 1 ? "" : "s"}`;
+  return parts.length > 1 ? `${head}: ${parts.join(", ")}` : head;
+}
+
 /** §3.5.2 — `u16` at `0xFFFF` means unknown; at `0xFFFE`… it is a real value. */
 export function isU16Sentinel(v: number): boolean {
   return v === SENTINEL_U16;

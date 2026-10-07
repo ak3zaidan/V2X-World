@@ -275,9 +275,17 @@ fn saturate_u16(v: f64) -> u16 {
 }
 
 /// A per-cause drop ledger, kept per node and reset per telemetry window.
+///
+/// It also keeps what was dropped since the node's step last took it
+/// ([`DropLedger::take_step`]): a receive-side drop is on `node.rx` with its frame, but a
+/// transmit-side drop (a frame the node could not build, sign or queue) and a CRL backlog
+/// shed have no frame to ride on, so the step hands their counts to the engine, which
+/// records them on `node.drop`. Without it they were in the telemetry window's total and
+/// on no channel at all, so the chase view's queue table could not show them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DropLedger {
     counts: [u32; 6],
+    step: [u32; 6],
 }
 
 impl DropLedger {
@@ -288,14 +296,21 @@ impl DropLedger {
 
     /// Records one drop.
     pub fn record(&mut self, cause: DropCause) {
-        let i = DropCause::ALL.iter().position(|c| *c == cause).unwrap_or(0);
-        self.counts[i] = self.counts[i].saturating_add(1);
+        self.record_n(cause, 1);
     }
 
     /// Adds `n` drops of one cause.
     pub fn record_n(&mut self, cause: DropCause, n: u32) {
         let i = DropCause::ALL.iter().position(|c| *c == cause).unwrap_or(0);
         self.counts[i] = self.counts[i].saturating_add(n);
+        self.step[i] = self.step[i].saturating_add(n);
+    }
+
+    /// The drops recorded since the last call, in [`DropCause::ALL`] order, and a fresh
+    /// start for the next. Independent of [`DropLedger::reset`]: a telemetry window can
+    /// close in the middle of a step without losing the step's count.
+    pub fn take_step(&mut self) -> [u32; 6] {
+        core::mem::take(&mut self.step)
     }
 
     /// How many drops of this cause.
@@ -309,7 +324,7 @@ impl DropLedger {
         self.counts
     }
 
-    /// Clears the ledger for the next window.
+    /// Clears the ledger for the next window. The step's own count is not touched.
     pub fn reset(&mut self) {
         self.counts = [0; 6];
     }
@@ -405,5 +420,29 @@ mod tests {
         assert_eq!(l.count(DropCause::RxOverflow), u32::MAX);
         l.reset();
         assert_eq!(l.counts(), [0; 6]);
+    }
+
+    /// A step's drops are handed out once, whole, and a telemetry window closing in the
+    /// middle of the step does not take them: `node.drop` and the window's counters each
+    /// see every drop exactly once.
+    #[test]
+    fn a_steps_drops_are_taken_once_and_survive_a_window_reset() {
+        let mut l = DropLedger::new();
+        l.record_n(DropCause::TxOverflow, 3);
+        l.reset();
+        l.record(DropCause::CrlBacklog);
+        let step = l.take_step();
+        assert_eq!(step[3], 3, "a window reset lost the step's transmit drops");
+        assert_eq!(step[5], 1);
+        assert_eq!(
+            l.take_step(),
+            [0; 6],
+            "a step's drops were handed out twice"
+        );
+        assert_eq!(
+            l.count(DropCause::CrlBacklog),
+            1,
+            "taking the step cleared the window"
+        );
     }
 }
