@@ -1,0 +1,146 @@
+# Base for the ready-made Midtown scenarios: not listed in the page's picker itself (it is not
+# in ../ready-made.txt); every Midtown file in the picker names it as `meta.base` and
+# changes only what makes it different. Edit the deployment here and every one of them follows.
+#
+# What it is: Midtown Manhattan at midday on a weekday, a connected fleet, the US credential
+# system (SCMS) running in the loop, eight roadside units on Fifth and Sixth Avenues where the
+# NYC Connected Vehicle Pilot mounted its units, and misbehaviour detection on every vehicle.
+# It is scenarios/manhattan-5min.yaml (the previous default) with two changes, each a choice:
+#
+#  * `time.t0` is 12:00 Eastern (17:00 UTC), not 03:00: the page draws the sky and the
+#    headlamps at the hour the engine simulates (BUILD-STATUS, "Night in the Studio").
+#  * the arrival rate is 3,000 veh/h, the settings window's "Normal (midday)" preset
+#    (crates/v2xw-engine/src/scenario/options.rs PRESETS, where the ratios between night,
+#    midday and rush hour are cited). It is a scaled level: NYC DOT's Midtown counts (avenues
+#    970-1,890 veh/h per approach) would need roughly forty times this on the extract, which
+#    is thousands of vehicles at once (BUILD-STATUS, traffic calibration, open item 1).
+schema: v2xw/scenario/1
+
+meta:
+  name: midtown-base
+  description: >-
+    Midtown Manhattan at midday with a connected fleet, the US SCMS in the loop, eight
+    roadside units on Fifth and Sixth Avenues and misbehaviour detection on every vehicle.
+  authors: [v2xw]
+  tags: [manhattan, osm, dsrc, signed, scms, base]
+  created: "2026-10-06"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  t0: "2027-03-04T17:00:00Z"
+  duration_s: 300.0
+  # The car-following models' calibration step, and the BSM period: one step, one message.
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: osm-xml
+    path: worlds/cache/manhattan.osm.xml
+    # Build decision D7's Midtown box; its south-west corner is the world's origin.
+    bbox:
+      min_lat_deg: 40.7440
+      min_lon_deg: -73.9900
+      max_lat_deg: 40.7620
+      max_lon_deg: -73.9680
+  highway_preset: urban-us-nyc
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  # Positions from phase2-manhattan.yaml's survey of the imported network.
+  rsus:
+    - {position_m: [460.7, 494.6, 0.0], roles: [report-forward, crl, provisioning-proxy]}   # 5th Avenue / 34th Street
+    - {position_m: [770.3, 1052.8, 0.0], roles: [report-forward, crl, provisioning-proxy]}  # 5th Avenue / 42nd Street
+    - {position_m: [1042.0, 1544.6, 0.0], roles: [report-forward, crl, provisioning-proxy]} # 5th Avenue / 49th Street
+    - {position_m: [1273.1, 1962.9, 0.0], roles: [report-forward, crl, provisioning-proxy]} # 5th Avenue / 55th Street
+    - {position_m: [190.3, 644.2, 0.0], roles: [report-forward, crl, provisioning-proxy]}   # 6th Avenue / 34th Street
+    - {position_m: [496.8, 1204.0, 0.0], roles: [report-forward, crl, provisioning-proxy]}  # 6th Avenue / 42nd Street
+    - {position_m: [692.8, 1556.5, 0.0], roles: [report-forward, crl, provisioning-proxy]}  # 6th Avenue / 47th Street
+    - {position_m: [923.7, 1973.8, 0.0], roles: [report-forward, crl, provisioning-proxy]}  # 6th Avenue / 53rd Street
+  backend:
+    protocol: protocol/scms/camp
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 3000.0
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  tiers:
+    # High propagation: links priced from Midtown's own geometry (TR 37.885 LOS and blockage,
+    # Mangel 2011 round the street corner), the law best supported on a street grid.
+    propagation: high
+    phy: medium
+    mac: medium
+
+net:
+  layer: wsmp
+  # Every vehicle's telematics modem (TR 37.885 urban macro, 500 m inter-site distance).
+  uu:
+    id: cellular/uu/cell-capacity-mm1
+    params:
+      isd_m: 500
+      penetration: 1.0
+  backhaul:
+    id: backhaul/fixed
+    params:
+      latency_ms: 10
+      capacity_mbps: 1000
+
+messages:
+  sets: [bsm]
+  codec_tier: uper
+
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: prioritized
+  signer_id_policy:
+    # A full certificate once a second, a digest otherwise: SAE J2945/1.
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    # SAE J2945/1's five-minute certificate change.
+    strategy: time
+    period_s: 300.0
+  # The calendar compressed so the backend has something to do in minutes: a two-minute
+  # i-period (a week in a deployment, CAMP-EE §2.1.5.3.2), the report shuffle and the CRL
+  # at a minute (a day each, CAMP-EE SCMS-765, Brecht 2018 §VI-G).
+  protocol:
+    id: protocol/scms/camp
+    params:
+      i_period_s: 120
+      cert_lifetime_s: 121
+      certs_per_period: 20
+      pool_periods: 2
+      topup_below_periods: 1
+      report_shuffle_window_s: 60
+      crl_cadence_s: 60
+      crl_fetch_interval_s: 60
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+detection:
+  local:
+    - id: detect/legacy-12
+  ma:
+    id: threat/ma/corroborated
+
+metrics: [all]
+
+exporters: []

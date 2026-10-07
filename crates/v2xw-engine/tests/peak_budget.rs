@@ -1,6 +1,6 @@
 //! The engine's cost at peak load, held by counts rather than by a clock.
 //!
-//! `scenarios/midtown-rush-hour.yaml` is the heaviest scenario the page is asked to carry. Its
+//! `scenarios/midtown-peak-load.yaml` is the heaviest scenario the page is asked to carry. Its
 //! cost is set by how many links each frame is followed to: the release engine ran it at
 //! 0.19x real time with every frame evaluated at every one of ~600 radios in the box, and at
 //! 0.5x with full evaluation capped at 500 m (`radio.range.max_m`; BUILD-STATUS.md, stabilise

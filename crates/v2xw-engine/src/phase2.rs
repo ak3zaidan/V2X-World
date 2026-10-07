@@ -364,7 +364,7 @@ pub fn renders_on_air(kind: AttackKind) -> bool {
 /// a forged signature and a certificate outside its validity window. What the kinds below
 /// change is none of those, and an attack that is counted as lying while nothing it does
 /// reaches a receiver reads as an attack nobody detected; so they are refused by name.
-fn unrendered(kind: AttackKind) -> Option<&'static str> {
+pub(crate) fn unrendered(kind: AttackKind) -> Option<&'static str> {
     match kind {
         AttackKind::DoS | AttackKind::DoSRandom => Some(
             "a flood is extra transmissions per generation interval, and the host sends one \

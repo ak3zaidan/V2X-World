@@ -23,7 +23,16 @@ import { AgentIcon, ChartIcon, GearIcon, InspectorIcon, MoreIcon } from "./Icons
 import { MenuButton } from "./Menu.js";
 import { openPanel, togglePanel } from "./route.js";
 
+import "../styles/settings-widgets.css";
+
 const MOD = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
+
+/** A scenario description's first sentence: the one line the picker has room for. */
+function firstSentence(text: string): string {
+  const t = text.trim();
+  const m = /^(.+?[.!?])(\s|$)/.exec(t);
+  return m ? m[1] : t;
+}
 
 /** The scenario's name, which opens the list of ready-made scenarios and the settings. */
 function ScenarioSwitcher(): React.JSX.Element {
@@ -54,29 +63,42 @@ function ScenarioSwitcher(): React.JSX.Element {
         <>
           <div className="sec">Ready-made scenarios</div>
           {presets.length === 0 ? <div className="dim menu-note">This engine lists none.</div> : null}
-          {presets.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              disabled={busy}
-              data-testid="switcher-load"
-              data-preset={item.name ?? item.id}
-              title={item.description ?? "Load these settings; the next run uses them"}
-              onClick={() => {
-                setBusy(true);
-                setNote(null);
-                loadPreset(item)
-                  .then((text) => setNote({ text, err: false }))
-                  .catch((err: unknown) => setNote({ text: describeError(err), err: true }))
-                  .finally(() => setBusy(false));
-              }}
-            >
-              <span className="grow">{item.name ?? item.id}</span>
-              {item.hash !== undefined && item.hash === runningHash ? <span className="faint">running</span> : null}
-            </button>
-          ))}
+          {/* Grouped as the engine's catalogue groups them, each with the one line that says what it
+              shows, so a scenario can be chosen without knowing its file name. */}
+          <div className="scenario-menu-list">
+            {presets.map((item, i) => (
+              <div key={item.id}>
+                {item.group && item.group !== presets[i - 1]?.group ? (
+                  <div className="sec group" data-testid="switcher-group">
+                    {item.group}
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item preset"
+                  disabled={busy}
+                  data-testid="switcher-load"
+                  data-preset={item.name ?? item.id}
+                  title="Load these settings; the next run uses them"
+                  onClick={() => {
+                    setBusy(true);
+                    setNote(null);
+                    loadPreset(item)
+                      .then((text) => setNote({ text, err: false }))
+                      .catch((err: unknown) => setNote({ text: describeError(err), err: true }))
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  <span className="preset-title">
+                    <span className="grow">{item.name ?? item.id}</span>
+                    {item.hash !== undefined && item.hash === runningHash ? <span className="faint">running</span> : null}
+                  </span>
+                  {item.description ? <span className="preset-desc">{firstSentence(item.description)}</span> : null}
+                </button>
+              </div>
+            ))}
+          </div>
           {note ? (
             <div className={note.err ? "menu-note err-text" : "menu-note"} data-testid="switcher-message" role="status">
               {note.text}

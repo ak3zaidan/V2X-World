@@ -4,7 +4,7 @@
 //! A frame's candidate receivers and its reception census used to come from
 //! [`ActorSnapshot::actors_within`], which returns every *actor* in range, and were then
 //! filtered to the ones carrying a radio by a map lookup each. At Midtown's evening peak
-//! (`scenarios/midtown-rush-hour.yaml`) three actors in four are pedestrians and cyclists
+//! (`scenarios/midtown-peak-load.yaml`) three actors in four are pedestrians and cyclists
 //! with no handset, and the line-of-sight reach covers the whole box, so every frame walked
 //! about 2,300 actors through two ordered-map lookups and a sort to keep about 600: the
 //! query was 12 % of the engine thread and the filter most of `start_frame`'s own time

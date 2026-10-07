@@ -1,0 +1,31 @@
+# Certificate lifecycle and pseudonym privacy: can a roadside eavesdropper follow a car?
+#
+# credential-lifecycle.yaml (every US SCMS entity in the loop on a small grid: bootstrap,
+# pseudonym batches and top-ups, certificate change, enrolment renewal, reports, revocation
+# and the CRL, with the calendar compressed to five minutes) plus a passive eavesdropper with
+# sniffers at a quarter of the signalised junctions (`threat/observer/passive-privacy`), as
+# pseudonym-strategies.yaml places it.
+#
+# What to read: the Backend view for the certificate lifecycle, and the privacy metrics —
+# how often the eavesdropper links a car's old and new pseudonyms, the anonymity-set size at
+# each change and how long it keeps a car tracked. Change "When vehicles change pseudonym"
+# in the settings to compare the J2945/1 rule with the NYC pilot's, C2C-CC's and mix zones.
+schema: v2xw/scenario/1
+
+meta:
+  base: credential-lifecycle.yaml
+  name: Certificates and pseudonym privacy
+  description: >-
+    The whole US credential system at work — certificate batches, top-ups, pseudonym
+    changes, reports and revocation — while an eavesdropper at a quarter of the junctions
+    tries to follow cars across their pseudonym changes.
+  tags: [privacy, pseudonym, eavesdropper, scms, credentials, backend]
+
+time:
+  t0: "2027-03-04T17:00:00Z"
+
+threats:
+  eavesdropper:
+    id: threat/observer/passive-privacy
+    params:
+      sniffer_fraction: 0.25

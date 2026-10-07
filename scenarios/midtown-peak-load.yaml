@@ -1,0 +1,167 @@
+# Midtown Manhattan at the evening rush: the heaviest traffic this simulator is asked to
+# carry on a laptop, with the pedestrians, cyclists and motorcycles that share the streets,
+# every motor vehicle sending signed BSMs. It is the peak-load scenario the page, the
+# scene, the inspector and the metrics are budgeted against (see "Budgets" below).
+#
+# What "rush hour" means here, and where the numbers come from:
+#
+#  * Volume. NYC DOT counted 1,356 vehicles in the PM peak hour on Eighth Avenue at West
+#    19th Street (1,223 in the AM peak) [NYC DOT, "8th and 9th Avenues Complete Streets",
+#    Community Board 4 presentation, 2011]. The box below is the D7 Midtown box every
+#    Manhattan scenario uses (about 2.0 by 1.9 km); some eight avenues cross it, so on
+#    the order of 10,000 vehicles an hour enter it on the avenues alone, before the
+#    crosstown streets.
+#    The engine's demand is a thinned Poisson process over the whole network, not a count
+#    per approach, so `rate_veh_per_h` is set to put the measured number of vehicles in the
+#    box at the order a rush hour puts there; the value and what it produced are in
+#    docs/design/BUILD-STATUS.md (stabilise track, 2026-10-06).
+#  * Speed. NYC DOT measures Midtown's average travel speed at about 5 mph (6.4 mph in
+#    2010, 5 mph in 2017, below 5 mph in 2023) from taxi GPS records [NYC DOT Mobility
+#    Report, 2018 and 2019 editions]. The run's mean vehicle speed is the check that the
+#    demand produced congestion and not free flow.
+#  * People. 2,000 pedestrians and 200 cyclists at once. A Midtown sidewalk at the evening
+#    peak carries far more than that; this is the share a laptop can draw and simulate,
+#    stated as a sample, not a count (as midtown-street-life.yaml). They behave as
+#    observed: jaywalking, crossing on DON'T WALK into a gap, groups (the model cards and
+#    midtown-street-life.yaml carry the citations).
+#  * The fleet. 80 % cars and taxis, 8 % delivery vans, 3 % trucks, 2 % buses, 3 %
+#    motorcycles and 4 % delivery mopeds: choices, not a classified count (none was read),
+#    with more two-wheelers than midtown-street-life.yaml because the evening peak is when
+#    the delivery riders are out.
+#
+# What it does not measure:
+#  * Turning-movement volumes per approach, or the queues spilling back from the tunnels
+#    and bridges: the demand is network-wide Poisson, not an OD matrix fitted to counts.
+#  * Double parking, deliveries blocking a lane, and pedestrians beyond the sample above.
+#  * The SCMS backend: no roadside units or authority traffic, so the load is the
+#    vehicles' and handsets' own channel use. manhattan-5min.yaml has the backend.
+#
+# Budgets. The page, the scene, the inspector and the metrics are expected to stay usable
+# on this scenario. The engine's throughput, the page's frame time and both processes'
+# memory at its peak were measured on the owner's 8 GB laptop and are recorded in
+# docs/design/BUILD-STATUS.md; the regression tests that hold them are named there.
+schema: v2xw/scenario/1
+
+meta:
+  name: Midtown Manhattan - busiest rush hour (stress test)
+  description: >-
+    Midtown Manhattan at the evening rush: heavy, slow traffic on the avenues at NYC DOT's
+    peak volumes, with pedestrians who jaywalk, cyclists, motorcycles and delivery mopeds;
+    every motor vehicle sends signed BSMs, so the radio channel is as busy as it gets.
+  authors: [v2xw]
+  tags: [manhattan, osm, peak, congestion, vru, motorcycles, cyclists, dsrc, stress]
+  created: "2026-10-06"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  # A weekday at 17:30, inside the evening peak hour.
+  t0: "2027-03-04T17:30:00Z"
+  duration_s: 300.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: osm-xml
+    path: worlds/cache/manhattan.osm.xml
+    bbox:
+      min_lat_deg: 40.7440
+      min_lon_deg: -73.9900
+      max_lat_deg: 40.7620
+      max_lon_deg: -73.9680
+  highway_preset: urban-us-nyc
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  vru:
+    pedestrians: 2000
+    cyclists: 200
+    device_fraction: 0.25
+    behaviour: observed
+    ebike_share: 0.4
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 9000.0
+    classes:
+      passenger:
+        fraction: 0.80
+      delivery:
+        fraction: 0.08
+      truck:
+        fraction: 0.03
+      bus:
+        fraction: 0.02
+      motorcycle:
+        fraction: 0.03
+      moped:
+        fraction: 0.04
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  # Receptions are fully evaluated (geometry, shadowing, fading, decoding) out to 500 m;
+  # beyond that, out to the link budget's reach, a receiver in line of sight still gets
+  # every frame's energy as interference, so the channel load is not understated. Why
+  # 500 m: in the street canyons the run's own NLOS law (TR 37.885 urban) brings a
+  # 20 dBm frame to the noise floor less 10 dB at about 450 m (wiring::CandidateRangePlan),
+  # so past 500 m only a frame straight down an avenue could still be decoded. Uncapped,
+  # every frame was evaluated at every one of ~600 radios in the box and the engine ran
+  # at 0.19x real time against 0.5x capped (measured; BUILD-STATUS.md). The price: the
+  # PDR-by-distance metrics have no decoded frames past 500 m.
+  range:
+    max_m: 500.0
+  tiers:
+    propagation: medium
+    phy: medium
+    mac: medium
+
+net:
+  layer: wsmp
+
+messages:
+  sets: [bsm]
+  codec_tier: uper
+
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: prioritized
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+metrics: [all]
+
+exporters: []
+
+# The streets fill first. The demand model starts from an empty network, and at the
+# steady rate a vehicle entering the box takes minutes to leave it, so the rush would
+# only build up near the end of a five-minute run. For the first 90 s the offered demand
+# is four times the steady rate (the lanes' insertion gap, not the multiplier, then
+# limits how fast vehicles enter); after that it is the rate above. The fill is a
+# choice to reach the peak inside the run, not a model of how traffic arrives.
+events:
+  - t: 0.0
+    until: 90.0
+    type: demand.multiplier
+    value: 4.0

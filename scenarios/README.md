@@ -9,6 +9,41 @@ Every file here is meant to be **copied and edited**, so every one is commented 
 document rather than like a config: each states at the top what it measures, what it does
 *not* measure, and why each non-obvious number is that number.
 
+## The ready-made scenarios (what the Studio's picker offers)
+
+[`ready-made.txt`](ready-made.txt) is the picker's list, grouped and in order; the names and
+one-line descriptions the page shows are each file's `meta.name` and `meta.description`. Every
+other file in this folder still loads by path (`scenario.load`, `v2xw run`) and is simply not
+offered. Each ready-made file is a short overlay (`meta.base`) on the deployment it changes, so
+the deployment is written once: [`base/midtown.yaml`](base/midtown.yaml) (Midtown at midday, the
+US SCMS, eight roadside units, detection) and [`base/radio-faceoff.yaml`](base/radio-faceoff.yaml)
+(Midtown at rush-hour density with no backend), or an existing study file below.
+
+| File | Name in the picker | What it shows |
+|---|---|---|
+| [`midtown-normal.yaml`](midtown-normal.yaml) | Midtown Manhattan - normal traffic | the honest baseline; start the server with this one |
+| [`midtown-rush-hour.yaml`](midtown-rush-hour.yaml) | Midtown Manhattan - evening rush hour | rising rush-hour demand, a lane-blocking breakdown, West 45th Street closed |
+| [`midtown-peak-load.yaml`](midtown-peak-load.yaml) | Midtown Manhattan - busiest rush hour (stress test) | 9,000 veh/h, 2,000 pedestrians, 200 cyclists, every vehicle sending BSMs: the peak-load budget scenario |
+| [`midtown-pedestrians.yaml`](midtown-pedestrians.yaml) | Midtown Manhattan - pedestrians, jaywalkers and motorcycles | `midtown-street-life.yaml` at a size the page draws smoothly |
+| [`midtown-rain.yaml`](midtown-rain.yaml) | Midtown Manhattan - heavy rain | slower, more cautious traffic; the radio loses almost nothing (ITU-R P.838-3) |
+| [`berlin.yaml`](berlin.yaml) | Berlin-Mitte (European ITS-G5 and CAMs) | the European stack end to end on a German city; needs `worlds/fetch.sh berlin` |
+| [`highway-congestion.yaml`](highway-congestion.yaml) | Highway - heavy traffic and breakdowns | a busy open-road channel; two breakdowns block lanes (not a level-of-service F jam: see the file) |
+| [`portland.yaml`](portland.yaml) | Downtown Portland, Oregon | `portland-downtown.yaml` by day |
+| [`radio-dsrc.yaml`](radio-dsrc.yaml), [`radio-lte.yaml`](radio-lte.yaml), [`radio-nr.yaml`](radio-nr.yaml) | Radio comparison - DSRC / LTE / NR | identical traffic, only the radio differs |
+| [`attack-fake-positions.yaml`](attack-fake-positions.yaml) | Attack - fake positions at rush hour | ConstPos and RandomPos attackers detected, reported and revoked |
+| [`attack-replay.yaml`](attack-replay.yaml) | Attack - replayed and delayed messages | validly signed lies only plausibility checks can catch |
+| [`attack-jamming.yaml`](attack-jamming.yaml) | Attack - radio jamming at Fifth Avenue and 42nd Street | a constant jammer for three minutes, the drop and the recovery |
+| [`privacy-pseudonyms.yaml`](privacy-pseudonyms.yaml) | Certificates and pseudonym privacy | `credential-lifecycle.yaml` with a roadside eavesdropper |
+| [`europe-credentials.yaml`](europe-credentials.yaml) | European credential system (ETSI CCMS) | `ccms-lifecycle.yaml` by day |
+| [`post-quantum.yaml`](post-quantum.yaml) | Post-quantum security - the cost on the air | Falcon-512 hybrid signatures, fragmented on the air |
+| [`emergency-priority.yaml`](emergency-priority.yaml) | Emergency vehicles get green lights | `connected-intersections.yaml`: SPaT, MAP, SRM and SSM |
+
+Traffic volumes: the demand presets' *ratios* (night, midday, rush hour) are cited in
+`crates/v2xw-engine/src/scenario/options.rs`; their *level* is scaled, because NYC DOT's Midtown
+counts would need about forty times the interactive rate on the extract (thousands of vehicles
+at once). The rush-hour congestion comes from the incident and the closure concentrating
+traffic, as it does in the city.
+
 ## The study library
 
 | File | Question it answers | Sweep | Runs |

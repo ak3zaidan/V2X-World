@@ -243,6 +243,8 @@ export interface ScenarioListItem {
   readonly description?: string;
   readonly tags?: string[];
   readonly hash?: string;
+  /** The heading the engine's ready-made catalogue lists it under (`scenarios/ready-made.txt`). */
+  readonly group?: string | null;
 }
 
 /** One catalogue row of `overlay.set {list:true}` (§6.7). */

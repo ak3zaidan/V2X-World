@@ -1,0 +1,32 @@
+# Post-quantum signatures: what quantum-safe security costs on the air.
+#
+# midtown-normal.yaml with every message and certificate signed by the Falcon-512 + ECDSA
+# P-256 hybrid: 666 more octets per signature and 1,563 per attached certificate (Falcon-512
+# and SEC 1 sizes, crates/v2xw-engine/src/signature.rs). A signed BSM with its certificate
+# no longer fits the 1,400-octet WSMP MTU, so the generic fragmenter splits it and the
+# receiver has to get every piece. The hardware is a unit that publishes a Falcon figure
+# (the Cohda MK6c with a Qualcomm 9150), so every signature and verification is charged its
+# post-quantum time too; the credential system issues hybrid certificates.
+#
+# Compare with midtown-normal.yaml: the channel busy ratio, the delivery ratio (a message is
+# lost if any fragment is), the latency and the bytes per message.
+schema: v2xw/scenario/1
+
+meta:
+  base: midtown-normal.yaml
+  name: Post-quantum security - the cost on the air
+  description: >-
+    Midday Midtown with quantum-safe hybrid signatures (Falcon-512 + P-256) on every
+    message and certificate: messages grow several times over and are sent in pieces.
+    Compare delivery, latency and channel load with the normal-traffic scenario.
+  tags: [security, post-quantum, falcon, hybrid, fragmentation, scms]
+
+security:
+  signature: hybrid-falcon512-ecdsa-p256
+
+net:
+  fragmenter:
+    id: fragmenter/generic-sdu
+
+nodes:
+  default_obu: obu/cohda-mk6c-qualcomm-9150

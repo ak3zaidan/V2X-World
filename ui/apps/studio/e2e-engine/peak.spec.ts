@@ -1,9 +1,9 @@
 /**
- * The page at peak load: Midtown's evening rush (`scenarios/midtown-rush-hour.yaml`) against the
+ * The page at peak load: Midtown's evening rush (`scenarios/midtown-peak-load.yaml`) against the
  * real engine, measured as the owner would run it, with budgets that fail when a change makes the
  * page, the scene, the inspector or the metrics fall over under it.
  *
- *   VWP_PEAK_SCENARIO  the scenario (default: scenarios/midtown-rush-hour.yaml)
+ *   VWP_PEAK_SCENARIO  the scenario (default: scenarios/midtown-peak-load.yaml)
  *   VWP_PEAK_SECONDS   wall seconds of streaming to measure over (default 60)
  *   VWP_PEAK_REPORT    a JSON file for the measurements (default: none)
  *   VWP_PEAK_SHOTS     a directory for screenshots (default: none)
@@ -74,7 +74,7 @@ const BUDGET = {
 let engine: EngineProcess;
 
 test.beforeAll(async () => {
-  engine = new EngineProcess(process.env.VWP_PEAK_SCENARIO ?? join(REPO, "scenarios/midtown-rush-hour.yaml"));
+  engine = new EngineProcess(process.env.VWP_PEAK_SCENARIO ?? join(REPO, "scenarios/midtown-peak-load.yaml"));
   await engine.start();
 });
 

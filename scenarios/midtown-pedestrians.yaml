@@ -1,0 +1,29 @@
+# Midtown Manhattan with pedestrians, jaywalkers, cyclists and motorcycles.
+#
+# midtown-street-life.yaml is the street as its road users behave (walking speeds by age,
+# Knoblauch 1996; crossing on DON'T WALK and mid-block as counted in Midtown, Basch 2015;
+# conventional and e-bikes, Schleinitz 2017; motorcycles and delivery mopeds in the fleet mix).
+# This file takes it whole and changes one thing for an interactive demo:
+#
+#  * 600 pedestrians and 80 cyclists instead of 1,500 and 150 — the size the viewer's
+#    pedestrian work was measured at (BUILD-STATUS, 3D traffic scene), so the page stays smooth.
+# device_fraction stays at the base's 0.25. This build has no PSM generator, so the loader
+# refuses "psm" in messages.sets; the radio side here is the vehicles' BSMs.
+#
+# Follow a pedestrian who steps out mid-block and watch the drivers yield.
+schema: v2xw/scenario/1
+
+meta:
+  base: midtown-street-life.yaml
+  name: Midtown Manhattan - pedestrians, jaywalkers and motorcycles
+  description: >-
+    Midtown at midday with people crossing against the signal and mid-block, groups,
+    cyclists on bikes and e-bikes, and motorcycles and delivery mopeds among the cars;
+    the vehicles all sign safety messages.
+  tags: [manhattan, pedestrians, jaywalking, cyclists, motorcycles, vru]
+
+actors:
+  vru:
+    pedestrians: 600
+    cyclists: 80
+    device_fraction: 0.25
