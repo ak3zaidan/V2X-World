@@ -466,4 +466,4 @@ export function clock(tS: number): string {
 
 /** The command that starts an engine with the agent, for the message shown when it has none. */
 export const AGENT_SERVE_HINT =
-  "The agent runs inside `v2xw serve`. Start the engine with `./target/release/v2xw serve --scenario <file> --port 8787 --paused --speed 0` (the same flags as v2xw-server) and reload this page.";
+  "The agent is part of the engine: `v2xw-server` and `v2xw serve` both serve it, unless the engine was started with --no-agent or is an older build. Restart it with `./run-sim.sh <scenario>` (it builds `v2xw-server` if needed and reads model keys from .env) and reload this page.";

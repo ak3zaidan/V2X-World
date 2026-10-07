@@ -84,6 +84,21 @@ just legacy-conformance
 | `docs/` | the design and the architecture decision records |
 | `docs/site/` | the generated documentation site and its generator |
 
+## Running a simulation
+
+```bash
+./run-sim.sh                                   # the engine, with the agent always on
+./run-sim.sh scenarios/manhattan-vru.yaml      # another scenario
+pnpm --dir ui --filter @vwp/studio dev         # the Studio, http://127.0.0.1:5173
+```
+
+There is one engine process, `v2xw-server`. It serves the agent endpoints and runs the
+always-on watcher, so every run gets the agent panel and the end-of-run analysis
+without a second command. It reads `V2XW_AGENT_PROVIDER`, `OPENAI_API_KEY`,
+`OPENAI_MODEL` and `ANTHROPIC_API_KEY` from `.env` when the environment does not set
+them. The banner names the provider and never prints a key. `--no-agent` serves the
+engine without the agent.
+
 ## The documentation site
 
 [`docs/site/`](docs/site/README.md) generates a browsable site from this repository
