@@ -1,0 +1,176 @@
+/*
+ * The vehicle overlay, the selected-vehicle HUD and the source note (2026-10-06).
+ *
+ * The overlay replaces the inspector column: a large dialog over the viewport's right side, near
+ * full height, resizable from its left edge, so the sent and received tables have room for a
+ * column per thing a reader compares.
+ */
+
+.ok-text { color: var(--ok); }
+
+/* ------------------------------------------------------------------ the overlay */
+
+.vehicle-overlay {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
+  width: min(1040px, calc(100% - 16px));
+  min-width: min(420px, calc(100% - 16px));
+  max-width: calc(100% - 16px);
+  z-index: 28;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: color-mix(in srgb, var(--bg-panel) 97%, transparent);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 45%);
+  backdrop-filter: blur(10px);
+  outline: none;
+}
+.vo-resize {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 2;
+}
+.vo-resize:hover { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+
+.vo-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 6px 16px;
+  flex: none;
+}
+.vo-title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.vo-title h2 { margin: 0; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vo-title .mono { font-size: 11.5px; }
+.vo-chip {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.vo-chip.ok { color: var(--ok); }
+.vo-chip.warn { color: var(--warn); }
+.vo-chip.bad { color: var(--err); }
+
+.vo-tabs { padding: 0 12px; border-bottom: 1px solid var(--border); flex: none; gap: 2px; }
+.vo-tabs button {
+  padding: 6px 14px;
+  font-size: 13px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--text-dim);
+}
+.vo-tabs button:hover:not(:disabled) { background: none; color: var(--text); }
+.vo-tabs button.active { color: var(--text); border-bottom-color: var(--accent); box-shadow: none; }
+.vo-tabs .count {
+  margin-left: 6px;
+  font-size: 10.5px;
+  font-family: var(--mono);
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.vo-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.vo-body > .panel-body { flex: 1; padding: 12px 16px; }
+
+/* Overview: cards in as many columns as fit. */
+.vo-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+.vo-card {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  min-width: 0;
+}
+.vo-card h3 { margin-top: 0; }
+.vo-card .kv { grid-template-columns: minmax(120px, max-content) 1fr; }
+.vo-health, .vo-wide, .vo-trends { grid-column: 1 / -1; }
+.vo-health p { margin: 0; }
+.vo-issues { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.vo-trends .sparkrow { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; border: none; padding: 0; }
+.vo-kv-columns { grid-template-columns: repeat(auto-fill, minmax(130px, max-content) minmax(90px, 1fr)) !important; }
+.table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ------------------------------------------------------------------ the message tables */
+
+.vehicle-overlay .feed { gap: 8px; }
+.vehicle-overlay .feed-bar { gap: 10px; flex-wrap: wrap; justify-content: flex-start; }
+.vehicle-overlay .feed-status { font-size: 11.5px; color: var(--text-dim); }
+.vehicle-overlay .feed-status.held { color: var(--warn); }
+.vehicle-overlay .feed-scroll {
+  max-height: none;
+  flex: 1 1 auto;
+  min-height: 160px;
+  flex-shrink: 1;
+}
+.vehicle-overlay .feed > .feed-scroll { flex-shrink: 1; }
+.vehicle-overlay .feed { min-height: 0; }
+.vehicle-overlay .feed-table { font-size: 12.5px; width: 100%; }
+.vehicle-overlay .feed-table th { font-weight: 600; color: var(--text-dim); white-space: nowrap; }
+.vehicle-overlay .feed-table td, .vehicle-overlay .feed-table th { padding: 4px 10px; }
+.vehicle-overlay .feed-table td.mono { font-family: var(--mono); font-size: 11.5px; }
+.vehicle-overlay .feed-table tbody tr[aria-expanded="true"] td { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.vehicle-overlay .feed-table tr.feed-expand > td { padding: 0 6px 8px; background: transparent; cursor: default; }
+.feed-outcome.ok { color: var(--ok); }
+.feed-outcome.warn { color: var(--warn); }
+.feed-outcome.lost { color: var(--err); }
+
+.vehicle-overlay .feed-detail { font-size: 12px; padding: 10px 12px; margin-top: 4px; }
+.feed-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 6px 18px;
+}
+.feed-detail-col { min-width: 0; }
+.feed-detail-col .kv { grid-template-columns: minmax(110px, max-content) 1fr; }
+.feed-detail-col h4, .vehicle-overlay .feed-hex h4 { margin: 4px 0 4px; }
+.vehicle-overlay .feed-hex pre { font-size: 11.5px; }
+
+/* ------------------------------------------------------------------ the HUD */
+
+.hud { width: min(560px, calc(100% - 16px)); font-family: var(--sans); font-size: 12px; }
+.hud-head .id { font-size: 13px; }
+.hud-head .hud-details { font-size: 12px; padding: 2px 10px; }
+.hud .hud-field.plain .v { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.hud .hud-field.plain .k { color: var(--text-dim); }
+.hud .hud-row-title { width: 64px; }
+.hud [data-testid="hud-health"] .hud-row-body { gap: 4px 12px; }
+
+/* ------------------------------------------------------------------ the source note */
+
+.source-note {
+  position: absolute;
+  top: 48px;
+  right: 16px;
+  z-index: 32;
+  width: min(380px, calc(100% - 32px));
+  padding: 10px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
+  font-size: 12px;
+  display: grid;
+  gap: 8px;
+}
+.source-note-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.source-note .kv { grid-template-columns: minmax(80px, max-content) 1fr; margin: 0; }
+.source-note p { margin: 0; }

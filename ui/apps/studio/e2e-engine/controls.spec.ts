@@ -292,18 +292,18 @@ test("every control does what it says", async ({ page }) => {
     await expect(page.getByTestId("state-legend")).toHaveCount(open ? 1 : 0, quick);
     return open ? "open → folded → open" : "folded → open → folded";
   });
-  await check("viewport: HUD dock", "dock and float the radio HUD", async () => {
-    // The dock button lives in the HUD's own header, which shows while a vehicle is followed.
-    if ((await page.getByTestId("hud-dock").count()) === 0) {
+  await check("viewport: HUD details", "open and close the vehicle overlay from the HUD", async () => {
+    // The Details button lives in the HUD's own header, which shows while a vehicle is followed.
+    if ((await page.getByTestId("hud-details").count()) === 0) {
       await page.evaluate(() => window.__vwpStudio?.selectFirstActor());
     }
-    await expect(page.getByTestId("hud-dock")).toBeVisible(quick);
-    const before = await page.getByTestId("hud-dock").innerText();
-    await page.getByTestId("hud-dock").click();
-    const after = await page.getByTestId("hud-dock").innerText();
-    expect(after).not.toBe(before);
-    await page.getByTestId("hud-dock").click();
-    return `${before} → ${after}`;
+    await expect(page.getByTestId("hud-details")).toBeVisible(quick);
+    const before = await page.getByTestId("inspector-panel").count();
+    await page.getByTestId("hud-details").click();
+    await expect(page.getByTestId("inspector-panel")).toHaveCount(before === 0 ? 1 : 0, quick);
+    await page.getByTestId("hud-details").click();
+    await expect(page.getByTestId("inspector-panel")).toHaveCount(before, quick);
+    return before === 0 ? "closed → open → closed" : "open → closed → open";
   });
 
   const table = [

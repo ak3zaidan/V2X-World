@@ -91,16 +91,17 @@ test("follow a vehicle: its BSMs, what it hears and its queues", async ({ page }
     await e.selectActor(a, "chase");
   }, actor);
 
-  // Chase view opens the Messages tab on its own; the panel sits in the right-hand column, beside
-  // the viewport, never over it.
-  const panel = page.getByTestId("message-panel");
-  await expect(panel).toBeVisible();
-  const box = await panel.boundingBox();
-  const view = await page.getByTestId("viewstack").boundingBox();
-  expect(box && view && box.x >= view.x + view.width - 1, "the panel is outside the viewport").toBe(true);
+  // Selecting does not cover the followed vehicle: the overlay opens from the HUD's Details button,
+  // over the viewport, and takes nothing from it (the viewport keeps its full width).
+  await expect(page.getByTestId("inspector-panel")).toHaveCount(0);
+  const before = await page.getByTestId("viewstack").boundingBox();
+  await page.getByTestId("hud-details").click();
+  await expect(page.getByTestId("inspector-panel")).toBeVisible();
+  const after = await page.getByTestId("viewstack").boundingBox();
+  expect(after?.width, "opening the overlay narrowed the viewport").toBe(before?.width);
 
   // --- Sent: a BSM with decoded fields ------------------------------------------------------------
-  await page.getByTestId("feed-tab-sent").click();
+  await page.getByTestId("tab-sent").click();
   await expect(page.getByTestId("feed-row-sent").first()).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("feed-row-sent").first()).toContainText("BSM");
 
@@ -153,7 +154,7 @@ test("follow a vehicle: its BSMs, what it hears and its queues", async ({ page }
   await expect(detail.getByTestId("feed-field-lat")).toHaveCount(1);
 
   // --- Received: senders and fates -----------------------------------------------------------------
-  await page.getByTestId("feed-tab-received").click();
+  await page.getByTestId("tab-received").click();
   await expect(page.getByTestId("feed-row-received").first()).toBeVisible({ timeout: 30_000 });
   const from = (await page.getByTestId("feed-from").first().textContent()) ?? "";
   expect(from).toMatch(/^node \d+$/);
@@ -163,14 +164,14 @@ test("follow a vehicle: its BSMs, what it hears and its queues", async ({ page }
   await expect(detail.getByTestId("feed-field-temp_id")).toHaveCount(1);
 
   // --- Queues: the five, and messages waiting in them ------------------------------------------------
-  await page.getByTestId("feed-tab-queues").click();
+  await page.getByTestId("tab-queues").click();
   for (const q of ["rx", "verify", "app", "tx", "crl"]) await expect(page.getByTestId(`queue-${q}`)).toBeVisible();
   await expect.poll(async () => page.getByTestId("queue-entry").count(), { timeout: 60_000, intervals: [200] }).toBeGreaterThan(0);
   const entry = (await page.getByTestId("queue-entry").first().textContent()) ?? "";
   expect(entry).toMatch(/ms/);
 
   // Pause and resume the panel itself.
-  await page.getByTestId("feed-tab-sent").click();
+  await page.getByTestId("tab-sent").click();
   await page.getByTestId("feed-pause").click();
   const frozen = await page.getByTestId("feed-row-sent").first().getAttribute("data-msg");
   await page.waitForTimeout(1_500);

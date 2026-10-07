@@ -31,6 +31,7 @@ import {
   applyPush,
   followFeed,
   openMessage,
+  readMessage,
   setHovering,
   setPaused,
   type FeedDir,
@@ -261,7 +262,10 @@ export interface ValidationView {
   readonly warnings: readonly ValidationError[];
 }
 
-/** What the inspector is explaining right now. */
+/** The vehicle overlay's sections. */
+export type InspectorTab = "overview" | "sent" | "received" | "queues";
+
+/** What the source note is explaining right now. */
 export interface WhySubject {
   readonly kind: "metric" | "node_field" | "actor_field" | "event" | "link" | "entity" | "channel" | "world" | "overlay";
   readonly id: string;
@@ -273,7 +277,7 @@ export interface WhySubject {
   readonly unit?: string;
   /**
    * Set when the value was computed in the browser rather than by the engine (frame rate, overlay
-   * geometry, a side-by-side difference). `WhyTab` renders this instead of pretending a model card
+   * geometry, a side-by-side difference). `SourceNote` renders this instead of pretending a model card
    * exists, and does not offer `explain` — the engine has never seen the number.
    */
   readonly client?: ClientProvenance;
@@ -453,8 +457,6 @@ interface StudioState {
    * message, and its queues — pushed by the engine only while the node is followed (`lib/feed.ts`).
    */
   feed: FeedView;
-  /** Which of the message panel's three tabs is open. */
-  feedTab: "sent" | "received" | "queues";
   /**
    * The followed vehicle's pose in the stream at the last projection flush: world-local metres, m/s
    * and an ENU heading. The HUD prints it beside what the vehicle's BSMs say.
@@ -514,8 +516,8 @@ interface StudioState {
   metricProvenance: Readonly<Record<string, number>>;
   metricDims: Readonly<Record<string, string>>;
   why: WhySubject | null;
-  inspectorTab: "state" | "messages" | "why" | "log";
-  hudDocked: boolean;
+  /** Which section of the vehicle overlay is showing (`components/Inspector.tsx`). */
+  inspectorTab: InspectorTab;
   /**
    * Whether the interface shows protocol internals: wire field names, method names, frame counts
    * and the specification sections behind each model.
@@ -541,8 +543,10 @@ interface StudioState {
   /** Which shell panel is open over the main view, or `null` for none. */
   panel: PanelId | null;
   /**
-   * Whether the inspector column is showing. Closed until there is something in it: selecting a
-   * radio, asking why a value is what it is, or docking the HUD opens it; its × closes it.
+   * Whether the vehicle overlay (the dialog over the viewport with the selected radio's overview,
+   * its sent and received messages and its queues) is showing. Selecting a vehicle does not open
+   * it — the overlay would cover the vehicle the camera follows; the chase HUD's Details button,
+   * the header's inspector button and the I key do. Its x and Escape close it.
    */
   inspectorOpen: boolean;
   /**
@@ -574,8 +578,9 @@ interface StudioState {
   setFeedUnavailable: (reason: string | null) => void;
   setFeedPaused: (paused: boolean) => void;
   openFeedMessage: (dir: FeedDir, key: string | null) => void;
+  /** Open a message to read it, pausing the feed meanwhile; `null` closes it and resumes that pause. */
+  readFeedMessage: (dir: FeedDir, key: string | null) => void;
   setFeedFilter: (f: { types?: readonly string[]; outcome?: FeedView["outcome"] }) => void;
-  setFeedTab: (t: "sent" | "received" | "queues") => void;
   setFollowedPose: (p: FollowedPose | null) => void;
   setRadios: (n: number) => void;
   setNeighbors: (n: readonly InspectNeighbor[] | null) => void;
@@ -619,9 +624,8 @@ interface StudioState {
    */
   setMetricProjection: (provenance: Readonly<Record<string, number>>, dims: Readonly<Record<string, string>>) => void;
   setWhy: (w: WhySubject | null) => void;
-  setInspectorTab: (t: "state" | "messages" | "why" | "log") => void;
+  setInspectorTab: (t: InspectorTab) => void;
   setDevDetails: (v: boolean) => void;
-  setHudDocked: (v: boolean) => void;
   bumpSeries: () => void;
   setTarget: (t: EngineTargetView) => void;
   /** Publish (or clear) the local recording's state; `null` means no recording is open. */
@@ -816,7 +820,6 @@ export const useStudio = create<StudioState>((set) => ({
   inspect: null,
   inspectMessages: null,
   feed: EMPTY_FEED,
-  feedTab: "sent",
   followedPose: null,
   radios: 0,
   neighbors: null,
@@ -849,8 +852,7 @@ export const useStudio = create<StudioState>((set) => ({
   metricProvenance: {},
   metricDims: {},
   why: null,
-  inspectorTab: "state",
-  hudDocked: false,
+  inspectorTab: "overview",
   devDetails: readDevDetails(),
   seriesTick: 0,
   target: UNRESOLVED_TARGET,
@@ -873,9 +875,8 @@ export const useStudio = create<StudioState>((set) => ({
   setRun: (r) => set((state) => (sameRun(state.run, r) ? state : { run: { ...state.run, ...r } })),
   setSelection: (actorId, nodeId) =>
     set((state) => ({
-      // Selecting something is asking about it: the inspector opens to answer. Clearing the
-      // selection leaves it as the user left it.
-      inspectorOpen: actorId !== null || nodeId !== null ? true : state.inspectorOpen,
+      // Selecting no longer opens the overlay: it is large and sits over the viewport, so it opens
+      // only when asked for (the HUD's Details button). The HUD itself appears on selection.
       selectedActor: actorId,
       selectedNode: nodeId,
       pseudonym: null,
@@ -911,11 +912,11 @@ export const useStudio = create<StudioState>((set) => ({
   setFeedUnavailable: (reason) => set((state) => ({ feed: { ...state.feed, unavailable: reason } })),
   setFeedPaused: (paused) => set((state) => ({ feed: setPaused(state.feed, paused) })),
   openFeedMessage: (dir, key) => set((state) => ({ feed: openMessage(state.feed, dir, key) })),
+  readFeedMessage: (dir, key) => set((state) => ({ feed: readMessage(state.feed, dir, key) })),
   setFeedFilter: (f) =>
     set((state) => ({
       feed: { ...state.feed, ...(f.types ? { types: f.types } : {}), ...(f.outcome ? { outcome: f.outcome } : {}) },
     })),
-  setFeedTab: (t) => set({ feedTab: t }),
   setFollowedPose: (p) =>
     set((state) =>
       p !== null &&
@@ -984,16 +985,14 @@ export const useStudio = create<StudioState>((set) => ({
         ? state
         : { metricProvenance: provenance, metricDims: dims },
     ),
-  // Asking why a value is what it is is answered in the inspector, so the inspector opens.
-  setWhy: (w) =>
-    set((state) => ({ why: w, inspectorTab: w ? "why" : "state", inspectorOpen: w !== null || state.inspectorOpen })),
+  // Asking where a value comes from opens a small source note (`components/SourceNote.tsx`); it
+  // no longer takes over the vehicle overlay, whose Why tab the owner found meaningless (2026-10-06).
+  setWhy: (w) => set({ why: w }),
   setInspectorTab: (t) => set({ inspectorTab: t }),
   setDevDetails: (v) => {
     writeDevDetails(v);
     set({ devDetails: v });
   },
-  // A docked HUD lives at the foot of the inspector, so docking it has to show the inspector.
-  setHudDocked: (v) => set((state) => ({ hudDocked: v, inspectorOpen: v || state.inspectorOpen })),
   bumpSeries: () => set((state) => ({ seriesTick: state.seriesTick + 1 })),
   setTarget: (t) => set({ target: t }),
   setReplay: (r) => set({ replay: r }),

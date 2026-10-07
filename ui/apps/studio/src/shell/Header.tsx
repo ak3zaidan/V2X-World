@@ -293,10 +293,10 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
         type="button"
         className={inspectorOpen ? "icon-button on" : "icon-button"}
         aria-pressed={inspectorOpen}
-        aria-label="Inspector"
+        aria-label="Vehicle details"
         onClick={() => setInspectorOpen(!inspectorOpen)}
         data-testid="inspector-toggle"
-        title={inspectorOpen ? "Hide the inspector" : "Show the inspector: the selected radio, why a value is what it is, and the log"}
+        title={inspectorOpen ? "Hide the vehicle details (I)" : "Vehicle details: the selected radio's overview, every message it sent and received, and its queues (I)"}
       >
         <InspectorIcon />
       </button>

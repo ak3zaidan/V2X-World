@@ -268,14 +268,14 @@ test(`the camera survives a random walk through every control (seed ${SEED})`, a
       // The control has to be usable at every window size the walk visits: at 960 x 600 the state
       // legend used to sit on it, and at 800 x 520 the HUD itself. The button is in the HUD's own
       // header, so with nothing followed there is no HUD and nothing to press.
-      if ((await page.getByTestId("hud-dock").count()) === 0) return "no HUD to dock (nothing followed)";
+      if ((await page.getByTestId("hud-details").count()) === 0) return "no HUD (nothing followed)";
       try {
-        await page.getByTestId("hud-dock").click({ timeout: 5000 });
-        return "toggle HUD dock";
+        await page.getByTestId("hud-details").click({ timeout: 5000 });
+        return "toggle the vehicle overlay";
       } catch {
         const size = page.viewportSize();
-        failures.push(`the HUD dock button is not clickable at ${size?.width}x${size?.height}`);
-        return "toggle HUD dock (not clickable)";
+        failures.push(`the HUD's Details button is not clickable at ${size?.width}x${size?.height}`);
+        return "toggle the vehicle overlay (not clickable)";
       }
     },
     reconnect: async () => {

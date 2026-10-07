@@ -997,13 +997,6 @@ export class StudioEngine {
     } else if (feed.available === false) {
       store.setFeedUnavailable(feed.reason ?? "this engine has no message feed");
     }
-    // Following a vehicle in the chase or dashboard view opens its messages, unless the user is
-    // reading the provenance or the log.
-    const tab = store.inspectorTab;
-    const mode = store.cameraMode;
-    if ((mode === "chase" || mode === "dashboard") && (tab === "state" || tab === "messages")) {
-      store.setInspectorTab("messages");
-    }
   }
 
   /**
