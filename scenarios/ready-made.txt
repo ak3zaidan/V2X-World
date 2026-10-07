@@ -1,0 +1,33 @@
+# The ready-made scenarios the Studio's picker offers, in this order.
+#
+# One file name per line (relative to this folder); a line starting with "##" starts a heading;
+# "#" is a comment. The engine's `scenario.list` reads this file when the scenario it was
+# opened on is in this folder (crates/v2xw-server/src/live.rs, `preset_entries`). Every other
+# file here is still a scenario that loads by path — the study, test and benchmark files — it
+# is just not offered in the picker. The names and one-line descriptions shown are each file's
+# `meta.name` and `meta.description`.
+
+## Everyday traffic
+midtown-normal.yaml
+midtown-rush-hour.yaml
+midtown-pedestrians.yaml
+highway-congestion.yaml
+portland.yaml
+
+## Radio technology
+radio-dsrc.yaml
+radio-lte.yaml
+radio-nr.yaml
+
+## Attacks and defences
+attack-fake-positions.yaml
+attack-replay.yaml
+attack-jamming.yaml
+
+## Credentials, privacy and security
+privacy-pseudonyms.yaml
+europe-credentials.yaml
+post-quantum.yaml
+
+## Connected intersections
+emergency-priority.yaml

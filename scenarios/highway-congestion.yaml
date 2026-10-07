@@ -1,0 +1,123 @@
+# A congested six-lane highway: heavy traffic and two breakdowns that block lanes.
+#
+# The road: two parallel 1.5 km highways, three 12 ft lanes each way (3.66 m, the AASHTO
+# freeway lane), 65 mph limit, joined at the ends — a procedural grid of 2 × 2 junctions with
+# no signals, no sidewalks and no buildings. Two 1.5 km carriageways keep the fleet to a few
+# hundred vehicles, which is what this machine runs interactively (TR 36.885's freeway case
+# is a 2 km road with wrap-around).
+#
+# The traffic: 16,000 veh/h offered to the whole network. Spread over its four directional
+# carriageways that is about 4,000 veh/h each way on a highway, above the 3,450 veh/h left
+# when a breakdown blocks one of three lanes: the HCM gives 2,350 pc/h/ln for a 65 mph
+# basic freeway segment and 49 % of capacity with one of three lanes blocked by an
+# incident (HCM 2010 Exhibit 10-17; both recalled, not re-read). So each breakdown is a bottleneck with a queue behind
+# it — stop-and-go waves, the densest the radio channel gets on a highway.
+#
+# What to read: the channel busy ratio and the delivery ratio along the queue, and the
+# hard-braking (EEBL) warnings as the queue forms.
+schema: v2xw/scenario/1
+
+meta:
+  name: Highway - congestion behind a breakdown
+  description: >-
+    A six-lane highway at heavy load where two broken-down cars block lanes: queues and
+    stop-and-go waves form behind them, and the radio channel is at its busiest.
+  authors: [v2xw]
+  tags: [highway, traffic, congestion, incident, dsrc, procedural]
+  created: "2026-10-06"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  t0: "2027-03-04T22:00:00Z"
+  duration_s: 300.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: procedural
+    generator: world/source/procedural-grid
+    params:
+      cols: 2
+      rows: 2
+      block_x_m: 1500.0
+      block_y_m: 60.0
+      lanes_per_direction: 3
+      lane_width_m: 3.66
+      sidewalk_m: 0.0
+      # 65 mph.
+      speed_limit_mps: 29.06
+      signalised: false
+      crossings: false
+      block_buildings: false
+      rsu_at_junctions: false
+      corner_radius_m: 15.0
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: false
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 16000.0
+    # A US freeway mix: FHWA's vehicle-class counts put single-unit and combination trucks
+    # near a tenth of rural-interstate traffic (Traffic Monitoring Guide 2016, secondary).
+    classes:
+      passenger:
+        fraction: 0.88
+      truck:
+        fraction: 0.09
+      bus:
+        fraction: 0.01
+      motorcycle:
+        fraction: 0.02
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  tiers:
+    # No buildings: the medium tier's dual-slope law is the open-road model (Abbas 2015).
+    propagation: medium
+    phy: medium
+    mac: medium
+
+net:
+  layer: wsmp
+
+messages:
+  sets: [bsm]
+  codec_tier: uper
+
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: prioritized
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+events:
+  - {t: 60.0, until: 300.0, type: safety.breakdown, target: auto}
+  - {t: 75.0, until: 300.0, type: safety.breakdown, target: auto}
+
+metrics: [all]
+
+exporters: []
