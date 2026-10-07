@@ -181,9 +181,20 @@ export function Viewport(): React.JSX.Element {
     engine.viewer?.setStreamHeld(runState !== "running" && runState !== "seeking" && runState !== "loading");
   }, [runState]);
 
+  // Where the pointer went down: a drag (looking round, panning) ends with a click event too, and
+  // released over a vehicle it flew the camera into a chase of it — out of the free camera the
+  // user was steering. A press that moved more than a few pixels is a drag, not a click.
+  const pressAt = useRef<{ x: number; y: number } | null>(null);
+  const onPointerDown = useCallback((ev: React.PointerEvent<HTMLCanvasElement>) => {
+    pressAt.current = { x: ev.clientX, y: ev.clientY };
+  }, []);
+
   const onClick = useCallback((ev: React.MouseEvent<HTMLCanvasElement>) => {
     const viewer = engine.viewer;
     if (!viewer) return;
+    const press = pressAt.current;
+    pressAt.current = null;
+    if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 5) return;
     const rect = ev.currentTarget.getBoundingClientRect();
     const hit = viewer.pickAtPixel(ev.clientX - rect.left, ev.clientY - rect.top);
     // A panel asked for a point on the map (the event editor's "pick on the map"): this click
@@ -226,6 +237,7 @@ export function Viewport(): React.JSX.Element {
         ref={canvasRef}
         data-testid="viewer-canvas"
         tabIndex={0}
+        onPointerDown={onPointerDown}
         onClick={onClick}
         onKeyDown={onKeyDown}
         aria-label="2D/3D viewport"

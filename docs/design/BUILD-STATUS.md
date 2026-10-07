@@ -15,6 +15,94 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-06 — scene and cameras track: the ground is where the streets are
+
+Owner: `ui/packages/viewer` (cameras, ground, road surfaces, clip planes). Owner's points 2
+("close to the ground the ground seems to go down and there are holes in it"), 4 ("the camera
+ended up below the map") and 12 ("the free camera should be easier to control").
+
+### One cause for points 2 and 4
+
+The viewer took `world.bbox.minZM` to be the ground. The OSM importer puts a tunnel 6 m below
+ground per `layer` level (`crates/v2xw-world/src/osm.rs`, `TUNNEL_LEVEL_DEPTH_M`), and the box
+encloses every lane's centreline, so a world with a tunnel has its floor under the streets. On the
+real Manhattan map the page reported `bbox.minZM = −24 m`. So the ground plane was drawn 24 m under
+the streets, the landuse with it, every junction disc 24 m under its junction (a hole at every
+intersection), every crosswalk likewise; between the road ribbons the ground "went down". The
+camera's floor was the same −24 m, so the free camera, a spring's overshoot, or a chase of a car
+entering a tunnel could take the camera under the roads and the buildings.
+
+- `src/ground.ts`: the ground level is the median building base (junctions, then 0, when there
+  are none). The ground plane, landuse, RSU masts, heatmap and coverage overlays, picking and the
+  glitch hunter's "under the ground" all use it; junction discs and crossings use the junction's
+  own height (a bridge's junction is above grade).
+- The ground quad follows the camera and spans 2.5 far planes (a corner ray of a 68°, 2.5:1 view
+  reaches 2.07 far planes out before its depth passes the far plane), and is pushed behind the
+  road layers by polygon-offset units, not slope.
+- Clip planes: the street near plane is measured from the ground, not the box floor (which had put
+  it at 1 m), and is never so far out that the near-plane rectangle reaches into a road surface —
+  the limit is computed exactly from the projection's own inverse, lens shift included.
+- Cameras: a hard limit applied last in every frame and every mode — above `ground + 0.75 m`
+  (above every road surface: markings, sidewalk lift and a 0.15 m kerb, AASHTO Green Book §4.7),
+  outside every building that is not ghosted, under the plan view's ceiling. A chase or dashboard
+  subject in a tunnel is framed from the street above it. The occlusion march runs only for chase
+  and dashboard (with the free camera's look point 40 m ahead and a building beyond, it pulled
+  the camera through the wall in front). The plan view lifts above roofs at its 12 m minimum.
+
+### Point 12: the free camera
+
+It had no keys: drag turned the view and nothing moved it, and a drag released over a vehicle
+was taken as a click and flew the camera into a chase. Now: W A S D or the arrows move level with
+the ground, E / Space up, Q / C down, drag to look, the wheel sets the speed, Shift ×4, R resets to
+a 55° view from above the skyline. Speed scales with height (1.2 m/s per metre, 8–600 m/s), eases
+in over 0.12 s and stops in 0.07 s. A move into a building slides along the wall, 1.2 m off it.
+The camera answers directly (no spring on top of the eased keys). The Studio shows the controls
+while the free camera is in use (`FreeCameraHint.tsx`), gives the canvas the keyboard when Free is
+chosen, and ignores a "click" that was a drag of more than 5 px (`Viewport.tsx`). In the plan view
+W A S D pan.
+
+### Evidence
+
+- `test/ground-camera-geometry.test.ts` drives the real viewer (null renderer) over a grid world
+  with a 6 m tunnel, through 24 random poses × 40 frames in each of map, chase, dashboard, free and
+  rsu, with random drags, wheel, held keys (Q often), seeks, a subject leaving the stream and NaN
+  poses, and checks every frame: camera above every road surface and outside every building; the
+  near-plane rectangle above the road; every pixel ray below the horizon within the far plane
+  landing on the ground quad; the ground plane at the ground level; and no street-surface vertex
+  under the street except the tunnel's. The checks use three.js's camera and the scene graph only.
+  **On main's viewer (`c4c4721`) every test in the file fails**, with frames failing each check
+  counted separately (of 960 per mode): map — ground not at grade 960, ray misses ground 204,
+  camera in a building 57; chase — near plane cuts the road 235, ray misses 151, under the ground
+  61; dashboard — near cuts 200, under the ground 200, ray misses 47; free — ray misses 250, near
+  cuts 80, under the ground 80; rsu — ray misses 116, near cuts 64, under the ground 19; plus
+  junction discs and markings at z −6.3 to −6.5, and the chase of a car in the tunnel at z −3.4.
+  On this branch: 7 of 7 pass.
+- `test/free-camera.test.ts` (4): W moves forward level and stops on release; the wheel and Shift
+  change the speed and Q stops at the floor; walking into a building slides along it; R returns
+  to a view over the city.
+- Existing suites near this change, run once on the final commit: `camera-robustness`,
+  `world-cameras`, `street-cameras`, `viewer`, `scene-correctness`, `glitch-hunter` — 76 pass
+  (87 with the two new files). Viewer `tsc -b` and test tsconfig clean; Studio `tsc` clean. The
+  whole viewer suite was not run (build-first policy; the merge step runs it).
+- The page, Manhattan (`manhattan-5min.yaml`, main's release engine, headless SwiftShader at a
+  few frames a second; pictures looked at): the page reports `bbox.minZM −24`, ground level 0, the
+  ground plane at −0.05. Chase with the orbit dragged to its lowest sits at the 0.75 m floor with
+  the road, markings and crosswalks whole under it; dashboard and free seeded from it draw the
+  crossing and the avenue; a drag in free stays in free (it used to select a vehicle); E, W and Q
+  move the camera and Q stops at 0.75 m; R flies to a view over Midtown. Motion smoothness cannot
+  be judged at that frame rate.
+
+### Open
+
+- A car in a tunnel is under the ground plane and so invisible; the chase camera follows it from
+  the street above. Drawing tunnels (a cut-away, or the ground made see-through over a followed
+  subject) is not done.
+- A DEM-draped world is not handled: the protocol carries no terrain, so the ground is one flat
+  plane at the median building base.
+- Files outside `ui/packages/viewer`: `ui/apps/studio/src/components/Viewport.tsx` (the hint, the
+  canvas focus, the drag-is-not-a-click guard) and the new
+  `ui/apps/studio/src/components/FreeCameraHint.tsx`.
+
 ## 2026-09-30 — robustness track: a refusal names its setting, nothing flaky, nothing leaks
 
 One engineer, owner of error handling in `crates/v2xw-server` and the engine's loader, the

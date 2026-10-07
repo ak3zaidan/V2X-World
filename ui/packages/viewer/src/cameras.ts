@@ -760,16 +760,17 @@ export class CameraController {
       fx = MathUtils.clamp(fx, b.minXM, b.maxXM);
       fy = MathUtils.clamp(fy, b.minYM, b.maxYM);
     }
-    const pitch = -45 * DEG;
-    const back = 160;
+    // 55° down from above the skyline: from 113 m at 45° on Manhattan the reset looked straight at
+    // one tower's roof (measured in the page). At least 330 m up, and 40 m over the world's
+    // tallest roof where that is higher, up to 900 m.
+    const pitch = -55 * DEG;
+    const tallest = b ? b.maxZM : g;
+    const height = Math.max(330, Math.min(tallest - g + 40, 900));
+    const back = height / Math.tan(-pitch);
     const yaw = Number.isFinite(this.#freeYaw) ? this.#freeYaw : Math.PI / 2;
     this.#freeYaw = yaw;
     this.#freePitch = pitch;
-    this.#desiredPosition.set(
-      fx - Math.cos(yaw) * Math.cos(pitch) * back,
-      fy - Math.sin(yaw) * Math.cos(pitch) * back,
-      g - Math.sin(pitch) * back,
-    );
+    this.#desiredPosition.set(fx - Math.cos(yaw) * back, fy - Math.sin(yaw) * back, g + height);
     this.#keyVel.set(0, 0, 0);
     this.#freeVelocity.set(0, 0, 0);
     this.#freeSpeedMul = 1;
