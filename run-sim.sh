@@ -13,8 +13,9 @@
 # and open http://127.0.0.1:5173
 cd "$(dirname "$0")" || exit 1
 BIN=./target/release/v2xw-server
-if [ ! -x "$BIN" ]; then
-  echo "building $BIN (once)..." >&2
+# Build when missing, or when the binary predates the agent being part of the engine.
+if [ ! -x "$BIN" ] || ! "$BIN" --help 2>/dev/null | grep -q -- "--no-agent"; then
+  echo "building $BIN (the engine with the agent built in)..." >&2
   cargo build --release -j 1 -p v2xw-cli --bin v2xw-server || exit 1
 fi
 SCENARIO=${1:-scenarios/manhattan-5min.yaml}
