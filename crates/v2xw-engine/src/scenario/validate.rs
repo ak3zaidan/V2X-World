@@ -1472,6 +1472,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                cars) or moves-opmode (US EPA MOVES operating modes, light-duty).",
     },
     KeyStatus {
+        path: "energy.emission_model_by_segment",
+        status: Status::Wired,
+        note: "A different emission model for some segments, e.g. passenger-car: phemlight \
+               with hbefa3 for the rest; a segment not listed uses emission_model.",
+    },
+    KeyStatus {
         path: "energy.ev_model",
         status: Status::Wired,
         note: "The battery model for electric vehicles: kurczveil (SUMO's battery device) \
@@ -3337,6 +3343,14 @@ fn energy(s: &Scenario, e: &mut Vec<ScenarioError>) {
     bounded_at("energy.stop_speed_mps", "energy.stop_speed_mps", en.stop_speed_mps, e);
     if let Err(why) = v2xw_energy::registry::emission_model(&en.emission_model) {
         e.push(conflict("energy.emission_model", why));
+    }
+    for (seg, model) in &en.emission_model_by_segment {
+        if let Err(why) = v2xw_energy::registry::emission_model(model) {
+            e.push(conflict(
+                &format!("energy.emission_model_by_segment.{}", seg.as_str()),
+                why,
+            ));
+        }
     }
     if let Err(why) = v2xw_energy::registry::ev_model(&en.ev_model, &en.ev.params) {
         let field = if v2xw_energy::registry::ev_model(&en.ev_model, &Default::default()).is_ok() {

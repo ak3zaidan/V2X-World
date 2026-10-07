@@ -443,6 +443,12 @@ pub static SLOTS: &[Slot] = &[
         bare_id: true,
     },
     Slot {
+        path: "energy.emission_model_by_segment.*",
+        label: "Emission model, per vehicle segment",
+        family: Family::Emission,
+        bare_id: true,
+    },
+    Slot {
         path: "energy.ev_model",
         label: "Electric-vehicle energy model",
         family: Family::Energy,

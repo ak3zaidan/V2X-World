@@ -3,6 +3,8 @@
 //! ```yaml
 //! energy:
 //!   emission_model: energy/emission/hbefa3      # or hbefa3 | phemlight | moves-opmode
+//!   emission_model_by_segment:                  # optional: another model per segment
+//!     passenger-car: phemlight
 //!   ev_model: energy/ev/kurczveil               # or kurczveil | vt-cpem
 //!   fleet:
 //!     passenger-car: { ev_share: 0.2, diesel_share: 0.3, euro: 6 }
@@ -31,6 +33,10 @@ pub struct EnergySpec {
     /// The combustion-vehicle emission model, by id or short name.
     #[serde(default = "EnergySpec::default_emission")]
     pub emission_model: String,
+    /// A different emission model for some segments, by id or short name — PHEMlight's
+    /// measured curves for passenger cars, say, and HBEFA 3 for everything else.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub emission_model_by_segment: BTreeMap<Segment, String>,
     /// The battery-electric energy model, by id or short name.
     #[serde(default = "EnergySpec::default_ev")]
     pub ev_model: String,
@@ -96,6 +102,11 @@ impl EnergySpec {
     pub fn validate(&self) -> Result<(), String> {
         registry::emission_model(&self.emission_model)
             .map_err(|e| format!("energy.emission_model: {e}"))?;
+        for (seg, m) in &self.emission_model_by_segment {
+            registry::emission_model(m).map_err(|e| {
+                format!("energy.emission_model_by_segment.{}: {e}", seg.as_str())
+            })?;
+        }
         registry::ev_model(&self.ev_model, &self.ev.params)
             .map_err(|e| format!("energy.ev: {e}"))?;
         self.fleet.check()?;
@@ -105,9 +116,9 @@ impl EnergySpec {
                 self.ev.initial_soc
             ));
         }
-        if !(self.stop_speed_mps > 0.0 && self.stop_speed_mps < 5.0) {
+        if !(self.stop_speed_mps > 0.0 && self.stop_speed_mps <= 5.0) {
             return Err(format!(
-                "energy.stop_speed_mps must be in (0, 5) m/s, got {}",
+                "energy.stop_speed_mps must be in (0, 5] m/s, got {}",
                 self.stop_speed_mps
             ));
         }
@@ -119,6 +130,7 @@ impl Default for EnergySpec {
     fn default() -> Self {
         Self {
             emission_model: Self::default_emission(),
+            emission_model_by_segment: BTreeMap::new(),
             ev_model: Self::default_ev(),
             fleet: BTreeMap::new(),
             ev: EvSpec::default(),

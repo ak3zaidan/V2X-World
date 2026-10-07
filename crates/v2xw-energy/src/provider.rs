@@ -168,7 +168,14 @@ impl Totals {
 #[derive(Debug, Clone)]
 enum Kind {
     /// A combustion vehicle the emission model resolved.
-    Ice { class: EmissionClass, fuel: Fuel },
+    Ice {
+        /// Which of the provider's emission models computes it.
+        model: usize,
+        /// The class that model resolved it to.
+        class: EmissionClass,
+        /// Its fuel.
+        fuel: Fuel,
+    },
     /// A battery-electric vehicle.
     Ev { battery: Battery },
     /// A vehicle the emission model has no class for.
@@ -227,7 +234,10 @@ pub struct EnergyProvider {
     card: ModelCard,
     seed: u64,
     spec: EnergySpec,
-    emission: BoxedEmission,
+    /// The emission models: the section's default first, then each per-segment one.
+    emission: Vec<BoxedEmission>,
+    /// Which of `emission` a segment uses, when not the default.
+    by_segment: BTreeMap<Segment, usize>,
     ev: BoxedEv,
     tracks: BTreeMap<ActorId, Track>,
     /// Vehicles not seen for longer than [`MAX_GAP_S`], folded away at a flush in actor
@@ -251,7 +261,7 @@ pub struct EnergyProvider {
 impl core::fmt::Debug for EnergyProvider {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("EnergyProvider")
-            .field("emission", &self.emission.card().id)
+            .field("emission", &self.emission[0].card().id)
             .field("ev", &self.ev.card().id)
             .field("tracks", &self.tracks.len())
             .finish_non_exhaustive()
@@ -266,13 +276,20 @@ impl EnergyProvider {
     /// What [`EnergySpec::validate`] rejects.
     pub fn new(spec: EnergySpec, seed: u64) -> Result<Self, String> {
         spec.validate()?;
-        let emission = registry::emission_model(&spec.emission_model)?;
+        let mut emission = vec![registry::emission_model(&spec.emission_model)?];
+        let mut by_segment = BTreeMap::new();
+        for (seg, name) in &spec.emission_model_by_segment {
+            by_segment.insert(*seg, emission.len());
+            emission.push(registry::emission_model(name)?);
+        }
         let ev = registry::ev_model(&spec.ev_model, &spec.ev.params)?;
+        let ids: Vec<String> = emission.iter().map(|m| m.card().id.clone()).collect();
         Ok(Self {
-            card: card(&spec, emission.card().id.as_str(), ev.card().id.as_str()),
+            card: card(&spec, &ids.join(", "), ev.card().id.as_str()),
             seed,
             spec,
             emission,
+            by_segment,
             ev,
             tracks: BTreeMap::new(),
             retired: Vec::new(),
@@ -373,13 +390,17 @@ impl EnergyProvider {
             Some(p) if p.is_electric() => Kind::Ev {
                 battery: Battery::new(self.ev.capacity_wh(), self.spec.ev.initial_soc),
             },
-            Some(p) => match self.emission.resolve(&p) {
-                Some(class) => Kind::Ice {
-                    class,
-                    fuel: p.fuel,
-                },
-                None => Kind::Unmodelled,
-            },
+            Some(p) => {
+                let model = self.by_segment.get(&p.segment).copied().unwrap_or(0);
+                match self.emission[model].resolve(&p) {
+                    Some(class) => Kind::Ice {
+                        model,
+                        class,
+                        fuel: p.fuel,
+                    },
+                    None => Kind::Unmodelled,
+                }
+            }
         };
         Track {
             class: class.to_string(),
@@ -455,8 +476,8 @@ impl EnergyProvider {
             ..Totals::default()
         };
         match &mut track.kind {
-            Kind::Ice { class, fuel } => {
-                let r = self.emission.rates(class, &s).times(dt);
+            Kind::Ice { model, class, fuel } => {
+                let r = self.emission[*model].rates(class, &s).times(dt);
                 d.co2_g = r.co2_g_s;
                 d.fuel_g = r.fuel_g_s;
                 d.fuel_l = r.fuel_g_s
@@ -1154,6 +1175,21 @@ mod tests {
         let out = p.flush(10_000_000_000);
         assert_eq!(sample(&out, "energy_unmodelled").value.point(), Some(1.0));
         assert!(sample(&out, "co2_mass|class=bus").value.point() == Some(0.0));
+        // ... and a per-segment model fills the gap: PHEMlight for cars, HBEFA 3 for the bus.
+        let spec = EnergySpec {
+            emission_model: "hbefa3".to_string(),
+            emission_model_by_segment: [(Segment::PassengerCar, "phemlight".to_string())].into(),
+            ..EnergySpec::default()
+        };
+        let mut p = EnergyProvider::new(spec, 1).unwrap();
+        drive(&mut p, 1, "bus", &[5.0, 6.0, 7.0]);
+        drive(&mut p, 2, "passenger", &[5.0, 6.0, 7.0]);
+        let out = p.flush(10_000_000_000);
+        assert_eq!(sample(&out, "energy_unmodelled").value.point(), Some(0.0));
+        let classes: Vec<Option<String>> =
+            p.vehicles().into_iter().map(|v| v.emission_class).collect();
+        assert_eq!(classes, [Some("Bus".to_string()), Some("PC_G_EU4".to_string())]);
+        assert!(p.card().assumptions[0].contains("phemlight"));
     }
 
     #[test]
