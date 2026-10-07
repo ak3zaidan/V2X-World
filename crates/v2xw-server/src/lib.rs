@@ -121,6 +121,12 @@ pub struct ServerOptions {
     /// by every connection could not. Kept so a caller that pinned the run's table size
     /// keeps compiling; `""` is the right value.
     pub session_token: String,
+    /// Further routes served on the same origin, merged into the router after the VWP
+    /// ones. The seam a crate this one cannot depend on (the agent harness in
+    /// `v2xw-copilot`, served by `v2xw serve`) uses to put its endpoints beside `/rpc`, so
+    /// the Studio reaches it same-origin. The routes do their own authorisation; `None`
+    /// serves exactly what this crate defines.
+    pub extension: Option<axum::Router>,
 }
 
 impl Default for ServerOptions {
@@ -129,6 +135,7 @@ impl Default for ServerOptions {
             bind: SocketAddr::from(([127, 0, 0, 1], 8787)),
             token: None,
             session_token: String::new(),
+            extension: None,
         }
     }
 }
@@ -162,7 +169,10 @@ impl VwpServer {
             token: options.token.map(Arc::new),
             sessions: Arc::new(resume::Sessions::new()),
         };
-        let app = http::router(state);
+        let mut app = http::router(state);
+        if let Some(extension) = options.extension {
+            app = app.merge(extension);
+        }
         let listener = tokio::net::TcpListener::bind(options.bind)
             .await
             .map_err(|e| ServerError::Io {

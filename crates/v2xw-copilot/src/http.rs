@@ -41,6 +41,10 @@ pub struct HttpRequest {
     pub bearer: Option<Secret>,
     /// Any further headers, as `(name, value)`.
     pub headers: Vec<(String, String)>,
+    /// Headers whose value is a secret, as `(name, value)`: an API key sent in a header of
+    /// its own (Anthropic's `x-api-key`) rather than as a bearer token. Written to the
+    /// client's standard input like the bearer token, and redacted like it.
+    pub secret_headers: Vec<(String, Secret)>,
 }
 
 impl HttpRequest {
@@ -52,6 +56,7 @@ impl HttpRequest {
             body: body.into(),
             bearer: Some(bearer),
             headers: Vec::new(),
+            secret_headers: Vec::new(),
         }
     }
 
@@ -63,16 +68,21 @@ impl HttpRequest {
             body: body.into(),
             bearer: None,
             headers: Vec::new(),
+            secret_headers: Vec::new(),
         }
     }
 
     /// `text` with this request's token removed, for anything that is about to be shown.
     #[must_use]
     pub fn redact(&self, text: &str) -> String {
-        match &self.bearer {
+        let mut out = match &self.bearer {
             Some(s) => s.redact(text),
             None => text.to_string(),
+        };
+        for (_, secret) in &self.secret_headers {
+            out = secret.redact(&out);
         }
+        out
     }
 }
 
@@ -259,6 +269,13 @@ fn curl_config(request: &HttpRequest, timeout_s: u64) -> Result<String> {
             "header = \"{}: {}\"\n",
             quote(name)?,
             quote(value)?
+        ));
+    }
+    for (name, value) in &request.secret_headers {
+        out.push_str(&format!(
+            "header = \"{}: {}\"\n",
+            quote(name)?,
+            quote(value.expose())?
         ));
     }
     // `data-binary` reads a file when its value starts with `@`. A JSON body starts with

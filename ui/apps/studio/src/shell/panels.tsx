@@ -17,6 +17,7 @@
  */
 
 import { BackendPanel } from "../components/BackendView.js";
+import { AgentPanel } from "../components/AgentPanel.js";
 import { ComparisonView } from "../components/ComparisonView.js";
 import { CopilotPanel } from "../components/CopilotPanel.js";
 import { RunBrowser } from "../components/RunBrowser.js";
@@ -39,6 +40,8 @@ export const PANELS: Readonly<Record<PanelId, PanelSpec>> = {
   settings: { id: "settings", title: "Settings", kind: "fullscreen", render: () => null },
   metrics: { id: "metrics", title: "Metrics", kind: "fullscreen", keepMounted: true, render: ({ close }) => <MetricsDashboard close={close} /> },
   backend: { id: "backend", title: "Backend", kind: "fullscreen", render: ({ close }) => <BackendPanel close={close} /> },
+  // The agent keeps its conversation in its own store (state/agent.ts), so the sheet can unmount.
+  agent: { id: "agent", title: "Agent", kind: "sheet", render: () => <AgentPanel /> },
   runs: { id: "runs", title: "Runs and recordings", kind: "sheet", render: () => <RunBrowser /> },
   compare: { id: "compare", title: "Compare two runs", kind: "sheet", render: () => <ComparisonView /> },
   commands: { id: "commands", title: "Commands", kind: "sheet", render: () => <CopilotPanel /> },

@@ -11,6 +11,8 @@
 //! | what can be done to a run | the server's 32 JSON-RPC methods, [`tools`] |
 //! | is this scenario valid | the engine's own loader and validator, [`scenario`] |
 //! | where did this number come from | the run's provenance chain joined to the cards, [`explain`] |
+//! | where are this run's bottlenecks | the run's own metrics and backend view, judged by the deterministic [`analyst`] |
+//! | set it up, run it, explain it | the [`agent`] loop: Claude ([`claude`]) plans, the server runs, the analyst measures |
 //!
 //! Nothing here is a second implementation of any of those. The tool surface is
 //! *generated* from [`v2xw_server::openrpc::document`]; the scenario check is
@@ -112,15 +114,21 @@
 //! * **No `std` `HashMap` iteration reaching an output.** Every table here is a
 //!   `BTreeMap`, so the catalogue, the prompt and every tool result are in a fixed order.
 //! * **No transcendental, and no exported float.** This crate computes no number that any
-//!   artefact could carry.
+//!   artefact could carry. The [`analyst`]'s comparisons and ratios (a mean speed over the
+//!   posted speed, a queue's busy time over its capacity) are plain arithmetic on values the
+//!   server already quantised, go only into a report, and never into a run.
 //! * No `unsafe`, and every public item documented.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod agent;
+pub mod analyst;
 pub mod boundary;
+pub mod claude;
 pub mod error;
 pub mod explain;
+pub mod gather;
 pub mod grounding;
 pub mod http;
 pub mod openai;
@@ -132,6 +140,9 @@ pub mod tools;
 pub mod transport;
 
 pub use error::{CopilotError, Result};
+pub use agent::{Agent, AgentEvent, AgentPolicy, AgentReport};
+pub use analyst::{Analysis, Finding, Layer, RunEvidence, Severity, Thresholds};
+pub use claude::Claude;
 pub use explain::{Explanation, ModelExplanation};
 pub use grounding::{Citation, Grounding, MetricAnswer, ModelEntry, NotKnown, ParameterAnswer};
 pub use http::{CurlPost, HttpPost, HttpRequest, HttpResponse};

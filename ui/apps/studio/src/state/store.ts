@@ -420,7 +420,7 @@ const DEFAULT_SYNC: CompareSync = { time: true, camera: true, offsetNs: 0 };
  * A new panel is one id here and one entry in `PANELS` (`shell/panels.tsx`), whose type makes the
  * two agree.
  */
-export const PANEL_IDS = ["settings", "metrics", "backend", "runs", "compare", "commands", "details"] as const;
+export const PANEL_IDS = ["settings", "metrics", "backend", "agent", "runs", "compare", "commands", "details"] as const;
 export type PanelId = (typeof PANEL_IDS)[number];
 
 /** A sentence from the settings window's last action, and how to colour it. */

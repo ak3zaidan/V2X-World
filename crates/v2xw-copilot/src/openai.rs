@@ -283,6 +283,7 @@ pub fn decode_completion(value: &Value) -> Result<Completion> {
             content,
             tool_calls,
             tool_call_id: None,
+            provider_blocks: None,
         },
         finish_reason,
     })

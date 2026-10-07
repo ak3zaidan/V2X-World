@@ -41,6 +41,10 @@ v2xw-engine = { path = "../v2xw-engine", version = "0.1.0" }
 # purpose — the runner does not know about the command line, it takes a `RunExecutor`, and
 # `src/experiment.rs` is the implementation that calls `v2xw run`.
 v2xw-experiment = { path = "../v2xw-experiment", version = "0.1.0" }
+# `v2xw agent` and `v2xw serve`: the agent harness and its HTTP endpoints.
+v2xw-copilot = { path = "../v2xw-copilot", version = "0.1.0" }
+axum = { workspace = true }
+tokio = { workspace = true }
 
 clap = { workspace = true }
 serde = { workspace = true }

@@ -33,6 +33,7 @@ import {
   runWithDraft,
   undoEdit,
 } from "../state/settings.js";
+import { useRevealSetting } from "../lib/links.js";
 import { changedPointers, getPointer } from "../lib/schema.js";
 import {
   buildTree,
@@ -167,6 +168,8 @@ export function SettingsWindow({
     },
     [fields, jumpTo],
   );
+  // A link from elsewhere (the agent's list of the settings it changed) opens the window here.
+  useRevealSetting(jumpToField, fields.length > 0);
 
   // The tree follows the scroll: the section whose heading was last passed is the current one.
   const onScroll = useCallback(() => {

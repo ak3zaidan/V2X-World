@@ -325,7 +325,7 @@ impl<P: LlmProvider, T: RpcTransport> Copilot<P, T> {
 }
 
 /// The tools this crate answers itself, out of the catalogue.
-fn local_call(grounding: &Grounding, tool: &str, arguments: &Value) -> ToolOutcome {
+pub(crate) fn local_call(grounding: &Grounding, tool: &str, arguments: &Value) -> ToolOutcome {
     match tool {
         "registry__list_models" => {
             let family = arguments.get("family").and_then(Value::as_str);

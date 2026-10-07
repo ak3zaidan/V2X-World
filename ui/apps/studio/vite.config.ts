@@ -10,6 +10,11 @@ import react from "@vitejs/plugin-react";
  * the world would be blocked.
  */
 const engine = process.env.VWP_ENGINE ?? "http://127.0.0.1:8787";
+/**
+ * The agent's endpoints (`/agent/*`): on the engine itself when it is `v2xw serve`, or on a
+ * `v2xw serve --attach <engine>` beside a plain `v2xw-server`, named by VWP_AGENT.
+ */
+const agent = process.env.VWP_AGENT ?? engine;
 
 export default defineConfig({
   plugins: [react()],
@@ -22,6 +27,7 @@ export default defineConfig({
       "/rpc": { target: engine, changeOrigin: false },
       "/world": { target: engine, changeOrigin: false },
       "/healthz": { target: engine, changeOrigin: false },
+      "/agent": { target: agent, changeOrigin: false },
     },
   },
   preview: {
@@ -31,6 +37,7 @@ export default defineConfig({
       "/rpc": { target: engine, changeOrigin: false },
       "/world": { target: engine, changeOrigin: false },
       "/healthz": { target: engine, changeOrigin: false },
+      "/agent": { target: agent, changeOrigin: false },
     },
   },
   build: {

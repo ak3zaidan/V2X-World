@@ -70,3 +70,13 @@ export function CloseIcon(): React.JSX.Element {
     </svg>
   );
 }
+
+/** A speech bubble with a spark: the agent's door. */
+export function AgentIcon(): React.JSX.Element {
+  return (
+    <svg {...common}>
+      <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
+      <path d="M8 5.2v2.6M6.7 6.5h2.6" />
+    </svg>
+  );
+}
