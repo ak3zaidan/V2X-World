@@ -886,6 +886,8 @@ pub struct Engine {
     /// The junction each SPaT- or MAP-broadcasting roadside unit is wired to.
     infra_feeds: BTreeMap<NodeId, crate::infra::IntersectionFeed>,
     report: RunReport,
+    /// Whether [`Engine::advance`] has reached the end of the run.
+    ended: bool,
 }
 
 /// Whether a `safety.*` item waits for a vehicle that fits when none does at its instant:
@@ -1243,7 +1245,7 @@ impl Engine {
             transmitted_since_step: std::collections::BTreeSet::new(),
             lamps: BTreeMap::new(),
             providers,
-            metric_period: Duration::from_secs(1),
+            metric_period: scenario_for_radio.time.metric_period(),
             reverse_node_walk: false,
             link_sweep: true,
             gen_timing,
@@ -1268,6 +1270,7 @@ impl Engine {
             node_wake: BTreeMap::new(),
             infra_feeds: BTreeMap::new(),
             report: RunReport::default(),
+            ended: false,
         };
         engine.timeline = TimelineState {
             closures: resolve_closures(&engine.scenario, &engine.world)?,
@@ -1747,18 +1750,54 @@ impl Engine {
     /// Whatever a phase returns: a mobility failure, a recorder failure.
     pub fn run(&mut self, recorder: &mut dyn RunRecorder) -> Result<RunReport> {
         let horizon = self.scenario.time.horizon_ns();
+        self.advance(horizon, recorder)?;
+        Ok(self.finish_run(recorder))
+    }
+
+    /// Runs every event at or before `until` (clamped to the horizon) and returns whether
+    /// the run has reached its end: the end-of-run sentinel, the horizon, an empty heap
+    /// or a cancellation.
+    ///
+    /// [`Engine::run`] is `advance(horizon)` then [`Engine::finish_run`]; splitting it is
+    /// what lets a long run be driven in slices — a progress line per simulated hour, a
+    /// checkpoint at an interval — without a second loop. The slices change nothing the
+    /// run computes: an event is dispatched exactly when the single loop would dispatch
+    /// it, because the slice boundary only stops the loop *between* two events, and only
+    /// at a time no event before it has reached.
+    ///
+    /// # Errors
+    /// Whatever a phase returns: a mobility failure, a recorder failure.
+    pub fn advance(&mut self, until: SimTime, recorder: &mut dyn RunRecorder) -> Result<bool> {
+        if self.ended {
+            return Ok(true);
+        }
+        let horizon = self.scenario.time.horizon_ns();
+        let until = until.min(horizon);
         let step = self.scenario.time.mobility_step();
 
-        while let Some((key, event)) = self.scheduler.pop() {
-            if key.time > horizon {
+        loop {
+            let Some(next) = self.scheduler.peek_key() else {
+                self.ended = true;
                 break;
+            };
+            if next.time > horizon {
+                self.ended = true;
+                break;
+            }
+            if next.time > until {
+                return Ok(false);
             }
             // The one cancellation point (see `RunRecorder::cancelled`): between two
             // events, never inside a phase. Asked before the event is counted, so a
             // cancelled run's report does not claim an event it did not run.
             if recorder.cancelled() {
+                self.ended = true;
                 break;
             }
+            let Some((key, event)) = self.scheduler.pop() else {
+                self.ended = true;
+                break;
+            };
             self.report.count(event.class());
             match event {
                 Event::Control { item, end } => self.on_control(recorder, item as usize, end),
@@ -1798,6 +1837,7 @@ impl Engine {
                 } => {
                     self.report.end_ns = key.time;
                     self.resolve_in_flight(recorder, key.time);
+                    self.ended = true;
                     break;
                 }
                 // The remaining classes have no model scheduling them in this build; see
@@ -1810,6 +1850,65 @@ impl Engine {
             }
             self.report.end_ns = key.time;
         }
+        Ok(true)
+    }
+
+    /// The sizes of the collections the engine keeps, by name: what a long run watches
+    /// for growth that does not follow the live fleet. A diagnostic: nothing reads it
+    /// back, and it reaches no record or digest.
+    #[must_use]
+    pub fn census(&self) -> Vec<(&'static str, u64)> {
+        let n = |v: usize| v as u64;
+        let mut out = vec![
+            ("scheduler.live", n(self.scheduler.len())),
+            ("scheduler.heap", n(self.scheduler.pending_entries())),
+            ("actors", n(self.actors.len())),
+            ("nodes", n(self.nodes.len())),
+            ("inboxes", n(self.inboxes.len())),
+            ("inbox_frames", n(self.inboxes.values().map(Vec::len).sum())),
+            ("rx_pending", n(self.rx_pending.len())),
+            ("reassemblers", n(self.reassemblers.len())),
+            ("frag_groups", n(self.frag_groups.len())),
+            ("frag_resolved", n(self.frag_resolved.len())),
+            ("cert_cycles", n(self.cert_cycles.len())),
+            ("mac_window", n(self.mac_window.len())),
+            ("orphaned_rx", n(self.orphaned_rx.len())),
+            ("frames", n(self.frames.len())),
+            ("live_at_rx", n(self.live_at_rx.len())),
+            ("pending_tx", n(self.pending_tx.len())),
+            ("policy_odometer", n(self.policy_odometer.len())),
+            ("transfers", n(self.transfers.len())),
+            ("lamps", n(self.lamps.len())),
+            ("node_phase", n(self.node_phase.len())),
+            ("node_class", n(self.node_class.len())),
+            ("node_actor", n(self.node_actor.len())),
+            ("node_wake", n(self.node_wake.len())),
+            ("retired", n(self.retired.len())),
+            ("j2945_quality_at", n(self.j2945_quality_at.len())),
+            ("provenance", n(self.provenance.len())),
+            ("transmitted_since_step", n(self.transmitted_since_step.len())),
+        ];
+        if let Some(p2) = self.phase2.as_ref() {
+            p2.census(&mut out);
+        }
+        out
+    }
+
+    /// Whether the run has reached its end ([`Engine::advance`] returned `true`).
+    #[must_use]
+    pub fn ended(&self) -> bool {
+        self.ended
+    }
+
+    /// The simulated instant the run has reached: the last dispatched event's time.
+    #[must_use]
+    pub fn now(&self) -> SimTime {
+        self.scheduler.now()
+    }
+
+    /// Closes the run's books after [`Engine::advance`] has reached the end, and returns
+    /// the report. Called once; [`Engine::run`] calls it for a run driven in one piece.
+    pub fn finish_run(&mut self, recorder: &mut dyn RunRecorder) -> RunReport {
         let refusals: u64 = self
             .nodes
             .values()
@@ -1835,7 +1934,7 @@ impl Engine {
         self.report.frames_written = recorder.frames_written();
         self.report.keyframes = self.snapshots.keyframes();
         self.report.deltas = self.snapshots.deltas();
-        Ok(self.report.clone())
+        self.report.clone()
     }
 
     /// A scenario timeline item takes effect, or stops taking effect.
@@ -2591,6 +2690,9 @@ impl Engine {
                 self.node_class.remove(&node);
                 self.mac_window.remove(&node);
                 self.node_wake.remove(&node);
+                // Node ids are never reused, so a retired node's J2945/1 sub-interval is
+                // read by nothing again; kept, it grew with every vehicle of a run of days.
+                self.j2945_quality_at.remove(&node);
                 // Frames the retired node had been handed and not yet processed never
                 // reach an application: each attempt is settled here rather than left
                 // without a fate.

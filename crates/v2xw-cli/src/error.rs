@@ -65,6 +65,39 @@ pub enum CliError {
         #[source]
         source: serde_json::Error,
     },
+
+    /// A resumed run did not reproduce the run its checkpoint was taken from, so it was
+    /// not continued: carrying on would have spliced two different runs into one output.
+    #[error(
+        "resume refused: {what}. The checkpoint was taken by a different build, from a \
+         different scenario or world, or the engine is not deterministic here; the outputs \
+         before the checkpoint are kept as they were"
+    )]
+    Diverged {
+        /// What differed, with both values.
+        what: String,
+    },
+
+    /// The run was asked to stop (Ctrl-C, `kill`, the terminal closing) and stopped at a
+    /// checkpoint, every output up to it complete.
+    #[error(
+        "stopped on request at {at_s} simulated seconds, with a checkpoint; carry on with \
+         `v2xw resume {checkpoint}`"
+    )]
+    StoppedOnRequest {
+        /// The simulated second it stopped at.
+        at_s: f64,
+        /// The checkpoint it wrote.
+        checkpoint: String,
+    },
+
+    /// The run stopped at `--stop-at`, after writing its checkpoint, as a crash would stop
+    /// it: the open recording segment is left unfinished. For testing resume.
+    #[error("stopped at {at_s} simulated seconds, as asked (--stop-at); resume it with `v2xw resume`")]
+    Interrupted {
+        /// The simulated second it stopped at.
+        at_s: f64,
+    },
 }
 
 impl CliError {

@@ -1297,6 +1297,58 @@ fn apply_detector_param(p: &mut DetectorParams, key: &str, v: f64) -> bool {
 }
 
 impl Phase2 {
+    /// The sizes of the collections this path keeps, by name, for a long run's growth
+    /// census ([`crate::Engine::census`]). A diagnostic: nothing reads it back.
+    pub fn census(&self, out: &mut Vec<(&'static str, u64)>) {
+        let n = |v: usize| v as u64;
+        let st = &self.scms.state;
+        let k = &self.scms.kernel;
+        out.extend([
+            ("p2.creds_nodes", n(self.creds.len())),
+            ("p2.creds_total", n(self.creds.values().map(Vec::len).sum())),
+            ("p2.by_digest", n(self.by_digest.len())),
+            ("p2.detectors", n(self.detectors.len())),
+            ("p2.filed", n(self.filed.len())),
+            ("p2.checked_at", n(self.checked_at.len())),
+            ("p2.forwarded", n(self.forwarded.len())),
+            ("p2.in_flight", n(self.in_flight.len())),
+            ("p2.queue", n(self.queue.len())),
+            ("p2.cases", n(self.cases.len())),
+            ("p2.nodes", n(self.nodes.len())),
+            ("p2.link_claims", n(self.link_claims.len())),
+            ("p2.broadcast_accuracy", n(self.broadcast_accuracy.len())),
+            ("p2.privacy_chains", n(self.privacy_chains.len())),
+            ("p2.privacy_tracked", n(self.privacy_tracked.len())),
+            ("p2.blocks", n(self.blocks.len())),
+            ("scms.devices", n(st.devices.len())),
+            (
+                "scms.device_creds",
+                n(st.devices.values().map(|d| d.credentials.len()).sum()),
+            ),
+            (
+                "scms.device_crl",
+                n(st.devices.values().map(|d| d.crl.len()).sum()),
+            ),
+            ("scms.ra_requests", n(st.ra.requests.len())),
+            ("scms.ra_enrolled", n(st.ra.enrolled.len())),
+            ("scms.pca_issued", n(st.pca.issued.len())),
+            ("scms.la0_chains", n(st.la[0].chains.len())),
+            ("scms.ma_reports", n(st.ma.reports.len())),
+            ("scms.crlg_entries", n(st.crlg.entries.len())),
+            ("scms.crl_store_entries", n(st.crl_store.entries.len())),
+            ("scms.issued_enrolment", n(st.issued_enrolment.len())),
+            ("scms.kernel_stages", n(k.stages.stamps().len())),
+            ("scms.kernel_steps", n(k.steps.len())),
+            ("scms.kernel_ops", n(k.ops.len())),
+        ]);
+        if let Some(etsi) = self.etsi.as_ref() {
+            out.extend([
+                ("etsi.enrolled", n(etsi.enrolled.len())),
+                ("etsi.tickets", n(etsi.tickets.len())),
+            ]);
+        }
+    }
+
     /// Builds the Phase 2 state a scenario declared, or `None` when it declared none.
     ///
     /// # Errors

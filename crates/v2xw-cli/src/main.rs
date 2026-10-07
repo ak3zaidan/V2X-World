@@ -54,6 +54,14 @@ fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
                 Ok(fmt::run(&outcome))
             }
         }
+        Command::Resume(args) => {
+            let outcome = run::resume(&args.checkpoint, args.quiet, args.json)?;
+            if args.json {
+                json(&outcome, "run outcome")
+            } else {
+                Ok(fmt::run(&outcome))
+            }
+        }
         Command::Validate(args) => {
             let outcome = validate::validate(&args.scenario)?;
             if args.json {

@@ -1,0 +1,29 @@
+# The long-run tests' scenario (tests/longrun.rs): the credential-lifecycle grid — every
+# SCMS entity in the loop, attackers, revocation, the CRL — with every metric, which are
+# the outputs a long run has to keep on disk rather than in memory, at a length a debug
+# build runs in a minute or two.
+schema: v2xw/scenario/1
+
+meta:
+  name: longrun-grid
+  base: ../../../../scenarios/credential-lifecycle.yaml
+  description: The credential-lifecycle grid with every metric, shortened, for the long-run tests.
+
+time:
+  duration_s: 90.0
+
+actors:
+  vehicles:
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 900.0
+
+metrics: [all]
+
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.05
+      schedule:
+        from_s: 30.0
+        to_s: 90.0

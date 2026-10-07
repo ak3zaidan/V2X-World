@@ -193,6 +193,14 @@ pub struct Time {
     /// depend on radio events are marked `not-observed` inside them.
     #[serde(default)]
     pub time_dilation: Vec<DilationWindow>,
+    /// How often every metric provider flushes a window into a `metric.sample`, simulated
+    /// seconds; 1 s when left out. A run of days at a minute's period writes a sixtieth
+    /// of the samples — the long-run option that keeps `metrics.json` and the page's
+    /// series a usable size — and each sample then summarises a minute instead of a
+    /// second. Left out of the serialised scenario when not set, so no existing scenario's
+    /// hash moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric_period_s: Option<f64>,
 }
 
 impl Time {
@@ -207,6 +215,13 @@ impl Time {
     }
     fn default_des_resolution() -> String {
         "1us".to_string()
+    }
+
+    /// The metric period as a [`Duration`]: `metric_period_s`, or one second.
+    pub fn metric_period(&self) -> Duration {
+        self.metric_period_s
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .map_or(Duration::from_secs(1), Duration::from_secs_f64)
     }
 
     /// The mobility period as a [`Duration`].
@@ -232,6 +247,7 @@ impl Default for Time {
             mobility_step_ms: Time::default_mobility_step_ms(),
             des_resolution: Time::default_des_resolution(),
             time_dilation: Vec::new(),
+            metric_period_s: None,
         }
     }
 }

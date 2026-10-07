@@ -87,6 +87,10 @@ export interface HelloSummary {
   readonly channels: readonly { name: string; id: number; visibility: number; enabled: boolean }[];
   readonly origin: { lat: number; lon: number; alt: number };
   readonly bbox: { minX: number; minY: number; maxX: number; maxY: number };
+  /** Unix seconds of the run's `time.t0` (`Hello.t0_wall_ns`); 0 when the run has none. */
+  readonly t0UnixS?: number;
+  /** The metric period, ns (`Hello.metric_period_ns`). */
+  readonly metricPeriodNs?: number;
   readonly versionMajor: number;
   readonly versionMinor: number;
 }

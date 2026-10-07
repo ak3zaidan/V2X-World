@@ -10,17 +10,31 @@
  */
 
 import { useStudio } from "../state/store.js";
-import { simClock } from "../lib/format.js";
+import { localClock, simClock } from "../lib/format.js";
 
 export function HeaderClock(): React.JSX.Element {
   const simTimeNs = useStudio((s) => s.simTimeNs);
   const tNs = useStudio((s) => s.run.tNs);
   const replay = useStudio((s) => s.replay);
+  const hello = useStudio((s) => s.hello);
   const now = replay !== null ? replay.tNs : simTimeNs > 0 ? simTimeNs : tNs;
+  // The run's own clock beside the elapsed time: on a run of a day, "08:15 Thursday" is what says
+  // whether the streets should be busy and the sky dark.
+  const local = hello ? localClock(hello.t0UnixS, hello.origin.lon, now) : "";
   return (
-    <span className="headline-clock" data-testid="header-clock" title="Time inside the simulation, hours:minutes:seconds">
+    <span
+      className="headline-clock"
+      data-testid="header-clock"
+      title={`Time inside the simulation since it started${local ? `; the run's own clock (local mean time at the map) reads ${local}` : ""}`}
+    >
       <span className="mono">{simClock(now)}</span>
       <span className="faint"> simulated</span>
+      {local ? (
+        <span className="faint" data-testid="header-local-clock">
+          {" "}
+          · {local}
+        </span>
+      ) : null}
     </span>
   );
 }

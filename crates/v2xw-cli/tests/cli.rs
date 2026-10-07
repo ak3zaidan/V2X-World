@@ -65,6 +65,7 @@ fn options(scenario: PathBuf, out: PathBuf) -> RunOptions {
         rate_veh_per_h: Some(3600.0),
         city: None,
         json: false,
+        long: v2xw_cli::run::LongRun::default(),
     }
 }
 

@@ -22,17 +22,23 @@
 //! which is why the tests assert on the struct rather than on parsed output.
 
 #![deny(missing_docs)]
-#![forbid(unsafe_code)]
+// `deny` rather than `forbid`: `progress::phys_footprint_bytes` reads the memory footprint
+// through one `proc_pid_rusage` call, allowed there by name and nowhere else.
+#![deny(unsafe_code)]
 
 pub mod agent;
 pub mod agent_host;
+pub mod checkpoint;
 pub mod cli;
 pub mod error;
 pub mod experiment;
 pub mod fmt;
 pub mod import;
 pub mod info;
+pub mod progress;
 pub mod run;
+pub mod signal;
+pub mod stream;
 pub mod tally;
 pub mod validate;
 pub mod wall;

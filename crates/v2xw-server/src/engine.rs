@@ -597,6 +597,18 @@ pub trait Engine: Send + std::fmt::Debug {
         self.seek_range().1
     }
 
+    /// Makes time before the retained history seekable again by computing it a second
+    /// time: the kernel is started afresh on the same scenario — the same run, by the
+    /// determinism contract — so a following [`Engine::extend_to`] reaches any earlier
+    /// instant. Returns `false` when the run cannot (a replay or the fixture, which keep
+    /// their whole span anyway).
+    ///
+    /// # Errors
+    /// Whatever starting the kernel again returns.
+    fn rewind(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+
     /// The end of the run, simulated nanoseconds: how far a seek may ever reach.
     fn horizon_ns(&self) -> u64 {
         self.descriptor().duration

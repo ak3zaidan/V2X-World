@@ -775,9 +775,18 @@ async fn handle_text(
     let received_at = Instant::now();
     if request.method == "run.seek"
         && let Some(target) = seek_target(&state.run, &request.params)
-        && !compute_ahead(socket, state, target).await
     {
-        return TextOutcome::Gone;
+        // Before the retained history: the kernel computes the run again from the start,
+        // and the seek lands once it has reached the target (a run of days keeps only the
+        // last part of its history in memory; `LiveOptions::retain_bytes`).
+        let (min_ns, _) = state.run.seek_range();
+        if target < min_ns {
+            let run = Arc::clone(&state.run);
+            let _ = tokio::task::spawn_blocking(move || run.rewind()).await;
+        }
+        if !compute_ahead(socket, state, target).await {
+            return TextOutcome::Gone;
+        }
     }
     let mut ctx = rpc::Context {
         run: &state.run,
@@ -860,9 +869,10 @@ async fn handle_text(
     }
 }
 
-/// Where a `run.seek` asks to go, when that is past what the run has produced but inside
-/// the run: the case [`compute_ahead`] exists for. `None` for anything the seek itself will
-/// answer — a target already seekable, one outside the run, a malformed request.
+/// Where a `run.seek` asks to go, when that is outside what the run holds but inside the
+/// run — past what it has produced, or before the history it still keeps: the cases
+/// [`compute_ahead`] exists for. `None` for anything the seek itself will answer — a
+/// target already seekable, one outside the run, a malformed request.
 fn seek_target(run: &Run, params: &serde_json::Map<String, Value>) -> Option<u64> {
     let horizon = run.horizon_ns();
     let target = match (params.get("t_ns"), params.get("fraction")) {
@@ -876,8 +886,8 @@ fn seek_target(run: &Run, params: &serde_json::Map<String, Value>) -> Option<u64
         }
         _ => return None,
     };
-    let (_, max_ns) = run.seek_range();
-    (target > max_ns && target <= horizon).then_some(target)
+    let (min_ns, max_ns) = run.seek_range();
+    ((target > max_ns || target < min_ns) && target <= horizon).then_some(target)
 }
 
 /// Runs the kernel forward until `target` is seekable, telling the client how far it is.
@@ -906,12 +916,24 @@ async fn compute_ahead(socket: &mut WebSocket, state: &AppState, target: u64) ->
         } else {
             1.0
         };
+        let message = if target >= 86_400_000_000_000 || reached >= 3_600_000_000_000 {
+            format!(
+                "simulating ahead to {}: at {}",
+                long_clock(target),
+                long_clock(reached)
+            )
+        } else {
+            format!(
+                "simulating ahead to {:.1} s: at {:.1} s",
+                target as f64 / 1e9,
+                reached as f64 / 1e9
+            )
+        };
         let done = reached >= target;
         let notice = rpc::notification(
             "job.progress",
             json!({"job_id": job_id, "progress": progress,
-                   "message": format!("simulating ahead to {:.1} s: at {:.1} s",
-                                      target as f64 / 1e9, reached as f64 / 1e9),
+                   "message": message,
                    "t_ns": reached, "target_ns": target}),
         );
         if socket
@@ -940,6 +962,19 @@ async fn compute_ahead(socket: &mut WebSocket, state: &AppState, target: u64) ->
         .send(Message::Text(done.to_string().into()))
         .await
         .is_ok()
+}
+
+/// A simulated instant as `day 2, 07:30:00` (or `07:30:00` on the first day), for a
+/// progress message about a run of hours or days.
+fn long_clock(ns: u64) -> String {
+    let s = ns / 1_000_000_000;
+    let (d, rem) = (s / 86_400, s % 86_400);
+    let hms = format!("{:02}:{:02}:{:02}", rem / 3600, (rem % 3600) / 60, rem % 60);
+    if d > 0 {
+        format!("day {}, {hms}", d + 1)
+    } else {
+        hms
+    }
 }
 
 /// Sends an `Error` frame, a `Bye` and closes (§3.10, §3.11).

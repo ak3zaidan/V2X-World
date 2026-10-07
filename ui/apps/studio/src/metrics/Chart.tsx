@@ -18,6 +18,7 @@ import uPlot from "uplot";
 import { useStudio } from "../state/store.js";
 import { slotColour } from "./tokens.js";
 import { axisUnit, decimate, formatNumber, formatWithUnit, type Series } from "./model.js";
+import { axisTime, axisTimeSplits } from "../lib/format.js";
 
 /** One line on the chart. `slot` is the categorical colour (1–8), fixed per series. */
 export interface ChartLine {
@@ -118,9 +119,15 @@ export function MainChart({
           ticks: { stroke: grid, width: 1 },
           font,
           labelFont: font,
-          label: "simulated time (s)",
+          // Seconds for a few minutes, hours and minutes for hours, days and hours for days:
+          // the axis of a day-long run reads in the unit the day is lived in.
+          label: "simulated time",
           labelSize: 18,
-          values: (_u, splits) => splits.map((s) => formatNumber(s)),
+          splits: (_u, _i, min, max) => axisTimeSplits(min, max),
+          values: (u, splits) => {
+            const span = (u.scales.x.max ?? 0) - (u.scales.x.min ?? 0);
+            return splits.map((s) => axisTime(s, span));
+          },
         },
         {
           stroke: text,
