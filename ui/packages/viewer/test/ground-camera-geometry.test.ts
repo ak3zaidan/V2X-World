@@ -86,37 +86,40 @@ function nearDropPerMetre(v: Viewer): number {
 
 interface Check {
   failures: string[];
+  /** Frames failing each check, so one check failing everywhere cannot hide the others. */
+  counts: Record<string, number>;
   frames: number;
 }
 
 function checkFrame(v: Viewer, label: string, out: Check): void {
   out.frames++;
-  const fail = (msg: string): void => {
-    if (out.failures.length < 40) out.failures.push(`${label}: ${msg}`);
+  const fail = (kind: string, msg: string): void => {
+    const n = (out.counts[kind] = (out.counts[kind] ?? 0) + 1);
+    if (n <= 3) out.failures.push(`${label}: ${msg}`);
   };
   const cam = v.camera;
   const p = cam.position;
   if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) {
-    fail("camera not finite");
+    fail("not_finite", "camera not finite");
     return;
   }
   // 1. Above every road surface, outside every building that is not ghosted.
-  if (p.z < GRADE + SURFACE_TOP + 0.05) fail(`camera at z ${p.z.toFixed(2)}, under the road surface`);
+  if (p.z < GRADE + SURFACE_TOP + 0.05) fail("under_ground", `camera at z ${p.z.toFixed(2)}, under the road surface`);
   const w = v.worldRenderer;
   const b = w.buildingIndexAt(p.x, p.y);
   if (b >= 0 && p.z < w.buildingTopOf(b) && b !== w.ghostBuilding && b !== w.ghostBuilding2) {
-    fail(`camera inside building ${b} (z ${p.z.toFixed(1)} under its roof ${w.buildingTopOf(b).toFixed(1)})`);
+    fail("in_building", `camera inside building ${b} (z ${p.z.toFixed(1)} under its roof ${w.buildingTopOf(b).toFixed(1)})`);
   }
   // 2. The near plane does not cut the road.
   cam.updateMatrixWorld();
   const lowest = p.z + nearDropPerMetre(v) * cam.near;
   if (lowest < GRADE + SURFACE_TOP - 1e-4) {
-    fail(`near plane (${cam.near.toFixed(2)} m) reaches z ${lowest.toFixed(2)}, into the road`);
+    fail("near_cuts_road", `near plane (${cam.near.toFixed(2)} m) reaches z ${lowest.toFixed(2)}, into the road`);
   }
   // 3. The ground: at the ground level, and under every ray below the horizon within the far plane.
   const g = w.ground;
   const gz = g.position.z;
-  if (Math.abs(gz - GRADE) > 0.1) fail(`ground plane at z ${gz.toFixed(2)}, not at the ground level ${GRADE}`);
+  if (Math.abs(gz - GRADE) > 0.1) fail("ground_not_at_grade", `ground plane at z ${gz.toFixed(2)}, not at the ground level ${GRADE}`);
   const half = (g.geometry as PlaneGeometry).parameters.width / 2;
   const f = new Vector3();
   cam.getWorldDirection(f);
@@ -138,7 +141,7 @@ function checkFrame(v: Viewer, label: string, out: Check): void {
       }
     }
   }
-  if (misses > 0) fail(`${misses} of 625 rays below the horizon miss the ground: ${worst}`);
+  if (misses > 0) fail("ray_misses_ground", `${misses} of 625 rays below the horizon miss the ground: ${worst}`);
 }
 
 /** 4. Every street-surface vertex at or above the ground, except the tunnel's. */
@@ -193,7 +196,7 @@ describe("ground and camera geometry, every mode, random poses", () => {
   for (const mode of MODES) {
     it(`keeps the camera above the ground, the near plane out of the road and the ground under the horizon: ${mode}`, () => {
       const r = rng(0x5eed + mode.length * 977 + mode.charCodeAt(0));
-      const out: Check = { failures: [], frames: 0 };
+      const out: Check = { failures: [], counts: {}, frames: 0 };
       const v = viewer();
       const input = new EventTarget();
       v.cameras.attachInput(input);
@@ -269,7 +272,7 @@ describe("ground and camera geometry, every mode, random poses", () => {
       }
       v.dispose();
       expect(out.frames).toBeGreaterThan(900);
-      expect(out.failures, out.failures.slice(0, 12).join("\n")).toEqual([]);
+      expect(out.counts, `frames failing each check, of ${out.frames}:\n${out.failures.join("\n")}`).toEqual({});
     });
   }
 
