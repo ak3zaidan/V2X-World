@@ -555,3 +555,135 @@ fn the_load_metrics_scale_with_the_fleet_as_theory_says() {
     let share = |r: &Row| r.7 as f64 / r.5.max(1) as f64;
     assert!(share(&rows[4]) >= share(&rows[1]), "collision share fell from 5 to 50");
 }
+
+/// The two vehicles with the US SCMS behind them: `credential-lifecycle.yaml`'s backend,
+/// with the calendar compressed to 10 s periods so a 30 s run holds top-ups and CRLs.
+fn with_backend(mut s: Scenario) -> Scenario {
+    let lifecycle =
+        Scenario::load(scenarios().join("credential-lifecycle.yaml")).expect("loads");
+    s.actors.backend = lifecycle.actors.backend.clone();
+    s.net.uu = lifecycle.net.uu.clone();
+    s.security.protocol = lifecycle.security.protocol.clone();
+    s.security.verification_policy = "verify-all".into();
+    if let Some(p) = s.security.protocol.as_mut() {
+        p.params = serde_json::json!({
+            "i_period_s": 30, "cert_lifetime_s": 31, "certs_per_period": 5,
+            "pool_periods": 2, "topup_below_periods": 1, "cert_shuffle_window_s": 1,
+            "first_batch_delay_s": 2, "download_poll_interval_s": 2,
+            "enrolment_lifetime_s": 600, "reenrol_lead_s": 120,
+            "report_shuffle_window_s": 30, "crl_cadence_s": 10, "crl_fetch_interval_s": 10,
+        });
+    }
+    s
+}
+
+fn backend_run(n: usize, attacker: bool) -> (RunReport, MemoryRecorder) {
+    let mut s = with_backend(deterministic_radio(fleet(n, 45.0)));
+    s.actors.rsus = vec![
+        serde_json::from_value(serde_json::json!({
+            "position_m": [420.0, 280.0, 0.0],
+            "roles": ["crl", "provisioning-proxy", "report-forward"],
+            "profile": "rsu/commsignia-its-rs4",
+        }))
+        .expect("an RSU"),
+    ];
+    if attacker {
+        let lifecycle =
+            Scenario::load(scenarios().join("credential-lifecycle.yaml")).expect("loads");
+        s.threats = lifecycle.threats.clone();
+        s.detection = lifecycle.detection.clone();
+        s.threats.attackers[0].fraction = None;
+        s.threats.attackers[0].count = Some(1);
+        s.threats.attackers[0].schedule = None;
+        // Reports reach the MA within a second rather than a 30 s shuffle, so the
+        // revocation lands before the 30 s top-up and the refusal can be seen.
+        if let Some(p) = s.security.protocol.as_mut() {
+            p.params["report_shuffle_window_s"] = 1.into();
+        }
+    }
+    run(s)
+}
+
+#[test]
+fn the_backend_tops_up_both_vehicles_over_cellular_and_every_byte_is_booked_once() {
+    use v2xw_metrics::channels::ByteBucket as B;
+    let (report, rec) = backend_run(2, false);
+    let p = &report.phase2;
+    let a = &p.access;
+    assert_eq!(a.cellular_vehicles, 2);
+    // A pool of two 30 s periods at t = 0; the first period ends at 30 s and leaves one,
+    // so each vehicle tops up once by 45 s, five certificates a period.
+    assert_eq!(p.topups_completed, 2, "{p:?}");
+    assert_eq!(p.certs_topped_up, 10);
+    assert_eq!(p.topups_refused, 0);
+    let certs: Vec<v2xw_metrics::channels::SecCertView> = on(&rec);
+    let nb: Vec<v2xw_metrics::channels::NetBytesView> = on(&rec);
+    let bucket = |b: B| {
+        nb.iter()
+            .filter(|r| r.bucket == b)
+            .map(|r| r.bytes_on_wire)
+            .sum::<u64>()
+    };
+    // The counters, the records and the metrics are one set of books.
+    assert_eq!(bucket(B::CellularDl), a.uu_dl_bytes);
+    assert_eq!(bucket(B::CellularUl), a.uu_ul_bytes);
+    assert_eq!(bucket(B::Backend), a.backend_bytes);
+    assert!(a.uu_dl_bytes > 0 && a.uu_ul_bytes > 0 && a.backend_bytes > 0);
+    let mut sums: BTreeMap<String, f64> = BTreeMap::new();
+    for t in 1..=45 {
+        for (k, v) in window(&rec, t * S) {
+            if k.starts_with("bytes_uu") || k.starts_with("bytes_backend") {
+                *sums.entry(k).or_default() +=
+                    serde_json::to_value(&v).unwrap()["point"].as_f64().unwrap_or(0.0);
+            }
+        }
+    }
+    assert_eq!(sums["bytes_uu_dl{\"bucket\":\"cellular-dl\"}"], a.uu_dl_bytes as f64);
+    assert_eq!(sums["bytes_uu_ul{\"bucket\":\"cellular-ul\"}"], a.uu_ul_bytes as f64);
+    assert_eq!(sums["bytes_backend{\"bucket\":\"backend\"}"], a.backend_bytes as f64);
+    // What a vehicle downloaded for a top-up is what crossed its cellular downlink, not
+    // the backend's own exchanges (7,319 octets were reported before 2026-10-07 against
+    // 1,141 on the downlink).
+    let topups: Vec<_> = certs.iter().filter(|c| c.event == "top-up").collect();
+    assert_eq!(topups.len(), 2);
+    for c in topups {
+        let dl: u64 = nb
+            .iter()
+            .filter(|r| r.bucket == B::CellularDl && r.node == Some(c.node))
+            .map(|r| r.bytes_on_wire)
+            .sum();
+        assert_eq!(c.bytes, Some(dl), "{:?}", c.node);
+    }
+}
+
+#[test]
+fn one_attacker_among_six_is_reported_revoked_and_refused_and_the_crl_reaches_everyone() {
+    let (report, rec) = backend_run(6, true);
+    let p = &report.phase2;
+    assert_eq!(p.attackers, 1);
+    assert!(p.reports_at_ma > 0, "{p:?}");
+    assert_eq!(p.ma_revoke_decisions, 1);
+    assert_eq!(p.revoked_attackers, 1);
+    assert_eq!(p.revoked_honest, 0);
+    assert_eq!(p.crls_issued, 1);
+    assert!(p.crl_broadcasts > 0);
+    // Every vehicle and the roadside unit install it.
+    assert_eq!(p.crls_installed, 6, "{p:?}");
+    assert!(p.revoked_receptions > 0, "nobody refused the revoked sender");
+    // Passive revocation: the attacker's next top-up is refused as blocklisted, everyone
+    // else's goes through.
+    assert_eq!(p.topups_refused_blocklisted, 1);
+    assert_eq!(p.topups_completed, 5);
+    let order: Vec<u64> = p.revocation_stages.iter().map(|(_, t)| *t).collect();
+    assert!(
+        order.windows(2).all(|w| w[0] <= w[1]),
+        "{:?}",
+        p.revocation_stages
+    );
+    let rxs: Vec<NodeRxView> = on(&rec);
+    let refused = rxs
+        .iter()
+        .filter(|r| r.cause.as_deref() == Some("revoked"))
+        .count();
+    assert_eq!(refused as u64, p.revoked_receptions);
+}

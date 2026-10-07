@@ -2656,12 +2656,17 @@ impl Phase2 {
         for (node, run) in finished {
             let next_i = self.nodes.get(&node).map_or(0, |n| n.last_period + 1);
             let fresh = self.creds_of_device(device_of(node), next_i);
+            // What the vehicle downloaded (`sec.cert`'s `bytes`): the run's steps addressed
+            // to the device. Summing every step of the run counted the RA's, ACA's and
+            // LAs' own exchanges too, so a two-vehicle run reported 7,319 octets per
+            // top-up against a cellular downlink that carried about 1,100.
+            let device = device_of(node);
             let bytes = self
                 .scms
                 .kernel
                 .steps
                 .iter()
-                .filter(|s| s.run == run)
+                .filter(|s| s.run == run && s.to == device)
                 .map(|s| u64::from(s.bytes))
                 .sum();
             if let Some(n) = self.nodes.get_mut(&node) {
