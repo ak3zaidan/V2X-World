@@ -27,6 +27,13 @@
 //! | permitted-left critical gap | lags offered to left turners on a permissive green, timed to the closing opposing vehicle's actual arrival at its stop line, each accepted or rejected by the turner; Raff's method on the two samples | HCM 6th ed. Ch. 31: 4.5 s (secondary, LTRC Report 715) |
 //! | pedestrian signal compliance | share of kerb departures onto a signalised crossing made on walk | Basch et al. 2015, five Manhattan intersections: about 89 % on Walk (secondary); reported, since the model's `jaywalk_probability` is 0 by default |
 //! | approach volumes | vehicles per hour over the stop line of every signalised approach road, avenues (3+ lanes) and side streets apart | NYC DOT automated counts, Midtown 08:00-19:00: avenues 970-1,890 veh/h, side streets 330-640 veh/h — set by demand, reported |
+//! | start-up wave speed | at each green onset, the time each queued vehicle starts moving (above 0.5 m/s) against how far behind the stop line its front stood; the least-squares slope, per queue of four or more | Treiber & Kesting, *Traffic Flow Dynamics* (2013): congested traffic's upstream fronts travel at about 15 km/h (10-20 km/h), the same for a queue moving off as for a jam (**secondary**) |
+//! | heavy-vehicle equivalent | in a saturated queue, the mean discharge headway (positions ≥ 5) of heavy vehicles over that of cars: the headway-ratio estimate of a passenger-car equivalent | HCM 2000 Ch. 16 `f_HV = 100 / (100 + %HV·(E_T − 1))` with `E_T = 2.0` passenger cars per heavy vehicle at a signalised approach (**secondary**: as the HCM default is widely reproduced) |
+//!
+//! The network-level figures — the macroscopic fundamental diagram, stops per kilometre,
+//! kerbside dwell, lane utilisation, cyclist conflicts and pedestrian speed by crowding —
+//! are measured by [`crate::network::NetworkObserver`], which this observer feeds on every
+//! step; its comparisons follow this module's in [`CalibrationReport::comparisons`].
 //!
 //! Every reference that could not be re-read from its primary document is labelled
 //! **secondary** on the comparison, with where it was read.
@@ -85,6 +92,12 @@ struct Member {
     /// True if it stood again after having got going, before its front crossed.
     restopped: bool,
     length_m: f64,
+    /// How far behind the stop line its front stood at the green onset, metres.
+    dist_m: f64,
+    /// When it first moved off after the onset (above 0.5 m/s), seconds.
+    moved_at: Option<f64>,
+    /// A truck, bus or other heavy vehicle ([`crate::style::is_heavy`]).
+    heavy: bool,
 }
 
 /// A queue recorded at a green onset, waiting to discharge.
@@ -139,6 +152,8 @@ pub struct CalibrationObserver {
     head_gap_m: Vec<f64>,
     free_ratio: Vec<f64>,
     launch_mps2: Vec<f64>,
+    /// Launches of heavy vehicles, kept apart (they are not in `launch_mps2`).
+    launch_heavy_mps2: Vec<f64>,
     stop_decel_mps2: Vec<f64>,
     turn_speeds: BTreeMap<String, Vec<f64>>,
     trip_speed_mps: Vec<f64>,
@@ -167,6 +182,8 @@ pub struct CalibrationObserver {
     /// First and last observed instant, seconds.
     span_s: Option<(f64, f64)>,
     steps: u64,
+    /// The network-level measures ([`crate::network`]).
+    network: crate::network::NetworkObserver,
 }
 
 /// A permitted left turner, while it approaches and waits on a permissive green.
@@ -240,6 +257,7 @@ impl CalibrationObserver {
             pending_lags: Vec::new(),
             approach_counts,
             span_s: None,
+            network: crate::network::NetworkObserver::new(world),
             prev: BTreeMap::new(),
             open: Vec::new(),
             captured: BTreeSet::new(),
@@ -251,6 +269,7 @@ impl CalibrationObserver {
             head_gap_m: Vec::new(),
             free_ratio: Vec::new(),
             launch_mps2: Vec::new(),
+            launch_heavy_mps2: Vec::new(),
             stop_decel_mps2: Vec::new(),
             turn_speeds: BTreeMap::new(),
             trip_speed_mps: Vec::new(),
@@ -283,6 +302,8 @@ impl CalibrationObserver {
         self.track_permitted_lefts(world, t0, t1, dt, actors);
         self.track_vehicles(world, t1, dt, actors, despawned);
         self.track_pedestrians(world, t0_s, dt, pedestrians);
+        self.network
+            .observe(world, t0, t1, actors, despawned, pedestrians);
     }
 
     /// Lags offered to, accepted and rejected by permitted left turners: the field
@@ -530,6 +551,10 @@ impl CalibrationObserver {
                             peak_mps: a.speed_mps,
                             restopped: false,
                             length_m: a.length_m,
+                            dist_m: front_behind,
+                            moved_at: None,
+                            heavy: crate::style::is_heavy(a.class)
+                                || matches!(a.class, crate::VehicleClass::Delivery),
                         });
                     }
                     // Continue onto a single lane that feeds this one straight on.
@@ -586,6 +611,9 @@ impl CalibrationObserver {
                     continue;
                 };
                 m.peak_mps = m.peak_mps.max(a.speed_mps);
+                if m.moved_at.is_none() && a.speed_mps > 0.5 {
+                    m.moved_at = Some(t1_s);
+                }
                 if m.front_cross.is_none() {
                     let on_queue_lane = a.lane == q.lane || q.upstream.contains(&a.lane);
                     if on_queue_lane {
@@ -732,7 +760,12 @@ impl CalibrationObserver {
                 let held = held || a.accel_mps2 <= 0.0;
                 if a.speed_mps >= LAUNCH_TO_MPS {
                     if !held {
-                        self.launch_mps2.push(a.speed_mps / (t1_s - start).max(dt));
+                        let launch = a.speed_mps / (t1_s - start).max(dt);
+                        if crate::style::is_heavy(a.class) {
+                            self.launch_heavy_mps2.push(launch);
+                        } else {
+                            self.launch_mps2.push(launch);
+                        }
                     }
                     p.launch = None;
                 } else if a.speed_mps < STANDING_MPS {
@@ -885,7 +918,26 @@ impl CalibrationObserver {
         let mut sat_all: Vec<f64> = Vec::new();
         let mut first_four: Vec<[f64; 4]> = Vec::new();
         let mut discharged = 0usize;
+        let mut sat_heavy: Vec<f64> = Vec::new();
+        let mut sat_car: Vec<f64> = Vec::new();
+        let mut waves: Vec<f64> = Vec::new();
         for q in &queues {
+            // The start-up wave: the least-squares slope of standing distance on start time.
+            let pts: Vec<(f64, f64)> = q
+                .members
+                .iter()
+                .filter_map(|m| m.moved_at.map(|t| (t - q.onset_s, m.dist_m)))
+                .collect();
+            if pts.len() >= 4 {
+                let n = pts.len() as f64;
+                let mt = pts.iter().map(|p| p.0).sum::<f64>() / n;
+                let md = pts.iter().map(|p| p.1).sum::<f64>() / n;
+                let sxx: f64 = pts.iter().map(|p| (p.0 - mt) * (p.0 - mt)).sum();
+                let sxy: f64 = pts.iter().map(|p| (p.0 - mt) * (p.1 - md)).sum();
+                if sxx > 1e-9 {
+                    waves.push(sxy / sxx);
+                }
+            }
             let mut prev_t = q.onset_s;
             let mut prev_straight = true;
             let mut prev_ok = true;
@@ -906,6 +958,11 @@ impl CalibrationObserver {
                     sat_all.push(h);
                     if straight && prev_straight {
                         sat.push(h);
+                    }
+                    if m.heavy {
+                        sat_heavy.push(h);
+                    } else {
+                        sat_car.push(h);
                     }
                 }
                 prev_t = t;
@@ -950,6 +1007,7 @@ impl CalibrationObserver {
             queue_head_gap_m: Summary::of(&self.head_gap_m),
             free_flow_speed_ratio: Summary::of(&self.free_ratio),
             launch_accel_mps2: Summary::of(&self.launch_mps2),
+            launch_accel_heavy_mps2: Summary::of(&self.launch_heavy_mps2),
             stop_decel_mps2: Summary::of(&self.stop_decel_mps2),
             turn_speed_mps: turns,
             network_speed_mps: if self.total_s > 0.0 {
@@ -973,6 +1031,10 @@ impl CalibrationObserver {
             },
             avenue_volume_veh_per_h: self.approach_volumes(|lanes| lanes >= 3),
             street_volume_veh_per_h: self.approach_volumes(|lanes| lanes <= 2),
+            startup_wave_mps: Summary::of(&waves),
+            saturation_headway_heavy_s: Summary::of(&sat_heavy),
+            saturation_headway_car_s: Summary::of(&sat_car),
+            network: self.network.report(),
         }
     }
 }
@@ -1152,8 +1214,10 @@ pub struct CalibrationReport {
     pub queue_head_gap_m: Summary,
     /// Free-flow mid-block speed over the posted limit.
     pub free_flow_speed_ratio: Summary,
-    /// Mean acceleration from standstill to 8 m/s, m/s².
+    /// Mean acceleration from standstill to 8 m/s, m/s² (heavy vehicles apart).
     pub launch_accel_mps2: Summary,
+    /// The same for trucks, buses and coaches, m/s².
+    pub launch_accel_heavy_mps2: Summary,
     /// Peak deceleration of each stop, m/s².
     pub stop_decel_mps2: Summary,
     /// Lowest speed through a connector, by turn, m/s.
@@ -1179,6 +1243,14 @@ pub struct CalibrationReport {
     pub avenue_volume_veh_per_h: Summary,
     /// The same for roads of one or two lanes: the side streets.
     pub street_volume_veh_per_h: Summary,
+    /// The start-up wave's speed back up each queue, m/s.
+    pub startup_wave_mps: Summary,
+    /// Saturated discharge headways of heavy vehicles (positions ≥ 5), seconds.
+    pub saturation_headway_heavy_s: Summary,
+    /// The same for everything else, seconds.
+    pub saturation_headway_car_s: Summary,
+    /// The network-level measures ([`crate::network`]).
+    pub network: crate::network::NetworkReport,
 }
 
 /// One figure against its reference.
@@ -1390,7 +1462,33 @@ impl CalibrationReport {
                          (2017 taxi GPS, all-day); depends on demand, reported only",
                 tested: false,
             },
+            Comparison {
+                metric: "start-up wave speed, m/s",
+                measured: self.startup_wave_mps.mean,
+                samples: self.startup_wave_mps.n,
+                reference: 15.0 / 3.6,
+                band: (10.0 / 3.6, 20.0 / 3.6),
+                source: "Treiber & Kesting, Traffic Flow Dynamics (2013): upstream fronts of \
+                         congested traffic move at about 15 km/h, 10-20 km/h (secondary)",
+                tested: false,
+            },
+            Comparison {
+                metric: "heavy-vehicle equivalent (headway ratio)",
+                measured: self.saturation_headway_heavy_s.mean / self.saturation_headway_car_s.mean,
+                samples: self
+                    .saturation_headway_heavy_s
+                    .n
+                    .min(self.saturation_headway_car_s.n),
+                reference: 2.0,
+                band: (1.5, 2.5),
+                source: "HCM 2000 heavy-vehicle adjustment f_HV = 100/(100 + %HV(E_T − 1)), \
+                         E_T = 2.0 at a signalised approach (secondary); band a choice",
+                tested: false,
+            },
         ]
+        .into_iter()
+        .chain(self.network.comparisons())
+        .collect()
     }
 }
 
@@ -1413,6 +1511,10 @@ pub struct SaturationExperiment {
     pub lanes_per_direction: u32,
     /// The master seed.
     pub seed: u64,
+    /// The share of the queued vehicles that are trucks (SUMO `truck`, the AASHTO SU-9
+    /// design vehicle), chosen per insertion from the insertion's sequence number: 0 is
+    /// the HCM's base conditions, a positive share measures the heavy-vehicle equivalent.
+    pub heavy_share: f64,
 }
 
 impl Default for SaturationExperiment {
@@ -1423,6 +1525,7 @@ impl Default for SaturationExperiment {
             cycle_s: 90.0,
             lanes_per_direction: 2,
             seed: 0x5A7_F10E,
+            heavy_share: 0.0,
         }
     }
 }
@@ -1518,12 +1621,24 @@ impl SaturationExperiment {
             {
                 let mut ctx = crate::MobilityCtx::new(t, &world, &rng);
                 for (origin, exit) in &feeds {
-                    // Room for a car and its standstill gap behind the last one in.
-                    if nearest.get(origin).is_some_and(|front| *front < 14.0) {
+                    seq += 1;
+                    // A truck every so often, by a fixed low-discrepancy sequence of the
+                    // insertion number, so the share is met without a random draw.
+                    let class = if self.heavy_share > 0.0
+                        && ((seq as f64) * 0.618_033_988_75).fract() < self.heavy_share
+                    {
+                        crate::VehicleClass::Truck
+                    } else {
+                        crate::VehicleClass::Passenger
+                    };
+                    // Room for the vehicle and its standstill gap behind the last one in.
+                    if nearest
+                        .get(origin)
+                        .is_some_and(|front| *front < class.spec().length_m + 9.0)
+                    {
+                        seq -= 1;
                         continue;
                     }
-                    seq += 1;
-                    let class = crate::VehicleClass::Passenger;
                     engine.command(
                         &mut ctx,
                         crate::MobilityCommand::Spawn(crate::TripRequest {

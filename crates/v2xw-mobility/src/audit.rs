@@ -130,6 +130,10 @@ pub struct AuditActor {
     /// Where in its lane this vehicle rides outside a lane change, metres left of the
     /// centreline: zero for a car, the rider's lane position for a motorcycle or a moped.
     pub lane_position_m: f64,
+    /// What it is standing at the kerb for, while it is ([`crate::kerbside`]): a bus at its
+    /// stop, a taxi, a delivery. A vehicle standing at the kerb on purpose is not gridlock,
+    /// so [`Check::Standstill`] does not count it.
+    pub kerbside: Option<crate::kerbside::KerbRole>,
 }
 
 /// One pedestrian as the auditor sees it.
@@ -1615,7 +1619,7 @@ impl TrafficAuditor {
         let present: BTreeSet<ActorId> = actors.iter().map(|a| a.actor).collect();
         self.standing_since.retain(|a, _| present.contains(a));
         for a in actors {
-            if a.speed_mps > 0.1 {
+            if a.speed_mps > 0.1 || a.kerbside.is_some() {
                 self.standing_since.remove(&a.actor);
                 continue;
             }
@@ -1954,6 +1958,7 @@ mod tests {
             heading_rad: l.heading_at(rear),
             min_path_radius_m: crate::VehicleClass::Passenger.min_path_radius_m(),
             lane_position_m: 0.0,
+            kerbside: None,
         }
     }
 

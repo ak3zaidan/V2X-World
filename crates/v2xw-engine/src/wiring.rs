@@ -375,6 +375,11 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(share) = vru.ebike_share {
         params.cyclists.ebike_share = share;
     }
+    // Kerbside stops follow the jurisdiction too: New York City has its taxis
+    // (`v2xw_mobility::kerbside`).
+    params.kerbside = v2xw_mobility::kerbside::KerbsideParams::for_highway_preset(
+        scenario.world.highway_preset.map(|p| p.label()),
+    );
     let mut people = match vru.behaviour {
         crate::scenario::schema::VruBehaviour::Observed => {
             v2xw_mobility::SocialForceParams::observed()
