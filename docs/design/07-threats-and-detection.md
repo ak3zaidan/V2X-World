@@ -176,11 +176,40 @@ acting from 60 s. Five vehicles were armed in every run and the same five every 
 - *Missed*: each armed attacker not revoked — how long it lied, the reports about it and
   the most corroborated events one of its pseudonyms reached.
 
-ATTACK-TABLE
+| Attack | Armed | Lied | Reported | Decided / revoked | Honest revoked | Report precision | Revocation precision | Onset to first report, median s | First report to decision, median s (max) | Missed: node:lying s/reports/peak events |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ConstPos | 5 | 5 | 5 | 4 / 4 | 0 | 0.98 | 1.00 | 2.8 | 30.1 (73.5) | n18:13s/26r/2e |
+| ConstPosOffset | 5 | 5 | 3 | 1 / 1 | 0 | 0.75 | 1.00 | 27.1 | 26.8 (26.8) | n18:13s/0r/0e,n28:163s/5r/1e,n39:102s/0r/0e,n48:57s/1r/0e |
+| RandomPos | 5 | 5 | 5 | 4 / 4 | 0 | 0.98 | 1.00 | 2.0 | 31.4 (43.5) | n18:13s/25r/2e |
+| Teleport | 5 | 5 | 5 | 1 / 1 | 0 | 0.95 | 1.00 | 1.8 | 44.7 (44.7) | n18:13s/19r/2e,n27:165s/56r/2e,n39:97s/20r/2e,n48:53s/52r/1e |
+| SineWavePos | 5 | 5 | 5 | 1 / 1 | 0 | 0.81 | 1.00 | 11.4 | 139.7 (139.7) | n18:13s/8r/1e,n27:169s/12r/2e,n39:102s/7r/1e,n48:57s/11r/2e |
+| ConstSpeedOffset | 5 | 5 | 5 | 4 / 4 | 0 | 0.98 | 1.00 | 3.8 | 42.1 (42.9) | n18:13s/18r/2e |
+| RandomSpeed | 5 | 5 | 5 | 4 / 4 | 0 | 0.96 | 1.00 | 3.8 | 49.2 (109.4) | n18:13s/4r/1e |
+| StopAndGo | 5 | 5 | 5 | 4 / 4 | 0 | 0.96 | 1.00 | 4.5 | 46.7 (48.6) | n18:12s/10r/1e |
+| ReversedHeading | 5 | 5 | 5 | 2 / 2 | 0 | 0.97 | 1.00 | 5.8 | 47.3 (47.3) | n18:13s/18r/2e,n39:102s/40r/2e,n48:57s/113r/2e |
+| HeadingOffset | 5 | 5 | 4 | 2 / 2 | 0 | 0.92 | 1.00 | 26.5 | 72.4 (72.4) | n18:13s/0r/0e,n39:102s/20r/1e,n48:57s/44r/0e |
+| DataReplay | 5 | 5 | 5 | 5 / 5 | 0 | 0.98 | 1.00 | 1.0 | 30.1 (42.2) | - |
+| SlowDrift | 5 | 5 | 5 | 4 / 4 | 0 | 0.98 | 1.00 | 3.4 | 28.4 (42.2) | n18:13s/26r/2e |
+| AlongRoadOffset | 5 | 5 | 2 | 0 / 0 | 0 | 0.20 | - | - | - (-) | n18:13s/0r/0e,n27:169s/2r/1e,n28:163s/2r/0e,n39:102s/0r/0e,n48:57s/0r/0e |
+| DelayedMessages | 5 | 5 | 5 | 5 / 5 | 0 | 0.98 | 1.00 | 1.0 | 30.1 (42.2) | - |
+| InvalidSignature | 5 | 5 | 5 | 5 / 5 | 0 | 0.98 | 1.00 | 1.0 | 30.1 (42.2) | - |
+| ExpiredCert | 5 | 5 | 5 | 5 / 5 | 0 | 0.98 | 1.00 | 1.0 | 30.1 (42.2) | - |
+| NotYetValid | 5 | 5 | 5 | 5 / 5 | 0 | 0.98 | 1.00 | 1.0 | 30.1 (42.2) | - |
+| OutOfOrder | 5 | 5 | 5 | 5 / 5 | 0 | 0.98 | 1.00 | 1.0 | 30.1 (42.2) | - |
+| Disruptive | 5 | 5 | 5 | 4 / 4 | 0 | 0.98 | 1.00 | 3.1 | 30.1 (39.2) | n18:13s/16r/2e |
+| PosSpeedInconsistent | 5 | 5 | 5 | 2 / 2 | 0 | 0.96 | 1.00 | 22.3 | 44.5 (44.5) | n18:12s/7r/1e,n39:100s/40r/2e,n48:56s/72r/1e |
+| PosHeadingInconsistent | 5 | 5 | 5 | 4 / 4 | 0 | 0.97 | 1.00 | 2.9 | 30.1 (43.5) | n18:13s/18r/2e |
+| EventualStop | 5 | 5 | 5 | 4 / 4 | 0 | 0.98 | 1.00 | 3.6 | 29.6 (42.7) | n18:7s/10r/1e |
+
+Refused by name, because the engine does not put them on the air (see `phase2::unrendered`): DoS and DoSRandom (extra transmissions), Sybil (concurrent pseudonyms), VruImpersonation and VruPositionSpoof (a station type a BSM does not carry), FakeHazard (event messages) and SelectiveDrop (relaying). Before this round they ran and were counted as lying while nothing they did reached a receiver; so did the six envelope attacks above (forged signature, expired or not-yet-valid certificate, delayed, out-of-order and replayed generation time), which went unreported by every receiver until the host rendered them.
 
 What it says:
 
 - **No honest device was revoked in any run**, attackers present or not.
+- **Envelope lies are caught by everyone who hears them**: 5 of 5 for a forged signature,
+  an expired or not-yet-valid certificate, and a delayed, out-of-order or replayed
+  generation time, first reported within 1 s — every receiver checks these, so even the
+  attacker that lied for 13 s drew three corroborated events.
 - **Blatant kinematic lies are caught**: 4 of 5 for ConstPos, RandomPos, ConstSpeedOffset,
   RandomSpeed, StopAndGo, SlowDrift, Disruptive, PosHeadingInconsistent and EventualStop,
   detected within 2–5 s and decided 28–49 s later (median). The one escape is node 18,
