@@ -21,13 +21,21 @@
 //!    receiver. Inside the margin it transmits and receives as any node does, so the box
 //!    sees every frame and every joule of interference that can reach it — rule 3 of the
 //!    focus region — and the margin defaults to the radio's own reach for exactly that
-//!    reason. A dormant node keeps its identity, credentials and state, and wakes when its
-//!    vehicle comes within the margin.
+//!    reason. Inside the margin but outside the box a vehicle *transmits only*: it is not a
+//!    candidate receiver unless `scale.radio.receive_in_margin` is on, because its
+//!    receptions are not where the study is (rule 4 of the focus region already says the
+//!    outside is evaluated by the cheap rule) and they are most of a city's reception
+//!    work. A dormant node keeps its identity, credentials and state, and wakes when its
+//!    vehicle comes within the margin; a vehicle spawned dormant gets its node then.
 //!
 //! # What it costs in fidelity, stated
 //!
 //! * Outside the margin there is no radio at all: a study of channel load across the whole
 //!   city needs the margin set to cover it (and pays for it).
+//! * A vehicle in the margin hears nothing (unless `receive_in_margin`), so its channel
+//!   busy ratio — and the DCC state it would derive — reads an idle channel: it transmits
+//!   at the rate an idle channel allows, which can only *over*state the interference the
+//!   box sees.
 //! * A dormant node's GNSS belief and application state stand still until it wakes; the
 //!   first BSM after waking carries a fresh fix, as a radio switched on would.
 //! * Inside the box the radio's PHY is raised to the declared propagation tier when that
@@ -136,6 +144,11 @@ pub struct RadioGate {
     region: TierRegion,
     margin_m: f64,
     dormant: BTreeSet<NodeId>,
+    /// Queued vehicles inside the margin: they transmit, and receive only when
+    /// `scale.radio.receive_in_margin` says so.
+    margin_only: BTreeSet<NodeId>,
+    /// Whether a vehicle in the margin receives.
+    receive_in_margin: bool,
     /// Node-steps a dormant node did not take, over the run.
     pub dormant_node_steps: u64,
     /// The most nodes awake at once.
@@ -154,11 +167,14 @@ impl RadioGate {
     #[must_use]
     pub fn for_scenario(scenario: &Scenario, world: &World, reach_m: f64) -> Option<Self> {
         let region = region(scenario, world)?;
-        let margin_m = scenario.scale.as_ref()?.radio.margin_m.unwrap_or(reach_m);
+        let radio = scenario.scale.as_ref()?.radio;
+        let margin_m = radio.margin_m.unwrap_or(reach_m);
         Some(Self {
             region,
             margin_m,
             dormant: BTreeSet::new(),
+            margin_only: BTreeSet::new(),
+            receive_in_margin: radio.receive_in_margin,
             dormant_node_steps: 0,
             peak_awake: 0,
             peak_dormant: 0,
@@ -182,6 +198,7 @@ impl RadioGate {
     /// Recomputes the dormant set from every node's position and its vehicle's tier.
     pub fn update(&mut self, nodes: impl Iterator<Item = (NodeId, Vec3, Option<Tier>)>) {
         self.dormant.clear();
+        self.margin_only.clear();
         self.peak_deferred = self.peak_deferred.max(self.deferred);
         let mut awake = 0u64;
         for (node, pos, tier) in nodes {
@@ -189,6 +206,9 @@ impl RadioGate {
                 self.dormant.insert(node);
             } else {
                 awake += 1;
+                if tier == Some(Tier::Abstract) {
+                    self.margin_only.insert(node);
+                }
             }
         }
         let dormant = self.dormant.len() as u64;
@@ -201,6 +221,13 @@ impl RadioGate {
     #[must_use]
     pub fn is_dormant(&self, node: NodeId) -> bool {
         self.dormant.contains(&node)
+    }
+
+    /// Whether `node` is a candidate receiver this step: awake, and either microscopic or
+    /// in the margin with `receive_in_margin` on.
+    #[must_use]
+    pub fn receives(&self, node: NodeId) -> bool {
+        !self.dormant.contains(&node) && (self.receive_in_margin || !self.margin_only.contains(&node))
     }
 
     /// How many nodes are dormant this step.
@@ -223,6 +250,8 @@ mod tests {
             },
             margin_m: 50.0,
             dormant: BTreeSet::new(),
+            margin_only: BTreeSet::new(),
+            receive_in_margin: false,
             dormant_node_steps: 0,
             peak_awake: 0,
             peak_dormant: 0,
@@ -245,5 +274,10 @@ mod tests {
         assert!(!gate.is_dormant(NodeId::new(3)), "microscopic");
         assert!(!gate.is_dormant(NodeId::new(4)), "a single-tier provider");
         assert_eq!(gate.dormant_node_steps, 1);
+        // The margin transmits and does not receive; the box does both.
+        assert!(!gate.receives(NodeId::new(1)));
+        assert!(!gate.receives(NodeId::new(2)), "in the margin: transmit only");
+        assert!(gate.receives(NodeId::new(3)));
+        assert!(gate.receives(NodeId::new(4)));
     }
 }

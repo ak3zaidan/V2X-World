@@ -175,6 +175,10 @@ pub struct ScaleRadio {
     /// a vehicle in the queue network neither transmits nor receives. Absent, the radio's
     /// own reach (`radio.range`).
     pub margin_m: Option<f64>,
+    /// Whether a vehicle in the margin (queued, within `margin_m` of the region) is also
+    /// a receiver. Off, it only transmits: the region hears it, and its own receptions —
+    /// most of a city's reception work — are not evaluated.
+    pub receive_in_margin: bool,
 }
 
 impl Default for ScaleRadio {
@@ -182,6 +186,7 @@ impl Default for ScaleRadio {
         Self {
             follows: true,
             margin_m: None,
+            receive_in_margin: false,
         }
     }
 }

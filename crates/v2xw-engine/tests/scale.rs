@@ -39,6 +39,7 @@ fn tiered() -> Scenario {
         radio: ScaleRadio {
             follows: true,
             margin_m: Some(0.0),
+            receive_in_margin: false,
         },
     });
     s

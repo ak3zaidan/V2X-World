@@ -931,6 +931,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                inside it, abstract propagation outside.",
     },
     KeyStatus {
+        path: "scale.radio.receive_in_margin",
+        status: Status::Wired,
+        note: "On, a queued vehicle inside the margin also receives; off (the default), it \
+               only transmits, so the box hears it and its own receptions are skipped.",
+    },
+    KeyStatus {
         path: "scale.radio.margin_m",
         status: Status::Wired,
         note: "How far outside the box a queued vehicle's radio stays on; past it the \

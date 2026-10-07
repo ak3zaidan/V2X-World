@@ -77,6 +77,23 @@ impl NativeMobility {
         self.actors.values().map(|a| (a.id, a.lane, a.class)).collect()
     }
 
+    /// The driver this engine puts behind the wheel for `trip`: its car-following model's
+    /// profile for the class at the trip's desired speed, and the driver's traits drawn
+    /// from the trip's own streams — exactly what an insertion here would give it.
+    pub fn trip_driver(&self, ctx: &dyn MobCtx, trip: &TripRequest) -> (DriverProfile, DriverTraits) {
+        let driver = DriverProfile {
+            desired_speed_mps: trip.desired_speed_mps,
+            ..self.driver_for(trip.class)
+        };
+        (driver, self.traits_for(ctx, trip))
+    }
+
+    /// The spawn announcement of actor `id`, at `t`, if this engine drives it.
+    #[must_use]
+    pub fn spawn_record(&self, world: &World, id: ActorId, t: SimTime) -> Option<ActorSpawn> {
+        self.actors.contains_key(&id).then(|| self.actor_spawn(world, id, t))
+    }
+
     /// Places a demand trip as actor `id` by the engine's own insertion rules.
     pub fn admit_trip(&mut self, ctx: &dyn MobCtx, trip: &TripRequest, id: ActorId, t: SimTime) -> TripAdmission {
         let traits = self.traits_for(ctx, trip);

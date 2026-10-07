@@ -59,15 +59,15 @@ use v2xw_world::{ClassMask, LaneKind, World};
 
 use super::{
     MAX_DEPART_DELAY_S, MesoBoundary, MesoCore, MesoExit, MesoParams, MesoVehicle,
-    REFERENCE_VEHICLE_M, class_driver, vehicle_for_trip,
+    REFERENCE_VEHICLE_M, route_batch,
 };
 use crate::ctx::MobCtx;
-use crate::engine::{DriverTraits, Handoff, NativeMobility, TripAdmission};
+use crate::engine::{DriverTraits, Handoff, NativeMobility};
 use crate::error::Result;
 use crate::routing::dijkstra::{Dijkstra, DijkstraParams};
 use crate::traits::{Demand, Mobility};
 use crate::views::{
-    ActorSpawn, DespawnCause, MobilityCommand, MobilityUpdate, TripRequest,
+    ActorSpawn, DespawnCause, DriverProfile, MobilityCommand, MobilityUpdate, TripRequest,
 };
 
 /// The model id.
@@ -162,12 +162,15 @@ pub struct TieredMobility {
     meso: Option<MesoCore>,
     /// Per lane (dense index): whether the microscopic tier owns it.
     micro_lane: Vec<bool>,
-    /// The mesoscopic lanes a microscopic lane feeds directly, in id order.
-    exits: Vec<LaneId>,
+    /// Every way out of the region: the lane a vehicle is held short of (the first lane
+    /// past a microscopic one — a junction connector, or the road itself) and the
+    /// mesoscopic road whose first segment decides, in order.
+    exits: Vec<(LaneId, LaneId)>,
     router: Dijkstra,
     demand: Option<Box<dyn Demand>>,
-    /// Trips whose origin is microscopic and had no room, with the instant they first asked.
-    micro_waiting: Vec<(TripRequest, SimTime, ActorId)>,
+    /// Trips whose origin is microscopic and had no room, routed, with their front
+    /// position and the instant they first asked.
+    micro_waiting: Vec<(MesoVehicle, f64, SimTime)>,
     /// Trips whose origin is mesoscopic and had no room.
     meso_waiting: Vec<(MesoVehicle, f64, SimTime)>,
     published: BTreeMap<ActorId, Kinematics>,
@@ -267,7 +270,8 @@ impl TieredMobility {
         Some((k, 0.0))
     }
 
-    /// Holds every exit lane whose first segment has no room for a reference vehicle.
+    /// Holds every way out whose queued road's first segment has no room for a reference
+    /// vehicle.
     fn update_holds(&mut self, world: &World) {
         let Some(meso) = self.meso.as_ref() else {
             return;
@@ -275,11 +279,11 @@ impl TieredMobility {
         let holds: BTreeSet<LaneId> = self
             .exits
             .iter()
-            .copied()
-            .filter(|lane| {
-                meso.segment_at(world, *lane, 0.0)
+            .filter(|(_, road)| {
+                meso.segment_at(world, *road, 0.0)
                     .is_some_and(|seg| !meso.can_enter(seg, REFERENCE_VEHICLE_M))
             })
+            .map(|(hold, _)| *hold)
             .collect();
         self.micro.set_holds(holds);
     }
@@ -351,10 +355,12 @@ impl Mobility for TieredMobility {
                 continue;
             }
             for c in world.successors(lane.id) {
-                for next in [c.via, Some(c.to_lane)].into_iter().flatten() {
-                    if !self.micro_lane[next.as_usize()] && world.lane(next).kind != LaneKind::Internal {
-                        exits.insert(next);
-                    }
+                // Held short of the junction when the road beyond it is queued: a vehicle
+                // waits at the stop line, not inside the junction.
+                if !self.micro_lane[c.to_lane.as_usize()]
+                    && world.lane(c.to_lane).kind != LaneKind::Internal
+                {
+                    exits.insert((c.via.unwrap_or(c.to_lane), c.to_lane));
                 }
             }
         }
@@ -397,25 +403,42 @@ impl Mobility for TieredMobility {
         let max_wait = Duration::from_secs_f64(MAX_DEPART_DELAY_S).as_nanos();
         let mut micro_queue = core::mem::take(&mut self.micro_waiting);
         let mut meso_queue = core::mem::take(&mut self.meso_waiting);
+        // Every trip gets its id in stream order and the microscopic engine's own driver
+        // (so a vehicle drives the same in both tiers), and is routed once, on the pool;
+        // a trip that waits for room keeps its route rather than searching again.
+        let mut to_route: Vec<(TripRequest, ActorId, DriverProfile, DriverTraits)> = Vec::new();
         for trip in trips {
             let id = self.micro.reserve_actor_id();
-            if self.is_micro_lane(trip.origin) {
-                micro_queue.push((trip, t0, id));
-            } else {
-                let traits = DriverTraits::draw(&*ctx, trip.seq, trip.class);
-                match vehicle_for_trip(&self.router, world, &trip, id, class_driver(trip.class), traits) {
-                    Some(v) => meso_queue.push((v, trip.origin_s_m.max(trip.class.spec().length_m), t0)),
-                    None => self.counters.dropped_trips += 1,
-                }
+            let (driver, traits) = self.micro.trip_driver(&*ctx, &trip);
+            to_route.push((trip, id, driver, traits));
+        }
+        for (trip, routed) in route_batch(&self.router, world, to_route) {
+            let s_m = trip.origin_s_m.max(trip.class.spec().length_m);
+            match routed {
+                Some(v) if self.is_micro_lane(trip.origin) => micro_queue.push((v, s_m, t0)),
+                Some(v) => meso_queue.push((v, s_m, t0)),
+                None => self.counters.dropped_trips += 1,
             }
         }
-        for (trip, since, id) in micro_queue {
-            match self.micro.admit_trip(&*ctx, &trip, id, t0) {
-                TripAdmission::Placed(spawn) => spawned.push(spawn),
-                TripAdmission::Occupied if t0.saturating_sub(since) < max_wait => {
-                    self.micro_waiting.push((trip, since, id));
+        for (v, s_m, since) in micro_queue {
+            let h = Handoff {
+                id: v.id,
+                seq: v.seq,
+                class: v.class,
+                driver: v.driver,
+                traits: v.traits,
+                route: v.route.clone(),
+                route_index: 0,
+                s_m,
+                speed_mps: 0.0,
+                spawned: t0,
+            };
+            match self.micro.admit(world, h, t0) {
+                Ok(()) => spawned.extend(self.micro.spawn_record(world, v.id, t0)),
+                Err(_) if t0.saturating_sub(since) < max_wait => {
+                    self.micro_waiting.push((v, s_m, since));
                 }
-                _ => self.counters.dropped_trips += 1,
+                Err(_) => self.counters.dropped_trips += 1,
             }
         }
         for (mut v, s_m, since) in meso_queue {
@@ -502,8 +525,12 @@ impl Mobility for TieredMobility {
                 }
                 Err(_) => {
                     // The lane is not in the queue network (a class-restricted lane): the
-                    // vehicle stays microscopic.
-                    let _ = self.micro.admit(world, h, t1);
+                    // vehicle stays microscopic. Should the engine have no room to take it
+                    // back, it leaves as a blocked route rather than vanishing unannounced.
+                    if self.micro.admit(world, h, t1).is_err() {
+                        despawned.push((id, DespawnCause::RouteBlocked));
+                        released.insert(id);
+                    }
                 }
             }
         }

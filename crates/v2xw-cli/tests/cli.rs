@@ -61,6 +61,7 @@ fn options(scenario: PathBuf, out: PathBuf) -> RunOptions {
         record: true,
         attach_world: false,
         verify: true,
+        stream_digest: false,
         duration_s: Some(3.0),
         rate_veh_per_h: Some(3600.0),
         json: false,

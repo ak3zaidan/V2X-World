@@ -20,7 +20,18 @@ where
     R: Send,
     F: Fn(&T) -> R + Sync + Send,
 {
-    if items.len() < PAR_MIN_ITEMS || rayon::current_num_threads() < 2 {
+    map_ordered_from(items, PAR_MIN_ITEMS, f)
+}
+
+/// [`map_ordered`] with the threshold given: for items that each cost much more than a
+/// decision (a route search), a pair is already worth the pool.
+pub fn map_ordered_from<T, R, F>(items: &[T], min_items: usize, f: F) -> Vec<R>
+where
+    T: Sync,
+    R: Send,
+    F: Fn(&T) -> R + Sync + Send,
+{
+    if items.len() < min_items.max(2) || rayon::current_num_threads() < 2 {
         items.iter().map(f).collect()
     } else {
         items.par_iter().map(f).collect()

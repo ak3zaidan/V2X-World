@@ -2466,6 +2466,12 @@ impl Engine {
         self.radio_gate.as_ref().is_some_and(|g| g.is_dormant(node))
     }
 
+    /// Whether `node` is a candidate receiver this step (`crate::scale`): always, outside a
+    /// city-scale run.
+    fn receives(&self, node: NodeId) -> bool {
+        self.radio_gate.as_ref().is_none_or(|g| g.receives(node))
+    }
+
     /// Drops the radio state kept per directed link — the cached shadowing RNG streams and
     /// the propagation models' shadowing processes and link-state chains — for every link
     /// with an end that despawned at least [`LINK_STATE_GRACE`] ago.
@@ -2723,6 +2729,14 @@ impl Engine {
             let Some(rec) = self.actors.get(actor) else {
                 continue;
             };
+            // A queued vehicle beyond a city-scale run's radio margin (`crate::scale`) is in
+            // no radio query, no link's path and no sensor's view: the snapshot leaves it
+            // out rather than index a city of vehicles nothing will look up.
+            if let Some(gate) = self.radio_gate.as_ref()
+                && gate.would_be_dormant(k.pos, self.mobility.tier_of(*actor))
+            {
+                continue;
+            }
             let lane = k.lane.unwrap_or(v2xw_core::geom::LanePos::new(
                 v2xw_core::ids::LaneId::new(0),
                 0.0,
@@ -2768,9 +2782,16 @@ impl Engine {
     /// filed at the time it is actually about, rather than at a time the engine asserted
     /// for it.
     fn publish_state_at(&mut self, recorder: &mut dyn RunRecorder) {
+        // A vehicle in a city-scale run's queue network (`crate::scale`) has a queue
+        // placement, not a trajectory: its ground truth is recorded once a simulated
+        // second rather than every step. Every other actor's is recorded every step.
+        let per_second = (1_000_000_000 / self.scenario.time.mobility_step().as_nanos().max(1)).max(1);
+        let whole_second = self.report.mobility_steps % per_second == 0;
+        let mobility = &self.mobility;
         let states: Vec<(ActorId, Kinematics, &'static str, Option<NodeId>, u8, u8)> = self
             .actors
             .iter()
+            .filter(|(actor, _)| whole_second || mobility.tier_of(**actor) != Some(Tier::Abstract))
             .map(|(actor, rec)| {
                 let lamps = self.lamps.get(actor).copied().unwrap_or(0);
                 (*actor, rec.last, rec.class.as_str(), rec.node, rec.activity, lamps)
@@ -5113,7 +5134,7 @@ impl Engine {
                 continue;
             };
             let Some(node) = rec.node else { continue };
-            if node == state.tx || self.is_dormant(node) {
+            if node == state.tx || !self.receives(node) {
                 continue;
             }
             let pos = rec.last.extrapolate(now).pos;
@@ -5358,7 +5379,7 @@ impl Engine {
             };
             match rec.node {
                 // A dormant radio (`crate::scale`) is off, and could not have received.
-                Some(node) if node != tx && !self.is_dormant(node) => {
+                Some(node) if node != tx && self.receives(node) => {
                     count(tx_pos.distance(rec.last.extrapolate(now).pos));
                 }
                 _ => {}

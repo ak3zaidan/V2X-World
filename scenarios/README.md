@@ -32,7 +32,7 @@ document rather than like a config: each states at the top what it measures, wha
 | [`manhattan-5min.yaml`](manhattan-5min.yaml) | the default: five minutes of Midtown with a fleet, the SCMS in the loop through eight roadside units and every car's modem, and misbehaviour detection reporting to the corroborating authority; open the Backend view |
 | [`ccms-lifecycle.yaml`](ccms-lifecycle.yaml) | the European counterpart: CAMs over GeoNetworking, the ECTL and CA-CRL from the Distribution Centre, butterfly tickets the AA cannot link to the enrolment, TS 103 759 reports and passive revocation at the EA |
 | [`midtown-street-life.yaml`](midtown-street-life.yaml) | Midtown with its road users as they behave: pedestrians by age group who cross on DON'T WALK into a gap and jaywalk mid-block (more beside stopped traffic), groups, cyclists on conventional and e-bikes, motorcycles and delivery mopeds among the cars, vans, trucks and buses; the auditor counts conflicts and near misses, the `ped_*` metrics measure them |
-| [`scale/`](scale/) | the wall-clock ladder, 2 to 10,000 vehicles, with what the bulk spawn costs in realism stated in `scale/base.yaml` |
+| [`scale/`](scale/) | the wall-clock ladder, 2 to 10,000 vehicles, with what the bulk spawn costs in realism stated in `scale/base.yaml`; `scale/city.yaml` is the city-scale rung: a microscopic box in a mesoscopic Midtown with the radio following it (the `scale` section) |
 
 ## Running one
 

@@ -34,3 +34,11 @@ scale:
       min_lon_deg: -73.9826
       max_lat_deg: 40.7557
       max_lon_deg: -73.9754
+  radio:
+    # 300 m: in Midtown's street canyons a link that long is non-line-of-sight, and the
+    # TR 37.885 urban NLOS law puts a 20 dBm BSM 300 m away at about -105 dBm, below the
+    # 10 MHz noise floor plus the receiver's noise figure (about -98 dBm). Vehicles beyond
+    # it still drive (as queues) but their radios are off; the radio's own line-of-sight
+    # reach, the default, would keep most of Midtown awake. Inside the margin a queued
+    # vehicle transmits and does not receive (`receive_in_margin: false`, the default).
+    margin_m: 300.0

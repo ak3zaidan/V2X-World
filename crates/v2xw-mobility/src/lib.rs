@@ -25,6 +25,8 @@
 //! | GNSS error | [`gnss`] | 04-models.md §2.10, §3.8 |
 //! | Clock drift | [`clock`] | 04-models.md §2.10, §3.8 |
 //! | The abstract tier | [`kinematic`] | 04-models.md §2.1 |
+//! | The mesoscopic tier (queues, Eissfeldt 2003 / SUMO MESO) and the meso-micro coupling | [`meso`], [`meso::tiered`] | city scale |
+//! | Ordered parallel maps (the decide pass on the thread pool) | [`par`] | ADR 0004 decision 5 |
 //! | The engine that ties them together | [`engine`] | 03-interfaces.md §3 |
 //! | The fundamental-diagram validation | [`fd`] | 04-models.md §2.9 |
 //! | Synthetic worlds for validation runs | [`worlds`] | 04-models.md §2.9 |

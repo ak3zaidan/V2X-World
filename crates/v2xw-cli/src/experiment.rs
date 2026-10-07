@@ -175,6 +175,7 @@ impl RunExecutor for CliExecutor {
             // A city world attached to every run of a 600-run sweep is tens of gigabytes.
             attach_world: false,
             verify: self.verify,
+            stream_digest: false,
             // The sweep sets its parameters in the scenario document, not on the command
             // line, so that every run's hash is the hash of the document it executed.
             duration_s: None,

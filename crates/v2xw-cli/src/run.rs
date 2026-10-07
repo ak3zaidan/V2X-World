@@ -62,6 +62,8 @@ pub struct RunOptions {
     pub attach_world: bool,
     /// Read the recording back and verify it before reporting.
     pub verify: bool,
+    /// Without a recording: hash every record as it streams past (`stream_digest`).
+    pub stream_digest: bool,
     /// Override `time.duration_s`. Changes the scenario hash, as it should.
     pub duration_s: Option<f64>,
     /// Override `actors.vehicles.demand.rate_veh_per_h`. Changes the scenario hash.
@@ -97,6 +99,10 @@ pub struct RunOutcome {
     pub recording_file_sha256: Option<String>,
     /// SHA-256 over the recording's data section — the number two runs must agree on.
     pub content_digest: Option<String>,
+    /// SHA-256 over every record as it was produced (`--digest` without a recording):
+    /// `v2xw_engine::DigestRecorder`'s, the same stream digest the engine's tests use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_digest: Option<String>,
     /// What the reader's verification found, when `--verify` was on.
     pub verified: Option<VerifiedSummary>,
     /// Container counters the writer reported.
@@ -221,6 +227,7 @@ pub fn run(opts: &RunOptions) -> Result<RunOutcome> {
     };
 
     let recording_path = out_dir.join("recording.mcap");
+    let mut stream_digest: Option<String> = None;
     let (report, channels, metric_samples, container) = if opts.record {
         let writer = RecordingWriter::create(
             &recording_path,
@@ -261,6 +268,15 @@ pub fn run(opts: &RunOptions) -> Result<RunOutcome> {
                 largest_chunk_bytes: summary.largest_chunk_bytes,
             }),
         )
+    } else if opts.stream_digest {
+        let mut tally = Tally::new(v2xw_engine::DigestRecorder::new());
+        let run = Stopwatch::start();
+        let report = engine.run(&mut tally)?;
+        let run_s = run.elapsed_s();
+        let channels = tally.by_channel().clone();
+        let samples = tally.metric_samples().to_vec();
+        stream_digest = Some(tally.into_inner().digest_hex());
+        ((report, run_s), channels, samples, None)
     } else {
         let mut tally = Tally::new(NullRecorder::new());
         let run = Stopwatch::start();
@@ -285,6 +301,7 @@ pub fn run(opts: &RunOptions) -> Result<RunOutcome> {
         recording_bytes: None,
         recording_file_sha256: None,
         content_digest: None,
+        stream_digest,
         verified: None,
         container,
         timing: Timing::default(),

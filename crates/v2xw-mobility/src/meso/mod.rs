@@ -587,8 +587,13 @@ impl MesoCore {
                                 continue;
                             }
                             let lane = v.route.lanes[k];
-                            if !boundary.is_meso(lane) {
-                                To::Boundary(k)
+                            // The first lane past this one that the other tier owns: the
+                            // junction's connector when the junction is the other tier's,
+                            // so the vehicle crosses it there rather than appearing past it.
+                            let handed = (v.route_index + 1..=k)
+                                .find(|i| !boundary.is_meso(v.route.lanes[*i]));
+                            if let Some(i) = handed {
+                                To::Boundary(i)
                             } else {
                                 match self.segment_at(world, lane, 0.0) {
                                     Some(next) => To::Segment(next, Some((k, len, vc))),
@@ -837,6 +842,21 @@ pub(crate) fn vehicle_for_trip(
     })
 }
 
+/// Routes a step's trips on the thread pool and returns them in trip order: a route is
+/// a pure function of the world and the trip, so a city's start-up of thousands of
+/// Dijkstra searches uses every core and the result does not depend on how many there
+/// are (`crate::par`).
+pub(crate) fn route_batch(
+    router: &Dijkstra,
+    world: &World,
+    batch: Vec<(TripRequest, ActorId, DriverProfile, DriverTraits)>,
+) -> Vec<(TripRequest, Option<MesoVehicle>)> {
+    let routed = crate::par::map_ordered_from(&batch, 2, |(trip, id, driver, traits)| {
+        vehicle_for_trip(router, world, trip, *id, *driver, *traits)
+    });
+    batch.into_iter().map(|(t, ..)| t).zip(routed).collect()
+}
+
 /// The driver profile a queue-network vehicle of `class` carries: the class table's own
 /// values, which is all a queue model reads (its desired speed and standstill gap).
 pub(crate) fn class_driver(class: VehicleClass) -> DriverProfile {
@@ -900,11 +920,16 @@ impl Mobility for MesoMobility {
         }
         let world = ctx.world();
         let mut queue = core::mem::take(&mut self.waiting);
+        let mut to_route = Vec::with_capacity(trips.len());
         for trip in trips {
             let id = ActorId::new(self.next_actor);
             self.next_actor += 1;
             let traits = DriverTraits::draw(&*ctx, trip.seq, trip.class);
-            match vehicle_for_trip(&self.router, world, &trip, id, class_driver(trip.class), traits) {
+            let driver = class_driver(trip.class);
+            to_route.push((trip, id, driver, traits));
+        }
+        for (trip, routed) in route_batch(&self.router, world, to_route) {
+            match routed {
                 Some(v) => queue.push((v, trip.origin_s_m.max(trip.class.spec().length_m), t0)),
                 None => self.dropped_trips += 1,
             }
