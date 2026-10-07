@@ -327,6 +327,12 @@ pub fn resume(checkpoint: &Path, quiet: bool, json: bool) -> Result<RunOutcome> 
         // The resolved document did not hash alike (a default whose serialised form moved):
         // the scenario file and its overrides, as the run was started.
         let mut scenario = Scenario::load_unvalidated(&ck.scenario_path)?;
+        // In `run`'s order: the city first, then the overrides it would otherwise restate.
+        if let Some(city) = &ck.city {
+            scenario = scenario
+                .with_city(city)
+                .map_err(v2xw_engine::EngineError::Scenario)?;
+        }
         if let Some(d) = ck.duration_override_s {
             scenario.time.duration_s = d;
         }
@@ -370,9 +376,7 @@ pub fn resume(checkpoint: &Path, quiet: bool, json: bool) -> Result<RunOutcome> 
         verify: ck.verify,
         duration_s: ck.duration_override_s,
         rate_veh_per_h: ck.rate_override_veh_per_h,
-        // KNOWN ISSUE (merge of cities and long-runs): the checkpoint does not record a
-        // `--city` choice yet, so resuming such a run uses the scenario file's own world.
-        city: None,
+        city: ck.city.clone(),
         json,
         long: LongRun {
             progress_every_s: Some(ck.progress_every_s.unwrap_or(0.0)),
@@ -619,6 +623,7 @@ fn execute(
         scenario_path: opts.scenario.display().to_string(),
         duration_override_s: opts.duration_s,
         rate_override_veh_per_h: opts.rate_veh_per_h,
+        city: opts.city.clone(),
         cwd: cwd.clone(),
         keyframe_ms: opts.keyframe_ms,
         node_only: opts.node_only,
