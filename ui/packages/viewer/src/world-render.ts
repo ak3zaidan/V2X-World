@@ -56,6 +56,7 @@ import { MeshBuilder, addBox, addCylinder, addDisc, addExtrudedRing, addPolygon,
 import type { RingShading } from "./geometry.js";
 import type { ViewerTheme } from "./theme.js";
 import type { LodLevel } from "./types.js";
+import { groundLevelOf } from "./ground.js";
 
 /** §4.3 lane types. */
 const LANE_DRIVE = 0;
@@ -394,7 +395,13 @@ export class WorldRenderer {
     this.#siteMaterial = new MeshLambertMaterial({ vertexColors: true, name: "sites" });
 
     const groundGeom = new PlaneGeometry(1, 1);
-    this.ground = new Mesh(groundGeom, new MeshLambertMaterial({ name: "ground", side: DoubleSide }));
+    // Pushed behind the landuse and road layers by a constant number of depth steps (units, not
+    // slope: a slope factor at grazing angles would push it behind a tunnel 6 m down). The plane
+    // is now as large as the far plane, so far out it is the layer most likely to fight.
+    this.ground = new Mesh(groundGeom, new MeshLambertMaterial({
+      name: "ground", side: DoubleSide, polygonOffset: true, polygonOffsetFactor: 0,
+      polygonOffsetUnits: (RANK_CROSSING + 2) * LAYER_BIAS_STEPS,
+    }));
     this.ground.name = "world/ground";
     this.ground.receiveShadow = this.#options.shadows;
     this.ground.matrixAutoUpdate = false;
@@ -641,11 +648,33 @@ export class WorldRenderer {
   #resizeGround(radiusM: number): void {
     // ×6 rather than ×4: at a 1.25 m eye height the geometric horizon is about 4 km out, and at ×4
     // a 2 km world's ground plane ended at almost exactly that distance, so the edge of the world
-    // was on the skyline. It is one quad either way.
+    // was on the skyline. It is one quad either way. {@link followCamera} grows it to the far
+    // plane and keeps it centred under the camera, so every ray below the horizon that the far
+    // plane lets through lands on it.
     const size = Math.max(200, radiusM * 6);
+    if (size === this.#groundSize) return;
+    this.#groundSize = size;
     this.ground.geometry.dispose();
     this.ground.geometry = new PlaneGeometry(size, size);
     this.ground.updateMatrix();
+  }
+
+  /** Edge of the ground quad, metres. */
+  #groundSize = 0;
+  /** The world's ground level, metres; see `ground.ts`. */
+  #groundZ = 0;
+
+  /**
+   * The level the streets and buildings stand on, metres — not `bbox.minZM`, which a tunnel puts
+   * 6 m or more below it (`ground.ts`).
+   */
+  get groundZ(): number {
+    return this.#groundZ;
+  }
+
+  /** The ground quad's centre, height and half edge, metres: what a coverage check needs. */
+  get groundExtent(): { readonly cx: number; readonly cy: number; readonly z: number; readonly half: number } {
+    return { cx: this.ground.position.x, cy: this.ground.position.y, z: this.ground.position.z, half: this.#groundSize / 2 };
   }
 
   /**
@@ -667,7 +696,9 @@ export class WorldRenderer {
     const spanY = Math.max(1, bbox.maxYM - bbox.minYM);
     const radius = Math.hypot(spanX, spanY) / 2;
 
-    this.ground.position.set(cx, cy, bbox.minZM - 0.05);
+    const grade = groundLevelOf(world);
+    this.#groundZ = grade;
+    this.ground.position.set(cx, cy, grade - 0.05);
     this.ground.updateMatrix();
     this.#resizeGround(radius);
     this.sky.scale.setScalar(Math.max(4000, radius * 8));
@@ -716,7 +747,7 @@ export class WorldRenderer {
       const hex = landuseColor(th, lu.classIdx);
       const [r, g, b] = colorTriple(hex);
       const t = tileIndex(ring.x[lu.ringOff], ring.y[lu.ringOff]);
-      addPolygon(surfaceAt(t, RANK_LANDUSE), ring.x, ring.y, lu.ringOff, lu.ringCount, bbox.minZM + Z_LANDUSE, scratch, r, g, b);
+      addPolygon(surfaceAt(t, RANK_LANDUSE), ring.x, ring.y, lu.ringOff, lu.ringCount, grade + Z_LANDUSE, scratch, r, g, b);
     }
 
     const lanes = world.lanes;
@@ -760,11 +791,16 @@ export class WorldRenderer {
       });
     }
 
+    // A junction's disc and crossings at the junction's own height: a bridge's junction is above
+    // grade and a tunnel's below it. At `bbox.minZM` every disc lay under its junction.
+    const junctionZ = new Map<number, number>();
     for (let i = 0; i < world.junctions.count; i++) {
       const j = world.junctions.at(i);
+      const jz = Number.isFinite(j.zM) ? j.zM : grade;
+      junctionZ.set(j.junctionId, jz);
       const r = Math.max(4, Math.min(30, 2.2 + j.laneCount * 1.1));
       const [cr, cg, cb] = colorTriple(th.junction);
-      addDisc(surfaceAt(tileIndex(j.xM, j.yM), RANK_JUNCTION), j.xM, j.yM, bbox.minZM + Z_JUNCTION, r, 16, cr, cg, cb);
+      addDisc(surfaceAt(tileIndex(j.xM, j.yM), RANK_JUNCTION), j.xM, j.yM, jz + Z_JUNCTION, r, 16, cr, cg, cb);
     }
 
     for (let i = 0; i < world.crossings.count; i++) {
@@ -775,7 +811,7 @@ export class WorldRenderer {
       if (len < 0.2) continue;
       // High-visibility ladder markings: NYC DOT's standard (`markings.ts`).
       const col = [...colorTriple(th.crossing)] as [number, number, number];
-      addCrosswalk(markOf(tileIndex(c.x1M, c.y1M)), c.x1M, c.y1M, c.x2M, c.y2M, c.widthM, bbox.minZM + Z_CROSSING, col);
+      addCrosswalk(markOf(tileIndex(c.x1M, c.y1M)), c.x1M, c.y1M, c.x2M, c.y2M, c.widthM, (junctionZ.get(c.junctionId) ?? grade) + Z_CROSSING, col);
     }
 
     // ---- Buildings. ----
@@ -1336,7 +1372,7 @@ export class WorldRenderer {
     this.#siteCount = n;
     if (extra.length === 0) return 0;
 
-    const ground = this.#world?.bbox.minZM ?? 0;
+    const ground = this.#groundZ;
     const builder = new MeshBuilder({ color: true, vertexCapacity: 256, indexCapacity: 512 });
     const [r, g, b] = colorTriple(this.#theme.rsu);
     extra.forEach((u, k) => {
@@ -1473,6 +1509,18 @@ export class WorldRenderer {
     const e = camera.matrixWorld.elements;
     this.sky.position.set(e[12], e[13], e[14]);
     this.sky.updateMatrix();
+    // And the ground under it, as far as the far plane reaches: a quad centred on the world ended
+    // at three world radii, so a camera near the world's edge, or high in the free camera, saw
+    // the sky's underside through the gap between the quad's edge and the horizon.
+    const far = (camera as { far?: number }).far;
+    // Half-edge 2.5 far planes: a corner ray of a 68°, 2.5:1 view reaches 2.07 far planes out
+    // horizontally before its depth passes the far plane.
+    if (far !== undefined && Number.isFinite(far)) this.#resizeGround((Math.max(far, 100) * 5) / 6);
+    if (this.ground.position.x !== e[12] || this.ground.position.y !== e[13]) {
+      this.ground.position.x = e[12];
+      this.ground.position.y = e[13];
+      this.ground.updateMatrix();
+    }
   }
 
   #clearWorld(): void {

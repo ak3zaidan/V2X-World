@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { CAMERA_MODES, type CameraMode } from "@vwp/viewer";
 
+import { FreeCameraHint } from "./FreeCameraHint.js";
 import { ObuHud } from "./ObuHud.js";
 import { OverlayMenu } from "./OverlayMenu.js";
 import { StateLegend } from "./StateLegend.js";
@@ -293,6 +294,7 @@ export function Viewport(): React.JSX.Element {
 
       {/* With nothing selected the HUD only said "No radio selected" over the picture; the
           inspector's empty state says it where it covers nothing. */}
+      {cameraMode === "free" ? <FreeCameraHint canvas={canvasRef.current} /> : null}
       {hudDocked || (selectedActor === null && selectedNode === null) ? null : <ObuHud />}
     </div>
   );

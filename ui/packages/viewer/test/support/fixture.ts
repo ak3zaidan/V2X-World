@@ -52,6 +52,12 @@ export interface GridWorldOptions {
   readonly controllerSignals?: boolean;
   /** Make each junction's fourth head a pedestrian head (§4.5 `kind` 1). Default false. */
   readonly pedestrianHeads?: boolean;
+  /**
+   * Add a two-lane tunnel this far below ground under the second street, and put the box's floor
+   * under it — what the OSM importer does for a `layer=-1` way (`TUNNEL_LEVEL_DEPTH_M`, 6 m).
+   * Default 0: no tunnel, and the box's floor at −1 m as before.
+   */
+  readonly tunnelDepthM?: number;
 }
 
 /** A decoded synthetic world plus the axis positions its streets sit on. */
@@ -76,6 +82,7 @@ export function makeGridWorld(options: GridWorldOptions = {}): GridWorld {
     buildingsPerBlock: options.buildingsPerBlock ?? 1,
     controllerSignals: options.controllerSignals ?? false,
     pedestrianHeads: options.pedestrianHeads ?? false,
+    tunnelDepthM: options.tunnelDepthM ?? 0,
   };
   const n = o.blocks;
   const pitch = o.blockM;
@@ -212,12 +219,28 @@ export function makeGridWorld(options: GridWorldOptions = {}): GridWorld {
     ],
   });
 
+  if (o.tunnelDepthM > 0) {
+    // Under the street at y = axes[1], between the second and the last-but-one avenue.
+    const y = axes[1];
+    for (const dir of [1, -1]) {
+      const pts: [number, number, number][] = [];
+      for (let s = 0; s <= 8; s++) {
+        const x = axes[1] + ((axes[n - 2] - axes[1]) * (dir > 0 ? s : 8 - s)) / 8;
+        pts.push([x, y + dir * 1.65, -o.tunnelDepthM]);
+      }
+      lanes.push({
+        laneId: laneId++, edgeId: edgeId++, junctionId: 0xffffffff, strName: 1, widthM: laneWidth,
+        speedLimitMps: 13.89, allowedClasses: 0b0100_1111, laneType: 0, indexInEdge: 0, points: pts,
+      });
+    }
+  }
+
   const margin = pitch;
   const init: WorldInit = {
     originLatDeg: 40.7527, originLonDeg: -73.979, originAltM: 10,
     bboxMinXM: -half - margin, bboxMinYM: -half - margin,
     bboxMaxXM: half + margin, bboxMaxYM: half + margin,
-    bboxMinZM: -1, bboxMaxZM: 70,
+    bboxMinZM: o.tunnelDepthM > 0 ? -o.tunnelDepthM - 0.5 : -1, bboxMaxZM: 70,
     lanes, buildings, junctions, signals, sites, crossings, landuse, strings,
     provenanceJson: JSON.stringify({ source: "synthetic", transformations: ["grid"] }),
   };

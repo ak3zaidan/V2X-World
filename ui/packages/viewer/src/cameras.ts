@@ -20,6 +20,7 @@ import { MathUtils, Vector3 } from "three";
 import type { PerspectiveCamera } from "three";
 import type { CameraMode } from "@vwp/protocol";
 import type { WorldRenderer } from "./world-render.js";
+import { SURFACE_TOP_M } from "./ground.js";
 
 export type { CameraMode };
 
@@ -118,6 +119,35 @@ const CHASE_YAW_OMEGA = 3.6;
 const CHASE_REFERENCE_M = 9;
 /** Where in a street flight's progress `u` its final descent onto the subject begins. */
 const FLY_DESCENT_AT = 0.6;
+
+/**
+ * Free-camera travel speed per metre of height above the ground, 1/s: the ground crosses the view
+ * at about the same angular rate whatever the height, so one key is right for a street and for a
+ * borough (the scaling every fly-through camera since Google Earth uses). Bounded below at a
+ * brisk 8 m/s and above at 600 m/s.
+ */
+const FREE_SPEED_PER_M = 1.2;
+const FREE_MIN_SPEED_MPS = 8;
+const FREE_MAX_SPEED_MPS = 600;
+/** Shift's boost, and the time constant the velocity eases to the keys with, seconds. */
+const FREE_BOOST = 4;
+const FREE_EASE_S = 0.12;
+/** How far from a wall the free camera stops, metres: past the near plane's ~1 m corners. */
+const FREE_WALL_MARGIN_M = 1.2;
+
+/** Keyboard codes the camera listens to, by what they do. */
+const KEY_FORWARD = new Set(["KeyW", "ArrowUp"]);
+const KEY_BACK = new Set(["KeyS", "ArrowDown"]);
+const KEY_LEFT = new Set(["KeyA", "ArrowLeft"]);
+const KEY_RIGHT = new Set(["KeyD", "ArrowRight"]);
+const KEY_UP = new Set(["KeyE", "Space"]);
+const KEY_DOWN = new Set(["KeyQ", "KeyC"]);
+const KEY_BOOST = new Set(["ShiftLeft", "ShiftRight"]);
+const CAMERA_KEYS = new Set([...KEY_FORWARD, ...KEY_BACK, ...KEY_LEFT, ...KEY_RIGHT, ...KEY_UP, ...KEY_DOWN, ...KEY_BOOST]);
+
+/** The free camera's controls, as a line a page can show while it is active. */
+export const FREE_CAMERA_HINT =
+  "W A S D or arrows move · E / Space up · Q / C down · drag to look · scroll sets speed · Shift faster · R resets the view";
 
 /** Eight directions round the camera, for {@link CameraController} wall proximity. */
 const NEAR_RING: readonly (readonly [number, number])[] = [
@@ -272,6 +302,12 @@ export class CameraController {
   #lookVel = new Vector3();
   #freeYaw = 0;
   #freePitch = -0.3;
+  /** Camera keys held down (`KeyboardEvent.code`). */
+  #keys = new Set<string>();
+  /** The keyboard's eased world-frame velocity, m/s. */
+  #keyVel = new Vector3();
+  /** The scroll wheel's multiplier on the free camera's speed. */
+  #freeSpeedMul = 1;
 
   readonly positionLambda: number;
   readonly lookLambda: number;
@@ -302,6 +338,7 @@ export class CameraController {
   #detach: (() => void) | null = null;
   #scratch = new Vector3();
   #scratchB = new Vector3();
+  #scratchC = new Vector3();
 
   constructor(options: CameraControllerOptions) {
     this.camera = options.camera;
@@ -525,6 +562,7 @@ export class CameraController {
       }
       this.#desiredPosition.copy(this.camera.position);
       this.#freeVelocity.set(0, 0, 0);
+      this.#keyVel.set(0, 0, 0);
     }
     this.#computeDesired();
     if (instant) this.snap();
@@ -657,6 +695,88 @@ export class CameraController {
     this.#freeVelocity.set(forward, right, up);
   }
 
+  /**
+   * Press or release a camera key (`KeyboardEvent.code`). Returns whether the key is one the
+   * camera uses in the current mode, so the caller can stop the page scrolling on an arrow.
+   * {@link attachInput} calls this; it is public so a page or a test can drive the keys itself.
+   */
+  setKey(code: string, down: boolean): boolean {
+    if (!CAMERA_KEYS.has(code)) return false;
+    if (down) this.#keys.add(code);
+    else this.#keys.delete(code);
+    return this.#mode === "free" || this.#mode === "map";
+  }
+
+  /** Release every held key (the page lost focus, so the key-ups will never arrive). */
+  releaseKeys(): void {
+    this.#keys.clear();
+  }
+
+  /** The scroll wheel's multiplier on the free camera's speed, `[0.1, 20]`. */
+  get freeSpeedMultiplier(): number {
+    return this.#freeSpeedMul;
+  }
+
+  set freeSpeedMultiplier(v: number) {
+    if (Number.isFinite(v)) this.#freeSpeedMul = MathUtils.clamp(v, 0.1, 20);
+  }
+
+  /** The free camera's current travel speed for a held key, m/s, before Shift. */
+  get freeSpeedMps(): number {
+    const h = Math.max(0, this.camera.position.z - this.groundZ);
+    return MathUtils.clamp(h * FREE_SPEED_PER_M, FREE_MIN_SPEED_MPS, FREE_MAX_SPEED_MPS) * this.#freeSpeedMul;
+  }
+
+  /**
+   * The ground level the camera is kept above, metres: the world's (`ground.ts`), or 0 before a
+   * world is loaded.
+   */
+  get groundZ(): number {
+    const w = this.#world;
+    return w && w.world ? w.groundZ : 0;
+  }
+
+  /** The lowest the camera may ever be: the ground plus the clearance, above every road surface. */
+  get floorZ(): number {
+    return this.groundZ + Math.max(this.#groundClearance, SURFACE_TOP_M + 0.25);
+  }
+
+  /**
+   * Put the free camera back on a view of the city: 45° down at the point the camera was looking
+   * at (or the map's focus), from far enough to see a few blocks, keeping the heading. The way
+   * out of any corner the user has flown into.
+   */
+  resetView(): void {
+    if (this.#mode !== "free") {
+      this.setMode("map");
+      return;
+    }
+    const g = this.groundZ;
+    const b = this.#world?.world?.bbox;
+    let fx = finite3(this.look) ? this.look.x : this.target.x;
+    let fy = finite3(this.look) ? this.look.y : this.target.y;
+    if (b) {
+      fx = MathUtils.clamp(fx, b.minXM, b.maxXM);
+      fy = MathUtils.clamp(fy, b.minYM, b.maxYM);
+    }
+    const pitch = -45 * DEG;
+    const back = 160;
+    const yaw = Number.isFinite(this.#freeYaw) ? this.#freeYaw : Math.PI / 2;
+    this.#freeYaw = yaw;
+    this.#freePitch = pitch;
+    this.#desiredPosition.set(
+      fx - Math.cos(yaw) * Math.cos(pitch) * back,
+      fy - Math.sin(yaw) * Math.cos(pitch) * back,
+      g - Math.sin(pitch) * back,
+    );
+    this.#keyVel.set(0, 0, 0);
+    this.#freeVelocity.set(0, 0, 0);
+    this.#freeSpeedMul = 1;
+    this.#userMoved = true;
+    this.#computeDesired();
+    this.#beginFlight();
+  }
+
   /** Cut to the desired pose with no animation. */
   snap(): void {
     this.#posVel.set(0, 0, 0);
@@ -687,6 +807,7 @@ export class CameraController {
   update(dt: number): void {
     const step = Math.max(0, Math.min(0.25, Number.isFinite(dt) ? dt : 0));
     if (this.#mode === "free") this.#integrateFree(step);
+    else if (this.#mode === "map") this.#panMapByKeys(step);
     // The chase camera sits behind a *smoothed* heading. Behind the raw one it rode every tenth of
     // a degree of heading noise at nine metres' lever arm, and a U-turn swung it straight through
     // the car; the smoothed yaw orbits round instead.
@@ -735,6 +856,14 @@ export class CameraController {
     }
     if (flew) {
       // (the flight moved the camera this frame)
+    } else if (this.#mode === "free") {
+      // The free camera answers its keys and the mouse directly: the keys' velocity is already
+      // eased (`#integrateFree`), and a spring on top of it was a quarter-second of drift after
+      // every key-up — the "hard to control" the owner reported.
+      this.camera.position.copy(this.#desiredPosition);
+      this.look.copy(this.#desiredLook);
+      this.#posVel.set(0, 0, 0);
+      this.#lookVel.set(0, 0, 0);
     } else if (street && !this.#pendingFlight) {
       // A critically damped follow with the subject's own velocity fed forward. The old law
       // lerped the camera towards its desired point, which at 15 m/s trailed by v/λ = 3.75 m more
@@ -795,6 +924,13 @@ export class CameraController {
       this.camera.updateProjectionMatrix();
     }
     this.#guardFinite();
+    // Last, every frame, in every mode: above the ground and outside every building. Whatever put
+    // the camera there — a spring's overshoot, a flight's path, a subject in a tunnel, a seek, a
+    // value from outside — the frame drawn is never under the city.
+    this.#enforceLimits();
+    // The free camera flies on from where the limits left it, not from inside the roof it was
+    // lifted out of.
+    if (this.#mode === "free" && !this.isFlying) this.#desiredPosition.copy(this.camera.position);
     // `lookAt` along a zero-length direction is degenerate; nudge the target rather than let the
     // basis collapse.
     if (this.camera.position.distanceToSquared(this.look) < 1e-6) this.look.z -= 0.01;
@@ -867,21 +1003,45 @@ export class CameraController {
    * subject: the followed vehicle's own height in the street modes, the world's floor otherwise.
    */
   #keepAboveGround(pos: Vector3): boolean {
-    let ground = -Infinity;
-    const world = this.#world?.world;
-    if (world) ground = world.bbox.minZM;
+    // The world's ground level (`ground.ts`), not `bbox.minZM`: a tunnel puts that 6 m or more
+    // under the streets, and the camera could sink to it — under the roads and the buildings.
+    let floor = this.floorZ;
     if ((this.#mode === "chase" || this.#mode === "dashboard") && this.#followPosKnown) {
-      ground = Math.max(ground, this.#followPos.z);
-    } else if (this.#mode === "rsu" || this.#mode === "free") {
-      ground = Math.max(ground, Math.min(this.target.z, this.look.z));
+      // A subject on a bridge keeps the camera above the bridge deck too.
+      floor = Math.max(floor, this.#followPos.z + this.#groundClearance);
     }
-    if (!Number.isFinite(ground)) return false;
-    const floor = ground + this.#groundClearance;
     if (pos.z < floor) {
       pos.z = floor;
       return true;
     }
     return false;
+  }
+
+  /**
+   * The hard limits, applied to the camera itself after everything else in {@link update}: never
+   * below {@link floorZ}, never inside a building that is not ghosted, never above the plan view's
+   * ceiling. A spring's velocity into a limit is cancelled, so the camera does not lean on it.
+   */
+  #enforceLimits(): void {
+    const p = this.camera.position;
+    const floor = this.floorZ;
+    if (!(p.z >= floor)) {
+      p.z = floor;
+      if (this.#posVel.z < 0) this.#posVel.z = 0;
+    }
+    if (this.#liftAboveRoof(p) && this.#posVel.z < 0) this.#posVel.z = 0;
+    const ceiling = this.groundZ + this.#altitudeCeiling() + 50;
+    if (p.z > ceiling) p.z = ceiling;
+  }
+
+  /** The followed subject's position, raised to the ground when it is below it (a tunnel). */
+  #subjectBase(): Vector3 {
+    const g = this.groundZ;
+    if (this.#followPos.z >= g) return this.#followPos;
+    // A subject in a tunnel is under the ground plane: a camera that went down with it was under
+    // the city, looking at the underside of the ground (the owner's "below the map"). The camera
+    // stays on the street above, over where the subject is.
+    return this.#scratchC.set(this.#followPos.x, this.#followPos.y, g);
   }
 
   /**
@@ -1086,7 +1246,9 @@ export class CameraController {
    */
   keepCameraOutsideBuildings(pos: Vector3, lookAt: Vector3): boolean {
     const world = this.#world;
-    if (!world || this.#mode === "map") return false;
+    if (!world) return false;
+    // The plan view only has to stay above the roofs: at its 12 m minimum it was inside a tower.
+    if (this.#mode === "map") return this.#liftAboveRoof(pos);
     let moved = false;
 
     // 1. Within working distance, march from the target to the camera and stop short of the first
@@ -1095,7 +1257,9 @@ export class CameraController {
     //    onto the roof above it, where the roof hides the very car it is following.
     const dir = this.#scratchB.copy(pos).sub(lookAt);
     const dist = dir.length();
-    if (dist >= 1e-3 && dist <= this.#occlusionRange) {
+    // Only for a camera that has a subject to keep in view. The free camera's look point is 40 m
+    // ahead of it: with a building beyond, the march pulled the camera through the wall in front.
+    if (dist >= 1e-3 && dist <= this.#occlusionRange && CameraController.needsFollowSubject(this.#mode)) {
       dir.multiplyScalar(1 / dist);
       const steps = Math.min(48, Math.max(4, Math.ceil(dist)));
       let hitT = -1;
@@ -1182,22 +1346,113 @@ export class CameraController {
     return false;
   }
 
+  /** The held keys as `[forward, right, up]`, each −1, 0 or 1, and whether Shift is down. */
+  #keyAxes(): [number, number, number, boolean] {
+    const k = this.#keys;
+    const any = (set: ReadonlySet<string>): number => {
+      for (const c of set) if (k.has(c)) return 1;
+      return 0;
+    };
+    return [any(KEY_FORWARD) - any(KEY_BACK), any(KEY_RIGHT) - any(KEY_LEFT), any(KEY_UP) - any(KEY_DOWN), any(KEY_BOOST) === 1];
+  }
+
+  /**
+   * The free camera's move for one step: the keys (level with the ground, so W does not dive into
+   * the street when the view is pitched down; E and Q for height) eased to their speed, plus the
+   * body-frame velocity of {@link setFreeVelocity}. A move that would enter a building is cut back
+   * to the part of it that does not — sliding along the wall — instead of being lifted onto the
+   * roof afterwards, which was a jump.
+   */
   #integrateFree(dt: number): void {
-    const v = this.#freeVelocity;
-    if (v.lengthSq() < 1e-8) return;
+    if (!(dt > 0)) return;
     const cy = Math.cos(this.#freeYaw);
     const sy = Math.sin(this.#freeYaw);
-    const cp = Math.cos(this.#freePitch);
-    const sp = Math.sin(this.#freePitch);
-    const fx = cy * cp;
-    const fy = sy * cp;
-    const fz = sp;
-    // Right = forward × up, with up = +z.
-    const rx = fy;
-    const ry = -fx;
-    this.#desiredPosition.x += (fx * v.x + rx * v.y) * dt;
-    this.#desiredPosition.y += (fy * v.x + ry * v.y) * dt;
-    this.#desiredPosition.z += (fz * v.x + v.z) * dt;
+    const [kf, kr, ku, boost] = this.#keyAxes();
+    const speed = this.freeSpeedMps * (boost ? FREE_BOOST : 1);
+    const norm = Math.hypot(kf, kr) || 1;
+    // Level forward (cy, sy) and right (sy, −cy).
+    const tx = ((cy * kf + sy * kr) / norm) * speed;
+    const ty = ((sy * kf - cy * kr) / norm) * speed;
+    const tz = ku * speed;
+    const a = 1 - Math.exp(-dt / FREE_EASE_S);
+    const kv = this.#keyVel;
+    kv.x += (tx - kv.x) * a;
+    kv.y += (ty - kv.y) * a;
+    kv.z += (tz - kv.z) * a;
+    if (kv.lengthSq() < 1e-6 && tx === 0 && ty === 0 && tz === 0) kv.set(0, 0, 0);
+
+    let dx = kv.x * dt;
+    let dy = kv.y * dt;
+    let dz = kv.z * dt;
+    const v = this.#freeVelocity;
+    if (v.lengthSq() > 1e-8) {
+      const cp = Math.cos(this.#freePitch);
+      const sp = Math.sin(this.#freePitch);
+      const fx = cy * cp;
+      const fy = sy * cp;
+      // Right = forward × up, with up = +z.
+      dx += (fx * v.x + fy * v.y) * dt;
+      dy += (fy * v.x - fx * v.y) * dt;
+      dz += (sp * v.x + v.z) * dt;
+    }
+    if (dx === 0 && dy === 0 && dz === 0) return;
+    const d = this.#desiredPosition;
+    const floor = this.floorZ;
+    const nz = Math.max(floor, d.z + dz);
+    if (!this.#freeBlocked(d.x + dx, d.y + dy, nz)) {
+      d.set(d.x + dx, d.y + dy, nz);
+    } else if (!this.#freeBlocked(d.x + dx, d.y, nz)) {
+      d.set(d.x + dx, d.y, nz);
+      kv.y = 0;
+    } else if (!this.#freeBlocked(d.x, d.y + dy, nz)) {
+      d.set(d.x, d.y + dy, nz);
+      kv.x = 0;
+    } else if (!this.#freeBlocked(d.x, d.y, nz)) {
+      d.z = nz;
+      kv.x = 0;
+      kv.y = 0;
+    } else {
+      kv.set(0, 0, 0);
+    }
+  }
+
+  /**
+   * Whether the free camera at `(x, y, z)` would be inside a building or within
+   * {@link FREE_WALL_MARGIN_M} of one's wall below its roof. A camera already inside one (seeded
+   * there) is not trapped: the roof lift in {@link update} takes it out.
+   */
+  #freeBlocked(x: number, y: number, z: number): boolean {
+    const world = this.#world;
+    if (!world) return false;
+    const d = this.#desiredPosition;
+    const top = world.buildingTopAt(x, y);
+    if (top > -Infinity && z < top) {
+      const here = world.buildingTopAt(d.x, d.y);
+      return !(here > -Infinity && d.z < here);
+    }
+    const r = FREE_WALL_MARGIN_M;
+    for (const [ox, oy] of NEAR_RING) {
+      const t = world.buildingTopAt(x + ox * r, y + oy * r);
+      if (t > -Infinity && z < t) {
+        // Moving along or away from a wall the camera is already beside is allowed.
+        const tNow = world.buildingTopAt(d.x + ox * r, d.y + oy * r);
+        if (!(tNow > -Infinity && d.z < tNow)) return true;
+      }
+    }
+    return false;
+  }
+
+  /** WASD or the arrows pan the plan view, at half the view's height per second. */
+  #panMapByKeys(dt: number): void {
+    const [kf, kr, , boost] = this.#keyAxes();
+    if ((kf === 0 && kr === 0) || !(dt > 0)) return;
+    const rate = this.extentM * 0.5 * (boost ? FREE_BOOST : 1) * dt;
+    const cb = Math.cos(this.#bearing);
+    const sb = Math.sin(this.#bearing);
+    // Screen up is (cos b, sin b); screen right is (sin b, −cos b).
+    this.target.x += (cb * kf + sb * kr) * rate;
+    this.target.y += (sb * kf - cb * kr) * rate;
+    this.#userMoved = true;
   }
 
   #computeDesired(): void {
@@ -1219,7 +1474,7 @@ export class CameraController {
       case "chase": {
         // `#followPos`, not the map focus: see `clearFollowPose`. `setMode` guarantees a subject
         // exists before this mode can be entered, so the pose is always one of this vehicle's.
-        const base = this.#followPos;
+        const base = this.#subjectBase();
         const heading = Number.isFinite(this.#chaseYaw) ? this.#chaseYaw : this.#followHeading;
         const yaw = heading + Math.PI + this.#orbitYaw;
         const f = this.chaseFraming();
@@ -1236,7 +1491,7 @@ export class CameraController {
         break;
       }
       case "dashboard": {
-        const base = this.#followPos;
+        const base = this.#subjectBase();
         const h = this.#followHeading + this.#orbitYaw;
         const fx = Math.cos(h);
         const fy = Math.sin(h);
@@ -1412,18 +1667,35 @@ export class CameraController {
       this.#userMoved = true;
       const k = Math.exp(ev.deltaY * 0.0012);
       if (this.#mode === "map") this.altitudeM = this.#altitude * k;
+      // The free camera has no distance to zoom: the wheel sets how fast it flies (up is faster).
+      else if (this.#mode === "free") this.freeSpeedMultiplier = this.#freeSpeedMul / k;
       else this.distanceM = this.#chaseDistance * k;
     };
 
+    const typing = (ev: Event): boolean => {
+      const t = ev.target as { tagName?: string; isContentEditable?: boolean } | null;
+      const tag = t?.tagName?.toUpperCase();
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable === true;
+    };
     const onKeyDown = (e: Event): void => {
       const ev = e as KeyboardEvent;
-      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      if (ev.ctrlKey || ev.metaKey || ev.altKey || typing(ev)) return;
       // `f` for "frame": the one keystroke that answers "where is the vehicle?" when a single
       // actor is loose in a square kilometre of city.
-      // Registered passively with the pointer listeners, so no `preventDefault` here — `f` has no
-      // default action on a canvas to cancel, and calling it on a passive listener is a warning.
       if (ev.key === "f" || ev.key === "F") this.#onFrameActors?.();
+      // `r` for "reset": back to a view of the city from wherever the free camera has got to.
+      if ((ev.key === "r" || ev.key === "R") && this.#mode === "free") this.resetView();
+      // Movement keys; an arrow or Space the camera uses must not also scroll the page.
+      if (ev.code !== undefined && this.setKey(ev.code, true) && ev.code !== "ShiftLeft" && ev.code !== "ShiftRight") {
+        if (typeof ev.preventDefault === "function" && ev.cancelable !== false) ev.preventDefault();
+      }
     };
+    const onKeyUp = (e: Event): void => {
+      const ev = e as KeyboardEvent;
+      if (ev.code !== undefined) this.setKey(ev.code, false);
+    };
+    // Focus went elsewhere: the key-ups will go elsewhere too, so nothing may stay held.
+    const onBlur = (): void => this.releaseKeys();
 
     // `pointerleave` is deliberately *not* bound: with pointer capture a drag survives leaving the
     // element, and treating leave as pointer-up would end it mid-gesture.
@@ -1432,14 +1704,21 @@ export class CameraController {
       ["pointermove", onPointerMove],
       ["pointerup", onPointerUp],
       ["pointercancel", onPointerUp],
-      ["keydown", onKeyDown],
+      ["keyup", onKeyUp],
+      ["blur", onBlur],
     ];
     for (const [type, fn] of passive) element.addEventListener(type, fn, { passive: true });
-    element.addEventListener("wheel", onWheel, { passive: false });
+    // Not passive: an arrow key or Space that moves the camera must not scroll the page as well.
+    const active: readonly (readonly [string, (e: Event) => void])[] = [
+      ["wheel", onWheel],
+      ["keydown", onKeyDown],
+    ];
+    for (const [type, fn] of active) element.addEventListener(type, fn, { passive: false });
 
     this.#detach = (): void => {
       for (const [type, fn] of passive) element.removeEventListener(type, fn);
-      element.removeEventListener("wheel", onWheel);
+      for (const [type, fn] of active) element.removeEventListener(type, fn);
+      this.releaseKeys();
     };
     return this.#detach;
   }

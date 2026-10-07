@@ -1485,9 +1485,9 @@ export class OverlayManager {
     this.#world = world;
     if (world) {
       const b = world.world?.bbox;
-      if (b) this.heatmap.fitTo(b.minXM, b.minYM, b.maxXM, b.maxYM, b.minZM + 0.35);
+      if (b) this.heatmap.fitTo(b.minXM, b.minYM, b.maxXM, b.maxYM, world.groundZ + 0.35);
       this.coverage.setSites(world.sitePositions, world.siteCount, this.#coverageRadius,
-        (b?.minZM ?? 0) + 0.25);
+        world.groundZ + 0.25);
     }
     this.#applyAll();
   }
@@ -1502,7 +1502,7 @@ export class OverlayManager {
     const w = this.#world;
     if (w) {
       this.coverage.setSites(w.sitePositions, w.siteCount, this.#coverageRadius,
-        (w.world?.bbox.minZM ?? 0) + 0.25);
+        w.groundZ + 0.25);
     }
   }
 
