@@ -20,6 +20,15 @@ meta:
     return to their green wave.
   tags: [emergency, signal-priority, spat, map, srm, ssm, rsu, dsrc]
 
+# A real downtown by default (the base runs on a procedural grid): its four signal-priority
+# roadside units stand at the city's four busiest signalised intersections.
+city: manhattan
+
 time:
   t0: "2027-03-04T17:00:00Z"
   duration_s: 180.0
+
+actors:
+  vehicles:
+    demand:
+      rate_veh_per_h_per_lane_km: 25.0

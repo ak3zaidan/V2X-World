@@ -49,7 +49,7 @@ pub use schema::{
     Actors, Apps, Attacker, Backend, BackendEntity, BackendLink, BuildingOptions, CURRENT_SCHEMA,
     CryptoModeSpec, DemandSpec, Detection, DilationWindow, Experiment, ExporterSpec, Focus,
     FocusRegion, Messages, Meta, ModelChoice, Net, Nodes, PseudonymChangeSpec, Radio, RadioTiers,
-    Rat, Rsu, Scenario, Security, SignerIdPolicySpec, TerrainOptions, Threats, Time, TimelineItem,
+    Rat, Rsu, RsuPlacement, Scenario, Security, SignerIdPolicySpec, TerrainOptions, Threats, Time, TimelineItem,
     TimelineKind, VehicleClassSpec, Vehicles, Vru, Weather, WorldSpec,
 };
 pub use validate::{preflight, resolve_path, validate};
@@ -116,13 +116,27 @@ impl Scenario {
     ///
     /// # Errors
     /// [`ScenarioError::Parse`] if the document does not match the schema.
-    pub fn from_document(doc: Value) -> Result<Scenario> {
-        serde_json::from_value(doc).map_err(|e| {
+    pub fn from_document(mut doc: Value) -> Result<Scenario> {
+        crate::city::fill_world_from_city(&mut doc)?;
+        let mut scenario: Scenario = serde_json::from_value(doc).map_err(|e| {
             EngineError::Scenario(ScenarioError::Parse {
                 path: "<document>".to_string(),
                 message: e.to_string(),
             })
-        })
+        })?;
+        // A file whose `city` is not the city its world is — a ready-made scenario that
+        // inherits a world from its base and names its own city — runs on the city it
+        // names, with everything placed in the old world moved (`Scenario::with_city`).
+        if let Some(id) = scenario.city.clone()
+            && crate::city::city_of_world(&scenario.world).is_none_or(|c| c.id != id)
+        {
+            scenario.city = None;
+            scenario = scenario.with_city(&id).map_err(EngineError::Scenario)?;
+        }
+        if scenario.city.is_some() {
+            crate::city::connect_demand(&mut scenario);
+        }
+        Ok(scenario)
     }
 
     /// The first thing wrong with this scenario, if anything is.
@@ -205,6 +219,7 @@ impl Scenario {
             },
             seed: 0x5EED,
             time: Time::default(),
+            city: None,
             world: schema::WorldSpec {
                 source: v2xw_world::WorldSourceSpec::procedural(
                     "world/source/procedural-grid",
@@ -217,6 +232,7 @@ impl Scenario {
                 // A procedural world needs no jurisdiction; only an OSM import does.
                 highway_preset: None,
                 signals: schema::WorldSignalOptions::default(),
+                service_roads: true,
             },
             actors: Actors::default(),
             weather: Weather::default(),

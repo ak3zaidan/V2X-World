@@ -353,8 +353,8 @@ describe("§6 — the JSON-RPC client", () => {
   });
 
   it("§6.15 — exactly 32 methods and §6.14 — exactly 9 notifications (node.feed since v1.1)", () => {
-    expect(VWP_METHODS).toHaveLength(32);
-    expect(new Set(VWP_METHODS).size).toBe(32);
+    expect(VWP_METHODS).toHaveLength(33);
+    expect(new Set(VWP_METHODS).size).toBe(33);
     expect(VWP_METHODS).toContain("rpc.discover");
     expect(VWP_NOTIFICATIONS).toHaveLength(9);
     expect(VWP_NOTIFICATIONS).toEqual([

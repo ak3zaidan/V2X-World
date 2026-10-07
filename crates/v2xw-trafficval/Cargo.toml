@@ -23,3 +23,7 @@ serde_json = { workspace = true }
 [[bin]]
 name = "traffic_validation"
 path = "src/bin/traffic_validation.rs"
+
+[[bin]]
+name = "city_audit"
+path = "src/bin/city_audit.rs"

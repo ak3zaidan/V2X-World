@@ -12,10 +12,11 @@
 schema: v2xw/scenario/1
 
 meta:
-  name: Berlin-Mitte (European ITS-G5 and CAMs)
+  name: European stack - ITS-G5 radios and CAMs
   description: >-
-    Central Berlin at midday on the European stack: ITS-G5 radios on channel 180, CAMs over
-    GeoNetworking signed under ETSI TS 103 097, German speed limits and no right turn on red.
+    Midday traffic on the European stack: ITS-G5 radios on channel 180 and CAMs over
+    GeoNetworking signed under ETSI TS 103 097. Berlin-Mitte by default, with German speed
+    limits and no right turn on red; any city runs it under its own rules.
   authors: [v2xw]
   tags: [berlin, europe, its-g5, cam, gn-btp, etsi, city]
   created: "2026-10-06"
@@ -29,29 +30,16 @@ time:
   mobility_step_ms: 100
   des_resolution: 1us
 
-world:
-  source:
-    kind: osm-xml
-    path: worlds/cache/berlin.osm.xml
-    bbox:
-      min_lat_deg: 52.5140
-      min_lon_deg: 13.3880
-      max_lat_deg: 52.5250
-      max_lon_deg: 13.4080
-  highway_preset: urban-de
-  imported_at: "2026-09-30T00:00:00Z"
-  buildings:
-    enabled: true
-    keep_holes: true
-  terrain:
-    dem: null
+# Berlin-Mitte by default; the European stack runs on any city of the library.
+city: berlin
 
 actors:
   vehicles:
     equipped_fraction: 1.0
     demand:
       kind: mobility/demand/poisson
-      rate_veh_per_h: 1500.0
+      # 1,500 veh/h on Berlin-Mitte's grid, as a density.
+      rate_veh_per_h_per_lane_km: 20.0
 
 weather:
   initial: clear

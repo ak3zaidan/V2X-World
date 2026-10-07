@@ -11,32 +11,56 @@ document rather than like a config: each states at the top what it measures, wha
 
 ## The ready-made scenarios (what the Studio's picker offers)
 
+A scenario says **what happens** — the traffic, the radio, the network, the security stack,
+the attacks. A city says **where**. The two are chosen separately: the Studio's picker offers a
+scenario first and then a city of the library ([`../worlds/cities.yaml`](../worlds/cities.yaml):
+the largest city of every state and DC, the most-studied connected-vehicle cities, Berlin), and
+the command line takes `v2xw run <scenario> --city <id>` (`v2xw cities` lists the ids). A
+scenario file's `city` is only the city it runs on when none is chosen.
+
 [`ready-made.txt`](ready-made.txt) is the picker's list, grouped and in order; the names and
 one-line descriptions the page shows are each file's `meta.name` and `meta.description`. Every
 other file in this folder still loads by path (`scenario.load`, `v2xw run`) and is simply not
 offered. Each ready-made file is a short overlay (`meta.base`) on the deployment it changes, so
-the deployment is written once: [`base/midtown.yaml`](base/midtown.yaml) (Midtown at midday, the
-US SCMS, eight roadside units, detection) and [`base/radio-faceoff.yaml`](base/radio-faceoff.yaml)
-(Midtown at rush-hour density with no backend), or an existing study file below.
+the deployment is written once: [`base/city.yaml`](base/city.yaml) (a downtown at midday, the
+US SCMS, eight roadside units at the city's busiest signalised intersections, detection, demand
+stated per kilometre of driving lane) and [`base/radio-faceoff.yaml`](base/radio-faceoff.yaml)
+(rush-hour density with no backend), or an existing study file below.
+
+What makes a scenario fit any city (`crates/v2xw-engine/src/city.rs`):
+
+* `actors.vehicles.demand.rate_veh_per_h_per_lane_km` — demand as a density; the engine
+  multiplies it by the city's driving-lane length once the map is imported;
+* `actors.rsu_placement: {count, roles}` — roadside units at the city's busiest signalised
+  intersections, at least `min_spacing_m` apart;
+* `target: auto` on a `closure` — a side street of whatever city it is;
+* `at: busiest-junction` on a jammer — the city's busiest signalised intersection;
+* the clock keeps its local time of day on another city (noon is noon in Seattle too).
+
+A scenario that embeds its own world still runs as written, and `--city` moves it: explicit
+roadside-unit positions become a placement of the same count and roles, a fixed rate becomes a
+density, a named-street closure becomes `auto`.
 
 | File | Name in the picker | What it shows |
 |---|---|---|
-| [`midtown-normal.yaml`](midtown-normal.yaml) | Midtown Manhattan - normal traffic | the honest baseline; start the server with this one |
-| [`midtown-rush-hour.yaml`](midtown-rush-hour.yaml) | Midtown Manhattan - evening rush hour | rising rush-hour demand, a lane-blocking breakdown, West 45th Street closed |
-| [`midtown-peak-load.yaml`](midtown-peak-load.yaml) | Midtown Manhattan - busiest rush hour (stress test) | 9,000 veh/h, 2,000 pedestrians, 200 cyclists, every vehicle sending BSMs: the peak-load budget scenario |
-| [`midtown-pedestrians.yaml`](midtown-pedestrians.yaml) | Midtown Manhattan - pedestrians, jaywalkers and motorcycles | `midtown-street-life.yaml` at a size the page draws smoothly |
-| [`midtown-rain.yaml`](midtown-rain.yaml) | Midtown Manhattan - heavy rain | slower, more cautious traffic; the radio loses almost nothing (ITU-R P.838-3) |
-| [`berlin.yaml`](berlin.yaml) | Berlin-Mitte (European ITS-G5 and CAMs) | the European stack end to end on a German city; needs `worlds/fetch.sh berlin` |
-| [`highway-congestion.yaml`](highway-congestion.yaml) | Highway - heavy traffic and breakdowns | a busy open-road channel; two breakdowns block lanes (not a level-of-service F jam: see the file) |
-| [`portland.yaml`](portland.yaml) | Downtown Portland, Oregon | `portland-downtown.yaml` by day |
+| [`midtown-normal.yaml`](midtown-normal.yaml) | Normal traffic | the honest baseline; start the server with this one |
+| [`midtown-rush-hour.yaml`](midtown-rush-hour.yaml) | Evening rush hour | rising rush-hour demand, a lane-blocking breakdown, a side street closed |
+| [`midtown-peak-load.yaml`](midtown-peak-load.yaml) | Busiest rush hour (stress test) | 9,000 veh/h, 2,000 pedestrians, 200 cyclists, every vehicle sending BSMs: the peak-load budget scenario |
+| [`midtown-pedestrians.yaml`](midtown-pedestrians.yaml) | Pedestrians, jaywalkers and motorcycles | `midtown-street-life.yaml` at a size the page draws smoothly |
+| [`midtown-rain.yaml`](midtown-rain.yaml) | Heavy rain | slower, more cautious traffic; the radio loses almost nothing (ITU-R P.838-3) |
+| [`highway-congestion.yaml`](highway-congestion.yaml) | Highway - heavy traffic and breakdowns | a busy open-road channel on its own synthetic highway (or on a city, if one is picked) |
 | [`radio-dsrc.yaml`](radio-dsrc.yaml), [`radio-lte.yaml`](radio-lte.yaml), [`radio-nr.yaml`](radio-nr.yaml) | Radio comparison - DSRC / LTE / NR | identical traffic, only the radio differs |
+| [`berlin.yaml`](berlin.yaml) | European stack - ITS-G5 radios and CAMs | the European stack end to end; Berlin-Mitte by default |
 | [`attack-fake-positions.yaml`](attack-fake-positions.yaml) | Attack - fake positions at rush hour | ConstPos and RandomPos attackers detected, reported and revoked |
 | [`attack-replay.yaml`](attack-replay.yaml) | Attack - replayed and delayed messages | validly signed lies only plausibility checks can catch |
-| [`attack-jamming.yaml`](attack-jamming.yaml) | Attack - radio jamming at Fifth Avenue and 42nd Street | a constant jammer for three minutes, the drop and the recovery |
+| [`attack-jamming.yaml`](attack-jamming.yaml) | Attack - radio jamming at a busy junction | a constant jammer for three minutes, the drop and the recovery |
 | [`privacy-pseudonyms.yaml`](privacy-pseudonyms.yaml) | Certificates and pseudonym privacy | `credential-lifecycle.yaml` with a roadside eavesdropper |
-| [`europe-credentials.yaml`](europe-credentials.yaml) | European credential system (ETSI CCMS) | `ccms-lifecycle.yaml` by day |
+| [`europe-credentials.yaml`](europe-credentials.yaml) | European credential system (ETSI CCMS) | `ccms-lifecycle.yaml` by day; Berlin-Mitte by default |
 | [`post-quantum.yaml`](post-quantum.yaml) | Post-quantum security - the cost on the air | Falcon-512 hybrid signatures, fragmented on the air |
 | [`emergency-priority.yaml`](emergency-priority.yaml) | Emergency vehicles get green lights | `connected-intersections.yaml`: SPaT, MAP, SRM and SSM |
+
+[`portland.yaml`](portland.yaml) (downtown Portland by day) stays as a file but is no longer in
+the picker: Portland is a city, chosen in the city step like any other.
 
 Traffic volumes: the demand presets' *ratios* (night, midday, rush hour) are cited in
 `crates/v2xw-engine/src/scenario/options.rs`; their *level* is scaled, because NYC DOT's Midtown

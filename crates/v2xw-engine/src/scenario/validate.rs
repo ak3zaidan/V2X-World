@@ -187,6 +187,29 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the arrival rate",
     },
+    // 1,000 veh/h per lane-km is several times a jammed lane's density at any speed; the
+    // ceiling is a guard against a typo, as the rate's is.
+    Bound {
+        path: "actors.vehicles.demand.rate_veh_per_h_per_lane_km",
+        lo: 0.0,
+        hi: 1000.0,
+        exclusive_lo: false,
+        what: "the arrival rate per kilometre of driving lane",
+    },
+    Bound {
+        path: "actors.rsu_placement.count",
+        lo: 0.0,
+        hi: 256.0,
+        exclusive_lo: false,
+        what: "the number of placed roadside units",
+    },
+    Bound {
+        path: "actors.rsu_placement.min_spacing_m",
+        lo: 0.0,
+        hi: 5000.0,
+        exclusive_lo: false,
+        what: "the spacing of placed roadside units",
+    },
     Bound {
         path: "actors.vru.device_fraction",
         lo: 0.0,
@@ -611,6 +634,14 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                An OSM import is refused without it.",
     },
     KeyStatus {
+        path: "world.service_roads",
+        status: Status::Wired,
+        note: "Whether highway=service ways (alleys, driveways, parking aisles) become \
+               motor-traffic lanes. On by default; a city of the library turns it off, \
+               because downtown alleys run hard against building walls and a vehicle routed \
+               through one clips the buildings.",
+    },
+    KeyStatus {
         path: "world.signals.coordinate",
         status: Status::Wired,
         note: "Whether the OpenStreetMap importer offsets its synthesised signal plans for \
@@ -638,6 +669,31 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "actors.vehicles.demand.rate_veh_per_h",
         status: Status::Wired,
         note: "Vehicles per hour offered to the network.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.demand.rate_veh_per_h_per_lane_km",
+        status: Status::Wired,
+        note: "Vehicles per hour per kilometre of driving lane, so one scenario offers the \
+               same density on any city. Once the world is built it becomes \
+               rate_veh_per_h (times the network's driving-lane length) and wins over it.",
+    },
+    KeyStatus {
+        path: "actors.rsu_placement",
+        status: Status::Wired,
+        note: "Roadside units the engine stands at the city's busiest signalised \
+               intersections (most approach lanes first, nearest the middle of the map, \
+               no two closer than min_spacing_m), with the given roles, profile and \
+               backhaul; added to actors.rsus once the world is built. A city with fewer \
+               signals gets fewer units.",
+    },
+    KeyStatus {
+        path: "city",
+        status: Status::Wired,
+        note: "The city the scenario runs on, by its id in worlds/cities.yaml. With no \
+               world block the world is the city's extract, box and jurisdiction; set by \
+               the city picker, `v2xw run --city` and run.start, it replaces the world the \
+               file names and moves what was placed in the old city (roadside units, a \
+               fixed rate, a street closure, the local time of day) to the new one.",
     },
     KeyStatus {
         path: "actors.vehicles.demand.params",
@@ -1562,14 +1618,16 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ),
         ));
     }
+    let declared_rsus = s.actors.rsus.len()
+        + s.actors.rsu_placement.as_ref().map_or(0, |p| p.count as usize);
     for &unit in &s.threats.compromised_rsus {
-        if unit as usize >= s.actors.rsus.len() {
+        if unit as usize >= declared_rsus {
             e.push(conflict(
                 "threats.compromised_rsus",
                 format!(
                     "names roadside unit {unit}, and actors.rsus declares {}; a unit is \
                      named by its position in that list, from 0",
-                    s.actors.rsus.len()
+                    declared_rsus
                 ),
             ));
         }
@@ -1685,7 +1743,9 @@ fn unreachable_keys(s: &Scenario, e: &mut Vec<ScenarioError>) {
         s.actors
             .rsus
             .iter()
-            .any(|r| r.roles.iter().any(|x| x == name || x == "spat-map"))
+            .map(|r| &r.roles)
+            .chain(s.actors.rsu_placement.iter().map(|p| &p.roles))
+            .any(|roles| roles.iter().any(|x| x == name || x == "spat-map"))
     };
     for (i, set) in s.messages.sets.iter().enumerate() {
         let field = format!("messages.sets[{i}]");
@@ -2203,6 +2263,46 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 "'{}' is not a demand model this build ships; use one of {}",
                 s.actors.vehicles.demand.kind,
                 crate::wiring::DEMAND_KINDS.join(", ")
+            ),
+        ));
+    }
+
+    if let Some(per_km) = s.actors.vehicles.demand.rate_veh_per_h_per_lane_km {
+        bounded_at(
+            "actors.vehicles.demand.rate_veh_per_h_per_lane_km",
+            "actors.vehicles.demand.rate_veh_per_h_per_lane_km",
+            per_km,
+            e,
+        );
+    }
+    if let Some(p) = &s.actors.rsu_placement {
+        bounded_at("actors.rsu_placement.count", "actors.rsu_placement.count", f64::from(p.count), e);
+        bounded_at(
+            "actors.rsu_placement.min_spacing_m",
+            "actors.rsu_placement.min_spacing_m",
+            p.min_spacing_m,
+            e,
+        );
+        if let Some(profile) = &p.profile
+            && !all_profile_ids().contains(&profile.as_str())
+        {
+            e.push(conflict(
+                "actors.rsu_placement.profile",
+                format!(
+                    "'{profile}' is not a hardware profile this build ships; shipped \
+                     profiles: {}",
+                    all_profile_ids().join(", ")
+                ),
+            ));
+        }
+    }
+    if let Some(city) = &s.city
+        && crate::city::find(city).is_none()
+    {
+        e.push(conflict(
+            "city",
+            format!(
+                "'{city}' is not a city in worlds/cities.yaml; `v2xw cities` lists them"
             ),
         ));
     }

@@ -50,7 +50,18 @@ pub struct Scenario {
     /// The clock.
     #[serde(default)]
     pub time: Time,
-    /// Where the world comes from.
+    /// The city the scenario runs on, by its id in the city library
+    /// (`worlds/cities.yaml`, [`crate::city`]).
+    ///
+    /// A scenario says what happens and a city says where, so a scenario file need not
+    /// name a world at all: with `city` and no `world`, the world is the city's extract,
+    /// box and jurisdiction. `v2xw run --city`, the server's `run.start` and
+    /// `scenario.load` and the Studio's city picker set it, replacing whatever world the
+    /// file named ([`Scenario::with_city`]). Absent on a scenario that embeds its own world.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
+    /// Where the world comes from. Filled from [`Scenario::city`] when the file names a
+    /// city and no world.
     pub world: WorldSpec,
     /// What moves in it.
     #[serde(default)]
@@ -268,6 +279,11 @@ pub struct WorldSpec {
     /// How the OSM importer times the signals it synthesises.
     #[serde(default, skip_serializing_if = "WorldSignalOptions::is_default")]
     pub signals: WorldSignalOptions,
+    /// Whether `highway=service` ways (alleys, driveways, parking aisles) become
+    /// motor-traffic lanes ([`v2xw_world::osm::OsmLayers::service`]). Default `true`; a
+    /// city of the library sets `false`, the street network a city study drives on.
+    #[serde(default = "crate::scenario::schema::truth", skip_serializing_if = "crate::scenario::schema::is_true")]
+    pub service_roads: bool,
 }
 
 /// How an imported world's synthesised signal plans are coordinated
@@ -349,9 +365,44 @@ pub struct Actors {
     /// Roadside units.
     #[serde(default)]
     pub rsus: Vec<Rsu>,
+    /// Roadside units placed by the engine at the city's busiest signalised
+    /// intersections, so a scenario that does not know its city still has units where a
+    /// deployment would put them. They are appended to [`Actors::rsus`] once the world is
+    /// built ([`crate::city::place_rsus`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rsu_placement: Option<RsuPlacement>,
     /// Backend entities and the links between them.
     #[serde(default)]
     pub backend: Backend,
+}
+
+/// Roadside units the engine places itself ([`Actors::rsu_placement`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RsuPlacement {
+    /// How many units, at most: one per signalised intersection, the intersections with
+    /// the most approach lanes first, no two closer than `min_spacing_m`. A city with
+    /// fewer signals gets fewer units.
+    pub count: u32,
+    /// What each does (as [`Rsu::roles`]).
+    #[serde(default)]
+    pub roles: Vec<String>,
+    /// The hardware profile id of each (as [`Rsu::profile`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The backhaul of each (as [`Rsu::backhaul`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backhaul: Option<String>,
+    /// The least distance between two units, metres; 150 m by default, about two
+    /// downtown blocks.
+    #[serde(default = "RsuPlacement::default_spacing")]
+    pub min_spacing_m: f64,
+}
+
+impl RsuPlacement {
+    fn default_spacing() -> f64 {
+        150.0
+    }
 }
 
 /// Vehicle demand and the fleet mix.
@@ -396,6 +447,12 @@ pub struct DemandSpec {
     /// Vehicles per hour offered to the network, when the model takes a rate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_veh_per_h: Option<f64>,
+    /// Vehicles per hour per kilometre of driving lane: the arrival rate stated so that it
+    /// fits any city. Once the world is built it becomes `rate_veh_per_h` (the rate times
+    /// the network's driving-lane length), and it wins over a `rate_veh_per_h` the file
+    /// also gives. Midtown's 119 km of driving lane at 25 veh/h/km is 3,000 veh/h.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_veh_per_h_per_lane_km: Option<f64>,
     /// The model's own parameters, in the shape its parameter struct deserialises.
     #[serde(default)]
     pub params: serde_json::Value,
@@ -412,6 +469,7 @@ impl Default for DemandSpec {
         DemandSpec {
             kind: DemandSpec::default_kind(),
             rate_veh_per_h: None,
+            rate_veh_per_h_per_lane_km: None,
             params: serde_json::Value::Null,
         }
     }
@@ -1496,6 +1554,12 @@ pub struct Experiment {
     /// How many replications per (point, seed).
     #[serde(default)]
     pub replications: u32,
+}
+
+/// For `skip_serializing_if`: a default-`true` flag that is still `true`.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+pub(crate) fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// `true`, as a function, for `#[serde(default = …)]`.

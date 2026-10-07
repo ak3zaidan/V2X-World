@@ -570,6 +570,21 @@ fn first_sentence(text: &str) -> String {
 /// `fallback` is the description to use when this module has no words for the value —
 /// a reflected variant's doc comment or a model card's purpose.
 pub fn option_row(path: &str, value: &str, fallback: &str) -> Value {
+    // A state of the city library: its name, and its default limit and turn rule in words.
+    if path == "world.highway_preset"
+        && let Some(j) = v2xw_world::osm::HighwayPreset::parse(value).and_then(|p| p.us_jurisdiction())
+    {
+        return json!({
+            "value": value,
+            "label": j.name,
+            "description": format!(
+                "{} mph default on untagged streets; right on red after a stop{}.",
+                j.urban_mph,
+                if j.cited { "" } else { " (generic US default, not this state's statute)" }
+            ),
+            "available": true,
+        });
+    }
     match words(path, value) {
         Some((label, description, available)) => json!({
             "value": value, "label": label, "description": description,

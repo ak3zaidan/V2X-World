@@ -28,7 +28,10 @@
 //!
 //! # Where a jammer is
 //!
-//! Exactly one of three: `position_m`, a fixed world point; `follow_node`, the node id of
+//! Exactly one of four: `at: busiest-junction`, the city's busiest signalised intersection
+//! (resolved to a `position_m` once the world is built, `crate::city::adapt_to_world`, so a
+//! scenario written for no city in particular still jams a junction); `position_m`, a
+//! fixed world point; `follow_node`, the node id of
 //! a vehicle (or roadside unit) it rides — its antenna at the vehicle's, and silent while
 //! that node does not exist; or `path_m`, a polyline of world points it drives along at
 //! `speed_mps`, stopping at the end or, with `loop_path: true`, going round again. The
@@ -161,6 +164,8 @@ pub const ADJACENT_DEFAULT_POWER_DBM: f64 = 23.0;
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct JammerParams {
+    #[serde(default)]
+    at: Option<String>,
     #[serde(default)]
     position_m: Option<Vec<f64>>,
     #[serde(default)]
@@ -353,7 +358,17 @@ fn parse_emitter(
             };
             (p.x.is_finite() && p.y.is_finite() && p.z.is_finite()).then_some(p)
         };
+        if let Some(at) = &p.at
+            && at != "busiest-junction"
+        {
+            errors.push((
+                format!("{path}.params.at"),
+                format!("is '{at}'; the one place a jammer can be named by is busiest-junction"),
+            ));
+            return None;
+        }
         let given = [
+            p.at.is_some(),
             p.position_m.is_some(),
             p.follow_node.is_some(),
             p.path_m.is_some(),
@@ -364,12 +379,16 @@ fn parse_emitter(
         if given != 1 {
             errors.push((
                 format!("{path}.params"),
-                "must place the jammer exactly one way: position_m, follow_node or path_m"
+                "must place the jammer exactly one way: at, position_m, follow_node or path_m"
                     .to_string(),
             ));
             return None;
         }
-        let (position, motion) = if let Some(v) = p.position_m.as_deref() {
+        let (position, motion) = if p.at.is_some() {
+            // Not yet resolved: the world is not built. `adapt_to_world` turns it into a
+            // position_m before the run parses its jammers again.
+            (Vec3::new(0.0, 0.0, 1.5), JammerMotion::Fixed)
+        } else if let Some(v) = p.position_m.as_deref() {
             let Some(pos) = point(v) else {
                 errors.push((
                     format!("{path}.params.position_m"),

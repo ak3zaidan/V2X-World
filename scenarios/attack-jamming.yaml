@@ -13,10 +13,10 @@ schema: v2xw/scenario/1
 
 meta:
   base: midtown-normal.yaml
-  name: Attack - radio jamming at Fifth Avenue and 42nd Street
+  name: Attack - radio jamming at a busy junction
   description: >-
-    Midday Midtown with a jammer switched on at Fifth Avenue and 42nd Street for three
-    minutes: safety messages around the junction are drowned out, then recover when it
+    Midday downtown with a jammer switched on at the busiest signalised intersection for
+    three minutes: safety messages around the junction are drowned out, then recover when it
     stops.
   tags: [attack, jamming, radio, dsrc, scms]
 
@@ -24,7 +24,8 @@ threats:
   jammers:
     - id: attacker/jammer/constant
       params:
-        position_m: [770.3, 1052.8]
+        # The city's busiest signalised intersection (Fifth Avenue and 42nd Street in Midtown).
+        at: busiest-junction
         power_dbm: 23
         from_s: 60.0
         to_s: 240.0

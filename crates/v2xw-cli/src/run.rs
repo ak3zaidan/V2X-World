@@ -66,6 +66,8 @@ pub struct RunOptions {
     pub duration_s: Option<f64>,
     /// Override `actors.vehicles.demand.rate_veh_per_h`. Changes the scenario hash.
     pub rate_veh_per_h: Option<f64>,
+    /// Run on this library city instead of the file's world ([`Scenario::with_city`]).
+    pub city: Option<String>,
     /// Print the outcome as JSON on stdout instead of as a table.
     pub json: bool,
 }
@@ -166,6 +168,11 @@ pub fn run(opts: &RunOptions) -> Result<RunOutcome> {
     // attacker schedule runs to 180 s, and let `--duration-s 5` through on a file whose
     // timeline has an event at 10 s — an event that would then never fire.
     let mut scenario = Scenario::load_unvalidated(&opts.scenario)?;
+    if let Some(city) = &opts.city {
+        scenario = scenario
+            .with_city(city)
+            .map_err(v2xw_engine::EngineError::Scenario)?;
+    }
     apply_overrides(&mut scenario, opts);
     scenario
         .validate()
@@ -178,7 +185,10 @@ pub fn run(opts: &RunOptions) -> Result<RunOutcome> {
     let out_dir = opts
         .out
         .clone()
-        .unwrap_or_else(|| PathBuf::from("runs").join(&name));
+        .unwrap_or_else(|| match &opts.city {
+            Some(city) => PathBuf::from("runs").join(format!("{name}-{city}")),
+            None => PathBuf::from("runs").join(&name),
+        });
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| CliError::io("cannot create output directory", &out_dir, e))?;
 

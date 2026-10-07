@@ -1,0 +1,824 @@
+# worlds/cities.yaml — the city library: every real city a scenario can run on.
+#
+# A scenario says what happens (traffic, radio, network, security, attacks); a city says
+# where. Any scenario runs on any city here: `v2xw run <scenario> --city <id>`, the
+# server's `run.start` / `scenario.load` with a `city`, and the Studio's city picker.
+#
+# What is here: the largest city of every US state and of the District of Columbia, plus
+# the cities most studied for connected vehicles where they differ (the USDOT connected-
+# vehicle pilots in New York and Tampa, Ann Arbor's connected environment, Smart Columbus,
+# Pittsburgh's adaptive signals, and the large Texas and California cores), and Berlin-Mitte
+# for the European stack. Each entry is a downtown box of about 1.5 km x 1.5 km chosen to
+# take in the core's signalised arterials.
+#
+# Fields:
+#   id              the city's name in every interface; its extract is worlds/cache/<id>.osm.xml
+#   name, state     what a person reads; `state` is the USPS code
+#   region          northeast, southeast, south, midwest, southwest, west (US Census-style)
+#   role            largest (the state's largest city), studied (a connected-vehicle study
+#                   site or large core), metro (the largest metropolitan core), international
+#   bbox            [south, west, north, east] degrees, WGS 84. It fixes the world frame: the
+#                   south-west corner is the origin, so re-fetching cannot move a coordinate.
+#   utc_offset_h    standard-time offset, for a scenario's `time.local_start`
+#   highway_preset  the jurisdiction's default speed limits and rules of the road
+#                   (crates/v2xw-world/src/jurisdiction.rs cites each one)
+#   fetched         the date the extract was downloaded, which becomes `world.imported_at`
+#   description     the area the box covers
+#   drive_lane_km   kilometres of driving lane in the imported network, and
+#   signals         signalised intersections in it — both measured by the city audit
+#                   (`cargo run -p v2xw-trafficval --bin city_audit -- <scenario>`); a fixed
+#                   arrival rate moved to another city is rescaled by the lane-km ratio
+#
+# Every city is imported and its traffic run under the traffic auditor before it is offered:
+# 90 simulated seconds at 12.5 vehicles per hour per kilometre of driving lane (Midtown's
+# 1,500 veh/h, the load of the validation suite's cities checks) with 100 pedestrians and
+# eight roadside units placed at its signalised intersections. A city passes when it imports,
+# vehicles complete trips, the units find intersections, and no safety invariant is broken
+# (collisions, red-light entries, vehicles in buildings, pedestrians hit, impossible motion).
+# A city's world leaves out `highway=service` alleys and driveways (world.service_roads).
+#
+# Source and licence: the extracts are OpenStreetMap data, (c) OpenStreetMap contributors,
+# available under the Open Database License (ODbL) 1.0, https://www.openstreetmap.org/copyright.
+# They are fetched from the Overpass API by `worlds/fetch.sh` and never committed (they are
+# large and ODbL share-alike); a world built from one carries the attribution.
+#
+# Fetch one with `worlds/fetch.sh <id>`, every missing one with `worlds/fetch.sh --all`.
+# A city that fails to import or whose traffic does not pass the auditor is listed under
+# `dropped:` with the reason instead of shipping broken.
+schema: v2xw/cities/1
+source: "OpenStreetMap, via the Overpass API (worlds/fetch.sh)"
+licence: "ODbL-1.0"
+attribution: "(c) OpenStreetMap contributors, ODbL 1.0, https://www.openstreetmap.org/copyright"
+
+cities:
+  - id: huntsville
+    name: "Huntsville"
+    state: AL
+    state_name: "Alabama"
+    region: south
+    role: largest
+    bbox: [34.7233, -86.5942, 34.7367, -86.5778]
+    area_km2: 2.24
+    utc_offset_h: -6
+    highway_preset: urban-us-al
+    fetched: "2026-10-07"
+    description: "Downtown Huntsville around the courthouse square: Clinton Avenue, Jefferson Street and Memorial Parkway's frontage"
+  - id: birmingham
+    name: "Birmingham"
+    state: AL
+    state_name: "Alabama"
+    region: south
+    role: metro
+    bbox: [33.5113, -86.8161, 33.5247, -86.7999]
+    area_km2: 2.24
+    utc_offset_h: -6
+    highway_preset: urban-us-al
+    fetched: "2026-10-07"
+    description: "Downtown Birmingham's grid of numbered avenues and streets between the railroad and Linn Park"
+  - id: anchorage
+    name: "Anchorage"
+    state: AK
+    state_name: "Alaska"
+    region: west
+    role: largest
+    bbox: [61.2103, -149.9040, 61.2237, -149.8760]
+    area_km2: 2.24
+    utc_offset_h: -9
+    highway_preset: urban-us-ak
+    fetched: "2026-10-07"
+    description: "Downtown Anchorage: the lettered and numbered grid of 4th to 9th Avenue, A to L Street"
+  - id: phoenix
+    name: "Phoenix"
+    state: AZ
+    state_name: "Arizona"
+    region: southwest
+    role: largest
+    bbox: [33.4433, -112.0811, 33.4567, -112.0649]
+    area_km2: 2.24
+    utc_offset_h: -7
+    highway_preset: urban-us-az
+    fetched: "2026-10-07"
+    description: "Downtown Phoenix: Washington and Jefferson Streets, Central Avenue and the light-rail loop"
+  - id: little-rock
+    name: "Little Rock"
+    state: AR
+    state_name: "Arkansas"
+    region: south
+    role: largest
+    bbox: [34.7403, -92.2942, 34.7537, -92.2778]
+    area_km2: 2.24
+    utc_offset_h: -6
+    highway_preset: urban-us-ar
+    fetched: "2026-10-07"
+    description: "Downtown Little Rock between the Arkansas River and I-630: Main, Broadway and Capitol Avenue"
+  - id: los-angeles
+    name: "Los Angeles"
+    state: CA
+    state_name: "California"
+    region: west
+    role: largest
+    bbox: [34.0413, -118.2591, 34.0547, -118.2429]
+    area_km2: 2.23
+    utc_offset_h: -8
+    highway_preset: urban-us-ca
+    fetched: "2026-10-07"
+    description: "Downtown Los Angeles: the Financial District and Historic Core, Figueroa to Broadway"
+  - id: san-diego
+    name: "San Diego"
+    state: CA
+    state_name: "California"
+    region: west
+    role: studied
+    bbox: [32.7083, -117.1680, 32.7217, -117.1520]
+    area_km2: 2.24
+    utc_offset_h: -8
+    highway_preset: urban-us-ca
+    fetched: "2026-10-07"
+    description: "Downtown San Diego: the Core, Gaslamp Quarter and East Village grid"
+  - id: san-francisco
+    name: "San Francisco"
+    state: CA
+    state_name: "California"
+    region: west
+    role: studied
+    bbox: [37.7823, -122.4095, 37.7957, -122.3925]
+    area_km2: 2.23
+    utc_offset_h: -8
+    highway_preset: urban-us-ca
+    fetched: "2026-10-07"
+    description: "San Francisco's Financial District and SoMa edge: Market Street and its diagonal grid"
+  - id: san-jose
+    name: "San Jose"
+    state: CA
+    state_name: "California"
+    region: west
+    role: studied
+    bbox: [37.3273, -121.8975, 37.3407, -121.8805]
+    area_km2: 2.24
+    utc_offset_h: -8
+    highway_preset: urban-us-ca
+    fetched: "2026-10-07"
+    description: "Downtown San Jose: Santa Clara Street, First and Second Streets and the light-rail transit mall"
+  - id: denver
+    name: "Denver"
+    state: CO
+    state_name: "Colorado"
+    region: west
+    role: largest
+    bbox: [39.7383, -105.0018, 39.7517, -104.9842]
+    area_km2: 2.25
+    utc_offset_h: -7
+    highway_preset: urban-us-co
+    fetched: "2026-10-07"
+    description: "Downtown Denver: the diagonal grid of the CBD, 16th Street and the one-way pairs"
+  - id: bridgeport
+    name: "Bridgeport"
+    state: CT
+    state_name: "Connecticut"
+    region: northeast
+    role: largest
+    bbox: [41.1723, -73.1990, 41.1857, -73.1810]
+    area_km2: 2.25
+    utc_offset_h: -5
+    highway_preset: urban-us-ct
+    fetched: "2026-10-07"
+    description: "Downtown Bridgeport: Main Street, Fairfield Avenue and the streets by the I-95 and the station"
+  - id: wilmington
+    name: "Wilmington"
+    state: DE
+    state_name: "Delaware"
+    region: northeast
+    role: largest
+    bbox: [39.7383, -75.5568, 39.7517, -75.5392]
+    area_km2: 2.25
+    utc_offset_h: -5
+    highway_preset: urban-us-de
+    fetched: "2026-10-07"
+    description: "Downtown Wilmington: Market Street and the one-way grid between the Brandywine and the Christina"
+  - id: washington
+    name: "Washington"
+    state: DC
+    state_name: "District of Columbia"
+    region: northeast
+    role: largest
+    bbox: [38.8933, -77.0407, 38.9067, -77.0233]
+    area_km2: 2.25
+    utc_offset_h: -5
+    highway_preset: urban-us-dc
+    fetched: "2026-10-07"
+    description: "Downtown Washington: K Street, the lettered and numbered grid with its diagonal avenues"
+  - id: jacksonville
+    name: "Jacksonville"
+    state: FL
+    state_name: "Florida"
+    region: southeast
+    role: largest
+    bbox: [30.3233, -81.6658, 30.3367, -81.6502]
+    area_km2: 2.24
+    utc_offset_h: -5
+    highway_preset: urban-us-fl
+    fetched: "2026-10-07"
+    description: "Downtown Jacksonville on the St. Johns River: Bay, Forsyth and Adams Streets"
+  - id: miami
+    name: "Miami"
+    state: FL
+    state_name: "Florida"
+    region: southeast
+    role: studied
+    bbox: [25.7673, -80.2005, 25.7807, -80.1855]
+    area_km2: 2.24
+    utc_offset_h: -5
+    highway_preset: urban-us-fl
+    fetched: "2026-10-07"
+    description: "Downtown Miami and Brickell's north end: Biscayne Boulevard, Flagler Street and the Metromover loop"
+  - id: tampa
+    name: "Tampa"
+    state: FL
+    state_name: "Florida"
+    region: southeast
+    role: studied
+    bbox: [27.9423, -82.4656, 27.9557, -82.4504]
+    area_km2: 2.23
+    utc_offset_h: -5
+    highway_preset: urban-us-fl
+    fetched: "2026-10-07"
+    description: "Downtown Tampa, home of the THEA connected-vehicle pilot: the Selmon Expressway's reversible lanes and the Meridian Avenue corridor"
+  - id: atlanta
+    name: "Atlanta"
+    state: GA
+    state_name: "Georgia"
+    region: southeast
+    role: largest
+    bbox: [33.7503, -84.3961, 33.7637, -84.3799]
+    area_km2: 2.24
+    utc_offset_h: -5
+    highway_preset: urban-us-ga
+    fetched: "2026-10-07"
+    description: "Downtown Atlanta: Peachtree Street, the irregular grid round Five Points, and the North Avenue smart corridor's south end"
+  - id: honolulu
+    name: "Honolulu"
+    state: HI
+    state_name: "Hawaii"
+    region: west
+    role: largest
+    bbox: [21.3003, -157.8672, 21.3137, -157.8528]
+    area_km2: 2.23
+    utc_offset_h: -10
+    highway_preset: urban-us-hi
+    fetched: "2026-10-07"
+    description: "Downtown Honolulu: King, Beretania and Bishop Streets between Chinatown and the Capitol"
+  - id: boise
+    name: "Boise"
+    state: ID
+    state_name: "Idaho"
+    region: west
+    role: largest
+    bbox: [43.6093, -116.2113, 43.6227, -116.1927]
+    area_km2: 2.24
+    utc_offset_h: -7
+    highway_preset: urban-us-id
+    fetched: "2026-10-07"
+    description: "Downtown Boise: the Main and Idaho Street one-way pair and the grid round the Capitol"
+  - id: chicago
+    name: "Chicago"
+    state: IL
+    state_name: "Illinois"
+    region: midwest
+    role: largest
+    bbox: [41.8773, -87.6390, 41.8907, -87.6210]
+    area_km2: 2.23
+    utc_offset_h: -6
+    highway_preset: urban-us-il
+    fetched: "2026-10-07"
+    description: "Chicago's Loop north of Congress Parkway: State, Dearborn and LaSalle Streets under and around the elevated tracks"
+  - id: indianapolis
+    name: "Indianapolis"
+    state: IN
+    state_name: "Indiana"
+    region: midwest
+    role: largest
+    bbox: [39.7613, -86.1668, 39.7747, -86.1492]
+    area_km2: 2.25
+    utc_offset_h: -5
+    highway_preset: urban-us-in
+    fetched: "2026-10-07"
+    description: "Downtown Indianapolis: Monument Circle and the Mile Square's grid with its diagonal avenues"
+  - id: des-moines
+    name: "Des Moines"
+    state: IA
+    state_name: "Iowa"
+    region: midwest
+    role: largest
+    bbox: [41.5793, -93.6350, 41.5927, -93.6170]
+    area_km2: 2.24
+    utc_offset_h: -6
+    highway_preset: urban-us-ia
+    fetched: "2026-10-07"
+    description: "Downtown Des Moines: Locust and Grand Avenue, the numbered streets and the skywalk core"
+  - id: wichita
+    name: "Wichita"
+    state: KS
+    state_name: "Kansas"
+    region: midwest
+    role: largest
+    bbox: [37.6813, -97.3445, 37.6947, -97.3275]
+    area_km2: 2.23
+    utc_offset_h: -6
+    highway_preset: urban-us-ks
+    fetched: "2026-10-07"
+    description: "Downtown Wichita: Douglas Avenue and Broadway, east of the Arkansas River"
+  - id: louisville
+    name: "Louisville"
+    state: KY
+    state_name: "Kentucky"
+    region: south
+    role: largest
+    bbox: [38.2463, -85.7676, 38.2597, -85.7504]
+    area_km2: 2.24
+    utc_offset_h: -5
+    highway_preset: urban-us-ky
+    fetched: "2026-10-07"
+    description: "Downtown Louisville: Main, Market and Jefferson Streets and the one-way numbered streets"
+  - id: new-orleans
+    name: "New Orleans"
+    state: LA
+    state_name: "Louisiana"
+    region: south
+    role: largest
+    bbox: [29.9453, -90.0788, 29.9587, -90.0632]
+    area_km2: 2.24
+    utc_offset_h: -6
+    highway_preset: urban-us-la
+    fetched: "2026-10-07"
+    description: "New Orleans' Central Business District and the edge of the French Quarter: Canal Street and Poydras Street"
+  - id: portland-me
+    name: "Portland"
+    state: ME
+    state_name: "Maine"
+    region: northeast
+    role: largest
+    bbox: [43.6513, -70.2653, 43.6647, -70.2467]
+    area_km2: 2.23
+    utc_offset_h: -5
+    highway_preset: urban-us-me
+    fetched: "2026-10-07"
+    description: "Downtown Portland, Maine: Congress Street and the Old Port's irregular streets"
+  - id: baltimore
+    name: "Baltimore"
+    state: MD
+    state_name: "Maryland"
+    region: northeast
+    role: largest
+    bbox: [39.2823, -76.6237, 39.2957, -76.6063]
+    area_km2: 2.24
+    utc_offset_h: -5
+    highway_preset: urban-us-md
+    fetched: "2026-10-07"
+    description: "Downtown Baltimore and the Inner Harbor: Pratt and Lombard Streets, Charles and Light Streets"
+  - id: boston
+    name: "Boston"
+    state: MA
+    state_name: "Massachusetts"
+    region: northeast
+    role: largest
+    bbox: [42.3493, -71.0691, 42.3627, -71.0509]
+    area_km2: 2.23
+    utc_offset_h: -5
+    highway_preset: urban-us-boston
+    fetched: "2026-10-07"
+    description: "Downtown Boston: the Financial District, Downtown Crossing and Government Center's irregular streets"
+  - id: detroit
+    name: "Detroit"
+    state: MI
+    state_name: "Michigan"
+    region: midwest
+    role: largest
+    bbox: [42.3253, -83.0571, 42.3387, -83.0389]
+    area_km2: 2.23
+    utc_offset_h: -5
+    highway_preset: urban-us-mi
+    fetched: "2026-10-07"
+    description: "Downtown Detroit: Woodward Avenue, Campus Martius and the radial avenues of the Woodward plan"
+  - id: ann-arbor
+    name: "Ann Arbor"
+    state: MI
+    state_name: "Michigan"
+    region: midwest
+    role: studied
+    bbox: [42.2733, -83.7521, 42.2867, -83.7339]
+    area_km2: 2.24
+    utc_offset_h: -5
+    highway_preset: urban-us-mi
+    fetched: "2026-10-07"
+    description: "Downtown Ann Arbor, the Ann Arbor Connected Environment's core: Main, Huron and Division Streets"
+  - id: minneapolis
+    name: "Minneapolis"
+    state: MN
+    state_name: "Minnesota"
+    region: midwest
+    role: largest
+    bbox: [44.9703, -93.2775, 44.9837, -93.2585]
+    area_km2: 2.23
+    utc_offset_h: -6
+    highway_preset: urban-us-mn
+    fetched: "2026-10-07"
+    description: "Downtown Minneapolis: Nicollet Mall, Hennepin Avenue and the one-way numbered streets"
+  - id: jackson
+    name: "Jackson"
+    state: MS
+    state_name: "Mississippi"
+    region: south
+    role: largest
+    bbox: [32.2923, -90.1930, 32.3057, -90.1770]
+    area_km2: 2.25
+    utc_offset_h: -6
+    highway_preset: urban-us-ms
+    fetched: "2026-10-07"
+    description: "Downtown Jackson: Capitol Street, State Street and the grid round the Capitol"
+  - id: kansas-city
+    name: "Kansas City"
+    state: MO
+    state_name: "Missouri"
+    region: midwest
+    role: largest
+    bbox: [39.0933, -94.5907, 39.1067, -94.5733]
+    area_km2: 2.24
+    utc_offset_h: -6
+    highway_preset: urban-us-mo
+    fetched: "2026-10-07"
+    description: "Downtown Kansas City: Grand Boulevard, Main Street and the streetcar line through the Loop"
+  - id: st-louis
+    name: "St. Louis"
+    state: MO
+    state_name: "Missouri"
+    region: midwest
+    role: metro
+    bbox: [38.6213, -90.2036, 38.6347, -90.1864]
+    area_km2: 2.23
+    utc_offset_h: -6
+    highway_preset: urban-us-mo
+    fetched: "2026-10-07"
+    description: "Downtown St. Louis: Market Street, Washington Avenue and the grid west of the Gateway Arch"
+  - id: billings
+    name: "Billings"
+    state: MT
+    state_name: "Montana"
+    region: west
+    role: largest
+    bbox: [45.7763, -108.5147, 45.7897, -108.4953]
+    area_km2: 2.25
+    utc_offset_h: -7
+    highway_preset: urban-us-mt
+    fetched: "2026-10-07"
+    description: "Downtown Billings: the numbered avenues and streets between the railroad and the Rims"
+  - id: omaha
+    name: "Omaha"
+    state: NE
+    state_name: "Nebraska"
+    region: midwest
+    role: largest
+    bbox: [41.2513, -95.9460, 41.2647, -95.9280]
+    area_km2: 2.25
+    utc_offset_h: -6
+    highway_preset: urban-us-ne
+    fetched: "2026-10-07"
+    description: "Downtown Omaha: Dodge and Farnam Streets and the Old Market"
+  - id: las-vegas
+    name: "Las Vegas"
+    state: NV
+    state_name: "Nevada"
+    region: southwest
+    role: largest
+    bbox: [36.1623, -115.1513, 36.1757, -115.1347]
+    area_km2: 2.23
+    utc_offset_h: -8
+    highway_preset: urban-us-nv
+    fetched: "2026-10-07"
+    description: "Downtown Las Vegas: Fremont Street, Las Vegas Boulevard and the Main Street corridor"
+  - id: manchester
+    name: "Manchester"
+    state: NH
+    state_name: "New Hampshire"
+    region: northeast
+    role: largest
+    bbox: [42.9843, -71.4722, 42.9977, -71.4538]
+    area_km2: 2.23
+    utc_offset_h: -5
+    highway_preset: urban-us-nh
+    fetched: "2026-10-07"
+    description: "Downtown Manchester: Elm Street and the grid between the Merrimack mills and Union Street"
+  - id: newark
+    name: "Newark"
+    state: NJ
+    state_name: "New Jersey"
+    region: northeast
+    role: largest
+    bbox: [40.7293, -74.1809, 40.7427, -74.1631]
+    area_km2: 2.24
+    utc_offset_h: -5
+    highway_preset: urban-us-nj
+    fetched: "2026-10-07"
+    description: "Downtown Newark: Broad Street, Market Street and Four Corners"
+  - id: albuquerque
+    name: "Albuquerque"
+    state: NM
+    state_name: "New Mexico"
+    region: southwest
+    role: largest
+    bbox: [35.0783, -106.6582, 35.0917, -106.6418]
+    area_km2: 2.23
+    utc_offset_h: -7
+    highway_preset: urban-us-nm
+    fetched: "2026-10-07"
+    description: "Downtown Albuquerque: Central Avenue (old Route 66), the ART bus-rapid-transit stations and the grid round Civic Plaza"
+  - id: manhattan
+    name: "New York (Midtown Manhattan)"
+    state: NY
+    state_name: "New York"
+    region: northeast
+    role: largest
+    bbox: [40.7440, -73.9900, 40.7620, -73.9680]
+    area_km2: 3.72
+    utc_offset_h: -5
+    highway_preset: urban-us-nyc
+    fetched: "2026-09-18"
+    description: "Midtown Manhattan from 44th to 60th Street, 8th Avenue to Park Avenue: the NYC Connected Vehicle Pilot's avenue corridors"
+  - id: charlotte
+    name: "Charlotte"
+    state: NC
+    state_name: "North Carolina"
+    region: southeast
+    role: largest
+    bbox: [35.2203, -80.8512, 35.2337, -80.8348]
+    area_km2: 2.22
+    utc_offset_h: -5
+    highway_preset: urban-us-nc
+    fetched: "2026-10-07"
+    description: "Uptown Charlotte: Trade and Tryon Streets and the four wards' one-way grid"
+  - id: fargo
+    name: "Fargo"
+    state: ND
+    state_name: "North Dakota"
+    region: midwest
+    role: largest
+    bbox: [46.8693, -96.7979, 46.8827, -96.7781]
+    area_km2: 2.25
+    utc_offset_h: -6
+    highway_preset: urban-us-nd
+    fetched: "2026-10-07"
+    description: "Downtown Fargo: Broadway and Main Avenue by the Red River"
+  - id: columbus
+    name: "Columbus"
+    state: OH
+    state_name: "Ohio"
+    region: midwest
+    role: largest
+    bbox: [39.9553, -83.0088, 39.9687, -82.9912]
+    area_km2: 2.24
+    utc_offset_h: -5
+    highway_preset: urban-us-oh
+    fetched: "2026-10-07"
+    description: "Downtown Columbus, the Smart Columbus core: High Street, Broad Street and the one-way pairs"
+  - id: oklahoma-city
+    name: "Oklahoma City"
+    state: OK
+    state_name: "Oklahoma"
+    region: south
+    role: largest
+    bbox: [35.4623, -97.5233, 35.4757, -97.5067]
+    area_km2: 2.24
+    utc_offset_h: -6
+    highway_preset: urban-us-ok
+    fetched: "2026-10-07"
+    description: "Downtown Oklahoma City: the CBD, Bricktown and the streetcar loop"
+  - id: portland
+    name: "Portland"
+    state: OR
+    state_name: "Oregon"
+    region: west
+    role: largest
+    bbox: [45.5120, -122.6860, 45.5250, -122.6700]
+    area_km2: 1.81
+    utc_offset_h: -8
+    highway_preset: urban-us-portland
+    fetched: "2026-09-30"
+    description: "Downtown Portland between the Willamette and I-405: 200 ft blocks of one-way streets, the transit mall on 5th and 6th"
+  - id: philadelphia
+    name: "Philadelphia"
+    state: PA
+    state_name: "Pennsylvania"
+    region: northeast
+    role: largest
+    bbox: [39.9478, -75.1748, 39.9612, -75.1572]
+    area_km2: 2.24
+    utc_offset_h: -5
+    highway_preset: urban-us-pa
+    fetched: "2026-10-07"
+    description: "Center City Philadelphia: Market Street, Broad Street and City Hall in Penn's grid, from Rittenhouse Square to Chinatown"
+  - id: pittsburgh
+    name: "Pittsburgh"
+    state: PA
+    state_name: "Pennsylvania"
+    region: northeast
+    role: studied
+    bbox: [40.4343, -80.0069, 40.4477, -79.9891]
+    area_km2: 2.25
+    utc_offset_h: -5
+    highway_preset: urban-us-pa
+    fetched: "2026-10-07"
+    description: "Downtown Pittsburgh's Golden Triangle, whose signals carry the Surtrac adaptive control studied by Carnegie Mellon"
+  - id: providence
+    name: "Providence"
+    state: RI
+    state_name: "Rhode Island"
+    region: northeast
+    role: largest
+    bbox: [41.8173, -71.4220, 41.8307, -71.4040]
+    area_km2: 2.23
+    utc_offset_h: -5
+    highway_preset: urban-us-ri
+    fetched: "2026-10-07"
+    description: "Downtown Providence: Kennedy Plaza, Westminster and Weybosset Streets"
+  - id: charleston-sc
+    name: "Charleston"
+    state: SC
+    state_name: "South Carolina"
+    region: southeast
+    role: largest
+    bbox: [32.7733, -79.9440, 32.7867, -79.9280]
+    area_km2: 2.23
+    utc_offset_h: -5
+    highway_preset: urban-us-sc
+    fetched: "2026-10-07"
+    description: "Downtown Charleston on the peninsula: King, Meeting and Calhoun Streets"
+  - id: sioux-falls
+    name: "Sioux Falls"
+    state: SD
+    state_name: "South Dakota"
+    region: midwest
+    role: largest
+    bbox: [43.5393, -96.7373, 43.5527, -96.7187]
+    area_km2: 2.24
+    utc_offset_h: -6
+    highway_preset: urban-us-sd
+    fetched: "2026-10-07"
+    description: "Downtown Sioux Falls: Phillips Avenue and the grid by the Big Sioux River"
+  - id: nashville
+    name: "Nashville"
+    state: TN
+    state_name: "Tennessee"
+    region: south
+    role: largest
+    bbox: [36.1553, -86.7873, 36.1687, -86.7707]
+    area_km2: 2.23
+    utc_offset_h: -6
+    highway_preset: urban-us-tn
+    fetched: "2026-10-07"
+    description: "Downtown Nashville: Broadway, the numbered avenues and the grid between the Capitol and the Cumberland"
+  - id: houston
+    name: "Houston"
+    state: TX
+    state_name: "Texas"
+    region: south
+    role: largest
+    bbox: [29.7513, -95.3728, 29.7647, -95.3572]
+    area_km2: 2.25
+    utc_offset_h: -6
+    highway_preset: urban-us-tx
+    fetched: "2026-10-07"
+    description: "Downtown Houston: Main Street's light rail and the one-way grid of the CBD"
+  - id: austin
+    name: "Austin"
+    state: TX
+    state_name: "Texas"
+    region: south
+    role: studied
+    bbox: [30.2613, -97.7508, 30.2747, -97.7352]
+    area_km2: 2.24
+    utc_offset_h: -6
+    highway_preset: urban-us-tx
+    fetched: "2026-10-07"
+    description: "Downtown Austin: Congress Avenue and the numbered streets between Lady Bird Lake and the Capitol"
+  - id: dallas
+    name: "Dallas"
+    state: TX
+    state_name: "Texas"
+    region: south
+    role: studied
+    bbox: [32.7743, -96.8070, 32.7877, -96.7910]
+    area_km2: 2.23
+    utc_offset_h: -6
+    highway_preset: urban-us-tx
+    fetched: "2026-10-07"
+    description: "Downtown Dallas: Elm, Main and Commerce Streets and the DART transit mall"
+  - id: san-antonio
+    name: "San Antonio"
+    state: TX
+    state_name: "Texas"
+    region: south
+    role: studied
+    bbox: [29.4183, -98.4997, 29.4317, -98.4843]
+    area_km2: 2.23
+    utc_offset_h: -6
+    highway_preset: urban-us-tx
+    fetched: "2026-10-07"
+    description: "Downtown San Antonio: Commerce and Houston Streets round the River Walk and the Alamo"
+  - id: salt-lake-city
+    name: "Salt Lake City"
+    state: UT
+    state_name: "Utah"
+    region: west
+    role: largest
+    bbox: [40.7553, -111.8989, 40.7687, -111.8811]
+    area_km2: 2.24
+    utc_offset_h: -7
+    highway_preset: urban-us-ut
+    fetched: "2026-10-07"
+    description: "Downtown Salt Lake City: its wide-block grid of Main, State and 200 South, with TRAX on Main Street"
+  - id: burlington
+    name: "Burlington"
+    state: VT
+    state_name: "Vermont"
+    region: northeast
+    role: largest
+    bbox: [44.4703, -73.2224, 44.4837, -73.2036]
+    area_km2: 2.23
+    utc_offset_h: -5
+    highway_preset: urban-us-vt
+    fetched: "2026-10-07"
+    description: "Downtown Burlington: Church Street and the grid down to the Lake Champlain waterfront"
+  - id: virginia-beach
+    name: "Virginia Beach"
+    state: VA
+    state_name: "Virginia"
+    region: southeast
+    role: largest
+    bbox: [36.8363, -76.1434, 36.8497, -76.1266]
+    area_km2: 2.23
+    utc_offset_h: -5
+    highway_preset: urban-us-va
+    fetched: "2026-10-07"
+    description: "Virginia Beach Town Center, the city's central business district: Virginia Beach Boulevard and Independence Boulevard"
+  - id: seattle
+    name: "Seattle"
+    state: WA
+    state_name: "Washington"
+    region: west
+    role: largest
+    bbox: [47.6013, -122.3450, 47.6147, -122.3250]
+    area_km2: 2.24
+    utc_offset_h: -8
+    highway_preset: urban-us-wa
+    fetched: "2026-10-07"
+    description: "Downtown Seattle: the steep grid of 1st to 6th Avenue between Pike Street and Pioneer Square"
+  - id: charleston-wv
+    name: "Charleston"
+    state: WV
+    state_name: "West Virginia"
+    region: south
+    role: largest
+    bbox: [38.3433, -81.6406, 38.3567, -81.6234]
+    area_km2: 2.24
+    utc_offset_h: -5
+    highway_preset: urban-us-wv
+    fetched: "2026-10-07"
+    description: "Downtown Charleston, West Virginia: Kanawha Boulevard and the grid between the river and I-64"
+  - id: milwaukee
+    name: "Milwaukee"
+    state: WI
+    state_name: "Wisconsin"
+    region: midwest
+    role: largest
+    bbox: [43.0333, -87.9192, 43.0467, -87.9008]
+    area_km2: 2.23
+    utc_offset_h: -6
+    highway_preset: urban-us-wi
+    fetched: "2026-10-07"
+    description: "Downtown Milwaukee: Wisconsin Avenue and the grid either side of the Milwaukee River"
+  - id: cheyenne
+    name: "Cheyenne"
+    state: WY
+    state_name: "Wyoming"
+    region: west
+    role: largest
+    bbox: [41.1323, -104.8289, 41.1457, -104.8111]
+    area_km2: 2.23
+    utc_offset_h: -7
+    highway_preset: urban-us-wy
+    fetched: "2026-10-07"
+    description: "Downtown Cheyenne: Lincolnway (old US 30), Capitol Avenue and the grid north of the Union Pacific yard"
+  - id: berlin
+    name: "Berlin-Mitte"
+    state: BE
+    state_name: "Berlin, Germany"
+    region: europe
+    role: international
+    bbox: [52.5140, 13.3880, 52.5250, 13.4080]
+    area_km2: 1.66
+    utc_offset_h: 1
+    highway_preset: urban-de
+    fetched: "2026-09-30"
+    description: "Berlin-Mitte from Friedrichstraße to the Museumsinsel: Unter den Linden and the streets either side"
+
+# Cities taken out of the default list, with the reason (see the header).
+dropped: []

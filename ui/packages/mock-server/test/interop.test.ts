@@ -169,7 +169,7 @@ describe("HTTP companions (§1.1)", () => {
   it("§6.3 — /rpc/schema is an OpenRPC 1.3.2 document naming all 32 methods", async () => {
     const doc = (await (await fetch(`${base.httpUrl}/rpc/schema`)).json()) as { openrpc: string; methods: { name: string }[] };
     expect(doc.openrpc).toBe("1.3.2");
-    expect(doc.methods).toHaveLength(32);
+    expect(doc.methods).toHaveLength(33);
     expect(doc.methods.map((m) => m.name)).toContain("rpc.discover");
   });
 });

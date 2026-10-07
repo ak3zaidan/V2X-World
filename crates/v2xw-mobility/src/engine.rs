@@ -1035,6 +1035,8 @@ pub struct NativeMobility {
     next_actor: u32,
     next_seq: u64,
     dropped_trips: u64,
+    /// Of [`Self::dropped_trips`], the trips with no route from their origin or no room on it.
+    unroutable_trips: u64,
     card: ModelCard,
     /// The exterior lamp model's parameters ([`crate::lamps`]).
     lamp_params: crate::lamps::LampParams,
@@ -1145,6 +1147,7 @@ impl NativeMobility {
             next_actor: 0,
             next_seq: 0,
             dropped_trips: 0,
+            unroutable_trips: 0,
             lamp_params: crate::lamps::LampParams::default(),
             lamp_memory: BTreeMap::new(),
         }
@@ -1277,6 +1280,12 @@ impl NativeMobility {
     /// How many trips were dropped because their origin was occupied or unroutable.
     pub fn dropped_trips(&self) -> u64 {
         self.dropped_trips
+    }
+
+    /// How many of the dropped trips had no route, or an origin lane too short to stand on
+    /// (the rest waited [`MAX_DEPART_DELAY`] for room and gave up).
+    pub fn unroutable_trips(&self) -> u64 {
+        self.unroutable_trips
     }
 
     /// The pedestrian model, if one was given.
@@ -3455,7 +3464,11 @@ impl Mobility for NativeMobility {
                             });
                             self.waiting.push((trip, since, Some(id)));
                         }
-                        Insertion::Occupied | Insertion::Unroutable => self.dropped_trips += 1,
+                        Insertion::Occupied => self.dropped_trips += 1,
+                        Insertion::Unroutable => {
+                            self.dropped_trips += 1;
+                            self.unroutable_trips += 1;
+                        }
                     }
                 }
             } else {

@@ -15,12 +15,16 @@ schema: v2xw/scenario/1
 
 meta:
   base: midtown-street-life.yaml
-  name: Midtown Manhattan - pedestrians, jaywalkers and motorcycles
+  name: Pedestrians, jaywalkers and motorcycles
   description: >-
-    Midtown at midday with people crossing against the signal and mid-block, groups,
+    Midday downtown with people crossing against the signal and mid-block, groups,
     cyclists on bikes and e-bikes, and motorcycles and delivery mopeds among the cars;
     the vehicles all sign safety messages.
-  tags: [manhattan, pedestrians, jaywalking, cyclists, motorcycles, vru]
+  tags: [pedestrians, jaywalking, cyclists, motorcycles, vru]
+
+# Midtown's street life (midtown-street-life.yaml) by default; on another city the crowd and the
+# fleet scale with its network and its jurisdiction decides whether crossing mid-block is lawful.
+city: manhattan
 
 actors:
   vru:

@@ -21,8 +21,18 @@ meta:
     tries to follow cars across their pseudonym changes.
   tags: [privacy, pseudonym, eavesdropper, scms, credentials, backend]
 
+# A real downtown by default (the base runs on a procedural grid): the eavesdropper's sniffers
+# sit at the city's own junctions.
+city: manhattan
+
 time:
   t0: "2027-03-04T17:00:00Z"
+
+actors:
+  vehicles:
+    demand:
+      # The base's 1,500 veh/h on its grid, as a density: about 1,500 veh/h on Midtown.
+      rate_veh_per_h_per_lane_km: 12.6
 
 threats:
   eavesdropper:

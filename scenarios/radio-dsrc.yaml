@@ -9,7 +9,7 @@ meta:
   base: base/radio-faceoff.yaml
   name: Radio comparison - DSRC (802.11p)
   description: >-
-    Rush-hour Midtown with every car on DSRC (802.11p) and J2945/1 congestion control. Run
+    Rush hour downtown with every car on DSRC (802.11p) and J2945/1 congestion control. Run
     it, then the C-V2X versions: the traffic is identical, only the radio changes.
   tags: [radio, comparison, dsrc]
 

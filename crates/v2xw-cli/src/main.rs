@@ -45,6 +45,7 @@ fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
     match &cli.command {
         Command::Agent(args) => agent::agent(&args.to_options()),
         Command::Serve(args) => agent::serve(&args.to_options()),
+        Command::Cities(args) => Ok(cities(args.filter.as_deref(), args.json)),
         Command::Run(args) => {
             let outcome = run::run(&args.to_options())?;
             if args.json {
@@ -105,6 +106,66 @@ fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
             }
         },
     }
+}
+
+/// `v2xw cities`: the library, grouped by state, or as JSON.
+fn cities(filter: Option<&str>, as_json: bool) -> String {
+    let wanted = filter.map(str::to_lowercase);
+    let matches = |c: &v2xw_engine::city::City| {
+        wanted.as_deref().is_none_or(|w| {
+            [&c.id, &c.name, &c.state, &c.state_name]
+                .iter()
+                .any(|f| f.to_lowercase().contains(w))
+        })
+    };
+    let registry = v2xw_engine::city::registry();
+    if as_json {
+        let mut v = v2xw_engine::city::list_json();
+        if let Some(list) = v.get_mut("cities").and_then(serde_json::Value::as_array_mut) {
+            list.retain(|c| {
+                c.get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(v2xw_engine::city::find)
+                    .is_some_and(matches)
+            });
+        }
+        return serde_json::to_string_pretty(&v).unwrap_or_default() + "\n";
+    }
+    let mut out = String::new();
+    let mut state = String::new();
+    let mut missing = 0;
+    for c in registry.cities.iter().filter(|c| matches(c)) {
+        if c.state_name != state {
+            state.clone_from(&c.state_name);
+            out.push_str(&format!("{state}\n"));
+        }
+        let present = c.extract_present();
+        if !present {
+            missing += 1;
+        }
+        out.push_str(&format!(
+            "  {:<16} {:<30} {:<17} {}{}\n",
+            c.id,
+            c.name,
+            c.highway_preset,
+            c.description,
+            if present { "" } else { "  [not fetched]" }
+        ));
+    }
+    for d in &registry.dropped {
+        out.push_str(&format!("dropped: {} — {}\n", d.id, d.reason));
+    }
+    if missing > 0 {
+        out.push_str(&format!(
+            "\n{missing} extract(s) not fetched yet: worlds/fetch.sh <id> downloads one, \
+             worlds/fetch.sh --all every missing one.\n"
+        ));
+    }
+    out.push_str(&format!(
+        "\nRun any scenario on a city with `v2xw run <scenario> --city <id>`.\nMap data {}\n",
+        registry.attribution
+    ));
+    out
 }
 
 fn json<T: serde::Serialize>(value: &T, what: &'static str) -> v2xw_cli::Result<String> {

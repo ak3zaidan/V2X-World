@@ -43,6 +43,18 @@ pub enum Command {
     Agent(AgentArgs),
     /// Serve a run with the agent's endpoints beside the engine's (what the Studio uses).
     Serve(ServeArgs),
+    /// List the city library: every city a scenario can run on (`--city`), by state.
+    Cities(CitiesArgs),
+}
+
+/// `v2xw cities`.
+#[derive(Debug, clap::Args)]
+pub struct CitiesArgs {
+    /// Only the cities whose name, id, state or state code contains this, ignoring case.
+    pub filter: Option<String>,
+    /// Print the registry as JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// `v2xw agent`.
@@ -197,6 +209,11 @@ pub struct RunArgs {
     #[arg(long, value_name = "VEH_PER_H")]
     pub rate_veh_per_h: Option<f64>,
 
+    /// Run the scenario on this city of the library (`v2xw cities` lists them), in place
+    /// of the world the file names. Changes the scenario hash.
+    #[arg(long, value_name = "ID")]
+    pub city: Option<String>,
+
     /// Print the outcome as JSON.
     #[arg(long)]
     pub json: bool,
@@ -216,6 +233,7 @@ impl RunArgs {
             verify: !self.no_verify && !self.no_recording,
             duration_s: self.duration_s,
             rate_veh_per_h: self.rate_veh_per_h,
+            city: self.city.clone(),
             json: self.json,
         }
     }

@@ -16,7 +16,7 @@ meta:
   base: midtown-normal.yaml
   name: Post-quantum security - the cost on the air
   description: >-
-    Midday Midtown with quantum-safe hybrid signatures (Falcon-512 + P-256) on every
+    Midday downtown with quantum-safe hybrid signatures (Falcon-512 + P-256) on every
     message and certificate: messages grow several times over and are sent in pieces.
     Compare delivery, latency and channel load with the normal-traffic scenario.
   tags: [security, post-quantum, falcon, hybrid, fragmentation, scms]

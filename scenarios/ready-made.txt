@@ -6,6 +6,11 @@
 # file here is still a scenario that loads by path — the study, test and benchmark files — it
 # is just not offered in the picker. The names and one-line descriptions shown are each file's
 # `meta.name` and `meta.description`.
+#
+# None of them is tied to a place: the picker chooses the scenario first and then the city it
+# runs on (worlds/cities.yaml; `v2xw run <file> --city <id>`). A file's `city` is only its
+# default. The cities themselves are not scenarios, so there is no "other cities" group: every
+# scenario here runs on Portland, Berlin or any of the library's US cities.
 
 ## Everyday traffic
 midtown-normal.yaml
@@ -15,14 +20,11 @@ midtown-pedestrians.yaml
 midtown-rain.yaml
 highway-congestion.yaml
 
-## Other cities
-portland.yaml
-berlin.yaml
-
 ## Radio technology
 radio-dsrc.yaml
 radio-lte.yaml
 radio-nr.yaml
+berlin.yaml
 
 ## Attacks and defences
 attack-fake-positions.yaml

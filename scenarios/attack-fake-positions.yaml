@@ -18,7 +18,7 @@ meta:
   base: midtown-rush-hour.yaml
   name: Attack - fake positions at rush hour (detected and revoked)
   description: >-
-    Rush-hour Midtown where 4 % of cars broadcast false positions. Nearby cars and roadside
+    Rush hour where 4 % of cars broadcast false positions. Nearby cars and roadside
     units detect the lies, report them, and the credential system revokes the attackers'
     certificates while the traffic keeps flowing.
   tags: [attack, misbehaviour, position-falsification, detection, revocation, scms, rush-hour]

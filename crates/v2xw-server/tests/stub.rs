@@ -162,6 +162,7 @@ fn run_control_refuses_what_section_6_6_says_it_should() {
                 speed: Some(1.0),
                 seed: None,
                 scenario: None,
+                city: None,
             })
             .expect_err("already running")
             .code(),
