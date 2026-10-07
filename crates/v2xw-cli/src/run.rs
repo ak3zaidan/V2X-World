@@ -87,7 +87,8 @@ pub struct LongRun {
     pub checkpoint_every_s: Option<f64>,
     /// How much of the run reaches the recording.
     pub record_level: crate::stream::RecordLevel,
-    /// Stop at the first checkpoint at or after this simulated second, as a crash would:
+    /// Stop at the first progress line or checkpoint at or after this simulated second, as a
+    /// crash would, with the outputs past the last checkpoint on disk:
     /// the open segment is left unfinished. For testing resume.
     pub stop_at_s: Option<f64>,
 }
@@ -647,14 +648,20 @@ fn execute(
                     crate::progress::fmt_sim((c + 1) as f64 / 1e9),
                     out_dir.join(crate::checkpoint::FILE).display()
                 ));
-                if stop_at_ns.is_some_and(|s| c + 1 >= s) {
-                    tally.into_inner().abandon();
-                    return Err(CliError::Interrupted {
-                        at_s: (c + 1) as f64 / 1e9,
-                    });
-                }
             }
             next_checkpoint = Some(c.saturating_add(every));
+        }
+        // `--stop-at`: stop here as a crash would, after the outputs have moved on past the
+        // last checkpoint — the metrics written so far are on disk, the progress line is
+        // there, the open segment is never finished — so a resume has something to cut back.
+        if !done && stop_at_ns.is_some_and(|s| t_ns >= s) {
+            if let Some(m) = tally.metrics_mut() {
+                let _ = m.flush();
+            }
+            tally.into_inner().abandon();
+            return Err(CliError::Interrupted {
+                at_s: t_ns as f64 / 1e9,
+            });
         }
         if done {
             break;

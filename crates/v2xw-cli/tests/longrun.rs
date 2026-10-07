@@ -94,18 +94,24 @@ fn a_resumed_run_is_the_run_that_was_never_interrupted() {
         whole.recording_segments
     );
 
-    // Interrupted at its first checkpoint after 45 s — the 60 s one — as a crash leaves it:
-    // the segment being written is never finished.
+    // Interrupted at 45 s, fifteen seconds after its 30 s checkpoint, as a crash leaves it:
+    // the metrics and the progress of those fifteen seconds are on disk, the segment being
+    // written is never finished.
     let cut_dir = out_dir("cut");
     let err = run(&options(&cut_dir, checkpointed(Some(45.0)))).expect_err("stopped");
     assert!(
-        matches!(err, v2xw_cli::CliError::Interrupted { at_s } if (at_s - 60.0).abs() < 1e-6),
+        matches!(err, v2xw_cli::CliError::Interrupted { at_s } if (at_s - 45.0).abs() < 1e-6),
         "{err}"
     );
     let checkpoint = cut_dir.join("checkpoint.json");
     let ck: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&checkpoint).expect("checkpoint")).expect("json");
-    assert_eq!(ck["segments_done"], 2);
+    assert_eq!(ck["segments_done"], 1);
+    assert!(
+        std::fs::metadata(cut_dir.join("metrics.json")).expect("metrics").len()
+            > ck["metrics_bytes"].as_u64().expect("metrics_bytes"),
+        "the crash left metrics past the checkpoint, which the resume must cut"
+    );
 
     // Control: a checkpoint whose digest does not match what the rebuilt run reaches is
     // refused, and refused before any output is touched.
@@ -135,7 +141,7 @@ fn a_resumed_run_is_the_run_that_was_never_interrupted() {
     );
 
     let resumed = resume(&checkpoint, true, false).expect("resumed");
-    assert_eq!(resumed.resumed.map(|r| r.from_s.round()), Some(60.0));
+    assert_eq!(resumed.resumed.map(|r| r.from_s.round()), Some(30.0));
 
     // Control: the digest moved between the checkpoint and the end, so the equalities below
     // are about the whole run.

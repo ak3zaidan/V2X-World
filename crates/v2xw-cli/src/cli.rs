@@ -227,7 +227,8 @@ pub struct RunArgs {
     #[arg(long, value_enum, default_value = "full")]
     pub record_level: crate::stream::RecordLevel,
 
-    /// Stop at the first checkpoint at or after this simulated time, as a crash would.
+    /// Stop at the first progress line or checkpoint at or after this simulated time, as a
+    /// crash would.
     /// For testing `v2xw resume`.
     #[arg(long, value_name = "DURATION", value_parser = parse_duration, hide = true)]
     pub stop_at: Option<f64>,
