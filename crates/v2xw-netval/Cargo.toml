@@ -1,0 +1,25 @@
+[package]
+name = "v2xw-netval"
+description = "The network validation suite: every layer of the network simulation held to its reference, each check proved able to fail, and the generated report."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+# A validation crate, not part of the engine: nothing depends on it, and it depends on
+# every crate of the network stack so it can hold each one to its reference from outside.
+[dependencies]
+v2xw-core = { workspace = true }
+v2xw-world = { workspace = true }
+v2xw-radio = { workspace = true }
+v2xw-net = { workspace = true }
+v2xw-msg = { workspace = true }
+v2xw-sec = { workspace = true }
+v2xw-node = { workspace = true }
+v2xw-engine = { workspace = true }
+v2xw-metrics = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }

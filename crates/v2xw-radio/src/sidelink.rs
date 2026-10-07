@@ -394,7 +394,7 @@ impl Rri {
     ///
     /// LTE [Garcia 2021 §II.B]: `[5, 15]` for RRI ≥ 100 ms, `[10, 30]` for 50 ms,
     /// `[25, 75]` for 20 ms. NR [TS 38.321 §5.22.1]: `[5C, 15C]` with
-    /// `C = 100 / max(20, RRI)`, which reproduces the LTE numbers at 20 and 100 ms and
+    /// `C = ⌈100 / max(20, RRI)⌉`, which reproduces the LTE numbers at 20 and 100 ms and
     /// differs at 50 ms (`C = 2`, so `[10, 30]` — the same) and below 20 ms (`C = 5`).
     #[must_use]
     pub fn c_resel_range(self, rat: SlRat) -> (u32, u32) {
@@ -411,7 +411,9 @@ impl Rri {
                 if self.0 >= 100 {
                     (5, 15)
                 } else {
-                    let c = 100 / self.0.max(20);
+                    // ⌈100 / max(20, RRI)⌉, rounded *up* as TS 38.321 §5.22.1.1
+                    // prints it: at 60 ms that is 2, so [10, 30], not [5, 15].
+                    let c = 100u32.div_ceil(self.0.max(20));
                     (5 * c, 15 * c)
                 }
             }
@@ -1482,7 +1484,10 @@ mod tests {
         assert_eq!(Rri(100).c_resel_range(SlRat::LteMode4), (5, 15));
         assert_eq!(Rri(50).c_resel_range(SlRat::LteMode4), (10, 30));
         assert_eq!(Rri(20).c_resel_range(SlRat::LteMode4), (25, 75));
-        // NR's C = 100/max(20, RRI) rule reproduces them [TS 38.321 §5.22.1].
+        // NR's C = ⌈100/max(20, RRI)⌉ rule reproduces them [TS 38.321 §5.22.1.1], and
+        // rounds up between them: 60 ms gives C = 2, not 1.
+        assert_eq!(Rri(60).c_resel_range(SlRat::NrMode2), (10, 30));
+        assert_eq!(Rri(30).c_resel_range(SlRat::NrMode2), (20, 60));
         assert_eq!(Rri(100).c_resel_range(SlRat::NrMode2), (5, 15));
         assert_eq!(Rri(50).c_resel_range(SlRat::NrMode2), (10, 30));
         assert_eq!(Rri(20).c_resel_range(SlRat::NrMode2), (25, 75));

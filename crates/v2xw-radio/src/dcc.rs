@@ -815,6 +815,24 @@ impl ReactiveTable {
     }
 }
 
+/// The state next to `from` in the direction of `to` (TS 102 687 §5.3's neighbour rule).
+fn neighbour_towards(from: ReactiveState, to: ReactiveState) -> ReactiveState {
+    const ORDER: [ReactiveState; 5] = [
+        ReactiveState::Relaxed,
+        ReactiveState::Active1,
+        ReactiveState::Active2,
+        ReactiveState::Active3,
+        ReactiveState::Restrictive,
+    ];
+    let i = ORDER.iter().position(|s| *s == from).unwrap_or(0);
+    let j = ORDER.iter().position(|s| *s == to).unwrap_or(0);
+    match i.cmp(&j) {
+        core::cmp::Ordering::Less => ORDER[i + 1],
+        core::cmp::Ordering::Greater => ORDER[i - 1],
+        core::cmp::Ordering::Equal => from,
+    }
+}
+
 /// `dcc/etsi/reactive-ts102687` — the informative reactive state machine
 /// (04-models.md §6.2).
 #[derive(Debug)]
@@ -917,7 +935,10 @@ impl<C: Ctx + ?Sized> Dcc<C> for ReactiveDcc {
         state.has_measurement = true;
         let target = table.state_for(state.cbr);
         if target != state.state && now.saturating_sub(state.entered_at) >= hold {
-            state.state = target;
+            // One state per evaluation: "one state can only be reached by a neighbouring
+            // state" [TS 102 687 V1.2.1 §5.3]. A load that jumps from Relaxed's band to
+            // Restrictive's walks through the three active states, one per T_CBR.
+            state.state = neighbour_towards(state.state, target);
             state.entered_at = now;
         }
     }

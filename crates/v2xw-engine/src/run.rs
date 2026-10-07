@@ -4511,6 +4511,10 @@ impl Engine {
             Phy::cca(phy, &ctx, node, channel)
         };
         let busy = matches!(cca, v2xw_radio::CcaState::Busy { .. });
+        // The medium is sampled here, at this node's own timer, which can be slots after
+        // another frame began. The backoff must stop counting when the medium went busy,
+        // not now (EN 302 663 Annex C.4.2), so the MAC is told that instant first.
+        let busy_since = busy.then(|| self.medium_busy_since(node, now));
         {
             let Engine {
                 scheduler,
@@ -4527,6 +4531,9 @@ impl Engine {
                 scheduler, rng, world, snapshot, provenance, params, &mut null,
             );
             let mac = mac.as_mut().expect("checked above");
+            if let Some(since) = busy_since {
+                mac.freeze_at(node, channel, since);
+            }
             Mac::on_cca(mac, &mut ctx, node, channel, cca);
         }
 
@@ -4773,6 +4780,49 @@ impl Engine {
                 );
             }
         }
+    }
+
+    /// The instant the medium went busy at one node, by its own energy detector: the
+    /// counterpart of [`Engine::medium_idle_at`], and `now` when nothing is in flight.
+    ///
+    /// The MAC's countdown has to stop at this instant rather than at the timer that
+    /// sampled the medium ([`EdcaOcbMac::freeze_at`]).
+    fn medium_busy_since(&self, node: NodeId, now: SimTime) -> SimTime {
+        // The earliest start among the transmissions holding this node's medium busy now:
+        // the arrivals at or above the CCA threshold, this node's own frame, and a jammer
+        // above the energy-detection threshold. A busy period chained from frames that
+        // have already ended is dated from the oldest frame still on the air.
+        let threshold = self.phy.cca_config().cca_threshold_dbm();
+        let mut since = now;
+        for frame in self.live_at_rx.get(&node).into_iter().flatten() {
+            let Some(state) = self.frames.get(frame) else {
+                continue;
+            };
+            if state.start <= now
+                && state.end > now
+                && state
+                    .arrivals
+                    .get(&node)
+                    .is_some_and(|&(p, _)| p >= threshold)
+            {
+                since = since.min(state.start);
+            }
+        }
+        for state in self.frames.values() {
+            if state.tx == node
+                && state.tx_handle.is_some()
+                && state.start <= now
+                && state.end > now
+            {
+                since = since.min(state.start);
+            }
+        }
+        for a in self.phy.jamming().at(node) {
+            if a.power_dbm >= threshold && a.window.from <= now && a.window.to > now {
+                since = since.min(a.window.from);
+            }
+        }
+        since
     }
 
     /// The instant the medium stops being busy at one node, by its own energy detector.
