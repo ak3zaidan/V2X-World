@@ -31,7 +31,7 @@ use v2xw_mobility::intersection::gap_acceptance::{HcmGaps, Movement};
 use v2xw_mobility::lanechange::mobil::{Mobil, MobilParams, MobilPreset};
 use v2xw_mobility::traits::{CarFollowing, LaneChange, Mobility};
 use v2xw_mobility::views::{
-    DriverProfile, LaneChangeDecision, LaneNeighbors, LaneView, LeaderView, Side, SideNeighbors,
+    DriverProfile, LaneChangeDecision, LaneNeighbors, LeaderView, Side, SideNeighbors,
     VehicleView,
 };
 use v2xw_mobility::vru::social_force::SocialForceParams;
@@ -311,10 +311,27 @@ fn idm_stop(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
 // String stability
 // ---------------------------------------------------------------------------------------
 
+/// The equilibrium speed at gap `s`, `f(s, v, v) = 0`, by bisection to 1e-13 m/s on the
+/// engine's own function: a platoon started a hair off it relaxes over minutes at low
+/// density (the gap mode's time constant is |f_v|/f_s), and that slow drift would leak into
+/// the frequency-response reading.
+fn equilibrium(idm: &Idm, d: &DriverProfile, v0: f64, s: f64) -> f64 {
+    let (mut lo, mut hi) = (0.0f64, v0.max(0.1) * 1.5);
+    for _ in 0..80 {
+        let mid = 0.5 * (lo + hi);
+        if idm.accel_of(mid, v0, s, mid, d) > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
 /// The partial derivatives `(f_s, f_v, f_Δv)` of the model at the equilibrium of gap `s`
 /// (Δv = v − v_leader; f_v with Δv held), from central differences.
 fn partials(idm: &Idm, d: &DriverProfile, v0: f64, s: f64) -> (f64, f64, f64) {
-    let v = fd::equilibrium_speed_mps(idm, d, v0, s);
+    let v = equilibrium(idm, d, v0, s);
     let h = 1e-4;
     let f = |s: f64, v: f64, vl: f64| idm.accel_of(v, v0, s, vl, d);
     let fs = (f(s + h, v, v) - f(s - h, v, v)) / (2.0 * h);
@@ -328,7 +345,7 @@ fn partials(idm: &Idm, d: &DriverProfile, v0: f64, s: f64) -> (f64, f64, f64) {
 /// The linear string-stability criterion `f_v²/2 + f_v·f_Δv − f_s` at the equilibrium of
 /// gap `s`.
 fn criterion(idm: &Idm, d: &DriverProfile, v0: f64, s: f64) -> (f64, f64) {
-    let v = fd::equilibrium_speed_mps(idm, d, v0, s);
+    let v = equilibrium(idm, d, v0, s);
     let (fs, fv, fdv) = partials(idm, d, v0, s);
     (v, fv * fv / 2.0 + fv * fdv - fs)
 }
@@ -348,11 +365,11 @@ fn transfer_gain(fs: f64, fv: f64, fdv: f64, omega: f64) -> f64 {
 /// whole periods onto sin and cos at ω, and the per-car gain is the geometric mean of the
 /// ratios from the leader to the last car the probe still reaches. `delay_s` makes every follower see the platoon that
 /// long ago (the fault).
-fn platoon_gain(idm: &Idm, d: &DriverProfile, v0: f64, s: f64, length: f64, delay_s: f64, omega: f64) -> f64 {
+fn platoon_gain(idm: &Idm, d: &DriverProfile, v0: f64, s: f64, length: f64, delay_s: f64, omega: f64) -> (f64, Vec<f64>) {
     const N: usize = 16;
     const AMP: f64 = 0.05;
     let dt = 0.02;
-    let ve = fd::equilibrium_speed_mps(idm, d, v0, s);
+    let ve = equilibrium(idm, d, v0, s);
     let period = 2.0 * core::f64::consts::PI / omega;
     let settle = 200.0f64.max(4.0 * period);
     let cycles = (3.0f64).max((200.0 / period).floor());
@@ -382,6 +399,7 @@ fn platoon_gain(idm: &Idm, d: &DriverProfile, v0: f64, s: f64, length: f64, dela
         }
         let t1 = t + dt;
         if t1 > settle {
+            #[allow(clippy::needless_range_loop)]
             for i in 0..N {
                 sin_acc[i] += (v[i] - ve) * math::sin(omega * t1) * dt;
                 cos_acc[i] += (v[i] - ve) * math::cos(omega * t1) * dt;
@@ -391,14 +409,17 @@ fn platoon_gain(idm: &Idm, d: &DriverProfile, v0: f64, s: f64, length: f64, dela
     let amp = |i: usize| math::sqrt(sin_acc[i] * sin_acc[i] + cos_acc[i] * cos_acc[i]);
     // A strongly damped platoon carries the probe only a few cars before its amplitude
     // sinks under what slow transients leak into the projection, so the ratio is taken
-    // from the leader to the last car still carrying a thousandth of the probe.
-    let floor = AMP * 1e-3;
+    // from the leader to the last car still carrying a hundredth of the probe (below that,
+    // a residue of about 1e-4 of the probe from the settling transient dominates).
+    let floor = AMP * 1e-2;
     let a0 = amp(0);
     let k = (1..N).take_while(|&i| amp(i) >= floor).last();
-    match k {
+    let ratios: Vec<f64> = (1..5.min(N)).map(|i| amp(i) / amp(i - 1).max(1e-300)).collect();
+    let g = match k {
         Some(k) if a0 > 0.0 => math::pow(amp(k) / a0, 1.0 / k as f64),
         _ => f64::NAN,
-    }
+    };
+    (g, ratios)
 }
 
 fn string_stability(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
@@ -435,8 +456,9 @@ fn string_stability(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String>
             let omega = math::sqrt(c.abs());
             let (fs, fv, fdv) = partials(&idm, &d, v0, s);
             let theory = transfer_gain(fs, fv, fdv, omega);
-            let sim = platoon_gain(&idm, &d, v0, s, length, delay, omega);
-            line.push(format!("{rho:.0}: criterion {c:+.3}, ω {omega:.3} rad/s, |G| theory {theory:.4}, simulated {sim:.4}"));
+            let (sim, ratios) = platoon_gain(&idm, &d, v0, s, length, delay, omega);
+            let r: Vec<String> = ratios.iter().map(|x| format!("{x:.4}")).collect();
+            line.push(format!("{rho:.0}: criterion {c:+.3}, ω {omega:.3} rad/s, |G| theory {theory:.4}, simulated {sim:.4} (car-to-car {})", r.join(" ")));
             compared += 1;
             if (theory > 1.0) != (sim > 1.0) || !sim.is_finite() {
                 total_disagree += 1;

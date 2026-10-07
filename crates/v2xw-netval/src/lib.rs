@@ -31,6 +31,7 @@ pub mod access;
 pub mod ctx;
 pub mod differential;
 pub mod e2e;
+pub mod etsi;
 pub mod linklevel;
 pub mod net;
 pub mod phy;
@@ -280,6 +281,7 @@ pub fn all() -> Vec<Check> {
     v.extend(access::checks());
     v.extend(sps::checks());
     v.extend(net::checks());
+    v.extend(etsi::checks());
     v.extend(sec::checks());
     v.extend(e2e::checks());
     v.extend(differential::checks());
@@ -304,7 +306,10 @@ pub fn python(script: &str, input: &serde_json::Value) -> Result<serde_json::Val
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("reference")
         .join(script);
-    let mut child = Command::new("python3")
+    // `NETVAL_PYTHON` names another interpreter (a virtual environment holding the
+    // optional `asn1tools`, say); the default is the `python3` on the path.
+    let interpreter = std::env::var("NETVAL_PYTHON").unwrap_or_else(|_| "python3".to_string());
+    let mut child = Command::new(interpreter)
         .arg("-I")
         .arg(&path)
         .stdin(Stdio::piped())

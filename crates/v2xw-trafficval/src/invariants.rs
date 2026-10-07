@@ -343,14 +343,13 @@ pub fn checks() -> Vec<Check> {
             id: "invariants/closure",
             group: Group::Invariants,
             title: "A lane closure reroutes the traffic bound for it; nobody enters it and nobody jumps",
-            procedure: "`phase1-grid.yaml` at 6,000 veh/h; at 40 s the driving lane nearest \
-                the grid's centre is closed (`MobilityCommand::Closure`). Entries into the \
+            procedure: "`phase1-grid.yaml` at 6,000 veh/h; at 60 s a driving lane is closed (`MobilityCommand::Closure`). Entries into the \
                 lane are counted from vehicles that were not already committed to it (on \
                 it, or on a connector into it) when it closed, from 10 s after the closure; \
                 vehicles whose next lane was the closed one at the closure and later drove \
-                elsewhere count as rerouted; the lane is the busiest driving lane of the \
-                15 s before the closure; the auditor counts teleports, illegal \
-                transitions and mid-road despawns. 120 s (90 s in quick mode).",
+                elsewhere count as rerouted; the lane is the driving lane the most vehicles \
+                entered in the 25 s before the closure; the auditor counts teleports, illegal \
+                transitions and mid-road despawns. 180 s in both modes.",
             faults: &[
                 "the closure is never sent to the engine (the check still treats the lane as closed)",
                 "one vehicle's published position jumps 30 m for one step at 30 s",
@@ -503,16 +502,19 @@ struct ClosureWatch {
 }
 
 fn closure(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
-    let seconds = lab.cfg.secs(120, 90) as f64;
+    // 120 s after the closure in both modes: vehicles routed through the lane need that
+    // long to reach it, and without them a lost closure would go unseen.
+    let seconds = 180.0;
     let s = grid_scenario(lab, 6_000.0, seconds)?;
     let world = world_of(lab, &s)?;
-    let close_at = 40.0;
-    // The lane closed is the busiest driving lane over the 15 s before the closure, read
-    // from the same run's first 40 s (the run is deterministic, so they are identical): a
-    // closed lane nobody uses cannot show a reroute, nor an entry when the closure is lost.
+    let close_at = 60.0;
+    // The lane closed is the driving lane the most vehicles entered over the 25 s before the
+    // closure, read from the same run's first 60 s (the run is deterministic, so they are
+    // identical): a closed lane nobody uses cannot show a reroute, nor an entry when the
+    // closure is lost.
     let mut pre = s.clone();
     pre.time.duration_s = close_at;
-    let mut use_count: BTreeMap<LaneId, u64> = BTreeMap::new();
+    let mut entered_by: BTreeMap<LaneId, BTreeSet<ActorId>> = BTreeMap::new();
     let driving: BTreeSet<LaneId> = world
         .roads
         .lanes()
@@ -521,23 +523,21 @@ fn closure(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         .map(|l| l.id)
         .collect();
     scenario_run(lab, &pre, Engine::Shipped, &[], None, |t, actors| {
-        if t >= close_at - 15.0 {
+        if t >= close_at - 25.0 {
             for a in actors {
                 if driving.contains(&a.lane) {
-                    *use_count.entry(a.lane).or_default() += 1;
-                }
-                if let Some(n) = a.route_next.filter(|n| driving.contains(n)) {
-                    *use_count.entry(n).or_default() += 1;
+                    entered_by.entry(a.lane).or_default().insert(a.actor);
                 }
             }
         }
     })?;
-    let lane = use_count
+    let lane = entered_by
         .iter()
-        .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+        .max_by(|a, b| a.1.len().cmp(&b.1.len()).then(b.0.cmp(a.0)))
         .map(|(l, _)| *l)
         .or_else(|| central_lane(&world))
         .ok_or("no driving lane")?;
+    let entrants_before = entered_by.get(&lane).map_or(0, BTreeSet::len);
     let events = if variant == Variant::Fault(0) {
         vec![]
     } else {
@@ -583,7 +583,7 @@ fn closure(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     })?;
     let a = &r.audit;
     let mut notes = vec![format!(
-        "closed lane {} at {close_at} s; {} vehicles were committed to it, {} were bound for it next.",
+        "closed lane {} at {close_at} s ({entrants_before} vehicles entered it in the 25 s before); {} vehicles were committed to it, {} were bound for it next.",
         lane.index(),
         w.committed.len(),
         w.bound.len()

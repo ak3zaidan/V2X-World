@@ -222,8 +222,13 @@ pub const FINDINGS: &[(&str, &str, &str)] = &[
         "Open, recorded for the world owner: the junction-area polygon for OSM imports should cover its connectors (the auditor's outside-junction test reads it as given).",
     ),
     (
+        "cities/portland",
+        "Portland's scenario at its own 1,000 veh/h puts at most two vehicles on the road at once in 90 s (11 trips completed, longest standstill 4 s): the demand is placing a fraction of its rate, or its trips are a few hundred metres long, so the city's junctions are barely exercised. The new held row (peak vehicles >= 10) fails on it; the auditor's zero violations there say little.",
+        "Open, recorded for the demand/world owner: compare offered against placed trips for `portland-downtown.yaml` (`dropped_trips`), and the trip length distribution.",
+    ),
+    (
         "invariants (suite)",
         "Three held figures could not fail: the gridlock row on runs shorter than the auditor's 180 s standstill limit, the jerk-rate row (no fault reached it), and the closure check's entries (the lane closed carried no traffic, so losing the closure changed nothing).",
-        "Fixed in the checks: the standstill row is held only on runs longer than the limit and reported otherwise; a second fault (acceleration jitter) proves the jerk row; the closure is applied to the busiest lane of the 15 s before it, with a held row that it met traffic.",
+        "Fixed in the checks: the standstill row is held only on runs longer than the limit and reported otherwise; a second fault (acceleration jitter) proves the jerk row; the closure is applied to the lane most vehicles entered in the 25 s before it, watched for 120 s after, with a held row that it met traffic.",
     ),
 ];
