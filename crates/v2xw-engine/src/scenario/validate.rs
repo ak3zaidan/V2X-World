@@ -2509,6 +2509,38 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
         }
     }
 
+    // The reverse of the messages.sets rule above: a unit given the SPaT or MAP role
+    // broadcasts it only when the set is on, so the role alone was a setting that did
+    // nothing (a unit at a signalised junction with roles [spat, map] and sets [bsm] sent
+    // no message at all, and nothing said why).
+    let roled = s
+        .actors
+        .rsus
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (format!("actors.rsus[{i}].roles"), &r.roles))
+        .chain(
+            s.actors
+                .rsu_placement
+                .iter()
+                .map(|p| ("actors.rsu_placement.roles".to_string(), &p.roles)),
+        );
+    for (field, roles) in roled {
+        for set in ["spat", "map"] {
+            let named = roles.iter().any(|r| r == set || r == "spat-map");
+            if named && !s.messages.sets.iter().any(|m| m == set) {
+                e.push(conflict(
+                    &field,
+                    format!(
+                        "gives a roadside unit the '{set}' role, and messages.sets does not \
+                         carry '{set}', so the unit would broadcast nothing for it; add \
+                         '{set}' to messages.sets or drop the role"
+                    ),
+                ));
+            }
+        }
+    }
+
     let profiles = all_profile_ids();
     let mut seen_sites = BTreeSet::new();
     let sites = world_site_count(s);

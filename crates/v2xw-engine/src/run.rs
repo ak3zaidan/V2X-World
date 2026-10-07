@@ -1837,6 +1837,26 @@ impl Engine {
                 Event::Observe {
                     what: Observe::EndOfRun,
                 } => {
+                    // The sentinel is scheduled once, at build, so its sequence number is
+                    // older than every metric flush scheduled during the run: a flush due at
+                    // the horizon tied with it on time and class and lost, and every run
+                    // longer than one metric period ended without its last window (a 3 s
+                    // run reported metrics at 1 s and 2 s only). Whatever else is still due
+                    // at this instant runs first; the sentinel goes to the back of it.
+                    if self
+                        .scheduler
+                        .peek_key()
+                        .is_some_and(|k| k.time == key.time)
+                    {
+                        self.scheduler.schedule(
+                            key.time,
+                            EventClass::Observe,
+                            Event::Observe {
+                                what: Observe::EndOfRun,
+                            },
+                        );
+                        continue;
+                    }
                     self.report.end_ns = key.time;
                     self.resolve_in_flight(recorder, key.time);
                     self.ended = true;
