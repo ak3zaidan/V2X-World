@@ -266,8 +266,11 @@ export interface ScenarioEventRecord {
   index: number;
   /** Its `type`, e.g. `closure`. */
   kind: string;
-  /** `start`, or `end` when its `until` arrived. */
-  phase: "start" | "end";
+  /**
+   * `start`; `end` when its `until` arrived; `waiting` while an auto safety event waits for a
+   * fitting vehicle, `expired` when it gave up waiting.
+   */
+  phase: "start" | "end" | "waiting" | "expired";
   /** What it did, as a sentence. */
   effect: string;
   lanes?: number[];

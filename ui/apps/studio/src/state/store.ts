@@ -136,7 +136,7 @@ export interface FiredEvent {
   readonly t: number;
   readonly index: number;
   readonly kind: string;
-  readonly phase: "start" | "end";
+  readonly phase: "start" | "end" | "waiting" | "expired";
   readonly effect: string;
   readonly lanes?: readonly number[];
   readonly multiplier?: number;
