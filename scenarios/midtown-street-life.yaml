@@ -11,7 +11,7 @@
 #      walkers are 65 or over (choice, about New York's population share).
 #    - A start-up time at the onset of WALK for those who were waiting (median 2 s, choice
 #      below the HCM's 3.2 s platoon start-up).
-#    - 30 % of pedestrians cross on flashing or steady DON'T WALK when the traffic leaves
+#    - 15 % of pedestrians cross on flashing or steady DON'T WALK when the traffic leaves
 #      them the HCM critical headway (t_c = L/S_p + t_s): calibrated against Basch et al.
 #      2015, who counted about one Midtown crossing in ten beginning on DON'T WALK.
 #    - Groups: 55 % of pedestrians walk in groups of two to four (Moussaïd et al. 2010

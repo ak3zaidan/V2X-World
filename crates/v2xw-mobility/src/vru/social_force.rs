@@ -303,7 +303,11 @@ pub struct SocialForceParams {
     /// 40:789), who watched 21,760 pedestrians at five Midtown Manhattan intersections:
     /// 5,414 crossing on walk were 27.8 % of the walk crossers and 974 crossing on don't
     /// walk were 42.0 % of those, so about 2,319 of 21,794 crossings (10.6 %) began on
-    /// don't-walk.
+    /// don't-walk. The observed preset's 0.15 was set on the signalised test grid of
+    /// `tests/pedestrian_invariants.rs`, where 0.3 made 20.8 % of signalised crossings
+    /// begin on (flashing or steady) don't-walk (35 of 168): halved, it lands near the
+    /// count. A share of pedestrians, not of crossings: how many crossings it produces
+    /// depends on how often traffic leaves a gap, so check it against a local count.
     pub red_crossing_share: f64,
     /// Median start-up time, from the onset of walk to stepping off the kerb, for a
     /// pedestrian who was waiting, seconds; zero for none. Knoblauch et al. 1996 measured
@@ -378,7 +382,7 @@ impl SocialForceParams {
     pub fn observed() -> Self {
         Self {
             speed_law: SpeedLaw::Knoblauch1996,
-            red_crossing_share: 0.3,
+            red_crossing_share: 0.15,
             startup_median_s: 2.0,
             midblock: MidblockParams::urban(),
             group_shares: [0.65, 0.27, 0.06, 0.02],

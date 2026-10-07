@@ -3800,10 +3800,22 @@ impl Mobility for NativeMobility {
             // it. The car-following model only approaches that gap asymptotically, and the
             // 0.1 s integration of the calibrated city drivers overshot it by up to 5 cm and
             // stood there (2,530 vehicle-steps under s0 on the dense grid).
+            //
+            // "Standing" includes a leader all but stopped that the follower is closing on —
+            // a cyclist closing its own 0.5 m gap at 0.4 mm/s let a car behind it, uncapped
+            // because its leader was not at exactly zero, stop 5 cm inside its 2 m gap. Such
+            // a leader's own advance this step is added to the room. A follower moving off
+            // behind a leader that is moving off is not capped.
             let advance_cap_m = if along {
                 nearest_vehicle
-                    .filter(|v| v.speed_mps.abs() < 1e-6)
-                    .map(|v| (v.gap_m - actor.driver.min_gap_m).max(0.0))
+                    .filter(|v| {
+                        v.speed_mps.abs() < 1e-6
+                            || (v.speed_mps.abs() < STANDSTILL_MPS
+                                && actor.speed_mps > v.speed_mps)
+                    })
+                    .map(|v| {
+                        (v.gap_m + v.speed_mps.max(0.0) * dt_s - actor.driver.min_gap_m).max(0.0)
+                    })
             } else {
                 None
             };
