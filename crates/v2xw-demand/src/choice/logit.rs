@@ -1,8 +1,8 @@
 //! `demand/choice/logit` — multinomial logit route choice with the C-logit commonality
 //! correction.
 //!
-//! `p_r = exp(−θ (c_r + CF_r)) / Σ_s exp(−θ (c_s + CF_s))`, where the commonality factor
-//! `CF_r = β ln Σ_s (L_rs / √(L_r L_s))^γ` charges a route for the length `L_rs` it shares
+//! `p_r = exp(−θ c_r − β CF_r) / Σ_s exp(−θ c_s − β CF_s)`, where the commonality factor
+//! `CF_r = ln Σ_s (L_rs / √(L_r L_s))^γ` (a utility, weighted by β) charges a route for the length `L_rs` it shares
 //! with every route of the set (itself included, so a route overlapping nothing has
 //! `CF = 0`). Plain multinomial logit [M. Ben-Akiva, S. Lerman, *Discrete Choice
 //! Analysis*, MIT Press 1985] treats two routes that share all but one block as independent
@@ -103,11 +103,11 @@ impl Logit {
                         }
                     })
                     .collect();
-                self.cf_beta * math::ln(math::sum_ordered(terms).max(1.0))
+                math::ln(math::sum_ordered(terms).max(1.0))
             })
             .collect();
         // Utilities relative to the best, so the exponentials cannot overflow.
-        let u: Vec<f64> = (0..n).map(|r| -theta * (alts[r].cost_s + cf[r])).collect();
+        let u: Vec<f64> = (0..n).map(|r| -theta * alts[r].cost_s - self.cf_beta * cf[r]).collect();
         let umax = u.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let e: Vec<f64> = u.iter().map(|x| math::exp(x - umax)).collect();
         let sum = math::sum_ordered(e.iter().copied());
@@ -184,11 +184,11 @@ fn card(theta: Option<f64>, cv: f64, cf_beta: f64, cf_gamma: f64) -> ModelCard {
     card.equations = vec![
         Equation::new(
             "C-logit",
-            "p_r = exp(-theta (c_r + CF_r)) / sum_s exp(-theta (c_s + CF_s))",
+            "p_r = exp(-theta c_r - beta CF_r) / sum_s exp(-theta c_s - beta CF_s)",
         ),
         Equation::new(
             "commonality",
-            "CF_r = beta ln sum_s (L_rs / sqrt(L_r L_s))^gamma",
+            "CF_r = ln sum_s (L_rs / sqrt(L_r L_s))^gamma",
         ),
         Equation::new(
             "automatic dispersion",

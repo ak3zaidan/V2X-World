@@ -205,7 +205,9 @@ mod tests {
             assert!(alts[0].probability >= last, "monotone towards the cheaper route");
             last = alts[0].probability;
         }
-        assert!(alts[0].probability > 0.9, "{}", alts[0].probability);
+        // With a = 0.05 the odds grow by g = exp(a d / (1 - d^2)) = 1.019 per iteration
+        // (d = 1/3): 50 iterations take p from 0.5 to 1.019^50 / (1 + 1.019^50) = 0.72.
+        assert!((alts[0].probability - 0.718).abs() < 0.01, "{}", alts[0].probability);
         m.card().validate().expect("card");
     }
 

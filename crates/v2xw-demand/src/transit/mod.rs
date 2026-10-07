@@ -724,23 +724,30 @@ mod tests {
     fn write_feed(dir: &std::path::Path, world: &World) {
         std::fs::create_dir_all(dir).unwrap();
         let g = LaneGraph::new(world, ClassMask::BUS);
-        // A long straight run: follow straight successors from a long lane.
-        let mut path = vec![g.endpoints(80.0)[3]];
-        for _ in 0..12 {
-            let cur = *path.last().unwrap();
-            let lane = g.lane(cur);
-            let next = world
-                .successors(lane)
-                .iter()
-                .find(|c| c.permitted && c.direction == v2xw_world::TurnDirection::Straight)
-                .map(|c| c.via.unwrap_or(c.to_lane));
-            match next.and_then(|l| g.node(l)) {
-                Some(n) => path.push(n),
-                None => break,
+        // A straight run of at least four road lanes: follow straight successors from
+        // each long lane until one gives one.
+        let straight_from = |start: u32| -> Vec<u32> {
+            let mut path = vec![start];
+            for _ in 0..12 {
+                let cur = *path.last().unwrap();
+                let next = world
+                    .successors(g.lane(cur))
+                    .iter()
+                    .find(|c| c.permitted && c.direction == v2xw_world::TurnDirection::Straight)
+                    .map(|c| c.via.unwrap_or(c.to_lane));
+                match next.and_then(|l| g.node(l)) {
+                    Some(n) if !path.contains(&n) => path.push(n),
+                    _ => break,
+                }
             }
-        }
-        let road: Vec<_> = path.iter().filter(|n| !g.is_internal(**n)).copied().collect();
-        assert!(road.len() >= 4, "a straight street of four blocks");
+            path.into_iter().filter(|n| !g.is_internal(*n)).collect()
+        };
+        let road = g
+            .endpoints(60.0)
+            .into_iter()
+            .map(straight_from)
+            .find(|r| r.len() >= 4)
+            .expect("a straight street of four blocks");
         let proj = world.projection();
         let o = proj.origin();
         let mut stops = String::from("stop_id,stop_name,stop_lat,stop_lon\n");

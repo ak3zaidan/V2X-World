@@ -3,7 +3,7 @@
 
 use v2xw_core::rng::RngRegistry;
 use v2xw_engine::scenario::Scenario;
-use v2xw_mobility::{Mobility, MobilityCtx};
+use v2xw_mobility::MobilityCtx;
 
 fn scenario(kind: &str, params: serde_json::Value) -> Scenario {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scenarios/vru-grid.yaml");
