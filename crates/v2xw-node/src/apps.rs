@@ -1570,7 +1570,10 @@ fn pick_group(
 
 /// Fills a track's acceleration, yaw rate, size and hard-braking flag from a BSM's or a
 /// CAM's own octets.
-fn decode_dynamics(ty: MsgType, payload: &[u8], t: &mut Track) {
+///
+/// Public so the kernel's cooperative-awareness feed (`v2xw-engine` `run/coop.rs`) reads a
+/// CACC leader's acceleration from the same decoder the applications use.
+pub fn decode_dynamics(ty: MsgType, payload: &[u8], t: &mut Track) {
     match ty {
         MsgType::Bsm => {
             let Ok(b) = v2xw_msg::j2735::bsm::decode_message_frame(payload) else {

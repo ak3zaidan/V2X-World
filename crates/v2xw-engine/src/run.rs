@@ -115,6 +115,7 @@ use crate::records::{GtKinematics, MacCbr, NetBytes, NodeRx, NodeTx, PhyRx};
 use crate::scenario::Scenario;
 use crate::snapshot::{ActorState, SnapshotStream};
 
+mod coop;
 pub mod jamming;
 mod link;
 pub mod sidelink;
@@ -3457,6 +3458,8 @@ impl Engine {
         // assumed. That is the difference between a run that is deterministic and one that
         // happens to be.
         results.sort_by_key(|(id, ..)| *id);
+        // What each cooperative vehicle heard, for its CACC or platoon law (`run/coop.rs`).
+        self.feed_cooperative(&results, now);
 
         for (_, _, records, _) in &results {
             for rec in records {

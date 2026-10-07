@@ -1041,6 +1041,10 @@ pub struct NativeMobility {
     /// Per vehicle: the lamps shown last step (for the brake hysteresis) and the driver's
     /// signalling habit, drawn the first time the vehicle is asked about.
     lamp_memory: BTreeMap<ActorId, (u8, crate::lamps::SignalHabit)>,
+    /// The sub-lane lateral model, when one is selected ([`crate::lateral`]): every
+    /// vehicle then steers a continuous position across its lane and the leader search
+    /// skips a same-lane vehicle it may lawfully pass. `None` keeps lane-based driving.
+    lateral: Option<Arc<dyn crate::lateral::LateralModel>>,
 }
 
 impl core::fmt::Debug for NativeMobility {
@@ -1147,6 +1151,7 @@ impl NativeMobility {
             dropped_trips: 0,
             lamp_params: crate::lamps::LampParams::default(),
             lamp_memory: BTreeMap::new(),
+            lateral: None,
         }
     }
 
@@ -1182,6 +1187,13 @@ impl NativeMobility {
             out.push((a.id, bits));
         }
         out
+    }
+
+    /// Adds a sub-lane lateral model ([`crate::lateral`]).
+    #[must_use]
+    pub fn with_lateral(mut self, lateral: Arc<dyn crate::lateral::LateralModel>) -> Self {
+        self.lateral = Some(lateral);
+        self
     }
 
     /// Adds a pedestrian model, which is stepped with the same frozen snapshot the
@@ -3337,6 +3349,8 @@ struct Decision {
     /// of a vehicle standing ahead, metres; `None` when the car ahead is moving or there is
     /// none.
     advance_cap_m: Option<f64>,
+    /// Where across its lane the sub-lane model steers the vehicle this step.
+    lateral: Option<crate::lateral::LateralDecision>,
 }
 
 impl v2xw_core::model::Model for NativeMobility {
@@ -3414,6 +3428,9 @@ impl Mobility for NativeMobility {
         let t0 = ctx.now();
         let t1 = dt.after(t0);
         let dt_s = dt.as_secs_f64();
+        // The car-following model's step clock (`CarFollowing::begin_step`): before any
+        // `accel` of this step, so every evaluation in the step sees the same instant.
+        self.cf.begin_step(t0, dt);
 
         // --- pass 1: commands ---------------------------------------------
         let commanded: Vec<ActorId> = self.apply_commands(&*ctx, t0);
@@ -3528,6 +3545,7 @@ impl Mobility for NativeMobility {
                 // rider follows the bicycle lane graph.
                 classes: actor.class.class_mask(),
                 sides: self.params.lane_changes,
+                sublane: self.lateral.as_ref().map(|l| l.filter()),
             };
             // **One** neighbour query, shared by the car-following and lane-change models.
             let nbrs =
@@ -3971,6 +3989,20 @@ impl Mobility for NativeMobility {
                 amber_seen,
                 release_at,
                 advance_cap_m,
+                lateral: self
+                    .lateral
+                    .as_ref()
+                    .filter(|_| actor.transition.is_none())
+                    .map(|m| {
+                        crate::lateral::decide_in_lane(
+                            &**m,
+                            &snapshot,
+                            &ego,
+                            v0_effective,
+                            &lane_view,
+                            lane_position_for(&self.params, actor.class),
+                        )
+                    }),
             });
             neighbours.insert(*id, (ego_capped, nbrs));
         }
@@ -4198,6 +4230,14 @@ impl Mobility for NativeMobility {
                 }
             }
 
+            // Steer across the lane, when a sub-lane model decided where to.
+            if actor.transition.is_none()
+                && let Some(lat) = decision.lateral
+            {
+                let max = lat.speed_mps * dt_s;
+                actor.lateral_m += (lat.target_m - actor.lateral_m).clamp(-max, max);
+            }
+
             // Cross lane boundaries.
             let mut cause: Option<DespawnCause> = None;
             loop {
@@ -4408,6 +4448,10 @@ impl Mobility for NativeMobility {
 
     fn set_demand_multiplier(&mut self, m: f64) -> bool {
         self.demand.as_mut().is_some_and(|d| d.set_multiplier(m))
+    }
+
+    fn cooperative(&self) -> Option<Arc<crate::coop::CoopLink>> {
+        self.cf.cooperative()
     }
 
     fn exterior_lamps(&mut self, ctx: &mut dyn MobCtx) -> Vec<(ActorId, u8)> {

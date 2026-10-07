@@ -387,7 +387,7 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(share) = vru.red_crossing_share {
         people.red_crossing_share = share;
     }
-    let mut mobility = NativeMobility::new(params);
+    let mut mobility = crate::driving::native_with_driving(scenario, params, &rules);
     if vru.pedestrians > 0 {
         mobility = mobility.with_vru(v2xw_mobility::SocialForce::new(people));
     }

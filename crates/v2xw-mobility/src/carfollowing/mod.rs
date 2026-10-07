@@ -1,21 +1,40 @@
-//! Car-following models — 04-models.md §2.1.
+//! Car-following models — 04-models.md §2.1, and the driving-model library.
 //!
-//! One model is implemented natively at the medium tier, `mobility/car-following/idm`
-//! ([`idm`]). §2.1 also catalogues Krauss, Wiedemann 99 and Gipps; none of the three is
-//! implemented here, and each is left out for a reason the document itself records:
+//! | Model | Id | Module | Reads V2X |
+//! |---|---|---|---|
+//! | Intelligent Driver Model (the engine's default) | `mobility/car-following/idm` | [`idm`] | no |
+//! | Extended IDM (improved IDM + CAH + jerk bound) | `mobility/car-following/eidm` | [`eidm`] | no |
+//! | Krauß (SUMO's default) | `mobility/car-following/krauss` | [`krauss`] | no |
+//! | Gipps (Aimsun's) | `mobility/car-following/gipps` | [`gipps`] | no |
+//! | Wiedemann 99 (Vissim's) | `mobility/car-following/w99` | [`w99`] | no |
+//! | ACC (PATH, Milanés & Shladover 2014) | `mobility/car-following/acc` | [`acc`] | no |
+//! | CACC (Milanés & Shladover 2014) | `mobility/car-following/cacc-milanes` | [`cacc`] | predecessor |
+//! | CACC (Ploeg et al. 2011) | `mobility/car-following/cacc-ploeg` | [`cacc`] | predecessor |
+//! | Platoon (PATH, Rajamani 2012) | `mobility/car-following/cacc-path` | [`cacc`] | predecessor + leader |
 //!
-//! * **Krauss** needs the safe-velocity expression transcribed from
-//!   `MSCFModel_Krauss.cpp` (EPL-2.0, read only, never vendored) and quoted in its card.
-//!   §2.1 says the expression "is not in the research sheets", so writing one from memory
-//!   would be inventing the model.
-//! * **Wiedemann 99** has seven of its ten thresholds marked `TODO: calibrate` in §2.1,
-//!   including every one that shapes the braking reaction. A model whose behaviour is
-//!   dominated by uncited numbers is not a model.
-//! * **Gipps** has *all* of its parameters marked `TODO: calibrate` (§2.1: "obtain Gipps
-//!   1981 Transportation Research B 15(2) and record its Table values").
+//! [`library`] selects them per class from the scenario; [`platoon`] measures how the
+//! cooperative ones respond to packet loss and latency. `docs/models/driving-model-library.md`
+//! is the guide to adding another.
 //!
-//! The calibration plans for all three are in §2.1 and are unchanged by this crate.
+//! # History
+//!
+//! Until the library, §2.1's Krauss, Wiedemann 99 and Gipps were left out because their
+//! constants were not in the research sheets. They are in now, each with its source on
+//! its card and the parts that are secondary-sourced marked so; the §2.1 calibration plans
+//! still apply to every one of them.
 
+pub mod acc;
+pub mod cacc;
+pub mod common;
+pub mod eidm;
+pub mod gipps;
 pub mod idm;
+pub mod krauss;
+pub mod library;
+pub mod platoon;
+pub mod w99;
+
+#[cfg(test)]
+pub(crate) mod testkit;
 
 pub use idm::{Idm, IdmParams, IdmPreset};

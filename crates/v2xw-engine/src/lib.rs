@@ -61,6 +61,7 @@ pub mod app_truth;
 pub mod backend;
 pub mod ctx;
 pub mod daylight;
+pub mod driving;
 pub mod error;
 pub mod event;
 pub mod export;
