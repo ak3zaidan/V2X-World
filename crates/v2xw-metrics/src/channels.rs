@@ -83,18 +83,24 @@ const CHANNEL_VISIBILITY: &[(&str, &[Visibility])] = &[
     // One fragmented SDU's fate at one receiver, with the loss its fragments' PHY success
     // probabilities predicted: the sender's identity and those probabilities are ground truth.
     ("net.reassembly", &[Visibility::Gt]),
+    ("node.drop", &[Visibility::Node]), // as `v2xw_record::channels` declares it
     ("node.neighbor", &[Visibility::Node]),
     // Like `phy.rx`: the sender's identity and the distance are ground truth.
     ("node.rx", &[Visibility::Node, Visibility::NodeAndGt]),
+    ("node.security", &[Visibility::Node]), // as `v2xw_record::channels` declares it
     ("node.telemetry", &[Visibility::Node]),
     ("node.tx", &[Visibility::Node]),
     ("node.verify", &[Visibility::Node]),
     // The reception census: who was within range of a frame, which no node can know.
     ("phy.prr", &[Visibility::Gt]),
     ("phy.rx", &[Visibility::Node, Visibility::NodeAndGt]),
+    ("privacy.link", &[Visibility::Node]), // as `v2xw_record::channels` declares it
+    ("privacy.track", &[Visibility::Node]), // as `v2xw_record::channels` declares it
     ("proto.msg", &[Visibility::Node]),
     ("proto.revocation", &[Visibility::Public]),
+    ("scenario.event", &[Visibility::Public]), // as `v2xw_record::channels` declares it
     ("sec.cert", &[Visibility::Node]),
+    ("sec.pseudonym", &[Visibility::Node]), // as `v2xw_record::channels` declares it
     ("signal.priority", &[Visibility::Public]),
     ("snapshot.delta", &[Visibility::Mixed]),
     ("snapshot.keyframe", &[Visibility::Mixed]),
