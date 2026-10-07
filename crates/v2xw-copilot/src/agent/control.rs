@@ -211,8 +211,9 @@ pub fn tools() -> Vec<Value> {
         tool(
             "inspect",
             "Look inside the current run: a node (telemetry, queues, neighbours), a link \
-             (tx, rx), a backend entity (backend, ra, pca, ma, attacker, …) or a metric's \
-             provenance (explain).",
+             (tx, rx), the credential backend (entity `backend`, which lists its entities), \
+             or a headline metric's provenance (explain). Only for a question the \
+             simulate result does not answer.",
             json!({"type": "object", "additionalProperties": false, "required": ["target"],
                    "properties": {"target": {"type": "string", "enum": ["node", "link", "entity", "explain"]},
                                   "node": {"type": "integer"}, "tx": {"type": "integer"},
@@ -749,6 +750,22 @@ pub(super) fn record_meta<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, 
                 meta.extra.insert(name.clone(), v);
             }
         }
+        // Lost frames by cause, as counts: the grouped answer's sample count is the number
+        // of losses with that cause ("how many frames did the jammer kill").
+        if rows.iter().any(|(n, _)| n.starts_with("pdr_by_cause")) {
+            if let Ok(v) = agent.rpc.call(
+                "metrics.query",
+                &json!({"metrics": ["pdr_by_cause"], "group_by": ["cause"], "t_from_ns": 0, "t_to_ns": t_ns}),
+            ) {
+                for r in v.get("rows").and_then(Value::as_array).into_iter().flatten() {
+                    if let (Some(cause), Some(n)) = (r.get(0).and_then(Value::as_str), r.get(4).and_then(Value::as_u64)) {
+                        let key = format!("lost_frames[{cause}]");
+                        meta.units.insert(key.clone(), "frames".into());
+                        meta.extra.insert(key, n as f64);
+                    }
+                }
+            }
+        }
     }
     // The findings the extra metrics support (detection, overhead, pedestrians, apps),
     // added to the run's analysis so reports, briefs and experiments explain with them.
@@ -760,9 +777,11 @@ pub(super) fn record_meta<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, 
         .is_some_and(|a| !a.is_empty());
     let more = crate::insight::findings(&meta.extra, &agent.runs[index].analysis.headline, &meta.units, attackers);
     if !more.is_empty() {
+        // The analyst's own finding wins where both have one (its jamming finding carries
+        // the whole loss breakdown).
         let findings = &mut agent.runs[index].analysis.findings;
-        findings.retain(|f| !more.iter().any(|m| m.id == f.id));
-        findings.extend(more);
+        let fresh: Vec<_> = more.into_iter().filter(|m| !findings.iter().any(|f| f.id == m.id)).collect();
+        findings.extend(fresh);
         findings.sort_by(|a, b| b.severity.cmp(&a.severity));
     }
     agent.harness.meta.insert(index, meta);
@@ -927,11 +946,20 @@ fn live_metrics<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, T>, args: 
         .flatten()
         .filter_map(|r| Some((r.get("name")?.as_str()?.to_string(), r.get("unit").and_then(Value::as_str).unwrap_or("").to_string())))
         .collect();
-    let asked: Vec<String> = args
+    let mut asked: Vec<String> = args
         .get("metrics")
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
-        .unwrap_or_else(|| LIVE_DEFAULT.iter().map(|s| (*s).to_string()).collect());
+        .unwrap_or_default();
+    // Nothing, or "all", is the headline set plus every banded metric the run has.
+    if asked.is_empty() || asked.iter().any(|m| m == "all") {
+        asked = LIVE_DEFAULT.iter().map(|s| (*s).to_string()).collect();
+        for k in agent.harness.bands.keys() {
+            if !asked.contains(k) {
+                asked.push(k.clone());
+            }
+        }
+    }
     let th = analyst::Thresholds::default();
     let mut rows = Vec::new();
     let mut missing = Vec::new();

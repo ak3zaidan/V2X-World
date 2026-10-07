@@ -393,6 +393,10 @@ pub fn agent_system_prompt() -> String {
      the run the engine is serving: analyse_current_run or live_metrics, not a new run.\n\
      9. For step-by-step control (pause at a time, seek, inspect a node) use run_control, \
      live_metrics, query_metric and inspect.\n\
+     The simulate result is usually all you need: answer from it. Dig further only for a \
+     number the person asked for that it does not have, and say so if the simulator does \
+     not measure it. A finding marked critical (e.g. simulation.silent) changes what \
+     the other numbers mean: say it first.\n\
      10. Then answer in Markdown, short: two sentences of summary; the bottlenecks or \
      differences, most important first, each naming its finding id in square brackets, \
      e.g. [channel.congested], with its numbers; for an experiment, the significant \
@@ -474,6 +478,13 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         self.provider
             .as_ref()
             .map_or_else(|| "none".to_string(), |p| p.name().to_string())
+    }
+
+    /// The conversation so far: the person's prompts, the model's replies and every tool
+    /// result, in order (an evaluation keeps it as a transcript).
+    #[must_use]
+    pub fn history(&self) -> &[ChatMessage] {
+        &self.history
     }
 
     /// The model, when one is attached (a test reads what a scripted one was sent).

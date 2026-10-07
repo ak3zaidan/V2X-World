@@ -51,6 +51,30 @@ pub fn findings(
     let get = |k: &str| extra.get(k).or_else(|| headline.get(k)).copied();
     let mut out = Vec::new();
 
+    // A run in which nothing reached the air: every radio result is then empty, and a
+    // comparison against it reads as "100 % less load" unless this is said first.
+    let silent: Vec<&str> = ["bytes_air", "offered_load"]
+        .into_iter()
+        .filter(|k| get(k) == Some(0.0))
+        .collect();
+    if !silent.is_empty() {
+        out.push(Finding {
+            id: "simulation.silent".into(),
+            layer: Layer::Simulation,
+            severity: Severity::Critical,
+            title: "No frame reached the air".into(),
+            detail: "The run transmitted nothing, so its channel, delivery, latency and \
+                     security results are empty rather than good. Look for what stops a node \
+                     sending: a signature or certificate its hardware cannot produce, a message \
+                     too large for the radio without fragmentation, no equipped vehicle."
+                .into(),
+            evidence: silent.iter().map(|k| ev(k, 0.0, units)).collect(),
+            location: Location::default(),
+            reference: None,
+            links: silent.iter().map(|k| link(k)).collect(),
+        });
+    }
+
     // Detection.
     let det: Vec<&str> = ["det_recall", "det_precision", "det_fpr", "det_tp", "det_fp", "det_fn",
                           "time_to_detect", "time_to_decision"]
@@ -98,6 +122,35 @@ pub fn findings(
             location: Location::default(),
             reference: None,
             links: Vec::new(),
+        });
+    }
+
+    // Jamming: the analyst names the jammer only when it is the largest loss cause; with a
+    // jammer in the scenario its share is reported whatever its rank.
+    let jammed = get("lost_frames[jammed]");
+    if let Some(share) = get("pdr_by_cause[jammed]").filter(|v| *v > 0.0) {
+        let mut evidence = vec![ev("pdr_by_cause[jammed]", share, units)];
+        if let Some(n) = jammed {
+            evidence.push(Evidence {
+                label: "receptions lost to jamming".into(),
+                value: n,
+                unit: "frames".into(),
+                source: "pdr_by_cause{cause=jammed}.n".into(),
+            });
+        }
+        out.push(Finding {
+            id: "channel.jamming".into(),
+            layer: Layer::Channel,
+            severity: if share >= 0.3 { Severity::Warning } else { Severity::Notice },
+            title: "Frames were lost to a jammer".into(),
+            detail: "The share of lost receptions the run attributes to jamming energy (a \
+                     threat in the scenario, not load), whether or not it is the largest \
+                     loss cause."
+                .into(),
+            evidence,
+            location: Location::default(),
+            reference: Some("0.3 of losses, the analyst's dominant-cause share (engineering choice)".into()),
+            links: vec![link("pdr_by_cause[jammed]")],
         });
     }
 
@@ -184,6 +237,19 @@ mod tests {
         assert_eq!(off[0].id, "security.detection-off");
         assert!(findings(&map(&[("det_recall", 0.9)]), &none, &units, false).is_empty(),
                 "no attackers and no false positives: nothing to say about detection");
+    }
+
+    #[test]
+    fn a_silent_run_is_critical_and_a_jammer_reports_its_kill_count() {
+        let units = BTreeMap::new();
+        let none = BTreeMap::new();
+        let f = findings(&map(&[("bytes_air", 0.0)]), &none, &units, false);
+        assert_eq!(f[0].id, "simulation.silent");
+        assert_eq!(f[0].severity, Severity::Critical);
+        assert!(findings(&map(&[("bytes_air", 10.0)]), &none, &units, false).is_empty());
+        let j = findings(&map(&[("pdr_by_cause[jammed]", 0.0066), ("lost_frames[jammed]", 305.0)]), &none, &units, false);
+        assert_eq!(j[0].id, "channel.jamming");
+        assert!(j[0].evidence.iter().any(|e| e.value == 305.0 && e.unit == "frames"));
     }
 
     #[test]

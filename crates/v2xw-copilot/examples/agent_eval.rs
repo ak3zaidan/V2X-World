@@ -356,6 +356,7 @@ struct Args {
     only: Vec<String>,
     category: Vec<String>,
     append: bool,
+    transcripts: Option<PathBuf>,
 }
 
 fn args() -> Args {
@@ -372,6 +373,7 @@ fn args() -> Args {
         only: Vec::new(),
         category: Vec::new(),
         append: false,
+        transcripts: None,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -391,6 +393,7 @@ fn args() -> Args {
             "--out" => a.out = PathBuf::from(&next),
             "--compare" => a.compare = Some(PathBuf::from(&next)),
             "--label" => a.label = next,
+            "--transcripts" => a.transcripts = Some(PathBuf::from(&next)),
             "--only" => a.only = next.split(',').map(str::to_string).collect(),
             "--category" => a.category = next.split(',').map(str::to_string).collect(),
             other => panic!("unknown argument {other}"),
@@ -410,6 +413,27 @@ fn documents(report: &AgentReport) -> Vec<Value> {
         .collect()
 }
 
+/// The results of the tools that read the build's own registry (model cards, metric
+/// definitions, the settings index): a number quoted from a card is sourced, though it is
+/// not run data.
+fn registry_results(history: &[v2xw_copilot::ChatMessage]) -> String {
+    let mut names: BTreeMap<String, String> = BTreeMap::new();
+    let mut out = String::new();
+    for m in history {
+        for c in &m.tool_calls {
+            names.insert(c.id.clone(), c.name.clone());
+        }
+        if let Some(id) = &m.tool_call_id {
+            if names.get(id).is_some_and(|n| n.starts_with("registry__") || n == "find_settings") {
+                out.push_str(m.text());
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+/// `prompts` is the person's words and the registry sources ([`registry_results`]).
 fn score(case: &Case, report: &AgentReport, prompts: &str, r: &mut CaseResult) {
     let docs = documents(report);
     r.runs = report.runs.len();
@@ -757,7 +781,7 @@ fn main() {
         match outcome {
             Ok(report) => {
                 r.overview = report.overview.clone();
-                score(case, &report, &prompts, &mut r);
+                score(case, &report, &format!("{prompts}\n{}", registry_results(agent.history())), &mut r);
             }
             Err(e) => {
                 r.error = Some(e.to_string());
@@ -781,6 +805,15 @@ fn main() {
             if r.config_notes.is_empty() && r.conclusion_notes.is_empty() && r.ungrounded.is_empty() { String::new() }
             else { format!("\n     {:?} {:?} {:?}", r.config_notes, r.conclusion_notes, r.ungrounded) }
         );
+        if let Some(dir) = &args.transcripts {
+            let _ = std::fs::create_dir_all(dir);
+            let t: Vec<Value> = agent
+                .history()
+                .iter()
+                .map(|m| json!({"role": m.role, "text": m.content, "calls": m.tool_calls}))
+                .collect();
+            let _ = std::fs::write(dir.join(format!("{}.json", case.id)), serde_json::to_string_pretty(&t).unwrap_or_default());
+        }
         result.cases.retain(|c| c.id != r.id);
         result.cases.push(r);
         let order: Vec<&str> = suite.cases.iter().map(|c| c.id.as_str()).collect();

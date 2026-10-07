@@ -376,8 +376,12 @@ impl Experiment {
                 .enumerate()
                 .map(|(i, v)| {
                     let mut s = v.map_or_else(|| "—".to_string(), fmt);
-                    if let Some(Some(rel)) = r.relative.get(i) {
-                        s.push_str(&format!(" ({}%)", signed(100.0 * rel)));
+                    match (r.changes.get(i), r.relative.get(i)) {
+                        (Some(Some(d)), Some(Some(rel))) => {
+                            s.push_str(&format!(" ({}, {}%)", signed(*d), signed(100.0 * rel)));
+                        }
+                        (Some(Some(d)), _) => s.push_str(&format!(" ({})", signed(*d))),
+                        _ => {}
                     }
                     if let Some(Some(h)) = r.health.get(i) {
                         s.push_str(&format!(" {h}"));
