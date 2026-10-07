@@ -527,14 +527,19 @@ impl SigningProvider {
         // The fragments of one message are separate frames with separate frame ids; what
         // they share is the sender and the generation instant.
         let key = (v.node, v.t_generated.unwrap_or(u64::MAX - w.frames));
+        // A fragment's `envelope_bytes` is the share of the envelope that fragment carries,
+        // so it is summed over every frame; `cert_bytes` is the whole certificate repeated on
+        // every fragment, so it counts once per message, with the signer identifier.
+        if let Some(env) = v.envelope_bytes {
+            w.envelope += env;
+        }
         let n = w.messages.entry(key).or_insert(0);
         *n += 1;
         if *n > 1 {
             return;
         }
-        if let Some(env) = v.envelope_bytes {
+        if v.envelope_bytes.is_some() {
             let cert = v.cert_bytes.unwrap_or(0);
-            w.envelope += env;
             w.cert += cert;
             w.signed_msgs += 1;
             w.signer_id += match v.signer {
@@ -901,7 +906,7 @@ mod tests {
                 "payload_bytes": 100, "envelope_bytes": env, "cert_bytes": cert, "signer": signer,
                 "t_generated": msg, "t_sign_start": 1_000_000, "t_signed": 3_000_000}))
         };
-        for r in [tx(7, 1000, 1500, 0, "digest"), tx(7, 1000, 1500, 0, "digest"), tx(8, 400, 200, 100, "certificate")] {
+        for r in [tx(7, 1000, 850, 0, "digest"), tx(7, 1000, 650, 0, "digest"), tx(8, 400, 200, 100, "certificate")] {
             p.on_event(&r);
         }
         for i in 0..2u64 {
