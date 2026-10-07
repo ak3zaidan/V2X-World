@@ -230,3 +230,123 @@ fn the_crypto_study_scenarios_validate() {
         assert!(errors.is_empty(), "{f}: {errors:?}");
     }
 }
+
+/// What each signature scheme costs the same fleet on the air and in the backend. Not a
+/// check — a measurement, run on demand:
+///
+/// ```sh
+/// cargo test -p v2xw-engine --test pq_threshold fleet_costs -- --ignored --nocapture
+/// ```
+///
+/// Prints one JSON line per scheme: frames and fragments on the air, delivery, reassembly
+/// loss, MTU refusals, MAC access delay, the last sample of every channel-load, delivery
+/// and latency metric, and the credential system's provisioning bytes and PCA time.
+#[test]
+#[ignore = "a measurement, not a check: run with --ignored --nocapture"]
+fn fleet_costs_by_scheme() {
+    let interesting = |m: &str| {
+        ["pdr", "cbr", "latency", "verify", "sign", "airtime", "busy", "load", "frag", "reassembl"]
+            .iter()
+            .any(|k| m.contains(k))
+    };
+    for (sig, kem, fragmenter) in [
+        ("ecdsa-p256", "ecies-p256", "fragmenter/generic-sdu"),
+        ("hybrid-falcon512-ecdsa-p256", "ecies-p256", "fragmenter/generic-sdu"),
+        ("hybrid-falcon512-ecdsa-p256", "ecies-p256", "fragmenter/cert-cycle-partial-hybrid"),
+        ("falcon-512", "ecies-p256", "fragmenter/generic-sdu"),
+        ("hybrid-mldsa44-ecdsa-p256", "ecies-p256", "fragmenter/generic-sdu"),
+        ("ml-dsa-44", "ml-kem-768", "fragmenter/generic-sdu"),
+        ("ml-dsa-87", "ml-kem-1024", "fragmenter/generic-sdu"),
+        ("slh-dsa-sha2-128f", "ml-kem-768", "fragmenter/generic-sdu"),
+    ] {
+        let mut s = grid(sig);
+        s.time.duration_s = 60.0;
+        s.actors.vehicles.demand.rate_veh_per_h = Some(1500.0);
+        s.security.kem = kem.to_string();
+        s.net.fragmenter = Some(ModelChoice::new(fragmenter));
+        let (r, rec) = run(s);
+        let mut last: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+        for (_, x) in rec.records() {
+            if x.channel != "metric.sample" {
+                continue;
+            }
+            let v: Value = serde_json::from_slice(&x.json).expect("json");
+            let name = v["metric"].as_str().unwrap_or("").to_string();
+            if interesting(&name) {
+                last.insert(format!("{name} {}", v["dims"]), v["value"].clone());
+            }
+        }
+        let view = last_view(&rec);
+        let pca_busy = entity(&view, "pca")["queue"]["busy_ns"].as_u64().unwrap_or(0);
+        println!(
+            "FLEET {}",
+            json!({
+                "signature": sig, "kem": kem, "fragmenter": fragmenter,
+                "frames_transmitted": r.frames_transmitted,
+                "fragments_sent": r.fragments_sent,
+                "sdus_fragmented": r.sdus_fragmented,
+                "reassembly_complete": r.reassembly_complete,
+                "reassembly_lost": r.reassembly_lost,
+                "reception_attempts": r.reception_attempts,
+                "receptions_ok": r.receptions_ok,
+                "net_mtu_refusals": r.net_mtu_refusals,
+                "mac_grants": r.mac_grants,
+                "mac_access_delay_ns": r.mac_access_delay_ns,
+                "mac_drops": r.mac_drops,
+                "rx_losses": r.rx_losses,
+                "topups_completed": r.phase2.topups_completed,
+                "certs_topped_up": r.phase2.certs_topped_up,
+                "lop_to_ee_bytes": edge_bytes(&view, "lop", "ee"),
+                "ee_to_lop_bytes": edge_bytes(&view, "ee", "lop"),
+                "pca_busy_ns": pca_busy,
+                "metrics": last,
+            })
+        );
+    }
+}
+
+/// The threshold study scenarios, run whole: two-of-two against 3-of-5 revocation with
+/// servers down, and the 3-of-5 PCA with failing members under each protocol. A
+/// measurement, run on demand like [`fleet_costs_by_scheme`].
+#[test]
+#[ignore = "a measurement, not a check: run with --ignored --nocapture"]
+fn threshold_study_scenarios() {
+    let mut cells: Vec<(String, Scenario)> = Vec::new();
+    for f in ["threshold-revocation-2of2.yaml", "threshold-revocation-3of5.yaml"] {
+        let mut s = Scenario::load(scenarios().join(f)).expect("loads");
+        s.experiment = None;
+        cells.push((f.to_string(), s));
+    }
+    for protocol in ["frost-p256", "cggmp21-ecdsa", "umbrella"] {
+        let mut s = Scenario::load(scenarios().join("threshold-pca.yaml")).expect("loads");
+        s.experiment = None;
+        if let Some(t) = s.security.threshold.as_mut() {
+            t.protocol = protocol.to_string();
+        }
+        cells.push((format!("threshold-pca {protocol}"), s));
+    }
+    for (name, s) in cells {
+        let (r, _) = run(s);
+        let p = &r.phase2;
+        println!(
+            "THRESHOLD {}",
+            json!({
+                "cell": name,
+                "reports_at_ma": p.reports_at_ma,
+                "ma_revoke_decisions": p.ma_revoke_decisions,
+                "cases_opened": p.cases_opened,
+                "cases_unresolved": p.cases_unresolved,
+                "crls_issued": p.crls_issued,
+                "crl_versions_published": p.crl_versions_published,
+                "revocation_latency_ns": p.revocation_latency_ns,
+                "revocation_stages": p.revocation_stages,
+                "topups_started": p.topups_started,
+                "topups_completed": p.topups_completed,
+                "vehicles_starved": p.vehicles_starved,
+                "committees": p.committees,
+                "committee_failures": p.committee_failures,
+                "backend_deliveries_dropped": p.backend_deliveries_dropped,
+            })
+        );
+    }
+}
