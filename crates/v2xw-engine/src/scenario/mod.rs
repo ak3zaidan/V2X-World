@@ -133,6 +133,9 @@ impl Scenario {
             scenario.city = None;
             scenario = scenario.with_city(&id).map_err(EngineError::Scenario)?;
         }
+        if scenario.city.is_some() {
+            crate::city::connect_demand(&mut scenario);
+        }
         Ok(scenario)
     }
 
@@ -229,6 +232,7 @@ impl Scenario {
                 // A procedural world needs no jurisdiction; only an OSM import does.
                 highway_preset: None,
                 signals: schema::WorldSignalOptions::default(),
+                service_roads: true,
             },
             actors: Actors::default(),
             weather: Weather::default(),

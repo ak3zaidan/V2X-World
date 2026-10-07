@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         println!(
             "{:<16} {:<5} import {:>5.1}s lane-km {:>6.1} signals {:>3} rsus {:>2} rate {:>5} \
-             peak {:>3} trips {:>4} safety {:>3} standstill {:>2} {}",
+             peak {:>3} trips {:>4} dropped {:>3} safety {:>3} standstill {:>2} {}",
             city.id,
             if pass { "PASS" } else { "FAIL" },
             record["import_s"].as_f64().unwrap_or(0.0),
@@ -73,6 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             record["rate_veh_per_h"].as_f64().unwrap_or(0.0),
             record["peak_vehicles"].as_u64().unwrap_or(0),
             record["trips_completed"].as_u64().unwrap_or(0),
+            record["dropped_trips"].as_u64().unwrap_or(0),
             record["safety_violations"].as_u64().unwrap_or(0),
             record["standstill"].as_u64().unwrap_or(0),
             record["why"].as_str().unwrap_or("")
@@ -218,6 +219,7 @@ fn audit_city(path: &str, id: &str, seconds: f64) -> serde_json::Value {
         "peak_vehicles": report.stats.peak_vehicles,
         "vehicles": report.stats.vehicles,
         "trips_completed": trips,
+        "dropped_trips": mobility.dropped_trips(),
         "mean_speed_mps": report.stats.mean_speed_mps,
         "safety_violations": safety,
         "rate_exceedances": rate,

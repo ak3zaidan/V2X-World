@@ -13,7 +13,10 @@
 # the building multipolygons, with every node they reference — what the importer reads.
 # It deliberately leaves out the other relations (bus routes, administrative boundaries,
 # large land-use areas), whose members reach far outside the box: with them, the Berlin
-# box was 171 MB instead of 11 MB and the Portland box 32 MB instead of 7 MB.
+# box was 171 MB instead of 11 MB and the Portland box 32 MB instead of 7 MB. It asks for
+# `out body`, not `out meta`: the importer reads no element metadata (version, timestamp,
+# user), and on 2026-10-07 the metadata lookup was what made a loaded server time out (504
+# from every mirror for `out meta`, the same box in 9 s with `out body`).
 #
 # The boxes are the registry's (worlds/cities.yaml), so re-fetching cannot move the world
 # frame (a city's box fixes the origin). The data changes as OSM is edited: the date of a
@@ -51,7 +54,7 @@ ids() { awk '$1 == "-" && $2 == "id:" { print $3 }' "$registry"; }
 
 fetch_box() {
   local name=$1 box=$2 out="$cache/$1.osm.xml"
-  local query="[out:xml][timeout:180];(node($box);way($box);rel($box)[\"type\"=\"restriction\"];rel($box)[\"type\"=\"multipolygon\"][\"building\"];rel($box)[\"type\"=\"multipolygon\"][\"building:part\"];);(._;>;);out meta;"
+  local query="[out:xml][timeout:180];(node($box);way($box);rel($box)[\"type\"=\"restriction\"];rel($box)[\"type\"=\"multipolygon\"][\"building\"];rel($box)[\"type\"=\"multipolygon\"][\"building:part\"];);(._;>;);out body;"
   mkdir -p "$cache"
   local attempt=0 wait=20
   for endpoint in "${endpoints[@]}" "${endpoints[@]}"; do

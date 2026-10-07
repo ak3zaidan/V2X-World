@@ -634,6 +634,14 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                An OSM import is refused without it.",
     },
     KeyStatus {
+        path: "world.service_roads",
+        status: Status::Wired,
+        note: "Whether highway=service ways (alleys, driveways, parking aisles) become \
+               motor-traffic lanes. On by default; a city of the library turns it off, \
+               because downtown alleys run hard against building walls and a vehicle routed \
+               through one clips the buildings.",
+    },
+    KeyStatus {
         path: "world.signals.coordinate",
         status: Status::Wired,
         note: "Whether the OpenStreetMap importer offsets its synthesised signal plans for \

@@ -67,6 +67,10 @@ impl OdLaw {
     }
 }
 
+/// The shortest lane a trip may start on when [`OdParams::connected_only`] is set, metres:
+/// a 12 m bus and a 1 m margin.
+pub const MIN_ORIGIN_LANE_M: f64 = 13.0;
+
 /// The OD model's parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -89,6 +93,16 @@ pub struct OdParams {
     pub max_hops: usize,
     /// The classes a trip's lanes must admit.
     pub classes: ClassMask,
+    /// Draw origins and destinations only from the largest strongly connected part of the
+    /// network a private car may drive, so every trip has a route.
+    ///
+    /// Default `false`, the legacy law: any lane any of `classes` may use. On a city cut out
+    /// of a larger map that law draws many trips that cannot be driven — a bus-only lane as
+    /// an origin, a one-way street that leaves the box as a destination — and each is
+    /// dropped: on the library's downtown San Francisco, San Jose, Miami and Portland boxes
+    /// (2026-10-07) fewer than one trip in ten reached the road. The city layer
+    /// (`v2xw_engine::city`) turns it on.
+    pub connected_only: bool,
 }
 
 impl Default for OdParams {
@@ -100,6 +114,7 @@ impl Default for OdParams {
             rush_centre_bias: true,
             max_hops: 12,
             classes: ClassMask::MOTOR_TRAFFIC,
+            connected_only: false,
         }
     }
 }
@@ -150,6 +165,13 @@ impl OdModel {
             })
             .map(|l| l.id)
             .collect();
+        let usable = if params.connected_only {
+            let core = largest_car_component(world);
+            let kept: Vec<LaneId> = usable.iter().copied().filter(|l| core.contains(l)).collect();
+            if kept.is_empty() { usable } else { kept }
+        } else {
+            usable
+        };
         if usable.is_empty() {
             return Err(MobError::EmptyWorld {
                 what: "lane the requested classes may use",
@@ -178,6 +200,20 @@ impl OdModel {
             }
         } else {
             usable.clone()
+        };
+        // On the connected network, a trip also starts only where a vehicle fits: the
+        // engine refuses an origin lane shorter than the vehicle (a bus is 12 m), and a
+        // downtown cut into short blocks has many lanes shorter than that between close
+        // junctions.
+        let origins = if params.connected_only {
+            let long: Vec<LaneId> = origins
+                .iter()
+                .copied()
+                .filter(|l| world.lane(*l).length_m >= MIN_ORIGIN_LANE_M)
+                .collect();
+            if long.is_empty() { origins } else { long }
+        } else {
+            origins
         };
 
         let mut adjacency: BTreeMap<JunctionId, Vec<JunctionId>> = BTreeMap::new();
@@ -293,6 +329,85 @@ impl OdModel {
             })
             .collect()
     }
+}
+
+/// The largest strongly connected set of non-internal lanes a passenger car may use,
+/// joined by the network's permitted connections (Kosaraju, iterative).
+fn largest_car_component(world: &World) -> BTreeSet<LaneId> {
+    let lanes = world.roads.lanes();
+    let n = lanes.len();
+    let car = |l: LaneId| {
+        let lane = world.lane(l);
+        lane.kind != LaneKind::Internal
+            && lane.kind.is_motorised()
+            && lane.admits(ClassMask::CAR)
+    };
+    let mut fwd: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut rev: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for c in world.roads.connections() {
+        if !c.permitted || !car(c.from_lane) || !car(c.to_lane) {
+            continue;
+        }
+        if c.via.is_some_and(|v| !world.lane(v).admits(ClassMask::CAR)) {
+            continue;
+        }
+        let (a, b) = (c.from_lane.as_usize(), c.to_lane.as_usize());
+        if a < n && b < n {
+            fwd[a].push(b);
+            rev[b].push(a);
+        }
+    }
+    // Pass 1: finishing order on the forward graph.
+    let mut seen = vec![false; n];
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    for start in 0..n {
+        if seen[start] || !car(LaneId::new(start as u32)) {
+            continue;
+        }
+        seen[start] = true;
+        let mut stack: Vec<(usize, usize)> = vec![(start, 0)];
+        while let Some((v, i)) = stack.pop() {
+            if i < fwd[v].len() {
+                stack.push((v, i + 1));
+                let w = fwd[v][i];
+                if !seen[w] {
+                    seen[w] = true;
+                    stack.push((w, 0));
+                }
+            } else {
+                order.push(v);
+            }
+        }
+    }
+    // Pass 2: components on the reverse graph, in reverse finishing order.
+    let mut comp = vec![usize::MAX; n];
+    let mut best: (usize, usize) = (0, usize::MAX);
+    let mut next = 0usize;
+    for &start in order.iter().rev() {
+        if comp[start] != usize::MAX {
+            continue;
+        }
+        let mut size = 0usize;
+        comp[start] = next;
+        let mut stack = vec![start];
+        while let Some(v) = stack.pop() {
+            size += 1;
+            for &w in &rev[v] {
+                if comp[w] == usize::MAX {
+                    comp[w] = next;
+                    stack.push(w);
+                }
+            }
+        }
+        if size > best.0 {
+            best = (size, next);
+        }
+        next += 1;
+    }
+    (0..n)
+        .filter(|i| comp[*i] == best.1)
+        .map(|i| LaneId::new(i as u32))
+        .collect()
 }
 
 impl v2xw_core::model::Model for OdModel {

@@ -286,6 +286,7 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
                 ..Default::default()
             }
             .highway_preset(preset);
+            osm.layers.service = scenario.world.service_roads;
             osm.signals.coordinate = scenario.world.signals.coordinate;
             osm.signals.progression_speed_mps = scenario.world.signals.progression_speed_mps;
             if let Some(b) = bbox {

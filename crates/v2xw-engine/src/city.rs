@@ -181,6 +181,9 @@ impl City {
             cache: keep.and_then(|w| w.cache.clone()),
             highway_preset: Some(preset),
             signals,
+            // The street network, not the alleys and garage ramps behind it
+            // (`v2xw_world::osm::OsmLayers::service`).
+            service_roads: false,
         })
     }
 
@@ -337,6 +340,7 @@ impl Scenario {
         let old = self.current_city();
         if old.is_some_and(|o| o.id == city.id) {
             self.city = Some(city.id.clone());
+            connect_demand(&mut self);
             return Ok(self);
         }
         self.world = city.world_spec(Some(&self.world))?;
@@ -431,6 +435,8 @@ impl Scenario {
             }
         }
 
+        connect_demand(&mut self);
+
         // A focus box is a place in the old city.
         if let Some(focus) = &self.radio.tiers.focus
             && matches!(focus.region, crate::scenario::schema::FocusRegion::Bbox { .. })
@@ -438,6 +444,28 @@ impl Scenario {
             self.radio.tiers.focus = None;
         }
         Ok(self)
+    }
+}
+
+/// On a city, trips are drawn from the part of the network a car can drive round
+/// (`v2xw_mobility::demand::OdParams::connected_only`): a box cut out of a city leaves bus-only
+/// lanes and one-way streets that only leave it, and a trip from or to one has no route.
+/// Only the Poisson model has an OD law; the others are left alone.
+pub fn connect_demand(s: &mut Scenario) {
+    let d = &mut s.actors.vehicles.demand;
+    if !d.kind.starts_with("mobility/demand/poisson") {
+        return;
+    }
+    if !d.params.is_object() {
+        d.params = Value::Object(serde_json::Map::new());
+    }
+    if let Some(params) = d.params.as_object_mut() {
+        let od = params
+            .entry("od")
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Some(od) = od.as_object_mut() {
+            od.entry("connected_only").or_insert(Value::Bool(true));
+        }
     }
 }
 

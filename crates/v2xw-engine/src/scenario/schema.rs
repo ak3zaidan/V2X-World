@@ -279,6 +279,11 @@ pub struct WorldSpec {
     /// How the OSM importer times the signals it synthesises.
     #[serde(default, skip_serializing_if = "WorldSignalOptions::is_default")]
     pub signals: WorldSignalOptions,
+    /// Whether `highway=service` ways (alleys, driveways, parking aisles) become
+    /// motor-traffic lanes ([`v2xw_world::osm::OsmLayers::service`]). Default `true`; a
+    /// city of the library sets `false`, the street network a city study drives on.
+    #[serde(default = "crate::scenario::schema::truth", skip_serializing_if = "crate::scenario::schema::is_true")]
+    pub service_roads: bool,
 }
 
 /// How an imported world's synthesised signal plans are coordinated
@@ -1549,6 +1554,12 @@ pub struct Experiment {
     /// How many replications per (point, seed).
     #[serde(default)]
     pub replications: u32,
+}
+
+/// For `skip_serializing_if`: a default-`true` flag that is still `true`.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+pub(crate) fn is_true(b: &bool) -> bool {
+    *b
 }
 
 /// `true`, as a function, for `#[serde(default = …)]`.

@@ -950,6 +950,17 @@ pub struct OsmLayers {
     pub landuse: bool,
     /// `footway=crossing` ways.
     pub crossings: bool,
+    /// `highway=service` ways — alleys, driveways, parking aisles, drive-throughs — as
+    /// motor-traffic lanes. Default `true`.
+    ///
+    /// `false` is the street network a city-scale traffic study drives on: OSMnx's `drive`
+    /// network leaves every `highway=service` way out for the same reason. On the city
+    /// library's downtowns the service ways are mostly alleys and garage ramps that run
+    /// hard against building walls, and a vehicle routed through one clips the building
+    /// footprint at every turn (the traffic auditor's `in-building` check, 2026-10-07: 177
+    /// in 90 s on Anchorage, 201 on Washington, none once they were left out).
+    #[serde(default = "default_true")]
+    pub service: bool,
 }
 
 impl Default for OsmLayers {
@@ -962,6 +973,7 @@ impl Default for OsmLayers {
             buildings: true,
             landuse: true,
             crossings: true,
+            service: true,
         }
     }
 }
@@ -977,6 +989,7 @@ impl OsmLayers {
             buildings: false,
             landuse: false,
             crossings: false,
+            service: true,
         }
     }
 }
@@ -2910,6 +2923,9 @@ pub fn classify_way(
         return None;
     }
     let wanted = match defaults.family {
+        WayFamily::Motor if highway == "service" => {
+            options.layers.drivable && options.layers.service
+        }
         WayFamily::Motor => options.layers.drivable,
         WayFamily::Cycle => options.layers.cycle,
         WayFamily::Foot => options.layers.pedestrian,
@@ -9817,6 +9833,11 @@ fn build_provenance(
             .with("landuse", options.layers.landuse)
             .with("crossings", options.layers.crossings),
     );
+    // Recorded only when off, so a world imported with every layer keeps the provenance
+    // (and the content hash) it always had.
+    if !options.layers.service {
+        provenance.record(Transformation::new("osm-layer-omitted").with("layer", "service"));
+    }
     provenance.record(
         Transformation::new("local-tangent-plane")
             .with("projection", Projection::NAME)
