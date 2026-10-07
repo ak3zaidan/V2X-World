@@ -1027,6 +1027,23 @@ pub fn title(path: &str) -> Option<&'static str> {
         "detection.local" => "Detectors on each vehicle",
         "detection.ma.id" => "Misbehaviour authority",
         "apps.enabled" => "Safety applications",
+        // The fields of one element of a list, shown in the row-by-row editor.
+        "threats.attackers[].id" => "Attack type",
+        "threats.attackers[].fraction" => "Share of vehicles",
+        "threats.attackers[].count" => "Number of vehicles",
+        "threats.attackers[].schedule.from_s" => "Active from",
+        "threats.attackers[].schedule.to_s" => "Active until",
+        "threats.attackers[].params" => "Parameters (advanced)",
+        "threats.jammers[].id" => "Jammer type",
+        "threats.jammers[].params" => "Where and when (position_m, power_dbm, from_s, to_s)",
+        "detection.local[].id" => "Detector suite",
+        "detection.local[].params" => "Parameters (advanced)",
+        "radio.adjacent_channel" => "Neighbouring-channel transmitters",
+        "radio.adjacent_channel[].rat" => "Technology",
+        "radio.adjacent_channel[].params" => "Where and when (position_m, power_dbm)",
+        "actors.rsus[].profile" => "Hardware",
+        "actors.rsus[].backhaul" => "Backhaul",
+        "actors.rsus[].site" => "Site",
         _ => return None,
     })
 }

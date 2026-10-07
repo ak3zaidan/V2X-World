@@ -348,7 +348,7 @@ function schemaIndex(schema: unknown): Map<string, PublishedRow> {
   return out;
 }
 
-function kindOfRow(row: PublishedRow): FormField["kind"] {
+function kindOfRow(row: PublishedRow): ItemField["kind"] {
   if (Array.isArray(row.enum) && row.enum.length > 0) return "enum";
   switch (row.kind) {
     case "integer": return "integer";
