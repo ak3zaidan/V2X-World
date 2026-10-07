@@ -154,15 +154,13 @@ pub fn world_of(lab: &mut Lab, s: &Scenario) -> Result<Arc<World>, String> {
     let key = format!("world-{}", v2xw_engine::wiring::world_cache_key(s).map_err(|e| e.to_string())?);
     let s = s.clone();
     lab.study(&key, move |_| {
-        let started = std::time::Instant::now();
         let w = v2xw_engine::wiring::build_world(&s).map_err(|e| e.to_string())?;
         eprintln!(
-            "    world: {} lanes, {} junctions, {} signal plans, {} buildings ({:.0} s wall clock)",
+            "    world: {} lanes, {} junctions, {} signal plans, {} buildings",
             w.roads.lanes().len(),
             w.roads.junctions().len(),
             w.signals.len(),
-            w.buildings.len(),
-            started.elapsed().as_secs_f64()
+            w.buildings.len()
         );
         Ok(Arc::new(w))
     })

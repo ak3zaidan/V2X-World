@@ -6,6 +6,7 @@
 use v2xw_core::card::Tier;
 use v2xw_core::geom::Vec3;
 use v2xw_core::ids::{LinkKey, NodeId};
+use v2xw_core::math;
 use v2xw_core::weather::WeatherState;
 use v2xw_radio::fading::{NakagamiFading, NakagamiPreset};
 use v2xw_radio::obstacle::{NlosvCase, knife_edge_loss_db, knife_edge_loss_exact_db};
@@ -28,7 +29,7 @@ const C: f64 = 299_792_458.0;
 const BOLTZMANN: f64 = 1.380_649e-23;
 
 fn log10(x: f64) -> f64 {
-    x.log10()
+    math::log10(x)
 }
 
 /// The checks of this layer.
@@ -245,9 +246,9 @@ fn tr37885_plos(mode: Mode) -> Outcome {
         } else {
             (0.54 - 0.001 * (d - 475.0)).max(0.0)
         };
-        let ur = (1.05 * (-0.0114 * d).exp()).min(1.0);
+        let ur = (1.05 * math::exp(-0.0114 * d)).min(1.0);
         let ur_model = if mode.faulted() {
-            (1.05 * (-0.0141 * d).exp()).min(1.0)
+            (1.05 * math::exp(-0.0141 * d)).min(1.0)
         } else {
             prop::p_los_urban(d)
         };
@@ -304,7 +305,7 @@ fn nakagami(mode: Mode) -> Outcome {
         let gains: Vec<f64> = (0..n)
             .map(|i| {
                 let db = Fading::sample_db(&mut model, &mut ctx, link, 50.0, 1_000 + i as u64 * 100_000);
-                10f64.powf(db / 10.0)
+                math::pow(10.0, db / 10.0)
             })
             .collect();
         let d = stats::ks_statistic(&gains, |x| stats::gamma_cdf(x, m, 1.0 / m));
@@ -356,7 +357,7 @@ fn shadowing(mode: Mode) -> Outcome {
         prev = Some(s);
     }
     let rho = stats::correlation(&pairs);
-    let expected = (-5.0f64 / d_corr).exp();
+    let expected = math::exp(-5.0 / d_corr);
     Outcome::judge(
         p > 1e-3 && (rho - expected).abs() < 0.02,
         format!("marginal KS D={d:.4} p={p:.3} (σ {sigma} dB); lag-5 m correlation {rho:.4} against {expected:.4}"),

@@ -66,7 +66,6 @@
       {
         "depth": 0,
         "drops": {},
-        "drops_note": "a frame the transmit queue refuses is on no channel, so transmit drops are not observable here",
         "id": "tx",
         "in_service": 0,
         "label": "Transmit",
@@ -76,17 +75,17 @@
           "p95": 1
         },
         "served": 10,
-        "wait_p50_ms": 14.946,
-        "wait_p95_ms": 18.305,
+        "wait_p50_ms": 11.973,
+        "wait_p95_ms": 13.652,
         "waiting": [
           {
             "enqueued_ns": 3903462077,
             "from": null,
-            "left_ns": 3921767077,
+            "left_ns": 3917114077,
             "msg": 177,
             "stage": "on the air",
             "type": "bsm",
-            "waited_ms": 18.305
+            "waited_ms": 13.652
           }
         ],
         "waiting_omitted": 0,
@@ -118,10 +117,10 @@
   },
   "received": [
     {
-      "bytes_on_wire": 176,
+      "bytes_on_wire": 192,
       "cause": null,
       "decoded": {
-        "hex": "03810040038028001425038029569243dcdad3031435a58d1707f7c141200070321c20fdfa1fa1007fff80005a0fa04001200002990d37d81a6b8000a55a494e8d93598080295b16f68cfa12cfc23f24f23f59eb84dc070b86b0dc78025b1b6cffbe9ff35b87494ccd1f588e412730bb1edd8a2a09bf7fbad2adaf17282376c464f55a8822",
+        "hex": "03810040038038001435438029569243dcdad3031435a58ce307f79a9aa000201a9c20fd87a7d0007fff00005a0fa00038c00100f8401db02a010cfffec8004001200002990d37d81a6b8000a55a494e8d935980808ff89f46dc9f76f7f4f1436caa8e2799f7d9af603e87936c240dd317de8b7a45bc2b30909314a12efc9e525ec601eb4731685c06c6b10623e1c639eb85aa53ae",
         "message": {
           "fields": [
             {
@@ -153,9 +152,9 @@
             {
               "k": "lon",
               "label": "longitude",
-              "raw": 84015,
+              "raw": 83911,
               "unit": "°",
-              "v": 0.0084015
+              "v": 0.0083911
             },
             {
               "k": "elev",
@@ -167,16 +166,16 @@
             {
               "k": "acc_semi_major",
               "label": "accuracy · semi-major",
-              "raw": 130,
+              "raw": 53,
               "unit": "m",
-              "v": 6.5
+              "v": 2.65
             },
             {
               "k": "acc_semi_minor",
               "label": "accuracy · semi-minor",
-              "raw": 130,
+              "raw": 53,
               "unit": "m",
-              "v": 6.5
+              "v": 2.65
             },
             {
               "k": "acc_orientation",
@@ -188,16 +187,15 @@
             {
               "k": "transmission",
               "label": "transmission",
-              "na": true,
-              "raw": 7,
-              "v": null
+              "raw": 2,
+              "v": "ForwardGears"
             },
             {
               "k": "speed",
               "label": "speed",
-              "raw": 100,
+              "raw": 53,
               "unit": "m/s",
-              "v": 2.0
+              "v": 1.06
             },
             {
               "k": "heading",
@@ -217,18 +215,16 @@
             {
               "k": "accel_long",
               "label": "acceleration · longitudinal",
-              "na": true,
-              "raw": 2001,
+              "raw": 170,
               "unit": "m/s²",
-              "v": null
+              "v": 1.7
             },
             {
               "k": "accel_lat",
               "label": "acceleration · lateral",
-              "na": true,
-              "raw": 2001,
+              "raw": 0,
               "unit": "m/s²",
-              "v": null
+              "v": 0.0
             },
             {
               "k": "accel_vert",
@@ -248,9 +244,8 @@
             {
               "k": "brakes_wheels",
               "label": "brakes · wheel brakes applied",
-              "na": true,
-              "raw": 16,
-              "v": null
+              "raw": 0,
+              "v": "none"
             },
             {
               "k": "brakes_traction",
@@ -304,8 +299,10 @@
             {
               "k": "part_ii",
               "label": "Part II containers",
-              "raw": [],
-              "v": 0
+              "raw": [
+                0
+              ],
+              "v": 1
             }
           ],
           "format": "SAE J2735 MessageFrame · BasicSafetyMessage (DSRCmsgID 20)"
@@ -313,12 +310,12 @@
         "security": {
           "generation_time_us": 731232003955307,
           "hash": "sha256",
-          "payload_bytes": 40,
+          "payload_bytes": 56,
           "psid": 32,
           "signature": {
             "alg": "ECDSA NIST P-256",
-            "r": "295b16f68cfa12cfc23f24f23f59eb84dc070b86b0dc78025b1b6cffbe9ff35b",
-            "s": "87494ccd1f588e412730bb1edd8a2a09bf7fbad2adaf17282376c464f55a8822"
+            "r": "8ff89f46dc9f76f7f4f1436caa8e2799f7d9af603e87936c240dd317de8b7a45",
+            "s": "bc2b30909314a12efc9e525ec601eb4731685c06c6b10623e1c639eb85aa53ae"
           },
           "signer": {
             "hashed_id8": "00a55a494e8d9359",
@@ -334,52 +331,53 @@
             "start": 0
           },
           {
-            "end": 47,
+            "end": 63,
             "layer": "payload",
             "name": "payload",
             "start": 7
           },
           {
-            "end": 59,
+            "end": 75,
             "layer": "envelope",
             "name": "headerInfo",
-            "start": 47
+            "start": 63
           },
           {
-            "end": 67,
+            "end": 83,
             "layer": "envelope",
             "name": "signer",
-            "start": 59
+            "start": 75
           },
           {
-            "end": 133,
+            "end": 149,
             "layer": "envelope",
             "name": "signature",
-            "start": 67
+            "start": 83
           }
         ],
-        "spdu_bytes": 133
+        "spdu_bytes": 149
       },
-      "dist_m": 688.3569946289062,
-      "e2e_ms": 13.512296,
+      "dist_m": 681.8569946289062,
+      "e2e_ms": 11.621274,
       "from": 4,
       "msg": 180,
       "outcome": "delivered",
-      "rssi_dbm": -82.58999633789062,
-      "sinr_db": 15.40999984741211,
+      "rssi_dbm": -83.94000244140625,
+      "sinr_db": 14.0600004196167,
       "stages_ms": {
-        "airtime": 0.28,
+        "airtime": 0.304,
+        "handoff": 1.915,
         "mac_aifs": 0.0,
         "mac_backoff": 0.0,
         "mac_defer": 0.0,
-        "propagation": 0.002296,
+        "propagation": 0.002274,
         "reception": 0.0,
-        "sign": 12.83,
+        "sign": 9.0,
         "sign_queue": 0.0,
         "verify": 0.4,
         "verify_queue": 0.0
       },
-      "t_ns": 3968819924,
+      "t_ns": 3966928902,
       "type": "bsm",
       "verification": "verified"
     }
@@ -392,11 +390,11 @@
         "envelope": 93,
         "link": 38,
         "network": 5,
-        "on_wire": 176,
-        "payload": 40
+        "on_wire": 192,
+        "payload": 56
       },
       "decoded": {
-        "hex": "038100400380280014250a0116febb83cfdad302f6b5a514e288b5414120007089d460fdfa1fa1007fff80005a0fa04001200002990d37d74fe680045bfaee5072174680800e2bd188fb982d91ca94932030a6dfa102567db4605ca115d03de05dd96b05c0eab20340b2220653258ffdb4436f23d7653331d51d120f2f40af029c69595087",
+        "hex": "038100400380380014354a0116febb83cfdad302f6b5a515d488b51a9aa00020705460fd8777d0007fff00005a0fa00038c000ff27400152fc030afffec8004001200002990d37d74fe680045bfaee5072174680808f37877a0b648435f72b30884f99b38b0415d43d79322401d10cec15d7a452d711189218dee38adac940541ad462099711ab4a8ce1f6b6d6351e00450214c54a",
         "message": {
           "fields": [
             {
@@ -428,9 +426,9 @@
             {
               "k": "lon",
               "label": "longitude",
-              "raw": 22470,
+              "raw": 22954,
               "unit": "°",
-              "v": 0.002247
+              "v": 0.0022954
             },
             {
               "k": "elev",
@@ -442,16 +440,16 @@
             {
               "k": "acc_semi_major",
               "label": "accuracy · semi-major",
-              "raw": 130,
+              "raw": 53,
               "unit": "m",
-              "v": 6.5
+              "v": 2.65
             },
             {
               "k": "acc_semi_minor",
               "label": "accuracy · semi-minor",
-              "raw": 130,
+              "raw": 53,
               "unit": "m",
-              "v": 6.5
+              "v": 2.65
             },
             {
               "k": "acc_orientation",
@@ -463,16 +461,15 @@
             {
               "k": "transmission",
               "label": "transmission",
-              "na": true,
-              "raw": 7,
-              "v": null
+              "raw": 2,
+              "v": "ForwardGears"
             },
             {
               "k": "speed",
               "label": "speed",
-              "raw": 275,
+              "raw": 224,
               "unit": "m/s",
-              "v": 5.5
+              "v": 4.48
             },
             {
               "k": "heading",
@@ -492,18 +489,16 @@
             {
               "k": "accel_long",
               "label": "acceleration · longitudinal",
-              "na": true,
-              "raw": 2001,
+              "raw": 167,
               "unit": "m/s²",
-              "v": null
+              "v": 1.67
             },
             {
               "k": "accel_lat",
               "label": "acceleration · lateral",
-              "na": true,
-              "raw": 2001,
+              "raw": 0,
               "unit": "m/s²",
-              "v": null
+              "v": 0.0
             },
             {
               "k": "accel_vert",
@@ -523,9 +518,8 @@
             {
               "k": "brakes_wheels",
               "label": "brakes · wheel brakes applied",
-              "na": true,
-              "raw": 16,
-              "v": null
+              "raw": 0,
+              "v": "none"
             },
             {
               "k": "brakes_traction",
@@ -579,8 +573,10 @@
             {
               "k": "part_ii",
               "label": "Part II containers",
-              "raw": [],
-              "v": 0
+              "raw": [
+                0
+              ],
+              "v": 1
             }
           ],
           "format": "SAE J2735 MessageFrame · BasicSafetyMessage (DSRCmsgID 20)"
@@ -588,12 +584,12 @@
         "security": {
           "generation_time_us": 731232003903462,
           "hash": "sha256",
-          "payload_bytes": 40,
+          "payload_bytes": 56,
           "psid": 32,
           "signature": {
             "alg": "ECDSA NIST P-256",
-            "r": "0e2bd188fb982d91ca94932030a6dfa102567db4605ca115d03de05dd96b05c0",
-            "s": "eab20340b2220653258ffdb4436f23d7653331d51d120f2f40af029c69595087"
+            "r": "8f37877a0b648435f72b30884f99b38b0415d43d79322401d10cec15d7a452d7",
+            "s": "11189218dee38adac940541ad462099711ab4a8ce1f6b6d6351e00450214c54a"
           },
           "signer": {
             "hashed_id8": "045bfaee50721746",
@@ -609,31 +605,31 @@
             "start": 0
           },
           {
-            "end": 47,
+            "end": 63,
             "layer": "payload",
             "name": "payload",
             "start": 7
           },
           {
-            "end": 59,
+            "end": 75,
             "layer": "envelope",
             "name": "headerInfo",
-            "start": 47
+            "start": 63
           },
           {
-            "end": 67,
+            "end": 83,
             "layer": "envelope",
             "name": "signer",
-            "start": 59
+            "start": 75
           },
           {
-            "end": 133,
+            "end": 149,
             "layer": "envelope",
             "name": "signature",
-            "start": 67
+            "start": 83
           }
         ],
-        "spdu_bytes": 133
+        "spdu_bytes": 149
       },
       "msg": 177,
       "pseudonym": "045bfaee50721746",
@@ -643,20 +639,20 @@
           "qm": 2,
           "rat": "dsrc-80211p"
         },
-        "airtime_us": 280,
+        "airtime_us": 304,
         "channel": 172,
         "power_dbm": 17.0
       },
       "signer": "digest",
-      "t_ns": 3921767077,
+      "t_ns": 3917114077,
       "timing": {
-        "channel_access_ms": 0.0,
+        "channel_access_ms": 4.652,
         "generated_ns": 3903462077,
-        "on_air_ns": 3921767077,
-        "sign_ms": 18.305,
+        "on_air_ns": 3917114077,
+        "sign_ms": 9.0,
         "sign_queue_ms": 0.0,
         "sign_start_ns": 3903462077,
-        "signed_ns": 3921767077
+        "signed_ns": 3912462077
       },
       "type": "bsm"
     }
@@ -667,6 +663,6 @@
   },
   "since_ns": null,
   "t_ns": 4000000000,
-  "undetected": 4,
+  "undetected": 8,
   "v": 1
 }

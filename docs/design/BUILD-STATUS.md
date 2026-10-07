@@ -4,7 +4,7 @@ Living record of what is built and what has actually been *measured*, as against
 the plan in `10-roadmap.md` and the decisions in `12-build-decisions.md`. Claims
 here carry their evidence; anything unmeasured says so.
 
-Last updated 2026-09-30 (six-track merge section below, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
+Last updated 2026-10-06 (the stabilise track section first; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
 `v2xw-metrics`, `v2xw-node` and `v2xw-engine` are no longer stubs, and the line counts
 predate several waves. It is left as written rather than rewritten from memory, because a
 status file whose numbers were re-estimated rather than re-measured is worse than one that
@@ -14,6 +14,122 @@ For the current release position — what must be true for a 1.0 tag, what is no
 what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKLIST.md)
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
+
+## 2026-10-06 — stabilise track: every suite run on the ten-track merge, and Midtown's evening peak
+
+One engineer. First, run every test suite once on `main` as merged (`c4c4721`) and fix what
+the merge broke; then put the page, the scene, the inspector and the metrics under a
+realistic Midtown rush hour, measure them, and hold what was measured with budget tests.
+Every number below comes from a command run on the owner's 8 GB laptop with seven other
+engineers' builds and runs sharing it through the build lock; wall-clock figures are noisy,
+counts are not. Every heavy command ran under `heavy.sh`, which sets
+`RAYON_NUM_THREADS=2`: the engine's parallel link geometry had two threads, not the
+machine's eight.
+
+### The suites on the merge
+
+| Suite | Result on `c4c4721` | Cause | Now |
+|---|---|---|---|
+| core, msg, sec, world, mobility, radio, net, proto, threat, node, record, metrics, experiment, cli, copilot, wasm, py | all pass (217, 220, 100, 245, 252, 317, 113, 128, 225, 209, 242, 256, 80, 17, 90, 6, 16) | — | — |
+| engine | 221 pass, 1 fail: `the_five_internal_error_causes_are_refused_at_check_by_their_setting` | the mbd track's two-pipeline `MaHost::from_scenario` replaced the robustness track's `ma_params` and reported an unknown `detection.ma.params` key against the block, not the key, and took `revoke_window_s: -1` | fixed (`32cf240`): refusals name `detection.ma.params.<key>`, list the pipeline's keys, refuse negative windows |
+| server | 118 pass, 1 fail: `the_feed_has_the_shape_of_the_published_vector` | two deliberate shape changes: `queues.list[].drops_note` gone (node.drop records made tx drops observable), `received[].stages_ms.handoff` new | vector re-blessed (`05be715`); `FEED_VERSION` unchanged, since a v1 reader misreads neither |
+| conformance | 66 pass, 3 fail: the wall-clock and libm firewalls, and the `grid-traffic` golden | netval and trafficval (merged as early work) called `f64::exp/ln/log10/powf/sin` and read `Instant::now`; the golden was blessed on the traffic3d branch before main's schema additions reached it, plus 45 more `metric.sample` rows from later merges | netval/trafficval on `v2xw_core::math`, timings dropped from their progress lines (`5d75dbf`); golden re-blessed after the same digest at `RAYON_NUM_THREADS=1` and `2` (`66848ef`) |
+| netval | 2 pass, 4 fail, 1 ignored | the suite's own findings, not the merge: NET-03 PSIDs (CAM signed under 0x20, registry 36), ACC-04 (N=20: 0.869 simulated vs 0.907 analytical), PHY-09 (802.11p floor −98.000 vs kTB+NF −97.975 dBm), SEC-01 (Rust accepted 15/32 OpenSSL signatures), SEC-03 panics (`UnknownKey { backend: "crypto-backend/real", key: 3 }`) | **open**, for the netval owner |
+| trafficval | 0 pass, 1 fail: `the_model_level_checks_pass_and_each_can_fail` | the suite's findings: IDM gap at rest 1.927 m against [1.95, 2.5]; string stability, simulation and theory disagree at 6 densities | **open**, for the trafficval owner |
+| UI: protocol, viewer, mock-server | 197, 194 (+1 skipped), 49 pass | — | — |
+| UI: studio unit | 234 pass | the first run failed 10 files on "Failed to resolve entry for package @vwp/protocol": a fresh worktree has no `dist/` until a package is built; after the typecheck built it, all pass | — |
+| UI: typecheck, all four packages | clean | — | — |
+
+The Playwright suites were not run (they drive the page against the mock and the engine and
+belong to the UI tracks' merge step), apart from the peak spec below.
+
+### Midtown's evening rush: `scenarios/midtown-rush-hour.yaml`
+
+The D7 Midtown box at 17:30 on a weekday: demand from NYC DOT's peak-hour avenue counts
+(1,356 veh/h PM peak on Eighth Avenue, CB4 2011; about eight avenues cross the box) with a
+four-times fill for the first 90 s so the rush exists inside a five-minute run; 2,000
+pedestrians and 200 cyclists who behave as observed, a quarter with a handset; 3 %
+motorcycles and 4 % delivery mopeds; every motor vehicle sends signed BSMs. The scenario
+file states its sources and what it does not model.
+
+**The engine at peak** (the release `v2xw-server` built from main on 2026-10-06, unthrottled,
+no page attached, `run.status` every 10 s and `footprint`):
+
+| | uncapped | `radio.range.max_m: 500` |
+|---|---|---|
+| simulated ÷ wall time | 0.19 (46.5 s in 243 s, slowing as vehicles arrive) | 0.53 (58.4 s in 111 s) |
+| actors / radios at the end | 2,283 / 627 | 2,300 / 644 |
+| reception attempts per frame | 314 (14.2 M for 45 k frames; mean RSSI −120.8 dBm) | 110 (7.5 M for 68 k frames; −110.8 dBm) |
+| engine footprint | 2.37 GB (seek history at its 1,024 MB cap from 36 s) | 1.69 GB at 111 s |
+
+Uncapped, every frame was followed to every radio in the box, most of them 20 dB under the
+noise floor; the scenario now caps full evaluation at 500 m (beyond it a line-of-sight
+receiver still takes the energy as interference) and says why in the file. With the fill
+the page run below reached 0.21x real time at about 250 vehicles: the engine, not the page,
+sets the pace at the peak.
+
+A 15 s `sample` of the release server: the engine thread never idled; the rayon wait for a
+frame's link geometries was about 21 % of it (two threads), `ActorSnapshot::actors_within`
+about 12 %, `start_frame`'s own loop about 10 %, and the metric providers decoding records
+from JSON about 10 %. The candidate scan was walking every actor (about 2,300) to keep the
+~600 with a radio; **`c8769ed`** gives frames an index of the equipped actors
+(`run/radios.rs`). It changes no record: `grid-traffic` reproduces its golden digest, and a
+debug assertion compares the index with the old query on every frame of every debug run
+(the vru, reception, phases and radio_access suites pass with it; dropping one hit fails 3
+of 4 vru tests). Its speed-up is **not measured**: a release build is off limits here and a
+debug ratio is not a release one.
+
+**The page at peak** (`ui/apps/studio/e2e-engine/peak.spec.ts`, release engine, Vite dev
+server as the owner runs it, headless Chromium on SwiftShader, 60 s of streaming then a
+vehicle selected and the metrics panel opened):
+
+| | measured | budget |
+|---|---|---|
+| actors on the page | 2,337 | > 1,000 (the crowd arrived) |
+| viewer CPU per frame, mean | 6.4 ms (frame 7.5 ms) | < 12 ms |
+| page script share while streaming | 1.2 % (GPU waits 2.9 %) | < 50 % |
+| select a vehicle: HUD shown / script / GPU wait | 111 ms / 173 ms / 6,533 ms | < 5 s / < 1 s / — |
+| open metrics: first card / script / GPU wait | 1,860 ms / 672 ms (React DEV 320 ms) / 2,793 ms | < 5 s / < 1 s / — |
+| longest main-thread task | 6,607 ms | < 400 ms, with a GPU only |
+| tab heap after GC, peak | 146 MB | < 600 MB |
+| engine footprint, peak | 1.03 GB | < 3 GB |
+
+The first run failed on a 5,004 ms task when a vehicle was selected. Its CPU profile:
+4.1 s in `WebGLRenderer.setSize` and `getExtension`, 25 ms of React. A synchronous WebGL
+call waits for the GPU process to finish what is queued, and SwiftShader is a software
+rasteriser, so in this harness a long task is the rasteriser. The spec therefore profiles
+three windows and splits the page's own script from GPU waits; script is budgeted always,
+long tasks only with `VWP_HEADED=1`. A control in the spec (a 300 ms busy loop must read as
+more than 250 ms of script) keeps the script budget able to fail.
+
+What this says about the page at the peak: its own JavaScript is light (1 % while
+streaming, under 0.7 s for either interaction in DEV mode) and memory is bounded. Two
+things are left for the owners of the viewer:
+
+- **Shader compilation is synchronous.** `getProgramInfoLog` took 1.75 s during streaming
+  and 2.4 s when the metrics panel opened: three.js checks every new program's link
+  (`renderer.debug.checkShaderErrors`, on by default), which blocks until the GPU has
+  compiled it, and new materials appear as vehicle classes and close-up models enter the
+  view. On a GPU this is a hitch of tens to hundreds of milliseconds rather than seconds,
+  not measured here. `renderer.compileAsync` at world load would move it off the click.
+- **A selection resizes the canvas** (the inspector opens beside it): 3.4 s of
+  `setSize` here, a reallocation of the drawing buffer on any GPU.
+
+The channel at this peak is quiet: CBR 0.008 and 0.99 ms of air time per node per second
+at 19 s, with about 250 vehicles. Buildings keep most neighbours under the carrier-sense
+threshold; whether that matches a field measurement in Midtown is not checked here.
+
+### Budget tests added
+
+- `ui/apps/studio/e2e-engine/peak.spec.ts` — the table above, opt-in with the engine suite
+  (`VWP_ENGINE_BIN=… pnpm exec playwright test -c playwright.engine.config.ts peak.spec.ts`;
+  `VWP_PEAK_REPORT`, `VWP_PEAK_PROFILE` and `VWP_PEAK_SHOTS` save the numbers, the
+  profiles and pictures).
+- `crates/v2xw-engine/tests/peak_budget.rs` — the engine's work at peak as counts, on a
+  procedural grid with the peak's mix: no frame is followed to anything without a radio,
+  and with `radio.range.max_m` the attempts per frame fall and stay under a budget taken
+  from the measured value.
+- `crates/v2xw-engine/src/run/radios.rs` — the index's grid against a full scan.
 
 ## 2026-09-30 — robustness track: a refusal names its setting, nothing flaky, nothing leaks
 

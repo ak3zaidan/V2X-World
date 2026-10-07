@@ -70,7 +70,7 @@ fn differential(mode: Mode) -> Outcome {
     let mut ours = Vec::new();
     for _ in 0..600 {
         let model = MODELS[rng.below(MODELS.len() as u64) as usize];
-        let d = 10f64.powf(rng.uniform(0.0, 3.3));
+        let d = v2xw_core::math::pow(10.0, rng.uniform(0.0, 3.3));
         let f = [5.860e9, 5.890e9, 5.900e9, 5.920e9][rng.below(4) as usize];
         let pt = rng.uniform(0.0, 33.0);
         let (gt, gr) = (rng.uniform(0.0, 6.0), rng.uniform(0.0, 6.0));

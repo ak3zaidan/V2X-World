@@ -23,13 +23,11 @@ fn main() {
         .collect();
     let mut results = Vec::new();
     for c in checks {
-        let start = std::time::Instant::now();
         let v = v2xw_netval::run(&c);
         eprintln!(
-            "{:<7} {:<11} {:>6.1}s  {}\n        faulted: {:?} {}",
+            "{:<7} {:<11} {}\n        faulted: {:?} {}",
             c.id,
             v.label(),
-            start.elapsed().as_secs_f64(),
             v.honest.measured,
             v.faulted.status,
             v.faulted.measured
