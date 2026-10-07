@@ -141,9 +141,14 @@ fn jammer(params: serde_json::Value) -> ModelChoice {
 // 802.11p: the access delay on an idle channel
 // -----------------------------------------------------------------------------------------
 
-/// On a nearly idle 802.11p channel every frame's access delay (air start − signed) is
-/// exactly the AIFS and backoff its `node.tx` record reports, with no deferral left over,
-/// and a frame that went out the instant it was ready reports no AIFS at all.
+/// On a nearly idle 802.11p channel every frame's access delay (air start − hand-off to
+/// the MAC) is exactly the AIFS and backoff its `node.tx` record reports, with no deferral
+/// left over, and a frame that went out the instant it was ready reports no AIFS at all.
+///
+/// The access delay starts at `t_handoff`, not `t_signed`: since the hand-off (host
+/// latency and J2945/1's transmit-time offset) became its own stage, the time between the
+/// signature and the MAC is not channel access, and a record from before the split, which
+/// has no `t_handoff`, falls back to `t_signed`, which was then the same instant.
 ///
 /// The counterexample is the engine before this was fixed: every record claimed a whole
 /// 58 µs AIFS, so a frame with a zero access delay reported more AIFS than delay.
@@ -156,9 +161,11 @@ fn an_idle_80211p_channel_costs_the_aifs_and_backoff_the_mac_reports() {
     let mut deferred = 0;
     for v in &tx {
         let signed = v.t_signed.expect("t_signed");
+        let ready = v.t_handoff.unwrap_or(signed);
+        assert!(ready >= signed, "frame {:?} reached the MAC before it was signed", v.msg);
         let aifs = v.mac_aifs_ns.expect("mac_aifs_ns");
         let backoff = v.mac_backoff_ns.expect("mac_backoff_ns");
-        let access = v.t - signed;
+        let access = v.t - ready;
         assert!(
             aifs + backoff <= access,
             "frame {:?}: {aifs} ns AIFS + {backoff} ns backoff inside a {access} ns access \
@@ -687,7 +694,7 @@ fn technology_comparison_table() {
             let access: Vec<f64> = views::<NodeTxView>(&rec)
                 .iter()
                 .filter(|v| v.radio.as_ref().and_then(|r| r.attempt).unwrap_or(1) == 1)
-                .filter_map(|v| v.t_signed.map(|s| (v.t - s) as f64 / 1e6))
+                .filter_map(|v| v.t_handoff.or(v.t_signed).map(|s| (v.t - s) as f64 / 1e6))
                 .collect();
             let cbr = r.sidelink.as_ref().map_or(String::from("-"), |s| {
                 format!("{} pm", s.mean_cbr_at_grant_pm)
