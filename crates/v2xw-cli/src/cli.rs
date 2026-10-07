@@ -193,13 +193,33 @@ pub struct RunArgs {
     #[arg(long, value_name = "S")]
     pub duration_s: Option<f64>,
 
+    /// Override `time.duration_s` with a duration in units: `90s`, `15m`, `6h`, `2d`,
+    /// `1d12h`. Changes the scenario hash. Wins over `--duration-s`.
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
+    pub duration: Option<f64>,
+
     /// Override `actors.vehicles.demand.rate_veh_per_h`. Changes the scenario hash.
     #[arg(long, value_name = "VEH_PER_H")]
     pub rate_veh_per_h: Option<f64>,
 
+    /// Write a progress line every this much simulated time (`progress.jsonl` in the
+    /// output directory, one line on stderr): wall clock per simulated hour, memory,
+    /// fleet. Default: every 15 minutes for a run of an hour or more. `0` turns it off.
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration)]
+    pub progress_every: Option<f64>,
+
+    /// Keep `progress.jsonl` but print no progress lines on stderr.
+    #[arg(long)]
+    pub quiet: bool,
+
     /// Print the outcome as JSON.
     #[arg(long)]
     pub json: bool,
+}
+
+/// A simulated duration with units, for clap.
+fn parse_duration(text: &str) -> Result<f64, String> {
+    crate::progress::parse_duration_s(text)
 }
 
 impl RunArgs {
@@ -214,9 +234,14 @@ impl RunArgs {
             record: !self.no_recording,
             attach_world: self.attach_world,
             verify: !self.no_verify && !self.no_recording,
-            duration_s: self.duration_s,
+            duration_s: self.duration.or(self.duration_s),
             rate_veh_per_h: self.rate_veh_per_h,
             json: self.json,
+            long: crate::run::LongRun {
+                progress_every_s: self.progress_every,
+                quiet: self.quiet,
+                ..crate::run::LongRun::default()
+            },
         }
     }
 }

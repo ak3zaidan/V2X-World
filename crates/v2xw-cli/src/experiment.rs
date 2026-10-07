@@ -180,6 +180,11 @@ impl RunExecutor for CliExecutor {
             duration_s: None,
             rate_veh_per_h: None,
             json: false,
+            long: crate::run::LongRun {
+                progress_every_s: Some(0.0),
+                quiet: true,
+                ..crate::run::LongRun::default()
+            },
         };
         let outcome = crate::run::run(&options).map_err(describe)?;
         Ok(RunArtifacts {

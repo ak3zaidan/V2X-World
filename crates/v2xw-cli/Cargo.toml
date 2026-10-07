@@ -49,4 +49,6 @@ tokio = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `proc_pid_rusage`, for the memory footprint a long run reports per slice (`progress.rs`).
+libc = "0.2"
 thiserror = { workspace = true }

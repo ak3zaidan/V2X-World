@@ -68,6 +68,33 @@ pub struct RunOptions {
     pub rate_veh_per_h: Option<f64>,
     /// Print the outcome as JSON on stdout instead of as a table.
     pub json: bool,
+    /// How a long run is driven, watched and kept.
+    pub long: LongRun,
+}
+
+/// How a long run is driven, watched and kept. Everything defaults to what a short run
+/// wants, so a caller that does not care writes `long: LongRun::default()`.
+#[derive(Debug, Clone, Default)]
+pub struct LongRun {
+    /// Write a progress line every this many simulated seconds (`progress.jsonl` in the
+    /// output directory and one line on stderr). `None` picks: every 15 simulated minutes
+    /// for a run of an hour or more, none for a shorter one. `Some(0.0)` turns it off.
+    pub progress_every_s: Option<f64>,
+    /// Write `progress.jsonl` but print nothing on stderr.
+    pub quiet: bool,
+}
+
+impl LongRun {
+    /// The progress interval this run uses, seconds, or `None` for none.
+    #[must_use]
+    pub fn progress_interval_s(&self, duration_s: f64) -> Option<f64> {
+        match self.progress_every_s {
+            Some(e) if e > 0.0 => Some(e),
+            Some(_) => None,
+            None if duration_s >= 3600.0 => Some(900.0),
+            None => None,
+        }
+    }
 }
 
 /// What a run produced, in the shape `--json` prints and `run-report.json` stores.
@@ -246,7 +273,13 @@ pub fn run(opts: &RunOptions) -> Result<RunOutcome> {
                 .attach("world.vwb", "application/octet-stream", &payload.bytes)?;
         }
         let run = Stopwatch::start();
-        let report = engine.run(&mut tally)?;
+        let report = drive(
+            &mut engine,
+            &mut tally,
+            &opts.long,
+            &out_dir,
+            Some(&recording_path),
+        )?;
         let run_s = run.elapsed_s();
         let channels = tally.by_channel().clone();
         let samples = tally.metric_samples().to_vec();
@@ -264,7 +297,7 @@ pub fn run(opts: &RunOptions) -> Result<RunOutcome> {
     } else {
         let mut tally = Tally::new(NullRecorder::new());
         let run = Stopwatch::start();
-        let report = engine.run(&mut tally)?;
+        let report = drive(&mut engine, &mut tally, &opts.long, &out_dir, None)?;
         let run_s = run.elapsed_s();
         let channels = tally.by_channel().clone();
         let samples = tally.metric_samples().to_vec();
@@ -385,6 +418,45 @@ pub fn run(opts: &RunOptions) -> Result<RunOutcome> {
         },
     };
     Ok(outcome)
+}
+
+/// Drives the engine to its end, in slices when progress is asked for: a slice boundary
+/// stops the loop between two events, so the run computes exactly what one `run` call
+/// would (`Engine::advance`).
+fn drive<R: v2xw_engine::RunRecorder>(
+    engine: &mut Engine,
+    tally: &mut Tally<R>,
+    long: &LongRun,
+    out_dir: &Path,
+    recording: Option<&Path>,
+) -> Result<RunReport> {
+    let duration_s = engine.scenario().time.duration_s;
+    let Some(every_s) = long.progress_interval_s(duration_s) else {
+        return Ok(engine.run(tally)?);
+    };
+    let every_ns = ((every_s * 1e9).round() as u64).max(1);
+    let mut progress = crate::progress::Progress::open(out_dir, long.quiet);
+    let mut next = every_ns;
+    loop {
+        let done = engine.advance(next, tally)?;
+        let t_ns = if done { engine.now() } else { next };
+        let mut extra = serde_json::Map::new();
+        extra.insert("records".into(), tally.records().into());
+        extra.insert(
+            "metric_samples_kept".into(),
+            (tally.metric_samples().len() as u64).into(),
+        );
+        if let Some(bytes) = recording.and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len())
+        {
+            extra.insert("recording_bytes".into(), bytes.into());
+        }
+        progress.line(t_ns as f64 / 1e9, duration_s, &engine.census(), extra);
+        if done {
+            break;
+        }
+        next = next.saturating_add(every_ns);
+    }
+    Ok(engine.finish_run(tally))
 }
 
 /// Runs a scenario into memory and returns the record digest, for a determinism check that
