@@ -371,6 +371,48 @@ impl EdcaOcbMac {
     pub fn note_busy(&mut self, node: NodeId, ch: ChannelId, from: SimTime, to: SimTime) {
         self.state(node, ch).cbr.note_busy(from, to);
     }
+
+    /// Suspends every running countdown as of `since`, the instant the medium actually
+    /// went busy, keeping the slots counted down before it.
+    ///
+    /// For a caller that samples the medium rather than reporting each transition: the
+    /// engine's medium tier learns that the channel is busy when the node's own timer
+    /// fires, which can be several slots after another frame began. Reporting the busy
+    /// medium at the sampling instant alone would credit the node with slots that were
+    /// never idle; this credits exactly the idle slots before `since` (EN 302 663
+    /// Annex C.4.2: the node "has to suspend the countdown until the channel becomes free
+    /// again"). The caller follows it with [`Mac::on_cca`]`(Busy)` as usual, which finds
+    /// every countdown already frozen. A node already frozen is left alone.
+    pub fn freeze_at(&mut self, node: NodeId, ch: ChannelId, since: SimTime) {
+        let Some(state) = self.nodes.get_mut(&(node.index(), ch.0)) else {
+            return;
+        };
+        if state.busy {
+            return;
+        }
+        for b in state.backoff.iter_mut().flatten() {
+            count_down_to(b, since);
+            b.resume_at = None;
+        }
+    }
+}
+
+/// Counts down the whole idle slots of a running countdown up to `t`.
+///
+/// A slot that the busy medium interrupts part-way is not counted: the decrement happens
+/// at the end of an idle slot (IEEE 802.11-2016 §10.3.4.3).
+fn count_down_to(b: &mut Backoff, t: SimTime) {
+    let Some(resume) = b.resume_at else {
+        return;
+    };
+    if t <= resume {
+        return;
+    }
+    let slot = timing::SLOT_TIME.as_nanos();
+    let ticks = (t - resume) / slot;
+    let counted = ticks.min(u64::from(b.remaining));
+    b.remaining -= counted as u32;
+    b.resume_at = Some(resume + counted * slot);
 }
 
 impl Default for EdcaOcbMac {
@@ -474,8 +516,12 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
                     state.busy = true;
                     state.idle_since = None;
                     state.cbr.busy_from(now);
-                    // Freeze every countdown: the medium is occupied.
+                    // Freeze every countdown: the medium is occupied. The idle slots
+                    // already counted are kept, so the countdown resumes from what is
+                    // still owed after the next AIFS rather than starting over
+                    // (EN 302 663 Annex C.4.2: "suspend the countdown").
                     for b in state.backoff.iter_mut().flatten() {
+                        count_down_to(b, now);
                         b.resume_at = None;
                     }
                 }
@@ -1287,6 +1333,50 @@ mod tests {
             after_one_slot,
             "the countdown was frozen, not merely paused in appearance"
         );
+    }
+
+    /// A countdown interrupted part-way resumes, one AIFS after the medium clears, from
+    /// the slots still owed — whether the busy medium is reported when it starts or, by a
+    /// sampling caller, later with the instant it started ([`EdcaOcbMac::freeze_at`]).
+    /// Before 2026-10-06 it restarted from the full draw.
+    #[test]
+    fn an_interrupted_countdown_resumes_from_the_slots_still_owed() {
+        let slot = timing::SLOT_TIME.as_nanos();
+        let aifs = AccessCategory::Be.aifs().as_nanos();
+        for late_report in [false, true] {
+            let mut ctx = TestCtx::new(8);
+            let mut mac = EdcaOcbMac::new();
+            let (node, drawn) = (0..64u32)
+                .map(NodeId::new)
+                .find_map(|node| {
+                    ctx.set_now(0);
+                    Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Busy { energy_dbm: -70.0 });
+                    Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, 0), AccessCategory::Be)
+                        .expect("queued");
+                    let d = mac.backoff(node, CH, AccessCategory::Be).expect("drawn").drawn;
+                    (d >= 4).then_some((node, u64::from(d)))
+                })
+                .expect("some node draws at least 4 slots");
+            ctx.set_now(1_000_000);
+            Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
+            // Busy from part-way through the fourth slot of the countdown.
+            let busy_at = 1_000_000 + aifs + 3 * slot + 5_000;
+            if late_report {
+                mac.freeze_at(node, CH, busy_at);
+                ctx.set_now(1_000_000 + aifs + drawn * slot);
+            } else {
+                ctx.set_now(busy_at);
+            }
+            Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Busy { energy_dbm: -70.0 });
+            ctx.set_now(3_000_000);
+            Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
+            let expected = 3_000_000 + aifs + (drawn - 3) * slot;
+            assert_eq!(
+                Mac::next_poll_at(&mac, node, CH),
+                Some(expected),
+                "late report {late_report}: drawn {drawn}, 3 slots counted before the busy medium"
+            );
+        }
     }
 
     #[test]
