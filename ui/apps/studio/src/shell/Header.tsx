@@ -16,7 +16,7 @@ import { presetsOf, loadPreset } from "../state/settings.js";
 import { useStudio } from "../state/store.js";
 import { applyThemeToDocument } from "../lib/theme.js";
 import { changedPointers } from "../lib/schema.js";
-import { ChartIcon, GearIcon, InspectorIcon, MoreIcon } from "./Icons.js";
+import { AgentIcon, ChartIcon, GearIcon, InspectorIcon, MoreIcon } from "./Icons.js";
 import { MenuButton } from "./Menu.js";
 import { openPanel, togglePanel } from "./route.js";
 
@@ -215,6 +215,17 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
       >
         <ChartIcon />
         <span>Metrics</span>
+      </button>
+      <button
+        type="button"
+        className={panel === "agent" ? "icon-button labelled on" : "icon-button labelled"}
+        aria-pressed={panel === "agent"}
+        onClick={() => togglePanel("agent")}
+        data-testid="agent-button"
+        title="Ask the agent to set up, run and explain a simulation"
+      >
+        <AgentIcon />
+        <span>Agent</span>
       </button>
       <BackendView />
       <button

@@ -272,11 +272,16 @@ struct RunBody {
     base: Option<String>,
 }
 
-async fn run(State(host): State<AgentHost>, headers: HeaderMap, body: Option<Json<RunBody>>) -> Response {
+async fn run(State(host): State<AgentHost>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
     if !host.authorized(&headers) {
         return unauthorized();
     }
-    let base = body.and_then(|b| b.0.base).unwrap_or_else(|| "current".to_string());
+    // An empty body means the current scenario.
+    let base = serde_json::from_slice::<RunBody>(&body)
+        .ok()
+        .and_then(|b| b.base)
+        .filter(|b| !b.trim().is_empty())
+        .unwrap_or_else(|| "current".to_string());
     host.start("run", move |agent, sink| {
         agent
             .run_without_model(&format!("Run `{base}` and analyse it"), &base, sink)

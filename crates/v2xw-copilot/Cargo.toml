@@ -34,3 +34,7 @@ thiserror = { workspace = true }
 # NOTE: there is deliberately no HTTP client, no TLS stack and no async runtime here.
 # `crate::http::HttpPost` is the seam; `CurlPost` is the shipped implementation and adds no
 # dependency. See `crate::boundary` for the rule this is part of.
+
+[dev-dependencies]
+# The evaluation set (tests/eval.rs) starts a real engine in process when a key is set.
+tokio = { workspace = true }

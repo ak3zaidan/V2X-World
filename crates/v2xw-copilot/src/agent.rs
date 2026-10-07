@@ -754,7 +754,7 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         let _ = self.rpc.call("run.pause", &json!({}));
         let started = self.rpc.call(
             "run.start",
-            &json!({"scenario": prepared.document, "speed": self.policy.speed, "paused": false}),
+            &json!({"scenario": &prepared.document, "speed": self.policy.speed, "paused": false}),
         )?;
         let run_id = started.get("run_id").and_then(Value::as_str).unwrap_or("").to_string();
         let t_end_s = started.get("t_end_ns").and_then(Value::as_u64).unwrap_or(0) as f64 / 1e9;
@@ -801,8 +801,22 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                     actors,
                 });
             }
-            if (end > 0 && t >= end) || state == "ended" || state == "stopped" || (finished && t == last_t && poll > 0) {
+            // `finished` is the server's RunState token for a run that reached its end.
+            if (end > 0 && t >= end)
+                || state == "finished"
+                || (finished && t == last_t && poll > 0)
+            {
                 return Ok(t as f64 / 1e9);
+            }
+            if state == "error" {
+                return Err(CopilotError::Rpc {
+                    method: "run_prepared".into(),
+                    message: format!(
+                        "the engine reported an error at {} s: {}",
+                        fmt(t as f64 / 1e9),
+                        st.pointer("/engine/failure").cloned().unwrap_or(Value::Null)
+                    ),
+                });
             }
             if let Some(f) = st.pointer("/engine/failure").filter(|f| !f.is_null()) {
                 return Err(CopilotError::Rpc {

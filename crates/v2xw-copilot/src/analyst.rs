@@ -252,8 +252,11 @@ impl ScenarioFacts {
             duration_s: f("/time/duration_s").unwrap_or(0.0),
             demand_veh_per_h: f("/actors/vehicles/demand/rate_veh_per_h"),
             speed_limit_mps: f("/world/source/params/speed_limit_mps"),
+            // `security.protocol` is a model reference: `{id: protocol/scms/camp, params}`,
+            // or the bare id.
             security_protocol: doc
-                .pointer("/security/protocol")
+                .pointer("/security/protocol/id")
+                .or_else(|| doc.pointer("/security/protocol"))
                 .and_then(Value::as_str)
                 .map(str::to_string),
             pseudonym_period_s: f("/security/pseudonym_change/period_s"),
