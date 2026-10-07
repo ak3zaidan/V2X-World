@@ -256,10 +256,9 @@ impl Lab {
         if let Some(v) = self.studies.get(key).and_then(|b| b.downcast_ref::<T>()) {
             return Ok(v.clone());
         }
-        let started = std::time::Instant::now();
         eprintln!("  study {key} ...");
         let v = f(&self.cfg)?;
-        eprintln!("  study {key} done in {:.1} s (wall clock, not reported)", started.elapsed().as_secs_f64());
+        eprintln!("  study {key} done");
         self.studies.insert(key.to_string(), Box::new(v.clone()));
         Ok(v)
     }

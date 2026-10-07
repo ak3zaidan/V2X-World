@@ -1,11 +1,16 @@
 //! The statistics the goodness-of-fit checks need, written from the textbook definitions.
 //!
-//! Deliberately independent of the crates under test: every transcendental here is the
-//! platform's `f64` method (the radio crate uses the `libm` crate through
-//! `v2xw_core::math`), and the special functions are the classical series and continued
-//! fractions [Press et al., *Numerical Recipes*, 3rd ed., §6.1-6.2, §6.14, §14.3]. A
-//! reference that shared code with the model it judges would agree with it by
-//! construction.
+//! Deliberately independent of the crates under test: the special functions are the
+//! classical series and continued fractions [Press et al., *Numerical Recipes*, 3rd ed.,
+//! §6.1-6.2, §6.14, §14.3], written here and not taken from the radio crate. A reference
+//! that shared code with the model it judges would agree with it by construction.
+//!
+//! The elementary functions (`exp`, `ln`, `sin`) go through `v2xw_core::math` like every
+//! other crate's (ADR 0003, enforced by the conformance kit's firewall over the whole
+//! workspace): they were the platform's `f64` methods, which made a verdict near its
+//! threshold able to differ between machines. Sharing a correctly rounded `exp` with the
+//! model does not make the two agree by construction; sharing the model's formulas would.
+use v2xw_core::math;
 
 /// `ln Γ(x)` for `x > 0`, by the Lanczos approximation (g = 7, n = 9), accurate to about
 /// 1e-15 relative over the range the tests use.
@@ -26,7 +31,7 @@ pub fn ln_gamma(x: f64) -> f64 {
     if x < 0.5 {
         // Reflection.
         let pi = core::f64::consts::PI;
-        return (pi / (pi * x).sin()).ln() - ln_gamma(1.0 - x);
+        return math::ln(pi / math::sin(pi * x)) - ln_gamma(1.0 - x);
     }
     let x = x - 1.0;
     let mut a = C[0];
@@ -34,7 +39,7 @@ pub fn ln_gamma(x: f64) -> f64 {
     for (i, c) in C.iter().enumerate().skip(1) {
         a += c / (x + i as f64);
     }
-    0.5 * (2.0 * core::f64::consts::PI).ln() + (x + 0.5) * t.ln() - t + a.ln()
+    0.5 * math::ln(2.0 * core::f64::consts::PI) + (x + 0.5) * math::ln(t) - t + math::ln(a)
 }
 
 /// The regularised lower incomplete gamma function `P(a, x)`.
@@ -56,7 +61,7 @@ pub fn gamma_p(a: f64, x: f64) -> f64 {
                 break;
             }
         }
-        (sum.ln() - x + a * x.ln() - ln_gamma(a)).exp()
+        math::exp(math::ln(sum) - x + a * math::ln(x) - ln_gamma(a))
     } else {
         1.0 - gamma_q_cf(a, x)
     }
@@ -87,7 +92,7 @@ fn gamma_q_cf(a: f64, x: f64) -> f64 {
             break;
         }
     }
-    (-x + a * x.ln() - ln_gamma(a)).exp() * h
+    math::exp(-x + a * math::ln(x) - ln_gamma(a)) * h
 }
 
 /// The error function, as `sign(x)·P(1/2, x²)`.
@@ -155,7 +160,7 @@ pub fn ks_p_value(d: f64, n: usize) -> f64 {
     let mut sign = 1.0;
     for j in 1..=200 {
         let jf = j as f64;
-        let term = sign * 2.0 * (-2.0 * jf * jf * lambda * lambda).exp();
+        let term = sign * 2.0 * math::exp(-2.0 * jf * jf * lambda * lambda);
         sum += term;
         if term.abs() < 1e-14 {
             break;
