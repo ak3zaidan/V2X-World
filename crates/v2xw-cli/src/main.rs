@@ -100,6 +100,14 @@ fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
                 Ok(energy::format(&outcome))
             }
         }
+        Command::CompareSignatures(args) => {
+            let outcome = v2xw_cli::sigcompare::run(&args.to_options())?;
+            if args.json {
+                json(&outcome, "signature comparison")
+            } else {
+                Ok(v2xw_cli::sigcompare::format(&outcome))
+            }
+        }
         Command::Experiment(args) => match &args.command {
             // `run` and `resume` are one code path with one flag between them, so there is
             // no second implementation to drift.

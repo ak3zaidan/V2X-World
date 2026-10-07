@@ -2405,6 +2405,17 @@ pub fn build_metrics(
             .map_err(|why| crate::ScenarioError::conflict("energy", why))?;
         set.register(registry, Box::new(provider))?;
     }
+    // Signing overhead (`v2xw_metrics::signing`): opt-in, with `metrics: [all, signing]`
+    // or a `sig_*` name, so a bare `all` keeps the digests it had before the group existed.
+    let signing_named = scenario.metrics.iter().any(|m| {
+        m == v2xw_metrics::signing::GROUP || m.starts_with("sig_")
+    });
+    if signing_named {
+        set.register(
+            registry,
+            Box::new(v2xw_metrics::signing::SigningProvider::new(0, signing_facts(scenario))),
+        )?;
+    }
     if scenario.metrics.is_empty() {
         return Ok(set);
     }
@@ -2450,6 +2461,34 @@ pub fn build_metrics(
         }
     }
     Ok(set)
+}
+
+/// What the signing-overhead metrics need to know about the run's signature scheme: its
+/// encoded signature length (the scheme registry) and where the default OBU signs and
+/// verifies (its hardware profile).
+pub fn signing_facts(scenario: &Scenario) -> v2xw_metrics::signing::SchemeFacts {
+    let mut facts = v2xw_metrics::signing::SchemeFacts::default();
+    let Some(scheme) = v2xw_sec::scheme::signature(&scenario.security.signature) else {
+        return facts;
+    };
+    facts.scheme = scheme.id.to_string();
+    facts.mode = scheme.mode.as_str().to_string();
+    facts.sig_octets = u64::from(scheme.sig_octets());
+    if let Some(profile) = v2xw_node::profiles::get(&scenario.nodes.default_obu) {
+        let engine = |op: &str| {
+            profile.op_cost(op).map_or("unknown".to_string(), |(_, on)| {
+                match on {
+                    v2xw_node::profile::RunsOn::Hsm => "hsm",
+                    v2xw_node::profile::RunsOn::Accelerator => "accelerator",
+                    v2xw_node::profile::RunsOn::Cpu => "cpu",
+                }
+                .to_string()
+            })
+        };
+        facts.sign_engine = engine(scheme.sign_op());
+        facts.verify_engine = engine(scheme.verify_op());
+    }
+    facts
 }
 
 /// The two run-wide facts a node needs that are not in the scenario's `nodes` section.

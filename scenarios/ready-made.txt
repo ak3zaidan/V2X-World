@@ -35,6 +35,7 @@ attack-jamming.yaml
 privacy-pseudonyms.yaml
 europe-credentials.yaml
 post-quantum.yaml
+compare-signature-schemes.yaml
 
 ## Connected intersections
 emergency-priority.yaml

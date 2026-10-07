@@ -150,12 +150,25 @@ fn results_digest(table: &ResultsTable) -> Result<String> {
 /// This is the only place the experiment runner touches the engine, and it is in the one
 /// crate this project allows a clock read in.
 #[derive(Debug, Clone)]
-struct CliExecutor {
+pub(crate) struct CliExecutor {
     build_utc: String,
     keyframe_ms: u64,
     record: bool,
     node_only: bool,
     verify: bool,
+}
+
+impl CliExecutor {
+    /// The executor `v2xw compare-signatures` uses: no verification, the default keyframe.
+    pub(crate) fn new(build_utc: String, record: bool) -> Self {
+        CliExecutor {
+            build_utc,
+            keyframe_ms: 1000,
+            record,
+            node_only: false,
+            verify: false,
+        }
+    }
 }
 
 impl RunExecutor for CliExecutor {

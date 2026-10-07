@@ -9,6 +9,7 @@
 //! | [`import`] | imports an OpenStreetMap extract into the three world formats |
 //! | [`info`] | prints a recording's manifest, channels and verification report |
 //! | [`experiment`] | expands a scenario's sweep, runs it, aggregates it, resumes it |
+//! | [`sigcompare`] | `v2xw compare-signatures`: one scenario under several signature schemes, side by side |
 //! | [`agent`] | `v2xw agent "<prompt>"`: the agent harness end to end; `v2xw serve`: the engine with the agent's endpoints |
 //!
 //! Everything the tool does is a call into a library crate. The one thing it adds is the
@@ -39,6 +40,7 @@ pub mod info;
 pub mod progress;
 pub mod run;
 pub mod signal;
+pub mod sigcompare;
 pub mod stream;
 pub mod tally;
 pub mod validate;

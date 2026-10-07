@@ -26,7 +26,7 @@ pub struct Cli {
     pub command: Command,
 }
 
-/// The five commands.
+/// The commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Run a scenario and write its recording, metrics and manifest.
@@ -50,6 +50,49 @@ pub enum Command {
     Serve(ServeArgs),
     /// List the city library: every city a scenario can run on (`--city`), by state.
     Cities(CitiesArgs),
+    /// Run one scenario and seed under several signature schemes and compare their
+    /// signing overhead against ECDSA P-256 (comparison.json, .csv and .md).
+    CompareSignatures(CompareSignaturesArgs),
+}
+
+/// `v2xw compare-signatures`.
+#[derive(Debug, clap::Args)]
+pub struct CompareSignaturesArgs {
+    /// The scenario to run under each scheme.
+    pub scenario: PathBuf,
+    /// Comma-separated scheme ids (`v2xw_sec::scheme::SIGNATURE_IDS`); ECDSA P-256 is
+    /// added as the baseline when missing.
+    #[arg(long, value_delimiter = ',', default_value = "ecdsa-p256,ml-dsa-44,falcon-512,hybrid-mldsa44-ecdsa-p256")]
+    pub schemes: Vec<String>,
+    /// Where the outputs go. Defaults to `runs/<meta.name>-signatures`.
+    #[arg(short, long)]
+    pub out: Option<PathBuf>,
+    /// Simulated seconds per run, overriding the scenario's `time.duration_s`.
+    #[arg(long, value_name = "S")]
+    pub duration: Option<f64>,
+    /// The manifest build timestamp every run uses.
+    #[arg(long, value_name = "ISO8601")]
+    pub build_utc: Option<String>,
+    /// Write a recording per run (off by default: the comparison needs only the metrics).
+    #[arg(long)]
+    pub record: bool,
+    /// Print the comparison as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+impl CompareSignaturesArgs {
+    /// The library options this asks for.
+    pub fn to_options(&self) -> crate::sigcompare::CompareOptions {
+        crate::sigcompare::CompareOptions {
+            scenario: self.scenario.clone(),
+            schemes: self.schemes.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            out: self.out.clone(),
+            duration_s: self.duration,
+            build_utc: self.build_utc.clone(),
+            record: self.record,
+        }
+    }
 }
 
 /// `v2xw cities`.
