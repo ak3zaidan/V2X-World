@@ -2038,7 +2038,8 @@ struct HighwayDefault {
 /// a jurisdiction, and no jurisdiction is a safe guess: whichever preset were the
 /// default would silently be asserted about every extract that did not choose. The
 /// scenario states one, and [`OsmOptions::validate`] refuses the import until it does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum HighwayPreset {
     /// SUMO `netconvert`'s own OSM type map: German free-flow **design** speeds
@@ -2067,65 +2068,219 @@ pub enum HighwayPreset {
     /// 130 km/h advisory speed (Autobahn-Richtgeschwindigkeits-Verordnung), there being no
     /// general limit.
     UrbanDe,
-    /// A US state (or a city that sets its own default) from the city library's table,
-    /// [`crate::jurisdiction::US_JURISDICTIONS`]: the `urban-us-nyc` table with that
-    /// jurisdiction's urban default speed, and 55 mph on an untagged motorway. Its label is
-    /// `urban-us-<key>`, `urban-us-tx` for Texas.
-    UrbanUs(UsJurisdiction),
-}
-
-/// A row of [`crate::jurisdiction::US_JURISDICTIONS`], by position.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct UsJurisdiction(u8);
-
-impl UsJurisdiction {
-    /// The jurisdiction's data.
-    pub const fn data(self) -> &'static crate::jurisdiction::UsJurisdictionData {
-        &crate::jurisdiction::US_JURISDICTIONS[self.0 as usize]
-    }
-}
-
-impl std::fmt::Debug for UsJurisdiction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.data().label)
-    }
+    /// Alaska: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsAk,
+    /// Alabama: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsAl,
+    /// Arkansas: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsAr,
+    /// Arizona: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsAz,
+    /// California: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsCa,
+    /// Colorado: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsCo,
+    /// Connecticut: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsCt,
+    /// District of Columbia: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsDc,
+    /// Delaware: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsDe,
+    /// Florida: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsFl,
+    /// Georgia: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsGa,
+    /// Hawaii: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsHi,
+    /// Iowa: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsIa,
+    /// Idaho: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsId,
+    /// Illinois: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsIl,
+    /// Indiana: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsIn,
+    /// Kansas: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsKs,
+    /// Kentucky: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsKy,
+    /// Louisiana: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsLa,
+    /// Massachusetts: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsMa,
+    /// Maryland: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsMd,
+    /// Maine: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsMe,
+    /// Michigan: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsMi,
+    /// Minnesota: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsMn,
+    /// Missouri: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsMo,
+    /// Mississippi: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsMs,
+    /// Montana: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsMt,
+    /// North Carolina: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsNc,
+    /// North Dakota: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsNd,
+    /// Nebraska: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsNe,
+    /// New Hampshire: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsNh,
+    /// New Jersey: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsNj,
+    /// New Mexico: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsNm,
+    /// Nevada: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsNv,
+    /// Ohio: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsOh,
+    /// Oklahoma: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsOk,
+    /// Pennsylvania: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsPa,
+    /// Rhode Island: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsRi,
+    /// South Carolina: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsSc,
+    /// South Dakota: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsSd,
+    /// Tennessee: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsTn,
+    /// Texas: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsTx,
+    /// Utah: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsUt,
+    /// Virginia: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsVa,
+    /// Vermont: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsVt,
+    /// Washington: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsWa,
+    /// Wisconsin: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsWi,
+    /// West Virginia: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsWv,
+    /// Wyoming: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsWy,
+    /// Boston, Massachusetts: the `urban-us-nyc` table with this jurisdiction's urban default and 55 mph on
+    /// an untagged motorway ([`crate::jurisdiction::US_JURISDICTIONS`] cites it).
+    UrbanUsBoston,
 }
 
 /// How many presets there are: the four hand-built ones and one per US jurisdiction.
 const PRESET_COUNT: usize = 4 + crate::jurisdiction::US_JURISDICTIONS.len();
 
-impl Serialize for HighwayPreset {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> core::result::Result<S::Ok, S::Error> {
-        s.serialize_str(self.label())
-    }
-}
-
-impl<'de> Deserialize<'de> for HighwayPreset {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> core::result::Result<Self, D::Error> {
-        let name = String::deserialize(d)?;
-        HighwayPreset::parse(&name).ok_or_else(|| {
-            serde::de::Error::custom(format!(
-                "unknown highway preset {name:?}; expected sumo-german, urban-us-nyc, \
-                 urban-us-portland, urban-de or urban-us-<state> (urban-us-tx, urban-us-ca, ...)"
-            ))
-        })
-    }
-}
-
 impl HighwayPreset {
     /// Every preset, in a stable order.
-    pub const ALL: [HighwayPreset; PRESET_COUNT] = {
-        let mut all = [HighwayPreset::SumoGerman; PRESET_COUNT];
-        all[1] = HighwayPreset::UrbanUsNyc;
-        all[2] = HighwayPreset::UrbanUsPortland;
-        all[3] = HighwayPreset::UrbanDe;
-        let mut i = 0;
-        while i < crate::jurisdiction::US_JURISDICTIONS.len() {
-            all[4 + i] = HighwayPreset::UrbanUs(UsJurisdiction(i as u8));
-            i += 1;
-        }
-        all
-    };
+    pub const ALL: [HighwayPreset; PRESET_COUNT] = [
+        HighwayPreset::SumoGerman,
+        HighwayPreset::UrbanUsNyc,
+        HighwayPreset::UrbanUsPortland,
+        HighwayPreset::UrbanDe,
+        HighwayPreset::UrbanUsAk,
+        HighwayPreset::UrbanUsAl,
+        HighwayPreset::UrbanUsAr,
+        HighwayPreset::UrbanUsAz,
+        HighwayPreset::UrbanUsCa,
+        HighwayPreset::UrbanUsCo,
+        HighwayPreset::UrbanUsCt,
+        HighwayPreset::UrbanUsDc,
+        HighwayPreset::UrbanUsDe,
+        HighwayPreset::UrbanUsFl,
+        HighwayPreset::UrbanUsGa,
+        HighwayPreset::UrbanUsHi,
+        HighwayPreset::UrbanUsIa,
+        HighwayPreset::UrbanUsId,
+        HighwayPreset::UrbanUsIl,
+        HighwayPreset::UrbanUsIn,
+        HighwayPreset::UrbanUsKs,
+        HighwayPreset::UrbanUsKy,
+        HighwayPreset::UrbanUsLa,
+        HighwayPreset::UrbanUsMa,
+        HighwayPreset::UrbanUsMd,
+        HighwayPreset::UrbanUsMe,
+        HighwayPreset::UrbanUsMi,
+        HighwayPreset::UrbanUsMn,
+        HighwayPreset::UrbanUsMo,
+        HighwayPreset::UrbanUsMs,
+        HighwayPreset::UrbanUsMt,
+        HighwayPreset::UrbanUsNc,
+        HighwayPreset::UrbanUsNd,
+        HighwayPreset::UrbanUsNe,
+        HighwayPreset::UrbanUsNh,
+        HighwayPreset::UrbanUsNj,
+        HighwayPreset::UrbanUsNm,
+        HighwayPreset::UrbanUsNv,
+        HighwayPreset::UrbanUsOh,
+        HighwayPreset::UrbanUsOk,
+        HighwayPreset::UrbanUsPa,
+        HighwayPreset::UrbanUsRi,
+        HighwayPreset::UrbanUsSc,
+        HighwayPreset::UrbanUsSd,
+        HighwayPreset::UrbanUsTn,
+        HighwayPreset::UrbanUsTx,
+        HighwayPreset::UrbanUsUt,
+        HighwayPreset::UrbanUsVa,
+        HighwayPreset::UrbanUsVt,
+        HighwayPreset::UrbanUsWa,
+        HighwayPreset::UrbanUsWi,
+        HighwayPreset::UrbanUsWv,
+        HighwayPreset::UrbanUsWy,
+        HighwayPreset::UrbanUsBoston,
+    ];
 
     /// The preset's stable kebab-case name, as the report, the provenance and a scenario
     /// file spell it.
@@ -2135,7 +2290,10 @@ impl HighwayPreset {
             HighwayPreset::UrbanUsNyc => "urban-us-nyc",
             HighwayPreset::UrbanUsPortland => "urban-us-portland",
             HighwayPreset::UrbanDe => "urban-de",
-            HighwayPreset::UrbanUs(j) => j.data().label,
+            us => match us.us_jurisdiction() {
+                Some(j) => j.label,
+                None => "unknown",
+            },
         }
     }
 
@@ -2144,11 +2302,68 @@ impl HighwayPreset {
         Self::ALL.into_iter().find(|p| p.label() == name)
     }
 
+    /// The row of [`crate::jurisdiction::US_JURISDICTIONS`] an `urban-us-<state>` preset is.
+    const fn us_index(self) -> Option<usize> {
+        match self {
+            HighwayPreset::UrbanUsAk => Some(0),
+            HighwayPreset::UrbanUsAl => Some(1),
+            HighwayPreset::UrbanUsAr => Some(2),
+            HighwayPreset::UrbanUsAz => Some(3),
+            HighwayPreset::UrbanUsCa => Some(4),
+            HighwayPreset::UrbanUsCo => Some(5),
+            HighwayPreset::UrbanUsCt => Some(6),
+            HighwayPreset::UrbanUsDc => Some(7),
+            HighwayPreset::UrbanUsDe => Some(8),
+            HighwayPreset::UrbanUsFl => Some(9),
+            HighwayPreset::UrbanUsGa => Some(10),
+            HighwayPreset::UrbanUsHi => Some(11),
+            HighwayPreset::UrbanUsIa => Some(12),
+            HighwayPreset::UrbanUsId => Some(13),
+            HighwayPreset::UrbanUsIl => Some(14),
+            HighwayPreset::UrbanUsIn => Some(15),
+            HighwayPreset::UrbanUsKs => Some(16),
+            HighwayPreset::UrbanUsKy => Some(17),
+            HighwayPreset::UrbanUsLa => Some(18),
+            HighwayPreset::UrbanUsMa => Some(19),
+            HighwayPreset::UrbanUsMd => Some(20),
+            HighwayPreset::UrbanUsMe => Some(21),
+            HighwayPreset::UrbanUsMi => Some(22),
+            HighwayPreset::UrbanUsMn => Some(23),
+            HighwayPreset::UrbanUsMo => Some(24),
+            HighwayPreset::UrbanUsMs => Some(25),
+            HighwayPreset::UrbanUsMt => Some(26),
+            HighwayPreset::UrbanUsNc => Some(27),
+            HighwayPreset::UrbanUsNd => Some(28),
+            HighwayPreset::UrbanUsNe => Some(29),
+            HighwayPreset::UrbanUsNh => Some(30),
+            HighwayPreset::UrbanUsNj => Some(31),
+            HighwayPreset::UrbanUsNm => Some(32),
+            HighwayPreset::UrbanUsNv => Some(33),
+            HighwayPreset::UrbanUsOh => Some(34),
+            HighwayPreset::UrbanUsOk => Some(35),
+            HighwayPreset::UrbanUsPa => Some(36),
+            HighwayPreset::UrbanUsRi => Some(37),
+            HighwayPreset::UrbanUsSc => Some(38),
+            HighwayPreset::UrbanUsSd => Some(39),
+            HighwayPreset::UrbanUsTn => Some(40),
+            HighwayPreset::UrbanUsTx => Some(41),
+            HighwayPreset::UrbanUsUt => Some(42),
+            HighwayPreset::UrbanUsVa => Some(43),
+            HighwayPreset::UrbanUsVt => Some(44),
+            HighwayPreset::UrbanUsWa => Some(45),
+            HighwayPreset::UrbanUsWi => Some(46),
+            HighwayPreset::UrbanUsWv => Some(47),
+            HighwayPreset::UrbanUsWy => Some(48),
+            HighwayPreset::UrbanUsBoston => Some(49),
+            _ => None,
+        }
+    }
+
     /// The US jurisdiction's data, for an `urban-us-<state>` preset.
     pub const fn us_jurisdiction(self) -> Option<&'static crate::jurisdiction::UsJurisdictionData> {
-        match self {
-            HighwayPreset::UrbanUs(j) => Some(j.data()),
-            _ => None,
+        match self.us_index() {
+            Some(i) => Some(&crate::jurisdiction::US_JURISDICTIONS[i]),
+            None => None,
         }
     }
 
@@ -2173,7 +2388,10 @@ impl HighwayPreset {
                  325.1 (walking pace), Autobahn-Richtgeschwindigkeits-Verordnung (130 km/h \
                  advisory)"
             }
-            HighwayPreset::UrbanUs(j) => j.data().urban_source,
+            us => match us.us_jurisdiction() {
+                Some(j) => j.urban_source,
+                None => "unknown",
+            },
         }
     }
 
@@ -2184,10 +2402,10 @@ impl HighwayPreset {
             HighwayPreset::UrbanUsNyc => URBAN_US_NYC_TABLE.to_vec(),
             HighwayPreset::UrbanUsPortland => URBAN_US_PORTLAND_TABLE.to_vec(),
             HighwayPreset::UrbanDe => URBAN_DE_TABLE.to_vec(),
-            HighwayPreset::UrbanUs(j) => URBAN_US_NYC_TABLE
-                .iter()
-                .map(|row| us_state_row(*row, j))
-                .collect(),
+            us => match us.us_jurisdiction() {
+                Some(j) => URBAN_US_NYC_TABLE.iter().map(|row| us_state_row(*row, j)).collect(),
+                None => Vec::new(),
+            },
         }
     }
 
@@ -2201,10 +2419,10 @@ impl HighwayPreset {
                 URBAN_US_PORTLAND_TABLE.iter().find(|d| d.key == value).copied()
             }
             HighwayPreset::UrbanDe => URBAN_DE_TABLE.iter().find(|d| d.key == value).copied(),
-            HighwayPreset::UrbanUs(j) => URBAN_US_NYC_TABLE
-                .iter()
-                .find(|d| d.key == value)
-                .map(|row| us_state_row(*row, j)),
+            us => {
+                let j = us.us_jurisdiction()?;
+                URBAN_US_NYC_TABLE.iter().find(|d| d.key == value).map(|row| us_state_row(*row, j))
+            }
         }
     }
 
@@ -2224,15 +2442,10 @@ impl HighwayPreset {
     }
 }
 
-/// Where the pedestrian and cycle rows' "speed limits" come from.
-///
-/// They are walking and riding paces, not legal limits, so they are the same in every
-/// preset: a jurisdiction does not post a speed limit on a staircase.
 /// A row of the `urban-us-nyc` table restated for a US jurisdiction: its urban default in
 /// place of New York City's 25 mph, 55 mph on an untagged motorway, and the walking and
 /// cycling rows unchanged.
-fn us_state_row(row: HighwayDefault, j: UsJurisdiction) -> HighwayDefault {
-    let data = j.data();
+fn us_state_row(row: HighwayDefault, data: &crate::jurisdiction::UsJurisdictionData) -> HighwayDefault {
     if row.speed_source == NY_55 {
         HighwayDefault {
             speed_mps: 55.0 * crate::jurisdiction::MPH,
@@ -2250,6 +2463,10 @@ fn us_state_row(row: HighwayDefault, j: UsJurisdiction) -> HighwayDefault {
     }
 }
 
+/// Where the pedestrian and cycle rows' "speed limits" come from.
+///
+/// They are walking and riding paces, not legal limits, so they are the same in every
+/// preset: a jurisdiction does not post a speed limit on a staircase.
 const PACE_SOURCE: &str = "walking and cycling pace convention of 04-models.md §2.5, not \
                            a posted limit (5 km/h on the flat, 0.5 m/s on steps)";
 

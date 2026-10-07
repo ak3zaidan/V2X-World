@@ -24,6 +24,18 @@
 #                   (crates/v2xw-world/src/jurisdiction.rs cites each one)
 #   fetched         the date the extract was downloaded, which becomes `world.imported_at`
 #   description     the area the box covers
+#   drive_lane_km   kilometres of driving lane in the imported network, and
+#   signals         signalised intersections in it — both measured by the city audit
+#                   (`cargo run -p v2xw-trafficval --bin city_audit -- <scenario>`); a fixed
+#                   arrival rate moved to another city is rescaled by the lane-km ratio
+#
+# Every city is imported and its traffic run under the traffic auditor before it is offered:
+# 90 simulated seconds at 12.5 vehicles per hour per kilometre of driving lane (Midtown's
+# 1,500 veh/h, the load of the validation suite's cities checks) with 100 pedestrians and
+# eight roadside units placed at its signalised intersections. A city passes when it imports,
+# vehicles complete trips, the units find intersections, and no safety invariant is broken
+# (collisions, red-light entries, vehicles in buildings, pedestrians hit, impossible motion).
+# A city's world leaves out `highway=service` alleys and driveways (world.service_roads).
 #
 # Source and licence: the extracts are OpenStreetMap data, (c) OpenStreetMap contributors,
 # available under the Open Database License (ODbL) 1.0, https://www.openstreetmap.org/copyright.

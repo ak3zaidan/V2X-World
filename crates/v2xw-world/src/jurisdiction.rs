@@ -170,6 +170,21 @@ pub fn by_label(label: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::osm::HighwayPreset;
+
+    #[test]
+    fn every_preset_is_spelt_the_same_by_serde_and_by_its_label() {
+        for p in HighwayPreset::ALL {
+            let wire = serde_json::to_string(&p).expect("serialises");
+            assert_eq!(wire, format!("\"{}\"", p.label()), "{p:?}");
+            assert_eq!(serde_json::from_str::<HighwayPreset>(&wire).expect("parses"), p);
+            assert_eq!(HighwayPreset::parse(p.label()), Some(p));
+        }
+        for j in US_JURISDICTIONS {
+            let p = HighwayPreset::parse(j.label).expect("a preset per row");
+            assert_eq!(p.us_jurisdiction().map(|d| d.key), Some(j.key));
+        }
+    }
 
     #[test]
     fn every_state_and_dc_has_a_preset_or_a_hand_built_one() {

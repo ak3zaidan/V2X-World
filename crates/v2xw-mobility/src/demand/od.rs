@@ -235,6 +235,27 @@ impl OdModel {
             .nearest_lane_within(world.bbox.center(), f64::INFINITY, Some(params.classes))
             .map(|m| m.pos.lane)
             .filter(|l| world.lane(*l).kind.is_motorised());
+        // On the connected core the commute-to-core bias aims at the core's own lane nearest
+        // the middle: the nearest lane of all can be a bus lane or a street that leaves the
+        // box, and the bias sends up to 80 % of trips there (city audit, 2026-10-07: on 11 of
+        // the library's downtowns about four trips in five had no route until this).
+        let centre = if params.connected_only {
+            let mid = world.bbox.center();
+            usable
+                .iter()
+                .copied()
+                .min_by(|a, b| {
+                    let d = |l: LaneId| {
+                        let lane = world.lane(l);
+                        let p = lane.centreline[lane.centreline.len() / 2];
+                        (p.x - mid.x).hypot(p.y - mid.y)
+                    };
+                    d(*a).total_cmp(&d(*b)).then(a.cmp(b))
+                })
+                .or(centre)
+        } else {
+            centre
+        };
 
         Ok(Self {
             card: card(&params),

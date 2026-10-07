@@ -73,6 +73,10 @@ pub struct City {
     /// Signalised intersections in the imported network (measured by the city audit).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signals: Option<u32>,
+    /// What the city audit found beyond a clean pass: the residual safety-class counts of
+    /// the kinds the reference cities (Manhattan, Portland) show at the same load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit: Option<String>,
 }
 
 /// A city taken out of the default list, and why.
