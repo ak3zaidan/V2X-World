@@ -703,11 +703,14 @@ pub fn start(req: CompareRequest) -> core::result::Result<CompareJob, String> {
     if guard.as_ref().is_some_and(|j| j.running) {
         return Err("a comparison is already running".to_string());
     }
-    let schemes: Vec<String> = if req.schemes.is_empty() {
+    let mut schemes: Vec<String> = if req.schemes.is_empty() {
         DEFAULT_SCHEMES.iter().map(|s| (*s).to_string()).collect()
     } else {
         req.schemes.clone()
     };
+    if !schemes.iter().any(|s| s == BASELINE) {
+        schemes.insert(0, BASELINE.to_string());
+    }
     // One directory per scheme list and duration, so the runner's journal resumes a repeat
     // of the same request and never refuses a different one.
     let tag = v2xw_core::hash::sha256_hex(

@@ -24,6 +24,7 @@ import { classify, judgedSeries, LEVEL_LABEL, type HealthLevel } from "./health.
 import { HealthDot } from "./HealthBadge.js";
 import { useCatalogue, useOverview } from "./hooks.js";
 import { openRunSummary } from "./summaryStore.js";
+import { SignatureCompare } from "./SignatureCompare.js";
 import {
   cardSeries,
   familiesOf,
@@ -377,6 +378,7 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
                   ) : null}
                 </section>
               ))}
+              <SignatureCompare />
             </>
           )}
         </div>

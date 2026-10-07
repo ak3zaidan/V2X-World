@@ -338,3 +338,27 @@ button.small.active { border-color: var(--accent); }
   .rsum-head { flex-wrap: wrap; }
   .rsum-body { padding: 12px; }
 }
+
+/* Compare signature schemes (SignatureCompare.tsx). */
+.sigcmp-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 10px; }
+.sigcmp-schemes { display: flex; flex-wrap: wrap; gap: 4px 12px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin: 0; font-size: 12px; }
+.sigcmp-schemes label { display: inline-flex; align-items: center; gap: 4px; }
+.sigcmp-duration { font-size: 12px; }
+.sigcmp-duration input { width: 70px; }
+.sigcmp-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; font-size: 12px; }
+.sigcmp-open { cursor: pointer; text-decoration: underline; }
+.sigcmp-error { color: var(--err); font-size: 12px; }
+.sigcmp-table { border-collapse: collapse; font-size: 12px; margin: 10px 0; display: block; overflow-x: auto; max-width: 100%; }
+.sigcmp-table th, .sigcmp-table td { border-bottom: 1px solid var(--border); padding: 4px 8px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sigcmp-table th:first-child, .sigcmp-table td:first-child { text-align: left; }
+.sigcmp-table td .rel { color: var(--text-dim); font-size: 11px; }
+.sigcmp-table td.hl { font-weight: 600; }
+.sigcmp-table td.hl.worse { background: color-mix(in srgb, var(--err) 14%, transparent); }
+.sigcmp-table td.hl.better { background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.sigcmp-table td.lv-unhealthy { box-shadow: inset 3px 0 0 var(--err); }
+.sigcmp-table td.lv-caution { box-shadow: inset 3px 0 0 var(--warn); }
+.sigcmp-charts { margin: 10px 0; }
+.sigcmp-bar.base { background: var(--baseline); }
+.sigcmp-bar.worse { background: var(--err); }
+.sigcmp-bar.better { background: var(--ok); }
+.sigcmp-caveats { font-size: 11px; padding-left: 18px; }

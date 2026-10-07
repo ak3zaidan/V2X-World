@@ -145,6 +145,7 @@ export type GroupId =
   | "delivery"
   | "latency"
   | "security"
+  | "signing"
   | "misbehaviour"
   | "privacy"
   | "traffic"
@@ -166,6 +167,7 @@ export const GROUPS: readonly GroupSpec[] = [
   { id: "delivery", label: "Delivery and reliability", question: "Do messages get through, to whom, and how fresh is what receivers know?" },
   { id: "latency", label: "Latency", question: "How long does a message take, and where does the time go?" },
   { id: "security", label: "Security and PKI", question: "What do signing, verification and the credential system cost?" },
+  { id: "signing", label: "Signing overhead", question: "What does this signature scheme cost on the air, in each device and in the backend?" },
   { id: "misbehaviour", label: "Misbehaviour detection", question: "Are attackers caught, how fast, and at what false-alarm cost?" },
   { id: "privacy", label: "Privacy", question: "Can a vehicle be followed across its pseudonym changes?" },
   { id: "traffic", label: "Traffic", question: "How is the traffic moving?" },
@@ -248,6 +250,7 @@ const EXPLICIT: Readonly<Record<string, GroupId>> = {
 
 /** Name patterns for metrics the table above does not know (another track's new ones). */
 const PATTERNS: readonly (readonly [RegExp, GroupId])[] = [
+  [/^sig_/, "signing"],
   [/^det_|misbehav|^mbr_|detector/, "misbehaviour"],
   [/pseudonym|linkab|privacy|anonym|track(ing|ed)_/, "privacy"],
   [/^frag_/, "delivery"],
@@ -276,6 +279,35 @@ export function groupOf(base: string): GroupId {
 
 /** The name a reader knows a metric by; the engine's name stays visible beside it. */
 const LABELS: Readonly<Record<string, string>> = {
+  sig_signature_bytes: "Signature bytes per message",
+  sig_signature_rate: "Signature bytes per second",
+  sig_signer_id_bytes: "Signer identifier bytes per message",
+  sig_cert_bytes: "Certificate bytes per message",
+  sig_cert_airtime_share: "Certificates' share of the air",
+  sig_signer_id_airtime_share: "Signer identifiers' share of the air",
+  sig_security_airtime_share: "Security share of the air",
+  sig_security_airtime_share_nocert: "Security share of the air, no certificates",
+  sig_sign_latency: "Sign latency",
+  sig_sign_wait: "Wait for the signer",
+  sig_verify_latency: "Verify latency",
+  sig_signer_util: "Signer utilisation",
+  sig_signer_util_max: "Busiest signer",
+  sig_verifier_util: "Verifier utilisation",
+  sig_verifier_util_max: "Busiest verifier",
+  sig_verify_capacity: "Verifications per second (capacity)",
+  sig_neighbour_capacity: "Neighbours a device keeps up with",
+  sig_verify_headroom: "Verification headroom",
+  sig_verify_dropped: "Verifications dropped (queue full)",
+  sig_verify_late: "Verifications later than 100 ms",
+  sig_fragments_per_msg: "Frames per message",
+  sig_fragmented_share: "Messages fragmented",
+  sig_reassembly_loss: "Lost in reassembly",
+  sig_e2e_added: "Latency added by security",
+  sig_e2e_added_share: "Security's share of latency",
+  sig_cbr_extra: "Channel load from security bytes",
+  sig_backend_bytes: "Credential bytes to devices",
+  sig_ca_sign_rate: "CA signatures per second",
+  sig_ca_busy: "CA service time",
   cbr: "Channel busy ratio",
   channel_load: "Channel load around each node",
   channel_occupancy: "Channel occupancy",
