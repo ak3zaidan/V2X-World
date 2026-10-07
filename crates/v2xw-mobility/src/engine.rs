@@ -1630,6 +1630,36 @@ impl NativeMobility {
                 return Insertion::Occupied;
             }
         }
+        // Nor on a pedestrian in the carriageway: a crosswalk someone is on, or the stretch of
+        // the lane a pedestrian crossing mid-block is walking. A car was put down at rest
+        // on top of two jaywalkers.
+        if self.along_path()
+            && let Some(vru) = self.vru.as_ref()
+            && !vru.is_empty()
+        {
+            let rear = front - length;
+            let clear = |enter: f64, exit: f64| exit < rear - 0.5 || enter > front + 0.5;
+            let occupied = self.crosswalks.occupied(
+                vru.people().filter(|p| !p.arrived).map(|p| p.lane),
+            );
+            for c in self.crosswalks.conflicts_on(trip.origin) {
+                if occupied.contains(&c.crosswalk) && !clear(c.enter_s(), c.exit_s()) {
+                    return Insertion::Occupied;
+                }
+            }
+            let midblock = MidblockBands::of(Some(vru));
+            if let Some(list) = midblock.by_lane.get(&trip.origin) {
+                for c in list {
+                    let crossing = midblock
+                        .owner
+                        .get(&c.crosswalk)
+                        .is_some_and(|(ped, _)| midblock.progress.get(ped).copied().flatten().is_some());
+                    if crossing && !clear(c.enter_s(), c.exit_s()) {
+                        return Insertion::Occupied;
+                    }
+                }
+            }
+        }
         if self.along_path() {
             // The same for traffic about to arrive from the lanes that feed this one.
             for c in world.predecessors(trip.origin) {

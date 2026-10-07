@@ -417,6 +417,10 @@ fn the_world_has_a_walk_network_and_bicycle_lanes() {
 fn trace_the_observed_run() {
     let t0: f64 = std::env::var("V2XW_TRACE_T0").ok().and_then(|v| v.parse().ok()).unwrap_or(41.0);
     let t1: f64 = std::env::var("V2XW_TRACE_T1").ok().and_then(|v| v.parse().ok()).unwrap_or(42.1);
+    let watch: Vec<u32> = std::env::var("V2XW_TRACE_ACTORS")
+        .ok()
+        .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+        .unwrap_or_default();
     let world = world();
     let rng = RngRegistry::new(0x0B5E_57ED);
     let mut people = SocialForceParams::observed();
@@ -454,6 +458,23 @@ fn trace_the_observed_run() {
         let ts = update.t as f64 / 1e9;
         if ts >= t0 {
             let actors = engine.audit_actors(&world, update.t);
+            for a in actors.iter().filter(|a| watch.contains(&a.actor.index())) {
+                eprintln!(
+                    "t={ts:.1} watch {} {:?} lane {} s {:.3} v {:.3} acc {:.2} changing {:?}",
+                    a.actor.index(),
+                    a.class,
+                    a.lane.index(),
+                    a.s_m,
+                    a.speed_mps,
+                    a.accel_mps2,
+                    a.changing.map(|(f, to)| (f.index(), to.index()))
+                );
+            }
+            for sp in &update.spawned {
+                if watch.contains(&sp.actor.index()) {
+                    eprintln!("t={ts:.1} spawned {} {:?}", sp.actor.index(), sp.class);
+                }
+            }
             let vru = engine.vru().expect("pedestrians");
             for p in vru.people() {
                 let Some(m) = p.midblock.as_ref() else { continue };
