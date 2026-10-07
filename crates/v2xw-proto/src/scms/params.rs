@@ -227,6 +227,71 @@ pub struct ScmsParams {
     /// The hybrid post-quantum scheme every authority and device signs with, `None` for
     /// ECDSA P-256 alone (`security.signature`; `crate::hybrid`).
     pub hybrid: Option<crate::hybrid::HybridScheme>,
+    /// The post-quantum KEM encryption to the PCA and to devices uses, `None` for ECIES
+    /// alone (`security.kem`; `crate::hybrid::KemSpec`).
+    pub kem: Option<crate::hybrid::KemSpec>,
+    /// Committees that replace single authorities (`security.threshold`;
+    /// `crate::threshold`). `None`: the CAMP deployment, one server per role and two-of-two
+    /// linkage.
+    pub threshold: Option<ThresholdDeployment>,
+    /// How long the Misbehaviour Authority waits for a Linkage Authority's seed before
+    /// asking again. **Uncited**: CAMP describes no retry; 30 s is a model parameter so
+    /// that a two-of-two deployment with an LA down retries as a committee session does,
+    /// and the two are compared like for like.
+    pub seed_retry: Duration,
+}
+
+/// Which roles a committee plays, and how.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThresholdDeployment {
+    /// The signing protocol (`crate::threshold::THRESHOLD_IDS`) for the PCA and the CRL
+    /// Generator.
+    pub protocol: &'static str,
+    /// Its build parameters.
+    pub protocol_params: crate::threshold::ProtocolParams,
+    /// Committee size for the signing roles.
+    pub members: u16,
+    /// How many must sign.
+    pub quorum: u16,
+    /// Whether the PCA's certificate signing is a committee's.
+    pub pca: bool,
+    /// Whether the CRL Generator's signing is a committee's.
+    pub crl: bool,
+    /// The linkage authorities as a t-of-n release committee instead of two-of-two:
+    /// `(members, quorum)`.
+    pub linkage: Option<(u16, u16)>,
+    /// How long a coordinator waits for a round before excluding the silent.
+    pub round_timeout: Duration,
+    /// How long it waits before retrying a session that ran out of members.
+    pub retry_after: Duration,
+    /// Attempts before a session fails for good.
+    pub max_attempts: u16,
+    /// Ask every live member and keep the first quorum (true), or exactly a quorum.
+    pub fanout_all: bool,
+    /// One-way latency between a coordinator and a member: the members are separate
+    /// organisations, so this is a WAN figure, not the in-house backend's.
+    pub member_link_latency: Duration,
+}
+
+impl Default for ThresholdDeployment {
+    /// FROST, 3-of-5, on the PCA and the CRL Generator, linkage 3-of-5; timeouts are model
+    /// parameters (no deployment publishes one).
+    fn default() -> ThresholdDeployment {
+        ThresholdDeployment {
+            protocol: crate::threshold::frost::ID,
+            protocol_params: crate::threshold::ProtocolParams::default(),
+            members: 5,
+            quorum: 3,
+            pca: true,
+            crl: true,
+            linkage: Some((5, 3)),
+            round_timeout: Duration::from_millis(500),
+            retry_after: Duration::from_secs(30),
+            max_attempts: 10,
+            fanout_all: true,
+            member_link_latency: Duration::from_millis(20),
+        }
+    }
 }
 
 impl Default for ScmsParams {
@@ -263,6 +328,9 @@ impl Default for ScmsParams {
             device_profile: profiles::COHDA_MK6_BOTAN,
             sizes: SizeParams::default(),
             hybrid: None,
+            kem: None,
+            threshold: None,
+            seed_retry: Duration::from_secs(30),
         }
     }
 }

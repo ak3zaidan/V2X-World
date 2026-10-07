@@ -517,6 +517,9 @@ pub struct Backend {
     /// The links between them.
     #[serde(default)]
     pub links: Vec<BackendLink>,
+    /// Servers that are down, slow or lying, and when (`v2xw_proto::fault`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failures: Vec<BackendFailureSpec>,
 }
 
 /// One backend entity.
@@ -1047,9 +1050,18 @@ pub struct Security {
     /// The credential-management protocol and its parameters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol: Option<ModelChoice>,
-    /// The signature primitive, e.g. `ecdsa-p256`.
+    /// The signature scheme, e.g. `ecdsa-p256`, `hybrid-mldsa44-ecdsa-p256`, `ml-dsa-65`
+    /// — any id in `v2xw_sec::scheme::SIGNATURE_IDS`.
     #[serde(default = "Security::default_signature")]
     pub signature: String,
+    /// The key-encapsulation scheme for encryption to the PCA and to devices, e.g.
+    /// `ecies-p256` or `ml-kem-768` — any id in `v2xw_sec::scheme::KEM_IDS`.
+    #[serde(default = "Security::default_kem")]
+    pub kem: String,
+    /// Committees that replace single authorities of the credential system
+    /// (`v2xw_proto::threshold`). Absent: one server per role, two-of-two linkage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<ThresholdSpec>,
     /// `modeled` costs the operations without doing the mathematics; `real` does the
     /// mathematics. Both are recorded in the manifest.
     #[serde(default)]
@@ -1072,6 +1084,9 @@ impl Security {
     fn default_signature() -> String {
         "ecdsa-p256".to_string()
     }
+    fn default_kem() -> String {
+        "ecies-p256".to_string()
+    }
     fn default_verification_policy() -> String {
         "verify-all".to_string()
     }
@@ -1083,12 +1098,110 @@ impl Default for Security {
             envelope: Security::default_envelope(),
             protocol: None,
             signature: Security::default_signature(),
+            kem: Security::default_kem(),
+            threshold: None,
             crypto_mode: CryptoModeSpec::default(),
             verification_policy: Security::default_verification_policy(),
             signer_id_policy: SignerIdPolicySpec::default(),
             pseudonym_change: PseudonymChangeSpec::default(),
         }
     }
+}
+
+/// `security.threshold`: which credential-system roles a t-of-n committee plays.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThresholdSpec {
+    /// The signing protocol for the PCA and the CRL Generator: an id in
+    /// `v2xw_proto::threshold::THRESHOLD_IDS` (`frost-p256`, `cggmp21-ecdsa`, `umbrella`).
+    #[serde(default = "ThresholdSpec::default_protocol")]
+    pub protocol: String,
+    /// Committee size.
+    #[serde(default = "ThresholdSpec::default_members")]
+    pub members: u16,
+    /// How many members must act: a `quorum`-of-`members` committee.
+    #[serde(default = "ThresholdSpec::default_quorum")]
+    pub quorum: u16,
+    /// The roles a committee plays: any of `pca`, `crl`, `linkage`.
+    #[serde(default = "ThresholdSpec::default_roles")]
+    pub roles: Vec<String>,
+    /// The linkage committee's size and quorum, when `linkage` is a role (defaults to
+    /// `members` and `quorum`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linkage_members: Option<u16>,
+    /// See [`ThresholdSpec::linkage_members`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linkage_quorum: Option<u16>,
+    /// For `umbrella`: leaf pseudonyms per umbrella credential.
+    #[serde(default = "ThresholdSpec::default_leaves")]
+    pub umbrella_leaves: u32,
+    /// For `umbrella`: the protocol the committee signs umbrellas with.
+    #[serde(default = "ThresholdSpec::default_protocol")]
+    pub umbrella_inner: String,
+    /// Whether the offline phase (FROST commitments, CGGMP21 presignatures) is done ahead
+    /// of time, leaving the online round alone.
+    #[serde(default)]
+    pub preprocessed: bool,
+    /// How long a coordinator waits for a round before excluding the silent, ms.
+    #[serde(default = "ThresholdSpec::default_timeout")]
+    pub round_timeout_ms: f64,
+    /// How long it waits before retrying a session that ran out of members, s.
+    #[serde(default = "ThresholdSpec::default_retry")]
+    pub retry_after_s: f64,
+    /// Ask every live member and keep the first quorum (`true`), or exactly a quorum.
+    #[serde(default = "crate::scenario::schema::truth")]
+    pub ask_all: bool,
+    /// One-way latency between a coordinator and a member, ms: separate organisations
+    /// over a WAN.
+    #[serde(default = "ThresholdSpec::default_member_latency")]
+    pub member_latency_ms: f64,
+}
+
+impl ThresholdSpec {
+    fn default_protocol() -> String {
+        "frost-p256".to_string()
+    }
+    fn default_members() -> u16 {
+        5
+    }
+    fn default_quorum() -> u16 {
+        3
+    }
+    fn default_roles() -> Vec<String> {
+        vec!["pca".to_string(), "crl".to_string(), "linkage".to_string()]
+    }
+    fn default_leaves() -> u32 {
+        20
+    }
+    fn default_timeout() -> f64 {
+        500.0
+    }
+    fn default_retry() -> f64 {
+        30.0
+    }
+    fn default_member_latency() -> f64 {
+        20.0
+    }
+}
+
+/// `actors.backend.failures[]`: a backend server that is down, slow or lying for a window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackendFailureSpec {
+    /// The server: a role (`pca`, `la1`, `la2`, `ma`, `crlg`, `ra`, …) or a committee
+    /// member, `<role>-member-<k>` (`pca-member-0`, `linkage-member-2`, `crl-member-1`).
+    pub node: String,
+    /// `offline`, `slow` or `malicious`.
+    pub mode: String,
+    /// When it starts, s.
+    #[serde(default)]
+    pub from_s: f64,
+    /// When it ends, s; absent for the rest of the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_s: Option<f64>,
+    /// For `slow`: the extra service time per message, ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_ms: Option<f64>,
 }
 
 /// Whether the cryptography is done or costed.

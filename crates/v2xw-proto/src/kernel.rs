@@ -105,6 +105,20 @@ pub struct PqCharge {
     pub profile: &'static str,
     /// The profile key generation is charged against.
     pub keygen_profile: &'static str,
+    /// True for a pure post-quantum scheme: there is no ECDSA half to charge.
+    pub pure: bool,
+}
+
+/// The post-quantum KEM an entity pays when `security.kem` names one
+/// (`crate::hybrid::KemSpec`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KemCharge {
+    /// The ML-KEM parameter set.
+    pub primitive: PrimitiveId,
+    /// The profile encapsulation and decapsulation are charged against.
+    pub profile: &'static str,
+    /// Whether the ECIES half remains (a hybrid KEM) or is replaced.
+    pub ecies: bool,
 }
 
 /// What an entity produced while handling one message.
@@ -116,6 +130,7 @@ pub struct PqCharge {
 pub struct Outbox<M> {
     profile: &'static str,
     pq: Option<PqCharge>,
+    kem: Option<KemCharge>,
     work: Duration,
     ops: BTreeMap<(&'static str, &'static str), u64>,
     sends: Vec<PendingSend<M>>,
@@ -129,6 +144,7 @@ impl<M> Outbox<M> {
         Outbox {
             profile,
             pq: None,
+            kem: None,
             work: Duration::ZERO,
             ops: BTreeMap::new(),
             sends: Vec::new(),
@@ -190,6 +206,56 @@ impl<M> Outbox<M> {
             .ops
             .entry((pq.primitive.as_str(), op_kind_str(kind)))
             .or_insert(0) += u64::from(count);
+    }
+
+    /// Charges `t` of service time that no primitive anchor describes — a protocol
+    /// measured only as a unit, or a slow server's extra time — counted under `label`.
+    pub fn charge_time(&mut self, label: &'static str, t: Duration) {
+        self.work = Duration::from_nanos(self.work.as_nanos().saturating_add(t.as_nanos()));
+        *self.ops.entry((label, "time")).or_insert(0) += 1;
+    }
+
+    /// Whether this entity's signatures carry an ECDSA half: true under a classical or a
+    /// hybrid scheme, false under a pure post-quantum one (`crate::hybrid`).
+    pub const fn classical_signs(&self) -> bool {
+        match self.pq {
+            Some(pq) => !pq.pure,
+            None => true,
+        }
+    }
+
+    /// Charges `count` operations of `kind` on the post-quantum KEM, when the deployment
+    /// has one (`security.kem`): `Sign` is encapsulation, `Verify` decapsulation.
+    pub fn charge_kem(&mut self, kind: PrimitiveOpKind, count: u32) {
+        let Some(kem) = self.kem else {
+            return;
+        };
+        let op = OpDescriptor::new(kem.primitive, kind, count);
+        self.work = Duration::from_nanos(
+            self.work
+                .as_nanos()
+                .saturating_add(op.charge(kem.profile).as_nanos()),
+        );
+        *self
+            .ops
+            .entry((kem.primitive.as_str(), op_kind_str(kind)))
+            .or_insert(0) += u64::from(count);
+    }
+
+    /// The post-quantum KEM this entity pays, `None` (the default) for ECIES alone.
+    #[must_use]
+    pub fn with_kem(mut self, kem: Option<KemCharge>) -> Outbox<M> {
+        self.kem = kem;
+        self
+    }
+
+    /// Whether the deployment's encryption keeps its ECIES half (true unless `security.kem`
+    /// is a pure post-quantum KEM).
+    pub const fn ecies(&self) -> bool {
+        match self.kem {
+            Some(k) => k.ecies,
+            None => true,
+        }
     }
 
     /// Queues a message (`Action::Send`).

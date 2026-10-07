@@ -498,8 +498,14 @@ impl EtsiSizes {
     pub fn with_hybrid(mut self, scheme: Option<&crate::hybrid::HybridScheme>) -> EtsiSizes {
         if let Some(h) = scheme {
             self.certs = self.certs.with_hybrid(h);
-            self.hybrid_sig_bytes = h.sig_bytes;
-            self.hybrid_pk_bytes = h.pk_bytes;
+            self.hybrid_sig_bytes = h.envelope_extra_bytes();
+            // A ticket's verification key: the post-quantum one added to (hybrid) or in
+            // place of (pure) the compressed P-256 point.
+            self.hybrid_pk_bytes = if h.pure {
+                h.pk_bytes.saturating_sub(EC_POINT_COMPRESSED_BYTES)
+            } else {
+                h.pk_bytes
+            };
             self.hybrid_key_upload_bytes = h.key_upload_bytes();
         }
         self
@@ -1724,12 +1730,17 @@ impl EtsiRun {
         let n = self.nodes;
         // Under a hybrid scheme each signature and verification is two: the outbox adds
         // the post-quantum half against its own published figure (`crate::hybrid`).
+        // Under a pure post-quantum scheme there is no ECDSA half at all.
         let sign = |out: &mut Outbox<Ts102941Msg>, k: u32| {
-            out.charge(PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::Sign, k);
+            if out.classical_signs() {
+                out.charge(PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::Sign, k);
+            }
             out.charge_pq(PrimitiveOpKind::Sign, k);
         };
         let verify = |out: &mut Outbox<Ts102941Msg>, k: u32| {
-            out.charge(PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::Verify, k);
+            if out.classical_signs() {
+                out.charge(PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::Verify, k);
+            }
             out.charge_pq(PrimitiveOpKind::Verify, k);
         };
         match d.msg {

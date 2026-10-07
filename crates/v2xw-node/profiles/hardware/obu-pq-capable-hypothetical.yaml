@@ -2,7 +2,7 @@
 # collateral gathered [R7 §E5], so this profile is software-only by construction.
 id: obu/pq-capable-hypothetical
 kind: obu
-version: 2026-09-18.1
+version: 2026-10-07.1
 hypothetical: true
 purpose: >-
   A post-quantum-capable OBU modelled as a Cortex-A76-class application processor running
@@ -28,6 +28,10 @@ hsm:
   ops: {}
   queue_depth: {value: null, status: not-applicable, calibration: "rule H2: no HSM queue exists on this profile"}
   servers: {value: null, status: not-applicable, calibration: "rule H2: no HSM server exists on this profile"}
+# Catalogue anchors (v2xw_sec::primitive) that price an operation this profile publishes
+# no figure for: the same Raspberry Pi 5 liboqs measurements this profile's software table cites (arXiv 2503.10238 Table 8). Where the catalogue has
+# no row either, it derives one by a cited cycle ratio and flags it (v2xw-sec CostRatio).
+crypto_anchors: [hw-profile/cortex-a76-pi5-liboqs]
 software_crypto:
   ecdsa-p256-verify: {us: 67.0, ops_per_s: 14933, source: "wolfSSL 5.9.1 on a Pi 5 [R5 §B.5]; mbedTLS 3.6.6 on the same board gives 592/s (1689 us), which is the library spread"}
   ecdsa-p256-sign: {us: null, status: not-published, calibration: "the Pi 5 sign rate is not in the fetched rows [R5 §B.5]; PROXY = Pi 4 OpenSSL 244 us [R7 §D8], flagged"}

@@ -1127,9 +1127,17 @@ impl Engine {
         let scenario_for_radio = scenario.clone();
         let frag_plan = match scenario_for_radio.net.fragmenter.as_ref() {
             None => crate::frag::FragPlan::none(),
-            Some(choice) => crate::frag::FragPlan::from_choice(choice).map_err(|why| {
-                EngineError::Scenario(crate::error::ScenarioError::conflict("net.fragmenter", why))
-            })?,
+            Some(choice) => crate::frag::FragPlan::from_choice(choice)
+                .map_err(|why| {
+                    EngineError::Scenario(crate::error::ScenarioError::conflict(
+                        "net.fragmenter",
+                        why,
+                    ))
+                })?
+                .for_signature(
+                    &scenario_for_radio.security.signature,
+                    choice.params.get("hybrid_cert_bytes").is_some(),
+                ),
         };
         // The labeller reads the world's signal plans; built before the literal moves it.
         let app_truth = if scenario_for_radio.apps.enabled.is_empty() {

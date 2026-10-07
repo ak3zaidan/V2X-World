@@ -441,6 +441,7 @@ pub static CHOICES: &[Choices] = &[
         narrowed_when: "real",
         narrowed_to: &REAL_SIGNATURES,
     },
+    choices("security.kem", &crate::signature::KEMS),
 ];
 
 /// How much of a scenario key this build actually acts on.
@@ -1117,6 +1118,43 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                encrypted to the PCA or AA (v2xw_proto::hybrid).",
     },
     KeyStatus {
+        path: "security.kem",
+        status: Status::Wired,
+        note: "The key-encapsulation scheme wherever the credential system encrypts to the \
+               PCA or to a device (v2xw_sec::scheme::KEM_IDS): ecies-p256 (IEEE 1609.2's \
+               65-byte EciesP256EncryptedKey), ml-kem-512/768/1024 (FIPS 203: the ML-KEM \
+               ciphertext replaces the ephemeral point) or hybrid-ecies-p256-ml-kem-768 \
+               (both travel). Every encrypted-key structure grows by the ciphertext and every \
+               encryption and decryption pays an encapsulation or decapsulation (liboqs on a \
+               Raspberry Pi 5 for authorities, the Cohda MK6 or a cycle-ratio derivation for \
+               devices).",
+    },
+    KeyStatus {
+        path: "security.threshold",
+        status: Status::Wired,
+        note: "Committees replace single authorities (v2xw_proto::threshold): 'roles' picks \
+               the PCA (no single server can issue a certificate), the CRL Generator (the list \
+               is threshold-signed) and the linkage authorities (any quorum of a t-of-n \
+               committee releases a revoked device's seeds, instead of both of two). \
+               'protocol' is any registered one: frost-p256 (RFC 9591), cggmp21-ecdsa \
+               (threshold ECDSA, 1609.2-compatible output) or umbrella (one committee \
+               signature per umbrella_leaves derived pseudonyms; 05-protocols.md §5.4's \
+               placeholder binding). Every round crosses a member link (member_latency_ms) \
+               with its bytes and is charged per member; a member that misses \
+               round_timeout_ms is excluded and the session restarts, a malicious one is \
+               caught by its share, and fewer than a quorum fail the session until members \
+               return (retry_after_s). ETSI is refused.",
+    },
+    KeyStatus {
+        path: "actors.backend.failures",
+        status: Status::Wired,
+        note: "Backend servers that are 'offline' (deliveries dropped), 'slow' (extra_ms \
+               more service time per message) or 'malicious' (invalid threshold shares) \
+               between from_s and to_s. 'node' is a role (pca, la1, la2, ma, crlg, …) or a \
+               committee member, '<role>-member-<k>'. Two-of-two linkage with an LA down \
+               cannot revoke; a t-of-n committee with fewer than n − t + 1 down can.",
+    },
+    KeyStatus {
         path: "security.crypto_mode",
         status: Status::Wired,
         note: "Whether signing and verification are costed or actually computed. Both \
@@ -1522,6 +1560,7 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
         s,
         &mut v2xw_proto::ScmsParams::default(),
     ));
+    take(crate::crypto_config::check(s));
     for (i, a) in s.threats.attackers.iter().enumerate() {
         if let Some(kind) =
             a.id.strip_prefix("threat/attacker/legacy/")
@@ -1549,6 +1588,16 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 "is '{}', and the ETSI ITS PKI issues TS 103 097 certificates and \
                  authorization tickets; a station on it signs 'etsi103097' envelopes",
                 s.security.envelope
+            ),
+        ));
+    }
+    if !crate::signature::KEMS.contains(&s.security.kem.as_str()) {
+        e.push(conflict(
+            "security.kem",
+            format!(
+                "'{}' is not a key-encapsulation scheme this build models; allowed: {}",
+                s.security.kem,
+                crate::signature::KEMS.join(", ")
             ),
         ));
     }

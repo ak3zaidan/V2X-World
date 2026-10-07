@@ -1,7 +1,7 @@
 # 06-node-models.md §7.3.
 id: obu/cohda-mk6c-qualcomm-9150
 kind: obu
-version: 2026-09-18.1
+version: 2026-10-07.1
 purpose: >-
   Commercial C-V2X OBU (Cohda MK6C EVK: Qualcomm 9150 PC5 modem, NXP i.MX 8QXP host, NXP
   SXF1800 secure element). Qualcomm never released a public 9150 datasheet, so cores,
@@ -37,6 +37,10 @@ hsm:
       runs_on: hsm
   queue_depth: {value: null, status: todo-calibrate, calibration: "not published; measure. The SPI host interface is capped at 5 Mbit/s [R7 §D4], which is a hard ceiling on request/response bytes per second and bounds any answer"}
   servers: {value: null, status: todo-calibrate, calibration: "not published; measure whether the SE serves one request at a time over SPI"}
+# Catalogue anchors (v2xw_sec::primitive) that price an operation this profile publishes
+# no figure for: the same Cohda MK6 measurements this profile's software table cites (NDSS 2024 Table V). Where the catalogue has
+# no row either, it derives one by a cited cycle ratio and flags it (v2xw-sec CostRatio).
+crypto_anchors: [hw-profile/cohda-mk6-liboqs, hw-profile/cohda-mk6-botan]
 software_crypto:
   ecdsa-p256-sign: {us: 7820, ops_per_s: 128, source: "[R7 §E3: NDSS 2024 Table V, Botan on a Cohda MK6, 1000-execution mean, sigma 141 us, no ARMv8 optimizations]"}
   ecdsa-p256-verify: {us: null, status: not-published, calibration: "the published 0.001 ms (675219/s) is flagged ANOMALOUS by R7 §E3 and R5 §B.2 ('treat with care'); do not use it as a service time. PROXY = Pi 4 Cortex-A72 OpenSSL 1550.7 verify/s (645 us, derived) [R7 §D8] until measured on device with a cold-cache harness"}

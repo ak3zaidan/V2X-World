@@ -580,6 +580,13 @@ pub struct HardwareProfile {
     /// Store-size accounting.
     #[serde(default, deserialize_with = "de_storage")]
     pub storage_model: StorageModel,
+    /// The primitive-catalogue profiles (`v2xw_sec::primitive::profiles`) whose cited
+    /// anchors price an operation this profile publishes no figure for, first match
+    /// first. How a scheme added to the registry is priced on a device without editing
+    /// its YAML: the catalogue anchor for the same silicon — published, or derived by a
+    /// cycle ratio and flagged as such — stands in.
+    #[serde(default)]
+    pub crypto_anchors: Vec<String>,
     /// The model card, built once at load.
     #[serde(skip, default = "empty_card")]
     card: ModelCard,
@@ -772,16 +779,19 @@ impl HardwareProfile {
     /// that would silently set the load of every run.
     pub fn op_cost(&self, op: &str) -> Option<(Duration, RunsOn)> {
         // A hybrid signature is both signatures, made or checked one after the other: its
-        // cost is the sum of the two components' published costs, and it needs both. It
-        // runs where the classical half runs; a post-quantum half on a CPU beside an HSM
-        // would overlap in a real device, and this sum is the upper bound of that.
-        if let Some((pq, classical)) = hybrid_components(op) {
-            let (a, where_) = self.op_cost(classical)?;
-            let (b, _) = self.op_cost(pq)?;
-            return Some((
-                Duration::from_nanos(a.as_nanos().saturating_add(b.as_nanos())),
-                where_,
-            ));
+        // cost is the sum of the components' costs, and it needs every one. It runs where
+        // the first (classical) half runs; a post-quantum half on a CPU beside an HSM
+        // would overlap in a real device, and this sum is the upper bound of that. The
+        // components come from the scheme registry (`v2xw_sec::scheme`).
+        if let Some(parts) = v2xw_sec::scheme::op_components(op) {
+            let mut total = 0u64;
+            let mut where_ = None;
+            for part in parts {
+                let (t, w) = self.op_cost(part)?;
+                total = total.saturating_add(t.as_nanos());
+                where_.get_or_insert(w);
+            }
+            return Some((Duration::from_nanos(total), where_?));
         }
         if self.hsm.kind != HsmKind::None
             && let Some(spec) = self.hsm.ops.get(op)
@@ -789,8 +799,33 @@ impl HardwareProfile {
         {
             return Some((t, spec.runs_on.value.unwrap_or(RunsOn::Hsm)));
         }
-        let t = self.software_crypto.get(op)?.service_time()?;
-        Some((t, RunsOn::Cpu))
+        if let Some(t) = self.software_crypto.get(op).and_then(CostUs::service_time) {
+            return Some((t, RunsOn::Cpu));
+        }
+        self.anchored_cost(op).map(|t| (t, RunsOn::Cpu))
+    }
+
+    /// The catalogue figure for `op` on the first of [`HardwareProfile::crypto_anchors`]
+    /// that prices it, when the profile itself publishes none.
+    pub fn anchored_cost(&self, op: &str) -> Option<Duration> {
+        let (primitive, kind) = v2xw_sec::scheme::primitive_of_op(op)?;
+        let c = v2xw_sec::primitive::PrimitiveCatalogue::standard();
+        let d = c.get(primitive)?;
+        self.crypto_anchors
+            .iter()
+            .find_map(|a| d.cost_duration(kind, a, c))
+    }
+
+    /// Whether `op`'s cost on this profile is a figure derived rather than published for
+    /// this device: taken from a catalogue anchor, or scaled by a cycle ratio there.
+    pub fn op_cost_is_derived(&self, op: &str) -> bool {
+        if let Some(parts) = v2xw_sec::scheme::op_components(op) {
+            return parts.iter().any(|p| self.op_cost_is_derived(p));
+        }
+        let published = (self.hsm.kind != HsmKind::None
+            && self.hsm.ops.get(op).and_then(HsmOp::service_time).is_some())
+            || self.software_crypto.get(op).and_then(CostUs::service_time).is_some();
+        !published && self.anchored_cost(op).is_some()
     }
 
     /// The profile's model card (03-interfaces.md §12, family `hardware-profile`).
@@ -1005,35 +1040,19 @@ fn unit_of(name: &str) -> &'static str {
 }
 
 /// The operation ids a node signs and verifies with under a scenario's
-/// `security.signature`.
+/// `security.signature`, from the scheme registry (`v2xw_sec::scheme`).
 ///
-/// The hybrid schemes are the ECDSA P-256 signature with a post-quantum one concatenated
-/// (05-protocols.md §5.3): signing makes both and verifying checks both, so their ops are
-/// compound ids whose cost [`HardwareProfile::op_cost`] composes from the two published
-/// components. The classical curves other than P-256 keep the P-256 ops: no shipped
-/// profile publishes a brainpool figure, and one P-384 figure is not a table.
+/// A hybrid is the ECDSA P-256 signature with a post-quantum one concatenated
+/// (05-protocols.md §5.3): signing makes both and verifying checks both, so its ops are
+/// compound ids whose cost [`HardwareProfile::op_cost`] composes from the components. A
+/// pure post-quantum scheme signs with its own primitive's op. The classical curves other
+/// than P-256 keep the P-256 ops: no shipped profile publishes a brainpool figure, and one
+/// P-384 figure is not a table. An unknown name falls back to P-256, which the loader
+/// never lets through.
 #[must_use]
 pub fn signature_ops(signature: &str) -> (&'static str, &'static str) {
-    match signature {
-        "hybrid-falcon512-ecdsa-p256" => (
-            "hybrid-falcon512-ecdsa-p256-sign",
-            "hybrid-falcon512-ecdsa-p256-verify",
-        ),
-        "hybrid-mldsa44-ecdsa-p256" => (
-            "hybrid-mldsa44-ecdsa-p256-sign",
-            "hybrid-mldsa44-ecdsa-p256-verify",
-        ),
-        _ => ("ecdsa-p256-sign", "ecdsa-p256-verify"),
-    }
-}
-
-/// A compound hybrid op's `(post-quantum, classical)` components.
-fn hybrid_components(op: &str) -> Option<(&'static str, &'static str)> {
-    Some(match op {
-        "hybrid-falcon512-ecdsa-p256-sign" => ("falcon-512-sign", "ecdsa-p256-sign"),
-        "hybrid-falcon512-ecdsa-p256-verify" => ("falcon-512-verify", "ecdsa-p256-verify"),
-        "hybrid-mldsa44-ecdsa-p256-sign" => ("ml-dsa-44-sign", "ecdsa-p256-sign"),
-        "hybrid-mldsa44-ecdsa-p256-verify" => ("ml-dsa-44-verify", "ecdsa-p256-verify"),
-        _ => return None,
-    })
+    v2xw_sec::scheme::signature(signature).map_or(
+        ("ecdsa-p256-sign", "ecdsa-p256-verify"),
+        |s| (s.sign_op(), s.verify_op()),
+    )
 }

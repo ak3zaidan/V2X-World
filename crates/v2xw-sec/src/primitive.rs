@@ -491,6 +491,18 @@ fn scale(c: OpCost, target_clock_hz: f64) -> OpCost {
     }
 }
 
+/// How a primitive's cost is derived on a profile it has no published row for: scale a
+/// sibling primitive's published cost on that profile by the two primitives' cycle-count
+/// ratio on a `reference` profile that publishes both (04-models.md §9.4's scaling rule,
+/// applied across primitives rather than across clocks).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CostRatio {
+    /// The sibling whose published per-profile costs are scaled.
+    pub base: PrimitiveId,
+    /// The profile on which both primitives publish a cycle count for the operation.
+    pub reference: &'static str,
+}
+
 /// One primitive's sizes, level and costs (03-interfaces.md §6).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PrimitiveDescriptor {
@@ -546,6 +558,16 @@ pub struct PrimitiveDescriptor {
     /// fallback would not be.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_proxy: Option<PrimitiveId>,
+    /// A published cost derived for profiles this primitive has no row on, by the ratio of
+    /// its own cycle count to a sibling's on a platform that publishes both.
+    ///
+    /// ML-DSA-65 is the case: no Cortex-A or Cohda figure is published, but the `pqm4`
+    /// Cortex-M4 table gives ML-DSA-65 and ML-DSA-44 on the same core, and ML-DSA-44 *is*
+    /// published on every V2X-relevant profile. The derived figure is
+    /// `base(profile) × own(reference) / base(reference)`, per operation, and
+    /// [`PrimitiveDescriptor::cost_is_derived`] reports it as derived so a run can say so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_ratio: Option<CostRatio>,
     /// Where the sizes come from.
     pub sources: Vec<Citation>,
     /// Anything that qualifies the entry.
@@ -596,7 +618,44 @@ impl PrimitiveDescriptor {
             }
             return Some(total);
         }
+        if let Some(r) = self.cost_ratio {
+            let base = catalogue.get(r.base)?;
+            let base_here = base.cost_duration(op, profile, catalogue)?;
+            let own = self.cost.row(r.reference)?.op(op)?.cycles?;
+            let theirs = base.cost.row(r.reference)?.op(op)?.cycles?;
+            if theirs == 0 {
+                return None;
+            }
+            // Integer arithmetic: nanoseconds × cycles ÷ cycles, in u128 so no product of
+            // a long signing time and a large cycle count can overflow.
+            let ns = u128::from(base_here.as_nanos()) * u128::from(own) / u128::from(theirs);
+            return Some(Duration::from_nanos(u64::try_from(ns).unwrap_or(u64::MAX)));
+        }
         None
+    }
+
+    /// True when [`PrimitiveDescriptor::cost_duration`] for `op` on `profile` is not a
+    /// figure published for this primitive on this profile but one derived from another
+    /// (a proxy, a component sum is *not* derived — it is two published figures — while a
+    /// cycle-ratio scaling is). `false` too when there is no figure at all.
+    pub fn cost_is_derived(
+        &self,
+        op: PrimitiveOpKind,
+        profile: &str,
+        catalogue: &PrimitiveCatalogue,
+    ) -> bool {
+        if let Some(row) = self.cost.row(profile) {
+            return row.scaled && row.duration(op).is_some();
+        }
+        if let Some(proxy) = self.cost_proxy {
+            return catalogue.get(proxy).is_some_and(|p| p.cost_duration(op, profile, catalogue).is_some());
+        }
+        if !self.cost_components.is_empty() {
+            return self.cost_components.iter().any(|c| {
+                catalogue.get(*c).is_some_and(|d| d.cost_is_derived(op, profile, catalogue))
+            });
+        }
+        self.cost_ratio.is_some() && self.cost_duration(op, profile, catalogue).is_some()
     }
 
     /// The nominal signature size as carried in the 1609.2 envelope.
@@ -1274,9 +1333,58 @@ fn sig(
         cost,
         cost_components: Vec::new(),
         cost_proxy: None,
+        cost_ratio: None,
         sources,
         notes: Vec::new(),
     }
+}
+
+/// ML-KEM cost anchors (FIPS 203). `sign` is encapsulation and `verify` decapsulation,
+/// the convention [`CostRow`] documents for a KEM.
+///
+/// Two sources: the `pqm4` Cortex-M4 `m4fspeed` cycle counts (benchmarks.md, fetched
+/// 2026-10-07), and liboqs on a Raspberry Pi 4 and 5 from the same Table 8 of arXiv
+/// 2503.10238 that the ML-DSA-44 and Falcon-512 rows cite. ML-KEM-1024 is not in Table 8;
+/// it is derived from ML-KEM-768 by the `pqm4` ratio ([`CostRatio`]).
+fn ml_kem_costs(which: u16) -> CostTable {
+    use profiles as p;
+    const PQM4: &str = "pqm4 benchmarks.md, m4fspeed implementation (fetched 2026-10-07)";
+    const TABLE8: &str = "arXiv 2503.10238 Table 8 (liboqs, reference code)";
+    let (kg, enc, dec) = match which {
+        512 => (392_423, 390_881, 428_167),
+        768 => (642_096, 658_754, 707_827),
+        _ => (1_018_976, 1_031_565, 1_094_008),
+    };
+    let mut rows = vec![
+        CostRow::new(p::CORTEX_M4_PQM4, CostSite::Cpu, code(PQM4))
+            .at(24.0e6)
+            .keygen(OpCost::from_cycles(kg))
+            .sign(OpCost::from_cycles(enc))
+            .verify(OpCost::from_cycles(dec))
+            .note("sign = encapsulate, verify = decapsulate"),
+    ];
+    let pi = match which {
+        512 => Some(((3_807.3, 3_462.0, 2_783.0), (23_168.3, 19_178.0, 15_136.3))),
+        768 => Some(((2_539.0, 3_905.0, 2_571.5), (13_976.6, 11_900.6, 9_614.3))),
+        _ => None,
+    };
+    if let Some(((kg4, enc4, dec4), (kg5, enc5, dec5))) = pi {
+        rows.push(
+            CostRow::new(p::CORTEX_A72_PI4_LIBOQS, CostSite::Cpu, paper(TABLE8))
+                .keygen(OpCost::from_ops_per_s(kg4))
+                .sign(OpCost::from_ops_per_s(enc4))
+                .verify(OpCost::from_ops_per_s(dec4))
+                .note("sign = encapsulate, verify = decapsulate"),
+        );
+        rows.push(
+            CostRow::new(p::CORTEX_A76_PI5_LIBOQS, CostSite::Cpu, paper(TABLE8))
+                .keygen(OpCost::from_ops_per_s(kg5))
+                .sign(OpCost::from_ops_per_s(enc5))
+                .verify(OpCost::from_ops_per_s(dec5))
+                .note("sign = encapsulate, verify = decapsulate"),
+        );
+    }
+    CostTable::new(rows)
 }
 
 fn kem(id: PrimitiveId, ek: u32, dk: u32, ct: u32, ss: u32, level: u8) -> PrimitiveDescriptor {
@@ -1291,13 +1399,20 @@ fn kem(id: PrimitiveId, ek: u32, dk: u32, ct: u32, ss: u32, level: u8) -> Primit
         shared_secret_bytes: Some(ss),
         cert_bytes: None,
         security_level: level,
-        cost: CostTable::default(),
+        cost: ml_kem_costs(match level {
+            1 => 512,
+            3 => 768,
+            _ => 1024,
+        }),
         cost_components: Vec::new(),
         cost_proxy: None,
+        cost_ratio: None,
         sources: vec![std_src("FIPS 203 Table 3")],
         notes: vec![
             "`sig_bytes` is the ciphertext size; `shared_secret_bytes` is the shared secret.",
-            "No cost anchors were found for ML-KEM on any of the profiles in §9.4.",
+            "Cost anchors: pqm4 m4fspeed cycles on a Cortex-M4 and liboqs on a \
+             Raspberry Pi 4 and 5 (arXiv 2503.10238 Table 8); a profile with neither is \
+             derived by the pqm4 cycle ratio to a sibling (`cost_ratio`).",
         ],
     }
 }
@@ -1405,6 +1520,7 @@ fn build_standard_catalogue() -> PrimitiveCatalogue {
         cost: CostTable::default(),
         cost_components: Vec::new(),
         cost_proxy: Some(PrimitiveId::ECDSA_P256_SHA256),
+        cost_ratio: None,
         sources: vec![std_src("SEC 4 §3.4-3.5"), std_src("SEC 1 §2.3.3")],
         notes: vec![
             "`pk_bytes` 33 is the reconstruction value, a compressed point (§9.2, VERIFIED).",
@@ -1431,6 +1547,7 @@ fn build_standard_catalogue() -> PrimitiveCatalogue {
         cost: CostTable::default(),
         cost_components: Vec::new(),
         cost_proxy: None,
+        cost_ratio: None,
         sources: vec![std_src("FIPS 180-4")],
         notes: vec![
             "`sig_bytes` is the digest length. 04-models.md §9.4 lists no cost anchor for \
@@ -1681,6 +1798,42 @@ fn build_standard_catalogue() -> PrimitiveCatalogue {
          ECDSA P-256 anchors on the same hardware profile.",
     );
     v.push(hf);
+
+    // --- derived costs ------------------------------------------------------------------
+    // Where a primitive publishes no figure on a V2X-relevant profile, it is scaled from
+    // a sibling that does by the two primitives' cycle ratio on a platform that publishes
+    // both. Each pairing is a sibling of the same construction, so the ratio carries the
+    // parameter-set difference and not an architecture difference — except the SLH-DSA
+    // and ML-KEM ones, whose base is ML-DSA-44 because nothing of their own family is
+    // published on a Cortex-A or a Cohda unit; those are the weakest figures in the
+    // catalogue and `cost_is_derived` says so for every one of them.
+    for d in &mut v {
+        let ratio = |base, reference| Some(CostRatio { base, reference });
+        d.cost_ratio = match d.id {
+            PrimitiveId::ML_DSA_65 | PrimitiveId::ML_DSA_87 => {
+                ratio(PrimitiveId::ML_DSA_44, profiles::CORTEX_M4_PQM4)
+            }
+            PrimitiveId::FALCON_1024 => ratio(PrimitiveId::FALCON_512, profiles::CORTEX_M7_STM32F767),
+            PrimitiveId::SLH_DSA_SHA2_128S | PrimitiveId::SLH_DSA_SHA2_128F => {
+                ratio(PrimitiveId::ML_DSA_44, profiles::CORTEX_M4_PQM4)
+            }
+            PrimitiveId::ML_KEM_512 | PrimitiveId::ML_KEM_768 => {
+                ratio(PrimitiveId::ML_DSA_44, profiles::CORTEX_M4_PQM4)
+            }
+            PrimitiveId::ML_KEM_1024 => ratio(PrimitiveId::ML_KEM_768, profiles::CORTEX_M4_PQM4),
+            _ => d.cost_ratio,
+        };
+    }
+
+    // --- primitives contributed by registered schemes ------------------------------------
+    // A scheme module that introduces a primitive the catalogue does not have declares it
+    // beside the scheme (`crate::scheme::SignatureScheme::defines`), and it joins here, so
+    // adding a scheme is one module and one registry line.
+    for d in crate::scheme::contributed_primitives() {
+        if !v.iter().any(|x| x.id == d.id) {
+            v.push(d);
+        }
+    }
 
     PrimitiveCatalogue::new(v)
 }

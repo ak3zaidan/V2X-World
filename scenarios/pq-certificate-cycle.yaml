@@ -1,0 +1,42 @@
+# ============================================================================
+# The NDSS 2024 Partially-Hybrid certificate cycle against plain fragmentation, for the
+# Falcon-512 hybrid.
+# ============================================================================
+#
+#     v2xw experiment run scenarios/pq-certificate-cycle.yaml --out runs/pq-cert-cycle
+#
+# Twardokus, Bindel, Rahbari and McCarthy (NDSS 2024) keep the hybrid's *signature* in
+# every message — Falcon-512's 666 B fits a frame — and spread the 858-byte hybrid
+# certificate across the first α SPDUs of each five-SPDU, 500 ms cycle
+# (`fragmenter/cert-cycle-partial-hybrid`, v2xw-net). The alternative is to attach the
+# certificate whole and fragment the message (`fragmenter/generic-sdu`). The cycle trades
+# fragment loss for a certificate a receiver learns only when it has heard all α pieces.
+#
+# When `security.signature` is another post-quantum scheme the cycle carries that
+# scheme's certificate (858 B plus the difference in certificate growth, derived from the
+# cited sizes; `v2xw_engine::frag::FragPlan::for_signature`) — but an ML-DSA message does
+# not fit a frame even without its certificate, which is why NDSS chose Falcon and why
+# this file does too.
+schema: v2xw/scenario/1
+
+meta:
+  name: pq-certificate-cycle
+  base: pq-signatures.yaml
+  description: >-
+    Falcon-512 hybrid V2V with the NDSS 2024 certificate cycle against plain SDU
+    fragmentation: delivery at distance, reassembly loss and airtime.
+  tags: [study, post-quantum, falcon, fragmentation, ndss2024]
+  created: "2026-10-07"
+
+net:
+  fragmenter:
+    id: fragmenter/cert-cycle-partial-hybrid
+
+security:
+  signature: hybrid-falcon512-ecdsa-p256
+
+experiment:
+  sweep:
+    net.fragmenter.id: [fragmenter/cert-cycle-partial-hybrid, fragmenter/generic-sdu]
+  seeds: [1, 2]
+  replications: 1

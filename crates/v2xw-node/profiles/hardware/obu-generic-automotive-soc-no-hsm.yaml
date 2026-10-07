@@ -2,7 +2,7 @@
 # charged to the CPU using the software cost table.
 id: obu/generic-automotive-soc-no-hsm
 kind: obu
-version: 2026-09-18.1
+version: 2026-10-07.1
 purpose: >-
   Generic automotive SoC with no secure element or accelerator: the profile for scenarios
   asking what happens when all crypto runs in software. Anchored on the best-documented
@@ -28,6 +28,10 @@ hsm:
   ops: {}
   queue_depth: {value: null, status: not-applicable, calibration: "rule H2: no HSM queue exists on this profile; the CPU queue of 06-node-models §2.1 carries the work"}
   servers: {value: null, status: not-applicable, calibration: "rule H2: no HSM server exists on this profile"}
+# Catalogue anchors (v2xw_sec::primitive) that price an operation this profile publishes
+# no figure for: the same Raspberry Pi 4 liboqs measurements this profile's software table cites (arXiv 2503.10238 Table 8). Where the catalogue has
+# no row either, it derives one by a cited cycle ratio and flags it (v2xw-sec CostRatio).
+crypto_anchors: [hw-profile/cortex-a72-pi4-liboqs]
 software_crypto:
   ecdsa-p256-sign: {us: 244, ops_per_s: 4097.4, source: "OpenSSL reports 0.0002 s/sign, 4097.4 sign/s [R7 §D8; R5 §B.5: HimaJyun gist]"}
   ecdsa-p256-verify: {us: 645, ops_per_s: 1550.7, source: "OpenSSL reports 0.0006 s/verify, 1550.7 verify/s [R7 §D8; R5 §B.5]"}
