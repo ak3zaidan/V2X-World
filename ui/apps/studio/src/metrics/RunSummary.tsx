@@ -1,0 +1,479 @@
+/**
+ * The run summary: how the run performed, in one dialog over the simulator.
+ *
+ * It opens by itself when a run this page watched finishes, and from the header's or the metrics
+ * dashboard's "Run summary" button at any time (mid-run it summarises the run so far). It says:
+ *
+ *  1. the scenario, in one line;
+ *  2. the headline results a protocol evaluation leads with — delivery, latency, channel load,
+ *     security overhead, credentials and revocation, traffic flow;
+ *  3. every metric outside its healthy band, worst first, with how bad, when and (where the metric
+ *     has a node dimension) which nodes;
+ *  4. the bottlenecks — the latency stage that dominates, the loss cause that dominates, backend
+ *     entities near saturation;
+ *  5. the agent's analysis (`AgentSlot.tsx`), when the agent has one.
+ *
+ * Every number is the engine's (`metrics.query`, `inspect.entity`), every threshold the published
+ * health band's (`crates/v2xw-metrics/src/health.rs`). Nothing is judged that has no band, and a
+ * metric the run did not measure is listed as not measured, never as healthy.
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { snapshotOf } from "../lib/backend.js";
+import { CloseIcon } from "../shell/Icons.js";
+import { openPanel } from "../shell/route.js";
+import { engine } from "../state/engine.js";
+import { useStudio } from "../state/store.js";
+import { AgentSlot } from "./AgentSlot.js";
+import { fetchCatalogue, fetchGroups, fetchSeries, metricPeriodNs } from "./data.js";
+import { classify, judge, judgedSeries, LEVEL_LABEL, noteOf, outOfBand, whenText, worseLevel, type HealthLevel, type Judgement } from "./health.js";
+import { BandTable, HealthDot, HealthLine } from "./HealthBadge.js";
+import { useRunKey } from "./hooks.js";
+import { chooseBinNs, familiesOf, formatNumber, formatWithUnit, worstFirst, type MetricFamily } from "./model.js";
+import {
+  baseOf,
+  causeName,
+  dominant,
+  entityLoads,
+  reduceSeries,
+  scenarioLine,
+  scenarioPurpose,
+  stageName,
+  ENTITY_UTILISATION_LIMIT,
+  HEADLINES,
+  type EntityLoad,
+} from "./summaryModel.js";
+import { closeRunSummary, useRunSummary } from "./summaryStore.js";
+import "./metrics.css";
+
+/** The most windows the summary asks for per series: full resolution for a run of ten minutes at 1 s. */
+const SUMMARY_POINTS = 600;
+
+interface SummaryData {
+  readonly families: readonly MetricFamily[];
+  readonly judgements: readonly Judgement[];
+  /** Banded metrics the run did not measure. */
+  readonly unmeasured: readonly MetricFamily[];
+  readonly headline: ReadonlyMap<string, number | null>;
+  readonly units: ReadonlyMap<string, string>;
+  readonly where: ReadonlyMap<string, readonly { key: string; value: number | null }[]>;
+  readonly stage: { key: string; share: number } | null;
+  readonly cause: { key: string; share: number } | null;
+  readonly entities: readonly EntityLoad[];
+  readonly atS: number;
+}
+
+type Load = { status: "idle" | "loading" } | { status: "error"; error: string } | { status: "ready"; data: SummaryData };
+
+async function collect(tNs: number): Promise<SummaryData> {
+  const defs = await fetchCatalogue();
+  const families = familiesOf(defs);
+  const known = new Set(defs.map((d) => d.name));
+  const units = new Map(defs.map((d) => [d.name, d.unit] as const));
+  const banded = families.filter((f) => f.health !== null && known.has(judgedSeries(f.base, f.health)));
+  const headSeries = HEADLINES.flatMap((g) => g.items.map((i) => i.series)).filter((s) => known.has(s));
+  const names = [...new Set([...banded.map((f) => judgedSeries(f.base, f.health!)), ...headSeries])];
+  const period = metricPeriodNs();
+  const binNs = chooseBinNs(tNs / 1e9, period, SUMMARY_POINTS);
+  const { series } = await fetchSeries(names, { fromNs: 0, toNs: tNs, binNs, limit: SUMMARY_POINTS * 2 + 4 });
+
+  const judgements: Judgement[] = [];
+  const unmeasured: MetricFamily[] = [];
+  for (const f of banded) {
+    const s = series.get(judgedSeries(f.base, f.health!));
+    const j = s ? judge(f.base, f.unit, f.health!, s, f.label) : null;
+    if (j === null) unmeasured.push(f);
+    else judgements.push(j);
+  }
+  const headline = new Map<string, number | null>();
+  // A bin wider than the metric period holds the mean of its windows, so a total over the run is
+  // that sum scaled by the windows per bin.
+  const perBin = Math.max(1, binNs / period);
+  for (const g of HEADLINES) {
+    for (const i of g.items) {
+      if (!known.has(i.series)) continue;
+      const v = reduceSeries(series.get(i.series) ?? { t: new Float64Array(0), v: new Float64Array(0) }, i.reduce);
+      headline.set(i.series, v !== null && i.reduce === "sum" ? Math.round(v * perBin) : v);
+    }
+  }
+
+  // Where: the worst nodes of each out-of-band metric that has a node dimension.
+  const where = new Map<string, { key: string; value: number | null }[]>();
+  const out = outOfBand(judgements).slice(0, 8);
+  await Promise.all(
+    out.map(async (j) => {
+      const f = families.find((x) => x.base === j.base);
+      if (!f || !f.breakdowns.includes("node")) return;
+      try {
+        const { rows } = await fetchGroups(j.base, "node", { fromNs: 0, toNs: tNs });
+        where.set(j.base, worstFirst(rows, f.polarity).slice(0, 3));
+      } catch {
+        /* no breakdown on this engine */
+      }
+    }),
+  );
+
+  const optional = async <T,>(f: () => Promise<T>): Promise<T | null> => {
+    try {
+      return await f();
+    } catch {
+      return null;
+    }
+  };
+  const [stageRows, causeRows, backend] = await Promise.all([
+    families.some((f) => f.base === "latency_stage_share") ? optional(() => fetchGroups("latency_stage_share", "stage", { fromNs: 0, toNs: tNs })) : null,
+    families.some((f) => f.base === "pdr_by_cause") ? optional(() => fetchGroups("pdr_by_cause", "cause", { fromNs: 0, toNs: tNs })) : null,
+    optional(() => engine.request("inspect.entity", { entity: "backend", limit: 40 }, { quiet: true, timeoutMs: 4000 })),
+  ]);
+  const snap = backend === null ? null : snapshotOf(backend);
+  return {
+    families,
+    judgements,
+    unmeasured,
+    headline,
+    units,
+    where,
+    stage: stageRows ? dominant(stageRows.rows) : null,
+    cause: causeRows ? dominant(causeRows.rows) : null,
+    entities: snap ? entityLoads(snap, tNs) : [],
+    atS: tNs / 1e9,
+  };
+}
+
+/** Opens the summary by itself once per run, when a run this page saw playing finishes. */
+function useAutoOpen(): void {
+  const runKey = useRunKey();
+  const state = useStudio((s) => s.run.state);
+  const sawPlaying = useRef<string>("");
+  useEffect(() => {
+    if (state === "running" || state === "seeking" || state === "paused") sawPlaying.current = runKey;
+    if (state === "finished" && sawPlaying.current === runKey && useRunSummary.getState().autoOpenedFor !== runKey) {
+      useRunSummary.getState().noteAutoOpened(runKey);
+    }
+  }, [state, runKey]);
+}
+
+/** The header's door to the summary: "Summary", marked once the run has finished. */
+export function RunSummaryButton(): React.JSX.Element | null {
+  const state = useStudio((s) => s.run.state);
+  const open = useRunSummary((s) => s.open);
+  if (state === "idle" || state === "loading") return null;
+  return (
+    <button
+      type="button"
+      className={`icon-button labelled${open ? " on" : ""}${state === "finished" ? " rsum-ready" : ""}`}
+      aria-pressed={open}
+      onClick={() => useRunSummary.getState().setOpen(!open)}
+      data-testid="run-summary-button"
+      title={state === "finished" ? "How the run performed: headline results, anything unhealthy, bottlenecks" : "How the run is performing so far"}
+    >
+      <span>Summary</span>
+    </button>
+  );
+}
+
+export function RunSummary(): React.JSX.Element | null {
+  useAutoOpen();
+  const open = useRunSummary((s) => s.open);
+  if (!open) return null;
+  return <SummaryDialog />;
+}
+
+function SummaryDialog(): React.JSX.Element {
+  const run = useStudio((s) => s.run);
+  const scenario = useStudio((s) => s.scenario);
+  const hello = useStudio((s) => s.hello);
+  const runKey = useRunKey();
+  const [load, setLoad] = useState<Load>({ status: "idle" });
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const host = useRef<HTMLDivElement | null>(null);
+  const tNs = run.tNs;
+  const tRef = useRef(tNs);
+  tRef.current = tNs;
+
+  const refresh = useCallback(() => {
+    setLoad({ status: "loading" });
+    collect(tRef.current)
+      .then((data) => setLoad({ status: "ready", data }))
+      .catch((e: unknown) => setLoad({ status: "error", error: e instanceof Error ? e.message : String(e) }));
+  }, []);
+  // Once on open, and again when the run finishes or a new run starts under it.
+  useEffect(() => {
+    refresh();
+  }, [refresh, runKey, run.state === "finished"]);
+
+  useEffect(() => {
+    host.current?.focus();
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key === "Escape" && !ev.defaultPrevented) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeRunSummary();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  const showChart = (base: string): void => {
+    closeRunSummary();
+    useStudio.getState().setMetricsFocus({ title: base, metrics: [base] });
+    openPanel("metrics");
+  };
+
+  const finished = run.state === "finished";
+  const data = load.status === "ready" ? load.data : null;
+  const judged = data?.judgements ?? [];
+  const out = outOfBand(judged);
+  const counts = { unhealthy: 0, caution: 0, healthy: 0 } as Record<HealthLevel, number>;
+  for (const j of judged) counts[j.level]++;
+  const healthy = judged.filter((j) => j.level === "healthy" && j.worstLevel === "healthy");
+  const atTimes = counts.healthy - healthy.length;
+  const overall: HealthLevel = counts.unhealthy > 0 ? "unhealthy" : counts.caution > 0 || atTimes > 0 ? "caution" : "healthy";
+
+  return (
+    <div className="rsum-backdrop" onMouseDown={(e) => e.target === e.currentTarget && closeRunSummary()} data-testid="run-summary-backdrop">
+      <div ref={host} className="rsum" role="dialog" aria-modal="true" aria-labelledby="rsum-title" tabIndex={-1} data-testid="run-summary">
+        <header className="rsum-head">
+          <h2 id="rsum-title">Run summary</h2>
+          <span className={`rsum-state ${finished ? "done" : ""}`}>{finished ? "Finished" : `Run so far · ${formatNumber(tNs / 1e9)} s`}</span>
+          <span className="grow" />
+          <button type="button" className="small" onClick={refresh} disabled={load.status === "loading"} data-testid="run-summary-refresh">
+            {load.status === "loading" ? "Reading…" : "Refresh"}
+          </button>
+          <button
+            type="button"
+            className="small"
+            onClick={() => {
+              closeRunSummary();
+              openPanel("metrics");
+            }}
+          >
+            All metrics
+          </button>
+          <button type="button" className="icon-button" onClick={closeRunSummary} aria-label="Close the run summary" title="Close (Esc)" data-testid="run-summary-close">
+            <CloseIcon />
+          </button>
+        </header>
+        <div className="rsum-body">
+          <p className="rsum-scenario" data-testid="run-summary-scenario">
+            {scenarioLine(scenario, run, hello?.scenarioName ?? null)}
+          </p>
+          {scenarioPurpose(scenario) ? <p className="dim rsum-purpose">{scenarioPurpose(scenario)}</p> : null}
+
+          {load.status === "error" ? (
+            <p className="metrics-message" data-testid="run-summary-error">
+              The engine did not answer ({load.error}). It may have stopped; press Refresh to ask again.
+            </p>
+          ) : data === null ? (
+            <p className="dim">Reading the run's metrics…</p>
+          ) : (
+            <>
+              <div className={`rsum-verdict ${overall}`} data-testid="run-summary-verdict" data-level={overall}>
+                <HealthDot level={overall} />
+                {judged.length === 0 ? (
+                  <span>No metric with a published healthy range was measured in this run.</span>
+                ) : (
+                  <span>
+                    <strong>{verdictText(counts.unhealthy, counts.caution, atTimes, healthy.length)}</strong> — of {judged.length} metrics with a published healthy
+                    range, judged on the run's windows.
+                  </span>
+                )}
+              </div>
+
+              <section className="rsum-section" aria-label="Headline results">
+                <h3>Headline results</h3>
+                <div className="rsum-tiles">
+                  {HEADLINES.map((g) => {
+                    const items = g.items.filter((i) => (data.headline.get(i.series) ?? null) !== null);
+                    return (
+                      <div key={g.id} className="rsum-tile" data-testid={`run-summary-tile-${g.id}`}>
+                        <h4>{g.title}</h4>
+                        {items.length === 0 ? (
+                          <p className="dim">Not measured in this run.</p>
+                        ) : (
+                          <dl>
+                            {items.map((i) => {
+                              const v = data.headline.get(i.series) ?? null;
+                              const unit = data.units.get(i.series) ?? "";
+                              const f = data.families.find((x) => x.base === baseOf(i.series));
+                              const lv = f?.health && judgedSeries(f.base, f.health) === i.series ? classify(f.health, v) : null;
+                              return (
+                                <div key={i.series} className="rsum-item">
+                                  <dt>{i.label}</dt>
+                                  <dd>
+                                    {lv ? <HealthDot level={lv} /> : null}
+                                    <span className="mono">{v === null ? "—" : formatWithUnit(v, unit)}</span>
+                                  </dd>
+                                </div>
+                              );
+                            })}
+                          </dl>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="rsum-section" aria-label="Outside the healthy range" data-testid="run-summary-outside">
+                <h3>Outside the healthy range</h3>
+                {out.length === 0 ? (
+                  <p className="dim">{judged.length === 0 ? "Nothing was judged." : "Nothing: every judged metric stayed in its healthy range in every window."}</p>
+                ) : (
+                  <ol className="rsum-list">
+                    {out.map((j) => {
+                      const nodes = data.where.get(j.base);
+                      const open = expanded === j.base;
+                      return (
+                        <li key={j.base} className={`rsum-row ${worse(j)}`} data-testid={`run-summary-out-${j.base}`} data-level={worse(j)}>
+                          <div className="rsum-row-head">
+                            <HealthDot level={worse(j)} />
+                            <strong>{j.label}</strong>
+                            <span className="rsum-level">{j.level === "healthy" ? `${LEVEL_LABEL[j.worstLevel]} at times` : LEVEL_LABEL[j.level]}</span>
+                            <span className="grow" />
+                            <button type="button" className="linklike" onClick={() => setExpanded(open ? null : j.base)} aria-expanded={open}>
+                              {open ? "Hide thresholds" : "Thresholds"}
+                            </button>
+                            <button type="button" className="linklike" onClick={() => showChart(j.base)}>
+                              Chart
+                            </button>
+                          </div>
+                          <HealthLine band={j.band} value={j.level === "healthy" ? j.worst : j.mean} unit={j.unit} />
+                          <p className="dim rsum-when">
+                            {j.level === "healthy" ? "Run mean healthy; " : `Run mean ${formatWithUnit(j.mean, j.unit)}; `}
+                            {whenText(j)}.
+                            {nodes && nodes.length > 0 ? ` Worst nodes: ${nodes.map((n) => `${n.key} (${formatWithUnit(n.value, j.unit)})`).join(", ")}.` : ""}
+                          </p>
+                          {open ? <BandTable band={j.band} unit={j.unit} /> : null}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
+              </section>
+
+              <section className="rsum-section" aria-label="Bottlenecks" data-testid="run-summary-bottlenecks">
+                <h3>Bottlenecks</h3>
+                <Bottlenecks data={data} />
+              </section>
+
+              <AgentSlot />
+
+              {healthy.length > 0 || data.unmeasured.length > 0 ? (
+                <section className="rsum-section" aria-label="Healthy and not measured">
+                  <h3>Healthy throughout</h3>
+                  {healthy.length > 0 ? (
+                    <ul className="rsum-healthy">
+                      {healthy.map((j) => (
+                        <li key={j.base} title={noteOf(j.band, "healthy")}>
+                          <HealthDot level="healthy" /> {j.label} <span className="dim mono">{formatWithUnit(j.mean, j.unit)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="dim">None.</p>
+                  )}
+                  {data.unmeasured.length > 0 ? (
+                    <p className="dim">Not measured in this run, so not judged: {data.unmeasured.map((f) => f.label).join(", ")}.</p>
+                  ) : null}
+                </section>
+              ) : null}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** "1 unhealthy on average, 1 to watch, 2 out of range at times, 11 healthy throughout". */
+function verdictText(unhealthy: number, caution: number, atTimes: number, healthy: number): string {
+  if (unhealthy + caution + atTimes === 0) return `All ${healthy} healthy throughout`;
+  const parts: string[] = [];
+  parts.push(unhealthy > 0 ? `${unhealthy} unhealthy on average` : "None unhealthy on average");
+  if (caution > 0) parts.push(`${caution} to watch`);
+  if (atTimes > 0) parts.push(`${atTimes} out of range at times`);
+  parts.push(`${healthy} healthy throughout`);
+  return parts.join(", ");
+}
+
+/** A row's colour: the worse of the run mean's level and the worst window's. */
+function worse(j: Judgement): HealthLevel {
+  return worseLevel(j.level, j.worstLevel);
+}
+
+function Bottlenecks({ data }: { data: SummaryData }): React.JSX.Element {
+  // A dominant stage or loss cause is a fact about where time and messages go, not a verdict: it is
+  // shown neutral. Only an entity past its utilisation ceiling or a metric out of band is coloured.
+  const lines: { key: string; level: HealthLevel | "info"; text: React.ReactNode }[] = [];
+  if (data.stage !== null) {
+    lines.push({
+      key: "stage",
+      level: "info",
+      text: (
+        <>
+          <strong>{stageName(data.stage.key)}</strong> takes the largest share of end-to-end latency: {Math.round(data.stage.share * 100)} %.
+        </>
+      ),
+    });
+  }
+  if (data.cause !== null) {
+    lines.push({
+      key: "cause",
+      level: "info",
+      text: (
+        <>
+          Most lost messages were lost to <strong>{causeName(data.cause.key)}</strong>: {Math.round(data.cause.share * 100)} % of losses.
+        </>
+      ),
+    });
+  }
+  const busy = data.entities.filter((e) => e.utilisation >= ENTITY_UTILISATION_LIMIT * 0.75).slice(0, 4);
+  for (const e of busy) {
+    lines.push({
+      key: `entity-${e.id}`,
+      level: e.utilisation > ENTITY_UTILISATION_LIMIT ? "unhealthy" : "caution",
+      text: (
+        <>
+          Backend <strong>{e.name}</strong> was busy {Math.round(e.utilisation * 100)} % of the time
+          {e.meanWaitMs !== null ? `, requests waited ${formatNumber(e.meanWaitMs)} ms on average` : ""}
+          {e.utilisation > ENTITY_UTILISATION_LIMIT ? " — past the 80 % planning ceiling, where queues grow without bound." : "."}
+        </>
+      ),
+    });
+  }
+  const worstOut = outOfBand(data.judgements).filter((j) => j.level === "unhealthy").slice(0, 2);
+  for (const j of worstOut) {
+    const nodes = data.where.get(j.base);
+    if (nodes && nodes.length > 0) {
+      lines.push({
+        key: `nodes-${j.base}`,
+        level: "unhealthy",
+        text: (
+          <>
+            <strong>{j.label}</strong> is worst at node {nodes[0]!.key} ({formatWithUnit(nodes[0]!.value, j.unit)}).
+          </>
+        ),
+      });
+    }
+  }
+  if (lines.length === 0) {
+    const anyBackend = data.entities.length > 0;
+    return (
+      <p className="dim">
+        No bottleneck stands out{anyBackend ? `: the busiest backend entity was ${data.entities[0]!.name} at ${Math.round(data.entities[0]!.utilisation * 100)} %` : ""}.
+      </p>
+    );
+  }
+  return (
+    <ul className="rsum-bottlenecks">
+      {lines.map((l) => (
+        <li key={l.key}>
+          <span className={`hdot ${l.level}`} aria-hidden="true" /> {l.text}
+        </li>
+      ))}
+    </ul>
+  );
+}

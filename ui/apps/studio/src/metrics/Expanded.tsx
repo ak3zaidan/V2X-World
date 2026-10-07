@@ -14,6 +14,8 @@ import { closePanel } from "../shell/route.js";
 import { useStudio } from "../state/store.js";
 import { BreakdownSection, type Range } from "./Breakdown.js";
 import { Brush, MainChart, type ChartLine } from "./Chart.js";
+import { judge, judgedSeries, LEVEL_LABEL, whenText } from "./health.js";
+import { BandTable, HealthLine } from "./HealthBadge.js";
 import { slotColour } from "./tokens.js";
 import { sideBAvailable } from "./data.js";
 import { chartPng, download, downloadCsv, fileName } from "./exporting.js";
@@ -57,6 +59,14 @@ function slotOf(f: MetricFamily, name: string): number {
 function initialSelection(f: MetricFamily, requested: string | null): string[] {
   const all = seriesOf(f);
   if (requested !== null && all.includes(requested) && requested !== f.base) return [requested];
+  // A metric with a health band opens on the series the band judges, so its zones are drawn.
+  if (f.health) {
+    const judged = judgedSeries(f.base, f.health);
+    if (all.includes(judged)) {
+      if (f.headline !== null && judged !== f.headline) return [f.headline, judged];
+      if (f.headline === null) return [judged];
+    }
+  }
   if (f.headline !== null) {
     const p95 = f.percentiles.find((p) => p.endsWith(".p95"));
     return p95 ? [f.headline, p95] : [f.headline];
@@ -293,9 +303,12 @@ export function Expanded({
         <span className="dim">Drag across the chart or the strip below to zoom; double-click for the whole run.</span>
       </div>
 
+      {f.health ? <HealthVerdict f={f} active={active} /> : null}
+
       {hasData ? (
         <>
           <MainChart
+            band={f.health && chartLines.some((l) => l.name === judgedSeries(f.base, f.health!)) ? f.health : null}
             lines={chartLines}
             from={from}
             to={to}
@@ -501,6 +514,45 @@ function MarkdownLite({ text }: { text: string }): React.JSX.Element {
           </p>
         ))}
     </>
+  );
+}
+
+/**
+ * Whether this metric is healthy: its newest judged value with the one-line reason, how the run
+ * as a whole fared against the band, and the band itself with its source.
+ */
+function HealthVerdict({ f, active }: { f: MetricFamily; active: boolean }): React.JSX.Element | null {
+  const band = f.health;
+  const name = band ? judgedSeries(f.base, band) : "";
+  const names = useMemo(() => (band && seriesOf(f).includes(name) ? [name] : []), [band, f, name]);
+  const full = useFullSeries(names, active && names.length > 0);
+  if (!band) return null;
+  if (names.length === 0) {
+    return (
+      <section className="mx-health" data-testid="metric-health">
+        <p className="dim">
+          This metric has a published healthy range, judged on <code>{name}</code>, which this engine does not report.
+        </p>
+        <BandTable band={band} unit={f.unit} />
+      </section>
+    );
+  }
+  const s = full.series.get(name) ?? EMPTY_SERIES;
+  const j = judge(f.base, f.unit, band, s, f.label);
+  return (
+    <section className="mx-health" data-testid="metric-health">
+      {j === null ? (
+        <p className="dim">No window has reported a value to judge yet.</p>
+      ) : (
+        <>
+          <HealthLine band={band} value={latestOf(s)} unit={f.unit} testId="metric-health-now" />
+          <p className="dim mx-health-run" data-testid="metric-health-run">
+            Whole run so far: mean {formatWithUnit(j.mean, f.unit)} ({LEVEL_LABEL[j.level].toLowerCase()}); {whenText(j)}.
+          </p>
+        </>
+      )}
+      <BandTable band={band} unit={f.unit} />
+    </section>
   );
 }
 

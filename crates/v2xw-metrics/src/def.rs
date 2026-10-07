@@ -269,6 +269,11 @@ pub struct MetricDef {
     /// per-value series and no headline that would never receive a sample.
     #[serde(default, skip_serializing_if = "core::ops::Not::not")]
     pub breakdown_only: bool,
+    /// Whether a value is healthy for a real deployment: two thresholds, three one-line
+    /// explanations and the source ([`crate::health`]). Filled from
+    /// [`crate::health::band_for`] by [`MetricDef::new`]; `None` when nothing is published.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<crate::health::HealthBand>,
 }
 
 impl MetricDef {
@@ -286,8 +291,10 @@ impl MetricDef {
         quantum: Quantum,
         definition_md: impl Into<String>,
     ) -> Self {
+        let name = name.into();
+        let health = crate::health::band_for(&name);
         Self {
-            name: name.into(),
+            name,
             unit: unit.into(),
             dims: Vec::new(),
             agg,
@@ -302,7 +309,23 @@ impl MetricDef {
             max_value: None,
             breakdown: None,
             breakdown_only: false,
+            health,
         }
+    }
+
+    /// Sets the health band, replacing the one the table publishes for this name.
+    #[must_use]
+    pub fn with_health(mut self, band: crate::health::HealthBand) -> Self {
+        self.health = Some(band);
+        self
+    }
+
+    /// Removes the health band: for a metric that shares a name with a banded one but not
+    /// its meaning (a test, a fixture).
+    #[must_use]
+    pub fn without_health(mut self) -> Self {
+        self.health = None;
+        self
     }
 
     /// Marks the metric as having no headline: every sample carries its breakdown value.
@@ -445,6 +468,9 @@ impl MetricDef {
             if !seen.insert(*d) {
                 return Err(bad(format!("dimension {d} is listed twice")));
             }
+        }
+        if let Some(problem) = self.health.as_ref().and_then(crate::health::HealthBand::problem) {
+            return Err(bad(problem));
         }
         if self.not_accounted.is_empty() {
             return Err(bad(

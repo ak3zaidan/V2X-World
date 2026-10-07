@@ -15,6 +15,8 @@
  * dashboard shows one card per base and puts the series behind it in the expanded view.
  */
 
+import type { MetricHealthBand } from "@vwp/protocol";
+
 // ------------------------------------------------------------------------------------------------
 // The catalogue
 // ------------------------------------------------------------------------------------------------
@@ -30,6 +32,8 @@ export interface SeriesDef {
   readonly definition: string;
   readonly source?: string;
   readonly notAccounted: readonly string[];
+  /** Whether a value is healthy for a real deployment, when the engine publishes a band (`metrics/health.ts`). */
+  readonly health?: MetricHealthBand | null;
 }
 
 /** One metric: a dashboard card. */
@@ -57,6 +61,8 @@ export interface MetricFamily {
   readonly polarity: Polarity;
   /** Ground truth: a quantity no deployed device could measure (08-measurement-and-data.md §1). */
   readonly groundTruth: boolean;
+  /** The metric's health band, or `null` when none is published. */
+  readonly health: MetricHealthBand | null;
 }
 
 /** Every series a card can plot, headline first. */
@@ -124,6 +130,7 @@ export function familiesOf(rows: readonly SeriesDef[]): MetricFamily[] {
       valueDim,
       polarity: polarityOf(base),
       groundTruth: first.visibility === "GT" || first.visibility === "NODE+GT",
+      health: first.health ?? list.find((r) => r.health)?.health ?? null,
     });
   }
   return out;

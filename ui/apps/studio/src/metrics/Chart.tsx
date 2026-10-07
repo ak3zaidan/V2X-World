@@ -57,6 +57,7 @@ export function MainChart({
   onRange,
   onReset,
   onPlot,
+  band = null,
 }: {
   lines: readonly ChartLine[];
   from: number;
@@ -66,6 +67,8 @@ export function MainChart({
   onRange: (from: number, to: number) => void;
   onReset: () => void;
   onPlot?: (plot: uPlot | null) => void;
+  /** A health band to shade behind the lines: caution in amber, unhealthy in red-orange (`metrics/health.ts`). */
+  band?: { readonly better: "lower" | "higher"; readonly caution: number; readonly unhealthy: number } | null;
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
   const plot = useRef<uPlot | null>(null);
@@ -75,6 +78,8 @@ export function MainChart({
   range.current = { from, to };
   const handlers = useRef({ onRange, onReset });
   handlers.current = { onRange, onReset };
+  const bandRef = useRef(band);
+  bandRef.current = band;
 
   // Width follows the container.
   useLayoutEffect(() => {
@@ -141,6 +146,54 @@ export function MainChart({
         })),
       ],
       hooks: {
+        // The health band, under the lines: each zone shaded where it falls on the y scale, with
+        // a dashed line at each threshold, so a reader sees how close the run came.
+        drawClear: [
+          (u) => {
+            const b = bandRef.current;
+            if (!b) return;
+            const ctx = u.ctx;
+            const { left, top, width: bw, height: bh } = u.bbox;
+            const y = (v: number): number => Math.max(top, Math.min(top + bh, u.valToPos(v, "y", true)));
+            const zone = (v0: number, v1: number, colour: string, alpha: number): void => {
+              const a = y(v0);
+              const c = y(v1);
+              if (Math.abs(a - c) < 0.5) return;
+              ctx.save();
+              ctx.globalAlpha = alpha;
+              ctx.fillStyle = colour;
+              ctx.fillRect(left, Math.min(a, c), bw, Math.abs(a - c));
+              ctx.restore();
+            };
+            const warn = cssVar("--warn", "#e69f00");
+            const err = cssVar("--err", "#d55e00");
+            const yMin = u.scales.y.min ?? 0;
+            const yMax = u.scales.y.max ?? 1;
+            if (b.better === "lower") {
+              zone(b.caution, b.unhealthy, warn, 0.1);
+              zone(b.unhealthy, Math.max(yMax, b.unhealthy), err, 0.12);
+            } else {
+              zone(b.unhealthy, b.caution, warn, 0.1);
+              zone(Math.min(yMin, b.unhealthy), b.unhealthy, err, 0.12);
+            }
+            ctx.save();
+            ctx.setLineDash([4, 4]);
+            ctx.lineWidth = 1;
+            for (const [v, colour] of [
+              [b.caution, warn],
+              [b.unhealthy, err],
+            ] as const) {
+              if (v < yMin || v > yMax) continue;
+              const py = Math.round(u.valToPos(v, "y", true)) + 0.5;
+              ctx.strokeStyle = colour;
+              ctx.beginPath();
+              ctx.moveTo(left, py);
+              ctx.lineTo(left + bw, py);
+              ctx.stroke();
+            }
+            ctx.restore();
+          },
+        ],
         setSelect: [
           (u) => {
             if (u.select.width < 4) return;
@@ -164,7 +217,7 @@ export function MainChart({
       onPlot?.(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shape, unit, theme, height]);
+  }, [shape, unit, theme, height, band === null ? "" : `${band.better}:${band.caution}:${band.unhealthy}`]);
 
   useEffect(() => {
     plot.current?.setSize({ width, height });

@@ -287,6 +287,68 @@ threshold; whether that matches a field measurement in Midtown is not checked he
   from the measured value.
 - `crates/v2xw-engine/src/run/radios.rs` — the index's grid against a full scan.
 
+## 2026-10-06 — metric health bands and the run summary (metrics track)
+
+The owner asked two things of the measurements: "a user might see airtime per node, but they
+might not really be quite sure whether or not the shown value is safe or healthy for an actual
+system", and "a run summary at the end … how the run performed, any of the most important
+statistics, anything that was unhealthy or had high load, because the goal of this is to
+evaluate certain protocols."
+
+- **Health bands are part of the metric definition.** `crates/v2xw-metrics/src/health.rs`
+  publishes, for 21 metrics, two thresholds (healthy → caution → unhealthy), a one-line
+  explanation per level, the series judged (the headline, a percentile such as
+  `e2e_latency.p99`, or a breakdown value such as `pdr[100m]`), the source and whether the
+  number is a standard's, a literature convention or an engineering choice.
+  `MetricDef::new` looks every metric up in that one table, so the band reaches the catalogue
+  whichever provider defines the metric (including `cert_pool_valid` and `linkability` in
+  `v2xw-engine`, untouched). `MetricDef::validate` refuses a malformed band. The server's
+  catalogue rows carry it as `health`.
+  - Standards: CBR 0.50 / 0.68 (SAE J2945/1 vMinCBP; ETSI TS 102 687 adaptive CBR_target),
+    airtime per node 10 / 30 ms/s (TS 102 687 reactive Relaxed 1 % duty cycle; δ_max 3 %),
+    p99 end-to-end latency 50 / 100 ms (3GPP TS 22.185 §5.1, TR 22.886, SAE J2945/1), PDR
+    within 100 m 0.95 / 0.90 (3GPP TR 37.885's 0.9 reception level), AoI 300 / 600 ms and
+    p95 inter-reception 0.3 / 0.6 s (J2945/1 10 Hz and vMaxITT 600 ms).
+  - Literature: TTC 3 / 1.5 s (Hayward 1972; FHWA SSAM), DRAC 2 / 3.35 m/s² (Archer 2005).
+  - Engineering choices, said so in the band: MAC and verification queues, access delay,
+    verification wait, unverified share, certificate pool, revocation stage time, detection
+    recall and false-positive rate, linkability, backend reachability. Several match the run
+    analyst's `Thresholds` on purpose, so a card and a finding never disagree.
+- **The dashboard shows them.** A "Health at a glance" strip of every banded metric, worst
+  first; each card a coloured edge and a line like "Unhealthy 0.71 — above the 0.68 ETSI
+  congestion target; vehicles will throttle their messages" (the level always written, never
+  colour alone); threshold lines on the sparkline; a dot on a group in the side navigation;
+  in the expanded view the band shaded behind the chart, the whole run's verdict ("mean …;
+  unhealthy 12 % of the run, worst … at 42 s") and the band written out with its source. The
+  expanded view opens on the judged series.
+- **Run summary** (`metrics/RunSummary.tsx`): a dialog over the simulator that opens by itself
+  when a run this page watched finishes, and from the header's Summary button or the
+  dashboard's Run summary button at any time. The scenario in one line; headline results in
+  six tiles (delivery, latency, channel load, security overhead, credentials and revocation,
+  traffic flow); every metric outside its band ranked by severity with how bad, when and the
+  worst nodes; bottlenecks (dominant latency stage, dominant loss cause, backend entities by
+  utilisation against the 0.8 planning ceiling); the agent's analysis (`AgentSlot.tsx`, the
+  newest analyst findings and model overview from `state/agent.ts`, with an Analyse button);
+  what stayed healthy and what was not measured.
+- **Evidence.** `cargo test -p v2xw-metrics --lib`: 233 passed, including the four band tests
+  (every band well formed; 0.71 CBR unhealthy with the 0.68 reason; higher-is-better bands
+  turn the other way; a band out of order refused). Studio typecheck clean;
+  `test/metrics-health.test.ts` 10 passed (boundaries match the engine's, judging a run's
+  windows, ranking, the scenario line, reductions, dominant share, backend utilisation).
+  One Playwright pass against a debug `v2xw-server` on a 25 s cut of `manhattan-5min`: the
+  catalogue carried 62 series rows with a band; the summary opened by itself at the end with
+  "None unhealthy on average, 1 to watch, 2 out of range at times, 12 healthy throughout"
+  (unverified share caution at 0.0303; AoI 1,367 ms at 18 s; PDR within 100 m 0.933 at 15 s),
+  bottlenecks signing 73 % of latency and weak signal 99 % of losses; the dashboard showed the
+  health strip and the expanded CBR chart its band and source; no page errors.
+- **Not done.** The run analyst (`v2xw-copilot`) still holds its own `Thresholds` rather than
+  reading the bands; the two agree where they overlap but are two copies. HSM utilisation is
+  not a catalogue metric (it is in node telemetry), so it has no band; the summary shows
+  backend entity utilisation instead. A metric whose judged series the engine does not
+  stream (a p99 on an engine without percentiles) is shown as not judged, never judged on
+  another statistic. The summary's whole-run figures are means of the run's windows, not
+  pooled estimates; it says so.
+
 ## 2026-09-30 — robustness track: a refusal names its setting, nothing flaky, nothing leaks
 
 One engineer, owner of error handling in `crates/v2xw-server` and the engine's loader, the

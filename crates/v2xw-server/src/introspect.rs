@@ -49,6 +49,9 @@ pub struct MetricInfo {
     /// metric's name for a percentile (`e2e_latency.p95`) or a breakdown
     /// (`latency_stage[airtime]`).
     pub base: String,
+    /// The metric's health band (`v2xw_metrics::health::HealthBand`, serialised): whether a
+    /// value is healthy for a real deployment, and why. `None` when none is published.
+    pub health: Option<Value>,
 }
 
 /// One group of a grouped `metrics.query`: the dimension's value and the metric pooled
@@ -353,6 +356,7 @@ pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<V
                     json!({ "ref": m.source })
                 },
                 "base": m.base,
+                "health": m.health,
             })).collect::<Vec<_>>(),
         })),
         Query::Metrics {

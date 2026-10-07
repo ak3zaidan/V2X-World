@@ -28,6 +28,7 @@ import type { MetricsQueryParams, MetricsQueryResult } from "@vwp/protocol";
 
 import { compare } from "../state/compare.js";
 import { engine } from "../state/engine.js";
+import { bandOf } from "./health.js";
 import { groupRows, seriesFromRows, EMPTY_SERIES, type GroupRow, type Series, type SeriesDef } from "./model.js";
 
 /** Which run a query goes to: this page's engine, or the comparison's side B. */
@@ -76,6 +77,7 @@ export async function fetchCatalogue(side: Side = "a"): Promise<SeriesDef[]> {
       definition: c.definition_md ?? "",
       ...(source ? { source } : {}),
       notAccounted: c.not_accounted ?? [],
+      health: bandOf(c.health),
     };
   });
 }

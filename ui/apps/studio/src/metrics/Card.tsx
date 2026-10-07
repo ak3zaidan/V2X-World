@@ -7,7 +7,10 @@
  */
 
 import { useMemo, useState } from "react";
+import type { MetricHealthBand } from "@vwp/protocol";
 
+import { classify, judgedSeries } from "./health.js";
+import { HealthLine } from "./HealthBadge.js";
 import { usePins } from "./pins.js";
 import {
   axisUnit,
@@ -47,12 +50,15 @@ export function Sparkline({
   to,
   unit,
   label,
+  band = null,
 }: {
   series: Series;
   from: number;
   to: number;
   unit: string;
   label: string;
+  /** The health band, drawn as threshold lines where they fall inside the line's range. */
+  band?: MetricHealthBand | null;
 }): React.JSX.Element {
   const [hover, setHover] = useState<number | null>(null);
   const geom = useMemo(() => {
@@ -116,6 +122,18 @@ export function Sparkline({
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >
+        {band
+          ? (
+              [
+                ["caution", band.caution],
+                ["unhealthy", band.unhealthy],
+              ] as const
+            )
+              .filter(([, v]) => v >= geom.lo && v <= geom.hi)
+              .map(([lv, v]) => (
+                <line key={lv} x1={0} x2={W} y1={geom.sy(v)} y2={geom.sy(v)} className={`mthreshold ${lv}`} vectorEffect="non-scaling-stroke" />
+              ))
+          : null}
         <path d={geom.d} className="mline" vectorEffect="non-scaling-stroke" />
         {geom.dots >= 0 ? <circle cx={geom.sx(series.t[geom.dots])} cy={geom.sy(series.v[geom.dots])} r={3} className="mdot" /> : null}
         {hover !== null ? (
@@ -189,11 +207,18 @@ export function MetricCard({
   const hasLine = series !== undefined && series !== null && observedCount(series) > 0;
   const hasBars = headline === null && f.values.some((v) => (overview.latest.get(v.series) ?? null) !== null);
   const empty = !hasLine && !hasBars;
+  // The health band judges one series: the headline, a percentile or a breakdown value. A card
+  // judges only when the engine streams that series; it never judges a different statistic.
+  const band = f.health;
+  const judged = band ? judgedSeries(f.base, band) : null;
+  const judgedValue = judged !== null && overview.latest.has(judged) ? (overview.latest.get(judged) ?? null) : null;
+  const level = band && !empty ? classify(band, judgedValue) : null;
   return (
     <article
-      className={`mcard${empty ? " empty" : ""}`}
+      className={`mcard${empty ? " empty" : ""}${level ? ` h-${level}` : ""}`}
       data-testid={`metric-card-${f.base}`}
       data-has-data={empty ? "false" : "true"}
+      data-health={level ?? "none"}
       aria-label={f.label}
     >
       <header className="mcard-head">
@@ -234,8 +259,9 @@ export function MetricCard({
               <span className="dim mcard-when">newest window</span>
             </div>
           ) : null}
+          {band && level ? <HealthLine band={band} value={judgedValue} unit={f.unit} compact testId={`metric-health-${f.base}`} /> : null}
           {hasLine && series ? (
-            <Sparkline series={series} from={0} to={Math.max(overview.toS, series.t.length > 0 ? series.t[series.t.length - 1] : 0)} unit={f.unit} label={f.label} />
+            <Sparkline series={series} from={0} to={Math.max(overview.toS, series.t.length > 0 ? series.t[series.t.length - 1] : 0)} unit={f.unit} label={f.label} band={band && band.judged === "" ? band : null} />
           ) : (
             <MiniBars f={f} latest={overview.latest} />
           )}
