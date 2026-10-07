@@ -696,7 +696,7 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "actors.vru.red_crossing_share",
         status: Status::Wired,
         note: "The share of pedestrians who cross on flashing or steady don't-walk when \
-               the traffic leaves a gap. Default 0.15 under 'observed', calibrated so that \
+               the traffic leaves a gap. Default 0.10 under 'observed', calibrated so that \
                about a tenth of signalised crossings begin on don't-walk, as Basch et al. \
                2015 counted at five Midtown intersections.",
     },

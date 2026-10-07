@@ -345,7 +345,7 @@ Pedestrians walk on sidewalk lanes and crossings from the world; vehicles are bo
 |---|---|---|
 | walking speed by age group | under 65: 1.51 ± 0.25 m/s; 65 and over: 1.25 ± 0.27 m/s; 15 % older | Knoblauch, Pietrucha & Nitzburg, TRR 1538 (1996): means 4.95 / 4.11 ft/s, 15th percentiles 4.09 / 3.19 ft/s; σ derived assuming normality; the older share is a choice |
 | start-up at the onset of WALK | lognormal, median 2 s, shape 0.5, for a pedestrian who was waiting | a choice below the HCM's 3.2 s platoon start-up |
-| crossing against the signal | 15 % of pedestrians start on flashing or steady DON'T WALK when the gap passes `t_c = L/S_p + t_s` (`t_s` lognormal, median 2 s) | calibrated to Basch et al., J. Community Health 40:789 (2015): about 10.6 % of Midtown crossings began on DON'T WALK |
+| crossing against the signal | 10 % of pedestrians start on flashing or steady DON'T WALK when the gap passes `t_c = L/S_p + t_s` (`t_s` lognormal, median 2 s) | calibrated to Basch et al., J. Community Health 40:789 (2015): about 10.6 % of Midtown crossings began on DON'T WALK |
 | groups | groups of 1–4 with shares 0.65 / 0.27 / 0.06 / 0.02 (55 % of pedestrians in groups), one walk, side by side, slowest member's pace | Moussaïd et al., PLoS ONE 5:e10047 (2010): more than half walk in groups on a workday |
 | mid-block crossing | 0.25 decisions per 100 m of eligible sidewalk (blocks over 50 m, 12 m from the corners), ×4 beside stopped traffic; straight or up to 35° diagonal; lane-by-lane HCM gap; drivers stop for a pedestrian in or entering their lane, 10 % yield to one waiting | rate, factor and yield share are choices; the gap rule is the HCM's; legality is a jurisdiction rule (NYC Int. 346-A, 2024) |
 
