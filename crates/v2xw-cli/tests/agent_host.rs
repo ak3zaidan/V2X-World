@@ -93,3 +93,58 @@ fn the_endpoints_report_status_run_a_model_less_analysis_and_never_serve_the_key
     }
     rt.block_on(server.stop());
 }
+
+/// Always on: with nobody asking, the watcher follows a run to its end and the summary is
+/// served. It is started the way `v2xw serve` starts it, before the engine's address is
+/// known.
+#[test]
+fn the_watcher_follows_a_run_by_itself_and_serves_its_summary() {
+    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("runtime");
+    let host = AgentHost::new(None);
+    host.start_watcher(v2xw_copilot::watch::WatchCadence { status_ms: 150, gather_ms: 450 });
+    let server = rt
+        .block_on(serve_stub(
+            ServerOptions {
+                bind: std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+                extension: Some(host.router()),
+                ..ServerOptions::default()
+            },
+            StubOptions { actors: 12, duration_s: 30, speed: 0.0, ..StubOptions::default() },
+        ))
+        .expect("the fixture engine starts");
+    let addr = server.address().to_string();
+    host.set_origin(format!("http://{addr}"));
+
+    let mut feed: Vec<Value> = Vec::new();
+    let mut summary_ready = false;
+    for _ in 0..400 {
+        let (code, body) = http(&addr, "GET", &format!("/agent/watch?after={}", feed.len()), "");
+        assert_eq!(code, 200, "{body}");
+        let page: Value = serde_json::from_str(&body).expect("watch is JSON");
+        assert_eq!(page["watching"], true, "the watcher started without a request");
+        feed.extend(page["observations"].as_array().cloned().unwrap_or_default());
+        if page["summary_run_id"].is_string() && page["overview_pending"] == false {
+            summary_ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    assert!(summary_ready, "a summary was written: {feed:#?}");
+    assert_eq!(feed.first().map(|o| o["kind"].clone()), Some(Value::from("started")), "{feed:#?}");
+    assert!(feed.iter().any(|o| o["kind"] == "finished"), "{feed:#?}");
+    let seqs: Vec<u64> = feed.iter().filter_map(|o| o["seq"].as_u64()).collect();
+    assert!(seqs.windows(2).all(|p| p[1] == p[0] + 1), "no line lost or repeated: {seqs:?}");
+
+    let (code, body) = http(&addr, "GET", "/agent/summary", "");
+    assert_eq!(code, 200, "{body}");
+    let s: Value = serde_json::from_str(&body).expect("summary is JSON");
+    let summary = &s["summary"];
+    assert!(
+        ["healthy", "attention", "unhealthy"].contains(&summary["verdict"].as_str().unwrap_or("")),
+        "{summary:#}"
+    );
+    assert_eq!(summary["layers"].as_array().map(Vec::len), Some(9), "every layer has a line");
+    assert!(summary["headline"].as_str().is_some_and(|h| !h.is_empty()));
+    assert!(s["markdown"].as_str().unwrap_or("").contains("# Run summary"));
+    rt.block_on(server.stop());
+}

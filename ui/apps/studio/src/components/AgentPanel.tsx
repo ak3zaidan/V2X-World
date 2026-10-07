@@ -17,19 +17,26 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   SUGGESTIONS,
   cellText,
+  clock,
   foldEvents,
   keyToPointer,
+  layerStateLabel,
   notable,
+  observationsOf,
   parseMarkdown,
+  plain,
   progressFraction,
+  verdictLabel,
   type AgentReport,
   type Finding,
   type Inline,
   type JobView,
+  type Observation,
   type RunRecord,
+  type RunSummary,
 } from "../lib/agent.js";
 import { openMetricChart, revealSetting } from "../lib/links.js";
-import { agentBusy, useAgent, type Turn } from "../state/agent.js";
+import { agentBusy, useAgent, useAgentWatch, type Turn } from "../state/agent.js";
 import "../styles/agent.css";
 
 const LAYER_TITLES: Record<string, string> = {
@@ -114,7 +121,7 @@ function FindingCard({ f, open, onToggle }: { f: Finding; open: boolean; onToggl
     <div className={`agent-finding sev-${f.severity}`} id={`finding-${f.id}`} data-testid="agent-finding">
       <button type="button" className="agent-finding-head" onClick={onToggle} aria-expanded={open}>
         <span className={`sev-dot sev-${f.severity}`} aria-label={f.severity} />
-        <span className="grow">{f.title}</span>
+        <span className="grow">{plain(f.title)}</span>
         <span className="faint mono">{f.id}</span>
       </button>
       {open ? (
@@ -242,6 +249,124 @@ function Report({ report }: { report: AgentReport }): React.JSX.Element {
   );
 }
 
+/**
+ * A finished run as the agent sums it up: the verdict, one sentence, the overview, each layer's
+ * state against its thresholds, and the problems with their numbers. Exported for the run-summary
+ * overlay, which shows the same summary beside its own statistics.
+ */
+export function AgentRunSummaryView({ summary, pending, markdown }: { summary: RunSummary; pending?: boolean; markdown?: string }): React.JSX.Element {
+  const [openIds, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const toggle = (id: string): void =>
+    setOpen((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  const showFinding = (id: string): void => {
+    setOpen((s) => new Set(s).add(id));
+    requestAnimationFrame(() => document.getElementById(`finding-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  };
+  return (
+    <div className="agent-summary" data-testid="agent-run-summary">
+      <div className="agent-summary-head">
+        <span className={`agent-verdict verdict-${summary.verdict}`} data-testid="agent-verdict">
+          {verdictLabel(summary.verdict)}
+        </span>
+        <b className="grow">{summary.scenario || summary.run_id}</b>
+        <span className="faint mono">
+          {clock(summary.t_s)} / {clock(summary.t_end_s)}
+        </span>
+      </div>
+      <Markdown text={summary.overview} onFinding={showFinding} />
+      {pending ? <div className="faint agent-working">The agent is writing its overview…</div> : null}
+      {summary.overview_note ? <div className="faint">{summary.overview_note}</div> : null}
+      <div className="agent-layers" role="list" aria-label="Each layer against its thresholds">
+        {summary.layers.map((l) => (
+          <div key={l.layer} role="listitem" className={`agent-layer-chip state-${l.state}`} title={l.findings.length > 0 ? l.findings.join(", ") : layerStateLabel(l.state)}>
+            <span className="agent-layer-name">{l.title}</span>
+            <span className="agent-layer-state">{layerStateLabel(l.state)}</span>
+          </div>
+        ))}
+      </div>
+      {summary.problems.length > 0 ? (
+        <div className="agent-layer">
+          <div className="agent-layer-title">Problems, most severe first</div>
+          {summary.problems.map((f) => (
+            <FindingCard key={f.id} f={f} open={openIds.has(f.id)} onToggle={() => toggle(f.id)} />
+          ))}
+        </div>
+      ) : null}
+      <div className="agent-report-foot faint">
+        Overview by {summary.overview_by === "analyst" ? "the deterministic analyst" : summary.overview_by}; every number is the analyst&apos;s, judged against the cited
+        thresholds.
+        {markdown ? (
+          <button type="button" className="link-button" onClick={() => void navigator.clipboard?.writeText(markdown)} title="Copy the summary as Markdown">
+            Copy as Markdown
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ObservationLine({ o }: { o: Observation }): React.JSX.Element {
+  return (
+    <div className={`agent-obs kind-${o.kind}`} data-testid="agent-observation">
+      <span className={`sev-dot sev-${o.severity}`} aria-label={o.severity} />
+      <span className="mono faint agent-obs-t">{clock(o.t_s)}</span>
+      <span className="grow">{plain(o.text)}</span>
+    </div>
+  );
+}
+
+/** What the always-on agent is saying about the run on screen, and its summary of the last one. */
+function AgentLive(): React.JSX.Element | null {
+  const available = useAgentWatch((s) => s.available);
+  const page = useAgentWatch((s) => s.page);
+  const all = useAgentWatch((s) => s.observations);
+  const summary = useAgentWatch((s) => s.summary);
+  const summaryMarkdown = useAgentWatch((s) => s.summaryMarkdown);
+  const pending = useAgentWatch((s) => s.overviewPending);
+  const [showSummary, setShowSummary] = useState(true);
+  if (available !== true || page === null) return null;
+  const current = observationsOf(all, page.run_id, page.generation);
+  const watching = page.phase === "watching" || page.phase === "analysing";
+  const summaryIsCurrent = summary !== null && summary.run_id === page.run_id && summary.generation === page.generation;
+  return (
+    <section className="agent-live" data-testid="agent-live" aria-label="The agent's notes on the run">
+      <div className="agent-live-head">
+        <span className={watching ? "agent-live-dot on" : "agent-live-dot"} />
+        <b>{watching ? (page.phase === "analysing" ? "Analysing the run" : "Watching the run") : summaryIsCurrent ? "Run finished" : "Waiting for a run"}</b>
+        <span className="grow" />
+        {page.run_id !== null && page.t_end_s > 0 ? (
+          <span className="mono faint">
+            {clock(page.t_s)} / {clock(page.t_end_s)}
+          </span>
+        ) : null}
+      </div>
+      {page.phase === "idle" ? (
+        <div className="dim">Press Run: the agent follows every run by itself, notes congestion, delivery drops, revocations and saturated queues as they happen, and sums the run up at the end.</div>
+      ) : null}
+      {current.length > 0 ? (
+        <div className="agent-obs-list">
+          {current.map((o) => (
+            <ObservationLine key={o.seq} o={o} />
+          ))}
+        </div>
+      ) : null}
+      {summary !== null ? (
+        <div className="agent-last-run">
+          <button type="button" className="link-button" onClick={() => setShowSummary(!showSummary)} aria-expanded={showSummary}>
+            {summaryIsCurrent ? "Run summary" : "Summary of the previous run"} {showSummary ? "▾" : "▸"}
+          </button>
+          {showSummary ? <AgentRunSummaryView summary={summary} pending={pending} markdown={summaryMarkdown} /> : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function JobBody({ view, turn }: { view: JobView; turn: Turn }): React.JSX.Element {
   return (
     <div className="agent-job">
@@ -353,16 +478,19 @@ export function AgentPanel(): React.JSX.Element {
             {statusError}
           </div>
         ) : status && !model ? (
-          <div className="note info" data-testid="agent-no-key">
-            <strong>No model connected.</strong> {status.how_to_add_key}
-          </div>
+          <details className="note info" data-testid="agent-no-key">
+            <summary>
+              <strong>No language model connected.</strong> The agent still watches every run; its notes and summaries come from the deterministic analyst.
+            </summary>
+            {status.how_to_add_key}
+          </details>
         ) : null}
+        <AgentLive />
         {turns.length === 0 ? (
           <div className="agent-empty">
             <p className="dim">
-              Say what to simulate and what to find out. The agent picks a shipped scenario, changes only what you ask for, checks it with the engine&apos;s
-              own loader, runs it and reports the bottlenecks in every layer — traffic, channel, queues, delivery, latency, security and privacy — with the
-              numbers behind each.
+              Or ask for a simulation in plain words. The agent picks a ready-made scenario, changes only what you ask for, checks it with the engine&apos;s
+              own loader, runs it and reports the bottlenecks in every layer, with the numbers behind each.
             </p>
             {model ? (
               <div className="agent-suggestions">

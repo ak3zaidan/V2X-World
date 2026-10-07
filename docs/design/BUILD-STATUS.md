@@ -349,6 +349,51 @@ evaluate certain protocols."
   another statistic. The summary's whole-run figures are means of the run's windows, not
   pooled estimates; it says so.
 
+## 2026-10-06 — the agent, always on (agent track)
+
+The owner asked for the agent to turn on whenever a simulation starts. What is built:
+
+- **The watcher** (`crates/v2xw-copilot/src/watch.rs`): a pure state machine fed `run.status`
+  answers and the run's evidence. It adopts a run when it moves (a server started paused at
+  t = 0 is not a run yet), runs the deterministic analyst over the evidence read so far and
+  posts a plain sentence when a warning-or-worse finding appears, rises a level or clears;
+  names a trend when the latest bin of `cbr` or `pdr` crosses the analyst's own threshold
+  (`Thresholds::cbr_target`, `prr_range_level`) before the whole-run value does; and
+  announces rises in the backend's `ma.revocation_decisions` and `ee.vehicles_starved`
+  counters. Every number in a note is the analyst's or the backend's. When the run ends it
+  writes a `RunSummary`: a verdict (healthy / needs attention / unhealthy), each of the nine
+  layers against its thresholds or "not measured", the problems most severe first, and an
+  overview. With a model key the overview is Claude's (one request, no tools), and it is
+  discarded for the analyst's own if it states a number the analysis does not contain.
+- **The host** (`crates/v2xw-cli/src/agent_host.rs`): `v2xw serve` starts the watcher
+  thread with the engine, unasked: a status read a second, an evidence read every six
+  seconds while a run moves. New endpoints `GET /agent/watch?after=` (the feed, the phase,
+  the progress, whether a model is attached) and `GET /agent/summary` (the last finished
+  run's summary and its Markdown) — the latter is what the run-summary overlay reads.
+- **`find_settings`**, a new agent tool: searches the engine's own published settings
+  surface by words, so the model finds a key (attackers, demand, radio) instead of guessing.
+- **The Studio**: the header's Agent button carries a live dot while a run is watched, a
+  count of unseen warnings, and a short note under the header for each new warning and for
+  the run's end; the agent panel opens on the live notes and the run summary
+  (`AgentRunSummaryView`, exported for the overlay).
+
+**The agent lives in `v2xw serve`, not in `v2xw-server`.** `v2xw-copilot` depends on
+`v2xw-server` for the method list and the OpenRPC document, so the `v2xw-server` binary cannot
+carry it without a dependency cycle. Start the engine with
+`./target/release/v2xw serve --scenario <file> --port 8787 --paused --speed 0` (same flags);
+the page says exactly this when the engine it is connected to has no agent.
+
+Measured, once each: `v2xw-copilot` lib `watch::` and `agent::tests` (13 pass, among them
+each live-note kind shown silent on a quiet run and firing on its constructed cause, and a
+model overview with an invented number discarded), `tests/agent.rs` (5: a scripted model
+configures, runs, analyses, then a follow-up compares), `v2xw-cli tests/agent_host.rs` (2:
+the watcher follows a fixture run to its summary with no request), the Studio's
+`test/agent.test.ts` (12) and its typecheck. One Playwright pass on a debug `v2xw serve`
+with the procedural grid at 1,800 veh/h and `metrics: [all]`: the header note appeared at the
+run's end, the panel showed the notes and a "Needs attention" summary (one finding,
+`channel.weak-signal`). Not measured: a run with a model key (no key on this machine), and the
+watcher's load on a long city run.
+
 ## 2026-09-30 — robustness track: a refusal names its setting, nothing flaky, nothing leaks
 
 One engineer, owner of error handling in `crates/v2xw-server` and the engine's loader, the
