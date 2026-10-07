@@ -24,6 +24,7 @@ import {
   notable,
   observationsOf,
   parseMarkdown,
+  plain,
   progressFraction,
   verdictLabel,
   type AgentReport,
@@ -120,7 +121,7 @@ function FindingCard({ f, open, onToggle }: { f: Finding; open: boolean; onToggl
     <div className={`agent-finding sev-${f.severity}`} id={`finding-${f.id}`} data-testid="agent-finding">
       <button type="button" className="agent-finding-head" onClick={onToggle} aria-expanded={open}>
         <span className={`sev-dot sev-${f.severity}`} aria-label={f.severity} />
-        <span className="grow">{f.title}</span>
+        <span className="grow">{plain(f.title)}</span>
         <span className="faint mono">{f.id}</span>
       </button>
       {open ? (
@@ -314,7 +315,7 @@ function ObservationLine({ o }: { o: Observation }): React.JSX.Element {
     <div className={`agent-obs kind-${o.kind}`} data-testid="agent-observation">
       <span className={`sev-dot sev-${o.severity}`} aria-label={o.severity} />
       <span className="mono faint agent-obs-t">{clock(o.t_s)}</span>
-      <span className="grow">{o.text}</span>
+      <span className="grow">{plain(o.text)}</span>
     </div>
   );
 }

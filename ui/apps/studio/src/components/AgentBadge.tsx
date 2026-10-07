@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 
-import { unseenCount, type Observation } from "../lib/agent.js";
+import { plain, unseenCount, type Observation } from "../lib/agent.js";
 import { openPanel } from "../shell/route.js";
 import { useAgentWatch } from "../state/agent.js";
 import { useStudio } from "../state/store.js";
@@ -74,7 +74,7 @@ export function AgentBadge(): React.JSX.Element | null {
             openPanel("agent");
           }}
         >
-          <b>Agent:</b> {note.text}
+          <b>Agent:</b> {plain(note.text)}
         </span>
       ) : null}
     </span>

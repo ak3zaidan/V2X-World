@@ -49,7 +49,16 @@ carry it without a dependency cycle. Start the engine with
 `./target/release/v2xw serve --scenario <file> --port 8787 --paused --speed 0` (same flags);
 the page says exactly this when the engine it is connected to has no agent.
 
-Measured: see the agent track's report for which tests ran; nothing else here is claimed.
+Measured, once each: `v2xw-copilot` lib `watch::` and `agent::tests` (13 pass, among them
+each live-note kind shown silent on a quiet run and firing on its constructed cause, and a
+model overview with an invented number discarded), `tests/agent.rs` (5: a scripted model
+configures, runs, analyses, then a follow-up compares), `v2xw-cli tests/agent_host.rs` (2:
+the watcher follows a fixture run to its summary with no request), the Studio's
+`test/agent.test.ts` (12) and its typecheck. One Playwright pass on a debug `v2xw serve`
+with the procedural grid at 1,800 veh/h and `metrics: [all]`: the header note appeared at the
+run's end, the panel showed the notes and a "Needs attention" summary (one finding,
+`channel.weak-signal`). Not measured: a run with a model key (no key on this machine), and the
+watcher's load on a long city run.
 
 ## 2026-09-30 — robustness track: a refusal names its setting, nothing flaky, nothing leaks
 

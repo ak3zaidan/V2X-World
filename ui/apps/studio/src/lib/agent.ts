@@ -452,6 +452,11 @@ export function unseenCount(all: readonly Observation[], seenSeq: number): numbe
   return all.filter((o) => o.seq > seenSeq && (o.severity === "warning" || o.severity === "critical")).length;
 }
 
+/** A note's text without its Markdown code marks, for one plain line. */
+export function plain(s: string): string {
+  return s.replace(/`/g, "");
+}
+
 /** "1:05" for 65 simulated seconds. */
 export function clock(tS: number): string {
   if (!Number.isFinite(tS) || tS < 0) return "0:00";
