@@ -896,8 +896,15 @@ impl MutationOperator for RandomMutation {
             // 0 — the attack family: pick a kind, which moves the family axis. The main
             // coverage driver.
             0 => {
-                let index = rng.below(AttackKind::ALL.len() as u64) as usize;
-                let kind = AttackKind::ALL[index];
+                // Only the kinds the engine puts on the air: it refuses the others by
+                // name rather than count lies no receiver could hear.
+                let kinds: Vec<AttackKind> = AttackKind::ALL
+                    .iter()
+                    .copied()
+                    .filter(|k| v2xw_engine::phase2::renders_on_air(*k))
+                    .collect();
+                let index = rng.below(kinds.len() as u64) as usize;
+                let kind = kinds[index];
                 child.insert(
                     "threats.attackers[0].id".to_string(),
                     json!(format!("{ATTACKER_PREFIX}{}", kind.as_str())),
@@ -1096,7 +1103,7 @@ pub fn default_base_genomes() -> Vec<Genome> {
     let mut out = Vec::new();
     for (kind, rate, fraction) in [
         (AttackKind::ConstPos, 1500.0, 0.05),
-        (AttackKind::Sybil, 6000.0, 0.10),
+        (AttackKind::InvalidSignature, 6000.0, 0.10),
         (AttackKind::SlowDrift, 24000.0, 0.25),
     ] {
         let mut genome = Genome::new();

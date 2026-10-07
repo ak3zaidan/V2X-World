@@ -59,8 +59,7 @@ fn heading_with(params: DetectorParams, trace: &[ObservedMessage]) -> (f64, bool
 }
 
 #[test]
-fn a_reversed_heading_at_city_speed_is_caught_by_the_bounded_check_and_missed_by_the_legacy_one()
-{
+fn a_reversed_heading_at_city_speed_is_caught_by_the_bounded_check_and_missed_by_the_legacy_one() {
     // 10.5 m/s (38 km/h) straight along x, claiming the opposite heading throughout.
     let trace: Vec<ObservedMessage> = (0..12)
         .map(|i| claim(i, 10.5 * i as f64, 0.0, 10.5, core::f64::consts::PI))
@@ -112,13 +111,7 @@ fn a_turn_is_not_read_as_a_heading_lie() {
     let (x0, y0) = (24.0, -r);
     for k in 1..=3u64 {
         let a = core::f64::consts::FRAC_PI_2 * k as f64 / 3.0;
-        trace.push(claim(
-            3 + k,
-            x0 + r * a.sin(),
-            y0 + r * a.cos(),
-            8.0,
-            -a,
-        ));
+        trace.push(claim(3 + k, x0 + r * a.sin(), y0 + r * a.cos(), 8.0, -a));
     }
     let (xe, ye) = (x0 + r, y0);
     for k in 1..=5u64 {

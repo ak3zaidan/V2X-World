@@ -315,6 +315,38 @@ pub const CRL_FETCH_INTERVAL_S: f64 = 3_600.0;
 /// per unit per five seconds) while reaching a vehicle that drives past.
 pub const CRL_BROADCAST_INTERVAL_S: f64 = 5.0;
 
+/// Whether the engine puts an attack kind on the air; a scenario naming one it does not
+/// is refused (see [`unrendered`]).
+#[must_use]
+pub fn renders_on_air(kind: AttackKind) -> bool {
+    unrendered(kind).is_none()
+}
+
+/// Why the engine cannot render an attack kind on the air, or `None` when it can.
+///
+/// The host applies an attacker's claimed position, speed, heading and generation time,
+/// a forged signature and a certificate outside its validity window. What the kinds below
+/// change is none of those, and an attack that is counted as lying while nothing it does
+/// reaches a receiver reads as an attack nobody detected; so they are refused by name.
+fn unrendered(kind: AttackKind) -> Option<&'static str> {
+    match kind {
+        AttackKind::DoS | AttackKind::DoSRandom => Some(
+            "a flood is extra transmissions per generation interval, and the host sends one \
+             frame per generation",
+        ),
+        AttackKind::Sybil => Some(
+            "its ghost identities need concurrent pseudonyms the host does not hand an attacker",
+        ),
+        AttackKind::VruImpersonation | AttackKind::VruPositionSpoof => Some(
+            "it changes the declared station type, which a BSM does not carry; the host does \
+             not switch a vehicle to sending PSMs",
+        ),
+        AttackKind::FakeHazard => Some("the host does not send an attacker's event messages"),
+        AttackKind::SelectiveDrop => Some("a vehicle here relays nothing for it to drop"),
+        _ => None,
+    }
+}
+
 /// How far a receiver's map search looks for a road, metres: a claim farther than this
 /// from every motor-vehicle lane scores as this far, which is several times the map
 /// check's tolerance, so the cap never turns a firing check into a quiet one.
@@ -1241,6 +1273,16 @@ impl Phase2 {
                             ),
                         )
                     })?;
+            if let Some(why) = unrendered(kind) {
+                return Err(conflict(
+                    "threats.attackers[].id",
+                    format!(
+                        "{} is in the catalogue, but this engine does not put it on the air \
+                         yet: {why}. Running it would count lies nobody could hear.",
+                        a.id
+                    ),
+                ));
+            }
             let params = attacker_params(kind, &a.params)?;
             let horizon = (scenario.time.duration_s * 1e9).round().max(0.0) as u64;
             let (from, to) = match (waves.get(&population), &a.schedule) {

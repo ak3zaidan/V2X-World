@@ -55,7 +55,10 @@ fn a_claim_whose_confidence_disc_reaches_the_road_is_not_off_it() {
     let (legacy_peak, legacy_fired) = off_road(false, &t);
     let (bounded_peak, bounded_fired) = off_road(true, &t);
     println!("18 m: legacy {legacy_peak:.2}, bounded {bounded_peak:.2}");
-    assert!(legacy_fired, "the legacy check was expected to fire at 18 m / 15 m");
+    assert!(
+        legacy_fired,
+        "the legacy check was expected to fire at 18 m / 15 m"
+    );
     assert!(
         !bounded_fired,
         "an 18 m claim stating 4.4 m confidence was scored off the road ({bounded_peak:.2})"

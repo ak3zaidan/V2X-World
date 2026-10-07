@@ -225,7 +225,11 @@ impl CorroboratedMa {
         }
         let (from, to) = self.slot_range(at);
         let in_window = |set: Option<&BTreeSet<(u64, String)>>| {
-            set.map_or(0, |s| s.iter().filter(|(slot, _)| *slot >= from && *slot <= to).count())
+            set.map_or(0, |s| {
+                s.iter()
+                    .filter(|(slot, _)| *slot >= from && *slot <= to)
+                    .count()
+            })
         };
         in_window(self.filed_by.get(reporter)) <= self.params.report_budget as usize
             && in_window(self.reported.get(reporter)) < self.params.reputation_max as usize
@@ -319,7 +323,9 @@ impl CorroboratedMa {
         let slot = at / self.slot_ns();
         // Pairs older than two windows can never be inside a window again that a later
         // decision reads.
-        let keep_from = self.slot_range(at.saturating_sub(secs_to_ns(self.params.window_s))).0;
+        let keep_from = self
+            .slot_range(at.saturating_sub(secs_to_ns(self.params.window_s)))
+            .0;
         let filed = self
             .filed_by
             .entry(r.reporter_cert_digest.clone())

@@ -517,6 +517,11 @@ struct FrameState {
     /// The application payload a Phase 2 message carries, for the two messages the
     /// revocation path needs and no node runtime generates.
     app: Option<AppPayload>,
+    /// Whether the frame's signature verifies. `false` only for an attacker's forged or
+    /// tampered message, or one signed under a certificate outside its validity window;
+    /// the SPDU's signature octets are then corrupted, so a receiver that checks the bytes
+    /// finds it out by checking them, and one that has no bytes reads this field.
+    signature_valid: bool,
     /// The signed SPDU as it goes on the air, when the node's own generator built one.
     ///
     /// `None` for the two frames the engine synthesises on a node's behalf (the
@@ -3181,6 +3186,7 @@ impl Engine {
             belief.map_or(0.0, |b| b.heading_rad),
         );
         let mut signature_valid = true;
+        let mut claimed_generation = tx.generation_time;
         if self.phase2.as_ref().is_some_and(|p| p.is_attacker(node)) {
             let actor = self
                 .node_actor
@@ -3245,10 +3251,26 @@ impl Engine {
                     e.speed_mps,
                     e.heading_rad,
                 );
-                signature_valid = e.signature_valid;
+                // What the attacker's edit does to the envelope, rendered on the air: a
+                // forged signature, a certificate outside its validity window (the
+                // receiver's IEEE 1609.2 validity check refuses it as surely as a bad
+                // signature), and the generation time the message claims (a delayed,
+                // replayed or out-of-order message).
+                let window_forged = (e.cert_valid_from, e.cert_valid_to) != cert
+                    && !(e.cert_valid_from..=e.cert_valid_to).contains(&believed);
+                signature_valid = e.signature_valid && !window_forged;
+                // The model edits the time it was handed (`believed`); its edit moves the
+                // message's own stamp by the same amount, so an attack that leaves the
+                // time alone leaves the frame's generation time exactly as it was.
+                claimed_generation = if e.generation_time >= believed {
+                    tx.generation_time
+                        .saturating_add(e.generation_time - believed)
+                } else {
+                    tx.generation_time
+                        .saturating_sub(believed - e.generation_time)
+                };
             }
         }
-        let _ = signature_valid;
         // The passive privacy observer hears the safety frame as it goes on the air.
         // Only what a sniffer hears, when the scenario limits the eavesdropper's coverage:
         // where the transmitter physically is decides that, as it decides reception.
@@ -3310,7 +3332,7 @@ impl Engine {
         {
             p.note_broadcast_accuracy(
                 crate::phase2::digest_bytes(&cred.digest),
-                tx.generation_time,
+                claimed_generation,
                 crate::phase2::broadcast_accuracy_95_m(tx.msg_type, b),
             );
         }
@@ -3432,7 +3454,7 @@ impl Engine {
             msg_type: tx.msg_type,
             signer: tx.signer.clone(),
             full_certificate: tx.full_certificate,
-            generation_time: tx.generation_time,
+            generation_time: claimed_generation,
             claimed_pos: claim.0,
             claimed_speed_mps: claim.1,
             claimed_heading_rad: claim.2,
@@ -3448,7 +3470,17 @@ impl Engine {
             claimed_cert_period,
             claimed_linkage,
             app,
-            spdu: tx.signed.as_ref().map(|f| f.spdu.clone()),
+            signature_valid,
+            spdu: tx.signed.as_ref().map(|f| {
+                let mut spdu = f.spdu.clone();
+                // The signature is the SPDU's last field (IEEE 1609.2 SignedData), so
+                // flipping its final octet leaves the frame parseable and the signature
+                // wrong.
+                if !signature_valid && let Some(last) = spdu.last_mut() {
+                    *last ^= 0x01;
+                }
+                spdu
+            }),
             // Read from the node's own `SignedFrame`, not recomputed here: the split
             // between payload and envelope is the security stack's answer and the
             // engine has no business having a second one.
@@ -6524,10 +6556,10 @@ fn rx_frame(state: &FrameState, bytes: u32) -> RxFrame {
         claimed_heading_rad: state.claimed_heading_rad,
         claimed_generation_time: state.generation_time,
         full_certificate: state.full_certificate,
-        // Modelled crypto: the engine knows the sender's key is genuine, so the signature
-        // is valid. The receiver only learns it by *spending* the verification time, which
-        // `ObuRuntime::step` charges against its servers.
-        signature_valid: true,
+        // Modelled crypto: the engine knows whether the sender's signature is genuine (it
+        // is, unless an attacker forged it). The receiver only learns it by *spending* the
+        // verification time, which `ObuRuntime::step` charges against its servers.
+        signature_valid: state.signature_valid,
         claimed_cert_period: state.claimed_cert_period,
         claimed_linkage: state.claimed_linkage,
         spdu: state.spdu.clone(),

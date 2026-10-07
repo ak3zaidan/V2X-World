@@ -1142,7 +1142,14 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "threats.attackers",
         status: Status::Wired,
-        note: "Attacker populations: which model, how many, and when they are active.",
+        note: "Attacker populations: which model, how many, and when they are active. \
+               On the air the engine renders an attacker's claimed position, speed, \
+               heading and generation time, a forged signature (the SPDU's signature \
+               octets are corrupted, so a receiver checking the bytes finds it) and a \
+               certificate outside its validity window. DoS, DoSRandom, Sybil, \
+               VruImpersonation, VruPositionSpoof, FakeHazard and SelectiveDrop change \
+               none of those and are refused by name rather than counted as lies nobody \
+               could hear.",
     },
     KeyStatus {
         path: "threats.attackers[].params",

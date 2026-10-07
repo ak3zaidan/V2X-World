@@ -708,7 +708,13 @@ impl Legacy12 {
     /// Jemaa, Cincilla, Urien, *CaTch: a confidence range tolerant misbehavior detection
     /// approach*, IEEE WCNC 2019): a claim is inconsistent only if no pair of positions
     /// inside the stated confidence ranges makes it consistent.
-    fn heading_bounded(&self, history: &[Fix], m: &ObservedMessage, t: SimTime, f: &mut Fingerprint) {
+    fn heading_bounded(
+        &self,
+        history: &[Fix],
+        m: &ObservedMessage,
+        t: SimTime,
+        f: &mut Fingerprint,
+    ) {
         let p = &self.params;
         if m.claimed_speed_mps <= p.heading_min_speed_mps {
             return;
