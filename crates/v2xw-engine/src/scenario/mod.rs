@@ -48,7 +48,7 @@ pub use schema::{
     Actors, Apps, Attacker, Backend, BackendEntity, BackendLink, BuildingOptions, CURRENT_SCHEMA,
     CryptoModeSpec, DemandSpec, Detection, DilationWindow, Experiment, ExporterSpec, Focus,
     FocusRegion, Messages, Meta, ModelChoice, Net, Nodes, PseudonymChangeSpec, Radio, RadioTiers,
-    Rat, Rsu, Scenario, Security, SignerIdPolicySpec, TerrainOptions, Threats, Time, TimelineItem,
+    Rat, Rsu, RsuPlacement, Scenario, Security, SignerIdPolicySpec, TerrainOptions, Threats, Time, TimelineItem,
     TimelineKind, VehicleClassSpec, Vehicles, Vru, Weather, WorldSpec,
 };
 pub use validate::{preflight, resolve_path, validate};
@@ -115,7 +115,8 @@ impl Scenario {
     ///
     /// # Errors
     /// [`ScenarioError::Parse`] if the document does not match the schema.
-    pub fn from_document(doc: Value) -> Result<Scenario> {
+    pub fn from_document(mut doc: Value) -> Result<Scenario> {
+        crate::city::fill_world_from_city(&mut doc)?;
         serde_json::from_value(doc).map_err(|e| {
             EngineError::Scenario(ScenarioError::Parse {
                 path: "<document>".to_string(),
@@ -204,6 +205,7 @@ impl Scenario {
             },
             seed: 0x5EED,
             time: Time::default(),
+            city: None,
             world: schema::WorldSpec {
                 source: v2xw_world::WorldSourceSpec::procedural(
                     "world/source/procedural-grid",

@@ -41,6 +41,11 @@ pub enum ClosureTarget {
     Edge(u32),
     /// Every edge whose street name is this one, ignoring case: `"street:West 42nd Street"`.
     Street(String),
+    /// `"auto"`: a side street of whatever city the run is on — the named tertiary,
+    /// residential or unclassified street nearest the middle of the map, closed along its
+    /// length. What a scenario written for no city in particular closes
+    /// ([`crate::city`]).
+    Auto,
 }
 
 impl ClosureTarget {
@@ -49,7 +54,7 @@ impl ClosureTarget {
     /// # Errors
     /// A sentence saying what the accepted spellings are.
     pub fn parse(value: &Value) -> Result<Self, String> {
-        const HINT: &str = "write a lane id, \"lane:<id>\", \"edge:<id>\" or \"street:<name>\"";
+        const HINT: &str = "write a lane id, \"lane:<id>\", \"edge:<id>\", \"street:<name>\" or \"auto\"";
         if let Some(n) = value.as_u64() {
             return u32::try_from(n)
                 .map(ClosureTarget::Lane)
@@ -58,6 +63,9 @@ impl ClosureTarget {
         let Some(text) = value.as_str() else {
             return Err(format!("{value} is not a closure target; {HINT}"));
         };
+        if text.trim() == "auto" {
+            return Ok(ClosureTarget::Auto);
+        }
         let (kind, rest) = text.split_once(':').unwrap_or(("lane", text));
         let rest = rest.trim();
         let id = || {
@@ -95,6 +103,12 @@ impl ClosureTarget {
                     }
                 }
             }
+            ClosureTarget::Auto => {
+                return match auto_street(world) {
+                    Some(name) => ClosureTarget::Street(name).lanes(world),
+                    None => Vec::new(),
+                };
+            }
             ClosureTarget::Street(name) => {
                 let wanted = name.to_lowercase();
                 for edge in world.roads.edges() {
@@ -112,6 +126,47 @@ impl ClosureTarget {
         }
         out.into_iter().collect()
     }
+}
+
+/// The street `"auto"` closes: among the named tertiary, residential and unclassified
+/// edges, the one whose middle is nearest the middle of the map, by name.
+pub fn auto_street(world: &World) -> Option<String> {
+    use v2xw_world::model::RoadClass;
+    let centre = world.bbox.center();
+    let mut best: Option<(f64, u32, String)> = None;
+    for edge in world.roads.edges() {
+        if edge.is_internal()
+            || !matches!(
+                edge.road_class,
+                RoadClass::Tertiary | RoadClass::Residential | RoadClass::Unclassified
+            )
+        {
+            continue;
+        }
+        let name = world.symbols.resolve_optional(edge.name);
+        if name.is_empty() {
+            continue;
+        }
+        let Some(lane) = edge
+            .lanes
+            .iter()
+            .filter_map(|l| world.try_lane(*l))
+            .find(|l| l.kind == LaneKind::Driving)
+        else {
+            continue;
+        };
+        let Some(mid) = lane.centreline.get(lane.centreline.len() / 2) else {
+            continue;
+        };
+        let d = ((mid.x - centre.x).powi(2) + (mid.y - centre.y).powi(2)).sqrt();
+        let better = best
+            .as_ref()
+            .is_none_or(|(bd, bid, _)| d < *bd || (d == *bd && edge.id.index() < *bid));
+        if better {
+            best = Some((d, edge.id.index(), name.to_string()));
+        }
+    }
+    best.map(|(_, _, name)| name)
 }
 
 /// How far a live parameter change reaches.

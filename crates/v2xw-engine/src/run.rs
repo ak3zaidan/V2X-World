@@ -973,6 +973,10 @@ impl Engine {
     /// As [`Engine::build`], less the world import.
     pub fn build_with_world(scenario: Scenario, world: World, build_utc: &str) -> Result<Engine> {
         scenario.validate()?;
+        // A scenario written for any city states its demand per kilometre of driving lane
+        // and its roadside units as a placement; this city's network decides the numbers
+        // (`crate::city`). The run, its manifest and its report see the concrete ones.
+        let scenario = crate::city::adapt_to_world(scenario, &world);
         let mut registry = Registry::new();
         crate::wiring::register_all(&mut registry)?;
 

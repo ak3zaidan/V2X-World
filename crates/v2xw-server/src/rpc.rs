@@ -23,7 +23,7 @@ use crate::run::Run;
 use crate::session::{CameraState, OVERLAYS, Session, overlay_is_gt};
 
 /// Every method name of §6.15, in the order the inventory lists them.
-pub const METHODS: [&str; 33] = [
+pub const METHODS: [&str; 34] = [
     "run.start",
     "run.pause",
     "run.resume",
@@ -46,6 +46,7 @@ pub const METHODS: [&str; 33] = [
     "scenario.save",
     "scenario.load",
     "scenario.list",
+    "cities.list",
     "world.import_osm",
     "world.generate",
     "events.set",
@@ -304,6 +305,7 @@ pub fn dispatch(ctx: &mut Context<'_>, request: &Request) -> Result<Outcome> {
         "scenario.save" => scenario_save(ctx, p),
         "scenario.load" => scenario_load(ctx, p),
         "scenario.list" => scenario_list(ctx, p),
+        "cities.list" => cities_list(ctx, p),
         "world.import_osm" => world_import(ctx, p),
         "world.generate" => world_generate(ctx, p),
         "events.set" => events_set(ctx, p),
@@ -342,11 +344,13 @@ fn run_start(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcome> {
             ));
         }
     };
+    let city = city_param(p)?;
     let outcome = ctx.run.control(Control::Start {
         paused,
         speed,
         seed,
         scenario,
+        city,
     })?;
     let d = ctx.run.descriptor();
     let mut result = json!({
@@ -368,6 +372,50 @@ fn run_start(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcome> {
     ctx.run
         .notify_state(outcome.state, outcome.t_ns, "run.start");
     Ok(Outcome::of(result))
+}
+
+/// `city`: an id from `cities.list`, refused here when the library has no such city.
+fn city_param(p: &Map<String, Value>) -> Result<Option<String>> {
+    match p.get("city") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(id)) if v2xw_engine::city::find(id).is_some() => Ok(Some(id.clone())),
+        Some(Value::String(id)) => Err(ServerError::param(
+            "/city",
+            &format!("`{id}` is not a city in the library"),
+            "pick an id from cities.list",
+        )),
+        Some(_) => Err(ServerError::param(
+            "/city",
+            "must be a city id",
+            "pass e.g. \"houston\"; cities.list lists them",
+        )),
+    }
+}
+
+/// `cities.list`: the city library, every city with whether its extract is on this
+/// machine, and the city the running scenario is on.
+fn cities_list(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcome> {
+    let mut out = v2xw_engine::city::list_json();
+    let current = |doc: &Value| {
+        v2xw_engine::Scenario::from_document(doc.clone())
+            .ok()
+            .and_then(|s| s.current_city().map(|c| c.id.clone()))
+    };
+    let d = ctx.run.descriptor();
+    out["current"] = json!(current(&d.scenario));
+    out["staged"] = json!(ctx.run.staged().and_then(|s| current(&s.document)));
+    if let Some(q) = text(p, "query").map(str::to_lowercase).filter(|q| !q.is_empty())
+        && let Some(list) = out.get_mut("cities").and_then(Value::as_array_mut)
+    {
+        list.retain(|c| {
+            ["id", "name", "state", "state_name"].iter().any(|k| {
+                c.get(*k)
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| v.to_lowercase().contains(&q))
+            })
+        });
+    }
+    Ok(Outcome::of(out))
 }
 
 /// `seed`: a non-negative integer, or a decimal or `0x`-hexadecimal string — the two
@@ -1326,6 +1374,11 @@ fn scenario_save(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcom
 }
 
 fn scenario_load(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcome> {
+    let city = city_param(p)?;
+    // `{city}` alone: the scenario the next run would use, on that city.
+    if let (None, Some(city)) = (text(p, "path"), city.as_ref()) {
+        return staged_outcome(ctx.run.stage(StageRequest::City(city.clone()))?);
+    }
     let Some(path) = text(p, "path") else {
         return Err(ServerError::param(
             "/path",
@@ -1347,7 +1400,13 @@ fn scenario_load(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcom
     }
     // A live engine stages the preset for the next run, exactly as `scenario.set` stages
     // a document; the form then shows it, and Run runs it.
-    match ctx.run.stage(StageRequest::Preset(path.to_string())) {
+    let staged = ctx.run.stage(StageRequest::Preset(path.to_string()));
+    // `{path, city}`: the preset, then the city — the order the Studio's picker asks them.
+    let staged = match (staged, city) {
+        (Ok(_), Some(city)) => ctx.run.stage(StageRequest::City(city)),
+        (other, _) => other,
+    };
+    match staged {
         Ok(staged) => Ok(Outcome::of(json!({
             "hash": staged.hash,
             "valid": staged.errors.is_empty(),
@@ -1361,6 +1420,16 @@ fn scenario_load(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcom
         }),
         Err(e) => Err(e),
     }
+}
+
+fn staged_outcome(staged: crate::engine::Staged) -> Result<Outcome> {
+    Ok(Outcome::of(json!({
+        "hash": staged.hash,
+        "valid": staged.errors.is_empty(),
+        "scenario": staged.document,
+        "errors": staged.errors,
+        "requires_restart": staged.changed,
+    })))
 }
 
 fn scenario_list(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcome> {

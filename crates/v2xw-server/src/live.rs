@@ -4262,6 +4262,7 @@ impl Engine for LiveEngine {
                 speed,
                 seed,
                 scenario,
+                city,
             } => {
                 // §6.6 refuses a start while the run is moving (-32001); the page pauses
                 // first. From any other state the previous kernel is stopped and joined
@@ -4276,6 +4277,11 @@ impl Engine for LiveEngine {
                     Some(ScenarioSource::Preset(id)) => self.load_preset(&id)?,
                     None => self.next_scenario(),
                 };
+                if let Some(city) = city {
+                    next = next
+                        .with_city(&city)
+                        .map_err(|e| ServerError::ScenarioInvalid(vec![scenario_error(&e)]))?;
+                }
                 if let Some(seed) = seed {
                     next.seed = seed;
                 }
@@ -4501,6 +4507,13 @@ impl Engine for LiveEngine {
                 Ok(s) => (Some(s), Vec::new(), None),
                 Err(errors) => (None, errors, Some(doc)),
             },
+            StageRequest::City(id) => {
+                let base = self.next_scenario();
+                match base.with_city(&id) {
+                    Ok(s) => (Some(s), Vec::new(), None),
+                    Err(e) => (None, vec![scenario_error(&e)], Some(running.clone())),
+                }
+            }
             StageRequest::Patch(ops) => {
                 let mut doc = match &self.staged {
                     Some(s) => {

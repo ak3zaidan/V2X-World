@@ -324,6 +324,9 @@ pub enum StageRequest {
     Patch(Vec<Value>),
     /// A preset id or a path, as `scenario.load` names one.
     Preset(String),
+    /// The scenario the next run would otherwise use, on this city of the library
+    /// (`v2xw_engine::Scenario::with_city`).
+    City(String),
 }
 
 /// A scenario an engine is holding for its next run: the answer to `scenario.set`.
@@ -353,6 +356,8 @@ pub enum Control {
         seed: Option<u64>,
         /// The scenario to run instead of the staged or current one.
         scenario: Option<ScenarioSource>,
+        /// The city of the library to run it on, replacing the world it names.
+        city: Option<String>,
     },
     /// `run.pause`.
     Pause,

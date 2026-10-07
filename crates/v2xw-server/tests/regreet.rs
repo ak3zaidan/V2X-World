@@ -34,6 +34,7 @@ fn start(run: &Run) {
         speed: Some(0.0),
         seed: None,
         scenario: None,
+        city: None,
     })
     .expect("start");
 }

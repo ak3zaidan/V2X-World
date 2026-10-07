@@ -181,6 +181,8 @@ fn all_methods() -> Vec<Value> {
                 &[],
                 json!({
                     "scenario": {"oneOf": [{"type": "string"}, {"type": "object"}]},
+                    "city": {"type": "string",
+                             "description": "a cities.list id: run the scenario on that city"},
                     "seed": {"type": "integer", "minimum": 0},
                     "speed": {"type": "number", "minimum": 0, "maximum": 100,
                               "description": "absent keeps the run's current speed (1 on a fresh server)"},
@@ -573,10 +575,13 @@ fn all_methods() -> Vec<Value> {
         ),
         method(
             "scenario.load",
-            "Read a scenario from a file or a preset id.",
+            "Read a scenario from a file or a preset id, optionally on a city of the library; \
+             a city alone puts the next run's scenario on that city.",
             object(
-                &["path"],
+                &[],
                 json!({"path": {"type": "string"},
+                       "city": {"type": "string",
+                                "description": "a cities.list id"},
                        "validate": {"type": "boolean", "default": true}}),
             ),
             object(
@@ -602,6 +607,25 @@ fn all_methods() -> Vec<Value> {
                 json!({"items": {"type": "array", "items": {"type": "object"}}}),
             ),
             &[-32013],
+        ),
+        method(
+            "cities.list",
+            "The city library: every real city a scenario can run on, grouped by state, \
+             with whether its OpenStreetMap extract is on this machine.",
+            object(
+                &[],
+                json!({"query": {"type": "string",
+                                 "description": "keep cities whose name, id or state contains this"}}),
+            ),
+            object(
+                &["cities"],
+                json!({"cities": {"type": "array", "items": {"type": "object"}},
+                       "dropped": {"type": "array", "items": {"type": "object"}},
+                       "current": {"type": ["string", "null"]},
+                       "staged": {"type": ["string", "null"]},
+                       "attribution": {"type": "string"}}),
+            ),
+            &[],
         ),
         method(
             "world.import_osm",

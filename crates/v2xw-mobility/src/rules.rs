@@ -10,6 +10,7 @@
 //! | `urban-us-portland` | permitted after a full stop | ORS 811.360(1)(a): a right turn against a steady red after stopping, unless a sign prohibits it |
 //! | `sumo-german`, `urban-de` | prohibited unless signed | StVO §37(2): only with the green-arrow sign (Grünpfeil) |
 //! | `urban-us` | permitted after a full stop | Uniform Vehicle Code §11-202(c)3 |
+//! | `urban-us-<state>` | permitted after a full stop | the state's code, modelled on UVC §11-202(c)3 (`v2xw_world::jurisdiction`) |
 //! | none, or unknown | prohibited | the conservative default, and the legacy engine's behaviour |
 //!
 //! | Preset | Motorcycle filtering or lane splitting | Source |
@@ -21,9 +22,9 @@
 //! | none, or unknown | prohibited | the New York rule |
 //!
 //! Where filtering is lawful (California, CVC §21658.1; Utah, between stopped vehicles on
-//! roads posted 45 mph or less), a preset would set [`Filtering::BetweenStopped`]; none of
-//! the presets this build knows does, so the engine has no filtering manoeuvre and a
-//! motorcycle keeps its place in a queue.
+//! roads posted 45 mph or less; Montana, Arizona, Colorado), the state's `urban-us-<state>`
+//! preset sets [`Filtering::BetweenStopped`]. The engine has no filtering manoeuvre yet, so
+//! the rule is recorded and a motorcycle still keeps its place in a queue.
 //!
 //! | Preset | Crossing away from a crosswalk or against the signal | Source |
 //! |---|---|---|
@@ -89,7 +90,25 @@ impl TrafficRules {
                 motorcycle_filtering: Filtering::Prohibited,
                 jaywalking_lawful: false,
             },
-            _ => TrafficRules::NEW_YORK_CITY,
+            // A state of the city library (`urban-us-tx`, ...): right turn on red after a
+            // stop everywhere, and the state's own filtering and crossing rules
+            // (`v2xw_world::jurisdiction` cites each).
+            Some(label) => match v2xw_world::jurisdiction::by_label(label) {
+                Some(i) => {
+                    let j = &v2xw_world::jurisdiction::US_JURISDICTIONS[i];
+                    TrafficRules {
+                        right_turn_on_red: true,
+                        motorcycle_filtering: if j.motorcycle_filtering {
+                            Filtering::BetweenStopped
+                        } else {
+                            Filtering::Prohibited
+                        },
+                        jaywalking_lawful: j.jaywalking_lawful,
+                    }
+                }
+                None => TrafficRules::NEW_YORK_CITY,
+            },
+            None => TrafficRules::NEW_YORK_CITY,
         }
     }
 
@@ -144,5 +163,18 @@ mod tests {
         assert!(TrafficRules::of_highway_preset(Some("urban-us-nyc")).jaywalking_lawful);
         assert!(!TrafficRules::of_highway_preset(Some("urban-us-portland")).jaywalking_lawful);
         assert!(!TrafficRules::of_highway_preset(Some("urban-de")).jaywalking_lawful);
+    }
+
+    #[test]
+    fn a_state_preset_carries_that_states_rules() {
+        let tx = TrafficRules::of_highway_preset(Some("urban-us-tx"));
+        assert!(tx.right_turn_on_red);
+        assert_eq!(tx.motorcycle_filtering, Filtering::Prohibited);
+        assert!(!tx.jaywalking_lawful);
+        let ca = TrafficRules::of_highway_preset(Some("urban-us-ca"));
+        assert!(ca.right_turn_on_red);
+        assert_eq!(ca.motorcycle_filtering, Filtering::BetweenStopped);
+        assert!(ca.jaywalking_lawful);
+        assert_eq!(TrafficRules::of_highway_preset(Some("urban-us-zz")), TrafficRules::NEW_YORK_CITY);
     }
 }

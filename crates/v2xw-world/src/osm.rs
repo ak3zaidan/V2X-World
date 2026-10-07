@@ -1992,6 +1992,7 @@ impl WayFamily {
 /// Every row names the source of its speed, because a class default speed is
 /// jurisdiction-specific and silently shipping one is exactly what the project's
 /// no-black-box rule forbids (V4/W1).
+#[derive(Debug, Clone, Copy)]
 struct HighwayDefault {
     /// The tag value.
     key: &'static str,
@@ -2024,8 +2025,7 @@ struct HighwayDefault {
 /// a jurisdiction, and no jurisdiction is a safe guess: whichever preset were the
 /// default would silently be asserted about every extract that did not choose. The
 /// scenario states one, and [`OsmOptions::validate`] refuses the import until it does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum HighwayPreset {
     /// SUMO `netconvert`'s own OSM type map: German free-flow **design** speeds
@@ -2054,16 +2054,65 @@ pub enum HighwayPreset {
     /// 130 km/h advisory speed (Autobahn-Richtgeschwindigkeits-Verordnung), there being no
     /// general limit.
     UrbanDe,
+    /// A US state (or a city that sets its own default) from the city library's table,
+    /// [`crate::jurisdiction::US_JURISDICTIONS`]: the `urban-us-nyc` table with that
+    /// jurisdiction's urban default speed, and 55 mph on an untagged motorway. Its label is
+    /// `urban-us-<key>`, `urban-us-tx` for Texas.
+    UrbanUs(UsJurisdiction),
+}
+
+/// A row of [`crate::jurisdiction::US_JURISDICTIONS`], by position.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct UsJurisdiction(u8);
+
+impl UsJurisdiction {
+    /// The jurisdiction's data.
+    pub const fn data(self) -> &'static crate::jurisdiction::UsJurisdictionData {
+        &crate::jurisdiction::US_JURISDICTIONS[self.0 as usize]
+    }
+}
+
+impl std::fmt::Debug for UsJurisdiction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.data().label)
+    }
+}
+
+/// How many presets there are: the four hand-built ones and one per US jurisdiction.
+const PRESET_COUNT: usize = 4 + crate::jurisdiction::US_JURISDICTIONS.len();
+
+impl Serialize for HighwayPreset {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> core::result::Result<S::Ok, S::Error> {
+        s.serialize_str(self.label())
+    }
+}
+
+impl<'de> Deserialize<'de> for HighwayPreset {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> core::result::Result<Self, D::Error> {
+        let name = String::deserialize(d)?;
+        HighwayPreset::parse(&name).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unknown highway preset {name:?}; expected sumo-german, urban-us-nyc, \
+                 urban-us-portland, urban-de or urban-us-<state> (urban-us-tx, urban-us-ca, ...)"
+            ))
+        })
+    }
 }
 
 impl HighwayPreset {
     /// Every preset, in a stable order.
-    pub const ALL: [HighwayPreset; 4] = [
-        HighwayPreset::SumoGerman,
-        HighwayPreset::UrbanUsNyc,
-        HighwayPreset::UrbanUsPortland,
-        HighwayPreset::UrbanDe,
-    ];
+    pub const ALL: [HighwayPreset; PRESET_COUNT] = {
+        let mut all = [HighwayPreset::SumoGerman; PRESET_COUNT];
+        all[1] = HighwayPreset::UrbanUsNyc;
+        all[2] = HighwayPreset::UrbanUsPortland;
+        all[3] = HighwayPreset::UrbanDe;
+        let mut i = 0;
+        while i < crate::jurisdiction::US_JURISDICTIONS.len() {
+            all[4 + i] = HighwayPreset::UrbanUs(UsJurisdiction(i as u8));
+            i += 1;
+        }
+        all
+    };
 
     /// The preset's stable kebab-case name, as the report, the provenance and a scenario
     /// file spell it.
@@ -2073,12 +2122,21 @@ impl HighwayPreset {
             HighwayPreset::UrbanUsNyc => "urban-us-nyc",
             HighwayPreset::UrbanUsPortland => "urban-us-portland",
             HighwayPreset::UrbanDe => "urban-de",
+            HighwayPreset::UrbanUs(j) => j.data().label,
         }
     }
 
     /// The preset named `name`, or `None`.
     pub fn parse(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|p| p.label() == name)
+    }
+
+    /// The US jurisdiction's data, for an `urban-us-<state>` preset.
+    pub const fn us_jurisdiction(self) -> Option<&'static crate::jurisdiction::UsJurisdictionData> {
+        match self {
+            HighwayPreset::UrbanUs(j) => Some(j.data()),
+            _ => None,
+        }
     }
 
     /// Where this preset's numbers come from, for the model card and the provenance.
@@ -2102,23 +2160,39 @@ impl HighwayPreset {
                  325.1 (walking pace), Autobahn-Richtgeschwindigkeits-Verordnung (130 km/h \
                  advisory)"
             }
+            HighwayPreset::UrbanUs(j) => j.data().urban_source,
         }
     }
 
     /// The table this preset selects.
-    const fn table(self) -> &'static [HighwayDefault] {
+    fn table(self) -> Vec<HighwayDefault> {
         match self {
-            HighwayPreset::SumoGerman => SUMO_GERMAN_TABLE,
-            HighwayPreset::UrbanUsNyc => URBAN_US_NYC_TABLE,
-            HighwayPreset::UrbanUsPortland => URBAN_US_PORTLAND_TABLE,
-            HighwayPreset::UrbanDe => URBAN_DE_TABLE,
+            HighwayPreset::SumoGerman => SUMO_GERMAN_TABLE.to_vec(),
+            HighwayPreset::UrbanUsNyc => URBAN_US_NYC_TABLE.to_vec(),
+            HighwayPreset::UrbanUsPortland => URBAN_US_PORTLAND_TABLE.to_vec(),
+            HighwayPreset::UrbanDe => URBAN_DE_TABLE.to_vec(),
+            HighwayPreset::UrbanUs(j) => URBAN_US_NYC_TABLE
+                .iter()
+                .map(|row| us_state_row(*row, j))
+                .collect(),
         }
     }
 
     /// The row for a `highway=*` value, or `None` if this importer does not model it
     /// (`construction`, `proposed`, `raceway`, `platform`, …).
-    fn row(self, value: &str) -> Option<&'static HighwayDefault> {
-        self.table().iter().find(|d| d.key == value)
+    fn row(self, value: &str) -> Option<HighwayDefault> {
+        match self {
+            HighwayPreset::SumoGerman => SUMO_GERMAN_TABLE.iter().find(|d| d.key == value).copied(),
+            HighwayPreset::UrbanUsNyc => URBAN_US_NYC_TABLE.iter().find(|d| d.key == value).copied(),
+            HighwayPreset::UrbanUsPortland => {
+                URBAN_US_PORTLAND_TABLE.iter().find(|d| d.key == value).copied()
+            }
+            HighwayPreset::UrbanDe => URBAN_DE_TABLE.iter().find(|d| d.key == value).copied(),
+            HighwayPreset::UrbanUs(j) => URBAN_US_NYC_TABLE
+                .iter()
+                .find(|d| d.key == value)
+                .map(|row| us_state_row(*row, j)),
+        }
     }
 
     /// Every distinct citation the preset's rows carry, in table order.
@@ -2141,6 +2215,28 @@ impl HighwayPreset {
 ///
 /// They are walking and riding paces, not legal limits, so they are the same in every
 /// preset: a jurisdiction does not post a speed limit on a staircase.
+/// A row of the `urban-us-nyc` table restated for a US jurisdiction: its urban default in
+/// place of New York City's 25 mph, 55 mph on an untagged motorway, and the walking and
+/// cycling rows unchanged.
+fn us_state_row(row: HighwayDefault, j: UsJurisdiction) -> HighwayDefault {
+    let data = j.data();
+    if row.speed_source == NY_55 {
+        HighwayDefault {
+            speed_mps: 55.0 * crate::jurisdiction::MPH,
+            speed_source: crate::jurisdiction::US_MOTORWAY_55,
+            ..row
+        }
+    } else if row.speed_source == NYC_25 {
+        HighwayDefault {
+            speed_mps: data.urban_mps(),
+            speed_source: data.urban_source,
+            ..row
+        }
+    } else {
+        row
+    }
+}
+
 const PACE_SOURCE: &str = "walking and cycling pace convention of 04-models.md §2.5, not \
                            a posted limit (5 km/h on the flat, 0.5 m/s on steps)";
 

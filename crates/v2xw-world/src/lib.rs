@@ -72,6 +72,7 @@ pub mod dem;
 pub mod error;
 pub mod hash;
 pub mod index;
+pub mod jurisdiction;
 pub mod los;
 pub mod model;
 pub mod osm;
