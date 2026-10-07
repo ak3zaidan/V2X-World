@@ -234,7 +234,11 @@ impl VruSafetyProvider {
             )
             .with_dims([Dim::T])
             .with_source(cards::design("08-measurement-and-data.md §2.5 (traffic and safety)"))
-            .with_min_samples(1),
+            .with_min_samples(1)
+            .not_accounting_for(
+                "a crossing at an unmarked junction leg mapped without a crossing way, which \
+                 is on a lane",
+            ),
         ]
     }
 
