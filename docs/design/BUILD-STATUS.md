@@ -29,7 +29,7 @@ city-scale checks) runs `netval-report` and `traffic_validation` and writes
 again with an injected fault that must turn it red; a check its fault cannot turn red is
 reported as such (`CANNOT FAIL` / *pass, not proved*), never as a pass.
 
-### Network: 45 checks
+### Network: 45 checks — 44 pass and are proved able to fail; NET-03 fails (another track's defect)
 
 New this round: **PHY-14** (the 802.11 convolutional code's distance spectrum recomputed
 from its generator polynomials and puncturing patterns by a trellis search, against the
