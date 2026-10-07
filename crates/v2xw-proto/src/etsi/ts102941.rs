@@ -153,6 +153,9 @@ pub struct EtsiParams {
     /// The hybrid post-quantum scheme every authority and station signs with, `None` for
     /// ECDSA P-256 alone (`security.signature`; `crate::hybrid`).
     pub hybrid: Option<crate::hybrid::HybridScheme>,
+    /// The post-quantum KEM encryption to the EA, AA and stations uses, `None` for ECIES
+    /// alone (`security.kem`; `crate::hybrid::KemSpec`).
+    pub kem: Option<crate::hybrid::KemSpec>,
 }
 
 impl Default for EtsiParams {
@@ -187,6 +190,7 @@ impl Default for EtsiParams {
             profile: profiles::I9_11950H_WOLFSSL,
             station_profile: profiles::COHDA_MK6_BOTAN,
             hybrid: None,
+            kem: None,
         }
     }
 }
@@ -468,6 +472,9 @@ pub struct EtsiSizes {
     hybrid_pk_bytes: u32,
     /// Under a hybrid scheme, one post-quantum key as a butterfly request uploads it.
     hybrid_key_upload_bytes: u32,
+    /// One encrypted-key structure: 65 B for ECIES, the ML-KEM layout under a post-quantum
+    /// `security.kem` (`crate::hybrid::KemSpec`).
+    enc_key_bytes: u32,
 }
 
 impl EtsiSizes {
@@ -488,6 +495,7 @@ impl EtsiSizes {
             hybrid_sig_bytes: 0,
             hybrid_pk_bytes: 0,
             hybrid_key_upload_bytes: 0,
+            enc_key_bytes: ECIES_P256_ENCRYPTED_KEY_BYTES,
         }
     }
 
@@ -553,6 +561,17 @@ impl EtsiSizes {
             params.report_payload_bytes,
         )
         .with_hybrid(params.hybrid.as_ref())
+        .with_kem(params.kem.as_ref())
+    }
+
+    /// The same sizes with a post-quantum KEM (`security.kem`): every encrypted-key
+    /// structure is the KEM's rather than ECIES's 65 bytes.
+    #[must_use]
+    pub const fn with_kem(mut self, kem: Option<&crate::hybrid::KemSpec>) -> EtsiSizes {
+        if let Some(k) = kem {
+            self.enc_key_bytes = k.wrapped_key_bytes;
+        }
+        self
     }
 
     /// The sizes for a deployment, with the other two framing blocks defaulted from
@@ -580,7 +599,7 @@ impl EtsiSizes {
                 + EC_POINT_COMPRESSED_BYTES
                 + self.subject_attributes_bytes
                 + 2 * self.sig_bytes()
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+                + self.enc_key_bytes,
             "etsi_subject_attributes_bytes",
         )
     }
@@ -591,7 +610,7 @@ impl EtsiSizes {
             self.env_cert()
                 + self.certs.authority.bytes()
                 + self.certs.enrolment.bytes()
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+                + self.enc_key_bytes,
             "envelope(certificate) + EA certificate + enrolment credential + ECIES wrapper",
             STRUCTURE,
         )
@@ -607,7 +626,7 @@ impl EtsiSizes {
                 + AES128_KEY_BYTES
                 + self.subject_attributes_bytes
                 + self.ec_signature_bytes()
-                + ECIES_P256_ENCRYPTED_KEY_BYTES
+                + self.enc_key_bytes
                 + self.hybrid_pk_bytes,
             "etsi_subject_attributes_bytes",
         )
@@ -615,7 +634,7 @@ impl EtsiSizes {
 
     /// The `ecSignature` the AA cannot read: a signed, encrypted `SharedAtRequest` hash.
     const fn ec_signature_bytes(&self) -> u32 {
-        self.env_digest() + SHA256_BYTES + self.sig_bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES
+        self.env_digest() + SHA256_BYTES + self.sig_bytes() + self.enc_key_bytes
     }
 
     /// `AuthorizationValidationRequest`.
@@ -627,7 +646,7 @@ impl EtsiSizes {
                 + AES128_KEY_BYTES
                 + self.subject_attributes_bytes
                 + self.ec_signature_bytes()
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+                + self.enc_key_bytes,
             "etsi_subject_attributes_bytes",
         )
     }
@@ -635,7 +654,7 @@ impl EtsiSizes {
     /// `AuthorizationValidationResponse`.
     pub const fn validation_response(&self) -> WireSize {
         WireSize::derived(
-            self.env_cert() + self.certs.authority.bytes() + 1 + ECIES_P256_ENCRYPTED_KEY_BYTES,
+            self.env_cert() + self.certs.authority.bytes() + 1 + self.enc_key_bytes,
             "envelope(certificate) + EA certificate + response code + ECIES wrapper",
             STRUCTURE,
         )
@@ -644,7 +663,7 @@ impl EtsiSizes {
     /// `AuthorizationResponse`: the AT, encrypted to the station.
     pub const fn authorization_response(&self) -> WireSize {
         WireSize::derived(
-            self.env_digest() + self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES,
+            self.env_digest() + self.certs.pseudonym.bytes() + self.enc_key_bytes,
             "envelope(digest) + authorization ticket + ECIES wrapper",
             STRUCTURE,
         )
@@ -664,7 +683,7 @@ impl EtsiSizes {
                 + 2 * EC_POINT_COMPRESSED_BYTES
                 + self.subject_attributes_bytes
                 + 2 * self.sig_bytes()
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+                + self.enc_key_bytes,
             "etsi_subject_attributes_bytes",
         )
     }
@@ -675,7 +694,7 @@ impl EtsiSizes {
             self.env_cert()
                 + self.certs.authority.bytes()
                 + self.butterfly_response_bytes
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+                + self.enc_key_bytes,
             "etsi_butterfly_response_bytes",
         )
     }
@@ -691,7 +710,7 @@ impl EtsiSizes {
                 + EC_POINT_COMPRESSED_BYTES
                 + AES128_KEY_BYTES
                 + self.subject_attributes_bytes
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+                + self.enc_key_bytes,
             "etsi_subject_attributes_bytes",
         )
     }
@@ -699,7 +718,7 @@ impl EtsiSizes {
     /// One `ButterflyCertResponse`, AA → EA: one authorization ticket, encrypted.
     pub const fn butterfly_cert_response(&self) -> WireSize {
         WireSize::derived(
-            self.env_digest() + self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES,
+            self.env_digest() + self.certs.pseudonym.bytes() + self.enc_key_bytes,
             "envelope(digest) + authorization ticket + ECIES wrapper",
             STRUCTURE,
         )
@@ -712,7 +731,7 @@ impl EtsiSizes {
                 + HASHED_ID8_BYTES
                 + self.butterfly_response_bytes
                 + self.sig_bytes()
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+                + self.enc_key_bytes,
             "etsi_butterfly_response_bytes",
         )
     }
@@ -722,7 +741,7 @@ impl EtsiSizes {
         WireSize::derived(
             self.env_cert()
                 + self.certs.authority.bytes()
-                + count * (self.certs.pseudonym.bytes() + ECIES_P256_ENCRYPTED_KEY_BYTES),
+                + count * (self.certs.pseudonym.bytes() + self.enc_key_bytes),
             "envelope(certificate) + EA certificate + count x (authorization ticket +              ECIES wrapper)",
             STRUCTURE,
         )
@@ -803,7 +822,7 @@ impl EtsiSizes {
             self.env_cert()
                 + self.certs.pseudonym.bytes()
                 + self.report_payload_bytes
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+                + self.enc_key_bytes,
             "etsi_report_payload_bytes",
         )
     }
@@ -818,7 +837,7 @@ impl EtsiSizes {
                 + self.certs.authority.bytes()
                 + HASHED_ID8_BYTES
                 + TIME32_BYTES
-                + ECIES_P256_ENCRYPTED_KEY_BYTES,
+                + self.enc_key_bytes,
             "envelope(certificate) + MA certificate + subject HashedId8 + effective time              + ECIES wrapper",
             STRUCTURE,
         )

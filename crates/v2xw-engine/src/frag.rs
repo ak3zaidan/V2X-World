@@ -203,7 +203,7 @@ impl FragPlan {
         if scheme.mode == v2xw_sec::scheme::SchemeMode::Classical {
             return self;
         }
-        let mut p = c.params().clone();
+        let mut p = *c.params();
         let delta = i64::from(scheme.extra_octets().1) - i64::from(falcon.extra_octets().1);
         p.hybrid_cert_bytes = u32::try_from(
             (i64::from(v2xw_net::frag::cert_cycle::FALCON512_HYBRID_CERTIFICATE_BYTES) + delta)

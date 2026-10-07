@@ -232,8 +232,9 @@ fn too_few_live_members_fail_the_session_and_nothing_is_issued() {
 
 #[test]
 fn a_member_that_comes_back_lets_a_waiting_session_finish() {
+    // Ten attempts twenty seconds apart outlast a two-minute outage.
     let t = ThresholdDeployment {
-        retry_after: Duration::from_secs(5),
+        retry_after: Duration::from_secs(20),
         ..pca_only(true)
     };
     let mut run = deployment(Some(t));

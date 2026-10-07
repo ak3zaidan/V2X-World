@@ -102,3 +102,18 @@ Start from the study whose shape matches yours, then:
 4. **Check that your sweep can differ.** A swept field the engine does not read produces
    identical cells and reads as a null result. `rat-comparison.yaml` was that failure
    mode until `radio.rat` was wired; the page's key-status table says which keys are.
+
+## Post-quantum and threshold studies
+
+Added with the crypto extension point (`docs/design/extending-crypto.md`). Scheme and
+protocol values are registry ids, so a scheme or protocol someone registers can be swept
+by adding it to a list.
+
+| File | Question it answers | Sweep | Runs |
+|---|---|---|---|
+| [`pq-signatures.yaml`](pq-signatures.yaml) | What does post-quantum signing cost a fleet — airtime, delivery at distance, latency, backend load, provisioning bytes — classical vs hybrid vs pure? | 7 signature schemes | 7 |
+| [`pq-full-stack.yaml`](pq-full-stack.yaml) | The same with ML-KEM encryption to the PCA and device: what does the hybrid's insurance cost against the pure end state? | 3 KEMs × 2 signatures | 6 |
+| [`pq-certificate-cycle.yaml`](pq-certificate-cycle.yaml) | NDSS 2024's Partially-Hybrid certificate cycle against plain fragmentation, for the Falcon-512 hybrid | 2 fragmenters × 2 seeds | 4 |
+| [`threshold-revocation-2of2.yaml`](threshold-revocation-2of2.yaml) | Baseline: revocation with CAMP's two Linkage Authorities when LA2 goes down | — | 1 |
+| [`threshold-revocation-3of5.yaml`](threshold-revocation-3of5.yaml) | The same with the seeds Shamir-shared over a 3-of-5 linkage committee, LA2 and two members down | — | 1 |
+| [`threshold-pca.yaml`](threshold-pca.yaml) | A 3-of-5 PCA and CRL Generator with one offline, one malicious and one slow member, under FROST, threshold ECDSA and an umbrella authority | 3 protocols | 3 |

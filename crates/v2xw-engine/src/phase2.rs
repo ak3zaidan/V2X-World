@@ -1455,6 +1455,7 @@ impl Phase2 {
             ep.at_validity = params.scms.cert_lifetime;
             ep.butterfly_batch = params.jmax;
             ep.hybrid = hybrid;
+            ep.kem = kem;
             let mut run = v2xw_proto::etsi::ts102941::EtsiRun::new(ep).map_err(|e| {
                 conflict(
                     "security.protocol",

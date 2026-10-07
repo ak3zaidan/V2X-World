@@ -336,8 +336,12 @@ impl<C> Committees<C> {
             );
             sent += 1;
         }
+        // The timeout runs from when a member could have answered: a protocol whose
+        // members compute for seconds (CGGMP21's presigning) is not timed out for doing
+        // its work.
+        let expected = round.member_time.map_or(Duration::ZERO, |(t, _)| t);
         out.start_timer(
-            r.round_timeout,
+            Duration::from_nanos(r.round_timeout.as_nanos().saturating_add(expected.as_nanos())),
             wrap(CommitteeMsg::Timeout {
                 session: id,
                 round: s.round,
@@ -567,6 +571,15 @@ impl<C> Committees<C> {
         s.attempt = s.attempt.wrapping_add(1);
         let remaining = n.saturating_sub(s.excluded.len());
         let role = s.role;
+        // A bound on restarts that exclude nobody (a lie that cannot be attributed rotates
+        // the signing set instead): after `max_attempts` passes over the committee the
+        // session fails rather than spinning.
+        let cap = u32::from(r.max_attempts.max(1)) * u32::try_from(n.max(1)).unwrap_or(u32::MAX);
+        if u32::from(s.attempt) > cap {
+            let s = self.sessions.remove(&id)?;
+            self.stats.entry(self.roles[role].role).or_default().failed += 1;
+            return Some(Outcome::Failed { cont: s.cont? });
+        }
         if remaining >= usize::from(r.quorum) {
             self.stats.entry(self.roles[role].role).or_default().restarts += 1;
             self.begin_attempt(id, out, wrap);
