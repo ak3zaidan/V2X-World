@@ -337,9 +337,9 @@ export function parseMarkdown(md: string): Block[] {
 /** The prompts the empty panel offers, each one the harness can carry out end to end. */
 export const SUGGESTIONS: readonly string[] = [
   "How did the run on screen do? Where are the bottlenecks?",
-  "Run a busy signalised grid at 1,500 vehicles per hour and tell me where the network struggles.",
+  "Run heavy rush-hour traffic and tell me where the radio channel and the queues struggle.",
+  "Add an attacker sending false positions and tell me whether misbehaviour detection catches and revokes it.",
   "Compare DSRC with LTE-V2X on the same scenario.",
-  "Run the credential lifecycle and check pseudonym top-ups and revocation.",
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -437,7 +437,8 @@ export function layerStateLabel(s: LayerState): string {
 export function mergeObservations(held: readonly Observation[], page: readonly Observation[]): Observation[] {
   const last = held.length > 0 ? held[held.length - 1]!.seq : 0;
   const fresh = page.filter((o) => o.seq > last);
-  return fresh.length === 0 ? [...held] : [...held, ...fresh];
+  // The same array when nothing is new, so a poll with no news re-renders nothing.
+  return fresh.length === 0 ? (held as Observation[]) : [...held, ...fresh];
 }
 
 /** The observations of one run, oldest first. */

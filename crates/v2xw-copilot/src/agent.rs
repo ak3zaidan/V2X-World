@@ -260,6 +260,15 @@ pub fn agent_tools() -> Vec<Value> {
                    "properties": {"base": {"type": "string"}}}),
         ),
         tool(
+            "find_settings",
+            "Search the scenario's settings by words (e.g. `attacker`, `demand`, `pseudonym`, \
+             `radio`): each match's dotted key, title, unit, allowed values or range, default, \
+             and whether the engine acts on it. Use it to find the right key before \
+             prepare_scenario; never guess a key.",
+            json!({"type": "object", "additionalProperties": false, "required": ["query"],
+                   "properties": {"query": {"type": "string"}}}),
+        ),
+        tool(
             "prepare_scenario",
             "Build the scenario to run: start from `base` (a preset id, `current` or `last`) \
              and apply only the changes the request implies. Each change is a dotted key \
@@ -334,9 +343,10 @@ pub fn agent_system_prompt() -> String {
      \n\
      How to work:\n\
      1. Before your first tool call, say in two to four short lines what you will do.\n\
-     2. Pick a base with list_scenarios: the shipped scenario closest to the request. \
-     Prefer a small, fast one (a procedural grid) unless the request names a city, a \
-     credential system, pedestrians or a scale that needs another. Then call \
+     2. Pick a base with list_scenarios: the ready-made scenario whose description is \
+     closest to the request. Prefer a small, fast one unless the request names a city, a \
+     credential system, attackers, pedestrians or a scale that needs another. If a change \
+     needs a setting the base does not show, find its key with find_settings. Then call \
      prepare_scenario with ONLY the changes the request implies, and say in `reason` and \
      in each `why` what you chose and why. Keep the base's duration unless asked; long \
      runs take minutes.\n\
@@ -580,6 +590,7 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                     json!({"scenarios": items})
                 }),
             "get_scenario" => self.base_document(&s("base")).map(|d| json!({"scenario": d})),
+            "find_settings" => Ok(find_settings(&s("query"))),
             "prepare_scenario" => {
                 let changes = args.get("changes").and_then(Value::as_array).cloned().unwrap_or_default();
                 self.prepare(&s("base"), &s("reason"), &changes, sink)
@@ -1105,6 +1116,50 @@ fn cell(v: &Value) -> String {
     }
 }
 
+/// The settings whose key, title or description contain every word of `query`, from the
+/// engine's own published settings surface (`v2xw_engine::scenario::publish::surface`, the
+/// same index the settings window is generated from). At most 25, in the surface's order.
+#[must_use]
+pub fn find_settings(query: &str) -> Value {
+    let surface = v2xw_engine::scenario::publish::surface();
+    let words: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let mut matches = Vec::new();
+    let mut total = 0usize;
+    for f in surface.get("fields").and_then(Value::as_array).into_iter().flatten() {
+        let path = text(f, "x-path");
+        if path.is_empty() {
+            continue;
+        }
+        let hay = format!("{} {} {}", path, text(f, "title"), text(f, "description")).to_lowercase();
+        if words.is_empty() || !words.iter().all(|w| hay.contains(w.as_str())) {
+            continue;
+        }
+        total += 1;
+        if matches.len() >= 25 {
+            continue;
+        }
+        let mut row = Map::new();
+        row.insert("key".into(), json!(path));
+        for k in ["title", "unit", "enum", "x-range", "default", "x-implemented", "x-status-note"] {
+            if let Some(v) = f.get(k).filter(|v| !v.is_null()) {
+                row.insert(k.trim_start_matches("x-").replace('-', "_"), v.clone());
+            }
+        }
+        let d = text(f, "description");
+        if !d.is_empty() {
+            row.insert("description".into(), json!(d.chars().take(240).collect::<String>()));
+        }
+        matches.push(Value::Object(row));
+    }
+    json!({"query": query, "matches": matches, "total": total,
+           "note": if total > matches.len() { "more matched; narrow the words" } else { "" }})
+}
+
 /// A dotted key or a JSON Pointer, as a JSON Pointer.
 #[must_use]
 pub fn to_pointer(key: &str) -> String {
@@ -1222,6 +1277,19 @@ mod tests {
         for m in AGENT_METHODS {
             assert!(v2xw_server::rpc::METHODS.contains(&m), "{m} is not a server method");
         }
+    }
+
+    #[test]
+    fn settings_are_found_in_the_engines_own_surface() {
+        let r = find_settings("rat");
+        let keys: Vec<&str> = r["matches"].as_array().unwrap().iter()
+            .filter_map(|m| m["key"].as_str()).collect();
+        assert!(keys.contains(&"radio.rat"), "{r:#}");
+        let rat = r["matches"].as_array().unwrap().iter().find(|m| m["key"] == "radio.rat").unwrap();
+        assert!(rat["enum"].as_array().is_some_and(|e| !e.is_empty()), "its choices: {rat:#}");
+        // A word nothing has finds nothing, and an empty query does not list everything.
+        assert_eq!(find_settings("zzqxj")["total"], 0);
+        assert_eq!(find_settings("")["total"], 0);
     }
 
     #[test]

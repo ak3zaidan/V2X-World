@@ -445,8 +445,9 @@ impl Watcher {
         self.key.as_ref().is_none_or(|(r, _)| e.run_id.is_empty() || &e.run_id == r)
     }
 
-    /// The latest bin of the channel-load and delivery series against the analyst's own
-    /// thresholds.
+    /// The latest bin of the delivery series against the analyst's own reliability level.
+    /// (Channel load needs no trend of its own: the analyst's `channel.congested` already
+    /// fires, as a warning, on the busiest bin before the whole-run mean crosses.)
     fn trends(&mut self, e: &RunEvidence) {
         let latest = |name: &str| -> Option<(f64, f64)> {
             e.metrics
@@ -457,25 +458,6 @@ impl Watcher {
                 .find_map(|(t, v)| v.map(|v| (*t, v)))
         };
         let whole = |name: &str| e.metrics.get(name).and_then(|m| m.value);
-
-        // Channel load climbing past the congestion-control target.
-        let (target, source) = self.thresholds.cbr_target(&e.scenario.rat, &e.scenario.region);
-        if let Some((t, cbr)) = latest("cbr") {
-            let over = cbr >= target && whole("cbr").is_none_or(|w| w < target);
-            let was = self.trends.get("channel.load-rising").copied().unwrap_or(false);
-            if over && !was && !self.seen.contains_key("channel.congested") {
-                self.push(Severity::Warning, ObservationKind::Trend,
-                    Some("channel.load-rising".into()), Some(Layer::Channel),
-                    format!(
-                        "Congestion is building: the channel was busy {} of the time in the \
-                         latest interval, past the {} target ({source}).",
-                        fmt(cbr), fmt(target)
-                    ),
-                    vec![Evidence { label: "channel busy ratio, latest bin".into(), value: cbr,
-                        unit: "ratio".into(), source: format!("cbr[t={} s]", fmt(t)) }]);
-            }
-            self.trends.insert("channel.load-rising".into(), over);
-        }
 
         // Delivery dropping below the reliability the analyst reads ranges at.
         let level = self.thresholds.prr_range_level;
@@ -595,12 +577,50 @@ fn layer_of(id: &str) -> Option<Layer> {
     serde_json::from_value::<Layer>(json!(head)).ok()
 }
 
-/// A finding as one sentence: its title and its first number.
+/// What a finding means in the words a person watching would use, for the kinds the owner
+/// named: congestion building, delivery dropping, a queue saturating, credentials failing.
+fn lead(id: &str) -> Option<&'static str> {
+    let head = id.split('.').next().unwrap_or("");
+    Some(match id {
+        "channel.congested" | "channel.collisions" | "access.delay" => "Congestion is building",
+        "traffic.delay" => "Traffic is congested",
+        "traffic.conflicts" => "Near misses",
+        "access.tx-queue" | "access.verification" => "A queue is saturating",
+        "latency.over-budget" => "Messages are arriving late",
+        "security.pool-exhausted" | "security.topups" => "Vehicles are running out of credentials",
+        "security.false-revocations" => "Honest vehicles were revoked",
+        "privacy.linkable" => "Vehicles can be tracked",
+        _ if id.starts_with("backend.saturated.") => "A queue is saturating",
+        _ if head == "delivery" => "Delivery is dropping",
+        _ => return None,
+    })
+}
+
+/// The number that best shows a finding: the busiest bin when only the peak crossed (a
+/// warning, not a whole-run breach), else the first.
+fn headline_evidence(f: &Finding) -> Option<&Evidence> {
+    if f.severity == Severity::Warning {
+        if let Some(e) = f.evidence.iter().find(|e| e.label == "busiest bin") {
+            return Some(e);
+        }
+    }
+    f.evidence.first()
+}
+
+/// A finding as one sentence: what it means, its title and its telling number.
 fn sentence(f: &Finding) -> String {
     let title = f.title.trim_end_matches('.');
-    match f.evidence.first() {
+    let body = match headline_evidence(f) {
         Some(e) => format!("{title} ({} {}{}).", e.label, fmt(e.value), unit_suffix(&e.unit)),
         None => format!("{title}."),
+    };
+    match lead(&f.id) {
+        Some(l) => {
+            let mut cs = body.chars();
+            let first: String = cs.next().map(|c| c.to_lowercase().collect()).unwrap_or_default();
+            format!("{l}: {first}{}", cs.as_str())
+        }
+        None => body,
     }
 }
 
@@ -897,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn a_trend_is_named_before_the_whole_run_value_crosses() {
+    fn congestion_and_a_delivery_drop_are_named_before_the_whole_run_value_crosses() {
         let mut w = Watcher::default();
         w.on_status(&status("r1", 1, "running", 20, 60));
         let mut e = quiet(20.0);
@@ -905,10 +925,13 @@ mod tests {
         e.metrics.get_mut("pdr").unwrap().series.push((20.0, Some(0.8)));
         let got = w.on_evidence(&e);
         assert_eq!(kinds(&got), vec![
-            (ObservationKind::Trend, Some("channel.load-rising")),
+            (ObservationKind::Finding, Some("channel.congested")),
             (ObservationKind::Trend, Some("delivery.dropping")),
         ], "{got:#?}");
-        assert!(got[0].text.contains("0.85") && got[0].text.contains("J2945/1"), "{}", got[0].text);
+        // The busiest bin crossed, not the mean: the note says so with the bin's number.
+        assert!(got[0].text.starts_with("Congestion is building:"), "{}", got[0].text);
+        assert!(got[0].text.contains("busiest bin 0.85"), "{}", got[0].text);
+        assert!(got[1].text.contains("0.8 ") && got[1].text.contains("0.9"), "{}", got[1].text);
         // Still over: not repeated.
         assert!(w.on_evidence(&e).is_empty());
         // The quiet series names neither.
