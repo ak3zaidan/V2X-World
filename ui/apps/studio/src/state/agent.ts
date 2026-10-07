@@ -197,6 +197,8 @@ interface WatchState {
   overviewPending: boolean;
   /** The highest `seq` the person has seen (the agent panel was open). */
   seenSeq: number;
+  /** The last `seq` the first successful read found: older lines are not news. */
+  bootSeq: number | null;
   /** Bumped when a new summary arrives, so a run-summary overlay can open itself once. */
   summaryArrivals: number;
   markSeen: () => void;
@@ -229,7 +231,14 @@ export const useAgentWatch = create<WatchState>((set, get) => {
         const held = page.next < get().observations.length ? [] : get().observations;
         const merged = mergeObservations(held, observations);
         const wasPending = get().overviewPending;
-        set({ available: true, unavailable: null, page: rest, observations: merged, overviewPending: page.overview_pending });
+        set((s) => ({
+          available: true,
+          unavailable: null,
+          page: rest,
+          observations: merged,
+          overviewPending: page.overview_pending,
+          bootSeq: s.bootSeq ?? (merged.at(-1)?.seq ?? 0),
+        }));
         const want = page.summary_run_id === null ? "" : `${page.summary_run_id}#${page.summary_generation ?? 0}`;
         if (want !== "" && (want !== summaryKey(get().summary) || (wasPending && !page.overview_pending))) {
           await get().refreshSummary();
@@ -251,6 +260,7 @@ export const useAgentWatch = create<WatchState>((set, get) => {
     summaryMarkdown: "",
     overviewPending: false,
     seenSeq: 0,
+    bootSeq: null,
     summaryArrivals: 0,
     markSeen: () => {
       const last = get().observations.at(-1)?.seq ?? 0;

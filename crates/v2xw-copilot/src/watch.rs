@@ -677,10 +677,12 @@ fn layer_verdicts(a: &Analysis) -> Vec<LayerVerdict> {
 fn headline(verdict: Verdict, problems: &[Finding], layers: &[LayerVerdict], e: &RunEvidence) -> String {
     let measured = layers.iter().filter(|l| l.state != "not-measured").count();
     match verdict {
-        Verdict::Healthy => format!(
-            "Every measured layer stayed within its threshold ({measured} of {} layers measured).",
+        Verdict::Healthy if measured < layers.len() => format!(
+            "Every measured layer stayed within its threshold, but only {measured} of {} layers \
+             were measured: the scenario's `metrics` list leaves the rest out.",
             layers.len()
         ),
+        Verdict::Healthy => "Every layer stayed within its threshold.".to_string(),
         Verdict::Attention | Verdict::Unhealthy => {
             let critical = problems.iter().filter(|f| f.severity == Severity::Critical).count();
             let worst = problems.first().map(|f| f.title.trim_end_matches('.').to_string()).unwrap_or_default();

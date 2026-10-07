@@ -347,9 +347,6 @@ function AgentLive(): React.JSX.Element | null {
       {page.phase === "idle" ? (
         <div className="dim">Press Run: the agent follows every run by itself, notes congestion, delivery drops, revocations and saturated queues as they happen, and sums the run up at the end.</div>
       ) : null}
-      {!page.model ? (
-        <div className="faint">Notes and summaries come from the deterministic analyst. {page.how_to_add_key ?? ""}</div>
-      ) : null}
       {current.length > 0 ? (
         <div className="agent-obs-list">
           {current.map((o) => (
@@ -480,9 +477,12 @@ export function AgentPanel(): React.JSX.Element {
             {statusError}
           </div>
         ) : status && !model ? (
-          <div className="note info" data-testid="agent-no-key">
-            <strong>No model connected.</strong> {status.how_to_add_key}
-          </div>
+          <details className="note info" data-testid="agent-no-key">
+            <summary>
+              <strong>No language model connected.</strong> The agent still watches every run; its notes and summaries come from the deterministic analyst.
+            </summary>
+            {status.how_to_add_key}
+          </details>
         ) : null}
         <AgentLive />
         {turns.length === 0 ? (

@@ -107,6 +107,8 @@
 .agent-obs.kind-cleared { color: var(--text-dim); }
 
 .agent-last-run { display: flex; flex-direction: column; gap: 6px; }
+.agent-last-run > .link-button { align-self: flex-start; }
+details.note > summary { cursor: pointer; }
 .agent-summary { display: flex; flex-direction: column; gap: 8px; }
 .agent-summary-head { display: flex; gap: 8px; align-items: center; }
 .agent-verdict { padding: 2px 8px; border-radius: 10px; font-weight: 600; font-size: 11px; border: 1px solid var(--border); }

@@ -5,7 +5,7 @@
  * each new warning, and the end-of-run summary, as a short note under the header for a few seconds.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { unseenCount, type Observation } from "../lib/agent.js";
 import { openPanel } from "../shell/route.js";
@@ -15,6 +15,9 @@ import "../styles/agent.css";
 
 /** How long a note stays up, milliseconds. Long enough to read one sentence twice. */
 const NOTE_MS = 8000;
+
+/** The last observation a note was considered for, across mounts. */
+let lastNoted = 0;
 
 function worthANote(o: Observation): boolean {
   return o.kind === "finished" || o.kind === "failed" || o.severity === "warning" || o.severity === "critical";
@@ -30,7 +33,7 @@ export function AgentBadge(): React.JSX.Element | null {
   const markSeen = useAgentWatch((s) => s.markSeen);
   const panelOpen = useStudio((s) => s.panel === "agent");
   const [note, setNote] = useState<Observation | null>(null);
-  const shownSeq = useRef(0);
+  const bootSeq = useAgentWatch((s) => s.bootSeq);
 
   useEffect(() => start(), [start]);
   // Everything is seen while the panel is open.
@@ -38,18 +41,21 @@ export function AgentBadge(): React.JSX.Element | null {
     if (panelOpen) markSeen();
   }, [panelOpen, count, markSeen]);
 
-  // A note for each new warning (or the run's end) while the panel is closed. The first read
-  // after a reload only sets the mark: old news is not news.
+  // A note for each new warning (or the run's end) while the panel is closed. What the first
+  // read after a reload found is old news (`bootSeq`), and the mark lives outside the component
+  // so a remounted header does not show a note twice or swallow one.
   useEffect(() => {
-    if (latest === null) return;
-    const first = shownSeq.current === 0;
-    if (latest.seq <= shownSeq.current) return;
-    shownSeq.current = latest.seq;
-    if (first || panelOpen || !worthANote(latest)) return;
+    if (latest === null || bootSeq === null) return;
+    if (latest.seq <= Math.max(bootSeq, lastNoted)) return;
+    lastNoted = latest.seq;
+    if (panelOpen || !worthANote(latest)) return;
     setNote(latest);
+  }, [latest, bootSeq, panelOpen]);
+  useEffect(() => {
+    if (note === null) return;
     const t = setTimeout(() => setNote(null), NOTE_MS);
     return () => clearTimeout(t);
-  }, [latest, panelOpen]);
+  }, [note]);
 
   if (available !== true) return null;
   const watching = phase === "watching" || phase === "analysing";
