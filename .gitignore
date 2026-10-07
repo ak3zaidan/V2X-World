@@ -67,3 +67,7 @@ legacy/gui/last_run.log
 .env
 .env.*
 runs/
+
+# A symlink named node_modules is not matched by "node_modules/" (directories only):
+# agent worktrees once committed self-referencing links. Match the name in any form.
+node_modules
