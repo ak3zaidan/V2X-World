@@ -24,7 +24,7 @@ pub const FAILURE_MODES: [&str; 3] = ["offline", "slow", "malicious"];
 pub const MAX_MEMBERS: u16 = 64;
 
 fn conflict(field: &str, why: impl Into<String>) -> EngineError {
-    EngineError::conflict(field, why)
+    EngineError::Scenario(crate::ScenarioError::conflict(field, why))
 }
 
 /// The post-quantum KEM `security.kem` names; `None` for ECIES.
