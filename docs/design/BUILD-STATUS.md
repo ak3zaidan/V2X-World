@@ -59,7 +59,7 @@ alternating` (wsmp only) holds every BSM to the 1609.4 CCH interval.
 overlay uses a unit disk at `range_m`, not the run's link budget; no location service for
 GeoUnicast; no GN security header processing; WSA is not sent as frames in the engine.
 `scenario::publish` tests `every_number_publishes_a_unit` (`actors.rsu_placement.count`)
-and `every_section_has_a_group` (`city`) fail on the base commit too.
+and `every_section_has_a_group` (`city`) fail on fields this track did not touch (not re-run on the base commit).
 
 ## 2026-10-06 — settings as dropdowns, and a ready-made list a person can read (settings track)
 
