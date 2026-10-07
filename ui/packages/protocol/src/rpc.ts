@@ -708,6 +708,22 @@ export interface MetricsQueryParams {
   format?: "json" | "arrow";
   limit?: number;
 }
+/**
+ * A metric's health band (`v2xw_metrics::health::HealthBand`): at or inside `caution` is healthy,
+ * past `unhealthy` is unhealthy, between is caution. `judged` names the series it applies to as a
+ * suffix of the metric's name (`""`, `".p99"`, `"[100m]"`).
+ */
+export interface MetricHealthBand {
+  better: "lower" | "higher";
+  judged: string;
+  caution: number;
+  unhealthy: number;
+  healthy_note: string;
+  caution_note: string;
+  unhealthy_note: string;
+  source: string;
+  basis: "standard" | "literature" | "engineering";
+}
 /** §6.12 `metrics.query` result. */
 export interface MetricsQueryResult {
   columns: { name: string; type: "int" | "float" | "string" | "time_ns"; unit?: string; visibility?: Visibility }[];
@@ -726,6 +742,8 @@ export interface MetricsQueryResult {
     base?: string;
     /** What the metric does not account for, one sentence each (08-measurement-and-data.md §1: "no black box"). */
     not_accounted?: string[];
+    /** Whether a value is healthy for a real deployment (`v2xw_metrics::health::HealthBand`). */
+    health?: MetricHealthBand | null;
   }[];
   provenance?: ProvenanceInfo[];
   /**

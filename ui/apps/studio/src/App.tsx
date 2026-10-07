@@ -40,6 +40,7 @@ import { StatusBanner } from "./components/Status.js";
 import { TimeControls } from "./components/TimeControls.js";
 import { Viewport } from "./components/Viewport.js";
 import { SettingsWindow } from "./settings/SettingsWindow.js";
+import { RunSummary } from "./metrics/RunSummary.js";
 import { Header } from "./shell/Header.js";
 import { CloseIcon } from "./shell/Icons.js";
 import { FullPanel, Sheet } from "./shell/PanelFrame.js";
@@ -233,6 +234,7 @@ export function App(): React.JSX.Element {
             {p.render({ close: closePanel, retarget: reconnect })}
           </FullPanel>
         ))}
+      <RunSummary />
     </div>
   );
 }

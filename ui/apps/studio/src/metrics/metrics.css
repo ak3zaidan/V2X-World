@@ -235,3 +235,105 @@ button.small.active { border-color: var(--accent); }
 .bd-hist figcaption { display: flex; font-size: 11px; margin-top: 3px; font-variant-numeric: tabular-nums; }
 .bd-node-tools input { width: 180px; }
 .bd-nodes .bd-table { width: 100%; }
+
+/* ------------------------------------------------------------------ health bands */
+/*
+ * Healthy, caution, unhealthy: the Studio's own --ok, --warn, --err (Okabe-Ito green, orange,
+ * vermillion, distinguishable under the common colour-vision deficiencies). Colour is never the
+ * only signal: every dot has its level written beside it.
+ */
+
+.hdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; margin-right: 5px; vertical-align: baseline; }
+.hdot.healthy { background: var(--ok); }
+.hdot.caution { background: var(--warn); }
+.hdot.unhealthy { background: var(--err); box-shadow: 0 0 0 2px color-mix(in srgb, var(--err) 30%, transparent); }
+
+.hline { display: flex; align-items: baseline; gap: 4px; font-size: 12px; line-height: 1.4; margin-top: 4px; }
+.hline-level { font-weight: 600; white-space: nowrap; }
+.hline.healthy .hline-level { color: var(--ok); }
+.hline.caution .hline-level { color: var(--warn); }
+.hline.unhealthy .hline-level { color: var(--err); }
+.hline-text { color: var(--text-dim); min-width: 0; }
+.hline-text strong { color: var(--text); font-weight: 600; }
+.hline.compact { font-size: 11.5px; }
+.hline.compact .hline-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+.mcard.h-caution { border-left: 3px solid var(--warn); }
+.mcard.h-unhealthy { border-left: 3px solid var(--err); }
+.mcard.h-healthy { border-left: 3px solid color-mix(in srgb, var(--ok) 70%, transparent); }
+.mthreshold { stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+.mthreshold.caution { stroke: var(--warn); }
+.mthreshold.unhealthy { stroke: var(--err); }
+
+.mhealth-strip { margin-bottom: 22px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); }
+.mhealth-strip h3 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+.mhealth-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mhealth-chip { display: inline-flex; align-items: center; font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg-raised); color: var(--text); cursor: pointer; }
+.mhealth-chip:hover { border-color: var(--border-strong); }
+.mhealth-chip.caution { border-color: color-mix(in srgb, var(--warn) 60%, var(--border)); }
+.mhealth-chip.unhealthy { border-color: var(--err); font-weight: 600; }
+
+.mx-health { margin: 8px 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); }
+.mx-health .hline { font-size: 13px; }
+.mx-health-run { font-size: 12px; margin: 4px 0 8px; }
+.hband h4 { font-size: 12px; font-weight: 600; margin: 6px 0 4px; }
+.hband ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.hband li { color: var(--text-dim); }
+.hband li strong { color: var(--text); font-weight: 600; }
+.hband-src { font-size: 11px; margin: 6px 0 0; }
+
+/* ------------------------------------------------------------------ run summary */
+
+.rsum-backdrop {
+  position: fixed; inset: 0; z-index: 60;
+  background: color-mix(in srgb, #000 45%, transparent);
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: max(16px, 5vh) 16px 16px;
+}
+.rsum {
+  width: min(1040px, 100%); max-height: calc(100vh - max(32px, 10vh));
+  display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  outline: none;
+}
+.rsum-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.rsum-head h2 { font-size: 16px; margin: 0; }
+.rsum-state { font-size: 12px; color: var(--text-dim); padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; }
+.rsum-state.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); }
+.rsum-body { overflow: auto; padding: 14px 18px 22px; }
+.rsum-scenario { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+.rsum-purpose { margin: 0 0 12px; font-size: 12px; max-width: 90ch; }
+.rsum-verdict { display: flex; align-items: baseline; gap: 4px; padding: 10px 12px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-panel); font-size: 13px; margin: 8px 0 16px; }
+.rsum-verdict.unhealthy { border-color: var(--err); }
+.rsum-verdict.caution { border-color: color-mix(in srgb, var(--warn) 70%, var(--border)); }
+.rsum-verdict.healthy { border-color: color-mix(in srgb, var(--ok) 60%, var(--border)); }
+.rsum-section { margin: 0 0 18px; }
+.rsum-section h3 { font-size: 13px; font-weight: 600; margin: 0 0 8px; text-transform: none; }
+.rsum-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.rsum-tile { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); padding: 9px 11px; }
+.rsum-tile h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
+.rsum-tile p { margin: 0; font-size: 12px; }
+.rsum-tile dl { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.rsum-item { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.rsum-item dt { color: var(--text-dim); }
+.rsum-item dd { margin: 0; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+.rsum-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.rsum-row { border: 1px solid var(--border); border-left-width: 3px; border-radius: var(--radius); padding: 8px 11px; background: var(--bg-panel); }
+.rsum-row.unhealthy { border-left-color: var(--err); }
+.rsum-row.caution { border-left-color: var(--warn); }
+.rsum-row-head { display: flex; align-items: baseline; gap: 6px; font-size: 13px; }
+.rsum-level { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
+.rsum-when { font-size: 12px; margin: 3px 0 0; }
+.rsum-bottlenecks, .rsum-findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; }
+.rsum-sev { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+.rsum-overview { font-size: 13px; line-height: 1.5; max-width: 90ch; white-space: pre-wrap; }
+.rsum-healthy { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; }
+.topbar .rsum-ready { border-color: color-mix(in srgb, var(--ok) 60%, var(--border)); }
+
+@media (max-width: 640px) {
+  .rsum-backdrop { padding: 8px; }
+  .rsum-head { flex-wrap: wrap; }
+  .rsum-body { padding: 12px; }
+}

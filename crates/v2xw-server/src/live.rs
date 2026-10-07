@@ -1036,6 +1036,10 @@ fn assemble_setup(
                     not_accounted: def.not_accounted.clone(),
                     source: source.clone(),
                     base: def.name.clone(),
+                    health: def
+                        .health
+                        .as_ref()
+                        .and_then(|h| serde_json::to_value(h).ok()),
                 }),
             }
         }

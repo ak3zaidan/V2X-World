@@ -20,7 +20,10 @@ import { CloseIcon } from "../shell/Icons.js";
 import { useStudio } from "../state/store.js";
 import { MetricCard } from "./Card.js";
 import { Expanded } from "./Expanded.js";
+import { classify, judgedSeries, LEVEL_LABEL, type HealthLevel } from "./health.js";
+import { HealthDot } from "./HealthBadge.js";
 import { useCatalogue, useOverview } from "./hooks.js";
+import { openRunSummary } from "./summaryStore.js";
 import {
   cardSeries,
   familiesOf,
@@ -104,7 +107,17 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
   const families = useMemo(() => familiesOf(catalogue.defs), [catalogue.defs]);
   // A node-profile session is refused every ground-truth metric; not asking saves a refusal each.
   const asked = useMemo(() => families.filter((f) => !(profileNode && f.groundTruth)), [families, profileNode]);
-  const lineNames = useMemo(() => asked.flatMap((f) => (f.headline === null ? [] : [f.headline])), [asked]);
+  // The headline lines, plus each health band's judged series where it is not the headline (a
+  // p99, a delivery ratio at 100 m), so a card can say whether its value is healthy.
+  const lineNames = useMemo(() => {
+    const out = asked.flatMap((f) => (f.headline === null ? [] : [f.headline]));
+    for (const f of asked) {
+      if (f.health === null) continue;
+      const j = judgedSeries(f.base, f.health);
+      if (!out.includes(j) && seriesOf(f).includes(j)) out.push(j);
+    }
+    return out;
+  }, [asked]);
   const barNames = useMemo(() => asked.flatMap((f) => (f.headline === null ? cardSeries(f) : [])), [asked]);
   const expanded = route.metric === null ? null : (families.find((f) => f.base === route.metric || seriesOf(f).includes(route.metric as string)) ?? null);
   // The overview is idle while a chart is expanded: nothing on screen would show it.
@@ -197,6 +210,23 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
   }).filter((x) => x.shown.length + x.missing.length > 0);
   const measuredCount = ready ? families.filter((f) => measured(f, overview.series, overview.latest)).length : null;
 
+  // Health at a glance: every banded metric's newest judged value, worst first.
+  const health = ready
+    ? families
+        .flatMap((f) => {
+          if (f.health === null) return [];
+          const v = overview.latest.get(judgedSeries(f.base, f.health)) ?? null;
+          const level = classify(f.health, v);
+          return level === null ? [] : [{ f, level }];
+        })
+        .sort((a, b) => rank(b.level) - rank(a.level) || a.f.label.localeCompare(b.f.label))
+    : [];
+  const groupLevel = (id: GroupId): HealthLevel | null => {
+    let worst: HealthLevel | null = null;
+    for (const h of health) if (h.f.group === id && (worst === null || rank(h.level) > rank(worst))) worst = h.level;
+    return worst;
+  };
+
   const scrollToGroup = (id: GroupId | "pinned"): void => {
     if (expanded !== null) back();
     setRoute({ group: id });
@@ -214,6 +244,9 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
           {measuredCount !== null ? ` · ${measuredCount} of ${families.length} measured` : ""}
         </span>
         <span className="grow" />
+        <button type="button" className="small" onClick={openRunSummary} data-testid="metrics-open-summary" title="How the run performed: headline results, anything unhealthy, bottlenecks">
+          Run summary
+        </button>
         <input
           ref={search}
           type="search"
@@ -248,7 +281,13 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
               title={g.question}
               data-testid={`metrics-nav-${g.id}`}
             >
-              <span>{g.label}</span>
+              <span>
+                {(() => {
+                  const lv = groupLevel(g.id);
+                  return lv !== null && lv !== "healthy" ? <HealthDot level={lv} /> : null;
+                })()}
+                {g.label}
+              </span>
               <span className="dim">{ready ? `${shown.length}/${shown.length + missing.length}` : shown.length}</span>
             </button>
           ))}
@@ -276,6 +315,31 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
           ) : (
             <>
               {query !== "" && filtered.length === 0 ? <p className="metrics-message dim">No metric matches “{query}”.</p> : null}
+              {query === "" && health.length > 0 ? (
+                <section className="mhealth-strip" data-testid="metrics-health-strip" aria-label="Health at a glance">
+                  <h3>Health at a glance</h3>
+                  <p className="dim mgroup-q">
+                    Each metric with a published healthy range, judged on its newest window against the standard or study behind it. Open one to see the
+                    thresholds and their source.
+                  </p>
+                  <div className="mhealth-chips">
+                    {health.map(({ f, level }) => (
+                      <button
+                        key={f.base}
+                        type="button"
+                        className={`mhealth-chip ${level}`}
+                        onClick={() => open(f)}
+                        title={`${LEVEL_LABEL[level]}: ${f.label}`}
+                        data-testid={`health-chip-${f.base}`}
+                        data-level={level}
+                      >
+                        <HealthDot level={level} />
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
               {pinned.length > 0 ? (
                 <section id="metrics-group-pinned" className="mgroup" data-testid="metrics-group-pinned">
                   <h3>Pinned</h3>
@@ -319,4 +383,8 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
       </div>
     </div>
   );
+}
+
+function rank(l: HealthLevel): number {
+  return l === "unhealthy" ? 2 : l === "caution" ? 1 : 0;
 }
