@@ -59,6 +59,7 @@ import { transport as transportCaps } from "../state/transport.js";
 import { durationNs, simClock } from "../lib/format.js";
 import { describeError } from "../lib/errors.js";
 import { useStatus } from "./Status.js";
+import { RunDuration } from "./RunDuration.js";
 
 /**
  * Speeds the selector offers.
@@ -512,6 +513,8 @@ export function TimeControls(): React.JSX.Element {
           </option>
         ))}
       </select>
+
+      <RunDuration />
 
       <span className="clock" data-testid="sim-clock" title={drivingReplay ? "The recording's own span" : status.headline}>
         {simClock(nowNs)}

@@ -144,6 +144,15 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the mobility period",
     },
+    // From a tenth of a second (a mobility step at most) to an hour: a sample is a
+    // window's summary, and an hour is the coarsest a day's chart still has a shape at.
+    Bound {
+        path: "time.metric_period_s",
+        lo: 0.1,
+        hi: 3600.0,
+        exclusive_lo: false,
+        what: "the metric period",
+    },
     Bound {
         path: "world.buildings.metres_per_level",
         lo: 1.5,
@@ -534,6 +543,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "The mobility period, and the step the stream and run.seek are quantised \
                to.",
+    },
+    KeyStatus {
+        path: "time.metric_period_s",
+        status: Status::Wired,
+        note: "How often the metric providers flush a sample; one second by default. A \
+               run of days at 60 s writes a sixtieth of the samples.",
     },
     KeyStatus {
         path: "time.des_resolution",
@@ -1818,6 +1833,9 @@ fn time(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ));
     }
     bounded_at("time.duration_s", "time.duration_s", s.time.duration_s, e);
+    if let Some(p) = s.time.metric_period_s {
+        bounded_at("time.metric_period_s", "time.metric_period_s", p, e);
+    }
     // ADR 0004 decision 2's window, read from `BOUNDS` so the page's slider and this
     // check cannot disagree about it.
     if let Some(b) = bound_of("time.mobility_step_ms")

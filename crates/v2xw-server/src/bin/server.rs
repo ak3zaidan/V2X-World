@@ -22,6 +22,8 @@ v2xw-server — the VWP v1 control surface and stream (docs/protocol/vwp-v1.md)
   --retain <n>    mobility steps of history kept for run.seek (default 36000)
   --retain-mb <n> most memory that history may take, MB (default 1024)
   --lookahead <n> steps the kernel may run ahead of the stream (default 64)
+  --resume <p>    open a `v2xw run --checkpoint-every` run where its checkpoint.json
+                  stands: the run is computed to that instant and served paused there
 
   fixture run:
   --actors <n>    actors to drive (default 120)
@@ -41,12 +43,42 @@ v2xw-server — the VWP v1 control surface and stream (docs/protocol/vwp-v1.md)
   --help          this message
 ";
 
+/// What `--resume` needs from a `v2xw run` checkpoint (`v2xw_cli::checkpoint::Checkpoint`,
+/// read here by field so the server does not depend on the command line): the resolved
+/// scenario written beside it, the build timestamp and the instant.
+fn read_checkpoint(path: &std::path::Path) -> Result<(String, String, u64), String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    if v.get("format").and_then(serde_json::Value::as_str) != Some("v2xw-checkpoint/1") {
+        return Err("not a v2xw-checkpoint/1 file".to_string());
+    }
+    let t_ns = v
+        .get("t_ns")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("the checkpoint has no t_ns")?;
+    let build_utc = v
+        .get("build_utc")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let scenario = dir.join("scenario.resolved.yaml");
+    if !scenario.exists() {
+        return Err(format!("{} is missing", scenario.display()));
+    }
+    Ok((scenario.display().to_string(), build_utc, t_ns))
+}
+
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
     let mut options = ServerOptions::default();
     let mut stub = StubOptions::default();
     let mut live = LiveOptions::default();
     let mut scenario: Option<String> = None;
+    let mut resume: Option<std::path::PathBuf> = None;
     let mut host: IpAddr = [127, 0, 0, 1].into();
     let mut port: u16 = 8787;
     let mut quiet = false;
@@ -76,6 +108,9 @@ async fn main() -> std::process::ExitCode {
             "--scenario" => next()
                 .map(|v| scenario = Some(v))
                 .ok_or("--scenario needs a path"),
+            "--resume" => next()
+                .map(|v| resume = Some(std::path::PathBuf::from(v)))
+                .ok_or("--resume needs the path of a checkpoint.json"),
             "--record" => next()
                 .map(|v| live.recording = Some(std::path::PathBuf::from(v)))
                 .ok_or("--record needs a path"),
@@ -152,6 +187,25 @@ async fn main() -> std::process::ExitCode {
     }
     options.bind = SocketAddr::new(host, port);
 
+    // A checkpoint names its run: the resolved scenario beside it and the build timestamp.
+    // The run is served paused at the checkpoint's instant, computed there again (the
+    // engine is deterministic, so it is the same run).
+    let mut resume_at: Option<u64> = None;
+    if let Some(path) = &resume {
+        match read_checkpoint(path) {
+            Ok((scenario_path, build_utc, t_ns)) => {
+                scenario = Some(scenario_path);
+                live.build_utc = build_utc;
+                live.paused = true;
+                resume_at = Some(t_ns);
+            }
+            Err(message) => {
+                eprintln!("v2xw-server: --resume {}: {message}", path.display());
+                return std::process::ExitCode::FAILURE;
+            }
+        }
+    }
+
     let started = match &scenario {
         Some(path) => serve_scenario(options, path, live).await,
         None => serve_stub(options, stub).await,
@@ -163,6 +217,38 @@ async fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
+    if let Some(t_ns) = resume_at {
+        let run = std::sync::Arc::clone(server.run());
+        let target = t_ns.saturating_add(1);
+        let reached = tokio::task::spawn_blocking(move || {
+            let mut last = 0;
+            let mut printed = 0u64;
+            loop {
+                let reached = run.extend_to(target, std::time::Duration::from_millis(200));
+                if reached >= target || (reached == last && reached > 0 && run.extend_to(target, std::time::Duration::from_secs(5)) == reached) {
+                    let _ = run.seek(reached.min(target));
+                    return reached;
+                }
+                if !quiet && reached / 3_600_000_000_000 > printed {
+                    printed = reached / 3_600_000_000_000;
+                    eprintln!(
+                        "v2xw-server: computing to the checkpoint: {:.1} of {:.1} simulated hours",
+                        reached as f64 / 3.6e12,
+                        target as f64 / 3.6e12
+                    );
+                }
+                last = reached;
+            }
+        })
+        .await
+        .unwrap_or(0);
+        if !quiet {
+            eprintln!(
+                "v2xw-server: at the checkpoint, {:.1} simulated hours in; paused",
+                reached as f64 / 3.6e12
+            );
+        }
+    }
     if !quiet {
         let run = server.run();
         let d = run.descriptor();

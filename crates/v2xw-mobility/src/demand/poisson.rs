@@ -78,6 +78,12 @@ pub struct PoissonParams {
     /// below a 25 mph limit on an empty avenue, which is no city's free-speed distribution;
     /// a scenario that wants it names it (`speed: {law: legacy-uniform, ...}`).
     pub speed: SpeedLaw,
+    /// Demand by the hour of the local day ([`crate::demand::daily`]), on top of
+    /// `profile`: what makes a run of days have a night and a rush hour. `None` keeps the
+    /// rate flat over the clock, and is left out of the serialised parameters so every
+    /// scenario without it keeps its card and its draw sequence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daily: Option<crate::demand::DailyProfile>,
 }
 
 impl Default for PoissonParams {
@@ -90,6 +96,7 @@ impl Default for PoissonParams {
             duration: Duration::from_secs(600),
             fleet: FleetMix::CarsOnly,
             speed: SpeedLaw::ClassSpeedDev,
+            daily: None,
         }
     }
 }
@@ -173,10 +180,16 @@ impl PoissonDemand {
         t.saturating_add(secs_to_ns(gap_s).max(1))
     }
 
+    /// The daily profile's factor at `t`, `1` without one.
+    pub fn daily_factor_at(&self, t: SimTime) -> f64 {
+        self.params.daily.map_or(1.0, |d| d.factor(t))
+    }
+
     /// Turns a surviving candidate into a trip.
     fn make_trip(&mut self, ctx: &mut dyn MobCtx, t: SimTime) -> Option<TripRequest> {
         let multiplier = self.multiplier_at(t);
-        let keep = multiplier * self.event_multiplier / self.params.candidate_boost.max(1.0);
+        let keep = multiplier * self.daily_factor_at(t) * self.event_multiplier
+            / self.params.candidate_boost.max(1.0);
         if !ctx
             .rng(RngDomain::Spawn, EntityRef::Global)
             .bool(keep.clamp(0.0, 1.0))
@@ -397,6 +410,53 @@ mod tests {
             t += step;
         }
         out
+    }
+
+    /// A day of arrivals under the NYC DOT daily profile has the day's shape: the hour of
+    /// the morning peak brings several times the arrivals of the night's quietest hour,
+    /// the afternoon is as busy as the morning, and the day's total is the mean rate times
+    /// a day. Counted from the model itself over a day, in one-minute windows.
+    ///
+    /// Shown able to fail: with the daily factor left out of the thinning probability
+    /// (`keep` without `daily_factor_at`) the 08:00/03:00 ratio is 1.0 ± noise and the
+    /// first assertion fails.
+    #[test]
+    fn a_day_of_arrivals_follows_the_daily_profile() {
+        let w = world();
+        let rng = RngRegistry::new(77);
+        // 2027-03-04, a Thursday, from local midnight in New York (UTC−5).
+        let daily = crate::demand::DailyProfile {
+            curve: crate::demand::DailyCurve::NycDotManhattan,
+            utc_offset_h: Some(-5.0),
+            t0_unix_s: 1_804_118_400.0 + 5.0 * 3600.0,
+        };
+        let mut m = demand(
+            &w,
+            PoissonParams {
+                arrival_rate_per_s: 600.0 / 3600.0,
+                candidate_boost: daily.supremum(),
+                duration: Duration::from_secs(86_400),
+                daily: Some(daily),
+                ..PoissonParams::default()
+            },
+        );
+        let trips = collect(&mut m, &w, &rng, 86_400, 60_000);
+        let mut by_hour = [0u32; 24];
+        for t in &trips {
+            by_hour[(t.t / (3600 * NS_PER_S)) as usize] += 1;
+        }
+        let (night, morning, afternoon) = (by_hour[3], by_hour[8], by_hour[16]);
+        assert!(
+            f64::from(morning) > 3.0 * f64::from(night),
+            "08:00 brought {morning} arrivals and 03:00 {night}: {by_hour:?}"
+        );
+        assert!(
+            f64::from(afternoon) > 0.9 * f64::from(morning),
+            "16:00 {afternoon} against 08:00 {morning}"
+        );
+        // 600 veh/h on average over a weekday is 14,400 arrivals, ± a few sigma.
+        let n = trips.len() as f64;
+        assert!((n - 14_400.0).abs() < 600.0, "{n} arrivals in the day");
     }
 
     #[test]

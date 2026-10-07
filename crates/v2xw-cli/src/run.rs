@@ -442,6 +442,12 @@ fn execute(
         .progress_interval_s(duration_s)
         .map(|s| ((s * 1e9).round() as u64).max(1));
 
+    // A recording with no scene does not pay for encoding one. (The snapshot stream is
+    // binary and apart from the records, so no record and no digest moves.)
+    if opts.record && !level.keeps_frames() {
+        engine.set_snapshots_enabled(false);
+    }
+
     // A resume first brings the engine back to the checkpoint, with every output off, and
     // goes no further unless the record digest there is the checkpoint's.
     let mut replay = Tally::new(Sink::none());
@@ -593,7 +599,7 @@ fn execute(
             && let (Some(c), Some(every)) = (next_checkpoint, checkpoint_every_ns)
             && c == target
         {
-            if c < horizon_ns {
+            if c.saturating_add(1) < horizon_ns {
                 let segments_done = tally.inner_mut().roll()?;
                 let metrics_bytes = match tally.metrics_mut() {
                     Some(m) => m.flush()?,

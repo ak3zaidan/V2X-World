@@ -1,0 +1,94 @@
+# A day of Midtown: the default scenario's streets, fleet and credential system, run for a
+# whole day on the clock instead of five compressed minutes.
+#
+# What makes it a day and not five minutes stretched:
+#
+#  * demand follows Manhattan's counted traffic by the hour (NYC DOT Automated Traffic
+#    Volume Counts, 2015–2026; `v2xw_mobility::demand::daily`): the night lull at 03:00
+#    at a quarter of the mean, the morning peak at 08:00, the afternoon plateau from 15:00
+#    to 18:00, and a Saturday lighter than a weekday. `rate_veh_per_h` is the mean weekday
+#    rate, so the fleet on the map swings between about 5 and 30 vehicles over the day;
+#  * the credential system runs on its deployment calendar, not a compressed one: weekly
+#    i-periods with the hour's overlap (CAMP-EE §2.1.5.3.2), twenty certificates a period,
+#    the CRL published once a day (Brecht 2018 §VI-G) and fetched by every car, pseudonyms
+#    changed on the J2945/1 five-minute rule all day;
+#  * two per cent of vehicles lie about their position from 06:00 to 20:00, so the
+#    Misbehaviour Authority has something to revoke and the daily CRL something to carry;
+#  * the scene's sun follows the run's clock (the page draws night as night, headlamps
+#    included: `v2xw_engine::daylight`).
+#
+# Long-run settings, each a choice made for a run of a day and each stated:
+#
+#  * metrics are sampled once a minute (`time.metric_period_s: 60`), not once a second:
+#    a day of every metric at 1 s is about 28 million samples and a 7 GB metrics.json;
+#    at 60 s it is under half a million. Each sample then summarises a minute;
+#  * the propagation tier is `medium` (TR 37.885 by distance, line of sight or not), not
+#    the default scenario's `high` geometric street-corner model: the high tier costs
+#    about three times as much per frame, and a day of it on this machine is most of a
+#    working day of wall clock. Copy the file and set `high` for a study of the corners.
+#
+# Run it headless, with checkpoints so a crash or a closed laptop costs at most an hour:
+#
+#     v2xw run scenarios/manhattan-day.yaml --out runs/day --record-level metrics \
+#         --checkpoint-every 1h
+#     v2xw resume runs/day/checkpoint.json          # after an interruption
+#
+# docs/design/findings/long-runs.md has the measured cost of a day and of each of the
+# ways to make one cheaper.
+schema: v2xw/scenario/1
+
+meta:
+  name: manhattan-day
+  base: manhattan-5min.yaml
+  description: >-
+    A day of Midtown Manhattan from midnight: demand by the hour from NYC DOT counts, the
+    SCMS on its deployment calendar (weekly i-periods, a daily CRL), pseudonym changes all
+    day, a small population of position liars between 06:00 and 20:00, and metrics sampled
+    once a minute.
+  tags: [manhattan, day, long-run, scms, demand-profile]
+  created: "2026-10-07"
+
+time:
+  # Local midnight, New York standard time (UTC−5), on a Thursday.
+  t0: "2027-03-04T05:00:00Z"
+  duration_s: 86400.0
+  metric_period_s: 60.0
+
+actors:
+  vehicles:
+    demand:
+      kind: mobility/demand/poisson
+      # The mean weekday rate; the hour's factor multiplies it (0.26 at 03:00, 1.34 at
+      # 17:00). Measured on this world: 300 veh/h offered settles at about 40 vehicles on
+      # the map at the daily mean.
+      rate_veh_per_h: 300.0
+      params:
+        daily:
+          curve: nyc-dot-manhattan
+
+radio:
+  tiers:
+    propagation: medium
+
+security:
+  # The deployment calendar: the compressed five-minute values of the base are removed,
+  # so every lifecycle parameter takes its cited default (`ScmsParams::default`).
+  protocol:
+    id: protocol/scms/camp
+    params:
+      i_period_s: null
+      cert_lifetime_s: null
+      certs_per_period: null
+      pool_periods: null
+      topup_below_periods: null
+      report_shuffle_window_s: null
+      crl_cadence_s: null
+      crl_fetch_interval_s: null
+
+threats:
+  attackers:
+    - id: threat/attacker/legacy/ConstPos
+      fraction: 0.02
+      schedule:
+        from_s: 21600.0
+        to_s: 72000.0

@@ -9,6 +9,7 @@
 //! This module holds what all three share: the shape functions, the fleet mix and the
 //! desired-speed law.
 
+pub mod daily;
 pub mod od;
 pub mod poisson;
 pub mod tr36885;
@@ -20,6 +21,7 @@ use v2xw_core::rng::RngStream;
 
 use crate::classes::{LegacyClass, VehicleClass};
 
+pub use daily::{DailyCurve, DailyProfile};
 pub use od::{OdLaw, OdModel, OdParams};
 pub use poisson::{PoissonDemand, PoissonParams};
 pub use tr36885::{DropModel, DropParams, DropVariant};

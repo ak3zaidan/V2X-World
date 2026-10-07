@@ -191,16 +191,75 @@ export function durationNs(ns: number | bigint): string {
   return `${sign}${m}m ${String(s).padStart(2, "0")}s`;
 }
 
-/** Simulated time as `hh:mm:ss.mmm`, the form the scrub bar and event markers use. */
+/**
+ * Simulated time as `hh:mm:ss.mmm`, the form the scrub bar and event markers use; from a day on,
+ * `1d 02:03:04` — a run of days counts its days, and the milliseconds stop meaning anything there.
+ */
 export function simClock(ns: number | bigint): string {
   const n = typeof ns === "bigint" ? Number(ns) : ns;
   if (!Number.isFinite(n)) return NA;
   const total = n / 1e9;
+  if (total >= 86400) {
+    const d = Math.floor(total / 86400);
+    const rem = total % 86400;
+    const hh = String(Math.floor(rem / 3600)).padStart(2, "0");
+    const mm = String(Math.floor((rem % 3600) / 60)).padStart(2, "0");
+    const ss = String(Math.floor(rem % 60)).padStart(2, "0");
+    return `${d}d ${hh}:${mm}:${ss}`;
+  }
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = Math.floor(total % 60);
   const ms = Math.floor((total % 1) * 1000);
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * The run's own clock at a simulated instant, as `Thu 08:15`: the scenario's `time.t0` (`Hello`'s
+ * `t0_wall_ns`) plus the simulated time, in local mean time at the world's origin (longitude / 15°
+ * an hour) — the clock the scene's sun and the engine's headlamp rule read, so the label and the
+ * light agree. Empty when the run has no `t0`.
+ */
+export function localClock(t0UnixS: number | undefined, originLonDeg: number, simNs: number): string {
+  const t0 = t0UnixS ?? 0;
+  if (!Number.isFinite(t0) || t0 === 0 || !Number.isFinite(simNs)) return "";
+  const local = t0 + simNs / 1e9 + (Number.isFinite(originLonDeg) ? originLonDeg / 15 : 0) * 3600;
+  const date = new Date(Math.floor(local) * 1000);
+  const hh = String(date.getUTCHours()).padStart(2, "0");
+  const mm = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${WEEKDAYS[date.getUTCDay()]} ${hh}:${mm}`;
+}
+
+/**
+ * A simulated-time axis tick, in the unit the visible span reads in: seconds for a few minutes,
+ * `h:mm` for hours, `1d 06h` for days.
+ */
+export function axisTime(seconds: number, spanS: number): string {
+  if (!Number.isFinite(seconds)) return "—";
+  if (spanS < 900) return `${Math.round(seconds)}`;
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (spanS >= 2 * 86400) return d > 0 ? `${d}d ${String(h).padStart(2, "0")}h` : `${h}h`;
+  const hm = `${d * 24 + h}:${String(m).padStart(2, "0")}`;
+  return hm;
+}
+
+/**
+ * Where a simulated-time axis puts its ticks: on round minutes, hours or days, about `count` of
+ * them across `[from, to]` seconds. uPlot's own splits are decimal (every 20,000 s), which on a day
+ * puts no tick on any hour a reader would look for.
+ */
+export function axisTimeSplits(from: number, to: number, count = 6): number[] {
+  const span = to - from;
+  if (!(span > 0)) return [from];
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800, 604800];
+  const step = steps.find((s) => span / s <= count) ?? steps[steps.length - 1];
+  const out: number[] = [];
+  for (let t = Math.ceil(from / step) * step; t <= to; t += step) out.push(t);
+  return out;
 }
 
 /** A signed nanosecond offset (`clock_offset_ns`) in the largest readable unit. */

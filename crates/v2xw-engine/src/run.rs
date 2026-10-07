@@ -1228,7 +1228,7 @@ impl Engine {
             transmitted_since_step: std::collections::BTreeSet::new(),
             lamps: BTreeMap::new(),
             providers,
-            metric_period: Duration::from_secs(1),
+            metric_period: scenario_for_radio.time.metric_period(),
             reverse_node_walk: false,
             link_sweep: true,
             gen_timing,

@@ -1111,7 +1111,7 @@ fn assemble_setup(
         mobility_step_ns: cadence.mobility_step.as_nanos(),
         keyframe_period_ns: cadence.keyframe_period.as_nanos(),
         telemetry_period_ns: 1_000_000_000,
-        metric_period_ns: 1_000_000_000,
+        metric_period_ns: scenario.time.metric_period().as_nanos(),
         resume_seq: 0,
         sim_time_ns: 0,
         origin_lat_deg: world.origin.lat_deg,
@@ -4440,6 +4440,31 @@ impl Engine for LiveEngine {
             self.state = RunState::Paused;
         }
         Ok(outputs)
+    }
+
+    fn rewind(&mut self) -> Result<bool> {
+        // The same run on a fresh kernel: `restart` with what makes it the *same* run to a
+        // connected page kept — the run descriptor, the strings the page has already
+        // interned, the generation (so no connection is sent a new `Hello`). Everything
+        // the kernel produces is computed again from `t = 0`, which the determinism
+        // contract makes the same steps; the seek history, the metric series and the
+        // projector's stores are refilled as it goes.
+        let scenario = self.scenario.clone();
+        let descriptor = self.descriptor.clone();
+        let strings = (
+            std::mem::take(&mut self.appended_strings),
+            std::mem::take(&mut self.appended_index),
+        );
+        let runs_started = self.runs_started;
+        let speed = (self.speed, self.client_sync);
+        self.restart(scenario)?;
+        self.descriptor = descriptor;
+        (self.appended_strings, self.appended_index) = strings;
+        self.runs_started = runs_started;
+        (self.speed, self.client_sync) = speed;
+        // §6.6: a seek pauses the run; the rewind is the first half of one.
+        self.state = RunState::Paused;
+        Ok(true)
     }
 
     fn extend_to(&mut self, t: SimTime, budget: std::time::Duration) -> u64 {

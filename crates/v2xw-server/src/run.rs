@@ -347,6 +347,15 @@ impl Run {
         self.engine.lock().extend_to(t, budget)
     }
 
+    /// Starts the run's kernel again from `t = 0`, keeping the run's identity, so time
+    /// before the retained history can be computed again; see [`Engine::rewind`].
+    ///
+    /// # Errors
+    /// Whatever starting the kernel returns.
+    pub fn rewind(&self) -> Result<bool> {
+        self.engine.lock().rewind()
+    }
+
     /// The end of the run, which no seek can pass.
     pub fn horizon_ns(&self) -> u64 {
         self.engine.lock().horizon_ns()

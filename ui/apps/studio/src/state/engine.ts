@@ -789,6 +789,10 @@ export class StudioEngine {
         maxActors: 20_000,
         autoStart: true,
       });
+      // The sun, the sky and the headlamps follow the run's own clock (`time.t0` plus the
+      // simulated time), so a run of a day goes dark at dusk the way the engine's headlamp rule
+      // does; a fixed 11:00 drew every night-time run in daylight.
+      this.viewer.setSunFromRun(true);
     }
     this.viewer.mount(canvas);
     this.viewer.setTheme(studioTheme(theme));
@@ -1359,6 +1363,8 @@ export class StudioEngine {
       channels,
       origin: { lat: hello.originLatDeg, lon: hello.originLonDeg, alt: hello.originAltM },
       bbox: { minX: hello.bboxMinXM, minY: hello.bboxMinYM, maxX: hello.bboxMaxXM, maxY: hello.bboxMaxYM },
+      t0UnixS: Number(hello.t0WallNs / 1_000_000n) / 1000,
+      metricPeriodNs: Number(hello.metricPeriodNs),
       versionMajor: hello.versionMajor,
       versionMinor: hello.versionMinor,
     }, { resumed });

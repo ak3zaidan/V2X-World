@@ -499,7 +499,23 @@ pub fn build_demand(scenario: &Scenario, world: &World) -> Result<Box<dyn Demand
             // the timeline puts in force (`PoissonParams::candidate_boost`), so the boost is
             // raised to the timeline's peak. A scenario with no demand event has a peak of 1
             // and keeps the draw sequence it always had.
-            let peak = crate::timeline::demand_peak(scenario);
+            let mut peak = crate::timeline::demand_peak(scenario);
+            // A daily profile is on the civil clock: `time.t0` puts the run on it, and the
+            // world's longitude gives the local offset when the scenario does not. Its peak
+            // multiplies the timeline's in the boost.
+            if let Some(daily) = params.daily.as_mut() {
+                let wall = WallClock::parse_rfc3339(&scenario.time.t0).map_err(|e| {
+                    EngineError::Scenario(crate::ScenarioError::conflict(
+                        "time.t0",
+                        format!("a daily demand profile needs the run on the civil clock: {e}"),
+                    ))
+                })?;
+                daily.t0_unix_s = wall.t0_unix_s() as f64;
+                if daily.utc_offset_h.is_none() {
+                    daily.utc_offset_h = Some((world.origin.lon_deg / 15.0).round());
+                }
+                peak *= daily.supremum();
+            }
             if peak > params.candidate_boost {
                 params.candidate_boost = peak;
             }
