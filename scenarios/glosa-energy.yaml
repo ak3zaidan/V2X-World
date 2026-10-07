@@ -1,0 +1,192 @@
+# ============================================================================
+# RQ: Does green-light speed advice (GLOSA) change what the traffic burns?
+# ============================================================================
+#
+# The connected intersections of `connected-intersections.yaml` — four roadside units on
+# the middle avenue broadcasting SPaT and MAP from the engine's own signal plans — with
+# the energy layer on (`energy:`) and the share of drivers who follow GLOSA's advice swept
+# from none to all.
+#
+#     v2xw experiment run scenarios/glosa-energy.yaml --out runs/glosa-energy
+#     v2xw energy runs/glosa-energy/<cell>/recording.mcap --vehicles-csv vehicles.csv
+#
+# The second line re-scores a finished recording — under another emission model
+# (`--emission-model phemlight`), EV model or fleet (`--spec`) — without re-running it.
+#
+# ## What it measures
+#
+# * `stops_per_km`, `fuel_per_100km`, `co2_per_km`, `nox_per_km` — per class and for the
+#   fleet, over the run so far (`metrics/energy`, `v2xw_energy::provider`).
+# * `co2_mass`, `fuel_mass`, `ev_battery_energy`, `ev_regen_energy` — per flush window.
+# * `link_*` — the same per lane (`region` = lane id), for a map of where the fuel goes.
+# * `ev_soc_min`, `ev_depleted` — the electric share's batteries.
+#
+# The models: HBEFA 3.1 (Krajzewicz et al. 2015) for the combustion cars, a Euro 6 mix
+# with a third diesel; SUMO's battery model (Kurczveil et al. 2014) for the one car in
+# five that is electric. Every number's source is on the model cards.
+#
+# ## What it does not measure
+#
+# * Cold starts, evaporative and non-exhaust emissions (the models' cards list what each
+#   ignores).
+# * Charging, and the upstream emissions of fuel and electricity.
+# * Anything about drivers who ignore the advice beyond the compliance share: a follower
+#   eases to the advised speed at 1 m/s² (`v2xw_engine::run::GLOSA_EASE_MPS2`).
+#
+# ## What to expect
+#
+# Published GLOSA evaluations put the saving at a few per cent to over twenty per cent,
+# depending on penetration, signal timing and how much stopping there was to remove:
+# Treiber and Kesting (2014, arXiv:1408.5498) about 15 % fewer stops and 4 % on fuel at
+# 50 km/h; Tielert et al. (2012, ITST) up to 20 % battery energy for electric vehicles;
+# Katsaros et al. (2011, IWCMC) fuel and stop time falling as penetration rises.
+# `crates/v2xw-engine/tests/energy_glosa.rs` runs the two ends of this sweep and checks
+# that the advised vehicles stop less and burn less.
+schema: v2xw/scenario/1
+meta:
+  name: glosa-energy
+  description: >-
+    GLOSA from four SPaT/MAP roadside units, with the share of drivers following its
+    advice swept, and emissions, fuel and EV energy measured (metrics/energy).
+  authors: [v2xw]
+  tags: [glosa, energy, emissions, spat, map, rsu, procedural, dsrc]
+  created: "2026-10-07"
+
+seed: "0xC0FFEE_5EED"
+
+time:
+  t0: "2027-03-04T08:00:00Z"
+  duration_s: 120.0
+  mobility_step_ms: 100
+  des_resolution: 1us
+
+world:
+  source:
+    kind: procedural
+    generator: world/source/procedural-grid
+    params:
+      cols: 6
+      rows: 6
+      block_x_m: 274.0
+      block_y_m: 80.0
+      lanes_per_direction: 2
+      lane_width_m: 3.5
+      sidewalk_m: 2.0
+      speed_limit_mps: 11.176
+      signalised: true
+      cycle_s: 60.0
+      amber_s: 3.0
+      crossings: true
+      block_buildings: true
+      building_height_m: 30.0
+      # One infrastructure site per junction, at its centre. Site k is junction k, row by
+      # row: site = row * cols + col.
+      rsu_at_junctions: true
+      corner_radius_m: 4.5
+  imported_at: "2026-09-18T00:00:00Z"
+  buildings:
+    enabled: true
+    keep_holes: true
+  terrain:
+    dem: null
+
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 3000.0
+    classes:
+      passenger:
+        fraction: 0.9
+      emergency:
+        fraction: 0.1
+  # Four units on the middle avenue (column 2), rows 1 to 4. `spat` puts the junction's SPaT
+  # on the air and answers signal requests; `map` its geometry.
+  #
+  # The Commsignia ITS-RS4 profile, because a unit signs every SPaT and MAP on its own HSM
+  # and the RS4 is the roadside profile that publishes a signing cost. Its figure — 50 ms
+  # per ECDSA signature — is the flagged upper bound from its brief (the profile says why);
+  # at 11 signatures a second it keeps the unit's HSM about half busy. The Cohda MK5 RSU
+  # profile publishes none, and the engine refuses to build a SPaT unit on it rather than
+  # let it sign for free.
+  rsus:
+    - site: 8
+      roles: [spat, map]
+      profile: rsu/commsignia-its-rs4
+    - site: 14
+      roles: [spat, map]
+      profile: rsu/commsignia-its-rs4
+    - site: 20
+      roles: [spat, map]
+      profile: rsu/commsignia-its-rs4
+    - site: 26
+      roles: [spat, map]
+      profile: rsu/commsignia-its-rs4
+
+weather:
+  initial: clear
+  intensity: 0.0
+
+radio:
+  rat: dsrc-80211p
+  tiers:
+    propagation: medium
+    phy: medium
+    mac: medium
+
+net:
+  layer: wsmp
+
+messages:
+  sets: [bsm, spat, map, srm, ssm]
+  codec_tier: size-model
+
+security:
+  envelope: ieee1609.2
+  signature: ecdsa-p256
+  crypto_mode: modeled
+  verification_policy: prioritized
+  signer_id_policy:
+    full_cert_every_ms: 1000
+    digest_otherwise: true
+  pseudonym_change:
+    strategy: time
+    period_s: 300.0
+
+nodes:
+  default_obu: obu/unex-obu-301-craton2
+  compute_tier: medium
+  backend_tier: medium
+
+# The energy section installs its own provider (`metrics/energy`); nothing else is needed
+# to answer the question.
+metrics: []
+
+exporters: []
+
+# Every equipped vehicle runs the applications; GLOSA's advice is what this study varies.
+apps:
+  enabled: [fcw, eebl, ima, lta, bsw, pcw, rlvw, glosa]
+  glosa_compliance: 1.0
+
+# The energy layer (`v2xw_energy`). Every key is optional; `energy: {}` is HBEFA 3 over a
+# Euro 4 petrol fleet with no electric vehicles.
+energy:
+  emission_model: energy/emission/hbefa3
+  ev_model: energy/ev/kurczveil
+  fleet:
+    passenger-car:
+      ev_share: 0.2
+      diesel_share: 0.33
+      euro: 6
+  ev:
+    initial_soc: 0.8
+  stop_speed_mps: 0.1
+
+experiment:
+  sweep:
+    # None, half and every equipped driver following the advice.
+    apps.glosa_compliance: [0.0, 0.5, 1.0]
+  seeds: [1, 2, 3]
+  replications: 1

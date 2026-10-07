@@ -196,6 +196,14 @@ pub fn card() -> ModelCard {
          reproduced (see the module documentation)"
             .to_string(),
         "no two-wheeler classes; a motorcycle is unmodelled under this model".to_string(),
+        "the intercept is the standstill rate, and it is high: PC_G_EU4 idles at 2.6 g/s \
+         CO2 and 0.84 g/s fuel (about 4 L/h), some four times a warm petrol car's \
+         measured idle (PHEMlight's PC_G_EU4 idle row: 0.22 g/s). Traffic that queues a \
+         lot reads high - on the EPA UDDS, a fifth of it stationary, 12 L/100 km against \
+         PHEMlight's 9 - and a V2X application that removes idling reads a larger saving \
+         under this model than under PHEMlight. SUMO's HBEFA3 behaves the same; compare \
+         energy/emission/phemlight for passenger cars"
+            .to_string(),
     ];
     card.ignores = vec![
         "cold-start excess emissions".to_string(),

@@ -243,6 +243,8 @@ pub struct EnergyProvider {
     retired_depleted: u64,
     /// Retired vehicles the model had no class for.
     retired_unmodelled: u64,
+    /// MOVES operating-mode seconds by (source type, lane, mode).
+    op_modes: BTreeMap<(u16, u32, u8), f64>,
     rejected: u64,
 }
 
@@ -279,6 +281,7 @@ impl EnergyProvider {
             retired_soc_min: None,
             retired_depleted: 0,
             retired_unmodelled: 0,
+            op_modes: BTreeMap::new(),
             rejected: 0,
         })
     }
@@ -403,9 +406,6 @@ impl EnergyProvider {
         let Some(track) = self.tracks.get_mut(&k.actor) else {
             return;
         };
-        if matches!(track.kind, Kind::Ignored) {
-            return;
-        }
         let now = Last {
             t: k.t,
             v: k.speed_mps.max(0.0),
@@ -413,6 +413,11 @@ impl EnergyProvider {
             heading: k.heading_rad,
             lane: k.lane,
         };
+        if matches!(track.kind, Kind::Ignored) {
+            // Kept only so `retire` can drop it once it is gone.
+            track.last = Some(now);
+            return;
+        }
         let Some(last) = track.last.replace(now) else {
             track.halted = now.v < REARM_SPEED_MPS;
             return;
@@ -486,6 +491,26 @@ impl EnergyProvider {
         if let Some(lane) = last.lane {
             track.window_links.entry(lane).or_default().add(&d);
         }
+        // The MOVES operating-mode time, for a project-level MOVES run of this traffic.
+        let source = match track.powertrain.map(|p| p.segment) {
+            Some(Segment::PassengerCar) => Some((21u16, &crate::moves::PASSENGER_CAR)),
+            Some(Segment::LightCommercial) => Some((31u16, &crate::moves::PASSENGER_TRUCK)),
+            _ => None,
+        };
+        if let (Some((source_type, rl)), Some(lane)) = (source, last.lane) {
+            let mode = crate::moves::op_mode(rl, &s);
+            *self.op_modes.entry((source_type, lane, mode)).or_default() += dt;
+        }
+    }
+
+    /// Seconds spent in each MOVES operating mode, by `(source type, lane, mode)`: 21 is a
+    /// passenger car, 31 a passenger truck (light commercial vehicles). Divided by its
+    /// `(source type, lane)` total, this is the `opModeDistribution` table a MOVES
+    /// project-level run takes as its activity input, so MOVES's own current rates can
+    /// be applied to the traffic this engine simulated.
+    #[must_use]
+    pub fn op_mode_seconds(&self) -> &BTreeMap<(u16, u32, u8), f64> {
+        &self.op_modes
     }
 
     fn definitions(&self) -> Vec<MetricDef> {
@@ -1075,7 +1100,8 @@ mod tests {
         let co2_car = sample(&out, "co2_mass|class=passenger").value.point().unwrap();
         assert!(co2 > 0.0 && (co2 - co2_car).abs() < 1e-9, "only the car emits");
         let km = sample(&out, "vehicle_distance").value.point().unwrap();
-        assert!((km - (0.049 + 0.280 + 0.049 + 0.056)).abs() < 0.002, "{km} km");
+        let want: f64 = prof.windows(2).map(|w| 0.5 * (w[0] + w[1])).sum::<f64>() / 1000.0;
+        assert!((km - want).abs() < 1e-6, "{km} km, want {want}");
         let g_km = sample(&out, "co2_per_km").value.point().unwrap();
         assert!((100.0..400.0).contains(&g_km), "{g_km} g/km");
         assert_eq!(sample(&out, "vehicle_stops").value.point(), Some(1.0));
@@ -1087,6 +1113,10 @@ mod tests {
         assert!(sample(&again, "co2_mass").value.is_insufficient());
         assert_eq!(sample(&again, "co2_per_km").value.point(), Some(g_km));
         assert_eq!(p.vehicles().len(), 1, "the pedestrian is not a vehicle");
+        // The operating-mode time adds up to the car's driving time, idle included.
+        let secs: f64 = p.op_mode_seconds().values().sum();
+        assert!((secs - (prof.len() - 1) as f64).abs() < 1e-9, "{secs}");
+        assert!(p.op_mode_seconds().contains_key(&(21, 7, 1)), "idle was seen");
     }
 
     #[test]

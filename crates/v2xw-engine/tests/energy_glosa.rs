@@ -46,8 +46,10 @@ fn scenario(compliance: f64) -> Scenario {
 struct Outcome {
     /// The live provider's last headline value of each run-so-far metric.
     live: BTreeMap<String, f64>,
-    /// Per-actor totals, re-scored from the recording.
+    /// Per-actor totals, re-scored from the recording (HBEFA 3, the run's own model).
     rescored: BTreeMap<ActorId, Totals>,
+    /// The same recording re-scored under PHEMlight, for the model's share of the answer.
+    phem: BTreeMap<ActorId, Totals>,
     /// The actors GLOSA advised.
     advised: BTreeSet<ActorId>,
 }
@@ -63,6 +65,11 @@ fn run(compliance: f64) -> Outcome {
     let mut node_actor: BTreeMap<NodeId, ActorId> = BTreeMap::new();
     let mut advised_nodes: BTreeSet<u64> = BTreeSet::new();
     let mut rescore = EnergyProvider::new(EnergySpec::default(), seed).expect("provider");
+    let phem_spec = EnergySpec {
+        emission_model: "phemlight".to_string(),
+        ..EnergySpec::default()
+    };
+    let mut phem = EnergyProvider::new(phem_spec, seed).expect("provider");
     for (_, r) in recorder.records() {
         match r.channel {
             "metric.sample" => {
@@ -84,6 +91,7 @@ fn run(compliance: f64) -> Outcome {
                     node_actor.insert(n, k.actor);
                 }
                 rescore.on_event(r);
+                phem.on_event(r);
             }
             "app.advice" => {
                 let v: serde_json::Value = serde_json::from_slice(&r.json).expect("json");
@@ -104,17 +112,23 @@ fn run(compliance: f64) -> Outcome {
         .into_iter()
         .map(|v| (v.actor, v.totals))
         .collect();
+    let phem = phem
+        .vehicles()
+        .into_iter()
+        .map(|v| (v.actor, v.totals))
+        .collect();
     Outcome {
         live: live.into_iter().map(|(k, (_, v))| (k, v)).collect(),
         rescored,
+        phem,
         advised,
     }
 }
 
-fn sum(o: &Outcome, actors: &BTreeSet<ActorId>) -> Totals {
+fn sum(by: &BTreeMap<ActorId, Totals>, actors: &BTreeSet<ActorId>) -> Totals {
     let mut t = Totals::default();
     for a in actors {
-        if let Some(x) = o.rescored.get(a) {
+        if let Some(x) = by.get(a) {
             t.co2_g += x.co2_g;
             t.fuel_l += x.fuel_l;
             t.km_ice += x.km_ice;
@@ -153,7 +167,8 @@ fn glosa_followed_reduces_stops_and_fuel_of_the_advised_vehicles() {
         .filter(|a| off.rescored.contains_key(a) && on.rescored.contains_key(a))
         .copied()
         .collect();
-    let (a, b) = (sum(&off, &both), sum(&on, &both));
+    let (a, b) = (sum(&off.rescored, &both), sum(&on.rescored, &both));
+    let (pa, pb) = (sum(&off.phem, &both), sum(&on.phem, &both));
     let per = |t: &Totals| {
         (
             t.fuel_l / t.km_ice * 100.0,
@@ -179,7 +194,14 @@ fn glosa_followed_reduces_stops_and_fuel_of_the_advised_vehicles() {
         "fleet (live): off {:.1} g/km, {:.3} stops/km | on {:.1} g/km, {:.3} stops/km",
         off.live["co2_per_km"], off.live["stops_per_km"], on.live["co2_per_km"], on.live["stops_per_km"]
     );
+    let (pf0, _, _) = per(&pa);
+    let (pf1, _, _) = per(&pb);
+    eprintln!(
+        "PHEMlight re-score: {pf0:.2} -> {pf1:.2} L/100km ({:+.1} %)",
+        (pf1 / pf0 - 1.0) * 100.0
+    );
     assert!(both.len() >= 20, "only {} advised vehicles to compare", both.len());
+    assert!(pf1 < pf0, "under PHEMlight GLOSA did not reduce fuel: {pf0} -> {pf1}");
     assert!(stops1 < stops0, "GLOSA did not reduce stops: {stops0} -> {stops1}");
     assert!(fuel1 < fuel0, "GLOSA did not reduce fuel: {fuel0} -> {fuel1}");
 }

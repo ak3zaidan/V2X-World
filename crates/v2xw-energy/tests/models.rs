@@ -93,37 +93,60 @@ fn the_cycles_are_the_published_ones() {
 /// the unadjusted dynamometer figures the cycles measure are about a quarter better, which
 /// is 6.3-8.8 and 4.6-5.7 L/100 km; the bands widen that by the spread between a European
 /// Euro 4 car (HBEFA, PHEMlight) and a US fleet-average light-duty vehicle (MOVES).
+///
+/// One exception, kept visible rather than hidden in a wider band: HBEFA 3's urban figure.
+/// The fit's intercept is what it charges at a standstill, and for `PC_G_EU4` that is
+/// 3014 / 3.6 = 837 mg/s of fuel (about 4.1 L/h) and 2.6 g/s of CO2 — some four times a
+/// warm petrol car's measured idle (PHEMlight's measured idle row for the same class is
+/// 0.22 g/s, about 1 L/h). The UDDS stands still for a fifth of its 1369 s, so HBEFA 3
+/// reads 10-14 L/100 km there. SUMO reports the same, because it is the same polynomial.
+/// The model card states it; this test pins it, so a change to it is a decision.
 #[test]
 fn every_combustion_model_lands_in_the_cited_band_on_udds_and_hwfet() {
     let mut seen = BTreeMap::new();
+    let mut out_of_band = Vec::new();
     for model in registry::EMISSION_MODELS {
-        for (cyc, lo, hi) in [("epa_udds.txt", 5.5, 11.0), ("epa_hwfet.txt", 4.0, 8.0)] {
+        for cyc in ["epa_udds.txt", "epa_hwfet.txt"] {
+            let (lo, hi) = match (model, cyc) {
+                ("energy/emission/hbefa3", "epa_udds.txt") => (10.0, 14.0),
+                (_, "epa_udds.txt") => (5.5, 11.0),
+                _ => (4.0, 8.0),
+            };
             let r = drive(model, petrol_car(), cyc);
             let l_100km = r.fuel_g / 742.0 / r.km * 100.0;
             let g_km = r.co2_g / r.km;
             eprintln!("{model:32} {cyc:14} {l_100km:6.2} L/100km {g_km:6.1} gCO2/km");
-            assert!(
-                (lo..=hi).contains(&l_100km),
-                "{model} on {cyc}: {l_100km} L/100 km outside [{lo}, {hi}]"
-            );
+            if !(lo..=hi).contains(&l_100km) {
+                out_of_band.push(format!("{model} on {cyc}: {l_100km} L/100 km outside [{lo}, {hi}]"));
+            }
             // Carbon balance: petrol releases 3.0-3.2 g CO2 per g burned (EPA 8,887 g per
             // US gallon at about 2.80 kg per gallon).
             let ratio = r.co2_g / r.fuel_g;
-            assert!((2.9..3.3).contains(&ratio), "{model}: {ratio} g CO2 per g fuel");
+            if !(2.9..3.3).contains(&ratio) {
+                out_of_band.push(format!("{model} on {cyc}: {ratio} g CO2 per g fuel"));
+            }
             seen.insert((model, cyc), l_100km);
         }
         // Every model has the urban cycle costlier per km than the highway one.
         assert!(seen[&(model, "epa_udds.txt")] > seen[&(model, "epa_hwfet.txt")]);
     }
+    assert!(out_of_band.is_empty(), "{out_of_band:#?}");
 }
 
-/// HBEFA 3 and PHEMlight describe the same Euro 4 petrol car from the same underlying
+/// HBEFA 3 and PHEMlight describe the same Euro 4 car from the same underlying
 /// measurements by two different methods (a fitted polynomial and a power-based curve
-/// look-up). They must agree within 25 % on both cycles, or one of the two transcriptions
-/// is wrong.
+/// look-up), so a transcription error in either shows as a gross disagreement.
+///
+/// Measured in this build: the diesel cars agree within 5 % on the highway and 15 % in
+/// town; the petrol car's polynomial reads 28 % above PHEMlight on the highway (7.3 against
+/// 5.7 L/100 km — at a steady 80 km/h the polynomial gives 7.0 by hand, PHEMlight 5.3) and
+/// 38 % above in town, where its idle intercept adds to it (see the test above). The
+/// bounds pin those known disagreements so they cannot drift unnoticed: within 35 % on
+/// the highway, [1.1, 1.6] in town.
 #[test]
 fn hbefa3_and_phemlight_agree_on_the_same_car() {
-    for cyc in ["epa_udds.txt", "epa_hwfet.txt"] {
+    let mut wrong = Vec::new();
+    for (cyc, lo, hi) in [("epa_hwfet.txt", 0.75, 1.35), ("epa_udds.txt", 1.1, 1.6)] {
         for fuel in [Fuel::Gasoline, Fuel::Diesel] {
             let p = Powertrain {
                 fuel,
@@ -133,9 +156,12 @@ fn hbefa3_and_phemlight_agree_on_the_same_car() {
             let ph = drive("phemlight", p, cyc);
             let rel = (h.fuel_g / h.km) / (ph.fuel_g / ph.km);
             eprintln!("{cyc} {fuel:?}: HBEFA3 / PHEMlight fuel per km = {rel:.3}");
-            assert!((0.75..1.25).contains(&rel), "{cyc} {fuel:?}: ratio {rel}");
+            if !(lo..=hi).contains(&rel) {
+                wrong.push(format!("{cyc} {fuel:?}: ratio {rel} outside [{lo}, {hi}]"));
+            }
         }
     }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 /// Both EV models on both cycles, battery side.

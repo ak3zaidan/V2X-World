@@ -33,6 +33,8 @@ pub struct EnergyOptions {
     pub ev_model: Option<String>,
     /// Writes one CSV row per vehicle here.
     pub vehicles_csv: Option<PathBuf>,
+    /// Writes the MOVES operating-mode distribution per lane here.
+    pub opmode_csv: Option<PathBuf>,
 }
 
 /// One class's totals.
@@ -215,6 +217,22 @@ pub fn energy(o: &EnergyOptions) -> Result<EnergyOutcome> {
                 v.soc.map(|s| format!("{s:.4}")).unwrap_or_default(),
                 t.stops,
             ));
+        }
+        std::fs::write(path, csv).map_err(|e| CliError::io("cannot write", path, e))?;
+    }
+    if let Some(path) = &o.opmode_csv {
+        // MOVES's `opModeDistribution` shape: per (source type, link), each mode's share of
+        // the time, with the seconds beside it so a reader can re-weight.
+        let secs = provider.op_mode_seconds();
+        let mut totals: BTreeMap<(u16, u32), f64> = BTreeMap::new();
+        for ((src, lane, _), s) in secs {
+            *totals.entry((*src, *lane)).or_default() += s;
+        }
+        let mut csv = String::from("sourceTypeID,linkID,opModeID,seconds,opModeFraction\n");
+        for ((src, lane, mode), s) in secs {
+            let total = totals.get(&(*src, *lane)).copied().unwrap_or(0.0);
+            let frac = if total > 0.0 { s / total } else { 0.0 };
+            csv.push_str(&format!("{src},{lane},{mode},{s:.3},{frac:.6}\n"));
         }
         std::fs::write(path, csv).map_err(|e| CliError::io("cannot write", path, e))?;
     }

@@ -288,6 +288,9 @@ pub struct EnergyArgs {
     /// Write one CSV row per vehicle here.
     #[arg(long, value_name = "FILE")]
     pub vehicles_csv: Option<PathBuf>,
+    /// Write the MOVES operating-mode distribution per lane (opModeDistribution) here.
+    #[arg(long, value_name = "FILE")]
+    pub opmode_csv: Option<PathBuf>,
     /// Print the outcome as JSON.
     #[arg(long)]
     pub json: bool,
@@ -303,6 +306,7 @@ impl EnergyArgs {
             emission_model: self.emission_model.clone(),
             ev_model: self.ev_model.clone(),
             vehicles_csv: self.vehicles_csv.clone(),
+            opmode_csv: self.opmode_csv.clone(),
         }
     }
 }
