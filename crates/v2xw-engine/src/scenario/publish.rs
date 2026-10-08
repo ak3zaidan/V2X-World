@@ -284,6 +284,12 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     // An IEEE 802.11 channel number, `(f_c − 5000 MHz)/5`: a name, not a quantity.
     ("radio.channel", "channel number"),
     ("radio.adjacent_channel[].channel", "channel number"),
+    ("radio.mac.cw_min_vo", "slots"),
+    ("radio.mac.cw_min_vi", "slots"),
+    ("radio.mac.aifsn_vo", "slots"),
+    ("radio.mac.aifsn_vi", "slots"),
+    ("radio.mac.queue_length", "frames"),
+    ("radio.dcc.density_coefficient", "vehicles"),
 ];
 
 /// The numeric leaves that genuinely have no unit, declared rather than left blank.
@@ -307,6 +313,12 @@ const DIMENSIONLESS: &[&str] = &[
     "energy.fleet.*.ev_share",
     "energy.fleet.*.diesel_share",
     "energy.ev.initial_soc",
+    "radio.channel_model.path_loss_exponent",
+    "radio.channel_model.nakagami_shape",
+    "radio.dcc.cbr_target",
+    "radio.sidelink.resource_keep_probability",
+    "radio.dcc.adaptive_alpha",
+    "radio.dcc.adaptive_beta",
 ];
 
 /// One place the scenario picks a model, and which registry family fills it.

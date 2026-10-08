@@ -172,9 +172,170 @@ const BASIC: &[Basic] = &[
         recommended: "The applications whose benefit you want to measure.",
     },
     Basic {
+        path: "time.warmup_s",
+        explain: "How long the run fills with traffic before it is measured: charts and metric summaries skip it, so an empty map filling up does not drag the averages down.",
+        recommended: "10 to 20 % of the run; 30 to 60 s on a city extract.",
+    },
+    Basic {
+        path: "radio.phy.data_rate_mbps",
+        explain: "The 802.11p data rate (modulation and coding). Faster rates finish each frame sooner, so more radios fit on the channel, but they need a stronger signal, so range shrinks.",
+        recommended: "6 Mbit/s (the US default); 3 for range, 12 to 18 for crowded channels.",
+    },
+    Basic {
+        path: "radio.channel_model.fading",
+        explain: "The fast signal fluctuation as vehicles move a few centimetres: Rayleigh has no direct path, Rice and Nakagami have one. It is the main cause of losses well inside range.",
+        recommended: "Leave unset (Nakagami m = 3); Rayleigh for a worst case.",
+    },
+    Basic {
+        path: "radio.dcc.enabled",
+        explain: "Congestion control: radios slow down or turn their power down when the channel is busy, so the channel stays usable. Turn it off to measure what it buys.",
+        recommended: "On, except as the baseline of a congestion study.",
+    },
+    Basic {
         path: "exporters",
         explain: "Which files the run writes when it finishes, for analysis outside the Studio.",
         recommended: "None to explore; Parquet to analyse in Python or R.",
+    },
+];
+
+/// The explanation and recommended range of advanced fields that have them: the
+/// researcher-grade radio numbers (`radio.phy`, `radio.mac`, `radio.channel_model`,
+/// `radio.dcc`), which a newcomer does not need but should still be able to read.
+const ADVANCED: &[Basic] = &[
+    Basic {
+        path: "radio.sidelink.reservation_interval_ms",
+        explain: "How often a C-V2X radio's booked slot repeats; it should match how often the radio has a message to send.",
+        recommended: "100 ms for 10 Hz BSMs; 20 or 50 ms for faster traffic.",
+    },
+    Basic {
+        path: "radio.sidelink.resource_keep_probability",
+        explain: "The chance a radio keeps its booked slot when its counter runs out, rather than picking a new one.",
+        recommended: "0.8 (J3161/1); 0 to study fast reselection.",
+    },
+    Basic {
+        path: "radio.sidelink.rsrp_threshold_dbm",
+        explain: "How strong another radio's booking must be for a radio to avoid that slot.",
+        recommended: "-128 dBm (NR studies) to -110 dBm (LTE studies).",
+    },
+    Basic {
+        path: "radio.sidelink.sensing",
+        explain: "Whether radios listen before booking a slot. Off is the random-selection baseline.",
+        recommended: "On; off only as a baseline.",
+    },
+    Basic {
+        path: "radio.phy.noise_figure_db",
+        explain: "How much noise the receiver's own electronics add; every extra dB costs about 10 % of range in free space.",
+        recommended: "6 dB (automotive module) to 9 dB (3GPP UE).",
+    },
+    Basic {
+        path: "radio.phy.sensitivity_dbm",
+        explain: "The weakest frame the receiver decodes, at every data rate (Veins' minPowerLevel).",
+        recommended: "-92 dBm (fielded units) to -85 dBm (ETSI minimum).",
+    },
+    Basic {
+        path: "radio.phy.cca_threshold_dbm",
+        explain: "The signal level at which a radio hears the channel as busy and holds back; it also sets what the channel busy ratio counts.",
+        recommended: "-85 dBm (ETSI); -82 (ns-3); -65 (Veins).",
+    },
+    Basic {
+        path: "radio.phy.capture_threshold_db",
+        explain: "Replaces the error model with a hard rule: a frame survives only if it stays this many dB above interference plus noise.",
+        recommended: "Unset (error model); 4 to 10 dB to compare with threshold-based simulators.",
+    },
+    Basic {
+        path: "radio.mac.periodic_access_category",
+        explain: "The priority queue awareness messages wait in; higher priorities wait less before sending.",
+        recommended: "Voice (US BSM) or video (European CAM).",
+    },
+    Basic {
+        path: "radio.mac.event_access_category",
+        explain: "The priority queue hazard warnings (DENM) wait in.",
+        recommended: "Voice.",
+    },
+    Basic {
+        path: "radio.mac.cw_min_vo",
+        explain: "The random back-off window of the voice queue: a wider window spreads transmissions out, which means fewer collisions and more delay.",
+        recommended: "3 (standard) to 15 in dense traffic.",
+    },
+    Basic {
+        path: "radio.mac.aifsn_vo",
+        explain: "The fixed idle wait of the voice queue before its back-off countdown.",
+        recommended: "2 (standard).",
+    },
+    Basic {
+        path: "radio.mac.cw_min_vi",
+        explain: "The random back-off window of the video queue.",
+        recommended: "7 (standard).",
+    },
+    Basic {
+        path: "radio.mac.aifsn_vi",
+        explain: "The fixed idle wait of the video queue.",
+        recommended: "3 (standard).",
+    },
+    Basic {
+        path: "radio.mac.queue_length",
+        explain: "How many frames wait in each priority queue before new ones are dropped.",
+        recommended: "16 to 64.",
+    },
+    Basic {
+        path: "radio.channel_model.path_loss_exponent",
+        explain: "How fast the signal weakens with distance: 2 in free space, near 3 in a built-up street. Setting it runs the log-distance law.",
+        recommended: "1.8 (highway) to 3.5 (dense city).",
+    },
+    Basic {
+        path: "radio.channel_model.shadowing_sigma_db",
+        explain: "How much the signal wanders around its average as buildings and trucks block it.",
+        recommended: "3 to 4 dB in line of sight, 6 to 7 dB obstructed.",
+    },
+    Basic {
+        path: "radio.channel_model.shadowing_decorrelation_m",
+        explain: "How far a vehicle travels before its shadowing changes completely.",
+        recommended: "10 m (city) to 50 m (highway).",
+    },
+    Basic {
+        path: "radio.channel_model.nakagami_shape",
+        explain: "The Nakagami shape m: 1 is Rayleigh, larger values are milder fading.",
+        recommended: "1 to 5.",
+    },
+    Basic {
+        path: "radio.channel_model.rice_k_db",
+        explain: "The strength of the direct path over the scattered ones in a Rice channel.",
+        recommended: "3 to 10 dB.",
+    },
+    Basic {
+        path: "radio.dcc.cbr_target",
+        explain: "The share of time busy the ETSI adaptive algorithm aims the channel at.",
+        recommended: "0.6 to 0.7 (standard 0.68).",
+    },
+    Basic {
+        path: "radio.dcc.adaptive_alpha",
+        explain: "How quickly the ETSI adaptive algorithm's load average follows new measurements.",
+        recommended: "0.016 (standard).",
+    },
+    Basic {
+        path: "radio.dcc.adaptive_beta",
+        explain: "How strongly the ETSI adaptive algorithm changes the allowed airtime when the load is off target.",
+        recommended: "0.0012 (standard).",
+    },
+    Basic {
+        path: "radio.dcc.max_itt_ms",
+        explain: "The longest gap J2945/1 allows between one vehicle's BSMs under congestion.",
+        recommended: "600 ms (standard).",
+    },
+    Basic {
+        path: "radio.dcc.density_coefficient",
+        explain: "How many neighbours within 100 m J2945/1 tolerates before it stretches the BSM interval.",
+        recommended: "25 (standard).",
+    },
+    Basic {
+        path: "radio.dcc.power_control",
+        explain: "Whether J2945/1 also turns the radiated power down as the channel fills.",
+        recommended: "On (J2945/1); off for rate-only control.",
+    },
+    Basic {
+        path: "radio.dcc.min_power_dbm",
+        explain: "The lowest power J2945/1's power control may reach.",
+        recommended: "10 dBm (standard).",
     },
 ];
 
@@ -193,12 +354,16 @@ fn basic(path: &str) -> Option<&'static Basic> {
 
 /// The real-world sentence for a basic field.
 pub fn explain(path: &str) -> Option<&'static str> {
-    basic(path).map(|b| b.explain)
+    basic(path)
+        .or_else(|| ADVANCED.iter().find(|b| b.path == path))
+        .map(|b| b.explain)
 }
 
 /// The recommended range, in words, for a basic field.
 pub fn recommended(path: &str) -> Option<&'static str> {
-    basic(path).map(|b| b.recommended)
+    basic(path)
+        .or_else(|| ADVANCED.iter().find(|b| b.path == path))
+        .map(|b| b.recommended)
 }
 
 /// One write of a patch: the pointer and the value it puts there.

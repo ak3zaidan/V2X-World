@@ -133,19 +133,6 @@ pub mod sidelink;
 const SAFETY_CHANNEL: ChannelId = ChannelId(172);
 /// The centre frequency of [`SAFETY_CHANNEL`], hertz.
 const SAFETY_FREQ_HZ: f64 = 5.860e9;
-/// The MCS every safety frame in this build is sent at.
-///
-/// 6 Mbit/s QPSK 1/2 is the J2945/1 `vDataRate` default and the rate every published
-/// 802.11p PDR-versus-distance curve this engine is validated against was measured at
-/// (04-models.md §4.2, §13). Nothing selects a different one yet, so it is a constant here
-/// rather than a scenario field that would have exactly one legal value.
-const SAFETY_MCS: Mcs = Mcs::R6Qpsk12;
-/// The EDCA access category a safety message is queued in.
-///
-/// AC_VO, which is what a BSM or a CAM uses (04-models.md §4.3; EN 302 663 Annex C.4.2
-/// puts DENM and CAM at AC_VO and AC_VI respectively and J2945/1 puts the BSM at the
-/// highest category).
-const SAFETY_AC: AccessCategory = AccessCategory::Vo;
 /// The AIFS a safety frame waits before the PHY may start it, at the abstract tier.
 ///
 /// EDCA AC_VO on a 10 MHz OCB channel is the *floor* on access delay. At the medium and
@@ -862,6 +849,8 @@ pub struct Engine {
     lamps: BTreeMap<ActorId, u8>,
     providers: v2xw_metrics::ProviderSet,
     metric_period: Duration,
+    /// The end of the warm-up, ns (`time.warmup_s`): no sample is recorded before it.
+    metric_warmup_ns: SimTime,
     reverse_node_walk: bool,
     /// Whether [`Engine::sweep_retired_links`] runs; always, outside a test.
     link_sweep: bool,
@@ -888,6 +877,12 @@ pub struct Engine {
     regulation: Option<crate::wiring::RadioRegulation>,
     /// The channel an 802.11p run transmits on: the region's, 172 in the 2016 US plan.
     dsrc_channel: ChannelId,
+    /// The rate every 802.11p safety frame is sent at (`radio.phy.data_rate_mbps`).
+    safety_mcs: Mcs,
+    /// The access category periodic messages are queued in (`radio.mac`).
+    periodic_ac: AccessCategory,
+    /// The access category event messages (DENM) are queued in.
+    event_ac: AccessCategory,
     /// That channel's centre, Hz.
     dsrc_freq_hz: f64,
     /// Rain over the link (`weather/attenuation/itu-r-p838`), at the medium and high
@@ -1327,6 +1322,7 @@ impl Engine {
             lamps: BTreeMap::new(),
             providers,
             metric_period: scenario_for_radio.time.metric_period(),
+            metric_warmup_ns: scenario_for_radio.time.warmup_ns(),
             reverse_node_walk: false,
             link_sweep: true,
             gen_timing,
@@ -1339,6 +1335,21 @@ impl Engine {
             radio_env,
             regulation,
             dsrc_channel,
+            safety_mcs: crate::wiring::safety_mcs(&scenario_for_radio),
+            periodic_ac: crate::wiring::access_category(
+                scenario_for_radio
+                    .radio
+                    .mac
+                    .periodic_access_category
+                    .as_deref(),
+            ),
+            event_ac: crate::wiring::access_category(
+                scenario_for_radio
+                    .radio
+                    .mac
+                    .event_access_category
+                    .as_deref(),
+            ),
             dsrc_freq_hz,
             rain,
             detector_range_m,
@@ -4513,10 +4524,14 @@ impl Engine {
         let psdu = layers.psdu_bytes();
         let descriptor = FrameDescriptor {
             bytes: psdu,
-            mcs: SAFETY_MCS,
+            mcs: self.safety_mcs,
             tx_power_dbm,
             channel,
-            ac: SAFETY_AC,
+            ac: if matches!(tx.msg_type, v2xw_msg::MsgType::Denm) {
+                self.event_ac
+            } else {
+                self.periodic_ac
+            },
             kind: FrameKind::Broadcast,
             // A whole SDU: its id and the frame number are the same counter seen from two
             // layers. A split one's fragments share the SDU id below.
@@ -4525,8 +4540,8 @@ impl Engine {
         // A sidelink transport block occupies one slot whatever it carries; its size
         // decides how many sub-channels it takes instead (04-models.md §5.1, §5.2).
         let slot = self.sidelink.as_ref().map(|sl| sl.slot());
-        let air_of =
-            move |psdu: u32| slot.unwrap_or_else(|| v2xw_radio::air_time(psdu, SAFETY_MCS));
+        let mcs = self.safety_mcs;
+        let air_of = move |psdu: u32| slot.unwrap_or_else(|| v2xw_radio::air_time(psdu, mcs));
         let air = air_of(psdu);
         let sdu_payload = split.map_or(sdu_bytes, |(p, _)| p);
         let cert_frag = cert_piece.map(|desc| crate::frag::FragMeta {
@@ -4921,7 +4936,7 @@ impl Engine {
                     bytes: descriptor.bytes,
                     mcs: descriptor.mcs,
                     power_dbm: descriptor.tx_power_dbm,
-                    ac: SAFETY_AC,
+                    ac: descriptor.ac,
                     channel,
                     air_time: air,
                     at: now,
@@ -5000,7 +5015,7 @@ impl Engine {
                         frame: descriptor,
                         enqueued_at: now,
                     },
-                    SAFETY_AC,
+                    descriptor.ac,
                 )
                 .err()
             };
@@ -7252,8 +7267,12 @@ impl Engine {
         let now = self.scheduler.now();
         self.emit_mac_reports(recorder, now);
         let samples = self.providers.flush(now);
-        for sample in samples {
-            self.emit(recorder, &sample);
+        // `time.warmup_s`: a window that closes inside the warm-up is flushed, so the
+        // providers start the next one clean, and not recorded.
+        if now > self.metric_warmup_ns {
+            for sample in samples {
+                self.emit(recorder, &sample);
+            }
         }
         let next = self.metric_period.after(now);
         if next <= horizon {
@@ -7284,7 +7303,10 @@ impl Engine {
                 (
                     self.dsrc_channel.0,
                     Mac::<EngineCtx<'_>>::cbr(mac, node, self.dsrc_channel, now),
-                    mac.queue_len(node, self.dsrc_channel, SAFETY_AC) as u64,
+                    AccessCategory::ALL
+                        .into_iter()
+                        .map(|ac| mac.queue_len(node, self.dsrc_channel, ac) as u64)
+                        .sum::<u64>(),
                 )
             } else if let Some(sl) = self.sidelink.as_ref() {
                 (

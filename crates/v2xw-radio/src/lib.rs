@@ -164,7 +164,7 @@ pub use jamming::{
     ConstantJammer, JamArrival, JamWindow, JammerKind, JammerProfile, JammingField, PulsedJammer,
     ReactiveJammer, SensedInterval, blind_area_radius_m, punal_rssi_to_sinr_db,
 };
-pub use mac::{Backoff, CbrMeter, EdcaOcbMac, SlottedMac};
+pub use mac::{Backoff, CbrMeter, EdcaOcbMac, EdcaParams, SlottedMac};
 pub use obstacle::{
     BuildingIndex, BuildingShadowing, CornerTracer, MultiEdgeRule, NlosvCase, SommerFit,
     TerrainDiffraction, VehicleBlockage, first_wall_m, knife_edge_loss_db,
@@ -177,9 +177,9 @@ pub use phy::{
 };
 pub use prop::{
     DualSlope, FreeSpace, GeometricState, GeometricUrbanV2v, LogDistancePreset,
-    LogDistanceShadowing, Polarization, RainAttenuation, ShadowProcess, SommerCoefficients,
-    Tr37885, Tr37885State, TwoRayGround, friis_loss_db, mangel_breakpoint_m, mangel_nlos_db,
-    p838_coefficients, rain_attenuation_db, two_ray_ground_loss_db,
+    LogDistanceShadowing, LogDistanceTuning, Polarization, RainAttenuation, ShadowProcess,
+    SommerCoefficients, Tr37885, Tr37885State, TwoRayGround, friis_loss_db, mangel_breakpoint_m,
+    mangel_nlos_db, p838_coefficients, rain_attenuation_db, two_ray_ground_loss_db,
 };
 pub use terrain::{
     EdgeExtraction, GroundProfile, ProfilePoint, TerrainProfile, any_edge_obstructs, knife_edges,
