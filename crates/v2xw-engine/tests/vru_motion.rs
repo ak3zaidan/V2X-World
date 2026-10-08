@@ -149,6 +149,15 @@ fn measure_vru_motion() {
             }
         }
         let mut peds: Vec<(u32, Vec3, Option<u32>, u8, Option<(u32, f64, f64)>)> = Vec::new();
+        // Last step's pedestrian positions by 1 m cell, to count who was near an event.
+        let mut cells: BTreeMap<(i64, i64), Vec<Vec3>> = BTreeMap::new();
+        for (tid, tr) in &tracks {
+            if classes.get(tid) == Some(&VehicleClass::Pedestrian)
+                && let Some(p) = tr.pos
+            {
+                cells.entry((p.x.floor() as i64, p.y.floor() as i64)).or_default().push(p);
+            }
+        }
         for (actor, k) in &update.states {
             let id = actor.index();
             let class = classes.get(&id).copied().unwrap_or_default();
@@ -226,7 +235,17 @@ fn measure_vru_motion() {
                     if a > a_lim {
                         if kind == "pedestrian" {
                             let lc = tr.lane != k.lane.map(|l| l.lane.index());
-                            let key = format!("act {}->{act} lanechange {lc}", tr.act_prev);
+                            let mut near = 0usize;
+                            let (cx, cy) = (p0.x.floor() as i64, p0.y.floor() as i64);
+                            for dx in -1..=1 {
+                                for dy in -1..=1 {
+                                    if let Some(v) = cells.get(&(cx + dx, cy + dy)) {
+                                        near += v.iter().filter(|q| q.distance_2d(p0) < 1.0).count();
+                                    }
+                                }
+                            }
+                            let near = near.saturating_sub(1).min(3);
+                            let key = format!("act {}->{act} lanechange {lc} near {near}", tr.act_prev);
                             let n = accel_why.entry(key.clone()).or_default();
                             *n += 1;
                             if *n <= 2 && a > 6.0 {

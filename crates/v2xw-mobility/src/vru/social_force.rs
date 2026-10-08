@@ -492,12 +492,31 @@ const LATERAL_RELAX_S: f64 = 1.0;
 /// choice**: most of it, so walkers spread across a pavement rather than all walk its
 /// centreline, as SUMO's striping model spreads them over its stripes.
 const SIDE_SPREAD: f64 = 0.8;
+/// How far ahead a walker steers for round a corner, metres. **A choice**: about 0.7 s of
+/// walking, so a corner is walked as an arc of about a metre's radius.
+const STEER_LOOKAHEAD_M: f64 = 1.0;
+/// The hardest a walker stops at the kerb, m/s². **A choice**: from a normal pace (1.4 m/s)
+/// within about a step (0.5 s).
+const KERB_DECEL_MPS2: f64 = 3.0;
+/// The largest push one walker gives another, m/s²: the isotropic potential's force at
+/// contact, `V0/σ` (7 m/s² at the §2.5 values). The elliptical potential's gradient grows
+/// without bound as `b → 0` (two walkers' next positions meeting), and the vru_motion harness
+/// measured single pushes over 30 m/s² flinging walkers at their speed cap; the
+/// generalized centrifugal-force model (Chraibi, Seyfried & Schadschneider, Phys. Rev. E 82,
+/// 046111, 2010; JuPedSim's GCFM) was introduced over the same divergence and bounds its
+/// repulsion near contact the same way.
+fn pair_force_cap(params: &SocialForceParams) -> f64 {
+    params.v0_m2_s2 / params.sigma_m.max(1e-6)
+}
 /// The stream a lone walker's [`Pedestrian::side`] is drawn from.
 pub const SIDE_ID: &str = "vru/pedestrian/side";
 
 /// How fast a lane-change offset ([`Pedestrian::carry`]) closes, m/s: well under a walking
 /// pace, so the extra apparent speed it adds is small.
 pub const CARRY_CLOSE_MPS: f64 = 0.7;
+/// The time constant a lane-change offset closes with, seconds ([`Pedestrian::carry`]).
+/// **A choice**: a second, so a small offset drifts away rather than snapping.
+pub const CARRY_CLOSE_TAU_S: f64 = 1.0;
 /// A lane change whose offset would exceed this is a real gap in the walkable network, not a
 /// corner, and is not carried, metres. On the Midtown extract the corner offsets the glitch
 /// hunter measured were 2-4.2 m (a pavement's end to the crosswalk's start round the kerb).
@@ -943,7 +962,10 @@ impl SocialForce {
         let dv_db =
             (self.params.v0_m2_s2 / self.params.sigma_m) * math::exp(-b / self.params.sigma_m);
         let scale = dv_db * sum / (4.0 * b);
-        Vec3::new_2d(scale * dir_x, scale * dir_y)
+        let f = Vec3::new_2d(scale * dir_x, scale * dir_y);
+        let m = f.norm_2d();
+        let cap = pair_force_cap(&self.params);
+        if m > cap { f.scale(cap / m) } else { f }
     }
 
     /// The repulsion a border at distance `d` exerts, magnitude only (§2.5).
@@ -1225,7 +1247,16 @@ impl VruMobility for SocialForce {
                             // gap is there; nobody starts on it otherwise (MUTCD §4E.02).
                             let violates = person.traits.violator && gap_ok;
                             let _ = state;
-                            permit.hazard || !(legacy || violates)
+                            // Caught by the change from walk at the kerb's edge, too close to
+                            // stop short of it at KERB_DECEL_MPS2, a walker steps off rather than
+                            // stopping dead on it (the pedestrian's amber dilemma); never into a
+                            // vehicle's path. One already waiting is not walking on.
+                            let to_k = lane.length_m - self.params.kerb_margin_m - person.s_m;
+                            let along = person.vel.x * forward.x + person.vel.y * forward.y;
+                            let committed = person.waiting_since.is_none()
+                                && along > 0.0
+                                && along * along > 2.0 * KERB_DECEL_MPS2 * to_k.max(0.0);
+                            permit.hazard || !(legacy || violates || committed)
                         }
                     }
                 }
@@ -1281,10 +1312,34 @@ impl VruMobility for SocialForce {
                 .unwrap_or(person.side * walkable_half)
                 .clamp(-walkable_half, walkable_half);
             let lat_cap = LATERAL_SPEED_FACTOR * person.desired_speed_mps;
-            let v_lat = ((keep - person.lateral_m) / LATERAL_RELAX_S).clamp(-lat_cap, lat_cap);
+            let mut v_lat = ((keep - person.lateral_m) / LATERAL_RELAX_S).clamp(-lat_cap, lat_cap);
+            // Round a corner: within a look-ahead of the lane's end, walking on, it heads for
+            // its place on the next lane rather than along this one to its end and then
+            // turning, which made every corner a turn of up to 90 degrees inside one step
+            // or two (accelerations of 7 m/s² at every crossing's end on Midtown).
+            let mut aim = forward;
+            let remaining = lane.length_m - person.s_m;
+            if !hold
+                && remaining < STEER_LOOKAHEAD_M
+                && let Some(n) = next.and_then(|n| world.try_lane(n))
+                && Self::is_walkable(world, n.id)
+            {
+                let n_half = (0.5 * n.width_m - body).max(0.0);
+                let n_keep = person
+                    .slot_m
+                    .unwrap_or(person.side * n_half)
+                    .clamp(-n_half, n_half);
+                let target = lane_point(n, STEER_LOOKAHEAD_M - remaining.max(0.0), n_keep);
+                let to = Vec3::new_2d(target.x - position.x, target.y - position.y);
+                let d = to.norm_2d();
+                if d > 0.2 {
+                    aim = to.scale(1.0 / d);
+                    v_lat = 0.0;
+                }
+            }
             let mut accel = Vec3::new_2d(
-                (desired_speed * forward.x + v_lat * left_normal.x - person.vel.x) / self.params.tau_s,
-                (desired_speed * forward.y + v_lat * left_normal.y - person.vel.y) / self.params.tau_s,
+                (desired_speed * aim.x + v_lat * left_normal.x - person.vel.x) / self.params.tau_s,
+                (desired_speed * aim.y + v_lat * left_normal.y - person.vel.y) / self.params.tau_s,
             );
 
             // --- pairwise repulsion ---------------------------------------
@@ -1318,8 +1373,19 @@ impl VruMobility for SocialForce {
             // times too strong, and on a 2 m pavement no walker could keep off its centreline.
             let left_distance = (half_width - person.lateral_m).max(0.0);
             let right_distance = (half_width + person.lateral_m).max(0.0);
-            let left_force = self.border_repulsion_magnitude(left_distance);
-            let right_force = self.border_repulsion_magnitude(right_distance);
+            // A walker still outside the band on one side (just round a corner onto this
+            // lane) is coming in from there, not walking into that kerb: no push from it,
+            // or it is flung inwards at the potential's full 50 m/s².
+            let left_force = if person.lateral_m > walkable_half {
+                0.0
+            } else {
+                self.border_repulsion_magnitude(left_distance)
+            };
+            let right_force = if person.lateral_m < -walkable_half {
+                0.0
+            } else {
+                self.border_repulsion_magnitude(right_distance)
+            };
             accel = Vec3::new_2d(
                 accel.x - left_normal.x * left_force + left_normal.x * right_force,
                 accel.y - left_normal.y * left_force + left_normal.y * right_force,
@@ -1358,6 +1424,20 @@ impl VruMobility for SocialForce {
                     velocity.y * max_speed / speed,
                 );
             }
+            if hold {
+                // Coming to a stop at the kerb: no faster than a stop at KERB_DECEL_MPS2 from
+                // here allows. The desired speed tapers over the last two metres, but with
+                // `τ` = 0.5 s the walker still arrived at 1.5-2 m/s and stopped dead in one
+                // step on the clamp below (20 m/s² on vru-grid as walk ended).
+                let along = velocity.x * forward.x + velocity.y * forward.y;
+                let cap = math::sqrt(2.0 * KERB_DECEL_MPS2 * to_kerb.max(0.0));
+                if along > cap {
+                    velocity = Vec3::new_2d(
+                        velocity.x - (along - cap) * forward.x,
+                        velocity.y - (along - cap) * forward.y,
+                    );
+                }
+            }
             let moved = Vec3::new_2d(
                 position.x + velocity.x * dt_s,
                 position.y + velocity.y * dt_s,
@@ -1380,7 +1460,10 @@ impl VruMobility for SocialForce {
                     );
                 }
             }
-            let mut lateral_m = proj_d.clamp(-walkable_half, walkable_half);
+            // Inside the walkable band; a walker outside it (just round a corner) may only
+            // come in.
+            let band = walkable_half.max(person.lateral_m.abs());
+            let mut lateral_m = proj_d.clamp(-band, band);
             // Held at the pavement's edge: the velocity into the edge is spent, as the kerb's
             // along-track part is above. Left in, it kept building against the clamp, so a
             // walker pressed to the edge carried a velocity (and a facing) pointing off the
@@ -1397,7 +1480,18 @@ impl VruMobility for SocialForce {
             let mut current = person.lane;
             let mut route_index = person.route_index;
             let mut arrived = false;
-            let mut carry_next = carry;
+            // Off a convex bend of the lane's polyline, (s, d) do not map back onto the point
+            // they were projected from (the nearest point is the vertex, and the offset is
+            // along the next segment's normal): the walker would jump. The mismatch is
+            // carried instead, so it stands where it moved to. (Midtown street life: a
+            // walker 1.4 m off a bend jumped 1.4 m sideways, 140 m/s².)
+            let mut carry_next = {
+                let free = lane_point(lane, proj_s, proj_d);
+                let target = Vec3::new_2d(moved.x - carry.x, moved.y - carry.y);
+                let r = Vec3::new_2d(target.x - free.x, target.y - free.y);
+                let c = Vec3::new_2d(carry.x + r.x, carry.y + r.y);
+                if r.norm_2d() > 1e-9 && c.norm_2d() <= CARRY_MAX_M { c } else { carry }
+            };
             if s_m >= lane.length_m {
                 match self.next_lane(person) {
                     Some(next) if Self::is_walkable(world, next) => {
@@ -1418,7 +1512,12 @@ impl VruMobility for SocialForce {
                         current = next;
                         route_index += 1;
                         s_m = onto_s.clamp(-CARRY_MAX_M, next_lane.length_m);
-                        lateral_m = onto_d.clamp(-next_half, next_half);
+                        // Where it stands across the new lane, even outside its band: it
+                        // walks in at the lateral pace above. (Carried as a world offset closing
+                        // at a fixed 0.7 m/s, the offset added that velocity in one step: 7 m/s²
+                        // at every corner.)
+                        let _ = next_half;
+                        lateral_m = onto_d.clamp(-CARRY_MAX_M, CARRY_MAX_M);
                         let landed = lane_point(next_lane, s_m, lateral_m);
                         let gap = Vec3::new_2d(moved.x - landed.x, moved.y - landed.y);
                         carry_next = if gap.norm_2d() <= CARRY_MAX_M {
@@ -1557,9 +1656,13 @@ impl VruMobility for SocialForce {
             person.lane = current;
             person.s_m = s_m;
             person.lateral_m = lateral_m;
+            // The carry closes in proportion to its size (a 1 s time constant), at no more
+            // than CARRY_CLOSE_MPS: a fixed closing speed put that whole velocity onto a
+            // walker in one step whenever a carry appeared.
             let gap = carry_next.norm_2d();
-            person.carry = if gap > 0.0 {
-                carry_next.scale((gap - CARRY_CLOSE_MPS * dt_s).max(0.0) / gap)
+            person.carry = if gap > 1e-6 {
+                let close = (gap / CARRY_CLOSE_TAU_S).min(CARRY_CLOSE_MPS) * dt_s;
+                carry_next.scale((gap - close).max(0.0) / gap)
             } else {
                 Vec3::ZERO
             };
@@ -2216,19 +2319,25 @@ mod tests {
         }
         let snapshot = ActorSnapshot::new(0, 50.0);
         let dt = Duration::from_millis(100);
+        let mut last: BTreeMap<ActorId, (LaneId, f64)> = BTreeMap::new();
         for k in 0..600u64 {
             let mut ctx = MobilityCtx::new(k * 100 * NS_PER_MS, &w, &rng);
             let states = m.step(&mut ctx, dt, &snapshot);
             for (actor, k) in states {
                 let person = m.get(actor).expect("still here");
+                let before = last.insert(actor, (person.lane, person.lateral_m));
                 assert!(
                     SocialForce::is_walkable(&w, person.lane),
                     "{actor} left the pavement onto {:?}",
                     w.lane(person.lane).kind
                 );
                 let half = 0.5 * w.lane(person.lane).width_m;
+                // Inside the lane's band, or (just round a corner onto it) coming in.
+                let coming_in = before.is_some_and(|(l, d)| {
+                    l == person.lane && person.lateral_m.abs() <= d.abs() + 1e-9
+                }) || before.is_some_and(|(l, _)| l != person.lane);
                 assert!(
-                    person.lateral_m.abs() <= half + 1e-9,
+                    person.lateral_m.abs() <= half + 1e-9 || coming_in,
                     "{actor} is {} m off a {half} m half-width lane",
                     person.lateral_m
                 );
