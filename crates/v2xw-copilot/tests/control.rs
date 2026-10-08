@@ -28,6 +28,7 @@ struct Fake {
     runs: usize,
     paused: bool,
     log: Log,
+    staged: Option<Value>,
 }
 
 impl Fake {
@@ -39,6 +40,7 @@ impl Fake {
             runs: 0,
             paused: true,
             log: Arc::new(Mutex::new(Vec::new())),
+            staged: None,
         }
     }
 
@@ -97,8 +99,23 @@ impl RpcTransport for Fake {
         Ok(match method {
             "scenario.list" => json!({"items": [
                 {"id": "scenarios/phase1-grid.yaml", "description": "procedural grid"}]}),
-            "scenario.load" => json!({"scenario": base_scenario()}),
-            "scenario.get" => json!({"scenario": self.running}),
+            "scenario.load" => {
+                // Loading the running scenario's hash withdraws a staged draft.
+                if params["path"] == "running-hash" {
+                    self.staged = None;
+                }
+                json!({"scenario": base_scenario()})
+            }
+            "scenario.get" => match &self.staged {
+                Some(doc) => json!({"scenario": doc, "running_hash": "running-hash",
+                                    "staged": {"hash": "staged-hash"}}),
+                None => json!({"scenario": self.running, "running_hash": "running-hash",
+                               "staged": null}),
+            },
+            "scenario.set" => {
+                self.staged = Some(params["scenario"].clone());
+                json!({"hash": "staged-hash", "valid": true})
+            }
             "run.pause" => {
                 self.paused = true;
                 json!({"state": "paused"})
@@ -424,4 +441,106 @@ fn polling_starts_fast_and_settles_at_the_policy_interval() {
     assert_eq!(poll_delay_ms(500, 2), 100);
     assert_eq!(poll_delay_ms(500, 10), 500);
     assert_eq!(poll_delay_ms(0, 3), 0);
+}
+
+/// The Portland request: one `setup` call stages a draft on Portland (nothing runs), the
+/// panel gets its chips, a follow-up setup builds on the draft, and Undo puts back what the
+/// Settings window held before.
+#[test]
+fn setup_stages_a_portland_draft_with_chips_and_undo_restores_the_window() {
+    let provider = ScriptedProvider::new(vec![
+        tools(vec![call(
+            "s1",
+            "setup",
+            json!({"changes": [
+                {"key": "city", "value": "portland"},
+                {"key": "radio.rat", "value": "dsrc-80211p"},
+                {"key": "threats.attackers", "value": {"append":
+                    {"id": "threat/attacker/legacy/ConstPos", "fraction": 0.05}}}]}),
+        )]),
+        say("Ready in Settings; press Run."),
+        tools(vec![call(
+            "s2",
+            "setup",
+            json!({"changes": [{"key": "time.duration_s", "value": 120}]}),
+        )]),
+        say("Duration set."),
+    ]);
+    let engine = Fake::new();
+    let log = Arc::clone(&engine.log);
+    let mut agent = Agent::new(Some(provider), engine)
+        .expect("builds")
+        .with_policy(quick());
+    let mut events = Vec::new();
+    agent
+        .ask("Set up busy traffic on Portland with DSRC and attackers", &mut |e| {
+            events.push(e)
+        })
+        .expect("completes");
+
+    let calls: Vec<(String, Value)> = log.lock().unwrap().clone();
+    assert!(
+        !calls.iter().any(|(m, _)| m == "run.start"),
+        "a setup never runs anything"
+    );
+    let set = calls
+        .iter()
+        .find(|(m, _)| m == "scenario.set")
+        .expect("the draft was staged");
+    assert_eq!(set.1["scenario"]["city"], "portland");
+    assert_eq!(set.1["scenario"]["radio"]["rat"], "dsrc-80211p");
+    let chips = events
+        .iter()
+        .find_map(|e| match e {
+            AgentEvent::Staged { setup, chips, .. } => Some((*setup, chips.clone())),
+            _ => None,
+        })
+        .expect("a staged event");
+    assert_eq!(chips.0, 1);
+    let line: Vec<String> = chips
+        .1
+        .iter()
+        .map(|c| format!("{} → {}", c.label, c.value))
+        .collect();
+    assert_eq!(line[0], "City → Portland, OR", "{line:?}");
+    assert!(line.iter().any(|l| l == "Attackers → 5% Constant position"), "{line:?}");
+    assert!(!line.iter().any(|l| l.starts_with("Metrics")), "{line:?}");
+
+    // A follow-up builds on the draft, not on the running scenario.
+    agent
+        .ask("make it two minutes", &mut |_| {})
+        .expect("completes");
+    let last_set = log
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(m, _)| m == "scenario.set")
+        .cloned()
+        .expect("staged again");
+    assert_eq!(last_set.1["scenario"]["city"], "portland", "kept the first setup");
+    assert_eq!(last_set.1["scenario"]["time"]["duration_s"], json!(120));
+
+    // Undo of the second setup puts the first one's draft back.
+    agent.undo_setup(2).expect("undoes");
+    let restored = log
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(m, _)| m == "scenario.set")
+        .cloned()
+        .expect("restored");
+    assert_eq!(restored.1["validate"], json!(false));
+    assert_eq!(restored.1["scenario"]["city"], "portland");
+    assert_ne!(restored.1["scenario"]["time"]["duration_s"], json!(120));
+    // Undo of the first withdraws the draft: the running scenario's hash is loaded.
+    agent.undo_setup(1).expect("undoes");
+    assert!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .any(|(m, p)| m == "scenario.load" && p["path"] == "running-hash")
+    );
+    assert!(agent.undo_setup(9).is_err(), "no such setup");
 }

@@ -526,6 +526,11 @@ kbd {
   min-height: 0;
   position: relative;
 }
+/* A crowded header keeps the scenario and city readable: the buttons that have an icon drop
+   their word first (the word stays in the tooltip), and the buttons never shrink or wrap. */
+@media (max-width: 1240px) {
+  .topbar .icon-button.labelled:has(> svg) > span:not([class]) { display: none; }
+}
 @media (max-width: 900px) {
   .topbar .headline-clock .faint, .icon-button.labelled span { display: none; }
 }
