@@ -124,6 +124,8 @@ mod gcbr;
 pub use gcbr::GlobalCbrTally;
 mod cpm_metrics;
 pub use cpm_metrics::CpmTally;
+mod air_bytes;
+pub use air_bytes::AirBytes;
 pub mod jamming;
 mod link;
 mod radios;
@@ -503,6 +505,9 @@ pub struct RunReport {
     /// Collective perception's object awareness, redundancy, sizes and rate (`cpm`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpm: Option<CpmTally>,
+    /// Every octet that went on the air, by layer, with the PHY's own time and the
+    /// forwarding share ([`AirBytes`]).
+    pub air_bytes: AirBytes,
 }
 
 /// The city-scale radio gate's totals ([`crate::scale`]).
@@ -5799,6 +5804,7 @@ impl Engine {
     ) {
         let _ = frame_index;
         self.finish_rx_only(recorder, frame, state, now, tx_id, outcomes);
+        self.report.air_bytes.add(state);
         self.emit_tx_record(recorder, frame, state);
     }
 

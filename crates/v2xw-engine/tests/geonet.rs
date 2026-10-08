@@ -157,6 +157,17 @@ fn on_air_forwards_are_frames_in_the_relays_own_queue() {
     let mut rec = MemoryRecorder::new();
     let rep = engine.run(&mut rec).expect("runs");
     let stats = rep.gn_air.clone().expect("on-air totals");
+    // The ledger: the layers add up to the PSDUs, and the forwards' octets are in it.
+    let b = rep.air_bytes;
+    eprintln!("{b:?}");
+    assert_eq!(
+        b.payload + b.security + b.spdu_unsplit + b.fragmentation + b.network + b.llc_snap
+            + b.mac_header
+            + b.fcs,
+        b.psdu
+    );
+    assert!(b.gn_forwarded > 0 && b.gn_forwarded < b.psdu, "{b:?}");
+    assert_eq!(b.phy_preamble_us, 40 * b.frames);
     let senders = denm_senders(&rec);
     eprintln!("on-air {:?}\n{stats:?}\nsenders {senders:?}", rep.geonet);
     let w = &rep.geonet[0];
