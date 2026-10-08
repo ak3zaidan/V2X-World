@@ -27,14 +27,14 @@ defaults, ranges and sources in [`docs/guides/configuration-reference.md`](../gu
 | `radio.channel_model` | `path_loss_exponent`, `shadowing_sigma_db`, `shadowing_decorrelation_m`, `fading`, `nakagami_shape`, `rice_k_db` | `LogDistanceTuning`, `NakagamiFading::with_m`, the candidate-range law |
 | `radio.dcc` | `enabled`, `cbr_target`, `adaptive_alpha`, `adaptive_beta`, `max_itt_ms`, `density_coefficient`, `power_control`, `min_power_dbm` | `wiring::build_dcc`, `AdaptiveDcc::with_params`, `SaeJ2945Dcc::retuned` |
 | `radio.sidelink` | `reservation_interval_ms`, `resource_keep_probability`, `rsrp_threshold_dbm`, `sensing` | `SidelinkAccess::for_scenario` over the profile's `SpsParams` |
-| `actors.vehicles.driver` | `max_accel_mps2`, `comfort_decel_mps2`, `time_headway_s`, `min_gap_m`, `politeness`, `lane_change_threshold_mps2` | `NativeMobility::with_driver_override` (passenger cars), MOBIL params |
+| `actors.vehicles.drivers` | `max_accel_mps2`, `comfort_decel_mps2`, `time_headway_s`, `min_gap_m`, `politeness`, `lane_change_threshold_mps2` | `NativeMobility::with_driver_override` (passenger cars), MOBIL params |
 | `messages.rate_hz` | fixed BSM/CAM rate | `wiring::generator_params`, J2945/1 `vMinITT` |
 | `time.warmup_s` | warm-up | `on_metric_flush` records no sample inside it |
 
 Each field has a `BOUNDS` or `CHOICES` row, a `KEY_STATUS` row, a title, an
 explanation and a recommended range in `guide.rs`. `time.warmup_s`,
 `radio.phy.data_rate_mbps`, `radio.channel_model.fading`, `radio.dcc.enabled`,
-`messages.rate_hz` and `actors.vehicles.driver.time_headway_s` are `basic`; the rest
+`messages.rate_hz` and `actors.vehicles.drivers.time_headway_s` are `basic`; the rest
 are `advanced`. The loader refuses the combinations where a setting would do nothing,
 for example 802.11p numbers on a sidelink run, ETSI numbers under J2945/1, or EDCA
 numbers at the abstract MAC tier. None of the new fields is serialised when unset, so
@@ -2821,3 +2821,51 @@ conflicts resolved by hand and the whole workspace compile-checked:
   arrival is earlier than its actual one); pedestrian calls for actuated phases; actuated
   coordination (offsets hold only under fixed-time); roundabout-specific yielding; the
   agent's watch does not yet read the traffic metrics.
+## 2026-10-07 — traffic calibration and driver heterogeneity
+
+- **Human drivers** (`v2xw_mobility::drivers`; scenario `actors.vehicles.drivers`).
+  - `realism` presets: `calibrated` (the default, unchanged), `identical`,
+    `heterogeneous` and `human`.
+  - Overrides: `parameter_spread`, `reaction_time_s`, `perception_error`,
+    `truck_lane_restriction` and `motorcycle_filtering`. New pedestrian option:
+    `actors.vru.crossing_gap_margin_s`.
+  - Each field is bounded, has a KEY_STATUS row, a title and choice words. Realism and
+    reaction time are Basic fields, and there is a new "Drivers" quick setting.
+  - Per-driver T, a, b and s0 are mean-one lognormal factors with per-class cvs.
+  - Reaction time is a delayed car-following decision, with an alarm when braking past b.
+  - Perception errors are the HDM's Ornstein-Uhlenbeck errors (Treiber, Kesting & Helbing
+    2006).
+  - The truck restriction keeps trucks out of the leftmost lane of motorway and trunk
+    roads with 3 or more lanes (StVO §18(11)).
+  - All noise is keyed per driver and step, so runs stay deterministic. Defaults are off,
+    so calibrated runs are unchanged.
+- **Traffic-calibration study**: `cargo run -p v2xw-trafficval --bin traffic_calibration`
+  writes `docs/validation/traffic-calibration.md`. Full mode passes. It includes city and
+  corridor fundamental diagrams with Greenshields and triangular fits, each beside SUMO's
+  default Krauss driver. Results:
+  - Capacity sits on the IDM's equilibrium maximum flow: 1,899 veh/h for the city ring
+    (0.0 % below) and 1,737 for the corridor (0.3 % below).
+  - The human population keeps 98 % of capacity.
+  - Stop-and-go waves travel at -12 to -18 km/h. The triangular congested branch gives
+    -13.6 km/h.
+  - Human drivers jam at 5 of 11 densities where identical drivers do not.
+  - No collisions.
+  - The headway cv is 0.22 for human drivers against 0.006 for identical ones.
+  - Against the HCM's 2,400 pc/h/ln: Treiber 2000's drivers reach 0.72 of it and SUMO's
+    default reaches 1.17.
+- **Open findings fixed**:
+  - The IDM rest gap (1.927 m) and string stability at 6 densities already pass under
+    the corrected check. Both are re-run in the study.
+  - `model/sugiyama-ring` now passes (jam at -14.9 km/h) with the human population. Its
+    fault is the ideal driver.
+  - Fixed a bug where the jam speed was read from the least-squares intercept instead of
+    the slope.
+  - The jam speed is now measured from the outflow front.
+- **Not done**: NGSIM trajectory import, which would let the headway distribution be held
+  with a Kolmogorov-Smirnov test. Also not done: motorcycle filtering beyond the existing
+  SL2015 model, and a social-force recalibration.
+- **Not re-run**: `docs/validation/traffic.md`, which needs a full traffic_validation run.
+- **Build hazard**: `target/agents` shares v2xw-engine's build-script output
+  (`scenario_reflect.rs`) across worktrees. A stale reflection from another worktree made
+  the publish tests fail. Touch `src/scenario/schema.rs` inside the heavy lock before
+  testing.

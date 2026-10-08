@@ -26,7 +26,7 @@ pub fn native_with_driving(
     rules: &TrafficRules,
 ) -> NativeMobility {
     let spec = &scenario.actors.vehicles.driving;
-    let d = &scenario.actors.vehicles.driver;
+    let d = &scenario.actors.vehicles.drivers;
     let lane_change_set = d.politeness.is_some() || d.lane_change_threshold_mps2.is_some();
     let mut mobility = match library::build(spec, scenario.seed) {
         Ok(Some(cf)) if !lane_change_set => {
@@ -65,15 +65,28 @@ pub fn native_with_driving(
             min_gap_m: d.min_gap_m,
         });
     }
-    if let Some(lateral) = &spec.lateral {
-        mobility = mobility.with_lateral(lateral.build(rules));
+    // `actors.vehicles.drivers.motorcycle_filtering` overrides the jurisdiction's rule;
+    // filtering needs the sub-lane model, so allowing it turns that model on.
+    let mut rules = *rules;
+    let mut lateral = spec.lateral.clone();
+    match scenario.actors.vehicles.drivers.motorcycle_filtering {
+        Some(true) => {
+            rules.motorcycle_filtering = v2xw_mobility::rules::Filtering::BetweenStopped;
+            let l = lateral.get_or_insert_with(Default::default);
+            l.params.filter.motorcycles_share = true;
+        }
+        Some(false) => rules.motorcycle_filtering = v2xw_mobility::rules::Filtering::Prohibited,
+        None => {}
+    }
+    if let Some(lateral) = &lateral {
+        mobility = mobility.with_lateral(lateral.build(&rules));
     }
     mobility
 }
 
-/// Kesting 2007's MOBIL parameters with `actors.vehicles.driver`'s numbers over them.
+/// Kesting 2007's MOBIL parameters with `actors.vehicles.drivers`'s numbers over them.
 fn mobil_of(
-    d: &crate::scenario::schema::DriverSettings,
+    d: &crate::scenario::schema::Drivers,
 ) -> v2xw_mobility::lanechange::mobil::MobilParams {
     let mut p = MobilPreset::Kesting2007.params();
     if let Some(v) = d.politeness {
@@ -119,4 +132,31 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
         }
     }
     e
+}
+
+#[cfg(test)]
+mod drivers_tests {
+    use crate::scenario::Scenario;
+    use crate::scenario::schema::DriverRealism;
+
+    #[test]
+    fn the_drivers_block_reaches_the_engine() {
+        let mut s = Scenario::minimal();
+        let base = crate::wiring::native_mobility(&s);
+        assert_eq!(base.params().human, Default::default());
+        assert!(base.params().driver_heterogeneity);
+
+        s.actors.vehicles.drivers.realism = DriverRealism::Human;
+        s.actors.vehicles.drivers.reaction_time_s = Some(1.1);
+        s.actors.vehicles.drivers.truck_lane_restriction = Some(true);
+        let m = crate::wiring::native_mobility(&s);
+        let h = m.params().human;
+        assert_eq!(h.reaction_time_s, 1.1);
+        assert!(h.parameter_spread > 0.0 && h.distance_error > 0.0 && h.truck_lane_restriction);
+
+        s.actors.vehicles.drivers = Default::default();
+        s.actors.vehicles.drivers.realism = DriverRealism::Identical;
+        let m = crate::wiring::native_mobility(&s);
+        assert!(!m.params().driver_heterogeneity && !m.params().driver_styles);
+    }
 }

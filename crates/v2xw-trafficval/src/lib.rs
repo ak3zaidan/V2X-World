@@ -40,6 +40,7 @@ use serde::Serialize;
 
 pub mod calib;
 pub mod cities;
+pub mod fdlab;
 pub mod invariants;
 pub mod model;
 pub mod report;

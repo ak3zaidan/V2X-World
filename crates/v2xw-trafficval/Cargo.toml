@@ -27,3 +27,7 @@ path = "src/bin/traffic_validation.rs"
 [[bin]]
 name = "city_audit"
 path = "src/bin/city_audit.rs"
+
+[[bin]]
+name = "traffic_calibration"
+path = "src/bin/traffic_calibration.rs"

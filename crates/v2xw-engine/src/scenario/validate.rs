@@ -415,6 +415,34 @@ pub static BOUNDS: &[Bound] = &[
         what: "the share who cross against the signal",
     },
     Bound {
+        path: "actors.vehicles.drivers.parameter_spread",
+        lo: 0.0,
+        hi: 2.0,
+        exclusive_lo: false,
+        what: "the driver parameter spread",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.reaction_time_s",
+        lo: 0.0,
+        hi: v2xw_mobility::drivers::MAX_REACTION_S,
+        exclusive_lo: false,
+        what: "the drivers' reaction time",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.perception_error",
+        lo: 0.0,
+        hi: 3.0,
+        exclusive_lo: false,
+        what: "the perception-error multiplier",
+    },
+    Bound {
+        path: "actors.vru.crossing_gap_margin_s",
+        lo: 0.5,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the pedestrian crossing gap margin",
+    },
+    Bound {
         path: "actors.vru.ebike_share",
         lo: 0.0,
         hi: 1.0,
@@ -860,46 +888,46 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the sensing RSRP threshold",
     },
-    // `actors.vehicles.driver`: the ranges of the IDM calibrations in Treiber and
+    // `actors.vehicles.drivers`: the ranges of the IDM calibrations in Treiber and
     // Kesting, *Traffic Flow Dynamics* (2013) Table 11.2 and of Kesting 2007's MOBIL
     // politeness, opened a little either way.
     Bound {
-        path: "actors.vehicles.driver.max_accel_mps2",
+        path: "actors.vehicles.drivers.max_accel_mps2",
         lo: 0.3,
         hi: 5.0,
         exclusive_lo: false,
         what: "the comfortable acceleration",
     },
     Bound {
-        path: "actors.vehicles.driver.comfort_decel_mps2",
+        path: "actors.vehicles.drivers.comfort_decel_mps2",
         lo: 0.5,
         hi: 6.0,
         exclusive_lo: false,
         what: "the comfortable deceleration",
     },
     Bound {
-        path: "actors.vehicles.driver.time_headway_s",
+        path: "actors.vehicles.drivers.time_headway_s",
         lo: 0.3,
         hi: 4.0,
         exclusive_lo: false,
         what: "the desired time headway",
     },
     Bound {
-        path: "actors.vehicles.driver.min_gap_m",
+        path: "actors.vehicles.drivers.min_gap_m",
         lo: 0.5,
         hi: 10.0,
         exclusive_lo: false,
         what: "the standstill gap",
     },
     Bound {
-        path: "actors.vehicles.driver.politeness",
+        path: "actors.vehicles.drivers.politeness",
         lo: 0.0,
         hi: 1.0,
         exclusive_lo: false,
         what: "the MOBIL politeness",
     },
     Bound {
-        path: "actors.vehicles.driver.lane_change_threshold_mps2",
+        path: "actors.vehicles.drivers.lane_change_threshold_mps2",
         lo: 0.0,
         hi: 2.0,
         exclusive_lo: false,
@@ -1313,6 +1341,44 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                docs/models/driving-model-library.md.",
     },
     KeyStatus {
+        path: "actors.vehicles.drivers",
+        status: Status::Wired,
+        note: "How human the drivers are. 'realism' picks the population: calibrated (the \
+               default: own free speed, reaction at a green, three following styles), \
+               identical (the textbook model), heterogeneous (every driver their own time \
+               gap, acceleration, braking and standstill gap, spread as fitted to real \
+               drivers) or human (heterogeneous plus a 0.8 s reaction time and the Human \
+               Driver Model's perception errors, Treiber, Kesting & Helbing 2006). The other \
+               keys override the preset. See docs/models/driver-heterogeneity.md. The \
+               passenger-car numbers max_accel_mps2, comfort_decel_mps2, time_headway_s \
+               and min_gap_m replace the car-following model's calibration for cars (each \
+               driver keeps a style and spread around them); politeness and \
+               lane_change_threshold_mps2 set MOBIL for every class. Read by the native \
+               mobility engine; a SUMO run takes its drivers from SUMO.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.reaction_time_s",
+        status: Status::Wired,
+        note: "Each driver applies the car-following decision they made this long ago, \
+               except when braking harder than comfortable, which acts at once. 0.7-0.75 s \
+               is an expected event's brake reaction, 1.25 s an unexpected one's (Green \
+               2000). Above about 0.6 s homogeneous traffic forms stop-and-go waves.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.truck_lane_restriction",
+        status: Status::Wired,
+        note: "Trucks and trailers make no discretionary change into the leftmost lane of a \
+               motorway or trunk road with three or more lanes (StVO §18(11); many US \
+               states' left-lane truck restrictions).",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.motorcycle_filtering",
+        status: Status::Wired,
+        note: "Overrides the jurisdiction's rule: true lets motorcycles and mopeds ride \
+               between stopped cars (and turns on the SL2015 sub-lane model, which filtering \
+               needs); false keeps them in the queue.",
+    },
+    KeyStatus {
         path: "actors.vehicles.classes",
         status: Status::Wired,
         note: "The fleet mix: each vehicle's class is drawn with these shares, and its \
@@ -1367,6 +1433,14 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                the traffic leaves a gap. Default 0.10 under 'observed', calibrated so that \
                about a tenth of signalised crossings begin on don't-walk, as Basch et al. \
                2015 counted at five Midtown intersections.",
+    },
+    KeyStatus {
+        path: "actors.vru.crossing_gap_margin_s",
+        status: Status::Wired,
+        note: "The gap a pedestrian accepts: the HCM critical headway t_c = L/S_p + t_s, \
+               where this is t_s (start-up and clearance), the median of a lognormal \
+               across pedestrians. Default 2 s (HCM, not re-verified locally); smaller \
+               values make pedestrians accept tighter gaps against traffic.",
     },
     KeyStatus {
         path: "actors.vru.ebike_share",
@@ -1701,14 +1775,6 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "802.11p EDCA at the medium and high MAC tiers: the access category of \
                periodic and event messages, CWmin and AIFSN of the voice and video \
                categories, and the per-category queue length.",
-    },
-    KeyStatus {
-        path: "actors.vehicles.driver",
-        status: Status::Wired,
-        note: "The passenger-car driver: a, b, T and s0 replace the car-following model's \
-               calibration for cars (each driver keeps a style and heterogeneity draw \
-               around them); politeness and the threshold set MOBIL for every class. Read \
-               by the native mobility engine; a SUMO run takes its drivers from SUMO.",
     },
     KeyStatus {
         path: "messages.rate_hz",
@@ -3389,6 +3455,22 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             s.actors.vru.red_crossing_share,
         ),
         ("actors.vru.ebike_share", s.actors.vru.ebike_share),
+        (
+            "actors.vru.crossing_gap_margin_s",
+            s.actors.vru.crossing_gap_margin_s,
+        ),
+        (
+            "actors.vehicles.drivers.parameter_spread",
+            s.actors.vehicles.drivers.parameter_spread,
+        ),
+        (
+            "actors.vehicles.drivers.reaction_time_s",
+            s.actors.vehicles.drivers.reaction_time_s,
+        ),
+        (
+            "actors.vehicles.drivers.perception_error",
+            s.actors.vehicles.drivers.perception_error,
+        ),
     ] {
         if let Some(v) = value {
             bounded_at(path, path, v, e);
@@ -3854,18 +3936,18 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ));
         }
     }
-    let dv = &s.actors.vehicles.driver;
+    let dv = &s.actors.vehicles.drivers;
     for (path, v) in [
-        ("actors.vehicles.driver.max_accel_mps2", dv.max_accel_mps2),
+        ("actors.vehicles.drivers.max_accel_mps2", dv.max_accel_mps2),
         (
-            "actors.vehicles.driver.comfort_decel_mps2",
+            "actors.vehicles.drivers.comfort_decel_mps2",
             dv.comfort_decel_mps2,
         ),
-        ("actors.vehicles.driver.time_headway_s", dv.time_headway_s),
-        ("actors.vehicles.driver.min_gap_m", dv.min_gap_m),
-        ("actors.vehicles.driver.politeness", dv.politeness),
+        ("actors.vehicles.drivers.time_headway_s", dv.time_headway_s),
+        ("actors.vehicles.drivers.min_gap_m", dv.min_gap_m),
+        ("actors.vehicles.drivers.politeness", dv.politeness),
         (
-            "actors.vehicles.driver.lane_change_threshold_mps2",
+            "actors.vehicles.drivers.lane_change_threshold_mps2",
             dv.lane_change_threshold_mps2,
         ),
     ] {
@@ -3875,7 +3957,7 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
     }
     if !dv.is_default() && s.mobility.as_ref().is_some_and(|m| m.provider == "sumo") {
         e.push(conflict(
-            "actors.vehicles.driver",
+            "actors.vehicles.drivers",
             "sets the native engine's drivers, and mobility.provider is sumo, whose drivers \
              are SUMO's vType parameters"
                 .to_string(),

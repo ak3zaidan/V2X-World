@@ -102,6 +102,7 @@ pub mod clock;
 pub mod coop;
 pub mod ctx;
 pub mod demand;
+pub mod drivers;
 pub mod engine;
 pub mod error;
 pub mod fd;

@@ -264,13 +264,13 @@ fn mean_speed(rec: &MemoryRecorder) -> f64 {
 fn the_driver_numbers_change_the_traffic() {
     let base = fleet(20, 5.0);
     let mut timid = base.clone();
-    timid.actors.vehicles.driver.max_accel_mps2 = Some(0.5);
-    timid.actors.vehicles.driver.time_headway_s = Some(2.5);
+    timid.actors.vehicles.drivers.max_accel_mps2 = Some(0.5);
+    timid.actors.vehicles.drivers.time_headway_s = Some(2.5);
     let (_, t) = run(timid);
     let mut brisk = base;
-    brisk.actors.vehicles.driver.max_accel_mps2 = Some(2.5);
-    brisk.actors.vehicles.driver.time_headway_s = Some(0.8);
-    brisk.actors.vehicles.driver.politeness = Some(0.0);
+    brisk.actors.vehicles.drivers.max_accel_mps2 = Some(2.5);
+    brisk.actors.vehicles.drivers.time_headway_s = Some(0.8);
+    brisk.actors.vehicles.drivers.politeness = Some(0.0);
     let (_, b) = run(brisk);
     assert!(
         mean_speed(&t) < 0.9 * mean_speed(&b),

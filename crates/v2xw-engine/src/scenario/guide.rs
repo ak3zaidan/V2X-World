@@ -92,6 +92,16 @@ const BASIC: &[Basic] = &[
         recommended: "Leave empty for all cars, or shares that add up to 1.",
     },
     Basic {
+        path: "actors.vehicles.drivers.realism",
+        explain: "How human the drivers are. Real drivers differ from one another, react late and misjudge gaps, which is what turns dense traffic into stop-and-go waves (Treiber, Kesting & Helbing 2006).",
+        recommended: "Calibrated for city runs; human for congestion and shockwave studies; identical to test a model in isolation.",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.reaction_time_s",
+        explain: "How long a driver takes to respond to the car ahead. 0.7 s is a prepared driver's brake reaction, 1.25 s a surprised one's (Green 2000).",
+        recommended: "0.6 to 1.2 s; leave unset to use the realism preset's.",
+    },
+    Basic {
         path: "actors.vru.pedestrians",
         explain: "People walking on the sidewalks and crossings. Those with a phone or wearable can broadcast their own safety messages (PSM).",
         recommended: "0 to 400 at once.",
@@ -217,7 +227,7 @@ const BASIC: &[Basic] = &[
         recommended: "On, except as the baseline of a congestion study.",
     },
     Basic {
-        path: "actors.vehicles.driver.time_headway_s",
+        path: "actors.vehicles.drivers.time_headway_s",
         explain: "The time gap drivers keep to the car ahead. Shorter gaps fit more cars on the road and leave less time to react to a warning.",
         recommended: "1.0 s (aggressive) to 2.0 s (cautious); about 1.5 s typical.",
     },
@@ -238,27 +248,27 @@ const BASIC: &[Basic] = &[
 /// `radio.dcc`), which a newcomer does not need but should still be able to read.
 const ADVANCED: &[Basic] = &[
     Basic {
-        path: "actors.vehicles.driver.max_accel_mps2",
+        path: "actors.vehicles.drivers.max_accel_mps2",
         explain: "How hard a car driver accelerates when the road ahead is clear.",
         recommended: "1.0 to 2.0 m/s².",
     },
     Basic {
-        path: "actors.vehicles.driver.comfort_decel_mps2",
+        path: "actors.vehicles.drivers.comfort_decel_mps2",
         explain: "How hard a car driver brakes in normal driving (emergency braking is harder).",
         recommended: "1.5 to 3.0 m/s².",
     },
     Basic {
-        path: "actors.vehicles.driver.min_gap_m",
+        path: "actors.vehicles.drivers.min_gap_m",
         explain: "The distance drivers leave to the car in front when queued at a light.",
         recommended: "1.5 to 3 m.",
     },
     Basic {
-        path: "actors.vehicles.driver.politeness",
+        path: "actors.vehicles.drivers.politeness",
         explain: "How much drivers care about the cars behind them when changing lanes: 0 is selfish, 1 fully considerate.",
         recommended: "0.2 to 0.5.",
     },
     Basic {
-        path: "actors.vehicles.driver.lane_change_threshold_mps2",
+        path: "actors.vehicles.drivers.lane_change_threshold_mps2",
         explain: "The least advantage a lane change must bring before a driver bothers.",
         recommended: "0.1 to 0.3 m/s².",
     },
@@ -660,6 +670,8 @@ pub fn quick() -> Value {
               "How many vehicles enter the map each hour."),
         field("pedestrians", "Pedestrians", "actors.vru.pedestrians",
               "People walking on the sidewalks and crossings."),
+        field("drivers", "Drivers", "actors.vehicles.drivers.realism",
+              "How human the drivers are: calibrated, identical, heterogeneous or human (stop-and-go waves)."),
         // Shares from scenarios/midtown-street-life.yaml's fleet (a stated choice there:
         // no classified count of Midtown traffic was read).
         class_toggle("motorcycles", "Motorcycles", "motorcycle", 0.02,

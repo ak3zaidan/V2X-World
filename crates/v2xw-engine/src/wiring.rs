@@ -466,6 +466,13 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     params.strategic_lane_choice = traffic.strategic_lane_choice;
     params.junction_clearance = traffic.keep_junctions_clear;
     params.time_to_teleport_s = traffic.gridlock_timeout_s.max(0.0);
+    // How human the drivers are (`actors.vehicles.drivers`, `v2xw_mobility::drivers`).
+    let drivers = &scenario.actors.vehicles.drivers;
+    params.human = drivers.human_params();
+    if drivers.realism == crate::scenario::schema::DriverRealism::Identical {
+        params.driver_heterogeneity = false;
+        params.driver_styles = false;
+    }
     // Kerbside stops follow the jurisdiction too: New York City has its taxis
     // (`v2xw_mobility::kerbside`).
     params.kerbside = v2xw_mobility::kerbside::KerbsideParams::for_highway_preset(
@@ -484,6 +491,9 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     }
     if let Some(share) = vru.red_crossing_share {
         people.red_crossing_share = share;
+    }
+    if let Some(margin) = vru.crossing_gap_margin_s {
+        people.gap_margin_s = margin;
     }
     let mut mobility = crate::driving::native_with_driving(scenario, params, &rules);
     if vru.pedestrians > 0 {

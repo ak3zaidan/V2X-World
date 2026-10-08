@@ -756,38 +756,64 @@ pub struct Vehicles {
         skip_serializing_if = "v2xw_mobility::carfollowing::library::DrivingSpec::is_default"
     )]
     pub driving: v2xw_mobility::carfollowing::library::DrivingSpec,
-    /// The passenger-car driver as plain numbers: the car-following parameters `a`, `b`,
-    /// `T` and `s0` (Treiber, Hennecke and Helbing 2000) and MOBIL's politeness and
-    /// lane-change threshold (Kesting, Treiber and Helbing 2007). Each set field replaces
-    /// the model's calibration for cars; every driver still gets their own style and
-    /// heterogeneity draw around it.
-    #[serde(default, skip_serializing_if = "DriverSettings::is_default")]
-    pub driver: DriverSettings,
+    /// The drivers: how human they are (the realism preset, each driver's own
+    /// car-following parameters, reaction time, perception errors, the truck left-lane
+    /// restriction and motorcycle lane filtering) and the passenger-car driver as plain
+    /// numbers (IDM `a`, `b`, `T`, `s0`; MOBIL politeness and threshold). Left out of the serialised scenario when it is the
+    /// default, so a scenario that does not mention it keeps its content hash.
+    #[serde(default, skip_serializing_if = "Drivers::is_default")]
+    pub drivers: Drivers,
 }
 
-/// Passenger-car driver settings (`actors.vehicles.driver`). Unset fields keep the
-/// car-following and lane-change models' calibration.
+/// How human the drivers are (`actors.vehicles.drivers`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DriverSettings {
-    /// The comfortable maximum acceleration `a`, m/s². Unset is the model's (1.4 m/s² for
-    /// the urban IDM).
+pub struct Drivers {
+    /// The driver population: `calibrated` (the default), `identical`, `heterogeneous`
+    /// or `human`.
+    #[serde(default)]
+    pub realism: DriverRealism,
+    /// Overrides how far drivers differ in time gap, acceleration, braking and standstill
+    /// gap: a multiplier on the per-class spread (0 none, 1 as fitted to real drivers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameter_spread: Option<f64>,
+    /// Overrides the drivers' reaction time in car following, seconds (0 reacts at once).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reaction_time_s: Option<f64>,
+    /// Overrides how badly drivers misjudge the gap and the closing speed: a multiplier on
+    /// the Human Driver Model's estimation errors (0 none, 1 as published).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perception_error: Option<f64>,
+    /// Keeps trucks out of the leftmost lane of a motorway with three or more lanes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truck_lane_restriction: Option<bool>,
+    /// Overrides the jurisdiction's rule on motorcycles filtering between stopped cars;
+    /// true turns on the sub-lane model if the scenario has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motorcycle_filtering: Option<bool>,
+    /// The passenger car's comfortable maximum acceleration `a` (Treiber, Hennecke and
+    /// Helbing 2000), m/s². Replaces the model's calibration for cars; every driver still
+    /// gets their own style and spread around it. Unset is the model's (1.4 m/s² for the
+    /// urban IDM).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_accel_mps2: Option<f64>,
-    /// The comfortable deceleration `b`, m/s². Unset is the model's (2.0 m/s²).
+    /// The passenger car's comfortable deceleration `b`, m/s². Unset is the model's
+    /// (2.0 m/s²).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comfort_decel_mps2: Option<f64>,
-    /// The desired time gap to the vehicle ahead `T`, s. Shorter gaps raise road capacity
-    /// and shorten the time a warning has to act. Unset is the model's (about 1.2 to
-    /// 1.5 s).
+    /// The passenger car's desired time gap to the vehicle ahead `T`, s. Shorter gaps
+    /// raise road capacity and shorten the time a warning has to act. Unset is the
+    /// model's (about 1.2 to 1.5 s).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_headway_s: Option<f64>,
-    /// The gap kept to a stopped vehicle `s0`, m. Unset is the model's (2 m).
+    /// The gap a passenger car keeps to a stopped vehicle `s0`, m. Unset is the model's
+    /// (2 m).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_gap_m: Option<f64>,
-    /// MOBIL's politeness factor `p`: 0 is a selfish driver who changes lane whenever it
-    /// helps them, 1 weighs the followers' loss as much as their own gain. Unset is 0.5
-    /// (Kesting 2007, which reports 0.2 to 0.5 as realistic). Applies to every class.
+    /// MOBIL's politeness factor `p` (Kesting, Treiber and Helbing 2007): 0 is a selfish
+    /// driver who changes lane whenever it helps them, 1 weighs the followers' loss as
+    /// much as their own gain. Unset is 0.5 (Kesting 2007 reports 0.2 to 0.5 as
+    /// realistic). Applies to every class.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub politeness: Option<f64>,
     /// MOBIL's lane-change threshold `Δa_th`, m/s²: the least advantage worth changing
@@ -796,11 +822,53 @@ pub struct DriverSettings {
     pub lane_change_threshold_mps2: Option<f64>,
 }
 
-impl DriverSettings {
-    /// Whether nothing is set.
+impl Drivers {
+    /// Whether this is the block a scenario that does not mention it gets.
     pub fn is_default(&self) -> bool {
-        *self == Self::default()
+        *self == Drivers::default()
     }
+
+    /// The engine's human-driver parameters this block asks for.
+    pub fn human_params(&self) -> v2xw_mobility::drivers::HumanDriverParams {
+        use v2xw_mobility::drivers::{HDM_DISTANCE_ERROR, HDM_RATE_ERROR_PER_S, HumanDriverParams};
+        let mut p = match self.realism {
+            DriverRealism::Calibrated | DriverRealism::Identical => HumanDriverParams::default(),
+            DriverRealism::Heterogeneous => HumanDriverParams::heterogeneous(),
+            DriverRealism::Human => HumanDriverParams::human(),
+        };
+        if let Some(x) = self.parameter_spread {
+            p.parameter_spread = x;
+        }
+        if let Some(x) = self.reaction_time_s {
+            p.reaction_time_s = x;
+        }
+        if let Some(x) = self.perception_error {
+            p.distance_error = HDM_DISTANCE_ERROR * x;
+            p.rate_error_per_s = HDM_RATE_ERROR_PER_S * x;
+        }
+        if let Some(x) = self.truck_lane_restriction {
+            p.truck_lane_restriction = x;
+        }
+        p
+    }
+}
+
+/// The driver population of `actors.vehicles.drivers.realism`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DriverRealism {
+    /// Calibrated city drivers: their own free speed, reaction at a green and one of three
+    /// following styles; car following itself is exact.
+    #[default]
+    Calibrated,
+    /// Every driver the textbook model: the limit exactly, no reaction time, one style.
+    Identical,
+    /// Calibrated, plus every driver their own time gap, acceleration, braking and
+    /// standstill gap, spread as fitted to real drivers.
+    Heterogeneous,
+    /// Heterogeneous, plus a 0.8 s reaction time and the Human Driver Model's perception
+    /// errors: traffic that breaks into stop-and-go waves as real traffic does.
+    Human,
 }
 
 impl Vehicles {
@@ -816,7 +884,7 @@ impl Default for Vehicles {
             classes: BTreeMap::new(),
             equipped_fraction: Vehicles::default_equipped(),
             driving: v2xw_mobility::carfollowing::library::DrivingSpec::default(),
-            driver: DriverSettings::default(),
+            drivers: Drivers::default(),
         }
     }
 }
@@ -906,6 +974,10 @@ pub struct Vru {
     /// Overrides the share of cyclists on e-bikes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ebike_share: Option<f64>,
+    /// Overrides the median time a pedestrian wants a traffic gap to leave beyond the time
+    /// to walk across (the HCM's start-up and clearance time), seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crossing_gap_margin_s: Option<f64>,
 }
 
 /// How the pedestrians of `actors.vru` behave.

@@ -51,8 +51,8 @@ with its reason.
 | Pseudonym change | n/a in Veins (PREXT plug-in) | `security.pseudonym_change.*` |
 | Crypto hardware | n/a | `nodes.default_obu`, `nodes.per_class`, `nodes.compute_tier` |
 | Demand, vehicle mix | SUMO routes, `vTypeDistribution` | `actors.vehicles.demand.*`, `actors.vehicles.classes` |
-| Car-following model and IDM parameters | SUMO `carFollowModel`, `accel`, `decel`, `tau`, `minGap` | `actors.vehicles.driving.car_following`, `actors.vehicles.driver.*` (**new**) |
-| Lane-change politeness | SUMO `lcCooperative`, MOBIL `p` | `actors.vehicles.driver.politeness` (**new**) |
+| Car-following model and IDM parameters | SUMO `carFollowModel`, `accel`, `decel`, `tau`, `minGap` | `actors.vehicles.driving.car_following`, `actors.vehicles.drivers.*` (**new**) |
+| Lane-change politeness | SUMO `lcCooperative`, MOBIL `p` | `actors.vehicles.drivers.politeness` (**new**) |
 | Duration, seed, replications | `sim-time-limit`, `seed-set`, `repeat` | `time.duration_s`, `seed`, `experiment.seeds`, `experiment.replications` |
 | Warm-up | OMNeT++ `warmup-period` | `time.warmup_s` (**new**) |
 | Metric sampling interval | OMNeT++ statistic recording interval | `time.metric_period_s` |
@@ -192,19 +192,19 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `actors.vehicles.classes` | all passenger cars | shares in 0-1 | Vehicle mix. |
 | `actors.vehicles.equipped_fraction` | 1 | 0 to 1 | Penetration rate. |
 | `actors.vehicles.driving.car_following` | IDM, urban HCM calibration | `idm`, `eidm`, `krauss`, `gipps`, `w99`, `acc`, `cacc` + params | Car-following model. |
-| `actors.vehicles.driver.max_accel_mps2` **new** | model's (1.4) | 0.3 to 5 m/s² | IDM `a`, passenger cars. |
-| `actors.vehicles.driver.comfort_decel_mps2` **new** | model's (2.0) | 0.5 to 6 m/s² | IDM `b`. |
-| `actors.vehicles.driver.time_headway_s` **new** | model's (about 1.5) | 0.3 to 4 s | IDM `T`. |
-| `actors.vehicles.driver.min_gap_m` **new** | model's (2.0) | 0.5 to 10 m | IDM `s0`. |
-| `actors.vehicles.driver.politeness` **new** | 0.5 | 0 to 1 | MOBIL `p` (Kesting 2007), all classes. |
-| `actors.vehicles.driver.lane_change_threshold_mps2` **new** | 0.1 | 0 to 2 m/s² | MOBIL `Δa_th`. |
+| `actors.vehicles.drivers.max_accel_mps2` **new** | model's (1.4) | 0.3 to 5 m/s² | IDM `a`, passenger cars. |
+| `actors.vehicles.drivers.comfort_decel_mps2` **new** | model's (2.0) | 0.5 to 6 m/s² | IDM `b`. |
+| `actors.vehicles.drivers.time_headway_s` **new** | model's (about 1.5) | 0.3 to 4 s | IDM `T`. |
+| `actors.vehicles.drivers.min_gap_m` **new** | model's (2.0) | 0.5 to 10 m | IDM `s0`. |
+| `actors.vehicles.drivers.politeness` **new** | 0.5 | 0 to 1 | MOBIL `p` (Kesting 2007), all classes. |
+| `actors.vehicles.drivers.lane_change_threshold_mps2` **new** | 0.1 | 0 to 2 m/s² | MOBIL `Δa_th`. |
 | `world.signals.coordinate`, `.progression_speed_mps` | off | 1 to 40 m/s | Green-wave signal timing. |
 | `apps.glosa_compliance` | scenario's | 0 to 1 | Share of drivers who follow advice. |
 | `actors.vru.red_crossing_share` | scenario's | 0 to 1 | Pedestrian non-compliance. |
 
 The IDM `delta` exponent and the other model internals are parameters of the chosen
 model: `actors.vehicles.driving.car_following.params`, published from the model's card.
-`actors.vehicles.driver` is refused with `mobility.provider: sumo`, since SUMO's `vType`
+`actors.vehicles.drivers` is refused with `mobility.provider: sumo`, since SUMO's `vType`
 holds those drivers.
 
 ## Run (`time`, `seed`, `experiment`)
