@@ -169,7 +169,7 @@ and public-key checks go to a fast accelerator. A unit that does both on one CPU
   99th percentile implies for the run.
 - **`phase2.messages_checked` (99) is far below the attacker's frames received (300).**
   This was not investigated.
-- **Three `scenario::publish` unit tests fail at the base commit.** They are
+- **Three `scenario::publish` unit tests fail on this branch.** They are
   `every_leaf_has_a_status` (`mobility.provider`), `every_number_publishes_a_unit`
   (`actors.rsu_placement.count`) and `every_section_has_a_group` (`city`). They name fields this work does not touch and were not re-run on the bare base commit; they
   most likely come from the merge of the other tracks.
