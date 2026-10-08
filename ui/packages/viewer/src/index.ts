@@ -21,7 +21,7 @@
  */
 
 export { Viewer } from "./scene.js";
-export type { ViewerOptions, FrameReport, ActorFraming } from "./scene.js";
+export type { ViewerOptions, FrameReport, ActorFraming, LightingMode } from "./scene.js";
 
 export { WorldRenderer, pointInRing } from "./world-render.js";
 export type { WorldRendererOptions, WorldBuildReport, BuildingBackend, RoadsideUnitPlacement } from "./world-render.js";

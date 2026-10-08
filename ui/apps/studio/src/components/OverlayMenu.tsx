@@ -71,6 +71,8 @@ export function OverlayMenu(): React.JSX.Element {
   const serverOverlays = useStudio((s) => s.serverOverlays);
   const gtLocked = useStudio((s) => s.groundTruthLocked);
   const devDetails = useStudio((s) => s.devDetails);
+  const lighting = useStudio((s) => s.lighting);
+  const setLighting = useStudio((s) => s.setLighting);
   const following = useStudio((s) => s.selectedNode !== null || s.selectedActor !== null);
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -164,6 +166,25 @@ export function OverlayMenu(): React.JSX.Element {
             </div>
           ) : null}
           <div className="menu-rule" />
+          <label
+            className="layer-row"
+            title="How street-level views are lit. The map view is always drawn in daylight so the streets stay readable."
+          >
+            <span className="grow">
+              <span className="menu-item-title">Lighting</span>
+              <span className="menu-item-hint">Map view is always lit as day.</span>
+            </span>
+            <select
+              value={lighting}
+              onChange={(e) => setLighting(e.target.value as typeof lighting)}
+              data-testid="lighting"
+              aria-label="Lighting"
+            >
+              <option value="day">Day</option>
+              <option value="night">Night</option>
+              <option value="clock">Follow the clock</option>
+            </select>
+          </label>
           <label className="layer-row" title="Turn off and lock every layer drawn from ground truth, so what is on screen is only what the radios could know">
             <input type="checkbox" checked={gtLocked} onChange={(e) => engine.lockGroundTruth(e.target.checked)} />
             <span className="grow">

@@ -100,7 +100,7 @@ test("search, edit, undo, reset, JSON round trip, apply to the next run", async 
 
   // --- 4. apply reaches the next run ------------------------------------------------------------
   await page.getByTestId("apply").click();
-  await expect(page.getByTestId("scenario-message")).toContainText("Applied 1 change");
+  await expect(page.getByTestId("scenario-message")).toContainText("Changes take effect when you restart");
   await expect(page.getByTestId("staged-note")).toContainText("waiting for the next run");
   expect((await status(page)).staged_hash).not.toBeNull();
   const done = await runToEnd(page);
@@ -214,7 +214,7 @@ test("the settings open in a window of their own, and an Apply there reaches thi
   await popup.getByTestId("settings-filter").fill("time.duration_s");
   await popup.locator(DURATION).locator("input").fill("2");
   await popup.getByTestId("apply").click();
-  await expect(popup.getByTestId("scenario-message")).toContainText("Applied 1 change");
+  await expect(popup.getByTestId("scenario-message")).toContainText("Changes take effect when you restart");
   // The main page hears of it without a reload: its gear shows applied settings waiting.
   await expect(page.getByTestId("settings-pending")).toBeVisible({ timeout: 15_000 });
 

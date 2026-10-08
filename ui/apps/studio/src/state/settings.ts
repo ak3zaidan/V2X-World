@@ -137,6 +137,9 @@ export async function checkDraft(): Promise<string> {
     : `${res.errors.length} setting${res.errors.length === 1 ? "" : "s"} need fixing — each is marked where it is.`;
 }
 
+/** What an applied edit says: it waits for a restart, which the note offers a button for. */
+export const RESTART_NOTE = "Changes take effect when you restart.";
+
 /** Send the draft to the engine for the next run. Returns a sentence, or throws with the reasons. */
 export async function applyDraft(): Promise<string> {
   const draft = useStudio.getState().draft;
@@ -156,8 +159,8 @@ export async function applyDraft(): Promise<string> {
       ? ` ${inert.length} of your edits (${inert.map((f) => f.label).join(", ")}) change nothing in this build — see the marks on those fields.`
       : "";
   return changed.length === 0
-    ? `These are the settings of the run already on screen; there is nothing to change.${inertNote}`
-    : `Applied ${changed.length} change${changed.length === 1 ? "" : "s"}. The next run uses them — press Run.${inertNote}`;
+    ? `No change from the run on screen.${inertNote}`
+    : `${RESTART_NOTE}${inertNote}`;
 }
 
 /**
@@ -197,11 +200,10 @@ async function startRunFromHere(): Promise<string> {
 
 /** Apply any unapplied edit, then start a run with it. */
 export async function runWithDraft(): Promise<string> {
-  let applied = "";
-  if (currentEdits().length > 0) applied = `${await applyDraft()} `;
+  if (currentEdits().length > 0) await applyDraft();
   const state = await startRunFromHere();
   const now = useStudio.getState().run;
-  return `${applied.replace(" — press Run.", ".")}${state === "running" ? "Running" : `Started; the engine reports it is ${state}`} — ${Math.round(now.tEndNs / 1e9)} s of simulated time.`;
+  return `${state === "running" ? "Running" : `Started; the engine reports it is ${state}`} — ${Math.round(now.tEndNs / 1e9)} s of simulated time.`;
 }
 
 /** Load a ready-made scenario into the form; the next Run runs it. */

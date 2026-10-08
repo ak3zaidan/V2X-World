@@ -72,7 +72,28 @@ import { RunDuration } from "./RunDuration.js";
 const SPEEDS = [0, 0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50, 100];
 
 function speedLabel(speed: number): string {
-  return speed === 0 ? "as fast as possible" : `${speed}×`;
+  return speed === 0 ? "as fast as possible" : speed === 1 ? "1× (real time)" : `${speed}×`;
+}
+
+/**
+ * The engine's seek progress (`"simulating ahead to 300.0 s: at 218.0 s"`) in words a person
+ * reads at a glance: "Catching up to 5:00 — 73%". Shown only once a catch-up has lasted longer
+ * than a moment, since a short seek finishes before anyone could read it.
+ */
+function CatchUp({ progress, message }: { readonly progress: number; readonly message: string }): React.JSX.Element | null {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setShown(true), 600);
+    return () => clearTimeout(t);
+  }, []);
+  if (!shown || progress >= 1) return null;
+  const m = /to ([\d.]+) s/.exec(message);
+  const target = m ? ` to ${simClock(Number(m[1]) * 1e9)}` : "";
+  return (
+    <div className="timebar-notice" role="status" data-testid="seek-progress" title={message}>
+      <progress value={progress} max={1} aria-label="Catching up" /> Catching up{target} — {Math.round(progress * 100)}%
+    </div>
+  );
 }
 
 const MARK_COLOR: Record<string, string> = {
@@ -497,11 +518,31 @@ export function TimeControls(): React.JSX.Element {
       >
         ▶|
       </button>
+      {drivingReplay ? null : (
+        <button
+          type="button"
+          className="icon tb-restart"
+          title={caps.restart.enabled ? "Restart: rewind to the start and run again with the current settings" : caps.restart.why}
+          disabled={!caps.restart.enabled}
+          onClick={() => void call(() => engine.startRun())}
+          data-testid="restart-run"
+          aria-label="Restart"
+        >
+          ↺
+        </button>
+      )}
 
       <select
         className="tb-speed"
         value={String(run.speed)}
-        onChange={(e) => void call(() => engine.request("run.speed", { speed: Number(e.target.value) }))}
+        onChange={(e) => {
+          // Read the choice now. `call` runs its function a microtask later, by which time React has
+          // put this controlled select back to `run.speed` — so reading `e.target.value` inside it
+          // sent the old speed, and the menu snapped back to "as fast as possible" every time.
+          const speed = Number(e.target.value);
+          useStudio.getState().setRun({ speed });
+          void call(() => engine.request("run.speed", { speed }));
+        }}
         aria-label="Playback speed"
         title={caps.speed.enabled ? "Playback speed: how fast simulated time runs against real time" : caps.speed.why}
         data-testid="speed"
@@ -639,14 +680,7 @@ export function TimeControls(): React.JSX.Element {
         </span>
       ) : null}
 
-      {seekProgress !== null ? (
-        <div className="timebar-notice" role="status" data-testid="seek-progress">
-          <progress value={seekProgress.progress} max={1} aria-label="Simulating ahead to the seek target" />{" "}
-          {seekProgress.message !== ""
-            ? seekProgress.message.replace(/^simulating/, "Simulating")
-            : `Simulating ahead: ${Math.round(seekProgress.progress * 100)} %`}
-        </div>
-      ) : null}
+      {seekProgress !== null ? <CatchUp progress={seekProgress.progress} message={seekProgress.message} /> : null}
       {notice ? (
         <div className="timebar-notice" role="status" data-testid="time-notice">
           {notice}
