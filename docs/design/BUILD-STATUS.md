@@ -2982,3 +2982,32 @@ conflicts resolved by hand and the whole workspace compile-checked:
   (`scenario_reflect.rs`) across worktrees. A stale reflection from another worktree made
   the publish tests fail. Touch `src/scenario/schema.rs` inside the heavy lock before
   testing.
+## 2026-10-08 — traffic soak: run, find, fix (branch of 4986cd4)
+
+- **`v2xw check-traffic <run dir>`** reads a run's recording through the Studio's replay
+  scene and rebuilds its world, so it checks what the page shows: queue heads standing on
+  their own green or at a clear unsignalised junction, mid-lane stops, stops past a
+  cycle, red entries (judged where the front crossed the stop line), lamps matching no
+  phase, overlaps, jumps, braking, jerk, speeding, pedestrian jumps; plus discharge
+  headways by queue position, saturation headway, start-up lost time, speeds per road
+  class. `--trace <actor>` prints one actor's steps with the lamps, occupants and exit of
+  each movement ahead. Test: `tests/check_traffic.rs` (a clean busy grid passes; a plan
+  the lamps do not match fails). Traffic-only soaks (`equipped_fraction: 0`) run 300 s of
+  Midtown in 8 s; with the radio stack and full recording, 180 s took 734 s (node.rx
+  writes 4 GB of JSON).
+- **Fixed, each found by a soak run and re-run:**
+  - Recorded lamps kept the fixed-time clock while actuated control and priority moved
+    the plans: actuated grid, 446 red entries and 2 green standstills as recorded -> 0.
+  - Vehicles crawled at 0.1-0.2 m/s toward a red far ahead (the stop-at-line floor bound
+    at every distance) and into standing obstacles inside s0; now they drive up and stop.
+  - The standstill-gap cap's -10.5 m/s² step (phase1-grid lane 119): capped at 8.5.
+  - `portland-downtown.yaml`: 8 vehicles in 300 s -> 84 (connected-core OD on every
+    imported map).
+  - GLOSA lane match through a strategic lane change (0 of 77 -> 7 of 53 followed
+    without the 1 s hold; still not the whole cause).
+- **Open, seen in the soaks:** queue heads on protected green 8-27 s at a few Midtown and
+  Chicago stop lines (exit room / junction-clear holds, not yet traced); stops of 160-180
+  s on midtown-rush-hour; 151 long stops and 10 lateral overlaps on highway-congestion;
+  start-up lost time 3.17 s (target 1-3); `check-traffic` counts lawful right turns on
+  red as red entries (Chicago 31, Portland 11); phantom stops are mostly kerbside stops
+  that stay on the lane centreline (no pull-over), which the recording cannot tell apart.
