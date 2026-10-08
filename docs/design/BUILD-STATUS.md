@@ -4,7 +4,7 @@ Living record of what is built and what has actually been *measured*, as against
 the plan in `10-roadmap.md` and the decisions in `12-build-decisions.md`. Claims
 here carry their evidence; anything unmeasured says so.
 
-Last updated 2026-10-07 (the round-5 merge section first, then the round-4 merge section; the stabilise track section; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
+Last updated 2026-10-08 (the scale track section first, then the round-5 merge section, then the round-4 merge section; the stabilise track section; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
 `v2xw-metrics`, `v2xw-node` and `v2xw-engine` are no longer stubs, and the line counts
 predate several waves. It is left as written rather than rewritten from memory, because a
 status file whose numbers were re-estimated rather than re-measured is worse than one that
@@ -14,6 +14,82 @@ For the current release position — what must be true for a 1.0 tag, what is no
 what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKLIST.md)
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
+
+## 2026-10-08 — scale, speed and long runs (scale track, branch of 4986cd4)
+
+Runs, not reading: the optimised dev build (`opt-level 2`, debug assertions on),
+`v2xw run --no-recording --digest`, `RAYON_NUM_THREADS=2`, on the owner's 8 GB M2 while
+other engineers' jobs and browsers kept its load average near 7, so wall times carry
+±20 % noise. Ladder scenarios (scratch overlays): a 10 × 10 procedural grid with three
+SPaT/MAP RSUs and every US set (`bsm, spat, map, srm, ssm`), and `scenarios/scale/base.yaml`
+Manhattan; both signed (ECDSA, modeled crypto, prioritized verification), `metrics: [all]`,
+the V2V apps on, fleets bulk-spawned by `max_total_vehicles`.
+
+**A measuring pitfall, fixed for this track only.** The agents share one
+`target/agents`, so `target/agents/debug/v2xw` is whichever worktree built last. Numbers
+taken from it can be another branch's binary (this track's first table was, and is
+discarded). Every number below comes from a binary copied out of the target dir under the
+same build lock.
+
+| run | vehicles | before: wall s per sim s | after | digest |
+|---|---|---|---|---|
+| grid, 10 s | 49 | 0.80 | 0.65 | same |
+| Manhattan, 10 s | 49 | 0.55 | 0.49 | same |
+| grid, 10 s | 197 | 4.40 | 4.44 | same |
+| Manhattan, 10 s | 199 | 7.0 | 7.6 | same |
+| grid, 2 s | 911 | 84.6 | 66.4 | same |
+| Manhattan tiered (meso + 600 m micro box), 2 s, cap 4,800 | 1,539 | 7.9 | 8.3 | same |
+
+Peak memory: 27 MB (grid-50), 108 MB (grid-200), 825 MB (grid-1000), 269 MB (tiered 1,539).
+The 1 and 2 thread digests agree on grid-50 (`7caffe61…`); the other rungs were run at two threads only.
+**Vehicles in real time:** about 100 all-microscopic in this dense, everyone-hears-everyone
+ladder (wall ≈ sim at ~110 on the grid); the tiered city runs 1,539 at 8× slower than real
+time with all messages and metrics, and a 6-hour tiered night (below) runs 42× faster than
+real time. A 3,000-vehicle all-microscopic run was not attempted: at 1,000 it is 66× slower
+than real time and the cost is quadratic in the fleet.
+
+**Where the time goes** (`sample`, two threads). Grid-200: the engine thread was 38 %
+record encoding and the metric providers' JSON decode, 36 % frame start (link geometry, in
+parallel, then path loss, shadowing and fading in receiver order), 14 % node steps
+(verification: COER parse, signature check); the rayon workers slept 78 % of the time.
+Manhattan-1000: building shadowing is 38 % of all CPU (`ring_crossing`, `point_in_ring`
+and the R-tree walk in `candidates_along`), already in the parallel half.
+
+**Fixed:**
+
+- `925f4ef` perf — each reception's `phy.rx`/`node.rx` records are built, encoded and
+  decoded for the providers in parallel and emitted in receiver order where they were;
+  Nakagami fades are drawn in parallel (`BoxedFading::shared`; single-use `(link, frame)`
+  streams). Same digests. Main-thread time in `finish_phy_end` −13 % at two threads, grid-1000
+  −21 % wall; more with more threads.
+- `842f2c4` fix — the RA's shuffles now close at 10,000 items as well as at their window
+  (CAMP-EE §2.2.7, SCMS-765; the 10,000 was published and never applied). Found on a 1-hour
+  `manhattan-day`: 5,240 reports reached the proxy, **0 reached the MA**, so nobody was
+  revoked, and with the one-day window a whole-day run cannot revoke anyone either. New
+  lifecycle keys `cert_shuffle_threshold`, `report_shuffle_threshold`; test
+  `lockstep.rs::the_report_shuffle_closes_at_its_count_before_its_window` (fails with the
+  generation check removed).
+
+**Long runs** (`--record-level metrics`, progress every 5 or 30 min):
+
+- 1 hour of `manhattan-day` from midnight, all microscopic (attacker window moved into the
+  hour): 131 vehicles, 455 s wall (8× faster than real time), peak 140 MB, 66 M records.
+- 6 hours from midnight with the meso tier (`scale.traffic` tiered, 300 m radio margin):
+  600 vehicles, 510 s wall, footprint 74 → 140 MB, tracking the fleet's growth towards
+  06:00 rather than the clock. Stores that grow with every vehicle *ever seen*, not with the
+  live fleet: the SCMS's per-device records and the engine's `p2.creds` (40 certificates a
+  device, 22,800 at 6 h for ~30 live vehicles), `p2.by_digest`, `p2.privacy_*`, and the
+  SCMS kernel's stage and wire logs (11,598 and 7,732 at 6 h). At a day's demand
+  (~20,000 vehicles) the credential maps reach ~800,000 entries. Left as they are: the
+  backend's issuance history is what a revocation needs, and the engine's copy is keyed for
+  reports that arrive after a vehicle left; trimming it is a modelling decision, not a leak
+  fix. `p2.in_flight` is now bounded by the 10,000-report shuffle.
+
+**Not done:** the live server feed and the Studio at the busiest scenario (no browser run);
+the shadowing process (`LogDistanceShadowing::loss_db`, 8 % serial at 200 vehicles) and
+node steps are still serial; building shadowing (`ring_crossing`) was not made cheaper;
+`settle`'s per-top-up scan of the whole SCMS wire log (`phase2.rs`, `kernel.steps.iter()`)
+is quadratic over a long run with many top-ups, unmeasured.
 
 ## 2026-10-07 — round-5 merge: eight tracks onto main (settings, agent, radio, network, traffic)
 
