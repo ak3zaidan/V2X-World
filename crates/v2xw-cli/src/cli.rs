@@ -40,6 +40,9 @@ pub enum Command {
     ImportOsm(ImportArgs),
     /// Print a recording's manifest, channels and verification report.
     Info(InfoArgs),
+    /// Write a scenario's road network and demand in SUMO formats (plain XML, .net.xml via
+    /// netconvert when SUMO is installed, .rou.xml with this engine's routes).
+    ExportSumo(ExportSumoArgs),
     /// Score a recording's traffic for emissions, fuel and EV energy, with health bands.
     Energy(EnergyArgs),
     /// Expand a scenario's `experiment` block into runs, execute them and aggregate them.
@@ -397,6 +400,19 @@ impl EnergyArgs {
             opmode_csv: self.opmode_csv.clone(),
         }
     }
+}
+
+/// `v2xw export-sumo`.
+#[derive(Debug, clap::Args)]
+pub struct ExportSumoArgs {
+    /// The scenario.
+    pub scenario: PathBuf,
+    /// The directory to write into.
+    #[arg(short, long, default_value = "sumo-export")]
+    pub out: PathBuf,
+    /// Print the outcome as JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// `v2xw info`.

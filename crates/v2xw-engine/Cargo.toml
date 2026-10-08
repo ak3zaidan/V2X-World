@@ -33,6 +33,9 @@ v2xw-energy = { workspace = true }
 # below this crate. A path entry, as `v2xw-trafficval` names this crate, so the root
 # manifest the other tracks also edit stays untouched.
 v2xw-demand = { path = "../v2xw-demand", version = "0.1.0" }
+# `mobility.provider: sumo`: the TraCI co-simulation tier. It depends on the mobility,
+# world and radio crates only, never on this one.
+v2xw-interop = { path = "../v2xw-interop", version = "0.1.0" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

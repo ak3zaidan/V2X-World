@@ -32,6 +32,7 @@ pub mod checkpoint;
 pub mod cli;
 pub mod error;
 pub mod experiment;
+pub mod export_sumo;
 pub mod fmt;
 pub mod import;
 pub mod energy;

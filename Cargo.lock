@@ -2575,6 +2575,7 @@ dependencies = [
  "v2xw-energy",
  "v2xw-engine",
  "v2xw-experiment",
+ "v2xw-interop",
  "v2xw-metrics",
  "v2xw-mobility",
  "v2xw-msg",
@@ -2680,6 +2681,7 @@ dependencies = [
  "v2xw-core",
  "v2xw-demand",
  "v2xw-energy",
+ "v2xw-interop",
  "v2xw-metrics",
  "v2xw-mobility",
  "v2xw-msg",
@@ -2705,6 +2707,19 @@ dependencies = [
  "v2xw-metrics",
  "v2xw-record",
  "v2xw-threat",
+]
+
+[[package]]
+name = "v2xw-interop"
+version = "0.1.0"
+dependencies = [
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "v2xw-core",
+ "v2xw-mobility",
+ "v2xw-radio",
+ "v2xw-world",
 ]
 
 [[package]]

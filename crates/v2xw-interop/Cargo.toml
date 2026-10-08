@@ -1,0 +1,24 @@
+[package]
+name = "v2xw-interop"
+description = "SUMO interoperability: a TraCI mobility plug-in, .rou.xml demand import and export, network export to SUMO plain XML, and the SUMO cross-validation report."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+v2xw-core = { workspace = true }
+v2xw-world = { workspace = true }
+v2xw-mobility = { workspace = true }
+# The radio sweep harness, for the delivery-versus-distance comparison only.
+v2xw-radio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+quick-xml = { workspace = true }
+
+[[bin]]
+name = "cross_validate"
+path = "src/bin/cross_validate.rs"

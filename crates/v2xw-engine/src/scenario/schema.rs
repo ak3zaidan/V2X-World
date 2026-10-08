@@ -109,6 +109,12 @@ pub struct Scenario {
     /// serialised scenario so a scenario that does not mention it keeps its content hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub energy: Option<v2xw_energy::EnergySpec>,
+    /// Who drives the traffic: absent (or `provider: native`) is this engine's own
+    /// mobility; `provider: sumo` hands every vehicle to SUMO over TraCI
+    /// (`v2xw_interop::sumo`) while radio, security, backend and UI run here. Left out of
+    /// the serialised scenario when absent, so existing content hashes hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mobility: Option<MobilityProvider>,
     /// A parameter sweep, when this file describes one (08-measurement-and-data.md §4).
     #[serde(default)]
     pub experiment: Option<Experiment>,
@@ -205,6 +211,36 @@ impl Default for ScaleRadio {
             receive_in_margin: false,
         }
     }
+}
+
+/// `mobility:` — the traffic provider.
+///
+/// ```yaml
+/// world: { source: { kind: sumo-net, path: worlds/my.net.xml } }
+/// mobility:
+///   provider: sumo
+///   route_files: [worlds/my.rou.xml]     # optional: SUMO reads and routes these itself
+///   sumo_args: [--default.carfollowmodel, IDM]
+/// ```
+///
+/// SUMO is found through `sumo_home`, else `$SUMO_HOME`, else `$V2XW_SUMO_VENV`. The world
+/// must be the `net.xml` SUMO runs (`world.source.kind: sumo-net`): that is what makes a
+/// SUMO lane a world lane. The scenario's own demand still applies: its trips are routed
+/// here and inserted into SUMO.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MobilityProvider {
+    /// `native` or `sumo`.
+    pub provider: String,
+    /// `.rou.xml` files SUMO loads itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub route_files: Vec<String>,
+    /// Extra SUMO command-line options.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sumo_args: Vec<String>,
+    /// SUMO's installation directory (holding `bin/sumo`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sumo_home: Option<String>,
 }
 
 /// `seed: 0x…`, `seed: "0x…"` or `seed: 12345`.

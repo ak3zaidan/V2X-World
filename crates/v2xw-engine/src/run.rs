@@ -1054,8 +1054,14 @@ impl Engine {
         let wall = WallClock::parse_rfc3339(&scenario.time.t0)
             .map_err(|e| EngineError::Core(v2xw_core::error::CoreError::Time(e)))?;
         let rng = RngRegistry::new(scenario.seed);
-        let mut mobility = crate::scale::build_mobility(&scenario, &world)
-            .unwrap_or_else(|| crate::wiring::build_mobility(&scenario));
+        // SUMO, when `mobility.provider` names it, drives the traffic; otherwise the city-scale
+        // tier (`scale`) or the default microscopic model.
+        let sumo = scenario.mobility.as_ref().is_some_and(|m| m.provider == "sumo");
+        let scaled = if sumo { None } else { crate::scale::build_mobility(&scenario, &world) };
+        let mut mobility = match scaled {
+            Some(m) => m,
+            None => crate::wiring::build_mobility_for(&scenario, &world)?,
+        };
         // The drivers see the weather the run starts in (FHWA speed and headway, sight
         // distance, surface grip — v2xw_mobility::weather).
         mobility.set_weather(crate::wiring::initial_weather(&scenario));

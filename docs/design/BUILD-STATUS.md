@@ -61,6 +61,58 @@ GeoUnicast; no GN security header processing; WSA is not sent as frames in the e
 `scenario::publish` tests `every_number_publishes_a_unit` (`actors.rsu_placement.count`)
 and `every_section_has_a_group` (`city`) fail on fields this track did not touch (not re-run on the base commit).
 
+## 2026-10-07 — SUMO interoperability and cross-validation (interop track)
+
+New crate `crates/v2xw-interop`. Every number below is from the debug build with SUMO
+1.27.1 from the `eclipse-sumo` wheel; the report is the record and is regenerated, not
+edited.
+
+**One command:** `just cross-validate` (add `--quick` for shorter runs) writes
+[`docs/validation/cross-validation.md`](../validation/cross-validation.md). SUMO is found
+through `$SUMO_HOME`, else `$V2XW_SUMO_VENV` (a virtualenv with `pip install eclipse-sumo`).
+The Manhattan study needs `worlds/cache/manhattan.osm.xml`.
+
+What is built:
+
+| Piece | Where | State |
+|---|---|---|
+| TraCI client (binary protocol, batched gets: a fixed number of round trips per step whatever the fleet) | `v2xw-interop/src/traci.rs` | used by every run below |
+| `mobility/sumo-traci`: SUMO drives every vehicle; this engine publishes SUMO's states as ground truth (front bumper → rear reference point, compass angle → ENU heading, SUMO lanes → world lanes by id) and inserts its own demand's trips with this engine's routes | `v2xw-interop/src/sumo.rs` | `scenarios/interop/sumo-grid.yaml` ran 60 s through `v2xw run`: 23 SUMO vehicles, 5,763 signed BSMs sent and verified over 802.11p |
+| Scenario switch `mobility: { provider: sumo, route_files, sumo_args, sumo_home }`; `world.source.kind: sumo-net` now builds (the loader refused it before) | `v2xw-engine` schema, validate, wiring | absent field = unchanged hashes |
+| `.rou.xml` import (`vehicle`, `trip`, `flow` with `vehsPerHour`/`period`/`number`/`probability`, nested and referenced routes) as a `Demand` that keeps each vehicle's route | `v2xw-interop/src/routes.rs` | test on `worlds/sumo/grid3.rou.xml` |
+| Export: world → plain XML (`.nod/.edg/.con.xml`) → `netconvert` → `.net.xml`; demand → `.rou.xml` with this engine's routes | `netexport.rs`, `routes.rs`, `v2xw export-sumo SCENARIO --out DIR` | sumo-grid export: all 113 trips inserted by stand-alone `sumo` |
+| Cross-validation study and report | `xval.rs`, `radio.rs`, `bin/cross_validate.rs` | full run about 2 min |
+
+Method: SUMO's own network (netgenerate 5 × 5 grid; netconvert on a 1.1 km Midtown
+extract), imported into this engine, so lanes match one to one; one trip list routed once
+and driven by both (native, SUMO-Krauss, SUMO-IDM); one observer measures all three (Edie
+flow, density and speed, paired travel times, halting below 0.1 m/s, per-edge GEH).
+
+Findings (see the report for the tables):
+
+- Network flow and density agree within about ±9 %, at least 98 % of edges are within
+  GEH 5 (acceptance 85 %), edge-speed correlation 0.84–0.97.
+- This engine is 3–9 % slower in space-mean speed and its mean travel time is 5–16 %
+  longer, but the paired **median** ratio is 1.01–1.04: the difference is a tail of slow
+  trips, not a shift. SUMO-IDM against SUMO-Krauss moves results only 1–4 %, so the tail
+  is not the car-following equation; the leading suspects are late strategic lane changes
+  before turns and the already-recorded 5.99 s permitted-left critical gap. Not yet
+  isolated by an experiment.
+- Radio: LTE-V2X Mode 4 against OpenCV2X (Artery-based) is within 5–14 PDR points on
+  average, against Molina-Masegosa 6–11. **802.11p against Veins is 30 points off**: this
+  engine still delivers most packets at 300–400 m where the Veins curve has collapsed.
+  The studies used WINNER+ B1, which this workspace has only as an uncalibrated stand-in;
+  until it is calibrated this is a finding about the channel, not yet the 802.11p stack.
+- Every reference curve is digitised from a published figure (Veins: colour-traced from
+  Sepulcre et al., arXiv:2104.07923, Fig. 4a; OpenCV2X: markers of arXiv:2103.13212,
+  Fig. 3) and the report says so.
+
+Not done: signal states from SUMO are not published back to the engine's signal channel;
+SUMO pedestrians are not read; signal programmes are not exported (netconvert regenerates
+them); the round trip of a procedural world through netconvert keeps lanes and signals
+but shortens lanes by about 4 % (junction shapes); the tail finding above needs its
+experiment; WINNER+ B1 calibration owed before the 802.11p comparison means anything.
+
 ## 2026-10-06 — settings as dropdowns, and a ready-made list a person can read (settings track)
 
 The owner's review: settings fields were free text nobody knew how to fill, and the
