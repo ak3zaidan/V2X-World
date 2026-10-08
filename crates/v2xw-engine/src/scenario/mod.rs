@@ -119,11 +119,30 @@ impl Scenario {
     /// [`ScenarioError::Parse`] if the document does not match the schema.
     pub fn from_document(mut doc: Value) -> Result<Scenario> {
         crate::city::fill_world_from_city(&mut doc)?;
-        let mut scenario: Scenario = serde_json::from_value(doc).map_err(|e| {
-            EngineError::Scenario(ScenarioError::Parse {
-                path: "<document>".to_string(),
-                message: e.to_string(),
-            })
+        // Through serde_path_to_error, so a key that does not parse is named: the settings
+        // window marks the field rather than showing "<document>: missing field `count`"
+        // at the top (found setting actors.rsu_placement.profile on a scenario with no
+        // placement block, radio.tiers.focus.tier with no focus region, scale.radio.*).
+        let mut scenario: Scenario = serde_path_to_error::deserialize(doc).map_err(|e| {
+            let at = e.path().to_string();
+            let inner = e.into_inner().to_string();
+            if at.is_empty() || at == "." {
+                return EngineError::Scenario(ScenarioError::Parse {
+                    path: "<document>".to_string(),
+                    message: inner,
+                });
+            }
+            let (field, conflict) = match inner
+                .strip_prefix("missing field `")
+                .and_then(|r| r.split('`').next())
+            {
+                Some(key) => (
+                    format!("{at}.{key}"),
+                    format!("is missing, and {at} needs it once any of its settings is set"),
+                ),
+                None => (at, inner),
+            };
+            EngineError::Scenario(ScenarioError::Conflict { field, conflict })
         })?;
         // A file whose `city` is not the city its world is — a ready-made scenario that
         // inherits a world from its base and names its own city — runs on the city it

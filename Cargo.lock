@@ -2676,6 +2676,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "serde_yml",
  "thiserror",
  "v2xw-core",
