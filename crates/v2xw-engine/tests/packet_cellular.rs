@@ -50,4 +50,20 @@ fn packet_level_cellular_carries_the_backend_and_reports_the_comparison() {
         "backend messages open TCP connections"
     );
     assert!(!a.uu_vs_simple.is_empty(), "the comparison is reported");
+    // Every message of the backend flows, not just a probe, went through the scheduler.
+    assert!(
+        a.carrier.uu_messages > 0,
+        "the kernels' messages ride the packet-level Uu: {:?}",
+        a.carrier
+    );
+    let topup = a.exchange_latency.get("topup").copied().unwrap_or_default();
+    assert!(
+        topup.count > 0,
+        "top-up latency is measured: {:?}",
+        a.exchange_latency
+    );
+    assert!(
+        topup.mean_ms() > 10.0,
+        "a top-up costs real round trips: {topup:?}"
+    );
 }

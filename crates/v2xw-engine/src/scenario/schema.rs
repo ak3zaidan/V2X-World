@@ -546,6 +546,9 @@ pub struct RsuPlacement {
     /// The backhaul of each (as [`Rsu::backhaul`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backhaul: Option<String>,
+    /// The backhaul parameters of each (as [`Rsu::backhaul_params`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backhaul_params: Option<serde_json::Value>,
     /// The least distance between two units, metres; 150 m by default, about two
     /// downtown blocks.
     #[serde(default = "RsuPlacement::default_spacing")]
@@ -725,6 +728,11 @@ pub struct Rsu {
     /// Its backhaul link model id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backhaul: Option<String>,
+    /// This unit's own backhaul parameters — `rate_mbps`, `down_mbps`, `latency_ms`,
+    /// `distance_km`, `hops`, `loss` (the medium card's keys) — over `net.backhaul.params`
+    /// when it names the same medium, over the medium's defaults otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backhaul_params: Option<serde_json::Value>,
 }
 
 /// Backend entities and their topology.

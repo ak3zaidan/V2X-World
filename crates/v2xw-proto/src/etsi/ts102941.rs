@@ -1583,6 +1583,11 @@ impl EtsiRun {
         *self.tickets.entry(station).or_insert(0) += tickets;
     }
 
+    /// Installs the driver's per-message access model ([`crate::net::PathOracle`]).
+    pub fn set_path_oracle(&mut self, oracle: crate::net::SharedOracle) {
+        self.kernel.net_mut().set_oracle(oracle);
+    }
+
     /// Replaces the link `station` reaches the EA, the AA, the CPOC and the MA over — the
     /// access the driver models (cellular Uu, or a roadside unit's relay and backhaul).
     pub fn set_access(&mut self, station: NodeId, link: Link) {

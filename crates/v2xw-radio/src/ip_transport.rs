@@ -32,7 +32,7 @@ use crate::cellular_packet::PacketUu;
 /// A path packets cross one at a time: `Some(arrival)` or `None` for lost.
 ///
 /// `Uplink` is client → server (vehicle or RSU → backend), `Downlink` the reverse.
-pub trait PacketPath<C: Ctx + ?Sized> {
+pub trait PacketPath<C: ?Sized> {
     /// Offers one IP packet of `bytes` at `at`.
     fn deliver(
         &mut self,
@@ -66,7 +66,7 @@ pub struct ConstantPath {
     pub bps: f64,
 }
 
-impl<C: Ctx + ?Sized> PacketPath<C> for ConstantPath {
+impl<C: ?Sized> PacketPath<C> for ConstantPath {
     fn deliver(
         &mut self,
         _ctx: &mut C,
@@ -86,8 +86,16 @@ impl<C: Ctx + ?Sized> PacketPath<C> for ConstantPath {
 pub struct WiredLink {
     /// A label for reports.
     pub name: String,
-    /// Line rate, bit/s.
+    /// Line rate towards the backend (upstream), bit/s.
     pub rate_bps: f64,
+    /// Line rate from the backend (downstream), bit/s; equal to `rate_bps` on a
+    /// symmetric medium.
+    #[serde(default)]
+    pub down_bps: f64,
+    /// Propagation per km of route, µs: [`FIBRE_US_PER_KM`] in glass, [`AIR_US_PER_KM`]
+    /// over a radio hop.
+    #[serde(default)]
+    pub us_per_km: f64,
     /// Route length, km.
     pub distance_km: f64,
     /// Router hops.
@@ -106,6 +114,155 @@ pub struct WiredLink {
 /// is the standard engineering rule].
 pub const FIBRE_US_PER_KM: f64 = 4.9;
 
+/// A radio hop: the speed of light, 1/299,792.458 km/s = 3.336 µs per km.
+pub const AIR_US_PER_KM: f64 = 3.336;
+
+/// The interleaving delay a VDSL2 line adds, ms (`todo-calibrate`, see
+/// [`WiredLink::copper`]).
+pub const DSL_INTERLEAVE_MS: f64 = 8.0;
+
+/// The share of time a planned microwave hop is in outage (`todo-calibrate`, see
+/// [`WiredLink::microwave`]).
+pub const MICROWAVE_OUTAGE: f64 = 1e-5;
+
+/// `backhaul/fibre`: a metro fibre backhaul, [`WiredLink::metro_fibre`].
+pub const BACKHAUL_FIBRE: &str = "backhaul/fibre";
+/// `backhaul/dsl`: a VDSL2 copper backhaul, [`WiredLink::copper`].
+pub const BACKHAUL_DSL: &str = "backhaul/dsl";
+/// `backhaul/microwave`: a point-to-point microwave backhaul, [`WiredLink::microwave`].
+pub const BACKHAUL_MICROWAVE: &str = "backhaul/microwave";
+
+/// The cards of the three wired media, for the catalogue and the settings page: each
+/// parameter is one `actors.rsus[].backhaul_params` / `net.backhaul.params` key.
+#[must_use]
+pub fn wired_cards() -> Vec<v2xw_core::card::ModelCard> {
+    use v2xw_core::card::{
+        Equation, Family, ModelCard, Parameter, Source, SourceKind, Tier, Validation,
+        ValidationStatus,
+    };
+    let ranged = |name: &str, unit: &str, v: f64, src: Source, lo: f64, hi: f64| {
+        let mut p = Parameter::new(name, unit, serde_json::json!(v), src);
+        p.range = Some(vec![serde_json::json!(lo), serde_json::json!(hi)]);
+        if p.source.kind == SourceKind::TodoCalibrate {
+            p.calibration = Some(
+                "Replace with the deployment's measured figure (an RSU vendor's backhaul \
+                 test or the operator's SLA)."
+                    .to_string(),
+            );
+        }
+        p
+    };
+    let todo = Source::todo_calibrate;
+    let mut out = Vec::new();
+    for (id, link, what) in [
+        (
+            BACKHAUL_FIBRE,
+            WiredLink::metro_fibre(),
+            "Metro fibre from the roadside cabinet to the backend: high rate, sub-millisecond.",
+        ),
+        (
+            BACKHAUL_DSL,
+            WiredLink::copper(),
+            "A VDSL2 telephone line: asymmetric rate and an interleaving delay of milliseconds.",
+        ),
+        (
+            BACKHAUL_MICROWAVE,
+            WiredLink::microwave(),
+            "A point-to-point microwave hop: fibre-like rate, rare outages.",
+        ),
+    ] {
+        let dsl = id == BACKHAUL_DSL;
+        let mut card = ModelCard::new(id, Family::Backhaul, "1.0.0", what);
+        card.tier = vec![Tier::High];
+        card.equations = vec![Equation::new(
+            "FIFO per direction",
+            "arrival = max(offer, line free) + bytes·8 / rate(dir) + distance·us_per_km + hops·per_hop",
+        )];
+        let fixed_ms = link.fixed_ns() as f64 / 1e6;
+        card.parameters = vec![
+            ranged(
+                "rate_mbps",
+                "Mbit/s",
+                link.rate_bps / 1e6,
+                if dsl {
+                    Source::new(
+                        SourceKind::Datasheet,
+                        "Openreach FTTC 80/20 tier: 20 Mbit/s upstream",
+                    )
+                } else {
+                    todo("an implementer's line rate for this medium")
+                },
+                0.1,
+                100_000.0,
+            ),
+            ranged(
+                "down_mbps",
+                "Mbit/s",
+                link.rate(Direction::Downlink) / 1e6,
+                if dsl {
+                    Source::new(
+                        SourceKind::Datasheet,
+                        "Openreach FTTC 80/20 tier: 80 Mbit/s downstream",
+                    )
+                } else {
+                    todo("symmetric: the upstream rate")
+                },
+                0.1,
+                100_000.0,
+            ),
+            ranged(
+                "distance_km",
+                "km",
+                link.distance_km,
+                todo("a metro-scale route from the roadside to the backend"),
+                0.0,
+                5000.0,
+            ),
+            ranged(
+                "hops",
+                "-",
+                f64::from(link.hops),
+                todo("router hops of a metro access network"),
+                0.0,
+                64.0,
+            ),
+            ranged(
+                "loss",
+                "-",
+                link.loss,
+                todo("per-packet loss of the medium"),
+                0.0,
+                0.5,
+            ),
+            ranged(
+                "latency_ms",
+                "ms",
+                fixed_ms,
+                Source::new(
+                    SourceKind::Standard,
+                    "derived: distance × propagation (ITU-T G.652 fibre 4.9 µs/km; c in air) + hops × per-hop delay",
+                ),
+                0.0,
+                2000.0,
+            ),
+        ];
+        card.assumptions = vec![
+            "One FIFO per direction per roadside unit: the messages of every vehicle it relays \
+             queue behind each other on the line."
+                .to_string(),
+            "latency_ms, when given, replaces the distance and hop delay as the fixed one-way part."
+                .to_string(),
+        ];
+        card.validation = Validation {
+            status: ValidationStatus::UnitTested,
+            references: vec![],
+            tests: vec!["wired_media_differ_and_queue".to_string()],
+        };
+        out.push(card);
+    }
+    out
+}
+
 impl WiredLink {
     /// A link from its figures.
     #[must_use]
@@ -113,6 +270,8 @@ impl WiredLink {
         Self {
             name: name.to_string(),
             rate_bps,
+            down_bps: rate_bps,
+            us_per_km: FIBRE_US_PER_KM,
             distance_km,
             hops,
             per_hop_us,
@@ -132,24 +291,70 @@ impl WiredLink {
         Self::new("metro-fibre", 1e9, 20.0, 4, 50.0)
     }
 
-    /// A copper (VDSL2-class) backhaul: 20 Mbit/s up, 5 km, 6 hops of 50 µs, plus the
-    /// interleaving the line adds as one hop of 8 ms [ITU-T G.993.2 allows interleaving
-    /// delays of several ms; 8 ms is `todo-calibrate`].
+    /// A copper (VDSL2-class) backhaul: 20 Mbit/s up and 80 Mbit/s down [the FTTC 80/20
+    /// tier, Openreach SIN 498], 5 km, 6 hops of 50 µs, plus the interleaving the line adds
+    /// as one hop of 8 ms [ITU-T G.993.2 lets the operator cap the interleaving delay
+    /// (delay_max); 8 ms is `todo-calibrate`].
     #[must_use]
     pub fn copper() -> Self {
         let mut l = Self::new("copper", 20e6, 5.0, 7, 50.0);
-        l.per_hop_us = (6.0 * 50.0 + 8000.0) / 7.0;
+        l.down_bps = 80e6;
+        l.per_hop_us = (6.0 * 50.0 + DSL_INTERLEAVE_MS * 1e3) / 7.0;
         l
+    }
+
+    /// A licensed point-to-point microwave backhaul: 400 Mbit/s each way, 10 km of air
+    /// at the speed of light ([`AIR_US_PER_KM`]), two radio terminals and two routers of
+    /// 50 µs, and an outage share of 1e-5 (the "five nines" a link is planned to under
+    /// ITU-R P.530; rate, terminal delay and outage are `todo-calibrate`).
+    #[must_use]
+    pub fn microwave() -> Self {
+        let mut l = Self::new("microwave", 400e6, 10.0, 4, 50.0);
+        l.us_per_km = AIR_US_PER_KM;
+        l.loss = MICROWAVE_OUTAGE;
+        l
+    }
+
+    /// The medium a `backhaul/*` id names, with its defaults.
+    #[must_use]
+    pub fn medium(id: &str) -> Option<Self> {
+        match id {
+            BACKHAUL_FIBRE => Some(Self::metro_fibre()),
+            BACKHAUL_DSL => Some(Self::copper()),
+            BACKHAUL_MICROWAVE => Some(Self::microwave()),
+            _ => None,
+        }
+    }
+
+    /// The line rate in direction `dir`, bit/s.
+    #[must_use]
+    pub fn rate(&self, dir: Direction) -> f64 {
+        match dir {
+            Direction::Uplink => self.rate_bps,
+            Direction::Downlink if self.down_bps > 0.0 => self.down_bps,
+            Direction::Downlink => self.rate_bps,
+        }
     }
 
     /// The fixed one-way part, ns.
     #[must_use]
     pub fn fixed_ns(&self) -> u64 {
-        ((self.distance_km * FIBRE_US_PER_KM + f64::from(self.hops) * self.per_hop_us) * 1e3) as u64
+        let per_km = if self.us_per_km > 0.0 {
+            self.us_per_km
+        } else {
+            FIBRE_US_PER_KM
+        };
+        ((self.distance_km * per_km + f64::from(self.hops) * self.per_hop_us) * 1e3) as u64
+    }
+
+    /// Bytes carried so far, both directions.
+    #[must_use]
+    pub fn bytes_total(&self) -> u64 {
+        self.bytes[0] + self.bytes[1]
     }
 }
 
-impl<C: Ctx + ?Sized> PacketPath<C> for WiredLink {
+impl<C: ?Sized> PacketPath<C> for WiredLink {
     fn deliver(
         &mut self,
         _ctx: &mut C,
@@ -167,7 +372,7 @@ impl<C: Ctx + ?Sized> PacketPath<C> for WiredLink {
             }
         }
         let start = at.max(self.busy_until[d]);
-        let ser = (f64::from(bytes) * 8.0 / self.rate_bps.max(1.0) * 1e9) as u64;
+        let ser = (f64::from(bytes) * 8.0 / self.rate(dir).max(1.0) * 1e9) as u64;
         self.busy_until[d] = start + ser;
         self.bytes[d] += u64::from(bytes);
         Some(self.busy_until[d] + self.fixed_ns())
@@ -384,7 +589,7 @@ impl TransferReport {
 /// One HTTPS exchange: `request_body` up, `response_body` down, opening the connection
 /// first when it is not established. Sending resumes from the idle window rule of
 /// RFC 5681 §4.1 when the connection sat idle longer than its RTO.
-pub fn https_exchange<C: Ctx + ?Sized, P: PacketPath<C> + ?Sized>(
+pub fn https_exchange<C: ?Sized, P: PacketPath<C> + ?Sized>(
     ctx: &mut C,
     path: &mut P,
     ue: NodeId,
@@ -443,7 +648,7 @@ pub fn https_exchange<C: Ctx + ?Sized, P: PacketPath<C> + ?Sized>(
 
 /// Opens a connection: the TCP handshake, then the TLS one. Returns when the client may
 /// send its first request.
-pub fn handshake<C: Ctx + ?Sized, P: PacketPath<C> + ?Sized>(
+pub fn handshake<C: ?Sized, P: PacketPath<C> + ?Sized>(
     ctx: &mut C,
     path: &mut P,
     ue: NodeId,
@@ -509,7 +714,7 @@ pub fn handshake<C: Ctx + ?Sized, P: PacketPath<C> + ?Sized>(
 /// Sends `bytes` in one direction over an open connection; returns when the last byte
 /// reached the receiver, or `None` when the connection gave up.
 #[allow(clippy::too_many_arguments)]
-pub fn stream<C: Ctx + ?Sized, P: PacketPath<C> + ?Sized>(
+pub fn stream<C: ?Sized, P: PacketPath<C> + ?Sized>(
     ctx: &mut C,
     path: &mut P,
     ue: NodeId,
@@ -709,6 +914,36 @@ mod tests {
     use crate::cellular_packet::{BaseStationLayout, Rat};
     use crate::testctx::TestCtx;
     use v2xw_core::geom::Vec3;
+
+    #[test]
+    fn wired_media_differ_and_queue() {
+        let ue = NodeId::new(1);
+        let up = |l: &mut WiredLink, at: SimTime, bytes: u32, dir: Direction| {
+            PacketPath::<()>::deliver(l, &mut (), ue, dir, at, bytes).unwrap()
+        };
+        let (mut fibre, mut dsl, mut mw) = (
+            WiredLink::metro_fibre(),
+            WiredLink::copper(),
+            WiredLink::microwave(),
+        );
+        let f = up(&mut fibre, 0, 1500, Direction::Uplink);
+        let d = up(&mut dsl, 0, 1500, Direction::Uplink);
+        let m = up(&mut mw, 0, 1500, Direction::Uplink);
+        assert!(f < 1_000_000, "fibre under 1 ms: {f}");
+        assert!(d > 8_000_000, "DSL pays its interleaving: {d}");
+        assert!(
+            m < 2_000_000 && m != f,
+            "microwave sub-2 ms and not fibre: {m}"
+        );
+        // A second packet offered at once queues behind the first on the line.
+        let d2 = up(&mut dsl, 0, 1500, Direction::Uplink);
+        assert!(d2 > d, "FIFO: {d2} after {d}");
+        // Asymmetric DSL: the downstream serialises four times faster.
+        let u = up(&mut WiredLink::copper(), 0, 1_000_000, Direction::Uplink);
+        let dn = up(&mut WiredLink::copper(), 0, 1_000_000, Direction::Downlink);
+        assert!(u > dn * 3, "up {u} vs down {dn}");
+        assert_eq!(wired_cards().len(), 3);
+    }
 
     #[test]
     fn handshakes_cost_round_trips() {

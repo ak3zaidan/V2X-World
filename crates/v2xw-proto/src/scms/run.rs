@@ -639,14 +639,22 @@ impl ScmsRun {
         self.state.devices.insert(node, DeviceState::new(node));
     }
 
-    /// Replaces the link `device` reaches the backend over (privacy proxy, RA, DCM, ECA,
-    /// CRL Store) with `link`.
+    /// Installs the driver's per-message access model on this deployment's topology: every
+    /// message on a device's link is then carried by it ([`crate::net::PathOracle`]).
+    ///
+    /// The link `device` reaches the backend over (privacy proxy, RA, DCM, ECA, CRL Store)
+    /// is set with [`ScmsRun::set_access`].
     ///
     /// The deployment's default device link is a fixed cellular uplink; a driver that
     /// models the access leg itself — the cellular Uu model's latency and capacity at the
     /// device's position, or a roadside unit's relay over its backhaul — states the link
     /// the next exchange will see here, so the flow's round trips cost what that access
     /// really costs and are charged to the transport it really used.
+    pub fn set_path_oracle(&mut self, oracle: crate::net::SharedOracle) {
+        self.kernel.net_mut().set_oracle(oracle);
+    }
+
+    /// Replaces the link `device` reaches the backend over with `link` (see above).
     pub fn set_access(&mut self, device: NodeId, link: Link) {
         let n = self.state.nodes;
         let net = self.kernel.net_mut();

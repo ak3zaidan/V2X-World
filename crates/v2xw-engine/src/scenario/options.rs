@@ -413,6 +413,18 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Cellular",
             "The unit reaches the backend over the mobile network.",
         ),
+        (_, "backhaul/fibre") => w(
+            "Fibre",
+            "Metro fibre to the backend: 1 Gbit/s and well under a millisecond.",
+        ),
+        (_, "backhaul/dsl") => w(
+            "DSL (copper)",
+            "A VDSL2 phone line: 20 Mbit/s up, 80 down, about 9 ms each way.",
+        ),
+        (_, "backhaul/microwave") => w(
+            "Microwave",
+            "A point-to-point radio hop: 400 Mbit/s, about 0.2 ms, rare outages.",
+        ),
         (_, "backhaul/none") => w("None (offline)", "The unit has no backend link."),
         (_, "backend-net/fixed") => w(
             "Fixed links",

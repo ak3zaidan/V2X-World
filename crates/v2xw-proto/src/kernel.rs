@@ -637,7 +637,7 @@ impl<M> Kernel<M> {
                 bytes,
                 transport,
             });
-            let arrival = link.delay(bytes).after(done);
+            let arrival = self.net.arrival(node, s.to, &link, bytes, done);
             let delivery = Delivery {
                 at: arrival,
                 from: node,

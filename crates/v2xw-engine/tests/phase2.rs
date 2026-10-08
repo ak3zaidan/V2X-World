@@ -340,6 +340,7 @@ fn a_role_belongs_to_the_unit_that_declares_it_and_not_to_the_scenario() {
         roles: vec!["report-forward".to_string()],
         profile,
         backhaul: None,
+        backhaul_params: None,
     });
     let engine = Engine::build(scenario, "").expect("builds");
     let p = engine
