@@ -458,7 +458,22 @@ pub struct Pedestrian {
     /// carries them from where they stood and shrinks at [`CARRY_CLOSE_MPS`], so they walk
     /// round the corner instead of jumping onto the next lane.
     pub carry: Vec3,
+    /// The direction it faces, radians: where it actually walks, turned at no more than
+    /// [`PED_MAX_YAW_RATE`], and held while it stands ([`SocialForce::settle`]).
+    pub heading_rad: f64,
+    /// How it actually moved over the last step, m/s: the displacement of its drawn position
+    /// over the step, after the kerb, the pavement's edges and a corner's carry. What the
+    /// stream publishes as its velocity.
+    pub moved_vel: Vec3,
 }
+
+/// How fast a pedestrian's facing may turn, rad/s. **A choice**: a brisk pivot (180 degrees in
+/// about 0.8 s), below the 3D view's own 5 rad/s limit so the view draws what the engine says.
+pub const PED_MAX_YAW_RATE: f64 = 4.0;
+/// Below this actual speed a pedestrian is standing for its facing, m/s: the social force's
+/// small pushes while it waits are not a direction it walks in. **A choice**, a fifth of a
+/// slow walk.
+const PED_FACING_SPEED_MPS: f64 = 0.25;
 
 /// How fast a lane-change offset ([`Pedestrian::carry`]) closes, m/s: well under a walking
 /// pace, so the extra apparent speed it adds is small.
@@ -726,6 +741,8 @@ impl SocialForce {
                 midblock_declined: None,
                 walks: 0,
                 carry: Vec3::ZERO,
+                heading_rad: world.lane(first).heading_at(s_m),
+                moved_vel: Vec3::ZERO,
             },
         );
         if let Some(p) = self.people.get_mut(&actor) {
@@ -938,13 +955,16 @@ impl VruMobility for SocialForce {
             let Some(person) = self.people.get(&actor) else {
                 continue;
             };
+            let old_pos = person.position(world);
             if person.arrived {
-                out.push((actor, self.kinematics_of(person, world, t_end)));
+                self.settle(actor, old_pos, dt_s, world);
+                out.push((actor, self.kinematics_of(&self.people[&actor], world, t_end)));
                 continue;
             }
             if person.crossing_midblock() {
                 self.step_midblock_crossing(ctx, actor, dt_s, now);
                 let world = ctx.world();
+                self.settle(actor, old_pos, dt_s, world);
                 let person = &self.people[&actor];
                 out.push((actor, self.kinematics_of(person, world, t_end)));
                 continue;
@@ -1259,6 +1279,19 @@ impl VruMobility for SocialForce {
                 }
             }
             let mut lateral_m = projection.d_m.clamp(-walkable_half, walkable_half);
+            // Held at the pavement's edge: the velocity into the edge is spent, as the kerb's
+            // along-track part is above. Left in, it kept building against the clamp, so a
+            // walker pressed to the edge carried a velocity (and a facing) pointing off the
+            // pavement while standing still across it.
+            let across = velocity.x * left_normal.x + velocity.y * left_normal.y;
+            if (projection.d_m > walkable_half && across > 0.0)
+                || (projection.d_m < -walkable_half && across < 0.0)
+            {
+                velocity = Vec3::new_2d(
+                    velocity.x - across * left_normal.x,
+                    velocity.y - across * left_normal.y,
+                );
+            }
             let mut current = person.lane;
             let mut route_index = person.route_index;
             let mut arrived = false;
@@ -1311,7 +1344,9 @@ impl VruMobility for SocialForce {
             if let Some(m) = midblock.as_mut() {
                 match m.stage {
                     MidblockStage::Approaching if at_kerb && mid_hold => {
-                        let from = lane.offset_point(s_m, lateral_m);
+                        // Where it stands, a corner's carry included: the crossing's
+                        // straight path starts there, not on the lane band beside it.
+                        let from = lane.offset_point(s_m, lateral_m) + carry_next;
                         m.from = from;
                         // The lanes the actual path cuts, diagonal included; a path that
                         // meets a junction connector or a crosswalk is given up.
@@ -1430,8 +1465,9 @@ impl VruMobility for SocialForce {
             person.activity = activity;
             person.midblock = midblock;
             person.midblock_declined = declined;
-            let person = &self.people[&actor];
             let world = ctx.world();
+            self.settle(actor, old_pos, dt_s, world);
+            let person = &self.people[&actor];
             out.push((actor, self.kinematics_of(person, world, t_end)));
         }
         out.sort_by_key(|(a, _)| *a);
@@ -1440,6 +1476,61 @@ impl VruMobility for SocialForce {
 }
 
 impl SocialForce {
+    /// After a pedestrian's step: what it actually did, for the stream. Its published
+    /// velocity is its drawn position's displacement over the step, and its facing turns
+    /// towards where it actually walks at no more than [`PED_MAX_YAW_RATE`]; standing, it
+    /// keeps its facing, or turns to face the crossing it waits at.
+    ///
+    /// The model's own velocity is not a facing: it carries the border and neighbour pushes
+    /// the clamps then undo, and once a waiting walker's velocity decays to a few mm/s its
+    /// direction is whatever the last push was, so the facing derived from it spun a person
+    /// standing at a kerb by up to 180 degrees a step. SUMO keeps a walker's angle from its
+    /// movement and holds it while it stands (`MSPModel_Striping::PState::getAngle`; the
+    /// angle is recomputed only when it moves, eclipse-sumo/sumo#9014).
+    fn settle(&mut self, actor: ActorId, old: Vec3, dt_s: f64, world: &World) {
+        let Some(p) = self.people.get(&actor) else {
+            return;
+        };
+        let new = p.position(world);
+        let mut v = Vec3::new_2d((new.x - old.x) / dt_s, (new.y - old.y) / dt_s);
+        // A step no walking speed explains is a cut (a gap in the walk network, a fresh
+        // walk): it is not a velocity, and the facing does not turn to it.
+        let cut = v.norm_2d() > 2.0 * self.params.max_speed_factor * p.desired_speed_mps + 0.5;
+        if cut {
+            v = p.vel;
+        }
+        let target = if cut {
+            None
+        } else if v.norm_2d() >= PED_FACING_SPEED_MPS {
+            Some(v.heading_2d())
+        } else {
+            match p.activity {
+                PedActivity::WaitingAtKerb => self
+                    .next_lane(p)
+                    .and_then(|n| world.try_lane(n))
+                    .map(|l| l.heading_at(0.0)),
+                PedActivity::WaitingMidblock => p
+                    .midblock
+                    .as_ref()
+                    .filter(|m| m.from != Vec3::ZERO)
+                    .map(|m| Vec3::new_2d(m.to.x - m.from.x, m.to.y - m.from.y).heading_2d()),
+                _ => None,
+            }
+        };
+        let mut heading = p.heading_rad;
+        if let Some(t) = target {
+            let tau = core::f64::consts::TAU;
+            let d = t - heading;
+            let d = d - tau * (d / tau + 0.5).floor();
+            let lim = PED_MAX_YAW_RATE * dt_s;
+            heading += d.clamp(-lim, lim);
+            heading -= tau * (heading / tau + 0.5).floor();
+        }
+        let p = self.people.get_mut(&actor).expect("present above");
+        p.moved_vel = v;
+        p.heading_rad = heading;
+    }
+
     /// One step of a pedestrian in the carriageway on a mid-block crossing: it walks the
     /// straight path at its desired speed (relaxing towards it with `τ`) and, at the far
     /// kerb, steps onto the far sidewalk and is given a new walk from there.
@@ -1489,6 +1580,7 @@ impl SocialForce {
             person.lane = far_lane;
             person.s_m = far_s;
             person.lateral_m = 0.0;
+            person.carry = Vec3::ZERO;
             person.route = route;
             person.route_index = 0;
             person.midblock = None;
@@ -1539,18 +1631,11 @@ impl SocialForce {
         t: v2xw_core::time::SimTime,
     ) -> Kinematics {
         let position = person.position(world);
-        let heading = if person.vel.norm_2d() > 1e-6 {
-            person.vel.heading_2d()
-        } else {
-            world
-                .try_lane(person.lane)
-                .map(|l| l.heading_at(person.s_m))
-                .unwrap_or(0.0)
-        };
+        let heading = person.heading_rad;
         Kinematics {
             t,
             pos: position,
-            vel: person.vel,
+            vel: person.moved_vel,
             acc: Vec3::ZERO,
             heading_rad: heading,
             yaw_rate_rad_s: 0.0,
