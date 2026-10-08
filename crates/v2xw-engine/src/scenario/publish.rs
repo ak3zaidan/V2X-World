@@ -220,6 +220,11 @@ const GROUPS: &[(&str, &str, &str)] = &[
         "Measurement",
         "What is measured, exported and swept.",
     ),
+    (
+        "scale",
+        "Traffic",
+        "What moves and what transmits: the fleet, its size, roadside units and the backend.",
+    ),
 ];
 
 /// Unit suffixes, longest first: the schema puts a field's unit in its name on purpose

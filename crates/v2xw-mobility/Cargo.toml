@@ -18,3 +18,5 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # Crate error type.
 thiserror = { workspace = true }
+# The decide pass maps over actors on the thread pool and merges in id order (crate::par).
+rayon = { workspace = true }

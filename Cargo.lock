@@ -2722,6 +2722,7 @@ dependencies = [
 name = "v2xw-mobility"
 version = "0.1.0"
 dependencies = [
+ "rayon",
  "serde",
  "serde_json",
  "thiserror",

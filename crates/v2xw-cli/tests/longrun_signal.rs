@@ -24,6 +24,8 @@ fn a_run_asked_to_stop_checkpoints_and_resumes_into_the_same_run() {
         record: true,
         attach_world: false,
         verify: true,
+        stream_digest: false,
+        city: None,
         duration_s: Some(60.0),
         rate_veh_per_h: None,
         city: None,

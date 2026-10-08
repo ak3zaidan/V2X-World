@@ -79,6 +79,7 @@ pub mod pseudonym_policy;
 pub mod records;
 pub mod run;
 pub mod safety_events;
+pub mod scale;
 pub mod scenario;
 pub mod sec_records;
 pub mod signature;

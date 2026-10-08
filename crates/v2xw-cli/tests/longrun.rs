@@ -38,6 +38,8 @@ fn options(out: &Path, long: LongRun) -> RunOptions {
         record: true,
         attach_world: false,
         verify: true,
+        stream_digest: false,
+        city: None,
         duration_s: None,
         rate_veh_per_h: None,
         city: None,

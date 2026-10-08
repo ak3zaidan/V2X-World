@@ -250,6 +250,7 @@ impl Scenario {
             apps: schema::Apps::default(),
             energy: None,
             experiment: None,
+            scale: None,
         }
     }
 }

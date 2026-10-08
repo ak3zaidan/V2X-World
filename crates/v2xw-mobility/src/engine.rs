@@ -84,6 +84,9 @@ use crate::vru::crosswalk::{CrosswalkIndex, VehiclePath};
 use crate::vru::social_force::SocialForce;
 use v2xw_core::rng::{EntityRef, RngDomain};
 
+mod tiering;
+pub use tiering::{Handoff, TripAdmission};
+
 /// The model id.
 pub const MODEL_ID: &str = "mobility/native/medium";
 
@@ -1081,6 +1084,9 @@ pub struct NativeMobility {
     actors: BTreeMap<ActorId, Actor>,
     published: BTreeMap<ActorId, Kinematics>,
     closed: BTreeSet<LaneId>,
+    /// Lanes a coupled tier has no room on ([`NativeMobility::set_holds`]): stopped short
+    /// of like a closure, never detoured round. Empty unless a tier coupling sets it.
+    holds: BTreeSet<LaneId>,
     /// How many times a closure command has changed [`Self::closed`]: the router's cost
     /// generation ([`DynamicCost::with_generation`]). Counting the closed lanes instead
     /// missed a reopen and a close in the same step.
@@ -1225,6 +1231,7 @@ impl NativeMobility {
             actors: BTreeMap::new(),
             published: BTreeMap::new(),
             closed: BTreeSet::new(),
+            holds: BTreeSet::new(),
             closure_changes: 0,
             pending: Vec::new(),
             waiting: Vec::new(),
@@ -1778,7 +1785,7 @@ impl NativeMobility {
             if dist > self.params.lookahead_m {
                 return None;
             }
-            if self.closed.contains(lane) {
+            if self.closed.contains(lane) || self.holds.contains(lane) {
                 return Some(dist.max(0.0));
             }
             dist += world.lane(*lane).length_m;
@@ -3912,9 +3919,11 @@ impl Mobility for NativeMobility {
         // so a capped vehicle could decide to change lane for a speed gain it would never
         // be allowed to take.
         let mut neighbours: BTreeMap<ActorId, (VehicleView, LaneNeighbors)> = BTreeMap::new();
-        for id in &ids {
+        // One actor's decision: a pure function of the frozen state, so the actors are
+        // decided in parallel and merged in id order (`crate::par`, ADR 0004 decision 5).
+        let decide_one = |id: &ActorId| -> Option<(Decision, VehicleView, LaneNeighbors)> {
             let Some(actor) = self.actors.get(id) else {
-                continue;
+                return None;
             };
             let ego = actor.view(world);
             let lane = world.lane(actor.lane);
@@ -4169,7 +4178,7 @@ impl Mobility for NativeMobility {
             // for a way round it, so a vehicle still routed into one has none: it waits
             // for the lane to reopen instead of driving up to the barrier and vanishing.
             if along
-                && !self.closed.is_empty()
+                && (!self.closed.is_empty() || !self.holds.is_empty())
                 && let Some(gap) = self.closure_gap(world, actor)
             {
                 let before = leader;
@@ -4413,32 +4422,40 @@ impl Mobility for NativeMobility {
             } else {
                 None
             };
-            decisions.push(Decision {
-                actor: *id,
-                accel_mps2: accel,
-                v0_mps: v0_effective,
-                lane_change: LaneChangeDecision::Stay,
-                amber_commit,
-                amber_seen,
-                release_at,
-                advance_cap_m,
-                detour_ok: false,
-                lateral: self
-                    .lateral
-                    .as_ref()
-                    .filter(|_| actor.transition.is_none())
-                    .map(|m| {
-                        crate::lateral::decide_in_lane(
-                            &**m,
-                            &snapshot,
-                            &ego,
-                            v0_effective,
-                            &lane_view,
-                            lane_position_for(&self.params, actor.class),
-                        )
-                    }),
-            });
-            neighbours.insert(*id, (ego_capped, nbrs));
+            Some((
+                Decision {
+                    actor: *id,
+                    accel_mps2: accel,
+                    v0_mps: v0_effective,
+                    lane_change: LaneChangeDecision::Stay,
+                    amber_commit,
+                    amber_seen,
+                    release_at,
+                    advance_cap_m,
+                    detour_ok: false,
+                    lateral: self
+                        .lateral
+                        .as_ref()
+                        .filter(|_| actor.transition.is_none())
+                        .map(|m| {
+                            crate::lateral::decide_in_lane(
+                                &**m,
+                                &snapshot,
+                                &ego,
+                                v0_effective,
+                                &lane_view,
+                                lane_position_for(&self.params, actor.class),
+                            )
+                        }),
+                },
+                ego_capped,
+                nbrs,
+            ))
+        };
+        let decided = crate::par::map_ordered(&ids, decide_one);
+        for (decision, ego_capped, nbrs) in decided.into_iter().flatten() {
+            neighbours.insert(decision.actor, (ego_capped, nbrs));
+            decisions.push(decision);
         }
         // Lane-change decisions: a second walk, because MOBIL needs the context for its
         // reconsideration draw and the borrow of the world above is shared.

@@ -62,6 +62,8 @@ pub struct RunOptions {
     pub attach_world: bool,
     /// Read the recording back and verify it before reporting.
     pub verify: bool,
+    /// Without a recording: hash every record as it streams past (`stream_digest`).
+    pub stream_digest: bool,
     /// Override `time.duration_s`. Changes the scenario hash, as it should.
     pub duration_s: Option<f64>,
     /// Override `actors.vehicles.demand.rate_veh_per_h`. Changes the scenario hash.
@@ -151,6 +153,10 @@ pub struct RunOutcome {
     pub recording_file_sha256: Option<String>,
     /// SHA-256 over the recording's data section — the number two runs must agree on.
     pub content_digest: Option<String>,
+    /// SHA-256 over every record as it was produced (`--digest` without a recording):
+    /// `v2xw_engine::DigestRecorder`'s, the same stream digest the engine's tests use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_digest: Option<String>,
     /// What the reader's verification found, when `--verify` was on.
     pub verified: Option<VerifiedSummary>,
     /// Container counters the writer reported.
@@ -374,6 +380,7 @@ pub fn resume(checkpoint: &Path, quiet: bool, json: bool) -> Result<RunOutcome> 
         record: ck.record,
         attach_world: ck.attach_world,
         verify: ck.verify,
+        stream_digest: false,
         duration_s: ck.duration_override_s,
         rate_veh_per_h: ck.rate_override_veh_per_h,
         city: ck.city.clone(),
@@ -718,6 +725,7 @@ fn execute(
 
     let channels = tally.by_channel().clone();
     let record_digest = tally.record_digest_hex();
+    let stream_digest = opts.stream_digest.then(|| record_digest.clone());
     let (metrics_sha, metric_samples) = match tally.take_metrics() {
         Some(m) => m.finish()?,
         None => (v2xw_core::hash::sha256_hex(b""), 0),
@@ -748,6 +756,7 @@ fn execute(
         recording_bytes: None,
         recording_file_sha256: None,
         content_digest: None,
+        stream_digest,
         verified: None,
         container: totals.map(|t| ContainerSummary {
             message_count: t.message_count,

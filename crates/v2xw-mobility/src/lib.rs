@@ -30,6 +30,8 @@
 //! | GNSS error | [`gnss`] | 04-models.md §2.10, §3.8 |
 //! | Clock drift | [`clock`] | 04-models.md §2.10, §3.8 |
 //! | The abstract tier | [`kinematic`] | 04-models.md §2.1 |
+//! | The mesoscopic tier (queues, Eissfeldt 2003 / SUMO MESO) and the meso-micro coupling | [`meso`], [`meso::tiered`] | city scale |
+//! | Ordered parallel maps (the decide pass on the thread pool) | [`par`] | ADR 0004 decision 5 |
 //! | The engine that ties them together | [`engine`] | 03-interfaces.md §3 |
 //! | The fundamental-diagram validation | [`fd`] | 04-models.md §2.9 |
 //! | Synthetic worlds for validation runs | [`worlds`] | 04-models.md §2.9 |
@@ -111,6 +113,8 @@ pub mod lamps;
 pub mod lanechange;
 pub mod network;
 pub mod lateral;
+pub mod meso;
+pub mod par;
 pub mod routing;
 pub mod rules;
 pub mod snapshot;
@@ -201,6 +205,14 @@ pub fn model_cards() -> Vec<(String, v2xw_core::card::ModelCard)> {
         kinematic::card(&kinematic::LaneFollowParams::default()),
         engine::card(&engine_params, carfollowing::idm::MODEL_ID),
         lateral::sl2015::card(&lateral::Sl2015Params::default()),
+        meso::card(&meso::MesoParams::default()),
+        meso::tiered::card(&meso::tiered::TieredParams {
+            region: meso::tiered::TierRegion::Circle {
+                centre_m: [0.0, 0.0],
+                radius_m: 500.0,
+            },
+            meso: meso::MesoParams::default(),
+        }),
     ];
     // The driving-model library: every selectable car-following model at its defaults.
     cards.extend(carfollowing::library::cards());
