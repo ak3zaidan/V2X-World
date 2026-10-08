@@ -40,6 +40,7 @@ fn options(out: &Path, long: LongRun) -> RunOptions {
         verify: true,
         duration_s: None,
         rate_veh_per_h: None,
+        city: None,
         json: false,
         long,
     }

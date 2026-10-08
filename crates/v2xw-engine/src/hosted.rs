@@ -324,6 +324,20 @@ pub fn build_vru_device(
     )
     .with_profile(crate::wiring::envelope_profile(scenario), env.wall)
     .with_signer_id_policies(policy, policy);
+    // A PSM is signed under PSID_VRU and a VAM under ITS-AID 638 (v2xw_msg::registry,
+    // ETSI TS 102 965 Table A.1), not the vehicle's 0x20: without a stack every SPDU this
+    // device sent carried the BSM's PSID.
+    let services = vru_services(scenario);
+    let mut sends = Vec::new();
+    if services.psm {
+        sends.push(v2xw_msg::MsgType::Psm);
+    }
+    if services.vam {
+        sends.push(v2xw_msg::MsgType::Vam);
+    }
+    device
+        .security_mut()
+        .set_stack(crate::wiring::etsi_facilities(scenario), &sends);
     install_credentials(
         device.stores_mut(),
         scenario,

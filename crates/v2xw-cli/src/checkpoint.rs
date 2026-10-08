@@ -81,6 +81,10 @@ pub struct Checkpoint {
     pub duration_override_s: Option<f64>,
     /// `--rate-veh-per-h` as given.
     pub rate_override_veh_per_h: Option<f64>,
+    /// `--city` as given: the library city the run was moved onto. Absent in checkpoints
+    /// written before it was recorded, which resume on the scenario file's own world.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub city: Option<String>,
     /// The working directory the run was started in, against which the scenario's
     /// relative paths (the map extract) resolve.
     pub cwd: String,
@@ -497,4 +501,33 @@ pub fn truncate_and_hash(path: &Path, len: u64) -> Result<v2xw_core::Sha256Write
         h.update(&buf[..n]);
     }
     Ok(h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `--city` a run was started with survives the checkpoint, and a checkpoint written
+    /// before the field existed still reads (as a run on the file's own world).
+    #[test]
+    fn the_city_is_recorded_and_old_checkpoints_still_read() {
+        let mut ck = serde_json::json!({
+            "format": FORMAT, "method": "replay", "scenario_name": "s", "scenario_hash": "h",
+            "world_hash": "w", "build_utc": "2026-10-07T00:00:00Z", "scenario_path": "s.yaml",
+            "duration_override_s": null, "rate_override_veh_per_h": null, "cwd": ".",
+            "keyframe_ms": 1000, "node_only": false, "record": true, "record_level": "full",
+            "attach_world": false, "verify": true, "every_s": 30.0, "progress_every_s": null,
+            "t_ns": 0, "record_digest": "", "records": 0, "metric_samples": 0,
+            "metrics_bytes": 0, "segments_done": 0, "progress_bytes": 0, "wall_s": 0.0,
+            "resumes": 0
+        });
+        let old: Checkpoint = serde_json::from_value(ck.clone()).expect("an old checkpoint reads");
+        assert_eq!(old.city, None);
+        ck["city"] = serde_json::json!("houston");
+        let new: Checkpoint = serde_json::from_value(ck).expect("reads");
+        assert_eq!(new.city.as_deref(), Some("houston"));
+        let back: Checkpoint =
+            serde_json::from_slice(&serde_json::to_vec(&new).expect("writes")).expect("reads");
+        assert_eq!(back, new);
+    }
 }
