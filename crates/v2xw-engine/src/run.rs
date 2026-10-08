@@ -295,7 +295,17 @@ struct GlosaDrivers {
     seed: u64,
     decided: BTreeMap<ActorId, bool>,
     capped: BTreeMap<ActorId, f64>,
+    /// How long, seconds, a capped driver's advice has been missing.
+    missing: BTreeMap<ActorId, f64>,
 }
+
+/// How long a following driver keeps to the last advised speed when the advice drops out,
+/// seconds. The application gives none for a step or two whenever the ego's lane match
+/// wavers (a lane change, a SPaT a moment late), and a driver does not floor it the
+/// instant the display blanks: they hold the speed until it is plainly gone. This build's
+/// choice; without it a strategic lane change on the approach reset the cap every few
+/// steps and no follower ever reached the advised speed.
+pub const GLOSA_HOLD_S: f64 = 1.0;
 
 /// How fast a following driver eases down to the advised speed, m/s per second: a gentle
 /// lift off the throttle, not a brake. This build's choice (eco-driving guidance puts
@@ -317,6 +327,9 @@ impl GlosaDrivers {
             return None;
         }
         let target = advice.and_then(|a| a.target_mps);
+        if target.is_some() {
+            self.missing.remove(&actor);
+        }
         match target {
             Some(v) => {
                 let (compliance, seed) = (self.compliance, self.seed);
@@ -353,10 +366,25 @@ impl GlosaDrivers {
                     v_mps: Some(v),
                 })
             }
-            None => self
-                .capped
-                .remove(&actor)
-                .map(|_| v2xw_mobility::MobilityCommand::SpeedCap { actor, v_mps: None }),
+            // Advice that says "no target" (pass at your own speed) lifts the cap at once;
+            // advice that is missing lifts it only once it has stayed missing for
+            // GLOSA_HOLD_S.
+            None if advice.is_none() && self.capped.contains_key(&actor) => {
+                let gone = self.missing.entry(actor).or_insert(0.0);
+                *gone += dt_s;
+                if *gone < GLOSA_HOLD_S {
+                    return None;
+                }
+                self.missing.remove(&actor);
+                self.capped.remove(&actor);
+                Some(v2xw_mobility::MobilityCommand::SpeedCap { actor, v_mps: None })
+            }
+            None => {
+                self.missing.remove(&actor);
+                self.capped
+                    .remove(&actor)
+                    .map(|_| v2xw_mobility::MobilityCommand::SpeedCap { actor, v_mps: None })
+            }
         }
     }
 }
@@ -1321,6 +1349,7 @@ impl Engine {
                 seed: scenario_for_radio.seed,
                 decided: BTreeMap::new(),
                 capped: BTreeMap::new(),
+                missing: BTreeMap::new(),
             },
             priority: crate::priority::PriorityControllers::new(
                 crate::priority::PriorityParams::default(),
