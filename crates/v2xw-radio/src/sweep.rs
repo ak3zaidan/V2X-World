@@ -194,15 +194,19 @@ pub enum ChannelModel {
     /// `h' = h − 1 m`, the channel the Veins, OpenCV2X and Molina-Masegosa studies ran on
     /// [WINNER+ D5.3 Table 4-1; TR 36.885 Table A.1.4-1], σ 3 dB.
     WinnerPlusB1,
+    /// `propagation/winner-plus-b1` with `heights: actual`: the breakpoint from the
+    /// antennas' real 1.5 m heights (177 m), as the LTE-V2X study simulators evaluate it.
+    WinnerPlusB1ActualHeights,
 }
 
 impl ChannelModel {
     /// Every channel, in a fixed order.
-    pub const ALL: [ChannelModel; 4] = [
+    pub const ALL: [ChannelModel; 5] = [
         ChannelModel::Tr37885HighwayLos,
         ChannelModel::WinnerB1ShapedTodoCalibrate,
         ChannelModel::AbbasLosHighway,
         ChannelModel::WinnerPlusB1,
+        ChannelModel::WinnerPlusB1ActualHeights,
     ];
 
     /// The label a report prints.
@@ -213,6 +217,7 @@ impl ChannelModel {
             ChannelModel::WinnerB1ShapedTodoCalibrate => "winner-b1-shaped-todo-calibrate",
             ChannelModel::AbbasLosHighway => "abbas-los-highway",
             ChannelModel::WinnerPlusB1 => "winner-plus-b1",
+            ChannelModel::WinnerPlusB1ActualHeights => "winner-plus-b1-actual-heights",
         }
     }
 
@@ -232,7 +237,9 @@ impl ChannelModel {
             ChannelModel::WinnerB1ShapedTodoCalibrate => 3.0,
             // Abbas 2015 Table II.
             ChannelModel::AbbasLosHighway => 3.95,
-            ChannelModel::WinnerPlusB1 => crate::winner::SIGMA_LOS_DB,
+            ChannelModel::WinnerPlusB1 | ChannelModel::WinnerPlusB1ActualHeights => {
+                crate::winner::SIGMA_LOS_DB
+            }
         }
     }
 
@@ -265,6 +272,13 @@ impl ChannelModel {
                 .params()
                 .path_loss_db(d),
             ChannelModel::WinnerPlusB1 => crate::winner::b1_los_db(d, 1.5, 1.5, f_hz),
+            ChannelModel::WinnerPlusB1ActualHeights => crate::winner::b1_los_with(
+                d,
+                1.5,
+                1.5,
+                f_hz,
+                crate::winner::B1Heights::Actual,
+            ),
         }
     }
 }

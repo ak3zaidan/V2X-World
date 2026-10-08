@@ -2630,3 +2630,32 @@ conflicts resolved by hand and the whole workspace compile-checked:
   timer, TR 36.881 access/handover figures, Shannon fit, background load, NR timings.
 - Not done: the RSU backhaul in the engine is still the `Backhaul` latency+rate struct;
   `WiredLink` exists for TCP but is not yet wired into `backhaul/*` ids. No Studio UI.
+
+## 2026-10-07 — radio and MAC fidelity (radio-fidelity track)
+
+- **802.11p against Veins: 30.0 → 5.7 PDR points.** `propagation/winner-plus-b1`
+  (`v2xw-radio/src/winner.rs`; WINNER+ D5.3 Table 4-1 / TR 36.885 Table A.1.4-1) ships
+  with the effective antenna heights `h' = h − 1 m` (breakpoint 19.7 m). The old stand-in
+  used the actual heights (177 m). The published simulators disagree on that convention:
+  OpenCV2X and Molina-Masegosa match only the actual heights, at 4.1 / 9.3 / 6.0 points.
+  Both conventions are offered (`params: {heights: effective | actual}`). Tables are in
+  [`docs/validation/radio-fidelity.md`](../validation/radio-fidelity.md).
+- **`radio.tuning`** (`channel`, `receiver`, `sidelink`): 17 researcher overrides covering
+  path-loss exponent, shadowing σ and decorrelation, the Nakagami m profile, Sommer β/γ,
+  vehicle blockage under any law, 802.11p noise figure, carrier sense and capture
+  threshold, and SPS sensing, RSRP threshold, candidate %, probResourceKeep and T2. Each
+  is bounded, status-classified, titled, and has an `x-explain`/`x-recommended` (new
+  `guide::ADVANCED_HINTS`, advanced level). The loader refuses an override the composed
+  model would ignore. An empty section leaves the scenario hash unchanged.
+- **Hidden terminals labelled.** An 802.11p interference loss is `hidden-terminal` when
+  the later of the two transmitters heard the earlier frame below CCA. Three tests that
+  counted `collision` now count both labels.
+- Verified: `v2xw-radio` winner/tuning tests; `v2xw-engine --test radio_tuning` (4);
+  `v2xw-engine --lib scenario::` (27); the interop WINNER measurement (ignored test).
+- Integration note: the shared `target/agents` build-script output for `v2xw-engine` is
+  shared across worktrees (cargo hashes path packages workspace-relatively), so another
+  track's schema can leak into this one's published-schema tests. Touch
+  `src/scenario/schema.rs` before running them.
+- Not done: IPG validation, B1 NLOS, OpenCV2X sub-channelisation in the harness, and an
+  exposed-node label. The LTE sensing ring (≈ 330 MB per 1,000 UEs) is the next memory
+  target.

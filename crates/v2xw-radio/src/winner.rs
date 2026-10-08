@@ -80,25 +80,72 @@ pub const SIGMA_LOS_DB: f64 = 3.0;
 /// Shadowing σ on a building-blocked link, dB [TR 36.885 Table A.1.4-1].
 pub const SIGMA_NLOS_DB: f64 = 4.0;
 
+/// Which antenna heights the B1 breakpoint and far law are evaluated with.
+///
+/// The published simulators disagree, and the disagreement is the whole of their range
+/// difference: WINNER+ and TR 36.885 as written subtract the 1 m environment height
+/// (`d'BP` ≈ 20 m), which the Veins curve of Sepulcre et al. 2021 reproduces; the
+/// LTE-V2X Mode 4 curves of OpenCV2X (McCarthy 2021) and Molina-Masegosa 2017 are
+/// reproduced only with the antennas' actual heights (`d_BP` ≈ 177 m), which is how
+/// their implementations evaluate it. Both are offered and the card says which is which.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum B1Heights {
+    /// `h' = h − 1 m`, as WINNER+ D5.3 and TR 36.885 print it. The default.
+    #[default]
+    Effective,
+    /// The antennas' actual heights, as the LTE-V2X study simulators evaluate it.
+    Actual,
+}
+
+impl B1Heights {
+    /// The height subtracted from each antenna, metres.
+    #[must_use]
+    pub const fn environment_m(self) -> f64 {
+        match self {
+            B1Heights::Effective => ENVIRONMENT_HEIGHT_M,
+            B1Heights::Actual => 0.0,
+        }
+    }
+}
+
+fn heights(h_t_m: f64, h_r_m: f64, conv: B1Heights) -> (f64, f64) {
+    let e = conv.environment_m();
+    (
+        (h_t_m - e).max(MIN_EFFECTIVE_HEIGHT_M),
+        (h_r_m - e).max(MIN_EFFECTIVE_HEIGHT_M),
+    )
+}
+
 /// The effective breakpoint distance `d'BP = 4·h'_t·h'_r·f/c`, metres.
 #[must_use]
 pub fn breakpoint_m(h_t_m: f64, h_r_m: f64, f_hz: f64) -> f64 {
-    let ht = (h_t_m - ENVIRONMENT_HEIGHT_M).max(MIN_EFFECTIVE_HEIGHT_M);
-    let hr = (h_r_m - ENVIRONMENT_HEIGHT_M).max(MIN_EFFECTIVE_HEIGHT_M);
+    breakpoint_with(h_t_m, h_r_m, f_hz, B1Heights::Effective)
+}
+
+/// The breakpoint distance under a height convention, metres.
+#[must_use]
+pub fn breakpoint_with(h_t_m: f64, h_r_m: f64, f_hz: f64, conv: B1Heights) -> f64 {
+    let (ht, hr) = heights(h_t_m, h_r_m, conv);
     4.0 * ht * hr * f_hz / crate::numeric::SPEED_OF_LIGHT_M_S
 }
 
 /// The WINNER+ B1 LOS path loss, dB, with the TR 36.885 3 m floor on the distance.
 #[must_use]
 pub fn b1_los_db(d_m: f64, h_t_m: f64, h_r_m: f64, f_hz: f64) -> f64 {
+    b1_los_with(d_m, h_t_m, h_r_m, f_hz, B1Heights::Effective)
+}
+
+/// The WINNER+ B1 LOS path loss under a height convention, dB.
+#[must_use]
+pub fn b1_los_with(d_m: f64, h_t_m: f64, h_r_m: f64, f_hz: f64, conv: B1Heights) -> f64 {
     let d = d_m.max(MIN_DISTANCE_M);
     let f_ghz = f_hz / 1e9;
-    let d_bp = breakpoint_m(h_t_m, h_r_m, f_hz);
+    let d_bp = breakpoint_with(h_t_m, h_r_m, f_hz, conv);
     if d <= d_bp {
         22.7 * math::log10(d) + 27.0 + 20.0 * math::log10(f_ghz)
     } else {
-        let ht = (h_t_m - ENVIRONMENT_HEIGHT_M).max(MIN_EFFECTIVE_HEIGHT_M);
-        let hr = (h_r_m - ENVIRONMENT_HEIGHT_M).max(MIN_EFFECTIVE_HEIGHT_M);
+        let (ht, hr) = heights(h_t_m, h_r_m, conv);
         40.0 * math::log10(d) + 7.56 - 17.3 * math::log10(ht) - 17.3 * math::log10(hr)
             + 2.7 * math::log10(f_ghz)
     }
@@ -110,6 +157,7 @@ pub struct WinnerPlusB1 {
     card: ModelCard,
     tier: Tier,
     d_corr_m: f64,
+    heights: B1Heights,
     shadowing: ShadowingOverride,
     shadows: BTreeMap<(u32, u32), ShadowProcess>,
 }
@@ -126,9 +174,17 @@ impl WinnerPlusB1 {
             card: card(),
             tier,
             d_corr_m: decorrelation_distance_m(env),
+            heights: B1Heights::Effective,
             shadowing: ShadowingOverride::default(),
             shadows: BTreeMap::new(),
         }
+    }
+
+    /// The same model under another antenna-height convention.
+    #[must_use]
+    pub fn with_heights(mut self, h: B1Heights) -> Self {
+        self.heights = h;
+        self
     }
 
     /// The same model with the shadowing σ and decorrelation distance overridden.
@@ -167,7 +223,7 @@ impl<C: Ctx + ?Sized> Propagation<C> for WinnerPlusB1 {
         _w: &WeatherState,
     ) -> LossBreakdown {
         let d = tx.pos.distance(rx.pos);
-        let path = b1_los_db(d, tx.height_m(), rx.height_m(), f_hz);
+        let path = b1_los_with(d, tx.height_m(), rx.height_m(), f_hz, self.heights);
         let base_sigma = if los.class.has_building() {
             SIGMA_NLOS_DB
         } else {
@@ -236,6 +292,20 @@ fn card() -> ModelCard {
         Parameter::new("near_slope_db_per_decade", "dB", serde_json::json!(22.7), winner.clone()),
         Parameter::new("far_slope_db_per_decade", "dB", serde_json::json!(40.0), winner.clone()),
         Parameter::new("environment_height_m", "m", serde_json::json!(ENVIRONMENT_HEIGHT_M), winner.clone()),
+        Parameter {
+            name: "heights".to_string(),
+            unit: "-".to_string(),
+            default: serde_json::json!("effective"),
+            range: Some(vec![serde_json::json!("effective"), serde_json::json!("actual")]),
+            source: Source::new(
+                SourceKind::Paper,
+                "effective: WINNER+ D5.3 / TR 36.885 as printed, reproduces Veins (Sepulcre \
+                 2021 Fig. 4a) to 5.7 PDR points; actual: reproduces OpenCV2X (McCarthy \
+                 2021 Fig. 3) and Molina-Masegosa 2017 Fig. 3 to 5-6 points \
+                 (docs/validation/radio-fidelity.md)",
+            ),
+            calibration: None,
+        },
         Parameter::new("sigma_los_db", "dB", serde_json::json!(SIGMA_LOS_DB), tr.clone()),
         Parameter::new("sigma_nlos_db", "dB", serde_json::json!(SIGMA_NLOS_DB), tr.clone()),
         Parameter::new("min_distance_m", "m", serde_json::json!(MIN_DISTANCE_M), tr.clone()),

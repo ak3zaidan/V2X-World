@@ -167,6 +167,7 @@ pub fn run_all(quick: bool) -> Vec<Comparison> {
         quick,
         &[
             ChannelModel::WinnerPlusB1,
+            ChannelModel::WinnerPlusB1ActualHeights,
             ChannelModel::WinnerB1ShapedTodoCalibrate,
             ChannelModel::Tr37885HighwayLos,
         ],
@@ -265,7 +266,10 @@ mod winner_tests {
     #[test]
     #[ignore = "measurement: a few minutes in a debug build"]
     fn the_studies_on_winner_plus_b1() {
-        let rows = run_channels(false, &[ChannelModel::WinnerPlusB1]);
+        let rows = run_channels(
+            false,
+            &[ChannelModel::WinnerPlusB1, ChannelModel::WinnerPlusB1ActualHeights],
+        );
         println!("{}", markdown(&rows));
         for r in &rows {
             assert!(r.mad.is_some(), "{} measured nothing", r.reference.name);

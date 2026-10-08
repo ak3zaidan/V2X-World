@@ -1207,8 +1207,9 @@ pub enum PropagationChoice {
     Geometric,
     /// `propagation/winner-plus-b1`: WINNER+ B1 line of sight with effective antenna
     /// heights, the TR 36.885 V2V channel the Veins and OpenCV2X studies ran on. Buildings
-    /// are charged by the obstacle stack's Sommer term.
-    WinnerB1,
+    /// are charged by the obstacle stack's Sommer term. `params: {heights: effective |
+    /// actual}` picks the breakpoint convention ([`v2xw_radio::winner::B1Heights`]).
+    WinnerB1(v2xw_radio::winner::B1Heights),
 }
 
 impl PropagationChoice {
@@ -1274,6 +1275,13 @@ struct PresetParam<T> {
 struct PhyParams {
     #[serde(default)]
     sensitivity: Option<v2xw_radio::SensitivityPreset>,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WinnerParams {
+    #[serde(default)]
+    heights: Option<v2xw_radio::winner::B1Heights>,
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -1349,7 +1357,15 @@ pub fn radio_models(
                     v2xw_radio::TwoRayGround::ID => PropagationChoice::TwoRayGround,
                     v2xw_radio::Tr37885::ID => PropagationChoice::Tr37885,
                     v2xw_radio::GeometricUrbanV2v::ID => PropagationChoice::Geometric,
-                    v2xw_radio::WinnerPlusB1::ID => PropagationChoice::WinnerB1,
+                    v2xw_radio::WinnerPlusB1::ID => {
+                        match params_of::<WinnerParams>(&choice.params) {
+                            Ok(p) => PropagationChoice::WinnerB1(p.heights.unwrap_or_default()),
+                            Err(e) => {
+                                errors.push(bad(e));
+                                continue;
+                            }
+                        }
+                    }
                     _ => match params_of::<PresetParam<v2xw_radio::LogDistancePreset>>(
                         &choice.params,
                     ) {
@@ -1740,7 +1756,9 @@ pub fn los_mean_loss_db(
                 .params()
                 .path_loss_db(d_m)
         }
-        PropagationChoice::WinnerB1 => v2xw_radio::winner::b1_los_db(d_m, h_t_m, h_r_m, f_hz),
+        PropagationChoice::WinnerB1(h) => {
+            v2xw_radio::winner::b1_los_with(d_m, h_t_m, h_r_m, f_hz, h)
+        }
         PropagationChoice::Tr37885 | PropagationChoice::Geometric => {
             if urban {
                 v2xw_radio::prop::tr37885_urban_los_db(d_m, f_hz / 1e9)
@@ -1914,9 +1932,11 @@ pub fn build_radio_at(
                 None => m,
             })
         }
-        PropagationChoice::WinnerB1 => {
-            Box::new(v2xw_radio::WinnerPlusB1::new(tier, env).with_shadowing(shadow))
-        }
+        PropagationChoice::WinnerB1(h) => Box::new(
+            v2xw_radio::WinnerPlusB1::new(tier, env)
+                .with_heights(h)
+                .with_shadowing(shadow),
+        ),
         PropagationChoice::LogDistance(None) => Box::new(log_distance(
             v2xw_radio::LogDistanceShadowing::auto(tier, env),
         )),

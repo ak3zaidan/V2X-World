@@ -1244,7 +1244,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "Picks a model per radio family, overriding the tier's default: \
                propagation (free-space, two-ray-ground, log-distance with a named preset, \
-               tr37885, v2v-urban-geometric), fading (none, nakagami-m with a preset), per (the \
+               tr37885, v2v-urban-geometric, winner-plus-b1 with heights effective, the \
+               default, as WINNER+ and TR 36.885 print it, or actual, as the LTE-V2X study \
+               simulators evaluate it), fading (none, nakagami-m with a preset), per (the \
                802.11p error model's implementation loss), phy (the 802.11p sensitivity \
                table: measured-obu by default, etsi-static, etsi-dynamic or cohda-mk5), \
                obstacle (the Sommer building row) and sidelink \
@@ -2356,7 +2358,7 @@ fn radio_tuning(s: &Scenario, e: &mut Vec<ScenarioError>) {
         PropagationChoice::LogDistance(_) => "propagation/log-distance-shadowing",
         PropagationChoice::Tr37885 => "propagation/tr37885",
         PropagationChoice::Geometric => "propagation/v2v-urban-geometric",
-        PropagationChoice::WinnerB1 => "propagation/winner-plus-b1",
+        PropagationChoice::WinnerB1(_) => "propagation/winner-plus-b1",
     };
 
     if c.path_loss_exponent.is_some() && !matches!(law, PropagationChoice::LogDistance(_)) {
