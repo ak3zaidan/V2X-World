@@ -5387,7 +5387,7 @@ impl Engine {
             // The transmitter despawned between the grant and the air. Nothing to do: the
             // frame is gone with it — except the receivers still waiting to combine a
             // sidelink retransmission, whose losses are recorded.
-            if !state.sl.held.is_empty()
+            if (!state.sl.held.is_empty() || !state.sl.prr_bins.is_empty())
                 && let Some(sl) = self.sidelink.as_mut()
             {
                 sl.finalize.push(frame);
@@ -5517,7 +5517,18 @@ impl Engine {
         within.sort_by_key(|(n, _, _)| *n);
         beyond.sort_by_key(|(n, _)| *n);
         let candidates: Vec<(NodeId, Vec3)> = within.iter().map(|&(n, p, _)| (n, p)).collect();
-        state.census = self.reception_census(state.tx, state.tx_pos, now);
+        if state.sl.total > 1 {
+            // A blind-retransmitted block is censused once, at its first copy, receiver
+            // by receiver, and reported when the block is resolved (`sidelink.rs`).
+            if state.sl.attempt <= 1 {
+                state.sl.prr_bins = self.reception_census_by_node(state.tx, state.tx_pos, now);
+                state.sl.prr_decoded.clear();
+                state.sl.prr_due = false;
+            }
+            state.census = BTreeMap::new();
+        } else {
+            state.census = self.reception_census(state.tx, state.tx_pos, now);
+        }
 
         // Stage 2: the link budgets, sequentially, because the models carry state — a
         // shadowing process is correlated along a trajectory, which is why it has state
@@ -5760,13 +5771,35 @@ impl Engine {
     /// [`Engine::link_budget`] reports for the same pair at the same instant (the ground
     /// points' 3-D separation), so a decoded receiver lands in the bin it was counted in.
     fn reception_census(&self, tx: NodeId, tx_pos: Vec3, now: SimTime) -> BTreeMap<u32, u32> {
-        let max = v2xw_metrics::channels::PRR_MAX_M;
         let mut census: BTreeMap<u32, u32> = BTreeMap::new();
-        let mut count = |d: f64| {
+        self.census_walk(tx, tx_pos, now, |_, bin| {
+            *census.entry(bin).or_insert(0) += 1;
+        });
+        census
+    }
+
+    /// [`Engine::reception_census`] receiver by receiver: each counted node's bin.
+    fn reception_census_by_node(
+        &self,
+        tx: NodeId,
+        tx_pos: Vec3,
+        now: SimTime,
+    ) -> BTreeMap<NodeId, u32> {
+        let mut bins: BTreeMap<NodeId, u32> = BTreeMap::new();
+        self.census_walk(tx, tx_pos, now, |node, bin| {
+            bins.insert(node, bin);
+        });
+        bins
+    }
+
+    /// Every equipped node the census counts, with its 20 m bin.
+    fn census_walk(&self, tx: NodeId, tx_pos: Vec3, now: SimTime, mut f: impl FnMut(NodeId, u32)) {
+        let max = v2xw_metrics::channels::PRR_MAX_M;
+        let mut count = |node: NodeId, d: f64| {
             if d < max
                 && let Some(bin) = self.prr_bins.index_of(d)
             {
-                *census.entry(bin as u32).or_insert(0) += 1;
+                f(node, bin as u32);
             }
         };
         for (actor, node) in self.equipped_within(tx_pos, max) {
@@ -5775,15 +5808,14 @@ impl Engine {
             };
             // A dormant radio (`crate::scale`) is off, and could not have received.
             if node != tx && self.receives(node) {
-                count(tx_pos.distance(rec.last.extrapolate(now).pos));
+                count(node, tx_pos.distance(rec.last.extrapolate(now).pos));
             }
         }
         for (&rsu, &rsu_pos) in &self.rsus {
             if rsu != tx {
-                count(tx_pos.distance(rsu_pos));
+                count(rsu, tx_pos.distance(rsu_pos));
             }
         }
-        census
     }
 
     /// The reception phase (ADR 0004 decision 5, invariant I-R2).
@@ -5929,20 +5961,34 @@ impl Engine {
         // The census's `X`: receivers in range that decoded the frame, by the bin the census
         // counted them in.
         let mut decoded_by_bin: BTreeMap<u32, u32> = BTreeMap::new();
-        for outcome in &outcomes {
-            if outcome.received
-                && outcome.distance_m < v2xw_metrics::channels::PRR_MAX_M
-                && let Some(bin) = self.prr_bins.index_of(outcome.distance_m)
-            {
-                *decoded_by_bin.entry(bin as u32).or_insert(0) += 1;
+        // A blind-retransmitted sidelink block carries its census across its copies and
+        // reports it once, when it is resolved; a block sent once is censused here.
+        let tb_census = (state.sl.total > 1).then(|| {
+            let mut c: BTreeMap<u32, u32> = BTreeMap::new();
+            if state.sl.prr_due {
+                for bin in state.sl.prr_bins.values() {
+                    *c.entry(*bin).or_insert(0) += 1;
+                }
+                decoded_by_bin.clone_from(&state.sl.prr_decoded);
+            }
+            c
+        });
+        if tb_census.is_none() {
+            for outcome in &outcomes {
+                if outcome.received
+                    && outcome.distance_m < v2xw_metrics::channels::PRR_MAX_M
+                    && let Some(bin) = self.prr_bins.index_of(outcome.distance_m)
+                {
+                    *decoded_by_bin.entry(bin as u32).or_insert(0) += 1;
+                }
             }
         }
-        if !state.census.is_empty() || !decoded_by_bin.is_empty() {
+        let census_map = tb_census.as_ref().unwrap_or(&state.census);
+        if !census_map.is_empty() || !decoded_by_bin.is_empty() {
             // Over the union of both maps and not clamped: a decode the census did not count
             // would be a producer defect, and the metric refuses such a record rather than
             // have it hidden here.
-            let keys: std::collections::BTreeSet<u32> = state
-                .census
+            let keys: std::collections::BTreeSet<u32> = census_map
                 .keys()
                 .chain(decoded_by_bin.keys())
                 .copied()
@@ -5952,7 +5998,7 @@ impl Engine {
                 .map(|bin| {
                     [
                         bin,
-                        state.census.get(&bin).copied().unwrap_or(0),
+                        census_map.get(&bin).copied().unwrap_or(0),
                         decoded_by_bin.get(&bin).copied().unwrap_or(0),
                     ]
                 })
