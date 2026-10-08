@@ -466,7 +466,19 @@ pub const CARRY_CLOSE_MPS: f64 = 0.7;
 /// A lane change whose offset would exceed this is a real gap in the walkable network, not a
 /// corner, and is not carried, metres. On the Midtown extract the corner offsets the glitch
 /// hunter measured were 2-4.2 m (a pavement's end to the crosswalk's start round the kerb).
-const CARRY_MAX_M: f64 = 5.0;
+/// The pose stream of midtown-pedestrians then still had 65 one-step jumps in 25 s, every one
+/// 5.4-6.9 m: the corners of the avenues' wider pavements, snapped because they were just over
+/// the old 5 m limit; at 8 m four remained in 25 s, all 8.2-9.7 m. 12 m carries all of them; a
+/// longer gap is still snapped.
+const CARRY_MAX_M: f64 = 12.0;
+/// The longest a carry takes to close, seconds: a gap longer than `CARRY_CLOSE_MPS` × this closes
+/// proportionally faster, so a 10 m corner is walked round in a few seconds rather than the
+/// fourteen the fixed 0.7 m/s would spend drawing the person off their lane.
+const CARRY_CLOSE_MAX_S: f64 = 4.0;
+/// The along-path speed a pedestrian's facing is computed with at least, m/s — SUMO's
+/// `NUMERICAL_EPS` floor in `MSPModel_Striping::PState::getAngle`, raised so that a standing
+/// person's sub-centimetre-per-second sideways jiggle turns them by under 6° rather than 90°.
+const FACING_MIN_ALONG_MPS: f64 = 0.1;
 
 impl Pedestrian {
     /// Its world position, given the world.
@@ -1417,7 +1429,8 @@ impl VruMobility for SocialForce {
             person.lateral_m = lateral_m;
             let gap = carry_next.norm_2d();
             person.carry = if gap > 0.0 {
-                carry_next.scale((gap - CARRY_CLOSE_MPS * dt_s).max(0.0) / gap)
+                let rate = CARRY_CLOSE_MPS.max(gap / CARRY_CLOSE_MAX_S);
+                carry_next.scale((gap - rate * dt_s).max(0.0) / gap)
             } else {
                 Vec3::ZERO
             };
@@ -1539,13 +1552,28 @@ impl SocialForce {
         t: v2xw_core::time::SimTime,
     ) -> Kinematics {
         let position = person.position(world);
-        let heading = if person.vel.norm_2d() > 1e-6 {
-            person.vel.heading_2d()
-        } else {
-            world
-                .try_lane(person.lane)
-                .map(|l| l.heading_at(person.s_m))
-                .unwrap_or(0.0)
+        // Facing: the walking direction of the path, turned by the sideways part of the
+        // velocity — SUMO's striping model (`MSPModel_Striping::PState::getAngle`,
+        // src/microsim/transportables/MSPModel_Striping.cpp: the lane's rotation plus
+        // `atan2(speedLat, max(speed, eps))`). The old rule took the velocity's own direction
+        // whenever it exceeded 1 µm/s, so a person standing at the kerb, whose velocity is the
+        // social forces' millimetre jiggle, spun to a new random facing every step: 940 heading
+        // flips over 143° in 25 s on midtown-pedestrians, which the 3D view drew as people
+        // whirling on the spot. The along-path speed is floored at a small positive value, so
+        // the turn stays inside ±90° and a person never faces back down their own path.
+        let path_heading = world.try_lane(person.lane).map(|l| l.heading_at(person.s_m));
+        let heading = match path_heading {
+            Some(h) if !person.crossing_midblock() => {
+                let (sin_h, cos_h) = math::sin_cos(h);
+                let along = person.vel.x * cos_h + person.vel.y * sin_h;
+                let lateral = -person.vel.x * sin_h + person.vel.y * cos_h;
+                h + math::atan2(lateral, along.max(FACING_MIN_ALONG_MPS))
+            }
+            // On a mid-block crossing the path is the straight line being walked, which the
+            // velocity follows; standing (waiting for a gap) keeps the lane's direction.
+            _ if person.vel.norm_2d() > FACING_MIN_ALONG_MPS => person.vel.heading_2d(),
+            Some(h) => h,
+            None => 0.0,
         };
         Kinematics {
             t,
@@ -2085,8 +2113,11 @@ mod tests {
                 let lane = kin.lane.expect("on a lane").lane;
                 if let Some((p, prev_lane)) = last.get(&actor) {
                     let person = m.get(actor).expect("here");
-                    let limit = (params.max_speed_factor * person.desired_speed_mps
-                        + CARRY_CLOSE_MPS)
+                    // The carry closes at up to `gap / CARRY_CLOSE_MAX_S` for a long gap; the gap
+                    // left after this step bounds the one before it.
+                    let closing = CARRY_CLOSE_MPS
+                        .max(1.05 * (person.carry.norm_2d() + 0.1) / CARRY_CLOSE_MAX_S);
+                    let limit = (params.max_speed_factor * person.desired_speed_mps + closing)
                         * 0.1
                         + 0.05;
                     let step = ((kin.pos.x - p.x).powi(2) + (kin.pos.y - p.y).powi(2)).sqrt();
