@@ -31,6 +31,9 @@ import { bearingDeg } from "../lib/feed.js";
 import { toGeodetic } from "../lib/geo.js";
 import { linkText, pseudonymLine } from "../lib/security.js";
 import { vehicleHealth } from "../lib/vehicleHealth.js";
+import { actorNoun } from "../lib/actorNoun.js";
+
+const capitalise = (w: string): string => w.charAt(0).toUpperCase() + w.slice(1);
 
 /** One value with its label; nothing when the field has no data or reads zero. */
 function Value({ field, label, keepZero = false }: { field: HudField | undefined; label: string; keepZero?: boolean }): React.JSX.Element | null {
@@ -67,6 +70,8 @@ function Row({ title, testId, children }: { title: string; testId: string; child
 export function ObuHud(): React.JSX.Element | null {
   const telemetry = useStudio((s) => s.telemetry);
   const telemetryNode = useStudio((s) => s.telemetryNode);
+  const selectedActor = useStudio((s) => s.selectedActor);
+  const selectedNode = useStudio((s) => s.selectedNode);
   const pseudonym = useStudio((s) => s.pseudonym);
   const security = useStudio((s) => s.security);
   const inspect = useStudio((s) => s.inspect);
@@ -99,8 +104,19 @@ export function ObuHud(): React.JSX.Element | null {
     return (
       <div className="hud" data-testid="obu-hud">
         <div className="hud-head">
-          <span className="id">No radio selected</span>
-          <span className="dim">Select a vehicle or a roadside unit on the map.</span>
+          {selectedActor !== null ? (
+            <>
+              <span className="id">{capitalise(actorNoun(selectedActor))} {selectedActor}</span>
+              <span className="dim">
+                {selectedNode !== null ? "Waiting for its first radio report." : "Carries no radio, so there is no radio to report on."}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="id">No radio selected</span>
+              <span className="dim">Select a vehicle or a roadside unit on the map.</span>
+            </>
+          )}
         </div>
       </div>
     );
