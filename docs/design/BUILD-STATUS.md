@@ -15,6 +15,48 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-07 — network stack on the channel (netstack track)
+
+Closes the round-4 gap "forwarded GeoNetworking copies have no MAC".
+
+| Piece | Where | What runs |
+|---|---|---|
+| On-air GN forwarding (`net.geonet.forwarding: on-air`, new default) | `engine/src/run/gn_air.rs` | an EN 302 636-4-1 router per RSU/OBU inside the run; DENMs originate as GBC to `area_radius_m`, everything else as SHB (CAMs fill the LocT, so no beacons, §10.3.6.2); every decoded frame goes to the receiver's router; a forward is a new frame (same SPDU, router's packet) in the relay's MAC pending list; a CBF candidate is asked again at its timer and cancelled if a copy was heard; then DCC gate, EDCA, collisions, CBR and `node.tx` like any frame. `overlay` keeps the old instant run. `RunReport.gn_air` totals; `RunReport.geonet` rows are filled at the end of the run from the first DENM after the hazard |
+| ETSI DCC profiles on EDCA (`net.access_categories: etsi-profiles`) | `gn_air.rs::access_category`, `FrameDescriptor.ac` now honoured by the MAC and the DCC gate | TS 102 724 DP0-DP3 -> EN 302 663 AC_VO/VI/BE/BK: hazard DENM VO, CAM/BSM BE, forwarded copies and the rest BK |
+| Per-AC queue limit (`net.mac_queue_depth`, 1-1024, default 64) | `wiring::build_mac` | `EdcaOcbMac::with_queue_depth`; overflow is a MAC drop |
+| GN-layer global CBR (`net.dcc_cbr: global`, gn-btp only) | `engine/src/run/gcbr.rs` | TS 102 636-4-2 §5: CBR_G = max(own, neighbours' R0, neighbours' R1) feeds the DCC; `RunReport.gcbr` |
+| CPM figures (`RunReport.cpm`) | `engine/src/run/cpm_metrics.rs` | object awareness within 150 m (awareness messages alone vs with CPMs), redundancy, payload size p50/p95/bins, generation rate per station |
+| Air ledger (`RunReport.air_bytes`) | `engine/src/run/air_bytes.rs` | octets by layer for every frame on the air, PHY preamble time, forwarded-copy octets |
+| CSMA/CA in the dissemination run (`DissemConfig.mac`) | `net/src/stack/dissem.rs`, `eval.rs::compare_with` | carrier sense, AIFS + CWmin backoff, collisions, half duplex |
+
+All new options are validated, have labels and choice words in `options.rs`, and publish
+through the reflection (no Studio change needed).
+
+**Measured** (each test run once):
+* Connected-intersections, gn-btp, breakdown at 8 s, on-air GPC CBF: 11 of 11 equipped
+  vehicles in the 1 km area reached, p50 / p95 101 / 167 ms, 2 hops, 71 transmissions
+  (68 forwards) for 3 DENMs; 100 CBF timers armed, 32 stood down; DENMs went on the air
+  from 33 stations against 1 with the overlay. Air ledger of that run: payload 18.8 % of
+  PSDU octets (security 48 %), forwards 4 %.
+* Same grid, 8 s, no hazard: `etsi-profiles` raises mean access delay per grant from
+  2.2 µs to 5.7 µs (CAMs on AC_BE); the global CBR raised the DCC input in 370 of 691
+  updates (max +1 %, a light channel).
+* CPM run (40 % equipped, 40 pedestrians without devices): awareness 3.6 % from CAMs
+  alone vs 5.7 % with CPMs; redundancy 1.78 reports per receiver-object-second; CPM
+  payload p50 68 B, p95 159 B; 1.19 CPMs per station per second.
+* Amador et al. highway, 10 veh/km/lane, seed 7: with CSMA, ETSI / DPD / GPC PDR 1.000 /
+  0.667 / 1.000 (published 0.9998 / 0.9500 / 0.9917; without a MAC 0.787 / 0.667 /
+  1.000); transmissions per DENM 200.8 / 6.6 / 17.2 (published ÷ 30: 275 / 16.2 / 19.9).
+
+**Not done / caveats.** GeoUnicast is sent once with no link-layer ACK/retry; GN security
+header verification at forwarders is not separate (each copy goes to the node inbox and is
+verified as a frame); on-air forwarding needs the medium/high MAC tier (abstract tier and
+sidelink fall back to the overlay); a breakdown's DENM waits out the 10 s stationary
+trigger timer, so a short run ends before it; the DP-to-AC table and the TS 102 636-4-2
+CBR rule are cited from memory of the published documents; no IVIM/TIM; the dissemination
+run still has no DCC. Shared build cache: the engine's `build.rs` reflection can be stale
+when another worktree built last; force it with a changed `V2XW_GIT_COMMIT`.
+
 ## 2026-10-07 — round-4 merge: nine tracks onto main
 
 Merged with `--no-ff`, in this order: valfix, foundations, agentcrypto, page, settings,
