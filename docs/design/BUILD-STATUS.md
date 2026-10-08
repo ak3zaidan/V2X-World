@@ -203,6 +203,82 @@ Headless runs of the release engine (`v2xw run --no-recording`, optimised dev bu
   dynamics rules (1 to 10 Hz), so on the ETSI stack a pir p95 near 0.8-0.9 s is correct
   behaviour and is still flagged.
 
+## 2026-10-08 — pedestrians and two-wheelers: run, find, fix (branch of 4986cd4)
+
+The owner's report: "pedestrian movement is not smooth". Measured, not read: a new
+diagnostic, `crates/v2xw-engine/tests/vru_motion.rs` (`--ignored`; `V2XW_SCENARIO`,
+`V2XW_SECONDS`, `V2XW_WATCH=<ids>`, `V2XW_LANES=<ids>`), runs a scenario's mobility alone and
+reports, from the positions the stream would carry: jumps, published-speed mismatch, heading
+turns and standing spins, reversals, accelerations over 3 m/s², lateral jerks, the
+walking-speed distribution, stops, and pedestrians closer than 0.35 m (by group, lane and
+activity). A 60 s Midtown run takes 1-3 s; the build is what costs.
+
+The cause was the engine, not the viewer: the viewer's Catmull-Rom paths and 5 rad/s turn
+limit were hiding what the engine sent.
+
+| Measured (vru-grid 60 s / midtown-pedestrians 40 s / midtown-street-life 60 s) | 4986cd4 | this branch |
+|---|---|---|
+| heading turns over 30° in one 0.1 s step, per 1000 steps | 10.5 / 13.3 / – | 0 / 0 / 0 |
+| standing spins, worst | 180° / 180° / – | 23° (the turn-rate limit) |
+| published speed off the displacement, per 1000 | 0.3 / 28.1 / – | 0 / 0 / 0 |
+| jumps, per 1000 steps; worst | 0 / 0.44, 8.2 m / 0.42, 8.1 m | 0 / 0 / 0.00, 0.49 m |
+| worst acceleration, m/s² | 20.7 / 799 / 791 | 13.9 / 16.2 / 50.6 |
+| steps over 3 m/s², per 1000 | 24 / 55 / 53 | 17 / 25 / 29 |
+| pairs closer than 0.35 m (summed over steps) | 16,197 / 46,530 / 192,869 | 1,856 / 6,862 / 33,765 |
+| walking speed mean, s.d. (m/s) | 1.19, 0.40 / 1.31, 1.33 / 1.25, 1.26 | 1.29, 0.31 / 1.24, 0.36 / 1.20, 0.37 |
+| cyclists: worst step, acceleration | – / – / 1.06 m, 92 m/s² | – / – / 0, 6.9 m/s² |
+
+Fixes (one commit each, symptom, cause and fix in the message):
+
+1. **Facing and velocity** (`1ce6e1e`). The published heading was the social-force velocity,
+   whose direction is the last push once a waiting walker's speed decays: people spun at the
+   kerb. The stream now carries the displacement as velocity and a facing that turns at most
+   4 rad/s toward where the walker actually goes, holds while standing and turns to face the
+   crossing (as SUMO derives a walker's angle from its movement, `MSPModel_Striping`).
+2. **Spread, groups and gaps** (`b92fba8`). The kerb potential was measured from the body's
+   edge, not the walker's position (Helbing & Molnár 1995 eq. 6), 3.3× too strong, so it
+   herded everyone and every group onto the centreline. Walkers now keep a place across the
+   pavement (groups abreast, Moussaïd et al. 2010; lone walkers a drawn share of the width),
+   moving across at 0.4 of their pace (SUMO `LATERAL_SPEED_FACTOR`). The Midtown walk network
+   has 3-3.5 m gaps between sidewalk stubs; a lane is now extended back along its first
+   segment so a walker walks the gap, and routes skip successors more than 5 m away.
+3. **Lane-change offset** (`420b32a`, vehicle engine). A lane change started from the two
+   lanes' half widths summed; a bike lane past a buffer is further away, and a cyclist leaving
+   it jumped 1 m. It starts from the actual position projected across the target lane.
+4. **Corners, kerbs, bends, contact** (`e7bb0dc`). Look-ahead steering 1 m before a lane's end;
+   the true lateral offset kept round a corner (no carry closing at a fixed 0.7 m/s, which was
+   7 m/s² at every crossing's end); a 3 m/s² stop cap at the kerb and stepping off when caught
+   too close by the end of WALK; the polyline-bend projection mismatch carried instead of
+   jumped; one walker's push on another capped at `V0/σ` (the elliptical potential diverges
+   as `b → 0`; cf. the generalized centrifugal-force model, Chraibi et al. 2010).
+
+**Gates.** `cargo test -p v2xw-mobility --lib vru`: 19 pass. `pedestrian_invariants`:
+already failing at 4986cd4 (vehicle-vehicle `overlap = 21` in the signalised run, and the
+observed run); on this branch the signalised run passes and the observed run fails on
+`gap-below-minimum = 21, speed-jump = 3, accel-bound = 3`, all vehicle checks.
+`traffic_invariants` pass.
+
+**3D view check.** Both engines (4986cd4's sources and this branch, built from the same
+tree) served `midtown-pedestrians.yaml` on a spare port; `scripts/capture-stream.mjs` captured
+60 s of each stream (662 frames) and `test/glitch-capture.test.ts` replayed both at 60 fps
+through the same tour (aerial, then chase over a car, a delivery van, a pedestrian and a
+cyclist; 2,374 drawn frames each, warm-up 20 s). BEFORE: `teleport = 11` (all the engine's:
+"pedestrian moved 6.14 m in one 17.0 ms frame at 1.5 m/s") and `stutter = 40` ("pedestrian
+jerked 2.1 px on screen moving 2.4 px/frame"). AFTER: every class 0. A headed Studio run
+(Playwright on a GPU) was not done: headless SwiftShader draws this scene at 4-8 fps, too slow
+to judge motion (see the round-4 notes above).
+
+**Open.**
+- About 2-3 % of walking steps still exceed 3 m/s² with nobody within 1 m. Not traced yet;
+  suspects are the crowd-speed cap (`CROWD_SPEED_CAP`, a hard clip when the Weidmann factor
+  steps) and border pushes on narrow lanes.
+- Groups of four on a narrow pavement still overlap: the line abreast is clamped to the
+  walkable width; a V or river-like formation (Moussaïd 2010) needs a longitudinal slot.
+- Pedestrians wait the whole of a 40-60 s run at some Midtown kerbs; whether that is the
+  signal plan or a missing walk phase is not checked.
+- Spawns are uniform over sidewalk lanes and despawns happen where a 12-lane walk ends,
+  mid-pavement; the viewer fades them, but people still appear from nowhere.
+
 ## 2026-10-07 — round-5 merge: eight tracks onto main (settings, agent, radio, network, traffic)
 
 Merged with `--no-ff`, in this order: netconfig, radio, netstack, cellular, traffic,
