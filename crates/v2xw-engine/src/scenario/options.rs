@@ -1210,6 +1210,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.vehicles.demand.kind" => "How vehicles arrive",
         "actors.vehicles.demand.fleet_size" => "Vehicles on the road (fixed fleet)",
         "traffic.signals.control" => "Signal control",
+        "traffic.reroute_period_s" => "Reroute around congestion every",
         "traffic.gridlock_timeout_s" => "Gridlock timeout",
         "traffic.keep_junctions_clear" => "Keep junctions clear",
         "traffic.signals.passage_s" => "Passage time (gap-out)",

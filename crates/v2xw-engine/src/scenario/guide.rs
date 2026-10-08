@@ -72,6 +72,11 @@ const BASIC: &[Basic] = &[
         recommended: "300 (SUMO's default); 0 to see raw gridlock.",
     },
     Basic {
+        path: "traffic.reroute_period_s",
+        explain: "How often drivers check for a faster way round the traffic, as a navigation app does. Off, every driver keeps the route it chose on free-flowing roads; on, jams push traffic onto parallel streets.",
+        recommended: "0 (off) for a baseline; 60 to 300 to model navigation-app drivers.",
+    },
+    Basic {
         path: "traffic.right_turn_on_red",
         explain: "Whether drivers may turn right on a red light after stopping. Legal in most of the US, banned in New York City.",
         recommended: "Leave empty to follow the city's rule.",

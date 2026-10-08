@@ -257,6 +257,16 @@ pub static BOUNDS: &[Bound] = &[
     // FHWA Traffic Signal Timing Manual (2008) ch. 5: minimum greens of 2-15 s, maximum
     // greens up to about 120 s on a major arterial, passage times of 0.5-5 s; the bounds
     // keep inside those, with room either side.
+    // 0 is off; an hour between re-plans is as good as none, and more often than every
+    // 10 s re-routes faster than a lane's smoothed speed can change (SUMO's adaptation is
+    // 180 one-second samples).
+    Bound {
+        path: "traffic.reroute_period_s",
+        lo: 0.0,
+        hi: 3600.0,
+        exclusive_lo: false,
+        what: "the rerouting period",
+    },
     Bound {
         path: "traffic.signals.min_green_s",
         lo: 2.0,
@@ -906,6 +916,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "traffic.lane_changes",
         status: Status::Wired,
         note: "Discretionary and route lane changes (MOBIL).",
+    },
+    KeyStatus {
+        path: "traffic.reroute_period_s",
+        status: Status::Wired,
+        note: "Congestion-aware rerouting on smoothed lane speeds (SUMO's rerouting device); \
+               0 is off.",
     },
     KeyStatus {
         path: "traffic.strategic_lane_choice",
@@ -2901,6 +2917,22 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             t.gridlock_timeout_s,
             e,
         );
+        bounded_at(
+            "traffic.reroute_period_s",
+            "traffic.reroute_period_s",
+            t.reroute_period_s,
+            e,
+        );
+        if t.reroute_period_s > 0.0 && t.reroute_period_s < 10.0 {
+            e.push(conflict(
+                "traffic.reroute_period_s",
+                format!(
+                    "is {} s; re-planning more often than every 10 s only repeats the same \
+                     route (lane speeds are smoothed over 180 s); use 0 for off or at least 10",
+                    t.reroute_period_s
+                ),
+            ));
+        }
         let g = &t.signals;
         for (path, v) in [
             ("traffic.signals.min_green_s", g.min_green_s),

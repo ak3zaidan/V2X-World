@@ -145,6 +145,12 @@ pub struct Traffic {
     /// closes. On by default.
     #[serde(default = "Traffic::yes")]
     pub dynamic_rerouting: bool,
+    /// Congestion-aware rerouting: every vehicle re-plans its route this often, seconds,
+    /// on the speeds the lanes have shown over the last three minutes, as SUMO's rerouting
+    /// device does. 0 (the default) routes on free-flow times and re-plans only for a
+    /// closure. Needs dynamic_rerouting.
+    #[serde(default)]
+    pub reroute_period_s: f64,
     /// Whether drivers change lane to overtake or to reach the lane their next turn needs
     /// (MOBIL). On by default; off keeps every vehicle in the lane it started in.
     #[serde(default = "Traffic::yes")]
@@ -184,6 +190,7 @@ impl Default for Traffic {
         Traffic {
             right_turn_on_red: None,
             dynamic_rerouting: true,
+            reroute_period_s: 0.0,
             lane_changes: true,
             strategic_lane_choice: true,
             keep_junctions_clear: true,

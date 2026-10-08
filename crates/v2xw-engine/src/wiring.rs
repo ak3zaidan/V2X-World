@@ -461,6 +461,7 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
         params.right_turn_on_red = rtor;
     }
     params.dynamic_rerouting = traffic.dynamic_rerouting;
+    params.reroute_period_s = traffic.reroute_period_s.max(0.0);
     params.lane_changes = traffic.lane_changes;
     params.strategic_lane_choice = traffic.strategic_lane_choice;
     params.junction_clearance = traffic.keep_junctions_clear;

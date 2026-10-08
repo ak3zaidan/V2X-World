@@ -654,6 +654,13 @@ pub struct EngineParams {
     /// Needs `lane_changes`; off by default so a unit test sees the plain router, set by a
     /// scenario's `traffic.strategic_lane_choice`.
     pub strategic_lane_choice: bool,
+    /// Congestion-aware rerouting, every this many seconds per vehicle, or `0` (off, the
+    /// default). When on, each lane's speed is sampled every second and smoothed over
+    /// [`CONGESTION_ADAPTATION_STEPS`] samples, the router prices a lane at its length over
+    /// that speed, and every vehicle re-plans its route from where it is once a period
+    /// (SUMO's rerouting device, `--device.rerouting.period`, with its default adaptation
+    /// interval of 1 s and 180 adaptation steps). Set by `traffic.reroute_period_s`.
+    pub reroute_period_s: f64,
     /// **A test hook, not a model parameter.** Walks the decision pass in reverse actor
     /// order. Because the pass reads only the frozen snapshot, the published result must be
     /// bit-identical either way; that is the ADR 0004 Jacobi property, and this is how the
@@ -688,6 +695,7 @@ impl Default for EngineParams {
             class_routing: true,
             time_to_teleport_s: 0.0,
             strategic_lane_choice: false,
+            reroute_period_s: 0.0,
             reverse_order: false,
         }
     }
@@ -733,6 +741,15 @@ const STRATEGIC_CHANGE_COST_S: f64 = 4.0;
 /// its route needs, before it gives up and takes a route from the lane it is on, seconds.
 /// **A choice**: about two cycles of a busy neighbour lane's gaps.
 const STRATEGIC_GIVE_UP_S: f64 = 8.0;
+
+/// How many one-second samples a lane's congestion speed is smoothed over: SUMO's
+/// `--device.rerouting.adaptation-steps` default (180), as an exponential average of the
+/// same memory.
+const CONGESTION_ADAPTATION_STEPS: f64 = 180.0;
+
+/// The slowest a congested lane is priced at, m/s, so a standing queue costs a long but
+/// finite time and stays routable.
+const CONGESTION_FLOOR_MPS: f64 = 0.5;
 
 /// Below this speed a vehicle counts as standing for the gridlock timer, m/s: SUMO's
 /// waiting-time threshold (`SUMO_const_haltingSpeed`, 0.1 m/s).
@@ -1166,6 +1183,11 @@ pub struct NativeMobility {
     unroutable_trips: u64,
     /// What the gridlock resolution did ([`EngineParams::time_to_teleport_s`]).
     gridlock: GridlockCounters,
+    /// Each lane's smoothed speed, m/s, for congestion-aware routing
+    /// ([`EngineParams::reroute_period_s`]); a lane at its free speed is not kept.
+    lane_speed: BTreeMap<LaneId, f64>,
+    /// When the lane speeds were last sampled.
+    speed_sampled_at: Option<SimTime>,
     card: ModelCard,
     /// The exterior lamp model's parameters ([`crate::lamps`]).
     lamp_params: crate::lamps::LampParams,
@@ -1304,6 +1326,8 @@ impl NativeMobility {
             dropped_trips: 0,
             unroutable_trips: 0,
             gridlock: GridlockCounters::default(),
+            lane_speed: BTreeMap::new(),
+            speed_sampled_at: None,
             lamp_params: crate::lamps::LampParams::default(),
             lamp_memory: BTreeMap::new(),
             lateral: None,
@@ -1718,6 +1742,46 @@ impl NativeMobility {
             }
         }
         removed
+    }
+
+    /// Samples every lane's speed once a second into [`Self::lane_speed`]: the mean speed
+    /// of the vehicles on it, or its free speed when it is empty, smoothed exponentially
+    /// over [`CONGESTION_ADAPTATION_STEPS`] samples. Lanes in id order.
+    fn sample_congestion(&mut self, world: &World, t1: SimTime) {
+        if self.params.reroute_period_s <= 0.0 {
+            return;
+        }
+        if self
+            .speed_sampled_at
+            .is_some_and(|at| t1.saturating_sub(at) < secs_to_ns(1.0))
+        {
+            return;
+        }
+        self.speed_sampled_at = Some(t1);
+        let mut sums: BTreeMap<LaneId, (f64, u32)> = BTreeMap::new();
+        for a in self.actors.values() {
+            let e = sums.entry(a.lane).or_insert((0.0, 0));
+            e.0 += a.speed_mps;
+            e.1 += 1;
+        }
+        let alpha = 1.0 / CONGESTION_ADAPTATION_STEPS;
+        let lanes: BTreeSet<LaneId> = sums.keys().chain(self.lane_speed.keys()).copied().collect();
+        for lane in lanes {
+            let Some(l) = world.try_lane(lane) else {
+                continue;
+            };
+            let free = l.speed_limit_mps.max(CONGESTION_FLOOR_MPS);
+            let seen = sums.get(&lane).map_or(free, |(sum, n)| (sum / f64::from(*n)).min(free));
+            let old = self.lane_speed.get(&lane).copied().unwrap_or(free);
+            let new = old + alpha * (seen - old);
+            // An empty lane back within 1 % of its free speed is forgotten; an occupied one
+            // is kept however close, or a slow first sample would be dropped at once.
+            if !sums.contains_key(&lane) && new >= 0.99 * free {
+                self.lane_speed.remove(&lane);
+            } else {
+                self.lane_speed.insert(lane, new);
+            }
+        }
     }
 
     /// A vehicle that has stood at the end of its lane for [`STRATEGIC_GIVE_UP_S`] with a
@@ -2152,6 +2216,11 @@ impl NativeMobility {
         let mut costs = DynamicCost::new(world);
         for lane in &self.closed {
             costs.set_closed(*lane, true);
+        }
+        for (lane, v) in &self.lane_speed {
+            if let Some(l) = world.try_lane(*lane) {
+                costs.observe(*lane, Some(l.length_m / v.max(CONGESTION_FLOOR_MPS)));
+            }
         }
         costs.with_generation(self.closure_changes)
     }
@@ -5301,7 +5370,15 @@ impl Mobility for NativeMobility {
                 despawned.push((decision.actor, cause));
             }
         }
-        // Re-plan whoever is due.
+        // Re-plan whoever is due: on a closure, and with congestion-aware rerouting on,
+        // once a period on the lane speeds just sampled.
+        self.sample_congestion(world, t1);
+        let costs = if self.params.reroute_period_s > 0.0 {
+            self.costs(world)
+        } else {
+            costs
+        };
+        let period = secs_to_ns(self.params.reroute_period_s.max(0.0));
         if self.params.dynamic_rerouting {
             let due: Vec<ActorId> = self
                 .actors
@@ -5309,6 +5386,9 @@ impl Mobility for NativeMobility {
                 .filter(|a| {
                     self.router
                         .due(t1, a.planned_at, a.planned_generation, generation)
+                        || (period > 0
+                            && t1.saturating_sub(a.planned_at) >= period
+                            && world.lane(a.lane).kind != LaneKind::Internal)
                 })
                 .map(|a| a.id)
                 .collect();
@@ -7555,6 +7635,48 @@ mod tests {
             strategic_m + 50.0 < plain_m,
             "the strategic route ({strategic_m:.0} m) is not shorter than going round ({plain_m:.0} m)"
         );
+    }
+
+    #[test]
+    fn a_standing_queue_prices_its_lane_up_for_the_router() {
+        let world = grid(false);
+        let (origin, destination) = long_lane_and_destination(&world);
+        let run = |period_s: f64| {
+            let rng = RngRegistry::new(4);
+            let params = EngineParams {
+                reroute_period_s: period_s,
+                ..EngineParams::default()
+            };
+            let mut engine = engine_on(&world, params, &rng);
+            let trip = TripRequest {
+                seq: 0,
+                t: 0,
+                origin,
+                origin_s_m: 30.0,
+                destination,
+                class: VehicleClass::Passenger,
+                desired_speed_mps: 11.0,
+            };
+            let id = engine.insert_trip(&world, &trip, 0).expect("placed");
+            {
+                let mut ctx = MobilityCtx::new(0, &world, &rng);
+                engine.command(&mut ctx, MobilityCommand::Stop { actor: id, until: None });
+            }
+            let mut t = 0u64;
+            for _ in 0..1200 {
+                let mut ctx = MobilityCtx::new(t, &world, &rng);
+                engine.step(&mut ctx, params.step);
+                t += params.step.as_nanos();
+            }
+            let free = world.lane(origin).length_m / world.lane(origin).speed_limit_mps;
+            let priced = crate::views::EdgeCost::lane_cost_s(&engine.costs(&world), origin, t)
+                .expect("open");
+            (free, priced)
+        };
+        let (free, on) = run(60.0);
+        assert!(on > 1.8 * free, "a lane with a car standing on it for 2 min costs {on:.1} s against {free:.1} s free");
+        let (_, off) = run(0.0);
+        assert!((off - free).abs() < 1e-9, "with rerouting off the lane costs {off} s, not its free {free} s");
     }
 
     #[test]
