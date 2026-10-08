@@ -2655,6 +2655,20 @@ pub fn build_metrics(
     scenario: &Scenario,
     registry: &mut Registry,
 ) -> Result<v2xw_metrics::ProviderSet> {
+    build_metrics_for(scenario, None, registry)
+}
+
+/// [`build_metrics`] for a run on `world`: the providers that measure per road element
+/// (Edie's flow, density and space-mean speed, per lane) are told the world's geometry.
+/// The catalogue is the same either way; only a run's providers need the world.
+///
+/// # Errors
+/// As [`build_metrics`].
+pub fn build_metrics_for(
+    scenario: &Scenario,
+    world: Option<&World>,
+    registry: &mut Registry,
+) -> Result<v2xw_metrics::ProviderSet> {
     let mut set = v2xw_metrics::ProviderSet::new();
     // Emissions and energy (`v2xw_energy`): whenever the scenario has an `energy:`
     // section, or with the section's defaults when the metric list names one of its
@@ -2717,7 +2731,7 @@ pub fn build_metrics(
         Box::new(v2xw_metrics::frag::FragProvider::new()),
         Box::new(v2xw_metrics::security::SecurityProvider::new(0)),
         Box::new(v2xw_metrics::detection::DetectionProvider::new()),
-        Box::new(v2xw_metrics::safety::SafetyProvider::new(0)),
+        Box::new(safety_provider(scenario, world)),
         Box::new(v2xw_metrics::vru::VruSafetyProvider::new()),
     ];
     // The applications' warnings, labelled against ground truth, when vehicles run any.
@@ -2745,6 +2759,50 @@ pub fn build_metrics(
         }
     }
     Ok(set)
+}
+
+/// The safety and traffic-flow provider, told the run's mobility step and every motorised
+/// lane's length.
+///
+/// Edie's generalised flow, density and space-mean speed (`flow`, `density`,
+/// `mean_speed`) are per lane, over the lane's length; a lane whose length was never
+/// declared has no aggregate. Nothing declared one, so no run ever measured the three —
+/// they were in every run's catalogue and never once had a value. The sample interval is
+/// the scenario's step, because Edie weights each sample by it (a 50 ms run read at the
+/// 100 ms default would report twice the flow).
+fn safety_provider(
+    scenario: &Scenario,
+    world: Option<&World>,
+) -> v2xw_metrics::safety::SafetyProvider {
+    let mut p = v2xw_metrics::safety::SafetyProvider::new(0)
+        .with_sample_interval(v2xw_core::time::Duration::from_millis(
+            scenario.time.mobility_step_ms.max(1),
+        ))
+        .with_per_lane(false);
+    // The lanes traffic drives on: a sidewalk or a crossing full of pedestrians is not
+    // road density, and a parking lane's parked cars are not flow.
+    let motorised = |k: v2xw_world::LaneKind| {
+        matches!(
+            k,
+            v2xw_world::LaneKind::Driving | v2xw_world::LaneKind::Bus | v2xw_world::LaneKind::Internal
+        )
+    };
+    for lane in world
+        .map(|w| w.roads.lanes())
+        .unwrap_or_default()
+        .iter()
+        .filter(|l| motorised(l.kind))
+    {
+        let length: f64 = lane
+            .centreline
+            .windows(2)
+            .map(|w| w[0].distance(w[1]))
+            .sum();
+        if length > 0.0 {
+            p.declare_lane_length(lane.id.index(), length);
+        }
+    }
+    p
 }
 
 /// What the signing-overhead metrics need to know about the run's signature scheme: its

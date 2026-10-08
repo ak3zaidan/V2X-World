@@ -1265,7 +1265,7 @@ impl Engine {
 
         let gen_timing = crate::wiring::generation_timing(&scenario);
         crate::wiring::register_generation_timing(&mut registry, gen_timing)?;
-        let providers = crate::wiring::build_metrics(&scenario, &mut registry)?;
+        let providers = crate::wiring::build_metrics_for(&scenario, Some(&world), &mut registry)?;
         crate::backend::register_used(&scenario, &mut registry)?;
         let manifest = crate::manifest::assemble(&scenario, &world, &registry, build_utc)?;
         // The snapshot stream's cadence is the scenario's mobility step and, by default,

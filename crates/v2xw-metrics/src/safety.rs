@@ -113,6 +113,10 @@ pub struct SafetyProvider {
 
     /// The declared lane lengths: world geometry the run supplies.
     lane_length_m: BTreeMap<u32, f64>,
+    /// Σ of the declared lengths, m: the network the headline aggregates are over.
+    network_length_m: f64,
+    /// Whether per-lane samples are reported ([`SafetyProvider::with_per_lane`]).
+    per_lane: bool,
     /// Lanes seen in the data whose length was never declared.
     undeclared_lanes: BTreeSet<u32>,
 
@@ -149,6 +153,8 @@ impl SafetyProvider {
             pet_horizon: Duration::from_secs(5),
             ttc_threshold_grid: Quantum::TIME_S.grid(TTC_THRESHOLD_S),
             lane_length_m: BTreeMap::new(),
+            network_length_m: 0.0,
+            per_lane: true,
             undeclared_lanes: BTreeSet::new(),
             frame_t: None,
             frame: BTreeMap::new(),
@@ -193,7 +199,20 @@ impl SafetyProvider {
 
     /// Declares a lane's length, so Edie's aggregates can be computed on it.
     pub fn declare_lane_length(&mut self, lane: u32, metres: f64) {
-        self.lane_length_m.insert(lane, metres);
+        if let Some(old) = self.lane_length_m.insert(lane, metres) {
+            self.network_length_m -= old;
+        }
+        self.network_length_m += metres;
+    }
+
+    /// Whether every lane's own aggregate is reported (`region` = the lane), besides the
+    /// network's. On by default; a city run turns it off, because a Manhattan peak has
+    /// fifteen hundred occupied lanes a window and three samples each would triple the
+    /// run's metric stream for a breakdown nothing reads.
+    #[must_use]
+    pub const fn with_per_lane(mut self, on: bool) -> Self {
+        self.per_lane = on;
+        self
     }
 
     /// Lanes that appeared in the data and whose length was never declared, so they have no
@@ -426,7 +445,10 @@ impl SafetyProvider {
                 Agg::Rate,
                 Visibility::Gt,
                 Quantum::TRAFFIC,
-                "Edie's flow over the window and the lane: `Σ v·Δt / (L·T)`, in veh/h.",
+                "Edie's flow over the window: `Σ v·Δt / (L·T)`, in veh/h per lane — over \
+                 the whole network's motorised lanes (L their summed length; the \
+                 macroscopic fundamental diagram's production), and per lane where the \
+                 run reports lanes.",
             )
             .with_dims([Dim::T, Dim::Region])
             .with_source(edie.clone())
@@ -439,7 +461,9 @@ impl SafetyProvider {
                 Agg::Rate,
                 Visibility::Gt,
                 Quantum::TRAFFIC,
-                "Edie's density over the window and the lane: `Σ Δt / (L·T)`, in veh/km.",
+                "Edie's density over the window: `Σ Δt / (L·T)`, in veh/km per lane — over \
+                 the whole network's motorised lanes, and per lane where the run reports \
+                 lanes.",
             )
             .with_dims([Dim::T, Dim::Region])
             .with_source(edie.clone())
@@ -501,6 +525,12 @@ impl SafetyProvider {
         if self.frame_t != Some(v.t) {
             self.close_frame();
             self.frame_t = Some(v.t);
+        }
+        // Pedestrians are the VRU provider's (`crate::vru`): walking in groups along a
+        // sidewalk lane, they paired as leader and follower here and filled `headway_*`,
+        // `ttc_min` and `speed` with metre gaps at walking pace.
+        if v.class.as_deref() == Some("pedestrian") {
+            return;
         }
         self.frame.insert(v.actor, v);
     }
@@ -683,7 +713,50 @@ impl MetricProvider for SafetyProvider {
         let flow_def = self.def("flow");
         let density_def = self.def("density");
         let speed_def = self.def("mean_speed");
-        for (lane, acc) in core::mem::take(&mut self.lanes) {
+        // The network's: Edie over the union of the declared lanes — Σ distance and
+        // Σ time over every lane, over Σ L·T — which is the macroscopic fundamental
+        // diagram's production and accumulation per lane-kilometre (Geroliminis and
+        // Daganzo, Transp. Res. B 42(9), 2008). Summed in lane-id order.
+        let (net_samples, net_time, net_distance) =
+            self.lanes.values().fold((0u64, 0.0f64, 0.0f64), |(n, t, d), acc| {
+                (
+                    n + acc.samples,
+                    t + (acc.samples as f64) * self.dt.as_secs_f64(),
+                    d + acc.distance.sum(1).point().unwrap_or(0.0),
+                )
+            });
+        if let Some(t) = secs
+            && self.network_length_m > 0.0
+            && t > 0.0
+        {
+            let area = self.network_length_m * t;
+            out.push(MetricSample::new(
+                &flow_def,
+                at,
+                Dims::new(),
+                SampleValue::Scalar(Estimate::Value {
+                    point: net_distance / area * 3600.0,
+                    n: net_samples,
+                }),
+            ));
+            out.push(MetricSample::new(
+                &density_def,
+                at,
+                Dims::new(),
+                SampleValue::Scalar(Estimate::Value {
+                    point: net_time / area * 1000.0,
+                    n: net_samples,
+                }),
+            ));
+            out.push(MetricSample::new(
+                &speed_def,
+                at,
+                Dims::new(),
+                SampleValue::Ratio(ratio_of_sums(net_distance, net_time, net_samples, 1)),
+            ));
+        }
+        let lanes = core::mem::take(&mut self.lanes);
+        for (lane, acc) in lanes.into_iter().filter(|_| self.per_lane) {
             let mut dims = Dims::new();
             dims.insert(Dim::Region, DimValue::index(u64::from(lane)));
             let length = self.lane_length_m.get(&lane).copied().unwrap_or(0.0);
@@ -892,9 +965,40 @@ mod tests {
         assert_eq!(sample(&s, "density|region=7").value.point(), Some(10.0));
         assert_eq!(sample(&s, "flow|region=7").value.point(), Some(720.0));
         assert_eq!(sample(&s, "mean_speed|region=7").value.point(), Some(20.0));
+        // The network's headline is the same lane here: one lane is the whole network.
+        assert_eq!(sample(&s, "density").value.point(), Some(10.0));
+        assert_eq!(sample(&s, "flow").value.point(), Some(720.0));
+        assert_eq!(sample(&s, "mean_speed").value.point(), Some(20.0));
         // And the identity q = k·v̄ holds on the reported numbers: 10 veh/km × 20 m/s =
         // 10 veh/km × 72 km/h = 720 veh/h.
         assert_eq!(10.0 * 72.0, 720.0);
+    }
+
+    /// Over a network of two 100 m lanes with one vehicle on one of them, the network's
+    /// density is half the lane's, its flow half, and its space-mean speed the vehicle's;
+    /// a pedestrian on the other lane is not traffic.
+    #[test]
+    fn the_network_aggregate_is_over_every_declared_lane_and_leaves_pedestrians_out() {
+        let mut p = SafetyProvider::new(0).with_min_samples(1).with_per_lane(false);
+        p.declare_lane_length(7, 100.0);
+        p.declare_lane_length(8, 100.0);
+        for i in 0..10u64 {
+            p.on_event(&kin(i * 100_000_000, 1, Some(7), (i as f64) * 2.0, 20.0, None));
+            let mut ped: serde_json::Value =
+                serde_json::from_slice(&kin(i * 100_000_000, 2, Some(8), 0.0, 1.0, None).json)
+                    .unwrap();
+            ped["class"] = json!("pedestrian");
+            p.on_event(&OwnedRecord {
+                channel: "gt.kinematics",
+                visibility: Visibility::Gt,
+                json: serde_json::to_vec(&ped).unwrap(),
+            });
+        }
+        let s = p.flush(1_000_000_000);
+        assert_eq!(sample(&s, "density").value.point(), Some(5.0));
+        assert_eq!(sample(&s, "flow").value.point(), Some(360.0));
+        assert_eq!(sample(&s, "mean_speed").value.point(), Some(20.0));
+        assert!(!s.iter().any(|x| x.metric == "flow" && !x.dims.is_empty()));
     }
 
     #[test]
