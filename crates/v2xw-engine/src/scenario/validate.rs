@@ -2969,6 +2969,14 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             e,
         );
     }
+    if s.actors.vehicles.demand.fleet_size.is_some() && s.scale.is_some() {
+        e.push(conflict(
+            "actors.vehicles.demand.fleet_size",
+            "holds a fleet in the microscopic engine only, and this scenario runs the \
+             city-scale tiers (scale); remove one of the two"
+                .to_string(),
+        ));
+    }
     if s.actors.vehicles.demand.fleet_size.is_some()
         && !matches!(
             s.actors.vehicles.demand.kind.as_str(),

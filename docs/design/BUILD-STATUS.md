@@ -2630,3 +2630,40 @@ conflicts resolved by hand and the whole workspace compile-checked:
   timer, TR 36.881 access/handover figures, Shannon fit, background load, NR timings.
 - Not done: the RSU backhaul in the engine is still the `Backhaul` latency+rate struct;
   `WiredLink` exists for TCP but is not yet wired into `backhaul/*` ids. No Studio UI.
+
+## 2026-10-07 — traffic: fleets, strategic lanes, actuated signals, gridlock (branch of 7bd8d95)
+
+- **N vehicles is N on the road.** `actors.vehicles.demand.fleet_size` (Basic) holds a fixed
+  fleet: finished trips are replaced, refused or unroutable trips redrawn (`Demand::fleet_target`,
+  `top_up`). `max_total_vehicles` now counts vehicles placed (`Demand::refund`), so a cap of 2
+  no longer gives 0. Poisson only; refused with `scale` (the tiered engine draws its own trips).
+- **Dead ends.** The router takes a U-turn where it is a dead end's only way on (the OSM
+  importer builds it only where a car fits); the OD connected core counts it.
+- **Strategic lane choice** (`traffic.strategic_lane_choice`, default on): routes are planned
+  from every lane of the road (4 s per lane crossed); the driver changes lane before the
+  MUTCD no-change zone, and one who reaches the zone without a gap takes a route from its own
+  lane. On a two-lane grid a right-lane trip turning left had no route at all before this;
+  peak-density quick run places 345 vehicles against 242.
+- **Gridlock** (`traffic.gridlock_timeout_s`, default 300 s = SUMO's time-to-teleport): a
+  vehicle standing that long (kerb stops and scripted stops excused) is moved to the next lane
+  on its route with room, or removed; counted on `traffic.control` and as `traffic_*` metrics
+  (`traffic_teleports` has a health band).
+- **Signals** (`traffic.signals`): `control: actuated` runs NEMA-style basic actuation (min
+  green, passage-time gap-out, extension, max-out, rest in green) by moving the plan clock, so
+  drivers, pedestrians, lamps and SPaT agree; the SPaT states the window (minEnd = soonest
+  gap-out, maxEnd = latest extension, status trafficDependentOperation). `green_wave_speed_mps`
+  and `green_wave_heading_deg` set one-way progression offsets.
+- **Congestion rerouting** (`traffic.reroute_period_s`, default 0 = off as in SUMO): lane speeds
+  sampled each second, smoothed over 180 samples, priced into the router; each vehicle
+  re-plans once a period.
+- Also published: `traffic.right_turn_on_red`, `dynamic_rerouting`, `lane_changes`,
+  `keep_junctions_clear`. Absent `traffic` section = these defaults (content hash unchanged).
+- Verified: mobility lib tests (284), engine scenario/actuated tests, `tests/traffic_control.rs`,
+  trafficval `--quick --only saturation` (saturation headway 2.15 s; start-up lost time 3.15 s,
+  out of [1, 3] — the same value at 7bd8d95, it follows the Greenshields 1947 calibration) and
+  `--quick --only peak-density` (10 safety-class vehicle-steps at 7bd8d95, 11 now; all one
+  speed-jump of ~10.5 m/s² at t 88.4 s on lane 119, from the standing-leader advance cap).
+- Not done: permitted-left critical gap (5.99 s vs HCM 4.5 s: the opposing car's predicted
+  arrival is earlier than its actual one); pedestrian calls for actuated phases; actuated
+  coordination (offsets hold only under fixed-time); roundabout-specific yielding; the
+  agent's watch does not yet read the traffic metrics.
