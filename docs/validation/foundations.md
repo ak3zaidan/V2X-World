@@ -171,5 +171,5 @@ and public-key checks go to a fast accelerator. A unit that does both on one CPU
   This was not investigated.
 - **Three `scenario::publish` unit tests fail at the base commit.** They are
   `every_leaf_has_a_status` (`mobility.provider`), `every_number_publishes_a_unit`
-  (`actors.rsu_placement.count`) and `every_section_has_a_group` (`city`). They predate
-  this work and come from the merge of the other tracks.
+  (`actors.rsu_placement.count`) and `every_section_has_a_group` (`city`). They name fields this work does not touch and were not re-run on the bare base commit; they
+  most likely come from the merge of the other tracks.
