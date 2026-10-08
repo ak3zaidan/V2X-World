@@ -211,14 +211,30 @@ impl Model for NakagamiFading {
     }
 }
 
-impl<C: Ctx + ?Sized> Fading<C> for NakagamiFading {
-    fn sample_db(&mut self, ctx: &mut C, link: LinkKey, d_m: f64, t: SimTime) -> f64 {
+impl NakagamiFading {
+    /// The gain for one frame on one link, dB, drawn from that frame's own keyed stream
+    /// (`(RngDomain::Fading, EntityRef::LinkFrame { link, frame: t })`, single-use).
+    ///
+    /// What [`Fading::sample_db`] returns, through a shared borrow: the draw reads nothing
+    /// but the model's shape and its own stream, so a frame's receivers can be faded in
+    /// parallel and get the very numbers the sequential call would give them.
+    #[must_use]
+    pub fn sample_shared_db(
+        &self,
+        rng: &v2xw_core::rng::RngRegistry,
+        link: LinkKey,
+        d_m: f64,
+        t: SimTime,
+    ) -> f64 {
+        let mut stream = rng.checkout(RngDomain::Fading, EntityRef::LinkFrame { link, frame: t });
+        self.gain_db(&mut stream, d_m)
+    }
+
+    fn gain_db(&self, stream: &mut v2xw_core::rng::RngStream, d_m: f64) -> f64 {
         let m = self.m_at(d_m);
         // `nakagami` returns an amplitude; the power gain is its square, and the gain in
         // dB is 10·log10 of that, i.e. 20·log10 of the amplitude.
-        let amplitude = ctx
-            .rng(RngDomain::Fading, EntityRef::LinkFrame { link, frame: t })
-            .nakagami(m, self.omega);
+        let amplitude = stream.nakagami(m, self.omega);
         if amplitude <= 0.0 {
             // A zero amplitude is a total fade. Reporting −inf would poison every sum it
             // reaches; −200 dB is below any receiver's sensitivity by 100 dB and keeps
@@ -226,6 +242,15 @@ impl<C: Ctx + ?Sized> Fading<C> for NakagamiFading {
             return -200.0;
         }
         20.0 * math::log10(amplitude)
+    }
+}
+
+impl<C: Ctx + ?Sized> Fading<C> for NakagamiFading {
+    fn sample_db(&mut self, ctx: &mut C, link: LinkKey, d_m: f64, t: SimTime) -> f64 {
+        let mut stream = ctx.rng(RngDomain::Fading, EntityRef::LinkFrame { link, frame: t });
+        let gain = self.gain_db(&mut stream, d_m);
+        drop(stream);
+        gain
     }
 }
 

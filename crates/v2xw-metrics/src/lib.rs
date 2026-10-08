@@ -169,7 +169,7 @@ pub use gate::{CalibrationIssue, GateFailure, GateReport, IssueRegister, IssueSt
 pub use health::{Basis, Better, HealthBand, HealthLevel};
 pub use invariants::{InvariantOutcome, InvariantReport, InvariantViolation, check_all};
 pub use ledger::EventLedger;
-pub use provider::{Decoded, MetricProvider, ProviderSet};
+pub use provider::{Decoded, MetricProvider, Predecoded, ProviderSet};
 pub use quant::Quantum;
 pub use stats::{
     ConfidenceLevel, Distribution, DistributionSummary, Estimate, Interpolation, Percentile,
