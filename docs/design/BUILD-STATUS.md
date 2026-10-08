@@ -2630,3 +2630,52 @@ conflicts resolved by hand and the whole workspace compile-checked:
   timer, TR 36.881 access/handover figures, Shannon fit, background load, NR timings.
 - Not done: the RSU backhaul in the engine is still the `Backhaul` latency+rate struct;
   `WiredLink` exists for TCP but is not yet wired into `backhaul/*` ids. No Studio UI.
+
+## 2026-10-07 — traffic calibration and driver heterogeneity
+
+- **Human drivers** (`v2xw_mobility::drivers`; scenario `actors.vehicles.drivers`).
+  - `realism` presets: `calibrated` (the default, unchanged), `identical`,
+    `heterogeneous` and `human`.
+  - Overrides: `parameter_spread`, `reaction_time_s`, `perception_error`,
+    `truck_lane_restriction` and `motorcycle_filtering`. New pedestrian option:
+    `actors.vru.crossing_gap_margin_s`.
+  - Each field is bounded, has a KEY_STATUS row, a title and choice words. Realism and
+    reaction time are Basic fields, and there is a new "Drivers" quick setting.
+  - Per-driver T, a, b and s0 are mean-one lognormal factors with per-class cvs.
+  - Reaction time is a delayed car-following decision, with an alarm when braking past b.
+  - Perception errors are the HDM's Ornstein-Uhlenbeck errors (Treiber, Kesting & Helbing
+    2006).
+  - The truck restriction keeps trucks out of the leftmost lane of motorway and trunk
+    roads with 3 or more lanes (StVO §18(11)).
+  - All noise is keyed per driver and step, so runs stay deterministic. Defaults are off,
+    so calibrated runs are unchanged.
+- **Traffic-calibration study**: `cargo run -p v2xw-trafficval --bin traffic_calibration`
+  writes `docs/validation/traffic-calibration.md`. Full mode passes. It includes city and
+  corridor fundamental diagrams with Greenshields and triangular fits, each beside SUMO's
+  default Krauss driver. Results:
+  - Capacity sits on the IDM's equilibrium maximum flow: 1,899 veh/h for the city ring
+    (0.0 % below) and 1,737 for the corridor (0.3 % below).
+  - The human population keeps 98 % of capacity.
+  - Stop-and-go waves travel at -12 to -18 km/h. The triangular congested branch gives
+    -13.6 km/h.
+  - Human drivers jam at 5 of 11 densities where identical drivers do not.
+  - No collisions.
+  - The headway cv is 0.22 for human drivers against 0.006 for identical ones.
+  - Against the HCM's 2,400 pc/h/ln: Treiber 2000's drivers reach 0.72 of it and SUMO's
+    default reaches 1.17.
+- **Open findings fixed**:
+  - The IDM rest gap (1.927 m) and string stability at 6 densities already pass under
+    the corrected check. Both are re-run in the study.
+  - `model/sugiyama-ring` now passes (jam at -14.9 km/h) with the human population. Its
+    fault is the ideal driver.
+  - Fixed a bug where the jam speed was read from the least-squares intercept instead of
+    the slope.
+  - The jam speed is now measured from the outflow front.
+- **Not done**: NGSIM trajectory import, which would let the headway distribution be held
+  with a Kolmogorov-Smirnov test. Also not done: motorcycle filtering beyond the existing
+  SL2015 model, and a social-force recalibration.
+- **Not re-run**: `docs/validation/traffic.md`, which needs a full traffic_validation run.
+- **Build hazard**: `target/agents` shares v2xw-engine's build-script output
+  (`scenario_reflect.rs`) across worktrees. A stale reflection from another worktree made
+  the publish tests fail. Touch `src/scenario/schema.rs` inside the heavy lock before
+  testing.
