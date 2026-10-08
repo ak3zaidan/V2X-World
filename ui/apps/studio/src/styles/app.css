@@ -185,7 +185,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-
 }
 .icon-button:hover:not(:disabled) { color: var(--text); background: var(--bg-raised); border-color: var(--border); }
 .icon-button.on, .icon-button[aria-expanded="true"] { color: var(--text); background: var(--bg-raised); border-color: var(--border-strong); }
-.icon-button.labelled { padding: 0 10px 0 8px; }
+.icon-button.labelled { padding: 0 10px 0 8px; white-space: nowrap; flex: none; }
 .badge-dot {
   position: absolute;
   top: 4px;

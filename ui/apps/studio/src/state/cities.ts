@@ -58,6 +58,17 @@ export function cityLabel(c: CityEntry): string {
   return c.region === "europe" ? c.name : `${c.name}, ${c.state}`;
 }
 
+/**
+ * The header's one-line name: the district a name gives in brackets, else the city, with the state
+ * code — "New York (Midtown Manhattan)" → "Midtown Manhattan, NY", "Portland" → "Portland, OR".
+ * The same rule as the agent's chips (`catalog::city_short_name`).
+ */
+export function cityShortLabel(c: CityEntry): string {
+  const inner = /\(([^)]+)\)\s*$/.exec(c.name);
+  const name = inner ? inner[1]! : c.name;
+  return c.region === "europe" || !c.state ? name : `${name}, ${c.state}`;
+}
+
 /** Cities whose name, id, state or state code contains `query` (case-insensitive), in order. */
 export function filterCities(cities: readonly CityEntry[], query: string): CityEntry[] {
   const q = query.trim().toLowerCase();

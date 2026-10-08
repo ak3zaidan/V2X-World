@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  alertLine,
   cellText,
+  chipLine,
   clock,
+  isAlert,
   foldEvents,
   keyToPointer,
   mergeObservations,
@@ -127,5 +130,47 @@ describe("the always-on watcher's feed", () => {
     expect(clock(65.9)).toBe("1:05");
     expect(clock(0)).toBe("0:00");
     expect(clock(Number.NaN)).toBe("0:00");
+  });
+});
+
+describe("the minimal panel's chips and alerts", () => {
+  const obs = (kind: Observation["kind"], severity: Observation["severity"], text: string): Observation => ({
+    seq: 1,
+    run_id: "r",
+    generation: 1,
+    t_s: 12,
+    severity,
+    kind,
+    text,
+    evidence: [],
+  });
+  it("folds a setup into one chip line", () => {
+    const v = foldEvents([
+      {
+        kind: "staged",
+        setup: 1,
+        base: "current",
+        chips: [
+          { key: "city", label: "City", value: "Portland, OR" },
+          { key: "radio.rat", label: "Radio technology", value: "DSRC" },
+        ],
+      },
+      { kind: "done" },
+    ]);
+    expect(v.staged).toHaveLength(1);
+    expect(chipLine(v.staged[0]!.chips)).toBe("City → Portland, OR · Radio technology → DSRC");
+  });
+  it("shows problems and events as alerts, not the watching or cleared lines", () => {
+    expect(isAlert(obs("started", "info", "Watching this run."))).toBe(false);
+    expect(isAlert(obs("cleared", "notice", "Cleared."))).toBe(false);
+    expect(isAlert(obs("finding", "warning", "Congestion is building."))).toBe(true);
+    expect(isAlert(obs("trend", "notice", "Attacks detected."))).toBe(true);
+    expect(isAlert(obs("finished", "info", "The run ended."))).toBe(true);
+    expect(isAlert(obs("finding", "notice", "A small thing."))).toBe(false);
+  });
+  it("keeps an alert to its first sentence, numbers intact", () => {
+    expect(alertLine("Delivery is dropping: 0.82 of messages were received (3GPP TR 37.885). More words.")).toBe(
+      "Delivery is dropping: 0.82 of messages were received (3GPP TR 37.885).",
+    );
   });
 });
