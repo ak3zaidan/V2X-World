@@ -147,6 +147,10 @@ pub struct TrafficCheck {
 
 const STOP_MPS: f64 = 0.1;
 
+/// How far before the junction a stop line stands, metres: the mobility engine's
+/// `STOP_LINE_OFFSET_M`.
+const STOP_LINE_M: f64 = 2.0;
+
 fn ped_class(idx: u8) -> bool {
     VehicleClass::ALL.get(idx as usize) == Some(&VehicleClass::Pedestrian)
 }
@@ -222,6 +226,8 @@ struct Signals {
     lamp: BTreeMap<u32, u8>,
     /// Current matched phase per plan (`None` unknown or ambiguous).
     phase: Vec<Option<usize>>,
+    /// Per plan, each movement's state from each lamp change on: `(t, states)`.
+    hist: Vec<Vec<(f64, Vec<Option<SignalState>>)>>,
     cycle: Vec<f64>,
 }
 
@@ -249,13 +255,14 @@ impl Signals {
             movement,
             lamp: BTreeMap::new(),
             phase: vec![None; world.signals.len()],
+            hist: vec![Vec::new(); world.signals.len()],
             cycle: world.signals.iter().map(|p| p.cycle_s).collect(),
         }
     }
 
     /// Re-matches the phases of the plans whose lamps changed; returns the plans that
     /// match no phase.
-    fn update(&mut self, changed: &BTreeSet<usize>) -> Vec<usize> {
+    fn update(&mut self, world: &World, changed: &BTreeSet<usize>, t: f64) -> Vec<usize> {
         let mut bad = Vec::new();
         for &p in changed {
             let wires = &self.plan_groups[p];
@@ -274,8 +281,22 @@ impl Signals {
             // Several phases can show the same lamps (an all-red after each green); the
             // movement states of all of them are then asked for in `state`.
             self.phase[p] = if more.is_some() { first.map(|f| f + 1_000_000) } else { first };
+            let states = world.signals[p]
+                .controlled
+                .iter()
+                .map(|l| self.state(world, *l))
+                .collect();
+            self.hist[p].push((t, states));
         }
         bad
+    }
+
+    /// The state of movement `via` at an earlier `t` (at or after the first lamp read).
+    fn state_at(&self, via: LaneId, t: f64) -> Option<SignalState> {
+        let (p, i) = *self.movement.get(&via)?;
+        let h = &self.hist[p];
+        let k = h.partition_point(|(at, _)| *at <= t);
+        h.get(k.checked_sub(1)?).and_then(|(_, v)| v[i])
     }
 
     /// The state of movement `via` now: `None` when the lamps do not tell.
@@ -467,8 +488,6 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
     let mut err: Option<CliError> = None;
     // The lamps of the previous frame: a vehicle that crossed its stop line during a step
     // decided on the lamp at the step's start.
-    let mut last_sig: (BTreeMap<u32, u8>, Vec<Option<usize>>) =
-        (BTreeMap::new(), vec![None; world.signals.len()]);
 
     let mut frame_cb = |f: v2xw_record::reader::RecordedFrame| -> v2xw_record::Result<()> {
         let mut changed_plans: BTreeSet<usize> = BTreeSet::new();
@@ -500,7 +519,7 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
             // A keyframe repeating the step a delta already gave.
             return Ok(());
         }
-        for p in sig.update(&changed_plans) {
+        for p in sig.update(world, &changed_plans, t) {
             let key = (p as u32, "lamp_phase_unknown", 0);
             if flagged.insert(key) {
                 rows.add("lamp_phase_unknown", || format!("plan {p} at t {t:.1} s: lamps {:?}", sig.plan_groups[p].iter().map(|w| sig.lamp.get(w)).collect::<Vec<_>>()));
@@ -696,7 +715,11 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
             if a.lane != p.lane && a.lane != U32_NONE && (a.lane as usize) < lanes.len() {
                 let l = LaneId::new(a.lane);
                 if world.roads.lane(l).kind == LaneKind::Internal {
-                    let was = sig.state_in(world, l, &last_sig.0, &last_sig.1);
+                    // The lamp the driver saw where the law reads it: as the front crossed
+                    // the stop line, `STOP_LINE_M` before the junction (the recorded lane is
+                    // the front bumper's), at the speed it had, and a step before that.
+                    let crossed = t - dt - STOP_LINE_M / p.speed.max(0.3);
+                    let was = sig.state_at(l, crossed);
                     if let Some(state) = sig.state(world, l) {
                         if state == SignalState::Red
                             && was == Some(SignalState::Red)
@@ -812,9 +835,6 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                 prev_jerk_a.remove(id);
             }
         }
-        if !changed_plans.is_empty() || steps == 1 {
-            last_sig = (sig.lamp.clone(), sig.phase.clone());
-        }
         if let Some(a) = opts.trace.and_then(|who| now.get(&who)) {
             let (s, lat, len) = if a.lane != U32_NONE && (a.lane as usize) < lanes.len() {
                 geo.project(world, LaneId::new(a.lane), a.x, a.y)
@@ -824,7 +844,25 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
             let states: Vec<String> = if a.lane != U32_NONE && (a.lane as usize) < lanes.len() {
                 vias[a.lane as usize]
                     .iter()
-                    .map(|m| format!("{}:{:?}", m.index(), sig.state(world, *m)))
+                    .map(|m| {
+                        // What stands on the movement's exit: (count, rearmost s, its speed).
+                        let exit = world
+                            .roads
+                            .connections()
+                            .iter()
+                            .find(|c| c.via == Some(*m))
+                            .map(|c| c.to_lane);
+                        let on_exit = exit.and_then(|e| by_lane.get(&e.index())).map(|v| {
+                            (v.len(), v.first().map(|f| (f.0, now[&f.2].speed)))
+                        });
+                        let inside = by_lane.get(&m.index()).map_or(0, Vec::len);
+                        format!(
+                            "{}:{:?} in {inside} exit {:?} {on_exit:?}",
+                            m.index(),
+                            sig.state(world, *m),
+                            exit.map(|e| e.index())
+                        )
+                    })
                     .collect()
             } else {
                 Vec::new()
