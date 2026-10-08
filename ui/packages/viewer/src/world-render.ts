@@ -885,11 +885,39 @@ export class WorldRenderer {
     // A junction's disc and crossings at the junction's own height: a bridge's junction is above
     // grade and a tunnel's below it. At `bbox.minZM` every disc lay under its junction.
     const junctionZ = new Map<number, number>();
+    // How far each junction's own connectors reach from its centre: their end points are where
+    // the approaches' stop lines are, so a disc of that radius fills the box and goes no further.
+    // The disc used to be sized by the connector *count* alone (2.2 + 1.1 m a connector, up to
+    // 30 m), and on Portland's multi-connector junctions it spread a 20-30 m grey disc over the
+    // corners, the sidewalks and half the block: the plan view read as blobs on a wire grid.
+    const reach = new Map<number, number>();
+    {
+      const centre = new Map<number, { x: number; y: number }>();
+      for (let i = 0; i < world.junctions.count; i++) {
+        const j = world.junctions.at(i);
+        centre.set(j.junctionId, { x: j.xM, y: j.yM });
+      }
+      for (let i = 0; i < lanes.count; i++) {
+        const jid = lanes.junctionId[i];
+        if (jid === 0xffffffff || lanes.laneType[i] !== LANE_JUNCTION_INTERNAL) continue;
+        const c = centre.get(jid);
+        const n = lanes.pointCount[i];
+        if (!c || n < 1) continue;
+        const a = lanes.pointOff[i];
+        const e = a + n - 1;
+        const d = Math.max(Math.hypot(pts.x[a] - c.x, pts.y[a] - c.y), Math.hypot(pts.x[e] - c.x, pts.y[e] - c.y));
+        if (d > (reach.get(jid) ?? 0)) reach.set(jid, d);
+      }
+    }
     for (let i = 0; i < world.junctions.count; i++) {
       const j = world.junctions.at(i);
       const jz = Number.isFinite(j.zM) ? j.zM : grade;
       junctionZ.set(j.junctionId, jz);
-      const r = Math.max(4, Math.min(30, 2.2 + j.laneCount * 1.1));
+      const byCount = Math.max(4, Math.min(30, 2.2 + j.laneCount * 1.1));
+      const reached = reach.get(j.junctionId);
+      // A world that ties its connectors to junctions but none to this one: a node no vehicle
+      // turns through (a path crossing, a dead end), which needs a patch, not a plaza.
+      const r = reached !== undefined ? Math.max(3, Math.min(byCount, reached)) : reach.size > 0 ? 4 : byCount;
       const [cr, cg, cb] = colorTriple(th.junction);
       addDisc(surfaceAt(tileIndex(j.xM, j.yM), RANK_JUNCTION), j.xM, j.yM, jz + Z_JUNCTION, r, 16, cr, cg, cb);
     }
