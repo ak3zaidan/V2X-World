@@ -651,10 +651,17 @@ mod tests {
         m.refund();
         let more = {
             let mut ctx = MobilityCtx::new(2 * v2xw_core::time::NS_PER_S, &w, &rng);
-            m.spawns_in(&mut ctx, v2xw_core::time::NS_PER_S, 5 * v2xw_core::time::NS_PER_S)
+            m.spawns_in(
+                &mut ctx,
+                v2xw_core::time::NS_PER_S,
+                5 * v2xw_core::time::NS_PER_S,
+            )
         };
         assert_eq!(more.len(), 1, "the refunded slot was not drawn again");
-        assert_eq!(more[0].seq, 2, "a redrawn trip takes the next sequence number");
+        assert_eq!(
+            more[0].seq, 2,
+            "a redrawn trip takes the next sequence number"
+        );
     }
 
     #[test]

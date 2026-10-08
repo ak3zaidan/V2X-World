@@ -2501,13 +2501,17 @@ pub fn build_metrics(
     }
     // Signing overhead (`v2xw_metrics::signing`): opt-in, with `metrics: [all, signing]`
     // or a `sig_*` name, so a bare `all` keeps the digests it had before the group existed.
-    let signing_named = scenario.metrics.iter().any(|m| {
-        m == v2xw_metrics::signing::GROUP || m.starts_with("sig_")
-    });
+    let signing_named = scenario
+        .metrics
+        .iter()
+        .any(|m| m == v2xw_metrics::signing::GROUP || m.starts_with("sig_"));
     if signing_named {
         set.register(
             registry,
-            Box::new(v2xw_metrics::signing::SigningProvider::new(0, signing_facts(scenario))),
+            Box::new(v2xw_metrics::signing::SigningProvider::new(
+                0,
+                signing_facts(scenario),
+            )),
         )?;
     }
     // Traffic control (`v2xw_metrics::traffic`): with a `traffic` section, or when the
@@ -2585,14 +2589,16 @@ pub fn signing_facts(scenario: &Scenario) -> v2xw_metrics::signing::SchemeFacts 
     facts.sig_octets = u64::from(scheme.sig_octets());
     if let Some(profile) = v2xw_node::profiles::get(&scenario.nodes.default_obu) {
         let engine = |op: &str| {
-            profile.op_cost(op).map_or("unknown".to_string(), |(_, on)| {
-                match on {
-                    v2xw_node::profile::RunsOn::Hsm => "hsm",
-                    v2xw_node::profile::RunsOn::Accelerator => "accelerator",
-                    v2xw_node::profile::RunsOn::Cpu => "cpu",
-                }
-                .to_string()
-            })
+            profile
+                .op_cost(op)
+                .map_or("unknown".to_string(), |(_, on)| {
+                    match on {
+                        v2xw_node::profile::RunsOn::Hsm => "hsm",
+                        v2xw_node::profile::RunsOn::Accelerator => "accelerator",
+                        v2xw_node::profile::RunsOn::Cpu => "cpu",
+                    }
+                    .to_string()
+                })
         };
         facts.sign_engine = engine(scheme.sign_op());
         facts.verify_engine = engine(scheme.verify_op());

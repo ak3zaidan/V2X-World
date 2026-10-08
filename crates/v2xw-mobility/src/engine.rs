@@ -1771,7 +1771,9 @@ impl NativeMobility {
                 continue;
             };
             let free = l.speed_limit_mps.max(CONGESTION_FLOOR_MPS);
-            let seen = sums.get(&lane).map_or(free, |(sum, n)| (sum / f64::from(*n)).min(free));
+            let seen = sums
+                .get(&lane)
+                .map_or(free, |(sum, n)| (sum / f64::from(*n)).min(free));
             let old = self.lane_speed.get(&lane).copied().unwrap_or(free);
             let new = old + alpha * (seen - old);
             // An empty lane back within 1 % of its free speed is forgotten; an occupied one
@@ -1812,7 +1814,9 @@ impl NativeMobility {
                 continue;
             };
             let in_zone = left < self.params.no_change_zone_m;
-            let stuck = a.stuck_since.is_some_and(|since| t1.saturating_sub(since) >= limit);
+            let stuck = a
+                .stuck_since
+                .is_some_and(|since| t1.saturating_sub(since) >= limit);
             if !(in_zone || stuck) {
                 continue;
             }
@@ -4292,8 +4296,7 @@ impl Mobility for NativeMobility {
                     let have = (self.actors.len() + queue.len()) as u64;
                     let short = target.saturating_sub(have);
                     for _ in 0..short.min(64) {
-                        if let Some(trip) = self.demand.as_mut().and_then(|d| d.top_up(ctx, t0))
-                        {
+                        if let Some(trip) = self.demand.as_mut().and_then(|d| d.top_up(ctx, t0)) {
                             queue.push((trip, t0, None));
                         }
                     }
@@ -6848,7 +6851,10 @@ mod tests {
             "the fleet of 2 was on the road {full} of {} s: {on_road:?}",
             on_road.len() - 2
         );
-        assert!(done > 0, "no trip finished in five minutes, so none was replaced");
+        assert!(
+            done > 0,
+            "no trip finished in five minutes, so none was replaced"
+        );
     }
 
     /// A driving lane long enough to hold several vehicles, and somewhere routable to go.
@@ -7511,17 +7517,35 @@ mod tests {
                 ..EngineParams::default()
             };
             let mut engine = engine_on(&world, params, &rng);
-            let route: Vec<LaneId> = cycle.iter().cycle().take(cycle.len() * 4).copied().collect();
+            let route: Vec<LaneId> = cycle
+                .iter()
+                .cycle()
+                .take(cycle.len() * 4)
+                .copied()
+                .collect();
             let driver = IdmPreset::Kesting2010.profile(VehicleClass::Passenger);
             let leader = engine
-                .spawn_with_route(&world, 0, VehicleClass::Passenger, driver, route.clone(), 40.0)
+                .spawn_with_route(
+                    &world,
+                    0,
+                    VehicleClass::Passenger,
+                    driver,
+                    route.clone(),
+                    40.0,
+                )
                 .expect("leader");
             let follower = engine
                 .spawn_with_route(&world, 0, VehicleClass::Passenger, driver, route, 10.0)
                 .expect("follower");
             {
                 let mut ctx = MobilityCtx::new(0, &world, &rng);
-                engine.command(&mut ctx, MobilityCommand::Stop { actor: leader, until: None });
+                engine.command(
+                    &mut ctx,
+                    MobilityCommand::Stop {
+                        actor: leader,
+                        until: None,
+                    },
+                );
             }
             let mut t = 0u64;
             for _ in 0..600 {
@@ -7536,10 +7560,17 @@ mod tests {
                     .find(|(a, _, _, _)| *a == id)
                     .map(|(_, l, s, _)| (*l, *s))
             };
-            (engine.gridlock_counters(), lane_of(leader), lane_of(follower))
+            (
+                engine.gridlock_counters(),
+                lane_of(leader),
+                lane_of(follower),
+            )
         };
         let (on, leader, follower) = run(20.0);
-        assert!(on.teleported >= 1, "the stuck follower was not moved on: {on:?}");
+        assert!(
+            on.teleported >= 1,
+            "the stuck follower was not moved on: {on:?}"
+        );
         assert_eq!(on.removed, 0, "{on:?}");
         assert_ne!(
             leader.map(|(l, _)| l),
@@ -7547,7 +7578,11 @@ mod tests {
             "the follower is still behind the held leader"
         );
         let (off, _, _) = run(0.0);
-        assert_eq!(off, GridlockCounters::default(), "the timeout off still acted");
+        assert_eq!(
+            off,
+            GridlockCounters::default(),
+            "the timeout off still acted"
+        );
     }
 
     #[test]
@@ -7583,7 +7618,8 @@ mod tests {
                 .any(|c| c.direction == TurnDirection::Left);
             (!own_turns_left).then_some((l.id, left_of, turn.to_lane))
         });
-        let (origin, left_lane, exit) = pick.expect("a right lane whose left turn is from the lane beside");
+        let (origin, left_lane, exit) =
+            pick.expect("a right lane whose left turn is from the lane beside");
         let run = |strategic: bool| {
             let rng = RngRegistry::new(3);
             let params = EngineParams {
@@ -7613,7 +7649,10 @@ mod tests {
                 if engine.actors.get(&id).is_some_and(|a| a.lane == left_lane) {
                     on_left = true;
                 }
-                if u.despawned.iter().any(|(a, c)| *a == id && *c == DespawnCause::TripComplete) {
+                if u.despawned
+                    .iter()
+                    .any(|(a, c)| *a == id && *c == DespawnCause::TripComplete)
+                {
                     done_at = Some(t);
                 }
                 t += params.step.as_nanos();
@@ -7623,7 +7662,10 @@ mod tests {
         let (plain_m, _, _) = run(false);
         let (strategic_m, on_left, done) = run(true);
         assert!(on_left, "the driver never moved into the left-turn lane");
-        assert!(done.is_some(), "the strategic trip did not finish in two minutes");
+        assert!(
+            done.is_some(),
+            "the strategic trip did not finish in two minutes"
+        );
         assert!(
             strategic_m + 50.0 < plain_m,
             "the strategic route ({strategic_m:.0} m) is not shorter than going round ({plain_m:.0} m)"
@@ -7653,7 +7695,13 @@ mod tests {
             let id = engine.insert_trip(&world, &trip, 0).expect("placed");
             {
                 let mut ctx = MobilityCtx::new(0, &world, &rng);
-                engine.command(&mut ctx, MobilityCommand::Stop { actor: id, until: None });
+                engine.command(
+                    &mut ctx,
+                    MobilityCommand::Stop {
+                        actor: id,
+                        until: None,
+                    },
+                );
             }
             let mut t = 0u64;
             for _ in 0..1200 {
@@ -7667,9 +7715,15 @@ mod tests {
             (free, priced)
         };
         let (free, on) = run(60.0);
-        assert!(on > 1.8 * free, "a lane with a car standing on it for 2 min costs {on:.1} s against {free:.1} s free");
+        assert!(
+            on > 1.8 * free,
+            "a lane with a car standing on it for 2 min costs {on:.1} s against {free:.1} s free"
+        );
         let (_, off) = run(0.0);
-        assert!((off - free).abs() < 1e-9, "with rerouting off the lane costs {off} s, not its free {free} s");
+        assert!(
+            (off - free).abs() < 1e-9,
+            "with rerouting off the lane costs {off} s, not its free {free} s"
+        );
     }
 
     #[test]

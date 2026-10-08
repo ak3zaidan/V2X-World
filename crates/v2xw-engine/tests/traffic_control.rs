@@ -44,7 +44,9 @@ fn scenario(control: SignalControlKind) -> Scenario {
 #[test]
 fn actuated_signals_act_and_say_so_and_fixed_time_ones_do_not() {
     let actuated = records(scenario(SignalControlKind::Actuated), "traffic.control");
-    let last = actuated.last().expect("an actuated run logs its controllers");
+    let last = actuated
+        .last()
+        .expect("an actuated run logs its controllers");
     let acted = last["gap_outs"].as_u64().unwrap_or(0) + last["max_outs"].as_u64().unwrap_or(0);
     assert!(
         acted > 0 || last["extended_s"].as_f64().unwrap_or(0.0) > 0.0,

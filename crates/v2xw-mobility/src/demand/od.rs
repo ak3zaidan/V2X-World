@@ -383,11 +383,7 @@ fn largest_car_component(world: &World) -> BTreeSet<LaneId> {
         // reachable.
         let uturn_refused = c.direction == v2xw_world::model::TurnDirection::UTurn
             && through.get(c.from_lane.as_usize()).copied().unwrap_or(true);
-        if !c.permitted
-            || uturn_refused
-            || !car(c.from_lane)
-            || !car(c.to_lane)
-        {
+        if !c.permitted || uturn_refused || !car(c.from_lane) || !car(c.to_lane) {
             continue;
         }
         if c.via.is_some_and(|v| !world.lane(v).admits(ClassMask::CAR)) {

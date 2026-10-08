@@ -148,7 +148,13 @@ impl ActuatedControllers {
                 .controlled
                 .iter()
                 .zip(&crossing)
-                .map(|(l, c)| if *c { None } else { approach_of.get(l).copied() })
+                .map(|(l, c)| {
+                    if *c {
+                        None
+                    } else {
+                        approach_of.get(l).copied()
+                    }
+                })
                 .collect();
             plans.insert(
                 i,
@@ -185,8 +191,7 @@ impl ActuatedControllers {
         let duration = plan.phases[i].duration_s;
         let left = (duration - into).max(0.0);
         let walks = (0..plan.controlled.len()).any(|m| {
-            st.crossing[m]
-                && matches!(plan.phases[i].states.get(m), Some(SignalState::Green))
+            st.crossing[m] && matches!(plan.phases[i].states.get(m), Some(SignalState::Green))
         });
         let min = if walks {
             p.min_green_s.max(duration)
@@ -445,8 +450,14 @@ mod tests {
         let at = plan.offset_s + 1.0;
         let o = ctl.outlook(&world, 0, at).expect("actuated");
         let left = stated - 1.0;
-        assert!((o.cut_s - (left - (control.min_green_s - 1.0))).abs() < 1e-9, "{o:?}");
-        assert!((o.extend_s - (control.max_green_s - stated)).abs() < 1e-9, "{o:?}");
+        assert!(
+            (o.cut_s - (left - (control.min_green_s - 1.0))).abs() < 1e-9,
+            "{o:?}"
+        );
+        assert!(
+            (o.extend_s - (control.max_green_s - stated)).abs() < 1e-9,
+            "{o:?}"
+        );
         let fixed = ActuatedControllers::new(&SignalControl::default(), &world);
         assert!(fixed.outlook(&world, 0, at).is_none());
     }

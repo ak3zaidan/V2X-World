@@ -2939,7 +2939,10 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ("traffic.signals.max_green_s", g.max_green_s),
             ("traffic.signals.passage_s", g.passage_s),
             ("traffic.signals.detector_m", g.detector_m),
-            ("traffic.signals.green_wave_heading_deg", g.green_wave_heading_deg),
+            (
+                "traffic.signals.green_wave_heading_deg",
+                g.green_wave_heading_deg,
+            ),
         ] {
             bounded_at(path, path, v, e);
         }

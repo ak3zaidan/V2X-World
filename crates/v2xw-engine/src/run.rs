@@ -7697,8 +7697,19 @@ impl Engine {
             removed: g.removed,
         };
         let changed = self.traffic_log.as_ref().is_none_or(|last| {
-            (last.gap_outs, last.max_outs, last.jammed, last.teleported, last.removed)
-                != (rec.gap_outs, rec.max_outs, rec.jammed, rec.teleported, rec.removed)
+            (
+                last.gap_outs,
+                last.max_outs,
+                last.jammed,
+                last.teleported,
+                last.removed,
+            ) != (
+                rec.gap_outs,
+                rec.max_outs,
+                rec.jammed,
+                rec.teleported,
+                rec.removed,
+            )
         });
         if changed {
             self.emit(recorder, &rec);
