@@ -983,6 +983,29 @@ impl core::fmt::Debug for Engine {
 }
 
 impl Engine {
+    /// The measured link of `cellular/uu/packet-pf` for a vehicle's backend flow, or
+    /// `None` for the other Uu models (see `BackendAccess::packet_link`).
+    fn packet_link(&mut self, node: NodeId, pos: Vec3) -> Option<v2xw_proto::net::Link> {
+        let Engine {
+            scheduler,
+            rng,
+            world,
+            snapshot,
+            provenance,
+            params,
+            phase2,
+            ..
+        } = self;
+        let p = phase2.as_mut()?;
+        if p.access_mut().uu_id() != Some(v2xw_radio::cellular_packet::PacketUu::ID) {
+            return None;
+        }
+        let mut null = crate::ctx::NullRecorder::new();
+        let mut ctx = EngineCtx::new(scheduler, rng, world, snapshot, provenance, params, &mut null);
+        p.access_mut().packet_link(&mut ctx, node, pos)
+    }
+
+
     /// Builds a run from a validated scenario.
     ///
     /// `build_utc` is the caller's timestamp for the manifest; the engine may not read a
@@ -6620,11 +6643,16 @@ impl Engine {
             .unwrap_or_default();
         for (node, kind, i) in due {
             let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+            let packet = if kind == crate::backend::AccessKind::Cellular {
+                self.packet_link(node, pos)
+            } else {
+                None
+            };
             let Some(p) = self.phase2.as_mut() else { break };
             let link = match kind {
                 crate::backend::AccessKind::Cellular => {
                     if p.access_mut().uu_coverage(pos, now) {
-                        p.access_mut().nominal_link(kind, None)
+                        packet.or_else(|| p.access_mut().nominal_link(kind, None))
                     } else {
                         None
                     }
@@ -6649,11 +6677,16 @@ impl Engine {
             .unwrap_or_default();
         for (node, kind) in due {
             let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+            let packet = if kind == crate::backend::AccessKind::Cellular {
+                self.packet_link(node, pos)
+            } else {
+                None
+            };
             let Some(p) = self.phase2.as_mut() else { break };
             let link = match kind {
                 crate::backend::AccessKind::Cellular => {
                     if p.access_mut().uu_coverage(pos, now) {
-                        p.access_mut().nominal_link(kind, None)
+                        packet.or_else(|| p.access_mut().nominal_link(kind, None))
                     } else {
                         None
                     }
@@ -6679,11 +6712,16 @@ impl Engine {
             .unwrap_or_default();
         for (node, kind) in due {
             let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+            let packet = if kind == crate::backend::AccessKind::Cellular {
+                self.packet_link(node, pos)
+            } else {
+                None
+            };
             let Some(p) = self.phase2.as_mut() else { break };
             let link = match kind {
                 crate::backend::AccessKind::Cellular => {
                     if p.access_mut().uu_coverage(pos, now) {
-                        p.access_mut().nominal_link(kind, None)
+                        packet.or_else(|| p.access_mut().nominal_link(kind, None))
                     } else {
                         None
                     }

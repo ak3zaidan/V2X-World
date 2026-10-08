@@ -31,13 +31,22 @@ use v2xw_radio::cellular::{
     CellCapacityUu, CellPlan, CellularUu, Direction, FixedLatencyUu, HandoverOutageUu,
     MecPlacement, Qos, RadioLatencyClass, SendOutcome, UuLatencyPreset,
 };
+use v2xw_radio::cellular_packet::{BaseStationLayout, PacketUu, Rat};
+use v2xw_radio::ip_transport::{
+    TcpConfig, TcpConn, TransferReport, handshake as tcp_handshake, stream as tcp_stream,
+};
 
 use crate::ctx::EngineCtx;
 use crate::error::{EngineError, Result};
 use crate::scenario::Scenario;
 
 /// `net.uu` model ids this build accepts.
-pub const UU_MODELS: [&str; 3] = [FixedLatencyUu::ID, CellCapacityUu::ID, HandoverOutageUu::ID];
+pub const UU_MODELS: [&str; 4] = [
+    FixedLatencyUu::ID,
+    CellCapacityUu::ID,
+    HandoverOutageUu::ID,
+    PacketUu::ID,
+];
 
 /// `actors.rsus[].backhaul` and `net.backhaul` ids this build accepts.
 pub const BACKHAUL_MODELS: [&str; 3] = ["backhaul/fixed", "backhaul/cellular", "backhaul/none"];
@@ -53,6 +62,13 @@ pub const BACKEND_NET_MODELS: [&str; 1] = ["backend-net/fixed"];
 /// numbers. A deployment's measured RSU backhaul latency replaces it through
 /// `net.backhaul.params.latency_ms`.
 pub const BACKHAUL_LATENCY_MS: f64 = 10.0;
+
+/// The request a packet-level flow's first exchange carries, bytes: a signed and
+/// encrypted SCMS request is of this order (`todo-calibrate` against the protocol crate's
+/// encoded request sizes).
+pub const PROBE_REQUEST_BYTES: u32 = 512;
+/// The response of the same exchange, bytes (`todo-calibrate`, as above).
+pub const PROBE_RESPONSE_BYTES: u32 = 4096;
 
 /// The default wired backhaul capacity, Mbit/s. Uncited, as above.
 pub const BACKHAUL_CAPACITY_MBPS: f64 = 1000.0;
@@ -105,6 +121,8 @@ enum Uu {
     Fixed(FixedLatencyUu),
     Capacity(CellCapacityUu),
     Handover(HandoverOutageUu),
+    /// The packet-level model; every message rides a TCP/TLS connection per vehicle.
+    Packet(Box<PacketUu>),
 }
 
 /// One roadside unit's backhaul.
@@ -163,6 +181,24 @@ pub struct AccessReport {
     pub uu_lost: u64,
     /// Sends that found no coverage and were held.
     pub uu_no_coverage: u64,
+    /// `cellular/uu/packet-pf` only: HARQ retransmissions.
+    pub uu_harq_retx: u64,
+    /// `cellular/uu/packet-pf` only: RLC AM retransmissions.
+    pub uu_rlc_retx: u64,
+    /// `cellular/uu/packet-pf` only: handovers and the measured mean gap, µs.
+    pub uu_handovers: u64,
+    /// The measured mean handover gap, µs.
+    pub uu_ho_gap_mean_us: u64,
+    /// `cellular/uu/packet-pf` only: TCP connections opened, segments retransmitted, RTOs.
+    pub tcp_connections: u64,
+    /// TCP retransmissions.
+    pub tcp_retransmissions: u64,
+    /// TCP retransmission timeouts.
+    pub tcp_rtos: u64,
+    /// True when the packet-level results differ from the simple model's.
+    pub uu_differs_from_simple: bool,
+    /// What the comparison found, in a sentence (empty for the other Uu models).
+    pub uu_vs_simple: String,
 }
 
 /// The access legs of a run.
@@ -178,6 +214,8 @@ pub struct BackendAccess {
     relay_range_m: f64,
     default_backhaul: Backhaul,
     kinds: BTreeMap<NodeId, AccessKind>,
+    tcp: TcpConfig,
+    conns: BTreeMap<NodeId, TcpConn>,
     /// The counters.
     pub report: AccessReport,
 }
@@ -278,6 +316,36 @@ impl BackendAccess {
                     }
                     Uu::Handover(m)
                 }
+                PacketUu::ID => {
+                    let rat_label = p.get("rat").and_then(serde_json::Value::as_str).unwrap_or("lte");
+                    let rat = Rat::named(rat_label).ok_or_else(|| {
+                        conflict("net.uu.params.rat", format!("'{rat_label}' is not a RAT; allowed: lte, nr"))
+                    })?;
+                    let layout = match (p.get("sites").and_then(serde_json::Value::as_array), p.get("city_bbox").and_then(serde_json::Value::as_array)) {
+                        (Some(sites), _) => BaseStationLayout::from_sites(
+                            plan.clone(),
+                            sites
+                                .iter()
+                                .filter_map(|v| Some((v.get(0)?.as_f64()?, v.get(1)?.as_f64()?)))
+                                .collect(),
+                        ),
+                        (None, Some(b)) if b.len() == 4 => {
+                            let f = |i: usize| b[i].as_f64().unwrap_or(0.0);
+                            BaseStationLayout::for_city(plan.clone(), (f(0), f(1)), (f(2), f(3)))
+                        }
+                        _ => BaseStationLayout::lattice(plan.clone()),
+                    };
+                    let bg = num(p, "background_load").unwrap_or(v2xw_radio::cellular_packet::DEFAULT_BACKGROUND_LOAD);
+                    let mut m = PacketUu::new(rat, layout)
+                        .with_background_load(bg, num(p, "neighbour_load").unwrap_or(bg))
+                        .with_core(MecPlacement::AtCoreNetwork);
+                    if let (Some(ul), Some(dl)) = (num(p, "uplink_mbps"), num(p, "downlink_mbps")) {
+                        m = m.with_simple_capacity_bps(ul * 1e6, dl * 1e6);
+                    }
+                    nominal_uu = ms(capacity(plan).fixed_latency_ms()) + internet;
+                    nominal_uu_bps = (CellCapacityUu::MOSAIC_UPLINK_BPS) as u64;
+                    Uu::Packet(Box::new(m))
+                }
                 other => {
                     return Err(conflict(
                         "net.uu",
@@ -309,6 +377,8 @@ impl BackendAccess {
             relay_range_m: RELAY_RANGE_M,
             default_backhaul,
             kinds: BTreeMap::new(),
+            tcp: TcpConfig::default(),
+            conns: BTreeMap::new(),
             report: AccessReport::default(),
         })
     }
@@ -396,6 +466,7 @@ impl BackendAccess {
             Some(Uu::Fixed(m)) => CellularUu::<EngineCtx<'_>>::coverage(m, pos, t).is_some(),
             Some(Uu::Capacity(m)) => CellularUu::<EngineCtx<'_>>::coverage(m, pos, t).is_some(),
             Some(Uu::Handover(m)) => CellularUu::<EngineCtx<'_>>::coverage(m, pos, t).is_some(),
+            Some(Uu::Packet(m)) => CellularUu::<EngineCtx<'_>>::coverage(&**m, pos, t).is_some(),
         }
     }
 
@@ -424,6 +495,30 @@ impl BackendAccess {
                 let _ = m.observe_position(ctx, node, pos);
                 m.send(ctx, node, dir, bytes, Qos::Reliable)
             }
+            Some(Uu::Packet(m)) => {
+                let _ = m.observe_position(ctx, node, pos);
+                let conn = self.conns.entry(node).or_insert_with(|| TcpConn::new(&self.tcp));
+                let mut r = TransferReport { start: now, ..TransferReport::default() };
+                let mut t = Some(now);
+                if !conn.established {
+                    self.report.tcp_connections += 1;
+                    t = tcp_handshake(ctx, &mut **m, node, conn, &self.tcp, now, &mut r);
+                }
+                let done = t.and_then(|t| {
+                    tcp_stream(ctx, &mut **m, node, conn, &self.tcp, dir, bytes, t, &mut r)
+                });
+                if done.is_none() {
+                    // A connection that gave up is closed; the next send opens a new one.
+                    self.conns.remove(&node);
+                }
+                self.report.tcp_retransmissions += r.retransmissions;
+                self.report.tcp_rtos += r.rtos;
+                refresh_packet_report(&mut self.report, m);
+                match done {
+                    Some(at) => SendOutcome::Scheduled { deliver_at: at, bytes_on_wire: bytes },
+                    None => SendOutcome::Dropped(v2xw_radio::types::DropCause::QueueFull { ac: "tcp", depth: 0 }),
+                }
+            }
         };
         match outcome {
             SendOutcome::Scheduled { deliver_at, .. } => {
@@ -438,6 +533,50 @@ impl BackendAccess {
                 AccessOutcome::NoCoverage
             }
         }
+    }
+
+    /// For `cellular/uu/packet-pf` only: the link a multi-message flow (a top-up, a
+    /// re-enrolment, a trust-list fetch) sees *now*, measured rather than nominal.
+    ///
+    /// The flow's first request and response — [`PROBE_REQUEST_BYTES`] up and
+    /// [`PROBE_RESPONSE_BYTES`] down, over the vehicle's own keep-alive TCP/TLS connection,
+    /// opening it if needed — are carried at packet level through the PF scheduler; the
+    /// link the backend kernel then charges for the whole flow has half that exchange's
+    /// time as its one-way latency (so the handshakes are felt) and the response's measured
+    /// goodput as its rate. `None` for the other Uu models, or when the exchange failed.
+    pub fn packet_link(&mut self, ctx: &mut EngineCtx<'_>, node: NodeId, pos: Vec3) -> Option<Link> {
+        let Some(Uu::Packet(m)) = self.uu.as_mut() else {
+            return None;
+        };
+        let now = v2xw_core::ctx::Ctx::now(ctx);
+        let _ = m.observe_position(ctx, node, pos);
+        let conn = self.conns.entry(node).or_insert_with(|| TcpConn::new(&self.tcp));
+        let mut r = TransferReport { start: now, ..TransferReport::default() };
+        let mut t = Some(now);
+        if !conn.established {
+            self.report.tcp_connections += 1;
+            t = tcp_handshake(ctx, &mut **m, node, conn, &self.tcp, now, &mut r);
+        }
+        let up = t.and_then(|t| {
+            tcp_stream(ctx, &mut **m, node, conn, &self.tcp, Direction::Uplink, PROBE_REQUEST_BYTES, t, &mut r)
+        });
+        let done = up.and_then(|u| {
+            tcp_stream(ctx, &mut **m, node, conn, &self.tcp, Direction::Downlink, PROBE_RESPONSE_BYTES, u, &mut r)
+        });
+        self.report.tcp_retransmissions += r.retransmissions;
+        self.report.tcp_rtos += r.rtos;
+        refresh_packet_report(&mut self.report, m);
+        let (Some(up), Some(done)) = (up, done) else {
+            self.conns.remove(&node);
+            self.report.uu_lost += 1;
+            return None;
+        };
+        let dl_s = ((done - up) as f64 * 1e-9).max(1e-3);
+        Some(Link {
+            latency: Duration::from_nanos((done - now) / 2) + self.internet,
+            bandwidth_bps: (f64::from(PROBE_RESPONSE_BYTES) * 8.0 / dl_s) as u64,
+            transport: Transport::CellularUu,
+        })
     }
 
     /// The link a flow the backend kernel carries end to end sees on this access — used
@@ -478,6 +617,9 @@ pub fn catalogue_cards() -> Vec<v2xw_core::card::ModelCard> {
             .clone(),
         CellCapacityUu::new(CellPlan::urban_macro()).card().clone(),
         HandoverOutageUu::new(CellCapacityUu::new(CellPlan::urban_macro()))
+            .card()
+            .clone(),
+        PacketUu::new(Rat::Lte, BaseStationLayout::lattice(CellPlan::urban_macro()))
             .card()
             .clone(),
         v2xw_node::rsu::Backhaul::fibre().card().clone(),
@@ -527,6 +669,19 @@ pub fn register_used(
         }
     }
     Ok(())
+}
+
+/// Copies the packet-level model's counters and its comparison with the simple model
+/// into the run report.
+fn refresh_packet_report(report: &mut AccessReport, m: &PacketUu) {
+    let s = m.stats();
+    report.uu_harq_retx = s.harq_retx;
+    report.uu_rlc_retx = s.rlc_retx;
+    report.uu_handovers = s.handovers;
+    report.uu_ho_gap_mean_us = s.ho_gap_sum_us.checked_div(s.ho_gaps).unwrap_or(0);
+    let c = m.comparison();
+    report.uu_differs_from_simple = c.differs;
+    report.uu_vs_simple = c.note;
 }
 
 /// A backhaul from its id and parameters.

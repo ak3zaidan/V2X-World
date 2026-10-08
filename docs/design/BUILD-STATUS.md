@@ -2499,3 +2499,31 @@ conflicts resolved by hand and the whole workspace compile-checked:
   remaining cost at 1,000+ vehicles is the radio, not the decide pass (two threads: 1.4x).
 - Not done: a longer run where the fleet keeps growing past the 2 s insertion limit, and a
   Studio control for the `scale` section.
+
+## 2026-10-07 — packet-level cellular and TCP/IP for backend traffic
+
+- `crates/v2xw-radio/src/cellular_packet.rs`: `cellular/uu/packet-pf` (`PacketUu`). Base
+  stations per city (`BaseStationLayout::for_city` hex grid, explicit `from_sites`, or the
+  old lattice); SINR against neighbour sites mapped to spectral efficiency (Mogensen
+  attenuated Shannon, CQI-table clamp); one proportional-fair scheduler per cell and
+  direction over PRBs per TTI (LTE 20 MHz / 100 PRB / 1 ms, NR 100 MHz / 273 PRB / 0.5 ms);
+  HARQ at 10 % first-transmission BLER, RLC AM retransmission then loss; SR wait and grant
+  chain on the uplink; core-network leg from the Coll-Perales MEC placement; handover
+  holds and forwards packets (lossless AM) and *measures* the gap to the first block on
+  the target cell. HARQ draws are pure hashes, so the copy-rollout that gives a delivery
+  instant and the real cell agree (determinism). `comparison()` evaluates the M/M/1 simple
+  model on every send and says when the two differ (>25 % and >5 ms, or >1 point of loss).
+- `crates/v2xw-radio/src/ip_transport.rs`: TCP (IW10, slow start, CUBIC per RFC 8312,
+  fast retransmit, RFC 6298 RTO), TLS 1.2/1.3 handshakes, HTTP and TLS-record framing over
+  any `PacketPath` — `PacketUu`, `WiredLink` (RSU fibre/copper backhaul FIFO), or
+  `ConstantPath` (the simple model). `ScmsExchange` for provisioning, pseudonym batches and
+  CRL fetches; `compare_exchange` reports the difference from `2L + bytes/rate`.
+- Engine: `net.uu.id: cellular/uu/packet-pf` (params `rat` lte|nr, `background_load`,
+  `neighbour_load`, `isd_m`, `sites` or `city_bbox`). Every backend message over Uu then
+  rides a per-vehicle keep-alive TCP/TLS connection. `AccessReport` gains HARQ/RLC/
+  handover/TCP counters, `uu_differs_from_simple` and the `uu_vs_simple` sentence.
+- Calibrated: an unloaded LTE request/reply lands in 15–40 ms against the 29.2 ms measured
+  first hop (Narayanan WWW'20). `todo-calibrate` on the card: retransmission BLER, RLC
+  timer, TR 36.881 access/handover figures, Shannon fit, background load, NR timings.
+- Not done: the RSU backhaul in the engine is still the `Backhaul` latency+rate struct;
+  `WiredLink` exists for TCP but is not yet wired into `backhaul/*` ids. No Studio UI.
