@@ -54,9 +54,9 @@ test("search, edit, undo, reset, JSON round trip, apply to the next run", async 
   await expect(page.getByTestId("settings-count")).toHaveText("1 found");
   await search.fill("zzzz no such setting");
   await expect(page.getByTestId("settings-empty")).toBeVisible();
-  // The tree prunes to what the search shows.
+  // The tree dims the sections the search found nothing in.
   await search.fill("duration");
-  const groups = await page.getByTestId("settings-tree-group").allTextContents();
+  const groups = await page.locator('[data-testid="settings-tree-group"]:not(.empty)').allTextContents();
   expect(groups.length, `tree while searching: ${groups.join(" | ")}`).toBeLessThan(5);
 
   // --- 2. edit, undo, reset -----------------------------------------------------------------------

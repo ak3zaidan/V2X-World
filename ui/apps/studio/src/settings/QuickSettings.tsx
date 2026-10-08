@@ -59,6 +59,20 @@ function FieldControl({ q, field, value }: { q: QuickSetting; field: Field | und
   const [custom, setCustom] = useState(false);
   if (!field) return <span className="faint">not in this engine</span>;
   const id = `quick-${q.id}`;
+  // The master seed is written as a hexadecimal string ("0x…"), which a number box cannot hold.
+  if ((typeof value === "string" || field.kind === "string") && !(field.choices && field.choices.length > 0)) {
+    return (
+      <input
+        id={id}
+        data-testid={id}
+        type="text"
+        className="mono"
+        value={value === undefined || value === null ? "" : String(value)}
+        placeholder={field.hasDefault ? String(field.defaultValue) : "default"}
+        onChange={(e) => editSetting(field.pointer, e.target.value)}
+      />
+    );
+  }
   if (field.choices && field.choices.length > 0) {
     const current = value === undefined || value === null ? "" : String(value);
     const def = field.hasDefault && field.defaultValue !== undefined && field.defaultValue !== null ? String(field.defaultValue) : null;
@@ -83,7 +97,8 @@ function FieldControl({ q, field, value }: { q: QuickSetting; field: Field | und
   const num = typeof value === "number" ? value : typeof field.defaultValue === "number" && value === undefined ? field.defaultValue : undefined;
   const at = presets.findIndex((p) => p.value === num);
   const isInt = field.kind === "integer";
-  const showCustom = custom || (at < 0 && presets.length > 0);
+  const unset = num === undefined && !custom;
+  const showCustom = custom || (at < 0 && presets.length > 0 && !unset);
   // A share (0..1) reads as a percentage; the document keeps the fraction.
   const isShare = field.unit === undefined && field.min === 0 && field.max === 1 && !isInt;
   return (
@@ -92,8 +107,9 @@ function FieldControl({ q, field, value }: { q: QuickSetting; field: Field | und
         <select
           id={id}
           data-testid={id}
-          value={showCustom ? "custom" : String(at)}
+          value={showCustom ? "custom" : unset ? "" : String(at)}
           onChange={(e) => {
+            if (e.target.value === "") return;
             if (e.target.value === "custom") {
               setCustom(true);
               return;
@@ -102,6 +118,7 @@ function FieldControl({ q, field, value }: { q: QuickSetting; field: Field | und
             editSetting(field.pointer, presets[Number(e.target.value)].value);
           }}
         >
+          {unset ? <option value="">Not set</option> : null}
           {presets.map((p, i) => (
             <option key={p.label} value={String(i)} title={p.note}>
               {p.label}
@@ -127,8 +144,13 @@ function FieldControl({ q, field, value }: { q: QuickSetting; field: Field | und
           }}
         />
       ) : null}
-      {field.unit ? <span className="unit">{field.unit}</span> : isShare ? <span className="unit">%</span> : null}
-      {field.pointer === "/time/duration_s" && num !== undefined ? <span className="faint">{describeSeconds(num)}</span> : null}
+      {/* A named value already says its unit; the label may too ("Roadside units"). */}
+      {(showCustom || presets.length === 0) && field.unit && !q.label.toLowerCase().includes(field.unit.toLowerCase()) ? (
+        <span className="unit">{field.unit}</span>
+      ) : (showCustom || presets.length === 0) && isShare ? (
+        <span className="unit">%</span>
+      ) : null}
+      {field.pointer === "/time/duration_s" && num !== undefined && showCustom ? <span className="faint">{describeSeconds(num)}</span> : null}
     </span>
   );
 }
