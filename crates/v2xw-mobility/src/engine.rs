@@ -1473,7 +1473,7 @@ impl NativeMobility {
     /// The lane of its road a vehicle has to change to for its route's next lane
     /// ([`Self::strategic_pending`]).
     fn strategic_target(&self, world: &World, actor: &Actor) -> Option<LaneId> {
-        if actor.transition.is_some() {
+        if !self.params.strategic_lane_choice || actor.transition.is_some() {
             return None;
         }
         let next = *actor.route.lanes.get(actor.route_index + 1)?;
