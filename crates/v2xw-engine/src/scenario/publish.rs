@@ -281,6 +281,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("events[].t", "s"),
     ("events[].until", "s"),
     ("experiment.replications", "runs"),
+    ("net.mac_queue_depth", "frames"),
     // An IEEE 802.11 channel number, `(f_c − 5000 MHz)/5`: a name, not a quantity.
     ("radio.channel", "channel number"),
     ("radio.adjacent_channel[].channel", "channel number"),

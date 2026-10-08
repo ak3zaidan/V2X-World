@@ -3115,7 +3115,13 @@ pub fn build_phy(scenario: &Scenario) -> v2xw_radio::OfdmPhy {
 pub fn build_mac(scenario: &Scenario) -> Option<v2xw_radio::EdcaOcbMac> {
     match scenario.radio.tiers.mac {
         v2xw_core::card::Tier::Abstract => None,
-        _ => Some(v2xw_radio::EdcaOcbMac::new()),
+        _ => {
+            let mac = v2xw_radio::EdcaOcbMac::new();
+            Some(match scenario.net.mac_queue_depth {
+                Some(depth) => mac.with_queue_depth(depth.max(1) as usize),
+                None => mac,
+            })
+        }
     }
 }
 

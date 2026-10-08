@@ -8,7 +8,7 @@
 //! before the warning, so their location tables are filled as a running stack's would be.
 //!
 //! The result goes into the event's note (what a person reads in the timeline) and into
-//! [`super::RunReport::geonet`]. Forwarded copies ride the protocol run, not the MAC: the
+//! [`super::RunReport::geonet`]. This is the `overlay` forwarding: forwarded copies ride the protocol run, not the MAC (`on-air`, the default, is [`super::gn_air`]): the
 //! frame-level radio carries each node's own messages; the overlay adds the forwarding.
 //!
 //! # Determinism
@@ -76,6 +76,11 @@ impl Engine {
             return None;
         }
         let node = node?;
+        // On the air the warning is the node's own DENM, forwarded frame by frame
+        // (`super::gn_air`); here it is only registered to be followed.
+        if self.gn_air.is_some() {
+            return self.gn_track_warning(node, now);
+        }
         let mut nodes = Vec::new();
         let mut origin = None;
         for (id, a) in &self.actors {

@@ -118,6 +118,8 @@ use crate::snapshot::{ActorState, SnapshotStream};
 mod coop;
 mod geonet;
 pub use geonet::GeonetWarning;
+mod gn_air;
+pub use gn_air::GnAirStats;
 pub mod jamming;
 mod link;
 mod radios;
@@ -488,6 +490,9 @@ pub struct RunReport {
     /// Each multi-hop hazard warning (`net.geonet`): reach, latency, hops, overhead.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub geonet: Vec<GeonetWarning>,
+    /// What the on-air GeoNetworking routers did (`net.geonet.forwarding: on-air`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gn_air: Option<GnAirStats>,
 }
 
 /// The city-scale radio gate's totals ([`crate::scale`]).
@@ -706,6 +711,8 @@ struct FrameState {
     /// For an SPDU of a certificate cycle that carries a fragment of the hybrid
     /// certificate: which fragment of which cycle.
     cert_frag: Option<crate::frag::FragMeta>,
+    /// The GeoNetworking packet the frame carries, when the run forwards on the air.
+    gn: Option<gn_air::GnFrame>,
 }
 
 /// What a Phase 2 application message carries, beyond its length.
@@ -913,6 +920,8 @@ pub struct Engine {
     /// The hand-off [`Engine::hand_down`] is adding to the frame being handed down, ns,
     /// so [`Engine::hand_down_app`] can record the signature's own end apart from it.
     pending_handoff: u64,
+    /// The on-air GeoNetworking layer (`net.geonet.forwarding: on-air`).
+    gn_air: Option<gn_air::GnOnAir>,
     /// The 20 m bins of the reception census (`phy.prr`), the very bins the metric reads.
     prr_bins: v2xw_metrics::bins::Bins,
     /// When each node is next woken to hand over a finished signature check
@@ -1347,6 +1356,7 @@ impl Engine {
             jamming: jammers,
             timeline: TimelineState::default(),
             pending_handoff: 0,
+            gn_air: None,
             prr_bins: v2xw_metrics::comms::prr_bins(),
             node_wake: BTreeMap::new(),
             infra_feeds: BTreeMap::new(),
@@ -1381,6 +1391,10 @@ impl Engine {
         if policy.acts() || policy.sniffer_sites().is_some() {
             engine.pseudonym_policy = Some(policy);
         }
+        engine.gn_air = gn_air::GnOnAir::for_scenario(
+            &engine.scenario,
+            engine.mac.is_some() && engine.sidelink.is_none(),
+        );
         engine.create_rsus();
         engine.attach_intersection_feeds()?;
         engine.seed_timeline();
@@ -2022,6 +2036,7 @@ impl Engine {
     /// Closes the run's books after [`Engine::advance`] has reached the end, and returns
     /// the report. Called once; [`Engine::run`] calls it for a run driven in one piece.
     pub fn finish_run(&mut self, recorder: &mut dyn RunRecorder) -> RunReport {
+        self.gn_finish();
         let refusals: u64 = self
             .nodes
             .values()
@@ -4516,7 +4531,7 @@ impl Engine {
             mcs: SAFETY_MCS,
             tx_power_dbm,
             channel,
-            ac: SAFETY_AC,
+            ac: self.access_category(tx.msg_type, false),
             kind: FrameKind::Broadcast,
             // A whole SDU: its id and the frame number are the same counter seen from two
             // layers. A split one's fragments share the SDU id below.
@@ -4611,7 +4626,12 @@ impl Engine {
             census: BTreeMap::new(),
             frag: None,
             cert_frag,
+            gn: None,
         };
+        let mut base = base;
+        if pieces.is_none() && !sidelink {
+            base.gn = self.gn_originate(node, tx.msg_type, whole_bytes, now);
+        }
         // The frames that go down: the whole SDU, or one per fragment, each with its own
         // frame number and the SDU's id, its own layers and its own air time.
         let mut frames: Vec<(FrameSeq, FrameState)> = Vec::new();
@@ -4904,6 +4924,11 @@ impl Engine {
             }
         }
         for (_, frame) in ready {
+            // A GeoNetworking CBF candidate whose contention timer is due: its router
+            // decides now whether it still forwards.
+            if !self.gn_cbf_fires(node, frame, now) {
+                continue;
+            }
             let Some((descriptor, air)) = self.frames.get(&frame).map(|f| (f.descriptor, f.air))
             else {
                 continue;
@@ -4921,7 +4946,7 @@ impl Engine {
                     bytes: descriptor.bytes,
                     mcs: descriptor.mcs,
                     power_dbm: descriptor.tx_power_dbm,
-                    ac: SAFETY_AC,
+                    ac: descriptor.ac,
                     channel,
                     air_time: air,
                     at: now,
@@ -5000,7 +5025,7 @@ impl Engine {
                         frame: descriptor,
                         enqueued_at: now,
                     },
-                    SAFETY_AC,
+                    descriptor.ac,
                 )
                 .err()
             };
@@ -5921,6 +5946,7 @@ impl Engine {
                 if state.app.is_some() {
                     delivered_app.push((outcome.rx, arrival));
                 }
+                self.gn_on_receive(outcome.rx, state, now);
             }
         }
         if received_any {
@@ -7284,7 +7310,15 @@ impl Engine {
                 (
                     self.dsrc_channel.0,
                     Mac::<EngineCtx<'_>>::cbr(mac, node, self.dsrc_channel, now),
-                    mac.queue_len(node, self.dsrc_channel, SAFETY_AC) as u64,
+                    [
+                        AccessCategory::Vo,
+                        AccessCategory::Vi,
+                        AccessCategory::Be,
+                        AccessCategory::Bk,
+                    ]
+                    .into_iter()
+                    .map(|ac| mac.queue_len(node, self.dsrc_channel, ac) as u64)
+                    .sum(),
                 )
             } else if let Some(sl) = self.sidelink.as_ref() {
                 (

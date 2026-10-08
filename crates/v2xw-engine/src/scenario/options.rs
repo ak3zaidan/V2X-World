@@ -123,6 +123,22 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Alternating (IEEE 1609.4)",
             "One radio switches channel every 50 ms; a message made on the wrong half waits up to 54 ms.",
         ),
+        ("net.geonet.forwarding", "on-air") => w(
+            "On the air (recommended)",
+            "Each forwarded copy is a real frame: it queues, contends, can collide and loads the channel.",
+        ),
+        ("net.geonet.forwarding", "overlay") => w(
+            "Protocol only (no MAC)",
+            "Forwarding runs over a fixed radio range with no contention or collisions: optimistic reach.",
+        ),
+        ("net.access_categories", "single") => w(
+            "One queue (AC_VO)",
+            "Every message waits in the same top-priority queue, as deployed US radios do.",
+        ),
+        ("net.access_categories", "etsi-profiles") => w(
+            "ETSI DCC profiles",
+            "Hazard warnings jump the queue; CAMs and forwarded copies wait longer when the channel is busy.",
+        ),
         ("net.geonet.area_forwarding", "cbf") => w(
             "Contention-based (CBF)",
             "The farthest receiver rebroadcasts first and the nearer ones stand down: few transmissions, the standard's choice.",
@@ -1232,6 +1248,9 @@ pub fn title(path: &str) -> Option<&'static str> {
         "net.geonet" => "Multi-hop hazard warnings",
         "net.channel_access" => "Channel switching",
         "net.geonet.area_forwarding" => "Forwarding inside the area",
+        "net.geonet.forwarding" => "How forwarded copies travel",
+        "net.access_categories" => "Message priority queues",
+        "net.mac_queue_depth" => "Radio queue depth",
         "net.geonet.non_area_forwarding" => "Forwarding towards the area",
         "net.geonet.cbf_variant" => "When a contender stands down",
         "net.geonet.keep_alive_forwarding" => "Keep the warning alive",

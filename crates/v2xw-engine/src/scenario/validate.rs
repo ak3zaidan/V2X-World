@@ -38,6 +38,8 @@ const GN_AREA_FORWARDING: [&str; 2] = ["cbf", "simple"];
 const GN_NON_AREA_FORWARDING: [&str; 2] = ["greedy", "cbf"];
 const GN_CBF_VARIANTS: [&str; 3] = ["etsi", "dpd", "gpc"];
 const CHANNEL_ACCESS: [&str; 2] = ["continuous", "alternating"];
+const GN_FORWARDING: [&str; 2] = ["on-air", "overlay"];
+const ACCESS_CATEGORIES: [&str; 2] = ["single", "etsi-profiles"];
 /// The envelope profiles `v2xw-sec` implements.
 const ENVELOPES: [&str; 2] = ["ieee1609.2", "etsi103097"];
 /// The verification policies `v2xw-node` registers.
@@ -280,6 +282,15 @@ pub static BOUNDS: &[Bound] = &[
         hi: 600000.0,
         exclusive_lo: false,
         what: "how long the warning repeats",
+    },
+    // A queue of one frame drops every burst; past 1 024 a queue only hides congestion
+    // as latency. Nothing in IEEE 802.11 fixes the depth (an implementation choice).
+    Bound {
+        path: "net.mac_queue_depth",
+        lo: 1.0,
+        hi: 1024.0,
+        exclusive_lo: false,
+        what: "the depth of each EDCA queue",
     },
     Bound {
         path: "net.geonet.window_s",
@@ -597,6 +608,8 @@ pub static CHOICES: &[Choices] = &[
     choices("net.geonet.non_area_forwarding", &GN_NON_AREA_FORWARDING),
     choices("net.geonet.cbf_variant", &GN_CBF_VARIANTS),
     choices("net.channel_access", &CHANNEL_ACCESS),
+    choices("net.geonet.forwarding", &GN_FORWARDING),
+    choices("net.access_categories", &ACCESS_CATEGORIES),
     choices("messages.codec_tier", &CODEC_TIERS),
     choices("messages.sets[]", &MESSAGE_SETS),
     choices("security.envelope", &ENVELOPES),
@@ -1243,11 +1256,30 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                fires, its DENM is GeoBroadcast to a circle around the vehicle and forwarded \
                hop by hop by the GeoNetworking router of EN 302 636-4-1 (beacons, location \
                table, duplicate detection, hop limit, greedy and contention-based \
-               forwarding) with the DEN service's repetition and keep-alive forwarding. The \
-               equipped vehicles' positions at that instant are the network; the hop range \
-               is range_m, and forwarded copies do not contend for the MAC. The event's \
-               note and the run summary say how many vehicles in the area it reached, how \
-               fast, over how many hops and at how many transmissions.",
+               forwarding) with the DEN service's repetition and keep-alive forwarding. \
+               forwarding 'on-air' (default): every router runs inside the run, a CBF \
+               contender's copy is a real frame queued in its MAC, so forwards contend, \
+               collide, are delayed, count in the channel busy ratio and pass the DCC gate; \
+               the run's link budget decides who hears each copy, and CAMs refresh the \
+               location table. forwarding 'overlay': a protocol-only run over the vehicles' \
+               positions at the hazard instant, hop range range_m, no MAC. The run summary \
+               says how many vehicles in the area it reached, how fast, over how many hops \
+               and at how many transmissions.",
+    },
+    KeyStatus {
+        path: "net.access_categories",
+        status: Status::Wired,
+        note: "'single' (default): every frame waits in the AC_VO queue. 'etsi-profiles': \
+               the DCC profiles of ETSI TS 102 724 mapped to EDCA queues as EN 302 663 \
+               maps them (DP0 hazard DENM -> AC_VO, DP2 CAM -> AC_BE, DP3 forwarded \
+               GeoNetworking copies and other traffic -> AC_BK), each with its own AIFS \
+               and contention window (IEEE 802.11-2020 Table 9-155, OCB).",
+    },
+    KeyStatus {
+        path: "net.mac_queue_depth",
+        status: Status::Wired,
+        note: "Depth of each EDCA queue of every 802.11p radio (default 64). A frame that \
+               finds its queue full is dropped and counted as a MAC drop.",
     },
     KeyStatus {
         path: "net.fragmenter",
@@ -3133,7 +3165,14 @@ fn net(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ));
         }
     }
+    if let Some(a) = &s.net.access_categories {
+        one_of("net.access_categories", a, &ACCESS_CATEGORIES, e);
+    }
+    if let Some(d) = s.net.mac_queue_depth {
+        bounded_at("net.mac_queue_depth", "net.mac_queue_depth", f64::from(d), e);
+    }
     if let Some(g) = &s.net.geonet {
+        one_of("net.geonet.forwarding", &g.forwarding, &GN_FORWARDING, e);
         if s.net.layer != "gn-btp" {
             e.push(conflict(
                 "net.geonet",

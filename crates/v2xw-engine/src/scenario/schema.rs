@@ -1220,6 +1220,17 @@ pub struct Net {
     /// waits for the next control-channel interval).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_access: Option<String>,
+    /// Which EDCA queue each message waits in: `single` (every frame on AC_VO, the
+    /// deployed SAE J2945/1 profile; the default) or `etsi-profiles` (the ETSI DCC
+    /// profiles of TS 102 724: hazard DENMs on AC_VO, CAMs on AC_BE, forwarded
+    /// GeoNetworking copies and everything else on AC_BK, so a busy channel serves warnings
+    /// first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_categories: Option<String>,
+    /// How many frames each EDCA queue of a radio holds before it drops the newest; 64 by
+    /// default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac_queue_depth: Option<u32>,
 }
 
 /// Multi-hop GeoNetworking forwarding of hazard warnings ([`Net::geonet`]), EN 302 636-4-1
@@ -1227,6 +1238,12 @@ pub struct Net {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Geonet {
+    /// How forwarded copies travel: `on-air` (each forward is a real frame that queues in
+    /// the forwarder's MAC, contends, collides, counts in the channel busy ratio and passes
+    /// the DCC gate; the default) or `overlay` (a protocol-only run over a disk of
+    /// `range_m` at the hazard's instant, with no MAC: optimistic, but instant to compute).
+    #[serde(default = "Geonet::default_forwarding")]
+    pub forwarding: String,
     /// How a warning spreads inside its area: `cbf` (contention-based: the farthest
     /// receiver rebroadcasts first, the rest stand down) or `simple` (every receiver
     /// rebroadcasts once).
@@ -1247,7 +1264,8 @@ pub struct Geonet {
     /// The warning area's radius around the hazard, metres; 1 000 m by default.
     #[serde(default = "Geonet::default_area_radius_m")]
     pub area_radius_m: f64,
-    /// The single-hop radio range the forwarding sees, metres; 500 m by default.
+    /// The single-hop range of the `overlay` forwarding, metres; 500 m by default. On the
+    /// air the run's own link budget decides who hears a copy.
     #[serde(default = "Geonet::default_range_m")]
     pub range_m: f64,
     /// How often the originator repeats the warning, ms; 0 sends it once.
@@ -1266,6 +1284,9 @@ pub struct Geonet {
 }
 
 impl Geonet {
+    fn default_forwarding() -> String {
+        "on-air".to_string()
+    }
     fn default_area_forwarding() -> String {
         "cbf".to_string()
     }
@@ -1298,6 +1319,7 @@ impl Geonet {
 impl Default for Geonet {
     fn default() -> Self {
         Geonet {
+            forwarding: Geonet::default_forwarding(),
             area_forwarding: Geonet::default_area_forwarding(),
             non_area_forwarding: Geonet::default_non_area_forwarding(),
             cbf_variant: Geonet::default_cbf_variant(),
@@ -1328,6 +1350,8 @@ impl Default for Net {
             backend_net: None,
             geonet: None,
             channel_access: None,
+            access_categories: None,
+            mac_queue_depth: None,
         }
     }
 }
