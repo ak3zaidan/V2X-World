@@ -3805,7 +3805,8 @@ fn threats(s: &Scenario, e: &mut Vec<ScenarioError>) {
 
 fn metrics_and_exporters(s: &Scenario, e: &mut Vec<ScenarioError>) {
     // An opt-in group (`signing`) is not selected by `all`, so it may stand beside it.
-    let opt_in = |m: &String| m == v2xw_metrics::signing::GROUP;
+    let opt_in =
+        |m: &String| m == v2xw_metrics::signing::GROUP || m == v2xw_metrics::traffic::GROUP;
     if s.metrics.iter().any(|m| m == "all") && s.metrics.iter().filter(|m| !opt_in(m)).count() > 1 {
         e.push(conflict(
             "metrics",

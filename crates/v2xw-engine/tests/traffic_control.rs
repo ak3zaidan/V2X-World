@@ -50,6 +50,13 @@ fn actuated_signals_act_and_say_so_and_fixed_time_ones_do_not() {
         acted > 0 || last["extended_s"].as_f64().unwrap_or(0.0) > 0.0,
         "the actuated controllers did nothing in 90 s: {last}"
     );
+    // The metric provider reports the same counts (it is on whenever a traffic section is).
+    let metrics = records(scenario(SignalControlKind::Actuated), "metric.sample");
+    assert!(
+        metrics.iter().any(|m| m["metric"] == "signal_gap_outs"),
+        "no signal_gap_outs sample among {} metric samples",
+        metrics.len()
+    );
     let fixed = records(scenario(SignalControlKind::FixedTime), "traffic.control");
     assert!(fixed.is_empty(), "fixed-time control logged {fixed:?}");
 }

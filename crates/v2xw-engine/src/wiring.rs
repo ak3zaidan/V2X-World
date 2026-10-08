@@ -2509,6 +2509,21 @@ pub fn build_metrics(
             Box::new(v2xw_metrics::signing::SigningProvider::new(0, signing_facts(scenario))),
         )?;
     }
+    // Traffic control (`v2xw_metrics::traffic`): with a `traffic` section, or when the
+    // metric list names the group or one of its metrics. Not under a bare `all`, so a
+    // scenario that says nothing about it keeps the digests it had.
+    let traffic_named = scenario.metrics.iter().any(|m| {
+        m == v2xw_metrics::traffic::GROUP
+            || v2xw_metrics::traffic::TrafficControlProvider::definitions()
+                .iter()
+                .any(|d| d.name == *m)
+    });
+    if scenario.traffic.is_some() || traffic_named {
+        set.register(
+            registry,
+            Box::new(v2xw_metrics::traffic::TrafficControlProvider::new()),
+        )?;
+    }
     if scenario.metrics.is_empty() {
         return Ok(set);
     }
