@@ -1741,6 +1741,7 @@ impl Engine {
                 feed.sync(p);
             }
             let outlook = self.priority.outlook(&self.world, plan, now_s);
+            feed.set_actuation(self.actuated.outlook(&self.world, plan, now_s));
             // A SPaT that does not encode is a defect in the encoder, not in the run; the
             // unit keeps the last good one rather than sending a truncated message, and the
             // count is in the run report.

@@ -156,6 +156,9 @@ pub struct IntersectionFeed {
     offset_s: f64,
     groups: Vec<GroupTimeline>,
     map: MapData,
+    /// The actuated controller's window at the last [`IntersectionFeed::set_actuation`]:
+    /// how much sooner and later than the plan's clock the next change may come.
+    actuation: Option<crate::actuated::ActuatedOutlook>,
 }
 
 impl IntersectionFeed {
@@ -247,7 +250,14 @@ impl IntersectionFeed {
             offset_s: p.offset_s,
             groups,
             map,
+            actuation: None,
         })
+    }
+
+    /// The actuated controller's window for the next SPaT (`crate::actuated`), `None`
+    /// under fixed-time control.
+    pub fn set_actuation(&mut self, a: Option<crate::actuated::ActuatedOutlook>) {
+        self.actuation = a;
     }
 
     /// The MAP this unit broadcasts.
@@ -313,7 +323,17 @@ impl IntersectionFeed {
                         let earliest = o.earliest_cut_s.min(remaining);
                         (earliest, remaining, earliest)
                     }
-                    _ => (remaining, remaining, remaining),
+                    // An actuated controller (SAE J2735 `trafficDependentOperation`): a green
+                    // may gap out as soon as its minimum has run, or be extended up to its
+                    // maximum, and every later change moves with it; an amber is certain.
+                    _ => match self.actuation {
+                        Some(a) if state != SignalState::Amber => (
+                            (remaining - a.cut_s).max(0.0),
+                            remaining + a.extend_s,
+                            remaining,
+                        ),
+                        _ => (remaining, remaining, remaining),
+                    },
                 };
                 MovementState::current(
                     g.signal_group,
@@ -326,7 +346,8 @@ impl IntersectionFeed {
                             likely_time: Some(time_mark(hour_s + likely_s)),
                             // `TimeIntervalConfidence` 15 is 100 %: a fixed-time change is
                             // certain; under a priority service it is not stated.
-                            confidence: (outlook.is_none()).then_some(15),
+                            confidence: (outlook.is_none() && self.actuation.is_none())
+                                .then_some(15),
                             next_time: None,
                         },
                     ),
@@ -338,7 +359,11 @@ impl IntersectionFeed {
             intersections: vec![IntersectionState {
                 id: IntersectionReferenceId::new(self.intersection_id),
                 revision: 1,
-                status: IntersectionStatus::FIXED_TIME_OPERATION,
+                status: if self.actuation.is_some() {
+                    IntersectionStatus::TRAFFIC_DEPENDENT_OPERATION
+                } else {
+                    IntersectionStatus::FIXED_TIME_OPERATION
+                },
                 moy: Some(minute_of_the_year(wall, t)),
                 time_stamp: Some(ms_in_minute),
                 states,

@@ -74,6 +74,17 @@ pub struct ActuatedCounters {
     pub cut_s: f64,
 }
 
+/// What an actuated controller may still do to the plan's clock, for the SPaT
+/// (`crate::infra`): its next change may come up to `cut_s` sooner (a gap-out once the
+/// minimum green has run) or `extend_s` later (extension to the maximum green).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ActuatedOutlook {
+    /// Seconds sooner, at most.
+    pub cut_s: f64,
+    /// Seconds later, at most.
+    pub extend_s: f64,
+}
+
 /// `traffic.control` — the traffic control's own log: actuated signal decisions and
 /// gridlock resolution, cumulative (PUBLIC: what a traffic management centre logs).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -153,6 +164,39 @@ impl ActuatedControllers {
             plans,
             counters: ActuatedCounters::default(),
         }
+    }
+
+    /// The window the SPaT of plan `idx` states at `now_s` ([`ActuatedOutlook`]), `None`
+    /// under fixed-time control. Outside a vehicle green (an amber, an all-red) nothing
+    /// moves the clock, so the window is zero both ways until the next green starts.
+    pub fn outlook(&self, world: &World, idx: usize, now_s: f64) -> Option<ActuatedOutlook> {
+        let p = self.params.as_ref()?;
+        let st = self.plans.get(&idx)?;
+        let plan = world.signals.get(idx)?;
+        let (i, into) = plan.phase_at(now_s)?;
+        if !vehicle_green(plan, i, &st.crossing) {
+            return Some(ActuatedOutlook {
+                cut_s: 0.0,
+                extend_s: 0.0,
+            });
+        }
+        let held = if st.phase == i { st.held_s } else { 0.0 };
+        let elapsed = into + held;
+        let duration = plan.phases[i].duration_s;
+        let left = (duration - into).max(0.0);
+        let walks = (0..plan.controlled.len()).any(|m| {
+            st.crossing[m]
+                && matches!(plan.phases[i].states.get(m), Some(SignalState::Green))
+        });
+        let min = if walks {
+            p.min_green_s.max(duration)
+        } else {
+            p.min_green_s
+        };
+        Some(ActuatedOutlook {
+            cut_s: (left - (min - elapsed).max(0.0)).clamp(0.0, left),
+            extend_s: (p.max_green_s - elapsed - left).max(0.0),
+        })
     }
 
     /// Whether any controller is actuated.
@@ -389,6 +433,22 @@ mod tests {
             control.max_green_s
         );
         assert_eq!(ctl.counters().max_outs, 1);
+    }
+
+    #[test]
+    fn the_spat_window_spans_the_gap_out_and_the_maximum() {
+        let world = grid();
+        let control = actuated();
+        let ctl = ActuatedControllers::new(&control, &world);
+        let plan = &world.signals[0];
+        let stated = plan.phases[0].duration_s;
+        let at = plan.offset_s + 1.0;
+        let o = ctl.outlook(&world, 0, at).expect("actuated");
+        let left = stated - 1.0;
+        assert!((o.cut_s - (left - (control.min_green_s - 1.0))).abs() < 1e-9, "{o:?}");
+        assert!((o.extend_s - (control.max_green_s - stated)).abs() < 1e-9, "{o:?}");
+        let fixed = ActuatedControllers::new(&SignalControl::default(), &world);
+        assert!(fixed.outlook(&world, 0, at).is_none());
     }
 
     #[test]
