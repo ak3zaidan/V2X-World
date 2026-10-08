@@ -5296,13 +5296,31 @@ impl Mobility for NativeMobility {
             {
                 let separation = 0.5 * (world.lane(actor.lane).width_m + world.lane(to).width_m);
                 let home = lane_position_for(&self.params, actor.class);
-                let from_offset_m = actor.lateral_m
+                let nominal = actor.lateral_m
                     + match side {
                         // Moving left puts the vehicle to the *right* of the target lane's
                         // centreline, and the offset closes from there.
                         Side::Left => -separation,
                         Side::Right => separation,
                     };
+                // Where the vehicle actually is, across the target lane. Two lanes' half
+                // widths are their centrelines' separation only where they abut; a bicycle
+                // lane past a buffer or a parking lane, or two imported lanes that overlap,
+                // do not, and the half-width offset put a cyclist leaving the bike lane on
+                // Midtown 1 m sideways in one step (`vru_motion`: 1.06 m, 92 m/s²). The
+                // nominal offset stays the answer where the projection is not a sensible
+                // one (a target lane that does not run beside this one here).
+                let from_offset_m = {
+                    let here_lane = world.lane(actor.lane);
+                    let here =
+                        here_lane.offset_point(actor.s_m.min(here_lane.length_m), actor.lateral_m);
+                    let measured = world.lane(to).project_point(here).d_m;
+                    if (measured - nominal).abs() <= separation {
+                        measured
+                    } else {
+                        nominal
+                    }
+                };
                 actor.forced_cut_in = None;
                 actor.transition = Some(Transition {
                     from: actor.lane,
