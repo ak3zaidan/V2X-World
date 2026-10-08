@@ -92,6 +92,7 @@
 .mcard {
   background: var(--bg-panel);
   border: 1px solid var(--border);
+  border-left-width: 3px; /* the health stripe's width on every card, so their contents align */
   border-radius: 8px;
   padding: 10px 12px 8px;
   display: flex;
