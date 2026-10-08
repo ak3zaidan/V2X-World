@@ -148,9 +148,11 @@ impl RatConfig {
     /// factors of TS 38.306 §4.1.2, used for LTE too, `todo-calibrate`]; CQI 1 and 15
     /// efficiencies 0.1523 and 5.5547 bit/RE and the 10 % BLER the CQI is defined at
     /// [TS 36.213 §7.2.3, Table 7.2.3-1]; 8 ms FDD HARQ RTT [TS 36.213 §8, §10.1]; four
-    /// transmissions [ns-3 LTE `LteEnbMac::MaxHarqRetransmissions` = 3]; SR period 10 ms and
-    /// the 8 ms SR → grant → data chain, 1.5 ms DL processing, 49.5 ms handover
-    /// interruption [TR 36.881 §5.1, §5.2 latency analysis, `todo-calibrate`]; UE 23 dBm
+    /// transmissions [ns-3 LTE `LteEnbMac::MaxHarqRetransmissions` = 3]; RLC AM retransmits
+    /// after the 20 ms t-PollRetransmit [ns-3 `LteRlcAm` default; TS 36.322 §7.3]; SR period
+    /// 10 ms and the 8 ms SR → grant → data chain (1 + 3 + 1 + 3 ms), 1.5 ms DL processing
+    /// [TR 36.881 Table 5.1-1]; 49.5 ms handover interruption [TR 36.881 §5.2, within the
+    /// TS 36.133 §5.1.2.1 bound of 50 ms]; UE 23 dBm
     /// [TS 36.101 §6.2.2 power class 3]; UE NF 9 dB, BS NF 5 dB [TR 37.885 Table 6.1.1-1].
     #[must_use]
     pub const fn lte_20mhz() -> Self {
@@ -186,7 +188,8 @@ impl RatConfig {
     ///
     /// 273 PRB [TS 38.101-1 Table 5.3.2-1]; 0.5 ms slot of 14 symbols [TS 38.211 §4.3.2];
     /// overheads 0.14 / 0.08 [TS 38.306 §4.1.2]; top efficiency 7.4063 bit/RE of 256QAM
-    /// [TS 38.214 Table 5.2.2.1-3]; the HARQ RTT, SR period, grant chain and interruption are
+    /// [TS 38.214 Table 5.2.2.1-3]; RLC AM as LTE [5G-LENA reuses the ns-3 RLC AM, 20 ms
+    /// t-PollRetransmit]; the HARQ RTT, SR period, grant chain and interruption are
     /// `todo-calibrate` (a 4-slot RTT, a 1 ms SR period, a 2 ms grant chain, 0.5 ms DL
     /// processing; 30 ms interruption between the LTE figure and the 0 ms Rel-16 DAPS
     /// target of TS 38.300 §9.2.3.2).
@@ -206,7 +209,7 @@ impl RatConfig {
             max_harq_tx: 4,
             bler_first: 0.1,
             bler_retx: 0.05,
-            rlc_retx_ms: 10.0,
+            rlc_retx_ms: 20.0,
             max_rlc_retx: 4,
             sr_period_ms: 1.0,
             ul_grant_ms: 2.0,
@@ -1104,6 +1107,32 @@ impl PacketUu {
         }
     }
 
+    /// Places a stationary UE (a roadside unit's modem) at `p` without a context: its
+    /// serving cell is the one covering `p`, and its salt comes from its id.
+    pub fn place(&mut self, ue: NodeId, p: Vec3) {
+        let serving = self.layout.coverage(p).map(|v| v.cell.index());
+        let info = self.ues.entry(ue.index()).or_insert_with(|| UeInfo {
+            salt: mix(0x5A17_u64 ^ (u64::from(ue.index()) << 20)),
+            serving: None,
+            pos: None,
+            interrupted_until: 0,
+        });
+        info.pos = Some(p);
+        info.serving = serving;
+    }
+
+    /// The cell serving position `p`, if any (the MBSFN area a broadcast is counted in).
+    #[must_use]
+    pub fn cell_at(&self, p: Vec3) -> Option<u32> {
+        self.layout.coverage(p).map(|v| v.cell.index())
+    }
+
+    /// The RAT's figures in force.
+    #[must_use]
+    pub const fn rat_config(&self) -> &RatConfig {
+        &self.cfg
+    }
+
     /// The delivery of `bytes` offered at `at` (no earlier than now) over the UE's link.
     pub fn send_at<C: Ctx + ?Sized>(
         &mut self,
@@ -1114,10 +1143,32 @@ impl PacketUu {
         at: SimTime,
     ) -> SendOutcome {
         let now = ctx.now();
+        let _ = self.ue_info(ctx, ue);
+        self.send_at_clock(now, ue, dir, bytes, at)
+    }
+
+    /// [`PacketUu::send_at`] with the clock given rather than read from a context: how a
+    /// driver that is not inside an engine callback (the backend kernel, carrying a
+    /// flow's messages through [`AtClock`]) offers a packet. A UE the model has not seen
+    /// through a context yet gets a salt from its id alone, so the draws stay a pure
+    /// function of the schedule.
+    pub fn send_at_clock(
+        &mut self,
+        now: SimTime,
+        ue: NodeId,
+        dir: Direction,
+        bytes: u32,
+        at: SimTime,
+    ) -> SendOutcome {
         let at = at.max(now);
         self.stats.sent += 1;
         let (salt, serving, pos, until) = {
-            let info = self.ue_info(ctx, ue);
+            let info = self.ues.entry(ue.index()).or_insert_with(|| UeInfo {
+                salt: mix(0x5A17_u64 ^ (u64::from(ue.index()) << 20)),
+                serving: None,
+                pos: None,
+                interrupted_until: 0,
+            });
             (info.salt, info.serving, info.pos, info.interrupted_until)
         };
         let (cell, pos) = match (serving, pos) {
@@ -1388,6 +1439,25 @@ impl<C: Ctx + ?Sized> CellularUu<C> for PacketUu {
     }
 }
 
+/// The packet-level Uu with the clock taken from the packet's own offer instant: a
+/// [`crate::ip_transport::PacketPath`] for any context type, so TCP can be run over it by
+/// a driver with no engine context at hand (the backend kernel's per-message oracle).
+#[derive(Debug)]
+pub struct AtClock<'a>(pub &'a mut PacketUu);
+
+impl<C: ?Sized> crate::ip_transport::PacketPath<C> for AtClock<'_> {
+    fn deliver(
+        &mut self,
+        _ctx: &mut C,
+        ue: NodeId,
+        dir: Direction,
+        at: SimTime,
+        bytes: u32,
+    ) -> Option<SimTime> {
+        self.0.send_at_clock(at, ue, dir, bytes, at).deliver_at()
+    }
+}
+
 // =========================================================================================
 // Card
 // =========================================================================================
@@ -1507,37 +1577,57 @@ fn packet_card() -> ModelCard {
             "chosen: chase combining makes a retransmission more reliable than the first",
             "Fit to an ns-3 LTE or 5G-LENA HARQ trace of residual BLER per attempt.",
         ),
-        todo_param(
+        Parameter::new(
             "rlc_retx_ms",
             "ms",
             serde_json::json!(lte.rlc_retx_ms),
-            "chosen from the TS 36.331 t-StatusProhibit / t-PollRetransmit option ranges",
-            "Take the operator default from a measured RRC configuration log.",
+            Source::new(
+                SourceKind::Code,
+                "ns-3 LTE module, LteRlcAm PollRetransmitTimer default 20 ms (t-PollRetransmit, \
+                 TS 36.322 §7.3); 5G-LENA reuses the same RLC AM entity for NR",
+            ),
         ),
-        todo_param(
+        Parameter::new(
             "lte_ul_access_ms",
             "ms",
             serde_json::json!([lte.sr_period_ms, lte.ul_grant_ms]),
-            "TR 36.881 §5.1 user-plane latency analysis: SR period 10 ms, SR to data 8 ms",
-            "Read TR 36.881 Table 5.1-1 and record each component.",
+            Source::new(
+                SourceKind::Standard,
+                "TR 36.881 Table 5.1-1 (SR-based uplink access): SR periodicity 10 ms (mean \
+                 wait 5 ms); SR transmission 1 ms + eNB SR decoding and grant generation 3 ms \
+                 + grant transmission 1 ms + UE grant decoding and PUSCH encoding 3 ms (the \
+                 n+4 timing of TS 36.213 §8.0) = 8 ms SR to data",
+            ),
         ),
-        todo_param(
-            "ho_interruption_ms",
+        Parameter::new(
+            "lte_ho_interruption_ms",
             "ms",
-            serde_json::json!([
-                lte.ho_interruption_ms,
-                RatConfig::nr_100mhz_30khz().ho_interruption_ms
-            ]),
-            "TR 36.881 §5.2 LTE handover interruption analysis (49.5 ms); NR between it and the \
-             0 ms DAPS target of TS 38.300 §9.2.3.2",
-            "Fit to a drive-test handover trace (e.g. MobileInsight) per RAT.",
+            serde_json::json!(lte.ho_interruption_ms),
+            Source::new(
+                SourceKind::Standard,
+                "TR 36.881 §5.2 LTE intra-frequency handover interruption analysis, 49.5 ms; \
+                 inside the TS 36.133 §5.1.2.1 requirement T_interrupt = T_search + T_IU + 20 \
+                 ms with T_IU up to 30 ms (≤ 50 ms to a known target cell)",
+            ),
         ),
         todo_param(
+            "nr_ho_interruption_ms",
+            "ms",
+            serde_json::json!(RatConfig::nr_100mhz_30khz().ho_interruption_ms),
+            "chosen between the LTE figure and the 0 ms DAPS target of TS 38.300 §9.2.3.2",
+            "Fit to a drive-test NR handover trace (e.g. MobileInsight 5G) or read the \
+             TS 38.133 §6.1.1 interruption components.",
+        ),
+        Parameter::new(
             "shannon_fit",
             "-",
             serde_json::json!([SHANNON_ALPHA, SHANNON_SNR_EFF]),
-            "Mogensen et al., VTC 2007-Spring: attenuated Shannon bound for LTE",
-            "Read the paper's fitted BW_eff and SNR_eff for SISO and replace both.",
+            Source::new(
+                SourceKind::Paper,
+                "Mogensen et al., \"LTE Capacity Compared to the Shannon Bound\", VTC \
+                 2007-Spring: link-level SISO AWGN fit BW_eff = 0.75, SNR_eff = 1.25 (the \
+                 system overheads are applied separately, as here)",
+            ),
         ),
         todo_param(
             "background_load",

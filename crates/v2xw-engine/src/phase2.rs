@@ -758,6 +758,18 @@ struct NodeSec {
     next_trust_fetch: SimTime,
     /// The fetch in flight, with the ECTL and CA-CRL sequences held when it started.
     trust_fetch: Option<(FlowRun, u32, u32)>,
+    /// When the top-up, the successor enrolment and the trust-list fetch in flight were
+    /// started, for the per-exchange latency.
+    topup_started: SimTime,
+    /// See [`NodeSec::topup_started`].
+    reenrol_started: SimTime,
+    /// See [`NodeSec::topup_started`].
+    trust_started: SimTime,
+    /// The node step at which the current spell without a valid pseudonym began, and the
+    /// last starved step seen.
+    starved_since: Option<SimTime>,
+    /// See [`NodeSec::starved_since`].
+    starved_last: SimTime,
 }
 
 /// Counters the run report carries for this path.
@@ -886,6 +898,11 @@ pub struct Phase2Report {
     pub vehicles_starved: u64,
     /// Node steps a vehicle spent unable to sign for want of a certificate.
     pub starved_node_steps: u64,
+    /// Certificate availability: simulated time vehicles spent with no valid pseudonym,
+    /// summed over vehicles, ns (measured between node steps).
+    pub cert_unavailable_ns: u64,
+    /// The longest single spell one vehicle spent with no valid pseudonym, ns.
+    pub cert_unavailable_max_ns: u64,
     /// The access legs.
     pub access: crate::backend::AccessReport,
     /// Distinct armed attackers the backend revoked (ground truth).
@@ -1027,6 +1044,8 @@ pub struct Phase2 {
     by_digest: BTreeMap<[u8; 8], (NodeId, u32, u32)>,
     rsus: Vec<RsuSpec>,
     rsu_nodes: Vec<NodeId>,
+    /// `crl_delivery: mbms`: when the eMBMS carousel next repeats the current list.
+    mbms_next: SimTime,
     specs: Vec<AttackerSpec>,
     attackers: BTreeMap<NodeId, AttackerSlot>,
     detectors: BTreeMap<NodeId, Legacy12>,
@@ -1450,7 +1469,8 @@ impl Phase2 {
                     .profile
                     .clone()
                     .unwrap_or_else(|| DEFAULT_RSU_PROFILE.to_string()),
-                backhaul: access.backhaul_of(spec.backhaul.as_deref())?,
+                backhaul: access
+                    .backhaul_with(spec.backhaul.as_deref(), spec.backhaul_params.as_ref())?,
             });
         }
 
@@ -1559,6 +1579,13 @@ impl Phase2 {
         } else {
             None
         };
+        // Every message of every backend flow rides the run's access model: the kernels
+        // ask the carrier for each one's arrival (`backend::Carrier`).
+        scms.set_path_oracle(access.oracle());
+        let mut etsi = etsi;
+        if let Some(e) = etsi.as_mut() {
+            e.set_path_oracle(access.oracle());
+        }
         Ok(Some(Phase2 {
             scms,
             etsi,
@@ -1569,6 +1596,7 @@ impl Phase2 {
             by_digest: BTreeMap::new(),
             rsus,
             rsu_nodes: Vec::new(),
+            mbms_next: 0,
             specs,
             attackers: BTreeMap::new(),
             detectors: BTreeMap::new(),
@@ -1644,6 +1672,9 @@ impl Phase2 {
         let index = self.rsu_nodes.len();
         self.rsu_nodes.push(node);
         self.report.rsus += 1;
+        if let Some(spec) = self.rsus.get(index) {
+            self.access.register_rsu(node, spec.backhaul, spec.position);
+        }
         if self.compromised_specs.contains_key(&index) {
             self.compromised_nodes.insert(node, index);
             self.report.compromised_rsus += 1;
@@ -1831,7 +1862,7 @@ impl Phase2 {
     /// The counters this path accumulated during the run, with the access legs' own.
     pub fn report(&self) -> Phase2Report {
         let mut r = self.report.clone();
-        r.access = self.access.report.clone();
+        r.access = self.access.report_now();
         let st = &self.scms.state;
         r.committees = st
             .committees
@@ -1855,6 +1886,11 @@ impl Phase2 {
     }
 
     /// The access legs.
+    pub fn access(&self) -> &BackendAccess {
+        &self.access
+    }
+
+    /// The access legs, mutably.
     pub fn access_mut(&mut self) -> &mut BackendAccess {
         &mut self.access
     }
@@ -2487,6 +2523,12 @@ impl Phase2 {
         transport: Transport,
     ) {
         self.report.reports_received += 1;
+        let kind = if transport == Transport::RsuBackhaul {
+            "report-relay"
+        } else {
+            "report-uu"
+        };
+        self.access.note_exchange(kind, sent_at, arrive_at);
         let Some((subject, i, lv)) = self.resolve_subject(&report.subject_cert_digest) else {
             return;
         };
@@ -2646,12 +2688,13 @@ impl Phase2 {
         let mut finished = Vec::new();
         for (node, n) in &self.nodes {
             let Some(run) = n.topup else { continue };
-            if log
+            if let Some(t) = log
                 .at_node(run, StageId::Installed, device_of(*node))
-                .is_some()
-                || log.at(run, StageId::Installed).is_some()
+                .or_else(|| log.at(run, StageId::Installed))
             {
                 finished.push((*node, run));
+                let started = n.topup_started;
+                self.access.note_exchange("topup", started, t);
             }
         }
         for (node, run) in finished {
@@ -2687,7 +2730,7 @@ impl Phase2 {
             }
         }
         // Top-ups the RA refused, and successor enrolments that finished either way.
-        self.settle_refusals_and_renewals(&log, &mut tick);
+        self.settle_refusals_and_renewals(&log, &mut tick, now);
         // Bytes the backend moved.
         let (steps, cursor) = {
             let (new, cursor) = self.scms.kernel.steps_since(self.step_cursor);
@@ -2706,6 +2749,7 @@ impl Phase2 {
         &mut self,
         log: &v2xw_proto::stage::StageLog,
         tick: &mut BackendTick,
+        now: SimTime,
     ) {
         let mut refused = Vec::new();
         let mut renewed = Vec::new();
@@ -2754,9 +2798,11 @@ impl Phase2 {
                 continue;
             };
             n.reenrol = None;
+            let started = n.reenrol_started;
             match until {
                 Some(t) => {
                     n.enrolment_until = t;
+                    self.access.note_exchange("reenrol", started, now);
                     self.report.reenrolments_completed += 1;
                     tick.events.push((node, "reenrolled"));
                 }
@@ -2804,6 +2850,7 @@ impl Phase2 {
         let run = etsi.fetch_trust_lists(device, now);
         if let Some(n) = self.nodes.get_mut(&node) {
             n.trust_fetch = Some((run, held.0, held.1));
+            n.trust_started = now;
         }
     }
 
@@ -2834,6 +2881,7 @@ impl Phase2 {
         self.report.reenrolments_started += 1;
         if let Some(n) = self.nodes.get_mut(&node) {
             n.reenrol = Some(run);
+            n.reenrol_started = now;
         }
     }
 
@@ -2856,7 +2904,8 @@ impl Phase2 {
             None => self.scms.backend_view(now, &mut self.tracker),
         };
         let r = &self.report;
-        let a = &self.access.report;
+        let a_now = self.access.report_now();
+        let a = &a_now;
         for e in &mut view.entities {
             match e.id.as_str() {
                 "crl-store" => {
@@ -2910,6 +2959,20 @@ impl Phase2 {
                     e.set("access_cellular", a.cellular_vehicles);
                     e.set("access_rsu_relay", a.relay_only_vehicles);
                     e.set("access_offline", a.offline_vehicles);
+                    e.set(
+                        "cert_unavailable_s",
+                        (r.cert_unavailable_ns as f64 / 1e9 * 10.0).round() / 10.0,
+                    );
+                    // Backend latency per exchange type, ms (mean and worst so far).
+                    for (kind, l) in &a.exchange_latency {
+                        let key = kind.replace('-', "_");
+                        e.set(&format!("{key}_latency_ms"), (l.mean_ms() * 10.0).round() / 10.0);
+                        e.set(&format!("{key}_latency_max_ms"), l.max_ns / 1_000_000);
+                    }
+                    if a.mbms_broadcasts > 0 {
+                        e.set("crl_mbms_broadcasts", a.mbms_broadcasts);
+                        e.set("crl_mbms_receptions", a.mbms_receptions);
+                    }
                 }
                 _ => {}
             }
@@ -2938,6 +3001,9 @@ impl Phase2 {
             rsu.set("crl_frames", r.crl_broadcasts);
             rsu.set("reports_filed_by_units", r.reports_from_rsus);
             rsu.set("reports_relayed", r.reports_uploaded_relay);
+            rsu.set("backhaul_messages", a.carrier.backhaul_messages);
+            rsu.set("backhaul_line_bytes", a.carrier.backhaul_line_bytes);
+            rsu.set("backhaul_retransmissions", a.carrier.backhaul_retx);
             rsu.set("compromised", self.compromised_count() as u64);
             view.entities.push(rsu);
         }
@@ -3177,6 +3243,8 @@ impl Phase2 {
         for (node, newer) in fetched {
             if let Some(n) = self.nodes.get_mut(&node) {
                 n.trust_fetch = None;
+                let started = n.trust_started;
+                self.access.note_exchange("trust-fetch", started, now);
             }
             self.report.trust_fetches += 1;
             if newer {
@@ -3266,6 +3334,8 @@ impl Phase2 {
                 n.topup = None;
                 n.etsi_batch = None;
                 n.last_period = i;
+                let started = n.topup_started;
+                self.access.note_exchange("topup", started, now);
             }
             self.report.topups_completed += 1;
             self.report.certs_topped_up += fresh.len() as u64;
@@ -3409,6 +3479,31 @@ impl Phase2 {
                 .f64();
             n.next_crl_fetch = now.saturating_add((u * interval as f64) as u64);
         }
+    }
+
+    /// `crl_delivery: mbms` only: the cellular vehicles a broadcast at `now` is for — on a
+    /// newly `published` list, or on a carousel turn — each marked as receiving. `None`
+    /// under unicast delivery or before the first list.
+    pub fn mbms_due(&mut self, now: SimTime, published: bool) -> Option<Vec<NodeId>> {
+        if self.access.crl_delivery() != crate::backend::CrlDelivery::Mbms {
+            return None;
+        }
+        let version = self.published_version;
+        if version == 0 || (!published && now < self.mbms_next) {
+            return None;
+        }
+        self.mbms_next = Duration::from_secs_f64(self.access.mbms().carousel_s).after(now);
+        let mut out = Vec::new();
+        for (node, n) in &mut self.nodes {
+            if n.access == Some(AccessKind::Cellular)
+                && !n.crl_fetch_in_flight
+                && n.crl_version < version
+            {
+                n.crl_fetch_in_flight = true;
+                out.push(*node);
+            }
+        }
+        Some(out)
     }
 
     /// A CRL poll that ended without a download (lost, no coverage).
@@ -3606,6 +3701,7 @@ impl Phase2 {
             self.report.topups_started += 1;
             if let Some(n) = self.nodes.get_mut(&node) {
                 n.topup = Some(run);
+                n.topup_started = now;
                 n.etsi_batch = Some((i, false));
             }
             return;
@@ -3622,6 +3718,7 @@ impl Phase2 {
             self.report.topups_started += 1;
             if let Some(n) = self.nodes.get_mut(&node) {
                 n.topup = Some(run);
+                n.topup_started = now;
                 n.etsi_target = Some(target);
             }
             let _ = i;
@@ -3632,6 +3729,7 @@ impl Phase2 {
         self.report.topups_started += 1;
         if let Some(n) = self.nodes.get_mut(&node) {
             n.topup = Some(run);
+            n.topup_started = now;
         }
     }
 
@@ -3658,14 +3756,41 @@ impl Phase2 {
         }
     }
 
-    /// Counts a node step spent unable to sign.
-    pub fn note_starved(&mut self, node: NodeId) {
+    /// Counts a node step at `now` spent unable to sign, and the time since the last one.
+    pub fn note_starved(&mut self, node: NodeId, now: SimTime) {
         self.report.starved_node_steps += 1;
-        if let Some(n) = self.nodes.get_mut(&node)
-            && !n.starved
-        {
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return;
+        };
+        if !n.starved {
             n.starved = true;
             self.report.vehicles_starved += 1;
+        }
+        match n.starved_since {
+            None => n.starved_since = Some(now),
+            Some(since) => {
+                self.report.cert_unavailable_ns += now.saturating_sub(n.starved_last);
+                self.report.cert_unavailable_max_ns = self
+                    .report
+                    .cert_unavailable_max_ns
+                    .max(now.saturating_sub(since));
+            }
+        }
+        n.starved_last = now;
+    }
+
+    /// A node step at `now` at which the vehicle could sign: closes a spell without a
+    /// valid pseudonym, counting the time up to this step.
+    pub fn note_signable(&mut self, node: NodeId, now: SimTime) {
+        let Some(n) = self.nodes.get_mut(&node) else {
+            return;
+        };
+        if let Some(since) = n.starved_since.take() {
+            self.report.cert_unavailable_ns += now.saturating_sub(n.starved_last);
+            self.report.cert_unavailable_max_ns = self
+                .report
+                .cert_unavailable_max_ns
+                .max(now.saturating_sub(since));
         }
     }
 

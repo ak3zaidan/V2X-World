@@ -537,6 +537,7 @@ fn a_vehicle_without_a_modem_relays_through_a_roadside_unit() {
                     roles: vec!["report-forward".to_string()],
                     profile: None,
                     backhaul: backhaul.map(str::to_string),
+                    backhaul_params: None,
                 });
             }
         }
@@ -559,6 +560,16 @@ fn a_vehicle_without_a_modem_relays_through_a_roadside_unit() {
         "no relayed report reached the proxy"
     );
     assert!(p.access.backhaul_bytes > 0, "the backhaul carried nothing");
+    assert!(
+        p.access.carrier.backhaul_messages > 0,
+        "relayed messages queue on the unit's backhaul line: {:?}",
+        p.access.carrier
+    );
+    assert!(
+        p.access.exchange_latency.contains_key("report-relay"),
+        "relayed report latency is measured: {:?}",
+        p.access.exchange_latency
+    );
     assert_eq!(
         p.access.uu_ul_bytes, 0,
         "a vehicle with no modem used the uplink"
@@ -600,6 +611,7 @@ fn a_roadside_unit_verifies_and_checks_what_it_hears() {
                 roles: vec!["report-forward".to_string()],
                 profile: profile.map(str::to_string),
                 backhaul: None,
+                backhaul_params: None,
             });
         }
         s

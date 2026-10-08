@@ -1264,10 +1264,28 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "actors.rsus[].backhaul",
         status: Status::Wired,
         note: "This unit's backhaul: 'backhaul/fixed' (net.backhaul's latency and \
-               capacity), 'backhaul/cellular' (the Uu model's one-way latency) or \
-               'backhaul/none' (an isolated unit: it relays nothing and broadcasts no CRL). \
-               A relayed misbehaviour report pays it, byte for byte, in the backhaul \
-               bucket.",
+               capacity), 'backhaul/fibre', 'backhaul/dsl' or 'backhaul/microwave' (a wired \
+               or radio line with its medium's rate, asymmetry, propagation and loss), \
+               'backhaul/cellular' (the unit's own modem; under cellular/uu/packet-pf its \
+               messages ride a TCP connection through the PF scheduler) or 'backhaul/none' \
+               (an isolated unit: it relays nothing and broadcasts no CRL). Every message \
+               the unit carries — relayed reports, its own reports, the CRL it broadcasts \
+               and each message of a relayed vehicle's top-up — queues on its line, in the \
+               backhaul bucket.",
+    },
+    KeyStatus {
+        path: "actors.rsus[].backhaul_params",
+        status: Status::Wired,
+        note: "This unit's own backhaul numbers: rate_mbps (towards the backend), \
+               down_mbps, latency_ms (the fixed one-way part), distance_km, hops, loss \
+               (per packet; a lost packet is sent again after Linux's 200 ms minimum RTO). \
+               Over net.backhaul.params when the unit names the same medium, over the \
+               medium's card defaults otherwise.",
+    },
+    KeyStatus {
+        path: "actors.rsu_placement.backhaul_params",
+        status: Status::Wired,
+        note: "The backhaul numbers of every placed unit (as actors.rsus[].backhaul_params).",
     },
     KeyStatus {
         path: "actors.backend.protocol",
@@ -1664,8 +1682,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "net.backhaul",
         status: Status::Wired,
         note: "The roadside units' default backhaul: 'backhaul/fixed' with latency_ms \
-               (default 10, uncited) and capacity_mbps (default 1000), 'backhaul/cellular' \
-               or 'backhaul/none'.",
+               (default 10, uncited), capacity_mbps (default 1000) and down_mbps; \
+               'backhaul/fibre' (1 Gbit/s metro fibre, about 0.3 ms), 'backhaul/dsl' \
+               (VDSL2 20/80 Mbit/s with 8 ms interleaving) or 'backhaul/microwave' \
+               (400 Mbit/s radio hop, 1e-5 outage), each with rate_mbps, down_mbps, \
+               latency_ms, distance_km, hops and loss; 'backhaul/cellular' or \
+               'backhaul/none'. Each unit's line is a FIFO per direction.",
     },
     KeyStatus {
         path: "net.uu",
@@ -1681,7 +1703,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                proportional-fair scheduler per cell, HARQ, RLC AM, measured handover gaps \
                and every backend message over TCP CUBIC with TLS 1.3; params.rat lte|nr, \
                background_load; the run report says when it differs from the simple \
-               model). params.penetration is the share of vehicles with a modem \
+               model; every message of a top-up, re-enrolment or trust-list fetch rides \
+               it too). params.crl_delivery 'unicast' (each vehicle polls the CRL Store) \
+               or 'mbms' (eMBMS broadcast once per cell on a new list and every \
+               mbms_carousel_s, default 10; mbms_subframes 1-6 MBSFN subframes per frame, \
+               default 1, about 1.4 Mbit/s on LTE 20 MHz; mbms_period_ms the MCH \
+               scheduling period, default 320). params.penetration is the share of vehicles with a modem \
                (default 1); the rest relay through roadside units or are offline. Without \
                net.uu no vehicle has a modem.",
     },
@@ -2275,16 +2302,18 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
     take(
         crate::backend::BackendAccess::from_scenario(s).and_then(|access| {
             for (i, rsu) in s.actors.rsus.iter().enumerate() {
-                access.backhaul_of(rsu.backhaul.as_deref()).map_err(|_| {
-                    crate::EngineError::Scenario(ScenarioError::conflict(
-                        &format!("actors.rsus[{i}].backhaul"),
-                        format!(
-                            "'{}' is not a backhaul model; allowed: {}",
-                            rsu.backhaul.as_deref().unwrap_or(""),
-                            crate::backend::BACKHAUL_MODELS.join(", ")
-                        ),
-                    ))
-                })?;
+                access
+                    .backhaul_with(rsu.backhaul.as_deref(), rsu.backhaul_params.as_ref())
+                    .map_err(|_| {
+                        crate::EngineError::Scenario(ScenarioError::conflict(
+                            &format!("actors.rsus[{i}].backhaul"),
+                            format!(
+                                "'{}' is not a backhaul model; allowed: {}",
+                                rsu.backhaul.as_deref().unwrap_or(""),
+                                crate::backend::BACKHAUL_MODELS.join(", ")
+                            ),
+                        ))
+                    })?;
             }
             Ok(())
         }),

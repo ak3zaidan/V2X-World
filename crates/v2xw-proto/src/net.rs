@@ -13,7 +13,34 @@
 use std::collections::BTreeMap;
 
 use v2xw_core::ids::NodeId;
-use v2xw_core::time::Duration;
+use v2xw_core::time::{Duration, SimTime};
+
+/// A driver's own model of the access legs, consulted for every message the kernel puts
+/// on a device's link.
+///
+/// The kernel's own link is `latency + bytes·8 / bandwidth`. A driver that models the
+/// access leg packet by packet — the packet-level Uu scheduler with TCP and TLS on top, or
+/// a roadside unit's wired backhaul as a FIFO — installs one of these on the topology
+/// ([`BackendNet::set_oracle`]) and every message of every flow (each request, response,
+/// acknowledgement and poll of a top-up, a re-enrolment or a trust-list fetch) is carried
+/// by it instead, so a flow's time is the sum of what each of its messages really cost.
+pub trait PathOracle: core::fmt::Debug + Send {
+    /// Carries one message of `bytes` from `from` to `to`, offered at `at` over `link`.
+    ///
+    /// `Some(arrival)` when this oracle carried it; `None` when the link is not one it
+    /// models, and the kernel then charges `link.delay(bytes)`.
+    fn carry(
+        &mut self,
+        from: NodeId,
+        to: NodeId,
+        link: &Link,
+        bytes: u32,
+        at: SimTime,
+    ) -> Option<SimTime>;
+}
+
+/// A [`PathOracle`] the driver keeps a handle on (it reads the counters back).
+pub type SharedOracle = std::sync::Arc<std::sync::Mutex<dyn PathOracle>>;
 
 /// Which transport carried a message.
 #[derive(
@@ -77,9 +104,21 @@ impl Link {
 /// A [`BTreeMap`] keyed by the ordered pair, so the iteration order of the topology can
 /// never reach an output. An absent link is a modelling error, not a silent zero-latency
 /// hop: [`BackendNet::link`] returns `None` and the kernel refuses to deliver.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct BackendNet {
     links: BTreeMap<(NodeId, NodeId), Link>,
+    oracle: Option<SharedOracle>,
+}
+
+/// A clone carries the links but **not** the oracle: a scratch kernel over the same
+/// topology (`ScmsRun::preload`) must not advance the driver's live access model.
+impl Clone for BackendNet {
+    fn clone(&self) -> BackendNet {
+        BackendNet {
+            links: self.links.clone(),
+            oracle: None,
+        }
+    }
 }
 
 impl BackendNet {
@@ -87,7 +126,32 @@ impl BackendNet {
     pub fn new() -> BackendNet {
         BackendNet {
             links: BTreeMap::new(),
+            oracle: None,
         }
+    }
+
+    /// Installs the driver's access model ([`PathOracle`]).
+    pub fn set_oracle(&mut self, oracle: SharedOracle) {
+        self.oracle = Some(oracle);
+    }
+
+    /// When a message of `bytes` sent at `at` from `from` to `to` over `link` arrives: the
+    /// oracle's answer when it models that link, else `link.delay(bytes)` after `at`.
+    pub fn arrival(
+        &self,
+        from: NodeId,
+        to: NodeId,
+        link: &Link,
+        bytes: u32,
+        at: SimTime,
+    ) -> SimTime {
+        if let Some(o) = &self.oracle {
+            let mut g = o.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(t) = g.carry(from, to, link, bytes, at) {
+                return t.max(at);
+            }
+        }
+        link.delay(bytes).after(at)
     }
 
     /// Adds a link in both directions.

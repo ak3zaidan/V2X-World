@@ -424,6 +424,7 @@ impl Scenario {
                         roles,
                         profile: first.profile.clone(),
                         backhaul: first.backhaul.clone(),
+                        backhaul_params: first.backhaul_params.clone(),
                         min_spacing_m: 150.0,
                     });
                 }
@@ -569,6 +570,7 @@ pub fn place_rsus(scenario: &mut Scenario, world: &World) -> usize {
             roles: placement.roles.clone(),
             profile: placement.profile.clone(),
             backhaul: placement.backhaul.clone(),
+            backhaul_params: placement.backhaul_params.clone(),
         });
     }
     n
@@ -684,6 +686,7 @@ mod tests {
             roles: vec!["crl".into()],
             profile: None,
             backhaul: None,
+            backhaul_params: None,
         });
         let h = s.with_city("houston").expect("houston");
         assert_eq!(h.city.as_deref(), Some("houston"));

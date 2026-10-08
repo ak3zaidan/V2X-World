@@ -277,6 +277,8 @@ enum Transfer {
         version: u32,
         entries: Vec<v2xw_sec::linkage::CrlLinkageEntry>,
         requested_at: SimTime,
+        /// Broadcast on the eMBMS bearer rather than fetched (`crl_delivery: mbms`).
+        mbms: bool,
     },
 }
 
@@ -6228,7 +6230,20 @@ impl Engine {
                     return;
                 };
                 let bytes = crate::phase2::report_bytes();
-                let at = backhaul.delay(bytes).after(now);
+                // The unit's backhaul line: a FIFO of its medium, shared with every other
+                // message the unit carries.
+                let at = self
+                    .phase2
+                    .as_mut()
+                    .and_then(|p| {
+                        p.access_mut().rsu_send(
+                            rx,
+                            v2xw_radio::cellular::Direction::Uplink,
+                            bytes,
+                            now,
+                        )
+                    })
+                    .unwrap_or_else(|| backhaul.delay(bytes).after(now));
                 if at > horizon {
                     return;
                 }
@@ -6407,6 +6422,7 @@ impl Engine {
                 version,
                 entries,
                 requested_at,
+                mbms,
             } => {
                 let mut trace = v2xw_metrics::latency::TraceBuilder::new(
                     "crl-download",
@@ -6417,6 +6433,10 @@ impl Engine {
                 trace.endpoints(None, Some(node)).to("uu", now);
                 let trace = trace.finish();
                 self.emit(recorder, &trace);
+                if let Some(p) = self.phase2.as_mut() {
+                    let kind = if mbms { "crl-mbms" } else { "crl-fetch" };
+                    p.access_mut().note_exchange(kind, requested_at, now);
+                }
                 self.install_crl_at(recorder, node, version, &entries, now, true);
             }
         }
@@ -6622,19 +6642,33 @@ impl Engine {
 
         // 4. A newly published list starts the roadside broadcast.
         if tick.published.is_some() && !self.crl_timer_armed {
-            let lag = self
+            // The list goes down each broadcasting unit's backhaul line, its bytes queued
+            // with whatever else the line carries; the broadcast starts when the first
+            // unit has it.
+            let at = self
                 .phase2
-                .as_ref()
+                .as_mut()
                 .and_then(|p| {
-                    p.rsus_with_role("crl")
+                    let size = p.crl_size(p.published_crl().0);
+                    let units: Vec<NodeId> = p
+                        .rsus_with_role("crl")
                         .into_iter()
-                        .filter_map(|n| p.rsu_spec_of(n).map(|s| s.backhaul))
-                        .filter(|b| b.connected)
-                        .map(|b| b.latency)
+                        .filter(|n| p.rsu_spec_of(*n).is_some_and(|s| s.backhaul.connected))
+                        .collect();
+                    units
+                        .into_iter()
+                        .filter_map(|n| {
+                            p.access_mut().rsu_send(
+                                n,
+                                v2xw_radio::cellular::Direction::Downlink,
+                                size,
+                                now,
+                            )
+                        })
                         .min()
                 })
-                .unwrap_or(Duration::ZERO);
-            let at = lag.after(now).max(now + 1);
+                .unwrap_or(now)
+                .max(now + 1);
             if at <= horizon {
                 self.crl_timer_armed = true;
                 self.scheduler.schedule(
@@ -6645,10 +6679,89 @@ impl Engine {
             }
         }
 
-        // 5. Cellular CRL polls.
+        // 5a. eMBMS: a new list, and each carousel turn, is broadcast once per MBSFN area
+        // to every cellular vehicle in coverage that lacks it — no uplink request.
+        let mbms = self
+            .phase2
+            .as_mut()
+            .and_then(|p| p.mbms_due(now, tick.published.is_some()))
+            .unwrap_or_default();
+        if !mbms.is_empty() {
+            let mut areas = std::collections::BTreeSet::new();
+            let mut covered = Vec::new();
+            let mut lost = Vec::new();
+            let (version, entries, size, at) = {
+                let Some(p) = self.phase2.as_mut() else {
+                    return;
+                };
+                let (v, e) = p.published_crl();
+                let (v, e) = (v, e.to_vec());
+                let size = p.crl_size(v);
+                let a = p.access_mut();
+                let at = a.mbms().delivered(now, a.mbms_core(), size);
+                for node in mbms {
+                    let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
+                    if a.uu_coverage(pos, now) {
+                        areas.insert(a.mbms_area(pos));
+                        covered.push(node);
+                    } else {
+                        lost.push(node);
+                    }
+                }
+                (v, e, size, at)
+            };
+            if let Some(p) = self.phase2.as_mut() {
+                for node in &lost {
+                    p.crl_poll_failed(*node);
+                }
+                let r = &mut p.access_mut().report;
+                r.mbms_broadcasts += areas.len() as u64;
+                r.mbms_bytes += u64::from(size) * areas.len() as u64;
+            }
+            if !areas.is_empty() {
+                self.emit_backend_bytes(
+                    recorder,
+                    now,
+                    ByteBucket::CellularDl,
+                    u64::from(size) * areas.len() as u64,
+                    None,
+                );
+            }
+            for node in covered {
+                if at > horizon {
+                    if let Some(p) = self.phase2.as_mut() {
+                        p.crl_poll_failed(node);
+                    }
+                    continue;
+                }
+                if let Some(p) = self.phase2.as_mut() {
+                    p.access_mut().report.mbms_receptions += 1;
+                }
+                let sdu = v2xw_core::ids::SduId::new(self.next_sdu);
+                self.next_sdu += 1;
+                self.transfers.insert(
+                    sdu,
+                    Transfer::Crl {
+                        node,
+                        version,
+                        entries: entries.clone(),
+                        requested_at: now,
+                        mbms: true,
+                    },
+                );
+                self.scheduler.schedule(
+                    at.max(now + 1),
+                    EventClass::NetDeliver,
+                    Event::NetDeliver { sdu, to: node },
+                );
+            }
+        }
+
+        // 5. Cellular CRL polls (unicast delivery only).
         let polls = self
             .phase2
             .as_mut()
+            .filter(|p| p.access().crl_delivery() == crate::backend::CrlDelivery::Unicast)
             .map(|p| p.crl_polls_due(now))
             .unwrap_or_default();
         for (node, _have) in polls {
@@ -6729,6 +6842,7 @@ impl Engine {
                                 version,
                                 entries,
                                 requested_at: now,
+                                mbms: false,
                             },
                         );
                         self.scheduler.schedule(
@@ -6773,6 +6887,9 @@ impl Engine {
                 crate::backend::AccessKind::RsuRelay => {
                     let unit = p.relay_in_range(pos, "provisioning-proxy");
                     let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
+                    if let Some(u) = unit {
+                        p.access_mut().bind_relay(node, u);
+                    }
                     p.access_mut().nominal_link(kind, backhaul)
                 }
                 crate::backend::AccessKind::Offline => None,
@@ -6807,6 +6924,9 @@ impl Engine {
                 crate::backend::AccessKind::RsuRelay => {
                     let unit = p.relay_in_range(pos, "provisioning-proxy");
                     let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
+                    if let Some(u) = unit {
+                        p.access_mut().bind_relay(node, u);
+                    }
                     p.access_mut().nominal_link(kind, backhaul)
                 }
                 crate::backend::AccessKind::Offline => None,
@@ -6842,6 +6962,9 @@ impl Engine {
                 crate::backend::AccessKind::RsuRelay => {
                     let unit = p.relay_in_range(pos, "provisioning-proxy");
                     let backhaul = unit.and_then(|u| p.rsu_spec_of(u).map(|s| s.backhaul));
+                    if let Some(u) = unit {
+                        p.access_mut().bind_relay(node, u);
+                    }
                     p.access_mut().nominal_link(kind, backhaul)
                 }
                 crate::backend::AccessKind::Offline => None,
@@ -6907,7 +7030,19 @@ impl Engine {
                 return;
             }
             let sent_at = self.signing_cost(node).after(now);
-            let at = backhaul.delay(crate::phase2::report_bytes()).after(sent_at);
+            let bytes = crate::phase2::report_bytes();
+            let at = self
+                .phase2
+                .as_mut()
+                .and_then(|p| {
+                    p.access_mut().rsu_send(
+                        node,
+                        v2xw_radio::cellular::Direction::Uplink,
+                        bytes,
+                        sent_at,
+                    )
+                })
+                .unwrap_or_else(|| backhaul.delay(bytes).after(sent_at));
             if at > horizon {
                 return;
             }
@@ -7122,7 +7257,9 @@ impl Engine {
             // step: 26 of 55 vehicles on `credential-lifecycle`, none of which ever missed
             // a signature.
             if active.is_none() && pool_valid == 0 {
-                p.note_starved(*id);
+                p.note_starved(*id, now);
+            } else {
+                p.note_signable(*id, now);
             }
             if let Some(old) = p.note_change(*id, n_changes, digest) {
                 let hex = |d: &[u8]| v2xw_core::hash::hex_encode(d);

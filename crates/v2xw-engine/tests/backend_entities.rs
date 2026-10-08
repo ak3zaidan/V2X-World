@@ -331,6 +331,7 @@ fn relayed(compromised: Option<&str>) -> Scenario {
                 roles: vec!["report-forward".to_string()],
                 profile: None,
                 backhaul: None,
+                backhaul_params: None,
             });
         }
     }
@@ -420,6 +421,7 @@ fn a_compromised_unit_cannot_forge_the_crl() {
                     roles: vec!["crl".to_string()],
                     profile: None,
                     backhaul: None,
+                    backhaul_params: None,
                 });
             }
         }

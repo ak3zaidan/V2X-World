@@ -21,6 +21,7 @@
 //! its roadside unit.
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use v2xw_core::geom::Vec3;
 use v2xw_core::ids::NodeId;
@@ -31,9 +32,10 @@ use v2xw_radio::cellular::{
     CellCapacityUu, CellPlan, CellularUu, Direction, FixedLatencyUu, HandoverOutageUu,
     MecPlacement, Qos, RadioLatencyClass, SendOutcome, UuLatencyPreset,
 };
-use v2xw_radio::cellular_packet::{BaseStationLayout, PacketUu, Rat};
+use v2xw_radio::cellular_packet::{AtClock, BaseStationLayout, PacketUu, Rat};
 use v2xw_radio::ip_transport::{
-    TcpConfig, TcpConn, TransferReport, handshake as tcp_handshake, stream as tcp_stream,
+    BACKHAUL_DSL, BACKHAUL_FIBRE, BACKHAUL_MICROWAVE, PacketPath, TcpConfig, TcpConn,
+    TransferReport, WiredLink, handshake as tcp_handshake, stream as tcp_stream,
 };
 
 use crate::ctx::EngineCtx;
@@ -49,7 +51,78 @@ pub const UU_MODELS: [&str; 4] = [
 ];
 
 /// `actors.rsus[].backhaul` and `net.backhaul` ids this build accepts.
-pub const BACKHAUL_MODELS: [&str; 3] = ["backhaul/fixed", "backhaul/cellular", "backhaul/none"];
+pub const BACKHAUL_MODELS: [&str; 6] = [
+    "backhaul/fixed",
+    BACKHAUL_FIBRE,
+    BACKHAUL_DSL,
+    BACKHAUL_MICROWAVE,
+    "backhaul/cellular",
+    "backhaul/none",
+];
+
+/// How a CRL reaches cellular vehicles (`net.uu.params.crl_delivery`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CrlDelivery {
+    /// Each vehicle polls the CRL Store over its own unicast TCP/TLS connection.
+    Unicast,
+    /// The operator broadcasts each new list once per MBSFN area (eMBMS, TS 23.246 /
+    /// TS 36.300 §15): no uplink request, one copy on the air for every vehicle in
+    /// coverage, repeated as a carousel for vehicles that were out of coverage.
+    Mbms,
+}
+
+/// The eMBMS bearer a CRL is broadcast on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MbmsBearer {
+    /// Its rate, bit/s.
+    pub rate_bps: f64,
+    /// The MCH scheduling period, ms: a new session's data waits for the next one.
+    pub period_ms: f64,
+    /// How often the carousel repeats the current list, s.
+    pub carousel_s: f64,
+}
+
+/// MBSFN subframes per radio frame a CRL bearer is given (`mbms_subframes`), default 1:
+/// TS 36.331 `MBSFN-SubframeConfig` allows up to six of the ten subframes of an FDD frame
+/// (subframes 0, 4, 5 and 9 cannot be MBSFN, TS 36.211 §6.1).
+pub const MBMS_SUBFRAMES_DEFAULT: f64 = 1.0;
+/// Resource elements per PRB in an MBSFN subframe that carry PMCH data: extended cyclic
+/// prefix, 12 symbols × 12 subcarriers [TS 36.211 §6.10.2, §6.12], less a 2-symbol
+/// non-MBSFN control region [TS 36.211 §6.7] = 120 (the MBSFN reference signals are left
+/// in, so the rate is an upper bound by their share).
+pub const MBMS_RE_PER_PRB: f64 = 120.0;
+/// The PMCH's spectral efficiency, bit/RE: QPSK at CQI 6, 1.1758 [TS 36.213 Table
+/// 7.2.3-1], the robust end an operator runs a broadcast at so the cell edge decodes it.
+pub const MBMS_SE: f64 = 1.1758;
+/// The MCH scheduling period, ms: `rf32` = 320 ms, of the rf8 … rf1024 options of TS
+/// 36.331 `PMCH-Config.mch-SchedulingPeriod`.
+pub const MBMS_PERIOD_MS: f64 = 320.0;
+/// The carousel's repetition, s (an implementer's choice; FLUTE carousels in TS 26.346
+/// §7 repeat at the operator's interval).
+pub const MBMS_CAROUSEL_S: f64 = 10.0;
+
+impl MbmsBearer {
+    /// The bearer on `prbs` PRBs with `subframes` MBSFN subframes per 10 ms frame.
+    #[must_use]
+    pub fn on(prbs: u32, subframes: f64) -> MbmsBearer {
+        MbmsBearer {
+            rate_bps: subframes * 100.0 * f64::from(prbs) * MBMS_RE_PER_PRB * MBMS_SE,
+            period_ms: MBMS_PERIOD_MS,
+            carousel_s: MBMS_CAROUSEL_S,
+        }
+    }
+
+    /// When a list of `bytes` handed to the BM-SC at `at` has been received.
+    #[must_use]
+    pub fn delivered(&self, at: SimTime, core: Duration, bytes: u32) -> SimTime {
+        let ready = core.after(at);
+        let period = ((self.period_ms * 1e6) as u64).max(1);
+        let start = ready.div_ceil(period) * period;
+        let tx = (f64::from(bytes) * 8.0 / self.rate_bps.max(1.0) * 1e9) as u64;
+        start + tx
+    }
+}
 
 /// `net.backend_net` ids this build accepts.
 pub const BACKEND_NET_MODELS: [&str; 1] = ["backend-net/fixed"];
@@ -62,13 +135,6 @@ pub const BACKEND_NET_MODELS: [&str; 1] = ["backend-net/fixed"];
 /// numbers. A deployment's measured RSU backhaul latency replaces it through
 /// `net.backhaul.params.latency_ms`.
 pub const BACKHAUL_LATENCY_MS: f64 = 10.0;
-
-/// The request a packet-level flow's first exchange carries, bytes: a signed and
-/// encrypted SCMS request is of this order (`todo-calibrate` against the protocol crate's
-/// encoded request sizes).
-pub const PROBE_REQUEST_BYTES: u32 = 512;
-/// The response of the same exchange, bytes (`todo-calibrate`, as above).
-pub const PROBE_RESPONSE_BYTES: u32 = 4096;
 
 /// The default wired backhaul capacity, Mbit/s. Uncited, as above.
 pub const BACKHAUL_CAPACITY_MBPS: f64 = 1000.0;
@@ -121,19 +187,322 @@ enum Uu {
     Fixed(FixedLatencyUu),
     Capacity(CellCapacityUu),
     Handover(HandoverOutageUu),
-    /// The packet-level model; every message rides a TCP/TLS connection per vehicle.
-    Packet(Box<PacketUu>),
+    /// The packet-level model, held by the [`Carrier`]; every message rides a TCP/TLS
+    /// connection per vehicle.
+    Packet,
+}
+
+/// What a roadside unit's backhaul is made of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BackhaulMedium {
+    /// `backhaul/fixed`: a latency and a capacity.
+    Fixed,
+    /// `backhaul/fibre`.
+    Fibre,
+    /// `backhaul/dsl`.
+    Dsl,
+    /// `backhaul/microwave`.
+    Microwave,
+    /// `backhaul/cellular`: the unit's own modem on the Uu model.
+    Cellular,
+    /// `backhaul/none`.
+    None,
 }
 
 /// One roadside unit's backhaul.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Backhaul {
-    /// One-way latency.
+    /// One-way latency (the fixed part: propagation and forwarding).
     pub latency: Duration,
-    /// Capacity, bit/s.
+    /// Capacity towards the backend, bit/s.
     pub bandwidth_bps: u64,
     /// Whether the unit has a backhaul at all.
     pub connected: bool,
+    /// The medium.
+    pub medium: BackhaulMedium,
+    /// Capacity from the backend, bit/s (equal to `bandwidth_bps` on a symmetric medium).
+    pub down_bps: u64,
+    /// Per-packet loss.
+    pub loss: f64,
+}
+
+impl Backhaul {
+    /// The FIFO line this backhaul is, for the per-message carrier.
+    fn line(&self, name: &str) -> WiredLink {
+        let mut w = WiredLink::new(
+            name,
+            self.bandwidth_bps.max(1) as f64,
+            0.0,
+            1,
+            self.latency.as_nanos() as f64 / 1e3,
+        );
+        w.down_bps = self.down_bps.max(1) as f64;
+        w.loss = self.loss;
+        w
+    }
+}
+
+/// Linux's floor on a TCP retransmission timeout, 200 ms (`TCP_RTO_MIN`,
+/// include/net/tcp.h): what a message lost on a wired backhaul waits before it is sent
+/// again.
+pub const WIRED_RTO_MS: f64 = 200.0;
+/// The initial retransmission timeout of RFC 6298 §2.1, 1 s: how long a vehicle whose
+/// TCP connection gave up waits before it opens a new one and tries again.
+pub const RECONNECT_S: f64 = 1.0;
+
+/// Every message of a backend exchange, carried by the access model the run selected.
+///
+/// Shared between [`BackendAccess`] (the engine's own sends: a misbehaviour report, a CRL
+/// poll, a roadside unit's forward) and the protocol kernels' [`PathOracle`] (every
+/// request, response and poll of a top-up, a re-enrolment or a trust-list fetch), so both
+/// queue on the same cells, the same TCP connections and the same backhaul lines.
+#[derive(Debug)]
+pub struct Carrier {
+    packet: Option<PacketUu>,
+    tcp: TcpConfig,
+    conns: BTreeMap<NodeId, TcpConn>,
+    rsu_lines: BTreeMap<NodeId, (Backhaul, WiredLink)>,
+    relay_of: BTreeMap<NodeId, NodeId>,
+    internet: Duration,
+    air_latency: Duration,
+    air_bps: u64,
+    device_base: u32,
+    /// Counters.
+    pub stats: CarrierStats,
+}
+
+/// What the carrier did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct CarrierStats {
+    /// Kernel messages carried segment by segment over the packet-level Uu.
+    pub uu_messages: u64,
+    /// Kernel and engine messages carried over a roadside unit's backhaul line.
+    pub backhaul_messages: u64,
+    /// Bytes those backhaul lines carried, both directions.
+    pub backhaul_line_bytes: u64,
+    /// Backhaul messages lost on the line and sent again after an RTO.
+    pub backhaul_retx: u64,
+    /// TCP connections opened.
+    pub tcp_connections: u64,
+    /// TCP retransmissions.
+    pub tcp_retransmissions: u64,
+    /// TCP timeouts.
+    pub tcp_rtos: u64,
+    /// Connections that gave up and were reopened.
+    pub reconnects: u64,
+    /// Messages that could not be carried after three attempts and were charged at the
+    /// nominal link instead.
+    pub fallbacks: u64,
+}
+
+impl Carrier {
+    fn new(packet: Option<PacketUu>, internet: Duration) -> Carrier {
+        let p = v2xw_proto::ScmsParams::default();
+        Carrier {
+            packet,
+            tcp: TcpConfig::default(),
+            conns: BTreeMap::new(),
+            rsu_lines: BTreeMap::new(),
+            relay_of: BTreeMap::new(),
+            internet,
+            air_latency: p.v2x_air_latency,
+            air_bps: p.v2x_air_bandwidth_bps,
+            device_base: crate::phase2::SCMS_DEVICE_BASE,
+            stats: CarrierStats::default(),
+        }
+    }
+
+    /// One message over vehicle `node`'s TCP/TLS connection on the packet-level Uu,
+    /// opening the connection when needed and reopening it (after [`RECONNECT_S`]) when
+    /// TCP gives up, three times at most. `None` when it never got through.
+    fn tcp_carry(
+        &mut self,
+        node: NodeId,
+        dir: Direction,
+        bytes: u32,
+        at: SimTime,
+    ) -> Option<SimTime> {
+        let Carrier {
+            packet,
+            tcp,
+            conns,
+            stats,
+            ..
+        } = self;
+        let m = packet.as_mut()?;
+        let mut t0 = at;
+        for _ in 0..3 {
+            let conn = conns.entry(node).or_insert_with(|| TcpConn::new(tcp));
+            let mut r = TransferReport {
+                start: t0,
+                ..TransferReport::default()
+            };
+            let mut path = AtClock(m);
+            let mut t = Some(t0);
+            if !conn.established {
+                stats.tcp_connections += 1;
+                t = tcp_handshake(&mut (), &mut path, node, conn, tcp, t0, &mut r);
+            }
+            let done = t.and_then(|t| {
+                tcp_stream(&mut (), &mut path, node, conn, tcp, dir, bytes, t, &mut r)
+            });
+            stats.tcp_retransmissions += r.retransmissions;
+            stats.tcp_rtos += r.rtos;
+            if let Some(d) = done {
+                return Some(d);
+            }
+            conns.remove(&node);
+            stats.reconnects += 1;
+            t0 = ms(RECONNECT_S * 1e3).after(r.done_at.unwrap_or(t0).max(t0));
+        }
+        None
+    }
+
+    /// One message over roadside unit `rsu`'s backhaul, from `at`: its FIFO line (lost
+    /// packets sent again after [`WIRED_RTO_MS`], three times at most), or for a cellular
+    /// backhaul the unit's own TCP connection on the packet-level Uu.
+    fn line_carry(
+        &mut self,
+        rsu: NodeId,
+        dir: Direction,
+        bytes: u32,
+        at: SimTime,
+    ) -> Option<SimTime> {
+        let (bh, _) = self.rsu_lines.get(&rsu)?;
+        if !bh.connected {
+            return None;
+        }
+        self.stats.backhaul_messages += 1;
+        self.stats.backhaul_line_bytes += u64::from(bytes);
+        if bh.medium == BackhaulMedium::Cellular && self.packet.is_some() {
+            let t = match dir {
+                Direction::Uplink => self
+                    .tcp_carry(rsu, dir, bytes, at)
+                    .map(|t| self.internet.after(t)),
+                Direction::Downlink => self.tcp_carry(rsu, dir, bytes, self.internet.after(at)),
+            };
+            if t.is_some() {
+                return t;
+            }
+            self.stats.fallbacks += 1;
+        }
+        let (bh, line) = self.rsu_lines.get_mut(&rsu)?;
+        let mut t = at;
+        for _ in 0..4 {
+            if let Some(a) = PacketPath::<()>::deliver(line, &mut (), rsu, dir, t, bytes) {
+                return Some(a);
+            }
+            self.stats.backhaul_retx += 1;
+            t = ms(WIRED_RTO_MS).after(t);
+        }
+        self.stats.fallbacks += 1;
+        Some(bh.delay(bytes).after(t))
+    }
+
+    /// The sidelink hop between a relayed vehicle and its unit.
+    fn air(&self, bytes: u32) -> Duration {
+        Link {
+            latency: self.air_latency,
+            bandwidth_bps: self.air_bps,
+            transport: Transport::V2xAir,
+        }
+        .delay(bytes)
+    }
+
+    fn carry(
+        &mut self,
+        from: NodeId,
+        to: NodeId,
+        link: &Link,
+        bytes: u32,
+        at: SimTime,
+    ) -> Option<SimTime> {
+        let base = self.device_base;
+        let (device, dir) = if from.index() >= base {
+            (from, Direction::Uplink)
+        } else if to.index() >= base {
+            (to, Direction::Downlink)
+        } else {
+            return None;
+        };
+        let node = NodeId::new(device.index() - base);
+        match link.transport {
+            Transport::CellularUu => {
+                self.packet.as_ref()?;
+                self.stats.uu_messages += 1;
+                let t = match dir {
+                    Direction::Uplink => self
+                        .tcp_carry(node, dir, bytes, at)
+                        .map(|t| self.internet.after(t)),
+                    Direction::Downlink => {
+                        self.tcp_carry(node, dir, bytes, self.internet.after(at))
+                    }
+                };
+                t.or_else(|| {
+                    self.stats.fallbacks += 1;
+                    Some(
+                        link.delay(bytes)
+                            .after(ms(3.0 * RECONNECT_S * 1e3).after(at)),
+                    )
+                })
+            }
+            Transport::RsuBackhaul => {
+                let rsu = *self.relay_of.get(&node)?;
+                let air = self.air(bytes);
+                match dir {
+                    Direction::Uplink => self.line_carry(rsu, dir, bytes, air.after(at)),
+                    Direction::Downlink => {
+                        self.line_carry(rsu, dir, bytes, at).map(|t| air.after(t))
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The kernels' handle on the [`Carrier`].
+#[derive(Debug)]
+struct CarrierOracle(Arc<Mutex<Carrier>>);
+
+impl v2xw_proto::net::PathOracle for CarrierOracle {
+    fn carry(
+        &mut self,
+        from: NodeId,
+        to: NodeId,
+        link: &Link,
+        bytes: u32,
+        at: SimTime,
+    ) -> Option<SimTime> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .carry(from, to, link, bytes, at)
+    }
+}
+
+/// One backend exchange type's latency: count, sum and largest, ns.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ExchangeLatency {
+    /// Exchanges completed.
+    pub count: u64,
+    /// Their latencies summed, ns.
+    pub sum_ns: u64,
+    /// The largest, ns.
+    pub max_ns: u64,
+}
+
+impl ExchangeLatency {
+    /// The mean, ms.
+    #[must_use]
+    pub fn mean_ms(&self) -> f64 {
+        if self.count == 0 {
+            0.0
+        } else {
+            self.sum_ns as f64 / self.count as f64 / 1e6
+        }
+    }
 }
 
 impl Backhaul {
@@ -199,6 +568,19 @@ pub struct AccessReport {
     pub uu_differs_from_simple: bool,
     /// What the comparison found, in a sentence (empty for the other Uu models).
     pub uu_vs_simple: String,
+    /// The per-message carrier's counters: kernel messages carried over the packet-level
+    /// Uu and over roadside backhaul lines.
+    pub carrier: CarrierStats,
+    /// Backend latency per exchange type (`topup`, `reenrol`, `trust-fetch`,
+    /// `crl-fetch`, `crl-mbms`, `report`, `rsu-report`), request to completion.
+    pub exchange_latency: BTreeMap<String, ExchangeLatency>,
+    /// `crl_delivery: mbms` only: CRL copies broadcast (one per MBSFN area and carousel
+    /// turn), the bytes they put on the bearer, and the vehicles that received one.
+    pub mbms_broadcasts: u64,
+    /// See [`AccessReport::mbms_broadcasts`].
+    pub mbms_bytes: u64,
+    /// See [`AccessReport::mbms_broadcasts`].
+    pub mbms_receptions: u64,
 }
 
 /// The access legs of a run.
@@ -213,9 +595,12 @@ pub struct BackendAccess {
     nominal_uu_bps: u64,
     relay_range_m: f64,
     default_backhaul: Backhaul,
+    default_backhaul_id: Option<String>,
+    default_backhaul_params: serde_json::Value,
     kinds: BTreeMap<NodeId, AccessKind>,
-    tcp: TcpConfig,
-    conns: BTreeMap<NodeId, TcpConn>,
+    carrier: Arc<Mutex<Carrier>>,
+    crl_delivery: CrlDelivery,
+    mbms: MbmsBearer,
     /// The counters.
     pub report: AccessReport,
 }
@@ -251,6 +636,12 @@ impl BackendAccess {
         let mut internet = ms(INTERNET_ONE_WAY_MS);
         let mut nominal_uu = ms(29.0);
         let mut nominal_uu_bps = 10_000_000;
+        let mut packet = None;
+        let mut prbs = 100;
+        let mut crl_delivery = CrlDelivery::Unicast;
+        let mut mbms_subframes = MBMS_SUBFRAMES_DEFAULT;
+        let mut mbms_period = MBMS_PERIOD_MS;
+        let mut mbms_carousel = MBMS_CAROUSEL_S;
         if let Some(choice) = &scenario.net.uu {
             let p = &choice.params;
             penetration = num(p, "penetration").unwrap_or(1.0).clamp(0.0, 1.0);
@@ -354,7 +745,9 @@ impl BackendAccess {
                     }
                     nominal_uu = ms(capacity(plan).fixed_latency_ms()) + internet;
                     nominal_uu_bps = (CellCapacityUu::MOSAIC_UPLINK_BPS) as u64;
-                    Uu::Packet(Box::new(m))
+                    prbs = m.rat_config().prbs;
+                    packet = Some(m);
+                    Uu::Packet
                 }
                 other => {
                     return Err(conflict(
@@ -368,13 +761,31 @@ impl BackendAccess {
             };
             uu = Some(model);
             uu_id = Some(choice.id.clone());
+            match p.get("crl_delivery").and_then(serde_json::Value::as_str) {
+                None | Some("unicast") => {}
+                Some("mbms") => crl_delivery = CrlDelivery::Mbms,
+                Some(other) => {
+                    return Err(conflict(
+                        "net.uu.params.crl_delivery",
+                        format!("'{other}' is not a CRL delivery; allowed: unicast, mbms"),
+                    ));
+                }
+            }
+            if let Some(v) = num(p, "mbms_subframes") {
+                mbms_subframes = v.clamp(1.0, 6.0);
+            }
+            if let Some(v) = num(p, "mbms_period_ms") {
+                mbms_period = v.clamp(80.0, 10_240.0);
+            }
+            if let Some(v) = num(p, "mbms_carousel_s") {
+                mbms_carousel = v.clamp(0.5, 3600.0);
+            }
         }
+        let mut mbms = MbmsBearer::on(prbs, mbms_subframes);
+        mbms.period_ms = mbms_period;
+        mbms.carousel_s = mbms_carousel;
         let default_backhaul = match &scenario.net.backhaul {
-            None => Backhaul {
-                latency: ms(BACKHAUL_LATENCY_MS),
-                bandwidth_bps: (BACKHAUL_CAPACITY_MBPS * 1e6) as u64,
-                connected: true,
-            },
+            None => backhaul_from("backhaul/fixed", &serde_json::Value::Null, nominal_uu)?,
             Some(choice) => backhaul_from(&choice.id, &choice.params, nominal_uu)?,
         };
         Ok(BackendAccess {
@@ -386,11 +797,121 @@ impl BackendAccess {
             nominal_uu_bps,
             relay_range_m: RELAY_RANGE_M,
             default_backhaul,
+            default_backhaul_id: scenario.net.backhaul.as_ref().map(|c| c.id.clone()),
+            default_backhaul_params: scenario
+                .net
+                .backhaul
+                .as_ref()
+                .map_or(serde_json::Value::Null, |c| c.params.clone()),
             kinds: BTreeMap::new(),
-            tcp: TcpConfig::default(),
-            conns: BTreeMap::new(),
+            carrier: Arc::new(Mutex::new(Carrier::new(packet, internet))),
+            crl_delivery,
+            mbms,
             report: AccessReport::default(),
         })
+    }
+
+    fn carrier(&self) -> std::sync::MutexGuard<'_, Carrier> {
+        self.carrier.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The per-message oracle to install on the protocol kernels, so every message of a
+    /// backend flow is carried by this run's access model.
+    #[must_use]
+    pub fn oracle(&self) -> v2xw_proto::net::SharedOracle {
+        Arc::new(Mutex::new(CarrierOracle(Arc::clone(&self.carrier))))
+    }
+
+    /// How a CRL reaches cellular vehicles.
+    #[must_use]
+    pub const fn crl_delivery(&self) -> CrlDelivery {
+        self.crl_delivery
+    }
+
+    /// The eMBMS bearer (`crl_delivery: mbms`).
+    #[must_use]
+    pub const fn mbms(&self) -> MbmsBearer {
+        self.mbms
+    }
+
+    /// The core-network and internet leg a broadcast list crosses to the BM-SC.
+    #[must_use]
+    pub fn mbms_core(&self) -> Duration {
+        let core = self
+            .carrier()
+            .packet
+            .as_ref()
+            .map_or(Duration::ZERO, |m| ms(m.core_ms()));
+        core + self.internet
+    }
+
+    /// The MBSFN area (cell) a position is served by, for counting broadcast copies; a
+    /// non-packet Uu model has one area.
+    #[must_use]
+    pub fn mbms_area(&self, pos: Vec3) -> u32 {
+        self.carrier()
+            .packet
+            .as_ref()
+            .and_then(|m| m.cell_at(pos))
+            .unwrap_or(0)
+    }
+
+    /// Records one exchange of `kind` that took from `start` to `end`.
+    pub fn note_exchange(&mut self, kind: &str, start: SimTime, end: SimTime) {
+        let d = end.saturating_sub(start);
+        let e = self
+            .report
+            .exchange_latency
+            .entry(kind.to_string())
+            .or_default();
+        e.count += 1;
+        e.sum_ns += d;
+        e.max_ns = e.max_ns.max(d);
+    }
+
+    /// Gives roadside unit `node` its backhaul line, at `pos` (a cellular backhaul's modem
+    /// is placed there on the packet-level Uu).
+    pub fn register_rsu(&mut self, node: NodeId, backhaul: Backhaul, pos: Vec3) {
+        let mut c = self.carrier();
+        if backhaul.medium == BackhaulMedium::Cellular
+            && let Some(m) = c.packet.as_mut()
+        {
+            m.place(node, pos);
+        }
+        let line = backhaul.line(&format!("rsu-{}", node.index()));
+        c.rsu_lines.insert(node, (backhaul, line));
+    }
+
+    /// Notes that vehicle `node`'s next relayed flow goes through unit `rsu`.
+    pub fn bind_relay(&mut self, node: NodeId, rsu: NodeId) {
+        self.carrier().relay_of.insert(node, rsu);
+    }
+
+    /// One message over unit `rsu`'s backhaul offered at `at`: its arrival, or `None`
+    /// for a unit with no backhaul.
+    pub fn rsu_send(
+        &mut self,
+        rsu: NodeId,
+        dir: Direction,
+        bytes: u32,
+        at: SimTime,
+    ) -> Option<SimTime> {
+        self.carrier().line_carry(rsu, dir, bytes, at)
+    }
+
+    /// The counters, with the carrier's folded in.
+    #[must_use]
+    pub fn report_now(&self) -> AccessReport {
+        let mut r = self.report.clone();
+        let c = self.carrier();
+        r.carrier = c.stats;
+        r.tcp_connections += c.stats.tcp_connections;
+        r.tcp_retransmissions += c.stats.tcp_retransmissions;
+        r.tcp_rtos += c.stats.tcp_rtos;
+        if let Some(m) = c.packet.as_ref() {
+            refresh_packet_report(&mut r, m);
+        }
+        r
     }
 
     /// The Uu model's id, when there is one.
@@ -404,10 +925,43 @@ impl BackendAccess {
     /// # Errors
     /// [`EngineError::Scenario`] for an id this build does not have.
     pub fn backhaul_of(&self, id: Option<&str>) -> Result<Backhaul> {
-        match id {
-            None => Ok(self.default_backhaul),
-            Some(id) => backhaul_from(id, &serde_json::Value::Null, self.nominal_uu),
+        self.backhaul_with(id, None)
+    }
+
+    /// The backhaul a unit declaring `id` and `params` (`actors.rsus[].backhaul_params`)
+    /// has: the unit's own parameters over `net.backhaul.params` when it names the same
+    /// medium (or none), over the medium's card defaults otherwise.
+    ///
+    /// # Errors
+    /// [`EngineError::Scenario`] for an id this build does not have.
+    pub fn backhaul_with(
+        &self,
+        id: Option<&str>,
+        params: Option<&serde_json::Value>,
+    ) -> Result<Backhaul> {
+        let same = id.is_none() || id == self.default_backhaul_id.as_deref();
+        if same && params.is_none() {
+            return Ok(self.default_backhaul);
         }
+        let id = id
+            .or(self.default_backhaul_id.as_deref())
+            .unwrap_or("backhaul/fixed");
+        let mut merged = if same {
+            self.default_backhaul_params.clone()
+        } else {
+            serde_json::Value::Null
+        };
+        if let Some(serde_json::Value::Object(own)) = params {
+            if !merged.is_object() {
+                merged = serde_json::json!({});
+            }
+            if let Some(m) = merged.as_object_mut() {
+                for (k, v) in own {
+                    m.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        backhaul_from(id, &merged, self.nominal_uu)
     }
 
     /// The relay radius.
@@ -476,7 +1030,11 @@ impl BackendAccess {
             Some(Uu::Fixed(m)) => CellularUu::<EngineCtx<'_>>::coverage(m, pos, t).is_some(),
             Some(Uu::Capacity(m)) => CellularUu::<EngineCtx<'_>>::coverage(m, pos, t).is_some(),
             Some(Uu::Handover(m)) => CellularUu::<EngineCtx<'_>>::coverage(m, pos, t).is_some(),
-            Some(Uu::Packet(m)) => CellularUu::<EngineCtx<'_>>::coverage(&**m, pos, t).is_some(),
+            Some(Uu::Packet) => self
+                .carrier()
+                .packet
+                .as_ref()
+                .is_some_and(|m| CellularUu::<EngineCtx<'_>>::coverage(m, pos, t).is_some()),
         }
     }
 
@@ -505,31 +1063,17 @@ impl BackendAccess {
                 let _ = m.observe_position(ctx, node, pos);
                 m.send(ctx, node, dir, bytes, Qos::Reliable)
             }
-            Some(Uu::Packet(m)) => {
-                let _ = m.observe_position(ctx, node, pos);
-                let conn = self
-                    .conns
-                    .entry(node)
-                    .or_insert_with(|| TcpConn::new(&self.tcp));
-                let mut r = TransferReport {
-                    start: now,
-                    ..TransferReport::default()
-                };
-                let mut t = Some(now);
-                if !conn.established {
-                    self.report.tcp_connections += 1;
-                    t = tcp_handshake(ctx, &mut **m, node, conn, &self.tcp, now, &mut r);
+            Some(Uu::Packet) => {
+                let mut c = self.carrier.lock().unwrap_or_else(PoisonError::into_inner);
+                if let Some(m) = c.packet.as_mut() {
+                    // Through the context: a cell change starts a handover, and a UE seen
+                    // for the first time draws its salt from the keyed stream.
+                    let _ = m.observe_position(ctx, node, pos);
                 }
-                let done = t.and_then(|t| {
-                    tcp_stream(ctx, &mut **m, node, conn, &self.tcp, dir, bytes, t, &mut r)
-                });
-                if done.is_none() {
-                    // A connection that gave up is closed; the next send opens a new one.
-                    self.conns.remove(&node);
+                let done = c.tcp_carry(node, dir, bytes, now);
+                if let Some(m) = c.packet.as_ref() {
+                    refresh_packet_report(&mut self.report, m);
                 }
-                self.report.tcp_retransmissions += r.retransmissions;
-                self.report.tcp_rtos += r.rtos;
-                refresh_packet_report(&mut self.report, m);
                 match done {
                     Some(at) => SendOutcome::Scheduled {
                         deliver_at: at,
@@ -557,77 +1101,34 @@ impl BackendAccess {
         }
     }
 
-    /// For `cellular/uu/packet-pf` only: the link a multi-message flow (a top-up, a
-    /// re-enrolment, a trust-list fetch) sees *now*, measured rather than nominal.
+    /// For `cellular/uu/packet-pf` only: prepares vehicle `node`'s modem for a
+    /// multi-message flow (a top-up, a re-enrolment, a trust-list fetch) and returns the
+    /// link to give the kernel.
     ///
-    /// The flow's first request and response — [`PROBE_REQUEST_BYTES`] up and
-    /// [`PROBE_RESPONSE_BYTES`] down, over the vehicle's own keep-alive TCP/TLS connection,
-    /// opening it if needed — are carried at packet level through the PF scheduler; the
-    /// link the backend kernel then charges for the whole flow has half that exchange's
-    /// time as its one-way latency (so the handshakes are felt) and the response's measured
-    /// goodput as its rate. `None` for the other Uu models, or when the exchange failed.
+    /// The link's numbers are only the fallback: the kernel's [`PathOracle`] carries every
+    /// message of the flow — each request, response and poll — segment by segment over
+    /// the vehicle's own keep-alive TCP/TLS connection through the PF scheduler
+    /// ([`Carrier`]). What this does is observe the vehicle's position (a cell change
+    /// starts a handover) and refuse a vehicle with no serving cell.
     pub fn packet_link(
         &mut self,
         ctx: &mut EngineCtx<'_>,
         node: NodeId,
         pos: Vec3,
     ) -> Option<Link> {
-        let Some(Uu::Packet(m)) = self.uu.as_mut() else {
+        if !matches!(self.uu, Some(Uu::Packet)) {
             return None;
-        };
-        let now = v2xw_core::ctx::Ctx::now(ctx);
-        let _ = m.observe_position(ctx, node, pos);
-        let conn = self
-            .conns
-            .entry(node)
-            .or_insert_with(|| TcpConn::new(&self.tcp));
-        let mut r = TransferReport {
-            start: now,
-            ..TransferReport::default()
-        };
-        let mut t = Some(now);
-        if !conn.established {
-            self.report.tcp_connections += 1;
-            t = tcp_handshake(ctx, &mut **m, node, conn, &self.tcp, now, &mut r);
         }
-        let up = t.and_then(|t| {
-            tcp_stream(
-                ctx,
-                &mut **m,
-                node,
-                conn,
-                &self.tcp,
-                Direction::Uplink,
-                PROBE_REQUEST_BYTES,
-                t,
-                &mut r,
-            )
-        });
-        let done = up.and_then(|u| {
-            tcp_stream(
-                ctx,
-                &mut **m,
-                node,
-                conn,
-                &self.tcp,
-                Direction::Downlink,
-                PROBE_RESPONSE_BYTES,
-                u,
-                &mut r,
-            )
-        });
-        self.report.tcp_retransmissions += r.retransmissions;
-        self.report.tcp_rtos += r.rtos;
-        refresh_packet_report(&mut self.report, m);
-        let (Some(up), Some(done)) = (up, done) else {
-            self.conns.remove(&node);
-            self.report.uu_lost += 1;
-            return None;
-        };
-        let dl_s = ((done - up) as f64 * 1e-9).max(1e-3);
+        let now = v2xw_core::ctx::Ctx::now(ctx);
+        {
+            let mut c = self.carrier();
+            let m = c.packet.as_mut()?;
+            let _ = m.observe_position(ctx, node, pos);
+            CellularUu::<EngineCtx<'_>>::coverage(&*m, pos, now)?;
+        }
         Some(Link {
-            latency: Duration::from_nanos((done - now) / 2) + self.internet,
-            bandwidth_bps: (f64::from(PROBE_RESPONSE_BYTES) * 8.0 / dl_s) as u64,
+            latency: self.nominal_uu,
+            bandwidth_bps: self.nominal_uu_bps,
             transport: Transport::CellularUu,
         })
     }
@@ -644,6 +1145,8 @@ impl BackendAccess {
                 transport: Transport::CellularUu,
             }),
             AccessKind::RsuRelay => {
+                // The oracle carries each message over the unit's line (bound with
+                // `bind_relay`); these numbers are the fallback.
                 let b = backhaul.filter(|b| b.connected)?;
                 // The sidelink hop's channel access, then the unit's backhaul.
                 Some(Link {
@@ -681,6 +1184,9 @@ pub fn catalogue_cards() -> Vec<v2xw_core::card::ModelCard> {
         v2xw_node::rsu::Backhaul::fibre().card().clone(),
         v2xw_threat::LegacyWindow::legacy_defaults().card().clone(),
     ]
+    .into_iter()
+    .chain(v2xw_radio::ip_transport::wired_cards())
+    .collect()
 }
 
 /// Registers the cards of the backend models this run uses — the vehicles' Uu model, the
@@ -742,26 +1248,68 @@ fn refresh_packet_report(report: &mut AccessReport, m: &PacketUu) {
 
 /// A backhaul from its id and parameters.
 fn backhaul_from(id: &str, params: &serde_json::Value, uu_one_way: Duration) -> Result<Backhaul> {
+    let loss = num(params, "loss").unwrap_or(0.0).clamp(0.0, 0.5);
+    let bps = |key: &str, default_mbps: f64| {
+        (num(params, key).unwrap_or(default_mbps).max(1e-3) * 1e6) as u64
+    };
     match id {
-        "backhaul/fixed" => Ok(Backhaul {
-            latency: ms(num(params, "latency_ms").unwrap_or(BACKHAUL_LATENCY_MS)),
-            bandwidth_bps: (num(params, "capacity_mbps").unwrap_or(BACKHAUL_CAPACITY_MBPS) * 1e6)
-                as u64,
-            connected: true,
-        }),
+        "backhaul/fixed" => {
+            let up = bps("capacity_mbps", BACKHAUL_CAPACITY_MBPS);
+            Ok(Backhaul {
+                latency: ms(num(params, "latency_ms").unwrap_or(BACKHAUL_LATENCY_MS)),
+                bandwidth_bps: up,
+                connected: true,
+                medium: BackhaulMedium::Fixed,
+                down_bps: num(params, "down_mbps").map_or(up, |v| (v.max(1e-3) * 1e6) as u64),
+                loss,
+            })
+        }
+        BACKHAUL_FIBRE | BACKHAUL_DSL | BACKHAUL_MICROWAVE => {
+            let mut w = WiredLink::medium(id).unwrap_or_else(WiredLink::metro_fibre);
+            if let Some(v) = num(params, "distance_km") {
+                w.distance_km = v.max(0.0);
+            }
+            if let Some(v) = num(params, "hops") {
+                w.hops = v.clamp(0.0, 64.0) as u32;
+            }
+            let up = bps("rate_mbps", w.rate_bps / 1e6);
+            let down = bps("down_mbps", w.rate(Direction::Downlink) / 1e6);
+            let latency = num(params, "latency_ms").map_or(Duration::from_nanos(w.fixed_ns()), ms);
+            Ok(Backhaul {
+                latency,
+                bandwidth_bps: up,
+                connected: true,
+                medium: match id {
+                    BACKHAUL_FIBRE => BackhaulMedium::Fibre,
+                    BACKHAUL_DSL => BackhaulMedium::Dsl,
+                    _ => BackhaulMedium::Microwave,
+                },
+                down_bps: down,
+                loss: num(params, "loss").map_or(w.loss, |v| v.clamp(0.0, 0.5)),
+            })
+        }
         // A unit whose backhaul is itself a cellular modem: the Uu one-way latency, and
-        // the MOSAIC uplink cap as its capacity.
-        "backhaul/cellular" => Ok(Backhaul {
-            latency: num(params, "latency_ms").map_or(uu_one_way, ms),
-            bandwidth_bps: (num(params, "capacity_mbps")
-                .unwrap_or(CellCapacityUu::MOSAIC_UPLINK_BPS / 1e6)
-                * 1e6) as u64,
-            connected: true,
-        }),
+        // the MOSAIC uplink cap as its capacity. Under `cellular/uu/packet-pf` the
+        // carrier puts its messages on the unit's own TCP connection through the PF
+        // scheduler instead, and these numbers are the fallback.
+        "backhaul/cellular" => {
+            let up = bps("capacity_mbps", CellCapacityUu::MOSAIC_UPLINK_BPS / 1e6);
+            Ok(Backhaul {
+                latency: num(params, "latency_ms").map_or(uu_one_way, ms),
+                bandwidth_bps: up,
+                connected: true,
+                medium: BackhaulMedium::Cellular,
+                down_bps: up,
+                loss,
+            })
+        }
         "backhaul/none" => Ok(Backhaul {
             latency: Duration::ZERO,
             bandwidth_bps: 0,
             connected: false,
+            medium: BackhaulMedium::None,
+            down_bps: 0,
+            loss: 0.0,
         }),
         other => Err(conflict(
             "net.backhaul",
@@ -770,5 +1318,59 @@ fn backhaul_from(id: &str, params: &serde_json::Value, uu_one_way: Duration) -> 
                 BACKHAUL_MODELS.join(", ")
             ),
         )),
+    }
+}
+
+#[cfg(test)]
+mod carrier_tests {
+    use super::*;
+
+    #[test]
+    fn mbms_waits_for_the_scheduling_period_and_serialises() {
+        let b = MbmsBearer::on(100, 1.0);
+        // 100 PRB × 120 RE × 1.1758 bit × 100 subframes/s ≈ 1.41 Mbit/s.
+        assert!((b.rate_bps - 1.411e6).abs() < 1e4, "{}", b.rate_bps);
+        let t = b.delivered(0, Duration::from_millis(10), 14_110);
+        // Next 320 ms boundary after 10 ms, then 80 ms on the bearer.
+        assert!((t as f64 / 1e6 - 400.0).abs() < 1.0, "{t}");
+    }
+
+    #[test]
+    fn a_backhaul_line_queues_and_media_differ() {
+        let fibre =
+            backhaul_from(BACKHAUL_FIBRE, &serde_json::Value::Null, Duration::ZERO).unwrap();
+        let dsl = backhaul_from(BACKHAUL_DSL, &serde_json::Value::Null, Duration::ZERO).unwrap();
+        assert!(dsl.latency > fibre.latency * 10);
+        assert!(dsl.down_bps > dsl.bandwidth_bps);
+        let slow = backhaul_from(
+            BACKHAUL_FIBRE,
+            &serde_json::json!({"rate_mbps": 1.0, "latency_ms": 5.0}),
+            Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!(slow.latency, Duration::from_millis(5));
+        let mut c = Carrier::new(None, Duration::ZERO);
+        let rsu = NodeId::new(7);
+        c.rsu_lines.insert(rsu, (slow, slow.line("t")));
+        let a = c.line_carry(rsu, Direction::Uplink, 125_000, 0).unwrap();
+        let b = c.line_carry(rsu, Direction::Uplink, 125_000, 0).unwrap();
+        // 1 s on the line each; the second waits for the first.
+        assert!(a >= 1_005_000_000 && b >= a + 1_000_000_000, "{a} {b}");
+        assert_eq!(c.stats.backhaul_line_bytes, 250_000);
+        // A kernel message from a relayed vehicle's device id rides that line.
+        c.relay_of.insert(NodeId::new(3), rsu);
+        let link = Link {
+            latency: Duration::ZERO,
+            bandwidth_bps: 0,
+            transport: Transport::RsuBackhaul,
+        };
+        let dev = NodeId::new(crate::phase2::SCMS_DEVICE_BASE + 3);
+        let t = c.carry(dev, NodeId::new(1), &link, 1000, 0).unwrap();
+        assert!(t > b, "queued behind the earlier messages: {t}");
+        // Two backend entities: not the carrier's link.
+        assert!(
+            c.carry(NodeId::new(1), NodeId::new(2), &link, 10, 0)
+                .is_none()
+        );
     }
 }
