@@ -176,6 +176,15 @@ export function BreakdownSection({
           pooled over {told.span}
           {dim === "node" ? " · worst first" : ""}
         </span>
+        {dim === "dist_bin" ? (
+          <span
+            className="mx-info"
+            tabIndex={0}
+            title="Each point is a distance bin, drawn at its centre; the shaded band is the 95 % Wilson interval of the pooled count. Hover a point for its interval and sample count; the CSV has every bin."
+          >
+            i
+          </span>
+        ) : null}
         <span className="grow" />
         {withinOptions.length > 0 || within !== null ? (
           <label className="bd-within">
@@ -287,11 +296,9 @@ function DistanceChart({ rows, f }: { rows: readonly GroupRow[]; f: MetricFamily
           </g>
         ))}
       </svg>
-      <p className="dim bd-note">
-        {banded ? "The band is the 95 % Wilson interval of the pooled count. " : ""}
-        Each point is a distance bin, drawn at its centre. Hover a point for its interval and sample count; the CSV has every bin.
-        {unbinned.length > 0 ? ` Not drawn: ${unbinned.map((r) => `${r.key} (${formatWithUnit(r.value, f.unit)})`).join(", ")}.` : ""}
-      </p>
+      {unbinned.length > 0 ? (
+        <p className="dim bd-note">Not drawn: {unbinned.map((r) => `${r.key} (${formatWithUnit(r.value, f.unit)})`).join(", ")}.</p>
+      ) : null}
     </div>
   );
 }

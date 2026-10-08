@@ -1116,7 +1116,7 @@ export function pooledText(
   pooled: { readonly fromS: number; readonly toS: number; readonly blockS: number } | null,
   periodS: number,
 ): { span: string; caveat: string | null } {
-  const askedText = `${formatNumber(asked.fromS)}–${asked.toS === null ? "now" : formatNumber(asked.toS)} s`;
+  const askedText = asked.toS === null ? `${formatNumber(asked.fromS)} s–now` : `${formatNumber(asked.fromS)}–${formatNumber(asked.toS)} s`;
   if (pooled === null) return { span: askedText, caveat: null };
   const span = `${formatNumber(pooled.fromS)}–${formatNumber(pooled.toS)} s`;
   const askedTo = asked.toS ?? Number.POSITIVE_INFINITY;
