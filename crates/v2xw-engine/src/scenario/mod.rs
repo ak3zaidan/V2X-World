@@ -119,11 +119,30 @@ impl Scenario {
     /// [`ScenarioError::Parse`] if the document does not match the schema.
     pub fn from_document(mut doc: Value) -> Result<Scenario> {
         crate::city::fill_world_from_city(&mut doc)?;
-        let mut scenario: Scenario = serde_json::from_value(doc).map_err(|e| {
-            EngineError::Scenario(ScenarioError::Parse {
-                path: "<document>".to_string(),
-                message: e.to_string(),
-            })
+        // Through serde_path_to_error, so a key that does not parse is named: the settings
+        // window marks the field rather than showing "<document>: missing field `count`"
+        // at the top (found setting actors.rsu_placement.profile on a scenario with no
+        // placement block, radio.tiers.focus.tier with no focus region, scale.radio.*).
+        let mut scenario: Scenario = serde_path_to_error::deserialize(doc).map_err(|e| {
+            let at = e.path().to_string();
+            let inner = e.into_inner().to_string();
+            if at.is_empty() || at == "." {
+                return EngineError::Scenario(ScenarioError::Parse {
+                    path: "<document>".to_string(),
+                    message: inner,
+                });
+            }
+            let (field, conflict) = match inner
+                .strip_prefix("missing field `")
+                .and_then(|r| r.split('`').next())
+            {
+                Some(key) => (
+                    format!("{at}.{key}"),
+                    format!("is missing, and {at} needs it once any of its settings is set"),
+                ),
+                None => (at, inner),
+            };
+            EngineError::Scenario(ScenarioError::Conflict { field, conflict })
         })?;
         // A file whose `city` is not the city its world is — a ready-made scenario that
         // inherits a world from its base and names its own city — runs on the city it
@@ -139,7 +158,13 @@ impl Scenario {
         // downtown box and no `city`, and on it the legacy OD law drew trips from bus-only
         // lanes, 2 m stubs and one-ways that only leave the box — 6 vehicles reached the
         // road in 180 s at 1,000 veh/h. A scenario that says `connected_only: false` keeps it.
+        // A file that names a library city's extract by path (`world.source.path:
+        // worlds/cache/portland.osm.xml`, the same box) is on that city as much as one that
+        // says `city:`, and its trips need the connected network just the same. Measured
+        // 2026-10-08 before this: scenarios/portland.yaml dropped 24 of 26 trips in 90 s as
+        // unroutable (one-way streets that only leave the box), manhattan-5min 9 of 26.
         if scenario.city.is_some()
+            || crate::city::city_of_world(&scenario.world).is_some()
             || matches!(scenario.world.source, v2xw_world::WorldSourceSpec::OsmXml { .. })
         {
             crate::city::connect_demand(&mut scenario);

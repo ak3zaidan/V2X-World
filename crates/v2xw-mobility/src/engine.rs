@@ -4405,7 +4405,7 @@ impl Mobility for NativeMobility {
                     }
                 }
                 let world = ctx.world();
-                let mut unroutable_in_fleet = 0u64;
+                let mut unroutable_now = 0u64;
                 for (trip, since, reserved) in queue {
                     let traits = self.traits_for(&*ctx, &trip);
                     match self.try_insert(world, &trip, t0, reserved, traits) {
@@ -4430,42 +4430,63 @@ impl Mobility for NativeMobility {
                             }
                         }
                         Insertion::Unroutable => {
-                            self.dropped_trips += 1;
-                            self.unroutable_trips += 1;
-                            unroutable_in_fleet += 1;
+                            unroutable_now += 1;
                             if let Some(d) = self.demand.as_mut() {
                                 d.refund();
                             }
                         }
                     }
                 }
-                // A fleet trip with no route is redrawn at once (SUMO's randomTrips
-                // `--validate` drops unroutable trips the same way), bounded as above.
-                if fleet.is_some() {
-                    for _ in 0..unroutable_in_fleet.min(64) {
-                        let Some(trip) = self.demand.as_mut().and_then(|d| d.top_up(ctx, t0))
-                        else {
-                            break;
-                        };
-                        let world = ctx.world();
-                        let traits = self.traits_for(&*ctx, &trip);
-                        match self.try_insert(world, &trip, t0, None, traits) {
-                            Insertion::Placed(id) => {
-                                self.assign_kerbside(&*ctx, id);
-                                spawned.push(self.actor_spawn(world, id, t0));
+                // A trip with no route is redrawn at once with a new origin and destination,
+                // up to `REDRAW_TRIES` times, rather than lost. SUMO's randomTrips
+                // `--validate` (tools/randomTrips.py) discards unroutable trips, which thins
+                // the stated flow; on a downtown box whose one-way streets only leave it, or
+                // a highway with destinations behind the origin, that lost 31 % to 80 % of
+                // the stated arrivals (highway-congestion: 909 of 1,131 in 90 s, measured
+                // 2026-10-08). A held fleet tops up the same way. Bounded per step.
+                const REDRAW_TRIES: u64 = 4;
+                let mut tries = (unroutable_now * REDRAW_TRIES).min(256);
+                let mut pending = unroutable_now;
+                let mut failed_in_row = 0u64;
+                while pending > 0 && tries > 0 {
+                    tries -= 1;
+                    let Some(trip) = self.demand.as_mut().and_then(|d| d.redraw(ctx, t0)) else {
+                        break;
+                    };
+                    let world = ctx.world();
+                    let traits = self.traits_for(&*ctx, &trip);
+                    match self.try_insert(world, &trip, t0, None, traits) {
+                        Insertion::Placed(id) => {
+                            self.assign_kerbside(&*ctx, id);
+                            spawned.push(self.actor_spawn(world, id, t0));
+                            pending -= 1;
+                            failed_in_row = 0;
+                        }
+                        Insertion::Occupied => {
+                            let id = ActorId::new(self.next_actor);
+                            self.next_actor += 1;
+                            self.waiting.push((trip, t0, Some(id)));
+                            pending -= 1;
+                            failed_in_row = 0;
+                        }
+                        Insertion::Unroutable => {
+                            if let Some(d) = self.demand.as_mut() {
+                                d.refund();
                             }
-                            Insertion::Occupied => {
-                                let id = ActorId::new(self.next_actor);
-                                self.next_actor += 1;
-                                self.waiting.push((trip, t0, Some(id)));
-                            }
-                            Insertion::Unroutable => {
+                            failed_in_row += 1;
+                            // This arrival has had its tries; it is lost and counted.
+                            if failed_in_row >= REDRAW_TRIES {
                                 self.dropped_trips += 1;
                                 self.unroutable_trips += 1;
+                                pending -= 1;
+                                failed_in_row = 0;
                             }
                         }
                     }
                 }
+                // What the bound or the model left unredrawn is lost and counted.
+                self.dropped_trips += pending;
+                self.unroutable_trips += pending;
             } else {
                 let world = ctx.world();
                 for trip in trips {
@@ -5709,6 +5730,10 @@ impl Mobility for NativeMobility {
 
     fn gridlock(&self) -> Option<GridlockCounters> {
         (self.params.time_to_teleport_s > 0.0).then_some(self.gridlock)
+    }
+
+    fn trip_losses(&self) -> Option<(u64, u64)> {
+        Some((self.dropped_trips, self.unroutable_trips))
     }
 
     fn set_demand_multiplier(&mut self, m: f64) -> bool {

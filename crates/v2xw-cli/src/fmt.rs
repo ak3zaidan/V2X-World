@@ -44,6 +44,13 @@ pub fn run(o: &RunOutcome) -> String {
     }
     let _ = writeln!(s, "mobility steps  {}", r.mobility_steps);
     let _ = writeln!(s, "actors spawned  {}", r.actors_spawned);
+    if r.trips_dropped > 0 {
+        let _ = writeln!(
+            s,
+            "trips dropped   {} ({} with no route from their origin)",
+            r.trips_dropped, r.trips_unroutable
+        );
+    }
     let _ = writeln!(s, "nodes created   {}", r.nodes_created);
     let _ = writeln!(s, "frames sent     {}", r.frames_transmitted);
     let _ = writeln!(

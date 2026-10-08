@@ -2543,6 +2543,24 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ));
         }
     }
+    // The same rule `phase2::Phase2::build` enforces at run start, here so the settings
+    // window marks the field when the settings are applied rather than the run refusing
+    // to start (found in the quick-settings sweep: Security -> European C-ITS on a
+    // scenario built on base/city.yaml, which names the CAMP backend).
+    if let (Some(a), Some(b)) = (
+        s.actors.backend.protocol.as_ref(),
+        s.security.protocol.as_ref(),
+    ) && *a != b.id
+    {
+        e.push(conflict(
+            "security.protocol",
+            format!(
+                "names {} but actors.backend.protocol names {a}; one deployment runs one \
+                 credential protocol, so set both to the same one",
+                b.id
+            ),
+        ));
+    }
     let etsi = s.actors.backend.protocol.as_deref() == Some(crate::phase2::ETSI_PKI)
         || s.security
             .protocol
@@ -3921,6 +3939,23 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
     radio_tuning(s, e);
     if let Some(r) = s.messages.rate_hz {
         bounded_at("messages.rate_hz", "messages.rate_hz", r, e);
+        // Each vehicle's message generator is asked once per mobility step, so the step
+        // caps the rate: measured 2026-10-08 on midtown-normal, 10 s, 13 vehicles, a 100 ms
+        // step: 20 Hz sent 788 frames, exactly what 10 Hz sent; with a 50 ms step, 1,569.
+        // A setting that silently does nothing is refused with the way out.
+        let step_ms = s.time.mobility_step_ms.max(1) as f64;
+        let ceiling_hz = 1_000.0 / step_ms;
+        if r.is_finite() && r > ceiling_hz + 1e-9 {
+            e.push(conflict(
+                "messages.rate_hz",
+                format!(
+                    "is {r} Hz, but vehicles can send at most {ceiling_hz} Hz with a {step_ms} ms \
+                     mobility step (each vehicle's message generator runs once a step): set \
+                     time.mobility_step_ms to {} or less, or choose {ceiling_hz} Hz or less",
+                    (1_000.0 / r).floor()
+                ),
+            ));
+        }
         let timing_keys = [
             "nominal_itt_ms",
             "min_itt_ms",
@@ -4593,25 +4628,12 @@ fn security(s: &Scenario, e: &mut Vec<ScenarioError>) {
     }
     let p = &s.security.pseudonym_change;
     match p.strategy.as_str() {
-        "time" => {
-            if p.period_s.is_none() {
-                e.push(conflict(
-                    "security.pseudonym_change.period_s",
-                    "is missing, but security.pseudonym_change.strategy is 'time', which \
-                     changes pseudonym on a period and has no default one"
-                        .to_string(),
-                ));
-            }
-        }
-        "distance" => {
-            if p.distance_m.is_none() {
-                e.push(conflict(
-                    "security.pseudonym_change.distance_m",
-                    "is missing, but security.pseudonym_change.strategy is 'distance'".to_string(),
-                ));
-            }
-        }
-        "c2c-cc" | "mix-zone" | "silent" => {}
+        // `time` without `period_s` and `distance` without `distance_m` run on the rule's
+        // cited default (`PseudonymStrategy::from_scenario`: J2945/1 CERTCHG 300 s, the
+        // NYC CV pilot's 2 km). Refusing them here made the Studio's Pseudonym change
+        // quick setting unusable: picking Distance on a scenario with no distance_m was
+        // refused, and the quick panel has no distance field (quick-settings sweep).
+        "time" | "distance" | "c2c-cc" | "mix-zone" | "silent" => {}
         other => e.push(conflict(
             "security.pseudonym_change.strategy",
             format!(
@@ -4811,17 +4833,30 @@ fn threats(s: &Scenario, e: &mut Vec<ScenarioError>) {
                     .to_string(),
             ));
         }
-        if let Some(w) = a.schedule
-            && (w.from_s < 0.0 || w.to_s > s.time.duration_s || w.to_s <= w.from_s)
-        {
-            e.push(conflict(
-                &format!("threats.attackers[{i}].schedule"),
-                format!(
-                    "spans [{}, {}] s, which is not a non-empty interval inside the run \
-                     [0, {}] s (time.duration_s)",
-                    w.from_s, w.to_s, s.time.duration_s
-                ),
-            ));
+        // An end past the run's end means "until the run ends": shortening the run (the
+        // Studio's Run length) must not make an attack scenario unstartable. The attack is
+        // active over [from, min(to, duration)); `active_at` never sees the later instants.
+        // A start at or past the end is refused: no attack would happen, and the run would
+        // silently measure an honest fleet.
+        if let Some(w) = a.schedule {
+            if w.from_s < 0.0 || w.to_s <= w.from_s {
+                e.push(conflict(
+                    &format!("threats.attackers[{i}].schedule"),
+                    format!(
+                        "spans [{}, {}] s, which is not a non-empty interval of time",
+                        w.from_s, w.to_s
+                    ),
+                ));
+            } else if w.from_s >= s.time.duration_s {
+                e.push(conflict(
+                    &format!("threats.attackers[{i}].schedule"),
+                    format!(
+                        "starts the attack at {} s, but the run ends at {} s, so no attack \
+                         would happen: lengthen the run past {} s or start the attack earlier",
+                        w.from_s, s.time.duration_s, w.from_s
+                    ),
+                ));
+            }
         }
     }
 }
@@ -4879,9 +4914,10 @@ fn timeline(s: &Scenario, e: &mut Vec<ScenarioError>) {
             e.push(conflict(
                 &format!("{field}.t"),
                 format!(
-                    "is {} s, which is outside the run [0, {}] s (time.duration_s); an event \
-                     past the horizon never fires",
-                    item.t, s.time.duration_s
+                    "is {} s, which is outside the run [0, {}] s (time.duration_s), so the \
+                     event would never happen: lengthen the run past {} s or move the event \
+                     earlier",
+                    item.t, s.time.duration_s, item.t
                 ),
             ));
         }
@@ -4897,11 +4933,13 @@ fn timeline(s: &Scenario, e: &mut Vec<ScenarioError>) {
                         .unwrap_or_default()
                 ),
             )),
-            Some(until) if until <= item.t || until > s.time.duration_s => e.push(conflict(
+            // An end past the run's end means "until the run ends" (the run loop schedules
+            // only the ends inside the horizon), so shortening the run keeps it startable.
+            Some(until) if until <= item.t => e.push(conflict(
                 &format!("{field}.until"),
                 format!(
-                    "is {until} s, which is not after t ({} s) and inside the run [0, {}] s",
-                    item.t, s.time.duration_s
+                    "is {until} s, which is not after the event's start t ({} s)",
+                    item.t
                 ),
             )),
             _ => {}

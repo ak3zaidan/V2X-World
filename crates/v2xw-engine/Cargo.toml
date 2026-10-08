@@ -39,6 +39,9 @@ v2xw-interop = { path = "../v2xw-interop", version = "0.1.0" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The path of the key a scenario document failed to parse at, so the settings window can
+# mark that field (already in the lock through axum).
+serde_path_to_error = "0.1"
 # Scenarios are authored in YAML (03-interfaces.md §13); JSON is the same schema through
 # the same structs, which is why one loader serves both.
 serde_yml = { workspace = true }

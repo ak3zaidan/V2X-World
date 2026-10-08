@@ -401,6 +401,11 @@ pub struct RunReport {
     pub mobility_steps: u64,
     /// How many actors were ever spawned.
     pub actors_spawned: u64,
+    /// Trips the demand produced that never reached the road (no room at the origin for
+    /// the whole insertion delay, or no route).
+    pub trips_dropped: u64,
+    /// Of [`Self::trips_dropped`], the trips with no route from their origin.
+    pub trips_unroutable: u64,
     /// Why actors left the run, by cause (`TripComplete`, `RouteBlocked`, ...), in cause
     /// order. A closure on the timeline shows here: a vehicle that could not avoid it
     /// leaves at the barrier as `RouteBlocked`.
@@ -2122,6 +2127,10 @@ impl Engine {
     pub fn finish_run(&mut self, recorder: &mut dyn RunRecorder) -> RunReport {
         self.gn_finish();
         self.cpm_finish();
+        if let Some((dropped, unroutable)) = self.mobility.trip_losses() {
+            self.report.trips_dropped = dropped;
+            self.report.trips_unroutable = unroutable;
+        }
         self.report.gcbr = self.gcbr.as_ref().map(|g| g.tally);
         let refusals: u64 = self
             .nodes
