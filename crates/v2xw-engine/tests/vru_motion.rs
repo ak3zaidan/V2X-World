@@ -30,6 +30,8 @@ struct Track {
     heading: Option<f64>,
     still_s: f64,
     act: u8,
+    lane: Option<u32>,
+    act_prev: u8,
 }
 
 #[derive(Default)]
@@ -72,6 +74,10 @@ fn measure_vru_motion() {
         .ok()
         .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
         .unwrap_or_default();
+    let watch_t: (f64, f64) = (
+        std::env::var("V2XW_WATCH_T0").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0),
+        std::env::var("V2XW_WATCH_T1").ok().and_then(|s| s.parse().ok()).unwrap_or(1e9),
+    );
     std::env::set_current_dir(&root).unwrap();
     let mut scenario = Scenario::load(root.join(&path)).expect("scenario loads");
     if let Ok(p) = std::env::var("V2XW_PEDESTRIANS") {
@@ -90,6 +96,25 @@ fn measure_vru_motion() {
         let mut ctx = MobilityCtx::new(0, &world, &rng);
         mobility.init(&mut ctx, demand).expect("init");
     }
+    if let Ok(ids) = std::env::var("V2XW_LANES") {
+        for id in ids.split(',').filter_map(|x| x.trim().parse::<u32>().ok()) {
+            if let Some(l) = world.try_lane(v2xw_core::ids::LaneId::new(id)) {
+                let a = l.point_at(0.0);
+                let b = l.point_at(l.length_m);
+                println!(
+                    "lane {id} {:?} len {:.2} width {:.2} from ({:.2},{:.2}) to ({:.2},{:.2}) succ {:?}",
+                    l.kind,
+                    l.length_m,
+                    l.width_m,
+                    a.x,
+                    a.y,
+                    b.x,
+                    b.y,
+                    world.successor_lanes(l.id).iter().map(|x| x.index()).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
     let step = scenario.time.mobility_step();
     let dt = step.as_secs_f64();
     let mut classes: BTreeMap<u32, VehicleClass> = BTreeMap::new();
@@ -101,6 +126,10 @@ fn measure_vru_motion() {
     let mut overlap_pairs = 0u64;
     let mut off_walk = 0u64;
     let mut activity_counts: BTreeMap<u8, u64> = BTreeMap::new();
+    let mut accel_why: BTreeMap<String, u64> = BTreeMap::new();
+    let mut overlap_why: BTreeMap<String, u64> = BTreeMap::new();
+    let mut overlap_run: BTreeMap<(u32, u32), u32> = BTreeMap::new();
+    let mut overlap_longest = (0u32, 0u32, 0u32);
     let mut t = 0u64;
     let end = (seconds * 1e9) as u64;
     let wall = std::time::Instant::now();
@@ -119,7 +148,7 @@ fn measure_vru_motion() {
                 stops.push((tr.still_s, d.index(), tr.act));
             }
         }
-        let mut peds: Vec<(u32, Vec3, Option<u32>)> = Vec::new();
+        let mut peds: Vec<(u32, Vec3, Option<u32>, u8, Option<(u32, f64, f64)>)> = Vec::new();
         for (actor, k) in &update.states {
             let id = actor.index();
             let class = classes.get(&id).copied().unwrap_or_default();
@@ -137,7 +166,7 @@ fn measure_vru_motion() {
             let act = person.as_ref().map_or(0, |p| p.activity.code());
             if kind == "pedestrian" {
                 *activity_counts.entry(act).or_default() += 1;
-                peds.push((id, k.pos, person.as_ref().and_then(|p| p.group)));
+                peds.push((id, k.pos, person.as_ref().and_then(|p| p.group), act, k.lane.map(|l| (l.lane.index(), l.s_m, l.d_m))));
                 if k.lane.is_none() && !person.as_ref().is_some_and(|p| p.crossing_midblock()) {
                     off_walk += 1;
                 }
@@ -145,7 +174,7 @@ fn measure_vru_motion() {
             let tally = tallies.entry(kind).or_default();
             let tr = tracks.entry(id).or_default();
             let speed = k.vel.norm_2d();
-            if watch.contains(&id) {
+            if watch.contains(&id) && ts >= watch_t.0 && ts <= watch_t.1 {
                 println!(
                     "watch {id} t={ts:.1} pos=({:.2},{:.2}) v={speed:.2} hdg={:.1} lane={:?} act={act}",
                     k.pos.x,
@@ -158,6 +187,14 @@ fn measure_vru_motion() {
                 tally.samples += 1;
                 let disp = k.pos - p0;
                 let d = disp.norm_2d();
+                if kind == "pedestrian" && d > 4.0 {
+                    println!(
+                        "jump {id} t {ts:.1} {d:.1} m: lane {:?} -> {:?} act {}->{act}",
+                        tr.lane,
+                        k.lane.map(|l| (l.lane.index(), l.s_m, l.d_m)),
+                        tr.act_prev
+                    );
+                }
                 let implied = d / dt;
                 let vmax = match kind {
                     "pedestrian" => 2.6,
@@ -187,6 +224,15 @@ fn measure_vru_motion() {
                     let a = (v_now - v0).norm_2d() / dt;
                     let a_lim = if kind == "pedestrian" { 3.0 } else { 5.0 };
                     if a > a_lim {
+                        if kind == "pedestrian" {
+                            let lc = tr.lane != k.lane.map(|l| l.lane.index());
+                            let key = format!("act {}->{act} lanechange {lc}", tr.act_prev);
+                            let n = accel_why.entry(key.clone()).or_default();
+                            *n += 1;
+                            if *n <= 2 && a > 6.0 {
+                                println!("accel example {key}: id {id} t {ts:.1} a {a:.1} speed {speed:.2}");
+                            }
+                        }
                         tally.accel_over_3 += 1;
                         if a > tally.worst_accel.0 {
                             tally.worst_accel = (a, id, ts);
@@ -223,6 +269,8 @@ fn measure_vru_motion() {
             }
             tr.pos = Some(k.pos);
             tr.heading = Some(k.heading_rad);
+            tr.lane = k.lane.map(|l| l.lane.index());
+            tr.act_prev = act;
         }
         // Overlaps: pedestrians closer than 0.35 m, centre to centre (a body is ~0.5 m).
         peds.sort_by(|a, b| a.1.x.total_cmp(&b.1.x));
@@ -232,9 +280,28 @@ fn measure_vru_motion() {
                 if peds[j].1.x - peds[i].1.x > 0.35 {
                     break;
                 }
-                if peds[i].1.distance_2d(peds[j].1) < 0.35 {
+                let dist = peds[i].1.distance_2d(peds[j].1);
+                if dist < 0.35 {
                     overlap_pairs += 1;
                     any = true;
+                    let (a, b) = (&peds[i], &peds[j]);
+                    let same_group = a.2.is_some() && a.2 == b.2;
+                    let same_lane = a.4.zip(b.4).is_some_and(|(x, y)| x.0 == y.0);
+                    let key = format!(
+                        "d<{} group {} lane {} acts {}/{}",
+                        if dist < 0.05 { "0.05" } else if dist < 0.2 { "0.2" } else { "0.35" },
+                        same_group,
+                        same_lane,
+                        a.3.min(b.3),
+                        a.3.max(b.3)
+                    );
+                    *overlap_why.entry(key).or_default() += 1;
+                    let pk = (a.0.min(b.0), a.0.max(b.0));
+                    let n = overlap_run.entry(pk).or_default();
+                    *n += 1;
+                    if *n > overlap_longest.0 {
+                        overlap_longest = (*n, pk.0, pk.1);
+                    }
                     if overlap_pairs <= 3 {
                         println!(
                             "overlap t={ts:.1} {} and {} at ({:.1},{:.1}) groups {:?}/{:?}",
@@ -303,7 +370,17 @@ fn measure_vru_motion() {
             .join(" ")
     );
     println!("pedestrian steps off every walkable lane (not mid-block): {off_walk}");
-    println!("steps with a pedestrian overlap (<0.35 m): {overlaps}, pairs {overlap_pairs}");
+    println!("steps with a pedestrian overlap (<0.35 m): {overlaps}, pairs {overlap_pairs}, distinct pairs {}, longest {} steps ({} & {})", overlap_run.len(), overlap_longest.0, overlap_longest.1, overlap_longest.2);
+    let mut ow: Vec<_> = overlap_why.into_iter().collect();
+    ow.sort_by(|a, b| b.1.cmp(&a.1));
+    for (k, n) in ow.iter().take(8) {
+        println!("  overlap {k}: {n}");
+    }
+    let mut aw: Vec<_> = accel_why.into_iter().collect();
+    aw.sort_by(|a, b| b.1.cmp(&a.1));
+    for (k, n) in aw.iter().take(8) {
+        println!("  accel>lim {k}: {n}");
+    }
     stops.sort_by(|a, b| b.0.total_cmp(&a.0));
     let mut by_kind: BTreeMap<&str, (u64, f64)> = BTreeMap::new();
     for (s, id, _) in &stops {

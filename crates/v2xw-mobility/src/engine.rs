@@ -2648,10 +2648,9 @@ impl NativeMobility {
                     let mut route = vec![first];
                     while route.len() < PEDESTRIAN_WALK_LANES {
                         let last = *route.last().expect("non-empty");
-                        let next: Vec<LaneId> = world
-                            .successor_lanes(last)
+                        let next: Vec<LaneId> = SocialForce::walk_successors(world, last)
                             .into_iter()
-                            .filter(|l| SocialForce::is_walkable(world, *l) && !route.contains(l))
+                            .filter(|l| !route.contains(l))
                             .collect();
                         if next.is_empty() {
                             break;
