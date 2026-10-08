@@ -545,6 +545,12 @@ fn security_choices() -> Vec<Value> {
                     "security.protocol.id",
                     json!(v2xw_proto::scms::CAMP_SCMS_ID),
                 ),
+                // The backend runs the same protocol, or the run refuses to start on a
+                // scenario that names the other one (base/city.yaml names CAMP).
+                set(
+                    "actors.backend.protocol",
+                    json!(v2xw_proto::scms::CAMP_SCMS_ID),
+                ),
                 set("security.envelope", json!("ieee1609.2")),
                 set("net.layer", json!("wsmp")),
                 set("messages.sets", json!(["bsm"])),
@@ -556,6 +562,7 @@ fn security_choices() -> Vec<Value> {
             None,
             vec![
                 set("security.protocol.id", json!(crate::phase2::ETSI_PKI)),
+                set("actors.backend.protocol", json!(crate::phase2::ETSI_PKI)),
                 set("security.envelope", json!("etsi103097")),
                 set("net.layer", json!("gn-btp")),
                 set("messages.sets", json!(["cam"])),
@@ -672,14 +679,24 @@ fn message_rate_choices() -> Vec<Value> {
         vec![set("messages.rate_hz", Value::Null)],
     )];
     for hz in [20u32, 10, 5, 2, 1] {
+        let mut patch = vec![set("messages.rate_hz", json!(hz))];
+        // A generator runs once a mobility step, so above 10 Hz the step must shrink with
+        // the interval (validate refuses the rate otherwise): 50 ms for 20 Hz, which also
+        // doubles the mobility work.
+        let note = if hz > 10 {
+            patch.push(set("time.mobility_step_ms", json!(1000 / hz)));
+            format!(" Vehicles also move in {} ms steps, so the run is slower.", 1000 / hz)
+        } else {
+            String::new()
+        };
         out.push(choice(
             &format!("{hz} Hz"),
             &format!(
                 "Every vehicle broadcasts its awareness message (BSM or CAM) {hz} times a \
-                 second; congestion control may still lengthen the interval."
+                 second; congestion control may still lengthen the interval.{note}"
             ),
             None,
-            vec![set("messages.rate_hz", json!(hz))],
+            patch,
         ));
     }
     out
