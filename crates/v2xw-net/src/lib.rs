@@ -100,6 +100,7 @@ pub mod frag;
 pub mod frame;
 pub mod gn;
 pub mod netlayer;
+pub mod stack;
 pub mod wsmp;
 
 #[cfg(test)]

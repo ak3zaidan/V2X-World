@@ -288,6 +288,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
 #[cfg(test)]
 const DIMENSIONLESS: &[&str] = &[
     "seed",
+    "net.geonet.hop_limit",
     "experiment.seeds[]",
     "weather.intensity",
     "actors.vehicles.equipped_fraction",

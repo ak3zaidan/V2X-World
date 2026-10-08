@@ -116,6 +116,8 @@ use crate::scenario::Scenario;
 use crate::snapshot::{ActorState, SnapshotStream};
 
 mod coop;
+mod geonet;
+pub use geonet::GeonetWarning;
 pub mod jamming;
 mod link;
 mod radios;
@@ -483,6 +485,9 @@ pub struct RunReport {
     /// microscopic box ([`crate::scale::RadioGate`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<ScaleTally>,
+    /// Each multi-hop hazard warning (`net.geonet`): reach, latency, hops, overhead.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub geonet: Vec<GeonetWarning>,
 }
 
 /// The city-scale radio gate's totals ([`crate::scale`]).
@@ -2353,6 +2358,11 @@ impl Engine {
                 );
             }
         }
+        if !matches!(purpose, se::Purpose::CutIn(_)) {
+            if let Some(more) = self.geonet_warning(index, chosen.actor, chosen.node, now) {
+                note.effect.push_str(&more);
+            }
+        }
         true
     }
 
@@ -4066,7 +4076,15 @@ impl Engine {
             policy.silenced_frames += 1;
             return;
         }
-        let jitter = self.gen_timing.jitter(&self.rng, node, tx.generation_time);
+        let mut jitter = self.gen_timing.jitter(&self.rng, node, tx.generation_time);
+        // IEEE 1609.4 alternating access: wait for the control-channel interval.
+        if self.scenario.net.channel_access.as_deref() == Some("alternating") {
+            let sched = v2xw_net::stack::wave::ChannelSchedule {
+                access: v2xw_net::stack::wave::ChannelAccess::Alternating,
+            };
+            let at = jitter.after(tx.ready_at);
+            jitter = Duration::from_nanos(jitter.as_nanos() + sched.access_delay_ns(at, true));
+        }
         if jitter.as_nanos() == 0 {
             self.hand_down_app(node, tx, now, horizon, None);
             return;

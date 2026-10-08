@@ -1170,6 +1170,107 @@ pub struct Net {
     /// The backend network model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_net: Option<ModelChoice>,
+    /// Multi-hop GeoNetworking for hazard warnings (`gn-btp` only): when a hazard fires,
+    /// its DENM is GeoBroadcast and forwarded hop by hop through the equipped vehicles.
+    /// Unset, a DENM travels one hop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geonet: Option<Geonet>,
+    /// IEEE 1609.4 channel access on `wsmp`: `continuous` (one channel all the time, the
+    /// deployed SAE J2945/1 profile; the default) or `alternating` (50 ms on the control
+    /// channel, 50 ms on a service channel, a 4 ms guard at each switch: a safety message
+    /// waits for the next control-channel interval).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_access: Option<String>,
+}
+
+/// Multi-hop GeoNetworking forwarding of hazard warnings ([`Net::geonet`]), EN 302 636-4-1
+/// with the DEN basic service of EN 302 637-3.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Geonet {
+    /// How a warning spreads inside its area: `cbf` (contention-based: the farthest
+    /// receiver rebroadcasts first, the rest stand down) or `simple` (every receiver
+    /// rebroadcasts once).
+    #[serde(default = "Geonet::default_area_forwarding")]
+    pub area_forwarding: String,
+    /// How a packet travels towards an area it is not yet in: `greedy` (to the neighbour
+    /// nearest the area) or `cbf`.
+    #[serde(default = "Geonet::default_non_area_forwarding")]
+    pub non_area_forwarding: String,
+    /// What a contending vehicle does on hearing a copy: `etsi` (stand down, and take a
+    /// later copy as new: many transmissions), `dpd` (stand down, never forward twice) or
+    /// `gpc` (stand down only if the copy came from farther along).
+    #[serde(default = "Geonet::default_cbf_variant")]
+    pub cbf_variant: String,
+    /// The most hops a warning may take; 10 by default (`itsGnDefaultHopLimit`).
+    #[serde(default = "Geonet::default_hop_limit")]
+    pub hop_limit: u32,
+    /// The warning area's radius around the hazard, metres; 1 000 m by default.
+    #[serde(default = "Geonet::default_area_radius_m")]
+    pub area_radius_m: f64,
+    /// The single-hop radio range the forwarding sees, metres; 500 m by default.
+    #[serde(default = "Geonet::default_range_m")]
+    pub range_m: f64,
+    /// How often the originator repeats the warning, ms; 0 sends it once.
+    #[serde(default = "Geonet::default_repetition_interval_ms")]
+    pub repetition_interval_ms: u64,
+    /// How long it keeps repeating, ms.
+    #[serde(default = "Geonet::default_repetition_duration_ms")]
+    pub repetition_duration_ms: u64,
+    /// Keep-alive forwarding: vehicles in the area re-send a warning they stop hearing,
+    /// so it reaches vehicles that arrive later.
+    #[serde(default)]
+    pub keep_alive_forwarding: bool,
+    /// How long each warning is followed, seconds.
+    #[serde(default = "Geonet::default_window_s")]
+    pub window_s: f64,
+}
+
+impl Geonet {
+    fn default_area_forwarding() -> String {
+        "cbf".to_string()
+    }
+    fn default_non_area_forwarding() -> String {
+        "greedy".to_string()
+    }
+    fn default_cbf_variant() -> String {
+        "gpc".to_string()
+    }
+    fn default_hop_limit() -> u32 {
+        10
+    }
+    fn default_area_radius_m() -> f64 {
+        1_000.0
+    }
+    fn default_range_m() -> f64 {
+        500.0
+    }
+    fn default_repetition_interval_ms() -> u64 {
+        1_000
+    }
+    fn default_repetition_duration_ms() -> u64 {
+        5_000
+    }
+    fn default_window_s() -> f64 {
+        10.0
+    }
+}
+
+impl Default for Geonet {
+    fn default() -> Self {
+        Geonet {
+            area_forwarding: Geonet::default_area_forwarding(),
+            non_area_forwarding: Geonet::default_non_area_forwarding(),
+            cbf_variant: Geonet::default_cbf_variant(),
+            hop_limit: Geonet::default_hop_limit(),
+            area_radius_m: Geonet::default_area_radius_m(),
+            range_m: Geonet::default_range_m(),
+            repetition_interval_ms: Geonet::default_repetition_interval_ms(),
+            repetition_duration_ms: Geonet::default_repetition_duration_ms(),
+            keep_alive_forwarding: false,
+            window_s: Geonet::default_window_s(),
+        }
+    }
 }
 
 impl Net {
@@ -1186,6 +1287,8 @@ impl Default for Net {
             backhaul: None,
             uu: None,
             backend_net: None,
+            geonet: None,
+            channel_access: None,
         }
     }
 }
