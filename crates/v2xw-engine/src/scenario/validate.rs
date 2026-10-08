@@ -3192,7 +3192,12 @@ fn net(s: &Scenario, e: &mut Vec<ScenarioError>) {
         }
     }
     if let Some(d) = s.net.mac_queue_depth {
-        bounded_at("net.mac_queue_depth", "net.mac_queue_depth", f64::from(d), e);
+        bounded_at(
+            "net.mac_queue_depth",
+            "net.mac_queue_depth",
+            f64::from(d),
+            e,
+        );
     }
     if let Some(g) = &s.net.geonet {
         one_of("net.geonet.forwarding", &g.forwarding, &GN_FORWARDING, e);

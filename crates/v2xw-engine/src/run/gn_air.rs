@@ -42,8 +42,8 @@ use v2xw_core::time::SimTime;
 use v2xw_net::BtpPort;
 use v2xw_net::stack::router::LinkDest;
 use v2xw_net::stack::{
-    Area, AreaForwarding, CbfVariant, ForwardingConfig, GnAddr, GnMib, GnPacket,
-    NonAreaForwarding, PacketKey, Router, RouterAction,
+    Area, AreaForwarding, CbfVariant, ForwardingConfig, GnAddr, GnMib, GnPacket, NonAreaForwarding,
+    PacketKey, Router, RouterAction,
 };
 use v2xw_radio::types::AccessCategory;
 
@@ -360,7 +360,8 @@ impl Engine {
         state.end = state.air.after(at);
         state.descriptor.tx_power_dbm = self.tx_power_dbm(node);
         state.descriptor.ac = self.access_category(template.msg_type, true);
-        state.descriptor.sdu_ref = v2xw_radio::types::SduRef::new(template.descriptor.sdu_ref.sdu, seq);
+        state.descriptor.sdu_ref =
+            v2xw_radio::types::SduRef::new(template.descriptor.sdu_ref.sdu, seq);
         state.tx_handle = None;
         state.arrivals.clear();
         state.faint.clear();
@@ -376,11 +377,7 @@ impl Engine {
         state.census.clear();
         state.frag = None;
         state.cert_frag = None;
-        state.gn = Some(GnFrame {
-            packet,
-            to,
-            cbf,
-        });
+        state.gn = Some(GnFrame { packet, to, cbf });
         if !cbf {
             self.gn_count_forward(node, &state);
         }
@@ -421,11 +418,11 @@ impl Engine {
     /// contention timer has come due, and its router decides. `false` when the frame stood
     /// down (it is then gone).
     pub(super) fn gn_cbf_fires(&mut self, node: NodeId, frame: FrameSeq, now: SimTime) -> bool {
-        let Some((key, ready)) = self
-            .frames
-            .get(&frame)
-            .and_then(|s| s.gn.as_ref().filter(|g| g.cbf).map(|g| (g.packet.key(), s.ready_at)))
-        else {
+        let Some((key, ready)) = self.frames.get(&frame).and_then(|s| {
+            s.gn.as_ref()
+                .filter(|g| g.cbf)
+                .map(|g| (g.packet.key(), s.ready_at))
+        }) else {
             return true;
         };
         let Some(gn) = self.gn_air.as_mut() else {

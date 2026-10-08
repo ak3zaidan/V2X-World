@@ -162,7 +162,10 @@ fn on_air_forwards_are_frames_in_the_relays_own_queue() {
     let w = &rep.geonet[0];
     assert!(stats.gbc_originated >= 1, "{stats:?}");
     assert!(stats.forwards_sent >= 1, "{stats:?}");
-    assert!(stats.cbf_armed > stats.forwards_sent, "CBF contenders stand down: {stats:?}");
+    assert!(
+        stats.cbf_armed > stats.forwards_sent,
+        "CBF contenders stand down: {stats:?}"
+    );
     assert!(
         senders.len() >= 2,
         "DENMs go on the air from relays, not only the origin: {senders:?}"
@@ -180,7 +183,11 @@ fn on_air_forwards_are_frames_in_the_relays_own_queue() {
     let rep2 = overlay.run(&mut rec2).expect("runs");
     assert!(rep2.gn_air.is_none());
     let senders2 = denm_senders(&rec2);
-    assert_eq!(senders2.len(), 1, "the overlay puts only the origin's DENMs on the air: {senders2:?}");
+    assert_eq!(
+        senders2.len(),
+        1,
+        "the overlay puts only the origin's DENMs on the air: {senders2:?}"
+    );
     assert!(
         senders.values().sum::<u64>() > senders2.values().sum::<u64>(),
         "forwards load the channel on the air: {senders:?} vs {senders2:?}"

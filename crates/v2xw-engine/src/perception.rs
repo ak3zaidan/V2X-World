@@ -328,6 +328,26 @@ impl Perception {
             .map(|(k, _)| k.1)
     }
 
+    /// The actor behind the confirmed track of `observer` nearest `pos`, within `gate_m`.
+    ///
+    /// A CPM's object ids are re-keyed by the sender's pseudonym on the air, so the
+    /// measurement layer associates a reported object with its track by position (the
+    /// CPM carries the track's own estimate, to the centimetre). Ground truth, as above.
+    pub fn actor_near(&self, observer: NodeId, pos: Vec3, gate_m: f64) -> Option<ActorId> {
+        let mut best: Option<(f64, ActorId)> = None;
+        for ((_, actor), t) in self
+            .tracks
+            .range((observer, ActorId::new(0))..=(observer, ActorId::new(u32::MAX)))
+        {
+            let Some(p) = t.last else { continue };
+            let d = p.pos.distance_2d(pos);
+            if d <= gate_m && best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, *actor));
+            }
+        }
+        best.map(|(_, a)| a)
+    }
+
     /// Forgets an observer that left the run.
     pub fn forget(&mut self, observer: NodeId) {
         self.tracks.retain(|(n, _), _| *n != observer);
