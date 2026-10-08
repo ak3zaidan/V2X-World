@@ -258,7 +258,7 @@ export function ComparisonView(): React.JSX.Element {
           </div>
           <p className="help">
             A second <code>v2xw-server</code> on another port —{" "}
-            <code>cargo run -p v2xw-server -- --scenario baseline.yaml --port 8788</code>. Read-only: no{" "}
+            <code>V2XW_PORT=8788 ./run-sim.sh baseline.yaml</code>. Read-only: no{" "}
             <code>view.follow</code>, no <code>events.set</code>, so only keyframes, deltas and{" "}
             <code>MetricSample</code> come over this connection. There is no <code>--replay</code> flag on that
             binary yet (<code>serve_replay</code> is library-only), so a recording is opened below instead.
