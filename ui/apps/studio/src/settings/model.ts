@@ -20,7 +20,12 @@ import {
 
 /** A field of either source, with the engine's statement about it when the engine published one. */
 export type Field = FormField &
-  Partial<Pick<PublishedFormField, "status" | "statusNote" | "collection" | "path" | "hasDefault" | "defaultValue" | "range">>;
+  Partial<
+    Pick<
+      PublishedFormField,
+      "status" | "statusNote" | "collection" | "path" | "hasDefault" | "defaultValue" | "range" | "level" | "explain" | "recommended"
+    >
+  >;
 
 /** Where the fields came from, which the window says in one line. */
 export type FieldSource = "published" | "schema" | "builtin";
@@ -279,3 +284,11 @@ export const STATUS_BADGE: Record<FieldStatus, { label: string; cls: string } | 
   descriptive: { label: "description", cls: "" },
   unknown: { label: "unclassified", cls: "off" },
 };
+
+/**
+ * Whether a field belongs on the Basic page. A build that publishes no levels at all shows every
+ * field on both pages rather than an empty Basic page.
+ */
+export function isBasic(f: Field, anyLevels: boolean): boolean {
+  return !anyLevels || f.level === "basic";
+}

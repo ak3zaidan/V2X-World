@@ -189,6 +189,50 @@ export interface ScenarioExtras {
   readonly statuses: readonly { id: string; label: string; note: string }[];
   /** The engine's setting groups, in its order, each with a sentence and the sections under it. */
   readonly groups: readonly { name: string; description: string; sections: readonly string[] }[];
+  /** The quick settings the engine publishes (`scenario.get` `quick`), in its order. */
+  readonly quick: readonly QuickSetting[];
+  /** The "what would you like to study?" starting points (`scenario.get` `studies`). */
+  readonly studies: readonly Study[];
+}
+
+/** One write of an engine-published patch. */
+export interface PatchWrite {
+  readonly path: string;
+  readonly pointer: string;
+  readonly value: unknown;
+}
+
+/** One choice of a quick setting: its words and the writes it makes. */
+export interface QuickChoice {
+  readonly label: string;
+  readonly description?: string;
+  readonly group?: string;
+  readonly patch: readonly PatchWrite[];
+}
+
+/** A quick setting as the engine publishes it (`crates/v2xw-engine/src/scenario/guide.rs`). */
+export interface QuickSetting {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: "scenario" | "city" | "field" | "choice" | "class";
+  readonly explain?: string;
+  readonly path?: string;
+  readonly pointer?: string;
+  readonly options?: readonly QuickChoice[];
+  /** For a `class` toggle: the class, its share when on, and the class that gives it up. */
+  readonly class?: string;
+  readonly share?: number;
+  readonly absorb?: string;
+  readonly shows_files?: boolean;
+}
+
+/** A study starting point. */
+export interface Study {
+  readonly id: string;
+  readonly label: string;
+  readonly question: string;
+  readonly look_at?: string;
+  readonly patch: readonly PatchWrite[];
 }
 
 /** The pseudonym the followed node is currently using (§3.6.7 `sec.cert`, §3.6.4 `node.tx`). */
@@ -412,7 +456,7 @@ const EMPTY_RUN: RunInfo = {
   generation: 0, stagedHash: null, outputDigest: null, kernelThreads: null, failure: null,
 };
 
-const EMPTY_EXTRAS: ScenarioExtras = { runningHash: "", staged: null, fields: [], statuses: [], groups: [] };
+const EMPTY_EXTRAS: ScenarioExtras = { runningHash: "", staged: null, fields: [], statuses: [], groups: [], quick: [], studies: [] };
 
 /** Before the first probe: the page's own origin, unresolved. */
 const UNRESOLVED_TARGET: EngineTargetView = {
@@ -989,6 +1033,8 @@ export const useStudio = create<StudioState>((set) => ({
         fields: extras?.fields && extras.fields.length > 0 ? extras.fields : state.scenarioExtras.fields,
         statuses: extras?.statuses && extras.statuses.length > 0 ? extras.statuses : state.scenarioExtras.statuses,
         groups: extras?.groups && extras.groups.length > 0 ? extras.groups : state.scenarioExtras.groups,
+        quick: extras?.quick && extras.quick.length > 0 ? extras.quick : state.scenarioExtras.quick,
+        studies: extras?.studies && extras.studies.length > 0 ? extras.studies : state.scenarioExtras.studies,
       },
     })),
   setReconnectAttempts: (n) => set((state) => (state.reconnectAttempts === n ? state : { reconnectAttempts: n })),

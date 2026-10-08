@@ -249,7 +249,19 @@ function SettingRowImpl({
           <StatusBadge field={f} />
         </label>
         <div className="setting-desc" id={`${id}-desc`}>
-          <Prose text={f.help ?? ""} />
+          {f.explain ? (
+            <>
+              <div className="setting-explain" data-testid="setting-explain">{f.explain}</div>
+              {f.help ? (
+                <details className="setting-technical">
+                  <summary>Technical detail</summary>
+                  <Prose text={f.help} />
+                </details>
+              ) : null}
+            </>
+          ) : (
+            <Prose text={f.help ?? ""} />
+          )}
           {f.status && f.status !== "wired" && f.statusNote ? (
             <div className="status-note">
               <Prose text={f.statusNote} />
@@ -285,7 +297,8 @@ function SettingRowImpl({
         ) : null}
         <div className="setting-meta">
           {f.hasDefault ? <span>Default: <code>{describeValue(f.defaultValue)}</code></span> : null}
-          {f.range ? <span>Range: {f.range}</span> : null}
+          {f.recommended ? <span data-testid="setting-recommended">Recommended: {f.recommended}</span> : null}
+          {f.range ? <span>Allowed: {f.range}</span> : null}
           <span className="setting-path" title="How a scenario file spells this setting">
             <code>{fieldPath(f)}</code>
           </span>

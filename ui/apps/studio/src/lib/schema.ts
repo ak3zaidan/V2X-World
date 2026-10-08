@@ -317,6 +317,12 @@ export interface PublishedFormField extends FormField {
   readonly defaultValue?: unknown;
   /** The engine's range in words, when it bounds the value (`(0, ∞)`). */
   readonly range?: string;
+  /** `basic` for what a newcomer sets, `advanced` for model internals (`x-level`). */
+  readonly level?: "basic" | "advanced";
+  /** What the setting is in the real world, in one sentence (`x-explain`). */
+  readonly explain?: string;
+  /** The range to start in, in words (`x-recommended`). */
+  readonly recommended?: string;
 }
 
 /** One row of the published field index, or one node of the published schema. */
@@ -417,6 +423,9 @@ export function fieldsFromPublished(
     hasDefault: Object.prototype.hasOwnProperty.call(row, "default") && pointer === row["x-pointer"],
     ...(Object.prototype.hasOwnProperty.call(row, "default") && pointer === row["x-pointer"] ? { defaultValue: row.default } : {}),
     ...(typeof row["x-range"] === "string" ? { range: row["x-range"] } : {}),
+    ...(row["x-level"] === "basic" || row["x-level"] === "advanced" ? { level: row["x-level"] } : {}),
+    ...(typeof row["x-explain"] === "string" ? { explain: row["x-explain"] } : {}),
+    ...(typeof row["x-recommended"] === "string" ? { recommended: row["x-recommended"] } : {}),
   });
 
   // What a list's element rows say about it: a list of strings from a closed set becomes

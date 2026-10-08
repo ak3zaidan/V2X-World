@@ -710,9 +710,19 @@ pub fn slot_values(path: &str, registry: &Registry) -> Option<(Vec<Value>, bool)
         "threats.compromised_rsu_attack" => {
             Some(vec![v2xw_threat::attack_rsu::MODEL_ID.to_string()])
         }
-        "actors.rsus[].profile" | "actors.backend.entities.*.profile" => Some(
+        // Each slot offers only the hardware that belongs there: a roadside unit's list
+        // holds the RSU profiles, a backend entity's the server and base-station ones.
+        "actors.rsus[].profile" => Some(
             validate::all_profile_ids()
                 .into_iter()
+                .filter(|id| id.starts_with("rsu/"))
+                .map(str::to_string)
+                .collect(),
+        ),
+        "actors.backend.entities.*.profile" => Some(
+            validate::all_profile_ids()
+                .into_iter()
+                .filter(|id| id.starts_with("backend/") || id.starts_with("bs/"))
                 .map(str::to_string)
                 .collect(),
         ),
@@ -789,6 +799,14 @@ pub fn extra_values(path: &str) -> Option<(Vec<Value>, bool)> {
             false,
         )),
         "radio.channel" | "radio.adjacent_channel[].channel" => Some((channel_rows(), true)),
+        "actors.rsu_placement.profile" => Some((
+            validate::all_profile_ids()
+                .into_iter()
+                .filter(|id| id.starts_with("rsu/"))
+                .map(|v| option_row(path, v, ""))
+                .collect(),
+            true,
+        )),
         "actors.vehicles.classes.*.obu" => Some((
             validate::obu_profile_ids()
                 .into_iter()
@@ -926,6 +944,42 @@ pub static PRESETS: &[Preset] = &[
         label: "1 hour",
         value: 3600.0,
         note: "A full peak hour; a batch run, not an interactive one.",
+    },
+    Preset {
+        path: "time.duration_s",
+        label: "6 hours",
+        value: 21_600.0,
+        note: "A morning or an evening: a batch run (checkpointed; see docs/design/BUILD-STATUS.md, long runs).",
+    },
+    Preset {
+        path: "time.duration_s",
+        label: "1 day",
+        value: 86_400.0,
+        note: "A whole day: the SCMS revocation list is published daily (CAMP), so one day sees one CRL.",
+    },
+    Preset {
+        path: "time.duration_s",
+        label: "1 week",
+        value: 604_800.0,
+        note: "One SCMS certificate period (CAMP i_period, one week): pseudonym top-ups and expiry.",
+    },
+    Preset {
+        path: "actors.rsu_placement.count",
+        label: "None",
+        value: 0.0,
+        note: "Vehicles only: no infrastructure.",
+    },
+    Preset {
+        path: "actors.rsu_placement.count",
+        label: "A few (4)",
+        value: 4.0,
+        note: "This build's choice: a pilot corridor's handful of instrumented junctions.",
+    },
+    Preset {
+        path: "actors.rsu_placement.count",
+        label: "Many (16)",
+        value: 16.0,
+        note: "This build's choice: most signalised junctions of a downtown extract.",
     },
     Preset {
         path: "actors.vehicles.equipped_fraction",
@@ -1083,6 +1137,15 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.rsus[].profile" => "Hardware",
         "actors.rsus[].backhaul" => "Backhaul",
         "actors.rsus[].site" => "Site",
+        "actors.rsu_placement.count" => "Number of roadside units",
+        "actors.rsu_placement.profile" => "Roadside unit hardware",
+        "actors.vehicles.classes" => "Fleet mix",
+        "actors.vru.pedestrians" => "Pedestrians",
+        "actors.vru.cyclists" => "Cyclists",
+        "exporters" => "Files written after the run",
+        "seed" => "Random seed",
+        "meta.name" => "Run name",
+        "city" => "City",
         _ => return None,
     })
 }

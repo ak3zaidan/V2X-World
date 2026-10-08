@@ -1166,6 +1166,8 @@ fn scenario_get(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcome
             "models",
             "statuses",
             "validator",
+            "quick",
+            "studies",
         ] {
             result[key] = surface[key].clone();
         }
@@ -1206,6 +1208,8 @@ fn scenario_schema(_ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Out
         "fields",
         "slots",
         "models",
+        "quick",
+        "studies",
     ];
     if let Some(bad) = wanted.iter().find(|w| !known.contains(&w.as_str())) {
         return Err(ServerError::param(
