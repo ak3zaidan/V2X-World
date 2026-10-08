@@ -563,6 +563,20 @@ pub enum IntersectionMode {
     None,
 }
 
+/// A passenger-car driver's car-following parameters set by hand
+/// ([`NativeMobility::with_driver_override`]); `None` keeps the model's own.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DriverOverride {
+    /// Comfortable maximum acceleration `a`, m/s².
+    pub max_accel_mps2: Option<f64>,
+    /// Comfortable deceleration `b`, m/s².
+    pub comfort_decel_mps2: Option<f64>,
+    /// Desired time headway `T`, s.
+    pub time_headway_s: Option<f64>,
+    /// Standstill distance `s0`, m.
+    pub min_gap_m: Option<f64>,
+}
+
 /// The engine's parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1114,6 +1128,9 @@ pub struct NativeMobility {
     card: ModelCard,
     /// The exterior lamp model's parameters ([`crate::lamps`]).
     lamp_params: crate::lamps::LampParams,
+    /// A researcher's passenger-car driver (`actors.vehicles.driver`): each set field
+    /// replaces the car-following model's own calibration for [`VehicleClass::Passenger`].
+    driver_override: DriverOverride,
     /// Per vehicle: the lamps shown last step (for the brake hysteresis) and the driver's
     /// signalling habit, drawn the first time the vehicle is asked about.
     lamp_memory: BTreeMap<ActorId, (u8, crate::lamps::SignalHabit)>,
@@ -1249,9 +1266,19 @@ impl NativeMobility {
             dropped_trips: 0,
             unroutable_trips: 0,
             lamp_params: crate::lamps::LampParams::default(),
+            driver_override: DriverOverride::default(),
             lamp_memory: BTreeMap::new(),
             lateral: None,
         }
+    }
+
+    /// The same engine with a passenger-car driver of the caller's: `a`, `b`, `T` and
+    /// `s0` replace the car-following model's calibration for cars, before the per-driver
+    /// style and heterogeneity draws, so the population keeps its spread around them.
+    #[must_use]
+    pub fn with_driver_override(mut self, o: DriverOverride) -> Self {
+        self.driver_override = o;
+        self
     }
 
     /// The same engine with these exterior-lamp parameters ([`crate::lamps`]).
@@ -2526,6 +2553,17 @@ impl NativeMobility {
                 comfort_decel_mps2: tw.comfort_decel_mps2,
                 time_headway_s: tw.time_headway_s,
                 min_gap_m: tw.min_gap_m,
+                ..base
+            };
+        }
+        if class == VehicleClass::Passenger && self.driver_override != DriverOverride::default() {
+            let o = self.driver_override;
+            let base = self.cf.profile(class);
+            return DriverProfile {
+                max_accel_mps2: o.max_accel_mps2.unwrap_or(base.max_accel_mps2),
+                comfort_decel_mps2: o.comfort_decel_mps2.unwrap_or(base.comfort_decel_mps2),
+                time_headway_s: o.time_headway_s.unwrap_or(base.time_headway_s),
+                min_gap_m: o.min_gap_m.unwrap_or(base.min_gap_m),
                 ..base
             };
         }

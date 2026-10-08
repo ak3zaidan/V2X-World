@@ -192,6 +192,16 @@ const BASIC: &[Basic] = &[
         recommended: "On, except as the baseline of a congestion study.",
     },
     Basic {
+        path: "actors.vehicles.driver.time_headway_s",
+        explain: "The time gap drivers keep to the car ahead. Shorter gaps fit more cars on the road and leave less time to react to a warning.",
+        recommended: "1.0 s (aggressive) to 2.0 s (cautious); about 1.5 s typical.",
+    },
+    Basic {
+        path: "messages.rate_hz",
+        explain: "How many awareness messages each vehicle sends per second, at a fixed rate. Unset, vehicles follow the standards: 10 per second in the US, and in Europe as often as their motion changes.",
+        recommended: "Unset; 10 Hz to match ns-3 and Veins; 1 to 20 Hz to study load.",
+    },
+    Basic {
         path: "exporters",
         explain: "Which files the run writes when it finishes, for analysis outside the Studio.",
         recommended: "None to explore; Parquet to analyse in Python or R.",
@@ -202,6 +212,31 @@ const BASIC: &[Basic] = &[
 /// researcher-grade radio numbers (`radio.phy`, `radio.mac`, `radio.channel_model`,
 /// `radio.dcc`), which a newcomer does not need but should still be able to read.
 const ADVANCED: &[Basic] = &[
+    Basic {
+        path: "actors.vehicles.driver.max_accel_mps2",
+        explain: "How hard a car driver accelerates when the road ahead is clear.",
+        recommended: "1.0 to 2.0 m/s².",
+    },
+    Basic {
+        path: "actors.vehicles.driver.comfort_decel_mps2",
+        explain: "How hard a car driver brakes in normal driving (emergency braking is harder).",
+        recommended: "1.5 to 3.0 m/s².",
+    },
+    Basic {
+        path: "actors.vehicles.driver.min_gap_m",
+        explain: "The distance drivers leave to the car in front when queued at a light.",
+        recommended: "1.5 to 3 m.",
+    },
+    Basic {
+        path: "actors.vehicles.driver.politeness",
+        explain: "How much drivers care about the cars behind them when changing lanes: 0 is selfish, 1 fully considerate.",
+        recommended: "0.2 to 0.5.",
+    },
+    Basic {
+        path: "actors.vehicles.driver.lane_change_threshold_mps2",
+        explain: "The least advantage a lane change must bring before a driver bothers.",
+        recommended: "0.1 to 0.3 m/s².",
+    },
     Basic {
         path: "radio.sidelink.reservation_interval_ms",
         explain: "How often a C-V2X radio's booked slot repeats; it should match how often the radio has a message to send.",

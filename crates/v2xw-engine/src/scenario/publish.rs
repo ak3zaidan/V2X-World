@@ -316,6 +316,7 @@ const DIMENSIONLESS: &[&str] = &[
     "radio.channel_model.path_loss_exponent",
     "radio.channel_model.nakagami_shape",
     "radio.dcc.cbr_target",
+    "actors.vehicles.driver.politeness",
     "radio.sidelink.resource_keep_probability",
     "radio.dcc.adaptive_alpha",
     "radio.dcc.adaptive_beta",

@@ -26,14 +26,63 @@ pub fn native_with_driving(
     rules: &TrafficRules,
 ) -> NativeMobility {
     let spec = &scenario.actors.vehicles.driving;
+    let d = &scenario.actors.vehicles.driver;
+    let lane_change_set = d.politeness.is_some() || d.lane_change_threshold_mps2.is_some();
     let mut mobility = match library::build(spec, scenario.seed) {
-        Ok(Some(cf)) => NativeMobility::with_models(params, cf, MobilPreset::Kesting2007),
+        Ok(Some(cf)) if !lane_change_set => {
+            NativeMobility::with_models(params, cf, MobilPreset::Kesting2007)
+        }
+        Ok(Some(cf)) => NativeMobility::with_lane_change_params(
+            params,
+            cf,
+            MobilPreset::Kesting2007,
+            mobil_of(d),
+        ),
+        Ok(None) | Err(_) if lane_change_set => {
+            // `NativeMobility::new`'s own car-following model, with these MOBIL numbers.
+            let idm: std::sync::Arc<dyn v2xw_mobility::traits::CarFollowing + Send + Sync> =
+                std::sync::Arc::new(v2xw_mobility::carfollowing::idm::Idm::new(
+                    v2xw_mobility::carfollowing::idm::IdmPreset::UrbanHcm,
+                ));
+            NativeMobility::with_lane_change_params(
+                params,
+                idm,
+                MobilPreset::Kesting2007,
+                mobil_of(d),
+            )
+        }
         Ok(None) | Err(_) => NativeMobility::new(params),
     };
+    if d.max_accel_mps2.is_some()
+        || d.comfort_decel_mps2.is_some()
+        || d.time_headway_s.is_some()
+        || d.min_gap_m.is_some()
+    {
+        mobility = mobility.with_driver_override(v2xw_mobility::DriverOverride {
+            max_accel_mps2: d.max_accel_mps2,
+            comfort_decel_mps2: d.comfort_decel_mps2,
+            time_headway_s: d.time_headway_s,
+            min_gap_m: d.min_gap_m,
+        });
+    }
     if let Some(lateral) = &spec.lateral {
         mobility = mobility.with_lateral(lateral.build(rules));
     }
     mobility
+}
+
+/// Kesting 2007's MOBIL parameters with `actors.vehicles.driver`'s numbers over them.
+fn mobil_of(
+    d: &crate::scenario::schema::DriverSettings,
+) -> v2xw_mobility::lanechange::mobil::MobilParams {
+    let mut p = MobilPreset::Kesting2007.params();
+    if let Some(v) = d.politeness {
+        p.politeness = v;
+    }
+    if let Some(v) = d.lane_change_threshold_mps2 {
+        p.threshold_mps2 = v;
+    }
+    p
 }
 
 /// The block's errors, each naming its scenario key.

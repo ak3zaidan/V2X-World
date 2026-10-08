@@ -739,6 +739,61 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the sensing RSRP threshold",
     },
+    // `actors.vehicles.driver`: the ranges of the IDM calibrations in Treiber and
+    // Kesting, *Traffic Flow Dynamics* (2013) Table 11.2 and of Kesting 2007's MOBIL
+    // politeness, opened a little either way.
+    Bound {
+        path: "actors.vehicles.driver.max_accel_mps2",
+        lo: 0.3,
+        hi: 5.0,
+        exclusive_lo: false,
+        what: "the comfortable acceleration",
+    },
+    Bound {
+        path: "actors.vehicles.driver.comfort_decel_mps2",
+        lo: 0.5,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the comfortable deceleration",
+    },
+    Bound {
+        path: "actors.vehicles.driver.time_headway_s",
+        lo: 0.3,
+        hi: 4.0,
+        exclusive_lo: false,
+        what: "the desired time headway",
+    },
+    Bound {
+        path: "actors.vehicles.driver.min_gap_m",
+        lo: 0.5,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the standstill gap",
+    },
+    Bound {
+        path: "actors.vehicles.driver.politeness",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the MOBIL politeness",
+    },
+    Bound {
+        path: "actors.vehicles.driver.lane_change_threshold_mps2",
+        lo: 0.0,
+        hi: 2.0,
+        exclusive_lo: false,
+        what: "the lane-change threshold",
+    },
+    // `messages.rate_hz`: 1 Hz is the CAM floor (T_GenCamMax 1 s, EN 302 637-2 §6.1.3);
+    // 50 Hz is five times J2945/1's rate, past which a 10 MHz channel cannot carry a
+    // city fleet.
+    Bound {
+        path: "messages.rate_hz",
+        lo: 1.0,
+        hi: 50.0,
+        exclusive_lo: false,
+        what: "the message rate",
+    },
     Bound {
         path: "threats.attackers[].fraction",
         lo: 0.0,
@@ -1446,6 +1501,20 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "802.11p EDCA at the medium and high MAC tiers: the access category of \
                periodic and event messages, CWmin and AIFSN of the voice and video \
                categories, and the per-category queue length.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.driver",
+        status: Status::Wired,
+        note: "The passenger-car driver: a, b, T and s0 replace the car-following model's \
+               calibration for cars (each driver keeps a style and heterogeneity draw \
+               around them); politeness and the threshold set MOBIL for every class. Read \
+               by the native mobility engine; a SUMO run takes its drivers from SUMO.",
+    },
+    KeyStatus {
+        path: "messages.rate_hz",
+        status: Status::Wired,
+        note: "A fixed BSM and CAM rate in place of J2945/1's 10 Hz and the ETSI CAM \
+               triggers; congestion control may still stretch it.",
     },
     KeyStatus {
         path: "radio.sidelink",
@@ -3293,6 +3362,52 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
     }
 
     radio_tuning(s, e);
+    if let Some(r) = s.messages.rate_hz {
+        bounded_at("messages.rate_hz", "messages.rate_hz", r, e);
+        let timing_keys = [
+            "nominal_itt_ms",
+            "min_itt_ms",
+            "t_gen_cam_min_ms",
+            "t_gen_cam_max_ms",
+        ];
+        if s.messages
+            .generator
+            .as_ref()
+            .is_some_and(|g| timing_keys.iter().any(|k| g.params.get(*k).is_some()))
+        {
+            e.push(conflict(
+                "messages.rate_hz",
+                "and messages.generator.params both set the message interval; keep one".to_string(),
+            ));
+        }
+    }
+    let dv = &s.actors.vehicles.driver;
+    for (path, v) in [
+        ("actors.vehicles.driver.max_accel_mps2", dv.max_accel_mps2),
+        (
+            "actors.vehicles.driver.comfort_decel_mps2",
+            dv.comfort_decel_mps2,
+        ),
+        ("actors.vehicles.driver.time_headway_s", dv.time_headway_s),
+        ("actors.vehicles.driver.min_gap_m", dv.min_gap_m),
+        ("actors.vehicles.driver.politeness", dv.politeness),
+        (
+            "actors.vehicles.driver.lane_change_threshold_mps2",
+            dv.lane_change_threshold_mps2,
+        ),
+    ] {
+        if let Some(v) = v {
+            bounded_at(path, path, v, e);
+        }
+    }
+    if !dv.is_default() && s.mobility.as_ref().is_some_and(|m| m.provider == "sumo") {
+        e.push(conflict(
+            "actors.vehicles.driver",
+            "sets the native engine's drivers, and mobility.provider is sumo, whose drivers \
+             are SUMO's vType parameters"
+                .to_string(),
+        ));
+    }
 
     // `radio.models`: every family and id must be one `wiring::build_radio`,
     // `build_phy` and `build_obstacles` act on, with parameters that fit the model. The

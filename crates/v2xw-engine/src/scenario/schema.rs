@@ -599,6 +599,51 @@ pub struct Vehicles {
         skip_serializing_if = "v2xw_mobility::carfollowing::library::DrivingSpec::is_default"
     )]
     pub driving: v2xw_mobility::carfollowing::library::DrivingSpec,
+    /// The passenger-car driver as plain numbers: the car-following parameters `a`, `b`,
+    /// `T` and `s0` (Treiber, Hennecke and Helbing 2000) and MOBIL's politeness and
+    /// lane-change threshold (Kesting, Treiber and Helbing 2007). Each set field replaces
+    /// the model's calibration for cars; every driver still gets their own style and
+    /// heterogeneity draw around it.
+    #[serde(default, skip_serializing_if = "DriverSettings::is_default")]
+    pub driver: DriverSettings,
+}
+
+/// Passenger-car driver settings (`actors.vehicles.driver`). Unset fields keep the
+/// car-following and lane-change models' calibration.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriverSettings {
+    /// The comfortable maximum acceleration `a`, m/s². Unset is the model's (1.4 m/s² for
+    /// the urban IDM).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_accel_mps2: Option<f64>,
+    /// The comfortable deceleration `b`, m/s². Unset is the model's (2.0 m/s²).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comfort_decel_mps2: Option<f64>,
+    /// The desired time gap to the vehicle ahead `T`, s. Shorter gaps raise road capacity
+    /// and shorten the time a warning has to act. Unset is the model's (about 1.2 to
+    /// 1.5 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_headway_s: Option<f64>,
+    /// The gap kept to a stopped vehicle `s0`, m. Unset is the model's (2 m).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_gap_m: Option<f64>,
+    /// MOBIL's politeness factor `p`: 0 is a selfish driver who changes lane whenever it
+    /// helps them, 1 weighs the followers' loss as much as their own gain. Unset is 0.5
+    /// (Kesting 2007, which reports 0.2 to 0.5 as realistic). Applies to every class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub politeness: Option<f64>,
+    /// MOBIL's lane-change threshold `Δa_th`, m/s²: the least advantage worth changing
+    /// lane for. Unset is 0.1 m/s² (ibid.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_change_threshold_mps2: Option<f64>,
+}
+
+impl DriverSettings {
+    /// Whether nothing is set.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl Vehicles {
@@ -614,6 +659,7 @@ impl Default for Vehicles {
             classes: BTreeMap::new(),
             equipped_fraction: Vehicles::default_equipped(),
             driving: v2xw_mobility::carfollowing::library::DrivingSpec::default(),
+            driver: DriverSettings::default(),
         }
     }
 }
@@ -1596,6 +1642,13 @@ pub struct Messages {
     /// Which codec tier: real `uper` bytes or the validated `size-model` (D2).
     #[serde(default = "Messages::default_codec_tier")]
     pub codec_tier: String,
+    /// A fixed awareness-message rate, messages per second: every BSM and every CAM goes
+    /// out on this period instead of J2945/1's 10 Hz and the ETSI CAM triggers (heading
+    /// 4°, position 4 m, speed 0.5 m/s, EN 302 637-2 §6.1.3), the way ns-3's
+    /// `BsmApplication` and Veins' `beaconInterval` send. Congestion control may still
+    /// stretch it. Unset keeps the standards' generation rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_hz: Option<f64>,
 }
 
 impl Messages {
@@ -1613,6 +1666,7 @@ impl Default for Messages {
             sets: Messages::default_sets(),
             generator: None,
             codec_tier: Messages::default_codec_tier(),
+            rate_hz: None,
         }
     }
 }

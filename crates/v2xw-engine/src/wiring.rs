@@ -2933,6 +2933,15 @@ pub fn generator_params(
     use v2xw_msg::generator::{BSM_GENERATOR_ID, BsmGenParams, CAM_GENERATOR_ID, CamGenParams};
     let mut bsm = BsmGenParams::j2945_1();
     let mut cam = CamGenParams::en302637_2();
+    if let Some(period) = fixed_message_period(scenario) {
+        // A fixed rate: the BSM's nominal interval, and a CAM whose shortest and longest
+        // interval are the same, so the dynamics triggers have nothing to choose between.
+        bsm.nominal_itt = period;
+        bsm.min_itt = bsm.min_itt.min(period);
+        cam.t_gen_cam_min = period;
+        cam.t_gen_cam_max = period;
+        cam.t_check_cam_gen = period.min(cam.t_check_cam_gen);
+    }
     let Some(choice) = scenario.messages.generator.as_ref() else {
         return (bsm, cam);
     };
@@ -3308,10 +3317,24 @@ pub fn build_dcc(scenario: &Scenario) -> Option<EngineDcc> {
     })
 }
 
+/// The fixed awareness period `messages.rate_hz` asks for, if any.
+pub fn fixed_message_period(scenario: &Scenario) -> Option<Duration> {
+    scenario
+        .messages
+        .rate_hz
+        .filter(|r| r.is_finite() && *r > 0.0)
+        .map(|r| Duration::from_nanos((1e9 / r).round() as u64))
+}
+
 /// `radio.dcc`'s SAE J2945/1 numbers over `base`.
 pub fn j2945_params(scenario: &Scenario, base: v2xw_radio::J2945Params) -> v2xw_radio::J2945Params {
     let ds = &scenario.radio.dcc;
     let mut p = base;
+    // A fixed rate above 10 Hz lowers the floor J2945/1 holds the generator to, or the
+    // DCC would put the 100 ms vMinITT straight back.
+    if let Some(period) = fixed_message_period(scenario) {
+        p.min_itt = p.min_itt.min(period);
+    }
     if let Some(ms) = ds.max_itt_ms {
         p.max_itt = Duration::from_nanos((ms * 1e6).round() as u64);
     }

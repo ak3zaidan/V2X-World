@@ -240,3 +240,60 @@ fn the_sidelink_scheduling_numbers_change_the_run() {
         "turning sensing off changed nothing"
     );
 }
+
+fn mean_speed(rec: &MemoryRecorder) -> f64 {
+    let speeds: Vec<f64> = rec
+        .records()
+        .iter()
+        .filter(|(_, r)| r.channel == "gt.kinematics")
+        .filter_map(|(_, r)| {
+            let v: serde_json::Value = serde_json::from_slice(&r.json).ok()?;
+            v.get("speed_mps")?.as_f64()
+        })
+        .collect();
+    assert!(
+        !speeds.is_empty(),
+        "no ground-truth kinematics were recorded"
+    );
+    speeds.iter().sum::<f64>() / speeds.len() as f64
+}
+
+/// Traffic: cars that accelerate at 0.5 m/s² and keep a 2.5 s gap are slower over the
+/// first seconds than cars that accelerate at 2.5 m/s² with a 0.8 s gap.
+#[test]
+fn the_driver_numbers_change_the_traffic() {
+    let base = fleet(20, 5.0);
+    let mut timid = base.clone();
+    timid.actors.vehicles.driver.max_accel_mps2 = Some(0.5);
+    timid.actors.vehicles.driver.time_headway_s = Some(2.5);
+    let (_, t) = run(timid);
+    let mut brisk = base;
+    brisk.actors.vehicles.driver.max_accel_mps2 = Some(2.5);
+    brisk.actors.vehicles.driver.time_headway_s = Some(0.8);
+    brisk.actors.vehicles.driver.politeness = Some(0.0);
+    let (_, b) = run(brisk);
+    assert!(
+        mean_speed(&t) < 0.9 * mean_speed(&b),
+        "timid drivers averaged {:.2} m/s against brisk drivers' {:.2} m/s",
+        mean_speed(&t),
+        mean_speed(&b)
+    );
+}
+
+/// Messages: a fixed 5 Hz rate sends about half the frames of J2945/1's 10 Hz.
+#[test]
+fn the_message_rate_changes_the_frame_count() {
+    let mut base = fleet(15, 3.0);
+    base.radio.dcc.enabled = Some(false);
+    let (b, _) = run(base.clone());
+    let mut slow = base;
+    slow.messages.rate_hz = Some(5.0);
+    let (s, _) = run(slow);
+    let ratio = s.frames_transmitted as f64 / b.frames_transmitted.max(1) as f64;
+    assert!(
+        (0.35..0.65).contains(&ratio),
+        "5 Hz sent {} frames against 10 Hz's {} (ratio {ratio:.2})",
+        s.frames_transmitted,
+        b.frames_transmitted
+    );
+}
