@@ -1466,7 +1466,7 @@ impl NativeMobility {
                 continue;
             }
             let crossed = f64::from(o.index.abs_diff(lane.index));
-            if room < crossed * STRATEGIC_M_PER_CHANGE {
+            if room < self.params.no_change_zone_m + crossed * STRATEGIC_M_PER_CHANGE {
                 continue;
             }
             let Some(r) = self.plan_route(class, world, other, to, t, costs) else {
@@ -1491,7 +1491,7 @@ impl NativeMobility {
     fn strategic_pending(&self, world: &World, actor: &Actor) -> Option<f64> {
         self.strategic_target(world, actor)?;
         let lane = world.lane(actor.lane);
-        Some((lane.length_m - actor.s_m - STOP_LINE_MARGIN_M).max(0.0))
+        Some((lane.length_m - actor.s_m).max(0.0))
     }
 
     /// The lane of its road a vehicle has to change to for its route's next lane
@@ -1784,9 +1784,10 @@ impl NativeMobility {
         }
     }
 
-    /// A vehicle that has stood at the end of its lane for [`STRATEGIC_GIVE_UP_S`] with a
-    /// strategic change it cannot make takes a route from the lane it is on instead, as a
-    /// driver who cannot get over goes straight on and finds another way.
+    /// A vehicle with a strategic change it has not made by the no-change zone before the
+    /// end of its lane, or that has stood for [`STRATEGIC_GIVE_UP_S`] waiting to make it,
+    /// takes a route from the lane it is on instead, as a driver who cannot get over goes
+    /// straight on and finds another way.
     fn give_up_strategic(&mut self, world: &World, t1: SimTime) {
         if !self.params.strategic_lane_choice {
             return;
@@ -1807,10 +1808,12 @@ impl NativeMobility {
                 }
             }
             let a = &self.actors[&id];
-            let Some(since) = a.stuck_since else {
+            let Some(left) = self.strategic_pending(world, a) else {
                 continue;
             };
-            if t1.saturating_sub(since) < limit || self.strategic_pending(world, a).is_none() {
+            let in_zone = left < self.params.no_change_zone_m;
+            let stuck = a.stuck_since.is_some_and(|since| t1.saturating_sub(since) >= limit);
+            if !(in_zone || stuck) {
                 continue;
             }
             let (lane, destination, class) = (a.lane, a.destination, a.class);
@@ -4674,17 +4677,6 @@ impl Mobility for NativeMobility {
                     binding_stop_line = None;
                 }
             }
-            // A strategic lane change not yet made: the route's next lane leaves from another
-            // lane of this road, so the end of this one is braked for like a stop line until
-            // the change is made ([`Self::strategic_pending`]).
-            if along && let Some(d) = self.strategic_pending(world, actor) {
-                let gap = (d + actor.driver.min_gap_m).max(0.0);
-                let before = leader;
-                leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(gap, 0.0)));
-                if leader != before {
-                    binding_stop_line = Some(d + STOP_LINE_MARGIN_M);
-                }
-            }
             // An external stop command is a virtual leader at zero gap.
             if actor.stopped_until.is_some_and(|until| t0 < until) {
                 leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(0.0, 0.0)));
@@ -4972,19 +4964,20 @@ impl Mobility for NativeMobility {
                 if actor.transition.is_some() || t0 < actor.cooldown_until {
                     continue;
                 }
-                // A strategic change the route needs comes before anything discretionary,
-                // and is allowed inside the no-change zone: it is what the zone is for.
+                if self.along_path() && !self.may_consider_lane_change(ctx.world(), actor, &mobil) {
+                    continue;
+                }
+                // A strategic change the route needs comes before anything discretionary.
+                // It too keeps out of the no-change zone (MUTCD 2009 §3B.04's solid line):
+                // a driver who reaches the zone without a gap gives up and finds another
+                // way ([`Self::give_up_strategic`]).
                 if self.along_path() && self.strategic_target(ctx.world(), actor).is_some() {
                     if let Some((ego, nbrs)) = neighbours.get(&decision.actor)
-                        && actor.s_m >= actor.class.spec().length_m
                         && let Some(change) =
                             self.strategic_change(ctx.world(), &mobil, actor, ego, nbrs)
                     {
                         decision.lane_change = change;
                     }
-                    continue;
-                }
-                if self.along_path() && !self.may_consider_lane_change(ctx.world(), actor, &mobil) {
                     continue;
                 }
                 // A vehicle making for its kerbside stop keeps to the kerb lane.
