@@ -420,7 +420,10 @@ fn every_metric_of_the_two_vehicle_run_is_its_hand_computed_value() {
     let e2e = serde_json::to_value(&w["e2e_latency"]).unwrap();
     let latency_ms = e2e["sum"].as_f64().unwrap() / 20.0;
     assert!((9.4..20.0).contains(&latency_ms), "latency {latency_ms} ms");
-    assert!((point(&w, "aoi") - (latency_ms + 50.0)).abs() < 1.0);
+    // The two start on the lanes nearest the grid's centre, which can be further apart
+    // than the headline's 100 m (SAE J2945/1 vPERRange), so the neighbourhood age is read
+    // at 300 m, the radius `nar` is checked at above.
+    assert!((point(&w, "aoi{\"radius\":\"300m\"}") - (latency_ms + 50.0)).abs() < 1.0);
     for zero in [
         "collision_rate",
         "per",

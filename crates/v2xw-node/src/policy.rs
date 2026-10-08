@@ -161,6 +161,9 @@ pub struct VerifyDecisionRecord {
     pub queue_depth: Option<u64>,
 }
 
+/// `node.verify`'s reason for a message the node's profile cannot verify at all.
+pub const VERIFY_UNPRICED: &str = "verify_unpriced";
+
 impl VerifyDecisionRecord {
     /// The record of a decision that settles the message's fate at once — a skip or a
     /// drop — or `None` for a decision to verify, whose record is written when the check
@@ -198,6 +201,39 @@ impl VerifyDecisionRecord {
             cost_us: None,
             queue_depth: None,
         })
+    }
+
+    /// The record of a message dropped because the node's hardware profile prices no
+    /// verification for the scheme it is signed under (`reason: verify_unpriced`).
+    ///
+    /// Such a node cannot check the signature, and it does not act on what it cannot
+    /// check. It used to queue the message anyway: the queue never drained, filled, and
+    /// every later message was reported as `verify_overflow` — "the verifier cannot keep
+    /// up" — on a verifier that was idle. Under post-quantum signatures the shipped
+    /// roadside unit (`rsu/commsignia-its-rs4`, which publishes only an ECDSA P-256
+    /// accelerator) dropped every message that way, which was the unexplained 3.6 % of
+    /// `sig_verify_dropped` in `pq-signatures` and 41 % in `post-quantum`.
+    #[must_use]
+    pub fn unpriced(
+        node: NodeId,
+        at: SimTime,
+        policy: &'static str,
+        msg_type: &'static str,
+    ) -> Self {
+        Self {
+            node,
+            t_enqueue: at,
+            t_start: None,
+            t_done: None,
+            policy,
+            msg_type,
+            outcome: "dropped",
+            reason: VERIFY_UNPRICED,
+            priority: 0,
+            primitive: None,
+            cost_us: None,
+            queue_depth: None,
+        }
     }
 
     /// The record of a task the queue refused or evicted.

@@ -176,6 +176,16 @@ pub(crate) struct SlFrame {
     /// Each receiver's link condition at the block's latest transmission: environment,
     /// LOS / NLOSv / NLOS and relative speed — what an NR link-level curve is indexed by.
     pub(crate) cond: BTreeMap<NodeId, v2xw_radio::NrLinkCondition>,
+    /// The reception census of the block's first copy, receiver by receiver: the 20 m bin
+    /// each equipped node in range was counted in. With blind retransmissions the census
+    /// (`phy.prr`) is one per transport block, not one per copy — TR 36.885 §A.2.1.4
+    /// counts a packet once, and a copy a receiver discards as a duplicate is not a
+    /// failed reception. Empty for a block sent once.
+    pub(crate) prr_bins: BTreeMap<NodeId, u32>,
+    /// The receivers that decoded some copy, counted in their first-copy census bin.
+    pub(crate) prr_decoded: BTreeMap<u32, u32>,
+    /// Set on the copy (or the finalisation) that resolves the block: its census is due.
+    pub(crate) prr_due: bool,
 }
 
 impl SlFrame {
@@ -1086,6 +1096,14 @@ impl Engine {
             sl.report.duplicates += duplicates;
         }
         record.sort_by_key(|o| o.rx);
+        if state.sl.total > 1 {
+            for o in record.iter().filter(|o| o.received) {
+                if let Some(&bin) = state.sl.prr_bins.get(&o.rx) {
+                    *state.sl.prr_decoded.entry(bin).or_insert(0) += 1;
+                }
+            }
+            state.sl.prr_due = last;
+        }
         self.finish_phy_end(recorder, frame, &state, now, frame_index, tx_id, record);
         if !last {
             // The block waits for its next copy: its geometry is the next copy's, and
@@ -1122,9 +1140,11 @@ impl Engine {
             }
             let held: Vec<LinkOutcome> =
                 core::mem::take(&mut state.sl.held).into_values().collect();
-            if held.is_empty() {
+            if held.is_empty() && state.sl.prr_bins.is_empty() {
                 continue;
             }
+            // The block's census is resolved with it (nothing more can decode).
+            state.sl.prr_due = !state.sl.prr_bins.is_empty();
             let tx_id = state.tx_id();
             self.finish_rx_only(recorder, frame, &state, now, tx_id, held);
         }
@@ -1138,7 +1158,7 @@ impl Engine {
         let waiting: Vec<FrameSeq> = self
             .frames
             .iter()
-            .filter(|(_, s)| !s.sl.held.is_empty())
+            .filter(|(_, s)| !s.sl.held.is_empty() || !s.sl.prr_bins.is_empty())
             .map(|(f, _)| *f)
             .collect();
         if let Some(sl) = self.sidelink.as_mut() {

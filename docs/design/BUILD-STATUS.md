@@ -91,6 +91,118 @@ node steps are still serial; building shadowing (`ring_crossing`) was not made c
 `settle`'s per-top-up scan of the whole SCMS wire log (`phase2.rs`, `kernel.steps.iter()`)
 is quadratic over a long run with many top-ups, unmeasured.
 
+## 2026-10-08 — network stack soak: run, find, fix (netsoak track, branch of 4986cd4)
+
+Headless runs of the release engine (`v2xw run --no-recording`, optimised dev build), 15 s to
+120 s each, every one re-run after its fix. Every number below is from those runs.
+
+| Run | Configuration |
+|---|---|
+| soak-rush | Midtown rush hour, 30 s, DSRC; and the same on LTE-V2X and NR-V2X, and with DCC off |
+| soak-peak | Midtown "busiest rush hour" (`midtown-peak-load.yaml`), 40 s, ×4 demand: 2,689 actors, 2,200 of them pedestrians and riders |
+| pq-* / pqs-* | `pq-signatures.yaml`, 120 s, ECDSA P-256, ML-DSA-44, Falcon-512, hybrid ML-DSA-44 + P-256, with `metrics: [all, signing]` |
+| pqmid | `post-quantum.yaml` (Midtown, hybrid Falcon-512 + P-256, 8 RSUs), 40 s |
+| eu-gn | Berlin, ITS-G5, CAMs + DENMs over GeoNetworking on-air forwarding, breakdown at 10 s, ×4 demand; and with DCC off |
+| att-* | fake positions (ConstPos + RandomPos, 10 %), replay, jamming at the busiest junction |
+
+**Fixed (each its own commit, with the measurement in the message):**
+
+1. **LTE-V2X PDR was exactly half.** Within 100 m, 0.500 in every 20 m bin, at 1-2 % CBR,
+   while `nar` at 300 m was 0.97. The PRR census (TR 36.885 §A.2.1.4) was taken per copy of
+   a blind-retransmitted block, so a receiver that decoded copy 1 counted as a failure of
+   copy 2. A block is now censused once, at its first copy, receiver by receiver, and
+   reported when it is resolved. After: 100 m 1.00, 300 m 0.90. DSRC and NR (one
+   transmission) unchanged. `run.rs`, `run/sidelink.rs`.
+2. **Age of information ~700-800 ms in Midtown peak on DSRC was a metric artefact, not
+   the channel.** The channel was at CBR 1-2 % and PDR 0.76 within 100 m, so neither
+   saturation nor DCC throttling. Three causes, measured:
+   - `aoi` pooled every link out to the 1 km candidate range. Around Manhattan's corners a
+     link is heard once in a while, and each gap's area grows with the square of the gap.
+   - It pooled the 500 pedestrian PSM devices (1 Hz, SAE J2945/9) with the 10 Hz BSMs.
+     `nar` counted pedestrians as receivers and neighbours. `pir`'s p95 of 1.0 s was their
+     gap.
+   - A gap's whole area was filed in the window where it closed, so window values jumped
+     between 70 and 1,400 ms.
+
+   **Chosen definition.** The headline is now each vehicle's neighbourhood age: Kaul et
+   al.'s system age (SECON 2011), over the vehicle pairs truly within **100 m**. 100 m is
+   SAE J2945/1's vPERRange, the range that standard judges PER and IPG over, and the same
+   standard's 600 ms vMaxITT is the health band. The age is integrated exactly between
+   mobility steps. It is not sampled at them, because beacons are generated on the step
+   boundary and a sample would read the peak (102 ms, not 52 ms). The breakdowns are
+   `300m`, `all` (the old every-link figure) and class `vru`. `nar` is vehicles only.
+   `pir`'s headline excludes PSM/VAM senders, which get their own `vru` sample.
+
+   After, on soak-peak:
+
+   | Metric | Value |
+   |---|---|
+   | aoi, 100 m | 82 ms |
+   | aoi, 300 m | 894 ms |
+   | aoi, all | 430 ms |
+   | aoi, vru | 931 ms |
+   | pir p95 | 0.20 s |
+
+   Theory for 100 m: 50 ms + 12 ms latency + losses. The 300 m figure is set by corners:
+   most pairs that far apart are NLOS and heard rarely, and each adds age until the 10 s
+   restart drops it. The vru figure is a 1 Hz PSM at PDR 0.76.
+
+   On soak-rush, aoi is 67 ms on DSRC, 80 ms on NR and 108 ms on LTE-V2X. LTE's SPS waits
+   about 50 ms for its reserved subframe (`mac_access_delay` 55 ms). That matches the
+   J3161/1 100 ms selection window.
+3. **`flow`, `density` and `mean_speed` never had a value in any run.** These are three
+   of the "59 of 90 measured". Edie's aggregates need lane lengths, and nothing ever
+   called `declare_lane_length`. The run now declares every Driving, Bus and Internal
+   lane. The headline is the network's: the macroscopic fundamental diagram per lane-km
+   (Geroliminis and Daganzo 2008). Per-lane samples are off in a run, because on they
+   tripled the peak run's metrics.json from 38 MB to 108 MB.
+
+   Pedestrians walking in groups on sidewalk lanes had filled `headway_*` and `ttc_min`
+   with metre gaps. They are now left to the VRU provider. Peak headway p50 went from
+   1.2 m to 11.5 m. Density is 1.7 veh/km/lane and space-mean speed 3.05 m/s.
+4. **The unexplained 3.6 % of `sig_verify_dropped` under post-quantum signatures.** It
+   was 4.4 % in pq-signatures and 41 % in post-quantum. It was never the verifier: queue
+   depth p95 was 0 and headroom 150×. Recording node.verify showed that every drop was at
+   a roadside unit. All 8 RSUs dropped 100 % of messages, as `verify_overflow`.
+
+   The cause is the shipped RSU profile, `rsu/commsignia-its-rs4`. It publishes only an
+   ECDSA P-256 accelerator, so it prices no PQ verification. Its verify queue therefore
+   never drained, filled, and the policy reported "queue full" for everything after. A
+   node that cannot price its verify op now drops the message as `verify_unpriced`, and
+   counts it with the policy skips. `sig_verify_dropped` keeps its meaning: the verifier
+   failing to keep up. `v2xw-node` `runtime.rs`, `policy.rs`.
+
+**Checked and found plausible, no change:**
+
+- DSRC range in Manhattan is much shorter than LTE-V2X: `nar` 300 m 0.54 against 0.97,
+  with 99 % of DSRC losses below sensitivity. The link budget explains it: about 8-10 dB
+  in LTE's favour (narrower subchannels and HARQ combining), against a NLOS street grid.
+- `unverified_ratio` is 5 % under ECDSA and 9 % under ML-DSA-44 with digest-only signer
+  ids (a full certificate every 1 s). These are receivers that have not yet heard the
+  certificate. Under PQ the certificate-bearing message is larger and is lost more often
+  in fragments (`frag_sdu_loss` 0.82).
+- The detection metrics (`det_*`, `time_to_detect`) are empty in a 40 s attack run.
+  156 verdicts fired and 102 reports were sent, but the base calendar's RA report
+  shuffle is 60 s, so none reach the MA before the run ends. A run needs to be longer
+  than 60 s.
+
+**Open — not fixed:**
+
+- **RSUs cannot verify any post-quantum message.** No RSU profile prices a PQ op, and
+  nothing refuses the scenario. Their misbehaviour-report and relay roles act on nothing
+  under PQ. Fixing it needs either a published (or flagged-proxy) PQ cost and
+  `crypto_anchors` for the RSU profiles, or a validation refusal.
+- **Verify-all delivers some messages unverified.** Under the `verify-all` policy, a
+  message whose signer certificate is unknown is still delivered to applications as
+  `Unverified`, although the policy card says nothing unverified reaches an application.
+- **The DENM multi-hop latency looked worse with DCC on.** On eu-gn the p50 was 3.1 s
+  with DCC on and 0.17 s with it off, with reach 11/11 and 10/11. This is from 11
+  receivers on one seed, so it is not established. It needs several seeds before it is
+  read as a DCC effect.
+- **The `pir` and `aoi` health bands are J2945/1's (10 Hz BSM).** CAMs follow the
+  dynamics rules (1 to 10 Hz), so on the ETSI stack a pir p95 near 0.8-0.9 s is correct
+  behaviour and is still flagged.
+
 ## 2026-10-07 — round-5 merge: eight tracks onto main (settings, agent, radio, network, traffic)
 
 Merged with `--no-ff`, in this order: netconfig, radio, netstack, cellular, traffic,

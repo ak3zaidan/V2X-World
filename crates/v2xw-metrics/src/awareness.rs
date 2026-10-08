@@ -8,7 +8,7 @@
 //!
 //! | Metric | Formula | Unit | Source |
 //! |---|---|---|---|
-//! | `aoi` | time-average age of information per directed link: ∫ (t − g(t)) dt / ∫ dt, where g(t) is the generation time of the freshest message the receiver holds from that sender | ms | Kaul, Gruteser, Rai, Kenney, "Minimizing age of information in vehicular networks", IEEE SECON 2011; Kaul, Yates, Gruteser, IEEE INFOCOM 2012 |
+//! | `aoi` | time-average age of information over each receiver's neighbourhood: ∫ (t − g(t)) dt / ∫ dt over the vehicle (receiver, sender) pairs truly within R = 100 m (SAE J2945/1 vPERRange; also 300 m) at each mobility step that the receiver has heard, where g(t) is the generation time of the freshest message it holds from that sender; the `all` breakdown integrates every directed link between its deliveries, whatever the distance | ms | Kaul, Gruteser, Rai, Kenney, "Minimizing age of information in vehicular networks", IEEE SECON 2011; Kaul, Yates, Gruteser, IEEE INFOCOM 2012 |
 //! | `aoi_peak` | the age just before each update: t_delivered(k) − g(k−1) | ms (distribution) | Costa, Codreanu, Ephremides, "On the age of information in status update systems with packet management", IEEE Trans. Inf. Theory 62(4), 2016 |
 //! | `nar` | Σ over receivers of (neighbours within R heard within T) / Σ (neighbours within R) | ratio | Boban and d'Orey, "Exploring the practical limits of cooperative awareness in vehicular communications", IEEE Trans. Veh. Technol. 65(6), 2016 (the neighbourhood awareness ratio); 08-measurement-and-data.md §2.1 (r = 100–300 m, T = 1 s) |
 //! | `delivery_ratio` | messages delivered to the application / reception attempts resolved, per 50 m distance bin | ratio | 08-measurement-and-data.md §2.1 (`pdr` by `dist_bin`), applied at the application rather than the PHY |
@@ -56,18 +56,100 @@ pub const NAR_MIN_PAIRS: u64 = 1;
 /// rather than extended — a vehicle that drove away and came back is a new encounter.
 pub const AOI_RESTART: Duration = Duration::from_secs(10);
 
+/// The headline `aoi` is over the vehicles truly within this distance: SAE J2945/1's
+/// `vPERRange`, the 100 m within which that standard judges a BSM link's packet error
+/// and inter-packet gap — the same standard whose 600 ms `vMaxITT` is `aoi`'s health
+/// band — and the inner radius `nar` is reported at (08 §2.1).
+///
+/// Published AoI for beaconing is the *system age* of a receiver's neighbourhood — the
+/// age of what it holds about each vehicle around it, averaged over those vehicles and
+/// over time (Kaul, Gruteser, Rai, Kenney, IEEE SECON 2011) — not an average over every
+/// link the radio happens to close. Further out the figure is set by geometry rather
+/// than by the channel: in a street grid most pairs 300 m apart are around a corner,
+/// heard once in a while, and each such pair adds an age that grows for seconds until
+/// `AOI_RESTART` drops it, so the 300 m figure measures the city's corners and the
+/// restart horizon as much as the radio. It is kept as the `300m` breakdown, and every
+/// vehicle link at any distance, integrated between its deliveries, as `all`.
+pub const AOI_HEADLINE_RADIUS_M: u32 = 100;
+
+/// The label of `aoi`'s every-link pool.
+pub const AOI_ALL_LINKS: &str = "all";
+
+/// The label of `aoi`'s vulnerable-road-user sample: what vehicles hold about the
+/// pedestrians and riders carrying a device within [`AOI_VRU_RADIUS_M`].
+pub const AOI_VRU: &str = "vru";
+
+/// How near a road user must be for a vehicle's age of information about it to count:
+/// the 100 m of `nar`'s inner radius, the range a VRU warning acts on.
+pub const AOI_VRU_RADIUS_M: u32 = 100;
+
+/// The kinematics classes that are vulnerable road users (`v2xw_mobility::VehicleClass`
+/// spellings). Their devices beacon at their own rates (a PSM at 1 to 5 Hz under SAE
+/// J2945/9, a VAM under ETSI TS 103 300-3 at 1 to 10 Hz), so `aoi` and `nar` — which
+/// are about vehicles' cooperative awareness of vehicles (Boban and d'Orey; Kaul et al.)
+/// — count only vehicle-to-vehicle pairs, and VRUs get their own `aoi` sample.
+const VRU_CLASSES: [&str; 3] = ["pedestrian", "bicycle", "scooter"];
+
 /// How old a vehicle's last known position may be and still place it in a neighbourhood.
 /// Two mobility steps at the slowest cadence a scenario may choose, so a vehicle that
 /// despawned stops being anybody's neighbour.
 const POSITION_STALE: Duration = Duration::from_secs(2);
 
 /// Freshness state of one directed link.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Link {
     /// When the freshest message was delivered.
     delivered: SimTime,
     /// Its generation time.
     generated: SimTime,
+    /// The recent updates, (delivered, generated) in delivery order, the latest last: the
+    /// one held at the last sampled instant and every one since. The neighbourhood age is
+    /// integrated from them a step behind the deliveries (an instant is sampled when the
+    /// next instant's first record arrives).
+    hist: Vec<(SimTime, SimTime)>,
+}
+
+/// ∫ (s − g) ds over (u, v], ns²: the area of one sawtooth piece.
+fn age_area(u: SimTime, v: SimTime, g: SimTime) -> u128 {
+    let dt = u128::from(v.saturating_sub(u));
+    dt * u128::from(u.saturating_sub(g)) + dt * dt / 2
+}
+
+impl Link {
+    /// The receiver's age about this sender integrated exactly over (a, b]: (Σ age × time,
+    /// ns²; time, ns; the age at b). Only the part after the first delivery counts; `None`
+    /// when nothing was held by b.
+    fn age_over(&self, a: SimTime, b: SimTime) -> Option<(u128, u128, SimTime)> {
+        let mut held = self.hist.iter().rev().find(|(d, _)| *d <= a).map(|x| x.1);
+        let (mut area, mut time, mut u) = (0u128, 0u128, a);
+        for &(d, g) in self.hist.iter().filter(|(d, _)| *d > a && *d <= b) {
+            if let Some(h) = held {
+                area += age_area(u, d, h);
+                time += u128::from(d - u);
+            }
+            held = Some(g);
+            u = d;
+        }
+        let h = held?;
+        area += age_area(u, b, h);
+        time += u128::from(b - u);
+        Some((area, time, b.saturating_sub(h)))
+    }
+
+    /// Records an update, keeping only what an integration after `sampled` can need.
+    fn push(&mut self, d: SimTime, g: SimTime, sampled: Option<SimTime>) {
+        self.delivered = d;
+        self.generated = g;
+        self.hist.push((d, g));
+        if let Some(t) = sampled {
+            while self.hist.len() >= 2 && self.hist[1].0 <= t {
+                self.hist.remove(0);
+            }
+        }
+        if self.hist.len() > 32 {
+            self.hist.remove(0);
+        }
+    }
 }
 
 /// The awareness provider.
@@ -84,11 +166,23 @@ pub struct AwarenessProvider {
     links: BTreeMap<(NodeId, NodeId), Link>,
     /// Latest known true position per node: (instant, x, y).
     positions: BTreeMap<NodeId, (SimTime, f64, f64)>,
+    /// Whether each node with a known position is a vulnerable road user. A node with no
+    /// kinematics (a roadside unit) is in neither class.
+    is_vru: BTreeMap<NodeId, bool>,
 
-    /// Σ age × time over the window, ns², and Σ time, ns — exact in integers.
+    /// Every link's sawtooth: Σ age × time over the window, ns², and Σ time, ns — exact in
+    /// integers. The `all` breakdown.
     aoi_area: u128,
     aoi_time: u128,
     aoi_updates: u64,
+    /// The neighbourhood age, per radius in [`NAR_RADII_M`] order: Σ age × time, ns², and
+    /// Σ time, ns, over every (receiver, heard neighbour within R) pair between sampled
+    /// instants, and how many pair-steps.
+    aoi_hood_area: [u128; 2],
+    aoi_hood_time: [u128; 2],
+    aoi_hood_n: [u64; 2],
+    /// The same for vehicles' links from VRUs within [`AOI_VRU_RADIUS_M`].
+    aoi_vru: (u128, u128, u64),
     aoi_peak_ms: Distribution,
     delivery_by_bin: BTreeMap<usize, Proportion>,
     delivery_unbinned: Proportion,
@@ -120,9 +214,14 @@ impl AwarenessProvider {
             last_heard: BTreeMap::new(),
             links: BTreeMap::new(),
             positions: BTreeMap::new(),
+            is_vru: BTreeMap::new(),
             aoi_area: 0,
             aoi_time: 0,
             aoi_updates: 0,
+            aoi_hood_area: [0; 2],
+            aoi_hood_time: [0; 2],
+            aoi_hood_n: [0; 2],
+            aoi_vru: (0, 0, 0),
             aoi_peak_ms: Distribution::new(),
             delivery_by_bin: BTreeMap::new(),
             delivery_unbinned: Proportion::new(),
@@ -251,17 +350,33 @@ impl AwarenessProvider {
                 Visibility::NodeAndGt,
                 Quantum::TIME_MS,
                 "Age of information: how old, on average over time, the freshest message a \
-                 receiver holds from each neighbour is. Integrated exactly between \
-                 deliveries on every directed link and pooled over links.",
+                 receiver holds from each neighbour is — over the vehicles truly within \
+                 100 m that it has heard (SAE J2945/1's vPERRange; Kaul et al.'s system age), \
+                 integrated exactly between mobility steps over the pairs within range at \
+                 each step. Broken down at 100 m and 300 m, and `all`: \
+                 every link's sawtooth but a VRU device's, integrated exactly between its \
+                 deliveries, whatever the distance, which far links that rarely deliver \
+                 dominate. Vehicles only: pedestrians' and riders' devices beacon at their \
+                 own, lower rates, so vehicles' age about them within 100 m is the \
+                 class `vru` sample.",
             )
-            .with_dims([Dim::T])
+            .with_dims([Dim::T, Dim::Radius, Dim::Class])
+            .with_breakdown(
+                Dim::Radius,
+                NAR_RADII_M
+                    .iter()
+                    .map(|r| format!("{r}m"))
+                    .chain([AOI_ALL_LINKS.to_string()]),
+            )
             .with_source(cards::paper(
                 "Kaul, Gruteser, Rai, Kenney, IEEE SECON 2011; Kaul, Yates, Gruteser, IEEE \
                  INFOCOM 2012",
             ))
             .with_min_samples(1)
             .with_range(0.0, f64::INFINITY)
-            .not_accounting_for("the age after a link's last delivery, which keeps growing unseen")
+            .not_accounting_for(
+                "neighbours in range never heard, or unheard for over aoi_restart_s: nar counts them",
+            )
             .not_accounting_for("pseudonym changes: links are keyed by the true sender"),
             MetricDef::new(
                 "aoi_peak",
@@ -279,7 +394,8 @@ impl AwarenessProvider {
             .with_min_samples(self.min_samples)
             .with_range(0.0, f64::INFINITY)
             .not_accounting_for("the first message on a link, which has no predecessor")
-            .not_accounting_for("links restarted after a silence longer than aoi_restart_s"),
+            .not_accounting_for("links restarted after a silence longer than aoi_restart_s")
+            .not_accounting_for("links farther than 100 m at the delivery"),
             MetricDef::new(
                 "nar",
                 "ratio",
@@ -288,7 +404,9 @@ impl AwarenessProvider {
                 Quantum::RATIO,
                 "Neighbourhood awareness ratio: of the vehicles truly within R metres of each \
                  equipped vehicle, the fraction it has received a message from in the last \
-                 second. Reported at R = 100 m and R = 300 m. Sampled at every mobility step \
+                 second. Pedestrians' and riders' devices are neither receivers nor \
+                 neighbours: they beacon at their own rates. Reported at R = 100 m and R = \
+                 300 m. Sampled at every mobility step \
                  and pooled over the window; the 95 % Wilson interval is computed on the \
                  number of distinct neighbour pairs, not on the samples, because one pair \
                  seen ten times is not ten independent observations — so a sparse run \
@@ -368,27 +486,31 @@ impl AwarenessProvider {
         let key = (v.rx, tx);
         let heard = self.last_heard.entry(key).or_insert(d);
         *heard = (*heard).max(d);
-        match self.links.get(&key).copied() {
-            Some(prev) if g > prev.generated && d >= prev.delivered => {
-                if d.saturating_sub(prev.delivered) <= AOI_RESTART.as_nanos() {
+        let sampled = self.nar_sampled_at;
+        match self.links.get(&key).map(|l| (l.delivered, l.generated)) {
+            Some((prev_delivered, prev_generated)) if g > prev_generated && d >= prev_delivered => {
+                if d.saturating_sub(prev_delivered) <= AOI_RESTART.as_nanos()
+                    && !self.known_vru(v.rx)
+                    && !self.known_vru(tx)
+                {
                     // The area of one trapezoid of the sawtooth, in ns²: the age runs from
                     // d(k−1) − g(k−1) to d(k) − g(k−1) over an interval of d(k) − d(k−1).
-                    let dt = u128::from(d - prev.delivered);
-                    let a0 = u128::from(prev.delivered.saturating_sub(prev.generated));
-                    let a1 = u128::from(d.saturating_sub(prev.generated));
+                    let dt = u128::from(d - prev_delivered);
+                    let a0 = u128::from(prev_delivered.saturating_sub(prev_generated));
+                    let a1 = u128::from(d.saturating_sub(prev_generated));
                     self.aoi_area += dt * (a0 + a1) / 2;
                     self.aoi_time += dt;
                     self.aoi_updates += 1;
-                    self.aoi_peak_ms
-                        .observe((d.saturating_sub(prev.generated) as f64) / 1e6);
+                    // Peaks of the neighbourhood's links only, as the headline; a delivery
+                    // with no distance is counted.
+                    if v.dist_m.is_none_or(|d| d <= f64::from(AOI_HEADLINE_RADIUS_M)) {
+                        self.aoi_peak_ms
+                            .observe((d.saturating_sub(prev_generated) as f64) / 1e6);
+                    }
                 }
-                self.links.insert(
-                    key,
-                    Link {
-                        delivered: d,
-                        generated: g,
-                    },
-                );
+                if let Some(link) = self.links.get_mut(&key) {
+                    link.push(d, g, sampled);
+                }
             }
             // An older message than the one already held changes nothing about the
             // receiver's freshness.
@@ -399,10 +521,21 @@ impl AwarenessProvider {
                     Link {
                         delivered: d,
                         generated: g,
+                        hist: vec![(d, g)],
                     },
                 );
             }
         }
+    }
+
+    /// Whether a node is a vehicle: it has kinematics, and not a VRU's.
+    fn vehicle(&self, n: NodeId) -> bool {
+        self.is_vru.get(&n) == Some(&false)
+    }
+
+    /// Whether a node is known to be a VRU's device.
+    fn known_vru(&self, n: NodeId) -> bool {
+        self.is_vru.get(&n) == Some(&true)
     }
 
     fn on_kinematics(&mut self, v: &GtKinematicsView) {
@@ -416,6 +549,8 @@ impl AwarenessProvider {
         }
         if let Some(node) = v.node {
             self.positions.insert(node, (v.t, v.x_m, v.y_m));
+            let vru = v.class.as_deref().is_some_and(|c| VRU_CLASSES.contains(&c));
+            self.is_vru.insert(node, vru);
         }
     }
 
@@ -430,19 +565,78 @@ impl AwarenessProvider {
         if self.nar_sampled_at == Some(at) {
             return;
         }
+        let prev = self.nar_sampled_at;
         self.nar_sampled_at = Some(at);
-        for (k, (_, p, pairs)) in self.nar_counts(at).into_iter().enumerate() {
+        for (k, (_, p, pairs, (area, time, n))) in
+            self.nar_counts(at, prev).into_iter().enumerate()
+        {
             self.nar_window[k].merge(p);
             self.nar_pairs[k].extend(pairs);
+            self.aoi_hood_area[k] += area;
+            self.aoi_hood_time[k] += time;
+            self.aoi_hood_n[k] += n;
         }
+        let vru = self.vru_age(at, prev);
+        self.aoi_vru.0 += vru.0;
+        self.aoi_vru.1 += vru.1;
+        self.aoi_vru.2 += vru.2;
     }
 
-    /// `nar` at `at` for every radius: (heard, neighbours) pair counts, and the pairs.
-    fn nar_counts(&self, at: SimTime) -> Vec<(u32, Proportion, Vec<(NodeId, NodeId)>)> {
+    /// Vehicles' age of information about the VRUs within [`AOI_VRU_RADIUS_M`] over
+    /// (`prev`, `at`], as [`Self::nar_counts`] integrates it for vehicles.
+    fn vru_age(&self, at: SimTime, prev: Option<SimTime>) -> (u128, u128, u64) {
+        let Some(from) = prev.map(|p| p.max(at.saturating_sub(POSITION_STALE.as_nanos())))
+        else {
+            return (0, 0, 0);
+        };
+        let r = f64::from(AOI_VRU_RADIUS_M);
+        let live = |n: &NodeId| {
+            self.positions
+                .get(n)
+                .filter(|(t, _, _)| at.saturating_sub(*t) <= POSITION_STALE.as_nanos())
+                .map(|(_, x, y)| (*x, *y))
+        };
+        let mut out = (0u128, 0u128, 0u64);
+        // Over the links that exist (far fewer than the position pairs), in key order.
+        for (&(rx, tx), link) in &self.links {
+            if !self.vehicle(rx) || self.is_vru.get(&tx) != Some(&true) {
+                continue;
+            }
+            let (Some((xr, yr)), Some((xt, yt))) = (live(&rx), live(&tx)) else {
+                continue;
+            };
+            let (ex, ey) = (xt - xr, yt - yr);
+            if ex * ex + ey * ey > r * r {
+                continue;
+            }
+            if let Some((a, t, end)) = link.age_over(from, at)
+                && end <= AOI_RESTART.as_nanos()
+            {
+                out.0 += a;
+                out.1 += t;
+                out.2 += 1;
+            }
+        }
+        out
+    }
+
+    /// `nar` at `at` for every radius: (heard, neighbours) pair counts, the pairs, and the
+    /// neighbourhood age over (`prev`, `at`] of the pairs within the radius at `at`
+    /// (Σ age × time in ns², Σ time in ns, pair-steps).
+    #[allow(clippy::type_complexity)]
+    fn nar_counts(
+        &self,
+        at: SimTime,
+        prev: Option<SimTime>,
+    ) -> Vec<(u32, Proportion, Vec<(NodeId, NodeId)>, (u128, u128, u64))> {
+        // Vehicles only: a VRU is neither a receiver nor a neighbour here (`aoi` reports
+        // vehicles' awareness of VRUs on its own).
         let fresh: Vec<(NodeId, f64, f64)> = self
             .positions
             .iter()
-            .filter(|(_, (t, _, _))| at.saturating_sub(*t) <= POSITION_STALE.as_nanos())
+            .filter(|(n, (t, _, _))| {
+                at.saturating_sub(*t) <= POSITION_STALE.as_nanos() && self.vehicle(**n)
+            })
             .map(|(n, (_, x, y))| (*n, *x, *y))
             .collect();
         let largest = f64::from(NAR_RADII_M.iter().copied().max().unwrap_or(300));
@@ -456,10 +650,16 @@ impl AwarenessProvider {
             grid.entry(cell(*x, *y)).or_default().push(i);
         }
         let horizon = NAR_HORIZON.as_nanos();
-        let mut out: Vec<(u32, Proportion, Vec<(NodeId, NodeId)>)> = NAR_RADII_M
-            .iter()
-            .map(|&r| (r, Proportion::new(), Vec::new()))
-            .collect();
+        let restart = AOI_RESTART.as_nanos();
+        // The interval this instant stands for: back to the previous sampled instant, and
+        // never further than a position stays valid.
+        let from = prev.map(|p| p.max(at.saturating_sub(POSITION_STALE.as_nanos())));
+        #[allow(clippy::type_complexity)]
+        let mut out: Vec<(u32, Proportion, Vec<(NodeId, NodeId)>, (u128, u128, u64))> =
+            NAR_RADII_M
+                .iter()
+                .map(|&r| (r, Proportion::new(), Vec::new(), (0, 0, 0)))
+                .collect();
         for (i, (rx, x, y)) in fresh.iter().enumerate() {
             let (cx, cy) = cell(*x, *y);
             for dx in -1..=1 {
@@ -483,11 +683,23 @@ impl AwarenessProvider {
                             .last_heard
                             .get(&(*rx, tx))
                             .is_some_and(|&t| t >= at.saturating_sub(horizon));
-                        for (r, p, pairs) in &mut out {
+                        // The age of what the receiver held about this neighbour over the
+                        // step, integrated exactly: only messages delivered by each instant
+                        // count, and a link silent for longer than the restart horizon is a
+                        // lost neighbour (`nar` sees it), not an old one.
+                        let age = from
+                            .and_then(|a| self.links.get(&(*rx, tx)).and_then(|l| l.age_over(a, at)))
+                            .filter(|(_, _, end)| *end <= restart);
+                        for (r, p, pairs, (area, time, n)) in &mut out {
                             let r = f64::from(*r);
                             if d2 <= r * r {
                                 p.observe(heard);
                                 pairs.push((*rx, tx));
+                                if let Some((a, t, _)) = age {
+                                    *area += a;
+                                    *time += t;
+                                    *n += 1;
+                                }
                             }
                         }
                     }
@@ -535,18 +747,57 @@ impl MetricProvider for AwarenessProvider {
         let mut out = Vec::new();
 
         // --- aoi and aoi_peak ------------------------------------------------------------
+        // The instant being assembled belongs to this window if it is not past it; it is
+        // sampled before the neighbourhood age is read (the `nar` block below samples it
+        // again, which the sampled-instant guard makes a no-op).
+        if let Some(t) = self.frame_t
+            && t <= at
+        {
+            self.sample_nar(t);
+        }
+        let aoi = self.def("aoi");
+        let (areas, times, counts) = (
+            core::mem::take(&mut self.aoi_hood_area),
+            core::mem::take(&mut self.aoi_hood_time),
+            core::mem::take(&mut self.aoi_hood_n),
+        );
+        for (k, r) in NAR_RADII_M.iter().enumerate() {
+            // ns² / ns = ns; to ms. Both sums are exact integers until this one division.
+            let value = SampleValue::Ratio(ratio_of_sums(
+                (areas[k] as f64) / 1e6,
+                times[k] as f64,
+                counts[k],
+                1,
+            ));
+            if *r == AOI_HEADLINE_RADIUS_M {
+                out.push(MetricSample::new(&aoi, at, Dims::new(), value.clone()));
+            }
+            let mut dims = Dims::new();
+            dims.insert(Dim::Radius, DimValue::label(format!("{r}m")));
+            out.push(MetricSample::new(&aoi, at, dims, value));
+        }
         let (area, time, n) = (
             core::mem::take(&mut self.aoi_area),
             core::mem::take(&mut self.aoi_time),
             core::mem::take(&mut self.aoi_updates),
         );
         // ns² / ns = ns; to ms. Both sums are exact integers until this one division.
-        let (num_ms_ns, den_ns) = ((area as f64) / 1e6, time as f64);
+        let mut dims = Dims::new();
+        dims.insert(Dim::Radius, DimValue::label(AOI_ALL_LINKS));
         out.push(MetricSample::new(
-            &self.def("aoi"),
+            &aoi,
             at,
-            Dims::new(),
-            SampleValue::Ratio(ratio_of_sums(num_ms_ns, den_ns, n, 1)),
+            dims,
+            SampleValue::Ratio(ratio_of_sums((area as f64) / 1e6, time as f64, n, 1)),
+        ));
+        let (va, vt, vn) = core::mem::take(&mut self.aoi_vru);
+        let mut dims = Dims::new();
+        dims.insert(Dim::Class, DimValue::label(AOI_VRU));
+        out.push(MetricSample::new(
+            &aoi,
+            at,
+            dims,
+            SampleValue::Ratio(ratio_of_sums((va as f64) / 1e6, vt as f64, vn, 1)),
         ));
         let peak = core::mem::replace(&mut self.aoi_peak_ms, Distribution::new());
         out.push(MetricSample::new(
@@ -632,6 +883,8 @@ impl MetricProvider for AwarenessProvider {
         self.last_heard.retain(|_, t| *t >= keep);
         self.positions
             .retain(|_, (t, _, _)| at.saturating_sub(*t) <= POSITION_STALE.as_nanos());
+        let positions = &self.positions;
+        self.is_vru.retain(|n, _| positions.contains_key(n));
         self.window_start = at;
         out
     }
@@ -718,10 +971,78 @@ mod tests {
             p.on_event(&delivered(1, 2, g0, g0 + 2 * NS_PER_MS, 30.0));
         }
         let s = p.flush(2_000 * NS_PER_MS);
-        assert_eq!(point(&s, "aoi", &[]), Some(52.0));
+        assert_eq!(point(&s, "aoi", &[(Dim::Radius, AOI_ALL_LINKS)]), Some(52.0));
         let peak = s.iter().find(|x| x.metric == "aoi_peak").unwrap();
         assert_eq!(peak.value.point(), Some(102.0));
         assert_eq!(peak.value.n(), 10, "the first message has no predecessor");
+    }
+
+    /// The neighbourhood age is integrated between steps, not sampled at them: a beacon
+    /// generated on the step boundary would otherwise always be read just before its
+    /// update, and the sampled age would be the peak (102 ms), not the mean (52 ms).
+    fn kin_ped(node: u32, t: SimTime, x: f64) -> OwnedRecord {
+        let mut v: GtKinematicsView = serde_json::from_slice(&kin(node, t, x).json).unwrap();
+        v.class = Some("pedestrian".to_string());
+        OwnedRecord {
+            channel: "gt.kinematics",
+            visibility: Visibility::Gt,
+            json: serde_json::to_vec(&v).unwrap(),
+        }
+    }
+
+    /// A pedestrian's 1 Hz device is not a vehicle neighbour: it moves neither `aoi` nor
+    /// `nar`, and vehicles' age about it is the `vru` sample (about 500 ms at 1 Hz).
+    #[test]
+    fn a_pedestrian_device_is_reported_apart_from_vehicle_awareness() {
+        let mut p = AwarenessProvider::new(0).with_min_samples(1);
+        for k in 0..=20u64 {
+            let t = k * 100 * NS_PER_MS;
+            p.on_event(&kin(1, t, 0.0));
+            p.on_event(&kin(2, t, 30.0));
+            p.on_event(&kin_ped(4, t, 20.0));
+            p.on_event(&delivered(1, 2, t, t + 2 * NS_PER_MS, 30.0));
+            if k % 10 == 0 {
+                p.on_event(&delivered(1, 4, t, t + 2 * NS_PER_MS, 20.0));
+            }
+        }
+        p.on_event(&kin(1, 2_100 * NS_PER_MS, 0.0));
+        let s = p.flush(2_100 * NS_PER_MS);
+        let hood = point(&s, "aoi", &[]).unwrap();
+        assert!((hood - 52.0).abs() < 0.1, "vehicles only: {hood}");
+        let vru = s
+            .iter()
+            .find(|x| x.metric == "aoi" && x.dims.get(&Dim::Class) == Some(&DimValue::label(AOI_VRU)))
+            .and_then(|x| x.value.point())
+            .unwrap();
+        assert!((450.0..560.0).contains(&vru), "a 1 Hz device: {vru}");
+        // The vehicle pairs within 100 m are 1→2 (heard) and 2→1 (not): one half. Were
+        // the pedestrian counted, its four pairs would make it two sixths.
+        assert_eq!(point(&s, "nar", &[(Dim::Radius, "100m")]), Some(0.5));
+    }
+
+    #[test]
+    fn neighbourhood_aoi_integrates_between_steps_and_leaves_far_links_out() {
+        let mut p = AwarenessProvider::new(0).with_min_samples(1);
+        for k in 0..=20u64 {
+            let t = k * 100 * NS_PER_MS;
+            p.on_event(&kin(1, t, 0.0));
+            p.on_event(&kin(2, t, 30.0));
+            p.on_event(&kin(3, t, 800.0));
+            // 2 → 1 every step, delivered 2 ms after generation.
+            p.on_event(&delivered(1, 2, t, t + 2 * NS_PER_MS, 30.0));
+            // 3 → 1 once every 2 s, from 800 m.
+            if k % 20 == 0 {
+                p.on_event(&delivered(1, 3, t, t + 2 * NS_PER_MS, 800.0));
+            }
+        }
+        p.on_event(&kin(1, 2_100 * NS_PER_MS, 0.0));
+        let s = p.flush(2_100 * NS_PER_MS);
+        let hood = point(&s, "aoi", &[]).unwrap();
+        // The first step holds the first message from 2 ms on, so it averages 51 ms over 98 ms.
+        assert!((hood - 52.0).abs() < 0.1, "headline {hood}");
+        assert_eq!(point(&s, "aoi", &[(Dim::Radius, "100m")]), Some(hood));
+        let all = point(&s, "aoi", &[(Dim::Radius, AOI_ALL_LINKS)]).unwrap();
+        assert!(all > 150.0, "every-link pool is pulled up by the far link: {all}");
     }
 
     #[test]
