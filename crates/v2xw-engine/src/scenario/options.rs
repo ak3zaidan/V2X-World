@@ -1208,6 +1208,7 @@ pub fn title(path: &str) -> Option<&'static str> {
     Some(match path {
         "actors.vehicles.demand.rate_veh_per_h" => "Vehicles entering per hour",
         "actors.vehicles.demand.kind" => "How vehicles arrive",
+        "actors.vehicles.demand.fleet_size" => "Vehicles on the road (fixed fleet)",
         "actors.vehicles.equipped_fraction" => "Share of vehicles with a V2X radio",
         "actors.vru.device_fraction" => "Share of pedestrians and cyclists with a device",
         "radio.rat" => "Radio technology",

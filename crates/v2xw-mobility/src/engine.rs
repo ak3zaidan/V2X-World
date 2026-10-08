@@ -1832,6 +1832,9 @@ impl NativeMobility {
             Insertion::Placed(id) => Some(id),
             Insertion::Occupied | Insertion::Unroutable => {
                 self.dropped_trips += 1;
+                if let Some(d) = self.demand.as_mut() {
+                    d.refund();
+                }
                 None
             }
         }
@@ -3842,7 +3845,6 @@ impl Mobility for NativeMobility {
         if let Some(mut demand) = self.demand.take() {
             let trips = demand.spawns_in(ctx, t0, t1);
             self.demand = Some(demand);
-            let world = ctx.world();
             if self.along_path() {
                 // Trips whose origin has no room *now* wait for it, oldest first, as
                 // SUMO's insertion queue does (`--max-depart-delay`), rather than being
@@ -3854,6 +3856,24 @@ impl Mobility for NativeMobility {
                 // demand-stream order (invariant I-M2) however long it waits.
                 let mut queue = core::mem::take(&mut self.waiting);
                 queue.extend(trips.into_iter().map(|trip| (trip, t0, None)));
+                // A held fleet ([`Demand::fleet_target`]): top it up to its size, counting
+                // the trips already waiting to enter. A finished trip is replaced in the
+                // step after it ends; a refused one is replaced in the same step. The
+                // attempts are bounded so a network with nowhere to put a vehicle cannot
+                // spin: at most twice the shortfall per step, and 64 at most.
+                let fleet = self.demand.as_ref().and_then(|d| d.fleet_target());
+                if let Some(target) = fleet {
+                    let have = (self.actors.len() + queue.len()) as u64;
+                    let short = target.saturating_sub(have);
+                    for _ in 0..short.min(64) {
+                        if let Some(trip) = self.demand.as_mut().and_then(|d| d.top_up(ctx, t0))
+                        {
+                            queue.push((trip, t0, None));
+                        }
+                    }
+                }
+                let world = ctx.world();
+                let mut unroutable_in_fleet = 0u64;
                 for (trip, since, reserved) in queue {
                     let traits = self.traits_for(&*ctx, &trip);
                     match self.try_insert(world, &trip, t0, reserved, traits) {
@@ -3871,14 +3891,51 @@ impl Mobility for NativeMobility {
                             });
                             self.waiting.push((trip, since, Some(id)));
                         }
-                        Insertion::Occupied => self.dropped_trips += 1,
+                        Insertion::Occupied => {
+                            self.dropped_trips += 1;
+                            if let Some(d) = self.demand.as_mut() {
+                                d.refund();
+                            }
+                        }
                         Insertion::Unroutable => {
                             self.dropped_trips += 1;
                             self.unroutable_trips += 1;
+                            unroutable_in_fleet += 1;
+                            if let Some(d) = self.demand.as_mut() {
+                                d.refund();
+                            }
+                        }
+                    }
+                }
+                // A fleet trip with no route is redrawn at once (SUMO's randomTrips
+                // `--validate` drops unroutable trips the same way), bounded as above.
+                if fleet.is_some() {
+                    for _ in 0..unroutable_in_fleet.min(64) {
+                        let Some(trip) = self.demand.as_mut().and_then(|d| d.top_up(ctx, t0))
+                        else {
+                            break;
+                        };
+                        let world = ctx.world();
+                        let traits = self.traits_for(&*ctx, &trip);
+                        match self.try_insert(world, &trip, t0, None, traits) {
+                            Insertion::Placed(id) => {
+                                self.assign_kerbside(&*ctx, id);
+                                spawned.push(self.actor_spawn(world, id, t0));
+                            }
+                            Insertion::Occupied => {
+                                let id = ActorId::new(self.next_actor);
+                                self.next_actor += 1;
+                                self.waiting.push((trip, t0, Some(id)));
+                            }
+                            Insertion::Unroutable => {
+                                self.dropped_trips += 1;
+                                self.unroutable_trips += 1;
+                            }
                         }
                     }
                 }
             } else {
+                let world = ctx.world();
                 for trip in trips {
                     let traits = self.traits_for(&*ctx, &trip);
                     if let Some(id) = self.insert_trip_with(world, &trip, t0, traits) {
@@ -6272,6 +6329,65 @@ mod tests {
         for (id, _, _, _) in engine.longitudinal_states() {
             assert!(Mobility::kinematics(&engine, id).is_some());
         }
+    }
+
+    /// A small grid with a fleet of `n` held vehicles: how many are on the road at each
+    /// whole second over `secs`, and how many trips finished.
+    fn fleet_run(params: PoissonParams, secs: u64) -> (Vec<usize>, usize) {
+        let world = v2xw_world::procedural::grid(
+            &GridParams::legacy().with_size(4, 8).with_signals(true),
+            &ImportOptions::default(),
+        )
+        .expect("grid");
+        let rng = RngRegistry::new(7);
+        let ep = EngineParams::default();
+        let mut engine = NativeMobility::new(ep);
+        let demand = PoissonDemand::new(&world, params, OdParams::default()).expect("demand");
+        {
+            let mut ctx = MobilityCtx::new(0, &world, &rng);
+            engine.init(&mut ctx, Box::new(demand)).expect("init");
+        }
+        let (mut on_road, mut done) = (Vec::new(), 0usize);
+        let mut t = 0u64;
+        while t < secs * NS_PER_S {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            let u = engine.step(&mut ctx, ep.step);
+            done += u
+                .despawned
+                .iter()
+                .filter(|(_, c)| *c == DespawnCause::TripComplete)
+                .count();
+            t += ep.step.as_nanos();
+            if t % NS_PER_S == 0 {
+                on_road.push(engine.len());
+            }
+        }
+        (on_road, done)
+    }
+
+    #[test]
+    fn a_fleet_of_two_is_two_vehicles_on_the_road() {
+        // The owner's report: a cap of 2 on a 4 x 8 grid gave 0 vehicles. A held fleet
+        // of 2 is 2 vehicles from the first seconds to the end, finished trips replaced.
+        let (on_road, done) = fleet_run(
+            PoissonParams {
+                fleet_size: 2,
+                duration: Duration::from_secs(300),
+                ..PoissonParams::default()
+            },
+            300,
+        );
+        let full = on_road.iter().skip(2).filter(|n| **n == 2).count();
+        assert!(
+            on_road.iter().all(|n| *n <= 2),
+            "more than the fleet on the road: {on_road:?}"
+        );
+        assert!(
+            full * 100 >= (on_road.len() - 2) * 95,
+            "the fleet of 2 was on the road {full} of {} s: {on_road:?}",
+            on_road.len() - 2
+        );
+        assert!(done > 0, "no trip finished in five minutes, so none was replaced");
     }
 
     /// A driving lane long enough to hold several vehicles, and somewhere routable to go.

@@ -269,6 +269,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("actors.vru.midblock_rate_per_100m", "per 100 m"),
     ("actors.rsus[].site", "site id"),
     ("actors.rsu_placement.count", "roadside units"),
+    ("actors.vehicles.demand.fleet_size", "vehicles"),
     ("radio.tiers.focus.region.node", "node id"),
     ("threats.attackers[].count", "vehicles"),
     ("threats.attackers[].actor_ids[]", "actor id"),

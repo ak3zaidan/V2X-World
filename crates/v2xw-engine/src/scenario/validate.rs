@@ -235,6 +235,16 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the arrival rate",
     },
+    // A guard, not a traffic figure: 50,000 vehicles held on the road is well past what the
+    // all-microscopic engine carries in real time on this machine class (BUILD-STATUS,
+    // city scale: about 250 at 0.2x real time) and what the tiered city carries.
+    Bound {
+        path: "actors.vehicles.demand.fleet_size",
+        lo: 1.0,
+        hi: 50_000.0,
+        exclusive_lo: false,
+        what: "the number of vehicles held on the road",
+    },
     // 1,000 veh/h per lane-km is several times a jammed lane's density at any speed; the
     // ceiling is a guard against a typo, as the rate's is.
     Bound {
@@ -822,6 +832,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "actors.vehicles.demand.rate_veh_per_h",
         status: Status::Wired,
         note: "Vehicles per hour offered to the network.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.demand.fleet_size",
+        status: Status::Wired,
+        note: "Holds exactly this many vehicles on the road: a finished trip is replaced, \
+               and a trip that cannot enter or has no route is redrawn. Needs the Poisson \
+               model; its arrival rate is then not used.",
     },
     KeyStatus {
         path: "actors.vehicles.demand.rate_veh_per_h_per_lane_km",
@@ -2780,6 +2797,29 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ));
     }
 
+    if let Some(n) = s.actors.vehicles.demand.fleet_size {
+        bounded_at(
+            "actors.vehicles.demand.fleet_size",
+            "actors.vehicles.demand.fleet_size",
+            f64::from(n),
+            e,
+        );
+    }
+    if s.actors.vehicles.demand.fleet_size.is_some()
+        && !matches!(
+            s.actors.vehicles.demand.kind.as_str(),
+            "mobility/demand/poisson" | v2xw_mobility::demand::poisson::MODEL_ID
+        )
+    {
+        e.push(conflict(
+            "actors.vehicles.demand.fleet_size",
+            format!(
+                "holds a fleet only with the Poisson demand model, and the demand is '{}'; \
+                 set actors.vehicles.demand.kind to mobility/demand/poisson",
+                s.actors.vehicles.demand.kind
+            ),
+        ));
+    }
     if let Some(rate) = s.actors.vehicles.demand.rate_veh_per_h {
         if !(rate.is_finite() && rate >= 0.0) {
             e.push(conflict(

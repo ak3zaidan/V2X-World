@@ -241,11 +241,20 @@ impl Dijkstra {
             if settled > self.params.max_settled {
                 return None;
             }
-            for c in world.successors(lane) {
+            let successors = world.successors(lane);
+            // A dead end: the only way on is to turn round. The importer builds that
+            // turnaround only where a car fits (`osm::build_movements`, AASHTO Green Book
+            // Table 2-2), and SUMO routes through it too (netconvert's default
+            // turnarounds); refusing it left every trip that started on, or had to pass
+            // through, a cul-de-sac without a route.
+            let dead_end = !successors
+                .iter()
+                .any(|c| c.permitted && c.direction != TurnDirection::UTurn);
+            for c in successors {
                 if !c.permitted {
                     continue; // a turn restriction
                 }
-                if c.direction == TurnDirection::UTurn && !self.params.allow_uturn {
+                if c.direction == TurnDirection::UTurn && !self.params.allow_uturn && !dead_end {
                     continue;
                 }
                 let next = c.via.unwrap_or(c.to_lane);

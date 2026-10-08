@@ -367,11 +367,24 @@ fn largest_car_component(world: &World) -> BTreeSet<LaneId> {
     };
     let mut fwd: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut rev: Vec<Vec<usize>> = vec![Vec::new(); n];
+    // The lanes with a permitted way on that is not a U-turn: anywhere else, a U-turn is
+    // a dead end's turnaround, which the router takes (`Dijkstra::search`).
+    let mut through = vec![false; n];
     for c in world.roads.connections() {
-        // The router turns down a U-turn unless told otherwise (`DijkstraParams::allow_uturn`),
-        // so a lane reachable only by one is not reachable.
+        if c.permitted && c.direction != v2xw_world::model::TurnDirection::UTurn {
+            if let Some(t) = through.get_mut(c.from_lane.as_usize()) {
+                *t = true;
+            }
+        }
+    }
+    for c in world.roads.connections() {
+        // The router turns down a U-turn unless told otherwise (`DijkstraParams::allow_uturn`)
+        // or it is a dead end's only way on, so a lane reachable only by another is not
+        // reachable.
+        let uturn_refused = c.direction == v2xw_world::model::TurnDirection::UTurn
+            && through.get(c.from_lane.as_usize()).copied().unwrap_or(true);
         if !c.permitted
-            || c.direction == v2xw_world::model::TurnDirection::UTurn
+            || uturn_refused
             || !car(c.from_lane)
             || !car(c.to_lane)
         {

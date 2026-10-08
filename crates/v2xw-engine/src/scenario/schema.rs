@@ -618,6 +618,11 @@ pub struct DemandSpec {
     /// also gives. Midtown's 119 km of driving lane at 25 veh/h/km is 3,000 veh/h.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_veh_per_h_per_lane_km: Option<f64>,
+    /// Hold exactly this many vehicles on the road for the whole run: every trip that ends
+    /// is replaced by a new one, and a trip that cannot enter or has no route is redrawn.
+    /// The arrival rate is then not used. Absent runs the arrival process.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_size: Option<u32>,
     /// The model's own parameters, in the shape its parameter struct deserialises.
     #[serde(default)]
     pub params: serde_json::Value,
@@ -635,6 +640,7 @@ impl Default for DemandSpec {
             kind: DemandSpec::default_kind(),
             rate_veh_per_h: None,
             rate_veh_per_h_per_lane_km: None,
+            fleet_size: None,
             params: serde_json::Value::Null,
         }
     }

@@ -625,6 +625,9 @@ pub fn build_demand(scenario: &Scenario, world: &World) -> Result<Box<dyn Demand
             if let Some(rate) = d.rate_veh_per_h {
                 params.arrival_rate_per_s = rate / 3600.0;
             }
+            if let Some(n) = d.fleet_size {
+                params.fleet_size = u64::from(n);
+            }
             if !shares.is_empty() {
                 params.fleet = v2xw_mobility::demand::FleetMix::from_shares(&shares);
             }

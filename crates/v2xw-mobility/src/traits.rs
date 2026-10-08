@@ -270,6 +270,28 @@ pub trait Demand: Model + Send + Sync {
     ) -> Vec<MobilityCommand> {
         Vec::new()
     }
+
+    /// Tells the model that one trip it produced never reached the road: its origin had
+    /// no room until the departure deadline, or no route existed. A model with a cap on
+    /// its trips gives the slot back, so a cap of N means N vehicles placed rather than N
+    /// trips drawn (a cap of 2 on a small grid used to put 0 vehicles on the road when both
+    /// draws were refused). The default does nothing.
+    fn refund(&mut self) {}
+
+    /// The number of vehicles this model holds on the road at all times, when it holds a
+    /// fleet rather than running an arrival process. The engine then asks
+    /// [`Demand::top_up`] for a trip whenever fewer are on the road (or waiting to enter),
+    /// so a finished trip is replaced by a new one. `None` (the default) keeps the arrival
+    /// process.
+    fn fleet_target(&self) -> Option<u64> {
+        None
+    }
+
+    /// One trip starting at `t`, outside the arrival process: what holds a fleet at
+    /// [`Demand::fleet_target`]. `None` (the default) when the model cannot make one.
+    fn top_up(&mut self, _ctx: &mut dyn MobCtx, _t: SimTime) -> Option<TripRequest> {
+        None
+    }
 }
 
 /// Vulnerable road users (03-interfaces.md §3, 04-models.md §2.5).

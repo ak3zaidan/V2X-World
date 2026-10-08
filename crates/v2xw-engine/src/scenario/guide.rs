@@ -57,6 +57,11 @@ const BASIC: &[Basic] = &[
         recommended: "500 (night) to 4,500 (rush hour) on a city extract.",
     },
     Basic {
+        path: "actors.vehicles.demand.fleet_size",
+        explain: "Keeps exactly this many vehicles driving for the whole run: when one finishes its trip a new one sets off, as in a field trial with a fixed test fleet. Leave it empty to let vehicles arrive at the hourly rate instead.",
+        recommended: "2 to 50 to watch individual vehicles; 100 to 300 for channel load on this machine.",
+    },
+    Basic {
         path: "actors.vehicles.equipped_fraction",
         explain: "The share of vehicles that carry a V2X radio. Today's deployments are a few percent; a mandate would equip every new vehicle.",
         recommended: "0.05 (early deployment) to 1 (every vehicle).",
