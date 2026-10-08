@@ -120,8 +120,14 @@ pub struct CommsProvider {
     losses_by_cause: BTreeMap<String, u64>,
     /// Channel busy ratios, per 5.9 GHz channel (`None` = the producer did not say).
     cbr: BTreeMap<Option<u16>, Distribution>,
-    /// Inter-packet gaps in seconds.
+    /// Inter-packet gaps in seconds, from every transmitter but a VRU's device.
     pir: Distribution,
+    /// The same from the transmitters that have sent a PSM or a VAM: a pedestrian's or a
+    /// rider's device, which beacons at its own, lower rate (SAE J2945/9, ETSI TS 103
+    /// 300-3), so its 1 s gaps are not lost BSMs and are reported apart (class `vru`).
+    pir_vru: Distribution,
+    /// Transmitters seen sending a VRU awareness message.
+    vru_tx: std::collections::BTreeSet<NodeId>,
     /// The last successful reception per directed link, for the next gap.
     last_rx: BTreeMap<LinkKey, SimTime>,
     /// Airtime per transmitting node, in microseconds. Integer, so exact.
@@ -170,6 +176,8 @@ impl CommsProvider {
             losses_by_cause: BTreeMap::new(),
             cbr: BTreeMap::new(),
             pir: Distribution::new(),
+            pir_vru: Distribution::new(),
+            vru_tx: std::collections::BTreeSet::new(),
             last_rx: BTreeMap::new(),
             airtime_us: BTreeMap::new(),
             bytes: BTreeMap::new(),
@@ -449,9 +457,11 @@ impl CommsProvider {
                 Visibility::NodeAndGt,
                 Quantum::TIME_S,
                 "Packet inter-reception time: the gap between successive receptions from \
-                 the same transmitter at the same receiver.",
+                 the same transmitter at the same receiver. Pedestrians' and riders' \
+                 devices, which beacon at their own lower rates, are the class `vru` \
+                 sample rather than the headline.",
             )
-            .with_dims([Dim::T])
+            .with_dims([Dim::T, Dim::Class])
             .with_source(cards::paper(
                 "Martelli, Elena Renda, Resta, Santi, 'A measurement-based study of beaconing \
                  performance in IEEE 802.11p vehicular networks', IEEE INFOCOM 2012 (packet \
@@ -547,6 +557,9 @@ impl CommsProvider {
 
     /// Records one transmission.
     fn on_tx(&mut self, v: &NodeTxView) {
+        if matches!(v.msg_type.as_deref(), Some("psm" | "vam")) {
+            self.vru_tx.insert(v.node);
+        }
         if let Some(us) = v.airtime_us {
             *self.airtime_us.entry(v.node).or_insert(0) += us;
         }
@@ -575,8 +588,12 @@ impl CommsProvider {
                 if let Some(prev) = self.last_rx.insert(key, v.t_end)
                     && v.t_end >= prev
                 {
-                    self.pir
-                        .observe(Duration::between(prev, v.t_end).as_secs_f64());
+                    let gap = Duration::between(prev, v.t_end).as_secs_f64();
+                    if self.vru_tx.contains(&tx) {
+                        self.pir_vru.observe(gap);
+                    } else {
+                        self.pir.observe(gap);
+                    }
                 }
             }
         }
@@ -824,12 +841,24 @@ impl MetricProvider for CommsProvider {
 
         // --- pir -------------------------------------------------------------------------
         let pir = core::mem::replace(&mut self.pir, Distribution::new());
+        let pir_def = self.def("pir");
         out.push(MetricSample::new(
-            &self.def("pir"),
+            &pir_def,
             at,
             Dims::new(),
             SampleValue::Distribution(pir.summary(self.min_samples)),
         ));
+        let pir_vru = core::mem::replace(&mut self.pir_vru, Distribution::new());
+        if !pir_vru.is_empty() {
+            let mut dims = Dims::new();
+            dims.insert(Dim::Class, DimValue::label("vru"));
+            out.push(MetricSample::new(
+                &pir_def,
+                at,
+                dims,
+                SampleValue::Distribution(pir_vru.summary(self.min_samples)),
+            ));
+        }
 
         // --- goodput ---------------------------------------------------------------------
         let goodput_bytes = core::mem::take(&mut self.goodput_bytes);
