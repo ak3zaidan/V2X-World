@@ -14,8 +14,8 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use v2xw_mobility::{IdmPreset, VehicleClass};
 use v2xw_mobility::drivers::HumanDriverParams;
+use v2xw_mobility::{IdmPreset, VehicleClass};
 use v2xw_trafficval::fdlab::{
     self, DiagramFits, HeadwayStats, Model, RingRun, RingSpec, fit_diagram, headway_stats,
 };
@@ -133,12 +133,20 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from);
     let cfg = Config::new(quick);
-    let (warmup, measure) = if quick { (120.0, 180.0) } else { (300.0, 300.0) };
+    let (warmup, measure) = if quick {
+        (120.0, 180.0)
+    } else {
+        (300.0, 300.0)
+    };
     let seed = 0x7CA1_1B4A_0000_0001;
     let city_v0 = 13.9; // 50 km/h
     let fwy_v0 = 33.3; // 120 km/h, Treiber 2000
-    let city_k = vec![10.0, 20.0, 30.0, 40.0, 45.0, 50.0, 55.0, 70.0, 90.0, 110.0, 130.0];
-    let fwy_k = vec![5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 55.0, 70.0, 90.0, 110.0];
+    let city_k = vec![
+        10.0, 20.0, 30.0, 40.0, 45.0, 50.0, 55.0, 70.0, 90.0, 110.0, 130.0,
+    ];
+    let fwy_k = vec![
+        5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 55.0, 70.0, 90.0, 110.0,
+    ];
     let ring = |model, human, length, v0| RingSpec {
         model,
         human,
@@ -342,7 +350,11 @@ fn main() {
     let mut lab = Lab::new(cfg.clone());
     let mut model_md = String::new();
     let mut model_fail = false;
-    for id in ["model/idm-stops-at-s0", "model/string-stability", "model/sugiyama-ring"] {
+    for id in [
+        "model/idm-stops-at-s0",
+        "model/string-stability",
+        "model/sugiyama-ring",
+    ] {
         let Some(c) = checks().into_iter().find(|c| c.id == id) else {
             continue;
         };

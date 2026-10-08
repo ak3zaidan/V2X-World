@@ -4334,7 +4334,8 @@ impl Mobility for NativeMobility {
             let mut accel = if along && hp.imperfect() && actor.class != VehicleClass::Pedestrian {
                 let step_ns = (dt_s * 1e9).round().max(1.0) as u64;
                 let k = t0 / step_ns;
-                let key = actor.traits.noise_key ^ crate::drivers::splitmix64(u64::from(actor.id.index()));
+                let key = actor.traits.noise_key
+                    ^ crate::drivers::splitmix64(u64::from(actor.id.index()));
                 let mut seen = leader;
                 let (mut wg, mut wr) = (actor.human.w_gap, actor.human.w_rate);
                 if let Some(l) = seen.as_mut()
@@ -4356,9 +4357,9 @@ impl Mobility for NativeMobility {
                     wg = p.w_gap;
                     wr = p.w_rate;
                 }
-                let now =
-                    self.cf
-                        .accel(&ego_capped, seen.as_ref(), &lane_view, &self.weather);
+                let now = self
+                    .cf
+                    .accel(&ego_capped, seen.as_ref(), &lane_view, &self.weather);
                 human_next = Some((wg, wr, now));
                 crate::drivers::delayed(
                     &actor.human,
@@ -4635,8 +4636,11 @@ impl Mobility for NativeMobility {
                 // carriageway has three or more ([`crate::drivers`], StVO §18(11)).
                 if self.params.human.truck_lane_restriction
                     && matches!(actor.class, VehicleClass::Truck | VehicleClass::Trailer)
-                    && let LaneChangeDecision::Change { to, side: Side::Left, .. } =
-                        decision.lane_change
+                    && let LaneChangeDecision::Change {
+                        to,
+                        side: Side::Left,
+                        ..
+                    } = decision.lane_change
                     && crate::drivers::is_restricted_left_lane(ctx.world(), to)
                 {
                     decision.lane_change = LaneChangeDecision::Stay;

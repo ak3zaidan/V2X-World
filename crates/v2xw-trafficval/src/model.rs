@@ -22,6 +22,7 @@ use v2xw_core::ids::{ActorId, LaneId};
 use v2xw_core::math;
 use v2xw_core::rng::RngRegistry;
 use v2xw_core::weather::WeatherState;
+use v2xw_mobility::VehicleClass;
 use v2xw_mobility::carfollowing::idm::{Idm, IdmParams, IdmPreset};
 use v2xw_mobility::ctx::MobilityCtx;
 use v2xw_mobility::fd::{self, FdParams};
@@ -32,7 +33,6 @@ use v2xw_mobility::views::{
     DriverProfile, LaneChangeDecision, LaneNeighbors, LeaderView, Side, SideNeighbors, VehicleView,
 };
 use v2xw_mobility::vru::social_force::SocialForceParams;
-use v2xw_mobility::VehicleClass;
 
 use crate::{Check, Group, Lab, Outcome, Row, Variant};
 
@@ -115,7 +115,9 @@ pub fn checks() -> Vec<Check> {
                 speed from its outflow front: the median of Δx/Δt between a car leaving \
                 the jam (rising past 3 m/s after standing below 1 m/s) and the car behind \
                 it leaving next.",
-            faults: &["the ideal driver: no reaction time, no perception errors, every driver alike"],
+            faults: &[
+                "the ideal driver: no reaction time, no perception errors, every driver alike",
+            ],
             run: sugiyama,
         },
         Check {

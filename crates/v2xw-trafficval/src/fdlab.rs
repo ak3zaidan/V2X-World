@@ -153,7 +153,9 @@ pub fn run_ring(spec: &RingSpec, density_veh_km: f64) -> Result<RingRun, String>
     d.desired_speed_mps = spec.v0_mps;
     let ve = match spec.model {
         Model::Idm(p) => fd::equilibrium_speed_mps(&Idm::new(p), &d, spec.v0_mps, spacing - body),
-        Model::KraussSumo => spec.v0_mps.min((spacing - body - d.min_gap_m).max(0.0) / 1.0),
+        Model::KraussSumo => spec
+            .v0_mps
+            .min((spacing - body - d.min_gap_m).max(0.0) / 1.0),
     };
     let mut index: BTreeMap<ActorId, usize> = BTreeMap::new();
     for i in 0..n {
@@ -198,9 +200,7 @@ pub fn run_ring(spec: &RingSpec, density_veh_km: f64) -> Result<RingRun, String>
         let measuring = t > warm_ns;
         for (id, lane, s, v) in engine.longitudinal_states() {
             let Some(&i) = index.get(&id) else { continue };
-            let raw = lane_index
-                .get(&lane)
-                .map_or(f64::NAN, |k| offsets[*k] + s);
+            let raw = lane_index.get(&lane).map_or(f64::NAN, |k| offsets[*k] + s);
             if !raw.is_finite() {
                 continue;
             }
@@ -255,8 +255,12 @@ pub fn run_ring(spec: &RingSpec, density_veh_km: f64) -> Result<RingRun, String>
         }
     }
     let mean = math::sum_ordered(speeds.clone()) / speeds.len().max(1) as f64;
-    let var = math::sum_ordered(speeds.iter().map(|v| (v - mean) * (v - mean)).collect::<Vec<f64>>())
-        / speeds.len().max(1) as f64;
+    let var = math::sum_ordered(
+        speeds
+            .iter()
+            .map(|v| (v - mean) * (v - mean))
+            .collect::<Vec<f64>>(),
+    ) / speeds.len().max(1) as f64;
     passages.sort_by(f64::total_cmp);
     let headways: Vec<f64> = passages.windows(2).map(|w| w[1] - w[0]).collect();
     let wave = outflow_wave_kmh(&departures, n, length);
@@ -288,7 +292,9 @@ pub fn outflow_wave_kmh(departures: &[(f64, usize, f64)], n: usize, length: f64)
     let mut speeds: Vec<f64> = Vec::new();
     for &(t, i, u) in departures {
         let follower = (i + n - 1) % n;
-        if let Some(&(tf, uf)) = by_car[follower].iter().find(|(tf, _)| *tf > t && *tf - t < 15.0)
+        if let Some(&(tf, uf)) = by_car[follower]
+            .iter()
+            .find(|(tf, _)| *tf > t && *tf - t < 15.0)
         {
             let mut dx = (uf - u).rem_euclid(length);
             if dx > length / 2.0 {
@@ -328,7 +334,11 @@ pub fn fit(points: &[(f64, f64)]) -> Fit {
     Fit {
         slope,
         intercept,
-        r2: if ss_tot > 0.0 { 1.0 - ss_res / ss_tot } else { f64::NAN },
+        r2: if ss_tot > 0.0 {
+            1.0 - ss_res / ss_tot
+        } else {
+            f64::NAN
+        },
     }
 }
 
@@ -362,11 +372,17 @@ pub struct DiagramFits {
 /// Fits Greenshields (speed linear in density) and a triangular diagram (free branch at
 /// the free speed, congested branch a straight line in flow-density) to `runs`.
 pub fn fit_diagram(runs: &[RingRun], v0_mps: f64) -> DiagramFits {
-    let sk: Vec<(f64, f64)> = runs.iter().map(|r| (r.density_veh_km, r.speed_mps * 3.6)).collect();
+    let sk: Vec<(f64, f64)> = runs
+        .iter()
+        .map(|r| (r.density_veh_km, r.speed_mps * 3.6))
+        .collect();
     let g = fit(&sk);
     let gs_free = g.intercept;
     let gs_jam = -g.intercept / g.slope;
-    let free: Vec<&RingRun> = runs.iter().filter(|r| r.speed_mps >= 0.9 * v0_mps).collect();
+    let free: Vec<&RingRun> = runs
+        .iter()
+        .filter(|r| r.speed_mps >= 0.9 * v0_mps)
+        .collect();
     let cong: Vec<(f64, f64)> = runs
         .iter()
         .filter(|r| r.speed_mps < 0.9 * v0_mps)
@@ -418,7 +434,11 @@ pub struct HeadwayStats {
 
 /// The statistics of `h`.
 pub fn headway_stats(h: &[f64]) -> HeadwayStats {
-    let mut v: Vec<f64> = h.iter().copied().filter(|x| x.is_finite() && *x > 0.0).collect();
+    let mut v: Vec<f64> = h
+        .iter()
+        .copied()
+        .filter(|x| x.is_finite() && *x > 0.0)
+        .collect();
     v.sort_by(f64::total_cmp);
     let n = v.len();
     if n == 0 {

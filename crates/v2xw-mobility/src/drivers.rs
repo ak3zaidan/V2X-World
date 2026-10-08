@@ -141,7 +141,9 @@ impl HumanDriverParams {
 /// The per-class coefficients of variation `(T, a, b, s0)` (module table).
 pub fn spread_cv(class: VehicleClass) -> [f64; 4] {
     match class {
-        VehicleClass::Truck | VehicleClass::Trailer | VehicleClass::Coach => [0.20, 0.20, 0.15, 0.20],
+        VehicleClass::Truck | VehicleClass::Trailer | VehicleClass::Coach => {
+            [0.20, 0.20, 0.15, 0.20]
+        }
         VehicleClass::Bus => [0.15, 0.15, 0.15, 0.15],
         VehicleClass::Motorcycle | VehicleClass::Moped => [0.30, 0.30, 0.25, 0.30],
         _ => [0.25, 0.25, 0.20, 0.25],
