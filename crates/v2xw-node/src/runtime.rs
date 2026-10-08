@@ -413,6 +413,9 @@ pub struct ObuRuntime {
     node: NodeId,
     config: NodeConfig,
     service: ProfileServiceModel,
+    /// Whether the profile prices `config.verify_op` at all (fixed at construction: the
+    /// catalogue lookup is not free, and neither changes over a run).
+    verify_priced: bool,
     cpu: ServerBank,
     hsm: ServerBank,
     /// A separate hardware engine, where the profile says one exists.
@@ -508,6 +511,13 @@ impl ObuRuntime {
         // is the pessimistic reading rather than a guess at parallelism nobody published.
         let hsm_servers = profile.hsm.servers.or(1).max(1);
         let service = ProfileServiceModel::new(profile.clone()).for_node(node);
+        let verify_priced = profile.op_cost(config.verify_op).is_some()
+            || profile
+                .hsm
+                .ops
+                .get(config.verify_op)
+                .and_then(crate::profile::HsmOp::range_us)
+                .is_some();
         let stores = Stores {
             peers: PeerCertCache::new(config.peer_cache_capacity),
             neighbors: NeighborTable::new(config.neighbor_capacity),
@@ -553,6 +563,7 @@ impl ObuRuntime {
             security: NodeSecurity::new(config.wall, config.crypto_mode, config.psid),
             etsi: EtsiUperCodec::new(),
             service,
+            verify_priced,
             config,
         }
     }
@@ -1090,6 +1101,31 @@ impl ObuRuntime {
                     .as_ref()
                     .and_then(|s| self.relevance.get(&crate::safety::digest_key(s)).copied()),
             };
+            // A profile that prices no verification for the run's scheme checks nothing.
+            // Its messages are dropped here as unverifiable (`verify_unpriced`), not queued
+            // behind a verifier that never runs: that queue filled and every later
+            // message was reported as an overflow — "the verifier cannot keep up" — on an
+            // idle verifier. Counted with the policy's skips in the telemetry, the one
+            // counter for a message the node did not verify.
+            if !self.verify_priced {
+                let _ = summary;
+                self.drops.record(DropCause::VerifyPolicySkip);
+                ctx.emit(VerifyDecisionRecord::unpriced(
+                    self.node,
+                    parsed,
+                    policy_id(self.policy.code()),
+                    msg_type_name(frame.msg_type),
+                ));
+                out.rx_reports.push(RxReport {
+                    token: stamp.token,
+                    disposition: RxDisposition::Dropped(DropCause::VerifyPolicySkip),
+                    arrived,
+                    parsed,
+                    verify_start: None,
+                    verify_done: None,
+                });
+                continue;
+            }
             let decision = {
                 let view = PolicyView {
                     position: &self.belief,
