@@ -84,3 +84,30 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     }
     e
 }
+
+#[cfg(test)]
+mod drivers_tests {
+    use crate::scenario::Scenario;
+    use crate::scenario::schema::DriverRealism;
+
+    #[test]
+    fn the_drivers_block_reaches_the_engine() {
+        let mut s = Scenario::minimal();
+        let base = crate::wiring::native_mobility(&s);
+        assert_eq!(base.params().human, Default::default());
+        assert!(base.params().driver_heterogeneity);
+
+        s.actors.vehicles.drivers.realism = DriverRealism::Human;
+        s.actors.vehicles.drivers.reaction_time_s = Some(1.1);
+        s.actors.vehicles.drivers.truck_lane_restriction = Some(true);
+        let m = crate::wiring::native_mobility(&s);
+        let h = m.params().human;
+        assert_eq!(h.reaction_time_s, 1.1);
+        assert!(h.parameter_spread > 0.0 && h.distance_error > 0.0 && h.truck_lane_restriction);
+
+        s.actors.vehicles.drivers = Default::default();
+        s.actors.vehicles.drivers.realism = DriverRealism::Identical;
+        let m = crate::wiring::native_mobility(&s);
+        assert!(!m.params().driver_heterogeneity && !m.params().driver_styles);
+    }
+}

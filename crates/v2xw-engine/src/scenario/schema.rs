@@ -765,6 +765,10 @@ pub struct Vru {
     /// Overrides the share of cyclists on e-bikes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ebike_share: Option<f64>,
+    /// Overrides the median time a pedestrian wants a traffic gap to leave beyond the time
+    /// to walk across (the HCM's start-up and clearance time), seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crossing_gap_margin_s: Option<f64>,
 }
 
 /// How the pedestrians of `actors.vru` behave.

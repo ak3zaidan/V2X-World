@@ -211,17 +211,43 @@ fn main() {
     };
     let q_fwy = qmax(IdmPreset::Treiber2000, fwy_v0);
     let q_city = qmax(IdmPreset::UrbanHcm, city_v0);
+    // The model's own equilibrium fundamental diagram: q_e(s) = v_e(s)/(s + l), maximised
+    // over the gap — what a stable ring of identical drivers must carry at its best.
+    let q_eq = |preset: IdmPreset, v0: f64| {
+        let idm = v2xw_mobility::Idm::new(preset);
+        let mut d = preset.profile(VehicleClass::Passenger);
+        d.desired_speed_mps = v0;
+        let l = VehicleClass::Passenger.spec().length_m;
+        (1..2000)
+            .map(|k| {
+                let s = d.min_gap_m + k as f64 * 0.1;
+                v2xw_mobility::fd::equilibrium_speed_mps(&idm, &d, v0, s) / (s + l) * 3600.0
+            })
+            .fold(0.0, f64::max)
+    };
+    let qe_fwy = q_eq(IdmPreset::Treiber2000, fwy_v0);
+    let qe_city = q_eq(IdmPreset::UrbanHcm, city_v0);
     rows.push(Row::held(
-        "corridor capacity below Kesting 2010's Q_max, identical drivers, fraction",
-        1.0 - fits[3].measured_capacity_veh_h / q_fwy,
-        (0.0, 0.2),
-        format!("Kesting 2010 Eq. 4.1: Q_max = {q_fwy:.0} veh/h for Treiber 2000's drivers; a perturbed ring sits at or below it"),
+        "city capacity below the IDM's equilibrium maximum flow, identical drivers, fraction",
+        1.0 - fits[0].measured_capacity_veh_h / qe_city,
+        (0.0, 0.05),
+        format!("max over s of v_e(s)/(s + l) = {qe_city:.0} veh/h (Treiber & Kesting 2013 §11.3.4, the IDM's steady state); the city drivers are string stable here, so the ring sits on it, less the density grid's step"),
     ));
     rows.push(Row::held(
-        "city capacity below Kesting 2010's Q_max, identical drivers, fraction",
-        1.0 - fits[0].measured_capacity_veh_h / q_city,
+        "corridor capacity below the IDM's equilibrium maximum flow, identical drivers, fraction",
+        1.0 - fits[3].measured_capacity_veh_h / qe_fwy,
         (0.0, 0.2),
-        format!("Kesting 2010 Eq. 4.1: Q_max = {q_city:.0} veh/h for the city drivers at 50 km/h"),
+        format!("max v_e(s)/(s + l) = {qe_fwy:.0} veh/h; Treiber 2000's drivers are string unstable near capacity, so a perturbed ring sits below it"),
+    ));
+    rows.push(Row::reported(
+        "corridor capacity against Kesting 2010's Q_max, identical drivers, ratio",
+        fits[3].measured_capacity_veh_h / q_fwy,
+        format!("Kesting 2010 Eq. 4.1 approximation: Q_max = {q_fwy:.0} veh/h"),
+    ));
+    rows.push(Row::reported(
+        "city capacity against Kesting 2010's Q_max, identical drivers, ratio",
+        fits[0].measured_capacity_veh_h / q_city,
+        format!("Kesting 2010 Eq. 4.1 approximation: Q_max = {q_city:.0} veh/h; it ignores the (v/v0)^δ term, which matters at 50 km/h"),
     ));
     rows.push(Row::held(
         "corridor capacity, human drivers, against identical ones, ratio",

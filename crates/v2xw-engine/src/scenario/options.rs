@@ -1226,6 +1226,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.vehicles.demand.kind" => "How vehicles arrive",
         "actors.vehicles.equipped_fraction" => "Share of vehicles with a V2X radio",
         "actors.vru.device_fraction" => "Share of pedestrians and cyclists with a device",
+        "actors.vru.crossing_gap_margin_s" => "Pedestrian gap acceptance margin",
         "actors.vehicles.drivers" => "Drivers",
         "actors.vehicles.drivers.realism" => "Driver realism",
         "actors.vehicles.drivers.parameter_spread" => "How much drivers differ",

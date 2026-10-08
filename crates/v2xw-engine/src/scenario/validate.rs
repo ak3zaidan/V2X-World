@@ -345,6 +345,13 @@ pub static BOUNDS: &[Bound] = &[
         what: "the perception-error multiplier",
     },
     Bound {
+        path: "actors.vru.crossing_gap_margin_s",
+        lo: 0.5,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the pedestrian crossing gap margin",
+    },
+    Bound {
         path: "actors.vru.ebike_share",
         lo: 0.0,
         hi: 1.0,
@@ -981,6 +988,14 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                the traffic leaves a gap. Default 0.10 under 'observed', calibrated so that \
                about a tenth of signalised crossings begin on don't-walk, as Basch et al. \
                2015 counted at five Midtown intersections.",
+    },
+    KeyStatus {
+        path: "actors.vru.crossing_gap_margin_s",
+        status: Status::Wired,
+        note: "The gap a pedestrian accepts: the HCM critical headway t_c = L/S_p + t_s, \
+               where this is t_s (start-up and clearance), the median of a lognormal \
+               across pedestrians. Default 2 s (HCM, not re-verified locally); smaller \
+               values make pedestrians accept tighter gaps against traffic.",
     },
     KeyStatus {
         path: "actors.vru.ebike_share",
@@ -2732,6 +2747,10 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             s.actors.vru.red_crossing_share,
         ),
         ("actors.vru.ebike_share", s.actors.vru.ebike_share),
+        (
+            "actors.vru.crossing_gap_margin_s",
+            s.actors.vru.crossing_gap_margin_s,
+        ),
         (
             "actors.vehicles.drivers.parameter_spread",
             s.actors.vehicles.drivers.parameter_spread,
