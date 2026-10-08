@@ -1,0 +1,69 @@
+# ============================================================================
+# Compare signature schemes: what each way of signing messages costs.
+# ============================================================================
+#
+#     v2xw compare-signatures scenarios/compare-signature-schemes.yaml \
+#         --schemes ecdsa-p256,ml-dsa-44,falcon-512,hybrid-mldsa44-ecdsa-p256
+#
+# or, in the Studio, open this scenario and press "Compare signature schemes" in the metrics
+# dashboard's Signing overhead group.
+#
+# The same downtown grid, fleet, roadside unit, credential system and seed under every
+# scheme; only `security.signature` changes. Every run carries the signing-overhead metric
+# group (`metrics: [all, signing]`, crates/v2xw-metrics/src/signing.rs), so each scheme
+# reports, against ECDSA P-256:
+#
+# * bytes — signature, signer identifier and certificate octets per message and their
+#   share of the air, with and without certificates;
+# * device cost — sign and verify latency (p50, p95) and the engine each runs on, signer
+#   and verifier utilisation, verification headroom and how many neighbours a device can
+#   keep up with, verifications dropped or later than 100 ms;
+# * fragmentation — frames per message, the share fragmented, reassembly loss;
+# * latency and channel — latency added by security, measured CBR and the CBR the
+#   security bytes add;
+# * backend — credential bytes to and from devices, CA signatures and CA service time.
+#
+# The hardware is an automotive SoC with no HSM (obu/generic-automotive-soc-no-hsm), which
+# prices every registered scheme on its CPU, so the schemes are compared on one engine.
+# Swap `nodes.default_obu` for an HSM profile to see the hardware split (a slow secure
+# element signs, a fast accelerator verifies); `v2xw compare-signatures` refuses a scheme
+# the chosen profile cannot price rather than inventing a cost.
+#
+# Adding a scheme: docs/guides/signature-schemes.md.
+schema: v2xw/scenario/1
+
+meta:
+  base: pq-signatures.yaml
+  name: Compare signature schemes
+  description: >-
+    One downtown fleet under ECDSA P-256, ML-DSA-44, Falcon-512 and a hybrid: the bytes,
+    sign and verify time, verification headroom, fragmentation, added latency, channel load
+    and backend cost of each way of signing, side by side.
+  tags: [study, security, signatures, overhead, post-quantum, comparison]
+  created: "2026-10-07"
+
+time:
+  duration_s: 60.0
+
+actors:
+  vehicles:
+    demand:
+      # A fleet on the map within seconds rather than a trickle: a high arrival rate capped
+      # at 40 trips (scenarios/scale/base.yaml explains the arrangement), so a short run
+      # already has neighbours to verify.
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 20000.0
+      params:
+        max_total_vehicles: 40
+
+metrics: [all, signing]
+
+experiment:
+  sweep:
+    security.signature:
+      - ecdsa-p256
+      - ml-dsa-44
+      - falcon-512
+      - hybrid-mldsa44-ecdsa-p256
+  seeds: [1]
+  replications: 1

@@ -119,6 +119,11 @@ test `crates/v2xw-engine/tests/pq_threshold.rs` checks the worked example end to
 is offered by the published schema, a scenario naming it validates and runs, the node
 charges both halves, the air carries its octets and the credential system its sizes.
 
+To see what the new scheme costs next to ECDSA P-256 (bytes, sign and verify time,
+verification headroom, fragmentation, latency, channel load and backend cost), run
+`v2xw compare-signatures <scenario> --schemes ecdsa-p256,<your-id>`.
+`docs/guides/signature-schemes.md` explains how to read the result.
+
 ### When the primitive is new
 
 If your scheme uses a primitive `v2xw_sec::primitive` does not have (a HAWK, a MAYO, an

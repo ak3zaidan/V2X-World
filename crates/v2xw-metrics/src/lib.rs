@@ -47,6 +47,8 @@
 //! * **Security** ([`security`]): `verify_rate`, `verify_cost`, `verify_wait`,
 //!   `verify_queue_depth`, `unverified_ratio`, `full_cert_share`, `envelope_overhead`,
 //!   `revocation_latency_stage`, `crl_entries`, `crl_bytes`.
+//! * **Signing overhead** ([`signing`], opt-in with `metrics: [all, signing]`): what the
+//!   signature scheme costs on the air, in the devices and in the backend, `sig_*`.
 //! * **Detection** ([`detection`]): the [`ConfusionMatrix`] itself — four counts, reported
 //!   in full — and `det_recall`, `det_fpr`, `det_precision`, `det_f1`, `det_accuracy`,
 //!   `time_to_detect`, `time_to_decision`, `false_accusations` derived from it.
@@ -153,6 +155,7 @@ pub mod quant;
 pub mod runtime;
 pub mod safety;
 pub mod security;
+pub mod signing;
 pub mod stats;
 pub mod summary;
 pub mod vis;
