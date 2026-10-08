@@ -157,6 +157,19 @@ const PLANNED_BRAKE_JERK_MPS3: f64 = 20.0;
 /// brake at when they must stop for something unexpected.
 const PLANNED_STOP_MAX_DECEL_MPS2: f64 = 3.4;
 
+/// The hardest braking the standstill-gap advance cap may apply, m/s²: 0.9 g, the
+/// dry-asphalt peak friction the auditor's deceleration bound is set at (AASHTO 2018
+/// §3.2.2's emergency envelope, `audit::AuditParams::max_decel_mps2` = 9 m/s²), less a
+/// margin for the quantised published speed.
+const CAP_MAX_DECEL_MPS2: f64 = 8.5;
+
+/// From what deceleration on the stop-at-the-line floor of [`static_obstacle_accel`]
+/// binds, m/s². **This crate's choice**: a light lift off the throttle; below it the
+/// car-following model's own approach is kept. Any value up to a planned stop's
+/// deceleration is safe, since once bound the floor is the constant deceleration that
+/// ends at the line.
+const STOP_FLOOR_BIND_MPS2: f64 = 0.3;
+
 /// The model id a driver's own traits are drawn under ([`DriverTraits`]).
 const DRIVER_TRAITS_ID: &str = "mobility/native/driver";
 
@@ -5233,11 +5246,15 @@ impl Mobility for NativeMobility {
             };
             let before = actor.speed_mps;
             actor.speed_mps = (actor.speed_mps + decision.accel_mps2 * dt_s).clamp(0.0, ceiling);
+            // The cap is a braking decision like any other, so it cannot take more than a
+            // tyre gives: cutting 1.05 m/s to 0 in one step read as -10.5 m/s² (phase1-grid
+            // lane 119, t 88.4 s). Held to `CAP_MAX_DECEL_MPS2` the vehicle overruns the
+            // cap by under 2 cm at a crawl and stops on the next step.
             if let Some(cap) = decision.advance_cap_m
                 && dt_s > 0.0
                 && actor.speed_mps * dt_s > cap
             {
-                actor.speed_mps = cap / dt_s;
+                actor.speed_mps = (cap / dt_s).max(before - CAP_MAX_DECEL_MPS2 * dt_s).max(0.0);
             }
             // What is published is the acceleration the vehicle *had*, not the one the
             // model asked for: a car standing at a red line has a car-following
@@ -6034,8 +6051,19 @@ pub fn static_obstacle_accel(
     // vehicle's (0.7 m/s²) creeping up to the line asked for −0.34 m/s² at 0.6 m/s with
     // 0.35 m left: buses and trucks rolled over the stop line on red at walking pace, and
     // the cross traffic's green then met them in the junction.
+    //
+    // The floor binds only once stopping at the line needs real braking
+    // (`STOP_FLOOR_BIND_MPS2`): it is a bound on speed, as SUMO's stop speed is
+    // (`MSCFModel::maximumSafeStopSpeed`, src/microsim/cfmodels/MSCFModel.cpp: the speed
+    // from which the vehicle can still stop in the gap), not an order to brake. Bound
+    // always, it held every vehicle that moved off with a red line far ahead at the speed
+    // of its first step: −v²/2d is below zero for any v, so nothing could accelerate,
+    // and cars crawled at 0.17 m/s for the whole red, 65 m short of the line (Midtown,
+    // check-traffic's phantom stop, actor 9 after a kerb stop). Binding from a small
+    // deceleration on is as safe: the floor then tracks `need`, a constant deceleration
+    // that ends at the line.
     let at_least = |a: f64| {
-        if to_line > 0.05 {
+        if to_line > 0.05 && -need(to_line) >= STOP_FLOOR_BIND_MPS2 {
             a.min(need(to_line))
         } else {
             a
@@ -6046,6 +6074,13 @@ pub fn static_obstacle_accel(
     }
     if to_line <= 0.05 {
         return a_model;
+    }
+    // Already inside its standstill gap of the obstacle and slow: the driver stops, at no
+    // more than a planned stop's deceleration. Easing in at exactly `v²/2d` instead never
+    // quite arrived: at 0.2 m/s, 2.5 m out, it took 25 s, the car creeping at a few
+    // centimetres a second on a green behind a car that had moved on (Midtown, actor 41).
+    if room <= 0.05 && -need(to_line) <= PLANNED_STOP_MAX_DECEL_MPS2 {
+        return at_least(a_model.max(-PLANNED_STOP_MAX_DECEL_MPS2).max(need(to_line).min(-0.5)));
     }
     let tight = if room > 0.05 {
         need(room)
