@@ -789,6 +789,39 @@ export function discGeometry(segments: number, perInstanceColor = false): Buffer
 }
 
 /**
+ * A unit "pointer": a disc of radius 1 at the origin with a nose that runs to `tipDistance` along
+ * +x, its two flanks tangent to the circle — the location-arrow shape a navigation map uses, so a
+ * mark says which way its vehicle is pointing as well as where it is. Flat at z = 0, with the
+ * unit-white `color` attribute per-instance colour needs ({@link withUnitVertexColors}).
+ */
+export function pointerGeometry(segments: number, tipDistance = 1.7): BufferGeometry {
+  const n = Math.max(8, segments | 0);
+  const tip = Math.max(1.05, tipDistance);
+  // The flanks leave the circle where a line from the tip is tangent to it.
+  const t0 = Math.acos(1 / tip);
+  const pos: number[] = [0, 0, 0, tip, 0, 0];
+  for (let i = 0; i <= n; i++) {
+    const a = t0 + ((2 * Math.PI - 2 * t0) * i) / n;
+    pos.push(Math.cos(a), Math.sin(a), 0);
+  }
+  const idx: number[] = [];
+  // Fan from the centre: tip → first arc point, round the arc, last arc point → tip.
+  idx.push(0, 1, 2);
+  for (let i = 0; i < n; i++) idx.push(0, 2 + i, 3 + i);
+  idx.push(0, 2 + n, 1);
+  const g = new BufferGeometry();
+  const p = new Float32Array(pos);
+  g.setAttribute("position", new BufferAttribute(p, 3));
+  const nor = new Float32Array(p.length);
+  for (let i = 2; i < nor.length; i += 3) nor[i] = 1;
+  g.setAttribute("normal", new BufferAttribute(nor, 3));
+  g.setAttribute("color", new BufferAttribute(new Float32Array(p.length).fill(1), 3));
+  g.setIndex(idx);
+  g.computeBoundingSphere();
+  return g;
+}
+
+/**
  * Give a geometry the unit-white `color` attribute that `InstancedMesh.setColorAt` needs to have
  * any effect — the trap this function exists to name.
  *

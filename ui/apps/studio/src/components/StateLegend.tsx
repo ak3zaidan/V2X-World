@@ -13,23 +13,36 @@ import { actorStatePalette } from "../lib/theme.js";
 import { LegendIcon } from "../shell/Icons.js";
 
 /**
- * The road-user key: at map altitude every actor is a dot in its state colour, and a pedestrian's
- * or a cyclist's dot is {@link VRU_MARK_SCALE} the size of a vehicle's (`ActorLocatorOverlay`).
- * Up close each is drawn as itself — a car, a person, a rider on a bicycle.
+ * The aerial mark's outline (`pointerGeometry` in `@vwp/viewer`): a disc of radius `r` whose nose
+ * runs to 1.75 r along the heading, here pointing right.
+ */
+function pointerPath(r: number): string {
+  const tip = 1.75 * r;
+  const t0 = Math.acos(1 / 1.75);
+  const x = (r * Math.cos(t0)).toFixed(2);
+  const y = (r * Math.sin(t0)).toFixed(2);
+  return `M${tip.toFixed(2)},0 L${x},${y} A${r},${r} 0 1 1 ${x},-${y} Z`;
+}
+
+/**
+ * The road-user key: at map altitude every actor is a pointer in its state colour, its nose along
+ * the way it is heading, and a pedestrian's or a cyclist's is {@link VRU_MARK_SCALE} the size of a
+ * vehicle's (`ActorLocatorOverlay`). Up close each is drawn as itself — a car, a person, a rider on
+ * a bicycle.
  */
 function RoadUserKey({ color }: { color: string }): React.JSX.Element {
-  const r = 4;
+  const r = 3.6;
   return (
     <>
       <span className="item" data-testid="legend-vehicle">
-        <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true" focusable="false">
-          <circle r={r} fill={color} />
+        <svg width="14" height="12" viewBox="-5 -6 14 12" aria-hidden="true" focusable="false">
+          <path d={pointerPath(r)} fill={color} />
         </svg>
-        Vehicle
+        Vehicle, pointing the way it is heading
       </span>
       <span className="item" data-testid="legend-vru">
-        <svg width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true" focusable="false">
-          <circle r={r * VRU_MARK_SCALE} fill={color} />
+        <svg width="14" height="12" viewBox="-5 -6 14 12" aria-hidden="true" focusable="false">
+          <path d={pointerPath(r * VRU_MARK_SCALE)} fill={color} />
         </svg>
         Pedestrian or cyclist
       </span>
