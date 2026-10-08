@@ -108,7 +108,7 @@ impl LinkView<'_> {
         );
         // TR 37.885's NLOSv is a same-street state: the vehicles on the path are looked
         // for only when no building is, and only near the line.
-        if law.traces_geometry()
+        if (law.traces_geometry() || self.obstacles.vehicles_any_law)
             && !los.class.has_building()
             && let Some(vehicles) = self.obstacles.vehicles.as_ref()
         {

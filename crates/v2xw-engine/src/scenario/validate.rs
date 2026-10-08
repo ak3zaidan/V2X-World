@@ -531,8 +531,51 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the candidate-range cap",
     },
-    // The 5.9 GHz ITS band's IEEE channel numbers, 5.850-5.925 GHz: 170 to 184. Which of
-    // them a technology may use is the region's rule, checked separately.
+    Bound {
+        path: "radio.channel_model.nakagami_shape_far",
+        lo: 0.5,
+        hi: 20.0,
+        exclusive_lo: false,
+        what: "the far Nakagami m",
+    },
+    Bound {
+        path: "radio.channel_model.nakagami_breakpoint_m",
+        lo: 0.0,
+        hi: 5000.0,
+        exclusive_lo: true,
+        what: "the Nakagami breakpoint",
+    },
+    // Sommer 2011's fitted rows run 2.4-9.6 dB per wall; 40 dB is a reinforced-concrete ceiling.
+    Bound {
+        path: "radio.channel_model.building_wall_loss_db",
+        lo: 0.0,
+        hi: 40.0,
+        exclusive_lo: false,
+        what: "the per-wall building loss",
+    },
+    // Sommer 2011's fitted rows run 0.10-0.63 dB/m.
+    Bound {
+        path: "radio.channel_model.building_loss_db_per_m",
+        lo: 0.0,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the per-metre building loss",
+    },
+    Bound {
+        path: "radio.sidelink.candidate_percent",
+        lo: 20.0,
+        hi: 50.0,
+        exclusive_lo: false,
+        what: "the candidate percentage",
+    },
+    // TS 36.213 §14.1.1.6: T2 in [20, 100] ms on LTE; TS 38.214 §8.1.4: up to the 100 ms packet delay budget on NR.
+    Bound {
+        path: "radio.sidelink.selection_window_ms",
+        lo: 1.0,
+        hi: 100.0,
+        exclusive_lo: false,
+        what: "the selection window end T2",
+    },
     Bound {
         path: "radio.channel",
         lo: 170.0,
@@ -1389,7 +1432,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "Picks a model per radio family, overriding the tier's default: \
                propagation (free-space, two-ray-ground, log-distance with a named preset, \
-               tr37885, v2v-urban-geometric), fading (none, nakagami-m with a preset), per (the \
+               tr37885, v2v-urban-geometric, winner-plus-b1 with heights effective, the \
+               default, as WINNER+ and TR 36.885 print it, or actual, as the LTE-V2X study \
+               simulators evaluate it), fading (none, nakagami-m with a preset), per (the \
                802.11p error model's implementation loss), phy (the 802.11p sensitivity \
                table: measured-obu by default, etsi-static, etsi-dynamic or cohda-mk5), \
                obstacle (the Sommer building row) and sidelink \
@@ -1520,7 +1565,8 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "radio.sidelink",
         status: Status::Wired,
         note: "LTE-V2X and NR-V2X semi-persistent scheduling: reservation interval, keep \
-               probability, sensing threshold and sensing on or off, over the profile's \
+               probability, sensing threshold, sensing on or off, candidate percentage \
+               (20; 35 or 50 on NR) and selection-window end T2, over the profile's \
                values. Refused on an 802.11p run.",
     },
     KeyStatus {
@@ -1533,9 +1579,14 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     KeyStatus {
         path: "radio.channel_model",
         status: Status::Wired,
-        note: "The channel as plain numbers. The exponent, shadowing spread and \
-               decorrelation run the log-distance law with them; the fading law replaces \
-               the tier's Nakagami draw (Rice through Nakagami's m = (K+1)^2/(2K+1)).",
+        note: "The channel as plain numbers. The exponent runs the log-distance law with \
+               one slope; the shadowing spread and decorrelation reach every law with \
+               shadowing (log-distance, tr37885, v2v-urban-geometric, winner-plus-b1); \
+               the fading law replaces the tier's Nakagami draw (Rice through Nakagami's \
+               m = (K+1)^2/(2K+1); Nakagami near and far m with a breakpoint); the \
+               building wall and per-metre losses are Sommer 2011's beta and gamma \
+               wherever buildings are charged; vehicle_blockage turns TR 37.885 NLOSv on \
+               under any law, or off.",
     },
     KeyStatus {
         path: "net.channel_access",
@@ -2470,6 +2521,154 @@ fn unreachable_keys(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 ),
             )),
         }
+    }
+}
+
+/// `radio.channel_model` and `radio.sidelink` against the run's law and technology: every
+/// override the chosen law or radio would ignore is refused rather than silently accepted.
+/// The ranges and closed sets of the fields both share are [`radio_tuning`]'s.
+fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    use crate::scenario::schema::Rat;
+    use crate::wiring::PropagationChoice;
+    let c = &s.radio.channel_model;
+    for (leaf, v) in [
+        ("nakagami_shape_far", c.nakagami_shape_far),
+        ("nakagami_breakpoint_m", c.nakagami_breakpoint_m),
+        ("building_wall_loss_db", c.building_wall_loss_db),
+        ("building_loss_db_per_m", c.building_loss_db_per_m),
+    ] {
+        if let Some(v) = v {
+            let path = format!("radio.channel_model.{leaf}");
+            bounded_at(&path, &path, v, e);
+        }
+    }
+    let sl = &s.radio.sidelink;
+    for (leaf, v) in [
+        ("candidate_percent", sl.candidate_percent.map(f64::from)),
+        ("selection_window_ms", sl.selection_window_ms.map(f64::from)),
+    ] {
+        if let Some(v) = v {
+            let path = format!("radio.sidelink.{leaf}");
+            bounded_at(&path, &path, v, e);
+        }
+    }
+
+    let tier = s.radio.tiers.propagation;
+    let law = crate::wiring::propagation_choice_at(s, tier);
+    let abstract_tier = tier == v2xw_core::card::Tier::Abstract;
+    let law_name = match law {
+        PropagationChoice::FreeSpace => "propagation/free-space",
+        PropagationChoice::TwoRayGround => "propagation/two-ray-ground",
+        PropagationChoice::LogDistance(..) => "propagation/log-distance-shadowing",
+        PropagationChoice::Tr37885 => "propagation/tr37885",
+        PropagationChoice::Geometric => "propagation/v2v-urban-geometric",
+        PropagationChoice::WinnerB1(_) => "propagation/winner-plus-b1",
+    };
+
+    if c.path_loss_exponent.is_some() && !matches!(law, PropagationChoice::LogDistance(..)) {
+        e.push(conflict(
+            "radio.channel_model.path_loss_exponent",
+            format!(
+                "sets the log-distance law's slope, and radio.models.propagation names                  {law_name}, which has its own; choose propagation/log-distance-shadowing                  or remove the named law"
+            ),
+        ));
+    }
+    let no_shadow = matches!(
+        law,
+        PropagationChoice::FreeSpace | PropagationChoice::TwoRayGround
+    );
+    for (leaf, set) in [
+        ("shadowing_sigma_db", c.shadowing_sigma_db.is_some()),
+        ("shadowing_decorrelation_m", c.shadowing_decorrelation_m.is_some()),
+    ] {
+        if set && no_shadow {
+            e.push(conflict(
+                &format!("radio.channel_model.{leaf}"),
+                format!("tunes shadowing, and {law_name} is a deterministic law with none"),
+            ));
+        }
+    }
+    if (c.nakagami_shape_far.is_some() || c.nakagami_breakpoint_m.is_some())
+        && c.fading.as_deref() != Some("nakagami")
+    {
+        e.push(conflict(
+            "radio.channel_model.nakagami_shape_far",
+            "and nakagami_breakpoint_m shape a Nakagami channel; set              radio.channel_model.fading to 'nakagami'"
+                .to_string(),
+        ));
+    }
+    if c.nakagami_shape_far.is_some() != c.nakagami_breakpoint_m.is_some() {
+        e.push(conflict(
+            "radio.channel_model.nakagami_breakpoint_m",
+            "and nakagami_shape_far go together: a distance-dependent channel needs both              the far m and where it starts"
+                .to_string(),
+        ));
+    }
+    if abstract_tier && c.fading.as_deref().is_some_and(|f| f != "none") {
+        e.push(conflict(
+            "radio.channel_model.fading",
+            "would change nothing: the abstract propagation tier draws no fading".to_string(),
+        ));
+    }
+    let buildings_charged = !matches!(law, PropagationChoice::Tr37885);
+    for (leaf, set) in [
+        ("building_wall_loss_db", c.building_wall_loss_db.is_some()),
+        ("building_loss_db_per_m", c.building_loss_db_per_m.is_some()),
+    ] {
+        if !set {
+            continue;
+        }
+        let why = if abstract_tier {
+            Some("the abstract propagation tier composes no obstacle".to_string())
+        } else if !s.world.buildings.enabled {
+            Some("world.buildings.enabled is false".to_string())
+        } else if !buildings_charged {
+            Some(format!(
+                "{law_name} prices a building-blocked link with its own NLOS law, not the \
+                 Sommer term"
+            ))
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            e.push(conflict(
+                &format!("radio.channel_model.{leaf}"),
+                format!("would change nothing: {why}"),
+            ));
+        }
+    }
+    if c.vehicle_blockage.is_some() && abstract_tier {
+        e.push(conflict(
+            "radio.channel_model.vehicle_blockage",
+            "would change nothing: the abstract propagation tier composes no obstacle"
+                .to_string(),
+        ));
+    }
+
+    let lte = s.radio.rat == Rat::LteV2xPc5;
+    if let Some(p) = sl.candidate_percent {
+        if !matches!(p, 20 | 35 | 50) {
+            e.push(conflict(
+                "radio.sidelink.candidate_percent",
+                format!("{p} is not one of 20, 35, 50 (TS 38.331 sl-TxPercentageList)"),
+            ));
+        } else if lte && p != 20 {
+            e.push(conflict(
+                "radio.sidelink.candidate_percent",
+                format!(
+                    "{p} % is NR-only: LTE-V2X fixes it at 20 % (TS 36.213 §14.1.1.6 step 7)"
+                ),
+            ));
+        }
+    }
+    if let Some(ms) = sl.selection_window_ms
+        && lte
+        && ms < 20
+    {
+        e.push(conflict(
+            "radio.sidelink.selection_window_ms",
+            format!("{ms} ms is under LTE's 20 ms minimum T2 (TS 36.213 §14.1.1.6)"),
+        ));
     }
 }
 
@@ -3417,6 +3616,7 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
             e.push(conflict(&path, why));
         }
     }
+    radio_law_checks(s, e);
 
     // `hybrid` names two radios on one node and a policy choosing between them per
     // message. `v2xw_radio::hybrid` has the selector; nothing states the policy, so the
@@ -3727,19 +3927,6 @@ fn radio_tuning(s: &Scenario, e: &mut Vec<ScenarioError>) {
         e.push(conflict(
             "radio.channel_model.rice_k_db",
             "is the Rice factor; set radio.channel_model.fading to 'rice'".to_string(),
-        ));
-    }
-    if c.tunes_law()
-        && s.radio
-            .models
-            .get("propagation")
-            .is_some_and(|m| m.id != v2xw_radio::LogDistanceShadowing::ID)
-    {
-        e.push(conflict(
-            "radio.channel_model",
-            "sets the log-distance law's exponent or shadowing, and radio.models.propagation \
-             names another law; remove one of the two"
-                .to_string(),
         ));
     }
 }

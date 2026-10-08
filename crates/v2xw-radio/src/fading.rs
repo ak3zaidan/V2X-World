@@ -127,11 +127,9 @@ impl NakagamiPreset {
 pub struct NakagamiFading {
     card: ModelCard,
     preset: NakagamiPreset,
-    /// A fixed shape parameter that replaces the preset's (`radio.channel_model`): `m = 1`
-    /// is Rayleigh, and a Rice channel of factor `K` is approximated by
-    /// `m = (K+1)²/(2K+1)` (Nakagami 1960; Stüber, *Principles of Mobile Communication*,
-    /// 4th ed., Eq. 2.57).
-    m_override: Option<f64>,
+    /// A caller-chosen shape profile replacing the preset's, when a study sets one
+    /// (`radio.channel_model.fading: nakagami`).
+    profile: Option<crate::tuning::NakagamiProfile>,
     /// `Ω`, the mean power gain. One, so the fading is a 0 dB-mean multiplicative gain
     /// and the link budget's path loss is not silently rescaled by it.
     omega: f64,
@@ -147,7 +145,7 @@ impl NakagamiFading {
         Self {
             card: nakagami_card(preset),
             preset,
-            m_override: None,
+            profile: None,
             omega: 1.0,
         }
     }
@@ -164,15 +162,27 @@ impl NakagamiFading {
         self.preset
     }
 
-    /// The model with one fixed shape parameter `m` (≥ 0.5) at every distance.
+    /// The same model with a caller-chosen shape profile in place of the preset's. `m`
+    /// is clamped to the Nakagami domain `m >= 0.5`.
     #[must_use]
-    pub fn with_m(mut self, m: f64) -> Self {
-        self.m_override = Some(m.max(0.5));
+    pub fn with_profile(mut self, p: crate::tuning::NakagamiProfile) -> Self {
+        self.profile = Some(crate::tuning::NakagamiProfile {
+            m_near: p.m_near.max(0.5),
+            m_far: p.m_far.max(0.5),
+            breakpoint_m: p.breakpoint_m,
+        });
         self
     }
 
-    /// The Nakagami `m` that approximates a Rice channel of factor `k_db`
-    /// (`m = (K+1)²/(2K+1)`, `K` linear).
+    /// The model with one fixed shape parameter `m` (≥ 0.5) at every distance.
+    #[must_use]
+    pub fn with_m(self, m: f64) -> Self {
+        self.with_profile(crate::tuning::NakagamiProfile::constant(m))
+    }
+
+    /// The Nakagami `m` that approximates a Rice channel of factor `k_db`:
+    /// `m = (K+1)²/(2K+1)`, `K` linear (Nakagami 1960; Stüber, *Principles of Mobile
+    /// Communication*, 4th ed., Eq. 2.57).
     #[must_use]
     pub fn rice_m(k_db: f64) -> f64 {
         let k = math::pow(10.0, k_db / 10.0);
@@ -182,7 +192,10 @@ impl NakagamiFading {
     /// The shape parameter this model uses at a distance.
     #[must_use]
     pub fn m_at(&self, d_m: f64) -> f64 {
-        self.m_override.unwrap_or_else(|| self.preset.m_at(d_m))
+        match &self.profile {
+            Some(p) => p.m_at(d_m),
+            None => self.preset.m_at(d_m),
+        }
     }
 }
 

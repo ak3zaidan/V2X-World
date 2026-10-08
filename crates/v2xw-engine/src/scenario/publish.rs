@@ -261,6 +261,8 @@ const UNIT_SUFFIXES: &[(&str, &str)] = &[
 /// cannot reach the page without a unit beside it, which is what
 /// 13-product-direction.md §2 requires of every field.
 const UNIT_OVERRIDES: &[(&str, &str)] = &[
+    ("radio.channel_model.building_loss_db_per_m", "dB/m"),
+    ("radio.sidelink.candidate_percent", "%"),
     ("energy.fleet.*.euro", "Euro class"),
     ("energy.ev.params.*", "the EV model card's unit"),
     ("world.buildings.metres_per_level", "m/storey"),
@@ -298,6 +300,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
 /// leaf publishes an empty unit, which is what it would publish without this list.
 #[cfg(test)]
 const DIMENSIONLESS: &[&str] = &[
+    "radio.channel_model.nakagami_shape_far",
     "seed",
     "net.geonet.hop_limit",
     "scale.traffic.meso.jam_threshold",

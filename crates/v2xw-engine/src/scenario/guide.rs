@@ -372,6 +372,41 @@ const ADVANCED: &[Basic] = &[
         explain: "The lowest power J2945/1's power control may reach.",
         recommended: "10 dBm (standard).",
     },
+    Basic {
+        path: "radio.channel_model.nakagami_shape_far",
+        explain: "The fading severity beyond the breakpoint distance, for a channel that gets harsher with range.",
+        recommended: "0.75 to 1 beyond about 80-100 m.",
+    },
+    Basic {
+        path: "radio.channel_model.nakagami_breakpoint_m",
+        explain: "The distance at which the fading switches to its far-away severity.",
+        recommended: "80 to 100 m.",
+    },
+    Basic {
+        path: "radio.channel_model.building_wall_loss_db",
+        explain: "How much each building wall between two cars costs the signal (Sommer 2011's β, as Veins models it).",
+        recommended: "9 dB (Sommer 2011 default); 2.4 dB for light construction.",
+    },
+    Basic {
+        path: "radio.channel_model.building_loss_db_per_m",
+        explain: "How much each metre of the path inside a building costs (Sommer 2011's γ).",
+        recommended: "0.4 dB/m (Sommer 2011 default); 0.1-0.63 dB/m across the fitted rows.",
+    },
+    Basic {
+        path: "radio.channel_model.vehicle_blockage",
+        explain: "Whether trucks and cars between two antennas weaken the signal (3GPP TR 37.885 NLOSv).",
+        recommended: "On for realism; off to measure what blockage costs.",
+    },
+    Basic {
+        path: "radio.sidelink.candidate_percent",
+        explain: "The share of resources that must remain after exclusion before a radio picks one.",
+        recommended: "20 % (LTE's fixed value); 35 or 50 % on NR.",
+    },
+    Basic {
+        path: "radio.sidelink.selection_window_ms",
+        explain: "How late after a message is ready its new resource may be. Shorter cuts latency but leaves fewer resources to pick from.",
+        recommended: "100 ms at 10 Hz; at most the message interval.",
+    },
 ];
 
 /// `basic` or `advanced`.
@@ -387,18 +422,19 @@ fn basic(path: &str) -> Option<&'static Basic> {
     BASIC.iter().find(|b| b.path == path)
 }
 
-/// The real-world sentence for a basic field.
-pub fn explain(path: &str) -> Option<&'static str> {
-    basic(path)
-        .or_else(|| ADVANCED.iter().find(|b| b.path == path))
-        .map(|b| b.explain)
+fn hint(path: &str) -> Option<&'static Basic> {
+    basic(path).or_else(|| ADVANCED.iter().find(|b| b.path == path))
 }
 
-/// The recommended range, in words, for a basic field.
+/// The real-world sentence for a basic field, or an advanced one that carries one.
+pub fn explain(path: &str) -> Option<&'static str> {
+    hint(path).map(|b| b.explain)
+}
+
+/// The recommended range, in words, for a basic field, or an advanced one that carries
+/// one.
 pub fn recommended(path: &str) -> Option<&'static str> {
-    basic(path)
-        .or_else(|| ADVANCED.iter().find(|b| b.path == path))
-        .map(|b| b.recommended)
+    hint(path).map(|b| b.recommended)
 }
 
 /// One write of a patch: the pointer and the value it puts there.

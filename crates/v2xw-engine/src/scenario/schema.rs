@@ -963,6 +963,15 @@ pub struct SidelinkSettings {
     /// selection baseline (Ali et al. 2021 §II.1). Unset is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sensing: Option<bool>,
+    /// The share of the selection window that must survive exclusion before a radio
+    /// picks: 20 % (LTE's fixed value), 35 % or 50 % (NR only). Unset is 20 %.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_percent: Option<u8>,
+    /// How late after a message is ready its new resource may be (the selection window's
+    /// end T2), ms. Shorter cuts latency but leaves fewer resources to pick from; at most
+    /// the message interval. Unset is the profile's (100 ms at 10 Hz).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_window_ms: Option<u32>,
 }
 
 impl SidelinkSettings {
@@ -1130,6 +1139,27 @@ pub struct ChannelModelSettings {
     /// scattered power's. Unset is 6 dB.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rice_k_db: Option<f64>,
+    /// The Nakagami `m` beyond `nakagami_breakpoint_m`, when `fading` is `nakagami`, for a
+    /// channel that gets harsher with range (Veins-style: about 1.5 near, 0.75 far). Needs
+    /// the breakpoint. Unset keeps `nakagami_shape` at every distance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nakagami_shape_far: Option<f64>,
+    /// The distance at which the Nakagami `m` switches to `nakagami_shape_far`, metres.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nakagami_breakpoint_m: Option<f64>,
+    /// How much each building wall the signal passes through costs (Sommer 2011 β), dB:
+    /// 9 dB for the fitted default, about 2.4 dB for light construction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub building_wall_loss_db: Option<f64>,
+    /// How much each metre of path inside a building costs (Sommer 2011 γ), dB per metre:
+    /// 0.4 for the fitted default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub building_loss_db_per_m: Option<f64>,
+    /// Whether other vehicles between two antennas attenuate the signal (3GPP TR 37.885
+    /// NLOSv blockage). On by default with the city-street law; off makes vehicles
+    /// radio-transparent, on charges them under every law.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle_blockage: Option<bool>,
 }
 
 impl ChannelModelSettings {
@@ -1138,11 +1168,10 @@ impl ChannelModelSettings {
         *self == Self::default()
     }
 
-    /// Whether these settings replace the propagation law's numbers.
+    /// Whether these settings replace the propagation law's slope (the exponent is the
+    /// log-distance law's; shadowing applies to every law).
     pub fn tunes_law(&self) -> bool {
         self.path_loss_exponent.is_some()
-            || self.shadowing_sigma_db.is_some()
-            || self.shadowing_decorrelation_m.is_some()
     }
 }
 
