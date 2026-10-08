@@ -4,7 +4,7 @@ Living record of what is built and what has actually been *measured*, as against
 the plan in `10-roadmap.md` and the decisions in `12-build-decisions.md`. Claims
 here carry their evidence; anything unmeasured says so.
 
-Last updated 2026-10-06 (the stabilise track section first; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
+Last updated 2026-10-07 (the round-4 merge section first; the stabilise track section; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
 `v2xw-metrics`, `v2xw-node` and `v2xw-engine` are no longer stubs, and the line counts
 predate several waves. It is left as written rather than rewritten from memory, because a
 status file whose numbers were re-estimated rather than re-measured is worse than one that
@@ -14,6 +14,57 @@ For the current release position — what must be true for a 1.0 tag, what is no
 what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKLIST.md)
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
+
+## 2026-10-07 — round-4 merge: nine tracks onto main
+
+Merged with `--no-ff`, in this order: valfix, foundations, agentcrypto, page, settings,
+scale, v2xnet (networking), cellular, interop. All nine merged; none was left out.
+
+- **Conflicts resolved:** `RunReport` keeps both `scale` (scale track) and `geonet`
+  (networking track). The mobility builder in `Engine::build` uses SUMO when
+  `mobility.provider` is `sumo` (interop), else the city-scale tier when `scale` asks for
+  one, else the default microscopic model. BUILD-STATUS sections from every track are kept.
+- **Fixes the merge needed:** the CLI longrun tests set `RunOptions.city` twice (valfix and
+  scale both added it); now once. The Studio's comparison hint now starts the second
+  engine with `V2XW_PORT=8788 ./run-sim.sh baseline.yaml`, because the old
+  `cargo run -p v2xw-server` no longer works now that the bin is in `v2xw-cli`.
+- **Test reconciliation (commit "reconcile the merged tracks' tests"):**
+  - `scale.traffic.meso.jam_threshold` is declared dimensionless in the publish table.
+  - The fragmentation test lets only the groups that `resolve_in_flight` closes at the
+    horizon be missing from the last window, since foundations made that window close at
+    the horizon.
+  - The geonet test drops the RSUs' spat/map roles, which foundations' new validator rule
+    refuses in a cam+denm run.
+  - The unbuildable-world-source case uses `open-drive`, since interop made `sumo-net` build.
+  - The server's method inventory and the TypeScript conformance sweep count 34 methods.
+    `cities.list` from the cities track had never been counted, and the sweep's failed
+    count assertion left the run paused, which caused three more failures after it.
+  - The node-feed vector was re-blessed for agentcrypto's additive `crypto` block, and
+    `@vwp/protocol`'s `feed.ts` already carries it. `FEED_VERSION` was not raised, because
+    the block is additive.
+- **Verified:** `cargo check --workspace --tests` is clean, with only pre-existing
+  warnings. `cargo test -p v2xw-engine -p v2xw-server` ran once: 369 passed, 7 failed and
+  11 were ignored. All 7 failures are fixed above, and their targets were re-run green: the
+  engine lib, fragmentation, geonet and scenario, plus the server's feed, rpc and interop.
+  The Studio typecheck passes after the protocol and viewer builds, and
+  `cargo fmt --all` is its own commit. The release build of `v2xw-cli`, which holds the
+  `v2xw` and `v2xw-server` bins, and of `v2xw-server` succeeds.
+- **The engine starts with the agent on:** `V2XW_PORT=8759 ./run-sim.sh` printed `agent
+  http://127.0.0.1:8759/agent/status (watching every run)` and the model banner, and
+  `/agent/status` answered. It was then stopped.
+- **Owner action:** the server already on port 8787 was started at 14:48 from the old
+  binary, which has no agent. Stop it and start `./run-sim.sh` again. Your old untracked
+  `run-sim.sh` was moved to the session scratchpad as `run-sim.sh.owner-backup`. The
+  tracked one replaces it, with the same scenario and port and `.env` read by the engine.
+- **Not done or not checked:**
+  - The full suites of the other crates (cli, mobility, netval, interop and others) were
+    not run, and neither were Studio unit tests, Playwright or e2e.
+  - Each track's own "not done" list stands: the NET-03 check edit was blocked by the
+    permission classifier and needs owner approval; no browser pass was made over quick
+    settings or the Basic/Advanced window; the Poisson cap counts trips, not placed
+    vehicles; forwarded GeoNetworking copies have no MAC; cellular values are marked
+    todo-calibrate; no Studio control exists for `scale`; there is no WINNER+ B1
+    calibration for interop.
 
 ## 2026-10-07 — V2X networking stacks as protocols (networking track)
 
