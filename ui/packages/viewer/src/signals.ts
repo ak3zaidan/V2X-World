@@ -318,6 +318,7 @@ export class SignalRenderer {
     // Mounts: a pole per kerb spot (shared by the heads of one approach) and an arm per head.
     const poleAt = new Map<string, { x: number; y: number; z0: number; top: number }>();
     const arms: { x0: number; y0: number; x1: number; y1: number; z: number }[] = [];
+    let road: RoadSurface | null = null;
     for (let i = 0; i < n; i++) {
       const s = world.signals.at(i);
       this.#headSignal[i] = s.signalId;
@@ -374,9 +375,11 @@ export class SignalRenderer {
         } else {
           const lanesRight = world.lanes.indexInEdge[li];
           const kerb = (lanesRight + 0.5) * world.lanes.widthM[li] + 1.2;
-          // Right of the direction of travel is (sin, −cos).
-          const px = s.xM + sn * kerb;
-          const py = s.yM - cs * kerb;
+          // Right of the direction of travel is (sin, −cos). The edge's own lanes end at `kerb`,
+          // but a street can be two side-by-side edges, or the stop line can sit on a cross
+          // street's edge; the pole goes to the nearest spot off every road surface.
+          road ??= roadSurface(world);
+          const [px, py] = clearOfRoad(road, s.xM, s.yM, cs, sn, kerb);
           const key = `${Math.round(px * 2)},${Math.round(py * 2)}`;
           const armZ = s.zM + HOUSING_H / 2 + ARM_T / 2;
           const pole = poleAt.get(key);
@@ -688,6 +691,90 @@ export class SignalRenderer {
  * The housing: the box, and above each section a tunnel visor — a U-shaped hood of three thin
  * slabs projecting 0.22 m towards the approach — so a lamp is lit inside a hood, as a real one is.
  */
+/** Lane types a pole must not stand on (`LANE_TYPES`): drive, bike, bus, parking, junction-internal. */
+const ROAD_LANE_TYPES = new Set([0, 1, 3, 4, 5]);
+/** Clearance kept between a pole and the edge of any road surface, metres. */
+const POLE_CLEARANCE_M = 0.5;
+const ROAD_CELL_M = 16;
+
+export interface RoadSurface {
+  /** Segment endpoints and half-widths (with clearance), flat: x0, y0, x1, y1, half. */
+  seg: Float64Array;
+  cells: Map<number, number[]>;
+}
+
+const cellKey = (gx: number, gy: number): number => gx * 1_000_003 + gy;
+
+/** A grid of every road lane's centreline segments, for "is this point on the road?". */
+export function roadSurface(world: VwpWorld): RoadSurface {
+  const { lanes } = world;
+  const lx = world.lanePoints.x;
+  const ly = world.lanePoints.y;
+  const segs: number[] = [];
+  const cells = new Map<number, number[]>();
+  for (let li = 0; li < lanes.count; li++) {
+    if (!ROAD_LANE_TYPES.has(lanes.laneType[li])) continue;
+    const half = lanes.widthM[li] / 2 + POLE_CLEARANCE_M;
+    const off = lanes.pointOff[li];
+    for (let k = off; k < off + lanes.pointCount[li] - 1; k++) {
+      const id = segs.length / 5;
+      segs.push(lx[k], ly[k], lx[k + 1], ly[k + 1], half);
+      const gx0 = Math.floor((Math.min(lx[k], lx[k + 1]) - half) / ROAD_CELL_M);
+      const gx1 = Math.floor((Math.max(lx[k], lx[k + 1]) + half) / ROAD_CELL_M);
+      const gy0 = Math.floor((Math.min(ly[k], ly[k + 1]) - half) / ROAD_CELL_M);
+      const gy1 = Math.floor((Math.max(ly[k], ly[k + 1]) + half) / ROAD_CELL_M);
+      for (let gx = gx0; gx <= gx1; gx++) {
+        for (let gy = gy0; gy <= gy1; gy++) {
+          const key = cellKey(gx, gy);
+          let list = cells.get(key);
+          if (!list) cells.set(key, (list = []));
+          list.push(id);
+        }
+      }
+    }
+  }
+  return { seg: Float64Array.from(segs), cells };
+}
+
+export function onRoad(road: RoadSurface, x: number, y: number): boolean {
+  const list = road.cells.get(cellKey(Math.floor(x / ROAD_CELL_M), Math.floor(y / ROAD_CELL_M)));
+  if (!list) return false;
+  const s = road.seg;
+  for (const id of list) {
+    const o = id * 5;
+    const dx = s[o + 2] - s[o];
+    const dy = s[o + 3] - s[o + 1];
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 0 ? Math.max(0, Math.min(1, ((x - s[o]) * dx + (y - s[o + 1]) * dy) / len2)) : 0;
+    if (Math.hypot(x - s[o] - t * dx, y - s[o + 1] - t * dy) < s[o + 4]) return true;
+  }
+  return false;
+}
+
+/**
+ * Where a mast-arm pole stands for a head at (x, y) over an approach heading (cos, sin): `kerb`
+ * metres to the right when that is off the road (the usual case), else the nearest spot further
+ * right or set back up the approach that is clear of every road surface, so a pole never stands
+ * in a lane. A sideways step costs 1 per metre, a set-back 2.
+ */
+export function clearOfRoad(road: RoadSurface, x: number, y: number, cs: number, sn: number, kerb: number): [number, number] {
+  let best: [number, number] | null = null;
+  let bestCost = Infinity;
+  for (let back = 0; back <= 12 && 2 * back < bestCost; back += 1) {
+    for (let extra = 0; extra <= 14 && extra + 2 * back < bestCost; extra += 0.5) {
+      const lat = kerb + extra;
+      const px = x + sn * lat - cs * back;
+      const py = y - cs * lat - sn * back;
+      if (!onRoad(road, px, py)) {
+        best = [px, py];
+        bestCost = extra + 2 * back;
+        break;
+      }
+    }
+  }
+  return best ?? [x + sn * kerb, y - cs * kerb];
+}
+
 function housingGeometry(): BufferGeometry {
   const b = new MeshBuilder({ vertexCapacity: 256, indexCapacity: 512 });
   addBox(b, 0, 0, 0, HOUSING_D, HOUSING_W, HOUSING_H, 0);
