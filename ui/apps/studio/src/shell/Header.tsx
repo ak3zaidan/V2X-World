@@ -296,7 +296,7 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
         aria-expanded={quickOpen}
         onClick={() => setQuickOpen((v) => !v)}
         data-testid="quick-button"
-        title="The main choices for the next run: scenario, city, traffic, radio, security, attackers, run length, files"
+        title="The settings changed most: traffic, radio, message rate, security, attackers, run length, seed, files"
       >
         <span>Quick settings</span>
       </button>

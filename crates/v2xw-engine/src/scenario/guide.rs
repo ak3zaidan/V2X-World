@@ -659,41 +659,89 @@ fn field(id: &str, label: &str, path: &str, explain: &str) -> Value {
            "pointer": pointer_for(path), "explain": explain})
 }
 
-/// The quick settings, in the order the Studio shows them.
+/// The awareness-message rate choices: each message set's own standard timing, and the
+/// fixed rates a channel-load study steps through. A fixed rate is `messages.rate_hz`,
+/// which sets the BSM's nominal interval and pins the CAM's shortest and longest interval
+/// to it (`wiring::generator_params`); congestion control may still lengthen it.
+fn message_rate_choices() -> Vec<Value> {
+    let mut out = vec![choice(
+        "Standard",
+        "Each message set's own standard timing: the J2945/1 BSM at 10 Hz, the EN 302 637-2 \
+         CAM triggered by the vehicle's movement.",
+        None,
+        vec![set("messages.rate_hz", Value::Null)],
+    )];
+    for hz in [20u32, 10, 5, 2, 1] {
+        out.push(choice(
+            &format!("{hz} Hz"),
+            &format!(
+                "Every vehicle broadcasts its awareness message (BSM or CAM) {hz} times a \
+                 second; congestion control may still lengthen the interval."
+            ),
+            None,
+            vec![set("messages.rate_hz", json!(hz))],
+        ));
+    }
+    out
+}
+
+/// The quick settings, in the order the Studio shows them, each with the heading it sits
+/// under. The scenario and the city are not here: the Studio's header picks those.
 pub fn quick() -> Value {
+    let g = |mut v: Value, group: &str| {
+        v["group"] = json!(group);
+        v
+    };
     json!([
-        {"id": "scenario", "label": "Scenario", "kind": "scenario",
-         "explain": "A ready-made situation: the traffic, the radio, the security and what goes wrong."},
-        {"id": "city", "label": "City", "kind": "city",
-         "explain": "Where it happens: any scenario runs on any city in the library."},
-        field("traffic", "Traffic", "actors.vehicles.demand.rate_veh_per_h",
-              "How many vehicles enter the map each hour."),
-        field("pedestrians", "Pedestrians", "actors.vru.pedestrians",
-              "People walking on the sidewalks and crossings."),
-        field("drivers", "Drivers", "actors.vehicles.drivers.realism",
-              "How human the drivers are: calibrated, identical, heterogeneous or human (stop-and-go waves)."),
+        g(field("traffic", "Traffic", "actors.vehicles.demand.rate_veh_per_h",
+                "How many vehicles enter the map each hour."), "Traffic"),
+        g(field("equipped", "Equipped share", "actors.vehicles.equipped_fraction",
+                "The share of vehicles that carry a V2X radio (market penetration)."), "Traffic"),
+        g(field("pedestrians", "Pedestrians", "actors.vru.pedestrians",
+                "People walking on the sidewalks and crossings."), "Traffic"),
+        g(field("cyclists", "Cyclists", "actors.vru.cyclists",
+                "People cycling on the roads and bike lanes."), "Traffic"),
+        g(field("drivers", "Drivers", "actors.vehicles.drivers.realism",
+                "How human the drivers are: calibrated, identical, heterogeneous or human (stop-and-go waves)."), "Traffic"),
         // Shares from scenarios/midtown-street-life.yaml's fleet (a stated choice there:
         // no classified count of Midtown traffic was read).
-        class_toggle("motorcycles", "Motorcycles", "motorcycle", 0.02,
-                     "2 % of vehicles are motorcycles, taken from the cars."),
-        class_toggle("trucks", "Trucks", "truck", 0.03,
-                     "3 % of vehicles are trucks, taken from the cars."),
-        field("radio", "Radio", "radio.rat", "Which V2X radio technology vehicles use."),
-        {"id": "security", "label": "Security", "kind": "choice",
-         "explain": "Which credential system signs and checks messages.",
-         "options": security_choices()},
-        {"id": "signature", "label": "Signature", "kind": "choice",
-         "explain": "The signature on every message: classical, hybrid or post-quantum. A larger signature is sent in pieces and checked on hardware with figures for it.",
-         "options": signature_choices()},
-        {"id": "attackers", "label": "Attackers", "kind": "choice",
-         "explain": "Whether some vehicles send false messages, and which kind.",
-         "options": attacker_choices()},
-        field("duration", "Run length", "time.duration_s", "How much simulated time the run covers."),
-        field("rsus", "Roadside units", "actors.rsu_placement.count",
-              "Radios at the busiest signalised junctions."),
-        {"id": "save", "label": "Save run data", "kind": "choice",
-         "explain": "Which files the run writes when it finishes, beside its recording.",
-         "options": export_choices(), "shows_files": true},
+        g(class_toggle("motorcycles", "Motorcycles", "motorcycle", 0.02,
+                       "2 % of vehicles are motorcycles, taken from the cars."), "Traffic"),
+        g(class_toggle("trucks", "Trucks", "truck", 0.03,
+                       "3 % of vehicles are trucks, taken from the cars."), "Traffic"),
+        g(field("rsus", "Roadside units", "actors.rsu_placement.count",
+                "Radios at the busiest signalised junctions."), "Traffic"),
+        g(field("radio", "Radio", "radio.rat", "Which V2X radio technology vehicles use."),
+          "Radio"),
+        g(field("tx_power", "Transmit power", "radio.devices.obu.tx_power_dbm",
+                "A vehicle radio's conducted power; congestion control may lower it."), "Radio"),
+        g(json!({"id": "message_rate", "label": "Message rate", "kind": "choice",
+                 "explain": "How often each vehicle broadcasts its safety message.",
+                 "options": message_rate_choices()}), "Radio"),
+        g(json!({"id": "security", "label": "Security", "kind": "choice",
+                 "explain": "Which credential system signs and checks messages.",
+                 "options": security_choices()}), "Security"),
+        g(json!({"id": "signature", "label": "Signature", "kind": "choice",
+                 "explain": "The signature on every message: classical, hybrid or post-quantum. A larger signature is sent in pieces and checked on hardware with figures for it.",
+                 "options": signature_choices()}), "Security"),
+        g(field("pseudonyms", "Pseudonym change", "security.pseudonym_change.strategy",
+                "When a vehicle switches to a fresh certificate to stay untrackable."), "Security"),
+        g(json!({"id": "attackers", "label": "Attackers", "kind": "choice",
+                 "explain": "Whether some vehicles send false messages, and which kind.",
+                 "options": attacker_choices()}), "Security"),
+        // The share of every attacker population at once; the Studio greys it out while
+        // `threats.attackers` is empty. Bounded [0, 1] by validate's BOUNDS.
+        g(json!({"id": "attacker_share", "label": "Attacker share", "kind": "share",
+                 "path": "threats.attackers", "pointer": pointer_for("threats.attackers"),
+                 "key": "fraction", "values": [0.01, 0.05, 0.1, 0.2, 0.3],
+                 "explain": "The share of equipped vehicles that attack."}), "Security"),
+        g(field("duration", "Run length", "time.duration_s",
+                "How much simulated time the run covers."), "Run"),
+        g(field("seed", "Seed", "seed",
+                "The random seed: the same seed and settings give the same run."), "Run"),
+        g(json!({"id": "save", "label": "Save run data", "kind": "choice",
+                 "explain": "Which files the run writes when it finishes, beside its recording.",
+                 "options": export_choices(), "shows_files": true}), "Run"),
     ])
 }
 

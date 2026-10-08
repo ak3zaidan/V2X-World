@@ -1,21 +1,22 @@
 /**
- * One setting in the settings window, laid out the way VS Code lays one out: the title (with the
- * section path in front of it and the unit after it), the engine's status, the description, the
- * control, and a line with the default, the dotted path and the per-setting reset.
+ * One setting in the settings window, as one compact row: the label and its unit on the left with a
+ * one-line explanation under it, the control on the right with its default, recommended range and
+ * a reset under it. The engine's full description and the dotted path are on hover (and behind
+ * "More"), so the window reads as a list of controls rather than a page of paragraphs.
  *
  * Two markers, because there are two baselines and they answer different questions:
  *
  *  * **edited** — the value differs from what the engine holds for the next run. It is an unapplied
- *    change; *Undo edit* puts back the engine's value.
+ *    change; the undo arrow puts back the engine's value.
  *  * **modified** — the value differs from the engine's default. It is what this scenario sets;
- *    *Reset to default* puts the default in (as an edit, applied like any other).
+ *    *Reset* puts the default in (as an edit, applied like any other).
  */
 
 import { memo, useEffect, useState } from "react";
 import type { ValidationError } from "@vwp/protocol";
 
 import { EventsEditor } from "../components/EventsEditor.js";
-import { STATUS_BADGE, breadcrumbOf, describeValue, fieldPath, isUnsupported, type Field } from "./model.js";
+import { STATUS_BADGE, breadcrumbOf, describeValue, fieldPath, isUnsupported, oneLine, type Field } from "./model.js";
 import { ChoiceSelect, ListEditor, MultiCheck, NumberWithPresets } from "./widgets.js";
 
 /** What one element of a list is called, from the list's title: "Attackers" → "Attacker". */
@@ -135,7 +136,7 @@ function JsonWidget({
     <>
       <textarea
         {...rest}
-        rows={Math.min(8, Math.max(1, Math.ceil(serialised.length / 90)))}
+        rows={Math.min(6, Math.max(1, Math.ceil(serialised.length / 70)))}
         value={text}
         className={bad ? "bad mono" : "mono"}
         spellCheck={false}
@@ -154,7 +155,7 @@ function JsonWidget({
           }
         }}
       />
-      {bad ? <div className="help err-text">Not valid JSON yet — the setting keeps its last valid value.</div> : null}
+      {bad ? <div className="help err-text">Not valid JSON yet; the setting keeps its last valid value.</div> : null}
     </>
   );
 }
@@ -222,9 +223,14 @@ function SettingRowImpl({
   const crumb = breadcrumbOf(f, sectionKey);
   const unsupported = isUnsupported(f);
   const invalid = errors !== undefined && errors.length > 0;
+  const [more, setMore] = useState(false);
+  const line = oneLine(f.explain ?? f.help);
+  const full = [f.explain, f.help].filter((t): t is string => !!t && t.trim() !== "").join("\n\n");
+  const hasMore = full.replace(/[`*]/g, "").replace(/\s+/g, " ").trim() !== line || (f.status !== "wired" && !!f.statusNote);
+  const wide = f.kind === "list" || f.kind === "multi" || f.kind === "json" || f.pointer === "/events";
   return (
     <div
-      className={`setting${unsupported ? " inactive" : ""}${edited ? " edited" : ""}${modified ? " modified" : ""}${invalid ? " invalid" : ""}`}
+      className={`setting${unsupported ? " inactive" : ""}${edited ? " edited" : ""}${modified ? " modified" : ""}${invalid ? " invalid" : ""}${wide ? " wide" : ""}`}
       data-testid="setting"
       data-pointer={f.pointer}
       data-edited={edited ? "true" : "false"}
@@ -232,58 +238,81 @@ function SettingRowImpl({
       id={`setting${f.pointer.replace(/\W/g, "_")}`}
     >
       <div className="setting-marker" aria-hidden="true" />
-      <div className="setting-main">
-        <label className="setting-title" htmlFor={id}>
-          {crumb ? <span className="setting-crumb">{crumb}: </span> : null}
+      <div className="setting-label">
+        <label className="setting-title" htmlFor={id} title={`${fieldPath(f)}${full ? `\n\n${full.replace(/[`*]/g, "")}` : ""}`}>
+          {crumb ? <span className="setting-crumb">{crumb} › </span> : null}
           <b>{f.label}</b>
-          {f.unit ? <span className="unit"> [{f.unit}]</span> : null}
+          {f.unit ? <span className="unit"> {f.unit}</span> : null}
           {edited ? (
-            <span className="setting-flag edited-flag" title="Changed here and not applied yet">
-              edited
-            </span>
+            <span className="setting-dot edited" title="Changed here and not applied yet" aria-label="edited" />
           ) : modified ? (
-            <span className="setting-flag" title="This scenario sets a value other than the engine's default">
-              modified
-            </span>
+            <span className="setting-dot" title="This scenario sets a value other than the engine's default" aria-label="modified" />
           ) : null}
           <StatusBadge field={f} />
         </label>
         <div className="setting-desc" id={`${id}-desc`}>
-          {f.explain ? (
-            <>
-              <div className="setting-explain" data-testid="setting-explain">{f.explain}</div>
-              {f.help ? (
-                <details className="setting-technical">
-                  <summary>Technical detail</summary>
-                  <Prose text={f.help} />
-                </details>
-              ) : null}
-            </>
-          ) : (
-            <Prose text={f.help ?? ""} />
-          )}
-          {f.status && f.status !== "wired" && f.statusNote ? (
-            <div className="status-note">
-              <Prose text={f.statusNote} />
-            </div>
-          ) : null}
-          {/* A fully applied field's note says what the engine does with it, including where a value
-              changes nothing (radio.tiers.phy "abstract" under a medium MAC, security.envelope on a
-              BSM run). It is shown once the field is edited — the moment the user needs it — rather
-              than on all hundred and forty rows. */}
-          {f.status === "wired" && edited && f.statusNote && f.statusNote.trim() !== (f.help ?? "").trim() ? (
-            <div className="faint" data-testid="wired-note">
-              <Prose text={f.statusNote} />
-            </div>
+          <span data-testid="setting-explain">{line}</span>
+          {hasMore ? (
+            <button type="button" className="linkbutton more" onClick={() => setMore((m) => !m)} aria-expanded={more}>
+              {more ? "less" : "more"}
+            </button>
           ) : null}
         </div>
-        <div className={f.kind === "boolean" ? "setting-control inline" : f.kind === "list" || f.kind === "multi" ? "setting-control wide" : "setting-control"}>
+        {more ? (
+          <div className="setting-more">
+            {full ? <Prose text={full} /> : null}
+            {f.statusNote && f.status !== "wired" ? (
+              <div className="status-note">
+                <Prose text={f.statusNote} />
+              </div>
+            ) : null}
+            <div className="setting-path">
+              <code>{fieldPath(f)}</code>
+              {devDetails ? <code className="faint"> {f.pointer}</code> : null}
+            </div>
+          </div>
+        ) : null}
+        {f.status === "wired" && edited && f.statusNote && f.statusNote.trim() !== (f.help ?? "").trim() ? (
+          <div className="setting-more faint" data-testid="wired-note">
+            <Prose text={oneLine(f.statusNote)} />
+          </div>
+        ) : null}
+      </div>
+      <div className="setting-right">
+        <div className={f.kind === "boolean" ? "setting-control inline" : "setting-control"}>
           {f.pointer === "/events" ? (
             <EventsEditor value={value} onChange={(v) => onEdit(f.pointer, v)} durationS={durationS} canPick={canPick} />
           ) : (
             <Widget field={f} value={value} onChange={(v) => onEdit(f.pointer, v)} invalid={invalid} />
           )}
           {f.kind === "boolean" ? <span className="dim">{value === true ? "on" : "off"}</span> : null}
+          {edited ? (
+            <button type="button" className="icon-button tiny" data-testid="setting-undo" onClick={() => onUndo(f.pointer)} title="Undo this edit" aria-label="Undo this edit">
+              ↶
+            </button>
+          ) : null}
+        </div>
+        <div className="setting-meta">
+          {f.hasDefault ? (
+            <span>
+              Default <code>{describeValue(f.defaultValue)}</code>
+              {modified ? (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="linkbutton"
+                    data-testid="setting-reset"
+                    onClick={() => onEdit(f.pointer, f.defaultValue)}
+                    title={`Set this back to the engine's default (${describeValue(f.defaultValue)})`}
+                  >
+                    Reset
+                  </button>
+                </>
+              ) : null}
+            </span>
+          ) : null}
+          {f.recommended ? <span data-testid="setting-recommended" title="Recommended range">Rec. {f.recommended}</span> : f.range ? <span title="Allowed range">Range {f.range}</span> : null}
         </div>
         {invalid ? (
           <div className="setting-error" role="alert" data-testid="setting-error">
@@ -295,32 +324,6 @@ function SettingRowImpl({
             ))}
           </div>
         ) : null}
-        <div className="setting-meta">
-          {f.hasDefault ? <span>Default: <code>{describeValue(f.defaultValue)}</code></span> : null}
-          {f.recommended ? <span data-testid="setting-recommended">Recommended: {f.recommended}</span> : null}
-          {f.range ? <span>Allowed: {f.range}</span> : null}
-          <span className="setting-path" title="How a scenario file spells this setting">
-            <code>{fieldPath(f)}</code>
-          </span>
-          {devDetails ? <span className="faint"><code>{f.pointer}</code></span> : null}
-          <span className="grow" />
-          {edited ? (
-            <button type="button" className="linkbutton" data-testid="setting-undo" onClick={() => onUndo(f.pointer)} title="Put back the value the engine holds for the next run">
-              Undo edit
-            </button>
-          ) : null}
-          {modified && f.hasDefault ? (
-            <button
-              type="button"
-              className="linkbutton"
-              data-testid="setting-reset"
-              onClick={() => onEdit(f.pointer, f.defaultValue)}
-              title={`Set this back to the engine's default (${describeValue(f.defaultValue)})`}
-            >
-              Reset to default
-            </button>
-          ) : null}
-        </div>
       </div>
     </div>
   );
