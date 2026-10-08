@@ -87,6 +87,14 @@ pub trait Mobility: Model {
         None
     }
 
+    /// Trips the demand produced that never reached the road, as `(dropped, unroutable)`:
+    /// every dropped trip, and of those the ones with no route from their origin. `None`
+    /// for a model that does not count them. A run whose demand is mostly dropped looks
+    /// like an empty map; this is how the report says why.
+    fn trip_losses(&self) -> Option<(u64, u64)> {
+        None
+    }
+
     /// Passes a demand multiplier to the demand model (see [`Demand::set_multiplier`]).
     /// Returns whether it was honoured; a tier with no demand model returns `false`.
     fn set_demand_multiplier(&mut self, _m: f64) -> bool {
@@ -297,6 +305,14 @@ pub trait Demand: Model + Send + Sync {
     /// [`Demand::fleet_target`]. `None` (the default) when the model cannot make one.
     fn top_up(&mut self, _ctx: &mut dyn MobCtx, _t: SimTime) -> Option<TripRequest> {
         None
+    }
+
+    /// A fresh trip at `t` in place of one that had no route (its slot already given back
+    /// with [`Demand::refund`]), so a network with streets that only leave the map does
+    /// not silently thin the arrival process. `None` when the model cannot draw one; the
+    /// default is [`Demand::top_up`], which only a held fleet answers.
+    fn redraw(&mut self, ctx: &mut dyn MobCtx, t: SimTime) -> Option<TripRequest> {
+        self.top_up(ctx, t)
     }
 }
 

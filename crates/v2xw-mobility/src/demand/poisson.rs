@@ -307,6 +307,19 @@ impl Demand for PoissonDemand {
         let multiplier = self.multiplier_at(t);
         Some(self.draw_trip(ctx, t, multiplier))
     }
+
+    /// A new origin and destination for an arrival that had no route: the arrival keeps its
+    /// instant (the Poisson process is not thinned), only the OD pair is drawn again. The
+    /// cap still holds, because the unroutable trip's slot was refunded first.
+    fn redraw(&mut self, ctx: &mut dyn MobCtx, t: SimTime) -> Option<TripRequest> {
+        if self.params.max_total_vehicles > 0
+            && self.seq.saturating_sub(self.refunded) >= self.params.max_total_vehicles
+        {
+            return None;
+        }
+        let multiplier = self.multiplier_at(t);
+        Some(self.draw_trip(ctx, t, multiplier))
+    }
 }
 
 /// The model card.

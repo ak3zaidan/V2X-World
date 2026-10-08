@@ -134,7 +134,12 @@ impl Scenario {
             scenario.city = None;
             scenario = scenario.with_city(&id).map_err(EngineError::Scenario)?;
         }
-        if scenario.city.is_some() {
+        // A file that names a library city's extract by path (`world.source.path:
+        // worlds/cache/portland.osm.xml`, the same box) is on that city as much as one that
+        // says `city:`, and its trips need the connected network just the same. Measured
+        // 2026-10-08 before this: scenarios/portland.yaml dropped 24 of 26 trips in 90 s as
+        // unroutable (one-way streets that only leave the box), manhattan-5min 9 of 26.
+        if scenario.city.is_some() || crate::city::city_of_world(&scenario.world).is_some() {
             crate::city::connect_demand(&mut scenario);
         }
         Ok(scenario)
