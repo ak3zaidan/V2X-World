@@ -338,7 +338,14 @@ export function researchSectionOf(f: Field): string | null {
   const has = (...w: string[]): boolean => w.some((x) => words.has(x));
   // Topic words first: a congestion-control or MAC knob is found wherever the engine files it.
   if (has("dcc", "congestion", "cbr")) return "dcc";
-  if (has("mac", "edca", "csma", "aifs", "aifsn", "cw", "sps", "harq", "retransmissions", "sensing", "reservation") || path.includes("channel_access"))
+  // `radio.sidelink.*` is the C-V2X scheduler (sensing, reservation, candidate share,
+  // selection window): medium access, kept together under one heading.
+  if (
+    has("mac", "edca", "csma", "aifs", "aifsn", "cw", "sps", "harq", "retransmissions", "sensing", "reservation") ||
+    path.startsWith("radio.sidelink.") ||
+    path.includes("channel_access") ||
+    path.includes("access_categories")
+  )
     return "mac";
   if (has("uu", "cellular", "backhaul", "tcp", "gnb", "enb") || path.startsWith("net.backend") || path.startsWith("actors.backend") || path.startsWith("nodes.backend"))
     return "backend";

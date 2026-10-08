@@ -86,11 +86,14 @@ sidelink's MCS and sensitivity are `radio.models.sidelink`'s.
 |---|---|---|---|
 | `radio.models.propagation` | tier: free space (abstract), dual-slope log-distance (medium), geometric urban V2V (high) | `free-space`, `two-ray-ground`, `log-distance-shadowing`, `tr37885`, `v2v-urban-geometric` | The path-loss law (Abbas 2015, 3GPP TR 37.885, Mangel 2011). |
 | `radio.channel_model.path_loss_exponent` **new** | unset (measured dual-slope fits) | 1.5 to 6 | Single-slope `PL = PL_FS(10 m) + 10·n·log10(d/10 m)` at the run's carrier (Rappaport Eq. 4.68). Setting it runs the log-distance law. It is refused beside another explicitly named law. |
-| `radio.channel_model.shadowing_sigma_db` **new** | fit's sigma (4.15 dB LOS, 6.67 dB OLOS urban, Abbas 2015) | 0 to 15 dB | Log-normal shadowing spread. |
+| `radio.channel_model.shadowing_sigma_db` **new** | the law's own sigma (4.15 dB LOS, 6.67 dB OLOS urban, Abbas 2015) | 0 to 15 dB | Log-normal shadowing spread, applied to every law with shadowing (log-distance, TR 37.885, geometric, WINNER+ B1). |
 | `radio.channel_model.shadowing_decorrelation_m` **new** | environment's (about 10 m city) | 0 to 500 m (exclusive of 0) | Gudmundson 1991 correlation distance. |
 | `radio.channel_model.fading` **new** | tier's (Nakagami m = 3 for 802.11p, none for C-V2X curves) | `none`, `rayleigh`, `rice`, `nakagami` | Small-scale fading. Refused beside `radio.models.fading`. |
 | `radio.channel_model.nakagami_shape` **new** | 3 | 0.5 to 20 | Nakagami m (needs `fading: nakagami`). |
 | `radio.channel_model.rice_k_db` **new** | 6 dB (Cheng 2007 LOS 3-10 dB) | -10 to 30 dB | Rice K, simulated as Nakagami `m = (K+1)²/(2K+1)` (Stüber Eq. 2.57). Needs `fading: rice`. |
+| `radio.channel_model.nakagami_shape_far`, `.nakagami_breakpoint_m` **new** | unset (one m everywhere) | 0.5 to 20; (0, 5000] m | Distance-dependent Nakagami m (Veins-style 1.5 near, 0.75 far). Need `fading: nakagami`, and each other. |
+| `radio.channel_model.building_wall_loss_db`, `.building_loss_db_per_m` **new** | 9 dB, 0.4 dB/m (Sommer 2011) | 0 to 40 dB; 0 to 10 dB/m | Sommer β and γ, wherever buildings are charged. Refused with buildings off or under TR 37.885. |
+| `radio.channel_model.vehicle_blockage` **new** | on with the geometric law | bool | TR 37.885 NLOSv under any law, or vehicles radio-transparent. |
 | `world.buildings.enabled` | true | bool | Buildings exist, and so obstruct. |
 | `radio.models.obstacle` | `obstacle/building-shadowing` (Sommer 2011) | presets | Per-wall and per-metre loss. |
 | `radio.range.margin_db`, `radio.range.max_m` | 10 dB, unset | 0 to 40 dB; 50 m to 100 km | How far a transmission is followed. This changes cost, not physics. |
@@ -125,6 +128,8 @@ Refused on an 802.11p run.
 | `radio.sidelink.resource_keep_probability` **new** | profile's (0.8 J3161/1) | 0, 0.2, 0.4, 0.6, 0.8 | `probResourceKeep`. |
 | `radio.sidelink.rsrp_threshold_dbm` **new** | profile's (-128 NR, -110 LTE studies) | -128 to -60 dBm | Sensing exclusion threshold (TS 36.213 §14.1.1.6), raised 3 dB until enough candidates remain. |
 | `radio.sidelink.sensing` **new** | on | bool | `false` is the random-selection baseline (Ali 2021 §II.1). |
+| `radio.sidelink.candidate_percent` **new** | 20 | 20 (LTE); 20, 35, 50 (NR) | Share of the selection window that must survive exclusion. |
+| `radio.sidelink.selection_window_ms` **new** | profile's T2 | 20-100 (LTE), 1-100 (NR) | End of the selection window T2. |
 
 Numerology is fixed by the profile (µ = 1, 30 kHz for NR), and mode 2 (autonomous) is
 the only mode. See below.

@@ -122,8 +122,8 @@ override the composed model would ignore, so every accepted value changes the ru
 | field | range | default (cited) | acts on |
 |---|---|---|---|
 | `radio.channel_model.path_loss_exponent` | 1.5-6 | preset slopes (Abbas 2015) | log-distance law (one slope) |
-| `radio.channel_model.shadowing_sigma_db` | 0-12 dB | 3/4 dB (TR 36.885/37.885), 3.95 (Abbas) | every law with shadowing |
-| `radio.channel_model.shadowing_decorrelation_m` | (0, 1000] m | 10 urban / 25 freeway (TR 36.885 A.1.4) | same |
+| `radio.channel_model.shadowing_sigma_db` | 0-15 dB | 3/4 dB (TR 36.885/37.885), 3.95 (Abbas) | every law with shadowing |
+| `radio.channel_model.shadowing_decorrelation_m` | (0, 500] m | 10 urban / 25 freeway (TR 36.885 A.1.4) | same |
 | `radio.channel_model.fading: nakagami` with `nakagami_shape`, `nakagami_shape_far`, `nakagami_breakpoint_m` | 0.5-20, (0, 5000] m | m = 3 (Torrent-Moreno 2009) | small-scale fading |
 | `radio.channel_model.building_wall_loss_db`, `building_loss_db_per_m` | 0-40 dB, 0-10 dB/m | 9 dB, 0.4 dB/m (Sommer 2011) | Sommer term, geometric law's through-building path |
 | `radio.channel_model.vehicle_blockage` | on/off | on with the geometric law | TR 37.885 NLOSv, any law |
