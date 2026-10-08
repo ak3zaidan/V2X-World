@@ -205,7 +205,7 @@ pub enum Phase {
 pub const MAX_OBSERVATIONS_PER_RUN: usize = 60;
 
 /// The backend counters announced when they rise: `(entity, field, sentence)`.
-const COUNTERS: [(&str, &str, &str); 2] = [
+const COUNTERS: [(&str, &str, &str); 3] = [
     (
         "ma",
         "revocation_decisions",
@@ -215,6 +215,11 @@ const COUNTERS: [(&str, &str, &str); 2] = [
         "ee",
         "vehicles_starved",
         "A vehicle ran out of valid pseudonym certificates",
+    ),
+    (
+        "rsu",
+        "backhaul_retransmissions",
+        "A roadside unit's backhaul lost a packet and had to resend it",
     ),
 ];
 

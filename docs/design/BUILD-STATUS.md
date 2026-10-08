@@ -2630,3 +2630,50 @@ conflicts resolved by hand and the whole workspace compile-checked:
   timer, TR 36.881 access/handover figures, Shannon fit, background load, NR timings.
 - Not done: the RSU backhaul in the engine is still the `Backhaul` latency+rate struct;
   `WiredLink` exists for TCP but is not yet wired into `backhaul/*` ids. No Studio UI.
+
+## 2026-10-07 — cellular backend completed: every exchange end to end, wired backhaul media, eMBMS CRL
+
+- **Every backend message rides the selected link model.** `v2xw_proto::net::PathOracle`
+  on `BackendNet`: the kernel asks it for each message's arrival. The engine's `Carrier`
+  (`crates/v2xw-engine/src/backend.rs`, shared by `BackendAccess` and both kernels) carries
+  every request, response, acknowledgement and poll of top-ups, re-enrolments and ETSI
+  trust-list fetches over the vehicle's keep-alive TCP/TLS connection through the PF
+  scheduler (`cellular/uu/packet-pf`, via the ctx-free `AtClock` path), or over the
+  relaying unit's backhaul line. A connection that gives up is reopened after RFC 6298's
+  1 s, three times, then the nominal link is charged (`carrier.fallbacks`). The old
+  512/4096-byte probe is gone. A cloned topology drops the oracle (preload's scratch kernel).
+- **Wired backhaul per RSU.** `backhaul/fibre`, `backhaul/dsl`, `backhaul/microwave`
+  (`WiredLink` media: asymmetric rate, propagation per medium, hops, loss; cards from
+  `ip_transport::wired_cards()` in the catalogue), selectable in `actors.rsus[].backhaul`
+  with numbers in the new `actors.rsus[].backhaul_params` / `actors.rsu_placement.backhaul_params`
+  (`rate_mbps`, `down_mbps`, `latency_ms`, `distance_km`, `hops`, `loss`). Each unit has
+  one FIFO line per direction: relayed reports, its own reports, the CRL feed for its
+  broadcast and relayed vehicles' flow messages all queue on it; a lost packet is resent
+  after Linux's 200 ms `TCP_RTO_MIN`. `backhaul/cellular` under packet-pf rides the unit's
+  own TCP connection through the scheduler.
+- **eMBMS CRL broadcast.** `net.uu.params.crl_delivery: mbms` (default `unicast`):
+  unicast polls stop; a new list and each carousel turn (`mbms_carousel_s`, 10) go once
+  per cell to every cellular vehicle in coverage lacking it, after the next MCH scheduling
+  period (`mbms_period_ms`, 320, TS 36.331) and the bearer's serialisation
+  (`mbms_subframes` × 100 PRB × 120 RE × 1.1758 bit/RE ≈ 1.4 Mbit/s per subframe, TS
+  36.211 §6.7/§6.10.2, TS 36.213 Table 7.2.3-1).
+- **Metrics.** `AccessReport.exchange_latency` per type (`topup`, `reenrol`,
+  `trust-fetch`, `crl-fetch`, `crl-mbms`, `report-uu`, `report-relay`; count/sum/max),
+  `AccessReport.carrier` (kernel messages over Uu and backhaul, backhaul line bytes,
+  retransmissions, reconnects, fallbacks), `mbms_*`; certificate availability
+  `Phase2Report.cert_unavailable_ns` / `cert_unavailable_max_ns` (time with no valid
+  pseudonym, between node steps). Published on the backend view (`ee`, `rsu` entities);
+  the agent's watcher announces backhaul retransmissions.
+- **Calibrated, markers removed:** Shannon fit 0.75/1.25 (Mogensen VTC'07 link-level
+  SISO), RLC t-PollRetransmit 20 ms for LTE and NR (ns-3 `LteRlcAm`; NR changed from
+  10 ms), LTE SR-based UL access chain (TR 36.881 Table 5.1-1), LTE handover interruption
+  49.5 ms (TR 36.881 §5.2, inside the TS 36.133 §5.1.2.1 50 ms bound). DSL rates cited to
+  the FTTC 80/20 tier. **Still `todo-calibrate`:** `bler_retx`, `background_load`, NR HO
+  interruption and NR timings, LTE overheads, PF window, fibre/microwave hop delays,
+  microwave rate/outage, DSL interleaving.
+- Tests: `ip_transport::wired_media_differ_and_queue`, `backend::carrier_tests` (2),
+  `packet_cellular` (kernel messages carried, top-up latency measured),
+  `security_lifecycle::a_vehicle_without_a_modem_relays_through_a_roadside_unit`
+  (backhaul line used, relay latency measured). No MBMS integration run yet.
+- Not done: positions are observed at flow start and on engine sends, not per kernel
+  message during a long flow; MBMS reception has no per-vehicle loss beyond coverage.

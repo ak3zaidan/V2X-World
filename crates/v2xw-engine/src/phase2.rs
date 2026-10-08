@@ -2904,7 +2904,8 @@ impl Phase2 {
             None => self.scms.backend_view(now, &mut self.tracker),
         };
         let r = &self.report;
-        let a = &self.access.report;
+        let a_now = self.access.report_now();
+        let a = &a_now;
         for e in &mut view.entities {
             match e.id.as_str() {
                 "crl-store" => {
@@ -2958,6 +2959,20 @@ impl Phase2 {
                     e.set("access_cellular", a.cellular_vehicles);
                     e.set("access_rsu_relay", a.relay_only_vehicles);
                     e.set("access_offline", a.offline_vehicles);
+                    e.set(
+                        "cert_unavailable_s",
+                        (r.cert_unavailable_ns as f64 / 1e9 * 10.0).round() / 10.0,
+                    );
+                    // Backend latency per exchange type, ms (mean and worst so far).
+                    for (kind, l) in &a.exchange_latency {
+                        let key = kind.replace('-', "_");
+                        e.set(&format!("{key}_latency_ms"), (l.mean_ms() * 10.0).round() / 10.0);
+                        e.set(&format!("{key}_latency_max_ms"), l.max_ns / 1_000_000);
+                    }
+                    if a.mbms_broadcasts > 0 {
+                        e.set("crl_mbms_broadcasts", a.mbms_broadcasts);
+                        e.set("crl_mbms_receptions", a.mbms_receptions);
+                    }
                 }
                 _ => {}
             }
@@ -2986,6 +3001,9 @@ impl Phase2 {
             rsu.set("crl_frames", r.crl_broadcasts);
             rsu.set("reports_filed_by_units", r.reports_from_rsus);
             rsu.set("reports_relayed", r.reports_uploaded_relay);
+            rsu.set("backhaul_messages", a.carrier.backhaul_messages);
+            rsu.set("backhaul_line_bytes", a.carrier.backhaul_line_bytes);
+            rsu.set("backhaul_retransmissions", a.carrier.backhaul_retx);
             rsu.set("compromised", self.compromised_count() as u64);
             view.entities.push(rsu);
         }
