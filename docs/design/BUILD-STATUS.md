@@ -17,6 +17,19 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-08 — round-6 merge (manual, after the spend limit)
+
+The round's merge agent never ran (spend limit). All seven test-to-fix branches were merged by hand into main in the order scale, netsoak, trafficsoak, vrusoak, configsweep, scene, metricview. configsweep's agent stopped mid-track; its one uncommitted file (e2e-engine/owner-flow.spec.ts) was committed as a wip snapshot.
+
+Conflicts:
+- `scenario/mod.rs`: trafficsoak and configsweep both fixed trips lost on imported map boxes; connected demand now applies to a library city, a world naming a city's extract by path, and any OSM import.
+- `vru/social_force.rs`: vrusoak and scene both fixed pedestrian jitter; vrusoak's smoothed per-person heading and proportional carry are kept, and a long corner carry still closes within `CARRY_CLOSE_MAX_S` (scene's rule). scene's unused facing constant was dropped.
+- BUILD-STATUS sections: all kept.
+
+Checked: release build of v2xw-cli (v2xw, v2xw-server) clean; protocol and viewer rebuilt; Studio typecheck passes; `run-sim.sh` starts with the agent on. **Not run:** any cargo test suite, vitest, Playwright, cargo fmt.
+
+Open from the tracks: queue heads standing 8-27 s on their own green and some 160-180 s stops in Midtown rush hour (trafficsoak, not yet traced); Portland downtown spawning no vehicles (scene saw it; the demand fix in this merge may address it, unconfirmed); RSUs cannot verify post-quantum messages (no PQ cost in RSU profiles: owner's call); the agent client's /agent/* 404s fail e2e console checks against the mock server.
+
 ## 2026-10-08 — scale, speed and long runs (scale track, branch of 4986cd4)
 
 Runs, not reading: the optimised dev build (`opt-level 2`, debug assertions on),
