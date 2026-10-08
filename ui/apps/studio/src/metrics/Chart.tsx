@@ -177,26 +177,41 @@ export function MainChart({
             const yMin = u.scales.y.min ?? 0;
             const yMax = u.scales.y.max ?? 1;
             if (b.better === "lower") {
-              zone(b.caution, b.unhealthy, warn, 0.1);
-              zone(b.unhealthy, Math.max(yMax, b.unhealthy), err, 0.12);
+              zone(b.caution, b.unhealthy, warn, 0.06);
+              zone(b.unhealthy, Math.max(yMax, b.unhealthy), err, 0.08);
             } else {
-              zone(b.unhealthy, b.caution, warn, 0.1);
-              zone(Math.min(yMin, b.unhealthy), b.unhealthy, err, 0.12);
+              zone(b.unhealthy, b.caution, warn, 0.06);
+              zone(Math.min(yMin, b.unhealthy), b.unhealthy, err, 0.08);
             }
+            // Each threshold: a faint dashed line, labelled at the plot's right edge on the side of
+            // the zone it opens ("caution 500", "unhealthy 600"), so the band reads without a legend.
+            const px = uPlot.pxRatio;
             ctx.save();
-            ctx.setLineDash([4, 4]);
-            ctx.lineWidth = 1;
-            for (const [v, colour] of [
-              [b.caution, warn],
-              [b.unhealthy, err],
+            ctx.setLineDash([4 * px, 4 * px]);
+            ctx.lineWidth = px;
+            ctx.font = `600 ${10 * px}px ${cssVar("--sans", "system-ui")}`;
+            ctx.textAlign = "right";
+            for (const [v, colour, name] of [
+              [b.caution, warn, "caution"],
+              [b.unhealthy, err, "unhealthy"],
             ] as const) {
               if (v < yMin || v > yMax) continue;
               const py = Math.round(u.valToPos(v, "y", true)) + 0.5;
+              ctx.globalAlpha = 0.7;
               ctx.strokeStyle = colour;
               ctx.beginPath();
               ctx.moveTo(left, py);
               ctx.lineTo(left + bw, py);
               ctx.stroke();
+              // The zone opens above the line when lower is better, below it otherwise; a label
+              // with no room on that side goes on the other.
+              const above = b.better === "lower";
+              let ty = above ? py - 4 * px : py + 12 * px;
+              if (ty < top + 10 * px) ty = py + 12 * px;
+              if (ty > top + bh - 2 * px) ty = py - 4 * px;
+              ctx.globalAlpha = 0.95;
+              ctx.fillStyle = colour;
+              ctx.fillText(`${name} ${formatNumber(v)}`, left + bw - 6 * px, ty);
             }
             ctx.restore();
           },

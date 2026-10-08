@@ -65,7 +65,7 @@ test("open, find, expand, brush, export and close the metrics dashboard", async 
   expect(page.url()).toContain("#metrics/pdr");
   await expect(page.getByTestId("metric-chart").locator("canvas")).toHaveCount(1, { timeout: 20_000 });
   await expect(page.getByTestId("metric-source")).toContainText("TR 36.885");
-  const statsBefore = await page.getByTestId("metric-stats-pdr").locator("td").nth(1).innerText();
+  const statsBefore = await page.getByTestId("metric-stats-pdr").locator("[data-stat=n]").innerText();
   expect(Number(statsBefore.replace(/,/g, ""))).toBeGreaterThan(3);
 
   // --- brush a range on the strip under the chart ----------------------------------------------
@@ -81,7 +81,7 @@ test("open, find, expand, brush, export and close the metrics dashboard", async 
   const rangeText = await page.getByTestId("metric-range-text").innerText();
   const [from, to] = rangeText.split(" s of ")[0].split("–").map(Number);
   expect(to - from).toBeGreaterThan(0);
-  const statsAfter = Number((await page.getByTestId("metric-stats-pdr").locator("td").nth(1).innerText()).replace(/,/g, ""));
+  const statsAfter = Number((await page.getByTestId("metric-stats-pdr").locator("[data-stat=n]").innerText()).replace(/,/g, ""));
   expect(statsAfter, "the statistics cover the brushed range only").toBeLessThan(Number(statsBefore.replace(/,/g, "")));
 
   // A breakdown over that range: delivery against distance, pooled by the engine.

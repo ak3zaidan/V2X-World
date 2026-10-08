@@ -50,7 +50,7 @@ test("the dashboard shows a finished run's measurements, and again after a reloa
     const cards = await page.locator('.mcard[data-has-data="true"]').count();
     await page.getByTestId("metric-open-pdr").first().click();
     await expect(page.getByTestId("metric-chart").locator("canvas")).toHaveCount(1, { timeout: 30_000 });
-    const windows = Number((await page.getByTestId("metric-stats-pdr").locator("td").nth(1).innerText()).replace(/,/g, ""));
+    const windows = Number((await page.getByTestId("metric-stats-pdr").locator("[data-stat=n]").innerText()).replace(/,/g, ""));
     await expect(page.getByTestId("breakdown-distance-chart")).toBeVisible({ timeout: 30_000 });
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");

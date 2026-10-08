@@ -216,6 +216,37 @@ export function whenText(j: Judgement): string {
   return parts.join(", ");
 }
 
+// ------------------------------------------------------------------------------------------------
+// The expanded view's one-line verdict
+// ------------------------------------------------------------------------------------------------
+
+/**
+ * Where a value sits against its band, in a few words: "Above 600 ms limit", "Below 0.95 target",
+ * "Within 500 ms target". The threshold named is the one that decides the level.
+ */
+export function limitText(band: HealthBand, level: HealthLevel, unit: string): string {
+  const u = unit === "ratio" || unit === "1" || unit === "-" || unit === "" ? "" : ` ${unit}`;
+  const lower = band.better === "lower";
+  if (level === "healthy") return `Within ${formatNumber(band.caution)}${u} target`;
+  if (level === "caution") return `${lower ? "Above" : "Below"} ${formatNumber(band.caution)}${u} target`;
+  return `${lower ? "Above" : "Below"} ${formatNumber(band.unhealthy)}${u} limit`;
+}
+
+/**
+ * The verdict under the expanded view's value, as short parts a reader scans:
+ * ["Above 600 ms limit", "unhealthy 83 % of run", "worst 834 ms at 17 s"]. The first part is the
+ * newest value's level (`level`); the rest are the run's, from its judgement.
+ */
+export function verdictParts(band: HealthBand, level: HealthLevel, unit: string, j: Judgement | null): string[] {
+  const parts = [limitText(band, level, unit)];
+  if (j === null) return parts;
+  if (j.unhealthyShare > 0) parts.push(`unhealthy ${pct(j.unhealthyShare)} of run`);
+  if (j.cautionShare > 0) parts.push(`caution ${pct(j.cautionShare)}`);
+  if (j.unhealthyShare === 0 && j.cautionShare === 0) parts.push(`healthy in all ${j.windows.toLocaleString("en-US")} windows`);
+  parts.push(`worst ${formatWithUnit(j.worst, unit)} at ${formatNumber(j.worstAtS)} s`);
+  return parts;
+}
+
 function pct(x: number): string {
   const p = x * 100;
   return p > 0 && p < 1 ? "<1 %" : `${Math.round(p)} %`;

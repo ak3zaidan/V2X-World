@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { bandOf, classify, judge, outOfBand, verdictLine, whenText, type HealthBand } from "../src/metrics/health.js";
+import { bandOf, classify, judge, limitText, outOfBand, verdictLine, verdictParts, whenText, type HealthBand } from "../src/metrics/health.js";
 import { familiesOf, type Series } from "../src/metrics/model.js";
 import { attackerShare, baseOf, dominant, entityLoads, reduceSeries, scenarioLine } from "../src/metrics/summaryModel.js";
 
@@ -79,6 +79,21 @@ describe("judge", () => {
 
   it("does not judge a series with no observed window", () => {
     expect(judge("cbr", "ratio", CBR, series([Number.NaN]))).toBeNull();
+  });
+});
+
+describe("the expanded view's verdict line", () => {
+  it("names the threshold that decides the level, then the run's shares and worst window", () => {
+    expect(limitText(CBR, "unhealthy", "ratio")).toBe("Above 0.68 limit");
+    expect(limitText(CBR, "caution", "ratio")).toBe("Above 0.5 target");
+    expect(limitText(PDR, "unhealthy", "ratio")).toBe("Below 0.9 limit");
+    const lat: HealthBand = { ...CBR, caution: 500, unhealthy: 600 };
+    expect(limitText(lat, "healthy", "ms")).toBe("Within 500 ms target");
+    const j = judge("lat", "ms", lat, series([100, 700, 834, 650, 550]));
+    expect(verdictParts(lat, "unhealthy", "ms", j)).toEqual(["Above 600 ms limit", "unhealthy 60 % of run", "caution 20 %", "worst 834 ms at 2 s"]);
+    const ok = judge("lat", "ms", lat, series([100, 200]));
+    expect(verdictParts(lat, "healthy", "ms", ok)).toEqual(["Within 500 ms target", "healthy in all 2 windows", "worst 200 ms at 1 s"]);
+    expect(verdictParts(lat, "healthy", "ms", null)).toEqual(["Within 500 ms target"]);
   });
 });
 

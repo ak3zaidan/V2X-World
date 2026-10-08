@@ -15,6 +15,36 @@ export function HealthDot({ level }: { level: HealthLevel }): React.JSX.Element 
   return <span className={`hdot ${level}`} aria-hidden="true" />;
 }
 
+/**
+ * A level as a small coloured chip ("● Unhealthy"); what it means, the thresholds and their source
+ * are its tooltip. The card and the expanded view's headline both use it.
+ */
+export function HealthChip({
+  band,
+  level,
+  unit,
+  testId,
+  large = false,
+}: {
+  band: MetricHealthBand;
+  level: HealthLevel;
+  unit: string;
+  testId?: string;
+  large?: boolean;
+}): React.JSX.Element {
+  return (
+    <span
+      className={`hchip ${level}${large ? " large" : ""}`}
+      data-testid={testId}
+      data-level={level}
+      title={`${noteOf(band, level)}\n${thresholdsText(band, unit)}\n${BASIS_LABEL[band.basis]}: ${band.source}`}
+    >
+      <HealthDot level={level} />
+      {LEVEL_LABEL[level]}
+    </span>
+  );
+}
+
 /** A value judged against its band, in one line. Nothing when the value is missing. */
 export function HealthLine({
   band,
@@ -52,7 +82,7 @@ export function BandTable({ band, unit }: { band: MetricHealthBand; unit: string
   const stat = judgedLabel(band);
   return (
     <div className="hband" data-testid="health-band">
-      <h4>Is this value healthy?{stat !== "" ? <span className="dim"> Judged on the {stat}.</span> : null}</h4>
+      <h4>Health thresholds{stat !== "" ? <span className="dim"> · judged on the {stat}</span> : null}</h4>
       <ul>
         <li className="healthy">
           <HealthDot level="healthy" /> <strong>Healthy</strong> {op[0]} {band.caution}

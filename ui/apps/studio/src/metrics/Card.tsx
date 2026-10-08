@@ -9,8 +9,8 @@
 import { useMemo, useState } from "react";
 import type { MetricHealthBand } from "@vwp/protocol";
 
-import { classify, judgedSeries } from "./health.js";
-import { HealthLine } from "./HealthBadge.js";
+import { classify, judgedLabel, judgedSeries, limitText, noteOf } from "./health.js";
+import { HealthChip } from "./HealthBadge.js";
 import { usePins } from "./pins.js";
 import {
   axisUnit,
@@ -251,15 +251,26 @@ export function MetricCard({
         // The title is the keyboard's way in; the body is a larger target for the pointer.
         <div className="mcard-body" onClick={() => onOpen(f)} data-testid={`metric-body-${f.base}`}>
           {headline !== null ? (
-            <div className="mcard-value">
+            <div className="mcard-value" title="The newest window's value">
               <span className="mcard-num" data-testid={`metric-value-${f.base}`}>
                 {formatNumber(latest)}
               </span>
               <span className="mcard-unit">{unitSuffix(f.unit) === "" ? axisUnit(f.unit) : f.unit}</span>
-              <span className="dim mcard-when">newest window</span>
+              {band && level ? <HealthChip band={band} level={level} unit={f.unit} testId={`metric-health-${f.base}`} /> : null}
+            </div>
+          ) : headline === null && band && level ? (
+            <HealthChip band={band} level={level} unit={f.unit} testId={`metric-health-${f.base}`} />
+          ) : null}
+          {band && level ? (
+            <div className={`mcard-verdict ${level}`} title={noteOf(band, level)}>
+              {judgedLabel(band) !== "" ? (
+                <span>
+                  {judgedLabel(band)} <strong className="mono">{formatWithUnit(judgedValue, f.unit)}</strong> ·{" "}
+                </span>
+              ) : null}
+              {limitText(band, level, f.unit)}
             </div>
           ) : null}
-          {band && level ? <HealthLine band={band} value={judgedValue} unit={f.unit} compact testId={`metric-health-${f.base}`} /> : null}
           {hasLine && series ? (
             <Sparkline series={series} from={0} to={Math.max(overview.toS, series.t.length > 0 ? series.t[series.t.length - 1] : 0)} unit={f.unit} label={f.label} band={band && band.judged === "" ? band : null} />
           ) : (
