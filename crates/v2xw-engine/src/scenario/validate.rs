@@ -4809,17 +4809,30 @@ fn threats(s: &Scenario, e: &mut Vec<ScenarioError>) {
                     .to_string(),
             ));
         }
-        if let Some(w) = a.schedule
-            && (w.from_s < 0.0 || w.to_s > s.time.duration_s || w.to_s <= w.from_s)
-        {
-            e.push(conflict(
-                &format!("threats.attackers[{i}].schedule"),
-                format!(
-                    "spans [{}, {}] s, which is not a non-empty interval inside the run \
-                     [0, {}] s (time.duration_s)",
-                    w.from_s, w.to_s, s.time.duration_s
-                ),
-            ));
+        // An end past the run's end means "until the run ends": shortening the run (the
+        // Studio's Run length) must not make an attack scenario unstartable. The attack is
+        // active over [from, min(to, duration)); `active_at` never sees the later instants.
+        // A start at or past the end is refused: no attack would happen, and the run would
+        // silently measure an honest fleet.
+        if let Some(w) = a.schedule {
+            if w.from_s < 0.0 || w.to_s <= w.from_s {
+                e.push(conflict(
+                    &format!("threats.attackers[{i}].schedule"),
+                    format!(
+                        "spans [{}, {}] s, which is not a non-empty interval of time",
+                        w.from_s, w.to_s
+                    ),
+                ));
+            } else if w.from_s >= s.time.duration_s {
+                e.push(conflict(
+                    &format!("threats.attackers[{i}].schedule"),
+                    format!(
+                        "starts the attack at {} s, but the run ends at {} s, so no attack \
+                         would happen: lengthen the run past {} s or start the attack earlier",
+                        w.from_s, s.time.duration_s, w.from_s
+                    ),
+                ));
+            }
         }
     }
 }
@@ -4877,9 +4890,10 @@ fn timeline(s: &Scenario, e: &mut Vec<ScenarioError>) {
             e.push(conflict(
                 &format!("{field}.t"),
                 format!(
-                    "is {} s, which is outside the run [0, {}] s (time.duration_s); an event \
-                     past the horizon never fires",
-                    item.t, s.time.duration_s
+                    "is {} s, which is outside the run [0, {}] s (time.duration_s), so the \
+                     event would never happen: lengthen the run past {} s or move the event \
+                     earlier",
+                    item.t, s.time.duration_s, item.t
                 ),
             ));
         }
@@ -4895,11 +4909,13 @@ fn timeline(s: &Scenario, e: &mut Vec<ScenarioError>) {
                         .unwrap_or_default()
                 ),
             )),
-            Some(until) if until <= item.t || until > s.time.duration_s => e.push(conflict(
+            // An end past the run's end means "until the run ends" (the run loop schedules
+            // only the ends inside the horizon), so shortening the run keeps it startable.
+            Some(until) if until <= item.t => e.push(conflict(
                 &format!("{field}.until"),
                 format!(
-                    "is {until} s, which is not after t ({} s) and inside the run [0, {}] s",
-                    item.t, s.time.duration_s
+                    "is {until} s, which is not after the event's start t ({} s)",
+                    item.t
                 ),
             )),
             _ => {}
