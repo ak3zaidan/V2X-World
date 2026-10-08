@@ -564,6 +564,12 @@ impl LifecycleParams {
                 "topup_below_periods" => p.topup_below_periods = (v.round() as u32).min(64),
                 "cert_shuffle_window_s" => p.scms.shuffle_window = secs(v),
                 "report_shuffle_window_s" => p.scms.report_shuffle_window = secs(v),
+                "cert_shuffle_threshold" => {
+                    p.scms.shuffle_threshold = (v.round() as u32).max(1);
+                }
+                "report_shuffle_threshold" => {
+                    p.scms.report_shuffle_threshold = (v.round() as u32).max(1);
+                }
                 "crl_cadence_s" => {
                     p.scms.crl_cadence = secs(v);
                     p.scms.publish_on_cadence = v > 0.0;
@@ -628,7 +634,7 @@ impl LifecycleParams {
 }
 
 /// The lifecycle keys `security.protocol.params` accepts.
-pub const LIFECYCLE_KEYS: [&str; 16] = [
+pub const LIFECYCLE_KEYS: [&str; 18] = [
     "i_period_s",
     "cert_lifetime_s",
     "certs_per_period",
@@ -636,6 +642,8 @@ pub const LIFECYCLE_KEYS: [&str; 16] = [
     "topup_below_periods",
     "cert_shuffle_window_s",
     "report_shuffle_window_s",
+    "cert_shuffle_threshold",
+    "report_shuffle_threshold",
     "crl_cadence_s",
     "crl_fetch_interval_s",
     "crl_broadcast_interval_s",

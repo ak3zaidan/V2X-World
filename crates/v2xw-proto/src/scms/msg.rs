@@ -278,8 +278,13 @@ pub enum ScmsMsg {
     },
     /// LA → RA: the sealed pre-linkage values.
     PreLinkageResponse(Box<PreLinkageBatch>),
-    /// The RA's shuffle window closing.
-    ShuffleTimer,
+    /// The RA's shuffle window closing, for the batch of that generation: a batch the
+    /// count threshold released early leaves its timer to find a newer generation, and
+    /// the timer then releases nothing.
+    ShuffleTimer {
+        /// The batch generation the timer was armed for.
+        generation: u64,
+    },
     /// RA → PCA: one i-period of certificate requests.
     CertRequest {
         /// The device (carried for the simulation's bookkeeping; the PCA learns only the
@@ -317,8 +322,12 @@ pub enum ScmsMsg {
     },
     /// Device → LOP → RA → MA: a misbehaviour report.
     Report(Box<ReportSubmission>),
-    /// The report shuffle window closing.
-    ReportShuffleTimer,
+    /// The report shuffle window closing, for the batch of that generation (as
+    /// [`ScmsMsg::ShuffleTimer`]).
+    ReportShuffleTimer {
+        /// The batch generation the timer was armed for.
+        generation: u64,
+    },
     /// The CRL Generator's cadence boundary: publish what has been appended since the
     /// last one.
     CrlPublishTimer,

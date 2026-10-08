@@ -170,3 +170,64 @@ fn the_crl_is_published_on_its_cadence() {
     );
     assert!(published < (issued / cadence + 1) * cadence);
 }
+
+/// "10,000 requests or one day, whichever comes first" (CAMP-EE SCMS-765): the report
+/// shuffle closes at its count, not only at its window — and the window's timer, still
+/// armed for the batch the count released, releases nothing early from the next batch.
+#[test]
+fn the_report_shuffle_closes_at_its_count_before_its_window() {
+    let report = |run: &mut ScmsRun, lv, at_s: u64| {
+        run.report_at_proxy(
+            DEVICE_B,
+            0,
+            lv,
+            at_s * NS_PER_S,
+            at_s * NS_PER_S + 10_000_000,
+            at_s * NS_PER_S + 50_000_000,
+            Transport::CellularUu,
+            1_200,
+        )
+    };
+    let mut run = deployment(2);
+    // A 100 s window with a threshold of three reports.
+    run.state.params.report_shuffle_window = Duration::from_secs(100);
+    run.state.params.report_shuffle_threshold = 3;
+    run.preload(DEVICE_A, 0, 1, 2).expect("preloads");
+    let lv = run.state.devices[&DEVICE_A].credentials[&(0, 0)].lv;
+    let first: Vec<_> = (1..=3).map(|s| report(&mut run, lv, s)).collect();
+    // A fourth report starts the next batch, whose own window closes about 110 s.
+    let fourth = report(&mut run, lv, 10);
+    // The first batch's timer, armed about 1 s, comes due about 101 s.
+    run.run_until(105 * NS_PER_S).expect("runs");
+    for r in &first {
+        let at = run
+            .kernel
+            .stages
+            .at(*r, StageId::ReportReceived)
+            .expect("the third report closed the batch");
+        assert!(at < 10 * NS_PER_S, "released by the count, not the window: {at} ns");
+    }
+    assert!(
+        run.kernel
+            .stages
+            .at(fourth, StageId::ReportReceived)
+            .is_none(),
+        "the first batch's timer released a report of the second batch"
+    );
+    run.run_until(200 * NS_PER_S).expect("runs");
+    let at = run
+        .kernel
+        .stages
+        .at(fourth, StageId::ReportReceived)
+        .expect("the second batch's own window closed");
+    assert!(at >= 110 * NS_PER_S, "{at} ns");
+
+    // Without the threshold the same three reports wait for the day.
+    let mut daylong = deployment(2);
+    daylong.state.params.report_shuffle_window = Duration::from_secs(86_400);
+    daylong.preload(DEVICE_A, 0, 1, 2).expect("preloads");
+    let lv = daylong.state.devices[&DEVICE_A].credentials[&(0, 0)].lv;
+    let r = report(&mut daylong, lv, 1);
+    daylong.run_until(3_600 * NS_PER_S).expect("runs");
+    assert!(daylong.kernel.stages.at(r, StageId::ReportReceived).is_none());
+}
