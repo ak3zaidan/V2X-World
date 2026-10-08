@@ -25,6 +25,15 @@ describe("research sections", () => {
     expect(tree.map((g) => g.name)).toEqual(["Run", "Radio & Channel", "Security & Certificates", "Novel"]);
     expect(tree[1].subs.map((s) => s.label)).toEqual(["General", "Devices"]);
   });
+
+  it("files the traffic, sidelink and queue settings, and never repeats a section id", () => {
+    expect(researchSectionOf(f("traffic.gridlock_timeout_s"))).toBe("traffic");
+    expect(researchSectionOf(f("radio.sidelink.candidate_percent"))).toBe("mac");
+    expect(researchSectionOf(f("net.access_categories"))).toBe("mac");
+    const tree = buildResearchTree([f("traffic.reroute_period_s", "Traffic"), f("wholly.new_key", "Traffic")]);
+    const ids = tree.map((g) => g.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
 });
 
 describe("list share", () => {

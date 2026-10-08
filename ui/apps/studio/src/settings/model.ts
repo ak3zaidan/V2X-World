@@ -124,6 +124,7 @@ export function matches(f: Field, query: string): boolean {
 /** Words for a section key the scenario spells as an abbreviation or a plural. */
 const SECTION_LABELS: Record<string, string> = {
   vru: "Pedestrians and cyclists",
+  traffic: "Signals, rerouting and gridlock",
   rsus: "Roadside units",
   backend: "Backend (SCMS)",
   meta: "Description",
@@ -350,7 +351,7 @@ export function researchSectionOf(f: Field): string | null {
   if (has("uu", "cellular", "backhaul", "tcp", "gnb", "enb") || path.startsWith("net.backend") || path.startsWith("actors.backend") || path.startsWith("nodes.backend"))
     return "backend";
   if (top === "meta" || top === "schema" || top === "seed" || top === "time" || top === "events" || top === "experiment") return "run";
-  if (top === "actors" || top === "mobility" || top === "energy" || path.startsWith("scale.traffic")) return "traffic";
+  if (top === "actors" || top === "traffic" || top === "mobility" || top === "energy" || path.startsWith("scale.traffic")) return "traffic";
   if (top === "city" || top === "world" || top === "weather") return "world";
   if (top === "radio" || path.startsWith("scale.radio")) return "radio";
   if (top === "messages" || top === "apps") return "messages";
@@ -434,7 +435,14 @@ export function buildResearchTree(fields: readonly Field[]): ResearchGroup[] {
     const list = buckets.get(s.id);
     if (list && list.length > 0) out.push(make(s.id, s.name, s.blurb, list, s));
   }
-  for (const e of extra) out.push(make(slug(e.name), e.name, "", e.fields));
+  // An engine group no rule claimed keeps its own section; its id never collides with a
+  // research section's (a React key and an anchor both use it).
+  const taken = new Set(RESEARCH_SECTIONS.map((s) => s.id));
+  for (const e of extra) {
+    const id = taken.has(slug(e.name)) ? `engine-${slug(e.name)}` : slug(e.name);
+    taken.add(id);
+    out.push(make(id, e.name, "", e.fields));
+  }
   return out;
 }
 
