@@ -647,6 +647,13 @@ pub struct EngineParams {
     /// engine's default so a unit test sees the raw dynamics; a scenario sets it from
     /// `traffic.gridlock`.
     pub time_to_teleport_s: f64,
+    /// Strategic lane choice: a route is planned from every lane of the road the vehicle
+    /// is on, not only its own, and the vehicle changes lane ahead of the turn it needs
+    /// (SUMO's strategic lane-change layer, Erdmann 2015, "SUMO's lane-changing model").
+    /// Without it a driver in the wrong lane for their turn drove on and round the block.
+    /// Needs `lane_changes`; off by default so a unit test sees the plain router, set by a
+    /// scenario's `traffic.strategic_lane_choice`.
+    pub strategic_lane_choice: bool,
     /// **A test hook, not a model parameter.** Walks the decision pass in reverse actor
     /// order. Because the pass reads only the frozen snapshot, the published result must be
     /// bit-identical either way; that is the ADR 0004 Jacobi property, and this is how the
@@ -680,6 +687,7 @@ impl Default for EngineParams {
             heavy_turns: true,
             class_routing: true,
             time_to_teleport_s: 0.0,
+            strategic_lane_choice: false,
             reverse_order: false,
         }
     }
@@ -711,6 +719,21 @@ struct Transition {
     pull_out: bool,
 }
 
+/// The road a strategic lane change needs, per lane crossed, metres: at 11 m/s a
+/// 3 s manoeuvre (MOBIL's transition, [`crate::lanechange::mobil`]) covers 33 m, and a
+/// slower urban approach less. **A choice**, not a cited figure.
+const STRATEGIC_M_PER_CHANGE: f64 = 25.0;
+
+/// What a strategic lane change costs in the route choice, seconds per lane crossed: the
+/// driver prefers to stay in lane unless the other lane's route saves more than this.
+/// **A choice**, of the order of the lane-change duration.
+const STRATEGIC_CHANGE_COST_S: f64 = 4.0;
+
+/// How long a vehicle stands at the end of its lane, unable to make the strategic change
+/// its route needs, before it gives up and takes a route from the lane it is on, seconds.
+/// **A choice**: about two cycles of a busy neighbour lane's gaps.
+const STRATEGIC_GIVE_UP_S: f64 = 8.0;
+
 /// Below this speed a vehicle counts as standing for the gridlock timer, m/s: SUMO's
 /// waiting-time threshold (`SUMO_const_haltingSpeed`, 0.1 m/s).
 const STUCK_SPEED_MPS: f64 = 0.1;
@@ -725,6 +748,9 @@ pub struct GridlockCounters {
     pub teleported: u64,
     /// Of those, removed because no lane on the rest of the route had room.
     pub removed: u64,
+    /// Strategic lane changes given up at the end of the lane for want of a gap
+    /// ([`EngineParams::strategic_lane_choice`]).
+    pub strategic_given_up: u64,
 }
 
 /// One actor the engine drives.
@@ -1378,6 +1404,165 @@ impl NativeMobility {
         })
     }
 
+    /// [`Self::plan_route`] with strategic lane choice ([`EngineParams::strategic_lane_choice`]):
+    /// the route from each other lane of `from`'s road that the vehicle still has room to
+    /// reach from `s_m`, at [`STRATEGIC_CHANGE_COST_S`] per lane crossed, against its own
+    /// lane's. The winner is returned as `[from, <the route from the chosen lane, after its
+    /// first lane>]`: the next lane is then one the chosen lane reaches, which the decision
+    /// pass reads as a lane change to make ([`Self::strategic_pending`]).
+    #[allow(clippy::too_many_arguments)]
+    fn plan_route_strategic(
+        &self,
+        class: VehicleClass,
+        world: &World,
+        from: LaneId,
+        s_m: f64,
+        to: LaneId,
+        t: SimTime,
+        costs: &dyn crate::views::EdgeCost,
+    ) -> Option<Route> {
+        let own = self.plan_route(class, world, from, to, t, costs);
+        if !(self.params.strategic_lane_choice && self.params.lane_changes && self.along_path()) {
+            return own;
+        }
+        let lane = world.try_lane(from)?;
+        if lane.kind == LaneKind::Internal || from == to {
+            return own;
+        }
+        let room = lane.length_m - s_m;
+        let mut best: Option<(f64, Route)> = own.clone().map(|r| (r.cost_s, r));
+        let mut siblings: Vec<LaneId> = world.edge(lane.edge).lanes.clone();
+        siblings.sort_unstable();
+        for other in siblings {
+            if other == from {
+                continue;
+            }
+            let o = world.lane(other);
+            if !o.kind.is_motorised() || !o.admits(class.class_mask()) {
+                continue;
+            }
+            let crossed = f64::from(o.index.abs_diff(lane.index));
+            if room < crossed * STRATEGIC_M_PER_CHANGE {
+                continue;
+            }
+            let Some(r) = self.plan_route(class, world, other, to, t, costs) else {
+                continue;
+            };
+            if r.lanes.len() < 2 {
+                continue;
+            }
+            let cost = r.cost_s + crossed * STRATEGIC_CHANGE_COST_S;
+            if best.as_ref().is_none_or(|(c, _)| cost < *c) {
+                let mut lanes = vec![from];
+                lanes.extend(r.lanes.iter().skip(1).copied());
+                best = Some((cost, Self::route_of(world, lanes)));
+            }
+        }
+        best.map(|(_, r)| r)
+    }
+
+    /// The distance to the end of its lane, metres, of a vehicle whose route's next lane
+    /// leaves from another lane of its road: the strategic change it has still to make.
+    /// `None` when the next lane follows from its own (or the change is under way).
+    fn strategic_pending(&self, world: &World, actor: &Actor) -> Option<f64> {
+        self.strategic_target(world, actor)?;
+        let lane = world.lane(actor.lane);
+        Some((lane.length_m - actor.s_m - STOP_LINE_MARGIN_M).max(0.0))
+    }
+
+    /// The lane of its road a vehicle has to change to for its route's next lane
+    /// ([`Self::strategic_pending`]).
+    fn strategic_target(&self, world: &World, actor: &Actor) -> Option<LaneId> {
+        if actor.transition.is_some() {
+            return None;
+        }
+        let next = *actor.route.lanes.get(actor.route_index + 1)?;
+        let reaches = |l: LaneId| {
+            world
+                .successors(l)
+                .iter()
+                .any(|c| c.permitted && c.via.unwrap_or(c.to_lane) == next)
+        };
+        if reaches(actor.lane) {
+            return None;
+        }
+        let lane = world.try_lane(actor.lane)?;
+        if lane.kind == LaneKind::Internal {
+            return None;
+        }
+        world
+            .edge(lane.edge)
+            .lanes
+            .iter()
+            .copied()
+            .filter(|l| *l != actor.lane)
+            .find(|l| reaches(*l))
+    }
+
+    /// The lane change towards [`Self::strategic_target`], if the lane beside on that
+    /// side has room now: the same acceptance as a move to the kerb
+    /// ([`Self::move_to_kerb`]), on either side.
+    fn strategic_change(
+        &self,
+        world: &World,
+        mobil: &Mobil,
+        actor: &Actor,
+        ego: &VehicleView,
+        nbrs: &LaneNeighbors,
+    ) -> Option<LaneChangeDecision> {
+        let target = self.strategic_target(world, actor)?;
+        let side = if world.lane(target).index > world.lane(actor.lane).index {
+            Side::Left
+        } else {
+            Side::Right
+        };
+        let beside = nbrs.side(side)?;
+        let beside_lane = world.try_lane(beside.lane)?;
+        if beside_lane.edge != world.lane(actor.lane).edge || !beside_lane.kind.is_motorised() {
+            return None;
+        }
+        let lane_view = LaneView::of(beside_lane);
+        if let Some(l) = beside.leader {
+            if l.gap_m < ego.driver.min_gap_m {
+                return None;
+            }
+            let mut moved = *ego;
+            moved.lane = beside.lane;
+            if self.cf.accel(&moved, Some(&l), &lane_view, &self.weather)
+                < -PULL_OUT_FOLLOWER_DECEL_MPS2
+            {
+                return None;
+            }
+        }
+        if let Some(f) = beside.follower
+            && let Some(fv) = f.vehicle.as_ref()
+        {
+            if f.gap_m < fv.driver.min_gap_m {
+                return None;
+            }
+            let a = self.cf.accel(
+                fv,
+                Some(&LeaderView::of(*ego, f.gap_m)),
+                &lane_view,
+                &self.weather,
+            );
+            if a < -PULL_OUT_FOLLOWER_DECEL_MPS2 {
+                return None;
+            }
+        }
+        let lateral = 0.5 * (world.lane(actor.lane).width_m + beside_lane.width_m);
+        Some(LaneChangeDecision::Change {
+            to: beside.lane,
+            side,
+            incentive_mps2: 0.0,
+            duration: crate::lanechange::mobil::transition_duration(
+                mobil.params(),
+                lateral,
+                ego.speed_mps.max(PULL_OUT_SPEED_MPS),
+            ),
+        })
+    }
+
     /// Adds a clock model. The engine does not read it — believed time belongs to the node
     /// runtime — but holding it here keeps a scenario's mobility-side model set in one
     /// place, and it is on the manifest through this model's card.
@@ -1465,6 +1650,7 @@ impl NativeMobility {
     /// not depend on map iteration (the determinism contract).
     fn resolve_gridlock(&mut self, world: &World, t1: SimTime, gone: &[ActorId]) -> Vec<ActorId> {
         let mut removed = Vec::new();
+        self.give_up_strategic(world, t1);
         if self.params.time_to_teleport_s <= 0.0 {
             return removed;
         }
@@ -1532,6 +1718,48 @@ impl NativeMobility {
             }
         }
         removed
+    }
+
+    /// A vehicle that has stood at the end of its lane for [`STRATEGIC_GIVE_UP_S`] with a
+    /// strategic change it cannot make takes a route from the lane it is on instead, as a
+    /// driver who cannot get over goes straight on and finds another way.
+    fn give_up_strategic(&mut self, world: &World, t1: SimTime) {
+        if !self.params.strategic_lane_choice {
+            return;
+        }
+        let costs = self.costs(world);
+        let limit = secs_to_ns(STRATEGIC_GIVE_UP_S);
+        let ids: Vec<ActorId> = self.actors.keys().copied().collect();
+        // With the gridlock timer off nothing else keeps the standing clock, so it is kept
+        // here (by speed alone); with it on, `resolve_gridlock` keeps it.
+        let own_clock = self.params.time_to_teleport_s <= 0.0;
+        for id in ids {
+            let a = self.actors.get_mut(&id).expect("present");
+            if own_clock {
+                if a.speed_mps >= STUCK_SPEED_MPS {
+                    a.stuck_since = None;
+                } else {
+                    a.stuck_since.get_or_insert(t1);
+                }
+            }
+            let a = &self.actors[&id];
+            let Some(since) = a.stuck_since else {
+                continue;
+            };
+            if t1.saturating_sub(since) < limit || self.strategic_pending(world, a).is_none() {
+                continue;
+            }
+            let (lane, destination, class) = (a.lane, a.destination, a.class);
+            let route = self.plan_route(class, world, lane, destination, t1, &costs);
+            let a = self.actors.get_mut(&id).expect("present");
+            if let Some(route) = route {
+                a.route = route;
+                a.route_index = 0;
+                a.planned_at = t1;
+                a.stuck_since = None;
+                self.gridlock.strategic_given_up += 1;
+            }
+        }
     }
 
     /// How many trips were dropped because their origin was occupied or unroutable.
@@ -2033,10 +2261,11 @@ impl NativeMobility {
                 }
             }
             None => {
-                let Some(route) = self.plan_route(
+                let Some(route) = self.plan_route_strategic(
                     trip.class,
                     world,
                     trip.origin,
+                    trip.origin_s_m,
                     trip.destination,
                     trip.t,
                     edge_costs,
@@ -3255,6 +3484,16 @@ impl NativeMobility {
         let target = world.try_lane(to)?;
         let old = &actor.route.lanes;
         let dest_edge = world.try_lane(actor.destination).map(|l| l.edge);
+        // A strategic change keeps the route it was made for: the lanes after this one
+        // stay, and the next of them is reached from the target lane or from one further
+        // across ([`Self::strategic_target`]).
+        if target.edge == world.lane(actor.lane).edge
+            && self.strategic_target(world, actor).is_some()
+        {
+            let mut lanes = vec![to];
+            lanes.extend(old.iter().skip(actor.route_index + 1).copied());
+            return Some((Self::route_of(world, lanes), actor.destination));
+        }
         if old.len() <= actor.route_index + 1 && dest_edge == Some(target.edge) {
             // Changing lane on the destination road: the trip ends at the end of this lane.
             return Some((Self::route_of(world, vec![to]), to));
@@ -4366,6 +4605,17 @@ impl Mobility for NativeMobility {
                     binding_stop_line = None;
                 }
             }
+            // A strategic lane change not yet made: the route's next lane leaves from another
+            // lane of this road, so the end of this one is braked for like a stop line until
+            // the change is made ([`Self::strategic_pending`]).
+            if along && let Some(d) = self.strategic_pending(world, actor) {
+                let gap = (d + actor.driver.min_gap_m).max(0.0);
+                let before = leader;
+                leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(gap, 0.0)));
+                if leader != before {
+                    binding_stop_line = Some(d + STOP_LINE_MARGIN_M);
+                }
+            }
             // An external stop command is a virtual leader at zero gap.
             if actor.stopped_until.is_some_and(|until| t0 < until) {
                 leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(0.0, 0.0)));
@@ -4651,6 +4901,18 @@ impl Mobility for NativeMobility {
                     continue;
                 };
                 if actor.transition.is_some() || t0 < actor.cooldown_until {
+                    continue;
+                }
+                // A strategic change the route needs comes before anything discretionary,
+                // and is allowed inside the no-change zone: it is what the zone is for.
+                if self.along_path() && self.strategic_target(ctx.world(), actor).is_some() {
+                    if let Some((ego, nbrs)) = neighbours.get(&decision.actor)
+                        && actor.s_m >= actor.class.spec().length_m
+                        && let Some(change) =
+                            self.strategic_change(ctx.world(), &mobil, actor, ego, nbrs)
+                    {
+                        decision.lane_change = change;
+                    }
                     continue;
                 }
                 if self.along_path() && !self.may_consider_lane_change(ctx.world(), actor, &mobil) {
@@ -5051,11 +5313,12 @@ impl Mobility for NativeMobility {
                 .map(|a| a.id)
                 .collect();
             for id in due {
-                let (lane, destination, class) = {
+                let (lane, s_m, destination, class) = {
                     let a = &self.actors[&id];
-                    (a.lane, a.destination, a.class)
+                    (a.lane, a.s_m, a.destination, a.class)
                 };
-                let replanned = self.plan_route(class, world, lane, destination, t1, &costs);
+                let replanned =
+                    self.plan_route_strategic(class, world, lane, s_m, destination, t1, &costs);
                 let a = self.actors.get_mut(&id).expect("present");
                 a.planned_at = t1;
                 a.planned_generation = generation;
@@ -7212,6 +7475,86 @@ mod tests {
         );
         let (off, _, _) = run(0.0);
         assert_eq!(off, GridlockCounters::default(), "the timeout off still acted");
+    }
+
+    #[test]
+    fn a_driver_in_the_wrong_lane_changes_lane_for_the_turn_instead_of_going_round() {
+        // Two lanes each way, left turns from the left lane only. A trip that starts in the
+        // right lane and turns left at the first junction: with strategic lane choice the
+        // driver moves over and turns; without it the router can only send them round.
+        let world = v2xw_world::procedural::grid(
+            &GridParams {
+                lanes_per_direction: 2,
+                ..GridParams::legacy().with_size(3, 3).with_signals(false)
+            },
+            &ImportOptions::default(),
+        )
+        .expect("grid");
+        let pick = world.roads.lanes().iter().find_map(|l| {
+            if l.kind != LaneKind::Driving || l.index != 0 || l.length_m < 80.0 {
+                return None;
+            }
+            let left_of = world
+                .edge(l.edge)
+                .lanes
+                .iter()
+                .copied()
+                .find(|x| world.lane(*x).index == 1)?;
+            let turn = world
+                .successors(left_of)
+                .iter()
+                .find(|c| c.permitted && c.direction == TurnDirection::Left)?;
+            let own_turns_left = world
+                .successors(l.id)
+                .iter()
+                .any(|c| c.direction == TurnDirection::Left);
+            (!own_turns_left).then_some((l.id, left_of, turn.to_lane))
+        });
+        let (origin, left_lane, exit) = pick.expect("a right lane whose left turn is from the lane beside");
+        let run = |strategic: bool| {
+            let rng = RngRegistry::new(3);
+            let params = EngineParams {
+                strategic_lane_choice: strategic,
+                ..EngineParams::default()
+            };
+            let mut engine = engine_on(&world, params, &rng);
+            let trip = TripRequest {
+                seq: 0,
+                t: 0,
+                origin,
+                origin_s_m: 10.0,
+                destination: exit,
+                class: VehicleClass::Passenger,
+                desired_speed_mps: 11.0,
+            };
+            // Without strategic choice the trip may have no route at all from this lane.
+            let Some(id) = engine.insert_trip(&world, &trip, 0) else {
+                return (f64::INFINITY, false, None);
+            };
+            let route_m = engine.actors[&id].route.length_m;
+            let (mut on_left, mut done_at) = (false, None);
+            let mut t = 0u64;
+            while t < 120 * NS_PER_S && done_at.is_none() {
+                let mut ctx = MobilityCtx::new(t, &world, &rng);
+                let u = engine.step(&mut ctx, params.step);
+                if engine.actors.get(&id).is_some_and(|a| a.lane == left_lane) {
+                    on_left = true;
+                }
+                if u.despawned.iter().any(|(a, c)| *a == id && *c == DespawnCause::TripComplete) {
+                    done_at = Some(t);
+                }
+                t += params.step.as_nanos();
+            }
+            (route_m, on_left, done_at)
+        };
+        let (plain_m, _, _) = run(false);
+        let (strategic_m, on_left, done) = run(true);
+        assert!(on_left, "the driver never moved into the left-turn lane");
+        assert!(done.is_some(), "the strategic trip did not finish in two minutes");
+        assert!(
+            strategic_m + 50.0 < plain_m,
+            "the strategic route ({strategic_m:.0} m) is not shorter than going round ({plain_m:.0} m)"
+        );
     }
 
     #[test]

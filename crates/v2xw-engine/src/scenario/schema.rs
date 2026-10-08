@@ -149,6 +149,11 @@ pub struct Traffic {
     /// (MOBIL). On by default; off keeps every vehicle in the lane it started in.
     #[serde(default = "Traffic::yes")]
     pub lane_changes: bool,
+    /// Whether a driver picks the lane their route needs ahead of a turn and changes into
+    /// it, rather than only routing from the lane they happen to be in. On by default;
+    /// needs lane_changes.
+    #[serde(default = "Traffic::yes")]
+    pub strategic_lane_choice: bool,
     /// Whether a driver keeps out of a junction until there is room beyond it and yields to
     /// vehicles already inside it ("don't block the box"). On by default.
     #[serde(default = "Traffic::yes")]
@@ -180,6 +185,7 @@ impl Default for Traffic {
             right_turn_on_red: None,
             dynamic_rerouting: true,
             lane_changes: true,
+            strategic_lane_choice: true,
             keep_junctions_clear: true,
             gridlock_timeout_s: Traffic::DEFAULT_GRIDLOCK_TIMEOUT_S,
             signals: SignalControl::default(),

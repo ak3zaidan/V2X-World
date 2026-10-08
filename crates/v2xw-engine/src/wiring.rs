@@ -462,6 +462,7 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     }
     params.dynamic_rerouting = traffic.dynamic_rerouting;
     params.lane_changes = traffic.lane_changes;
+    params.strategic_lane_choice = traffic.strategic_lane_choice;
     params.junction_clearance = traffic.keep_junctions_clear;
     params.time_to_teleport_s = traffic.gridlock_timeout_s.max(0.0);
     // Kerbside stops follow the jurisdiction too: New York City has its taxis

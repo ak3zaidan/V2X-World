@@ -908,6 +908,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Discretionary and route lane changes (MOBIL).",
     },
     KeyStatus {
+        path: "traffic.strategic_lane_choice",
+        status: Status::Wired,
+        note: "Routes are planned from every lane of the road and the driver changes lane \
+               ahead of the turn; gives up after 8 s at the lane end without a gap.",
+    },
+    KeyStatus {
         path: "traffic.keep_junctions_clear",
         status: Status::Wired,
         note: "Do not enter a junction without room beyond it; yield to vehicles inside it.",
