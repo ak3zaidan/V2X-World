@@ -9,8 +9,8 @@
 import { useMemo, useState } from "react";
 import type { MetricHealthBand } from "@vwp/protocol";
 
-import { classify, judgedSeries } from "./health.js";
-import { HealthLine } from "./HealthBadge.js";
+import { classify, judgedLabel, judgedSeries, limitText, noteOf } from "./health.js";
+import { HealthChip } from "./HealthBadge.js";
 import { usePins } from "./pins.js";
 import {
   axisUnit,
@@ -71,7 +71,11 @@ export function Sparkline({
       if (v > hi) hi = v;
     }
     if (!Number.isFinite(lo)) return null;
-    if (hi - lo < 1e-12) {
+    // The range the line actually spans, for the axis text; the padding below is only for drawing.
+    const flat = hi - lo < 1e-12;
+    const dataLo = lo;
+    const dataHi = hi;
+    if (flat) {
       const pad = Math.abs(hi) > 0 ? Math.abs(hi) * 0.05 : 1;
       lo -= pad;
       hi += pad;
@@ -92,7 +96,7 @@ export function Sparkline({
     }
     // A lone point draws nothing as a path; give it a dot.
     const dots = observedCount(series) === 1 ? [...series.v].findIndex((v) => !Number.isNaN(v)) : -1;
-    return { d, lo, hi, sx, sy, dots };
+    return { d, lo, hi, sx, sy, dots, flat, dataLo, dataHi };
   }, [series, from, to]);
 
   if (geom === null) return <div className="mcard-plot" />;
@@ -118,7 +122,7 @@ export function Sparkline({
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
         role="img"
-        aria-label={`${label} over simulated time, ${formatNumber(geom.lo)} to ${formatNumber(geom.hi)} ${axisUnit(unit)}`}
+        aria-label={`${label} over simulated time, ${formatNumber(geom.dataLo)} to ${formatNumber(geom.dataHi)} ${axisUnit(unit)}`}
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >
@@ -150,7 +154,7 @@ export function Sparkline({
             <span>{formatNumber(from)} s</span>
             <span className="grow" />
             <span title="The range of the line">
-              {formatNumber(geom.lo)}–{formatNumber(geom.hi)}
+              {geom.flat ? `constant ${formatNumber(geom.dataLo)}` : `${formatNumber(geom.dataLo)}–${formatNumber(geom.dataHi)}`}
               {unitSuffix(unit) === "" ? "" : ` ${unitSuffix(unit)}`}
             </span>
             <span className="grow" />
@@ -251,15 +255,26 @@ export function MetricCard({
         // The title is the keyboard's way in; the body is a larger target for the pointer.
         <div className="mcard-body" onClick={() => onOpen(f)} data-testid={`metric-body-${f.base}`}>
           {headline !== null ? (
-            <div className="mcard-value">
+            <div className="mcard-value" title="The newest window's value">
               <span className="mcard-num" data-testid={`metric-value-${f.base}`}>
                 {formatNumber(latest)}
               </span>
               <span className="mcard-unit">{unitSuffix(f.unit) === "" ? axisUnit(f.unit) : f.unit}</span>
-              <span className="dim mcard-when">newest window</span>
+              {band && level ? <HealthChip band={band} level={level} unit={f.unit} testId={`metric-health-${f.base}`} /> : null}
+            </div>
+          ) : headline === null && band && level ? (
+            <HealthChip band={band} level={level} unit={f.unit} testId={`metric-health-${f.base}`} />
+          ) : null}
+          {band && level && (level !== "healthy" || judgedLabel(band) !== "") ? (
+            <div className={`mcard-verdict ${level}`} title={noteOf(band, level)}>
+              {judgedLabel(band) !== "" ? (
+                <span>
+                  {judgedLabel(band)} <strong className="mono">{formatWithUnit(judgedValue, f.unit)}</strong> ·{" "}
+                </span>
+              ) : null}
+              {limitText(band, level, f.unit)}
             </div>
           ) : null}
-          {band && level ? <HealthLine band={band} value={judgedValue} unit={f.unit} compact testId={`metric-health-${f.base}`} /> : null}
           {hasLine && series ? (
             <Sparkline series={series} from={0} to={Math.max(overview.toS, series.t.length > 0 ? series.t[series.t.length - 1] : 0)} unit={f.unit} label={f.label} band={band && band.judged === "" ? band : null} />
           ) : (

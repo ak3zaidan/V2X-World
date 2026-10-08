@@ -16,6 +16,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 
 import { useStudio } from "../state/store.js";
+import { statLabel } from "./health.js";
 import { slotColour } from "./tokens.js";
 import { axisUnit, decimate, formatNumber, formatWithUnit, type Series } from "./model.js";
 import { axisTime, axisTimeSplits } from "../lib/format.js";
@@ -69,7 +70,7 @@ export function MainChart({
   onReset: () => void;
   onPlot?: (plot: uPlot | null) => void;
   /** A health band to shade behind the lines: caution in amber, unhealthy in red-orange (`metrics/health.ts`). */
-  band?: { readonly better: "lower" | "higher"; readonly caution: number; readonly unhealthy: number } | null;
+  band?: { readonly better: "lower" | "higher"; readonly caution: number; readonly unhealthy: number; readonly judged?: string } | null;
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement | null>(null);
   const plot = useRef<uPlot | null>(null);
@@ -177,26 +178,67 @@ export function MainChart({
             const yMin = u.scales.y.min ?? 0;
             const yMax = u.scales.y.max ?? 1;
             if (b.better === "lower") {
-              zone(b.caution, b.unhealthy, warn, 0.1);
-              zone(b.unhealthy, Math.max(yMax, b.unhealthy), err, 0.12);
+              zone(b.caution, b.unhealthy, warn, 0.06);
+              zone(b.unhealthy, Math.max(yMax, b.unhealthy), err, 0.08);
             } else {
-              zone(b.unhealthy, b.caution, warn, 0.1);
-              zone(Math.min(yMin, b.unhealthy), b.unhealthy, err, 0.12);
+              zone(b.unhealthy, b.caution, warn, 0.06);
+              zone(Math.min(yMin, b.unhealthy), b.unhealthy, err, 0.08);
             }
+          },
+        ],
+        // Each threshold, over the lines: a faint dashed line labelled at the plot's right edge on
+        // the side of the zone it opens ("caution 500", "unhealthy 600 · p99"), so the band reads
+        // without a legend. Drawn after the grid, which would otherwise cover a line on a tick.
+        draw: [
+          (u) => {
+            const b = bandRef.current;
+            if (!b) return;
+            const ctx = u.ctx;
+            const { left, top, width: bw, height: bh } = u.bbox;
+            const warn = cssVar("--warn", "#e69f00");
+            const err = cssVar("--err", "#d55e00");
+            const panel = cssVar("--bg-panel", "#111820");
+            const yMin = u.scales.y.min ?? 0;
+            const yMax = u.scales.y.max ?? 1;
+            const px = uPlot.pxRatio;
+            const stat = statLabel(b.judged ?? "");
             ctx.save();
-            ctx.setLineDash([4, 4]);
-            ctx.lineWidth = 1;
-            for (const [v, colour] of [
-              [b.caution, warn],
-              [b.unhealthy, err],
+            ctx.lineWidth = px;
+            ctx.font = `600 ${10 * px}px ${cssVar("--sans", "system-ui")}`;
+            ctx.textAlign = "right";
+            ctx.textBaseline = "alphabetic";
+            const placed: number[] = [];
+            for (const [v, colour, name] of [
+              [b.caution, warn, "caution"],
+              [b.unhealthy, err, "unhealthy"],
             ] as const) {
               if (v < yMin || v > yMax) continue;
               const py = Math.round(u.valToPos(v, "y", true)) + 0.5;
+              ctx.setLineDash([4 * px, 4 * px]);
+              ctx.globalAlpha = 0.75;
               ctx.strokeStyle = colour;
               ctx.beginPath();
               ctx.moveTo(left, py);
               ctx.lineTo(left + bw, py);
               ctx.stroke();
+              // The zone opens above the line when lower is better, below it otherwise; a label
+              // with no room on that side, or on top of the other label, goes on the other.
+              const up = py - 4 * px;
+              const down = py + 12 * px;
+              let ty = b.better === "lower" ? up : down;
+              if (ty < top + 10 * px || placed.some((q) => Math.abs(q - ty) < 12 * px)) ty = ty === up ? down : up;
+              if (ty > top + bh - 2 * px) ty = up;
+              placed.push(ty);
+              const text = `${name} ${formatNumber(v)}${stat !== "" ? ` · ${stat}` : ""}`;
+              const w = ctx.measureText(text).width;
+              const x = left + bw - 6 * px;
+              ctx.setLineDash([]);
+              ctx.globalAlpha = 0.85;
+              ctx.fillStyle = panel;
+              ctx.fillRect(x - w - 4 * px, ty - 10 * px, w + 8 * px, 13 * px);
+              ctx.globalAlpha = 1;
+              ctx.fillStyle = colour;
+              ctx.fillText(text, x, ty);
             }
             ctx.restore();
           },
@@ -224,7 +266,7 @@ export function MainChart({
       onPlot?.(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shape, unit, theme, height, band === null ? "" : `${band.better}:${band.caution}:${band.unhealthy}`]);
+  }, [shape, unit, theme, height, band === null ? "" : `${band.better}:${band.caution}:${band.unhealthy}:${band.judged ?? ""}`]);
 
   useEffect(() => {
     plot.current?.setSize({ width, height });

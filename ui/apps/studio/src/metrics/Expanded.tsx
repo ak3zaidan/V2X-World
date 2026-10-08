@@ -1,6 +1,14 @@
 /**
- * One metric, expanded: a large chart with a time brush, the statistics of the range in view,
- * every breakdown the metric supports, what the metric is and where it comes from, and export.
+ * One metric, expanded, laid out for a researcher scanning fast:
+ *
+ *   1. the headline: name, the newest value large with its unit and a health chip, and one short
+ *      line of verdict ("Above 600 ms limit · unhealthy 83 % of run · worst 834 ms at 17 s");
+ *   2. the chart, full width, with the health band shaded and labelled on its edge, a hover
+ *      readout, drag to zoom and a time brush under it;
+ *   3. one compact strip of statistics over the range in view;
+ *   4. related metrics as a row of chips, then the breakdowns the metric has (none: no section);
+ *   5. "About this metric", collapsed: a one-sentence definition, and inside it the thresholds and
+ *      their source, unit, visibility, the model and what the metric does not account for.
  *
  * With a second run open for comparison (the Compare panel, an engine on another port) the chart
  * overlays the two runs, on the same simulated time, and the statistics say how they differ.
@@ -14,8 +22,8 @@ import { closePanel } from "../shell/route.js";
 import { useStudio } from "../state/store.js";
 import { BreakdownSection, type Range } from "./Breakdown.js";
 import { Brush, MainChart, type ChartLine } from "./Chart.js";
-import { judge, judgedSeries, LEVEL_LABEL, whenText } from "./health.js";
-import { BandTable, HealthLine } from "./HealthBadge.js";
+import { classify, judge, judgedLabel, judgedSeries, verdictParts, type HealthLevel } from "./health.js";
+import { BandTable, HealthChip } from "./HealthBadge.js";
 import { slotColour } from "./tokens.js";
 import { sideBAvailable } from "./data.js";
 import { chartPng, download, downloadCsv, fileName } from "./exporting.js";
@@ -74,6 +82,14 @@ function initialSelection(f: MetricFamily, requested: string | null): string[] {
   return f.values.slice(0, 4).map((v) => v.series);
 }
 
+/** The first sentence of a definition, for the collapsed "About" line. */
+function firstSentence(text: string): string {
+  const para = text.split(/\n\s*\n/)[0]?.trim() ?? "";
+  // A full stop that ends a sentence: followed by a space and a capital, or the paragraph's end.
+  const m = /^([\s\S]*?[.!?])(?:\s+(?=[A-Z(`])|$)/.exec(para);
+  return (m ? m[1] : para).replace(/\s+/g, " ");
+}
+
 const MAX_LINES = 8;
 
 /** One identity for "no filter", so a hook keyed on it does not see a new object every render. */
@@ -115,12 +131,28 @@ export function Expanded({
     setNote(null);
   }, [f.base]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // An export's note is a confirmation, not a fixture: it goes after a few seconds.
+  useEffect(() => {
+    if (note === null) return;
+    const t = setTimeout(() => setNote(null), 6000);
+    return () => clearTimeout(t);
+  }, [note]);
+
   const bReady = compareView !== null && compareView.state === "ready" && sideBAvailable();
   const comparing = overlay && bReady;
   // Comparing overlays one series of each run: two runs × several series is a legend nobody reads.
   const lines = useMemo(() => (comparing ? selected.slice(0, 1) : selected), [comparing, selected]);
   const a = useFullSeries(lines, active);
   const b = useFullSeries(comparing ? lines : [], active && comparing, "b");
+
+  // The series the headline value is read from: the one the health band judges, else the first drawn.
+  const band = f.health;
+  const judgedName = band ? judgedSeries(f.base, band) : null;
+  const judgedReported = judgedName !== null && seriesOf(f).includes(judgedName);
+  const heroName = judgedReported ? (judgedName as string) : (lines[0] ?? f.headline ?? seriesOf(f)[0] ?? f.base);
+  const heroNames = useMemo(() => [heroName], [heroName]);
+  const hero = useFullSeries(heroNames, active);
+  const heroSeries = hero.series.get(heroName) ?? a.series.get(heroName) ?? EMPTY_SERIES;
 
   // The time the run has reached, and the range in view.
   const lastA = Math.max(0, ...lines.map((n) => lastT(a.series.get(n))));
@@ -145,11 +177,7 @@ export function Expanded({
     return out;
   }, [lines, comparing, a.series, b.series, f]);
 
-  const stats = useMemo(
-    () =>
-      chartLines.map((l) => ({ line: l, stats: rangeStats(l.series, from, to) })),
-    [chartLines, from, to],
-  );
+  const stats = useMemo(() => chartLines.map((l) => ({ line: l, stats: rangeStats(l.series, from, to) })), [chartLines, from, to]);
   const hasData = chartLines.some((l) => observedCount(l.series) > 0);
   // With no window to draw, whether anything was measured at all: a metric too thin to report in
   // any one window (fewer samples than its minimum) can still pool to a value over the run, which
@@ -187,7 +215,7 @@ export function Expanded({
     const units = chartLines.map(() => f.unit);
     const csv = seriesCsv(names, units, chartLines.map((l) => l.series), from, to);
     downloadCsv(fileName([f.base, `${formatNumber(from)}-${formatNumber(to)}s`], "csv"), csv);
-    setNote(`CSV saved: ${chartLines.length} series at the engine's full resolution, ${formatNumber(from)}–${formatNumber(to)} s.`);
+    setNote(`CSV saved: ${chartLines.length} series, full resolution, ${formatNumber(from)}–${formatNumber(to)} s.`);
   };
   const exportPng = async (): Promise<void> => {
     const p = plotRef.current;
@@ -220,43 +248,54 @@ export function Expanded({
 
   const group = GROUPS.find((g) => g.id === f.group);
   const all = seriesOf(f);
+  const windows = [60, 600, 3600].filter((w) => extent > w * 1.5);
+  const wholeRun = route.from === null && route.to === null;
 
   return (
     <div className="mx" data-testid="metric-expanded" data-metric={f.base}>
-      <div className="mx-head">
-        <button type="button" className="small" onClick={onBack} data-testid="metric-back" title="Back to all metrics (Esc)">
+      <div className="mx-topbar">
+        <button type="button" className="mx-back" onClick={onBack} data-testid="metric-back" title="Back to all metrics (Esc)">
           ← All metrics
         </button>
-        <div className="mx-title">
-          <h3>{f.label}</h3>
-          <span className="mono dim">{f.base}</span>
-          <span className="dim">· {group?.label}</span>
-          {f.groundTruth ? <span className="gt-tag">GT</span> : null}
-        </div>
+        {group ? <span className="mx-crumb">/ {group.label}</span> : null}
         <span className="grow" />
-        <button type="button" className={`small${pinned ? " active" : ""}`} aria-pressed={pinned} onClick={() => togglePin(f.base)} data-testid="metric-pin-expanded">
-          {pinned ? "★ Pinned" : "☆ Pin"}
-        </button>
-        <button type="button" className={`small${table ? " active" : ""}`} aria-pressed={table} onClick={() => setTable((t) => !t)} data-testid="metric-table-toggle" disabled={!hasData}>
-          Table
-        </button>
-        <button type="button" className="small" onClick={exportCsv} data-testid="metric-export-csv" disabled={!hasData} title="The series in view at the engine's full resolution">
-          CSV
-        </button>
-        <button type="button" className="small" onClick={() => void exportPng()} data-testid="metric-export-png" disabled={!hasData} title="The chart as an image, titled">
-          PNG
-        </button>
-        <button type="button" className="small" onClick={copyLink} data-testid="metric-copy-link" title="Copy a link to this chart over this range">
-          Link
-        </button>
+        {note !== null ? (
+          <span className="mx-note" role="status" data-testid="metric-note">
+            {note}
+          </span>
+        ) : null}
+        <div className="mx-actions" role="toolbar" aria-label="Metric actions">
+          <button
+            type="button"
+            className={`mx-act pin${pinned ? " on" : ""}`}
+            aria-pressed={pinned}
+            onClick={() => togglePin(f.base)}
+            data-testid="metric-pin-expanded"
+            title={pinned ? "Unpin from the dashboard" : "Pin to the top of the dashboard"}
+          >
+            {pinned ? "★ Pinned" : "☆ Pin"}
+          </button>
+          <span className="mx-act-group">
+            <button type="button" className={`mx-act${table ? " on" : ""}`} aria-pressed={table} onClick={() => setTable((t) => !t)} data-testid="metric-table-toggle" disabled={!hasData} title="Show every window's value as a table">
+              Table
+            </button>
+            <button type="button" className="mx-act" onClick={exportCsv} data-testid="metric-export-csv" disabled={!hasData} title="Download the series in view at the engine's full resolution">
+              CSV
+            </button>
+            <button type="button" className="mx-act" onClick={() => void exportPng()} data-testid="metric-export-png" disabled={!hasData} title="Download the chart as a titled image">
+              PNG
+            </button>
+            <button type="button" className="mx-act" onClick={copyLink} data-testid="metric-copy-link" title="Copy a link to this chart over this range">
+              Link
+            </button>
+          </span>
+        </div>
       </div>
-      {note !== null ? (
-        <p className="mx-note dim" role="status" data-testid="metric-note">
-          {note}
-        </p>
-      ) : null}
 
-      <div className="mx-controls">
+      <Headline f={f} seriesName={heroName} series={heroSeries} judged={judgedReported} extent={extent} />
+
+      <section className="mx-plot" aria-label="Chart">
+      <div className="mx-toolbar">
         {all.length > 1 ? (
           <div className="mx-chips" role="group" aria-label="Series to draw">
             {all.map((n) => {
@@ -265,7 +304,7 @@ export function Expanded({
                 <button
                   key={n}
                   type="button"
-                  className={`chip${on ? " on" : ""}`}
+                  className={`mx-chip${on ? " on" : ""}`}
                   aria-pressed={on}
                   onClick={() => toggleSeries(n)}
                   data-testid={`metric-series-${n}`}
@@ -285,30 +324,27 @@ export function Expanded({
             Overlay run B
           </label>
         ) : null}
+        <div className="mx-range" role="group" aria-label="Time range">
+          <span className="mx-seg">
+            <button type="button" className={wholeRun ? "on" : ""} aria-pressed={wholeRun} onClick={resetRange} data-testid="metric-range-all">
+              Whole run
+            </button>
+            {windows.map((w) => (
+              <button key={w} type="button" onClick={() => setRoute({ from: Math.max(0, extent - w), to: null })}>
+                Last {w < 3600 ? `${w / 60 >= 1 ? `${w / 60} min` : `${w} s`}` : "hour"}
+              </button>
+            ))}
+          </span>
+          <span className="mx-range-text" data-testid="metric-range-text" title="Drag across the chart or the strip under it to zoom; double-click the chart for the whole run.">
+            {formatNumber(from)}–{formatNumber(to)} s of {formatNumber(extent)} s{following && run.state === "running" ? ", following the run" : ""}
+          </span>
+        </div>
       </div>
-
-      <div className="mx-range" role="group" aria-label="Time range">
-        <button type="button" className={`small${route.from === null && route.to === null ? " active" : ""}`} onClick={resetRange} data-testid="metric-range-all">
-          Whole run
-        </button>
-        {[60, 600, 3600].filter((w) => extent > w * 1.5).map((w) => (
-          <button key={w} type="button" className="small" onClick={() => setRoute({ from: Math.max(0, extent - w), to: null })}>
-            Last {w < 3600 ? `${w / 60 >= 1 ? `${w / 60} min` : `${w} s`}` : "hour"}
-          </button>
-        ))}
-        <span className="dim" data-testid="metric-range-text">
-          {formatNumber(from)}–{formatNumber(to)} s of {formatNumber(extent)} s{following && run.state === "running" ? ", following the run" : ""}
-        </span>
-        <span className="grow" />
-        <span className="dim">Drag across the chart or the strip below to zoom; double-click for the whole run.</span>
-      </div>
-
-      {f.health ? <HealthVerdict f={f} active={active} /> : null}
 
       {hasData ? (
         <>
           <MainChart
-            band={f.health && chartLines.some((l) => l.name === judgedSeries(f.base, f.health!)) ? f.health : null}
+            band={band && chartLines.some((l) => l.name === judgedName) ? band : null}
             lines={chartLines}
             from={from}
             to={to}
@@ -322,63 +358,52 @@ export function Expanded({
           <Brush series={chartLines[0]?.series ?? null} extent={extent} from={from} to={to} onRange={setRange} onReset={resetRange} />
         </>
       ) : (
-        <p className="mx-empty dim" data-testid="metric-expanded-empty">
+        <p className="mx-empty" data-testid="metric-expanded-empty">
           {a.status === "loading"
             ? "Asking the engine for this metric's full series…"
             : lines.some((n) => a.refused.has(n))
               ? "The engine refused this measurement for this session. A node-profile session sees no ground truth."
               : pooledSamples > 0
-                ? `No single window had enough samples to report a value — each needs the metric's minimum sample count — but the engine measured ${pooledSamples.toLocaleString("en-US")} samples ${dimLabel(f.breakdowns[0] ?? "").toLowerCase()} over this range. The breakdowns below pool them. A denser or longer run gives the chart windows of its own.`
+                ? `No single window had enough samples to report a value, but the engine measured ${pooledSamples.toLocaleString("en-US")} samples ${dimLabel(f.breakdowns[0] ?? "").toLowerCase()} over this range. The breakdowns below pool them; a denser or longer run gives the chart windows of its own.`
                 : run.state === "finished"
                   ? "The run finished without producing this measurement: nothing in the scenario exercised it."
                   : "No window has had enough samples of this measurement yet. The chart appears once one has."}
         </p>
       )}
+      </section>
 
-      {hasData ? <StatsTable rows={stats} unit={f.unit} comparing={comparing} from={from} to={to} /> : null}
+      {hasData ? <StatsStrip rows={stats} unit={f.unit} comparing={comparing} from={from} to={to} /> : null}
 
       {table && hasData ? <ValueTable lines={chartLines} unit={f.unit} from={from} to={to} /> : null}
 
-      <div className="mx-sections">
-        <div className="mx-breakdowns">
+      {related.length > 0 ? (
+        <nav className="mx-related" aria-label="Related metrics" data-testid="metric-related">
+          <span className="mx-label">Related</span>
+          {related.map((r) => (
+            <button
+              key={r.base}
+              type="button"
+              className="mx-chip"
+              onClick={() => setRoute({ metric: r.base, breakdown: null })}
+              title={`${r.definition === "" ? r.label : firstSentence(r.definition)} (over the same range)`}
+              data-testid={`metric-related-${r.base}`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </nav>
+      ) : null}
+
+      {f.breakdowns.length > 0 ? (
+        <section className="mx-breakdowns" aria-label="Breakdowns">
           <h4 className="mx-h">Breakdowns</h4>
-          {f.breakdowns.length > 0 ? (
-            f.breakdowns.map((d) => <BreakdownSection key={d} f={f} dim={d} range={range} active={active} highlighted={route.breakdown === d} />)
-          ) : (
-            <p className="dim bd-note">This metric has no breakdown: the engine measures it for the whole run only.</p>
-          )}
-          {rat !== null && f.group !== "traffic" && f.group !== "simulator" ? (
-            <p className="dim bd-note" data-testid="metric-technology">
-              By radio technology: this run is all <code>{rat}</code>. The engine runs one technology per run (<code>radio.rat</code>), as a
-              deployment does on one channel. To compare technologies, run the scenario with each and overlay the two runs here (Compare,
-              then Overlay run B).
-            </p>
-          ) : null}
-        </div>
-        <div className="mx-side">
-          {related.length > 0 ? (
-            <nav className="mx-related" aria-label="Related metrics" data-testid="metric-related">
-              <h4 className="mx-h">Next to look at</h4>
-              <p className="dim">Over the same range.</p>
-              <div className="mx-related-list">
-                {related.map((r) => (
-                  <button
-                    key={r.base}
-                    type="button"
-                    className="small"
-                    onClick={() => setRoute({ metric: r.base, breakdown: null })}
-                    title={r.definition}
-                    data-testid={`metric-related-${r.base}`}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </div>
-            </nav>
-          ) : null}
-          <About f={f} latest={lines.length > 0 ? latestOf(a.series.get(lines[0]) ?? EMPTY_SERIES) : null} />
-        </div>
-      </div>
+          {f.breakdowns.map((d) => (
+            <BreakdownSection key={d} f={f} dim={d} range={range} active={active} highlighted={route.breakdown === d} />
+          ))}
+        </section>
+      ) : null}
+
+      <About f={f} rat={rat} latest={latestOf(heroSeries)} judgedName={judgedName} judgedReported={judgedReported} />
     </div>
   );
 }
@@ -387,9 +412,74 @@ function lastT(s: Series | undefined): number {
   return s && s.t.length > 0 ? s.t[s.t.length - 1] : 0;
 }
 
-const STAT_KEYS = ["min", "mean", "p50", "p95", "p99", "max"] as const;
+/**
+ * The headline: the metric's name, its newest value large with its unit, a health chip and one
+ * short verdict line. Without a health band, the value and when it was measured.
+ */
+function Headline({
+  f,
+  seriesName,
+  series,
+  judged,
+  extent,
+}: {
+  f: MetricFamily;
+  seriesName: string;
+  series: Series;
+  judged: boolean;
+  extent: number;
+}): React.JSX.Element {
+  const band = f.health;
+  const latest = latestOf(series);
+  const level: HealthLevel | null = band && judged ? classify(band, latest) : null;
+  const j = useMemo(() => (band && judged ? judge(f.base, f.unit, band, series, f.label) : null), [band, judged, f.base, f.unit, f.label, series]);
+  const stat = band && judged ? judgedLabel(band) : seriesName === f.base ? "" : seriesLabel(f, seriesName);
+  const whole = useMemo(() => (level === null ? rangeStats(series, 0, Math.max(extent, lastT(series))) : null), [level, series, extent]);
+  let parts: string[] = [];
+  if (band && level !== null) parts = verdictParts(band, level, f.unit, j);
+  else if (latest !== null) {
+    parts = [`newest window at ${formatNumber(lastT(series))} s`];
+    if (whole) parts.push(`run mean ${formatWithUnit(whole.mean, f.unit)}`, `max ${formatWithUnit(whole.max, f.unit)}`);
+  }
+  const unit = unitSuffix(f.unit);
+  return (
+    <header className="mx-headline">
+      <div className="mx-name">
+        <h3>{f.label}</h3>
+        <span className="mono mx-base">{f.base}</span>
+        {f.groundTruth ? (
+          <span className="gt-tag" title="Ground truth: the simulator knows it; no deployed device could measure it">
+            GT
+          </span>
+        ) : null}
+      </div>
+      {latest !== null ? (
+        <>
+          <div className="mx-reading">
+            <span className="mx-value" data-testid="metric-hero-value" title={`The newest window of ${seriesName}`}>
+              {formatNumber(latest)}
+            </span>
+            {unit !== "" ? <span className="mx-unit">{unit}</span> : null}
+            {stat !== "" ? <span className="mx-stat">{stat}</span> : null}
+            {band && level !== null ? <HealthChip band={band} level={level} unit={f.unit} testId="metric-health-now" large /> : null}
+          </div>
+          <p className="mx-verdict" data-testid="metric-health-run">
+            {parts.map((p, i) => (
+              <span key={i} className={i === 0 && level !== null ? `lead ${level}` : undefined}>
+                {p}
+              </span>
+            ))}
+          </p>
+        </>
+      ) : null}
+    </header>
+  );
+}
 
-function StatsTable({
+const STAT_KEYS = ["mean", "min", "p50", "p95", "p99", "max"] as const;
+
+/** One compact strip of statistics per drawn series over the range in view; the caveat is in the ⓘ. */
+function StatsStrip({
   rows,
   unit,
   comparing,
@@ -403,37 +493,45 @@ function StatsTable({
   to: number;
 }): React.JSX.Element {
   const delta = comparing && rows.length === 2 && rows[0].stats && rows[1].stats ? { a: rows[0].stats, b: rows[1].stats } : null;
+  const explain = `Over ${formatNumber(from)}–${formatNumber(to)} s, in ${unitSuffix(unit) === "" ? axisUnit(unit) : unit}. These are statistics of the values the engine reported per window (one per metric period): for a delay, the spread of the windows' means, not of individual messages; the p95 series is the per-message percentile. Computed from the full series, not from what is drawn.`;
+  const multi = rows.length > 1;
   return (
     <div className="mx-stats">
-      <table className="bd-table" data-testid="metric-stats">
+      <table className="mx-stats-table" data-testid="metric-stats">
         <thead>
           <tr>
-            <th data-testid="metric-stats-unit">series · {axisUnit(unit)}</th>
-            <th title="Windows in the range that carry a value">windows</th>
+            <th className="lbl" data-testid="metric-stats-unit">
+              {multi ? "series" : "range"} · {axisUnit(unit)}
+              <span className="mx-info" tabIndex={0} title={explain} aria-label={explain} data-testid="metric-stats-info">
+                i
+              </span>
+            </th>
             {STAT_KEYS.map((k) => (
               <th key={k}>{k}</th>
             ))}
+            <th title="Windows in the range that carry a value">windows</th>
           </tr>
         </thead>
         <tbody>
           {rows.map(({ line, stats }) => (
             <tr key={line.name} data-testid={`metric-stats-${line.name}`}>
-              <td>
+              <td className="lbl">
                 <i className="key" style={{ background: slotColour(line.slot) }} />
                 {line.label}
               </td>
-              <td className="mono">{stats ? stats.n.toLocaleString("en-US") : "0"}</td>
               {STAT_KEYS.map((k) => (
                 <td key={k} className="mono" data-stat={k}>
                   {stats ? formatNumber(stats[k]) : "—"}
                 </td>
               ))}
+              <td className="mono dim" data-stat="n">
+                {stats ? stats.n.toLocaleString("en-US") : "0"}
+              </td>
             </tr>
           ))}
           {delta ? (
             <tr className="delta">
-              <td>run B − this run</td>
-              <td />
+              <td className="lbl">run B − this run</td>
               {STAT_KEYS.map((k) => {
                 const d = delta.b[k] - delta.a[k];
                 return (
@@ -443,15 +541,11 @@ function StatsTable({
                   </td>
                 );
               })}
+              <td />
             </tr>
           ) : null}
         </tbody>
       </table>
-      <p className="dim bd-note">
-        Over {formatNumber(from)}–{formatNumber(to)} s, in {unitSuffix(unit) === "" ? axisUnit(unit) : unit}. These are statistics of the values the engine reported per window (one
-        per metric period): for a delay, the spread of the windows&apos; means, not of individual messages — the p95 series is the per-message percentile. Computed from the full series,
-        not from what is drawn.
-      </p>
     </div>
   );
 }
@@ -500,63 +594,41 @@ function ValueTable({ lines, unit, from, to }: { lines: readonly ChartLine[]; un
 }
 
 /** Inline Markdown the catalogue's definitions use: `code` spans, and paragraphs. */
-function MarkdownLite({ text }: { text: string }): React.JSX.Element {
+function MarkdownLite({ text, inline = false }: { text: string; inline?: boolean }): React.JSX.Element {
+  const spans = (p: string): React.JSX.Element[] =>
+    p.split(/(`[^`]+`)/).map((part, j) =>
+      part.startsWith("`") && part.endsWith("`") && part.length > 1 ? <code key={j}>{part.slice(1, -1)}</code> : <span key={j}>{part}</span>,
+    );
+  if (inline) return <>{spans(text)}</>;
   return (
     <>
       {text
         .split(/\n\s*\n/)
         .filter((p) => p.trim() !== "")
         .map((p, i) => (
-          <p key={i}>
-            {p.split(/(`[^`]+`)/).map((part, j) =>
-              part.startsWith("`") && part.endsWith("`") && part.length > 1 ? <code key={j}>{part.slice(1, -1)}</code> : <span key={j}>{part}</span>,
-            )}
-          </p>
+          <p key={i}>{spans(p)}</p>
         ))}
     </>
   );
 }
 
 /**
- * Whether this metric is healthy: its newest judged value with the one-line reason, how the run
- * as a whole fared against the band, and the band itself with its source.
+ * What the metric is, collapsed to one sentence: open, the whole definition, the health
+ * thresholds with their source, the facts a methods section needs, and what it leaves out.
  */
-function HealthVerdict({ f, active }: { f: MetricFamily; active: boolean }): React.JSX.Element | null {
-  const band = f.health;
-  const name = band ? judgedSeries(f.base, band) : "";
-  const names = useMemo(() => (band && seriesOf(f).includes(name) ? [name] : []), [band, f, name]);
-  const full = useFullSeries(names, active && names.length > 0);
-  if (!band) return null;
-  if (names.length === 0) {
-    return (
-      <section className="mx-health" data-testid="metric-health">
-        <p className="dim">
-          This metric has a published healthy range, judged on <code>{name}</code>, which this engine does not report.
-        </p>
-        <BandTable band={band} unit={f.unit} />
-      </section>
-    );
-  }
-  const s = full.series.get(name) ?? EMPTY_SERIES;
-  const j = judge(f.base, f.unit, band, s, f.label);
-  return (
-    <section className="mx-health" data-testid="metric-health">
-      {j === null ? (
-        <p className="dim">No window has reported a value to judge yet.</p>
-      ) : (
-        <>
-          <HealthLine band={band} value={latestOf(s)} unit={f.unit} testId="metric-health-now" />
-          <p className="dim mx-health-run" data-testid="metric-health-run">
-            Whole run so far: mean {formatWithUnit(j.mean, f.unit)} ({LEVEL_LABEL[j.level].toLowerCase()}); {whenText(j)}.
-          </p>
-        </>
-      )}
-      <BandTable band={band} unit={f.unit} />
-    </section>
-  );
-}
-
-function About({ f, latest }: { f: MetricFamily; latest: number | null }): React.JSX.Element {
+function About({
+  f,
+  rat,
+  latest,
+  judgedName,
+  judgedReported,
+}: {
+  f: MetricFamily;
+  rat: string | null;
+  latest: number | null;
+  judgedName: string | null;
+  judgedReported: boolean;
+}): React.JSX.Element {
   const provenance = useStudio((s) => s.metricProvenance);
   const name = f.headline ?? seriesOf(f)[0] ?? f.base;
   // The inspector's Why tab: the model, its version and the parameter set that produced this
@@ -565,45 +637,69 @@ function About({ f, latest }: { f: MetricFamily; latest: number | null }): React
     useStudio.getState().setWhy(metricSubject(name, latest, f.unit, provenance[name]));
     closePanel();
   };
+  const definition = f.definition === "" ? "The engine published no definition for this metric." : f.definition;
+  const lead = firstSentence(definition);
   return (
-    <section className="mx-about" data-testid="metric-about" aria-label="What this metric is">
-      <h4 className="mx-h">What it is</h4>
-      <MarkdownLite text={f.definition === "" ? "The engine published no definition for this metric." : f.definition} />
-      <button type="button" className="small" onClick={why} data-testid="metric-why" title="Close the metrics and show, in the inspector, the model, version and parameters behind this measurement">
-        Which model produced it
-      </button>
-      <dl>
-        <dt>Unit</dt>
-        <dd>{axisUnit(f.unit)}</dd>
-        <dt>Reduced by</dt>
-        <dd className="mono">{f.agg || "—"}</dd>
-        <dt>Visibility</dt>
-        <dd>
-          {f.groundTruth
-            ? "Ground truth: the simulator knows it; no deployed device could measure it."
-            : "Node: what a deployed device could measure itself."}
-        </dd>
-        <dt>Source</dt>
-        <dd data-testid="metric-source">{f.source ?? "The engine cites no source for this metric."}</dd>
-        {f.breakdowns.length > 0 ? (
-          <>
-            <dt>Broken down</dt>
-            <dd>{f.breakdowns.map((d) => dimLabel(d).replace(/^By /, "by ")).join(", ")}</dd>
-          </>
+    <details className="mx-about" data-testid="metric-about">
+      <summary data-testid="metric-about-toggle">
+        <span className="mx-about-title">About this metric</span>
+        <span className="mx-about-lead">
+          <MarkdownLite text={lead} inline />
+        </span>
+      </summary>
+      <div className="mx-about-body">
+        <div className="mx-about-def">
+          <MarkdownLite text={definition} />
+        </div>
+        {f.health ? (
+          <div className="mx-about-band">
+            {!judgedReported && judgedName !== null ? (
+              <p className="dim">
+                The healthy range is judged on <code>{judgedName}</code>, which this engine does not report.
+              </p>
+            ) : null}
+            <BandTable band={f.health} unit={f.unit} />
+          </div>
         ) : null}
-        <dt>Series</dt>
-        <dd className="mono">{seriesOf(f).join(", ")}</dd>
-      </dl>
-      {f.notAccounted.length > 0 ? (
-        <>
-          <h5>What it does not account for</h5>
-          <ul>
-            {f.notAccounted.map((n) => (
-              <li key={n}>{n}</li>
-            ))}
-          </ul>
-        </>
-      ) : null}
-    </section>
+        <dl>
+          <dt>Unit</dt>
+          <dd>{axisUnit(f.unit)}</dd>
+          <dt>Reduced by</dt>
+          <dd className="mono">{f.agg || "—"}</dd>
+          <dt>Visibility</dt>
+          <dd>{f.groundTruth ? "Ground truth: the simulator knows it; no deployed device could measure it." : "Node: what a deployed device could measure itself."}</dd>
+          <dt>Source</dt>
+          <dd data-testid="metric-source">{f.source ?? "The engine cites no source for this metric."}</dd>
+          <dt>Broken down</dt>
+          <dd>{f.breakdowns.length > 0 ? f.breakdowns.map((d) => dimLabel(d).replace(/^By /, "by ")).join(", ") : "Whole run only"}</dd>
+          {rat !== null && f.group !== "traffic" && f.group !== "simulator" ? (
+            <>
+              <dt>Radio</dt>
+              <dd data-testid="metric-technology" title="The engine runs one technology per run (radio.rat). To compare technologies, run the scenario with each and overlay the runs (Compare, then Overlay run B).">
+                <code>{rat}</code> for the whole run; compare technologies by overlaying runs
+              </dd>
+            </>
+          ) : null}
+          <dt>Series</dt>
+          <dd className="mono">{seriesOf(f).join(", ")}</dd>
+          <dt>Model</dt>
+          <dd>
+            <button type="button" className="linklike" onClick={why} data-testid="metric-why" title="Close the metrics and show, in the inspector, the model, version and parameters behind this measurement">
+              Which model produced it
+            </button>
+          </dd>
+        </dl>
+        {f.notAccounted.length > 0 ? (
+          <div className="mx-caveats">
+            <h5>Does not account for</h5>
+            <ul>
+              {f.notAccounted.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </details>
   );
 }

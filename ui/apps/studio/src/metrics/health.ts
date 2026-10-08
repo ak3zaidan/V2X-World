@@ -60,7 +60,11 @@ export function judgedSeries(base: string, band: HealthBand): string {
 
 /** How the judged statistic is named to a reader: "p99", "within 100 m", or "" for the headline. */
 export function judgedLabel(band: HealthBand): string {
-  const j = band.judged;
+  return statLabel(band.judged);
+}
+
+/** The same, from a band's `judged` suffix alone (".p99", "[100m]", ""). */
+export function statLabel(j: string): string {
   if (j === "") return "";
   if (j.startsWith(".")) return j.slice(1);
   const m = /^\[(\d+)m\]$/.exec(j);
@@ -214,6 +218,38 @@ export function whenText(j: Judgement): string {
     parts.push(`out of band from ${formatNumber(j.outFromS)} s to ${formatNumber(j.outToS)} s`);
   }
   return parts.join(", ");
+}
+
+// ------------------------------------------------------------------------------------------------
+// The expanded view's one-line verdict
+// ------------------------------------------------------------------------------------------------
+
+/**
+ * Where a value sits against its band, in a few words: "Above 600 ms limit", "Below 0.95 target",
+ * "Below 500 ms target" (healthy). The threshold named is the one that decides the level; a value
+ * exactly on it counts as the better level, as `classify` does.
+ */
+export function limitText(band: HealthBand, level: HealthLevel, unit: string): string {
+  const u = unit === "ratio" || unit === "1" || unit === "-" || unit === "" ? "" : ` ${unit}`;
+  const lower = band.better === "lower";
+  if (level === "healthy") return `${lower ? "Below" : "Above"} ${formatNumber(band.caution)}${u} target`;
+  if (level === "caution") return `${lower ? "Above" : "Below"} ${formatNumber(band.caution)}${u} target`;
+  return `${lower ? "Above" : "Below"} ${formatNumber(band.unhealthy)}${u} limit`;
+}
+
+/**
+ * The verdict under the expanded view's value, as short parts a reader scans:
+ * ["Above 600 ms limit", "unhealthy 83 % of run", "worst 834 ms at 17 s"]. The first part is the
+ * newest value's level (`level`); the rest are the run's, from its judgement.
+ */
+export function verdictParts(band: HealthBand, level: HealthLevel, unit: string, j: Judgement | null): string[] {
+  const parts = [limitText(band, level, unit)];
+  if (j === null) return parts;
+  if (j.unhealthyShare > 0) parts.push(`unhealthy ${pct(j.unhealthyShare)} of run`);
+  if (j.cautionShare > 0) parts.push(`caution ${pct(j.cautionShare)}`);
+  if (j.unhealthyShare === 0 && j.cautionShare === 0) parts.push(`healthy in all ${j.windows.toLocaleString("en-US")} windows`);
+  parts.push(`worst ${formatWithUnit(j.worst, unit)} at ${formatNumber(j.worstAtS)} s`);
+  return parts;
 }
 
 function pct(x: number): string {

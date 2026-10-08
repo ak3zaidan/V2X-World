@@ -318,11 +318,23 @@ export function MetricsDashboard({ close }: { close: () => void }): React.JSX.El
               {query !== "" && filtered.length === 0 ? <p className="metrics-message dim">No metric matches “{query}”.</p> : null}
               {query === "" && health.length > 0 ? (
                 <section className="mhealth-strip" data-testid="metrics-health-strip" aria-label="Health at a glance">
-                  <h3>Health at a glance</h3>
-                  <p className="dim mgroup-q">
-                    Each metric with a published healthy range, judged on its newest window against the standard or study behind it. Open one to see the
-                    thresholds and their source.
-                  </p>
+                  <h3>
+                    Health at a glance
+                    <span className="mhealth-counts dim" data-testid="metrics-health-counts">
+                      {(["unhealthy", "caution", "healthy"] as const)
+                        .map((l) => [l, health.filter((h) => h.level === l).length] as const)
+                        .filter(([, n]) => n > 0)
+                        .map(([l, n]) => `${n} ${LEVEL_LABEL[l].toLowerCase()}`)
+                        .join(" · ")}
+                    </span>
+                    <span
+                      className="mx-info"
+                      tabIndex={0}
+                      title="Each metric with a published healthy range, judged on its newest window against the standard or study behind it. Open one to see the thresholds and their source."
+                    >
+                      i
+                    </span>
+                  </h3>
                   <div className="mhealth-chips">
                     {health.map(({ f, level }) => (
                       <button
