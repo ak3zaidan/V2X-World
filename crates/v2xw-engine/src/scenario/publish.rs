@@ -294,6 +294,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
 const DIMENSIONLESS: &[&str] = &[
     "seed",
     "net.geonet.hop_limit",
+    "scale.traffic.meso.jam_threshold",
     "experiment.seeds[]",
     "weather.intensity",
     "actors.vehicles.equipped_fraction",

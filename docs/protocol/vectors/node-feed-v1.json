@@ -1,4 +1,32 @@
 {
+  "crypto": {
+    "explanation": "Signing and verification run on different hardware here: the SoC's secure element (hardware security module) and the hardware verification accelerator. Signing needs the private key, so it stays inside the tamper-resistant element, a small, slow core; verification needs no secret and runs on the hardware verification accelerator. That is why verify can be faster than sign on this device. On one processor in software, ECDSA verification costs about twice signing (OpenSSL on a Cortex-A53: sign 613 us, verify 1290 us [R7 §D8]). To study verify-dominated cost, pick a software-crypto profile such as obu/unex-obu-301-craton2-software or obu/generic-automotive-soc-no-hsm.",
+    "profile": "obu/unex-obu-301-craton2",
+    "sign": {
+      "basis": "upper-bound",
+      "basis_text": "at most 9.000 ms: the vendor publishes only an upper bound, and the model charges the bound (a worst case, not a measurement)",
+      "label": "signed in the secure element",
+      "modelled_ms": 9.0,
+      "op": "ecdsa-p256-sign",
+      "range_us": null,
+      "runs_on": "hsm",
+      "service_us": 9000.0,
+      "source": "\"<9 ms signing latency\" [R7 §A4]",
+      "where_text": "the SoC's secure element (hardware security module)"
+    },
+    "verify": {
+      "basis": "derived-from-throughput",
+      "basis_text": "0.400 ms, derived as 1 / the published rate (2500/s): an estimate for one engine, not a published latency",
+      "label": "verified by the hardware accelerator",
+      "modelled_ms": 0.4,
+      "op": "ecdsa-p256-verify",
+      "range_us": null,
+      "runs_on": "accelerator",
+      "service_us": 400.0,
+      "source": "\">2500 ECDSA NIST P-256 verifications/s ('line-rate')\" [R7 §A4]",
+      "where_text": "the hardware verification accelerator"
+    }
+  },
   "history_ns": 20000000000,
   "node": 0,
   "omitted": {

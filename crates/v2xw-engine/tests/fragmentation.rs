@@ -235,10 +235,15 @@ fn a_padded_message_goes_out_in_pieces_and_reaches_the_node_only_whole() {
     // to be missing.
     let counted: u64 = windows.iter().map(|x| x.value.n()).sum();
     let last_flush = windows.iter().map(|x| x.t).max().unwrap_or(0);
-    let before: u64 = l.reassembly.iter().filter(|g| g.t <= last_flush).count() as u64;
-    assert_eq!(
-        counted, before,
-        "the provider did not count every reassembly record"
+    // The last window now closes at the horizon itself, and the groups the end of the run
+    // resolves (`resolve_in_flight`) carry that same instant but land after the flush; only
+    // those may be missing.
+    let before: u64 = l.reassembly.iter().filter(|g| g.t < last_flush).count() as u64;
+    let at_flush: u64 = l.reassembly.iter().filter(|g| g.t == last_flush).count() as u64;
+    assert!(
+        counted >= before && counted <= before + at_flush,
+        "the provider did not count every reassembly record: {counted} counted, {before} \
+         before the last window, {at_flush} at it"
     );
     let independent: Vec<f64> = s
         .iter()

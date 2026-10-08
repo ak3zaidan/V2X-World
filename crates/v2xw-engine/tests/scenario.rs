@@ -616,10 +616,11 @@ fn the_five_internal_error_causes_are_refused_at_check_by_their_setting() {
 /// Check by its setting.
 #[test]
 fn world_and_detector_inputs_the_builder_would_refuse_are_refused_at_check() {
+    // A SUMO network builds since the interop track; an OpenDRIVE file still does not.
     let sumo = edited(&[
         (
             "/world/source",
-            serde_json::json!({"kind": "sumo-net", "path": "net.xml"}),
+            serde_json::json!({"kind": "open-drive", "path": "road.xodr"}),
         ),
         (
             "/world/imported_at",

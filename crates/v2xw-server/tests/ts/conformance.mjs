@@ -204,10 +204,11 @@ await check("§6.1 / R10 — a JSON-RPC batch array is rejected with −32600", 
   eq(body.error.code, -32600, "code");
 });
 
-await check("§6.3 / R1 — /rpc/schema is an OpenRPC 1.3.2 document naming all 33 methods", async () => {
+await check("§6.3 / R1 — /rpc/schema is an OpenRPC 1.3.2 document naming all 34 methods", async () => {
   const doc = await (await fetch(`${base}/rpc/schema`)).json();
   eq(doc.openrpc, "1.3.2", "openrpc version");
-  eq(doc.methods.length, 33, "method count: the 32 of §6.15 plus scenario.schema (the generated settings surface)");
+  eq(doc.methods.length, 34, "method count: the 32 of §6.15 plus scenario.schema (the generated settings surface) and cities.list (the city library)");
+  assert(doc.methods.map((m) => m.name).includes("cities.list"), "cities.list present");
   assert(doc.methods.map((m) => m.name).includes("scenario.schema"), "scenario.schema present");
   assert(doc.methods.map((m) => m.name).includes("rpc.discover"), "rpc.discover present");
   for (const m of doc.methods) {
@@ -645,7 +646,7 @@ await check("R9 — an unknown method is −32601", async () => {
   c.close();
 });
 
-await check("every one of the 33 methods answers (a result or a documented error code)", async () => {
+await check("every one of the 34 methods answers (a result or a documented error code)", async () => {
   const doc = await (await fetch(`${base}/rpc/schema`)).json();
   const c = client();
   const hello = await c.connect();
@@ -665,7 +666,7 @@ await check("every one of the 33 methods answers (a result or a documented error
     "export.dataset": { exporter: "telemetry" }, "export.recording": {},
     "experiment.define": { name: "x", sweep: { "traffic.actors": [1, 2] } },
     "experiment.run": { experiment_id: "nope" }, "experiment.status": { experiment_id: "nope" },
-    "rpc.discover": {},
+    "rpc.discover": {}, "cities.list": {},
   };
   const known = new Set(doc.methods.flatMap((m) => (m.errors ?? []).map((e) => e.code)));
   known.add(-32602); known.add(-32603);
@@ -681,7 +682,7 @@ await check("every one of the 33 methods answers (a result or a documented error
       answered.push(m);
     }
   }
-  eq(answered.length, 33, `answered ${answered.length} of 33`);
+  eq(answered.length, 34, `answered ${answered.length} of 34`);
   // The sweep called `run.seek`, which §6.6 says pauses a live run, and `run.pause`.
   // §1.3 rule 4 then says the server sends nothing until `run.resume`, so later checks
   // that expect a moving stream have to put it back.

@@ -16,6 +16,11 @@ fn scenario(geonet: Option<Geonet>) -> Scenario {
     s.net.layer = "gn-btp".to_string();
     s.security.envelope = "etsi103097".to_string();
     s.messages.sets = vec!["cam".into(), "denm".into()];
+    // The roadside units' SPaT and MAP roles would broadcast nothing without those sets, and
+    // the validator refuses that; the units stay as relays only.
+    for rsu in &mut s.actors.rsus {
+        rsu.roles.clear();
+    }
     s.messages.codec_tier = "uper".to_string();
     s.events = serde_json::from_value(serde_json::json!([
         {"t": 10.0, "until": 13.0, "type": "safety.breakdown"},
