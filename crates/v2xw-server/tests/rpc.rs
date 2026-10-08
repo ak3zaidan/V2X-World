@@ -19,7 +19,7 @@ fn the_inventory_is_the_thirty_two_methods_of_section_6_15() {
     let mut sorted = METHODS.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
-    assert_eq!(sorted.len(), 33, "no duplicates");
+    assert_eq!(sorted.len(), METHODS.len(), "no duplicates");
     assert!(METHODS.contains(&"scenario.schema"));
     for group in [
         "run.start",

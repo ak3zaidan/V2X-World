@@ -345,7 +345,7 @@ fn radio_models_select_the_propagation_and_fading_and_refuse_unknown_ids() {
     let mut bad = base;
     bad.radio.models.insert(
         "propagation".to_string(),
-        v2xw_engine::scenario::schema::ModelChoice::new("propagation/winner-plus-b1"),
+        v2xw_engine::scenario::schema::ModelChoice::new("propagation/itu-r-p1411"),
     );
     let errors = v2xw_engine::scenario::validate(&bad);
     assert!(
