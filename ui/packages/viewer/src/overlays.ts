@@ -53,7 +53,7 @@ import { ActorState, OVERLAY_NAMES, type OverlayName } from "@vwp/protocol";
 import { ACTOR_STATE_COLOR_KEYS, actorStateColorIndex } from "./actors.js";
 import { VEHICLE_MARK_ANGULAR_RADIUS } from "./types.js";
 import {
-  MeshBuilder, addBox, discGeometry, markerGeometry, ringGeometry, withUnitVertexColors,
+  MeshBuilder, addBox, discGeometry, markerGeometry, pointerGeometry, ringGeometry, withUnitVertexColors,
 } from "./geometry.js";
 import type { ViewerTheme } from "./theme.js";
 import type { WorldRenderer } from "./world-render.js";
@@ -182,6 +182,8 @@ export interface OverlayUpdateContext {
    * legend has no attacker row.
    */
   readonly showGroundTruth?: boolean;
+  /** Interpolated heading per slot, radians CCW from +x; points the aerial mark. Omitted, east. */
+  readonly heading?: Float32Array;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -974,6 +976,9 @@ const DEFAULT_VEHICLE_RADIUS_M = 2.75;
  * The selected vehicle additionally keeps a ring and a vertical stem at every distance, because
  * "which one am I following" has to be answerable from anywhere, and there is only ever one of it.
  */
+/** How far the aerial mark's nose runs ahead of its centre, in mark radii. */
+const POINTER_TIP = 1.75;
+
 export class ActorLocatorOverlay {
   readonly group = new Group();
 
@@ -1019,6 +1024,8 @@ export class ActorLocatorOverlay {
   #ring: InstancedMesh<BufferGeometry, MeshBasicMaterial>;
   #stem: InstancedMesh<BufferGeometry, MeshBasicMaterial>;
   #discGeom: BufferGeometry;
+  /** The dot and its halo: a disc with a nose along the vehicle's heading. */
+  #pointerGeom: BufferGeometry;
   #ringGeom: BufferGeometry;
   #stemGeom: BufferGeometry;
   #theme: ViewerTheme;
@@ -1053,6 +1060,7 @@ export class ActorLocatorOverlay {
     // Both carry a unit `color` attribute: `withUnitVertexColors` explains why nothing per-instance
     // colour is written reaches the screen without one.
     this.#discGeom = discGeometry(28, true);
+    this.#pointerGeom = pointerGeometry(28, POINTER_TIP);
     this.#ringGeom = withUnitVertexColors(ringGeometry(0.66, 28));
     // A unit stem: 1 m square, base at z = 0, top at z = 1, so its instance matrix is a pure
     // scale-and-translate and the writer never has to build a rotation.
@@ -1062,8 +1070,8 @@ export class ActorLocatorOverlay {
     if (!stemGeom) throw new Error("locator stem geometry is empty");
     this.#stemGeom = stemGeom;
 
-    this.#halo = this.#makeMesh(this.#discGeom, "locator-halo", this.#capacity, 0.85, 10, false);
-    this.#dot = this.#makeMesh(this.#discGeom, "locator-dot", this.#capacity, 0.95, 11, true);
+    this.#halo = this.#makeMesh(this.#pointerGeom, "locator-halo", this.#capacity, 0.85, 10, false);
+    this.#dot = this.#makeMesh(this.#pointerGeom, "locator-dot", this.#capacity, 0.95, 11, true);
     this.#ring = this.#makeMesh(this.#ringGeom, "locator-ring", this.#capacity, 0.9, 12, true);
     this.#stem = this.#makeMesh(this.#stemGeom, "locator-stem-selected", 1, 0.45, 13, false);
     this.#dotKey = new Uint8Array(this.#capacity).fill(0xff);
@@ -1211,8 +1219,8 @@ export class ActorLocatorOverlay {
       mesh.material.dispose();
     }
     this.#capacity = next;
-    this.#halo = this.#makeMesh(this.#discGeom, "locator-halo", next, 0.85, 10, false);
-    this.#dot = this.#makeMesh(this.#discGeom, "locator-dot", next, 0.95, 11, true);
+    this.#halo = this.#makeMesh(this.#pointerGeom, "locator-halo", next, 0.85, 10, false);
+    this.#dot = this.#makeMesh(this.#pointerGeom, "locator-dot", next, 0.95, 11, true);
     this.#ring = this.#makeMesh(this.#ringGeom, "locator-ring", next, 0.9, 12, true);
     this.#dotKey = new Uint8Array(next).fill(0xff);
     this.#ringKey = new Uint8Array(next).fill(0xff);
@@ -1237,6 +1245,7 @@ export class ActorLocatorOverlay {
     const gt = ctx.showGroundTruth !== false;
     const cls = ctx.classIdx;
     const st = ctx.state;
+    const heading = ctx.heading;
     const radii = this.#classRadius;
     const nRadii = radii.length;
     const stateColor = this.#stateColor;
@@ -1306,13 +1315,20 @@ export class ActorLocatorOverlay {
         if (nDot >= cap) continue;
         const i = nDot++;
         const o = i * 16;
-        dotM[o] = markR; dotM[o + 5] = markR;
+        // The dot's nose points along the vehicle's heading (a rotation about +z), so the map says
+        // which way each vehicle is going — what SUMO's GUI shows with its triangle shape at overview
+        // zoom (`GUIBaseVehicle::drawAction_drawVehicleAsTrianglePlus`).
+        const hd = heading !== undefined ? heading[slot] : 0;
+        const cH = Math.cos(hd);
+        const sH = Math.sin(hd);
+        dotM[o] = markR * cH; dotM[o + 1] = markR * sH; dotM[o + 4] = -markR * sH; dotM[o + 5] = markR * cH;
         dotM[o + 12] = x; dotM[o + 13] = y; dotM[o + 14] = z + 0.14;
         if (nHalo < haloLimit) {
-          // A little wider and behind, so the dot clears whatever is under it in either theme.
+          // A little wider and behind, so the dot clears whatever is under it in either theme. A thin
+          // edge, not a second disc: at 1.55× the halo read as a dark blob round every vehicle.
           const h = nHalo++ * 16;
-          const r = markR * 1.55;
-          haloM[h] = r; haloM[h + 5] = r;
+          const r = markR * 1.3;
+          haloM[h] = r * cH; haloM[h + 1] = r * sH; haloM[h + 4] = -r * sH; haloM[h + 5] = r * cH;
           haloM[h + 12] = x; haloM[h + 13] = y; haloM[h + 14] = z + 0.10;
         }
         if (this.#dotKey[i] !== ci) {
@@ -1379,6 +1395,7 @@ export class ActorLocatorOverlay {
       mesh.material.dispose();
     }
     this.#discGeom.dispose();
+    this.#pointerGeom.dispose();
     this.#ringGeom.dispose();
     this.#stemGeom.dispose();
     this.group.removeFromParent();

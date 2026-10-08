@@ -5,6 +5,8 @@ the plan in `10-roadmap.md` and the decisions in `12-build-decisions.md`. Claims
 here carry their evidence; anything unmeasured says so.
 
 Last updated 2026-10-08 (the scale track section first, then the round-5 merge section, then the round-4 merge section; the stabilise track section; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
+
+Last updated 2026-10-08 (the 3D scene track section first, then the round-5 merge section, then the round-4 merge section; the stabilise track section; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
 `v2xw-metrics`, `v2xw-node` and `v2xw-engine` are no longer stubs, and the line counts
 predate several waves. It is left as written rather than rewritten from memory, because a
 status file whose numbers were re-estimated rather than re-measured is worse than one that
@@ -278,6 +280,54 @@ to judge motion (see the round-4 notes above).
   signal plan or a missing walk phase is not checked.
 - Spawns are uniform over sidewalk lanes and despawns happen where a 12-lane walk ends,
   mid-pavement; the viewer fades them, but people still appear from nowhere.
+
+## 2026-10-08 — the 3D scene, tested in the real browser (scene track, branch of 4986cd4)
+
+Test-to-fix: the real engine (`v2xw-server`, optimised dev build) on Midtown rush hour,
+pedestrians, peak load, the highway, Portland downtown and fake-position attack, with the
+Studio in GPU Chromium (Playwright, `channel: "chromium"`, ANGLE Metal on the M2; the default
+headless shell is SwiftShader and ran at about 1 frame a second, which made every glitch count
+meaningless). Each pass screenshots Map, Chase, Driver's view and Free, runs the viewer's glitch
+hunter, and an independent probe reads every drawn pose per animation frame (per-actor jerk,
+jumps, motion against the drawn heading, camera jerk) and the engine's own pose stream as the
+interpolator receives it. Scripts: the session scratchpad's `scene3d/` (`tour.mjs`,
+`probe.mjs`, `raw.mjs`).
+
+**Fixed, each re-measured:**
+
+| Symptom | Cause | Fix | Before → after |
+|---|---|---|---|
+| pedestrians hop across corners (owner: "pedestrian movement is not smooth") | a lane change whose landing point was > 5 m away was snapped; the avenues' wide pavements put every corner at 5.4–6.9 m | `CARRY_MAX_M` 12 m; a long carry closes in at most 4 s | engine pose stream, midtown-pedestrians, 25 s, 132k steps: 65 jumps → 0 |
+| pedestrians whirl on the spot at the kerb | heading = velocity direction whenever \|v\| > 1 µm/s | facing = path direction turned by `atan2(v_lat, max(v_along, 0.1))`, SUMO `MSPModel_Striping::PState::getAngle` | headings turning > 143° in a step: 940 → 106 (the rest are route-end turn-rounds) |
+| black wedge over the followed car in a queue | the chase camera (≈7 m back) stood inside the car behind | a vehicle whose body box contains the camera is not drawn | rush-hour chase at a red light: subject in full view |
+| street views look like night with lighting on Day | dark-theme world palette (navy sky, near-black asphalt, blue-grey facades), no light lift at street level | street daylight in the dark theme: day sky gradient, pale-sky/warm-ground hemisphere, 1.6× lift fading with the sun, warm facade gain; fog fades into the sky actually painted | chase/driver/free on rush hour, peak load, highway: blue sky, grey road and facades |
+| map vehicles are blobs with no direction | round dot in a 1.55× dark halo | location-arrow pointer along the heading (SUMO GUI's triangle at overview zoom), 1.3× halo; legend matches | map on rush hour, pedestrians, attack |
+| Portland's map is grey 20–30 m discs on a wire grid | junction disc sized by connector count | sized by how far the junction's own connectors reach (≤ the old size); a junction with none gets 4 m | Portland and Midtown map crops |
+| floating heads | neck too short by 6 cm | neck spans torso top to head base | pedestrian chase |
+| "Following vehicle 1" over a pedestrian; "No radio selected" while one is selected; "Following" in the free camera | chip and HUD assumed a vehicle with a radio | class noun from the Hello class table; "Selected" in free/roadside; HUD says "carries no radio" or "waiting for its first report" | pedestrian and highway screenshots |
+| console warning on every load | three r186 removed `PCFSoftShadowMap` | `PCFShadowMap` | no warnings |
+
+**Measured and fine (no change):** vehicle motion is smooth in every view — the drawn-pose
+probe found 0 jumps, 0 backwards steps and 0 heading snaps over 51k vehicle-frames at peak
+load (2,300 actors), jerk RMS 2.7 mm/frame; frame time at peak load is 0.7 ms CPU, p95
+2.2 ms (M2, 1440×900); the render clock tracks the wall clock to 0.5 % with no long frames.
+The chase and driver cameras are smooth once landed; the only camera jerk the probe saw is
+frame-time jitter during the fly-down. The glitch hunter's own counts of "teleport" in the
+first frames of a hunt come from its own start-up stall, not the scene (the independent
+probe sees none).
+
+**Not fixed, recorded:**
+
+- **Portland downtown spawns no vehicles at all** (0 in 60 s, headless `v2xw run` and in
+  the browser; the round-4 suite already recorded "at most 6"). The demand produces trips;
+  they are refused at insertion, almost certainly as unroutable on the one-way grid. A
+  traffic/demand fix, not attempted here.
+- Pedestrian "backwards" steps (84 in 25 s, 0.06 %) and sideways ones remain in the
+  engine stream: social-force sidesteps; the drawn facing no longer flips with them.
+- The glitch hunter flags spawns in view at distance (`pop`, engine-caused) — vehicles
+  entering at the map's edge lanes inside the frustum; not addressed.
+- Not run: the Playwright e2e suites; the full viewer and Studio unit suites (the four
+  viewer test files touching the changed code pass: 38 tests).
 
 ## 2026-10-07 — round-5 merge: eight tracks onto main (settings, agent, radio, network, traffic)
 

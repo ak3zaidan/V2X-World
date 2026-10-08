@@ -25,7 +25,7 @@ import {
   Color,
   Fog,
   NeutralToneMapping,
-  PCFSoftShadowMap,
+  PCFShadowMap,
   PerspectiveCamera,
   SRGBColorSpace,
   Scene,
@@ -222,7 +222,9 @@ function defaultCreateRenderer(canvas: ViewerCanvas, options: ViewerOptions): Vi
   renderer.toneMapping = NeutralToneMapping;
   renderer.toneMappingExposure = 1;
   renderer.shadowMap.enabled = options.shadows ?? true;
-  renderer.shadowMap.type = PCFSoftShadowMap;
+  // three r18x removed PCFSoftShadowMap (it fell back to PCFShadowMap with a console warning on
+  // every page load); PCF is what was drawn either way.
+  renderer.shadowMap.type = PCFShadowMap;
   const dpr = typeof devicePixelRatio === "number" ? devicePixelRatio : 1;
   renderer.setPixelRatio(Math.min(dpr, options.pixelRatioCap ?? 1.5));
   // No cast: `WebGLRenderer` satisfies `ViewerRenderer` structurally, which is the point of the
@@ -814,11 +816,19 @@ export class Viewer {
 
   #syncSun(): void {
     // The plan view is lit brighter than street level whatever the hour (see `setLightLift`).
-    this.worldRenderer.setLightLift(this.#lighting !== null && this.cameras.mode === "map" ? MAP_LIGHT_LIFT : 1);
+    const map = this.cameras.mode === "map";
+    this.worldRenderer.setLightLift(this.#lighting !== null && map ? MAP_LIGHT_LIFT : 1);
+    // The dark theme's street views get a daylight sky (see `WorldRenderer.setStreetDaylight`);
+    // the light theme's own sky already is one.
+    this.worldRenderer.setStreetDaylight(this.#lighting !== null && !map && this.#theme.name === "dark");
     const hour = this.#lightingHour();
-    if (hour === null || hour === this.#appliedHour) return;
-    this.#appliedHour = hour;
-    this.worldRenderer.setTimeOfDay(hour);
+    if (hour !== null && hour !== this.#appliedHour) {
+      this.#appliedHour = hour;
+      this.worldRenderer.setTimeOfDay(hour);
+    }
+    // Distance fog fades into the horizon actually painted — the daylight one, or the dusk and
+    // night ones — not the theme's fixed horizon, which left a pale band round a night sky.
+    if (!this.#fogUserSet && this.#fog) this.#fog.color.copy(this.worldRenderer.horizonColor);
   }
 
   /**
@@ -883,7 +893,7 @@ export class Viewer {
     if (settled) return;
     this.#cuedMode = mode;
     this.#cuedScale = scale;
-    this.#applyFog(enabled, this.#theme.skyHorizon, this.#depthCueNear * scale, this.#depthCueFar * scale);
+    this.#applyFog(enabled, this.worldRenderer.horizonColor.getHex(), this.#depthCueNear * scale, this.#depthCueFar * scale);
   }
 
   /** Reuse the one `Fog` instance; only the reference on the scene moves. */
@@ -1247,6 +1257,7 @@ export class Viewer {
       // instances do (09-ui §6). Read from the renderer rather than mirrored, so the two cannot
       // drift.
       showGroundTruth: this.actors.showGroundTruth,
+      heading: this.interpolator.outHeading,
     });
 
     // 6. Picking data: O(1), the grid is only built if somebody clicks.

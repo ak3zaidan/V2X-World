@@ -289,6 +289,12 @@ const GRAVITY = 9.80665;
  * data turned faster than any rider could.
  */
 const LEAN_MAX_RAD = 0.52;
+/**
+ * How close the camera may come to a vehicle's body before that body is not drawn, metres: the
+ * street-level near plane is at most a metre (`Viewer#syncClipPlanes`), and a camera this far off
+ * the skin would already see through it.
+ */
+const CAMERA_BODY_MARGIN_M = 0.35;
 /** Time constant of the drawn roll, seconds. */
 const LEAN_TAU_S = 0.25;
 
@@ -957,6 +963,29 @@ export class ActorRenderer {
       const dist2 = dx * dx + dy * dy + dz * dz;
 
       const r = this.#radius[c];
+      // The camera inside another road user's body: a chase camera standing off behind a car
+      // stopped in a queue sits in the car behind it, and the inside of that car's paint — a
+      // black wedge — covered the subject (rush-hour chase, captured and looked at). The
+      // dashboard's own car is handled by `hiddenActorId`; this is every other body, by its
+      // footprint box plus the near plane, and only within its bounding radius so it costs a
+      // compare for everything else. A person or rider is never hidden: they are smaller than
+      // the margin a camera keeps.
+      if (dist2 < r * r) {
+        const def = this.#classes[c];
+        if (def && def.category !== 1) {
+          const ch = Math.cos(h);
+          const sh = Math.sin(h);
+          const lx = -dx * ch - dy * sh;
+          const ly = dx * sh - dy * ch;
+          if (
+            Math.abs(lx) < def.lengthM / 2 + CAMERA_BODY_MARGIN_M &&
+            Math.abs(ly) < def.widthM / 2 + CAMERA_BODY_MARGIN_M &&
+            -dz > -CAMERA_BODY_MARGIN_M && -dz < def.heightM + CAMERA_BODY_MARGIN_M
+          ) {
+            continue;
+          }
+        }
+      }
       if (cull) {
         const cz = z + this.#halfHeight[c];
         let outside = false;

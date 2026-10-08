@@ -17,6 +17,7 @@ import { ObuHud } from "./ObuHud.js";
 import { OverlayMenu } from "./OverlayMenu.js";
 import { StateLegend } from "./StateLegend.js";
 import { StatsChip } from "./StatsReadout.js";
+import { actorNoun } from "../lib/actorNoun.js";
 import { rsuCount } from "../lib/security.js";
 import { radioBreakdown } from "../lib/format.js";
 import { engine } from "../state/engine.js";
@@ -228,7 +229,11 @@ export function Viewport(): React.JSX.Element {
   }, []);
 
   const followLabel = selectedNode !== null ? engine.nodes.get(selectedNode)?.label || `node ${selectedNode}` : null;
-  const following = followLabel ?? (selectedActor !== null ? `vehicle ${selectedActor}` : null);
+  const following = followLabel ?? (selectedActor !== null ? `${actorNoun(selectedActor)} ${selectedActor}` : null);
+  // The free and roadside cameras keep the selection (its HUD, its overlays) but stay where they are
+  // (`CameraController.setFollowPose` moves the target in every other mode), so there the chip must
+  // not say "Following".
+  const tracks = cameraMode !== "free" && cameraMode !== "rsu";
 
   return (
     <div className="viewport" ref={hostRef} data-testid="viewport">
@@ -255,8 +260,12 @@ export function Viewport(): React.JSX.Element {
         <div className="vp-group" role="group" aria-label="Camera" data-testid="camera-group">
           <CameraPicker />
           {following ? (
-            <span className="vp-follow on" data-testid="follow-chip" title={`The camera follows ${following}`}>
-              <span className="vp-follow-label">Following</span> {following}
+            <span
+              className="vp-follow on"
+              data-testid="follow-chip"
+              title={tracks ? `The camera follows ${following}` : `${following} is selected; the ${cameraMode === "free" ? "free" : "roadside"} camera does not follow it`}
+            >
+              <span className="vp-follow-label">{tracks ? "Following" : "Selected"}</span> {following}
               <button
                 type="button"
                 className="vp-clear"

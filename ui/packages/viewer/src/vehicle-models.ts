@@ -657,7 +657,12 @@ function pedestrian(b: PartBuilder, L: number, W: number, H: number, lod: LodLev
   box(b, 0, -(torsoW / 2 + 0.05), shoulderZ - armH / 2, depth * 0.55, 0.09, armH);
   b.as(ACTOR_PART.FIXED);
   const headR = Math.min(headH * 0.48, 0.12);
-  box(b, 0, 0, legH + torsoH + headH * 0.12, 0.08, 0.08, headH * 0.25, SKIN);
+  // The neck runs from inside the torso's top to inside the head's base. It used to be a fixed
+  // quarter of `headH` tall from the shoulders, which on the 1.72 m class left 6 cm of air between
+  // its top and the head: every pedestrian in a close view had a floating head.
+  const neckBottom = legH + torsoH - 0.02;
+  const neckTop = H - 2 * headR + 0.02;
+  box(b, 0, 0, (neckBottom + neckTop) / 2, 0.09, 0.09, Math.max(0.02, neckTop - neckBottom), SKIN);
   box(b, 0, 0, H - headR, headR * 1.7, headR * 1.6, headR * 2, SKIN);
   if (lod === 0) box(b, -0.01, 0, H - headR * 0.35, headR * 1.8, headR * 1.7, headR * 0.7, lin(0x2a2018));
   // 0.7 m steps: a 1.4 m stride at the 1.3 m/s a pedestrian walks (about 1.85 steps a second,
