@@ -294,6 +294,22 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "No vehicles",
             "No vehicle demand: pedestrians, roadside units and the backend only.",
         ),
+        ("actors.vehicles.drivers.realism", "calibrated") => w(
+            "Calibrated city drivers",
+            "Each driver their own free speed, reaction at a green and following style; tuned to HCM saturation flow.",
+        ),
+        ("actors.vehicles.drivers.realism", "identical") => w(
+            "Identical (textbook model)",
+            "Every driver the same ideal model: the limit exactly, instant reactions. For model studies.",
+        ),
+        ("actors.vehicles.drivers.realism", "heterogeneous") => w(
+            "Heterogeneous",
+            "Calibrated, and each driver keeps their own gap and accelerates and brakes their own way.",
+        ),
+        ("actors.vehicles.drivers.realism", "human") => w(
+            "Human (reaction time and misjudgement)",
+            "Heterogeneous, with a 0.8 s reaction and misjudged gaps: dense traffic forms stop-and-go waves.",
+        ),
         ("actors.vru.behaviour", "observed") => w(
             "As observed in Midtown",
             "Walking speeds by age, crossing against the signal and mid-block as field studies measured.",
@@ -1210,6 +1226,13 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.vehicles.demand.kind" => "How vehicles arrive",
         "actors.vehicles.equipped_fraction" => "Share of vehicles with a V2X radio",
         "actors.vru.device_fraction" => "Share of pedestrians and cyclists with a device",
+        "actors.vehicles.drivers" => "Drivers",
+        "actors.vehicles.drivers.realism" => "Driver realism",
+        "actors.vehicles.drivers.parameter_spread" => "How much drivers differ",
+        "actors.vehicles.drivers.reaction_time_s" => "Reaction time",
+        "actors.vehicles.drivers.perception_error" => "Misjudgement of gaps",
+        "actors.vehicles.drivers.truck_lane_restriction" => "Trucks out of the left lane",
+        "actors.vehicles.drivers.motorcycle_filtering" => "Motorcycles filter between cars",
         "radio.rat" => "Radio technology",
         "radio.region" => "Regulatory region",
         "radio.channel" => "Channel",

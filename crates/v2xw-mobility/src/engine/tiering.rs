@@ -244,6 +244,7 @@ impl NativeMobility {
                 forced_brake: None,
                 forced_cut_in: None,
                 kerb: crate::kerbside::KerbState::NONE,
+                human: crate::drivers::HumanState::default(),
             },
         );
         Ok(())

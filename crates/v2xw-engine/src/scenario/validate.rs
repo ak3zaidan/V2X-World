@@ -324,6 +324,27 @@ pub static BOUNDS: &[Bound] = &[
         what: "the share who cross against the signal",
     },
     Bound {
+        path: "actors.vehicles.drivers.parameter_spread",
+        lo: 0.0,
+        hi: 2.0,
+        exclusive_lo: false,
+        what: "the driver parameter spread",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.reaction_time_s",
+        lo: 0.0,
+        hi: v2xw_mobility::drivers::MAX_REACTION_S,
+        exclusive_lo: false,
+        what: "the drivers' reaction time",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.perception_error",
+        lo: 0.0,
+        hi: 3.0,
+        exclusive_lo: false,
+        what: "the perception-error multiplier",
+    },
+    Bound {
         path: "actors.vru.ebike_share",
         lo: 0.0,
         hi: 1.0,
@@ -871,6 +892,39 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                message age limit and association gate; 'lateral' turns on the SL2015 \
                sub-lane model. Left out, the engine's own IDM drives. See \
                docs/models/driving-model-library.md.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers",
+        status: Status::Wired,
+        note: "How human the drivers are. 'realism' picks the population: calibrated (the \
+               default: own free speed, reaction at a green, three following styles), \
+               identical (the textbook model), heterogeneous (every driver their own time \
+               gap, acceleration, braking and standstill gap, spread as fitted to real \
+               drivers) or human (heterogeneous plus a 0.8 s reaction time and the Human \
+               Driver Model's perception errors, Treiber, Kesting & Helbing 2006). The other \
+               keys override the preset. See docs/models/driver-heterogeneity.md.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.reaction_time_s",
+        status: Status::Wired,
+        note: "Each driver applies the car-following decision they made this long ago, \
+               except when braking harder than comfortable, which acts at once. 0.7-0.75 s \
+               is an expected event's brake reaction, 1.25 s an unexpected one's (Green \
+               2000). Above about 0.6 s homogeneous traffic forms stop-and-go waves.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.truck_lane_restriction",
+        status: Status::Wired,
+        note: "Trucks and trailers make no discretionary change into the leftmost lane of a \
+               motorway or trunk road with three or more lanes (StVO §18(11); many US \
+               states' left-lane truck restrictions).",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.motorcycle_filtering",
+        status: Status::Wired,
+        note: "Overrides the jurisdiction's rule: true lets motorcycles and mopeds ride \
+               between stopped cars (and turns on the SL2015 sub-lane model, which filtering \
+               needs); false keeps them in the queue.",
     },
     KeyStatus {
         path: "actors.vehicles.classes",
@@ -2678,6 +2732,18 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             s.actors.vru.red_crossing_share,
         ),
         ("actors.vru.ebike_share", s.actors.vru.ebike_share),
+        (
+            "actors.vehicles.drivers.parameter_spread",
+            s.actors.vehicles.drivers.parameter_spread,
+        ),
+        (
+            "actors.vehicles.drivers.reaction_time_s",
+            s.actors.vehicles.drivers.reaction_time_s,
+        ),
+        (
+            "actors.vehicles.drivers.perception_error",
+            s.actors.vehicles.drivers.perception_error,
+        ),
     ] {
         if let Some(v) = value {
             bounded_at(path, path, v, e);

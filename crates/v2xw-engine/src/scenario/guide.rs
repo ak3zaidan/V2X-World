@@ -67,6 +67,16 @@ const BASIC: &[Basic] = &[
         recommended: "Leave empty for all cars, or shares that add up to 1.",
     },
     Basic {
+        path: "actors.vehicles.drivers.realism",
+        explain: "How human the drivers are. Real drivers differ from one another, react late and misjudge gaps, which is what turns dense traffic into stop-and-go waves (Treiber, Kesting & Helbing 2006).",
+        recommended: "Calibrated for city runs; human for congestion and shockwave studies; identical to test a model in isolation.",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.reaction_time_s",
+        explain: "How long a driver takes to respond to the car ahead. 0.7 s is a prepared driver's brake reaction, 1.25 s a surprised one's (Green 2000).",
+        recommended: "0.6 to 1.2 s; leave unset to use the realism preset's.",
+    },
+    Basic {
         path: "actors.vru.pedestrians",
         explain: "People walking on the sidewalks and crossings. Those with a phone or wearable can broadcast their own safety messages (PSM).",
         recommended: "0 to 400 at once.",
@@ -399,6 +409,8 @@ pub fn quick() -> Value {
               "How many vehicles enter the map each hour."),
         field("pedestrians", "Pedestrians", "actors.vru.pedestrians",
               "People walking on the sidewalks and crossings."),
+        field("drivers", "Drivers", "actors.vehicles.drivers.realism",
+              "How human the drivers are: calibrated, identical, heterogeneous or human (stop-and-go waves)."),
         // Shares from scenarios/midtown-street-life.yaml's fleet (a stated choice there:
         // no classified count of Midtown traffic was read).
         class_toggle("motorcycles", "Motorcycles", "motorcycle", 0.02,

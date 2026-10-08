@@ -160,6 +160,10 @@ const PLANNED_STOP_MAX_DECEL_MPS2: f64 = 3.4;
 /// The model id a driver's own traits are drawn under ([`DriverTraits`]).
 const DRIVER_TRAITS_ID: &str = "mobility/native/driver";
 
+/// The model id a driver's own car-following parameters and perception noise are drawn
+/// under ([`crate::drivers`]).
+const DRIVER_PARAMS_ID: &str = "mobility/native/driver/params";
+
 /// The median of a driver's reaction time, seconds.
 ///
 /// Taoka 1989 (TRR 1213, "An analytical model for driver response") fits a lognormal to
@@ -290,6 +294,11 @@ pub struct DriverTraits {
     /// How the driver follows ([`crate::style::DriverStyle`]), read from the same latent
     /// as `speed_factor`.
     pub style: crate::style::DriverStyle,
+    /// Four standard normals for this driver's own `T`, `a`, `b`, `s0`
+    /// ([`crate::drivers::spread_profile`]); zero for the neutral driver.
+    pub params_z: [f64; 4],
+    /// The key of this driver's perception-error noise ([`crate::drivers::std_normal`]).
+    pub noise_key: u64,
 }
 
 impl DriverTraits {
@@ -300,6 +309,8 @@ impl DriverTraits {
         follow_reaction_s: 0.0,
         amber_go_tti_s: 0.0,
         style: crate::style::DriverStyle::Normal,
+        params_z: [0.0; 4],
+        noise_key: 0,
     };
 
     /// The traits of the driver of trip `seq` in a vehicle of `class`, with the queue
@@ -341,12 +352,29 @@ impl DriverTraits {
             let scale = 0.5 * (far - near) / math::ln(9.0);
             (median + scale * math::ln(u / (1.0 - u))).clamp(near, far)
         };
+        // The driver's own car-following parameters and perception noise come from a
+        // stream of their own, so drawing them leaves every other draw as it was.
+        let (params_z, noise_key) = {
+            let mut rng = ctx.rng(
+                RngDomain::DesiredSpeed,
+                EntityRef::custom(DRIVER_PARAMS_ID, seq),
+            );
+            let z = [
+                rng.normal(0.0, 1.0),
+                rng.normal(0.0, 1.0),
+                rng.normal(0.0, 1.0),
+                rng.normal(0.0, 1.0),
+            ];
+            (z, rng.u64())
+        };
         DriverTraits {
             speed_factor,
             reaction_s,
             follow_reaction_s,
             amber_go_tti_s,
             style: crate::style::DriverStyle::of_speed_factor(speed_factor, class.spec().speed_dev),
+            params_z,
+            noise_key,
         }
     }
 }
@@ -640,6 +668,10 @@ pub struct EngineParams {
     /// bus-only lane), falling back to the engine-wide router only when its own has no
     /// route. Not applied in the legacy parity mode.
     pub class_routing: bool,
+    /// Human drivers: per-driver parameter spread, reaction time, perception errors and
+    /// the heavy-vehicle left-lane restriction ([`crate::drivers`]). All off by default.
+    /// Not applied in the legacy parity mode.
+    pub human: crate::drivers::HumanDriverParams,
     /// **A test hook, not a model parameter.** Walks the decision pass in reverse actor
     /// order. Because the pass reads only the frozen snapshot, the published result must be
     /// bit-identical either way; that is the ADR 0004 Jacobi property, and this is how the
@@ -672,6 +704,7 @@ impl Default for EngineParams {
             driver_styles: true,
             heavy_turns: true,
             class_routing: true,
+            human: crate::drivers::HumanDriverParams::default(),
             reverse_order: false,
         }
     }
@@ -745,6 +778,8 @@ struct Actor {
     forced_cut_in: Option<(Side, SimTime)>,
     /// Its kerbside stops ([`crate::kerbside`]).
     kerb: crate::kerbside::KerbState,
+    /// The driver's reaction history and perception errors ([`crate::drivers`]).
+    human: crate::drivers::HumanState,
 }
 
 impl Actor {
@@ -1614,6 +1649,7 @@ impl NativeMobility {
                 forced_brake: None,
                 forced_cut_in: None,
                 kerb: crate::kerbside::KerbState::NONE,
+                human: crate::drivers::HumanState::default(),
             },
         );
         Ok(id)
@@ -2043,6 +2079,19 @@ impl NativeMobility {
         {
             driver = traits.style.apply(driver);
         }
+        // Each driver's own T, a, b and s0 around the class's ([`crate::drivers`]).
+        if self.along_path()
+            && self.params.driver_heterogeneity
+            && self.params.human.parameter_spread > 0.0
+            && trip.class != VehicleClass::Bicycle
+        {
+            driver = crate::drivers::spread_profile(
+                driver,
+                trip.class,
+                traits.params_z,
+                self.params.human.parameter_spread,
+            );
+        }
         self.actors.insert(
             id,
             Actor {
@@ -2073,6 +2122,7 @@ impl NativeMobility {
                 forced_brake: None,
                 forced_cut_in: None,
                 kerb: crate::kerbside::KerbState::NONE,
+                human: crate::drivers::HumanState::default(),
             },
         );
         self.next_seq = self.next_seq.max(trip.seq + 1);
@@ -3747,6 +3797,9 @@ struct Decision {
     detour_ok: bool,
     /// Where across its lane the sub-lane model steers the vehicle this step.
     lateral: Option<crate::lateral::LateralDecision>,
+    /// The driver's next perception errors and this step's car-following decision, when
+    /// the drivers are imperfect ([`crate::drivers`]).
+    human: Option<(f64, f64, f64)>,
 }
 
 impl v2xw_core::model::Model for NativeMobility {
@@ -4274,9 +4327,50 @@ impl Mobility for NativeMobility {
             {
                 line_slack = (line - l.gap_m - 0.5).max(0.0);
             }
-            let mut accel = self
-                .cf
-                .accel(&ego_capped, leader.as_ref(), &lane_view, &self.weather);
+            // A human driver sees the car ahead through their estimation errors and acts on
+            // what they decided their reaction time ago ([`crate::drivers`]).
+            let hp = &self.params.human;
+            let mut human_next = None;
+            let mut accel = if along && hp.imperfect() && actor.class != VehicleClass::Pedestrian {
+                let step_ns = (dt_s * 1e9).round().max(1.0) as u64;
+                let k = t0 / step_ns;
+                let key = actor.traits.noise_key ^ crate::drivers::splitmix64(u64::from(actor.id.index()));
+                let mut seen = leader;
+                let (mut wg, mut wr) = (actor.human.w_gap, actor.human.w_rate);
+                if let Some(l) = seen.as_mut()
+                    && l.is_vehicle()
+                    && (hp.distance_error > 0.0 || hp.rate_error_per_s > 0.0)
+                {
+                    let p = crate::drivers::perceive(
+                        hp,
+                        &actor.human,
+                        key,
+                        k,
+                        dt_s,
+                        l.gap_m,
+                        ego.speed_mps,
+                        l.speed_mps,
+                    );
+                    l.gap_m = p.gap_m;
+                    l.speed_mps = p.leader_speed_mps;
+                    wg = p.w_gap;
+                    wr = p.w_rate;
+                }
+                let now =
+                    self.cf
+                        .accel(&ego_capped, seen.as_ref(), &lane_view, &self.weather);
+                human_next = Some((wg, wr, now));
+                crate::drivers::delayed(
+                    &actor.human,
+                    hp.reaction_time_s,
+                    dt_s,
+                    now,
+                    actor.driver.comfort_decel_mps2,
+                )
+            } else {
+                self.cf
+                    .accel(&ego_capped, leader.as_ref(), &lane_view, &self.weather)
+            };
             // A merge partner that reaches the merge point first is fallen in behind by the
             // time the ego gets there ([`merge_accel`]), not braked for as if it stood at
             // the ego's bumper now.
@@ -4440,6 +4534,7 @@ impl Mobility for NativeMobility {
                     release_at,
                     advance_cap_m,
                     detour_ok: false,
+                    human: human_next,
                     lateral: self
                         .lateral
                         .as_ref()
@@ -4536,6 +4631,16 @@ impl Mobility for NativeMobility {
                     continue;
                 }
                 decision.lane_change = mobil.decide(ctx, ego, nbrs, &self.weather);
+                // Heavy goods vehicles keep out of a motorway's leftmost lane where the
+                // carriageway has three or more ([`crate::drivers`], StVO §18(11)).
+                if self.params.human.truck_lane_restriction
+                    && matches!(actor.class, VehicleClass::Truck | VehicleClass::Trailer)
+                    && let LaneChangeDecision::Change { to, side: Side::Left, .. } =
+                        decision.lane_change
+                    && crate::drivers::is_restricted_left_lane(ctx.world(), to)
+                {
+                    decision.lane_change = LaneChangeDecision::Stay;
+                }
             }
             self.lane_change = Some(mobil);
         }
@@ -4570,6 +4675,16 @@ impl Mobility for NativeMobility {
             actor.amber_commit = decision.amber_commit;
             actor.amber_seen = decision.amber_seen;
             actor.release_at = decision.release_at;
+            if let Some((wg, wr, decided)) = decision.human {
+                actor.human.w_gap = wg;
+                actor.human.w_rate = wr;
+                crate::drivers::remember(
+                    &mut actor.human,
+                    self.params.human.reaction_time_s,
+                    dt_s,
+                    decided,
+                );
+            }
             let ceiling = if along {
                 decision.v0_mps.max(actor.speed_mps)
             } else {

@@ -302,6 +302,8 @@ const DIMENSIONLESS: &[&str] = &[
     "actors.vru.device_fraction",
     "actors.vru.red_crossing_share",
     "actors.vru.ebike_share",
+    "actors.vehicles.drivers.parameter_spread",
+    "actors.vehicles.drivers.perception_error",
     "threats.attackers[].fraction",
     "apps.glosa_compliance",
     "energy.fleet.*.ev_share",

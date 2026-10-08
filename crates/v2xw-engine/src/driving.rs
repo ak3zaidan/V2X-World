@@ -30,8 +30,21 @@ pub fn native_with_driving(
         Ok(Some(cf)) => NativeMobility::with_models(params, cf, MobilPreset::Kesting2007),
         Ok(None) | Err(_) => NativeMobility::new(params),
     };
-    if let Some(lateral) = &spec.lateral {
-        mobility = mobility.with_lateral(lateral.build(rules));
+    // `actors.vehicles.drivers.motorcycle_filtering` overrides the jurisdiction's rule;
+    // filtering needs the sub-lane model, so allowing it turns that model on.
+    let mut rules = *rules;
+    let mut lateral = spec.lateral.clone();
+    match scenario.actors.vehicles.drivers.motorcycle_filtering {
+        Some(true) => {
+            rules.motorcycle_filtering = v2xw_mobility::rules::Filtering::BetweenStopped;
+            let l = lateral.get_or_insert_with(Default::default);
+            l.params.filter.motorcycles_share = true;
+        }
+        Some(false) => rules.motorcycle_filtering = v2xw_mobility::rules::Filtering::Prohibited,
+        None => {}
+    }
+    if let Some(lateral) = &lateral {
+        mobility = mobility.with_lateral(lateral.build(&rules));
     }
     mobility
 }
