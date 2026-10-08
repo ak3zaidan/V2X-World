@@ -211,6 +211,31 @@ const SUN_DISTANCE_M = 900;
 const SUN_NOON = new Color(0xfff4e4);
 const SUN_LOW = new Color(0xff9a52);
 const NIGHT_TOP = new Color(0x05070f);
+/**
+ * The daylight sky the street-level views are drawn under in the dark theme (see
+ * {@link WorldRenderer.setStreetDaylight}): a clear-sky zenith and a paler, hazier horizon, the
+ * gradient a clear day shows from the ground (Preetham, Shirley and Smits 1999, "A Practical
+ * Analytic Model for Daylight", SIGGRAPH: zenith luminance well under the horizon's, and the
+ * horizon desaturated by the longer air path).
+ */
+const DAY_SKY_TOP = new Color(0x3f74b5);
+const DAY_SKY_HORIZON = new Color(0xa9c3dc);
+const DAY_SKY_BOTTOM = new Color(0x6d7884);
+/** Light bounced up off sunlit asphalt and concrete: a warm mid grey (albedo ~0.2-0.35). */
+const DAY_GROUND_BOUNCE = new Color(0x77736b);
+/**
+ * Linear gain on the building albedo in street daylight: 0x5b6674 comes out a neutral, slightly
+ * warm concrete grey (about 0x7a7d80), the colour of Midtown's limestone and concrete in the
+ * light rather than the dark page's blue-grey. A design value, read off the screenshots.
+ */
+const DAY_FACADE_GAIN = new Color().setRGB(1.75, 1.55, 1.28);
+/**
+ * Extra light at street level in daylight under {@link WorldRenderer.setStreetDaylight}. The dark
+ * theme's albedos (asphalt 0x3d454f, ground 0x28323d) under the plain 11:00 sun drew a chase view
+ * that read as night — near-black road under a navy sky. 1.6 brings the asphalt to a mid grey
+ * against the sky, a design value read off the screenshots like the plan view's 2.0.
+ */
+const STREET_DAY_LIFT = 1.6;
 const DUSK_HORIZON = new Color(0xff8a4a);
 const NIGHT_HORIZON = new Color(0x0a1020);
 
@@ -305,6 +330,8 @@ export class WorldRenderer {
   #darkness = 0;
   /** See {@link setLightLift}. */
   #lightLift = 1;
+  /** See {@link setStreetDaylight}. */
+  #streetDay = false;
   /** What the marking pass drew, for tests and the build report. */
   #markingReport: MarkingReport | null = null;
   /** Buildings a road runs through (indices), from `#buildPortals`. */
@@ -534,10 +561,12 @@ export class WorldRenderer {
     const dirZ = Math.sin(elevation);
     const daylight = Math.max(0, dirZ);
     this.#darkness = 1 - Math.min(1, daylight * 4);
+    // The street-daylight lift fades with the sun, so dusk and night are not brightened by it.
+    const lift = this.#lightLift * (this.#streetDay ? 1 + (STREET_DAY_LIFT - 1) * (1 - this.#darkness) : 1);
 
     this.#sunDir.set(dirX, dirY, Math.max(0.03, dirZ)).normalize();
     this.#placeSun();
-    this.sun.intensity = (0.15 + daylight * 2.6) * this.#lightLift;
+    this.sun.intensity = (0.15 + daylight * 2.6) * lift;
     // Warm near the horizon, neutral at noon.
     const warmth = 1 - Math.min(1, daylight * 2.4);
     this.sun.color.copy(SUN_NOON).lerp(SUN_LOW, warmth);
@@ -549,15 +578,39 @@ export class WorldRenderer {
     this.fill.intensity = this.sun.intensity * this.#options.fillLightFraction;
 
     // The sky is the only light a shadowed surface gets besides the fill, so it carries the shade.
-    this.hemisphere.intensity = (0.45 + daylight * 1.35) * this.#lightLift;
+    this.hemisphere.intensity = (0.45 + daylight * 1.35) * lift;
+    // The sky light's colours: in street daylight a pale sky over sunlit pavement, not the dark
+    // theme's navy over its near-black ground — under those every shaded wall came out deep blue.
+    if (this.#streetDay) {
+      this.hemisphere.color.copy(DAY_SKY_HORIZON);
+      this.hemisphere.groundColor.copy(DAY_GROUND_BOUNCE);
+      // The facades' albedo, warmed and lifted by the material's colour (it multiplies the vertex
+      // colours, so no geometry is rebuilt): the dark theme's 0x5b6674 is a blue-grey chosen to
+      // sit on a dark page, and lit from the street it read as navy glass.
+      this.#buildingMaterial.color.copy(DAY_FACADE_GAIN);
+    } else {
+      this.hemisphere.color.setHex(this.#theme.skyHorizon);
+      this.hemisphere.groundColor.setHex(this.#theme.ground);
+      this.#buildingMaterial.color.setRGB(1, 1, 1);
+    }
 
     const u = this.sky.material.uniforms;
     const night = 1 - Math.min(1, daylight * 3);
-    (u.uTop.value as Color).setHex(this.#theme.skyTop).lerp(NIGHT_TOP, night * 0.85);
-    (u.uHorizon.value as Color).setHex(this.#theme.skyHorizon)
+    const top = u.uTop.value as Color;
+    const horizon = u.uHorizon.value as Color;
+    if (this.#streetDay) {
+      top.copy(DAY_SKY_TOP);
+      horizon.copy(DAY_SKY_HORIZON);
+    } else {
+      top.setHex(this.#theme.skyTop);
+      horizon.setHex(this.#theme.skyHorizon);
+    }
+    top.lerp(NIGHT_TOP, night * 0.85);
+    horizon
       .lerp(DUSK_HORIZON, Math.max(0, 1 - Math.abs(daylight - 0.08) * 8) * 0.55)
       .lerp(NIGHT_HORIZON, night * 0.7);
-    (u.uBottom.value as Color).setHex(this.#theme.skyBottom);
+    if (this.#streetDay) (u.uBottom.value as Color).copy(DAY_SKY_BOTTOM).lerp(NIGHT_HORIZON, night * 0.7);
+    else (u.uBottom.value as Color).setHex(this.#theme.skyBottom);
     (u.uSun.value as Vector3).set(dirX, dirY, dirZ);
     u.uSunIntensity.value = daylight;
   }
@@ -574,6 +627,28 @@ export class WorldRenderer {
     if (l === this.#lightLift) return;
     this.#lightLift = l;
     this.setTimeOfDay(this.#timeOfDay);
+  }
+
+  /**
+   * Draw the street-level views under a daylight sky with brighter light, whatever the UI theme.
+   * The dark theme is a dark *page*; its world palette suits the plan view, but from the road it
+   * put a navy dome and near-black asphalt over a city at 11:00. Only the sky uniforms and the
+   * light intensities change, so switching is O(1) — no vertex colour is rebuilt.
+   */
+  setStreetDaylight(on: boolean): void {
+    if (on === this.#streetDay) return;
+    this.#streetDay = on;
+    this.setTimeOfDay(this.#timeOfDay);
+  }
+
+  /** Whether {@link setStreetDaylight} is on. */
+  get streetDaylight(): boolean {
+    return this.#streetDay;
+  }
+
+  /** The sky's horizon colour as last painted: what distance fog should fade into. */
+  get horizonColor(): Color {
+    return this.sky.material.uniforms.uHorizon.value as Color;
   }
 
   /** Swap the palette. Rebuilds vertex colours only if a world is loaded. */
