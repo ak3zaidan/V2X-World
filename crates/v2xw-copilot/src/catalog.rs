@@ -34,6 +34,12 @@ pub struct Setting {
     pub status: String,
     /// What the engine does with it, one line.
     pub note: String,
+    /// The plain-language label the settings window shows (`Radio technology`).
+    pub title: String,
+    /// `basic` or `advanced`, as the settings window files it.
+    pub level: String,
+    /// The recommended range, in words, when the engine publishes one.
+    pub recommended: String,
 }
 
 impl Setting {
@@ -54,6 +60,12 @@ impl Setting {
         }
         if self.status != "wired" {
             m.insert("status".into(), json!(self.status));
+        }
+        if !self.title.is_empty() {
+            m.insert("label".into(), json!(self.title));
+        }
+        if !self.recommended.is_empty() {
+            m.insert("recommended".into(), json!(self.recommended));
         }
         if !self.note.is_empty() {
             m.insert("note".into(), json!(self.note));
@@ -156,6 +168,9 @@ pub fn settings() -> &'static [Setting] {
                 default: row.get("default").cloned().unwrap_or(Value::Null),
                 status: s("x-status"),
                 note: shorten(&note, 220),
+                title: s("title"),
+                level: s("x-level"),
+                recommended: shorten(&s("x-recommended"), 120),
             });
         }
         out
@@ -190,7 +205,7 @@ pub fn find_settings(query: &str, limit: usize) -> Value {
         .iter()
         .map(|s| {
             let path = s.path.to_lowercase();
-            let note = s.note.to_lowercase();
+            let note = format!("{} {}", s.title, s.note).to_lowercase();
             let values = s.values.join(" ").to_lowercase();
             let score = words
                 .iter()
@@ -219,6 +234,9 @@ pub fn find_settings(query: &str, limit: usize) -> Value {
             "refused_by_this_engine": REFUSED_ATTACKERS,
         });
     }
+    if q.contains("city") || q.contains("place") || q.contains("map") || q.contains("where") {
+        out["cities"] = cities(query);
+    }
     if q.contains("jam") {
         out["jammers"] = json!(
             JAMMERS
@@ -228,6 +246,118 @@ pub fn find_settings(query: &str, limit: usize) -> Value {
         );
     }
     out
+}
+
+/// The plain-language label of a setting (`radio.rat` → `Radio technology`), from the
+/// engine's published settings; a key it does not publish is humanised.
+#[must_use]
+pub fn label_of(key: &str) -> String {
+    let path = key.trim_start_matches('/').replace('/', ".");
+    let generic = path
+        .split('.')
+        .map(|p| {
+            if p.chars().all(|c| c.is_ascii_digit()) {
+                "[]"
+            } else {
+                p
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".")
+        .replace(".[]", "[]");
+    match generic.as_str() {
+        "city" => return "City".into(),
+        "threats.attackers" => return "Attackers".into(),
+        "threats.jammers" => return "Jammers".into(),
+        "detection.local" => return "Detectors".into(),
+        "events" => return "Timeline".into(),
+        "time.duration_s" => return "Duration".into(),
+        "actors.vehicles.classes" => return "Vehicle mix".into(),
+        _ => {}
+    }
+    if let Some(s) = settings()
+        .iter()
+        .find(|s| s.path == generic || s.path == path)
+        .filter(|s| !s.title.is_empty())
+    {
+        return s.title.clone();
+    }
+    let last = generic.rsplit('.').next().unwrap_or(&generic);
+    let words = last.replace("[]", "").replace('_', " ");
+    let mut cs = words.chars();
+    cs.next()
+        .map(|f| f.to_uppercase().chain(cs).collect())
+        .unwrap_or_default()
+}
+
+/// A city's short name for a chip or a header: `Portland, OR`, `Midtown Manhattan, NY`.
+#[must_use]
+pub fn city_short_name(id: &str) -> Option<String> {
+    let c = v2xw_engine::city::find(id)?;
+    let name = c
+        .name
+        .split_once(" (")
+        .map(|(_, inner)| inner.trim_end_matches(')').to_string())
+        .unwrap_or_else(|| c.name.clone());
+    Some(if c.region == "europe" || c.state.is_empty() {
+        name
+    } else {
+        format!("{name}, {}", c.state)
+    })
+}
+
+/// The city library, matched against `query` (an id, a name or a state; an empty or
+/// unmatched query lists them all): id, short name, the area, and whether its map is on
+/// this machine. Read from the engine's own registry (`worlds/cities.yaml`), so the agent
+/// never says a city is missing without having looked.
+#[must_use]
+pub fn cities(query: &str) -> Value {
+    let reg = &v2xw_engine::city::registry().cities;
+    let words: Vec<String> = query
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '-')
+        .filter(|w| w.len() > 1 && !matches!(*w, "city" | "cities" | "the" | "on" | "in" | "map"))
+        .map(str::to_string)
+        .collect();
+    let hit = |c: &v2xw_engine::city::City| {
+        let hay = format!("{} {} {} {}", c.id, c.name, c.state, c.state_name).to_lowercase();
+        words.iter().any(|w| hay.contains(w.as_str()))
+    };
+    let mut picked: Vec<&v2xw_engine::city::City> = reg.iter().filter(|c| hit(c)).collect();
+    if picked.is_empty() {
+        picked = reg.iter().collect();
+    }
+    json!({
+        "how": "a change {\"key\": \"city\", \"value\": \"<id>\"}; any scenario runs on any city",
+        "cities": picked.iter().map(|c| {
+            let mut v = json!({"id": c.id,
+                               "name": city_short_name(&c.id).unwrap_or_else(|| c.name.clone()),
+                               "area": shorten(&c.description, 90)});
+            if !c.extract_present() {
+                v["map_missing"] = json!(format!("its map is not downloaded: worlds/fetch.sh {}", c.id));
+            }
+            v
+        }).collect::<Vec<_>>(),
+    })
+}
+
+/// Every city id with its short name, one line, for the agent's instructions.
+pub fn cities_line() -> &'static str {
+    static CELL: OnceLock<String> = OnceLock::new();
+    CELL.get_or_init(|| {
+        v2xw_engine::city::registry()
+            .cities
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} ({})",
+                    c.id,
+                    city_short_name(&c.id).unwrap_or_else(|| c.name.clone())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    })
 }
 
 /// The quick reference the agent's instructions carry: the settings most requests touch,
@@ -250,11 +380,24 @@ pub fn quick_reference() -> &'static str {
             .join(", ");
         format!(
             "Settings (dotted keys for `changes`; find_settings has the other ~160):\n\
+             - city: a city id from the list below (top level; any scenario runs on any \
+             city; it replaces the base's map)\n\
              - time.duration_s (s); seed (keep it to compare like with like)\n\
-             - actors.vehicles.demand.rate_veh_per_h (veh/h; {{\"multiply\": 2}} doubles it); \
-             actors.vehicles.equipped_fraction (0-1, market penetration)\n\
-             - actors.vru.pedestrians, actors.vru.cyclists (people; the vru-grid and \
-             midtown-street-life scenarios have them)\n\
+             - actors.vehicles.demand.rate_veh_per_h (veh/h; {{\"multiply\": 2}} doubles it; \
+             busy downtown 2400-4500, light 500-1000) needs demand.kind \
+             mobility/demand/poisson; actors.vehicles.equipped_fraction (0-1, market \
+             penetration)\n\
+             - actors.vehicles.classes: the fleet mix, a map of class to {{\"fraction\": x}} \
+             whose fractions sum to 1, e.g. {{\"passenger\": {{\"fraction\": 0.8}}, \
+             \"truck\": {{\"fraction\": 0.1}}, \"motorcycle\": {{\"fraction\": 0.1}}}}. \
+             Classes: passenger, delivery, truck, trailer, bus, coach, motorcycle, moped, \
+             emergency\n\
+             - actors.vru.pedestrians, actors.vru.cyclists (people); \
+             actors.vru.device_fraction (0-1 carrying a V2X device)\n\
+             - actors.rsu_placement: {{\"count\": n}} roadside units at the busiest signals\n\
+             - security.protocol.id: protocol/scms/camp (US SCMS) | protocol/etsi/ts102941 \
+             (EU CCMS); a base with a backend (credential-lifecycle, ccms-lifecycle) carries \
+             the entities it needs\n\
              - radio.rat: {rat}; radio.region: {region} (unset = the technology's own: \
              us-2016 for DSRC, us for LTE/NR); radio.devices.obu.tx_power_dbm\n\
              - weather.initial: {weather}; weather.intensity (0-1); weather.visibility_m\n\
@@ -285,7 +428,11 @@ pub fn quick_reference() -> &'static str {
              - apps.enabled: fcw, eebl, ima, lta, bsw, pcw, rlvw, glosa (all on by default)\n\
              Change values: a plain value sets the key; {{\"multiply\": k}} scales a number; \
              {{\"append\": item}} adds to a list; {{\"remove\": true}} deletes the key. \
-             Array items are addressed by index (threats.attackers.0.fraction).",
+             Array items are addressed by index (threats.attackers.0.fraction).\n\
+             \n\
+             Cities (`city` ids; every one is supported; list_cities says whether its map \
+             is downloaded): {cities}",
+            cities = cities_line(),
             rat = values("radio.rat"),
             region = values("radio.region"),
             weather = values("weather.initial"),
@@ -342,6 +489,25 @@ mod tests {
                 .as_array()
                 .is_some_and(Vec::is_empty)
         );
+    }
+
+    #[test]
+    fn portland_is_in_the_agents_city_list_and_its_search() {
+        assert!(
+            quick_reference().contains("portland (Portland, OR)"),
+            "the instructions name every city"
+        );
+        assert!(quick_reference().contains("manhattan (Midtown Manhattan, NY)"));
+        let found = cities("Portland");
+        assert!(
+            found["cities"]
+                .as_array()
+                .is_some_and(|c| c.iter().any(|c| c["id"] == "portland")),
+            "{found}"
+        );
+        assert!(find_settings("which city", 3)["cities"].is_object());
+        assert_eq!(label_of("city"), "City");
+        assert_eq!(label_of("threats.attackers"), "Attackers");
     }
 
     #[test]

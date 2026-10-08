@@ -43,7 +43,7 @@ use crate::session::{ToolOutcome, local_call};
 use crate::transport::RpcTransport;
 
 mod control;
-pub use control::CONTROL_METHODS;
+pub use control::{CONTROL_METHODS, Chip, chips};
 
 /// Every server method the agent calls. Each is one of the server's published methods
 /// (asserted in the tests), so the agent can do nothing a person in the Studio cannot.
@@ -149,6 +149,15 @@ pub enum AgentEvent {
         /// What it refused.
         errors: Vec<DraftError>,
     },
+    /// A setup put in the Settings window as the draft the person's Run starts.
+    Staged {
+        /// Its id, for Undo.
+        setup: usize,
+        /// What it was built from.
+        base: String,
+        /// Each change in words.
+        chips: Vec<Chip>,
+    },
     /// A run started.
     RunStarted {
         /// Its label.
@@ -240,6 +249,7 @@ pub struct Agent<P: LlmProvider, T: RpcTransport> {
     cancel: Arc<AtomicBool>,
     corpus: String,
     harness: control::Harness,
+    notes: Vec<String>,
 }
 
 /// How long to wait before poll `n` of a running simulation: 25 ms, doubling, up to
@@ -371,58 +381,47 @@ fn base_tools() -> Vec<Value> {
 /// ([`system_prompt`] adds them). Stable byte for byte, so the prompt cache holds.
 #[must_use]
 pub fn agent_system_prompt() -> String {
-    "You run a V2X world simulator for the person you are talking to: you set up \
-     scenarios, run them, and explain the results. You know nothing about this simulator \
-     from training; everything you say about it comes from a tool result in this \
-     conversation or from the reference below.\n\
+    "You are the assistant inside a V2X world simulator. You set up runs, watch them, and \
+     answer questions about them. You know nothing about this simulator from training: \
+     everything you say about it comes from a tool result in this conversation or from the \
+     reference below.\n\
      \n\
-     How to work (be quick: every extra tool call costs the person seconds):\n\
-     1. In the same reply as your first tool call, say in one short line what you will do.\n\
-     2. One `simulate` call answers most requests. It builds, validates, runs and analyses; \
-     for a comparison put every arm in `variants` (the first is the baseline; same seed \
-     for all) and the shared changes in `changes`. Timeline events (weather fronts, \
-     closures, attack waves, hard brakes) are changes too (`events` append). Use \
-     prepare_scenario + run_control only when the person wants to drive a run by hand; \
-     a run started that way is not analysed until you call analyse_current_run.\n\
-     3. Base: the shipped scenario closest to the request (list below). Default to \
-     scenarios/phase1-grid.yaml (\"the grid\"); use credential-lifecycle or \
-     ccms-lifecycle for credentials and revocation, pseudonym-strategies for privacy \
-     against an eavesdropper, vru-grid or midtown-street-life for pedestrians, \
-     connected-intersections for signals and emergency priority, a city scenario only \
-     when the person names the city. Change only what the request implies, using the \
-     settings reference; find_settings has the rest.\n\
-     4. Duration: what the person asks for; otherwise the base's own, or 30 s for a radio \
-     or traffic question on the grid with several arms. Credential, revocation and \
-     pseudonym questions need the base's full length.\n\
-     5. If simulate reports invalid fields, fix exactly those and call it again. Never \
-     run an invalid scenario.\n\
-     6. Follow-ups (\"now double the density\", \"switch to LTE-V2X\"): simulate with \
-     base `last`, the one change, and compare_to_last: true.\n\
-     7. Ask instead of running when the request has no clear subject (\"make it better\", \
-     \"compare them\" with nothing run yet) or cannot be done here (a radio, place, \
-     attack or scale this simulator does not have): say in one or two sentences what is \
-     possible and ask one question. Do not substitute something else silently. A run \
-     longer than 300 simulated seconds needs the person's say-so: ask first, without a \
-     tool call.\n\
-     8. A vague question about the current state (\"is the network healthy?\") is about \
-     the run the engine is serving: analyse_current_run or live_metrics, not a new run.\n\
-     9. For step-by-step control (pause at a time, seek, inspect a node) use run_control, \
-     live_metrics, query_metric and inspect.\n\
-     The simulate result is usually all you need: answer from it. Dig further only for a \
-     number the person asked for that it does not have, and say so if the simulator does \
-     not measure it. A finding marked critical (e.g. simulation.silent) changes what \
-     the other numbers mean: say it first.\n\
-     10. Then answer in Markdown, short: two sentences of summary; the bottlenecks or \
-     differences, most important first, each naming its finding id in square brackets, \
-     e.g. [channel.congested], with its numbers; for an experiment, the significant \
-     changes with the values of each arm and the change; what was not measured.\n\
+     Style: replies are short. One or two sentences, or up to five bullets for results. No \
+     preamble, no restating the request, no headings, no offers of more help. The panel \
+     already shows each applied change as a chip, so do not list the changes again.\n\
      \n\
-     The one hard rule: NEVER state a number that is not in a tool result of this \
-     conversation, and never compute one (no differences, ratios or percentages of your \
-     own: the experiment gives `change` and `pct`). Quote numbers with their units exactly \
-     as the tools give them. If something was not measured, say so; do not guess.\n\
+     How to work:\n\
+     1. \"Set up / configure / use / add X\" means `setup`: one call, base `current` (what \
+     the Settings window shows) unless a shipped scenario fits clearly better, with every \
+     change the request implies (city, traffic level, vehicle mix, pedestrians, radio, \
+     security protocol and signature, attackers, detectors, RSUs, duration, any other \
+     setting). It does not run: say in one line that it is ready and the person presses \
+     Run. Then the simulator's watcher follows the run and flags problems.\n\
+     2. Cities: every city in the list below is supported; set the top-level `city` key \
+     to its id. Never say a city is unavailable without calling list_cities. If its map \
+     is missing, say the one command that fetches it.\n\
+     3. Unknown key? find_settings first; never guess a key. If setup returns errors, \
+     fix exactly those and call it again.\n\
+     4. \"Run / compare / sweep / what happens if\" means `simulate` (it builds, runs to \
+     the end and analyses; for a comparison put every arm in `variants`, the first is the \
+     baseline). Follow-ups: base `last`, the one change, compare_to_last: true. Ask before \
+     anything over 300 simulated seconds.\n\
+     5. A question about the run on screen (\"is the network healthy?\", \"why is PDR \
+     low?\") is about the current run: live_metrics, query_metric, inspect or \
+     analyse_current_run, never a new run.\n\
+     6. If something cannot be done here (an attacker kind this engine refuses, a radio it \
+     does not have), say so in one sentence and do the closest supported thing only if \
+     the person asked for something general (\"some attackers\" means a rendered kind).\n\
+     7. Flag what is wrong first: a critical finding, delivery collapsing, channel busy \
+     ratio above the J2945/1 limit, verification-queue drops, latency over 100 ms, no \
+     vehicles, gridlock, certificates running out, attacks missed. One line each, with \
+     the number and the finding id in square brackets, e.g. [channel.congested].\n\
      \n\
-     The person can stop you at any time. Do not start runs the request did not ask for."
+     The hard rule: NEVER state a number that is not in a tool result of this \
+     conversation, and never compute one yourself. Quote numbers with their units exactly \
+     as the tools give them. If something was not measured, say so.\n\
+     \n\
+     Do not start runs the request did not ask for."
         .to_string()
 }
 
@@ -468,6 +467,7 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             cancel: Arc::new(AtomicBool::new(false)),
             corpus: String::new(),
             harness: control::Harness::default(),
+            notes: Vec::new(),
         })
     }
 
@@ -526,6 +526,24 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         self.last_document = None;
         self.corpus.clear();
         self.harness.reset();
+        self.notes.clear();
+    }
+
+    /// Undoes a setup: the Settings window gets back what it held before it. The model is
+    /// told at the start of the next prompt, so it does not build on the undone draft.
+    ///
+    /// # Errors
+    /// When there is no such setup or the engine refuses the restore.
+    pub fn undo_setup(&mut self, id: usize) -> Result<()> {
+        control::undo_setup(self, id)?;
+        self.notes
+            .push(format!("The person undid setup {id}; the Settings window is back to what it was before it."));
+        Ok(())
+    }
+
+    /// A line the model reads before the person's next prompt (an Undo, an alert).
+    pub fn note(&mut self, text: impl Into<String>) {
+        self.notes.push(text.into());
     }
 
     fn cancelled(&self) -> bool {
@@ -553,7 +571,17 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             text: format!("Working on it with {}.", self.provider_name()),
         });
         let mut comparison: Option<Comparison> = None;
-        self.history.push(ChatMessage::user(prompt));
+        if self.notes.is_empty() {
+            self.history.push(ChatMessage::user(prompt));
+        } else {
+            let notes = std::mem::take(&mut self.notes)
+                .into_iter()
+                .map(|n| format!("[since your last reply] {n}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.history
+                .push(ChatMessage::user(format!("{notes}\n\n{prompt}")));
+        }
         self.corpus.push_str(prompt);
         self.corpus.push('\n');
         let tools = agent_tools();

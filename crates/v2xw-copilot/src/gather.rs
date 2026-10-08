@@ -31,6 +31,10 @@ struct Row {
 /// read off these.
 const EXTRA_SERIES: [&str; 3] = ["cert_pool_valid", "ttc_conflicts", "nar"];
 
+/// Whole-run values the watcher's own alerts read beyond the analyst's headline set
+/// (`crate::watch`): verify-queue drops and the detectors' recall.
+const WATCH_METRICS: [&str; 3] = ["verify_overflow", "det_recall", "det_precision"];
+
 /// Reads everything the analyst uses about the run the server is serving.
 ///
 /// # Errors
@@ -87,7 +91,7 @@ pub fn gather<T: RpcTransport>(rpc: &mut T) -> Result<RunEvidence> {
 
     let mut metrics: BTreeMap<String, MetricEvidence> = BTreeMap::new();
     let whole = t_ns.max(1).saturating_add(1);
-    for name in HEADLINE_METRICS {
+    for name in HEADLINE_METRICS.into_iter().chain(WATCH_METRICS) {
         let Some(row) = rows.get(name) else { continue };
         let value = rpc
             .call(

@@ -205,6 +205,16 @@ pub enum Phase {
 pub const MAX_OBSERVATIONS_PER_RUN: usize = 60;
 
 /// The backend counters announced when they rise: `(entity, field, sentence)`.
+/// Simulated seconds with no actor on the road before it is called out: long enough for
+/// a Poisson demand of a few hundred veh/h to have placed its first vehicles.
+const NO_VEHICLES_AFTER_S: f64 = 15.0;
+/// Network mean speed under which traffic is called a standstill, m/s (see `alerts`).
+const GRIDLOCK_MPS: f64 = 1.0;
+/// Simulated seconds before a standstill is called: vehicles start from rest.
+const GRIDLOCK_AFTER_S: f64 = 30.0;
+/// Detection recall under which attacks are called missed: fewer than half flagged.
+const ATTACK_RECALL_LOW: f64 = 0.5;
+
 const COUNTERS: [(&str, &str, &str); 2] = [
     (
         "ma",
@@ -324,6 +334,9 @@ impl Watcher {
         let previous_t = self.t_s;
         self.t_s = t_s;
         self.t_end_s = t_end_s;
+        if self.phase == Phase::Watching {
+            self.no_vehicles(status, t_s);
+        }
         match self.phase {
             Phase::Watching => {
                 if state == "error" {
@@ -484,8 +497,146 @@ impl Watcher {
             );
         }
         self.trends(e);
+        self.alerts(e);
         self.events(e);
         self.feed[before..].to_vec()
+    }
+
+    /// Nothing on the road a while into a run: the demand placed no vehicle (a cap that
+    /// counts trips, a router that refuses every destination) and every other number of
+    /// the run is about an empty city.
+    fn no_vehicles(&mut self, status: &Value, t_s: f64) {
+        let Some(actors) = status.get("actors").and_then(Value::as_u64) else {
+            return;
+        };
+        let flagged = self.trends.get("traffic.no-vehicles").copied().unwrap_or(false);
+        if actors == 0 && t_s >= NO_VEHICLES_AFTER_S && !flagged {
+            self.push(
+                Severity::Critical,
+                ObservationKind::Trend,
+                Some("traffic.no-vehicles".into()),
+                Some(Layer::Traffic),
+                format!(
+                    "No vehicles on the road after {} s: the demand placed none, so the \
+                     network numbers describe an empty city.",
+                    fmt(t_s)
+                ),
+                vec![Evidence {
+                    label: "actors on the road".into(),
+                    value: 0.0,
+                    unit: "count".into(),
+                    source: "run.status.actors".into(),
+                }],
+            );
+            self.trends.insert("traffic.no-vehicles".into(), true);
+        }
+    }
+
+    /// The owner's named problems the analyst's whole-run findings do not cover: the
+    /// verifier dropping messages, traffic at a standstill, attacks detected or missed.
+    /// Each is said once per run, when it first becomes true.
+    fn alerts(&mut self, e: &RunEvidence) {
+        let whole = |name: &str| e.metrics.get(name).and_then(|m| m.value);
+        let once = |w: &mut Self, key: &str| -> bool {
+            let fresh = !w.trends.get(key).copied().unwrap_or(false);
+            w.trends.insert(key.into(), true);
+            fresh
+        };
+
+        // Verification-queue overflow: a message dropped unverified is a message the
+        // application never sees (IEEE 1609.2 §5.2: a receiver acts only on verified data).
+        if let Some(n) = whole("verify_overflow").filter(|n| *n > 0.0) {
+            if once(self, "access.verify-drops") {
+                self.push(
+                    Severity::Warning,
+                    ObservationKind::Trend,
+                    Some("access.verify-drops".into()),
+                    Some(Layer::Access),
+                    format!(
+                        "The verification queue is dropping messages ({} so far): receivers \
+                         hear more signed messages than they can check.",
+                        fmt(n)
+                    ),
+                    vec![Evidence {
+                        label: "messages dropped by a full verify queue".into(),
+                        value: n,
+                        unit: "count".into(),
+                        source: "verify_overflow".into(),
+                    }],
+                );
+            }
+        }
+
+        // Gridlock: the latest bin's network mean speed under 1 m/s with vehicles on the
+        // road. HCM 6th ed. (Exhibit 16-8) calls an urban street LOS F below 30% of its
+        // base free-flow speed; 1 m/s is under 10% of a 25 mph street, a jam rather than
+        // slow traffic.
+        if let Some(m) = e.metrics.get("mean_speed") {
+            let to_mps = if m.unit.contains("km") { 1.0 / 3.6 } else { 1.0 };
+            let latest = m.series.iter().rev().find_map(|(t, v)| v.map(|v| (*t, v)));
+            if let Some((t, v)) = latest {
+                let mps = v * to_mps;
+                if mps < GRIDLOCK_MPS && t >= GRIDLOCK_AFTER_S && once(self, "traffic.gridlock") {
+                    self.push(
+                        Severity::Warning,
+                        ObservationKind::Trend,
+                        Some("traffic.gridlock".into()),
+                        Some(Layer::Traffic),
+                        format!(
+                            "Traffic is at a standstill: mean speed {} {} in the latest \
+                             interval (under 1 m/s is a jam, HCM LOS F).",
+                            fmt(v),
+                            m.unit
+                        ),
+                        vec![Evidence {
+                            label: "mean speed, latest bin".into(),
+                            value: v,
+                            unit: m.unit.clone(),
+                            source: format!("mean_speed[t={} s]", fmt(t)),
+                        }],
+                    );
+                }
+            }
+        }
+
+        // Attacks: the detectors' recall over the attacker's messages so far.
+        if let Some(recall) = whole("det_recall") {
+            let (key, sev, text) = if recall < ATTACK_RECALL_LOW {
+                (
+                    "security.attacks-missed",
+                    Severity::Warning,
+                    format!(
+                        "Attacks are being missed: the detectors flagged {} of the \
+                         attackers' messages.",
+                        fmt(recall)
+                    ),
+                )
+            } else {
+                (
+                    "security.attacks-detected",
+                    Severity::Notice,
+                    format!(
+                        "Attacks detected: the detectors flagged {} of the attackers' messages.",
+                        fmt(recall)
+                    ),
+                )
+            };
+            if once(self, key) {
+                self.push(
+                    sev,
+                    ObservationKind::Trend,
+                    Some(key.into()),
+                    Some(Layer::Security),
+                    text,
+                    vec![Evidence {
+                        label: "detection recall".into(),
+                        value: recall,
+                        unit: "ratio".into(),
+                        source: "det_recall".into(),
+                    }],
+                );
+            }
+        }
     }
 
     fn is_current(&self, e: &RunEvidence) -> bool {
@@ -1073,6 +1224,38 @@ mod tests {
             s.layers.iter().any(|l| l.state == "not-measured"),
             "security was not measured"
         );
+    }
+
+    #[test]
+    fn an_empty_road_verify_drops_and_missed_attacks_are_flagged_once() {
+        let mut w = Watcher::default();
+        let mut st = status("r1", 1, "running", 5, 60);
+        st["actors"] = json!(0);
+        w.on_status(&st);
+        assert!(
+            !w.feed().iter().any(|o| o.finding.as_deref() == Some("traffic.no-vehicles")),
+            "not yet: vehicles may still be entering"
+        );
+        st["t_ns"] = json!(20_000_000_000u64);
+        w.on_status(&st);
+        w.on_status(&st);
+        let empty: Vec<_> = w
+            .feed()
+            .iter()
+            .filter(|o| o.finding.as_deref() == Some("traffic.no-vehicles"))
+            .collect();
+        assert_eq!(empty.len(), 1, "{:#?}", w.feed());
+        assert_eq!(empty[0].severity, Severity::Critical);
+
+        let mut e = quiet(20.0);
+        e.metrics.insert("verify_overflow".into(), metric(42.0, "count"));
+        e.metrics.insert("det_recall".into(), metric(0.2, "ratio"));
+        let new = w.on_evidence(&e);
+        let ids: Vec<_> = new.iter().filter_map(|o| o.finding.as_deref()).collect();
+        assert!(ids.contains(&"access.verify-drops"), "{ids:?}");
+        assert!(ids.contains(&"security.attacks-missed"), "{ids:?}");
+        assert!(new.iter().any(|o| o.text.contains("42")));
+        assert!(w.on_evidence(&e).is_empty(), "each is said once");
     }
 
     /// Congestion: the finding is announced once, announced again only when it is worse,
