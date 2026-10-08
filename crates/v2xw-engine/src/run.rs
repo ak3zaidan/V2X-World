@@ -120,6 +120,8 @@ mod geonet;
 pub use geonet::GeonetWarning;
 mod gn_air;
 pub use gn_air::GnAirStats;
+mod gcbr;
+pub use gcbr::GlobalCbrTally;
 pub mod jamming;
 mod link;
 mod radios;
@@ -493,6 +495,9 @@ pub struct RunReport {
     /// What the on-air GeoNetworking routers did (`net.geonet.forwarding: on-air`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gn_air: Option<GnAirStats>,
+    /// What the GeoNetworking global CBR did (`net.dcc_cbr: global`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gcbr: Option<GlobalCbrTally>,
 }
 
 /// The city-scale radio gate's totals ([`crate::scale`]).
@@ -922,6 +927,8 @@ pub struct Engine {
     pending_handoff: u64,
     /// The on-air GeoNetworking layer (`net.geonet.forwarding: on-air`).
     gn_air: Option<gn_air::GnOnAir>,
+    /// The GeoNetworking global CBR tables (`net.dcc_cbr: global`).
+    gcbr: Option<gcbr::GlobalCbr>,
     /// The 20 m bins of the reception census (`phy.prr`), the very bins the metric reads.
     prr_bins: v2xw_metrics::bins::Bins,
     /// When each node is next woken to hand over a finished signature check
@@ -1357,6 +1364,7 @@ impl Engine {
             timeline: TimelineState::default(),
             pending_handoff: 0,
             gn_air: None,
+            gcbr: None,
             prr_bins: v2xw_metrics::comms::prr_bins(),
             node_wake: BTreeMap::new(),
             infra_feeds: BTreeMap::new(),
@@ -1391,6 +1399,7 @@ impl Engine {
         if policy.acts() || policy.sniffer_sites().is_some() {
             engine.pseudonym_policy = Some(policy);
         }
+        engine.gcbr = gcbr::GlobalCbr::for_scenario(&engine.scenario);
         engine.gn_air = gn_air::GnOnAir::for_scenario(
             &engine.scenario,
             engine.mac.is_some() && engine.sidelink.is_none(),
@@ -2037,6 +2046,7 @@ impl Engine {
     /// the report. Called once; [`Engine::run`] calls it for a run driven in one piece.
     pub fn finish_run(&mut self, recorder: &mut dyn RunRecorder) -> RunReport {
         self.gn_finish();
+        self.report.gcbr = self.gcbr.as_ref().map(|g| g.tally);
         let refusals: u64 = self
             .nodes
             .values()
@@ -3392,7 +3402,11 @@ impl Engine {
         let cbr = self
             .mac
             .as_ref()
-            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, self.dsrc_channel, now));
+            .map(|m| Mac::<EngineCtx<'_>>::cbr(m, node, self.dsrc_channel, now))
+            .map(|local| match self.gcbr.as_mut() {
+                Some(g) => g.global(node, local, now),
+                None => local,
+            });
         // The unit's own state as its position estimate has it: the J2945/1 local
         // estimator. Only an on-board unit tracks itself; a roadside unit does not move.
         let own = (!self.rsus.contains_key(&node))
@@ -5947,6 +5961,9 @@ impl Engine {
                     delivered_app.push((outcome.rx, arrival));
                 }
                 self.gn_on_receive(outcome.rx, state, now);
+                if let Some(g) = self.gcbr.as_mut() {
+                    g.on_receive(outcome.rx, state.tx, now);
+                }
             }
         }
         if received_any {

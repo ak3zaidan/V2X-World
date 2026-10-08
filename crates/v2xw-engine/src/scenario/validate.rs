@@ -40,6 +40,7 @@ const GN_CBF_VARIANTS: [&str; 3] = ["etsi", "dpd", "gpc"];
 const CHANNEL_ACCESS: [&str; 2] = ["continuous", "alternating"];
 const GN_FORWARDING: [&str; 2] = ["on-air", "overlay"];
 const ACCESS_CATEGORIES: [&str; 2] = ["single", "etsi-profiles"];
+const DCC_CBR: [&str; 2] = ["local", "global"];
 /// The envelope profiles `v2xw-sec` implements.
 const ENVELOPES: [&str; 2] = ["ieee1609.2", "etsi103097"];
 /// The verification policies `v2xw-node` registers.
@@ -610,6 +611,7 @@ pub static CHOICES: &[Choices] = &[
     choices("net.channel_access", &CHANNEL_ACCESS),
     choices("net.geonet.forwarding", &GN_FORWARDING),
     choices("net.access_categories", &ACCESS_CATEGORIES),
+    choices("net.dcc_cbr", &DCC_CBR),
     choices("messages.codec_tier", &CODEC_TIERS),
     choices("messages.sets[]", &MESSAGE_SETS),
     choices("security.envelope", &ENVELOPES),
@@ -1274,6 +1276,16 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                maps them (DP0 hazard DENM -> AC_VO, DP2 CAM -> AC_BE, DP3 forwarded \
                GeoNetworking copies and other traffic -> AC_BK), each with its own AIFS \
                and contention window (IEEE 802.11-2020 Table 9-155, OCB).",
+    },
+    KeyStatus {
+        path: "net.dcc_cbr",
+        status: Status::Wired,
+        note: "gn-btp only. 'local' (default): the DCC algorithm acts on the station's \
+               own 100 ms CBR. 'global': ETSI TS 102 636-4-2 - every frame's GeoNetworking \
+               header carries the sender's CBR and the highest its neighbours reported, \
+               and the DCC acts on the maximum over two hops, so stations back off for \
+               hidden-terminal congestion. The run summary's gcbr counts how often it \
+               raised the input.",
     },
     KeyStatus {
         path: "net.mac_queue_depth",
@@ -3167,6 +3179,17 @@ fn net(s: &Scenario, e: &mut Vec<ScenarioError>) {
     }
     if let Some(a) = &s.net.access_categories {
         one_of("net.access_categories", a, &ACCESS_CATEGORIES, e);
+    }
+    if let Some(c) = &s.net.dcc_cbr {
+        one_of("net.dcc_cbr", c, &DCC_CBR, e);
+        if c == "global" && s.net.layer != "gn-btp" {
+            e.push(conflict(
+                "net.dcc_cbr",
+                "the global CBR is carried in GeoNetworking headers; set net.layer to \
+                 'gn-btp', or use 'local'"
+                    .to_string(),
+            ));
+        }
     }
     if let Some(d) = s.net.mac_queue_depth {
         bounded_at("net.mac_queue_depth", "net.mac_queue_depth", f64::from(d), e);

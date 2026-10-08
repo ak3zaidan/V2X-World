@@ -186,3 +186,49 @@ fn on_air_forwards_are_frames_in_the_relays_own_queue() {
         "forwards load the channel on the air: {senders:?} vs {senders2:?}"
     );
 }
+
+/// The access-layer settings change the run: the ETSI DCC profiles put CAMs in the
+/// best-effort queue (a longer AIFS and contention window, so a longer access delay), and
+/// the global CBR raises the congestion control's input above what a station hears.
+#[test]
+fn queue_profiles_and_the_global_cbr_change_the_run() {
+    let base = || {
+        let mut s = scenario(None);
+        s.time.duration_s = 8.0;
+        s.events.clear();
+        s
+    };
+    let single = run(base());
+    let mut etsi = base();
+    etsi.net.access_categories = Some("etsi-profiles".into());
+    etsi.net.dcc_cbr = Some("global".into());
+    etsi.net.mac_queue_depth = Some(4);
+    let etsi = run(etsi);
+    let per = |r: &RunReport| r.mac_access_delay_ns as f64 / r.mac_grants.max(1) as f64;
+    eprintln!(
+        "single {:.0} ns/grant ({} grants), etsi {:.0} ns/grant ({} grants), gcbr {:?}",
+        per(&single),
+        single.mac_grants,
+        per(&etsi),
+        etsi.mac_grants,
+        etsi.gcbr
+    );
+    assert!(single.mac_grants > 100 && etsi.mac_grants > 100);
+    assert!(
+        per(&etsi) > per(&single),
+        "AC_BE waits longer than AC_VO: {} vs {}",
+        per(&etsi),
+        per(&single)
+    );
+    assert!(single.gcbr.is_none());
+    let g = etsi.gcbr.expect("global CBR tally");
+    assert!(g.updates > 0 && g.raised > 0, "{g:?}");
+    // Validated: a global CBR needs GeoNetworking headers.
+    let mut bad = base();
+    bad.net.layer = "wsmp".into();
+    bad.security.envelope = "ieee1609.2".into();
+    bad.messages.sets = vec!["bsm".into()];
+    bad.net.dcc_cbr = Some("global".into());
+    let msg = format!("{:?}", bad.validate());
+    assert!(msg.contains("net.dcc_cbr"), "{msg}");
+}

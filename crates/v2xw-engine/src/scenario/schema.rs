@@ -1231,6 +1231,13 @@ pub struct Net {
     /// default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac_queue_depth: Option<u32>,
+    /// Which channel busy ratio the congestion control acts on (`gn-btp` only): `local`
+    /// (the station's own measurement; the default) or `global` (the highest of its own,
+    /// its neighbours' and their neighbours', carried in every GeoNetworking single-hop
+    /// header, ETSI TS 102 636-4-2), so a station also backs off for congestion it cannot
+    /// hear itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dcc_cbr: Option<String>,
 }
 
 /// Multi-hop GeoNetworking forwarding of hazard warnings ([`Net::geonet`]), EN 302 636-4-1
@@ -1352,6 +1359,7 @@ impl Default for Net {
             channel_access: None,
             access_categories: None,
             mac_queue_depth: None,
+            dcc_cbr: None,
         }
     }
 }

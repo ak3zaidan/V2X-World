@@ -131,6 +131,14 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Protocol only (no MAC)",
             "Forwarding runs over a fixed radio range with no contention or collisions: optimistic reach.",
         ),
+        ("net.dcc_cbr", "local") => w(
+            "Own measurement",
+            "Each radio throttles for the channel load it hears itself.",
+        ),
+        ("net.dcc_cbr", "global") => w(
+            "Two-hop maximum (ETSI GeoNetworking)",
+            "Radios share their load in every header and throttle for congestion up to two hops away.",
+        ),
         ("net.access_categories", "single") => w(
             "One queue (AC_VO)",
             "Every message waits in the same top-priority queue, as deployed US radios do.",
@@ -1251,6 +1259,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "net.geonet.forwarding" => "How forwarded copies travel",
         "net.access_categories" => "Message priority queues",
         "net.mac_queue_depth" => "Radio queue depth",
+        "net.dcc_cbr" => "Load the congestion control sees",
         "net.geonet.non_area_forwarding" => "Forwarding towards the area",
         "net.geonet.cbf_variant" => "When a contender stands down",
         "net.geonet.keep_alive_forwarding" => "Keep the warning alive",
