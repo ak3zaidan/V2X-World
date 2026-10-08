@@ -1196,8 +1196,12 @@ pub enum PropagationChoice {
     /// `propagation/two-ray-ground`: the flat-earth two-ray model.
     TwoRayGround,
     /// `propagation/log-distance-shadowing` with one fixed preset, or `None` for the
-    /// per-link choice from the environment and the vehicle-obstruction state.
-    LogDistance(Option<v2xw_radio::LogDistancePreset>),
+    /// per-link choice from the environment and the vehicle-obstruction state, and the
+    /// `radio.channel_model` overrides over it.
+    LogDistance(
+        Option<v2xw_radio::LogDistancePreset>,
+        v2xw_radio::LogDistanceTuning,
+    ),
     /// `propagation/tr37885`: the 3GPP LOS/NLOS/NLOSv state model with its own shadowing.
     Tr37885,
     /// `propagation/v2v-urban-geometric`: TR 37.885 LOS, geometric NLOSv, the Mangel 2011
@@ -1347,7 +1351,7 @@ pub fn radio_models(
                     _ => match params_of::<PresetParam<v2xw_radio::LogDistancePreset>>(
                         &choice.params,
                     ) {
-                        Ok(p) => PropagationChoice::LogDistance(p.preset),
+                        Ok(p) => PropagationChoice::LogDistance(p.preset, Default::default()),
                         Err(e) => {
                             errors.push(bad(e));
                             continue;
@@ -1442,11 +1446,34 @@ pub fn propagation_choice_at(
     tier: v2xw_core::card::Tier,
 ) -> PropagationChoice {
     let models = radio_models(scenario).unwrap_or_default();
-    models.propagation.unwrap_or(match tier {
+    let chosen = models.propagation.unwrap_or(match tier {
         v2xw_core::card::Tier::Abstract => PropagationChoice::FreeSpace,
-        v2xw_core::card::Tier::Medium => PropagationChoice::LogDistance(None),
+        v2xw_core::card::Tier::Medium => PropagationChoice::LogDistance(None, Default::default()),
         _ => PropagationChoice::Geometric,
-    })
+    });
+    let cm = &scenario.radio.channel_model;
+    if !cm.tunes_law() {
+        return chosen;
+    }
+    // `radio.channel_model`'s numbers are the log-distance law's. A law the scenario named
+    // explicitly is kept (the loader refuses the combination); a tier default is replaced,
+    // because a researcher who typed an exponent asked for that law.
+    let tuning = log_distance_tuning(scenario);
+    match chosen {
+        PropagationChoice::LogDistance(p, _) => PropagationChoice::LogDistance(p, tuning),
+        other if models.propagation.is_some() => other,
+        _ => PropagationChoice::LogDistance(None, tuning),
+    }
+}
+
+/// The `radio.channel_model` overrides of the log-distance law, at the run's carrier.
+pub fn log_distance_tuning(scenario: &Scenario) -> v2xw_radio::LogDistanceTuning {
+    let cm = &scenario.radio.channel_model;
+    v2xw_radio::LogDistanceTuning {
+        exponent: cm.path_loss_exponent,
+        sigma_db: cm.shadowing_sigma_db,
+        f_hz: radio_regulation(scenario).ok().map(|r| r.centre_hz()),
+    }
 }
 
 /// The radio one node carries, resolved from `radio.devices` for its class: what the link
@@ -1728,12 +1755,12 @@ pub fn los_mean_loss_db(
         PropagationChoice::TwoRayGround => {
             v2xw_radio::two_ray_ground_loss_db(d_m, h_t_m, h_r_m, f_hz, 1.0)
         }
-        PropagationChoice::LogDistance(Some(preset)) => preset.params().path_loss_db(d_m),
-        PropagationChoice::LogDistance(None) => {
-            v2xw_radio::LogDistancePreset::for_environment(env, false)
-                .params()
-                .path_loss_db(d_m)
+        PropagationChoice::LogDistance(Some(preset), t) => {
+            t.apply(preset.params()).path_loss_db(d_m)
         }
+        PropagationChoice::LogDistance(None, t) => t
+            .apply(v2xw_radio::LogDistancePreset::for_environment(env, false).params())
+            .path_loss_db(d_m),
         PropagationChoice::Tr37885 | PropagationChoice::Geometric => {
             if urban {
                 v2xw_radio::prop::tr37885_urban_los_db(d_m, f_hz / 1e9)
@@ -1886,11 +1913,16 @@ pub fn build_radio_at(
         PropagationChoice::TwoRayGround => Box::new(v2xw_radio::TwoRayGround::new(tier)),
         PropagationChoice::Tr37885 => Box::new(v2xw_radio::Tr37885::new(tier, env)),
         PropagationChoice::Geometric => Box::new(v2xw_radio::GeometricUrbanV2v::new(tier, env)),
-        PropagationChoice::LogDistance(None) => {
-            Box::new(v2xw_radio::LogDistanceShadowing::auto(tier, env))
-        }
-        PropagationChoice::LogDistance(Some(preset)) => {
-            Box::new(v2xw_radio::LogDistanceShadowing::new(tier, preset, env))
+        PropagationChoice::LogDistance(preset, tuning) => {
+            let mut law = match preset {
+                None => v2xw_radio::LogDistanceShadowing::auto(tier, env),
+                Some(p) => v2xw_radio::LogDistanceShadowing::new(tier, p, env),
+            }
+            .with_tuning(tuning);
+            if let Some(d) = scenario.radio.channel_model.shadowing_decorrelation_m {
+                law = law.with_decorrelation_m(d);
+            }
+            Box::new(law)
         }
     };
     let models = radio_models(scenario).unwrap_or_default();
@@ -1910,12 +1942,35 @@ pub fn build_radio_at(
         _ if sidelink => FadingChoice::None,
         _ => FadingChoice::Nakagami(v2xw_radio::NakagamiPreset::FixedMedium),
     };
-    let fading: Box<dyn BoxedFading> = match models.fading.unwrap_or(default_fading) {
-        FadingChoice::None => Box::new(v2xw_radio::NoFading::new()),
-        FadingChoice::Nakagami(preset) => Box::new(v2xw_radio::NakagamiFading::new(preset)),
+    let cm = &scenario.radio.channel_model;
+    // `radio.channel_model.fading` names the law in words; the loader refuses it beside a
+    // `radio.models.fading`, so at most one of the two is set.
+    let shape = match cm.fading.as_deref() {
+        Some("none") => Some(None),
+        Some("rayleigh") => Some(Some(1.0)),
+        Some("rice") => Some(Some(v2xw_radio::NakagamiFading::rice_m(
+            cm.rice_k_db.unwrap_or(DEFAULT_RICE_K_DB),
+        ))),
+        Some("nakagami") => Some(Some(cm.nakagami_shape.unwrap_or(3.0))),
+        _ => None,
+    };
+    let fading: Box<dyn BoxedFading> = match shape {
+        Some(None) => Box::new(v2xw_radio::NoFading::new()),
+        Some(Some(m)) => Box::new(
+            v2xw_radio::NakagamiFading::new(v2xw_radio::NakagamiPreset::FixedMedium).with_m(m),
+        ),
+        None => match models.fading.unwrap_or(default_fading) {
+            FadingChoice::None => Box::new(v2xw_radio::NoFading::new()),
+            FadingChoice::Nakagami(preset) => Box::new(v2xw_radio::NakagamiFading::new(preset)),
+        },
     };
     (propagation, fading)
 }
+
+/// The Rice factor `radio.channel_model.rice_k_db` defaults to, dB: a moderate direct
+/// path, inside the 3 to 10 dB that V2V measurements at 5.9 GHz report for line of sight
+/// (Cheng et al., IEEE JSAC 25(8), 2007, §IV).
+pub const DEFAULT_RICE_K_DB: f64 = 6.0;
 
 /// Registers the cards of the radio models a run composes, so the manifest pins them.
 ///
@@ -2485,13 +2540,17 @@ pub fn build_metrics(
     }
     // Signing overhead (`v2xw_metrics::signing`): opt-in, with `metrics: [all, signing]`
     // or a `sig_*` name, so a bare `all` keeps the digests it had before the group existed.
-    let signing_named = scenario.metrics.iter().any(|m| {
-        m == v2xw_metrics::signing::GROUP || m.starts_with("sig_")
-    });
+    let signing_named = scenario
+        .metrics
+        .iter()
+        .any(|m| m == v2xw_metrics::signing::GROUP || m.starts_with("sig_"));
     if signing_named {
         set.register(
             registry,
-            Box::new(v2xw_metrics::signing::SigningProvider::new(0, signing_facts(scenario))),
+            Box::new(v2xw_metrics::signing::SigningProvider::new(
+                0,
+                signing_facts(scenario),
+            )),
         )?;
     }
     if scenario.metrics.is_empty() {
@@ -2554,14 +2613,16 @@ pub fn signing_facts(scenario: &Scenario) -> v2xw_metrics::signing::SchemeFacts 
     facts.sig_octets = u64::from(scheme.sig_octets());
     if let Some(profile) = v2xw_node::profiles::get(&scenario.nodes.default_obu) {
         let engine = |op: &str| {
-            profile.op_cost(op).map_or("unknown".to_string(), |(_, on)| {
-                match on {
-                    v2xw_node::profile::RunsOn::Hsm => "hsm",
-                    v2xw_node::profile::RunsOn::Accelerator => "accelerator",
-                    v2xw_node::profile::RunsOn::Cpu => "cpu",
-                }
-                .to_string()
-            })
+            profile
+                .op_cost(op)
+                .map_or("unknown".to_string(), |(_, on)| {
+                    match on {
+                        v2xw_node::profile::RunsOn::Hsm => "hsm",
+                        v2xw_node::profile::RunsOn::Accelerator => "accelerator",
+                        v2xw_node::profile::RunsOn::Cpu => "cpu",
+                    }
+                    .to_string()
+                })
         };
         facts.sign_engine = engine(scheme.sign_op());
         facts.verify_engine = engine(scheme.verify_op());
@@ -2872,6 +2933,15 @@ pub fn generator_params(
     use v2xw_msg::generator::{BSM_GENERATOR_ID, BsmGenParams, CAM_GENERATOR_ID, CamGenParams};
     let mut bsm = BsmGenParams::j2945_1();
     let mut cam = CamGenParams::en302637_2();
+    if let Some(period) = fixed_message_period(scenario) {
+        // A fixed rate: the BSM's nominal interval, and a CAM whose shortest and longest
+        // interval are the same, so the dynamics triggers have nothing to choose between.
+        bsm.nominal_itt = period;
+        bsm.min_itt = bsm.min_itt.min(period);
+        cam.t_gen_cam_min = period;
+        cam.t_gen_cam_max = period;
+        cam.t_check_cam_gen = period.min(cam.t_check_cam_gen);
+    }
     let Some(choice) = scenario.messages.generator.as_ref() else {
         return (bsm, cam);
     };
@@ -3096,11 +3166,52 @@ pub fn build_phy(scenario: &Scenario) -> v2xw_radio::OfdmPhy {
     if let Some(preset) = models.per {
         phy = phy.with_per_model(v2xw_radio::PerModel::new(preset));
     }
-    phy.with_sensitivity(
+    let mut phy = phy.with_sensitivity(
         models
             .sensitivity
             .unwrap_or(v2xw_radio::SensitivityPreset::MeasuredObu),
-    )
+    );
+    let ps = &scenario.radio.phy;
+    if let Some(nf) = ps.noise_figure_db {
+        phy = phy.with_noise_figure_db(nf);
+    }
+    if let Some(s) = ps.sensitivity_dbm {
+        phy = phy.with_sensitivity_override_dbm(s);
+    }
+    if let Some(cca) = ps.cca_threshold_dbm {
+        phy = phy.with_cca(v2xw_radio::CcaConfig {
+            busy_dbm: cca,
+            energy_detect_dbm: None,
+        });
+    }
+    if let Some(cp) = ps.capture_threshold_db {
+        phy = phy.with_capture(v2xw_radio::CaptureRule::Threshold { cp_th_db: cp });
+    }
+    phy
+}
+
+/// The data rate `radio.phy.data_rate_mbps` names, or 6 Mbit/s QPSK 1/2 (SAE J2945/1).
+pub fn safety_mcs(scenario: &Scenario) -> v2xw_radio::Mcs {
+    scenario
+        .radio
+        .phy
+        .data_rate_mbps
+        .and_then(|r| {
+            v2xw_radio::Mcs::ALL
+                .into_iter()
+                .find(|m| (m.rate_mbps() - r).abs() < 1e-9)
+        })
+        .unwrap_or(v2xw_radio::Mcs::R6Qpsk12)
+}
+
+/// An access-category word (`vo`, `vi`, `be`, `bk`) as the MAC's type.
+pub fn access_category(word: Option<&str>) -> v2xw_radio::AccessCategory {
+    match word {
+        Some("vi") => v2xw_radio::AccessCategory::Vi,
+        Some("be") => v2xw_radio::AccessCategory::Be,
+        Some("bk") => v2xw_radio::AccessCategory::Bk,
+        _ => v2xw_radio::AccessCategory::Vo,
+    }
 }
 
 /// The medium-access model the scenario names, or `None` when the tier models no access.
@@ -3115,7 +3226,30 @@ pub fn build_phy(scenario: &Scenario) -> v2xw_radio::OfdmPhy {
 pub fn build_mac(scenario: &Scenario) -> Option<v2xw_radio::EdcaOcbMac> {
     match scenario.radio.tiers.mac {
         v2xw_core::card::Tier::Abstract => None,
-        _ => Some(v2xw_radio::EdcaOcbMac::new()),
+        _ => {
+            use v2xw_radio::{AccessCategory, EdcaParams};
+            let m = &scenario.radio.mac;
+            let mut mac = v2xw_radio::EdcaOcbMac::new();
+            for (ac, cw, aifsn) in [
+                (AccessCategory::Vo, m.cw_min_vo, m.aifsn_vo),
+                (AccessCategory::Vi, m.cw_min_vi, m.aifsn_vi),
+            ] {
+                if cw.is_some() || aifsn.is_some() {
+                    let std = EdcaParams::standard(ac);
+                    mac = mac.with_edca(
+                        ac,
+                        EdcaParams {
+                            cw_min: cw.unwrap_or(std.cw_min),
+                            aifsn: aifsn.unwrap_or(std.aifsn),
+                        },
+                    );
+                }
+            }
+            if let Some(q) = m.queue_length {
+                mac = mac.with_queue_depth(q as usize);
+            }
+            Some(mac)
+        }
     }
 }
 
@@ -3133,6 +3267,9 @@ pub fn build_dcc(scenario: &Scenario) -> Option<EngineDcc> {
     if scenario.radio.tiers.mac == v2xw_core::card::Tier::Abstract {
         return None;
     }
+    if scenario.radio.dcc.enabled == Some(false) {
+        return None;
+    }
     match technology_of(scenario.radio.rat) {
         Some(v2xw_radio::regulation::Technology::Ieee80211p) => {}
         // A sidelink's CR limits are its MAC's; above them, LTE-V2X under SAE J3161/1
@@ -3142,7 +3279,11 @@ pub fn build_dcc(scenario: &Scenario) -> Option<EngineDcc> {
             let on = choice
                 .and_then(|c| c.rate_control)
                 .unwrap_or_else(|| sidelink_profile(scenario) == Some(SidelinkProfile::SaeJ3161));
-            return on.then(|| EngineDcc::J2945(v2xw_radio::SaeJ2945Dcc::j3161()));
+            return on.then(|| {
+                let d = v2xw_radio::SaeJ2945Dcc::j3161();
+                let p = j2945_params(scenario, d.params());
+                EngineDcc::J2945(d.retuned(p))
+            });
         }
         None => return None,
     }
@@ -3154,11 +3295,59 @@ pub fn build_dcc(scenario: &Scenario) -> Option<EngineDcc> {
                 v2xw_radio::regulation::Region::Eu => DccChoice::EtsiAdaptive,
                 _ => DccChoice::SaeJ2945,
             });
+    let ds = &scenario.radio.dcc;
     Some(match choice {
-        DccChoice::SaeJ2945 => EngineDcc::J2945(v2xw_radio::SaeJ2945Dcc::new()),
-        DccChoice::EtsiAdaptive => EngineDcc::Adaptive(v2xw_radio::AdaptiveDcc::new()),
+        DccChoice::SaeJ2945 => EngineDcc::J2945(v2xw_radio::SaeJ2945Dcc::with_params(
+            j2945_params(scenario, v2xw_radio::J2945Params::J2945_1),
+        )),
+        DccChoice::EtsiAdaptive => {
+            let mut p = v2xw_radio::AdaptiveParams::TS102687;
+            if let Some(t) = ds.cbr_target {
+                p.cbr_target = t;
+            }
+            if let Some(a) = ds.adaptive_alpha {
+                p.alpha = a;
+            }
+            if let Some(b) = ds.adaptive_beta {
+                p.beta = b;
+            }
+            EngineDcc::Adaptive(v2xw_radio::AdaptiveDcc::new().with_params(p))
+        }
         DccChoice::EtsiReactive => EngineDcc::Reactive(v2xw_radio::ReactiveDcc::new()),
     })
+}
+
+/// The fixed awareness period `messages.rate_hz` asks for, if any.
+pub fn fixed_message_period(scenario: &Scenario) -> Option<Duration> {
+    scenario
+        .messages
+        .rate_hz
+        .filter(|r| r.is_finite() && *r > 0.0)
+        .map(|r| Duration::from_nanos((1e9 / r).round() as u64))
+}
+
+/// `radio.dcc`'s SAE J2945/1 numbers over `base`.
+pub fn j2945_params(scenario: &Scenario, base: v2xw_radio::J2945Params) -> v2xw_radio::J2945Params {
+    let ds = &scenario.radio.dcc;
+    let mut p = base;
+    // A fixed rate above 10 Hz lowers the floor J2945/1 holds the generator to, or the
+    // DCC would put the 100 ms vMinITT straight back.
+    if let Some(period) = fixed_message_period(scenario) {
+        p.min_itt = p.min_itt.min(period);
+    }
+    if let Some(ms) = ds.max_itt_ms {
+        p.max_itt = Duration::from_nanos((ms * 1e6).round() as u64);
+    }
+    if let Some(b) = ds.density_coefficient {
+        p.b_density = b;
+    }
+    if let Some(on) = ds.power_control {
+        p.power_control = on;
+    }
+    if let Some(min) = ds.min_power_dbm {
+        p.rp_min_dbm = min;
+    }
+    p
 }
 
 /// Builds one roadside unit's node runtime.

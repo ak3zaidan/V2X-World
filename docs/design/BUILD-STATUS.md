@@ -15,6 +15,45 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-07 — researcher-grade configuration, engine side
+
+New validated, published scenario fields, each read by the run. They are listed with
+defaults, ranges and sources in [`docs/guides/configuration-reference.md`](../guides/configuration-reference.md).
+
+| Section | Fields | Wired into |
+|---|---|---|
+| `radio.phy` | `data_rate_mbps`, `noise_figure_db`, `sensitivity_dbm`, `cca_threshold_dbm`, `capture_threshold_db` | `wiring::build_phy`, `wiring::safety_mcs` (replaces `run.rs`'s `SAFETY_MCS` constant) |
+| `radio.mac` | `periodic_access_category`, `event_access_category`, `cw_min_vo/vi`, `aifsn_vo/vi`, `queue_length` | `EdcaOcbMac::with_edca`, the frame's `ac` (replaces `SAFETY_AC`) |
+| `radio.channel_model` | `path_loss_exponent`, `shadowing_sigma_db`, `shadowing_decorrelation_m`, `fading`, `nakagami_shape`, `rice_k_db` | `LogDistanceTuning`, `NakagamiFading::with_m`, the candidate-range law |
+| `radio.dcc` | `enabled`, `cbr_target`, `adaptive_alpha`, `adaptive_beta`, `max_itt_ms`, `density_coefficient`, `power_control`, `min_power_dbm` | `wiring::build_dcc`, `AdaptiveDcc::with_params`, `SaeJ2945Dcc::retuned` |
+| `radio.sidelink` | `reservation_interval_ms`, `resource_keep_probability`, `rsrp_threshold_dbm`, `sensing` | `SidelinkAccess::for_scenario` over the profile's `SpsParams` |
+| `actors.vehicles.driver` | `max_accel_mps2`, `comfort_decel_mps2`, `time_headway_s`, `min_gap_m`, `politeness`, `lane_change_threshold_mps2` | `NativeMobility::with_driver_override` (passenger cars), MOBIL params |
+| `messages.rate_hz` | fixed BSM/CAM rate | `wiring::generator_params`, J2945/1 `vMinITT` |
+| `time.warmup_s` | warm-up | `on_metric_flush` records no sample inside it |
+
+Each field has a `BOUNDS` or `CHOICES` row, a `KEY_STATUS` row, a title, an
+explanation and a recommended range in `guide.rs`. `time.warmup_s`,
+`radio.phy.data_rate_mbps`, `radio.channel_model.fading`, `radio.dcc.enabled`,
+`messages.rate_hz` and `actors.vehicles.driver.time_headway_s` are `basic`; the rest
+are `advanced`. The loader refuses the combinations where a setting would do nothing,
+for example 802.11p numbers on a sidelink run, ETSI numbers under J2945/1, or EDCA
+numbers at the abstract MAC tier. None of the new fields is serialised when unset, so
+no existing scenario's hash moves.
+
+- **Verified:** `tests/researcher_config.rs` has nine tests, all green. Every area moves
+  a metric against a same-seed baseline, and the loader refusals are checked. The engine
+  lib `scenario` tests have 29 green, including `every_leaf_has_a_status`,
+  `every_number_publishes_a_unit` and `the_tables_name_real_fields`. The `v2xw-radio` lib
+  has 326 green.
+- **Shared-target pitfall:** the engine's build script writes `scenario_reflect.rs` into an
+  `OUT_DIR` that every worktree sharing `target/agents` overwrites. If another worktree
+  builds in between, the publish tests then see that worktree's schema. Touch
+  `schema.rs` inside the heavy lock before running them.
+- **Not done:** the agent's tool list and the Studio's quick settings were not changed;
+  they read the published surface. 20 MHz 802.11p, NR numerology, sidelink mode 1 and a
+  bounded certificate cache are not modelled; the reference lists why. The full engine
+  and server suites were not run.
+
 ## 2026-10-07 — round-4 merge: nine tracks onto main
 
 Merged with `--no-ff`, in this order: valfix, foundations, agentcrypto, page, settings,

@@ -127,6 +127,11 @@ impl NakagamiPreset {
 pub struct NakagamiFading {
     card: ModelCard,
     preset: NakagamiPreset,
+    /// A fixed shape parameter that replaces the preset's (`radio.channel_model`): `m = 1`
+    /// is Rayleigh, and a Rice channel of factor `K` is approximated by
+    /// `m = (K+1)²/(2K+1)` (Nakagami 1960; Stüber, *Principles of Mobile Communication*,
+    /// 4th ed., Eq. 2.57).
+    m_override: Option<f64>,
     /// `Ω`, the mean power gain. One, so the fading is a 0 dB-mean multiplicative gain
     /// and the link budget's path loss is not silently rescaled by it.
     omega: f64,
@@ -142,6 +147,7 @@ impl NakagamiFading {
         Self {
             card: nakagami_card(preset),
             preset,
+            m_override: None,
             omega: 1.0,
         }
     }
@@ -158,10 +164,25 @@ impl NakagamiFading {
         self.preset
     }
 
+    /// The model with one fixed shape parameter `m` (≥ 0.5) at every distance.
+    #[must_use]
+    pub fn with_m(mut self, m: f64) -> Self {
+        self.m_override = Some(m.max(0.5));
+        self
+    }
+
+    /// The Nakagami `m` that approximates a Rice channel of factor `k_db`
+    /// (`m = (K+1)²/(2K+1)`, `K` linear).
+    #[must_use]
+    pub fn rice_m(k_db: f64) -> f64 {
+        let k = math::pow(10.0, k_db / 10.0);
+        (k + 1.0) * (k + 1.0) / (2.0 * k + 1.0)
+    }
+
     /// The shape parameter this model uses at a distance.
     #[must_use]
     pub fn m_at(&self, d_m: f64) -> f64 {
-        self.preset.m_at(d_m)
+        self.m_override.unwrap_or_else(|| self.preset.m_at(d_m))
     }
 }
 

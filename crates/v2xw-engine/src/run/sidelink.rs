@@ -386,7 +386,23 @@ impl SidelinkAccess {
             choice.profile = crate::wiring::sidelink_profile(scenario);
         }
         let refsens_cutoff = choice.refsens_cutoff;
-        let (pool, params, profile) = configuration(scenario.radio.rat, choice)?;
+        let (pool, mut params, profile) = configuration(scenario.radio.rat, choice)?;
+        // `radio.sidelink`: a researcher's numbers over the profile's.
+        let st = &scenario.radio.sidelink;
+        if let Some(ms) = st.reservation_interval_ms {
+            params.rri = v2xw_radio::Rri(ms);
+        }
+        if let Some(p) = st.resource_keep_probability
+            && let Some(k) = v2xw_radio::ProbResourceKeep::from_probability(p)
+        {
+            params.prob_keep = k;
+        }
+        if let Some(t) = st.rsrp_threshold_dbm {
+            params.rsrp_threshold_dbm = t;
+        }
+        if let Some(on) = st.sensing {
+            params.sensing = on;
+        }
         // The channel the region's rules put this technology on (`radio.region`,
         // `radio.channel`); the loader has already refused a scenario with none.
         let regulation = crate::wiring::radio_regulation(scenario).ok()?;

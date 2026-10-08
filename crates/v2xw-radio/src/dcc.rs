@@ -315,6 +315,13 @@ impl AdaptiveDcc {
         self
     }
 
+    /// The model with other parameter values (a researcher's target load, say).
+    #[must_use]
+    pub fn with_params(mut self, params: AdaptiveParams) -> Self {
+        self.params = params;
+        self
+    }
+
     /// The parameters in force.
     #[must_use]
     pub const fn params(&self) -> AdaptiveParams {
@@ -1341,6 +1348,13 @@ impl SaeJ2945Dcc {
             card: j3161_card(),
             ..Self::with_params(J2945Params::J3161_1)
         }
+    }
+
+    /// The same model (and card) with its parameter values replaced.
+    #[must_use]
+    pub fn retuned(mut self, params: J2945Params) -> Self {
+        self.params = params;
+        self
     }
 
     /// The model with other parameter values, e.g. [`J2945Params::ROSTAMI`].

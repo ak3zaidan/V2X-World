@@ -274,7 +274,40 @@ fn ac_index(ac: AccessCategory) -> usize {
 pub struct EdcaOcbMac {
     card: ModelCard,
     queue_depth: usize,
+    /// `CWmin` per access category, in internal (BK, BE, VI, VO) order.
+    cw_min: [u32; 4],
+    /// `AIFS` per access category, in the same order.
+    aifs: [Duration; 4],
     nodes: BTreeMap<(u32, u16), NodeState>,
+}
+
+/// The EDCA parameter set of one access category (EN 302 663 Table C.4): what
+/// `radio.mac` overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdcaParams {
+    /// `CWmin`, slots. OCB never doubles it, so `CWmax` has no effect on broadcast.
+    pub cw_min: u32,
+    /// `AIFSN`, slots after SIFS.
+    pub aifsn: u32,
+}
+
+impl EdcaParams {
+    /// The standard's set for a category.
+    #[must_use]
+    pub const fn standard(ac: AccessCategory) -> Self {
+        Self {
+            cw_min: ac.cw_min(),
+            aifsn: ac.aifsn(),
+        }
+    }
+
+    /// `AIFS = AIFSN × aSlotTime + aSIFSTime` [EN 302 663 Annex C.4.4].
+    #[must_use]
+    pub const fn aifs(&self) -> Duration {
+        Duration::from_nanos(
+            timing::SLOT_TIME.as_nanos() * self.aifsn as u64 + timing::SIFS.as_nanos(),
+        )
+    }
 }
 
 impl EdcaOcbMac {
@@ -287,8 +320,25 @@ impl EdcaOcbMac {
         Self {
             card: edca_card(),
             queue_depth: DEFAULT_QUEUE_DEPTH,
+            cw_min: [0, 1, 2, 3].map(|i| ac_of_index(i).cw_min()),
+            aifs: [0, 1, 2, 3].map(|i| ac_of_index(i).aifs()),
             nodes: BTreeMap::new(),
         }
+    }
+
+    /// The MAC with one access category's EDCA parameters replaced.
+    #[must_use]
+    pub fn with_edca(mut self, ac: AccessCategory, params: EdcaParams) -> Self {
+        let i = ac_index(ac);
+        self.cw_min[i] = params.cw_min;
+        self.aifs[i] = params.aifs();
+        self
+    }
+
+    /// The `AIFS` in force for an access category.
+    #[must_use]
+    pub fn aifs(&self, ac: AccessCategory) -> Duration {
+        self.aifs[ac_index(ac)]
     }
 
     /// The MAC with a caller-chosen queue depth.
@@ -313,7 +363,7 @@ impl EdcaOcbMac {
     /// that a reader looking for the doubling finds this comment instead of a bug.
     #[must_use]
     pub fn contention_window(&self, ac: AccessCategory) -> u32 {
-        ac.cw_min()
+        self.cw_min[ac_index(ac)]
     }
 
     /// How many frames this node has been granted in one access category.
@@ -447,6 +497,8 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
         }
         let now = ctx.now();
         let depth = self.queue_depth;
+        let cw_min = self.cw_min[ac_index(ac)];
+        let ac_aifs = self.aifs[ac_index(ac)];
         // The backoff draw needs the RNG before the node state is borrowed mutably, and
         // it must happen unconditionally so that the draw count does not depend on the
         // medium state: a model whose stream position depended on the channel would
@@ -454,7 +506,7 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
         // medium is not already idle for AIFS.
         let slots = ctx
             .rng(RngDomain::MacBackoff, EntityRef::Node(node))
-            .below(u64::from(ac.cw_min()) + 1) as u32;
+            .below(u64::from(cw_min) + 1) as u32;
         let state = self.state(node, ch_of(&sdu));
         let index = ac_index(ac);
         if state.queues[index].len() >= depth {
@@ -472,7 +524,7 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
                 // No CCA report yet: the channel has been idle since time zero.
                 (false, None) => Some(Duration::from_nanos(now)),
             };
-            let aifs_met = idle_for.is_some_and(|d| d.as_nanos() >= ac.aifs().as_nanos());
+            let aifs_met = idle_for.is_some_and(|d| d.as_nanos() >= ac_aifs.as_nanos());
             state.backoff[index] = Some(if aifs_met {
                 // "On enqueue with idle medium for AIFS, transmit immediately."
                 Backoff {
@@ -489,8 +541,8 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
                         state
                             .idle_since
                             .unwrap_or(0)
-                            .max(now.saturating_sub(ac.aifs().as_nanos()))
-                            + ac.aifs().as_nanos(),
+                            .max(now.saturating_sub(ac_aifs.as_nanos()))
+                            + ac_aifs.as_nanos(),
                     )
                 };
                 Backoff {
@@ -499,7 +551,7 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
                     // Idle for less than an AIFS: the rest of it. Busy: a whole one after
                     // the medium clears; any further AIFS repeated after later busy
                     // periods is deferral, not this.
-                    aifs_ns: resume_at.map_or(ac.aifs().as_nanos(), |r| r.saturating_sub(now)),
+                    aifs_ns: resume_at.map_or(ac_aifs.as_nanos(), |r| r.saturating_sub(now)),
                     resume_at,
                 }
             });
@@ -509,6 +561,7 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
 
     fn on_cca(&mut self, ctx: &mut C, node: NodeId, ch: ChannelId, cca: CcaState) {
         let now = ctx.now();
+        let aifs = self.aifs;
         let state = self.state(node, ch);
         match cca {
             CcaState::Busy { .. } => {
@@ -534,7 +587,7 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
                     // Resume each countdown one AIFS after the medium went idle.
                     for (i, slot) in state.backoff.iter_mut().enumerate() {
                         if let Some(b) = slot {
-                            b.resume_at = Some(now + aifs_of_index(i).as_nanos());
+                            b.resume_at = Some(now + aifs[i].as_nanos());
                         }
                     }
                 } else if state.idle_since.is_none() {
@@ -651,13 +704,14 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
             attempt: 1,
         };
         if more_queued {
-            let ac = grant.ac;
+            let ac_cw = self.cw_min[index];
+            let ac_aifs = self.aifs[index];
             // Drawn here rather than at the top of `poll` on purpose: a grant is a causal
             // event, so the stream position follows the sequence of grants, while a draw
             // per poll would make it follow the engine's poll cadence.
             let slots = ctx
                 .rng(RngDomain::MacBackoff, EntityRef::Node(node))
-                .below(u64::from(ac.cw_min()) + 1) as u32;
+                .below(u64::from(ac_cw) + 1) as u32;
             let state = self.state(node, ch);
             state.backoff[index] = Some(Backoff {
                 remaining: slots,
@@ -667,8 +721,8 @@ impl<C: Ctx + ?Sized> Mac<C> for EdcaOcbMac {
                 // transmission freezes this again and the matching `Idle` re-computes the
                 // same instant, so a MAC driven by CCA and one driven by `poll` alone
                 // agree (EN 302 663 Annex C.4.2: the procedure runs once per frame).
-                resume_at: Some(air.after(due) + ac.aifs().as_nanos()),
-                aifs_ns: ac.aifs().as_nanos(),
+                resume_at: Some(air.after(due) + ac_aifs.as_nanos()),
+                aifs_ns: ac_aifs.as_nanos(),
             });
         }
         Some(grant)
@@ -701,10 +755,6 @@ fn ac_of_index(index: usize) -> AccessCategory {
         2 => AccessCategory::Vi,
         _ => AccessCategory::Vo,
     }
-}
-
-fn aifs_of_index(index: usize) -> Duration {
-    ac_of_index(index).aifs()
 }
 
 fn ch_of(sdu: &MacSdu) -> ChannelId {

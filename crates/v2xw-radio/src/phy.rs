@@ -394,6 +394,9 @@ pub struct OfdmPhy {
     cca: CcaConfig,
     capture: CaptureRule,
     noise_figure_db: f64,
+    /// A flat receiver sensitivity that replaces the table at every MCS
+    /// (`radio.phy.sensitivity_dbm`; Veins' `minPowerLevel`).
+    sensitivity_override_dbm: Option<f64>,
     next_tx_id: u64,
     /// Live and recent transmissions, by id.
     transmissions: BTreeMap<u64, Transmission>,
@@ -427,6 +430,7 @@ impl OfdmPhy {
             cca: CcaConfig::ETSI,
             capture: CaptureRule::default(),
             noise_figure_db: NOISE_FIGURE_HARDWARE_DB,
+            sensitivity_override_dbm: None,
             next_tx_id: 1,
             transmissions: BTreeMap::new(),
             arrivals: BTreeMap::new(),
@@ -473,6 +477,20 @@ impl OfdmPhy {
         self
     }
 
+    /// The PHY with one flat receiver sensitivity at every MCS, dBm, in place of the
+    /// preset's table.
+    #[must_use]
+    pub fn with_sensitivity_override_dbm(mut self, dbm: f64) -> Self {
+        self.sensitivity_override_dbm = Some(dbm);
+        self
+    }
+
+    /// The noise figure in use, dB.
+    #[must_use]
+    pub const fn noise_figure_db(&self) -> f64 {
+        self.noise_figure_db
+    }
+
     /// The error model in use.
     #[must_use]
     pub const fn per_model(&self) -> &PerModel {
@@ -494,7 +512,8 @@ impl OfdmPhy {
     /// The receiver sensitivity for one MCS, dBm.
     #[must_use]
     pub fn sensitivity_dbm(&self, mcs: Mcs) -> f64 {
-        self.sensitivity.sensitivity_dbm(mcs)
+        self.sensitivity_override_dbm
+            .unwrap_or_else(|| self.sensitivity.sensitivity_dbm(mcs))
     }
 
     /// The noise floor, dBm: thermal noise in 10 MHz plus the noise figure.

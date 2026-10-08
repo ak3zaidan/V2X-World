@@ -38,6 +38,12 @@ const GN_AREA_FORWARDING: [&str; 2] = ["cbf", "simple"];
 const GN_NON_AREA_FORWARDING: [&str; 2] = ["greedy", "cbf"];
 const GN_CBF_VARIANTS: [&str; 3] = ["etsi", "dpd", "gpc"];
 const CHANNEL_ACCESS: [&str; 2] = ["continuous", "alternating"];
+/// The EDCA access categories, as `radio.mac` spells them (EN 302 663 Table C.3).
+const ACCESS_CATEGORIES: [&str; 4] = ["vo", "vi", "be", "bk"];
+/// The small-scale fading laws `radio.channel_model.fading` names.
+const FADING_LAWS: [&str; 4] = ["none", "rayleigh", "rice", "nakagami"];
+/// The eight 10 MHz OFDM data rates, Mbit/s (IEEE 802.11-2020 Table 17-4).
+pub const DATA_RATES_MBPS: [f64; 8] = [3.0, 4.5, 6.0, 9.0, 12.0, 18.0, 24.0, 27.0];
 /// The envelope profiles `v2xw-sec` implements.
 const ENVELOPES: [&str; 2] = ["ieee1609.2", "etsi103097"];
 /// The verification policies `v2xw-node` registers.
@@ -150,6 +156,13 @@ pub static BOUNDS: &[Bound] = &[
     },
     // From a tenth of a second (a mobility step at most) to an hour: a sample is a
     // window's summary, and an hour is the coarsest a day's chart still has a shape at.
+    Bound {
+        path: "time.warmup_s",
+        lo: 0.0,
+        hi: f64::INFINITY,
+        exclusive_lo: false,
+        what: "the warm-up period",
+    },
     Bound {
         path: "time.metric_period_s",
         lo: 0.1,
@@ -544,6 +557,243 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the rotation distance",
     },
+    // `radio.phy`. Noise figure: 0 dB is an ideal receiver; 15 dB is worse than any
+    // automotive front end in the 3GPP TR 37.885 Table 6.1.2-1 assumptions (9 dB UE).
+    Bound {
+        path: "radio.phy.data_rate_mbps",
+        lo: 3.0,
+        hi: 27.0,
+        exclusive_lo: false,
+        what: "the 802.11p data rate",
+    },
+    Bound {
+        path: "radio.phy.noise_figure_db",
+        lo: 0.0,
+        hi: 15.0,
+        exclusive_lo: false,
+        what: "the receiver noise figure",
+    },
+    // Between the thermal floor less any useful SNR (-105 dBm) and a deafened receiver.
+    Bound {
+        path: "radio.phy.sensitivity_dbm",
+        lo: -105.0,
+        hi: -60.0,
+        exclusive_lo: false,
+        what: "the receiver sensitivity",
+    },
+    // -100 dBm is below the noise floor; -50 dBm is above Veins' -65 dBm by 15 dB.
+    Bound {
+        path: "radio.phy.cca_threshold_dbm",
+        lo: -100.0,
+        hi: -50.0,
+        exclusive_lo: false,
+        what: "the carrier-sense threshold",
+    },
+    Bound {
+        path: "radio.phy.capture_threshold_db",
+        lo: 0.0,
+        hi: 30.0,
+        exclusive_lo: false,
+        what: "the capture threshold",
+    },
+    // `radio.mac`. CWmin is 2^k - 1 up to aCWmax = 1023 and AIFSN is 2-15 for a non-AP
+    // station (IEEE 802.11-2020 §9.4.2.28, Table 9-155).
+    Bound {
+        path: "radio.mac.cw_min_vo",
+        lo: 1.0,
+        hi: 1023.0,
+        exclusive_lo: false,
+        what: "the voice contention window",
+    },
+    Bound {
+        path: "radio.mac.cw_min_vi",
+        lo: 1.0,
+        hi: 1023.0,
+        exclusive_lo: false,
+        what: "the video contention window",
+    },
+    Bound {
+        path: "radio.mac.aifsn_vo",
+        lo: 2.0,
+        hi: 15.0,
+        exclusive_lo: false,
+        what: "the voice AIFSN",
+    },
+    Bound {
+        path: "radio.mac.aifsn_vi",
+        lo: 2.0,
+        hi: 15.0,
+        exclusive_lo: false,
+        what: "the video AIFSN",
+    },
+    Bound {
+        path: "radio.mac.queue_length",
+        lo: 1.0,
+        hi: 1024.0,
+        exclusive_lo: false,
+        what: "the queue length",
+    },
+    // `radio.channel_model`. Exponents from 1.5 (waveguiding street, Kunisch 1.61) to 6
+    // (dense obstruction); shadowing 0-15 dB; Nakagami m >= 0.5 by definition.
+    Bound {
+        path: "radio.channel_model.path_loss_exponent",
+        lo: 1.5,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the path-loss exponent",
+    },
+    Bound {
+        path: "radio.channel_model.shadowing_sigma_db",
+        lo: 0.0,
+        hi: 15.0,
+        exclusive_lo: false,
+        what: "the shadowing spread",
+    },
+    Bound {
+        path: "radio.channel_model.shadowing_decorrelation_m",
+        lo: 0.0,
+        hi: 500.0,
+        exclusive_lo: true,
+        what: "the shadowing decorrelation distance",
+    },
+    Bound {
+        path: "radio.channel_model.nakagami_shape",
+        lo: 0.5,
+        hi: 20.0,
+        exclusive_lo: false,
+        what: "the Nakagami shape",
+    },
+    Bound {
+        path: "radio.channel_model.rice_k_db",
+        lo: -10.0,
+        hi: 30.0,
+        exclusive_lo: false,
+        what: "the Rice factor",
+    },
+    // `radio.dcc`. A target load below 0.1 throttles an empty channel; above 0.95 the
+    // channel is saturated before the loop reacts. α and β are TS 102 687 Table 3's
+    // 0.016 and 0.0012, open a decade either way.
+    Bound {
+        path: "radio.dcc.cbr_target",
+        lo: 0.1,
+        hi: 0.95,
+        exclusive_lo: false,
+        what: "the target channel load",
+    },
+    Bound {
+        path: "radio.dcc.adaptive_alpha",
+        lo: 0.001,
+        hi: 0.5,
+        exclusive_lo: false,
+        what: "the adaptive smoothing factor",
+    },
+    Bound {
+        path: "radio.dcc.adaptive_beta",
+        lo: 0.0001,
+        hi: 0.05,
+        exclusive_lo: false,
+        what: "the adaptive gain",
+    },
+    // vMax_ITT must not undercut vMin_ITT (100 ms); 2 s is a fifth of the CAM floor rate.
+    Bound {
+        path: "radio.dcc.max_itt_ms",
+        lo: 100.0,
+        hi: 2000.0,
+        exclusive_lo: false,
+        what: "the longest BSM interval",
+    },
+    Bound {
+        path: "radio.dcc.density_coefficient",
+        lo: 1.0,
+        hi: 200.0,
+        exclusive_lo: false,
+        what: "the density coefficient",
+    },
+    Bound {
+        path: "radio.dcc.min_power_dbm",
+        lo: -10.0,
+        hi: 20.0,
+        exclusive_lo: false,
+        what: "the lowest controlled power",
+    },
+    // `radio.sidelink`: TS 36.331's RRI range, probResourceKeep's 0-0.8, and the RSRP
+    // threshold's -128 dBm floor (TS 36.213 §14.1.1.6), capped at -60 dBm.
+    Bound {
+        path: "radio.sidelink.reservation_interval_ms",
+        lo: 1.0,
+        hi: 1000.0,
+        exclusive_lo: false,
+        what: "the resource reservation interval",
+    },
+    Bound {
+        path: "radio.sidelink.resource_keep_probability",
+        lo: 0.0,
+        hi: 0.8,
+        exclusive_lo: false,
+        what: "the resource keep probability",
+    },
+    Bound {
+        path: "radio.sidelink.rsrp_threshold_dbm",
+        lo: -128.0,
+        hi: -60.0,
+        exclusive_lo: false,
+        what: "the sensing RSRP threshold",
+    },
+    // `actors.vehicles.driver`: the ranges of the IDM calibrations in Treiber and
+    // Kesting, *Traffic Flow Dynamics* (2013) Table 11.2 and of Kesting 2007's MOBIL
+    // politeness, opened a little either way.
+    Bound {
+        path: "actors.vehicles.driver.max_accel_mps2",
+        lo: 0.3,
+        hi: 5.0,
+        exclusive_lo: false,
+        what: "the comfortable acceleration",
+    },
+    Bound {
+        path: "actors.vehicles.driver.comfort_decel_mps2",
+        lo: 0.5,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the comfortable deceleration",
+    },
+    Bound {
+        path: "actors.vehicles.driver.time_headway_s",
+        lo: 0.3,
+        hi: 4.0,
+        exclusive_lo: false,
+        what: "the desired time headway",
+    },
+    Bound {
+        path: "actors.vehicles.driver.min_gap_m",
+        lo: 0.5,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the standstill gap",
+    },
+    Bound {
+        path: "actors.vehicles.driver.politeness",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the MOBIL politeness",
+    },
+    Bound {
+        path: "actors.vehicles.driver.lane_change_threshold_mps2",
+        lo: 0.0,
+        hi: 2.0,
+        exclusive_lo: false,
+        what: "the lane-change threshold",
+    },
+    // `messages.rate_hz`: 1 Hz is the CAM floor (T_GenCamMax 1 s, EN 302 637-2 §6.1.3);
+    // 50 Hz is five times J2945/1's rate, past which a 10 MHz channel cannot carry a
+    // city fleet.
+    Bound {
+        path: "messages.rate_hz",
+        lo: 1.0,
+        hi: 50.0,
+        exclusive_lo: false,
+        what: "the message rate",
+    },
     Bound {
         path: "threats.attackers[].fraction",
         lo: 0.0,
@@ -597,6 +847,9 @@ pub static CHOICES: &[Choices] = &[
     choices("net.geonet.non_area_forwarding", &GN_NON_AREA_FORWARDING),
     choices("net.geonet.cbf_variant", &GN_CBF_VARIANTS),
     choices("net.channel_access", &CHANNEL_ACCESS),
+    choices("radio.mac.periodic_access_category", &ACCESS_CATEGORIES),
+    choices("radio.mac.event_access_category", &ACCESS_CATEGORIES),
+    choices("radio.channel_model.fading", &FADING_LAWS),
     choices("messages.codec_tier", &CODEC_TIERS),
     choices("messages.sets[]", &MESSAGE_SETS),
     choices("security.envelope", &ENVELOPES),
@@ -704,6 +957,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "The mobility period, and the step the stream and run.seek are quantised \
                to.",
+    },
+    KeyStatus {
+        path: "time.warmup_s",
+        status: Status::Wired,
+        note: "Metric samples whose window ends inside the warm-up are not recorded, so \
+               charts and summaries start once traffic has built up. The run report's \
+               whole-run counters still count it.",
     },
     KeyStatus {
         path: "time.metric_period_s",
@@ -1226,6 +1486,56 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                CAM). LLC/SNAP, the 802.11 MAC header and the FCS are added below either, \
                and the air time and the overhead metrics are computed over the whole \
                frame.",
+    },
+    KeyStatus {
+        path: "radio.phy",
+        status: Status::Wired,
+        note: "802.11p receiver and transmitter numbers. The data rate sets every safety \
+               frame's MCS and air time; the noise figure, sensitivity, carrier-sense and \
+               capture thresholds replace the PHY's defaults. A sidelink run (LTE-V2X, \
+               NR-V2X) refuses them: its numbers are radio.models.sidelink's.",
+    },
+    KeyStatus {
+        path: "radio.mac",
+        status: Status::Wired,
+        note: "802.11p EDCA at the medium and high MAC tiers: the access category of \
+               periodic and event messages, CWmin and AIFSN of the voice and video \
+               categories, and the per-category queue length.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.driver",
+        status: Status::Wired,
+        note: "The passenger-car driver: a, b, T and s0 replace the car-following model's \
+               calibration for cars (each driver keeps a style and heterogeneity draw \
+               around them); politeness and the threshold set MOBIL for every class. Read \
+               by the native mobility engine; a SUMO run takes its drivers from SUMO.",
+    },
+    KeyStatus {
+        path: "messages.rate_hz",
+        status: Status::Wired,
+        note: "A fixed BSM and CAM rate in place of J2945/1's 10 Hz and the ETSI CAM \
+               triggers; congestion control may still stretch it.",
+    },
+    KeyStatus {
+        path: "radio.sidelink",
+        status: Status::Wired,
+        note: "LTE-V2X and NR-V2X semi-persistent scheduling: reservation interval, keep \
+               probability, sensing threshold and sensing on or off, over the profile's \
+               values. Refused on an 802.11p run.",
+    },
+    KeyStatus {
+        path: "radio.dcc",
+        status: Status::Wired,
+        note: "Congestion control on or off, the ETSI adaptive target load and gains, and \
+               SAE J2945/1's longest interval, density coefficient and power control. A \
+               number for an algorithm the run does not use is refused.",
+    },
+    KeyStatus {
+        path: "radio.channel_model",
+        status: Status::Wired,
+        note: "The channel as plain numbers. The exponent, shadowing spread and \
+               decorrelation run the log-distance law with them; the fading law replaces \
+               the tier's Nakagami draw (Rice through Nakagami's m = (K+1)^2/(2K+1)).",
     },
     KeyStatus {
         path: "net.channel_access",
@@ -2264,6 +2574,19 @@ fn time(s: &Scenario, e: &mut Vec<ScenarioError>) {
     if let Some(p) = s.time.metric_period_s {
         bounded_at("time.metric_period_s", "time.metric_period_s", p, e);
     }
+    if let Some(w) = s.time.warmup_s {
+        bounded_at("time.warmup_s", "time.warmup_s", w, e);
+        if w >= s.time.duration_s {
+            e.push(conflict(
+                "time.warmup_s",
+                format!(
+                    "is {w} s, which leaves nothing of the {} s run to measure; make it \
+                     shorter than time.duration_s",
+                    s.time.duration_s
+                ),
+            ));
+        }
+    }
     // ADR 0004 decision 2's window, read from `BOUNDS` so the page's slider and this
     // check cannot disagree about it.
     if let Some(b) = bound_of("time.mobility_step_ms")
@@ -3038,6 +3361,54 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
         bounded_at("radio.range.max_m", "radio.range.max_m", cap, e);
     }
 
+    radio_tuning(s, e);
+    if let Some(r) = s.messages.rate_hz {
+        bounded_at("messages.rate_hz", "messages.rate_hz", r, e);
+        let timing_keys = [
+            "nominal_itt_ms",
+            "min_itt_ms",
+            "t_gen_cam_min_ms",
+            "t_gen_cam_max_ms",
+        ];
+        if s.messages
+            .generator
+            .as_ref()
+            .is_some_and(|g| timing_keys.iter().any(|k| g.params.get(*k).is_some()))
+        {
+            e.push(conflict(
+                "messages.rate_hz",
+                "and messages.generator.params both set the message interval; keep one".to_string(),
+            ));
+        }
+    }
+    let dv = &s.actors.vehicles.driver;
+    for (path, v) in [
+        ("actors.vehicles.driver.max_accel_mps2", dv.max_accel_mps2),
+        (
+            "actors.vehicles.driver.comfort_decel_mps2",
+            dv.comfort_decel_mps2,
+        ),
+        ("actors.vehicles.driver.time_headway_s", dv.time_headway_s),
+        ("actors.vehicles.driver.min_gap_m", dv.min_gap_m),
+        ("actors.vehicles.driver.politeness", dv.politeness),
+        (
+            "actors.vehicles.driver.lane_change_threshold_mps2",
+            dv.lane_change_threshold_mps2,
+        ),
+    ] {
+        if let Some(v) = v {
+            bounded_at(path, path, v, e);
+        }
+    }
+    if !dv.is_default() && s.mobility.as_ref().is_some_and(|m| m.provider == "sumo") {
+        e.push(conflict(
+            "actors.vehicles.driver",
+            "sets the native engine's drivers, and mobility.provider is sumo, whose drivers \
+             are SUMO's vType parameters"
+                .to_string(),
+        ));
+    }
+
     // `radio.models`: every family and id must be one `wiring::build_radio`,
     // `build_phy` and `build_obstacles` act on, with parameters that fit the model. The
     // parse is the wiring's own, so the loader and the run cannot disagree about it.
@@ -3118,6 +3489,258 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 e,
             );
         }
+    }
+}
+
+/// `radio.phy`, `radio.mac` and `radio.channel_model`: ranges, closed sets, and the
+/// combinations that would leave a number with nothing to act on.
+fn radio_tuning(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let p = &s.radio.phy;
+    let m = &s.radio.mac;
+    let c = &s.radio.channel_model;
+    for (path, v) in [
+        ("radio.phy.data_rate_mbps", p.data_rate_mbps),
+        ("radio.phy.noise_figure_db", p.noise_figure_db),
+        ("radio.phy.sensitivity_dbm", p.sensitivity_dbm),
+        ("radio.phy.cca_threshold_dbm", p.cca_threshold_dbm),
+        ("radio.phy.capture_threshold_db", p.capture_threshold_db),
+        ("radio.mac.cw_min_vo", m.cw_min_vo.map(f64::from)),
+        ("radio.mac.cw_min_vi", m.cw_min_vi.map(f64::from)),
+        ("radio.mac.aifsn_vo", m.aifsn_vo.map(f64::from)),
+        ("radio.mac.aifsn_vi", m.aifsn_vi.map(f64::from)),
+        ("radio.mac.queue_length", m.queue_length.map(f64::from)),
+        (
+            "radio.channel_model.path_loss_exponent",
+            c.path_loss_exponent,
+        ),
+        (
+            "radio.channel_model.shadowing_sigma_db",
+            c.shadowing_sigma_db,
+        ),
+        (
+            "radio.channel_model.shadowing_decorrelation_m",
+            c.shadowing_decorrelation_m,
+        ),
+        ("radio.channel_model.nakagami_shape", c.nakagami_shape),
+        ("radio.channel_model.rice_k_db", c.rice_k_db),
+    ] {
+        if let Some(v) = v {
+            bounded_at(path, path, v, e);
+        }
+    }
+    if let Some(r) = p.data_rate_mbps
+        && !DATA_RATES_MBPS.iter().any(|x| (x - r).abs() < 1e-9)
+    {
+        e.push(conflict(
+            "radio.phy.data_rate_mbps",
+            format!("{r} Mbit/s is not a 10 MHz 802.11p rate; choose one of 3, 4.5, 6, 9, 12, 18, 24 or 27"),
+        ));
+    }
+    for (path, cw) in [
+        ("radio.mac.cw_min_vo", m.cw_min_vo),
+        ("radio.mac.cw_min_vi", m.cw_min_vi),
+    ] {
+        if let Some(cw) = cw
+            && !(cw + 1).is_power_of_two()
+        {
+            e.push(conflict(
+                path,
+                format!("{cw} is not 2^k - 1; EDCA windows are 1, 3, 7, 15, 31, 63, 127, 255, 511 or 1023 slots (IEEE 802.11-2020 §9.4.2.28)"),
+            ));
+        }
+    }
+    for (path, ac) in [
+        (
+            "radio.mac.periodic_access_category",
+            &m.periodic_access_category,
+        ),
+        ("radio.mac.event_access_category", &m.event_access_category),
+    ] {
+        if let Some(ac) = ac {
+            one_of(path, ac, &ACCESS_CATEGORIES, e);
+        }
+    }
+    let dsrc = s.radio.rat == crate::scenario::schema::Rat::Dsrc80211p;
+    if !dsrc && (!p.is_default() || !m.is_default()) {
+        let path = if p.is_default() {
+            "radio.mac"
+        } else {
+            "radio.phy"
+        };
+        e.push(conflict(
+            path,
+            "configures the 802.11p radio, and radio.rat is not dsrc-80211p; a sidelink's \
+             MCS, sensitivity and resource settings are radio.models.sidelink's"
+                .to_string(),
+        ));
+    }
+    if !m.is_default() && s.radio.tiers.mac == v2xw_core::card::Tier::Abstract {
+        e.push(conflict(
+            "radio.mac",
+            "sets EDCA numbers, and radio.tiers.mac is 'abstract', which models no medium \
+             access; set it to 'medium' or 'high'"
+                .to_string(),
+        ));
+    }
+    let sl = &s.radio.sidelink;
+    for (path, v) in [
+        (
+            "radio.sidelink.reservation_interval_ms",
+            sl.reservation_interval_ms.map(f64::from),
+        ),
+        (
+            "radio.sidelink.resource_keep_probability",
+            sl.resource_keep_probability,
+        ),
+        ("radio.sidelink.rsrp_threshold_dbm", sl.rsrp_threshold_dbm),
+    ] {
+        if let Some(v) = v {
+            bounded_at(path, path, v, e);
+        }
+    }
+    if !sl.is_default() && dsrc {
+        e.push(conflict(
+            "radio.sidelink",
+            "configures C-V2X sidelink scheduling, and radio.rat is dsrc-80211p".to_string(),
+        ));
+    }
+    if let Some(p) = sl.resource_keep_probability
+        && v2xw_radio::ProbResourceKeep::from_probability(p).is_none()
+    {
+        e.push(conflict(
+            "radio.sidelink.resource_keep_probability",
+            format!("{p} is not a probResourceKeep value; choose 0, 0.2, 0.4, 0.6 or 0.8"),
+        ));
+    }
+    if let Some(ms) = sl.reservation_interval_ms {
+        let rri = v2xw_radio::Rri(ms);
+        let legal = match s.radio.rat {
+            crate::scenario::schema::Rat::LteV2xPc5 => rri.is_lte_legal(),
+            _ => rri.is_nr_legal(),
+        };
+        if !legal {
+            e.push(conflict(
+                "radio.sidelink.reservation_interval_ms",
+                format!(
+                    "{ms} ms is not a reservation interval this sidelink allows; LTE: 20, \
+                     50, 100, 200 ... 1000; NR: 1-99 or a multiple of 100 up to 1000"
+                ),
+            ));
+        }
+    }
+    let d = &s.radio.dcc;
+    for (path, v) in [
+        ("radio.dcc.cbr_target", d.cbr_target),
+        ("radio.dcc.adaptive_alpha", d.adaptive_alpha),
+        ("radio.dcc.adaptive_beta", d.adaptive_beta),
+        ("radio.dcc.max_itt_ms", d.max_itt_ms),
+        ("radio.dcc.density_coefficient", d.density_coefficient),
+        ("radio.dcc.min_power_dbm", d.min_power_dbm),
+    ] {
+        if let Some(v) = v {
+            bounded_at(path, path, v, e);
+        }
+    }
+    if !d.is_default() {
+        let running = crate::wiring::build_dcc(s);
+        let adaptive = matches!(running, Some(crate::wiring::EngineDcc::Adaptive(_)));
+        let sae = running
+            .as_ref()
+            .is_some_and(crate::wiring::EngineDcc::is_sae);
+        let off = d.enabled == Some(false);
+        for (path, set, applies, algo) in [
+            (
+                "radio.dcc.cbr_target",
+                d.cbr_target.is_some(),
+                adaptive,
+                "the ETSI adaptive",
+            ),
+            (
+                "radio.dcc.adaptive_alpha",
+                d.adaptive_alpha.is_some(),
+                adaptive,
+                "the ETSI adaptive",
+            ),
+            (
+                "radio.dcc.adaptive_beta",
+                d.adaptive_beta.is_some(),
+                adaptive,
+                "the ETSI adaptive",
+            ),
+            (
+                "radio.dcc.max_itt_ms",
+                d.max_itt_ms.is_some(),
+                sae,
+                "the SAE J2945/1",
+            ),
+            (
+                "radio.dcc.density_coefficient",
+                d.density_coefficient.is_some(),
+                sae,
+                "the SAE J2945/1",
+            ),
+            (
+                "radio.dcc.power_control",
+                d.power_control.is_some(),
+                sae,
+                "the SAE J2945/1",
+            ),
+            (
+                "radio.dcc.min_power_dbm",
+                d.min_power_dbm.is_some(),
+                sae,
+                "the SAE J2945/1",
+            ),
+        ] {
+            if set && !applies {
+                e.push(conflict(
+                    path,
+                    if off {
+                        "is a congestion-control number, and radio.dcc.enabled is false"
+                            .to_string()
+                    } else {
+                        format!(
+                            "configures {algo} congestion control, which this run does not \
+                             use (radio.models.dcc, the region and radio.tiers.mac decide which runs)"
+                        )
+                    },
+                ));
+            }
+        }
+    }
+    if let Some(f) = &c.fading {
+        one_of("radio.channel_model.fading", f, &FADING_LAWS, e);
+        if s.radio.models.contains_key("fading") {
+            e.push(conflict(
+                "radio.channel_model.fading",
+                "and radio.models.fading both choose the fading law; keep one".to_string(),
+            ));
+        }
+    }
+    if c.nakagami_shape.is_some() && c.fading.as_deref() != Some("nakagami") {
+        e.push(conflict(
+            "radio.channel_model.nakagami_shape",
+            "is the Nakagami shape; set radio.channel_model.fading to 'nakagami'".to_string(),
+        ));
+    }
+    if c.rice_k_db.is_some() && c.fading.as_deref() != Some("rice") {
+        e.push(conflict(
+            "radio.channel_model.rice_k_db",
+            "is the Rice factor; set radio.channel_model.fading to 'rice'".to_string(),
+        ));
+    }
+    if c.tunes_law()
+        && s.radio
+            .models
+            .get("propagation")
+            .is_some_and(|m| m.id != v2xw_radio::LogDistanceShadowing::ID)
+    {
+        e.push(conflict(
+            "radio.channel_model",
+            "sets the log-distance law's exponent or shadowing, and radio.models.propagation \
+             names another law; remove one of the two"
+                .to_string(),
+        ));
     }
 }
 

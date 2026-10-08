@@ -1187,6 +1187,45 @@ pub struct LogDistanceShadowing {
     d_corr_m: f64,
     sommer: Option<SommerCoefficients>,
     shadows: BTreeMap<(u32, u32), ShadowProcess>,
+    tuning: LogDistanceTuning,
+}
+
+/// A researcher's overrides of the log-distance law (`radio.channel_model`): what ns-3's
+/// `LogDistancePropagationLossModel` and Veins' `LogNormalShadowing` expose as plain
+/// numbers, applied over whichever preset the run would otherwise use.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct LogDistanceTuning {
+    /// A single-slope path-loss exponent `n`: `PL(d) = PL_FS(d0) + 10·n·log10(d/d0)` with
+    /// `d0` = 10 m and the Friis loss at the run's carrier as the anchor (Rappaport,
+    /// *Wireless Communications*, 2nd ed., Eq. 4.68). `None` keeps the preset's slopes.
+    pub exponent: Option<f64>,
+    /// The log-normal shadowing standard deviation, dB. `None` keeps the preset's.
+    pub sigma_db: Option<f64>,
+    /// The carrier the single-slope anchor is computed at, Hz; `None` is 5.9 GHz.
+    pub f_hz: Option<f64>,
+}
+
+impl LogDistanceTuning {
+    /// Whether this changes nothing.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.exponent.is_none() && self.sigma_db.is_none()
+    }
+
+    /// `base` with these overrides applied.
+    #[must_use]
+    pub fn apply(&self, mut base: DualSlope) -> DualSlope {
+        if let Some(n) = self.exponent {
+            base.n1 = None;
+            base.n2 = n;
+            base.pl0_db = friis_loss_db(D0_M, self.f_hz.unwrap_or(5.9e9));
+            base.d_b_m = f64::INFINITY;
+        }
+        if let Some(s) = self.sigma_db {
+            base.sigma_db = s;
+        }
+        base
+    }
 }
 
 impl LogDistanceShadowing {
@@ -1208,7 +1247,16 @@ impl LogDistanceShadowing {
             // documentation and [`crate::budget::evaluate`].
             sommer: None,
             shadows: BTreeMap::new(),
+            tuning: LogDistanceTuning::default(),
         }
+    }
+
+    /// The model with a researcher's exponent and shadowing overrides
+    /// ([`LogDistanceTuning`]).
+    #[must_use]
+    pub fn with_tuning(mut self, tuning: LogDistanceTuning) -> Self {
+        self.tuning = tuning;
+        self
     }
 
     /// The model choosing its preset per link from the environment class and whether a
@@ -1287,11 +1335,12 @@ impl LogDistanceShadowing {
 
     /// The parameters in force for one call.
     fn params_for(&self, los: &LosResult) -> DualSlope {
-        if self.auto_preset {
+        let base = if self.auto_preset {
             LogDistancePreset::for_environment(self.env, los.class.has_vehicle()).params()
         } else {
             self.preset.params()
-        }
+        };
+        self.tuning.apply(base)
     }
 }
 

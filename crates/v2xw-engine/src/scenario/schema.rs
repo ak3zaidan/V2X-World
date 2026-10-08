@@ -335,6 +335,14 @@ pub struct Time {
     /// hash moves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metric_period_s: Option<f64>,
+    /// The warm-up period, simulated seconds: how long the run fills with traffic before
+    /// it is measured. No metric sample is recorded for a window that ends inside it, so
+    /// the charts and the metric summaries describe the steady state rather than an empty
+    /// map filling up (the transient-deletion practice of Law, *Simulation Modeling and
+    /// Analysis*, 5th ed., §9.5.1). The run report's whole-run counters still include it.
+    /// Unset is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warmup_s: Option<f64>,
 }
 
 impl Time {
@@ -356,6 +364,13 @@ impl Time {
         self.metric_period_s
             .filter(|s| s.is_finite() && *s > 0.0)
             .map_or(Duration::from_secs(1), Duration::from_secs_f64)
+    }
+
+    /// The warm-up period's end, nanoseconds; zero when there is none.
+    pub fn warmup_ns(&self) -> u64 {
+        self.warmup_s
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .map_or(0, |s| (s * 1e9).round() as u64)
     }
 
     /// The mobility period as a [`Duration`].
@@ -382,6 +397,7 @@ impl Default for Time {
             des_resolution: Time::default_des_resolution(),
             time_dilation: Vec::new(),
             metric_period_s: None,
+            warmup_s: None,
         }
     }
 }
@@ -583,6 +599,51 @@ pub struct Vehicles {
         skip_serializing_if = "v2xw_mobility::carfollowing::library::DrivingSpec::is_default"
     )]
     pub driving: v2xw_mobility::carfollowing::library::DrivingSpec,
+    /// The passenger-car driver as plain numbers: the car-following parameters `a`, `b`,
+    /// `T` and `s0` (Treiber, Hennecke and Helbing 2000) and MOBIL's politeness and
+    /// lane-change threshold (Kesting, Treiber and Helbing 2007). Each set field replaces
+    /// the model's calibration for cars; every driver still gets their own style and
+    /// heterogeneity draw around it.
+    #[serde(default, skip_serializing_if = "DriverSettings::is_default")]
+    pub driver: DriverSettings,
+}
+
+/// Passenger-car driver settings (`actors.vehicles.driver`). Unset fields keep the
+/// car-following and lane-change models' calibration.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriverSettings {
+    /// The comfortable maximum acceleration `a`, m/s². Unset is the model's (1.4 m/s² for
+    /// the urban IDM).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_accel_mps2: Option<f64>,
+    /// The comfortable deceleration `b`, m/s². Unset is the model's (2.0 m/s²).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comfort_decel_mps2: Option<f64>,
+    /// The desired time gap to the vehicle ahead `T`, s. Shorter gaps raise road capacity
+    /// and shorten the time a warning has to act. Unset is the model's (about 1.2 to
+    /// 1.5 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_headway_s: Option<f64>,
+    /// The gap kept to a stopped vehicle `s0`, m. Unset is the model's (2 m).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_gap_m: Option<f64>,
+    /// MOBIL's politeness factor `p`: 0 is a selfish driver who changes lane whenever it
+    /// helps them, 1 weighs the followers' loss as much as their own gain. Unset is 0.5
+    /// (Kesting 2007, which reports 0.2 to 0.5 as realistic). Applies to every class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub politeness: Option<f64>,
+    /// MOBIL's lane-change threshold `Δa_th`, m/s²: the least advantage worth changing
+    /// lane for. Unset is 0.1 m/s² (ibid.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_change_threshold_mps2: Option<f64>,
+}
+
+impl DriverSettings {
+    /// Whether nothing is set.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl Vehicles {
@@ -598,6 +659,7 @@ impl Default for Vehicles {
             classes: BTreeMap::new(),
             equipped_fraction: Vehicles::default_equipped(),
             driving: v2xw_mobility::carfollowing::library::DrivingSpec::default(),
+            driver: DriverSettings::default(),
         }
     }
 }
@@ -847,6 +909,241 @@ pub struct Radio {
     /// interference ratio.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adjacent_channel: Vec<AdjacentEmitter>,
+    /// The 802.11p receiver and transmitter settings a researcher varies: data rate (MCS),
+    /// noise figure, receiver sensitivity, carrier-sense threshold and capture threshold.
+    /// Each one left unset keeps the model's cited default.
+    #[serde(default, skip_serializing_if = "PhySettings::is_default")]
+    pub phy: PhySettings,
+    /// 802.11p medium access (EDCA): which access category each kind of message is queued
+    /// in, the contention window and arbitration spacing of the two safety categories, and
+    /// the queue length.
+    #[serde(default, skip_serializing_if = "MacSettings::is_default")]
+    pub mac: MacSettings,
+    /// The radio channel as plain numbers: path-loss exponent, shadowing spread and
+    /// decorrelation distance, and the small-scale fading law (none, Rayleigh, Rice or
+    /// Nakagami-m).
+    #[serde(default, skip_serializing_if = "ChannelModelSettings::is_default")]
+    pub channel_model: ChannelModelSettings,
+    /// Decentralised congestion control as numbers: on or off, the ETSI adaptive target
+    /// load and gains, and the SAE J2945/1 rate and power limits. Which algorithm runs is
+    /// `radio.models.dcc` (the region's by default).
+    #[serde(default, skip_serializing_if = "DccSettings::is_default")]
+    pub dcc: DccSettings,
+    /// C-V2X sidelink scheduling as numbers (LTE-V2X Mode 4, NR-V2X Mode 2): the
+    /// reservation interval, the probability of keeping a resource, the sensing exclusion
+    /// threshold, and sensing on or off. The profile, MCS and retransmissions are
+    /// `radio.models.sidelink`'s.
+    #[serde(default, skip_serializing_if = "SidelinkSettings::is_default")]
+    pub sidelink: SidelinkSettings,
+}
+
+/// Sidelink semi-persistent scheduling settings (`radio.sidelink`). Unset fields keep the
+/// profile's.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidelinkSettings {
+    /// How often a radio's reserved resource repeats, ms (the resource reservation
+    /// interval, RRI). LTE allows 20, 50, 100 or a multiple of 100 up to 1,000
+    /// (TS 36.331 `sl-ResourceReservationPeriod`); NR also 1 to 99. Unset is 100 ms, one
+    /// BSM period.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reservation_interval_ms: Option<u32>,
+    /// The probability a radio keeps its resource when the reselection counter runs out
+    /// (`probResourceKeep`): 0, 0.2, 0.4, 0.6 or 0.8 (TS 36.331). Higher keeps
+    /// reservations stable for others to sense, but makes two radios that collide keep
+    /// colliding. Unset is the profile's (0.8 under SAE J3161/1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_keep_probability: Option<f64>,
+    /// The RSRP above which a resource another radio reserved is excluded from selection,
+    /// dBm; it is raised 3 dB at a time until enough candidates remain (TS 36.213
+    /// §14.1.1.6). Unset is the profile's (−128 dBm NR, −110 dBm LTE studies).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rsrp_threshold_dbm: Option<f64>,
+    /// Whether radios sense the channel before choosing a resource. `false` is the random
+    /// selection baseline (Ali et al. 2021 §II.1). Unset is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensing: Option<bool>,
+}
+
+impl SidelinkSettings {
+    /// Whether nothing is set.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Congestion-control settings (`radio.dcc`). Unset fields keep the standards' tables.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DccSettings {
+    /// Whether 802.11p congestion control runs at all. `false` lets every radio send at
+    /// its full rate and power however busy the channel is: the baseline a DCC study
+    /// compares against. Unset is on (EN 302 571 requires it in Europe).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// The channel load the ETSI adaptive algorithm steers towards, as a fraction of time
+    /// busy. Unset is 0.68 (TS 102 687 V1.2.1 Table 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cbr_target: Option<f64>,
+    /// The ETSI adaptive smoothing factor α: how much of each new load measurement enters
+    /// the running average. Unset is 0.016 (ibid.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_alpha: Option<f64>,
+    /// The ETSI adaptive gain β: how hard the allowed duty cycle reacts to the gap from the
+    /// target. Unset is 0.0012 (ibid.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_beta: Option<f64>,
+    /// The longest interval SAE J2945/1 may stretch a BSM's spacing to under congestion,
+    /// ms (`vMax_ITT`). Unset is 600 ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_itt_ms: Option<f64>,
+    /// The vehicle density at which SAE J2945/1 starts to stretch the interval
+    /// (`B`, vehicles within 100 m). Unset is 25.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density_coefficient: Option<f64>,
+    /// Whether SAE J2945/1 also lowers the radiated power as the channel fills. Unset is
+    /// on (J2945/1 §6.3.8); J3161/1 for LTE-V2X has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub power_control: Option<bool>,
+    /// The lowest power J2945/1's power control may go to, dBm (`vRP_Min`). Unset is 10.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_power_dbm: Option<f64>,
+}
+
+impl DccSettings {
+    /// Whether nothing is set.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// 802.11p physical-layer settings (`radio.phy`). Unset fields keep the defaults.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PhySettings {
+    /// The data rate every safety frame is sent at, Mbit/s: one of 3, 4.5, 6, 9, 12, 18,
+    /// 24 or 27 (the eight 10 MHz OFDM rates of IEEE 802.11-2020 Table 17-4). A higher
+    /// rate takes less air time per frame but needs a stronger signal, so it trades range
+    /// for channel capacity. Unset is 6 Mbit/s, the SAE J2945/1 default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_rate_mbps: Option<f64>,
+    /// The receiver noise figure, dB: how much noise the receiver's own electronics add on
+    /// top of the thermal floor of −104 dBm in 10 MHz. Unset is the hardware figure the
+    /// PHY card cites (6 dB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise_figure_db: Option<f64>,
+    /// One receiver sensitivity at every data rate, dBm: a frame weaker than this is not
+    /// decoded (Veins' `minPowerLevel`). Unset uses the per-rate table that
+    /// `radio.models.phy` selects (fielded units, −92 dBm at 6 Mbit/s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensitivity_dbm: Option<f64>,
+    /// The carrier-sense (CCA) threshold, dBm: energy above it makes a radio treat the
+    /// channel as busy, defer its transmission and count the time in the channel busy
+    /// ratio. Unset is −85 dBm (ETSI EN 302 571 §4.2.10.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cca_threshold_dbm: Option<f64>,
+    /// A hard capture threshold, dB: a frame is decoded only while it stays this far above
+    /// the interference plus noise (Torrent-Moreno 2009, Eq. 1). Unset uses the SINR trace
+    /// against the error model, as Veins does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_threshold_db: Option<f64>,
+}
+
+impl PhySettings {
+    /// Whether nothing is set.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// 802.11p EDCA settings (`radio.mac`). Unset fields keep EN 302 663 Table C.4.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacSettings {
+    /// The access category periodic awareness messages (BSM, CAM, PSM, VAM, CPM, SPaT,
+    /// MAP) are queued in: `vo`, `vi`, `be` or `bk`. Unset is `vo`, the highest, which is
+    /// where SAE J2945/1 puts the BSM; EN 302 663 Annex C puts the CAM at `vi`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub periodic_access_category: Option<String>,
+    /// The access category event messages (DENM, forwarded hazard warnings) are queued
+    /// in. Unset is `vo` (EN 302 663 Annex C).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_access_category: Option<String>,
+    /// `CWmin` of the voice category, slots: a frame waits a random 0 to `CWmin` idle
+    /// slots before it may start. A larger window means fewer collisions and more delay.
+    /// Unset is 3 (EN 302 663 Table C.4). Broadcast never doubles it, so there is no
+    /// `CWmax` to set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cw_min_vo: Option<u32>,
+    /// `AIFSN` of the voice category, slots: the fixed idle wait before the countdown.
+    /// Unset is 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aifsn_vo: Option<u32>,
+    /// `CWmin` of the video category, slots. Unset is 7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cw_min_vi: Option<u32>,
+    /// `AIFSN` of the video category, slots. Unset is 3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aifsn_vi: Option<u32>,
+    /// How many frames each access category queues before it drops the next. Unset is 64.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_length: Option<u32>,
+}
+
+impl MacSettings {
+    /// Whether nothing is set.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The radio channel as plain numbers (`radio.channel_model`). Unset fields keep the
+/// propagation and fading models the tier or `radio.models` chooses.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelModelSettings {
+    /// A single-slope path-loss exponent: 2 is free space, about 2.7 to 3.5 a city street.
+    /// Setting it, or the shadowing spread, runs the log-distance law
+    /// (`propagation/log-distance-shadowing`) with these numbers over a free-space anchor
+    /// at 10 m. Unset keeps the measured dual-slope fits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_loss_exponent: Option<f64>,
+    /// The log-normal shadowing standard deviation, dB: how much the received power
+    /// wanders around the path-loss mean as buildings and trucks come and go. Unset keeps
+    /// the fit's own (about 4 dB in line of sight, 6 to 7 dB obstructed, Abbas 2015).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadowing_sigma_db: Option<f64>,
+    /// How far a vehicle moves before its shadowing is uncorrelated with what it was,
+    /// metres (Gudmundson 1991). Unset is the environment's (about 10 m in a city).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadowing_decorrelation_m: Option<f64>,
+    /// The small-scale fading law: `none`, `rayleigh` (no direct path), `rice` (a direct
+    /// path `rice_k_db` stronger than the scatter) or `nakagami` (shape `nakagami_shape`).
+    /// Unset keeps the tier's choice (Nakagami m = 3 for 802.11p).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fading: Option<String>,
+    /// The Nakagami shape `m` when `fading` is `nakagami` (written `m` in the literature): 1 is Rayleigh, larger is
+    /// milder. Unset is 3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nakagami_shape: Option<f64>,
+    /// The Rice factor `K` when `fading` is `rice`, dB: the direct path's power over the
+    /// scattered power's. Unset is 6 dB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rice_k_db: Option<f64>,
+}
+
+impl ChannelModelSettings {
+    /// Whether nothing is set.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Whether these settings replace the propagation law's numbers.
+    pub fn tunes_law(&self) -> bool {
+        self.path_loss_exponent.is_some()
+            || self.shadowing_sigma_db.is_some()
+            || self.shadowing_decorrelation_m.is_some()
+    }
 }
 
 /// One transmitter on an adjacent channel (`radio.adjacent_channel`).
@@ -1345,6 +1642,13 @@ pub struct Messages {
     /// Which codec tier: real `uper` bytes or the validated `size-model` (D2).
     #[serde(default = "Messages::default_codec_tier")]
     pub codec_tier: String,
+    /// A fixed awareness-message rate, messages per second: every BSM and every CAM goes
+    /// out on this period instead of J2945/1's 10 Hz and the ETSI CAM triggers (heading
+    /// 4°, position 4 m, speed 0.5 m/s, EN 302 637-2 §6.1.3), the way ns-3's
+    /// `BsmApplication` and Veins' `beaconInterval` send. Congestion control may still
+    /// stretch it. Unset keeps the standards' generation rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_hz: Option<f64>,
 }
 
 impl Messages {
@@ -1362,6 +1666,7 @@ impl Default for Messages {
             sets: Messages::default_sets(),
             generator: None,
             codec_tier: Messages::default_codec_tier(),
+            rate_hz: None,
         }
     }
 }
