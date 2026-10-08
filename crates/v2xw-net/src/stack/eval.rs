@@ -30,6 +30,14 @@
 //! second copy cancels every downstream contender — the failure GPC exists to fix,
 //! sharpened by the missing DCC queueing that de-synchronises real forwarders.
 //!
+//! **With CSMA/CA** ([`compare_with`] with `Some(Csma::AC_VO)`, same seed): ETSI / DPD /
+//! GPC transmissions per DENM 200.8 / 6.6 / 17.2 and PDR 1.000 / 0.667 / 1.000. Carrier
+//! sense alone takes ETSI's PDR from 0.787 to the published 0.9998, and its transmissions
+//! from 183.8 towards the published ÷ 30 of 275; DPD's loss is unchanged (standing down
+//! on any duplicate is a protocol property; the published 0.95 includes DCC queueing,
+//! which this run does not model). The engine's on-air forwarding has the full MAC and
+//! DCC.
+//!
 //! **What this module reproduces, and what it cannot.** Our run has no MAC contention
 //! and no DCC (see [`super::dissem`]), so absolute transmission counts and the
 //! density-driven PDR loss of their DCC-limited channel are not comparable. The claims a
@@ -43,7 +51,8 @@ use serde::{Deserialize, Serialize};
 
 use super::area::Area;
 use super::dissem::{
-    DenParams, DissemConfig, DissemReport, DisseminationRun, Hazard, MotionNode, UnitDisk, highway,
+    Csma, DenParams, DissemConfig, DissemReport, DisseminationRun, Hazard, MotionNode, UnitDisk,
+    highway,
 };
 use super::router::{CbfVariant, ForwardingConfig};
 
@@ -92,6 +101,18 @@ pub fn amador_highway(
     denms: u32,
     seed: u64,
 ) -> (EvalRow, DissemReport) {
+    amador_highway_with(density, variant, denms, seed, None)
+}
+
+/// [`amador_highway`] with a medium-access model: `Some(Csma::AC_VO)` makes forwarders
+/// carrier-sense, back off and collide as 802.11p broadcast does.
+pub fn amador_highway_with(
+    density: u32,
+    variant: CbfVariant,
+    denms: u32,
+    seed: u64,
+    mac: Option<Csma>,
+) -> (EvalRow, DissemReport) {
     let mut nodes = highway(
         AMADOR_LENGTH_M,
         AMADOR_LANES_PER_DIR,
@@ -126,6 +147,7 @@ pub fn amador_highway(
         end_ms: 4_000 + 1_000 * u64::from(denms) + 2_000,
         processing_us: 0,
         seed,
+        mac,
     };
     let m = UnitDisk {
         range_m: AMADOR_RANGE_M,
@@ -169,9 +191,14 @@ pub struct Comparison {
 
 /// Compare at one density.
 pub fn compare(density: u32, denms: u32, seed: u64) -> Comparison {
-    let e = amador_highway(density, CbfVariant::Etsi, denms, seed).0;
-    let d = amador_highway(density, CbfVariant::Dpd, denms, seed).0;
-    let g = amador_highway(density, CbfVariant::Gpc, denms, seed).0;
+    compare_with(density, denms, seed, None)
+}
+
+/// [`compare`] with a medium-access model.
+pub fn compare_with(density: u32, denms: u32, seed: u64, mac: Option<Csma>) -> Comparison {
+    let e = amador_highway_with(density, CbfVariant::Etsi, denms, seed, mac).0;
+    let d = amador_highway_with(density, CbfVariant::Dpd, denms, seed, mac).0;
+    let g = amador_highway_with(density, CbfVariant::Gpc, denms, seed, mac).0;
     let ratio = if d.tx_per_denm > 0.0 {
         v2xw_core::math::q3(e.tx_per_denm / d.tx_per_denm)
     } else {
@@ -210,5 +237,34 @@ mod tests {
         assert!(c.rows[2].pdr >= 0.98, "GPC pdr {}", c.rows[2].pdr);
         // 4 km at 778 m range needs at least 6 hops.
         assert!(c.rows[2].max_hops >= 5);
+    }
+
+    /// With CSMA/CA the forwarders carrier-sense one another, so two near-tied CBF
+    /// contenders no longer put the same copy on the air in the same instant: ETSI's
+    /// reach recovers to the published PDR (0.9998) and the orderings still hold.
+    #[test]
+    fn with_csma_etsi_reaches_the_published_pdr_and_the_orderings_hold() {
+        let ideal = compare(10, 5, 7);
+        let mac = compare_with(10, 5, 7, Some(Csma::AC_VO));
+        eprintln!(
+            "no MAC: tx {:?} pdr {:?}\nCSMA:   tx {:?} pdr {:?}",
+            ideal.rows.iter().map(|r| r.tx_per_denm).collect::<Vec<_>>(),
+            ideal.rows.iter().map(|r| r.pdr).collect::<Vec<_>>(),
+            mac.rows.iter().map(|r| r.tx_per_denm).collect::<Vec<_>>(),
+            mac.rows.iter().map(|r| r.pdr).collect::<Vec<_>>(),
+        );
+        let (_, rep) = amador_highway_with(10, CbfVariant::Etsi, 5, 7, Some(Csma::AC_VO));
+        eprintln!(
+            "ETSI with CSMA: collisions {} half-duplex {} access {} us",
+            rep.collisions, rep.half_duplex, rep.access_delay_mean_us
+        );
+        assert!(rep.access_delay_mean_us > 0.0, "the MAC is in the loop");
+        assert!(
+            mac.rows[0].pdr > ideal.rows[0].pdr && mac.rows[0].pdr >= 0.95,
+            "ETSI with a MAC: {mac:?}"
+        );
+        assert!(mac.overhead_order_of_magnitude, "{mac:?}");
+        assert!(mac.gpc_recovers, "{mac:?}");
+        assert!(mac.rows[2].pdr >= 0.95, "{mac:?}");
     }
 }

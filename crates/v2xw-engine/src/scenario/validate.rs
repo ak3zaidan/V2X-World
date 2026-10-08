@@ -44,6 +44,10 @@ const ACCESS_CATEGORIES: [&str; 4] = ["vo", "vi", "be", "bk"];
 const FADING_LAWS: [&str; 4] = ["none", "rayleigh", "rice", "nakagami"];
 /// The eight 10 MHz OFDM data rates, Mbit/s (IEEE 802.11-2020 Table 17-4).
 pub const DATA_RATES_MBPS: [f64; 8] = [3.0, 4.5, 6.0, 9.0, 12.0, 18.0, 24.0, 27.0];
+const GN_FORWARDING: [&str; 2] = ["on-air", "overlay"];
+/// How `net.access_categories` maps messages onto EDCA queues.
+const NET_ACCESS_CATEGORIES: [&str; 2] = ["single", "etsi-profiles"];
+const DCC_CBR: [&str; 2] = ["local", "global"];
 /// The envelope profiles `v2xw-sec` implements.
 const ENVELOPES: [&str; 2] = ["ieee1609.2", "etsi103097"];
 /// The verification policies `v2xw-node` registers.
@@ -893,6 +897,9 @@ pub static CHOICES: &[Choices] = &[
     choices("radio.mac.periodic_access_category", &ACCESS_CATEGORIES),
     choices("radio.mac.event_access_category", &ACCESS_CATEGORIES),
     choices("radio.channel_model.fading", &FADING_LAWS),
+    choices("net.geonet.forwarding", &GN_FORWARDING),
+    choices("net.access_categories", &NET_ACCESS_CATEGORIES),
+    choices("net.dcc_cbr", &DCC_CBR),
     choices("messages.codec_tier", &CODEC_TIERS),
     choices("messages.sets[]", &MESSAGE_SETS),
     choices("security.envelope", &ENVELOPES),
@@ -1604,11 +1611,34 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                fires, its DENM is GeoBroadcast to a circle around the vehicle and forwarded \
                hop by hop by the GeoNetworking router of EN 302 636-4-1 (beacons, location \
                table, duplicate detection, hop limit, greedy and contention-based \
-               forwarding) with the DEN service's repetition and keep-alive forwarding. The \
-               equipped vehicles' positions at that instant are the network; the hop range \
-               is range_m, and forwarded copies do not contend for the MAC. The event's \
-               note and the run summary say how many vehicles in the area it reached, how \
-               fast, over how many hops and at how many transmissions.",
+               forwarding) with the DEN service's repetition and keep-alive forwarding. \
+               forwarding 'on-air' (default): every router runs inside the run, a CBF \
+               contender's copy is a real frame queued in its MAC, so forwards contend, \
+               collide, are delayed, count in the channel busy ratio and pass the DCC gate; \
+               the run's link budget decides who hears each copy, and CAMs refresh the \
+               location table. forwarding 'overlay': a protocol-only run over the vehicles' \
+               positions at the hazard instant, hop range range_m, no MAC. The run summary \
+               says how many vehicles in the area it reached, how fast, over how many hops \
+               and at how many transmissions.",
+    },
+    KeyStatus {
+        path: "net.access_categories",
+        status: Status::Wired,
+        note: "'single' (default): every frame waits in the AC_VO queue. 'etsi-profiles': \
+               the DCC profiles of ETSI TS 102 724 mapped to EDCA queues as EN 302 663 \
+               maps them (DP0 hazard DENM -> AC_VO, DP2 CAM -> AC_BE, DP3 forwarded \
+               GeoNetworking copies and other traffic -> AC_BK), each with its own AIFS \
+               and contention window (IEEE 802.11-2020 Table 9-155, OCB).",
+    },
+    KeyStatus {
+        path: "net.dcc_cbr",
+        status: Status::Wired,
+        note: "gn-btp only. 'local' (default): the DCC algorithm acts on the station's \
+               own 100 ms CBR. 'global': ETSI TS 102 636-4-2 - every frame's GeoNetworking \
+               header carries the sender's CBR and the highest its neighbours reported, \
+               and the DCC acts on the maximum over two hops, so stations back off for \
+               hidden-terminal congestion. The run summary's gcbr counts how often it \
+               raised the input.",
     },
     KeyStatus {
         path: "net.fragmenter",
@@ -3943,7 +3973,34 @@ fn net(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ));
         }
     }
+    if let Some(a) = &s.net.access_categories {
+        one_of("net.access_categories", a, &NET_ACCESS_CATEGORIES, e);
+    }
+    if let Some(c) = &s.net.dcc_cbr {
+        one_of("net.dcc_cbr", c, &DCC_CBR, e);
+        if c == "global" && s.net.layer != "gn-btp" {
+            e.push(conflict(
+                "net.dcc_cbr",
+                "the global CBR is carried in GeoNetworking headers; set net.layer to \
+                 'gn-btp', or use 'local'"
+                    .to_string(),
+            ));
+        }
+    }
+    if s.net.access_categories.as_deref() == Some("etsi-profiles")
+        && (s.radio.mac.periodic_access_category.is_some()
+            || s.radio.mac.event_access_category.is_some())
+    {
+        e.push(conflict(
+            "net.access_categories",
+            "is 'etsi-profiles', which maps every message to its ETSI DCC profile's queue; \
+             radio.mac.periodic_access_category and event_access_category choose the \
+             queues by hand. Keep one"
+                .to_string(),
+        ));
+    }
     if let Some(g) = &s.net.geonet {
+        one_of("net.geonet.forwarding", &g.forwarding, &GN_FORWARDING, e);
         if s.net.layer != "gn-btp" {
             e.push(conflict(
                 "net.geonet",

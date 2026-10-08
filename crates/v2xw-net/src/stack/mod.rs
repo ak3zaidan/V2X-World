@@ -40,8 +40,8 @@ pub mod wave;
 
 pub use area::{Area, AreaShape};
 pub use dissem::{
-    ActionStats, DenParams, DissemConfig, DissemReport, DisseminationRun, DistancePdr, Hazard,
-    Medium, MotionNode, UnitDisk, UrbanGridMedium,
+    ActionStats, Csma, DenParams, DissemConfig, DissemReport, DisseminationRun, DistancePdr,
+    Hazard, Medium, MotionNode, UnitDisk, UrbanGridMedium,
 };
 pub use mib::{AreaForwarding, GnMib, NonAreaForwarding};
 pub use packet::{GnAddr, GnPacket, PacketKey, PositionVector};

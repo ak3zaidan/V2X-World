@@ -83,10 +83,12 @@ fn alternating_channel_access_holds_bsms_to_the_control_channel_interval() {
 fn a_breakdown_warning_spreads_multi_hop_and_the_forwarding_setting_matters() {
     assert!(run(scenario(None)).geonet.is_empty());
     let cbf = run(scenario(Some(Geonet {
+        forwarding: "overlay".into(),
         range_m: 200.0,
         ..Geonet::default()
     })));
     let flood = run(scenario(Some(Geonet {
+        forwarding: "overlay".into(),
         range_m: 200.0,
         area_forwarding: "simple".into(),
         ..Geonet::default()
@@ -115,4 +117,141 @@ fn a_breakdown_warning_spreads_multi_hop_and_the_forwarding_setting_matters() {
     let err = bad.validate();
     let msg = format!("{err:?}");
     assert!(err.is_err() && msg.contains("net.geonet"), "{msg}");
+}
+
+/// The DENM transmissions on `node.tx`, by transmitter.
+fn denm_senders(rec: &MemoryRecorder) -> std::collections::BTreeMap<u64, u64> {
+    let mut by = std::collections::BTreeMap::new();
+    for (_, r) in rec.records() {
+        if r.channel != "node.tx" {
+            continue;
+        }
+        let Ok(t) = v2xw_metrics::channels::decode::<v2xw_metrics::channels::NodeTxView>(r) else {
+            continue;
+        };
+        if t.msg_type.as_deref() == Some("denm") {
+            *by.entry(u64::from(t.node.index())).or_insert(0) += 1;
+        }
+    }
+    by
+}
+
+/// On the air, every forward is a real frame: it goes through a relay's MAC and shows on
+/// `node.tx` under the relay, which the overlay's forwards never do. CBF candidates stand
+/// down when they hear a copy, and the warning is still followed to its reach.
+#[test]
+fn on_air_forwards_are_frames_in_the_relays_own_queue() {
+    // A breakdown raises the stationary-vehicle DENM once its 10 s triggering timer has
+    // run out (C2C-CC RS 2006), repeated every second, so the run lasts past it.
+    let hard_brake = |s: &mut Scenario| {
+        s.time.duration_s = 24.0;
+        s.events = serde_json::from_value(serde_json::json!([
+            {"t": 8.0, "until": 23.0, "type": "safety.breakdown"},
+        ]))
+        .expect("timeline items");
+    };
+    let mut air = scenario(Some(Geonet::default()));
+    hard_brake(&mut air);
+    assert_eq!(air.net.geonet.as_ref().unwrap().forwarding, "on-air");
+    let mut engine = Engine::build(air, "").expect("builds");
+    let mut rec = MemoryRecorder::new();
+    let rep = engine.run(&mut rec).expect("runs");
+    let stats = rep.gn_air.clone().expect("on-air totals");
+    // The ledger: the layers add up to the PSDUs, and the forwards' octets are in it.
+    let b = rep.air_bytes;
+    eprintln!("{b:?}");
+    assert_eq!(
+        b.payload
+            + b.security
+            + b.spdu_unsplit
+            + b.fragmentation
+            + b.network
+            + b.llc_snap
+            + b.mac_header
+            + b.fcs,
+        b.psdu
+    );
+    assert!(b.gn_forwarded > 0 && b.gn_forwarded < b.psdu, "{b:?}");
+    assert_eq!(b.phy_preamble_us, 40 * b.frames);
+    let senders = denm_senders(&rec);
+    eprintln!("on-air {:?}\n{stats:?}\nsenders {senders:?}", rep.geonet);
+    let w = &rep.geonet[0];
+    assert!(stats.gbc_originated >= 1, "{stats:?}");
+    assert!(stats.forwards_sent >= 1, "{stats:?}");
+    assert!(
+        stats.cbf_armed > stats.forwards_sent,
+        "CBF contenders stand down: {stats:?}"
+    );
+    assert!(
+        senders.len() >= 2,
+        "DENMs go on the air from relays, not only the origin: {senders:?}"
+    );
+    assert!(w.in_area > 5 && w.reached >= 2, "{w:?}");
+    assert!(w.forwarded >= 1, "{w:?}");
+
+    let mut over = scenario(Some(Geonet {
+        forwarding: "overlay".into(),
+        ..Geonet::default()
+    }));
+    hard_brake(&mut over);
+    let mut overlay = Engine::build(over, "").expect("builds");
+    let mut rec2 = MemoryRecorder::new();
+    let rep2 = overlay.run(&mut rec2).expect("runs");
+    assert!(rep2.gn_air.is_none());
+    let senders2 = denm_senders(&rec2);
+    assert_eq!(
+        senders2.len(),
+        1,
+        "the overlay puts only the origin's DENMs on the air: {senders2:?}"
+    );
+    assert!(
+        senders.values().sum::<u64>() > senders2.values().sum::<u64>(),
+        "forwards load the channel on the air: {senders:?} vs {senders2:?}"
+    );
+}
+
+/// The access-layer settings change the run: the ETSI DCC profiles put CAMs in the
+/// best-effort queue (a longer AIFS and contention window, so a longer access delay), and
+/// the global CBR raises the congestion control's input above what a station hears.
+#[test]
+fn queue_profiles_and_the_global_cbr_change_the_run() {
+    let base = || {
+        let mut s = scenario(None);
+        s.time.duration_s = 8.0;
+        s.events.clear();
+        s
+    };
+    let single = run(base());
+    let mut etsi = base();
+    etsi.net.access_categories = Some("etsi-profiles".into());
+    etsi.net.dcc_cbr = Some("global".into());
+    etsi.radio.mac.queue_length = Some(4);
+    let etsi = run(etsi);
+    let per = |r: &RunReport| r.mac_access_delay_ns as f64 / r.mac_grants.max(1) as f64;
+    eprintln!(
+        "single {:.0} ns/grant ({} grants), etsi {:.0} ns/grant ({} grants), gcbr {:?}",
+        per(&single),
+        single.mac_grants,
+        per(&etsi),
+        etsi.mac_grants,
+        etsi.gcbr
+    );
+    assert!(single.mac_grants > 100 && etsi.mac_grants > 100);
+    assert!(
+        per(&etsi) > per(&single),
+        "AC_BE waits longer than AC_VO: {} vs {}",
+        per(&etsi),
+        per(&single)
+    );
+    assert!(single.gcbr.is_none());
+    let g = etsi.gcbr.expect("global CBR tally");
+    assert!(g.updates > 0 && g.raised > 0, "{g:?}");
+    // Validated: a global CBR needs GeoNetworking headers.
+    let mut bad = base();
+    bad.net.layer = "wsmp".into();
+    bad.security.envelope = "ieee1609.2".into();
+    bad.messages.sets = vec!["bsm".into()];
+    bad.net.dcc_cbr = Some("global".into());
+    let msg = format!("{:?}", bad.validate());
+    assert!(msg.contains("net.dcc_cbr"), "{msg}");
 }
