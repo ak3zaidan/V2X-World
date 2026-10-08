@@ -4,7 +4,7 @@ Living record of what is built and what has actually been *measured*, as against
 the plan in `10-roadmap.md` and the decisions in `12-build-decisions.md`. Claims
 here carry their evidence; anything unmeasured says so.
 
-Last updated 2026-10-07 (the round-4 merge section first; the stabilise track section; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
+Last updated 2026-10-07 (the round-5 merge section first, then the round-4 merge section; the stabilise track section; then the six-track merge section, then the road network and traffic behaviour sections of 2026-09-29; QA section of 2026-09-24 after them). **The crate table below is stale**: `v2xw-record`,
 `v2xw-metrics`, `v2xw-node` and `v2xw-engine` are no longer stubs, and the line counts
 predate several waves. It is left as written rather than rewritten from memory, because a
 status file whose numbers were re-estimated rather than re-measured is worse than one that
@@ -14,6 +14,66 @@ For the current release position — what must be true for a 1.0 tag, what is no
 what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKLIST.md)
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
+
+## 2026-10-07 — round-5 merge: eight tracks onto main (settings, agent, radio, network, traffic)
+
+Merged with `--no-ff`, in this order: netconfig, radio, netstack, cellular, traffic,
+trafficcal, settingsui, agent. No track's work was left unmerged. Each track's own
+section follows this one.
+
+**Overlaps reconciled into one settings surface** (the owner asked for clean, organised
+settings, so no setting appears twice):
+
+| Overlap | Kept | What changed |
+|---|---|---|
+| radio's `radio.tuning.*` against netconfig's `radio.phy`, `radio.channel_model`, `radio.sidelink` | netconfig's paths | `radio.channel_model` gains `nakagami_shape_far`, `nakagami_breakpoint_m`, `building_wall_loss_db`, `building_loss_db_per_m`, `vehicle_blockage`; `radio.sidelink` gains `candidate_percent`, `selection_window_ms`; the receiver numbers are `radio.phy`'s. The shadowing override reaches every law with shadowing (radio's mechanism); the exponent is netconfig's single-slope log-distance tuning; the `fading` word feeds radio's Nakagami profile. Radio's validation rules (exponent under another named law, shadowing on a deterministic law, Sommer terms with buildings off, NR-only candidate shares, LTE's 20 ms T2 floor) now name the merged paths. |
+| netstack's `net.mac_queue_depth` against netconfig's `radio.mac.queue_length` | `radio.mac.queue_length` | one queue-depth setting |
+| netstack's `net.access_categories` against netconfig's `radio.mac.periodic/event_access_category` | both | `etsi-profiles` maps by ETSI DCC profile; otherwise the two `radio.mac` words choose the queues, and a forwarded copy is event traffic. Naming both is refused. |
+| netconfig's `actors.vehicles.driver` against trafficcal's `actors.vehicles.drivers` | `actors.vehicles.drivers` | one Drivers section: realism, spread, reaction time, perception error, truck lane restriction, motorcycle filtering, and the passenger-car IDM `a`, `b`, `T`, `s0` and MOBIL politeness and threshold |
+| settingsui's BSM-only Message rate quick setting against netconfig's `messages.rate_hz` | `messages.rate_hz` | the quick setting offers Standard, 20, 10, 5, 2 and 1 Hz and now sets the CAM as well as the BSM |
+| trafficcal's Drivers quick setting against settingsui's grouped quick list | both | Drivers sits in the Traffic group; scenario and city stay out of the quick list |
+
+**Fixes made at merge:**
+
+- **GLOSA following.** The traffic track turned strategic lane choice on by default. With
+  it on, the ego's lane match wavers on the approach, the GLOSA application gives no
+  advice for a step or two, and the follower's speed cap was lifted at once.
+  `applications.rs` measured 0 of 77 slowed advisories followed. It passed at 7bd8d95 and
+  failed on the traffic branch alone. A follower now holds the cap through up to 1 s of
+  missing advice (`GLOSA_HOLD_S`, this build's choice). Advice that says "no target"
+  still lifts the cap at once. After the fix, `energy_glosa` on the arterial measured
+  stops/km −20.2 % and HBEFA 3 fuel −1.1 %. Before the fix fuel rose +0.5 % and the test
+  failed.
+- **Settings window.** The traffic track's top-level `traffic` section fell into a second
+  "Traffic" group, which showed Traffic twice and caused a React duplicate-key error. It
+  now files under Traffic as "Signals, rerouting and gridlock". C-V2X scheduler fields
+  (`radio.sidelink.*`) and `net.access_categories` now file under Medium Access.
+- **Tests.** In `radio_access`, WINNER+ B1 now ships, so the test's unshipped-law example
+  is `propagation/itu-r-p1411`. In the server `rpc` test, the no-duplicates check
+  compared against 33 while there are 34 distinct methods. That check already failed
+  before this merge.
+
+**Verified:**
+
+- `cargo check --workspace --tests` is clean.
+- `cargo test -p v2xw-engine`: every test passes on the merged tree. The full run had 3
+  failures: `applications` GLOSA, `energy_glosa` and `radio_access`. Each was fixed as
+  described above, and those three test files passed on a rerun.
+- `cargo test -p v2xw-server`: one failure (`rpc`), fixed and passing on a rerun.
+- Studio: protocol and viewer `tsc -b`, the `@vwp/studio` typecheck, and vitest (28
+  files, 282 tests) all pass.
+- `cargo fmt --all` was committed on its own.
+- The release `v2xw` and `v2xw-server` built.
+- `V2XW_PORT=8758 ./run-sim.sh` started. The Studio rendered against it in Chromium
+  through Playwright with no console errors:
+  - the header shows the Metrics button with no PDR/CBR and the city on one line;
+  - the settings window shows 12 sections and 271 settings;
+  - the agent panel shows its one-line prompt and three suggestions.
+
+**Not run:** the Playwright e2e suites; the full test suites of the other crates
+(`v2xw-copilot`, `v2xw-mobility`, `v2xw-radio`, `v2xw-net`); a browser pass through the
+quick settings, the Undo control on the agent's setting chips, or a live run with alerts.
+Each track's own "not done" list stands in its section below.
 
 ## 2026-10-07 — researcher-grade configuration, engine side
 
