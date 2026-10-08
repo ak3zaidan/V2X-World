@@ -45,6 +45,26 @@ fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
     match &cli.command {
         Command::Agent(args) => agent::agent(&args.to_options()),
         Command::Serve(args) => agent::serve(&args.to_options()),
+        Command::CheckTraffic(args) => {
+            let mut o = v2xw_cli::check_traffic::CheckOptions::new(&args.dir);
+            o.green_stop_s = args.green_stop_s;
+            o.examples = args.examples;
+            o.trace = args.trace;
+            let c = v2xw_cli::check_traffic::check_traffic(&o)?;
+            let text = if args.json {
+                json(&c, "traffic check")?
+            } else {
+                v2xw_cli::check_traffic::format(&c)
+            };
+            if c.ok {
+                Ok(text)
+            } else {
+                print!("{text}");
+                Err(v2xw_cli::CliError::Agent(
+                    "check-traffic: the run failed its traffic invariants".into(),
+                ))
+            }
+        }
         Command::Cities(args) => Ok(cities(args.filter.as_deref(), args.json)),
         Command::Run(args) => {
             let outcome = run::run(&args.to_options())?;

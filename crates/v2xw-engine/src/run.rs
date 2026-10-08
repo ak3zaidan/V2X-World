@@ -3187,6 +3187,7 @@ impl Engine {
                 lamps: self.lamps.get(actor).copied().unwrap_or(0),
             });
         }
+        self.snapshots.follow_plans(&self.world);
         let frame = self.snapshots.encode(at, &states)?;
         recorder.write_wire_frame(&frame);
         self.report.keyframes = self.snapshots.keyframes();

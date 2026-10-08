@@ -38,6 +38,9 @@ v2xw-proto = { workspace = true }
 v2xw-threat = { workspace = true }
 v2xw-metrics = { workspace = true }
 v2xw-record = { workspace = true }
+# `v2xw check-traffic`: the replay scene that resolves a recording's deltas, the same code
+# the Studio replays through.
+v2xw-wasm = { path = "../v2xw-wasm", version = "0.1.0" }
 v2xw-server = { workspace = true }
 # The kernel. Not a `workspace = true` entry because `v2xw-engine` is a workspace member
 # that the root manifest's shared dependency table does not list.

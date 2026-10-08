@@ -29,6 +29,7 @@
 
 pub mod agent;
 pub mod agent_host;
+pub mod check_traffic;
 pub mod checkpoint;
 pub mod cli;
 pub mod energy;

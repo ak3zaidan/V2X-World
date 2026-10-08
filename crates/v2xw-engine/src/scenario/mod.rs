@@ -134,7 +134,14 @@ impl Scenario {
             scenario.city = None;
             scenario = scenario.with_city(&id).map_err(EngineError::Scenario)?;
         }
-        if scenario.city.is_some() {
+        // Any imported map is a box cut out of a larger network, whether or not it names a
+        // city of the library: `portland-downtown.yaml` reads `portland.osm.xml` with a
+        // downtown box and no `city`, and on it the legacy OD law drew trips from bus-only
+        // lanes, 2 m stubs and one-ways that only leave the box — 6 vehicles reached the
+        // road in 180 s at 1,000 veh/h. A scenario that says `connected_only: false` keeps it.
+        if scenario.city.is_some()
+            || matches!(scenario.world.source, v2xw_world::WorldSourceSpec::OsmXml { .. })
+        {
             crate::city::connect_demand(&mut scenario);
         }
         Ok(scenario)

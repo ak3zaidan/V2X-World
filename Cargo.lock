@@ -2587,6 +2587,7 @@ dependencies = [
  "v2xw-sec",
  "v2xw-server",
  "v2xw-threat",
+ "v2xw-wasm",
  "v2xw-world",
 ]
 

@@ -53,6 +53,10 @@ pub enum Command {
     Serve(ServeArgs),
     /// List the city library: every city a scenario can run on (`--city`), by state.
     Cities(CitiesArgs),
+    /// Check a finished run's traffic from its recording: vehicles standing on green or at
+    /// a clear junction, overlaps, jumps, braking and jerk out of bounds, red entries,
+    /// pedestrian steps no walker makes; and the stop-line discharge headways.
+    CheckTraffic(CheckTrafficArgs),
     /// Run one scenario and seed under several signature schemes and compare their
     /// signing overhead against ECDSA P-256 (comparison.json, .csv and .md).
     CompareSignatures(CompareSignaturesArgs),
@@ -113,6 +117,26 @@ pub struct CitiesArgs {
     /// Only the cities whose name, id, state or state code contains this, ignoring case.
     pub filter: Option<String>,
     /// Print the registry as JSON.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// `v2xw check-traffic`.
+#[derive(Debug, clap::Args)]
+pub struct CheckTrafficArgs {
+    /// The run directory (`recording.mcap` and `scenario.resolved.yaml`).
+    pub dir: PathBuf,
+    /// Seconds a queue head may stand on its own protected green.
+    #[arg(long, default_value_t = 6.0)]
+    pub green_stop_s: f64,
+    /// Examples printed per row.
+    #[arg(long, default_value_t = 8)]
+    pub examples: usize,
+    /// Print this actor's every step on stderr: lane, position, speed and the lamps of
+    /// the movements ahead.
+    #[arg(long)]
+    pub trace: Option<u32>,
+    /// Print the check as JSON.
     #[arg(long)]
     pub json: bool,
 }
