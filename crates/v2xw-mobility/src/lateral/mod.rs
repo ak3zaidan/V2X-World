@@ -68,7 +68,10 @@ impl Default for SublaneFilter {
 fn narrow(class: VehicleClass) -> bool {
     matches!(
         class,
-        VehicleClass::Bicycle | VehicleClass::Motorcycle | VehicleClass::Moped | VehicleClass::Scooter
+        VehicleClass::Bicycle
+            | VehicleClass::Motorcycle
+            | VehicleClass::Moped
+            | VehicleClass::Scooter
     )
 }
 
@@ -225,13 +228,17 @@ mod tests {
     use v2xw_core::geom::Dims;
 
     fn of(class: VehicleClass, lat: f64, width: f64) -> VehicleView {
-        let mut v = vehicle(0, 5.0, DriverProfile {
-            desired_speed_mps: 10.0,
-            max_accel_mps2: 1.0,
-            comfort_decel_mps2: 2.0,
-            time_headway_s: 1.0,
-            min_gap_m: 2.0,
-        });
+        let mut v = vehicle(
+            0,
+            5.0,
+            DriverProfile {
+                desired_speed_mps: 10.0,
+                max_accel_mps2: 1.0,
+                comfort_decel_mps2: 2.0,
+                time_headway_s: 1.0,
+                min_gap_m: 2.0,
+            },
+        );
         v.class = class;
         v.lateral_m = lat;
         v.dims = Dims::new(2.0, width, 1.5);
@@ -259,7 +266,12 @@ mod tests {
         })
         .unwrap();
         let cycle = ring_cycle(&world, 0);
-        let route: Vec<_> = cycle.iter().cycle().take(cycle.len() * 4).copied().collect();
+        let route: Vec<_> = cycle
+            .iter()
+            .cycle()
+            .take(cycle.len() * 4)
+            .copied()
+            .collect();
         let rng = RngRegistry::new(7);
         let step = Duration::from_millis(100);
         let mut engine = NativeMobility::with_models(
@@ -283,14 +295,24 @@ mod tests {
             })));
         }
         engine
-            .init(&mut MobilityCtx::new(0, &world, &rng), Box::new(NoDemand::new()))
+            .init(
+                &mut MobilityCtx::new(0, &world, &rng),
+                Box::new(NoDemand::new()),
+            )
             .unwrap();
         let mut moto_driver = IdmPreset::UrbanHcm.profile(VehicleClass::Motorcycle);
         moto_driver.desired_speed_mps = 4.0;
         let mut car_driver = IdmPreset::UrbanHcm.profile(VehicleClass::Passenger);
         car_driver.desired_speed_mps = 13.9;
         let moto = engine
-            .spawn_with_route(&world, 0, VehicleClass::Motorcycle, moto_driver, route.clone(), 45.0)
+            .spawn_with_route(
+                &world,
+                0,
+                VehicleClass::Motorcycle,
+                moto_driver,
+                route.clone(),
+                45.0,
+            )
             .unwrap();
         let car = engine
             .spawn_with_route(&world, 0, VehicleClass::Passenger, car_driver, route, 5.0)
@@ -318,8 +340,14 @@ mod tests {
     fn the_sub_lane_model_lets_a_car_pass_a_filtering_motorcycle_in_lane() {
         let queued = car_gain_over_motorcycle(false);
         let passed = car_gain_over_motorcycle(true);
-        assert!(queued < 0.0, "lane-based: the car should stay behind, gained {queued}");
-        assert!(passed > 10.0, "sub-lane: the car should pass, gained {passed}");
+        assert!(
+            queued < 0.0,
+            "lane-based: the car should stay behind, gained {queued}"
+        );
+        assert!(
+            passed > 10.0,
+            "sub-lane: the car should pass, gained {passed}"
+        );
     }
 
     #[test]
@@ -334,7 +362,13 @@ mod tests {
         assert!(f.is_leader(&car, &of(VehicleClass::Bicycle, -1.2, 0.65)));
         // Motorcycles do not filter unless allowed.
         assert!(f.is_leader(&of(VehicleClass::Motorcycle, 1.2, 0.8), &car));
-        let lawful = SublaneFilter { motorcycles_share: true, ..f };
-        assert!(!lawful.is_leader(&of(VehicleClass::Motorcycle, 1.5, 0.8), &of(VehicleClass::Passenger, -0.5, 1.8)));
+        let lawful = SublaneFilter {
+            motorcycles_share: true,
+            ..f
+        };
+        assert!(!lawful.is_leader(
+            &of(VehicleClass::Motorcycle, 1.5, 0.8),
+            &of(VehicleClass::Passenger, -0.5, 1.8)
+        ));
     }
 }

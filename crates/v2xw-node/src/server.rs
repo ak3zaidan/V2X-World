@@ -588,11 +588,23 @@ mod tests {
         assert_eq!(sign.facts.basis, CostBasis::UpperBound);
         assert!(!sign.facts.basis.is_exact());
         assert_eq!(sign.label, "signed in the secure element");
-        assert!(sign.basis_text.starts_with("at most 9.000 ms"), "{}", sign.basis_text);
+        assert!(
+            sign.basis_text.starts_with("at most 9.000 ms"),
+            "{}",
+            sign.basis_text
+        );
         assert_eq!(verify.facts.basis, CostBasis::DerivedFromThroughput);
         assert_eq!(verify.label, "verified by the hardware accelerator");
-        assert!(verify.basis_text.contains("derived"), "{}", verify.basis_text);
-        assert!(hw.explanation.contains("different hardware"), "{}", hw.explanation);
+        assert!(
+            verify.basis_text.contains("derived"),
+            "{}",
+            verify.basis_text
+        );
+        assert!(
+            hw.explanation.contains("different hardware"),
+            "{}",
+            hw.explanation
+        );
 
         let sw = profile("obu/unex-obu-301-craton2-software")
             .crypto_placement("ecdsa-p256-sign", "ecdsa-p256-verify");
@@ -600,9 +612,13 @@ mod tests {
         assert_eq!(s.facts.runs_on, RunsOn::Cpu);
         assert_eq!(v.facts.runs_on, RunsOn::Cpu);
         assert_eq!(s.facts.basis, CostBasis::SoftwareProxy);
-        assert!(v.modelled_ms > s.modelled_ms, "software verify must cost more than sign");
         assert!(
-            sw.explanation.contains("verification costs more than signing"),
+            v.modelled_ms > s.modelled_ms,
+            "software verify must cost more than sign"
+        );
+        assert!(
+            sw.explanation
+                .contains("verification costs more than signing"),
             "{}",
             sw.explanation
         );
@@ -611,9 +627,16 @@ mod tests {
     /// Every shipped OBU profile states where it signs and verifies.
     #[test]
     fn every_obu_profile_places_sign_and_verify() {
-        for p in crate::profiles::all().iter().filter(|p| p.id.starts_with("obu/")) {
+        for p in crate::profiles::all()
+            .iter()
+            .filter(|p| p.id.starts_with("obu/"))
+        {
             let c = p.crypto_placement("ecdsa-p256-sign", "ecdsa-p256-verify");
-            assert!(c.sign.is_some() || c.verify.is_some(), "{} places neither", p.id);
+            assert!(
+                c.sign.is_some() || c.verify.is_some(),
+                "{} places neither",
+                p.id
+            );
         }
     }
 

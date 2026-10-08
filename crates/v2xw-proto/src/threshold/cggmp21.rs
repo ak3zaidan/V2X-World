@@ -42,9 +42,11 @@ pub const ID: &str = "cggmp21-ecdsa";
 pub const ENTRY: ProtocolEntry = ProtocolEntry {
     id: ID,
     label: "Threshold ECDSA (CGGMP21) — 1609.2-compatible output",
-    build: |p| Box::new(Cggmp21 {
-        presigned: p.preprocessed,
-    }),
+    build: |p| {
+        Box::new(Cggmp21 {
+            presigned: p.preprocessed,
+        })
+    },
 };
 
 const SILENCE: &str = "Silence Laboratories, Presign calculator, DKLs23 vs CGGMP21, 2-of-3 on GCP \
@@ -87,9 +89,13 @@ impl ThresholdProtocol for Cggmp21 {
         let peers = u32::from(signers.saturating_sub(1)).max(1);
         let mut rounds = Vec::new();
         if !self.presigned {
-            for (k, name) in ["cggmp21-presign-1", "cggmp21-presign-2", "cggmp21-presign-3"]
-                .into_iter()
-                .enumerate()
+            for (k, name) in [
+                "cggmp21-presign-1",
+                "cggmp21-presign-2",
+                "cggmp21-presign-3",
+            ]
+            .into_iter()
+            .enumerate()
             {
                 // Round 1's request carries nothing to relay; later ones relay the other
                 // signers' messages from the round before.
@@ -111,7 +117,10 @@ impl ThresholdProtocol for Cggmp21 {
                         SILENCE,
                     ),
                     member_ops: Vec::new(),
-                    member_time: Some((PRESIGN_ROUND_TIME.saturating_mul(u64::from(batch)), SILENCE)),
+                    member_time: Some((
+                        PRESIGN_ROUND_TIME.saturating_mul(u64::from(batch)),
+                        SILENCE,
+                    )),
                     coordinator_ops: Vec::new(),
                     verifies_shares: false,
                 });

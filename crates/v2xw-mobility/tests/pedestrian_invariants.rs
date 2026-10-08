@@ -13,12 +13,12 @@
 
 use v2xw_core::rng::RngRegistry;
 use v2xw_core::time::{Duration, NS_PER_S};
+use v2xw_mobility::VehicleClass;
 use v2xw_mobility::audit::{AuditParams, AuditReport, Check, TrafficAuditor};
-use v2xw_mobility::demand::{OdParams, PoissonDemand, PoissonParams};
 use v2xw_mobility::demand::FleetMix;
+use v2xw_mobility::demand::{OdParams, PoissonDemand, PoissonParams};
 use v2xw_mobility::engine::VruPopulation;
 use v2xw_mobility::vru::{PedActivity, SocialForce, SocialForceParams};
-use v2xw_mobility::VehicleClass;
 use v2xw_mobility::{EngineParams, Mobility, MobilityCtx, NativeMobility};
 use v2xw_world::procedural::GridParams;
 use v2xw_world::{ClassMask, ImportOptions, World};
@@ -200,7 +200,12 @@ fn the_auditor_sees_pedestrians_who_cross_on_dont_walk() {
         "{:?}",
         report.stats
     );
-    assert_eq!(report.count(Check::PedestrianDontWalkEntry), 0, "{:?}", report.counts);
+    assert_eq!(
+        report.count(Check::PedestrianDontWalkEntry),
+        0,
+        "{:?}",
+        report.counts
+    );
     // Crossing against the signal never means walking into a car.
     assert_eq!(report.count(Check::PedestrianOverlap), 0);
 }
@@ -364,7 +369,10 @@ fn observed_run_without_the_amber_lapse() {
     );
     eprintln!("no lapse: {:?}", report.counts);
     for e in report.examples.iter().take(8) {
-        eprintln!("  {:?} t={} {:?}->{:?}: {}", e.check, e.t_s, e.actor, e.other, e.detail);
+        eprintln!(
+            "  {:?} t={} {:?}->{:?}: {}",
+            e.check, e.t_s, e.actor, e.other, e.detail
+        );
     }
 }
 
@@ -415,8 +423,14 @@ fn the_world_has_a_walk_network_and_bicycle_lanes() {
 #[test]
 #[ignore = "a diagnostic trace, not a gate"]
 fn trace_the_observed_run() {
-    let t0: f64 = std::env::var("V2XW_TRACE_T0").ok().and_then(|v| v.parse().ok()).unwrap_or(41.0);
-    let t1: f64 = std::env::var("V2XW_TRACE_T1").ok().and_then(|v| v.parse().ok()).unwrap_or(42.1);
+    let t0: f64 = std::env::var("V2XW_TRACE_T0")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(41.0);
+    let t1: f64 = std::env::var("V2XW_TRACE_T1")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(42.1);
     let watch: Vec<u32> = std::env::var("V2XW_TRACE_ACTORS")
         .ok()
         .map(|v| v.split(',').filter_map(|x| x.trim().parse().ok()).collect())
@@ -477,7 +491,9 @@ fn trace_the_observed_run() {
             }
             let vru = engine.vru().expect("pedestrians");
             for p in vru.people() {
-                let Some(m) = p.midblock.as_ref() else { continue };
+                let Some(m) = p.midblock.as_ref() else {
+                    continue;
+                };
                 let pos = p.position(&world);
                 let near: Vec<&v2xw_mobility::audit::AuditActor> = actors
                     .iter()

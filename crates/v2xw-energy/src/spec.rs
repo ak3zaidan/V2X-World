@@ -103,9 +103,8 @@ impl EnergySpec {
         registry::emission_model(&self.emission_model)
             .map_err(|e| format!("energy.emission_model: {e}"))?;
         for (seg, m) in &self.emission_model_by_segment {
-            registry::emission_model(m).map_err(|e| {
-                format!("energy.emission_model_by_segment.{}: {e}", seg.as_str())
-            })?;
+            registry::emission_model(m)
+                .map_err(|e| format!("energy.emission_model_by_segment.{}: {e}", seg.as_str()))?;
         }
         registry::ev_model(&self.ev_model, &self.ev.params)
             .map_err(|e| format!("energy.ev: {e}"))?;

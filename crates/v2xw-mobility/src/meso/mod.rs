@@ -157,7 +157,9 @@ impl MesoParams {
     pub fn jam_share(&self, v_max_mps: f64) -> f64 {
         match self.jam_threshold {
             Some(share) => share.clamp(0.0, 1.0),
-            None => REFERENCE_VEHICLE_M / (v_max_mps.max(0.1) * self.tau_ff_s + REFERENCE_VEHICLE_M),
+            None => {
+                REFERENCE_VEHICLE_M / (v_max_mps.max(0.1) * self.tau_ff_s + REFERENCE_VEHICLE_M)
+            }
         }
     }
 }
@@ -260,8 +262,13 @@ pub trait MesoBoundary {
     /// Offers `vehicle`, about to enter route lane `next_index`, to the tier that owns that
     /// lane at `at`. `true` takes it: the queue network forgets it. `false` leaves it at
     /// the head of its queue, blocking it, as a full segment would.
-    fn offer(&mut self, world: &World, vehicle: &MesoVehicle, next_index: usize, at: SimTime)
-    -> bool;
+    fn offer(
+        &mut self,
+        world: &World,
+        vehicle: &MesoVehicle,
+        next_index: usize,
+        at: SimTime,
+    ) -> bool;
 }
 
 /// A whole world in the queue network: nothing is ever handed anywhere.
@@ -300,14 +307,19 @@ impl MesoCore {
                 .lanes
                 .iter()
                 .map(|l| world.lane(*l))
-                .filter(|l| l.kind.is_motorised() && l.kind != LaneKind::Internal && l.admits(classes))
+                .filter(|l| {
+                    l.kind.is_motorised() && l.kind != LaneKind::Internal && l.admits(classes)
+                })
                 .collect();
             if lanes.is_empty() || edge.is_internal() {
                 edge_segments.push((segments.len() as u32, 0));
                 continue;
             }
             let length = lanes.iter().map(|l| l.length_m).fold(0.0_f64, f64::max);
-            let v_max = lanes.iter().map(|l| l.speed_limit_mps).fold(0.0_f64, f64::max);
+            let v_max = lanes
+                .iter()
+                .map(|l| l.speed_limit_mps)
+                .fold(0.0_f64, f64::max);
             let n = (length / params.segment_length_m.max(1.0)).ceil().max(1.0) as u32;
             let first = segments.len() as u32;
             let seg_len = length / f64::from(n);
@@ -427,7 +439,8 @@ impl MesoCore {
         }
         let lane_len = world.lane(lane).length_m.max(1e-9);
         let s = &self.segments[seg as usize];
-        let seg_frac = ((s_m / lane_len - s.frac.0) / (s.frac.1 - s.frac.0).max(1e-12)).clamp(0.0, 1.0);
+        let seg_frac =
+            ((s_m / lane_len - s.frac.0) / (s.frac.1 - s.frac.0).max(1e-12)).clamp(0.0, 1.0);
         vehicle.segment = seg;
         vehicle.entered = t;
         vehicle.entry_frac = seg_frac;
@@ -458,7 +471,13 @@ impl MesoCore {
     /// Whether the junction at the end of route lane `index` lets `v` through at `at`:
     /// no signal, or its movement shows green.
     #[must_use]
-    pub fn junction_allows(&self, world: &World, v: &MesoVehicle, index: usize, at: SimTime) -> bool {
+    pub fn junction_allows(
+        &self,
+        world: &World,
+        v: &MesoVehicle,
+        index: usize,
+        at: SimTime,
+    ) -> bool {
         if !self.params.junction_control {
             return true;
         }
@@ -493,7 +512,10 @@ impl MesoCore {
         let Some(i) = plan.controlled.iter().position(|l| *l == movement) else {
             return true;
         };
-        match plan.states_at(ns_to_secs(at)).and_then(|s| s.get(i).copied()) {
+        match plan
+            .states_at(ns_to_secs(at))
+            .and_then(|s| s.get(i).copied())
+        {
             Some(SignalState::Green | SignalState::GreenYield) | None => true,
             Some(_) => false,
         }
@@ -508,7 +530,15 @@ impl MesoCore {
         while let Some(l) = route.lanes.get(k) {
             let lane = world.lane(*l);
             if lane.kind != LaneKind::Internal {
-                return Some((k, conn_len, if conn_v.is_finite() { conn_v } else { lane.speed_limit_mps }));
+                return Some((
+                    k,
+                    conn_len,
+                    if conn_v.is_finite() {
+                        conn_v
+                    } else {
+                        lane.speed_limit_mps
+                    },
+                ));
             }
             conn_len += lane.length_m;
             conn_v = conn_v.min(lane.speed_limit_mps);
@@ -563,7 +593,10 @@ impl MesoCore {
                 }
                 continue;
             }
-            let head = *self.segments[seg as usize].queue.front().expect("candidate has a head");
+            let head = *self.segments[seg as usize]
+                .queue
+                .front()
+                .expect("candidate has a head");
             let (edge_last, from_jammed, lanes) = {
                 let s = &self.segments[seg as usize];
                 (s.index + 1 == s.of, s.jammed(), s.lanes)
@@ -669,7 +702,15 @@ impl MesoCore {
 
     /// The head of `seg` leaves at `at`: the queue shortens and the gate closes for one
     /// headway.
-    fn depart(&mut self, seg: u32, head: ActorId, at: SimTime, from_jammed: bool, to_jammed: bool, lanes: u8) {
+    fn depart(
+        &mut self,
+        seg: u32,
+        head: ActorId,
+        at: SimTime,
+        from_jammed: bool,
+        to_jammed: bool,
+        lanes: u8,
+    ) {
         let footprint = self.vehicles[&head].footprint_m();
         let headway = self.params.headway_s(from_jammed, to_jammed, lanes);
         let s = &mut self.segments[seg as usize];
@@ -703,7 +744,13 @@ impl MesoCore {
     }
 
     /// The states of one segment's vehicles, queue order.
-    fn segment_states(&self, world: &World, seg: usize, t: SimTime, out: &mut Vec<(ActorId, Kinematics)>) {
+    fn segment_states(
+        &self,
+        world: &World,
+        seg: usize,
+        t: SimTime,
+        out: &mut Vec<(ActorId, Kinematics)>,
+    ) {
         let seg = &self.segments[seg];
         if seg.queue.is_empty() {
             return;
@@ -716,7 +763,11 @@ impl MesoCore {
             let column = rank % back_m.len();
             let travel = ns_to_secs(v.earliest_exit.saturating_sub(v.entered));
             let since = ns_to_secs(t.saturating_sub(v.entered));
-            let p = if travel > 0.0 { (since / travel).clamp(0.0, 1.0) } else { 1.0 };
+            let p = if travel > 0.0 {
+                (since / travel).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
             let along = v.entry_frac + (1.0 - v.entry_frac) * p;
             let free_s = along * seg.length_m;
             let queued_s = (seg.length_m - back_m[column]).max(0.0);
@@ -733,7 +784,14 @@ impl MesoCore {
     }
 
     /// One vehicle's state at `s_seg` metres into its segment.
-    fn kinematics(world: &World, v: &MesoVehicle, seg: &Segment, s_seg: f64, speed: f64, t: SimTime) -> Kinematics {
+    fn kinematics(
+        world: &World,
+        v: &MesoVehicle,
+        seg: &Segment,
+        s_seg: f64,
+        speed: f64,
+        t: SimTime,
+    ) -> Kinematics {
         let lane = world.lane(v.lane());
         let frac = seg.frac.0 + (seg.frac.1 - seg.frac.0) * (s_seg / seg.length_m.max(1e-9));
         let front = frac * lane.length_m;
@@ -822,7 +880,13 @@ pub(crate) fn vehicle_for_trip(
     driver: DriverProfile,
     traits: DriverTraits,
 ) -> Option<MesoVehicle> {
-    let route = router.search(world, trip.origin, trip.destination, trip.t, &FreeFlowCost::new(world))?;
+    let route = router.search(
+        world,
+        trip.origin,
+        trip.destination,
+        trip.t,
+        &FreeFlowCost::new(world),
+    )?;
     Some(MesoVehicle {
         id,
         seq: trip.seq,
@@ -995,7 +1059,10 @@ impl Mobility for MesoMobility {
 }
 
 /// Every signal plan's state at `t`, in signal order — what a viewer draws.
-pub(crate) fn signal_states(world: &World, t: SimTime) -> Vec<(v2xw_core::ids::SignalId, PhaseState)> {
+pub(crate) fn signal_states(
+    world: &World,
+    t: SimTime,
+) -> Vec<(v2xw_core::ids::SignalId, PhaseState)> {
     let t_s = ns_to_secs(t);
     let mut out: Vec<_> = world
         .signals
@@ -1037,7 +1104,10 @@ pub fn card(params: &MesoParams) -> ModelCard {
                     Köln."
             .to_string(),
         accessed: None,
-        note: Some("the queue model: segment capacity, free-flow exit time, jam-dependent headways".to_string()),
+        note: Some(
+            "the queue model: segment capacity, free-flow exit time, jam-dependent headways"
+                .to_string(),
+        ),
     };
     let krajzewicz = Source {
         kind: SourceKind::Paper,
@@ -1069,15 +1139,29 @@ pub fn card(params: &MesoParams) -> ModelCard {
             notes: Some("SUMO's --meso-jam-threshold -1".to_string()),
         },
     ];
-    let p = |name: &str, unit: &str, value: serde_json::Value| Parameter::new(name, unit, value, sumo.clone());
+    let p = |name: &str, unit: &str, value: serde_json::Value| {
+        Parameter::new(name, unit, value, sumo.clone())
+    };
     card.parameters = vec![
-        p("segment_length_m", "m", serde_json::json!(params.segment_length_m)),
+        p(
+            "segment_length_m",
+            "m",
+            serde_json::json!(params.segment_length_m),
+        ),
         p("tau_ff_s", "s", serde_json::json!(params.tau_ff_s)),
         p("tau_fj_s", "s", serde_json::json!(params.tau_fj_s)),
         p("tau_jf_s", "s", serde_json::json!(params.tau_jf_s)),
         p("tau_jj_s", "s", serde_json::json!(params.tau_jj_s)),
-        p("jam_threshold", "-", serde_json::json!(params.jam_threshold)),
-        p("junction_control", "-", serde_json::json!(params.junction_control)),
+        p(
+            "jam_threshold",
+            "-",
+            serde_json::json!(params.jam_threshold),
+        ),
+        p(
+            "junction_control",
+            "-",
+            serde_json::json!(params.junction_control),
+        ),
     ];
     card.assumptions = vec![
         "One FIFO queue per segment shared by its lanes (Eissfeldt's original), not SUMO's \

@@ -87,7 +87,12 @@ fn gn_headers(mode: Mode) -> Outcome {
     ];
     let mut bad = Vec::new();
     for (t, bytes) in want {
-        let model = t.header_bytes() - if mode.faulted() && t == GnTransport::Shb { 4 } else { 0 };
+        let model = t.header_bytes()
+            - if mode.faulted() && t == GnTransport::Shb {
+                4
+            } else {
+                0
+            };
         if model != bytes {
             bad.push(format!("{t:?}: {model} vs {bytes}"));
         }
@@ -105,14 +110,30 @@ fn gn_headers(mode: Mode) -> Outcome {
     if cam != 52 {
         bad.push(format!("CAM below the envelope {cam} vs 52"));
     }
-    Outcome::judge(bad.is_empty(), if bad.is_empty() { "6 packet types, BTP-A/B and the 52-octet CAM stack match".to_string() } else { bad.join("; ") })
+    Outcome::judge(
+        bad.is_empty(),
+        if bad.is_empty() {
+            "6 packet types, BTP-A/B and the 52-octet CAM stack match".to_string()
+        } else {
+            bad.join("; ")
+        },
+    )
 }
 
 fn wsmp_header(mode: Mode) -> Outcome {
     let layer = WsmpNetLayer::new(WsmpParams::default());
     let mut bad = Vec::new();
     // PSID p-encoding boundaries.
-    for (v, n) in [(0u32, 1u32), (0x7F, 1), (0x80, 2), (0x407F, 2), (0x4080, 3), (0x20_407F, 3), (0x20_4080, 4), (0x1020_407F, 4)] {
+    for (v, n) in [
+        (0u32, 1u32),
+        (0x7F, 1),
+        (0x80, 2),
+        (0x407F, 2),
+        (0x4080, 3),
+        (0x20_407F, 3),
+        (0x20_4080, 4),
+        (0x1020_407F, 4),
+    ] {
         if p_encoded_bytes(v) != Some(n) {
             bad.push(format!("p-encoding of {v:#x}"));
         }
@@ -135,10 +156,20 @@ fn wsmp_header(mode: Mode) -> Outcome {
             got -= 1;
         }
         if got != want {
-            bad.push(format!("PSID {psid:#x}, {payload} B, {} ext: {got} vs {want}", ext.count()));
+            bad.push(format!(
+                "PSID {psid:#x}, {payload} B, {} ext: {got} vs {want}",
+                ext.count()
+            ));
         }
     }
-    Outcome::judge(bad.is_empty(), if bad.is_empty() { "9 p-encoding boundaries and 5 header shapes match (BSM of 300 B: 5 octets)".to_string() } else { bad.join("; ") })
+    Outcome::judge(
+        bad.is_empty(),
+        if bad.is_empty() {
+            "9 p-encoding boundaries and 5 header shapes match (BSM of 300 B: 5 octets)".to_string()
+        } else {
+            bad.join("; ")
+        },
+    )
 }
 
 fn identifiers(mode: Mode) -> Outcome {
@@ -146,32 +177,62 @@ fn identifiers(mode: Mode) -> Outcome {
     // Every message this simulator signs goes out under the one PSID the node holds
     // (`NodeSecurity::psid`, set from `PSID_SAFETY` by the engine's wiring).
     let signed_under = |_msg: &str| -> u64 { if mode.faulted() { 0x21 } else { PSID_SAFETY } };
-    let registry: [(&str, u64); 5] = [("BSM (US)", 0x20), ("CAM", 36), ("DENM", 37), ("SPATEM", 137), ("MAPEM", 138)];
+    let registry: [(&str, u64); 5] = [
+        ("BSM (US)", 0x20),
+        ("CAM", 36),
+        ("DENM", 37),
+        ("SPATEM", 137),
+        ("MAPEM", 138),
+    ];
     let mut bad = Vec::new();
     for (msg, want) in registry {
         let got = signed_under(msg);
         if got != want {
-            bad.push(format!("{msg} signed under {got} ({got:#x}), registry {want}"));
+            bad.push(format!(
+                "{msg} signed under {got} ({got:#x}), registry {want}"
+            ));
         }
     }
-    Outcome::judge(bad.is_empty(), if bad.is_empty() { "5 identifiers match".to_string() } else { bad.join("; ") })
+    Outcome::judge(
+        bad.is_empty(),
+        if bad.is_empty() {
+            "5 identifiers match".to_string()
+        } else {
+            bad.join("; ")
+        },
+    )
 }
 
 fn fragmentation(mode: Mode) -> Outcome {
     let f = GenericSduFragmenter::default();
     let mut bad = Vec::new();
-    for (sdu, mtu) in [(1_399u32, 1_398u32), (4_000, 1_398), (2_796, 1_398), (10_000, 500), (2_000, 1_400)] {
+    for (sdu, mtu) in [
+        (1_399u32, 1_398u32),
+        (4_000, 1_398),
+        (2_796, 1_398),
+        (10_000, 500),
+        (2_000, 1_400),
+    ] {
         let parts = f.split(SduId::new(1), sdu, mtu).expect("splits");
         let want = sdu.div_ceil(mtu - 4) as usize;
         let sum: u32 = parts.iter().map(|p| p.payload_bytes).sum();
         if parts.len() != want || sum != sdu || parts.iter().any(|p| p.total_bytes() > mtu) {
-            bad.push(format!("{sdu} B over {mtu}: {} fragments (want {want}), {sum} B", parts.len()));
+            bad.push(format!(
+                "{sdu} B over {mtu}: {} fragments (want {want}), {sum} B",
+                parts.len()
+            ));
         }
     }
     let mut rng = RngStream::derive(0xF2A6, RngDomain::plugin("netval"), EntityRef::Global);
     let mut summary = Vec::new();
-    for probs in [vec![0.1, 0.1, 0.1], vec![0.05, 0.2], vec![0.3, 0.01, 0.01, 0.01]] {
-        let parts = f.split(SduId::new(1), 1_394 * probs.len() as u32, 1_398).expect("splits");
+    for probs in [
+        vec![0.1, 0.1, 0.1],
+        vec![0.05, 0.2],
+        vec![0.3, 0.01, 0.01, 0.01],
+    ] {
+        let parts = f
+            .split(SduId::new(1), 1_394 * probs.len() as u32, 1_398)
+            .expect("splits");
         let mut buf = ReassemblyBuffer::new(64, Duration::from_millis(1_000));
         let n = 20_000u64;
         let mut lost = 0u64;
@@ -187,7 +248,10 @@ fn fragmentation(mode: Mode) -> Outcome {
                 if mode.faulted() && drop {
                     frag.index = 0;
                 }
-                if matches!(buf.accept(s * 10_000_000, NodeId::new(1), &frag), ReassemblyOutcome::Complete { .. }) {
+                if matches!(
+                    buf.accept(s * 10_000_000, NodeId::new(1), &frag),
+                    ReassemblyOutcome::Complete { .. }
+                ) {
                     complete = true;
                 }
             }
@@ -196,15 +260,35 @@ fn fragmentation(mode: Mode) -> Outcome {
             }
         }
         let formula = 1.0 - probs.iter().map(|p| 1.0 - p).product::<f64>();
-        let model = sdu_loss(&probs.iter().enumerate().map(|(i, p)| FragmentLoss::new(i as u16, *p, 1_394)).collect::<Vec<_>>(), true).p_any_fragment_lost;
+        let model = sdu_loss(
+            &probs
+                .iter()
+                .enumerate()
+                .map(|(i, p)| FragmentLoss::new(i as u16, *p, 1_394))
+                .collect::<Vec<_>>(),
+            true,
+        )
+        .p_any_fragment_lost;
         let sim = lost as f64 / n as f64;
         let se = (formula * (1.0 - formula) / n as f64).sqrt();
         if (sim - formula).abs() > 4.0 * se || (model - formula).abs() > 1e-12 {
-            bad.push(format!("p={probs:?}: simulated {sim:.4}, formula {formula:.4}, model {model:.4}"));
+            bad.push(format!(
+                "p={probs:?}: simulated {sim:.4}, formula {formula:.4}, model {model:.4}"
+            ));
         }
         summary.push(format!("{sim:.4} vs {formula:.4}"));
     }
-    Outcome::judge(bad.is_empty(), if bad.is_empty() { format!("5 splits exact; SDU loss simulated vs formula: {}", summary.join(", ")) } else { bad.join("; ") })
+    Outcome::judge(
+        bad.is_empty(),
+        if bad.is_empty() {
+            format!(
+                "5 splits exact; SDU loss simulated vs formula: {}",
+                summary.join(", ")
+            )
+        } else {
+            bad.join("; ")
+        },
+    )
 }
 
 fn pick(rng: &mut RngStream, min: i64, max: i64) -> i64 {
@@ -279,7 +363,9 @@ fn bsm_decoder(mode: Mode) -> Outcome {
             written.lon += 1;
         }
         let enc = bsm::encode_bsm(&BasicSafetyMessage::part_i(written)).expect("encodes");
-        hexes.push(Value::String(enc.bytes.iter().map(|b| format!("{b:02x}")).collect()));
+        hexes.push(Value::String(
+            enc.bytes.iter().map(|b| format!("{b:02x}")).collect(),
+        ));
     }
     let decoded = match crate::python("bsm_uper.py", &Value::Array(hexes)) {
         Ok(v) => v,
@@ -293,7 +379,10 @@ fn bsm_decoder(mode: Mode) -> Outcome {
         let want = expected_json(c);
         for (k, v) in want.as_object().expect("object") {
             if got.get(k) != Some(v) {
-                wrong.push(format!("{k}: encoded {v}, decoded {}", got.get(k).cloned().unwrap_or(Value::Null)));
+                wrong.push(format!(
+                    "{k}: encoded {v}, decoded {}",
+                    got.get(k).cloned().unwrap_or(Value::Null)
+                ));
                 break;
             }
         }
@@ -301,9 +390,17 @@ fn bsm_decoder(mode: Mode) -> Outcome {
     Outcome::judge(
         wrong.is_empty() && items.len() == cores.len(),
         if wrong.is_empty() {
-            format!("{} messages, 25 fields each, decode identically", items.len())
+            format!(
+                "{} messages, 25 fields each, decode identically",
+                items.len()
+            )
         } else {
-            format!("{} of {} messages differ; first: {}", wrong.len(), cores.len(), wrong[0])
+            format!(
+                "{} of {} messages differ; first: {}",
+                wrong.len(),
+                cores.len(),
+                wrong[0]
+            )
         },
     )
 }

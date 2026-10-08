@@ -1961,7 +1961,10 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ));
     }
     let declared_rsus = s.actors.rsus.len()
-        + s.actors.rsu_placement.as_ref().map_or(0, |p| p.count as usize);
+        + s.actors
+            .rsu_placement
+            .as_ref()
+            .map_or(0, |p| p.count as usize);
     for &unit in &s.threats.compromised_rsus {
         if unit as usize >= declared_rsus {
             e.push(conflict(
@@ -2202,7 +2205,12 @@ fn scale(s: &Scenario, e: &mut Vec<ScenarioError>) {
         return;
     };
     let t = &scale.traffic;
-    one_of("scale.traffic.model", &t.model, &crate::scale::TRAFFIC_MODELS, e);
+    one_of(
+        "scale.traffic.model",
+        &t.model,
+        &crate::scale::TRAFFIC_MODELS,
+        e,
+    );
     if t.model == v2xw_mobility::meso::tiered::MODEL_ID && t.region.is_none() {
         e.push(conflict(
             "scale.traffic.region",
@@ -2497,7 +2505,10 @@ pub(crate) fn radial_params(
     s: &Scenario,
 ) -> core::result::Result<v2xw_world::procedural::radial::RadialParams, ScenarioError> {
     let v2xw_world::WorldSourceSpec::Procedural { params, .. } = &s.world.source else {
-        return Err(conflict("world.source", "is not a procedural world".to_string()));
+        return Err(conflict(
+            "world.source",
+            "is not a procedural world".to_string(),
+        ));
     };
     let radial: v2xw_world::procedural::radial::RadialParams = if params.is_null() {
         v2xw_world::procedural::radial::RadialParams::default()
@@ -2662,7 +2673,10 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "actors.vru.midblock_rate_per_100m",
             s.actors.vru.midblock_rate_per_100m,
         ),
-        ("actors.vru.red_crossing_share", s.actors.vru.red_crossing_share),
+        (
+            "actors.vru.red_crossing_share",
+            s.actors.vru.red_crossing_share,
+        ),
         ("actors.vru.ebike_share", s.actors.vru.ebike_share),
     ] {
         if let Some(v) = value {
@@ -2732,7 +2746,12 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
         );
     }
     if let Some(p) = &s.actors.rsu_placement {
-        bounded_at("actors.rsu_placement.count", "actors.rsu_placement.count", f64::from(p.count), e);
+        bounded_at(
+            "actors.rsu_placement.count",
+            "actors.rsu_placement.count",
+            f64::from(p.count),
+            e,
+        );
         bounded_at(
             "actors.rsu_placement.min_spacing_m",
             "actors.rsu_placement.min_spacing_m",
@@ -2757,9 +2776,7 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
     {
         e.push(conflict(
             "city",
-            format!(
-                "'{city}' is not a city in worlds/cities.yaml; `v2xw cities` lists them"
-            ),
+            format!("'{city}' is not a city in worlds/cities.yaml; `v2xw cities` lists them"),
         ));
     }
 
@@ -3125,11 +3142,36 @@ fn net(s: &Scenario, e: &mut Vec<ScenarioError>) {
                     .to_string(),
             ));
         }
-        one_of("net.geonet.area_forwarding", &g.area_forwarding, &GN_AREA_FORWARDING, e);
-        one_of("net.geonet.non_area_forwarding", &g.non_area_forwarding, &GN_NON_AREA_FORWARDING, e);
-        one_of("net.geonet.cbf_variant", &g.cbf_variant, &GN_CBF_VARIANTS, e);
-        bounded_at("net.geonet.hop_limit", "net.geonet.hop_limit", f64::from(g.hop_limit), e);
-        bounded_at("net.geonet.area_radius_m", "net.geonet.area_radius_m", g.area_radius_m, e);
+        one_of(
+            "net.geonet.area_forwarding",
+            &g.area_forwarding,
+            &GN_AREA_FORWARDING,
+            e,
+        );
+        one_of(
+            "net.geonet.non_area_forwarding",
+            &g.non_area_forwarding,
+            &GN_NON_AREA_FORWARDING,
+            e,
+        );
+        one_of(
+            "net.geonet.cbf_variant",
+            &g.cbf_variant,
+            &GN_CBF_VARIANTS,
+            e,
+        );
+        bounded_at(
+            "net.geonet.hop_limit",
+            "net.geonet.hop_limit",
+            f64::from(g.hop_limit),
+            e,
+        );
+        bounded_at(
+            "net.geonet.area_radius_m",
+            "net.geonet.area_radius_m",
+            g.area_radius_m,
+            e,
+        );
         bounded_at("net.geonet.range_m", "net.geonet.range_m", g.range_m, e);
         bounded_at(
             "net.geonet.repetition_interval_ms",
@@ -3459,9 +3501,8 @@ fn nodes(s: &Scenario, e: &mut Vec<ScenarioError>) {
         let pq = v2xw_sec::scheme::signature(&s.security.signature)
             .is_some_and(|x| x.mode != v2xw_sec::scheme::SchemeMode::Classical);
         let signs = |id: &str| {
-            v2xw_node::profiles::get(id).is_none_or(|p| {
-                p.op_cost(op).is_some() && (!pq || p.op_cost(verify_op).is_some())
-            })
+            v2xw_node::profiles::get(id)
+                .is_none_or(|p| p.op_cost(op).is_some() && (!pq || p.op_cost(verify_op).is_some()))
         };
         let signing: Vec<&str> = obus.iter().copied().filter(|id| signs(id)).collect();
         let unsigned = |field: &str, id: &str, e: &mut Vec<ScenarioError>| {
@@ -3893,11 +3934,26 @@ fn energy(s: &Scenario, e: &mut Vec<ScenarioError>) {
     for (seg, m) in &en.fleet {
         let at = |leaf: &str| format!("energy.fleet.{}.{leaf}", seg.as_str());
         bounded_at("energy.fleet.*.ev_share", &at("ev_share"), m.ev_share, e);
-        bounded_at("energy.fleet.*.diesel_share", &at("diesel_share"), m.diesel_share, e);
+        bounded_at(
+            "energy.fleet.*.diesel_share",
+            &at("diesel_share"),
+            m.diesel_share,
+            e,
+        );
         bounded_at("energy.fleet.*.euro", &at("euro"), f64::from(m.euro), e);
     }
-    bounded_at("energy.ev.initial_soc", "energy.ev.initial_soc", en.ev.initial_soc, e);
-    bounded_at("energy.stop_speed_mps", "energy.stop_speed_mps", en.stop_speed_mps, e);
+    bounded_at(
+        "energy.ev.initial_soc",
+        "energy.ev.initial_soc",
+        en.ev.initial_soc,
+        e,
+    );
+    bounded_at(
+        "energy.stop_speed_mps",
+        "energy.stop_speed_mps",
+        en.stop_speed_mps,
+        e,
+    );
     if let Err(why) = v2xw_energy::registry::emission_model(&en.emission_model) {
         e.push(conflict("energy.emission_model", why));
     }

@@ -461,7 +461,7 @@ impl SnapshotEncoder {
 
         for (slot, t) in rows {
             let Some(r) = self.refs.get(slot).copied() else {
-                    spawns.push(SpawnRow {
+                spawns.push(SpawnRow {
                     slot: *slot,
                     actor_id: t.actor_id,
                     node_id: t.node_id,

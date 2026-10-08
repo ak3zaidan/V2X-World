@@ -395,7 +395,8 @@ pub struct PedestrianSignalReport {
     pub never_walk: u32,
     /// Turning movements given a permissive green (turn, yielding to pedestrians) in the
     /// phases where they alone kept a crosswalk from ever showing walk.
-    pub turns_made_permissive: u32,    /// Exclusive pedestrian phases added to plans whose vehicle phases left a crosswalk
+    pub turns_made_permissive: u32,
+    /// Exclusive pedestrian phases added to plans whose vehicle phases left a crosswalk
     /// no window for a walk at all.
     pub exclusive_phases: u32,
     /// Of those, the plans whose greens were too short to give the phase its time, so
@@ -529,7 +530,9 @@ pub fn signalise_crossings(
             let blocked = blocked_of(plan, cutters);
             blocked.iter().all(|b| *b)
                 || (blocked.iter().any(|b| *b)
-                    && walk_intervals(plan, &blocked, length_m, timing).0.is_empty())
+                    && walk_intervals(plan, &blocked, length_m, timing)
+                        .0
+                        .is_empty())
         };
         // 1. Where only turning movements on a protected green block such a crosswalk in
         // some phase — a left turn from a one-way street onto a one-way avenue, which
@@ -593,7 +596,11 @@ pub fn signalise_crossings(
                         .iter()
                         .any(|s| matches!(s, SignalState::Green | SignalState::GreenYield))
                 })
-                .max_by(|a, b| a.1.duration_s.total_cmp(&b.1.duration_s).then(b.0.cmp(&a.0)))
+                .max_by(|a, b| {
+                    a.1.duration_s
+                        .total_cmp(&b.1.duration_s)
+                        .then(b.0.cmp(&a.0))
+                })
                 .map(|(i, p)| (i, p.duration_s));
             match donor {
                 Some((i, d)) if d - duration >= MIN_VEHICLE_GREEN_S => {

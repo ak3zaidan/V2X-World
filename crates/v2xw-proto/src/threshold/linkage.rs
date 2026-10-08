@@ -45,7 +45,8 @@ pub const SHARE_BYTES: u32 = 32 + 2;
 /// default of `SizeParams` (16 B, a todo-calibrate card parameter).
 const LCI_BYTES: u32 = 16;
 
-const WHY: &str = "Shamir, CACM 1979; Feldman, FOCS 1987; share = P-256 scalar (SEC 1) + Uint16 index";
+const WHY: &str =
+    "Shamir, CACM 1979; Feldman, FOCS 1987; share = P-256 scalar (SEC 1) + Uint16 index";
 
 /// Shamir sharing with Feldman verification.
 #[derive(Debug, Clone, Copy, Default)]
@@ -110,7 +111,10 @@ impl ThresholdProtocol for ShamirFeldman {
     }
 
     fn signature_bytes(&self) -> WireSize {
-        WireSize::cited(LINKAGE_SEED_BYTES, "Brecht 2018 §V-B: a 16-byte linkage seed")
+        WireSize::cited(
+            LINKAGE_SEED_BYTES,
+            "Brecht 2018 §V-B: a 16-byte linkage seed",
+        )
     }
 
     fn verification_key_bytes(&self) -> WireSize {

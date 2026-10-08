@@ -393,7 +393,10 @@ impl CarFollowing for Cacc {
         let ap = self.acc.params();
         let sit = common::situation(ego, lane, w, ap.weather_response, ap.road_context);
         let dt = self.clock.dt_s();
-        let degrade = |acc_gap: f64| self.acc.accel_with_time_gap(ego, leader, lane, w, acc_gap, dt);
+        let degrade = |acc_gap: f64| {
+            self.acc
+                .accel_with_time_gap(ego, leader, lane, w, acc_gap, dt)
+        };
         let factor = sit.headway_factor;
         let Some(l) = leader.filter(|l| l.is_vehicle()) else {
             return degrade(ap.time_gap_s * factor);
@@ -404,7 +407,10 @@ impl CarFollowing for Cacc {
             Some(u) => {
                 let emergency = ego.class.spec().emergency_decel_mps2;
                 let g = l.gap_m - sit.driver.min_gap_m;
-                let a = u.min(self.acc.safety_cap(ego.speed_mps, g, l.speed_mps, emergency, dt));
+                let a = u.min(
+                    self.acc
+                        .safety_cap(ego.speed_mps, g, l.speed_mps, emergency, dt),
+                );
                 acc::finish(
                     a,
                     ego.speed_mps,
@@ -451,7 +457,10 @@ pub fn card(law: CaccLaw, p: &CaccParams, coop: &crate::coop::CoopParams) -> Mod
                             "gap control",
                             "a = (k_p·e + k_d·ė)/0.1 s, e = g − h·v, ė = v_p(V2X) − v − h·a",
                         ),
-                        Equation::new("speed control", "a = −0.4·(v − v0) when g/v > 2 s, e > 1.66 m"),
+                        Equation::new(
+                            "speed control",
+                            "a = −0.4·(v − v0) when g/v > 2 s, e > 1.66 m",
+                        ),
                     ],
                     vec![
                         Parameter::new("time_gap", "s", serde_json::json!(p.time_gap_s), s.clone()),

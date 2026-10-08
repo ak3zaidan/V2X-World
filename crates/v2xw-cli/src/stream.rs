@@ -42,8 +42,8 @@ impl MetricsStream {
     /// # Errors
     /// [`CliError::Io`] if the file cannot be created.
     pub fn create(path: &Path) -> Result<MetricsStream> {
-        let file = std::fs::File::create(path)
-            .map_err(|e| CliError::io("cannot write", path, e))?;
+        let file =
+            std::fs::File::create(path).map_err(|e| CliError::io("cannot write", path, e))?;
         let mut s = MetricsStream {
             path: path.to_path_buf(),
             file: BufWriter::with_capacity(1 << 16, file),

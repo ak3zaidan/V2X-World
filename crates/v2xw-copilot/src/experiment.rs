@@ -86,8 +86,14 @@ impl HealthBand {
 #[must_use]
 pub fn bands_from_catalogue(catalogue: &Value) -> BTreeMap<String, HealthBand> {
     let mut out = BTreeMap::new();
-    for row in catalogue.get("catalogue").and_then(Value::as_array).into_iter().flatten() {
-        let (Some(name), Some(h)) = (row.get("name").and_then(Value::as_str), row.get("health")) else {
+    for row in catalogue
+        .get("catalogue")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let (Some(name), Some(h)) = (row.get("name").and_then(Value::as_str), row.get("health"))
+        else {
             continue;
         };
         if let Ok(band) = serde_json::from_value::<HealthBand>(h.clone()) {
@@ -108,24 +114,60 @@ pub fn fallback_band(series: &str, th: &Thresholds) -> Option<HealthBand> {
         source: source.to_string(),
     };
     Some(match series {
-        "cbr" | "cbr.p95" => b(Better::Lower, 0.5, th.cbr_target_etsi,
-            "ETSI TS 102 687 target CBR 0.68; 0.5 is where DCC leaves its relaxed state"),
-        "e2e_latency.p95" | "latency.p95" => b(Better::Lower, th.latency_budget_ms / 2.0, th.latency_budget_ms,
-            "3GPP TS 22.185 §5.1 100 ms; caution at half the budget (engineering choice)"),
-        "pdr[100m]" => b(Better::Higher, th.near_range_prr, th.prr_range_level,
-            "3GPP TR 37.885 range read at PRR 0.9; 0.95 near range (engineering choice)"),
-        "nar" | "awareness" => b(Better::Higher, 0.95, th.awareness_floor,
-            "analyst awareness floor 0.9 (engineering choice)"),
-        "unverified_ratio" => b(Better::Lower, 0.01, th.unverified_ratio,
-            "analyst: 5 % unverified is a verification bottleneck (engineering choice)"),
-        "aoi.p95" => b(Better::Lower, 2.0 * th.generation_interval_ms, th.aoi_intervals * th.generation_interval_ms,
-            "3 generation intervals of 10 Hz BSMs (engineering choice)"),
-        "mac_queue_depth" => b(Better::Lower, 0.5, th.queue_depth_saturated,
-            "analyst: a mean depth of one frame is a saturating queue (engineering choice)"),
-        "linkability" => b(Better::Lower, th.linkability / 2.0, th.linkability,
-            "analyst: linkability 0.5 means pseudonym change is not protecting (engineering choice)"),
-        "ttc_conflicts" => b(Better::Lower, 0.0, 5.0,
-            "conflicts below the 1.5 s TTC of Hayward 1972 / FHWA SSAM; counts are engineering choices"),
+        "cbr" | "cbr.p95" => b(
+            Better::Lower,
+            0.5,
+            th.cbr_target_etsi,
+            "ETSI TS 102 687 target CBR 0.68; 0.5 is where DCC leaves its relaxed state",
+        ),
+        "e2e_latency.p95" | "latency.p95" => b(
+            Better::Lower,
+            th.latency_budget_ms / 2.0,
+            th.latency_budget_ms,
+            "3GPP TS 22.185 §5.1 100 ms; caution at half the budget (engineering choice)",
+        ),
+        "pdr[100m]" => b(
+            Better::Higher,
+            th.near_range_prr,
+            th.prr_range_level,
+            "3GPP TR 37.885 range read at PRR 0.9; 0.95 near range (engineering choice)",
+        ),
+        "nar" | "awareness" => b(
+            Better::Higher,
+            0.95,
+            th.awareness_floor,
+            "analyst awareness floor 0.9 (engineering choice)",
+        ),
+        "unverified_ratio" => b(
+            Better::Lower,
+            0.01,
+            th.unverified_ratio,
+            "analyst: 5 % unverified is a verification bottleneck (engineering choice)",
+        ),
+        "aoi.p95" => b(
+            Better::Lower,
+            2.0 * th.generation_interval_ms,
+            th.aoi_intervals * th.generation_interval_ms,
+            "3 generation intervals of 10 Hz BSMs (engineering choice)",
+        ),
+        "mac_queue_depth" => b(
+            Better::Lower,
+            0.5,
+            th.queue_depth_saturated,
+            "analyst: a mean depth of one frame is a saturating queue (engineering choice)",
+        ),
+        "linkability" => b(
+            Better::Lower,
+            th.linkability / 2.0,
+            th.linkability,
+            "analyst: linkability 0.5 means pseudonym change is not protecting (engineering choice)",
+        ),
+        "ttc_conflicts" => b(
+            Better::Lower,
+            0.0,
+            5.0,
+            "conflicts below the 1.5 s TTC of Hayward 1972 / FHWA SSAM; counts are engineering choices",
+        ),
         _ => return None,
     })
 }
@@ -135,7 +177,15 @@ pub fn fallback_band(series: &str, th: &Thresholds) -> Option<HealthBand> {
 pub fn absolute_floor(metric: &str, unit: &str) -> f64 {
     let u = unit.to_lowercase();
     match u.as_str() {
-        "ratio" | "fraction" | "" if metric.contains("pdr") || metric.contains("ratio") || metric == "cbr" || metric.starts_with("cbr.") || metric.starts_with("det_") => 0.01,
+        "ratio" | "fraction" | ""
+            if metric.contains("pdr")
+                || metric.contains("ratio")
+                || metric == "cbr"
+                || metric.starts_with("cbr.")
+                || metric.starts_with("det_") =>
+        {
+            0.01
+        }
         "ratio" | "fraction" => 0.01,
         "ms" => 1.0,
         "s" => 0.1,
@@ -213,7 +263,11 @@ fn base(metric: &str) -> &str {
 
 /// Compares the arms against the first.
 #[must_use]
-pub fn compare(arms: &[Arm<'_>], bands: &BTreeMap<String, HealthBand>, th: &Thresholds) -> Experiment {
+pub fn compare(
+    arms: &[Arm<'_>],
+    bands: &BTreeMap<String, HealthBand>,
+    th: &Thresholds,
+) -> Experiment {
     let labels: Vec<String> = arms.iter().map(|a| a.label.to_string()).collect();
     let mut caveats = vec![
         "One seed per arm: the differences are this realisation's, with no confidence interval."
@@ -225,7 +279,13 @@ pub fn compare(arms: &[Arm<'_>], bands: &BTreeMap<String, HealthBand>, th: &Thre
                 .to_string(),
         );
     }
-    let value = |a: &Arm<'_>, m: &str| a.analysis.headline.get(m).or_else(|| a.extra.get(m)).copied();
+    let value = |a: &Arm<'_>, m: &str| {
+        a.analysis
+            .headline
+            .get(m)
+            .or_else(|| a.extra.get(m))
+            .copied()
+    };
     let mut names: BTreeSet<String> = BTreeSet::new();
     if let Some(first) = arms.first() {
         names.extend(first.analysis.headline.keys().cloned());
@@ -249,7 +309,10 @@ pub fn compare(arms: &[Arm<'_>], bands: &BTreeMap<String, HealthBand>, th: &Thre
         let mut significant = false;
         let health: Vec<Option<String>> = values
             .iter()
-            .map(|v| v.and_then(|v| band.as_ref().and_then(|b| b.level(v))).map(str::to_string))
+            .map(|v| {
+                v.and_then(|v| band.as_ref().and_then(|b| b.level(v)))
+                    .map(str::to_string)
+            })
             .collect();
         for (i, v) in values.iter().enumerate().skip(1) {
             let (Some(a), Some(b)) = (v0, *v) else {
@@ -265,12 +328,33 @@ pub fn compare(arms: &[Arm<'_>], bands: &BTreeMap<String, HealthBand>, th: &Thre
             let crossed = health[0].is_some() && health[i].is_some() && health[0] != health[i];
             significant |= moved || crossed;
         }
-        let explained_by = if significant { explain(&m, arms) } else { Vec::new() };
-        rows.push(Row { metric: m, unit, values, changes, relative, health, significant, explained_by });
+        let explained_by = if significant {
+            explain(&m, arms)
+        } else {
+            Vec::new()
+        };
+        rows.push(Row {
+            metric: m,
+            unit,
+            values,
+            changes,
+            relative,
+            health,
+            significant,
+            explained_by,
+        });
     }
-    rows.sort_by(|a, b| b.significant.cmp(&a.significant).then_with(|| a.metric.cmp(&b.metric)));
+    rows.sort_by(|a, b| {
+        b.significant
+            .cmp(&a.significant)
+            .then_with(|| a.metric.cmp(&b.metric))
+    });
     let ids = |a: &Analysis| -> BTreeSet<String> {
-        a.findings.iter().filter(|f| f.severity >= Severity::Notice).map(|f| f.id.clone()).collect()
+        a.findings
+            .iter()
+            .filter(|f| f.severity >= Severity::Notice)
+            .map(|f| f.id.clone())
+            .collect()
     };
     let first = arms.first().map(|a| ids(a.analysis)).unwrap_or_default();
     let findings = arms
@@ -285,7 +369,12 @@ pub fn compare(arms: &[Arm<'_>], bands: &BTreeMap<String, HealthBand>, th: &Thre
             }
         })
         .collect();
-    Experiment { labels, rows, findings, caveats }
+    Experiment {
+        labels,
+        rows,
+        findings,
+        caveats,
+    }
 }
 
 /// The findings, in any arm, whose evidence or charts name this metric: those an arm has
@@ -314,12 +403,20 @@ fn explain(metric: &str, arms: &[Arm<'_>]) -> Vec<String> {
             }
         }
     }
-    hits.sort_by(|x, y| y.0.cmp(&x.0).then(y.1.cmp(&x.1)).then_with(|| x.2.cmp(&y.2)));
+    hits.sort_by(|x, y| {
+        y.0.cmp(&x.0)
+            .then(y.1.cmp(&x.1))
+            .then_with(|| x.2.cmp(&y.2))
+    });
     hits.into_iter().take(3).map(|(_, _, t)| t).collect()
 }
 
 fn signed(v: f64) -> String {
-    if v > 0.0 { format!("+{}", fmt(v)) } else { fmt(v) }
+    if v > 0.0 {
+        format!("+{}", fmt(v))
+    } else {
+        fmt(v)
+    }
 }
 
 impl Experiment {
@@ -356,7 +453,12 @@ impl Experiment {
             .rows
             .iter()
             .filter(|r| !r.significant)
-            .map(|r| (r.metric.clone(), json!(r.values.iter().map(opt).collect::<Vec<_>>().join(" / "))))
+            .map(|r| {
+                (
+                    r.metric.clone(),
+                    json!(r.values.iter().map(opt).collect::<Vec<_>>().join(" / ")),
+                )
+            })
             .collect();
         json!({
             "arms": self.labels,
@@ -371,7 +473,10 @@ impl Experiment {
     #[must_use]
     pub fn to_markdown(&self) -> String {
         let mut md = String::from("## Experiment\n\n");
-        md.push_str(&format!("| Metric | Unit | {} | Significant | Explained by |\n|---|---|", self.labels.join(" | ")));
+        md.push_str(&format!(
+            "| Metric | Unit | {} | Significant | Explained by |\n|---|---|",
+            self.labels.join(" | ")
+        ));
         for _ in &self.labels {
             md.push_str("---|");
         }
@@ -431,7 +536,10 @@ mod tests {
             run_id: "r".into(),
             scenario_hash: "h".into(),
             findings,
-            headline: headline.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
+            headline: headline
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), *v))
+                .collect(),
             not_measured: Vec::new(),
             thresholds: Vec::new(),
         }
@@ -444,27 +552,57 @@ mod tests {
             severity: Severity::Warning,
             title: id.into(),
             detail: String::new(),
-            evidence: vec![Evidence { label: "x".into(), value: 0.7, unit: "ratio".into(), source: metric.into() }],
+            evidence: vec![Evidence {
+                label: "x".into(),
+                value: 0.7,
+                unit: "ratio".into(),
+                source: metric.into(),
+            }],
             location: Location::default(),
             reference: None,
-            links: vec![Link { metric: metric.into(), chart: metric.into(), query: Value::Null }],
+            links: vec![Link {
+                metric: metric.into(),
+                chart: metric.into(),
+                query: Value::Null,
+            }],
         }
     }
 
     #[test]
     fn a_large_move_and_a_band_crossing_are_called_out_and_explained_and_a_tiny_one_is_not() {
         let a = analysis(&[("cbr", 0.30), ("pdr", 0.950), ("mac_drops", 0.0)], vec![]);
-        let b = analysis(&[("cbr", 0.72), ("pdr", 0.952), ("mac_drops", 0.0)], vec![finding("channel.congested", "cbr")]);
+        let b = analysis(
+            &[("cbr", 0.72), ("pdr", 0.952), ("mac_drops", 0.0)],
+            vec![finding("channel.congested", "cbr")],
+        );
         let none = BTreeMap::new();
-        let units: BTreeMap<String, String> = [("cbr", "ratio"), ("pdr", "ratio")].iter().map(|(k, v)| ((*k).into(), (*v).into())).collect();
+        let units: BTreeMap<String, String> = [("cbr", "ratio"), ("pdr", "ratio")]
+            .iter()
+            .map(|(k, v)| ((*k).into(), (*v).into()))
+            .collect();
         let arms = [
-            Arm { label: "light", analysis: &a, extra: &none, units: &units, seed: "1" },
-            Arm { label: "rush", analysis: &b, extra: &none, units: &units, seed: "1" },
+            Arm {
+                label: "light",
+                analysis: &a,
+                extra: &none,
+                units: &units,
+                seed: "1",
+            },
+            Arm {
+                label: "rush",
+                analysis: &b,
+                extra: &none,
+                units: &units,
+                seed: "1",
+            },
         ];
         let x = compare(&arms, &BTreeMap::new(), &Thresholds::default());
         let cbr = x.rows.iter().find(|r| r.metric == "cbr").expect("cbr");
         assert!(cbr.significant);
-        assert_eq!(cbr.health, vec![Some("healthy".into()), Some("unhealthy".into())]);
+        assert_eq!(
+            cbr.health,
+            vec![Some("healthy".into()), Some("unhealthy".into())]
+        );
         assert_eq!(cbr.explained_by, vec!["channel.congested@rush".to_string()]);
         assert!((cbr.relative[1].expect("rel") - 1.4).abs() < 1e-9);
         let pdr = x.rows.iter().find(|r| r.metric == "pdr").expect("pdr");
@@ -487,8 +625,20 @@ mod tests {
         let none = BTreeMap::new();
         let no_units = BTreeMap::new();
         let arms = [
-            Arm { label: "a", analysis: &a, extra: &none, units: &no_units, seed: "1" },
-            Arm { label: "b", analysis: &b, extra: &none, units: &no_units, seed: "2" },
+            Arm {
+                label: "a",
+                analysis: &a,
+                extra: &none,
+                units: &no_units,
+                seed: "1",
+            },
+            Arm {
+                label: "b",
+                analysis: &b,
+                extra: &none,
+                units: &no_units,
+                seed: "2",
+            },
         ];
         let x = compare(&arms, &bands, &Thresholds::default());
         assert_eq!(x.rows[0].health[0].as_deref(), Some("caution"));

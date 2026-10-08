@@ -367,7 +367,9 @@ pub(crate) mod tests {
     fn the_signalised_grid_has_gates() {
         let w = grid();
         let g = LaneGraph::new(&w, ClassMask::CAR);
-        let gated = (0..g.len() as Node).filter(|n| g.gate(*n).is_some()).count();
+        let gated = (0..g.len() as Node)
+            .filter(|n| g.gate(*n).is_some())
+            .count();
         assert!(gated > 0, "a signalised grid gives some connector a gate");
     }
 }

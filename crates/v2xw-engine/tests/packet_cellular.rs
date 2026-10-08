@@ -45,6 +45,9 @@ fn packet_level_cellular_carries_the_backend_and_reports_the_comparison() {
     let a = &report.phase2.access;
     println!("{a:?}");
     assert!(a.cellular_vehicles > 0);
-    assert!(a.tcp_connections > 0, "backend messages open TCP connections");
+    assert!(
+        a.tcp_connections > 0,
+        "backend messages open TCP connections"
+    );
     assert!(!a.uu_vs_simple.is_empty(), "the comparison is reported");
 }

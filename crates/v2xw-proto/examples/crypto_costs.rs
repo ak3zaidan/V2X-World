@@ -34,7 +34,9 @@ fn ms(d: Duration) -> f64 {
 }
 
 fn us(d: Option<Duration>) -> String {
-    d.map_or("—".to_string(), |d| format!("{:.0}", d.as_nanos() as f64 / 1e3))
+    d.map_or("—".to_string(), |d| {
+        format!("{:.0}", d.as_nanos() as f64 / 1e3)
+    })
 }
 
 struct Provisioned {
@@ -380,8 +382,15 @@ fn part4() {
             .map_or(0, |s| s.messages);
         println!(
             "| {label} | {what} | {} | {} | {bytes} | {msgs} |",
-            if run.state.crlg.entries.is_empty() { "no" } else { "yes" },
-            published.map_or("—".to_string(), |t| format!("{:.0}", (t - t0) as f64 / 1e6)),
+            if run.state.crlg.entries.is_empty() {
+                "no"
+            } else {
+                "yes"
+            },
+            published.map_or("—".to_string(), |t| format!(
+                "{:.0}",
+                (t - t0) as f64 / 1e6
+            )),
         );
     }
     println!();

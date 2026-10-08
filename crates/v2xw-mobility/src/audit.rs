@@ -864,7 +864,11 @@ impl TrafficAuditor {
     /// either side) it stands in ahead of the front bumper, the time to collision at the
     /// two velocities. An approach is counted once, when it first falls below the conflict
     /// threshold, and once more if it then falls below the near-miss threshold.
-    fn count_pedestrian_conflicts(&mut self, actors: &[AuditActor], pedestrians: &[AuditPedestrian]) {
+    fn count_pedestrian_conflicts(
+        &mut self,
+        actors: &[AuditActor],
+        pedestrians: &[AuditPedestrian],
+    ) {
         let mut now: BTreeMap<(ActorId, ActorId), bool> = BTreeMap::new();
         let in_road: Vec<&AuditPedestrian> = pedestrians
             .iter()
@@ -895,7 +899,7 @@ impl TrafficAuditor {
                 if closing <= 0.1 {
                     continue;
                 }
-                let ttc = (ahead - 0.5 * p.length_m) .max(0.0) / closing;
+                let ttc = (ahead - 0.5 * p.length_m).max(0.0) / closing;
                 if ttc >= PED_CONFLICT_TTC_S {
                     continue;
                 }

@@ -211,7 +211,9 @@ impl NetworkObserver {
         for plan in &world.signals {
             for l in &plan.controlled {
                 if let Some((approach, _)) = movement_of.get(l)
-                    && world.try_lane(*approach).is_some_and(|x| x.kind.is_motorised())
+                    && world
+                        .try_lane(*approach)
+                        .is_some_and(|x| x.kind.is_motorised())
                 {
                     signal_approaches.insert(*approach);
                 }
@@ -361,12 +363,9 @@ impl NetworkObserver {
                         && c.route_next
                             .and_then(|n| self.movement_of.get(&n))
                             .is_none_or(|(_, t)| *t != TurnDirection::Right);
-                    let straight_through = self
-                        .movement_of
-                        .get(&c.lane)
-                        .is_some_and(|(ap, t)| {
-                            world.lane(*ap).edge == edge && *t == TurnDirection::Straight
-                        });
+                    let straight_through = self.movement_of.get(&c.lane).is_some_and(|(ap, t)| {
+                        world.lane(*ap).edge == edge && *t == TurnDirection::Straight
+                    });
                     (on_approach || straight_through)
                         && front_of(c).distance_2d(front) < RIGHT_HOOK_M
                 });
@@ -377,10 +376,7 @@ impl NetworkObserver {
         }
         self.prev_lane = lanes_now;
         // Dooring exposures: cyclists passing a taxi at the kerb within a door's reach.
-        for taxi in actors
-            .iter()
-            .filter(|a| a.kerbside == Some(KerbRole::Taxi))
-        {
+        for taxi in actors.iter().filter(|a| a.kerbside == Some(KerbRole::Taxi)) {
             let (tc, th) = (centre_of(taxi), taxi.heading_rad);
             let (sin_h, cos_h) = math::sin_cos(th);
             for c in &cyclists {
@@ -412,8 +408,7 @@ impl NetworkObserver {
                 let Some(lane) = world.try_lane(p.lane) else {
                     continue;
                 };
-                if p.activity != crate::vru::PedActivity::Walking
-                    || lane.kind != LaneKind::Sidewalk
+                if p.activity != crate::vru::PedActivity::Walking || lane.kind != LaneKind::Sidewalk
                 {
                     continue;
                 }
@@ -523,7 +518,11 @@ impl NetworkObserver {
             .iter()
             .map(|(sum, weight, n)| Summary {
                 n: *n,
-                mean: if *weight > 0.0 { sum / weight } else { f64::NAN },
+                mean: if *weight > 0.0 {
+                    sum / weight
+                } else {
+                    f64::NAN
+                },
                 sd: f64::NAN,
                 p15: f64::NAN,
                 p50: f64::NAN,
@@ -670,13 +669,21 @@ impl NetworkReport {
         };
         // Weidmann at the middle of the Fruin band (space per person, m²).
         let mid = |level: usize| -> f64 {
-            let hi = if level == 0 { 5.0 } else { FRUIN_SPACE_M2[level - 1] };
+            let hi = if level == 0 {
+                5.0
+            } else {
+                FRUIN_SPACE_M2[level - 1]
+            };
             let lo = FRUIN_SPACE_M2.get(level).copied().unwrap_or(0.3);
             weidmann_factor(2.0 / (hi + lo)) / weidmann_factor(1.0 / 5.0)
         };
         let (c_ratio, c_n) = ratio(2);
         let (d_ratio, d_n) = ratio(3);
-        let bus = self.kerbside_dwell_s.get("bus").copied().unwrap_or_default();
+        let bus = self
+            .kerbside_dwell_s
+            .get("bus")
+            .copied()
+            .unwrap_or_default();
         vec![
             Comparison {
                 metric: "network max flow / s·g/C cut bound",

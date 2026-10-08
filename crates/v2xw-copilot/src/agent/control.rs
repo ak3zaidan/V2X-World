@@ -130,10 +130,19 @@ impl Harness {
     pub(super) fn extras_markdown(&self, runs: &[RunRecord], from: usize) -> String {
         let mut md = String::new();
         for (i, r) in runs.iter().enumerate().skip(from) {
-            let Some(m) = self.meta.get(&i).filter(|m| !m.extra.is_empty()) else { continue };
-            md.push_str(&format!("## Other measured values: {}\n\n| Metric | Value | Unit |\n|---|---|---|\n", r.label));
+            let Some(m) = self.meta.get(&i).filter(|m| !m.extra.is_empty()) else {
+                continue;
+            };
+            md.push_str(&format!(
+                "## Other measured values: {}\n\n| Metric | Value | Unit |\n|---|---|---|\n",
+                r.label
+            ));
             for (k, v) in &m.extra {
-                md.push_str(&format!("| `{k}` | {} | {} |\n", fmt(*v), m.units.get(k).map_or("", String::as_str)));
+                md.push_str(&format!(
+                    "| `{k}` | {} | {} |\n",
+                    fmt(*v),
+                    m.units.get(k).map_or("", String::as_str)
+                ));
             }
             md.push('\n');
         }
@@ -270,12 +279,17 @@ pub(super) fn dispatch<P: LlmProvider, T: RpcTransport>(
     };
     Some(match result {
         Ok(result) => ToolOutcome::Ok { result },
-        Err(e) => ToolOutcome::Failed { message: e.to_string() },
+        Err(e) => ToolOutcome::Failed {
+            message: e.to_string(),
+        },
     })
 }
 
 fn err(method: &str, message: impl Into<String>) -> CopilotError {
-    CopilotError::Rpc { method: method.into(), message: message.into() }
+    CopilotError::Rpc {
+        method: method.into(),
+        message: message.into(),
+    }
 }
 
 // ----------------------------------------------------------------------------- scenarios
@@ -317,17 +331,26 @@ pub(super) fn scenario_list<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P
 pub(super) fn apply_change(doc: &mut Value, key: &str, value: &Value) -> Result<(Value, Value)> {
     let pointer = to_pointer(key);
     let before = doc.pointer(&pointer).cloned().unwrap_or(Value::Null);
-    let op = value.as_object().filter(|o| o.len() == 1).and_then(|o| o.iter().next());
+    let op = value
+        .as_object()
+        .filter(|o| o.len() == 1)
+        .and_then(|o| o.iter().next());
     let mut after = match op {
         Some((k, v)) if k == "multiply" => {
             let (Some(b), Some(m)) = (before.as_f64(), v.as_f64()) else {
-                return Err(err("prepare_scenario", format!("`{key}` is not a number in the base, so it cannot be multiplied")));
+                return Err(err(
+                    "prepare_scenario",
+                    format!("`{key}` is not a number in the base, so it cannot be multiplied"),
+                ));
             };
             json!(b * m)
         }
         Some((k, v)) if k == "add" && v.is_number() => {
             let (Some(b), Some(m)) = (before.as_f64(), v.as_f64()) else {
-                return Err(err("prepare_scenario", format!("`{key}` is not a number in the base")));
+                return Err(err(
+                    "prepare_scenario",
+                    format!("`{key}` is not a number in the base"),
+                ));
             };
             json!(b + m)
         }
@@ -335,7 +358,12 @@ pub(super) fn apply_change(doc: &mut Value, key: &str, value: &Value) -> Result<
             let mut list = match &before {
                 Value::Array(a) => a.clone(),
                 Value::Null => Vec::new(),
-                _ => return Err(err("prepare_scenario", format!("`{key}` is not a list, so nothing can be appended to it"))),
+                _ => {
+                    return Err(err(
+                        "prepare_scenario",
+                        format!("`{key}` is not a list, so nothing can be appended to it"),
+                    ));
+                }
             };
             match item {
                 Value::Array(items) => list.extend(items.iter().cloned()),
@@ -349,7 +377,11 @@ pub(super) fn apply_change(doc: &mut Value, key: &str, value: &Value) -> Result<
         }
         _ => value.clone(),
     };
-    if key.trim_start_matches('/').replace('/', ".").starts_with("threats.jammers") {
+    if key
+        .trim_start_matches('/')
+        .replace('/', ".")
+        .starts_with("threats.jammers")
+    {
         resolve_centre(doc, &mut after)?;
     }
     set_pointer(doc, &pointer, after.clone());
@@ -357,7 +389,9 @@ pub(super) fn apply_change(doc: &mut Value, key: &str, value: &Value) -> Result<
 }
 
 fn remove_pointer(doc: &mut Value, pointer: &str) {
-    let Some((parent, last)) = pointer.rsplit_once('/') else { return };
+    let Some((parent, last)) = pointer.rsplit_once('/') else {
+        return;
+    };
     let last = last.replace("~1", "/").replace("~0", "~");
     match doc.pointer_mut(parent) {
         Some(Value::Object(o)) => {
@@ -389,16 +423,31 @@ fn resolve_centre(doc: &Value, v: &mut Value) -> Result<()> {
             .and_then(Value::as_str)
             .is_some_and(|s| matches!(s.to_lowercase().as_str(), "centre" | "center" | "middle"));
         let unplaced = item.get("params").is_none_or(|p| {
-            p.get("position_m").is_none() && p.get("follow_node").is_none() && p.get("path_m").is_none()
+            p.get("position_m").is_none()
+                && p.get("follow_node").is_none()
+                && p.get("path_m").is_none()
         });
         if !wants && !unplaced {
             continue;
         }
-        let p = |k: &str| doc.pointer(&format!("/world/source/params/{k}")).and_then(Value::as_f64);
-        let generator = doc.pointer("/world/source/generator").and_then(Value::as_str).unwrap_or("");
-        let centre = match (generator.contains("procedural-grid"), p("cols"), p("rows"), p("block_x_m"), p("block_y_m")) {
+        let p = |k: &str| {
+            doc.pointer(&format!("/world/source/params/{k}"))
+                .and_then(Value::as_f64)
+        };
+        let generator = doc
+            .pointer("/world/source/generator")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let centre = match (
+            generator.contains("procedural-grid"),
+            p("cols"),
+            p("rows"),
+            p("block_x_m"),
+            p("block_y_m"),
+        ) {
             (true, Some(c), Some(r), Some(bx), Some(by)) => {
-                let half = p("lanes_per_direction").unwrap_or(1.0) * p("lane_width_m").unwrap_or(3.5);
+                let half =
+                    p("lanes_per_direction").unwrap_or(1.0) * p("lane_width_m").unwrap_or(3.5);
                 [half + (c - 1.0) * bx / 2.0, half + (r - 1.0) * by / 2.0]
             }
             _ => {
@@ -431,21 +480,42 @@ fn build(
     let mut applied = Vec::new();
     for list in lists {
         for c in *list {
-            let key = c.get("key").and_then(Value::as_str).unwrap_or("").to_string();
+            let key = c
+                .get("key")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             if key.is_empty() {
                 return Err(err("simulate", "a change has no key"));
             }
-            let why = c.get("why").and_then(Value::as_str).unwrap_or("").to_string();
+            let why = c
+                .get("why")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let value = c.get("value").cloned().unwrap_or(Value::Null);
             let (before, after) = apply_change(&mut doc, &key, &value)?;
-            applied.push(Change { key, before, after, why });
+            applied.push(Change {
+                key,
+                before,
+                after,
+                why,
+            });
         }
     }
     if let Some(d) = duration_s {
-        let before = doc.pointer("/time/duration_s").cloned().unwrap_or(Value::Null);
+        let before = doc
+            .pointer("/time/duration_s")
+            .cloned()
+            .unwrap_or(Value::Null);
         set_pointer(&mut doc, "/time/duration_s", json!(d));
         applied.retain(|c| c.key != "time.duration_s");
-        applied.push(Change { key: "time.duration_s".into(), before, after: json!(d), why: "duration_s".into() });
+        applied.push(Change {
+            key: "time.duration_s".into(),
+            before,
+            after: json!(d),
+            why: "duration_s".into(),
+        });
     }
     if let Some(d) = doc.pointer("/time/duration_s").and_then(Value::as_f64) {
         if d > max_duration_s {
@@ -481,10 +551,23 @@ fn simulate<P: LlmProvider, T: RpcTransport>(
     sink: &mut dyn FnMut(AgentEvent),
     comparison: &mut Option<Comparison>,
 ) -> Result<Value> {
-    let s = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-    let base = if s("base").is_empty() { "current".to_string() } else { s("base") };
+    let s = |k: &str| {
+        args.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let base = if s("base").is_empty() {
+        "current".to_string()
+    } else {
+        s("base")
+    };
     let reason = s("reason");
-    let common: Vec<Value> = args.get("changes").and_then(Value::as_array).cloned().unwrap_or_default();
+    let common: Vec<Value> = args
+        .get("changes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let mut variants: Vec<(String, Vec<Value>)> = args
         .get("variants")
         .and_then(Value::as_array)
@@ -492,32 +575,62 @@ fn simulate<P: LlmProvider, T: RpcTransport>(
         .flatten()
         .enumerate()
         .map(|(i, v)| {
-            let label = v.get("label").and_then(Value::as_str).map_or_else(|| format!("arm {}", i + 1), str::to_string);
-            (label, v.get("changes").and_then(Value::as_array).cloned().unwrap_or_default())
+            let label = v
+                .get("label")
+                .and_then(Value::as_str)
+                .map_or_else(|| format!("arm {}", i + 1), str::to_string);
+            (
+                label,
+                v.get("changes")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+            )
         })
         .collect();
     if variants.is_empty() {
-        let label = if s("label").is_empty() { format!("run {}", agent.runs.len() + 1) } else { s("label") };
+        let label = if s("label").is_empty() {
+            format!("run {}", agent.runs.len() + 1)
+        } else {
+            s("label")
+        };
         variants.push((label, Vec::new()));
     }
     if variants.len() > 6 {
-        return Err(err("simulate", "at most 6 variants per call; split the sweep"));
+        return Err(err(
+            "simulate",
+            "at most 6 variants per call; split the sweep",
+        ));
     }
-    let compare_to_last = args.get("compare_to_last").and_then(Value::as_bool).unwrap_or(false);
+    let compare_to_last = args
+        .get("compare_to_last")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if compare_to_last && agent.runs.is_empty() {
-        return Err(err("simulate", "compare_to_last: nothing has run in this conversation yet"));
+        return Err(err(
+            "simulate",
+            "compare_to_last: nothing has run in this conversation yet",
+        ));
     }
     let duration_s = args.get("duration_s").and_then(Value::as_f64);
     let base_doc = agent.base_document(&base)?;
     if !base_doc.is_object() {
-        return Err(err("simulate", format!("the base {base:?} gave no scenario document")));
+        return Err(err(
+            "simulate",
+            format!("the base {base:?} gave no scenario document"),
+        ));
     }
 
     // Build and validate every arm before running any.
     let mut built: Vec<(String, Value, Vec<Change>, String)> = Vec::new();
     let mut invalid: Vec<Value> = Vec::new();
     for (label, changes) in &variants {
-        let (doc, applied) = match build(&base_doc, &[&common, changes], duration_s, agent.policy.max_duration_s) {
+        let (doc, applied) = match build(
+            &base_doc,
+            &[&common, changes],
+            duration_s,
+            agent.policy.max_duration_s,
+        ) {
             Ok(x) => x,
             Err(e) => {
                 invalid.push(json!({"label": label, "errors": [e.to_string()]}));
@@ -533,7 +646,12 @@ fn simulate<P: LlmProvider, T: RpcTransport>(
             errors: report.errors.clone(),
         });
         if report.ok {
-            built.push((label.clone(), doc, applied, report.content_hash.clone().unwrap_or_default()));
+            built.push((
+                label.clone(),
+                doc,
+                applied,
+                report.content_hash.clone().unwrap_or_default(),
+            ));
         } else {
             invalid.push(json!({"label": label, "errors": report.errors.iter()
                 .map(|e| json!({"field": e.field, "message": e.message})).collect::<Vec<_>>()}));
@@ -558,8 +676,14 @@ fn simulate<P: LlmProvider, T: RpcTransport>(
             document: doc,
         });
         if let Err(e) = agent.run_prepared(&label, sink) {
-            let done: Vec<String> = agent.runs[first_new..].iter().map(|r| r.label.clone()).collect();
-            return Err(err("simulate", format!("arm {label:?} failed: {e}; finished before it: {done:?}")));
+            let done: Vec<String> = agent.runs[first_new..]
+                .iter()
+                .map(|r| r.label.clone())
+                .collect();
+            return Err(err(
+                "simulate",
+                format!("arm {label:?} failed: {e}; finished before it: {done:?}"),
+            ));
         }
         arms.push(agent.runs.len() - 1);
     }
@@ -567,7 +691,10 @@ fn simulate<P: LlmProvider, T: RpcTransport>(
     if arms.len() >= 2 {
         let x = experiment_of(agent, &arms);
         if let (Some(a), Some(b)) = (arms.first(), arms.last()) {
-            *comparison = Some(analyst::compare(&agent.runs[*a].analysis, &agent.runs[*b].analysis));
+            *comparison = Some(analyst::compare(
+                &agent.runs[*a].analysis,
+                &agent.runs[*b].analysis,
+            ));
         }
         let out = json!({
             "ok": true,
@@ -586,17 +713,25 @@ fn simulate<P: LlmProvider, T: RpcTransport>(
 /// One run for the model: its findings with their numbers, the headline and extra metrics,
 /// and every metric outside its healthy band.
 pub(super) fn run_summary<P: LlmProvider, T: RpcTransport>(agent: &Agent<P, T>, i: usize) -> Value {
-    let Some(run) = agent.runs.get(i) else { return Value::Null };
+    let Some(run) = agent.runs.get(i) else {
+        return Value::Null;
+    };
     let mut out = brief(run, i, true);
     let empty = RunMeta::default();
     let m = agent.harness.meta.get(&i).unwrap_or(&empty);
     if !m.extra.is_empty() {
-        out["extra"] = json!(m.extra.iter().map(|(k, v)| (k.clone(), json!(fmt(*v)))).collect::<Map<_, _>>());
+        out["extra"] = json!(
+            m.extra
+                .iter()
+                .map(|(k, v)| (k.clone(), json!(fmt(*v))))
+                .collect::<Map<_, _>>()
+        );
     }
-    let health: BTreeMap<String, String> = health_of(&run.analysis.headline, &m.extra, &agent.harness.bands)
-        .into_iter()
-        .filter(|(_, l)| l != "healthy")
-        .collect();
+    let health: BTreeMap<String, String> =
+        health_of(&run.analysis.headline, &m.extra, &agent.harness.bands)
+            .into_iter()
+            .filter(|(_, l)| l != "healthy")
+            .collect();
     if !health.is_empty() {
         out["out_of_band"] = json!(health);
     }
@@ -607,9 +742,15 @@ pub(super) fn run_summary<P: LlmProvider, T: RpcTransport>(agent: &Agent<P, T>, 
 }
 
 /// The experiment over these runs of the conversation.
-fn experiment_of<P: LlmProvider, T: RpcTransport>(agent: &Agent<P, T>, idx: &[usize]) -> Experiment {
+fn experiment_of<P: LlmProvider, T: RpcTransport>(
+    agent: &Agent<P, T>,
+    idx: &[usize],
+) -> Experiment {
     let empty = RunMeta::default();
-    let metas: Vec<&RunMeta> = idx.iter().map(|i| agent.harness.meta.get(i).unwrap_or(&empty)).collect();
+    let metas: Vec<&RunMeta> = idx
+        .iter()
+        .map(|i| agent.harness.meta.get(i).unwrap_or(&empty))
+        .collect();
     let arms: Vec<Arm<'_>> = idx
         .iter()
         .zip(&metas)
@@ -633,20 +774,37 @@ pub(super) fn compare_runs<P: LlmProvider, T: RpcTransport>(
 ) -> Result<Value> {
     let n = agent.runs.len();
     if n < 2 {
-        return Err(err("compare_runs", "fewer than two runs in this conversation"));
+        return Err(err(
+            "compare_runs",
+            "fewer than two runs in this conversation",
+        ));
     }
     let idx: Vec<usize> = match args.get("runs").and_then(Value::as_array) {
-        Some(list) => list.iter().filter_map(Value::as_u64).map(|v| v as usize).collect(),
+        Some(list) => list
+            .iter()
+            .filter_map(Value::as_u64)
+            .map(|v| v as usize)
+            .collect(),
         None => {
-            let pick = |k: &str, d: usize| args.get(k).and_then(Value::as_u64).map_or(d, |v| v as usize);
+            let pick = |k: &str, d: usize| {
+                args.get(k)
+                    .and_then(Value::as_u64)
+                    .map_or(d, |v| v as usize)
+            };
             vec![pick("a", n - 2), pick("b", n - 1)]
         }
     };
     if idx.len() < 2 || idx.iter().any(|i| *i >= n) {
-        return Err(err("compare_runs", format!("give two or more run indexes below {n} (list_runs numbers them)")));
+        return Err(err(
+            "compare_runs",
+            format!("give two or more run indexes below {n} (list_runs numbers them)"),
+        ));
     }
     let x = experiment_of(agent, &idx);
-    *comparison = Some(analyst::compare(&agent.runs[idx[0]].analysis, &agent.runs[idx[idx.len() - 1]].analysis));
+    *comparison = Some(analyst::compare(
+        &agent.runs[idx[0]].analysis,
+        &agent.runs[idx[idx.len() - 1]].analysis,
+    ));
     let out = x.compact();
     agent.harness.experiments.push((agent.harness.turn, x));
     Ok(out)
@@ -663,14 +821,37 @@ fn brief(r: &RunRecord, index: usize, full: bool) -> Value {
         .map(|f| {
             let mut o = json!({"id": f.id, "severity": f.severity, "title": f.title});
             if full || f.severity >= Severity::Warning {
-                o["evidence"] = json!(f.evidence.iter().map(|e| format!("{}: {} {}", e.label, fmt(e.value), e.unit).trim().to_string()).collect::<Vec<_>>());
+                o["evidence"] = json!(
+                    f.evidence
+                        .iter()
+                        .map(|e| format!("{}: {} {}", e.label, fmt(e.value), e.unit)
+                            .trim()
+                            .to_string())
+                        .collect::<Vec<_>>()
+                );
                 let w = &f.location;
                 let mut wh = Vec::new();
                 if !w.nodes.is_empty() {
-                    wh.push(format!("nodes {}", w.nodes.iter().take(3).cloned().collect::<Vec<_>>().join(",")));
+                    wh.push(format!(
+                        "nodes {}",
+                        w.nodes
+                            .iter()
+                            .take(3)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ));
                 }
                 if !w.regions.is_empty() {
-                    wh.push(format!("regions {}", w.regions.iter().take(3).cloned().collect::<Vec<_>>().join(",")));
+                    wh.push(format!(
+                        "regions {}",
+                        w.regions
+                            .iter()
+                            .take(3)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ));
                 }
                 if !w.entities.is_empty() {
                     wh.push(format!("entities {}", w.entities.join(",")));
@@ -699,7 +880,12 @@ fn brief(r: &RunRecord, index: usize, full: bool) -> Value {
         "not_measured": a.not_measured,
     });
     if full {
-        out["headline"] = json!(a.headline.iter().map(|(k, v)| (k.clone(), json!(fmt(*v)))).collect::<Map<_, _>>());
+        out["headline"] = json!(
+            a.headline
+                .iter()
+                .map(|(k, v)| (k.clone(), json!(fmt(*v))))
+                .collect::<Map<_, _>>()
+        );
     }
     out
 }
@@ -715,7 +901,10 @@ fn health_of(
         .iter()
         .chain(extra.iter())
         .filter_map(|(k, v)| {
-            let band = bands.get(k).cloned().or_else(|| experiment::fallback_band(k, &th))?;
+            let band = bands
+                .get(k)
+                .cloned()
+                .or_else(|| experiment::fallback_band(k, &th))?;
             band.level(*v).map(|l| (k.clone(), l.to_string()))
         })
         .collect()
@@ -730,7 +919,10 @@ pub(super) fn record_meta<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, 
         .and_then(|p| p.document.get("seed"))
         .map(|s| s.as_str().map_or_else(|| s.to_string(), str::to_string))
         .unwrap_or_default();
-    let mut meta = RunMeta { seed, ..RunMeta::default() };
+    let mut meta = RunMeta {
+        seed,
+        ..RunMeta::default()
+    };
     let t_ns = (agent.runs[index].t_s * 1e9).round() as u64;
     if let Ok(cat) = agent.rpc.call("metrics.query", &json!({})) {
         let bands = experiment::bands_from_catalogue(&cat);
@@ -743,11 +935,26 @@ pub(super) fn record_meta<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, 
             .into_iter()
             .flatten()
             .filter_map(|r| {
-                Some((r.get("name")?.as_str()?.to_string(), r.get("unit").and_then(Value::as_str).unwrap_or("").to_string()))
+                Some((
+                    r.get("name")?.as_str()?.to_string(),
+                    r.get("unit")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                ))
             })
             .collect();
-        for r in cat.get("catalogue").and_then(Value::as_array).into_iter().flatten() {
-            let base = r.get("base").or_else(|| r.get("name")).and_then(Value::as_str).unwrap_or("");
+        for r in cat
+            .get("catalogue")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let base = r
+                .get("base")
+                .or_else(|| r.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
             if base.is_empty() || agent.runs[index].analysis.headline.contains_key(base) {
                 continue;
             }
@@ -759,7 +966,11 @@ pub(super) fn record_meta<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, 
                 .filter_map(Value::as_str)
                 .filter(|d| *d != "t")
                 .collect();
-            let entry = if dims.is_empty() { base.to_string() } else { format!("{base}[{}]", dims.join("|")) };
+            let entry = if dims.is_empty() {
+                base.to_string()
+            } else {
+                format!("{base}[{}]", dims.join("|"))
+            };
             if !meta.catalogue.contains(&entry) && meta.catalogue.len() < 120 {
                 meta.catalogue.push(entry);
             }
@@ -773,18 +984,31 @@ pub(super) fn record_meta<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, 
             .map(|(n, _)| n)
             .filter(|n| !headline.contains_key(*n))
             .filter(|n| {
-                EXTRA_METRICS.iter().any(|p| if p.ends_with('_') { n.starts_with(p) } else { n == p })
+                EXTRA_METRICS.iter().any(|p| {
+                    if p.ends_with('_') {
+                        n.starts_with(p)
+                    } else {
+                        n == p
+                    }
+                })
             })
             .take(EXTRA_LIMIT)
             .collect();
         for name in wanted {
             let v = agent
                 .rpc
-                .call("metrics.query", &json!({"metrics": [name], "t_from_ns": 0, "t_to_ns": t_ns,
-                                               "bin_ns": t_ns.max(1) + 1}))
+                .call(
+                    "metrics.query",
+                    &json!({"metrics": [name], "t_from_ns": 0, "t_to_ns": t_ns,
+                                               "bin_ns": t_ns.max(1) + 1}),
+                )
                 .ok()
                 .and_then(|v| {
-                    v.get("rows")?.as_array()?.iter().rev().find_map(|r| r.get(1).and_then(Value::as_f64))
+                    v.get("rows")?
+                        .as_array()?
+                        .iter()
+                        .rev()
+                        .find_map(|r| r.get(1).and_then(Value::as_f64))
                 });
             if let Some(v) = v {
                 meta.extra.insert(name.clone(), v);
@@ -815,12 +1039,20 @@ pub(super) fn record_meta<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, 
         .and_then(|p| p.document.pointer("/threats/attackers"))
         .and_then(Value::as_array)
         .is_some_and(|a| !a.is_empty());
-    let more = crate::insight::findings(&meta.extra, &agent.runs[index].analysis.headline, &meta.units, attackers);
+    let more = crate::insight::findings(
+        &meta.extra,
+        &agent.runs[index].analysis.headline,
+        &meta.units,
+        attackers,
+    );
     if !more.is_empty() {
         // The analyst's own finding wins where both have one (its jamming finding carries
         // the whole loss breakdown).
         let findings = &mut agent.runs[index].analysis.findings;
-        let fresh: Vec<_> = more.into_iter().filter(|m| !findings.iter().any(|f| f.id == m.id)).collect();
+        let fresh: Vec<_> = more
+            .into_iter()
+            .filter(|m| !findings.iter().any(|f| f.id == m.id))
+            .collect();
         findings.extend(fresh);
         findings.sort_by(|a, b| b.severity.cmp(&a.severity));
     }
@@ -828,22 +1060,29 @@ pub(super) fn record_meta<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, 
 }
 
 fn list_runs<P: LlmProvider, T: RpcTransport>(agent: &Agent<P, T>) -> Value {
-    json!(agent
-        .runs
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            let changed: Vec<String> = r
-                .prepared
-                .as_ref()
-                .map(|p| p.changes.iter().filter(|c| c.key != "metrics")
-                    .map(|c| format!("{}={}", c.key, compact_value(&c.after))).collect())
-                .unwrap_or_default();
-            json!({"index": i, "label": r.label, "run_id": r.analysis.run_id,
+    json!(
+        agent
+            .runs
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let changed: Vec<String> = r
+                    .prepared
+                    .as_ref()
+                    .map(|p| {
+                        p.changes
+                            .iter()
+                            .filter(|c| c.key != "metrics")
+                            .map(|c| format!("{}={}", c.key, compact_value(&c.after)))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                json!({"index": i, "label": r.label, "run_id": r.analysis.run_id,
                    "base": r.prepared.as_ref().map(|p| p.base.clone()), "changed": changed,
                    "t_s": fmt(r.t_s)})
-        })
-        .collect::<Vec<_>>())
+            })
+            .collect::<Vec<_>>()
+    )
 }
 
 fn compact_value(v: &Value) -> String {
@@ -875,7 +1114,10 @@ fn run_control<P: LlmProvider, T: RpcTransport>(
     args: &Value,
     sink: &mut dyn FnMut(AgentEvent),
 ) -> Result<Value> {
-    let action = args.get("action").and_then(Value::as_str).unwrap_or("status");
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("status");
     let num = |k: &str| args.get(k).and_then(Value::as_f64);
     match action {
         "status" => {}
@@ -886,7 +1128,12 @@ fn run_control<P: LlmProvider, T: RpcTransport>(
             agent.rpc.call("run.stop", &json!({}))?;
         }
         "speed" => {
-            let v = num("speed").ok_or_else(|| err("run_control", "speed needs `speed` (0 is as fast as possible)"))?;
+            let v = num("speed").ok_or_else(|| {
+                err(
+                    "run_control",
+                    "speed needs `speed` (0 is as fast as possible)",
+                )
+            })?;
             agent.rpc.call("run.speed", &json!({"speed": v}))?;
         }
         "start" => {
@@ -896,31 +1143,45 @@ fn run_control<P: LlmProvider, T: RpcTransport>(
                 Some(p) => p.document.clone(),
                 None => agent.base_document("current")?,
             };
-            let started = agent.rpc.call("run.start", &json!({"scenario": &doc, "speed": agent.policy.speed, "paused": paused}))?;
+            let started = agent.rpc.call(
+                "run.start",
+                &json!({"scenario": &doc, "speed": agent.policy.speed, "paused": paused}),
+            )?;
             agent.last_document = Some(doc);
             sink(AgentEvent::RunStarted {
                 label: "manual".into(),
-                run_id: started.get("run_id").and_then(Value::as_str).unwrap_or("").to_string(),
+                run_id: started
+                    .get("run_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 t_end_s: started.get("t_end_ns").and_then(Value::as_u64).unwrap_or(0) as f64 / 1e9,
             });
         }
         "step" => {
             let secs = num("seconds").unwrap_or(1.0).max(0.1);
             let _ = agent.rpc.call("run.pause", &json!({}));
-            agent.rpc.call("run.step", &json!({"unit": "second", "count": secs.round().max(1.0)}))?;
+            agent.rpc.call(
+                "run.step",
+                &json!({"unit": "second", "count": secs.round().max(1.0)}),
+            )?;
         }
         "seek" | "run_to" => {
             let st = agent.rpc.call("run.status", &json!({}))?;
             let t_now = st.get("t_ns").and_then(Value::as_u64).unwrap_or(0);
             let t_end = st.get("t_end_ns").and_then(Value::as_u64).unwrap_or(0);
-            let target = num("t_s").map_or(t_end, |t| ((t * 1e9).round().max(0.0) as u64).min(t_end));
+            let target =
+                num("t_s").map_or(t_end, |t| ((t * 1e9).round().max(0.0) as u64).min(t_end));
             if action == "seek" && target < t_now {
                 // Over HTTP the server cannot rewind (`run.seek` streams frames over the
                 // socket); a run is a function of its scenario and seed, so starting it
                 // again and stepping to the target reaches the same state.
                 let doc = agent.base_document("current")?;
                 let _ = agent.rpc.call("run.pause", &json!({}));
-                agent.rpc.call("run.start", &json!({"scenario": &doc, "speed": agent.policy.speed, "paused": true}))?;
+                agent.rpc.call(
+                    "run.start",
+                    &json!({"scenario": &doc, "speed": agent.policy.speed, "paused": true}),
+                )?;
             }
             let st = agent.rpc.call("run.status", &json!({}))?;
             let now = st.get("t_ns").and_then(Value::as_u64).unwrap_or(0);
@@ -928,9 +1189,13 @@ fn run_control<P: LlmProvider, T: RpcTransport>(
                 if action == "seek" {
                     let _ = agent.rpc.call("run.pause", &json!({}));
                     let secs = ((target - now) as f64 / 1e9).ceil().max(1.0);
-                    agent.rpc.call("run.step", &json!({"unit": "second", "count": secs}))?;
+                    agent
+                        .rpc
+                        .call("run.step", &json!({"unit": "second", "count": secs}))?;
                 } else {
-                    let _ = agent.rpc.call("run.speed", &json!({"speed": agent.policy.speed}));
+                    let _ = agent
+                        .rpc
+                        .call("run.speed", &json!({"speed": agent.policy.speed}));
                     let _ = agent.rpc.call("run.resume", &json!({}));
                     wait_until(agent, target)?;
                     if target < t_end {
@@ -946,11 +1211,17 @@ fn run_control<P: LlmProvider, T: RpcTransport>(
 }
 
 /// Polls until the run reaches `target_ns`, ends, or is stopped by the person.
-fn wait_until<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, T>, target_ns: u64) -> Result<()> {
+fn wait_until<P: LlmProvider, T: RpcTransport>(
+    agent: &mut Agent<P, T>,
+    target_ns: u64,
+) -> Result<()> {
     for poll in 0..agent.policy.max_polls {
         if agent.cancelled() {
             let _ = agent.rpc.call("run.pause", &json!({}));
-            return Err(err("run_control", "stopped by the person; the run was paused"));
+            return Err(err(
+                "run_control",
+                "stopped by the person; the run was paused",
+            ));
         }
         let st = agent.rpc.call("run.status", &json!({}))?;
         let t = st.get("t_ns").and_then(Value::as_u64).unwrap_or(0);
@@ -958,20 +1229,39 @@ fn wait_until<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, T>, target_n
         if t >= target_ns || matches!(state, "finished" | "error" | "stopped") {
             return Ok(());
         }
-        std::thread::sleep(std::time::Duration::from_millis(super::poll_delay_ms(agent.policy.poll_ms, poll)));
+        std::thread::sleep(std::time::Duration::from_millis(super::poll_delay_ms(
+            agent.policy.poll_ms,
+            poll,
+        )));
     }
-    Err(CopilotError::Budget { what: "poll", budget: agent.policy.max_polls })
+    Err(CopilotError::Budget {
+        what: "poll",
+        budget: agent.policy.max_polls,
+    })
 }
 
 // ----------------------------------------------------------------------------- reading
 
 /// The metrics a `live_metrics` call with no list reads.
 const LIVE_DEFAULT: [&str; 12] = [
-    "pdr", "pdr[100m]", "cbr", "cbr.p95", "e2e_latency.p95", "aoi.p95", "nar",
-    "mac_queue_depth", "unverified_ratio", "mean_speed", "ttc_conflicts", "linkability",
+    "pdr",
+    "pdr[100m]",
+    "cbr",
+    "cbr.p95",
+    "e2e_latency.p95",
+    "aoi.p95",
+    "nar",
+    "mac_queue_depth",
+    "unverified_ratio",
+    "mean_speed",
+    "ttc_conflicts",
+    "linkability",
 ];
 
-fn live_metrics<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, T>, args: &Value) -> Result<Value> {
+fn live_metrics<P: LlmProvider, T: RpcTransport>(
+    agent: &mut Agent<P, T>,
+    args: &Value,
+) -> Result<Value> {
     let st = agent.rpc.call("run.status", &json!({}))?;
     let t_ns = st.get("t_ns").and_then(Value::as_u64).unwrap_or(0);
     let cat = agent.rpc.call("metrics.query", &json!({}))?;
@@ -984,12 +1274,24 @@ fn live_metrics<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, T>, args: 
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|r| Some((r.get("name")?.as_str()?.to_string(), r.get("unit").and_then(Value::as_str).unwrap_or("").to_string())))
+        .filter_map(|r| {
+            Some((
+                r.get("name")?.as_str()?.to_string(),
+                r.get("unit")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            ))
+        })
         .collect();
     let mut asked: Vec<String> = args
         .get("metrics")
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
     // Nothing, or "all", is the headline set plus every banded metric the run has.
     if asked.is_empty() || asked.iter().any(|m| m == "all") {
@@ -1017,7 +1319,12 @@ fn live_metrics<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, T>, args: 
             missing.push(name.clone());
             continue;
         };
-        let band = agent.harness.bands.get(name).cloned().or_else(|| experiment::fallback_band(name, &th));
+        let band = agent
+            .harness
+            .bands
+            .get(name)
+            .cloned()
+            .or_else(|| experiment::fallback_band(name, &th));
         let mut row = json!({"metric": name, "value": fmt(v)});
         if let Some(u) = units.get(name).filter(|u| !u.is_empty()) {
             row["unit"] = json!(u);
@@ -1030,18 +1337,36 @@ fn live_metrics<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, T>, args: 
     Ok(json!({"run": status_brief(&st), "metrics": rows, "not_available": missing}))
 }
 
-fn query_metric<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, T>, args: &Value) -> Result<Value> {
-    let metric = args.get("metric").and_then(Value::as_str).unwrap_or("").to_string();
+fn query_metric<P: LlmProvider, T: RpcTransport>(
+    agent: &mut Agent<P, T>,
+    args: &Value,
+) -> Result<Value> {
+    let metric = args
+        .get("metric")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let st = agent.rpc.call("run.status", &json!({}))?;
     let t_now = st.get("t_ns").and_then(Value::as_u64).unwrap_or(0);
-    let ns = |k: &str, d: u64| args.get(k).and_then(Value::as_f64).map_or(d, |s| (s * 1e9).round().max(0.0) as u64);
+    let ns = |k: &str, d: u64| {
+        args.get(k)
+            .and_then(Value::as_f64)
+            .map_or(d, |s| (s * 1e9).round().max(0.0) as u64)
+    };
     let (from, to) = (ns("from_s", 0), ns("to_s", t_now).min(t_now.max(1)));
     let mut params = json!({"metrics": [metric], "t_from_ns": from, "t_to_ns": to});
-    let grouped = args.get("group_by").and_then(Value::as_str).filter(|g| !g.is_empty());
+    let grouped = args
+        .get("group_by")
+        .and_then(Value::as_str)
+        .filter(|g| !g.is_empty());
     if let Some(g) = grouped {
         params["group_by"] = json!([g]);
     } else {
-        let bins = args.get("bins").and_then(Value::as_u64).unwrap_or(10).clamp(1, 40);
+        let bins = args
+            .get("bins")
+            .and_then(Value::as_u64)
+            .unwrap_or(10)
+            .clamp(1, 40);
         params["bin_ns"] = json!(((to - from) / bins).max(1_000_000_000));
     }
     if let Some(w) = args.get("where").filter(|w| w.is_object()) {
@@ -1061,7 +1386,10 @@ fn query_metric<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, T>, args: 
                 Some(other) => other.to_string(),
                 None => String::new(),
             };
-            let val = r.get(1).and_then(Value::as_f64).map_or_else(|| "insufficient".to_string(), fmt);
+            let val = r
+                .get(1)
+                .and_then(Value::as_f64)
+                .map_or_else(|| "insufficient".to_string(), fmt);
             let mut o = json!([key, val]);
             if grouped.is_some() {
                 if let Some(n) = r.get(4) {
@@ -1090,27 +1418,58 @@ fn trim(v: &Value, depth: usize) -> Value {
             }
             Value::Array(out)
         }
-        Value::Object(o) if depth < 6 => Value::Object(o.iter().map(|(k, x)| (k.clone(), trim(x, depth + 1))).collect()),
+        Value::Object(o) if depth < 6 => Value::Object(
+            o.iter()
+                .map(|(k, x)| (k.clone(), trim(x, depth + 1)))
+                .collect(),
+        ),
         Value::Object(_) => json!("{…}"),
         Value::String(s) => json!(catalog::shorten(s, 200)),
-        Value::Number(n) => n.as_f64().map_or_else(|| v.clone(), |f| if f.fract() == 0.0 { v.clone() } else { json!(fmt(f)) }),
+        Value::Number(n) => n.as_f64().map_or_else(
+            || v.clone(),
+            |f| {
+                if f.fract() == 0.0 {
+                    v.clone()
+                } else {
+                    json!(fmt(f))
+                }
+            },
+        ),
         other => other.clone(),
     }
 }
 
-fn inspect<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, T>, args: &Value) -> Result<Value> {
+fn inspect<P: LlmProvider, T: RpcTransport>(
+    agent: &mut Agent<P, T>,
+    args: &Value,
+) -> Result<Value> {
     let target = args.get("target").and_then(Value::as_str).unwrap_or("");
-    let t_ns = args.get("t_s").and_then(Value::as_f64).map(|t| (t * 1e9).round() as u64);
+    let t_ns = args
+        .get("t_s")
+        .and_then(Value::as_f64)
+        .map(|t| (t * 1e9).round() as u64);
     let mut p = Map::new();
     if let Some(t) = t_ns {
         p.insert("t_ns".into(), json!(t));
     }
     let (method, extra) = match target {
-        "node" => ("inspect.node", json!({"node": args.get("node").cloned().unwrap_or(json!(1)), "limit": 8})),
-        "link" => ("inspect.link", json!({"tx": args.get("tx"), "rx": args.get("rx")})),
-        "entity" => ("inspect.entity", json!({"entity": args.get("entity").and_then(Value::as_str).unwrap_or("backend"), "limit": 8})),
-        "explain" => ("explain", json!({"subject": {"kind": "metric",
-            "id": args.get("metric").and_then(Value::as_str).unwrap_or("pdr")}})),
+        "node" => (
+            "inspect.node",
+            json!({"node": args.get("node").cloned().unwrap_or(json!(1)), "limit": 8}),
+        ),
+        "link" => (
+            "inspect.link",
+            json!({"tx": args.get("tx"), "rx": args.get("rx")}),
+        ),
+        "entity" => (
+            "inspect.entity",
+            json!({"entity": args.get("entity").and_then(Value::as_str).unwrap_or("backend"), "limit": 8}),
+        ),
+        "explain" => (
+            "explain",
+            json!({"subject": {"kind": "metric",
+            "id": args.get("metric").and_then(Value::as_str).unwrap_or("pdr")}}),
+        ),
         other => return Err(err("inspect", format!("unknown target {other:?}"))),
     };
     if let Some(o) = extra.as_object() {
@@ -1130,15 +1489,28 @@ mod tests {
     fn changes_set_scale_append_and_remove() {
         let mut d = json!({"actors": {"vehicles": {"demand": {"rate_veh_per_h": 1500.0}}},
                            "threats": {"attackers": []}, "weather": {"intensity": 0.2}});
-        let (b, a) = apply_change(&mut d, "actors.vehicles.demand.rate_veh_per_h", &json!({"multiply": 2})).expect("scales");
+        let (b, a) = apply_change(
+            &mut d,
+            "actors.vehicles.demand.rate_veh_per_h",
+            &json!({"multiply": 2}),
+        )
+        .expect("scales");
         assert_eq!((b, a), (json!(1500.0), json!(3000.0)));
-        apply_change(&mut d, "threats.attackers", &json!({"append": {"id": "threat/attacker/legacy/ConstPos", "fraction": 0.05}})).expect("appends");
+        apply_change(
+            &mut d,
+            "threats.attackers",
+            &json!({"append": {"id": "threat/attacker/legacy/ConstPos", "fraction": 0.05}}),
+        )
+        .expect("appends");
         assert_eq!(d["threats"]["attackers"][0]["fraction"], json!(0.05));
         apply_change(&mut d, "threats.attackers.0.fraction", &json!(0.1)).expect("indexes");
         assert_eq!(d["threats"]["attackers"][0]["fraction"], json!(0.1));
         apply_change(&mut d, "weather.intensity", &json!({"remove": true})).expect("removes");
         assert!(d["weather"].get("intensity").is_none());
-        assert!(apply_change(&mut d, "weather", &json!({"multiply": 2})).is_err(), "an object cannot be scaled");
+        assert!(
+            apply_change(&mut d, "weather", &json!({"multiply": 2})).is_err(),
+            "an object cannot be scaled"
+        );
     }
 
     #[test]
@@ -1146,12 +1518,30 @@ mod tests {
         let mut d = json!({"world": {"source": {"generator": "world/source/procedural-grid", "params": {
             "cols": 13, "rows": 34, "block_x_m": 274.0, "block_y_m": 80.0,
             "lanes_per_direction": 2, "lane_width_m": 3.5}}}, "threats": {}});
-        apply_change(&mut d, "threats.jammers", &json!({"append": {"id": "attacker/jammer/constant",
-            "params": {"position_m": "centre"}}})).expect("placed");
-        assert_eq!(d["threats"]["jammers"][0]["params"]["position_m"], json!([7.0 + 6.0 * 274.0, 7.0 + 16.5 * 80.0]));
-        assert_eq!(d["threats"]["jammers"][0]["params"]["power_dbm"], json!(23.0));
+        apply_change(
+            &mut d,
+            "threats.jammers",
+            &json!({"append": {"id": "attacker/jammer/constant",
+            "params": {"position_m": "centre"}}}),
+        )
+        .expect("placed");
+        assert_eq!(
+            d["threats"]["jammers"][0]["params"]["position_m"],
+            json!([7.0 + 6.0 * 274.0, 7.0 + 16.5 * 80.0])
+        );
+        assert_eq!(
+            d["threats"]["jammers"][0]["params"]["power_dbm"],
+            json!(23.0)
+        );
         let mut city = json!({"world": {"source": {"generator": "world/source/osm"}}});
-        assert!(apply_change(&mut city, "threats.jammers", &json!({"append": {"id": "attacker/jammer/constant"}})).is_err());
+        assert!(
+            apply_change(
+                &mut city,
+                "threats.jammers",
+                &json!({"append": {"id": "attacker/jammer/constant"}})
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1163,7 +1553,10 @@ mod tests {
         assert_eq!(doc["radio"]["rat"], "lte-v2x-pc5");
         assert_eq!(doc["metrics"], json!(["all"]));
         assert!(changes.iter().any(|c| c.key == "time.duration_s"));
-        assert!(build(&base, &[], Some(900.0), 300.0).is_err(), "over the cap");
+        assert!(
+            build(&base, &[], Some(900.0), 300.0).is_err(),
+            "over the cap"
+        );
     }
 
     #[test]
@@ -1175,7 +1568,10 @@ mod tests {
 
     #[test]
     fn trimming_keeps_a_note_of_what_it_cut() {
-        let v = trim(&json!({"list": (0..20).collect::<Vec<_>>(), "x": 0.123456}), 0);
+        let v = trim(
+            &json!({"list": (0..20).collect::<Vec<_>>(), "x": 0.123456}),
+            0,
+        );
         assert_eq!(v["list"].as_array().map(Vec::len), Some(9));
         assert_eq!(v["list"][8], "… 12 more");
         assert_eq!(v["x"], "0.123");

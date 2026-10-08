@@ -2528,8 +2528,8 @@ impl BreakdownStore {
             .iter()
             .map(|d| {
                 let key = d.get(dim)?;
-                let others_match = d.len() == filter.len() + 1
-                    && filter.iter().all(|(k, v)| d.get(k) == Some(v));
+                let others_match =
+                    d.len() == filter.len() + 1 && filter.iter().all(|(k, v)| d.get(k) == Some(v));
                 others_match.then_some(key)
             })
             .collect();
@@ -2692,9 +2692,10 @@ impl Pool {
     /// Pools `e`, which is a merged time block of `block_ns` (0: a single sample).
     fn add(&mut self, e: &BreakdownEntry, block_ns: SimTime) {
         self.required = self.required.max(e.required);
-        self.span = Some(self.span.map_or((e.t, e.t_end), |(a, b)| {
-            (a.min(e.t), b.max(e.t_end))
-        }));
+        self.span = Some(
+            self.span
+                .map_or((e.t, e.t_end), |(a, b)| (a.min(e.t), b.max(e.t_end))),
+        );
         self.block_ns = self.block_ns.max(block_ns);
         match (e.counts, e.sums, e.total) {
             (Some((s, t)), _, _) => {
@@ -5243,27 +5244,49 @@ mod breakdown_store_tests {
     fn a_long_run_pools_its_whole_past_in_bounded_memory() {
         for kind in 0..3u8 {
             let (small, whole) = stores(kind);
-            assert!(small.recent.len() <= 100, "kind {kind}: recent {}", small.recent.len());
-            assert!(small.blocks.len() <= 400, "kind {kind}: blocks {}", small.blocks.len());
+            assert!(
+                small.recent.len() <= 100,
+                "kind {kind}: recent {}",
+                small.recent.len()
+            );
+            assert!(
+                small.blocks.len() <= 400,
+                "kind {kind}: blocks {}",
+                small.blocks.len()
+            );
             assert!(small.block_ns > 10 * S, "kind {kind}: the blocks coarsened");
             // A breakdown matches samples whose *other* dimensions are exactly the filter:
             // one node's message types, and one message type's nodes.
             for (dim, filter) in [("msg_type", node(2)), ("node", bsm())] {
                 let got = by_key(small.groups(dim, &filter, 0, u64::MAX));
                 let want = by_key(whole.groups(dim, &filter, 0, u64::MAX));
-                assert_eq!(got.keys().collect::<Vec<_>>(), want.keys().collect::<Vec<_>>());
+                assert_eq!(
+                    got.keys().collect::<Vec<_>>(),
+                    want.keys().collect::<Vec<_>>()
+                );
                 assert!(!got.is_empty(), "kind {kind} by {dim}");
                 for (k, w) in &want {
                     let g = &got[k];
                     assert_eq!(g.n, w.n, "kind {kind} by {dim} {k}: every sample pooled");
-                    assert!(close(g.value, w.value), "kind {kind} {k}: {:?} vs {:?}", g.value, w.value);
+                    assert!(
+                        close(g.value, w.value),
+                        "kind {kind} {k}: {:?} vs {:?}",
+                        g.value,
+                        w.value
+                    );
                     assert!(close(g.lo, w.lo) && close(g.hi, w.hi), "kind {kind} {k}");
                     assert_eq!(g.span, w.span, "kind {kind} {k}: the span pooled");
                     assert_eq!(w.block_ns, 0);
-                    assert_eq!(g.block_ns, small.block_ns, "kind {kind} {k}: blocks are reported");
+                    assert_eq!(
+                        g.block_ns, small.block_ns,
+                        "kind {kind} {k}: blocks are reported"
+                    );
                 }
                 let first = want.values().filter_map(|r| r.span).map(|s| s.0).min();
-                assert!(first.is_some_and(|t| t <= 2 * S), "kind {kind}: from the start");
+                assert!(
+                    first.is_some_and(|t| t <= 2 * S),
+                    "kind {kind}: from the start"
+                );
             }
         }
     }
@@ -5276,13 +5299,21 @@ mod breakdown_store_tests {
         let (small, whole) = stores(0);
         let none = node(3);
         // The other dimensions must match exactly: no filter matches no two-dimension sample.
-        assert!(small.groups("msg_type", &BTreeMap::new(), 0, u64::MAX).is_empty());
+        assert!(
+            small
+                .groups("msg_type", &BTreeMap::new(), 0, u64::MAX)
+                .is_empty()
+        );
         let recent_from = (RUN_S - 10) * S;
         let got = by_key(small.groups("msg_type", &none, recent_from, u64::MAX));
         let want = by_key(whole.groups("msg_type", &none, recent_from, u64::MAX));
         assert_eq!(want.len(), 2);
         for (k, w) in &want {
-            assert_eq!((got[k].n, got[k].value, got[k].span), (w.n, w.value, w.span), "{k}");
+            assert_eq!(
+                (got[k].n, got[k].value, got[k].span),
+                (w.n, w.value, w.span),
+                "{k}"
+            );
             assert_eq!(got[k].block_ns, 0, "{k}: the newest samples are not merged");
         }
         let (from, to) = (500 * S, 1_500 * S);
@@ -5291,10 +5322,20 @@ mod breakdown_store_tests {
         assert_eq!(rows.len(), 2);
         for row in rows {
             let (a, b) = row.span.expect("pooled something");
-            assert!(a + block >= from && b <= to + block, "{}: {a}..{b} vs {from}..{to}", row.key);
+            assert!(
+                a + block >= from && b <= to + block,
+                "{}: {a}..{b} vs {from}..{to}",
+                row.key
+            );
             assert_eq!(row.block_ns, block);
             let w = &by_key(whole.groups("msg_type", &none, a, b))[&row.key];
-            assert!(row.n.abs_diff(w.n) * 10 <= w.n, "{}: {} vs {}", row.key, row.n, w.n);
+            assert!(
+                row.n.abs_diff(w.n) * 10 <= w.n,
+                "{}: {} vs {}",
+                row.key,
+                row.n,
+                w.n
+            );
         }
     }
 }
@@ -5320,8 +5361,9 @@ mod series_bin_tests {
                 .filter(|(t, _)| *t >= edge && *t < upper)
                 .map(|(_, v)| *v)
                 .collect();
-            let value = (!inside.is_empty())
-                .then(|| v2xw_core::math::sum_ordered(inside.iter().copied()) / inside.len() as f64);
+            let value = (!inside.is_empty()).then(|| {
+                v2xw_core::math::sum_ordered(inside.iter().copied()) / inside.len() as f64
+            });
             out.push((edge, value));
             edge = upper;
         }
@@ -5364,10 +5406,21 @@ mod series_bin_tests {
         }
         // Spot values, so the reference itself is pinned too.
         let one = series_bins(&rows, 0, 10_000_000_000, 1_000_000_000, 10_000);
-        assert_eq!(one[4], (4_000_000_000, None), "the gap is a gap, not a zero");
-        assert_eq!(one[7], (7_000_000_000, Some(0.25)), "two samples in one bin average");
+        assert_eq!(
+            one[4],
+            (4_000_000_000, None),
+            "the gap is a gap, not a zero"
+        );
+        assert_eq!(
+            one[7],
+            (7_000_000_000, Some(0.25)),
+            "two samples in one bin average"
+        );
         assert_eq!(one[9], (9_000_000_000, Some(3.0)));
-        assert_eq!(series_bins(&[], 0, 2_000_000_000, 1_000_000_000, 10).len(), 3);
+        assert_eq!(
+            series_bins(&[], 0, 2_000_000_000, 1_000_000_000, 10).len(),
+            3
+        );
     }
 }
 
@@ -5552,4 +5605,3 @@ mod breakdown_total_cap_tests {
         assert_eq!(groups.len(), 7, "every node still groups");
     }
 }
-

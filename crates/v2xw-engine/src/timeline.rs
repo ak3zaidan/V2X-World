@@ -54,7 +54,8 @@ impl ClosureTarget {
     /// # Errors
     /// A sentence saying what the accepted spellings are.
     pub fn parse(value: &Value) -> Result<Self, String> {
-        const HINT: &str = "write a lane id, \"lane:<id>\", \"edge:<id>\", \"street:<name>\" or \"auto\"";
+        const HINT: &str =
+            "write a lane id, \"lane:<id>\", \"edge:<id>\", \"street:<name>\" or \"auto\"";
         if let Some(n) = value.as_u64() {
             return u32::try_from(n)
                 .map(ClosureTarget::Lane)

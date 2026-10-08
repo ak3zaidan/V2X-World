@@ -1608,5 +1608,9 @@ fn every_signal_group_of_the_grid_shows_green_and_the_check_can_fail() {
         phase.states[0] = v2xw_world::SignalState::Red;
     }
     let broken = validate(&world, None, &ValidationParams::default());
-    assert!(broken.count("signal-movement-never-green") >= 1, "{:?}", broken.checks);
+    assert!(
+        broken.count("signal-movement-never-green") >= 1,
+        "{:?}",
+        broken.checks
+    );
 }

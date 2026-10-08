@@ -907,8 +907,7 @@ impl VruMobility for SocialForce {
             })
             .collect();
         let fluctuation = self.params.fluctuation_mps2;
-        let midblock_on =
-            self.params.midblock.rate_per_100m > 0.0 && self.midblock_index.is_some();
+        let midblock_on = self.params.midblock.rate_per_100m > 0.0 && self.midblock_index.is_some();
         let mut out: Vec<(ActorId, Kinematics)> = Vec::with_capacity(self.people.len());
         let actors: Vec<ActorId> = self.people.keys().copied().collect();
         for actor in actors {
@@ -960,7 +959,10 @@ impl VruMobility for SocialForce {
             let forward = Vec3::new_2d(cos_h, sin_h);
 
             // --- a mid-block crossing: plan, approach, wait ---------------------
-            let mut midblock = person.midblock.clone().filter(|_| lane.kind == LaneKind::Sidewalk);
+            let mut midblock = person
+                .midblock
+                .clone()
+                .filter(|_| lane.kind == LaneKind::Sidewalk);
             if midblock.is_none()
                 && lane.kind == LaneKind::Sidewalk
                 && person.midblock_declined != Some(person.lane)
@@ -1001,12 +1003,13 @@ impl VruMobility for SocialForce {
                             let mut rng =
                                 ctx.rng(RngDomain::plugin(MIDBLOCK_ID), EntityRef::Actor(actor));
                             let site = *same[rng.below(same.len() as u64) as usize];
-                            let max = p.diagonal_max_deg.clamp(0.0, 60.0) * core::f64::consts::PI
-                                / 180.0;
+                            let max =
+                                p.diagonal_max_deg.clamp(0.0, 60.0) * core::f64::consts::PI / 180.0;
                             let theta = rng.uniform(0.0, max);
                             let far = world.lane(site.far_lane);
                             let along = math::cos(far.heading_at(site.far_s_m) - heading);
-                            let shift = site.width_m * math::tan(theta)
+                            let shift = site.width_m
+                                * math::tan(theta)
                                 * if along >= 0.0 { 1.0 } else { -1.0 };
                             // The far end stays clear of the corners, as the near one does.
                             let margin = index.margin_m().min(0.5 * far.length_m);
@@ -1146,11 +1149,8 @@ impl VruMobility for SocialForce {
                         }
                     }
                 }
-                crate::network::weidmann_factor(crate::network::local_density(
-                    others,
-                    lane.width_m,
-                ))
-                .max(0.1)
+                crate::network::weidmann_factor(crate::network::local_density(others, lane.width_m))
+                    .max(0.1)
             } else {
                 1.0
             };
@@ -1318,7 +1318,9 @@ impl VruMobility for SocialForce {
                         let crossed = self
                             .midblock_index
                             .as_ref()
-                            .map_or(Some(m.crossed.clone()), |ix| ix.path_lanes(world, from, m.to));
+                            .map_or(Some(m.crossed.clone()), |ix| {
+                                ix.path_lanes(world, from, m.to)
+                            });
                         m.bands = match crossed {
                             Some(lanes) => {
                                 m.crossed = lanes;
@@ -1357,7 +1359,11 @@ impl VruMobility for SocialForce {
                 waiting_since
             };
             let previous_wait = person.waiting_since;
-            let walk_onset = if at_kerb && !left_lane { walk_onset } else { None };
+            let walk_onset = if at_kerb && !left_lane {
+                walk_onset
+            } else {
+                None
+            };
             let activity = if mid_start.is_some() {
                 PedActivity::CrossingMidblock
             } else if left_lane && world.lane(current).kind == LaneKind::Crossing {
@@ -1437,7 +1443,13 @@ impl SocialForce {
     /// One step of a pedestrian in the carriageway on a mid-block crossing: it walks the
     /// straight path at its desired speed (relaxing towards it with `τ`) and, at the far
     /// kerb, steps onto the far sidewalk and is given a new walk from there.
-    fn step_midblock_crossing(&mut self, ctx: &mut dyn MobCtx, actor: ActorId, dt_s: f64, now: v2xw_core::time::SimTime) {
+    fn step_midblock_crossing(
+        &mut self,
+        ctx: &mut dyn MobCtx,
+        actor: ActorId,
+        dt_s: f64,
+        now: v2xw_core::time::SimTime,
+    ) {
         let tau = self.params.tau_s.max(1e-3);
         let Some(person) = self.people.get(&actor) else {
             return;
@@ -2053,8 +2065,13 @@ mod tests {
         {
             let mut ctx = MobilityCtx::new(0, &w, &rng);
             for id in 1..=12u32 {
-                m.spawn(&mut ctx, ActorId::new(id), cycle.clone(), f64::from(id) * 7.0)
-                    .expect("spawned");
+                m.spawn(
+                    &mut ctx,
+                    ActorId::new(id),
+                    cycle.clone(),
+                    f64::from(id) * 7.0,
+                )
+                .expect("spawned");
             }
         }
         let snapshot = ActorSnapshot::new(0, 50.0);
@@ -2086,7 +2103,10 @@ mod tests {
                 last.insert(actor, (kin.pos, lane));
             }
         }
-        assert!(changes > 8, "the run must cross lane boundaries ({changes})");
+        assert!(
+            changes > 8,
+            "the run must cross lane boundaries ({changes})"
+        );
         assert!(worst <= 0.0);
     }
 
@@ -2325,14 +2345,26 @@ mod tests {
 
     /// Spawns one pedestrian with the given traits and speed 90 m along the first quarter
     /// of the kerb ring, and returns the model and the world.
-    fn kerb_with(traits: PedestrianTraits, speed: f64) -> (SocialForce, World, Vec<LaneId>, RngRegistry) {
+    fn kerb_with(
+        traits: PedestrianTraits,
+        speed: f64,
+    ) -> (SocialForce, World, Vec<LaneId>, RngRegistry) {
         let (w, cycle) = kerb_ring();
         let rng = RngRegistry::new(5);
         let mut m = SocialForce::new(SocialForceParams::observed());
         {
             let mut ctx = MobilityCtx::new(0, &w, &rng);
-            m.spawn_with(&mut ctx, ActorId::new(1), cycle.clone(), 90.0, 0.0, traits, speed, None)
-                .expect("spawned");
+            m.spawn_with(
+                &mut ctx,
+                ActorId::new(1),
+                cycle.clone(),
+                90.0,
+                0.0,
+                traits,
+                speed,
+                None,
+            )
+            .expect("spawned");
         }
         (m, w, cycle, rng)
     }
@@ -2361,8 +2393,16 @@ mod tests {
         let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
         let share = old.len() as f64 / 6000.0;
         assert!((share - 0.15).abs() < 0.015, "older share {share}");
-        assert!((mean(&young) - 1.51).abs() < 0.02, "younger mean {}", mean(&young));
-        assert!((mean(&old) - 1.25).abs() < 0.03, "older mean {}", mean(&old));
+        assert!(
+            (mean(&young) - 1.51).abs() < 0.02,
+            "younger mean {}",
+            mean(&young)
+        );
+        assert!(
+            (mean(&old) - 1.25).abs() < 0.03,
+            "older mean {}",
+            mean(&old)
+        );
         // The MUTCD clearance speed (1.07 m/s) is below most of either group.
         let below = young.iter().filter(|v| **v < 1.0668).count() as f64 / young.len() as f64;
         assert!(below < 0.1, "{below}");
@@ -2398,7 +2438,13 @@ mod tests {
             }
         }
         // A compliant pedestrian waits whatever the gap.
-        let (mut m, w, cycle, rng) = kerb_with(PedestrianTraits { violator: false, ..traits }, 1.4);
+        let (mut m, w, cycle, rng) = kerb_with(
+            PedestrianTraits {
+                violator: false,
+                ..traits
+            },
+            1.4,
+        );
         m.set_crossing_permits([(cycle[1], red(f64::INFINITY))].into_iter().collect());
         steps(&mut m, &w, &rng, 0, 200);
         assert_eq!(m.get(ActorId::new(1)).unwrap().lane, cycle[0]);
@@ -2426,7 +2472,9 @@ mod tests {
             steps(&mut m, &w, &rng, 0, 150);
             assert!(m.get(ActorId::new(1)).unwrap().waiting_since.is_some());
             m.set_crossing_permits(
-                [(cycle[1], permit(SignalState::Green))].into_iter().collect(),
+                [(cycle[1], permit(SignalState::Green))]
+                    .into_iter()
+                    .collect(),
             );
             let mut stepped = None;
             for k in 150..250u64 {

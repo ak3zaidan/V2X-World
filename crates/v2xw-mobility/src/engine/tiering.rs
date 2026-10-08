@@ -74,13 +74,20 @@ impl NativeMobility {
     /// id order.
     #[must_use]
     pub fn vehicle_lanes(&self) -> Vec<(ActorId, LaneId, VehicleClass)> {
-        self.actors.values().map(|a| (a.id, a.lane, a.class)).collect()
+        self.actors
+            .values()
+            .map(|a| (a.id, a.lane, a.class))
+            .collect()
     }
 
     /// The driver this engine puts behind the wheel for `trip`: its car-following model's
     /// profile for the class at the trip's desired speed, and the driver's traits drawn
     /// from the trip's own streams — exactly what an insertion here would give it.
-    pub fn trip_driver(&self, ctx: &dyn MobCtx, trip: &TripRequest) -> (DriverProfile, DriverTraits) {
+    pub fn trip_driver(
+        &self,
+        ctx: &dyn MobCtx,
+        trip: &TripRequest,
+    ) -> (DriverProfile, DriverTraits) {
         let driver = DriverProfile {
             desired_speed_mps: trip.desired_speed_mps,
             ..self.driver_for(trip.class)
@@ -91,11 +98,19 @@ impl NativeMobility {
     /// The spawn announcement of actor `id`, at `t`, if this engine drives it.
     #[must_use]
     pub fn spawn_record(&self, world: &World, id: ActorId, t: SimTime) -> Option<ActorSpawn> {
-        self.actors.contains_key(&id).then(|| self.actor_spawn(world, id, t))
+        self.actors
+            .contains_key(&id)
+            .then(|| self.actor_spawn(world, id, t))
     }
 
     /// Places a demand trip as actor `id` by the engine's own insertion rules.
-    pub fn admit_trip(&mut self, ctx: &dyn MobCtx, trip: &TripRequest, id: ActorId, t: SimTime) -> TripAdmission {
+    pub fn admit_trip(
+        &mut self,
+        ctx: &dyn MobCtx,
+        trip: &TripRequest,
+        id: ActorId,
+        t: SimTime,
+    ) -> TripAdmission {
         let traits = self.traits_for(ctx, trip);
         let world = ctx.world();
         match self.try_insert(world, trip, t, Some(id), traits) {
@@ -131,7 +146,12 @@ impl NativeMobility {
     ///
     /// # Errors
     /// The hand-off itself, when there is no room.
-    pub fn admit(&mut self, world: &World, h: Handoff, t: SimTime) -> core::result::Result<(), Box<Handoff>> {
+    pub fn admit(
+        &mut self,
+        world: &World,
+        h: Handoff,
+        t: SimTime,
+    ) -> core::result::Result<(), Box<Handoff>> {
         let Some(&lane_id) = h.route.lanes.get(h.route_index) else {
             return Err(Box::new(h));
         };
@@ -156,7 +176,8 @@ impl NativeMobility {
                     }
                 } else {
                     let gap = rear - a.s_m;
-                    if gap < self.params.insertion_gap_m || !self.may_follow_newcomer(world, a, gap) {
+                    if gap < self.params.insertion_gap_m || !self.may_follow_newcomer(world, a, gap)
+                    {
                         return Err(Box::new(h));
                     }
                 }
@@ -167,7 +188,9 @@ impl NativeMobility {
             let next = c.via.unwrap_or(c.to_lane);
             for a in self.actors.values().filter(|a| a.lane == next) {
                 let rear_on = lane.length_m + a.s_m - a.class.spec().length_m;
-                if rear_on - front < need_ahead.min(self.params.insertion_gap_m.max(h.driver.min_gap_m)) {
+                if rear_on - front
+                    < need_ahead.min(self.params.insertion_gap_m.max(h.driver.min_gap_m))
+                {
                     return Err(Box::new(h));
                 }
             }
@@ -185,7 +208,11 @@ impl NativeMobility {
                 }
             }
         }
-        let destination = *h.route.lanes.last().expect("route has the lane checked above");
+        let destination = *h
+            .route
+            .lanes
+            .last()
+            .expect("route has the lane checked above");
         self.next_seq = self.next_seq.max(h.seq + 1);
         self.actors.insert(
             h.id,

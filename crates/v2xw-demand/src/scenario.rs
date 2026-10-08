@@ -27,8 +27,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use v2xw_core::card::{Source, SourceKind};
-use v2xw_mobility::traits::Demand;
 use v2xw_mobility::VehicleClass;
+use v2xw_mobility::traits::Demand;
 use v2xw_world::{ClassMask, World};
 
 use crate::assign::{AssignParams, Assigner};
@@ -74,8 +74,8 @@ pub struct BuildContext<'w> {
 }
 
 /// The engine's builder for its own demand kinds, handed to a composite.
-pub type OtherKinds<'a> =
-    dyn Fn(&str, &serde_json::Value, Option<f64>) -> std::result::Result<Box<dyn Demand>, String> + 'a;
+pub type OtherKinds<'a> = dyn Fn(&str, &serde_json::Value, Option<f64>) -> std::result::Result<Box<dyn Demand>, String>
+    + 'a;
 
 /// `(seconds of the day, YYYYMMDD)` of an RFC 3339 UTC instant shifted by `offset_s`.
 ///
@@ -200,7 +200,11 @@ struct Part {
 ///
 /// # Errors
 /// [`DemandError`] naming what is wrong with the parameters or the files they name.
-pub fn build(kind: &str, params: &serde_json::Value, ctx: &BuildContext) -> Result<Box<dyn Demand>> {
+pub fn build(
+    kind: &str,
+    params: &serde_json::Value,
+    ctx: &BuildContext,
+) -> Result<Box<dyn Demand>> {
     build_with_offset(kind, params, ctx, 0.0)
 }
 
@@ -340,7 +344,11 @@ fn build_with_offset(
                 Some(path) => RouteFile::load(path)?
                     .trips
                     .iter()
-                    .flat_map(|r| r.alternatives.iter().filter_map(|a| graph.nodes_of(&a.lanes)))
+                    .flat_map(|r| {
+                        r.alternatives
+                            .iter()
+                            .filter_map(|a| graph.nodes_of(&a.lanes))
+                    })
                     .collect(),
                 None => sampler::candidates(&graph, &placed, &sp),
             };
@@ -393,8 +401,9 @@ fn build_with_offset(
                     built.push(build_with_offset(&part.kind, &part.params, ctx, offset)?);
                 } else if let Some(other) = ctx.other {
                     built.push(
-                        other(&part.kind, &part.params, part.rate_veh_per_h)
-                            .map_err(|e| DemandError::Invalid(format!("{k}: part '{}': {e}", part.kind)))?,
+                        other(&part.kind, &part.params, part.rate_veh_per_h).map_err(|e| {
+                            DemandError::Invalid(format!("{k}: part '{}': {e}", part.kind))
+                        })?,
                     );
                 } else {
                     return Err(DemandError::Invalid(format!(
@@ -418,9 +427,18 @@ mod tests {
 
     #[test]
     fn local_time_crosses_midnight() {
-        assert_eq!(local_start("2027-03-04T08:00:00Z", 0.0).unwrap(), (28_800.0, 20270304));
+        assert_eq!(
+            local_start("2027-03-04T08:00:00Z", 0.0).unwrap(),
+            (28_800.0, 20270304)
+        );
         // 03:00 UTC is 19:00 the previous day in Pacific standard time.
-        assert_eq!(local_start("2027-03-04T03:00:00Z", -28_800.0).unwrap(), (68_400.0, 20270303));
-        assert_eq!(local_start("2024-12-31T23:30:00Z", 3600.0).unwrap(), (1_800.0, 20250101));
+        assert_eq!(
+            local_start("2027-03-04T03:00:00Z", -28_800.0).unwrap(),
+            (68_400.0, 20270303)
+        );
+        assert_eq!(
+            local_start("2024-12-31T23:30:00Z", 3600.0).unwrap(),
+            (1_800.0, 20250101)
+        );
     }
 }

@@ -40,8 +40,8 @@ pub fn solar_elevation_deg(unix_s: f64, lat_deg: f64, lon_deg: f64) -> f64 {
     let gmst = (280.460_618_37 + 360.985_647_366_29 * n).rem_euclid(360.0);
     let hour_angle = (gmst + lon_deg) * rad - ra;
     let lat = lat_deg * rad;
-    let s = math::sin(lat) * math::sin(decl)
-        + math::cos(lat) * math::cos(decl) * math::cos(hour_angle);
+    let s =
+        math::sin(lat) * math::sin(decl) + math::cos(lat) * math::cos(decl) * math::cos(hour_angle);
     math::asin(s.clamp(-1.0, 1.0)) / rad
 }
 
@@ -105,7 +105,11 @@ mod tests {
         let t0 = 1_804_147_200.0;
         let e = solar_elevation_deg(t0, 40.744, -73.99);
         assert!(e < -20.0, "{e}");
-        assert!(headlamps_on(e, &WeatherState::CLEAR, &HeadlampParams::default()));
+        assert!(headlamps_on(
+            e,
+            &WeatherState::CLEAR,
+            &HeadlampParams::default()
+        ));
     }
 
     #[test]

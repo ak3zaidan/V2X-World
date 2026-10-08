@@ -42,7 +42,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::area::Area;
-use super::dissem::{DenParams, DissemConfig, DissemReport, DisseminationRun, Hazard, MotionNode, UnitDisk, highway};
+use super::dissem::{
+    DenParams, DissemConfig, DissemReport, DisseminationRun, Hazard, MotionNode, UnitDisk, highway,
+};
 use super::router::{CbfVariant, ForwardingConfig};
 
 /// Amador et al. Table 1: maximum transmission range, m.
@@ -84,25 +86,50 @@ pub struct EvalRow {
 
 /// Run Amador et al.'s highway for one density and variant, with `denms` DENMs one
 /// second apart after a 4 s beacon warm-up.
-pub fn amador_highway(density: u32, variant: CbfVariant, denms: u32, seed: u64) -> (EvalRow, DissemReport) {
-    let mut nodes = highway(AMADOR_LENGTH_M, AMADOR_LANES_PER_DIR, f64::from(density), seed);
+pub fn amador_highway(
+    density: u32,
+    variant: CbfVariant,
+    denms: u32,
+    seed: u64,
+) -> (EvalRow, DissemReport) {
+    let mut nodes = highway(
+        AMADOR_LENGTH_M,
+        AMADOR_LANES_PER_DIR,
+        f64::from(density),
+        seed,
+    );
     // The stationary source on the shoulder, 500 m from the far end.
     let src_x = AMADOR_LENGTH_M - 500.0;
     nodes.push(MotionNode::fixed(src_x, -2.0));
     let src = nodes.len() - 1;
     let width = 3.5 * 2.0 * f64::from(AMADOR_LANES_PER_DIR);
     let area = Area::rect(src_x - 4_000.0, -5.0, src_x + 100.0, width + 1.0);
-    let hazards = (0..denms).map(|k| Hazard { at_ms: 4_000 + 1_000 * u64::from(k), node: src, area }).collect();
+    let hazards = (0..denms)
+        .map(|k| Hazard {
+            at_ms: 4_000 + 1_000 * u64::from(k),
+            node: src,
+            area,
+        })
+        .collect();
     let improved = variant != CbfVariant::Etsi;
     let cfg = DissemConfig {
-        forwarding: ForwardingConfig { cbf_variant: variant, out_of_area_broadcast_forward: !improved, ..Default::default() },
-        den: DenParams { bytes: AMADOR_DENM_BYTES, ..Default::default() },
+        forwarding: ForwardingConfig {
+            cbf_variant: variant,
+            out_of_area_broadcast_forward: !improved,
+            ..Default::default()
+        },
+        den: DenParams {
+            bytes: AMADOR_DENM_BYTES,
+            ..Default::default()
+        },
         beacons: true,
         end_ms: 4_000 + 1_000 * u64::from(denms) + 2_000,
         processing_us: 0,
         seed,
     };
-    let m = UnitDisk { range_m: AMADOR_RANGE_M };
+    let m = UnitDisk {
+        range_m: AMADOR_RANGE_M,
+    };
     let rep = DisseminationRun::new(cfg, &m, nodes, hazards).run();
     let n = rep.actions.len().max(1) as f64;
     let avg = |f: &dyn Fn(&super::dissem::ActionStats) -> f64| {
@@ -145,8 +172,15 @@ pub fn compare(density: u32, denms: u32, seed: u64) -> Comparison {
     let e = amador_highway(density, CbfVariant::Etsi, denms, seed).0;
     let d = amador_highway(density, CbfVariant::Dpd, denms, seed).0;
     let g = amador_highway(density, CbfVariant::Gpc, denms, seed).0;
-    let ratio = if d.tx_per_denm > 0.0 { v2xw_core::math::q3(e.tx_per_denm / d.tx_per_denm) } else { 0.0 };
-    let published = AMADOR_PUBLISHED.iter().find(|r| r.0 == density).map(|r| v2xw_core::math::q3(r.1[0] / r.1[1]));
+    let ratio = if d.tx_per_denm > 0.0 {
+        v2xw_core::math::q3(e.tx_per_denm / d.tx_per_denm)
+    } else {
+        0.0
+    };
+    let published = AMADOR_PUBLISHED
+        .iter()
+        .find(|r| r.0 == density)
+        .map(|r| v2xw_core::math::q3(r.1[0] / r.1[1]));
     Comparison {
         density,
         overhead_order_of_magnitude: ratio >= 5.0,
@@ -166,7 +200,11 @@ mod tests {
     fn reproduces_amador_orderings_at_10_veh_per_km_lane() {
         let c = compare(10, 5, 7);
         eprintln!("{}", serde_json::to_string_pretty(&c).unwrap());
-        assert!(c.overhead_order_of_magnitude, "ETSI/DPD = {}", c.tx_ratio_etsi_over_dpd);
+        assert!(
+            c.overhead_order_of_magnitude,
+            "ETSI/DPD = {}",
+            c.tx_ratio_etsi_over_dpd
+        );
         assert!(c.dpd_loses_reach);
         assert!(c.gpc_recovers);
         assert!(c.rows[2].pdr >= 0.98, "GPC pdr {}", c.rows[2].pdr);

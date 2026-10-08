@@ -1001,10 +1001,11 @@ impl Engine {
             return None;
         }
         let mut null = crate::ctx::NullRecorder::new();
-        let mut ctx = EngineCtx::new(scheduler, rng, world, snapshot, provenance, params, &mut null);
+        let mut ctx = EngineCtx::new(
+            scheduler, rng, world, snapshot, provenance, params, &mut null,
+        );
         p.access_mut().packet_link(&mut ctx, node, pos)
     }
-
 
     /// Builds a run from a validated scenario.
     ///
@@ -1056,8 +1057,15 @@ impl Engine {
         let rng = RngRegistry::new(scenario.seed);
         // SUMO, when `mobility.provider` names it, drives the traffic; otherwise the city-scale
         // tier (`scale`) or the default microscopic model.
-        let sumo = scenario.mobility.as_ref().is_some_and(|m| m.provider == "sumo");
-        let scaled = if sumo { None } else { crate::scale::build_mobility(&scenario, &world) };
+        let sumo = scenario
+            .mobility
+            .as_ref()
+            .is_some_and(|m| m.provider == "sumo");
+        let scaled = if sumo {
+            None
+        } else {
+            crate::scale::build_mobility(&scenario, &world)
+        };
         let mut mobility = match scaled {
             Some(m) => m,
             None => crate::wiring::build_mobility_for(&scenario, &world)?,
@@ -1988,7 +1996,10 @@ impl Engine {
             ("retired", n(self.retired.len())),
             ("j2945_quality_at", n(self.j2945_quality_at.len())),
             ("provenance", n(self.provenance.len())),
-            ("transmitted_since_step", n(self.transmitted_since_step.len())),
+            (
+                "transmitted_since_step",
+                n(self.transmitted_since_step.len()),
+            ),
         ];
         if let Some(p2) = self.phase2.as_ref() {
             p2.census(&mut out);
@@ -2616,8 +2627,11 @@ impl Engine {
             .iter()
             .filter_map(|a| {
                 let rec = self.actors.get(a)?;
-                (!gate.would_be_dormant(rec.last.pos, self.mobility.tier_of(*a)))
-                    .then_some((*a, rec.class, rec.last.dims))
+                (!gate.would_be_dormant(rec.last.pos, self.mobility.tier_of(*a))).then_some((
+                    *a,
+                    rec.class,
+                    rec.last.dims,
+                ))
             })
             .collect();
         for (actor, class, dims) in waking {
@@ -2633,7 +2647,8 @@ impl Engine {
         gate.deferred = self.deferred_nodes.len() as u64;
         let mobility = &self.mobility;
         gate.update(self.actors.iter().filter_map(|(actor, rec)| {
-            rec.node.map(|n| (n, rec.last.pos, mobility.tier_of(*actor)))
+            rec.node
+                .map(|n| (n, rec.last.pos, mobility.tier_of(*actor)))
         }));
     }
 
@@ -2722,29 +2737,12 @@ impl Engine {
         let env = crate::wiring::NodeEnv::new(&self.world, self.wall);
         // A pedestrian or a cyclist carries a VRU device (PSM / VAM), a vehicle an
         // OBU; both are hosted the same way from here on.
-        let mut runtime: crate::hosted::HostedNode =
-            if crate::wiring::is_vru_class(class) {
-                self.report.vru_devices_created += 1;
-                crate::hosted::build_vru_device(
-                    &self.scenario,
-                    env,
-                    id,
-                    now,
-                    class,
-                    dims,
-                )
-                .into()
-            } else {
-                crate::wiring::build_node(
-                    &self.scenario,
-                    env,
-                    id,
-                    now,
-                    class,
-                    dims,
-                )
-                .into()
-            };
+        let mut runtime: crate::hosted::HostedNode = if crate::wiring::is_vru_class(class) {
+            self.report.vru_devices_created += 1;
+            crate::hosted::build_vru_device(&self.scenario, env, id, now, class, dims).into()
+        } else {
+            crate::wiring::build_node(&self.scenario, env, id, now, class, dims).into()
+        };
         // Phase 2: the backend enrols and provisions the device, and the
         // credentials it installs carry the linkage values a CRL revokes. The
         // digest stays the `pseudo_signer` stand-in — see `crate::phase2`, joint 1
@@ -2977,7 +2975,8 @@ impl Engine {
         // A vehicle in a city-scale run's queue network (`crate::scale`) has a queue
         // placement, not a trajectory: its ground truth is recorded once a simulated
         // second rather than every step. Every other actor's is recorded every step.
-        let per_second = (1_000_000_000 / self.scenario.time.mobility_step().as_nanos().max(1)).max(1);
+        let per_second =
+            (1_000_000_000 / self.scenario.time.mobility_step().as_nanos().max(1)).max(1);
         let whole_second = self.report.mobility_steps % per_second == 0;
         let mobility = &self.mobility;
         let states: Vec<(ActorId, Kinematics, &'static str, Option<NodeId>, u8, u8)> = self
@@ -2986,7 +2985,14 @@ impl Engine {
             .filter(|(actor, _)| whole_second || mobility.tier_of(**actor) != Some(Tier::Abstract))
             .map(|(actor, rec)| {
                 let lamps = self.lamps.get(actor).copied().unwrap_or(0);
-                (*actor, rec.last, rec.class.as_str(), rec.node, rec.activity, lamps)
+                (
+                    *actor,
+                    rec.last,
+                    rec.class.as_str(),
+                    rec.node,
+                    rec.activity,
+                    lamps,
+                )
             })
             .collect();
         for (actor, k, class, node, activity, lamps) in states {

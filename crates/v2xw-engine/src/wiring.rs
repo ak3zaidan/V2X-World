@@ -406,7 +406,11 @@ pub fn build_mobility_for(scenario: &Scenario, world: &World) -> Result<Box<dyn 
             )
         })?;
     let mut cfg = v2xw_interop::sumo::SumoConfig::new(&home, path);
-    cfg.route_files = spec.route_files.iter().map(std::path::PathBuf::from).collect();
+    cfg.route_files = spec
+        .route_files
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
     cfg.extra_args = spec.sumo_args.clone();
     cfg.seed = scenario.seed;
     cfg.shift_m = sumo_shift(world);

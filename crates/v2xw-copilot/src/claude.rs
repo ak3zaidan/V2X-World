@@ -127,7 +127,12 @@ pub fn key_file_path() -> Option<PathBuf> {
     std::env::var("HOME")
         .ok()
         .filter(|h| !h.trim().is_empty())
-        .map(|h| Path::new(&h).join(".config").join("v2xw").join("anthropic.key"))
+        .map(|h| {
+            Path::new(&h)
+                .join(".config")
+                .join("v2xw")
+                .join("anthropic.key")
+        })
 }
 
 /// Finds the key: the environment first, then the key file.
@@ -303,7 +308,13 @@ fn env_value(name: &str) -> Option<String> {
 /// Whether a model takes `fallbacks: "default"` on the Claude API.
 #[must_use]
 pub fn supports_default_fallbacks(model: &str) -> bool {
-    ["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"].contains(&model)
+    [
+        "claude-opus-5-5",
+        "claude-opus-5",
+        "claude-fable-5-1",
+        "claude-sonnet-5-5",
+    ]
+    .contains(&model)
 }
 
 impl<H: HttpPost> LlmProvider for Claude<H> {
@@ -337,7 +348,9 @@ impl<H: HttpPost> LlmProvider for Claude<H> {
                 attempt += 1;
                 // A pause between attempts is not a reading of the clock: nothing is
                 // derived from it.
-                std::thread::sleep(std::time::Duration::from_secs(u64::from(attempt) * self.pause_s));
+                std::thread::sleep(std::time::Duration::from_secs(
+                    u64::from(attempt) * self.pause_s,
+                ));
                 continue;
             }
             return Err(CopilotError::Provider(format!(
@@ -467,9 +480,10 @@ fn tool_result(m: &ChatMessage) -> Value {
 /// [`CopilotError::Provider`] for an error body, a refusal (after any fallbacks) or a
 /// reply cut off at `max_tokens`; [`CopilotError::Decode`] for a body with no content.
 pub fn decode_completion(value: &Value) -> Result<Completion> {
-    if value.get("type").and_then(Value::as_str) == Some("error") || value.get("error").is_some()
-    {
-        return Err(CopilotError::Provider(api_error_message(&value.to_string())));
+    if value.get("type").and_then(Value::as_str) == Some("error") || value.get("error").is_some() {
+        return Err(CopilotError::Provider(api_error_message(
+            &value.to_string(),
+        )));
     }
     let stop = value
         .get("stop_reason")
@@ -508,7 +522,11 @@ pub fn decode_completion(value: &Value) -> Result<Completion> {
                 }
             }
             Some("tool_use") => {
-                let id = b.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+                let id = b
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
                 let name = b
                     .get("name")
                     .and_then(Value::as_str)
@@ -683,12 +701,22 @@ mod tests {
         assert_eq!(v["output_config"]["effort"], "medium");
         assert_eq!(v["cache_control"]["type"], "ephemeral");
         assert_eq!(v["fallbacks"], "default");
-        assert!(v.get("tool_choice").is_none(), "forced tool choice is rejected by the model");
-        assert!(v.get("temperature").is_none(), "sampling parameters are rejected");
+        assert!(
+            v.get("tool_choice").is_none(),
+            "forced tool choice is rejected by the model"
+        );
+        assert!(
+            v.get("temperature").is_none(),
+            "sampling parameters are rejected"
+        );
         assert_eq!(v["tools"][0]["name"], "run_scenario");
         assert!(v["tools"][0]["input_schema"].is_object());
         let msgs = v["messages"].as_array().expect("messages");
-        assert_eq!(msgs.len(), 3, "user, assistant, one user message of tool results");
+        assert_eq!(
+            msgs.len(),
+            3,
+            "user, assistant, one user message of tool results"
+        );
         // The thinking block is replayed byte for byte.
         assert_eq!(msgs[1]["content"][0]["signature"], "sig");
         let results = msgs[2]["content"].as_array().expect("results");
@@ -713,14 +741,28 @@ mod tests {
             .expect_err("401");
         let text = err.to_string();
         assert!(text.contains("HTTP 401"));
-        assert!(!text.contains("sk-ant-secret"), "the key was echoed: {text}");
+        assert!(
+            !text.contains("sk-ant-secret"),
+            "the key was echoed: {text}"
+        );
         let sent = &p.http().seen[0];
         assert!(!sent.body.contains("sk-ant-secret"));
-        assert!(sent.bearer.is_none(), "Anthropic takes x-api-key, not a bearer token");
+        assert!(
+            sent.bearer.is_none(),
+            "Anthropic takes x-api-key, not a bearer token"
+        );
         assert_eq!(sent.secret_headers[0].0, "x-api-key");
         assert_eq!(sent.secret_headers[0].1.expose(), "sk-ant-secret");
-        assert!(sent.headers.iter().any(|(k, v)| k == "anthropic-version" && v == API_VERSION));
-        assert!(sent.headers.iter().any(|(k, v)| k == "anthropic-beta" && v == FALLBACK_BETA));
+        assert!(
+            sent.headers
+                .iter()
+                .any(|(k, v)| k == "anthropic-version" && v == API_VERSION)
+        );
+        assert!(
+            sent.headers
+                .iter()
+                .any(|(k, v)| k == "anthropic-beta" && v == FALLBACK_BETA)
+        );
         assert_eq!(sent.url, DEFAULT_URL);
     }
 
@@ -733,7 +775,9 @@ mod tests {
         let mut p = Claude::new(post, Secret::new("k"));
         p.retries = 1;
         p.pause_s = 0;
-        let c = p.complete(&ChatRequest::default()).expect("the retry succeeds");
+        let c = p
+            .complete(&ChatRequest::default())
+            .expect("the retry succeeds");
         assert_eq!(c.finish_reason, "tool_calls");
         assert_eq!(p.http().calls(), 2);
     }

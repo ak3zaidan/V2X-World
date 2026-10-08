@@ -144,8 +144,18 @@ impl DwellSpec {
                 );
                 vec![
                     pax,
-                    Parameter::new("boarding_s", "s", serde_json::json!(boarding_s), tcqsm.clone()),
-                    Parameter::new("alighting_s", "s", serde_json::json!(alighting_s), tcqsm.clone()),
+                    Parameter::new(
+                        "boarding_s",
+                        "s",
+                        serde_json::json!(boarding_s),
+                        tcqsm.clone(),
+                    ),
+                    Parameter::new(
+                        "alighting_s",
+                        "s",
+                        serde_json::json!(alighting_s),
+                        tcqsm.clone(),
+                    ),
                     Parameter::new("door_s", "s", serde_json::json!(door_s), tcqsm),
                 ]
             }

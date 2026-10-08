@@ -113,7 +113,12 @@ pub struct Row {
 
 impl Row {
     /// A held figure.
-    pub fn held(metric: impl Into<String>, measured: f64, band: (f64, f64), reference: impl Into<String>) -> Self {
+    pub fn held(
+        metric: impl Into<String>,
+        measured: f64,
+        band: (f64, f64),
+        reference: impl Into<String>,
+    ) -> Self {
         Self {
             metric: metric.into(),
             measured,
@@ -129,7 +134,11 @@ impl Row {
     }
 
     /// A figure reported beside its reference but not held to a band.
-    pub fn reported(metric: impl Into<String>, measured: f64, reference: impl Into<String>) -> Self {
+    pub fn reported(
+        metric: impl Into<String>,
+        measured: f64,
+        reference: impl Into<String>,
+    ) -> Self {
         Self {
             metric: metric.into(),
             measured,
@@ -241,7 +250,10 @@ impl Lab {
 
     /// The study called `key`, if it has run.
     pub fn get<T: Clone + 'static>(&self, key: &str) -> Option<T> {
-        self.studies.get(key).and_then(|b| b.downcast_ref::<T>()).cloned()
+        self.studies
+            .get(key)
+            .and_then(|b| b.downcast_ref::<T>())
+            .cloned()
     }
 
     /// The study called `key`, run with `f` the first time it is asked for.

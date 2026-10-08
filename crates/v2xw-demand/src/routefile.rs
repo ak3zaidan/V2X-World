@@ -51,7 +51,9 @@ pub struct RoutedTrip {
 impl RoutedTrip {
     /// The chosen route's lanes.
     pub fn route(&self) -> Option<&[LaneId]> {
-        self.alternatives.get(self.chosen).map(|a| a.lanes.as_slice())
+        self.alternatives
+            .get(self.chosen)
+            .map(|a| a.lanes.as_slice())
     }
 }
 

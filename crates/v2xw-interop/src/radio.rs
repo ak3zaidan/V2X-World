@@ -37,7 +37,9 @@
 use v2xw_core::time::Duration;
 use v2xw_radio::sidelink::{LTE_QPSK_R050, PoolConfig};
 use v2xw_radio::sps::SpsParams;
-use v2xw_radio::sweep::{ChannelModel, DsrcConfig, HighwaySweep, SweepReport, sweep_dsrc, sweep_sidelink};
+use v2xw_radio::sweep::{
+    ChannelModel, DsrcConfig, HighwaySweep, SweepReport, sweep_dsrc, sweep_sidelink,
+};
 
 /// One published curve.
 #[derive(Debug, Clone)]
@@ -110,7 +112,14 @@ pub const OPENCV2X_012: Reference = Reference {
 pub const MOLINA_10PPS: Reference = Reference {
     name: "Molina-Masegosa 2017 LTE-V2X Mode 4, 120 veh/km, 10 pps",
     source: "Molina-Masegosa & Gozalvez, IEEE VT Mag. 12(4) 2017, Fig. 3 (values as transcribed in v2xw-radio sweep.rs)",
-    points: &[(0.0, 0.97), (100.0, 0.95), (200.0, 0.90), (300.0, 0.79), (400.0, 0.66), (500.0, 0.45)],
+    points: &[
+        (0.0, 0.97),
+        (100.0, 0.95),
+        (200.0, 0.90),
+        (300.0, 0.79),
+        (400.0, 0.66),
+        (500.0, 0.45),
+    ],
 };
 
 /// One comparison row set.
@@ -134,7 +143,10 @@ fn compare(reference: Reference, report: &SweepReport) -> Comparison {
         .iter()
         .map(|(d, p)| (*d, *p, report.pdr_at(d.max(1.0))))
         .collect();
-    let devs: Vec<f64> = rows.iter().filter_map(|(_, p, o)| o.map(|o| (o - p).abs())).collect();
+    let devs: Vec<f64> = rows
+        .iter()
+        .filter_map(|(_, p, o)| o.map(|o| (o - p).abs()))
+        .collect();
     let mad = (!devs.is_empty()).then(|| devs.iter().sum::<f64>() / devs.len() as f64);
     Comparison {
         reference,
@@ -158,7 +170,10 @@ pub fn run_all(quick: bool) -> Vec<Comparison> {
         }
     };
     let mut out = Vec::new();
-    for channel in [ChannelModel::WinnerB1ShapedTodoCalibrate, ChannelModel::Tr37885HighwayLos] {
+    for channel in [
+        ChannelModel::WinnerB1ShapedTodoCalibrate,
+        ChannelModel::Tr37885HighwayLos,
+    ] {
         // Veins: 60 veh/km, 10 Hz, 190 B, 23 dBm, 6 Mbit/s.
         let mut s = HighwaySweep::highway_fast(10).with_channel(channel);
         s.payload_cycle = vec![190];
@@ -200,8 +215,15 @@ pub fn markdown(rows: &[Comparison]) -> String {
     let mut s = String::new();
     for c in rows {
         let _ = writeln!(s, "#### {} — channel `{}`\n", c.reference.name, c.channel);
-        let _ = writeln!(s, "Reference: {}. This engine: {}.\n", c.reference.source, c.ours);
-        let _ = writeln!(s, "| distance (m) | published PDR | this engine | difference |");
+        let _ = writeln!(
+            s,
+            "Reference: {}. This engine: {}.\n",
+            c.reference.source, c.ours
+        );
+        let _ = writeln!(
+            s,
+            "| distance (m) | published PDR | this engine | difference |"
+        );
         let _ = writeln!(s, "|---:|---:|---:|---:|");
         for (d, p, o) in &c.rows {
             match o {
@@ -214,7 +236,11 @@ pub fn markdown(rows: &[Comparison]) -> String {
             }
         }
         if let Some(m) = c.mad {
-            let _ = writeln!(s, "\nMean absolute deviation: **{:.1} PDR points**.\n", m * 100.0);
+            let _ = writeln!(
+                s,
+                "\nMean absolute deviation: **{:.1} PDR points**.\n",
+                m * 100.0
+            );
         }
     }
     s

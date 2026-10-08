@@ -110,7 +110,9 @@ fn a_resumed_run_is_the_run_that_was_never_interrupted() {
         serde_json::from_slice(&std::fs::read(&checkpoint).expect("checkpoint")).expect("json");
     assert_eq!(ck["segments_done"], 1);
     assert!(
-        std::fs::metadata(cut_dir.join("metrics.json")).expect("metrics").len()
+        std::fs::metadata(cut_dir.join("metrics.json"))
+            .expect("metrics")
+            .len()
             > ck["metrics_bytes"].as_u64().expect("metrics_bytes"),
         "the crash left metrics past the checkpoint, which the resume must cut"
     );
@@ -153,7 +155,10 @@ fn a_resumed_run_is_the_run_that_was_never_interrupted() {
         "the checkpoint's digest is the end's: nothing ran after it"
     );
     assert_eq!(resumed.record_digest, whole.record_digest, "record digest");
-    assert_eq!(resumed.content_digest, whole.content_digest, "content digest");
+    assert_eq!(
+        resumed.content_digest, whole.content_digest,
+        "content digest"
+    );
     assert!(whole.content_digest.is_some());
     assert_eq!(resumed.metric_samples, whole.metric_samples);
     assert_eq!(resumed.recording_segments, whole.recording_segments);
@@ -168,8 +173,16 @@ fn a_resumed_run_is_the_run_that_was_never_interrupted() {
         "run-report.json"
     );
     let digests = file_digests(&whole_dir);
-    assert_eq!(digests.len(), 3, "scenario, metrics and report: {digests:?}");
-    assert_eq!(file_digests(&cut_dir), digests, "the manifest's file digests");
+    assert_eq!(
+        digests.len(),
+        3,
+        "scenario, metrics and report: {digests:?}"
+    );
+    assert_eq!(
+        file_digests(&cut_dir),
+        digests,
+        "the manifest's file digests"
+    );
     // The progress file carries on rather than starting again.
     let lines = |d: &Path| {
         String::from_utf8(read(d, "progress.jsonl"))
@@ -186,7 +199,10 @@ fn a_resumed_run_is_the_run_that_was_never_interrupted() {
     assert!(single.recording_segments.is_empty());
     assert_eq!(single.record_digest, whole.record_digest);
     assert_eq!(single.content_digest, whole.content_digest);
-    assert_eq!(read(&single_dir, "metrics.json"), read(&whole_dir, "metrics.json"));
+    assert_eq!(
+        read(&single_dir, "metrics.json"),
+        read(&whole_dir, "metrics.json")
+    );
 }
 
 /// The metrics level keeps the samples and the run's summary records and drops the scene:
@@ -206,11 +222,18 @@ fn the_metrics_level_records_a_fraction_and_changes_nothing_computed() {
     ))
     .expect("metrics level");
     assert_eq!(lean.record_digest, full.record_digest);
-    assert_eq!(read(&lean_dir, "metrics.json"), read(&full_dir, "metrics.json"));
+    assert_eq!(
+        read(&lean_dir, "metrics.json"),
+        read(&full_dir, "metrics.json")
+    );
     let (f, l) = (
         full.recording_bytes.expect("bytes"),
         lean.recording_bytes.expect("bytes"),
     );
     assert!(l * 5 < f, "metrics level {l} B against full {f} B");
-    assert!(lean.verified.as_ref().is_some_and(|v| v.records > 0 && v.frames == 0));
+    assert!(
+        lean.verified
+            .as_ref()
+            .is_some_and(|v| v.records > 0 && v.frames == 0)
+    );
 }

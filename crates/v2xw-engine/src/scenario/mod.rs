@@ -50,8 +50,8 @@ pub use schema::{
     Actors, Apps, Attacker, Backend, BackendEntity, BackendLink, BuildingOptions, CURRENT_SCHEMA,
     CryptoModeSpec, DemandSpec, Detection, DilationWindow, Experiment, ExporterSpec, Focus,
     FocusRegion, Messages, Meta, ModelChoice, Net, Nodes, PseudonymChangeSpec, Radio, RadioTiers,
-    Rat, Rsu, RsuPlacement, Scenario, Security, SignerIdPolicySpec, TerrainOptions, Threats, Time, TimelineItem,
-    TimelineKind, VehicleClassSpec, Vehicles, Vru, Weather, WorldSpec,
+    Rat, Rsu, RsuPlacement, Scenario, Security, SignerIdPolicySpec, TerrainOptions, Threats, Time,
+    TimelineItem, TimelineKind, VehicleClassSpec, Vehicles, Vru, Weather, WorldSpec,
 };
 pub use validate::{preflight, resolve_path, validate};
 

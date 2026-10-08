@@ -3,8 +3,8 @@
 use super::tiered::{TierRegion, TieredMobility, TieredParams};
 use super::*;
 use crate::ctx::MobilityCtx;
-use crate::demand::poisson::{PoissonDemand, PoissonParams};
 use crate::demand::OdParams;
+use crate::demand::poisson::{PoissonDemand, PoissonParams};
 use crate::engine::EngineParams;
 use crate::worlds::{RingParams, ring, ring_cycle};
 use v2xw_core::rng::RngRegistry;
@@ -63,16 +63,25 @@ fn a_free_segment_is_crossed_at_free_flow() {
     let mut core = MesoCore::new(&world, MesoParams::default(), ClassMask::MOTOR_TRAFFIC);
     let seg_len = core.segments()[0].length_m;
     assert!((seg_len - 62.5).abs() < 0.5, "segment {seg_len} m");
-    core.insert(&world, car(0, lanes.clone()), 0.0, 0, false).expect("room");
+    core.insert(&world, car(0, lanes.clone()), 0.0, 0, false)
+        .expect("room");
     let v = core.vehicle(ActorId::new(0)).expect("in");
     // 62.5 m at the 10 m/s limit: 6.25 s.
-    assert_eq!(v.earliest_exit, Duration::from_secs_f64(seg_len / 10.0).as_nanos());
+    assert_eq!(
+        v.earliest_exit,
+        Duration::from_secs_f64(seg_len / 10.0).as_nanos()
+    );
     run(&mut core, &world, 0, 63);
     let v = core.vehicle(ActorId::new(0)).expect("still in");
     assert_eq!(v.segment, 1, "crossed exactly one segment in 6.3 s");
-    assert_eq!(v.entered, Duration::from_secs_f64(seg_len / 10.0).as_nanos());
+    assert_eq!(
+        v.entered,
+        Duration::from_secs_f64(seg_len / 10.0).as_nanos()
+    );
     // Its published position moves with it.
-    let k = core.state_of(&world, v.id, 63 * STEP.as_nanos()).expect("state");
+    let k = core
+        .state_of(&world, v.id, 63 * STEP.as_nanos())
+        .expect("state");
     assert!((k.ground_speed_mps() - 10.0).abs() < 1e-6);
 }
 
@@ -84,7 +93,8 @@ fn a_queue_discharges_at_the_jam_headway() {
     // Seven cars stacked at the end of segment 0 (52.5 m of 62.5): jammed, the next
     // segment free.
     for i in 0..7 {
-        core.insert(&world, car(i, lanes.clone()), 62.0, 0, true).expect("forced");
+        core.insert(&world, car(i, lanes.clone()), 62.0, 0, true)
+            .expect("forced");
     }
     assert!(core.segments()[0].jammed());
     // Each leaves a jam-free headway after the one before: 1.73 s.
@@ -118,22 +128,32 @@ fn a_full_segment_holds_back_the_one_upstream() {
     let fp = car(0, lanes.clone()).footprint_m();
     let n = (cap / fp).floor() as u32;
     for i in 0..n {
-        core.insert(&world, car(100 + i, lanes.clone()), 62.5 + 62.0, 0, false).expect("room");
+        core.insert(&world, car(100 + i, lanes.clone()), 62.5 + 62.0, 0, false)
+            .expect("room");
     }
     assert!(!core.can_enter(1, fp));
-    core.insert(&world, car(0, lanes.clone()), 61.0, 0, false).expect("room upstream");
+    core.insert(&world, car(0, lanes.clone()), 61.0, 0, false)
+        .expect("room upstream");
     // Freeze segment 1's queue by closing its gate for the length of the test.
     core.segments[1].free_at = 1_000 * NS_PER_S;
     run(&mut core, &world, 0, 50);
     let v = core.vehicle(ActorId::new(0)).expect("in");
-    assert_eq!(v.segment, 0, "held at the head of segment 0 while segment 1 is full");
-    let k = core.state_of(&world, v.id, 50 * STEP.as_nanos()).expect("state");
+    assert_eq!(
+        v.segment, 0,
+        "held at the head of segment 0 while segment 1 is full"
+    );
+    let k = core
+        .state_of(&world, v.id, 50 * STEP.as_nanos())
+        .expect("state");
     assert_eq!(k.ground_speed_mps(), 0.0, "and standing");
 }
 
 fn grid() -> World {
-    v2xw_world::procedural::grid(&GridParams::legacy().with_signals(true), &ImportOptions::default())
-        .expect("grid")
+    v2xw_world::procedural::grid(
+        &GridParams::legacy().with_signals(true),
+        &ImportOptions::default(),
+    )
+    .expect("grid")
 }
 
 fn demand(world: &World) -> Box<dyn Demand> {
@@ -200,9 +220,17 @@ fn a_vehicle_crosses_into_the_region_and_out_again_as_one_actor() {
     for u in &updates {
         // I-M1, and one state per actor whichever tier drives it.
         let ids: Vec<ActorId> = u.states.iter().map(|(a, _)| *a).collect();
-        assert!(ids.windows(2).all(|w| w[0] < w[1]), "ordered and unique at {}", u.t);
+        assert!(
+            ids.windows(2).all(|w| w[0] < w[1]),
+            "ordered and unique at {}",
+            u.t
+        );
         for s in &u.spawned {
-            assert!(!gone.contains(&s.actor) && alive.insert(s.actor), "spawned once: {:?}", s.actor);
+            assert!(
+                !gone.contains(&s.actor) && alive.insert(s.actor),
+                "spawned once: {:?}",
+                s.actor
+            );
         }
         for (a, _) in &u.despawned {
             assert!(alive.remove(a), "despawned once, after a spawn: {a:?}");
@@ -210,7 +238,11 @@ fn a_vehicle_crosses_into_the_region_and_out_again_as_one_actor() {
         }
         // Everything published was announced and has not left.
         for a in &ids {
-            assert!(alive.contains(a), "{a:?} published without a spawn at {}", u.t);
+            assert!(
+                alive.contains(a),
+                "{a:?} published without a spawn at {}",
+                u.t
+            );
         }
         // And no vehicle jumps: a crossing keeps the position continuous.
     }

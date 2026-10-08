@@ -110,7 +110,9 @@ pub fn run_check(lab: &mut Lab, check: &Check) -> CheckResult {
                     "    {:<58} {:>12.4} {:<18} {}",
                     r.metric,
                     r.measured,
-                    r.band.map(|(a, b)| format!("[{a:.3}, {b:.3}]")).unwrap_or_else(|| "reported".into()),
+                    r.band
+                        .map(|(a, b)| format!("[{a:.3}, {b:.3}]"))
+                        .unwrap_or_else(|| "reported".into()),
                     if r.passes() { "" } else { "OUT" }
                 );
             }

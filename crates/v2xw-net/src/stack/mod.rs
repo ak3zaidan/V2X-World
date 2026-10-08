@@ -49,7 +49,9 @@ pub use router::{CbfVariant, ForwardingConfig, Router, RouterAction};
 
 /// Which networking stack a scenario runs over the radio: the selector a scenario's
 /// `net.stack` names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum StackKind {
     /// IEEE 1609.3 WSMP, single hop, optionally with 1609.4 channel switching.

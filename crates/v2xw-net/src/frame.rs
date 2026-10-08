@@ -132,9 +132,7 @@ impl NetStack {
                 // A CPM is ETSI's and the scenario loader refuses it on WSMP; were one to
                 // reach here it would be addressed as the safety message it resembles.
                 FrameMsg::Cpm => NetMeta::for_bsm(sdu_bytes).with_llc_snap(false),
-                FrameMsg::Ssm => {
-                    NetMeta::wsmp(sdu_bytes, Psid::SIGNAL_STATUS).with_llc_snap(false)
-                }
+                FrameMsg::Ssm => NetMeta::wsmp(sdu_bytes, Psid::SIGNAL_STATUS).with_llc_snap(false),
             },
             NetStack::GnBtp(_) => match msg {
                 FrameMsg::Denm => NetMeta::for_denm(sdu_bytes).with_llc_snap(false),
@@ -155,10 +153,8 @@ impl NetStack {
                     NetMeta::gn(sdu_bytes, GnTransport::Shb, BtpKind::B, BtpPort::SSEM)
                         .with_llc_snap(false)
                 }
-                FrameMsg::Cpm => {
-                    NetMeta::gn(sdu_bytes, GnTransport::Shb, BtpKind::B, BtpPort::CPM)
-                        .with_llc_snap(false)
-                }
+                FrameMsg::Cpm => NetMeta::gn(sdu_bytes, GnTransport::Shb, BtpKind::B, BtpPort::CPM)
+                    .with_llc_snap(false),
             },
         }
     }

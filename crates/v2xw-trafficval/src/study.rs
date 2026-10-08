@@ -92,10 +92,11 @@ impl MotionObserver {
                     // v·Δψ/Δt is the vertex angle over 0.1 s, not a lateral acceleration.
                     // The figure is v·Δψ averaged over the last second (TURN_WINDOW_S), the
                     // time a car takes to cover several vertices at turning speed.
-                    let e = self
-                        .turn_peak
-                        .entry(a.actor)
-                        .or_insert((a.lane, 0.0, std::collections::VecDeque::new()));
+                    let e = self.turn_peak.entry(a.actor).or_insert((
+                        a.lane,
+                        0.0,
+                        std::collections::VecDeque::new(),
+                    ));
                     if e.0 != a.lane {
                         self.turn_peaks.push(e.1);
                         *e = (a.lane, 0.0, std::collections::VecDeque::new());
@@ -133,7 +134,10 @@ impl MotionObserver {
                     }
                     if a.speed_mps >= 8.0 {
                         if l.2 && t1_s > l.0 {
-                            self.launches.entry(a.class.as_str()).or_default().push(8.0 / (t1_s - l.0));
+                            self.launches
+                                .entry(a.class.as_str())
+                                .or_default()
+                                .push(8.0 / (t1_s - l.0));
                         }
                         self.launch.remove(&a.actor);
                     }
@@ -152,7 +156,11 @@ impl MotionObserver {
         acc.sort_by(f64::total_cmp);
         MotionStats {
             turn_peak_lateral_mps2: Summary::of(&self.turn_peaks),
-            launch_by_class: self.launches.iter().map(|(k, v)| (*k, Summary::of(v))).collect(),
+            launch_by_class: self
+                .launches
+                .iter()
+                .map(|(k, v)| (*k, Summary::of(v)))
+                .collect(),
             accel_mps2: Summary::of(&self.accel),
             accel_p05: quantile(&acc, 0.05),
             accel_p95: quantile(&acc, 0.95),

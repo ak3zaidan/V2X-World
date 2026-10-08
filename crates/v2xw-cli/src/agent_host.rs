@@ -171,7 +171,9 @@ impl AgentHost {
                 }
                 Next::Finish => {
                     since_gather = every;
-                    let Ok(evidence) = v2xw_copilot::gather::gather(&mut rpc) else { continue };
+                    let Ok(evidence) = v2xw_copilot::gather::gather(&mut rpc) else {
+                        continue;
+                    };
                     let summary = match self.watch.lock() {
                         Ok(mut w) => {
                             let s = w.watcher.finish(&evidence);
@@ -236,7 +238,10 @@ impl AgentHost {
 
     /// The agent, built on first use so the engine's origin is known.
     fn with_agent<R>(&self, f: impl FnOnce(&mut HostAgent) -> R) -> Result<R, String> {
-        let mut slot = self.agent.lock().map_err(|_| "the agent's lock is poisoned".to_string())?;
+        let mut slot = self
+            .agent
+            .lock()
+            .map_err(|_| "the agent's lock is poisoned".to_string())?;
         if slot.is_none() {
             let origin = self
                 .origin
@@ -265,7 +270,9 @@ impl AgentHost {
     }
 
     fn authorized(&self, headers: &HeaderMap) -> bool {
-        let Some(expected) = &self.token else { return true };
+        let Some(expected) = &self.token else {
+            return true;
+        };
         headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
@@ -277,11 +284,16 @@ impl AgentHost {
     fn start(
         &self,
         kind: &str,
-        work: impl FnOnce(&mut HostAgent, &mut dyn FnMut(AgentEvent)) -> Result<(), String> + Send + 'static,
+        work: impl FnOnce(&mut HostAgent, &mut dyn FnMut(AgentEvent)) -> Result<(), String>
+        + Send
+        + 'static,
     ) -> Response {
         let id = {
             let Ok(mut job) = self.job.lock() else {
-                return reply(StatusCode::INTERNAL_SERVER_ERROR, json!({"error": "lock poisoned"}));
+                return reply(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({"error": "lock poisoned"}),
+                );
             };
             if job.running {
                 return reply(
@@ -308,7 +320,8 @@ impl AgentHost {
                 if let Ok(mut c) = host.cancel.lock() {
                     *c = Some(agent.cancel_handle());
                 }
-                let mut sink = |e: AgentEvent| push(serde_json::to_value(&e).unwrap_or(Value::Null));
+                let mut sink =
+                    |e: AgentEvent| push(serde_json::to_value(&e).unwrap_or(Value::Null));
                 work(agent, &mut sink)
             });
             let error = match outcome {
@@ -332,9 +345,18 @@ impl AgentHost {
 fn reply(status: StatusCode, body: Value) -> Response {
     let mut r = (status, Json(body)).into_response();
     let h = r.headers_mut();
-    h.insert("cross-origin-opener-policy", HeaderValue::from_static("same-origin"));
-    h.insert("cross-origin-embedder-policy", HeaderValue::from_static("require-corp"));
-    h.insert("cross-origin-resource-policy", HeaderValue::from_static("same-origin"));
+    h.insert(
+        "cross-origin-opener-policy",
+        HeaderValue::from_static("same-origin"),
+    );
+    h.insert(
+        "cross-origin-embedder-policy",
+        HeaderValue::from_static("require-corp"),
+    );
+    h.insert(
+        "cross-origin-resource-policy",
+        HeaderValue::from_static("same-origin"),
+    );
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     r
 }
@@ -349,12 +371,16 @@ async fn status(State(host): State<AgentHost>, headers: HeaderMap) -> Response {
     }
     let busy = host.job.lock().map(|j| j.running).unwrap_or(true);
     // While a job runs it holds the agent; the cached line answers instead of waiting.
-    let built = if busy { Ok(()) } else { host.with_agent(|_| ()) };
-    let (model, provider, runs) = host
-        .info
-        .lock()
-        .map(|i| i.clone())
-        .unwrap_or((false, "none".into(), 0));
+    let built = if busy {
+        Ok(())
+    } else {
+        host.with_agent(|_| ())
+    };
+    let (model, provider, runs) =
+        host.info
+            .lock()
+            .map(|i| i.clone())
+            .unwrap_or((false, "none".into(), 0));
     let why = host.provider_error.lock().ok().and_then(|e| e.clone());
     let (job, running, kind) = host
         .job
@@ -385,19 +411,29 @@ struct AskBody {
     prompt: String,
 }
 
-async fn ask(State(host): State<AgentHost>, headers: HeaderMap, Json(body): Json<AskBody>) -> Response {
+async fn ask(
+    State(host): State<AgentHost>,
+    headers: HeaderMap,
+    Json(body): Json<AskBody>,
+) -> Response {
     if !host.authorized(&headers) {
         return unauthorized();
     }
     let prompt = body.prompt.trim().to_string();
     if prompt.is_empty() {
-        return reply(StatusCode::BAD_REQUEST, json!({"error": "the prompt is empty"}));
+        return reply(
+            StatusCode::BAD_REQUEST,
+            json!({"error": "the prompt is empty"}),
+        );
     }
     host.start("ask", move |agent, sink| {
         if !agent.has_model() {
             return Err(v2xw_copilot::claude::HOW_TO_ADD_A_KEY.to_string());
         }
-        agent.ask(&prompt, sink).map(|_| ()).map_err(|e| e.to_string())
+        agent
+            .ask(&prompt, sink)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     })
 }
 
@@ -407,7 +443,11 @@ struct RunBody {
     base: Option<String>,
 }
 
-async fn run(State(host): State<AgentHost>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+async fn run(
+    State(host): State<AgentHost>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
     if !host.authorized(&headers) {
         return unauthorized();
     }
@@ -430,7 +470,9 @@ async fn analyse(State(host): State<AgentHost>, headers: HeaderMap) -> Response 
         return unauthorized();
     }
     host.start("analyse", move |agent, sink| {
-        let record = agent.analyse_current("current run", sink).map_err(|e| e.to_string())?;
+        let record = agent
+            .analyse_current("current run", sink)
+            .map_err(|e| e.to_string())?;
         let summary = v2xw_copilot::agent::deterministic_summary(Some(&record.analysis));
         let mut report = v2xw_copilot::agent::AgentReport {
             prompt: "Analyse the current run".into(),
@@ -443,7 +485,9 @@ async fn analyse(State(host): State<AgentHost>, headers: HeaderMap) -> Response 
             markdown: String::new(),
         };
         report.markdown = v2xw_copilot::agent::to_markdown(&report);
-        sink(AgentEvent::Report { report: Box::new(report) });
+        sink(AgentEvent::Report {
+            report: Box::new(report),
+        });
         Ok(())
     })
 }
@@ -456,15 +500,25 @@ struct EventsQuery {
     after: Option<usize>,
 }
 
-async fn events(State(host): State<AgentHost>, headers: HeaderMap, Query(q): Query<EventsQuery>) -> Response {
+async fn events(
+    State(host): State<AgentHost>,
+    headers: HeaderMap,
+    Query(q): Query<EventsQuery>,
+) -> Response {
     if !host.authorized(&headers) {
         return unauthorized();
     }
     let Ok(job) = host.job.lock() else {
-        return reply(StatusCode::INTERNAL_SERVER_ERROR, json!({"error": "lock poisoned"}));
+        return reply(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"error": "lock poisoned"}),
+        );
     };
     if q.job.is_some_and(|id| id != job.id) {
-        return reply(StatusCode::GONE, json!({"error": "that job was replaced", "job": job.id}));
+        return reply(
+            StatusCode::GONE,
+            json!({"error": "that job was replaced", "job": job.id}),
+        );
     }
     let after = q.after.unwrap_or(0).min(job.events.len());
     reply(
@@ -498,7 +552,10 @@ async fn reset(State(host): State<AgentHost>, headers: HeaderMap) -> Response {
         return unauthorized();
     }
     if host.job.lock().map(|j| j.running).unwrap_or(true) {
-        return reply(StatusCode::CONFLICT, json!({"error": "stop the running request first"}));
+        return reply(
+            StatusCode::CONFLICT,
+            json!({"error": "stop the running request first"}),
+        );
     }
     let _ = host.with_agent(HostAgent::reset);
     reply(StatusCode::OK, json!({"reset": true}))
@@ -510,12 +567,19 @@ struct WatchQuery {
     after: Option<usize>,
 }
 
-async fn watch(State(host): State<AgentHost>, headers: HeaderMap, Query(q): Query<WatchQuery>) -> Response {
+async fn watch(
+    State(host): State<AgentHost>,
+    headers: HeaderMap,
+    Query(q): Query<WatchQuery>,
+) -> Response {
     if !host.authorized(&headers) {
         return unauthorized();
     }
     let Ok(w) = host.watch.lock() else {
-        return reply(StatusCode::INTERNAL_SERVER_ERROR, json!({"error": "lock poisoned"}));
+        return reply(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"error": "lock poisoned"}),
+        );
     };
     let feed = w.watcher.feed();
     let after = q.after.unwrap_or(0).min(feed.len());
@@ -549,7 +613,10 @@ async fn summary(State(host): State<AgentHost>, headers: HeaderMap) -> Response 
         return unauthorized();
     }
     let Ok(w) = host.watch.lock() else {
-        return reply(StatusCode::INTERNAL_SERVER_ERROR, json!({"error": "lock poisoned"}));
+        return reply(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"error": "lock poisoned"}),
+        );
     };
     match w.watcher.summary() {
         Some(s) => reply(

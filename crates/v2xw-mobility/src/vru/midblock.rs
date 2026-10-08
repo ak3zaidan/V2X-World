@@ -147,7 +147,10 @@ struct Grid {
 
 impl Grid {
     fn key(&self, x: f64, y: f64) -> (i64, i64) {
-        ((x / self.cell).floor() as i64, (y / self.cell).floor() as i64)
+        (
+            (x / self.cell).floor() as i64,
+            (y / self.cell).floor() as i64,
+        )
     }
 }
 
@@ -297,7 +300,10 @@ fn cast(
             continue;
         }
         let other = world.lane(LaneId::new(l));
-        let (u0, u1) = (other.centreline[i as usize], other.centreline[i as usize + 1]);
+        let (u0, u1) = (
+            other.centreline[i as usize],
+            other.centreline[i as usize + 1],
+        );
         if let Some((t, u)) = seg_intersect(p, q, u0, u1) {
             let seg = math::hypot(u1.x - u0.x, u1.y - u0.y);
             hits.push((t * reach, other.id, other.cumulative[i as usize] + u * seg));

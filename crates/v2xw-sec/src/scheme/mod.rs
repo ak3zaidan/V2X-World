@@ -232,7 +232,11 @@ impl KemScheme {
             .post_quantum
             .and_then(|p| PrimitiveCatalogue::standard().get(p))
             .map_or(0, |d| d.sig_bytes.nominal());
-        let ecies = if self.ecies { ECIES_EPHEMERAL_OCTETS } else { 0 };
+        let ecies = if self.ecies {
+            ECIES_EPHEMERAL_OCTETS
+        } else {
+            0
+        };
         ecies + pq + WRAPPED_KEY_AND_TAG_OCTETS
     }
 }
@@ -497,9 +501,14 @@ mod tests {
     fn a_kem_wrap_is_ecies_shaped() {
         assert_eq!(kem("ecies-p256").expect("kem").wrapped_key_octets(), 65);
         // ML-KEM-768 ciphertext 1,088 B [FIPS 203 Table 3] + wrapped key and tag.
-        assert_eq!(kem("ml-kem-768").expect("kem").wrapped_key_octets(), 1_088 + 32);
         assert_eq!(
-            kem("hybrid-ecies-p256-ml-kem-768").expect("kem").wrapped_key_octets(),
+            kem("ml-kem-768").expect("kem").wrapped_key_octets(),
+            1_088 + 32
+        );
+        assert_eq!(
+            kem("hybrid-ecies-p256-ml-kem-768")
+                .expect("kem")
+                .wrapped_key_octets(),
             33 + 1_088 + 32
         );
     }
@@ -539,7 +548,11 @@ mod tests {
                 // The backend anchor, and whichever of the Cohda unit's two libraries
                 // prices it.
                 let t = d.cost_duration(op, profiles::CORTEX_A76_PI5_LIBOQS, c);
-                assert!(t.is_some_and(|t| t.as_nanos() > 0), "{} {op:?} Pi 5: {t:?}", s.id);
+                assert!(
+                    t.is_some_and(|t| t.as_nanos() > 0),
+                    "{} {op:?} Pi 5: {t:?}",
+                    s.id
+                );
                 let mk6 = priced_on(
                     p.primitive,
                     op,
@@ -557,8 +570,12 @@ mod tests {
         let m65 = c.get(PrimitiveId::ML_DSA_65).expect("present");
         let m44 = c.get(PrimitiveId::ML_DSA_44).expect("present");
         let p = profiles::CORTEX_A76_PI5_LIBOQS;
-        let v44 = m44.cost_duration(PrimitiveOpKind::Verify, p, c).expect("published");
-        let v65 = m65.cost_duration(PrimitiveOpKind::Verify, p, c).expect("derived");
+        let v44 = m44
+            .cost_duration(PrimitiveOpKind::Verify, p, c)
+            .expect("published");
+        let v65 = m65
+            .cost_duration(PrimitiveOpKind::Verify, p, c)
+            .expect("derived");
         // pqm4 m4f verify cycles: 2,415,944 / 1,421,623.
         let expected = u128::from(v44.as_nanos()) * 2_415_944 / 1_421_623;
         assert_eq!(u128::from(v65.as_nanos()), expected);
@@ -566,7 +583,9 @@ mod tests {
         assert!(!m44.cost_is_derived(PrimitiveOpKind::Verify, p, c));
         // ML-KEM-768 decapsulation on a Pi 5 is published (Table 8: 9,614.3/s).
         let k = c.get(PrimitiveId::ML_KEM_768).expect("present");
-        let dec = k.cost_duration(PrimitiveOpKind::Verify, p, c).expect("published");
+        let dec = k
+            .cost_duration(PrimitiveOpKind::Verify, p, c)
+            .expect("published");
         assert_eq!(dec.as_nanos(), 104_012);
         assert!(!k.cost_is_derived(PrimitiveOpKind::Verify, p, c));
     }

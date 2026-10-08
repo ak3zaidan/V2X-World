@@ -712,8 +712,7 @@ impl ScmsSizes {
             self.env_digest()
                 + n * (EC_POINT_COMPRESSED_BYTES
                     + 2 * (LINKAGE_VALUE_BYTES + self.enc_key_bytes)
-                    + 2 * (self.params.linkage_chain_identifier_bytes
-                        + self.enc_key_bytes)
+                    + 2 * (self.params.linkage_chain_identifier_bytes + self.enc_key_bytes)
                     + SHA256_BYTES),
             "linkage_chain_identifier_bytes",
         )
@@ -722,7 +721,8 @@ impl ScmsSizes {
     /// PCA → RA, and RA → device: `n` certificates, each with its sealed randomiser.
     pub const fn cert_batch(&self, n: u32) -> WireSize {
         WireSize::derived(
-            self.env_digest() + self.issued(n) * (self.certs.pseudonym.bytes() + self.enc_key_bytes),
+            self.env_digest()
+                + self.issued(n) * (self.certs.pseudonym.bytes() + self.enc_key_bytes),
             "envelope(digest) + n · (pseudonym certificate + encrypted-key wrapper), n counted \
              in issued credentials (one per umbrella under an umbrella authority)",
             DERIVATION,

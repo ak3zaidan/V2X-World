@@ -75,9 +75,7 @@ fn main() {
         }
         return;
     }
-    println!(
-        "8 vehicles, 25 m/s, leader -2 m/s² for 3 s; 10 Hz beacons; burst length {burst}\n"
-    );
+    println!("8 vehicles, 25 m/s, leader -2 m/s² for 3 s; 10 Hz beacons; burst length {burst}\n");
     println!(
         "| model | loss | latency s | accel gain | stable | RMS gap err m | cruise gap m | \
          veh/h/lane | coop share | min gap m |"

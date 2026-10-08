@@ -24,7 +24,6 @@ use v2xw_sec::primitive::{PrimitiveId, PrimitiveOpKind};
 use crate::error::{ProtoError, Result};
 use crate::fault::{Fault, FaultPlan};
 use crate::kernel::{Delivery, Kernel, Outbox};
-use crate::threshold::session::{CommitteeMsg, Committees, Outcome, RoleSpec};
 use crate::net::{BackendNet, Link, Transport};
 use crate::pseudonym::{CertEvent, PseudonymStore, PseudonymStrategy};
 use crate::scms::governance::{DeviceTrust, Governance, Policy};
@@ -36,6 +35,7 @@ use crate::scms::params::{ScmsNodes, ScmsParams};
 use crate::sizes::{CertificateSizes, WireSize};
 use crate::spec::{AES128_BLOCK, OpDescriptor};
 use crate::stage::{FlowId, FlowRun, StageId};
+use crate::threshold::session::{CommitteeMsg, Committees, Outcome, RoleSpec};
 
 const ECDSA: PrimitiveId = PrimitiveId::ECDSA_P256_SHA256;
 const ECQV: PrimitiveId = PrimitiveId::ECQV_P256;
@@ -1212,7 +1212,11 @@ impl ScmsRun {
 
     /// Handles one delivery: dropped if its receiver is offline, otherwise handled and
     /// dispatched, with a slow receiver's extra time charged.
-    fn step(state: &mut ScmsState, kernel: &mut Kernel<ScmsMsg>, d: Delivery<ScmsMsg>) -> Result<()> {
+    fn step(
+        state: &mut ScmsState,
+        kernel: &mut Kernel<ScmsMsg>,
+        d: Delivery<ScmsMsg>,
+    ) -> Result<()> {
         if state.faults.offline(d.to, d.at) {
             state.faults.dropped += 1;
             return Ok(());
@@ -1355,7 +1359,10 @@ impl ScmsState {
                 self.crlg.signature = self.gov.sign_as("crlg", &crl_digest(&self.crlg.entries));
                 self.crlg.versions += 1;
                 let entries = u32::try_from(self.crlg.entries.len()).unwrap_or(u32::MAX);
-                for (to, step) in [(n.crl_store, "crl-publish"), (n.crl_broadcast, "crl-broadcast")] {
+                for (to, step) in [
+                    (n.crl_store, "crl-publish"),
+                    (n.crl_broadcast, "crl-broadcast"),
+                ] {
                     out.send(
                         to,
                         ScmsMsg::CrlPublish { entries },
@@ -2577,7 +2584,12 @@ impl ScmsState {
                     );
                 }
             }
-            ScmsMsg::SeedRetry { lci1, lci2, i, tries } => {
+            ScmsMsg::SeedRetry {
+                lci1,
+                lci2,
+                i,
+                tries,
+            } => {
                 let Some(case) = self.ma.case.as_ref() else {
                     return Ok(());
                 };
@@ -2618,7 +2630,9 @@ impl ScmsState {
                 }
             }
             ScmsMsg::Committee(m) => {
-                let outcome = self.committees.handle(m, at, to, &self.faults, out, wrap_committee);
+                let outcome = self
+                    .committees
+                    .handle(m, at, to, &self.faults, out, wrap_committee);
                 match outcome {
                     Some(Outcome::Done { cont, .. }) => self.resume(cont, at, out)?,
                     Some(Outcome::Failed { cont }) => {
@@ -3193,7 +3207,14 @@ fn build_committees(
         add("crl", 1, nodes.crlg, t.members, t.quorum, p);
     }
     if let Some((members, quorum)) = t.linkage {
-        add("linkage", 2, nodes.ma, members, quorum, crate::threshold::linkage::ID);
+        add(
+            "linkage",
+            2,
+            nodes.ma,
+            members,
+            quorum,
+            crate::threshold::linkage::ID,
+        );
     }
     let committees = Committees::new(roles, envelope);
     let link = Link {

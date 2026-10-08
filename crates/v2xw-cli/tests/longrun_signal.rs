@@ -60,7 +60,10 @@ fn a_run_asked_to_stop_checkpoints_and_resumes_into_the_same_run() {
         v2xw_cli::CliError::StoppedOnRequest { at_s, .. } => at_s,
         other => panic!("{other}"),
     };
-    assert!(at >= 30.0 && at < 60.0 && (at - at.round()).abs() < 1e-9, "stopped at {at} s");
+    assert!(
+        at >= 30.0 && at < 60.0 && (at - at.round()).abs() < 1e-9,
+        "stopped at {at} s"
+    );
     // Every segment on disk is a finished recording: nothing half-written was left.
     for entry in std::fs::read_dir(&asked).expect("dir") {
         let p = entry.expect("entry").path();

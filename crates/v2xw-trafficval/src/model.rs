@@ -31,8 +31,7 @@ use v2xw_mobility::intersection::gap_acceptance::{HcmGaps, Movement};
 use v2xw_mobility::lanechange::mobil::{Mobil, MobilParams, MobilPreset};
 use v2xw_mobility::traits::{CarFollowing, LaneChange, Mobility};
 use v2xw_mobility::views::{
-    DriverProfile, LaneChangeDecision, LaneNeighbors, LeaderView, Side, SideNeighbors,
-    VehicleView,
+    DriverProfile, LaneChangeDecision, LaneNeighbors, LeaderView, Side, SideNeighbors, VehicleView,
 };
 use v2xw_mobility::vru::social_force::SocialForceParams;
 use v2xw_mobility::worlds::{RingParams, cycle_length_m, ring, ring_cycle};
@@ -163,7 +162,10 @@ pub fn checks() -> Vec<Check> {
                 relaxation time τ 0.5 s, pedestrian repulsion V0 2.1 m²/s² over σ 0.3 m, \
                 border repulsion U0 10 m²/s² over R 0.2 m, step Δt 2 s, field of view 200° \
                 with weight c 0.5 behind. Walking speeds in a run are group 2's.",
-            faults: &["a parameter set with τ = 1.0 s and σ = 0.5 m", "the parameter table transcribed one row out of step"],
+            faults: &[
+                "a parameter set with τ = 1.0 s and σ = 0.5 m",
+                "the parameter table transcribed one row out of step",
+            ],
             run: social_force,
         },
     ]
@@ -184,7 +186,8 @@ fn idm_reference(p: &IdmParams, d: &DriverProfile, v: f64, v0: f64, gap: f64, v_
     } else {
         let s = gap.max(p.gap_floor_m);
         let dv = v - v_lead;
-        let dynamic = (v * d.time_headway_s + v * dv / (2.0 * math::sqrt(a * d.comfort_decel_mps2))).max(0.0);
+        let dynamic =
+            (v * d.time_headway_s + v * dv / (2.0 * math::sqrt(a * d.comfort_decel_mps2))).max(0.0);
         let s_star = d.min_gap_m + p.s1_m * math::sqrt(v / v0) + dynamic;
         a * (free - (s_star / s).powi(2))
     };
@@ -219,7 +222,14 @@ fn idm_equation(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
             for dv in [-5.0, -1.0, 0.0, 1.0, 5.0] {
                 let v_lead = f64::max(v - dv, 0.0);
                 let got = model.accel_of(v, driver.desired_speed_mps, gap, v_lead, &driver);
-                let want = idm_reference(&reference_params, &driver, v, driver.desired_speed_mps, gap, v_lead);
+                let want = idm_reference(
+                    &reference_params,
+                    &driver,
+                    v,
+                    driver.desired_speed_mps,
+                    gap,
+                    v_lead,
+                );
                 worst = worst.max((got - want).abs());
                 n += 1;
             }
@@ -228,13 +238,39 @@ fn idm_equation(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     let t2000 = "Treiber, Hennecke & Helbing 2000, Phys. Rev. E 62, 1805, Table 1";
     Ok(Outcome {
         rows: vec![
-            Row::held("largest |engine − equation|, m/s²", worst, (0.0, 1e-9), "Treiber 2000 Eq. 1–2").n(n),
-            Row::held("desired speed v0, km/h", driver.desired_speed_mps * 3.6, (119.5, 120.5), t2000),
+            Row::held(
+                "largest |engine − equation|, m/s²",
+                worst,
+                (0.0, 1e-9),
+                "Treiber 2000 Eq. 1–2",
+            )
+            .n(n),
+            Row::held(
+                "desired speed v0, km/h",
+                driver.desired_speed_mps * 3.6,
+                (119.5, 120.5),
+                t2000,
+            ),
             Row::held("time gap T, s", driver.time_headway_s, (1.6, 1.6), t2000),
-            Row::held("maximum acceleration a, m/s²", driver.max_accel_mps2, (0.73, 0.73), t2000),
-            Row::held("comfortable deceleration b, m/s²", driver.comfort_decel_mps2, (1.67, 1.67), t2000),
+            Row::held(
+                "maximum acceleration a, m/s²",
+                driver.max_accel_mps2,
+                (0.73, 0.73),
+                t2000,
+            ),
+            Row::held(
+                "comfortable deceleration b, m/s²",
+                driver.comfort_decel_mps2,
+                (1.67, 1.67),
+                t2000,
+            ),
             Row::held("jam distance s0, m", driver.min_gap_m, (2.0, 2.0), t2000),
-            Row::held("acceleration exponent δ", model.params().delta, (4.0, 4.0), t2000),
+            Row::held(
+                "acceleration exponent δ",
+                model.params().delta,
+                (4.0, 4.0),
+                t2000,
+            ),
         ],
         notes: vec![format!(
             "{n} points compared; the model's floor on the acceleration is {} m/s² and on the gap {} m, both on its card.",
@@ -257,7 +293,13 @@ fn ballistic(x: &mut f64, v: &mut f64, a: f64, dt: f64) {
 
 /// Integrates the approach to a standing obstacle `obstacle` m ahead from `v_start`, with
 /// `accel(v, gap)`, and returns `(gap at the end, smallest gap, final speed, peak decel)`.
-fn approach(accel: impl Fn(f64, f64) -> f64, v_start: f64, obstacle: f64, dt: f64, t_end: f64) -> (f64, f64, f64, f64) {
+fn approach(
+    accel: impl Fn(f64, f64) -> f64,
+    v_start: f64,
+    obstacle: f64,
+    dt: f64,
+    t_end: f64,
+) -> (f64, f64, f64, f64) {
     let (mut x, mut v) = (0.0, v_start);
     let mut min_gap = f64::INFINITY;
     let mut peak_decel = 0.0f64;
@@ -279,8 +321,13 @@ fn idm_stop(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     }
     let v0 = 13.9;
     let obstacle = 150.0;
-    let (gap, min_gap, v, peak_decel) =
-        approach(|v, gap| idm.accel_of(v, v0, gap, 0.0, &model_driver), v0, obstacle, 0.1, 120.0);
+    let (gap, min_gap, v, peak_decel) = approach(
+        |v, gap| idm.accel_of(v, v0, gap, 0.0, &model_driver),
+        v0,
+        obstacle,
+        0.1,
+        120.0,
+    );
     // The same approach through the equation written out here, at the engine's step and at
     // 1 ms (the continuous limit). With speeds floored at zero the IDM does not reach s0
     // from above: it is underdamped near standstill and stops a little short (Treiber &
@@ -301,8 +348,20 @@ fn idm_stop(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
                 (0.0, 1e-9),
                 "Treiber 2000 Eq. 1–2 integrated ballistically (Treiber & Kanagaraj 2015) by the check itself",
             ),
-            Row::held("gap at rest, m", gap, (s0 - 0.1, s0 + 0.5), format!("{cite}; the continuous model with v ≥ 0 stops {shortfall:.3} m short of s0 (1 ms integration), so the band opens 0.1 m below s0")),
-            Row::held("smallest gap on the approach, m", min_gap, (s0 - 0.1, f64::INFINITY), cite),
+            Row::held(
+                "gap at rest, m",
+                gap,
+                (s0 - 0.1, s0 + 0.5),
+                format!(
+                    "{cite}; the continuous model with v ≥ 0 stops {shortfall:.3} m short of s0 (1 ms integration), so the band opens 0.1 m below s0"
+                ),
+            ),
+            Row::held(
+                "smallest gap on the approach, m",
+                min_gap,
+                (s0 - 0.1, f64::INFINITY),
+                cite,
+            ),
             Row::held("speed after 120 s, m/s", v, (0.0, 0.05), "at rest"),
             Row::reported(
                 "peak deceleration, m/s²",
@@ -374,7 +433,15 @@ fn transfer_gain(fs: f64, fv: f64, fdv: f64, omega: f64) -> f64 {
 /// whole periods onto sin and cos at ω, and the per-car gain is the geometric mean of the
 /// ratios from the leader to the last car the probe still reaches. `delay_s` makes every follower see the platoon that
 /// long ago (the fault).
-fn platoon_gain(idm: &Idm, d: &DriverProfile, v0: f64, s: f64, length: f64, delay_s: f64, omega: f64) -> (f64, Vec<f64>) {
+fn platoon_gain(
+    idm: &Idm,
+    d: &DriverProfile,
+    v0: f64,
+    s: f64,
+    length: f64,
+    delay_s: f64,
+    omega: f64,
+) -> (f64, Vec<f64>) {
     const N: usize = 16;
     const AMP: f64 = 0.05;
     let dt = 0.02;
@@ -386,7 +453,8 @@ fn platoon_gain(idm: &Idm, d: &DriverProfile, v0: f64, s: f64, length: f64, dela
     let mut x: Vec<f64> = (0..N).map(|i| -(i as f64) * (s + length)).collect();
     let mut v = vec![ve; N];
     let delay_steps = (delay_s / dt).round() as usize;
-    let mut history: std::collections::VecDeque<(Vec<f64>, Vec<f64>)> = std::collections::VecDeque::new();
+    let mut history: std::collections::VecDeque<(Vec<f64>, Vec<f64>)> =
+        std::collections::VecDeque::new();
     let (mut sin_acc, mut cos_acc) = (vec![0.0f64; N], vec![0.0f64; N]);
     let steps = (t_end / dt).round() as usize;
     for k in 0..steps {
@@ -423,7 +491,9 @@ fn platoon_gain(idm: &Idm, d: &DriverProfile, v0: f64, s: f64, length: f64, dela
     let a0 = amp(0);
     let floor = a0 * 1e-2;
     let k = (1..N).take_while(|&i| amp(i) >= floor).last();
-    let ratios: Vec<f64> = (1..5.min(N)).map(|i| amp(i) / amp(i - 1).max(1e-300)).collect();
+    let ratios: Vec<f64> = (1..5.min(N))
+        .map(|i| amp(i) / amp(i - 1).max(1e-300))
+        .collect();
     let g = match k {
         Some(k) if a0 > 0.0 => math::pow(amp(k) / a0, 1.0 / k as f64),
         _ => f64::NAN,
@@ -432,7 +502,11 @@ fn platoon_gain(idm: &Idm, d: &DriverProfile, v0: f64, s: f64, length: f64, dela
 }
 
 fn string_stability(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
-    let delay = if variant == Variant::Fault(0) { 0.8 } else { 0.0 };
+    let delay = if variant == Variant::Fault(0) {
+        0.8
+    } else {
+        0.0
+    };
     let length = VehicleClass::Passenger.spec().length_m;
     let mut rows = Vec::new();
     let mut notes = Vec::new();
@@ -440,14 +514,20 @@ fn string_stability(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String>
     let mut worst_gain_err = 0.0f64;
     let mut compared = 0usize;
     for (preset, v0, label) in [
-        (IdmPreset::UrbanHcm, 11.176, "city drivers (UrbanHcm), 25 mph"),
+        (
+            IdmPreset::UrbanHcm,
+            11.176,
+            "city drivers (UrbanHcm), 25 mph",
+        ),
         (IdmPreset::Treiber2000, 33.3, "Treiber 2000, 120 km/h"),
     ] {
         let idm = Idm::new(preset);
         let d = preset.profile(VehicleClass::Passenger);
         let mut unstable = Vec::new();
         let mut line = Vec::new();
-        for rho in [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0] {
+        for rho in [
+            10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 110.0, 120.0,
+        ] {
             let s = 1000.0 / rho - length;
             if s <= d.min_gap_m + 0.2 {
                 continue;
@@ -457,7 +537,9 @@ fn string_stability(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String>
                 unstable.push(rho);
             }
             if c.abs() < 0.01 {
-                line.push(format!("{rho:.0}: criterion {c:+.3} (marginal, not compared)"));
+                line.push(format!(
+                    "{rho:.0}: criterion {c:+.3} (marginal, not compared)"
+                ));
                 continue;
             }
             // ω inside the unstable band ω² < −2c when c < 0, at the same distance from 0
@@ -472,7 +554,11 @@ fn string_stability(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String>
             if (theory > 1.0) != (sim > 1.0) || !sim.is_finite() {
                 total_disagree += 1;
             }
-            let err = if sim.is_finite() { (sim - theory).abs() } else { f64::INFINITY };
+            let err = if sim.is_finite() {
+                (sim - theory).abs()
+            } else {
+                f64::INFINITY
+            };
             worst_gain_err = worst_gain_err.max(err);
         }
         rows.push(Row::reported(
@@ -553,8 +639,16 @@ fn ring_fd(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
                 (0.0, fd::targets::CAPACITY_BELOW_THEORY_TOLERANCE),
                 "Kesting 2010 Eq. 4.1: Q_max = (1/T)(1 − l_eff/(v0·T + l_eff)); a perturbed ring sits at or below it",
             ),
-            Row::reported("capacity, veh/h", r.capacity_veh_h, "Q_max from the parameters below"),
-            Row::reported("Q_max from the parameters, veh/h", r.theoretical_capacity_veh_h, "Kesting 2010 Eq. 4.1"),
+            Row::reported(
+                "capacity, veh/h",
+                r.capacity_veh_h,
+                "Q_max from the parameters below",
+            ),
+            Row::reported(
+                "Q_max from the parameters, veh/h",
+                r.theoretical_capacity_veh_h,
+                "Kesting 2010 Eq. 4.1",
+            ),
             Row::reported(
                 "capacity drop (same density), fraction",
                 r.capacity_drop,
@@ -590,7 +684,12 @@ pub struct RingJam {
 }
 
 /// Runs `n` cars of `driver` on a `length_m` ring at a desired speed of `v0`.
-pub fn ring_jam(n: usize, length_m: f64, driver: DriverProfile, v0: f64) -> Result<RingJam, String> {
+pub fn ring_jam(
+    n: usize,
+    length_m: f64,
+    driver: DriverProfile,
+    v0: f64,
+) -> Result<RingJam, String> {
     let world = ring(&RingParams {
         circumference_m: length_m,
         segments: 4,
@@ -626,10 +725,17 @@ pub fn ring_jam(n: usize, length_m: f64, driver: DriverProfile, v0: f64) -> Resu
     let rng = RngRegistry::new(0x5_0617_A3A2);
     {
         let mut ctx = MobilityCtx::new(0, &world, &rng);
-        engine.init(&mut ctx, Box::new(NoDemand::new())).map_err(|e| e.to_string())?;
+        engine
+            .init(&mut ctx, Box::new(NoDemand::new()))
+            .map_err(|e| e.to_string())?;
     }
     let laps = 200;
-    let route: Vec<LaneId> = cycle.iter().cycle().take(cycle.len() * laps).copied().collect();
+    let route: Vec<LaneId> = cycle
+        .iter()
+        .cycle()
+        .take(cycle.len() * laps)
+        .copied()
+        .collect();
     let spacing = length / n as f64;
     let body = VehicleClass::Passenger.spec().length_m;
     let mut d = driver;
@@ -643,7 +749,14 @@ pub fn ring_jam(n: usize, length_m: f64, driver: DriverProfile, v0: f64) -> Resu
             k += 1;
         }
         let id = engine
-            .spawn_with_route(&world, 0, VehicleClass::Passenger, d, route[k..].to_vec(), s)
+            .spawn_with_route(
+                &world,
+                0,
+                VehicleClass::Passenger,
+                d,
+                route[k..].to_vec(),
+                s,
+            )
             .map_err(|e| e.to_string())?;
         engine
             .set_speed(id, if i == 0 { 0.8 * ve } else { ve })
@@ -672,7 +785,10 @@ pub fn ring_jam(n: usize, length_m: f64, driver: DriverProfile, v0: f64) -> Resu
         for (_, lane, s, v) in &states {
             speeds.push(*v);
             min_speed = min_speed.min(*v);
-            let pos = lane_index.get(lane).map(|i| offsets[*i] + s).unwrap_or(f64::NAN);
+            let pos = lane_index
+                .get(lane)
+                .map(|i| offsets[*i] + s)
+                .unwrap_or(f64::NAN);
             if slowest.is_none_or(|(sv, _)| *v < sv) {
                 slowest = Some((*v, pos));
             }
@@ -696,7 +812,8 @@ pub fn ring_jam(n: usize, length_m: f64, driver: DriverProfile, v0: f64) -> Resu
         }
     }
     let mean = speeds.iter().sum::<f64>() / speeds.len().max(1) as f64;
-    let sd = (speeds.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / speeds.len().max(1) as f64).sqrt();
+    let sd = (speeds.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / speeds.len().max(1) as f64)
+        .sqrt();
     let wave = if min_speed < 2.0 && track.len() > 10 {
         fd::least_squares(&track).1 * 3.6
     } else {
@@ -720,7 +837,12 @@ fn sugiyama(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     let src = "Sugiyama et al. 2008, New J. Phys. 10 033001: 22 cars, 230 m, asked to cruise at 30 km/h; a jam formed and moved backwards 'with the same speed as a jam cluster on a highway'";
     Ok(Outcome {
         rows: vec![
-            Row::held("slowest car in the jam, m/s", r.min_speed_mps, (0.0, 2.0), src),
+            Row::held(
+                "slowest car in the jam, m/s",
+                r.min_speed_mps,
+                (0.0, 2.0),
+                src,
+            ),
             Row::held(
                 "jam propagation speed, km/h",
                 r.wave_kmh,
@@ -728,7 +850,11 @@ fn sugiyama(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
                 "highway jam fronts move upstream at 15–20 km/h (Kerner & Rehborn 1996; Treiber & Kesting 2013 §18.1, secondary); about 20 km/h on Sugiyama's circuit (secondary)",
             ),
             Row::reported("mean speed, km/h", r.mean_speed_mps * 3.6, "—"),
-            Row::reported("speed standard deviation, m/s", r.speed_sd_mps, "stop-and-go amplitude"),
+            Row::reported(
+                "speed standard deviation, m/s",
+                r.speed_sd_mps,
+                "stop-and-go amplitude",
+            ),
         ],
         notes: vec![],
     })
@@ -744,7 +870,10 @@ struct Lcg(u64);
 
 impl Lcg {
     fn next(&mut self) -> f64 {
-        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         (self.0 >> 11) as f64 / (1u64 << 53) as f64
     }
     fn range(&mut self, lo: f64, hi: f64) -> f64 {
@@ -762,12 +891,21 @@ fn mobil_criterion(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> 
     // A middle lane with a neighbour each side.
     let mut lanes = None;
     for lane in world.roads.lanes() {
-        if lane.kind != v2xw_world::LaneKind::Driving || lane.index != 1 || lane.junction.is_some() {
+        if lane.kind != v2xw_world::LaneKind::Driving || lane.index != 1 || lane.junction.is_some()
+        {
             continue;
         }
         let edge = world.edge(lane.edge);
-        let right = edge.lanes.iter().find(|l| world.lane(**l).index == 0).copied();
-        let left = edge.lanes.iter().find(|l| world.lane(**l).index == 2).copied();
+        let right = edge
+            .lanes
+            .iter()
+            .find(|l| world.lane(**l).index == 0)
+            .copied();
+        let left = edge
+            .lanes
+            .iter()
+            .find(|l| world.lane(**l).index == 2)
+            .copied();
         if let (Some(r), Some(l)) = (right, left) {
             lanes = Some((lane.id, l, r));
             break;
@@ -805,7 +943,10 @@ fn mobil_criterion(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> 
     // The independent evaluation: Kesting 2007's criteria on the IDM, with the speed the
     // lane allows.
     let acc = |v: &VehicleView, leader: Option<&LeaderView>, lane: LaneId| {
-        let v0 = v.driver.desired_speed_mps.min(world.lane(lane).speed_limit_mps);
+        let v0 = v
+            .driver
+            .desired_speed_mps
+            .min(world.lane(lane).speed_limit_mps);
         match leader {
             None => idm.accel_of(v.speed_mps, v0, f64::INFINITY, 0.0, &v.driver),
             Some(l) => idm.accel_of(v.speed_mps, v0, l.gap_m, l.speed_mps, &v.driver),
@@ -837,7 +978,10 @@ fn mobil_criterion(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> 
                 Some(LeaderView::of(veh(1, mid, 1, 2.0), 6.0)),
                 None,
                 None,
-                Some(LeaderView::of(veh(4, left, 2, seq.range(9.0, 14.0)), seq.range(2.0, 20.0))),
+                Some(LeaderView::of(
+                    veh(4, left, 2, seq.range(9.0, 14.0)),
+                    seq.range(2.0, 20.0),
+                )),
                 None,
                 Some(LeaderView::of(veh(6, right, 0, 14.0), 1.0)),
             )
@@ -876,13 +1020,20 @@ fn mobil_criterion(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> 
         // Independent.
         let mut best: Option<(f64, Side)> = None;
         let a_c = acc(&ego, nbrs.leader.as_ref(), mid);
-        let old = nbrs.follower.as_ref().and_then(|f| f.vehicle.map(|v| (v, f.gap_m)));
+        let old = nbrs
+            .follower
+            .as_ref()
+            .and_then(|f| f.vehicle.map(|v| (v, f.gap_m)));
         for side in [Side::Left, Side::Right] {
             let t = nbrs.side(side).expect("both sides");
             let a_c_new = acc(&ego, t.leader.as_ref(), t.lane);
             let mut polite = 0.0;
             let mut safe = true;
-            if let Some((fv, fgap)) = t.follower.as_ref().and_then(|f| f.vehicle.map(|v| (v, f.gap_m))) {
+            if let Some((fv, fgap)) = t
+                .follower
+                .as_ref()
+                .and_then(|f| f.vehicle.map(|v| (v, f.gap_m)))
+            {
                 let after = acc(&fv, Some(&LeaderView::of(ego, fgap)), t.lane);
                 if after < -paper.b_safe_mps2 {
                     safe = false;
@@ -932,20 +1083,42 @@ fn mobil_criterion(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> 
     } else {
         paper
     };
-    let mut notes = vec![format!("{changes} of {n} situations call for a change by the criterion.")];
+    let mut notes = vec![format!(
+        "{changes} of {n} situations call for a change by the criterion."
+    )];
     notes.extend(examples);
     Ok(Outcome {
         rows: vec![
-            Row::zero("verdicts that differ from the criterion", disagree, "Kesting 2007 Eq. 1–4").n(n),
+            Row::zero(
+                "verdicts that differ from the criterion",
+                disagree,
+                "Kesting 2007 Eq. 1–4",
+            )
+            .n(n),
             Row::held(
                 "share of situations that change lane",
                 changes as f64 / n as f64,
                 (0.05, 0.95),
                 "the sample must exercise both verdicts, or agreement proves nothing",
             ),
-            Row::held("changing threshold Δa_th, m/s²", table.threshold_mps2, (0.1, 0.1), k07),
-            Row::held("safe deceleration b_safe, m/s²", table.b_safe_mps2, (4.0, 4.0), k07),
-            Row::held("keep-right bias Δa_bias, m/s²", table.right_bias_mps2, (0.3, 0.3), k07),
+            Row::held(
+                "changing threshold Δa_th, m/s²",
+                table.threshold_mps2,
+                (0.1, 0.1),
+                k07,
+            ),
+            Row::held(
+                "safe deceleration b_safe, m/s²",
+                table.b_safe_mps2,
+                (4.0, 4.0),
+                k07,
+            ),
+            Row::held(
+                "keep-right bias Δa_bias, m/s²",
+                table.right_bias_mps2,
+                (0.3, 0.3),
+                k07,
+            ),
             Row::reported(
                 "politeness p",
                 paper.politeness,
@@ -982,17 +1155,59 @@ fn hcm_gaps(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     let src = "HCM 2010 Exhibit 19-10 (HCM 6th ed. Exhibit 20-11), base values";
     let mut rows = Vec::new();
     for (m, name, narrow, wide, follow) in [
-        (Movement::MajorLeft, "left from the major road", 4.1, 4.1, 2.2),
-        (Movement::MinorRight, "right from the minor road", 6.2, 6.9, 3.3),
-        (Movement::MinorThrough, "through from the minor road", 6.5, 6.5, 4.0),
-        (Movement::MinorLeft, "left from the minor road", 7.1, 7.5, 3.5),
+        (
+            Movement::MajorLeft,
+            "left from the major road",
+            4.1,
+            4.1,
+            2.2,
+        ),
+        (
+            Movement::MinorRight,
+            "right from the minor road",
+            6.2,
+            6.9,
+            3.3,
+        ),
+        (
+            Movement::MinorThrough,
+            "through from the minor road",
+            6.5,
+            6.5,
+            4.0,
+        ),
+        (
+            Movement::MinorLeft,
+            "left from the minor road",
+            7.1,
+            7.5,
+            3.5,
+        ),
     ] {
         let g = of(m);
-        rows.push(Row::held(format!("{name}: critical headway, 2-lane major, s"), g.critical_gap_narrow_s, (narrow, narrow), src));
-        rows.push(Row::held(format!("{name}: critical headway, 4-lane major, s"), g.critical_gap_wide_s, (wide, wide), src));
-        rows.push(Row::held(format!("{name}: follow-up headway, s"), g.follow_up_s, (follow, follow), src));
+        rows.push(Row::held(
+            format!("{name}: critical headway, 2-lane major, s"),
+            g.critical_gap_narrow_s,
+            (narrow, narrow),
+            src,
+        ));
+        rows.push(Row::held(
+            format!("{name}: critical headway, 4-lane major, s"),
+            g.critical_gap_wide_s,
+            (wide, wide),
+            src,
+        ));
+        rows.push(Row::held(
+            format!("{name}: follow-up headway, s"),
+            g.follow_up_s,
+            (follow, follow),
+            src,
+        ));
     }
-    Ok(Outcome { rows, notes: vec![] })
+    Ok(Outcome {
+        rows,
+        notes: vec![],
+    })
 }
 
 fn social_force(_lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {

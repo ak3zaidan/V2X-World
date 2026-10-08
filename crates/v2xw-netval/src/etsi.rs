@@ -68,7 +68,11 @@ fn position(rng: &mut Rng) -> PositionEstimate {
     let speed = rng.range(0.0, 35.0);
     let heading = rng.range(-3.1, 3.1);
     PositionEstimate {
-        pos: Vec3::new(rng.range(-5_000.0, 5_000.0), rng.range(-5_000.0, 5_000.0), rng.range(-20.0, 200.0)),
+        pos: Vec3::new(
+            rng.range(-5_000.0, 5_000.0),
+            rng.range(-5_000.0, 5_000.0),
+            rng.range(-20.0, 200.0),
+        ),
         vel: Vec3::new(speed * heading.cos(), speed * heading.sin(), 0.0),
         heading_rad: heading,
         semi_major_m: rng.range(0.5, 20.0),
@@ -84,16 +88,42 @@ fn etsi_messages(mode: Mode) -> Outcome {
     let cdd = root.join("cdd_ts102894_2/ETSI-ITS-CDD.asn");
     let clock = WallClock::new(1_767_225_600);
     let mut rng = Rng(0xE751);
-    let origins = [GeoOrigin::new(40.7440, -73.9900, 0.0), GeoOrigin::new(52.5200, 13.4050, 34.0), GeoOrigin::new(-33.8688, 151.2093, 10.0)];
-    let types = [ParticipantType::PassengerCar, ParticipantType::Bus, ParticipantType::HeavyTruck, ParticipantType::Motorcycle, ParticipantType::LightTruck];
-    let causes = [DenmCause::TrafficCondition, DenmCause::Accident, DenmCause::Roadworks, DenmCause::Adhesion, DenmCause::ObstacleOnTheRoad, DenmCause::HumanPresenceOnTheRoad, DenmCause::DangerousEndOfQueue, DenmCause::EmergencyVehicleApproaching, DenmCause::StationaryVehicle];
+    let origins = [
+        GeoOrigin::new(40.7440, -73.9900, 0.0),
+        GeoOrigin::new(52.5200, 13.4050, 34.0),
+        GeoOrigin::new(-33.8688, 151.2093, 10.0),
+    ];
+    let types = [
+        ParticipantType::PassengerCar,
+        ParticipantType::Bus,
+        ParticipantType::HeavyTruck,
+        ParticipantType::Motorcycle,
+        ParticipantType::LightTruck,
+    ];
+    let causes = [
+        DenmCause::TrafficCondition,
+        DenmCause::Accident,
+        DenmCause::Roadworks,
+        DenmCause::Adhesion,
+        DenmCause::ObstacleOnTheRoad,
+        DenmCause::HumanPresenceOnTheRoad,
+        DenmCause::DangerousEndOfQueue,
+        DenmCause::EmergencyVehicleApproaching,
+        DenmCause::StationaryVehicle,
+    ];
     // (type, modules, [(hex, station, lat, lon)])
     let mut sets: Vec<(&str, Vec<String>, Vec<(String, u32, i64, i64)>)> = Vec::new();
     let expect = |o: &GeoOrigin, p: &PositionEstimate| {
         let (lat, lon, _) = o.to_geodetic(p.pos);
         ((lat * 1e7).round() as i64, (lon * 1e7).round() as i64)
     };
-    let fault = |b: Vec<u8>| if mode.faulted() { insert_bit(&b, 48) } else { b };
+    let fault = |b: Vec<u8>| {
+        if mode.faulted() {
+            insert_bit(&b, 48)
+        } else {
+            b
+        }
+    };
     let mut problems = Vec::new();
 
     let mut cams = Vec::new();
@@ -101,7 +131,10 @@ fn etsi_messages(mode: Mode) -> Outcome {
         let origin = origins[(k % 3) as usize];
         let p = position(&mut rng);
         let station = (rng.next() & 0xFFFF_FFFF) as u32;
-        let ts = match timestamp_its(clock, u64::from(k) * 100_000_000 + rng.next() % 1_000_000_000) {
+        let ts = match timestamp_its(
+            clock,
+            u64::from(k) * 100_000_000 + rng.next() % 1_000_000_000,
+        ) {
             Ok(t) => t,
             Err(e) => return Outcome::judge(false, format!("timestamp: {e:?}")),
         };
@@ -121,7 +154,16 @@ fn etsi_messages(mode: Mode) -> Outcome {
             Err(e) => problems.push(format!("CAM {k} does not encode: {e}")),
         }
     }
-    sets.push(("CAM", vec![root.join("cam_ts103900/CAM-PDU-Descriptions.asn").display().to_string(), cdd.display().to_string()], cams));
+    sets.push((
+        "CAM",
+        vec![
+            root.join("cam_ts103900/CAM-PDU-Descriptions.asn")
+                .display()
+                .to_string(),
+            cdd.display().to_string(),
+        ],
+        cams,
+    ));
 
     let mut denms = Vec::new();
     for k in 0..60u32 {
@@ -132,8 +174,19 @@ fn etsi_messages(mode: Mode) -> Outcome {
             Ok(t) => t,
             Err(e) => return Outcome::judge(false, format!("timestamp: {e:?}")),
         };
-        let id = EventId { originating_station_id: station, sequence_number: (rng.next() & 0xFFFF) as u16 };
-        let input = DenmInput::new(id, station, types[(k % 5) as usize], ts, p, origin, causes[(k % 9) as usize]);
+        let id = EventId {
+            originating_station_id: station,
+            sequence_number: (rng.next() & 0xFFFF) as u16,
+        };
+        let input = DenmInput::new(
+            id,
+            station,
+            types[(k % 5) as usize],
+            ts,
+            p,
+            origin,
+            causes[(k % 9) as usize],
+        );
         match build_denm(&input).and_then(|d| encode_denm(&d)) {
             Ok(e) => {
                 let (lat, lon) = expect(&origin, &p);
@@ -142,7 +195,16 @@ fn etsi_messages(mode: Mode) -> Outcome {
             Err(e) => problems.push(format!("DENM {k} does not encode: {e}")),
         }
     }
-    sets.push(("DENM", vec![root.join("denm_ts103831/DENM-PDU-Descriptions.asn").display().to_string(), cdd.display().to_string()], denms));
+    sets.push((
+        "DENM",
+        vec![
+            root.join("denm_ts103831/DENM-PDU-Descriptions.asn")
+                .display()
+                .to_string(),
+            cdd.display().to_string(),
+        ],
+        denms,
+    ));
 
     let mut vams = Vec::new();
     for k in 0..60u32 {
@@ -156,7 +218,11 @@ fn etsi_messages(mode: Mode) -> Outcome {
         };
         let input = VamInput {
             station_id: station,
-            profile: if k % 2 == 0 { VruProfile::Pedestrian } else { VruProfile::Bicyclist },
+            profile: if k % 2 == 0 {
+                VruProfile::Pedestrian
+            } else {
+                VruProfile::Bicyclist
+            },
             position: p,
             origin,
             generation_time: ts,
@@ -171,25 +237,44 @@ fn etsi_messages(mode: Mode) -> Outcome {
             Err(e) => problems.push(format!("VAM {k} does not encode: {e}")),
         }
     }
-    sets.push(("VAM", vec![root.join("vam_ts103300_3/VAM-PDU-Descriptions.asn").display().to_string(), cdd.display().to_string()], vams));
+    sets.push((
+        "VAM",
+        vec![
+            root.join("vam_ts103300_3/VAM-PDU-Descriptions.asn")
+                .display()
+                .to_string(),
+            cdd.display().to_string(),
+        ],
+        vams,
+    ));
 
     let mut summary = Vec::new();
     for (ty, asn, items) in &sets {
         let hexes: Vec<&str> = items.iter().map(|i| i.0.as_str()).collect();
-        let out = match crate::python("etsi_uper.py", &json!({"type": ty, "asn": asn, "items": hexes})) {
+        let out = match crate::python(
+            "etsi_uper.py",
+            &json!({"type": ty, "asn": asn, "items": hexes}),
+        ) {
             Ok(v) => v,
             Err(e) => return Outcome::skip(e),
         };
         let mut bad = 0;
-        for (got, (_, station, lat, lon)) in out["items"].as_array().into_iter().flatten().zip(items) {
+        for (got, (_, station, lat, lon)) in
+            out["items"].as_array().into_iter().flatten().zip(items)
+        {
             let why = if let Some(e) = got.get("error") {
                 Some(format!("{ty}: {e}"))
             } else if got["reencoded_equal"].as_bool() != Some(true) {
                 Some(format!("{ty}: re-encodes differently"))
             } else if got["stationId"].as_u64() != Some(u64::from(*station)) {
                 Some(format!("{ty}: station {} vs {station}", got["stationId"]))
-            } else if (got["latitude"].as_i64().unwrap_or(i64::MAX) - lat).abs() > 1 || (got["longitude"].as_i64().unwrap_or(i64::MAX) - lon).abs() > 1 {
-                Some(format!("{ty}: position {}, {} vs {lat}, {lon}", got["latitude"], got["longitude"]))
+            } else if (got["latitude"].as_i64().unwrap_or(i64::MAX) - lat).abs() > 1
+                || (got["longitude"].as_i64().unwrap_or(i64::MAX) - lon).abs() > 1
+            {
+                Some(format!(
+                    "{ty}: position {}, {} vs {lat}, {lon}",
+                    got["latitude"], got["longitude"]
+                ))
             } else {
                 None
             };
@@ -200,14 +285,22 @@ fn etsi_messages(mode: Mode) -> Outcome {
                 }
             }
         }
-        summary.push(format!("{ty}: {} of {} conform", items.len() - bad, items.len()));
+        summary.push(format!(
+            "{ty}: {} of {} conform",
+            items.len() - bad,
+            items.len()
+        ));
         if bad > 0 && problems.is_empty() {
             problems.push(format!("{ty}: {bad} failed"));
         }
     }
     Outcome::judge(
         problems.is_empty(),
-        if problems.is_empty() { summary.join("; ") } else { format!("{}; first: {}", summary.join("; "), problems.join("; ")) },
+        if problems.is_empty() {
+            summary.join("; ")
+        } else {
+            format!("{}; first: {}", summary.join("; "), problems.join("; "))
+        },
     )
 }
 

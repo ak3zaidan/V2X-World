@@ -42,10 +42,15 @@ struct Args {
 impl Args {
     fn parse() -> Res<Args> {
         let mut it = std::env::args().skip(1);
-        let cmd = it.next().ok_or_else(|| "usage: v2xw-demand <command> [--key value]...".to_string())?;
+        let cmd = it
+            .next()
+            .ok_or_else(|| "usage: v2xw-demand <command> [--key value]...".to_string())?;
         let mut kv = BTreeMap::new();
         while let Some(k) = it.next() {
-            let key = k.strip_prefix("--").ok_or_else(|| format!("unexpected '{k}'"))?.to_string();
+            let key = k
+                .strip_prefix("--")
+                .ok_or_else(|| format!("unexpected '{k}'"))?
+                .to_string();
             let v = it.next().ok_or_else(|| format!("--{key} needs a value"))?;
             kv.insert(key, v);
         }
@@ -62,7 +67,10 @@ impl Args {
 
     fn num(&self, k: &str, default: f64) -> Res<f64> {
         self.get(k)
-            .map(|v| v.parse::<f64>().map_err(|_| format!("--{k} '{v}' is not a number")))
+            .map(|v| {
+                v.parse::<f64>()
+                    .map_err(|_| format!("--{k} '{v}' is not a number"))
+            })
             .transpose()
             .map(|v| v.unwrap_or(default))
     }
@@ -70,13 +78,24 @@ impl Args {
 
 fn hhmm(s: &str) -> Res<f64> {
     let mut p = s.split(':');
-    let h: f64 = p.next().and_then(|x| x.parse().ok()).ok_or_else(|| format!("'{s}' is not HH:MM"))?;
-    let m: f64 = p.next().unwrap_or("0").parse().map_err(|_| format!("'{s}' is not HH:MM"))?;
+    let h: f64 = p
+        .next()
+        .and_then(|x| x.parse().ok())
+        .ok_or_else(|| format!("'{s}' is not HH:MM"))?;
+    let m: f64 = p
+        .next()
+        .unwrap_or("0")
+        .parse()
+        .map_err(|_| format!("'{s}' is not HH:MM"))?;
     Ok(h * 3600.0 + m * 60.0)
 }
 
 fn bbox(s: &str) -> Res<[f64; 4]> {
-    let v: Vec<f64> = s.split(',').map(|x| x.trim().parse::<f64>()).collect::<Result<_, _>>().map_err(|_| format!("'{s}' is not S,W,N,E"))?;
+    let v: Vec<f64> = s
+        .split(',')
+        .map(|x| x.trim().parse::<f64>())
+        .collect::<Result<_, _>>()
+        .map_err(|_| format!("'{s}' is not S,W,N,E"))?;
     if v.len() != 4 {
         return Err(format!("'{s}' is not S,W,N,E"));
     }
@@ -87,7 +106,8 @@ fn world(a: &Args) -> Res<World> {
     if let Some(path) = a.get("scenario") {
         // Exactly the world a run of the scenario builds, so the route file's world hash
         // matches when the run loads it.
-        let sc = v2xw_engine::scenario::Scenario::load_unvalidated(path).map_err(|e| e.to_string())?;
+        let sc =
+            v2xw_engine::scenario::Scenario::load_unvalidated(path).map_err(|e| e.to_string())?;
         return v2xw_engine::wiring::build_world(&sc).map_err(|e| e.to_string());
     }
     match a.get("world") {
@@ -96,16 +116,23 @@ fn world(a: &Args) -> Res<World> {
                 signalised: true,
                 ..v2xw_world::procedural::GridParams::legacy()
             };
-            v2xw_world::procedural::grid(&p, &v2xw_world::ImportOptions::default()).map_err(|e| e.to_string())
+            v2xw_world::procedural::grid(&p, &v2xw_world::ImportOptions::default())
+                .map_err(|e| e.to_string())
         }
-        Some(other) => Err(format!("--world '{other}': give --scenario FILE, or --world grid")),
+        Some(other) => Err(format!(
+            "--world '{other}': give --scenario FILE, or --world grid"
+        )),
     }
 }
 
 fn zones_of(a: &Args) -> Res<ZoneSpec> {
     let z = a.get("zones").unwrap_or("grid:3x3");
-    let g = z.strip_prefix("grid:").ok_or_else(|| "--zones is grid:CxR".to_string())?;
-    let (c, r) = g.split_once('x').ok_or_else(|| "--zones is grid:CxR".to_string())?;
+    let g = z
+        .strip_prefix("grid:")
+        .ok_or_else(|| "--zones is grid:CxR".to_string())?;
+    let (c, r) = g
+        .split_once('x')
+        .ok_or_else(|| "--zones is grid:CxR".to_string())?;
     Ok(ZoneSpec::Grid {
         cols: c.parse().map_err(|_| "bad columns")?,
         rows: r.parse().map_err(|_| "bad rows")?,
@@ -121,7 +148,10 @@ fn loader_of(a: &Args) -> Res<LoaderSpec> {
             alpha: 0.15,
             beta: 4.0,
         },
-        "micro" => LoaderSpec::Micro { step_ms: 100, seed: 1 },
+        "micro" => LoaderSpec::Micro {
+            step_ms: 100,
+            seed: 1,
+        },
         other => return Err(format!("--loader '{other}' is not queue, bpr or micro")),
     })
 }
@@ -131,8 +161,10 @@ fn run() -> Res<()> {
     match a.cmd.as_str() {
         "od2trips" => {
             let w = world(&a)?;
-            let zones = ZoneSet::build(&w, &zones_of(&a)?, ClassMask::CAR).map_err(|e| e.to_string())?;
-            let ms = OdMatrix::load(&PathBuf::from(a.need("matrix")?)).map_err(|e| e.to_string())?;
+            let zones =
+                ZoneSet::build(&w, &zones_of(&a)?, ClassMask::CAR).map_err(|e| e.to_string())?;
+            let ms =
+                OdMatrix::load(&PathBuf::from(a.need("matrix")?)).map_err(|e| e.to_string())?;
             let p = Od2TripsParams {
                 scale: a.num("scale", 1.0)?,
                 run_start_s_of_day: a.get("start").map(hhmm).transpose()?.unwrap_or(0.0),
@@ -145,8 +177,13 @@ fn run() -> Res<()> {
                 t.iter_mut().for_each(|x| x.id += base);
                 trips.extend(t);
             }
-            let set = TripSet::new(world_hash(&w), serde_json::json!({"model": v2xw_demand::od::MODEL_ID, "zones": zones.len()}), trips);
-            set.save(&PathBuf::from(a.need("out")?)).map_err(|e| e.to_string())?;
+            let set = TripSet::new(
+                world_hash(&w),
+                serde_json::json!({"model": v2xw_demand::od::MODEL_ID, "zones": zones.len()}),
+                trips,
+            );
+            set.save(&PathBuf::from(a.need("out")?))
+                .map_err(|e| e.to_string())?;
             println!("{} trips over {} zones", set.trips.len(), zones.len());
         }
         "purposes" => {
@@ -160,8 +197,13 @@ fn run() -> Res<()> {
             )
             .map_err(|e| e.to_string())?;
             let day = a.num("day", 0.0)? as u64;
-            let set = TripSet::new(world_hash(&w), serde_json::json!({"model": v2xw_demand::purpose::MODEL_ID, "day": day}), m.trips_for_day(day));
-            set.save(&PathBuf::from(a.need("out")?)).map_err(|e| e.to_string())?;
+            let set = TripSet::new(
+                world_hash(&w),
+                serde_json::json!({"model": v2xw_demand::purpose::MODEL_ID, "day": day}),
+                m.trips_for_day(day),
+            );
+            set.save(&PathBuf::from(a.need("out")?))
+                .map_err(|e| e.to_string())?;
             println!("{} trips on day {day}", set.trips.len());
         }
         "assign" => {
@@ -186,7 +228,11 @@ fn run() -> Res<()> {
                 gap_tolerance: a.num("gap", 0.02)?,
                 ..AssignParams::default()
             };
-            let warm = a.get("warm").map(|p| RouteFile::load(&PathBuf::from(p))).transpose().map_err(|e| e.to_string())?;
+            let warm = a
+                .get("warm")
+                .map(|p| RouteFile::load(&PathBuf::from(p)))
+                .transpose()
+                .map_err(|e| e.to_string())?;
             let r = Assigner::new(&w, params)
                 .run(&set.trips, warm.as_ref(), |l| {
                     println!(
@@ -200,14 +246,25 @@ fn run() -> Res<()> {
                     );
                 })
                 .map_err(|e| e.to_string())?;
-            r.routes.save(&PathBuf::from(a.need("out")?)).map_err(|e| e.to_string())?;
-            println!("converged: {}  unroutable trips: {}", r.converged, r.unroutable.len());
+            r.routes
+                .save(&PathBuf::from(a.need("out")?))
+                .map_err(|e| e.to_string())?;
+            println!(
+                "converged: {}  unroutable trips: {}",
+                r.converged,
+                r.unroutable.len()
+            );
         }
         "sample" | "check" => {
             let w = world(&a)?;
             let g = LaneGraph::new(&w, ClassMask::CAR);
             let text = std::fs::read_to_string(a.need("counts")?).map_err(|e| e.to_string())?;
-            let placed = counts::place(&w, &g, &counts::parse_counts(&text).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            let placed = counts::place(
+                &w,
+                &g,
+                &counts::parse_counts(&text).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
             let (trips, routes) = if a.cmd == "sample" {
                 let sp = sampler::SamplerParams {
                     method: match a.get("method").unwrap_or("max-entropy") {
@@ -218,7 +275,12 @@ fn run() -> Res<()> {
                 };
                 let cands = sampler::candidates(&g, &placed, &sp);
                 let s = sampler::sample(&g, &placed, &cands, &sp);
-                println!("{} candidate routes, {} trips, uncovered counts {:?}", cands.len(), s.trips.len(), s.uncovered);
+                println!(
+                    "{} candidate routes, {} trips, uncovered counts {:?}",
+                    cands.len(),
+                    s.trips.len(),
+                    s.uncovered
+                );
                 let rf = RouteFile::new(
                     world_hash(&w),
                     serde_json::json!({"model": sampler::MODEL_ID}),
@@ -238,23 +300,42 @@ fn run() -> Res<()> {
                         })
                         .collect(),
                 );
-                rf.save(&PathBuf::from(a.need("out")?)).map_err(|e| e.to_string())?;
+                rf.save(&PathBuf::from(a.need("out")?))
+                    .map_err(|e| e.to_string())?;
                 (s.trips, s.routes)
             } else {
-                let rf = RouteFile::load(&PathBuf::from(a.need("routes")?)).map_err(|e| e.to_string())?;
+                let rf = RouteFile::load(&PathBuf::from(a.need("routes")?))
+                    .map_err(|e| e.to_string())?;
                 let trips: Vec<_> = rf.trips.iter().map(|r| r.trip.clone()).collect();
-                let routes: Vec<_> = rf.trips.iter().map(|r| r.route().and_then(|l| g.nodes_of(l)).unwrap_or_default()).collect();
+                let routes: Vec<_> = rf
+                    .trips
+                    .iter()
+                    .map(|r| r.route().and_then(|l| g.nodes_of(l)).unwrap_or_default())
+                    .collect();
                 (trips, routes)
             };
             // Load the network with the routes and count what passes.
             let last = trips.iter().map(|t| t.depart_s).fold(0.0, f64::max);
             let mut loader = loader_of(&a)?.build();
             let l = loader
-                .load(&w, &g, &trips, &routes, Window { begin_s: 0.0, end_s: last + 3600.0, bin_s: 300.0 })
+                .load(
+                    &w,
+                    &g,
+                    &trips,
+                    &routes,
+                    Window {
+                        begin_s: 0.0,
+                        end_s: last + 3600.0,
+                        bin_s: 300.0,
+                    },
+                )
                 .map_err(|e| e.to_string())?;
             let c = counts::check(&placed, &trips, &routes, &l.times);
             for r in &c.rows {
-                println!("{:<16} t={:>6.0}  observed {:>7.1}  modelled {:>7.1}  GEH {:5.2}", r.id, r.begin_s, r.observed, r.modelled, r.geh);
+                println!(
+                    "{:<16} t={:>6.0}  observed {:>7.1}  modelled {:>7.1}  GEH {:5.2}",
+                    r.id, r.begin_s, r.observed, r.modelled, r.geh
+                );
             }
             println!(
                 "GEH<5 on {:.1}% of counts (TAG M3.1 needs 85%: {}), RMSE {:.1}%, R² {:.3}",
@@ -291,9 +372,16 @@ fn run() -> Res<()> {
             let s = build_schedule(&w, &p, date).map_err(|e| e.to_string())?;
             let mut lines: BTreeMap<String, usize> = BTreeMap::new();
             for t in &s.trips {
-                *lines.entry(format!("{} (type {})", t.route, t.route_type)).or_default() += 1;
+                *lines
+                    .entry(format!("{} (type {})", t.route, t.route_type))
+                    .or_default() += 1;
             }
-            println!("{} vehicle trips, {} stops placed, {} patterns unplaced", s.trips.len(), s.placed_stops, s.unplaced_patterns);
+            println!(
+                "{} vehicle trips, {} stops placed, {} patterns unplaced",
+                s.trips.len(),
+                s.placed_stops,
+                s.unplaced_patterns
+            );
             for (l, n) in lines {
                 println!("  {l:<40} {n:>4} trips");
             }

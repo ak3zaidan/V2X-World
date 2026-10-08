@@ -45,8 +45,8 @@ fn build_umbrella(p: &ProtocolParams) -> Box<dyn ThresholdProtocol> {
     } else {
         p.umbrella_inner
     };
-    let inner = super::build(inner_id, p)
-        .unwrap_or_else(|| Box::new(super::frost::Frost::default()));
+    let inner =
+        super::build(inner_id, p).unwrap_or_else(|| Box::new(super::frost::Frost::default()));
     Box::new(Umbrella {
         inner,
         leaves: p.umbrella_leaves.max(1),

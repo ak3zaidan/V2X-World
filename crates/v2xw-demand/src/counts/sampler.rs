@@ -129,7 +129,10 @@ pub fn candidates(graph: &LaneGraph, counts: &[PlacedCount], p: &SamplerParams) 
     if ends.len() < 2 {
         return Vec::new();
     }
-    let observed: BTreeSet<Node> = counts.iter().flat_map(|c| c.nodes.iter().copied()).collect();
+    let observed: BTreeSet<Node> = counts
+        .iter()
+        .flat_map(|c| c.nodes.iter().copied())
+        .collect();
     let mut seen: BTreeSet<Vec<v2xw_core::ids::EdgeId>> = BTreeSet::new();
     let mut out: Vec<Vec<Node>> = Vec::new();
     let mut search = Search::new(graph);
@@ -252,13 +255,18 @@ pub fn sample(
             }
             offset[r] = first.unwrap_or(0.0);
         }
-        let target: Vec<f64> = members.iter().map(|ci| counts[*ci].count.count.max(0.0).round()).collect();
+        let target: Vec<f64> = members
+            .iter()
+            .map(|ci| counts[*ci].count.count.max(0.0).round())
+            .collect();
         for (k, ci) in members.iter().enumerate() {
             if !inc.iter().any(|x| x.contains(&k)) && target[k] > 0.0 {
                 uncovered.push(counts[*ci].count.id.clone());
             }
         }
-        let used: Vec<usize> = (0..candidates.len()).filter(|r| !inc[*r].is_empty()).collect();
+        let used: Vec<usize> = (0..candidates.len())
+            .filter(|r| !inc[*r].is_empty())
+            .collect();
         let mut n_r = vec![0u64; candidates.len()];
         let mut residual = target.clone();
         let mut weights = vec![1.0; candidates.len()];
@@ -269,7 +277,11 @@ pub fn sample(
             }
             for _ in 0..p.max_sweeps.max(1) {
                 for k in 0..members.len() {
-                    let through: Vec<usize> = used.iter().copied().filter(|r| inc[*r].contains(&k)).collect();
+                    let through: Vec<usize> = used
+                        .iter()
+                        .copied()
+                        .filter(|r| inc[*r].contains(&k))
+                        .collect();
                     let v = math::sum_ordered(through.iter().map(|r| x[*r]));
                     if v > 0.0 {
                         let f = target[k] / v;
@@ -280,7 +292,9 @@ pub fn sample(
                 }
                 let err = (0..members.len())
                     .map(|k| {
-                        let v = math::sum_ordered(used.iter().filter(|r| inc[**r].contains(&k)).map(|r| x[*r]));
+                        let v = math::sum_ordered(
+                            used.iter().filter(|r| inc[**r].contains(&k)).map(|r| x[*r]),
+                        );
                         if inc.iter().any(|i| i.contains(&k)) {
                             (v - target[k]).abs() / target[k].max(1.0)
                         } else {
@@ -420,9 +434,7 @@ pub fn card(p: &SamplerParams) -> ModelCard {
     card.validation = Validation {
         status: ValidationStatus::UnitTested,
         references: Vec::new(),
-        tests: vec![
-            "counts::sampler::tests::sampled_routes_reproduce_the_counts".to_string(),
-        ],
+        tests: vec!["counts::sampler::tests::sampled_routes_reproduce_the_counts".to_string()],
     };
     card
 }

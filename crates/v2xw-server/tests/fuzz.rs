@@ -400,8 +400,13 @@ fn a_seek_before_the_history_computes_the_same_run_again() {
     assert!(reached >= target, "computed again to {reached} ns");
     let mut session = Session::new(ConnectParams::default(), &run.descriptor());
     session.regreet(&run).expect("greet");
-    call_on(&run, Some(&mut session), "run.seek", json!({"t_ns": target}))
-        .expect("a seek the rewind made possible");
+    call_on(
+        &run,
+        Some(&mut session),
+        "run.seek",
+        json!({"t_ns": target}),
+    )
+    .expect("a seek the rewind made possible");
 
     ok(&run, "run.resume", json!({}));
     let second = drive_to_end(&run);

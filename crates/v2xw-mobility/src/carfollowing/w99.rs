@@ -340,8 +340,12 @@ pub fn card(params: &W99Params) -> ModelCard {
             "a_max(v) = CC8 + (CC9 − CC8)·min(v, 80 km/h)/(80 km/h)",
         ),
     ];
-    let names = ["CC0", "CC1", "CC2", "CC3", "CC4", "CC5", "CC6", "CC7", "CC8", "CC9"];
-    let units = ["m", "s", "m", "s", "m/s", "m/s", "1/(m·s)", "m/s²", "m/s²", "m/s²"];
+    let names = [
+        "CC0", "CC1", "CC2", "CC3", "CC4", "CC5", "CC6", "CC7", "CC8", "CC9",
+    ];
+    let units = [
+        "m", "s", "m", "s", "m/s", "m/s", "1/(m·s)", "m/s²", "m/s²", "m/s²",
+    ];
     card.parameters = names
         .iter()
         .zip(units)
@@ -385,7 +389,13 @@ mod tests {
     #[test]
     fn stops_behind_a_standing_leader() {
         for preset in [W99Preset::Vissim, W99Preset::Sumo] {
-            let m = W99::new(W99Params { preset, ..W99Params::default() }, 3);
+            let m = W99::new(
+                W99Params {
+                    preset,
+                    ..W99Params::default()
+                },
+                3,
+            );
             let (min_gap, v) = run_follow(&m, 15.0, 120.0, 0.0, 900);
             assert!(min_gap > 0.0, "{preset:?} collided: {min_gap}");
             assert!(v < 0.3, "{preset:?} still moving at {v}");

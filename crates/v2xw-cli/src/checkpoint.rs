@@ -156,11 +156,10 @@ impl Checkpoint {
     /// [`CliError::Io`] if it cannot be read, [`CliError::BadArgument`] if it is not one.
     pub fn read(path: &Path) -> Result<Checkpoint> {
         let bytes = std::fs::read(path).map_err(|e| CliError::io("cannot read", path, e))?;
-        let ck: Checkpoint =
-            serde_json::from_slice(&bytes).map_err(|e| CliError::BadArgument {
-                flag: "checkpoint",
-                problem: format!("{} is not a v2xw checkpoint: {e}", path.display()),
-            })?;
+        let ck: Checkpoint = serde_json::from_slice(&bytes).map_err(|e| CliError::BadArgument {
+            flag: "checkpoint",
+            problem: format!("{} is not a v2xw checkpoint: {e}", path.display()),
+        })?;
         if ck.format != FORMAT {
             return Err(CliError::BadArgument {
                 flag: "checkpoint",
@@ -293,7 +292,8 @@ impl Sink {
             let s = w.finish()?;
             self.totals.message_count += s.message_count;
             self.totals.chunk_count += s.chunk_count;
-            self.totals.largest_chunk_bytes = self.totals.largest_chunk_bytes.max(s.largest_chunk_bytes);
+            self.totals.largest_chunk_bytes =
+                self.totals.largest_chunk_bytes.max(s.largest_chunk_bytes);
         }
         Ok(())
     }
@@ -326,9 +326,9 @@ impl Sink {
     /// Segments finished so far.
     #[must_use]
     pub fn segments_done(&self) -> u32 {
-        self.segmented
-            .as_ref()
-            .map_or(0, |s| s.next.saturating_sub(u32::from(self.writer.is_some())))
+        self.segmented.as_ref().map_or(0, |s| {
+            s.next.saturating_sub(u32::from(self.writer.is_some()))
+        })
     }
 
     /// The bytes on disk of what this sink has written, for a progress line.
@@ -356,7 +356,9 @@ impl Sink {
         let files = if let Some(p) = self.single_path.take() {
             vec![p]
         } else if let Some(seg) = self.segmented.as_ref() {
-            (0..seg.next).map(|i| seg.dir.join(segment_name(i))).collect()
+            (0..seg.next)
+                .map(|i| seg.dir.join(segment_name(i)))
+                .collect()
         } else {
             Vec::new()
         };

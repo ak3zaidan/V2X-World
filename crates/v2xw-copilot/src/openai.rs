@@ -614,9 +614,17 @@ mod tests {
             HttpResponse::new(200, one_tool_call_reply()),
         ]);
         let mut provider = OpenAi::new(post, Secret::new("sk-secret"));
-        provider.complete(&ChatRequest::default()).expect("the retry succeeds");
-        provider.complete(&ChatRequest::default()).expect("the second request succeeds");
-        assert_eq!(provider.http.calls(), 3, "the second request was refused and retried");
+        provider
+            .complete(&ChatRequest::default())
+            .expect("the retry succeeds");
+        provider
+            .complete(&ChatRequest::default())
+            .expect("the second request succeeds");
+        assert_eq!(
+            provider.http.calls(),
+            3,
+            "the second request was refused and retried"
+        );
         assert!(!provider.http.seen[2].body.contains("temperature"));
     }
 
@@ -637,16 +645,31 @@ mod tests {
             HttpResponse::new(200, responses_reply()),
             HttpResponse::new(200, responses_reply()),
         ]);
-        let mut provider =
-            OpenAi::new(post, Secret::new("sk-test-not-a-key")).with_temperature(None).with_model("gpt-6.1-sol");
-        let c = provider.complete(&ChatRequest::default()).expect("the retry succeeds");
+        let mut provider = OpenAi::new(post, Secret::new("sk-test-not-a-key"))
+            .with_temperature(None)
+            .with_model("gpt-6.1-sol");
+        let c = provider
+            .complete(&ChatRequest::default())
+            .expect("the retry succeeds");
         assert_eq!(c.message.tool_calls[0].name, "simulate");
-        provider.complete(&ChatRequest::default()).expect("the next request succeeds");
-        assert_eq!(provider.http.calls(), 3, "the second request went straight to /v1/responses");
+        provider
+            .complete(&ChatRequest::default())
+            .expect("the next request succeeds");
+        assert_eq!(
+            provider.http.calls(),
+            3,
+            "the second request went straight to /v1/responses"
+        );
         assert_eq!(provider.api(), Api::Responses);
         assert_eq!(provider.http.seen[0].url, DEFAULT_URL);
-        assert_eq!(provider.http.seen[1].url, "https://api.openai.com/v1/responses");
-        assert_eq!(provider.http.seen[2].url, "https://api.openai.com/v1/responses");
+        assert_eq!(
+            provider.http.seen[1].url,
+            "https://api.openai.com/v1/responses"
+        );
+        assert_eq!(
+            provider.http.seen[2].url,
+            "https://api.openai.com/v1/responses"
+        );
         assert!(provider.http.seen[2].body.contains("\"input\""));
         assert_eq!(provider.last_usage().map(|u| u.input_tokens), Some(10));
     }
@@ -658,9 +681,16 @@ mod tests {
             HttpResponse::new(400, refusal),
             HttpResponse::new(200, one_tool_call_reply()),
         ]);
-        let mut provider = OpenAi::new(post, Secret::new("sk-test-not-a-key")).with_temperature(None);
-        provider.complete(&ChatRequest::default()).expect("the retry succeeds");
-        assert!(provider.http.seen[1].body.contains("\"reasoning_effort\":\"none\""));
+        let mut provider =
+            OpenAi::new(post, Secret::new("sk-test-not-a-key")).with_temperature(None);
+        provider
+            .complete(&ChatRequest::default())
+            .expect("the retry succeeds");
+        assert!(
+            provider.http.seen[1]
+                .body
+                .contains("\"reasoning_effort\":\"none\"")
+        );
         assert_eq!(provider.api(), Api::Chat);
     }
 
@@ -686,11 +716,17 @@ mod tests {
         ]);
         let mut provider = OpenAi::new(post, Secret::new("sk-secret"));
         provider.pause_s = 0;
-        provider.complete(&ChatRequest::default()).expect("the retry succeeds");
+        provider
+            .complete(&ChatRequest::default())
+            .expect("the retry succeeds");
         assert_eq!(provider.http.calls(), 2);
         assert_eq!(
             provider.last_usage(),
-            Some(Usage { input_tokens: 1200, cached_input_tokens: 1024, output_tokens: 80 })
+            Some(Usage {
+                input_tokens: 1200,
+                cached_input_tokens: 1024,
+                output_tokens: 80
+            })
         );
     }
 
@@ -700,10 +736,14 @@ mod tests {
             HttpResponse::new(200, one_tool_call_reply()),
             HttpResponse::new(200, one_tool_call_reply()),
         ]);
-        let mut provider =
-            OpenAi::new(post, Secret::new("sk-test-not-a-key")).with_reasoning_effort(Some("low".into()));
+        let mut provider = OpenAi::new(post, Secret::new("sk-test-not-a-key"))
+            .with_reasoning_effort(Some("low".into()));
         provider.complete(&ChatRequest::default()).expect("decodes");
-        assert!(provider.http.seen[0].body.contains("\"reasoning_effort\":\"low\""));
+        assert!(
+            provider.http.seen[0]
+                .body
+                .contains("\"reasoning_effort\":\"low\"")
+        );
         provider = provider.with_reasoning_effort(None);
         provider.complete(&ChatRequest::default()).expect("decodes");
         assert!(!provider.http.seen[1].body.contains("reasoning_effort"));

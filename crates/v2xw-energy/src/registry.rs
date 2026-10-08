@@ -54,7 +54,9 @@ pub fn ev_model(name: &str, params: &BTreeMap<String, f64>) -> Result<BoxedEv, S
     match canonical(name, &EV_MODELS) {
         Some(KURCZVEIL_ID) => Ok(Box::new(Kurczveil::new(params)?)),
         Some(VT_CPEM_ID) => Ok(Box::new(VtCpem::new(params)?)),
-        _ => Err(format!("no EV energy model {name:?}; this build has {EV_MODELS:?}")),
+        _ => Err(format!(
+            "no EV energy model {name:?}; this build has {EV_MODELS:?}"
+        )),
     }
 }
 

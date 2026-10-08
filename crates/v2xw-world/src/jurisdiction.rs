@@ -177,7 +177,10 @@ mod tests {
         for p in HighwayPreset::ALL {
             let wire = serde_json::to_string(&p).expect("serialises");
             assert_eq!(wire, format!("\"{}\"", p.label()), "{p:?}");
-            assert_eq!(serde_json::from_str::<HighwayPreset>(&wire).expect("parses"), p);
+            assert_eq!(
+                serde_json::from_str::<HighwayPreset>(&wire).expect("parses"),
+                p
+            );
             assert_eq!(HighwayPreset::parse(p.label()), Some(p));
         }
         for j in US_JURISDICTIONS {

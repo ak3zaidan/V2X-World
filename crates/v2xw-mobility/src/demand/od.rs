@@ -167,7 +167,11 @@ impl OdModel {
             .collect();
         let usable = if params.connected_only {
             let core = largest_car_component(world);
-            let kept: Vec<LaneId> = usable.iter().copied().filter(|l| core.contains(l)).collect();
+            let kept: Vec<LaneId> = usable
+                .iter()
+                .copied()
+                .filter(|l| core.contains(l))
+                .collect();
             if kept.is_empty() { usable } else { kept }
         } else {
             usable
@@ -359,9 +363,7 @@ fn largest_car_component(world: &World) -> BTreeSet<LaneId> {
     let n = lanes.len();
     let car = |l: LaneId| {
         let lane = world.lane(l);
-        lane.kind != LaneKind::Internal
-            && lane.kind.is_motorised()
-            && lane.admits(ClassMask::CAR)
+        lane.kind != LaneKind::Internal && lane.kind.is_motorised() && lane.admits(ClassMask::CAR)
     };
     let mut fwd: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut rev: Vec<Vec<usize>> = vec![Vec::new(); n];

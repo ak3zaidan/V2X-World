@@ -160,7 +160,8 @@ impl Sl2015 {
             ..*ego
         };
         neighbours.iter().all(|n| {
-            let alongside = n.gap_m.abs() < 0.5 && n.gap_m > -(n.view.dims.length_m + ego.dims.length_m);
+            let alongside =
+                n.gap_m.abs() < 0.5 && n.gap_m > -(n.view.dims.length_m + ego.dims.length_m);
             if !alongside {
                 return true;
             }
@@ -300,7 +301,12 @@ pub fn card(p: &Sl2015Params) -> ModelCard {
         Equation::new("motion", "|dc/dt| ≤ maxSpeedLat"),
     ];
     card.parameters = vec![
-        Parameter::new("resolution", "m", serde_json::json!(p.resolution_m), sumo.clone()),
+        Parameter::new(
+            "resolution",
+            "m",
+            serde_json::json!(p.resolution_m),
+            sumo.clone(),
+        ),
         Parameter::new(
             "max_speed_lat",
             "m/s",
@@ -399,7 +405,10 @@ mod tests {
         v.class = VehicleClass::Bicycle;
         v.dims = Dims::new(1.6, 0.65, 1.7);
         v.lateral_m = lat;
-        LateralNeighbor { view: v, gap_m: gap }
+        LateralNeighbor {
+            view: v,
+            gap_m: gap,
+        }
     }
 
     #[test]
@@ -412,8 +421,14 @@ mod tests {
         // Half free width (4.6 − 1.8)/2 = 1.4: the car shifts left so the clearance to
         // the cyclist reaches three feet.
         assert!(d.target_m > 0.0, "{d:?}");
-        let at = VehicleView { lateral_m: d.target_m, ..car };
-        assert!(!m.filter().is_leader(&at, &cyclist(-1.9, 20.0).view), "{d:?}");
+        let at = VehicleView {
+            lateral_m: d.target_m,
+            ..car
+        };
+        assert!(
+            !m.filter().is_leader(&at, &cyclist(-1.9, 20.0).view),
+            "{d:?}"
+        );
     }
 
     #[test]

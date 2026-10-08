@@ -60,7 +60,8 @@ fn sumo_drives_the_route_file_over_traci() {
     let mut sumo = v2xw_interop::sumo::SumoMobility::new(cfg, SumoIds::new(&world));
     let rng = RngRegistry::new(1);
     let mut ctx = MobilityCtx::new(0, &world, &rng);
-    sumo.init(&mut ctx, Box::new(v2xw_mobility::NoDemand::new())).unwrap();
+    sumo.init(&mut ctx, Box::new(v2xw_mobility::NoDemand::new()))
+        .unwrap();
     let mut spawned = 0;
     let mut t = 0;
     let mut last = None;
@@ -77,7 +78,10 @@ fn sumo_drives_the_route_file_over_traci() {
     let u = last.unwrap();
     // Every published vehicle is inside the world's box.
     for (_, k) in &u.states {
-        assert!(k.pos.x > -50.0 && k.pos.y > -50.0 && k.pos.x < 500.0 && k.pos.y < 500.0, "{k:?}");
+        assert!(
+            k.pos.x > -50.0 && k.pos.y > -50.0 && k.pos.x < 500.0 && k.pos.y < 500.0,
+            "{k:?}"
+        );
     }
     assert!(u.states.iter().any(|(_, k)| k.lane.is_some()));
     assert!(u.states.iter().any(|(_, k)| k.vel.x.hypot(k.vel.y) > 3.0));

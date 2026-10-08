@@ -105,8 +105,16 @@ impl Engine {
         let area = Area::circle(o.pos.x, o.pos.y, g.area_radius_m);
         let mib = GnMib {
             default_hop_limit: g.hop_limit.clamp(1, 255) as u8,
-            area_forwarding: if g.area_forwarding == "simple" { AreaForwarding::Simple } else { AreaForwarding::Cbf },
-            non_area_forwarding: if g.non_area_forwarding == "cbf" { NonAreaForwarding::Cbf } else { NonAreaForwarding::Greedy },
+            area_forwarding: if g.area_forwarding == "simple" {
+                AreaForwarding::Simple
+            } else {
+                AreaForwarding::Cbf
+            },
+            non_area_forwarding: if g.non_area_forwarding == "cbf" {
+                NonAreaForwarding::Cbf
+            } else {
+                NonAreaForwarding::Greedy
+            },
             ..GnMib::default()
         };
         let variant = match g.cbf_variant.as_str() {
@@ -124,7 +132,11 @@ impl Engine {
             den: DenParams {
                 repetition_interval_ms: g.repetition_interval_ms,
                 repetition_duration_ms: g.repetition_duration_ms,
-                transmission_interval_ms: if g.keep_alive_forwarding { g.repetition_interval_ms.max(1_000) } else { 0 },
+                transmission_interval_ms: if g.keep_alive_forwarding {
+                    g.repetition_interval_ms.max(1_000)
+                } else {
+                    0
+                },
                 kaf: g.keep_alive_forwarding,
                 ..DenParams::default()
             },
@@ -135,7 +147,17 @@ impl Engine {
         };
         let medium = UnitDisk { range_m: g.range_m };
         let vehicles = nodes.len() as u64;
-        let rep = DisseminationRun::new(cfg, &medium, nodes, vec![Hazard { at_ms: WARMUP_MS, node: origin, area }]).run();
+        let rep = DisseminationRun::new(
+            cfg,
+            &medium,
+            nodes,
+            vec![Hazard {
+                at_ms: WARMUP_MS,
+                node: origin,
+                area,
+            }],
+        )
+        .run();
         let a = rep.actions.first()?;
         let w = GeonetWarning {
             at: now,
@@ -143,7 +165,11 @@ impl Engine {
             vehicles,
             in_area: a.targets,
             reached: a.reached,
-            reach_permille: if a.targets == 0 { 1_000 } else { a.reached * 1_000 / a.targets },
+            reach_permille: if a.targets == 0 {
+                1_000
+            } else {
+                a.reached * 1_000 / a.targets
+            },
             transmissions: a.transmissions,
             forwarded: a.forwarded,
             kept_alive: a.kaf,

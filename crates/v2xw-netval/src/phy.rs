@@ -181,7 +181,10 @@ fn friis(mode: Mode) -> Outcome {
             worst = worst.max((model - reference).abs());
         }
     }
-    Outcome::judge(worst < 1e-9, format!("max |error| {worst:.3e} dB over 36 points"))
+    Outcome::judge(
+        worst < 1e-9,
+        format!("max |error| {worst:.3e} dB over 36 points"),
+    )
 }
 
 fn two_ray(mode: Mode) -> Outcome {
@@ -233,7 +236,10 @@ fn tr37885_pathloss(mode: Mode) -> Outcome {
         && prop::tr37885_sigma_db(Tr37885State::Nlos) == 4.0;
     Outcome::judge(
         worst < 1e-9 && sigma_ok,
-        format!("max |error| {worst:.3e} dB over 18 points; σ table {}", if sigma_ok { "matches" } else { "differs" }),
+        format!(
+            "max |error| {worst:.3e} dB over 18 points; σ table {}",
+            if sigma_ok { "matches" } else { "differs" }
+        ),
     )
 }
 
@@ -257,7 +263,10 @@ fn tr37885_plos(mode: Mode) -> Outcome {
             .max((ur_model - ur).abs());
         d += 2.5;
     }
-    Outcome::judge(worst < 1e-12, format!("max |error| {worst:.3e} over 481 distances"))
+    Outcome::judge(
+        worst < 1e-12,
+        format!("max |error| {worst:.3e} over 481 distances"),
+    )
 }
 
 fn nlosv(mode: Mode) -> Outcome {
@@ -267,7 +276,11 @@ fn nlosv(mode: Mode) -> Outcome {
         let model_ramp = |case: NlosvCase| {
             let m = case.mean_db(d);
             if mode.faulted() && case != NlosvCase::MinAntennaAboveBlocker {
-                let base = if case == NlosvCase::MaxAntennaBelowBlocker { 9.0 } else { 5.0 };
+                let base = if case == NlosvCase::MaxAntennaBelowBlocker {
+                    9.0
+                } else {
+                    5.0
+                };
                 base + (15.0 * log10(d) - 14.0).max(0.0)
             } else {
                 m
@@ -286,7 +299,11 @@ fn nlosv(mode: Mode) -> Outcome {
         && NlosvCase::classify(1.5, 3.5, 3.0) == NlosvCase::Between;
     Outcome::judge(
         worst < 1e-9 && sig && classify,
-        format!("max |mean error| {worst:.3e} dB; σ {}; case classification {}", if sig { "ok" } else { "wrong" }, if classify { "ok" } else { "wrong" }),
+        format!(
+            "max |mean error| {worst:.3e} dB; σ {}; case classification {}",
+            if sig { "ok" } else { "wrong" },
+            if classify { "ok" } else { "wrong" }
+        ),
     )
 }
 
@@ -298,13 +315,18 @@ fn nakagami(mode: Mode) -> Outcome {
         (NakagamiPreset::FixedMedium, 3.0),
         (NakagamiPreset::FixedLow, 5.0),
     ] {
-        let built = if mode.faulted() && m == 3.0 { NakagamiPreset::FixedSevere } else { preset };
+        let built = if mode.faulted() && m == 3.0 {
+            NakagamiPreset::FixedSevere
+        } else {
+            preset
+        };
         let mut model = NakagamiFading::new(built);
         let mut ctx = TestCtx::new(0x6e61_6b61);
         let link = LinkKey(NodeId::new(1), NodeId::new(2));
         let gains: Vec<f64> = (0..n)
             .map(|i| {
-                let db = Fading::sample_db(&mut model, &mut ctx, link, 50.0, 1_000 + i as u64 * 100_000);
+                let db =
+                    Fading::sample_db(&mut model, &mut ctx, link, 50.0, 1_000 + i as u64 * 100_000);
                 math::pow(10.0, db / 10.0)
             })
             .collect();
@@ -313,7 +335,10 @@ fn nakagami(mode: Mode) -> Outcome {
         let mean = stats::mean(&gains);
         let se = (1.0 / m).sqrt() / (n as f64).sqrt();
         let ok = p > 1e-3 && (mean - 1.0).abs() < 4.0 * se;
-        parts.push((ok, format!("m={m}: KS D={d:.4} p={p:.3}, mean gain {mean:.4}")));
+        parts.push((
+            ok,
+            format!("m={m}: KS D={d:.4} p={p:.3}, mean gain {mean:.4}"),
+        ));
     }
     Outcome::all(parts)
 }
@@ -360,7 +385,9 @@ fn shadowing(mode: Mode) -> Outcome {
     let expected = math::exp(-5.0 / d_corr);
     Outcome::judge(
         p > 1e-3 && (rho - expected).abs() < 0.02,
-        format!("marginal KS D={d:.4} p={p:.3} (σ {sigma} dB); lag-5 m correlation {rho:.4} against {expected:.4}"),
+        format!(
+            "marginal KS D={d:.4} p={p:.3} (σ {sigma} dB); lag-5 m correlation {rho:.4} against {expected:.4}"
+        ),
     )
 }
 
@@ -399,7 +426,9 @@ fn knife_edge(mode: Mode) -> Outcome {
     let j0 = knife_edge_loss_exact_db(0.0);
     Outcome::judge(
         worst_approx < 1e-9 && worst_exact < 0.01,
-        format!("Eq. 31 max |error| {worst_approx:.2e} dB; exact max |error| {worst_exact:.4} dB; J(0) = {j0:.4} dB"),
+        format!(
+            "Eq. 31 max |error| {worst_approx:.2e} dB; exact max |error| {worst_exact:.4} dB; J(0) = {j0:.4} dB"
+        ),
     )
 }
 
@@ -416,7 +445,10 @@ fn noise_floor(mode: Mode) -> Outcome {
     let sl_err = (cv2x::THERMAL_NOISE_DBM_PER_HZ - kt).abs();
     Outcome::judge(
         (model - reference).abs() < 0.05 && sl_err < 1e-6 && cv2x::UE_NOISE_FIGURE_DB == 9.0,
-        format!("802.11p floor {model:.3} dBm vs kTB+NF {reference:.3} dBm; sidelink kT {:.6} vs {kt:.6} dBm/Hz", cv2x::THERMAL_NOISE_DBM_PER_HZ),
+        format!(
+            "802.11p floor {model:.3} dBm vs kTB+NF {reference:.3} dBm; sidelink kT {:.6} vs {kt:.6} dBm/Hz",
+            cv2x::THERMAL_NOISE_DBM_PER_HZ
+        ),
     )
 }
 
@@ -425,7 +457,11 @@ fn sensitivity(mode: Mode) -> Outcome {
     let ieee = [-85.0, -84.0, -82.0, -80.0, -77.0, -73.0, -69.0, -68.0];
     let mut mismatches = Vec::new();
     for (i, mcs) in Mcs::ALL.iter().enumerate() {
-        let model = if mode.faulted() { ieee[i] } else { mcs.sensitivity_static_dbm() };
+        let model = if mode.faulted() {
+            ieee[i]
+        } else {
+            mcs.sensitivity_static_dbm()
+        };
         if model != etsi[i] {
             mismatches.push(format!("{}: {model} vs {}", mcs.label(), etsi[i]));
         }
@@ -452,17 +488,22 @@ fn airtime(mode: Mode) -> Outcome {
         for len in 1..=2_304u32 {
             n += 1;
             let tail = if mode.faulted() { 0 } else { 6 };
-            let symbols = (16 + 8 * u64::from(len) + 6).div_ceil(u64::from(mcs.data_bits_per_symbol()));
+            let symbols =
+                (16 + 8 * u64::from(len) + 6).div_ceil(u64::from(mcs.data_bits_per_symbol()));
             let reference_ns = (32 + 8 + 8 * symbols) * 1_000;
             let model_ns = if mode.faulted() {
-                let s = (16 + 8 * u64::from(len) + tail).div_ceil(u64::from(mcs.data_bits_per_symbol()));
+                let s = (16 + 8 * u64::from(len) + tail)
+                    .div_ceil(u64::from(mcs.data_bits_per_symbol()));
                 (32 + 8 + 8 * s) * 1_000
             } else {
                 air_time(len, mcs).as_nanos()
             };
             if model_ns != reference_ns {
                 wrong += 1;
-                first.get_or_insert(format!("{} {len} B: {model_ns} ns vs {reference_ns} ns", mcs.label()));
+                first.get_or_insert(format!(
+                    "{} {len} B: {model_ns} ns vs {reference_ns} ns",
+                    mcs.label()
+                ));
             }
         }
     }
@@ -488,14 +529,27 @@ fn link_budget(mode: Mode) -> Outcome {
         let tx = endpoint(0, 0.0, 0.0);
         let rx = endpoint(1, d, 0.0);
         let budget = v2xw_radio::budget::evaluate(
-            &mut ctx, &mut propagation, &mut [], &mut fading, &tx, &rx, 5.9e9, &los, &w, 20.0, 0,
+            &mut ctx,
+            &mut propagation,
+            &mut [],
+            &mut fading,
+            &tx,
+            &rx,
+            5.9e9,
+            &los,
+            &w,
+            20.0,
+            0,
         );
         let fspl = 20.0 * log10(4.0 * core::f64::consts::PI * d * 5.9e9 / C);
         let reference = 20.0 + tx.gain_dbi + rx.gain_dbi - fspl;
         let model = budget.rx_power_dbm + if mode.faulted() { rx.gain_dbi } else { 0.0 };
         worst = worst.max((model - reference).abs());
     }
-    Outcome::judge(worst < 1e-9, format!("max |error| {worst:.3e} dB over 4 links (Pt 20 dBm, 3 dBi each end)"))
+    Outcome::judge(
+        worst < 1e-9,
+        format!("max |error| {worst:.3e} dB over 4 links (Pt 20 dBm, 3 dBi each end)"),
+    )
 }
 
 fn rain(mode: Mode) -> Outcome {
@@ -515,7 +569,10 @@ fn rain(mode: Mode) -> Outcome {
         };
         let (k, a) = prop::p838_coefficients(6e9, asked);
         let ok = crate::rel(k, k_t) < 5e-4 && (a - a_t).abs() < 5e-4;
-        parts.push((ok, format!("{pol:?}: k {k:.7} (table {k_t}), α {a:.4} (table {a_t})")));
+        parts.push((
+            ok,
+            format!("{pol:?}: k {k:.7} (table {k_t}), α {a:.4} (table {a_t})"),
+        ));
     }
     Outcome::all(parts)
 }

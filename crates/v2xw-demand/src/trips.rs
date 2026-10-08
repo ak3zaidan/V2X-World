@@ -87,7 +87,8 @@ impl TripSet {
     /// # Errors
     /// I/O errors.
     pub fn save(&self, path: &std::path::Path) -> Result<()> {
-        let text = serde_json::to_string(self).map_err(|e| DemandError::parse(path, e.to_string()))?;
+        let text =
+            serde_json::to_string(self).map_err(|e| DemandError::parse(path, e.to_string()))?;
         std::fs::write(path, text).map_err(|e| DemandError::io(path, e))
     }
 
@@ -107,7 +108,11 @@ pub fn sort_trips(trips: &mut [Trip]) {
 
 /// The world's content hash, hex: what route and trip files record.
 pub fn world_hash(world: &v2xw_world::World) -> String {
-    world.content_hash.iter().map(|b| format!("{b:02x}")).collect()
+    world
+        .content_hash
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Checks a recorded world hash against `world`. An empty recorded hash is accepted (a

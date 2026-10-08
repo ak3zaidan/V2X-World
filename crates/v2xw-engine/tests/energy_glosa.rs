@@ -60,7 +60,10 @@ struct Outcome {
 }
 
 fn totals_of(p: &EnergyProvider) -> BTreeMap<ActorId, Totals> {
-    p.vehicles().into_iter().map(|v| (v.actor, v.totals)).collect()
+    p.vehicles()
+        .into_iter()
+        .map(|v| (v.actor, v.totals))
+        .collect()
 }
 
 /// A signalised arterial as the published single-route evaluations build one: a 7 × 3
@@ -265,8 +268,18 @@ fn glosa_reduces_stops_on_an_arterial_without_costing_fuel() {
         c.off.2,
         c.on.2
     );
-    assert!(c.on.0 <= c.off.0, "HBEFA 3 fuel rose: {} -> {}", c.off.0, c.on.0);
-    assert!(c.phem.1 <= c.phem.0, "PHEMlight fuel rose: {} -> {}", c.phem.0, c.phem.1);
+    assert!(
+        c.on.0 <= c.off.0,
+        "HBEFA 3 fuel rose: {} -> {}",
+        c.off.0,
+        c.on.0
+    );
+    assert!(
+        c.phem.1 <= c.phem.0,
+        "PHEMlight fuel rose: {} -> {}",
+        c.phem.0,
+        c.phem.1
+    );
 }
 
 /// A measurement, not a check: GLOSA's effect across demand. Run it with

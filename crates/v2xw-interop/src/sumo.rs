@@ -172,9 +172,8 @@ pub fn card() -> ModelCard {
          connectors; their lane position is left empty there."
             .to_string(),
     );
-    c.limitations.push(
-        "Pedestrians and SUMO's own persons are not read.".to_string(),
-    );
+    c.limitations
+        .push("Pedestrians and SUMO's own persons are not read.".to_string());
     c
 }
 
@@ -188,7 +187,9 @@ impl SumoMobility {
             conn: None,
             ids,
             demand: None,
-            router: Dijkstra::new(DijkstraParams::for_classes(VehicleClass::Passenger.class_mask())),
+            router: Dijkstra::new(DijkstraParams::for_classes(
+                VehicleClass::Passenger.class_mask(),
+            )),
             tracked: BTreeMap::new(),
             by_actor: BTreeMap::new(),
             kin: BTreeMap::new(),
@@ -217,7 +218,12 @@ impl SumoMobility {
             self.cfg.port
         };
         let mut c = Command::new(&self.cfg.sumo_binary);
-        if let Some(home) = self.cfg.sumo_binary.parent().and_then(std::path::Path::parent) {
+        if let Some(home) = self
+            .cfg
+            .sumo_binary
+            .parent()
+            .and_then(std::path::Path::parent)
+        {
             c.env("SUMO_HOME", home);
         }
         c.arg("-n").arg(&self.cfg.net_file);
@@ -253,7 +259,9 @@ impl SumoMobility {
             .map_err(|e| format!("{}: {e}", self.cfg.sumo_binary.display()))?;
         self.child = Some(child);
         let conn = Traci::connect(port, std::time::Duration::from_secs(30)).map_err(|e| {
-            format!("could not connect to SUMO on port {port} (did it exit? its errors are above): {e}")
+            format!(
+                "could not connect to SUMO on port {port} (did it exit? its errors are above): {e}"
+            )
         })?;
         self.conn = Some(conn);
         Ok(())
@@ -272,16 +280,27 @@ impl SumoMobility {
         for trip in &trips {
             let lanes = demand
                 .planned_route(world, trip)
-                .filter(|r| v2xw_mobility::demand::hooks::planned_route_is_drivable(world, trip.class, r, false))
+                .filter(|r| {
+                    v2xw_mobility::demand::hooks::planned_route_is_drivable(
+                        world, trip.class, r, false,
+                    )
+                })
                 .or_else(|| crate::route_trip(world, trip));
-            let edges = lanes.map(|l| self.ids.edges_of_route(world, &l)).unwrap_or_default();
+            let edges = lanes
+                .map(|l| self.ids.edges_of_route(world, &l))
+                .unwrap_or_default();
             if edges.is_empty() {
                 self.counters.refused += 1;
                 continue;
             }
             let rid = format!("v2xw_r{}", trip.seq);
             let vid = format!("v2xw_{}", trip.seq);
-            sets.push((cmd::SET_ROUTE, var::ADD, rid.clone(), Content::new().str_list(&edges)));
+            sets.push((
+                cmd::SET_ROUTE,
+                var::ADD,
+                rid.clone(),
+                Content::new().str_list(&edges),
+            ));
             let vtype = if trip.class == VehicleClass::Bicycle {
                 "DEFAULT_BIKETYPE"
             } else {
@@ -312,7 +331,9 @@ impl SumoMobility {
                 Content::new().double(trip.desired_speed_mps),
             ));
         }
-        let Some(conn) = self.conn.as_mut() else { return };
+        let Some(conn) = self.conn.as_mut() else {
+            return;
+        };
         match conn.set_batch(&sets) {
             Ok(results) => {
                 // Three commands per trip; a trip counts as inserted when its add held.
@@ -338,16 +359,34 @@ impl SumoMobility {
             other => return Err(format!("vehicle id list: {other:?}")),
         };
         present.sort();
-        let new: Vec<&String> = present.iter().filter(|v| !self.tracked.contains_key(*v)).collect();
+        let new: Vec<&String> = present
+            .iter()
+            .filter(|v| !self.tracked.contains_key(*v))
+            .collect();
         let mut gets = Vec::with_capacity(present.len() * 6 + new.len() * 3);
         for v in &new {
             for vr in [var::LENGTH, var::WIDTH, var::VEHICLECLASS] {
-                gets.push(Get { cmd: cmd::GET_VEHICLE, var: vr, object: (*v).clone() });
+                gets.push(Get {
+                    cmd: cmd::GET_VEHICLE,
+                    var: vr,
+                    object: (*v).clone(),
+                });
             }
         }
         for v in &present {
-            for vr in [var::POSITION, var::SPEED, var::ANGLE, var::ACCELERATION, var::LANE_ID, var::LANEPOSITION] {
-                gets.push(Get { cmd: cmd::GET_VEHICLE, var: vr, object: v.clone() });
+            for vr in [
+                var::POSITION,
+                var::SPEED,
+                var::ANGLE,
+                var::ACCELERATION,
+                var::LANE_ID,
+                var::LANEPOSITION,
+            ] {
+                gets.push(Get {
+                    cmd: cmd::GET_VEHICLE,
+                    var: vr,
+                    object: v.clone(),
+                });
             }
         }
         let values = conn.get_batch(&gets).map_err(|e| e.to_string())?;
@@ -359,12 +398,23 @@ impl SumoMobility {
             let width = values[k + 1].f().unwrap_or(1.8);
             let class = values[k + 2]
                 .s()
-                .and_then(|c| serde_json::from_value::<VehicleClass>(serde_json::Value::String(c.to_string())).ok())
+                .and_then(|c| {
+                    serde_json::from_value::<VehicleClass>(serde_json::Value::String(c.to_string()))
+                        .ok()
+                })
                 .unwrap_or_default();
             k += 3;
             let id = ActorId::new(self.next_actor);
             self.next_actor += 1;
-            self.tracked.insert((*v).clone(), Tracked { id, length_m: length, width_m: width, heading: f64::NAN });
+            self.tracked.insert(
+                (*v).clone(),
+                Tracked {
+                    id,
+                    length_m: length,
+                    width_m: width,
+                    heading: f64::NAN,
+                },
+            );
             self.by_actor.insert(id, (*v).clone());
             new_classes.insert(id, class);
         }
@@ -390,9 +440,13 @@ impl SumoMobility {
             let lane = values[k + 4].s().unwrap_or("").to_string();
             let lane_pos = values[k + 5].f().unwrap_or(0.0);
             k += 6;
-            let Some(tr) = self.tracked.get_mut(v) else { continue };
+            let Some(tr) = self.tracked.get_mut(v) else {
+                continue;
+            };
             let (fx, fy) = match pos {
-                crate::traci::Value::Pos(x, y) => (*x + self.cfg.shift_m.0, *y + self.cfg.shift_m.1),
+                crate::traci::Value::Pos(x, y) => {
+                    (*x + self.cfg.shift_m.0, *y + self.cfg.shift_m.1)
+                }
                 _ => continue,
             };
             let h = std::f64::consts::FRAC_PI_2 - angle.to_radians();
@@ -408,7 +462,11 @@ impl SumoMobility {
             let lane_pos_world = if lane.starts_with(':') {
                 None
             } else if let Some(l) = self.ids.lane_of.get(&lane) {
-                Some(LanePos { lane: *l, s_m: lane_pos, d_m: 0.0 })
+                Some(LanePos {
+                    lane: *l,
+                    s_m: lane_pos,
+                    d_m: 0.0,
+                })
             } else {
                 self.counters.unmapped_lane_samples += 1;
                 None
@@ -464,7 +522,12 @@ impl SumoMobility {
         for a in due {
             self.stops.remove(&a);
             if let Some(v) = self.by_actor.get(&a) {
-                self.queued.push((cmd::SET_VEHICLE, var::SPEED, v.clone(), Content::new().double(-1.0)));
+                self.queued.push((
+                    cmd::SET_VEHICLE,
+                    var::SPEED,
+                    v.clone(),
+                    Content::new().double(-1.0),
+                ));
             }
         }
     }
@@ -585,24 +648,46 @@ impl SumoMobility {
                 if let Some(v) = self.by_actor.get(&actor) {
                     // SUMO has no "lift the cap"; the vType's own maximum (55.56 m/s for
                     // DEFAULT_VEHTYPE, SUMO vType defaults) is the uncapped value.
-                    self.queued.push((cmd::SET_VEHICLE, var::MAXSPEED, v.clone(), Content::new().double(v_mps.unwrap_or(55.56))));
+                    self.queued.push((
+                        cmd::SET_VEHICLE,
+                        var::MAXSPEED,
+                        v.clone(),
+                        Content::new().double(v_mps.unwrap_or(55.56)),
+                    ));
                 }
             }
             MobilityCommand::Stop { actor, until } => {
                 if let Some(v) = self.by_actor.get(&actor) {
-                    self.queued.push((cmd::SET_VEHICLE, var::SPEED, v.clone(), Content::new().double(0.0)));
+                    self.queued.push((
+                        cmd::SET_VEHICLE,
+                        var::SPEED,
+                        v.clone(),
+                        Content::new().double(0.0),
+                    ));
                     self.stops.insert(actor, until);
                 }
             }
             MobilityCommand::Despawn { actor } => {
                 if let Some(v) = self.by_actor.get(&actor) {
                     // REMOVE_VAPORIZED = 3 (tools/traci/constants.py).
-                    self.queued.push((cmd::SET_VEHICLE, var::REMOVE, v.clone(), Content::new().byte(3)));
+                    self.queued.push((
+                        cmd::SET_VEHICLE,
+                        var::REMOVE,
+                        v.clone(),
+                        Content::new().byte(3),
+                    ));
                 }
             }
             MobilityCommand::Reroute { actor, to } => {
-                if let (Some(v), Some(e)) = (self.by_actor.get(&actor), self.ids.edge_of_lane(world, to)) {
-                    self.queued.push((cmd::SET_VEHICLE, var::CHANGETARGET, v.clone(), Content::new().str(e)));
+                if let (Some(v), Some(e)) =
+                    (self.by_actor.get(&actor), self.ids.edge_of_lane(world, to))
+                {
+                    self.queued.push((
+                        cmd::SET_VEHICLE,
+                        var::CHANGETARGET,
+                        v.clone(),
+                        Content::new().str(e),
+                    ));
                 }
             }
             MobilityCommand::Closure { lane, closed } => {
@@ -612,7 +697,8 @@ impl SumoMobility {
                     } else {
                         (var::LANE_ALLOWED, vec!["all".to_string()])
                     };
-                    self.queued.push((cmd::SET_LANE, v, l.clone(), Content::new().str_list(&list)));
+                    self.queued
+                        .push((cmd::SET_LANE, v, l.clone(), Content::new().str_list(&list)));
                 }
             }
             _ => {}
@@ -622,5 +708,9 @@ impl SumoMobility {
 
 /// The set of world lanes SUMO currently reports vehicles on, for tests and reports.
 pub fn occupied_lanes(update: &MobilityUpdate) -> BTreeSet<LaneId> {
-    update.states.iter().filter_map(|(_, k)| k.lane.map(|l| l.lane)).collect()
+    update
+        .states
+        .iter()
+        .filter_map(|(_, k)| k.lane.map(|l| l.lane))
+        .collect()
 }

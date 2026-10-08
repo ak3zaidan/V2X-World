@@ -19,11 +19,11 @@ use v2xw_core::card::{Family, ModelCard, Tier, Validation, ValidationStatus};
 use v2xw_core::ids::LaneId;
 use v2xw_core::rng::{EntityRef, RngDomain};
 use v2xw_core::time::{SimTime, secs_to_ns};
+use v2xw_mobility::MobCtx;
 use v2xw_mobility::demand::SpeedLaw;
 use v2xw_mobility::demand::hooks::ActorProgress;
 use v2xw_mobility::traits::Demand;
 use v2xw_mobility::views::{MobilityCommand, TripRequest};
-use v2xw_mobility::MobCtx;
 use v2xw_world::World;
 
 use crate::trips::{Trip, sort_trips};
@@ -172,7 +172,14 @@ pub struct CompositeDemand {
 impl std::fmt::Debug for CompositeDemand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompositeDemand")
-            .field("parts", &self.parts.iter().map(|p| p.card().id.clone()).collect::<Vec<_>>())
+            .field(
+                "parts",
+                &self
+                    .parts
+                    .iter()
+                    .map(|p| p.card().id.clone())
+                    .collect::<Vec<_>>(),
+            )
             .field("next_seq", &self.next_seq)
             .finish()
     }
@@ -227,7 +234,12 @@ impl Demand for CompositeDemand {
         for (i, p) in self.parts.iter_mut().enumerate() {
             all.extend(p.spawns_in(ctx, from, to).into_iter().map(|t| (i, t)));
         }
-        all.sort_by(|a, b| a.1.t.cmp(&b.1.t).then(a.0.cmp(&b.0)).then(a.1.seq.cmp(&b.1.seq)));
+        all.sort_by(|a, b| {
+            a.1.t
+                .cmp(&b.1.t)
+                .then(a.0.cmp(&b.0))
+                .then(a.1.seq.cmp(&b.1.seq))
+        });
         all.into_iter()
             .map(|(part, mut trip)| {
                 let seq = self.next_seq;
@@ -278,11 +290,7 @@ impl Demand for CompositeDemand {
 }
 
 /// A card for a trip list from `source`, citing `sources`.
-pub fn trip_list_card(
-    id: &str,
-    purpose: &str,
-    sources: Vec<v2xw_core::card::Source>,
-) -> ModelCard {
+pub fn trip_list_card(id: &str, purpose: &str, sources: Vec<v2xw_core::card::Source>) -> ModelCard {
     let mut card = ModelCard::new(id, Family::Mobility, "1.0.0", purpose);
     card.tier = vec![Tier::Abstract, Tier::Medium, Tier::High];
     card.sources = sources;
@@ -343,7 +351,10 @@ mod tests {
         let mut c = CompositeDemand::new(vec![Box::new(a), Box::new(b)]);
         let mut ctx = MobilityCtx::new(0, &w, &rng);
         let got = c.spawns_in(&mut ctx, 0, secs_to_ns(3.0));
-        let order: Vec<(u64, u32)> = got.iter().map(|t| (t.seq, t.origin.as_usize() as u32)).collect();
+        let order: Vec<(u64, u32)> = got
+            .iter()
+            .map(|t| (t.seq, t.origin.as_usize() as u32))
+            .collect();
         assert_eq!(order, vec![(0, 0), (1, 1), (2, 0)]);
         // Planned routes find their way back to the right part.
         assert_eq!(c.planned_route(&w, &got[1]), Some(vec![LaneId::new(1)]));

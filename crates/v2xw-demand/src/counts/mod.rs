@@ -197,7 +197,13 @@ pub fn place(world: &World, graph: &LaneGraph, counts: &[Count]) -> Result<Vec<P
 
 /// The non-internal graph lane nearest a coordinate whose heading (clockwise from north)
 /// is within 45° of `heading_deg`, within 60 m.
-fn locate(world: &World, graph: &LaneGraph, lat: f64, lon: f64, heading_deg: Option<f64>) -> Option<LaneId> {
+fn locate(
+    world: &World,
+    graph: &LaneGraph,
+    lat: f64,
+    lon: f64,
+    heading_deg: Option<f64>,
+) -> Option<LaneId> {
     let (x, y) = world.projection().to_enu(lat, lon);
     let p = Vec3::new(x, y, 0.0);
     let mut best: Option<(f64, LaneId)> = None;
@@ -321,8 +327,14 @@ pub fn summarise(counts: &[PlacedCount], modelled: &[f64]) -> CountCheck {
         .map(|r| (r.modelled - r.observed) * (r.modelled - r.observed))
         .sum::<f64>()
         / n;
-    let ss_tot: f64 = rows.iter().map(|r| (r.observed - mean_obs) * (r.observed - mean_obs)).sum();
-    let ss_res: f64 = rows.iter().map(|r| (r.modelled - r.observed) * (r.modelled - r.observed)).sum();
+    let ss_tot: f64 = rows
+        .iter()
+        .map(|r| (r.observed - mean_obs) * (r.observed - mean_obs))
+        .sum();
+    let ss_res: f64 = rows
+        .iter()
+        .map(|r| (r.modelled - r.observed) * (r.modelled - r.observed))
+        .sum();
     CountCheck {
         share_geh_below_5: below,
         passes_tag_m3_1: below >= 0.85,
@@ -331,7 +343,11 @@ pub fn summarise(counts: &[PlacedCount], modelled: &[f64]) -> CountCheck {
         } else {
             0.0
         },
-        r_squared: if ss_tot > 0.0 { 1.0 - ss_res / ss_tot } else { 1.0 },
+        r_squared: if ss_tot > 0.0 {
+            1.0 - ss_res / ss_tot
+        } else {
+            1.0
+        },
         rows,
     }
 }

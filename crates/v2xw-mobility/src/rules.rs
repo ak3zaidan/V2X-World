@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn no_known_jurisdiction_lets_a_motorcycle_filter_and_new_york_lets_a_pedestrian_cross_anywhere()
-    {
+     {
         for preset in [
             None,
             Some("urban-us-nyc"),
@@ -175,6 +175,9 @@ mod tests {
         assert!(ca.right_turn_on_red);
         assert_eq!(ca.motorcycle_filtering, Filtering::BetweenStopped);
         assert!(ca.jaywalking_lawful);
-        assert_eq!(TrafficRules::of_highway_preset(Some("urban-us-zz")), TrafficRules::NEW_YORK_CITY);
+        assert_eq!(
+            TrafficRules::of_highway_preset(Some("urban-us-zz")),
+            TrafficRules::NEW_YORK_CITY
+        );
     }
 }

@@ -75,7 +75,10 @@ pub const RENDERED_ATTACKERS: [(&str, &str); 22] = [
     ("StopAndGo", "speed: claims to stop and go"),
     ("ReversedHeading", "heading: flipped 180°"),
     ("HeadingOffset", "heading: a constant offset"),
-    ("DataReplay", "timing: replays another vehicle's past messages"),
+    (
+        "DataReplay",
+        "timing: replays another vehicle's past messages",
+    ),
     ("DelayedMessages", "timing: sends its messages late"),
     ("OutOfOrder", "timing: out-of-order generation times"),
     ("SlowDrift", "stealth: a slowly growing position error"),
@@ -84,9 +87,18 @@ pub const RENDERED_ATTACKERS: [(&str, &str); 22] = [
     ("ExpiredCert", "credential: a certificate past its validity"),
     ("NotYetValid", "credential: a certificate not yet valid"),
     ("Disruptive", "combined: replays neighbours' data"),
-    ("PosSpeedInconsistent", "combined: position and speed disagree"),
-    ("PosHeadingInconsistent", "combined: position and heading disagree"),
-    ("EventualStop", "combined: claims a stop that does not happen"),
+    (
+        "PosSpeedInconsistent",
+        "combined: position and speed disagree",
+    ),
+    (
+        "PosHeadingInconsistent",
+        "combined: position and heading disagree",
+    ),
+    (
+        "EventualStop",
+        "combined: claims a stop that does not happen",
+    ),
 ];
 
 /// Attacker kinds in the catalogue the engine refuses by name.
@@ -103,8 +115,14 @@ pub const REFUSED_ATTACKERS: [&str; 7] = [
 /// The jammer models (`threats.jammers[].id`).
 pub const JAMMERS: [(&str, &str); 3] = [
     ("attacker/jammer/constant", "always on"),
-    ("attacker/jammer/pulsed", "on for `duty` of every `period_ms`"),
-    ("attacker/jammer/reactive", "fires when it hears a frame above `trigger_dbm`"),
+    (
+        "attacker/jammer/pulsed",
+        "on for `duty` of every `period_ms`",
+    ),
+    (
+        "attacker/jammer/reactive",
+        "fires when it hears a frame above `trigger_dbm`",
+    ),
 ];
 
 /// Every editable setting of the scenario schema, built once.
@@ -128,7 +146,11 @@ pub fn settings() -> &'static [Setting] {
                 values: row
                     .get("enum")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
                     .unwrap_or_default(),
                 unit: s("unit"),
                 default: row.get("default").cloned().unwrap_or(Value::Null),
@@ -183,7 +205,11 @@ pub fn find_settings(query: &str, limit: usize) -> Value {
         .filter(|(score, _)| *score > 0)
         .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
-    let rows: Vec<Value> = scored.iter().take(limit.max(1)).map(|(_, s)| s.to_json()).collect();
+    let rows: Vec<Value> = scored
+        .iter()
+        .take(limit.max(1))
+        .map(|(_, s)| s.to_json())
+        .collect();
     let mut out = json!({"settings": rows});
     let q = query.to_lowercase();
     if q.contains("attack") || q.contains("threat") || q.contains("misbehav") {
@@ -194,7 +220,12 @@ pub fn find_settings(query: &str, limit: usize) -> Value {
         });
     }
     if q.contains("jam") {
-        out["jammers"] = json!(JAMMERS.iter().map(|(id, what)| json!({"id": id, "what": what})).collect::<Vec<_>>());
+        out["jammers"] = json!(
+            JAMMERS
+                .iter()
+                .map(|(id, what)| json!({"id": id, "what": what}))
+                .collect::<Vec<_>>()
+        );
     }
     out
 }
@@ -272,20 +303,45 @@ mod tests {
 
     #[test]
     fn the_index_has_the_settings_the_agent_writes_and_their_closed_sets() {
-        let rat = settings().iter().find(|s| s.path == "radio.rat").expect("radio.rat");
+        let rat = settings()
+            .iter()
+            .find(|s| s.path == "radio.rat")
+            .expect("radio.rat");
         assert!(rat.values.iter().any(|v| v == "lte-v2x-pc5"));
-        assert!(settings().iter().any(|s| s.path == "actors.vehicles.demand.rate_veh_per_h"));
-        let sig = settings().iter().find(|s| s.path == "security.signature").expect("signature");
-        assert!(sig.values.iter().any(|v| v.contains("mldsa")), "{:?}", sig.values);
+        assert!(
+            settings()
+                .iter()
+                .any(|s| s.path == "actors.vehicles.demand.rate_veh_per_h")
+        );
+        let sig = settings()
+            .iter()
+            .find(|s| s.path == "security.signature")
+            .expect("signature");
+        assert!(
+            sig.values.iter().any(|v| v.contains("mldsa")),
+            "{:?}",
+            sig.values
+        );
     }
 
     #[test]
     fn a_search_ranks_the_path_match_first_and_adds_the_attacker_list_when_asked() {
         let r = find_settings("pseudonym period", 5);
-        assert_eq!(r["settings"][0]["path"], "security.pseudonym_change.period_s");
+        assert_eq!(
+            r["settings"][0]["path"],
+            "security.pseudonym_change.period_s"
+        );
         let a = find_settings("attacker fraction", 5);
-        assert!(a["attackers"]["kinds"].as_array().is_some_and(|k| k.len() == RENDERED_ATTACKERS.len()));
-        assert!(find_settings("zzzz-nothing", 5)["settings"].as_array().is_some_and(Vec::is_empty));
+        assert!(
+            a["attackers"]["kinds"]
+                .as_array()
+                .is_some_and(|k| k.len() == RENDERED_ATTACKERS.len())
+        );
+        assert!(
+            find_settings("zzzz-nothing", 5)["settings"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+        );
     }
 
     #[test]
@@ -293,6 +349,9 @@ mod tests {
         let q = quick_reference();
         assert!(q.contains("dsrc-80211p | lte-v2x-pc5"), "{q}");
         assert!(q.contains("hybrid-mldsa44-ecdsa-p256"));
-        assert!(!q.contains("radio.rat: ;"), "an empty value list means a path moved");
+        assert!(
+            !q.contains("radio.rat: ;"),
+            "an empty value list means a path moved"
+        );
     }
 }

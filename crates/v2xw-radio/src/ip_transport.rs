@@ -34,11 +34,25 @@ use crate::cellular_packet::PacketUu;
 /// `Uplink` is client → server (vehicle or RSU → backend), `Downlink` the reverse.
 pub trait PacketPath<C: Ctx + ?Sized> {
     /// Offers one IP packet of `bytes` at `at`.
-    fn deliver(&mut self, ctx: &mut C, ue: NodeId, dir: Direction, at: SimTime, bytes: u32) -> Option<SimTime>;
+    fn deliver(
+        &mut self,
+        ctx: &mut C,
+        ue: NodeId,
+        dir: Direction,
+        at: SimTime,
+        bytes: u32,
+    ) -> Option<SimTime>;
 }
 
 impl<C: Ctx + ?Sized> PacketPath<C> for PacketUu {
-    fn deliver(&mut self, ctx: &mut C, ue: NodeId, dir: Direction, at: SimTime, bytes: u32) -> Option<SimTime> {
+    fn deliver(
+        &mut self,
+        ctx: &mut C,
+        ue: NodeId,
+        dir: Direction,
+        at: SimTime,
+        bytes: u32,
+    ) -> Option<SimTime> {
         self.send_at(ctx, ue, dir, bytes, at).deliver_at()
     }
 }
@@ -53,7 +67,14 @@ pub struct ConstantPath {
 }
 
 impl<C: Ctx + ?Sized> PacketPath<C> for ConstantPath {
-    fn deliver(&mut self, _ctx: &mut C, _ue: NodeId, _dir: Direction, at: SimTime, bytes: u32) -> Option<SimTime> {
+    fn deliver(
+        &mut self,
+        _ctx: &mut C,
+        _ue: NodeId,
+        _dir: Direction,
+        at: SimTime,
+        bytes: u32,
+    ) -> Option<SimTime> {
         let ser = Duration::from_secs_f64(f64::from(bytes) * 8.0 / self.bps.max(1.0));
         Some(ser.after(self.one_way.after(at)))
     }
@@ -129,7 +150,14 @@ impl WiredLink {
 }
 
 impl<C: Ctx + ?Sized> PacketPath<C> for WiredLink {
-    fn deliver(&mut self, _ctx: &mut C, ue: NodeId, dir: Direction, at: SimTime, bytes: u32) -> Option<SimTime> {
+    fn deliver(
+        &mut self,
+        _ctx: &mut C,
+        ue: NodeId,
+        dir: Direction,
+        at: SimTime,
+        bytes: u32,
+    ) -> Option<SimTime> {
         let d = dir as usize;
         self.sent += 1;
         if self.loss > 0.0 {
@@ -384,13 +412,28 @@ pub fn https_exchange<C: Ctx + ?Sized, P: PacketPath<C> + ?Sized>(
         TlsVersion::None => b,
         _ => b + cfg.tls_record_overhead * b.div_ceil(16_384).max(1),
     };
-    let finish = if cfg.tls == TlsVersion::Tls13 && r.handshake_s > 0.0 { cfg.client_finish } else { 0 };
+    let finish = if cfg.tls == TlsVersion::Tls13 && r.handshake_s > 0.0 {
+        cfg.client_finish
+    } else {
+        0
+    };
     let req = tls(cfg.http_request_header + request_body) + finish;
-    let Some(at_server) = stream(ctx, path, ue, conn, cfg, Direction::Uplink, req, t, &mut r) else {
+    let Some(at_server) = stream(ctx, path, ue, conn, cfg, Direction::Uplink, req, t, &mut r)
+    else {
         return r;
     };
     let resp = tls(cfg.http_response_header + response_body);
-    let done = stream(ctx, path, ue, conn, cfg, Direction::Downlink, resp, at_server, &mut r);
+    let done = stream(
+        ctx,
+        path,
+        ue,
+        conn,
+        cfg,
+        Direction::Downlink,
+        resp,
+        at_server,
+        &mut r,
+    );
     if let Some(d) = done {
         conn.last_active = d;
     }
@@ -636,7 +679,11 @@ pub fn compare_exchange(tcp: &TransferReport, simple_s: f64) -> (bool, String) {
     match tcp.seconds() {
         None => (
             true,
-            format!("the TCP exchange was abandoned after {} timeouts; the simple model gives {:.0} ms", tcp.rtos, simple_s * 1e3),
+            format!(
+                "the TCP exchange was abandoned after {} timeouts; the simple model gives {:.0} ms",
+                tcp.rtos,
+                simple_s * 1e3
+            ),
         ),
         Some(s) => {
             let d = s - simple_s;
@@ -673,12 +720,24 @@ mod tests {
         let ue = NodeId::new(1);
         let mut rtts = Vec::new();
         for tls in [TlsVersion::None, TlsVersion::Tls13, TlsVersion::Tls12] {
-            let cfg = TcpConfig { tls, ..TcpConfig::default() };
+            let cfg = TcpConfig {
+                tls,
+                ..TcpConfig::default()
+            };
             let mut conn = TcpConn::new(&cfg);
             let r = https_exchange(&mut ctx, &mut path, ue, &mut conn, &cfg, 0, 200, 300);
             rtts.push(r.seconds().unwrap() / 0.04);
             // Keep-alive: the second exchange skips the handshakes.
-            let r2 = https_exchange(&mut ctx, &mut path, ue, &mut conn, &cfg, 10_000_000_000, 200, 300);
+            let r2 = https_exchange(
+                &mut ctx,
+                &mut path,
+                ue,
+                &mut conn,
+                &cfg,
+                10_000_000_000,
+                200,
+                300,
+            );
             assert!((r2.seconds().unwrap() / 0.04 - 1.0).abs() < 0.05);
         }
         // TCP 1 RTT + request; TLS 1.3 one more; TLS 1.2 two more.
@@ -690,7 +749,10 @@ mod tests {
     #[test]
     fn slow_start_needs_rounds_and_loss_backs_off() {
         let mut ctx = TestCtx::new(1);
-        let cfg = TcpConfig { tls: TlsVersion::None, ..TcpConfig::default() };
+        let cfg = TcpConfig {
+            tls: TlsVersion::None,
+            ..TcpConfig::default()
+        };
         let ue = NodeId::new(1);
         // 1 MB over a 100 Mbit/s, 25 ms path: slow start needs several RTTs where the
         // simple model charges one.
@@ -716,7 +778,10 @@ mod tests {
     #[test]
     fn a_certificate_download_over_packet_lte() {
         let mut ctx = TestCtx::new(9);
-        let mut uu = PacketUu::new(Rat::Lte, BaseStationLayout::lattice(CellPlan::urban_macro()));
+        let mut uu = PacketUu::new(
+            Rat::Lte,
+            BaseStationLayout::lattice(CellPlan::urban_macro()),
+        );
         let ue = NodeId::new(3);
         uu.observe_position(&mut ctx, ue, Vec3::new(100.0, 50.0, 0.0));
         let cfg = TcpConfig::default();

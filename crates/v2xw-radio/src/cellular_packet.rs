@@ -430,7 +430,14 @@ impl BaseStationLayout {
     /// base station's noise floor raised by the interference over thermal — a deliberately
     /// pessimistic power-limited uplink, which is what a cell edge is.
     #[must_use]
-    pub fn sinr_db(&self, cfg: &RatConfig, p: Vec3, cell: u32, dir: Direction, neighbour_load: f64) -> f64 {
+    pub fn sinr_db(
+        &self,
+        cfg: &RatConfig,
+        p: Vec3,
+        cell: u32,
+        dir: Direction,
+        neighbour_load: f64,
+    ) -> f64 {
         let plan = self.plan();
         let near = self.nearby(p);
         let d0 = near
@@ -638,7 +645,11 @@ impl Sched {
     }
 
     fn fails(salt: u64, tb: &Tb, p: f64) -> bool {
-        let h = mix(salt ^ mix(tb.pkt ^ (tb.first << 20) ^ (u64::from(tb.attempt) << 56) ^ (u64::from(tb.rlc) << 60)));
+        let h = mix(salt
+            ^ mix(tb.pkt
+                ^ (tb.first << 20)
+                ^ (u64::from(tb.attempt) << 56)
+                ^ (u64::from(tb.rlc) << 60)));
         unit(h) < p
     }
 
@@ -698,7 +709,9 @@ impl Sched {
             if avail == 0 {
                 break;
             }
-            let Some(u) = self.ues.get_mut(&ue) else { continue };
+            let Some(u) = self.ues.get_mut(&ue) else {
+                continue;
+            };
             let bpp = (u.se * c.bits_per_prb_se).max(1.0);
             for p in u.q.iter_mut() {
                 if avail == 0 {
@@ -746,7 +759,9 @@ impl Sched {
         if ok && let Some(start) = self.watch.remove(&tb.ue) {
             self.gaps.push(t + 1 - start.min(t + 1));
         }
-        let Some(u) = self.ues.get_mut(&tb.ue) else { return };
+        let Some(u) = self.ues.get_mut(&tb.ue) else {
+            return;
+        };
         let Some(pos) = u.q.iter().position(|p| p.id == tb.pkt) else {
             return;
         };
@@ -914,8 +929,10 @@ impl PacketUu {
     /// The model on a layout, with half the PRBs taken by other subscribers' traffic.
     #[must_use]
     pub fn new(rat: Rat, layout: BaseStationLayout) -> Self {
-        let shadow = CellCapacityUu::new(layout.plan().clone())
-            .with_chain(RadioLatencyClass::LowAutomationLowLoad, MecPlacement::AtCoreNetwork);
+        let shadow = CellCapacityUu::new(layout.plan().clone()).with_chain(
+            RadioLatencyClass::LowAutomationLowLoad,
+            MecPlacement::AtCoreNetwork,
+        );
         Self {
             card: packet_card(),
             cfg: RatConfig::of(rat),
@@ -955,7 +972,10 @@ impl PacketUu {
     #[must_use]
     pub fn with_core(mut self, mec: MecPlacement) -> Self {
         self.mec = mec;
-        self.shadow = self.shadow.clone().with_chain(RadioLatencyClass::LowAutomationLowLoad, mec);
+        self.shadow = self
+            .shadow
+            .clone()
+            .with_chain(RadioLatencyClass::LowAutomationLowLoad, mec);
         self
     }
 
@@ -1016,7 +1036,8 @@ impl PacketUu {
 
     fn ue_info<C: Ctx + ?Sized>(&mut self, ctx: &mut C, ue: NodeId) -> &mut UeInfo {
         self.ues.entry(ue.index()).or_insert_with(|| {
-            let salt = (ctx.rng(RngDomain::Backend, EntityRef::Node(ue)).f64() * 9.007_199_254_740_992e15) as u64;
+            let salt = (ctx.rng(RngDomain::Backend, EntityRef::Node(ue)).f64()
+                * 9.007_199_254_740_992e15) as u64;
             UeInfo {
                 salt: mix(salt ^ u64::from(ue.index())),
                 serving: None,
@@ -1042,7 +1063,10 @@ impl PacketUu {
 
     fn advance_cell(&mut self, cell: u32, now: SimTime) {
         let target = now / self.cfg.tti_ns;
-        let cfgs = [self.step_cfg(Direction::Uplink), self.step_cfg(Direction::Downlink)];
+        let cfgs = [
+            self.step_cfg(Direction::Uplink),
+            self.step_cfg(Direction::Downlink),
+        ];
         let c = self.cells.entry(cell).or_default();
         for (i, d) in c.iter_mut().enumerate() {
             if d.tti == 0 && d.ues.is_empty() && d.pending.is_empty() {
@@ -1056,7 +1080,12 @@ impl PacketUu {
     /// Notices a UE's position: sets its serving cell and, when the cell changed, performs
     /// the handover — the UE's packets move to the target cell and wait out the
     /// interruption there. Returns the interruption when a handover happened.
-    pub fn observe_position<C: Ctx + ?Sized>(&mut self, ctx: &mut C, ue: NodeId, p: Vec3) -> Option<Duration> {
+    pub fn observe_position<C: Ctx + ?Sized>(
+        &mut self,
+        ctx: &mut C,
+        ue: NodeId,
+        p: Vec3,
+    ) -> Option<Duration> {
         let view = self.layout.coverage(p);
         let info = self.ue_info(ctx, ue);
         info.pos = Some(p);
@@ -1064,9 +1093,13 @@ impl PacketUu {
         let old = info.serving;
         info.serving = new.or(old);
         match (old, new) {
-            (Some(o), Some(n)) if o != n => {
-                Some(CellularUu::<C>::handover(self, ctx, ue, CellId::new(o), CellId::new(n)))
-            }
+            (Some(o), Some(n)) if o != n => Some(CellularUu::<C>::handover(
+                self,
+                ctx,
+                ue,
+                CellId::new(o),
+                CellId::new(n),
+            )),
             _ => None,
         }
     }
@@ -1103,7 +1136,9 @@ impl PacketUu {
         if self.layout.coverage(pos).is_none() {
             return SendOutcome::NoCoverage;
         }
-        let sinr = self.layout.sinr_db(&self.cfg, pos, cell, dir, self.neighbour_load);
+        let sinr = self
+            .layout
+            .sinr_db(&self.cfg, pos, cell, dir, self.neighbour_load);
         let se = self.cfg.spectral_efficiency(sinr);
         self.advance_cell(cell, now);
         let di = dir as usize;
@@ -1114,7 +1149,10 @@ impl PacketUu {
                 arrive += core_ns + (self.cfg.dl_processing_ms * 1e6) as u64;
             }
             Direction::Uplink => {
-                let busy = self.cells.get(&cell).is_some_and(|c| c[di].backlog_of(ue.index()));
+                let busy = self
+                    .cells
+                    .get(&cell)
+                    .is_some_and(|c| c[di].backlog_of(ue.index()));
                 if !busy {
                     // A UE with nothing buffered must ask for a grant: the wait for its next
                     // SR occasion, then the SR → grant → data chain.
@@ -1167,7 +1205,10 @@ impl PacketUu {
                 if simple.is_none() {
                     self.stats.simple_drops += 1;
                 }
-                SendOutcome::Dropped(DropCause::QueueFull { ac: "rlc-am", depth: 0 })
+                SendOutcome::Dropped(DropCause::QueueFull {
+                    ac: "rlc-am",
+                    depth: 0,
+                })
             }
             None => {
                 let s = &mut self.cells.entry(cell).or_default()[di];
@@ -1187,7 +1228,10 @@ impl PacketUu {
     /// The simple model's mean latency for the same arrival: the fixed chain plus the
     /// M/M/1 mean sojourn `1/(µ − λ)`, or `None` where it would drop.
     fn simple_ms(&mut self, ue: NodeId, dir: Direction, at: SimTime, _bytes: u32) -> Option<f64> {
-        let w = self.shadow_arrivals.entry((ue.index(), dir as u8)).or_default();
+        let w = self
+            .shadow_arrivals
+            .entry((ue.index(), dir as u8))
+            .or_default();
         let from = at.saturating_sub(crate::cellular::ARRIVAL_WINDOW.as_nanos());
         while w.front().is_some_and(|t| *t < from) {
             w.pop_front();
@@ -1204,7 +1248,9 @@ impl PacketUu {
         let s = &self.stats;
         let n = s.delivered.max(1) as f64;
         let mean_packet_ms = s.latency_sum_us as f64 / n / 1e3;
-        let simple_n = (s.delivered + s.lost_rlc + s.dropped_overload).saturating_sub(s.simple_drops).max(1) as f64;
+        let simple_n = (s.delivered + s.lost_rlc + s.dropped_overload)
+            .saturating_sub(s.simple_drops)
+            .max(1) as f64;
         let mean_simple_ms = s.simple_sum_us as f64 / simple_n / 1e3;
         let total = s.sent.max(1) as f64;
         let loss_packet = (s.lost_rlc + s.dropped_overload) as f64 / total;
@@ -1239,7 +1285,11 @@ impl PacketUu {
                 self.stats().harq_retx,
                 self.stats().rlc_retx,
                 s.handovers,
-                if s.ho_gaps > 0 { s.ho_gap_sum_us as f64 / s.ho_gaps as f64 / 1e3 } else { 0.0 }
+                if s.ho_gaps > 0 {
+                    s.ho_gap_sum_us as f64 / s.ho_gaps as f64 / 1e3
+                } else {
+                    0.0
+                }
             )
         };
         SimpleModelComparison {
@@ -1274,7 +1324,14 @@ impl<C: Ctx + ?Sized> CellularUu<C> for PacketUu {
         self.layout.coverage(p)
     }
 
-    fn send(&mut self, ctx: &mut C, ue: NodeId, dir: Direction, bytes: u32, _qos: Qos) -> SendOutcome {
+    fn send(
+        &mut self,
+        ctx: &mut C,
+        ue: NodeId,
+        dir: Direction,
+        bytes: u32,
+        _qos: Qos,
+    ) -> SendOutcome {
         let now = ctx.now();
         self.send_at(ctx, ue, dir, bytes, now)
     }
@@ -1286,7 +1343,10 @@ impl<C: Ctx + ?Sized> CellularUu<C> for PacketUu {
         self.advance_cell(to, now);
         let ms = ctx
             .rng(RngDomain::Backend, EntityRef::Node(ue))
-            .normal(self.cfg.ho_interruption_ms, self.cfg.ho_interruption_sigma_ms)
+            .normal(
+                self.cfg.ho_interruption_ms,
+                self.cfg.ho_interruption_sigma_ms,
+            )
             .max(0.0);
         let d = Duration::from_secs_f64(ms * 1e-3);
         let until = d.after(now);
@@ -1300,8 +1360,13 @@ impl<C: Ctx + ?Sized> CellularUu<C> for PacketUu {
         let start = now / self.cfg.tti_ns;
         let ses: [f64; 2] = [Direction::Uplink, Direction::Downlink].map(|dir| {
             se_pos.map_or(self.cfg.se_min, |p| {
-                self.cfg
-                    .spectral_efficiency(self.layout.sinr_db(&self.cfg, p, to, dir, self.neighbour_load))
+                self.cfg.spectral_efficiency(self.layout.sinr_db(
+                    &self.cfg,
+                    p,
+                    to,
+                    dir,
+                    self.neighbour_load,
+                ))
             })
         });
         let moved: [Vec<Pkt>; 2] = {
@@ -1312,7 +1377,9 @@ impl<C: Ctx + ?Sized> CellularUu<C> for PacketUu {
         for (i, pkts) in moved.into_iter().enumerate() {
             for mut p in pkts {
                 p.ready = p.ready.max(ready);
-                target[i].pending.insert((p.ready, p.id), (ue.index(), ses[i], salt, p));
+                target[i]
+                    .pending
+                    .insert((p.ready, p.id), (ue.index(), ses[i], salt, p));
             }
             target[i].watch.insert(ue.index(), start);
         }
@@ -1334,7 +1401,13 @@ fn todo(reference: &str) -> Source {
     }
 }
 
-fn todo_param(name: &str, unit: &str, v: serde_json::Value, reference: &str, plan: &str) -> Parameter {
+fn todo_param(
+    name: &str,
+    unit: &str,
+    v: serde_json::Value,
+    reference: &str,
+    plan: &str,
+) -> Parameter {
     let mut p = Parameter::new(name, unit, v, todo(reference));
     p.calibration = Some(plan.to_string());
     p
@@ -1377,37 +1450,55 @@ fn packet_card() -> ModelCard {
             "lte_prbs",
             "PRB",
             serde_json::json!(lte.prbs),
-            Source::new(SourceKind::Standard, "TS 36.101 Table 5.6-1: 100 PRB at 20 MHz"),
+            Source::new(
+                SourceKind::Standard,
+                "TS 36.101 Table 5.6-1: 100 PRB at 20 MHz",
+            ),
         ),
         Parameter::new(
             "nr_prbs",
             "PRB",
             serde_json::json!(RatConfig::nr_100mhz_30khz().prbs),
-            Source::new(SourceKind::Standard, "TS 38.101-1 Table 5.3.2-1: 273 PRB at 100 MHz, 30 kHz SCS"),
+            Source::new(
+                SourceKind::Standard,
+                "TS 38.101-1 Table 5.3.2-1: 273 PRB at 100 MHz, 30 kHz SCS",
+            ),
         ),
         Parameter::new(
             "overhead_dl",
             "-",
             serde_json::json!(lte.overhead_dl),
-            Source::new(SourceKind::Standard, "TS 38.306 §4.1.2: OH 0.14 DL, 0.08 UL in FR1"),
+            Source::new(
+                SourceKind::Standard,
+                "TS 38.306 §4.1.2: OH 0.14 DL, 0.08 UL in FR1",
+            ),
         ),
         Parameter::new(
             "bler_first",
             "-",
             serde_json::json!(lte.bler_first),
-            Source::new(SourceKind::Standard, "TS 36.213 §7.2.3: CQI chosen for a transport-block error probability of 0.1"),
+            Source::new(
+                SourceKind::Standard,
+                "TS 36.213 §7.2.3: CQI chosen for a transport-block error probability of 0.1",
+            ),
         ),
         Parameter::new(
             "lte_harq_rtt_ms",
             "ms",
             serde_json::json!(8.0),
-            Source::new(SourceKind::Standard, "TS 36.213 §8, §10.1: FDD HARQ timing n+4 / n+8"),
+            Source::new(
+                SourceKind::Standard,
+                "TS 36.213 §8, §10.1: FDD HARQ timing n+4 / n+8",
+            ),
         ),
         Parameter::new(
             "max_harq_tx",
             "-",
             serde_json::json!(lte.max_harq_tx),
-            Source::new(SourceKind::Code, "ns-3 LTE module, LteEnbMac MaxHarqRetransmissions = 3"),
+            Source::new(
+                SourceKind::Code,
+                "ns-3 LTE module, LteEnbMac MaxHarqRetransmissions = 3",
+            ),
         ),
         todo_param(
             "bler_retx",
@@ -1433,7 +1524,10 @@ fn packet_card() -> ModelCard {
         todo_param(
             "ho_interruption_ms",
             "ms",
-            serde_json::json!([lte.ho_interruption_ms, RatConfig::nr_100mhz_30khz().ho_interruption_ms]),
+            serde_json::json!([
+                lte.ho_interruption_ms,
+                RatConfig::nr_100mhz_30khz().ho_interruption_ms
+            ]),
             "TR 36.881 §5.2 LTE handover interruption analysis (49.5 ms); NR between it and the \
              0 ms DAPS target of TS 38.300 §9.2.3.2",
             "Fit to a drive-test handover trace (e.g. MobileInsight) per RAT.",
@@ -1468,9 +1562,15 @@ fn packet_card() -> ModelCard {
         "Radio-link failure and re-establishment.".to_string(),
     ];
     card.sources = vec![
-        Source::new(SourceKind::Standard, "TS 36.213, TS 36.101, TS 38.101-1, TS 38.306, TS 36.300"),
+        Source::new(
+            SourceKind::Standard,
+            "TS 36.213, TS 36.101, TS 38.101-1, TS 38.306, TS 36.300",
+        ),
         Source::new(SourceKind::Paper, "Mogensen et al., VTC 2007-Spring"),
-        Source::new(SourceKind::Paper, "Jalali, Padovani, Pankaj, VTC 2000 (proportional fair)"),
+        Source::new(
+            SourceKind::Paper,
+            "Jalali, Padovani, Pankaj, VTC 2000 (proportional fair)",
+        ),
     ];
     card.validation = Validation {
         status: ValidationStatus::UnitTested,
@@ -1542,10 +1642,20 @@ mod tests {
             let mut worst = 0u64;
             for k in 0..ues {
                 let ue = NodeId::new(k + 1);
-                uu.observe_position(&mut ctx, ue, Vec3::new(60.0 + 20.0 * f64::from(k), 30.0, 0.0));
+                uu.observe_position(
+                    &mut ctx,
+                    ue,
+                    Vec3::new(60.0 + 20.0 * f64::from(k), 30.0, 0.0),
+                );
             }
             for k in 0..ues {
-                let out = uu.send(&mut ctx, NodeId::new(k + 1), Direction::Downlink, big, Qos::BestEffort);
+                let out = uu.send(
+                    &mut ctx,
+                    NodeId::new(k + 1),
+                    Direction::Downlink,
+                    big,
+                    Qos::BestEffort,
+                );
                 worst = worst.max(out.deliver_at().expect("delivered"));
             }
             worst as f64 * 1e-9
@@ -1555,8 +1665,14 @@ mod tests {
         let loaded = run(1, 0.75);
         // 2 MB at near-peak efficiency over 100 PRB takes on the order of 0.2 s.
         assert!(one > 0.1 && one < 1.0, "one UE {one:.3} s");
-        assert!(four > 2.5 * one, "four UEs share: {four:.3} s against {one:.3} s");
-        assert!(loaded > 2.5 * one, "background load: {loaded:.3} s against {one:.3} s");
+        assert!(
+            four > 2.5 * one,
+            "four UEs share: {four:.3} s against {one:.3} s"
+        );
+        assert!(
+            loaded > 2.5 * one,
+            "background load: {loaded:.3} s against {one:.3} s"
+        );
     }
 
     #[test]
@@ -1591,7 +1707,10 @@ mod tests {
                 let ue = NodeId::new(i % 7);
                 ctx.set_now(u64::from(i) * 3_000_000);
                 uu.observe_position(&mut ctx, ue, Vec3::new(f64::from(i) * 30.0, 10.0, 0.0));
-                v.push(uu.send(&mut ctx, ue, Direction::Uplink, 3000, Qos::BestEffort).deliver_at());
+                v.push(
+                    uu.send(&mut ctx, ue, Direction::Uplink, 3000, Qos::BestEffort)
+                        .deliver_at(),
+                );
             }
             (v, uu.stats())
         };

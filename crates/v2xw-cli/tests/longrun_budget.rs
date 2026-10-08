@@ -54,7 +54,11 @@ fn a_long_run_holds_its_memory_and_its_cost_flat() {
         },
     })
     .expect("run");
-    assert!(outcome.metric_samples > 10_000, "{} samples", outcome.metric_samples);
+    assert!(
+        outcome.metric_samples > 10_000,
+        "{} samples",
+        outcome.metric_samples
+    );
 
     let lines: Vec<serde_json::Value> = std::fs::read_to_string(out.join("progress.jsonl"))
         .expect("progress")
@@ -98,8 +102,17 @@ fn a_long_run_holds_its_memory_and_its_cost_flat() {
         assert!(end <= 2 * mid + 64, "{k}: {mid} at 120 s, {end} at 240 s");
     }
     let created = outcome.report.nodes_created;
-    for k in ["nodes", "inboxes", "node_phase", "j2945_quality_at", "p2.detectors"] {
-        assert!(census(240.0, k) <= created, "{k} beyond the {created} nodes created");
+    for k in [
+        "nodes",
+        "inboxes",
+        "node_phase",
+        "j2945_quality_at",
+        "p2.detectors",
+    ] {
+        assert!(
+            census(240.0, k) <= created,
+            "{k} beyond the {created} nodes created"
+        );
     }
     // Nodes that left are not kept: the live stores follow the fleet, not the run.
     assert!(

@@ -93,7 +93,9 @@ pub enum CliError {
 
     /// The run stopped at `--stop-at`, after writing its checkpoint, as a crash would stop
     /// it: the open recording segment is left unfinished. For testing resume.
-    #[error("stopped at {at_s} simulated seconds, as asked (--stop-at); resume it with `v2xw resume`")]
+    #[error(
+        "stopped at {at_s} simulated seconds, as asked (--stop-at); resume it with `v2xw resume`"
+    )]
     Interrupted {
         /// The simulated second it stopped at.
         at_s: f64,

@@ -115,7 +115,13 @@ impl Eidm {
     }
 
     /// The improved IDM with the CAH blend, on bare numbers (no jerk bound).
-    pub fn accel_of(&self, v: f64, v0: f64, leader: Option<(f64, f64, f64)>, d: &DriverProfile) -> f64 {
+    pub fn accel_of(
+        &self,
+        v: f64,
+        v0: f64,
+        leader: Option<(f64, f64, f64)>,
+        d: &DriverProfile,
+    ) -> f64 {
         let p = &self.params;
         let a = d.max_accel_mps2;
         let b = d.comfort_decel_mps2.max(0.1);
@@ -130,8 +136,8 @@ impl Eidm {
         };
         let s = gap.max(0.1);
         let dv = v - v_l;
-        let s_star = d.min_gap_m
-            + (d.time_headway_s * v + v * dv / (2.0 * math::sqrt(a * b))).max(0.0);
+        let s_star =
+            d.min_gap_m + (d.time_headway_s * v + v * dv / (2.0 * math::sqrt(a * b))).max(0.0);
         let z = s_star / s;
         let iidm = if v <= v0 {
             if z >= 1.0 {
@@ -259,7 +265,10 @@ pub fn card(params: &EidmParams) -> ModelCard {
             "CAH blend",
             "a = (1−c)·a_IIDM + c·[a_CAH + b·tanh((a_IIDM − a_CAH)/b)] when a_IIDM < a_CAH",
         ),
-        Equation::new("jerk bound", "a ≤ a_prev + j_max·Δt (2·j_max while a_prev + j_max·Δt < 0)"),
+        Equation::new(
+            "jerk bound",
+            "a ≤ a_prev + j_max·Δt (2·j_max while a_prev + j_max·Δt < 0)",
+        ),
     ];
     card.parameters = vec![
         Parameter::new(

@@ -81,7 +81,10 @@ impl GnPacket {
     /// The key duplicate detection and the CBF buffer use: `(source, sequence number)`
     /// [Annex A.2].
     pub fn key(&self) -> PacketKey {
-        PacketKey { source: self.source.addr, sn: self.sn }
+        PacketKey {
+            source: self.source.addr,
+            sn: self.sn,
+        }
     }
 
     /// The frame's network-layer octets: GN header + BTP header + payload.

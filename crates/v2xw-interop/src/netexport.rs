@@ -110,7 +110,9 @@ pub fn to_plain_xml(world: &World, ids: &SumoIds) -> PlainXml {
             continue;
         };
         if left.centreline.len() < 2 {
-            *px.skipped.entry("edge with a degenerate centreline").or_default() += 1;
+            *px.skipped
+                .entry("edge with a degenerate centreline")
+                .or_default() += 1;
             continue;
         }
         let speed = lanes
@@ -148,8 +150,10 @@ pub fn to_plain_xml(world: &World, ids: &SumoIds) -> PlainXml {
         if !con.permitted {
             continue;
         }
-        let (Some(from), Some(to)) = (ids.sumo_lane.get(&con.from_lane), ids.sumo_lane.get(&con.to_lane))
-        else {
+        let (Some(from), Some(to)) = (
+            ids.sumo_lane.get(&con.from_lane),
+            ids.sumo_lane.get(&con.to_lane),
+        ) else {
             continue;
         };
         let (fe, fl) = from.rsplit_once('_').unwrap_or((from, "0"));
@@ -181,7 +185,11 @@ pub fn export_net(
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let px = to_plain_xml(world, ids);
     let p = |ext: &str| dir.join(format!("{stem}.{ext}"));
-    for (ext, body) in [("nod.xml", &px.nodes), ("edg.xml", &px.edges), ("con.xml", &px.connections)] {
+    for (ext, body) in [
+        ("nod.xml", &px.nodes),
+        ("edg.xml", &px.edges),
+        ("con.xml", &px.connections),
+    ] {
         std::fs::write(p(ext), body).map_err(|e| e.to_string())?;
     }
     let out = p("net.xml");

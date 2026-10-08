@@ -46,23 +46,46 @@ fn selection_window(mode: Mode) -> Outcome {
         if mode.faulted() {
             params.t2_slots += 1;
         }
-        let (t1, t2, window) = (params.t1_slots, params.t2_slots, params.sensing_window_slots);
+        let (t1, t2, window) = (
+            params.t1_slots,
+            params.t2_slots,
+            params.sensing_window_slots,
+        );
         let latency = u64::from(1000 / pps);
         let engine = SpsEngine::new(Tier::High, pool.clone(), params);
         let n = 5_000u64;
         let c = engine.candidates(n, 1);
-        let inside = c.iter().all(|r| r.slot >= n + t1 && r.slot <= n + t2 && r.subch < s as u32);
-        let ok = t1 <= 4 && (20..=100).contains(&t2) && t2 <= latency && window == 1_000 && inside && c.len() as u64 == (t2 - t1 + 1) * s;
+        let inside = c
+            .iter()
+            .all(|r| r.slot >= n + t1 && r.slot <= n + t2 && r.subch < s as u32);
+        let ok = t1 <= 4
+            && (20..=100).contains(&t2)
+            && t2 <= latency
+            && window == 1_000
+            && inside
+            && c.len() as u64 == (t2 - t1 + 1) * s;
         parts.push((ok, format!("LTE {pps} pps: T1 {t1}, T2 {t2} (budget {latency}), sensing {window}, M_total {} = ({t2} − {t1} + 1)·{s}", c.len())));
     }
     // NR Mode 2 at µ = 1 (30 kHz): T_proc,1 = 5 slots, PDB 100 ms = 200 slots.
     let params = SpsParams::ali_todisco(Numerology::Mu1, true);
-    let (t1, t2, window) = (params.t1_slots, params.t2_slots, params.sensing_window_slots);
+    let (t1, t2, window) = (
+        params.t1_slots,
+        params.t2_slots,
+        params.sensing_window_slots,
+    );
     let engine = SpsEngine::new(Tier::High, pool.clone(), params);
     let c = engine.candidates(5_000, 1);
-    let inside = c.iter().all(|r| r.slot >= 5_000 + t1 && r.slot <= 5_000 + t2);
+    let inside = c
+        .iter()
+        .all(|r| r.slot >= 5_000 + t1 && r.slot <= 5_000 + t2);
     let ok = t1 <= 5 && t2 <= 200 && window == 200 && inside && c.len() as u64 == (t2 - t1 + 1) * s;
-    parts.push((ok, format!("NR µ=1: T1 {t1}, T2 {t2}, sensing {window} slots, M_total {}", c.len())));
+    parts.push((
+        ok,
+        format!(
+            "NR µ=1: T1 {t1}, T2 {t2}, sensing {window} slots, M_total {}",
+            c.len()
+        ),
+    ));
     Outcome::all(parts)
 }
 
@@ -86,7 +109,8 @@ fn srssi_ranking(mode: Mode) -> Outcome {
                 engine.note_energy(node, slot, sc, -100.0 + 5.0 * f64::from(sc));
             }
         }
-        let Some(out) = engine.select(&mut ctx, node, trigger, 1, SelectionReason::NoReservation) else {
+        let Some(out) = engine.select(&mut ctx, node, trigger, 1, SelectionReason::NoReservation)
+        else {
             return Outcome::judge(false, format!("node {k}: no selection"));
         };
         if out.resource.subch != 0 {
@@ -96,6 +120,10 @@ fn srssi_ranking(mode: Mode) -> Outcome {
     }
     Outcome::judge(
         outside == 0 && slots.len() >= 40,
-        format!("{} of {picks} picks outside S_B; {} distinct slots", outside, slots.len()),
+        format!(
+            "{} of {picks} picks outside S_B; {} distinct slots",
+            outside,
+            slots.len()
+        ),
     )
 }

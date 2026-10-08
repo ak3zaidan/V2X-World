@@ -84,9 +84,9 @@ impl Logit {
             .map(|a| a.cost_s)
             .fold(f64::INFINITY, f64::min)
             .max(1.0);
-        let theta = self.theta_per_s.unwrap_or_else(|| {
-            std::f64::consts::PI / (math::sqrt(6.0) * self.cv * cmin)
-        });
+        let theta = self
+            .theta_per_s
+            .unwrap_or_else(|| std::f64::consts::PI / (math::sqrt(6.0) * self.cv * cmin));
         let cf: Vec<f64> = (0..n)
             .map(|r| {
                 if self.cf_beta == 0.0 {
@@ -107,7 +107,9 @@ impl Logit {
             })
             .collect();
         // Utilities relative to the best, so the exponentials cannot overflow.
-        let u: Vec<f64> = (0..n).map(|r| -theta * alts[r].cost_s - self.cf_beta * cf[r]).collect();
+        let u: Vec<f64> = (0..n)
+            .map(|r| -theta * alts[r].cost_s - self.cf_beta * cf[r])
+            .collect();
         let umax = u.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let e: Vec<f64> = u.iter().map(|x| math::exp(x - umax)).collect();
         let sum = math::sum_ordered(e.iter().copied());
@@ -190,10 +192,7 @@ fn card(theta: Option<f64>, cv: f64, cf_beta: f64, cf_gamma: f64) -> ModelCard {
             "commonality",
             "CF_r = ln sum_s (L_rs / sqrt(L_r L_s))^gamma",
         ),
-        Equation::new(
-            "automatic dispersion",
-            "theta = pi / (sqrt(6) cv c_min)",
-        ),
+        Equation::new("automatic dispersion", "theta = pi / (sqrt(6) cv c_min)"),
     ];
     let mut cv_param = Parameter::new(
         "perception_cv",
@@ -207,12 +206,7 @@ fn card(theta: Option<f64>, cv: f64, cf_beta: f64, cf_gamma: f64) -> ModelCard {
             .to_string(),
     );
     card.parameters = vec![
-        Parameter::new(
-            "theta_per_s",
-            "1/s",
-            serde_json::json!(theta),
-            ds.clone(),
-        ),
+        Parameter::new("theta_per_s", "1/s", serde_json::json!(theta), ds.clone()),
         cv_param,
         Parameter::new(
             "commonality_beta",
@@ -272,7 +266,8 @@ mod tests {
         b.signature = e(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 11]);
         let mut c = alt(100.0, 1.0 / 3.0);
         c.signature = e(&[20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
-        let plain = Logit::new(Some(0.05), 0.1, 0.0, 1.0).probabilities(&[a.clone(), b.clone(), c.clone()]);
+        let plain =
+            Logit::new(Some(0.05), 0.1, 0.0, 1.0).probabilities(&[a.clone(), b.clone(), c.clone()]);
         assert!((plain[2] - 1.0 / 3.0).abs() < 1e-12);
         let cl = Logit::new(Some(0.05), 0.1, 1.0, 1.0).probabilities(&[a, b, c]);
         assert!(cl[2] > 0.4, "{cl:?}");

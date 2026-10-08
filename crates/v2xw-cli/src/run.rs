@@ -254,13 +254,10 @@ pub fn run(opts: &RunOptions) -> Result<RunOutcome> {
         .map_err(v2xw_engine::EngineError::Scenario)?;
     let load_s = load.elapsed_s();
 
-    let out_dir = opts
-        .out
-        .clone()
-        .unwrap_or_else(|| match &opts.city {
-            Some(city) => PathBuf::from("runs").join(format!("{}-{city}", scenario.meta.name)),
-            None => PathBuf::from("runs").join(&scenario.meta.name),
-        });
+    let out_dir = opts.out.clone().unwrap_or_else(|| match &opts.city {
+        Some(city) => PathBuf::from("runs").join(format!("{}-{city}", scenario.meta.name)),
+        None => PathBuf::from("runs").join(&scenario.meta.name),
+    });
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| CliError::io("cannot create output directory", &out_dir, e))?;
 
@@ -580,9 +577,11 @@ fn execute(
     };
     let metrics_path = out_dir.join("metrics.json");
     let metrics = match resume.as_ref() {
-        Some(ck) => {
-            crate::stream::MetricsStream::resume(&metrics_path, ck.metrics_bytes, ck.metric_samples)?
-        }
+        Some(ck) => crate::stream::MetricsStream::resume(
+            &metrics_path,
+            ck.metrics_bytes,
+            ck.metric_samples,
+        )?,
         None => crate::stream::MetricsStream::create(&metrics_path)?,
     };
     let mut sink = sink;
@@ -605,7 +604,8 @@ fn execute(
     // A checkpoint on request (Ctrl-C, `kill`, the terminal closing: `crate::signal`) is
     // looked for once a simulated second, at the same one-nanosecond-early boundary.
     const POLL_NS: u64 = 1_000_000_000;
-    let mut next_poll = checkpoint_every_ns.map(|_| next_multiple_after(start_ns.saturating_add(1), POLL_NS) - 1);
+    let mut next_poll =
+        checkpoint_every_ns.map(|_| next_multiple_after(start_ns.saturating_add(1), POLL_NS) - 1);
     if checkpoint_every_ns.is_some() {
         crate::signal::install();
     }
@@ -826,8 +826,7 @@ fn execute(
     }
 
     if !exporters.is_empty() {
-        outcome.exports =
-            v2xw_engine::export::run_exporters(&exporters, &recording_path, out_dir)?;
+        outcome.exports = v2xw_engine::export::run_exporters(&exporters, &recording_path, out_dir)?;
     }
 
     // The deterministic artefacts are digested before the manifest is written, because the

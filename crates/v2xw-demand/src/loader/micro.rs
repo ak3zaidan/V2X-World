@@ -65,7 +65,10 @@ impl Micro {
             "step_ms",
             "ms",
             serde_json::json!(step_ms),
-            Source::new(SourceKind::Code, "the engine's mobility step (EngineParams::step)"),
+            Source::new(
+                SourceKind::Code,
+                "the engine's mobility step (EngineParams::step)",
+            ),
         )];
         card.sources = vec![Source::new(
             SourceKind::Code,
@@ -134,7 +137,11 @@ impl NetworkLoader for Micro {
         let demand = TripListDemand::new(
             shifted,
             planned,
-            trip_list_card(MODEL_ID, "the assignment's trips on their chosen routes", Vec::new()),
+            trip_list_card(
+                MODEL_ID,
+                "the assignment's trips on their chosen routes",
+                Vec::new(),
+            ),
         );
         let rng = RngRegistry::new(self.seed);
         let params = EngineParams {

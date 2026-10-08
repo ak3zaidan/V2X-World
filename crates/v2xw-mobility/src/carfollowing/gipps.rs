@@ -121,7 +121,13 @@ impl Gipps {
     }
 
     /// The speed one reaction time ahead, on bare numbers.
-    pub fn next_speed(&self, v: f64, v_desired: f64, leader: Option<(f64, f64)>, d: &DriverProfile) -> f64 {
+    pub fn next_speed(
+        &self,
+        v: f64,
+        v_desired: f64,
+        leader: Option<(f64, f64)>,
+        d: &DriverProfile,
+    ) -> f64 {
         let tau = d.time_headway_s.max(0.1);
         let a = d.max_accel_mps2;
         let vd = v_desired.max(0.1);
@@ -224,8 +230,18 @@ pub fn card(params: &GippsParams) -> ModelCard {
     ];
     let pc = Gipps::class_profile(VehicleClass::Passenger);
     card.parameters = vec![
-        Parameter::new("a", "m/s²", serde_json::json!(pc.max_accel_mps2), gipps.clone()),
-        Parameter::new("B", "m/s²", serde_json::json!(pc.comfort_decel_mps2), gipps.clone()),
+        Parameter::new(
+            "a",
+            "m/s²",
+            serde_json::json!(pc.max_accel_mps2),
+            gipps.clone(),
+        ),
+        Parameter::new(
+            "B",
+            "m/s²",
+            serde_json::json!(pc.comfort_decel_mps2),
+            gipps.clone(),
+        ),
         Parameter::new("tau", "s", serde_json::json!(GIPPS_TAU_S), gipps.clone()),
         Parameter::new("V", "m/s", serde_json::json!(GIPPS_V_MPS), gipps.clone()),
         Parameter::new(

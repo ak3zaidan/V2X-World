@@ -183,7 +183,14 @@ impl Router {
         Router {
             addr,
             cfg,
-            ego: PositionVector { addr, t_ns: 0, x: 0.0, y: 0.0, speed: 0.0, heading_deg: 0.0 },
+            ego: PositionVector {
+                addr,
+                t_ns: 0,
+                x: 0.0,
+                y: 0.0,
+                speed: 0.0,
+                heading_deg: 0.0,
+            },
             loct: LocationTable::new(cfg.mib.lifetime_loc_te_ms, cfg.mib.dpl_length),
             sn: 0,
             cbf: BTreeMap::new(),
@@ -214,7 +221,14 @@ impl Router {
 
     /// Update the ego position vector (the caller's positioning, before each event).
     pub fn set_ego(&mut self, x: f64, y: f64, speed: f64, heading_deg: f64, now_ns: u64) {
-        self.ego = PositionVector { addr: self.addr, t_ns: now_ns.max(1), x, y, speed, heading_deg };
+        self.ego = PositionVector {
+            addr: self.addr,
+            t_ns: now_ns.max(1),
+            x,
+            y,
+            speed,
+            heading_deg,
+        };
     }
 
     /// The ego position vector.
@@ -254,8 +268,20 @@ impl Router {
         self.sn
     }
 
-    fn new_packet(&mut self, transport: GnTransport, dest: Destination, port: BtpPort, bytes: u32, tag: u64, hops: u8) -> GnPacket {
-        let sn = if matches!(transport, GnTransport::Shb | GnTransport::Beacon) { 0 } else { self.next_sn() };
+    fn new_packet(
+        &mut self,
+        transport: GnTransport,
+        dest: Destination,
+        port: BtpPort,
+        bytes: u32,
+        tag: u64,
+        hops: u8,
+    ) -> GnPacket {
+        let sn = if matches!(transport, GnTransport::Shb | GnTransport::Beacon) {
+            0
+        } else {
+            self.next_sn()
+        };
         GnPacket {
             transport,
             source: self.ego,
@@ -272,46 +298,127 @@ impl Router {
 
     /// Single-hop broadcast [§10.3.10.2]; also postpones the next beacon by a full period
     /// (an SHB carries the same position vector a beacon would).
-    pub fn originate_shb(&mut self, port: BtpPort, bytes: u32, tag: u64, now_ns: u64) -> Vec<RouterAction> {
-        let p = self.new_packet(GnTransport::Shb, Destination::SingleHop, port, bytes, tag, 1);
+    pub fn originate_shb(
+        &mut self,
+        port: BtpPort,
+        bytes: u32,
+        tag: u64,
+        now_ns: u64,
+    ) -> Vec<RouterAction> {
+        let p = self.new_packet(
+            GnTransport::Shb,
+            Destination::SingleHop,
+            port,
+            bytes,
+            tag,
+            1,
+        );
         self.next_beacon_ns = now_ns + self.cfg.mib.beacon_retransmit_ms * 1_000_000;
         self.counters.originated += 1;
-        vec![RouterAction::Transmit { packet: p, to: LinkDest::Broadcast, originated: true }]
+        vec![RouterAction::Transmit {
+            packet: p,
+            to: LinkDest::Broadcast,
+            originated: true,
+        }]
     }
 
     /// Topologically scoped broadcast [§10.3.9.2].
-    pub fn originate_tsb(&mut self, port: BtpPort, bytes: u32, tag: u64, hops: u8, now_ns: u64) -> Vec<RouterAction> {
-        let p = self.new_packet(GnTransport::Tsb, Destination::Topological, port, bytes, tag, hops);
+    pub fn originate_tsb(
+        &mut self,
+        port: BtpPort,
+        bytes: u32,
+        tag: u64,
+        hops: u8,
+        now_ns: u64,
+    ) -> Vec<RouterAction> {
+        let p = self.new_packet(
+            GnTransport::Tsb,
+            Destination::Topological,
+            port,
+            bytes,
+            tag,
+            hops,
+        );
         self.loct.check_and_record(self.addr, p.sn, now_ns);
         self.counters.originated += 1;
-        vec![RouterAction::Transmit { packet: p, to: LinkDest::Broadcast, originated: true }]
+        vec![RouterAction::Transmit {
+            packet: p,
+            to: LinkDest::Broadcast,
+            originated: true,
+        }]
     }
 
     /// GeoBroadcast [§10.3.11.2]: inside the area the source broadcasts; outside, it
     /// forwards towards the area with the non-area algorithm.
-    pub fn originate_gbc(&mut self, area: Area, port: BtpPort, bytes: u32, tag: u64, now_ns: u64) -> Vec<RouterAction> {
+    pub fn originate_gbc(
+        &mut self,
+        area: Area,
+        port: BtpPort,
+        bytes: u32,
+        tag: u64,
+        now_ns: u64,
+    ) -> Vec<RouterAction> {
         let hops = self.cfg.mib.default_hop_limit;
-        let p = self.new_packet(GnTransport::Gbc, Destination::Area(area), port, bytes, tag, hops);
+        let p = self.new_packet(
+            GnTransport::Gbc,
+            Destination::Area(area),
+            port,
+            bytes,
+            tag,
+            hops,
+        );
         self.loct.check_and_record(self.addr, p.sn, now_ns);
         self.counters.originated += 1;
         if area.contains(self.ego.x, self.ego.y) {
-            return vec![RouterAction::Transmit { packet: p, to: LinkDest::Broadcast, originated: true }];
+            return vec![RouterAction::Transmit {
+                packet: p,
+                to: LinkDest::Broadcast,
+                originated: true,
+            }];
         }
         match self.greedy_next_hop(area.cx, area.cy, now_ns) {
-            Some(nh) => vec![RouterAction::Transmit { packet: p, to: LinkDest::Unicast(nh), originated: true }],
+            Some(nh) => vec![RouterAction::Transmit {
+                packet: p,
+                to: LinkDest::Unicast(nh),
+                originated: true,
+            }],
             // At a local optimum the source still broadcasts: every neighbour then decides.
-            None => vec![RouterAction::Transmit { packet: p, to: LinkDest::Broadcast, originated: true }],
+            None => vec![RouterAction::Transmit {
+                packet: p,
+                to: LinkDest::Broadcast,
+                originated: true,
+            }],
         }
     }
 
     /// GeoUnicast [§10.3.8.2] to `dest`, whose position must be in the location table
     /// (this module has no location service).
-    pub fn originate_guc(&mut self, dest: GnAddr, port: BtpPort, bytes: u32, tag: u64, now_ns: u64) -> Vec<RouterAction> {
+    pub fn originate_guc(
+        &mut self,
+        dest: GnAddr,
+        port: BtpPort,
+        bytes: u32,
+        tag: u64,
+        now_ns: u64,
+    ) -> Vec<RouterAction> {
         let Some(de) = self.loct.get(dest, now_ns).map(|e| e.pv) else {
-            return vec![RouterAction::Drop { key: PacketKey { source: self.addr, sn: self.sn }, reason: DropReason::UnknownDestination }];
+            return vec![RouterAction::Drop {
+                key: PacketKey {
+                    source: self.addr,
+                    sn: self.sn,
+                },
+                reason: DropReason::UnknownDestination,
+            }];
         };
         let hops = self.cfg.mib.default_hop_limit;
-        let p = self.new_packet(GnTransport::Guc, Destination::Node(de), port, bytes, tag, hops);
+        let p = self.new_packet(
+            GnTransport::Guc,
+            Destination::Node(de),
+            port,
+            bytes,
+            tag,
+            hops,
+        );
         self.loct.check_and_record(self.addr, p.sn, now_ns);
         self.counters.originated += 1;
         self.forward_non_area(p, de.x, de.y, None, now_ns, true)
@@ -334,7 +441,15 @@ impl Router {
         best.map(|(_, a)| a)
     }
 
-    fn forward_non_area(&mut self, packet: GnPacket, tx: f64, ty: f64, sender: Option<GnAddr>, now_ns: u64, originated: bool) -> Vec<RouterAction> {
+    fn forward_non_area(
+        &mut self,
+        packet: GnPacket,
+        tx: f64,
+        ty: f64,
+        sender: Option<GnAddr>,
+        now_ns: u64,
+        originated: bool,
+    ) -> Vec<RouterAction> {
         let key = packet.key();
         match self.cfg.mib.non_area_forwarding {
             NonAreaForwarding::Greedy => match self.greedy_next_hop(tx, ty, now_ns) {
@@ -342,16 +457,27 @@ impl Router {
                     if !originated {
                         self.counters.forwarded += 1;
                     }
-                    vec![RouterAction::Transmit { packet, to: LinkDest::Unicast(nh), originated }]
+                    vec![RouterAction::Transmit {
+                        packet,
+                        to: LinkDest::Unicast(nh),
+                        originated,
+                    }]
                 }
                 None => {
                     self.counters.local_optimum += 1;
-                    vec![RouterAction::Drop { key, reason: DropReason::LocalOptimum }]
+                    vec![RouterAction::Drop {
+                        key,
+                        reason: DropReason::LocalOptimum,
+                    }]
                 }
             },
             NonAreaForwarding::Cbf => {
                 if originated {
-                    return vec![RouterAction::Transmit { packet, to: LinkDest::Broadcast, originated }];
+                    return vec![RouterAction::Transmit {
+                        packet,
+                        to: LinkDest::Broadcast,
+                        originated,
+                    }];
                 }
                 let sender_pv = sender.and_then(|s| self.loct.get(s, now_ns)).map(|e| e.pv);
                 let progress = match sender_pv {
@@ -360,61 +486,102 @@ impl Router {
                 };
                 if progress <= 0.0 {
                     self.counters.local_optimum += 1;
-                    return vec![RouterAction::Drop { key, reason: DropReason::LocalOptimum }];
+                    return vec![RouterAction::Drop {
+                        key,
+                        reason: DropReason::LocalOptimum,
+                    }];
                 }
                 let at = now_ns + self.cfg.mib.cbf_timeout_ns(progress);
-                self.cbf.insert(key, CbfEntry { packet, to: LinkDest::Broadcast });
+                self.cbf.insert(
+                    key,
+                    CbfEntry {
+                        packet,
+                        to: LinkDest::Broadcast,
+                    },
+                );
                 vec![RouterAction::ArmCbfTimer { key, at_ns: at }]
             }
         }
     }
 
     /// A frame arrived from `sender` (the link-layer source) addressed to `link_dest`.
-    pub fn receive(&mut self, packet: &GnPacket, sender: GnAddr, link_dest: LinkDest, now_ns: u64) -> Vec<RouterAction> {
+    pub fn receive(
+        &mut self,
+        packet: &GnPacket,
+        sender: GnAddr,
+        link_dest: LinkDest,
+        now_ns: u64,
+    ) -> Vec<RouterAction> {
         let key = packet.key();
         if let LinkDest::Unicast(a) = link_dest {
             if a != self.addr {
-                return vec![RouterAction::Drop { key, reason: DropReason::NotAddressed }];
+                return vec![RouterAction::Drop {
+                    key,
+                    reason: DropReason::NotAddressed,
+                }];
             }
         }
         if packet.source.addr == self.addr {
-            return vec![RouterAction::Drop { key, reason: DropReason::OwnPacket }];
+            return vec![RouterAction::Drop {
+                key,
+                reason: DropReason::OwnPacket,
+            }];
         }
         if packet.source.t_ns + packet.lifetime_ms * 1_000_000 < now_ns {
-            return vec![RouterAction::Drop { key, reason: DropReason::LifetimeExpired }];
+            return vec![RouterAction::Drop {
+                key,
+                reason: DropReason::LifetimeExpired,
+            }];
         }
         // The source's position vector updates the location table; it marks a neighbour
         // only when the source is the sender (a first hop, a beacon or an SHB).
-        self.loct.update(packet.source, packet.source.addr == sender, now_ns);
+        self.loct
+            .update(packet.source, packet.source.addr == sender, now_ns);
         match packet.transport {
             GnTransport::Beacon => vec![],
             GnTransport::Shb => {
                 self.counters.delivered += 1;
-                vec![RouterAction::Deliver { packet: packet.clone() }]
+                vec![RouterAction::Deliver {
+                    packet: packet.clone(),
+                }]
             }
             GnTransport::Tsb => {
                 if self.loct.check_and_record(key.source, key.sn, now_ns) {
                     self.counters.duplicates += 1;
-                    return vec![RouterAction::Drop { key, reason: DropReason::Duplicate }];
+                    return vec![RouterAction::Drop {
+                        key,
+                        reason: DropReason::Duplicate,
+                    }];
                 }
                 self.counters.delivered += 1;
-                let mut out = vec![RouterAction::Deliver { packet: packet.clone() }];
+                let mut out = vec![RouterAction::Deliver {
+                    packet: packet.clone(),
+                }];
                 out.push(self.decrement_and_broadcast(packet));
                 out
             }
-            GnTransport::Gbc | GnTransport::Gac => self.receive_gbc(packet, sender, link_dest, now_ns),
+            GnTransport::Gbc | GnTransport::Gac => {
+                self.receive_gbc(packet, sender, link_dest, now_ns)
+            }
             GnTransport::Guc => self.receive_guc(packet, sender, now_ns),
         }
     }
 
     fn decrement_and_broadcast(&mut self, packet: &GnPacket) -> RouterAction {
         if packet.rhl <= 1 {
-            return RouterAction::Drop { key: packet.key(), reason: DropReason::HopLimit };
+            return RouterAction::Drop {
+                key: packet.key(),
+                reason: DropReason::HopLimit,
+            };
         }
         let mut p = packet.clone();
         p.rhl -= 1;
         self.counters.forwarded += 1;
-        RouterAction::Transmit { packet: p, to: LinkDest::Broadcast, originated: false }
+        RouterAction::Transmit {
+            packet: p,
+            to: LinkDest::Broadcast,
+            originated: false,
+        }
     }
 
     fn receive_guc(&mut self, packet: &GnPacket, sender: GnAddr, now_ns: u64) -> Vec<RouterAction> {
@@ -422,21 +589,32 @@ impl Router {
         let cbf = self.cfg.mib.non_area_forwarding == NonAreaForwarding::Cbf;
         if cbf && self.cbf.remove(&key).is_some() {
             self.counters.cbf_cancelled += 1;
-            return vec![RouterAction::Drop { key, reason: DropReason::CbfCancelled }];
+            return vec![RouterAction::Drop {
+                key,
+                reason: DropReason::CbfCancelled,
+            }];
         }
         if self.loct.check_and_record(key.source, key.sn, now_ns) {
             self.counters.duplicates += 1;
-            return vec![RouterAction::Drop { key, reason: DropReason::Duplicate }];
+            return vec![RouterAction::Drop {
+                key,
+                reason: DropReason::Duplicate,
+            }];
         }
         let Destination::Node(mut de) = packet.dest else {
             return vec![];
         };
         if de.addr == self.addr {
             self.counters.delivered += 1;
-            return vec![RouterAction::Deliver { packet: packet.clone() }];
+            return vec![RouterAction::Deliver {
+                packet: packet.clone(),
+            }];
         }
         if packet.rhl <= 1 {
-            return vec![RouterAction::Drop { key, reason: DropReason::HopLimit }];
+            return vec![RouterAction::Drop {
+                key,
+                reason: DropReason::HopLimit,
+            }];
         }
         // A fresher DE PV from our own table replaces the header's [§10.3.8.3].
         if let Some(e) = self.loct.get(de.addr, now_ns) {
@@ -450,7 +628,13 @@ impl Router {
         self.forward_non_area(p, de.x, de.y, Some(sender), now_ns, false)
     }
 
-    fn receive_gbc(&mut self, packet: &GnPacket, sender: GnAddr, link_dest: LinkDest, now_ns: u64) -> Vec<RouterAction> {
+    fn receive_gbc(
+        &mut self,
+        packet: &GnPacket,
+        sender: GnAddr,
+        link_dest: LinkDest,
+        now_ns: u64,
+    ) -> Vec<RouterAction> {
         let key = packet.key();
         let Destination::Area(area) = packet.dest else {
             return vec![];
@@ -475,10 +659,16 @@ impl Router {
             if cancel {
                 self.cbf.remove(&key);
                 self.counters.cbf_cancelled += 1;
-                return vec![RouterAction::Drop { key, reason: DropReason::CbfCancelled }];
+                return vec![RouterAction::Drop {
+                    key,
+                    reason: DropReason::CbfCancelled,
+                }];
             }
             self.counters.duplicates += 1;
-            return vec![RouterAction::Drop { key, reason: DropReason::Duplicate }];
+            return vec![RouterAction::Drop {
+                key,
+                reason: DropReason::Duplicate,
+            }];
         }
         // Duplicate packet detection. The ETSI-baseline CBF runs without it, so a copy
         // after our own forward is taken as new; simple forwarding always needs it.
@@ -486,16 +676,24 @@ impl Router {
         let seen = self.loct.check_and_record(key.source, key.sn, now_ns);
         if run_dpd && seen {
             self.counters.duplicates += 1;
-            return vec![RouterAction::Drop { key, reason: DropReason::Duplicate }];
+            return vec![RouterAction::Drop {
+                key,
+                reason: DropReason::Duplicate,
+            }];
         }
         let inside = area.contains(self.ego.x, self.ego.y);
         let mut out = Vec::new();
         if inside {
             self.counters.delivered += 1;
-            out.push(RouterAction::Deliver { packet: packet.clone() });
+            out.push(RouterAction::Deliver {
+                packet: packet.clone(),
+            });
         }
         if packet.rhl <= 1 {
-            out.push(RouterAction::Drop { key, reason: DropReason::HopLimit });
+            out.push(RouterAction::Drop {
+                key,
+                reason: DropReason::HopLimit,
+            });
             return out;
         }
         let mut p = packet.clone();
@@ -504,7 +702,11 @@ impl Router {
             match self.cfg.mib.area_forwarding {
                 AreaForwarding::Simple => {
                     self.counters.forwarded += 1;
-                    out.push(RouterAction::Transmit { packet: p, to: LinkDest::Broadcast, originated: false });
+                    out.push(RouterAction::Transmit {
+                        packet: p,
+                        to: LinkDest::Broadcast,
+                        originated: false,
+                    });
                 }
                 AreaForwarding::Cbf => {
                     let dist = self
@@ -515,14 +717,26 @@ impl Router {
                         Some(d) => self.cfg.mib.cbf_timeout_ns(d),
                         None => self.cfg.mib.cbf_max_ms * 1_000_000,
                     };
-                    self.cbf.insert(key, CbfEntry { packet: p, to: LinkDest::Broadcast });
-                    out.push(RouterAction::ArmCbfTimer { key, at_ns: now_ns + to });
+                    self.cbf.insert(
+                        key,
+                        CbfEntry {
+                            packet: p,
+                            to: LinkDest::Broadcast,
+                        },
+                    );
+                    out.push(RouterAction::ArmCbfTimer {
+                        key,
+                        at_ns: now_ns + to,
+                    });
                 }
             }
             return out;
         }
         if link_dest == LinkDest::Broadcast && !self.cfg.out_of_area_broadcast_forward {
-            out.push(RouterAction::Drop { key, reason: DropReason::OutOfArea });
+            out.push(RouterAction::Drop {
+                key,
+                reason: DropReason::OutOfArea,
+            });
             return out;
         }
         out.extend(self.forward_non_area(p, area.cx, area.cy, Some(sender), now_ns, false));
@@ -534,7 +748,11 @@ impl Router {
         match self.cbf.remove(&key) {
             Some(e) => {
                 self.counters.forwarded += 1;
-                vec![RouterAction::Transmit { packet: e.packet, to: e.to, originated: false }]
+                vec![RouterAction::Transmit {
+                    packet: e.packet,
+                    to: e.to,
+                    originated: false,
+                }]
             }
             None => vec![],
         }
@@ -576,31 +794,59 @@ mod tests {
         hear(&mut far, &src, 1);
         hear(&mut near, &far, 1);
         let area = Area::rect(-10.0, -10.0, 2_000.0, 10.0);
-        let RouterAction::Transmit { packet, .. } = src.originate_gbc(area, BtpPort::DENM, 300, 0, 10).remove(0) else { panic!() };
+        let RouterAction::Transmit { packet, .. } =
+            src.originate_gbc(area, BtpPort::DENM, 300, 0, 10).remove(0)
+        else {
+            panic!()
+        };
         let an = near.receive(&packet, GnAddr(1), LinkDest::Broadcast, 10);
         let af = far.receive(&packet, GnAddr(1), LinkDest::Broadcast, 10);
-        let t = |a: &[RouterAction]| a.iter().find_map(|x| match x { RouterAction::ArmCbfTimer { at_ns, .. } => Some(*at_ns), _ => None }).unwrap();
+        let t = |a: &[RouterAction]| {
+            a.iter()
+                .find_map(|x| match x {
+                    RouterAction::ArmCbfTimer { at_ns, .. } => Some(*at_ns),
+                    _ => None,
+                })
+                .unwrap()
+        };
         assert!(t(&af) < t(&an));
         let fwd = far.on_cbf_timer(packet.key(), t(&af));
-        let RouterAction::Transmit { packet: p2, .. } = &fwd[0] else { panic!() };
+        let RouterAction::Transmit { packet: p2, .. } = &fwd[0] else {
+            panic!()
+        };
         assert_eq!(p2.rhl, packet.rhl - 1);
         let c = near.receive(p2, GnAddr(3), LinkDest::Broadcast, t(&af));
-        assert!(matches!(c[0], RouterAction::Drop { reason: DropReason::CbfCancelled, .. }));
+        assert!(matches!(
+            c[0],
+            RouterAction::Drop {
+                reason: DropReason::CbfCancelled,
+                ..
+            }
+        ));
         assert!(near.on_cbf_timer(packet.key(), t(&an)).is_empty());
     }
 
     #[test]
     fn etsi_variant_rebuffers_a_late_copy_dpd_does_not() {
         for (variant, rebuffers) in [(CbfVariant::Etsi, true), (CbfVariant::Dpd, false)] {
-            let cfg = ForwardingConfig { cbf_variant: variant, ..Default::default() };
+            let cfg = ForwardingConfig {
+                cbf_variant: variant,
+                ..Default::default()
+            };
             let mut src = router(1, 0.0, cfg);
             let mut r = router(2, 300.0, cfg);
             let area = Area::rect(-10.0, -10.0, 2_000.0, 10.0);
-            let RouterAction::Transmit { packet, .. } = src.originate_gbc(area, BtpPort::DENM, 300, 0, 10).remove(0) else { panic!() };
+            let RouterAction::Transmit { packet, .. } =
+                src.originate_gbc(area, BtpPort::DENM, 300, 0, 10).remove(0)
+            else {
+                panic!()
+            };
             r.receive(&packet, GnAddr(1), LinkDest::Broadcast, 10);
             assert_eq!(r.on_cbf_timer(packet.key(), 200_000_000).len(), 1);
             let again = r.receive(&packet, GnAddr(9), LinkDest::Broadcast, 300_000_000);
-            let armed = again.iter().any(|a| matches!(a, RouterAction::ArmCbfTimer { .. }));
+            let armed = again
+                .iter()
+                .any(|a| matches!(a, RouterAction::ArmCbfTimer { .. }));
             assert_eq!(armed, rebuffers, "{variant:?}");
         }
     }
@@ -615,12 +861,28 @@ mod tests {
         hear(&mut s, &b, 1);
         let far_area = Area::circle(5_000.0, 0.0, 100.0);
         let acts = s.originate_gbc(far_area, BtpPort::DENM, 100, 0, 5);
-        assert!(matches!(acts[0], RouterAction::Transmit { to: LinkDest::Unicast(GnAddr(3)), .. }));
+        assert!(matches!(
+            acts[0],
+            RouterAction::Transmit {
+                to: LinkDest::Unicast(GnAddr(3)),
+                ..
+            }
+        ));
         let behind = Area::circle(-5_000.0, 0.0, 100.0);
         let mut lone = router(4, 0.0, cfg);
         hear(&mut lone, &a, 1);
-        let RouterAction::Transmit { packet, .. } = s.originate_gbc(behind, BtpPort::DENM, 100, 0, 6).remove(0) else { panic!() };
+        let RouterAction::Transmit { packet, .. } =
+            s.originate_gbc(behind, BtpPort::DENM, 100, 0, 6).remove(0)
+        else {
+            panic!()
+        };
         let out = lone.receive(&packet, GnAddr(1), LinkDest::Unicast(GnAddr(4)), 6);
-        assert!(out.iter().any(|x| matches!(x, RouterAction::Drop { reason: DropReason::LocalOptimum, .. })));
+        assert!(out.iter().any(|x| matches!(
+            x,
+            RouterAction::Drop {
+                reason: DropReason::LocalOptimum,
+                ..
+            }
+        )));
     }
 }

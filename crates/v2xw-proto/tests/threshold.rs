@@ -79,10 +79,16 @@ fn every_registered_protocol_has_rounds_setup_and_a_knowledge_statement() {
         let p = threshold::build(id, &ProtocolParams::default()).expect("registered");
         assert!(p.sign_round_trips() >= 1, "{id}");
         assert!(p.sign_bytes(3, 1, 93) > 0, "{id}");
-        assert!(p.setup_bytes(ThresholdOp::Dkg, &c) > 0, "{id}: key generation costs bytes");
+        assert!(
+            p.setup_bytes(ThresholdOp::Dkg, &c) > 0,
+            "{id}: key generation costs bytes"
+        );
         assert!(p.setup_rounds(ThresholdOp::Dkg, &c) > 0, "{id}");
         assert!(!p.knowledge().is_empty(), "{id}");
-        assert!(p.identifiable_abort(), "{id}: every shipped protocol identifies a cheater");
+        assert!(
+            p.identifiable_abort(),
+            "{id}: every shipped protocol identifies a cheater"
+        );
     }
 }
 
@@ -100,8 +106,16 @@ fn frost_is_two_rounds_cggmp21_four_and_linkage_release_one() {
         .sign_round_trips()
     };
     assert_eq!(rounds("frost-p256", false), 2, "RFC 9591 §5: commit, sign");
-    assert_eq!(rounds("frost-p256", true), 1, "RFC 9591 §5.1: preprocessed commitments");
-    assert_eq!(rounds("cggmp21-ecdsa", false), 4, "CGGMP21: 3 presign + 1 online");
+    assert_eq!(
+        rounds("frost-p256", true),
+        1,
+        "RFC 9591 §5.1: preprocessed commitments"
+    );
+    assert_eq!(
+        rounds("cggmp21-ecdsa", false),
+        4,
+        "CGGMP21: 3 presign + 1 online"
+    );
     assert_eq!(rounds("cggmp21-ecdsa", true), 1, "presignature pool");
     assert_eq!(rounds("shamir-feldman", false), 1);
     assert_eq!(rounds("umbrella", false), 2, "FROST inside");
@@ -188,7 +202,12 @@ fn asking_every_member_costs_more_bytes_and_shrugs_off_a_slow_one() {
     provisioned(&mut all, DEVICE_A, 0, PERIODS, JMAX);
     assert_eq!(held(&all), (PERIODS * JMAX) as usize);
     let (q, a) = (stats(&quorum_only, "pca"), stats(&all, "pca"));
-    assert!(a.bytes > q.bytes, "five asked in round one: {} vs {}", a.bytes, q.bytes);
+    assert!(
+        a.bytes > q.bytes,
+        "five asked in round one: {} vs {}",
+        a.bytes,
+        q.bytes
+    );
     assert!(
         a.latency_ns_max < Duration::from_secs(1).as_nanos(),
         "the slow member did not set the pace: {a:?}"
@@ -201,7 +220,11 @@ fn an_offline_member_is_timed_out_excluded_and_replaced() {
     let down = run.committee_members("pca")[0];
     run.set_faults(vec![forever(down, FaultKind::Offline)]);
     provisioned(&mut run, DEVICE_A, 0, PERIODS, JMAX);
-    assert_eq!(held(&run), (PERIODS * JMAX) as usize, "4 of 5 still make a quorum of 3");
+    assert_eq!(
+        held(&run),
+        (PERIODS * JMAX) as usize,
+        "4 of 5 still make a quorum of 3"
+    );
     let s = stats(&run, "pca");
     assert_eq!(s.completed, u64::from(PERIODS));
     assert_eq!(s.timeouts, u64::from(PERIODS), "one timeout per session");
@@ -221,13 +244,25 @@ fn too_few_live_members_fail_the_session_and_nothing_is_issued() {
     };
     let mut run = deployment(Some(t));
     let m = run.committee_members("pca");
-    run.set_faults(m[..3].iter().map(|n| forever(*n, FaultKind::Offline)).collect());
+    run.set_faults(
+        m[..3]
+            .iter()
+            .map(|n| forever(*n, FaultKind::Offline))
+            .collect(),
+    );
     provisioned(&mut run, DEVICE_A, 0, PERIODS, JMAX);
     assert_eq!(held(&run), 0, "2 of 5 cannot make a quorum of 3");
     let s = stats(&run, "pca");
     assert_eq!(s.completed, 0);
     assert!(s.failed >= 1);
-    assert!(run.state.threshold_failures.get("pca").copied().unwrap_or(0) >= 1);
+    assert!(
+        run.state
+            .threshold_failures
+            .get("pca")
+            .copied()
+            .unwrap_or(0)
+            >= 1
+    );
 }
 
 #[test]
@@ -281,7 +316,10 @@ fn a_slow_member_the_quorum_depends_on_is_waited_for_not_excluded() {
     assert_eq!(s.failed, 0, "{s:?}");
     assert!(s.timeouts > 0);
     // Every round waited on the slow member: at least two of its 800 ms per session.
-    assert!(s.mean_latency_ns() >= Duration::from_millis(1_600).as_nanos(), "{s:?}");
+    assert!(
+        s.mean_latency_ns() >= Duration::from_millis(1_600).as_nanos(),
+        "{s:?}"
+    );
 }
 
 #[test]
@@ -298,7 +336,12 @@ fn a_malicious_member_is_caught_by_its_share_excluded_and_the_session_restarts()
     assert!(s.restarts >= 1);
     assert_eq!(s.failed, 0);
     assert_eq!(
-        run.state.committees.caught.values().map(|c| c.len()).sum::<usize>(),
+        run.state
+            .committees
+            .caught
+            .values()
+            .map(|c| c.len())
+            .sum::<usize>(),
         1
     );
 }
@@ -322,7 +365,10 @@ fn threshold_ecdsa_is_far_slower_than_frost_unless_presigned() {
     let pooled = latency("cggmp21-ecdsa", true);
     // CGGMP21's measured presigning (≈ 2.6 s per presignature per party) dominates.
     assert!(ecdsa > 10 * frost, "cggmp21 {ecdsa} vs frost {frost}");
-    assert!(pooled < ecdsa / 10, "a presignature pool leaves only the online round");
+    assert!(
+        pooled < ecdsa / 10,
+        "a presignature pool leaves only the online round"
+    );
 }
 
 #[test]
@@ -341,7 +387,10 @@ fn an_umbrella_authority_signs_one_umbrella_per_k_leaves() {
     assert_eq!(held(&umbrella), (PERIODS * JMAX) as usize);
     let (p, u) = (stats(&per_cert, "pca"), stats(&umbrella, "pca"));
     assert_eq!(p.sessions, u.sessions);
-    assert!(u.bytes < p.bytes, "1 signature per umbrella of {JMAX} leaves: {u:?} vs {p:?}");
+    assert!(
+        u.bytes < p.bytes,
+        "1 signature per umbrella of {JMAX} leaves: {u:?} vs {p:?}"
+    );
 }
 
 // ------------------------------------------------------------------------------------
@@ -405,7 +454,10 @@ fn t_of_n_linkage_revokes_with_members_down_and_names_the_same_device() {
     });
     assert_eq!(committee.state.crlg.entries.len(), 1);
     // The released seeds are the ones two-of-two would have released.
-    let (a, b) = (&healthy.state.crlg.entries[0], &committee.state.crlg.entries[0]);
+    let (a, b) = (
+        &healthy.state.crlg.entries[0],
+        &committee.state.crlg.entries[0],
+    );
     assert_eq!((a.ls1_i, a.ls2_i, a.i), (b.ls1_i, b.ls2_i, b.i));
     let s = stats(&committee, "linkage");
     assert_eq!(s.completed, 1);
@@ -453,11 +505,7 @@ fn committees_are_deterministic() {
         let liar = run.committee_members("pca")[1];
         run.set_faults(vec![forever(liar, FaultKind::Malicious)]);
         provisioned(&mut run, DEVICE_A, 0, PERIODS, JMAX);
-        (
-            run.kernel.steps.len(),
-            run.kernel.now(),
-            stats(&run, "pca"),
-        )
+        (run.kernel.steps.len(), run.kernel.now(), stats(&run, "pca"))
     };
     assert_eq!(once(), once());
 }

@@ -45,7 +45,9 @@ pub fn encode_request(
                 "output": m.text(),
             })),
             Role::Assistant => match m.provider_blocks.as_ref().and_then(Value::as_array) {
-                Some(items) if items.iter().all(is_replayable) => input.extend(items.iter().cloned()),
+                Some(items) if items.iter().all(is_replayable) => {
+                    input.extend(items.iter().cloned())
+                }
                 _ => {
                     if !m.text().is_empty() {
                         input.push(json!({"role": "assistant", "content": m.text()}));
@@ -132,7 +134,12 @@ pub fn decode_completion(value: &Value) -> Result<Completion> {
     for item in items {
         match item.get("type").and_then(Value::as_str) {
             Some("message") => {
-                for part in item.get("content").and_then(Value::as_array).into_iter().flatten() {
+                for part in item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
                     match part.get("type").and_then(Value::as_str) {
                         Some("output_text") => {
                             if let Some(t) = part.get("text").and_then(Value::as_str) {
@@ -145,7 +152,9 @@ pub fn decode_completion(value: &Value) -> Result<Completion> {
                         Some("refusal") => {
                             return Err(CopilotError::Provider(format!(
                                 "the model declined: {}",
-                                part.get("refusal").and_then(Value::as_str).unwrap_or("no reason given")
+                                part.get("refusal")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("no reason given")
                             )));
                         }
                         _ => {}
@@ -177,7 +186,10 @@ pub fn decode_completion(value: &Value) -> Result<Completion> {
             _ => {}
         }
     }
-    let status = value.get("status").and_then(Value::as_str).unwrap_or("completed");
+    let status = value
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("completed");
     if status == "incomplete" && tool_calls.is_empty() {
         let why = value
             .pointer("/incomplete_details/reason")
@@ -244,10 +256,21 @@ mod tests {
         assert_eq!(c.message.text(), "I will run it.");
         assert_eq!(c.message.tool_calls[0].id, "call_1");
         assert_eq!(c.message.tool_calls[0].name, "simulate");
-        assert_eq!(c.message.provider_blocks.as_ref().and_then(Value::as_array).map(Vec::len), Some(3));
+        assert_eq!(
+            c.message
+                .provider_blocks
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(3)
+        );
         assert_eq!(
             decode_usage(&reply()),
-            Some(Usage { input_tokens: 900, cached_input_tokens: 512, output_tokens: 40 })
+            Some(Usage {
+                input_tokens: 900,
+                cached_input_tokens: 512,
+                output_tokens: 40
+            })
         );
     }
 
@@ -264,9 +287,10 @@ mod tests {
             tools: vec![json!({"type": "function", "function": {"name": "simulate",
                 "description": "d", "parameters": {"type": "object"}}})],
         };
-        let body: Value =
-            serde_json::from_str(&encode_request("gpt-6.1-sol", &request, None, Some("low")).expect("encodes"))
-                .expect("json");
+        let body: Value = serde_json::from_str(
+            &encode_request("gpt-6.1-sol", &request, None, Some("low")).expect("encodes"),
+        )
+        .expect("json");
         let input = body["input"].as_array().expect("input");
         assert_eq!(input[0]["role"], "system");
         assert_eq!(input[2]["type"], "reasoning");
@@ -275,7 +299,10 @@ mod tests {
         assert_eq!(input[5]["type"], "function_call_output");
         assert_eq!(input[5]["call_id"], "call_1");
         assert_eq!(body["tools"][0]["name"], "simulate");
-        assert!(body["tools"][0].get("function").is_none(), "tools are flat here");
+        assert!(
+            body["tools"][0].get("function").is_none(),
+            "tools are flat here"
+        );
         assert_eq!(body["store"], false);
         assert_eq!(body["reasoning"]["effort"], "low");
         assert!(body.get("temperature").is_none());
@@ -285,13 +312,25 @@ mod tests {
     fn a_foreign_history_is_rebuilt_from_text_and_calls() {
         let mut m = ChatMessage::calls(
             Some("plan".into()),
-            vec![ToolCall { id: "c9".into(), name: "t".into(), arguments: "{}".into() }],
+            vec![ToolCall {
+                id: "c9".into(),
+                name: "t".into(),
+                arguments: "{}".into(),
+            }],
         );
         // A Claude content block is not an output item of this API.
         m.provider_blocks = Some(json!([{"type": "thinking", "thinking": ""}]));
         let body: Value = serde_json::from_str(
-            &encode_request("m", &ChatRequest { messages: vec![m], tools: vec![] }, Some(0.0), None)
-                .expect("encodes"),
+            &encode_request(
+                "m",
+                &ChatRequest {
+                    messages: vec![m],
+                    tools: vec![],
+                },
+                Some(0.0),
+                None,
+            )
+            .expect("encodes"),
         )
         .expect("json");
         assert_eq!(body["input"][0]["role"], "assistant");

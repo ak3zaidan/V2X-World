@@ -48,8 +48,8 @@ use v2xw_mobility::{MobCtx, VehicleClass};
 use v2xw_world::{ClassMask, World};
 
 use crate::error::{DemandError, Result};
-use crate::od::zones::{MIN_ENDPOINT_LANE_M, ZoneWeight, mid, weights};
 use crate::graph::LaneGraph;
+use crate::od::zones::{MIN_ENDPOINT_LANE_M, ZoneWeight, mid, weights};
 use crate::trips::Trip;
 
 /// The model id.
@@ -156,17 +156,19 @@ impl TimeOfDayCurve for DepartureProfile {
                 let i = ((s / bin_s).floor() as usize) % weights.len();
                 weights[i].max(0.0)
             }
-            DepartureProfile::Peaks { peaks } => math::sum_ordered(peaks.iter().map(|(w, m, sd)| {
-                // The peak wrapped once either side of midnight.
-                let sd = sd.max(1.0);
-                [-DAY_S, 0.0, DAY_S]
-                    .iter()
-                    .map(|k| {
-                        let z = (s - m - k) / sd;
-                        w * math::exp(-0.5 * z * z) / sd
-                    })
-                    .sum::<f64>()
-            })),
+            DepartureProfile::Peaks { peaks } => {
+                math::sum_ordered(peaks.iter().map(|(w, m, sd)| {
+                    // The peak wrapped once either side of midnight.
+                    let sd = sd.max(1.0);
+                    [-DAY_S, 0.0, DAY_S]
+                        .iter()
+                        .map(|k| {
+                            let z = (s - m - k) / sd;
+                            w * math::exp(-0.5 * z * z) / sd
+                        })
+                        .sum::<f64>()
+                }))
+            }
         }
     }
 }
@@ -267,11 +269,25 @@ pub fn default_purposes() -> BTreeMap<Purpose, PurposeSpec> {
     BTreeMap::from([
         (
             Purpose::HomeBasedWork,
-            spec(0.20, peaks(&[(1.0, 7.75, 0.9)]), 8.5, 1.0, 4000.0, VehicleClass::Passenger),
+            spec(
+                0.20,
+                peaks(&[(1.0, 7.75, 0.9)]),
+                8.5,
+                1.0,
+                4000.0,
+                VehicleClass::Passenger,
+            ),
         ),
         (
             Purpose::HomeBasedSchool,
-            spec(0.08, peaks(&[(1.0, 7.5, 0.4)]), 7.0, 0.5, 1500.0, VehicleClass::Passenger),
+            spec(
+                0.08,
+                peaks(&[(1.0, 7.5, 0.4)]),
+                7.0,
+                0.5,
+                1500.0,
+                VehicleClass::Passenger,
+            ),
         ),
         (
             Purpose::HomeBasedShop,
@@ -297,11 +313,25 @@ pub fn default_purposes() -> BTreeMap<Purpose, PurposeSpec> {
         ),
         (
             Purpose::NonHomeBased,
-            spec(0.25, peaks(&[(1.0, 12.5, 3.0)]), 0.0, 0.0, 2500.0, VehicleClass::Passenger),
+            spec(
+                0.25,
+                peaks(&[(1.0, 12.5, 3.0)]),
+                0.0,
+                0.0,
+                2500.0,
+                VehicleClass::Passenger,
+            ),
         ),
         (
             Purpose::Commercial,
-            spec(0.05, peaks(&[(1.0, 10.5, 3.0)]), 0.0, 0.0, 5000.0, VehicleClass::Delivery),
+            spec(
+                0.05,
+                peaks(&[(1.0, 10.5, 3.0)]),
+                0.0,
+                0.0,
+                5000.0,
+                VehicleClass::Delivery,
+            ),
         ),
     ])
 }
@@ -354,7 +384,9 @@ impl PurposeModel {
     pub fn new(world: &World, params: PurposeParams) -> Result<Self> {
         let purposes = params.purposes.clone().unwrap_or_else(default_purposes);
         if purposes.values().any(|p| !(p.share >= 0.0)) {
-            return Err(DemandError::Invalid("a purpose share is negative".to_string()));
+            return Err(DemandError::Invalid(
+                "a purpose share is negative".to_string(),
+            ));
         }
         let g = LaneGraph::new(world, ClassMask::CAR);
         let lanes: Vec<LaneId> = g
@@ -664,12 +696,16 @@ mod tests {
             peaks: vec![(1.0, h(8.0), h(0.5))],
         };
         let mut rng = RngStream::derive(1, RngDomain::plugin(MODEL_ID), EntityRef::Global);
-        let xs: Vec<f64> = (0..2000).map(|_| p.sample_between(&mut rng, 0.0, DAY_S)).collect();
+        let xs: Vec<f64> = (0..2000)
+            .map(|_| p.sample_between(&mut rng, 0.0, DAY_S))
+            .collect();
         let mean = xs.iter().sum::<f64>() / xs.len() as f64;
         assert!((mean - h(8.0)).abs() < 300.0, "{}", mean / 3600.0);
         // A curve handed over by another engine becomes a binned profile.
         let flat = DepartureProfile::from_curve(&|_s: f64| 2.0, 3600.0);
-        assert!(matches!(flat, DepartureProfile::Binned { ref weights, .. } if weights.len() == 24));
+        assert!(
+            matches!(flat, DepartureProfile::Binned { ref weights, .. } if weights.len() == 24)
+        );
     }
 
     #[test]

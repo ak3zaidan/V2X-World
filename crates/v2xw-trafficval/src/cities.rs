@@ -9,7 +9,9 @@
 
 use v2xw_engine::Scenario;
 
-use crate::invariants::{Engine, Overrides, TAMPER_FAULTS, apply, audit_rows, load, scenario_study, tamper_of};
+use crate::invariants::{
+    Engine, Overrides, TAMPER_FAULTS, apply, audit_rows, load, scenario_study, tamper_of,
+};
 use crate::{Check, Group, Lab, Outcome, Row, Variant};
 
 /// The checks of this group.
@@ -64,7 +66,11 @@ fn city(lab: &mut Lab, key: &str, s: Scenario, variant: Variant) -> Result<Outco
         (1.0, f64::INFINITY),
         "traffic must flow through the city, not only appear",
     ));
-    rows.push(Row::reported(format!("{key}: network mean speed, m/s"), r.audit.stats.mean_speed_mps, "—"));
+    rows.push(Row::reported(
+        format!("{key}: network mean speed, m/s"),
+        r.audit.stats.mean_speed_mps,
+        "—",
+    ));
     Ok(Outcome { rows, notes })
 }
 
@@ -105,15 +111,23 @@ pub fn berlin_scenario(lab: &Lab) -> Result<Scenario, String> {
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut t = text;
     for (from, to) in [
-        ("worlds/cache/portland.osm.xml", "worlds/cache/berlin.osm.xml"),
+        (
+            "worlds/cache/portland.osm.xml",
+            "worlds/cache/berlin.osm.xml",
+        ),
         ("min_lat_deg: 45.5120", "min_lat_deg: 52.5140"),
         ("min_lon_deg: -122.6860", "min_lon_deg: 13.3880"),
         ("max_lat_deg: 45.5250", "max_lat_deg: 52.5250"),
         ("max_lon_deg: -122.6700", "max_lon_deg: 13.4080"),
-        ("highway_preset: urban-us-portland", "highway_preset: urban-de"),
+        (
+            "highway_preset: urban-us-portland",
+            "highway_preset: urban-de",
+        ),
     ] {
         if !t.contains(from) {
-            return Err(format!("portland-downtown.yaml no longer contains `{from}`"));
+            return Err(format!(
+                "portland-downtown.yaml no longer contains `{from}`"
+            ));
         }
         t = t.replace(from, to);
     }

@@ -26,14 +26,25 @@ fn the_model_level_checks_pass_and_each_can_fail() {
         }
         for (row, v) in r.verdicts() {
             match v {
-                Verdict::Fail => problems.push(format!("{}: {} = {} outside {:?}", r.id, row.metric, row.measured, row.band)),
-                Verdict::NotProved if row.metric.contains("differ") || row.metric.contains("|engine") => {
-                    problems.push(format!("{}: {} never went red under a fault", r.id, row.metric))
+                Verdict::Fail => problems.push(format!(
+                    "{}: {} = {} outside {:?}",
+                    r.id, row.metric, row.measured, row.band
+                )),
+                Verdict::NotProved
+                    if row.metric.contains("differ") || row.metric.contains("|engine") =>
+                {
+                    problems.push(format!(
+                        "{}: {} never went red under a fault",
+                        r.id, row.metric
+                    ))
                 }
                 _ => {}
             }
         }
     }
     assert!(problems.is_empty(), "{problems:#?}");
-    assert_eq!(FAST.len(), checks().iter().filter(|c| FAST.contains(&c.id)).count());
+    assert_eq!(
+        FAST.len(),
+        checks().iter().filter(|c| FAST.contains(&c.id)).count()
+    );
 }

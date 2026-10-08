@@ -34,7 +34,10 @@ fn main() {
     }
     // Scenario files name their worlds relative to the workspace root.
     if let Err(e) = std::env::set_current_dir(&cfg.root) {
-        eprintln!("cannot enter the workspace root {}: {e}", cfg.root.display());
+        eprintln!(
+            "cannot enter the workspace root {}: {e}",
+            cfg.root.display()
+        );
         std::process::exit(2);
     }
     let mut lab = Lab::new(cfg.clone());

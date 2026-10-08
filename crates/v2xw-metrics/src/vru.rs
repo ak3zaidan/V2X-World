@@ -220,7 +220,9 @@ impl VruSafetyProvider {
                  ended in the window — at a kerb waiting for walk or a gap, mostly.",
             )
             .with_dims([Dim::T])
-            .with_source(cards::design("08-measurement-and-data.md §2.5 (traffic and safety)"))
+            .with_source(cards::design(
+                "08-measurement-and-data.md §2.5 (traffic and safety)",
+            ))
             .with_min_samples(self.min_samples)
             .not_accounting_for("why the pedestrian stood"),
             MetricDef::new(
@@ -233,7 +235,9 @@ impl VruSafetyProvider {
                  mid-block, away from any crosswalk.",
             )
             .with_dims([Dim::T])
-            .with_source(cards::design("08-measurement-and-data.md §2.5 (traffic and safety)"))
+            .with_source(cards::design(
+                "08-measurement-and-data.md §2.5 (traffic and safety)",
+            ))
             .with_min_samples(1)
             .not_accounting_for(
                 "a crossing at an unmarked junction leg mapped without a crossing way, which \
@@ -289,7 +293,8 @@ impl VruSafetyProvider {
         for a in gone {
             let seen = self.last_seen.remove(&a).unwrap_or(t);
             if let Some(since) = self.standing_since.remove(&a) {
-                self.wait.observe(Duration::between(since, seen).as_secs_f64());
+                self.wait
+                    .observe(Duration::between(since, seen).as_secs_f64());
             }
         }
         // --- conflicts -----------------------------------------------------------------
@@ -455,7 +460,15 @@ impl MetricProvider for VruSafetyProvider {
 mod tests {
     use super::*;
 
-    fn sample(t_ms: u64, actor: u32, class: &str, x: f64, y: f64, v: f64, h: f64) -> GtKinematicsView {
+    fn sample(
+        t_ms: u64,
+        actor: u32,
+        class: &str,
+        x: f64,
+        y: f64,
+        v: f64,
+        h: f64,
+    ) -> GtKinematicsView {
         let mut s: GtKinematicsView = serde_json::from_value(json!({
             "t": t_ms * 1_000_000,
             "actor": actor,
@@ -490,7 +503,15 @@ mod tests {
             let t = k * 100;
             let car_x = k as f64 * 1.0;
             p.on_kinematics(sample(t, 1, "passenger", car_x, 0.0, 10.0, 0.0));
-            p.on_kinematics(sample(t, 2, "pedestrian", 24.0, -1.0 + 0.1 * k as f64, 1.4, core::f64::consts::FRAC_PI_2));
+            p.on_kinematics(sample(
+                t,
+                2,
+                "pedestrian",
+                24.0,
+                -1.0 + 0.1 * k as f64,
+                1.4,
+                core::f64::consts::FRAC_PI_2,
+            ));
         }
         let out = p.flush(1_300_000_000);
         assert_eq!(count(&out, "ped_conflicts"), 1);
@@ -505,7 +526,15 @@ mod tests {
         for k in 0..12u64 {
             let t = k * 100;
             p.on_kinematics(sample(t, 1, "passenger", k as f64, 0.0, 10.0, 0.0));
-            p.on_kinematics(sample(t, 2, "pedestrian", 20.0 + 0.14 * k as f64, 0.5, 1.4, 0.0));
+            p.on_kinematics(sample(
+                t,
+                2,
+                "pedestrian",
+                20.0 + 0.14 * k as f64,
+                0.5,
+                1.4,
+                0.0,
+            ));
         }
         let out = p.flush(1_300_000_000);
         assert_eq!(count(&out, "ped_conflicts"), 0);

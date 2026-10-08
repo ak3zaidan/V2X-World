@@ -49,7 +49,9 @@ impl SumoIds {
         let mut counts: BTreeMap<String, u32> = BTreeMap::new();
         for e in world.roads.edges() {
             if let Some(n) = e.name {
-                *counts.entry(world.symbols.resolve(n).to_string()).or_default() += 1;
+                *counts
+                    .entry(world.symbols.resolve(n).to_string())
+                    .or_default() += 1;
             }
         }
         let mut ids = Self::default();
@@ -142,10 +144,7 @@ pub fn sumo_tool(home: &std::path::Path, tool: &str) -> PathBuf {
 /// same edge, to any lane of the destination's edge the class may use. The lane-level
 /// router does not change lanes within an edge; a vehicle does, so for an edge-level route
 /// (what SUMO and a `.rou.xml` need) the siblings are as good as the origin lane.
-pub fn route_trip(
-    world: &World,
-    trip: &v2xw_mobility::views::TripRequest,
-) -> Option<Vec<LaneId>> {
+pub fn route_trip(world: &World, trip: &v2xw_mobility::views::TripRequest) -> Option<Vec<LaneId>> {
     use v2xw_mobility::routing::dijkstra::DijkstraParams;
     let mask = trip.class.class_mask();
     let router = v2xw_mobility::Dijkstra::new(DijkstraParams::for_classes(mask));

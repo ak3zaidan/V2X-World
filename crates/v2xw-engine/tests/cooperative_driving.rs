@@ -39,7 +39,10 @@ fn cacc_hears_its_leader_over_the_network_and_nothing_without_obus() {
     engine.run(&mut MemoryRecorder::new()).expect("runs");
     let stats = engine.cooperative_stats().expect("a cooperative fleet");
     eprintln!("equipped: {stats:?}");
-    assert!(stats.associated > 0, "no BSM associated with a radar leader: {stats:?}");
+    assert!(
+        stats.associated > 0,
+        "no BSM associated with a radar leader: {stats:?}"
+    );
     assert!(
         stats.offered > stats.associated,
         "every message heard was from the leader, which the grid cannot produce: {stats:?}"

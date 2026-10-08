@@ -148,10 +148,10 @@ pub mod tools;
 pub mod transport;
 pub mod watch;
 
-pub use error::{CopilotError, Result};
 pub use agent::{Agent, AgentEvent, AgentPolicy, AgentReport};
 pub use analyst::{Analysis, Finding, Layer, RunEvidence, Severity, Thresholds};
 pub use claude::Claude;
+pub use error::{CopilotError, Result};
 pub use explain::{Explanation, ModelExplanation};
 pub use grounding::{Citation, Grounding, MetricAnswer, ModelEntry, NotKnown, ParameterAnswer};
 pub use http::{CurlPost, HttpPost, HttpRequest, HttpResponse};

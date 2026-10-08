@@ -353,7 +353,11 @@ impl<C> Committees<C> {
         // its work.
         let expected = round.member_time.map_or(Duration::ZERO, |(t, _)| t);
         out.start_timer(
-            Duration::from_nanos(r.round_timeout.as_nanos().saturating_add(expected.as_nanos())),
+            Duration::from_nanos(
+                r.round_timeout
+                    .as_nanos()
+                    .saturating_add(expected.as_nanos()),
+            ),
             wrap(CommitteeMsg::Timeout {
                 session: id,
                 round: s.round,
@@ -579,7 +583,10 @@ impl<C> Committees<C> {
             .collect();
         let role = s.role;
         let r = &self.roles[role];
-        let caught = self.caught.get(&role).map_or(0, |c| c.iter().filter(|k| !s.excluded.contains(k)).count());
+        let caught = self
+            .caught
+            .get(&role)
+            .map_or(0, |c| c.iter().filter(|k| !s.excluded.contains(k)).count());
         let left = r
             .members
             .len()
@@ -588,7 +595,8 @@ impl<C> Committees<C> {
             // Excluding the silent would leave no quorum, and a slow member cannot be told
             // from a dead one: wait one more timeout for this round.
             s.waits += 1;
-            let (flow, run, wait, round, attempt) = (s.flow, s.run, r.round_timeout, s.round, s.attempt);
+            let (flow, run, wait, round, attempt) =
+                (s.flow, s.run, r.round_timeout, s.round, s.attempt);
             out.start_timer(
                 wait,
                 wrap(CommitteeMsg::Timeout {
@@ -599,7 +607,10 @@ impl<C> Committees<C> {
                 flow,
                 run,
             );
-            self.stats.entry(self.roles[role].role).or_default().timeouts += 1;
+            self.stats
+                .entry(self.roles[role].role)
+                .or_default()
+                .timeouts += 1;
             return None;
         }
         for k in &silent {
@@ -634,7 +645,10 @@ impl<C> Committees<C> {
             return Some(Outcome::Failed { cont: s.cont? });
         }
         if remaining >= usize::from(r.quorum) {
-            self.stats.entry(self.roles[role].role).or_default().restarts += 1;
+            self.stats
+                .entry(self.roles[role].role)
+                .or_default()
+                .restarts += 1;
             self.begin_attempt(id, out, wrap);
             return None;
         }
@@ -647,7 +661,10 @@ impl<C> Committees<C> {
         }
         s.excluded.clear();
         let (flow, run, wait) = (s.flow, s.run, r.retry_after);
-        self.stats.entry(self.roles[role].role).or_default().restarts += 1;
+        self.stats
+            .entry(self.roles[role].role)
+            .or_default()
+            .restarts += 1;
         out.start_timer(wait, wrap(CommitteeMsg::Retry { session: id }), flow, run);
         None
     }

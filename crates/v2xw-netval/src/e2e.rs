@@ -77,13 +77,17 @@ fn repo() -> PathBuf {
 
 /// Loads a shipped scenario with its world path made absolute.
 pub fn load(rel: &str) -> Result<Scenario, String> {
-    let mut s = Scenario::load(repo().join("scenarios").join(rel)).map_err(|e| format!("{rel}: {e}"))?;
+    let mut s =
+        Scenario::load(repo().join("scenarios").join(rel)).map_err(|e| format!("{rel}: {e}"))?;
     if let v2xw_world::WorldSourceSpec::OsmXml { path, .. } = &mut s.world.source
         && Path::new(path).is_relative()
     {
         let abs = repo().join(&*path);
         if !abs.exists() {
-            return Err(format!("{rel}: world {} not present (not in git)", abs.display()));
+            return Err(format!(
+                "{rel}: world {} not present (not in git)",
+                abs.display()
+            ));
         }
         *path = abs.to_string_lossy().into_owned();
     }
@@ -175,16 +179,33 @@ fn conservation(mode: Mode) -> Outcome {
             .iter()
             .filter(|o| !o.violations.is_empty())
             .map(|o| {
-                let subjects: BTreeSet<String> = o.violations.iter().map(|v| v.subject.clone().unwrap_or_default()).collect();
-                let first = o.violations.first().map(|v| v.detail.chars().take(120).collect::<String>()).unwrap_or_default();
-                format!("{} ({} violations on {}: {first})", o.invariant, o.violations.len(), subjects.into_iter().collect::<Vec<_>>().join(", "))
+                let subjects: BTreeSet<String> = o
+                    .violations
+                    .iter()
+                    .map(|v| v.subject.clone().unwrap_or_default())
+                    .collect();
+                let first = o
+                    .violations
+                    .first()
+                    .map(|v| v.detail.chars().take(120).collect::<String>())
+                    .unwrap_or_default();
+                format!(
+                    "{} ({} violations on {}: {first})",
+                    o.invariant,
+                    o.violations.len(),
+                    subjects.into_iter().collect::<Vec<_>>().join(", ")
+                )
             })
             .collect();
         let losses: u64 = report.rx_losses.values().sum();
         let identity = report.reception_attempts == report.receptions_ok + losses;
         let fates = ledger.node_rx.len() as u64 == report.reception_attempts
             && ledger.rx.len() as u64 == report.reception_attempts;
-        let ok = failed.is_empty() && identity && fates && catalog_ok && ledger.decode_failure_total() == 0;
+        let ok = failed.is_empty()
+            && identity
+            && fates
+            && catalog_ok
+            && ledger.decode_failure_total() == 0;
         parts.push((
             ok,
             format!(
@@ -193,9 +214,21 @@ fn conservation(mode: Mode) -> Outcome {
                 report.receptions_ok,
                 losses,
                 report.rx_losses.len(),
-                if identity { "" } else { "; attempts ≠ ok + losses" },
-                if fates { "" } else { "; fate count ≠ attempts" },
-                if failed.is_empty() { String::new() } else { format!("; {}", failed.join(", ")) }
+                if identity {
+                    ""
+                } else {
+                    "; attempts ≠ ok + losses"
+                },
+                if fates {
+                    ""
+                } else {
+                    "; fate count ≠ attempts"
+                },
+                if failed.is_empty() {
+                    String::new()
+                } else {
+                    format!("; {}", failed.join(", "))
+                }
             ),
         ));
     }
@@ -213,7 +246,10 @@ fn grid(duration_s: f64) -> Result<Scenario, String> {
 
 fn determinism(mode: Mode) -> Outcome {
     let in_pool = |threads: usize, s: Scenario| -> Result<String, String> {
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().map_err(|e| e.to_string())?;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .map_err(|e| e.to_string())?;
         pool.install(|| run_digest(s))
     };
     let result = (|| -> Result<(String, String, String), String> {
@@ -229,7 +265,12 @@ fn determinism(mode: Mode) -> Outcome {
     match result {
         Ok((a, b, c)) => Outcome::judge(
             a == b && a == c,
-            format!("1 thread {}…, 4 threads {}…, rerun {}…", &a[..12], &b[..12], &c[..12]),
+            format!(
+                "1 thread {}…, 4 threads {}…, rerun {}…",
+                &a[..12],
+                &b[..12],
+                &c[..12]
+            ),
         ),
         Err(e) => Outcome::skip(e),
     }
@@ -260,7 +301,10 @@ fn more_power(mode: Mode) -> Outcome {
         Ok((delivered_pairs(&r0).len(), delivered_pairs(&r1).len(), p0))
     })();
     match result {
-        Ok((a, b, p0)) => Outcome::judge(b >= a && a > 0, format!("{a} delivering pairs at {p0} dBm, {b} at the changed power")),
+        Ok((a, b, p0)) => Outcome::judge(
+            b >= a && a > 0,
+            format!("{a} delivering pairs at {p0} dBm, {b} at the changed power"),
+        ),
         Err(e) => Outcome::skip(e),
     }
 }
@@ -273,7 +317,11 @@ fn mean_cbr(rec: &MemoryRecorder) -> f64 {
         .filter_map(|(_, r)| decode::<MacCbrView>(r).ok())
         .map(|v| v.cbr)
         .collect();
-    if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 }
+    if v.is_empty() {
+        0.0
+    } else {
+        v.iter().sum::<f64>() / v.len() as f64
+    }
 }
 
 fn more_density(mode: Mode) -> Outcome {
@@ -284,7 +332,10 @@ fn more_density(mode: Mode) -> Outcome {
         Ok(if mode.faulted() { (b, a) } else { (a, b) })
     })();
     match result {
-        Ok((a, b)) => Outcome::judge(b > a, format!("mean CBR {a:.4} with 10 vehicles, {b:.4} with 100")),
+        Ok((a, b)) => Outcome::judge(
+            b > a,
+            format!("mean CBR {a:.4} with 10 vehicles, {b:.4} with 100"),
+        ),
         Err(e) => Outcome::skip(e),
     }
 }
@@ -304,7 +355,10 @@ fn buildings(mode: Mode) -> Outcome {
         })
     })();
     match result {
-        Ok((on, off)) => Outcome::judge(on <= off && off > 0, format!("{on} delivered with buildings, {off} without")),
+        Ok((on, off)) => Outcome::judge(
+            on <= off && off > 0,
+            format!("{on} delivered with buildings, {off} without"),
+        ),
         Err(e) => Outcome::skip(e),
     }
 }

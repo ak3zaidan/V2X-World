@@ -50,7 +50,11 @@ impl Medium for UnitDisk {
         self.range_m
     }
     fn p_rx(&self, tx: (f64, f64), rx: (f64, f64)) -> f64 {
-        if v2xw_core::math::hypot(tx.0 - rx.0, tx.1 - rx.1) <= self.range_m { 1.0 } else { 0.0 }
+        if v2xw_core::math::hypot(tx.0 - rx.0, tx.1 - rx.1) <= self.range_m {
+            1.0
+        } else {
+            0.0
+        }
     }
 }
 
@@ -98,7 +102,11 @@ impl DistancePdr {
         }
         let (d0, p0) = self.samples[i - 1];
         let (d1, p1) = self.samples[i];
-        if d1 <= d0 { p0 } else { p0 + (p1 - p0) * (d - d0) / (d1 - d0) }
+        if d1 <= d0 {
+            p0
+        } else {
+            p0 + (p1 - p0) * (d - d0) / (d1 - d0)
+        }
     }
 }
 
@@ -140,9 +148,15 @@ impl Medium for UrbanGridMedium {
     }
     fn p_rx(&self, tx: (f64, f64), rx: (f64, f64)) -> f64 {
         let d = v2xw_core::math::hypot(tx.0 - rx.0, tx.1 - rx.1);
-        let same_ns = matches!((self.on_line(tx.0), self.on_line(rx.0)), (Some(a), Some(b)) if a == b);
-        let same_ew = matches!((self.on_line(tx.1), self.on_line(rx.1)), (Some(a), Some(b)) if a == b);
-        let r = if same_ns || same_ew { self.los_range_m } else { self.nlos_range_m };
+        let same_ns =
+            matches!((self.on_line(tx.0), self.on_line(rx.0)), (Some(a), Some(b)) if a == b);
+        let same_ew =
+            matches!((self.on_line(tx.1), self.on_line(rx.1)), (Some(a), Some(b)) if a == b);
+        let r = if same_ns || same_ew {
+            self.los_range_m
+        } else {
+            self.nlos_range_m
+        };
         if d <= r { 1.0 } else { 0.0 }
     }
 }
@@ -168,7 +182,14 @@ pub struct MotionNode {
 impl MotionNode {
     /// A parked node.
     pub fn fixed(x: f64, y: f64) -> Self {
-        MotionNode { x, y, vx: 0.0, vy: 0.0, wrap_x: 0.0, wrap_y: 0.0 }
+        MotionNode {
+            x,
+            y,
+            vx: 0.0,
+            vy: 0.0,
+            wrap_x: 0.0,
+            wrap_y: 0.0,
+        }
     }
 
     /// Position at `t_ns`.
@@ -187,7 +208,9 @@ impl MotionNode {
 
     fn speed_heading(&self) -> (f64, f64) {
         let s = v2xw_core::math::hypot(self.vx, self.vy);
-        let h = v2xw_core::math::atan2(self.vx, self.vy).to_degrees().rem_euclid(360.0);
+        let h = v2xw_core::math::atan2(self.vx, self.vy)
+            .to_degrees()
+            .rem_euclid(360.0);
         (s, h)
     }
 }
@@ -385,8 +408,17 @@ pub struct DisseminationRun<'m> {
 
 impl<'m> DisseminationRun<'m> {
     /// A run over `nodes` (station `i` has GN address `i + 1`) with `hazards`.
-    pub fn new(cfg: DissemConfig, medium: &'m dyn Medium, nodes: Vec<MotionNode>, hazards: Vec<Hazard>) -> Self {
-        let mut rng = RngStream::derive(cfg.seed, RngDomain::plugin(DISSEM_RNG_MODEL), EntityRef::Global);
+    pub fn new(
+        cfg: DissemConfig,
+        medium: &'m dyn Medium,
+        nodes: Vec<MotionNode>,
+        hazards: Vec<Hazard>,
+    ) -> Self {
+        let mut rng = RngStream::derive(
+            cfg.seed,
+            RngDomain::plugin(DISSEM_RNG_MODEL),
+            EntityRef::Global,
+        );
         let period = cfg.forwarding.mib.beacon_retransmit_ms * 1_000_000;
         let routers = (0..nodes.len())
             .map(|i| {
@@ -394,7 +426,9 @@ impl<'m> DisseminationRun<'m> {
                 Router::new(GnAddr(i as u64 + 1), cfg.forwarding, first)
             })
             .collect::<Vec<_>>();
-        let dens = (0..nodes.len()).map(|i| DenService::new(i as u32 + 1, cfg.den.kaf)).collect();
+        let dens = (0..nodes.len())
+            .map(|i| DenService::new(i as u32 + 1, cfg.den.kaf))
+            .collect();
         let mut run = DisseminationRun {
             cfg,
             medium,
@@ -487,14 +521,25 @@ impl<'m> DisseminationRun<'m> {
                     let req = TriggerRequest {
                         area: hz.area,
                         validity_ms: d.validity_ms,
-                        repetition_interval_ms: (d.repetition_interval_ms > 0).then_some(d.repetition_interval_ms),
-                        repetition_duration_ms: (d.repetition_duration_ms > 0).then_some(d.repetition_duration_ms),
-                        transmission_interval_ms: (d.transmission_interval_ms > 0).then_some(d.transmission_interval_ms),
+                        repetition_interval_ms: (d.repetition_interval_ms > 0)
+                            .then_some(d.repetition_interval_ms),
+                        repetition_duration_ms: (d.repetition_duration_ms > 0)
+                            .then_some(d.repetition_duration_ms),
+                        transmission_interval_ms: (d.transmission_interval_ms > 0)
+                            .then_some(d.transmission_interval_ms),
                         bytes: d.bytes,
                     };
                     let (action, acts) = self.dens[hz.node].trigger(req, t / 1_000_000);
                     let targets = self.in_area(&hz.area, hz.node, t);
-                    self.actions.insert(action, ActionTrack { origin: hz.node, generated_ns: t, targets, ..Default::default() });
+                    self.actions.insert(
+                        action,
+                        ActionTrack {
+                            origin: hz.node,
+                            generated_ns: t,
+                            targets,
+                            ..Default::default()
+                        },
+                    );
                     self.apply_den(hz.node, acts, t);
                 }
             }
@@ -520,7 +565,11 @@ impl<'m> DisseminationRun<'m> {
     fn apply(&mut self, node: usize, acts: Vec<RouterAction>, t: u64) {
         for a in acts {
             match a {
-                RouterAction::Transmit { packet, to, originated } => {
+                RouterAction::Transmit {
+                    packet,
+                    to,
+                    originated,
+                } => {
                     if !originated {
                         if let Some(tr) = self.track_of(&packet) {
                             tr.forwarded += 1;
@@ -549,7 +598,9 @@ impl<'m> DisseminationRun<'m> {
         if packet.btp_port != BtpPort::DENM {
             return;
         }
-        let Some(denm) = self.denms.get(packet.payload_tag as usize).copied() else { return };
+        let Some(denm) = self.denms.get(packet.payload_tag as usize).copied() else {
+            return;
+        };
         if let Some(tr) = self.actions.get_mut(&denm.action) {
             if tr.origin != node {
                 tr.first_rx.entry(node).or_insert((t, packet.hops()));
@@ -574,16 +625,25 @@ impl<'m> DisseminationRun<'m> {
                     if let Some(tr) = self.actions.get_mut(&denm.action) {
                         if kaf { tr.kaf += 1 } else { tr.originated += 1 }
                     }
-                    let racts = self.routers[node].originate_gbc(denm.area, BtpPort::DENM, denm.bytes, tag, t);
+                    let racts = self.routers[node].originate_gbc(
+                        denm.area,
+                        BtpPort::DENM,
+                        denm.bytes,
+                        tag,
+                        t,
+                    );
                     for ra in &racts {
                         if let RouterAction::Transmit { packet, .. } = ra {
                             let targets = self.in_area(&denm.area, node, t);
-                            self.packets.insert(packet.key(), (targets, BTreeSet::new(), 0));
+                            self.packets
+                                .insert(packet.key(), (targets, BTreeSet::new(), 0));
                         }
                     }
                     self.apply(node, racts, t);
                 }
-                DenAction::ArmTimer { timer, at_ms } => self.push(at_ms * 1_000_000, Ev::Den { node, timer }),
+                DenAction::ArmTimer { timer, at_ms } => {
+                    self.push(at_ms * 1_000_000, Ev::Den { node, timer })
+                }
                 DenAction::Indicate { .. } => {}
             }
         }
@@ -647,7 +707,13 @@ impl<'m> DisseminationRun<'m> {
                 }
             }
             v2xw_core::math::sort_total_order(&mut lat);
-            let q = |p: f64| if lat.is_empty() { 0.0 } else { v2xw_core::math::q3(v2xw_core::math::quantile_sorted(&lat, p)) };
+            let q = |p: f64| {
+                if lat.is_empty() {
+                    0.0
+                } else {
+                    v2xw_core::math::q3(v2xw_core::math::quantile_sorted(&lat, p))
+                }
+            };
             let reached = lat.len() as u64;
             let targets = tr.targets.len() as u64;
             let transmissions = tr.originated + tr.forwarded + tr.kaf;
@@ -657,13 +723,21 @@ impl<'m> DisseminationRun<'m> {
                 generated_ms: tr.generated_ns / 1_000_000,
                 targets,
                 reached,
-                reach: if targets == 0 { 1.0 } else { v2xw_core::math::q3(reached as f64 / targets as f64) },
+                reach: if targets == 0 {
+                    1.0
+                } else {
+                    v2xw_core::math::q3(reached as f64 / targets as f64)
+                },
                 receivers: tr.first_rx.len() as u64,
                 transmissions,
                 originated: tr.originated,
                 forwarded: tr.forwarded,
                 kaf: tr.kaf,
-                tx_per_reached: if reached == 0 { 0.0 } else { v2xw_core::math::q3(transmissions as f64 / reached as f64) },
+                tx_per_reached: if reached == 0 {
+                    0.0
+                } else {
+                    v2xw_core::math::q3(transmissions as f64 / reached as f64)
+                },
                 latency_p50_ms: q(0.5),
                 latency_p95_ms: q(0.95),
                 latency_max_ms: lat.last().copied().map(v2xw_core::math::q3).unwrap_or(0.0),
@@ -677,7 +751,15 @@ impl<'m> DisseminationRun<'m> {
             .filter(|p| !p.0.is_empty())
             .map(|p| p.0.intersection(&p.1).count() as f64 / p.0.len() as f64)
             .collect();
-        let mean = |v: &[f64]| if v.is_empty() { 0.0 } else { v2xw_core::math::q3(v2xw_core::math::sum_ordered(v.iter().copied()) / v.len() as f64) };
+        let mean = |v: &[f64]| {
+            if v.is_empty() {
+                0.0
+            } else {
+                v2xw_core::math::q3(
+                    v2xw_core::math::sum_ordered(v.iter().copied()) / v.len() as f64,
+                )
+            }
+        };
         let tpp: Vec<f64> = pk.iter().map(|p| p.2 as f64).collect();
         DissemReport {
             nodes: self.nodes.len() as u64,
@@ -696,7 +778,11 @@ impl<'m> DisseminationRun<'m> {
 /// at `per_km_lane` per km per lane, evenly spaced with a random offset, at 25-33 m/s,
 /// wrapping on `length_m` so the density holds.
 pub fn highway(length_m: f64, lanes_per_dir: u32, per_km_lane: f64, seed: u64) -> Vec<MotionNode> {
-    let mut rng = RngStream::derive(seed, RngDomain::plugin(DISSEM_RNG_MODEL), EntityRef::Custom { kind: 1, id: 0 });
+    let mut rng = RngStream::derive(
+        seed,
+        RngDomain::plugin(DISSEM_RNG_MODEL),
+        EntityRef::Custom { kind: 1, id: 0 },
+    );
     let per_lane = ((length_m / 1_000.0) * per_km_lane).round().max(0.0) as usize;
     let mut out = Vec::new();
     for lane in 0..(2 * lanes_per_dir) {
@@ -706,7 +792,14 @@ pub fn highway(length_m: f64, lanes_per_dir: u32, per_km_lane: f64, seed: u64) -
         let speed = rng.uniform(25.0, 33.0);
         for k in 0..per_lane {
             let x = (k as f64 + rng.uniform(0.0, 0.8)) * gap;
-            out.push(MotionNode { x, y, vx: dir * speed, vy: 0.0, wrap_x: length_m, wrap_y: 0.0 });
+            out.push(MotionNode {
+                x,
+                y,
+                vx: dir * speed,
+                vy: 0.0,
+                wrap_x: length_m,
+                wrap_y: 0.0,
+            });
         }
     }
     out
@@ -715,7 +808,11 @@ pub fn highway(length_m: f64, lanes_per_dir: u32, per_km_lane: f64, seed: u64) -
 /// A Manhattan grid of `streets × streets` street lines `block_m` apart, `vehicles` cars
 /// placed on random streets driving along them at 8-14 m/s, wrapping on the grid.
 pub fn grid_city(streets: u32, block_m: f64, vehicles: usize, seed: u64) -> Vec<MotionNode> {
-    let mut rng = RngStream::derive(seed, RngDomain::plugin(DISSEM_RNG_MODEL), EntityRef::Custom { kind: 2, id: 0 });
+    let mut rng = RngStream::derive(
+        seed,
+        RngDomain::plugin(DISSEM_RNG_MODEL),
+        EntityRef::Custom { kind: 2, id: 0 },
+    );
     let extent = streets as f64 * block_m;
     (0..vehicles)
         .map(|_| {
@@ -723,9 +820,23 @@ pub fn grid_city(streets: u32, block_m: f64, vehicles: usize, seed: u64) -> Vec<
             let along = rng.uniform(0.0, extent);
             let v = rng.uniform(8.0, 14.0) * if rng.bool(0.5) { 1.0 } else { -1.0 };
             if rng.bool(0.5) {
-                MotionNode { x: along, y: line, vx: v, vy: 0.0, wrap_x: extent, wrap_y: extent }
+                MotionNode {
+                    x: along,
+                    y: line,
+                    vx: v,
+                    vy: 0.0,
+                    wrap_x: extent,
+                    wrap_y: extent,
+                }
             } else {
-                MotionNode { x: line, y: along, vx: 0.0, vy: v, wrap_x: extent, wrap_y: extent }
+                MotionNode {
+                    x: line,
+                    y: along,
+                    vx: 0.0,
+                    vy: v,
+                    wrap_x: extent,
+                    wrap_y: extent,
+                }
             }
         })
         .collect()
@@ -745,13 +856,28 @@ mod tests {
     #[test]
     fn a_chain_carries_a_denm_hop_by_hop_and_counts_it() {
         // Ten nodes 400 m apart, range 500 m: only multi-hop reaches the end.
-        let nodes: Vec<_> = (0..10).map(|i| MotionNode::fixed(400.0 * i as f64, 0.0)).collect();
+        let nodes: Vec<_> = (0..10)
+            .map(|i| MotionNode::fixed(400.0 * i as f64, 0.0))
+            .collect();
         let area = Area::rect(-10.0, -10.0, 3_700.0, 10.0);
         for af in [AreaForwarding::Cbf, AreaForwarding::Simple] {
-            let mut cfg = DissemConfig { end_ms: 8_000, ..Default::default() };
+            let mut cfg = DissemConfig {
+                end_ms: 8_000,
+                ..Default::default()
+            };
             cfg.forwarding.mib.area_forwarding = af;
             let m = UnitDisk { range_m: 500.0 };
-            let r = DisseminationRun::new(cfg, &m, nodes.clone(), vec![Hazard { at_ms: 4_000, node: 0, area }]).run();
+            let r = DisseminationRun::new(
+                cfg,
+                &m,
+                nodes.clone(),
+                vec![Hazard {
+                    at_ms: 4_000,
+                    node: 0,
+                    area,
+                }],
+            )
+            .run();
             let a = &r.actions[0];
             assert_eq!(a.targets, 9, "{af:?}");
             assert_eq!(a.reached, 9, "{af:?}");
@@ -762,7 +888,11 @@ mod tests {
             assert_eq!(a.forwarded, 9, "{af:?}");
             if af == AreaForwarding::Cbf {
                 // Each CBF hop waits TO_CBF(400 m) = 100 - 99·0.4 = 60.4 ms.
-                assert!(a.latency_max_ms > 8.0 * 60.0 && a.latency_max_ms < 8.0 * 62.0, "{}", a.latency_max_ms);
+                assert!(
+                    a.latency_max_ms > 8.0 * 60.0 && a.latency_max_ms < 8.0 * 62.0,
+                    "{}",
+                    a.latency_max_ms
+                );
             }
         }
     }
@@ -774,17 +904,38 @@ mod tests {
         let nodes = vec![
             MotionNode::fixed(0.0, 0.0),
             MotionNode::fixed(400.0, 0.0),
-            MotionNode { x: 3_000.0, y: 0.0, vx: -30.0, vy: 0.0, wrap_x: 0.0, wrap_y: 0.0 },
+            MotionNode {
+                x: 3_000.0,
+                y: 0.0,
+                vx: -30.0,
+                vy: 0.0,
+                wrap_x: 0.0,
+                wrap_y: 0.0,
+            },
         ];
         let m = UnitDisk { range_m: 500.0 };
         let mut got = Vec::new();
         for kaf in [false, true] {
             let cfg = DissemConfig {
                 end_ms: 90_000,
-                den: DenParams { kaf, transmission_interval_ms: 1_000, ..Default::default() },
+                den: DenParams {
+                    kaf,
+                    transmission_interval_ms: 1_000,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
-            let r = DisseminationRun::new(cfg, &m, nodes.clone(), vec![Hazard { at_ms: 4_000, node: 0, area }]).run();
+            let r = DisseminationRun::new(
+                cfg,
+                &m,
+                nodes.clone(),
+                vec![Hazard {
+                    at_ms: 4_000,
+                    node: 0,
+                    area,
+                }],
+            )
+            .run();
             got.push(r.actions[0].receivers);
         }
         assert_eq!(got, vec![1, 2]);

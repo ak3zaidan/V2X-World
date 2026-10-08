@@ -648,11 +648,15 @@ impl PrimitiveDescriptor {
             return row.scaled && row.duration(op).is_some();
         }
         if let Some(proxy) = self.cost_proxy {
-            return catalogue.get(proxy).is_some_and(|p| p.cost_duration(op, profile, catalogue).is_some());
+            return catalogue
+                .get(proxy)
+                .is_some_and(|p| p.cost_duration(op, profile, catalogue).is_some());
         }
         if !self.cost_components.is_empty() {
             return self.cost_components.iter().any(|c| {
-                catalogue.get(*c).is_some_and(|d| d.cost_is_derived(op, profile, catalogue))
+                catalogue
+                    .get(*c)
+                    .is_some_and(|d| d.cost_is_derived(op, profile, catalogue))
             });
         }
         self.cost_ratio.is_some() && self.cost_duration(op, profile, catalogue).is_some()
@@ -1813,7 +1817,9 @@ fn build_standard_catalogue() -> PrimitiveCatalogue {
             PrimitiveId::ML_DSA_65 | PrimitiveId::ML_DSA_87 => {
                 ratio(PrimitiveId::ML_DSA_44, profiles::CORTEX_M4_PQM4)
             }
-            PrimitiveId::FALCON_1024 => ratio(PrimitiveId::FALCON_512, profiles::CORTEX_M7_STM32F767),
+            PrimitiveId::FALCON_1024 => {
+                ratio(PrimitiveId::FALCON_512, profiles::CORTEX_M7_STM32F767)
+            }
             PrimitiveId::SLH_DSA_SHA2_128S | PrimitiveId::SLH_DSA_SHA2_128F => {
                 ratio(PrimitiveId::ML_DSA_44, profiles::CORTEX_M4_PQM4)
             }

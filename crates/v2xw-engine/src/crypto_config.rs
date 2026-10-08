@@ -84,7 +84,10 @@ fn check_spec(t: &ThresholdSpec) -> Result<(), EngineError> {
     if registered(&t.protocol).is_none() {
         return Err(conflict(
             "security.threshold.protocol",
-            format!("'{}' is not a registered threshold protocol; allowed: {ids}", t.protocol),
+            format!(
+                "'{}' is not a registered threshold protocol; allowed: {ids}",
+                t.protocol
+            ),
         ));
     }
     if registered(&t.umbrella_inner).is_none() || t.umbrella_inner == "umbrella" {
@@ -140,13 +143,22 @@ fn check_spec(t: &ThresholdSpec) -> Result<(), EngineError> {
         ));
     }
     if t.retry_after_s.is_nan() || t.retry_after_s <= 0.0 {
-        return Err(conflict("security.threshold.retry_after_s", "must be positive"));
+        return Err(conflict(
+            "security.threshold.retry_after_s",
+            "must be positive",
+        ));
     }
     if t.member_latency_ms.is_nan() || t.member_latency_ms < 0.0 {
-        return Err(conflict("security.threshold.member_latency_ms", "must not be negative"));
+        return Err(conflict(
+            "security.threshold.member_latency_ms",
+            "must not be negative",
+        ));
     }
     if t.umbrella_leaves == 0 {
-        return Err(conflict("security.threshold.umbrella_leaves", "an umbrella covers at least one leaf"));
+        return Err(conflict(
+            "security.threshold.umbrella_leaves",
+            "an umbrella covers at least one leaf",
+        ));
     }
     Ok(())
 }
@@ -205,19 +217,27 @@ pub fn backend_faults(s: &Scenario, run: &ScmsRun) -> Result<Vec<Fault>, EngineE
             "malicious" => FaultKind::Malicious,
             "slow" => {
                 let extra = f.extra_ms.filter(|x| *x > 0.0).ok_or_else(|| {
-                    conflict(&format!("{field}.extra_ms"), "a slow server needs extra_ms > 0")
+                    conflict(
+                        &format!("{field}.extra_ms"),
+                        "a slow server needs extra_ms > 0",
+                    )
                 })?;
                 FaultKind::Slow { extra: ms(extra) }
             }
             other => {
                 return Err(conflict(
                     &format!("{field}.mode"),
-                    format!("'{other}' is not a fault mode; allowed: {}", FAILURE_MODES.join(", ")),
+                    format!(
+                        "'{other}' is not a fault mode; allowed: {}",
+                        FAILURE_MODES.join(", ")
+                    ),
                 ));
             }
         };
         let from = (f.from_s.max(0.0) * 1e9).round() as u64;
-        let until = f.to_s.map_or(u64::MAX, |t| (t.max(0.0) * 1e9).round() as u64);
+        let until = f
+            .to_s
+            .map_or(u64::MAX, |t| (t.max(0.0) * 1e9).round() as u64);
         out.push(Fault {
             node,
             kind,

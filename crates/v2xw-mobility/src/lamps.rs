@@ -249,7 +249,9 @@ pub fn card(p: &LampParams) -> ModelCard {
                 "brake_off_decel_mps2",
                 "m/s²",
                 serde_json::json!(p.brake_off_decel_mps2),
-                choice("hysteresis below the on threshold, so a hovering car's lamp does not flash"),
+                choice(
+                    "hysteresis below the on threshold, so a hovering car's lamp does not flash",
+                ),
             ),
             "as brake_on_decel_mps2",
         ),
@@ -330,20 +332,35 @@ mod tests {
     #[test]
     fn a_car_standing_at_a_light_shows_its_stop_lamps() {
         let p = LampParams::default();
-        assert_eq!(lamps(&car(0.0, 0.0), 0, SignalHabit::ALWAYS, &p) & LAMP_BRAKE, LAMP_BRAKE);
+        assert_eq!(
+            lamps(&car(0.0, 0.0), 0, SignalHabit::ALWAYS, &p) & LAMP_BRAKE,
+            LAMP_BRAKE
+        );
         // Moving off: accelerating from a standstill is off the brake.
-        assert_eq!(lamps(&car(0.1, 1.5), LAMP_BRAKE, SignalHabit::ALWAYS, &p) & LAMP_BRAKE, 0);
+        assert_eq!(
+            lamps(&car(0.1, 1.5), LAMP_BRAKE, SignalHabit::ALWAYS, &p) & LAMP_BRAKE,
+            0
+        );
     }
 
     #[test]
     fn coasting_is_not_braking_and_the_threshold_has_hysteresis() {
         let p = LampParams::default();
         assert_eq!(lamps(&car(12.0, -0.5), 0, SignalHabit::ALWAYS, &p), 0);
-        assert_eq!(lamps(&car(12.0, -1.2), 0, SignalHabit::ALWAYS, &p), LAMP_BRAKE);
+        assert_eq!(
+            lamps(&car(12.0, -1.2), 0, SignalHabit::ALWAYS, &p),
+            LAMP_BRAKE
+        );
         // Between the two thresholds the lamp keeps what it showed.
-        assert_eq!(lamps(&car(12.0, -0.8), LAMP_BRAKE, SignalHabit::ALWAYS, &p), LAMP_BRAKE);
+        assert_eq!(
+            lamps(&car(12.0, -0.8), LAMP_BRAKE, SignalHabit::ALWAYS, &p),
+            LAMP_BRAKE
+        );
         assert_eq!(lamps(&car(12.0, -0.8), 0, SignalHabit::ALWAYS, &p), 0);
-        assert_eq!(lamps(&car(12.0, -0.4), LAMP_BRAKE, SignalHabit::ALWAYS, &p), 0);
+        assert_eq!(
+            lamps(&car(12.0, -0.4), LAMP_BRAKE, SignalHabit::ALWAYS, &p),
+            0
+        );
     }
 
     #[test]

@@ -145,7 +145,11 @@ impl Acc {
     pub fn gap_control(&self, v: f64, v0: f64, g: f64, v_l: f64, t_gap: f64) -> f64 {
         let p = &self.params;
         let dv = v_l - v;
-        let d0 = if v > 1e-6 { (75.0 / v - 5.0).clamp(0.0, 2.0) } else { 2.0 };
+        let d0 = if v > 1e-6 {
+            (75.0 / v - 5.0).clamp(0.0, 2.0)
+        } else {
+            2.0
+        };
         let e = g - t_gap * v - d0;
         let (kv, ke) = if e.abs() < 0.2 && (v - v0).abs() < 0.1 {
             p.gap_gains
@@ -219,7 +223,6 @@ impl Acc {
             ..self.params.preset.profile(class)
         }
     }
-
 }
 
 /// The common last step of every ACC/CACC law: never past the desired speed in one step,
@@ -321,8 +324,18 @@ pub fn card(params: &AccParams) -> ModelCard {
         ),
     ];
     card.parameters = vec![
-        Parameter::new("time_gap", "s", serde_json::json!(params.time_gap_s), milanes.clone()),
-        Parameter::new("speed_gain", "1/s", serde_json::json!(params.speed_gain), xiao.clone()),
+        Parameter::new(
+            "time_gap",
+            "s",
+            serde_json::json!(params.time_gap_s),
+            milanes.clone(),
+        ),
+        Parameter::new(
+            "speed_gain",
+            "1/s",
+            serde_json::json!(params.speed_gain),
+            xiao.clone(),
+        ),
         Parameter::new(
             "gap_gains",
             "1/s, 1/s²",

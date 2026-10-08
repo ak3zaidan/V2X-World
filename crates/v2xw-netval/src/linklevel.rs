@@ -94,7 +94,8 @@ fn spectrum(rate: CodeRate, d_max: usize) -> Vec<f64> {
     let mut c = vec![0.0f64; d_max + 1];
     for phase0 in 0..period {
         // active[(state, w)] = (paths, total information weight), at the current phase.
-        let mut active: std::collections::BTreeMap<(u32, usize), (f64, f64)> = std::collections::BTreeMap::new();
+        let mut active: std::collections::BTreeMap<(u32, usize), (f64, f64)> =
+            std::collections::BTreeMap::new();
         // The diverging step: input 1 from state 0.
         let (a, b, next) = encode_step(0, 1);
         let (ta, tb) = pat[phase0];
@@ -107,7 +108,8 @@ fn spectrum(rate: CodeRate, d_max: usize) -> Vec<f64> {
             if active.is_empty() {
                 break;
             }
-            let mut nxt: std::collections::BTreeMap<(u32, usize), (f64, f64)> = std::collections::BTreeMap::new();
+            let mut nxt: std::collections::BTreeMap<(u32, usize), (f64, f64)> =
+                std::collections::BTreeMap::new();
             let (ta, tb) = pat[phase];
             for (&(state, w), &(n, info)) in &active {
                 for u in 0..2u32 {
@@ -137,7 +139,11 @@ fn distance_spectrum(mode: Mode) -> Outcome {
     let mut parts = Vec::new();
     // The bound keeps the first terms from the free distance: nine for rate 1/2 (d to
     // 26), ten for 2/3 (to 15) and 3/4 (to 14).
-    for (rate, d_max, d_free_want) in [(CodeRate::R1_2, 26usize, 10usize), (CodeRate::R2_3, 15, 6), (CodeRate::R3_4, 14, 5)] {
+    for (rate, d_max, d_free_want) in [
+        (CodeRate::R1_2, 26usize, 10usize),
+        (CodeRate::R2_3, 15, 6),
+        (CodeRate::R3_4, 14, 5),
+    ] {
         let c = spectrum(rate, d_max);
         let d_free = c.iter().position(|x| *x > 0.0).unwrap_or(0);
         let p_div = 2.0 * f64::from(rate.b_value());
@@ -159,10 +165,19 @@ fn distance_spectrum(mode: Mode) -> Outcome {
             }
         }
         let (n, dn) = rate.as_fraction();
-        let shown: Vec<String> = c.iter().enumerate().filter(|x| *x.1 > 0.0).take(4).map(|(w, x)| format!("c{w}={x}")).collect();
+        let shown: Vec<String> = c
+            .iter()
+            .enumerate()
+            .filter(|x| *x.1 > 0.0)
+            .take(4)
+            .map(|(w, x)| format!("c{w}={x}"))
+            .collect();
         parts.push((
             worst < 1e-3 && d_free == d_free_want,
-            format!("rate {n}/{dn}: d_free {d_free}, {} …; max rel. error {worst:.1e}", shown.join(" ")),
+            format!(
+                "rate {n}/{dn}: d_free {d_free}, {} …; max rel. error {worst:.1e}",
+                shown.join(" ")
+            ),
         ));
     }
     Outcome::all(parts)
@@ -183,7 +198,8 @@ fn erfc_nr(x: f64) -> f64 {
                 + t * (0.096_784_18
                     + t * (-0.186_288_06
                         + t * (0.278_868_07
-                            + t * (-1.135_203_98 + t * (1.488_515_87 + t * (-0.822_152_23 + t * 0.170_872_77))))))));
+                            + t * (-1.135_203_98
+                                + t * (1.488_515_87 + t * (-0.822_152_23 + t * 0.170_872_77))))))));
     let r = t * math::exp(poly);
     if x >= 0.0 { r } else { 2.0 - r }
 }
@@ -210,8 +226,16 @@ fn exact_qam_ber(m: usize, snr: f64) -> f64 {
             }
             let upper = if j == m - 1 { f64::INFINITY } else { c + 1.0 };
             let lower = if j == 0 { f64::NEG_INFINITY } else { c - 1.0 };
-            let p_lo = if lower.is_infinite() { 1.0 } else { q((lower - l) / sigma) };
-            let p_hi = if upper.is_infinite() { 0.0 } else { q((upper - l) / sigma) };
+            let p_lo = if lower.is_infinite() {
+                1.0
+            } else {
+                q((lower - l) / sigma)
+            };
+            let p_hi = if upper.is_infinite() {
+                0.0
+            } else {
+                q((upper - l) / sigma)
+            };
             total += (p_lo - p_hi) * f64::from((gray(i) ^ gray(j)).count_ones());
         }
     }
@@ -220,7 +244,12 @@ fn exact_qam_ber(m: usize, snr: f64) -> f64 {
 
 fn uncoded(mode: Mode) -> Outcome {
     let mut parts = Vec::new();
-    for (modulation, m, label) in [(Modulation::Bpsk, 2usize, "BPSK"), (Modulation::Qpsk, 2, "QPSK"), (Modulation::Qam16, 4, "16-QAM"), (Modulation::Qam64, 8, "64-QAM")] {
+    for (modulation, m, label) in [
+        (Modulation::Bpsk, 2usize, "BPSK"),
+        (Modulation::Qpsk, 2, "QPSK"),
+        (Modulation::Qam16, 4, "16-QAM"),
+        (Modulation::Qam64, 8, "64-QAM"),
+    ] {
         let mut worst = 0.0f64;
         let mut at = 0.0;
         for k in 0..=60 {
@@ -247,7 +276,10 @@ fn uncoded(mode: Mode) -> Outcome {
             }
         }
         let tol = if m == 2 { 1e-5 } else { 0.02 };
-        parts.push((worst <= tol, format!("{label}: max rel. error {worst:.2e} (at {at:.1} dB)")));
+        parts.push((
+            worst <= tol,
+            format!("{label}: max rel. error {worst:.2e} (at {at:.1} dB)"),
+        ));
     }
     Outcome::all(parts)
 }
@@ -308,7 +340,8 @@ fn block_survives(bits: &[u8], rate: CodeRate, p: f64, rng: &mut Rng) -> bool {
             }
             for u in 0..2u32 {
                 let (a, b, ns) = encode_step(s as u32, u);
-                let cost = ra.map_or(0, |r| u32::from(u32::from(r) != a)) + rb.map_or(0, |r| u32::from(u32::from(r) != b));
+                let cost = ra.map_or(0, |r| u32::from(u32::from(r) != a))
+                    + rb.map_or(0, |r| u32::from(u32::from(r) != b));
                 let cand = m + cost;
                 let ns = ns as usize;
                 // The predecessor's oldest bit is what the next state drops: record it.
@@ -377,18 +410,30 @@ fn crossing(mut lo: f64, mut hi: f64, target: f64, per: impl Fn(f64) -> f64) -> 
 
 fn viterbi_per(mode: Mode) -> Outcome {
     let bytes = 100;
-    let model = if mode.faulted() { PerModel::with_impl_loss_db(3.0) } else { PerModel::default() };
+    let model = if mode.faulted() {
+        PerModel::with_impl_loss_db(3.0)
+    } else {
+        PerModel::default()
+    };
     let mut parts = Vec::new();
-    for (k, mcs) in [Mcs::R3Bpsk12, Mcs::R4p5Bpsk34, Mcs::R6Qpsk12, Mcs::R9Qpsk34].into_iter().enumerate() {
+    for (k, mcs) in [Mcs::R3Bpsk12, Mcs::R4p5Bpsk34, Mcs::R6Qpsk12, Mcs::R9Qpsk34]
+        .into_iter()
+        .enumerate()
+    {
         let model_snr = model.snr_for_per(bytes, mcs, 0.1);
         // The same frames at every SNR (common random numbers), so the bisection walks a
         // monotone estimate.
         let seed = 0xF1D0 + k as u64;
-        let sim_snr = crossing(model_snr - 7.0, model_snr + 2.0, 0.1, |s| simulated_per(mcs, bytes, s, 400, seed));
+        let sim_snr = crossing(model_snr - 7.0, model_snr + 2.0, 0.1, |s| {
+            simulated_per(mcs, bytes, s, 400, seed)
+        });
         let d = sim_snr - model_snr;
         parts.push((
             (-2.0..=0.3).contains(&d),
-            format!("{}: 10 % PER at {sim_snr:.2} dB simulated, {model_snr:.2} dB model ({d:+.2} dB)", mcs.label()),
+            format!(
+                "{}: 10 % PER at {sim_snr:.2} dB simulated, {model_snr:.2} dB model ({d:+.2} dB)",
+                mcs.label()
+            ),
         ));
     }
     Outcome::all(parts)

@@ -47,7 +47,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let only: Option<Vec<String>> =
         value("--only").map(|v| v.split(',').map(|s| s.trim().to_string()).collect());
     let mut out = match value("--json") {
-        Some(p) => Some(std::fs::OpenOptions::new().create(true).append(true).open(p)?),
+        Some(p) => Some(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)?,
+        ),
         None => None,
     };
     let registry = v2xw_engine::city::registry();
@@ -97,9 +102,9 @@ fn audit_city(path: &str, id: &str, seconds: f64) -> serde_json::Value {
     if !city.extract_present() {
         return fail(format!("extract missing: worlds/fetch.sh {id}"));
     }
-    let scenario = match Scenario::load_unvalidated(path).and_then(|s| {
-        s.with_city(id).map_err(v2xw_engine::EngineError::Scenario)
-    }) {
+    let scenario = match Scenario::load_unvalidated(path)
+        .and_then(|s| s.with_city(id).map_err(v2xw_engine::EngineError::Scenario))
+    {
         Ok(mut s) => {
             s.time.duration_s = seconds;
             s
@@ -109,7 +114,11 @@ fn audit_city(path: &str, id: &str, seconds: f64) -> serde_json::Value {
     if let Err(e) = scenario.validate() {
         return fail(format!("validate: {e}"));
     }
-    let asked_rsus = scenario.actors.rsu_placement.as_ref().map_or(0, |p| p.count);
+    let asked_rsus = scenario
+        .actors
+        .rsu_placement
+        .as_ref()
+        .map_or(0, |p| p.count);
     let t = Instant::now();
     let world = match v2xw_engine::wiring::build_world(&scenario) {
         Ok(w) => w,
@@ -120,7 +129,13 @@ fn audit_city(path: &str, id: &str, seconds: f64) -> serde_json::Value {
     if std::env::var("CITY_AUDIT_OD").is_ok() {
         use v2xw_mobility::demand::{OdModel, OdParams};
         use v2xw_mobility::routing::{Dijkstra, DijkstraParams, FreeFlowCost};
-        let od = OdModel::build(&world, OdParams { connected_only: true, ..OdParams::default() });
+        let od = OdModel::build(
+            &world,
+            OdParams {
+                connected_only: true,
+                ..OdParams::default()
+            },
+        );
         if let Ok(od) = od {
             let router = Dijkstra::new(DijkstraParams::default());
             let cost = FreeFlowCost::new(&world);
@@ -135,12 +150,22 @@ fn audit_city(path: &str, id: &str, seconds: f64) -> serde_json::Value {
                         let (la, lb) = (world.lane(a), world.lane(b));
                         eprintln!(
                             "{id}: no route {} ({:?} {:.1} m) -> {} ({:?} {:.1} m, allowed {:?})",
-                            a.index(), la.kind, la.length_m, b.index(), lb.kind, lb.length_m, lb.allowed
+                            a.index(),
+                            la.kind,
+                            la.length_m,
+                            b.index(),
+                            lb.kind,
+                            lb.length_m,
+                            lb.allowed
                         );
                     }
                 }
             }
-            eprintln!("{id}: {} origins, {} destinations, {fail}/300 sampled pairs unroutable", o.len(), d.len());
+            eprintln!(
+                "{id}: {} origins, {} destinations, {fail}/300 sampled pairs unroutable",
+                o.len(),
+                d.len()
+            );
         }
     }
     // `CITY_AUDIT_LANES=id,id`: print those lanes' geometry, to read an example off the map.

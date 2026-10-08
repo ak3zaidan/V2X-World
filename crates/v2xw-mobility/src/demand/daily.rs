@@ -88,9 +88,8 @@ impl DailyProfile {
     pub fn supremum(&self) -> f64 {
         let max = |c: &[f64; 24]| c.iter().copied().fold(0.0, f64::max);
         match self.curve {
-            DailyCurve::NycDotManhattan => {
-                max(&NYC_DOT_MANHATTAN_WEEKDAY).max(max(&NYC_DOT_MANHATTAN_WEEKEND) * WEEKEND_VOLUME_RATIO)
-            }
+            DailyCurve::NycDotManhattan => max(&NYC_DOT_MANHATTAN_WEEKDAY)
+                .max(max(&NYC_DOT_MANHATTAN_WEEKEND) * WEEKEND_VOLUME_RATIO),
             DailyCurve::NycDotManhattanWeekday => max(&NYC_DOT_MANHATTAN_WEEKDAY),
             DailyCurve::NycDotManhattanWeekend => {
                 max(&NYC_DOT_MANHATTAN_WEEKEND) * WEEKEND_VOLUME_RATIO
@@ -170,19 +169,31 @@ mod tests {
         let midday = at_hours(&p, 11.5);
         let evening = at_hours(&p, 15.5);
         assert!(night < 0.3, "03:30 {night}");
-        assert!(morning > 1.25 && morning > midday, "08:30 {morning} vs 11:30 {midday}");
+        assert!(
+            morning > 1.25 && morning > midday,
+            "08:30 {morning} vs 11:30 {midday}"
+        );
         assert!(evening > morning, "15:30 {evening}");
         assert!(morning / night > 4.0);
         // The mean over the day, by sampling every minute, is the weekday mean of 1.
-        let mean: f64 = (0..1440).map(|m| at_hours(&p, f64::from(m) / 60.0)).sum::<f64>() / 1440.0;
+        let mean: f64 = (0..1440)
+            .map(|m| at_hours(&p, f64::from(m) / 60.0))
+            .sum::<f64>()
+            / 1440.0;
         assert!((mean - 1.0).abs() < 0.01, "weekday mean {mean}");
         // Saturday (two days on) is the weekend curve at 0.819 of the volume.
         let sat: f64 = (0..1440)
             .map(|m| at_hours(&p, 48.0 + f64::from(m) / 60.0))
             .sum::<f64>()
             / 1440.0;
-        assert!((sat - WEEKEND_VOLUME_RATIO).abs() < 0.01, "saturday mean {sat}");
-        assert!(at_hours(&p, 48.0 + 8.5) < morning * 0.7, "saturday morning is quiet");
+        assert!(
+            (sat - WEEKEND_VOLUME_RATIO).abs() < 0.01,
+            "saturday mean {sat}"
+        );
+        assert!(
+            at_hours(&p, 48.0 + 8.5) < morning * 0.7,
+            "saturday morning is quiet"
+        );
         // Continuous across midnight.
         let before = at_hours(&p, 23.999);
         let after = at_hours(&p, 24.001);

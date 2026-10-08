@@ -72,7 +72,10 @@ impl RpcTransport for FakeEngine {
     }
 
     fn call(&mut self, method: &str, params: &Value) -> Result<Value> {
-        self.calls.lock().unwrap().push((method.to_string(), params.clone()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push((method.to_string(), params.clone()));
         let metric = params
             .get("metrics")
             .and_then(|m| m.get(0))
@@ -92,7 +95,11 @@ impl RpcTransport for FakeEngine {
                 self.running = params["scenario"].clone();
                 self.runs += 1;
                 self.t_ns = 0;
-                let d = self.running.pointer("/time/duration_s").and_then(Value::as_f64).unwrap_or(60.0);
+                let d = self
+                    .running
+                    .pointer("/time/duration_s")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(60.0);
                 self.t_end_ns = (d * 1e9) as u64;
                 json!({"run_id": format!("run-{}", self.runs), "state": "running",
                        "t_end_ns": self.t_end_ns})
@@ -125,7 +132,13 @@ impl RpcTransport for FakeEngine {
                     .map(|i| {
                         let lo = i * 20;
                         let v = (1.0 - k * 0.15 * f64::from(i)).max(0.0);
-                        json!([format!("{lo}-{}", lo + 20), (v * 1000.0).round() / 1000.0, null, null, 100])
+                        json!([
+                            format!("{lo}-{}", lo + 20),
+                            (v * 1000.0).round() / 1000.0,
+                            null,
+                            null,
+                            100
+                        ])
                     })
                     .collect();
                 json!({"rows": rows})
@@ -152,7 +165,11 @@ impl RpcTransport for FakeEngine {
 }
 
 fn call(id: &str, name: &str, args: Value) -> ToolCall {
-    ToolCall { id: id.to_string(), name: name.to_string(), arguments: args.to_string() }
+    ToolCall {
+        id: id.to_string(),
+        name: name.to_string(),
+        arguments: args.to_string(),
+    }
 }
 
 fn tools(text: Option<&str>, calls: Vec<ToolCall>) -> Completion {
@@ -163,93 +180,208 @@ fn tools(text: Option<&str>, calls: Vec<ToolCall>) -> Completion {
 }
 
 fn say(text: &str) -> Completion {
-    Completion { message: ChatMessage::assistant(text), finish_reason: "stop".into() }
+    Completion {
+        message: ChatMessage::assistant(text),
+        finish_reason: "stop".into(),
+    }
 }
 
 fn quick() -> AgentPolicy {
-    AgentPolicy { poll_ms: 0, ..AgentPolicy::default() }
+    AgentPolicy {
+        poll_ms: 0,
+        ..AgentPolicy::default()
+    }
 }
 
 #[test]
 fn one_prompt_configures_runs_analyses_and_reports_then_a_follow_up_compares() {
     let provider = ScriptedProvider::new(vec![
-        tools(Some("I will start from the grid and double its demand."),
-              vec![call("c1", "list_scenarios", json!({}))]),
-        tools(None, vec![call("c2", "prepare_scenario", json!({
+        tools(
+            Some("I will start from the grid and double its demand."),
+            vec![call("c1", "list_scenarios", json!({}))],
+        ),
+        tools(
+            None,
+            vec![call(
+                "c2",
+                "prepare_scenario",
+                json!({
             "base": "phase1-grid",
             "reason": "the request names no city; the grid is the closest small scenario",
             "changes": [{"key": "actors.vehicles.demand.rate_veh_per_h",
-                         "value": {"multiply": 2}, "why": "double the density"}]}))]),
-        tools(None, vec![call("c3", "run_prepared", json!({"label": "double density"}))]),
-        say("The channel ran above its target [channel.congested]: mean busy ratio 0.9 \
-             against 0.8. Delivery fell below 0.9 from 20 m [delivery.range]."),
+                         "value": {"multiply": 2}, "why": "double the density"}]}),
+            )],
+        ),
+        tools(
+            None,
+            vec![call(
+                "c3",
+                "run_prepared",
+                json!({"label": "double density"}),
+            )],
+        ),
+        say(
+            "The channel ran above its target [channel.congested]: mean busy ratio 0.9 \
+             against 0.8. Delivery fell below 0.9 from 20 m [delivery.range].",
+        ),
         // The follow-up.
-        tools(None, vec![call("c4", "prepare_scenario", json!({
+        tools(
+            None,
+            vec![call(
+                "c4",
+                "prepare_scenario",
+                json!({
             "base": "last", "reason": "same scenario, other radio",
-            "changes": [{"key": "radio.rat", "value": "lte-v2x-pc5", "why": "compare with LTE-V2X"}]}))]),
-        tools(None, vec![call("c5", "run_prepared", json!({"label": "lte-v2x"}))]),
+            "changes": [{"key": "radio.rat", "value": "lte-v2x-pc5", "why": "compare with LTE-V2X"}]}),
+            )],
+        ),
+        tools(
+            None,
+            vec![call("c5", "run_prepared", json!({"label": "lte-v2x"}))],
+        ),
         tools(None, vec![call("c6", "compare_runs", json!({}))]),
         say("On LTE-V2X the busy ratio fell from 0.9 to 0.45 [channel.congested] is gone."),
     ]);
     let engine = FakeEngine::new();
     let calls = Arc::clone(&engine.calls);
-    let mut agent = Agent::new(Some(provider), engine).expect("builds").with_policy(quick());
+    let mut agent = Agent::new(Some(provider), engine)
+        .expect("builds")
+        .with_policy(quick());
     let mut events: Vec<AgentEvent> = Vec::new();
     let report = agent
-        .ask("Run the grid at double the density and tell me how the channel holds up.",
-             &mut |e| events.push(e))
+        .ask(
+            "Run the grid at double the density and tell me how the channel holds up.",
+            &mut |e| events.push(e),
+        )
         .expect("the turn completes");
 
     // The plan, the change (with its before and after), the run, its progress, the report.
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::Plan { text } if text.contains("double"))));
-    let changes = events.iter().find_map(|e| match e {
-        AgentEvent::Changes { changes, valid, .. } => Some((changes.clone(), *valid)),
-        _ => None,
-    }).expect("a Changes event");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Plan { text } if text.contains("double")))
+    );
+    let changes = events
+        .iter()
+        .find_map(|e| match e {
+            AgentEvent::Changes { changes, valid, .. } => Some((changes.clone(), *valid)),
+            _ => None,
+        })
+        .expect("a Changes event");
     assert!(changes.1, "the engine's loader accepted the scenario");
-    let demand = changes.0.iter().find(|c| c.key == "actors.vehicles.demand.rate_veh_per_h").expect("demand changed");
+    let demand = changes
+        .0
+        .iter()
+        .find(|c| c.key == "actors.vehicles.demand.rate_veh_per_h")
+        .expect("demand changed");
     assert_eq!(demand.before, json!(30.0));
     assert_eq!(demand.after, json!(60.0));
-    assert!(changes.0.iter().any(|c| c.key == "metrics" && c.after == json!(["all"])));
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::RunStarted { .. })));
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::Progress { t_s, .. } if *t_s >= 60.0)));
-    assert!(events.iter().any(|e| matches!(e, AgentEvent::Report { .. })));
+    assert!(
+        changes
+            .0
+            .iter()
+            .any(|c| c.key == "metrics" && c.after == json!(["all"]))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::RunStarted { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Progress { t_s, .. } if *t_s >= 60.0))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Report { .. }))
+    );
 
     // The run was started with the changed scenario, through the server's own method.
-    let started = calls.lock().unwrap().iter().find(|(m, _)| m == "run.start").cloned().expect("started");
-    assert_eq!(started.1["scenario"]["actors"]["vehicles"]["demand"]["rate_veh_per_h"], json!(60.0));
+    let started = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(m, _)| m == "run.start")
+        .cloned()
+        .expect("started");
+    assert_eq!(
+        started.1["scenario"]["actors"]["vehicles"]["demand"]["rate_veh_per_h"],
+        json!(60.0)
+    );
 
     assert_eq!(report.runs.len(), 1);
     let a = &report.runs[0].analysis;
-    assert!(a.finding("channel.congested").is_some(), "{:#?}", a.findings);
+    assert!(
+        a.finding("channel.congested").is_some(),
+        "{:#?}",
+        a.findings
+    );
     assert!(report.ungrounded.is_empty(), "{:?}", report.ungrounded);
     assert!(report.markdown.contains("# Simulation report"));
     assert!(report.markdown.contains("channel.congested"));
-    assert!(report.markdown.contains("actors.vehicles.demand.rate_veh_per_h"));
+    assert!(
+        report
+            .markdown
+            .contains("actors.vehicles.demand.rate_veh_per_h")
+    );
 
     // The follow-up re-runs with the one change and compares.
-    let follow = agent.ask("Now compare with LTE-V2X.", &mut |_| {}).expect("the follow-up completes");
-    assert_eq!(follow.runs.len(), 1, "only the follow-up's run is in its report");
+    let follow = agent
+        .ask("Now compare with LTE-V2X.", &mut |_| {})
+        .expect("the follow-up completes");
+    assert_eq!(
+        follow.runs.len(),
+        1,
+        "only the follow-up's run is in its report"
+    );
     let c = follow.comparison.expect("a comparison");
-    let cbr = c.deltas.iter().find(|d| d.metric == "cbr").expect("cbr compared");
+    let cbr = c
+        .deltas
+        .iter()
+        .find(|d| d.metric == "cbr")
+        .expect("cbr compared");
     assert!(cbr.b < cbr.a, "LTE-V2X's fake channel is quieter");
     assert!(c.only_in_a.contains(&"channel.congested".to_string()));
-    let second = calls.lock().unwrap().iter().filter(|(m, _)| m == "run.start").nth(1).cloned().expect("second start");
+    let second = calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, _)| m == "run.start")
+        .nth(1)
+        .cloned()
+        .expect("second start");
     assert_eq!(second.1["scenario"]["radio"]["rat"], json!("lte-v2x-pc5"));
-    assert_eq!(second.1["scenario"]["actors"]["vehicles"]["demand"]["rate_veh_per_h"], json!(60.0),
-               "built from the last run, so the doubled demand stays");
+    assert_eq!(
+        second.1["scenario"]["actors"]["vehicles"]["demand"]["rate_veh_per_h"],
+        json!(60.0),
+        "built from the last run, so the doubled demand stays"
+    );
 }
 
 #[test]
 fn a_number_the_analyst_did_not_produce_is_sent_back_and_then_flagged() {
     let provider = ScriptedProvider::new(vec![
-        tools(None, vec![call("c1", "prepare_scenario", json!({
-            "base": "phase1-grid", "reason": "as asked", "changes": []}))]),
-        tools(None, vec![call("c2", "run_prepared", json!({"label": "baseline"}))]),
-        say("The busy ratio was 0.83."),          // not produced by any tool
-        say("The busy ratio was 0.4123 still."),  // still not
+        tools(
+            None,
+            vec![call(
+                "c1",
+                "prepare_scenario",
+                json!({
+            "base": "phase1-grid", "reason": "as asked", "changes": []}),
+            )],
+        ),
+        tools(
+            None,
+            vec![call("c2", "run_prepared", json!({"label": "baseline"}))],
+        ),
+        say("The busy ratio was 0.83."), // not produced by any tool
+        say("The busy ratio was 0.4123 still."), // still not
     ]);
-    let mut agent = Agent::new(Some(provider), FakeEngine::new()).expect("builds").with_policy(quick());
+    let mut agent = Agent::new(Some(provider), FakeEngine::new())
+        .expect("builds")
+        .with_policy(quick());
     let report = agent.ask("Run the grid.", &mut |_| {}).expect("completes");
     assert_eq!(report.ungrounded, vec!["0.4123".to_string()]);
     assert!(report.markdown.contains("Unverified numbers"));
@@ -258,55 +390,101 @@ fn a_number_the_analyst_did_not_produce_is_sent_back_and_then_flagged() {
 #[test]
 fn an_invalid_change_is_refused_by_the_loader_and_nothing_runs() {
     let provider = ScriptedProvider::new(vec![
-        tools(None, vec![call("c1", "prepare_scenario", json!({
+        tools(
+            None,
+            vec![call(
+                "c1",
+                "prepare_scenario",
+                json!({
             "base": "phase1-grid", "reason": "r",
-            "changes": [{"key": "radio.rat", "value": "carrier-pigeon", "why": "w"}]}))]),
-        tools(None, vec![call("c2", "run_prepared", json!({"label": "x"}))]),
+            "changes": [{"key": "radio.rat", "value": "carrier-pigeon", "why": "w"}]}),
+            )],
+        ),
+        tools(
+            None,
+            vec![call("c2", "run_prepared", json!({"label": "x"}))],
+        ),
         say("The scenario could not be validated."),
     ]);
     let engine = FakeEngine::new();
     let calls = Arc::clone(&engine.calls);
-    let mut agent = Agent::new(Some(provider), engine).expect("builds").with_policy(quick());
+    let mut agent = Agent::new(Some(provider), engine)
+        .expect("builds")
+        .with_policy(quick());
     let mut invalid = false;
     let report = agent
         .ask("Use a carrier pigeon radio.", &mut |e| {
-            if let AgentEvent::Changes { valid: false, errors, .. } = &e {
+            if let AgentEvent::Changes {
+                valid: false,
+                errors,
+                ..
+            } = &e
+            {
                 invalid = !errors.is_empty();
             }
         })
         .expect("completes");
     assert!(invalid, "the loader's errors reached the panel");
     assert!(report.runs.is_empty());
-    assert!(!calls.lock().unwrap().iter().any(|(m, _)| m == "run.start"), "nothing invalid ran");
+    assert!(
+        !calls.lock().unwrap().iter().any(|(m, _)| m == "run.start"),
+        "nothing invalid ran"
+    );
 }
 
 #[test]
 fn stopping_mid_run_pauses_the_engine_and_reports_stopped() {
     let provider = ScriptedProvider::new(vec![
-        tools(None, vec![call("c1", "prepare_scenario", json!({
-            "base": "phase1-grid", "reason": "r", "changes": []}))]),
-        tools(None, vec![call("c2", "run_prepared", json!({"label": "x"}))]),
+        tools(
+            None,
+            vec![call(
+                "c1",
+                "prepare_scenario",
+                json!({
+            "base": "phase1-grid", "reason": "r", "changes": []}),
+            )],
+        ),
+        tools(
+            None,
+            vec![call("c2", "run_prepared", json!({"label": "x"}))],
+        ),
         say("unreachable"),
     ]);
     let slot: Arc<Mutex<Option<Arc<AtomicBool>>>> = Arc::new(Mutex::new(None));
     let mut engine = FakeEngine::new();
     engine.stop_at_status = Some((2, Arc::clone(&slot)));
     let calls = Arc::clone(&engine.calls);
-    let mut agent = Agent::new(Some(provider), engine).expect("builds").with_policy(quick());
+    let mut agent = Agent::new(Some(provider), engine)
+        .expect("builds")
+        .with_policy(quick());
     *slot.lock().unwrap() = Some(agent.cancel_handle());
-    let report = agent.ask("Run the grid.", &mut |_| {}).expect("a stopped turn is not an error");
+    let report = agent
+        .ask("Run the grid.", &mut |_| {})
+        .expect("a stopped turn is not an error");
     assert!(report.stopped);
     let log = calls.lock().unwrap();
-    let start = log.iter().position(|(m, _)| m == "run.start").expect("started");
-    assert!(log[start..].iter().any(|(m, _)| m == "run.pause"), "the run was paused after the stop");
+    let start = log
+        .iter()
+        .position(|(m, _)| m == "run.start")
+        .expect("started");
+    assert!(
+        log[start..].iter().any(|(m, _)| m == "run.pause"),
+        "the run was paused after the stop"
+    );
 }
 
 #[test]
 fn with_no_model_a_scenario_still_runs_and_is_analysed() {
-    let mut agent: Agent<ScriptedProvider, FakeEngine> =
-        Agent::new(None, FakeEngine::new()).expect("builds").with_policy(quick());
-    assert!(matches!(agent.ask("anything", &mut |_| {}), Err(CopilotError::MissingApiKey { .. })));
-    let report = agent.run_without_model("Run the grid", "phase1-grid", &mut |_| {}).expect("runs");
+    let mut agent: Agent<ScriptedProvider, FakeEngine> = Agent::new(None, FakeEngine::new())
+        .expect("builds")
+        .with_policy(quick());
+    assert!(matches!(
+        agent.ask("anything", &mut |_| {}),
+        Err(CopilotError::MissingApiKey { .. })
+    ));
+    let report = agent
+        .run_without_model("Run the grid", "phase1-grid", &mut |_| {})
+        .expect("runs");
     assert_eq!(report.provider, "none");
     assert_eq!(report.runs.len(), 1);
     assert!(report.overview.contains("no model attached"));

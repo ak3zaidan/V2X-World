@@ -494,12 +494,14 @@ impl HsmOp {
     /// How [`HsmOp::service_time`]'s figure was arrived at, or `None` when there is none.
     pub fn basis(&self) -> Option<CostBasis> {
         if self.latency_us.value.is_some() {
-            return Some(match (&self.latency_us.status, self.latency_lower_us.value) {
-                (Some(FieldStatus::UpperBound), Some(_)) => CostBasis::WithinBound,
-                (Some(FieldStatus::UpperBound), None) => CostBasis::UpperBound,
-                (Some(FieldStatus::Derived), _) => CostBasis::DerivedFromThroughput,
-                _ => CostBasis::Published,
-            });
+            return Some(
+                match (&self.latency_us.status, self.latency_lower_us.value) {
+                    (Some(FieldStatus::UpperBound), Some(_)) => CostBasis::WithinBound,
+                    (Some(FieldStatus::UpperBound), None) => CostBasis::UpperBound,
+                    (Some(FieldStatus::Derived), _) => CostBasis::DerivedFromThroughput,
+                    _ => CostBasis::Published,
+                },
+            );
         }
         self.throughput_per_s
             .value
@@ -1111,7 +1113,11 @@ impl HardwareProfile {
         }
         let published = (self.hsm.kind != HsmKind::None
             && self.hsm.ops.get(op).and_then(HsmOp::service_time).is_some())
-            || self.software_crypto.get(op).and_then(CostUs::service_time).is_some();
+            || self
+                .software_crypto
+                .get(op)
+                .and_then(CostUs::service_time)
+                .is_some();
         !published && self.anchored_cost(op).is_some()
     }
 
@@ -1338,8 +1344,7 @@ fn unit_of(name: &str) -> &'static str {
 /// never lets through.
 #[must_use]
 pub fn signature_ops(signature: &str) -> (&'static str, &'static str) {
-    v2xw_sec::scheme::signature(signature).map_or(
-        ("ecdsa-p256-sign", "ecdsa-p256-verify"),
-        |s| (s.sign_op(), s.verify_op()),
-    )
+    v2xw_sec::scheme::signature(signature).map_or(("ecdsa-p256-sign", "ecdsa-p256-verify"), |s| {
+        (s.sign_op(), s.verify_op())
+    })
 }

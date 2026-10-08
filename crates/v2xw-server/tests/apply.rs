@@ -540,11 +540,18 @@ fn the_ready_made_catalogue_is_the_list() {
     let list = ok(&run, "scenario.list", json!({"kind": "presets"}));
     let items = list["items"].as_array().expect("items");
     let names: Vec<&str> = items.iter().filter_map(|i| i["name"].as_str()).collect();
-    assert_eq!(names, ["listed"], "only the catalogue's files are offered: {list}");
+    assert_eq!(
+        names,
+        ["listed"],
+        "only the catalogue's files are offered: {list}"
+    );
     assert_eq!(items[0]["group"], "Everyday traffic");
     let unlisted = dir.join("unlisted.yaml").display().to_string();
     let loaded = ok(&run, "scenario.load", json!({"path": unlisted}));
-    assert_eq!(loaded["valid"], true, "an unlisted file still loads by path");
+    assert_eq!(
+        loaded["valid"], true,
+        "an unlisted file still loads by path"
+    );
 }
 
 #[test]

@@ -201,7 +201,10 @@ impl Cep {
         let [f0, f1, f2, f3, f4] = self.f;
         // CEP.cpp writes the higher terms as pow(f_k·v, k); f2 and f3 are zero in both
         // published vehicles, and f4 is reproduced as written.
-        let f_roll = (f0 + f1 * v + (f2 * v) * (f2 * v) + (f3 * v) * (f3 * v) * (f3 * v)
+        let f_roll = (f0
+            + f1 * v
+            + (f2 * v) * (f2 * v)
+            + (f3 * v) * (f3 * v) * (f3 * v)
             + (f4 * v) * (f4 * v) * (f4 * v) * (f4 * v))
             * m
             * G;
@@ -498,7 +501,10 @@ mod tests {
     #[test]
     fn braking_cuts_the_fuel_and_standing_still_idles() {
         let c = &VEHICLES[1];
-        assert_eq!(c.rates(&DriveState::between(15.0, 12.0, 1.0)), Rates::default());
+        assert_eq!(
+            c.rates(&DriveState::between(15.0, 12.0, 1.0)),
+            Rates::default()
+        );
         let idle = c.rates(&DriveState::between(0.0, 0.0, 1.0));
         assert!((idle.fuel_g_s - D_IDLE_FC * 93.0 / 3600.0).abs() < 1e-12);
         assert!(idle.co2_g_s > 0.0);

@@ -146,7 +146,10 @@ pub fn gravity(
     let wsum = math::sum_ordered(weights.iter().copied()).max(1e-12);
     let ends = |given: &Option<BTreeMap<String, f64>>| -> Vec<f64> {
         match given {
-            Some(m) => names.iter().map(|z| m.get(z).copied().unwrap_or(0.0)).collect(),
+            Some(m) => names
+                .iter()
+                .map(|z| m.get(z).copied().unwrap_or(0.0))
+                .collect(),
             None => weights.iter().map(|w| p.total_trips * w / wsum).collect(),
         }
     };

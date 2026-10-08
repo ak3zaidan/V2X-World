@@ -38,7 +38,9 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::analyst::{self, Analysis, Evidence, Finding, Layer, RunEvidence, Severity, Thresholds, fmt};
+use crate::analyst::{
+    self, Analysis, Evidence, Finding, Layer, RunEvidence, Severity, Thresholds, fmt,
+};
 use crate::error::Result;
 use crate::provider::{ChatMessage, ChatRequest, LlmProvider};
 
@@ -55,7 +57,10 @@ pub struct WatchCadence {
 
 impl Default for WatchCadence {
     fn default() -> Self {
-        WatchCadence { status_ms: 1_000, gather_ms: 6_000 }
+        WatchCadence {
+            status_ms: 1_000,
+            gather_ms: 6_000,
+        }
     }
 }
 
@@ -288,8 +293,15 @@ impl Watcher {
 
     /// Takes a `run.status` answer and says what to do next.
     pub fn on_status(&mut self, status: &Value) -> Next {
-        let run_id = status.get("run_id").and_then(Value::as_str).unwrap_or("").to_string();
-        let generation = status.get("generation").and_then(Value::as_u64).unwrap_or(0);
+        let run_id = status
+            .get("run_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let generation = status
+            .get("generation")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         let state = status.get("state").and_then(Value::as_str).unwrap_or("");
         let t_ns = status.get("t_ns").and_then(Value::as_u64).unwrap_or(0);
         let end_ns = status.get("t_end_ns").and_then(Value::as_u64).unwrap_or(0);
@@ -301,7 +313,8 @@ impl Watcher {
 
         // A run is adopted when it moves (or is found already over): a server started
         // paused at t = 0 has a run that nobody has started yet.
-        let rerun = same && self.phase == Phase::Done && state == "running" && t_s + 1e-9 < self.t_s;
+        let rerun =
+            same && self.phase == Phase::Done && state == "running" && t_s + 1e-9 < self.t_s;
         if !same || rerun {
             if state != "running" && !ended {
                 return Next::Idle;
@@ -322,9 +335,17 @@ impl Watcher {
                             other => other.to_string(),
                         })
                         .unwrap_or_else(|| "no detail given".into());
-                    self.push(Severity::Critical, ObservationKind::Failed, None, None,
-                        format!("The engine stopped with an error at {} s: {failure}", fmt(t_s)),
-                        Vec::new());
+                    self.push(
+                        Severity::Critical,
+                        ObservationKind::Failed,
+                        None,
+                        None,
+                        format!(
+                            "The engine stopped with an error at {} s: {failure}",
+                            fmt(t_s)
+                        ),
+                        Vec::new(),
+                    );
                     return Next::Idle;
                 }
                 if ended {
@@ -362,7 +383,14 @@ impl Watcher {
              the end."
                 .to_string()
         };
-        self.push(Severity::Info, ObservationKind::Started, None, None, text, Vec::new());
+        self.push(
+            Severity::Info,
+            ObservationKind::Started,
+            None,
+            None,
+            text,
+            Vec::new(),
+        );
     }
 
     fn push(
@@ -374,7 +402,10 @@ impl Watcher {
         text: String,
         evidence: Vec<Evidence>,
     ) {
-        let limited = !matches!(kind, ObservationKind::Started | ObservationKind::Finished | ObservationKind::Failed);
+        let limited = !matches!(
+            kind,
+            ObservationKind::Started | ObservationKind::Finished | ObservationKind::Failed
+        );
         if limited && self.observations.len() >= MAX_OBSERVATIONS_PER_RUN {
             return;
         }
@@ -414,11 +445,22 @@ impl Watcher {
 
         for f in &live {
             match self.seen.get(&f.id).copied() {
-                None => self.push(f.severity, ObservationKind::Finding, Some(f.id.clone()),
-                    Some(f.layer), sentence(f), first_evidence(f)),
-                Some(was) if f.severity > was => self.push(f.severity, ObservationKind::Worse,
-                    Some(f.id.clone()), Some(f.layer),
-                    format!("Worse now: {}", sentence(f)), first_evidence(f)),
+                None => self.push(
+                    f.severity,
+                    ObservationKind::Finding,
+                    Some(f.id.clone()),
+                    Some(f.layer),
+                    sentence(f),
+                    first_evidence(f),
+                ),
+                Some(was) if f.severity > was => self.push(
+                    f.severity,
+                    ObservationKind::Worse,
+                    Some(f.id.clone()),
+                    Some(f.layer),
+                    format!("Worse now: {}", sentence(f)),
+                    first_evidence(f),
+                ),
                 Some(_) => {}
             }
             self.seen.insert(f.id.clone(), f.severity);
@@ -432,9 +474,14 @@ impl Watcher {
         for id in gone {
             self.seen.remove(&id);
             let layer = layer_of(&id);
-            self.push(Severity::Notice, ObservationKind::Cleared, Some(id.clone()), layer,
+            self.push(
+                Severity::Notice,
+                ObservationKind::Cleared,
+                Some(id.clone()),
+                layer,
                 format!("Cleared: the `{id}` problem is no longer present in the numbers so far."),
-                Vec::new());
+                Vec::new(),
+            );
         }
         self.trends(e);
         self.events(e);
@@ -442,7 +489,9 @@ impl Watcher {
     }
 
     fn is_current(&self, e: &RunEvidence) -> bool {
-        self.key.as_ref().is_none_or(|(r, _)| e.run_id.is_empty() || &e.run_id == r)
+        self.key
+            .as_ref()
+            .is_none_or(|(r, _)| e.run_id.is_empty() || &e.run_id == r)
     }
 
     /// The latest bin of the delivery series against the analyst's own reliability level.
@@ -463,17 +512,30 @@ impl Watcher {
         let level = self.thresholds.prr_range_level;
         if let Some((t, pdr)) = latest("pdr") {
             let low = pdr < level && whole("pdr").is_none_or(|w| w >= level);
-            let was = self.trends.get("delivery.dropping").copied().unwrap_or(false);
+            let was = self
+                .trends
+                .get("delivery.dropping")
+                .copied()
+                .unwrap_or(false);
             if low && !was {
-                self.push(Severity::Warning, ObservationKind::Trend,
-                    Some("delivery.dropping".into()), Some(Layer::Delivery),
+                self.push(
+                    Severity::Warning,
+                    ObservationKind::Trend,
+                    Some("delivery.dropping".into()),
+                    Some(Layer::Delivery),
                     format!(
                         "Delivery is dropping: {} of messages were received in the latest \
                          interval, below the {} reliability level (3GPP TR 37.885).",
-                        fmt(pdr), fmt(level)
+                        fmt(pdr),
+                        fmt(level)
                     ),
-                    vec![Evidence { label: "packet delivery ratio, latest bin".into(), value: pdr,
-                        unit: "ratio".into(), source: format!("pdr[t={} s]", fmt(t)) }]);
+                    vec![Evidence {
+                        label: "packet delivery ratio, latest bin".into(),
+                        value: pdr,
+                        unit: "ratio".into(),
+                        source: format!("pdr[t={} s]", fmt(t)),
+                    }],
+                );
             }
             self.trends.insert("delivery.dropping".into(), low);
         }
@@ -483,16 +545,30 @@ impl Watcher {
     fn events(&mut self, e: &RunEvidence) {
         let Some(view) = &e.backend else { return };
         for (entity, field, what) in COUNTERS {
-            let Some(now) = backend_counter(view, entity, field) else { continue };
+            let Some(now) = backend_counter(view, entity, field) else {
+                continue;
+            };
             let key = format!("{entity}.{field}");
             let before = self.counters.get(&key).copied().unwrap_or(0.0);
             if now > before {
                 let text = format!("{what} ({} so far).", fmt(now));
-                self.push(Severity::Notice, ObservationKind::Event, Some(key.clone()),
-                    Some(if entity == "ma" { Layer::Backend } else { Layer::Security }),
+                self.push(
+                    Severity::Notice,
+                    ObservationKind::Event,
+                    Some(key.clone()),
+                    Some(if entity == "ma" {
+                        Layer::Backend
+                    } else {
+                        Layer::Security
+                    }),
                     text,
-                    vec![Evidence { label: field.replace('_', " "), value: now,
-                        unit: "count".into(), source: format!("backend:{entity}.{field}") }]);
+                    vec![Evidence {
+                        label: field.replace('_', " "),
+                        value: now,
+                        unit: "count".into(),
+                        source: format!("backend:{entity}.{field}"),
+                    }],
+                );
             }
             self.counters.insert(key, now);
         }
@@ -530,7 +606,11 @@ impl Watcher {
             scenario: e.scenario.name.clone(),
             scenario_hash: e.scenario_hash.clone(),
             t_s: e.t_reached_s.max(self.t_s),
-            t_end_s: if e.t_end_s > 0.0 { e.t_end_s } else { self.t_end_s },
+            t_end_s: if e.t_end_s > 0.0 {
+                e.t_end_s
+            } else {
+                self.t_end_s
+            },
             verdict,
             headline: headline.clone(),
             overview: String::new(),
@@ -548,15 +628,27 @@ impl Watcher {
             Verdict::Attention => Severity::Warning,
             Verdict::Unhealthy => Severity::Critical,
         };
-        self.push(severity, ObservationKind::Finished, None, None,
-            format!("The run ended. {headline} The run summary is ready."), Vec::new());
+        self.push(
+            severity,
+            ObservationKind::Finished,
+            None,
+            None,
+            format!("The run ended. {headline} The run summary is ready."),
+            Vec::new(),
+        );
         summary.observations = self.observations.clone();
         self.summary = Some(summary.clone());
         summary
     }
 
     /// Replaces the last summary's overview (the model's, once checked).
-    pub fn set_overview(&mut self, run_id: &str, overview: String, by: String, note: Option<String>) {
+    pub fn set_overview(
+        &mut self,
+        run_id: &str,
+        overview: String,
+        by: String,
+        note: Option<String>,
+    ) {
         if let Some(s) = self.summary.as_mut().filter(|s| s.run_id == run_id) {
             if !overview.trim().is_empty() {
                 s.overview = overview;
@@ -611,13 +703,21 @@ fn headline_evidence(f: &Finding) -> Option<&Evidence> {
 fn sentence(f: &Finding) -> String {
     let title = f.title.trim_end_matches('.');
     let body = match headline_evidence(f) {
-        Some(e) => format!("{title} ({} {}{}).", e.label, fmt(e.value), unit_suffix(&e.unit)),
+        Some(e) => format!(
+            "{title} ({} {}{}).",
+            e.label,
+            fmt(e.value),
+            unit_suffix(&e.unit)
+        ),
         None => format!("{title}."),
     };
     match lead(&f.id) {
         Some(l) => {
             let mut cs = body.chars();
-            let first: String = cs.next().map(|c| c.to_lowercase().collect()).unwrap_or_default();
+            let first: String = cs
+                .next()
+                .map(|c| c.to_lowercase().collect())
+                .unwrap_or_default();
             format!("{l}: {first}{}", cs.as_str())
         }
         None => body,
@@ -674,7 +774,12 @@ fn layer_verdicts(a: &Analysis) -> Vec<LayerVerdict> {
         .collect()
 }
 
-fn headline(verdict: Verdict, problems: &[Finding], layers: &[LayerVerdict], e: &RunEvidence) -> String {
+fn headline(
+    verdict: Verdict,
+    problems: &[Finding],
+    layers: &[LayerVerdict],
+    e: &RunEvidence,
+) -> String {
     let measured = layers.iter().filter(|l| l.state != "not-measured").count();
     match verdict {
         Verdict::Healthy if measured < layers.len() => format!(
@@ -684,8 +789,14 @@ fn headline(verdict: Verdict, problems: &[Finding], layers: &[LayerVerdict], e: 
         ),
         Verdict::Healthy => "Every layer stayed within its threshold.".to_string(),
         Verdict::Attention | Verdict::Unhealthy => {
-            let critical = problems.iter().filter(|f| f.severity == Severity::Critical).count();
-            let worst = problems.first().map(|f| f.title.trim_end_matches('.').to_string()).unwrap_or_default();
+            let critical = problems
+                .iter()
+                .filter(|f| f.severity == Severity::Critical)
+                .count();
+            let worst = problems
+                .first()
+                .map(|f| f.title.trim_end_matches('.').to_string())
+                .unwrap_or_default();
             let incomplete = if e.t_end_s > 0.0 && e.t_reached_s + 1e-9 < e.t_end_s {
                 " The run did not reach its end."
             } else {
@@ -695,7 +806,11 @@ fn headline(verdict: Verdict, problems: &[Finding], layers: &[LayerVerdict], e: 
                 "{} problem{} found{}; the most severe: {worst}.{incomplete}",
                 problems.len(),
                 if problems.len() == 1 { "" } else { "s" },
-                if critical > 0 { format!(", {critical} critical") } else { String::new() },
+                if critical > 0 {
+                    format!(", {critical} critical")
+                } else {
+                    String::new()
+                },
             )
         }
     }
@@ -715,13 +830,26 @@ pub fn written_overview(s: &RunSummary) -> String {
         }
         out.push('\n');
     }
-    let healthy: Vec<&str> = s.layers.iter().filter(|l| l.state == "healthy").map(|l| l.title.as_str()).collect();
+    let healthy: Vec<&str> = s
+        .layers
+        .iter()
+        .filter(|l| l.state == "healthy")
+        .map(|l| l.title.as_str())
+        .collect();
     if !healthy.is_empty() {
         out.push_str(&format!("Within thresholds: {}.\n", healthy.join(", ")));
     }
-    let missing: Vec<&str> = s.layers.iter().filter(|l| l.state == "not-measured").map(|l| l.title.as_str()).collect();
+    let missing: Vec<&str> = s
+        .layers
+        .iter()
+        .filter(|l| l.state == "not-measured")
+        .map(|l| l.title.as_str())
+        .collect();
     if !missing.is_empty() {
-        out.push_str(&format!("Not measured in this run: {}.\n", missing.join(", ")));
+        out.push_str(&format!(
+            "Not measured in this run: {}.\n",
+            missing.join(", ")
+        ));
     }
     out
 }
@@ -796,7 +924,14 @@ pub fn model_overview(
 /// The summary as Markdown, for `v2xw agent` and for copying out of the page.
 #[must_use]
 pub fn summary_markdown(s: &RunSummary) -> String {
-    let mut md = format!("# Run summary: {}\n\n", if s.scenario.is_empty() { &s.run_id } else { &s.scenario });
+    let mut md = format!(
+        "# Run summary: {}\n\n",
+        if s.scenario.is_empty() {
+            &s.run_id
+        } else {
+            &s.scenario
+        }
+    );
     md.push_str(&format!(
         "Run `{}`, {} of {} s simulated. Verdict: **{:?}**.\n\n",
         s.run_id,
@@ -811,9 +946,17 @@ pub fn summary_markdown(s: &RunSummary) -> String {
     }
     md.push_str("| Layer | State | Findings |\n|---|---|---|\n");
     for l in &s.layers {
-        md.push_str(&format!("| {} | {} | {} |\n", l.title, l.state, l.findings.join(", ")));
+        md.push_str(&format!(
+            "| {} | {} | {} |\n",
+            l.title,
+            l.state,
+            l.findings.join(", ")
+        ));
     }
-    md.push_str(&format!("\n_Overview by {}; every number is the analyst's._\n", s.overview_by));
+    md.push_str(&format!(
+        "\n_Overview by {}; every number is the analyst's._\n",
+        s.overview_by
+    ));
     md
 }
 
@@ -829,7 +972,11 @@ mod tests {
     }
 
     fn metric(value: f64, unit: &str) -> MetricEvidence {
-        MetricEvidence { unit: unit.into(), value: Some(value), ..MetricEvidence::default() }
+        MetricEvidence {
+            unit: unit.into(),
+            value: Some(value),
+            ..MetricEvidence::default()
+        }
     }
 
     /// A run with nothing wrong in the layers the live feed watches.
@@ -860,9 +1007,21 @@ mod tests {
         m.insert("mac_drops".into(), metric(0.0, "count"));
         let mut pdr = metric(0.97, "ratio");
         pdr.series = vec![(0.0, Some(0.97)), (10.0, Some(0.97))];
-        pdr.groups.insert("dist_bin".into(), vec![
-            Group { key: "0-20".into(), value: Some(0.99), n: 100 },
-            Group { key: "20-40".into(), value: Some(0.98), n: 100 }]);
+        pdr.groups.insert(
+            "dist_bin".into(),
+            vec![
+                Group {
+                    key: "0-20".into(),
+                    value: Some(0.99),
+                    n: 100,
+                },
+                Group {
+                    key: "20-40".into(),
+                    value: Some(0.98),
+                    n: 100,
+                },
+            ],
+        );
         m.insert("pdr".into(), pdr);
         m.insert("nar".into(), metric(0.97, "ratio"));
         m.insert("e2e_latency.p95".into(), metric(12.0, "ms"));
@@ -879,11 +1038,17 @@ mod tests {
         assert_eq!(w.on_status(&status("r1", 1, "paused", 0, 60)), Next::Idle);
         assert_eq!(w.phase(), Phase::Idle);
         assert!(w.feed().is_empty());
-        assert_eq!(w.on_status(&status("r1", 1, "running", 1, 60)), Next::Gather);
+        assert_eq!(
+            w.on_status(&status("r1", 1, "running", 1, 60)),
+            Next::Gather
+        );
         assert_eq!(w.phase(), Phase::Watching);
         assert_eq!(kinds(w.feed()), vec![(ObservationKind::Started, None)]);
         // A second status of the same run does not restart it.
-        assert_eq!(w.on_status(&status("r1", 1, "running", 2, 60)), Next::Gather);
+        assert_eq!(
+            w.on_status(&status("r1", 1, "running", 2, 60)),
+            Next::Gather
+        );
         assert_eq!(w.feed().len(), 1);
     }
 
@@ -893,12 +1058,21 @@ mod tests {
         w.on_status(&status("r1", 1, "running", 10, 60));
         assert!(w.on_evidence(&quiet(10.0)).is_empty(), "{:#?}", w.feed());
         assert!(w.on_evidence(&quiet(20.0)).is_empty());
-        assert_eq!(w.on_status(&status("r1", 1, "finished", 60, 60)), Next::Finish);
+        assert_eq!(
+            w.on_status(&status("r1", 1, "finished", 60, 60)),
+            Next::Finish
+        );
         let s = w.finish(&quiet(60.0));
         assert_eq!(s.verdict, Verdict::Healthy, "{:#?}", s.problems);
-        assert_eq!(kinds(&s.observations).last().map(|k| k.0), Some(ObservationKind::Finished));
+        assert_eq!(
+            kinds(&s.observations).last().map(|k| k.0),
+            Some(ObservationKind::Finished)
+        );
         assert!(s.overview.contains("Within thresholds"), "{}", s.overview);
-        assert!(s.layers.iter().any(|l| l.state == "not-measured"), "security was not measured");
+        assert!(
+            s.layers.iter().any(|l| l.state == "not-measured"),
+            "security was not measured"
+        );
     }
 
     /// Congestion: the finding is announced once, announced again only when it is worse,
@@ -910,12 +1084,22 @@ mod tests {
         let mut congested = quiet(10.0);
         congested.metrics.get_mut("cbr").unwrap().value = Some(0.85);
         let first = w.on_evidence(&congested);
-        assert_eq!(kinds(&first), vec![(ObservationKind::Finding, Some("channel.congested"))],
-                   "{first:#?}");
-        assert!(first[0].text.contains("0.85"), "the number is the analyst's: {}", first[0].text);
+        assert_eq!(
+            kinds(&first),
+            vec![(ObservationKind::Finding, Some("channel.congested"))],
+            "{first:#?}"
+        );
+        assert!(
+            first[0].text.contains("0.85"),
+            "the number is the analyst's: {}",
+            first[0].text
+        );
         assert!(w.on_evidence(&congested).is_empty(), "announced once");
         let cleared = w.on_evidence(&quiet(30.0));
-        assert_eq!(kinds(&cleared), vec![(ObservationKind::Cleared, Some("channel.congested"))]);
+        assert_eq!(
+            kinds(&cleared),
+            vec![(ObservationKind::Cleared, Some("channel.congested"))]
+        );
     }
 
     #[test]
@@ -923,17 +1107,37 @@ mod tests {
         let mut w = Watcher::default();
         w.on_status(&status("r1", 1, "running", 20, 60));
         let mut e = quiet(20.0);
-        e.metrics.get_mut("cbr").unwrap().series.push((20.0, Some(0.85)));
-        e.metrics.get_mut("pdr").unwrap().series.push((20.0, Some(0.8)));
+        e.metrics
+            .get_mut("cbr")
+            .unwrap()
+            .series
+            .push((20.0, Some(0.85)));
+        e.metrics
+            .get_mut("pdr")
+            .unwrap()
+            .series
+            .push((20.0, Some(0.8)));
         let got = w.on_evidence(&e);
-        assert_eq!(kinds(&got), vec![
-            (ObservationKind::Finding, Some("channel.congested")),
-            (ObservationKind::Trend, Some("delivery.dropping")),
-        ], "{got:#?}");
+        assert_eq!(
+            kinds(&got),
+            vec![
+                (ObservationKind::Finding, Some("channel.congested")),
+                (ObservationKind::Trend, Some("delivery.dropping")),
+            ],
+            "{got:#?}"
+        );
         // The busiest bin crossed, not the mean: the note says so with the bin's number.
-        assert!(got[0].text.starts_with("Congestion is building:"), "{}", got[0].text);
+        assert!(
+            got[0].text.starts_with("Congestion is building:"),
+            "{}",
+            got[0].text
+        );
         assert!(got[0].text.contains("busiest bin 0.85"), "{}", got[0].text);
-        assert!(got[1].text.contains("0.8 ") && got[1].text.contains("0.9"), "{}", got[1].text);
+        assert!(
+            got[1].text.contains("0.8 ") && got[1].text.contains("0.9"),
+            "{}",
+            got[1].text
+        );
         // Still over: not repeated.
         assert!(w.on_evidence(&e).is_empty());
         // The quiet series names neither.
@@ -951,7 +1155,10 @@ mod tests {
         assert!(w.on_evidence(&e).is_empty(), "no revocation, nothing said");
         e.backend = Some(json!({"entities": [{"id": "ma", "state": {"revocation_decisions": 2}}]}));
         let got = w.on_evidence(&e);
-        assert_eq!(kinds(&got), vec![(ObservationKind::Event, Some("ma.revocation_decisions"))]);
+        assert_eq!(
+            kinds(&got),
+            vec![(ObservationKind::Event, Some("ma.revocation_decisions"))]
+        );
         assert!(got[0].text.contains("2 so far"), "{}", got[0].text);
         assert!(w.on_evidence(&e).is_empty(), "the same count is not news");
     }
@@ -962,11 +1169,17 @@ mod tests {
         w.on_status(&status("r1", 1, "finished", 60, 60));
         let s = w.finish(&quiet(60.0));
         assert_eq!(s.generation, 1);
-        assert_eq!(w.on_status(&status("r2", 2, "running", 1, 60)), Next::Gather);
+        assert_eq!(
+            w.on_status(&status("r2", 2, "running", 1, 60)),
+            Next::Gather
+        );
         assert_eq!(w.run(), Some(("r2", 2)));
         assert_eq!(w.summary().map(|s| s.run_id.as_str()), Some("r1"));
         let seqs: Vec<u64> = w.feed().iter().map(|o| o.seq).collect();
-        assert!(seqs.windows(2).all(|p| p[1] == p[0] + 1), "the feed is numbered without gaps");
+        assert!(
+            seqs.windows(2).all(|p| p[1] == p[0] + 1),
+            "the feed is numbered without gaps"
+        );
     }
 
     #[test]
@@ -975,7 +1188,10 @@ mod tests {
         w.on_status(&status("r9", 1, "running", 10, 60));
         let mut congested = quiet(10.0);
         congested.metrics.get_mut("cbr").unwrap().value = Some(0.85);
-        assert!(w.on_evidence(&congested).is_empty(), "r1's evidence is not r9's");
+        assert!(
+            w.on_evidence(&congested).is_empty(),
+            "r1's evidence is not r9's"
+        );
     }
 
     #[test]
@@ -987,15 +1203,23 @@ mod tests {
         let s = w.finish(&e);
         assert_ne!(s.verdict, Verdict::Healthy);
         assert!(s.problems.iter().any(|f| f.id == "latency.over-budget"));
-        assert!(s.layers.iter().any(|l| l.layer == Layer::Latency && l.state != "healthy"));
+        assert!(
+            s.layers
+                .iter()
+                .any(|l| l.layer == Layer::Latency && l.state != "healthy")
+        );
 
         let reply = |text: &str| Completion {
             message: ChatMessage::assistant(text),
             finish_reason: "stop".into(),
         };
-        let mut good = ScriptedProvider::new(vec![reply("Latency missed its budget: 140 ms [latency.over-budget].")]);
-        assert_eq!(model_overview(&mut good, &s).unwrap().as_deref().ok(),
-                   Some("Latency missed its budget: 140 ms [latency.over-budget]."));
+        let mut good = ScriptedProvider::new(vec![reply(
+            "Latency missed its budget: 140 ms [latency.over-budget].",
+        )]);
+        assert_eq!(
+            model_overview(&mut good, &s).unwrap().as_deref().ok(),
+            Some("Latency missed its budget: 140 ms [latency.over-budget].")
+        );
         let mut bad = ScriptedProvider::new(vec![reply("Latency was 187 ms, far over budget.")]);
         let why = model_overview(&mut bad, &s).unwrap().unwrap_err();
         assert!(why.contains("187"), "{why}");
@@ -1004,7 +1228,10 @@ mod tests {
         assert_eq!(good.seen[0].messages[0].text(), overview_system_prompt());
 
         w.set_overview("r1", "model text".into(), "scripted".into(), None);
-        assert_eq!(w.summary().map(|s| s.overview_by.as_str()), Some("scripted"));
+        assert_eq!(
+            w.summary().map(|s| s.overview_by.as_str()),
+            Some("scripted")
+        );
         assert!(summary_markdown(w.summary().unwrap()).contains("| Latency |"));
     }
 

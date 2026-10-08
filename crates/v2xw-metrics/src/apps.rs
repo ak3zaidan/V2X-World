@@ -285,7 +285,10 @@ mod tests {
             serde_json::json!({"app": "fcw", "outcome": "missed"}),
         ));
         let out = p.flush(1);
-        let count = out.iter().find(|s| s.metric == "app_warnings").expect("count");
+        let count = out
+            .iter()
+            .find(|s| s.metric == "app_warnings")
+            .expect("count");
         assert!(matches!(count.value, SampleValue::Count { count: 3 }));
         assert!(out.iter().any(|s| s.metric == "app_precision"));
         assert!(out.iter().any(|s| s.metric == "app_miss_ratio"));

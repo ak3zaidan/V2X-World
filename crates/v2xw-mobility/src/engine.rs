@@ -76,9 +76,9 @@ use crate::traits::{
     CarFollowing, ClockModel, Demand, IntersectionControl, LaneChange, Mobility, VruMobility,
 };
 use crate::views::{
-    ActorSpawn, ConflictView, DespawnCause, DriverProfile, EntryDecision, JunctionView,
-    LaneChangeDecision, LaneNeighbors, LaneView, LeaderView, MobilityCommand, MobilityUpdate,
-    EMERGENCY_BRAKE_ONSET_JERK_MPS3, PhaseState, Route, Side, TripRequest, VehicleView,
+    ActorSpawn, ConflictView, DespawnCause, DriverProfile, EMERGENCY_BRAKE_ONSET_JERK_MPS3,
+    EntryDecision, JunctionView, LaneChangeDecision, LaneNeighbors, LaneView, LeaderView,
+    MobilityCommand, MobilityUpdate, PhaseState, Route, Side, TripRequest, VehicleView,
 };
 use crate::vru::crosswalk::{CrosswalkIndex, VehiclePath};
 use crate::vru::social_force::SocialForce;
@@ -523,7 +523,11 @@ impl crate::views::EdgeCost for CyclistCost<'_> {
             .world
             .try_lane(lane)
             .is_some_and(|l| matches!(l.kind, LaneKind::Driving | LaneKind::Bus));
-        Some(if shared { base * self.shared_factor.max(1.0) } else { base })
+        Some(if shared {
+            base * self.shared_factor.max(1.0)
+        } else {
+            base
+        })
     }
 }
 
@@ -757,7 +761,9 @@ impl Actor {
                 .map(|c| c.direction)
         };
         let turning = if lane.kind == LaneKind::Internal {
-            self.trail.last().and_then(|from| direction(*from, self.lane))
+            self.trail
+                .last()
+                .and_then(|from| direction(*from, self.lane))
         } else {
             None
         };
@@ -1273,7 +1279,13 @@ impl NativeMobility {
                 let mut rng = ctx.rng(RngDomain::ReactionTime, key);
                 let turns = rng.uniform(0.0, 1.0) < p.turn_signal_use;
                 let lane_changes = rng.uniform(0.0, 1.0) < p.lane_change_signal_use;
-                (0, crate::lamps::SignalHabit { turns, lane_changes })
+                (
+                    0,
+                    crate::lamps::SignalHabit {
+                        turns,
+                        lane_changes,
+                    },
+                )
             });
             let bits = crate::lamps::lamps(&a.lamp_input(world), last, habit, &p);
             self.lamp_memory.insert(a.id, (bits, habit));
@@ -1882,8 +1894,12 @@ impl NativeMobility {
             });
         let route = match planned {
             Some(lanes) => {
-                let length_m =
-                    math::sum_ordered(lanes.iter().map(|l| world.lane(*l).length_m).collect::<Vec<_>>());
+                let length_m = math::sum_ordered(
+                    lanes
+                        .iter()
+                        .map(|l| world.lane(*l).length_m)
+                        .collect::<Vec<_>>(),
+                );
                 let cost_s = math::sum_ordered(
                     lanes
                         .iter()
@@ -1974,9 +1990,9 @@ impl NativeMobility {
         {
             let rear = front - length;
             let clear = |enter: f64, exit: f64| exit < rear - 0.5 || enter > front + 0.5;
-            let occupied = self.crosswalks.occupied(
-                vru.people().filter(|p| !p.arrived).map(|p| p.lane),
-            );
+            let occupied = self
+                .crosswalks
+                .occupied(vru.people().filter(|p| !p.arrived).map(|p| p.lane));
             for c in self.crosswalks.conflicts_on(trip.origin) {
                 if occupied.contains(&c.crosswalk) && !clear(c.enter_s(), c.exit_s()) {
                     return Insertion::Occupied;
@@ -1985,10 +2001,9 @@ impl NativeMobility {
             let midblock = MidblockBands::of(Some(vru));
             if let Some(list) = midblock.by_lane.get(&trip.origin) {
                 for c in list {
-                    let crossing = midblock
-                        .owner
-                        .get(&c.crosswalk)
-                        .is_some_and(|(ped, _)| midblock.progress.get(ped).copied().flatten().is_some());
+                    let crossing = midblock.owner.get(&c.crosswalk).is_some_and(|(ped, _)| {
+                        midblock.progress.get(ped).copied().flatten().is_some()
+                    });
                     if crossing && !clear(c.enter_s(), c.exit_s()) {
                         return Insertion::Occupied;
                     }
@@ -2299,11 +2314,7 @@ impl NativeMobility {
         midblock: &MidblockBands,
     ) -> BTreeMap<ActorId, bool> {
         let p = vru.params().midblock;
-        let mut go: BTreeMap<ActorId, bool> = midblock
-            .waiting
-            .iter()
-            .map(|a| (*a, true))
-            .collect();
+        let mut go: BTreeMap<ActorId, bool> = midblock.waiting.iter().map(|a| (*a, true)).collect();
         let mut seen: BTreeSet<(ActorId, ActorId)> = BTreeSet::new();
         for a in self.actors.values() {
             let path = a.crosswalk_path();
@@ -2366,13 +2377,12 @@ impl NativeMobility {
         }
         // Forget the drivers who have passed, and the pedestrians who have crossed; a
         // driver who yielded is remembered until the pedestrian is across.
-        self.midblock_yields.retain(|(ped, veh), yields| {
-            match midblock.progress.get(ped) {
+        self.midblock_yields
+            .retain(|(ped, veh), yields| match midblock.progress.get(ped) {
                 None => false,
                 Some(None) => seen.contains(&(*ped, *veh)),
                 Some(Some(_)) => *yields,
-            }
-        });
+            });
         go
     }
 
@@ -2477,13 +2487,8 @@ impl NativeMobility {
         }
         let params = self.params.kerbside;
         if let Some(a) = self.actors.get_mut(&id) {
-            a.kerb = crate::kerbside::KerbState::assign(
-                ctx,
-                &params,
-                a.class,
-                a.seq,
-                a.route.length_m,
-            );
+            a.kerb =
+                crate::kerbside::KerbState::assign(ctx, &params, a.class, a.seq, a.route.length_m);
         }
     }
 
@@ -3091,13 +3096,14 @@ impl NativeMobility {
             let route = if clash || alongside {
                 None
             } else {
-                self.route_after_change(world, actor, to, t, &costs).or_else(|| {
-                    if decisions[i].detour_ok {
-                        self.replan_from(world, actor, to, t, &costs)
-                    } else {
-                        None
-                    }
-                })
+                self.route_after_change(world, actor, to, t, &costs)
+                    .or_else(|| {
+                        if decisions[i].detour_ok {
+                            self.replan_from(world, actor, to, t, &costs)
+                        } else {
+                            None
+                        }
+                    })
             };
             match route {
                 Some(r) => {
@@ -3934,8 +3940,9 @@ impl Mobility for NativeMobility {
             lane_view.speed_limit_mps *= actor.traits.speed_factor;
             // A junction connector is driven no faster than its curvature allows.
             if along && let Some(v) = self.turn_speed.get(&actor.lane) {
-                lane_view.speed_limit_mps =
-                    lane_view.speed_limit_mps.min(self.class_turn_speed(actor.class, *v));
+                lane_view.speed_limit_mps = lane_view
+                    .speed_limit_mps
+                    .min(self.class_turn_speed(actor.class, *v));
             }
             let options = NeighborOptions {
                 lookahead_m: self.params.lookahead_m,
@@ -4741,15 +4748,24 @@ impl Mobility for NativeMobility {
                     && let Some(n) = next
                     && !world.successor_lanes(actor.lane).contains(&n)
                 {
-                    let router =
-                        router_of(&self.router, &self.bike_router, &self.class_routers, actor.class);
+                    let router = router_of(
+                        &self.router,
+                        &self.bike_router,
+                        &self.class_routers,
+                        actor.class,
+                    );
                     next = router
                         .replan(world, actor.lane, actor.destination, t1, &costs)
                         .or_else(|| {
                             (actor.class != VehicleClass::Bicycle)
                                 .then(|| {
-                                    self.router
-                                        .replan(world, actor.lane, actor.destination, t1, &costs)
+                                    self.router.replan(
+                                        world,
+                                        actor.lane,
+                                        actor.destination,
+                                        t1,
+                                        &costs,
+                                    )
                                 })
                                 .flatten()
                         })
@@ -4907,7 +4923,9 @@ impl Mobility for NativeMobility {
                         &mut exposure,
                     );
                 }
-                vru.set_crossing_permits(self.crosswalks.permits_exposed(&signal_states, &exposure));
+                vru.set_crossing_permits(
+                    self.crosswalks.permits_exposed(&signal_states, &exposure),
+                );
             }
             if !midblock.is_empty() {
                 let go = self.midblock_permits(&*ctx, world, &vru, &midblock);
@@ -5011,16 +5029,12 @@ impl Mobility for NativeMobility {
             })
         };
         if here.kind == LaneKind::Internal {
-            let approach = actor
-                .trail
-                .last()
-                .copied()
-                .or_else(|| {
-                    actor
-                        .route_index
-                        .checked_sub(1)
-                        .and_then(|i| actor.route.lanes.get(i).copied())
-                })?;
+            let approach = actor.trail.last().copied().or_else(|| {
+                actor
+                    .route_index
+                    .checked_sub(1)
+                    .and_then(|i| actor.route.lanes.get(i).copied())
+            })?;
             return movement(approach, actor.lane, -actor.s_m);
         }
         let mut distance = (here.length_m - actor.s_m).max(0.0);

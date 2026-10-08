@@ -369,10 +369,8 @@ impl NodeProfileStripper {
                 self.refs.clear();
                 for (slot, row) in b.actors.iter().enumerate() {
                     if row.is_occupied() {
-                        self.refs.insert(
-                            slot as u32,
-                            (row.state, row.verified_neighbors, row.lamps),
-                        );
+                        self.refs
+                            .insert(slot as u32, (row.state, row.verified_neighbors, row.lamps));
                     }
                 }
                 Some(b.to_frame(seq, flags)?)

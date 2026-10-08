@@ -317,11 +317,20 @@ impl BackendAccess {
                     Uu::Handover(m)
                 }
                 PacketUu::ID => {
-                    let rat_label = p.get("rat").and_then(serde_json::Value::as_str).unwrap_or("lte");
+                    let rat_label = p
+                        .get("rat")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("lte");
                     let rat = Rat::named(rat_label).ok_or_else(|| {
-                        conflict("net.uu.params.rat", format!("'{rat_label}' is not a RAT; allowed: lte, nr"))
+                        conflict(
+                            "net.uu.params.rat",
+                            format!("'{rat_label}' is not a RAT; allowed: lte, nr"),
+                        )
                     })?;
-                    let layout = match (p.get("sites").and_then(serde_json::Value::as_array), p.get("city_bbox").and_then(serde_json::Value::as_array)) {
+                    let layout = match (
+                        p.get("sites").and_then(serde_json::Value::as_array),
+                        p.get("city_bbox").and_then(serde_json::Value::as_array),
+                    ) {
                         (Some(sites), _) => BaseStationLayout::from_sites(
                             plan.clone(),
                             sites
@@ -335,7 +344,8 @@ impl BackendAccess {
                         }
                         _ => BaseStationLayout::lattice(plan.clone()),
                     };
-                    let bg = num(p, "background_load").unwrap_or(v2xw_radio::cellular_packet::DEFAULT_BACKGROUND_LOAD);
+                    let bg = num(p, "background_load")
+                        .unwrap_or(v2xw_radio::cellular_packet::DEFAULT_BACKGROUND_LOAD);
                     let mut m = PacketUu::new(rat, layout)
                         .with_background_load(bg, num(p, "neighbour_load").unwrap_or(bg))
                         .with_core(MecPlacement::AtCoreNetwork);
@@ -497,8 +507,14 @@ impl BackendAccess {
             }
             Some(Uu::Packet(m)) => {
                 let _ = m.observe_position(ctx, node, pos);
-                let conn = self.conns.entry(node).or_insert_with(|| TcpConn::new(&self.tcp));
-                let mut r = TransferReport { start: now, ..TransferReport::default() };
+                let conn = self
+                    .conns
+                    .entry(node)
+                    .or_insert_with(|| TcpConn::new(&self.tcp));
+                let mut r = TransferReport {
+                    start: now,
+                    ..TransferReport::default()
+                };
                 let mut t = Some(now);
                 if !conn.established {
                     self.report.tcp_connections += 1;
@@ -515,8 +531,14 @@ impl BackendAccess {
                 self.report.tcp_rtos += r.rtos;
                 refresh_packet_report(&mut self.report, m);
                 match done {
-                    Some(at) => SendOutcome::Scheduled { deliver_at: at, bytes_on_wire: bytes },
-                    None => SendOutcome::Dropped(v2xw_radio::types::DropCause::QueueFull { ac: "tcp", depth: 0 }),
+                    Some(at) => SendOutcome::Scheduled {
+                        deliver_at: at,
+                        bytes_on_wire: bytes,
+                    },
+                    None => SendOutcome::Dropped(v2xw_radio::types::DropCause::QueueFull {
+                        ac: "tcp",
+                        depth: 0,
+                    }),
                 }
             }
         };
@@ -544,24 +566,55 @@ impl BackendAccess {
     /// link the backend kernel then charges for the whole flow has half that exchange's
     /// time as its one-way latency (so the handshakes are felt) and the response's measured
     /// goodput as its rate. `None` for the other Uu models, or when the exchange failed.
-    pub fn packet_link(&mut self, ctx: &mut EngineCtx<'_>, node: NodeId, pos: Vec3) -> Option<Link> {
+    pub fn packet_link(
+        &mut self,
+        ctx: &mut EngineCtx<'_>,
+        node: NodeId,
+        pos: Vec3,
+    ) -> Option<Link> {
         let Some(Uu::Packet(m)) = self.uu.as_mut() else {
             return None;
         };
         let now = v2xw_core::ctx::Ctx::now(ctx);
         let _ = m.observe_position(ctx, node, pos);
-        let conn = self.conns.entry(node).or_insert_with(|| TcpConn::new(&self.tcp));
-        let mut r = TransferReport { start: now, ..TransferReport::default() };
+        let conn = self
+            .conns
+            .entry(node)
+            .or_insert_with(|| TcpConn::new(&self.tcp));
+        let mut r = TransferReport {
+            start: now,
+            ..TransferReport::default()
+        };
         let mut t = Some(now);
         if !conn.established {
             self.report.tcp_connections += 1;
             t = tcp_handshake(ctx, &mut **m, node, conn, &self.tcp, now, &mut r);
         }
         let up = t.and_then(|t| {
-            tcp_stream(ctx, &mut **m, node, conn, &self.tcp, Direction::Uplink, PROBE_REQUEST_BYTES, t, &mut r)
+            tcp_stream(
+                ctx,
+                &mut **m,
+                node,
+                conn,
+                &self.tcp,
+                Direction::Uplink,
+                PROBE_REQUEST_BYTES,
+                t,
+                &mut r,
+            )
         });
         let done = up.and_then(|u| {
-            tcp_stream(ctx, &mut **m, node, conn, &self.tcp, Direction::Downlink, PROBE_RESPONSE_BYTES, u, &mut r)
+            tcp_stream(
+                ctx,
+                &mut **m,
+                node,
+                conn,
+                &self.tcp,
+                Direction::Downlink,
+                PROBE_RESPONSE_BYTES,
+                u,
+                &mut r,
+            )
         });
         self.report.tcp_retransmissions += r.retransmissions;
         self.report.tcp_rtos += r.rtos;
@@ -619,9 +672,12 @@ pub fn catalogue_cards() -> Vec<v2xw_core::card::ModelCard> {
         HandoverOutageUu::new(CellCapacityUu::new(CellPlan::urban_macro()))
             .card()
             .clone(),
-        PacketUu::new(Rat::Lte, BaseStationLayout::lattice(CellPlan::urban_macro()))
-            .card()
-            .clone(),
+        PacketUu::new(
+            Rat::Lte,
+            BaseStationLayout::lattice(CellPlan::urban_macro()),
+        )
+        .card()
+        .clone(),
         v2xw_node::rsu::Backhaul::fibre().card().clone(),
         v2xw_threat::LegacyWindow::legacy_defaults().card().clone(),
     ]

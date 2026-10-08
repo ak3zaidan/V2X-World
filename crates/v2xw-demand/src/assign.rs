@@ -205,7 +205,8 @@ impl<'w> Assigner<'w> {
         }
         // Warm start.
         if let Some(w) = warm {
-            let by_id: BTreeMap<u64, &RoutedTrip> = w.trips.iter().map(|r| (r.trip.id, r)).collect();
+            let by_id: BTreeMap<u64, &RoutedTrip> =
+                w.trips.iter().map(|r| (r.trip.id, r)).collect();
             for s in &mut states {
                 let Some(r) = by_id.get(&trips[s.trip].id) else {
                     continue;
@@ -230,7 +231,9 @@ impl<'w> Assigner<'w> {
         }
         // Initial free-flow routes for everyone without one.
         let free = FreeFlow(g);
-        let cold: Vec<usize> = (0..states.len()).filter(|i| states[*i].alts.is_empty()).collect();
+        let cold: Vec<usize> = (0..states.len())
+            .filter(|i| states[*i].alts.is_empty())
+            .collect();
         let best = self.best_routes(trips, &states, &cold, &free);
         for (k, i) in cold.iter().enumerate() {
             if let Some((path, cost)) = best[k].clone() {
@@ -291,7 +294,9 @@ impl<'w> Assigner<'w> {
                     .map(|a| path_cost_s(&times, &a.path, depart))
                     .collect();
                 let used = measured[s.chosen];
-                let best_cost = b.as_ref().map_or(used, |(path, _)| path_cost_s(&times, path, depart));
+                let best_cost = b
+                    .as_ref()
+                    .map_or(used, |(path, _)| path_cost_s(&times, path, depart));
                 let id = trips[s.trip].id;
                 used_sum.push((id, used));
                 gap_sum.push((id, (used - best_cost).max(0.0)));
@@ -448,7 +453,10 @@ impl<'w> Assigner<'w> {
         let mut out: Vec<Option<(Vec<Node>, f64)>> = vec![None; which.len()];
         let mut search = Search::new(g);
         for ((origin, quantum), members) in groups {
-            let targets: Vec<Node> = members.iter().map(|k| states[which[*k]].destination).collect();
+            let targets: Vec<Node> = members
+                .iter()
+                .map(|k| states[which[*k]].destination)
+                .collect();
             search.run(g, costs, origin, quantum as f64 * q, &targets);
             for k in members {
                 let d = states[which[k]].destination;
@@ -569,9 +577,7 @@ fn card(p: &AssignParams) -> ModelCard {
     card.validation = Validation {
         status: ValidationStatus::UnitTested,
         references: Vec::new(),
-        tests: vec![
-            "assign::tests::the_assignment_converges_and_is_deterministic".to_string(),
-        ],
+        tests: vec!["assign::tests::the_assignment_converges_and_is_deterministic".to_string()],
     };
     card
 }
@@ -631,12 +637,20 @@ mod tests {
         };
         let a = Assigner::new(&w, params.clone());
         let mut gaps = Vec::new();
-        let r1 = a.run(&trips, None, |l| gaps.push(l.relative_gap)).expect("runs");
-        assert!(r1.unroutable.len() < trips.len() / 10, "{:?}", r1.unroutable.len());
+        let r1 = a
+            .run(&trips, None, |l| gaps.push(l.relative_gap))
+            .expect("runs");
+        assert!(
+            r1.unroutable.len() < trips.len() / 10,
+            "{:?}",
+            r1.unroutable.len()
+        );
         let first = gaps[0];
         let last = *gaps.last().unwrap();
         assert!(last <= first, "gap went from {first} to {last}: {gaps:?}");
-        let r2 = Assigner::new(&w, params).run(&trips, None, |_| {}).expect("runs");
+        let r2 = Assigner::new(&w, params)
+            .run(&trips, None, |_| {})
+            .expect("runs");
         assert_eq!(
             serde_json::to_string(&r1.routes).unwrap(),
             serde_json::to_string(&r2.routes).unwrap(),
@@ -650,14 +664,23 @@ mod tests {
         let w = crate::graph::tests::grid();
         let trips: Vec<Trip> = demand(&w, 400.0).into_iter().take(20).collect();
         let params = AssignParams {
-            loader: LoaderSpec::Micro { step_ms: 200, seed: 1 },
+            loader: LoaderSpec::Micro {
+                step_ms: 200,
+                seed: 1,
+            },
             max_iterations: 2,
             min_iterations: 2,
             horizon_s: 600.0,
             ..AssignParams::default()
         };
-        let r = Assigner::new(&w, params).run(&trips, None, |_| {}).expect("runs");
+        let r = Assigner::new(&w, params)
+            .run(&trips, None, |_| {})
+            .expect("runs");
         let arrived = r.routes.log[0].arrived;
-        assert!(arrived >= trips.len() / 2, "only {arrived} of {} arrived", trips.len());
+        assert!(
+            arrived >= trips.len() / 2,
+            "only {arrived} of {} arrived",
+            trips.len()
+        );
     }
 }

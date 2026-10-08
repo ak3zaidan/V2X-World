@@ -123,7 +123,8 @@ impl Clone for StepClock {
     fn clone(&self) -> Self {
         let c = StepClock::default();
         c.now_ns.store(self.now(), Ordering::Relaxed);
-        c.dt_ns.store(self.dt_ns.load(Ordering::Relaxed), Ordering::Relaxed);
+        c.dt_ns
+            .store(self.dt_ns.load(Ordering::Relaxed), Ordering::Relaxed);
         c
     }
 }

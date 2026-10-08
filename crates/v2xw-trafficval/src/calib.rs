@@ -94,7 +94,13 @@ impl v2xw_core::model::Model for BrokenDrivers {
 }
 
 impl CarFollowing for BrokenDrivers {
-    fn accel(&self, ego: &VehicleView, leader: Option<&LeaderView>, lane: &LaneView, w: &WeatherState) -> f64 {
+    fn accel(
+        &self,
+        ego: &VehicleView,
+        leader: Option<&LeaderView>,
+        lane: &LaneView,
+        w: &WeatherState,
+    ) -> f64 {
         let mut l = *lane;
         l.speed_limit_mps *= self.limit_factor;
         self.inner.accel(ego, leader, &l, w)
@@ -119,7 +125,11 @@ impl CarFollowing for BrokenDrivers {
 ///
 /// # Errors
 /// The world generator's or the engine's.
-pub fn grid_study(lab: &mut Lab, variant: GridVariant, tamper: Option<Tamper>) -> Result<StudyResult, String> {
+pub fn grid_study(
+    lab: &mut Lab,
+    variant: GridVariant,
+    tamper: Option<Tamper>,
+) -> Result<StudyResult, String> {
     let key = format!("midtown-grid-{variant:?}");
     lab.study(&key, |cfg| {
         let world = midtown_grid()?;
@@ -139,7 +149,10 @@ pub fn grid_study(lab: &mut Lab, variant: GridVariant, tamper: Option<Tamper>) -
                 })
             }
             GridVariant::MotorcyclesAsCars => {
-                fleet = FleetMix::from_shares(&[(VehicleClass::Passenger, 0.85), (VehicleClass::Motorcycle, 0.15)]);
+                fleet = FleetMix::from_shares(&[
+                    (VehicleClass::Passenger, 0.85),
+                    (VehicleClass::Motorcycle, 0.15),
+                ]);
                 Arc::new(BrokenDrivers {
                     inner: Idm::new(IdmPreset::UrbanHcm),
                     limit_factor: 1.0,
@@ -158,7 +171,10 @@ pub fn grid_study(lab: &mut Lab, variant: GridVariant, tamper: Option<Tamper>) -
             GridVariant::FastTurns => params.turn_lateral_accel_mps2 = 6.0,
             GridVariant::Jaywalk(pm) => sf.jaywalk_probability = f64::from(pm) / 1000.0,
             GridVariant::Motorcycles => {
-                fleet = FleetMix::from_shares(&[(VehicleClass::Passenger, 0.85), (VehicleClass::Motorcycle, 0.15)]);
+                fleet = FleetMix::from_shares(&[
+                    (VehicleClass::Passenger, 0.85),
+                    (VehicleClass::Motorcycle, 0.15),
+                ]);
             }
             _ => {}
         }
@@ -188,7 +204,11 @@ pub fn grid_study(lab: &mut Lab, variant: GridVariant, tamper: Option<Tamper>) -
             seconds as f64,
             AuditParams::default(),
             &[],
-            if variant == GridVariant::Tampered { tamper } else { None },
+            if variant == GridVariant::Tampered {
+                tamper
+            } else {
+                None
+            },
             |_, _| {},
         )
     })
@@ -226,7 +246,9 @@ pub fn checks() -> Vec<Check> {
                 for 600 s. The HCM field method: each queue recorded at green onset, each \
                 queued vehicle's rear timed over the stop line; saturation headway from the \
                 fifth vehicle on, through movements; start-up lost time over the first four.",
-            faults: &["the Kesting 2010 freeway drivers (T 1.5 s, a 1.4 m/s²) instead of the city drivers"],
+            faults: &[
+                "the Kesting 2010 freeway drivers (T 1.5 s, a 1.4 m/s²) instead of the city drivers",
+            ],
             run: saturation,
         },
         Check {
@@ -237,7 +259,9 @@ pub fn checks() -> Vec<Check> {
                 limit mid-block with no leader in reach; launch acceleration from standstill \
                 to 8 m/s; the peak deceleration of each stop from above 5 m/s; the speed of \
                 every walking pedestrian step.",
-            faults: &["drivers with a = 0.6 m/s², b = 0.8 m/s², no heterogeneity, cruising at 0.8 × the limit; pedestrians wanting 0.9 m/s"],
+            faults: &[
+                "drivers with a = 0.6 m/s², b = 0.8 m/s², no heterogeneity, cruising at 0.8 × the limit; pedestrians wanting 0.9 m/s",
+            ],
             run: midtown_drivers,
         },
         Check {
@@ -310,7 +334,14 @@ fn saturation(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         .run(engine)
         .map_err(|e| e.to_string())
     })?;
-    let mut rows = rows_from(&r, &["saturation headway, through, s", "start-up lost time, s", "queue spacing, front to front, m"]);
+    let mut rows = rows_from(
+        &r,
+        &[
+            "saturation headway, through, s",
+            "start-up lost time, s",
+            "queue spacing, front to front, m",
+        ],
+    );
     let h = &r.headway_by_position_s;
     if h.len() >= 6 {
         rows.push(Row::held(
@@ -335,12 +366,19 @@ fn saturation(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
     }
     Ok(Outcome {
         rows,
-        notes: vec![format!("{} queues recorded, {} queued vehicles timed.", r.queues, r.queued_vehicles_discharged)],
+        notes: vec![format!(
+            "{} queues recorded, {} queued vehicles timed.",
+            r.queues, r.queued_vehicles_discharged
+        )],
     })
 }
 
 fn midtown_drivers(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
-    let gv = if variant.is_fault() { GridVariant::BrokenDrivers } else { GridVariant::Shipped };
+    let gv = if variant.is_fault() {
+        GridVariant::BrokenDrivers
+    } else {
+        GridVariant::Shipped
+    };
     let s = grid_study(lab, gv, None)?;
     let mut rows = rows_from(
         &s.calib,
@@ -378,7 +416,11 @@ fn midtown_drivers(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
 pub const AASHTO_TURN_LATERAL_MPS2: f64 = 0.38 * 9.81;
 
 fn turning(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
-    let gv = if variant.is_fault() { GridVariant::FastTurns } else { GridVariant::Shipped };
+    let gv = if variant.is_fault() {
+        GridVariant::FastTurns
+    } else {
+        GridVariant::Shipped
+    };
     let s = grid_study(lab, gv, None)?;
     let lat = &s.motion.turn_peak_lateral_mps2;
     let mut rows = vec![Row::held(
@@ -388,14 +430,25 @@ fn turning(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
         "AASHTO Green Book 2018 Ch. 3/9: side friction 0.32–0.38 for intersection curves at 15–10 mph (secondary), × g",
     )
     .n(lat.n)];
-    rows.push(Row::reported("peak lateral acceleration in a turn, mean, m/s²", lat.mean, "—"));
+    rows.push(Row::reported(
+        "peak lateral acceleration in a turn, mean, m/s²",
+        lat.mean,
+        "—",
+    ));
     for (turn, sm) in &s.calib.turn_speed_mps {
         rows.push(
-            Row::reported(format!("{turn} turn: lowest speed through the connector, mean, km/h"), sm.mean * 3.6, "reported: depends on the corner radius")
-                .n(sm.n),
+            Row::reported(
+                format!("{turn} turn: lowest speed through the connector, mean, km/h"),
+                sm.mean * 3.6,
+                "reported: depends on the corner radius",
+            )
+            .n(sm.n),
         );
     }
-    Ok(Outcome { rows, notes: vec![] })
+    Ok(Outcome {
+        rows,
+        notes: vec![],
+    })
 }
 
 fn permitted_left(lab: &mut Lab, _variant: Variant) -> Result<Outcome, String> {
@@ -430,16 +483,37 @@ fn pedestrian_compliance(lab: &mut Lab, variant: Variant) -> Result<Outcome, Str
     );
     Ok(Outcome {
         rows,
-        notes: vec![format!("{} crossings started at signalised crosswalks.", s.calib.pedestrian_crossings)],
+        notes: vec![format!(
+            "{} crossings started at signalised crosswalks.",
+            s.calib.pedestrian_crossings
+        )],
     })
 }
 
 fn motorcycles(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
-    let gv = if variant.is_fault() { GridVariant::MotorcyclesAsCars } else { GridVariant::Motorcycles };
+    let gv = if variant.is_fault() {
+        GridVariant::MotorcyclesAsCars
+    } else {
+        GridVariant::Motorcycles
+    };
     let s = grid_study(lab, gv, None)?;
-    let car = s.motion.launch_by_class.get(VehicleClass::Passenger.as_str()).cloned().unwrap_or_default();
-    let moto = s.motion.launch_by_class.get(VehicleClass::Motorcycle.as_str()).cloned().unwrap_or_default();
-    let ratio = if car.n > 0 && moto.n > 0 { moto.mean / car.mean } else { f64::NAN };
+    let car = s
+        .motion
+        .launch_by_class
+        .get(VehicleClass::Passenger.as_str())
+        .cloned()
+        .unwrap_or_default();
+    let moto = s
+        .motion
+        .launch_by_class
+        .get(VehicleClass::Motorcycle.as_str())
+        .cloned()
+        .unwrap_or_default();
+    let ratio = if car.n > 0 && moto.n > 0 {
+        moto.mean / car.mean
+    } else {
+        f64::NAN
+    };
     Ok(Outcome {
         rows: vec![
             Row::held(
@@ -448,8 +522,18 @@ fn motorcycles(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
                 (1.05, f64::INFINITY),
                 "PTWs out-accelerate cars from a stop (Minh, Sano & Matsumoto 2005; qualitative)",
             ),
-            Row::reported("motorcycle launch acceleration 0-8 m/s, mean, m/s²", moto.mean, "reported").n(moto.n),
-            Row::reported("car launch acceleration 0-8 m/s, mean, m/s²", car.mean, "reported").n(car.n),
+            Row::reported(
+                "motorcycle launch acceleration 0-8 m/s, mean, m/s²",
+                moto.mean,
+                "reported",
+            )
+            .n(moto.n),
+            Row::reported(
+                "car launch acceleration 0-8 m/s, mean, m/s²",
+                car.mean,
+                "reported",
+            )
+            .n(car.n),
         ],
         notes: vec![],
     })

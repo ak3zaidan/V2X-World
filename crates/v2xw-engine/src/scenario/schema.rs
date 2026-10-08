@@ -432,7 +432,10 @@ pub struct WorldSpec {
     /// Whether `highway=service` ways (alleys, driveways, parking aisles) become
     /// motor-traffic lanes ([`v2xw_world::osm::OsmLayers::service`]). Default `true`; a
     /// city of the library sets `false`, the street network a city study drives on.
-    #[serde(default = "crate::scenario::schema::truth", skip_serializing_if = "crate::scenario::schema::is_true")]
+    #[serde(
+        default = "crate::scenario::schema::truth",
+        skip_serializing_if = "crate::scenario::schema::is_true"
+    )]
     pub service_roads: bool,
 }
 

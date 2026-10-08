@@ -160,15 +160,16 @@ impl City {
     /// The world section for this city, keeping the building, signal and cache options
     /// of `keep` (a scenario's previous world) when given.
     pub fn world_spec(&self, keep: Option<&WorldSpec>) -> Result<WorldSpec, ScenarioError> {
-        let preset = v2xw_world::osm::HighwayPreset::parse(&self.highway_preset).ok_or_else(|| {
-            ScenarioError::conflict(
-                "city",
-                format!(
-                    "city '{}' names the highway preset '{}', which this build does not know",
-                    self.id, self.highway_preset
-                ),
-            )
-        })?;
+        let preset =
+            v2xw_world::osm::HighwayPreset::parse(&self.highway_preset).ok_or_else(|| {
+                ScenarioError::conflict(
+                    "city",
+                    format!(
+                        "city '{}' names the highway preset '{}', which this build does not know",
+                        self.id, self.highway_preset
+                    ),
+                )
+            })?;
         let mut signals = keep.map(|w| w.signals.clone()).unwrap_or_default();
         // A green-wave speed is a city's own timing (Portland's 12 mph); another city's
         // plans progress at each link's speed limit.
@@ -271,7 +272,10 @@ pub fn city_of_world(world: &WorldSpec) -> Option<&'static City> {
     let WorldSourceSpec::OsmXml { path, bbox } = &world.source else {
         return None;
     };
-    let stem = std::path::Path::new(path).file_name()?.to_str()?.strip_suffix(".osm.xml")?;
+    let stem = std::path::Path::new(path)
+        .file_name()?
+        .to_str()?
+        .strip_suffix(".osm.xml")?;
     let city = find(stem)?;
     let same_box = bbox.is_none_or(|b| {
         let c = city.geo_bbox();
@@ -288,7 +292,11 @@ pub fn shift_utc(t0: &str, hours: f64) -> Option<String> {
     let body = t0.trim().strip_suffix('Z')?;
     let (date, time) = body.split_once('T')?;
     let mut d = date.split('-');
-    let (y, m, day): (i64, i64, i64) = (d.next()?.parse().ok()?, d.next()?.parse().ok()?, d.next()?.parse().ok()?);
+    let (y, m, day): (i64, i64, i64) = (
+        d.next()?.parse().ok()?,
+        d.next()?.parse().ok()?,
+        d.next()?.parse().ok()?,
+    );
     let mut t = time.split(':');
     let (hh, mm): (i64, i64) = (t.next()?.parse().ok()?, t.next()?.parse().ok()?);
     let sec = t.next().unwrap_or("00");
@@ -297,7 +305,11 @@ pub fn shift_utc(t0: &str, hours: f64) -> Option<String> {
     let days = total_min.div_euclid(1440);
     let minutes = total_min.rem_euclid(1440);
     let (y, m, day) = civil_from_days(days);
-    Some(format!("{y:04}-{m:02}-{day:02}T{:02}:{:02}:{sec}Z", minutes / 60, minutes % 60))
+    Some(format!(
+        "{y:04}-{m:02}-{day:02}T{:02}:{:02}:{sec}Z",
+        minutes / 60,
+        minutes % 60
+    ))
 }
 
 // Howard Hinnant's days-from-civil and its inverse (public domain).
@@ -363,7 +375,9 @@ impl Scenario {
         // A world outside the library (a procedural grid) has no measured size here, so its
         // fixed rate is kept as written; a library city without a measurement yet is taken
         // to be the size of Midtown.
-        let old_km = old.map(|o| o.drive_lane_km.unwrap_or(REFERENCE_LANE_KM)).unwrap_or(0.0);
+        let old_km = old
+            .map(|o| o.drive_lane_km.unwrap_or(REFERENCE_LANE_KM))
+            .unwrap_or(0.0);
         let demand = &mut self.actors.vehicles.demand;
         if demand.rate_veh_per_h_per_lane_km.is_none()
             && let Some(rate) = demand.rate_veh_per_h
@@ -375,7 +389,11 @@ impl Scenario {
             && old_km > 0.0
         {
             let scale = |n: u32| -> u32 {
-                if n == 0 { 0 } else { ((f64::from(n) * new_km / old_km).round() as u32).max(1) }
+                if n == 0 {
+                    0
+                } else {
+                    ((f64::from(n) * new_km / old_km).round() as u32).max(1)
+                }
             };
             self.actors.vru.pedestrians = scale(self.actors.vru.pedestrians);
             self.actors.vru.cyclists = scale(self.actors.vru.cyclists);
@@ -418,7 +436,9 @@ impl Scenario {
                 continue;
             }
             if let Some(target) = item.params.get_mut("target")
-                && target.as_str().is_some_and(|t| t.trim_start().starts_with("street:"))
+                && target
+                    .as_str()
+                    .is_some_and(|t| t.trim_start().starts_with("street:"))
             {
                 *target = Value::String("auto".into());
             }
@@ -443,7 +463,10 @@ impl Scenario {
 
         // A focus box is a place in the old city.
         if let Some(focus) = &self.radio.tiers.focus
-            && matches!(focus.region, crate::scenario::schema::FocusRegion::Bbox { .. })
+            && matches!(
+                focus.region,
+                crate::scenario::schema::FocusRegion::Bbox { .. }
+            )
         {
             self.radio.tiers.focus = None;
         }
@@ -503,14 +526,15 @@ pub fn signalised_by_rank(world: &World) -> Vec<(v2xw_core::geom::Vec3, usize)> 
                 .count();
             let dx = j.position.x - centre.x;
             let dy = j.position.y - centre.y;
-            (j.position, approaches, (dx * dx + dy * dy).sqrt(), j.id.index())
+            (
+                j.position,
+                approaches,
+                (dx * dx + dy * dy).sqrt(),
+                j.id.index(),
+            )
         })
         .collect();
-    out.sort_by(|a, b| {
-        b.1.cmp(&a.1)
-            .then(a.2.total_cmp(&b.2))
-            .then(a.3.cmp(&b.3))
-    });
+    out.sort_by(|a, b| b.1.cmp(&a.1).then(a.2.total_cmp(&b.2)).then(a.3.cmp(&b.3)));
     out.into_iter().map(|(p, n, _, _)| (p, n)).collect()
 }
 
@@ -595,10 +619,19 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), r.cities.len(), "ids are unique");
         for c in &r.cities {
-            assert!(v2xw_world::osm::HighwayPreset::parse(&c.highway_preset).is_some(), "{}", c.id);
+            assert!(
+                v2xw_world::osm::HighwayPreset::parse(&c.highway_preset).is_some(),
+                "{}",
+                c.id
+            );
             let [s, w, n, e] = c.bbox;
             assert!(s < n && w < e, "{}", c.id);
-            assert!((0.5..=5.0).contains(&c.area_km2), "{}: {} km²", c.id, c.area_km2);
+            assert!(
+                (0.5..=5.0).contains(&c.area_km2),
+                "{}: {} km²",
+                c.id,
+                c.area_km2
+            );
         }
         // Every state and DC had a city; the ones the audit took out are listed with the
         // reason and the box they had, so they can be fetched and audited again.
@@ -611,7 +644,11 @@ mod tests {
         states.sort_unstable();
         states.dedup();
         assert!(states.len() >= 45, "{} states: {states:?}", states.len());
-        assert_eq!(r.cities.len() + r.dropped.len(), 64, "the library's 64 cities");
+        assert_eq!(
+            r.cities.len() + r.dropped.len(),
+            64,
+            "the library's 64 cities"
+        );
         for d in &r.dropped {
             assert!(!d.reason.is_empty(), "{} has a reason", d.id);
             assert!(find(&d.id).is_none(), "{} is not offered", d.id);
@@ -620,9 +657,18 @@ mod tests {
 
     #[test]
     fn utc_shift_crosses_midnight_and_month_ends() {
-        assert_eq!(shift_utc("2027-03-04T17:00:00Z", 1.0).as_deref(), Some("2027-03-04T18:00:00Z"));
-        assert_eq!(shift_utc("2027-03-04T23:30:00Z", 2.0).as_deref(), Some("2027-03-05T01:30:00Z"));
-        assert_eq!(shift_utc("2027-03-01T01:00:00Z", -3.0).as_deref(), Some("2027-02-28T22:00:00Z"));
+        assert_eq!(
+            shift_utc("2027-03-04T17:00:00Z", 1.0).as_deref(),
+            Some("2027-03-04T18:00:00Z")
+        );
+        assert_eq!(
+            shift_utc("2027-03-04T23:30:00Z", 2.0).as_deref(),
+            Some("2027-03-05T01:30:00Z")
+        );
+        assert_eq!(
+            shift_utc("2027-03-01T01:00:00Z", -3.0).as_deref(),
+            Some("2027-02-28T22:00:00Z")
+        );
         assert_eq!(shift_utc("not a time", 1.0), None);
     }
 
@@ -644,7 +690,13 @@ mod tests {
         assert_eq!(h.time.t0, "2027-03-04T18:00:00Z", "noon Central");
         assert!(h.actors.rsus.is_empty());
         assert_eq!(h.actors.rsu_placement.as_ref().map(|p| p.count), Some(1));
-        assert!(h.actors.vehicles.demand.rate_veh_per_h_per_lane_km.is_some());
+        assert!(
+            h.actors
+                .vehicles
+                .demand
+                .rate_veh_per_h_per_lane_km
+                .is_some()
+        );
         assert_eq!(
             h.world.highway_preset.map(|p| p.label()),
             Some("urban-us-tx")

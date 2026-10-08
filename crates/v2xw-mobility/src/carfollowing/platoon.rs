@@ -249,7 +249,12 @@ pub fn run(setup: &PlatoonSetup) -> Result<PlatoonResult, String> {
         let due = flight.partition_point(|f| f.0 <= now);
         for (_, rx, tx, rec) in flight.drain(..due) {
             let predecessor = tx + 1 == rx;
-            link.record(ActorId::new(rx as u32), ActorId::new(tx as u32), rec, predecessor);
+            link.record(
+                ActorId::new(rx as u32),
+                ActorId::new(tx as u32),
+                rec,
+                predecessor,
+            );
         }
         // Broadcasts in [t, t + dt), staggered by vehicle.
         for i in 0..n {
@@ -278,13 +283,25 @@ pub fn run(setup: &PlatoonSetup) -> Result<PlatoonResult, String> {
                 let lost = if ge {
                     let st = &mut bad[rx * n + i];
                     let flip = keyed_uniform(setup.seed, CHANNEL_ID, key, msg, 1);
-                    *st = if *st { flip >= p_exit_bad } else { flip < p_enter_bad };
+                    *st = if *st {
+                        flip >= p_exit_bad
+                    } else {
+                        flip < p_enter_bad
+                    };
                     *st
                 } else {
                     u < setup.channel.loss
                 };
                 if !lost {
-                    flight.push((now + latency_ns, rx, i, CoopRecord { received: now + latency_ns, ..rec }));
+                    flight.push((
+                        now + latency_ns,
+                        rx,
+                        i,
+                        CoopRecord {
+                            received: now + latency_ns,
+                            ..rec
+                        },
+                    ));
                 }
             }
         }
@@ -457,14 +474,20 @@ mod tests {
         assert!(good.cooperative_share > 0.99, "{good:?}");
         assert_eq!(dead.cooperative_share, 0.0, "{dead:?}");
         assert!(good.string_stable(), "{good:?}");
-        assert!(good.min_gap_m > 0.0 && dead.min_gap_m > 0.0, "{good:?} {dead:?}");
+        assert!(
+            good.min_gap_m > 0.0 && dead.min_gap_m > 0.0,
+            "{good:?} {dead:?}"
+        );
         // The cooperative platoon holds a tighter gap (0.7 s against the fallback's 1.1 s),
         // so it carries more, and it holds that gap more closely through the disturbance.
         assert!(
             good.throughput_veh_h > 1.2 * dead.throughput_veh_h,
             "{good:?} {dead:?}"
         );
-        assert!(good.rms_gap_error_m < dead.rms_gap_error_m, "{good:?} {dead:?}");
+        assert!(
+            good.rms_gap_error_m < dead.rms_gap_error_m,
+            "{good:?} {dead:?}"
+        );
     }
 
     #[test]

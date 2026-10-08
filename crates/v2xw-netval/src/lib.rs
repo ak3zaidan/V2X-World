@@ -329,7 +329,10 @@ pub fn python(script: &str, input: &serde_json::Value) -> Result<serde_json::Val
     if !out.status.success() {
         return Err(format!(
             "{script} failed: {}",
-            String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("")
+            String::from_utf8_lossy(&out.stderr)
+                .lines()
+                .last()
+                .unwrap_or("")
         ));
     }
     serde_json::from_slice(&out.stdout).map_err(|e| format!("{script} output: {e}"))

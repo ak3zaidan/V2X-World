@@ -958,7 +958,10 @@ impl Walk<'_> {
     /// reads the schema exactly as before; `x-options` is the form's richer copy.
     fn with_options(&self, path: &str, out: &mut Map<String, Value>) {
         let (rows, open) = if let Some(Value::Array(values)) = out.get("enum") {
-            let docs = out.get("x-enum-descriptions").cloned().unwrap_or(Value::Null);
+            let docs = out
+                .get("x-enum-descriptions")
+                .cloned()
+                .unwrap_or(Value::Null);
             let rows = values
                 .iter()
                 .filter_map(Value::as_str)

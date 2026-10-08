@@ -440,7 +440,11 @@ pub fn system_prompt(scenarios: &Value) -> String {
     format!(
         "{}\n\nShipped scenarios (base ids):\n{}\n\n{}",
         agent_system_prompt(),
-        if list.is_empty() { "(the engine did not list them; call list_scenarios)".to_string() } else { list.join("\n") },
+        if list.is_empty() {
+            "(the engine did not list them; call list_scenarios)".to_string()
+        } else {
+            list.join("\n")
+        },
         crate::catalog::quick_reference()
     )
 }
@@ -592,8 +596,11 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                     self.history.push(ChatMessage::user(note));
                     continue;
                 }
-                let report = self.report(prompt, runs_before, overview, ungrounded, comparison, false);
-                sink(AgentEvent::Report { report: Box::new(report.clone()) });
+                let report =
+                    self.report(prompt, runs_before, overview, ungrounded, comparison, false);
+                sink(AgentEvent::Report {
+                    report: Box::new(report.clone()),
+                });
                 return Ok(report);
             }
 
@@ -610,7 +617,9 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                 }
                 calls += 1;
                 let outcome = if self.cancelled() {
-                    ToolOutcome::Refused { reason: "stopped by the person".into() }
+                    ToolOutcome::Refused {
+                        reason: "stopped by the person".into(),
+                    }
                 } else {
                     match serde_json::from_str::<Value>(if call.arguments.trim().is_empty() {
                         "{}"
@@ -634,7 +643,8 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                 });
                 self.corpus.push_str(&payload);
                 self.corpus.push('\n');
-                self.history.push(ChatMessage::tool(call.id.clone(), payload));
+                self.history
+                    .push(ChatMessage::tool(call.id.clone(), payload));
             }
         }
         Err(CopilotError::Budget {
@@ -658,7 +668,9 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             comparison,
             true,
         );
-        sink(AgentEvent::Report { report: Box::new(report.clone()) });
+        sink(AgentEvent::Report {
+            report: Box::new(report.clone()),
+        });
         report
     }
 
@@ -670,7 +682,12 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         sink: &mut dyn FnMut(AgentEvent),
         comparison: &mut Option<Comparison>,
     ) -> ToolOutcome {
-        let s = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let s = |k: &str| {
+            args.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
         let result = match tool {
             "list_scenarios" => self
                 .rpc
@@ -681,18 +698,29 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                         .and_then(Value::as_array)
                         .into_iter()
                         .flatten()
-                        .map(|i| json!({"id": i["id"], "name": i["name"],
-                                        "description": i["description"], "tags": i["tags"]}))
+                        .map(|i| {
+                            json!({"id": i["id"], "name": i["name"],
+                                        "description": i["description"], "tags": i["tags"]})
+                        })
                         .collect();
                     json!({"scenarios": items})
                 }),
             "get_scenario" => self.base_document(&s("base")).map(|d| {
-                match args.get("paths").and_then(Value::as_array).filter(|p| !p.is_empty()) {
+                match args
+                    .get("paths")
+                    .and_then(Value::as_array)
+                    .filter(|p| !p.is_empty())
+                {
                     Some(paths) => {
                         let picked: Map<String, Value> = paths
                             .iter()
                             .filter_map(Value::as_str)
-                            .map(|p| (p.to_string(), d.pointer(&to_pointer(p)).cloned().unwrap_or(Value::Null)))
+                            .map(|p| {
+                                (
+                                    p.to_string(),
+                                    d.pointer(&to_pointer(p)).cloned().unwrap_or(Value::Null),
+                                )
+                            })
                             .collect();
                         json!({"scenario": picked})
                     }
@@ -701,41 +729,66 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             }),
             "find_settings" => Ok(find_settings(&s("query"))),
             "prepare_scenario" => {
-                let changes = args.get("changes").and_then(Value::as_array).cloned().unwrap_or_default();
+                let changes = args
+                    .get("changes")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
                 self.prepare(&s("base"), &s("reason"), &changes, sink)
             }
             "run_prepared" => {
-                let label = if s("label").is_empty() { format!("run {}", self.runs.len() + 1) } else { s("label") };
-                self.run_prepared(&label, sink).map(|_| control::run_summary(self, self.runs.len() - 1))
+                let label = if s("label").is_empty() {
+                    format!("run {}", self.runs.len() + 1)
+                } else {
+                    s("label")
+                };
+                self.run_prepared(&label, sink)
+                    .map(|_| control::run_summary(self, self.runs.len() - 1))
             }
             "analyse_current_run" => {
-                let label = if s("label").is_empty() { "current run".to_string() } else { s("label") };
-                self.analyse_current(&label, sink).map(|_| control::run_summary(self, self.runs.len() - 1))
+                let label = if s("label").is_empty() {
+                    "current run".to_string()
+                } else {
+                    s("label")
+                };
+                self.analyse_current(&label, sink)
+                    .map(|_| control::run_summary(self, self.runs.len() - 1))
             }
             "compare_runs" => control::compare_runs(self, args, comparison),
             "finding_detail" => {
-                let run = args.get("run").and_then(Value::as_u64).map(|v| v as usize)
+                let run = args
+                    .get("run")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as usize)
                     .unwrap_or_else(|| self.runs.len().saturating_sub(1));
-                match self.runs.get(run).and_then(|r| r.analysis.finding(&s("id"))) {
+                match self
+                    .runs
+                    .get(run)
+                    .and_then(|r| r.analysis.finding(&s("id")))
+                {
                     Some(f) => serde_json::to_value(f).map_err(CopilotError::from),
-                    None => Err(CopilotError::Rpc { method: "finding_detail".into(),
-                        message: "no such finding in that run".into() }),
+                    None => Err(CopilotError::Rpc {
+                        method: "finding_detail".into(),
+                        message: "no such finding in that run".into(),
+                    }),
                 }
             }
             "registry__metric" | "registry__model_card" => {
                 return local_call(&self.grounding, tool, args);
             }
             other => {
-                return control::dispatch(self, other, args, sink, comparison).unwrap_or_else(|| {
-                    ToolOutcome::Refused {
+                return control::dispatch(self, other, args, sink, comparison).unwrap_or_else(
+                    || ToolOutcome::Refused {
                         reason: format!("{other:?} is not one of this agent's tools"),
-                    }
-                });
+                    },
+                );
             }
         };
         match result {
             Ok(result) => ToolOutcome::Ok { result },
-            Err(e) => ToolOutcome::Failed { message: e.to_string() },
+            Err(e) => ToolOutcome::Failed {
+                message: e.to_string(),
+            },
         }
     }
 
@@ -793,8 +846,16 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         }
         let mut applied = Vec::new();
         for c in changes {
-            let key = c.get("key").and_then(Value::as_str).unwrap_or("").to_string();
-            let why = c.get("why").and_then(Value::as_str).unwrap_or("").to_string();
+            let key = c
+                .get("key")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let why = c
+                .get("why")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let value = c.get("value").cloned().unwrap_or(Value::Null);
             // Set, {multiply}, {add}, {append}, {remove}, and a jammer's "centre".
             let (before, after) = control::apply_change(&mut doc, &key, &value)?;
@@ -810,7 +871,12 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                     });
                 }
             }
-            applied.push(Change { key, before, after, why });
+            applied.push(Change {
+                key,
+                before,
+                after,
+                why,
+            });
         }
         let all = json!(["all"]);
         if doc.get("metrics") != Some(&all) {
@@ -843,15 +909,21 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             scenario_hash: hash.clone(),
             document: doc,
         });
-        Ok(json!({"ok": true, "scenario_hash": hash, "changes": applied,
-                  "warnings": report.warnings}))
+        Ok(
+            json!({"ok": true, "scenario_hash": hash, "changes": applied,
+                  "warnings": report.warnings}),
+        )
     }
 
     /// Runs the prepared scenario to its end and analyses it.
     ///
     /// # Errors
     /// With nothing prepared, when the server refuses the start, or when the run stalls.
-    pub fn run_prepared(&mut self, label: &str, sink: &mut dyn FnMut(AgentEvent)) -> Result<RunRecord> {
+    pub fn run_prepared(
+        &mut self,
+        label: &str,
+        sink: &mut dyn FnMut(AgentEvent),
+    ) -> Result<RunRecord> {
         let prepared = self.prepared.clone().ok_or_else(|| CopilotError::Rpc {
             method: "run_prepared".into(),
             message: "nothing is prepared; call prepare_scenario first".into(),
@@ -863,9 +935,17 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             "run.start",
             &json!({"scenario": &prepared.document, "speed": self.policy.speed, "paused": false}),
         )?;
-        let run_id = started.get("run_id").and_then(Value::as_str).unwrap_or("").to_string();
+        let run_id = started
+            .get("run_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let t_end_s = started.get("t_end_ns").and_then(Value::as_u64).unwrap_or(0) as f64 / 1e9;
-        sink(AgentEvent::RunStarted { label: label.into(), run_id, t_end_s });
+        sink(AgentEvent::RunStarted {
+            label: label.into(),
+            run_id,
+            t_end_s,
+        });
         self.last_document = Some(prepared.document.clone());
         let t_s = self.watch(label, sink)?;
         let evidence = gather(&mut self.rpc)?;
@@ -882,7 +962,10 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         let index = self.runs.len() - 1;
         control::record_meta(self, index);
         let record = self.runs[index].clone();
-        sink(AgentEvent::Analysed { label: label.into(), analysis: record.analysis.compact() });
+        sink(AgentEvent::Analysed {
+            label: label.into(),
+            analysis: record.analysis.compact(),
+        });
         Ok(record)
     }
 
@@ -903,7 +986,10 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             let t = st.get("t_ns").and_then(Value::as_u64).unwrap_or(0);
             let end = st.get("t_end_ns").and_then(Value::as_u64).unwrap_or(0);
             let state = st.get("state").and_then(Value::as_str).unwrap_or("");
-            let finished = st.pointer("/engine/finished").and_then(Value::as_bool).unwrap_or(false);
+            let finished = st
+                .pointer("/engine/finished")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let actors = st.get("actors").and_then(Value::as_u64).unwrap_or(0);
             if poll % 2 == 0 || t >= end {
                 sink(AgentEvent::Progress {
@@ -914,9 +1000,7 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                 });
             }
             // `finished` is the server's RunState token for a run that reached its end.
-            if (end > 0 && t >= end)
-                || state == "finished"
-                || (finished && t == last_t && poll > 0)
+            if (end > 0 && t >= end) || state == "finished" || (finished && t == last_t && poll > 0)
             {
                 return Ok(t as f64 / 1e9);
             }
@@ -926,7 +1010,9 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                     message: format!(
                         "the engine reported an error at {} s: {}",
                         fmt(t as f64 / 1e9),
-                        st.pointer("/engine/failure").cloned().unwrap_or(Value::Null)
+                        st.pointer("/engine/failure")
+                            .cloned()
+                            .unwrap_or(Value::Null)
                     ),
                 });
             }
@@ -942,8 +1028,10 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                 if still * self.policy.poll_ms as usize > 120_000 && state != "running" {
                     return Err(CopilotError::Rpc {
                         method: "run_prepared".into(),
-                        message: format!("the run stopped advancing at {} s (state {state})",
-                                         fmt(t as f64 / 1e9)),
+                        message: format!(
+                            "the run stopped advancing at {} s (state {state})",
+                            fmt(t as f64 / 1e9)
+                        ),
                     });
                 }
             } else {
@@ -957,14 +1045,21 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                 )));
             }
         }
-        Err(CopilotError::Budget { what: "poll", budget: self.policy.max_polls })
+        Err(CopilotError::Budget {
+            what: "poll",
+            budget: self.policy.max_polls,
+        })
     }
 
     /// Analyses the run the engine is serving, without starting anything. Needs no model.
     ///
     /// # Errors
     /// When the server cannot be read.
-    pub fn analyse_current(&mut self, label: &str, sink: &mut dyn FnMut(AgentEvent)) -> Result<RunRecord> {
+    pub fn analyse_current(
+        &mut self,
+        label: &str,
+        sink: &mut dyn FnMut(AgentEvent),
+    ) -> Result<RunRecord> {
         let evidence = gather(&mut self.rpc)?;
         let analysis = analyst::analyse(&evidence, &self.thresholds);
         let record = RunRecord {
@@ -977,7 +1072,10 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         let index = self.runs.len() - 1;
         control::record_meta(self, index);
         let record = self.runs[index].clone();
-        sink(AgentEvent::Analysed { label: label.into(), analysis: record.analysis.compact() });
+        sink(AgentEvent::Analysed {
+            label: label.into(),
+            analysis: record.analysis.compact(),
+        });
         Ok(record)
     }
 
@@ -994,7 +1092,9 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
     ) -> Result<AgentReport> {
         self.cancel.store(false, Ordering::SeqCst);
         let runs_before = self.runs.len();
-        sink(AgentEvent::Status { text: crate::claude::HOW_TO_ADD_A_KEY.to_string() });
+        sink(AgentEvent::Status {
+            text: crate::claude::HOW_TO_ADD_A_KEY.to_string(),
+        });
         let prepared = self.prepare(
             base,
             "no model is attached, so the named scenario runs as shipped",
@@ -1014,7 +1114,9 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         }
         let overview = deterministic_summary(self.runs.last().map(|r| &r.analysis));
         let report = self.report(prompt, runs_before, overview, Vec::new(), None, stopped);
-        sink(AgentEvent::Report { report: Box::new(report.clone()) });
+        sink(AgentEvent::Report {
+            report: Box::new(report.clone()),
+        });
         Ok(report)
     }
 
@@ -1043,7 +1145,10 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         let mut experiments = self.harness.markdown_for_turn(self.harness.turn);
         experiments.push_str(&self.harness.extras_markdown(&self.runs, runs_before));
         if !experiments.is_empty() {
-            let at = report.markdown.find("## Thresholds").unwrap_or(report.markdown.len());
+            let at = report
+                .markdown
+                .find("## Thresholds")
+                .unwrap_or(report.markdown.len());
             report.markdown.insert_str(at, &experiments);
         }
         report
@@ -1056,8 +1161,14 @@ pub fn deterministic_summary(analysis: Option<&Analysis>) -> String {
     let Some(a) = analysis else {
         return "No run was analysed.".to_string();
     };
-    let top: Vec<&Finding> = a.findings.iter().filter(|f| f.severity >= Severity::Warning).take(5).collect();
-    let mut out = String::from("Summary written from the analyst's findings (no model attached).\n\n");
+    let top: Vec<&Finding> = a
+        .findings
+        .iter()
+        .filter(|f| f.severity >= Severity::Warning)
+        .take(5)
+        .collect();
+    let mut out =
+        String::from("Summary written from the analyst's findings (no model attached).\n\n");
     if top.is_empty() {
         out.push_str("No bottleneck at warning level or above was found in the measured layers.\n");
     } else {
@@ -1068,7 +1179,11 @@ pub fn deterministic_summary(analysis: Option<&Analysis>) -> String {
     if !a.not_measured.is_empty() {
         out.push_str(&format!(
             "\nNot measured: {}.\n",
-            a.not_measured.iter().map(|l| l.title()).collect::<Vec<_>>().join(", ")
+            a.not_measured
+                .iter()
+                .map(|l| l.title())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     out
@@ -1126,10 +1241,7 @@ pub fn to_markdown(r: &AgentReport) -> String {
             for f in fs {
                 md.push_str(&format!(
                     "- **{}** `{}` ({:?}): {}\n",
-                    f.title,
-                    f.id,
-                    f.severity,
-                    f.detail
+                    f.title, f.id, f.severity, f.detail
                 ));
                 for e in &f.evidence {
                     md.push_str(&format!(
@@ -1166,7 +1278,11 @@ pub fn to_markdown(r: &AgentReport) -> String {
                 if !f.links.is_empty() {
                     md.push_str(&format!(
                         "  - charts: {}\n",
-                        f.links.iter().map(|l| format!("`{}`", l.chart)).collect::<Vec<_>>().join(", ")
+                        f.links
+                            .iter()
+                            .map(|l| format!("`{}`", l.chart))
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ));
                 }
             }
@@ -1176,7 +1292,13 @@ pub fn to_markdown(r: &AgentReport) -> String {
     if let Some(c) = &r.comparison {
         md.push_str("## Comparison\n\n| Metric | A | B | Change |\n|---|---|---|---|\n");
         for d in &c.deltas {
-            md.push_str(&format!("| `{}` | {} | {} | {} |\n", d.metric, fmt(d.a), fmt(d.b), fmt(d.change)));
+            md.push_str(&format!(
+                "| `{}` | {} | {} | {} |\n",
+                d.metric,
+                fmt(d.a),
+                fmt(d.b),
+                fmt(d.change)
+            ));
         }
         if !c.only_in_b.is_empty() {
             md.push_str(&format!("\nNew in B: {}\n", c.only_in_b.join(", ")));
@@ -1193,7 +1315,10 @@ pub fn to_markdown(r: &AgentReport) -> String {
         }
         md.push('\n');
     }
-    md.push_str(&format!("_Overview by {}; every number above the overview's is the analyst's._\n", r.provider));
+    md.push_str(&format!(
+        "_Overview by {}; every number above the overview's is the analyst's._\n",
+        r.provider
+    ));
     md
 }
 
@@ -1224,12 +1349,18 @@ pub fn find_settings(query: &str) -> Value {
     let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let mut matches = Vec::new();
     let mut total = 0usize;
-    for f in surface.get("fields").and_then(Value::as_array).into_iter().flatten() {
+    for f in surface
+        .get("fields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
         let path = text(f, "x-path");
         if path.is_empty() {
             continue;
         }
-        let hay = format!("{} {} {}", path, text(f, "title"), text(f, "description")).to_lowercase();
+        let hay =
+            format!("{} {} {}", path, text(f, "title"), text(f, "description")).to_lowercase();
         if words.is_empty() || !words.iter().all(|w| hay.contains(w.as_str())) {
             continue;
         }
@@ -1239,14 +1370,25 @@ pub fn find_settings(query: &str) -> Value {
         }
         let mut row = Map::new();
         row.insert("key".into(), json!(path));
-        for k in ["title", "unit", "enum", "x-range", "default", "x-implemented", "x-status-note"] {
+        for k in [
+            "title",
+            "unit",
+            "enum",
+            "x-range",
+            "default",
+            "x-implemented",
+            "x-status-note",
+        ] {
             if let Some(v) = f.get(k).filter(|v| !v.is_null()) {
                 row.insert(k.trim_start_matches("x-").replace('-', "_"), v.clone());
             }
         }
         let d = text(f, "description");
         if !d.is_empty() {
-            row.insert("description".into(), json!(d.chars().take(240).collect::<String>()));
+            row.insert(
+                "description".into(),
+                json!(d.chars().take(240).collect::<String>()),
+            );
         }
         matches.push(Value::Object(row));
     }
@@ -1299,7 +1441,9 @@ fn set_pointer(doc: &mut Value, pointer: &str, value: Value) {
             obj.insert(p.clone(), value);
             return;
         }
-        cur = obj.entry(p.clone()).or_insert_with(|| Value::Object(Map::new()));
+        cur = obj
+            .entry(p.clone())
+            .or_insert_with(|| Value::Object(Map::new()));
     }
 }
 
@@ -1311,18 +1455,26 @@ fn numbers_in(text: &str, standalone_only: bool) -> Vec<String> {
     while i < chars.len() {
         if chars[i].is_ascii_digit() {
             let start = i;
-            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == ',' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()
-                || chars[i] == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
+            while i < chars.len()
+                && (chars[i].is_ascii_digit()
+                    || chars[i] == ',' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit()
+                    || chars[i] == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
             {
                 i += 1;
             }
-            let before = if start > 0 { Some(chars[start - 1]) } else { None };
+            let before = if start > 0 {
+                Some(chars[start - 1])
+            } else {
+                None
+            };
             let after = chars.get(i).copied();
             // `802.11p`, `p95`, `J2945/1`, `3GPP`, `node7`, ids and version strings are
             // names, not quantities. A unit glued on (`100ms`, `30s`, `2x`) is not.
-            let named = before.is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '/' | '`' | '.'))
-                || after.is_some_and(|c| (c.is_alphabetic() && !matches!(c, 's' | 'm' | 'x'))
-                    || matches!(c, '/' | '_'));
+            let named = before
+                .is_some_and(|c| c.is_alphanumeric() || matches!(c, '_' | '/' | '`' | '.'))
+                || after.is_some_and(|c| {
+                    (c.is_alphabetic() && !matches!(c, 's' | 'm' | 'x')) || matches!(c, '/' | '_')
+                });
             if !standalone_only || !named {
                 out.push(chars[start..i].iter().collect::<String>().replace(',', ""));
             }
@@ -1352,9 +1504,13 @@ pub fn ungrounded_numbers(overview: &str, corpus: &str) -> Vec<String> {
         if x.fract() == 0.0 && x.abs() <= 10.0 {
             continue;
         }
-        let ok = known
-            .iter()
-            .any(|&k| close(x, k) || close(x, k * 100.0) || close(x / 100.0, k) || close(x, k * 1000.0) || close(x / 1000.0, k));
+        let ok = known.iter().any(|&k| {
+            close(x, k)
+                || close(x, k * 100.0)
+                || close(x / 100.0, k)
+                || close(x, k * 1000.0)
+                || close(x / 1000.0, k)
+        });
         if !ok && !out.contains(&n) {
             out.push(n);
         }
@@ -1369,18 +1525,33 @@ mod tests {
     #[test]
     fn every_method_the_agent_calls_is_one_the_server_publishes() {
         for m in AGENT_METHODS {
-            assert!(v2xw_server::rpc::METHODS.contains(&m), "{m} is not a server method");
+            assert!(
+                v2xw_server::rpc::METHODS.contains(&m),
+                "{m} is not a server method"
+            );
         }
     }
 
     #[test]
     fn settings_are_found_in_the_engines_own_surface() {
         let r = find_settings("rat");
-        let keys: Vec<&str> = r["matches"].as_array().unwrap().iter()
-            .filter_map(|m| m["key"].as_str()).collect();
+        let keys: Vec<&str> = r["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["key"].as_str())
+            .collect();
         assert!(keys.contains(&"radio.rat"), "{r:#}");
-        let rat = r["matches"].as_array().unwrap().iter().find(|m| m["key"] == "radio.rat").unwrap();
-        assert!(rat["enum"].as_array().is_some_and(|e| !e.is_empty()), "its choices: {rat:#}");
+        let rat = r["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["key"] == "radio.rat")
+            .unwrap();
+        assert!(
+            rat["enum"].as_array().is_some_and(|e| !e.is_empty()),
+            "its choices: {rat:#}"
+        );
         // A word nothing has finds nothing, and an empty query does not list everything.
         assert_eq!(find_settings("zzqxj")["total"], 0);
         assert_eq!(find_settings("")["total"], 0);
@@ -1392,7 +1563,11 @@ mod tests {
         assert_eq!(to_pointer("/time/duration_s"), "/time/duration_s");
         let mut d = json!({"radio": {"rat": "dsrc-80211p"}});
         set_pointer(&mut d, "/radio/rat", json!("lte-v2x-pc5"));
-        set_pointer(&mut d, "/actors/vehicles/demand/rate_veh_per_h", json!(600.0));
+        set_pointer(
+            &mut d,
+            "/actors/vehicles/demand/rate_veh_per_h",
+            json!(600.0),
+        );
         assert_eq!(d["radio"]["rat"], "lte-v2x-pc5");
         assert_eq!(d["actors"]["vehicles"]["demand"]["rate_veh_per_h"], 600.0);
     }
@@ -1403,7 +1578,13 @@ mod tests {
         assert!(ungrounded_numbers("The CBR was 0.74 [channel.congested].", corpus).is_empty());
         assert!(ungrounded_numbers("The CBR was 74% of airtime.", corpus).is_empty());
         assert!(ungrounded_numbers("Two runs; 802.11p; p95; TS 22.185.", corpus).is_empty());
-        assert_eq!(ungrounded_numbers("The CBR was 0.81.", corpus), vec!["0.81".to_string()]);
-        assert_eq!(ungrounded_numbers("PDR dropped by 37 %.", corpus), vec!["37".to_string()]);
+        assert_eq!(
+            ungrounded_numbers("The CBR was 0.81.", corpus),
+            vec!["0.81".to_string()]
+        );
+        assert_eq!(
+            ungrounded_numbers("PDR dropped by 37 %.", corpus),
+            vec!["37".to_string()]
+        );
     }
 }

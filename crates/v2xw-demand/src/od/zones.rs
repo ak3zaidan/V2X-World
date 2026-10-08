@@ -138,7 +138,10 @@ impl ZoneSet {
                         .push((*lane, *weight));
                 }
             }
-            ZoneSpec::Boxes { zones: boxes, weight } => {
+            ZoneSpec::Boxes {
+                zones: boxes,
+                weight,
+            } => {
                 let w = weights(world, &ends, *weight);
                 let proj = world.projection();
                 for (name, [s, west, n, e]) in boxes {
@@ -149,7 +152,10 @@ impl ZoneSet {
                         .zip(&w)
                         .filter(|(l, _)| {
                             let m = mid(world, **l);
-                            m.x >= x0.min(x1) && m.x <= x0.max(x1) && m.y >= y0.min(y1) && m.y <= y0.max(y1)
+                            m.x >= x0.min(x1)
+                                && m.x <= x0.max(x1)
+                                && m.y >= y0.min(y1)
+                                && m.y <= y0.max(y1)
                         })
                         .map(|(l, w)| (*l, *w))
                         .collect();

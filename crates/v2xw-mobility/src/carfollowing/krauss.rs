@@ -241,7 +241,10 @@ pub fn card(params: &KraussParams) -> ModelCard {
             "dawdle",
             "v' = max(0, v_des − σ·Δt·η·(v_des if v_des < a else a)),  η ~ U[0,1)",
         ),
-        Equation::new("acceleration", "a_out = (v' − v)/Δt, clamped to [−b_emergency, a]"),
+        Equation::new(
+            "acceleration",
+            "a_out = (v' − v)/Δt, clamped to [−b_emergency, a]",
+        ),
     ];
     let vtype = Source::new(
         SourceKind::Standard,
@@ -319,7 +322,13 @@ mod tests {
 
     #[test]
     fn sigma_zero_reaches_v0() {
-        let m = Krauss::new(KraussParams { sigma: 0.0, ..KraussParams::default() }, 1);
+        let m = Krauss::new(
+            KraussParams {
+                sigma: 0.0,
+                ..KraussParams::default()
+            },
+            1,
+        );
         let mut ego = vehicle(0, 0.0, m.profile(VehicleClass::Passenger));
         for _ in 0..400 {
             let a = m.accel(&ego, None, &lane(13.9), &WeatherState::default());

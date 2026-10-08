@@ -80,7 +80,11 @@ impl ChannelSchedule {
         }
         let sync = SYNC_INTERVAL_MS * 1_000_000;
         let base = t_ns - t_ns % sync;
-        let offset = if cch { GUARD_INTERVAL_MS } else { CCH_INTERVAL_MS + GUARD_INTERVAL_MS } * 1_000_000;
+        let offset = if cch {
+            GUARD_INTERVAL_MS
+        } else {
+            CCH_INTERVAL_MS + GUARD_INTERVAL_MS
+        } * 1_000_000;
         let cand = base + offset;
         if cand >= t_ns { cand } else { cand + sync }
     }
@@ -95,7 +99,9 @@ impl ChannelSchedule {
     pub fn usable_fraction(&self) -> f64 {
         match self.access {
             ChannelAccess::Continuous => 1.0,
-            ChannelAccess::Alternating => (CCH_INTERVAL_MS - GUARD_INTERVAL_MS) as f64 / SYNC_INTERVAL_MS as f64,
+            ChannelAccess::Alternating => {
+                (CCH_INTERVAL_MS - GUARD_INTERVAL_MS) as f64 / SYNC_INTERVAL_MS as f64
+            }
         }
     }
 }
@@ -142,7 +148,10 @@ impl WsaUser {
         if self.joined.is_some() {
             return self.joined;
         }
-        let hit = wsa.services.iter().find(|s| self.interests.contains(&s.psid))?;
+        let hit = wsa
+            .services
+            .iter()
+            .find(|s| self.interests.contains(&s.psid))?;
         self.joined = Some(hit.channel);
         self.joined
     }
@@ -154,7 +163,9 @@ mod tests {
 
     #[test]
     fn alternating_access_waits_for_the_right_interval() {
-        let s = ChannelSchedule { access: ChannelAccess::Alternating };
+        let s = ChannelSchedule {
+            access: ChannelAccess::Alternating,
+        };
         assert_eq!(s.interval(0), Interval::Guard);
         assert_eq!(s.interval(10_000_000), Interval::Cch);
         assert_eq!(s.interval(52_000_000), Interval::Guard);
@@ -163,10 +174,21 @@ mod tests {
         assert_eq!(s.next_opportunity_ns(60_000_000, true), 104_000_000);
         assert_eq!(s.access_delay_ns(10_000_000, true), 0);
         assert_eq!(s.next_opportunity_ns(10_000_000, false), 54_000_000);
-        let c = ChannelSchedule { access: ChannelAccess::Continuous };
+        let c = ChannelSchedule {
+            access: ChannelAccess::Continuous,
+        };
         assert_eq!(c.access_delay_ns(60_000_000, true), 0);
-        let mut u = WsaUser { interests: vec![0x8002], joined: None };
-        let p = WsaProvider { services: vec![ServiceInfo { psid: 0x8002, channel: 174 }], repeat_rate_per_5s: 50 };
+        let mut u = WsaUser {
+            interests: vec![0x8002],
+            joined: None,
+        };
+        let p = WsaProvider {
+            services: vec![ServiceInfo {
+                psid: 0x8002,
+                channel: 174,
+            }],
+            repeat_rate_per_5s: 50,
+        };
         assert_eq!(p.interval_ms(), 100);
         assert_eq!(u.on_wsa(&p), Some(174));
     }

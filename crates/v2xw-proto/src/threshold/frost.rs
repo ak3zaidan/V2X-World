@@ -34,8 +34,7 @@
 use v2xw_sec::primitive::{PrimitiveId, PrimitiveOpKind};
 
 use super::{
-    Committee, Knowledge, ProtocolEntry, RoundMessage, RoundPlan, StarRound,
-    ThresholdProtocol,
+    Committee, Knowledge, ProtocolEntry, RoundMessage, RoundPlan, StarRound, ThresholdProtocol,
 };
 use crate::sizes::WireSize;
 use crate::spec::OpDescriptor;
@@ -47,9 +46,11 @@ pub const ID: &str = "frost-p256";
 pub const ENTRY: ProtocolEntry = ProtocolEntry {
     id: ID,
     label: "FROST threshold Schnorr (RFC 9591, P-256)",
-    build: |p| Box::new(Frost {
-        preprocessed: p.preprocessed,
-    }),
+    build: |p| {
+        Box::new(Frost {
+            preprocessed: p.preprocessed,
+        })
+    },
 };
 
 /// `Ne`, a serialized P-256 element: RFC 9591 §6.4.
@@ -160,11 +161,13 @@ impl ThresholdProtocol for Frost {
                 index: 2,
                 messages: (0..n)
                     .flat_map(|from| {
-                        (0..n).filter(move |to| *to != from).map(move |to| RoundMessage {
-                            from,
-                            to: Some(to),
-                            bytes: WireSize::derived(NS, "one secret share f_i(ℓ)", KG20),
-                        })
+                        (0..n)
+                            .filter(move |to| *to != from)
+                            .map(move |to| RoundMessage {
+                                from,
+                                to: Some(to),
+                                bytes: WireSize::derived(NS, "one secret share f_i(ℓ)", KG20),
+                            })
                     })
                     .collect(),
                 // Verify every other party's proof (2) and share against its commitments
@@ -199,11 +202,13 @@ impl ThresholdProtocol for Frost {
                 index: 2,
                 messages: (0..n)
                     .flat_map(|from| {
-                        (0..n).filter(move |to| *to != from).map(move |to| RoundMessage {
-                            from,
-                            to: Some(to),
-                            bytes: WireSize::derived(NS, "one share of zero", HJKY95),
-                        })
+                        (0..n)
+                            .filter(move |to| *to != from)
+                            .map(move |to| RoundMessage {
+                                from,
+                                to: Some(to),
+                                bytes: WireSize::derived(NS, "one share of zero", HJKY95),
+                            })
                     })
                     .collect(),
                 compute: vec![mults(u32::from(n.saturating_sub(1)) * t1)],

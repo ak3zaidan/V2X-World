@@ -78,7 +78,10 @@ fn differential(mode: Mode) -> Outcome {
         let mcs = Mcs::ALL[rng.below(8) as usize];
         let bytes = 20 + rng.below(1_500) as u32;
         let rx = pt + gt + gr - path_loss(model, d, f);
-        let sinr = rx - OfdmPhy::new(Tier::High).with_noise_figure_db(nf).noise_floor();
+        let sinr = rx
+            - OfdmPhy::new(Tier::High)
+                .with_noise_figure_db(nf)
+                .noise_floor();
         let per_model = PerModel::default();
         let per = if mode.faulted() {
             let bits = (timing::SIGNAL_BITS as u64 + 16 + 8 * u64::from(bytes) + 6) as f64;
@@ -112,7 +115,9 @@ fn differential(mode: Mode) -> Outcome {
         }
         if (rx - trx).abs() > 1e-9 || (sinr - tsinr).abs() > 1e-9 || dp > 1e-9 + 1e-7 * tper.abs() {
             bad += 1;
-            first.get_or_insert(format!("link {i}: PER {per:.6e} vs {tper:.6e} at {sinr:.2} dB"));
+            first.get_or_insert(format!(
+                "link {i}: PER {per:.6e} vs {tper:.6e} at {sinr:.2} dB"
+            ));
         }
     }
     Outcome::judge(
@@ -120,7 +125,9 @@ fn differential(mode: Mode) -> Outcome {
         format!(
             "{} links ({graded} in the PER transition region): max |Δ power| {worst_rx:.2e} dB, max |Δ PER| {worst_per:.2e}{}",
             rows.len(),
-            first.map(|f| format!("; {bad} out of tolerance, first {f}")).unwrap_or_default()
+            first
+                .map(|f| format!("; {bad} out of tolerance, first {f}"))
+                .unwrap_or_default()
         ),
     )
 }

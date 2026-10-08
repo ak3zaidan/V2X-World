@@ -40,7 +40,14 @@ pub struct Area {
 impl Area {
     /// A circle of `radius` around `(cx, cy)`.
     pub fn circle(cx: f64, cy: f64, radius: f64) -> Self {
-        Area { shape: AreaShape::Circle, cx, cy, a: radius, b: radius, angle_deg: 0.0 }
+        Area {
+            shape: AreaShape::Circle,
+            cx,
+            cy,
+            a: radius,
+            b: radius,
+            angle_deg: 0.0,
+        }
     }
 
     /// An axis-aligned rectangle spanning `[x0, x1] × [y0, y1]`.

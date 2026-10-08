@@ -80,7 +80,11 @@ fn fleet(n: usize, seconds: f64) -> Scenario {
         let db = (mid(b).x - cx).hypot(mid(b).y - cy);
         da.total_cmp(&db).then(a.id.cmp(&b.id))
     });
-    assert!(by_centre.len() >= n, "the grid has {} lanes", by_centre.len());
+    assert!(
+        by_centre.len() >= n,
+        "the grid has {} lanes",
+        by_centre.len()
+    );
     let trips: Vec<_> = by_centre
         .iter()
         .take(n)
@@ -266,7 +270,11 @@ fn every_bsm_says_where_the_vehicle_truly_was_within_gnss_error() {
         // Never off by more than 30 m: the model's multipath bursts reach 20-25 m here
         // (measured: five BSMs of one vehicle in one burst at 2.1-2.9 s), which is Reid's
         // tail, not a frame of reference error (that is hundreds of metres).
-        assert!(e < 30.0, "{:?} at {generated}: {e:.2} m from the truth", t.node);
+        assert!(
+            e < 30.0,
+            "{:?} at {generated}: {e:.2} m from the truth",
+            t.node
+        );
         errors.push(e);
         // The encoded speed is the claim on J2735's 0.02 m/s grid, and the claim is the
         // true speed within GNSS velocity noise.
@@ -283,13 +291,21 @@ fn every_bsm_says_where_the_vehicle_truly_was_within_gnss_error() {
             assert!(d < 10.0, "heading {got} vs truth {want}");
         }
     }
-    assert!(errors.len() >= 50, "only {} BSMs had a ground truth", errors.len());
+    assert!(
+        errors.len() >= 50,
+        "only {} BSMs had a ground truth",
+        errors.len()
+    );
     let mean = errors.iter().sum::<f64>() / errors.len() as f64;
     // Reid 2019's 95th percentile is 5.30 m; a mean above it is not that receiver. And
     // most fixes sit inside the 99th percentile, 9.38 m.
     assert!(mean < 5.3, "mean horizontal error {mean:.2} m");
     let inside = errors.iter().filter(|&&e| e < 9.38).count();
-    assert!(inside * 10 >= errors.len() * 8, "{inside} of {} inside 9.38 m", errors.len());
+    assert!(
+        inside * 10 >= errors.len() * 8,
+        "{inside} of {} inside 9.38 m",
+        errors.len()
+    );
 }
 
 #[test]
@@ -304,8 +320,11 @@ fn every_frame_reaches_the_other_vehicle_at_the_friis_power_and_is_verified() {
     assert_eq!(report.receptions_ok, 60);
     assert_eq!(phy.len(), 60);
     assert_eq!(rxs.len(), 60);
-    assert!(rxs.iter().all(|r| r.outcome == RxFate::Delivered
-        && r.verification.as_deref() == Some("verified")));
+    assert!(
+        rxs.iter().all(
+            |r| r.outcome == RxFate::Delivered && r.verification.as_deref() == Some("verified")
+        )
+    );
     assert_eq!(ver.len(), 60);
     let by_msg: BTreeMap<u64, &NodeTxView> = txs.iter().map(|t| (t.msg.unwrap(), t)).collect();
     for p in &phy {
@@ -349,7 +368,10 @@ fn every_frame_reaches_the_other_vehicle_at_the_friis_power_and_is_verified() {
             tx.airtime_us.unwrap() * 1000
         );
         assert_eq!(r.t_tx_start.unwrap(), tx.t);
-        assert_eq!(r.t_verify_done.unwrap() - r.t_verify_start.unwrap(), 400_000);
+        assert_eq!(
+            r.t_verify_done.unwrap() - r.t_verify_start.unwrap(),
+            400_000
+        );
         assert_eq!(r.t_delivered, r.t_verify_done);
     }
 }
@@ -518,7 +540,10 @@ fn the_load_metrics_scale_with_the_fleet_as_theory_says() {
         let overlaps = spans.windows(2).filter(|w| w[1].0 < w[0].1).count();
         let same_start = spans.windows(2).filter(|w| w[1].0 == w[0].0).count();
         let phy: Vec<PhyRxView> = on(&rec);
-        let min_sinr = phy.iter().filter_map(|p| p.sinr_db).fold(f64::INFINITY, f64::min);
+        let min_sinr = phy
+            .iter()
+            .filter_map(|p| p.sinr_db)
+            .fold(f64::INFINITY, f64::min);
         println!(
             "{row:?} losses {:?} mac.cbr {} overlaps {overlaps} same-start {same_start} min sinr {min_sinr:.1}",
             report.rx_losses,
@@ -527,7 +552,11 @@ fn the_load_metrics_scale_with_the_fleet_as_theory_says() {
         // With everyone in carrier-sense range there are no hidden terminals, so a
         // collision needs two frames on the air at once, and an overlapping pair costs at
         // most both frames at every other receiver.
-        assert_eq!(collisions == 0, overlaps == 0, "collisions {collisions}, overlaps {overlaps} at {n}");
+        assert_eq!(
+            collisions == 0,
+            overlaps == 0,
+            "collisions {collisions}, overlaps {overlaps} at {n}"
+        );
         assert!(collisions <= 2 * overlaps as u64 * (n as u64 - 1));
         rows.push(row);
     }
@@ -536,7 +565,10 @@ fn the_load_metrics_scale_with_the_fleet_as_theory_says() {
         // Offered load is linear: n vehicles × 10 Hz.
         // Each vehicle generates ten; one generated in the last ~12 ms (sign + hand-off) is
         // still in the MAC at the horizon.
-        assert!((9 * n as u64..=10 * n as u64).contains(&frames), "frames at {n}: {frames}");
+        assert!(
+            (9 * n as u64..=10 * n as u64).contains(&frames),
+            "frames at {n}: {frames}"
+        );
         let per = offered / n as f64;
         assert!(
             (per - 16_464.0).abs() < 200.0,
@@ -553,14 +585,16 @@ fn the_load_metrics_scale_with_the_fleet_as_theory_says() {
     }
     assert_eq!(rows[0].7, 0, "two vehicles collided");
     let share = |r: &Row| r.7 as f64 / r.5.max(1) as f64;
-    assert!(share(&rows[4]) >= share(&rows[1]), "collision share fell from 5 to 50");
+    assert!(
+        share(&rows[4]) >= share(&rows[1]),
+        "collision share fell from 5 to 50"
+    );
 }
 
 /// The two vehicles with the US SCMS behind them: `credential-lifecycle.yaml`'s backend,
 /// with the calendar compressed to 10 s periods so a 30 s run holds top-ups and CRLs.
 fn with_backend(mut s: Scenario) -> Scenario {
-    let lifecycle =
-        Scenario::load(scenarios().join("credential-lifecycle.yaml")).expect("loads");
+    let lifecycle = Scenario::load(scenarios().join("credential-lifecycle.yaml")).expect("loads");
     s.actors.backend = lifecycle.actors.backend.clone();
     s.net.uu = lifecycle.net.uu.clone();
     s.security.protocol = lifecycle.security.protocol.clone();
@@ -633,14 +667,24 @@ fn the_backend_tops_up_both_vehicles_over_cellular_and_every_byte_is_booked_once
     for t in 1..=45 {
         for (k, v) in window(&rec, t * S) {
             if k.starts_with("bytes_uu") || k.starts_with("bytes_backend") {
-                *sums.entry(k).or_default() +=
-                    serde_json::to_value(&v).unwrap()["point"].as_f64().unwrap_or(0.0);
+                *sums.entry(k).or_default() += serde_json::to_value(&v).unwrap()["point"]
+                    .as_f64()
+                    .unwrap_or(0.0);
             }
         }
     }
-    assert_eq!(sums["bytes_uu_dl{\"bucket\":\"cellular-dl\"}"], a.uu_dl_bytes as f64);
-    assert_eq!(sums["bytes_uu_ul{\"bucket\":\"cellular-ul\"}"], a.uu_ul_bytes as f64);
-    assert_eq!(sums["bytes_backend{\"bucket\":\"backend\"}"], a.backend_bytes as f64);
+    assert_eq!(
+        sums["bytes_uu_dl{\"bucket\":\"cellular-dl\"}"],
+        a.uu_dl_bytes as f64
+    );
+    assert_eq!(
+        sums["bytes_uu_ul{\"bucket\":\"cellular-ul\"}"],
+        a.uu_ul_bytes as f64
+    );
+    assert_eq!(
+        sums["bytes_backend{\"bucket\":\"backend\"}"],
+        a.backend_bytes as f64
+    );
     // What a vehicle downloaded for a top-up is what crossed its cellular downlink, not
     // the backend's own exchanges (7,319 octets were reported before 2026-10-07 against
     // 1,141 on the downlink).
@@ -669,7 +713,10 @@ fn one_attacker_among_six_is_reported_revoked_and_refused_and_the_crl_reaches_ev
     assert!(p.crl_broadcasts > 0);
     // Every vehicle and the roadside unit install it.
     assert_eq!(p.crls_installed, 6, "{p:?}");
-    assert!(p.revoked_receptions > 0, "nobody refused the revoked sender");
+    assert!(
+        p.revoked_receptions > 0,
+        "nobody refused the revoked sender"
+    );
     // Passive revocation: the attacker's next top-up is refused as blocklisted, everyone
     // else's goes through.
     assert_eq!(p.topups_refused_blocklisted, 1);
@@ -720,7 +767,10 @@ fn set_pointer(doc: &mut serde_json::Value, pointer: &str, value: serde_json::Va
 
 /// A value for `row` other than `current`: another available option, another preset, the
 /// other boolean, or a number moved inside its range.
-fn another_value(row: &serde_json::Value, current: &serde_json::Value) -> Option<serde_json::Value> {
+fn another_value(
+    row: &serde_json::Value,
+    current: &serde_json::Value,
+) -> Option<serde_json::Value> {
     use serde_json::Value as V;
     let differs = |v: &V| v != current && !(current.is_null() && Some(v) == row.get("default"));
     if let Some(opts) = row.get("x-options").and_then(V::as_array) {
@@ -734,14 +784,24 @@ fn another_value(row: &serde_json::Value, current: &serde_json::Value) -> Option
         return e.iter().find(|v| !v.is_null() && differs(v)).cloned();
     }
     if let Some(p) = row.get("x-presets").and_then(V::as_array) {
-        if let Some(v) = p.iter().filter_map(|o| o.get("value").cloned()).find(differs) {
+        if let Some(v) = p
+            .iter()
+            .filter_map(|o| o.get("value").cloned())
+            .find(differs)
+        {
             return Some(v);
         }
     }
-    match row.get("kind").and_then(V::as_str).or(row.get("type").and_then(V::as_str)) {
-        Some("boolean") => Some(V::Bool(!current.as_bool().unwrap_or(
-            row.get("default").and_then(V::as_bool).unwrap_or(false),
-        ))),
+    match row
+        .get("kind")
+        .and_then(V::as_str)
+        .or(row.get("type").and_then(V::as_str))
+    {
+        Some("boolean") => {
+            Some(V::Bool(!current.as_bool().unwrap_or(
+                row.get("default").and_then(V::as_bool).unwrap_or(false),
+            )))
+        }
         Some("number" | "integer") => {
             let base = current
                 .as_f64()
@@ -830,13 +890,17 @@ fn settings_audit() {
     for row in surface["fields"].as_array().expect("fields") {
         let path = row["x-path"].as_str().unwrap_or_default().to_string();
         let pointer = row["x-pointer"].as_str().unwrap_or_default();
-        if row["x-status"].as_str() != Some("wired") || path.contains("[]")
+        if row["x-status"].as_str() != Some("wired")
+            || path.contains("[]")
             || path.contains('*')
             || pointer.is_empty()
         {
             continue;
         }
-        let current = doc.pointer(pointer).cloned().unwrap_or(serde_json::Value::Null);
+        let current = doc
+            .pointer(pointer)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         let Some(value) = another_value(row, &current) else {
             skipped.push(format!("{path} (no value to try)"));
             continue;
@@ -844,10 +908,8 @@ fn settings_audit() {
         // A second value for a number, the other way from the first: a doubled power can
         // sit above a cap the halved one is below.
         let mut values = vec![value.clone()];
-        if let (Some(v), Some(c)) = (
-            value.as_f64(),
-            current.as_f64().or(row["default"].as_f64()),
-        ) && c != 0.0
+        if let (Some(v), Some(c)) = (value.as_f64(), current.as_f64().or(row["default"].as_f64()))
+            && c != 0.0
             && v > c
         {
             values.push(if value.is_i64() || value.is_u64() {
@@ -888,8 +950,7 @@ fn settings_that_did_nothing_now_act_or_refuse() {
     // The radial city generator builds a radial city (it used to build the grid).
     let mut s = fleet(2, 1.0);
     let grid = v2xw_engine::wiring::build_world(&s).expect("grid");
-    if let v2xw_world::WorldSourceSpec::Procedural { generator, params } = &mut s.world.source
-    {
+    if let v2xw_world::WorldSourceSpec::Procedural { generator, params } = &mut s.world.source {
         *generator = "world/source/procedural-radial".into();
         *params = serde_json::Value::Null;
     }

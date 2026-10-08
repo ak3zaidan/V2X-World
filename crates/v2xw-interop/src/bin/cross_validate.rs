@@ -51,7 +51,11 @@ fn args() -> Args {
 }
 
 fn f(x: f64, p: usize) -> String {
-    if x.is_finite() { format!("{x:.p$}") } else { "—".to_string() }
+    if x.is_finite() {
+        format!("{x:.p$}")
+    } else {
+        "—".to_string()
+    }
 }
 
 fn rel(a: f64, b: f64) -> String {
@@ -90,7 +94,11 @@ fn metrics_table(s: &mut String, runs: &[Measured]) {
         ("mean travel time, s", |m| m.mean_tt(), 1),
         ("median travel time, s", |m| m.tt_pct(0.5), 1),
         ("85th pct travel time, s", |m| m.tt_pct(0.85), 1),
-        ("mean insertion delay, s", |m| xval_mean(&m.insert_delay_s), 2),
+        (
+            "mean insertion delay, s",
+            |m| xval_mean(&m.insert_delay_s),
+            2,
+        ),
         ("mean vehicles halting (< 0.1 m/s)", |m| m.halting_mean, 1),
         ("max vehicles halting", |m| m.halting_max as f64, 0),
         ("halting time per trip, s", |m| m.wait_per_trip_s, 1),
@@ -100,7 +108,11 @@ fn metrics_table(s: &mut String, runs: &[Measured]) {
         for r in runs {
             let _ = write!(s, " {} |", f(g(r), p));
         }
-        let cmp = if runs.len() > 1 { rel(g(&runs[0]), g(&runs[1])) } else { "—".into() };
+        let cmp = if runs.len() > 1 {
+            rel(g(&runs[0]), g(&runs[1]))
+        } else {
+            "—".into()
+        };
         let _ = writeln!(s, " {cmp} |");
     }
     let _ = write!(s, "| wall-clock, s |");
@@ -111,16 +123,30 @@ fn metrics_table(s: &mut String, runs: &[Measured]) {
 }
 
 fn xval_mean(v: &[f64]) -> f64 {
-    if v.is_empty() { f64::NAN } else { v.iter().sum::<f64>() / v.len() as f64 }
+    if v.is_empty() {
+        f64::NAN
+    } else {
+        v.iter().sum::<f64>() / v.len() as f64
+    }
 }
 
 fn main() {
     let a = args();
     let home = v2xw_interop::sumo_home();
     let timing = if a.quick {
-        Timing { step: Duration::from_millis(100), demand_s: 300.0, total_s: 480.0, warm_s: 120.0 }
+        Timing {
+            step: Duration::from_millis(100),
+            demand_s: 300.0,
+            total_s: 480.0,
+            warm_s: 120.0,
+        }
     } else {
-        Timing { step: Duration::from_millis(100), demand_s: 900.0, total_s: 1200.0, warm_s: 180.0 }
+        Timing {
+            step: Duration::from_millis(100),
+            demand_s: 900.0,
+            total_s: 1200.0,
+            warm_s: 180.0,
+        }
     };
     let seed = 20_261_007;
     let mut doc = String::new();
@@ -228,11 +254,25 @@ fn main() {
         let _ = writeln!(
             body,
             "\n**Summary, this engine against SUMO's default model, over all {} cases:** network flow {:+.0} to {:+.0} %, space-mean speed {:+.0} to {:+.0} %; at least {:.0} % of edges within GEH 5 (acceptance: 85 %); edge-speed correlation at least {:.2}; paired travel-time ratio {:.2}–{:.2} on the mean and {:.2}–{:.2} on the median.\n",
-            cases.len(), flow.0, flow.1, speed.0, speed.1, geh_min, r_min, tt.0, tt.1, tt.2, tt.3
+            cases.len(),
+            flow.0,
+            flow.1,
+            speed.0,
+            speed.1,
+            geh_min,
+            r_min,
+            tt.0,
+            tt.1,
+            tt.2,
+            tt.3
         );
     }
     for c in &cases {
-        let _ = writeln!(body, "\n### {} at {:.0} veh/h offered\n", c.study_name, c.rate);
+        let _ = writeln!(
+            body,
+            "\n### {} at {:.0} veh/h offered\n",
+            c.study_name, c.rate
+        );
         metrics_table(&mut body, &c.runs);
         for r in &c.runs {
             if let Some(e) = &r.error {
@@ -240,7 +280,10 @@ fn main() {
             }
         }
         if c.runs.len() >= 3 {
-            let _ = writeln!(body, "\n| pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |");
+            let _ = writeln!(
+                body,
+                "\n| pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |"
+            );
             let _ = writeln!(body, "|---|---:|---:|---:|---:|---:|---:|---:|");
             for (i, j) in [(0, 1), (0, 2), (2, 1)] {
                 let (share, n, r, mad) = edge_agreement(&c.runs[i], &c.runs[j]);
@@ -248,20 +291,37 @@ fn main() {
                 let _ = writeln!(
                     body,
                     "| {} vs {} | {n} | {} % | {} | {} | {np} | {} | {} |",
-                    c.runs[i].label, c.runs[j].label, f(share * 100.0, 0), f(r, 2), f(mad, 1), f(mr, 2), f(md, 2)
+                    c.runs[i].label,
+                    c.runs[j].label,
+                    f(share * 100.0, 0),
+                    f(r, 2),
+                    f(mad, 1),
+                    f(mr, 2),
+                    f(md, 2)
                 );
             }
-            let _ = writeln!(body, "\nVehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): {}\n",
-                (0..c.runs[0].bins.len()).step_by(2).map(|k| {
-                    let g = |m: &Measured| m.bins.get(k).map_or("—".to_string(), |b| f(b.0, 0));
-                    format!("{}/{}/{}", g(&c.runs[0]), g(&c.runs[1]), g(&c.runs[2]))
-                }).collect::<Vec<_>>().join(", "));
+            let _ = writeln!(
+                body,
+                "\nVehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): {}\n",
+                (0..c.runs[0].bins.len())
+                    .step_by(2)
+                    .map(|k| {
+                        let g =
+                            |m: &Measured| m.bins.get(k).map_or("—".to_string(), |b| f(b.0, 0));
+                        format!("{}/{}/{}", g(&c.runs[0]), g(&c.runs[1]), g(&c.runs[2]))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
         }
     }
     doc.push_str(&body);
     doc.push_str(EXPLANATIONS);
     if a.radio {
-        let _ = writeln!(doc, "\n## Radio: delivery versus distance against Veins, OpenCV2X/Artery and Molina-Masegosa\n");
+        let _ = writeln!(
+            doc,
+            "\n## Radio: delivery versus distance against Veins, OpenCV2X/Artery and Molina-Masegosa\n"
+        );
         doc.push_str(RADIO_INTRO);
         let rows = v2xw_interop::radio::run_all(a.quick);
         doc.push_str(&v2xw_interop::radio::markdown(&rows));

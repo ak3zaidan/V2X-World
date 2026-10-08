@@ -17,7 +17,9 @@ use v2xw_energy::state::DriveState;
 
 /// A cycle's speeds, m/s, one per second.
 fn cycle(name: &str) -> Vec<f64> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(name);
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data")
+        .join(name);
     let text = std::fs::read_to_string(&path).expect("cycle file");
     text.lines()
         .skip(2)
@@ -50,7 +52,9 @@ struct Result {
 
 fn drive(model: &str, p: Powertrain, cycle_name: &str) -> Result {
     let m = registry::emission_model(model).unwrap();
-    let class = m.resolve(&p).unwrap_or_else(|| panic!("{model} has no class for {p:?}"));
+    let class = m
+        .resolve(&p)
+        .unwrap_or_else(|| panic!("{model} has no class for {p:?}"));
     let mut r = Result {
         km: 0.0,
         co2_g: 0.0,
@@ -83,7 +87,11 @@ fn the_cycles_are_the_published_ones() {
     assert_eq!(udds.len(), 1370);
     assert_eq!(hwfet.len(), 766);
     assert!((km(&udds) - 7.45 * 1.609344).abs() < 0.05, "{}", km(&udds));
-    assert!((km(&hwfet) - 10.26 * 1.609344).abs() < 0.05, "{}", km(&hwfet));
+    assert!(
+        (km(&hwfet) - 10.26 * 1.609344).abs() < 0.05,
+        "{}",
+        km(&hwfet)
+    );
 }
 
 /// A petrol passenger car on the urban and highway cycles, under every combustion model.
@@ -117,7 +125,9 @@ fn every_combustion_model_lands_in_the_cited_band_on_udds_and_hwfet() {
             let g_km = r.co2_g / r.km;
             eprintln!("{model:32} {cyc:14} {l_100km:6.2} L/100km {g_km:6.1} gCO2/km");
             if !(lo..=hi).contains(&l_100km) {
-                out_of_band.push(format!("{model} on {cyc}: {l_100km} L/100 km outside [{lo}, {hi}]"));
+                out_of_band.push(format!(
+                    "{model} on {cyc}: {l_100km} L/100 km outside [{lo}, {hi}]"
+                ));
             }
             // Carbon balance: petrol releases 3.0-3.2 g CO2 per g burned (EPA 8,887 g per
             // US gallon at about 2.80 kg per gallon).
@@ -289,7 +299,10 @@ fn removing_one_signal_stop_saves_fuel_and_energy_under_every_model() {
                 / dist(prof)
         };
         let saving = 1.0 - e(&glosa) / e(&stop_go);
-        eprintln!("{model:32} GLOSA saves {:.1} % battery energy per km", saving * 100.0);
+        eprintln!(
+            "{model:32} GLOSA saves {:.1} % battery energy per km",
+            saving * 100.0
+        );
         assert!(saving > 0.0, "{model}: {saving}");
     }
 }

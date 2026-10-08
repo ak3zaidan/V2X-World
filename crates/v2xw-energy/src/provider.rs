@@ -629,7 +629,11 @@ pub fn defs() -> Vec<MetricDef> {
         ),
         class_sum("fuel_mass", "g", "Fuel burned in the window, by mass."),
         class_sum("nox_mass", "g", "NOx emitted in the window (as NO2 mass)."),
-        class_sum("pm_mass", "g", "Exhaust particulate matter emitted in the window."),
+        class_sum(
+            "pm_mass",
+            "g",
+            "Exhaust particulate matter emitted in the window.",
+        ),
         class_sum("co_mass", "g", "CO emitted in the window."),
         class_sum("hc_mass", "g", "Hydrocarbons emitted in the window."),
         class_sum(
@@ -670,17 +674,37 @@ pub fn defs() -> Vec<MetricDef> {
             "",
         ))
         .not_accounting_for("slowdowns that do not reach the stop speed"),
-        link_sum("link_co2_mass", "g", "Tailpipe CO2 emitted on each lane in the window."),
-        link_sum("link_fuel_mass", "g", "Fuel burned on each lane in the window."),
-        link_sum("link_nox_mass", "g", "NOx emitted on each lane in the window."),
-        link_sum("link_pm_mass", "g", "Exhaust PM emitted on each lane in the window."),
+        link_sum(
+            "link_co2_mass",
+            "g",
+            "Tailpipe CO2 emitted on each lane in the window.",
+        ),
+        link_sum(
+            "link_fuel_mass",
+            "g",
+            "Fuel burned on each lane in the window.",
+        ),
+        link_sum(
+            "link_nox_mass",
+            "g",
+            "NOx emitted on each lane in the window.",
+        ),
+        link_sum(
+            "link_pm_mass",
+            "g",
+            "Exhaust PM emitted on each lane in the window.",
+        ),
         link_sum(
             "link_ev_energy",
             "Wh",
             "Net electric-vehicle battery energy used on each lane in the window.",
         )
         .with_range(f64::NEG_INFINITY, f64::INFINITY),
-        link_sum("link_distance", "km", "Vehicle distance driven on each lane in the window."),
+        link_sum(
+            "link_distance",
+            "km",
+            "Vehicle distance driven on each lane in the window.",
+        ),
         class_ratio(
             "co2_per_km",
             "g/km",
@@ -838,15 +862,35 @@ impl MetricProvider for EnergyProvider {
         ];
         for (name, get) in per_window {
             let def = Self::def_named(name);
-            out.push(MetricSample::new(&def, at, Dims::new(), sum_value(get(&total), total.intervals)));
+            out.push(MetricSample::new(
+                &def,
+                at,
+                Dims::new(),
+                sum_value(get(&total), total.intervals),
+            ));
             for (class, t) in &window {
-                out.push(MetricSample::new(&def, at, class_dims(class), sum_value(get(t), t.intervals)));
+                out.push(MetricSample::new(
+                    &def,
+                    at,
+                    class_dims(class),
+                    sum_value(get(t), t.intervals),
+                ));
             }
         }
         let stops = Self::def_named("vehicle_stops");
-        out.push(MetricSample::new(&stops, at, Dims::new(), SampleValue::count(total.stops)));
+        out.push(MetricSample::new(
+            &stops,
+            at,
+            Dims::new(),
+            SampleValue::count(total.stops),
+        ));
         for (class, t) in &window {
-            out.push(MetricSample::new(&stops, at, class_dims(class), SampleValue::count(t.stops)));
+            out.push(MetricSample::new(
+                &stops,
+                at,
+                class_dims(class),
+                SampleValue::count(t.stops),
+            ));
         }
         // --- per window, by lane ---------------------------------------------------------
         let per_link: [(&str, fn(&Totals) -> f64); 6] = [
@@ -860,7 +904,12 @@ impl MetricProvider for EnergyProvider {
         for (name, get) in per_link {
             let def = Self::def_named(name);
             for (lane, t) in &links {
-                out.push(MetricSample::new(&def, at, lane_dims(*lane), sum_value(get(t), t.intervals)));
+                out.push(MetricSample::new(
+                    &def,
+                    at,
+                    lane_dims(*lane),
+                    sum_value(get(t), t.intervals),
+                ));
             }
         }
         // --- run so far, by class and in total -------------------------------------------
@@ -873,7 +922,9 @@ impl MetricProvider for EnergyProvider {
             ("co2_per_km", |t| (t.co2_g, t.km_ice + t.km_ev)),
             ("fuel_per_100km", |t| (t.fuel_l, t.km_ice / 100.0)),
             ("nox_per_km", |t| (t.nox_g, t.km_ice)),
-            ("ev_energy_per_100km", |t| (t.ev_net_wh() / 1000.0, t.km_ev / 100.0)),
+            ("ev_energy_per_100km", |t| {
+                (t.ev_net_wh() / 1000.0, t.km_ev / 100.0)
+            }),
             ("stops_per_km", |t| (t.stops as f64, t.km_all)),
         ];
         for (name, get) in ratios {
@@ -1026,8 +1077,18 @@ pub fn card(spec: &EnergySpec, emission_id: &str, ev_id: &str) -> ModelCard {
             "state of charge every EV starts with",
             "set from the study's charging assumption",
         ),
-        cite::param("gasoline_g_per_l", "g/L", GASOLINE_G_PER_L, cite::fuel_density()),
-        cite::param("diesel_g_per_l", "g/L", DIESEL_G_PER_L, cite::fuel_density()),
+        cite::param(
+            "gasoline_g_per_l",
+            "g/L",
+            GASOLINE_G_PER_L,
+            cite::fuel_density(),
+        ),
+        cite::param(
+            "diesel_g_per_l",
+            "g/L",
+            DIESEL_G_PER_L,
+            cite::fuel_density(),
+        ),
     ];
     card.assumptions = vec![
         format!("emission model {emission_id}; EV model {ev_id}"),
@@ -1089,9 +1150,12 @@ mod tests {
     }
 
     fn sample<'a>(s: &'a [MetricSample], key: &str) -> &'a MetricSample {
-        s.iter()
-            .find(|x| x.key() == key)
-            .unwrap_or_else(|| panic!("no {key}: {:?}", s.iter().map(MetricSample::key).collect::<Vec<_>>()))
+        s.iter().find(|x| x.key() == key).unwrap_or_else(|| {
+            panic!(
+                "no {key}: {:?}",
+                s.iter().map(MetricSample::key).collect::<Vec<_>>()
+            )
+        })
     }
 
     #[test]
@@ -1118,15 +1182,27 @@ mod tests {
         drive(&mut p, 2, "pedestrian", &[1.0, 1.0, 1.0]);
         let out = p.flush(60_000_000_000);
         let co2 = sample(&out, "co2_mass").value.point().unwrap();
-        let co2_car = sample(&out, "co2_mass|class=passenger").value.point().unwrap();
-        assert!(co2 > 0.0 && (co2 - co2_car).abs() < 1e-9, "only the car emits");
+        let co2_car = sample(&out, "co2_mass|class=passenger")
+            .value
+            .point()
+            .unwrap();
+        assert!(
+            co2 > 0.0 && (co2 - co2_car).abs() < 1e-9,
+            "only the car emits"
+        );
         let km = sample(&out, "vehicle_distance").value.point().unwrap();
         let want: f64 = prof.windows(2).map(|w| 0.5 * (w[0] + w[1])).sum::<f64>() / 1000.0;
         assert!((km - want).abs() < 1e-6, "{km} km, want {want}");
         let g_km = sample(&out, "co2_per_km").value.point().unwrap();
         assert!((100.0..400.0).contains(&g_km), "{g_km} g/km");
         assert_eq!(sample(&out, "vehicle_stops").value.point(), Some(1.0));
-        assert!(sample(&out, "link_co2_mass|region=7").value.point().unwrap() > 0.0);
+        assert!(
+            sample(&out, "link_co2_mass|region=7")
+                .value
+                .point()
+                .unwrap()
+                > 0.0
+        );
         assert_eq!(sample(&out, "energy_unmodelled").value.point(), Some(0.0));
         assert!(sample(&out, "ev_soc_min").value.is_insufficient(), "no EVs");
         // The window drains; the run-so-far ratio does not.
@@ -1137,7 +1213,10 @@ mod tests {
         // The operating-mode time adds up to the car's driving time, idle included.
         let secs: f64 = p.op_mode_seconds().values().sum();
         assert!((secs - (prof.len() - 1) as f64).abs() < 1e-9, "{secs}");
-        assert!(p.op_mode_seconds().contains_key(&(21, 7, 1)), "idle was seen");
+        assert!(
+            p.op_mode_seconds().contains_key(&(21, 7, 1)),
+            "idle was seen"
+        );
     }
 
     #[test]
@@ -1160,7 +1239,10 @@ mod tests {
         let soc = sample(&out, "ev_soc_min").value.point().unwrap();
         assert!(soc < 0.8 && soc > 0.79, "{soc}");
         let v = &p.vehicles()[0];
-        assert!(v.soc.unwrap() > soc - 1e-12, "regeneration lifted it from its minimum");
+        assert!(
+            v.soc.unwrap() > soc - 1e-12,
+            "regeneration lifted it from its minimum"
+        );
     }
 
     #[test]
@@ -1188,7 +1270,10 @@ mod tests {
         assert_eq!(sample(&out, "energy_unmodelled").value.point(), Some(0.0));
         let classes: Vec<Option<String>> =
             p.vehicles().into_iter().map(|v| v.emission_class).collect();
-        assert_eq!(classes, [Some("Bus".to_string()), Some("PC_G_EU4".to_string())]);
+        assert_eq!(
+            classes,
+            [Some("Bus".to_string()), Some("PC_G_EU4".to_string())]
+        );
         assert!(p.card().assumptions[0].contains("phemlight"));
     }
 

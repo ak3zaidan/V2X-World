@@ -136,7 +136,11 @@ impl EmissionModel for Hbefa3 {
         let a2 = s.a_mps2 + GRAVITY_MPS2 * s.sin_incline();
         let eval = |q: usize| -> f64 {
             let f = &row.c[q];
-            let mg_s = (f[0] + f[1] * a2 * v + f[2] * a2 * a2 * v + f[3] * v + f[4] * v * v
+            let mg_s = (f[0]
+                + f[1] * a2 * v
+                + f[2] * a2 * a2 * v
+                + f[3] * v
+                + f[4] * v * v
                 + f[5] * v * v * v)
                 / 3.6;
             mg_s.max(0.0) / 1000.0
@@ -178,7 +182,12 @@ pub fn card() -> ModelCard {
             "v in m/s; one coefficient row per class and quantity; the fuel row is fuel mass",
         ),
     ];
-    let mut coefficients = cite::param("coefficients", "mg/s per term", 0.0, cite::krajzewicz_2015());
+    let mut coefficients = cite::param(
+        "coefficients",
+        "mg/s per term",
+        0.0,
+        cite::krajzewicz_2015(),
+    );
     coefficients.default = serde_json::json!("45 classes x 6 quantities x 6 terms (table)");
     card.parameters = vec![coefficients];
     card.assumptions = vec![

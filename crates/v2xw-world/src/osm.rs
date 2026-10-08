@@ -2403,7 +2403,10 @@ impl HighwayPreset {
             HighwayPreset::UrbanUsPortland => URBAN_US_PORTLAND_TABLE.to_vec(),
             HighwayPreset::UrbanDe => URBAN_DE_TABLE.to_vec(),
             us => match us.us_jurisdiction() {
-                Some(j) => URBAN_US_NYC_TABLE.iter().map(|row| us_state_row(*row, j)).collect(),
+                Some(j) => URBAN_US_NYC_TABLE
+                    .iter()
+                    .map(|row| us_state_row(*row, j))
+                    .collect(),
                 None => Vec::new(),
             },
         }
@@ -2414,14 +2417,20 @@ impl HighwayPreset {
     fn row(self, value: &str) -> Option<HighwayDefault> {
         match self {
             HighwayPreset::SumoGerman => SUMO_GERMAN_TABLE.iter().find(|d| d.key == value).copied(),
-            HighwayPreset::UrbanUsNyc => URBAN_US_NYC_TABLE.iter().find(|d| d.key == value).copied(),
-            HighwayPreset::UrbanUsPortland => {
-                URBAN_US_PORTLAND_TABLE.iter().find(|d| d.key == value).copied()
+            HighwayPreset::UrbanUsNyc => {
+                URBAN_US_NYC_TABLE.iter().find(|d| d.key == value).copied()
             }
+            HighwayPreset::UrbanUsPortland => URBAN_US_PORTLAND_TABLE
+                .iter()
+                .find(|d| d.key == value)
+                .copied(),
             HighwayPreset::UrbanDe => URBAN_DE_TABLE.iter().find(|d| d.key == value).copied(),
             us => {
                 let j = us.us_jurisdiction()?;
-                URBAN_US_NYC_TABLE.iter().find(|d| d.key == value).map(|row| us_state_row(*row, j))
+                URBAN_US_NYC_TABLE
+                    .iter()
+                    .find(|d| d.key == value)
+                    .map(|row| us_state_row(*row, j))
             }
         }
     }
@@ -2445,7 +2454,10 @@ impl HighwayPreset {
 /// A row of the `urban-us-nyc` table restated for a US jurisdiction: its urban default in
 /// place of New York City's 25 mph, 55 mph on an untagged motorway, and the walking and
 /// cycling rows unchanged.
-fn us_state_row(row: HighwayDefault, data: &crate::jurisdiction::UsJurisdictionData) -> HighwayDefault {
+fn us_state_row(
+    row: HighwayDefault,
+    data: &crate::jurisdiction::UsJurisdictionData,
+) -> HighwayDefault {
     if row.speed_source == NY_55 {
         HighwayDefault {
             speed_mps: 55.0 * crate::jurisdiction::MPH,

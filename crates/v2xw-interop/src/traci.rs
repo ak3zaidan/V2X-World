@@ -453,7 +453,10 @@ impl Traci {
     ///
     /// # Errors
     /// A broken socket or reply.
-    pub fn set_batch(&mut self, sets: &[(u8, u8, String, Content)]) -> TResult<Vec<Result<(), String>>> {
+    pub fn set_batch(
+        &mut self,
+        sets: &[(u8, u8, String, Content)],
+    ) -> TResult<Vec<Result<(), String>>> {
         if sets.is_empty() {
             return Ok(Vec::new());
         }

@@ -10,7 +10,11 @@ use v2xw_record::profile::{NodeProfileStripper, Profile};
 use v2xw_record::wire::snapshot::{DeltaBody, KeyframeBody};
 
 fn parked(slot: u32, lamps: u8) -> ActorPose {
-    let mut p = ActorPose::new(slot, ActorId::new(slot), [10.0 + f64::from(slot) * 8.0, 5.0, 0.0]);
+    let mut p = ActorPose::new(
+        slot,
+        ActorId::new(slot),
+        [10.0 + f64::from(slot) * 8.0, 5.0, 0.0],
+    );
     p.lamps = lamps;
     p
 }
@@ -28,7 +32,10 @@ fn a_lamp_change_alone_is_a_moved_row_and_round_trips() {
 
     // Step 1: nothing moves; slot 1 puts its left indicator on.
     let d = enc
-        .encode(&Snapshot::new(100_000_000, vec![parked(0, 0x01), parked(1, 0x02)]))
+        .encode(&Snapshot::new(
+            100_000_000,
+            vec![parked(0, 0x01), parked(1, 0x02)],
+        ))
         .expect("delta");
     let body = DeltaBody::decode(d.frame().body()).expect("delta body");
     assert_eq!(body.moved.len(), 1, "only the slot whose lamps changed");
@@ -38,9 +45,17 @@ fn a_lamp_change_alone_is_a_moved_row_and_round_trips() {
 
     // Step 2: nothing changes at all: no row.
     let d = enc
-        .encode(&Snapshot::new(200_000_000, vec![parked(0, 0x01), parked(1, 0x02)]))
+        .encode(&Snapshot::new(
+            200_000_000,
+            vec![parked(0, 0x01), parked(1, 0x02)],
+        ))
         .expect("delta");
-    assert!(DeltaBody::decode(d.frame().body()).expect("body").moved.is_empty());
+    assert!(
+        DeltaBody::decode(d.frame().body())
+            .expect("body")
+            .moved
+            .is_empty()
+    );
 
     // Step 3: a spawn carries its lamps.
     let d = enc
@@ -61,7 +76,9 @@ fn a_lamp_change_alone_is_a_moved_row_and_round_trips() {
 fn the_node_profile_keeps_the_lamps_because_they_are_public() {
     let mut enc = SnapshotEncoder::new([0.0, 0.0, 0.0], Cadence::DEFAULT, Profile::Full, 0);
     let mut strip = NodeProfileStripper::new();
-    let kf = enc.encode(&Snapshot::new(0, vec![parked(0, 0)])).expect("keyframe");
+    let kf = enc
+        .encode(&Snapshot::new(0, vec![parked(0, 0)]))
+        .expect("keyframe");
     strip.strip(kf.frame()).expect("strip");
     let d = enc
         .encode(&Snapshot::new(100_000_000, vec![parked(0, 0x04)]))

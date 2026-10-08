@@ -229,7 +229,9 @@ impl CoopLink {
     }
 
     fn read(&self) -> std::sync::RwLockReadGuard<'_, CoopState> {
-        self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn write(&self) -> std::sync::RwLockWriteGuard<'_, CoopState> {
@@ -248,7 +250,13 @@ impl CoopLink {
     /// A record whose message carried no acceleration is given one differentiated from the
     /// previous record of the same sender, when that one is older and recent enough
     /// (within [`CoopParams::retain_s`]).
-    pub fn record(&self, receiver: ActorId, sender: ActorId, mut rec: CoopRecord, predecessor: bool) {
+    pub fn record(
+        &self,
+        receiver: ActorId,
+        sender: ActorId,
+        mut rec: CoopRecord,
+        predecessor: bool,
+    ) {
         let mut st = self.write();
         st.stats.associated += 1;
         if predecessor {
@@ -365,9 +373,17 @@ mod tests {
     fn the_platoon_head_is_the_end_of_the_predecessor_chain() {
         let link = CoopLink::new(CoopParams::default(), vec![]);
         for i in 1..4u32 {
-            link.record(ActorId::new(i + 1), ActorId::new(i), rec(10, 20.0, Some(0.0)), true);
+            link.record(
+                ActorId::new(i + 1),
+                ActorId::new(i),
+                rec(10, 20.0, Some(0.0)),
+                true,
+            );
         }
-        assert_eq!(link.platoon_head(ActorId::new(4), 16), Some(ActorId::new(1)));
+        assert_eq!(
+            link.platoon_head(ActorId::new(4), 16),
+            Some(ActorId::new(1))
+        );
         link.prune(10_000_000_000);
         assert_eq!(link.platoon_head(ActorId::new(4), 16), None);
     }

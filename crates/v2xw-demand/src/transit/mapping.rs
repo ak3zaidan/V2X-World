@@ -106,7 +106,8 @@ fn candidates(world: &World, graph: &LaneGraph, p: Vec3, mp: &MatchParams) -> Ve
         let lane = world.lane(graph.lane(n));
         // A cheap reject before projecting: the lane's end points both far away.
         let (a, b) = (lane.start(), lane.end());
-        let far = |q: Vec3| ((q.x - p.x).abs() - lane.length_m).max((q.y - p.y).abs() - lane.length_m);
+        let far =
+            |q: Vec3| ((q.x - p.x).abs() - lane.length_m).max((q.y - p.y).abs() - lane.length_m);
         if far(a) > mp.radius_m && far(b) > mp.radius_m {
             continue;
         }
@@ -126,8 +127,16 @@ fn candidates(world: &World, graph: &LaneGraph, p: Vec3, mp: &MatchParams) -> Ve
 
 /// Matches a pattern's stop points (world metres) to lanes (see the module docs).
 /// `None` when no two consecutive stops could be joined.
-pub fn match_pattern(world: &World, graph: &LaneGraph, points: &[Vec3], mp: &MatchParams) -> Option<Matched> {
-    let cands: Vec<Vec<Cand>> = points.iter().map(|p| candidates(world, graph, *p, mp)).collect();
+pub fn match_pattern(
+    world: &World,
+    graph: &LaneGraph,
+    points: &[Vec3],
+    mp: &MatchParams,
+) -> Option<Matched> {
+    let cands: Vec<Vec<Cand>> = points
+        .iter()
+        .map(|p| candidates(world, graph, *p, mp))
+        .collect();
     let mut search = Search::new(graph);
     let len = Length(graph);
     // Viterbi with segment restarts.
@@ -156,7 +165,8 @@ pub fn match_pattern(world: &World, graph: &LaneGraph, points: &[Vec3], mp: &Mat
             let to = &cands[j];
             let mut next = vec![f64::NEG_INFINITY; to.len()];
             let mut bp = vec![0usize; to.len()];
-            let mut step_paths: Vec<Vec<Option<Vec<Node>>>> = vec![vec![None; to.len()]; from.len()];
+            let mut step_paths: Vec<Vec<Option<Vec<Node>>>> =
+                vec![vec![None; to.len()]; from.len()];
             let targets: Vec<Node> = to.iter().map(|c| c.node).collect();
             for (a, ca) in from.iter().enumerate() {
                 if score[a] == f64::NEG_INFINITY {
@@ -174,7 +184,10 @@ pub fn match_pattern(world: &World, graph: &LaneGraph, points: &[Vec3], mp: &Mat
                         match (search.cost_to(cb.node), search.path_to(cb.node)) {
                             (Some(c), Some(p)) => {
                                 let between = c - graph.length_m(ca.node) - graph.length_m(cb.node);
-                                ((graph.length_m(ca.node) - ca.s_m) + between + cb.s_m, Some(p))
+                                (
+                                    (graph.length_m(ca.node) - ca.s_m) + between + cb.s_m,
+                                    Some(p),
+                                )
                             }
                             _ => (0.0, None),
                         }
@@ -218,7 +231,9 @@ pub fn match_pattern(world: &World, graph: &LaneGraph, points: &[Vec3], mp: &Mat
                 if k == 0 {
                     route.push(cand.node);
                 } else {
-                    let p = paths[k - 1][chosen[k - 1]][chosen[k]].as_ref().expect("on the best path");
+                    let p = paths[k - 1][chosen[k - 1]][chosen[k]]
+                        .as_ref()
+                        .expect("on the best path");
                     route.extend_from_slice(&p[1..]);
                 }
                 stops.push(Placed {
@@ -228,7 +243,9 @@ pub fn match_pattern(world: &World, graph: &LaneGraph, points: &[Vec3], mp: &Mat
                     route_index: route.len() - 1,
                 });
             }
-            let better = best_segment.as_ref().is_none_or(|b| stops.len() > b.stops.len());
+            let better = best_segment
+                .as_ref()
+                .is_none_or(|b| stops.len() > b.stops.len());
             if better {
                 best_segment = Some(Matched { stops, route });
             }

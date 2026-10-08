@@ -84,9 +84,7 @@ const LOOK_LANES: usize = 5;
 const PASS_ROOM_M: f64 = 10.0;
 
 /// What a vehicle stops at the kerb for.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum KerbRole {
     /// A bus serving its stops.
@@ -188,7 +186,10 @@ impl KerbsideParams {
     pub fn bus_dwell_lognormal(&self) -> (f64, f64) {
         let cv = self.bus_dwell_cv.max(0.0);
         let s2 = math::ln(1.0 + cv * cv);
-        (math::ln(self.bus_dwell_mean_s.max(1.0)) - 0.5 * s2, math::sqrt(s2))
+        (
+            math::ln(self.bus_dwell_mean_s.max(1.0)) - 0.5 * s2,
+            math::sqrt(s2),
+        )
     }
 
     /// The role a vehicle of `class` may take, before any share is drawn.
@@ -259,7 +260,10 @@ impl KerbState {
         let Some(role) = KerbsideParams::candidate_role(class).filter(|_| params.enabled) else {
             return KerbState::NONE;
         };
-        let mut rng = ctx.rng(RngDomain::plugin(MODEL_ID), EntityRef::custom(MODEL_ID, seq));
+        let mut rng = ctx.rng(
+            RngDomain::plugin(MODEL_ID),
+            EntityRef::custom(MODEL_ID, seq),
+        );
         // Two draws whatever the role, so a role's draws do not depend on another's.
         let take = rng.uniform(0.0, 1.0);
         let where_ = rng.uniform(0.0, 1.0);
@@ -422,7 +426,8 @@ impl KerbState {
                             RngDomain::plugin(MODEL_ID),
                             EntityRef::custom(
                                 DWELL_ID,
-                                seq.wrapping_mul(256).wrapping_add(u64::from(self.stops_made)),
+                                seq.wrapping_mul(256)
+                                    .wrapping_add(u64::from(self.stops_made)),
                             ),
                         );
                         let dwell_s = match role {
@@ -522,7 +527,9 @@ pub fn plan_stop(
         offset += world.try_lane(*l).map_or(0.0, |x| x.length_m);
     }
     for (id, start) in lanes {
-        let Some(l) = world.try_lane(id) else { continue };
+        let Some(l) = world.try_lane(id) else {
+            continue;
+        };
         if l.kind == LaneKind::Internal || !is_kerb_lane(world, id) {
             continue;
         }
@@ -531,8 +538,7 @@ pub fn plan_stop(
         // zone, so the stop ends at least that zone and the margin, less the vehicle's
         // own length, before the lane does.
         let lo = (length_m + 3.0 + PASS_ROOM_M).max(braking - start);
-        let hi = l.length_m - (no_change_zone_m.max(0.0) + params.end_margin_m.max(0.0))
-            + length_m;
+        let hi = l.length_m - (no_change_zone_m.max(0.0) + params.end_margin_m.max(0.0)) + length_m;
         if lo <= hi {
             return Some((id, lo));
         }
@@ -566,8 +572,14 @@ mod tests {
             KerbsideParams::for_highway_preset(Some("urban-us-portland")).taxi_share,
             0.0
         );
-        assert_eq!(KerbsideParams::candidate_role(VehicleClass::Bus), Some(KerbRole::Bus));
-        assert_eq!(KerbsideParams::candidate_role(VehicleClass::Motorcycle), None);
+        assert_eq!(
+            KerbsideParams::candidate_role(VehicleClass::Bus),
+            Some(KerbRole::Bus)
+        );
+        assert_eq!(
+            KerbsideParams::candidate_role(VehicleClass::Motorcycle),
+            None
+        );
     }
 
     #[test]

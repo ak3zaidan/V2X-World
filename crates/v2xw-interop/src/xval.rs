@@ -41,7 +41,9 @@ use v2xw_mobility::ctx::MobCtx;
 use v2xw_mobility::routing::dijkstra::DijkstraParams;
 use v2xw_mobility::traits::{Demand, Mobility};
 use v2xw_mobility::views::{DespawnCause, MobilityUpdate, TripRequest};
-use v2xw_mobility::{Dijkstra, EngineParams, FreeFlowCost, MobilityCtx, NativeMobility, VehicleClass};
+use v2xw_mobility::{
+    Dijkstra, EngineParams, FreeFlowCost, MobilityCtx, NativeMobility, VehicleClass,
+};
 use v2xw_world::World;
 use v2xw_world::sumo::{SumoImportReport, SumoOptions, import_sumo_net};
 
@@ -59,7 +61,11 @@ pub struct ListDemand {
 impl ListDemand {
     /// The demand for `trips` (sorted by time) and their routes.
     pub fn new(trips: Vec<(TripRequest, Vec<LaneId>)>) -> Self {
-        let by_seq = trips.iter().enumerate().map(|(i, (t, _))| (t.seq, i)).collect();
+        let by_seq = trips
+            .iter()
+            .enumerate()
+            .map(|(i, (t, _))| (t.seq, i))
+            .collect();
         Self {
             card: ModelCard::new(
                 "mobility/demand/fixed-list",
@@ -81,7 +87,12 @@ impl Model for ListDemand {
 }
 
 impl Demand for ListDemand {
-    fn spawns_in(&mut self, _ctx: &mut dyn MobCtx, _from: SimTime, to: SimTime) -> Vec<TripRequest> {
+    fn spawns_in(
+        &mut self,
+        _ctx: &mut dyn MobCtx,
+        _from: SimTime,
+        to: SimTime,
+    ) -> Vec<TripRequest> {
         let mut out = Vec::new();
         while let Some((t, _)) = self.trips.get(self.cursor) {
             if t.t >= to {
@@ -115,7 +126,13 @@ impl SplitMix {
 }
 
 /// Draws and routes trips: exponential headways at `rate_vph` for `demand_s` seconds.
-pub fn make_trips(world: &World, ids: &SumoIds, rate_vph: f64, demand_s: f64, seed: u64) -> Vec<(TripRequest, Vec<LaneId>)> {
+pub fn make_trips(
+    world: &World,
+    ids: &SumoIds,
+    rate_vph: f64,
+    demand_s: f64,
+    seed: u64,
+) -> Vec<(TripRequest, Vec<LaneId>)> {
     let class = VehicleClass::Passenger;
     let mask = class.class_mask();
     let edges: Vec<LaneId> = ids
@@ -261,8 +278,21 @@ pub struct Observer<'a> {
 
 impl<'a> Observer<'a> {
     /// An observer over `[window.0, window.1)` seconds.
-    pub fn new(world: &'a World, ids: &'a SumoIds, trips: &[(TripRequest, Vec<LaneId>)], window: (f64, f64), label: &str) -> Self {
-        let lane_km = world.roads.lanes().iter().filter(|l| l.kind.is_motorised()).map(|l| l.length_m).sum::<f64>() / 1000.0;
+    pub fn new(
+        world: &'a World,
+        ids: &'a SumoIds,
+        trips: &[(TripRequest, Vec<LaneId>)],
+        window: (f64, f64),
+        label: &str,
+    ) -> Self {
+        let lane_km = world
+            .roads
+            .lanes()
+            .iter()
+            .filter(|l| l.kind.is_motorised())
+            .map(|l| l.length_m)
+            .sum::<f64>()
+            / 1000.0;
         Self {
             world,
             ids,
@@ -273,7 +303,10 @@ impl<'a> Observer<'a> {
                 lane_km,
                 ..Measured::default()
             },
-            requested: trips.iter().map(|(t, _)| (t.seq, t.t as f64 / 1e9)).collect(),
+            requested: trips
+                .iter()
+                .map(|(t, _)| (t.seq, t.t as f64 / 1e9))
+                .collect(),
             spawn: BTreeMap::new(),
             last_edge: BTreeMap::new(),
             window,
@@ -312,7 +345,10 @@ impl<'a> Observer<'a> {
                 halting += 1;
                 self.wait_total += dt_s;
             }
-            let edge = k.lane.map(|l| self.world.lane(l.lane).edge).filter(|e| self.ids.edge_id.contains_key(e));
+            let edge = k
+                .lane
+                .map(|l| self.world.lane(l.lane).edge)
+                .filter(|e| self.ids.edge_id.contains_key(e));
             if let Some(e) = edge {
                 if self.last_edge.get(a) != Some(&e) {
                     self.last_edge.insert(*a, e);
@@ -380,8 +416,16 @@ fn run_tool(cmd: &mut Command) -> Result<String, String> {
         cmd.env("SUMO_HOME", home);
     }
     let o = cmd.output().map_err(|e| format!("{cmd:?}: {e}"))?;
-    let log = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
-    if o.status.success() { Ok(log) } else { Err(format!("{cmd:?} failed: {log}")) }
+    let log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+    if o.status.success() {
+        Ok(log)
+    } else {
+        Err(format!("{cmd:?} failed: {log}"))
+    }
 }
 
 fn import(name: &str, net: PathBuf, provenance: String) -> Result<Study, String> {
@@ -390,9 +434,17 @@ fn import(name: &str, net: PathBuf, provenance: String) -> Result<Study, String>
         ..SumoOptions::default()
     }
     .imported_at("1970-01-01T00:00:00Z");
-    let (world, report) = import_sumo_net(&net, &opts).map_err(|e| format!("import {}: {e}", net.display()))?;
+    let (world, report) =
+        import_sumo_net(&net, &opts).map_err(|e| format!("import {}: {e}", net.display()))?;
     let ids = SumoIds::new(&world);
-    Ok(Study { name: name.to_string(), world, net, import: report, ids, provenance })
+    Ok(Study {
+        name: name.to_string(),
+        world,
+        net,
+        import: report,
+        ids,
+        provenance,
+    })
 }
 
 /// A 5 × 5 signalised grid, 200 m blocks, 2 lanes per direction, 50 km/h.
@@ -403,11 +455,28 @@ pub fn grid_study(home: &Path, dir: &Path) -> Result<Study, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let net = dir.join("grid.net.xml");
     let args = [
-        "--grid", "--grid.number", "5", "--grid.length", "200", "--default.lanenumber", "2",
-        "--default.speed", "13.89", "--default-junction-type", "traffic_light",
-        "--no-turnarounds", "true", "--seed", "1",
+        "--grid",
+        "--grid.number",
+        "5",
+        "--grid.length",
+        "200",
+        "--default.lanenumber",
+        "2",
+        "--default.speed",
+        "13.89",
+        "--default-junction-type",
+        "traffic_light",
+        "--no-turnarounds",
+        "true",
+        "--seed",
+        "1",
     ];
-    run_tool(Command::new(crate::sumo_tool(home, "netgenerate")).args(args).arg("-o").arg(&net))?;
+    run_tool(
+        Command::new(crate::sumo_tool(home, "netgenerate"))
+            .args(args)
+            .arg("-o")
+            .arg(&net),
+    )?;
     import("grid", net, format!("netgenerate {}", args.join(" ")))
 }
 
@@ -416,15 +485,34 @@ pub fn grid_study(home: &Path, dir: &Path) -> Result<Study, String> {
 ///
 /// # Errors
 /// netconvert or the import failing.
-pub fn manhattan_study(home: &Path, osm: &Path, dir: &Path, bbox: [f64; 4]) -> Result<Study, String> {
+pub fn manhattan_study(
+    home: &Path,
+    osm: &Path,
+    dir: &Path,
+    bbox: [f64; 4],
+) -> Result<Study, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let net = dir.join("manhattan.net.xml");
     let b = format!("{},{},{},{}", bbox[0], bbox[1], bbox[2], bbox[3]);
     let args = [
-        "--keep-edges.in-geo-boundary", &b, "--keep-edges.by-vclass", "passenger",
-        "--remove-edges.isolated", "true", "--geometry.remove", "true", "--junctions.join", "true",
-        "--tls.guess-signals", "true", "--tls.join", "true", "--no-turnarounds", "true",
-        "--ramps.guess", "false",
+        "--keep-edges.in-geo-boundary",
+        &b,
+        "--keep-edges.by-vclass",
+        "passenger",
+        "--remove-edges.isolated",
+        "true",
+        "--geometry.remove",
+        "true",
+        "--junctions.join",
+        "true",
+        "--tls.guess-signals",
+        "true",
+        "--tls.join",
+        "true",
+        "--no-turnarounds",
+        "true",
+        "--ramps.guess",
+        "false",
     ];
     run_tool(
         Command::new(crate::sumo_tool(home, "netconvert"))
@@ -434,7 +522,14 @@ pub fn manhattan_study(home: &Path, osm: &Path, dir: &Path, bbox: [f64; 4]) -> R
             .arg("-o")
             .arg(&net),
     )?;
-    import("manhattan", net, format!("netconvert --osm-files manhattan.osm.xml {}", args.join(" ")))
+    import(
+        "manhattan",
+        net,
+        format!(
+            "netconvert --osm-files manhattan.osm.xml {}",
+            args.join(" ")
+        ),
+    )
 }
 
 /// The run's timing.
@@ -451,12 +546,26 @@ pub struct Timing {
 }
 
 /// Runs this engine's native mobility on the trips.
-pub fn run_native(study: &Study, trips: &[(TripRequest, Vec<LaneId>)], timing: Timing, seed: u64) -> Measured {
+pub fn run_native(
+    study: &Study,
+    trips: &[(TripRequest, Vec<LaneId>)],
+    timing: Timing,
+    seed: u64,
+) -> Measured {
     let started = std::time::Instant::now();
     let world = &study.world;
     let rng = RngRegistry::new(seed);
-    let mut engine = NativeMobility::new(EngineParams { step: timing.step, ..EngineParams::default() });
-    let mut obs = Observer::new(world, &study.ids, trips, (timing.warm_s, timing.demand_s), "this engine (native)");
+    let mut engine = NativeMobility::new(EngineParams {
+        step: timing.step,
+        ..EngineParams::default()
+    });
+    let mut obs = Observer::new(
+        world,
+        &study.ids,
+        trips,
+        (timing.warm_s, timing.demand_s),
+        "this engine (native)",
+    );
     {
         let mut ctx = MobilityCtx::new(0, world, &rng);
         if let Err(e) = engine.init(&mut ctx, Box::new(ListDemand::new(trips.to_vec()))) {
@@ -476,14 +585,25 @@ pub fn run_native(study: &Study, trips: &[(TripRequest, Vec<LaneId>)], timing: T
     }
     let mut m = obs.finish();
     if engine.dropped_trips() > 0 {
-        m.error = Some(format!("{} trips dropped by the engine", engine.dropped_trips()));
+        m.error = Some(format!(
+            "{} trips dropped by the engine",
+            engine.dropped_trips()
+        ));
     }
     m.wall_s = started.elapsed().as_secs_f64();
     m
 }
 
 /// Runs SUMO over TraCI on the same trips and routes.
-pub fn run_sumo(study: &Study, home: &Path, trips: &[(TripRequest, Vec<LaneId>)], timing: Timing, seed: u64, label: &str, extra: &[&str]) -> (Measured, Option<String>) {
+pub fn run_sumo(
+    study: &Study,
+    home: &Path,
+    trips: &[(TripRequest, Vec<LaneId>)],
+    timing: Timing,
+    seed: u64,
+    label: &str,
+    extra: &[&str],
+) -> (Measured, Option<String>) {
     let started = std::time::Instant::now();
     let world = &study.world;
     let rng = RngRegistry::new(seed);
@@ -492,7 +612,13 @@ pub fn run_sumo(study: &Study, home: &Path, trips: &[(TripRequest, Vec<LaneId>)]
     cfg.seed = seed;
     cfg.extra_args = extra.iter().map(|s| (*s).to_string()).collect();
     let mut sumo = SumoMobility::new(cfg, study.ids.clone());
-    let mut obs = Observer::new(world, &study.ids, trips, (timing.warm_s, timing.demand_s), label);
+    let mut obs = Observer::new(
+        world,
+        &study.ids,
+        trips,
+        (timing.warm_s, timing.demand_s),
+        label,
+    );
     {
         let mut ctx = MobilityCtx::new(0, world, &rng);
         let _ = sumo.init(&mut ctx, Box::new(ListDemand::new(trips.to_vec())));
@@ -520,14 +646,24 @@ pub fn run_sumo(study: &Study, home: &Path, trips: &[(TripRequest, Vec<LaneId>)]
 
 /// GEH between two hourly counts.
 pub fn geh(m: f64, c: f64) -> f64 {
-    if m + c <= 0.0 { 0.0 } else { (2.0 * (m - c).powi(2) / (m + c)).sqrt() }
+    if m + c <= 0.0 {
+        0.0
+    } else {
+        (2.0 * (m - c).powi(2) / (m + c)).sqrt()
+    }
 }
 
 /// Per-edge comparison of `a` against `b`: (share of edges with GEH < 5, edges compared,
 /// Pearson r of edge mean speeds, mean |Δ speed| km/h).
 pub fn edge_agreement(a: &Measured, b: &Measured) -> (f64, usize, f64, f64) {
     let hours = a.window_s / 3600.0;
-    let edges: Vec<&EdgeId> = a.edge_entries.keys().chain(b.edge_entries.keys()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    let edges: Vec<&EdgeId> = a
+        .edge_entries
+        .keys()
+        .chain(b.edge_entries.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
     let mut ok = 0;
     for e in &edges {
         let m = *a.edge_entries.get(e).unwrap_or(&0) as f64 / hours;
@@ -545,13 +681,25 @@ pub fn edge_agreement(a: &Measured, b: &Measured) -> (f64, usize, f64, f64) {
         })
         .collect();
     let n = pairs.len() as f64;
-    let (mx, my) = (pairs.iter().map(|p| p.0).sum::<f64>() / n, pairs.iter().map(|p| p.1).sum::<f64>() / n);
+    let (mx, my) = (
+        pairs.iter().map(|p| p.0).sum::<f64>() / n,
+        pairs.iter().map(|p| p.1).sum::<f64>() / n,
+    );
     let cov: f64 = pairs.iter().map(|p| (p.0 - mx) * (p.1 - my)).sum();
     let vx: f64 = pairs.iter().map(|p| (p.0 - mx).powi(2)).sum();
     let vy: f64 = pairs.iter().map(|p| (p.1 - my).powi(2)).sum();
     let r = cov / (vx * vy).sqrt();
     let mad = pairs.iter().map(|p| (p.0 - p.1).abs()).sum::<f64>() / n;
-    (if edges.is_empty() { f64::NAN } else { ok as f64 / edges.len() as f64 }, edges.len(), r, mad)
+    (
+        if edges.is_empty() {
+            f64::NAN
+        } else {
+            ok as f64 / edges.len() as f64
+        },
+        edges.len(),
+        r,
+        mad,
+    )
 }
 
 /// Paired travel-time comparison: (trips completed by both, mean ratio a/b, median ratio).
@@ -598,15 +746,48 @@ pub fn export_round_trip(home: &Path, dir: &Path) -> Result<RoundTrip, String> {
     )
     .map_err(|e| e.to_string())?;
     let ids = SumoIds::new(&world);
-    let (net, _log) = crate::netexport::export_net(&world, &ids, &crate::sumo_tool(home, "netconvert"), dir, "procedural-grid")?;
+    let (net, _log) = crate::netexport::export_net(
+        &world,
+        &ids,
+        &crate::sumo_tool(home, "netconvert"),
+        dir,
+        "procedural-grid",
+    )?;
     let back = import("roundtrip", net, String::new())?;
     let stats = |w: &World| {
-        let normal: Vec<_> = w.roads.lanes().iter().filter(|l| l.junction.is_none() && l.kind.is_motorised()).collect();
-        let sig = w.roads.junctions().iter().filter(|j| matches!(j.control, v2xw_world::model::JunctionControl::Signalised { .. })).count();
+        let normal: Vec<_> = w
+            .roads
+            .lanes()
+            .iter()
+            .filter(|l| l.junction.is_none() && l.kind.is_motorised())
+            .collect();
+        let sig = w
+            .roads
+            .junctions()
+            .iter()
+            .filter(|j| {
+                matches!(
+                    j.control,
+                    v2xw_world::model::JunctionControl::Signalised { .. }
+                )
+            })
+            .count();
         let edges = SumoIds::new(w).edge_id.len();
-        (normal.len(), normal.iter().map(|l| l.length_m).sum::<f64>() / 1000.0, sig, edges)
+        (
+            normal.len(),
+            normal.iter().map(|l| l.length_m).sum::<f64>() / 1000.0,
+            sig,
+            edges,
+        )
     };
     let a = stats(&world);
     let b = stats(&back.world);
-    Ok(RoundTrip { lanes_before: a.0, lanes_after: b.0, km_before: a.1, km_after: b.1, signals: (a.2, b.2), edges: (a.3, b.3) })
+    Ok(RoundTrip {
+        lanes_before: a.0,
+        lanes_after: b.0,
+        km_before: a.1,
+        km_after: b.1,
+        signals: (a.2, b.2),
+        edges: (a.3, b.3),
+    })
 }

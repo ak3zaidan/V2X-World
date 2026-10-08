@@ -38,9 +38,10 @@ pub fn export(scenario: &Path, out: &Path) -> Result<ExportOutcome> {
     let s = v2xw_engine::scenario::Scenario::load(scenario)?;
     let world = v2xw_engine::wiring::build_world(&s)?;
     let ids = v2xw_interop::SumoIds::new(&world);
-    let stem = scenario
-        .file_stem()
-        .map_or_else(|| "scenario".to_string(), |s| s.to_string_lossy().into_owned());
+    let stem = scenario.file_stem().map_or_else(
+        || "scenario".to_string(),
+        |s| s.to_string_lossy().into_owned(),
+    );
     let io = |what: &'static str, p: &Path, e: std::io::Error| CliError::Io {
         what,
         path: p.display().to_string(),
@@ -49,26 +50,31 @@ pub fn export(scenario: &Path, out: &Path) -> Result<ExportOutcome> {
     std::fs::create_dir_all(out).map_err(|e| io("cannot create", out, e))?;
     let px = v2xw_interop::netexport::to_plain_xml(&world, &ids);
     let mut files = Vec::new();
-    for (ext, body) in [("nod.xml", &px.nodes), ("edg.xml", &px.edges), ("con.xml", &px.connections)] {
+    for (ext, body) in [
+        ("nod.xml", &px.nodes),
+        ("edg.xml", &px.edges),
+        ("con.xml", &px.connections),
+    ] {
         let p = out.join(format!("{stem}.{ext}"));
         std::fs::write(&p, body).map_err(|e| io("cannot write", &p, e))?;
         files.push(p.display().to_string());
     }
-    let netconvert = v2xw_interop::sumo_home().map(|home| {
-        match v2xw_interop::netexport::export_net(
-            &world,
-            &ids,
-            &v2xw_interop::sumo_tool(&home, "netconvert"),
-            out,
-            &stem,
-        ) {
-            Ok((p, _)) => {
-                files.push(p.display().to_string());
-                "ok".to_string()
+    let netconvert =
+        v2xw_interop::sumo_home().map(|home| {
+            match v2xw_interop::netexport::export_net(
+                &world,
+                &ids,
+                &v2xw_interop::sumo_tool(&home, "netconvert"),
+                out,
+                &stem,
+            ) {
+                Ok((p, _)) => {
+                    files.push(p.display().to_string());
+                    "ok".to_string()
+                }
+                Err(e) => e,
             }
-            Err(e) => e,
-        }
-    });
+        });
 
     let mut demand = v2xw_engine::wiring::build_demand(&s, &world)?;
     let rng = RngRegistry::new(s.seed);
@@ -94,8 +100,11 @@ pub fn export(scenario: &Path, out: &Path) -> Result<ExportOutcome> {
         t = t1;
     }
     let rou = out.join(format!("{stem}.rou.xml"));
-    std::fs::write(&rou, v2xw_interop::routes::write_rou_xml(&trips, &ids, &world))
-        .map_err(|e| io("cannot write", &rou, e))?;
+    std::fs::write(
+        &rou,
+        v2xw_interop::routes::write_rou_xml(&trips, &ids, &world),
+    )
+    .map_err(|e| io("cannot write", &rou, e))?;
     files.push(rou.display().to_string());
     Ok(ExportOutcome {
         files,

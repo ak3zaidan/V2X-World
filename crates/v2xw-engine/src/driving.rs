@@ -6,8 +6,8 @@
 //! cannot build (at validation, so the page hears about a bad name at Apply), and leaves
 //! a scenario without the block exactly as it was.
 
-use v2xw_mobility::carfollowing::library;
 use v2xw_mobility::MobilPreset;
+use v2xw_mobility::carfollowing::library;
 use v2xw_mobility::rules::TrafficRules;
 use v2xw_mobility::{EngineParams, NativeMobility};
 
@@ -41,11 +41,10 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     let spec = &s.actors.vehicles.driving;
     let mut e = Vec::new();
     if let Err(why) = library::build(spec, s.seed) {
-        let (field, msg) = why
-            .split_once(": ")
-            .map_or(("actors.vehicles.driving".to_string(), why.clone()), |(f, m)| {
-                (f.to_string(), m.to_string())
-            });
+        let (field, msg) = why.split_once(": ").map_or(
+            ("actors.vehicles.driving".to_string(), why.clone()),
+            |(f, m)| (f.to_string(), m.to_string()),
+        );
         e.push(ScenarioError::conflict(field, msg));
     }
     let c = &spec.cooperative;

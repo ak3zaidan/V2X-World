@@ -198,13 +198,21 @@ mod tests {
         if let Some(c) = class {
             dims.insert(Dim::Class, DimValue::label(c));
         }
-        MetricSample::new(&def, t, dims, SampleValue::Ratio(ratio_of_sums(v, 1.0, 5, 1)))
+        MetricSample::new(
+            &def,
+            t,
+            dims,
+            SampleValue::Ratio(ratio_of_sums(v, 1.0, 5, 1)),
+        )
     }
 
     #[test]
     fn every_band_is_ordered_and_the_grades_fall_where_they_should() {
         for b in bands() {
-            assert!(b.ok.0 <= b.ok.1 && b.plausible.0 <= b.ok.0 && b.ok.1 <= b.plausible.1, "{b:?}");
+            assert!(
+                b.ok.0 <= b.ok.1 && b.plausible.0 <= b.ok.0 && b.ok.1 <= b.plausible.1,
+                "{b:?}"
+            );
         }
         let s = vec![
             sample("co2_per_km", Some("passenger"), 900.0, 1),

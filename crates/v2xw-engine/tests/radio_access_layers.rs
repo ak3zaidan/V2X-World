@@ -162,7 +162,11 @@ fn an_idle_80211p_channel_costs_the_aifs_and_backoff_the_mac_reports() {
     for v in &tx {
         let signed = v.t_signed.expect("t_signed");
         let ready = v.t_handoff.unwrap_or(signed);
-        assert!(ready >= signed, "frame {:?} reached the MAC before it was signed", v.msg);
+        assert!(
+            ready >= signed,
+            "frame {:?} reached the MAC before it was signed",
+            v.msg
+        );
         let aifs = v.mac_aifs_ns.expect("mac_aifs_ns");
         let backoff = v.mac_backoff_ns.expect("mac_backoff_ns");
         let access = v.t - ready;

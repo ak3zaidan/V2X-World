@@ -322,10 +322,7 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Intersection map (MAP)",
             "Broadcasts the junction's lane geometry.",
         ),
-        ("actors.rsus[].roles[]", "spat-map") => w(
-            "Signal timing and map",
-            "Both of the above.",
-        ),
+        ("actors.rsus[].roles[]", "spat-map") => w("Signal timing and map", "Both of the above."),
         // --- world ----------------------------------------------------------------
         ("world.highway_preset", "urban-us-nyc") => w(
             "New York City",
@@ -350,10 +347,9 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
         ),
         ("weather.initial", "snow") => w("Snow", "Lower visibility and a slippery surface."),
         ("weather.initial", "sleet") => w("Sleet", "Freezing rain: the worst surface."),
-        ("weather.initial", "fog") => w(
-            "Fog",
-            "Visibility collapses; the radio is barely affected.",
-        ),
+        ("weather.initial", "fog") => {
+            w("Fog", "Visibility collapses; the radio is barely affected.")
+        }
         ("weather.initial", "wind") => w("Wind", "Strong wind with no precipitation."),
         // --- applications ---------------------------------------------------------
         ("apps.enabled[]", "fcw") => w(
@@ -417,10 +413,7 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Cellular",
             "The unit reaches the backend over the mobile network.",
         ),
-        (_, "backhaul/none") => w(
-            "None (offline)",
-            "The unit has no backend link.",
-        ),
+        (_, "backhaul/none") => w("None (offline)", "The unit has no backend link."),
         (_, "backend-net/fixed") => w(
             "Fixed links",
             "Links between backend authorities with a set latency and capacity.",
@@ -481,35 +474,119 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
 /// written from the type's own documentation in that crate.
 fn attack_words(kind: &str) -> Option<(&'static str, &'static str)> {
     Some(match kind {
-        "ConstPos" => ("Fake position: frozen", "Keeps claiming the first position it sent while it drives on."),
-        "ConstPosOffset" => ("Fake position: shifted", "Claims a position a constant distance from where it is."),
-        "RandomPos" => ("Fake position: random", "Claims a random position near itself, redrawn every message."),
-        "Teleport" => ("Fake position: teleporting", "Jumps its claimed position every fourth second."),
-        "SineWavePos" => ("Fake position: weaving", "Swings its claimed position from side to side across its lane."),
-        "ConstSpeedOffset" => ("Fake speed: shifted", "Adds a constant offset to the speed it claims."),
+        "ConstPos" => (
+            "Fake position: frozen",
+            "Keeps claiming the first position it sent while it drives on.",
+        ),
+        "ConstPosOffset" => (
+            "Fake position: shifted",
+            "Claims a position a constant distance from where it is.",
+        ),
+        "RandomPos" => (
+            "Fake position: random",
+            "Claims a random position near itself, redrawn every message.",
+        ),
+        "Teleport" => (
+            "Fake position: teleporting",
+            "Jumps its claimed position every fourth second.",
+        ),
+        "SineWavePos" => (
+            "Fake position: weaving",
+            "Swings its claimed position from side to side across its lane.",
+        ),
+        "ConstSpeedOffset" => (
+            "Fake speed: shifted",
+            "Adds a constant offset to the speed it claims.",
+        ),
         "RandomSpeed" => ("Fake speed: random", "Claims a random speed."),
-        "StopAndGo" => ("Fake speed: stop-and-go", "Alternates its claimed speed between stopped and fast."),
-        "ReversedHeading" => ("Fake heading: reversed", "Claims to be driving the opposite way."),
-        "HeadingOffset" => ("Fake heading: shifted", "Adds a constant offset to the heading it claims."),
-        "DataReplay" => ("Replay attack", "Re-sends its own earlier messages with their old timestamps."),
-        "SlowDrift" => ("Fake position: slow drift", "A position error that grows slowly from nothing, hard to notice."),
-        "AlongRoadOffset" => ("Fake position: along the road", "Shifts its claimed position along the road, so it stays on the map."),
-        "Sybil" => ("Ghost vehicles (Sybil)", "Not runnable yet: the host does not hand an attacker several pseudonyms at once."),
-        "DoS" => ("Message flood (DoS)", "Not runnable yet: a flood needs extra transmissions per interval."),
-        "DelayedMessages" => ("Delayed messages", "Stamps its messages with a stale generation time."),
-        "InvalidSignature" => ("Invalid signature", "Signs with a key that does not match its certificate."),
-        "ExpiredCert" => ("Expired certificate", "Presents a certificate past its validity."),
-        "NotYetValid" => ("Certificate not yet valid", "Presents a certificate whose validity has not begun."),
-        "OutOfOrder" => ("Out-of-order timestamps", "Stamps messages with times that go backwards."),
-        "DoSRandom" => ("Random flood (DoS)", "Not runnable yet: a flood needs extra transmissions per interval."),
-        "Disruptive" => ("Everything inconsistent", "Falsifies position, speed and heading at once, inconsistently."),
-        "PosSpeedInconsistent" => ("Moving while claiming to stop", "Its position advances while it claims to be almost stopped."),
-        "PosHeadingInconsistent" => ("Sideways while claiming straight", "Its position swings sideways while it claims a straight heading."),
-        "EventualStop" => ("Fake stop", "Drives honestly, then freezes its claimed position while claiming to creep."),
-        "VruImpersonation" => ("Posing as a pedestrian", "Not runnable yet: a BSM does not carry a station type."),
-        "VruPositionSpoof" => ("Fake pedestrian", "Not runnable yet: a BSM does not carry a station type."),
-        "FakeHazard" => ("Fake hazard warning", "Not runnable yet: the host does not send an attacker's event messages."),
-        "SelectiveDrop" => ("Drops relayed messages", "Not runnable yet: vehicles here relay nothing."),
+        "StopAndGo" => (
+            "Fake speed: stop-and-go",
+            "Alternates its claimed speed between stopped and fast.",
+        ),
+        "ReversedHeading" => (
+            "Fake heading: reversed",
+            "Claims to be driving the opposite way.",
+        ),
+        "HeadingOffset" => (
+            "Fake heading: shifted",
+            "Adds a constant offset to the heading it claims.",
+        ),
+        "DataReplay" => (
+            "Replay attack",
+            "Re-sends its own earlier messages with their old timestamps.",
+        ),
+        "SlowDrift" => (
+            "Fake position: slow drift",
+            "A position error that grows slowly from nothing, hard to notice.",
+        ),
+        "AlongRoadOffset" => (
+            "Fake position: along the road",
+            "Shifts its claimed position along the road, so it stays on the map.",
+        ),
+        "Sybil" => (
+            "Ghost vehicles (Sybil)",
+            "Not runnable yet: the host does not hand an attacker several pseudonyms at once.",
+        ),
+        "DoS" => (
+            "Message flood (DoS)",
+            "Not runnable yet: a flood needs extra transmissions per interval.",
+        ),
+        "DelayedMessages" => (
+            "Delayed messages",
+            "Stamps its messages with a stale generation time.",
+        ),
+        "InvalidSignature" => (
+            "Invalid signature",
+            "Signs with a key that does not match its certificate.",
+        ),
+        "ExpiredCert" => (
+            "Expired certificate",
+            "Presents a certificate past its validity.",
+        ),
+        "NotYetValid" => (
+            "Certificate not yet valid",
+            "Presents a certificate whose validity has not begun.",
+        ),
+        "OutOfOrder" => (
+            "Out-of-order timestamps",
+            "Stamps messages with times that go backwards.",
+        ),
+        "DoSRandom" => (
+            "Random flood (DoS)",
+            "Not runnable yet: a flood needs extra transmissions per interval.",
+        ),
+        "Disruptive" => (
+            "Everything inconsistent",
+            "Falsifies position, speed and heading at once, inconsistently.",
+        ),
+        "PosSpeedInconsistent" => (
+            "Moving while claiming to stop",
+            "Its position advances while it claims to be almost stopped.",
+        ),
+        "PosHeadingInconsistent" => (
+            "Sideways while claiming straight",
+            "Its position swings sideways while it claims a straight heading.",
+        ),
+        "EventualStop" => (
+            "Fake stop",
+            "Drives honestly, then freezes its claimed position while claiming to creep.",
+        ),
+        "VruImpersonation" => (
+            "Posing as a pedestrian",
+            "Not runnable yet: a BSM does not carry a station type.",
+        ),
+        "VruPositionSpoof" => (
+            "Fake pedestrian",
+            "Not runnable yet: a BSM does not carry a station type.",
+        ),
+        "FakeHazard" => (
+            "Fake hazard warning",
+            "Not runnable yet: the host does not send an attacker's event messages.",
+        ),
+        "SelectiveDrop" => (
+            "Drops relayed messages",
+            "Not runnable yet: vehicles here relay nothing.",
+        ),
         _ => return None,
     })
 }
@@ -621,7 +698,8 @@ fn first_sentence(text: &str) -> String {
 pub fn option_row(path: &str, value: &str, fallback: &str) -> Value {
     // A state of the city library: its name, and its default limit and turn rule in words.
     if path == "world.highway_preset"
-        && let Some(j) = v2xw_world::osm::HighwayPreset::parse(value).and_then(|p| p.us_jurisdiction())
+        && let Some(j) =
+            v2xw_world::osm::HighwayPreset::parse(value).and_then(|p| p.us_jurisdiction())
     {
         return json!({
             "value": value,
@@ -639,7 +717,8 @@ pub fn option_row(path: &str, value: &str, fallback: &str) -> Value {
     // dropdown says so instead of offering a choice that cannot run.
     if matches!(path, "nodes.default_obu" | "nodes.per_class.*")
         && let Some(p) = v2xw_node::profiles::get(value)
-        && p.op_cost(v2xw_node::profile::signature_ops("ecdsa-p256").0).is_none()
+        && p.op_cost(v2xw_node::profile::signature_ops("ecdsa-p256").0)
+            .is_none()
     {
         return json!({
             "value": value,
@@ -744,9 +823,7 @@ pub fn slot_values(path: &str, registry: &Registry) -> Option<(Vec<Value>, bool)
                 .map(|s| (*s).to_string())
                 .collect(),
         ),
-        "threats.eavesdropper" => {
-            Some(vec![crate::pseudonym_policy::EAVESDROPPER_ID.to_string()])
-        }
+        "threats.eavesdropper" => Some(vec![crate::pseudonym_policy::EAVESDROPPER_ID.to_string()]),
         "threats.compromised_rsu_attack" => {
             Some(vec![v2xw_threat::attack_rsu::MODEL_ID.to_string()])
         }
@@ -833,9 +910,11 @@ pub fn extra_values(path: &str) -> Option<(Vec<Value>, bool)> {
             false,
         )),
         "metrics[]" => Some((
-            vec![json!({"value": "all", "label": "Everything this build measures",
+            vec![
+                json!({"value": "all", "label": "Everything this build measures",
                         "description": "Every registered metric provider.",
-                        "available": true})],
+                        "available": true}),
+            ],
             false,
         )),
         "radio.channel" | "radio.adjacent_channel[].channel" => Some((channel_rows(), true)),

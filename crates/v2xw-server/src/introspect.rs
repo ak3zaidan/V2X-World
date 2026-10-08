@@ -391,7 +391,8 @@ pub fn answer<E: Introspect + ?Sized>(engine: &mut E, query: &Query) -> Result<V
                     vec![json!({"name": dim, "type": "string", "visibility": "META"})];
                 // Keyed, not searched: a per-node breakdown of a dense run has thousands of
                 // groups, and finding each key in a list was keys x groups string compares.
-                let mut keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+                let mut keys: std::collections::BTreeSet<String> =
+                    std::collections::BTreeSet::new();
                 let mut per_metric: Vec<std::collections::BTreeMap<String, GroupRow>> =
                     Vec::with_capacity(metrics.len());
                 let mut pooled: Option<(u64, u64)> = None;

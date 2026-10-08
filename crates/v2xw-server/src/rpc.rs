@@ -404,7 +404,9 @@ fn cities_list(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcome>
     let d = ctx.run.descriptor();
     out["current"] = json!(current(&d.scenario));
     out["staged"] = json!(ctx.run.staged().and_then(|s| current(&s.document)));
-    if let Some(q) = text(p, "query").map(str::to_lowercase).filter(|q| !q.is_empty())
+    if let Some(q) = text(p, "query")
+        .map(str::to_lowercase)
+        .filter(|q| !q.is_empty())
         && let Some(list) = out.get_mut("cities").and_then(Value::as_array_mut)
     {
         list.retain(|c| {

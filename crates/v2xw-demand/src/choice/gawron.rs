@@ -148,7 +148,10 @@ fn card(beta: f64, a: f64) -> ModelCard {
     );
     card.tier = vec![Tier::Medium, Tier::High];
     card.equations = vec![
-        Equation::new("cost smoothing", "c_r <- beta*T_r + (1-beta)*c_r (r not the best)"),
+        Equation::new(
+            "cost smoothing",
+            "c_r <- beta*T_r + (1-beta)*c_r (r not the best)",
+        ),
         Equation::new(
             "pairwise update",
             "p_r' = p_r (p_r+p_s) g / (p_r g + p_s), g = exp(a d/(1-d^2)), d = (c_s-c_r)/(c_s+c_r)",
@@ -176,9 +179,7 @@ fn card(beta: f64, a: f64) -> ModelCard {
     card.validation = Validation {
         status: ValidationStatus::UnitTested,
         references: Vec::new(),
-        tests: vec![
-            "choice::gawron::tests::probability_moves_to_the_cheaper_route".to_string(),
-        ],
+        tests: vec!["choice::gawron::tests::probability_moves_to_the_cheaper_route".to_string()],
     };
     card
 }
@@ -202,12 +203,19 @@ mod tests {
             m.update(&mut alts, &[100.0, 200.0], step);
             let p: f64 = alts.iter().map(|a| a.probability).sum();
             assert!((p - 1.0).abs() < 1e-12);
-            assert!(alts[0].probability >= last, "monotone towards the cheaper route");
+            assert!(
+                alts[0].probability >= last,
+                "monotone towards the cheaper route"
+            );
             last = alts[0].probability;
         }
         // With a = 0.05 the odds grow by g = exp(a d / (1 - d^2)) = 1.019 per iteration
         // (d = 1/3): 50 iterations take p from 0.5 to 1.019^50 / (1 + 1.019^50) = 0.72.
-        assert!((alts[0].probability - 0.718).abs() < 0.01, "{}", alts[0].probability);
+        assert!(
+            (alts[0].probability - 0.718).abs() < 0.01,
+            "{}",
+            alts[0].probability
+        );
         m.card().validate().expect("card");
     }
 

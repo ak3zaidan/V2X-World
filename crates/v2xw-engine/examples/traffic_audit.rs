@@ -268,7 +268,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!(
                 "  crossings made mid-block: {:.1} %; mean kerb wait {:.1} s over {} waits",
                 100.0 * p.midblock_crossings as f64 / all as f64,
-                if p.waits > 0 { p.wait_total_s / p.waits as f64 } else { 0.0 },
+                if p.waits > 0 {
+                    p.wait_total_s / p.waits as f64
+                } else {
+                    0.0
+                },
                 p.waits
             );
         }

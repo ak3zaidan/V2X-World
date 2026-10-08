@@ -184,13 +184,11 @@ fn card(saturation: f64) -> ModelCard {
         ),
     )];
     card.assumptions = vec![
-        "Queues have no physical length (a point queue): no spill-back, no gridlock."
-            .to_string(),
+        "Queues have no physical length (a point queue): no spill-back, no gridlock.".to_string(),
         "A trip's lanes are the ones its route names; no lane changes.".to_string(),
     ];
-    card.limitations = vec![
-        "Unsignalised junction priority and turning conflicts are not modelled.".to_string(),
-    ];
+    card.limitations =
+        vec!["Unsignalised junction priority and turning conflicts are not modelled.".to_string()];
     card.sources = vec![
         Source::new(
             SourceKind::Paper,

@@ -119,7 +119,10 @@ pub fn split_csv(line: &str) -> Vec<String> {
 }
 
 /// A table's rows as `(header → value)` lookups, streamed to `each`.
-fn read_table(path: &Path, mut each: impl FnMut(&dyn Fn(&str) -> String) -> Result<()>) -> Result<bool> {
+fn read_table(
+    path: &Path,
+    mut each: impl FnMut(&dyn Fn(&str) -> String) -> Result<()>,
+) -> Result<bool> {
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -134,7 +137,11 @@ fn read_table(path: &Path, mut each: impl FnMut(&dyn Fn(&str) -> String) -> Resu
         .into_iter()
         .map(|c| c.trim().to_string())
         .collect();
-    let index: BTreeMap<String, usize> = cols.iter().enumerate().map(|(i, c)| (c.clone(), i)).collect();
+    let index: BTreeMap<String, usize> = cols
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.clone(), i))
+        .collect();
     for line in lines {
         let line = line.map_err(|e| DemandError::io(path, e))?;
         if line.trim().is_empty() {
@@ -215,7 +222,10 @@ impl Feed {
         let mut feed = Feed::default();
         let bad = |table: &str, what: String| DemandError::parse(&dir.join(table), what);
         let found = read_table(&dir.join("stops.txt"), |get| {
-            let (Ok(lat), Ok(lon)) = (get("stop_lat").parse::<f64>(), get("stop_lon").parse::<f64>()) else {
+            let (Ok(lat), Ok(lon)) = (
+                get("stop_lat").parse::<f64>(),
+                get("stop_lon").parse::<f64>(),
+            ) else {
                 return Ok(()); // a station entrance or node without a position
             };
             if let Some([s, w, n, e]) = filter.bbox
@@ -239,8 +249,12 @@ impl Feed {
             return Err(bad("stops.txt", "missing".to_string()));
         }
         feed.stop_ids = feed.stops.keys().cloned().collect();
-        let stop_index: BTreeMap<&str, u32> =
-            feed.stop_ids.iter().enumerate().map(|(i, s)| (s.as_str(), i as u32)).collect();
+        let stop_index: BTreeMap<&str, u32> = feed
+            .stop_ids
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.as_str(), i as u32))
+            .collect();
         read_table(&dir.join("routes.txt"), |get| {
             let route_type: u16 = get("route_type").parse().unwrap_or(3);
             if !filter.route_types.is_empty() && !filter.route_types.contains(&route_type) {
@@ -252,7 +266,11 @@ impl Feed {
                 id.clone(),
                 Route {
                     id,
-                    name: if short.is_empty() { get("route_long_name") } else { short },
+                    name: if short.is_empty() {
+                        get("route_long_name")
+                    } else {
+                        short
+                    },
                     route_type,
                 },
             );
@@ -275,7 +293,10 @@ impl Feed {
             Ok(())
         })?;
         read_table(&dir.join("calendar_dates.txt"), |get| {
-            if let (Ok(d), Ok(k)) = (get("date").parse::<u32>(), get("exception_type").parse::<u8>()) {
+            if let (Ok(d), Ok(k)) = (
+                get("date").parse::<u32>(),
+                get("exception_type").parse::<u8>(),
+            ) {
                 feed.calendar_dates.insert((get("service_id"), d), k);
             }
             Ok(())
@@ -374,7 +395,8 @@ pub fn clip(src: &Path, dst: &Path, filter: &Filter) -> Result<(usize, usize, us
     let write = |name: &str, body: String| -> Result<()> {
         let p = dst.join(name);
         let mut f = std::fs::File::create(&p).map_err(|e| DemandError::io(&p, e))?;
-        f.write_all(body.as_bytes()).map_err(|e| DemandError::io(&p, e))
+        f.write_all(body.as_bytes())
+            .map_err(|e| DemandError::io(&p, e))
     };
     let used_stops: BTreeSet<u32> = feed.stop_times.values().flatten().map(|c| c.stop).collect();
     let mut s = String::from("stop_id,stop_name,stop_lat,stop_lon\n");
@@ -385,13 +407,23 @@ pub fn clip(src: &Path, dst: &Path, filter: &Filter) -> Result<(usize, usize, us
     write("stops.txt", s)?;
     let used_routes: BTreeSet<&str> = feed.trips.values().map(|t| t.route_id.as_str()).collect();
     let mut s = String::from("route_id,route_short_name,route_long_name,route_type\n");
-    for r in feed.routes.values().filter(|r| used_routes.contains(r.id.as_str())) {
+    for r in feed
+        .routes
+        .values()
+        .filter(|r| used_routes.contains(r.id.as_str()))
+    {
         s += &format!("{},{},,{}\n", q(&r.id), q(&r.name), r.route_type);
     }
     write("routes.txt", s)?;
     let mut s = String::from("route_id,service_id,trip_id,trip_headsign\n");
     for t in feed.trips.values() {
-        s += &format!("{},{},{},{}\n", q(&t.route_id), q(&t.service_id), q(&t.id), q(&t.headsign));
+        s += &format!(
+            "{},{},{},{}\n",
+            q(&t.route_id),
+            q(&t.service_id),
+            q(&t.id),
+            q(&t.headsign)
+        );
     }
     write("trips.txt", s)?;
     let fmt = |t: Option<u32>| {
@@ -418,13 +450,21 @@ pub fn clip(src: &Path, dst: &Path, filter: &Filter) -> Result<(usize, usize, us
     let mut s = String::from(
         "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n",
     );
-    for (sid, (days, a, b)) in feed.calendar.iter().filter(|(k, _)| services.contains(k.as_str())) {
+    for (sid, (days, a, b)) in feed
+        .calendar
+        .iter()
+        .filter(|(k, _)| services.contains(k.as_str()))
+    {
         let d: Vec<&str> = days.iter().map(|x| if *x { "1" } else { "0" }).collect();
         s += &format!("{},{},{},{}\n", q(sid), d.join(","), a, b);
     }
     write("calendar.txt", s)?;
     let mut s = String::from("service_id,date,exception_type\n");
-    for ((sid, d), k) in feed.calendar_dates.iter().filter(|((k, _), _)| services.contains(k.as_str())) {
+    for ((sid, d), k) in feed
+        .calendar_dates
+        .iter()
+        .filter(|((k, _), _)| services.contains(k.as_str()))
+    {
         s += &format!("{},{},{}\n", q(sid), d, k);
     }
     write("calendar_dates.txt", s)?;
@@ -432,7 +472,13 @@ pub fn clip(src: &Path, dst: &Path, filter: &Filter) -> Result<(usize, usize, us
         let mut s = String::from("trip_id,start_time,end_time,headway_secs\n");
         for (trip, fs) in &feed.frequencies {
             for f in fs {
-                s += &format!("{},{},{},{}\n", q(trip), fmt(Some(f.start_s)), fmt(Some(f.end_s)), f.headway_s);
+                s += &format!(
+                    "{},{},{},{}\n",
+                    q(trip),
+                    fmt(Some(f.start_s)),
+                    fmt(Some(f.end_s)),
+                    f.headway_s
+                );
             }
         }
         write("frequencies.txt", s)?;

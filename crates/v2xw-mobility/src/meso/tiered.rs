@@ -238,7 +238,10 @@ impl TieredMobility {
     /// Whether the microscopic tier owns `lane`.
     #[must_use]
     pub fn is_micro_lane(&self, lane: LaneId) -> bool {
-        self.micro_lane.get(lane.as_usize()).copied().unwrap_or(false)
+        self.micro_lane
+            .get(lane.as_usize())
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Which lanes are microscopic: a lane by its midpoint, an internal lane by its
@@ -298,7 +301,11 @@ struct MicroSide<'a> {
 
 impl MesoBoundary for MicroSide<'_> {
     fn is_meso(&self, lane: LaneId) -> bool {
-        !self.micro_lane.get(lane.as_usize()).copied().unwrap_or(false)
+        !self
+            .micro_lane
+            .get(lane.as_usize())
+            .copied()
+            .unwrap_or(false)
     }
 
     fn offer(&mut self, world: &World, v: &MesoVehicle, next_index: usize, at: SimTime) -> bool {
@@ -345,9 +352,14 @@ impl Mobility for TieredMobility {
 
     fn init(&mut self, ctx: &mut dyn MobCtx, demand: Box<dyn Demand>) -> Result<()> {
         // The microscopic engine places nothing on its own: every trip comes through here.
-        self.micro.init(ctx, Box::new(crate::demand::NoDemand::new()))?;
+        self.micro
+            .init(ctx, Box::new(crate::demand::NoDemand::new()))?;
         let world = ctx.world();
-        self.meso = Some(MesoCore::new(world, self.params.meso, ClassMask::MOTOR_TRAFFIC));
+        self.meso = Some(MesoCore::new(
+            world,
+            self.params.meso,
+            ClassMask::MOTOR_TRAFFIC,
+        ));
         self.micro_lane = Self::classify(world, &self.params.region);
         let mut exits = BTreeSet::new();
         for lane in world.roads.lanes() {
@@ -458,7 +470,9 @@ impl Mobility for TieredMobility {
                         });
                     }
                 }
-                Err(v) if t0.saturating_sub(since) < max_wait => self.meso_waiting.push((*v, s_m, since)),
+                Err(v) if t0.saturating_sub(since) < max_wait => {
+                    self.meso_waiting.push((*v, s_m, since))
+                }
                 Err(_) => self.counters.dropped_trips += 1,
             }
         }
@@ -487,10 +501,14 @@ impl Mobility for TieredMobility {
         // --- out of the region ----------------------------------------------------------
         let mut released: BTreeSet<ActorId> = BTreeSet::new();
         for (id, lane, class) in self.micro.vehicle_lanes() {
-            if self.is_micro_lane(lane) || !ClassMask::MOTOR_TRAFFIC.contains_any(class.class_mask()) {
+            if self.is_micro_lane(lane)
+                || !ClassMask::MOTOR_TRAFFIC.contains_any(class.class_mask())
+            {
                 continue;
             }
-            let Some(h) = self.micro.release(id) else { continue };
+            let Some(h) = self.micro.release(id) else {
+                continue;
+            };
             let Some((k, s_m)) = Self::meso_entry(world, &h) else {
                 // Nowhere in the queue network to go (the route ends on the connector):
                 // the trip is over.
@@ -628,8 +646,7 @@ pub fn card(params: &TieredParams) -> ModelCard {
             .to_string(),
     ];
     card.limitations = vec![
-        "A hand-in is timed to the step it happens in, not to its instant within it."
-            .to_string(),
+        "A hand-in is timed to the step it happens in, not to its instant within it.".to_string(),
         "Pedestrians and cyclists stay in the microscopic tier wherever they are.".to_string(),
     ];
     card.sources = vec![src];

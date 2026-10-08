@@ -35,7 +35,10 @@ impl ActionId {
 
     /// Unpack a payload tag.
     pub fn from_tag(tag: u64) -> Self {
-        ActionId { station: (tag >> 16) as u32, sn: (tag & 0xFFFF) as u16 }
+        ActionId {
+            station: (tag >> 16) as u32,
+            sn: (tag & 0xFFFF) as u16,
+        }
     }
 }
 
@@ -173,13 +176,23 @@ pub struct DenService {
 impl DenService {
     /// The service of `station`; `kaf` enables keep-alive forwarding.
     pub fn new(station: u32, kaf: bool) -> Self {
-        DenService { station, next_sn: 0, kaf, originated: BTreeMap::new(), received: BTreeMap::new(), kaf_sent: 0 }
+        DenService {
+            station,
+            next_sn: 0,
+            kaf,
+            originated: BTreeMap::new(),
+            received: BTreeMap::new(),
+            kaf_sent: 0,
+        }
     }
 
     /// AppDENM_trigger [§6.1.2]: a new event, sent now and repeated if asked.
     pub fn trigger(&mut self, req: TriggerRequest, now_ms: u64) -> (ActionId, Vec<DenAction>) {
         self.next_sn = self.next_sn.wrapping_add(1);
-        let action = ActionId { station: self.station, sn: self.next_sn };
+        let action = ActionId {
+            station: self.station,
+            sn: self.next_sn,
+        };
         let denm = Denm {
             action,
             area: req.area,
@@ -190,11 +203,25 @@ impl DenService {
             termination: None,
             bytes: req.bytes,
         };
-        let until = now_ms + req.repetition_duration_ms.unwrap_or(req.validity_ms).min(req.validity_ms);
-        self.originated.insert(action, Originated { denm, interval_ms: req.repetition_interval_ms, repeat_until_ms: until });
+        let until = now_ms
+            + req
+                .repetition_duration_ms
+                .unwrap_or(req.validity_ms)
+                .min(req.validity_ms);
+        self.originated.insert(
+            action,
+            Originated {
+                denm,
+                interval_ms: req.repetition_interval_ms,
+                repeat_until_ms: until,
+            },
+        );
         let mut out = vec![DenAction::Send { denm, kaf: false }];
         if let Some(iv) = req.repetition_interval_ms.filter(|&i| i > 0) {
-            out.push(DenAction::ArmTimer { timer: DenTimer::Repetition(action), at_ms: now_ms + iv });
+            out.push(DenAction::ArmTimer {
+                timer: DenTimer::Repetition(action),
+                at_ms: now_ms + iv,
+            });
         }
         (action, out)
     }
@@ -204,7 +231,10 @@ impl DenService {
         match self.originated.get_mut(&action) {
             Some(o) if o.denm.termination.is_none() => {
                 o.denm.reference_ms = now_ms;
-                vec![DenAction::Send { denm: o.denm, kaf: false }]
+                vec![DenAction::Send {
+                    denm: o.denm,
+                    kaf: false,
+                }]
             }
             _ => vec![],
         }
@@ -216,7 +246,10 @@ impl DenService {
             Some(o) if o.denm.termination.is_none() => {
                 o.denm.termination = Some(Termination::Cancel);
                 o.denm.reference_ms = now_ms;
-                vec![DenAction::Send { denm: o.denm, kaf: false }]
+                vec![DenAction::Send {
+                    denm: o.denm,
+                    kaf: false,
+                }]
             }
             _ => vec![],
         }
@@ -226,19 +259,35 @@ impl DenService {
     pub fn on_timer(&mut self, timer: DenTimer, now_ms: u64, jitter_ms: u64) -> Vec<DenAction> {
         match timer {
             DenTimer::Repetition(a) => {
-                let Some(o) = self.originated.get(&a) else { return vec![] };
-                if o.denm.termination.is_some() || now_ms > o.repeat_until_ms || now_ms >= o.denm.expires_ms() {
+                let Some(o) = self.originated.get(&a) else {
+                    return vec![];
+                };
+                if o.denm.termination.is_some()
+                    || now_ms > o.repeat_until_ms
+                    || now_ms >= o.denm.expires_ms()
+                {
                     return vec![];
                 }
-                let mut out = vec![DenAction::Send { denm: o.denm, kaf: false }];
+                let mut out = vec![DenAction::Send {
+                    denm: o.denm,
+                    kaf: false,
+                }];
                 if let Some(iv) = o.interval_ms {
-                    out.push(DenAction::ArmTimer { timer, at_ms: now_ms + iv });
+                    out.push(DenAction::ArmTimer {
+                        timer,
+                        at_ms: now_ms + iv,
+                    });
                 }
                 out
             }
             DenTimer::Kaf(a) => {
-                let Some(r) = self.received.get_mut(&a) else { return vec![] };
-                if r.kaf_due_ms != Some(now_ms) || r.denm.termination.is_some() || now_ms >= r.denm.expires_ms() {
+                let Some(r) = self.received.get_mut(&a) else {
+                    return vec![];
+                };
+                if r.kaf_due_ms != Some(now_ms)
+                    || r.denm.termination.is_some()
+                    || now_ms >= r.denm.expires_ms()
+                {
                     return vec![];
                 }
                 let iv = r.denm.transmission_interval_ms.unwrap_or(0);
@@ -249,7 +298,10 @@ impl DenService {
                 r.kaf_due_ms = Some(due);
                 self.kaf_sent += 1;
                 vec![
-                    DenAction::Send { denm: r.denm, kaf: true },
+                    DenAction::Send {
+                        denm: r.denm,
+                        kaf: true,
+                    },
                     DenAction::ArmTimer { timer, at_ms: due },
                 ]
             }
@@ -258,9 +310,18 @@ impl DenService {
 
     /// A DENM arrived [§8.1.2]. `inside` is whether this station is in its relevance
     /// area; `jitter_ms` is the caller's KAF jitter draw.
-    pub fn on_receive(&mut self, denm: Denm, now_ms: u64, inside: bool, jitter_ms: u64) -> Vec<DenAction> {
+    pub fn on_receive(
+        &mut self,
+        denm: Denm,
+        now_ms: u64,
+        inside: bool,
+        jitter_ms: u64,
+    ) -> Vec<DenAction> {
         if denm.action.station == self.station || now_ms >= denm.expires_ms() {
-            return vec![DenAction::Indicate { denm, kind: RxKind::Discarded }];
+            return vec![DenAction::Indicate {
+                denm,
+                kind: RxKind::Discarded,
+            }];
         }
         let kind = match self.received.get(&denm.action) {
             None if denm.termination.is_some() => RxKind::Terminated,
@@ -276,13 +337,27 @@ impl DenService {
             out.push(DenAction::Indicate { denm, kind });
             return out;
         }
-        let kaf_due = match (self.kaf, inside, denm.termination, denm.transmission_interval_ms) {
+        let kaf_due = match (
+            self.kaf,
+            inside,
+            denm.termination,
+            denm.transmission_interval_ms,
+        ) {
             (true, true, None, Some(iv)) if iv > 0 => Some(now_ms + iv + jitter_ms),
             _ => None,
         };
-        self.received.insert(denm.action, Received { denm, kaf_due_ms: kaf_due });
+        self.received.insert(
+            denm.action,
+            Received {
+                denm,
+                kaf_due_ms: kaf_due,
+            },
+        );
         if let Some(at) = kaf_due {
-            out.push(DenAction::ArmTimer { timer: DenTimer::Kaf(denm.action), at_ms: at });
+            out.push(DenAction::ArmTimer {
+                timer: DenTimer::Kaf(denm.action),
+                at_ms: at,
+            });
         }
         out.push(DenAction::Indicate { denm, kind });
         out
@@ -331,14 +406,25 @@ mod tests {
     fn receiver_classifies_and_kaf_forwards_after_silence() {
         let mut o = DenService::new(1, false);
         let (_, acts) = o.trigger(req(), 0);
-        let DenAction::Send { denm, .. } = acts[0] else { panic!() };
+        let DenAction::Send { denm, .. } = acts[0] else {
+            panic!()
+        };
         let mut r = DenService::new(2, true);
         let a = r.on_receive(denm, 10, true, 50);
-        assert!(a.contains(&DenAction::Indicate { denm, kind: RxKind::New }));
-        assert!(a.contains(&DenAction::ArmTimer { timer: DenTimer::Kaf(denm.action), at_ms: 1_060 }));
+        assert!(a.contains(&DenAction::Indicate {
+            denm,
+            kind: RxKind::New
+        }));
+        assert!(a.contains(&DenAction::ArmTimer {
+            timer: DenTimer::Kaf(denm.action),
+            at_ms: 1_060
+        }));
         // A repetition at 900 ms pushes the KAF timer back, so the old one is stale.
         let b = r.on_receive(denm, 900, true, 50);
-        assert!(b.contains(&DenAction::Indicate { denm, kind: RxKind::Repetition }));
+        assert!(b.contains(&DenAction::Indicate {
+            denm,
+            kind: RxKind::Repetition
+        }));
         assert!(r.on_timer(DenTimer::Kaf(denm.action), 1_060, 0).is_empty());
         let fwd = r.on_timer(DenTimer::Kaf(denm.action), 1_950, 0);
         assert!(matches!(fwd[0], DenAction::Send { kaf: true, .. }));
@@ -346,7 +432,10 @@ mod tests {
         cancel.termination = Some(Termination::Cancel);
         cancel.reference_ms = 2_000;
         let c = r.on_receive(cancel, 2_000, true, 0);
-        assert!(c.contains(&DenAction::Indicate { denm: cancel, kind: RxKind::Terminated }));
+        assert!(c.contains(&DenAction::Indicate {
+            denm: cancel,
+            kind: RxKind::Terminated
+        }));
         assert!(r.on_timer(DenTimer::Kaf(denm.action), 2_950, 0).is_empty());
     }
 }

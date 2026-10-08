@@ -21,7 +21,11 @@ pub struct BtpHeader {
 impl BtpHeader {
     /// A BTP-B header to `port`, the form every broadcast facility uses.
     pub const fn b(port: BtpPort) -> Self {
-        BtpHeader { kind: BtpKind::B, dest_port: port, second: 0 }
+        BtpHeader {
+            kind: BtpKind::B,
+            dest_port: port,
+            second: 0,
+        }
     }
 
     /// The four header octets as on the wire: two big-endian 16-bit fields [§7.2-7.3].

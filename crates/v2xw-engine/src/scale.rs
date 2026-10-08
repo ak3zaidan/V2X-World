@@ -52,9 +52,9 @@ use std::collections::BTreeSet;
 use v2xw_core::card::Tier;
 use v2xw_core::geom::Vec3;
 use v2xw_core::ids::NodeId;
+use v2xw_mobility::Mobility;
 use v2xw_mobility::meso::tiered::{TierRegion, TieredMobility, TieredParams};
 use v2xw_mobility::meso::{MesoMobility, MesoParams};
-use v2xw_mobility::Mobility;
 use v2xw_world::World;
 
 use crate::scenario::Scenario;
@@ -227,7 +227,8 @@ impl RadioGate {
     /// in the margin with `receive_in_margin` on.
     #[must_use]
     pub fn receives(&self, node: NodeId) -> bool {
-        !self.dormant.contains(&node) && (self.receive_in_margin || !self.margin_only.contains(&node))
+        !self.dormant.contains(&node)
+            && (self.receive_in_margin || !self.margin_only.contains(&node))
     }
 
     /// How many nodes are dormant this step.
@@ -276,7 +277,10 @@ mod tests {
         assert_eq!(gate.dormant_node_steps, 1);
         // The margin transmits and does not receive; the box does both.
         assert!(!gate.receives(NodeId::new(1)));
-        assert!(!gate.receives(NodeId::new(2)), "in the margin: transmit only");
+        assert!(
+            !gate.receives(NodeId::new(2)),
+            "in the margin: transmit only"
+        );
         assert!(gate.receives(NodeId::new(3)));
         assert!(gate.receives(NodeId::new(4)));
     }

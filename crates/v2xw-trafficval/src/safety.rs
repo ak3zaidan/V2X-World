@@ -107,7 +107,12 @@ impl SafetyObserver {
     pub fn new(world: &World) -> Self {
         Self {
             zones: ConflictZones::build(world),
-            lane_len: world.roads.lanes().iter().map(|l| (l.id, l.length_m)).collect(),
+            lane_len: world
+                .roads
+                .lanes()
+                .iter()
+                .map(|l| (l.id, l.length_m))
+                .collect(),
             active: BTreeMap::new(),
             conflict_min_ttc: Vec::new(),
             closing_s: 0.0,
@@ -198,13 +203,21 @@ impl SafetyObserver {
             }
             if ttc <= SSAM_TTC_S {
                 self.under_ttc_s += dt_s;
-                let e = self.active.entry((f.actor, l.actor)).or_insert(f64::INFINITY);
+                let e = self
+                    .active
+                    .entry((f.actor, l.actor))
+                    .or_insert(f64::INFINITY);
                 *e = e.min(ttc);
                 still.insert((f.actor, l.actor));
             }
         }
         // Conflicts that ended this step.
-        let ended: Vec<(ActorId, ActorId)> = self.active.keys().filter(|k| !still.contains(k)).copied().collect();
+        let ended: Vec<(ActorId, ActorId)> = self
+            .active
+            .keys()
+            .filter(|k| !still.contains(k))
+            .copied()
+            .collect();
         for k in ended {
             if let Some(m) = self.active.remove(&k) {
                 self.conflict_min_ttc.push(m);
@@ -259,7 +272,12 @@ impl SafetyObserver {
             }
         }
         // Vehicles gone from the world leave their zones.
-        let gone: Vec<ActorId> = self.in_zone.keys().filter(|k| !present.contains(k)).copied().collect();
+        let gone: Vec<ActorId> = self
+            .in_zone
+            .keys()
+            .filter(|k| !present.contains(k))
+            .copied()
+            .collect();
         for g in gone {
             for (key, side) in self.in_zone.remove(&g).unwrap_or_default() {
                 let st = self.zone_state.entry(key).or_default();
@@ -279,7 +297,11 @@ impl SafetyObserver {
             vehicle_h: self.veh_s / 3600.0,
             severe_conflicts: ttc.iter().filter(|t| **t < 0.5).count(),
             conflict_min_ttc_s: Summary::of(&ttc),
-            share_closing_under_ttc: if self.closing_s > 0.0 { self.under_ttc_s / self.closing_s } else { 0.0 },
+            share_closing_under_ttc: if self.closing_s > 0.0 {
+                self.under_ttc_s / self.closing_s
+            } else {
+                0.0
+            },
             drac_over_s: self.drac_over_s,
             collisions: self.collisions,
             unavoidable: self.unavoidable,
@@ -304,7 +326,9 @@ pub fn checks() -> Vec<Check> {
                 read for every follower closing on a leader in its lane or the next lane of \
                 its route: TTC, DRAC, the conflict episodes with TTC ≤ 1.5 s and their \
                 minimum TTC.",
-            faults: &["one vehicle's published position pushed 12 m forward into the car ahead, every step from 60 s"],
+            faults: &[
+                "one vehicle's published position pushed 12 m forward into the car ahead, every step from 60 s",
+            ],
             run: ttc_check,
         },
         Check {
@@ -327,10 +351,14 @@ fn push_forward(step: u64, actors: &mut Vec<AuditActor>) {
         return;
     }
     // The first vehicle that has someone ahead of it on its lane.
-    let lanes: BTreeMap<LaneId, Vec<usize>> = actors.iter().enumerate().fold(BTreeMap::new(), |mut m, (i, a)| {
-        m.entry(a.lane).or_default().push(i);
-        m
-    });
+    let lanes: BTreeMap<LaneId, Vec<usize>> =
+        actors
+            .iter()
+            .enumerate()
+            .fold(BTreeMap::new(), |mut m, (i, a)| {
+                m.entry(a.lane).or_default().push(i);
+                m
+            });
     for idx in lanes.values() {
         if idx.len() >= 2 {
             let mut v: Vec<usize> = idx.clone();
@@ -344,14 +372,22 @@ fn push_forward(step: u64, actors: &mut Vec<AuditActor>) {
 }
 
 fn ttc_check(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
-    let gv = if variant.is_fault() { GridVariant::Tampered } else { GridVariant::Shipped };
+    let gv = if variant.is_fault() {
+        GridVariant::Tampered
+    } else {
+        GridVariant::Shipped
+    };
     let s = grid_study(lab, gv, Some(push_forward))?.safety;
-    let per_km = |n: f64| if s.vehicle_km > 0.0 { n / s.vehicle_km } else { f64::NAN };
+    let per_km = |n: f64| {
+        if s.vehicle_km > 0.0 {
+            n / s.vehicle_km
+        } else {
+            f64::NAN
+        }
+    };
     let mut notes = vec![format!(
         "{:.1} vehicle-km and {:.1} vehicle-hours observed; {} TTC conflicts.",
-        s.vehicle_km,
-        s.vehicle_h,
-        s.conflict_min_ttc_s.n
+        s.vehicle_km, s.vehicle_h, s.conflict_min_ttc_s.n
     )];
     notes.extend(s.examples.iter().cloned());
     Ok(Outcome {
@@ -390,9 +426,19 @@ fn ttc_check(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
 }
 
 fn pet_check(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
-    let gv = if variant.is_fault() { GridVariant::NoJunctionControl } else { GridVariant::Shipped };
+    let gv = if variant.is_fault() {
+        GridVariant::NoJunctionControl
+    } else {
+        GridVariant::Shipped
+    };
     let s = grid_study(lab, gv, None)?.safety;
-    let per_k = |n: f64| if s.junction_entries > 0 { 1000.0 * n / s.junction_entries as f64 } else { f64::NAN };
+    let per_k = |n: f64| {
+        if s.junction_entries > 0 {
+            1000.0 * n / s.junction_entries as f64
+        } else {
+            f64::NAN
+        }
+    };
     Ok(Outcome {
         rows: vec![
             Row::zero(
@@ -406,9 +452,16 @@ fn pet_check(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
                 "SSAM maximum PET 5 s; reported",
             )
             .n(s.pet_s.n),
-            Row::reported("PET < 1 s per 1,000 junction entries", per_k(s.pet_under_1s as f64), "Allen et al. 1978 read PET < 1 s as serious (secondary); reported"),
+            Row::reported(
+                "PET < 1 s per 1,000 junction entries",
+                per_k(s.pet_under_1s as f64),
+                "Allen et al. 1978 read PET < 1 s as serious (secondary); reported",
+            ),
             Row::reported("PET, 15th percentile, s", s.pet_s.p15, "reported"),
         ],
-        notes: vec![format!("{} junction-connector entries.", s.junction_entries)],
+        notes: vec![format!(
+            "{} junction-connector entries.",
+            s.junction_entries
+        )],
     })
 }

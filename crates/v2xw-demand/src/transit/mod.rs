@@ -112,7 +112,9 @@ impl Default for TransitParams {
 }
 
 fn runs_on_road(route_type: u16) -> bool {
-    matches!(route_type, 0 | 3 | 5 | 11) || (700..800).contains(&route_type) || (900..1000).contains(&route_type)
+    matches!(route_type, 0 | 3 | 5 | 11)
+        || (700..800).contains(&route_type)
+        || (900..1000).contains(&route_type)
 }
 
 /// One scheduled call of a vehicle trip.
@@ -260,7 +262,9 @@ pub fn build_schedule(world: &World, p: &TransitParams, date: u32) -> Result<Sch
                         stop_id: st.id.clone(),
                         name: st.name.clone(),
                         route_index: ps.route_index,
-                        s_m: ps.s_m.clamp((14.0f64).min(lane_len), (lane_len - 1.0).max(0.0)),
+                        s_m: ps
+                            .s_m
+                            .clamp((14.0f64).min(lane_len), (lane_len - 1.0).max(0.0)),
                         arrival_s: arr + shift - p.start_s_of_day,
                         departure_s: dep + shift - p.start_s_of_day,
                     }
@@ -268,7 +272,9 @@ pub fn build_schedule(world: &World, p: &TransitParams, date: u32) -> Result<Sch
                 .collect();
             // Join under way: drop calls already departed at the run start.
             let first_live = calls_run.iter().position(|c| c.departure_s >= 0.0);
-            let Some(first_live) = first_live else { continue };
+            let Some(first_live) = first_live else {
+                continue;
+            };
             calls_run.drain(..first_live);
             if calls_run.len() < 2 || calls_run[0].departure_s > p.duration_s {
                 continue;
@@ -296,7 +302,11 @@ pub fn build_schedule(world: &World, p: &TransitParams, date: u32) -> Result<Sch
             });
         }
     }
-    out.sort_by(|a, b| a.depart_s.total_cmp(&b.depart_s).then(a.trip_id.cmp(&b.trip_id)));
+    out.sort_by(|a, b| {
+        a.depart_s
+            .total_cmp(&b.depart_s)
+            .then(a.trip_id.cmp(&b.trip_id))
+    });
     if p.max_trips > 0 {
         out.truncate(p.max_trips);
     }
@@ -469,7 +479,10 @@ pub fn report(records: &[CallRecord]) -> TransitReport {
         .iter()
         .map(|r| r.arrived_s.unwrap_or(0.0) - r.scheduled_s)
         .collect();
-    let on_time = delays.iter().filter(|d| **d >= -60.0 && **d <= 300.0).count();
+    let on_time = delays
+        .iter()
+        .filter(|d| **d >= -60.0 && **d <= 300.0)
+        .count();
     let n = delays.len().max(1) as f64;
     TransitReport {
         served: served.len(),
@@ -563,11 +576,11 @@ impl Demand for TransitDemand {
             };
             if let Some(until) = st.dwell_until {
                 if now >= until {
-                    if let Some(r) = records
-                        .iter_mut()
-                        .rev()
-                        .find(|r| r.trip_id == trip.trip_id && r.stop_id == call.stop_id && r.departed_s.is_none())
-                    {
+                    if let Some(r) = records.iter_mut().rev().find(|r| {
+                        r.trip_id == trip.trip_id
+                            && r.stop_id == call.stop_id
+                            && r.departed_s.is_none()
+                    }) {
                         r.departed_s = Some(now);
                     }
                     st.dwell_until = None;
@@ -661,8 +674,7 @@ fn card(p: &TransitParams, s: &Schedule) -> ModelCard {
         Source::todo_calibrate("comfortable stopping deceleration"),
     );
     decel.calibration = Some(
-        "the agency's AVL trajectories approaching stops (deceleration onset and rate)"
-            .to_string(),
+        "the agency's AVL trajectories approaching stops (deceleration onset and rate)".to_string(),
     );
     card.parameters = vec![decel];
     card.parameters.extend(p.dwell.parameters());
@@ -766,7 +778,11 @@ mod tests {
         }
         std::fs::write(dir.join("stops.txt"), stops).unwrap();
         std::fs::write(dir.join("stop_times.txt"), times).unwrap();
-        std::fs::write(dir.join("routes.txt"), "route_id,route_short_name,route_type\nr1,1,3\n").unwrap();
+        std::fs::write(
+            dir.join("routes.txt"),
+            "route_id,route_short_name,route_type\nr1,1,3\n",
+        )
+        .unwrap();
         std::fs::write(
             dir.join("trips.txt"),
             "route_id,service_id,trip_id\nr1,wk,t1\nr1,wk,t2\n",

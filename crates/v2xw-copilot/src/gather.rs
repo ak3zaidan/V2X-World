@@ -14,8 +14,7 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 
 use crate::analyst::{
-    BREAKDOWNS, Group, HEADLINE_METRICS, MetricEvidence, RunEvidence, SERIES_METRICS,
-    ScenarioFacts,
+    BREAKDOWNS, Group, HEADLINE_METRICS, MetricEvidence, RunEvidence, SERIES_METRICS, ScenarioFacts,
 };
 use crate::error::Result;
 use crate::transport::RpcTransport;
@@ -57,17 +56,31 @@ pub fn gather<T: RpcTransport>(rpc: &mut T) -> Result<RunEvidence> {
         .into_iter()
         .flatten()
     {
-        let Some(name) = r.get("name").and_then(Value::as_str) else { continue };
+        let Some(name) = r.get("name").and_then(Value::as_str) else {
+            continue;
+        };
         rows.insert(
             name.to_string(),
             Row {
-                unit: r.get("unit").and_then(Value::as_str).unwrap_or("").to_string(),
+                unit: r
+                    .get("unit")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 dims: r
                     .get("dims")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(|d| d.as_str().map(str::to_string)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|d| d.as_str().map(str::to_string))
+                            .collect()
+                    })
                     .unwrap_or_default(),
-                base: r.get("base").and_then(Value::as_str).unwrap_or(name).to_string(),
+                base: r
+                    .get("base")
+                    .and_then(Value::as_str)
+                    .unwrap_or(name)
+                    .to_string(),
             },
         );
     }
@@ -103,11 +116,13 @@ pub fn gather<T: RpcTransport>(rpc: &mut T) -> Result<RunEvidence> {
             &json!({"metrics": [name], "t_from_ns": 0, "t_to_ns": t_ns, "bin_ns": bin}),
         ) {
             let series = series_of(&v);
-            let entry = metrics.entry((*name).to_string()).or_insert_with(|| MetricEvidence {
-                unit: row.unit.clone(),
-                dims: row.dims.clone(),
-                ..MetricEvidence::default()
-            });
+            let entry = metrics
+                .entry((*name).to_string())
+                .or_insert_with(|| MetricEvidence {
+                    unit: row.unit.clone(),
+                    dims: row.dims.clone(),
+                    ..MetricEvidence::default()
+                });
             entry.series = series;
         }
     }
@@ -130,11 +145,13 @@ pub fn gather<T: RpcTransport>(rpc: &mut T) -> Result<RunEvidence> {
             if groups.is_empty() {
                 continue;
             }
-            let entry = metrics.entry(name.to_string()).or_insert_with(|| MetricEvidence {
-                unit: row.unit.clone(),
-                dims: row.dims.clone(),
-                ..MetricEvidence::default()
-            });
+            let entry = metrics
+                .entry(name.to_string())
+                .or_insert_with(|| MetricEvidence {
+                    unit: row.unit.clone(),
+                    dims: row.dims.clone(),
+                    ..MetricEvidence::default()
+                });
             entry.groups.insert(dim.to_string(), groups);
         }
     }
@@ -238,7 +255,10 @@ mod tests {
         assert_eq!(e.scenario.rat, "lte-v2x-pc5");
         assert!((e.t_reached_s - 30.0).abs() < 1e-9);
         assert_eq!(e.metrics["cbr"].value, Some(0.42));
-        assert!(!e.metrics.contains_key("pdr"), "pdr is not in this run's catalogue");
+        assert!(
+            !e.metrics.contains_key("pdr"),
+            "pdr is not in this run's catalogue"
+        );
         assert!(e.backend.is_none(), "no security protocol, no backend read");
         assert!(
             rpc.seen.iter().all(|(m, p)| m != "metrics.query"

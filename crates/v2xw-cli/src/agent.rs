@@ -76,7 +76,13 @@ fn progress(e: &AgentEvent) {
     let line = match e {
         AgentEvent::Status { text } => text.clone(),
         AgentEvent::Plan { text } => format!("plan: {}", text.replace('\n', " / ")),
-        AgentEvent::Changes { base, changes, valid, errors, .. } => format!(
+        AgentEvent::Changes {
+            base,
+            changes,
+            valid,
+            errors,
+            ..
+        } => format!(
             "scenario from `{base}`: {} change(s){}{}",
             changes.len(),
             changes
@@ -86,17 +92,42 @@ fn progress(e: &AgentEvent) {
             if *valid {
                 String::new()
             } else {
-                format!("\n    INVALID: {}", errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("; "))
+                format!(
+                    "\n    INVALID: {}",
+                    errors
+                        .iter()
+                        .map(|e| e.message.clone())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
             }
         ),
-        AgentEvent::RunStarted { label, run_id, t_end_s } => {
-            format!("run `{label}` started ({run_id}), {} s to simulate", fmt(*t_end_s))
+        AgentEvent::RunStarted {
+            label,
+            run_id,
+            t_end_s,
+        } => {
+            format!(
+                "run `{label}` started ({run_id}), {} s to simulate",
+                fmt(*t_end_s)
+            )
         }
-        AgentEvent::Progress { label, t_s, t_end_s, actors } => {
-            format!("  {label}: {} / {} s, {actors} actors", fmt(*t_s), fmt(*t_end_s))
+        AgentEvent::Progress {
+            label,
+            t_s,
+            t_end_s,
+            actors,
+        } => {
+            format!(
+                "  {label}: {} / {} s, {actors} actors",
+                fmt(*t_s),
+                fmt(*t_end_s)
+            )
         }
         AgentEvent::Analysed { label, .. } => format!("run `{label}` analysed"),
-        AgentEvent::Tool { name, ok } => format!("  tool {name}: {}", if *ok { "ok" } else { "failed" }),
+        AgentEvent::Tool { name, ok } => {
+            format!("  tool {name}: {}", if *ok { "ok" } else { "failed" })
+        }
         AgentEvent::Report { .. } => "report ready".to_string(),
         AgentEvent::Error { message } => format!("error: {message}"),
     };
@@ -167,7 +198,9 @@ pub fn agent(opts: &AgentOptions) -> Result<String> {
             })
             .map_err(|e| e.to_string())
     } else if agent.has_model() {
-        agent.ask(&opts.prompt, &mut sink).map_err(|e| e.to_string())
+        agent
+            .ask(&opts.prompt, &mut sink)
+            .map_err(|e| e.to_string())
     } else {
         agent
             .run_without_model(&opts.prompt, &opts.base, &mut sink)
@@ -183,7 +216,10 @@ pub fn agent(opts: &AgentOptions) -> Result<String> {
                 s.push('\n');
                 s
             })
-            .map_err(|source| CliError::Json { what: "agent report", source })
+            .map_err(|source| CliError::Json {
+                what: "agent report",
+                source,
+            })
     } else {
         Ok(report.markdown)
     }
@@ -207,7 +243,10 @@ pub fn serve(opts: &ServeOptions) -> Result<String> {
             let listener = tokio::net::TcpListener::bind(bind)
                 .await
                 .map_err(|e| CliError::Agent(format!("cannot bind {bind}: {e}")))?;
-            println!("v2xw agent endpoints on http://{} for the engine at {engine}", bind);
+            println!(
+                "v2xw agent endpoints on http://{} for the engine at {engine}",
+                bind
+            );
             print_key_line();
             axum::serve(listener, router)
                 .with_graceful_shutdown(async {
@@ -249,7 +288,10 @@ pub fn serve(opts: &ServeOptions) -> Result<String> {
         host.set_origin(format!("http://127.0.0.1:{}", server.address().port()));
         println!("v2xw serve listening on {}", server.http_url());
         println!("  rpc      POST {}/rpc", server.http_url());
-        println!("  agent    {}/agent/status (watching every run)", server.http_url());
+        println!(
+            "  agent    {}/agent/status (watching every run)",
+            server.http_url()
+        );
         print_key_line();
         use std::io::Write;
         let _ = std::io::stdout().flush();

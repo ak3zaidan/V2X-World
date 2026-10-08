@@ -168,7 +168,11 @@ fn cacc_build(law: CaccLaw, v: &serde_json::Value, ctx: &BuildCtx) -> Result<Sha
         }
         serde_json::from_value(base).map_err(|e| e.to_string())?
     };
-    Ok(Arc::new(Cacc::with_params(law, params, Arc::clone(&ctx.link))))
+    Ok(Arc::new(Cacc::with_params(
+        law,
+        params,
+        Arc::clone(&ctx.link),
+    )))
 }
 
 /// Every selectable car-following model, in id order. Add a model here.
@@ -325,7 +329,8 @@ impl CarFollowing for ByClass {
         lane: &LaneView,
         w: &WeatherState,
     ) -> f64 {
-        self.model_for(ego.class, ego.actor).accel(ego, leader, lane, w)
+        self.model_for(ego.class, ego.actor)
+            .accel(ego, leader, lane, w)
     }
 
     fn profile(&self, class: VehicleClass) -> DriverProfile {
@@ -384,7 +389,11 @@ pub fn build(spec: &DrivingSpec, seed: u64) -> Result<Option<SharedCf>, String> 
             format!(
                 "{key}.model: unknown car-following model `{}` (known: {})",
                 c.model,
-                FACTORIES.iter().map(|f| f.short).collect::<Vec<_>>().join(", ")
+                FACTORIES
+                    .iter()
+                    .map(|f| f.short)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         })?;
         if !(0.0..=1.0).contains(&c.share) {
@@ -412,7 +421,10 @@ pub fn build(spec: &DrivingSpec, seed: u64) -> Result<Option<SharedCf>, String> 
     })))
 }
 
-fn by_class_card(default: &SharedCf, per_class: &BTreeMap<VehicleClass, (f64, SharedCf)>) -> ModelCard {
+fn by_class_card(
+    default: &SharedCf,
+    per_class: &BTreeMap<VehicleClass, (f64, SharedCf)>,
+) -> ModelCard {
     let mut card = ModelCard::new(
         BY_CLASS_ID,
         Family::Mobility,
@@ -439,10 +451,15 @@ fn by_class_card(default: &SharedCf, per_class: &BTreeMap<VehicleClass, (f64, Sh
         Parameter::new(
             "by_class",
             "-",
-            serde_json::json!(per_class
-                .iter()
-                .map(|(c, (s, m))| (c.as_str().to_string(), serde_json::json!({"model": m.card().id, "share": s})))
-                .collect::<serde_json::Map<_, _>>()),
+            serde_json::json!(
+                per_class
+                    .iter()
+                    .map(|(c, (s, m))| (
+                        c.as_str().to_string(),
+                        serde_json::json!({"model": m.card().id, "share": s})
+                    ))
+                    .collect::<serde_json::Map<_, _>>()
+            ),
             choice,
         ),
     ];
@@ -487,7 +504,9 @@ mod tests {
         for f in FACTORIES {
             let m = (f.build)(&serde_json::Value::Null, &ctx).unwrap();
             assert_eq!(m.card().id, f.id);
-            (f.card)().validate().unwrap_or_else(|e| panic!("{}: {e}", f.id));
+            (f.card)()
+                .validate()
+                .unwrap_or_else(|e| panic!("{}: {e}", f.id));
             assert_eq!(m.cooperative().is_some(), f.cooperative, "{}", f.id);
         }
     }
@@ -502,7 +521,10 @@ mod tests {
         let Err(err) = build(&spec, 1) else {
             panic!("an unknown model was accepted")
         };
-        assert!(err.contains("no-such-model") && err.contains("krauss"), "{err}");
+        assert!(
+            err.contains("no-such-model") && err.contains("krauss"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -515,12 +537,17 @@ mod tests {
         let link = m.cooperative().expect("a cooperative class");
         assert!(link.subscribes(VehicleClass::Passenger));
         assert!(!link.subscribes(VehicleClass::Truck));
-        assert_eq!(m.profile(VehicleClass::Truck), Gipps::class_profile(VehicleClass::Truck));
+        assert_eq!(
+            m.profile(VehicleClass::Truck),
+            Gipps::class_profile(VehicleClass::Truck)
+        );
         // Half the cars: over 200 ids the split is near one half, and stable.
         let bc = by_class_of(&spec);
         let n = (0..200u32)
             .filter(|i| {
-                bc.model_for(VehicleClass::Passenger, ActorId::new(*i)).card().id
+                bc.model_for(VehicleClass::Passenger, ActorId::new(*i))
+                    .card()
+                    .id
                     == "mobility/car-following/cacc-ploeg"
             })
             .count();
@@ -528,14 +555,22 @@ mod tests {
         let again = by_class_of(&spec);
         for i in 0..200u32 {
             assert_eq!(
-                bc.model_for(VehicleClass::Passenger, ActorId::new(i)).card().id,
-                again.model_for(VehicleClass::Passenger, ActorId::new(i)).card().id
+                bc.model_for(VehicleClass::Passenger, ActorId::new(i))
+                    .card()
+                    .id,
+                again
+                    .model_for(VehicleClass::Passenger, ActorId::new(i))
+                    .card()
+                    .id
             );
         }
     }
 
     fn by_class_of(spec: &DrivingSpec) -> ByClass {
-        let link = Arc::new(CoopLink::new(spec.cooperative, vec![VehicleClass::Passenger]));
+        let link = Arc::new(CoopLink::new(
+            spec.cooperative,
+            vec![VehicleClass::Passenger],
+        ));
         let ctx = BuildCtx { seed: 9, link };
         let mk = |c: &CfChoice| (factory(&c.model).unwrap().build)(&c.params, &ctx).unwrap();
         let default = mk(spec.car_following.as_ref().unwrap());

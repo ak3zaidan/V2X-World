@@ -943,7 +943,8 @@ pub struct Phase2Report {
     pub kem_scheme: String,
     /// Per committee role (`pca`, `crl`, `linkage`): sessions, rounds, bytes, restarts,
     /// timeouts, invalid shares, failures and latency (`v2xw_proto::threshold::session`).
-    pub committees: std::collections::BTreeMap<String, v2xw_proto::threshold::session::CommitteeStats>,
+    pub committees:
+        std::collections::BTreeMap<String, v2xw_proto::threshold::session::CommitteeStats>,
     /// Committee sessions that failed for good, by role: certificates never issued, CRLs
     /// never signed, revocations never resolved.
     pub committee_failures: std::collections::BTreeMap<String, u64>,

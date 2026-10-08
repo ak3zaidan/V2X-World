@@ -93,8 +93,10 @@ pub mod threshold;
 pub mod view;
 
 pub use error::{ProtoError, Result};
+pub use fault::{Fault, FaultKind, FaultPlan};
 pub use hybrid::HybridScheme;
-pub use kernel::{Delivery, Kernel, KemCharge, Outbox, PqCharge};
+pub use hybrid::KemSpec;
+pub use kernel::{Delivery, KemCharge, Kernel, Outbox, PqCharge};
 pub use net::{BackendNet, Link, Transport};
 pub use overhead::{AirInterface, MessageOverhead, OverheadProfile, Payload};
 pub use pseudonym::{CertEvent, ChangeReason, ChangeTrigger, PseudonymStore, PseudonymStrategy};
@@ -110,8 +112,6 @@ pub use spec::{
     StorageCounter, TrustBoundary, ValidityPolicy, separation_violations,
 };
 pub use stage::{FlowId, FlowRun, StageId, StageLog, StageStamp, WireStep};
-pub use fault::{Fault, FaultKind, FaultPlan};
-pub use hybrid::KemSpec;
 pub use threshold::{
     Committee, ProtocolParams, RefreshPolicy, RoundMessage, RoundPlan, StarRound, ThresholdOp,
     ThresholdProtocol, UmbrellaScheme,

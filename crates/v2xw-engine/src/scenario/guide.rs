@@ -180,7 +180,11 @@ const BASIC: &[Basic] = &[
 
 /// `basic` or `advanced`.
 pub fn level_of(path: &str) -> &'static str {
-    if basic(path).is_some() { "basic" } else { "advanced" }
+    if basic(path).is_some() {
+        "basic"
+    } else {
+        "advanced"
+    }
 }
 
 fn basic(path: &str) -> Option<&'static Basic> {
@@ -225,8 +229,14 @@ fn words(path: &str, value: &str) -> (String, String) {
 /// pair `scenarios/pq-signatures.yaml` runs every scheme with).
 fn pq_support() -> Vec<Value> {
     vec![
-        set("net.fragmenter", json!({"id": v2xw_net::FRAGMENTER_GENERIC_ID})),
-        set("nodes.default_obu", json!("obu/generic-automotive-soc-no-hsm")),
+        set(
+            "net.fragmenter",
+            json!({"id": v2xw_net::FRAGMENTER_GENERIC_ID}),
+        ),
+        set(
+            "nodes.default_obu",
+            json!("obu/generic-automotive-soc-no-hsm"),
+        ),
         set("security.crypto_mode", json!("modeled")),
     ]
 }
@@ -237,7 +247,11 @@ fn signature_choices() -> Vec<Value> {
         .iter()
         .map(|s| {
             let (label, description) = words("security.signature", s.id);
-            let label = if label == s.id { s.label.to_string() } else { label };
+            let label = if label == s.id {
+                s.label.to_string()
+            } else {
+                label
+            };
             let (group, mut patch) = match s.mode {
                 SchemeMode::Classical => ("Classical (deployed today)", Vec::new()),
                 SchemeMode::Hybrid => ("Hybrid post-quantum", pq_support()),
@@ -256,7 +270,10 @@ fn security_choices() -> Vec<Value> {
             "The US Security Credential Management System: pseudonym certificates in batches, linkage values and certificate revocation lists. Vehicles send BSMs over WSMP.",
             None,
             vec![
-                set("security.protocol.id", json!(v2xw_proto::scms::CAMP_SCMS_ID)),
+                set(
+                    "security.protocol.id",
+                    json!(v2xw_proto::scms::CAMP_SCMS_ID),
+                ),
                 set("security.envelope", json!("ieee1609.2")),
                 set("net.layer", json!("wsmp")),
                 set("messages.sets", json!(["bsm"])),
@@ -308,7 +325,10 @@ fn attacker_choices() -> Vec<Value> {
             description.trim(),
             None,
             vec![
-                set("threats.attackers", json!([{"id": id, "fraction": ATTACK_SHARE}])),
+                set(
+                    "threats.attackers",
+                    json!([{"id": id, "fraction": ATTACK_SHARE}]),
+                ),
                 set("detection.local", json!([{"id": crate::phase2::LEGACY_12}])),
             ],
         ));
@@ -325,13 +345,30 @@ fn export_choices() -> Vec<Value> {
     )];
     for id in crate::export::EXPORTERS {
         let (label, description) = match id {
-            "recording" => ("Recording (MCAP)", "The full recording, replayable in the Studio and readable with Foxglove."),
-            "jsonl" => ("Tables as JSON Lines", "One table per recorded channel, as text: easy to read, large."),
-            "parquet" => ("Tables as Parquet", "One table per recorded channel, compressed: the format for pandas, R or DuckDB."),
-            "arrow" => ("Tables as Arrow", "One table per recorded channel as Arrow IPC files."),
+            "recording" => (
+                "Recording (MCAP)",
+                "The full recording, replayable in the Studio and readable with Foxglove.",
+            ),
+            "jsonl" => (
+                "Tables as JSON Lines",
+                "One table per recorded channel, as text: easy to read, large.",
+            ),
+            "parquet" => (
+                "Tables as Parquet",
+                "One table per recorded channel, compressed: the format for pandas, R or DuckDB.",
+            ),
+            "arrow" => (
+                "Tables as Arrow",
+                "One table per recorded channel as Arrow IPC files.",
+            ),
             other => (other, ""),
         };
-        out.push(choice(label, description, None, vec![set("exporters", json!([{"id": id}]))]));
+        out.push(choice(
+            label,
+            description,
+            None,
+            vec![set("exporters", json!([{"id": id}]))],
+        ));
     }
     out
 }
@@ -427,9 +464,15 @@ pub fn studies() -> Value {
             "Can misbehaving vehicles be detected, reported and revoked, and how fast?",
             "Detections, reports, revocation latency, false positives.",
             vec![
-                set("threats.attackers", json!([{"id": "threat/attacker/legacy/ConstPos", "fraction": ATTACK_SHARE}])),
+                set(
+                    "threats.attackers",
+                    json!([{"id": "threat/attacker/legacy/ConstPos", "fraction": ATTACK_SHARE}])
+                ),
                 set("detection.local", json!([{"id": crate::phase2::LEGACY_12}])),
-                set("detection.ma", json!({"id": crate::phase2::MA_CORROBORATED})),
+                set(
+                    "detection.ma",
+                    json!({"id": crate::phase2::MA_CORROBORATED})
+                ),
                 set("time.duration_s", json!(300.0)),
             ],
         ),
@@ -441,7 +484,10 @@ pub fn studies() -> Value {
             vec![
                 set("security.pseudonym_change.strategy", json!("time")),
                 set("security.pseudonym_change.period_s", json!(60.0)),
-                set("threats.eavesdropper", json!({"id": crate::pseudonym_policy::EAVESDROPPER_ID})),
+                set(
+                    "threats.eavesdropper",
+                    json!({"id": crate::pseudonym_policy::EAVESDROPPER_ID})
+                ),
                 set("threats.attackers", json!([])),
                 set("time.duration_s", json!(600.0)),
             ],
@@ -490,7 +536,10 @@ mod tests {
         let mut doc = serde_json::to_value(crate::Scenario::minimal()).expect("serialises");
         apply(&mut doc, patch);
         let s: crate::Scenario = serde_json::from_value(doc).expect("patched scenario parses");
-        crate::scenario::validate(&s).iter().map(ToString::to_string).collect()
+        crate::scenario::validate(&s)
+            .iter()
+            .map(ToString::to_string)
+            .collect()
     }
 
     #[test]
@@ -517,7 +566,11 @@ mod tests {
             .iter()
             .filter_map(|f| f["x-path"].as_str().map(str::to_string))
             .collect();
-        let has = |p: &str| published.iter().any(|x| x == p || x.starts_with(&format!("{p}[]")) || x.starts_with(&format!("{p}.")));
+        let has = |p: &str| {
+            published.iter().any(|x| {
+                x == p || x.starts_with(&format!("{p}[]")) || x.starts_with(&format!("{p}."))
+            })
+        };
         for q in quick().as_array().expect("list") {
             if let Some(p) = q["path"].as_str() {
                 assert!(has(p), "quick setting {} names unpublished {p}", q["id"]);
@@ -534,7 +587,11 @@ mod tests {
             .iter()
             .filter_map(|c| c["group"].as_str().map(str::to_string))
             .collect();
-        for g in ["Classical (deployed today)", "Hybrid post-quantum", "Post-quantum"] {
+        for g in [
+            "Classical (deployed today)",
+            "Hybrid post-quantum",
+            "Post-quantum",
+        ] {
             assert!(groups.iter().any(|x| x == g), "{g}");
         }
     }

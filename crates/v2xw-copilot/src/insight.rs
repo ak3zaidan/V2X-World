@@ -35,7 +35,11 @@ fn ev(metric: &str, v: f64, units: &BTreeMap<String, String>) -> Evidence {
 fn link(metric: &str) -> Link {
     Link {
         metric: metric.to_string(),
-        chart: metric.split(['.', '[']).next().unwrap_or(metric).to_string(),
+        chart: metric
+            .split(['.', '['])
+            .next()
+            .unwrap_or(metric)
+            .to_string(),
         query: json!({"method": "metrics.query", "params": {"metrics": [metric]}}),
     }
 }
@@ -76,17 +80,29 @@ pub fn findings(
     }
 
     // Detection.
-    let det: Vec<&str> = ["det_recall", "det_precision", "det_fpr", "det_tp", "det_fp", "det_fn",
-                          "time_to_detect", "time_to_decision"]
-        .into_iter()
-        .filter(|k| get(k).is_some())
-        .collect();
+    let det: Vec<&str> = [
+        "det_recall",
+        "det_precision",
+        "det_fpr",
+        "det_tp",
+        "det_fp",
+        "det_fn",
+        "time_to_detect",
+        "time_to_decision",
+    ]
+    .into_iter()
+    .filter(|k| get(k).is_some())
+    .collect();
     if !det.is_empty() && (attackers || get("det_fp").is_some_and(|v| v > 0.0)) {
         let recall = get("det_recall");
         let fpr = get("det_fpr");
         let missed = recall.is_some_and(|r| r < RECALL_FLOOR);
         let accusing = fpr.is_some_and(|f| f > FPR_CEILING);
-        let severity = if missed || accusing { Severity::Warning } else { Severity::Notice };
+        let severity = if missed || accusing {
+            Severity::Warning
+        } else {
+            Severity::Notice
+        };
         let title = match (missed, accusing) {
             (true, true) => "Detection misses most attacker messages and flags honest ones",
             (true, false) => "Detection misses most attacker messages",
@@ -141,7 +157,11 @@ pub fn findings(
         out.push(Finding {
             id: "channel.jamming".into(),
             layer: Layer::Channel,
-            severity: if share >= 0.3 { Severity::Warning } else { Severity::Notice },
+            severity: if share >= 0.3 {
+                Severity::Warning
+            } else {
+                Severity::Notice
+            },
             title: "Frames were lost to a jammer".into(),
             detail: "The share of lost receptions the run attributes to jamming energy (a \
                      threat in the scenario, not load), whether or not it is the largest \
@@ -149,17 +169,24 @@ pub fn findings(
                 .into(),
             evidence,
             location: Location::default(),
-            reference: Some("0.3 of losses, the analyst's dominant-cause share (engineering choice)".into()),
+            reference: Some(
+                "0.3 of losses, the analyst's dominant-cause share (engineering choice)".into(),
+            ),
             links: vec![link("pdr_by_cause[jammed]")],
         });
     }
 
     // Security overhead.
-    let over: Vec<&str> = ["envelope_overhead", "cert_bytes_share", "full_cert_share",
-                           "air_bytes_per_payload_byte", "security_overhead"]
-        .into_iter()
-        .filter(|k| get(k).is_some())
-        .collect();
+    let over: Vec<&str> = [
+        "envelope_overhead",
+        "cert_bytes_share",
+        "full_cert_share",
+        "air_bytes_per_payload_byte",
+        "security_overhead",
+    ]
+    .into_iter()
+    .filter(|k| get(k).is_some())
+    .collect();
     if !over.is_empty() {
         out.push(Finding {
             id: "security.overhead".into(),
@@ -169,7 +196,10 @@ pub fn findings(
             detail: "The signed envelope's bytes against the payload's: the certificate's share \
                      of the air bytes and how often a full certificate rides along."
                 .into(),
-            evidence: over.iter().filter_map(|k| get(k).map(|v| ev(k, v, units))).collect(),
+            evidence: over
+                .iter()
+                .filter_map(|k| get(k).map(|v| ev(k, v, units)))
+                .collect(),
             location: Location::default(),
             reference: None,
             links: over.iter().map(|k| link(k)).collect(),
@@ -177,19 +207,37 @@ pub fn findings(
     }
 
     // Pedestrians.
-    let ped: Vec<&String> = extra.keys().filter(|k| k.starts_with("ped_")).take(6).collect();
+    let ped: Vec<&String> = extra
+        .keys()
+        .filter(|k| k.starts_with("ped_"))
+        .take(6)
+        .collect();
     if !ped.is_empty() {
-        let conflicts = ped.iter().filter(|k| k.contains("conflict") || k.contains("near_miss"))
+        let conflicts = ped
+            .iter()
+            .filter(|k| k.contains("conflict") || k.contains("near_miss"))
             .any(|k| extra.get(*k).is_some_and(|v| *v > 0.0));
         out.push(Finding {
             id: "traffic.pedestrians".into(),
             layer: Layer::Traffic,
-            severity: if conflicts { Severity::Warning } else { Severity::Notice },
-            title: if conflicts { "Pedestrians and vehicles came into conflict" } else { "Pedestrians crossed without measured conflicts" }.into(),
+            severity: if conflicts {
+                Severity::Warning
+            } else {
+                Severity::Notice
+            },
+            title: if conflicts {
+                "Pedestrians and vehicles came into conflict"
+            } else {
+                "Pedestrians crossed without measured conflicts"
+            }
+            .into(),
             detail: "The pedestrian metrics of the run (crossings, conflicts, near misses, \
                      mid-block crossings), as the server measured them."
                 .into(),
-            evidence: ped.iter().filter_map(|k| extra.get(*k).map(|v| ev(k, *v, units))).collect(),
+            evidence: ped
+                .iter()
+                .filter_map(|k| extra.get(*k).map(|v| ev(k, *v, units)))
+                .collect(),
             location: Location::default(),
             reference: None,
             links: ped.iter().map(|k| link(k)).collect(),
@@ -197,7 +245,11 @@ pub fn findings(
     }
 
     // Application warnings.
-    let apps: Vec<&String> = extra.keys().filter(|k| k.starts_with("apps_") || k.as_str() == "warnings").take(6).collect();
+    let apps: Vec<&String> = extra
+        .keys()
+        .filter(|k| k.starts_with("apps_") || k.as_str() == "warnings")
+        .take(6)
+        .collect();
     if !apps.is_empty() {
         out.push(Finding {
             id: "apps.warnings".into(),
@@ -207,7 +259,10 @@ pub fn findings(
             detail: "Warnings the equipped vehicles' applications raised (forward collision, \
                      electronic brake light, …) and how they scored against ground truth."
                 .into(),
-            evidence: apps.iter().filter_map(|k| extra.get(*k).map(|v| ev(k, *v, units))).collect(),
+            evidence: apps
+                .iter()
+                .filter_map(|k| extra.get(*k).map(|v| ev(k, *v, units)))
+                .collect(),
             location: Location::default(),
             reference: None,
             links: apps.iter().map(|k| link(k)).collect(),
@@ -228,15 +283,27 @@ mod tests {
     fn a_detector_that_misses_is_a_warning_and_one_that_catches_is_a_notice() {
         let none: BTreeMap<String, f64> = BTreeMap::new();
         let units: BTreeMap<String, String> = BTreeMap::new();
-        let miss = findings(&map(&[("det_recall", 0.2), ("det_fpr", 0.0)]), &none, &units, true);
+        let miss = findings(
+            &map(&[("det_recall", 0.2), ("det_fpr", 0.0)]),
+            &none,
+            &units,
+            true,
+        );
         assert_eq!(miss[0].id, "security.detection");
         assert_eq!(miss[0].severity, Severity::Warning);
-        let catch = findings(&map(&[("det_recall", 0.9), ("det_fpr", 0.001)]), &none, &units, true);
+        let catch = findings(
+            &map(&[("det_recall", 0.9), ("det_fpr", 0.001)]),
+            &none,
+            &units,
+            true,
+        );
         assert_eq!(catch[0].severity, Severity::Notice);
         let off = findings(&none, &none, &units, true);
         assert_eq!(off[0].id, "security.detection-off");
-        assert!(findings(&map(&[("det_recall", 0.9)]), &none, &units, false).is_empty(),
-                "no attackers and no false positives: nothing to say about detection");
+        assert!(
+            findings(&map(&[("det_recall", 0.9)]), &none, &units, false).is_empty(),
+            "no attackers and no false positives: nothing to say about detection"
+        );
     }
 
     #[test]
@@ -247,9 +314,21 @@ mod tests {
         assert_eq!(f[0].id, "simulation.silent");
         assert_eq!(f[0].severity, Severity::Critical);
         assert!(findings(&map(&[("bytes_air", 10.0)]), &none, &units, false).is_empty());
-        let j = findings(&map(&[("pdr_by_cause[jammed]", 0.0066), ("lost_frames[jammed]", 305.0)]), &none, &units, false);
+        let j = findings(
+            &map(&[
+                ("pdr_by_cause[jammed]", 0.0066),
+                ("lost_frames[jammed]", 305.0),
+            ]),
+            &none,
+            &units,
+            false,
+        );
         assert_eq!(j[0].id, "channel.jamming");
-        assert!(j[0].evidence.iter().any(|e| e.value == 305.0 && e.unit == "frames"));
+        assert!(
+            j[0].evidence
+                .iter()
+                .any(|e| e.value == 305.0 && e.unit == "frames")
+        );
     }
 
     #[test]

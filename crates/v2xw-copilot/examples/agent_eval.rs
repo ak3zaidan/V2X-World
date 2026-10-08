@@ -119,7 +119,11 @@ impl Check {
         } else {
             format!("in [{:?}, {:?}]", self.min, self.max)
         };
-        format!("{} {what}{}", self.key, if self.all { " (all runs)" } else { "" })
+        format!(
+            "{} {what}{}",
+            self.key,
+            if self.all { " (all runs)" } else { "" }
+        )
     }
 
     fn holds(&self, doc: &Value) -> bool {
@@ -133,7 +137,9 @@ impl Check {
         }
         if let Some(x) = self.approx {
             let tol = self.tol.unwrap_or(0.02);
-            return v.as_f64().is_some_and(|y| (y - x).abs() <= tol * x.abs().max(1e-9));
+            return v
+                .as_f64()
+                .is_some_and(|y| (y - x).abs() <= tol * x.abs().max(1e-9));
         }
         if let Some(id) = &self.has_id {
             return v.as_array().is_some_and(|a| {
@@ -147,7 +153,8 @@ impl Check {
         }
         if let Some(t) = &self.has_type {
             return v.as_array().is_some_and(|a| {
-                a.iter().any(|item| item.get("type").and_then(Value::as_str) == Some(t.as_str()))
+                a.iter()
+                    .any(|item| item.get("type").and_then(Value::as_str) == Some(t.as_str()))
             });
         }
         if self.present == Some(true) {
@@ -260,7 +267,12 @@ struct CaseResult {
 
 impl CaseResult {
     fn score(&self) -> f64 {
-        let parts = [self.config_ok, self.completed, self.grounded, self.conclusions_ok];
+        let parts = [
+            self.config_ok,
+            self.completed,
+            self.grounded,
+            self.conclusions_ok,
+        ];
         parts.iter().filter(|b| **b).count() as f64 / parts.len() as f64
     }
 
@@ -299,26 +311,53 @@ impl Drop for Engine {
 
 fn healthy(origin: &str) -> bool {
     Command::new("curl")
-        .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", &format!("{origin}/healthz")])
+        .args([
+            "-s",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            &format!("{origin}/healthz"),
+        ])
         .output()
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "200")
 }
 
 fn start_engine(args: &Args) -> Engine {
     if let Some(url) = &args.engine {
-        return Engine { child: None, origin: url.trim_end_matches('/').to_string(), rt: None, server: None };
+        return Engine {
+            child: None,
+            origin: url.trim_end_matches('/').to_string(),
+            rt: None,
+            server: None,
+        };
     }
     let scenario = args.scenario.clone();
     if let Some(bin) = &args.server_bin {
         let origin = format!("http://127.0.0.1:{}", args.port);
         let child = Command::new(bin)
-            .args(["--scenario", &scenario.display().to_string(), "--port", &args.port.to_string(),
-                   "--speed", "0", "--paused", "--retain-mb", "256", "--quiet"])
+            .args([
+                "--scenario",
+                &scenario.display().to_string(),
+                "--port",
+                &args.port.to_string(),
+                "--speed",
+                "0",
+                "--paused",
+                "--retain-mb",
+                "256",
+                "--quiet",
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .unwrap_or_else(|e| panic!("cannot start {}: {e}", bin.display()));
-        let engine = Engine { child: Some(child), origin: origin.clone(), rt: None, server: None };
+        let engine = Engine {
+            child: Some(child),
+            origin: origin.clone(),
+            rt: None,
+            server: None,
+        };
         for _ in 0..240 {
             if healthy(&origin) {
                 return engine;
@@ -327,7 +366,11 @@ fn start_engine(args: &Args) -> Engine {
         }
         panic!("the engine at {origin} did not come up");
     }
-    let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("runtime");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime");
     let server = rt
         .block_on(v2xw_server::serve_scenario(
             v2xw_server::ServerOptions {
@@ -335,11 +378,20 @@ fn start_engine(args: &Args) -> Engine {
                 ..v2xw_server::ServerOptions::default()
             },
             &scenario,
-            v2xw_server::LiveOptions { paused: true, speed: 0.0, ..v2xw_server::LiveOptions::default() },
+            v2xw_server::LiveOptions {
+                paused: true,
+                speed: 0.0,
+                ..v2xw_server::LiveOptions::default()
+            },
         ))
         .expect("the engine starts");
     let origin = server.http_url();
-    Engine { child: None, origin, rt: Some(rt), server: Some(server) }
+    Engine {
+        child: None,
+        origin,
+        rt: Some(rt),
+        server: Some(server),
+    }
 }
 
 // ----------------------------------------------------------------------------- arguments
@@ -424,7 +476,10 @@ fn registry_results(history: &[v2xw_copilot::ChatMessage]) -> String {
             names.insert(c.id.clone(), c.name.clone());
         }
         if let Some(id) = &m.tool_call_id {
-            if names.get(id).is_some_and(|n| n.starts_with("registry__") || n == "find_settings") {
+            if names
+                .get(id)
+                .is_some_and(|n| n.starts_with("registry__") || n == "find_settings")
+            {
                 out.push_str(m.text());
                 out.push('\n');
             }
@@ -447,7 +502,13 @@ fn score(case: &Case, report: &AgentReport, prompts: &str, r: &mut CaseResult) {
             "{} run(s), expected {}{}",
             r.runs,
             range.min,
-            if range.max == usize::MAX { "+".to_string() } else if range.max == range.min { String::new() } else { format!("–{}", range.max) }
+            if range.max == usize::MAX {
+                "+".to_string()
+            } else if range.max == range.min {
+                String::new()
+            } else {
+                format!("–{}", range.max)
+            }
         ));
     }
     for c in &case.expect {
@@ -464,7 +525,10 @@ fn score(case: &Case, report: &AgentReport, prompts: &str, r: &mut CaseResult) {
         let pointer = format!("/{}", key.replace('.', "/"));
         let mut seen: Vec<String> = Vec::new();
         for d in &docs {
-            let v = d.pointer(&pointer).map(Value::to_string).unwrap_or_default();
+            let v = d
+                .pointer(&pointer)
+                .map(Value::to_string)
+                .unwrap_or_default();
             if !seen.contains(&v) {
                 seen.push(v);
             }
@@ -491,7 +555,10 @@ fn score(case: &Case, report: &AgentReport, prompts: &str, r: &mut CaseResult) {
     // Strict grounding: the overview against the report's tables (the overview itself cut
     // out) and the person's own words, not against the agent's conversation.
     let data = report.markdown.replacen(report.overview.trim(), "", 1);
-    let corpus = format!("{data}\n{prompts}\n{}", serde_json::to_string(&report.runs).unwrap_or_default());
+    let corpus = format!(
+        "{data}\n{prompts}\n{}",
+        serde_json::to_string(&report.runs).unwrap_or_default()
+    );
     r.ungrounded = ungrounded_numbers(&report.overview, &corpus);
     r.grounded = r.ungrounded.is_empty();
     r.agent_flagged = report.ungrounded.clone();
@@ -511,21 +578,35 @@ fn score(case: &Case, report: &AgentReport, prompts: &str, r: &mut CaseResult) {
         }
     }
     if !case.findings.is_empty() {
-        let found = report
-            .runs
-            .iter()
-            .any(|run| case.findings.iter().any(|id| run.analysis.finding(id).is_some()));
+        let found = report.runs.iter().any(|run| {
+            case.findings
+                .iter()
+                .any(|id| run.analysis.finding(id).is_some())
+        });
         if !found {
             cn.push(format!("no finding among {:?}", case.findings));
         }
     }
     if case.asks {
         let asks = text.contains('?')
-            || ["could you", "do you mean", "which ", "not possible", "cannot", "can't",
-                "not supported", "isn't supported", "does not", "doesn't", "no ", "unsupported",
-                "not available", "unable"]
-                .iter()
-                .any(|w| text.contains(w));
+            || [
+                "could you",
+                "do you mean",
+                "which ",
+                "not possible",
+                "cannot",
+                "can't",
+                "not supported",
+                "isn't supported",
+                "does not",
+                "doesn't",
+                "no ",
+                "unsupported",
+                "not available",
+                "unable",
+            ]
+            .iter()
+            .any(|w| text.contains(w));
         if !asks {
             cn.push("neither asks nor explains".to_string());
         }
@@ -562,7 +643,12 @@ fn f(v: Option<f64>, digits: usize) -> String {
 
 fn summary(s: &SuiteResult) -> BTreeMap<&'static str, String> {
     let n = s.cases.len().max(1) as f64;
-    let rate = |p: &dyn Fn(&CaseResult) -> bool| format!("{:.0}%", 100.0 * s.cases.iter().filter(|c| p(c)).count() as f64 / n);
+    let rate = |p: &dyn Fn(&CaseResult) -> bool| {
+        format!(
+            "{:.0}%",
+            100.0 * s.cases.iter().filter(|c| p(c)).count() as f64 / n
+        )
+    };
     let firsts: Vec<f64> = s.cases.iter().filter_map(|c| c.first_event_s).collect();
     let models: Vec<f64> = s.cases.iter().filter_map(|c| c.first_model_s).collect();
     let totals: Vec<f64> = s.cases.iter().map(|c| c.total_s).collect();
@@ -570,7 +656,13 @@ fn summary(s: &SuiteResult) -> BTreeMap<&'static str, String> {
     let mut m = BTreeMap::new();
     m.insert("a cases", format!("{}", s.cases.len()));
     m.insert("b passed (all four)", rate(&|c| c.passed()));
-    m.insert("c mean score", format!("{:.2}", s.cases.iter().map(CaseResult::score).sum::<f64>() / n));
+    m.insert(
+        "c mean score",
+        format!(
+            "{:.2}",
+            s.cases.iter().map(CaseResult::score).sum::<f64>() / n
+        ),
+    );
     m.insert("d configuration", rate(&|c| c.config_ok));
     m.insert("e run completed", rate(&|c| c.completed));
     m.insert("f numbers grounded", rate(&|c| c.grounded));
@@ -579,10 +671,30 @@ fn summary(s: &SuiteResult) -> BTreeMap<&'static str, String> {
     m.insert("i first model output, median s", f(pctl(&models, 0.5), 1));
     m.insert("j total, median s", f(pctl(&totals, 0.5), 1));
     m.insert("k total, p90 s", f(pctl(&totals, 0.9), 1));
-    m.insert("l model calls, mean", f(mean(&s.cases.iter().map(|c| c.model_calls as f64).collect::<Vec<_>>()), 1));
-    m.insert("m tokens in, total", format!("{}", s.cases.iter().map(|c| c.input_tokens).sum::<u64>()));
-    m.insert("n tokens cached, total", format!("{}", s.cases.iter().map(|c| c.cached_tokens).sum::<u64>()));
-    m.insert("o tokens out, total", format!("{}", s.cases.iter().map(|c| c.output_tokens).sum::<u64>()));
+    m.insert(
+        "l model calls, mean",
+        f(
+            mean(
+                &s.cases
+                    .iter()
+                    .map(|c| c.model_calls as f64)
+                    .collect::<Vec<_>>(),
+            ),
+            1,
+        ),
+    );
+    m.insert(
+        "m tokens in, total",
+        format!("{}", s.cases.iter().map(|c| c.input_tokens).sum::<u64>()),
+    );
+    m.insert(
+        "n tokens cached, total",
+        format!("{}", s.cases.iter().map(|c| c.cached_tokens).sum::<u64>()),
+    );
+    m.insert(
+        "o tokens out, total",
+        format!("{}", s.cases.iter().map(|c| c.output_tokens).sum::<u64>()),
+    );
     m.insert("p cost, USD", f(cost, 3));
     m
 }
@@ -603,9 +715,17 @@ fn markdown(s: &SuiteResult, before: Option<&SuiteResult>) -> String {
     let now = summary(s);
     if let Some(b) = before {
         let then = summary(b);
-        md.push_str(&format!("| Measure | Before (`{}`) | After (`{}`) |\n|---|---|---|\n", b.label, s.label));
+        md.push_str(&format!(
+            "| Measure | Before (`{}`) | After (`{}`) |\n|---|---|---|\n",
+            b.label, s.label
+        ));
         for (k, v) in &now {
-            md.push_str(&format!("| {} | {} | {} |\n", &k[2..], then.get(k).cloned().unwrap_or_default(), v));
+            md.push_str(&format!(
+                "| {} | {} | {} |\n",
+                &k[2..],
+                then.get(k).cloned().unwrap_or_default(),
+                v
+            ));
         }
     } else {
         md.push_str("| Measure | Value |\n|---|---|\n");
@@ -613,7 +733,9 @@ fn markdown(s: &SuiteResult, before: Option<&SuiteResult>) -> String {
             md.push_str(&format!("| {} | {} |\n", &k[2..], v));
         }
     }
-    md.push_str("\n## By category\n\n| Category | Cases | Passed | Mean score |\n|---|---|---|---|\n");
+    md.push_str(
+        "\n## By category\n\n| Category | Cases | Passed | Mean score |\n|---|---|---|---|\n",
+    );
     let mut cats: BTreeMap<&str, Vec<&CaseResult>> = BTreeMap::new();
     for c in &s.cases {
         cats.entry(c.category.as_str()).or_default().push(c);
@@ -631,7 +753,10 @@ fn markdown(s: &SuiteResult, before: Option<&SuiteResult>) -> String {
     for c in &s.cases {
         let mut notes: Vec<String> = Vec::new();
         if let Some(e) = &c.error {
-            notes.push(format!("error: {}", e.chars().take(160).collect::<String>()));
+            notes.push(format!(
+                "error: {}",
+                e.chars().take(160).collect::<String>()
+            ));
         }
         notes.extend(c.config_notes.iter().cloned());
         if !c.ungrounded.is_empty() {
@@ -663,7 +788,14 @@ fn markdown(s: &SuiteResult, before: Option<&SuiteResult>) -> String {
     md.push_str("\n## Answers\n\n");
     for c in &s.cases {
         md.push_str(&format!("### `{}`\n\n> {}\n\n", c.id, c.prompt));
-        md.push_str(&format!("Tools: {}\n\n", if c.tools.is_empty() { "none".to_string() } else { c.tools.join(", ") }));
+        md.push_str(&format!(
+            "Tools: {}\n\n",
+            if c.tools.is_empty() {
+                "none".to_string()
+            } else {
+                c.tools.join(", ")
+            }
+        ));
         for line in c.overview.lines() {
             md.push_str(&format!("    {line}\n"));
         }
@@ -676,8 +808,9 @@ fn markdown(s: &SuiteResult, before: Option<&SuiteResult>) -> String {
 
 fn main() {
     let args = args();
-    let suite: Suite = serde_yml::from_str(&std::fs::read_to_string(&args.suite).expect("the suite reads"))
-        .expect("the suite parses");
+    let suite: Suite =
+        serde_yml::from_str(&std::fs::read_to_string(&args.suite).expect("the suite reads"))
+            .expect("the suite parses");
     let before: Option<SuiteResult> = args
         .compare
         .as_ref()
@@ -686,12 +819,23 @@ fn main() {
     let engine = start_engine(&args);
     eprintln!("engine at {}", engine.origin);
 
-    let mut agents: BTreeMap<String, (Agent<Metered<Box<dyn LlmProvider + Send>>, HttpRpc<CurlPost>>, Arc<Mutex<Vec<CallStat>>>, String)> = BTreeMap::new();
+    let mut agents: BTreeMap<
+        String,
+        (
+            Agent<Metered<Box<dyn LlmProvider + Send>>, HttpRpc<CurlPost>>,
+            Arc<Mutex<Vec<CallStat>>>,
+            String,
+        ),
+    > = BTreeMap::new();
     let json_path = args.out.with_extension("json");
     // `--append`: keep the cases an earlier invocation wrote to the same file and replace
     // only the ones this one runs, so a suite can be run in parts (the machine's lock on
     // heavy commands is released between them).
-    let mut result = match args.append.then(|| std::fs::read_to_string(&json_path).ok()).flatten() {
+    let mut result = match args
+        .append
+        .then(|| std::fs::read_to_string(&json_path).ok())
+        .flatten()
+    {
         Some(text) => serde_json::from_str::<SuiteResult>(&text).unwrap_or_default(),
         None => SuiteResult::default(),
     };
@@ -701,26 +845,38 @@ fn main() {
     }
 
     for case in &suite.cases {
-        let selected = (args.only.is_empty() || args.only.contains(&case.id)
-            || case.follow_up_of.as_ref().is_some_and(|p| args.only.contains(p)))
+        let selected = (args.only.is_empty()
+            || args.only.contains(&case.id)
+            || case
+                .follow_up_of
+                .as_ref()
+                .is_some_and(|p| args.only.contains(p)))
             && (args.category.is_empty() || args.category.contains(&case.category));
         if !selected {
             continue;
         }
-        let (mut agent, calls, mut prompts) = match case.follow_up_of.as_ref().and_then(|p| agents.remove(p)) {
-            Some(a) => a,
-            None => {
-                let provider = v2xw_copilot::claude::provider_from_env().unwrap_or_else(|e| panic!("{e}"));
-                result.provider = provider.name().to_string();
-                let calls = Arc::new(Mutex::new(Vec::new()));
-                let metered = Metered { inner: provider, calls: Arc::clone(&calls) };
-                let rpc = HttpRpc::new(CurlPost::new().with_timeout_s(60), &engine.origin);
-                let agent = Agent::new(Some(metered), rpc)
-                    .expect("the agent builds")
-                    .with_policy(AgentPolicy { poll_ms: 100, ..AgentPolicy::default() });
-                (agent, calls, String::new())
-            }
-        };
+        let (mut agent, calls, mut prompts) =
+            match case.follow_up_of.as_ref().and_then(|p| agents.remove(p)) {
+                Some(a) => a,
+                None => {
+                    let provider =
+                        v2xw_copilot::claude::provider_from_env().unwrap_or_else(|e| panic!("{e}"));
+                    result.provider = provider.name().to_string();
+                    let calls = Arc::new(Mutex::new(Vec::new()));
+                    let metered = Metered {
+                        inner: provider,
+                        calls: Arc::clone(&calls),
+                    };
+                    let rpc = HttpRpc::new(CurlPost::new().with_timeout_s(60), &engine.origin);
+                    let agent = Agent::new(Some(metered), rpc)
+                        .expect("the agent builds")
+                        .with_policy(AgentPolicy {
+                            poll_ms: 100,
+                            ..AgentPolicy::default()
+                        });
+                    (agent, calls, String::new())
+                }
+            };
         let calls_before = calls.lock().map(|c| c.len()).unwrap_or(0);
         prompts.push_str(&case.prompt);
         prompts.push('\n');
@@ -736,22 +892,48 @@ fn main() {
                 match &e {
                     AgentEvent::Plan { text } => {
                         first_model.get_or_insert(t);
-                        eprintln!("  [{t:6.1}s] plan: {}", text.replace('\n', " / ").chars().take(200).collect::<String>());
+                        eprintln!(
+                            "  [{t:6.1}s] plan: {}",
+                            text.replace('\n', " / ")
+                                .chars()
+                                .take(200)
+                                .collect::<String>()
+                        );
                     }
                     AgentEvent::Tool { name, ok } => {
                         first_model.get_or_insert(t);
-                        tools.push(if *ok { name.clone() } else { format!("{name}!") });
-                        eprintln!("  [{t:6.1}s] tool {name} {}", if *ok { "ok" } else { "FAILED" });
+                        tools.push(if *ok {
+                            name.clone()
+                        } else {
+                            format!("{name}!")
+                        });
+                        eprintln!(
+                            "  [{t:6.1}s] tool {name} {}",
+                            if *ok { "ok" } else { "FAILED" }
+                        );
                     }
                     AgentEvent::Changes { valid, changes, .. } => {
                         first_model.get_or_insert(t);
-                        eprintln!("  [{t:6.1}s] changes ({}): {}", if *valid { "valid" } else { "INVALID" },
-                            changes.iter().map(|c| format!("{}={}", c.key, c.after)).collect::<Vec<_>>().join(", ").chars().take(300).collect::<String>());
+                        eprintln!(
+                            "  [{t:6.1}s] changes ({}): {}",
+                            if *valid { "valid" } else { "INVALID" },
+                            changes
+                                .iter()
+                                .map(|c| format!("{}={}", c.key, c.after))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                                .chars()
+                                .take(300)
+                                .collect::<String>()
+                        );
                     }
                     AgentEvent::Report { .. } => {
                         first_model.get_or_insert(t);
                     }
-                    AgentEvent::Status { text } => eprintln!("  [{t:6.1}s] {}", text.chars().take(160).collect::<String>()),
+                    AgentEvent::Status { text } => eprintln!(
+                        "  [{t:6.1}s] {}",
+                        text.chars().take(160).collect::<String>()
+                    ),
                     AgentEvent::RunStarted { label, .. } => eprintln!("  [{t:6.1}s] run {label}"),
                     AgentEvent::Error { message } => eprintln!("  [{t:6.1}s] error {message}"),
                     _ => {}
@@ -760,12 +942,21 @@ fn main() {
             agent.ask(&case.prompt, &mut sink)
         };
         let total = t0.elapsed().as_secs_f64();
-        let stats: Vec<CallStat> = calls.lock().map(|c| c[calls_before..].to_vec()).unwrap_or_default();
-        let usage = stats.iter().filter_map(|s| s.usage).fold(Usage::default(), Usage::plus);
+        let stats: Vec<CallStat> = calls
+            .lock()
+            .map(|c| c[calls_before..].to_vec())
+            .unwrap_or_default();
+        let usage = stats
+            .iter()
+            .filter_map(|s| s.usage)
+            .fold(Usage::default(), Usage::plus);
         let provider = agent.provider_name();
         let cost = price(&provider).map(|(pi, pc, po)| {
             let uncached = usage.input_tokens.saturating_sub(usage.cached_input_tokens) as f64;
-            (uncached * pi + usage.cached_input_tokens as f64 * pc + usage.output_tokens as f64 * po) / 1e6
+            (uncached * pi
+                + usage.cached_input_tokens as f64 * pc
+                + usage.output_tokens as f64 * po)
+                / 1e6
         });
         let mut r = CaseResult {
             id: case.id.clone(),
@@ -787,7 +978,12 @@ fn main() {
         match outcome {
             Ok(report) => {
                 r.overview = report.overview.clone();
-                score(case, &report, &format!("{prompts}\n{}", registry_results(agent.history())), &mut r);
+                score(
+                    case,
+                    &report,
+                    &format!("{prompts}\n{}", registry_results(agent.history())),
+                    &mut r,
+                );
             }
             Err(e) => {
                 r.error = Some(e.to_string());
@@ -806,10 +1002,24 @@ fn main() {
         }
         eprintln!(
             "  => score {:.2} config {} done {} grounded {} concl {} | {:.1}s, {} calls, {} in / {} out tokens{}",
-            r.score(), r.config_ok, r.completed, r.grounded, r.conclusions_ok, r.total_s, r.model_calls,
-            r.input_tokens, r.output_tokens,
-            if r.config_notes.is_empty() && r.conclusion_notes.is_empty() && r.ungrounded.is_empty() { String::new() }
-            else { format!("\n     {:?} {:?} {:?}", r.config_notes, r.conclusion_notes, r.ungrounded) }
+            r.score(),
+            r.config_ok,
+            r.completed,
+            r.grounded,
+            r.conclusions_ok,
+            r.total_s,
+            r.model_calls,
+            r.input_tokens,
+            r.output_tokens,
+            if r.config_notes.is_empty() && r.conclusion_notes.is_empty() && r.ungrounded.is_empty()
+            {
+                String::new()
+            } else {
+                format!(
+                    "\n     {:?} {:?} {:?}",
+                    r.config_notes, r.conclusion_notes, r.ungrounded
+                )
+            }
         );
         if let Some(dir) = &args.transcripts {
             let _ = std::fs::create_dir_all(dir);
@@ -818,14 +1028,25 @@ fn main() {
                 .iter()
                 .map(|m| json!({"role": m.role, "text": m.content, "calls": m.tool_calls}))
                 .collect();
-            let _ = std::fs::write(dir.join(format!("{}.json", case.id)), serde_json::to_string_pretty(&t).unwrap_or_default());
+            let _ = std::fs::write(
+                dir.join(format!("{}.json", case.id)),
+                serde_json::to_string_pretty(&t).unwrap_or_default(),
+            );
         }
         result.cases.retain(|c| c.id != r.id);
         result.cases.push(r);
         let order: Vec<&str> = suite.cases.iter().map(|c| c.id.as_str()).collect();
-        result.cases.sort_by_key(|c| order.iter().position(|id| *id == c.id).unwrap_or(usize::MAX));
+        result.cases.sort_by_key(|c| {
+            order
+                .iter()
+                .position(|id| *id == c.id)
+                .unwrap_or(usize::MAX)
+        });
         agents.insert(case.id.clone(), (agent, calls, prompts));
-        let _ = std::fs::write(&json_path, serde_json::to_string_pretty(&result).unwrap_or_default());
+        let _ = std::fs::write(
+            &json_path,
+            serde_json::to_string_pretty(&result).unwrap_or_default(),
+        );
         let _ = std::fs::write(&args.out, markdown(&result, before.as_ref()));
     }
     drop(engine);

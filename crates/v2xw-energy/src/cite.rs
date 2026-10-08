@@ -25,7 +25,12 @@ pub fn param(name: &str, unit: &str, default: f64, source: Source) -> Parameter 
 
 /// A parameter whose default is not yet cited, with its calibration plan (rule R1).
 pub fn todo(name: &str, unit: &str, default: f64, what: &str, plan: &str) -> Parameter {
-    let mut p = Parameter::new(name, unit, serde_json::json!(default), Source::todo_calibrate(what));
+    let mut p = Parameter::new(
+        name,
+        unit,
+        serde_json::json!(default),
+        Source::todo_calibrate(what),
+    );
     p.calibration = Some(plan.to_string());
     p
 }

@@ -13,13 +13,26 @@ fn layer(l: Layer, include_slow: bool) {
             continue;
         }
         let v = run(&c);
-        println!("{} {} — {} | faulted: {:?} {}", c.id, v.label(), v.honest.measured, v.faulted.status, v.faulted.measured);
+        println!(
+            "{} {} — {} | faulted: {:?} {}",
+            c.id,
+            v.label(),
+            v.honest.measured,
+            v.faulted.status,
+            v.faulted.measured
+        );
         if v.honest.status == Status::Skip {
             println!("  skipped: {}", v.honest.measured);
             continue;
         }
         if !v.valid() {
-            problems.push(format!("{} {}: {} (faulted: {})", c.id, v.label(), v.honest.measured, v.faulted.measured));
+            problems.push(format!(
+                "{} {}: {} (faulted: {})",
+                c.id,
+                v.label(),
+                v.honest.measured,
+                v.faulted.measured
+            ));
         }
     }
     assert!(problems.is_empty(), "\n{}", problems.join("\n"));

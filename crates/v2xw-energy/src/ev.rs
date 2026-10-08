@@ -14,7 +14,9 @@
 
 use std::collections::BTreeMap;
 
-use v2xw_core::card::{Family, ModelCard, Parameter, SourceKind, Tier, Validation, ValidationStatus};
+use v2xw_core::card::{
+    Family, ModelCard, Parameter, SourceKind, Tier, Validation, ValidationStatus,
+};
 use v2xw_core::model::Model;
 
 use crate::cite;
@@ -46,7 +48,10 @@ impl ParamSet {
                 ));
             }
             if !v.is_finite() {
-                return Err(format!("{}: parameter {k} must be finite, got {v}", card.id));
+                return Err(format!(
+                    "{}: parameter {k} must be finite, got {v}",
+                    card.id
+                ));
             }
             m.insert(k.clone(), *v);
         }
@@ -112,9 +117,16 @@ impl EvEnergyModel for Kurczveil {
         let d = s.distance_m;
         let v = s.v_mps;
         // Energy over the interval, J.
-        let kinetic = 0.5 * (m + p.get("rotating_mass_kg")) * (s.v1_mps * s.v1_mps - s.v0_mps * s.v0_mps);
+        let kinetic =
+            0.5 * (m + p.get("rotating_mass_kg")) * (s.v1_mps * s.v1_mps - s.v0_mps * s.v0_mps);
         let potential = m * GRAVITY_MPS2 * s.sin_incline() * d;
-        let air = 0.5 * p.get("air_density") * p.get("front_area_m2") * p.get("drag_coefficient") * v * v * d;
+        let air = 0.5
+            * p.get("air_density")
+            * p.get("front_area_m2")
+            * p.get("drag_coefficient")
+            * v
+            * v
+            * d;
         let roll = p.get("roll_coefficient") * GRAVITY_MPS2 * m * d;
         let dtheta = wrap(s.heading_change_rad).abs();
         let curve = if dtheta > 0.0 && d > 0.0 {
@@ -265,7 +277,12 @@ impl VtCpem {
         let rolling = m * GRAVITY_MPS2 * s.cos_incline() * p.get("rolling_cr") / 1000.0
             * (p.get("rolling_c1") * v_kmh + p.get("rolling_c2"));
         let rolling = if v > 0.0 { rolling } else { 0.0 };
-        let air = 0.5 * p.get("air_density") * p.get("frontal_area_m2") * p.get("drag_coefficient") * v * v;
+        let air = 0.5
+            * p.get("air_density")
+            * p.get("frontal_area_m2")
+            * p.get("drag_coefficient")
+            * v
+            * v;
         let force = m * s.a_mps2 + rolling + air + m * GRAVITY_MPS2 * s.sin_incline();
         force * v
     }
@@ -296,7 +313,11 @@ impl EvEnergyModel for VtCpem {
             wheels * drive * eta_rb
         };
         let eta_bat = p.get("battery_efficiency");
-        let battery = if motor >= 0.0 { motor / eta_bat } else { motor * eta_bat };
+        let battery = if motor >= 0.0 {
+            motor / eta_bat
+        } else {
+            motor * eta_bat
+        };
         battery + p.get("auxiliary_power_w")
     }
 
@@ -356,7 +377,11 @@ pub fn vt_cpem_card() -> ModelCard {
             "air_density",
             "kg/m3",
             1.225,
-            cite::src(SourceKind::Standard, "ISO 2533:1975 Standard Atmosphere, sea level", ""),
+            cite::src(
+                SourceKind::Standard,
+                "ISO 2533:1975 Standard Atmosphere, sea level",
+                "",
+            ),
         ),
         cite::param("driveline_efficiency", "-", 0.92, fiori.clone()),
         cite::param("motor_efficiency", "-", 0.91, fiori.clone()),
@@ -545,7 +570,12 @@ mod tests {
             let battery = (m.battery_power_w(&s) - 700.0) * dt;
             battery / wheels
         };
-        assert!(share(3.0) > share(10.0), "{} vs {}", share(3.0), share(10.0));
+        assert!(
+            share(3.0) > share(10.0),
+            "{} vs {}",
+            share(3.0),
+            share(10.0)
+        );
         assert!(share(3.0) < 1.0);
     }
 

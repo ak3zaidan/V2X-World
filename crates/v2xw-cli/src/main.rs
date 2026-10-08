@@ -145,7 +145,10 @@ fn cities(filter: Option<&str>, as_json: bool) -> String {
     let registry = v2xw_engine::city::registry();
     if as_json {
         let mut v = v2xw_engine::city::list_json();
-        if let Some(list) = v.get_mut("cities").and_then(serde_json::Value::as_array_mut) {
+        if let Some(list) = v
+            .get_mut("cities")
+            .and_then(serde_json::Value::as_array_mut)
+        {
             list.retain(|c| {
                 c.get("id")
                     .and_then(serde_json::Value::as_str)

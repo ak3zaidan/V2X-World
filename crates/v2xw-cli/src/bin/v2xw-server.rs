@@ -96,7 +96,9 @@ const AGENT_VARIABLES: [&str; 4] = [
 /// returns the agent variables that are set there and not already set, non-empty, in the
 /// environment. Values are never printed.
 fn dotenv_agent_vars(path: &std::path::Path) -> Vec<(String, String)> {
-    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     for line in text.lines() {
         let line = line.trim();
@@ -104,7 +106,9 @@ fn dotenv_agent_vars(path: &std::path::Path) -> Vec<(String, String)> {
             continue;
         }
         let line = line.strip_prefix("export ").unwrap_or(line);
-        let Some((key, value)) = line.split_once('=') else { continue };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         let key = key.trim();
         if !AGENT_VARIABLES.contains(&key) {
             continue;
@@ -130,7 +134,10 @@ fn main() -> std::process::ExitCode {
         .iter()
         .position(|a| a == "--env-file")
         .and_then(|i| argv.get(i + 1))
-        .map_or_else(|| std::path::PathBuf::from(".env"), std::path::PathBuf::from);
+        .map_or_else(
+            || std::path::PathBuf::from(".env"),
+            std::path::PathBuf::from,
+        );
     for key in AGENT_VARIABLES {
         // An empty value would look like a key that is set; drop it.
         if std::env::var(key).is_ok_and(|v| v.is_empty()) {
@@ -142,7 +149,10 @@ fn main() -> std::process::ExitCode {
         // SAFETY: as above, still single-threaded.
         unsafe { std::env::set_var(key, value) };
     }
-    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("v2xw-server: cannot start the async runtime: {e}");
@@ -320,7 +330,11 @@ async fn serve(argv: Vec<String>) -> std::process::ExitCode {
             let mut printed = 0u64;
             loop {
                 let reached = run.extend_to(target, std::time::Duration::from_millis(200));
-                if reached >= target || (reached == last && reached > 0 && run.extend_to(target, std::time::Duration::from_secs(5)) == reached) {
+                if reached >= target
+                    || (reached == last
+                        && reached > 0
+                        && run.extend_to(target, std::time::Duration::from_secs(5)) == reached)
+                {
                     let _ = run.seek(reached.min(target));
                     return reached;
                 }
@@ -374,7 +388,10 @@ async fn serve(argv: Vec<String>) -> std::process::ExitCode {
         }
         println!("  traffic  {actors} actors, {nodes} nodes");
         if agent_host.is_some() {
-            println!("  agent    {}/agent/status (watching every run)", server.http_url());
+            println!(
+                "  agent    {}/agent/status (watching every run)",
+                server.http_url()
+            );
             v2xw_cli::agent::print_key_line();
         } else {
             println!("  agent    off (--no-agent)");

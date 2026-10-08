@@ -152,8 +152,12 @@ pub fn parse_o_format(text: &str) -> Result<OdMatrix> {
     if header.contains('M') {
         it.next(); // vehicle type
     }
-    let b = it.next().ok_or_else(|| DemandError::inline("missing begin time"))?;
-    let e = it.next().ok_or_else(|| DemandError::inline("missing end time"))?;
+    let b = it
+        .next()
+        .ok_or_else(|| DemandError::inline("missing begin time"))?;
+    let e = it
+        .next()
+        .ok_or_else(|| DemandError::inline("missing end time"))?;
     let begin_s = visum_time(&b.1)?;
     let end_s = visum_time(&e.1)?;
     let factor = number(it.next(), "factor")?;
@@ -185,8 +189,12 @@ pub fn parse_v_format(text: &str) -> Result<OdMatrix> {
     if header.contains('M') {
         it.next();
     }
-    let b = it.next().ok_or_else(|| DemandError::inline("missing begin time"))?;
-    let e = it.next().ok_or_else(|| DemandError::inline("missing end time"))?;
+    let b = it
+        .next()
+        .ok_or_else(|| DemandError::inline("missing begin time"))?;
+    let e = it
+        .next()
+        .ok_or_else(|| DemandError::inline("missing end time"))?;
     let mut m = OdMatrix::new(visum_time(&b.1)?, visum_time(&e.1)?);
     let factor = number(it.next(), "factor")?;
     m.factor = factor;
@@ -306,10 +314,14 @@ pub fn od2trips(
     let mut raw: Vec<(f64, usize, u64, LaneId, LaneId, VehicleClass)> = Vec::new();
     for (cell_index, ((from, to), count)) in matrix.cells.iter().enumerate() {
         let zf = zones.get(from).ok_or_else(|| {
-            DemandError::Invalid(format!("the matrix names zone '{from}', which is not defined"))
+            DemandError::Invalid(format!(
+                "the matrix names zone '{from}', which is not defined"
+            ))
         })?;
         let zt = zones.get(to).ok_or_else(|| {
-            DemandError::Invalid(format!("the matrix names zone '{to}', which is not defined"))
+            DemandError::Invalid(format!(
+                "the matrix names zone '{to}', which is not defined"
+            ))
         })?;
         let cell_key = cell_key(from, to);
         let mut rng = RngStream::derive(
@@ -375,7 +387,13 @@ fn draw_lane(rng: &mut RngStream, zone: &Zone, not: Option<LaneId>) -> LaneId {
     let w: Vec<f64> = zone
         .lanes
         .iter()
-        .map(|(l, w)| if Some(*l) == not && zone.lanes.len() > 1 { 0.0 } else { w.max(0.0) })
+        .map(|(l, w)| {
+            if Some(*l) == not && zone.lanes.len() > 1 {
+                0.0
+            } else {
+                w.max(0.0)
+            }
+        })
         .collect();
     if w.iter().all(|x| *x == 0.0) {
         return zone.lanes[0].0;
@@ -431,8 +449,16 @@ mod tests {
         m2.add(&names[2], &names[3], 10.0);
         let more = od2trips(&w, &zones, &m2, &p).expect("trips");
         let tag = format!("{}>{}", names[0], names[1]);
-        let a: Vec<_> = trips.iter().filter(|t| t.tag.as_deref() == Some(&tag)).map(|t| (t.depart_s, t.origin, t.destination)).collect();
-        let b: Vec<_> = more.iter().filter(|t| t.tag.as_deref() == Some(&tag)).map(|t| (t.depart_s, t.origin, t.destination)).collect();
+        let a: Vec<_> = trips
+            .iter()
+            .filter(|t| t.tag.as_deref() == Some(&tag))
+            .map(|t| (t.depart_s, t.origin, t.destination))
+            .collect();
+        let b: Vec<_> = more
+            .iter()
+            .filter(|t| t.tag.as_deref() == Some(&tag))
+            .map(|t| (t.depart_s, t.origin, t.destination))
+            .collect();
         assert_eq!(a, b);
     }
 }

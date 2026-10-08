@@ -285,7 +285,10 @@ mod tests {
         assert_eq!(back.mix(Segment::PassengerCar).ev_share, 0.1);
         assert_eq!(back.mix(Segment::PassengerCar).euro, 4);
         assert!(back.check().is_ok());
-        assert_eq!(Segment::of_vehicle_class("emergency"), Some(Segment::PassengerCar));
+        assert_eq!(
+            Segment::of_vehicle_class("emergency"),
+            Some(Segment::PassengerCar)
+        );
         assert_eq!(Segment::of_vehicle_class("pedestrian"), None);
     }
 }

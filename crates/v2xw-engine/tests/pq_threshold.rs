@@ -113,7 +113,11 @@ fn a_scheme_added_through_the_template_is_selectable_end_to_end() {
     let (cv, pv) = (last_view(&crec), last_view(&prec));
     assert_eq!(pv["signature"], ID);
     // The credential system signs with both halves and the device verifies both.
-    assert!(op(&pv, "pca", "ml-dsa-65 sign") > 0, "{}", entity(&pv, "pca")["ops"]);
+    assert!(
+        op(&pv, "pca", "ml-dsa-65 sign") > 0,
+        "{}",
+        entity(&pv, "pca")["ops"]
+    );
     assert_eq!(op(&cv, "pca", "ml-dsa-65 sign"), 0);
     // Its certificates are larger: the same top-ups move more bytes to the devices.
     println!(
@@ -144,7 +148,11 @@ fn pure_post_quantum_and_ml_kem_change_the_credential_system() {
     let v = last_view(&rec);
     assert!(op(&v, "pca", "ml-dsa-44 sign") > 0);
     assert_eq!(op(&v, "pca", "ecdsa-p256-sha256 sign"), 0, "no ECDSA half");
-    assert!(op(&v, "pca", "ml-kem-768 verify") > 0, "{}", entity(&v, "pca")["ops"]);
+    assert!(
+        op(&v, "pca", "ml-kem-768 verify") > 0,
+        "{}",
+        entity(&v, "pca")["ops"]
+    );
     assert!(report.phase2.topups_completed > 0);
 }
 
@@ -166,7 +174,12 @@ fn committees_run_in_the_engine_and_report() {
         extra_ms: None,
     }];
     let (report, rec) = run(s);
-    let pca = report.phase2.committees.get("pca").copied().unwrap_or_default();
+    let pca = report
+        .phase2
+        .committees
+        .get("pca")
+        .copied()
+        .unwrap_or_default();
     println!("pca committee: {pca:?}");
     assert!(pca.completed > 0, "{pca:?}");
     assert_eq!(pca.failed, 0);
@@ -200,7 +213,11 @@ fn the_loader_refuses_what_the_committees_and_schemes_would() {
     let mut t = threshold(&["pca"]);
     t.protocol = "frost-on-a-napkin".to_string();
     s.security.threshold = Some(t);
-    assert!(errs(&s).contains("security.threshold.protocol"), "{}", errs(&s));
+    assert!(
+        errs(&s).contains("security.threshold.protocol"),
+        "{}",
+        errs(&s)
+    );
 
     let mut s = grid("ecdsa-p256");
     s.actors.backend.failures = vec![BackendFailureSpec {
@@ -245,16 +262,39 @@ fn the_crypto_study_scenarios_validate() {
 #[ignore = "a measurement, not a check: run with --ignored --nocapture"]
 fn fleet_costs_by_scheme() {
     let interesting = |m: &str| {
-        ["pdr", "cbr", "latency", "verify", "sign", "airtime", "busy", "load", "frag", "reassembl"]
-            .iter()
-            .any(|k| m.contains(k))
+        [
+            "pdr",
+            "cbr",
+            "latency",
+            "verify",
+            "sign",
+            "airtime",
+            "busy",
+            "load",
+            "frag",
+            "reassembl",
+        ]
+        .iter()
+        .any(|k| m.contains(k))
     };
     for (sig, kem, fragmenter) in [
         ("ecdsa-p256", "ecies-p256", "fragmenter/generic-sdu"),
-        ("hybrid-falcon512-ecdsa-p256", "ecies-p256", "fragmenter/generic-sdu"),
-        ("hybrid-falcon512-ecdsa-p256", "ecies-p256", "fragmenter/cert-cycle-partial-hybrid"),
+        (
+            "hybrid-falcon512-ecdsa-p256",
+            "ecies-p256",
+            "fragmenter/generic-sdu",
+        ),
+        (
+            "hybrid-falcon512-ecdsa-p256",
+            "ecies-p256",
+            "fragmenter/cert-cycle-partial-hybrid",
+        ),
         ("falcon-512", "ecies-p256", "fragmenter/generic-sdu"),
-        ("hybrid-mldsa44-ecdsa-p256", "ecies-p256", "fragmenter/generic-sdu"),
+        (
+            "hybrid-mldsa44-ecdsa-p256",
+            "ecies-p256",
+            "fragmenter/generic-sdu",
+        ),
         ("ml-dsa-44", "ml-kem-768", "fragmenter/generic-sdu"),
         ("ml-dsa-87", "ml-kem-1024", "fragmenter/generic-sdu"),
         ("slh-dsa-sha2-128f", "ml-kem-768", "fragmenter/generic-sdu"),
@@ -285,7 +325,9 @@ fn fleet_costs_by_scheme() {
             }
         }
         let view = last_view(&rec);
-        let pca_busy = entity(&view, "pca")["queue"]["busy_ns"].as_u64().unwrap_or(0);
+        let pca_busy = entity(&view, "pca")["queue"]["busy_ns"]
+            .as_u64()
+            .unwrap_or(0);
         println!(
             "FLEET {}",
             json!({
@@ -320,7 +362,10 @@ fn fleet_costs_by_scheme() {
 #[ignore = "a measurement, not a check: run with --ignored --nocapture"]
 fn threshold_study_scenarios() {
     let mut cells: Vec<(String, Scenario)> = Vec::new();
-    for f in ["threshold-revocation-2of2.yaml", "threshold-revocation-3of5.yaml"] {
+    for f in [
+        "threshold-revocation-2of2.yaml",
+        "threshold-revocation-3of5.yaml",
+    ] {
         let mut s = Scenario::load(scenarios().join(f)).expect("loads");
         s.experiment = None;
         cells.push((f.to_string(), s));

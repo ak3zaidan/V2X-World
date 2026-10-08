@@ -630,6 +630,8 @@ fn the_activity_byte_round_trips_in_the_reserved_bytes() {
     assert_eq!(back.spawns[0].lamps, 3);
     assert_eq!(back, d);
     let (_, _, want) = spec_example();
-    let plain = example_delta().to_frame(11, 0).expect("the body fits a frame");
+    let plain = example_delta()
+        .to_frame(11, 0)
+        .expect("the body fits a frame");
     diff("Delta with activity 0", plain.as_bytes(), &want);
 }

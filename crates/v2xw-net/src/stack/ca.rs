@@ -70,7 +70,10 @@ pub struct CaService {
 impl CaService {
     /// A fresh service.
     pub fn new() -> Self {
-        CaService { t_gen_cam_ms: T_GEN_CAM_MAX_MS, ..Default::default() }
+        CaService {
+            t_gen_cam_ms: T_GEN_CAM_MAX_MS,
+            ..Default::default()
+        }
     }
 
     /// The current `T_GenCam`, ms.
@@ -83,7 +86,10 @@ impl CaService {
         let Some((t_last, prev)) = self.last else {
             self.last = Some((now_ms, k));
             self.last_lf_ms = Some(now_ms);
-            return Some(CamDecision { trigger: CamTrigger::First, low_frequency: true });
+            return Some(CamDecision {
+                trigger: CamTrigger::First,
+                low_frequency: true,
+            });
         };
         let elapsed = now_ms.saturating_sub(t_last);
         if elapsed < T_GEN_CAM_MIN_MS {
@@ -110,12 +116,17 @@ impl CaService {
         } else {
             return None;
         };
-        let lf = self.last_lf_ms.is_none_or(|t| now_ms.saturating_sub(t) >= LF_INTERVAL_MS);
+        let lf = self
+            .last_lf_ms
+            .is_none_or(|t| now_ms.saturating_sub(t) >= LF_INTERVAL_MS);
         if lf {
             self.last_lf_ms = Some(now_ms);
         }
         self.last = Some((now_ms, k));
-        Some(CamDecision { trigger, low_frequency: lf })
+        Some(CamDecision {
+            trigger,
+            low_frequency: lf,
+        })
     }
 }
 
@@ -125,15 +136,28 @@ mod tests {
 
     #[test]
     fn standstill_sends_at_t_gen_cam_max_and_a_mover_at_its_pace() {
-        let still = Kinematics { x: 0.0, y: 0.0, speed: 0.0, heading_deg: 0.0 };
+        let still = Kinematics {
+            x: 0.0,
+            y: 0.0,
+            speed: 0.0,
+            heading_deg: 0.0,
+        };
         let mut s = CaService::new();
-        let sent: Vec<u64> = (0..=3_000).step_by(100).filter(|&t| s.check(t, still).is_some()).collect();
+        let sent: Vec<u64> = (0..=3_000)
+            .step_by(100)
+            .filter(|&t| s.check(t, still).is_some())
+            .collect();
         assert_eq!(sent, vec![0, 1_000, 2_000, 3_000]);
         // 25 m/s: more than 4 m every 200 ms -> a CAM every 200 ms.
         let mut m = CaService::new();
         let mut n = 0;
         for t in (0..=2_000u64).step_by(100) {
-            let k = Kinematics { x: 25.0 * t as f64 / 1_000.0, y: 0.0, speed: 25.0, heading_deg: 0.0 };
+            let k = Kinematics {
+                x: 25.0 * t as f64 / 1_000.0,
+                y: 0.0,
+                speed: 25.0,
+                heading_deg: 0.0,
+            };
             if m.check(t, k).is_some() {
                 n += 1;
             }

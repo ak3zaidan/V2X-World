@@ -150,7 +150,9 @@ fn run_mixed(params: EngineParams, seconds: u64) -> (CalibrationReport, AuditRep
     let mut shown = 0;
     let mut last: Option<(u32, u32)> = None;
     for e in audit.examples.iter().filter(|e| e.check == Check::Overlap) {
-        let (Some(a), Some(b)) = (e.actor, e.other) else { continue };
+        let (Some(a), Some(b)) = (e.actor, e.other) else {
+            continue;
+        };
         let pair = (a, b);
         if last == Some(pair) || shown >= 12 {
             continue;
@@ -175,7 +177,9 @@ fn run_mixed(params: EngineParams, seconds: u64) -> (CalibrationReport, AuditRep
         .iter()
         .filter(|e| e.check == Check::GapBelowMinimum)
     {
-        let (Some(a), Some(b)) = (e.actor, e.other) else { continue };
+        let (Some(a), Some(b)) = (e.actor, e.other) else {
+            continue;
+        };
         if last_gap == Some((a, b)) || shown_gap >= 10 {
             continue;
         }
@@ -294,7 +298,12 @@ fn buses_taxis_and_deliveries_stop_at_the_kerb_and_the_traffic_goes_round() {
     eprintln!("[main] audit {:?}", main_audit.counts);
     eprintln!("[kerbside off] audit {:?}", before_audit.counts);
     eprintln!("[kerbside on] audit {:?}", audit.counts);
-    for e in audit.examples.iter().filter(|e| SAFETY.contains(&e.check)).take(12) {
+    for e in audit
+        .examples
+        .iter()
+        .filter(|e| SAFETY.contains(&e.check))
+        .take(12)
+    {
         eprintln!(
             "  [{}] t={:.1}s actor={:?} other={:?} lane={:?}: {}",
             e.check.label(),
@@ -308,17 +317,26 @@ fn buses_taxis_and_deliveries_stop_at_the_kerb_and_the_traffic_goes_round() {
     let dwell = &after.network.kerbside_dwell_s;
     let now = &after.network.kerbside_now;
     eprintln!("[kerbside on] at the kerb at the end: {now:?}");
-    let spells = |role: &str| {
-        dwell.get(role).map_or(0, |s| s.n) + now.get(role).copied().unwrap_or(0)
-    };
+    let spells =
+        |role: &str| dwell.get(role).map_or(0, |s| s.n) + now.get(role).copied().unwrap_or(0);
     assert!(spells("bus") >= 2, "buses served their stops: {dwell:?}");
     assert!(spells("taxi") >= 2, "taxis stopped at the kerb: {dwell:?}");
-    assert!(spells("delivery") >= 1, "deliveries double-parked: {dwell:?}");
+    assert!(
+        spells("delivery") >= 1,
+        "deliveries double-parked: {dwell:?}"
+    );
     assert!(before.network.kerbside_dwell_s.is_empty());
     let failing: Vec<String> = KERBSIDE_SAFETY
         .iter()
         .filter(|c| audit.count(**c) > before_audit.count(**c))
-        .map(|c| format!("{} = {} (off: {})", c.label(), audit.count(*c), before_audit.count(*c)))
+        .map(|c| {
+            format!(
+                "{} = {} (off: {})",
+                c.label(),
+                audit.count(*c),
+                before_audit.count(*c)
+            )
+        })
         .collect();
     assert!(
         failing.is_empty(),
@@ -326,7 +344,10 @@ fn buses_taxis_and_deliveries_stop_at_the_kerb_and_the_traffic_goes_round() {
     );
     // Vehicles touching: no more than the same fleet without kerbside stops.
     assert!(
-        audit.count(Check::Overlap) <= before_audit.count(Check::Overlap).max(main_audit.count(Check::Overlap)),
+        audit.count(Check::Overlap)
+            <= before_audit
+                .count(Check::Overlap)
+                .max(main_audit.count(Check::Overlap)),
         "overlaps {} with kerbside stops, {} without, {} on main",
         audit.count(Check::Overlap),
         before_audit.count(Check::Overlap),
@@ -370,7 +391,10 @@ fn drivers_are_cautious_normal_and_assertive_fifteen_seventy_fifteen() {
     let n = 4000;
     for seq in 0..n {
         let t = DriverTraits::draw(&ctx, seq, VehicleClass::Passenger);
-        let i = DriverStyle::ALL.iter().position(|s| *s == t.style).expect("a style");
+        let i = DriverStyle::ALL
+            .iter()
+            .position(|s| *s == t.style)
+            .expect("a style");
         counts[i] += 1;
     }
     let share = |i: usize| counts[i] as f64 / n as f64;
@@ -453,7 +477,12 @@ fn a_crowded_pavement_walks_slower_as_weidmann_measured() {
     };
     eprintln!("crowd slowing off: {:?}", levels(&before));
     eprintln!("crowd slowing on:  {:?}", levels(&after));
-    for c in after.network.comparisons().iter().filter(|c| c.metric.starts_with("pedestrian")) {
+    for c in after
+        .network
+        .comparisons()
+        .iter()
+        .filter(|c| c.metric.starts_with("pedestrian"))
+    {
         eprintln!(
             "{} = {:.3} [{}] ref {:.3} band {:.2}-{:.2}",
             c.metric, c.measured, c.samples, c.reference, c.band.0, c.band.1
@@ -468,9 +497,15 @@ fn a_crowded_pavement_walks_slower_as_weidmann_measured() {
     };
     let d = "pedestrian speed, Fruin LOS D / LOS A";
     let (on, off) = (comparison(&after, d), comparison(&before, d));
-    assert!(on.samples >= 20, "too few walkway cells at LOS D to judge: {on:?}");
+    assert!(
+        on.samples >= 20,
+        "too few walkway cells at LOS D to judge: {on:?}"
+    );
     // With the relation, walkers on a stretch at Fruin's LOS D walk at Weidmann's speed
     // relative to free walking; without it they do not slow, and the same check fails.
     assert!(on.passes(), "with crowd slowing: {on:?}");
-    assert!(!off.passes(), "without crowd slowing the check still passed: {off:?}");
+    assert!(
+        !off.passes(),
+        "without crowd slowing the check still passed: {off:?}"
+    );
 }

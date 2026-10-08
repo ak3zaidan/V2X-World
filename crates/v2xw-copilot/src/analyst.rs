@@ -243,7 +243,12 @@ impl ScenarioFacts {
     /// The facts, read out of a scenario document.
     #[must_use]
     pub fn from_document(doc: &Value) -> Self {
-        let s = |p: &str| doc.pointer(p).and_then(Value::as_str).unwrap_or("").to_string();
+        let s = |p: &str| {
+            doc.pointer(p)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
         let f = |p: &str| doc.pointer(p).and_then(Value::as_f64);
         ScenarioFacts {
             name: s("/meta/name"),
@@ -263,7 +268,11 @@ impl ScenarioFacts {
             metrics: doc
                 .get("metrics")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default(),
         }
     }
@@ -303,7 +312,10 @@ impl RunEvidence {
     }
 
     fn unit(&self, name: &str) -> String {
-        self.metrics.get(name).map(|m| m.unit.clone()).unwrap_or_default()
+        self.metrics
+            .get(name)
+            .map(|m| m.unit.clone())
+            .unwrap_or_default()
     }
 
     fn groups(&self, name: &str, dim: &str) -> &[Group] {
@@ -442,7 +454,10 @@ impl Thresholds {
                 "ETSI TS 103 574 CBR range boundary 0.65 (sidelink congestion control)",
             )
         } else if region.eq_ignore_ascii_case("eu") || region.eq_ignore_ascii_case("etsi") {
-            (self.cbr_target_etsi, "ETSI TS 102 687 adaptive DCC target CBR 0.68")
+            (
+                self.cbr_target_etsi,
+                "ETSI TS 102 687 adaptive DCC target CBR 0.68",
+            )
         } else {
             (
                 self.cbr_max_j2945,
@@ -455,28 +470,61 @@ impl Thresholds {
     #[must_use]
     pub fn citations(&self) -> Vec<(String, String)> {
         vec![
-            (format!("latency budget {} ms", fmt(self.latency_budget_ms)),
-             "3GPP TS 22.185 §5.1; SAE J2945/1".into()),
-            (format!("CBR target {} (ETSI)", fmt(self.cbr_target_etsi)),
-             "ETSI TS 102 687 V1.2.1 §5.4".into()),
-            (format!("CBP ceiling {} (J2945/1)", fmt(self.cbr_max_j2945)),
-             "SAE J2945/1 vMaxCBP".into()),
-            (format!("sidelink CBR boundary {}", fmt(self.cbr_congested_sidelink)),
-             "ETSI TS 103 574 (operator-configured; parameter)".into()),
-            (format!("range read at PRR {}", fmt(self.prr_range_level)),
-             "3GPP TR 37.885 evaluation methodology".into()),
-            (format!("near-range PRR {} within {} m", fmt(self.near_range_prr), fmt(self.near_range_m)),
-             "engineering choice (no standard)".into()),
-            (format!("TTC conflict below {} s", fmt(self.ttc_conflict_s)),
-             "Hayward 1972; FHWA SSAM default".into()),
-            (format!("DRAC critical above {} m/s²", fmt(self.drac_critical)),
-             "Archer 2005".into()),
-            (format!("mean speed below {} of the posted speed", fmt(self.speed_ratio_congested)),
-             "engineering choice; HCM urban-street LOS F starts at 0.3".into()),
-            (format!("entity utilisation above {}", fmt(self.entity_utilisation)),
-             "engineering choice (queueing planning ceiling)".into()),
-            (format!("AoI above {} × {} ms", fmt(self.aoi_intervals), fmt(self.generation_interval_ms)),
-             "engineering choice; 10 Hz from SAE J2945/1".into()),
+            (
+                format!("latency budget {} ms", fmt(self.latency_budget_ms)),
+                "3GPP TS 22.185 §5.1; SAE J2945/1".into(),
+            ),
+            (
+                format!("CBR target {} (ETSI)", fmt(self.cbr_target_etsi)),
+                "ETSI TS 102 687 V1.2.1 §5.4".into(),
+            ),
+            (
+                format!("CBP ceiling {} (J2945/1)", fmt(self.cbr_max_j2945)),
+                "SAE J2945/1 vMaxCBP".into(),
+            ),
+            (
+                format!("sidelink CBR boundary {}", fmt(self.cbr_congested_sidelink)),
+                "ETSI TS 103 574 (operator-configured; parameter)".into(),
+            ),
+            (
+                format!("range read at PRR {}", fmt(self.prr_range_level)),
+                "3GPP TR 37.885 evaluation methodology".into(),
+            ),
+            (
+                format!(
+                    "near-range PRR {} within {} m",
+                    fmt(self.near_range_prr),
+                    fmt(self.near_range_m)
+                ),
+                "engineering choice (no standard)".into(),
+            ),
+            (
+                format!("TTC conflict below {} s", fmt(self.ttc_conflict_s)),
+                "Hayward 1972; FHWA SSAM default".into(),
+            ),
+            (
+                format!("DRAC critical above {} m/s²", fmt(self.drac_critical)),
+                "Archer 2005".into(),
+            ),
+            (
+                format!(
+                    "mean speed below {} of the posted speed",
+                    fmt(self.speed_ratio_congested)
+                ),
+                "engineering choice; HCM urban-street LOS F starts at 0.3".into(),
+            ),
+            (
+                format!("entity utilisation above {}", fmt(self.entity_utilisation)),
+                "engineering choice (queueing planning ceiling)".into(),
+            ),
+            (
+                format!(
+                    "AoI above {} × {} ms",
+                    fmt(self.aoi_intervals),
+                    fmt(self.generation_interval_ms)
+                ),
+                "engineering choice; 10 Hz from SAE J2945/1".into(),
+            ),
         ]
     }
 }
@@ -634,7 +682,11 @@ pub fn fmt(v: f64) -> String {
     };
     if s.contains('.') {
         let t = s.trim_end_matches('0').trim_end_matches('.');
-        if t == "-0" { "0".to_string() } else { t.to_string() }
+        if t == "-0" {
+            "0".to_string()
+        } else {
+            t.to_string()
+        }
     } else {
         s
     }
@@ -679,7 +731,11 @@ fn worst(groups: &[Group], k: usize, largest: bool) -> Vec<&Group> {
     let mut v: Vec<&Group> = groups.iter().filter(|g| g.value.is_some()).collect();
     v.sort_by(|a, b| {
         let (x, y) = (a.value.unwrap_or(0.0), b.value.unwrap_or(0.0));
-        let o = if largest { y.total_cmp(&x) } else { x.total_cmp(&y) };
+        let o = if largest {
+            y.total_cmp(&x)
+        } else {
+            x.total_cmp(&y)
+        };
         o.then_with(|| a.key.cmp(&b.key))
     });
     v.truncate(k);
@@ -694,7 +750,9 @@ fn peak_window(e: &RunEvidence, metric: &str) -> Option<[f64; 2]> {
 
 /// The lower bound of a distance-bin key (`120-140` → 120, `1000+` → 1000).
 fn bin_lo(key: &str) -> Option<f64> {
-    key.split(['-', '+']).next().and_then(|s| s.trim().parse::<f64>().ok())
+    key.split(['-', '+'])
+        .next()
+        .and_then(|s| s.trim().parse::<f64>().ok())
 }
 
 /// Analyses a run. Pure and deterministic.
@@ -714,8 +772,13 @@ pub fn analyse(e: &RunEvidence, th: &Thresholds) -> Analysis {
     let not_measured = not_measured(e);
     for layer in &not_measured {
         findings.push(Finding {
-            id: format!("{}.not-measured", serde_json::to_value(layer).ok()
-                .and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()),
+            id: format!(
+                "{}.not-measured",
+                serde_json::to_value(layer)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default()
+            ),
             layer: *layer,
             severity: Severity::Info,
             title: format!("{} was not measured in this run", layer.title()),
@@ -752,7 +815,14 @@ pub fn analyse(e: &RunEvidence, th: &Thresholds) -> Analysis {
 fn not_measured(e: &RunEvidence) -> Vec<Layer> {
     let any = |names: &[&str]| names.iter().any(|n| e.has(n));
     let mut out = Vec::new();
-    if !any(&["mean_speed", "speed", "ttc_min", "ttc_conflicts", "density", "flow"]) {
+    if !any(&[
+        "mean_speed",
+        "speed",
+        "ttc_min",
+        "ttc_conflicts",
+        "density",
+        "flow",
+    ]) {
         out.push(Layer::Traffic);
     }
     if !any(&["cbr", "channel_load", "collision_rate"]) {
@@ -768,7 +838,11 @@ fn not_measured(e: &RunEvidence) -> Vec<Layer> {
         out.push(Layer::Latency);
     }
     if e.scenario.security_protocol.is_none()
-        && !any(&["cert_pool_valid", "false_accusations", "revocation_latency_stage"])
+        && !any(&[
+            "cert_pool_valid",
+            "false_accusations",
+            "revocation_latency_stage",
+        ])
     {
         out.push(Layer::Security);
         out.push(Layer::Backend);
@@ -833,8 +907,12 @@ fn simulation(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                          system simulated; it is excluded from every digest. Lower tiers \
                          or a smaller area run faster."
                     .into(),
-                evidence: vec![ev("wall seconds per simulated second", w, "s/s",
-                                  "wall_clock_per_sim_second")],
+                evidence: vec![ev(
+                    "wall seconds per simulated second",
+                    w,
+                    "s/s",
+                    "wall_clock_per_sim_second",
+                )],
                 location: Location::default(),
                 reference: Some(format!("real time = {}", fmt(th.realtime))),
                 links: vec![link("wall_clock_per_sim_second")],
@@ -852,7 +930,11 @@ fn traffic(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                 out.push(Finding {
                     id: "traffic.delay".into(),
                     layer: Layer::Traffic,
-                    severity: if ratio < 0.3 { Severity::Critical } else { Severity::Warning },
+                    severity: if ratio < 0.3 {
+                        Severity::Critical
+                    } else {
+                        Severity::Warning
+                    },
                     title: "Vehicles moved at a fraction of the posted speed".into(),
                     detail: format!(
                         "Mean speed was {} of the posted speed, a travel-time loss of {}: \
@@ -862,14 +944,28 @@ fn traffic(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                         if regions.is_empty() {
                             "The run has no per-region breakdown to say where.".to_string()
                         } else {
-                            format!("Slowest regions: {}.", regions.iter()
-                                .map(|g| format!("{} ({} m/s)", g.key, fmt(g.value.unwrap_or(0.0))))
-                                .collect::<Vec<_>>().join(", "))
+                            format!(
+                                "Slowest regions: {}.",
+                                regions
+                                    .iter()
+                                    .map(|g| format!(
+                                        "{} ({} m/s)",
+                                        g.key,
+                                        fmt(g.value.unwrap_or(0.0))
+                                    ))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
                         }
                     ),
                     evidence: vec![
                         ev("mean speed", v, "m/s", "mean_speed"),
-                        ev("posted speed", limit, "m/s", "scenario world speed_limit_mps"),
+                        ev(
+                            "posted speed",
+                            limit,
+                            "m/s",
+                            "scenario world speed_limit_mps",
+                        ),
                         ev("speed ratio", ratio, "ratio", "mean_speed / speed limit"),
                     ],
                     location: Location {
@@ -889,8 +985,12 @@ fn traffic(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
     let conflicts = e.value("ttc_conflicts").unwrap_or(0.0);
     let ttc_min = e.value("ttc_min");
     if conflicts > 0.0 || ttc_min.is_some_and(|t| t < th.ttc_conflict_s) {
-        let mut evidence = vec![ev("conflicts (TTC below threshold)", conflicts, "count",
-                                   "ttc_conflicts")];
+        let mut evidence = vec![ev(
+            "conflicts (TTC below threshold)",
+            conflicts,
+            "count",
+            "ttc_conflicts",
+        )];
         if let Some(t) = ttc_min {
             evidence.push(ev("minimum time to collision", t, "s", "ttc_min"));
         }
@@ -902,14 +1002,21 @@ fn traffic(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
         out.push(Finding {
             id: "traffic.conflicts".into(),
             layer: Layer::Traffic,
-            severity: if severe { Severity::Warning } else { Severity::Notice },
+            severity: if severe {
+                Severity::Warning
+            } else {
+                Severity::Notice
+            },
             title: "Traffic conflicts occurred".into(),
             detail: "Pairs of vehicles came within the time-to-collision threshold of each \
                      other. These are the events V2X safety applications exist to warn about; \
                      their count is the denominator a warning-application study needs."
                 .into(),
             evidence,
-            location: Location { window_s: peak_window(e, "ttc_conflicts"), ..Location::default() },
+            location: Location {
+                window_s: peak_window(e, "ttc_conflicts"),
+                ..Location::default()
+            },
             reference: Some(format!(
                 "TTC below {} s (Hayward 1972; FHWA SSAM default); DRAC above {} m/s² is \
                  critical (Archer 2005)",
@@ -940,7 +1047,11 @@ fn channel(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
             out.push(Finding {
                 id: "channel.congested".into(),
                 layer: Layer::Channel,
-                severity: if over_mean { Severity::Critical } else { Severity::Warning },
+                severity: if over_mean {
+                    Severity::Critical
+                } else {
+                    Severity::Warning
+                },
                 title: if over_mean {
                     "The channel ran above its congestion-control target".into()
                 } else {
@@ -957,7 +1068,10 @@ fn channel(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                     }
                 ),
                 evidence,
-                location: Location { window_s: peak_window(e, "cbr"), ..Location::default() },
+                location: Location {
+                    window_s: peak_window(e, "cbr"),
+                    ..Location::default()
+                },
                 reference: Some(source.to_string()),
                 links: vec![link("cbr")],
             });
@@ -969,8 +1083,10 @@ fn channel(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
         let share = top.value.unwrap_or(0.0);
         if share >= th.loss_cause_share {
             let k = top.key.as_str();
-            let (id, meaning) = if k.contains("collision") || k.contains("hidden")
-                || k.contains("in-band") || k.contains("adjacent")
+            let (id, meaning) = if k.contains("collision")
+                || k.contains("hidden")
+                || k.contains("in-band")
+                || k.contains("adjacent")
             {
                 (
                     "channel.collisions",
@@ -991,7 +1107,9 @@ fn channel(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                     "channel.jamming",
                     "Frames were lost to a jammer: a threat in the scenario, not load.",
                 )
-            } else if k.contains("sensitivity") || k.contains("range") || k.contains("fading")
+            } else if k.contains("sensitivity")
+                || k.contains("range")
+                || k.contains("fading")
                 || k.contains("preamble")
             {
                 (
@@ -1000,19 +1118,33 @@ fn channel(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                      distance, fading and buildings, not load.",
                 )
             } else {
-                ("channel.dominant-loss", "One loss cause accounts for most lost frames.")
+                (
+                    "channel.dominant-loss",
+                    "One loss cause accounts for most lost frames.",
+                )
             };
             out.push(Finding {
                 id: id.into(),
                 layer: Layer::Channel,
-                severity: if share >= 0.5 { Severity::Warning } else { Severity::Notice },
+                severity: if share >= 0.5 {
+                    Severity::Warning
+                } else {
+                    Severity::Notice
+                },
                 title: format!("Most losses were `{}`", top.key),
                 detail: meaning.to_string(),
                 evidence: causes
                     .iter()
-                    .filter_map(|g| g.value.map(|v| ev(&format!("share of losses: {}", g.key),
-                                                       v, "ratio",
-                                                       &format!("pdr_by_cause[{}]", g.key))))
+                    .filter_map(|g| {
+                        g.value.map(|v| {
+                            ev(
+                                &format!("share of losses: {}", g.key),
+                                v,
+                                "ratio",
+                                &format!("pdr_by_cause[{}]", g.key),
+                            )
+                        })
+                    })
                     .collect(),
                 location: Location::default(),
                 reference: Some(format!(
@@ -1044,38 +1176,57 @@ fn channel(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
 
 fn access(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
     let budget = th.latency_budget_ms * th.access_budget_fraction;
-    if let Some(d) = e.value("mac_access_delay.p95").or_else(|| e.value("mac_access_delay")) {
+    if let Some(d) = e
+        .value("mac_access_delay.p95")
+        .or_else(|| e.value("mac_access_delay"))
+    {
         if d > budget {
             let nodes = worst(e.groups("mac_access_delay", "node"), 5, true);
             out.push(Finding {
                 id: "access.delay".into(),
                 layer: Layer::Access,
-                severity: if d > th.latency_budget_ms * 0.5 { Severity::Critical } else { Severity::Warning },
+                severity: if d > th.latency_budget_ms * 0.5 {
+                    Severity::Critical
+                } else {
+                    Severity::Warning
+                },
                 title: "Medium access took a large part of the latency budget".into(),
                 detail: format!(
                     "Frames waited {} ms (p95) for the channel before going out. On 802.11p \
                      that is backoff behind a busy medium; on the sidelink, the resource \
                      reservation interval. {}",
                     fmt(d),
-                    if nodes.is_empty() { String::new() } else {
-                        format!("Worst nodes: {}.", nodes.iter()
-                            .map(|g| format!("{} ({} ms)", g.key, fmt(g.value.unwrap_or(0.0))))
-                            .collect::<Vec<_>>().join(", "))
+                    if nodes.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "Worst nodes: {}.",
+                            nodes
+                                .iter()
+                                .map(|g| format!("{} ({} ms)", g.key, fmt(g.value.unwrap_or(0.0))))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
                     }
                 ),
                 evidence: vec![
                     ev("access delay (p95)", d, "ms", "mac_access_delay.p95"),
                     ev("share of the budget allowed", budget, "ms", "thresholds"),
                 ],
-                location: Location { nodes: nodes.iter().map(|g| g.key.clone()).collect(),
-                                     ..Location::default() },
+                location: Location {
+                    nodes: nodes.iter().map(|g| g.key.clone()).collect(),
+                    ..Location::default()
+                },
                 reference: Some(format!(
                     "{} of the {} ms latency budget (3GPP TS 22.185 §5.1); the fraction is \
                      an engineering choice",
                     fmt(th.access_budget_fraction),
                     fmt(th.latency_budget_ms)
                 )),
-                links: vec![link("mac_access_delay"), grouped_link("mac_access_delay", "node")],
+                links: vec![
+                    link("mac_access_delay"),
+                    grouped_link("mac_access_delay", "node"),
+                ],
             });
         }
     }
@@ -1090,7 +1241,11 @@ fn access(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
         out.push(Finding {
             id: "access.tx-queue".into(),
             layer: Layer::Access,
-            severity: if drops > 0.0 { Severity::Warning } else { Severity::Notice },
+            severity: if drops > 0.0 {
+                Severity::Warning
+            } else {
+                Severity::Notice
+            },
             title: "Transmit queues filled up".into(),
             detail: "Messages were generated faster than the channel let them out, so they \
                      queued and, past the queue's limit or lifetime, were dropped before ever \
@@ -1110,17 +1265,31 @@ fn access(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
         });
     }
     let unverified = e.value("unverified_ratio");
-    let vdepth = e.value("verify_queue_depth.p95").or_else(|| e.value("verify_queue_depth"));
-    let vwait = e.value("verify_wait.p95").or_else(|| e.value("verify_wait"));
+    let vdepth = e
+        .value("verify_queue_depth.p95")
+        .or_else(|| e.value("verify_queue_depth"));
+    let vwait = e
+        .value("verify_wait.p95")
+        .or_else(|| e.value("verify_wait"));
     let saturated_queue = vdepth.is_some_and(|d| d > th.queue_depth_saturated * 10.0);
     if unverified.is_some_and(|u| u > th.unverified_ratio) || saturated_queue {
         let nodes = worst(e.groups("verify_queue_depth", "node"), 5, true);
         let mut evidence = Vec::new();
         if let Some(u) = unverified {
-            evidence.push(ev("messages left unverified", u, "ratio", "unverified_ratio"));
+            evidence.push(ev(
+                "messages left unverified",
+                u,
+                "ratio",
+                "unverified_ratio",
+            ));
         }
         if let Some(d) = vdepth {
-            evidence.push(ev("verification queue depth (p95)", d, "messages", "verify_queue_depth"));
+            evidence.push(ev(
+                "verification queue depth (p95)",
+                d,
+                "messages",
+                "verify_queue_depth",
+            ));
         }
         if let Some(w) = vwait {
             evidence.push(ev("verification wait (p95)", w, "ms", "verify_wait"));
@@ -1135,14 +1304,20 @@ fn access(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                      and it grows with the number of neighbours, not with the channel."
                 .into(),
             evidence,
-            location: Location { nodes: nodes.iter().map(|g| g.key.clone()).collect(),
-                                 window_s: peak_window(e, "verify_queue_depth"),
-                                 ..Location::default() },
+            location: Location {
+                nodes: nodes.iter().map(|g| g.key.clone()).collect(),
+                window_s: peak_window(e, "verify_queue_depth"),
+                ..Location::default()
+            },
             reference: Some(format!(
                 "unverified share above {} (engineering choice)",
                 fmt(th.unverified_ratio)
             )),
-            links: vec![link("unverified_ratio"), link("verify_queue_depth"), link("verify_wait")],
+            links: vec![
+                link("unverified_ratio"),
+                link("verify_queue_depth"),
+                link("verify_wait"),
+            ],
         });
     }
 }
@@ -1157,9 +1332,16 @@ fn delivery(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
     bins.sort_by(|a, b| a.0.total_cmp(&b.0));
     if !bins.is_empty() {
         // The range at the reliability level: the first bin below it.
-        let below = bins.iter().find(|(_, g)| g.value.unwrap_or(1.0) < th.prr_range_level);
-        let near: Vec<&(f64, &Group)> = bins.iter().filter(|(lo, _)| *lo < th.near_range_m).collect();
-        let near_low = near.iter().find(|(_, g)| g.value.unwrap_or(1.0) < th.near_range_prr);
+        let below = bins
+            .iter()
+            .find(|(_, g)| g.value.unwrap_or(1.0) < th.prr_range_level);
+        let near: Vec<&(f64, &Group)> = bins
+            .iter()
+            .filter(|(lo, _)| *lo < th.near_range_m)
+            .collect();
+        let near_low = near
+            .iter()
+            .find(|(_, g)| g.value.unwrap_or(1.0) < th.near_range_prr);
         if let Some((lo, g)) = near_low {
             out.push(Finding {
                 id: "delivery.near-range-loss".into(),
@@ -1173,9 +1355,16 @@ fn delivery(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                     fmt(*lo),
                     fmt(g.value.unwrap_or(0.0))
                 ),
-                evidence: vec![ev(&format!("PRR at {} m", g.key), g.value.unwrap_or(0.0),
-                                  "ratio", &format!("pdr[dist_bin={}]", g.key))],
-                location: Location { distance_bins: vec![g.key.clone()], ..Location::default() },
+                evidence: vec![ev(
+                    &format!("PRR at {} m", g.key),
+                    g.value.unwrap_or(0.0),
+                    "ratio",
+                    &format!("pdr[dist_bin={}]", g.key),
+                )],
+                location: Location {
+                    distance_bins: vec![g.key.clone()],
+                    ..Location::default()
+                },
                 reference: Some(format!(
                     "PRR {} within {} m (engineering choice)",
                     fmt(th.near_range_prr),
@@ -1188,7 +1377,11 @@ fn delivery(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
             out.push(Finding {
                 id: "delivery.range".into(),
                 layer: Layer::Delivery,
-                severity: if *lo < 100.0 { Severity::Warning } else { Severity::Notice },
+                severity: if *lo < 100.0 {
+                    Severity::Warning
+                } else {
+                    Severity::Notice
+                },
                 title: format!(
                     "Reception fell below {} from {} m",
                     fmt(th.prr_range_level),
@@ -1200,15 +1393,28 @@ fn delivery(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                      than one frame in ten.",
                     fmt(th.prr_range_level),
                     fmt(*lo),
-                    if e.scenario.rat.is_empty() { "this radio" } else { e.scenario.rat.as_str() }
+                    if e.scenario.rat.is_empty() {
+                        "this radio"
+                    } else {
+                        e.scenario.rat.as_str()
+                    }
                 ),
                 evidence: bins
                     .iter()
                     .take_while(|(l, _)| *l <= lo + 60.0)
-                    .map(|(_, g)| ev(&format!("PRR {} m", g.key), g.value.unwrap_or(0.0),
-                                     "ratio", &format!("pdr[dist_bin={}]", g.key)))
+                    .map(|(_, g)| {
+                        ev(
+                            &format!("PRR {} m", g.key),
+                            g.value.unwrap_or(0.0),
+                            "ratio",
+                            &format!("pdr[dist_bin={}]", g.key),
+                        )
+                    })
                     .collect(),
-                location: Location { distance_bins: vec![g.key.clone()], ..Location::default() },
+                location: Location {
+                    distance_bins: vec![g.key.clone()],
+                    ..Location::default()
+                },
                 reference: Some(format!(
                     "range read at PRR {} (3GPP TR 37.885 evaluation methodology)",
                     fmt(th.prr_range_level)
@@ -1235,13 +1441,19 @@ fn delivery(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                          usually means few samples in one bin, or buildings shadowing a nearer \
                          band of receivers more than a farther one (street canyons)."
                     .into(),
-                evidence: vec![ev(&format!("PRR rise from {} m to {} m", fmt(from), fmt(to)),
-                                  rise, "ratio", "pdr[dist_bin]")],
+                evidence: vec![ev(
+                    &format!("PRR rise from {} m to {} m", fmt(from), fmt(to)),
+                    rise,
+                    "ratio",
+                    "pdr[dist_bin]",
+                )],
                 location: Location {
                     distance_bins: vec![format!("{}", fmt(from)), format!("{}", fmt(to))],
                     ..Location::default()
                 },
-                reference: Some("a rise above 0.1 between adjacent bins (engineering choice)".into()),
+                reference: Some(
+                    "a rise above 0.1 between adjacent bins (engineering choice)".into(),
+                ),
                 links: vec![grouped_link("pdr", "dist_bin")],
             });
         }
@@ -1258,8 +1470,14 @@ fn delivery(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                          collision warning cannot fire for a vehicle that is not in the table."
                     .into(),
                 evidence: vec![ev("neighbour awareness ratio", nar, "ratio", "nar")],
-                location: Location { window_s: peak_window(e, "nar"), ..Location::default() },
-                reference: Some(format!("below {} (engineering choice)", fmt(th.awareness_floor))),
+                location: Location {
+                    window_s: peak_window(e, "nar"),
+                    ..Location::default()
+                },
+                reference: Some(format!(
+                    "below {} (engineering choice)",
+                    fmt(th.awareness_floor)
+                )),
                 links: vec![link("nar")],
             });
         }
@@ -1308,8 +1526,12 @@ fn latency(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                 ev("budget", th.latency_budget_ms, "ms", "3GPP TS 22.185 §5.1"),
             ];
             if let Some(t) = top {
-                evidence.push(ev(&format!("stage `{}` mean", t.key), t.value.unwrap_or(0.0),
-                                 "ms", &format!("latency_stage[{}]", t.key)));
+                evidence.push(ev(
+                    &format!("stage `{}` mean", t.key),
+                    t.value.unwrap_or(0.0),
+                    "ms",
+                    &format!("latency_stage[{}]", t.key),
+                ));
             }
             out.push(Finding {
                 id: "latency.over-budget".into(),
@@ -1320,12 +1542,18 @@ fn latency(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                     "One message in twenty took longer than {} ms from generation to the \
                      receiving application.{}",
                     fmt(th.latency_budget_ms),
-                    top.map(|t| format!(" The largest stage is `{}`.", t.key)).unwrap_or_default()
+                    top.map(|t| format!(" The largest stage is `{}`.", t.key))
+                        .unwrap_or_default()
                 ),
                 evidence,
-                location: Location { window_s: peak_window(e, "e2e_latency.p95"),
-                                     ..Location::default() },
-                reference: Some(format!("{} ms, 3GPP TS 22.185 §5.1", fmt(th.latency_budget_ms))),
+                location: Location {
+                    window_s: peak_window(e, "e2e_latency.p95"),
+                    ..Location::default()
+                },
+                reference: Some(format!(
+                    "{} ms, 3GPP TS 22.185 §5.1",
+                    fmt(th.latency_budget_ms)
+                )),
                 links: vec![link(name), grouped_link("latency_stage", "stage")],
             });
         }
@@ -1336,7 +1564,11 @@ fn latency(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
             out.push(Finding {
                 id: "latency.dominant-stage".into(),
                 layer: Layer::Latency,
-                severity: if share > 0.6 { Severity::Notice } else { Severity::Info },
+                severity: if share > 0.6 {
+                    Severity::Notice
+                } else {
+                    Severity::Info
+                },
                 title: format!("`{}` is the largest part of the latency", t.key),
                 detail: "Where the time goes between a message being generated and being \
                          used: shortening any other stage changes little while this one \
@@ -1344,10 +1576,22 @@ fn latency(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                     .into(),
                 evidence: stages
                     .iter()
-                    .filter_map(|g| g.value.map(|v| ev(&format!("stage `{}` mean", g.key), v,
-                                                       "ms", &format!("latency_stage[{}]", g.key))))
-                    .chain(std::iter::once(ev("share of the total", share, "ratio",
-                                              "latency_stage")))
+                    .filter_map(|g| {
+                        g.value.map(|v| {
+                            ev(
+                                &format!("stage `{}` mean", g.key),
+                                v,
+                                "ms",
+                                &format!("latency_stage[{}]", g.key),
+                            )
+                        })
+                    })
+                    .chain(std::iter::once(ev(
+                        "share of the total",
+                        share,
+                        "ratio",
+                        "latency_stage",
+                    )))
                     .collect(),
                 location: Location::default(),
                 reference: None,
@@ -1363,7 +1607,12 @@ fn security(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
         let min = e
             .metrics
             .get("cert_pool_valid")
-            .map(|m| m.series.iter().filter_map(|(_, v)| *v).fold(f64::INFINITY, f64::min))
+            .map(|m| {
+                m.series
+                    .iter()
+                    .filter_map(|(_, v)| *v)
+                    .fold(f64::INFINITY, f64::min)
+            })
             .filter(|v| v.is_finite())
             .unwrap_or(pool);
         if min <= 0.0 {
@@ -1376,7 +1625,12 @@ fn security(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                          heard by every receiver that verifies. Top-ups did not arrive in time."
                     .into(),
                 evidence: vec![
-                    ev("mean valid certificates per vehicle", pool, "certs", "cert_pool_valid"),
+                    ev(
+                        "mean valid certificates per vehicle",
+                        pool,
+                        "certs",
+                        "cert_pool_valid",
+                    ),
                     ev("lowest bin", min, "certs", "cert_pool_valid (binned)"),
                 ],
                 location: Location::default(),
@@ -1398,20 +1652,46 @@ fn security(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
             out.push(Finding {
                 id: "security.topups".into(),
                 layer: Layer::Security,
-                severity: if starved > 0.0 { Severity::Critical } else { Severity::Warning },
+                severity: if starved > 0.0 {
+                    Severity::Critical
+                } else {
+                    Severity::Warning
+                },
                 title: "Certificate top-ups failed".into(),
                 detail: "Some vehicles asked for new pseudonym certificates and were refused or \
                          left without; a starved vehicle is one whose pool ran dry before a \
                          top-up landed (no coverage, or a backend queue)."
                     .into(),
                 evidence: vec![
-                    ev("top-ups started", started, "count", "backend:ee.topups_started"),
-                    ev("top-ups completed", completed, "count", "backend:ee.topups_completed"),
-                    ev("top-ups refused", refused, "count", "backend:ee.topups_refused"),
-                    ev("vehicles starved", starved, "count", "backend:ee.vehicles_starved"),
+                    ev(
+                        "top-ups started",
+                        started,
+                        "count",
+                        "backend:ee.topups_started",
+                    ),
+                    ev(
+                        "top-ups completed",
+                        completed,
+                        "count",
+                        "backend:ee.topups_completed",
+                    ),
+                    ev(
+                        "top-ups refused",
+                        refused,
+                        "count",
+                        "backend:ee.topups_refused",
+                    ),
+                    ev(
+                        "vehicles starved",
+                        starved,
+                        "count",
+                        "backend:ee.vehicles_starved",
+                    ),
                 ],
-                location: Location { entities: vec!["ee".into(), "ra".into()],
-                                     ..Location::default() },
+                location: Location {
+                    entities: vec!["ee".into(), "ra".into()],
+                    ..Location::default()
+                },
                 reference: None,
                 links: vec![],
             });
@@ -1448,9 +1728,16 @@ fn security(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                     .into(),
                 evidence: rev
                     .iter()
-                    .filter_map(|g| g.value.map(|v| ev(&format!("stage `{}`", g.key), v,
-                                                       &e.unit("revocation_latency_stage"),
-                                                       &format!("revocation_latency_stage[{}]", g.key))))
+                    .filter_map(|g| {
+                        g.value.map(|v| {
+                            ev(
+                                &format!("stage `{}`", g.key),
+                                v,
+                                &e.unit("revocation_latency_stage"),
+                                &format!("revocation_latency_stage[{}]", g.key),
+                            )
+                        })
+                    })
                     .collect(),
                 location: Location::default(),
                 reference: None,
@@ -1471,19 +1758,37 @@ fn backend_entity<'a>(e: &'a RunEvidence, id: &str) -> Option<&'a Value> {
 
 fn backend(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
     let Some(view) = &e.backend else { return };
-    let t_ns = view.get("t").and_then(Value::as_f64).unwrap_or(e.t_reached_s * 1e9);
+    let t_ns = view
+        .get("t")
+        .and_then(Value::as_f64)
+        .unwrap_or(e.t_reached_s * 1e9);
     if t_ns <= 0.0 {
         return;
     }
     let mut hot: BTreeMap<String, (f64, f64, f64, f64)> = BTreeMap::new();
-    for ent in view.get("entities").and_then(Value::as_array).into_iter().flatten() {
-        let Some(q) = ent.get("queue").filter(|q| q.is_object()) else { continue };
-        let id = ent.get("id").and_then(Value::as_str).unwrap_or("?").to_string();
+    for ent in view
+        .get("entities")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(q) = ent.get("queue").filter(|q| q.is_object()) else {
+            continue;
+        };
+        let id = ent
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_string();
         let f = |k: &str| q.get(k).and_then(Value::as_f64).unwrap_or(0.0);
         let servers = f("servers").max(1.0);
         let util = f("busy_ns") / (servers * t_ns);
         let served = f("served");
-        let mean_wait_ms = if served > 0.0 { f("waited_ns") / served / 1e6 } else { 0.0 };
+        let mean_wait_ms = if served > 0.0 {
+            f("waited_ns") / served / 1e6
+        } else {
+            0.0
+        };
         if util > th.entity_utilisation || f("backlog_ns") > 1e9 {
             hot.insert(id, (util, f("depth"), mean_wait_ms, f("backlog_ns") / 1e9));
         }
@@ -1492,19 +1797,46 @@ fn backend(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
         out.push(Finding {
             id: format!("backend.saturated.{id}"),
             layer: Layer::Backend,
-            severity: if util >= 0.95 { Severity::Critical } else { Severity::Warning },
+            severity: if util >= 0.95 {
+                Severity::Critical
+            } else {
+                Severity::Warning
+            },
             title: format!("The `{id}` entity's queue saturated"),
             detail: "Its servers were busy almost all the time, so requests waited and the \
                      wait grows faster than the load. Every certificate or report flowing \
                      through it is delayed by that queue."
                 .into(),
             evidence: vec![
-                ev("server utilisation", util, "ratio", &format!("backend:{id}.queue.busy_ns")),
-                ev("queue depth now", depth, "requests", &format!("backend:{id}.queue.depth")),
-                ev("mean wait", wait, "ms", &format!("backend:{id}.queue.waited_ns")),
-                ev("backlog", backlog, "s", &format!("backend:{id}.queue.backlog_ns")),
+                ev(
+                    "server utilisation",
+                    util,
+                    "ratio",
+                    &format!("backend:{id}.queue.busy_ns"),
+                ),
+                ev(
+                    "queue depth now",
+                    depth,
+                    "requests",
+                    &format!("backend:{id}.queue.depth"),
+                ),
+                ev(
+                    "mean wait",
+                    wait,
+                    "ms",
+                    &format!("backend:{id}.queue.waited_ns"),
+                ),
+                ev(
+                    "backlog",
+                    backlog,
+                    "s",
+                    &format!("backend:{id}.queue.backlog_ns"),
+                ),
             ],
-            location: Location { entities: vec![id.clone()], ..Location::default() },
+            location: Location {
+                entities: vec![id.clone()],
+                ..Location::default()
+            },
             reference: Some(format!(
                 "utilisation above {} (engineering choice; queueing planning ceiling)",
                 fmt(th.entity_utilisation)
@@ -1528,12 +1860,18 @@ fn privacy(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                     .into(),
                 evidence: vec![ev("linkability", l, "ratio", "linkability")],
                 location: Location::default(),
-                reference: Some(format!("above {} (engineering choice)", fmt(th.linkability))),
+                reference: Some(format!(
+                    "above {} (engineering choice)",
+                    fmt(th.linkability)
+                )),
                 links: vec![link("linkability")],
             });
         }
     }
-    if let (Some(rate), Some(period)) = (e.value("pseudonym_change_rate"), e.scenario.pseudonym_period_s) {
+    if let (Some(rate), Some(period)) = (
+        e.value("pseudonym_change_rate"),
+        e.scenario.pseudonym_period_s,
+    ) {
         if period > 0.0 && e.t_reached_s > period {
             let expected = 1.0 / period;
             if rate < 0.5 * expected {
@@ -1547,10 +1885,18 @@ fn privacy(e: &RunEvidence, th: &Thresholds, out: &mut Vec<Finding>) {
                              as a minimum distance is unmet)."
                         .into(),
                     evidence: vec![
-                        ev("change rate", rate, &e.unit("pseudonym_change_rate"),
-                           "pseudonym_change_rate"),
-                        ev("configured period", period, "s",
-                           "scenario security.pseudonym_change.period_s"),
+                        ev(
+                            "change rate",
+                            rate,
+                            &e.unit("pseudonym_change_rate"),
+                            "pseudonym_change_rate",
+                        ),
+                        ev(
+                            "configured period",
+                            period,
+                            "s",
+                            "scenario security.pseudonym_change.period_s",
+                        ),
                     ],
                     location: Location::default(),
                     reference: Some("below half of 1/period".into()),
@@ -1629,11 +1975,18 @@ mod tests {
     }
 
     fn groups(dim: &str, rows: &[(&str, f64)], unit: &str) -> MetricEvidence {
-        let mut m = MetricEvidence { unit: unit.into(), ..MetricEvidence::default() };
+        let mut m = MetricEvidence {
+            unit: unit.into(),
+            ..MetricEvidence::default()
+        };
         m.groups.insert(
             dim.to_string(),
             rows.iter()
-                .map(|(k, v)| Group { key: (*k).to_string(), value: Some(*v), n: 100 })
+                .map(|(k, v)| Group {
+                    key: (*k).to_string(),
+                    value: Some(*v),
+                    n: 100,
+                })
                 .collect(),
         );
         m
@@ -1669,17 +2022,50 @@ mod tests {
         m.insert("mac_drops".into(), metric(0.0, "count"));
         m.insert("unverified_ratio".into(), metric(0.0, "ratio"));
         m.insert("verify_queue_depth.p95".into(), metric(1.0, "messages"));
-        m.insert("pdr".into(), groups("dist_bin",
-            &[("0-20", 0.99), ("20-40", 0.99), ("40-60", 0.98), ("60-80", 0.97),
-              ("80-100", 0.95), ("100-120", 0.93)], "ratio"));
-        m.insert("pdr_by_cause".into(), groups("cause",
-            &[("collision", 0.2), ("half-duplex", 0.1), ("below-sensitivity", 0.7)], "ratio"));
+        m.insert(
+            "pdr".into(),
+            groups(
+                "dist_bin",
+                &[
+                    ("0-20", 0.99),
+                    ("20-40", 0.99),
+                    ("40-60", 0.98),
+                    ("60-80", 0.97),
+                    ("80-100", 0.95),
+                    ("100-120", 0.93),
+                ],
+                "ratio",
+            ),
+        );
+        m.insert(
+            "pdr_by_cause".into(),
+            groups(
+                "cause",
+                &[
+                    ("collision", 0.2),
+                    ("half-duplex", 0.1),
+                    ("below-sensitivity", 0.7),
+                ],
+                "ratio",
+            ),
+        );
         m.get_mut("pdr").expect("pdr").value = Some(0.97);
         m.insert("nar".into(), metric(0.97, "ratio"));
         m.insert("aoi.p95".into(), metric(150.0, "ms"));
         m.insert("e2e_latency.p95".into(), metric(12.0, "ms"));
-        m.insert("latency_stage".into(), groups("stage",
-            &[("generation", 1.0), ("access", 0.5), ("airtime", 0.4), ("verify", 2.0)], "ms"));
+        m.insert(
+            "latency_stage".into(),
+            groups(
+                "stage",
+                &[
+                    ("generation", 1.0),
+                    ("access", 0.5),
+                    ("airtime", 0.4),
+                    ("verify", 2.0),
+                ],
+                "ms",
+            ),
+        );
         m.insert("cert_pool_valid".into(), metric(20.0, "certs"));
         m.insert("false_accusations".into(), metric(0.0, "count"));
         m.insert("linkability".into(), metric(0.1, "ratio"));
@@ -1717,41 +2103,152 @@ mod tests {
     fn every_detector_fires_on_its_constructed_bottleneck() {
         let th = Thresholds::default();
         let cases: Vec<(&str, Box<dyn Fn(&mut RunEvidence)>)> = vec![
-            ("traffic.delay", Box::new(|e| e.metrics.get_mut("mean_speed").unwrap().value = Some(3.0))),
-            ("traffic.conflicts", Box::new(|e| e.metrics.get_mut("ttc_conflicts").unwrap().value = Some(4.0))),
-            ("channel.congested", Box::new(|e| e.metrics.get_mut("cbr").unwrap().value = Some(0.85))),
-            ("channel.collisions", Box::new(|e| *e.metrics.get_mut("pdr_by_cause").unwrap()
-                .groups.get_mut("cause").unwrap() = vec![
-                    Group { key: "collision".into(), value: Some(0.6), n: 10 },
-                    Group { key: "below-sensitivity".into(), value: Some(0.4), n: 10 }])),
-            ("access.delay", Box::new(|e| e.metrics.get_mut("mac_access_delay.p95").unwrap().value = Some(35.0))),
-            ("access.tx-queue", Box::new(|e| e.metrics.get_mut("mac_drops").unwrap().value = Some(12.0))),
-            ("access.verification", Box::new(|e| e.metrics.get_mut("unverified_ratio").unwrap().value = Some(0.2))),
-            ("delivery.near-range-loss", Box::new(|e| e.metrics.get_mut("pdr").unwrap()
-                .groups.get_mut("dist_bin").unwrap()[1].value = Some(0.8))),
-            ("delivery.range", Box::new(|e| e.metrics.get_mut("pdr").unwrap()
-                .groups.get_mut("dist_bin").unwrap()[5].value = Some(0.7))),
-            ("delivery.awareness", Box::new(|e| e.metrics.get_mut("nar").unwrap().value = Some(0.6))),
-            ("delivery.stale-information", Box::new(|e| e.metrics.get_mut("aoi.p95").unwrap().value = Some(900.0))),
-            ("latency.over-budget", Box::new(|e| e.metrics.get_mut("e2e_latency.p95").unwrap().value = Some(140.0))),
-            ("latency.dominant-stage", Box::new(|e| *e.metrics.get_mut("latency_stage").unwrap()
-                .groups.get_mut("stage").unwrap() = vec![
-                    Group { key: "access".into(), value: Some(30.0), n: 10 },
-                    Group { key: "verify".into(), value: Some(2.0), n: 10 }])),
-            ("security.pool-exhausted", Box::new(|e| e.metrics.get_mut("cert_pool_valid").unwrap().value = Some(0.0))),
-            ("security.topups", Box::new(|e| e.backend.as_mut().unwrap()["entities"][1]["state"]["vehicles_starved"] = json!(3))),
-            ("security.false-revocations", Box::new(|e| e.metrics.get_mut("false_accusations").unwrap().value = Some(1.0))),
-            ("backend.saturated.ra", Box::new(|e| e.backend.as_mut().unwrap()["entities"][0]["queue"]["busy_ns"] = json!(230e9))),
-            ("privacy.linkable", Box::new(|e| e.metrics.get_mut("linkability").unwrap().value = Some(0.8))),
+            (
+                "traffic.delay",
+                Box::new(|e| e.metrics.get_mut("mean_speed").unwrap().value = Some(3.0)),
+            ),
+            (
+                "traffic.conflicts",
+                Box::new(|e| e.metrics.get_mut("ttc_conflicts").unwrap().value = Some(4.0)),
+            ),
+            (
+                "channel.congested",
+                Box::new(|e| e.metrics.get_mut("cbr").unwrap().value = Some(0.85)),
+            ),
+            (
+                "channel.collisions",
+                Box::new(|e| {
+                    *e.metrics
+                        .get_mut("pdr_by_cause")
+                        .unwrap()
+                        .groups
+                        .get_mut("cause")
+                        .unwrap() = vec![
+                        Group {
+                            key: "collision".into(),
+                            value: Some(0.6),
+                            n: 10,
+                        },
+                        Group {
+                            key: "below-sensitivity".into(),
+                            value: Some(0.4),
+                            n: 10,
+                        },
+                    ]
+                }),
+            ),
+            (
+                "access.delay",
+                Box::new(|e| e.metrics.get_mut("mac_access_delay.p95").unwrap().value = Some(35.0)),
+            ),
+            (
+                "access.tx-queue",
+                Box::new(|e| e.metrics.get_mut("mac_drops").unwrap().value = Some(12.0)),
+            ),
+            (
+                "access.verification",
+                Box::new(|e| e.metrics.get_mut("unverified_ratio").unwrap().value = Some(0.2)),
+            ),
+            (
+                "delivery.near-range-loss",
+                Box::new(|e| {
+                    e.metrics
+                        .get_mut("pdr")
+                        .unwrap()
+                        .groups
+                        .get_mut("dist_bin")
+                        .unwrap()[1]
+                        .value = Some(0.8)
+                }),
+            ),
+            (
+                "delivery.range",
+                Box::new(|e| {
+                    e.metrics
+                        .get_mut("pdr")
+                        .unwrap()
+                        .groups
+                        .get_mut("dist_bin")
+                        .unwrap()[5]
+                        .value = Some(0.7)
+                }),
+            ),
+            (
+                "delivery.awareness",
+                Box::new(|e| e.metrics.get_mut("nar").unwrap().value = Some(0.6)),
+            ),
+            (
+                "delivery.stale-information",
+                Box::new(|e| e.metrics.get_mut("aoi.p95").unwrap().value = Some(900.0)),
+            ),
+            (
+                "latency.over-budget",
+                Box::new(|e| e.metrics.get_mut("e2e_latency.p95").unwrap().value = Some(140.0)),
+            ),
+            (
+                "latency.dominant-stage",
+                Box::new(|e| {
+                    *e.metrics
+                        .get_mut("latency_stage")
+                        .unwrap()
+                        .groups
+                        .get_mut("stage")
+                        .unwrap() = vec![
+                        Group {
+                            key: "access".into(),
+                            value: Some(30.0),
+                            n: 10,
+                        },
+                        Group {
+                            key: "verify".into(),
+                            value: Some(2.0),
+                            n: 10,
+                        },
+                    ]
+                }),
+            ),
+            (
+                "security.pool-exhausted",
+                Box::new(|e| e.metrics.get_mut("cert_pool_valid").unwrap().value = Some(0.0)),
+            ),
+            (
+                "security.topups",
+                Box::new(|e| {
+                    e.backend.as_mut().unwrap()["entities"][1]["state"]["vehicles_starved"] =
+                        json!(3)
+                }),
+            ),
+            (
+                "security.false-revocations",
+                Box::new(|e| e.metrics.get_mut("false_accusations").unwrap().value = Some(1.0)),
+            ),
+            (
+                "backend.saturated.ra",
+                Box::new(|e| {
+                    e.backend.as_mut().unwrap()["entities"][0]["queue"]["busy_ns"] = json!(230e9)
+                }),
+            ),
+            (
+                "privacy.linkable",
+                Box::new(|e| e.metrics.get_mut("linkability").unwrap().value = Some(0.8)),
+            ),
             ("simulation.incomplete", Box::new(|e| e.t_reached_s = 20.0)),
         ];
-        let quiet = ids(&analyse(&healthy(), &th)).into_iter().map(str::to_string).collect::<Vec<_>>();
+        let quiet = ids(&analyse(&healthy(), &th))
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
         for (id, inject) in cases {
-            assert!(!quiet.contains(&id.to_string()), "{id} fires on the healthy run");
+            assert!(
+                !quiet.contains(&id.to_string()),
+                "{id} fires on the healthy run"
+            );
             let mut e = healthy();
             inject(&mut e);
             let a = analyse(&e, &th);
-            let f = a.finding(id).unwrap_or_else(|| panic!("{id} did not fire: {:#?}", ids(&a)));
+            let f = a
+                .finding(id)
+                .unwrap_or_else(|| panic!("{id} did not fire: {:#?}", ids(&a)));
             assert!(f.severity >= Severity::Notice, "{id} fired only as info");
             assert!(!f.evidence.is_empty(), "{id} has no evidence");
         }
@@ -1764,19 +2261,33 @@ mod tests {
         e.scenario.security_protocol = None;
         e.backend = None;
         let a = analyse(&e, &Thresholds::default());
-        for layer in [Layer::Traffic, Layer::Channel, Layer::Latency, Layer::Security,
-                      Layer::Backend, Layer::Privacy] {
-            assert!(a.not_measured.contains(&layer), "{layer:?} should be not measured");
+        for layer in [
+            Layer::Traffic,
+            Layer::Channel,
+            Layer::Latency,
+            Layer::Security,
+            Layer::Backend,
+            Layer::Privacy,
+        ] {
+            assert!(
+                a.not_measured.contains(&layer),
+                "{layer:?} should be not measured"
+            );
         }
-        assert!(a.findings.iter().any(|f| f.id == "security.not-measured"
-            && f.detail.contains("security.protocol")));
+        assert!(
+            a.findings
+                .iter()
+                .any(|f| f.id == "security.not-measured" && f.detail.contains("security.protocol"))
+        );
     }
 
     #[test]
     fn findings_name_where_and_link_to_their_chart() {
         let mut e = healthy();
-        e.metrics.insert("mac_access_delay".into(), groups("node",
-            &[("3", 40.0), ("9", 55.0), ("1", 2.0)], "ms"));
+        e.metrics.insert(
+            "mac_access_delay".into(),
+            groups("node", &[("3", 40.0), ("9", 55.0), ("1", 2.0)], "ms"),
+        );
         e.metrics.get_mut("mac_access_delay.p95").unwrap().value = Some(45.0);
         let a = analyse(&e, &Thresholds::default());
         let f = a.finding("access.delay").expect("fires");
@@ -1802,7 +2313,11 @@ mod tests {
         let b = analyse(&e, &th);
         let c = compare(&a, &b);
         assert!(c.only_in_b.contains(&"channel.congested".to_string()));
-        let d = c.deltas.iter().find(|d| d.metric == "cbr").expect("cbr compared");
+        let d = c
+            .deltas
+            .iter()
+            .find(|d| d.metric == "cbr")
+            .expect("cbr compared");
         assert!((d.change - 0.6).abs() < 1e-9);
     }
 

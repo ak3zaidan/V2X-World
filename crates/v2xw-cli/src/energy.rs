@@ -120,16 +120,13 @@ fn row(class: &str, t: &Totals) -> ClassRow {
 }
 
 fn read_spec(path: &Path) -> Result<EnergySpec> {
-    let text =
-        std::fs::read_to_string(path).map_err(|e| CliError::io("cannot read", path, e))?;
-    let parsed: std::result::Result<EnergySpec, String> = if path
-        .extension()
-        .is_some_and(|x| x == "json")
-    {
-        serde_json::from_str(&text).map_err(|e| e.to_string())
-    } else {
-        serde_yml::from_str(&text).map_err(|e| e.to_string())
-    };
+    let text = std::fs::read_to_string(path).map_err(|e| CliError::io("cannot read", path, e))?;
+    let parsed: std::result::Result<EnergySpec, String> =
+        if path.extension().is_some_and(|x| x == "json") {
+            serde_json::from_str(&text).map_err(|e| e.to_string())
+        } else {
+            serde_yml::from_str(&text).map_err(|e| e.to_string())
+        };
     parsed.map_err(|problem| CliError::BadArgument {
         flag: "spec",
         problem: format!("{}: {problem}", path.display()),
@@ -175,10 +172,11 @@ pub fn energy(o: &EnergyOptions) -> Result<EnergyOutcome> {
     if let Some(m) = &o.ev_model {
         spec.ev_model.clone_from(m);
     }
-    let mut provider = EnergyProvider::new(spec, seed).map_err(|problem| CliError::BadArgument {
-        flag: "spec",
-        problem,
-    })?;
+    let mut provider =
+        EnergyProvider::new(spec, seed).map_err(|problem| CliError::BadArgument {
+            flag: "spec",
+            problem,
+        })?;
     let mut records = 0u64;
     for r in reader.records(Some("gt.kinematics"))? {
         records += 1;

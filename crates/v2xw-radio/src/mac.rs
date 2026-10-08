@@ -1350,10 +1350,19 @@ mod tests {
                 .map(NodeId::new)
                 .find_map(|node| {
                     ctx.set_now(0);
-                    Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Busy { energy_dbm: -70.0 });
+                    Mac::on_cca(
+                        &mut mac,
+                        &mut ctx,
+                        node,
+                        CH,
+                        CcaState::Busy { energy_dbm: -70.0 },
+                    );
                     Mac::enqueue(&mut mac, &mut ctx, node, sdu(300, 0), AccessCategory::Be)
                         .expect("queued");
-                    let d = mac.backoff(node, CH, AccessCategory::Be).expect("drawn").drawn;
+                    let d = mac
+                        .backoff(node, CH, AccessCategory::Be)
+                        .expect("drawn")
+                        .drawn;
                     (d >= 4).then_some((node, u64::from(d)))
                 })
                 .expect("some node draws at least 4 slots");
@@ -1367,7 +1376,13 @@ mod tests {
             } else {
                 ctx.set_now(busy_at);
             }
-            Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Busy { energy_dbm: -70.0 });
+            Mac::on_cca(
+                &mut mac,
+                &mut ctx,
+                node,
+                CH,
+                CcaState::Busy { energy_dbm: -70.0 },
+            );
             ctx.set_now(3_000_000);
             Mac::on_cca(&mut mac, &mut ctx, node, CH, CcaState::Idle);
             let expected = 3_000_000 + aifs + (drawn - 3) * slot;

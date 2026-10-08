@@ -469,7 +469,11 @@ impl MetricDef {
                 return Err(bad(format!("dimension {d} is listed twice")));
             }
         }
-        if let Some(problem) = self.health.as_ref().and_then(crate::health::HealthBand::problem) {
+        if let Some(problem) = self
+            .health
+            .as_ref()
+            .and_then(crate::health::HealthBand::problem)
+        {
             return Err(bad(problem));
         }
         if self.not_accounted.is_empty() {

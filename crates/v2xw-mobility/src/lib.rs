@@ -111,9 +111,9 @@ pub mod kerbside;
 pub mod kinematic;
 pub mod lamps;
 pub mod lanechange;
-pub mod network;
 pub mod lateral;
 pub mod meso;
+pub mod network;
 pub mod par;
 pub mod routing;
 pub mod rules;
@@ -144,11 +144,10 @@ pub use traits::{
     VruMobility,
 };
 pub use views::{
-    ActorSpawn, ConflictView, DespawnCause, DriverProfile, EdgeCost, EntryDecision, GnssEnv,
-    JunctionView, LaneChangeDecision, LaneNeighbors, LaneView, LeaderView, MobilityCommand,
-    MobilityUpdate, PhaseState, ReroutePolicy, Route, Side, SideNeighbors, SkyView, TripRequest,
-    Intent, INTENT_HORIZON_M, EMERGENCY_BRAKE_ONSET_JERK_MPS3,
-    VehicleView,
+    ActorSpawn, ConflictView, DespawnCause, DriverProfile, EMERGENCY_BRAKE_ONSET_JERK_MPS3,
+    EdgeCost, EntryDecision, GnssEnv, INTENT_HORIZON_M, Intent, JunctionView, LaneChangeDecision,
+    LaneNeighbors, LaneView, LeaderView, MobilityCommand, MobilityUpdate, PhaseState,
+    ReroutePolicy, Route, Side, SideNeighbors, SkyView, TripRequest, VehicleView,
 };
 pub use vru::{SocialForce, SocialForceParams};
 pub use weather::{RoadContext, WeatherResponse};

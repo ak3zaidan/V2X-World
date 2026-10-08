@@ -17,13 +17,15 @@ fn scenario(kind: &str, params: serde_json::Value) -> Scenario {
 
 /// Runs the scenario's mobility for its duration; returns (vehicles spawned, card id).
 fn drive(s: &Scenario) -> (usize, String) {
-    s.validate().expect("the scenario validates with the new kind");
+    s.validate()
+        .expect("the scenario validates with the new kind");
     let world = v2xw_engine::wiring::build_world(s).expect("world");
     let demand = v2xw_engine::wiring::build_demand(s, &world).expect("demand builds");
     let id = v2xw_core::model::Model::card(demand.as_ref()).id.clone();
     let rng = RngRegistry::new(s.seed);
     let mut m = v2xw_engine::wiring::build_mobility(s);
-    m.init(&mut MobilityCtx::new(0, &world, &rng), demand).expect("init");
+    m.init(&mut MobilityCtx::new(0, &world, &rng), demand)
+        .expect("init");
     let step = v2xw_core::time::Duration::from_millis(s.time.mobility_step_ms);
     let mut t = 0;
     let mut spawned = 0;
@@ -66,6 +68,8 @@ fn an_unknown_part_is_refused_by_name() {
         serde_json::json!({ "parts": [ { "kind": "mobility/demand/nonesuch" } ] }),
     );
     let world = v2xw_engine::wiring::build_world(&s).expect("world");
-    let err = v2xw_engine::wiring::build_demand(&s, &world).err().expect("refused");
+    let err = v2xw_engine::wiring::build_demand(&s, &world)
+        .err()
+        .expect("refused");
     assert!(err.to_string().contains("nonesuch"), "{err}");
 }

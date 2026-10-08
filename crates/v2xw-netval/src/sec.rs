@@ -14,8 +14,8 @@ use v2xw_sec::cert::{self, CertSpec, HolderId};
 use v2xw_sec::crypto::{CryptoBackend, CryptoBackendInfo, KeyHandle, Real, SigToken};
 use v2xw_sec::ec;
 use v2xw_sec::envelope::{
-    CrlStore, Envelope, HeaderInfoSpec, PeerCertCache, PlanOutcome, RejectReason,
-    SecurityEnvelope, SecurityEnvelopeInfo, SignerHandle, SignerIdChoice, TrustStore,
+    CrlStore, Envelope, HeaderInfoSpec, PeerCertCache, PlanOutcome, RejectReason, SecurityEnvelope,
+    SecurityEnvelopeInfo, SignerHandle, SignerIdChoice, TrustStore,
 };
 use v2xw_sec::hashedid::certificate_digest;
 use v2xw_sec::linkage::{CrlLinkageEntry, DeviceLinkageContext, LaId, LinkageSeed};
@@ -81,7 +81,9 @@ fn hex(b: &[u8]) -> String {
 }
 
 fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap_or(0)).collect()
+    (0..s.len() / 2)
+        .map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap_or(0))
+        .collect()
 }
 
 struct Entity {
@@ -110,18 +112,30 @@ fn device_linkage(device: u8) -> DeviceLinkageContext {
 /// `i_cert`.
 fn build_pki(ctx: &mut TestCtx, backend: &mut Real, count: u32, i_cert: u16) -> Pki {
     let p = PrimitiveId::ECDSA_P256_SHA256;
-    let root_key = backend.keygen(ctx, p, NodeId::new(900)).expect("root keygen");
-    let root_material = backend.public_material(&backend.public_of(&root_key).expect("pub")).expect("material");
-    let root = Arc::new(cert::trust_anchor(&CertSpec::authority(T0_1609, PSID_BSM), &root_material).expect("root"));
+    let root_key = backend
+        .keygen(ctx, p, NodeId::new(900))
+        .expect("root keygen");
+    let root_material = backend
+        .public_material(&backend.public_of(&root_key).expect("pub"))
+        .expect("material");
+    let root = Arc::new(
+        cert::trust_anchor(&CertSpec::authority(T0_1609, PSID_BSM), &root_material).expect("root"),
+    );
     let root_coer = cert::encode(&root).expect("root encodes");
     let root_digest = certificate_digest(&root).expect("digest");
-    let pca_key = backend.keygen(ctx, p, NodeId::new(901)).expect("pca keygen");
-    let pca_material = backend.public_material(&backend.public_of(&pca_key).expect("pub")).expect("material");
+    let pca_key = backend
+        .keygen(ctx, p, NodeId::new(901))
+        .expect("pca keygen");
+    let pca_material = backend
+        .public_material(&backend.public_of(&pca_key).expect("pub"))
+        .expect("material");
     let mut pca_spec = CertSpec::authority(T0_1609, PSID_BSM);
     pca_spec.issuer = Some(root_digest);
     let pca = Arc::new(
         cert::issue_explicit(&pca_spec, &pca_material, &root_coer, |digest| {
-            backend.sign_prehashed(ctx, &root_key, digest)?.to_ieee1609_signature()
+            backend
+                .sign_prehashed(ctx, &root_key, digest)?
+                .to_ieee1609_signature()
         })
         .expect("pca"),
     );
@@ -131,24 +145,40 @@ fn build_pki(ctx: &mut TestCtx, backend: &mut Real, count: u32, i_cert: u16) -> 
     for n in 0..count {
         let node = NodeId::new(n);
         let key = backend.keygen(ctx, p, node).expect("keygen");
-        let material = backend.public_material(&backend.public_of(&key).expect("pub")).expect("material");
+        let material = backend
+            .public_material(&backend.public_of(&key).expect("pub"))
+            .expect("material");
         let linkage = device_linkage((n + 1) as u8);
         let spec = CertSpec::pseudonym(
             pca_digest.clone(),
-            HolderId::Linkage { i_cert: i_cert, linkage_value: linkage.linkage_value_for(u32::from(i_cert), n) },
+            HolderId::Linkage {
+                i_cert: i_cert,
+                linkage_value: linkage.linkage_value_for(u32::from(i_cert), n),
+            },
             T0_1609,
             PSID_BSM,
         );
         let certificate = Arc::new(
             cert::issue_explicit(&spec, &material, &pca_coer, |digest| {
-                backend.sign_prehashed(ctx, &pca_key, digest)?.to_ieee1609_signature()
+                backend
+                    .sign_prehashed(ctx, &pca_key, digest)?
+                    .to_ieee1609_signature()
             })
             .expect("ee"),
         );
         let signer = SignerHandle::new(node, key, certificate.clone()).expect("signer");
-        entities.push(Entity { key, certificate, signer, linkage });
+        entities.push(Entity {
+            key,
+            certificate,
+            signer,
+            linkage,
+        });
     }
-    Pki { root, pca, entities }
+    Pki {
+        root,
+        pca,
+        entities,
+    }
 }
 
 fn digest_of(i: u32) -> [u8; 32] {
@@ -162,7 +192,9 @@ fn ecdsa_interop(mode: Mode) -> Outcome {
     let mut verify = Vec::new();
     for i in 0..32u32 {
         let key = backend.keygen(&mut ctx, p, NodeId::new(i)).expect("keygen");
-        let pubm = backend.public_material(&backend.public_of(&key).expect("pub")).expect("material");
+        let pubm = backend
+            .public_material(&backend.public_of(&key).expect("pub"))
+            .expect("material");
         let d = digest_of(i);
         let sig = backend.sign_prehashed(&mut ctx, &key, &d).expect("signs");
         let (mut r, mut s) = (sig.r().expect("r"), sig.s().expect("s"));
@@ -175,12 +207,20 @@ fn ecdsa_interop(mode: Mode) -> Outcome {
         t[0] ^= 1;
         verify.push(json!({"pub": hex(&pubm), "digest": hex(&t), "r": hex(&r), "s": hex(&s)}));
     }
-    let sign: Vec<Value> = (100..132u32).map(|i| Value::String(hex(&digest_of(i)))).collect();
-    let out = match crate::python("security.py", &json!({"op": "ecdsa", "verify": verify, "sign": sign})) {
+    let sign: Vec<Value> = (100..132u32)
+        .map(|i| Value::String(hex(&digest_of(i))))
+        .collect();
+    let out = match crate::python(
+        "security.py",
+        &json!({"op": "ecdsa", "verify": verify, "sign": sign}),
+    ) {
         Ok(v) => v,
         Err(e) => return Outcome::skip(e),
     };
-    let verdicts: Vec<bool> = out["verify"].as_array().map(|a| a.iter().map(|v| v.as_bool() == Some(true)).collect()).unwrap_or_default();
+    let verdicts: Vec<bool> = out["verify"]
+        .as_array()
+        .map(|a| a.iter().map(|v| v.as_bool() == Some(true)).collect())
+        .unwrap_or_default();
     let openssl_ok = verdicts.iter().step_by(2).filter(|v| **v).count();
     let openssl_tamper_rejected = verdicts.iter().skip(1).step_by(2).filter(|v| !**v).count();
     let mut rust_ok = 0;
@@ -193,8 +233,13 @@ fn ecdsa_interop(mode: Mode) -> Outcome {
         };
         let mut bytes = unhex(item["r"].as_str().unwrap_or(""));
         bytes.extend(unhex(item["s"].as_str().unwrap_or("")));
-        let token = SigToken { primitive: p, bytes };
-        let d: [u8; 32] = unhex(item["digest"].as_str().unwrap_or("")).try_into().unwrap_or([0; 32]);
+        let token = SigToken {
+            primitive: p,
+            bytes,
+        };
+        let d: [u8; 32] = unhex(item["digest"].as_str().unwrap_or(""))
+            .try_into()
+            .unwrap_or([0; 32]);
         if backend.verify_prehashed(&mut ctx, &pk, &d, &token) {
             rust_ok += 1;
         }
@@ -208,15 +253,24 @@ fn ecdsa_interop(mode: Mode) -> Outcome {
             high_s += 1;
             let mut raw = unhex(item["r"].as_str().unwrap_or(""));
             raw.extend(unhex(item["raw_s"].as_str().unwrap_or("")));
-            let raw_token = SigToken { primitive: p, bytes: raw };
+            let raw_token = SigToken {
+                primitive: p,
+                bytes: raw,
+            };
             if !backend.verify_prehashed(&mut ctx, &pk, &d, &raw_token) {
                 high_s_refused += 1;
             }
         }
     }
     Outcome::judge(
-        openssl_ok == 32 && openssl_tamper_rejected == 32 && rust_ok == 32 && rust_tamper_rejected == 32 && high_s_refused == high_s,
-        format!("OpenSSL accepted {openssl_ok}/32 Rust signatures and rejected {openssl_tamper_rejected}/32 tampered; Rust accepted {rust_ok}/32 OpenSSL signatures (low-s form) and rejected {rust_tamper_rejected}/32 tampered; {high_s_refused}/{high_s} raw high-s forms refused by the low-s policy"),
+        openssl_ok == 32
+            && openssl_tamper_rejected == 32
+            && rust_ok == 32
+            && rust_tamper_rejected == 32
+            && high_s_refused == high_s,
+        format!(
+            "OpenSSL accepted {openssl_ok}/32 Rust signatures and rejected {openssl_tamper_rejected}/32 tampered; Rust accepted {rust_ok}/32 OpenSSL signatures (low-s form) and rejected {rust_tamper_rejected}/32 tampered; {high_s_refused}/{high_s} raw high-s forms refused by the low-s policy"
+        ),
     )
 }
 
@@ -237,11 +291,28 @@ fn spdu_independent(mode: Mode) -> Outcome {
         };
         ctx.set_now(u64::from(k) * 100_000_000);
         let payload: Vec<u8> = (0..(20 + 13 * k)).map(|b| (b * 7 + k) as u8).collect();
-        let hdr = HeaderInfoSpec { psid: PSID_BSM, msg_type: Some(MsgType::Bsm), ..HeaderInfoSpec::default() };
-        let pdu = envelope.sign(&mut ctx, &mut backend, &signer, &payload, &hdr, SignerIdChoice::Digest).expect("signs");
+        let hdr = HeaderInfoSpec {
+            psid: PSID_BSM,
+            msg_type: Some(MsgType::Bsm),
+            ..HeaderInfoSpec::default()
+        };
+        let pdu = envelope
+            .sign(
+                &mut ctx,
+                &mut backend,
+                &signer,
+                &payload,
+                &hdr,
+                SignerIdChoice::Digest,
+            )
+            .expect("signs");
         let parsed = envelope.parse(pdu.bytes()).expect("parses");
-        let pubm = backend.public_material(&backend.public_of(&e.key).expect("pub")).expect("material");
-        items.push(json!({"spdu": hex(pdu.bytes()), "cert": hex(e.signer.cert_coer()), "pub": hex(&pubm)}));
+        let pubm = backend
+            .public_material(&backend.public_of(&e.key).expect("pub"))
+            .expect("material");
+        items.push(
+            json!({"spdu": hex(pdu.bytes()), "cert": hex(e.signer.cert_coer()), "pub": hex(&pubm)}),
+        );
         expected.push(json!({
             "protocolVersion": 3, "content": 1, "hashId": 0, "innerVersion": 3,
             "payload": hex(&payload), "psid": PSID_BSM, "generationTime": parsed.generation_time,
@@ -253,23 +324,39 @@ fn spdu_independent(mode: Mode) -> Outcome {
         Err(e) => return Outcome::skip(e),
     };
     let mut wrong = Vec::new();
-    for (i, (got, want)) in out["items"].as_array().into_iter().flatten().zip(&expected).enumerate() {
+    for (i, (got, want)) in out["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .zip(&expected)
+        .enumerate()
+    {
         if let Some(err) = got.get("error") {
             wrong.push(format!("SPDU {i}: {err}"));
             continue;
         }
         for (k, v) in want.as_object().expect("object") {
             if got.get(k) != Some(v) {
-                wrong.push(format!("SPDU {i} {k}: {} vs {v}", got.get(k).cloned().unwrap_or(Value::Null)));
+                wrong.push(format!(
+                    "SPDU {i} {k}: {} vs {v}",
+                    got.get(k).cloned().unwrap_or(Value::Null)
+                ));
             }
         }
         if got.get("signerDigest") != got.get("expectedDigest") {
-            wrong.push(format!("SPDU {i}: signer digest is not the low-order 8 octets of SHA-256(cert)"));
+            wrong.push(format!(
+                "SPDU {i}: signer digest is not the low-order 8 octets of SHA-256(cert)"
+            ));
         }
     }
     Outcome::judge(
         wrong.is_empty() && expected.len() == 12,
-        if wrong.is_empty() { "12 SPDUs: every field equal, HashedId8 right, OpenSSL verifies every signature".to_string() } else { format!("{} problems; first: {}", wrong.len(), wrong[0]) },
+        if wrong.is_empty() {
+            "12 SPDUs: every field equal, HashedId8 right, OpenSSL verifies every signature"
+                .to_string()
+        } else {
+            format!("{} problems; first: {}", wrong.len(), wrong[0])
+        },
     )
 }
 
@@ -291,16 +378,34 @@ fn receiver_decisions(mode: Mode) -> Outcome {
     anchors8.insert(pki8.root.clone()).expect("root");
     let mut cache8 = PeerCertCache::new();
     cache8.insert(pki8.pca.clone(), true).expect("pca");
-    let hdr = HeaderInfoSpec { psid: PSID_BSM, msg_type: Some(MsgType::Bsm), ..HeaderInfoSpec::default() };
+    let hdr = HeaderInfoSpec {
+        psid: PSID_BSM,
+        msg_type: Some(MsgType::Bsm),
+        ..HeaderInfoSpec::default()
+    };
     let sign = |ctx: &mut TestCtx, backend: &mut Real, signer: &SignerHandle, at: u64| {
         ctx.set_now(at);
-        let pdu = envelope.sign(ctx, backend, signer, b"bsm", &hdr, SignerIdChoice::Certificate).expect("signs");
+        let pdu = envelope
+            .sign(
+                ctx,
+                backend,
+                signer,
+                b"bsm",
+                &hdr,
+                SignerIdChoice::Certificate,
+            )
+            .expect("signs");
         envelope.parse(pdu.bytes()).expect("parses")
     };
     // The CRL: device 1 (entity 0) revoked from period 7. The fault swaps the LA ids.
     let dev = &pki.entities[0].linkage;
     let crl_ctx = if mode.faulted() {
-        DeviceLinkageContext::new(LaId(0x0002), LaId(0x0001), LinkageSeed::new([1; 16]), LinkageSeed::new([0x81; 16]))
+        DeviceLinkageContext::new(
+            LaId(0x0002),
+            LaId(0x0001),
+            LinkageSeed::new([1; 16]),
+            LinkageSeed::new([0x81; 16]),
+        )
     } else {
         dev.clone()
     };
@@ -308,37 +413,87 @@ fn receiver_decisions(mode: Mode) -> Outcome {
     crl.add_linkage_entry(CrlLinkageEntry::from_device(&crl_ctx, 7, 20));
     let empty = CrlStore::new();
     let mut parts = Vec::new();
-    let p0 = sign(&mut ctx, &mut backend, &pki.entities[0].signer, 1_000_000_000);
-    let p1 = sign(&mut ctx, &mut backend, &pki.entities[1].signer, 1_000_000_000);
-    let plan = |p, c: &PeerCertCache, a: &TrustStore, crl: &CrlStore| envelope.verify_plan(p, c, a, crl).outcome;
+    let p0 = sign(
+        &mut ctx,
+        &mut backend,
+        &pki.entities[0].signer,
+        1_000_000_000,
+    );
+    let p1 = sign(
+        &mut ctx,
+        &mut backend,
+        &pki.entities[1].signer,
+        1_000_000_000,
+    );
+    let plan = |p, c: &PeerCertCache, a: &TrustStore, crl: &CrlStore| {
+        envelope.verify_plan(p, c, a, crl).outcome
+    };
     let o = plan(&p0, &cache, &anchors, &empty);
     parts.push((o == PlanOutcome::Verifiable, format!("valid chain: {o:?}")));
     let o = plan(&p0, &cache, &anchors, &crl);
-    parts.push((o == PlanOutcome::Reject(RejectReason::Revoked), format!("revoked device, its period: {o:?}")));
+    parts.push((
+        o == PlanOutcome::Reject(RejectReason::Revoked),
+        format!("revoked device, its period: {o:?}"),
+    ));
     let o = plan(&p1, &cache, &anchors, &crl);
-    parts.push((o == PlanOutcome::Verifiable, format!("other device under the same CRL: {o:?}")));
+    parts.push((
+        o == PlanOutcome::Verifiable,
+        format!("other device under the same CRL: {o:?}"),
+    ));
     // Period 8: the same device's seeds stepped forward one period.
-    let p8 = sign(&mut ctx8, &mut backend8, &pki8.entities[0].signer, 1_000_000_000);
+    let p8 = sign(
+        &mut ctx8,
+        &mut backend8,
+        &pki8.entities[0].signer,
+        1_000_000_000,
+    );
     let o = plan(&p8, &cache8, &anchors8, &crl);
-    parts.push((o == PlanOutcome::Reject(RejectReason::Revoked), format!("revoked device, next period: {o:?}")));
+    parts.push((
+        o == PlanOutcome::Reject(RejectReason::Revoked),
+        format!("revoked device, next period: {o:?}"),
+    ));
     let lv = dev.linkage_value_for(9, 3);
     let later = crl.revokes_linkage(9, 3, lv);
     parts.push((later, format!("linkage value of period 9 matched: {later}")));
     // Expired: generated after the 10,140-minute validity.
-    let p_late = sign(&mut ctx, &mut backend, &pki.entities[1].signer, 10_141 * 60 * 1_000_000_000);
+    let p_late = sign(
+        &mut ctx,
+        &mut backend,
+        &pki.entities[1].signer,
+        10_141 * 60 * 1_000_000_000,
+    );
     let o = plan(&p_late, &cache, &anchors, &empty);
-    parts.push((o == PlanOutcome::Reject(RejectReason::OutsideValidityPeriod), format!("expired: {o:?}")));
+    parts.push((
+        o == PlanOutcome::Reject(RejectReason::OutsideValidityPeriod),
+        format!("expired: {o:?}"),
+    ));
     Outcome::all(parts)
 }
 
 fn butterfly_identity(mode: Mode) -> Outcome {
-    let seed: Vec<u8> = (0..64u8).map(|b| b.wrapping_mul(37).wrapping_add(11)).collect();
+    let seed: Vec<u8> = (0..64u8)
+        .map(|b| b.wrapping_mul(37).wrapping_add(11))
+        .collect();
     let cat = Caterpillar::from_seed(&seed).expect("64 bytes");
     let a_pub = cat.signing_public();
     let mut items = Vec::new();
-    for (i, j) in [(0u32, 0u32), (0, 1), (1, 0), (3, 7), (7, 19), (52, 0), (100, 3), (155, 19), (2, 2), (9, 9), (40, 11), (77, 5)] {
+    for (i, j) in [
+        (0u32, 0u32),
+        (0, 1),
+        (1, 0),
+        (3, 7),
+        (7, 19),
+        (52, 0),
+        (100, 3),
+        (155, 19),
+        (2, 2),
+        (9, 9),
+        (40, 11),
+        (77, 5),
+    ] {
         let f = butterfly::f1(cat.ck(), i, j);
-        let (b, _q) = butterfly::ra_cocoon_keys(&a_pub, &cat.encryption_public(), cat.ck(), cat.ek(), i, j);
+        let (b, _q) =
+            butterfly::ra_cocoon_keys(&a_pub, &cat.encryption_public(), cat.ck(), cat.ek(), i, j);
         let c = ec::scalar_from_be_mod_n(&v2xw_core::hash::sha256(format!("c {i} {j}").as_bytes()));
         let (certified, _big_c) = butterfly::pca_certify_explicit(&b, &c);
         let d = if mode.faulted() {
@@ -371,6 +526,14 @@ fn butterfly_identity(mode: Mode) -> Outcome {
     }
     Outcome::judge(
         bad.is_empty() && rows.len() == 12,
-        if bad.is_empty() { "12 expansions: B = A + f·G, certified = B + c·G, d·G = certified".to_string() } else { format!("{} failures: {}", bad.len(), bad.iter().take(4).cloned().collect::<Vec<_>>().join(", ")) },
+        if bad.is_empty() {
+            "12 expansions: B = A + f·G, certified = B + c·G, d·G = certified".to_string()
+        } else {
+            format!(
+                "{} failures: {}",
+                bad.len(),
+                bad.iter().take(4).cloned().collect::<Vec<_>>().join(", ")
+            )
+        },
     )
 }

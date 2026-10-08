@@ -191,8 +191,14 @@ mod tests {
     #[test]
     fn the_style_cut_points_are_the_15th_and_85th_percentiles() {
         assert_eq!(DriverStyle::of_speed_factor(1.0, 0.1), DriverStyle::Normal);
-        assert_eq!(DriverStyle::of_speed_factor(1.11, 0.1), DriverStyle::Assertive);
-        assert_eq!(DriverStyle::of_speed_factor(0.89, 0.1), DriverStyle::Cautious);
+        assert_eq!(
+            DriverStyle::of_speed_factor(1.11, 0.1),
+            DriverStyle::Assertive
+        );
+        assert_eq!(
+            DriverStyle::of_speed_factor(0.89, 0.1),
+            DriverStyle::Cautious
+        );
         assert_eq!(DriverStyle::of_speed_factor(1.5, 0.0), DriverStyle::Normal);
         // The fleet's mean time gap and acceleration are kept within 1 %.
         let mean = |k: usize| {
@@ -200,7 +206,8 @@ mod tests {
                 let (t, a, b, s0) = s.multipliers();
                 [t, a, b, s0][k]
             };
-            0.15 * m(DriverStyle::Cautious) + 0.7 * m(DriverStyle::Normal)
+            0.15 * m(DriverStyle::Cautious)
+                + 0.7 * m(DriverStyle::Normal)
                 + 0.15 * m(DriverStyle::Assertive)
         };
         for k in 0..4 {
@@ -218,7 +225,10 @@ mod tests {
             );
             assert_eq!(design_vehicle_length_m(class), Some(design));
         }
-        assert!(VehicleClass::Truck.spec().length_m < design_vehicle_length_m(VehicleClass::Truck).unwrap());
+        assert!(
+            VehicleClass::Truck.spec().length_m
+                < design_vehicle_length_m(VehicleClass::Truck).unwrap()
+        );
     }
 
     #[test]

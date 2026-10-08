@@ -64,7 +64,14 @@ impl LocationTable {
         let expires = now_ns + self.lifetime_ns;
         let len = self.dpl_length;
         let e = self.entries.entry(source).or_insert_with(|| LocTe {
-            pv: PositionVector { addr: source, t_ns: 0, x: 0.0, y: 0.0, speed: 0.0, heading_deg: 0.0 },
+            pv: PositionVector {
+                addr: source,
+                t_ns: 0,
+                x: 0.0,
+                y: 0.0,
+                speed: 0.0,
+                heading_deg: 0.0,
+            },
             is_neighbour: false,
             expires_ns: expires,
             dpl: VecDeque::new(),
@@ -126,7 +133,14 @@ mod tests {
     #[test]
     fn entries_expire() {
         let mut t = LocationTable::new(1_000, 8);
-        let pv = PositionVector { addr: GnAddr(1), t_ns: 1, x: 0.0, y: 0.0, speed: 0.0, heading_deg: 0.0 };
+        let pv = PositionVector {
+            addr: GnAddr(1),
+            t_ns: 1,
+            x: 0.0,
+            y: 0.0,
+            speed: 0.0,
+            heading_deg: 0.0,
+        };
         t.update(pv, true, 0);
         assert_eq!(t.neighbours(999_999_999).count(), 1);
         assert_eq!(t.neighbours(1_000_000_000).count(), 0);

@@ -34,7 +34,10 @@ fn main() {
         );
         results.push((c, v));
     }
-    let bad = results.iter().filter(|r| !r.1.valid() && !r.1.skipped()).count();
+    let bad = results
+        .iter()
+        .filter(|r| !r.1.valid() && !r.1.skipped())
+        .count();
     if only.is_none() {
         let commit = Command::new("git")
             .args(["rev-parse", "--short", "HEAD"])
