@@ -149,6 +149,7 @@ impl Engine {
             end_ms: WARMUP_MS + window_ms,
             processing_us: 0,
             seed: self.scenario.seed ^ ((index as u64 + 1) << 32),
+            mac: None,
         };
         let medium = UnitDisk { range_m: g.range_m };
         let vehicles = nodes.len() as u64;

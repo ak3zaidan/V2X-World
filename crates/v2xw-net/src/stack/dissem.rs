@@ -8,11 +8,16 @@
 //!   and the location table it fills (so greedy forwarding sees stale neighbours, as a
 //!   real router does); each frame's 802.11p air time at 6 Mbit/s; per-link reception
 //!   with the medium's probability; node motion during the run.
-//! * **Not modelled:** MAC contention, collisions and DCC. Every frame reaches the air
-//!   when the router asks. This is the dominant difference from an Artery run (Amador et
-//!   al. ran LIMERIC DCC), and it is why [`super::eval`] compares *ratios and orderings*
-//!   with their tables rather than absolute counts. The engine's full radio pipeline
-//!   carries the single-hop traffic; this run is the multi-hop overlay.
+//! * **Optional ([`DissemConfig::mac`]):** CSMA/CA as 802.11p broadcast does it — carrier
+//!   sense over the medium's range, AIFS and a contention-window backoff after a busy
+//!   medium, no acknowledgement and no retry — with collisions (two overlapping frames
+//!   at a receiver are both lost; no capture) and half-duplex loss. Off (`None`), every
+//!   frame reaches the air when the router asks, which is the overlay the engine's
+//!   `net.geonet.forwarding: overlay` runs.
+//! * **Not modelled:** DCC. Amador et al. ran LIMERIC DCC, which is why [`super::eval`]
+//!   compares *ratios and orderings* with their tables rather than absolute counts. The
+//!   engine's on-air forwarding (`net.geonet.forwarding: on-air`) runs the full radio
+//!   pipeline, DCC included.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -260,6 +265,35 @@ impl Default for DenParams {
     }
 }
 
+/// CSMA/CA for broadcast frames, IEEE 802.11-2020 §10.22.2 with the OCB EDCA parameters
+/// of Table 9-155 and the 10 MHz OFDM timing of Table 17-21.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Csma {
+    /// `aSIFSTime`, µs (32 at 10 MHz).
+    pub sifs_us: u64,
+    /// `aSlotTime`, µs (13 at 10 MHz).
+    pub slot_us: u64,
+    /// AIFSN of the access category (AC_VO: 2).
+    pub aifsn: u64,
+    /// CWmin of the access category (AC_VO: 3). Broadcast never doubles it.
+    pub cw_min: u64,
+}
+
+impl Csma {
+    /// AC_VO on a 10 MHz OCB channel, the category DENMs use.
+    pub const AC_VO: Csma = Csma {
+        sifs_us: 32,
+        slot_us: 13,
+        aifsn: 2,
+        cw_min: 3,
+    };
+
+    /// `AIFS = SIFS + AIFSN × slot`, ns.
+    pub fn aifs_ns(&self) -> u64 {
+        (self.sifs_us + self.aifsn * self.slot_us) * 1_000
+    }
+}
+
 /// A dissemination run's configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DissemConfig {
@@ -275,6 +309,9 @@ pub struct DissemConfig {
     pub processing_us: u64,
     /// Master seed.
     pub seed: u64,
+    /// Medium access: `None` puts every frame on the air at once (no contention).
+    #[serde(default)]
+    pub mac: Option<Csma>,
 }
 
 impl Default for DissemConfig {
@@ -286,6 +323,7 @@ impl Default for DissemConfig {
             end_ms: 30_000,
             processing_us: 0,
             seed: 1,
+            mac: None,
         }
     }
 }
@@ -358,6 +396,15 @@ pub struct DissemReport {
     pub receptions: u64,
     /// Drops by router reason.
     pub drops: BTreeMap<String, u64>,
+    /// With a MAC: receptions lost to an overlapping frame.
+    #[serde(default)]
+    pub collisions: u64,
+    /// With a MAC: receptions lost because the receiver was transmitting.
+    #[serde(default)]
+    pub half_duplex: u64,
+    /// With a MAC: mean channel-access delay, µs.
+    #[serde(default)]
+    pub access_delay_mean_us: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -373,6 +420,10 @@ struct Tx {
     packet: GnPacket,
     sender: GnAddr,
     to: LinkDest,
+    from: usize,
+    start: u64,
+    end: u64,
+    pos: (f64, f64),
 }
 
 #[derive(Default)]
@@ -404,6 +455,12 @@ pub struct DisseminationRun<'m> {
     beacons: u64,
     receptions: u64,
     drops: BTreeMap<String, u64>,
+    collisions: u64,
+    half_duplex: u64,
+    access_ns: u64,
+    accesses: u64,
+    /// Indices into `txs` of frames that may still overlap a reception, by start.
+    recent: Vec<usize>,
 }
 
 impl<'m> DisseminationRun<'m> {
@@ -446,6 +503,11 @@ impl<'m> DisseminationRun<'m> {
             beacons: 0,
             receptions: 0,
             drops: BTreeMap::new(),
+            collisions: 0,
+            half_duplex: 0,
+            access_ns: 0,
+            accesses: 0,
+            recent: Vec::new(),
         };
         if run.cfg.beacons && period > 0 {
             for i in 0..run.routers.len() {
@@ -492,6 +554,9 @@ impl<'m> DisseminationRun<'m> {
                     self.push(next, Ev::Beacon(i));
                 }
                 Ev::Rx { node, tx } => {
+                    if self.cfg.mac.is_some() && !self.survives(node, tx) {
+                        continue;
+                    }
                     self.place(node, t);
                     let (packet, sender, to) = {
                         let x = &self.txs[tx];
@@ -649,8 +714,82 @@ impl<'m> DisseminationRun<'m> {
         }
     }
 
+    /// Whether `node`'s reception of frame `tx` survives the frames that overlapped it.
+    fn survives(&mut self, node: usize, tx: usize) -> bool {
+        let (s, e) = (self.txs[tx].start, self.txs[tx].end);
+        let rxp = self.nodes[node].at(s);
+        for &k in &self.recent {
+            if k == tx {
+                continue;
+            }
+            let o = &self.txs[k];
+            if o.start >= e || o.end <= s {
+                continue;
+            }
+            if o.from == node {
+                self.half_duplex += 1;
+                return false;
+            }
+            if self.medium.p_rx(o.pos, rxp) > 0.0 {
+                self.collisions += 1;
+                return false;
+            }
+        }
+        true
+    }
+
+    /// When `from`, asked to send at `t`, wins the medium: carrier sense over every frame
+    /// already scheduled, AIFS, and a backoff after a busy medium.
+    fn access(&mut self, from: usize, t: u64, air: u64) -> u64 {
+        let Some(mac) = self.cfg.mac else {
+            return t;
+        };
+        self.recent.retain(|&k| self.txs[k].end + 5_000_000 > t);
+        let here = self.nodes[from].at(t);
+        let sensed = |run: &Self, at: u64, until: u64| -> Option<u64> {
+            run.recent
+                .iter()
+                .map(|&k| &run.txs[k])
+                .filter(|o| o.start < until && o.end > at)
+                .filter(|o| o.from == from || run.medium.p_rx(o.pos, here) > 0.0)
+                .map(|o| o.end)
+                .max()
+        };
+        let mut at = t;
+        let mut deferred = false;
+        // Busy now: wait for it to clear.
+        while let Some(end) = sensed(self, at, at + 1) {
+            at = end;
+            deferred = true;
+        }
+        loop {
+            let slots = if deferred {
+                self.rng.below(mac.cw_min + 1)
+            } else {
+                0
+            };
+            let go = at + mac.aifs_ns() + slots * mac.slot_us * 1_000;
+            // A frame that starts while this one counts down freezes it; resume after.
+            match sensed(self, at, go) {
+                Some(end) => {
+                    at = end;
+                    deferred = true;
+                }
+                None => {
+                    at = go;
+                    break;
+                }
+            }
+        }
+        let _ = air;
+        self.access_ns += at - t;
+        self.accesses += 1;
+        at
+    }
+
     fn transmit(&mut self, from: usize, packet: GnPacket, to: LinkDest, t: u64) {
         let air = airtime_ns(packet.bytes());
+        let t = self.access(from, t, air);
         let arrive = t + air + self.cfg.processing_us * 1_000;
         if let Some(p) = self.packets.get_mut(&packet.key()) {
             if packet.btp_port == BtpPort::DENM {
@@ -660,7 +799,18 @@ impl<'m> DisseminationRun<'m> {
         let txp = self.nodes[from].at(t);
         let sender = self.routers[from].addr();
         let idx = self.txs.len();
-        self.txs.push(Tx { packet, sender, to });
+        self.txs.push(Tx {
+            packet,
+            sender,
+            to,
+            from,
+            start: t,
+            end: t + air,
+            pos: txp,
+        });
+        if self.cfg.mac.is_some() {
+            self.recent.push(idx);
+        }
         let range = self.medium.range_m();
         let mut rx = Vec::new();
         for m in 0..self.nodes.len() {
@@ -770,6 +920,13 @@ impl<'m> DisseminationRun<'m> {
             frames: self.txs.len() as u64,
             receptions: self.receptions,
             drops: self.drops,
+            collisions: self.collisions,
+            half_duplex: self.half_duplex,
+            access_delay_mean_us: if self.accesses == 0 {
+                0.0
+            } else {
+                v2xw_core::math::q3(self.access_ns as f64 / self.accesses as f64 / 1_000.0)
+            },
         }
     }
 }

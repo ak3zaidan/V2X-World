@@ -161,7 +161,12 @@ fn on_air_forwards_are_frames_in_the_relays_own_queue() {
     let b = rep.air_bytes;
     eprintln!("{b:?}");
     assert_eq!(
-        b.payload + b.security + b.spdu_unsplit + b.fragmentation + b.network + b.llc_snap
+        b.payload
+            + b.security
+            + b.spdu_unsplit
+            + b.fragmentation
+            + b.network
+            + b.llc_snap
             + b.mac_header
             + b.fcs,
         b.psdu

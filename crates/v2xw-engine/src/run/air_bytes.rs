@@ -65,8 +65,7 @@ impl AirBytes {
         self.psdu += psdu;
         self.airtime_us += s.air.as_nanos() / 1_000;
         self.phy_preamble_us += PHY_PREAMBLE_SIGNAL_US;
-        if s
-            .gn
+        if s.gn
             .as_ref()
             .is_some_and(|g| g.packet.source.addr != super::gn_air::addr(s.tx))
         {
