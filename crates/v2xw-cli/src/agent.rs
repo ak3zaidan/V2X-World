@@ -124,6 +124,14 @@ fn progress(e: &AgentEvent) {
                 fmt(*t_end_s)
             )
         }
+        AgentEvent::Staged { setup, chips, .. } => format!(
+            "setup {setup} staged for the next run: {}",
+            chips
+                .iter()
+                .map(|c| format!("{} → {}", c.label, c.value))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        ),
         AgentEvent::Analysed { label, .. } => format!("run `{label}` analysed"),
         AgentEvent::Tool { name, ok } => {
             format!("  tool {name}: {}", if *ok { "ok" } else { "failed" })

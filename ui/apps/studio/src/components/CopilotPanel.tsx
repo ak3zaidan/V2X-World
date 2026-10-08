@@ -2,7 +2,7 @@
  * The copilot panel of 09-ui §6 — "chat that calls the same JSON-RPC methods (tool registry
  * generated from the method list), showing each call and result".
  *
- * No LLM is wired up yet. What is wired up is the part that would otherwise drift: the tool surface
+ * The chat itself is the Agent panel (AgentPanel.tsx). What is here is the part that would drift: the tool surface
  * is `rpc.discover` (§6.15), fetched from the engine at connect time, not a list typed out here. If
  * the engine gains a method, this panel grows a tool; if this build knows a method the engine does
  * not implement, the row says so. Underneath, every JSON-RPC call the Studio has made is logged, so
@@ -31,10 +31,8 @@ export function CopilotPanel(): React.JSX.Element {
   return (
     <>
       <div className="panel-body" data-testid="copilot-panel">
-        <div className="note info">
-          <strong>No assistant is connected in this build.</strong> What is here is the list of everything
-          this engine can be asked to do — {methods.length} commands, published by the engine itself, so the
-          list cannot fall out of date — and a record of every command this page has sent.
+        <div className="faint">
+          {methods.length} commands this engine accepts, and every command this page sent. To chat, open the Agent.
         </div>
 
         <div className="field">

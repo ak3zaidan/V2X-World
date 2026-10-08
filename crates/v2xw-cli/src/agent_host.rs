@@ -233,6 +233,7 @@ impl AgentHost {
             .route("/agent/events", get(events))
             .route("/agent/stop", post(stop))
             .route("/agent/reset", post(reset))
+            .route("/agent/undo", post(undo))
             .route("/agent/watch", get(watch))
             .route("/agent/summary", get(summary))
             .route(
@@ -273,6 +274,29 @@ impl AgentHost {
             *i = (agent.has_model(), agent.provider_name(), agent.runs().len());
         }
         Ok(out)
+    }
+
+    /// The watcher's warnings and criticals about the run it follows, one line each, or
+    /// `None` when it flagged nothing.
+    fn alerts_note(&self) -> Option<String> {
+        let w = self.watch.lock().ok()?;
+        let (run, _) = w.watcher.run()?;
+        let lines: Vec<String> = w
+            .watcher
+            .feed()
+            .iter()
+            .filter(|o| o.run_id == run && o.severity >= v2xw_copilot::Severity::Warning)
+            .rev()
+            .take(8)
+            .map(|o| format!("- t={} s: {}", v2xw_copilot::analyst::fmt(o.t_s), o.text))
+            .collect();
+        if lines.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "The watcher flagged these in run {run} (newest first):\n{}",
+            lines.join("\n")
+        ))
     }
 
     fn authorized(&self, headers: &HeaderMap) -> bool {
@@ -432,9 +456,15 @@ async fn ask(
             json!({"error": "the prompt is empty"}),
         );
     }
+    // What the watcher flagged in the run on screen, so a question about it is answered
+    // with the alerts the person saw beside the chat.
+    let alerts = host.alerts_note();
     host.start("ask", move |agent, sink| {
         if !agent.has_model() {
             return Err(v2xw_copilot::claude::HOW_TO_ADD_A_KEY.to_string());
+        }
+        if let Some(n) = alerts {
+            agent.note(n);
         }
         agent
             .ask(&prompt, sink)
@@ -565,6 +595,43 @@ async fn reset(State(host): State<AgentHost>, headers: HeaderMap) -> Response {
     }
     let _ = host.with_agent(HostAgent::reset);
     reply(StatusCode::OK, json!({"reset": true}))
+}
+
+#[derive(Debug, Deserialize)]
+struct UndoBody {
+    setup: usize,
+}
+
+/// `POST /agent/undo {setup}`: the Settings window gets back what it held before that
+/// setup.
+async fn undo(
+    State(host): State<AgentHost>,
+    headers: HeaderMap,
+    Json(body): Json<UndoBody>,
+) -> Response {
+    if !host.authorized(&headers) {
+        return unauthorized();
+    }
+    if host.job.lock().map(|j| j.running).unwrap_or(true) {
+        return reply(
+            StatusCode::CONFLICT,
+            json!({"error": "the agent is busy; stop it first"}),
+        );
+    }
+    // The restore is an RPC to this same server: off the async workers.
+    let h = host.clone();
+    let out = tokio::task::spawn_blocking(move || {
+        h.with_agent(|a| a.undo_setup(body.setup).map_err(|e| e.to_string()))
+    })
+    .await;
+    match out {
+        Ok(Ok(Ok(()))) => reply(StatusCode::OK, json!({"undone": body.setup})),
+        Ok(Ok(Err(e)) | Err(e)) => reply(StatusCode::CONFLICT, json!({"error": e})),
+        Err(e) => reply(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"error": e.to_string()}),
+        ),
+    }
 }
 
 #[derive(Debug, Deserialize)]

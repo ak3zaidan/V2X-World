@@ -5,7 +5,31 @@
 import { describe, expect, it } from "vitest";
 import type { CityEntry } from "@vwp/protocol";
 
-import { cityLabel, filterCities, groupByState } from "../src/state/cities.js";
+import { cityLabel, cityShortLabel, filterCities, groupByState } from "../src/state/cities.js";
+
+describe("the header's city name", () => {
+  const c = (id: string, name: string, state: string, region: string): CityEntry => ({
+    id,
+    name,
+    state,
+    state_name: state,
+    region,
+    role: "largest",
+    bbox: [0, 0, 0.01, 0.01],
+    area_km2: 2,
+    utc_offset_h: 0,
+    highway_preset: "urban-us",
+    fetched: "2026-10-07",
+    description: name,
+    present: true,
+    fetch: `worlds/fetch.sh ${id}`,
+  });
+  it("is one short line: the district in brackets, else the city, with the state code", () => {
+    expect(cityShortLabel(c("manhattan", "New York (Midtown Manhattan)", "NY", "northeast"))).toBe("Midtown Manhattan, NY");
+    expect(cityShortLabel(c("portland", "Portland", "OR", "west"))).toBe("Portland, OR");
+    expect(cityShortLabel(c("berlin", "Berlin-Mitte", "BE", "europe"))).toBe("Berlin-Mitte");
+  });
+});
 
 const city = (id: string, name: string, state: string, state_name: string, region = "south"): CityEntry => ({
   id,

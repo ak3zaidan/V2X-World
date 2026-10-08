@@ -40,7 +40,7 @@
 .picker-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
 .picker-summary { font-size: 12.5px; line-height: 1.4; min-width: 0; }
 .picker-attrib { font-size: 10.5px; padding: 0 14px 8px; }
-.topbar-city { color: var(--text-dim); margin-left: 6px; }
+.topbar-city { color: var(--text-dim); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 22ch; min-width: 0; flex: 0 1 auto; }
 .topbar-city::before { content: "·"; margin-right: 6px; color: var(--text-faint); }
 @media (max-width: 720px) {
   .picker-body { grid-template-columns: 1fr; overflow-y: auto; }

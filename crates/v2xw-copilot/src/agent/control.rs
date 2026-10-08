@@ -27,6 +27,7 @@
 
 use std::collections::BTreeMap;
 
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use super::{Agent, AgentEvent, Change, Prepared, RunRecord, set_pointer, to_pointer};
@@ -105,6 +106,9 @@ pub(super) struct Harness {
     pub(super) experiments: Vec<(usize, Experiment)>,
     /// Which turn this is (`ask` calls so far).
     pub(super) turn: usize,
+    /// Per `setup` (id = index + 1): what the Settings window held before it, as
+    /// `scenario.get` answered, so Undo can put it back.
+    pub(super) setups: Vec<Option<Value>>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -173,6 +177,28 @@ pub fn tools() -> Vec<Value> {
             "value": {"description": "new value, or {multiply: k} | {append: item} | {remove: true}"},
             "why": {"type": "string"}}});
     vec![
+        tool(
+            "setup",
+            "Set up the person's next run without running it: start from `base` (a \
+             scenario id, or `current` = what the Settings window shows now, the default), \
+             apply the changes, validate with the engine's loader, and put the result in \
+             the Settings window as the draft their Run button starts. Use it for every \
+             'set up / configure / use X' request. The person sees each change as a chip \
+             with Undo. Returns ok, or the loader's errors to fix and retry.",
+            json!({"type": "object", "additionalProperties": false,
+                   "required": ["changes"],
+                   "properties": {
+                       "base": {"type": "string", "description": "a scenario id, or `current` (default)"},
+                       "reason": {"type": "string"},
+                       "changes": {"type": "array", "items": change.clone()}}}),
+        ),
+        tool(
+            "list_cities",
+            "The city library: id, short name, area, and whether its map is downloaded. \
+             Check here before saying a city is not available.",
+            json!({"type": "object", "additionalProperties": false,
+                   "properties": {"query": {"type": "string", "description": "a name, id or state; empty lists all"}}}),
+        ),
         tool(
             "simulate",
             "Build, validate, run to the end and analyse one or more variants of a base \
@@ -269,6 +295,10 @@ pub(super) fn dispatch<P: LlmProvider, T: RpcTransport>(
         "find_settings" => Ok(catalog::find_settings(
             args.get("query").and_then(Value::as_str).unwrap_or(""),
             12,
+        )),
+        "setup" => setup(agent, args, sink),
+        "list_cities" => Ok(catalog::cities(
+            args.get("query").and_then(Value::as_str).unwrap_or(""),
         )),
         "run_control" => run_control(agent, args, sink),
         "live_metrics" => live_metrics(agent, args),
@@ -541,6 +571,194 @@ fn build(
         });
     }
     Ok((doc, applied))
+}
+
+// ----------------------------------------------------------------------------- setup
+
+/// One applied change as the panel shows it: `City → Portland, OR`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Chip {
+    /// The dotted key (opens the setting in the Settings window).
+    pub key: String,
+    /// The setting's plain-language label.
+    pub label: String,
+    /// The new value in words.
+    pub value: String,
+}
+
+/// The changes as chips. The analyst's own `metrics: all` is left out: the person did not
+/// ask for it and it changes nothing they would set.
+#[must_use]
+pub fn chips(changes: &[Change]) -> Vec<Chip> {
+    changes
+        .iter()
+        .filter(|c| c.key != "metrics")
+        .map(|c| Chip {
+            key: c.key.clone(),
+            label: catalog::label_of(&c.key),
+            value: value_words(&c.key, &c.before, &c.after),
+        })
+        .collect()
+}
+
+/// The new value of a change in words.
+fn value_words(key: &str, before: &Value, after: &Value) -> String {
+    let path = key.trim_start_matches('/').replace('/', ".");
+    let pct = |v: f64| format!("{}%", fmt(v * 100.0));
+    let item = |v: &Value| -> String {
+        let id = v.get("id").and_then(Value::as_str).unwrap_or("");
+        let name = v2xw_engine::scenario::options::humanise_id(id);
+        match (
+            v.get("fraction").and_then(Value::as_f64),
+            v.get("count").and_then(Value::as_u64),
+        ) {
+            (Some(f), _) => format!("{} {name}", pct(f)),
+            (None, Some(n)) => format!("{n} {name}"),
+            _ => name,
+        }
+    };
+    match (path.as_str(), after) {
+        (_, Value::Null) => "removed".into(),
+        ("city", Value::String(id)) => {
+            catalog::city_short_name(id).unwrap_or_else(|| id.clone())
+        }
+        (_, Value::Array(items)) => {
+            // An append shows what was added, not the whole list.
+            let had = before.as_array().map_or(0, Vec::len);
+            let added: Vec<String> = items
+                .iter()
+                .skip(had.min(items.len()))
+                .map(|v| if v.is_object() { item(v) } else { scalar_words(&path, v) })
+                .collect();
+            if added.is_empty() {
+                format!("{} items", items.len())
+            } else {
+                added.join(", ")
+            }
+        }
+        ("actors.vehicles.classes", Value::Object(m)) => m
+            .iter()
+            .map(|(k, v)| {
+                let f = v.get("fraction").and_then(Value::as_f64).unwrap_or(0.0);
+                format!("{k} {}", pct(f))
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+        (_, Value::Object(_)) if after.get("id").is_some() => item(after),
+        (_, Value::Object(m)) => m
+            .iter()
+            .map(|(k, v)| format!("{k} {}", scalar_words("", v)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        (_, v) => scalar_words(&path, v),
+    }
+}
+
+fn scalar_words(path: &str, v: &Value) -> String {
+    match v {
+        Value::String(s) => {
+            let row = v2xw_engine::scenario::options::option_row(path, s, "");
+            row.get("label")
+                .and_then(Value::as_str)
+                .filter(|l| !l.is_empty())
+                .map_or_else(|| s.clone(), str::to_string)
+        }
+        Value::Number(n) => {
+            let x = n.as_f64().unwrap_or(0.0);
+            let unit = catalog::settings()
+                .iter()
+                .find(|s| s.path == path)
+                .map(|s| s.unit.clone())
+                .unwrap_or_default();
+            match unit.as_str() {
+                "" | "ratio" | "count" | "1" | "dimensionless" => fmt(x),
+                u => format!("{} {u}", fmt(x)),
+            }
+        }
+        Value::Bool(b) => if *b { "on" } else { "off" }.into(),
+        other => other.to_string(),
+    }
+}
+
+/// `setup`: builds and validates the draft, then stages it in the engine so the Settings
+/// window shows it and the person's Run button starts it.
+fn setup<P: LlmProvider, T: RpcTransport>(
+    agent: &mut Agent<P, T>,
+    args: &Value,
+    sink: &mut dyn FnMut(AgentEvent),
+) -> Result<Value> {
+    let base = args
+        .get("base")
+        .and_then(Value::as_str)
+        .filter(|b| !b.is_empty())
+        .unwrap_or("current")
+        .to_string();
+    let reason = args
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let changes = args
+        .get("changes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let before = agent.rpc.call("scenario.get", &json!({})).ok();
+    let prepared = agent.prepare(&base, &reason, &changes, sink)?;
+    if prepared.get("ok") != Some(&Value::Bool(true)) {
+        return Ok(prepared);
+    }
+    let Some(p) = agent.prepared.clone() else {
+        return Err(err("setup", "nothing was prepared"));
+    };
+    agent
+        .rpc
+        .call("scenario.set", &json!({"scenario": p.document}))?;
+    agent.harness.setups.push(before);
+    let id = agent.harness.setups.len();
+    let chips = chips(&p.changes);
+    sink(AgentEvent::Staged {
+        setup: id,
+        base: base.clone(),
+        chips: chips.clone(),
+    });
+    Ok(json!({
+        "ok": true,
+        "staged": true,
+        "applied": chips.iter().map(|c| format!("{} → {}", c.label, c.value)).collect::<Vec<_>>(),
+        "warnings": prepared.get("warnings").cloned().unwrap_or(Value::Null),
+        "next": "It is in the Settings window now. Reply in one line; the person presses Run. \
+                 The watcher flags problems while it runs.",
+    }))
+}
+
+/// Puts back what the Settings window held before setup `id`.
+///
+/// # Errors
+/// When there is no such setup, or the engine refuses the restore.
+pub(super) fn undo_setup<P: LlmProvider, T: RpcTransport>(
+    agent: &mut Agent<P, T>,
+    id: usize,
+) -> Result<()> {
+    let Some(before) = id
+        .checked_sub(1)
+        .and_then(|i| agent.harness.setups.get(i))
+        .cloned()
+    else {
+        return Err(err("undo", format!("no setup {id} in this conversation")));
+    };
+    let Some(b) = before else {
+        return Err(err("undo", "the engine's draft before it was not read"));
+    };
+    if b.get("staged").is_some_and(|s| !s.is_null()) {
+        agent.rpc.call(
+            "scenario.set",
+            &json!({"scenario": b.get("scenario"), "validate": false}),
+        )?;
+    } else if let Some(h) = b.get("running_hash").and_then(Value::as_str) {
+        agent.rpc.call("scenario.load", &json!({"path": h}))?;
+    }
+    Ok(())
 }
 
 // ----------------------------------------------------------------------------- simulate
@@ -1484,6 +1702,37 @@ fn inspect<P: LlmProvider, T: RpcTransport>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_setups_changes_read_as_short_chips() {
+        let ch = |key: &str, before: Value, after: Value| Change {
+            key: key.into(),
+            before,
+            after,
+            why: String::new(),
+        };
+        let c = chips(&[
+            ch("city", Value::Null, json!("portland")),
+            ch("radio.rat", json!("lte-v2x-pc5"), json!("dsrc-80211p")),
+            ch(
+                "threats.attackers",
+                json!([]),
+                json!([{"id": "threat/attacker/legacy/ConstPos", "fraction": 0.05}]),
+            ),
+            ch(
+                "actors.vehicles.classes",
+                Value::Null,
+                json!({"passenger": {"fraction": 0.9}, "truck": {"fraction": 0.1}}),
+            ),
+            ch("metrics", Value::Null, json!(["all"])),
+        ]);
+        let line: Vec<String> = c.iter().map(|c| format!("{} → {}", c.label, c.value)).collect();
+        assert_eq!(c.len(), 4, "the analyst's own metrics change is not a chip: {line:?}");
+        assert_eq!(line[0], "City → Portland, OR");
+        assert!(line[1].starts_with("Radio") && !line[1].contains("dsrc-80211p") || line[1].contains("DSRC"), "{line:?}");
+        assert_eq!(line[2], "Attackers → 5% Constant position");
+        assert_eq!(line[3], "Vehicle mix → passenger 90%, truck 10%");
+    }
 
     #[test]
     fn changes_set_scale_append_and_remove() {

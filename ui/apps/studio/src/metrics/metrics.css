@@ -80,13 +80,6 @@
   .metrics-main { padding: 12px 16px 32px; }
 }
 
-/* The header's tiny live summary, inside the Metrics button. */
-.metrics-summary { display: inline-flex; gap: 10px; margin-left: 4px; font-family: var(--mono); font-size: 11px; color: var(--text); }
-.metrics-summary-item .dim { font-family: var(--sans); }
-@media (max-width: 1100px) {
-  .metrics-summary { display: none; }
-}
-
 /* ------------------------------------------------------------------ groups and cards */
 
 .mgroup { margin-bottom: 26px; scroll-margin-top: 8px; }

@@ -169,7 +169,8 @@
 .pill.warn { background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .pill.err { background: color-mix(in srgb, var(--err) 12%, transparent); }
 
-.topbar button.primary { height: 30px; padding: 0 16px; font-weight: 600; min-width: 72px; }
+/* Sized to its label, whatever the label is ("Run", "Run again", "Reconnect"): it never shrinks or wraps. */
+.topbar button.primary { height: 30px; padding: 0 16px; font-weight: 600; min-width: 72px; width: auto; flex: none; white-space: nowrap; box-sizing: border-box; }
 
 /* ------------------------------------------------------------- the transport bar */
 

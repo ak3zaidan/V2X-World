@@ -94,6 +94,59 @@ trigger timer, so a short run ends before it; the DP-to-AC table and the TS 102 
 CBR rule are cited from memory of the published documents; no IVIM/TIM; the dissemination
 run still has no DCC. Shared build cache: the engine's `build.rs` reflection can be stale
 when another worktree built last; force it with a changed `V2XW_GIT_COMMIT`.
+## 2026-10-07 — the agent panel, minimal and capable, plus header fixes (agent-panel track)
+
+- **The Portland bug, at its cause.** The agent said Portland was not supported because
+  nothing told it the city library exists: no city was in its instructions or tools, and
+  Portland is not a ready-made scenario. Now the instructions list every city id with its
+  short name (`catalog::cities_line`, from `worlds/cities.yaml` via `v2xw_engine::city`), a
+  `list_cities` tool searches the registry and says whether the map is downloaded,
+  `find_settings` adds the cities to a place query, and the prompt forbids saying a city is
+  missing without checking. The quick reference also names `city`, the fleet mix
+  (`actors.vehicles.classes`), pedestrians, `actors.rsu_placement` and
+  `security.protocol.id`.
+- **`setup` tool.** It builds a draft from what the Settings window shows (`scenario.get`, which
+  returns the staged draft when there is one), validates it with the loader, and stages it with
+  `scenario.set`. It does not run anything. It emits `AgentEvent::Staged {setup, chips}`, where
+  each chip's label comes from the published settings (`title`) and its value is put in words
+  (`options::option_row`, city short names, "5% Constant position"). `POST /agent/undo
+  {setup}` restores what the window held before, and the model is told at its next prompt.
+  The settings index now carries each field's `label`, `level` and `recommended` range.
+- **Brief replies.** The system prompt now asks for one or two sentences, a setup by default for
+  "set up / use / add", and the problems flagged first.
+- **More live alerts** (`watch.rs`), each said once per run:
+  - `traffic.no-vehicles` (critical): no actors after 15 s.
+  - `access.verify-drops`: `verify_overflow` > 0.
+  - `traffic.gridlock`: the latest bin's mean speed is under 1 m/s after 30 s (HCM 6th ed.
+    Exhibit 16-8).
+  - `security.attacks-missed` (det_recall < 0.5) or `security.attacks-detected`.
+  - The existing analyst findings already cover channel load against the J2945/1 and ETSI
+    limits, latency over 100 ms, delivery and certificate exhaustion.
+  - A question asked during a run carries the watcher's warnings to the model.
+- **Studio.** The agent panel is a message list and one input. A setup shows as one row of
+  chips with Undo, and the Settings window refreshes to the draft. Alerts are one-line cards
+  placed by arrival: the numbers are behind a click, and at the run's end so is the run
+  summary. Findings, runs and comparisons are behind "Details". The status paragraphs,
+  provider banner, live-notes block and quick buttons are gone. In the header:
+  - The Metrics button shows only "Metrics" (`metrics/Summary.tsx` removed).
+  - The city is one short line (`cityShortLabel`: "Midtown Manhattan, NY", ellipsis at 22ch,
+    full name in the tooltip).
+  - The primary button is sized to its label and never shrinks.
+  - Under 1240 px the icon buttons drop their words first.
+- **Verified:**
+  - copilot lib (108) and the `control` (6, including the new Portland setup, follow-up and
+    Undo test) and `agent` (5) integration tests pass, as does `v2xw-cli tests/agent_host`
+    (2).
+  - The Studio typecheck (app and tests) passes, eslint is clean on the changed files, and
+    `test/agent.test.ts` and `test/cities.test.ts` pass (19).
+  - Real model (`openai:gpt-6.1-sol`): the owner's Portland prompt staged City → Portland, OR ·
+    4000 veh/h · motorcycle 10%, passenger 80%, truck 10% · 200 pedestrians · US SCMS (CAMP) ·
+    DSRC · 5% Constant position attackers · detectors. The reply was one line, and
+    `cities.list.staged` was `portland`. Pressing Run then showed the first alert card.
+  - The header check measured scrollWidth equal to clientWidth for "Run", "Run again",
+    "Reconnect" and "working…" at 1440, 1100 and 900 px. The city stayed one line.
+- **Not done:** the `simulate` tool's changes are not shown as chips, only in Details. Undo was
+  exercised against the fake engine, not in the browser.
 
 ## 2026-10-07 — round-4 merge: nine tracks onto main
 

@@ -12,7 +12,7 @@ import { AgentBadge } from "../components/AgentBadge.js";
 import { BackendButton } from "../components/BackendView.js";
 import { ScenarioPicker } from "../components/ScenarioPicker.js";
 import { QuickSettings } from "../settings/QuickSettings.js";
-import { cityById, cityLabel, refreshCities, useCities } from "../state/cities.js";
+import { cityById, cityLabel, cityShortLabel, refreshCities, useCities } from "../state/cities.js";
 import { HeaderClock } from "../components/HeaderClock.js";
 import { PrimaryAction, StatusPill } from "../components/Status.js";
 import { engine } from "../state/engine.js";
@@ -20,7 +20,6 @@ import { useStudio } from "../state/store.js";
 import { transport } from "../state/transport.js";
 import { applyThemeToDocument } from "../lib/theme.js";
 import { changedPointers } from "../lib/schema.js";
-import { MetricsSummary } from "../metrics/Summary.js";
 import { RunSummaryButton } from "../metrics/RunSummary.js";
 import { AgentIcon, ChartIcon, GearIcon, InspectorIcon, MoreIcon } from "./Icons.js";
 import { MenuButton } from "./Menu.js";
@@ -62,8 +61,8 @@ function ScenarioSwitcher(): React.JSX.Element {
           {name ?? <span className="faint">no scenario loaded</span>}
         </span>
         {city ? (
-          <span className="topbar-city" data-testid="header-city" title={city.description}>
-            {cityLabel(city)}
+          <span className="topbar-city" data-testid="header-city" title={`${city.name}, ${city.state_name}: ${city.description}`}>
+            {cityShortLabel(city)}
           </span>
         ) : null}
         <span className="caret" aria-hidden="true">▾</span>
@@ -262,7 +261,6 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
       >
         <ChartIcon />
         <span>Metrics</span>
-        <MetricsSummary />
       </button>
       <RunSummaryButton />
       <button

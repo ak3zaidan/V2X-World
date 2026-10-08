@@ -96,6 +96,13 @@ export interface AgentReport {
   readonly markdown: string;
 }
 
+/** One applied change as the panel shows it (`Chip` in agent/control.rs): `City → Portland, OR`. */
+export interface Chip {
+  readonly key: string;
+  readonly label: string;
+  readonly value: string;
+}
+
 /** One event of a job. `done` is added by the host when the job ends. */
 export type AgentEvent =
   | { readonly kind: "status"; readonly text: string }
@@ -108,6 +115,7 @@ export type AgentEvent =
       readonly valid: boolean;
       readonly errors: readonly { readonly field: string | null; readonly message: string }[];
     }
+  | { readonly kind: "staged"; readonly setup: number; readonly base: string; readonly chips: readonly Chip[] }
   | { readonly kind: "run-started"; readonly label: string; readonly run_id: string; readonly t_end_s: number }
   | { readonly kind: "progress"; readonly label: string; readonly t_s: number; readonly t_end_s: number; readonly actors: number }
   | { readonly kind: "analysed"; readonly label: string; readonly analysis: { readonly findings: readonly Finding[] } }
@@ -130,6 +138,8 @@ export interface JobView {
   readonly plans: readonly string[];
   readonly statuses: readonly string[];
   readonly changes: readonly Extract<AgentEvent, { kind: "changes" }>[];
+  /** Setups put in the Settings window, each with its chips. */
+  readonly staged: readonly Extract<AgentEvent, { kind: "staged" }>[];
   readonly runs: readonly { readonly label: string; readonly runId: string; readonly tS: number; readonly tEndS: number; readonly actors: number; readonly analysed: boolean }[];
   readonly tools: number;
   readonly failedTools: number;
@@ -142,6 +152,7 @@ export const EMPTY_JOB: JobView = {
   plans: [],
   statuses: [],
   changes: [],
+  staged: [],
   runs: [],
   tools: 0,
   failedTools: 0,
@@ -155,6 +166,7 @@ export function foldEvents(events: readonly AgentEvent[]): JobView {
   const plans: string[] = [];
   const statuses: string[] = [];
   const changes: Extract<AgentEvent, { kind: "changes" }>[] = [];
+  const staged: Extract<AgentEvent, { kind: "staged" }>[] = [];
   const runs: { label: string; runId: string; tS: number; tEndS: number; actors: number; analysed: boolean }[] = [];
   let tools = 0;
   let failedTools = 0;
@@ -177,6 +189,9 @@ export function foldEvents(events: readonly AgentEvent[]): JobView {
         break;
       case "changes":
         changes.push(e);
+        break;
+      case "staged":
+        staged.push(e);
         break;
       case "run-started": {
         const r = { label: e.label, runId: e.run_id, tS: 0, tEndS: e.t_end_s, actors: 0, analysed: false };
@@ -208,7 +223,7 @@ export function foldEvents(events: readonly AgentEvent[]): JobView {
         break;
     }
   }
-  return { plans, statuses, changes, runs, tools, failedTools, report, errors, done };
+  return { plans, statuses, changes, staged, runs, tools, failedTools, report, errors, done };
 }
 
 /** A run's progress as a fraction in [0, 1]. */
@@ -336,11 +351,15 @@ export function parseMarkdown(md: string): Block[] {
 
 /** The prompts the empty panel offers, each one the harness can carry out end to end. */
 export const SUGGESTIONS: readonly string[] = [
-  "How did the run on screen do? Where are the bottlenecks?",
-  "Run heavy rush-hour traffic and tell me where the radio channel and the queues struggle.",
-  "Add an attacker sending false positions and tell me whether misbehaviour detection catches and revokes it.",
-  "Compare DSRC with LTE-V2X on the same scenario.",
+  "Set up busy traffic in Portland with DSRC and 5% attackers",
+  "Is the network healthy?",
+  "Compare DSRC with LTE-V2X",
 ];
+
+/** A chip line as text: `City → Portland, OR · Radio → DSRC`. */
+export function chipLine(chips: readonly Chip[]): string {
+  return chips.map((c) => `${c.label} → ${c.value}`).join(" · ");
+}
 
 // ---------------------------------------------------------------------------------------------
 // The always-on watcher (`GET /agent/watch`, `GET /agent/summary`; crates/v2xw-copilot/src/watch.rs).
@@ -450,6 +469,24 @@ export function observationsOf(all: readonly Observation[], runId: string | null
 /** How many observations at warning level or above arrived after `seenSeq` (the header badge). */
 export function unseenCount(all: readonly Observation[], seenSeq: number): number {
   return all.filter((o) => o.seq > seenSeq && (o.severity === "warning" || o.severity === "critical")).length;
+}
+
+/**
+ * Whether an observation belongs in the agent panel as an alert card: the problems (warning and
+ * critical), the notable events and trends (attacks detected, revocations), a failure and the
+ * run's end. The "watching" and "cleared" lines are status, not news, and stay out.
+ */
+export function isAlert(o: Observation): boolean {
+  if (o.kind === "started" || o.kind === "cleared") return false;
+  if (o.kind === "finished" || o.kind === "failed" || o.kind === "event" || o.kind === "trend") return true;
+  return o.severity === "warning" || o.severity === "critical";
+}
+
+/** An alert's first sentence, for its one line; the rest is behind a click. */
+export function alertLine(text: string): string {
+  const t = plain(text).trim();
+  const m = /^(.+?[.!?])(?=\s|$)/.exec(t);
+  return m ? m[1]! : t;
 }
 
 /** A note's text without its Markdown code marks, for one plain line. */

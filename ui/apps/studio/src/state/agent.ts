@@ -23,6 +23,7 @@ import {
   type SummaryPage,
   type WatchPage,
 } from "../lib/agent.js";
+import { engine } from "./engine.js";
 import { useStudio } from "./store.js";
 
 export interface Turn {
@@ -35,6 +36,8 @@ export interface Turn {
   readonly running: boolean;
   /** A failure to start or follow the job (the job's own errors arrive as events). */
   readonly error: string | null;
+  /** Wall milliseconds when it was asked, to order it among the watcher's alerts. */
+  readonly at: number;
 }
 
 interface AgentState {
@@ -43,6 +46,11 @@ interface AgentState {
   statusError: string | null;
   turns: Turn[];
   draft: string;
+  /** Setups the person undid. */
+  undone: ReadonlySet<number>;
+  /** Why the last Undo failed, if it did. */
+  undoError: string | null;
+  undo: (setup: number) => Promise<void>;
   setDraft: (s: string) => void;
   refreshStatus: () => Promise<void>;
   ask: (prompt: string) => Promise<void>;
@@ -98,6 +106,8 @@ export const useAgent = create<AgentState>((set, get) => {
       if (page.events.length > 0) {
         after = page.next;
         patch(id, (t) => ({ events: [...t.events, ...page.events] }));
+        // A setup changed the engine's draft: the Settings window shows it at once.
+        if (page.events.some((e) => e.kind === "staged")) void engine.refreshScenario();
       }
       const done = page.events.some((e) => e.kind === "done");
       if (done || !page.running) {
@@ -117,7 +127,7 @@ export const useAgent = create<AgentState>((set, get) => {
 
   const start = async (kind: Turn["kind"], prompt: string, path: string, body: unknown): Promise<void> => {
     const id = nextTurn++;
-    set((s) => ({ turns: [...s.turns, { id, prompt, kind, job: null, events: [], running: true, error: null }] }));
+    set((s) => ({ turns: [...s.turns, { id, prompt, kind, job: null, events: [], running: true, error: null, at: Date.now() }] }));
     try {
       const r = await call<{ job: number }>(path, { method: "POST", body: JSON.stringify(body) });
       if (!r.ok) {
@@ -137,6 +147,21 @@ export const useAgent = create<AgentState>((set, get) => {
     statusError: null,
     turns: [],
     draft: "",
+    undone: new Set<number>(),
+    undoError: null,
+    undo: async (setup) => {
+      try {
+        const r = await call<{ undone: number }>("/agent/undo", { method: "POST", body: JSON.stringify({ setup }) });
+        if (!r.ok) {
+          set({ undoError: (r.body as { error?: string }).error ?? `HTTP ${r.status}` });
+          return;
+        }
+        set((s) => ({ undone: new Set(s.undone).add(setup), undoError: null }));
+        void engine.refreshScenario();
+      } catch (e) {
+        set({ undoError: `Undo failed: ${String(e)}` });
+      }
+    },
     setDraft: (draft) => set({ draft }),
     refreshStatus: async () => {
       try {
@@ -167,7 +192,7 @@ export const useAgent = create<AgentState>((set, get) => {
     },
     reset: async () => {
       const r = await call("/agent/reset", { method: "POST", body: "{}" }).catch(() => null);
-      if (r === null || r.ok) set({ turns: [] });
+      if (r === null || r.ok) set({ turns: [], undone: new Set<number>(), undoError: null });
     },
   };
 });
@@ -190,6 +215,8 @@ interface WatchState {
   page: Omit<WatchPage, "observations"> | null;
   /** Every observation since the engine started, oldest first. */
   observations: Observation[];
+  /** Wall milliseconds each observation (by `seq`) reached the page; 0 for the first read's. */
+  arrived: ReadonlyMap<number, number>;
   /** The last finished run's summary. */
   summary: RunSummary | null;
   summaryMarkdown: string;
@@ -231,11 +258,22 @@ export const useAgentWatch = create<WatchState>((set, get) => {
         const held = page.next < get().observations.length ? [] : get().observations;
         const merged = mergeObservations(held, observations);
         const wasPending = get().overviewPending;
+        // When each arrived, so the panel can place it among the conversation's turns. What
+        // the first read finds was there before the page opened.
+        const booted = get().bootSeq !== null;
+        let arrived = get().arrived;
+        if (merged !== held) {
+          const next = new Map(arrived);
+          const now = Date.now();
+          for (const o of merged) if (!next.has(o.seq)) next.set(o.seq, booted ? now : 0);
+          arrived = next;
+        }
         set((s) => ({
           available: true,
           unavailable: null,
           page: rest,
           observations: merged,
+          arrived,
           overviewPending: page.overview_pending,
           bootSeq: s.bootSeq ?? (merged.at(-1)?.seq ?? 0),
         }));
@@ -256,6 +294,7 @@ export const useAgentWatch = create<WatchState>((set, get) => {
     unavailable: null,
     page: null,
     observations: [],
+    arrived: new Map<number, number>(),
     summary: null,
     summaryMarkdown: "",
     overviewPending: false,

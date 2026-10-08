@@ -1,33 +1,35 @@
 /**
- * The agent panel: say what to simulate and what to find out; the agent picks a shipped scenario,
- * changes only what the request implies, validates it with the engine's loader, runs it, watches
- * it, and reports — bottlenecks and inefficiencies in every layer, with the analyst's numbers.
+ * The agent panel, kept minimal: a message list and one input box.
  *
- * What it shows, per request: the agent's plan, the settings it changed (each one opens the
- * settings window at that setting), the run's progress, and the report — the model's overview,
- * whose [finding ids] open the finding, and the findings by layer, each with its numbers, where,
- * the threshold it was judged against and a link to its chart in the metrics panel.
- *
- * With no model key the panel says how to add one, and still offers what needs no model: analyse
- * the run on screen, or run a scenario as shipped and analyse it.
+ * - The person types anything ("set up busy traffic in Portland with DSRC and some attackers").
+ *   The agent sets the settings up as the Settings window's draft and answers in a line; what it
+ *   changed is one row of chips ("City → Portland, OR · Radio → DSRC"), each opening its
+ *   setting, with Undo.
+ * - The person presses Run. The engine's watcher follows the run and its alerts appear in the
+ *   list as one-line cards (delivery collapsing, a busy channel, verify-queue drops, no vehicles,
+ *   gridlock, attacks detected or missed); a click shows the numbers.
+ * - Questions about the run are answered from its metrics. A reply's findings, runs and
+ *   comparison tables are behind "Details"; nothing else is shown.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   SUGGESTIONS,
-  cellText,
+  alertLine,
+  chipLine,
   clock,
   foldEvents,
+  isAlert,
   keyToPointer,
   layerStateLabel,
   notable,
   observationsOf,
   parseMarkdown,
   plain,
-  progressFraction,
   verdictLabel,
   type AgentReport,
+  type Chip,
   type Finding,
   type Inline,
   type JobView,
@@ -192,16 +194,12 @@ function Report({ report }: { report: AgentReport }): React.JSX.Element {
       else n.add(id);
       return n;
     });
-  const showFinding = (id: string): void => {
-    setOpen((s) => new Set(s).add(id));
-    requestAnimationFrame(() => document.getElementById(`finding-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
-  };
   const copy = (): void => {
     void navigator.clipboard?.writeText(report.markdown);
   };
+  // The overview is the reply itself; this is what is behind its "Details".
   return (
     <div className="agent-report" data-testid="agent-report">
-      <Markdown text={report.overview} onFinding={showFinding} />
       {report.ungrounded.length > 0 ? (
         <div className="note" data-testid="agent-ungrounded">
           The overview states {report.ungrounded.join(", ")}, which no analysis result contains. Trust the findings below over the prose.
@@ -240,7 +238,7 @@ function Report({ report }: { report: AgentReport }): React.JSX.Element {
         </div>
       ) : null}
       <div className="agent-report-foot faint">
-        Overview by {report.provider}; every number in the findings is the analyst&apos;s.
+        {report.provider}; numbers from the analyst.
         <button type="button" className="link-button" onClick={copy} title="Copy the whole report as Markdown">
           Copy as Markdown
         </button>
@@ -310,138 +308,115 @@ export function AgentRunSummaryView({ summary, pending, markdown }: { summary: R
   );
 }
 
-function ObservationLine({ o }: { o: Observation }): React.JSX.Element {
+/** One applied setup: its chips on one line, each opening its setting, and Undo. */
+function ChipLine({ setup, chips }: { setup: number; chips: readonly Chip[] }): React.JSX.Element {
+  const undone = useAgent((s) => s.undone.has(setup));
+  const undo = useAgent((s) => s.undo);
+  const busy = useAgent((s) => agentBusy(s.turns));
   return (
-    <div className={`agent-obs kind-${o.kind}`} data-testid="agent-observation">
-      <span className={`sev-dot sev-${o.severity}`} aria-label={o.severity} />
-      <span className="mono faint agent-obs-t">{clock(o.t_s)}</span>
-      <span className="grow">{plain(o.text)}</span>
+    <div className={undone ? "agent-chips undone" : "agent-chips"} data-testid="agent-chips" title={chipLine(chips)}>
+      {chips.map((c, i) => (
+        <button key={`${c.key}-${i}`} type="button" className="agent-chip" onClick={() => revealSetting(keyToPointer(c.key))} title={`${c.key}: open in Settings`}>
+          <span className="agent-chip-label">{c.label}</span> → {c.value}
+        </button>
+      ))}
+      {undone ? (
+        <span className="faint">Undone</span>
+      ) : (
+        <button type="button" className="link-button" onClick={() => void undo(setup)} disabled={busy} data-testid="agent-undo" title="Put the settings back as they were">
+          Undo
+        </button>
+      )}
     </div>
   );
 }
 
-/** What the always-on agent is saying about the run on screen, and its summary of the last one. */
-function AgentLive(): React.JSX.Element | null {
-  const available = useAgentWatch((s) => s.available);
-  const page = useAgentWatch((s) => s.page);
-  const all = useAgentWatch((s) => s.observations);
-  const summary = useAgentWatch((s) => s.summary);
-  const summaryMarkdown = useAgentWatch((s) => s.summaryMarkdown);
-  const pending = useAgentWatch((s) => s.overviewPending);
-  const [showSummary, setShowSummary] = useState(true);
-  if (available !== true || page === null) return null;
-  const current = observationsOf(all, page.run_id, page.generation);
-  const watching = page.phase === "watching" || page.phase === "analysing";
-  const summaryIsCurrent = summary !== null && summary.run_id === page.run_id && summary.generation === page.generation;
+/** What the agent is doing right now, in one faint line. */
+function Working({ view }: { view: JobView }): React.JSX.Element {
+  const run = view.runs.at(-1);
+  const text =
+    run && !run.analysed
+      ? `Running ${run.label} · ${clock(run.tS)} / ${clock(run.tEndS)}`
+      : (view.plans.at(-1) ?? (view.tools > 0 ? `Working · step ${view.tools}` : "Thinking…"));
   return (
-    <section className="agent-live" data-testid="agent-live" aria-label="The agent's notes on the run">
-      <div className="agent-live-head">
-        <span className={watching ? "agent-live-dot on" : "agent-live-dot"} />
-        <b>{watching ? (page.phase === "analysing" ? "Analysing the run" : "Watching the run") : summaryIsCurrent ? "Run finished" : "Waiting for a run"}</b>
-        <span className="grow" />
-        {page.run_id !== null && page.t_end_s > 0 ? (
-          <span className="mono faint">
-            {clock(page.t_s)} / {clock(page.t_end_s)}
-          </span>
-        ) : null}
-      </div>
-      {page.phase === "idle" ? (
-        <div className="dim">Press Run: the agent follows every run by itself, notes congestion, delivery drops, revocations and saturated queues as they happen, and sums the run up at the end.</div>
-      ) : null}
-      {current.length > 0 ? (
-        <div className="agent-obs-list">
-          {current.map((o) => (
-            <ObservationLine key={o.seq} o={o} />
-          ))}
-        </div>
-      ) : null}
-      {summary !== null ? (
-        <div className="agent-last-run">
-          <button type="button" className="link-button" onClick={() => setShowSummary(!showSummary)} aria-expanded={showSummary}>
-            {summaryIsCurrent ? "Run summary" : "Summary of the previous run"} {showSummary ? "▾" : "▸"}
-          </button>
-          {showSummary ? <AgentRunSummaryView summary={summary} pending={pending} markdown={summaryMarkdown} /> : null}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function JobBody({ view, turn }: { view: JobView; turn: Turn }): React.JSX.Element {
-  return (
-    <div className="agent-job">
-      {view.plans.map((p, i) => (
-        <div key={`p${i}`} className="agent-plan">
-          {p}
-        </div>
-      ))}
-      {view.changes.map((c, i) => (
-        <div key={`c${i}`} className="agent-changes" data-testid="agent-changes">
-          <div className="dim">
-            From <code>{c.base}</code>
-            {c.reason ? ` — ${c.reason}` : ""}
-            {c.valid ? null : <span className="err"> (refused by the loader)</span>}
-          </div>
-          {c.changes.length > 0 ? (
-            <table className="table">
-              <tbody>
-                {c.changes.map((ch) => (
-                  <tr key={ch.key} title={ch.why}>
-                    <td>
-                      <button type="button" className="link-button mono" onClick={() => revealSetting(keyToPointer(ch.key))} title="Open this setting in the settings window">
-                        {ch.key}
-                      </button>
-                    </td>
-                    <td className="faint">{cellText(ch.before)}</td>
-                    <td>→ {cellText(ch.after)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : null}
-          {c.errors.map((e, j) => (
-            <div key={j} className="note err">
-              {e.field ? <code>{e.field}</code> : null} {e.message}
-            </div>
-          ))}
-        </div>
-      ))}
-      {view.runs.map((r, i) => (
-        <div key={`r${i}`} className="agent-progress" data-testid="agent-progress">
-          <div className="agent-progress-line">
-            <span>{r.label}</span>
-            <span className="grow" />
-            <span className="mono faint">
-              {fmtNum(r.tS)} / {fmtNum(r.tEndS)} s · {r.actors} actors{r.analysed ? " · analysed" : ""}
-            </span>
-          </div>
-          <div className="agent-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progressFraction(r.tS, r.tEndS) * 100)}>
-            <div style={{ width: `${progressFraction(r.tS, r.tEndS) * 100}%` }} />
-          </div>
-        </div>
-      ))}
-      {turn.running && view.report === null ? (
-        <div className="faint agent-working">{view.statuses.at(-1) ?? (view.tools > 0 ? `Working… ${view.tools} step${view.tools === 1 ? "" : "s"} so far` : "Working…")}</div>
-      ) : null}
-      {view.report ? <Report report={view.report} /> : null}
-      {view.errors.map((e, i) => (
-        <div key={`e${i}`} className="note err">
-          {e}
-        </div>
-      ))}
-      {turn.error ? <div className="note err">{turn.error}</div> : null}
+    <div className="agent-working" data-testid="agent-working">
+      <span className="agent-live-dot on" aria-hidden="true" />
+      <span className="agent-ellipsis">{plain(text)}</span>
     </div>
   );
 }
 
 function TurnView({ turn }: { turn: Turn }): React.JSX.Element {
   const view = useMemo(() => foldEvents(turn.events), [turn.events]);
+  const report = view.report;
+  const hasDetails = report !== null && (report.runs.length > 0 || (report.comparison?.deltas.length ?? 0) > 0 || report.ungrounded.length > 0);
+  const failed = [...view.errors, ...(turn.error ? [turn.error] : [])];
   return (
-    <div className="agent-turn">
-      <div className="agent-prompt">{turn.prompt}</div>
-      <JobBody view={view} turn={turn} />
+    <>
+      <div className="agent-msg user">{turn.prompt}</div>
+      <div className="agent-msg bot" data-testid="agent-reply">
+        {view.staged.map((s) => (
+          <ChipLine key={s.setup} setup={s.setup} chips={s.chips} />
+        ))}
+        {turn.running && report === null ? <Working view={view} /> : null}
+        {report ? <Markdown text={report.overview} onFinding={() => undefined} /> : null}
+        {failed.map((e, i) => (
+          <div key={i} className="agent-error" title={e}>
+            {e}
+          </div>
+        ))}
+        {hasDetails && report ? (
+          <details className="agent-details">
+            <summary>Details</summary>
+            <Report report={report} />
+          </details>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+/** A watcher alert: one line; the full sentence, its numbers and (at the run's end) the summary behind a click. */
+function AlertCard({ o }: { o: Observation }): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  const summary = useAgentWatch((s) => s.summary);
+  const pending = useAgentWatch((s) => s.overviewPending);
+  const markdown = useAgentWatch((s) => s.summaryMarkdown);
+  const ended = o.kind === "finished" && summary !== null && summary.run_id === o.run_id && summary.generation === o.generation ? summary : null;
+  const line = ended ? `Run finished · ${verdictLabel(ended.verdict)}: ${plain(ended.headline)}` : alertLine(o.text);
+  return (
+    <div className={`agent-alert sev-${o.severity}`} data-testid="agent-alert">
+      <button type="button" className="agent-alert-head" onClick={() => setOpen(!open)} aria-expanded={open} title={plain(o.text)}>
+        <span className={`sev-dot sev-${o.severity}`} aria-label={o.severity} />
+        <span className="mono faint">{clock(o.t_s)}</span>
+        <span className="agent-ellipsis">{line}</span>
+      </button>
+      {open ? (
+        <div className="agent-alert-body">
+          {ended ? (
+            <AgentRunSummaryView summary={ended} pending={pending} markdown={markdown} />
+          ) : (
+            <>
+              <div>{plain(o.text)}</div>
+              {o.evidence.map((e, i) => (
+                <div key={i} className="faint mono">
+                  {e.label}: {fmtNum(e.value)} {e.unit === "ratio" || e.unit === "count" ? "" : e.unit}
+                </div>
+              ))}
+              {o.finding ? <div className="faint mono">{o.finding}</div> : null}
+            </>
+          )}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+interface Item {
+  readonly at: number;
+  readonly key: string;
+  readonly turn?: Turn;
+  readonly alert?: Observation;
 }
 
 export function AgentPanel(): React.JSX.Element {
@@ -449,49 +424,60 @@ export function AgentPanel(): React.JSX.Element {
   const statusError = useAgent((s) => s.statusError);
   const turns = useAgent((s) => s.turns);
   const draft = useAgent((s) => s.draft);
-  const { setDraft, ask, stop, reset, refreshStatus, analyseCurrent, runScenario } = useAgent.getState();
+  const undoError = useAgent((s) => s.undoError);
+  const { setDraft, ask, stop, reset, refreshStatus } = useAgent.getState();
+  const page = useAgentWatch((s) => s.page);
+  const all = useAgentWatch((s) => s.observations);
+  const arrived = useAgentWatch((s) => s.arrived);
   const busy = agentBusy(turns);
   const scroller = useRef<HTMLDivElement | null>(null);
-  const input = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     void refreshStatus();
   }, [refreshStatus]);
 
-  // Keep the newest activity in view while a job runs.
+  // The run on screen's alerts, and any alert that arrived while this page was open, placed
+  // among the conversation's turns by when they arrived.
+  const items = useMemo<Item[]>(() => {
+    const current = page ? observationsOf(all, page.run_id, page.generation) : [];
+    const shown = new Map<number, Observation>();
+    for (const o of current) if (isAlert(o)) shown.set(o.seq, o);
+    for (const o of all) if (isAlert(o) && (arrived.get(o.seq) ?? 0) > 0) shown.set(o.seq, o);
+    const out: Item[] = [
+      ...turns.map((t) => ({ at: t.at, key: `t${String(t.id).padStart(6, "0")}`, turn: t })),
+      ...[...shown.values()].map((o) => ({ at: arrived.get(o.seq) ?? 0, key: `o${String(o.seq).padStart(6, "0")}`, alert: o })),
+    ];
+    return out.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
+  }, [turns, all, arrived, page]);
+
+  // Keep the newest message in view.
   const lastEvents = turns.at(-1)?.events.length ?? 0;
   useEffect(() => {
     const el = scroller.current;
-    if (el && busy) el.scrollTop = el.scrollHeight;
-  }, [lastEvents, busy, turns.length]);
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [lastEvents, items.length]);
 
   const model = status?.model === true;
   const send = (): void => {
     if (!busy && model && draft.trim() !== "") void ask(draft);
   };
+  const watching = page !== null && (page.phase === "watching" || page.phase === "analysing");
 
   return (
     <>
       <div className="panel-body agent-panel" data-testid="agent-panel" ref={scroller}>
         {statusError ? (
-          <div className="note err" data-testid="agent-unavailable">
+          <div className="agent-error" data-testid="agent-unavailable" title={statusError}>
             {statusError}
           </div>
         ) : status && !model ? (
-          <details className="note info" data-testid="agent-no-key">
-            <summary>
-              <strong>No language model connected.</strong> The agent still watches every run; its notes and summaries come from the deterministic analyst.
-            </summary>
-            {status.how_to_add_key}
-          </details>
+          <div className="agent-hint" data-testid="agent-no-key" title={status.how_to_add_key ?? ""}>
+            No model key: alerts still work. Add one to .env and restart the engine.
+          </div>
         ) : null}
-        <AgentLive />
-        {turns.length === 0 ? (
+        {items.length === 0 ? (
           <div className="agent-empty">
-            <p className="dim">
-              Or ask for a simulation in plain words. The agent picks a ready-made scenario, changes only what you ask for, checks it with the engine&apos;s
-              own loader, runs it and reports the bottlenecks in every layer, with the numbers behind each.
-            </p>
+            <div className="dim">Tell me what to set up, or ask about the run.</div>
             {model ? (
               <div className="agent-suggestions">
                 {SUGGESTIONS.map((s) => (
@@ -503,32 +489,16 @@ export function AgentPanel(): React.JSX.Element {
             ) : null}
           </div>
         ) : (
-          turns.map((t) => <TurnView key={t.id} turn={t} />)
+          items.map((it) => (it.turn ? <TurnView key={it.key} turn={it.turn} /> : it.alert ? <AlertCard key={it.key} o={it.alert} /> : null))
         )}
-        {status !== null ? (
-          <div className="agent-quick">
-            <button type="button" onClick={() => void analyseCurrent()} disabled={busy} title="Analyse the run on screen with the deterministic analyst (no model needed)" data-testid="agent-analyse">
-              Analyse this run
-            </button>
-            {!model ? (
-              <button type="button" onClick={() => void runScenario("current")} disabled={busy} title="Run the current scenario to its end and analyse it (no model needed)">
-                Run and analyse
-              </button>
-            ) : null}
-            {turns.length > 0 ? (
-              <button type="button" onClick={() => void reset()} disabled={busy} title="Start a new conversation">
-                New conversation
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+        {undoError ? <div className="agent-error">{undoError}</div> : null}
       </div>
       <div className="panel-foot agent-foot">
+        {watching ? <span className="agent-live-dot on" title={`Watching the run, ${clock(page.t_s)} / ${clock(page.t_end_s)}`} /> : null}
         <textarea
-          ref={input}
-          rows={2}
+          rows={1}
           value={draft}
-          placeholder={model ? "e.g. Run Manhattan at rush hour and tell me where the network struggles" : "Add a model key to ask in plain words"}
+          placeholder={model ? "Set up, run or ask anything…" : "Add a model key to chat"}
           aria-label="Ask the agent"
           data-testid="agent-input"
           disabled={!model}
@@ -549,7 +519,13 @@ export function AgentPanel(): React.JSX.Element {
             Send
           </button>
         )}
+        {turns.length > 0 && !busy ? (
+          <button type="button" className="agent-clear" onClick={() => void reset()} title="New conversation" aria-label="New conversation">
+            ↺
+          </button>
+        ) : null}
       </div>
     </>
   );
 }
+
