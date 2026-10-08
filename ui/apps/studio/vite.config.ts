@@ -11,8 +11,9 @@ import react from "@vitejs/plugin-react";
  */
 const engine = process.env.VWP_ENGINE ?? "http://127.0.0.1:8787";
 /**
- * The agent's endpoints (`/agent/*`): on the engine itself when it is `v2xw serve`, or on a
- * `v2xw serve --attach <engine>` beside a plain `v2xw-server`, named by VWP_AGENT.
+ * The agent's endpoints (`/agent/*`): on the engine itself (`v2xw-server` and `v2xw serve` both
+ * serve them), or on a `v2xw serve --attach <engine>` beside a `v2xw-server --no-agent`, named by
+ * VWP_AGENT.
  */
 const agent = process.env.VWP_AGENT ?? engine;
 

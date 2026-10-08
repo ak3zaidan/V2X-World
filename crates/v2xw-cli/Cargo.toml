@@ -19,6 +19,12 @@ path = "src/lib.rs"
 name = "v2xw"
 path = "src/main.rs"
 
+# The engine with the agent always on: the same program as `v2xw serve`, with the
+# engine server's own flags. One process, one command; the agent cannot be "offline".
+[[bin]]
+name = "v2xw-server"
+path = "src/bin/v2xw-server.rs"
+
 [dependencies]
 v2xw-core = { workspace = true }
 v2xw-world = { workspace = true }

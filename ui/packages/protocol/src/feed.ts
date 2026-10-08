@@ -244,6 +244,41 @@ export interface FeedQueues {
   list: FeedQueue[];
 }
 
+/** How a crypto timing figure was arrived at (`v2xw_node::profile::CostBasis`). */
+export type FeedCostBasis =
+  | "published"
+  | "upper-bound"
+  | "within-bound"
+  | "derived-from-throughput"
+  | "software-benchmark"
+  | "software-proxy"
+  | "catalogue"
+  | "composite";
+
+/** One crypto operation's placement on the node's hardware profile. */
+export interface FeedCryptoOp {
+  op: string;
+  service_us: number;
+  range_us: [number, number] | null;
+  runs_on: "hsm" | "accelerator" | "cpu";
+  basis: FeedCostBasis;
+  source: string | null;
+  /** "signed in the secure element", "verified by the hardware accelerator", … */
+  label: string;
+  where_text: string;
+  /** What the number is: a published latency, a vendor bound, a figure derived from a rate. */
+  basis_text: string;
+  modelled_ms: number;
+}
+
+/** Where the node signs and verifies, and why the two compare as they do on its hardware. */
+export interface FeedCrypto {
+  profile: string;
+  sign: FeedCryptoOp | null;
+  verify: FeedCryptoOp | null;
+  explanation: string;
+}
+
 /** One `node.feed` push. */
 export interface NodeFeedNotification {
   v: number;
@@ -266,6 +301,8 @@ export interface NodeFeedNotification {
   /** How far behind the stream the server keeps a node's traffic. */
   history_ns: number;
   queues: FeedQueues;
+  /** The node's crypto placement; absent from an engine that predates it. */
+  crypto?: FeedCrypto | null;
 }
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);

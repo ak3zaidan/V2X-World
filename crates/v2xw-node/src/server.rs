@@ -113,6 +113,9 @@ pub struct ProfileServiceModel {
     /// The abstract compute tier: every operation the profile costs takes
     /// [`ProfileServiceModel::UNLIMITED_COST`] instead of its profiled time.
     unlimited: bool,
+    /// The node whose `ServiceTime` stream a ranged cost draws from; without one a ranged
+    /// cost is charged at its midpoint.
+    node: Option<v2xw_core::ids::NodeId>,
     card: ModelCard,
 }
 
@@ -130,6 +133,7 @@ impl ProfileServiceModel {
             profile,
             app_task: None,
             unlimited: false,
+            node: None,
             card,
         }
     }
@@ -151,6 +155,13 @@ impl ProfileServiceModel {
     #[must_use]
     pub fn unlimited(mut self) -> Self {
         self.unlimited = true;
+        self
+    }
+
+    /// The same model drawing ranged costs from `node`'s `ServiceTime` stream.
+    #[must_use]
+    pub fn for_node(mut self, node: v2xw_core::ids::NodeId) -> Self {
+        self.node = Some(node);
         self
     }
 
@@ -179,10 +190,31 @@ impl Model for ProfileServiceModel {
 }
 
 impl ServiceModel for ProfileServiceModel {
-    fn service_time(&mut self, _ctx: &mut dyn NodeCtx, op: &OpDescriptor) -> Option<Duration> {
+    fn service_time(&mut self, ctx: &mut dyn NodeCtx, op: &OpDescriptor) -> Option<Duration> {
         let cost = match op.class {
             OpClass::Sign | OpClass::Verify | OpClass::Hash => {
-                self.profile.op_cost(op.op).map(|(d, _)| d)
+                // An upper-bound latency with a stated lower edge is drawn per call from
+                // the node's own stream, so a run is still a function of its seed.
+                let ranged = (!self.unlimited)
+                    .then(|| self.profile.hsm.ops.get(op.op))
+                    .flatten()
+                    .filter(|_| self.profile.hsm.kind != crate::profile::HsmKind::None)
+                    .and_then(crate::profile::HsmOp::range_us);
+                match (ranged, self.node) {
+                    (Some([lo, hi]), Some(node)) => {
+                        let us = ctx
+                            .rng(
+                                v2xw_core::rng::RngDomain::ServiceTime,
+                                v2xw_core::rng::EntityRef::Node(node),
+                            )
+                            .uniform(lo, hi);
+                        Some(Duration::from_nanos((us * 1e3) as u64))
+                    }
+                    (Some([lo, hi]), None) => {
+                        Some(Duration::from_nanos((0.5 * (lo + hi) * 1e3) as u64))
+                    }
+                    (None, _) => self.profile.op_cost(op.op).map(|(d, _)| d),
+                }
             }
             OpClass::Parse | OpClass::Application | OpClass::CrlProcessing => self.app_task,
         };
@@ -541,5 +573,76 @@ mod tests {
             bank.submit(0, Duration::from_millis(100));
         }
         assert_eq!(bank.utilisation_pm(v2xw_core::time::NS_PER_S), 1000);
+    }
+
+    /// The professor's case: on the reference OBU sign reads 9 ms and verify 0.4 ms. The
+    /// placement must say they ran on different hardware, that 9 ms is a vendor bound and
+    /// that 0.4 ms is derived from a rate; the software variant must have verify > sign.
+    #[test]
+    fn crypto_placement_names_the_hardware_and_the_kind_of_figure() {
+        use crate::profile::CostBasis;
+        let hw = profile(crate::profiles::REFERENCE_OBU)
+            .crypto_placement("ecdsa-p256-sign", "ecdsa-p256-verify");
+        let sign = hw.sign.expect("costed");
+        let verify = hw.verify.expect("costed");
+        assert_eq!(sign.facts.basis, CostBasis::UpperBound);
+        assert!(!sign.facts.basis.is_exact());
+        assert_eq!(sign.label, "signed in the secure element");
+        assert!(sign.basis_text.starts_with("at most 9.000 ms"), "{}", sign.basis_text);
+        assert_eq!(verify.facts.basis, CostBasis::DerivedFromThroughput);
+        assert_eq!(verify.label, "verified by the hardware accelerator");
+        assert!(verify.basis_text.contains("derived"), "{}", verify.basis_text);
+        assert!(hw.explanation.contains("different hardware"), "{}", hw.explanation);
+
+        let sw = profile("obu/unex-obu-301-craton2-software")
+            .crypto_placement("ecdsa-p256-sign", "ecdsa-p256-verify");
+        let (s, v) = (sw.sign.expect("costed"), sw.verify.expect("costed"));
+        assert_eq!(s.facts.runs_on, RunsOn::Cpu);
+        assert_eq!(v.facts.runs_on, RunsOn::Cpu);
+        assert_eq!(s.facts.basis, CostBasis::SoftwareProxy);
+        assert!(v.modelled_ms > s.modelled_ms, "software verify must cost more than sign");
+        assert!(
+            sw.explanation.contains("verification costs more than signing"),
+            "{}",
+            sw.explanation
+        );
+    }
+
+    /// Every shipped OBU profile states where it signs and verifies.
+    #[test]
+    fn every_obu_profile_places_sign_and_verify() {
+        for p in crate::profiles::all().iter().filter(|p| p.id.starts_with("obu/")) {
+            let c = p.crypto_placement("ecdsa-p256-sign", "ecdsa-p256-verify");
+            assert!(c.sign.is_some() || c.verify.is_some(), "{} places neither", p.id);
+        }
+    }
+
+    /// An upper-bound latency with a lower edge is drawn per call inside the range, from
+    /// the node's own stream: the same seed gives the same draws.
+    #[test]
+    fn a_bounded_sign_latency_with_a_lower_edge_is_drawn_inside_it() {
+        let mut p = profile(crate::profiles::REFERENCE_OBU);
+        let op = p.hsm.ops.get_mut("ecdsa-p256-sign").expect("costed");
+        op.latency_lower_us.value = Some(3000.0);
+        let draw = |seed: u64| {
+            let reg = RngRegistry::new(seed);
+            let mut ctx = NodeRuntimeCtx::new(0, &reg);
+            let mut sm =
+                ProfileServiceModel::new(p.clone()).for_node(v2xw_core::ids::NodeId::new(4));
+            (0..20)
+                .map(|_| {
+                    sm.service_time(&mut ctx, &OpDescriptor::sign("ecdsa-p256-sign", 64))
+                        .expect("costed")
+                        .as_nanos()
+                })
+                .collect::<Vec<_>>()
+        };
+        let a = draw(7);
+        assert_eq!(a, draw(7));
+        assert!(a.iter().all(|&ns| (3_000_000..=9_000_000).contains(&ns)));
+        assert!(a.iter().any(|&ns| ns != a[0]), "the draws vary");
+        let facts = p.op_cost_facts("ecdsa-p256-sign").expect("costed");
+        assert_eq!(facts.basis, crate::profile::CostBasis::WithinBound);
+        assert_eq!(facts.range_us, Some([3000.0, 9000.0]));
     }
 }

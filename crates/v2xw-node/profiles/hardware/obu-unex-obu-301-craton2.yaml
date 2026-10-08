@@ -25,6 +25,10 @@ flash_bytes: {value: 134217728, source: "128 MB NAND [R7 §A4]"}
 hsm:
   kind: soc-hsm
   part: {value: "Autotalks CRATON2 eHSM (ARM Cortex-M0, 32 KB RAM, 128 KB ROM, dedicated crypto accelerator, OTP); HW P/N ATK66610 v2.1.2; FIPS 140-2 overall Level 3 on the eHSM boundary", source: "[R7 §A4: FIPS security policy; R5 §C: CMVP #3556]"}
+  # Placement: sign runs inside the eHSM (a Cortex-M0 secure element that holds the key);
+  # verify runs on the separate line-rate verification engine, outside the eHSM boundary.
+  # Hence verify is faster than sign on this device, the reverse of software ECDSA; see
+  # obu/unex-obu-301-craton2-software and docs/design/findings/crypto-timing.md.
   ops:
     ecdsa-p256-sign:
       throughput_per_s: {value: 110, status: lower-bound, source: "\">110 signatures/s\" [R7 §A4]"}

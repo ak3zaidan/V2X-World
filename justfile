@@ -123,15 +123,15 @@ build-cli:
 
 [doc("Serve a real run over the wire protocol on port 8787")]
 serve SCENARIO:
-    cargo run --release --quiet -p v2xw-server -- --scenario {{SCENARIO}} --port 8787
+    cargo run --release --quiet -p v2xw-cli --bin v2xw-server -- --scenario {{SCENARIO}} --port 8787
 
 [doc("Serve the synthetic fixture stream — no map import, for browser work")]
 serve-fixture ACTORS="200":
-    cargo run --release --quiet -p v2xw-server -- --actors {{ACTORS}} --port 8787
+    cargo run --release --quiet -p v2xw-cli --bin v2xw-server -- --actors {{ACTORS}} --port 8787
 
 [doc("Build the server in release, one compile job at a time")]
 build-server:
-    cargo build --release -j 1 -p v2xw-server
+    cargo build --release -j 1 -p v2xw-cli --bin v2xw-server
 
 # Serve the Studio UI in development mode. Needs `just serve` in another terminal.
 studio:
