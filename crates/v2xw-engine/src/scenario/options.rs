@@ -35,6 +35,15 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
     let tier = path.starts_with("radio.tiers.") || path.ends_with("_tier");
     if tier {
         return match value {
+            // The 802.11p PHY distinguishes only high from the rest, and the sidelink maps
+            // abstract to medium (`run::sidelink`): the settings audit found choosing it
+            // changed nothing, so the words say what it does.
+            "abstract" if path == "radio.tiers.phy" => Some((
+                "Fast (abstract) — runs as Standard",
+                "This build has no separate abstract PHY: the Standard (medium) reception \
+                 model runs. Only propagation and channel access have an abstract tier.",
+                true,
+            )),
             "abstract" => Some((
                 "Fast (abstract)",
                 "Closed-form stand-ins: cheapest, for very large fleets; least faithful.",
@@ -583,6 +592,21 @@ pub fn option_row(path: &str, value: &str, fallback: &str) -> Value {
                 if j.cited { "" } else { " (generic US default, not this state's statute)" }
             ),
             "available": true,
+        });
+    }
+    // An on-board unit whose profile publishes no ECDSA signing cost is refused by the
+    // loader for every vehicle (a vehicle signs every message on its own hardware), so the
+    // dropdown says so instead of offering a choice that cannot run.
+    if matches!(path, "nodes.default_obu" | "nodes.per_class.*")
+        && let Some(p) = v2xw_node::profiles::get(value)
+        && p.op_cost(v2xw_node::profile::signature_ops("ecdsa-p256").0).is_none()
+    {
+        return json!({
+            "value": value,
+            "label": format!("{} (cannot sign)", humanise_id(value)),
+            "description": "Its sources publish no ECDSA signing rate, so a vehicle on it \
+                            could not sign a message; choose a unit that publishes one.",
+            "available": false,
         });
     }
     match words(path, value) {
