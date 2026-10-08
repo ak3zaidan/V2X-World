@@ -47,7 +47,11 @@
 //!   the same plan the mobility engine's vehicles obey, evaluated the same way
 //!   ([`v2xw_world::World::group_signals`]), once [`SnapshotStream::with_signals`] has
 //!   been given the world. It used to be empty: a recording played back in the page
-//!   drew every lamp as "no data".
+//!   drew every lamp as "no data". The plans' clocks move during a run (actuated control
+//!   and the priority service shift `offset_s`), so [`SnapshotStream::follow_plans`]
+//!   copies the world's offsets before every frame; without it the recorded lamps kept
+//!   the fixed-time clock while the drivers obeyed the moved one, and the page showed
+//!   queues standing at green lamps and driving through red ones.
 //! * **`verified_neighbors`** is the node's own count of peers in state *verified*
 //!   ([`v2xw_node::NeighborTable::counts`]), saturating at 255 as §3.3.2 requires. An
 //!   unequipped actor has none and the column is zero.
@@ -140,6 +144,8 @@ pub struct SnapshotStream {
     deltas: u64,
     /// Every signal head group of the world, evaluated per frame.
     signals: Vec<v2xw_world::GroupSignal>,
+    /// The plan (index into `World::signals`) each entry of `signals` belongs to.
+    signal_plans: Vec<usize>,
 }
 
 impl SnapshotStream {
@@ -157,6 +163,7 @@ impl SnapshotStream {
             keyframes: 0,
             deltas: 0,
             signals: Vec::new(),
+            signal_plans: Vec::new(),
         }
     }
 
@@ -165,7 +172,31 @@ impl SnapshotStream {
     #[must_use]
     pub fn with_signals(mut self, world: &v2xw_world::World) -> Self {
         self.signals = world.group_signals();
+        // `signal_group_wire_id` is `(plan + 1) * 65536 + group`; a plan with no heads
+        // streams under its plain id.
+        self.signal_plans = self
+            .signals
+            .iter()
+            .map(|g| {
+                if g.wire_id >= 65536 {
+                    (g.wire_id / 65536 - 1) as usize
+                } else {
+                    g.wire_id as usize
+                }
+            })
+            .collect();
         self
+    }
+
+    /// Copies the world's current plan offsets onto the streamed groups: actuated control
+    /// and the priority service move a plan's clock by moving its offset, and the lamps
+    /// must show the clock the drivers obey.
+    pub fn follow_plans(&mut self, world: &v2xw_world::World) {
+        for (g, p) in self.signals.iter_mut().zip(&self.signal_plans) {
+            if let Some(plan) = world.signals.get(*p) {
+                g.offset_s = plan.offset_s;
+            }
+        }
     }
 
     /// The cadence this stream runs at.
