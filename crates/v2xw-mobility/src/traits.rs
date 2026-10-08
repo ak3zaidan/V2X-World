@@ -81,6 +81,12 @@ pub trait Mobility: Model {
     /// radio and the GNSS models and no driver: a snowstorm changed nothing on the road.
     fn set_weather(&mut self, _weather: v2xw_core::weather::WeatherState) {}
 
+    /// What the gridlock resolution has done so far ([`crate::EngineParams::time_to_teleport_s`]),
+    /// or `None` for a model without one or with it off.
+    fn gridlock(&self) -> Option<crate::engine::GridlockCounters> {
+        None
+    }
+
     /// Passes a demand multiplier to the demand model (see [`Demand::set_multiplier`]).
     /// Returns whether it was honoured; a tier with no demand model returns `false`.
     fn set_demand_multiplier(&mut self, _m: f64) -> bool {

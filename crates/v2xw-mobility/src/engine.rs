@@ -55,7 +55,7 @@ use v2xw_core::geom::{LanePos, Vec3};
 use v2xw_core::ids::{ActorId, JunctionId, LaneId, SignalId};
 use v2xw_core::kinematics::Kinematics;
 use v2xw_core::math;
-use v2xw_core::time::{Duration, SimTime, ns_to_secs};
+use v2xw_core::time::{Duration, SimTime, ns_to_secs, secs_to_ns};
 use v2xw_core::weather::WeatherState;
 use v2xw_world::{ClassMask, JunctionControl, LaneKind, SignalState, TurnDirection, World};
 
@@ -640,6 +640,13 @@ pub struct EngineParams {
     /// bus-only lane), falling back to the engine-wide router only when its own has no
     /// route. Not applied in the legacy parity mode.
     pub class_routing: bool,
+    /// Gridlock resolution: a vehicle that has stood still this long, seconds, is moved
+    /// along its route to the next lane with room for it (SUMO's `--time-to-teleport`,
+    /// whose default is 300 s), and counted ([`GridlockCounters`]). Standing at a kerbside
+    /// stop or under a scripted stop does not count. `0` turns it off, which is the
+    /// engine's default so a unit test sees the raw dynamics; a scenario sets it from
+    /// `traffic.gridlock`.
+    pub time_to_teleport_s: f64,
     /// **A test hook, not a model parameter.** Walks the decision pass in reverse actor
     /// order. Because the pass reads only the frozen snapshot, the published result must be
     /// bit-identical either way; that is the ADR 0004 Jacobi property, and this is how the
@@ -672,6 +679,7 @@ impl Default for EngineParams {
             driver_styles: true,
             heavy_turns: true,
             class_routing: true,
+            time_to_teleport_s: 0.0,
             reverse_order: false,
         }
     }
@@ -701,6 +709,22 @@ struct Transition {
     /// heading swing is taken at [`PULL_OUT_SPEED_MPS`] at least, so a car nosing out
     /// from a standstill angles out instead of swinging round on the spot.
     pull_out: bool,
+}
+
+/// Below this speed a vehicle counts as standing for the gridlock timer, m/s: SUMO's
+/// waiting-time threshold (`SUMO_const_haltingSpeed`, 0.1 m/s).
+const STUCK_SPEED_MPS: f64 = 0.1;
+
+/// What the gridlock resolution did over a run ([`EngineParams::time_to_teleport_s`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct GridlockCounters {
+    /// Vehicles found standing for the whole timeout: each one is a jam the network did
+    /// not resolve by itself.
+    pub jammed: u64,
+    /// Of those, moved on along their route (SUMO's teleport).
+    pub teleported: u64,
+    /// Of those, removed because no lane on the rest of the route had room.
+    pub removed: u64,
 }
 
 /// One actor the engine drives.
@@ -745,6 +769,9 @@ struct Actor {
     forced_cut_in: Option<(Side, SimTime)>,
     /// Its kerbside stops ([`crate::kerbside`]).
     kerb: crate::kerbside::KerbState,
+    /// Since when it has stood still without a kerbside or scripted reason: what the
+    /// gridlock resolution ([`EngineParams::time_to_teleport_s`]) reads.
+    stuck_since: Option<SimTime>,
 }
 
 impl Actor {
@@ -1111,6 +1138,8 @@ pub struct NativeMobility {
     dropped_trips: u64,
     /// Of [`Self::dropped_trips`], the trips with no route from their origin or no room on it.
     unroutable_trips: u64,
+    /// What the gridlock resolution did ([`EngineParams::time_to_teleport_s`]).
+    gridlock: GridlockCounters,
     card: ModelCard,
     /// The exterior lamp model's parameters ([`crate::lamps`]).
     lamp_params: crate::lamps::LampParams,
@@ -1248,6 +1277,7 @@ impl NativeMobility {
             next_seq: 0,
             dropped_trips: 0,
             unroutable_trips: 0,
+            gridlock: GridlockCounters::default(),
             lamp_params: crate::lamps::LampParams::default(),
             lamp_memory: BTreeMap::new(),
             lateral: None,
@@ -1419,6 +1449,89 @@ impl NativeMobility {
     /// True if none are.
     pub fn is_empty(&self) -> bool {
         self.actors.is_empty()
+    }
+
+    /// What the gridlock resolution has done so far.
+    pub fn gridlock_counters(&self) -> GridlockCounters {
+        self.gridlock
+    }
+
+    /// Gridlock resolution, at the end of a step: every vehicle that has stood still for
+    /// [`EngineParams::time_to_teleport_s`] is moved to the next lane on its route that
+    /// has room at its start, as SUMO's teleport does (SUMO user documentation,
+    /// "Why Vehicles are teleporting": a vehicle waiting `--time-to-teleport` s is moved
+    /// to the next edge of its route with space). One with no such lane is removed, and
+    /// returned so the caller announces it. Ids in ascending order, so the result does
+    /// not depend on map iteration (the determinism contract).
+    fn resolve_gridlock(&mut self, world: &World, t1: SimTime, gone: &[ActorId]) -> Vec<ActorId> {
+        let mut removed = Vec::new();
+        if self.params.time_to_teleport_s <= 0.0 {
+            return removed;
+        }
+        let limit = secs_to_ns(self.params.time_to_teleport_s);
+        // The nearest rear bumper to each lane's start, from the end-of-step positions.
+        let mut first_rear: BTreeMap<LaneId, f64> = BTreeMap::new();
+        for a in self.actors.values() {
+            let rear = a.s_m - a.class.spec().length_m;
+            let e = first_rear.entry(a.lane).or_insert(f64::INFINITY);
+            if rear < *e {
+                *e = rear;
+            }
+        }
+        let ids: Vec<ActorId> = self.actors.keys().copied().collect();
+        for id in ids {
+            if gone.contains(&id) {
+                continue;
+            }
+            let a = self.actors.get_mut(&id).expect("present");
+            let excused = a.speed_mps >= STUCK_SPEED_MPS
+                || a.kerb.at_kerb()
+                || a.stopped_until.is_some()
+                || a.forced_brake.is_some();
+            if excused {
+                a.stuck_since = None;
+                continue;
+            }
+            let since = *a.stuck_since.get_or_insert(t1);
+            if t1.saturating_sub(since) < limit {
+                continue;
+            }
+            let length = a.class.spec().length_m;
+            let need = length + self.params.insertion_gap_m;
+            let target = (a.route_index + 1..a.route.lanes.len()).find(|k| {
+                let l = a.route.lanes[*k];
+                let lane = world.lane(l);
+                lane.kind != LaneKind::Internal
+                    && lane.length_m >= need
+                    && !self.closed.contains(&l)
+                    && first_rear.get(&l).is_none_or(|r| *r >= need)
+            });
+            self.gridlock.jammed += 1;
+            match target {
+                Some(k) => {
+                    let l = a.route.lanes[k];
+                    a.lane = l;
+                    a.route_index = k;
+                    a.s_m = length;
+                    a.speed_mps = 0.0;
+                    a.accel_mps2 = 0.0;
+                    a.lateral_m = 0.0;
+                    a.trail.clear();
+                    a.transition = None;
+                    a.amber_commit = None;
+                    a.amber_seen = None;
+                    a.release_at = None;
+                    a.stuck_since = None;
+                    first_rear.insert(l, 0.0);
+                    self.gridlock.teleported += 1;
+                }
+                None => {
+                    self.gridlock.removed += 1;
+                    removed.push(id);
+                }
+            }
+        }
+        removed
     }
 
     /// How many trips were dropped because their origin was occupied or unroutable.
@@ -1605,6 +1718,7 @@ impl NativeMobility {
                 transition: None,
                 cooldown_until: t,
                 speed_cap_mps: None,
+                stuck_since: None,
                 stopped_until: None,
                 trail: Vec::new(),
                 amber_commit: None,
@@ -2067,6 +2181,7 @@ impl NativeMobility {
                 transition: None,
                 cooldown_until: trip.t,
                 speed_cap_mps: None,
+                stuck_since: None,
                 stopped_until: None,
                 trail: Vec::new(),
                 amber_commit: None,
@@ -4950,6 +5065,12 @@ impl Mobility for NativeMobility {
                 }
             }
         }
+        if along {
+            let gone: Vec<ActorId> = despawned.iter().map(|(id, _)| *id).collect();
+            for id in self.resolve_gridlock(world, t1, &gone) {
+                despawned.push((id, DespawnCause::RouteBlocked));
+            }
+        }
         for (id, _) in &despawned {
             self.actors.remove(id);
         }
@@ -5054,6 +5175,10 @@ impl Mobility for NativeMobility {
 
     fn set_weather(&mut self, weather: WeatherState) {
         self.weather = weather;
+    }
+
+    fn gridlock(&self) -> Option<GridlockCounters> {
+        (self.params.time_to_teleport_s > 0.0).then_some(self.gridlock)
     }
 
     fn set_demand_multiplier(&mut self, m: f64) -> bool {
@@ -7031,6 +7156,62 @@ mod tests {
         }
         assert!(speed_at_5s < 1.0, "held at {speed_at_5s} m/s");
         assert!(speed_at_20s > 5.0, "released to {speed_at_20s} m/s");
+    }
+
+    #[test]
+    fn a_vehicle_jammed_past_the_timeout_is_moved_on_and_counted() {
+        // A leader held for good (a scripted stop, which is excused) and a follower stuck
+        // behind it: with a 20 s timeout the follower is moved to the next lane of its
+        // route with room, once, and counted; with the timeout off it waits for ever.
+        let run = |timeout_s: f64| {
+            let world = ring(&RingParams::default()).expect("a ring");
+            let cycle = ring_cycle(&world, 0);
+            let rng = RngRegistry::new(5);
+            let params = EngineParams {
+                intersections: IntersectionMode::None,
+                lane_changes: false,
+                dynamic_rerouting: false,
+                time_to_teleport_s: timeout_s,
+                ..EngineParams::default()
+            };
+            let mut engine = engine_on(&world, params, &rng);
+            let route: Vec<LaneId> = cycle.iter().cycle().take(cycle.len() * 4).copied().collect();
+            let driver = IdmPreset::Kesting2010.profile(VehicleClass::Passenger);
+            let leader = engine
+                .spawn_with_route(&world, 0, VehicleClass::Passenger, driver, route.clone(), 40.0)
+                .expect("leader");
+            let follower = engine
+                .spawn_with_route(&world, 0, VehicleClass::Passenger, driver, route, 10.0)
+                .expect("follower");
+            {
+                let mut ctx = MobilityCtx::new(0, &world, &rng);
+                engine.command(&mut ctx, MobilityCommand::Stop { actor: leader, until: None });
+            }
+            let mut t = 0u64;
+            for _ in 0..600 {
+                let mut ctx = MobilityCtx::new(t, &world, &rng);
+                engine.step(&mut ctx, params.step);
+                t += 100 * NS_PER_MS;
+            }
+            let lane_of = |id: ActorId| {
+                engine
+                    .longitudinal_states()
+                    .iter()
+                    .find(|(a, _, _, _)| *a == id)
+                    .map(|(_, l, s, _)| (*l, *s))
+            };
+            (engine.gridlock_counters(), lane_of(leader), lane_of(follower))
+        };
+        let (on, leader, follower) = run(20.0);
+        assert!(on.teleported >= 1, "the stuck follower was not moved on: {on:?}");
+        assert_eq!(on.removed, 0, "{on:?}");
+        assert_ne!(
+            leader.map(|(l, _)| l),
+            follower.map(|(l, _)| l),
+            "the follower is still behind the held leader"
+        );
+        let (off, _, _) = run(0.0);
+        assert_eq!(off, GridlockCounters::default(), "the timeout off still acted");
     }
 
     #[test]

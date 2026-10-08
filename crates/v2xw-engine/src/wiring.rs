@@ -453,6 +453,17 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(share) = vru.ebike_share {
         params.cyclists.ebike_share = share;
     }
+    // The traffic section (`scenario.traffic`): each field overrides the jurisdiction's
+    // rule or the engine default it names; absent, the defaults stand (gridlock resolution
+    // at SUMO's 300 s).
+    let traffic = scenario.traffic.clone().unwrap_or_default();
+    if let Some(rtor) = traffic.right_turn_on_red {
+        params.right_turn_on_red = rtor;
+    }
+    params.dynamic_rerouting = traffic.dynamic_rerouting;
+    params.lane_changes = traffic.lane_changes;
+    params.junction_clearance = traffic.keep_junctions_clear;
+    params.time_to_teleport_s = traffic.gridlock_timeout_s.max(0.0);
     // Kerbside stops follow the jurisdiction too: New York City has its taxis
     // (`v2xw_mobility::kerbside`).
     params.kerbside = v2xw_mobility::kerbside::KerbsideParams::for_highway_preset(

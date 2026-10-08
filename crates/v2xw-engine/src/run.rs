@@ -771,6 +771,12 @@ pub struct Engine {
     glosa: GlosaDrivers,
     /// The junction controllers' priority service (`crate::priority`, NTCIP 1211).
     priority: crate::priority::PriorityControllers,
+    /// Vehicle-actuated signal control (`crate::actuated`, `traffic.signals`), inert under
+    /// fixed-time control.
+    actuated: crate::actuated::ActuatedControllers,
+    /// The traffic-control log last written (`traffic.control`), so a record goes out only
+    /// when something changed.
+    traffic_log: Option<crate::actuated::TrafficControlRecord>,
     /// What the CPM-sending vehicles' sensors perceive (`crate::perception`), when the
     /// scenario sends CPMs.
     perception: Option<crate::perception::Perception>,
@@ -1049,6 +1055,16 @@ impl Engine {
         let scenario = crate::city::adapt_to_world(scenario, &world);
         // City scale: the radio's focus region follows the microscopic box.
         let scenario = crate::scale::normalise(scenario);
+        // Signal control (`traffic.signals`): a green wave sets the plans' offsets once,
+        // before anything reads them; an actuated controller moves them as it runs.
+        let mut world = world;
+        let signal_control = scenario
+            .traffic
+            .as_ref()
+            .map(|t| t.signals.clone())
+            .unwrap_or_default();
+        crate::actuated::coordinate(&signal_control, &mut world);
+        let actuated = crate::actuated::ActuatedControllers::new(&signal_control, &world);
         let mut registry = Registry::new();
         crate::wiring::register_all(&mut registry)?;
 
@@ -1284,6 +1300,8 @@ impl Engine {
             priority: crate::priority::PriorityControllers::new(
                 crate::priority::PriorityParams::default(),
             ),
+            actuated,
+            traffic_log: None,
             perception: scenario_for_radio
                 .messages
                 .sets
@@ -2522,6 +2540,24 @@ impl Engine {
         // the frame that reports it.
         self.transmitted_since_step.clear();
 
+        // Actuated control reads its detectors at the start of the step and moves its
+        // plans before the drivers look at the lamps, as the priority service does.
+        if self.actuated.is_active() {
+            let calls = self.actuated.calls(
+                &self.world,
+                self.actors
+                    .values()
+                    .filter(|a| !crate::wiring::is_vru_class(a.class))
+                    .filter_map(|a| a.last.lane.map(|p| (p.lane, p.s_m))),
+            );
+            self.actuated.step(
+                &mut self.world,
+                &calls,
+                v2xw_core::time::ns_to_secs(now),
+                step.as_secs_f64(),
+            );
+        }
+
         // The controllers serve their priority requests before the drivers look at the
         // lamps, so an extension or an early green takes effect this step.
         let served = self.priority.step(
@@ -2558,6 +2594,7 @@ impl Engine {
 
         self.absorb(&update, now);
         self.update_radio_gate(now);
+        self.log_traffic_control(recorder, now);
         self.set_lamps(lamps, step.after(now));
         self.sweep_retired_links(now);
         self.recentre_focus(now);
@@ -7640,6 +7677,34 @@ impl Engine {
     /// Stamped at the scheduler's instant, which is right for every phase whose records
     /// describe the instant they are dispatched at. Mobility is the exception, and it
     /// uses [`Engine::emit_at`].
+    /// Writes the traffic-control log (`traffic.control`) when an actuated controller or
+    /// the gridlock resolution did something since the last record.
+    fn log_traffic_control(&mut self, recorder: &mut dyn RunRecorder, now: SimTime) {
+        let a = self.actuated.counters();
+        let g = self.mobility.gridlock().unwrap_or_default();
+        if !self.actuated.is_active() && g == Default::default() {
+            return;
+        }
+        let rec = crate::actuated::TrafficControlRecord {
+            t: now,
+            gap_outs: a.gap_outs,
+            max_outs: a.max_outs,
+            extended_s: v2xw_core::math::q3(a.extended_s),
+            cut_s: v2xw_core::math::q3(a.cut_s),
+            jammed: g.jammed,
+            teleported: g.teleported,
+            removed: g.removed,
+        };
+        let changed = self.traffic_log.as_ref().is_none_or(|last| {
+            (last.gap_outs, last.max_outs, last.jammed, last.teleported, last.removed)
+                != (rec.gap_outs, rec.max_outs, rec.jammed, rec.teleported, rec.removed)
+        });
+        if changed {
+            self.emit(recorder, &rec);
+            self.traffic_log = Some(rec);
+        }
+    }
+
     fn emit(&mut self, recorder: &mut dyn RunRecorder, record: &dyn v2xw_core::ctx::ErasedRecord) {
         let at = self.scheduler.now();
         self.emit_at(recorder, at, record);

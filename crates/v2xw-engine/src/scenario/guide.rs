@@ -62,6 +62,21 @@ const BASIC: &[Basic] = &[
         recommended: "2 to 50 to watch individual vehicles; 100 to 300 for channel load on this machine.",
     },
     Basic {
+        path: "traffic.signals.control",
+        explain: "How the traffic lights decide when to change: on a fixed clock, or actuated by detectors in the road that hold a green while cars keep coming and end it early when the street goes quiet, as most US suburban and many city signals do.",
+        recommended: "fixed-time for a repeatable baseline; actuated to study signal timing or SPaT that changes.",
+    },
+    Basic {
+        path: "traffic.gridlock_timeout_s",
+        explain: "When a vehicle has been stuck this long in a jam the network cannot clear, it is moved on along its route and counted, as SUMO does. A run that counts many has unrealistic demand or a network fault.",
+        recommended: "300 (SUMO's default); 0 to see raw gridlock.",
+    },
+    Basic {
+        path: "traffic.right_turn_on_red",
+        explain: "Whether drivers may turn right on a red light after stopping. Legal in most of the US, banned in New York City.",
+        recommended: "Leave empty to follow the city's rule.",
+    },
+    Basic {
         path: "actors.vehicles.equipped_fraction",
         explain: "The share of vehicles that carry a V2X radio. Today's deployments are a few percent; a mandate would equip every new vehicle.",
         recommended: "0.05 (early deployment) to 1 (every vehicle).",

@@ -252,6 +252,7 @@ impl Scenario {
             mobility: None,
             experiment: None,
             scale: None,
+            traffic: None,
         }
     }
 }

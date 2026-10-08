@@ -346,6 +346,10 @@ impl v2xw_core::model::Model for TieredMobility {
 }
 
 impl Mobility for TieredMobility {
+    fn gridlock(&self) -> Option<crate::engine::GridlockCounters> {
+        Mobility::gridlock(&self.micro)
+    }
+
     fn tier(&self) -> Tier {
         Tier::Medium
     }

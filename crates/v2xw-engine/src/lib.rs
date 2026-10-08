@@ -56,6 +56,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod actuated;
 pub mod adapters;
 pub mod app_truth;
 pub mod backend;

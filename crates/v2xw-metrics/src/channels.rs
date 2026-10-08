@@ -104,6 +104,7 @@ const CHANNEL_VISIBILITY: &[(&str, &[Visibility])] = &[
     ("signal.priority", &[Visibility::Public]),
     ("snapshot.delta", &[Visibility::Mixed]),
     ("snapshot.keyframe", &[Visibility::Mixed]),
+    ("traffic.control", &[Visibility::Public]), // as `v2xw_record::channels` declares it
 ];
 
 /// The visibility tags `channel` may carry, or `None` for a channel 03-interfaces.md §14

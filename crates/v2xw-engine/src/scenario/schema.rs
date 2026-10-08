@@ -123,6 +123,147 @@ pub struct Scenario {
     /// scenario that does not mention it keeps its content hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<Scale>,
+    /// How the traffic behaves at junctions and in jams: right turn on red, rerouting,
+    /// lane changing, keeping junctions clear, gridlock resolution, and how the signals are
+    /// controlled (fixed-time or actuated, and a green wave). Absent uses the defaults
+    /// stated on each field, and is left out of the serialised scenario so a scenario that
+    /// does not mention it keeps its content hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traffic: Option<Traffic>,
+}
+
+/// How the traffic behaves at junctions and in jams ([`Scenario::traffic`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Traffic {
+    /// Whether a right turn may be made on a steady red after a full stop. Absent follows
+    /// the jurisdiction's rule (New York City prohibits it unless signed; most of the US
+    /// permits it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_turn_on_red: Option<bool>,
+    /// Whether drivers change route when the travel times they see change or a street
+    /// closes. On by default.
+    #[serde(default = "Traffic::yes")]
+    pub dynamic_rerouting: bool,
+    /// Whether drivers change lane to overtake or to reach the lane their next turn needs
+    /// (MOBIL). On by default; off keeps every vehicle in the lane it started in.
+    #[serde(default = "Traffic::yes")]
+    pub lane_changes: bool,
+    /// Whether a driver keeps out of a junction until there is room beyond it and yields to
+    /// vehicles already inside it ("don't block the box"). On by default.
+    #[serde(default = "Traffic::yes")]
+    pub keep_junctions_clear: bool,
+    /// Gridlock resolution: a vehicle that has stood still this long, seconds, is moved on
+    /// along its route to the next lane with room and counted, as SUMO's time-to-teleport
+    /// option does (default 300 s). 0 turns it off.
+    #[serde(default = "Traffic::default_gridlock_timeout")]
+    pub gridlock_timeout_s: f64,
+    /// How the signals are controlled.
+    #[serde(default)]
+    pub signals: SignalControl,
+}
+
+impl Traffic {
+    fn yes() -> bool {
+        true
+    }
+    /// SUMO's time-to-teleport default (SUMO user documentation, sumo options).
+    pub const DEFAULT_GRIDLOCK_TIMEOUT_S: f64 = 300.0;
+    fn default_gridlock_timeout() -> f64 {
+        Self::DEFAULT_GRIDLOCK_TIMEOUT_S
+    }
+}
+
+impl Default for Traffic {
+    fn default() -> Self {
+        Traffic {
+            right_turn_on_red: None,
+            dynamic_rerouting: true,
+            lane_changes: true,
+            keep_junctions_clear: true,
+            gridlock_timeout_s: Traffic::DEFAULT_GRIDLOCK_TIMEOUT_S,
+            signals: SignalControl::default(),
+        }
+    }
+}
+
+/// How a junction's signal decides when to change ([`Traffic::signals`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SignalControlKind {
+    /// The plan's clock: every phase lasts its stated time.
+    #[default]
+    FixedTime,
+    /// Vehicle-actuated (NEMA TS 2): a green runs at least its minimum, is extended while
+    /// detectors keep seeing vehicles within the passage time, ends early (gaps out) when
+    /// they stop and another approach is waiting, and never runs past its maximum.
+    Actuated,
+}
+
+/// Signal control ([`Traffic::signals`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignalControl {
+    /// Fixed-time or vehicle-actuated.
+    #[serde(default)]
+    pub control: SignalControlKind,
+    /// The shortest an actuated green runs, seconds.
+    #[serde(default = "SignalControl::default_min_green")]
+    pub min_green_s: f64,
+    /// The longest an actuated green runs while another approach waits, seconds.
+    #[serde(default = "SignalControl::default_max_green")]
+    pub max_green_s: f64,
+    /// The gap between detections that ends an actuated green, seconds (the passage time
+    /// or unit extension).
+    #[serde(default = "SignalControl::default_passage")]
+    pub passage_s: f64,
+    /// How far back from the stop line the detector sees, metres.
+    #[serde(default = "SignalControl::default_detector")]
+    pub detector_m: f64,
+    /// A green wave: every signal's offset set so that a vehicle at this speed meets green
+    /// after green travelling in green_wave_heading_deg. Absent keeps the plans' own
+    /// offsets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub green_wave_speed_mps: Option<f64>,
+    /// The direction the green wave runs, degrees clockwise from north (90 is eastbound).
+    #[serde(default = "SignalControl::default_wave_heading")]
+    pub green_wave_heading_deg: f64,
+}
+
+impl SignalControl {
+    // FHWA Traffic Signal Timing Manual (FHWA-HOP-08-024, 2008), chapter 5: minimum green
+    // 5-15 s for a through phase, maximum green 30-60 s for a minor-arterial through phase,
+    // passage time 2-3 s with stop-line presence detection, and a 40 ft (12.2 m) stop-line
+    // loop (recalled; the values are the middle of each range).
+    fn default_min_green() -> f64 {
+        7.0
+    }
+    fn default_max_green() -> f64 {
+        45.0
+    }
+    fn default_passage() -> f64 {
+        2.5
+    }
+    fn default_detector() -> f64 {
+        12.2
+    }
+    fn default_wave_heading() -> f64 {
+        90.0
+    }
+}
+
+impl Default for SignalControl {
+    fn default() -> Self {
+        SignalControl {
+            control: SignalControlKind::FixedTime,
+            min_green_s: Self::default_min_green(),
+            max_green_s: Self::default_max_green(),
+            passage_s: Self::default_passage(),
+            detector_m: Self::default_detector(),
+            green_wave_speed_mps: None,
+            green_wave_heading_deg: Self::default_wave_heading(),
+        }
+    }
 }
 
 /// City scale: which traffic tier runs where, and how the radio follows it.

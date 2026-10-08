@@ -226,6 +226,11 @@ const GROUPS: &[(&str, &str, &str)] = &[
         "What is measured, exported and swept.",
     ),
     (
+        "traffic",
+        "Traffic",
+        "How the traffic behaves at junctions and in jams, and how the signals are controlled.",
+    ),
+    (
         "scale",
         "Traffic",
         "What moves and what transmits: the fleet, its size, roadside units and the backend.",

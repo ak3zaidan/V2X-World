@@ -245,6 +245,60 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the number of vehicles held on the road",
     },
+    // Gridlock timeout: 0 is off; an hour is past any signal cycle or incident a run
+    // would want to wait out (SUMO's default is 300 s).
+    Bound {
+        path: "traffic.gridlock_timeout_s",
+        lo: 0.0,
+        hi: 3600.0,
+        exclusive_lo: false,
+        what: "the gridlock timeout",
+    },
+    // FHWA Traffic Signal Timing Manual (2008) ch. 5: minimum greens of 2-15 s, maximum
+    // greens up to about 120 s on a major arterial, passage times of 0.5-5 s; the bounds
+    // keep inside those, with room either side.
+    Bound {
+        path: "traffic.signals.min_green_s",
+        lo: 2.0,
+        hi: 60.0,
+        exclusive_lo: false,
+        what: "the minimum green",
+    },
+    Bound {
+        path: "traffic.signals.max_green_s",
+        lo: 5.0,
+        hi: 180.0,
+        exclusive_lo: false,
+        what: "the maximum green",
+    },
+    Bound {
+        path: "traffic.signals.passage_s",
+        lo: 0.2,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the passage time",
+    },
+    Bound {
+        path: "traffic.signals.detector_m",
+        lo: 1.0,
+        hi: 150.0,
+        exclusive_lo: false,
+        what: "the detector length",
+    },
+    Bound {
+        path: "traffic.signals.green_wave_speed_mps",
+        lo: 1.0,
+        hi: 40.0,
+        exclusive_lo: false,
+        what: "the green-wave speed",
+    },
+    Bound {
+        path: "traffic.signals.green_wave_heading_deg",
+        lo: 0.0,
+        hi: 360.0,
+        exclusive_lo: false,
+        what: "the green-wave heading",
+    },
     // 1,000 veh/h per lane-km is several times a jammed lane's density at any speed; the
     // ceiling is a guard against a typo, as the rate's is.
     Bound {
@@ -832,6 +886,43 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "actors.vehicles.demand.rate_veh_per_h",
         status: Status::Wired,
         note: "Vehicles per hour offered to the network.",
+    },
+    KeyStatus {
+        path: "traffic",
+        status: Status::Wired,
+        note: "How the traffic behaves at junctions and in jams; every field changes the run.",
+    },
+    KeyStatus {
+        path: "traffic.right_turn_on_red",
+        status: Status::Wired,
+        note: "Overrides the jurisdiction's right-turn-on-red rule.",
+    },
+    KeyStatus {
+        path: "traffic.dynamic_rerouting",
+        status: Status::Wired,
+        note: "Drivers re-plan on travel-time changes and closures.",
+    },
+    KeyStatus {
+        path: "traffic.lane_changes",
+        status: Status::Wired,
+        note: "Discretionary and route lane changes (MOBIL).",
+    },
+    KeyStatus {
+        path: "traffic.keep_junctions_clear",
+        status: Status::Wired,
+        note: "Do not enter a junction without room beyond it; yield to vehicles inside it.",
+    },
+    KeyStatus {
+        path: "traffic.gridlock_timeout_s",
+        status: Status::Wired,
+        note: "A vehicle standing this long is moved on along its route and counted on \
+               traffic.control (SUMO's time-to-teleport); 0 is off.",
+    },
+    KeyStatus {
+        path: "traffic.signals",
+        status: Status::Wired,
+        note: "Fixed-time or NEMA-style actuated control, and a green wave; the SPaT shows \
+               what the controller does.",
     },
     KeyStatus {
         path: "actors.vehicles.demand.fleet_size",
@@ -2797,6 +2888,41 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ));
     }
 
+    if let Some(t) = &s.traffic {
+        bounded_at(
+            "traffic.gridlock_timeout_s",
+            "traffic.gridlock_timeout_s",
+            t.gridlock_timeout_s,
+            e,
+        );
+        let g = &t.signals;
+        for (path, v) in [
+            ("traffic.signals.min_green_s", g.min_green_s),
+            ("traffic.signals.max_green_s", g.max_green_s),
+            ("traffic.signals.passage_s", g.passage_s),
+            ("traffic.signals.detector_m", g.detector_m),
+            ("traffic.signals.green_wave_heading_deg", g.green_wave_heading_deg),
+        ] {
+            bounded_at(path, path, v, e);
+        }
+        if let Some(v) = g.green_wave_speed_mps {
+            bounded_at(
+                "traffic.signals.green_wave_speed_mps",
+                "traffic.signals.green_wave_speed_mps",
+                v,
+                e,
+            );
+        }
+        if g.max_green_s < g.min_green_s {
+            e.push(conflict(
+                "traffic.signals.max_green_s",
+                format!(
+                    "is {} s, below the minimum green of {} s",
+                    g.max_green_s, g.min_green_s
+                ),
+            ));
+        }
+    }
     if let Some(n) = s.actors.vehicles.demand.fleet_size {
         bounded_at(
             "actors.vehicles.demand.fleet_size",
