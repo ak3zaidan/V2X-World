@@ -69,7 +69,38 @@ use crate::error::Result;
 /// hand a provider a value of the wrong type.
 pub struct Decoded<'a> {
     record: &'a EventRecord,
-    slot: OnceCell<(TypeId, Option<Box<dyn Any>>)>,
+    slot: OnceCell<(TypeId, Option<Box<dyn Any + Send>>)>,
+}
+
+/// A record's view decoded ahead of [`ProviderSet::on_event_predecoded`], so the decoding
+/// of a batch of records can run in parallel while the providers still see them one at a
+/// time, in order.
+///
+/// It is the very value [`Decoded::with`] would cache on its first call for `V`
+/// ([`decode`] of the same bytes), so a provider cannot tell a predecoded record from one
+/// it decoded itself: a view type other than the one predecoded is decoded for its caller
+/// exactly as before.
+pub struct Predecoded(TypeId, Option<Box<dyn Any + Send>>);
+
+impl core::fmt::Debug for Predecoded {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("Predecoded").field(&self.1.is_some()).finish()
+    }
+}
+
+impl Predecoded {
+    /// `record` decoded as `V`, or `None` when it is on another channel.
+    #[must_use]
+    pub fn of<V: ChannelView + Send + 'static>(record: &EventRecord) -> Option<Self> {
+        (record.channel == V::CHANNEL).then(|| {
+            Self(
+                TypeId::of::<V>(),
+                decode::<V>(record)
+                    .ok()
+                    .map(|v| Box::new(v) as Box<dyn Any + Send>),
+            )
+        })
+    }
 }
 
 impl core::fmt::Debug for Decoded<'_> {
@@ -114,7 +145,7 @@ impl<'a> Decoded<'a> {
     /// every later call for the same `V` reads the cached value.
     pub fn with<V, R>(&self, f: impl FnOnce(Option<&V>) -> R) -> R
     where
-        V: ChannelView + 'static,
+        V: ChannelView + Send + 'static,
     {
         if self.record.channel != V::CHANNEL {
             return f(None);
@@ -124,7 +155,7 @@ impl<'a> Decoded<'a> {
                 TypeId::of::<V>(),
                 decode::<V>(self.record)
                     .ok()
-                    .map(|v| Box::new(v) as Box<dyn Any>),
+                    .map(|v| Box::new(v) as Box<dyn Any + Send>),
             )
         });
         if *ty == TypeId::of::<V>() {
@@ -314,15 +345,47 @@ impl ProviderSet {
     /// A record on a channel nobody subscribed to is ignored, which is not an error: a
     /// recording carries every channel and a run's provider set is a subset of them.
     pub fn on_event(&mut self, ev: &EventRecord) {
-        let Some(indices) = self.by_channel.get(&ev.channel_name()) else {
+        // The two fields borrowed apart, so the subscriber list is read in place rather
+        // than cloned for every record.
+        let Self {
+            providers,
+            by_channel,
+            ..
+        } = self;
+        let Some(indices) = by_channel.get(&ev.channel_name()) else {
             return;
         };
-        // Cloned because the borrow of `by_channel` would otherwise outlive the mutable
-        // borrow of `providers`. The vector is one small `usize` per subscriber.
-        let indices = indices.clone();
         let decoded = Decoded::new(ev);
-        for i in indices {
-            self.providers[i].on_decoded(&decoded);
+        for &i in indices {
+            providers[i].on_decoded(&decoded);
+        }
+    }
+
+    /// Whether any provider subscribes to `channel`: when none does, predecoding a record on
+    /// it ([`Predecoded::of`]) is wasted work.
+    #[must_use]
+    pub fn wants(&self, channel: &'static str) -> bool {
+        self.by_channel.contains_key(&ChannelName(channel))
+    }
+
+    /// [`ProviderSet::on_event`] for a record whose view was decoded ahead
+    /// ([`Predecoded::of`]), perhaps on another thread. The providers see exactly what
+    /// `on_event` would show them.
+    pub fn on_event_predecoded(&mut self, ev: &EventRecord, pre: Option<Predecoded>) {
+        let Self {
+            providers,
+            by_channel,
+            ..
+        } = self;
+        let Some(indices) = by_channel.get(&ev.channel_name()) else {
+            return;
+        };
+        let decoded = Decoded::new(ev);
+        if let Some(Predecoded(ty, value)) = pre {
+            let _ = decoded.slot.set((ty, value));
+        }
+        for &i in indices {
+            providers[i].on_decoded(&decoded);
         }
     }
 

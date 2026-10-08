@@ -216,6 +216,10 @@ pub struct RaState {
     repos: BTreeMap<NodeId, BTreeMap<u32, Vec<IssuedCredential>>>,
     shuffle_armed: bool,
     report_shuffle_armed: bool,
+    /// Which batch of each shuffle is filling, bumped at each release, so the window timer
+    /// of a batch the count threshold already released releases nothing.
+    shuffle_generation: u64,
+    report_shuffle_generation: u64,
 }
 
 impl RaState {
@@ -1195,6 +1199,9 @@ impl ScmsRun {
         // A pre-run pool was issued long before the run's faults: they do not apply.
         let run_faults = core::mem::take(&mut self.state.faults);
         let run_armed = core::mem::replace(&mut self.state.ra.shuffle_armed, false);
+        // The run's armed timer names the run's batch generation; the scratch release bumps
+        // the counter, so it is put back with the timer or that batch would never close.
+        let run_generation = self.state.ra.shuffle_generation;
         self.enrol_at(device, 0);
         let mut outcome = Self::drain_into(&mut self.state, &mut self.kernel);
         if outcome.is_ok() {
@@ -1207,6 +1214,7 @@ impl ScmsRun {
         let leftover = core::mem::replace(&mut self.state.ra.jobs, run_jobs);
         self.state.ra.jobs.extend(leftover);
         self.state.ra.shuffle_armed = run_armed;
+        self.state.ra.shuffle_generation = run_generation;
         self.state.faults = run_faults;
         outcome
     }
@@ -1474,6 +1482,85 @@ impl ScmsState {
     /// SHA-256 compressions, counted for the same reason and with the same caveat.
     fn hashes(out: &mut Outbox<ScmsMsg>, n: u32) {
         out.compute(OpDescriptor::new(SHA256, PrimitiveOpKind::Verify, n));
+    }
+
+    /// Closes the RA's certificate-request shuffle: every job whose pre-linkage values are
+    /// in goes to the PCA, period by period. Run by the window's timer or, first, by the
+    /// count threshold ("10,000 requests or one day, whichever comes first",
+    /// CAMP-EE §2.2.7); either way the next batch starts with a fresh window.
+    fn release_request_shuffle(&mut self, out: &mut Outbox<ScmsMsg>, n: ScmsNodes, to: NodeId) {
+        self.ra.shuffle_armed = false;
+        self.ra.shuffle_generation += 1;
+        let jobs = core::mem::take(&mut self.ra.jobs);
+        let mut still_waiting = Vec::new();
+        for mut job in jobs {
+            if job.responses < 2 || job.sent {
+                still_waiting.push(job);
+                continue;
+            }
+            job.sent = true;
+            out.stage_at(StageId::Shuffled, to, None, job.flow, job.run);
+            for i in job.start_i..job.start_i + job.periods {
+                let mut items = Vec::new();
+                for j in 0..job.jmax {
+                    let (Some(b), Some(p1), Some(p2), Some(l1), Some(l2)) = (
+                        job.cocoons.get(&(i, j)).copied(),
+                        job.plv[0].get(&(i, j)).cloned(),
+                        job.plv[1].get(&(i, j)).cloned(),
+                        job.lci[0],
+                        job.lci[1],
+                    ) else {
+                        continue;
+                    };
+                    items.push(CertRequestItem {
+                        i,
+                        j,
+                        cocoon_signing: b,
+                        plv1: p1,
+                        plv2: p2,
+                        lci1: SealedForPca::seal(l1),
+                        lci2: SealedForPca::seal(l2),
+                        request_hash: job.request_hash,
+                    });
+                }
+                let count = u32::try_from(items.len()).unwrap_or(u32::MAX);
+                out.send(
+                    n.pca,
+                    ScmsMsg::CertRequest {
+                        device: job.device,
+                        i,
+                        items: Box::new(items),
+                    },
+                    "cert-request",
+                    self.sizes.cert_request_for(count),
+                    Transport::BackendNet,
+                    job.flow,
+                    job.run,
+                );
+            }
+            self.ra.repos.entry(job.device).or_default();
+            still_waiting.push(job);
+        }
+        self.ra.jobs = still_waiting;
+    }
+
+    /// Closes the RA's report shuffle: every waiting report goes on to the MA. Run by the
+    /// window's timer or, first, by the count threshold (CAMP-EE SCMS-765).
+    fn release_report_shuffle(&mut self, out: &mut Outbox<ScmsMsg>, n: ScmsNodes, to: NodeId) {
+        self.ra.report_shuffle_armed = false;
+        self.ra.report_shuffle_generation += 1;
+        for (r_run, report) in core::mem::take(&mut self.ra.reports) {
+            out.stage_at(StageId::Shuffled, to, None, FlowId::Report, r_run);
+            out.send(
+                n.ma,
+                ScmsMsg::Report(Box::new(report)),
+                "report-forward",
+                self.sizes.report(),
+                Transport::BackendNet,
+                FlowId::Report,
+                r_run,
+            );
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1938,70 +2025,32 @@ impl ScmsState {
                 }
                 if ready {
                     out.stage_at(StageId::PreLinkageReady, to, None, flow, run);
-                    if !self.ra.shuffle_armed {
+                    let waiting = self
+                        .ra
+                        .jobs
+                        .iter()
+                        .filter(|j| j.responses >= 2 && !j.sent)
+                        .count();
+                    if waiting >= self.params.shuffle_threshold as usize {
+                        // The count closes this batch before the day does.
+                        self.release_request_shuffle(out, n, to);
+                    } else if !self.ra.shuffle_armed {
                         self.ra.shuffle_armed = true;
                         out.start_timer(
                             self.params.shuffle_window,
-                            ScmsMsg::ShuffleTimer,
+                            ScmsMsg::ShuffleTimer {
+                                generation: self.ra.shuffle_generation,
+                            },
                             flow,
                             run,
                         );
                     }
                 }
             }
-            ScmsMsg::ShuffleTimer => {
-                self.ra.shuffle_armed = false;
-                let jobs = core::mem::take(&mut self.ra.jobs);
-                let mut still_waiting = Vec::new();
-                for mut job in jobs {
-                    if job.responses < 2 || job.sent {
-                        still_waiting.push(job);
-                        continue;
-                    }
-                    job.sent = true;
-                    out.stage_at(StageId::Shuffled, to, None, job.flow, job.run);
-                    for i in job.start_i..job.start_i + job.periods {
-                        let mut items = Vec::new();
-                        for j in 0..job.jmax {
-                            let (Some(b), Some(p1), Some(p2), Some(l1), Some(l2)) = (
-                                job.cocoons.get(&(i, j)).copied(),
-                                job.plv[0].get(&(i, j)).cloned(),
-                                job.plv[1].get(&(i, j)).cloned(),
-                                job.lci[0],
-                                job.lci[1],
-                            ) else {
-                                continue;
-                            };
-                            items.push(CertRequestItem {
-                                i,
-                                j,
-                                cocoon_signing: b,
-                                plv1: p1,
-                                plv2: p2,
-                                lci1: SealedForPca::seal(l1),
-                                lci2: SealedForPca::seal(l2),
-                                request_hash: job.request_hash,
-                            });
-                        }
-                        let count = u32::try_from(items.len()).unwrap_or(u32::MAX);
-                        out.send(
-                            n.pca,
-                            ScmsMsg::CertRequest {
-                                device: job.device,
-                                i,
-                                items: Box::new(items),
-                            },
-                            "cert-request",
-                            self.sizes.cert_request_for(count),
-                            Transport::BackendNet,
-                            job.flow,
-                            job.run,
-                        );
-                    }
-                    self.ra.repos.entry(job.device).or_default();
-                    still_waiting.push(job);
+            ScmsMsg::ShuffleTimer { generation } => {
+                if generation == self.ra.shuffle_generation {
+                    self.release_request_shuffle(out, n, to);
                 }
-                self.ra.jobs = still_waiting;
             }
             ScmsMsg::CertRequest { device, i, items } => {
                 let count = u32::try_from(items.len()).unwrap_or(u32::MAX);
@@ -2290,11 +2339,16 @@ impl ScmsState {
             }
             ScmsMsg::Report(r) if to == n.ra => {
                 self.ra.reports.push((run, *r));
-                if !self.ra.report_shuffle_armed {
+                if self.ra.reports.len() >= self.params.report_shuffle_threshold as usize {
+                    // The count closes the batch before the day does (CAMP-EE SCMS-765).
+                    self.release_report_shuffle(out, n, to);
+                } else if !self.ra.report_shuffle_armed {
                     self.ra.report_shuffle_armed = true;
                     out.start_timer(
                         self.params.report_shuffle_window,
-                        ScmsMsg::ReportShuffleTimer,
+                        ScmsMsg::ReportShuffleTimer {
+                            generation: self.ra.report_shuffle_generation,
+                        },
                         flow,
                         run,
                     );
@@ -2306,19 +2360,9 @@ impl ScmsState {
                 self.ma.reports.push(*r);
                 out.stage_at(StageId::ReportReceived, to, None, flow, run);
             }
-            ScmsMsg::ReportShuffleTimer => {
-                self.ra.report_shuffle_armed = false;
-                for (r_run, report) in core::mem::take(&mut self.ra.reports) {
-                    out.stage_at(StageId::Shuffled, to, None, FlowId::Report, r_run);
-                    out.send(
-                        n.ma,
-                        ScmsMsg::Report(Box::new(report)),
-                        "report-forward",
-                        self.sizes.report(),
-                        Transport::BackendNet,
-                        FlowId::Report,
-                        r_run,
-                    );
+            ScmsMsg::ReportShuffleTimer { generation } => {
+                if generation == self.ra.report_shuffle_generation {
+                    self.release_report_shuffle(out, n, to);
                 }
             }
 

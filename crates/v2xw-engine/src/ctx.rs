@@ -550,11 +550,7 @@ impl Ctx for EngineCtx<'_> {
         // the rule for a channel the table does not declare. The prefix alone was the whole
         // rule, and it refused every `node.rx` record — a reception attempt's fate, which
         // like `phy.rx` names its true sender and is declared node-and-ground-truth.
-        let node_only = match v2xw_record::channels::by_name(owned.channel) {
-            Some(spec) => spec.visibility.allowed_on_node_channel(),
-            None => owned.channel.starts_with("node."),
-        };
-        if node_only && !owned.visibility.allowed_on_node_channel() {
+        if !admitted(&owned) {
             self.refused += 1;
             return;
         }
@@ -572,6 +568,17 @@ impl Ctx for EngineCtx<'_> {
     fn params(&self) -> &ParamSet {
         self.params
     }
+}
+
+/// Whether the recorder's visibility rule admits `owned` on its channel: a ground-truth
+/// record may not be written to a node-only channel ([`EngineCtx`]'s `emit_erased` says
+/// why). Shared with the engine's batched emission, which serialises records ahead.
+pub(crate) fn admitted(owned: &OwnedRecord) -> bool {
+    let node_only = match v2xw_record::channels::by_name(owned.channel) {
+        Some(spec) => spec.visibility.allowed_on_node_channel(),
+        None => owned.channel.starts_with("node."),
+    };
+    !node_only || owned.visibility.allowed_on_node_channel()
 }
 
 /// The visibility a record must have to be written to a channel in the `node.` namespace.

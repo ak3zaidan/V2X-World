@@ -207,12 +207,53 @@ pub trait BoxedFading {
 
     /// The model's card.
     fn card(&self) -> &v2xw_core::card::ModelCard;
+
+    /// The model as a [`SharedFading`], when its draw can be made through a shared borrow
+    /// — from inside a parallel map — with the numbers [`BoxedFading::sample_db`] gives.
+    fn shared(&self) -> Option<SharedFading<'_>>;
+}
+
+/// A fading model that draws through a shared borrow ([`BoxedFading::shared`]).
+#[derive(Debug, Clone, Copy)]
+pub enum SharedFading<'a> {
+    /// `fading/none`: 0 dB.
+    None,
+    /// `fading/nakagami-m`, from its keyed single-use stream.
+    Nakagami(&'a v2xw_radio::NakagamiFading),
+}
+
+impl SharedFading<'_> {
+    /// [`BoxedFading::sample_db`] for this model, from the run's registry.
+    #[must_use]
+    pub fn sample_db(
+        self,
+        rng: &v2xw_core::rng::RngRegistry,
+        link: v2xw_core::ids::LinkKey,
+        d_m: f64,
+        t: v2xw_core::time::SimTime,
+    ) -> f64 {
+        match self {
+            Self::None => 0.0,
+            Self::Nakagami(m) => m.sample_shared_db(rng, link, d_m, t),
+        }
+    }
 }
 
 impl<F> BoxedFading for F
 where
-    F: for<'a> v2xw_radio::Fading<EngineCtx<'a>>,
+    F: for<'a> v2xw_radio::Fading<EngineCtx<'a>> + 'static,
 {
+    fn shared(&self) -> Option<SharedFading<'_>> {
+        let any: &dyn std::any::Any = self;
+        if let Some(m) = any.downcast_ref::<v2xw_radio::NakagamiFading>() {
+            Some(SharedFading::Nakagami(m))
+        } else if any.is::<v2xw_radio::NoFading>() {
+            Some(SharedFading::None)
+        } else {
+            None
+        }
+    }
+
     fn sample_db(
         &mut self,
         ctx: &mut EngineCtx<'_>,

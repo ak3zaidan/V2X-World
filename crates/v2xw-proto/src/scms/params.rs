@@ -176,6 +176,13 @@ pub struct ScmsParams {
     pub shuffle_window: Duration,
     /// The RA's report shuffle window [CAMP-EE SCMS-765].
     pub report_shuffle_window: Duration,
+    /// How many provisioning requests release the certificate-request shuffle before its
+    /// window closes [CAMP-EE §2.2.7: "10,000 requests or one day, whichever comes
+    /// first"].
+    pub shuffle_threshold: u32,
+    /// How many reports release the report shuffle before its window closes
+    /// [CAMP-EE SCMS-765, the same rule].
+    pub report_shuffle_threshold: u32,
     /// CRL cadence: daily, the USDOT 2013 working assumption [BRECHT §VI-G].
     pub crl_cadence: Duration,
     /// Whether the CRL Generator holds a new entry until the next [`Self::crl_cadence`]
@@ -310,6 +317,8 @@ impl Default for ScmsParams {
             elector_quorum: 2,
             shuffle_window: BatchPolicy::CAMP_SHUFFLE.max_delay,
             report_shuffle_window: BatchPolicy::CAMP_SHUFFLE.max_delay,
+            shuffle_threshold: BatchPolicy::CAMP_SHUFFLE.max_items,
+            report_shuffle_threshold: BatchPolicy::CAMP_SHUFFLE.max_items,
             crl_cadence: Duration::from_secs(86_400),
             publish_on_cadence: false,
             first_batch_delay: Duration::from_secs(60),

@@ -5542,9 +5542,35 @@ impl Engine {
                 within.par_iter().map(one).collect()
             }
         };
-        for (&(rx, rx_pos), geometry) in candidates.iter().zip(geometry) {
+        // The fading draws too: each is a single-use stream keyed by the link and the
+        // frame, so a model that can draw through a shared borrow fades every receiver in
+        // parallel, with the numbers the sequential budget would have drawn.
+        let fades: Vec<Option<f64>> = {
+            let main = self.fading.shared();
+            let in_focus = self.focus.as_ref().map(|f| f.fading.shared());
+            let rng = &self.rng;
+            let (tx, tx_pos) = (state.tx, state.tx_pos);
+            let one = |(&(rx, rx_pos), g): (&(NodeId, Vec3), &link::LinkGeometry)| {
+                use v2xw_radio::LinkPlacement;
+                let model = match (in_focus, g.evaluation.map(|e| e.placement)) {
+                    (Some(f), Some(LinkPlacement::Inside)) => f,
+                    (_, Some(LinkPlacement::Inbound)) => return None,
+                    _ => main,
+                };
+                let d = tx_pos.distance(rx_pos);
+                model.map(|m| m.sample_db(rng, LinkKey::new(tx, rx), d, now))
+            };
+            if main.is_none() && in_focus.flatten().is_none() {
+                vec![None; candidates.len()]
+            } else if candidates.len() < PAR_MIN_LINKS {
+                candidates.iter().zip(&geometry).map(one).collect()
+            } else {
+                candidates.par_iter().zip(&geometry).map(one).collect()
+            }
+        };
+        for ((&(rx, rx_pos), geometry), fade) in candidates.iter().zip(geometry).zip(fades) {
             let (rssi, dist, high, placement, los_class) =
-                self.link_budget(&state, rx, rx_pos, geometry);
+                self.link_budget(&state, rx, rx_pos, geometry, fade);
             if rssi < floor_dbm {
                 state.faint.insert(rx, rssi);
                 self.report.faint_arrivals += 1;
@@ -5972,18 +5998,12 @@ impl Engine {
         let piece = state
             .frag
             .filter(|m| m.kind == crate::frag::GroupKind::Message);
-        for outcome in outcomes {
-            self.report.reception_attempts += 1;
-            if let Some(cause) = outcome.cause {
-                self.report.lost(cause);
-            }
-            // J2945/1's per-neighbour PER, as a receiver counts it from msgCnt.
-            if outcome.received
-                && state.msg_type == v2xw_msg::MsgType::Bsm
-                && let Some(window) = self.j2945_per.as_mut()
-            {
-                window.note_received(outcome.rx, state.tx, now);
-            }
+        // Each attempt's `phy.rx` record and its `node.rx` record — the attempt itself, and
+        // for a PHY loss its fate — built and serialised ahead, in parallel over the
+        // receivers of a busy frame ([`Prepared`]); emitted below in receiver order.
+        let decode_phy = self.providers.wants(<PhyRx as v2xw_core::ctx::Record>::CHANNEL);
+        let decode_node = self.providers.wants(<NodeRx as v2xw_core::ctx::Record>::CHANNEL);
+        let build = |outcome: &LinkOutcome| -> Built {
             let record = PhyRx::new(
                 state.start,
                 now,
@@ -6005,7 +6025,7 @@ impl Engine {
                 outcome.copies,
             )
             .of_sdu(piece.map(|m| m.sdu_msg));
-            self.emit(recorder, &record);
+            let phy = Prepared::of::<v2xw_metrics::channels::PhyRxView>(&record, decode_phy);
             // The same attempt, on `node.rx`, with the sender's side of the journey. A PHY
             // loss is its fate already; a decoded frame's fate is the receiving node's to
             // decide, and it waits in `rx_pending` until the node reports it.
@@ -6033,20 +6053,39 @@ impl Engine {
                 state.end,
                 arrival,
             );
+            if piece.is_none() && !outcome.received {
+                let cause = outcome.cause.map_or("unknown", cause_name);
+                let lost = attempt.lost(now, cause);
+                let lost = Prepared::of::<v2xw_metrics::channels::NodeRxView>(&lost, decode_node);
+                (phy, arrival, None, Some(lost))
+            } else {
+                (phy, arrival, Some(attempt), None)
+            }
+        };
+        let built: Vec<Built> = if outcomes.len() < PAR_MIN_LINKS {
+            outcomes.iter().map(build).collect()
+        } else {
+            outcomes.par_iter().map(build).collect()
+        };
+        for (outcome, (phy, arrival, attempt, lost)) in outcomes.into_iter().zip(built) {
+            self.report.reception_attempts += 1;
+            if let Some(cause) = outcome.cause {
+                self.report.lost(cause);
+            }
+            // J2945/1's per-neighbour PER, as a receiver counts it from msgCnt.
+            if outcome.received
+                && state.msg_type == v2xw_msg::MsgType::Bsm
+                && let Some(window) = self.j2945_per.as_mut()
+            {
+                window.note_received(outcome.rx, state.tx, now);
+            }
+            self.emit_prepared(recorder, phy);
             if let Some(meta) = piece {
                 if outcome.received {
                     self.report.receptions_ok += 1;
                     received_any = true;
                 }
-                self.on_fragment(
-                    recorder,
-                    &state,
-                    meta,
-                    &outcome,
-                    arrival,
-                    Some(attempt),
-                    now,
-                );
+                self.on_fragment(recorder, &state, meta, &outcome, arrival, attempt, now);
                 continue;
             }
             // A segment or a certificate-cycle SPDU is a message of its own; its group is
@@ -6054,10 +6093,9 @@ impl Engine {
             if let Some(meta) = state.frag.or(state.cert_frag) {
                 self.on_fragment(recorder, &state, meta, &outcome, arrival, None, now);
             }
-            if !outcome.received {
-                let cause = outcome.cause.map_or("unknown", cause_name);
-                self.emit(recorder, &attempt.lost(now, cause));
-            } else {
+            if let Some(lost) = lost {
+                self.emit_prepared(recorder, lost);
+            } else if let Some(attempt) = attempt {
                 self.report.receptions_ok += 1;
                 received_any = true;
                 let token = self.next_rx_token;
@@ -7426,6 +7464,7 @@ impl Engine {
         rx: NodeId,
         rx_pos: Vec3,
         geometry: link::LinkGeometry,
+        drawn_fade: Option<f64>,
     ) -> (f64, f64, bool, Option<&'static str>, v2xw_radio::LosClass) {
         let now = self.scheduler.now();
         let link = LinkKey::new(state.tx, rx);
@@ -7482,7 +7521,8 @@ impl Engine {
                 !law.owns_buildings(),
             );
             let fade = if draw_fading {
-                fad.sample_db(&mut ctx, link, distance_m, now)
+                // Drawn ahead, in parallel, when the model allows it (`start_frame`).
+                drawn_fade.unwrap_or_else(|| fad.sample_db(&mut ctx, link, distance_m, now))
             } else {
                 0.0
             };
@@ -7996,6 +8036,25 @@ impl Engine {
         self.emit_at(recorder, at, record);
     }
 
+    /// [`Engine::emit`] for a record [`Prepared`] ahead — serialised, and decoded for the
+    /// metric providers, perhaps on another thread. What reaches the recorder, the
+    /// providers and the report is exactly what `emit` of the same record would produce;
+    /// only where the encoding was computed differs.
+    fn emit_prepared(&mut self, recorder: &mut dyn RunRecorder, prepared: Prepared) {
+        let at = self.scheduler.now();
+        let Some(owned) = prepared.owned else {
+            self.report.records_refused += 1;
+            return;
+        };
+        if !crate::ctx::admitted(&owned) {
+            self.report.records_refused += 1;
+            return;
+        }
+        self.providers.on_event_predecoded(&owned, prepared.view);
+        recorder.write(at, &owned);
+        self.report.records += 1;
+    }
+
     /// [`Engine::emit`], stamping the record at the instant it describes.
     ///
     /// The correction the vertical-slice audit asked for: a ground-truth kinematics
@@ -8141,6 +8200,38 @@ const fn drop_cause_name(cause: v2xw_node::DropCause) -> &'static str {
         v2xw_node::DropCause::VerifyPolicySkip
         | v2xw_node::DropCause::TxOverflow
         | v2xw_node::DropCause::CrlBacklog => rx_cause::VERIFY_POLICY_DROP,
+    }
+}
+
+/// One reception attempt's records, built ahead ([`Prepared`]): the `phy.rx` record, the
+/// arrival instant, the `node.rx` attempt still to be decided (a decoded frame, or any
+/// piece of a fragmented SDU) and the `node.rx` fate of a PHY loss.
+type Built = (Prepared, SimTime, Option<NodeRx>, Option<Prepared>);
+
+/// A record serialised ahead of its emission ([`Engine::emit_prepared`]), with its
+/// channel's metric view decoded when a provider reads the channel.
+///
+/// A frame heard by hundreds of receivers writes a `phy.rx` and a `node.rx` record for each,
+/// and encoding each to JSON and decoding it back for the metric providers was a third of
+/// a dense run's serial time. The encoding and the decoding are pure functions of the
+/// record, so a frame's are computed in parallel over its receivers and the records are
+/// then emitted one at a time, in receiver order, exactly where they were before.
+pub(crate) struct Prepared {
+    owned: Option<v2xw_core::ctx::OwnedRecord>,
+    view: Option<v2xw_metrics::Predecoded>,
+}
+
+impl Prepared {
+    fn of<V>(record: &dyn v2xw_core::ctx::ErasedRecord, decode: bool) -> Self
+    where
+        V: v2xw_metrics::channels::ChannelView + Send + 'static,
+    {
+        let owned = record.to_owned_record().ok();
+        let view = match (&owned, decode) {
+            (Some(o), true) => v2xw_metrics::Predecoded::of::<V>(o),
+            _ => None,
+        };
+        Self { owned, view }
     }
 }
 

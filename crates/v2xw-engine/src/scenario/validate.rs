@@ -1978,7 +1978,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                i_period_s (default one week), cert_lifetime_s (the period plus an hour), \
                certs_per_period (20), pool_periods (2 held at the start), \
                topup_below_periods (1), cert_shuffle_window_s and report_shuffle_window_s \
-               (one day, CAMP), crl_cadence_s (one day; 0 publishes on decision), \
+               (one day, CAMP) with cert_shuffle_threshold and report_shuffle_threshold \
+               (10,000: a batch closes at the count or the window, whichever comes first, \
+               CAMP-EE §2.2.7 and SCMS-765), crl_cadence_s (one day; 0 publishes on decision), \
                crl_fetch_interval_s (3600, uncited) and crl_broadcast_interval_s (5, \
                uncited). Vehicles top up over their backend link when the pool runs low \
                and cannot sign once it is empty. 'protocol/etsi/ts102941' runs the ETSI \
