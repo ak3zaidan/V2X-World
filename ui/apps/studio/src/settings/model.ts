@@ -292,3 +292,150 @@ export const STATUS_BADGE: Record<FieldStatus, { label: string; cls: string } | 
 export function isBasic(f: Field, anyLevels: boolean): boolean {
   return !anyLevels || f.level === "basic";
 }
+
+/**
+ * The window's sections, in the order a researcher works through a study: what runs, what
+ * moves, the radio, the MAC, congestion control, messages, the network layer, security, the
+ * backend, attackers, and what is written out.
+ *
+ * Only *where a field is shown* is decided here; which fields exist, their choices, defaults and
+ * ranges are the engine's. A field no rule claims falls back to the engine's own group, shown
+ * after these, so a key the engine adds later is never dropped.
+ */
+export interface ResearchSection {
+  readonly id: string;
+  readonly name: string;
+  readonly blurb: string;
+  /** The scenario key whose two-part fields (`radio.rat`) are this section's "General". */
+  readonly home?: string;
+}
+
+export const RESEARCH_SECTIONS: readonly ResearchSection[] = [
+  { id: "run", name: "Run", blurb: "Length, step, seed and timeline of the run.", home: "time" },
+  { id: "traffic", name: "Traffic", blurb: "Vehicles, people, roadside units and how they move.", home: "actors" },
+  { id: "world", name: "World & Weather", blurb: "The map, its buildings and terrain, and the weather." },
+  { id: "radio", name: "Radio & Channel", blurb: "Radio technology, power, antennas, propagation and fidelity.", home: "radio" },
+  { id: "mac", name: "Medium Access", blurb: "How radios share the channel: 802.11p EDCA or C-V2X sidelink scheduling." },
+  { id: "dcc", name: "Congestion Control", blurb: "How radios back off when the channel is busy." },
+  { id: "messages", name: "Messages", blurb: "Which messages are sent, how often, and the applications using them.", home: "messages" },
+  { id: "net", name: "Networking", blurb: "WSMP or GeoNetworking/BTP, forwarding and fragmentation.", home: "net" },
+  { id: "security", name: "Security & Certificates", blurb: "Signatures, certificates, pseudonyms and on-board hardware.", home: "security" },
+  { id: "backend", name: "Backend & Cellular", blurb: "The SCMS backend and the cellular and IP links that reach it." },
+  { id: "attackers", name: "Attackers", blurb: "Attackers, jammers, eavesdroppers and misbehaviour detection.", home: "threats" },
+  { id: "output", name: "Output", blurb: "What is measured and which files the run writes.", home: "metrics" },
+];
+
+/** Words in a dotted path, split at dots, brackets and underscores. */
+function pathWords(path: string): Set<string> {
+  return new Set(path.toLowerCase().split(/[.[\]_-]+/).filter((w) => w !== ""));
+}
+
+/** Which research section a field belongs in, or null for "the engine's own group". */
+export function researchSectionOf(f: Field): string | null {
+  const path = fieldPath(f).toLowerCase();
+  const top = (path.split(".")[0] ?? "").replace(/\[\]$/, "");
+  const words = pathWords(path);
+  const has = (...w: string[]): boolean => w.some((x) => words.has(x));
+  // Topic words first: a congestion-control or MAC knob is found wherever the engine files it.
+  if (has("dcc", "congestion", "cbr")) return "dcc";
+  if (has("mac", "edca", "csma", "aifs", "aifsn", "cw", "sps", "harq", "retransmissions", "sensing", "reservation") || path.includes("channel_access"))
+    return "mac";
+  if (has("uu", "cellular", "backhaul", "tcp", "gnb", "enb") || path.startsWith("net.backend") || path.startsWith("actors.backend") || path.startsWith("nodes.backend"))
+    return "backend";
+  if (top === "meta" || top === "schema" || top === "seed" || top === "time" || top === "events" || top === "experiment") return "run";
+  if (top === "actors" || top === "mobility" || top === "energy" || path.startsWith("scale.traffic")) return "traffic";
+  if (top === "city" || top === "world" || top === "weather") return "world";
+  if (top === "radio" || path.startsWith("scale.radio")) return "radio";
+  if (top === "messages" || top === "apps") return "messages";
+  if (top === "net") return "net";
+  if (top === "security" || top === "nodes" || top === "crypto_mode") return "security";
+  if (top === "threats" || top === "detection") return "attackers";
+  if (top === "metrics" || top === "exporters") return "output";
+  if (top === "scale") return "traffic";
+  return null;
+}
+
+/** One sub-heading of a research section. */
+export interface ResearchSub {
+  readonly key: string;
+  readonly label: string;
+  readonly fields: readonly Field[];
+}
+
+/** One section of the window, with its fields split into sub-headings. */
+export interface ResearchGroup {
+  readonly id: string;
+  readonly name: string;
+  readonly blurb: string;
+  readonly subs: readonly ResearchSub[];
+  readonly count: number;
+}
+
+/** The sub-heading a field sits under inside its section: the scenario key below the top one. */
+export function subKeyOf(f: Field, section: ResearchSection | undefined): string {
+  const parts = fieldPath(f).split(".").map((p) => p.replace(/\[\]$/, ""));
+  if (parts.length >= 3 && section?.home === parts[0]) return parts[1];
+  const top = parts[0] ?? f.group;
+  return section?.home === top ? "" : top;
+}
+
+/**
+ * The window's sections with the fields given, in research order then any engine group no rule
+ * claimed. Inside a section the engine's field order is kept per sub-heading, and the section's
+ * own general fields (`radio.rat`) come first.
+ */
+export function buildResearchTree(fields: readonly Field[]): ResearchGroup[] {
+  const buckets = new Map<string, Field[]>();
+  const extra: { name: string; fields: Field[] }[] = [];
+  for (const f of fields) {
+    const id = researchSectionOf(f);
+    if (id === null) {
+      let e = extra.find((x) => x.name === f.group);
+      if (!e) {
+        e = { name: f.group, fields: [] };
+        extra.push(e);
+      }
+      e.fields.push(f);
+    } else {
+      const list = buckets.get(id) ?? [];
+      list.push(f);
+      buckets.set(id, list);
+    }
+  }
+  const make = (id: string, name: string, blurb: string, list: readonly Field[], section?: ResearchSection): ResearchGroup => {
+    const subs: { key: string; fields: Field[] }[] = [];
+    for (const f of list) {
+      const key = subKeyOf(f, section);
+      let s = subs.find((x) => x.key === key);
+      if (!s) {
+        s = { key, fields: [] };
+        subs.push(s);
+      }
+      s.fields.push(f);
+    }
+    subs.sort((a, b) => Number(b.key === "") - Number(a.key === ""));
+    return {
+      id: `group-${id}`,
+      name,
+      blurb,
+      count: list.length,
+      subs: subs.map((s) => ({ key: s.key, label: s.key === "" ? "General" : humanise(s.key), fields: s.fields })),
+    };
+  };
+  const out: ResearchGroup[] = [];
+  for (const s of RESEARCH_SECTIONS) {
+    const list = buckets.get(s.id);
+    if (list && list.length > 0) out.push(make(s.id, s.name, s.blurb, list, s));
+  }
+  for (const e of extra) out.push(make(slug(e.name), e.name, "", e.fields));
+  return out;
+}
+
+/** The first sentence of an explanation, for the one line under a control. */
+export function oneLine(text: string | undefined): string {
+  if (!text) return "";
+  const t = text.replace(/[`*]/g, "").replace(/\s+/g, " ").trim();
+  const m = /^(.+?[.!?])(\s|$)/.exec(t);
+  const first = m ? m[1] : t;
+  return first.length > 160 ? `${first.slice(0, 157)}…` : first;
+}

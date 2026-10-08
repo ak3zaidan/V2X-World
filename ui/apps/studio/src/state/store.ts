@@ -214,8 +214,13 @@ export interface QuickChoice {
 export interface QuickSetting {
   readonly id: string;
   readonly label: string;
-  readonly kind: "scenario" | "city" | "field" | "choice" | "class";
+  readonly kind: "scenario" | "city" | "field" | "choice" | "class" | "share";
   readonly explain?: string;
+  /** The heading the quick panel shows it under ("Traffic", "Radio", …). */
+  readonly group?: string;
+  /** For a `share`: the key set on every element of the list at `pointer`, and its choices. */
+  readonly key?: string;
+  readonly values?: readonly number[];
   readonly path?: string;
   readonly pointer?: string;
   readonly options?: readonly QuickChoice[];

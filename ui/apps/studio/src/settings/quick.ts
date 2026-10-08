@@ -13,7 +13,33 @@ import { stableJson } from "./model.js";
 
 /** True when every write of the patch already holds in `doc`. */
 export function patchHolds(doc: unknown, patch: readonly PatchWrite[]): boolean {
-  return patch.length > 0 && patch.every((w) => stableJson(getPointer(doc, w.pointer)) === stableJson(w.value));
+  // An absent key and an explicit null say the same thing to the loader (an unset option).
+  const norm = (v: unknown): unknown => (v === undefined ? null : v);
+  return patch.length > 0 && patch.every((w) => stableJson(norm(getPointer(doc, w.pointer))) === stableJson(norm(w.value)));
+}
+
+/** The share every element of a list holds at `key`, when they agree; null when they do not. */
+export function currentShare(list: unknown, key: string): number | null {
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const first = (list[0] as Record<string, unknown> | null)?.[key];
+  if (typeof first !== "number") return null;
+  return list.every((e) => (e as Record<string, unknown> | null)?.[key] === first) ? first : null;
+}
+
+/** The list with `key` set to `value` on every element (and its exclusive siblings dropped). */
+export function listWithShare(list: unknown, key: string, value: number): unknown[] {
+  if (!Array.isArray(list)) return [];
+  return list.map((e) => {
+    const o: Record<string, unknown> = { ...(e as Record<string, unknown>) };
+    // An attacker population gives `fraction`, `count` or `actor_ids`, never two
+    // (schema.rs `Attacker`): a share replaces the others.
+    if (key === "fraction") {
+      delete o.count;
+      delete o.actor_ids;
+    }
+    o[key] = value;
+    return o;
+  });
 }
 
 /**

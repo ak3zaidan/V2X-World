@@ -1,18 +1,16 @@
 /**
- * The settings window: every setting a run is started from, in a window of its own, modelled on VS
- * Code's settings editor (docs/design/14-studio-shell.md §4).
+ * The settings window: every setting a run is started from, in a window of its own.
  *
- * It replaces the 280 px settings sidebar, which put a hundred and forty fields in a column too
- * narrow to read one of them and cut its own Run button off at 1,280 px. Here the list has the
- * page's width, a search box that looks at every word the engine publishes about a setting, a tree
- * of the engine's own groups, and two filters: **Modified** (what this scenario and your edits set)
- * and **Unsupported** (what the engine reads nothing from, kept out of the way but never hidden
- * without saying so).
+ * A left navigation of sections in the order a researcher works (Run, Traffic, Radio & Channel,
+ * Medium Access, Congestion Control, Messages, Networking, Security & Certificates, Backend &
+ * Cellular, Attackers, Output; `model.ts` `RESEARCH_SECTIONS`), one section on the page at a time,
+ * its Basic settings first and its Advanced ones behind one toggle. The search box looks across
+ * every section. "Changes" lists what differs from the scenario the engine holds, each with an undo.
  *
- * The form is generated from the engine's published settings surface, and every row carries the
- * `x-status` the engine's `KEY_STATUS` table assigns it, so a field the engine does not act on is
- * marked with the engine's own sentence about it. Apply lists any edited field of that kind, so an
- * edit that changes nothing is never silently accepted.
+ * Every row is generated from the engine's published settings surface (`scenario.get`): its label,
+ * unit, explanation, default, recommended range, level and status. Nothing here names a setting
+ * the engine did not publish, so an option the engine adds appears without an edit here; one no
+ * section rule claims is shown under the engine's own group name after the research sections.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,23 +36,45 @@ import { RestartNow } from "../components/RestartNow.js";
 import { useRevealSetting } from "../lib/links.js";
 import { changedPointers, getPointer } from "../lib/schema.js";
 import {
-  buildTree,
+  buildResearchTree,
+  describeValue,
   errorPointer,
   errorsByField,
+  fieldPath,
   isEdited,
   isModified,
   isBasic,
   isUnsupported,
   matches,
+  researchSectionOf,
   settingsFields,
   type Field,
+  type ResearchGroup,
 } from "./model.js";
 import { JsonView } from "./JsonView.js";
 import { applyPatch } from "./quick.js";
 import "../styles/quick.css";
+import "../styles/settings.css";
 import { SettingRow } from "./SettingRow.js";
 
-const SCENARIO_SECTION = "settings-scenario";
+const SECTION_KEY = "v2xw.settings.section";
+const ADVANCED_KEY = "v2xw.settings.advanced";
+
+function load<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : (JSON.parse(raw) as T);
+  } catch {
+    return fallback;
+  }
+}
+function save(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* private window: the choice lasts this session */
+  }
+}
 
 function ProblemList({ items, onJump }: { items: readonly ValidationError[]; onJump: (pointer: string) => void }): React.JSX.Element | null {
   if (items.length === 0) return null;
@@ -65,12 +85,17 @@ function ProblemList({ items, onJump }: { items: readonly ValidationError[]; onJ
           <button type="button" className="linklike" onClick={() => onJump(errorPointer(e.path))}>
             <code>{e.path}</code>
           </button>{" "}
-          — {e.message}
+          {e.message}
           {e.hint ? <span className="faint"> ({e.hint})</span> : null}
         </div>
       ))}
     </div>
   );
+}
+
+/** The section id a field is shown under (its research section, or its engine group's). */
+function sectionIdOf(f: Field, tree: readonly ResearchGroup[]): string | undefined {
+  return tree.find((g) => g.subs.some((s) => s.fields.includes(f)))?.id;
 }
 
 export function SettingsWindow({
@@ -96,69 +121,63 @@ export function SettingsWindow({
   const devDetails = useStudio((s) => s.devDetails);
   const busy = useStudio((s) => s.settingsBusy);
   const message = useStudio((s) => s.settingsMessage);
+  const studies = extras.studies;
 
   const [query, setQuery] = useState("");
   const [modifiedOnly, setModifiedOnly] = useState(false);
   const [showUnsupported, setShowUnsupported] = useState(false);
-  const [view, setView] = useState<"form" | "json">("form");
-  // Basic first: the settings that decide what a run models, each explained. Advanced adds model
-  // internals and developer switches. Remembered per browser.
-  const [level, setLevelState] = useState<"basic" | "advanced">(() => {
-    try {
-      return localStorage.getItem("v2xw.settings.level") === "advanced" ? "advanced" : "basic";
-    } catch {
-      return "basic";
-    }
-  });
-  const setLevel = (l: "basic" | "advanced"): void => {
-    setLevelState(l);
-    try {
-      localStorage.setItem("v2xw.settings.level", l);
-    } catch {
-      /* private window: the choice lasts this session */
-    }
-  };
-  const studies = useStudio((s) => s.scenarioExtras.studies);
-  const [active, setActive] = useState<string>(SCENARIO_SECTION);
+  const [view, setView] = useState<"form" | "json" | "changes">("form");
+  const [active, setActiveState] = useState<string>(() => load(SECTION_KEY, "group-run"));
+  const [advanced, setAdvanced] = useState<Record<string, boolean>>(() => load(ADVANCED_KEY, {}));
   const search = useRef<HTMLInputElement | null>(null);
   const content = useRef<HTMLDivElement | null>(null);
+
+  const setActive = useCallback((id: string) => {
+    setActiveState(id);
+    save(SECTION_KEY, id);
+    content.current?.scrollTo({ top: 0 });
+  }, []);
+  const toggleAdvanced = (id: string, on: boolean): void => {
+    setAdvanced((prev) => {
+      const next = { ...prev, [id]: on };
+      save(ADVANCED_KEY, next);
+      return next;
+    });
+  };
 
   useEffect(() => {
     search.current?.focus();
   }, []);
 
-  const { fields, source } = useMemo(
-    () => settingsFields(extras.fields, schema, scenario),
-    [extras.fields, schema, scenario],
-  );
+  const { fields, source } = useMemo(() => settingsFields(extras.fields, schema, scenario), [extras.fields, schema, scenario]);
   const edits = useMemo(() => (draft === null ? [] : changedPointers(scenario, draft)), [scenario, draft]);
   const dirty = edits.length > 0;
-  const unsupportedCount = useMemo(() => fields.filter(isUnsupported).length, [fields]);
-  const modifiedCount = useMemo(
-    () => fields.filter((f) => isEdited(f, edits) || isModified(f, getPointer(draft, f.pointer))).length,
-    [fields, edits, draft],
-  );
   const anyLevels = useMemo(() => fields.some((f) => f.level !== undefined), [fields]);
-  const basicCount = useMemo(() => fields.filter((f) => isBasic(f, anyLevels)).length, [fields, anyLevels]);
-  const shown = useMemo(
-    () =>
-      fields.filter(
-        (f) =>
-          // A search looks through every setting; an edited one stays in view on either page.
-          (level === "advanced" || query.trim() !== "" || isBasic(f, anyLevels) || isEdited(f, edits)) &&
-          (showUnsupported || !isUnsupported(f)) &&
-          matches(f, query) &&
-          (!modifiedOnly || isEdited(f, edits) || isModified(f, getPointer(draft, f.pointer))),
-      ),
-    [fields, showUnsupported, query, modifiedOnly, edits, draft, level, anyLevels],
-  );
-  const tree = useMemo(() => buildTree(shown, extras.groups), [shown, extras.groups]);
-  const filtering = query.trim() !== "" || modifiedOnly;
+  const unsupportedCount = useMemo(() => fields.filter(isUnsupported).length, [fields]);
+  const isMod = useCallback((f: Field) => isEdited(f, edits) || isModified(f, getPointer(draft, f.pointer)), [edits, draft]);
+  const modifiedCount = useMemo(() => fields.filter(isMod).length, [fields, isMod]);
 
-  // A new search starts at its first match, not wherever the list was scrolled to.
-  useEffect(() => {
-    content.current?.scrollTo({ top: 0 });
-  }, [query, modifiedOnly, showUnsupported]);
+  // Every field the filters allow, in its section; the page then shows one section, or every
+  // section's matches while a search or the Modified filter is on.
+  const visible = useMemo(() => fields.filter((f) => showUnsupported || !isUnsupported(f) || isEdited(f, edits)), [fields, showUnsupported, edits]);
+  const fullTree = useMemo(() => buildResearchTree(visible), [visible]);
+  const filtering = query.trim() !== "" || modifiedOnly;
+  const found = useMemo(
+    () => (filtering ? visible.filter((f) => matches(f, query) && (!modifiedOnly || isMod(f))) : []),
+    [filtering, visible, query, modifiedOnly, isMod],
+  );
+  const foundTree = useMemo(() => buildResearchTree(found), [found]);
+  const current = fullTree.find((g) => g.id === active) ?? fullTree[0];
+  const editedBySection = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const f of fields) {
+      if (!isEdited(f, edits)) continue;
+      const id = sectionIdOf(f, fullTree);
+      if (id) out.set(id, (out.get(id) ?? 0) + 1);
+    }
+    return out;
+  }, [fields, edits, fullTree]);
+
   const problems = useMemo(() => errorsByField(fields, validation?.errors ?? []), [fields, validation]);
   const inert = useMemo(() => inertEdits(fields, edits), [fields, edits]);
   const presets = presetsOf(list);
@@ -166,16 +185,6 @@ export function SettingsWindow({
     const d = getPointer(draft, "/time/duration_s");
     return typeof d === "number" ? d : undefined;
   })();
-
-  /** Scroll the list to a section or a setting, clearing a search that would hide it. */
-  const jumpTo = useCallback((id: string) => {
-    setView("form");
-    requestAnimationFrame(() => {
-      const el = document.getElementById(id);
-      el?.scrollIntoView({ block: "start" });
-      setActive(id);
-    });
-  }, []);
 
   const jumpToField = useCallback(
     (pointer: string) => {
@@ -185,55 +194,173 @@ export function SettingsWindow({
       if (!target) return;
       setQuery("");
       setModifiedOnly(false);
+      setView("form");
       if (isUnsupported(target)) setShowUnsupported(true);
-      const id = `setting${target.pointer.replace(/\W/g, "_")}`;
-      jumpTo(id);
-      requestAnimationFrame(() => {
-        const input = document.getElementById(`f${target.pointer.replace(/\W/g, "_")}`) as HTMLElement | null;
-        input?.focus();
-      });
+      const tree = buildResearchTree(fields);
+      const sec = sectionIdOf(target, tree);
+      if (sec) {
+        setActive(sec);
+        if (!isBasic(target, anyLevels)) toggleAdvanced(sec, true);
+      }
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          document.getElementById(`setting${target.pointer.replace(/\W/g, "_")}`)?.scrollIntoView({ block: "center" });
+          (document.getElementById(`f${target.pointer.replace(/\W/g, "_")}`) as HTMLElement | null)?.focus();
+        }),
+      );
     },
-    [fields, jumpTo],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fields, anyLevels, setActive],
   );
   // A link from elsewhere (the agent's list of the settings it changed) opens the window here.
   useRevealSetting(jumpToField, fields.length > 0);
 
-  // The tree follows the scroll: the section whose heading was last passed is the current one.
-  const onScroll = useCallback(() => {
-    const host = content.current;
-    if (!host) return;
-    const top = host.getBoundingClientRect().top;
-    let current = SCENARIO_SECTION;
-    for (const el of host.querySelectorAll<HTMLElement>("[data-section]")) {
-      if (el.getBoundingClientRect().top - top <= 24) current = el.id;
-      else break;
-    }
-    setActive((prev) => (prev === current ? prev : current));
-  }, []);
+  const row = (f: Field, sectionKey: string): React.JSX.Element => (
+    <SettingRow
+      key={f.pointer}
+      field={f}
+      sectionKey={sectionKey}
+      value={getPointer(draft, f.pointer)}
+      edited={isEdited(f, edits)}
+      modified={isModified(f, getPointer(draft, f.pointer))}
+      errors={problems.byPointer.get(f.pointer)}
+      devDetails={devDetails}
+      durationS={f.pointer === "/events" ? durationS : undefined}
+      canPick={!detached}
+      onEdit={editSetting}
+      onUndo={undoEdit}
+    />
+  );
+
+  /** One section's sub-headings with the fields `keep` allows. */
+  const subsOf = (g: ResearchGroup, keep: (f: Field) => boolean): React.JSX.Element[] =>
+    g.subs
+      .map((s) => ({ s, shown: s.fields.filter(keep) }))
+      .filter(({ shown }) => shown.length > 0)
+      .map(({ s, shown }) => (
+        <div key={s.key} className="settings-sub">
+          {g.subs.length > 1 ? <h4>{s.label}</h4> : null}
+          {shown.map((f) => row(f, s.key))}
+        </div>
+      ));
+
+  const sectionPage = (g: ResearchGroup): React.JSX.Element => {
+    const basic = (f: Field): boolean => isBasic(f, anyLevels) || isEdited(f, edits);
+    const basicCount = g.subs.reduce((n, s) => n + s.fields.filter(basic).length, 0);
+    const advCount = g.count - basicCount;
+    const showAdv = advanced[g.id] === true || basicCount === 0;
+    return (
+      <section className="settings-group" aria-labelledby={`${g.id}-h`} data-testid="settings-section" data-section-id={g.id}>
+        <div className="section-head">
+          <h3 id={`${g.id}-h`}>{g.name}</h3>
+          {g.blurb ? <span className="faint">{g.blurb}</span> : null}
+        </div>
+        {g.id === "group-run" ? runExtras : null}
+        {subsOf(g, basic)}
+        {advCount > 0 && basicCount > 0 ? (
+          <button
+            type="button"
+            className={showAdv ? "adv-toggle on" : "adv-toggle"}
+            aria-expanded={showAdv}
+            data-testid="settings-advanced-toggle"
+            onClick={() => toggleAdvanced(g.id, !showAdv)}
+          >
+            {showAdv ? "▾" : "▸"} Advanced <span className="count">{advCount}</span>
+          </button>
+        ) : null}
+        {showAdv && advCount > 0 ? <div className="settings-advanced">{subsOf(g, (f) => !basic(f))}</div> : null}
+      </section>
+    );
+  };
+
+  const runExtras = (
+    <div className="run-extras">
+      <dl className="kv compact">
+        <dt>Scenario</dt>
+        <dd>{hello?.scenarioName ?? "—"}</dd>
+        <dt>Identity</dt>
+        <dd>
+          <Identifier value={scenarioHash} label="scenario digest" testId="scenario-hash" />
+        </dd>
+        {outputDigest ? (
+          <>
+            <dt>Result</dt>
+            <dd title="A digest of everything the finished run produced. Two runs with the same settings and seed give the same one.">
+              <Identifier value={outputDigest} label="output digest" testId="output-digest" />
+            </dd>
+          </>
+        ) : null}
+      </dl>
+      {studies.length > 0 ? (
+        <div className="study-chips" data-testid="studies">
+          <span className="dim">Study:</span>
+          {studies.map((st) => (
+            <button
+              key={st.id}
+              type="button"
+              className="chip"
+              data-testid="study"
+              data-study={st.id}
+              disabled={busy !== null}
+              title={`${st.question}\nSets ${st.patch.map((w) => w.path).join(", ")}`}
+              onClick={() => {
+                const s0 = useStudio.getState();
+                const next = applyPatch(s0.draft ?? s0.scenario, st.patch);
+                for (const w of st.patch) editSetting(w.pointer, getPointer(next, w.pointer));
+                s0.setSettingsMessage({ text: `${st.label}: ${st.patch.length} settings set.${st.look_at ? ` Watch ${st.look_at}` : ""}`, tone: "info" });
+              }}
+            >
+              {st.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {presets.length > 0 ? (
+        <details className="presets" data-testid="presets">
+          <summary className="dim">Load a ready-made scenario ({presets.length})</summary>
+          <div className="preset-grid">
+            {presets.map((item) => (
+              <div key={item.id} className="preset-row">
+                <span title={item.description}>
+                  {item.name ?? item.id}
+                  {presets.filter((o) => o.name === item.name).length > 1 ? <span className="faint"> ({item.id.split("/").pop()})</span> : null}
+                </span>
+                <button
+                  type="button"
+                  disabled={busy !== null}
+                  data-testid="preset-load"
+                  data-preset={item.name ?? item.id}
+                  title="Load these settings into the form. The next run uses them."
+                  onClick={() => void runSettingsAction("Load", () => loadPreset(item))}
+                >
+                  Load
+                </button>
+              </div>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+
+  // What differs from the scenario the engine holds: each edit, by the field it is in.
+  const changes = useMemo(
+    () =>
+      edits.map((p) => {
+        const f = fields.filter((x) => p === x.pointer || p.startsWith(`${x.pointer}/`)).sort((a, b) => b.pointer.length - a.pointer.length)[0];
+        const sec = f ? fullTree.find((g) => g.subs.some((s) => s.fields.includes(f)))?.name ?? researchSectionOf(f) : null;
+        return { pointer: p, field: f, section: sec, from: getPointer(scenario, p), to: getPointer(draft, p) };
+      }),
+    [edits, fields, fullTree, scenario, draft],
+  );
 
   const staged = extras.staged;
-  const sourceLine =
-    source === "published" ? (
-      <>
-        {fields.length} settings, each with what this engine does with it.
-        {devDetails ? <span className="faint"> From <code>scenario.get {"{with_schema:true}"}</code>.</span> : null}
-      </>
-    ) : source === "schema" ? (
-      <>These {fields.length} fields are the ones this engine published.</>
-    ) : (
-      <>
-        These are the standard scenario fields. This engine did not publish its own list, so it may accept settings
-        that are not shown here, or ignore some that are. Press <b>Check</b> and it will say which.
-      </>
-    );
 
   return (
     <div
       className={detached ? "settings-window detached" : "settings-window"}
       data-testid="settings-window"
       onKeyDown={(e) => {
-        // Ctrl/Cmd + F goes to the search box, as it does in VS Code's settings editor, from
-        // anywhere in the window — the browser's find would search the page, not the settings.
         if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f") {
           e.preventDefault();
           search.current?.focus();
@@ -247,11 +374,10 @@ export function SettingsWindow({
           <input
             ref={search}
             type="search"
-            placeholder={`Search ${fields.length} settings by name, description or path`}
+            placeholder={`Search ${fields.length} settings`}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
-              // A search is a search of the form: the JSON view has nothing to filter.
               setView("form");
             }}
             onKeyDown={(e) => {
@@ -264,67 +390,21 @@ export function SettingsWindow({
             aria-label="Search settings"
           />
           <span className="faint settings-count" data-testid="settings-count" aria-live="polite">
-            {query !== "" || modifiedOnly ? `${shown.length} found` : ""}
+            {filtering ? `${found.length} found` : ""}
           </span>
         </div>
-        <div className="settings-filters" role="group" aria-label="Filters">
-          <button
-            type="button"
-            className={modifiedOnly ? "toggle on" : "toggle"}
-            aria-pressed={modifiedOnly}
-            onClick={() => {
-              setModifiedOnly((v) => !v);
-              setView("form");
-            }}
-            data-testid="settings-modified"
-            title="Only settings this scenario sets away from the default, and your unapplied edits"
-          >
-            Modified <span className="count">{modifiedCount}</span>
-          </button>
-          <button
-            type="button"
-            className={showUnsupported ? "toggle on" : "toggle"}
-            aria-pressed={showUnsupported}
-            onClick={() => {
-              setShowUnsupported((v) => !v);
-              setView("form");
-            }}
-            data-testid="settings-unsupported"
-            title={
-              unsupportedCount === 0
-                ? "Every setting this engine publishes changes the run; there is nothing unsupported to show"
-                : "Also show the settings this engine accepts but does not act on"
-            }
-          >
-            Unsupported <span className="count">{unsupportedCount}</span>
-          </button>
-        </div>
-        {anyLevels ? (
-          <div className="segmented" role="group" aria-label="Which settings">
-            <button
-              type="button"
-              className={level === "basic" ? "on" : ""}
-              aria-pressed={level === "basic"}
-              onClick={() => setLevel("basic")}
-              data-testid="settings-level-basic"
-              title="The settings that decide what a run models, each explained in plain words"
-            >
-              Basic <span className="count">{basicCount}</span>
-            </button>
-            <button
-              type="button"
-              className={level === "advanced" ? "on" : ""}
-              aria-pressed={level === "advanced"}
-              onClick={() => setLevel("advanced")}
-              data-testid="settings-level-advanced"
-              title="Every setting, including model internals, fidelity and developer switches"
-            >
-              Advanced <span className="count">{fields.length}</span>
-            </button>
-          </div>
-        ) : null}
+        <button
+          type="button"
+          className={view === "changes" ? "toggle on" : "toggle"}
+          aria-pressed={view === "changes"}
+          onClick={() => setView((v) => (v === "changes" ? "form" : "changes"))}
+          data-testid="settings-changes"
+          title="What differs from the scenario the engine holds"
+        >
+          Changes <span className="count">{edits.length}</span>
+        </button>
         <div className="segmented" role="group" aria-label="View">
-          <button type="button" className={view === "form" ? "on" : ""} aria-pressed={view === "form"} onClick={() => setView("form")} data-testid="settings-view-form">
+          <button type="button" className={view !== "json" ? "on" : ""} aria-pressed={view !== "json"} onClick={() => setView("form")} data-testid="settings-view-form">
             Form
           </button>
           <button type="button" className={view === "json" ? "on" : ""} aria-pressed={view === "json"} onClick={() => setView("json")} data-testid="settings-view-json">
@@ -332,7 +412,7 @@ export function SettingsWindow({
           </button>
         </div>
         {onDetach ? (
-          <button type="button" className="icon-button" onClick={onDetach} data-testid="settings-detach" title="Open the settings in a browser window of their own" aria-label="Open in a new window">
+          <button type="button" className="icon-button" onClick={onDetach} data-testid="settings-detach" title="Open the settings in a window of their own" aria-label="Open in a new window">
             ⧉
           </button>
         ) : null}
@@ -344,249 +424,171 @@ export function SettingsWindow({
       <div className="settings-body">
         <nav
           className="settings-tree"
-          aria-label="Setting groups"
+          aria-label="Setting sections"
           data-testid="settings-tree"
           onKeyDown={(e) => {
-            // The arrow keys walk the tree, as they do in VS Code's table of contents, so a keyboard
-            // user does not tab through thirty entries to reach the last group.
             if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
             const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(".tree-item"));
             if (items.length === 0) return;
             e.preventDefault();
             const at = items.indexOf(document.activeElement as HTMLElement);
-            const next =
-              e.key === "Home"
-                ? 0
-                : e.key === "End"
-                  ? items.length - 1
-                  : e.key === "ArrowDown"
-                    ? Math.min(items.length - 1, at + 1)
-                    : Math.max(0, at - 1);
+            const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : e.key === "ArrowDown" ? Math.min(items.length - 1, at + 1) : Math.max(0, at - 1);
             items[next]?.focus();
           }}
         >
-          <button
-            type="button"
-            className={active === SCENARIO_SECTION ? "tree-item on" : "tree-item"}
-            onClick={() => {
-              setQuery("");
-              setModifiedOnly(false);
-              jumpTo(SCENARIO_SECTION);
-            }}
-          >
-            Scenario
-          </button>
-          {tree.map((g) => (
-            <div key={g.id} className="tree-group">
+          {fullTree.map((g) => {
+            const n = editedBySection.get(g.id) ?? 0;
+            const hits = filtering ? foundTree.find((x) => x.id === g.id)?.count ?? 0 : null;
+            return (
               <button
+                key={g.id}
                 type="button"
-                className={active === g.id || g.sections.some((s) => s.id === active) ? "tree-item group on" : "tree-item group"}
-                onClick={() => jumpTo(g.id)}
+                className={`tree-item group${!filtering && view === "form" && current?.id === g.id ? " on" : ""}${hits === 0 ? " empty" : ""}`}
+                onClick={() => {
+                  setQuery("");
+                  setModifiedOnly(false);
+                  setView("form");
+                  setActive(g.id);
+                }}
                 data-testid="settings-tree-group"
                 data-group={g.name}
+                title={g.blurb}
               >
                 <span className="grow">{g.name}</span>
-                <span className="count">{g.count}</span>
+                {n > 0 ? <span className="edit-dot" title={`${n} unapplied edit${n === 1 ? "" : "s"}`} /> : null}
+                <span className="count">{hits ?? g.count}</span>
               </button>
-              {g.sections.length > 1
-                ? g.sections.map((s) => (
-                    <button key={s.id} type="button" className={active === s.id ? "tree-item sub on" : "tree-item sub"} onClick={() => jumpTo(s.id)}>
-                      <span className="grow">{s.label}</span>
-                      <span className="count">{s.fields.length}</span>
-                    </button>
-                  ))
-                : null}
-            </div>
-          ))}
+            );
+          })}
+          <div className="tree-filters">
+            <button
+              type="button"
+              className={modifiedOnly ? "toggle on" : "toggle"}
+              aria-pressed={modifiedOnly}
+              onClick={() => {
+                setModifiedOnly((v) => !v);
+                setView("form");
+              }}
+              data-testid="settings-modified"
+              title="Only settings that differ from the engine's default, and your edits"
+            >
+              Not default <span className="count">{modifiedCount}</span>
+            </button>
+            {unsupportedCount > 0 ? (
+              <button
+                type="button"
+                className={showUnsupported ? "toggle on" : "toggle"}
+                aria-pressed={showUnsupported}
+                onClick={() => setShowUnsupported((v) => !v)}
+                data-testid="settings-unsupported"
+                title="Also show settings this engine accepts but does not act on"
+              >
+                Inactive <span className="count">{unsupportedCount}</span>
+              </button>
+            ) : null}
+            <span className="faint source-line" data-testid="schema-source">
+              {source === "published" ? `${fields.length} settings, each with what this engine does with it.` : source === "schema" ? "From the engine's schema." : "Standard fields; press Check to validate."}
+            </span>
+          </div>
         </nav>
 
-        <div className="settings-content" ref={content} onScroll={onScroll} data-testid="scenario-panel">
-          {view === "json" ? (
-            <JsonView />
-          ) : (
-            <>
-              {validation ? (
-                <div className="settings-check">
-                  <span className={`pill ${validation.valid ? "ok" : "err"}`} data-testid="validation-state">
-                    {validation.valid ? "ready to run" : "needs fixing"}
-                  </span>
-                  {validation.valid && validation.warnings.length === 0 ? <span className="help"> The engine accepts these settings.</span> : null}
-                  <ProblemList items={validation.errors} onJump={jumpToField} />
-                  {validation.warnings.length > 0 ? (
-                    <div className="note" data-testid="validation-warn">
-                      {validation.warnings.map((w, i) => (
-                        <div key={i}>
-                          <code>{w.path}</code> — {w.message}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              {/* The scenario's identity and the ready-made list are not settings: a search or a
-                  filter shows the settings it found, first. */}
-              {!filtering ? (
-              <section className="settings-scenario" id={SCENARIO_SECTION} data-section="scenario">
-                <h3>Scenario</h3>
-                <div className={source === "builtin" ? "note" : "note info"} data-testid="schema-source">
-                  {sourceLine}
-                </div>
-                <dl className="kv">
-                  <dt>running</dt>
-                  <dd>{hello?.scenarioName ?? "—"}</dd>
-                  <dt>identity</dt>
-                  <dd>
-                    <Identifier value={scenarioHash} label="scenario digest" testId="scenario-hash" />
-                  </dd>
-                  {outputDigest ? (
-                    <>
-                      <dt>result</dt>
-                      <dd title="A digest of everything the finished run produced. Two runs with the same settings and seed give the same one.">
-                        <Identifier value={outputDigest} label="output digest" testId="output-digest" />
-                      </dd>
-                    </>
-                  ) : null}
-                </dl>
-                {studies.length > 0 ? (
-                  <div className="studies" data-testid="studies">
-                    <div className="dim">What would you like to study? Each sets a coherent group of settings, which you can then adjust:</div>
-                    <div className="study-grid">
-                      {studies.map((st) => (
-                        <button
-                          key={st.id}
-                          type="button"
-                          className="study-card"
-                          data-testid="study"
-                          data-study={st.id}
-                          disabled={busy !== null}
-                          title={st.patch.map((w) => w.path).join(", ")}
-                          onClick={() => {
-                            const s0 = useStudio.getState();
-                            const next = applyPatch(s0.draft ?? s0.scenario, st.patch);
-                            for (const w of st.patch) editSetting(w.pointer, getPointer(next, w.pointer));
-                            s0.setSettingsMessage({
-                              text: `${st.label}: set ${st.patch.length} settings (${st.patch.map((w) => w.path).join(", ")}). ${st.look_at ? `Watch: ${st.look_at} ` : ""}Press Run when ready.`,
-                              tone: "info",
-                            });
-                          }}
-                        >
-                          <b>{st.label}</b>
-                          <span>{st.question}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {presets.length > 0 ? (
-                  <div className="presets" data-testid="presets">
-                    <div className="dim">Start from a ready-made scenario:</div>
-                    <div className="preset-grid">
-                    {presets.map((item) => (
-                      <div key={item.id} className="preset-row">
-                        <span title={item.description}>
-                          {item.name ?? item.id}
-                          {presets.filter((o) => o.name === item.name).length > 1 ? <span className="faint"> ({item.id.split("/").pop()})</span> : null}
-                          {(item as { running?: boolean }).running ? <span className="faint"> (running)</span> : null}
-                          {item.description ? (
-                            <span className="faint preset-row-desc"> — {/^(.+?[.!?])(\s|$)/.exec(item.description.trim())?.[1] ?? item.description}</span>
-                          ) : null}
-                        </span>
-                        <button
-                          type="button"
-                          disabled={busy !== null}
-                          data-testid="preset-load"
-                          data-preset={item.name ?? item.id}
-                          title="Load these settings into the form. The next run uses them."
-                          onClick={() => void runSettingsAction("Load", () => loadPreset(item))}
-                        >
-                          Load
-                        </button>
-                      </div>
-                    ))}
-                    </div>
-                  </div>
-                ) : null}
-              </section>
-              ) : null}
-
-              {tree.length === 0 ? (
-                <p className="dim settings-empty" data-testid="settings-empty">
-                  No setting matches{query !== "" ? ` “${query}”` : ""}
-                  {modifiedOnly ? " among the modified ones" : ""}.
-                  {!showUnsupported && unsupportedCount > 0 ? " Unsupported settings are hidden; turn on Unsupported to search them too." : ""}
-                  {level === "basic" && anyLevels && query.trim() === "" ? " Switch to Advanced to see every setting." : ""}
-                </p>
-              ) : null}
-
-              {tree.map((g) => (
-                <section key={g.id} className="settings-group" aria-labelledby={`${g.id}-h`}>
-                  <h3 id={g.id} data-section="group">
-                    <span id={`${g.id}-h`}>{g.name}</span>
-                  </h3>
-                  {g.description ? <p className="help group-blurb">{g.description}</p> : null}
-                  {g.sections.map((s) => (
-                    <div key={s.id} className="settings-section">
-                      {g.sections.length > 1 ? (
-                        <h4 id={s.id} data-section="section">
-                          {s.label}
-                        </h4>
-                      ) : null}
-                      {s.fields.map((f: Field) => (
-                        <SettingRow
-                          key={f.pointer}
-                          field={f}
-                          sectionKey={s.key}
-                          value={getPointer(draft, f.pointer)}
-                          edited={isEdited(f, edits)}
-                          modified={isModified(f, getPointer(draft, f.pointer))}
-                          errors={problems.byPointer.get(f.pointer)}
-                          devDetails={devDetails}
-                          durationS={f.pointer === "/events" ? durationS : undefined}
-                          canPick={!detached}
-                          onEdit={editSetting}
-                          onUndo={undoEdit}
-                        />
-                      ))}
+        <div className="settings-content" ref={content} data-testid="scenario-panel">
+          {validation && (!validation.valid || validation.warnings.length > 0) ? (
+            <div className="settings-check">
+              <span className={`pill ${validation.valid ? "ok" : "err"}`} data-testid="validation-state">
+                {validation.valid ? "ready to run" : "needs fixing"}
+              </span>
+              <ProblemList items={validation.errors} onJump={jumpToField} />
+              {validation.warnings.length > 0 ? (
+                <div className="note" data-testid="validation-warn">
+                  {validation.warnings.map((w, i) => (
+                    <div key={i}>
+                      <code>{w.path}</code> {w.message}
                     </div>
                   ))}
-                </section>
+                </div>
+              ) : null}
+            </div>
+          ) : validation ? (
+            <span className="pill ok settings-ok" data-testid="validation-state">
+              ready to run
+            </span>
+          ) : null}
+
+          {view === "json" ? (
+            <JsonView />
+          ) : view === "changes" ? (
+            <section className="settings-group" data-testid="settings-changes-list">
+              <div className="section-head">
+                <h3>Changes</h3>
+                <span className="faint">What differs from the scenario the engine holds.</span>
+              </div>
+              {changes.length === 0 ? <p className="dim">No changes. Edit a setting and it is listed here.</p> : null}
+              {changes.map((c) => (
+                <div key={c.pointer} className="change-row" data-testid="change-row">
+                  <button type="button" className="linkbutton change-name" onClick={() => jumpToField(c.pointer)} title={c.field ? fieldPath(c.field) : c.pointer}>
+                    {c.section ? <span className="faint">{c.section} › </span> : null}
+                    {c.field?.label ?? c.pointer}
+                  </button>
+                  <code className="change-from">{describeValue(c.from)}</code>
+                  <span className="faint">→</span>
+                  <code className="change-to">{describeValue(c.to)}</code>
+                  <button type="button" className="icon-button tiny" onClick={() => undoEdit(c.pointer)} title="Undo this change" aria-label="Undo this change">
+                    ↶
+                  </button>
+                </div>
               ))}
-            </>
+            </section>
+          ) : filtering ? (
+            foundTree.length === 0 ? (
+              <p className="dim settings-empty" data-testid="settings-empty">
+                No setting matches{query !== "" ? ` “${query}”` : ""}
+                {modifiedOnly ? " among those not at their default" : ""}.
+                {!showUnsupported && unsupportedCount > 0 ? " Inactive settings are hidden." : ""}
+              </p>
+            ) : (
+              foundTree.map((g) => (
+                <section key={g.id} className="settings-group" data-testid="settings-section" data-section-id={g.id}>
+                  <div className="section-head">
+                    <h3>{g.name}</h3>
+                  </div>
+                  {subsOf(g, () => true)}
+                </section>
+              ))
+            )
+          ) : current ? (
+            sectionPage(current)
+          ) : (
+            <p className="dim settings-empty" data-testid="settings-empty">
+              This engine published no settings.
+            </p>
           )}
         </div>
       </div>
 
       <div className="settings-foot">
         <div className="settings-foot-text">
-          {staged ? (
-            <div className="note warn-note" data-testid="staged-note">
-              {staged.changed.length} setting{staged.changed.length === 1 ? "" : "s"} applied and waiting for the next run
-              <span className="faint">: {staged.changed.slice(0, 4).join(", ")}{staged.changed.length > 4 ? ", …" : ""}</span>.{" "}
-              <button
-                type="button"
-                className="linkbutton"
-                disabled={busy !== null}
-                data-testid="unstage"
-                title="Forget the applied settings; the next run uses the scenario on screen now"
-                onClick={() => void runSettingsAction("Revert", revertStaged)}
-              >
-                Revert to the running scenario
-              </button>
-            </div>
-          ) : null}
           {dirty ? (
             <div className="dim" data-testid="edit-route">
-              {edits.length} unapplied edit{edits.length === 1 ? "" : "s"}.{" "}
+              {edits.length} unapplied change{edits.length === 1 ? "" : "s"}.
               {inert.length > 0 ? (
                 <span className="err-text" data-testid="inert-edits">
-                  {inert.length === 1 ? "One edit changes" : `${inert.length} edits change`} nothing in this build:{" "}
-                  {inert.map((f) => f.label).join(", ")}.
+                  {" "}
+                  No effect in this build: {inert.map((f) => f.label).join(", ")}.
                 </span>
               ) : null}
             </div>
           ) : null}
+          {staged ? (
+            <div className="dim" data-testid="staged-note">
+              {staged.changed.length} applied setting{staged.changed.length === 1 ? "" : "s"} wait for the next run.{" "}
+              <button type="button" className="linkbutton" disabled={busy !== null} data-testid="unstage" onClick={() => void runSettingsAction("Revert", revertStaged)}>
+                Revert
+              </button>
+            </div>
+          ) : null}
           {message ? (
-            <div className={`settings-message ${message.tone === "err" ? "err-text" : ""}`} data-testid="scenario-message" role="status">
+            <div className={`settings-message ${message.tone === "err" ? "err-text" : "dim"}`} data-testid="scenario-message" role="status">
               {message.text}
               {message.tone !== "err" && message.text.startsWith(RESTART_NOTE) ? (
                 <>
@@ -597,31 +599,13 @@ export function SettingsWindow({
             </div>
           ) : null}
         </div>
-        <button
-          type="button"
-          disabled={busy !== null}
-          data-testid="validate"
-          title="Ask the engine whether it accepts these settings, without changing anything"
-          onClick={() => void runSettingsAction("Check", checkDraft)}
-        >
+        <button type="button" disabled={busy !== null} data-testid="validate" title="Ask the engine whether it accepts these settings" onClick={() => void runSettingsAction("Check", checkDraft)}>
           {busy === "Check" ? "Checking…" : "Check"}
         </button>
-        <button
-          type="button"
-          disabled={busy !== null || !dirty}
-          title="Put every setting back to what the engine holds"
-          onClick={discardEdits}
-          data-testid="discard-edits"
-        >
+        <button type="button" disabled={busy !== null || !dirty} title="Drop every unapplied change" onClick={discardEdits} data-testid="discard-edits">
           Discard
         </button>
-        <button
-          type="button"
-          disabled={busy !== null || !dirty}
-          data-testid="apply"
-          title="Send the edited settings to the engine. The next run uses them."
-          onClick={() => void runSettingsAction("Apply", applyDraft)}
-        >
+        <button type="button" disabled={busy !== null || !dirty} data-testid="apply" title="Send the changes to the engine; the next run uses them" onClick={() => void runSettingsAction("Apply", applyDraft)}>
           {busy === "Apply" ? "Applying…" : "Apply"}
         </button>
         <button
@@ -629,11 +613,10 @@ export function SettingsWindow({
           className="primary"
           disabled={busy !== null}
           data-testid="run-start"
-          title={dirty ? "Apply your edits and start a run with them" : "Start the scenario from the beginning"}
+          title={dirty ? "Apply the changes and start a run" : "Start the scenario from the beginning"}
           onClick={() =>
             void runSettingsAction("Run", async () => {
               const said = await runWithDraft();
-              // You press Run to watch the run: the window gets out of the way when it has started.
               if (!detached) onClose();
               return said;
             })
