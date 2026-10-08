@@ -4826,13 +4826,11 @@ impl Engine {
     /// for exactly as long as the medium is occupied, and the events cost one per waiting
     /// node per in-flight frame rather than one per node per frame.
     ///
-    /// What it does not model is the *capture* side of carrier sense: a node that starts
-    /// transmitting in the same nanosecond as another cannot have sensed it, and the
-    /// engine does not compute the transmitter-to-transmitter link budget that would tell
-    /// a receiver whether a collider was hidden. Every collision is therefore reported as
-    /// [`LossCause::Collision`] and never as [`LossCause::HiddenTerminal`]; the
-    /// distinction is the high tier's, and the `audible_to_victim_tx` field the PHY takes
-    /// for it is the seam.
+    /// Hidden terminals are told apart from plain collisions when the frames' interference
+    /// is declared (`on_phy_start`): the frame that started later was sent by a node whose
+    /// carrier sense heard the earlier one below the CCA threshold, or not at all, and the
+    /// loss is then [`LossCause::HiddenTerminal`]. Two frames that start in the same
+    /// nanosecond (equal backoff expiry) stay a plain [`LossCause::Collision`].
     fn on_mac_timer(&mut self, node: NodeId, channel: ChannelId, horizon: SimTime) {
         if self.sidelink.is_some() {
             self.on_sidelink_timer(node, horizon);
@@ -5485,6 +5483,26 @@ impl Engine {
         // `(receiver, interferer to add, the attempt it is added to)`.
         let mut overlaps: Vec<(NodeId, InterferenceSource, RxHandle)> = Vec::new();
         let tx_id = state.tx_id();
+        // Hidden or not (04-models.md §4.8): of two overlapping frames, the one that
+        // started later was put on the air by a node whose carrier sense should have held
+        // it. If the earlier frame reached that node below the CCA threshold — or not at
+        // all — the collision is a hidden terminal, which CSMA cannot prevent; otherwise
+        // it is a plain collision (equal backoff expiry, or the sensing-slot gap). Frames
+        // that start in the same nanosecond could not have sensed each other either way,
+        // and stay undetermined (a plain collision).
+        let cca_dbm = self.phy.cca_config().cca_threshold_dbm();
+        let power_at = |f: &FrameState, n: NodeId| -> Option<f64> {
+            f.arrivals
+                .get(&n)
+                .map(|&(p, _)| p)
+                .or_else(|| f.faint.get(&n).copied())
+        };
+        let audible = |earlier: &FrameState, later: &FrameState| -> Option<bool> {
+            if earlier.start == later.start {
+                return None;
+            }
+            Some(power_at(earlier, later.tx).is_some_and(|p| p >= cca_dbm))
+        };
         let receivers: std::collections::BTreeSet<NodeId> = state
             .arrivals
             .keys()
@@ -5517,19 +5535,21 @@ impl Engine {
                 let Some((o_power, o_attempt)) = theirs else {
                     continue;
                 };
+                let heard = if o.start <= state.start {
+                    audible(o, &state)
+                } else {
+                    audible(&state, o)
+                };
                 if my_attempt {
-                    overlaps.push((
-                        rx,
-                        InterferenceSource::new(o.tx, o_power, o.start, o.end),
-                        RxHandle { tx: tx_id, rx },
-                    ));
+                    let mut source = InterferenceSource::new(o.tx, o_power, o.start, o.end);
+                    source.audible_to_victim_tx = heard;
+                    overlaps.push((rx, source, RxHandle { tx: tx_id, rx }));
                 }
                 if o_attempt {
-                    overlaps.push((
-                        rx,
-                        InterferenceSource::new(state.tx, my_power, state.start, state.end),
-                        RxHandle { tx: o.tx_id(), rx },
-                    ));
+                    let mut source =
+                        InterferenceSource::new(state.tx, my_power, state.start, state.end);
+                    source.audible_to_victim_tx = heard;
+                    overlaps.push((rx, source, RxHandle { tx: o.tx_id(), rx }));
                 }
             }
         }

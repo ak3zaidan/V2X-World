@@ -520,6 +520,121 @@ pub static BOUNDS: &[Bound] = &[
     },
     // The 5.9 GHz ITS band's IEEE channel numbers, 5.850-5.925 GHz: 170 to 184. Which of
     // them a technology may use is the region's rule, checked separately.
+    // Free space is 2; measured V2V street slopes run 1.6-4 (Abbas 2015 Table II), and 6 is beyond any published fit.
+    Bound {
+        path: "radio.tuning.channel.path_loss_exponent",
+        lo: 1.5,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the path-loss exponent",
+    },
+    // Measured V2V σ is 3-6 dB (TR 36.885, Abbas 2015); 12 dB covers the harshest macro-cell fits.
+    Bound {
+        path: "radio.tuning.channel.shadowing_sigma_db",
+        lo: 0.0,
+        hi: 12.0,
+        exclusive_lo: false,
+        what: "the shadowing σ",
+    },
+    Bound {
+        path: "radio.tuning.channel.shadowing_decorrelation_m",
+        lo: 0.0,
+        hi: 1000.0,
+        exclusive_lo: true,
+        what: "the shadowing decorrelation distance",
+    },
+    // m >= 0.5 is the Nakagami domain (Nakagami 1960); above 20 the channel is indistinguishable from no fading.
+    Bound {
+        path: "radio.tuning.channel.nakagami_shape",
+        lo: 0.5,
+        hi: 20.0,
+        exclusive_lo: false,
+        what: "the Nakagami m",
+    },
+    Bound {
+        path: "radio.tuning.channel.nakagami_shape_far",
+        lo: 0.5,
+        hi: 20.0,
+        exclusive_lo: false,
+        what: "the far Nakagami m",
+    },
+    Bound {
+        path: "radio.tuning.channel.nakagami_breakpoint_m",
+        lo: 0.0,
+        hi: 5000.0,
+        exclusive_lo: true,
+        what: "the Nakagami breakpoint",
+    },
+    // Sommer 2011's fitted rows run 2.4-9.6 dB per wall; 40 dB is a reinforced-concrete ceiling.
+    Bound {
+        path: "radio.tuning.channel.building_wall_loss_db",
+        lo: 0.0,
+        hi: 40.0,
+        exclusive_lo: false,
+        what: "the per-wall building loss",
+    },
+    // Sommer 2011's fitted rows run 0.10-0.63 dB/m.
+    Bound {
+        path: "radio.tuning.channel.building_loss_db_per_m",
+        lo: 0.0,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the per-metre building loss",
+    },
+    // 6 dB automotive (EN 302 663), 9 dB a 3GPP UE (TR 37.885); 20 dB is a failing front end.
+    Bound {
+        path: "radio.tuning.receiver.noise_figure_db",
+        lo: 0.0,
+        hi: 20.0,
+        exclusive_lo: false,
+        what: "the receiver noise figure",
+    },
+    // Below the -98 dBm noise floor nothing is sensed; -65 dBm (Veins) to -85 dBm (ETSI) are the published defaults.
+    Bound {
+        path: "radio.tuning.receiver.carrier_sense_dbm",
+        lo: -100.0,
+        hi: -40.0,
+        exclusive_lo: false,
+        what: "the carrier-sense threshold",
+    },
+    // Torrent-Moreno 2009 used 4-10 dB.
+    Bound {
+        path: "radio.tuning.receiver.capture_threshold_db",
+        lo: 0.0,
+        hi: 30.0,
+        exclusive_lo: false,
+        what: "the capture threshold",
+    },
+    // TS 36.213 §14.1.1.6 / TS 36.331 SL-ThresPSSCH-RSRP: -128 dBm to 0 dBm in 2 dB steps.
+    Bound {
+        path: "radio.tuning.sidelink.rsrp_threshold_dbm",
+        lo: -128.0,
+        hi: 0.0,
+        exclusive_lo: false,
+        what: "the RSRP exclusion threshold",
+    },
+    Bound {
+        path: "radio.tuning.sidelink.candidate_percent",
+        lo: 20.0,
+        hi: 50.0,
+        exclusive_lo: false,
+        what: "the candidate percentage",
+    },
+    Bound {
+        path: "radio.tuning.sidelink.keep_probability",
+        lo: 0.0,
+        hi: 0.8,
+        exclusive_lo: false,
+        what: "probResourceKeep",
+    },
+    // TS 36.213 §14.1.1.6: T2 in [20, 100] ms on LTE; TS 38.214 §8.1.4: up to the 100 ms packet delay budget on NR.
+    Bound {
+        path: "radio.tuning.sidelink.selection_window_ms",
+        lo: 1.0,
+        hi: 100.0,
+        exclusive_lo: false,
+        what: "the selection window end T2",
+    },
     Bound {
         path: "radio.channel",
         lo: 170.0,
@@ -1149,6 +1264,25 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                ratio, and sends a BSM early and at full power on hard braking or when \
                its neighbours' coasted estimate of it drifts 0.2-0.5 m; each BSM is \
                staggered by 0-5 ms. Unknown families, ids and values are refused.",
+    },
+    KeyStatus {
+        path: "radio.tuning",
+        status: Status::Wired,
+        note: "Overrides one cited constant of the radio model the run composes; unset \
+               keeps the model's own. channel: path_loss_exponent (the log-distance law, \
+               one slope), shadowing_sigma_db and shadowing_decorrelation_m (every law \
+               with shadowing: log-distance, tr37885, v2v-urban-geometric, \
+               winner-plus-b1), nakagami_shape / nakagami_shape_far / \
+               nakagami_breakpoint_m (turns Nakagami fading on; 802.11p, or a sidelink \
+               whose radio.models.fading names nakagami-m), building_wall_loss_db and \
+               building_loss_db_per_m (the Sommer 2011 β and γ, wherever buildings are \
+               charged), vehicle_blockage (TR 37.885 NLOSv under any law, or off). \
+               receiver (802.11p): noise_figure_db, carrier_sense_dbm (the CCA \
+               decision; the CBR keeps -85 dBm), capture_threshold_db (the hard capture \
+               rule). sidelink (LTE-V2X, NR-V2X): sensing, rsrp_threshold_dbm, \
+               candidate_percent (20; 35 or 50 on NR), keep_probability (0-0.8 in 0.2 \
+               steps), selection_window_ms (T2). An override the chosen law or \
+               technology would ignore is refused.",
     },
     KeyStatus {
         path: "radio.devices",
@@ -2163,6 +2297,232 @@ fn unreachable_keys(s: &Scenario, e: &mut Vec<ScenarioError>) {
     }
 }
 
+/// `radio.tuning`: the ranges, the legal value sets, and every override the run's law or
+/// technology would ignore — a setting that changes nothing is refused rather than
+/// silently accepted.
+fn radio_tuning(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    use crate::scenario::schema::Rat;
+    use crate::wiring::{FadingChoice, PropagationChoice};
+    let t = &s.radio.tuning;
+    let c = &t.channel;
+    for (leaf, v) in [
+        ("path_loss_exponent", c.path_loss_exponent),
+        ("shadowing_sigma_db", c.shadowing_sigma_db),
+        ("shadowing_decorrelation_m", c.shadowing_decorrelation_m),
+        ("nakagami_shape", c.nakagami_shape),
+        ("nakagami_shape_far", c.nakagami_shape_far),
+        ("nakagami_breakpoint_m", c.nakagami_breakpoint_m),
+        ("building_wall_loss_db", c.building_wall_loss_db),
+        ("building_loss_db_per_m", c.building_loss_db_per_m),
+    ] {
+        if let Some(v) = v {
+            let path = format!("radio.tuning.channel.{leaf}");
+            bounded_at(&path, &path, v, e);
+        }
+    }
+    let r = &t.receiver;
+    for (leaf, v) in [
+        ("noise_figure_db", r.noise_figure_db),
+        ("carrier_sense_dbm", r.carrier_sense_dbm),
+        ("capture_threshold_db", r.capture_threshold_db),
+    ] {
+        if let Some(v) = v {
+            let path = format!("radio.tuning.receiver.{leaf}");
+            bounded_at(&path, &path, v, e);
+        }
+    }
+    let sl = &t.sidelink;
+    for (leaf, v) in [
+        ("rsrp_threshold_dbm", sl.rsrp_threshold_dbm),
+        ("candidate_percent", sl.candidate_percent.map(f64::from)),
+        ("keep_probability", sl.keep_probability),
+        ("selection_window_ms", sl.selection_window_ms.map(f64::from)),
+    ] {
+        if let Some(v) = v {
+            let path = format!("radio.tuning.sidelink.{leaf}");
+            bounded_at(&path, &path, v, e);
+        }
+    }
+
+    let tier = s.radio.tiers.propagation;
+    let law = crate::wiring::propagation_choice_at(s, tier);
+    let models = crate::wiring::radio_models(s).unwrap_or_default();
+    let abstract_tier = tier == v2xw_core::card::Tier::Abstract;
+    let dsrc = s.radio.rat == Rat::Dsrc80211p;
+    let sidelink = matches!(s.radio.rat, Rat::LteV2xPc5 | Rat::NrV2xPc5);
+    let law_name = match law {
+        PropagationChoice::FreeSpace => "propagation/free-space",
+        PropagationChoice::TwoRayGround => "propagation/two-ray-ground",
+        PropagationChoice::LogDistance(_) => "propagation/log-distance-shadowing",
+        PropagationChoice::Tr37885 => "propagation/tr37885",
+        PropagationChoice::Geometric => "propagation/v2v-urban-geometric",
+        PropagationChoice::WinnerB1 => "propagation/winner-plus-b1",
+    };
+
+    if c.path_loss_exponent.is_some() && !matches!(law, PropagationChoice::LogDistance(_)) {
+        e.push(conflict(
+            "radio.tuning.channel.path_loss_exponent",
+            format!(
+                "sets the log-distance law's slope, and this run's law is {law_name}, which \
+                 has its own; choose radio.models.propagation \
+                 propagation/log-distance-shadowing or the medium propagation tier"
+            ),
+        ));
+    }
+    let no_shadow = matches!(
+        law,
+        PropagationChoice::FreeSpace | PropagationChoice::TwoRayGround
+    );
+    for (leaf, set) in [
+        ("shadowing_sigma_db", c.shadowing_sigma_db.is_some()),
+        ("shadowing_decorrelation_m", c.shadowing_decorrelation_m.is_some()),
+    ] {
+        if set && no_shadow {
+            e.push(conflict(
+                &format!("radio.tuning.channel.{leaf}"),
+                format!("tunes shadowing, and {law_name} is a deterministic law with none"),
+            ));
+        }
+    }
+    if c.nakagami_shape.is_none()
+        && (c.nakagami_shape_far.is_some() || c.nakagami_breakpoint_m.is_some())
+    {
+        e.push(conflict(
+            "radio.tuning.channel.nakagami_shape",
+            "is unset, and nakagami_shape_far or nakagami_breakpoint_m needs it: the near \
+             m is the one below the breakpoint"
+                .to_string(),
+        ));
+    }
+    if c.nakagami_shape_far.is_some() != c.nakagami_breakpoint_m.is_some() {
+        e.push(conflict(
+            "radio.tuning.channel.nakagami_breakpoint_m",
+            "and nakagami_shape_far go together: a distance-dependent channel needs both \
+             the far m and where it starts"
+                .to_string(),
+        ));
+    }
+    if c.nakagami_shape.is_some() {
+        let why = if abstract_tier {
+            Some("the abstract propagation tier draws no fading".to_string())
+        } else if models.fading == Some(FadingChoice::None) {
+            Some("radio.models.fading is fading/none".to_string())
+        } else if sidelink && models.fading.is_none() {
+            Some(
+                "a sidelink's block-error curves already include the fading they were \
+                 simulated over, so a sidelink run draws none; name fading/nakagami-m in \
+                 radio.models.fading to add it anyway"
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            e.push(conflict(
+                "radio.tuning.channel.nakagami_shape",
+                format!("would change nothing: {why}"),
+            ));
+        }
+    }
+    let buildings_charged = !matches!(law, PropagationChoice::Tr37885);
+    for (leaf, set) in [
+        ("building_wall_loss_db", c.building_wall_loss_db.is_some()),
+        ("building_loss_db_per_m", c.building_loss_db_per_m.is_some()),
+    ] {
+        if !set {
+            continue;
+        }
+        let why = if abstract_tier {
+            Some("the abstract propagation tier composes no obstacle".to_string())
+        } else if !s.world.buildings.enabled {
+            Some("world.buildings.enabled is false".to_string())
+        } else if !buildings_charged {
+            Some(format!(
+                "{law_name} prices a building-blocked link with its own NLOS law, not the \
+                 Sommer term"
+            ))
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            e.push(conflict(
+                &format!("radio.tuning.channel.{leaf}"),
+                format!("would change nothing: {why}"),
+            ));
+        }
+    }
+    if c.vehicle_blockage.is_some() && abstract_tier {
+        e.push(conflict(
+            "radio.tuning.channel.vehicle_blockage",
+            "would change nothing: the abstract propagation tier composes no obstacle"
+                .to_string(),
+        ));
+    }
+
+    if !dsrc {
+        for (leaf, set) in [
+            ("noise_figure_db", r.noise_figure_db.is_some()),
+            ("carrier_sense_dbm", r.carrier_sense_dbm.is_some()),
+            ("capture_threshold_db", r.capture_threshold_db.is_some()),
+        ] {
+            if set {
+                e.push(conflict(
+                    &format!("radio.tuning.receiver.{leaf}"),
+                    "tunes the 802.11p receiver, and radio.rat is not dsrc-80211p".to_string(),
+                ));
+            }
+        }
+    }
+    if r.carrier_sense_dbm.is_some() && s.radio.tiers.mac == v2xw_core::card::Tier::Abstract {
+        e.push(conflict(
+            "radio.tuning.receiver.carrier_sense_dbm",
+            "would change nothing: the abstract MAC tier runs no carrier sense".to_string(),
+        ));
+    }
+
+    if !sl.is_default() && !sidelink {
+        e.push(conflict(
+            "radio.tuning.sidelink",
+            "tunes C-V2X resource selection, and radio.rat is not lte-v2x-pc5 or \
+             nr-v2x-pc5"
+                .to_string(),
+        ));
+    }
+    let lte = s.radio.rat == Rat::LteV2xPc5;
+    if let Some(p) = sl.candidate_percent {
+        if !matches!(p, 20 | 35 | 50) {
+            e.push(conflict(
+                "radio.tuning.sidelink.candidate_percent",
+                format!("{p} is not one of 20, 35, 50 (TS 38.331 sl-TxPercentageList)"),
+            ));
+        } else if lte && p != 20 {
+            e.push(conflict(
+                "radio.tuning.sidelink.candidate_percent",
+                format!(
+                    "{p} % is NR-only: LTE-V2X fixes it at 20 % (TS 36.213 §14.1.1.6 step 7)"
+                ),
+            ));
+        }
+    }
+    if let Some(k) = sl.keep_probability
+        && v2xw_radio::ProbResourceKeep::from_probability(k).is_none()
+    {
+        e.push(conflict(
+            "radio.tuning.sidelink.keep_probability",
+            format!("{k} is not one of 0, 0.2, 0.4, 0.6, 0.8 (TS 36.331 probResourceKeep-r14)"),
+        ));
+    }
+    if let Some(ms) = sl.selection_window_ms
+        && lte
+        && ms < 20
+    {
+        e.push(conflict(
+            "radio.tuning.sidelink.selection_window_ms",
+            format!("{ms} ms is under LTE's 20 ms minimum T2 (TS 36.213 §14.1.1.6)"),
+        ));
+    }
+}
+
 fn conflict(field: &str, conflict: String) -> ScenarioError {
     ScenarioError::conflict(field, conflict)
 }
@@ -3046,6 +3406,7 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
             e.push(conflict(&path, why));
         }
     }
+    radio_tuning(s, e);
 
     // `hybrid` names two radios on one node and a policy choosing between them per
     // message. `v2xw_radio::hybrid` has the selector; nothing states the policy, so the

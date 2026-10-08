@@ -28,10 +28,11 @@
 //!
 //! # What cannot match
 //!
-//! All three studies used WINNER+ B1, which this workspace ships only as a shaped stand-in
-//! whose coefficients are `todo-calibrate` (`ChannelModel::WinnerB1ShapedTodoCalibrate`);
-//! the sweep is also run on the fully cited TR 37.885 highway-LOS channel so the size of
-//! the channel's contribution is visible. The harness's ring has 3 lanes per direction
+//! All three studies used WINNER+ B1. It now ships (`propagation/winner-plus-b1`,
+//! `ChannelModel::WinnerPlusB1`, with the effective antenna heights `h' = h − 1 m`); the
+//! earlier shaped stand-in (`ChannelModel::WinnerB1ShapedTodoCalibrate`, breakpoint from
+//! the real heights) and the TR 37.885 highway-LOS channel are still run beside it so the
+//! size of the channel's contribution stays visible. The harness's ring has 3 lanes per direction
 //! where Veins used 2.
 
 use v2xw_core::time::Duration;
@@ -162,6 +163,18 @@ fn compare(reference: Reference, report: &SweepReport) -> Comparison {
 
 /// Runs every comparison. `quick` shortens each sweep to 1 s after 1 s of warm-up.
 pub fn run_all(quick: bool) -> Vec<Comparison> {
+    run_channels(
+        quick,
+        &[
+            ChannelModel::WinnerPlusB1,
+            ChannelModel::WinnerB1ShapedTodoCalibrate,
+            ChannelModel::Tr37885HighwayLos,
+        ],
+    )
+}
+
+/// Runs every comparison on the given channels.
+pub fn run_channels(quick: bool, channels: &[ChannelModel]) -> Vec<Comparison> {
     let dur = |s: HighwaySweep| {
         if quick {
             s.with_duration(Duration::from_secs(1), Duration::from_secs(1))
@@ -170,10 +183,7 @@ pub fn run_all(quick: bool) -> Vec<Comparison> {
         }
     };
     let mut out = Vec::new();
-    for channel in [
-        ChannelModel::WinnerB1ShapedTodoCalibrate,
-        ChannelModel::Tr37885HighwayLos,
-    ] {
+    for &channel in channels {
         // Veins: 60 veh/km, 10 Hz, 190 B, 23 dBm, 6 Mbit/s.
         let mut s = HighwaySweep::highway_fast(10).with_channel(channel);
         s.payload_cycle = vec![190];
@@ -244,4 +254,21 @@ pub fn markdown(rows: &[Comparison]) -> String {
         }
     }
     s
+}
+
+#[cfg(test)]
+mod winner_tests {
+    use super::*;
+
+    /// The three studies on the channel they ran on. A measurement, not a gate: run with
+    /// `cargo test -p v2xw-interop winner -- --ignored --nocapture` and read the tables.
+    #[test]
+    #[ignore = "measurement: a few minutes in a debug build"]
+    fn the_studies_on_winner_plus_b1() {
+        let rows = run_channels(false, &[ChannelModel::WinnerPlusB1]);
+        println!("{}", markdown(&rows));
+        for r in &rows {
+            assert!(r.mad.is_some(), "{} measured nothing", r.reference.name);
+        }
+    }
 }

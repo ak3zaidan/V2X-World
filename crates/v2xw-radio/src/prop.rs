@@ -1186,6 +1186,11 @@ pub struct LogDistanceShadowing {
     env: EnvClass,
     d_corr_m: f64,
     sommer: Option<SommerCoefficients>,
+    /// A caller-chosen single path-loss exponent replacing both slopes of the preset
+    /// (`radio.tuning.channel.path_loss_exponent`): the classic one-slope log-distance law
+    /// of ns-3's `LogDistancePropagationLossModel`, anchored at the preset's `PL0`.
+    exponent: Option<f64>,
+    shadowing: crate::tuning::ShadowingOverride,
     shadows: BTreeMap<(u32, u32), ShadowProcess>,
 }
 
@@ -1207,8 +1212,28 @@ impl LogDistanceShadowing {
             // what every tier of 04-models.md §3 composes. See the type's own
             // documentation and [`crate::budget::evaluate`].
             sommer: None,
+            exponent: None,
+            shadowing: crate::tuning::ShadowingOverride::NONE,
             shadows: BTreeMap::new(),
         }
+    }
+
+    /// The same model with one path-loss exponent over the whole range in place of the
+    /// preset's two slopes.
+    #[must_use]
+    pub fn with_exponent(mut self, n: f64) -> Self {
+        self.exponent = Some(n);
+        self
+    }
+
+    /// The same model with its shadowing σ and decorrelation distance overridden.
+    #[must_use]
+    pub fn with_shadowing(mut self, o: crate::tuning::ShadowingOverride) -> Self {
+        if let Some(d) = o.d_corr_m {
+            self.d_corr_m = d;
+        }
+        self.shadowing = o;
+        self
     }
 
     /// The model choosing its preset per link from the environment class and whether a
@@ -1287,11 +1312,17 @@ impl LogDistanceShadowing {
 
     /// The parameters in force for one call.
     fn params_for(&self, los: &LosResult) -> DualSlope {
-        if self.auto_preset {
+        let mut p = if self.auto_preset {
             LogDistancePreset::for_environment(self.env, los.class.has_vehicle()).params()
         } else {
             self.preset.params()
+        };
+        if let Some(n) = self.exponent {
+            p.n1 = None;
+            p.n2 = n;
         }
+        p.sigma_db = self.shadowing.sigma(p.sigma_db);
+        p
     }
 }
 
@@ -1855,6 +1886,7 @@ pub struct Tr37885 {
     /// update].
     restate_interval: Duration,
     d_corr_m: f64,
+    shadowing: crate::tuning::ShadowingOverride,
     links: BTreeMap<(u32, u32), LinkState>,
 }
 
@@ -1875,8 +1907,20 @@ impl Tr37885 {
             env,
             restate_interval: Self::RESTATE_INTERVAL,
             d_corr_m: decorrelation_distance_m(env),
+            shadowing: crate::tuning::ShadowingOverride::NONE,
             links: BTreeMap::new(),
         }
+    }
+
+    /// The same model with its shadowing σ (every state) and decorrelation distance
+    /// overridden.
+    #[must_use]
+    pub fn with_shadowing(mut self, o: crate::tuning::ShadowingOverride) -> Self {
+        if let Some(d) = o.d_corr_m {
+            self.d_corr_m = d;
+        }
+        self.shadowing = o;
+        self
     }
 
     /// Whether this environment uses the urban or the highway formulas and LOS
@@ -2007,7 +2051,7 @@ impl<C: Ctx + ?Sized> Propagation<C> for Tr37885 {
         let state = self.link_state(ctx, link, d3d, los);
         let fc_ghz = f_hz / 1e9;
         let path = self.path_loss_db(state, d3d, fc_ghz);
-        let sigma = tr37885_sigma_db(state);
+        let sigma = self.shadowing.sigma(tr37885_sigma_db(state));
         let draw = ctx
             .rng(RngDomain::Shadow, EntityRef::Link(link))
             .normal(0.0, 1.0);
@@ -2282,6 +2326,7 @@ pub struct GeometricUrbanV2v {
     env: EnvClass,
     d_corr_m: f64,
     sommer: SommerCoefficients,
+    shadowing: crate::tuning::ShadowingOverride,
     shadows: BTreeMap<(u32, u32), ShadowProcess>,
 }
 
@@ -2298,6 +2343,7 @@ impl GeometricUrbanV2v {
             env,
             d_corr_m: decorrelation_distance_m(env),
             sommer: SommerCoefficients::DEFAULT,
+            shadowing: crate::tuning::ShadowingOverride::NONE,
             shadows: BTreeMap::new(),
         }
     }
@@ -2306,6 +2352,17 @@ impl GeometricUrbanV2v {
     #[must_use]
     pub fn with_building_coefficients(mut self, c: SommerCoefficients) -> Self {
         self.sommer = c;
+        self
+    }
+
+    /// The same model with its shadowing σ (every state) and decorrelation distance
+    /// overridden.
+    #[must_use]
+    pub fn with_shadowing(mut self, o: crate::tuning::ShadowingOverride) -> Self {
+        if let Some(d) = o.d_corr_m {
+            self.d_corr_m = d;
+        }
+        self.shadowing = o;
         self
     }
 
@@ -2412,7 +2469,13 @@ impl<C: Ctx + ?Sized> Propagation<C> for GeometricUrbanV2v {
             .shadows
             .entry((tx.node.index(), rx.node.index()))
             .or_default()
-            .update(tx.pos, rx.pos, state.sigma_db(), self.d_corr_m, draw);
+            .update(
+                tx.pos,
+                rx.pos,
+                self.shadowing.sigma(state.sigma_db()),
+                self.d_corr_m,
+                draw,
+            );
         LossBreakdown::new(
             los_db,
             shadow,

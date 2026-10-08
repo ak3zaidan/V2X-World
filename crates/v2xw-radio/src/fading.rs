@@ -127,6 +127,9 @@ impl NakagamiPreset {
 pub struct NakagamiFading {
     card: ModelCard,
     preset: NakagamiPreset,
+    /// A caller-chosen shape profile replacing the preset's, when a study sets one
+    /// (`radio.tuning.channel.nakagami_m`).
+    profile: Option<crate::tuning::NakagamiProfile>,
     /// `Ω`, the mean power gain. One, so the fading is a 0 dB-mean multiplicative gain
     /// and the link budget's path loss is not silently rescaled by it.
     omega: f64,
@@ -142,6 +145,7 @@ impl NakagamiFading {
         Self {
             card: nakagami_card(preset),
             preset,
+            profile: None,
             omega: 1.0,
         }
     }
@@ -158,10 +162,25 @@ impl NakagamiFading {
         self.preset
     }
 
+    /// The same model with a caller-chosen shape profile in place of the preset's. `m`
+    /// is clamped to the Nakagami domain `m >= 0.5`.
+    #[must_use]
+    pub fn with_profile(mut self, p: crate::tuning::NakagamiProfile) -> Self {
+        self.profile = Some(crate::tuning::NakagamiProfile {
+            m_near: p.m_near.max(0.5),
+            m_far: p.m_far.max(0.5),
+            breakpoint_m: p.breakpoint_m,
+        });
+        self
+    }
+
     /// The shape parameter this model uses at a distance.
     #[must_use]
     pub fn m_at(&self, d_m: f64) -> f64 {
-        self.preset.m_at(d_m)
+        match &self.profile {
+            Some(p) => p.m_at(d_m),
+            None => self.preset.m_at(d_m),
+        }
     }
 }
 

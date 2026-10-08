@@ -350,6 +350,40 @@ fn configuration(rat: Rat, choice: SidelinkChoice) -> Option<(PoolConfig, SpsPar
     Some((pool, params, profile.to_string()))
 }
 
+/// Applies `radio.tuning.sidelink` over a profile's scheduler parameters. The loader has
+/// refused every value outside its legal set, so each conversion here succeeds.
+fn apply_tuning(
+    params: &mut SpsParams,
+    pool: &PoolConfig,
+    t: &crate::scenario::schema::SidelinkTuning,
+) {
+    if let Some(on) = t.sensing {
+        params.sensing = on;
+        params.srssi_ranking = on;
+    }
+    if let Some(dbm) = t.rsrp_threshold_dbm {
+        params.rsrp_threshold_dbm = dbm;
+    }
+    if let Some(p) = t.candidate_percent {
+        params.tx_percentage = match p {
+            35 => v2xw_radio::TxPercentage::P35,
+            50 => v2xw_radio::TxPercentage::P50,
+            _ => v2xw_radio::TxPercentage::P20,
+        };
+    }
+    if let Some(k) = t.keep_probability
+        && let Some(keep) = v2xw_radio::ProbResourceKeep::from_probability(k)
+    {
+        params.prob_keep = keep;
+    }
+    if let Some(ms) = t.selection_window_ms {
+        // T2 in slots: one per millisecond on LTE, 2^µ per millisecond on NR.
+        let slot_ns = pool.slot().as_nanos().max(1);
+        let slots = (u64::from(ms) * 1_000_000).div_ceil(slot_ns);
+        params.t2_slots = slots.max(params.t1_slots);
+    }
+}
+
 impl SidelinkAccess {
     /// The access layer `radio.rat` selects, or `None` for 802.11p.
     ///
@@ -386,7 +420,8 @@ impl SidelinkAccess {
             choice.profile = crate::wiring::sidelink_profile(scenario);
         }
         let refsens_cutoff = choice.refsens_cutoff;
-        let (pool, params, profile) = configuration(scenario.radio.rat, choice)?;
+        let (pool, mut params, profile) = configuration(scenario.radio.rat, choice)?;
+        apply_tuning(&mut params, &pool, &scenario.radio.tuning.sidelink);
         // The channel the region's rules put this technology on (`radio.region`,
         // `radio.channel`); the loader has already refused a scenario with none.
         let regulation = crate::wiring::radio_regulation(scenario).ok()?;

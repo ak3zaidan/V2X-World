@@ -190,14 +190,19 @@ pub enum ChannelModel {
     /// The only *measurement-fitted, fully verified* highway LOS model the workspace
     /// ships, and therefore the most defensible stand-in for the papers' WINNER+ B1.
     AbbasLosHighway,
+    /// `propagation/winner-plus-b1`: WINNER+ B1 LOS with the effective antenna heights
+    /// `h' = h − 1 m`, the channel the Veins, OpenCV2X and Molina-Masegosa studies ran on
+    /// [WINNER+ D5.3 Table 4-1; TR 36.885 Table A.1.4-1], σ 3 dB.
+    WinnerPlusB1,
 }
 
 impl ChannelModel {
     /// Every channel, in a fixed order.
-    pub const ALL: [ChannelModel; 3] = [
+    pub const ALL: [ChannelModel; 4] = [
         ChannelModel::Tr37885HighwayLos,
         ChannelModel::WinnerB1ShapedTodoCalibrate,
         ChannelModel::AbbasLosHighway,
+        ChannelModel::WinnerPlusB1,
     ];
 
     /// The label a report prints.
@@ -207,6 +212,7 @@ impl ChannelModel {
             ChannelModel::Tr37885HighwayLos => "tr37885-highway-los",
             ChannelModel::WinnerB1ShapedTodoCalibrate => "winner-b1-shaped-todo-calibrate",
             ChannelModel::AbbasLosHighway => "abbas-los-highway",
+            ChannelModel::WinnerPlusB1 => "winner-plus-b1",
         }
     }
 
@@ -226,6 +232,7 @@ impl ChannelModel {
             ChannelModel::WinnerB1ShapedTodoCalibrate => 3.0,
             // Abbas 2015 Table II.
             ChannelModel::AbbasLosHighway => 3.95,
+            ChannelModel::WinnerPlusB1 => crate::winner::SIGMA_LOS_DB,
         }
     }
 
@@ -257,6 +264,7 @@ impl ChannelModel {
             ChannelModel::AbbasLosHighway => crate::prop::LogDistancePreset::AbbasLosHighway
                 .params()
                 .path_loss_db(d),
+            ChannelModel::WinnerPlusB1 => crate::winner::b1_los_db(d, 1.5, 1.5, f_hz),
         }
     }
 }

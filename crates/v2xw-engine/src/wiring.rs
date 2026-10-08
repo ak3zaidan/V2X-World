@@ -700,6 +700,7 @@ pub const RADIO_MODEL_FAMILIES: &[(&str, &[&str])] = &[
             v2xw_radio::LogDistanceShadowing::ID,
             v2xw_radio::Tr37885::ID,
             v2xw_radio::GeometricUrbanV2v::ID,
+            v2xw_radio::WinnerPlusB1::ID,
         ],
     ),
     (
@@ -1204,6 +1205,10 @@ pub enum PropagationChoice {
     /// corner model round a traced corner and TR 37.885 NLOS elsewhere. The high tier's
     /// default.
     Geometric,
+    /// `propagation/winner-plus-b1`: WINNER+ B1 line of sight with effective antenna
+    /// heights, the TR 36.885 V2V channel the Veins and OpenCV2X studies ran on. Buildings
+    /// are charged by the obstacle stack's Sommer term.
+    WinnerB1,
 }
 
 impl PropagationChoice {
@@ -1344,6 +1349,7 @@ pub fn radio_models(
                     v2xw_radio::TwoRayGround::ID => PropagationChoice::TwoRayGround,
                     v2xw_radio::Tr37885::ID => PropagationChoice::Tr37885,
                     v2xw_radio::GeometricUrbanV2v::ID => PropagationChoice::Geometric,
+                    v2xw_radio::WinnerPlusB1::ID => PropagationChoice::WinnerB1,
                     _ => match params_of::<PresetParam<v2xw_radio::LogDistancePreset>>(
                         &choice.params,
                     ) {
@@ -1734,6 +1740,7 @@ pub fn los_mean_loss_db(
                 .params()
                 .path_loss_db(d_m)
         }
+        PropagationChoice::WinnerB1 => v2xw_radio::winner::b1_los_db(d_m, h_t_m, h_r_m, f_hz),
         PropagationChoice::Tr37885 | PropagationChoice::Geometric => {
             if urban {
                 v2xw_radio::prop::tr37885_urban_los_db(d_m, f_hz / 1e9)
@@ -1881,19 +1888,42 @@ pub fn build_radio_at(
     tier: v2xw_core::card::Tier,
 ) -> (Box<dyn BoxedPropagation>, Box<dyn BoxedFading>) {
     let env = world_env(world);
+    let models = radio_models(scenario).unwrap_or_default();
+    // `radio.tuning.channel`: each law takes the overrides it has a constant for; the
+    // loader refuses an override the chosen law would ignore.
+    let shadow = shadowing_override(scenario);
+    let exponent = scenario.radio.tuning.channel.path_loss_exponent;
+    let log_distance = |m: v2xw_radio::LogDistanceShadowing| {
+        let m = m.with_shadowing(shadow);
+        match exponent {
+            Some(n) => m.with_exponent(n),
+            None => m,
+        }
+    };
     let propagation: Box<dyn BoxedPropagation> = match propagation_choice_at(scenario, tier) {
         PropagationChoice::FreeSpace => Box::new(v2xw_radio::FreeSpace::new(tier)),
         PropagationChoice::TwoRayGround => Box::new(v2xw_radio::TwoRayGround::new(tier)),
-        PropagationChoice::Tr37885 => Box::new(v2xw_radio::Tr37885::new(tier, env)),
-        PropagationChoice::Geometric => Box::new(v2xw_radio::GeometricUrbanV2v::new(tier, env)),
-        PropagationChoice::LogDistance(None) => {
-            Box::new(v2xw_radio::LogDistanceShadowing::auto(tier, env))
+        PropagationChoice::Tr37885 => {
+            Box::new(v2xw_radio::Tr37885::new(tier, env).with_shadowing(shadow))
         }
-        PropagationChoice::LogDistance(Some(preset)) => {
-            Box::new(v2xw_radio::LogDistanceShadowing::new(tier, preset, env))
+        PropagationChoice::Geometric => {
+            let m = v2xw_radio::GeometricUrbanV2v::new(tier, env).with_shadowing(shadow);
+            let fit = models.building_fit.unwrap_or(v2xw_radio::SommerFit::Default);
+            Box::new(match sommer_override(scenario, fit) {
+                Some(c) => m.with_building_coefficients(c),
+                None => m,
+            })
         }
+        PropagationChoice::WinnerB1 => {
+            Box::new(v2xw_radio::WinnerPlusB1::new(tier, env).with_shadowing(shadow))
+        }
+        PropagationChoice::LogDistance(None) => Box::new(log_distance(
+            v2xw_radio::LogDistanceShadowing::auto(tier, env),
+        )),
+        PropagationChoice::LogDistance(Some(preset)) => Box::new(log_distance(
+            v2xw_radio::LogDistanceShadowing::new(tier, preset, env),
+        )),
     };
-    let models = radio_models(scenario).unwrap_or_default();
     // A sidelink's block errors come from link-level curves — Huawei R1-160284, the
     // WiLabV2Xsim tables, Lusvarghi 2024 — each simulated over a fading channel and
     // printed against the *average* SNR, so the small-scale fading is already inside
@@ -1910,9 +1940,23 @@ pub fn build_radio_at(
         _ if sidelink => FadingChoice::None,
         _ => FadingChoice::Nakagami(v2xw_radio::NakagamiPreset::FixedMedium),
     };
-    let fading: Box<dyn BoxedFading> = match models.fading.unwrap_or(default_fading) {
+    // `radio.tuning.channel.nakagami_shape` turns Nakagami fading on with that shape
+    // (the loader refuses it where it would double-count or be ignored).
+    let profile = nakagami_override(scenario);
+    let chosen = match (models.fading, profile) {
+        (Some(f), _) => f,
+        (None, Some(_)) => FadingChoice::Nakagami(v2xw_radio::NakagamiPreset::FixedMedium),
+        (None, None) => default_fading,
+    };
+    let fading: Box<dyn BoxedFading> = match chosen {
         FadingChoice::None => Box::new(v2xw_radio::NoFading::new()),
-        FadingChoice::Nakagami(preset) => Box::new(v2xw_radio::NakagamiFading::new(preset)),
+        FadingChoice::Nakagami(preset) => {
+            let f = v2xw_radio::NakagamiFading::new(preset);
+            Box::new(match profile {
+                Some(p) => f.with_profile(p),
+                None => f,
+            })
+        }
     };
     (propagation, fading)
 }
@@ -2053,6 +2097,13 @@ pub struct ObstacleStack {
     /// Whether the building model's *loss* is charged under the run's main law. Kept for
     /// callers that compose one law; the engine decides per link.
     pub building_loss: bool,
+    /// Whether the vehicles on a building-clear path are looked for under every law, not
+    /// only the geometric one (`radio.tuning.channel.vehicle_blockage: true`).
+    pub vehicles_any_law: bool,
+    /// Whether the run's law prices a vehicle-obstructed link itself, so the vehicle term
+    /// is classified but not charged: the auto-preset log-distance law switches to its
+    /// measured OLOS preset (Abbas 2015) on such a link.
+    pub law_prices_vehicles: bool,
 }
 
 impl ObstacleStack {
@@ -2244,7 +2295,8 @@ impl ObstacleStack {
         }
         // TR 37.885's NLOSv is a same-street state: a building-blocked link is priced by
         // its NLOS law, and a vehicle on it adds nothing further.
-        if !los.class.has_building()
+        if !self.law_prices_vehicles
+            && !los.class.has_building()
             && let Some(vehicles) = self.vehicles.as_mut()
         {
             terms[1] =
@@ -2281,6 +2333,43 @@ impl ObstacleStack {
     }
 }
 
+/// The Sommer coefficients `radio.tuning.channel` sets, over the fitted row `fit`, or
+/// `None` when it sets neither.
+pub fn sommer_override(
+    scenario: &Scenario,
+    fit: v2xw_radio::SommerFit,
+) -> Option<v2xw_radio::SommerCoefficients> {
+    let t = &scenario.radio.tuning.channel;
+    if t.building_wall_loss_db.is_none() && t.building_loss_db_per_m.is_none() {
+        return None;
+    }
+    let base = fit.coefficients();
+    Some(v2xw_radio::SommerCoefficients {
+        beta_db_per_wall: t.building_wall_loss_db.unwrap_or(base.beta_db_per_wall),
+        gamma_db_per_m: t.building_loss_db_per_m.unwrap_or(base.gamma_db_per_m),
+    })
+}
+
+/// The shadowing override `radio.tuning.channel` sets.
+pub fn shadowing_override(scenario: &Scenario) -> v2xw_radio::ShadowingOverride {
+    let t = &scenario.radio.tuning.channel;
+    v2xw_radio::ShadowingOverride {
+        sigma_db: t.shadowing_sigma_db,
+        d_corr_m: t.shadowing_decorrelation_m,
+    }
+}
+
+/// The Nakagami profile `radio.tuning.channel` sets, or `None`.
+pub fn nakagami_override(scenario: &Scenario) -> Option<v2xw_radio::NakagamiProfile> {
+    let t = &scenario.radio.tuning.channel;
+    let m = t.nakagami_shape?;
+    Some(v2xw_radio::NakagamiProfile {
+        m_near: m,
+        m_far: t.nakagami_shape_far.unwrap_or(m),
+        breakpoint_m: t.nakagami_breakpoint_m.unwrap_or(f64::INFINITY),
+    })
+}
+
 /// The obstacle stack the scenario selects; see [`ObstacleStack`].
 ///
 /// `propagation/tr37885` and `propagation/v2v-urban-geometric` decide their NLOS state
@@ -2308,11 +2397,26 @@ pub fn build_obstacles(scenario: &Scenario, world: &World) -> ObstacleStack {
         .unwrap_or(v2xw_radio::SommerFit::Default);
     let buildings_on = scenario.world.buildings.enabled && !world.buildings.is_empty();
     let stack_tier = tier;
+    let tuning = &scenario.radio.tuning.channel;
+    let coefficients = sommer_override(scenario, fit);
+    let blockage = tuning.vehicle_blockage;
+    let vehicles_on = match blockage {
+        Some(on) => on,
+        None => traces,
+    };
     ObstacleStack {
         building_loss: !main.owns_buildings(),
-        buildings: buildings_on.then(|| v2xw_radio::BuildingShadowing::with_fit(stack_tier, fit)),
+        vehicles_any_law: blockage == Some(true),
+        law_prices_vehicles: main == PropagationChoice::LogDistance(None),
+        buildings: buildings_on.then(|| {
+            let b = v2xw_radio::BuildingShadowing::with_fit(stack_tier, fit);
+            match coefficients {
+                Some(c) => b.with_coefficients(c),
+                None => b,
+            }
+        }),
         corners: (buildings_on && traces).then(|| v2xw_radio::CornerTracer::build(world)),
-        vehicles: traces
+        vehicles: vehicles_on
             .then(|| v2xw_radio::obstacle::VehicleBlockage::new(v2xw_core::card::Tier::High)),
         terrain: world
             .terrain
@@ -3096,11 +3200,27 @@ pub fn build_phy(scenario: &Scenario) -> v2xw_radio::OfdmPhy {
     if let Some(preset) = models.per {
         phy = phy.with_per_model(v2xw_radio::PerModel::new(preset));
     }
-    phy.with_sensitivity(
+    let mut phy = phy.with_sensitivity(
         models
             .sensitivity
             .unwrap_or(v2xw_radio::SensitivityPreset::MeasuredObu),
-    )
+    );
+    // `radio.tuning.receiver`.
+    let rx = &scenario.radio.tuning.receiver;
+    if let Some(nf) = rx.noise_figure_db {
+        phy = phy.with_noise_figure_db(nf);
+    }
+    if let Some(cs) = rx.carrier_sense_dbm {
+        // The carrier-sense (CCA) decision only; the CBR the congestion control reads
+        // keeps EN 302 571's −85 dBm busy threshold.
+        let mut cca = phy.cca_config();
+        cca.energy_detect_dbm = Some(cs);
+        phy = phy.with_cca(cca);
+    }
+    if let Some(cp) = rx.capture_threshold_db {
+        phy = phy.with_capture(v2xw_radio::CaptureRule::Threshold { cp_th_db: cp });
+    }
+    phy
 }
 
 /// The medium-access model the scenario names, or `None` when the tier models no access.

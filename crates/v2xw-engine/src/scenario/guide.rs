@@ -191,14 +191,110 @@ fn basic(path: &str) -> Option<&'static Basic> {
     BASIC.iter().find(|b| b.path == path)
 }
 
-/// The real-world sentence for a basic field.
-pub fn explain(path: &str) -> Option<&'static str> {
-    basic(path).map(|b| b.explain)
+/// Advanced fields that still carry a real-world sentence and a recommended range: the
+/// radio physics overrides (`radio.tuning`), which a protocol researcher reaches for but
+/// a first-time user should not see on the basic page.
+const ADVANCED_HINTS: &[Basic] = &[
+    Basic {
+        path: "radio.tuning.channel.path_loss_exponent",
+        explain: "How fast the signal weakens with distance on the log-distance channel: 2 is open space, higher is a cluttered street.",
+        recommended: "2.0 (free space) to 3.5 (dense urban); Abbas 2015 measured 1.7-2.9 on V2V links.",
+    },
+    Basic {
+        path: "radio.tuning.channel.shadowing_sigma_db",
+        explain: "How much the received power wanders around its average as vehicles pass trees, trucks and signs. 0 removes it, to isolate the protocol.",
+        recommended: "3 dB line of sight, 4 dB blocked (3GPP TR 36.885/37.885).",
+    },
+    Basic {
+        path: "radio.tuning.channel.shadowing_decorrelation_m",
+        explain: "How far a vehicle drives before its shadowing is a fresh, unrelated value.",
+        recommended: "10 m urban, 25 m freeway (3GPP TR 36.885 Annex A.1.4).",
+    },
+    Basic {
+        path: "radio.tuning.channel.nakagami_shape",
+        explain: "How deep the fast multipath fades are. Lower is harsher: 1 is Rayleigh, the worst case.",
+        recommended: "1 (harsh) to 3 (typical urban); Veins uses about 1.5 near and 0.75 far.",
+    },
+    Basic {
+        path: "radio.tuning.channel.nakagami_shape_far",
+        explain: "The fading severity beyond the breakpoint distance, for a channel that gets harsher with range.",
+        recommended: "0.75 to 1 beyond about 80-100 m.",
+    },
+    Basic {
+        path: "radio.tuning.channel.nakagami_breakpoint_m",
+        explain: "The distance at which the fading switches to its far-away severity.",
+        recommended: "80 to 100 m.",
+    },
+    Basic {
+        path: "radio.tuning.channel.building_wall_loss_db",
+        explain: "How much each building wall between two cars costs the signal (Sommer 2011's β, as Veins models it).",
+        recommended: "9 dB (Sommer 2011 default); 2.4 dB for light construction.",
+    },
+    Basic {
+        path: "radio.tuning.channel.building_loss_db_per_m",
+        explain: "How much each metre of the path inside a building costs (Sommer 2011's γ).",
+        recommended: "0.4 dB/m (Sommer 2011 default); 0.1-0.63 dB/m across the fitted rows.",
+    },
+    Basic {
+        path: "radio.tuning.channel.vehicle_blockage",
+        explain: "Whether trucks and cars between two antennas weaken the signal (3GPP TR 37.885 NLOSv).",
+        recommended: "On for realism; off to measure what blockage costs.",
+    },
+    Basic {
+        path: "radio.tuning.receiver.noise_figure_db",
+        explain: "The receiver's own electronic noise. Higher means a weaker signal is lost in it and the range shrinks.",
+        recommended: "6 dB automotive radio (ETSI EN 302 663); 9 dB a 3GPP handset.",
+    },
+    Basic {
+        path: "radio.tuning.receiver.carrier_sense_dbm",
+        explain: "How loud the channel must be before a radio waits instead of transmitting. Lower waits more and causes fewer hidden-terminal collisions.",
+        recommended: "-85 dBm (ETSI), -82 dBm (ns-3) or -65 dBm (Veins).",
+    },
+    Basic {
+        path: "radio.tuning.receiver.capture_threshold_db",
+        explain: "Replaces the bit-error model with a hard rule: a frame survives only while it is this much louder than everything else.",
+        recommended: "Unset (the error model decides); 4-10 dB to reproduce Torrent-Moreno 2009.",
+    },
+    Basic {
+        path: "radio.tuning.sidelink.sensing",
+        explain: "Whether a C-V2X radio listens to which resources others reserved before picking one. Off picks at random.",
+        recommended: "On (3GPP); off only as a baseline.",
+    },
+    Basic {
+        path: "radio.tuning.sidelink.rsrp_threshold_dbm",
+        explain: "How strong another radio's reservation must be heard before its resource is avoided.",
+        recommended: "-110 dBm (Molina-Masegosa 2017) to -128 dBm (Bazzi 2018).",
+    },
+    Basic {
+        path: "radio.tuning.sidelink.candidate_percent",
+        explain: "The share of resources that must remain after exclusion before a radio picks one.",
+        recommended: "20 % (LTE's fixed value); 35 or 50 % on NR.",
+    },
+    Basic {
+        path: "radio.tuning.sidelink.keep_probability",
+        explain: "The chance a radio keeps its resource when its reservation runs out. Higher is steadier, but two radios that collided keep colliding longer.",
+        recommended: "0 (Molina-Masegosa) to 0.8 (SAE J3161/1).",
+    },
+    Basic {
+        path: "radio.tuning.sidelink.selection_window_ms",
+        explain: "How late after a message is ready its new resource may be. Shorter cuts latency but leaves fewer resources to pick from.",
+        recommended: "100 ms at 10 Hz; at most the message interval.",
+    },
+];
+
+fn hint(path: &str) -> Option<&'static Basic> {
+    basic(path).or_else(|| ADVANCED_HINTS.iter().find(|b| b.path == path))
 }
 
-/// The recommended range, in words, for a basic field.
+/// The real-world sentence for a basic field, or an advanced one that carries one.
+pub fn explain(path: &str) -> Option<&'static str> {
+    hint(path).map(|b| b.explain)
+}
+
+/// The recommended range, in words, for a basic field, or an advanced one that carries
+/// one.
 pub fn recommended(path: &str) -> Option<&'static str> {
-    basic(path).map(|b| b.recommended)
+    hint(path).map(|b| b.recommended)
 }
 
 /// One write of a patch: the pointer and the value it puts there.

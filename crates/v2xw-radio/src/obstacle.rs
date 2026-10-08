@@ -976,6 +976,9 @@ pub struct BuildingShadowing {
     /// records as `todo-calibrate` rather than guessing that, say, timber means
     /// light construction.
     material_overrides: BTreeMap<u8, SommerFit>,
+    /// Caller-chosen `β`/`γ` replacing the fitted row's (`radio.tuning.channel`), for a
+    /// study of a building stock the six rows do not describe.
+    custom: Option<SommerCoefficients>,
     index: Option<BuildingIndex>,
     /// Whether [`BuildingShadowing::loss_for_path`] caps the through-building loss at the
     /// TR 37.885 around-the-corner NLOS excess.
@@ -1000,6 +1003,7 @@ impl BuildingShadowing {
             tier,
             fit,
             material_overrides: BTreeMap::new(),
+            custom: None,
             index: None,
             street_canyon_ceiling: true,
         }
@@ -1013,14 +1017,26 @@ impl BuildingShadowing {
         self
     }
 
+    /// The same model with caller-chosen coefficients in place of the fitted row's. A
+    /// material mapping, when one is set, still wins for its material.
+    #[must_use]
+    pub fn with_coefficients(mut self, c: SommerCoefficients) -> Self {
+        self.custom = Some(c);
+        self
+    }
+
+    /// The coefficients in force where no material mapping applies.
+    #[must_use]
+    pub fn coefficients(&self) -> SommerCoefficients {
+        self.custom.unwrap_or_else(|| self.fit.coefficients())
+    }
+
     /// The coefficients in force for one building.
     #[must_use]
     pub fn coefficients_for(&self, building: &Building) -> SommerCoefficients {
         self.material_overrides
             .get(&building.material.wire_code())
-            .copied()
-            .unwrap_or(self.fit)
-            .coefficients()
+            .map_or_else(|| self.coefficients(), |f| f.coefficients())
     }
 
     /// Builds or reuses the index for this world.
@@ -1194,8 +1210,7 @@ impl BuildingShadowing {
         if !los.class.has_building() {
             return 0.0;
         }
-        self.fit
-            .coefficients()
+        self.coefficients()
             .loss_db(los.walls_crossed, los.obstructed_len_m)
     }
 }

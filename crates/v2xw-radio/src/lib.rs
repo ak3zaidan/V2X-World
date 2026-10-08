@@ -20,6 +20,8 @@
 //! | The six family traits | [`traits`] | 03-interfaces.md §4 |
 //! | Shared value types, the MCS and EDCA tables, the timing constants | [`types`] | 04-models.md §4.1-§4.6 |
 //! | Friis, two-ray, dual-slope log-distance with correlated shadowing, TR 37.885 | [`prop`] | 04-models.md §3.1-§3.3, §3.6 |
+//! | WINNER+ B1 LOS with effective heights, the TR 36.885 V2V channel | [`winner`] | TR 36.885 Table A.1.4-1 |
+//! | Researcher overrides of cited constants (shadowing, Nakagami profile) | [`tuning`] | `radio.tuning` |
 //! | Nakagami-m fading, and no fading | [`fading`] | 04-models.md §3.4 |
 //! | Buildings, vehicles, terrain knife edges | [`obstacle`] | 04-models.md §3.5 |
 //! | The terrain profile query and the knife-edge extraction | [`terrain`] | 04-models.md §3.5 |
@@ -129,7 +131,9 @@ pub mod sps;
 pub mod sweep;
 pub mod terrain;
 pub mod traits;
+pub mod tuning;
 pub mod types;
+pub mod winner;
 
 #[cfg(test)]
 pub mod testctx;
@@ -155,6 +159,8 @@ pub use dcc::{
     ReactiveDcc, ReactiveTable, SaeJ2945Dcc,
 };
 pub use fading::{NakagamiFading, NakagamiPreset, NoFading};
+pub use tuning::{NakagamiProfile, ShadowingOverride};
+pub use winner::WinnerPlusB1;
 pub use focus::{
     BOUNDARY_BIAS_TOLERANCE_PP, BoundaryBiasMeter, BoundaryBiasReport, BoundaryBinBias,
     BoundaryObservation, FocusPlan, FocusShape, FocusWarning, LinkEvaluation, LinkPlacement,

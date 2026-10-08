@@ -847,6 +847,152 @@ pub struct Radio {
     /// interference ratio.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adjacent_channel: Vec<AdjacentEmitter>,
+    /// Fine control over the radio physics: path loss, shadowing, fading, buildings,
+    /// vehicle blockage, the 802.11p receiver and the sidelink's resource selection.
+    /// Every field is optional; unset keeps the model's cited default.
+    #[serde(default, skip_serializing_if = "RadioTuning::is_default")]
+    pub tuning: RadioTuning,
+}
+
+/// Fine control over the radio models' physics (`radio.tuning`).
+///
+/// Each field replaces one cited constant of the model the run composes; unset keeps the
+/// model's own value, so an empty section is the shipped model bit for bit.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RadioTuning {
+    /// The channel between two antennas: path loss, shadowing, fading, buildings and
+    /// vehicles in the way.
+    #[serde(default, skip_serializing_if = "ChannelTuning::is_default")]
+    pub channel: ChannelTuning,
+    /// The 802.11p receiver: its noise, its carrier sense and its capture rule.
+    #[serde(default, skip_serializing_if = "ReceiverTuning::is_default")]
+    pub receiver: ReceiverTuning,
+    /// How a C-V2X sidelink radio (LTE Mode 4, NR Mode 2) picks its transmission
+    /// resources.
+    #[serde(default, skip_serializing_if = "SidelinkTuning::is_default")]
+    pub sidelink: SidelinkTuning,
+}
+
+impl RadioTuning {
+    /// True when nothing is overridden.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// `radio.tuning.channel`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelTuning {
+    /// How fast the signal fades with distance: 2 is free space, 2.7-3.5 a city street,
+    /// 4 and above a dense obstructed one. Replaces both slopes of the log-distance law
+    /// (the medium tier's default channel); other laws keep their own slope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_loss_exponent: Option<f64>,
+    /// How much the received power wanders around its average as vehicles pass trees,
+    /// signs and parked cars (log-normal shadowing σ). 0 turns shadowing off; measured
+    /// V2V values are 3-6 dB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadowing_sigma_db: Option<f64>,
+    /// How far a vehicle drives before its shadowing changes to an unrelated value:
+    /// 10 m in a city, 25 m on a freeway (3GPP TR 36.885).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadowing_decorrelation_m: Option<f64>,
+    /// How deep the fast multipath fades are (Nakagami m): 1 is Rayleigh, the severest,
+    /// 3 the usual urban value, higher is closer to a clean line of sight. Setting it turns
+    /// Nakagami fading on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nakagami_shape: Option<f64>,
+    /// The Nakagami m beyond `nakagami_breakpoint_m`, for a distance-dependent channel
+    /// (Veins-style: about 1.5 near, 0.75 far). Needs `nakagami_shape` and the breakpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nakagami_shape_far: Option<f64>,
+    /// The distance at which the Nakagami m switches to `nakagami_shape_far`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nakagami_breakpoint_m: Option<f64>,
+    /// How much each building wall the signal passes through costs (Sommer 2011 β):
+    /// 9 dB for the fitted default, about 2.4 dB for light construction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub building_wall_loss_db: Option<f64>,
+    /// How much each metre of path inside a building costs (Sommer 2011 γ), dB per metre:
+    /// 0.4 for the fitted default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub building_loss_db_per_m: Option<f64>,
+    /// Whether other vehicles between two antennas attenuate the signal (3GPP TR 37.885
+    /// NLOSv blockage). On by default with the city-street law; off makes vehicles
+    /// radio-transparent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vehicle_blockage: Option<bool>,
+}
+
+impl ChannelTuning {
+    /// True when nothing is overridden.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// `radio.tuning.receiver` — the 802.11p receiver.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiverTuning {
+    /// The receiver's own noise above the thermal floor. 6 dB for automotive hardware
+    /// (EN 302 663); each dB more shortens the range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise_figure_db: Option<f64>,
+    /// The received power above which a radio considers the channel busy and holds its
+    /// transmission (clear-channel assessment). −85 dBm is ETSI's, −82 dBm ns-3's, −65 dBm
+    /// Veins'. Lower defers more and hides fewer terminals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carrier_sense_dbm: Option<f64>,
+    /// When set, a frame is decoded only while it stays this many dB above the summed
+    /// interference and noise (the hard capture rule of Torrent-Moreno 2009); unset, the
+    /// bit-error model decides per SINR window, as Veins does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_threshold_db: Option<f64>,
+}
+
+impl ReceiverTuning {
+    /// True when nothing is overridden.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// `radio.tuning.sidelink` — C-V2X sensing-based semi-persistent scheduling.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidelinkTuning {
+    /// Whether a radio senses the channel before picking a resource (3GPP sensing-based
+    /// SPS). Off picks at random, the baseline sensing is measured against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensing: Option<bool>,
+    /// The received power above which a resource another radio reserved is excluded
+    /// from the candidates (the RSRP threshold, raised 3 dB at a time until enough
+    /// survive). −110 dBm Molina-Masegosa, −128 dBm Bazzi; lower excludes more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rsrp_threshold_dbm: Option<f64>,
+    /// The share of the selection window that must survive exclusion before a radio
+    /// picks: 20 % (LTE's fixed value), 35 % or 50 % (NR only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_percent: Option<u8>,
+    /// The chance a radio keeps its reserved resource when the reselection counter runs
+    /// out (probResourceKeep): 0, 0.2, 0.4, 0.6 or 0.8. Higher is more stable but leaves
+    /// two radios that collided colliding for longer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_probability: Option<f64>,
+    /// The latest a new resource may be after the packet arrives (the selection window's
+    /// end T2): 20-100 ms on LTE, bounded by the packet interval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_window_ms: Option<u32>,
+}
+
+impl SidelinkTuning {
+    /// True when nothing is overridden.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// One transmitter on an adjacent channel (`radio.adjacent_channel`).
