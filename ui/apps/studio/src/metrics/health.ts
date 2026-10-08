@@ -60,7 +60,11 @@ export function judgedSeries(base: string, band: HealthBand): string {
 
 /** How the judged statistic is named to a reader: "p99", "within 100 m", or "" for the headline. */
 export function judgedLabel(band: HealthBand): string {
-  const j = band.judged;
+  return statLabel(band.judged);
+}
+
+/** The same, from a band's `judged` suffix alone (".p99", "[100m]", ""). */
+export function statLabel(j: string): string {
   if (j === "") return "";
   if (j.startsWith(".")) return j.slice(1);
   const m = /^\[(\d+)m\]$/.exec(j);
@@ -222,12 +226,13 @@ export function whenText(j: Judgement): string {
 
 /**
  * Where a value sits against its band, in a few words: "Above 600 ms limit", "Below 0.95 target",
- * "Within 500 ms target". The threshold named is the one that decides the level.
+ * "Below 500 ms target" (healthy). The threshold named is the one that decides the level; a value
+ * exactly on it counts as the better level, as `classify` does.
  */
 export function limitText(band: HealthBand, level: HealthLevel, unit: string): string {
   const u = unit === "ratio" || unit === "1" || unit === "-" || unit === "" ? "" : ` ${unit}`;
   const lower = band.better === "lower";
-  if (level === "healthy") return `Within ${formatNumber(band.caution)}${u} target`;
+  if (level === "healthy") return `${lower ? "Below" : "Above"} ${formatNumber(band.caution)}${u} target`;
   if (level === "caution") return `${lower ? "Above" : "Below"} ${formatNumber(band.caution)}${u} target`;
   return `${lower ? "Above" : "Below"} ${formatNumber(band.unhealthy)}${u} limit`;
 }

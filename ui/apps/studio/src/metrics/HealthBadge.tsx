@@ -82,7 +82,7 @@ export function BandTable({ band, unit }: { band: MetricHealthBand; unit: string
   const stat = judgedLabel(band);
   return (
     <div className="hband" data-testid="health-band">
-      <h4>Health thresholds{stat !== "" ? <span className="dim"> · judged on the {stat}</span> : null}</h4>
+      <h4>Health thresholds{stat !== "" ? <span className="dim"> · judged {stat.startsWith("within ") ? stat : `on the ${stat}`}</span> : null}</h4>
       <ul>
         <li className="healthy">
           <HealthDot level="healthy" /> <strong>Healthy</strong> {op[0]} {band.caution}

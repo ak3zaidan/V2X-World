@@ -183,7 +183,7 @@
 .mx-verdict .lead.caution { color: var(--warn); }
 
 /* toolbar: series on the left, range on the right */
-.mx-toolbar { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; font-size: 12px; margin-top: 4px; }
+.mx-toolbar { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; font-size: 12px; min-height: 24px; }
 .mx-chips { display: flex; gap: 4px; flex-wrap: wrap; }
 .mx-chip {
   display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 10px; border-radius: 999px;
@@ -202,7 +202,7 @@
 .mx-range-text { color: var(--text-faint); font-variant-numeric: tabular-nums; cursor: help; white-space: nowrap; }
 
 /* the chart, the hero */
-.mx-plot { display: flex; flex-direction: column; gap: 6px; margin-top: -8px; }
+.mx-plot { display: flex; flex-direction: column; gap: 8px; }
 .mx-chart { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 6px 4px; min-height: 380px; }
 .mx-chart .u-legend { font-size: 12px; color: var(--text-dim); text-align: left; padding: 4px 8px 0; }
 .mx-chart .u-legend .u-value { color: var(--text); font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -257,8 +257,12 @@
 .mx-about { border-top: 1px solid var(--border); padding-top: 12px; font-size: 13px; }
 .mx-about summary { cursor: pointer; display: flex; align-items: baseline; gap: 12px; list-style: none; min-width: 0; }
 .mx-about summary::-webkit-details-marker { display: none; }
-.mx-about summary::before { content: "▸"; color: var(--text-faint); font-size: 11px; width: 10px; flex: none; }
-.mx-about[open] summary::before { content: "▾"; }
+.mx-about summary::before {
+  content: ""; flex: none; align-self: center; width: 6px; height: 6px; margin: 0 4px 0 2px;
+  border: solid var(--text-dim); border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg); transition: transform 120ms;
+}
+.mx-about[open] summary::before { transform: rotate(45deg); }
+.mx-about summary:hover .mx-about-title { color: var(--accent); }
 .mx-about-title { font-weight: 600; white-space: nowrap; }
 .mx-about-lead { color: var(--text-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mx-about[open] .mx-about-lead { display: none; }

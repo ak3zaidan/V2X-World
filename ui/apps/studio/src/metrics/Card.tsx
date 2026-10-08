@@ -71,7 +71,11 @@ export function Sparkline({
       if (v > hi) hi = v;
     }
     if (!Number.isFinite(lo)) return null;
-    if (hi - lo < 1e-12) {
+    // The range the line actually spans, for the axis text; the padding below is only for drawing.
+    const flat = hi - lo < 1e-12;
+    const dataLo = lo;
+    const dataHi = hi;
+    if (flat) {
       const pad = Math.abs(hi) > 0 ? Math.abs(hi) * 0.05 : 1;
       lo -= pad;
       hi += pad;
@@ -92,7 +96,7 @@ export function Sparkline({
     }
     // A lone point draws nothing as a path; give it a dot.
     const dots = observedCount(series) === 1 ? [...series.v].findIndex((v) => !Number.isNaN(v)) : -1;
-    return { d, lo, hi, sx, sy, dots };
+    return { d, lo, hi, sx, sy, dots, flat, dataLo, dataHi };
   }, [series, from, to]);
 
   if (geom === null) return <div className="mcard-plot" />;
@@ -118,7 +122,7 @@ export function Sparkline({
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
         role="img"
-        aria-label={`${label} over simulated time, ${formatNumber(geom.lo)} to ${formatNumber(geom.hi)} ${axisUnit(unit)}`}
+        aria-label={`${label} over simulated time, ${formatNumber(geom.dataLo)} to ${formatNumber(geom.dataHi)} ${axisUnit(unit)}`}
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
       >
@@ -150,7 +154,7 @@ export function Sparkline({
             <span>{formatNumber(from)} s</span>
             <span className="grow" />
             <span title="The range of the line">
-              {formatNumber(geom.lo)}–{formatNumber(geom.hi)}
+              {geom.flat ? `constant ${formatNumber(geom.dataLo)}` : `${formatNumber(geom.dataLo)}–${formatNumber(geom.dataHi)}`}
               {unitSuffix(unit) === "" ? "" : ` ${unitSuffix(unit)}`}
             </span>
             <span className="grow" />
@@ -261,7 +265,7 @@ export function MetricCard({
           ) : headline === null && band && level ? (
             <HealthChip band={band} level={level} unit={f.unit} testId={`metric-health-${f.base}`} />
           ) : null}
-          {band && level ? (
+          {band && level && (level !== "healthy" || judgedLabel(band) !== "") ? (
             <div className={`mcard-verdict ${level}`} title={noteOf(band, level)}>
               {judgedLabel(band) !== "" ? (
                 <span>

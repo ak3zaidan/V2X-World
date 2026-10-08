@@ -83,7 +83,7 @@ function initialSelection(f: MetricFamily, requested: string | null): string[] {
 }
 
 /** The first sentence of a definition, for the collapsed "About" line. */
-export function firstSentence(text: string): string {
+function firstSentence(text: string): string {
   const para = text.split(/\n\s*\n/)[0]?.trim() ?? "";
   // A full stop that ends a sentence: followed by a space and a capital, or the paragraph's end.
   const m = /^([\s\S]*?[.!?])(?:\s+(?=[A-Z(`])|$)/.exec(para);
@@ -294,6 +294,7 @@ export function Expanded({
 
       <Headline f={f} seriesName={heroName} series={heroSeries} judged={judgedReported} extent={extent} />
 
+      <section className="mx-plot" aria-label="Chart">
       <div className="mx-toolbar">
         {all.length > 1 ? (
           <div className="mx-chips" role="group" aria-label="Series to draw">
@@ -341,7 +342,7 @@ export function Expanded({
       </div>
 
       {hasData ? (
-        <div className="mx-plot">
+        <>
           <MainChart
             band={band && chartLines.some((l) => l.name === judgedName) ? band : null}
             lines={chartLines}
@@ -355,7 +356,7 @@ export function Expanded({
             }}
           />
           <Brush series={chartLines[0]?.series ?? null} extent={extent} from={from} to={to} onRange={setRange} onReset={resetRange} />
-        </div>
+        </>
       ) : (
         <p className="mx-empty" data-testid="metric-expanded-empty">
           {a.status === "loading"
@@ -369,6 +370,7 @@ export function Expanded({
                   : "No window has had enough samples of this measurement yet. The chart appears once one has."}
         </p>
       )}
+      </section>
 
       {hasData ? <StatsStrip rows={stats} unit={f.unit} comparing={comparing} from={from} to={to} /> : null}
 
@@ -451,27 +453,25 @@ function Headline({
           </span>
         ) : null}
       </div>
-      <div className="mx-reading">
-        <span className="mx-value" data-testid="metric-hero-value">
-          {formatNumber(latest)}
-        </span>
-        {unit !== "" && latest !== null ? <span className="mx-unit">{unit}</span> : null}
-        {stat !== "" && latest !== null ? <span className="mx-stat">{stat}</span> : null}
-        {band && level !== null ? <HealthChip band={band} level={level} unit={f.unit} testId="metric-health-now" large /> : null}
-      </div>
-      {parts.length > 0 ? (
-        <p className="mx-verdict" data-testid="metric-health-run">
-          {parts.map((p, i) => (
-            <span key={i} className={i === 0 && level !== null ? `lead ${level}` : undefined}>
-              {p}
+      {latest !== null ? (
+        <>
+          <div className="mx-reading">
+            <span className="mx-value" data-testid="metric-hero-value" title={`The newest window of ${seriesName}`}>
+              {formatNumber(latest)}
             </span>
-          ))}
-        </p>
-      ) : (
-        <p className="mx-verdict dim" data-testid="metric-health-run">
-          No window has reported a value yet.
-        </p>
-      )}
+            {unit !== "" ? <span className="mx-unit">{unit}</span> : null}
+            {stat !== "" ? <span className="mx-stat">{stat}</span> : null}
+            {band && level !== null ? <HealthChip band={band} level={level} unit={f.unit} testId="metric-health-now" large /> : null}
+          </div>
+          <p className="mx-verdict" data-testid="metric-health-run">
+            {parts.map((p, i) => (
+              <span key={i} className={i === 0 && level !== null ? `lead ${level}` : undefined}>
+                {p}
+              </span>
+            ))}
+          </p>
+        </>
+      ) : null}
     </header>
   );
 }

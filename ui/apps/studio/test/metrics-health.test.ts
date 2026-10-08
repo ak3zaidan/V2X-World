@@ -88,12 +88,12 @@ describe("the expanded view's verdict line", () => {
     expect(limitText(CBR, "caution", "ratio")).toBe("Above 0.5 target");
     expect(limitText(PDR, "unhealthy", "ratio")).toBe("Below 0.9 limit");
     const lat: HealthBand = { ...CBR, caution: 500, unhealthy: 600 };
-    expect(limitText(lat, "healthy", "ms")).toBe("Within 500 ms target");
+    expect(limitText(lat, "healthy", "ms")).toBe("Below 500 ms target");
     const j = judge("lat", "ms", lat, series([100, 700, 834, 650, 550]));
     expect(verdictParts(lat, "unhealthy", "ms", j)).toEqual(["Above 600 ms limit", "unhealthy 60 % of run", "caution 20 %", "worst 834 ms at 2 s"]);
     const ok = judge("lat", "ms", lat, series([100, 200]));
-    expect(verdictParts(lat, "healthy", "ms", ok)).toEqual(["Within 500 ms target", "healthy in all 2 windows", "worst 200 ms at 1 s"]);
-    expect(verdictParts(lat, "healthy", "ms", null)).toEqual(["Within 500 ms target"]);
+    expect(verdictParts(lat, "healthy", "ms", ok)).toEqual(["Below 500 ms target", "healthy in all 2 windows", "worst 200 ms at 1 s"]);
+    expect(verdictParts(lat, "healthy", "ms", null)).toEqual(["Below 500 ms target"]);
   });
 });
 
