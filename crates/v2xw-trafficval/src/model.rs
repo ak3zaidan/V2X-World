@@ -21,21 +21,18 @@ use v2xw_core::geom::Dims;
 use v2xw_core::ids::{ActorId, LaneId};
 use v2xw_core::math;
 use v2xw_core::rng::RngRegistry;
-use v2xw_core::time::Duration;
 use v2xw_core::weather::WeatherState;
 use v2xw_mobility::carfollowing::idm::{Idm, IdmParams, IdmPreset};
 use v2xw_mobility::ctx::MobilityCtx;
-use v2xw_mobility::demand::NoDemand;
 use v2xw_mobility::fd::{self, FdParams};
 use v2xw_mobility::intersection::gap_acceptance::{HcmGaps, Movement};
 use v2xw_mobility::lanechange::mobil::{Mobil, MobilParams, MobilPreset};
-use v2xw_mobility::traits::{CarFollowing, LaneChange, Mobility};
+use v2xw_mobility::traits::{CarFollowing, LaneChange};
 use v2xw_mobility::views::{
     DriverProfile, LaneChangeDecision, LaneNeighbors, LeaderView, Side, SideNeighbors, VehicleView,
 };
 use v2xw_mobility::vru::social_force::SocialForceParams;
-use v2xw_mobility::worlds::{RingParams, cycle_length_m, ring, ring_cycle};
-use v2xw_mobility::{EngineParams, IntersectionMode, NativeMobility, VehicleClass};
+use v2xw_mobility::VehicleClass;
 
 use crate::{Check, Group, Lab, Outcome, Row, Variant};
 
@@ -110,13 +107,15 @@ pub fn checks() -> Vec<Check> {
             group: Group::Model,
             title: "22 city drivers on a 230 m circuit form a stop-and-go jam with no bottleneck (Sugiyama et al. 2008)",
             procedure: "The engine's mobility (NativeMobility) on a 230 m single-lane ring \
-                with 22 cars of the shipped city drivers (UrbanHcm), desired speed 30 km/h \
+                with 22 cars of the shipped city drivers (UrbanHcm) as the `human` driver \
+                population (own parameters, 0.8 s reaction, HDM perception errors), desired speed 30 km/h \
                 (the experiment's instruction), started evenly spaced at the equilibrium \
                 speed with one car 20 % slow. After 300 s of warm-up, the next 300 s are \
-                sampled each second: the slowest car's speed, and the position of the \
-                slowest car, whose drift along the ring is the jam's propagation speed \
-                (least-squares slope of the unwrapped position).",
-            faults: &["drivers with a = 3.0 m/s² (linearly string stable at this density)"],
+                sampled every step: the slowest car's speed, and the jam's propagation \
+                speed from its outflow front: the median of Δx/Δt between a car leaving \
+                the jam (rising past 3 m/s after standing below 1 m/s) and the car behind \
+                it leaving next.",
+            faults: &["the ideal driver: no reaction time, no perception errors, every driver alike"],
             run: sugiyama,
         },
         Check {
@@ -683,157 +682,46 @@ pub struct RingJam {
     pub speed_sd_mps: f64,
 }
 
-/// Runs `n` cars of `driver` on a `length_m` ring at a desired speed of `v0`.
+/// Runs `n` city drivers (UrbanHcm) of population `human` on a `length_m` ring at a
+/// desired speed of `v0`: 300 s of warm-up, 300 s measured
+/// ([`crate::fdlab::run_ring`]; the jam's speed is its outflow front's, from the
+/// departures of consecutive cars).
 pub fn ring_jam(
     n: usize,
     length_m: f64,
-    driver: DriverProfile,
     v0: f64,
+    human: v2xw_mobility::drivers::HumanDriverParams,
 ) -> Result<RingJam, String> {
-    let world = ring(&RingParams {
+    let spec = crate::fdlab::RingSpec {
+        model: crate::fdlab::Model::Idm(IdmPreset::UrbanHcm),
+        human,
         circumference_m: length_m,
-        segments: 4,
-        points_per_segment: 24,
-        lanes: 1,
-        lane_width_m: 3.5,
-        speed_limit_mps: v0,
-    })
-    .map_err(|e| e.to_string())?;
-    let cycle = ring_cycle(&world, 0);
-    let length = cycle_length_m(&world, &cycle);
-    let mut offsets = Vec::with_capacity(cycle.len());
-    let mut acc = 0.0;
-    for l in &cycle {
-        offsets.push(acc);
-        acc += world.lane(*l).length_m;
-    }
-    let idm = Idm::new(IdmPreset::UrbanHcm);
-    let cf: Arc<dyn CarFollowing + Send + Sync> = Arc::new(idm.clone());
-    let step = Duration::from_millis(100);
-    let mut engine = NativeMobility::with_models(
-        EngineParams {
-            step,
-            intersections: IntersectionMode::None,
-            lane_changes: false,
-            lookahead_m: 120.0,
-            dynamic_rerouting: false,
-            ..EngineParams::default()
-        },
-        cf,
-        MobilPreset::Kesting2007,
-    );
-    let rng = RngRegistry::new(0x5_0617_A3A2);
-    {
-        let mut ctx = MobilityCtx::new(0, &world, &rng);
-        engine
-            .init(&mut ctx, Box::new(NoDemand::new()))
-            .map_err(|e| e.to_string())?;
-    }
-    let laps = 200;
-    let route: Vec<LaneId> = cycle
-        .iter()
-        .cycle()
-        .take(cycle.len() * laps)
-        .copied()
-        .collect();
-    let spacing = length / n as f64;
-    let body = VehicleClass::Passenger.spec().length_m;
-    let mut d = driver;
-    d.desired_speed_mps = v0;
-    let ve = fd::equilibrium_speed_mps(&idm, &d, v0, spacing - body);
-    for i in 0..n {
-        let mut s = spacing * i as f64;
-        let mut k = 0;
-        while k + 1 < cycle.len() && s > world.lane(cycle[k]).length_m {
-            s -= world.lane(cycle[k]).length_m;
-            k += 1;
-        }
-        let id = engine
-            .spawn_with_route(
-                &world,
-                0,
-                VehicleClass::Passenger,
-                d,
-                route[k..].to_vec(),
-                s,
-            )
-            .map_err(|e| e.to_string())?;
-        engine
-            .set_speed(id, if i == 0 { 0.8 * ve } else { ve })
-            .map_err(|e| e.to_string())?;
-    }
-    let lane_index: std::collections::BTreeMap<LaneId, usize> =
-        cycle.iter().enumerate().map(|(i, l)| (*l, i)).collect();
-    let mut t = 0u64;
-    let step_ns = step.as_nanos();
-    let mut min_speed = f64::INFINITY;
-    let mut speeds = Vec::new();
-    let mut track: Vec<(f64, f64)> = Vec::new();
-    let mut unwrapped: Option<f64> = None;
-    let mut last_raw = 0.0;
-    let mut k = 0u64;
-    while t < 600_000_000_000 {
-        let mut ctx = MobilityCtx::new(t, &world, &rng);
-        engine.step(&mut ctx, step);
-        t += step_ns;
-        k += 1;
-        if t <= 300_000_000_000 || k % 10 != 0 {
-            continue;
-        }
-        let states = engine.longitudinal_states();
-        let mut slowest: Option<(f64, f64)> = None;
-        for (_, lane, s, v) in &states {
-            speeds.push(*v);
-            min_speed = min_speed.min(*v);
-            let pos = lane_index
-                .get(lane)
-                .map(|i| offsets[*i] + s)
-                .unwrap_or(f64::NAN);
-            if slowest.is_none_or(|(sv, _)| *v < sv) {
-                slowest = Some((*v, pos));
-            }
-        }
-        if let Some((_, raw)) = slowest {
-            let u = match unwrapped {
-                None => raw,
-                Some(prev) => {
-                    let mut dlt = raw - last_raw;
-                    if dlt > length / 2.0 {
-                        dlt -= length;
-                    } else if dlt < -length / 2.0 {
-                        dlt += length;
-                    }
-                    prev + dlt
-                }
-            };
-            unwrapped = Some(u);
-            last_raw = raw;
-            track.push((t as f64 / 1e9, u));
-        }
-    }
-    let mean = speeds.iter().sum::<f64>() / speeds.len().max(1) as f64;
-    let sd = (speeds.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / speeds.len().max(1) as f64)
-        .sqrt();
-    let wave = if min_speed < 2.0 && track.len() > 10 {
-        fd::least_squares(&track).1 * 3.6
-    } else {
-        f64::NAN
+        v0_mps: v0,
+        warmup_s: 300.0,
+        measure_s: 300.0,
+        seed: 0x5_0617_A3A2,
     };
+    let r = crate::fdlab::run_ring(&spec, n as f64 / length_m * 1000.0)?;
     Ok(RingJam {
-        min_speed_mps: min_speed,
-        mean_speed_mps: mean,
-        wave_kmh: wave,
-        speed_sd_mps: sd,
+        min_speed_mps: r.min_speed_mps,
+        mean_speed_mps: r.speed_mps,
+        wave_kmh: r.wave_kmh,
+        speed_sd_mps: r.speed_sd_mps,
     })
 }
 
 fn sugiyama(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
-    let mut driver = IdmPreset::UrbanHcm.profile(VehicleClass::Passenger);
-    if variant == Variant::Fault(0) {
-        driver.max_accel_mps2 = 3.0;
-    }
-    let key = format!("sugiyama-{}", driver.max_accel_mps2);
-    let r = lab.study(&key, |_| ring_jam(22, 230.0, driver, 30.0 / 3.6))?;
+    // Sugiyama's drivers were people: the engine's `human` population (per-driver
+    // parameters, a 0.8 s reaction time and the Human Driver Model's perception errors,
+    // `v2xw_mobility::drivers`), which a scenario asks for with
+    // `actors.vehicles.drivers.realism: human`.
+    let human = if variant == Variant::Fault(0) {
+        v2xw_mobility::drivers::HumanDriverParams::default()
+    } else {
+        v2xw_mobility::drivers::HumanDriverParams::human()
+    };
+    let key = format!("sugiyama-{}", human.reaction_time_s);
+    let r = lab.study(&key, |_| ring_jam(22, 230.0, 30.0 / 3.6, human))?;
     let src = "Sugiyama et al. 2008, New J. Phys. 10 033001: 22 cars, 230 m, asked to cruise at 30 km/h; a jam formed and moved backwards 'with the same speed as a jam cluster on a highway'";
     Ok(Outcome {
         rows: vec![
