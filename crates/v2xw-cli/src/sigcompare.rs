@@ -54,8 +54,12 @@ pub const COMPARISON_SCHEMA: &str = "v2xw/signature-comparison/1";
 pub const BASELINE: &str = "ecdsa-p256";
 
 /// The schemes compared when none are named.
-pub const DEFAULT_SCHEMES: [&str; 4] =
-    ["ecdsa-p256", "ml-dsa-44", "falcon-512", "hybrid-mldsa44-ecdsa-p256"];
+pub const DEFAULT_SCHEMES: [&str; 4] = [
+    "ecdsa-p256",
+    "ml-dsa-44",
+    "falcon-512",
+    "hybrid-mldsa44-ecdsa-p256",
+];
 
 /// The relative change below which a difference is not called out.
 pub const RELATIVE_FLOOR: f64 = 0.10;
@@ -164,41 +168,216 @@ enum Stat {
 
 /// The rows, in table order: (group, metric, stat, label).
 const ROWS: &[(&str, &str, Stat, &str)] = &[
-    ("Bytes on the air", "sig_signature_bytes", Stat::Point, "Signature per message"),
-    ("Bytes on the air", "sig_signature_rate", Stat::Point, "Signature bytes per second (all senders)"),
-    ("Bytes on the air", "sig_signer_id_bytes", Stat::Point, "Signer identifier per message"),
-    ("Bytes on the air", "sig_cert_bytes", Stat::Point, "Attached certificate per message (averaged)"),
-    ("Bytes on the air", "sig_cert_airtime_share", Stat::Point, "Certificates' share of the air"),
-    ("Bytes on the air", "sig_signer_id_airtime_share", Stat::Point, "Signer identifiers' share of the air"),
-    ("Bytes on the air", "sig_security_airtime_share", Stat::Point, "Security share of the air (with certificates)"),
-    ("Bytes on the air", "sig_security_airtime_share_nocert", Stat::Point, "Security share of the air (without certificates)"),
-    ("Device cost", "sig_sign_latency", Stat::P50, "Sign latency p50"),
-    ("Device cost", "sig_sign_latency", Stat::P95, "Sign latency p95"),
-    ("Device cost", "sig_sign_wait", Stat::P95, "Wait for the signer p95"),
-    ("Device cost", "sig_verify_latency", Stat::P50, "Verify latency p50"),
-    ("Device cost", "sig_verify_latency", Stat::P95, "Verify latency p95"),
-    ("Device cost", "sig_signer_util", Stat::Point, "Signer utilisation (mean node)"),
-    ("Device cost", "sig_signer_util_max", Stat::Point, "Signer utilisation (busiest node)"),
-    ("Device cost", "sig_verifier_util", Stat::Point, "Verifier utilisation (mean node)"),
-    ("Device cost", "sig_verifier_util_max", Stat::Point, "Verifier utilisation (busiest node)"),
-    ("Device cost", "sig_verify_capacity", Stat::Point, "Verifications per second one engine can do"),
-    ("Device cost", "sig_neighbour_capacity", Stat::Point, "Neighbours a device can keep up with"),
-    ("Device cost", "sig_verify_headroom", Stat::Point, "Verification headroom (capacity / load)"),
-    ("Device cost", "sig_verify_dropped", Stat::Point, "Verifications dropped"),
-    ("Device cost", "sig_verify_late", Stat::Point, "Verifications later than 100 ms"),
-    ("Fragmentation", "sig_fragments_per_msg", Stat::Point, "Frames per message"),
-    ("Fragmentation", "sig_fragmented_share", Stat::Point, "Messages fragmented"),
-    ("Fragmentation", "sig_reassembly_loss", Stat::Point, "Fragmented messages lost in reassembly"),
-    ("Latency and channel", "sig_e2e_added", Stat::P50, "Latency added by security p50"),
-    ("Latency and channel", "sig_e2e_added", Stat::P95, "Latency added by security p95"),
-    ("Latency and channel", "sig_e2e_added_share", Stat::Point, "Security's share of end-to-end latency"),
-    ("Latency and channel", "e2e_latency", Stat::P95, "End-to-end latency p95 (all flows)"),
-    ("Latency and channel", "cbr", Stat::Point, "Channel busy ratio (measured)"),
-    ("Latency and channel", "sig_cbr_extra", Stat::Point, "Channel busy ratio from security bytes (estimate)"),
-    ("Latency and channel", "pdr", Stat::Point, "Packet delivery ratio within 100 m"),
-    ("Backend", "sig_backend_bytes", Stat::Point, "Credential bytes to and from devices per second"),
-    ("Backend", "sig_ca_sign_rate", Stat::Point, "CA signatures per second"),
-    ("Backend", "sig_ca_busy", Stat::Point, "CA service time per second"),
+    (
+        "Bytes on the air",
+        "sig_signature_bytes",
+        Stat::Point,
+        "Signature per message",
+    ),
+    (
+        "Bytes on the air",
+        "sig_signature_rate",
+        Stat::Point,
+        "Signature bytes per second (all senders)",
+    ),
+    (
+        "Bytes on the air",
+        "sig_signer_id_bytes",
+        Stat::Point,
+        "Signer identifier per message",
+    ),
+    (
+        "Bytes on the air",
+        "sig_cert_bytes",
+        Stat::Point,
+        "Attached certificate per message (averaged)",
+    ),
+    (
+        "Bytes on the air",
+        "sig_cert_airtime_share",
+        Stat::Point,
+        "Certificates' share of the air",
+    ),
+    (
+        "Bytes on the air",
+        "sig_signer_id_airtime_share",
+        Stat::Point,
+        "Signer identifiers' share of the air",
+    ),
+    (
+        "Bytes on the air",
+        "sig_security_airtime_share",
+        Stat::Point,
+        "Security share of the air (with certificates)",
+    ),
+    (
+        "Bytes on the air",
+        "sig_security_airtime_share_nocert",
+        Stat::Point,
+        "Security share of the air (without certificates)",
+    ),
+    (
+        "Device cost",
+        "sig_sign_latency",
+        Stat::P50,
+        "Sign latency p50",
+    ),
+    (
+        "Device cost",
+        "sig_sign_latency",
+        Stat::P95,
+        "Sign latency p95",
+    ),
+    (
+        "Device cost",
+        "sig_sign_wait",
+        Stat::P95,
+        "Wait for the signer p95",
+    ),
+    (
+        "Device cost",
+        "sig_verify_latency",
+        Stat::P50,
+        "Verify latency p50",
+    ),
+    (
+        "Device cost",
+        "sig_verify_latency",
+        Stat::P95,
+        "Verify latency p95",
+    ),
+    (
+        "Device cost",
+        "sig_signer_util",
+        Stat::Point,
+        "Signer utilisation (mean node)",
+    ),
+    (
+        "Device cost",
+        "sig_signer_util_max",
+        Stat::Point,
+        "Signer utilisation (busiest node)",
+    ),
+    (
+        "Device cost",
+        "sig_verifier_util",
+        Stat::Point,
+        "Verifier utilisation (mean node)",
+    ),
+    (
+        "Device cost",
+        "sig_verifier_util_max",
+        Stat::Point,
+        "Verifier utilisation (busiest node)",
+    ),
+    (
+        "Device cost",
+        "sig_verify_capacity",
+        Stat::Point,
+        "Verifications per second one engine can do",
+    ),
+    (
+        "Device cost",
+        "sig_neighbour_capacity",
+        Stat::Point,
+        "Neighbours a device can keep up with",
+    ),
+    (
+        "Device cost",
+        "sig_verify_headroom",
+        Stat::Point,
+        "Verification headroom (capacity / load)",
+    ),
+    (
+        "Device cost",
+        "sig_verify_dropped",
+        Stat::Point,
+        "Verifications dropped",
+    ),
+    (
+        "Device cost",
+        "sig_verify_late",
+        Stat::Point,
+        "Verifications later than 100 ms",
+    ),
+    (
+        "Fragmentation",
+        "sig_fragments_per_msg",
+        Stat::Point,
+        "Frames per message",
+    ),
+    (
+        "Fragmentation",
+        "sig_fragmented_share",
+        Stat::Point,
+        "Messages fragmented",
+    ),
+    (
+        "Fragmentation",
+        "sig_reassembly_loss",
+        Stat::Point,
+        "Fragmented messages lost in reassembly",
+    ),
+    (
+        "Latency and channel",
+        "sig_e2e_added",
+        Stat::P50,
+        "Latency added by security p50",
+    ),
+    (
+        "Latency and channel",
+        "sig_e2e_added",
+        Stat::P95,
+        "Latency added by security p95",
+    ),
+    (
+        "Latency and channel",
+        "sig_e2e_added_share",
+        Stat::Point,
+        "Security's share of end-to-end latency",
+    ),
+    (
+        "Latency and channel",
+        "e2e_latency",
+        Stat::P95,
+        "End-to-end latency p95 (all flows)",
+    ),
+    (
+        "Latency and channel",
+        "cbr",
+        Stat::Point,
+        "Channel busy ratio (measured)",
+    ),
+    (
+        "Latency and channel",
+        "sig_cbr_extra",
+        Stat::Point,
+        "Channel busy ratio from security bytes (estimate)",
+    ),
+    (
+        "Latency and channel",
+        "pdr",
+        Stat::Point,
+        "Packet delivery ratio within 100 m",
+    ),
+    (
+        "Backend",
+        "sig_backend_bytes",
+        Stat::Point,
+        "Credential bytes to and from devices per second",
+    ),
+    (
+        "Backend",
+        "sig_ca_sign_rate",
+        Stat::Point,
+        "CA signatures per second",
+    ),
+    (
+        "Backend",
+        "sig_ca_busy",
+        Stat::Point,
+        "CA service time per second",
+    ),
 ];
 
 /// Runs the comparison and writes its three files.
@@ -262,13 +441,22 @@ pub fn run_scenario(
     if scenario.metrics.is_empty() {
         scenario.metrics = vec!["all".to_string()];
     }
-    if !scenario.metrics.iter().any(|m| m == v2xw_metrics::signing::GROUP) {
-        scenario.metrics.push(v2xw_metrics::signing::GROUP.to_string());
+    if !scenario
+        .metrics
+        .iter()
+        .any(|m| m == v2xw_metrics::signing::GROUP)
+    {
+        scenario
+            .metrics
+            .push(v2xw_metrics::signing::GROUP.to_string());
     }
     let mut sweep = BTreeMap::new();
     sweep.insert(
         "security.signature".to_string(),
-        schemes.iter().map(|s| serde_json::Value::String(s.clone())).collect(),
+        schemes
+            .iter()
+            .map(|s| serde_json::Value::String(s.clone()))
+            .collect(),
     );
     scenario.experiment = Some(v2xw_engine::scenario::schema::Experiment {
         sweep,
@@ -334,12 +522,15 @@ pub fn run_scenario(
 
 /// The health band and better-direction of a metric series, from the catalogue.
 fn band_of(metric: &str, series: &str) -> (Option<HealthBand>, Option<Better>) {
-    let band = v2xw_metrics::signing::SigningProvider::new(0, v2xw_metrics::signing::SchemeFacts::default())
-        .defs()
-        .into_iter()
-        .find(|d| d.name == metric)
-        .and_then(|d| d.health)
-        .or_else(|| v2xw_metrics::health::band_for(metric));
+    let band = v2xw_metrics::signing::SigningProvider::new(
+        0,
+        v2xw_metrics::signing::SchemeFacts::default(),
+    )
+    .defs()
+    .into_iter()
+    .find(|d| d.name == metric)
+    .and_then(|d| d.health)
+    .or_else(|| v2xw_metrics::health::band_for(metric));
     let better = band.as_ref().map(|b| b.better).or(match metric {
         "pdr" | "sig_verify_capacity" | "sig_neighbour_capacity" | "sig_verify_headroom" => {
             Some(Better::Higher)
@@ -413,7 +604,9 @@ pub fn build(
                 if i == base_ix {
                     return false;
                 }
-                let (Some(v), Some(b)) = (*v, base) else { return false };
+                let (Some(v), Some(b)) = (*v, base) else {
+                    return false;
+                };
                 let crossed = level[i].is_some() && level[i] != level[base_ix];
                 let big = (v - b).abs() > floor
                     && (b == 0.0 || (v - b).abs() / b.abs() >= RELATIVE_FLOOR);
@@ -464,7 +657,10 @@ pub fn build(
 /// 3GPP reliability requirement is read at; every bin otherwise.
 fn dims_match(metric: &str, s: &MetricSample) -> bool {
     match metric {
-        "pdr" => s.dims.iter().any(|(d, v)| d.to_string() == "radius" && v.to_string() == "100m"),
+        "pdr" => s
+            .dims
+            .iter()
+            .any(|(d, v)| d.to_string() == "radius" && v.to_string() == "100m"),
         _ => true,
     }
 }
@@ -487,11 +683,17 @@ fn pool(samples: &[&MetricSample], stat: Stat) -> Option<f64> {
     let mut count: Option<u64> = None;
     for sample in samples {
         match &sample.value {
-            SampleValue::Ratio(RatioEstimate::Proportion { successes, trials, .. }) => {
+            SampleValue::Ratio(RatioEstimate::Proportion {
+                successes, trials, ..
+            }) => {
                 s += successes;
                 t += trials;
             }
-            SampleValue::Ratio(RatioEstimate::RatioOfSums { numerator, denominator, .. }) => {
+            SampleValue::Ratio(RatioEstimate::RatioOfSums {
+                numerator,
+                denominator,
+                ..
+            }) => {
                 num += numerator;
                 den += denominator;
             }
@@ -500,7 +702,9 @@ fn pool(samples: &[&MetricSample], stat: Stat) -> Option<f64> {
                 wsum += point * w;
                 wn += w;
             }
-            SampleValue::Distribution(DistributionSummary::Summary { n, mean, p50, p95, .. }) => {
+            SampleValue::Distribution(DistributionSummary::Summary {
+                n, mean, p50, p95, ..
+            }) => {
                 let v = match stat {
                     Stat::P50 => *p50,
                     Stat::P95 => *p95,
@@ -547,7 +751,13 @@ pub fn markdown(c: &Comparison) -> String {
     for s in &c.schemes {
         md.push_str(&format!(
             "| {} | {} | {} | {} | {} | {} | {} |\n",
-            s.id, s.mode, s.sig_octets, s.key_octets, s.cert_extra_octets, s.sign_engine, s.verify_engine
+            s.id,
+            s.mode,
+            s.sig_octets,
+            s.key_octets,
+            s.cert_extra_octets,
+            s.sign_engine,
+            s.verify_engine
         ));
     }
     let mut group = "";
@@ -587,7 +797,8 @@ pub fn markdown(c: &Comparison) -> String {
 /// The CSV rendering, long form.
 #[must_use]
 pub fn csv(c: &Comparison) -> String {
-    let mut out = String::from("group,key,label,unit,scheme,mode,value,delta,rel,level,highlight\n");
+    let mut out =
+        String::from("group,key,label,unit,scheme,mode,value,delta,rel,level,highlight\n");
     let q = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
     let num = |v: Option<f64>| v.map(|v| format!("{v}")).unwrap_or_default();
     for r in &c.rows {

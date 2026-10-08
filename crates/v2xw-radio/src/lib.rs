@@ -159,8 +159,6 @@ pub use dcc::{
     ReactiveDcc, ReactiveTable, SaeJ2945Dcc,
 };
 pub use fading::{NakagamiFading, NakagamiPreset, NoFading};
-pub use tuning::{NakagamiProfile, ShadowingOverride};
-pub use winner::WinnerPlusB1;
 pub use focus::{
     BOUNDARY_BIAS_TOLERANCE_PP, BoundaryBiasMeter, BoundaryBiasReport, BoundaryBinBias,
     BoundaryObservation, FocusPlan, FocusShape, FocusWarning, LinkEvaluation, LinkPlacement,
@@ -191,6 +189,8 @@ pub use terrain::{
     EdgeExtraction, GroundProfile, ProfilePoint, TerrainProfile, any_edge_obstructs, knife_edges,
     radio_line_height_m,
 };
+pub use tuning::{NakagamiProfile, ShadowingOverride};
+pub use winner::WinnerPlusB1;
 
 pub use bler::{
     BlerCurve, CurveProvenance, SeAnchor, SeGapFit, SidelinkErrorModel, WILAB_LTE_SINR_AT_10PC,

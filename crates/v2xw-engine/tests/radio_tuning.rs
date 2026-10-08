@@ -29,9 +29,10 @@ fn tuned(mut s: Scenario, patch: serde_json::Value) -> Scenario {
 }
 
 fn model(mut s: Scenario, family: &str, id: &str) -> Scenario {
-    s.radio
-        .models
-        .insert(family.into(), v2xw_engine::scenario::schema::ModelChoice::new(id));
+    s.radio.models.insert(
+        family.into(),
+        v2xw_engine::scenario::schema::ModelChoice::new(id),
+    );
     s
 }
 
@@ -70,7 +71,10 @@ fn an_override_the_run_would_ignore_is_refused() {
     let s = grid_fleet(10, 1.0);
     // The shipped grid runs the medium tier's log-distance law, where the exponent acts;
     // TR 37.885 has its own slopes.
-    let exp = tuned(s.clone(), serde_json::json!({"channel": {"path_loss_exponent": 3.0}}));
+    let exp = tuned(
+        s.clone(),
+        serde_json::json!({"channel": {"path_loss_exponent": 3.0}}),
+    );
     assert!(!refused(&exp, "path_loss_exponent"));
     let exp_tr = model(exp, "propagation", "propagation/tr37885");
     assert!(refused(&exp_tr, "path_loss_exponent"));
@@ -89,7 +93,10 @@ fn an_override_the_run_would_ignore_is_refused() {
     lte.radio.sidelink.resource_keep_probability = Some(0.4);
     assert!(!refused(&lte, "resource_keep_probability"));
     // A Nakagami shape needs the Nakagami law named; a far m needs its breakpoint.
-    let nak = tuned(s.clone(), serde_json::json!({"channel": {"nakagami_shape": 1.0}}));
+    let nak = tuned(
+        s.clone(),
+        serde_json::json!({"channel": {"nakagami_shape": 1.0}}),
+    );
     assert!(refused(&nak, "nakagami_shape"));
     let nak = tuned(
         s.clone(),
@@ -116,7 +123,10 @@ fn winner_plus_b1_is_the_steeper_law_it_is_published_as() {
         mean_rssi(&b1, 150.0, 300.0).expect("winner links at 150-300 m"),
     );
     println!("mean RSSI 150-300 m: tr37885 {t:.1} dBm, winner-plus-b1 {w:.1} dBm");
-    assert!(t - w > 10.0, "WINNER+ B1 should be far steeper: {t:.1} vs {w:.1}");
+    assert!(
+        t - w > 10.0,
+        "WINNER+ B1 should be far steeper: {t:.1} vs {w:.1}"
+    );
 }
 
 /// Shadowing σ = 0 removes the spread at one distance; the default keeps it.
@@ -129,14 +139,19 @@ fn shadowing_sigma_reaches_the_link_budget() {
         // The deviation from the law at each attempt's own distance.
         let devs: Vec<f64> = rx
             .iter()
-            .filter_map(|r| Some(r.rssi_dbm? + v2xw_radio::winner::b1_los_db(r.dist_m?, 1.5, 1.5, 5.9e9)))
+            .filter_map(|r| {
+                Some(r.rssi_dbm? + v2xw_radio::winner::b1_los_db(r.dist_m?, 1.5, 1.5, 5.9e9))
+            })
             .collect();
         let m = devs.iter().sum::<f64>() / devs.len() as f64;
         (devs.iter().map(|d| (d - m) * (d - m)).sum::<f64>() / devs.len() as f64).sqrt()
     };
     let on = spread(&rx(model(base.clone(), "fading", "fading/none")));
     let off = spread(&rx(model(
-        tuned(base, serde_json::json!({"channel": {"shadowing_sigma_db": 0.0}})),
+        tuned(
+            base,
+            serde_json::json!({"channel": {"shadowing_sigma_db": 0.0}}),
+        ),
         "fading",
         "fading/none",
     )));
@@ -164,5 +179,9 @@ fn hidden_terminals_are_reported() {
     };
     let (hidden, collision) = (count("hidden-terminal"), count("collision"));
     println!("losses: hidden-terminal {hidden}, collision {collision}");
-    assert!(hidden > 0, "no hidden terminal among {} attempts", frames.len());
+    assert!(
+        hidden > 0,
+        "no hidden terminal among {} attempts",
+        frames.len()
+    );
 }

@@ -272,13 +272,9 @@ impl ChannelModel {
                 .params()
                 .path_loss_db(d),
             ChannelModel::WinnerPlusB1 => crate::winner::b1_los_db(d, 1.5, 1.5, f_hz),
-            ChannelModel::WinnerPlusB1ActualHeights => crate::winner::b1_los_with(
-                d,
-                1.5,
-                1.5,
-                f_hz,
-                crate::winner::B1Heights::Actual,
-            ),
+            ChannelModel::WinnerPlusB1ActualHeights => {
+                crate::winner::b1_los_with(d, 1.5, 1.5, f_hz, crate::winner::B1Heights::Actual)
+            }
         }
     }
 }

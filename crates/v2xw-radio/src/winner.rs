@@ -277,7 +277,10 @@ fn card() -> ModelCard {
     );
     card.tier = vec![Tier::Medium, Tier::High];
     card.equations = vec![
-        Equation::new("breakpoint", "d'BP = 4·(h_t − 1)·(h_r − 1)·f/c (≈ 19.7 m at 5.9 GHz, 1.5 m antennas)"),
+        Equation::new(
+            "breakpoint",
+            "d'BP = 4·(h_t − 1)·(h_r − 1)·f/c (≈ 19.7 m at 5.9 GHz, 1.5 m antennas)",
+        ),
         Equation::new(
             "path loss",
             "d ≤ d'BP: 22.7·log10(d) + 27.0 + 20·log10(f_GHz); d > d'BP: 40·log10(d) + 7.56 \
@@ -289,14 +292,32 @@ fn card() -> ModelCard {
         ),
     ];
     card.parameters = vec![
-        Parameter::new("near_slope_db_per_decade", "dB", serde_json::json!(22.7), winner.clone()),
-        Parameter::new("far_slope_db_per_decade", "dB", serde_json::json!(40.0), winner.clone()),
-        Parameter::new("environment_height_m", "m", serde_json::json!(ENVIRONMENT_HEIGHT_M), winner.clone()),
+        Parameter::new(
+            "near_slope_db_per_decade",
+            "dB",
+            serde_json::json!(22.7),
+            winner.clone(),
+        ),
+        Parameter::new(
+            "far_slope_db_per_decade",
+            "dB",
+            serde_json::json!(40.0),
+            winner.clone(),
+        ),
+        Parameter::new(
+            "environment_height_m",
+            "m",
+            serde_json::json!(ENVIRONMENT_HEIGHT_M),
+            winner.clone(),
+        ),
         Parameter {
             name: "heights".to_string(),
             unit: "-".to_string(),
             default: serde_json::json!("effective"),
-            range: Some(vec![serde_json::json!("effective"), serde_json::json!("actual")]),
+            range: Some(vec![
+                serde_json::json!("effective"),
+                serde_json::json!("actual"),
+            ]),
             source: Source::new(
                 SourceKind::Paper,
                 "effective: WINNER+ D5.3 / TR 36.885 as printed, reproduces Veins (Sepulcre \
@@ -306,16 +327,30 @@ fn card() -> ModelCard {
             ),
             calibration: None,
         },
-        Parameter::new("sigma_los_db", "dB", serde_json::json!(SIGMA_LOS_DB), tr.clone()),
-        Parameter::new("sigma_nlos_db", "dB", serde_json::json!(SIGMA_NLOS_DB), tr.clone()),
-        Parameter::new("min_distance_m", "m", serde_json::json!(MIN_DISTANCE_M), tr.clone()),
+        Parameter::new(
+            "sigma_los_db",
+            "dB",
+            serde_json::json!(SIGMA_LOS_DB),
+            tr.clone(),
+        ),
+        Parameter::new(
+            "sigma_nlos_db",
+            "dB",
+            serde_json::json!(SIGMA_NLOS_DB),
+            tr.clone(),
+        ),
+        Parameter::new(
+            "min_distance_m",
+            "m",
+            serde_json::json!(MIN_DISTANCE_M),
+            tr.clone(),
+        ),
     ];
     card.assumptions = vec![
         "The run's carrier is used in the f terms (TR 36.885 uses 6 GHz as the 5.9 GHz \
          proxy; the difference is 0.1 dB)."
             .to_string(),
-        "An antenna at or below the 1 m environment height is evaluated at h' = 0.1 m."
-            .to_string(),
+        "An antenna at or below the 1 m environment height is evaluated at h' = 0.1 m.".to_string(),
     ];
     card.limitations = vec![
         "No B1 NLOS (Manhattan two-leg) formula: a building-blocked link keeps the LOS law \

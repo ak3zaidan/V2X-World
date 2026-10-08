@@ -2834,7 +2834,10 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
     );
     for (leaf, set) in [
         ("shadowing_sigma_db", c.shadowing_sigma_db.is_some()),
-        ("shadowing_decorrelation_m", c.shadowing_decorrelation_m.is_some()),
+        (
+            "shadowing_decorrelation_m",
+            c.shadowing_decorrelation_m.is_some(),
+        ),
     ] {
         if set && no_shadow {
             e.push(conflict(
@@ -2895,8 +2898,7 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
     if c.vehicle_blockage.is_some() && abstract_tier {
         e.push(conflict(
             "radio.channel_model.vehicle_blockage",
-            "would change nothing: the abstract propagation tier composes no obstacle"
-                .to_string(),
+            "would change nothing: the abstract propagation tier composes no obstacle".to_string(),
         ));
     }
 
@@ -2910,9 +2912,7 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
         } else if lte && p != 20 {
             e.push(conflict(
                 "radio.sidelink.candidate_percent",
-                format!(
-                    "{p} % is NR-only: LTE-V2X fixes it at 20 % (TS 36.213 §14.1.1.6 step 7)"
-                ),
+                format!("{p} % is NR-only: LTE-V2X fixes it at 20 % (TS 36.213 §14.1.1.6 step 7)"),
             ));
         }
     }

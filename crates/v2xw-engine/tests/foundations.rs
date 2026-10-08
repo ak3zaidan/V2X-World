@@ -520,7 +520,11 @@ fn the_load_metrics_scale_with_the_fleet_as_theory_says() {
         let (report, rec) = run(deterministic_radio(fleet(n, 1.0)));
         let w = window(&rec, S);
         let collisions = report.rx_losses.get("collision").copied().unwrap_or(0)
-            + report.rx_losses.get("hidden-terminal").copied().unwrap_or(0);
+            + report
+                .rx_losses
+                .get("hidden-terminal")
+                .copied()
+                .unwrap_or(0);
         let row = (
             n,
             report.actors_spawned,

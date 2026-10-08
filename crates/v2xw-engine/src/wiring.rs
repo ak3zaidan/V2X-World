@@ -1973,7 +1973,9 @@ pub fn build_radio_at(
         }
         PropagationChoice::Geometric => {
             let m = v2xw_radio::GeometricUrbanV2v::new(tier, env).with_shadowing(shadow);
-            let fit = models.building_fit.unwrap_or(v2xw_radio::SommerFit::Default);
+            let fit = models
+                .building_fit
+                .unwrap_or(v2xw_radio::SommerFit::Default);
             Box::new(match sommer_override(scenario, fit) {
                 Some(c) => m.with_building_coefficients(c),
                 None => m,
@@ -2013,9 +2015,7 @@ pub fn build_radio_at(
     // `radio.models.fading`, so at most one of the two is set.
     let cm = &scenario.radio.channel_model;
     let fixed = |m: f64| -> Box<dyn BoxedFading> {
-        Box::new(
-            v2xw_radio::NakagamiFading::new(v2xw_radio::NakagamiPreset::FixedMedium).with_m(m),
-        )
+        Box::new(v2xw_radio::NakagamiFading::new(v2xw_radio::NakagamiPreset::FixedMedium).with_m(m))
     };
     let fading: Box<dyn BoxedFading> = match cm.fading.as_deref() {
         Some("none") => Box::new(v2xw_radio::NoFading::new()),
@@ -2024,10 +2024,9 @@ pub fn build_radio_at(
             cm.rice_k_db.unwrap_or(DEFAULT_RICE_K_DB),
         )),
         Some("nakagami") => Box::new(
-            v2xw_radio::NakagamiFading::new(v2xw_radio::NakagamiPreset::FixedMedium)
-                .with_profile(nakagami_override(scenario).unwrap_or(
-                    v2xw_radio::NakagamiProfile::constant(3.0),
-                )),
+            v2xw_radio::NakagamiFading::new(v2xw_radio::NakagamiPreset::FixedMedium).with_profile(
+                nakagami_override(scenario).unwrap_or(v2xw_radio::NakagamiProfile::constant(3.0)),
+            ),
         ),
         _ => match models.fading.unwrap_or(default_fading) {
             FadingChoice::None => Box::new(v2xw_radio::NoFading::new()),

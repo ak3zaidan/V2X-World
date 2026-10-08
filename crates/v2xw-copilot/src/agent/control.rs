@@ -619,16 +619,20 @@ fn value_words(key: &str, before: &Value, after: &Value) -> String {
     };
     match (path.as_str(), after) {
         (_, Value::Null) => "removed".into(),
-        ("city", Value::String(id)) => {
-            catalog::city_short_name(id).unwrap_or_else(|| id.clone())
-        }
+        ("city", Value::String(id)) => catalog::city_short_name(id).unwrap_or_else(|| id.clone()),
         (_, Value::Array(items)) => {
             // An append shows what was added, not the whole list.
             let had = before.as_array().map_or(0, Vec::len);
             let added: Vec<String> = items
                 .iter()
                 .skip(had.min(items.len()))
-                .map(|v| if v.is_object() { item(v) } else { scalar_words(&path, v) })
+                .map(|v| {
+                    if v.is_object() {
+                        item(v)
+                    } else {
+                        scalar_words(&path, v)
+                    }
+                })
                 .collect();
             if added.is_empty() {
                 format!("{} items", items.len())
@@ -1726,10 +1730,21 @@ mod tests {
             ),
             ch("metrics", Value::Null, json!(["all"])),
         ]);
-        let line: Vec<String> = c.iter().map(|c| format!("{} → {}", c.label, c.value)).collect();
-        assert_eq!(c.len(), 4, "the analyst's own metrics change is not a chip: {line:?}");
+        let line: Vec<String> = c
+            .iter()
+            .map(|c| format!("{} → {}", c.label, c.value))
+            .collect();
+        assert_eq!(
+            c.len(),
+            4,
+            "the analyst's own metrics change is not a chip: {line:?}"
+        );
         assert_eq!(line[0], "City → Portland, OR");
-        assert!(line[1].starts_with("Radio") && !line[1].contains("dsrc-80211p") || line[1].contains("DSRC"), "{line:?}");
+        assert!(
+            line[1].starts_with("Radio") && !line[1].contains("dsrc-80211p")
+                || line[1].contains("DSRC"),
+            "{line:?}"
+        );
         assert_eq!(line[2], "Attackers → 5% Constant position");
         assert_eq!(line[3], "Vehicle mix → passenger 90%, truck 10%");
     }

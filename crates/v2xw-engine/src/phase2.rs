@@ -2966,7 +2966,10 @@ impl Phase2 {
                     // Backend latency per exchange type, ms (mean and worst so far).
                     for (kind, l) in &a.exchange_latency {
                         let key = kind.replace('-', "_");
-                        e.set(&format!("{key}_latency_ms"), (l.mean_ms() * 10.0).round() / 10.0);
+                        e.set(
+                            &format!("{key}_latency_ms"),
+                            (l.mean_ms() * 10.0).round() / 10.0,
+                        );
                         e.set(&format!("{key}_latency_max_ms"), l.max_ns / 1_000_000);
                     }
                     if a.mbms_broadcasts > 0 {

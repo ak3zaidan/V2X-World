@@ -536,8 +536,9 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
     /// When there is no such setup or the engine refuses the restore.
     pub fn undo_setup(&mut self, id: usize) -> Result<()> {
         control::undo_setup(self, id)?;
-        self.notes
-            .push(format!("The person undid setup {id}; the Settings window is back to what it was before it."));
+        self.notes.push(format!(
+            "The person undid setup {id}; the Settings window is back to what it was before it."
+        ));
         Ok(())
     }
 

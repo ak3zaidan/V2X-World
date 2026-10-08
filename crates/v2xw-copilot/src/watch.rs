@@ -514,7 +514,11 @@ impl Watcher {
         let Some(actors) = status.get("actors").and_then(Value::as_u64) else {
             return;
         };
-        let flagged = self.trends.get("traffic.no-vehicles").copied().unwrap_or(false);
+        let flagged = self
+            .trends
+            .get("traffic.no-vehicles")
+            .copied()
+            .unwrap_or(false);
         if actors == 0 && t_s >= NO_VEHICLES_AFTER_S && !flagged {
             self.push(
                 Severity::Critical,
@@ -577,7 +581,11 @@ impl Watcher {
         // base free-flow speed; 1 m/s is under 10% of a 25 mph street, a jam rather than
         // slow traffic.
         if let Some(m) = e.metrics.get("mean_speed") {
-            let to_mps = if m.unit.contains("km") { 1.0 / 3.6 } else { 1.0 };
+            let to_mps = if m.unit.contains("km") {
+                1.0 / 3.6
+            } else {
+                1.0
+            };
             let latest = m.series.iter().rev().find_map(|(t, v)| v.map(|v| (*t, v)));
             if let Some((t, v)) = latest {
                 let mps = v * to_mps;
@@ -1238,7 +1246,9 @@ mod tests {
         st["actors"] = json!(0);
         w.on_status(&st);
         assert!(
-            !w.feed().iter().any(|o| o.finding.as_deref() == Some("traffic.no-vehicles")),
+            !w.feed()
+                .iter()
+                .any(|o| o.finding.as_deref() == Some("traffic.no-vehicles")),
             "not yet: vehicles may still be entering"
         );
         st["t_ns"] = json!(20_000_000_000u64);
@@ -1253,7 +1263,8 @@ mod tests {
         assert_eq!(empty[0].severity, Severity::Critical);
 
         let mut e = quiet(20.0);
-        e.metrics.insert("verify_overflow".into(), metric(42.0, "count"));
+        e.metrics
+            .insert("verify_overflow".into(), metric(42.0, "count"));
         e.metrics.insert("det_recall".into(), metric(0.2, "ratio"));
         let new = w.on_evidence(&e);
         let ids: Vec<_> = new.iter().filter_map(|o| o.finding.as_deref()).collect();

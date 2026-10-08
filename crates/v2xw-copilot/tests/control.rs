@@ -473,9 +473,10 @@ fn setup_stages_a_portland_draft_with_chips_and_undo_restores_the_window() {
         .with_policy(quick());
     let mut events = Vec::new();
     agent
-        .ask("Set up busy traffic on Portland with DSRC and attackers", &mut |e| {
-            events.push(e)
-        })
+        .ask(
+            "Set up busy traffic on Portland with DSRC and attackers",
+            &mut |e| events.push(e),
+        )
         .expect("completes");
 
     let calls: Vec<(String, Value)> = log.lock().unwrap().clone();
@@ -503,7 +504,10 @@ fn setup_stages_a_portland_draft_with_chips_and_undo_restores_the_window() {
         .map(|c| format!("{} → {}", c.label, c.value))
         .collect();
     assert_eq!(line[0], "City → Portland, OR", "{line:?}");
-    assert!(line.iter().any(|l| l == "Attackers → 5% Constant position"), "{line:?}");
+    assert!(
+        line.iter().any(|l| l == "Attackers → 5% Constant position"),
+        "{line:?}"
+    );
     assert!(!line.iter().any(|l| l.starts_with("Metrics")), "{line:?}");
 
     // A follow-up builds on the draft, not on the running scenario.
@@ -518,7 +522,10 @@ fn setup_stages_a_portland_draft_with_chips_and_undo_restores_the_window() {
         .find(|(m, _)| m == "scenario.set")
         .cloned()
         .expect("staged again");
-    assert_eq!(last_set.1["scenario"]["city"], "portland", "kept the first setup");
+    assert_eq!(
+        last_set.1["scenario"]["city"], "portland",
+        "kept the first setup"
+    );
     assert_eq!(last_set.1["scenario"]["time"]["duration_s"], json!(120));
 
     // Undo of the second setup puts the first one's draft back.

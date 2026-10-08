@@ -268,7 +268,10 @@ mod winner_tests {
     fn the_studies_on_winner_plus_b1() {
         let rows = run_channels(
             false,
-            &[ChannelModel::WinnerPlusB1, ChannelModel::WinnerPlusB1ActualHeights],
+            &[
+                ChannelModel::WinnerPlusB1,
+                ChannelModel::WinnerPlusB1ActualHeights,
+            ],
         );
         println!("{}", markdown(&rows));
         for r in &rows {

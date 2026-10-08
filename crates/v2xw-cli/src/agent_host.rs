@@ -718,7 +718,10 @@ async fn compare_start(
     match tokio::task::spawn_blocking(move || crate::sigcompare::start(req)).await {
         Ok(Ok(job)) => reply(StatusCode::ACCEPTED, json!(job)),
         Ok(Err(e)) => reply(StatusCode::CONFLICT, json!({"error": e})),
-        Err(e) => reply(StatusCode::INTERNAL_SERVER_ERROR, json!({"error": e.to_string()})),
+        Err(e) => reply(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"error": e.to_string()}),
+        ),
     }
 }
 

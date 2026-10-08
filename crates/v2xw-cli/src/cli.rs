@@ -65,7 +65,11 @@ pub struct CompareSignaturesArgs {
     pub scenario: PathBuf,
     /// Comma-separated scheme ids (`v2xw_sec::scheme::SIGNATURE_IDS`); ECDSA P-256 is
     /// added as the baseline when missing.
-    #[arg(long, value_delimiter = ',', default_value = "ecdsa-p256,ml-dsa-44,falcon-512,hybrid-mldsa44-ecdsa-p256")]
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "ecdsa-p256,ml-dsa-44,falcon-512,hybrid-mldsa44-ecdsa-p256"
+    )]
     pub schemes: Vec<String>,
     /// Where the outputs go. Defaults to `runs/<meta.name>-signatures`.
     #[arg(short, long)]
@@ -89,7 +93,12 @@ impl CompareSignaturesArgs {
     pub fn to_options(&self) -> crate::sigcompare::CompareOptions {
         crate::sigcompare::CompareOptions {
             scenario: self.scenario.clone(),
-            schemes: self.schemes.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            schemes: self
+                .schemes
+                .iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
             out: self.out.clone(),
             duration_s: self.duration,
             build_utc: self.build_utc.clone(),

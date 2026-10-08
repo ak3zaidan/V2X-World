@@ -85,9 +85,7 @@ pub fn native_with_driving(
 }
 
 /// Kesting 2007's MOBIL parameters with `actors.vehicles.drivers`'s numbers over them.
-fn mobil_of(
-    d: &crate::scenario::schema::Drivers,
-) -> v2xw_mobility::lanechange::mobil::MobilParams {
+fn mobil_of(d: &crate::scenario::schema::Drivers) -> v2xw_mobility::lanechange::mobil::MobilParams {
     let mut p = MobilPreset::Kesting2007.params();
     if let Some(v) = d.politeness {
         p.politeness = v;

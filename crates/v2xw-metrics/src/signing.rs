@@ -57,8 +57,8 @@ use v2xw_core::time::{Duration, SimTime};
 
 use crate::cards;
 use crate::channels::{
-    ChannelView, MacCbrView, NetFragView, NodeRxView, NodeTxView, RxFate,
-    SignerId, VerifyOutcome, decode, FragOutcome,
+    ChannelView, FragOutcome, MacCbrView, NetFragView, NodeRxView, NodeTxView, RxFate, SignerId,
+    VerifyOutcome, decode,
 };
 use crate::def::{Agg, DEFAULT_LEVEL, Dim, DimValue, Dims, MetricDef, MetricSample, SampleValue};
 use crate::health::{Basis, Better, HealthBand};
@@ -299,7 +299,12 @@ impl SigningProvider {
     #[allow(clippy::too_many_lines)]
     fn definitions(&self) -> Vec<MetricDef> {
         let src = cards::design("08-measurement-and-data.md §2.2");
-        let eng = |caution: f64, unhealthy: f64, better: Better, judged: &str, notes: [&str; 3], why: &str| {
+        let eng = |caution: f64,
+                   unhealthy: f64,
+                   better: Better,
+                   judged: &str,
+                   notes: [&str; 3],
+                   why: &str| {
             HealthBand {
                 better,
                 judged: judged.to_string(),
@@ -320,7 +325,15 @@ impl SigningProvider {
                 .not_accounting_for(omit.to_string())
         };
         let share = |name: &str, num: &str, den: &str, def: &str, omit: &str| {
-            m(name, "ratio", Agg::ratio(num, den), Quantum::RATIO, def, omit).with_range(0.0, 1.0)
+            m(
+                name,
+                "ratio",
+                Agg::ratio(num, den),
+                Quantum::RATIO,
+                def,
+                omit,
+            )
+            .with_range(0.0, 1.0)
         };
         let budget = "engineering choice against the 100 ms safety budget of 3GPP TS 22.185 §5.1";
         vec![
@@ -773,58 +786,165 @@ impl MetricProvider for SigningProvider {
         let sig = w.signed_msgs * self.facts.sig_octets;
         let msgs = w.messages.len() as u64;
 
-        out.push(self.ratio("sig_signature_bytes", at, sig as f64, w.signed_msgs as f64, w.signed_msgs));
-        out.push(self.scalar("sig_signature_rate", at, Dims::new(),
-            secs.map(|s| (sig as f64 / s, w.signed_msgs))));
-        out.push(self.ratio("sig_signer_id_bytes", at, w.signer_id as f64, w.signed_msgs as f64, w.signed_msgs));
-        out.push(self.ratio("sig_cert_bytes", at, w.cert as f64, w.signed_msgs as f64, w.signed_msgs));
-        out.push(self.ratio("sig_cert_airtime_share", at, w.cert as f64, w.air as f64, w.frames));
-        out.push(self.ratio("sig_signer_id_airtime_share", at, w.signer_id as f64, w.air as f64, w.frames));
-        out.push(self.ratio("sig_security_airtime_share", at, w.envelope as f64, w.air as f64, w.frames));
-        out.push(self.ratio("sig_security_airtime_share_nocert", at,
-            w.envelope.saturating_sub(w.cert) as f64, w.air.saturating_sub(w.cert) as f64, w.frames));
+        out.push(self.ratio(
+            "sig_signature_bytes",
+            at,
+            sig as f64,
+            w.signed_msgs as f64,
+            w.signed_msgs,
+        ));
+        out.push(self.scalar(
+            "sig_signature_rate",
+            at,
+            Dims::new(),
+            secs.map(|s| (sig as f64 / s, w.signed_msgs)),
+        ));
+        out.push(self.ratio(
+            "sig_signer_id_bytes",
+            at,
+            w.signer_id as f64,
+            w.signed_msgs as f64,
+            w.signed_msgs,
+        ));
+        out.push(self.ratio(
+            "sig_cert_bytes",
+            at,
+            w.cert as f64,
+            w.signed_msgs as f64,
+            w.signed_msgs,
+        ));
+        out.push(self.ratio(
+            "sig_cert_airtime_share",
+            at,
+            w.cert as f64,
+            w.air as f64,
+            w.frames,
+        ));
+        out.push(self.ratio(
+            "sig_signer_id_airtime_share",
+            at,
+            w.signer_id as f64,
+            w.air as f64,
+            w.frames,
+        ));
+        out.push(self.ratio(
+            "sig_security_airtime_share",
+            at,
+            w.envelope as f64,
+            w.air as f64,
+            w.frames,
+        ));
+        out.push(self.ratio(
+            "sig_security_airtime_share_nocert",
+            at,
+            w.envelope.saturating_sub(w.cert) as f64,
+            w.air.saturating_sub(w.cert) as f64,
+            w.frames,
+        ));
 
         let label = |engine: &str| {
             let mut d = Dims::new();
-            d.insert(Dim::Primitive, DimValue::label(format!("{}@{engine}", self.facts.scheme)));
+            d.insert(
+                Dim::Primitive,
+                DimValue::label(format!("{}@{engine}", self.facts.scheme)),
+            );
             d
         };
-        out.push(self.dist("sig_sign_latency", at, label(&self.facts.sign_engine), &w.sign_ms));
+        out.push(self.dist(
+            "sig_sign_latency",
+            at,
+            label(&self.facts.sign_engine),
+            &w.sign_ms,
+        ));
         out.push(self.dist("sig_sign_wait", at, Dims::new(), &w.sign_wait_ms));
-        out.push(self.dist("sig_verify_latency", at, label(&self.facts.verify_engine), &w.verify_ms));
+        out.push(self.dist(
+            "sig_verify_latency",
+            at,
+            label(&self.facts.verify_engine),
+            &w.verify_ms,
+        ));
 
         let su = util(&w.sign_busy, window_ns);
-        out.push(self.scalar("sig_signer_util", at, Dims::new(), su.map(|(m, _, n)| (m, n))));
-        out.push(self.scalar("sig_signer_util_max", at, Dims::new(), su.map(|(_, x, n)| (x, n))));
+        out.push(self.scalar(
+            "sig_signer_util",
+            at,
+            Dims::new(),
+            su.map(|(m, _, n)| (m, n)),
+        ));
+        out.push(self.scalar(
+            "sig_signer_util_max",
+            at,
+            Dims::new(),
+            su.map(|(_, x, n)| (x, n)),
+        ));
         let vu = util(&w.verify_busy, window_ns);
-        out.push(self.scalar("sig_verifier_util", at, Dims::new(), vu.map(|(m, _, n)| (m, n))));
-        out.push(self.scalar("sig_verifier_util_max", at, Dims::new(), vu.map(|(_, x, n)| (x, n))));
+        out.push(self.scalar(
+            "sig_verifier_util",
+            at,
+            Dims::new(),
+            vu.map(|(m, _, n)| (m, n)),
+        ));
+        out.push(self.scalar(
+            "sig_verifier_util_max",
+            at,
+            Dims::new(),
+            vu.map(|(_, x, n)| (x, n)),
+        ));
 
         // Capacity: one over the mean service time of the window's verifications.
         let vn = w.verify_ms.len() as u64;
         let mean_ms = w.verify_busy.values().sum::<u64>() as f64 / 1e6 / vn.max(1) as f64;
         let capacity = (vn > 0 && mean_ms > 0.0).then(|| 1000.0 / mean_ms);
-        out.push(self.scalar("sig_verify_capacity", at, Dims::new(), capacity.map(|c| (c, vn))));
+        out.push(self.scalar(
+            "sig_verify_capacity",
+            at,
+            Dims::new(),
+            capacity.map(|c| (c, vn)),
+        ));
         // Messages per second per sender, from the window's distinct messages.
         let senders: BTreeSet<NodeId> = w.messages.keys().map(|(n, _)| *n).collect();
         let per_sender = match secs {
             Some(s) if !senders.is_empty() => Some(msgs as f64 / senders.len() as f64 / s),
             _ => None,
         };
-        out.push(self.scalar("sig_neighbour_capacity", at, Dims::new(),
-            capacity.zip(per_sender).filter(|(_, r)| *r > 0.0).map(|(c, r)| (c / r, vn))));
+        out.push(
+            self.scalar(
+                "sig_neighbour_capacity",
+                at,
+                Dims::new(),
+                capacity
+                    .zip(per_sender)
+                    .filter(|(_, r)| *r > 0.0)
+                    .map(|(c, r)| (c / r, vn)),
+            ),
+        );
         let arrivals = match secs {
             Some(s) if !w.verify_arrivals.is_empty() => Some(
                 w.verify_arrivals.values().sum::<u64>() as f64 / w.verify_arrivals.len() as f64 / s,
             ),
             _ => None,
         };
-        out.push(self.scalar("sig_verify_headroom", at, Dims::new(),
-            capacity.zip(arrivals).filter(|(_, a)| *a > 0.0).map(|(c, a)| (c / a, vn))));
+        out.push(
+            self.scalar(
+                "sig_verify_headroom",
+                at,
+                Dims::new(),
+                capacity
+                    .zip(arrivals)
+                    .filter(|(_, a)| *a > 0.0)
+                    .map(|(c, a)| (c / a, vn)),
+            ),
+        );
         out.push(self.prop("sig_verify_dropped", at, w.dropped));
         out.push(self.prop("sig_verify_late", at, w.late));
 
-        out.push(self.ratio("sig_fragments_per_msg", at, w.frames as f64, msgs as f64, msgs));
+        out.push(self.ratio(
+            "sig_fragments_per_msg",
+            at,
+            w.frames as f64,
+            msgs as f64,
+            msgs,
+        ));
         let mut frag = Proportion::new();
         for n in w.messages.values() {
             frag.observe(*n > 1);
@@ -833,21 +953,44 @@ impl MetricProvider for SigningProvider {
         out.push(self.prop("sig_reassembly_loss", at, w.reassembly));
 
         out.push(self.dist("sig_e2e_added", at, Dims::new(), &w.added_ms));
-        out.push(self.ratio("sig_e2e_added_share", at, w.added_sum_ns as f64, w.e2e_sum_ns as f64, w.added_n));
+        out.push(self.ratio(
+            "sig_e2e_added_share",
+            at,
+            w.added_sum_ns as f64,
+            w.e2e_sum_ns as f64,
+            w.added_n,
+        ));
         let cbr_extra = (w.cbr_n > 0 && w.air > 0)
             .then(|| (w.cbr_sum / w.cbr_n as f64) * (w.envelope as f64 / w.air as f64));
-        out.push(self.ratio("sig_cbr_extra", at, cbr_extra.unwrap_or(0.0), 1.0,
-            if cbr_extra.is_some() { w.cbr_n } else { 0 }));
+        out.push(self.ratio(
+            "sig_cbr_extra",
+            at,
+            cbr_extra.unwrap_or(0.0),
+            1.0,
+            if cbr_extra.is_some() { w.cbr_n } else { 0 },
+        ));
 
         if let (Some(now), Some(s)) = (self.backend_now, secs) {
             let prev = self.backend_prev;
             let d = |a: u64, b: u64| a.saturating_sub(b) as f64 / s;
-            out.push(self.scalar("sig_backend_bytes", at, Dims::new(),
-                Some((d(now.device_bytes, prev.device_bytes), 1))));
-            out.push(self.scalar("sig_ca_sign_rate", at, Dims::new(),
-                Some((d(now.ca_signs, prev.ca_signs), 1))));
-            out.push(self.scalar("sig_ca_busy", at, Dims::new(),
-                Some((d(now.ca_busy_ns, prev.ca_busy_ns) / 1e6, 1))));
+            out.push(self.scalar(
+                "sig_backend_bytes",
+                at,
+                Dims::new(),
+                Some((d(now.device_bytes, prev.device_bytes), 1)),
+            ));
+            out.push(self.scalar(
+                "sig_ca_sign_rate",
+                at,
+                Dims::new(),
+                Some((d(now.ca_signs, prev.ca_signs), 1)),
+            ));
+            out.push(self.scalar(
+                "sig_ca_busy",
+                at,
+                Dims::new(),
+                Some((d(now.ca_busy_ns, prev.ca_busy_ns) / 1e6, 1)),
+            ));
             self.backend_prev = now;
         }
 
@@ -902,16 +1045,26 @@ mod tests {
         };
         let mut p = SigningProvider::new(0, facts);
         let tx = |msg: u64, bytes: u64, env: u64, cert: u64, signer: &str| {
-            rec("node.tx", json!({"t": 10_000_000, "node": 1, "msg": msg, "bytes_on_wire": bytes,
+            rec(
+                "node.tx",
+                json!({"t": 10_000_000, "node": 1, "msg": msg, "bytes_on_wire": bytes,
                 "payload_bytes": 100, "envelope_bytes": env, "cert_bytes": cert, "signer": signer,
-                "t_generated": msg, "t_sign_start": 1_000_000, "t_signed": 3_000_000}))
+                "t_generated": msg, "t_sign_start": 1_000_000, "t_signed": 3_000_000}),
+            )
         };
-        for r in [tx(7, 1000, 850, 0, "digest"), tx(7, 1000, 650, 0, "digest"), tx(8, 400, 200, 100, "certificate")] {
+        for r in [
+            tx(7, 1000, 850, 0, "digest"),
+            tx(7, 1000, 650, 0, "digest"),
+            tx(8, 400, 200, 100, "certificate"),
+        ] {
             p.on_event(&r);
         }
         for i in 0..2u64 {
-            p.on_event(&rec("node.verify", json!({"t_enqueue": 0, "t_start": i * 1_000_000,
-                "t_done": (i + 1) * 1_000_000, "node": 2, "outcome": "valid"})));
+            p.on_event(&rec(
+                "node.verify",
+                json!({"t_enqueue": 0, "t_start": i * 1_000_000,
+                "t_done": (i + 1) * 1_000_000, "node": 2, "outcome": "valid"}),
+            ));
         }
         let s = p.flush(1_000_000_000);
         assert_eq!(point(&s, "sig_signature_bytes"), 2420.0);
