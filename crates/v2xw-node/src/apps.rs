@@ -1228,7 +1228,14 @@ impl AppLayer {
         now: SimTime,
     ) -> Option<(HashedId8, SignalSituation)> {
         let range = self.params.signal_params.glosa_range_m;
-        let mut best: Option<(f64, HashedId8, SignalSituation)> = None;
+        // Ranked by (does the lane serve the intended turn, lateral offset): a driver in
+        // the through lane who means to turn left reads the left-turn signal of the lane
+        // they are changing into, as a driver reads the arrow over the lane they are
+        // heading for. Before, the match was the ego's own lane only, by a lateral bound
+        // of half a lane: halfway through a lane change the ego is half a lane from both
+        // and matched neither, and before it the through lane's group was advised — so
+        // the advice dropped out or jumped on every strategic lane change on an approach.
+        let mut best: Option<((bool, f64), HashedId8, SignalSituation)> = None;
         let now_hour_s = seconds_into_hour(self.wall, now);
         for (id, x) in &self.intersections {
             let Some(signer) = x.signer.clone() else {
@@ -1244,14 +1251,21 @@ impl AppLayer {
                 else {
                     continue;
                 };
-                if lateral.abs() > lane.half_width_m.max(1.5)
-                    || heading_gap(ego.heading_rad, dir) > deg(30.0)
-                {
+                let own = lane.half_width_m.max(1.5) + LANE_MATCH_SLACK_M;
+                // One lane over: the lane a strategic lane change is heading for.
+                let adjacent = own + 2.0 * lane.half_width_m.max(1.5);
+                if lateral.abs() > adjacent || heading_gap(ego.heading_rad, dir) > deg(30.0) {
                     continue;
                 }
-                let Some(group) = pick_group(lane, &x.egress, turn) else {
+                let Some((group, serves)) = pick_group(lane, &x.egress, turn) else {
                     continue;
                 };
+                // An adjacent lane counts only when it serves a turn the ego has said it
+                // will make and its own lane does not.
+                let serves = serves && turn.is_some();
+                if lateral.abs() > own && !serves {
+                    continue;
+                }
                 let Some(&(state, min_end, max_end, likely)) = x.states.get(&group) else {
                     continue;
                 };
@@ -1268,8 +1282,11 @@ impl AppLayer {
                     max_left_s: until(max_end),
                     likely_left_s: until(likely),
                 };
-                if best.as_ref().is_none_or(|(l, ..)| lateral.abs() < *l) {
-                    best = Some((lateral.abs(), signer.clone(), sit));
+                let key = (!serves, lateral.abs());
+                if best.as_ref().is_none_or(|(k, ..)| {
+                    key.0 < k.0 || (key.0 == k.0 && key.1 < k.1)
+                }) {
+                    best = Some((key, signer.clone(), sit));
                 }
             }
         }
@@ -1536,11 +1553,18 @@ fn project_ingress(points: &[Vec3], p: Vec3, range: f64) -> Option<(f64, f64, f6
 
 /// The signal group of the ego's movement from `lane`: the connection whose turn matches
 /// the ego's intent, else the straight one, else the first.
+/// How far past half a lane width the ego's own lane still matches, metres: the ego's
+/// reported position and the MAP's lane centre are both rounded, and a vehicle halfway
+/// through a lane change is half a lane from each. This build's choice.
+const LANE_MATCH_SLACK_M: f64 = 0.3;
+
+/// The signal group of the ego's movement from `lane`, and whether the lane serves the
+/// intended turn itself (rather than by the straight-on or any-movement fallback).
 fn pick_group(
     lane: &Ingress,
     egress: &BTreeMap<u8, (Vec3, Vec3)>,
     turn: Option<TurnIntent>,
-) -> Option<u8> {
+) -> Option<(u8, bool)> {
     let (s0, s1) = (lane.points[0], lane.points[1]);
     let travel = math::atan2(s0.y - s1.y, s0.x - s1.x);
     let classify = |to: u8| -> Option<TurnIntent> {
@@ -1556,16 +1580,20 @@ fn pick_group(
         })
     };
     let want = turn.unwrap_or(TurnIntent::Straight);
-    lane.connections
+    if let Some(g) = lane
+        .connections
         .iter()
         .find(|(to, g)| g.is_some() && classify(*to) == Some(want))
-        .or_else(|| {
-            lane.connections
-                .iter()
-                .find(|(to, g)| g.is_some() && classify(*to) == Some(TurnIntent::Straight))
-        })
+        .and_then(|(_, g)| *g)
+    {
+        return Some((g, true));
+    }
+    lane.connections
+        .iter()
+        .find(|(to, g)| g.is_some() && classify(*to) == Some(TurnIntent::Straight))
         .or_else(|| lane.connections.iter().find(|(_, g)| g.is_some()))
         .and_then(|(_, g)| *g)
+        .map(|g| (g, false))
 }
 
 /// Fills a track's acceleration, yaw rate, size and hard-braking flag from a BSM's or a
