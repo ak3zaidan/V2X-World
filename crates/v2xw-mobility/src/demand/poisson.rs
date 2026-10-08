@@ -84,6 +84,18 @@ pub struct PoissonParams {
     /// scenario without it keeps its card and its draw sequence.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daily: Option<crate::demand::DailyProfile>,
+    /// Hold this many vehicles on the road for the whole run, or `0` (the default) for the
+    /// arrival process. With a fleet the arrival rate is not used: the engine tops the
+    /// fleet up whenever a trip ends or a trip could not enter ([`Demand::fleet_target`]),
+    /// as SUMO's `--max-num-vehicles` with continuous rerouting or a closed-loop
+    /// `routeProbe` demand does. Left out of the serialised parameters when `0`, so every
+    /// scenario without it keeps its card and its draw sequence.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub fleet_size: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl Default for PoissonParams {
@@ -97,6 +109,7 @@ impl Default for PoissonParams {
             fleet: FleetMix::CarsOnly,
             speed: SpeedLaw::ClassSpeedDev,
             daily: None,
+            fleet_size: 0,
         }
     }
 }
@@ -117,6 +130,9 @@ pub struct PoissonDemand {
     next: Option<SimTime>,
     /// How many trips have been produced, which is also the next trip's `seq` (I-M2).
     seq: u64,
+    /// How many produced trips never reached the road ([`Demand::refund`]): the cap on
+    /// trips counts `seq - refunded`, the vehicles actually placed.
+    refunded: u64,
     /// The scenario timeline's demand multiplier in force (03-interfaces.md §13), `1` when
     /// none is. It scales the thinning probability, so it is exact while it is at most
     /// `candidate_boost` — which is what the engine sizes the boost to.
@@ -138,6 +154,7 @@ impl PoissonDemand {
             od,
             next: None,
             seq: 0,
+            refunded: 0,
             event_multiplier: 1.0,
         })
     }
@@ -196,9 +213,16 @@ impl PoissonDemand {
         {
             return None;
         }
-        if self.params.max_total_vehicles > 0 && self.seq >= self.params.max_total_vehicles {
+        if self.params.max_total_vehicles > 0
+            && self.seq.saturating_sub(self.refunded) >= self.params.max_total_vehicles
+        {
             return None;
         }
+        Some(self.draw_trip(ctx, t, multiplier))
+    }
+
+    /// Draws the class, origin, destination, offset and speed of trip `self.seq`.
+    fn draw_trip(&mut self, ctx: &mut dyn MobCtx, t: SimTime, multiplier: f64) -> TripRequest {
         let class = {
             let mut rng = ctx.rng(RngDomain::Spawn, EntityRef::Global);
             self.params.fleet.draw(&mut rng)
@@ -222,7 +246,7 @@ impl PoissonDemand {
             self.params.speed.draw(class, &mut rng)
         };
         self.seq += 1;
-        Some(TripRequest {
+        TripRequest {
             seq,
             t,
             origin,
@@ -230,7 +254,7 @@ impl PoissonDemand {
             destination,
             class,
             desired_speed_mps,
-        })
+        }
     }
 }
 
@@ -243,7 +267,7 @@ impl v2xw_core::model::Model for PoissonDemand {
 impl Demand for PoissonDemand {
     fn spawns_in(&mut self, ctx: &mut dyn MobCtx, from: SimTime, to: SimTime) -> Vec<TripRequest> {
         let mut out = Vec::new();
-        if to <= from {
+        if to <= from || self.params.fleet_size > 0 {
             return out;
         }
         if self.next.is_none() {
@@ -266,6 +290,22 @@ impl Demand for PoissonDemand {
     fn set_multiplier(&mut self, m: f64) -> bool {
         self.event_multiplier = if m.is_finite() { m.max(0.0) } else { 1.0 };
         true
+    }
+
+    fn refund(&mut self) {
+        self.refunded = (self.refunded + 1).min(self.seq);
+    }
+
+    fn fleet_target(&self) -> Option<u64> {
+        (self.params.fleet_size > 0).then_some(self.params.fleet_size)
+    }
+
+    fn top_up(&mut self, ctx: &mut dyn MobCtx, t: SimTime) -> Option<TripRequest> {
+        if self.params.fleet_size == 0 {
+            return None;
+        }
+        let multiplier = self.multiplier_at(t);
+        Some(self.draw_trip(ctx, t, multiplier))
     }
 }
 
@@ -344,6 +384,18 @@ pub fn card(params: &PoissonParams, od: &OdParams) -> ModelCard {
              `mobility/demand/od-gravity`",
         ),
     ));
+    if params.fleet_size > 0 {
+        card.parameters.push(Parameter::new(
+            "fleet_size",
+            "veh",
+            serde_json::json!(params.fleet_size),
+            Source::new(
+                SourceKind::Code,
+                "a stated choice of the scenario: the vehicles held on the road; a \
+                 finished or refused trip is replaced by a new one",
+            ),
+        ));
+    }
     card.assumptions = vec![
         "The arrival cursor is model state, so the draw sequence does not depend on how \
          the caller chopped time into windows (invariant I-M2)."
@@ -578,6 +630,38 @@ mod tests {
         let trips = collect(&mut m, &w, &rng, 60, 100);
         assert_eq!(trips.len(), 25);
         assert_eq!(m.produced(), 25);
+    }
+
+    #[test]
+    fn a_refused_trip_gives_its_cap_slot_back() {
+        // A cap of 2 means 2 vehicles placed: a trip the engine could not put on the road
+        // (no room, no route) is refunded, and the process draws another.
+        let w = world();
+        let rng = RngRegistry::new(3);
+        let mut m = demand(
+            &w,
+            PoissonParams {
+                arrival_rate_per_s: 10.0,
+                max_total_vehicles: 2,
+                ..PoissonParams::default()
+            },
+        );
+        let first = collect(&mut m, &w, &rng, 1, 100);
+        assert_eq!(first.len(), 2);
+        m.refund();
+        let more = {
+            let mut ctx = MobilityCtx::new(2 * v2xw_core::time::NS_PER_S, &w, &rng);
+            m.spawns_in(
+                &mut ctx,
+                v2xw_core::time::NS_PER_S,
+                5 * v2xw_core::time::NS_PER_S,
+            )
+        };
+        assert_eq!(more.len(), 1, "the refunded slot was not drawn again");
+        assert_eq!(
+            more[0].seq, 2,
+            "a redrawn trip takes the next sequence number"
+        );
     }
 
     #[test]

@@ -226,6 +226,11 @@ const GROUPS: &[(&str, &str, &str)] = &[
         "What is measured, exported and swept.",
     ),
     (
+        "traffic",
+        "Traffic",
+        "How the traffic behaves at junctions and in jams, and how the signals are controlled.",
+    ),
+    (
         "scale",
         "Traffic",
         "What moves and what transmits: the fleet, its size, roadside units and the backend.",
@@ -271,6 +276,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("actors.vru.midblock_rate_per_100m", "per 100 m"),
     ("actors.rsus[].site", "site id"),
     ("actors.rsu_placement.count", "roadside units"),
+    ("actors.vehicles.demand.fleet_size", "vehicles"),
     ("radio.tiers.focus.region.node", "node id"),
     ("threats.attackers[].count", "vehicles"),
     ("threats.attackers[].actor_ids[]", "actor id"),

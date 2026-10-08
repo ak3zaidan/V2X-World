@@ -55,7 +55,7 @@ use v2xw_core::geom::{LanePos, Vec3};
 use v2xw_core::ids::{ActorId, JunctionId, LaneId, SignalId};
 use v2xw_core::kinematics::Kinematics;
 use v2xw_core::math;
-use v2xw_core::time::{Duration, SimTime, ns_to_secs};
+use v2xw_core::time::{Duration, SimTime, ns_to_secs, secs_to_ns};
 use v2xw_core::weather::WeatherState;
 use v2xw_world::{ClassMask, JunctionControl, LaneKind, SignalState, TurnDirection, World};
 
@@ -654,6 +654,27 @@ pub struct EngineParams {
     /// bus-only lane), falling back to the engine-wide router only when its own has no
     /// route. Not applied in the legacy parity mode.
     pub class_routing: bool,
+    /// Gridlock resolution: a vehicle that has stood still this long, seconds, is moved
+    /// along its route to the next lane with room for it (SUMO's `--time-to-teleport`,
+    /// whose default is 300 s), and counted ([`GridlockCounters`]). Standing at a kerbside
+    /// stop or under a scripted stop does not count. `0` turns it off, which is the
+    /// engine's default so a unit test sees the raw dynamics; a scenario sets it from
+    /// `traffic.gridlock`.
+    pub time_to_teleport_s: f64,
+    /// Strategic lane choice: a route is planned from every lane of the road the vehicle
+    /// is on, not only its own, and the vehicle changes lane ahead of the turn it needs
+    /// (SUMO's strategic lane-change layer, Erdmann 2015, "SUMO's lane-changing model").
+    /// Without it a driver in the wrong lane for their turn drove on and round the block.
+    /// Needs `lane_changes`; off by default so a unit test sees the plain router, set by a
+    /// scenario's `traffic.strategic_lane_choice`.
+    pub strategic_lane_choice: bool,
+    /// Congestion-aware rerouting, every this many seconds per vehicle, or `0` (off, the
+    /// default). When on, each lane's speed is sampled every second and smoothed over
+    /// [`CONGESTION_ADAPTATION_STEPS`] samples, the router prices a lane at its length over
+    /// that speed, and every vehicle re-plans its route from where it is once a period
+    /// (SUMO's rerouting device, `--device.rerouting.period`, with its default adaptation
+    /// interval of 1 s and 180 adaptation steps). Set by `traffic.reroute_period_s`.
+    pub reroute_period_s: f64,
     /// **A test hook, not a model parameter.** Walks the decision pass in reverse actor
     /// order. Because the pass reads only the frozen snapshot, the published result must be
     /// bit-identical either way; that is the ADR 0004 Jacobi property, and this is how the
@@ -686,6 +707,9 @@ impl Default for EngineParams {
             driver_styles: true,
             heavy_turns: true,
             class_routing: true,
+            time_to_teleport_s: 0.0,
+            strategic_lane_choice: false,
+            reroute_period_s: 0.0,
             reverse_order: false,
         }
     }
@@ -715,6 +739,49 @@ struct Transition {
     /// heading swing is taken at [`PULL_OUT_SPEED_MPS`] at least, so a car nosing out
     /// from a standstill angles out instead of swinging round on the spot.
     pull_out: bool,
+}
+
+/// The road a strategic lane change needs, per lane crossed, metres: at 11 m/s a
+/// 3 s manoeuvre (MOBIL's transition, [`crate::lanechange::mobil`]) covers 33 m, and a
+/// slower urban approach less. **A choice**, not a cited figure.
+const STRATEGIC_M_PER_CHANGE: f64 = 25.0;
+
+/// What a strategic lane change costs in the route choice, seconds per lane crossed: the
+/// driver prefers to stay in lane unless the other lane's route saves more than this.
+/// **A choice**, of the order of the lane-change duration.
+const STRATEGIC_CHANGE_COST_S: f64 = 4.0;
+
+/// How long a vehicle stands at the end of its lane, unable to make the strategic change
+/// its route needs, before it gives up and takes a route from the lane it is on, seconds.
+/// **A choice**: about two cycles of a busy neighbour lane's gaps.
+const STRATEGIC_GIVE_UP_S: f64 = 8.0;
+
+/// How many one-second samples a lane's congestion speed is smoothed over: SUMO's
+/// `--device.rerouting.adaptation-steps` default (180), as an exponential average of the
+/// same memory.
+const CONGESTION_ADAPTATION_STEPS: f64 = 180.0;
+
+/// The slowest a congested lane is priced at, m/s, so a standing queue costs a long but
+/// finite time and stays routable.
+const CONGESTION_FLOOR_MPS: f64 = 0.5;
+
+/// Below this speed a vehicle counts as standing for the gridlock timer, m/s: SUMO's
+/// waiting-time threshold (`SUMO_const_haltingSpeed`, 0.1 m/s).
+const STUCK_SPEED_MPS: f64 = 0.1;
+
+/// What the gridlock resolution did over a run ([`EngineParams::time_to_teleport_s`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct GridlockCounters {
+    /// Vehicles found standing for the whole timeout: each one is a jam the network did
+    /// not resolve by itself.
+    pub jammed: u64,
+    /// Of those, moved on along their route (SUMO's teleport).
+    pub teleported: u64,
+    /// Of those, removed because no lane on the rest of the route had room.
+    pub removed: u64,
+    /// Strategic lane changes given up at the end of the lane for want of a gap
+    /// ([`EngineParams::strategic_lane_choice`]).
+    pub strategic_given_up: u64,
 }
 
 /// One actor the engine drives.
@@ -759,6 +826,9 @@ struct Actor {
     forced_cut_in: Option<(Side, SimTime)>,
     /// Its kerbside stops ([`crate::kerbside`]).
     kerb: crate::kerbside::KerbState,
+    /// Since when it has stood still without a kerbside or scripted reason: what the
+    /// gridlock resolution ([`EngineParams::time_to_teleport_s`]) reads.
+    stuck_since: Option<SimTime>,
 }
 
 impl Actor {
@@ -1125,6 +1195,13 @@ pub struct NativeMobility {
     dropped_trips: u64,
     /// Of [`Self::dropped_trips`], the trips with no route from their origin or no room on it.
     unroutable_trips: u64,
+    /// What the gridlock resolution did ([`EngineParams::time_to_teleport_s`]).
+    gridlock: GridlockCounters,
+    /// Each lane's smoothed speed, m/s, for congestion-aware routing
+    /// ([`EngineParams::reroute_period_s`]); a lane at its free speed is not kept.
+    lane_speed: BTreeMap<LaneId, f64>,
+    /// When the lane speeds were last sampled.
+    speed_sampled_at: Option<SimTime>,
     card: ModelCard,
     /// The exterior lamp model's parameters ([`crate::lamps`]).
     lamp_params: crate::lamps::LampParams,
@@ -1265,6 +1342,9 @@ impl NativeMobility {
             next_seq: 0,
             dropped_trips: 0,
             unroutable_trips: 0,
+            gridlock: GridlockCounters::default(),
+            lane_speed: BTreeMap::new(),
+            speed_sampled_at: None,
             lamp_params: crate::lamps::LampParams::default(),
             driver_override: DriverOverride::default(),
             lamp_memory: BTreeMap::new(),
@@ -1375,6 +1455,165 @@ impl NativeMobility {
         })
     }
 
+    /// [`Self::plan_route`] with strategic lane choice ([`EngineParams::strategic_lane_choice`]):
+    /// the route from each other lane of `from`'s road that the vehicle still has room to
+    /// reach from `s_m`, at [`STRATEGIC_CHANGE_COST_S`] per lane crossed, against its own
+    /// lane's. The winner is returned as `[from, <the route from the chosen lane, after its
+    /// first lane>]`: the next lane is then one the chosen lane reaches, which the decision
+    /// pass reads as a lane change to make ([`Self::strategic_pending`]).
+    #[allow(clippy::too_many_arguments)]
+    fn plan_route_strategic(
+        &self,
+        class: VehicleClass,
+        world: &World,
+        from: LaneId,
+        s_m: f64,
+        to: LaneId,
+        t: SimTime,
+        costs: &dyn crate::views::EdgeCost,
+    ) -> Option<Route> {
+        let own = self.plan_route(class, world, from, to, t, costs);
+        if !(self.params.strategic_lane_choice && self.params.lane_changes && self.along_path()) {
+            return own;
+        }
+        let lane = world.try_lane(from)?;
+        if lane.kind == LaneKind::Internal || from == to {
+            return own;
+        }
+        let room = lane.length_m - s_m;
+        let mut best: Option<(f64, Route)> = own.clone().map(|r| (r.cost_s, r));
+        let mut siblings: Vec<LaneId> = world.edge(lane.edge).lanes.clone();
+        siblings.sort_unstable();
+        for other in siblings {
+            if other == from {
+                continue;
+            }
+            let o = world.lane(other);
+            if !o.kind.is_motorised() || !o.admits(class.class_mask()) {
+                continue;
+            }
+            let crossed = f64::from(o.index.abs_diff(lane.index));
+            if room < self.params.no_change_zone_m + crossed * STRATEGIC_M_PER_CHANGE {
+                continue;
+            }
+            let Some(r) = self.plan_route(class, world, other, to, t, costs) else {
+                continue;
+            };
+            if r.lanes.len() < 2 {
+                continue;
+            }
+            let cost = r.cost_s + crossed * STRATEGIC_CHANGE_COST_S;
+            if best.as_ref().is_none_or(|(c, _)| cost < *c) {
+                let mut lanes = vec![from];
+                lanes.extend(r.lanes.iter().skip(1).copied());
+                best = Some((cost, Self::route_of(world, lanes)));
+            }
+        }
+        best.map(|(_, r)| r)
+    }
+
+    /// The distance to the end of its lane, metres, of a vehicle whose route's next lane
+    /// leaves from another lane of its road: the strategic change it has still to make.
+    /// `None` when the next lane follows from its own (or the change is under way).
+    fn strategic_pending(&self, world: &World, actor: &Actor) -> Option<f64> {
+        self.strategic_target(world, actor)?;
+        let lane = world.lane(actor.lane);
+        Some((lane.length_m - actor.s_m).max(0.0))
+    }
+
+    /// The lane of its road a vehicle has to change to for its route's next lane
+    /// ([`Self::strategic_pending`]).
+    fn strategic_target(&self, world: &World, actor: &Actor) -> Option<LaneId> {
+        if !self.params.strategic_lane_choice || actor.transition.is_some() {
+            return None;
+        }
+        let next = *actor.route.lanes.get(actor.route_index + 1)?;
+        let reaches = |l: LaneId| {
+            world
+                .successors(l)
+                .iter()
+                .any(|c| c.permitted && c.via.unwrap_or(c.to_lane) == next)
+        };
+        if reaches(actor.lane) {
+            return None;
+        }
+        let lane = world.try_lane(actor.lane)?;
+        if lane.kind == LaneKind::Internal {
+            return None;
+        }
+        world
+            .edge(lane.edge)
+            .lanes
+            .iter()
+            .copied()
+            .filter(|l| *l != actor.lane)
+            .find(|l| reaches(*l))
+    }
+
+    /// The lane change towards [`Self::strategic_target`], if the lane beside on that
+    /// side has room now: the same acceptance as a move to the kerb
+    /// ([`Self::move_to_kerb`]), on either side.
+    fn strategic_change(
+        &self,
+        world: &World,
+        mobil: &Mobil,
+        actor: &Actor,
+        ego: &VehicleView,
+        nbrs: &LaneNeighbors,
+    ) -> Option<LaneChangeDecision> {
+        let target = self.strategic_target(world, actor)?;
+        let side = if world.lane(target).index > world.lane(actor.lane).index {
+            Side::Left
+        } else {
+            Side::Right
+        };
+        let beside = nbrs.side(side)?;
+        let beside_lane = world.try_lane(beside.lane)?;
+        if beside_lane.edge != world.lane(actor.lane).edge || !beside_lane.kind.is_motorised() {
+            return None;
+        }
+        let lane_view = LaneView::of(beside_lane);
+        if let Some(l) = beside.leader {
+            if l.gap_m < ego.driver.min_gap_m {
+                return None;
+            }
+            let mut moved = *ego;
+            moved.lane = beside.lane;
+            if self.cf.accel(&moved, Some(&l), &lane_view, &self.weather)
+                < -PULL_OUT_FOLLOWER_DECEL_MPS2
+            {
+                return None;
+            }
+        }
+        if let Some(f) = beside.follower
+            && let Some(fv) = f.vehicle.as_ref()
+        {
+            if f.gap_m < fv.driver.min_gap_m {
+                return None;
+            }
+            let a = self.cf.accel(
+                fv,
+                Some(&LeaderView::of(*ego, f.gap_m)),
+                &lane_view,
+                &self.weather,
+            );
+            if a < -PULL_OUT_FOLLOWER_DECEL_MPS2 {
+                return None;
+            }
+        }
+        let lateral = 0.5 * (world.lane(actor.lane).width_m + beside_lane.width_m);
+        Some(LaneChangeDecision::Change {
+            to: beside.lane,
+            side,
+            incentive_mps2: 0.0,
+            duration: crate::lanechange::mobil::transition_duration(
+                mobil.params(),
+                lateral,
+                ego.speed_mps.max(PULL_OUT_SPEED_MPS),
+            ),
+        })
+    }
+
     /// Adds a clock model. The engine does not read it — believed time belongs to the node
     /// runtime — but holding it here keeps a scenario's mobility-side model set in one
     /// place, and it is on the manifest through this model's card.
@@ -1446,6 +1685,179 @@ impl NativeMobility {
     /// True if none are.
     pub fn is_empty(&self) -> bool {
         self.actors.is_empty()
+    }
+
+    /// What the gridlock resolution has done so far.
+    pub fn gridlock_counters(&self) -> GridlockCounters {
+        self.gridlock
+    }
+
+    /// Gridlock resolution, at the end of a step: every vehicle that has stood still for
+    /// [`EngineParams::time_to_teleport_s`] is moved to the next lane on its route that
+    /// has room at its start, as SUMO's teleport does (SUMO user documentation,
+    /// "Why Vehicles are teleporting": a vehicle waiting `--time-to-teleport` s is moved
+    /// to the next edge of its route with space). One with no such lane is removed, and
+    /// returned so the caller announces it. Ids in ascending order, so the result does
+    /// not depend on map iteration (the determinism contract).
+    fn resolve_gridlock(&mut self, world: &World, t1: SimTime, gone: &[ActorId]) -> Vec<ActorId> {
+        let mut removed = Vec::new();
+        self.give_up_strategic(world, t1);
+        if self.params.time_to_teleport_s <= 0.0 {
+            return removed;
+        }
+        let limit = secs_to_ns(self.params.time_to_teleport_s);
+        // The nearest rear bumper to each lane's start, from the end-of-step positions.
+        let mut first_rear: BTreeMap<LaneId, f64> = BTreeMap::new();
+        for a in self.actors.values() {
+            let rear = a.s_m - a.class.spec().length_m;
+            let e = first_rear.entry(a.lane).or_insert(f64::INFINITY);
+            if rear < *e {
+                *e = rear;
+            }
+        }
+        let ids: Vec<ActorId> = self.actors.keys().copied().collect();
+        for id in ids {
+            if gone.contains(&id) {
+                continue;
+            }
+            let a = self.actors.get_mut(&id).expect("present");
+            let excused = a.speed_mps >= STUCK_SPEED_MPS
+                || a.kerb.at_kerb()
+                || a.stopped_until.is_some()
+                || a.forced_brake.is_some();
+            if excused {
+                a.stuck_since = None;
+                continue;
+            }
+            let since = *a.stuck_since.get_or_insert(t1);
+            if t1.saturating_sub(since) < limit {
+                continue;
+            }
+            let length = a.class.spec().length_m;
+            let need = length + self.params.insertion_gap_m;
+            let target = (a.route_index + 1..a.route.lanes.len()).find(|k| {
+                let l = a.route.lanes[*k];
+                let lane = world.lane(l);
+                lane.kind != LaneKind::Internal
+                    && lane.length_m >= need
+                    && !self.closed.contains(&l)
+                    && first_rear.get(&l).is_none_or(|r| *r >= need)
+            });
+            self.gridlock.jammed += 1;
+            match target {
+                Some(k) => {
+                    let l = a.route.lanes[k];
+                    a.lane = l;
+                    a.route_index = k;
+                    a.s_m = length;
+                    a.speed_mps = 0.0;
+                    a.accel_mps2 = 0.0;
+                    a.lateral_m = 0.0;
+                    a.trail.clear();
+                    a.transition = None;
+                    a.amber_commit = None;
+                    a.amber_seen = None;
+                    a.release_at = None;
+                    a.stuck_since = None;
+                    first_rear.insert(l, 0.0);
+                    self.gridlock.teleported += 1;
+                }
+                None => {
+                    self.gridlock.removed += 1;
+                    removed.push(id);
+                }
+            }
+        }
+        removed
+    }
+
+    /// Samples every lane's speed once a second into [`Self::lane_speed`]: the mean speed
+    /// of the vehicles on it, or its free speed when it is empty, smoothed exponentially
+    /// over [`CONGESTION_ADAPTATION_STEPS`] samples. Lanes in id order.
+    fn sample_congestion(&mut self, world: &World, t1: SimTime) {
+        if self.params.reroute_period_s <= 0.0 {
+            return;
+        }
+        if self
+            .speed_sampled_at
+            .is_some_and(|at| t1.saturating_sub(at) < secs_to_ns(1.0))
+        {
+            return;
+        }
+        self.speed_sampled_at = Some(t1);
+        let mut sums: BTreeMap<LaneId, (f64, u32)> = BTreeMap::new();
+        for a in self.actors.values() {
+            let e = sums.entry(a.lane).or_insert((0.0, 0));
+            e.0 += a.speed_mps;
+            e.1 += 1;
+        }
+        let alpha = 1.0 / CONGESTION_ADAPTATION_STEPS;
+        let lanes: BTreeSet<LaneId> = sums.keys().chain(self.lane_speed.keys()).copied().collect();
+        for lane in lanes {
+            let Some(l) = world.try_lane(lane) else {
+                continue;
+            };
+            let free = l.speed_limit_mps.max(CONGESTION_FLOOR_MPS);
+            let seen = sums
+                .get(&lane)
+                .map_or(free, |(sum, n)| (sum / f64::from(*n)).min(free));
+            let old = self.lane_speed.get(&lane).copied().unwrap_or(free);
+            let new = old + alpha * (seen - old);
+            // An empty lane back within 1 % of its free speed is forgotten; an occupied one
+            // is kept however close, or a slow first sample would be dropped at once.
+            if !sums.contains_key(&lane) && new >= 0.99 * free {
+                self.lane_speed.remove(&lane);
+            } else {
+                self.lane_speed.insert(lane, new);
+            }
+        }
+    }
+
+    /// A vehicle with a strategic change it has not made by the no-change zone before the
+    /// end of its lane, or that has stood for [`STRATEGIC_GIVE_UP_S`] waiting to make it,
+    /// takes a route from the lane it is on instead, as a driver who cannot get over goes
+    /// straight on and finds another way.
+    fn give_up_strategic(&mut self, world: &World, t1: SimTime) {
+        if !self.params.strategic_lane_choice {
+            return;
+        }
+        let costs = self.costs(world);
+        let limit = secs_to_ns(STRATEGIC_GIVE_UP_S);
+        let ids: Vec<ActorId> = self.actors.keys().copied().collect();
+        // With the gridlock timer off nothing else keeps the standing clock, so it is kept
+        // here (by speed alone); with it on, `resolve_gridlock` keeps it.
+        let own_clock = self.params.time_to_teleport_s <= 0.0;
+        for id in ids {
+            let a = self.actors.get_mut(&id).expect("present");
+            if own_clock {
+                if a.speed_mps >= STUCK_SPEED_MPS {
+                    a.stuck_since = None;
+                } else {
+                    a.stuck_since.get_or_insert(t1);
+                }
+            }
+            let a = &self.actors[&id];
+            let Some(left) = self.strategic_pending(world, a) else {
+                continue;
+            };
+            let in_zone = left < self.params.no_change_zone_m;
+            let stuck = a
+                .stuck_since
+                .is_some_and(|since| t1.saturating_sub(since) >= limit);
+            if !(in_zone || stuck) {
+                continue;
+            }
+            let (lane, destination, class) = (a.lane, a.destination, a.class);
+            let route = self.plan_route(class, world, lane, destination, t1, &costs);
+            let a = self.actors.get_mut(&id).expect("present");
+            if let Some(route) = route {
+                a.route = route;
+                a.route_index = 0;
+                a.planned_at = t1;
+                a.stuck_since = None;
+                self.gridlock.strategic_given_up += 1;
+            }
+        }
     }
 
     /// How many trips were dropped because their origin was occupied or unroutable.
@@ -1632,6 +2044,7 @@ impl NativeMobility {
                 transition: None,
                 cooldown_until: t,
                 speed_cap_mps: None,
+                stuck_since: None,
                 stopped_until: None,
                 trail: Vec::new(),
                 amber_commit: None,
@@ -1838,6 +2251,11 @@ impl NativeMobility {
         for lane in &self.closed {
             costs.set_closed(*lane, true);
         }
+        for (lane, v) in &self.lane_speed {
+            if let Some(l) = world.try_lane(*lane) {
+                costs.observe(*lane, Some(l.length_m / v.max(CONGESTION_FLOOR_MPS)));
+            }
+        }
         costs.with_generation(self.closure_changes)
     }
 
@@ -1859,6 +2277,9 @@ impl NativeMobility {
             Insertion::Placed(id) => Some(id),
             Insertion::Occupied | Insertion::Unroutable => {
                 self.dropped_trips += 1;
+                if let Some(d) = self.demand.as_mut() {
+                    d.refund();
+                }
                 None
             }
         }
@@ -1943,10 +2364,11 @@ impl NativeMobility {
                 }
             }
             None => {
-                let Some(route) = self.plan_route(
+                let Some(route) = self.plan_route_strategic(
                     trip.class,
                     world,
                     trip.origin,
+                    trip.origin_s_m,
                     trip.destination,
                     trip.t,
                     edge_costs,
@@ -2091,6 +2513,7 @@ impl NativeMobility {
                 transition: None,
                 cooldown_until: trip.t,
                 speed_cap_mps: None,
+                stuck_since: None,
                 stopped_until: None,
                 trail: Vec::new(),
                 amber_commit: None,
@@ -3175,6 +3598,16 @@ impl NativeMobility {
         let target = world.try_lane(to)?;
         let old = &actor.route.lanes;
         let dest_edge = world.try_lane(actor.destination).map(|l| l.edge);
+        // A strategic change keeps the route it was made for: the lanes after this one
+        // stay, and the next of them is reached from the target lane or from one further
+        // across ([`Self::strategic_target`]).
+        if target.edge == world.lane(actor.lane).edge
+            && self.strategic_target(world, actor).is_some()
+        {
+            let mut lanes = vec![to];
+            lanes.extend(old.iter().skip(actor.route_index + 1).copied());
+            return Some((Self::route_of(world, lanes), actor.destination));
+        }
         if old.len() <= actor.route_index + 1 && dest_edge == Some(target.edge) {
             // Changing lane on the destination road: the trip ends at the end of this lane.
             return Some((Self::route_of(world, vec![to]), to));
@@ -3880,7 +4313,6 @@ impl Mobility for NativeMobility {
         if let Some(mut demand) = self.demand.take() {
             let trips = demand.spawns_in(ctx, t0, t1);
             self.demand = Some(demand);
-            let world = ctx.world();
             if self.along_path() {
                 // Trips whose origin has no room *now* wait for it, oldest first, as
                 // SUMO's insertion queue does (`--max-depart-delay`), rather than being
@@ -3892,6 +4324,23 @@ impl Mobility for NativeMobility {
                 // demand-stream order (invariant I-M2) however long it waits.
                 let mut queue = core::mem::take(&mut self.waiting);
                 queue.extend(trips.into_iter().map(|trip| (trip, t0, None)));
+                // A held fleet ([`Demand::fleet_target`]): top it up to its size, counting
+                // the trips already waiting to enter. A finished trip is replaced in the
+                // step after it ends; a refused one is replaced in the same step. The
+                // attempts are bounded so a network with nowhere to put a vehicle cannot
+                // spin: at most twice the shortfall per step, and 64 at most.
+                let fleet = self.demand.as_ref().and_then(|d| d.fleet_target());
+                if let Some(target) = fleet {
+                    let have = (self.actors.len() + queue.len()) as u64;
+                    let short = target.saturating_sub(have);
+                    for _ in 0..short.min(64) {
+                        if let Some(trip) = self.demand.as_mut().and_then(|d| d.top_up(ctx, t0)) {
+                            queue.push((trip, t0, None));
+                        }
+                    }
+                }
+                let world = ctx.world();
+                let mut unroutable_in_fleet = 0u64;
                 for (trip, since, reserved) in queue {
                     let traits = self.traits_for(&*ctx, &trip);
                     match self.try_insert(world, &trip, t0, reserved, traits) {
@@ -3909,14 +4358,51 @@ impl Mobility for NativeMobility {
                             });
                             self.waiting.push((trip, since, Some(id)));
                         }
-                        Insertion::Occupied => self.dropped_trips += 1,
+                        Insertion::Occupied => {
+                            self.dropped_trips += 1;
+                            if let Some(d) = self.demand.as_mut() {
+                                d.refund();
+                            }
+                        }
                         Insertion::Unroutable => {
                             self.dropped_trips += 1;
                             self.unroutable_trips += 1;
+                            unroutable_in_fleet += 1;
+                            if let Some(d) = self.demand.as_mut() {
+                                d.refund();
+                            }
+                        }
+                    }
+                }
+                // A fleet trip with no route is redrawn at once (SUMO's randomTrips
+                // `--validate` drops unroutable trips the same way), bounded as above.
+                if fleet.is_some() {
+                    for _ in 0..unroutable_in_fleet.min(64) {
+                        let Some(trip) = self.demand.as_mut().and_then(|d| d.top_up(ctx, t0))
+                        else {
+                            break;
+                        };
+                        let world = ctx.world();
+                        let traits = self.traits_for(&*ctx, &trip);
+                        match self.try_insert(world, &trip, t0, None, traits) {
+                            Insertion::Placed(id) => {
+                                self.assign_kerbside(&*ctx, id);
+                                spawned.push(self.actor_spawn(world, id, t0));
+                            }
+                            Insertion::Occupied => {
+                                let id = ActorId::new(self.next_actor);
+                                self.next_actor += 1;
+                                self.waiting.push((trip, t0, Some(id)));
+                            }
+                            Insertion::Unroutable => {
+                                self.dropped_trips += 1;
+                                self.unroutable_trips += 1;
+                            }
                         }
                     }
                 }
             } else {
+                let world = ctx.world();
                 for trip in trips {
                     let traits = self.traits_for(&*ctx, &trip);
                     if let Some(id) = self.insert_trip_with(world, &trip, t0, traits) {
@@ -4522,6 +5008,19 @@ impl Mobility for NativeMobility {
                 if self.along_path() && !self.may_consider_lane_change(ctx.world(), actor, &mobil) {
                     continue;
                 }
+                // A strategic change the route needs comes before anything discretionary.
+                // It too keeps out of the no-change zone (MUTCD 2009 §3B.04's solid line):
+                // a driver who reaches the zone without a gap gives up and finds another
+                // way ([`Self::give_up_strategic`]).
+                if self.along_path() && self.strategic_target(ctx.world(), actor).is_some() {
+                    if let Some((ego, nbrs)) = neighbours.get(&decision.actor)
+                        && let Some(change) =
+                            self.strategic_change(ctx.world(), &mobil, actor, ego, nbrs)
+                    {
+                        decision.lane_change = change;
+                    }
+                    continue;
+                }
                 // A vehicle making for its kerbside stop keeps to the kerb lane.
                 if actor.kerb.stop.is_some() {
                     continue;
@@ -4905,7 +5404,15 @@ impl Mobility for NativeMobility {
                 despawned.push((decision.actor, cause));
             }
         }
-        // Re-plan whoever is due.
+        // Re-plan whoever is due: on a closure, and with congestion-aware rerouting on,
+        // once a period on the lane speeds just sampled.
+        self.sample_congestion(world, t1);
+        let costs = if self.params.reroute_period_s > 0.0 {
+            self.costs(world)
+        } else {
+            costs
+        };
+        let period = secs_to_ns(self.params.reroute_period_s.max(0.0));
         if self.params.dynamic_rerouting {
             let due: Vec<ActorId> = self
                 .actors
@@ -4913,15 +5420,19 @@ impl Mobility for NativeMobility {
                 .filter(|a| {
                     self.router
                         .due(t1, a.planned_at, a.planned_generation, generation)
+                        || (period > 0
+                            && t1.saturating_sub(a.planned_at) >= period
+                            && world.lane(a.lane).kind != LaneKind::Internal)
                 })
                 .map(|a| a.id)
                 .collect();
             for id in due {
-                let (lane, destination, class) = {
+                let (lane, s_m, destination, class) = {
                     let a = &self.actors[&id];
-                    (a.lane, a.destination, a.class)
+                    (a.lane, a.s_m, a.destination, a.class)
                 };
-                let replanned = self.plan_route(class, world, lane, destination, t1, &costs);
+                let replanned =
+                    self.plan_route_strategic(class, world, lane, s_m, destination, t1, &costs);
                 let a = self.actors.get_mut(&id).expect("present");
                 a.planned_at = t1;
                 a.planned_generation = generation;
@@ -4929,6 +5440,12 @@ impl Mobility for NativeMobility {
                     a.route = route;
                     a.route_index = 0;
                 }
+            }
+        }
+        if along {
+            let gone: Vec<ActorId> = despawned.iter().map(|(id, _)| *id).collect();
+            for id in self.resolve_gridlock(world, t1, &gone) {
+                despawned.push((id, DespawnCause::RouteBlocked));
             }
         }
         for (id, _) in &despawned {
@@ -5035,6 +5552,10 @@ impl Mobility for NativeMobility {
 
     fn set_weather(&mut self, weather: WeatherState) {
         self.weather = weather;
+    }
+
+    fn gridlock(&self) -> Option<GridlockCounters> {
+        (self.params.time_to_teleport_s > 0.0).then_some(self.gridlock)
     }
 
     fn set_demand_multiplier(&mut self, m: f64) -> bool {
@@ -6312,6 +6833,68 @@ mod tests {
         }
     }
 
+    /// A small grid with a fleet of `n` held vehicles: how many are on the road at each
+    /// whole second over `secs`, and how many trips finished.
+    fn fleet_run(params: PoissonParams, secs: u64) -> (Vec<usize>, usize) {
+        let world = v2xw_world::procedural::grid(
+            &GridParams::legacy().with_size(4, 8).with_signals(true),
+            &ImportOptions::default(),
+        )
+        .expect("grid");
+        let rng = RngRegistry::new(7);
+        let ep = EngineParams::default();
+        let mut engine = NativeMobility::new(ep);
+        let demand = PoissonDemand::new(&world, params, OdParams::default()).expect("demand");
+        {
+            let mut ctx = MobilityCtx::new(0, &world, &rng);
+            engine.init(&mut ctx, Box::new(demand)).expect("init");
+        }
+        let (mut on_road, mut done) = (Vec::new(), 0usize);
+        let mut t = 0u64;
+        while t < secs * NS_PER_S {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            let u = engine.step(&mut ctx, ep.step);
+            done += u
+                .despawned
+                .iter()
+                .filter(|(_, c)| *c == DespawnCause::TripComplete)
+                .count();
+            t += ep.step.as_nanos();
+            if t % NS_PER_S == 0 {
+                on_road.push(engine.len());
+            }
+        }
+        (on_road, done)
+    }
+
+    #[test]
+    fn a_fleet_of_two_is_two_vehicles_on_the_road() {
+        // The owner's report: a cap of 2 on a 4 x 8 grid gave 0 vehicles. A held fleet
+        // of 2 is 2 vehicles from the first seconds to the end, finished trips replaced.
+        let (on_road, done) = fleet_run(
+            PoissonParams {
+                fleet_size: 2,
+                duration: Duration::from_secs(300),
+                ..PoissonParams::default()
+            },
+            300,
+        );
+        let full = on_road.iter().skip(2).filter(|n| **n == 2).count();
+        assert!(
+            on_road.iter().all(|n| *n <= 2),
+            "more than the fleet on the road: {on_road:?}"
+        );
+        assert!(
+            full * 100 >= (on_road.len() - 2) * 95,
+            "the fleet of 2 was on the road {full} of {} s: {on_road:?}",
+            on_road.len() - 2
+        );
+        assert!(
+            done > 0,
+            "no trip finished in five minutes, so none was replaced"
+        );
+    }
+
     /// A driving lane long enough to hold several vehicles, and somewhere routable to go.
     fn long_lane_and_destination(world: &World) -> (LaneId, LaneId) {
         let mut driving: Vec<LaneId> = world
@@ -6953,6 +7536,232 @@ mod tests {
         }
         assert!(speed_at_5s < 1.0, "held at {speed_at_5s} m/s");
         assert!(speed_at_20s > 5.0, "released to {speed_at_20s} m/s");
+    }
+
+    #[test]
+    fn a_vehicle_jammed_past_the_timeout_is_moved_on_and_counted() {
+        // A leader held for good (a scripted stop, which is excused) and a follower stuck
+        // behind it: with a 20 s timeout the follower is moved to the next lane of its
+        // route with room, once, and counted; with the timeout off it waits for ever.
+        let run = |timeout_s: f64| {
+            let world = ring(&RingParams::default()).expect("a ring");
+            let cycle = ring_cycle(&world, 0);
+            let rng = RngRegistry::new(5);
+            let params = EngineParams {
+                intersections: IntersectionMode::None,
+                lane_changes: false,
+                dynamic_rerouting: false,
+                time_to_teleport_s: timeout_s,
+                ..EngineParams::default()
+            };
+            let mut engine = engine_on(&world, params, &rng);
+            let route: Vec<LaneId> = cycle
+                .iter()
+                .cycle()
+                .take(cycle.len() * 4)
+                .copied()
+                .collect();
+            let driver = IdmPreset::Kesting2010.profile(VehicleClass::Passenger);
+            let leader = engine
+                .spawn_with_route(
+                    &world,
+                    0,
+                    VehicleClass::Passenger,
+                    driver,
+                    route.clone(),
+                    40.0,
+                )
+                .expect("leader");
+            let follower = engine
+                .spawn_with_route(&world, 0, VehicleClass::Passenger, driver, route, 10.0)
+                .expect("follower");
+            {
+                let mut ctx = MobilityCtx::new(0, &world, &rng);
+                engine.command(
+                    &mut ctx,
+                    MobilityCommand::Stop {
+                        actor: leader,
+                        until: None,
+                    },
+                );
+            }
+            let mut t = 0u64;
+            for _ in 0..600 {
+                let mut ctx = MobilityCtx::new(t, &world, &rng);
+                engine.step(&mut ctx, params.step);
+                t += 100 * NS_PER_MS;
+            }
+            let lane_of = |id: ActorId| {
+                engine
+                    .longitudinal_states()
+                    .iter()
+                    .find(|(a, _, _, _)| *a == id)
+                    .map(|(_, l, s, _)| (*l, *s))
+            };
+            (
+                engine.gridlock_counters(),
+                lane_of(leader),
+                lane_of(follower),
+            )
+        };
+        let (on, leader, follower) = run(20.0);
+        assert!(
+            on.teleported >= 1,
+            "the stuck follower was not moved on: {on:?}"
+        );
+        assert_eq!(on.removed, 0, "{on:?}");
+        assert_ne!(
+            leader.map(|(l, _)| l),
+            follower.map(|(l, _)| l),
+            "the follower is still behind the held leader"
+        );
+        let (off, _, _) = run(0.0);
+        assert_eq!(
+            off,
+            GridlockCounters::default(),
+            "the timeout off still acted"
+        );
+    }
+
+    #[test]
+    fn a_driver_in_the_wrong_lane_changes_lane_for_the_turn_instead_of_going_round() {
+        // Two lanes each way, left turns from the left lane only. A trip that starts in the
+        // right lane and turns left at the first junction: with strategic lane choice the
+        // driver moves over and turns; without it the router can only send them round.
+        let world = v2xw_world::procedural::grid(
+            &GridParams {
+                lanes_per_direction: 2,
+                ..GridParams::legacy().with_size(3, 3).with_signals(false)
+            },
+            &ImportOptions::default(),
+        )
+        .expect("grid");
+        let pick = world.roads.lanes().iter().find_map(|l| {
+            if l.kind != LaneKind::Driving || l.index != 0 || l.length_m < 80.0 {
+                return None;
+            }
+            let left_of = world
+                .edge(l.edge)
+                .lanes
+                .iter()
+                .copied()
+                .find(|x| world.lane(*x).index == 1)?;
+            let turn = world
+                .successors(left_of)
+                .iter()
+                .find(|c| c.permitted && c.direction == TurnDirection::Left)?;
+            let own_turns_left = world
+                .successors(l.id)
+                .iter()
+                .any(|c| c.direction == TurnDirection::Left);
+            (!own_turns_left).then_some((l.id, left_of, turn.to_lane))
+        });
+        let (origin, left_lane, exit) =
+            pick.expect("a right lane whose left turn is from the lane beside");
+        let run = |strategic: bool| {
+            let rng = RngRegistry::new(3);
+            let params = EngineParams {
+                strategic_lane_choice: strategic,
+                ..EngineParams::default()
+            };
+            let mut engine = engine_on(&world, params, &rng);
+            let trip = TripRequest {
+                seq: 0,
+                t: 0,
+                origin,
+                origin_s_m: 10.0,
+                destination: exit,
+                class: VehicleClass::Passenger,
+                desired_speed_mps: 11.0,
+            };
+            // Without strategic choice the trip may have no route at all from this lane.
+            let Some(id) = engine.insert_trip(&world, &trip, 0) else {
+                return (f64::INFINITY, false, None);
+            };
+            let route_m = engine.actors[&id].route.length_m;
+            let (mut on_left, mut done_at) = (false, None);
+            let mut t = 0u64;
+            while t < 120 * NS_PER_S && done_at.is_none() {
+                let mut ctx = MobilityCtx::new(t, &world, &rng);
+                let u = engine.step(&mut ctx, params.step);
+                if engine.actors.get(&id).is_some_and(|a| a.lane == left_lane) {
+                    on_left = true;
+                }
+                if u.despawned
+                    .iter()
+                    .any(|(a, c)| *a == id && *c == DespawnCause::TripComplete)
+                {
+                    done_at = Some(t);
+                }
+                t += params.step.as_nanos();
+            }
+            (route_m, on_left, done_at)
+        };
+        let (plain_m, _, _) = run(false);
+        let (strategic_m, on_left, done) = run(true);
+        assert!(on_left, "the driver never moved into the left-turn lane");
+        assert!(
+            done.is_some(),
+            "the strategic trip did not finish in two minutes"
+        );
+        assert!(
+            strategic_m + 50.0 < plain_m,
+            "the strategic route ({strategic_m:.0} m) is not shorter than going round ({plain_m:.0} m)"
+        );
+    }
+
+    #[test]
+    fn a_standing_queue_prices_its_lane_up_for_the_router() {
+        let world = grid(false);
+        let (origin, destination) = long_lane_and_destination(&world);
+        let run = |period_s: f64| {
+            let rng = RngRegistry::new(4);
+            let params = EngineParams {
+                reroute_period_s: period_s,
+                ..EngineParams::default()
+            };
+            let mut engine = engine_on(&world, params, &rng);
+            let trip = TripRequest {
+                seq: 0,
+                t: 0,
+                origin,
+                origin_s_m: 30.0,
+                destination,
+                class: VehicleClass::Passenger,
+                desired_speed_mps: 11.0,
+            };
+            let id = engine.insert_trip(&world, &trip, 0).expect("placed");
+            {
+                let mut ctx = MobilityCtx::new(0, &world, &rng);
+                engine.command(
+                    &mut ctx,
+                    MobilityCommand::Stop {
+                        actor: id,
+                        until: None,
+                    },
+                );
+            }
+            let mut t = 0u64;
+            for _ in 0..1200 {
+                let mut ctx = MobilityCtx::new(t, &world, &rng);
+                engine.step(&mut ctx, params.step);
+                t += params.step.as_nanos();
+            }
+            let free = world.lane(origin).length_m / world.lane(origin).speed_limit_mps;
+            let priced = crate::views::EdgeCost::lane_cost_s(&engine.costs(&world), origin, t)
+                .expect("open");
+            (free, priced)
+        };
+        let (free, on) = run(60.0);
+        assert!(
+            on > 1.8 * free,
+            "a lane with a car standing on it for 2 min costs {on:.1} s against {free:.1} s free"
+        );
+        let (_, off) = run(0.0);
+        assert!(
+            (off - free).abs() < 1e-9,
+            "with rerouting off the lane costs {off} s, not its free {free} s"
+        );
     }
 
     #[test]

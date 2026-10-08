@@ -1354,6 +1354,13 @@ pub fn title(path: &str) -> Option<&'static str> {
     Some(match path {
         "actors.vehicles.demand.rate_veh_per_h" => "Vehicles entering per hour",
         "actors.vehicles.demand.kind" => "How vehicles arrive",
+        "actors.vehicles.demand.fleet_size" => "Vehicles on the road (fixed fleet)",
+        "traffic.signals.control" => "Signal control",
+        "traffic.reroute_period_s" => "Reroute around congestion every",
+        "traffic.gridlock_timeout_s" => "Gridlock timeout",
+        "traffic.keep_junctions_clear" => "Keep junctions clear",
+        "traffic.signals.passage_s" => "Passage time (gap-out)",
+        "traffic.signals.green_wave_speed_mps" => "Green-wave speed",
         "actors.vehicles.equipped_fraction" => "Share of vehicles with a V2X radio",
         "actors.vru.device_fraction" => "Share of pedestrians and cyclists with a device",
         "radio.rat" => "Radio technology",

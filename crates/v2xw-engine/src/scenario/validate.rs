@@ -252,6 +252,80 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the arrival rate",
     },
+    // A guard, not a traffic figure: 50,000 vehicles held on the road is well past what the
+    // all-microscopic engine carries in real time on this machine class (BUILD-STATUS,
+    // city scale: about 250 at 0.2x real time) and what the tiered city carries.
+    Bound {
+        path: "actors.vehicles.demand.fleet_size",
+        lo: 1.0,
+        hi: 50_000.0,
+        exclusive_lo: false,
+        what: "the number of vehicles held on the road",
+    },
+    // Gridlock timeout: 0 is off; an hour is past any signal cycle or incident a run
+    // would want to wait out (SUMO's default is 300 s).
+    Bound {
+        path: "traffic.gridlock_timeout_s",
+        lo: 0.0,
+        hi: 3600.0,
+        exclusive_lo: false,
+        what: "the gridlock timeout",
+    },
+    // FHWA Traffic Signal Timing Manual (2008) ch. 5: minimum greens of 2-15 s, maximum
+    // greens up to about 120 s on a major arterial, passage times of 0.5-5 s; the bounds
+    // keep inside those, with room either side.
+    // 0 is off; an hour between re-plans is as good as none, and more often than every
+    // 10 s re-routes faster than a lane's smoothed speed can change (SUMO's adaptation is
+    // 180 one-second samples).
+    Bound {
+        path: "traffic.reroute_period_s",
+        lo: 0.0,
+        hi: 3600.0,
+        exclusive_lo: false,
+        what: "the rerouting period",
+    },
+    Bound {
+        path: "traffic.signals.min_green_s",
+        lo: 2.0,
+        hi: 60.0,
+        exclusive_lo: false,
+        what: "the minimum green",
+    },
+    Bound {
+        path: "traffic.signals.max_green_s",
+        lo: 5.0,
+        hi: 180.0,
+        exclusive_lo: false,
+        what: "the maximum green",
+    },
+    Bound {
+        path: "traffic.signals.passage_s",
+        lo: 0.2,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the passage time",
+    },
+    Bound {
+        path: "traffic.signals.detector_m",
+        lo: 1.0,
+        hi: 150.0,
+        exclusive_lo: false,
+        what: "the detector length",
+    },
+    Bound {
+        path: "traffic.signals.green_wave_speed_mps",
+        lo: 1.0,
+        hi: 40.0,
+        exclusive_lo: false,
+        what: "the green-wave speed",
+    },
+    Bound {
+        path: "traffic.signals.green_wave_heading_deg",
+        lo: 0.0,
+        hi: 360.0,
+        exclusive_lo: false,
+        what: "the green-wave heading",
+    },
     // 1,000 veh/h per lane-km is several times a jammed lane's density at any speed; the
     // ceiling is a guard against a typo, as the rate's is.
     Bound {
@@ -1132,6 +1206,62 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         path: "actors.vehicles.demand.rate_veh_per_h",
         status: Status::Wired,
         note: "Vehicles per hour offered to the network.",
+    },
+    KeyStatus {
+        path: "traffic",
+        status: Status::Wired,
+        note: "How the traffic behaves at junctions and in jams; every field changes the run.",
+    },
+    KeyStatus {
+        path: "traffic.right_turn_on_red",
+        status: Status::Wired,
+        note: "Overrides the jurisdiction's right-turn-on-red rule.",
+    },
+    KeyStatus {
+        path: "traffic.dynamic_rerouting",
+        status: Status::Wired,
+        note: "Drivers re-plan on travel-time changes and closures.",
+    },
+    KeyStatus {
+        path: "traffic.lane_changes",
+        status: Status::Wired,
+        note: "Discretionary and route lane changes (MOBIL).",
+    },
+    KeyStatus {
+        path: "traffic.reroute_period_s",
+        status: Status::Wired,
+        note: "Congestion-aware rerouting on smoothed lane speeds (SUMO's rerouting device); \
+               0 is off.",
+    },
+    KeyStatus {
+        path: "traffic.strategic_lane_choice",
+        status: Status::Wired,
+        note: "Routes are planned from every lane of the road and the driver changes lane \
+               ahead of the turn; gives up after 8 s at the lane end without a gap.",
+    },
+    KeyStatus {
+        path: "traffic.keep_junctions_clear",
+        status: Status::Wired,
+        note: "Do not enter a junction without room beyond it; yield to vehicles inside it.",
+    },
+    KeyStatus {
+        path: "traffic.gridlock_timeout_s",
+        status: Status::Wired,
+        note: "A vehicle standing this long is moved on along its route and counted on \
+               traffic.control (SUMO's time-to-teleport); 0 is off.",
+    },
+    KeyStatus {
+        path: "traffic.signals",
+        status: Status::Wired,
+        note: "Fixed-time or NEMA-style actuated control, and a green wave; the SPaT shows \
+               what the controller does.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.demand.fleet_size",
+        status: Status::Wired,
+        note: "Holds exactly this many vehicles on the road: a finished trip is replaced, \
+               and a trip that cannot enter or has no route is redrawn. Needs the Poisson \
+               model; its arrival rate is then not used.",
     },
     KeyStatus {
         path: "actors.vehicles.demand.rate_veh_per_h_per_lane_km",
@@ -3361,6 +3491,91 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ));
     }
 
+    if let Some(t) = &s.traffic {
+        bounded_at(
+            "traffic.gridlock_timeout_s",
+            "traffic.gridlock_timeout_s",
+            t.gridlock_timeout_s,
+            e,
+        );
+        bounded_at(
+            "traffic.reroute_period_s",
+            "traffic.reroute_period_s",
+            t.reroute_period_s,
+            e,
+        );
+        if t.reroute_period_s > 0.0 && t.reroute_period_s < 10.0 {
+            e.push(conflict(
+                "traffic.reroute_period_s",
+                format!(
+                    "is {} s; re-planning more often than every 10 s only repeats the same \
+                     route (lane speeds are smoothed over 180 s); use 0 for off or at least 10",
+                    t.reroute_period_s
+                ),
+            ));
+        }
+        let g = &t.signals;
+        for (path, v) in [
+            ("traffic.signals.min_green_s", g.min_green_s),
+            ("traffic.signals.max_green_s", g.max_green_s),
+            ("traffic.signals.passage_s", g.passage_s),
+            ("traffic.signals.detector_m", g.detector_m),
+            (
+                "traffic.signals.green_wave_heading_deg",
+                g.green_wave_heading_deg,
+            ),
+        ] {
+            bounded_at(path, path, v, e);
+        }
+        if let Some(v) = g.green_wave_speed_mps {
+            bounded_at(
+                "traffic.signals.green_wave_speed_mps",
+                "traffic.signals.green_wave_speed_mps",
+                v,
+                e,
+            );
+        }
+        if g.max_green_s < g.min_green_s {
+            e.push(conflict(
+                "traffic.signals.max_green_s",
+                format!(
+                    "is {} s, below the minimum green of {} s",
+                    g.max_green_s, g.min_green_s
+                ),
+            ));
+        }
+    }
+    if let Some(n) = s.actors.vehicles.demand.fleet_size {
+        bounded_at(
+            "actors.vehicles.demand.fleet_size",
+            "actors.vehicles.demand.fleet_size",
+            f64::from(n),
+            e,
+        );
+    }
+    if s.actors.vehicles.demand.fleet_size.is_some() && s.scale.is_some() {
+        e.push(conflict(
+            "actors.vehicles.demand.fleet_size",
+            "holds a fleet in the microscopic engine only, and this scenario runs the \
+             city-scale tiers (scale); remove one of the two"
+                .to_string(),
+        ));
+    }
+    if s.actors.vehicles.demand.fleet_size.is_some()
+        && !matches!(
+            s.actors.vehicles.demand.kind.as_str(),
+            "mobility/demand/poisson" | v2xw_mobility::demand::poisson::MODEL_ID
+        )
+    {
+        e.push(conflict(
+            "actors.vehicles.demand.fleet_size",
+            format!(
+                "holds a fleet only with the Poisson demand model, and the demand is '{}'; \
+                 set actors.vehicles.demand.kind to mobility/demand/poisson",
+                s.actors.vehicles.demand.kind
+            ),
+        ));
+    }
     if let Some(rate) = s.actors.vehicles.demand.rate_veh_per_h {
         if !(rate.is_finite() && rate >= 0.0) {
             e.push(conflict(
@@ -4529,7 +4744,8 @@ fn threats(s: &Scenario, e: &mut Vec<ScenarioError>) {
 
 fn metrics_and_exporters(s: &Scenario, e: &mut Vec<ScenarioError>) {
     // An opt-in group (`signing`) is not selected by `all`, so it may stand beside it.
-    let opt_in = |m: &String| m == v2xw_metrics::signing::GROUP;
+    let opt_in =
+        |m: &String| m == v2xw_metrics::signing::GROUP || m == v2xw_metrics::traffic::GROUP;
     if s.metrics.iter().any(|m| m == "all") && s.metrics.iter().filter(|m| !opt_in(m)).count() > 1 {
         e.push(conflict(
             "metrics",

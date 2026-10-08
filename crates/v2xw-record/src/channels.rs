@@ -340,6 +340,14 @@ pub const CHANNELS: &[ChannelSpec] = &[
         visibility: Visibility::Mixed,
         payload_bytes: None,
     },
+    // The traffic control's log (`v2xw_engine::actuated`): actuated signal decisions and
+    // gridlock resolution, cumulative.
+    ChannelSpec {
+        name: "traffic.control",
+        wire_id: None,
+        visibility: Visibility::Public,
+        payload_bytes: None,
+    },
 ];
 
 /// The channel with this name, or `None`.

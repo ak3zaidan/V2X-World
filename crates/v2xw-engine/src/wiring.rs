@@ -453,6 +453,19 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(share) = vru.ebike_share {
         params.cyclists.ebike_share = share;
     }
+    // The traffic section (`scenario.traffic`): each field overrides the jurisdiction's
+    // rule or the engine default it names; absent, the defaults stand (gridlock resolution
+    // at SUMO's 300 s).
+    let traffic = scenario.traffic.clone().unwrap_or_default();
+    if let Some(rtor) = traffic.right_turn_on_red {
+        params.right_turn_on_red = rtor;
+    }
+    params.dynamic_rerouting = traffic.dynamic_rerouting;
+    params.reroute_period_s = traffic.reroute_period_s.max(0.0);
+    params.lane_changes = traffic.lane_changes;
+    params.strategic_lane_choice = traffic.strategic_lane_choice;
+    params.junction_clearance = traffic.keep_junctions_clear;
+    params.time_to_teleport_s = traffic.gridlock_timeout_s.max(0.0);
     // Kerbside stops follow the jurisdiction too: New York City has its taxis
     // (`v2xw_mobility::kerbside`).
     params.kerbside = v2xw_mobility::kerbside::KerbsideParams::for_highway_preset(
@@ -624,6 +637,9 @@ pub fn build_demand(scenario: &Scenario, world: &World) -> Result<Box<dyn Demand
             params.duration = Duration::from_secs_f64(scenario.time.duration_s);
             if let Some(rate) = d.rate_veh_per_h {
                 params.arrival_rate_per_s = rate / 3600.0;
+            }
+            if let Some(n) = d.fleet_size {
+                params.fleet_size = u64::from(n);
             }
             if !shares.is_empty() {
                 params.fleet = v2xw_mobility::demand::FleetMix::from_shares(&shares);
@@ -2658,6 +2674,21 @@ pub fn build_metrics(
                 0,
                 signing_facts(scenario),
             )),
+        )?;
+    }
+    // Traffic control (`v2xw_metrics::traffic`): with a `traffic` section, or when the
+    // metric list names the group or one of its metrics. Not under a bare `all`, so a
+    // scenario that says nothing about it keeps the digests it had.
+    let traffic_named = scenario.metrics.iter().any(|m| {
+        m == v2xw_metrics::traffic::GROUP
+            || v2xw_metrics::traffic::TrafficControlProvider::definitions()
+                .iter()
+                .any(|d| d.name == *m)
+    });
+    if scenario.traffic.is_some() || traffic_named {
+        set.register(
+            registry,
+            Box::new(v2xw_metrics::traffic::TrafficControlProvider::new()),
         )?;
     }
     if scenario.metrics.is_empty() {

@@ -81,6 +81,12 @@ pub trait Mobility: Model {
     /// radio and the GNSS models and no driver: a snowstorm changed nothing on the road.
     fn set_weather(&mut self, _weather: v2xw_core::weather::WeatherState) {}
 
+    /// What the gridlock resolution has done so far ([`crate::EngineParams::time_to_teleport_s`]),
+    /// or `None` for a model without one or with it off.
+    fn gridlock(&self) -> Option<crate::engine::GridlockCounters> {
+        None
+    }
+
     /// Passes a demand multiplier to the demand model (see [`Demand::set_multiplier`]).
     /// Returns whether it was honoured; a tier with no demand model returns `false`.
     fn set_demand_multiplier(&mut self, _m: f64) -> bool {
@@ -269,6 +275,28 @@ pub trait Demand: Model + Send + Sync {
         _progress: &[crate::demand::hooks::ActorProgress],
     ) -> Vec<MobilityCommand> {
         Vec::new()
+    }
+
+    /// Tells the model that one trip it produced never reached the road: its origin had
+    /// no room until the departure deadline, or no route existed. A model with a cap on
+    /// its trips gives the slot back, so a cap of N means N vehicles placed rather than N
+    /// trips drawn (a cap of 2 on a small grid used to put 0 vehicles on the road when both
+    /// draws were refused). The default does nothing.
+    fn refund(&mut self) {}
+
+    /// The number of vehicles this model holds on the road at all times, when it holds a
+    /// fleet rather than running an arrival process. The engine then asks
+    /// [`Demand::top_up`] for a trip whenever fewer are on the road (or waiting to enter),
+    /// so a finished trip is replaced by a new one. `None` (the default) keeps the arrival
+    /// process.
+    fn fleet_target(&self) -> Option<u64> {
+        None
+    }
+
+    /// One trip starting at `t`, outside the arrival process: what holds a fleet at
+    /// [`Demand::fleet_target`]. `None` (the default) when the model cannot make one.
+    fn top_up(&mut self, _ctx: &mut dyn MobCtx, _t: SimTime) -> Option<TripRequest> {
+        None
     }
 }
 

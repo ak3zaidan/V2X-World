@@ -158,6 +158,7 @@ pub mod security;
 pub mod signing;
 pub mod stats;
 pub mod summary;
+pub mod traffic;
 pub mod vis;
 pub mod vru;
 
