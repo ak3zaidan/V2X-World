@@ -195,8 +195,14 @@ fn the_far_bins_are_lost_below_sensitivity_and_the_near_bins_are_not() {
 fn a_dense_fleet_loses_frames_to_interference_and_a_sparse_one_does_not() {
     let (dense, _) = run(load("scale/100.yaml"));
     let (sparse, _) = run(load("scale/2.yaml"));
-    let dense_collisions = *dense.rx_losses.get("collision").unwrap_or(&0);
-    let sparse_collisions = *sparse.rx_losses.get("collision").unwrap_or(&0);
+    // A collision with a transmitter the victim's could not hear is reported as a hidden
+    // terminal; both are interference.
+    let interference = |r: &v2xw_engine::RunReport| {
+        r.rx_losses.get("collision").copied().unwrap_or(0)
+            + r.rx_losses.get("hidden-terminal").copied().unwrap_or(0)
+    };
+    let dense_collisions = interference(&dense);
+    let sparse_collisions = interference(&sparse);
     assert!(
         dense_collisions > 0,
         "a hundred vehicles on one channel produced no collision at all"

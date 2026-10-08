@@ -106,7 +106,11 @@ fn generation_is_desynchronised_and_that_removes_the_synchronised_collisions() {
     assert!(desync.reception_attempts > 500 && sync.reception_attempts > 500);
 
     let contention =
-        |r: &RunReport| loss_fraction(r, "collision") + loss_fraction(r, "half-duplex");
+        |r: &RunReport| {
+            loss_fraction(r, "collision")
+                + loss_fraction(r, "hidden-terminal")
+                + loss_fraction(r, "half-duplex")
+        };
     assert!(
         contention(&sync) > 0.10,
         "the synchronised fleet lost only {:.3} to contention, so this fleet cannot show \
