@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! cross_validate [--quick] [--no-radio] [--out FILE] [--osm FILE] [--work DIR]
+//!                [--case NAME@RATE] [--no-idm]
 //! ```
 //!
 //! SUMO is found through `$SUMO_HOME`, else `$V2XW_SUMO_VENV` (a virtualenv with the
@@ -23,6 +24,8 @@ struct Args {
     out: PathBuf,
     osm: PathBuf,
     work: PathBuf,
+    case: Option<String>,
+    no_idm: bool,
 }
 
 fn args() -> Args {
@@ -32,12 +35,16 @@ fn args() -> Args {
         out: PathBuf::from("docs/validation/cross-validation.md"),
         osm: PathBuf::from("worlds/cache/manhattan.osm.xml"),
         work: std::env::temp_dir().join("v2xw-xval"),
+        case: None,
+        no_idm: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
         match x.as_str() {
             "--quick" => a.quick = true,
             "--no-radio" => a.radio = false,
+            "--case" => a.case = it.next(),
+            "--no-idm" => a.no_idm = true,
             "--out" => a.out = it.next().map(PathBuf::from).unwrap_or(a.out),
             "--osm" => a.osm = it.next().map(PathBuf::from).unwrap_or(a.osm),
             "--work" => a.work = it.next().map(PathBuf::from).unwrap_or(a.work),
@@ -84,7 +91,7 @@ fn metrics_table(s: &mut String, runs: &[Measured]) {
     }
     let _ = writeln!(s, "---:|");
     type Get = fn(&Measured) -> f64;
-    let rows: [(&str, Get, usize); 13] = [
+    let rows: [(&str, Get, usize); 20] = [
         ("trips offered", |m| m.offered as f64, 0),
         ("trips inserted", |m| m.inserted as f64, 0),
         ("trips completed", |m| m.completed as f64, 0),
@@ -102,6 +109,13 @@ fn metrics_table(s: &mut String, runs: &[Measured]) {
         ("mean vehicles halting (< 0.1 m/s)", |m| m.halting_mean, 1),
         ("max vehicles halting", |m| m.halting_max as f64, 0),
         ("halting time per trip, s", |m| m.wait_per_trip_s, 1),
+        ("  of which at a stop line (last 30 m), s", |m| m.halt_where_s[0] / m.inserted.max(1) as f64, 1),
+        ("  of which mid-block, s", |m| m.halt_where_s[1] / m.inserted.max(1) as f64, 1),
+        ("  of which inside a junction, s", |m| m.halt_where_s[2] / m.inserted.max(1) as f64, 1),
+        ("stops per trip", |m| m.stops_per_trip(), 2),
+        ("lane changes per vehicle-km", |m| m.lane_changes_per_km(), 2),
+        ("junction speed (moving), km/h", |m| m.junction_kmh(), 1),
+        ("vehicles left in network at end", |m| m.left_in_network as f64, 0),
     ];
     for (name, g, p) in rows {
         let _ = write!(s, "| {name} |");
@@ -180,7 +194,7 @@ fn main() {
             }
             if a.osm.exists() {
                 match xval::manhattan_study(home, &a.osm, &a.work, MANHATTAN_BBOX) {
-                    Ok(s) => studies.push((s, if a.quick { vec![1200.0] } else { vec![900.0, 2400.0] })),
+                    Ok(s) => studies.push((s, if a.quick { vec![1200.0] } else { vec![900.0, 2400.0, 3600.0] })),
                     Err(e) => setup_notes.push(format!("manhattan: {e}")),
                 }
             } else {
@@ -198,6 +212,9 @@ fn main() {
                     study.import.total_anomalies()
                 );
                 for rate in rates {
+                    if a.case.as_ref().is_some_and(|c| *c != format!("{}@{rate}", study.name)) {
+                        continue;
+                    }
                     let trips = make_trips(&study.world, &study.ids, *rate, timing.demand_s, seed);
                     eprintln!("{} @ {rate} veh/h: {} trips", study.name, trips.len());
                     let native = run_native(study, &trips, timing, seed);
@@ -205,9 +222,27 @@ fn main() {
                     let (krauss, v) = run_sumo(study, home, &trips, timing, seed, "SUMO Krauss (default)", &[]);
                     sumo_version = sumo_version.or(v);
                     eprintln!("  sumo krauss done in {:.0} s", krauss.wall_s);
-                    let (idm, _) = run_sumo(study, home, &trips, timing, seed, "SUMO IDM", &["--default.carfollowmodel", "IDM"]);
-                    eprintln!("  sumo idm done in {:.0} s", idm.wall_s);
-                    cases.push(Case { study_name: study.name.clone(), rate: *rate, runs: vec![native, krauss, idm] });
+                    if std::env::var_os("V2XW_XVAL_OUTLIERS").is_some() {
+                        let mut v: Vec<(f64, u64, f64, f64)> = native
+                            .travel_s
+                            .iter()
+                            .filter_map(|(q, a)| krauss.travel_s.get(q).map(|b| (a - b, *q, *a, *b)))
+                            .collect();
+                        v.sort_by(|x, y| y.0.total_cmp(&x.0));
+                        for q in krauss.travel_s.keys().filter(|q| !native.travel_s.contains_key(q)).take(8) {
+                            eprintln!("  outlier trip {q}: not completed natively");
+                        }
+                        for (d, q, a, b) in v.iter().take(8) {
+                            eprintln!("  outlier trip {q}: native {a:.0} s, krauss {b:.0} s, +{d:.0} s");
+                        }
+                    }
+                    let mut runs = vec![native, krauss];
+                    if !a.no_idm {
+                        let (idm, _) = run_sumo(study, home, &trips, timing, seed, "SUMO IDM", &["--default.carfollowmodel", "IDM"]);
+                        eprintln!("  sumo idm done in {:.0} s", idm.wall_s);
+                        runs.push(idm);
+                    }
+                    cases.push(Case { study_name: study.name.clone(), rate: *rate, runs });
                 }
             }
             if let Some(v) = &sumo_version {
@@ -279,13 +314,13 @@ fn main() {
                 let _ = writeln!(body, "\n- {}: {e}", r.label);
             }
         }
-        if c.runs.len() >= 3 {
+        if c.runs.len() >= 2 {
             let _ = writeln!(
                 body,
                 "\n| pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |"
             );
             let _ = writeln!(body, "|---|---:|---:|---:|---:|---:|---:|---:|");
-            for (i, j) in [(0, 1), (0, 2), (2, 1)] {
+            for (i, j) in [(0, 1), (0, 2), (2, 1)].into_iter().filter(|p| p.0.max(p.1) < c.runs.len()) {
                 let (share, n, r, mad) = edge_agreement(&c.runs[i], &c.runs[j]);
                 let (np, mr, md) = paired_tt(&c.runs[i], &c.runs[j]);
                 let _ = writeln!(
@@ -308,7 +343,7 @@ fn main() {
                     .map(|k| {
                         let g =
                             |m: &Measured| m.bins.get(k).map_or("—".to_string(), |b| f(b.0, 0));
-                        format!("{}/{}/{}", g(&c.runs[0]), g(&c.runs[1]), g(&c.runs[2]))
+                        c.runs.iter().map(g).collect::<Vec<_>>().join("/")
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
