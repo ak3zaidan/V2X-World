@@ -33,6 +33,7 @@ export function useStatus(): StatusView {
   const target = useStudio((s) => s.target);
   const reconnectAttempts = useStudio((s) => s.reconnectAttempts);
   const failure = useStudio((s) => s.run.failure);
+  const staged = useStudio((s) => s.run.stagedHash !== null);
 
   return useMemo(() => {
     const span = tEndNs > 0 ? tEndNs : hello?.simDurationNs ?? 0;
@@ -50,8 +51,9 @@ export function useStatus(): StatusView {
       atStart: tNs === 0,
       reconnectAttempts,
       ...(failure !== null ? { failure } : {}),
+      staged,
     });
-  }, [connection, runState, tEndNs, tNs, hello, replay, target, reconnectAttempts, failure]);
+  }, [connection, runState, tEndNs, tNs, hello, replay, target, reconnectAttempts, failure, staged]);
 }
 
 /**
