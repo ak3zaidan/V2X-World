@@ -8249,6 +8249,7 @@ fn resolve_rx(attempt: NodeRx, report: &RxReport, now: SimTime) -> NodeRx {
         RxDisposition::Delivered(VerificationState::Revoked) => a.lost(now, rx_cause::REVOKED),
         RxDisposition::Dropped(cause) => a.lost(now, drop_cause_name(cause)),
         RxDisposition::NodeOff => a.lost(now, rx_cause::RECEIVER_OFF),
+        RxDisposition::UnknownSigner => a.lost(now, rx_cause::UNKNOWN_SIGNER),
     }
 }
 

@@ -279,3 +279,87 @@ mod winner_tests {
         }
     }
 }
+
+/// The OpenCV2X pool as McCarthy et al. 2021 configure it: two sub-channels of 12 RB in
+/// the 10 MHz channel (adjacent PSCCH), rather than the harness's four of 12 in 50 PRB.
+#[must_use]
+pub fn opencv2x_pool() -> PoolConfig {
+    let mut pool = PoolConfig::molina_masegosa_highway();
+    pool.mcs = LTE_QPSK_R050;
+    pool.bandwidth_prb = 24;
+    pool
+}
+
+/// One OpenCV2X sweep at `density` on WINNER+ B1 actual heights, with `pool`.
+pub fn opencv2x_sweep(density: f64, pool: PoolConfig, quick: bool) -> SweepReport {
+    let mut s = HighwaySweep::highway_slow(10)
+        .with_channel(ChannelModel::WinnerPlusB1ActualHeights)
+        .with_density(density);
+    if quick {
+        s = s.with_duration(Duration::from_secs(1), Duration::from_secs(2));
+    }
+    s.payload_cycle = vec![190];
+    s.tx_power_dbm = 20.0;
+    let mut sps = SpsParams::molina_masegosa(10);
+    sps.rsrp_threshold_dbm = -126.0;
+    sweep_sidelink(&s, pool, sps)
+}
+
+#[cfg(test)]
+mod opencv2x_tests {
+    use super::*;
+
+    /// Sub-channelisation and inter-packet gap against OpenCV2X. A measurement: run with
+    /// `cargo test -p v2xw-interop opencv2x_tests -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement"]
+    fn subchannels_and_ipg() {
+        let mut harness = PoolConfig::molina_masegosa_highway();
+        harness.mcs = LTE_QPSK_R050;
+        // OpenCV2X's Table II pool with 190 B in one sub-channel, as its PDR curve implies
+        // (one 12-RB sub-channel carries 1,105 bits at QPSK r0.5 here, so the code rate is
+        // raised to 0.72, the least that fits 1,520 bits): a bound, since the error curve
+        // then belongs to that rate, not to MCS 7.
+        let mut one = opencv2x_pool();
+        one.mcs = v2xw_radio::sidelink::SlMcsSpec::new("opencv2x-190b-one-subchannel", 2, 740);
+        for (name, pool) in [
+            ("4x12 RB/50 PRB", harness),
+            ("2x12 RB", opencv2x_pool()),
+            ("2x12 RB, 190 B in one", one),
+        ] {
+            println!(
+                "VERDICT pool {name}: {} sub-channels, 190 B takes {:?}",
+                pool.subchannels(),
+                pool.subchannels_for(190)
+            );
+            for (density, reference) in [(60.0, OPENCV2X_006), (120.0, OPENCV2X_012)] {
+                let r = opencv2x_sweep(density, pool.clone(), false);
+                let c = compare(reference, &r);
+                let pts: Vec<String> = c
+                    .rows
+                    .iter()
+                    .map(|(d, p, o)| format!("{d:.0}:{p:.2}/{:.3}", o.unwrap_or(f64::NAN)))
+                    .collect();
+                println!(
+                    "VERDICT {density} veh/km MAD {:.1} pts: {}",
+                    c.mad.unwrap_or(f64::NAN) * 100.0,
+                    pts.join(" ")
+                );
+                let ipg: Vec<String> = r
+                    .bins
+                    .iter()
+                    .step_by(5)
+                    .map(|b| {
+                        format!(
+                            "{:.0}:{:.0}/{:.0}",
+                            b.centre_m,
+                            b.mean_ipg_ms().unwrap_or(f64::NAN),
+                            b.ipg_max_ms
+                        )
+                    })
+                    .collect();
+                println!("VERDICT   IPG mean/max ms by m: {}", ipg.join(" "));
+            }
+        }
+    }
+}

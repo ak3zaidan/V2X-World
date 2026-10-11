@@ -38,10 +38,16 @@
 //!
 //! # Buildings
 //!
-//! B1's NLOS formula needs the two street legs of a Manhattan grid; this model does not
-//! price a blocked link itself. It reports `owns_buildings = false` to the engine, so the
-//! obstacle stack's Sommer 2011 term charges the walls — exactly how Veins composes a
-//! distance law with `SimpleObstacleShadowing`. The card says so.
+//! Two treatments of a building-blocked link, chosen by `params.nlos`:
+//!
+//! * `sommer` (the default): the LOS law, and the obstacle stack's Sommer 2011 term
+//!   charges the walls — exactly how Veins composes a distance law with
+//!   `SimpleObstacleShadowing`.
+//! * `manhattan`: the B1 NLOS law of WINNER+ D5.3 Table 4-1 over the two street legs
+//!   `d1`, `d2` of the corner the link turns round (traced by the engine's corner tracer),
+//!   and no Sommer term — the law prices the buildings itself. A blocked link no single
+//!   corner connects is evaluated at `d1 = d2 = d/√2`, the two equal legs of a Manhattan
+//!   path over the same straight-line distance.
 
 use std::collections::BTreeMap;
 
@@ -109,6 +115,54 @@ impl B1Heights {
     }
 }
 
+/// How a building-blocked link is priced.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum B1Nlos {
+    /// The LOS law plus the obstacle stack's Sommer 2011 wall term (Veins' composition).
+    #[default]
+    Sommer,
+    /// The WINNER+ B1 NLOS (Manhattan two-leg) law round the traced street corner.
+    Manhattan,
+}
+
+/// Half the B1 street width (w = 20 m, WINNER+ D5.3 Table 4-1): the near end of the
+/// NLOS law's `d_l` range.
+pub const HALF_STREET_WIDTH_M: f64 = 10.0;
+
+/// The WINNER+ B1 NLOS path loss, dB, for a path that runs `d1` metres down the
+/// transmitter's street to the corner and `d2` metres down the receiver's (WINNER+ D5.3
+/// Table 4-1; the same Manhattan-grid law TR 36.885 Table A.1.4-1 cites for urban NLOS):
+///
+/// `PL = min(PL(d1, d2), PL(d2, d1))`,
+/// `PL(dk, dl) = PL_LOS(dk) + 17.3 − 12.5·n_j + 10·n_j·log10(dl) + 3·log10(f/GHz)`,
+/// `n_j = max(2.8 − 0.0024·dk, 1.84)`.
+///
+/// ITU-R M.2135 and TR 36.814 print the UMi variant with 20 in place of 17.3. The result
+/// is never below the LOS law over the straight-line distance.
+#[must_use]
+pub fn b1_nlos_with(
+    d1_m: f64,
+    d2_m: f64,
+    h_t_m: f64,
+    h_r_m: f64,
+    f_hz: f64,
+    conv: B1Heights,
+) -> f64 {
+    let f_ghz = f_hz / 1e9;
+    let leg = |dk: f64, dl: f64| {
+        let dk = dk.max(MIN_DISTANCE_M);
+        let dl = dl.max(HALF_STREET_WIDTH_M);
+        let n_j = (2.8 - 0.0024 * dk).max(1.84);
+        b1_los_with(dk, h_t_m, h_r_m, f_hz, conv) + 17.3 - 12.5 * n_j
+            + 10.0 * n_j * math::log10(dl)
+            + 3.0 * math::log10(f_ghz)
+    };
+    let nlos = leg(d1_m, d2_m).min(leg(d2_m, d1_m));
+    let straight = (d1_m * d1_m + d2_m * d2_m).sqrt();
+    nlos.max(b1_los_with(straight, h_t_m, h_r_m, f_hz, conv))
+}
+
 fn heights(h_t_m: f64, h_r_m: f64, conv: B1Heights) -> (f64, f64) {
     let e = conv.environment_m();
     (
@@ -158,6 +212,7 @@ pub struct WinnerPlusB1 {
     tier: Tier,
     d_corr_m: f64,
     heights: B1Heights,
+    nlos: B1Nlos,
     shadowing: ShadowingOverride,
     shadows: BTreeMap<(u32, u32), ShadowProcess>,
 }
@@ -175,6 +230,7 @@ impl WinnerPlusB1 {
             tier,
             d_corr_m: decorrelation_distance_m(env),
             heights: B1Heights::Effective,
+            nlos: B1Nlos::Sommer,
             shadowing: ShadowingOverride::default(),
             shadows: BTreeMap::new(),
         }
@@ -184,6 +240,13 @@ impl WinnerPlusB1 {
     #[must_use]
     pub fn with_heights(mut self, h: B1Heights) -> Self {
         self.heights = h;
+        self
+    }
+
+    /// The same model with another building-blocked-link treatment.
+    #[must_use]
+    pub fn with_nlos(mut self, n: B1Nlos) -> Self {
+        self.nlos = n;
         self
     }
 
@@ -223,7 +286,18 @@ impl<C: Ctx + ?Sized> Propagation<C> for WinnerPlusB1 {
         _w: &WeatherState,
     ) -> LossBreakdown {
         let d = tx.pos.distance(rx.pos);
-        let path = b1_los_with(d, tx.height_m(), rx.height_m(), f_hz, self.heights);
+        let path = if self.nlos == B1Nlos::Manhattan && los.class.has_building() {
+            let (d1, d2) = los.corner.map_or(
+                (
+                    d * core::f64::consts::FRAC_1_SQRT_2,
+                    d * core::f64::consts::FRAC_1_SQRT_2,
+                ),
+                |c| (c.d_t_m, c.d_r_m),
+            );
+            b1_nlos_with(d1, d2, tx.height_m(), rx.height_m(), f_hz, self.heights)
+        } else {
+            b1_los_with(d, tx.height_m(), rx.height_m(), f_hz, self.heights)
+        };
         let base_sigma = if los.class.has_building() {
             SIGMA_NLOS_DB
         } else {
@@ -327,6 +401,21 @@ fn card() -> ModelCard {
             ),
             calibration: None,
         },
+        Parameter {
+            name: "nlos".to_string(),
+            unit: "-".to_string(),
+            default: serde_json::json!("sommer"),
+            range: Some(vec![
+                serde_json::json!("sommer"),
+                serde_json::json!("manhattan"),
+            ]),
+            source: Source::new(
+                SourceKind::Paper,
+                "sommer: LOS law + Sommer et al. 2011 wall term (Veins); manhattan: WINNER+ \
+                 D5.3 Table 4-1 B1 NLOS over the traced corner's two street legs",
+            ),
+            calibration: None,
+        },
         Parameter::new(
             "sigma_los_db",
             "dB",
@@ -353,8 +442,10 @@ fn card() -> ModelCard {
         "An antenna at or below the 1 m environment height is evaluated at h' = 0.1 m.".to_string(),
     ];
     card.limitations = vec![
-        "No B1 NLOS (Manhattan two-leg) formula: a building-blocked link keeps the LOS law \
-         and the obstacle stack's Sommer term charges the walls, as Veins composes it."
+        "B1 NLOS (Manhattan two-leg) only with `nlos: manhattan`; by default a \
+         building-blocked link keeps the LOS law and the obstacle stack's Sommer term \
+         charges the walls, as Veins composes it. A blocked link with no single traced \
+         corner is evaluated at d1 = d2 = d/√2."
             .to_string(),
         "Below the breakpoint the law is under free space by a few dB, as published; no \
          free-space floor is applied."
@@ -373,6 +464,7 @@ fn card() -> ModelCard {
         tests: vec![
             "the_two_segments_meet_at_the_breakpoint".to_string(),
             "the_breakpoint_uses_effective_heights".to_string(),
+            "the_nlos_law_matches_a_hand_evaluation_and_exceeds_los".to_string(),
         ],
     };
     card
@@ -409,5 +501,21 @@ mod tests {
         assert!((pl - 119.14).abs() < 0.02, "{pl}");
         // The 3 m floor.
         assert_eq!(b1_los_db(1.0, 1.5, 1.5, F), b1_los_db(3.0, 1.5, 1.5, F));
+    }
+
+    #[test]
+    fn the_nlos_law_matches_a_hand_evaluation_and_exceeds_los() {
+        // d1 = 100, d2 = 50, effective heights: PL_LOS(100) = 40·2 + 7.56 + 2·17.3·0.30103
+        // + 2.7·log10(5.9) = 100.058; n_j = 2.56; PL(100, 50) = 100.058 + 17.3 − 32.0
+        // + 25.6·1.69897 + 3·0.77085 = 131.17. PL(50, 100) uses PL_LOS(50) = 88.017,
+        // n_j = 2.68: 88.017 + 17.3 − 33.5 + 53.6 + 2.313 = 127.73, the smaller.
+        let pl = b1_nlos_with(100.0, 50.0, 1.5, 1.5, F, B1Heights::Effective);
+        assert!((pl - 127.73).abs() < 0.05, "{pl}");
+        assert_eq!(
+            pl,
+            b1_nlos_with(50.0, 100.0, 1.5, 1.5, F, B1Heights::Effective)
+        );
+        // Turning a corner costs far more than the straight path of the same length.
+        assert!(pl > b1_los_db(150.0, 1.5, 1.5, F) + 15.0);
     }
 }

@@ -655,6 +655,9 @@ pub mod rx_cause {
     pub const RX_OVERFLOW: &str = "rx-overflow";
     /// The verification policy discarded the message.
     pub const VERIFY_POLICY_DROP: &str = "verify-policy-drop";
+    /// The signer's certificate was unknown and the policy holds unverifiable messages
+    /// (`verify-all`): a P2PCD request went out instead (IEEE 1609.2-2022 clause 8).
+    pub const UNKNOWN_SIGNER: &str = "unknown-signer";
     /// The verification queue was full, or the message was evicted from it.
     pub const VERIFY_OVERFLOW: &str = "verify-overflow";
     /// The signature did not verify (or the envelope did not parse).
@@ -665,10 +668,11 @@ pub mod rx_cause {
     pub const RECEIVER_OFF: &str = "receiver-off";
 
     /// The causes above the PHY, in a fixed order.
-    pub const ABOVE_PHY: [&str; 7] = [
+    pub const ABOVE_PHY: [&str; 8] = [
         REASSEMBLY_FAILED,
         RX_OVERFLOW,
         VERIFY_POLICY_DROP,
+        UNKNOWN_SIGNER,
         VERIFY_OVERFLOW,
         SIGNATURE_INVALID,
         REVOKED,

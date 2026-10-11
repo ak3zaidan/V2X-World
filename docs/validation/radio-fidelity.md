@@ -78,10 +78,46 @@ against this engine's NIST bound, and the harness's 3 lanes per direction agains
 | 400 | 0.670 | 0.736 | 0.530 | 0.448 |
 | 450 | 0.460 | 0.666 | 0.350 | 0.396 |
 
-The 120 veh/km gap at 150-350 m comes from congestion rather than the channel. The paper
-uses 2 sub-channels of 12 RB in 10 MHz; the harness keeps its 50-PRB pool, so collisions
-differ. `radio.sidelink` (§3) now exposes the knobs needed to close it in a full
-engine run.
+The 120 veh/km gap at 150-350 m comes from congestion rather than the channel.
+
+#### OpenCV2X's sub-channelisation (McCarthy 2021 Table II: 2 × 12 RB, PSCCH adjacent)
+
+`v2xw_interop::radio::opencv2x_pool`; run with `cargo test -p v2xw-interop opencv2x_tests
+-- --ignored --nocapture`. MAD in PDR points against Fig. 3 (WINNER+ B1, actual heights):
+
+| pool | 190 B takes | 60 veh/km | 120 veh/km |
+|---|---:|---:|---:|
+| harness, 4 × 12 RB in 50 PRB, QPSK r0.5 | 2 sub-channels | 4.1 | 9.3 |
+| OpenCV2X 2 × 12 RB, QPSK r0.5 | 2 (the whole pool) | 7.4 | 19.2 |
+| OpenCV2X 2 × 12 RB, 190 B in one sub-channel (r 0.72) | 1 | 4.2 | **6.5** |
+
+At QPSK r0.5 one 12-RB sub-channel carries 1,105 bits (10 PSSCH RB × 108 RE, less the
+CRC), short of 190 B, so taken literally the Table II pool allows one transmission per
+subframe and the gap doubles. OpenCV2X's curve is reproduced only if a 190 B packet fits
+one sub-channel, as its own size check evidently lets it; the third row raises the code
+rate to the least that fits (0.72), which also makes the error curve that rate's, so it is
+a bound rather than a reproduction. 120 veh/km at 200/300/400 m: 0.803 / 0.644 / 0.499
+against the published 0.895 / 0.770 / 0.530.
+
+#### Inter-packet gap (IPG) against distance, OpenCV2X configuration, RRI 100 ms
+
+Mean / largest gap between two successive decodes of one transmitter at one receiver
+(`BinStats::mean_ipg_ms`, attributed to the distance at the second decode):
+
+| distance (m) | 60 veh/km, harness pool | 120 veh/km, harness pool | 120 veh/km, 2 × 12 RB one-sub-channel |
+|---:|---:|---:|---:|
+| 12 | 101 / 1,400 | 101 / 1,335 | 101 / 1,424 |
+| 138 | 103 / 1,545 | 112 / 2,100 | 109 / 2,429 |
+| 262 | 109 / 2,041 | 144 / 2,592 | 131 / 2,542 |
+| 388 | 131 / 2,924 | 180 / 3,192 | 165 / 3,390 |
+
+The floor is the 100 ms RRI and the mean rises with distance and density as
+Molina-Masegosa and Gozalvez (IEEE VT Mag. 12(4), 2017) and OpenCV2X describe; the
+multi-second maxima are SPS's persistent collisions (a colliding pair keeps its resource
+for 5-15 periods, `probResourceKeep` 0). No digitised published IPG curve was available to
+this harness (the papers' figures could not be read), so the check is against SPS's
+renewal arithmetic, mean IPG ≈ RRI / PDR for independent losses, which the measured means
+undershoot at range because losses cluster.
 
 ### Molina-Masegosa 2017 LTE-V2X Mode 4, 120 veh/km, 10 pps: WINNER+ B1, actual heights
 
@@ -145,6 +181,28 @@ End-to-end evidence (`crates/v2xw-engine/tests/radio_tuning.rs`, phase-1 grid):
 | refusals | exponent under TR 37.885; sidelink knobs on 802.11p; keep 0.3; Nakagami shape without `fading: nakagami` |
 | hidden terminals, 250 vehicles, 4 s, buildings on | 156 hidden-terminal losses, 0 plain collisions |
 
+## 3a. Building-blocked links: WINNER+ B1 NLOS (Manhattan two-leg)
+
+`propagation/winner-plus-b1` with `params: {nlos: manhattan}` prices a building-blocked
+link with WINNER+ D5.3 Table 4-1's B1 NLOS law, `min(PL(d1,d2), PL(d2,d1))` with
+`PL(dk,dl) = PL_LOS(dk) + 17.3 − 12.5 n_j + 10 n_j log10(dl) + 3 log10(f)`,
+`n_j = max(2.8 − 0.0024 dk, 1.84)`, over the two street legs of the corner the engine's
+corner tracer finds (no corner: `d1 = d2 = d/√2`). The law owns the buildings, so the Sommer
+term is not added. `nlos: sommer` (the default, Veins' composition) is unchanged.
+Measured on the shipped grid, 40 vehicles, 3 s (`v2xw-engine --test b1_nlos`), PDR of
+802.11p arrivals:
+
+| distance (m) | LOS + Sommer | B1 NLOS (Manhattan) |
+|---:|---:|---:|
+| 0-100 | 0.833 | 0.667 |
+| 100-200 | 0.242 | 0.275 |
+| 200-300 | 0.025 | 0.054 |
+| 300-500 | 0.002 | 0.016 |
+
+The two-leg law is harsher round a near corner (≈ 26 dB above the LOS law over the 71 m straight line at d1 = d2 = 50 m) and
+gentler than Sommer's per-metre wall loss for long blocked paths, which reach further along
+the street canyons, as Mangel et al. 2011 measured.
+
 ## 4. Hidden and exposed terminals (802.11p)
 
 A collision is now classified when interference is declared. Of two overlapping frames,
@@ -178,9 +236,9 @@ own determinism review.
 
 ## 6. Not done
 
-- IPG (inter-packet gap) against OpenCV2X's IPG figures: not measured.
-- B1 NLOS (the Manhattan two-leg formula): a building-blocked link keeps the LOS law plus
-  the Sommer term, as Veins composes it.
-- The OpenCV2X sub-channelisation (2 × 12 RB in 10 MHz) is not reproduced in the harness,
-  which is the remaining 120 veh/km gap.
+- IPG is measured (§1) but not yet compared point by point with a digitised published IPG
+  curve.
+- OpenCV2X's 2 × 12 RB pool is reproduced; matching its curve needs 190 B in one
+  sub-channel, which the TBS arithmetic here does not allow at MCS 7 (§1). The 120 veh/km
+  gap is 6.5 points under that bound, 9.3 on the harness pool.
 - Labelling exposed-node deferrals (§4).

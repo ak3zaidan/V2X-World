@@ -1589,11 +1589,21 @@ impl VruDeviceRuntime {
                 },
                 0,
             ));
-            let m = self.to_message(&frame, believed, verdict);
-            self.deliver(m, out);
+            let held =
+                verdict == VerificationState::Unverified && self.policy.holds_unknown_signer();
+            if held {
+                self.drops.record(DropCause::VerifyPolicySkip);
+            } else {
+                let m = self.to_message(&frame, believed, verdict);
+                self.deliver(m, out);
+            }
             out.rx_reports.push(RxReport {
                 token: item.token,
-                disposition: RxDisposition::Delivered(verdict),
+                disposition: if held {
+                    RxDisposition::UnknownSigner
+                } else {
+                    RxDisposition::Delivered(verdict)
+                },
                 arrived: item.arrived,
                 parsed: item.arrived,
                 verify_start: Some(sched.start),

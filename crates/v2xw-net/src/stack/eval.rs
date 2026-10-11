@@ -148,6 +148,7 @@ pub fn amador_highway_with(
         processing_us: 0,
         seed,
         mac,
+        unicast_retry_limit: 0,
     };
     let m = UnitDisk {
         range_m: AMADOR_RANGE_M,

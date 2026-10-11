@@ -546,9 +546,25 @@ pub struct BinStats {
     pub evaluated: u64,
     /// Arrivals decoded.
     pub received: u64,
+    /// Inter-packet gaps closed in this bin: decodes of a transmitter at a receiver that
+    /// had already decoded that transmitter once (sidelink sweep only).
+    pub ipg_count: u64,
+    /// Sum of those gaps, milliseconds.
+    pub ipg_sum_ms: f64,
+    /// The largest of them, milliseconds.
+    pub ipg_max_ms: f64,
 }
 
 impl BinStats {
+    /// Mean inter-packet gap in this bin, milliseconds: the time between two successive
+    /// decodes of one transmitter at one receiver, attributed to the bin of the second
+    /// (Molina-Masegosa and Gozalvez 2017, IEEE VT Magazine 12(4); OpenCV2X's
+    /// inter-packet-gap statistic).
+    #[must_use]
+    pub fn mean_ipg_ms(&self) -> Option<f64> {
+        (self.ipg_count > 0).then(|| self.ipg_sum_ms / self.ipg_count as f64)
+    }
+
     /// Packet delivery in this bin, or `None` when nothing landed in it.
     #[must_use]
     pub fn pdr(&self) -> Option<f64> {
@@ -843,6 +859,8 @@ pub fn sweep_sidelink(sweep: &HighwaySweep, pool: PoolConfig, params: SpsParams)
         })
         .collect();
     let mut losses: BTreeMap<String, u64> = BTreeMap::new();
+    // Last decode instant of each (transmitter, receiver) pair, for the inter-packet gap.
+    let mut last_decode: BTreeMap<(usize, usize), u64> = BTreeMap::new();
     let mut transmissions = 0u64;
     let mut distinct_used = 0u64;
     let mut counted_slots = 0u64;
@@ -1080,7 +1098,16 @@ pub fn sweep_sidelink(sweep: &HighwaySweep, pool: PoolConfig, params: SpsParams)
                 let outcome = phy.evaluate(&mut ctx, &arrival);
                 bins[bin].evaluated += 1;
                 match outcome {
-                    RxOutcome::Received { .. } => bins[bin].received += 1,
+                    RxOutcome::Received { .. } => {
+                        bins[bin].received += 1;
+                        if let Some(prev) = last_decode.insert((tx.vehicle, rx), now) {
+                            let gap_ms = (now - prev) as f64 * 1e-6;
+                            let b = &mut bins[bin];
+                            b.ipg_count += 1;
+                            b.ipg_sum_ms += gap_ms;
+                            b.ipg_max_ms = b.ipg_max_ms.max(gap_ms);
+                        }
+                    }
                     RxOutcome::Lost(cause) => {
                         *losses.entry(cause.label().to_string()).or_insert(0) += 1;
                     }
