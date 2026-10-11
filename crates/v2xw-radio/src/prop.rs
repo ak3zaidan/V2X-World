@@ -1396,19 +1396,59 @@ impl<C: Ctx + ?Sized> Propagation<C> for LogDistanceShadowing {
         los: &LosResult,
         w: &WeatherState,
     ) -> LossBreakdown {
-        let d = tx.pos.distance(rx.pos);
-        let params = self.params_for(los);
-        let path = params.path_loss_db(d);
-
         // One normal draw from this link's Shadow stream. The key embeds the link, so the
         // value cannot depend on what any other link or model drew.
-        let link = LinkKey(tx.node, rx.node);
-        let draw = if params.sigma_db > 0.0 {
-            ctx.rng(RngDomain::Shadow, EntityRef::Link(link))
+        let draw = if self.params_for(los).sigma_db > 0.0 {
+            ctx.rng(RngDomain::Shadow, EntityRef::Link(LinkKey(tx.node, rx.node)))
                 .normal(0.0, 1.0)
         } else {
             0.0
         };
+        // Rain is not this law's term: the composition applies
+        // `weather/attenuation/itu-r-p838` once, whatever the law ([`RainAttenuation`]),
+        // so a law that also charged it would count the rain twice.
+        let _ = w;
+        self.loss_db_drawn(tx, rx, los, draw)
+    }
+}
+
+impl LogDistanceShadowing {
+    /// The standard-normal draw [`Propagation::loss_db`] takes for the link `tx → rx`,
+    /// through a shared borrow of the run's registry, so a frame's receivers can draw in
+    /// parallel. Each link draws from its own keyed stream (`RngDomain::Shadow`, the
+    /// link), which nothing else reads, so a draw taken here and handed to
+    /// [`LogDistanceShadowing::loss_db_drawn`] is the number `loss_db` would have drawn,
+    /// whatever order the links are drawn in. `0.0`, and no draw, when the link's preset
+    /// has no shadowing — exactly when `loss_db` draws nothing.
+    #[must_use]
+    pub fn shadow_draw_shared(
+        &self,
+        rng: &v2xw_core::rng::RngRegistry,
+        tx: NodeId,
+        rx: NodeId,
+        los: &LosResult,
+    ) -> f64 {
+        if self.params_for(los).sigma_db > 0.0 {
+            rng.checkout(RngDomain::Shadow, EntityRef::Link(LinkKey(tx, rx)))
+                .normal(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// [`Propagation::loss_db`] with the link's shadowing draw already taken
+    /// ([`LogDistanceShadowing::shadow_draw_shared`]): the path loss and the correlated
+    /// shadowing update, which is the stateful half and stays sequential.
+    pub fn loss_db_drawn(
+        &mut self,
+        tx: &RadioEndpoint,
+        rx: &RadioEndpoint,
+        los: &LosResult,
+        draw: f64,
+    ) -> LossBreakdown {
+        let d = tx.pos.distance(rx.pos);
+        let params = self.params_for(los);
+        let path = params.path_loss_db(d);
         let process = self
             .shadows
             .entry((tx.node.index(), rx.node.index()))
@@ -1419,10 +1459,6 @@ impl<C: Ctx + ?Sized> Propagation<C> for LogDistanceShadowing {
             (Some(c), true) => c.loss_db(los.walls_crossed, los.obstructed_len_m),
             _ => 0.0,
         };
-        // Rain is not this law's term: the composition applies
-        // `weather/attenuation/itu-r-p838` once, whatever the law ([`RainAttenuation`]),
-        // so a law that also charged it would count the rain twice.
-        let _ = w;
         LossBreakdown::new(path, shadow, obstacle, 0.0, tx.gain_dbi + rx.gain_dbi)
     }
 }
@@ -3041,6 +3077,40 @@ mod tests {
             "sd {sd} against σ {}",
             preset.params().sigma_db
         );
+    }
+
+    #[test]
+    fn a_shadowing_draw_taken_through_a_shared_borrow_is_the_one_loss_db_takes() {
+        // Two models from one seed: one draws inside `loss_db`, the other is handed draws
+        // taken through `shadow_draw_shared` — links interleaved in a different order, as
+        // a parallel map would take them. Every loss must agree to the bit.
+        let new = || {
+            LogDistanceShadowing::new(
+                Tier::Medium,
+                LogDistancePreset::AbbasLosUrban,
+                EnvClass::Urban,
+            )
+        };
+        let (mut a, mut b) = (new(), new());
+        let (mut ctx, registry) = (TestCtx::new(23), v2xw_core::rng::RngRegistry::new(23));
+        let tx = endpoint(0, 0.0, 0.0, 1.5);
+        let los = LosResult::clear();
+        for step in 0..20 {
+            let moved: Vec<_> = (1..5u32)
+                .map(|i| endpoint(i, 40.0 * f64::from(i) + 3.0 * f64::from(step), 7.0, 1.5))
+                .collect();
+            let draws: Vec<f64> = moved
+                .iter()
+                .rev()
+                .map(|r| b.shadow_draw_shared(&registry, tx.node, r.node, &los))
+                .collect();
+            for (r, draw) in moved.iter().zip(draws.into_iter().rev()) {
+                let want = a.loss_db(&mut ctx, &tx, r, 5.9e9, &los, &WeatherState::CLEAR);
+                let got = b.loss_db_drawn(&tx, r, &los, draw);
+                assert_eq!(want.total_db.to_bits(), got.total_db.to_bits(), "step {step}");
+                assert_eq!(want.shadow_db.to_bits(), got.shadow_db.to_bits(), "step {step}");
+            }
+        }
     }
 
     #[test]

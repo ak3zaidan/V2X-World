@@ -137,20 +137,32 @@ impl<R: RunRecorder> Tally<R> {
 
 impl<R: RunRecorder> RunRecorder for Tally<R> {
     fn write(&mut self, at: SimTime, record: &OwnedRecord) {
+        // Looked up by `&str` first: a run writes millions of records into a few dozen
+        // channels, and an owned key per record was an allocation per record.
+        if !self.by_channel.contains_key(record.channel) {
+            self.by_channel.insert(
+                record.channel.to_string(),
+                ChannelTally {
+                    first_ns: at,
+                    ..ChannelTally::default()
+                },
+            );
+        }
         let e = self
             .by_channel
-            .entry(record.channel.to_string())
-            .or_insert(ChannelTally {
-                first_ns: at,
-                ..ChannelTally::default()
-            });
+            .get_mut(record.channel)
+            .expect("inserted above");
         e.records += 1;
         e.json_bytes += record.json.len() as u64;
         e.last_ns = at;
         self.records += 1;
         self.digest.update(&at.to_le_bytes());
         self.digest.update(record.channel.as_bytes());
-        self.digest.update(record.visibility.to_string().as_bytes());
+        // The same bytes `to_string()` gave, written straight into the hash.
+        let _ = core::fmt::Write::write_fmt(
+            &mut DigestFmt(&mut self.digest),
+            format_args!("{}", record.visibility),
+        );
         self.digest.update(&record.json);
         if record.channel == "metric.sample" {
             self.metric_count += 1;
@@ -179,5 +191,15 @@ impl<R: RunRecorder> RunRecorder for Tally<R> {
 
     fn cancelled(&self) -> bool {
         self.inner.cancelled()
+    }
+}
+
+/// Feeds formatted text into the digest without building a `String` first.
+struct DigestFmt<'a>(&'a mut v2xw_core::hash::Sha256Writer);
+
+impl core::fmt::Write for DigestFmt<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.0.update(s.as_bytes());
+        Ok(())
     }
 }
