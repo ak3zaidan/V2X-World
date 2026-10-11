@@ -1238,8 +1238,9 @@ pub enum PropagationChoice {
     /// `propagation/winner-plus-b1`: WINNER+ B1 line of sight with effective antenna
     /// heights, the TR 36.885 V2V channel the Veins and OpenCV2X studies ran on. Buildings
     /// are charged by the obstacle stack's Sommer term. `params: {heights: effective |
-    /// actual}` picks the breakpoint convention ([`v2xw_radio::winner::B1Heights`]).
-    WinnerB1(v2xw_radio::winner::B1Heights),
+    /// actual}` picks the breakpoint convention ([`v2xw_radio::winner::B1Heights`]);
+    /// `nlos: sommer | manhattan` the building-blocked law ([`v2xw_radio::winner::B1Nlos`]).
+    WinnerB1(v2xw_radio::winner::B1Heights, v2xw_radio::winner::B1Nlos),
 }
 
 impl PropagationChoice {
@@ -1248,14 +1249,20 @@ impl PropagationChoice {
     pub const fn owns_buildings(self) -> bool {
         matches!(
             self,
-            PropagationChoice::Tr37885 | PropagationChoice::Geometric
+            PropagationChoice::Tr37885
+                | PropagationChoice::Geometric
+                | PropagationChoice::WinnerB1(_, v2xw_radio::winner::B1Nlos::Manhattan)
         )
     }
 
     /// Whether this law needs the street corner a blocked link turns round, and the
     /// vehicles on a clear one.
     pub const fn traces_geometry(self) -> bool {
-        matches!(self, PropagationChoice::Geometric)
+        matches!(
+            self,
+            PropagationChoice::Geometric
+                | PropagationChoice::WinnerB1(_, v2xw_radio::winner::B1Nlos::Manhattan)
+        )
     }
 }
 
@@ -1312,6 +1319,8 @@ struct PhyParams {
 struct WinnerParams {
     #[serde(default)]
     heights: Option<v2xw_radio::winner::B1Heights>,
+    #[serde(default)]
+    nlos: Option<v2xw_radio::winner::B1Nlos>,
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -1389,7 +1398,10 @@ pub fn radio_models(
                     v2xw_radio::GeometricUrbanV2v::ID => PropagationChoice::Geometric,
                     v2xw_radio::WinnerPlusB1::ID => {
                         match params_of::<WinnerParams>(&choice.params) {
-                            Ok(p) => PropagationChoice::WinnerB1(p.heights.unwrap_or_default()),
+                            Ok(p) => PropagationChoice::WinnerB1(
+                                p.heights.unwrap_or_default(),
+                                p.nlos.unwrap_or_default(),
+                            ),
                             Err(e) => {
                                 errors.push(bad(e));
                                 continue;
@@ -1809,7 +1821,7 @@ pub fn los_mean_loss_db(
         PropagationChoice::LogDistance(None, t) => t
             .apply(v2xw_radio::LogDistancePreset::for_environment(env, false).params())
             .path_loss_db(d_m),
-        PropagationChoice::WinnerB1(h) => {
+        PropagationChoice::WinnerB1(h, _) => {
             v2xw_radio::winner::b1_los_with(d_m, h_t_m, h_r_m, f_hz, h)
         }
         PropagationChoice::Tr37885 | PropagationChoice::Geometric => {
@@ -1981,9 +1993,10 @@ pub fn build_radio_at(
                 None => m,
             })
         }
-        PropagationChoice::WinnerB1(h) => Box::new(
+        PropagationChoice::WinnerB1(h, n) => Box::new(
             v2xw_radio::WinnerPlusB1::new(tier, env)
                 .with_heights(h)
+                .with_nlos(n)
                 .with_shadowing(shadow),
         ),
         PropagationChoice::LogDistance(preset, tuning) => Box::new(
