@@ -40,7 +40,8 @@
 //!
 //! * a hard brake: a moving vehicle (≥ [`AUTO_MIN_SPEED_MPS`]) with a vehicle behind it in
 //!   the same lane within [`AUTO_FOLLOWER_RANGE_M`] — an emergency somebody has to react to;
-//! * a breakdown: a moving vehicle;
+//! * a breakdown: a moving vehicle that comes to rest on its own lane, at least
+//!   [`BREAKDOWN_JUNCTION_CLEARANCE_M`] short of its end;
 //! * a cut-in: a moving vehicle with a lane on `side` of the same road and a vehicle on it
 //!   between [`CUT_IN_MIN_GAP_M`] and [`AUTO_FOLLOWER_RANGE_M`] behind it.
 //!
@@ -67,6 +68,11 @@ pub const HARD_BRAKE_DEFAULT_HOLD_S: f64 = 2.0;
 
 /// Default deceleration of a `safety.breakdown`, m/s².
 pub const BREAKDOWN_DEFAULT_DECEL_MPS2: f64 = 3.0;
+
+/// How far short of its lane's end an `"auto"` breakdown must come to rest, metres, at
+/// [`BREAKDOWN_DEFAULT_DECEL_MPS2`]. **A choice**: clear of the stop line's setback and
+/// a crosswalk, so the broken-down car stands in the block and not in the junction.
+pub const BREAKDOWN_JUNCTION_CLEARANCE_M: f64 = 10.0;
 
 /// How long an `"auto"` safety event waits for a vehicle that fits, seconds.
 pub const AUTO_WAIT_DEFAULT_S: f64 = 10.0;
@@ -198,7 +204,16 @@ pub fn pick(
             return false;
         };
         match purpose {
-            Purpose::Breakdown => true,
+            // One that comes to rest on its own lane, short of the junction ahead: a
+            // car whose engine dies rolls to a stop along the block. Picked anywhere, it
+            // stopped inside a junction connector and blocked the movement for the
+            // whole event (midtown-rush-hour, actor 2 on connector 10719 for 178 s).
+            Purpose::Breakdown => world.roads.try_lane(l.lane).is_some_and(|lane| {
+                let v = speed(&c.state);
+                lane.kind != v2xw_world::model::LaneKind::Internal
+                    && l.s_m + v * v / (2.0 * BREAKDOWN_DEFAULT_DECEL_MPS2)
+                        <= lane.length_m - BREAKDOWN_JUNCTION_CLEARANCE_M
+            }),
             Purpose::HardBrake => follower_on(l.lane.index(), l.s_m, 0.0),
             Purpose::CutIn(side) => {
                 let Some(lane) = world.roads.try_lane(l.lane) else {
