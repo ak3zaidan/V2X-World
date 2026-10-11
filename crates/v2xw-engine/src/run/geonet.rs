@@ -150,6 +150,9 @@ impl Engine {
             processing_us: 0,
             seed: self.scenario.seed ^ ((index as u64 + 1) << 32),
             mac: None,
+            // No MAC and a unit-disk medium: a unicast hop is never lost, so there is
+            // nothing to retry.
+            unicast_retry_limit: 0,
         };
         let medium = UnitDisk { range_m: g.range_m };
         let vehicles = nodes.len() as u64;

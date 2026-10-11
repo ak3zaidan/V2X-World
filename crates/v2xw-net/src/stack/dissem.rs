@@ -312,6 +312,13 @@ pub struct DissemConfig {
     /// Medium access: `None` puts every frame on the air at once (no contention).
     #[serde(default)]
     pub mac: Option<Csma>,
+    /// Link-layer retries of a unicast frame (a GeoUnicast hop, or a GeoBroadcast's greedy
+    /// line-forwarding hop) that drew no ACK; `0` sends each once, as broadcast does.
+    /// IEEE 802.11-2020 §10.3.2.9 and Annex C: an unacknowledged individually addressed
+    /// frame is retried up to `dot11ShortRetryLimit` (7) times, the contention window
+    /// doubling each time up to CWmax. Needs `mac`.
+    #[serde(default)]
+    pub unicast_retry_limit: u8,
 }
 
 impl Default for DissemConfig {
@@ -324,6 +331,7 @@ impl Default for DissemConfig {
             processing_us: 0,
             seed: 1,
             mac: None,
+            unicast_retry_limit: 0,
         }
     }
 }
@@ -405,15 +413,38 @@ pub struct DissemReport {
     /// With a MAC: mean channel-access delay, µs.
     #[serde(default)]
     pub access_delay_mean_us: f64,
+    /// Unicast frames sent (first attempts only).
+    #[serde(default)]
+    pub unicast_frames: u64,
+    /// Unicast first attempts that drew an ACK, eventually or at once.
+    #[serde(default)]
+    pub unicast_acked: u64,
+    /// Link-layer retransmissions.
+    #[serde(default)]
+    pub unicast_retries: u64,
 }
 
 #[derive(Debug, Clone)]
 enum Ev {
     Beacon(usize),
-    Rx { node: usize, tx: usize },
-    Cbf { node: usize, key: PacketKey },
-    Den { node: usize, timer: DenTimer },
+    Rx {
+        node: usize,
+        tx: usize,
+    },
+    Cbf {
+        node: usize,
+        key: PacketKey,
+    },
+    Den {
+        node: usize,
+        timer: DenTimer,
+    },
     Hazard(usize),
+    /// The ACK timeout of unicast frame `tx`, attempt `attempt` (0 = first).
+    AckTimeout {
+        tx: usize,
+        attempt: u8,
+    },
 }
 
 struct Tx {
@@ -461,6 +492,13 @@ pub struct DisseminationRun<'m> {
     accesses: u64,
     /// Indices into `txs` of frames that may still overlap a reception, by start.
     recent: Vec<usize>,
+    /// Unicast frames (indices into `txs`) their addressee decoded: an ACK went back.
+    acked: BTreeSet<usize>,
+    /// The first attempt each retransmission belongs to, by its index into `txs`.
+    first_attempt: BTreeMap<usize, usize>,
+    unicast_frames: u64,
+    unicast_acked: BTreeSet<usize>,
+    unicast_retries: u64,
 }
 
 impl<'m> DisseminationRun<'m> {
@@ -508,6 +546,11 @@ impl<'m> DisseminationRun<'m> {
             access_ns: 0,
             accesses: 0,
             recent: Vec::new(),
+            acked: BTreeSet::new(),
+            first_attempt: BTreeMap::new(),
+            unicast_frames: 0,
+            unicast_acked: BTreeSet::new(),
+            unicast_retries: 0,
         };
         if run.cfg.beacons && period > 0 {
             for i in 0..run.routers.len() {
@@ -548,7 +591,7 @@ impl<'m> DisseminationRun<'m> {
                     let j = if jmax > 0 { self.rng.below(jmax) } else { 0 };
                     if let Some(b) = self.routers[i].beacon(t, j) {
                         self.beacons += 1;
-                        self.transmit(i, b, LinkDest::Broadcast, t);
+                        self.transmit(i, b, LinkDest::Broadcast, t, 0);
                     }
                     let next = self.routers[i].next_beacon_ns();
                     self.push(next, Ev::Beacon(i));
@@ -562,8 +605,38 @@ impl<'m> DisseminationRun<'m> {
                         let x = &self.txs[tx];
                         (x.packet.clone(), x.sender, x.to)
                     };
+                    if matches!(to, LinkDest::Unicast(_)) {
+                        // Only the addressee is scheduled a unicast reception.
+                        self.acked.insert(tx);
+                        let first = self.first_attempt.get(&tx).copied().unwrap_or(tx);
+                        self.unicast_acked.insert(first);
+                    }
                     let acts = self.routers[node].receive(&packet, sender, to, t);
                     self.apply(node, acts, t);
+                }
+                Ev::AckTimeout { tx, attempt } => {
+                    if self.acked.contains(&tx) || attempt >= self.cfg.unicast_retry_limit {
+                        continue;
+                    }
+                    let Some(mac) = self.cfg.mac else {
+                        continue;
+                    };
+                    // Binary exponential backoff, CW = min(2^(k+1)·(CWmin+1) − 1, CWmax),
+                    // with CWmax = 2·(CWmin+1) − 1 for AC_VO/AC_VI (802.11-2020 Table 9-155).
+                    let cw_max = 2 * (mac.cw_min + 1) - 1;
+                    let cw = ((mac.cw_min + 1) << (u32::from(attempt) + 1))
+                        .saturating_sub(1)
+                        .min(cw_max);
+                    let backoff = self.rng.below(cw + 1) * mac.slot_us * 1_000;
+                    let (from, packet, to) = {
+                        let x = &self.txs[tx];
+                        (x.from, x.packet.clone(), x.to)
+                    };
+                    let first = self.first_attempt.get(&tx).copied().unwrap_or(tx);
+                    self.place(from, t);
+                    self.unicast_retries += 1;
+                    let idx = self.transmit(from, packet, to, t + backoff, attempt + 1);
+                    self.first_attempt.insert(idx, first);
                 }
                 Ev::Cbf { node, key } => {
                     self.place(node, t);
@@ -640,7 +713,7 @@ impl<'m> DisseminationRun<'m> {
                             tr.forwarded += 1;
                         }
                     }
-                    self.transmit(node, packet, to, t);
+                    self.transmit(node, packet, to, t, 0);
                 }
                 RouterAction::ArmCbfTimer { key, at_ns } => self.push(at_ns, Ev::Cbf { node, key }),
                 RouterAction::Deliver { packet } => self.deliver(node, packet, t),
@@ -787,7 +860,16 @@ impl<'m> DisseminationRun<'m> {
         at
     }
 
-    fn transmit(&mut self, from: usize, packet: GnPacket, to: LinkDest, t: u64) {
+    /// Puts one frame on the air and returns its index into `txs`. `attempt` counts the
+    /// link-layer retransmissions of a unicast frame before this one.
+    fn transmit(
+        &mut self,
+        from: usize,
+        packet: GnPacket,
+        to: LinkDest,
+        t: u64,
+        attempt: u8,
+    ) -> usize {
         let air = airtime_ns(packet.bytes());
         let t = self.access(from, t, air);
         let arrive = t + air + self.cfg.processing_us * 1_000;
@@ -835,6 +917,21 @@ impl<'m> DisseminationRun<'m> {
         for m in rx {
             self.push(arrive, Ev::Rx { node: m, tx: idx });
         }
+        if matches!(to, LinkDest::Unicast(_)) {
+            if attempt == 0 {
+                self.unicast_frames += 1;
+            }
+            if self.cfg.unicast_retry_limit > 0 {
+                if let Some(mac) = self.cfg.mac {
+                    // ACKTimeout = SIFS + slot + PHY-RX-START delay (802.11-2020
+                    // §10.3.2.9); the 14-octet ACK's 64 µs at 6 Mbit/s is inside it here
+                    // as the time to decode it. Checked after the reception resolves.
+                    let timeout = t + air + (mac.sifs_us + mac.slot_us + 64) * 1_000;
+                    self.push(timeout.max(arrive) + 1, Ev::AckTimeout { tx: idx, attempt });
+                }
+            }
+        }
+        idx
     }
 
     fn report(self) -> DissemReport {
@@ -927,6 +1024,9 @@ impl<'m> DisseminationRun<'m> {
             } else {
                 v2xw_core::math::q3(self.access_ns as f64 / self.accesses as f64 / 1_000.0)
             },
+            unicast_frames: self.unicast_frames,
+            unicast_acked: self.unicast_acked.len() as u64,
+            unicast_retries: self.unicast_retries,
         }
     }
 }
@@ -1096,5 +1196,57 @@ mod tests {
             got.push(r.actions[0].receivers);
         }
         assert_eq!(got, vec![1, 2]);
+    }
+
+    /// A GeoBroadcast to an area 3 km away travels by greedy unicast hops over a lossy
+    /// medium. With link-layer ACK/retry (802.11-2020 Annex C, dot11ShortRetryLimit 7) a
+    /// lost hop is resent rather than lost, so more first attempts are acknowledged and
+    /// more of the area is reached; without, every unicast is sent exactly once.
+    #[test]
+    fn unicast_hops_retry_until_acknowledged() {
+        let nodes: Vec<_> = (0..10)
+            .map(|i| MotionNode::fixed(350.0 * i as f64, 0.0))
+            .collect();
+        let area = Area::rect(2_400.0, -10.0, 3_300.0, 10.0);
+        let m = DistancePdr::logistic(380.0, 25.0, 500.0);
+        let run = |limit: u8| {
+            let cfg = DissemConfig {
+                end_ms: 12_000,
+                mac: Some(Csma::AC_VO),
+                unicast_retry_limit: limit,
+                seed: 3,
+                ..Default::default()
+            };
+            let hazards = (0..5)
+                .map(|k| Hazard {
+                    at_ms: 4_000 + 1_000 * k,
+                    node: 0,
+                    area,
+                })
+                .collect();
+            DisseminationRun::new(cfg, &m, nodes.clone(), hazards).run()
+        };
+        let once = run(0);
+        let retried = run(7);
+        let ratio = |r: &DissemReport| r.unicast_acked as f64 / r.unicast_frames.max(1) as f64;
+        println!(
+            "VERDICT no retry: {} unicast, {:.3} acked, pdr {:.3}; retry 7: {} unicast, {:.3} \
+             acked, {} retries, pdr {:.3}",
+            once.unicast_frames,
+            ratio(&once),
+            once.packet_pdr_mean,
+            retried.unicast_frames,
+            ratio(&retried),
+            retried.unicast_retries,
+            retried.packet_pdr_mean
+        );
+        assert!(
+            once.unicast_frames > 0,
+            "no unicast hop: the check proves nothing"
+        );
+        assert_eq!(once.unicast_retries, 0);
+        assert!(retried.unicast_retries > 0);
+        assert!(ratio(&retried) > ratio(&once) + 0.1);
+        assert!(retried.packet_pdr_mean >= once.packet_pdr_mean);
     }
 }
