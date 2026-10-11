@@ -11,6 +11,12 @@
 
 /** `GET /agent/status`. */
 export interface AgentStatus {
+  /**
+   * False when the engine serves no agent (`--no-agent`, or the mock engine): then only
+   * `reason` is set. Absent (older engines) means true.
+   */
+  readonly available?: boolean;
+  readonly reason?: string;
   readonly model: boolean;
   readonly provider: string;
   /** Where the key comes from, named (never the key). */

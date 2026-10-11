@@ -166,8 +166,13 @@ export const useAgent = create<AgentState>((set, get) => {
     refreshStatus: async () => {
       try {
         const r = await call<AgentStatus>("/agent/status");
-        if (r.ok) set({ status: r.body as AgentStatus, statusError: null });
-        else
+        const body = r.body as AgentStatus;
+        if (r.ok && body.available === false) set({ status: null, statusError: body.reason ?? AGENT_SERVE_HINT });
+        else if (r.ok) {
+          set({ status: body, statusError: null });
+          // The engine gained an agent since the watcher gave up (it was restarted): watch again.
+          useAgentWatch.getState().start();
+        } else
           set({
             status: null,
             statusError:
@@ -240,14 +245,33 @@ let watchStarted = false;
 export const useAgentWatch = create<WatchState>((set, get) => {
   const summaryKey = (s: RunSummary | null): string => (s === null ? "" : `${s.run_id}#${s.generation}`);
 
+  // Whether `/agent/status` has said this engine serves an agent. Until it has, the watcher asks
+  // that once rather than polling `/agent/watch`: an engine without one (`--no-agent`, the mock
+  // engine, an older build) would answer every poll with a 404, and the browser logs each as a
+  // console error. A page left on such an engine stays quiet; opening the agent panel asks again.
+  let confirmed = false;
+
   const poll = async (): Promise<void> => {
     let delay = WATCH_MS;
     try {
+      if (!confirmed) {
+        const s = await call<AgentStatus>("/agent/status");
+        const body = s.body as AgentStatus;
+        if (s.status === 404 || (s.ok && body.available === false)) {
+          set({ available: false, unavailable: (s.ok ? body.reason : undefined) ?? AGENT_SERVE_HINT });
+          watchStarted = false;
+          return;
+        }
+        if (!s.ok) throw new Error(body.reason ?? `HTTP ${s.status}`);
+        confirmed = true;
+      }
       const after = get().observations.length;
       const r = await call<WatchPage>(`/agent/watch?after=${after}`);
       if (r.status === 404) {
         set({ available: false, unavailable: AGENT_SERVE_HINT });
-        delay = WATCH_RETRY_MS;
+        confirmed = false;
+        watchStarted = false;
+        return;
       } else if (!r.ok) {
         set({ available: false, unavailable: (r.body as { error?: string }).error ?? `HTTP ${r.status}` });
         delay = WATCH_RETRY_MS;

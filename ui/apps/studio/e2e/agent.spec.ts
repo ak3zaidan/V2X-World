@@ -8,6 +8,12 @@
 import { expect, test } from "@playwright/test";
 
 test("the Agent button opens the agent panel, which explains an engine without an agent", async ({ page }) => {
+  // An engine without an agent says so once on /agent/status; the Studio must not poll routes
+  // that 404, each of which the browser logs as a console error.
+  const errors: string[] = [];
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
   await page.goto("/");
   await expect(page.getByTestId("agent-button")).toBeVisible();
   await page.getByTestId("agent-button").click();
@@ -20,4 +26,6 @@ test("the Agent button opens the agent panel, which explains an engine without a
   await expect(page.getByTestId("agent-panel")).toHaveCount(0);
   await page.getByTestId("agent-button").click();
   await expect(page.getByTestId("agent-panel")).toBeVisible();
+  await page.waitForTimeout(3000);
+  expect(errors).toEqual([]);
 });
