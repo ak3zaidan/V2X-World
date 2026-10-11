@@ -310,6 +310,15 @@ pub trait VerificationPolicy: Model {
     fn oldest_drop(&self) -> bool {
         false
     }
+
+    /// Whether a message whose signer certificate this node does not hold is held back
+    /// from the applications rather than delivered `Unverified`. A policy that promises
+    /// every delivered message was verified must hold it (IEEE 1609.2-2022 §5.2.4.2: an
+    /// unresolvable `digest` signer is not verified; the receiver asks for the
+    /// certificate through P2PCD, clause 8).
+    fn holds_unknown_signer(&self) -> bool {
+        false
+    }
 }
 
 /// Model id of the verify-everything policy.
@@ -378,6 +387,10 @@ impl VerificationPolicy for VerifyAll {
 
     fn code(&self) -> u8 {
         0
+    }
+
+    fn holds_unknown_signer(&self) -> bool {
+        true
     }
 }
 

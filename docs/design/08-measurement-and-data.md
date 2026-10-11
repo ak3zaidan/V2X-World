@@ -83,7 +83,7 @@ table is the map.
 **Channels.** `node.rx` (NODE+GT): one record per `phy.rx` attempt, followed to exactly one
 fate — `delivered` (with `verified`/`unverified`), `lost` with one cause from a closed
 vocabulary (the PHY's causes, then `reassembly-failed`, `rx-overflow`, `verify-policy-drop`,
-`verify-overflow`, `signature-invalid`, `revoked`, `receiver-off`), or `in-flight` at the end
+`unknown-signer`, `verify-overflow`, `signature-invalid`, `revoked`, `receiver-off`), or `in-flight` at the end
 of the run — carrying received power, SINR, distance, bytes, air time and every stamp of the
 message's journey on the true timeline. `msg.latency` (NODE or NODE+GT): a
 `LatencyTrace` — contiguous stages from origin to delivery — for any flow that is not a V2V

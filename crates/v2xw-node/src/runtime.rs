@@ -176,6 +176,12 @@ pub enum RxDisposition {
     Dropped(DropCause),
     /// The node was switched off when the frame reached it.
     NodeOff,
+    /// The signer's certificate was unknown (a `digest` signer identifier that missed the
+    /// cache), so nothing was verified, and the policy holds such a message back rather
+    /// than pass it on unchecked (IEEE 1609.2-2022 §5.2.4.2; SAE J2945/1-2020 §6.3.8).
+    /// The P2PCD request is counted on the peer store; the node's drop counter charges
+    /// `verify_policy_skip`.
+    UnknownSigner,
 }
 
 /// One received frame's journey through this node, reported so the engine can record it on
@@ -1223,7 +1229,9 @@ impl ObuRuntime {
                 break;
             }
             let done = entry.remove();
-            self.deliver(done.message, out);
+            if done.report.disposition != RxDisposition::UnknownSigner {
+                self.deliver(done.message, out);
+            }
             out.rx_reports.push(done.report);
         }
     }
@@ -1342,6 +1350,13 @@ impl ObuRuntime {
             // The verdict is fixed now, but the applications have it only when the server
             // is done: the message waits in `verifying` until `sched.finish`.
             let message = self.to_message(&frame, meta.arrived, verdict);
+            let disposition =
+                if verdict == VerificationState::Unverified && self.policy.holds_unknown_signer() {
+                    self.drops.record(DropCause::VerifyPolicySkip);
+                    RxDisposition::UnknownSigner
+                } else {
+                    RxDisposition::Delivered(verdict)
+                };
             let seq = self.verify_seq;
             self.verify_seq += 1;
             self.verifying.insert(
@@ -1350,7 +1365,7 @@ impl ObuRuntime {
                     message,
                     report: RxReport {
                         token: meta.token,
-                        disposition: RxDisposition::Delivered(verdict),
+                        disposition,
                         arrived: meta.arrived,
                         parsed: meta.parsed,
                         verify_start: Some(sched.start),

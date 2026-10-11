@@ -647,6 +647,7 @@ impl FeedStore {
                     let q = match c {
                         rx_cause::VERIFY_OVERFLOW
                         | rx_cause::VERIFY_POLICY_DROP
+                        | rx_cause::UNKNOWN_SIGNER
                         | rx_cause::SIGNATURE_INVALID
                         | rx_cause::REVOKED => Some("verify"),
                         rx_cause::RX_OVERFLOW

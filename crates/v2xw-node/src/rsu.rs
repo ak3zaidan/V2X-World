@@ -1372,6 +1372,12 @@ impl RsuRuntime {
                     .store(ForwardKind::MisbehaviourReport, frame.bytes, believed);
                 self.uplink_accepted = self.uplink_accepted.saturating_add(1);
             }
+            if verdict == VerificationState::Unverified && self.policy.holds_unknown_signer() {
+                // Unknown signer under a hold-back policy: the P2PCD request is counted,
+                // nothing reaches the applications (IEEE 1609.2-2022 §5.2.4.2).
+                self.drops.record(DropCause::VerifyPolicySkip);
+                continue;
+            }
             let m = self.to_message(&frame, believed, verdict);
             self.deliver(m, out);
         }
