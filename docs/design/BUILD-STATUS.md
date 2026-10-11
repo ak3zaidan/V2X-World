@@ -17,6 +17,58 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-11 — large-fleet speed (fleet-speed track, branch of d3558de)
+
+Optimised dev build (`opt-level 2`, debug assertions **on**), binaries copied out of
+`target/agents` under the build lock, `v2xw run --no-recording --digest`, owner's 8 GB M2
+shared with other agents (load ~3; wall times ±10 %). Scenarios: `scenarios/scale/base.yaml`
+(Midtown box, DSRC, signed ECDSA, prioritized verification) with `metrics: [all]` and the
+trip cap set to land the fleet: cap 560 → 520 vehicles, cap 1,260 → 1,054. "Capped" adds
+`radio.range.max_m: 500`, the published cut `midtown-peak-load.yaml` already uses.
+
+| run | vehicles | threads | wall s per sim s | peak MB | digest |
+|---|---|---|---|---|---|
+| uncapped | 520 | 1 / 2 | 31.9 / 21.9 | 291 / 314 | `33042a90…` both |
+| uncapped | 1,054 | 2 | 71.7 | 860 | `35088f69…` |
+| capped 500 m | 1,054 | 1 / 2 / 4 / 6 | 23.2 / 18.2 / 15.8 / 15.0 | 507-547 | `8661678b…` all |
+| capped, after | 1,054 | 2 / 6 | 19.0 / 16.2 | 525-529 | `8661678b…` (same) |
+| uncapped, after | 520 | 1 / 2 | 31.8 / 22.6 | 298-307 | `33042a90…` (same) |
+
+**Where the time goes** (`sample`, 1,054 vehicles, two threads). Uncapped, every pair in
+the box is a full link (LOS reach at 33 dBm exceeds the box's diagonal), so the
+critical path is the parallel link geometry: building classification (`los_shared`,
+`ring_crossing`, the R-tree walk) is 26 % of all CPU, and the main thread waits on it
+67 % of the time. Capped, the critical path is the **serial main thread**, about 56 % of
+it outside any parallel map, which is why 6 threads buy only 18 % over 2: per-reception
+record emission and the CLI's stream digest (SHA-256, ~15 %), the metric providers'
+JSON decode of node records (latency provider largest, ~7 %), one node wake per
+reception (verification, ~9 %: frames arrive at distinct nanoseconds, so wakes cannot be
+batched without moving them), the candidate walk (`equipped_within`, ~7 %, of which more
+than half is the debug-assertion cross-check that a release build drops), and the
+shadowing process (~5 %).
+
+**Fixed:**
+
+- perf — the log-distance shadowing draw is taken in the parallel per-link map
+  (`LogDistanceShadowing::shadow_draw_shared`, the link's own keyed stream) with the
+  geometry and the fade in **one** map; only the correlated state update stays serial
+  (`loss_db_drawn`). Main-thread shadowing 510 → 64 samples; the wall gain is inside the
+  noise at 2 threads. Same digests at 1, 2 and 6 threads. Test
+  `prop.rs::a_shadowing_draw_taken_through_a_shared_borrow_is_the_one_loss_db_takes`
+  (goes red when the shared draw keys the reverse link).
+- perf — the CLI tally no longer allocates two `String`s per record (channel key,
+  visibility); same digest bytes.
+
+**Not reached:** 1,000 vehicles in real time. The work is quadratic by physics in a fixed
+box (each of 1,054 radios hears ~200 within 500 m at 10 Hz: ~2 M reception attempts per
+simulated second, each with records, metrics and a node wake), and the serial remainder
+bounds the capped run at ~13-15× slower than real time on this build whatever the thread
+count. Next levers, in order: move the stream digest and the metric providers' node-record
+decode off the main thread (a channel to a hashing thread; the providers' predecoded path
+for node records as for engine records), cache the parsed envelope per frame instead of per
+receiver, and measure a release (`lto = thin`, no debug assertions) binary — the owner's
+`run-sim.sh` build — which these numbers do not include.
+
 ## 2026-10-08 — round-6 merge (manual, after the spend limit)
 
 The round's merge agent never ran (spend limit). All seven test-to-fix branches were merged by hand into main in the order scale, netsoak, trafficsoak, vrusoak, configsweep, scene, metricview. configsweep's agent stopped mid-track; its one uncommitted file (e2e-engine/owner-flow.spec.ts) was committed as a wip snapshot.

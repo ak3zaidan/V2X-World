@@ -5551,11 +5551,36 @@ impl Engine {
         // every receiver in parallel (`link`); the stateful half then runs here in
         // receiver order on those results.
         self.obstacles.prepare(&self.world);
-        let geometry: Vec<link::LinkGeometry> = {
+        // The fading and shadowing draws ride the same parallel map. A fade is a
+        // single-use stream keyed by the link and the frame; a log-distance shadowing
+        // draw comes from the link's own keyed stream, which nothing else reads
+        // (`LogDistanceShadowing::shadow_draw_shared`). So each is the number the
+        // sequential budget would have drawn, and the stateful half of the shadowing —
+        // the correlation along the trajectory — runs below in receiver order.
+        let per_link: Vec<(link::LinkGeometry, Option<f64>, Option<f64>)> = {
             let view = self.link_view();
+            let fade_main = self.fading.shared();
+            let fade_focus = self.focus.as_ref().map(|f| f.fading.shared());
+            let shadow_main = self.propagation.as_log_distance();
+            let shadow_focus = self.focus.as_ref().map(|f| f.propagation.as_log_distance());
+            let rng = &self.rng;
             let (tx, tx_pos, tx_heading) = (state.tx, state.tx_pos, state.tx_heading);
             let one = |&(rx, rx_pos, rx_heading): &(NodeId, Vec3, Option<f64>)| {
-                view.geometry(tx, tx_pos, tx_heading, rx, rx_pos, rx_heading, now)
+                use v2xw_radio::LinkPlacement;
+                let g = view.geometry(tx, tx_pos, tx_heading, rx, rx_pos, rx_heading, now);
+                let placement = g.evaluation.map(|e| e.placement);
+                let fade = match (fade_focus, placement) {
+                    (Some(f), Some(LinkPlacement::Inside)) => f,
+                    (_, Some(LinkPlacement::Inbound)) => None,
+                    _ => fade_main,
+                }
+                .map(|m| m.sample_db(rng, LinkKey::new(tx, rx), tx_pos.distance(rx_pos), now));
+                let shadow = match (shadow_focus, placement) {
+                    (Some(f), Some(LinkPlacement::Inside)) => f,
+                    _ => shadow_main,
+                }
+                .map(|m| m.shadow_draw_shared(rng, g.tx_end.node, g.rx_end.node, &g.los));
+                (g, fade, shadow)
             };
             if within.len() < PAR_MIN_LINKS {
                 within.iter().map(one).collect()
@@ -5563,35 +5588,9 @@ impl Engine {
                 within.par_iter().map(one).collect()
             }
         };
-        // The fading draws too: each is a single-use stream keyed by the link and the
-        // frame, so a model that can draw through a shared borrow fades every receiver in
-        // parallel, with the numbers the sequential budget would have drawn.
-        let fades: Vec<Option<f64>> = {
-            let main = self.fading.shared();
-            let in_focus = self.focus.as_ref().map(|f| f.fading.shared());
-            let rng = &self.rng;
-            let (tx, tx_pos) = (state.tx, state.tx_pos);
-            let one = |(&(rx, rx_pos), g): (&(NodeId, Vec3), &link::LinkGeometry)| {
-                use v2xw_radio::LinkPlacement;
-                let model = match (in_focus, g.evaluation.map(|e| e.placement)) {
-                    (Some(f), Some(LinkPlacement::Inside)) => f,
-                    (_, Some(LinkPlacement::Inbound)) => return None,
-                    _ => main,
-                };
-                let d = tx_pos.distance(rx_pos);
-                model.map(|m| m.sample_db(rng, LinkKey::new(tx, rx), d, now))
-            };
-            if main.is_none() && in_focus.flatten().is_none() {
-                vec![None; candidates.len()]
-            } else if candidates.len() < PAR_MIN_LINKS {
-                candidates.iter().zip(&geometry).map(one).collect()
-            } else {
-                candidates.par_iter().zip(&geometry).map(one).collect()
-            }
-        };
-        for ((&(rx, rx_pos), geometry), fade) in candidates.iter().zip(geometry).zip(fades) {
+        for (&(rx, rx_pos), (geometry, fade, shadow)) in candidates.iter().zip(per_link) {
             let (rssi, dist, high, placement, los_class) =
-                self.link_budget(&state, rx, rx_pos, geometry, fade);
+                self.link_budget(&state, rx, rx_pos, geometry, fade, shadow);
             if rssi < floor_dbm {
                 state.faint.insert(rx, rssi);
                 self.report.faint_arrivals += 1;
@@ -7521,6 +7520,7 @@ impl Engine {
         rx_pos: Vec3,
         geometry: link::LinkGeometry,
         drawn_fade: Option<f64>,
+        drawn_shadow: Option<f64>,
     ) -> (f64, f64, bool, Option<&'static str>, v2xw_radio::LosClass) {
         let now = self.scheduler.now();
         let link = LinkKey::new(state.tx, rx);
@@ -7566,7 +7566,13 @@ impl Engine {
                 (_, Some(LinkPlacement::Inbound)) => (propagation, fading, false),
                 _ => (propagation, fading, true),
             };
-            let loss = prop.loss_db(&mut ctx, &tx_end, &rx_end, freq_hz, &los, weather);
+            // A shadowing draw taken in the parallel half is the model's own draw for
+            // this link (`LogDistanceShadowing::shadow_draw_shared`); without one the
+            // model draws here.
+            let loss = match (drawn_shadow, prop.as_log_distance_mut()) {
+                (Some(draw), Some(m)) => m.loss_db_drawn(&tx_end, &rx_end, &los, draw),
+                _ => prop.loss_db(&mut ctx, &tx_end, &rx_end, freq_hz, &los, weather),
+            };
             let obstacle_db = obstacles.loss_db(
                 &mut ctx,
                 &tx_end,

@@ -159,12 +159,34 @@ pub trait BoxedPropagation {
         let _ = gone;
         0
     }
+
+    /// The model as the log-distance law, whose shadowing draw can be taken through a
+    /// shared borrow ([`v2xw_radio::LogDistanceShadowing::shadow_draw_shared`]) — from
+    /// inside a parallel map — and handed back to
+    /// [`v2xw_radio::LogDistanceShadowing::loss_db_drawn`]. `None` for any other law,
+    /// which then draws inside [`BoxedPropagation::loss_db`] as before.
+    fn as_log_distance(&self) -> Option<&v2xw_radio::LogDistanceShadowing> {
+        None
+    }
+
+    /// [`BoxedPropagation::as_log_distance`] through a unique borrow.
+    fn as_log_distance_mut(&mut self) -> Option<&mut v2xw_radio::LogDistanceShadowing> {
+        None
+    }
 }
 
 impl<P> BoxedPropagation for P
 where
-    P: for<'a> v2xw_radio::Propagation<EngineCtx<'a>>,
+    P: for<'a> v2xw_radio::Propagation<EngineCtx<'a>> + 'static,
 {
+    fn as_log_distance(&self) -> Option<&v2xw_radio::LogDistanceShadowing> {
+        (self as &dyn std::any::Any).downcast_ref()
+    }
+
+    fn as_log_distance_mut(&mut self) -> Option<&mut v2xw_radio::LogDistanceShadowing> {
+        (self as &mut dyn std::any::Any).downcast_mut()
+    }
+
     fn tier(&self) -> v2xw_core::card::Tier {
         v2xw_radio::Propagation::<EngineCtx<'_>>::tier(self)
     }
