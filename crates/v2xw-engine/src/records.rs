@@ -90,6 +90,13 @@ impl NodeDrop {
 }
 
 channel_record!(
+    /// `gt.subject` — which true actor signed with a pseudonym digest, once per digest.
+    GtSubject,
+    v2xw_metrics::channels::GtSubjectView,
+    "gt.subject",
+    Visibility::Gt
+);
+channel_record!(
     /// `gt.kinematics` — an actor's true state.
     GtKinematics,
     GtKinematicsView,
