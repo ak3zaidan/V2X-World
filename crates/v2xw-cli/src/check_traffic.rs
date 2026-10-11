@@ -845,7 +845,7 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                 vias[a.lane as usize]
                     .iter()
                     .map(|m| {
-                        // What stands on the movement's exit: (count, rearmost s, its speed).
+                        // What stands on the movement's exit: (count, rearmost actor, its s, its speed).
                         let exit = world
                             .roads
                             .connections()
@@ -853,7 +853,7 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                             .find(|c| c.via == Some(*m))
                             .map(|c| c.to_lane);
                         let on_exit = exit.and_then(|e| by_lane.get(&e.index())).map(|v| {
-                            (v.len(), v.first().map(|f| (f.0, now[&f.2].speed)))
+                            (v.len(), v.first().map(|f| (f.2, f.0, now[&f.2].speed)))
                         });
                         let inside = by_lane.get(&m.index()).map_or(0, Vec::len);
                         format!(

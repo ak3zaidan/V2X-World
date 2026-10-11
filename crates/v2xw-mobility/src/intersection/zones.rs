@@ -39,8 +39,8 @@ pub struct Zone {
     pub half_self: f64,
     /// Half the stretch of the other path this path's corridor covers, metres.
     pub half_other: f64,
-    /// True if the two paths meet where both end — a merge onto one exit lane, which is
-    /// driven through in order rather than waited for.
+    /// True if the two paths meet where both end, or converge at a shallow angle onto
+    /// one exit lane — a merge, which is driven through in order rather than waited for.
     pub merge: bool,
 }
 
@@ -108,12 +108,22 @@ impl ConflictZones {
                     if hits.is_empty() && a.end().distance_2d(b.end()) < 0.5 {
                         hits.push((a.length_m, b.length_m));
                     }
+                    let same_exit = exit_of.get(la).is_some() && exit_of.get(la) == exit_of.get(lb);
                     for (s_a, s_b) in hits {
-                        let merge = s_a >= a.length_m - 0.5 && s_b >= b.length_m - 0.5;
                         let angle = v2xw_world::model::normalise_angle(
                             a.heading_at(s_a) - b.heading_at(s_b),
                         );
-                        let sin = math::sin(angle).abs().max(MIN_SIN_CROSSING);
+                        let raw_sin = math::sin(angle).abs();
+                        // Two connectors onto one exit lane that converge at a shallow angle
+                        // and touch before their ends — a lane drop through the junction,
+                        // their centrelines meeting a few metres short of the exit — merge
+                        // too. Taken as a crossing, the second car waited at its stop line
+                        // until the first had driven clear of the meeting point: 5 s on a
+                        // green both had just got (midtown-rush-hour, actors 128 and 193
+                        // onto lane 2268).
+                        let merge = (s_a >= a.length_m - 0.5 && s_b >= b.length_m - 0.5)
+                            || (same_exit && raw_sin < MIN_SIN_CROSSING && math::cos(angle) > 0.0);
+                        let sin = raw_sin.max(MIN_SIN_CROSSING);
                         zones.entry(*la).or_default().push(Zone {
                             other: *lb,
                             s_self: s_a,
