@@ -386,6 +386,17 @@ pub fn op_components(op: &str) -> Option<Vec<&'static str>> {
     None
 }
 
+/// Whether `primitive` is a post-quantum one: it is a part of a registered
+/// [`SchemeMode::PostQuantum`] scheme. A hardware profile's post-quantum software proxy
+/// (`pq_software_proxy`) prices only such primitives, never the classical half of a
+/// hybrid.
+pub fn is_post_quantum_primitive(primitive: PrimitiveId) -> bool {
+    SIGNATURE_SCHEMES
+        .iter()
+        .filter(|s| s.mode == SchemeMode::PostQuantum)
+        .any(|s| s.parts.iter().any(|p| p.primitive == primitive))
+}
+
 /// The catalogue primitive and operation kind a single hardware-profile operation id
 /// stands for, e.g. `ml-dsa-65-verify` → (`primitive/ml-dsa-65`, verify). How a hardware
 /// profile with no published figure for an operation falls back to the catalogue anchor

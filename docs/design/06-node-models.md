@@ -631,6 +631,22 @@ What is missing for `obu/pq-capable-hypothetical`:
 
 ### 7.6 RSU profiles
 
+**Post-quantum cost (2026-10-11): a flagged software proxy.** No RSU datasheet publishes
+a post-quantum figure and both units' secure elements do ECDSA only, so until this date
+neither profile priced any PQ operation and an RSU dropped every PQ or hybrid message as
+`verify_unpriced` (its report-forward, relay and SPaT roles acted on nothing). Both
+profiles now carry `pq_software_proxy: [hw-profile/cohda-mk6-liboqs,
+hw-profile/cohda-mk6-botan]`: the catalogue figures for the Cohda MK6, a deployed V2X
+unit, from NDSS 2024 Table V (ML-DSA-44 verify 189 µs / sign 2,634 µs under Botan;
+Falcon-512 verify 446 µs / sign 2,152 µs under liboqs; other parameter sets scaled by the
+cited pqm4 cycle ratio). A published figure on either board wins over a derived one. The
+proxy prices post-quantum primitives only (`v2xw_sec::scheme::is_post_quantum_primitive`),
+never ECDSA, so classical runs are unchanged. It is likely optimistic: the RS4 runs an
+i.MX 6 quad at 792 MHz, the MK5 RSU an unpublished older SoC. `op_cost_facts` reports it
+as `software-proxy`, and a scenario whose RSUs rely on it gets a note from
+`v2xw validate` and a manifest warning (`scenario::pq_rsu_proxy_warnings`). Replace it with
+a `liboqs speed_sig` bench on the device.
+
 Two RSU profiles: the Commsignia ITS-RS4, whose brief is the most complete public RSU datasheet in the sheet (quad-core i.MX 6, 2 GB, SLI97 HSM with a stated verify figure) [R7 §C2], and the Cohda MK5 RSU, which shares the §7.1 radio but whose brief publishes radio-level figures only [R7 §C1]. The USDOT pilot facts (R7 §C7) give RSU counts and backhaul technology per site but **no mounting heights**, so every RSU antenna height below is `not-published` with the 3GPP UE-type-RSU evaluation assumption (5 m) as the flagged fallback [R2 Topic A: TR 36.885 Annex A.1.1]. The Commsignia brief's "<50 usec signing delay" is carried exactly as extracted and tagged `UNVERIFIED`, with the corroborated cross-vendor SLI97 figure (<50 ms) alongside, as R7 §C2 does.
 
 ```yaml

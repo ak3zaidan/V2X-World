@@ -221,6 +221,9 @@ pub fn assemble(
         FILES_EMBEDDING_THE_MANIFEST.join(", ")
     ));
 
+    m.warnings
+        .extend(crate::scenario::pq_rsu_proxy_warnings(scenario));
+
     if GIT_COMMIT == "unknown" {
         m.warnings.push(
             "git commit not recorded: neither V2XW_GIT_COMMIT nor a git repository was \
