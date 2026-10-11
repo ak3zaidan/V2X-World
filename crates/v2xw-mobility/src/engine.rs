@@ -5356,7 +5356,9 @@ impl Mobility for NativeMobility {
                 && dt_s > 0.0
                 && actor.speed_mps * dt_s > cap
             {
-                actor.speed_mps = (cap / dt_s).max(before - CAP_MAX_DECEL_MPS2 * dt_s).max(0.0);
+                actor.speed_mps = (cap / dt_s)
+                    .max(before - CAP_MAX_DECEL_MPS2 * dt_s)
+                    .max(0.0);
             }
             // What is published is the acceleration the vehicle *had*, not the one the
             // model asked for: a car standing at a red line has a car-following
@@ -6204,7 +6206,11 @@ pub fn static_obstacle_accel(
     // quite arrived: at 0.2 m/s, 2.5 m out, it took 25 s, the car creeping at a few
     // centimetres a second on a green behind a car that had moved on (Midtown, actor 41).
     if room <= 0.05 && -need(to_line) <= PLANNED_STOP_MAX_DECEL_MPS2 {
-        return at_least(a_model.max(-PLANNED_STOP_MAX_DECEL_MPS2).max(need(to_line).min(-0.5)));
+        return at_least(
+            a_model
+                .max(-PLANNED_STOP_MAX_DECEL_MPS2)
+                .max(need(to_line).min(-0.5)),
+        );
     }
     let tight = if room > 0.05 {
         need(room)

@@ -167,7 +167,10 @@ fn ped_class(idx: u8) -> bool {
 }
 
 fn class_of(idx: u8) -> VehicleClass {
-    VehicleClass::ALL.get(idx as usize).copied().unwrap_or(VehicleClass::Passenger)
+    VehicleClass::ALL
+        .get(idx as usize)
+        .copied()
+        .unwrap_or(VehicleClass::Passenger)
 }
 
 /// Lane geometry for projection.
@@ -216,7 +219,11 @@ impl Geo {
             let (px, py) = (a.x + u * dx, a.y + u * dy);
             let d2 = (x - px).powi(2) + (y - py).powi(2);
             if d2 < best.0 {
-                let side = if dx * (y - a.y) - dy * (x - a.x) >= 0.0 { 1.0 } else { -1.0 };
+                let side = if dx * (y - a.y) - dy * (x - a.x) >= 0.0 {
+                    1.0
+                } else {
+                    -1.0
+                };
                 best = (d2, cum[i - 1] + u * len2.sqrt(), side * d2.sqrt());
             }
         }
@@ -247,12 +254,22 @@ impl Signals {
         let mut groups = BTreeMap::new();
         let mut plan_groups = vec![Vec::new(); world.signals.len()];
         for g in world.group_signals() {
-            let plan = if g.wire_id >= 65536 { (g.wire_id / 65536 - 1) as usize } else { g.wire_id as usize };
+            let plan = if g.wire_id >= 65536 {
+                (g.wire_id / 65536 - 1) as usize
+            } else {
+                g.wire_id as usize
+            };
             if plan >= plan_groups.len() {
                 continue;
             }
             plan_groups[plan].push(g.wire_id);
-            groups.insert(g.wire_id, (plan, g.timeline.iter().map(|(s, _)| s.j2735_phase()).collect()));
+            groups.insert(
+                g.wire_id,
+                (
+                    plan,
+                    g.timeline.iter().map(|(s, _)| s.j2735_phase()).collect(),
+                ),
+            );
         }
         let mut movement = BTreeMap::new();
         for (p, plan) in world.signals.iter().enumerate() {
@@ -277,7 +294,10 @@ impl Signals {
         let mut bad = Vec::new();
         for &p in changed {
             let wires = &self.plan_groups[p];
-            let n = wires.first().and_then(|w| self.groups.get(w)).map_or(0, |g| g.1.len());
+            let n = wires
+                .first()
+                .and_then(|w| self.groups.get(w))
+                .map_or(0, |g| g.1.len());
             let mut matches = (0..n).filter(|&ph| {
                 wires.iter().all(|w| {
                     let want = self.groups[w].1[ph];
@@ -291,7 +311,11 @@ impl Signals {
             }
             // Several phases can show the same lamps (an all-red after each green); the
             // movement states of all of them are then asked for in `state`.
-            self.phase[p] = if more.is_some() { first.map(|f| f + 1_000_000) } else { first };
+            self.phase[p] = if more.is_some() {
+                first.map(|f| f + 1_000_000)
+            } else {
+                first
+            };
             let states = world.signals[p]
                 .controlled
                 .iter()
@@ -395,7 +419,11 @@ struct Rows {
 impl Rows {
     fn add(&mut self, name: &'static str, ex: impl FnOnce() -> String) {
         let max = self.max_examples;
-        let r = self.rows.iter_mut().find(|r| r.name == name).expect("declared row");
+        let r = self
+            .rows
+            .iter_mut()
+            .find(|r| r.name == name)
+            .expect("declared row");
         r.count += 1;
         if r.examples.len() < max {
             r.examples.push(ex());
@@ -430,7 +458,11 @@ pub fn check_traffic(opts: &CheckOptions) -> Result<TrafficCheck> {
 ///
 /// # Errors
 /// The recording cannot be read.
-pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> Result<TrafficCheck> {
+pub fn check_recording(
+    world: &World,
+    recording: &Path,
+    opts: &CheckOptions,
+) -> Result<TrafficCheck> {
     let geo = Geo::new(world);
     let mut sig = Signals::new(world);
     let mut rows = Rows {
@@ -453,7 +485,12 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
             ("ped_heading_flip", 0),
         ]
         .into_iter()
-        .map(|(name, limit)| Row { name, count: 0, limit, examples: Vec::new() })
+        .map(|(name, limit)| Row {
+            name,
+            count: 0,
+            limit,
+            examples: Vec::new(),
+        })
         .collect(),
         max_examples: opts.examples,
     };
@@ -468,7 +505,10 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
         }
     }
     let junction_of_lane = |l: LaneId| -> Option<usize> {
-        vias[l.as_usize()].first().and_then(|v| world.roads.lane(*v).junction).map(|j| j.as_usize())
+        vias[l.as_usize()]
+            .first()
+            .and_then(|v| world.roads.lane(*v).junction)
+            .map(|j| j.as_usize())
     };
     let junction_count = world.roads.junctions().len();
     let mut signalised_junction = vec![false; junction_count];
@@ -547,7 +587,15 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
         for p in sig.update(world, &changed_plans, t) {
             let key = (p as u32, "lamp_phase_unknown", 0);
             if flagged.insert(key) {
-                rows.add("lamp_phase_unknown", || format!("plan {p} at t {t:.1} s: lamps {:?}", sig.plan_groups[p].iter().map(|w| sig.lamp.get(w)).collect::<Vec<_>>()));
+                rows.add("lamp_phase_unknown", || {
+                    format!(
+                        "plan {p} at t {t:.1} s: lamps {:?}",
+                        sig.plan_groups[p]
+                            .iter()
+                            .map(|w| sig.lamp.get(w))
+                            .collect::<Vec<_>>()
+                    )
+                });
             }
         }
         steps += 1;
@@ -598,7 +646,9 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
             }
             seen_veh.insert(*id);
             veh_steps += 1;
-            grid.entry(((a.x / 2.0).floor() as i64, (a.y / 2.0).floor() as i64)).or_default().push(*id);
+            grid.entry(((a.x / 2.0).floor() as i64, (a.y / 2.0).floor() as i64))
+                .or_default()
+                .push(*id);
             if a.lane == U32_NONE || a.lane as usize >= lanes.len() {
                 continue;
             }
@@ -625,7 +675,12 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                 if d < f.3.min(l.3) - 0.5 && (f.1 - l.1).abs() < 1.2 {
                     let key = (f.2.min(l.2) ^ (f.2.max(l.2) << 16), "overlap", 0);
                     if flagged.insert(key) {
-                        rows.add("overlap", || format!("t {t:.1} s lane {lane}: actors {} and {} {d:.2} m apart", f.2, l.2));
+                        rows.add("overlap", || {
+                            format!(
+                                "t {t:.1} s lane {lane}: actors {} and {} {d:.2} m apart",
+                                f.2, l.2
+                            )
+                        });
                     }
                 }
             }
@@ -638,7 +693,9 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                         if dx == 0 && dy < 0 {
                             continue;
                         }
-                        let Some(others) = grid.get(&(gx + dx, gy + dy)) else { continue };
+                        let Some(others) = grid.get(&(gx + dx, gy + dy)) else {
+                            continue;
+                        };
                         for &b in others {
                             if (dx == 0 && dy == 0 && b <= a) || a == b {
                                 continue;
@@ -661,8 +718,13 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
         let mut lane_green_now: BTreeMap<u32, bool> = BTreeMap::new();
         for (lane, v) in &by_lane {
             let l = LaneId::new(*lane);
-            if vias[l.as_usize()].iter().any(|m| sig.movement.contains_key(m)) {
-                let green = vias[l.as_usize()].iter().any(|m| sig.state(world, *m) == Some(SignalState::Green));
+            if vias[l.as_usize()]
+                .iter()
+                .any(|m| sig.movement.contains_key(m))
+            {
+                let green = vias[l.as_usize()]
+                    .iter()
+                    .any(|m| sig.state(world, *m) == Some(SignalState::Green));
                 let was = lane_green_prev.get(lane).copied().unwrap_or(true);
                 if green && !was {
                     let len = world.roads.lane(l).length_m;
@@ -697,7 +759,9 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
             if a.speed < STOP_MPS && a.lane != U32_NONE {
                 last_stood.insert(*id, (a.lane, a.t));
             }
-            let Some(p) = prev.get(id).copied() else { continue };
+            let Some(p) = prev.get(id).copied() else {
+                continue;
+            };
             let dt = a.t - p.t;
             if dt <= 0.0 || dt > 1.0 {
                 continue;
@@ -713,7 +777,12 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
             let acc = (a.speed - p.speed) / dt;
             if ped {
                 if acc.abs() > 3.0 {
-                    rows.add("ped_speed_jump", || format!("pedestrian {id} at t {t:.1} s: {:.2}->{:.2} m/s", p.speed, a.speed));
+                    rows.add("ped_speed_jump", || {
+                        format!(
+                            "pedestrian {id} at t {t:.1} s: {:.2}->{:.2} m/s",
+                            p.speed, a.speed
+                        )
+                    });
                 }
                 if p.speed > 0.3 && a.speed > 0.3 {
                     let mut dh = (a.heading - p.heading).abs() % std::f64::consts::TAU;
@@ -721,20 +790,37 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                         dh = std::f64::consts::TAU - dh;
                     }
                     if dh > std::f64::consts::FRAC_PI_2 {
-                        rows.add("ped_heading_flip", || format!("pedestrian {id} at t {t:.1} s turned {:.0}°", dh.to_degrees()));
+                        rows.add("ped_heading_flip", || {
+                            format!(
+                                "pedestrian {id} at t {t:.1} s turned {:.0}°",
+                                dh.to_degrees()
+                            )
+                        });
                     }
                 }
                 continue;
             }
             if acc < -9.0 {
-                rows.add("decel", || format!("actor {id} at t {t:.1} s lane {}: {:.2}->{:.2} m/s ({acc:.1} m/s²)", a.lane, p.speed, a.speed));
+                rows.add("decel", || {
+                    format!(
+                        "actor {id} at t {t:.1} s lane {}: {:.2}->{:.2} m/s ({acc:.1} m/s²)",
+                        a.lane, p.speed, a.speed
+                    )
+                });
             } else if acc > 6.0 {
-                rows.add("accel", || format!("actor {id} at t {t:.1} s lane {}: {:.2}->{:.2} m/s ({acc:.1} m/s²)", a.lane, p.speed, a.speed));
+                rows.add("accel", || {
+                    format!(
+                        "actor {id} at t {t:.1} s lane {}: {:.2}->{:.2} m/s ({acc:.1} m/s²)",
+                        a.lane, p.speed, a.speed
+                    )
+                });
             }
             if let Some(pa) = prev_jerk_a.get(id) {
                 let jerk = (acc - pa) / dt;
                 if jerk.abs() > 30.0 {
-                    rows.add("jerk", || format!("actor {id} at t {t:.1} s: {jerk:.0} m/s³"));
+                    rows.add("jerk", || {
+                        format!("actor {id} at t {t:.1} s: {jerk:.0} m/s³")
+                    });
                 }
             }
             prev_jerk_a.insert(*id, acc);
@@ -750,12 +836,15 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                     let was = sig.state_at(l, crossed);
                     if let Some(state) = sig.state(world, l) {
                         let turned_on_red_after_stop = opts.right_turn_on_red
-                            && last_stood
-                                .get(id)
-                                .is_some_and(|(lane, at)| *lane == p.lane && t - at <= RTOR_STOP_WITHIN_S)
+                            && last_stood.get(id).is_some_and(|(lane, at)| {
+                                *lane == p.lane && t - at <= RTOR_STOP_WITHIN_S
+                            })
                             && world.roads.connections().iter().any(|c| {
                                 c.via == Some(l)
-                                    && matches!(c.direction, TurnDirection::Right | TurnDirection::SlightRight)
+                                    && matches!(
+                                        c.direction,
+                                        TurnDirection::Right | TurnDirection::SlightRight
+                                    )
                             });
                         if state == SignalState::Red
                             && was == Some(SignalState::Red)
@@ -786,7 +875,12 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                         let n = speeding_steps.entry(*id).or_default();
                         *n += 1;
                         if *n == 10 {
-                            rows.add("speeding", || format!("actor {id} at t {t:.1} s: {:.1} m/s on a {:.1} m/s lane {}", a.speed, lane.speed_limit_mps, a.lane));
+                            rows.add("speeding", || {
+                                format!(
+                                    "actor {id} at t {t:.1} s: {:.1} m/s on a {:.1} m/s lane {}",
+                                    a.speed, lane.speed_limit_mps, a.lane
+                                )
+                            });
                         }
                     }
                 }
@@ -801,18 +895,39 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
             let dt = prev.get(id).map_or(0.0, |p| a.t - p.t).clamp(0.0, 1.0);
             if a.speed > STOP_MPS || a.lane == U32_NONE || a.lane as usize >= lanes.len() {
                 if let Some(st) = stops.remove(id) {
-                    close_stop(world, &mut rows, &mut longest, *id, &st, t, Some(a.lane), opts, &sig);
+                    close_stop(
+                        world,
+                        &mut rows,
+                        &mut longest,
+                        *id,
+                        &st,
+                        t,
+                        Some(a.lane),
+                        opts,
+                        &sig,
+                    );
                 }
                 continue;
             }
             let l = LaneId::new(a.lane);
             let lane = world.roads.lane(l);
-            let entry = by_lane.get(&a.lane).and_then(|v| v.iter().position(|e| e.2 == *id));
-            let (s, len) = entry.map_or((0.0, lane.length_m), |k| (by_lane[&a.lane][k].0, lane.length_m));
-            let ahead = entry.and_then(|k| by_lane[&a.lane].get(k + 1)).map(|e| e.0 - s);
+            let entry = by_lane
+                .get(&a.lane)
+                .and_then(|v| v.iter().position(|e| e.2 == *id));
+            let (s, len) = entry.map_or((0.0, lane.length_m), |k| {
+                (by_lane[&a.lane][k].0, lane.length_m)
+            });
+            let ahead = entry
+                .and_then(|k| by_lane[&a.lane].get(k + 1))
+                .map(|e| e.0 - s);
             let j = junction_of_lane(l);
             let cycle = j
-                .and_then(|j| world.signals.iter().position(|p| p.junction.as_usize() == j))
+                .and_then(|j| {
+                    world
+                        .signals
+                        .iter()
+                        .position(|p| p.junction.as_usize() == j)
+                })
                 .map_or(90.0, |p| sig.cycle[p]);
             let st = stops.entry(*id).or_insert_with(|| Stop {
                 since: t,
@@ -856,7 +971,8 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                     }
                 }
             }
-            let mid = ahead.is_none_or(|d| d > 30.0) && len - s > 30.0 && lane.kind != LaneKind::Internal;
+            let mid =
+                ahead.is_none_or(|d| d > 30.0) && len - s > 30.0 && lane.kind != LaneKind::Internal;
             if mid {
                 st.phantom_run += dt;
                 st.phantom_max = st.phantom_max.max(st.phantom_run);
@@ -867,7 +983,17 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
         for id in prev.keys() {
             if !now.contains_key(id) {
                 if let Some(st) = stops.remove(id) {
-                    close_stop(world, &mut rows, &mut longest, *id, &st, t, None, opts, &sig);
+                    close_stop(
+                        world,
+                        &mut rows,
+                        &mut longest,
+                        *id,
+                        &st,
+                        t,
+                        None,
+                        opts,
+                        &sig,
+                    );
                 }
                 prev_jerk_a.remove(id);
             }
@@ -889,9 +1015,9 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                             .iter()
                             .find(|c| c.via == Some(*m))
                             .map(|c| c.to_lane);
-                        let on_exit = exit.and_then(|e| by_lane.get(&e.index())).map(|v| {
-                            (v.len(), v.first().map(|f| (f.2, f.0, now[&f.2].speed)))
-                        });
+                        let on_exit = exit
+                            .and_then(|e| by_lane.get(&e.index()))
+                            .map(|v| (v.len(), v.first().map(|f| (f.2, f.0, now[&f.2].speed))));
                         let inside = by_lane.get(&m.index()).map_or(0, Vec::len);
                         format!(
                             "{}:{:?} in {inside} exit {:?} {on_exit:?}",
@@ -906,7 +1032,12 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
             };
             eprintln!(
                 "trace t {t:.1} lane {} s {s:.2}/{len:.1} lat {lat:.2} v {:.2} a {:.2} xy ({:.2}, {:.2}) {}",
-                a.lane, a.speed, a.accel, a.x, a.y, states.join(" ")
+                a.lane,
+                a.speed,
+                a.accel,
+                a.x,
+                a.y,
+                states.join(" ")
             );
         }
         prev = now;
@@ -915,8 +1046,13 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
     let mut rec_cb = |r: v2xw_record::reader::RecordedRecord| -> v2xw_record::Result<()> {
         if r.channel == "traffic.control" {
             if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&r.json) {
-                let n = v.get("teleported").and_then(serde_json::Value::as_u64).unwrap_or(0)
-                    + v.get("removed").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                let n = v
+                    .get("teleported")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0)
+                    + v.get("removed")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0);
                 teleports = teleports.max(n);
             }
         }
@@ -931,7 +1067,17 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
     }
     let t_end = t_last;
     for (id, st) in std::mem::take(&mut stops) {
-        close_stop(world, &mut rows, &mut longest, id, &st, t_end, None, opts, &sig);
+        close_stop(
+            world,
+            &mut rows,
+            &mut longest,
+            id,
+            &st,
+            t_end,
+            None,
+            opts,
+            &sig,
+        );
     }
     for (_, (onset, _, times)) in std::mem::take(&mut queues) {
         if times.len() >= 6 {
@@ -966,11 +1112,18 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                 lost.push(h.iter().take(4).map(|x| x - s).sum::<f64>());
             }
         }
-        discharge.headway_by_position_s =
-            by_pos.iter().filter(|p| p.1 > 0).map(|p| v2xw_core::math::q3(p.0 / p.1 as f64)).collect();
+        discharge.headway_by_position_s = by_pos
+            .iter()
+            .filter(|p| p.1 > 0)
+            .map(|p| v2xw_core::math::q3(p.0 / p.1 as f64))
+            .collect();
         if !hs.is_empty() {
-            discharge.saturation_headway_s = Some(v2xw_core::math::q3(hs.iter().sum::<f64>() / hs.len() as f64));
-            discharge.startup_lost_time_s = Some(v2xw_core::math::q3(lost.iter().sum::<f64>() / lost.len() as f64));
+            discharge.saturation_headway_s = Some(v2xw_core::math::q3(
+                hs.iter().sum::<f64>() / hs.len() as f64,
+            ));
+            discharge.startup_lost_time_s = Some(v2xw_core::math::q3(
+                lost.iter().sum::<f64>() / lost.len() as f64,
+            ));
         }
     }
 
@@ -985,13 +1138,26 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                 "jump" => jump_limit,
                 _ => r.limit,
             };
-            CheckRow { name: r.name, count: r.count, limit, ok: r.count <= limit, examples: r.examples }
+            CheckRow {
+                name: r.name,
+                count: r.count,
+                limit,
+                ok: r.count <= limit,
+                examples: r.examples,
+            }
         })
         .collect();
     let ok = rows_out.iter().all(|r| r.ok);
     Ok(TrafficCheck {
-        dir: recording.parent().map(|p| p.display().to_string()).unwrap_or_default(),
-        run_s: if t_first.is_nan() { 0.0 } else { t_last - t_first },
+        dir: recording
+            .parent()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+        run_s: if t_first.is_nan() {
+            0.0
+        } else {
+            t_last - t_first
+        },
         steps,
         vehicles: seen_veh.len() as u64,
         pedestrians: seen_ped.len() as u64,
@@ -1001,7 +1167,15 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
         longest_stop: longest.1,
         speeds: speed_acc
             .into_iter()
-            .map(|(k, (v, lim, n))| (k, (v2xw_core::math::q3(v / n as f64), v2xw_core::math::q3(lim / n as f64))))
+            .map(|(k, (v, lim, n))| {
+                (
+                    k,
+                    (
+                        v2xw_core::math::q3(v / n as f64),
+                        v2xw_core::math::q3(lim / n as f64),
+                    ),
+                )
+            })
             .collect(),
         gridlock_teleports: teleports,
         ok,
@@ -1023,30 +1197,56 @@ fn close_stop(
     let dur = t - st.since;
     let lane = st.lane;
     let len = world.roads.lane(LaneId::new(lane)).length_m;
-    let where_ = format!("actor {id} on lane {lane} ({:.1} m before its end) from t {:.1} s for {dur:.1} s", len - st.s, st.since);
+    let where_ = format!(
+        "actor {id} on lane {lane} ({:.1} m before its end) from t {:.1} s for {dur:.1} s",
+        len - st.s,
+        st.since
+    );
     if dur > longest.0 {
         *longest = (dur, where_.clone());
     }
     // The movement it took, if it left into a junction; otherwise the worst of them.
-    let took = next_lane.map(LaneId::new).filter(|l| st.green.contains_key(l));
+    let took = next_lane
+        .map(LaneId::new)
+        .filter(|l| st.green.contains_key(l));
     let (g, p) = match took {
         Some(m) => st.green[&m],
         None => st
             .green
             .values()
-            .fold((f64::INFINITY, f64::INFINITY), |acc, v| (acc.0.min(v.0), acc.1.min(v.1))),
+            .fold((f64::INFINITY, f64::INFINITY), |acc, v| {
+                (acc.0.min(v.0), acc.1.min(v.1))
+            }),
     };
-    let (g, p) = if st.green.is_empty() { (0.0, 0.0) } else { (g, p) };
+    let (g, p) = if st.green.is_empty() {
+        (0.0, 0.0)
+    } else {
+        (g, p)
+    };
     if g > opts.green_stop_s {
-        rows.add("stopped_on_green", || format!("{where_}: {g:.1} s of it on a protected green (next lane {next_lane:?})"));
+        rows.add("stopped_on_green", || {
+            format!("{where_}: {g:.1} s of it on a protected green (next lane {next_lane:?})")
+        });
     } else if p > opts.permitted_stop_s {
-        rows.add("stopped_on_permitted_green", || format!("{where_}: {p:.1} s of it on a permitted green (next lane {next_lane:?})"));
+        rows.add("stopped_on_permitted_green", || {
+            format!("{where_}: {p:.1} s of it on a permitted green (next lane {next_lane:?})")
+        });
     }
     if st.clear_max > opts.clear_stop_s {
-        rows.add("stopped_at_clear_junction", || format!("{where_}: {:.1} s with the junction clear (next lane {next_lane:?})", st.clear_max));
+        rows.add("stopped_at_clear_junction", || {
+            format!(
+                "{where_}: {:.1} s with the junction clear (next lane {next_lane:?})",
+                st.clear_max
+            )
+        });
     }
     if st.phantom_max > opts.phantom_stop_s {
-        rows.add("phantom_stop", || format!("{where_}: {:.1} s mid-lane with nobody ahead", st.phantom_max));
+        rows.add("phantom_stop", || {
+            format!(
+                "{where_}: {:.1} s mid-lane with nobody ahead",
+                st.phantom_max
+            )
+        });
     }
     if dur > st.cycle + opts.cycle_margin_s {
         rows.add("long_stop", || where_.clone());
@@ -1068,7 +1268,14 @@ pub fn format(c: &TrafficCheck) -> String {
         if c.ok { "PASS" } else { "FAIL" }
     );
     for r in &c.rows {
-        let _ = writeln!(s, "  {:<28} {:>6} (limit {:>4}) {}", r.name, r.count, r.limit, if r.ok { "ok" } else { "FAIL" });
+        let _ = writeln!(
+            s,
+            "  {:<28} {:>6} (limit {:>4}) {}",
+            r.name,
+            r.count,
+            r.limit,
+            if r.ok { "ok" } else { "FAIL" }
+        );
         for e in &r.examples {
             let _ = writeln!(s, "      {e}");
         }
@@ -1079,9 +1286,16 @@ pub fn format(c: &TrafficCheck) -> String {
         "  discharge: {} queues, saturation headway {:?} s, start-up lost time {:?} s, by position {:?}",
         d.queues, d.saturation_headway_s, d.startup_lost_time_s, d.headway_by_position_s
     );
-    let _ = writeln!(s, "  longest stop {:.1} s: {}", c.longest_stop_s, c.longest_stop);
+    let _ = writeln!(
+        s,
+        "  longest stop {:.1} s: {}",
+        c.longest_stop_s, c.longest_stop
+    );
     for (k, (v, l)) in &c.speeds {
-        let _ = writeln!(s, "  speed {k}: mean {v:.1} m/s against a mean limit of {l:.1}");
+        let _ = writeln!(
+            s,
+            "  speed {k}: mean {v:.1} m/s against a mean limit of {l:.1}"
+        );
     }
     let _ = writeln!(s, "  gridlock teleports/removals: {}", c.gridlock_teleports);
     s

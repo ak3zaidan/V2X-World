@@ -6056,8 +6056,12 @@ impl Engine {
         // Each attempt's `phy.rx` record and its `node.rx` record — the attempt itself, and
         // for a PHY loss its fate — built and serialised ahead, in parallel over the
         // receivers of a busy frame ([`Prepared`]); emitted below in receiver order.
-        let decode_phy = self.providers.wants(<PhyRx as v2xw_core::ctx::Record>::CHANNEL);
-        let decode_node = self.providers.wants(<NodeRx as v2xw_core::ctx::Record>::CHANNEL);
+        let decode_phy = self
+            .providers
+            .wants(<PhyRx as v2xw_core::ctx::Record>::CHANNEL);
+        let decode_node = self
+            .providers
+            .wants(<NodeRx as v2xw_core::ctx::Record>::CHANNEL);
         let build = |outcome: &LinkOutcome| -> Built {
             let record = PhyRx::new(
                 state.start,

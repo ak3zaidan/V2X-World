@@ -205,7 +205,10 @@ fn the_report_shuffle_closes_at_its_count_before_its_window() {
             .stages
             .at(*r, StageId::ReportReceived)
             .expect("the third report closed the batch");
-        assert!(at < 10 * NS_PER_S, "released by the count, not the window: {at} ns");
+        assert!(
+            at < 10 * NS_PER_S,
+            "released by the count, not the window: {at} ns"
+        );
     }
     assert!(
         run.kernel
@@ -229,5 +232,11 @@ fn the_report_shuffle_closes_at_its_count_before_its_window() {
     let lv = daylong.state.devices[&DEVICE_A].credentials[&(0, 0)].lv;
     let r = report(&mut daylong, lv, 1);
     daylong.run_until(3_600 * NS_PER_S).expect("runs");
-    assert!(daylong.kernel.stages.at(r, StageId::ReportReceived).is_none());
+    assert!(
+        daylong
+            .kernel
+            .stages
+            .at(r, StageId::ReportReceived)
+            .is_none()
+    );
 }

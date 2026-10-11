@@ -685,7 +685,10 @@ fn message_rate_choices() -> Vec<Value> {
         // doubles the mobility work.
         let note = if hz > 10 {
             patch.push(set("time.mobility_step_ms", json!(1000 / hz)));
-            format!(" Vehicles also move in {} ms steps, so the run is slower.", 1000 / hz)
+            format!(
+                " Vehicles also move in {} ms steps, so the run is slower.",
+                1000 / hz
+            )
         } else {
             String::new()
         };

@@ -503,7 +503,9 @@ impl AwarenessProvider {
                     self.aoi_updates += 1;
                     // Peaks of the neighbourhood's links only, as the headline; a delivery
                     // with no distance is counted.
-                    if v.dist_m.is_none_or(|d| d <= f64::from(AOI_HEADLINE_RADIUS_M)) {
+                    if v.dist_m
+                        .is_none_or(|d| d <= f64::from(AOI_HEADLINE_RADIUS_M))
+                    {
                         self.aoi_peak_ms
                             .observe((d.saturating_sub(prev_generated) as f64) / 1e6);
                     }
@@ -567,8 +569,7 @@ impl AwarenessProvider {
         }
         let prev = self.nar_sampled_at;
         self.nar_sampled_at = Some(at);
-        for (k, (_, p, pairs, (area, time, n))) in
-            self.nar_counts(at, prev).into_iter().enumerate()
+        for (k, (_, p, pairs, (area, time, n))) in self.nar_counts(at, prev).into_iter().enumerate()
         {
             self.nar_window[k].merge(p);
             self.nar_pairs[k].extend(pairs);
@@ -585,8 +586,7 @@ impl AwarenessProvider {
     /// Vehicles' age of information about the VRUs within [`AOI_VRU_RADIUS_M`] over
     /// (`prev`, `at`], as [`Self::nar_counts`] integrates it for vehicles.
     fn vru_age(&self, at: SimTime, prev: Option<SimTime>) -> (u128, u128, u64) {
-        let Some(from) = prev.map(|p| p.max(at.saturating_sub(POSITION_STALE.as_nanos())))
-        else {
+        let Some(from) = prev.map(|p| p.max(at.saturating_sub(POSITION_STALE.as_nanos()))) else {
             return (0, 0, 0);
         };
         let r = f64::from(AOI_VRU_RADIUS_M);
@@ -655,11 +655,10 @@ impl AwarenessProvider {
         // never further than a position stays valid.
         let from = prev.map(|p| p.max(at.saturating_sub(POSITION_STALE.as_nanos())));
         #[allow(clippy::type_complexity)]
-        let mut out: Vec<(u32, Proportion, Vec<(NodeId, NodeId)>, (u128, u128, u64))> =
-            NAR_RADII_M
-                .iter()
-                .map(|&r| (r, Proportion::new(), Vec::new(), (0, 0, 0)))
-                .collect();
+        let mut out: Vec<(u32, Proportion, Vec<(NodeId, NodeId)>, (u128, u128, u64))> = NAR_RADII_M
+            .iter()
+            .map(|&r| (r, Proportion::new(), Vec::new(), (0, 0, 0)))
+            .collect();
         for (i, (rx, x, y)) in fresh.iter().enumerate() {
             let (cx, cy) = cell(*x, *y);
             for dx in -1..=1 {
@@ -688,7 +687,9 @@ impl AwarenessProvider {
                         // count, and a link silent for longer than the restart horizon is a
                         // lost neighbour (`nar` sees it), not an old one.
                         let age = from
-                            .and_then(|a| self.links.get(&(*rx, tx)).and_then(|l| l.age_over(a, at)))
+                            .and_then(|a| {
+                                self.links.get(&(*rx, tx)).and_then(|l| l.age_over(a, at))
+                            })
                             .filter(|(_, _, end)| *end <= restart);
                         for (r, p, pairs, (area, time, n)) in &mut out {
                             let r = f64::from(*r);
@@ -971,7 +972,10 @@ mod tests {
             p.on_event(&delivered(1, 2, g0, g0 + 2 * NS_PER_MS, 30.0));
         }
         let s = p.flush(2_000 * NS_PER_MS);
-        assert_eq!(point(&s, "aoi", &[(Dim::Radius, AOI_ALL_LINKS)]), Some(52.0));
+        assert_eq!(
+            point(&s, "aoi", &[(Dim::Radius, AOI_ALL_LINKS)]),
+            Some(52.0)
+        );
         let peak = s.iter().find(|x| x.metric == "aoi_peak").unwrap();
         assert_eq!(peak.value.point(), Some(102.0));
         assert_eq!(peak.value.n(), 10, "the first message has no predecessor");
@@ -1011,7 +1015,9 @@ mod tests {
         assert!((hood - 52.0).abs() < 0.1, "vehicles only: {hood}");
         let vru = s
             .iter()
-            .find(|x| x.metric == "aoi" && x.dims.get(&Dim::Class) == Some(&DimValue::label(AOI_VRU)))
+            .find(|x| {
+                x.metric == "aoi" && x.dims.get(&Dim::Class) == Some(&DimValue::label(AOI_VRU))
+            })
             .and_then(|x| x.value.point())
             .unwrap();
         assert!((450.0..560.0).contains(&vru), "a 1 Hz device: {vru}");
@@ -1042,7 +1048,10 @@ mod tests {
         assert!((hood - 52.0).abs() < 0.1, "headline {hood}");
         assert_eq!(point(&s, "aoi", &[(Dim::Radius, "100m")]), Some(hood));
         let all = point(&s, "aoi", &[(Dim::Radius, AOI_ALL_LINKS)]).unwrap();
-        assert!(all > 150.0, "every-link pool is pulled up by the far link: {all}");
+        assert!(
+            all > 150.0,
+            "every-link pool is pulled up by the far link: {all}"
+        );
     }
 
     #[test]

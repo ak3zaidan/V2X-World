@@ -84,7 +84,9 @@ pub struct Predecoded(TypeId, Option<Box<dyn Any + Send>>);
 
 impl core::fmt::Debug for Predecoded {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("Predecoded").field(&self.1.is_some()).finish()
+        f.debug_tuple("Predecoded")
+            .field(&self.1.is_some())
+            .finish()
     }
 }
 

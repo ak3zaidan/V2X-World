@@ -1283,9 +1283,10 @@ impl AppLayer {
                     likely_left_s: until(likely),
                 };
                 let key = (!serves, lateral.abs());
-                if best.as_ref().is_none_or(|(k, ..)| {
-                    key.0 < k.0 || (key.0 == k.0 && key.1 < k.1)
-                }) {
+                if best
+                    .as_ref()
+                    .is_none_or(|(k, ..)| key.0 < k.0 || (key.0 == k.0 && key.1 < k.1))
+                {
                     best = Some((key, signer.clone(), sit));
                 }
             }

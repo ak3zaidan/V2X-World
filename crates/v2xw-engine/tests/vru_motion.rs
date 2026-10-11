@@ -75,8 +75,14 @@ fn measure_vru_motion() {
         .map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect())
         .unwrap_or_default();
     let watch_t: (f64, f64) = (
-        std::env::var("V2XW_WATCH_T0").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0),
-        std::env::var("V2XW_WATCH_T1").ok().and_then(|s| s.parse().ok()).unwrap_or(1e9),
+        std::env::var("V2XW_WATCH_T0")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0),
+        std::env::var("V2XW_WATCH_T1")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1e9),
     );
     std::env::set_current_dir(&root).unwrap();
     let mut scenario = Scenario::load(root.join(&path)).expect("scenario loads");
@@ -110,7 +116,11 @@ fn measure_vru_motion() {
                     a.y,
                     b.x,
                     b.y,
-                    world.successor_lanes(l.id).iter().map(|x| x.index()).collect::<Vec<_>>()
+                    world
+                        .successor_lanes(l.id)
+                        .iter()
+                        .map(|x| x.index())
+                        .collect::<Vec<_>>()
                 );
             }
         }
@@ -155,7 +165,10 @@ fn measure_vru_motion() {
             if classes.get(tid) == Some(&VehicleClass::Pedestrian)
                 && let Some(p) = tr.pos
             {
-                cells.entry((p.x.floor() as i64, p.y.floor() as i64)).or_default().push(p);
+                cells
+                    .entry((p.x.floor() as i64, p.y.floor() as i64))
+                    .or_default()
+                    .push(p);
             }
         }
         for (actor, k) in &update.states {
@@ -175,7 +188,13 @@ fn measure_vru_motion() {
             let act = person.as_ref().map_or(0, |p| p.activity.code());
             if kind == "pedestrian" {
                 *activity_counts.entry(act).or_default() += 1;
-                peds.push((id, k.pos, person.as_ref().and_then(|p| p.group), act, k.lane.map(|l| (l.lane.index(), l.s_m, l.d_m))));
+                peds.push((
+                    id,
+                    k.pos,
+                    person.as_ref().and_then(|p| p.group),
+                    act,
+                    k.lane.map(|l| (l.lane.index(), l.s_m, l.d_m)),
+                ));
                 if k.lane.is_none() && !person.as_ref().is_some_and(|p| p.crossing_midblock()) {
                     off_walk += 1;
                 }
@@ -189,7 +208,11 @@ fn measure_vru_motion() {
                     k.pos.x,
                     k.pos.y,
                     k.heading_rad.to_degrees(),
-                    k.lane.map(|l| (l.lane.index(), (l.s_m * 10.0).round() / 10.0, (l.d_m * 100.0).round() / 100.0))
+                    k.lane.map(|l| (
+                        l.lane.index(),
+                        (l.s_m * 10.0).round() / 10.0,
+                        (l.d_m * 100.0).round() / 100.0
+                    ))
                 );
             }
             if let (Some(p0), Some(h0)) = (tr.pos, tr.heading) {
@@ -240,16 +263,20 @@ fn measure_vru_motion() {
                             for dx in -1..=1 {
                                 for dy in -1..=1 {
                                     if let Some(v) = cells.get(&(cx + dx, cy + dy)) {
-                                        near += v.iter().filter(|q| q.distance_2d(p0) < 1.0).count();
+                                        near +=
+                                            v.iter().filter(|q| q.distance_2d(p0) < 1.0).count();
                                     }
                                 }
                             }
                             let near = near.saturating_sub(1).min(3);
-                            let key = format!("act {}->{act} lanechange {lc} near {near}", tr.act_prev);
+                            let key =
+                                format!("act {}->{act} lanechange {lc} near {near}", tr.act_prev);
                             let n = accel_why.entry(key.clone()).or_default();
                             *n += 1;
                             if *n <= 2 && a > 6.0 {
-                                println!("accel example {key}: id {id} t {ts:.1} a {a:.1} speed {speed:.2}");
+                                println!(
+                                    "accel example {key}: id {id} t {ts:.1} a {a:.1} speed {speed:.2}"
+                                );
                             }
                         }
                         tally.accel_over_3 += 1;
@@ -308,7 +335,13 @@ fn measure_vru_motion() {
                     let same_lane = a.4.zip(b.4).is_some_and(|(x, y)| x.0 == y.0);
                     let key = format!(
                         "d<{} group {} lane {} acts {}/{}",
-                        if dist < 0.05 { "0.05" } else if dist < 0.2 { "0.2" } else { "0.35" },
+                        if dist < 0.05 {
+                            "0.05"
+                        } else if dist < 0.2 {
+                            "0.2"
+                        } else {
+                            "0.35"
+                        },
                         same_group,
                         same_lane,
                         a.3.min(b.3),
@@ -361,17 +394,30 @@ fn measure_vru_motion() {
         );
         println!(
             "{kind:10} worst jump {:.2} m (id {} t {:.1}) | accel {:.1} (id {} t {:.1}) | lat {:.3} m (id {} t {:.1}) | spin {:.0} deg (id {} t {:.1})",
-            t.worst_jump.0, t.worst_jump.1, t.worst_jump.2,
-            t.worst_accel.0, t.worst_accel.1, t.worst_accel.2,
-            t.worst_lat.0, t.worst_lat.1, t.worst_lat.2,
-            t.worst_spin.0, t.worst_spin.1, t.worst_spin.2
+            t.worst_jump.0,
+            t.worst_jump.1,
+            t.worst_jump.2,
+            t.worst_accel.0,
+            t.worst_accel.1,
+            t.worst_accel.2,
+            t.worst_lat.0,
+            t.worst_lat.1,
+            t.worst_lat.2,
+            t.worst_spin.0,
+            t.worst_spin.1,
+            t.worst_spin.2
         );
     }
     if !walk_speeds.is_empty() {
         walk_speeds.sort_by(f64::total_cmp);
         let n = walk_speeds.len();
         let mean = walk_speeds.iter().sum::<f64>() / n as f64;
-        let sd = (walk_speeds.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / n as f64).sqrt();
+        let sd = (walk_speeds
+            .iter()
+            .map(|v| (v - mean) * (v - mean))
+            .sum::<f64>()
+            / n as f64)
+            .sqrt();
         println!(
             "walking speed (implied, walking & moving): mean {mean:.2} sd {sd:.2} p5 {:.2} p50 {:.2} p95 {:.2} m/s",
             walk_speeds[n / 20],
@@ -389,7 +435,13 @@ fn measure_vru_motion() {
             .join(" ")
     );
     println!("pedestrian steps off every walkable lane (not mid-block): {off_walk}");
-    println!("steps with a pedestrian overlap (<0.35 m): {overlaps}, pairs {overlap_pairs}, distinct pairs {}, longest {} steps ({} & {})", overlap_run.len(), overlap_longest.0, overlap_longest.1, overlap_longest.2);
+    println!(
+        "steps with a pedestrian overlap (<0.35 m): {overlaps}, pairs {overlap_pairs}, distinct pairs {}, longest {} steps ({} & {})",
+        overlap_run.len(),
+        overlap_longest.0,
+        overlap_longest.1,
+        overlap_longest.2
+    );
     let mut ow: Vec<_> = overlap_why.into_iter().collect();
     ow.sort_by(|a, b| b.1.cmp(&a.1));
     for (k, n) in ow.iter().take(8) {
@@ -415,6 +467,9 @@ fn measure_vru_motion() {
     }
     println!("stops >= 5 s by kind (count, longest): {by_kind:?}");
     for (s, id, act) in stops.iter().take(8) {
-        println!("  long stop {s:.1} s actor {id} {:?} activity {act}", classes.get(id));
+        println!(
+            "  long stop {s:.1} s actor {id} {:?} activity {act}",
+            classes.get(id)
+        );
     }
 }

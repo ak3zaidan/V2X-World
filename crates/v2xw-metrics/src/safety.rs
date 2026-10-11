@@ -718,13 +718,15 @@ impl MetricProvider for SafetyProvider {
         // diagram's production and accumulation per lane-kilometre (Geroliminis and
         // Daganzo, Transp. Res. B 42(9), 2008). Summed in lane-id order.
         let (net_samples, net_time, net_distance) =
-            self.lanes.values().fold((0u64, 0.0f64, 0.0f64), |(n, t, d), acc| {
-                (
-                    n + acc.samples,
-                    t + (acc.samples as f64) * self.dt.as_secs_f64(),
-                    d + acc.distance.sum(1).point().unwrap_or(0.0),
-                )
-            });
+            self.lanes
+                .values()
+                .fold((0u64, 0.0f64, 0.0f64), |(n, t, d), acc| {
+                    (
+                        n + acc.samples,
+                        t + (acc.samples as f64) * self.dt.as_secs_f64(),
+                        d + acc.distance.sum(1).point().unwrap_or(0.0),
+                    )
+                });
         if let Some(t) = secs
             && self.network_length_m > 0.0
             && t > 0.0
@@ -979,11 +981,20 @@ mod tests {
     /// a pedestrian on the other lane is not traffic.
     #[test]
     fn the_network_aggregate_is_over_every_declared_lane_and_leaves_pedestrians_out() {
-        let mut p = SafetyProvider::new(0).with_min_samples(1).with_per_lane(false);
+        let mut p = SafetyProvider::new(0)
+            .with_min_samples(1)
+            .with_per_lane(false);
         p.declare_lane_length(7, 100.0);
         p.declare_lane_length(8, 100.0);
         for i in 0..10u64 {
-            p.on_event(&kin(i * 100_000_000, 1, Some(7), (i as f64) * 2.0, 20.0, None));
+            p.on_event(&kin(
+                i * 100_000_000,
+                1,
+                Some(7),
+                (i as f64) * 2.0,
+                20.0,
+                None,
+            ));
             let mut ped: serde_json::Value =
                 serde_json::from_slice(&kin(i * 100_000_000, 2, Some(8), 0.0, 1.0, None).json)
                     .unwrap();

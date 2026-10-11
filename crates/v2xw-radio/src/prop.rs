@@ -1399,8 +1399,11 @@ impl<C: Ctx + ?Sized> Propagation<C> for LogDistanceShadowing {
         // One normal draw from this link's Shadow stream. The key embeds the link, so the
         // value cannot depend on what any other link or model drew.
         let draw = if self.params_for(los).sigma_db > 0.0 {
-            ctx.rng(RngDomain::Shadow, EntityRef::Link(LinkKey(tx.node, rx.node)))
-                .normal(0.0, 1.0)
+            ctx.rng(
+                RngDomain::Shadow,
+                EntityRef::Link(LinkKey(tx.node, rx.node)),
+            )
+            .normal(0.0, 1.0)
         } else {
             0.0
         };
@@ -3107,8 +3110,16 @@ mod tests {
             for (r, draw) in moved.iter().zip(draws.into_iter().rev()) {
                 let want = a.loss_db(&mut ctx, &tx, r, 5.9e9, &los, &WeatherState::CLEAR);
                 let got = b.loss_db_drawn(&tx, r, &los, draw);
-                assert_eq!(want.total_db.to_bits(), got.total_db.to_bits(), "step {step}");
-                assert_eq!(want.shadow_db.to_bits(), got.shadow_db.to_bits(), "step {step}");
+                assert_eq!(
+                    want.total_db.to_bits(),
+                    got.total_db.to_bits(),
+                    "step {step}"
+                );
+                assert_eq!(
+                    want.shadow_db.to_bits(),
+                    got.shadow_db.to_bits(),
+                    "step {step}"
+                );
             }
         }
     }

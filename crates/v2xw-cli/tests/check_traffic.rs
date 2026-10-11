@@ -15,14 +15,19 @@ fn repo_root() -> PathBuf {
 }
 
 fn row(c: &v2xw_cli::check_traffic::TrafficCheck, name: &str) -> u64 {
-    c.rows.iter().find(|r| r.name == name).map_or(0, |r| r.count)
+    c.rows
+        .iter()
+        .find(|r| r.name == name)
+        .map_or(0, |r| r.count)
 }
 
 /// One 40 s run of the signalised grid at a busy demand, then the check on it and on a
 /// world whose plans the recorded lamps do not match.
 #[test]
 fn check_traffic_passes_a_clean_run_and_fails_a_tampered_plan() {
-    let out = std::env::temp_dir().join("v2xw-cli-tests").join("check-traffic");
+    let out = std::env::temp_dir()
+        .join("v2xw-cli-tests")
+        .join("check-traffic");
     let _ = std::fs::remove_dir_all(&out);
     run(&RunOptions {
         scenario: repo_root().join("scenarios/phase1-grid.yaml"),
@@ -44,7 +49,11 @@ fn check_traffic_passes_a_clean_run_and_fails_a_tampered_plan() {
 
     let opts = CheckOptions::new(&out);
     let clean = check_traffic(&opts).expect("the check");
-    assert!(clean.vehicles > 20, "a busy run: {} vehicles", clean.vehicles);
+    assert!(
+        clean.vehicles > 20,
+        "a busy run: {} vehicles",
+        clean.vehicles
+    );
     assert!(clean.steps >= 390, "every step read: {}", clean.steps);
     for r in &clean.rows {
         assert!(r.ok, "{} failed on a clean run: {:?}", r.name, r.examples);
@@ -53,7 +62,8 @@ fn check_traffic_passes_a_clean_run_and_fails_a_tampered_plan() {
 
     // Fault 1: the checker's world has every movement on a permanent protected green, so
     // every vehicle the run held at a red now stands "on green".
-    let scenario = v2xw_engine::Scenario::load(out.join("scenario.resolved.yaml")).expect("scenario");
+    let scenario =
+        v2xw_engine::Scenario::load(out.join("scenario.resolved.yaml")).expect("scenario");
     let mut world = v2xw_engine::wiring::build_world(&scenario).expect("world");
     for plan in &mut world.signals {
         for phase in &mut plan.phases {

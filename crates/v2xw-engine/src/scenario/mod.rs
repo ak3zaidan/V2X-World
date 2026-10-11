@@ -165,7 +165,10 @@ impl Scenario {
         // unroutable (one-way streets that only leave the box), manhattan-5min 9 of 26.
         if scenario.city.is_some()
             || crate::city::city_of_world(&scenario.world).is_some()
-            || matches!(scenario.world.source, v2xw_world::WorldSourceSpec::OsmXml { .. })
+            || matches!(
+                scenario.world.source,
+                v2xw_world::WorldSourceSpec::OsmXml { .. }
+            )
         {
             crate::city::connect_demand(&mut scenario);
         }

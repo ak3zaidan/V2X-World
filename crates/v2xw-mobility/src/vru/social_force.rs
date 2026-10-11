@@ -1075,7 +1075,10 @@ impl VruMobility for SocialForce {
             let old_pos = person.position(world);
             if person.arrived {
                 self.settle(actor, old_pos, dt_s, world);
-                out.push((actor, self.kinematics_of(&self.people[&actor], world, t_end)));
+                out.push((
+                    actor,
+                    self.kinematics_of(&self.people[&actor], world, t_end),
+                ));
                 continue;
             }
             if person.crossing_midblock() {
@@ -1477,8 +1480,7 @@ impl VruMobility for SocialForce {
             // walker pressed to the edge carried a velocity (and a facing) pointing off the
             // pavement while standing still across it.
             let across = velocity.x * left_normal.x + velocity.y * left_normal.y;
-            if (proj_d > walkable_half && across > 0.0)
-                || (proj_d < -walkable_half && across < 0.0)
+            if (proj_d > walkable_half && across > 0.0) || (proj_d < -walkable_half && across < 0.0)
             {
                 velocity = Vec3::new_2d(
                     velocity.x - across * left_normal.x,
@@ -1498,7 +1500,11 @@ impl VruMobility for SocialForce {
                 let target = Vec3::new_2d(moved.x - carry.x, moved.y - carry.y);
                 let r = Vec3::new_2d(target.x - free.x, target.y - free.y);
                 let c = Vec3::new_2d(carry.x + r.x, carry.y + r.y);
-                if r.norm_2d() > 1e-9 && c.norm_2d() <= CARRY_MAX_M { c } else { carry }
+                if r.norm_2d() > 1e-9 && c.norm_2d() <= CARRY_MAX_M {
+                    c
+                } else {
+                    carry
+                }
             };
             if s_m >= lane.length_m {
                 match self.next_lane(person) {
@@ -1864,7 +1870,11 @@ impl SocialForce {
                 None
             } else {
                 // Behind the lane's start (walking a gap onto it) is reported at its start.
-                Some(LanePos::new(person.lane, person.s_m.max(0.0), person.lateral_m))
+                Some(LanePos::new(
+                    person.lane,
+                    person.s_m.max(0.0),
+                    person.lateral_m,
+                ))
             },
             dims: Dims::new(
                 VehicleClass::Pedestrian.spec().length_m,
@@ -2403,9 +2413,8 @@ mod tests {
                     // left after this step bounds the one before it.
                     let closing = CARRY_CLOSE_MPS
                         .max(1.05 * (person.carry.norm_2d() + 0.1) / CARRY_CLOSE_MAX_S);
-                    let limit = (params.max_speed_factor * person.desired_speed_mps + closing)
-                        * 0.1
-                        + 0.05;
+                    let limit =
+                        (params.max_speed_factor * person.desired_speed_mps + closing) * 0.1 + 0.05;
                     let step = ((kin.pos.x - p.x).powi(2) + (kin.pos.y - p.y).powi(2)).sqrt();
                     if lane != *prev_lane {
                         changes += 1;

@@ -2797,7 +2797,9 @@ fn safety_provider(
     let motorised = |k: v2xw_world::LaneKind| {
         matches!(
             k,
-            v2xw_world::LaneKind::Driving | v2xw_world::LaneKind::Bus | v2xw_world::LaneKind::Internal
+            v2xw_world::LaneKind::Driving
+                | v2xw_world::LaneKind::Bus
+                | v2xw_world::LaneKind::Internal
         )
     };
     for lane in world
