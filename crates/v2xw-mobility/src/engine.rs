@@ -831,7 +831,12 @@ fn cooperative_accel(
         .map(|(front, len, v)| (front - len - s_m, *v))
         .filter(|(g, _)| *g >= 0.0 && leader_gap_m.is_none_or(|lg| *g < lg))
         .min_by(|a, b| a.0.total_cmp(&b.0))?;
-    let a = cf.accel(ego, Some(&LeaderView::virtual_obstacle(gap.0, gap.1)), lane_view, weather);
+    let a = cf.accel(
+        ego,
+        Some(&LeaderView::virtual_obstacle(gap.0, gap.1)),
+        lane_view,
+        weather,
+    );
     (a >= -ego.driver.comfort_decel_mps2).then_some(a)
 }
 
@@ -3928,6 +3933,12 @@ impl NativeMobility {
                 lanes.extend(old.iter().skip(k).copied());
                 return Some((Self::route_of(world, lanes), actor.destination));
             }
+            // No room to change back on that road: the change would cost the turn, so it
+            // is refused, as LC2013 refuses a speed-gain change off the lanes its route
+            // needs ahead (its best-lanes look-ahead over the next roads). Allowing it and
+            // re-planning from the stuck lane sent cars round the block (Manhattan extract
+            // at 2400 veh/h: 223 trips completed with it, 225 without; SUMO 232).
+            return None;
         }
         // Re-plan the rest from where the shift stopped, to any lane of the destination
         // road.
@@ -5044,6 +5055,30 @@ impl Mobility for NativeMobility {
                     binding_stop_line = None;
                 }
             }
+            // A strategic change not yet made: the lane's end is a barrier, as in SUMO,
+            // where a vehicle that cannot make its change waits at the end of its lane.
+            // A route the vehicle's own lane can make replaces the change in the
+            // no-change zone ([`Self::give_up_strategic`]), so a vehicle still owing it
+            // there has no other way on: it drove past the end of the lane and was removed with
+            // no route (SUMO cross-validation, Manhattan extract at 2400 veh/h: four trips
+            // traced, at links of about 62 m; trips completed 220 -> 223, SUMO 232).
+            if along
+                && let Some(left) = self.strategic_pending(world, actor)
+                && left < self.params.no_change_zone_m
+            {
+                let d = (left - STOP_LINE_MARGIN_M).max(0.0);
+                let before = leader;
+                leader = Self::closest(
+                    leader,
+                    Some(LeaderView::virtual_obstacle(
+                        d + actor.driver.min_gap_m,
+                        0.0,
+                    )),
+                );
+                if leader != before {
+                    binding_stop_line = Some(d + STOP_LINE_MARGIN_M);
+                }
+            }
             // An external stop command is a virtual leader at zero gap.
             if actor.stopped_until.is_some_and(|until| t0 < until) {
                 leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(0.0, 0.0)));
@@ -5387,7 +5422,16 @@ impl Mobility for NativeMobility {
                 if actor.transition.is_some() || t0 < actor.cooldown_until {
                     continue;
                 }
-                if self.along_path() && !self.may_consider_lane_change(ctx.world(), actor, &mobil) {
+                // A strategic change still owed by the no-change zone is the one change the
+                // zone allows: the vehicle waits at the end of its lane for it (the barrier
+                // in the decision pass) instead of driving on with no way out.
+                let owed = self.along_path()
+                    && self.strategic_target(ctx.world(), actor).is_some()
+                    && actor.s_m >= actor.class.spec().length_m;
+                if self.along_path()
+                    && !owed
+                    && !self.may_consider_lane_change(ctx.world(), actor, &mobil)
+                {
                     continue;
                 }
                 // A strategic change the route needs comes before anything discretionary.
@@ -8239,7 +8283,11 @@ mod tests {
             let u = engine.step(&mut ctx, params.step);
             on_left |= engine.actors.get(&id).is_some_and(|a| a.lane == left_lane);
             if let Some((_, c)) = u.despawned.iter().find(|(a, _)| *a == id) {
-                assert_eq!(*c, DespawnCause::TripComplete, "the turning car was removed");
+                assert_eq!(
+                    *c,
+                    DespawnCause::TripComplete,
+                    "the turning car was removed"
+                );
                 done = true;
             }
             t += params.step.as_nanos();
