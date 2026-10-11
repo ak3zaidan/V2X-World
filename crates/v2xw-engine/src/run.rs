@@ -4379,8 +4379,19 @@ impl Engine {
         };
         // The certificate cycle's fragment, if this SPDU carries one: credential octets
         // inside the envelope, in addition to the signer field the node chose.
+        // The fragment fills what *this* SDU leaves under the MTU. The model's own budget
+        // is the MTU less its fixed base frame (204 B, an ECDSA-signed BSM), but a hybrid
+        // SPDU carries its post-quantum signature too (Falcon-512: 666 B), so a fragment
+        // sized for 204 B pushed the frame past the MTU and it was refused: 391 of the
+        // pq-certificate-cycle run's frames in 30 s. The cap handed down is shifted so the
+        // model's budget comes out as `mtu - sdu_bytes`.
         let cert_piece = if node_message {
-            self.cert_cycle_piece(node, sdu, mtu)
+            let base = self
+                .frag_plan
+                .cert_cycle()
+                .map_or(0, |c| c.params().base_frame_bytes);
+            let cap = mtu.saturating_sub(sdu_bytes).saturating_add(base);
+            self.cert_cycle_piece(node, sdu, cap)
         } else {
             None
         };
