@@ -792,6 +792,49 @@ struct Transition {
 /// slower urban approach less. **A choice**, not a cited figure.
 const STRATEGIC_M_PER_CHANGE: f64 = 25.0;
 
+/// How much slower than a target-lane follower level with it a vehicle blocked from its
+/// strategic change aims to drive, m/s, and over how long, s
+/// ([`NativeMobility::strategic_fall_back`]): level with the follower that is 2 m/s²,
+/// SUMO LC2013's least fall-behind deceleration (`MIN_FALLBEHIND`, 7/3.6 m/s per second,
+/// src/microsim/lcmodels/MSLCM_LC2013.cpp), capped at the driver's comfortable one.
+const FALL_BEHIND_DV_MPS: f64 = 2.0;
+/// See [`FALL_BEHIND_DV_MPS`].
+const FALL_BEHIND_S: f64 = 1.0;
+
+/// How far before the no-change zone a vehicle's strategic change counts as urgent, so
+/// the vehicle behind it in the target lane makes room for it, metres
+/// ([`cooperative_accel`]). **A choice**: about two car lengths and a gap.
+const COOPERATE_LOOK_M: f64 = 20.0;
+
+/// The acceleration cap of a vehicle that makes room for an urgent strategic lane change
+/// into its lane: it follows the requester as if already in its lane, braking no harder
+/// than its comfortable deceleration, and does not cooperate when that would take more.
+/// `None` when no requester is ahead of it (and nearer than its own leader).
+///
+/// SUMO's LC2013 asks the target-lane follower of a blocked urgent change to brake so
+/// the change can be made ("informFollower", src/microsim/lcmodels/MSLCM_LC2013.cpp,
+/// cooperativeness `lcCooperative` default 1). Without it a car at the end of a lane that
+/// cannot make its turn stood beside a queue packed at standstill gap until the gridlock
+/// timer removed it: 15 of 651 trips on the SUMO cross-validation grid at 3600 veh/h.
+fn cooperative_accel(
+    cf: &dyn CarFollowing,
+    weather: &WeatherState,
+    ego: &VehicleView,
+    lane_view: &LaneView,
+    s_m: f64,
+    leader_gap_m: Option<f64>,
+    requests: &[(f64, f64, f64)],
+) -> Option<f64> {
+    let gap = requests
+        .iter()
+        .filter(|(front, _, _)| *front > s_m)
+        .map(|(front, len, v)| (front - len - s_m, *v))
+        .filter(|(g, _)| *g >= 0.0 && leader_gap_m.is_none_or(|lg| *g < lg))
+        .min_by(|a, b| a.0.total_cmp(&b.0))?;
+    let a = cf.accel(ego, Some(&LeaderView::virtual_obstacle(gap.0, gap.1)), lane_view, weather);
+    (a >= -ego.driver.comfort_decel_mps2).then_some(a)
+}
+
 /// What a strategic lane change costs in the route choice, seconds per lane crossed: the
 /// driver prefers to stay in lane unless the other lane's route saves more than this.
 /// **A choice**, of the order of the lane-change duration.
@@ -1660,6 +1703,64 @@ impl NativeMobility {
                 ego.speed_mps.max(PULL_OUT_SPEED_MPS),
             ),
         })
+    }
+
+    /// The acceleration cap of a vehicle whose strategic lane change is blocked by the
+    /// vehicle ahead in the target lane: it drops back behind it, braking no harder than
+    /// its comfortable deceleration. `None` when that lane has no such blocker.
+    ///
+    /// Without it two cars side by side at the same speed stayed side by side to the end
+    /// of the lane, and the one that needed the other's lane missed its turn: on the SUMO
+    /// cross-validation grid at 600 veh/h a car drove 130 m of an empty road level with
+    /// the car 1.5 m ahead in its target lane and was removed with no route left. SUMO's
+    /// LC2013 does the same: a vehicle that cannot overtake the target-lane leader in the
+    /// space left "slow[s] down smoothly to follow leader" (SUMO
+    /// `MSLCM_LC2013::informLeader`, src/microsim/lcmodels/MSLCM_LC2013.cpp).
+    fn strategic_fall_back(
+        &self,
+        world: &World,
+        actor: &Actor,
+        ego: &VehicleView,
+        nbrs: &LaneNeighbors,
+    ) -> Option<f64> {
+        let target = self.strategic_target(world, actor)?;
+        let side = if world.lane(target).index > world.lane(actor.lane).index {
+            Side::Left
+        } else {
+            Side::Right
+        };
+        let beside = nbrs.side(side)?;
+        let beside_lane = world.try_lane(beside.lane)?;
+        if beside_lane.edge != world.lane(actor.lane).edge {
+            return None;
+        }
+        let b = ego.driver.comfort_decel_mps2;
+        let mut cap: Option<f64> = None;
+        if let Some(l) = beside.leader {
+            let mut moved = *ego;
+            moved.lane = beside.lane;
+            let a = self
+                .cf
+                .accel(&moved, Some(&l), &LaneView::of(beside_lane), &self.weather);
+            if l.gap_m < ego.driver.min_gap_m || a < -PULL_OUT_FOLLOWER_DECEL_MPS2 {
+                cap = Some(a.max(-b));
+            }
+        }
+        // A target-lane follower level with the vehicle (inside its own standstill gap)
+        // does not make room ([`cooperative_accel`] would have it brake harder than it
+        // will), so the vehicle drops behind it: towards FALL_BEHIND_DV_MPS below the
+        // follower's speed over FALL_BEHIND_S. Without this the two drove side by side
+        // at the same speed to the end of the lane (grid at 3600 veh/h: 130 m at a gap of
+        // 0-2 m, and the car was removed at the lane end).
+        if let Some(f) = beside.follower
+            && let Some(fv) = f.vehicle.as_ref()
+            && f.gap_m < fv.driver.min_gap_m
+        {
+            let a = ((fv.speed_mps - FALL_BEHIND_DV_MPS - ego.speed_mps) / FALL_BEHIND_S)
+                .clamp(-b, 0.0);
+            cap = Some(cap.map_or(a, |c| c.min(a)));
+        }
+        cap
     }
 
     /// Adds a clock model. The engine does not read it — believed time belongs to the node
@@ -3797,6 +3898,37 @@ impl NativeMobility {
         if lanes.len() == 1 {
             return None; // the target lane cannot make the next movement
         }
+        // The shift stopped on a later road whose lane cannot make the old route's next
+        // movement. A driver who changed lane for speed changes back on that road when
+        // another of its lanes makes the turn and the road is long enough for it, as the
+        // strategic change of a planned route does ([`Self::strategic_target`]); the old
+        // route is kept from that movement on. Re-planning from the shifted lane alone
+        // took a detour of minutes round the block for want of one lane change (grid at
+        // 600 veh/h: 296 s against SUMO's 109 s on one trip).
+        if self.params.strategic_lane_choice && k < old.len() {
+            let here = world.lane(cur);
+            let next = old[k];
+            let reaches = |l: LaneId| {
+                world
+                    .successors(l)
+                    .iter()
+                    .any(|c| c.permitted && c.via.unwrap_or(c.to_lane) == next)
+            };
+            let feasible = here.kind != LaneKind::Internal
+                && world.edge(here.edge).lanes.iter().any(|l| {
+                    let o = world.lane(*l);
+                    *l != cur
+                        && o.admits(actor.class.class_mask())
+                        && reaches(*l)
+                        && here.length_m
+                            >= self.params.no_change_zone_m
+                                + f64::from(o.index.abs_diff(here.index)) * STRATEGIC_M_PER_CHANGE
+                });
+            if feasible {
+                lanes.extend(old.iter().skip(k).copied());
+                return Some((Self::route_of(world, lanes), actor.destination));
+            }
+        }
         // Re-plan the rest from where the shift stopped, to any lane of the destination
         // road.
         let dest_lanes: Vec<LaneId> = dest_edge
@@ -4617,6 +4749,32 @@ impl Mobility for NativeMobility {
         // so a capped vehicle could decide to change lane for a speed gain it would never
         // be allowed to take.
         let mut neighbours: BTreeMap<ActorId, (VehicleView, LaneNeighbors)> = BTreeMap::new();
+        // The urgent strategic changes, by the lane each wants into: the requester's front
+        // position, length and speed. The vehicle behind it in that lane makes room
+        // ([`cooperative_accel`]).
+        let mut requests: BTreeMap<LaneId, Vec<(f64, f64, f64)>> = BTreeMap::new();
+        if self.along_path() && self.params.strategic_lane_choice {
+            for a in self.actors.values() {
+                let Some(left) = self.strategic_pending(world, a) else {
+                    continue;
+                };
+                if left > self.params.no_change_zone_m + COOPERATE_LOOK_M {
+                    continue;
+                }
+                let Some(target) = self.strategic_target(world, a) else {
+                    continue;
+                };
+                let (from, to) = (world.lane(a.lane), world.lane(target));
+                if from.index.abs_diff(to.index) != 1 {
+                    continue;
+                }
+                requests.entry(target).or_default().push((
+                    a.s_m,
+                    a.class.spec().length_m,
+                    a.speed_mps,
+                ));
+            }
+        }
         // One actor's decision: a pure function of the frozen state, so the actors are
         // decided in parallel and merged in id order (`crate::par`, ADR 0004 decision 5).
         let decide_one = |id: &ActorId| -> Option<(Decision, VehicleView, LaneNeighbors)> {
@@ -5026,6 +5184,19 @@ impl Mobility for NativeMobility {
             if let Some(limit) = merge_limit {
                 accel = accel.min(limit);
             }
+            if let Some(reqs) = requests.get(&actor.lane)
+                && let Some(limit) = cooperative_accel(
+                    &*self.cf,
+                    &self.weather,
+                    &ego_capped,
+                    &lane_view,
+                    actor.s_m,
+                    leader.as_ref().map(|l| l.gap_m),
+                    reqs,
+                )
+            {
+                accel = accel.min(limit);
+            }
             if along
                 && let Some(l) = leader.as_ref()
                 && !l.is_vehicle()
@@ -5224,11 +5395,16 @@ impl Mobility for NativeMobility {
                 // a driver who reaches the zone without a gap gives up and finds another
                 // way ([`Self::give_up_strategic`]).
                 if self.along_path() && self.strategic_target(ctx.world(), actor).is_some() {
-                    if let Some((ego, nbrs)) = neighbours.get(&decision.actor)
-                        && let Some(change) =
+                    if let Some((ego, nbrs)) = neighbours.get(&decision.actor) {
+                        if let Some(change) =
                             self.strategic_change(ctx.world(), &mobil, actor, ego, nbrs)
-                    {
-                        decision.lane_change = change;
+                        {
+                            decision.lane_change = change;
+                        } else if let Some(cap) =
+                            self.strategic_fall_back(ctx.world(), actor, ego, nbrs)
+                        {
+                            decision.accel_mps2 = decision.accel_mps2.min(cap);
+                        }
                     }
                     continue;
                 }
@@ -7992,6 +8168,84 @@ mod tests {
             strategic_m + 50.0 < plain_m,
             "the strategic route ({strategic_m:.0} m) is not shorter than going round ({plain_m:.0} m)"
         );
+    }
+
+    #[test]
+    fn a_driver_level_with_a_car_in_the_turn_lane_drops_behind_it_and_turns() {
+        // As above, but a car starts level with the driver in the left-turn lane, at the
+        // same speed, going straight on. Without falling behind it the two drove side by
+        // side to the end of the lane and the driver missed the turn.
+        let world = v2xw_world::procedural::grid(
+            &GridParams {
+                lanes_per_direction: 2,
+                ..GridParams::legacy().with_size(3, 3).with_signals(false)
+            },
+            &ImportOptions::default(),
+        )
+        .expect("grid");
+        let pick = world.roads.lanes().iter().find_map(|l| {
+            if l.kind != LaneKind::Driving || l.index != 0 || l.length_m < 80.0 {
+                return None;
+            }
+            let left_of = world
+                .edge(l.edge)
+                .lanes
+                .iter()
+                .copied()
+                .find(|x| world.lane(*x).index == 1)?;
+            let turn = world
+                .successors(left_of)
+                .iter()
+                .find(|c| c.permitted && c.direction == TurnDirection::Left)?;
+            let straight = world
+                .successors(left_of)
+                .iter()
+                .find(|c| c.permitted && c.direction == TurnDirection::Straight)?;
+            let own_turns_left = world
+                .successors(l.id)
+                .iter()
+                .any(|c| c.direction == TurnDirection::Left);
+            (!own_turns_left).then_some((l.id, left_of, turn.to_lane, straight.to_lane))
+        });
+        let (origin, left_lane, exit, ahead) =
+            pick.expect("a right lane whose left turn is from the lane beside");
+        let rng = RngRegistry::new(3);
+        let params = EngineParams {
+            strategic_lane_choice: true,
+            driver_heterogeneity: false,
+            driver_styles: false,
+            ..EngineParams::default()
+        };
+        let mut engine = engine_on(&world, params, &rng);
+        let trip = |seq: u64, origin: LaneId, origin_s_m: f64, destination: LaneId| TripRequest {
+            seq,
+            t: 0,
+            origin,
+            origin_s_m,
+            destination,
+            class: VehicleClass::Passenger,
+            desired_speed_mps: 11.0,
+        };
+        let id = engine
+            .insert_trip(&world, &trip(0, origin, 10.0, exit), 0)
+            .expect("the turning car");
+        engine
+            .insert_trip(&world, &trip(1, left_lane, 11.0, ahead), 0)
+            .expect("the car beside it");
+        let (mut done, mut on_left) = (false, false);
+        let mut t = 0u64;
+        while t < 120 * NS_PER_S && !done {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            let u = engine.step(&mut ctx, params.step);
+            on_left |= engine.actors.get(&id).is_some_and(|a| a.lane == left_lane);
+            if let Some((_, c)) = u.despawned.iter().find(|(a, _)| *a == id) {
+                assert_eq!(*c, DespawnCause::TripComplete, "the turning car was removed");
+                done = true;
+            }
+            t += params.step.as_nanos();
+        }
+        assert!(on_left, "the turning car never got into the left-turn lane");
+        assert!(done, "the turning car did not finish in two minutes");
     }
 
     #[test]
