@@ -3453,3 +3453,37 @@ and the city base on `--city chicago`, checked with `v2xw check-traffic`.
   - `pedestrian_invariants` fails on d3558de itself (overlap 26, in-building 6; overlap 17,
     in-building 21, speed-jump 1, accel-bound 1, all VRU actors); unchanged by this branch.
   - Start-up lost time: Midtown 2.4 s, Chicago 3.3 s (two queues only).
+
+## 2026-10-11 — security and protocol realism: run, find, fix (branch of 500cbb0)
+
+Short runs of the attack and credential scenarios, read from `run-report.json` and
+`metrics.json`.
+
+- **Fixed:**
+  - Detection metrics were never fed in an engine run: every `det_*` sample read zero
+    trials. The engine declared no subject and its `gt.attack.action` records went to a
+    null recorder. New ground-truth channel `gt.subject` (digest to actor, once per
+    digest); the vehicle level is one trial per true actor. attack-fake-positions 300 s:
+    TP 12, FN 3, FP 0, TN 408 (recall 0.80, FPR 0); report precision 0.986. Time to
+    decision p50 55 s, mostly the compressed 60 s report shuffle. CRL installed 3,624
+    times; 196,093 receptions from revoked senders rejected.
+  - RSUs could not verify post-quantum messages. They now use `pq_software_proxy`, the
+    Cohda MK6 rows of NDSS 2024 Table V (ML-DSA-44 verify 189 µs), for post-quantum
+    primitives only. The proxy is flagged and likely optimistic. `v2xw validate` notes it
+    and the manifest warns (06-node-models.md §7.6).
+  - Certificate-cycle fragments pushed hybrid SPDUs past the MTU: pq-certificate-cycle
+    had 391 refusals in 30 s, and no fragment reached the air. Now 0.
+- **Checked, plausible:**
+  - Replay (90 s): 0 honest vehicles reported to the MA.
+  - credential-lifecycle (150 s): top-ups 59/59, pool steady at 5, re-enrolments 18/18,
+    2 of 2 attackers revoked, 0 honest.
+  - Pseudonym strategies (120 s): c2c-cc 57 changes per vehicle-hour with linkability
+    0.36; mix-zone 22 and 0.21. time (300 s period), distance (2 km) and silent make 0
+    changes in 120 s, as specified.
+- **Open:**
+  - Sybil is still refused: the host hands an attacker no concurrent pseudonyms, and
+    receivers drop ghosts' unknown signers.
+  - 15 % of honest pseudonyms are reported at least once in 300 s of rush hour. These
+    are GNSS outliers; the MA filters them (0 honest revoked).
+  - 22 revoke decisions for 12 attackers: one decision per pseudonym, not per device.
+  - A 300 s attack run at `--record-level events` writes 6.9 GB; use `metrics`.
