@@ -17,6 +17,21 @@ what each gap would take — see [`docs/RELEASE-CHECKLIST.md`](../RELEASE-CHECKL
 (2026-09-22). The Phase 1 acceptance table below is still accurate and the checklist cites
 it.
 
+## 2026-10-11 — round-7 merge (speed, netfid, stalls)
+
+- Merged `--no-ff` in order speed (d6dc2f3), netfid (bbe32d1), stalls (4ccb9b9) onto
+  d3558de. Only conflict: this file; both track sections kept. `cargo fmt --all` as its
+  own commit.
+- Checked: `cargo check --workspace --tests` clean; lib tests of radio, net, node,
+  mobility, metrics, engine, interop pass; `v2xw-engine --test b1_nlos --test
+  unknown_signer` and `v2xw-cli` check_traffic tests pass. No UI changes. Release
+  `v2xw-cli` bins built; `run-sim.sh` boots on 8758 with the agent on.
+- Not run: full suites, security_lifecycle and threat suites (verify-all now drops
+  unknown signers, so their counts may move), golden records with auto breakdowns.
+- Still open: see the three track sections below (fleet speed ~15x slower than real
+  time at 1,000 vehicles capped; short inter-signal links; `pedestrian_invariants`
+  failing since d3558de).
+
 ## 2026-10-11 — large-fleet speed (fleet-speed track, branch of d3558de)
 
 Optimised dev build (`opt-level 2`, debug assertions **on**), binaries copied out of
