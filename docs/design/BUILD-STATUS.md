@@ -3406,3 +3406,35 @@ conflicts resolved by hand and the whole workspace compile-checked:
   Annex C, limit 7): lossy 10-hop line, GBC to a remote area, PDR 0.20 → 1.00, hop ACK
   ratio 0.81 → 1.00 with 6 retries. The engine's overlay keeps 0 (no MAC, unit disk); not
   yet a scenario field.
+
+## 2026-10-11 — traffic stalls: breakdowns, merges, right turn on red (branch of d3558de)
+
+Traffic-only soaks (`equipped_fraction: 0`, 300 s) of midtown-rush-hour, portland-downtown
+and the city base on `--city chicago`, checked with `v2xw check-traffic`.
+
+- **Fixed:**
+  - The 160-180 s stops on midtown-rush-hour (lane 10719, the cars on lane 280, actor 152)
+    were the scripted `safety.breakdown`: the auto pick took any moving car, which came to
+    rest inside a junction connector or just past the stop line and held everyone behind
+    it for the whole event (plus 21 overlaps as cars took the next connector past it). The
+    auto pick now takes a car that stops on its own lane 10 m or more short of its end, and
+    a car standing 8 s with a broken-down lane on its next four route lanes replans round it.
+  - Two connectors onto one exit lane that touch a few metres before it were a crossing,
+    so the second car waited at its line until the first cleared (actor 193, 5 s on green);
+    they now merge.
+  - `check-traffic` excuses a right turn on red after a full stop where the jurisdiction
+    allows it: Chicago 31 red entries -> 1, Portland 11 -> 0 (its check passes). Portland
+    spawns 84 vehicles in 300 s.
+- **Open, traced:**
+  - Queue heads on green 9-20 s at Midtown links of 13-16 m between two signals (lanes
+    2695, 3159), and a 266 s stall at Chicago junctions 324/326, 12 m apart: the short link
+    is fed in two phases upstream but served in one downstream, and a car may not stop
+    across the crosswalk between them. Pairing the offsets of closely spaced signals (tried,
+    not committed) did not help because the phases are complementary; the fix is a joined
+    junction, or one controller with a shared phase plan, for such pairs.
+  - Phantom stops (kerbside stops on the centreline) block lanes for 20-57 s and queue cars
+    on green behind them (Midtown lanes 1405, 718).
+  - One lane-change frame jump (2.9 m in a step, lanes 2268 -> 2269, Midtown).
+  - `pedestrian_invariants` fails on d3558de itself (overlap 26, in-building 6; overlap 17,
+    in-building 21, speed-jump 1, accel-bound 1, all VRU actors); unchanged by this branch.
+  - Start-up lost time: Midtown 2.4 s, Chicago 3.3 s (two queues only).

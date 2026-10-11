@@ -43,7 +43,7 @@ use v2xw_record::wire::U32_NONE;
 use v2xw_record::wire::snapshot::{DeltaBody, KeyframeBody};
 use v2xw_record::writer::{TOPIC_DELTA, TOPIC_KEYFRAME};
 use v2xw_wasm::scene::Scene;
-use v2xw_world::model::LaneKind;
+use v2xw_world::model::{LaneKind, TurnDirection};
 use v2xw_world::{SignalState, World};
 
 use crate::{CliError, Result};
@@ -70,6 +70,10 @@ pub struct CheckOptions {
     pub examples: usize,
     /// An actor whose every step is printed on stderr.
     pub trace: Option<u32>,
+    /// Whether the run's rules let a vehicle turn right on a steady red after a full stop:
+    /// such an entry is not a red entry. [`check_traffic`] reads it from the scenario
+    /// (`traffic.right_turn_on_red`, else the highway preset's jurisdiction).
+    pub right_turn_on_red: bool,
 }
 
 impl CheckOptions {
@@ -84,6 +88,7 @@ impl CheckOptions {
             cycle_margin_s: 30.0,
             examples: 8,
             trace: None,
+            right_turn_on_red: false,
         }
     }
 }
@@ -150,6 +155,12 @@ const STOP_MPS: f64 = 0.1;
 /// How far before the junction a stop line stands, metres: the mobility engine's
 /// `STOP_LINE_OFFSET_M`.
 const STOP_LINE_M: f64 = 2.0;
+
+/// How recently a vehicle must have stood on its approach for a right turn on red to count
+/// as one made after a full stop, seconds. **A choice**: long enough for the gap the
+/// driver waits for, short enough that a car that stood a cycle ago does not excuse a
+/// turn it rolled through.
+const RTOR_STOP_WITHIN_S: f64 = 15.0;
 
 fn ped_class(idx: u8) -> bool {
     VehicleClass::ALL.get(idx as usize) == Some(&VehicleClass::Pedestrian)
@@ -401,7 +412,18 @@ pub fn check_traffic(opts: &CheckOptions) -> Result<TrafficCheck> {
     let scenario_path = dir.join("scenario.resolved.yaml");
     let scenario = v2xw_engine::Scenario::load(&scenario_path)?;
     let world = v2xw_engine::wiring::build_world(&scenario)?;
-    check_recording(&world, &dir.join("recording.mcap"), opts)
+    let rules = v2xw_mobility::rules::TrafficRules::of_highway_preset(
+        scenario.world.highway_preset.map(|p| p.label()),
+    );
+    let opts = CheckOptions {
+        right_turn_on_red: scenario
+            .traffic
+            .as_ref()
+            .and_then(|t| t.right_turn_on_red)
+            .unwrap_or(rules.right_turn_on_red),
+        ..opts.clone()
+    };
+    check_recording(&world, &dir.join("recording.mcap"), &opts)
 }
 
 /// The check over one recording of a run on `world`.
@@ -470,6 +492,9 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
     let mut prev: BTreeMap<u32, Sample> = BTreeMap::new();
     let mut prev_jerk_a: BTreeMap<u32, f64> = BTreeMap::new();
     let mut stops: BTreeMap<u32, Stop> = BTreeMap::new();
+    // Where and when each vehicle last stood: a right turn on red is lawful only after a
+    // full stop at the line.
+    let mut last_stood: BTreeMap<u32, (u32, f64)> = BTreeMap::new();
     let mut seen_veh: BTreeSet<u32> = BTreeSet::new();
     let mut seen_ped: BTreeSet<u32> = BTreeSet::new();
     let mut steps = 0u64;
@@ -669,6 +694,9 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
         }
 
         for (id, a) in &now {
+            if a.speed < STOP_MPS && a.lane != U32_NONE {
+                last_stood.insert(*id, (a.lane, a.t));
+            }
             let Some(p) = prev.get(id).copied() else { continue };
             let dt = a.t - p.t;
             if dt <= 0.0 || dt > 1.0 {
@@ -721,9 +749,18 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                     let crossed = t - dt - STOP_LINE_M / p.speed.max(0.3);
                     let was = sig.state_at(l, crossed);
                     if let Some(state) = sig.state(world, l) {
+                        let turned_on_red_after_stop = opts.right_turn_on_red
+                            && last_stood
+                                .get(id)
+                                .is_some_and(|(lane, at)| *lane == p.lane && t - at <= RTOR_STOP_WITHIN_S)
+                            && world.roads.connections().iter().any(|c| {
+                                c.via == Some(l)
+                                    && matches!(c.direction, TurnDirection::Right | TurnDirection::SlightRight)
+                            });
                         if state == SignalState::Red
                             && was == Some(SignalState::Red)
                             && p.speed > 0.0
+                            && !turned_on_red_after_stop
                         {
                             rows.add("red_entry", || format!("actor {id} at t {t:.1} s entered {} from {} on red at {:.1} m/s", a.lane, p.lane, a.speed));
                         }
@@ -845,7 +882,7 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                 vias[a.lane as usize]
                     .iter()
                     .map(|m| {
-                        // What stands on the movement's exit: (count, rearmost s, its speed).
+                        // What stands on the movement's exit: (count, rearmost actor, its s, its speed).
                         let exit = world
                             .roads
                             .connections()
@@ -853,7 +890,7 @@ pub fn check_recording(world: &World, recording: &Path, opts: &CheckOptions) -> 
                             .find(|c| c.via == Some(*m))
                             .map(|c| c.to_lane);
                         let on_exit = exit.and_then(|e| by_lane.get(&e.index())).map(|v| {
-                            (v.len(), v.first().map(|f| (f.0, now[&f.2].speed)))
+                            (v.len(), v.first().map(|f| (f.2, f.0, now[&f.2].speed)))
                         });
                         let inside = by_lane.get(&m.index()).map_or(0, Vec::len);
                         format!(

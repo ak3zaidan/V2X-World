@@ -1750,6 +1750,7 @@ impl NativeMobility {
     fn resolve_gridlock(&mut self, world: &World, t1: SimTime, gone: &[ActorId]) -> Vec<ActorId> {
         let mut removed = Vec::new();
         self.give_up_strategic(world, t1);
+        self.bypass_breakdowns(world, t1);
         if self.params.time_to_teleport_s <= 0.0 {
             return removed;
         }
@@ -2274,6 +2275,87 @@ impl NativeMobility {
                 a.destination = to;
                 a.planned_at = t;
                 a.planned_generation = generation;
+            }
+        }
+    }
+
+    /// Lanes a broken-down vehicle stands on: one under a scripted stop with no end
+    /// ([`MobilityCommand::Brake`] with no `hold_until`), braking or already holding.
+    fn broken_down_lanes(&self) -> BTreeSet<LaneId> {
+        self.actors
+            .values()
+            .filter(|a| {
+                a.speed_mps < STUCK_SPEED_MPS
+                    && (matches!(a.forced_brake, Some((_, None)))
+                        || a.stopped_until == Some(SimTime::MAX))
+            })
+            .map(|a| a.lane)
+            .collect()
+    }
+
+    /// A vehicle that has stood for [`STRATEGIC_GIVE_UP_S`] with a lane a broken-down
+    /// vehicle blocks among the next [`CLOSURE_SIGHT_LANES`] of its route — typically held
+    /// at the stop line because that car leaves no room on the exit (NY VTL §1175) — finds
+    /// another way, as a driver who sees the hazard lights does. Without it the queue
+    /// behind the exit waited out the whole breakdown: 160 s at an unsignalised junction on
+    /// midtown-rush-hour (actors 152, 62, 181 behind the car on lane 3723).
+    fn bypass_breakdowns(&mut self, world: &World, t1: SimTime) {
+        let broken = self.broken_down_lanes();
+        // With neither the gridlock timer nor strategic lane choice on, nothing else keeps
+        // the standing clock; it is kept here (by speed alone) while a breakdown stands.
+        if self.params.time_to_teleport_s <= 0.0 && !self.params.strategic_lane_choice {
+            for a in self.actors.values_mut() {
+                if broken.is_empty() || a.speed_mps >= STUCK_SPEED_MPS {
+                    a.stuck_since = None;
+                } else {
+                    a.stuck_since.get_or_insert(t1);
+                }
+            }
+        }
+        if broken.is_empty() {
+            return;
+        }
+        let limit = secs_to_ns(STRATEGIC_GIVE_UP_S);
+        let blocked: Vec<ActorId> = self
+            .actors
+            .values()
+            .filter(|a| {
+                a.forced_brake.is_none()
+                    && a.stopped_until.is_none()
+                    && !broken.contains(&a.lane)
+                    && a.stuck_since
+                        .is_some_and(|since| t1.saturating_sub(since) >= limit)
+                    // One that found no way round tries again a give-up time later.
+                    && t1.saturating_sub(a.planned_at) >= limit
+                    && a.route
+                        .lanes
+                        .iter()
+                        .skip(a.route_index + 1)
+                        .take(CLOSURE_SIGHT_LANES)
+                        .any(|l| broken.contains(l))
+            })
+            .map(|a| a.id)
+            .collect();
+        if blocked.is_empty() {
+            return;
+        }
+        let mut costs = self.costs(world);
+        for lane in &broken {
+            costs.set_closed(*lane, true);
+        }
+        for id in blocked {
+            let (lane, destination, class) = {
+                let a = &self.actors[&id];
+                (a.lane, a.destination, a.class)
+            };
+            let found = Self::detour(self.router_for(class), world, lane, destination, t1, &costs);
+            let a = self.actors.get_mut(&id).expect("present");
+            a.planned_at = t1;
+            if let Some((route, to)) = found {
+                a.route = route;
+                a.route_index = 0;
+                a.destination = to;
+                a.stuck_since = None;
             }
         }
     }
