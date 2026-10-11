@@ -754,13 +754,27 @@ pub(super) fn undo_setup<P: LlmProvider, T: RpcTransport>(
     let Some(b) = before else {
         return Err(err("undo", "the engine's draft before it was not read"));
     };
-    if b.get("staged").is_some_and(|s| !s.is_null()) {
-        agent.rpc.call(
-            "scenario.set",
-            &json!({"scenario": b.get("scenario"), "validate": false}),
-        )?;
-    } else if let Some(h) = b.get("running_hash").and_then(Value::as_str) {
-        agent.rpc.call("scenario.load", &json!({"path": h}))?;
+    // Loading the running scenario's hash withdraws a staged one, but only while that run is
+    // still the running one: once the person pressed Run on the setup, the engine knows only the
+    // new run's hash and refused the old one (409 "scenario.load"), so Undo did nothing. Then
+    // the settings from before are staged instead, for the next Run.
+    let running_now = agent
+        .rpc
+        .call("scenario.get", &json!({}))
+        .ok()
+        .and_then(|v| v.get("running_hash").and_then(Value::as_str).map(str::to_string));
+    let running_before = b.get("running_hash").and_then(Value::as_str);
+    let staged_before = b.get("staged").is_some_and(|s| !s.is_null());
+    match running_before {
+        Some(h) if !staged_before && running_now.as_deref() == Some(h) => {
+            agent.rpc.call("scenario.load", &json!({"path": h}))?;
+        }
+        _ => {
+            agent.rpc.call(
+                "scenario.set",
+                &json!({"scenario": b.get("scenario"), "validate": false}),
+            )?;
+        }
     }
     Ok(())
 }
