@@ -91,7 +91,7 @@ fn metrics_table(s: &mut String, runs: &[Measured]) {
     }
     let _ = writeln!(s, "---:|");
     type Get = fn(&Measured) -> f64;
-    let rows: [(&str, Get, usize); 20] = [
+    let rows: [(&str, Get, usize); 21] = [
         ("trips offered", |m| m.offered as f64, 0),
         ("trips inserted", |m| m.inserted as f64, 0),
         ("trips completed", |m| m.completed as f64, 0),
@@ -109,13 +109,34 @@ fn metrics_table(s: &mut String, runs: &[Measured]) {
         ("mean vehicles halting (< 0.1 m/s)", |m| m.halting_mean, 1),
         ("max vehicles halting", |m| m.halting_max as f64, 0),
         ("halting time per trip, s", |m| m.wait_per_trip_s, 1),
-        ("  of which at a stop line (last 30 m), s", |m| m.halt_where_s[0] / m.inserted.max(1) as f64, 1),
-        ("  of which mid-block, s", |m| m.halt_where_s[1] / m.inserted.max(1) as f64, 1),
-        ("  of which inside a junction, s", |m| m.halt_where_s[2] / m.inserted.max(1) as f64, 1),
+        (
+            "  of which at a stop line (last 30 m), s",
+            |m| m.halt_where_s[0] / m.inserted.max(1) as f64,
+            1,
+        ),
+        (
+            "  of which mid-block, s",
+            |m| m.halt_where_s[1] / m.inserted.max(1) as f64,
+            1,
+        ),
+        (
+            "  of which inside a junction, s",
+            |m| m.halt_where_s[2] / m.inserted.max(1) as f64,
+            1,
+        ),
         ("stops per trip", |m| m.stops_per_trip(), 2),
-        ("lane changes per vehicle-km", |m| m.lane_changes_per_km(), 2),
+        (
+            "lane changes per vehicle-km",
+            |m| m.lane_changes_per_km(),
+            2,
+        ),
         ("junction speed (moving), km/h", |m| m.junction_kmh(), 1),
-        ("vehicles left in network at end", |m| m.left_in_network as f64, 0),
+        ("queue discharge headway, s", |m| m.discharge_headway_s(), 2),
+        (
+            "vehicles left in network at end",
+            |m| m.left_in_network as f64,
+            0,
+        ),
     ];
     for (name, g, p) in rows {
         let _ = write!(s, "| {name} |");
@@ -320,7 +341,10 @@ fn main() {
                 "\n| pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |"
             );
             let _ = writeln!(body, "|---|---:|---:|---:|---:|---:|---:|---:|");
-            for (i, j) in [(0, 1), (0, 2), (2, 1)].into_iter().filter(|p| p.0.max(p.1) < c.runs.len()) {
+            for (i, j) in [(0, 1), (0, 2), (2, 1)]
+                .into_iter()
+                .filter(|p| p.0.max(p.1) < c.runs.len())
+            {
                 let (share, n, r, mad) = edge_agreement(&c.runs[i], &c.runs[j]);
                 let (np, mr, md) = paired_tt(&c.runs[i], &c.runs[j]);
                 let _ = writeln!(

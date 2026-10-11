@@ -238,7 +238,16 @@ pub struct Measured {
     pub halt_where_s: [f64; 3],
     /// Vehicles still in the network when the run ended.
     pub left_in_network: u64,
+    /// Queue discharge headways: the time between two vehicles leaving the same lane
+    /// into a junction, where the second had been halting within the last
+    /// [`DISCHARGE_QUEUED_S`] and the headway is under [`DISCHARGE_MAX_S`].
+    pub discharge_s: Vec<f64>,
 }
+
+/// A vehicle counts as discharging from a queue when it halted this recently, s.
+pub const DISCHARGE_QUEUED_S: f64 = 15.0;
+/// Headways at or above this are gaps in the queue, not discharge, s.
+pub const DISCHARGE_MAX_S: f64 = 4.0;
 
 impl Measured {
     /// Edie flow, veh/h per lane.
@@ -266,6 +275,15 @@ impl Measured {
     /// Mean speed of moving vehicles on junction-internal lanes, km/h.
     pub fn junction_kmh(&self) -> f64 {
         3.6 * self.junction_speed.0 / self.junction_speed.1.max(1e-9)
+    }
+
+    /// Mean queue discharge headway, s ([`Measured::discharge_s`]).
+    pub fn discharge_headway_s(&self) -> f64 {
+        if self.discharge_s.is_empty() {
+            f64::NAN
+        } else {
+            self.discharge_s.iter().sum::<f64>() / self.discharge_s.len() as f64
+        }
     }
 
     /// Mean travel time, s.
@@ -306,6 +324,9 @@ pub struct Observer<'a> {
     last_lane: BTreeMap<ActorId, (EdgeId, u8)>,
     moving: BTreeMap<ActorId, bool>,
     in_network: u64,
+    halted_at: BTreeMap<ActorId, f64>,
+    approach: BTreeMap<ActorId, LaneId>,
+    lane_exit: BTreeMap<LaneId, f64>,
 }
 
 impl<'a> Observer<'a> {
@@ -348,6 +369,9 @@ impl<'a> Observer<'a> {
             last_lane: BTreeMap::new(),
             moving: BTreeMap::new(),
             in_network: 0,
+            halted_at: BTreeMap::new(),
+            approach: BTreeMap::new(),
+            lane_exit: BTreeMap::new(),
         }
     }
 
@@ -371,6 +395,8 @@ impl<'a> Observer<'a> {
             self.last_edge.remove(a);
             self.last_lane.remove(a);
             self.moving.remove(a);
+            self.halted_at.remove(a);
+            self.approach.remove(a);
         }
         let in_window = t1 > self.window.0 && t1 <= self.window.1;
         let mut halting = 0u64;
@@ -391,11 +417,31 @@ impl<'a> Observer<'a> {
                     _ => 1,
                 };
                 self.m.halt_where_s[place] += dt_s;
+                self.halted_at.insert(*a, t1);
                 if self.moving.insert(*a, false) == Some(true) {
                     self.m.stops += 1;
                 }
             } else if v > 1.0 {
                 self.moving.insert(*a, true);
+            }
+            match lane {
+                Some((l, _)) if l.junction.is_none() => {
+                    self.approach.insert(*a, l.id);
+                }
+                _ => {
+                    if let Some(from) = self.approach.remove(a) {
+                        let queued = self
+                            .halted_at
+                            .get(a)
+                            .is_some_and(|h| t1 - h <= DISCHARGE_QUEUED_S);
+                        if let Some(prev) = self.lane_exit.insert(from, t1)
+                            && queued
+                            && t1 - prev < DISCHARGE_MAX_S
+                        {
+                            self.m.discharge_s.push(t1 - prev);
+                        }
+                    }
+                }
             }
             if lane.is_none_or(|(l, _)| l.junction.is_some()) {
                 if v >= HALTING_MPS {
@@ -625,12 +671,14 @@ pub fn run_native(
     // `traffic` section and no highway preset), not the bare engine defaults a unit test
     // sees: strategic lane choice on, gridlock resolution at 300 s (SUMO's
     // `--time-to-teleport` default, which the SUMO runs here keep too).
-    let mut engine = NativeMobility::new(v2xw_mobility::rules::TrafficRules::of_highway_preset(None).apply(EngineParams {
-        step: timing.step,
-        strategic_lane_choice: true,
-        time_to_teleport_s: 300.0,
-        ..EngineParams::default()
-    }));
+    let mut engine = NativeMobility::new(
+        v2xw_mobility::rules::TrafficRules::of_highway_preset(None).apply(EngineParams {
+            step: timing.step,
+            strategic_lane_choice: true,
+            time_to_teleport_s: 300.0,
+            ..EngineParams::default()
+        }),
+    );
     let mut obs = Observer::new(
         world,
         &study.ids,
@@ -650,7 +698,9 @@ pub fn run_native(
     let mut t = 0;
     let dt_s = timing.step.as_secs_f64();
     // Diagnostics: `V2XW_XVAL_TRACE=<trip seq>` prints that trip's lanes and halts.
-    let trace: Option<u64> = std::env::var("V2XW_XVAL_TRACE").ok().and_then(|v| v.parse().ok());
+    let trace: Option<u64> = std::env::var("V2XW_XVAL_TRACE")
+        .ok()
+        .and_then(|v| v.parse().ok());
     let mut traced: Option<ActorId> = None;
     let mut last: Option<(LaneId, bool)> = None;
     while t < horizon {
@@ -661,7 +711,10 @@ pub fn run_native(
             if let Some(s) = u.spawned.iter().find(|s| s.seq == q) {
                 traced = Some(s.actor);
                 if let Some((_, r)) = trips.iter().find(|(t, _)| t.seq == q) {
-                    let e: Vec<String> = r.iter().map(|l| format!("{}", world.lane(*l).edge)).collect();
+                    let e: Vec<String> = r
+                        .iter()
+                        .map(|l| format!("{}", world.lane(*l).edge))
+                        .collect();
                     eprintln!("  trace route {}", e.join(" "));
                 }
             }
@@ -683,7 +736,11 @@ pub fn run_native(
                     });
                     eprintln!(
                         "  trace t={:.1} lane={} edge={} s={:.1}/{len:.1} junction={j} v={v:.2} halt={}",
-                        t as f64 / 1e9, lane, e, k.lane.map_or(0.0, |l| l.s_m), now.1
+                        t as f64 / 1e9,
+                        lane,
+                        e,
+                        k.lane.map_or(0.0, |l| l.s_m),
+                        now.1
                     );
                     last = Some(now);
                 }
