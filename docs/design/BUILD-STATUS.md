@@ -3338,3 +3338,19 @@ conflicts resolved by hand and the whole workspace compile-checked:
   start-up lost time 3.17 s (target 1-3); `check-traffic` counts lawful right turns on
   red as red entries (Chicago 31, Portland 11); phantom stops are mostly kerbside stops
   that stay on the lane centreline (no pull-over), which the recording cannot tell apart.
+
+## 2026-10-11 — network fidelity: unknown signers, B1 NLOS, OpenCV2X pool, IPG, unicast retry (branch of d3558de)
+
+- **verify-all held:** a message whose `digest` signer missed the certificate cache was
+  delivered `unverified` under `verify-all`. `VerificationPolicy::holds_unknown_signer`
+  (true for verify-all; OBU, RSU, VRU) now drops it as `node.rx` cause `unknown-signer`
+  (P2PCD request still counted). Grid, 20 s: 77 of 511 app deliveries (15 %) were such
+  messages; now 0 delivered unverified (`v2xw-engine --test unknown_signer`).
+- **B1 NLOS:** `propagation/winner-plus-b1` `params.nlos: sommer | manhattan` (WINNER+ D5.3
+  Table 4-1 two-leg law over the traced corner). Tables in `docs/validation/radio-fidelity.md` §3a.
+- **OpenCV2X 2 × 12 RB pool and IPG** in the sweep harness: 120 veh/km MAD 9.3 → 6.5
+  points when 190 B fits one sub-channel; 19.2 taken literally (§1).
+- **GeoUnicast link-layer ACK/retry** (`DissemConfig::unicast_retry_limit`, 802.11-2020
+  Annex C, limit 7): lossy 10-hop line, GBC to a remote area, PDR 0.20 → 1.00, hop ACK
+  ratio 0.81 → 1.00 with 6 retries. The engine's overlay keeps 0 (no MAC, unit disk); not
+  yet a scenario field.
