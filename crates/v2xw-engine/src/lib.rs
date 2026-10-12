@@ -83,6 +83,7 @@ pub mod safety_events;
 pub mod scale;
 pub mod scenario;
 pub mod sec_records;
+pub mod sensitivity;
 pub mod signature;
 pub mod snapshot;
 pub mod timeline;
