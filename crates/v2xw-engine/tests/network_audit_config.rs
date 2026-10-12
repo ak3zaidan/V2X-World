@@ -199,7 +199,9 @@ fn verify_tally(rec: &MemoryRecorder) -> (BTreeMap<String, u64>, u64) {
     for v in records(rec, "node.verify") {
         let key = format!(
             "{}/{}",
-            v.get("outcome").and_then(|o| o.as_str()).unwrap_or_default(),
+            v.get("outcome")
+                .and_then(|o| o.as_str())
+                .unwrap_or_default(),
             v.get("reason").and_then(|o| o.as_str()).unwrap_or_default()
         );
         *tally.entry(key).or_insert(0) += 1;
@@ -226,7 +228,10 @@ fn the_verification_numbers_change_what_is_verified() {
     let (_, srec) = run(shallow);
     let (st, sw) = verify_tally(&srec);
     eprintln!("base {bt:?} wait {bw}\nshallow {st:?} wait {sw}");
-    assert!(bt.values().sum::<u64>() > 100, "too few verifications: {bt:?}");
+    assert!(
+        bt.values().sum::<u64>() > 100,
+        "too few verifications: {bt:?}"
+    );
     assert!(sw < bw, "a one-entry queue waited {sw} ns against {bw} ns");
     assert_ne!(st, bt, "a one-entry verification queue changed nothing");
 }
@@ -254,9 +259,16 @@ fn the_reactive_table_changes_the_gate() {
             .filter_map(|v| v.get("t").and_then(|t| t.as_u64()))
             .collect()
     };
-    eprintln!("frames {} -> {}", b.frames_transmitted, t.frames_transmitted);
+    eprintln!(
+        "frames {} -> {}",
+        b.frames_transmitted, t.frames_transmitted
+    );
     assert!(b.frames_transmitted > 100, "too few frames to compare");
-    assert_ne!(instants(&brec), instants(&trec), "table A.2 changed nothing");
+    assert_ne!(
+        instants(&brec),
+        instants(&trec),
+        "table A.2 changed nothing"
+    );
 }
 
 /// The loader refuses each new number where the run would not read it.
@@ -269,13 +281,22 @@ fn the_loader_refuses_network_settings_that_would_do_nothing() {
     let mut lte = fleet(2, 1.0);
     lte.radio.rat = Rat::LteV2xPc5;
     lte.radio.sidelink.cbr_threshold_dbm = Some(-93.0);
-    assert!(refused(&lte, "radio.sidelink.cbr_threshold_dbm"), "not -112 + 2n");
+    assert!(
+        refused(&lte, "radio.sidelink.cbr_threshold_dbm"),
+        "not -112 + 2n"
+    );
     lte.radio.sidelink.cbr_threshold_dbm = Some(-120.0);
-    assert!(refused(&lte, "radio.sidelink.cbr_threshold_dbm"), "out of range");
+    assert!(
+        refused(&lte, "radio.sidelink.cbr_threshold_dbm"),
+        "out of range"
+    );
 
     let mut us = fleet(2, 1.0);
     us.radio.dcc.reactive_table = Some("a2".to_string());
-    assert!(refused(&us, "radio.dcc.reactive_table"), "J2945/1 runs, not reactive");
+    assert!(
+        refused(&us, "radio.dcc.reactive_table"),
+        "J2945/1 runs, not reactive"
+    );
 
     let mut gn = junctions(1.0);
     gn.net.geonet = Some(Geonet {
@@ -295,11 +316,17 @@ fn the_loader_refuses_network_settings_that_would_do_nothing() {
     assert!(refused(&no_spat, "messages.spat_interval_ms"));
     let mut fast = junctions(1.0);
     fast.messages.map_interval_ms = Some(50);
-    assert!(refused(&fast, "messages.map_interval_ms"), "below the 100 ms check");
+    assert!(
+        refused(&fast, "messages.map_interval_ms"),
+        "below the 100 ms check"
+    );
 
     let mut cpm = junctions(1.0);
     cpm.messages.cpm_interval_ms = Some(200);
-    assert!(refused(&cpm, "messages.cpm_interval_ms"), "no cpm in messages.sets");
+    assert!(
+        refused(&cpm, "messages.cpm_interval_ms"),
+        "no cpm in messages.sets"
+    );
     let mut depth = junctions(1.0);
     depth.nodes.verify_queue_depth = Some(0);
     assert!(refused(&depth, "nodes.verify_queue_depth"));

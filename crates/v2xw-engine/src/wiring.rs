@@ -3693,8 +3693,14 @@ pub fn build_rsu(
         // unit that signed as a passenger car would be a unit a plausibility detector is
         // entitled to disbelieve.
         station_type: ParticipantType::Infrastructure,
-        spat_interval: infra_interval(scenario.messages.spat_interval_ms, v2xw_node::generate::SPAT_INTERVAL),
-        map_interval: infra_interval(scenario.messages.map_interval_ms, v2xw_node::generate::MAP_INTERVAL),
+        spat_interval: infra_interval(
+            scenario.messages.spat_interval_ms,
+            v2xw_node::generate::SPAT_INTERVAL,
+        ),
+        map_interval: infra_interval(
+            scenario.messages.map_interval_ms,
+            v2xw_node::generate::MAP_INTERVAL,
+        ),
         ..node_capacities(scenario)
     };
     // `verify-all` at a roadside unit, whatever the vehicles run: a unit that forwards

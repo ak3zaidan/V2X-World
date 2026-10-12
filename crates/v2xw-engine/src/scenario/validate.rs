@@ -6015,13 +6015,34 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ("radio.sidelink.noise_figure_db", sl.noise_figure_db),
         ("radio.sidelink.cbr_threshold_dbm", sl.cbr_threshold_dbm),
         ("radio.dcc.reactive_hold_ms", d.reactive_hold_ms),
-        ("net.geonet.cbf_min_time_ms", g.and_then(|g| g.cbf_min_time_ms).map(|v| v as f64)),
-        ("net.geonet.cbf_max_time_ms", g.and_then(|g| g.cbf_max_time_ms).map(|v| v as f64)),
-        ("net.geonet.max_comm_range_m", g.and_then(|g| g.max_comm_range_m)),
-        ("messages.spat_interval_ms", m.spat_interval_ms.map(|v| v as f64)),
-        ("messages.map_interval_ms", m.map_interval_ms.map(|v| v as f64)),
-        ("messages.cpm_interval_ms", m.cpm_interval_ms.map(|v| v as f64)),
-        ("nodes.verify_queue_depth", n.verify_queue_depth.map(f64::from)),
+        (
+            "net.geonet.cbf_min_time_ms",
+            g.and_then(|g| g.cbf_min_time_ms).map(|v| v as f64),
+        ),
+        (
+            "net.geonet.cbf_max_time_ms",
+            g.and_then(|g| g.cbf_max_time_ms).map(|v| v as f64),
+        ),
+        (
+            "net.geonet.max_comm_range_m",
+            g.and_then(|g| g.max_comm_range_m),
+        ),
+        (
+            "messages.spat_interval_ms",
+            m.spat_interval_ms.map(|v| v as f64),
+        ),
+        (
+            "messages.map_interval_ms",
+            m.map_interval_ms.map(|v| v as f64),
+        ),
+        (
+            "messages.cpm_interval_ms",
+            m.cpm_interval_ms.map(|v| v as f64),
+        ),
+        (
+            "nodes.verify_queue_depth",
+            n.verify_queue_depth.map(f64::from),
+        ),
     ] {
         if let Some(v) = v {
             bounded_at(path, path, v, e);
@@ -6071,8 +6092,12 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
                     .to_string(),
             ));
         }
-        let lo = g.cbf_min_time_ms.unwrap_or(v2xw_net::stack::mib::CBF_MIN_TIME_MS);
-        let hi = g.cbf_max_time_ms.unwrap_or(v2xw_net::stack::mib::CBF_MAX_TIME_MS);
+        let lo = g
+            .cbf_min_time_ms
+            .unwrap_or(v2xw_net::stack::mib::CBF_MIN_TIME_MS);
+        let hi = g
+            .cbf_max_time_ms
+            .unwrap_or(v2xw_net::stack::mib::CBF_MAX_TIME_MS);
         if tuned && lo >= hi {
             e.push(conflict(
                 "net.geonet.cbf_min_time_ms",
@@ -6081,9 +6106,21 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
         }
     }
     for (path, set, ty) in [
-        ("messages.spat_interval_ms", m.spat_interval_ms.is_some(), "spat"),
-        ("messages.map_interval_ms", m.map_interval_ms.is_some(), "map"),
-        ("messages.cpm_interval_ms", m.cpm_interval_ms.is_some(), "cpm"),
+        (
+            "messages.spat_interval_ms",
+            m.spat_interval_ms.is_some(),
+            "spat",
+        ),
+        (
+            "messages.map_interval_ms",
+            m.map_interval_ms.is_some(),
+            "map",
+        ),
+        (
+            "messages.cpm_interval_ms",
+            m.cpm_interval_ms.is_some(),
+            "cpm",
+        ),
     ] {
         if set && !m.sets.iter().any(|x| x == ty) {
             e.push(conflict(
