@@ -1958,23 +1958,22 @@ impl NativeMobility {
                 continue;
             }
             let (lane, destination, class) = (a.lane, a.destination, a.class);
-            // To the destination lane, or failing that to any other lane of the destination
-            // road, as a re-plan after a lane change does ([`Self::route_after_change`]): a
-            // lane that cannot reach the one lane the trip was bound for can usually reach
-            // its road, and without a route the vehicle stood at the end of its lane.
+            // To the destination lane, or failing that to another lane of the destination
+            // road, or to the reachable lane nearest it, as a closure detour does
+            // ([`Self::detour`]). Re-planning to the destination lane alone left a vehicle
+            // whose lane cannot reach it owing its change in the no-change zone, where it
+            // either changed lane or stood at the end of its lane (connected-intersections
+            // and Midtown, 120 s: the auditor's gap and lane-change-near-junction classes).
             let route = self
                 .plan_route(class, world, lane, destination, t1, &costs)
+                .map(|r| (r, destination))
                 .or_else(|| {
-                    let edge = world.try_lane(destination)?.edge;
-                    world.edge(edge).lanes.iter().find_map(|l| {
-                        (*l != destination && world.lane(*l).admits(class.class_mask()))
-                            .then(|| self.plan_route(class, world, lane, *l, t1, &costs))
-                            .flatten()
-                    })
+                    Self::detour(self.router_for(class), world, lane, destination, t1, &costs)
                 });
             let a = self.actors.get_mut(&id).expect("present");
-            if let Some(route) = route {
+            if let Some((route, to)) = route {
                 a.route = route;
+                a.destination = to;
                 a.route_index = 0;
                 a.planned_at = t1;
                 a.stuck_since = None;
@@ -5357,7 +5356,7 @@ impl Mobility for NativeMobility {
                 // A strategic change still owed by the no-change zone is the one change the
                 // zone allows: the vehicle waits at the end of its lane for it (the barrier
                 // in the decision pass) instead of driving on with no way out.
-                let owed = self.along_path()
+                let owed = std::env::var_os("V2XW_ABL").is_none() && self.along_path()
                     && self.strategic_target(ctx.world(), actor).is_some()
                     && actor.s_m >= actor.class.spec().length_m;
                 if self.along_path()
