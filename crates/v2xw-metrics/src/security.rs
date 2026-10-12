@@ -9,6 +9,7 @@
 //! | `verify_wait` | start − enqueue | ms | a task that never started, which has no wait to report and is therefore missing from the distribution rather than counted as an infinite wait |
 //! | `verify_queue_depth` | distribution of the depth at enqueue | count | the depth between enqueues: this is sampled at arrivals, so it is an arrival-biased estimate of the queue, not a time average |
 //! | `unverified_ratio` | delivered without verification / delivered | ratio | messages that were dropped rather than delivered |
+//! | `p2pcd_requests` | Σ P2PCD requests the nodes issued / window | 1/s | the responses, which this build does not send: a request only marks a digest-signed message whose signer was not cached |
 //! | `full_cert_share` | messages carrying a full certificate / all messages | ratio | peer-to-peer certificate distribution responses, which carry certificates outside the ordinary message flow |
 //! | `envelope_overhead` | Σ envelope bytes / Σ payload bytes | ratio | network and MAC headers, which are neither envelope nor payload; and it is a **ratio of sums**, so it carries no confidence interval |
 //! | `revocation_latency_stage` | t(stage) − t(previous stage) for one revocation | s | a revocation whose stages a protocol does not emit: a missing stage produces no sample, and invariant I-P4 is what reports the omission |
@@ -87,6 +88,8 @@ pub struct SecurityProvider {
     unverified: Proportion,
     /// Messages, and whether they carried a full certificate.
     full_cert: Proportion,
+    /// P2PCD requests the nodes issued in this window, and whether any node reported.
+    p2pcd: Option<u64>,
     /// Envelope and payload bytes, as integers.
     envelope_bytes: u64,
     payload_bytes: u64,
@@ -120,6 +123,7 @@ impl SecurityProvider {
             queue_depth: Distribution::new(),
             unverified: Proportion::new(),
             full_cert: Proportion::new(),
+            p2pcd: None,
             envelope_bytes: 0,
             payload_bytes: 0,
             envelope_messages: 0,
@@ -174,6 +178,11 @@ impl SecurityProvider {
             v2xw_core::card::Equation::new(
                 "full_cert_share",
                 "full_cert_share = messages carrying a full certificate / all messages",
+            ),
+            v2xw_core::card::Equation::new(
+                "p2pcd_requests",
+                "p2pcd_requests = Σ peer-to-peer certificate requests the nodes issued / \
+                 window length, in 1/s",
             ),
             v2xw_core::card::Equation::new(
                 "envelope_overhead",
@@ -320,6 +329,21 @@ impl SecurityProvider {
             )
             .not_accounting_for("messages whose signer identifier the producer did not record"),
             MetricDef::new(
+                "p2pcd_requests",
+                "1/s",
+                Agg::Rate,
+                Visibility::Node,
+                Quantum::COUNT,
+                "Peer-to-peer certificate distribution requests per second, all nodes: a \
+                 message signed with a certificate digest whose certificate the receiver \
+                 had not cached (IEEE 1609.2-2022 clause 8). Attaching the full \
+                 certificate more often lowers it.",
+            )
+            .with_dims([Dim::T])
+            .with_source(sec22.clone())
+            .with_min_samples(1)
+            .not_accounting_for("the responses, which this build does not send"),
+            MetricDef::new(
                 "envelope_overhead",
                 "ratio",
                 Agg::ratio("envelope bytes", "payload bytes"),
@@ -450,6 +474,9 @@ impl SecurityProvider {
     fn on_telemetry(&mut self, v: &NodeTelemetryView) {
         if let Some(d) = v.verify_queue_depth {
             self.queue_depth.observe(d as f64);
+        }
+        if let Some(n) = v.p2pcd_requests {
+            *self.p2pcd.get_or_insert(0) += u64::from(n);
         }
     }
 
@@ -606,6 +633,24 @@ impl MetricProvider for SecurityProvider {
             Dims::new(),
             SampleValue::Ratio(full_cert.estimate(self.min_samples, self.level)),
         ));
+
+        // Only a window in which some node reported its telemetry has a rate; a run whose
+        // nodes publish no telemetry reports nothing rather than a zero.
+        if let Some(n) = self.p2pcd.take() {
+            let value = match secs {
+                Some(s) => Estimate::Value {
+                    point: (n as f64) / s,
+                    n,
+                },
+                None => Estimate::Insufficient { n, required: 1 },
+            };
+            out.push(MetricSample::new(
+                &self.def("p2pcd_requests"),
+                at,
+                Dims::new(),
+                SampleValue::Scalar(value),
+            ));
+        }
 
         let env = core::mem::take(&mut self.envelope_bytes);
         let payload = core::mem::take(&mut self.payload_bytes);

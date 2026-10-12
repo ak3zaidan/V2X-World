@@ -705,6 +705,18 @@ impl NodeSecurity {
         }
     }
 
+    /// Takes back a certificate attachment whose frame never reached the air.
+    ///
+    /// A silent period after a pseudonym change discards the safety messages the node
+    /// signed during it, after signing. Had the cadence kept their certificates, the first
+    /// frame after the silence would name the new pseudonym by digest while no neighbour
+    /// had ever heard its certificate, and every receiver would miss it (a fleet of 20 with
+    /// a 2-4 s silence: 843 unknown signers became 4,051). The cadence restarts with the
+    /// first frame that is actually sent.
+    pub fn withdraw_certificate(&mut self, msg_type: MsgType) {
+        self.last_certificate.remove(msg_type.as_str());
+    }
+
     /// Decodes an SPDU, or `None` when the bytes are not a `SignedData` this profile
     /// admits.
     ///

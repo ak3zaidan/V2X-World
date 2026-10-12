@@ -1346,6 +1346,10 @@ pub struct NodeTelemetryView {
     /// Neighbours in state *verified*.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nbr_verified: Option<u16>,
+    /// Peer-to-peer certificate distribution requests this node issued in the window: a
+    /// digest-signed message whose signer was not cached (IEEE 1609.2-2022 clause 8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p2pcd_requests: Option<u32>,
 }
 
 impl ChannelView for NodeTelemetryView {

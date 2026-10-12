@@ -116,6 +116,19 @@ fn node_lost(m: &Measured, cause: &str) -> usize {
         .count()
 }
 
+/// A rate metric's events over the whole run: the sum of each window's sample count, so a
+/// busy window is not over-weighted the way a count-weighted mean of rates would be.
+fn events(m: &Measured, metric: &str) -> u64 {
+    m.rec
+        .records()
+        .iter()
+        .filter(|(_, r)| r.channel == "metric.sample")
+        .filter_map(|(_, r)| serde_json::from_slice::<MetricSample>(&r.json).ok())
+        .filter(|s| s.metric == metric)
+        .map(|s| s.value.n())
+        .sum()
+}
+
 fn pdr(r: &RunReport) -> f64 {
     r.receptions_ok as f64 / r.reception_attempts.max(1) as f64
 }
@@ -258,6 +271,17 @@ fn the_certificate_attach_cadence_moves_overhead() {
     assert!(all.report.air_bytes.security > hz.report.air_bytes.security);
     assert!(hz.report.air_bytes.security > slow.report.air_bytes.security);
     assert!(all.get("security_overhead") > slow.get("security_overhead"));
+    // Fewer certificates on the air means more digests whose certificate a receiver has
+    // not cached, and so more peer-to-peer certificate requests (IEEE 1609.2 clause 8).
+    let p2pcd = |m: &Measured| events(m, "p2pcd_requests");
+    println!(
+        "ROW p2pcd: every msg {}, 1 Hz {}, 5 s {}",
+        p2pcd(all),
+        p2pcd(hz),
+        p2pcd(slow)
+    );
+    assert!(p2pcd(all) < p2pcd(hz), "a certificate on every message needs no request");
+    assert!(p2pcd(hz) < p2pcd(slow));
 }
 
 /// Verify-all against verify-on-demand: on demand verifies only what an application acts
@@ -351,6 +375,58 @@ fn the_pseudonym_period_moves_changes_and_unknown_signers() {
     );
     assert!(f.report.phase2.pseudonym_changes > s.report.phase2.pseudonym_changes);
     assert!(unknown(&f) > unknown(&s));
+}
+
+/// A pseudonym change every 5 s against the same change followed by a 2-4 s radio silence
+/// (Huang et al., "Silent cascade", IEEE SECON 2005): the observer (the Wiedersheim et al.
+/// WONS 2010 kinematic tracker, global by default) bridges fewer changes after a silence,
+/// so linkability falls. The silence also costs frames on the air. A short period also
+/// raises the peer-to-peer certificate requests against the 300 s baseline: every change
+/// is a certificate the neighbours have not cached until its next attachment.
+#[test]
+fn the_pseudonym_strategy_moves_linkability_and_p2pcd() {
+    // 20 s, so the 300 s baseline changes nothing before the first i-period ends, and the
+    // 1 s certificate cadence (J2945/1's order) is well inside the 5 s period: with a 5 s
+    // cadence the count would follow where each change falls in the cadence rather than
+    // how often changes happen.
+    let base = backend(20, 20.0);
+    let mut time = base.clone();
+    time.security.pseudonym_change.period_s = Some(5.0);
+    let mut silent = time.clone();
+    silent.security.pseudonym_change.silent_period_s = Some(vec![2.0, 4.0]);
+    let b = run(base);
+    let t = run(time);
+    let q = run(silent);
+    let linkability = |m: &Measured| {
+        m.report.phase2.privacy_links_correct as f64
+            / m.report.phase2.pseudonym_changes.max(1) as f64
+    };
+    for (name, m) in [("300 s", &b), ("5 s", &t), ("5 s + silence", &q)] {
+        println!(
+            "ROW strategy {name}: changes {} links {}/{} linkability {:.3} metric {:.3} \
+             p2pcd {} unknown {} frames {}",
+            m.report.phase2.pseudonym_changes,
+            m.report.phase2.privacy_links_correct,
+            m.report.phase2.privacy_links_claimed,
+            linkability(m),
+            m.last.get("linkability").copied().unwrap_or(f64::NAN),
+            events(m, "p2pcd_requests"),
+            node_lost(m, "unknown-signer"),
+            m.report.frames_transmitted
+        );
+    }
+    assert!(t.report.phase2.pseudonym_changes > b.report.phase2.pseudonym_changes);
+    assert!(t.get("p2pcd_requests") > b.get("p2pcd_requests"));
+    assert!(t.report.phase2.privacy_links_correct > 0, "the observer links some changes");
+    assert!(linkability(&q) < linkability(&t), "a silence hides the change");
+    assert!(q.report.frames_transmitted < t.report.frames_transmitted);
+    // The frames a silence discards were signed, but their certificates reached no one:
+    // the first frame after it must still carry one. Before the fix the cadence counted
+    // them and unknown signers rose from 843 to 4,051.
+    assert!(
+        node_lost(&q, "unknown-signer") <= node_lost(&t, "unknown-signer"),
+        "a silence must not hide the new certificate"
+    );
 }
 
 /// 5 Hz against 10 Hz against 20 Hz BSMs: frames, bytes and the channel busy ratio rise
