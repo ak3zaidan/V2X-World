@@ -4771,6 +4771,8 @@ impl Mobility for NativeMobility {
             // The stop line behind the binding virtual obstacle, when a junction's "stop"
             // is what binds: how much room there is up to the line itself.
             let mut binding_stop_line: Option<f64> = None;
+            // A signal's "stop" hidden behind a car ahead that is going on (see below).
+            let mut signal_stop: Option<(LeaderView, f64)> = None;
             for junction in self.junctions_ahead(world, actor, t0) {
                 let conflicts = self.conflicts_for(world, &junction, &ego, &claims, t0);
                 let mut decision = self.entry_decision(world, &ego, &junction, &conflicts);
@@ -4912,6 +4914,14 @@ impl Mobility for NativeMobility {
                 leader = Self::closest(leader, virtual_leader);
                 if leader != before {
                     binding_stop_line = Some(junction.stop_line_gap_m);
+                } else if let Some(v) = virtual_leader
+                    && matches!(
+                        junction.signal,
+                        Some(SignalState::Red | SignalState::RedAmber | SignalState::Amber)
+                    )
+                    && signal_stop.is_none()
+                {
+                    signal_stop = Some((v, junction.stop_line_gap_m));
                 }
             }
             // While a lane change is under way the body is still partly in the lane being
@@ -5206,6 +5216,32 @@ impl Mobility for NativeMobility {
                 if let Some(limit) = merge_limit {
                     accel = accel.min(limit);
                 }
+            }
+            // A red or amber the driver decided to stop for binds even while a car ahead,
+            // nearer than the line, is going on through it: following that car alone, a
+            // driver 37 m from the line at 10 m/s on the amber's onset held its speed 12 m
+            // behind a leader clearing the junction, and once the leader had gone was too
+            // close to stop and entered on red (peak-density grid, 20,000 veh/h). Drivers
+            // stop for the signal, not for the car in front (UVC §11-202(c)); the stop is
+            // braked into as any stop line is ([`static_obstacle_accel`]).
+            if along
+                && let Some((stop, line)) = signal_stop
+                && leader.is_some_and(|l| l.is_vehicle() && l.gap_m < stop.gap_m)
+            {
+                let mut stop = stop;
+                stop.gap_m = stop
+                    .gap_m
+                    .max(line - STOP_LINE_MARGIN_M + actor.driver.min_gap_m);
+                let slack = (line - 0.2) - stop.gap_m;
+                let a_stop = static_obstacle_accel(
+                    self.cf
+                        .accel(&ego_capped, Some(&stop), &lane_view, &self.weather),
+                    ego.speed_mps,
+                    stop.gap_m,
+                    actor.driver.min_gap_m,
+                    slack,
+                );
+                accel = accel.min(a_stop);
             }
             // Any braking short of an emergency builds at a service-brake rate, whatever
             // asked for it — a car ahead braking, a merge partner, a pedestrian stepping
