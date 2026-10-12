@@ -3545,3 +3545,18 @@ Short runs of the attack and credential scenarios, read from `run-report.json` a
   - Pseudonym changes are counted only with a backend protocol.
   - There is no Part II size knob.
 - Checks: v2xw-node tests; v2xw-engine lib `scenario` tests; sensitivity_security 14/14.
+
+## 2026-10-12 — round 10 integration (sensitivity: radio, security, traffic)
+
+- Merged in order: sens-radio (27 rows, 4 radio specs), sens-security (16 rows; P2PCD
+  metric, `messages.path_history_points`, silent-period cadence fix), sens-traffic
+  (`world.source.params.ew_green_share`, default 0.5 keeps worlds and digests unchanged).
+- Only conflict: this file (both sections kept). `cargo check --workspace --tests` clean;
+  engine lib scenario/publish/guide 31/31; sensitivity_radio 27/27, sensitivity_security
+  16/16 (1 ignored), sensitivity_traffic 14/14, network_audit_config 7/7; node and world
+  lib tests pass. Release `v2xw-cli` builds; `run-sim.sh` boots with the agent on.
+- Output shifts: US DSRC runs (generation-phase first step, J2945/1 nav tracking);
+  `node.telemetry` gains `p2pcd_requests`, so recordings differ.
+- Open: dense saturated runs scale badly (~n^3 suspected); 5 Hz CBR reads ~0 for a fleet
+  spawned at once; `ew_green_share` bound not checked by validate.rs; v2xw-radio clippy
+  error (bler_nr.rs FRAC_1_PI) blocks clippy on the engine.
