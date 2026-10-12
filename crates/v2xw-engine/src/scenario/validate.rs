@@ -1315,6 +1315,16 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the pedestrian clearance walking speed",
     },
+    // SUMO netconvert `--tls.join-dist` defaults to 20 m. Above 40 m two junctions a
+    // short block apart would merge, and the importer refuses any cluster wider than
+    // 45 m (`v2xw_world::osm::JOIN_MAX_SPREAD_M`) anyway.
+    Bound {
+        path: "world.signals.join_m",
+        lo: 0.0,
+        hi: 40.0,
+        exclusive_lo: false,
+        what: "the signalised-junction join distance",
+    },
     // GNSS: 0.01 outliers/s of 12 m and 0.006 bursts/s are the legacy engine's draws
     // (04-models.md §3.8); the bounds are guards around them.
     Bound {
@@ -2950,6 +2960,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                grid). An imported city's plans come from the map, not from this.",
     },
     KeyStatus {
+        path: "world.signals.join_m",
+        status: Status::Wired,
+        note: "Signalised junctions joined into one, with one plan, when the road between \
+               them is at most this long (netconvert --tls.join; SUMO's --tls.join-dist \
+               default is 20 m). Unset joins none, so an imported world builds as before. \
+               Stops a 12-16 m link between two plans filling on one plan's turns and \
+               holding cars on the other's green.",
+    },
+    KeyStatus {
         path: "world.signals.all_red_s",
         status: Status::Wired,
         note: "Floor under each phase's all-red in an imported world's plans.",
@@ -3671,6 +3690,7 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "world.signals.pedestrian_speed_mps",
             ws.pedestrian_speed_mps,
         ),
+        ("world.signals.join_m", ws.join_m),
     ] {
         if let Some(v) = v {
             bounded_at(path, path, v, e);

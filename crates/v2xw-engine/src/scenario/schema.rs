@@ -724,6 +724,11 @@ pub struct WorldSignalOptions {
     /// (3.5 ft/s, MUTCD 2009 §4E.06). Imported worlds only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pedestrian_speed_mps: Option<f64>,
+    /// Joins two signalised junctions whose connecting road is at most this long, metres,
+    /// into one junction with one signal plan (`netconvert --tls.join`, whose
+    /// `--tls.join-dist` default is 20 m). Unset joins none. Imported worlds only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join_m: Option<f64>,
 }
 
 impl Default for WorldSignalOptions {
@@ -735,6 +740,7 @@ impl Default for WorldSignalOptions {
             all_red_s: None,
             pedestrian_walk_s: None,
             pedestrian_speed_mps: None,
+            join_m: None,
         }
     }
 }

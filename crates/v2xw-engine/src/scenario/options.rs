@@ -1543,6 +1543,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.vehicles.drivers.bicycle" => "Cyclist riding",
         "world.signals.cycle_s" => "Signal cycle length",
         "world.signals.all_red_s" => "All-red between phases (minimum)",
+        "world.signals.join_m" => "Join traffic lights closer than",
         "world.signals.pedestrian_walk_s" => "Pedestrian walk interval",
         "world.signals.pedestrian_speed_mps" => "Pedestrian clearance walking speed",
         "actors.vehicles.gnss" => "GNSS receivers",

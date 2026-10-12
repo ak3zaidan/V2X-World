@@ -309,6 +309,9 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
             if let Some(v) = ws.pedestrian_speed_mps {
                 osm.signals.pedestrian_speed_mps = v;
             }
+            if let Some(v) = ws.join_m {
+                osm.signals.join_m = v;
+            }
             if let Some(b) = bbox {
                 osm = osm.bbox(*b);
             }

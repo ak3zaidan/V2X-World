@@ -610,6 +610,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "7 s (MUTCD minimum); 4 to 10 s.",
     },
     Basic {
+        path: "world.signals.join_m",
+        explain: "Two traffic lights this close together on an imported map run as one junction with one plan, so cars are never fed into the short gap between them faster than it empties.",
+        recommended: "Off (0) as imported; 20 m (SUMO's netconvert default); 10 to 30 m.",
+    },
+    Basic {
         path: "world.signals.pedestrian_speed_mps",
         explain: "The walking speed the flashing don't-walk time is timed for: slower gives pedestrians longer and drivers shorter greens.",
         recommended: "1.067 m/s (MUTCD 3.5 ft/s); 0.91 m/s near schools or seniors.",
