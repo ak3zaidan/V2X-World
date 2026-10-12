@@ -2617,13 +2617,28 @@ impl NativeMobility {
             }
         }
         for a in self.actors.values() {
-            if a.lane != trip.origin {
+            // A vehicle changing out of the origin lane is already counted on the lane it
+            // is entering, but its body is still partly on this one: placed beside it, a
+            // car was dropped at rest across a car 0.6 m into its change, which braked at
+            // 8.5 m/s² on top of it (`tests/traffic_invariants.rs`, the dense grid).
+            let s_here = if a.lane == trip.origin {
+                a.s_m
+            } else if self.along_path()
+                && let Some(tr) = a.transition
+                && tr.switched
+                && tr.from == trip.origin
+            {
+                a.s_m + tr.from_s_delta
+            } else {
                 continue;
-            }
-            let ahead = (a.s_m - a.class.spec().length_m) - front;
-            let behind = (front - length) - a.s_m;
+            };
+            let ahead = (s_here - a.class.spec().length_m) - front;
+            let behind = (front - length) - s_here;
             if ahead.max(behind) < self.params.insertion_gap_m {
                 return Insertion::Occupied;
+            }
+            if a.lane != trip.origin {
+                continue;
             }
             // A vehicle behind the insertion point must be able to follow the newcomer
             // without an emergency stop: its standstill gap plus its time headway at its
