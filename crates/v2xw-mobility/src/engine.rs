@@ -1162,7 +1162,9 @@ impl Actor {
     fn lateral_rate_at(&self, t: SimTime) -> f64 {
         self.transition.map_or(0.0, |tr| {
             let dur = tr.duration.as_secs_f64();
-            if dur <= 0.0 {
+            // Held while the vehicle stands (the lateral pass of the step): no sideways
+            // motion, so no heading swing either.
+            if dur <= 0.0 || (tr.switched && self.speed_mps <= STANDSTILL_MPS) {
                 return 0.0;
             }
             let p = (ns_to_secs(t.saturating_sub(tr.started)) / dur).clamp(0.0, 1.0);
@@ -5686,6 +5688,16 @@ impl Mobility for NativeMobility {
 
             // Advance the lateral transition.
             if let Some(mut transition) = actor.transition {
+                // A vehicle brought to a stand part-way across does not go on sliding
+                // sideways: a car cannot move across the road without moving along it, and
+                // the transition is a function of time, so it is held while the vehicle
+                // stands. Left running, a 7 m truck stopped 9 m into a pull-out round a
+                // taxi swung its heading from 94 to 133 degrees on the spot and swept its
+                // body into the queue in the next lane (`tests/realism.rs`, kerbside on:
+                // 206 overlap steps).
+                if transition.switched && actor.speed_mps <= STANDSTILL_MPS {
+                    transition.started = transition.started.saturating_add(t1.saturating_sub(t0));
+                }
                 let elapsed = ns_to_secs(t1.saturating_sub(transition.started));
                 let total = transition.duration.as_secs_f64().max(1e-9);
                 if !transition.switched {
