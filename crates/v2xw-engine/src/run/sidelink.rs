@@ -377,6 +377,10 @@ fn apply_tuning(
     if let Some(dbm) = t.rsrp_threshold_dbm {
         params.rsrp_threshold_dbm = dbm;
     }
+    // network audit
+    if let Some(dbm) = t.cbr_threshold_dbm {
+        params.cbr_threshold_dbm = dbm;
+    }
     if let Some(p) = t.candidate_percent {
         params.tx_percentage = match p {
             35 => v2xw_radio::TxPercentage::P35,
@@ -476,6 +480,8 @@ impl SidelinkAccess {
         let phy = SidelinkPhy::new(tier, pool.clone()).with_sensitivity_dbm(
             refsens_cutoff.then_some(v2xw_radio::cv2x::SIDELINK_SENSITIVITY_DBM),
         );
+        // network audit: `radio.sidelink.noise_figure_db` over TR 36.885's 9 dB.
+        let phy = phy.with_noise_figure_db(crate::wiring::sidelink_noise_figure_db(scenario));
         let phy_high = scenario
             .radio
             .tiers

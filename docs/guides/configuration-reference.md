@@ -130,6 +130,8 @@ Refused on an 802.11p run.
 | `radio.sidelink.sensing` **new** | on | bool | `false` is the random-selection baseline (Ali 2021 §II.1). |
 | `radio.sidelink.candidate_percent` **new** | 20 | 20 (LTE); 20, 35, 50 (NR) | Share of the selection window that must survive exclusion. |
 | `radio.sidelink.selection_window_ms` **new** | profile's T2 | 20-100 (LTE), 1-100 (NR) | End of the selection window T2. |
+| `radio.sidelink.noise_figure_db` **new** | 9 dB (TR 36.885 Annex A.1.1) | 0 to 15 dB | The UE receiver's noise figure: every sidelink noise floor and the candidate range. |
+| `radio.sidelink.cbr_threshold_dbm` **new** | -94 dBm | -112 to -8 dBm, 2 dB steps (TS 36.331 `sl-ThresS-RSSI-CBR`) | S-RSSI above which a sub-channel counts busy in the CBR that the CR limits and metrics read. |
 
 Numerology is fixed by the profile (µ = 1, 30 kHz for NR), and mode 2 (autonomous) is
 the only mode. See below.
@@ -147,6 +149,8 @@ the only mode. See below.
 | `radio.dcc.density_coefficient` **new** | 25 | 1 to 200 vehicles | J2945/1 `B`. |
 | `radio.dcc.power_control` **new** | on (J2945/1), off (J3161/1) | bool | J2945/1 §6.3.8 power control. |
 | `radio.dcc.min_power_dbm` **new** | 10 | -10 to 20 dBm | J2945/1 `vRP_Min`. |
+| `radio.dcc.reactive_table` **new** | `a1` | `a1`, `a2` | TS 102 687 V1.2.1 Annex A Table A.1 (T_on up to 1 ms) or A.2 (up to 500 µs). |
+| `radio.dcc.reactive_hold_ms` **new** | 0 | 0 to 5000 ms | Reactive state-hold time (no hysteresis in the tables). |
 
 A number for an algorithm the run does not use is refused. For example, `cbr_target`
 under the US default J2945/1 is refused, and so is any number when `enabled: false`.
@@ -161,6 +165,8 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `messages.generator` `generator/cam-en302637-2` params | EN 302 637-2 §6.1.3 | `t_gen_cam_min_ms` 100, `t_gen_cam_max_ms` 1000, thresholds 4°, 4 m, 0.5 m/s, `n_gen_cam` 3 | ETSI CAM triggers. |
 | `messages.generator` `generator/timing-phase-jitter` | 100 ms phase window, 10 ms jitter (5 ms under J2945/1) | ms | Desynchronisation. |
 | `messages.codec_tier` | `uper` | `uper`, `size-model` | Real encoding or a size model. |
+| `messages.spat_interval_ms`, `messages.map_interval_ms` **new** | 100 / 1000 ms (CTI 4501) | 100 to 10 000 / 60 000 ms | Roadside SPaT and MAP periods. Refused without that message in `sets`. |
+| `messages.cpm_interval_ms` **new** | 100 ms | 100 to 1000 ms | `T_GenCpm` (ETSI TS 103 324 §6.1.2.3). Refused without `cpm` in `sets`. |
 | `security.signer_id_policy.full_cert_every_ms` | 1000 | ms | Certificate attach cadence. A digest is sent otherwise (`digest_otherwise`). 0 attaches the certificate to every message. |
 
 ## Networking (`net`)
@@ -175,6 +181,8 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `net.geonet.area_radius_m` | 1000 | 0 to 1784 m | DENM destination area. |
 | `net.geonet.repetition_interval_ms` / `_duration_ms` | 1000 / 5000 | 0 to 60 s / 0 to 600 s | DENM repetition (EN 302 637-3). |
 | `net.geonet.keep_alive_forwarding` | false | bool | Keep-alive forwarding. |
+| `net.geonet.cbf_min_time_ms`, `.cbf_max_time_ms` **new** | 1 / 100 ms | 0 to 1000 ms, min below max | `itsGnGeoBroadcastCbfMinTime` / `MaxTime` (EN 302 636-4-1 Annex H). Refused unless a forwarding algorithm is `cbf`. |
+| `net.geonet.max_comm_range_m` **new** | 1000 m | (0, 5000] m | `DIST_MAX`, where the CBF timer reaches its minimum (Annex H). |
 | `net.fragmenter` | none | model | Fragmentation over the MTU. |
 
 ## Security (`security`, `nodes`)
@@ -188,6 +196,7 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `security.pseudonym_change.strategy` | `time` | `time`, `distance`, `c2c-cc`, `mix-zone`, `silent` | Pseudonym strategy, with `period_s` (1 s to 1 day), `distance_m`, `silent_period_s`, `mix_zone_radius_m`. |
 | `nodes.default_obu`, `nodes.per_class` | profile | shipped `obu/*` profiles | Crypto hardware profile: signing and verification service times. |
 | `nodes.compute_tier` | `medium` | tiers | Queueing of crypto work. |
+| `nodes.verify_queue_depth` **new** | 64 | 1 to 4096 | Verification queue. A full queue drops (`verify_overflow`). |
 
 ## Traffic (`actors.vehicles`, `world.signals`, `apps`)
 
@@ -235,6 +244,7 @@ holds those drivers.
 | Sub-channel size and count | Fixed by the profile (J3161/1, EN 303 613, EN 303 798), because the BLER curves were computed for those pools. |
 | Certificate attach on new neighbour | `security.signer_id_policy` is cadence-based only. |
 | Certificate cache size | The node's certificate store is unbounded. A bounded cache with eviction is not modelled. |
+| `prioritized` horizon, `on-demand` threshold | The verification queue is FIFO and never reads the policy's priority, and no application sets a message's relevance, so neither number would change a run (see `config-inventory-network.md`). |
 | LIMERIC as such | The ETSI adaptive approach is TS 102 687's LIMERIC-derived algorithm, and its α, β and target are above. |
 | Signal timing plan per junction | Fixed-time plans come from the map, and only coordination is configurable. |
 
@@ -252,3 +262,8 @@ side on the same seed for each area:
 - **Messages:** 5 Hz halves the frames.
 - **Run:** the warm-up drops early samples.
 - **Loader:** it refuses the meaningless settings.
+
+`crates/v2xw-engine/tests/network_audit_config.rs` does the same for the network audit's
+fields: sidelink noise figure and CBR threshold, the reactive DCC table, CBF timers, SPaT, MAP
+and CPM intervals, the verification queue depth, and the loader's refusals. Every number found in
+the network crates, exposed or kept and why, is listed in `config-inventory-network.md`.

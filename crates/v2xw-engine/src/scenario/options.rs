@@ -106,6 +106,15 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "No pattern (isotropic)",
             "The same gain in every direction: the textbook simplification.",
         ),
+        // network audit
+        ("radio.dcc.reactive_table", "a1") => w(
+            "Table A.1 (frames up to 1 ms)",
+            "10 Hz relaxed down to 1 Hz restrictive (TS 102 687 V1.2.1 Table A.1). The default.",
+        ),
+        ("radio.dcc.reactive_table", "a2") => w(
+            "Table A.2 (frames up to 500 µs)",
+            "20 Hz relaxed down to 1 Hz restrictive, for short frames (Table A.2).",
+        ),
         ("radio.mac.periodic_access_category" | "radio.mac.event_access_category", "vo") => w(
             "Voice (AC_VO, highest)",
             "The shortest wait (AIFSN 2, CWmin 3): where SAE J2945/1 puts the BSM and EN 302 663 the DENM.",
@@ -1397,6 +1406,18 @@ pub fn title(path: &str) -> Option<&'static str> {
         "radio.channel_model.vehicle_blockage" => "Vehicles block the signal",
         "radio.sidelink.candidate_percent" => "Candidate resources kept",
         "radio.sidelink.selection_window_ms" => "Selection window end (T2)",
+        // network audit
+        "radio.sidelink.noise_figure_db" => "Receiver noise figure (C-V2X)",
+        "radio.sidelink.cbr_threshold_dbm" => "Busy threshold for the CBR (C-V2X)",
+        "radio.dcc.reactive_table" => "Reactive state table (ETSI)",
+        "radio.dcc.reactive_hold_ms" => "Reactive state hold time (ETSI)",
+        "net.geonet.cbf_min_time_ms" => "Shortest forwarding wait (CBF)",
+        "net.geonet.cbf_max_time_ms" => "Longest forwarding wait (CBF)",
+        "net.geonet.max_comm_range_m" => "Assumed forwarding range (DIST_MAX)",
+        "messages.spat_interval_ms" => "Signal phase (SPaT) interval",
+        "messages.map_interval_ms" => "Intersection map (MAP) interval",
+        "messages.cpm_interval_ms" => "Collective perception (CPM) check interval",
+        "nodes.verify_queue_depth" => "Verification queue length",
         "radio.tiers.propagation" => "Signal propagation detail",
         "radio.tiers.phy" => "Physical layer detail",
         "radio.tiers.mac" => "Channel access detail",

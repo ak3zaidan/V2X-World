@@ -298,6 +298,8 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("radio.mac.aifsn_vi", "slots"),
     ("radio.mac.queue_length", "frames"),
     ("radio.dcc.density_coefficient", "vehicles"),
+    // network audit
+    ("nodes.verify_queue_depth", "messages"),
 ];
 
 /// The numeric leaves that genuinely have no unit, declared rather than left blank.

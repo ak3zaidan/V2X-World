@@ -48,6 +48,8 @@ const GN_FORWARDING: [&str; 2] = ["on-air", "overlay"];
 /// How `net.access_categories` maps messages onto EDCA queues.
 const NET_ACCESS_CATEGORIES: [&str; 2] = ["single", "etsi-profiles"];
 const DCC_CBR: [&str; 2] = ["local", "global"];
+/// ETSI reactive DCC's tables, TS 102 687 V1.2.1 Annex A (network audit).
+const DCC_REACTIVE_TABLES: [&str; 2] = ["a1", "a2"];
 /// The envelope profiles `v2xw-sec` implements.
 const ENVELOPES: [&str; 2] = ["ieee1609.2", "etsi103097"];
 /// The verification policies `v2xw-node` registers.
@@ -950,6 +952,81 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the attacker fraction",
     },
+    // network audit: bounds of the fields the 2026-10-11 network-parameter audit exposed
+    // (docs/guides/config-inventory-network.md). Sidelink noise figure as radio.phy's;
+    // sl-ThresS-RSSI-CBR is -112 + 2n dBm, n = 0..45 (TS 36.331 SL-CBR-CommonTxConfig);
+    // the GN MIB's timers and range are 16-bit in EN 302 636-4-1 Annex H, bounded here to
+    // what a study uses; SPaT and MAP no faster than the 100 ms generation check.
+    Bound {
+        path: "radio.sidelink.noise_figure_db",
+        lo: 0.0,
+        hi: 15.0,
+        exclusive_lo: false,
+        what: "the sidelink noise figure",
+    },
+    Bound {
+        path: "radio.sidelink.cbr_threshold_dbm",
+        lo: -112.0,
+        hi: -8.0,
+        exclusive_lo: false,
+        what: "the sidelink CBR threshold",
+    },
+    Bound {
+        path: "radio.dcc.reactive_hold_ms",
+        lo: 0.0,
+        hi: 5_000.0,
+        exclusive_lo: false,
+        what: "the reactive DCC state-hold time",
+    },
+    Bound {
+        path: "net.geonet.cbf_min_time_ms",
+        lo: 0.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "the CBF minimum time",
+    },
+    Bound {
+        path: "net.geonet.cbf_max_time_ms",
+        lo: 0.0,
+        hi: 1_000.0,
+        exclusive_lo: true,
+        what: "the CBF maximum time",
+    },
+    Bound {
+        path: "net.geonet.max_comm_range_m",
+        lo: 0.0,
+        hi: 5_000.0,
+        exclusive_lo: true,
+        what: "the GeoNetworking DIST_MAX",
+    },
+    Bound {
+        path: "messages.spat_interval_ms",
+        lo: 100.0,
+        hi: 10_000.0,
+        exclusive_lo: false,
+        what: "the SPaT interval",
+    },
+    Bound {
+        path: "messages.map_interval_ms",
+        lo: 100.0,
+        hi: 60_000.0,
+        exclusive_lo: false,
+        what: "the MAP interval",
+    },
+    Bound {
+        path: "messages.cpm_interval_ms",
+        lo: 100.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "the CPM generation interval",
+    },
+    Bound {
+        path: "nodes.verify_queue_depth",
+        lo: 1.0,
+        hi: 4_096.0,
+        exclusive_lo: false,
+        what: "the verification queue depth",
+    },
 ];
 
 /// One closed set of values the loader accepts and the published schema offers.
@@ -1016,6 +1093,8 @@ pub static CHOICES: &[Choices] = &[
         narrowed_to: &REAL_SIGNATURES,
     },
     choices("security.kem", &crate::signature::KEMS),
+    // network audit
+    choices("radio.dcc.reactive_table", &DCC_REACTIVE_TABLES),
 ];
 
 /// How much of a scenario key this build actually acts on.
@@ -2429,6 +2508,31 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "The parameter sweep. Expanded by the experiment runner, not by a single \
                run: the engine clears it before running a cell.",
     },
+    // network audit
+    KeyStatus {
+        path: "messages.spat_interval_ms",
+        status: Status::Wired,
+        note: "A roadside unit's SPaT period (CTI 4501's 100 ms unless set). Refused \
+               unless messages.sets has spat.",
+    },
+    KeyStatus {
+        path: "messages.map_interval_ms",
+        status: Status::Wired,
+        note: "A roadside unit's MAP period (CTI 4501's 1 s unless set). Refused unless \
+               messages.sets has map.",
+    },
+    KeyStatus {
+        path: "messages.cpm_interval_ms",
+        status: Status::Wired,
+        note: "T_GenCpm, how often a vehicle checks whether a CPM is due (TS 103 324's \
+               100 ms unless set). Refused unless messages.sets has cpm.",
+    },
+    KeyStatus {
+        path: "nodes.verify_queue_depth",
+        status: Status::Wired,
+        note: "Each node's verification queue depth (64 unless set); a full queue drops \
+               (or, under prioritized, sheds the oldest).",
+    },
 ];
 
 /// The status entry that governs `path`: the longest matching prefix.
@@ -2484,6 +2588,7 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     scale(s, &mut e);
     security_backend(s, &mut e);
     e.extend(crate::driving::validate(s));
+    network_audit(s, &mut e);
     unreachable_keys(s, &mut e);
     e
 }
@@ -5324,4 +5429,97 @@ fn split_indices(segment: &str) -> Option<(&str, Vec<usize>)> {
         rest = &rest[close + 1..];
     }
     Some((name, indices))
+}
+
+// network audit ---------------------------------------------------------------------------
+
+/// The fields the network-parameter audit exposed: ranges, and the refusal of a value the
+/// run would not read (docs/guides/config-inventory-network.md).
+fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let sl = &s.radio.sidelink;
+    let d = &s.radio.dcc;
+    let g = s.net.geonet.as_ref();
+    let m = &s.messages;
+    let n = &s.nodes;
+    for (path, v) in [
+        ("radio.sidelink.noise_figure_db", sl.noise_figure_db),
+        ("radio.sidelink.cbr_threshold_dbm", sl.cbr_threshold_dbm),
+        ("radio.dcc.reactive_hold_ms", d.reactive_hold_ms),
+        ("net.geonet.cbf_min_time_ms", g.and_then(|g| g.cbf_min_time_ms).map(|v| v as f64)),
+        ("net.geonet.cbf_max_time_ms", g.and_then(|g| g.cbf_max_time_ms).map(|v| v as f64)),
+        ("net.geonet.max_comm_range_m", g.and_then(|g| g.max_comm_range_m)),
+        ("messages.spat_interval_ms", m.spat_interval_ms.map(|v| v as f64)),
+        ("messages.map_interval_ms", m.map_interval_ms.map(|v| v as f64)),
+        ("messages.cpm_interval_ms", m.cpm_interval_ms.map(|v| v as f64)),
+        ("nodes.verify_queue_depth", n.verify_queue_depth.map(f64::from)),
+    ] {
+        if let Some(v) = v {
+            bounded_at(path, path, v, e);
+        }
+    }
+    // The sidelink pair rides on `radio.sidelink`, which `radio_tuning` already refuses on
+    // an 802.11p run.
+    if let Some(t) = sl.cbr_threshold_dbm
+        && ((t + 112.0) / 2.0).fract().abs() > 1e-9
+    {
+        e.push(conflict(
+            "radio.sidelink.cbr_threshold_dbm",
+            format!("{t} dBm is not -112 + 2n dBm (TS 36.331 sl-ThresS-RSSI-CBR)"),
+        ));
+    }
+    if let Some(t) = &d.reactive_table {
+        one_of("radio.dcc.reactive_table", t, &DCC_REACTIVE_TABLES, e);
+    }
+    if d.reactive_table.is_some() || d.reactive_hold_ms.is_some() {
+        let reactive = matches!(
+            crate::wiring::build_dcc(s),
+            Some(crate::wiring::EngineDcc::Reactive(_))
+        );
+        if !reactive {
+            let path = if d.reactive_table.is_some() {
+                "radio.dcc.reactive_table"
+            } else {
+                "radio.dcc.reactive_hold_ms"
+            };
+            e.push(conflict(
+                path,
+                "configures ETSI reactive congestion control, which this run does not use; \
+                 set radio.models.dcc to dcc/etsi/reactive-ts102687"
+                    .to_string(),
+            ));
+        }
+    }
+    if let Some(g) = g {
+        let tuned = g.cbf_min_time_ms.is_some()
+            || g.cbf_max_time_ms.is_some()
+            || g.max_comm_range_m.is_some();
+        if tuned && g.area_forwarding != "cbf" && g.non_area_forwarding != "cbf" {
+            e.push(conflict(
+                "net.geonet",
+                "sets CBF timers, and neither area_forwarding nor non_area_forwarding is \
+                 'cbf', so no contention timer runs"
+                    .to_string(),
+            ));
+        }
+        let lo = g.cbf_min_time_ms.unwrap_or(v2xw_net::stack::mib::CBF_MIN_TIME_MS);
+        let hi = g.cbf_max_time_ms.unwrap_or(v2xw_net::stack::mib::CBF_MAX_TIME_MS);
+        if tuned && lo >= hi {
+            e.push(conflict(
+                "net.geonet.cbf_min_time_ms",
+                format!("{lo} ms is not below the CBF maximum time {hi} ms"),
+            ));
+        }
+    }
+    for (path, set, ty) in [
+        ("messages.spat_interval_ms", m.spat_interval_ms.is_some(), "spat"),
+        ("messages.map_interval_ms", m.map_interval_ms.is_some(), "map"),
+        ("messages.cpm_interval_ms", m.cpm_interval_ms.is_some(), "cpm"),
+    ] {
+        if set && !m.sets.iter().any(|x| x == ty) {
+            e.push(conflict(
+                path,
+                format!("sets the {ty} period, and messages.sets does not include {ty}"),
+            ));
+        }
+    }
 }

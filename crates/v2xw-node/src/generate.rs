@@ -125,6 +125,10 @@ pub struct MessageSchedule {
     /// When the last SPaT and MAP were asked for, on the node's clock.
     last_spat: Option<SimTime>,
     last_map: Option<SimTime>,
+    /// The SPaT and MAP periods (network audit: `messages.spat_interval_ms`,
+    /// `messages.map_interval_ms`); CTI 4501's 10 Hz and 1 Hz by default.
+    spat_interval: Duration,
+    map_interval: Duration,
     generated: u32,
 }
 
@@ -137,8 +141,19 @@ impl MessageSchedule {
             bsm: BsmGenerator::new(BsmGenParams::j2945_1()),
             last_spat: None,
             last_map: None,
+            spat_interval: SPAT_INTERVAL,
+            map_interval: MAP_INTERVAL,
             generated: 0,
         }
+    }
+
+    /// The same schedule with other SPaT and MAP periods (network audit). A period
+    /// shorter than [`MessageSchedule::check_interval`] is served at the check interval.
+    #[must_use]
+    pub fn with_infra_intervals(mut self, spat: Duration, map: Duration) -> Self {
+        self.spat_interval = spat;
+        self.map_interval = map;
+        self
     }
 
     /// The services this schedule runs.
@@ -240,12 +255,12 @@ impl MessageSchedule {
             })
         };
         if self.services.spat
-            && let Some(r) = periodic(&mut self.last_spat, SPAT_INTERVAL, MsgType::Spat)
+            && let Some(r) = periodic(&mut self.last_spat, self.spat_interval, MsgType::Spat)
         {
             out.push(r);
         }
         if self.services.map
-            && let Some(r) = periodic(&mut self.last_map, MAP_INTERVAL, MsgType::Map)
+            && let Some(r) = periodic(&mut self.last_map, self.map_interval, MsgType::Map)
         {
             out.push(r);
         }

@@ -1212,6 +1212,16 @@ pub struct SidelinkSettings {
     /// the message interval. Unset is the profile's (100 ms at 10 Hz).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_window_ms: Option<u32>,
+    // network audit
+    /// The UE receiver noise figure, dB: TR 36.885 Annex A.1.1's 9 dB unless set. It
+    /// moves every sidelink noise floor (and the candidate range measured against it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise_figure_db: Option<f64>,
+    /// `sl-ThresS-RSSI-CBR`, dBm: the S-RSSI above which a sub-channel counts as busy in
+    /// the channel busy ratio (TS 36.214 §5.1.30, TS 36.331 range -112 to -8 dBm in 2 dB
+    /// steps). -94 dBm unless set; the CR limits and every CBR metric read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cbr_threshold_dbm: Option<f64>,
 }
 
 impl SidelinkSettings {
@@ -1257,6 +1267,15 @@ pub struct DccSettings {
     /// The lowest power J2945/1's power control may go to, dBm (`vRP_Min`). Unset is 10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_power_dbm: Option<f64>,
+    // network audit
+    /// ETSI reactive DCC's table (TS 102 687 V1.2.1 Annex A): `a1` (frames up to 1 ms on
+    /// air, Table A.1, the default) or `a2` (up to 500 µs, Table A.2, twice the rates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reactive_table: Option<String>,
+    /// ETSI reactive DCC's state-hold time, ms: how long a state is held before the next
+    /// step. 0 unless set (the tables specify no hysteresis).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reactive_hold_ms: Option<f64>,
 }
 
 impl DccSettings {
@@ -1850,6 +1869,19 @@ pub struct Geonet {
     /// How long each warning is followed, seconds.
     #[serde(default = "Geonet::default_window_s")]
     pub window_s: f64,
+    // network audit
+    /// `itsGnGeoBroadcastCbfMinTime`, ms: the CBF timer of the farthest contender
+    /// (EN 302 636-4-1 Annex H, 1 ms unless set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cbf_min_time_ms: Option<u64>,
+    /// `itsGnGeoBroadcastCbfMaxTime`, ms: the CBF timer of the nearest contender
+    /// (Annex H, 100 ms unless set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cbf_max_time_ms: Option<u64>,
+    /// `itsGnDefaultMaxCommunicationRange` (`DIST_MAX`), m: the progress at which the CBF
+    /// timer reaches its minimum (Annex H, 1 000 m unless set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_comm_range_m: Option<f64>,
 }
 
 impl Geonet {
@@ -1899,6 +1931,9 @@ impl Default for Geonet {
             repetition_duration_ms: Geonet::default_repetition_duration_ms(),
             keep_alive_forwarding: false,
             window_s: Geonet::default_window_s(),
+            cbf_min_time_ms: None,
+            cbf_max_time_ms: None,
+            max_comm_range_m: None,
         }
     }
 }
@@ -1945,6 +1980,19 @@ pub struct Messages {
     /// stretch it. Unset keeps the standards' generation rules.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_hz: Option<f64>,
+    // network audit
+    /// The SPaT broadcast interval of a roadside unit running `spat`, ms: CTI 4501's
+    /// 10 Hz (100 ms) unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spat_interval_ms: Option<u64>,
+    /// The MAP broadcast interval of a roadside unit running `map`, ms: CTI 4501's 1 Hz
+    /// (1 000 ms) unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_interval_ms: Option<u64>,
+    /// `T_GenCpm`, ms: how often a vehicle running `cpm` checks whether a CPM is due (ETSI
+    /// TS 103 324 §6.1.2.3, 100 ms unless set; at most `T_GenCpmMax`, 1 000 ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpm_interval_ms: Option<u64>,
 }
 
 impl Messages {
@@ -1963,6 +2011,9 @@ impl Default for Messages {
             generator: None,
             codec_tier: Messages::default_codec_tier(),
             rate_hz: None,
+            spat_interval_ms: None,
+            map_interval_ms: None,
+            cpm_interval_ms: None,
         }
     }
 }
@@ -2240,6 +2291,11 @@ pub struct Nodes {
     /// The backend tier.
     #[serde(default = "RadioTiers::medium")]
     pub backend_tier: Tier,
+    // network audit
+    /// How many received messages wait for signature verification before new ones are
+    /// dropped, per node. 64 unless set (no profile publishes a depth).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify_queue_depth: Option<u32>,
 }
 
 impl Nodes {
@@ -2264,6 +2320,7 @@ impl Default for Nodes {
             per_class: BTreeMap::new(),
             compute_tier: Tier::Medium,
             backend_tier: Tier::Medium,
+            verify_queue_depth: None,
         }
     }
 }

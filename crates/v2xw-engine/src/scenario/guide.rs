@@ -442,6 +442,62 @@ const ADVANCED: &[Basic] = &[
         explain: "How late after a message is ready its new resource may be. Shorter cuts latency but leaves fewer resources to pick from.",
         recommended: "100 ms at 10 Hz; at most the message interval.",
     },
+    // network audit
+    Basic {
+        path: "radio.sidelink.noise_figure_db",
+        explain: "How much noise a C-V2X receiver's own electronics add; every extra dB shortens the range at which a transport block still decodes.",
+        recommended: "9 dB (3GPP TR 36.885 UE); 6 dB for a good automotive module.",
+    },
+    Basic {
+        path: "radio.sidelink.cbr_threshold_dbm",
+        explain: "The signal level above which a C-V2X sub-channel counts as busy in the channel busy ratio, which drives congestion control.",
+        recommended: "-94 dBm (this build's default); -112 to -80 dBm in 2 dB steps (TS 36.331).",
+    },
+    Basic {
+        path: "radio.dcc.reactive_table",
+        explain: "Which ETSI reactive table sets the message rate in each congestion state: A.1 for frames up to 1 ms on air, A.2 (twice the rates) for frames up to 500 µs.",
+        recommended: "A.1 for secured CAMs at 6 Mbit/s; A.2 only for short frames.",
+    },
+    Basic {
+        path: "radio.dcc.reactive_hold_ms",
+        explain: "How long reactive congestion control stays in a state before it may step again; longer holds damp oscillation.",
+        recommended: "0 (the tables give none) to 1,000 ms.",
+    },
+    Basic {
+        path: "net.geonet.cbf_min_time_ms",
+        explain: "How long the farthest receiver waits before re-broadcasting a geo-broadcast warning.",
+        recommended: "1 ms (EN 302 636-4-1 Annex H).",
+    },
+    Basic {
+        path: "net.geonet.cbf_max_time_ms",
+        explain: "How long the nearest receiver waits before re-broadcasting; the gap between the two timers decides how cleanly the farthest vehicle wins.",
+        recommended: "100 ms (Annex H); 20 to 100 ms in studies.",
+    },
+    Basic {
+        path: "net.geonet.max_comm_range_m",
+        explain: "The progress at which the contention timer reaches its minimum: the forwarding range the protocol assumes.",
+        recommended: "1,000 m (Annex H); about the real radio range in dense traffic, 300 to 500 m.",
+    },
+    Basic {
+        path: "messages.spat_interval_ms",
+        explain: "How often a traffic light's roadside unit broadcasts its signal phase and timing.",
+        recommended: "100 ms (10 Hz, CTI 4501).",
+    },
+    Basic {
+        path: "messages.map_interval_ms",
+        explain: "How often a roadside unit broadcasts the intersection's lane map.",
+        recommended: "1,000 ms (1 Hz, CTI 4501).",
+    },
+    Basic {
+        path: "messages.cpm_interval_ms",
+        explain: "How often a vehicle checks whether to share what its sensors see; a longer interval means fewer, larger collective perception messages.",
+        recommended: "100 ms (ETSI TS 103 324) to 1,000 ms.",
+    },
+    Basic {
+        path: "nodes.verify_queue_depth",
+        explain: "How many received messages can wait for signature verification; when the processor falls behind, messages beyond it are dropped.",
+        recommended: "16 to 256; 64 is one second of 6 neighbours at 10 Hz.",
+    },
 ];
 
 /// `basic` or `advanced`.

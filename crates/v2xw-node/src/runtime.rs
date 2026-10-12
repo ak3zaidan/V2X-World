@@ -375,6 +375,12 @@ pub struct NodeConfig {
     pub bsm_params: v2xw_msg::generator::BsmGenParams,
     /// The CAM generator's triggering rules (EN 302 637-2; `messages.generator`).
     pub cam_params: v2xw_msg::generator::CamGenParams,
+    /// SPaT and MAP broadcast periods of a unit running them (network audit).
+    pub spat_interval: Duration,
+    /// See `spat_interval`.
+    pub map_interval: Duration,
+    /// The CPM generation interval `T_GenCpm` (network audit).
+    pub cpm_interval: Duration,
     /// Whether the node's facilities layer is ETSI's (the GeoNetworking/BTP stack): an
     /// SRM or SSM then goes out as a SREM or SSEM, with the ETSI `ItsPduHeader` in front.
     pub etsi_facilities: bool,
@@ -405,6 +411,9 @@ impl Default for NodeConfig {
             psid: PSID_SAFETY,
             bsm_params: v2xw_msg::generator::BsmGenParams::j2945_1(),
             cam_params: v2xw_msg::generator::CamGenParams::en302637_2(),
+            spat_interval: crate::generate::SPAT_INTERVAL,
+            map_interval: crate::generate::MAP_INTERVAL,
+            cpm_interval: crate::cpm::T_GEN_CPM,
             etsi_facilities: false,
         }
     }
@@ -553,7 +562,8 @@ impl ObuRuntime {
             stores,
             policy,
             schedule: MessageSchedule::new(config.services)
-                .with_params(config.cam_params, config.bsm_params),
+                .with_params(config.cam_params, config.bsm_params)
+                .with_infra_intervals(config.spat_interval, config.map_interval),
             events: crate::events::EventServices::default(),
             state: NodeState::Active,
             received: Vec::new(),
@@ -565,7 +575,7 @@ impl ObuRuntime {
             gt_pos_error_m: f32::NAN,
             own: crate::vehicle::OwnVehicle::default(),
             apps: None,
-            cpm: crate::cpm::CpmService::default(),
+            cpm: crate::cpm::CpmService::default().with_generation_interval(config.cpm_interval),
             security: NodeSecurity::new(config.wall, config.crypto_mode, config.psid),
             etsi: EtsiUperCodec::new(),
             service,
