@@ -1051,10 +1051,10 @@ impl Walk<'_> {
 }
 
 /// Model parameters published as their own fields (see [`walk`]), with their defaults.
-const MODEL_PARAM_LEAVES: &[(&str, fn() -> Value)] = &[(
-    "world.source.params.ew_green_share",
-    || json!(v2xw_world::procedural::GridParams::default().ew_green_share),
-)];
+const MODEL_PARAM_LEAVES: &[(&str, fn() -> Value)] =
+    &[("world.source.params.ew_green_share", || {
+        json!(v2xw_world::procedural::GridParams::default().ew_green_share)
+    })];
 
 /// The published JSON Schema and the flat field index, built together because the index is
 /// the leaves the schema walk found.
