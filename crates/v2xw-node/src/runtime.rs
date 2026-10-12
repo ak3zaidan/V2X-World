@@ -211,6 +211,9 @@ struct Waiting {
     arrived: SimTime,
     parsed: SimTime,
     depth: u64,
+    /// The service priority the policy gave it (higher first; 0 for every policy but
+    /// `prioritized`, which keeps those first in, first out).
+    priority: u32,
 }
 
 /// A frame whose signature check has started and not yet finished: it reaches the
@@ -1117,10 +1120,25 @@ impl ObuRuntime {
                 // `on-demand` node with no applications verify only strangers — the
                 // correct degenerate behaviour rather than a silent "everything is
                 // relevant".
+                //
+                // Nothing in the engine installs application scores, so without a fallback
+                // every relevance was `None` and the `on-demand` threshold decided nothing.
+                // The fallback is the message's own claim against this node's belief
+                // ([`crate::safety::relevance_from_claim`]); an installed score wins.
                 relevance: frame
                     .signer
                     .as_ref()
-                    .and_then(|s| self.relevance.get(&crate::safety::digest_key(s)).copied()),
+                    .and_then(|s| self.relevance.get(&crate::safety::digest_key(s)).copied())
+                    .or_else(|| {
+                        frame.claimed_pos.map(|p| {
+                            crate::safety::relevance_from_claim(
+                                &self.belief,
+                                p,
+                                frame.claimed_speed_mps,
+                                frame.claimed_heading_rad,
+                            )
+                        })
+                    }),
             };
             // A profile that prices no verification for the run's scheme checks nothing.
             // Its messages are dropped here as unverifiable (`verify_unpriced`), not queued
@@ -1192,7 +1210,7 @@ impl ObuRuntime {
                         verify_done: None,
                     });
                 }
-                VerifyDecision::Verify { .. } => {
+                VerifyDecision::Verify { priority, .. } => {
                     let depth = self.queues[1].len() as u64;
                     let queued = Queued {
                         item: frame,
@@ -1208,6 +1226,7 @@ impl ObuRuntime {
                         arrived,
                         parsed,
                         depth,
+                        priority,
                     };
                     match admitted {
                         Admission::Queued => self.verify_meta.push_back(waiting),
@@ -1319,17 +1338,41 @@ impl ObuRuntime {
                 RunsOn::Accelerator => self.accel.earliest_free(),
                 RunsOn::Cpu => self.cpu.earliest_free(),
             };
-            if head.enqueued_at.max(free) > until {
+            let start = head.enqueued_at.max(free);
+            if start > until {
                 break;
             }
-            let Some(q) = self.queues[1].pop() else {
+            // The server takes the highest-priority frame among those waiting when it
+            // starts, the oldest of them on a tie (06-node-models.md §2.1: `prioritized`
+            // verifies the relevant and the near first). Every other policy gives every
+            // frame priority 0, so this is the head of the line and the order is first in,
+            // first out exactly as before. It used to be first in, first out for
+            // `prioritized` too: the priority was computed, recorded and never read.
+            let mut pick = 0;
+            let mut best = self.verify_meta.front().map_or(0, |w| w.priority);
+            for (i, (q, w)) in self.queues[1]
+                .iter()
+                .zip(self.verify_meta.iter())
+                .enumerate()
+                .skip(1)
+            {
+                if q.enqueued_at > start {
+                    break;
+                }
+                if w.priority > best {
+                    best = w.priority;
+                    pick = i;
+                }
+            }
+            let Some(q) = self.queues[1].take_at(pick) else {
                 break;
             };
-            let meta = self.verify_meta.pop_front().unwrap_or(Waiting {
+            let meta = self.verify_meta.remove(pick).unwrap_or(Waiting {
                 token: 0,
                 arrived: q.enqueued_at,
                 parsed: q.enqueued_at,
                 depth: 0,
+                priority: 0,
             });
             let frame = q.item;
             // Charged over the bytes actually checked, as signing is over the bytes
@@ -1346,7 +1389,7 @@ impl ObuRuntime {
             self.window.verification(sched.wait);
 
             let verdict = self.classify(ctx, &frame);
-            ctx.emit(VerifyDecisionRecord::verified(
+            let mut rec = VerifyDecisionRecord::verified(
                 self.node,
                 q.enqueued_at,
                 sched.start,
@@ -1361,7 +1404,10 @@ impl ObuRuntime {
                     _ => "skipped",
                 },
                 meta.depth,
-            ));
+            );
+            // The priority it was served by: 0 for every policy but `prioritized`.
+            rec.priority = meta.priority;
+            ctx.emit(rec);
             // The verdict is fixed now, but the applications have it only when the server
             // is done: the message waits in `verifying` until `sched.finish`.
             let message = self.to_message(&frame, meta.arrived, verdict);

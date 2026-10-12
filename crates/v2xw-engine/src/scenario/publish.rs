@@ -300,6 +300,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("radio.dcc.density_coefficient", "vehicles"),
     // network audit
     ("nodes.verify_queue_depth", "messages"),
+    ("nodes.peer_cert_cache", "certificates"),
     ("messages.path_history_points", "points"),
 ];
 
@@ -342,6 +343,7 @@ const DIMENSIONLESS: &[&str] = &[
     "actors.vehicles.drivers.speed_spread",
     "actors.vehicles.gnss.outage_probability",
     // end traffic audit
+    "security.on_demand_threshold",
 ];
 
 /// One place the scenario picks a model, and which registry family fills it.

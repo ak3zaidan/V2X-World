@@ -198,6 +198,9 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `nodes.default_obu`, `nodes.per_class` | profile | shipped `obu/*` profiles | Crypto hardware profile: signing and verification service times. |
 | `nodes.compute_tier` | `medium` | tiers | Queueing of crypto work. |
 | `nodes.verify_queue_depth` **new** | 64 | 1 to 4096 | Verification queue. A full queue drops (`verify_overflow`). |
+| `nodes.peer_cert_cache` **new** | 128 | 1 to 65536 | Peer certificates each vehicle or roadside unit holds (LRU, 06-node-models.md §2.2). An evicted peer's next digest-signed message needs a P2PCD request and cannot be verified until its certificate arrives again. |
+| `security.on_demand_threshold` **new** | 0.5 | (0, 1] | Relevance score (1/(1+TTC) from the sender's claimed position, speed and heading against the receiver's own) at or above which an `on-demand` unit verifies a known signer. No published operating point (Krishnan & Weimerskirch 2011). Refused under any other policy. |
+| `security.prioritized_horizon_m` **new** | 300 | 10 to 2000 m | Range over which nearness raises a `prioritized` unit's verification priority; the queue now serves the highest priority first. Refused under any other policy. |
 | `security.signer_id_policy.on_new_neighbour` **new** | false | bool | Also attach the certificate to the next BSM or CAM after a vehicle hears a station it did not know (ETSI TS 103 097 V1.3.1 §7.1.1), on top of the cadence; a forced certificate does not restart the cadence. Refused when every message already carries one, or with no `bsm`/`cam`. |
 
 ## Traffic (`actors.vehicles`, `world.signals`, `apps`)

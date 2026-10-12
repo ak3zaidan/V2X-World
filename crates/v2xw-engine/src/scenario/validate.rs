@@ -1034,6 +1034,35 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the verification queue depth",
     },
+    // --- security engine fixes (2026-10-12) ---------------------------------
+    // A relevance score is a ratio in [0, 1] (v2xw-node `relevance_from_ttc`); 0 would
+    // verify everything and be `verify-all`, so it is excluded.
+    Bound {
+        path: "security.on_demand_threshold",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: true,
+        what: "the on-demand relevance threshold (a score in (0, 1])",
+    },
+    // 06-node-models.md §2.1 scores proximity over the awareness range; J2945/1 and ETSI
+    // CAM receivers care out to about 300 m (the DSRC/C-V2X design range), so 10 m to
+    // 2 km brackets any useful horizon.
+    Bound {
+        path: "security.prioritized_horizon_m",
+        lo: 10.0,
+        hi: 2_000.0,
+        exclusive_lo: false,
+        what: "the prioritized proximity horizon, metres",
+    },
+    // A unit must hold at least one certificate; 65 536 is far above any neighbourhood
+    // a 1 km radio range holds.
+    Bound {
+        path: "nodes.peer_cert_cache",
+        lo: 1.0,
+        hi: 65_536.0,
+        exclusive_lo: false,
+        what: "the peer certificate cache size",
+    },
     // --- traffic audit (2026-10-11) ----------------------------------------
     // HCM 6th ed. (2016) ch. 20's two-way-stop critical gaps run 4.1-7.5 s and field
     // re-measurements (e.g. LTRC Report 715, 2025) fall within about +-40 % of them; a
@@ -2454,10 +2483,28 @@ pub static KEY_STATUS: &[KeyStatus] = &[
     },
     KeyStatus {
         path: "security.verification_policy",
-        status: Status::Partial,
-        note: "The policy is selected, but its threshold is a fixed number: there is no \
-               scenario key for the on-demand relevance threshold or the prioritised \
-               range.",
+        status: Status::Wired,
+        note: "Which received messages a unit verifies: all, the relevant ones \
+               (on-demand), or all in priority order (prioritized).",
+    },
+    KeyStatus {
+        path: "security.on_demand_threshold",
+        status: Status::Wired,
+        note: "The relevance score (time-to-collision based, 0 to 1) at or above which an \
+               on-demand unit verifies a known signer (0.5 unless set). Refused under any \
+               other policy.",
+    },
+    KeyStatus {
+        path: "security.prioritized_horizon_m",
+        status: Status::Wired,
+        note: "The range over which proximity raises a prioritized unit's verification \
+               priority (300 m unless set). Refused under any other policy.",
+    },
+    KeyStatus {
+        path: "nodes.peer_cert_cache",
+        status: Status::Wired,
+        note: "Peer certificates each vehicle or roadside unit holds (128 unless set); an evicted \
+               peer's next digest-signed message needs a P2PCD request.",
     },
     KeyStatus {
         path: "security.signer_id_policy",
@@ -5369,6 +5416,23 @@ fn security(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ));
     }
     let sid = &s.security.signer_id_policy;
+    if s.security.on_demand_threshold.is_some() && s.security.verification_policy != "on-demand" {
+        e.push(conflict(
+            "security.on_demand_threshold",
+            "is read only by the on-demand verification policy; set \
+             security.verification_policy: on-demand or remove it"
+                .to_string(),
+        ));
+    }
+    if s.security.prioritized_horizon_m.is_some() && s.security.verification_policy != "prioritized"
+    {
+        e.push(conflict(
+            "security.prioritized_horizon_m",
+            "is read only by the prioritized verification policy; set \
+             security.verification_policy: prioritized or remove it"
+                .to_string(),
+        ));
+    }
     if sid.on_new_neighbour && (sid.full_cert_every_ms == 0 || !sid.digest_otherwise) {
         e.push(conflict(
             "security.signer_id_policy.on_new_neighbour",
@@ -6083,6 +6147,15 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
         (
             "nodes.verify_queue_depth",
             n.verify_queue_depth.map(f64::from),
+        ),
+        ("nodes.peer_cert_cache", n.peer_cert_cache.map(f64::from)),
+        (
+            "security.on_demand_threshold",
+            s.security.on_demand_threshold,
+        ),
+        (
+            "security.prioritized_horizon_m",
+            s.security.prioritized_horizon_m,
         ),
     ] {
         if let Some(v) = v {

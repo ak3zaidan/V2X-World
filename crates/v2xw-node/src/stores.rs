@@ -869,7 +869,13 @@ impl PeerCertCache {
         self.lru.push(k);
         if self.lru.len() > self.capacity {
             self.evictions = self.evictions.saturating_add(1);
-            return Some(self.lru.remove(0));
+            let evicted = self.lru.remove(0);
+            // The certificate itself goes too. It used to stay in `inner`, so a node whose
+            // cache had evicted a peer still verified that peer's next digest-signed
+            // message against the forgotten key: the capacity bounded the bookkeeping and
+            // not what the node could verify, and shrinking it moved no metric.
+            self.inner.remove(&evicted);
+            return Some(evicted);
         }
         None
     }

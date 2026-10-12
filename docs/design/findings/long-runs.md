@@ -49,7 +49,7 @@ What broke, in the order a long run meets it:
 |---|---|
 | `v2xw run` | **Metrics streamed to `metrics.json`** as they are emitted (`stream::MetricsStream`), byte-identical to the old whole-document write. They were a `Vec<serde_json::Value>` held for the whole run: the first thing to break. |
 | `v2xw run` | **The recording verified and digested from disk**, chunk by chunk (`Reader::open_paged`, `checkpoint::file_sha256`), not read into memory whole. |
-| `v2xw run` | **`--record-level full\|events\|metrics`**: `metrics` keeps the metric samples and the run's summary records (scenario events, the MA's cases and decisions, revocations, spawns and despawns) and no scene. |
+| `v2xw run` | **`--record-level full\|receptions\|events\|metrics`**: `metrics` keeps the metric samples and the run's summary records (scenario events, the MA's cases and decisions, revocations, spawns and despawns) and no scene. `events` drops the scene and the per-reception journals (`node.rx`, `phy.rx`, `node.verify`: 95 % of an attack run's bytes); `receptions` keeps them. |
 | `v2xw run` | **`--checkpoint-every 1h`** and **`v2xw resume <out>/checkpoint.json`** (below). |
 | `v2xw run` | **`--progress-every`** (default every 15 simulated minutes for runs of an hour or more): `progress.jsonl` in the output directory, one line on stderr — wall clock per simulated hour, the physical memory footprint, the fleet, and the sizes of the collections the engine keeps (`Engine::census`). `--duration 6h`, `--quiet`. |
 | engine | **`Engine::advance(until)` + `Engine::finish_run`**: a run driven in slices, which change nothing it computes (a boundary stops the loop between two events). `Engine::run` is the two together. |

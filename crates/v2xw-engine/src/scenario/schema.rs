@@ -2286,6 +2286,14 @@ pub struct Security {
     /// When a node changes pseudonym.
     #[serde(default)]
     pub pseudonym_change: PseudonymChangeSpec,
+    /// The relevance score at or above which an `on-demand` node verifies a message from
+    /// a signer it already knows. 0.5 unless set; refused under any other policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_demand_threshold: Option<f64>,
+    /// The distance beyond which proximity adds nothing to a `prioritized` node's service
+    /// priority, metres. 300 unless set; refused under any other policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prioritized_horizon_m: Option<f64>,
 }
 
 impl Security {
@@ -2315,6 +2323,8 @@ impl Default for Security {
             verification_policy: Security::default_verification_policy(),
             signer_id_policy: SignerIdPolicySpec::default(),
             pseudonym_change: PseudonymChangeSpec::default(),
+            on_demand_threshold: None,
+            prioritized_horizon_m: None,
         }
     }
 }
@@ -2535,6 +2545,10 @@ pub struct Nodes {
     /// dropped, per node. 64 unless set (no profile publishes a depth).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify_queue_depth: Option<u32>,
+    /// How many peer certificates each vehicle or roadside unit holds before it forgets the least
+    /// recently used one. 128 unless set (no profile publishes one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_cert_cache: Option<u32>,
 }
 
 impl Nodes {
@@ -2560,6 +2574,7 @@ impl Default for Nodes {
             compute_tier: Tier::Medium,
             backend_tier: Tier::Medium,
             verify_queue_depth: None,
+            peer_cert_cache: None,
         }
     }
 }

@@ -633,6 +633,12 @@ impl PeerCertCache {
         self.certs.get(&id8_bytes(digest))
     }
 
+    /// Forgets the certificate held under the digest bytes `key`, returning whether one was
+    /// held. A bounded cache that evicts an entry must also stop verifying against it.
+    pub fn remove(&mut self, key: &[u8; 8]) -> bool {
+        self.certs.remove(key).is_some()
+    }
+
     /// Marks a cached certificate as verified.
     pub fn mark_verified(&mut self, digest: &HashedId8) -> bool {
         match self.certs.get_mut(&id8_bytes(digest)) {

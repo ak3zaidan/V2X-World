@@ -2159,6 +2159,15 @@ pub fn register_radio(
 /// `max_jitter_ms` still wins.
 pub fn generation_timing(scenario: &Scenario) -> v2xw_msg::GenerationTiming {
     let mut t = v2xw_msg::GenerationTiming::default();
+    // The phase spreads a fleet across its whole generation period, not the 100 ms of the
+    // 10 Hz default: J2945/1 and EN 302 637-2 both have each station time its messages
+    // independently, so at 5 Hz a fleet created in one instant fills the 200 ms period
+    // rather than only its first half. With a 100 ms window every 5 Hz frame fell in the
+    // even 100 ms slots and the MAC's 100 ms CBR sample at each second read about 0.
+    // At the 10 Hz default the period is the old window, so no digest moves.
+    if let Some(p) = fixed_message_period(scenario) {
+        t.phase_window = p;
+    }
     if build_dcc(scenario).is_some_and(|d| d.is_j2945())
         && technology_of(scenario.radio.rat) == Some(v2xw_radio::regulation::Technology::Ieee80211p)
     {
@@ -3042,6 +3051,9 @@ fn node_capacities(scenario: &Scenario) -> NodeConfig {
     if let Some(n) = scenario.nodes.verify_queue_depth {
         c.queue_capacity[1] = n as usize;
     }
+    if let Some(n) = scenario.nodes.peer_cert_cache {
+        c.peer_cache_capacity = n as usize;
+    }
     c.cpm_interval = infra_interval(scenario.messages.cpm_interval_ms, v2xw_node::cpm::T_GEN_CPM);
     if let Some(n) = scenario.messages.path_history_points {
         c.path_history_points = n as usize;
@@ -3125,8 +3137,12 @@ pub fn build_node(
         // default: `on-demand`'s relevance threshold and `prioritized`'s range are study
         // choices. The values here are the ones `v2xw-node::register_all` registers, so a
         // run and the manifest's card agree.
-        "on-demand" => Box::new(OnDemand::new(0.5)),
-        _ => Box::new(Prioritized::new(300.0)),
+        "on-demand" => Box::new(OnDemand::new(
+            scenario.security.on_demand_threshold.unwrap_or(0.5),
+        )),
+        _ => Box::new(Prioritized::new(
+            scenario.security.prioritized_horizon_m.unwrap_or(300.0),
+        )),
     };
     let (bsm_params, cam_params) = generator_params(scenario);
     // The node's own record of its transmit power is its class's `radio.devices` power;

@@ -3602,3 +3602,32 @@ order. Same digests at 1 and 2 threads; radio `phy` lib 29/29, `radio_tuning` 4/
 - Capped 1,000: main thread 46 % waiting on the parallel link map, then node step
   (one wake per reception: envelope parse + verify, ~8 %), metric providers (~8 %),
   candidate walk (~7 %), SHA-256 ~3.5 %. No single item above 10 %; not reached.
+
+## 2026-10-12 — protocol and security engine fixes (branch of 05599f6)
+
+- **Verify queue order:** the queue serves the highest policy priority first (only
+  `prioritized` sets one; the others stay first in, first out, so their digests do not
+  move). New `security.prioritized_horizon_m` (300 m). Near wait 0.42 ms vs far 0.92 ms;
+  with the order removed, 0.87 vs 0.88.
+- **On-demand relevance:** with no application score, a message is scored
+  1/(1+TTC) from its own claim against the receiver's belief. New
+  `security.on_demand_threshold` (0.5). Unverified share 0.992 -> 0.948 at 0.05. Both new
+  keys are refused under any other policy.
+- **Peer certificate cache:** eviction now removes the certificate from the verification
+  store. New `nodes.peer_cert_cache` (128). Cache 4: P2PCD 373 -> 21,903, unknown-signer
+  373 -> 24,424 (373 with the fix removed).
+- **5 Hz CBR:** the generation phase spans the message period (`messages.rate_hz`), so 5 Hz
+  CBR reads 0.048, not about 0. The 10 Hz default keeps its 100 ms window.
+- **MA per device:** a Revoke about a pseudonym of a device already decided (PCA + LA
+  resolution) counts as `decisions_linked`, not a decision. 30 % attackers: 7 decisions for
+  8 attackers (14 before).
+- **Recording:** `--record-level events` drops `node.rx`, `phy.rx` and `node.verify`. These
+  were 95 % of an attack run's bytes. The old level is `receptions`. Metrics are unchanged.
+- **Output shifts:** `prioritized` and `on-demand` runs change, and so do runs at a
+  non-10 Hz `rate_hz`. `node.verify` records carry the served priority, and the phase-2
+  report gains `decisions_linked`.
+- **Open:**
+  - Sybil is still refused. The ghosts need extra frames from `hand_down_app`, signed with
+    concurrent pseudonyms the attacker holds. They also need the certificate attached so
+    receivers can verify them.
+  - Only `ObuRuntime` orders by priority (the RSU and VRU runtimes do not).
