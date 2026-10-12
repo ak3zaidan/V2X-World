@@ -651,9 +651,12 @@ impl OfdmPhy {
     /// Sums in id order, like every other power reduction in the crate.
     #[must_use]
     pub fn energy_dbm(&self, node: NodeId, ch: ChannelId, at: SimTime) -> f64 {
+        // The map is keyed `(receiver, tx id)`, so this node's arrivals are one range, in
+        // the same tx-id order a filtered walk of the whole map visits them.
         let contributors: Vec<(NodeId, f64)> = self
             .arrivals
-            .values()
+            .range((node.index(), 0)..=(node.index(), u64::MAX))
+            .map(|(_, a)| a)
             .filter(|a| a.rx == node && a.frame.channel == ch && a.start <= at && at < a.end)
             .map(|a| (a.tx, numeric::dbm_to_mw(a.power_dbm)))
             .collect();

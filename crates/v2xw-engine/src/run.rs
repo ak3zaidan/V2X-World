@@ -878,6 +878,12 @@ pub struct Engine {
     /// Which frames currently have a registered arrival at each receiver, so a new frame
     /// can find the ones it overlaps without scanning every live frame.
     live_at_rx: BTreeMap<NodeId, Vec<FrameSeq>>,
+    /// The frames each node has put on the air (`tx_handle` set) and that may still be
+    /// there, so carrier sense at a node finds its own transmission without scanning the
+    /// whole frame table — which holds every queued frame of every node, and made each MAC
+    /// poll of a saturated run cost O(nodes x queue). A superset: entries whose frame has
+    /// ended or gone are skipped when read and pruned at the node's next MAC poll.
+    on_air_tx: BTreeMap<NodeId, BTreeSet<FrameSeq>>,
     /// Frames whose signature has finished but which the MAC has not yet been handed,
     /// per transmitter, keyed by (ready instant, frame) so the walk is in time order.
     pending_tx: BTreeMap<NodeId, Vec<(SimTime, FrameSeq)>>,
@@ -1408,6 +1414,7 @@ impl Engine {
             orphaned_rx: Vec::new(),
             frames: BTreeMap::new(),
             live_at_rx: BTreeMap::new(),
+            on_air_tx: BTreeMap::new(),
             pending_tx: BTreeMap::new(),
             phase2: None,
             pseudonym_policy: None,
@@ -5086,6 +5093,19 @@ impl Engine {
             return;
         }
         let now = self.scheduler.now();
+        // Forget this node's frames that have left the air (or the table): no carrier-sense
+        // question at `now` or later can count them again.
+        if let Some(own) = self.on_air_tx.get_mut(&node) {
+            let frames = &self.frames;
+            own.retain(|seq| {
+                frames
+                    .get(seq)
+                    .is_some_and(|s| s.tx_handle.is_some() && s.end > now)
+            });
+            if own.is_empty() {
+                self.on_air_tx.remove(&node);
+            }
+        }
 
         // 1. The medium as this node's own energy detector sees it. Sampled here rather
         //    than delivered as a transition event; see the note above on what that costs.
@@ -5388,6 +5408,17 @@ impl Engine {
     ///
     /// The MAC's countdown has to stop at this instant rather than at the timer that
     /// sampled the medium ([`EdcaOcbMac::freeze_at`]).
+    /// This node's own frames on the air, from [`Engine::on_air_tx`]: exactly the frames
+    /// of the table with `tx == node` and a `tx_handle`, in seq order.
+    fn own_on_air(&self, node: NodeId) -> impl Iterator<Item = &FrameState> + '_ {
+        self.on_air_tx
+            .get(&node)
+            .into_iter()
+            .flatten()
+            .filter_map(|seq| self.frames.get(seq))
+            .filter(move |state| state.tx == node && state.tx_handle.is_some())
+    }
+
     fn medium_busy_since(&self, node: NodeId, now: SimTime) -> SimTime {
         // The earliest start among the transmissions holding this node's medium busy now:
         // the arrivals at or above the CCA threshold, this node's own frame, and a jammer
@@ -5409,12 +5440,8 @@ impl Engine {
                 since = since.min(state.start);
             }
         }
-        for state in self.frames.values() {
-            if state.tx == node
-                && state.tx_handle.is_some()
-                && state.start <= now
-                && state.end > now
-            {
+        for state in self.own_on_air(node) {
+            if state.start <= now && state.end > now {
                 since = since.min(state.start);
             }
         }
@@ -5452,8 +5479,8 @@ impl Engine {
                 clear = clear.max(state.end);
             }
         }
-        for state in self.frames.values() {
-            if state.tx == node && state.tx_handle.is_some() && state.end > now {
+        for state in self.own_on_air(node) {
+            if state.end > now {
                 clear = clear.max(state.end);
             }
         }
@@ -5548,6 +5575,7 @@ impl Engine {
         };
         state.tx_handle = Some(handle);
         state.end = handle.end;
+        self.on_air_tx.entry(state.tx).or_default().insert(frame);
         self.report.frames_transmitted += 1;
         // §3.3.4 bit 4: "transmitted at least once in the last mobility step". Set where
         // the preamble actually goes on the air, not where the node decided to send, so
