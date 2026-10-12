@@ -792,15 +792,6 @@ struct Transition {
 /// slower urban approach less. **A choice**, not a cited figure.
 const STRATEGIC_M_PER_CHANGE: f64 = 25.0;
 
-/// How much slower than a target-lane follower level with it a vehicle blocked from its
-/// strategic change aims to drive, m/s, and over how long, s
-/// ([`NativeMobility::strategic_fall_back`]): level with the follower that is 2 m/s²,
-/// SUMO LC2013's least fall-behind deceleration (`MIN_FALLBEHIND`, 7/3.6 m/s per second,
-/// src/microsim/lcmodels/MSLCM_LC2013.cpp), capped at the driver's comfortable one.
-const FALL_BEHIND_DV_MPS: f64 = 2.0;
-/// See [`FALL_BEHIND_DV_MPS`].
-const FALL_BEHIND_S: f64 = 1.0;
-
 /// How far before the no-change zone a vehicle's strategic change counts as urgent, so
 /// the vehicle behind it in the target lane makes room for it, metres
 /// ([`cooperative_accel`]). **A choice**: about two car lengths and a gap.
@@ -1728,6 +1719,15 @@ impl NativeMobility {
         ego: &VehicleView,
         nbrs: &LaneNeighbors,
     ) -> Option<f64> {
+        // Only once the change is urgent, as for the follower's courtesy
+        // ([`cooperative_accel`]). Braking for every blocked change from the start of the
+        // lane, and dropping behind a target-lane follower level with the car as well as
+        // behind the leader, took the highway-congestion merge to a standstill
+        // (`traffic_audit`: overlaps 1750 -> 2988 vehicle-steps against 500cbb0, 143 cars
+        // standing 180 s); urgent and leader-only, 923 and none.
+        if self.strategic_pending(world, actor)? > self.params.no_change_zone_m + COOPERATE_LOOK_M {
+            return None;
+        }
         let target = self.strategic_target(world, actor)?;
         let side = if world.lane(target).index > world.lane(actor.lane).index {
             Side::Left
@@ -1739,33 +1739,14 @@ impl NativeMobility {
         if beside_lane.edge != world.lane(actor.lane).edge {
             return None;
         }
-        let b = ego.driver.comfort_decel_mps2;
-        let mut cap: Option<f64> = None;
-        if let Some(l) = beside.leader {
-            let mut moved = *ego;
-            moved.lane = beside.lane;
-            let a = self
-                .cf
-                .accel(&moved, Some(&l), &LaneView::of(beside_lane), &self.weather);
-            if l.gap_m < ego.driver.min_gap_m || a < -PULL_OUT_FOLLOWER_DECEL_MPS2 {
-                cap = Some(a.max(-b));
-            }
-        }
-        // A target-lane follower level with the vehicle (inside its own standstill gap)
-        // does not make room ([`cooperative_accel`] would have it brake harder than it
-        // will), so the vehicle drops behind it: towards FALL_BEHIND_DV_MPS below the
-        // follower's speed over FALL_BEHIND_S. Without this the two drove side by side
-        // at the same speed to the end of the lane (grid at 3600 veh/h: 130 m at a gap of
-        // 0-2 m, and the car was removed at the lane end).
-        if let Some(f) = beside.follower
-            && let Some(fv) = f.vehicle.as_ref()
-            && f.gap_m < fv.driver.min_gap_m
-        {
-            let a = ((fv.speed_mps - FALL_BEHIND_DV_MPS - ego.speed_mps) / FALL_BEHIND_S)
-                .clamp(-b, 0.0);
-            cap = Some(cap.map_or(a, |c| c.min(a)));
-        }
-        cap
+        let l = beside.leader?;
+        let mut moved = *ego;
+        moved.lane = beside.lane;
+        let a = self
+            .cf
+            .accel(&moved, Some(&l), &LaneView::of(beside_lane), &self.weather);
+        let blocked = l.gap_m < ego.driver.min_gap_m || a < -PULL_OUT_FOLLOWER_DECEL_MPS2;
+        blocked.then(|| a.max(-ego.driver.comfort_decel_mps2))
     }
 
     /// Adds a clock model. The engine does not read it — believed time belongs to the node
