@@ -39,6 +39,7 @@ fn fleet(n: u32, secs: f64) -> Scenario {
 struct Measured {
     report: RunReport,
     m: BTreeMap<String, f64>,
+    last: BTreeMap<String, f64>,
     rec: MemoryRecorder,
 }
 
@@ -55,6 +56,7 @@ fn run(s: Scenario) -> Measured {
     let mut rec = MemoryRecorder::new();
     let report = engine.run(&mut rec).expect("runs");
     let mut acc: BTreeMap<String, (f64, f64, bool)> = BTreeMap::new();
+    let mut last: BTreeMap<String, f64> = BTreeMap::new();
     for (_, r) in rec.records() {
         if r.channel != "metric.sample" {
             continue;
@@ -72,6 +74,7 @@ fn run(s: Scenario) -> Measured {
             keys.push(format!("{}{dims}", sample.metric));
         }
         for key in keys {
+            last.insert(key.clone(), p);
             let e = acc.entry(key).or_insert((0.0, 0.0, is_count));
             if is_count {
                 e.0 += p;
@@ -87,7 +90,7 @@ fn run(s: Scenario) -> Measured {
         .into_iter()
         .map(|(k, (s, n, _))| (k, s / n.max(1.0)))
         .collect();
-    Measured { report, m, rec }
+    Measured { report, m, last, rec }
 }
 
 fn refused(s: &Scenario, field: &str) -> bool {
@@ -506,33 +509,53 @@ fn the_crl_fetch_interval_moves_downloads_and_revocation_latency() {
     );
 }
 
-/// The attacker share: 20 % of the fleet broadcasting a constant false position against
-/// none: verdicts and reports about attackers appear where an honest fleet has none.
+
+/// The attacker share: none, 10 % and 30 % of the fleet broadcasting a constant false
+/// position. Verdicts, reports about attackers and the authority's true positives rise with
+/// the share; an honest fleet has no true positive, and its false positives are what the
+/// detectors file against honest vehicles (the confusion matrix, cumulative, read at the
+/// last window).
 #[test]
 fn the_attacker_share_moves_detections() {
     let with = |fraction: f64| {
-        let mut s = backend(30, 10.0);
+        let mut s = backend(30, 30.0);
         attacked(&mut s, fraction);
+        if let Some(p) = s.security.protocol.as_mut() {
+            p.params["report_shuffle_window_s"] = json!(5);
+        }
         run(s)
     };
-    let none = with(0.0);
-    let some = with(0.2);
-    for (n, m) in [("0", &none), ("0.2", &some)] {
+    let out = [with(0.0), with(0.1), with(0.3)];
+    for (n, m) in ["0", "0.1", "0.3"].iter().zip(&out) {
         let p = &m.report.phase2;
         println!(
-            "ROW attackers {n}: attackers {} falsified {} verdicts {} tp {:.0} fp {:.0} \
-             about_attackers {} about_honest {}",
+            "ROW attackers {n}: attackers {} falsified {} verdicts {} reports_at_ma {} \
+             tp {:.0} fp {:.0} fn {:.0} about_attackers {} about_honest {} revoked {}/{}",
             p.attackers,
             p.falsified_claims,
             p.verdicts_fired,
-            m.get("det_tp"),
-            m.get("det_fp"),
+            p.reports_at_ma,
+            m.last.get("det_tp{\"level\":\"report\",\"cell\":\"tp\"}").copied().unwrap_or(0.0),
+            m.last.get("det_fp{\"level\":\"report\",\"cell\":\"fp\"}").copied().unwrap_or(0.0),
+            m.last.get("det_fn{\"level\":\"report\",\"cell\":\"fn\"}").copied().unwrap_or(0.0),
             p.reports_about_attackers,
-            p.reports_about_honest
+            p.reports_about_honest,
+            p.revoked_attackers,
+            p.revoked_honest
         );
     }
-    assert!(some.report.phase2.attackers > 0);
-    assert!(some.report.phase2.verdicts_fired > none.report.phase2.verdicts_fired);
-    assert!(some.report.phase2.reports_about_attackers > 0);
+    let tp = |m: &Measured| {
+        m.last
+            .get("det_tp{\"level\":\"report\",\"cell\":\"tp\"}")
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let (none, few, many) = (&out[0], &out[1], &out[2]);
+    assert_eq!(tp(none), 0.0);
     assert_eq!(none.report.phase2.reports_about_attackers, 0);
+    assert!(few.report.phase2.attackers < many.report.phase2.attackers);
+    assert!(few.report.phase2.verdicts_fired > none.report.phase2.verdicts_fired);
+    assert!(many.report.phase2.verdicts_fired > few.report.phase2.verdicts_fired);
+    assert!(tp(few) > 0.0, "no report about an attacker reached the authority");
+    assert!(tp(many) > tp(few));
 }
