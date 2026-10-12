@@ -381,6 +381,9 @@ pub struct NodeConfig {
     pub map_interval: Duration,
     /// The CPM generation interval `T_GenCpm` (network audit).
     pub cpm_interval: Duration,
+    /// The most path-history points a BSM or CAM carries (J2945/1's 15;
+    /// `messages.path_history_points`).
+    pub path_history_points: usize,
     /// Whether the node's facilities layer is ETSI's (the GeoNetworking/BTP stack): an
     /// SRM or SSM then goes out as a SREM or SSEM, with the ETSI `ItsPduHeader` in front.
     pub etsi_facilities: bool,
@@ -414,6 +417,7 @@ impl Default for NodeConfig {
             spat_interval: crate::generate::SPAT_INTERVAL,
             map_interval: crate::generate::MAP_INTERVAL,
             cpm_interval: crate::cpm::T_GEN_CPM,
+            path_history_points: v2xw_msg::j2945::PathHistoryParams::J2945_1.max_points,
             etsi_facilities: false,
         }
     }
@@ -573,7 +577,8 @@ impl ObuRuntime {
             dcc_state_code: v2xw_record::wire::U16_NONE,
             relevance: BTreeMap::new(),
             gt_pos_error_m: f32::NAN,
-            own: crate::vehicle::OwnVehicle::default(),
+            own: crate::vehicle::OwnVehicle::default()
+                .with_path_history_points(config.path_history_points),
             apps: None,
             cpm: crate::cpm::CpmService::default().with_generation_interval(config.cpm_interval),
             security: NodeSecurity::new(config.wall, config.crypto_mode, config.psid),

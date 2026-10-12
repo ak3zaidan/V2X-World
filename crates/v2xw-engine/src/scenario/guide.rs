@@ -535,6 +535,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "100 ms (ETSI TS 103 324) to 1,000 ms.",
     },
     Basic {
+        path: "messages.path_history_points",
+        explain: "How many points of its recent track a vehicle puts in each safety message; more points let receivers follow its path but make every message bigger.",
+        recommended: "15 (SAE J2945/1); 0 to 23 (the J2735 limit).",
+    },
+    Basic {
         path: "nodes.verify_queue_depth",
         explain: "How many received messages can wait for signature verification; when the processor falls behind, messages beyond it are dropped.",
         recommended: "16 to 256; 64 is one second of 6 neighbours at 10 Hz.",

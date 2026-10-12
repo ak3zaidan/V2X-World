@@ -2,7 +2,7 @@
 
 Each row runs a baseline and one setting with the same seed and the same small fleet, and
 asserts the direction the cause predicts. A setting that changed nothing fails its row.
-Tests: `crates/v2xw-engine/tests/sensitivity_security.rs`. The 15 tests take about 85 s
+Tests: `crates/v2xw-engine/tests/sensitivity_security.rs`. The 16 tests take about 90 s
 together in a dev build with `opt-level=2`.
 
 **Fleet.** A procedural 5 x 8 grid, about 1.1 x 0.6 km, in open air. 20 to 60 vehicles
@@ -29,6 +29,7 @@ windows; counts are summed.
 | `security.pseudonym_change.period_s` | 300 → 5 s (20 s run, 5 s cadence) | Pseudonym changes 0 → 60. Unknown-signer fates 1,275 → 4,578. Unverified share 0.018 → 0.065. AoI 68 → 154 ms | Each new pseudonym is heard first by digest, and receivers cannot check it until its certificate comes round (the P2PCD case). |
 | `security.pseudonym_change.silent_period_s` (5 s period, 20 s run, 1 s cadence) | none → [2, 4] s | Linkability against the global observer 0.88 → 0.20 (53 → 12 of 60 changes bridged). Frames 3,955 → 2,086. Unknown signers 843 → 724 (was 4,051 before the fix below). P2PCD requests against the 300 s baseline: 377 → 843 at 5 s | The tracker (Wiedersheim et al., WONS 2010) predicts where a vehicle will be; a 2-4 s gap breaks the prediction (Huang et al., "silent cascade", SECON 2005). Silence costs awareness frames. |
 | `messages.rate_hz` (50 ms step) | 5 → 10 → 20 Hz | Frames 450 → 899 → 1,790. Security bytes 54 → 96 → 179 kB. CBR (sampled) 0.003 → 0.077 → 0.152. AoI 115 → 65 → 39 ms | The load follows the rate (airtime ratio 2.0 for each doubling). The 5 Hz CBR is under **Limits**. |
+| `messages.path_history_points` **new** (30 vehicles, 12 s) | 15 → 1 → 0 | Payload 202,734 → 202,580 → 166,610 B. Air bytes 741,606 → 741,452 → 705,482 B. Envelope/payload 1.895 → 1.897 → 2.306 | Part II's path history is about 10 B a message here. A 12 s drive on a straight grid keeps about one point, because a chord may run 300 m (J2945/1), so the cap binds at 1 and not between 1 and 15. |
 | `security.envelope` (GN/BTP, CAM + DENM, 5 s cadence) | ieee1609.2 → etsi103097 | Security bytes 715,354 → 717,469 B. Certificate share 0.033 → 0.035. 19 DENMs in both | TS 103 097 is a profile of 1609.2, so a CAM is byte-identical under both (§5.1-5.2). What differs is that a DENM must carry a certificate (§7.1.2). |
 | `net.uu.params.preset` / `penetration` | 5g-first-hop → 4g-west-coast; penetration 1 → 0.5 | Top-up exchange 1,136 → 1,259 ms. At half penetration: 10 vehicles with a modem instead of 20; 10 vehicles starved, 39 s without a valid certificate | The presets are the measured Uu latencies (`UuLatencyPreset`). A vehicle with no modem and no relay cannot top up. |
 | `actors.rsus[].backhaul_params` (no modem, 8 provisioning proxies) | 200 → 600 ms; 200 ms at 64 kbit/s; 5 ms | Top-up 1,884 → 3,484 ms; 64 kbit/s 2,181 ms. 5 ms: 2,142 ms over 320 messages instead of 240 | The exchange is a request, an ack and download polls 1 s apart, so it crosses the line 4 times one way (600 ms adds 1.6 s). A 5 ms line is not the fastest: its first poll arrives before the batch is ready, so a second poll is needed a second later. |
@@ -67,6 +68,12 @@ digest, and no neighbour had heard its certificate. Unknown signers rose from 84
 The engine now calls `NodeSecurity::withdraw_certificate` for each discarded frame, so the
 cadence restarts with the first frame on the air. Unknown signers fell to 724.
 
+**Path history length is a new validated setting:** `messages.path_history_points`
+(0 to 23, J2945/1's 15 unless set). It is in the schema, `validate.rs` (bounds, refused
+without `bsm` or `cam`, key status), `publish.rs` (points), `guide.rs` (Advanced) and the
+label in `options.rs`. The node reads it as the path-history builder's `max_points`
+(`OwnVehicle::with_path_history_points`). Unset, nothing moves.
+
 **P2PCD requests are a metric.** 08-measurement-and-data.md §2.2 specifies
 `p2pcd_requests`, and the nodes already counted them in their telemetry window, but no
 channel carried the count. `node.telemetry` now carries `p2pcd_requests` and
@@ -104,6 +111,7 @@ one verification either way. Only first sightings would add work.
 reads the last window rather than a sum.
 
 **Not configurable, so not a row:**
-- BSM Part II size: there is no padding or extension knob.
+- BSM Part II beyond the path history: the events, lights and path prediction follow
+  the vehicle's state, not a setting.
 - CRL size: it follows the number of revocations, not a setting.
 - An explicit cellular "availability" model beyond `penetration` and coverage.

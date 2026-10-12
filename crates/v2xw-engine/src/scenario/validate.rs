@@ -1021,6 +1021,13 @@ pub static BOUNDS: &[Bound] = &[
         what: "the CPM generation interval",
     },
     Bound {
+        path: "messages.path_history_points",
+        lo: 0.0,
+        hi: 23.0,
+        exclusive_lo: false,
+        what: "the path-history points per message (J2735 PathHistoryPointList, 1..23)",
+    },
+    Bound {
         path: "nodes.verify_queue_depth",
         lo: 1.0,
         hi: 4_096.0,
@@ -2828,6 +2835,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "T_GenCpm, how often a vehicle checks whether a CPM is due (TS 103 324's \
                100 ms unless set). Refused unless messages.sets has cpm.",
+    },
+    KeyStatus {
+        path: "messages.path_history_points",
+        status: Status::Wired,
+        note: "The most path-history points a BSM's Part II or a CAM carries (J2945/1's 15 \
+               unless set; 0 to 23). Refused unless messages.sets has bsm or cam.",
     },
     KeyStatus {
         path: "nodes.verify_queue_depth",
@@ -6064,6 +6077,10 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
             m.cpm_interval_ms.map(|v| v as f64),
         ),
         (
+            "messages.path_history_points",
+            m.path_history_points.map(f64::from),
+        ),
+        (
             "nodes.verify_queue_depth",
             n.verify_queue_depth.map(f64::from),
         ),
@@ -6152,5 +6169,13 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 format!("sets the {ty} period, and messages.sets does not include {ty}"),
             ));
         }
+    }
+    if m.path_history_points.is_some() && !m.sets.iter().any(|x| x == "bsm" || x == "cam") {
+        e.push(conflict(
+            "messages.path_history_points",
+            "sets the path history's length, and messages.sets has neither bsm nor cam, the \
+             messages that carry it"
+                .to_string(),
+        ));
     }
 }

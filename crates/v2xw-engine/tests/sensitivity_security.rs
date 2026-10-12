@@ -429,6 +429,51 @@ fn the_pseudonym_strategy_moves_linkability_and_p2pcd() {
     );
 }
 
+/// The BSM's Part II path history: none, 1 point, and J2945/1's 15. Each point is about
+/// 8 to 9 bytes of UPER, so the payload and the bytes on the air rise with the cap, and
+/// the security envelope's share of the payload falls.
+#[test]
+fn the_path_history_length_moves_part_ii_bytes() {
+    let mut out = Vec::new();
+    for points in [0u32, 1, 15] {
+        let mut s = fleet(30, 12.0);
+        // 15 is the default; leaving it unset keeps the run as it was.
+        s.messages.path_history_points = (points != 15).then_some(points);
+        let m = run(s);
+        row(&format!("path history {points}"), &m);
+        out.push(m);
+    }
+    let (none, one, full) = (&out[0], &out[1], &out[2]);
+    // A 12 s drive on a straight grid keeps about one point (a chord may run 300 m), so
+    // the cap binds at 1 and not between 1 and 15: only a long, curving path fills 15.
+    let payload = |m: &Measured| m.report.air_bytes.payload;
+    println!(
+        "ROW path history: payload {} / {} / {} B, air {} / {} / {} B, env/payload {:.3} / {:.3} / {:.3}",
+        payload(none),
+        payload(one),
+        payload(full),
+        none.report.air_bytes.psdu,
+        one.report.air_bytes.psdu,
+        full.report.air_bytes.psdu,
+        none.get("envelope_overhead"),
+        one.get("envelope_overhead"),
+        full.get("envelope_overhead"),
+    );
+    assert!(payload(none) < payload(one));
+    assert!(payload(one) <= payload(full));
+    assert!(none.report.air_bytes.psdu < full.report.air_bytes.psdu);
+    assert!(none.get("envelope_overhead") > full.get("envelope_overhead"));
+
+    // Refused where it would do nothing, and past the J2735 limit.
+    let mut no_awareness = fleet(5, 1.0);
+    no_awareness.messages.sets = vec!["spat".to_string()];
+    no_awareness.messages.path_history_points = Some(4);
+    assert!(refused(&no_awareness, "messages.path_history_points"));
+    let mut too_many = fleet(5, 1.0);
+    too_many.messages.path_history_points = Some(24);
+    assert!(refused(&too_many, "messages.path_history_points"));
+}
+
 /// 5 Hz against 10 Hz against 20 Hz BSMs: frames, bytes and the channel busy ratio rise
 /// with the rate and the age of information falls.
 #[test]

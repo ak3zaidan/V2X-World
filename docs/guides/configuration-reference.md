@@ -167,6 +167,7 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `messages.codec_tier` | `uper` | `uper`, `size-model` | Real encoding or a size model. |
 | `messages.spat_interval_ms`, `messages.map_interval_ms` **new** | 100 / 1000 ms (CTI 4501) | 100 to 10 000 / 60 000 ms | Roadside SPaT and MAP periods. Refused without that message in `sets`. |
 | `messages.cpm_interval_ms` **new** | 100 ms | 100 to 1000 ms | `T_GenCpm` (ETSI TS 103 324 §6.1.2.3). Refused without `cpm` in `sets`. |
+| `messages.path_history_points` **new** | 15 | 0 to 23 points | The most path-history points a BSM Part II (or a CAM) carries: SAE J2945/1 recalls 15, J2735 `PathHistoryPointList` allows 23, 0 sends none. About 8 to 9 bytes a point. Refused without `bsm` or `cam` in `sets`. |
 | `security.signer_id_policy.full_cert_every_ms` | 1000 | ms | Certificate attach cadence. A digest is sent otherwise (`digest_otherwise`). 0 attaches the certificate to every message. |
 
 ## Networking (`net`)

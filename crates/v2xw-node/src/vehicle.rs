@@ -143,6 +143,17 @@ impl Default for OwnVehicle {
 }
 
 impl OwnVehicle {
+    /// This vehicle with its messages' path history capped at `max_points`.
+    #[must_use]
+    pub fn with_path_history_points(mut self, max_points: usize) -> Self {
+        let params = PathHistoryParams {
+            max_points,
+            ..*self.history.params()
+        };
+        self.history = PathHistoryBuilder::new(params);
+        self
+    }
+
     /// The vehicle's role.
     pub fn role(&self) -> v2xw_msg::cam::VehicleRole {
         self.role

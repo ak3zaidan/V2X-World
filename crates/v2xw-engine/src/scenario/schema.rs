@@ -2220,6 +2220,11 @@ pub struct Messages {
     /// TS 103 324 §6.1.2.3, 100 ms unless set; at most `T_GenCpmMax`, 1 000 ms).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpm_interval_ms: Option<u64>,
+    /// The most path-history points a BSM's Part II (and a CAM's low-frequency container)
+    /// carries: J2945/1's 15 unless set, at most J2735's 23; 0 sends none. The points are
+    /// the Part II's bulk, about 8 to 9 bytes each.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_history_points: Option<u32>,
 }
 
 impl Messages {
@@ -2241,6 +2246,7 @@ impl Default for Messages {
             spat_interval_ms: None,
             map_interval_ms: None,
             cpm_interval_ms: None,
+            path_history_points: None,
         }
     }
 }

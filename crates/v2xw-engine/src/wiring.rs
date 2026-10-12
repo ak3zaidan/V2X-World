@@ -3043,6 +3043,9 @@ fn node_capacities(scenario: &Scenario) -> NodeConfig {
         c.queue_capacity[1] = n as usize;
     }
     c.cpm_interval = infra_interval(scenario.messages.cpm_interval_ms, v2xw_node::cpm::T_GEN_CPM);
+    if let Some(n) = scenario.messages.path_history_points {
+        c.path_history_points = n as usize;
+    }
     c
 }
 
