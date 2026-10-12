@@ -338,9 +338,20 @@ impl ActorSnapshot {
             let gap = ego.rear_s_m() - s_front;
             return Some(LeaderView::of(*cand, gap.max(0.0)));
         }
-        // One hop upstream: whoever is closest across every lane that feeds this one.
+        self.follower_upstream(world, ego, ego.lane, opts)
+    }
+
+    /// The closest vehicle on any lane or connector that feeds `lane`, one hop upstream,
+    /// with its gap to the ego's rear as if the ego stood on `lane`.
+    fn follower_upstream(
+        &self,
+        world: &World,
+        ego: &VehicleView,
+        lane_id: LaneId,
+        opts: NeighborOptions,
+    ) -> Option<LeaderView> {
         let mut best: Option<(f64, ActorId)> = None;
-        for c in world.predecessors(ego.lane) {
+        for c in world.predecessors(lane_id) {
             if !c.permitted {
                 continue;
             }
@@ -385,13 +396,19 @@ impl ActorSnapshot {
                     let gap = (s_front - cand.dims.length_m) - ego.s_m;
                     (gap <= opts.lookahead_m).then(|| LeaderView::of(*cand, gap.max(0.0)))
                 });
-        let follower =
-            self.last_behind(lane, ego.s_m, Some(ego.actor))
-                .and_then(|(s_front, actor)| {
-                    let cand = &self.get(actor)?.view;
-                    let gap = ego.rear_s_m() - s_front;
-                    (gap <= opts.lookahead_m).then(|| LeaderView::of(*cand, gap.max(0.0)))
-                });
+        // The follower in the target lane, or, when nobody is behind the ego on it, the
+        // closest vehicle about to enter it from upstream: a car still on the junction
+        // connector into the target lane is the follower a change near the start of the
+        // lane cuts in front of (connected-intersections: a car changed lane 6 m into a
+        // road ahead of one leaving the connector into it 2.7 m/s faster, and closed to
+        // a net gap of -0.05 m).
+        let follower = match self.last_behind(lane, ego.s_m, Some(ego.actor)) {
+            Some((s_front, actor)) => self.get(actor).and_then(|e| {
+                let gap = ego.rear_s_m() - s_front;
+                (gap <= opts.lookahead_m).then(|| LeaderView::of(e.view, gap.max(0.0)))
+            }),
+            None => self.follower_upstream(world, ego, lane, opts),
+        };
         Some(SideNeighbors {
             lane,
             side,

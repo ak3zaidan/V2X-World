@@ -793,43 +793,10 @@ struct Transition {
 const STRATEGIC_M_PER_CHANGE: f64 = 25.0;
 
 /// How far before the no-change zone a vehicle's strategic change counts as urgent, so
-/// the vehicle behind it in the target lane makes room for it, metres
-/// ([`cooperative_accel`]). **A choice**: about two car lengths and a gap.
-const COOPERATE_LOOK_M: f64 = 20.0;
-
-/// The acceleration cap of a vehicle that makes room for an urgent strategic lane change
-/// into its lane: it follows the requester as if already in its lane, braking no harder
-/// than its comfortable deceleration, and does not cooperate when that would take more.
-/// `None` when no requester is ahead of it (and nearer than its own leader).
-///
-/// SUMO's LC2013 asks the target-lane follower of a blocked urgent change to brake so
-/// the change can be made ("informFollower", src/microsim/lcmodels/MSLCM_LC2013.cpp,
-/// cooperativeness `lcCooperative` default 1). Without it a car at the end of a lane that
-/// cannot make its turn stood beside a queue packed at standstill gap until the gridlock
-/// timer removed it: 15 of 651 trips on the SUMO cross-validation grid at 3600 veh/h.
-fn cooperative_accel(
-    cf: &dyn CarFollowing,
-    weather: &WeatherState,
-    ego: &VehicleView,
-    lane_view: &LaneView,
-    s_m: f64,
-    leader_gap_m: Option<f64>,
-    requests: &[(f64, f64, f64)],
-) -> Option<f64> {
-    let gap = requests
-        .iter()
-        .filter(|(front, _, _)| *front > s_m)
-        .map(|(front, len, v)| (front - len - s_m, *v))
-        .filter(|(g, _)| *g >= 0.0 && leader_gap_m.is_none_or(|lg| *g < lg))
-        .min_by(|a, b| a.0.total_cmp(&b.0))?;
-    let a = cf.accel(
-        ego,
-        Some(&LeaderView::virtual_obstacle(gap.0, gap.1)),
-        lane_view,
-        weather,
-    );
-    (a >= -ego.driver.comfort_decel_mps2).then_some(a)
-}
+/// that it drops back behind the target-lane leader that blocks it
+/// ([`NativeMobility::strategic_fall_back`]), metres. **A choice**: about two car lengths
+/// and a gap.
+const URGENT_LOOK_M: f64 = 20.0;
 
 /// What a strategic lane change costs in the route choice, seconds per lane crossed: the
 /// driver prefers to stay in lane unless the other lane's route saves more than this.
@@ -1712,6 +1679,14 @@ impl NativeMobility {
     /// LC2013 does the same: a vehicle that cannot overtake the target-lane leader in the
     /// space left "slow[s] down smoothly to follow leader" (SUMO
     /// `MSLCM_LC2013::informLeader`, src/microsim/lcmodels/MSLCM_LC2013.cpp).
+    ///
+    /// The other half of LC2013's courtesy, the target-lane follower braking to let an
+    /// urgent change in (`informFollower`), is not modelled: tried, it held the follower
+    /// and the queue behind it back across the junction upstream, and on the Manhattan
+    /// extract at 3600 veh/h spill-back locked junctions (trips completed 327 against
+    /// SUMO Krauss's 368, 69 vehicles left against 32; without it 365 and 35), while on
+    /// the grid it changed nothing the barrier at the lane end does not already do
+    /// (648 trips completed either way, SUMO 648).
     fn strategic_fall_back(
         &self,
         world: &World,
@@ -1719,13 +1694,12 @@ impl NativeMobility {
         ego: &VehicleView,
         nbrs: &LaneNeighbors,
     ) -> Option<f64> {
-        // Only once the change is urgent, as for the follower's courtesy
-        // ([`cooperative_accel`]). Braking for every blocked change from the start of the
+        // Only once the change is urgent. Braking for every blocked change from the start of the
         // lane, and dropping behind a target-lane follower level with the car as well as
         // behind the leader, took the highway-congestion merge to a standstill
         // (`traffic_audit`: overlaps 1750 -> 2988 vehicle-steps against 500cbb0, 143 cars
         // standing 180 s); urgent and leader-only, 923 and none.
-        if self.strategic_pending(world, actor)? > self.params.no_change_zone_m + COOPERATE_LOOK_M {
+        if self.strategic_pending(world, actor)? > self.params.no_change_zone_m + URGENT_LOOK_M {
             return None;
         }
         let target = self.strategic_target(world, actor)?;
@@ -1984,7 +1958,20 @@ impl NativeMobility {
                 continue;
             }
             let (lane, destination, class) = (a.lane, a.destination, a.class);
-            let route = self.plan_route(class, world, lane, destination, t1, &costs);
+            // To the destination lane, or failing that to any other lane of the destination
+            // road, as a re-plan after a lane change does ([`Self::route_after_change`]): a
+            // lane that cannot reach the one lane the trip was bound for can usually reach
+            // its road, and without a route the vehicle stood at the end of its lane.
+            let route = self
+                .plan_route(class, world, lane, destination, t1, &costs)
+                .or_else(|| {
+                    let edge = world.try_lane(destination)?.edge;
+                    world.edge(edge).lanes.iter().find_map(|l| {
+                        (*l != destination && world.lane(*l).admits(class.class_mask()))
+                            .then(|| self.plan_route(class, world, lane, *l, t1, &costs))
+                            .flatten()
+                    })
+                });
             let a = self.actors.get_mut(&id).expect("present");
             if let Some(route) = route {
                 a.route = route;
@@ -4741,32 +4728,6 @@ impl Mobility for NativeMobility {
         // so a capped vehicle could decide to change lane for a speed gain it would never
         // be allowed to take.
         let mut neighbours: BTreeMap<ActorId, (VehicleView, LaneNeighbors)> = BTreeMap::new();
-        // The urgent strategic changes, by the lane each wants into: the requester's front
-        // position, length and speed. The vehicle behind it in that lane makes room
-        // ([`cooperative_accel`]).
-        let mut requests: BTreeMap<LaneId, Vec<(f64, f64, f64)>> = BTreeMap::new();
-        if self.along_path() && self.params.strategic_lane_choice {
-            for a in self.actors.values() {
-                let Some(left) = self.strategic_pending(world, a) else {
-                    continue;
-                };
-                if left > self.params.no_change_zone_m + COOPERATE_LOOK_M {
-                    continue;
-                }
-                let Some(target) = self.strategic_target(world, a) else {
-                    continue;
-                };
-                let (from, to) = (world.lane(a.lane), world.lane(target));
-                if from.index.abs_diff(to.index) != 1 {
-                    continue;
-                }
-                requests.entry(target).or_default().push((
-                    a.s_m,
-                    a.class.spec().length_m,
-                    a.speed_mps,
-                ));
-            }
-        }
         // One actor's decision: a pure function of the frozen state, so the actors are
         // decided in parallel and merged in id order (`crate::par`, ADR 0004 decision 5).
         let decide_one = |id: &ActorId| -> Option<(Decision, VehicleView, LaneNeighbors)> {
@@ -5043,9 +5004,12 @@ impl Mobility for NativeMobility {
             // there has no other way on: it drove past the end of the lane and was removed with
             // no route (SUMO cross-validation, Manhattan extract at 2400 veh/h: four trips
             // traced, at links of about 62 m; trips completed 220 -> 223, SUMO 232).
+            // The barrier stands from the start of the lane, so the driver approaches it
+            // as it would a red light; raised only on entering the zone it was 15-30 m
+            // away at speed and the driver braked at the 6 m/s² bound, closing up the car
+            // behind (connected-intersections, 10 m/s at 25 m from the lane end).
             if along
                 && let Some(left) = self.strategic_pending(world, actor)
-                && left < self.params.no_change_zone_m
             {
                 let d = (left - STOP_LINE_MARGIN_M).max(0.0);
                 let before = leader;
@@ -5198,19 +5162,6 @@ impl Mobility for NativeMobility {
                 merge_accel(&ego_capped, m, tau)
             });
             if let Some(limit) = merge_limit {
-                accel = accel.min(limit);
-            }
-            if let Some(reqs) = requests.get(&actor.lane)
-                && let Some(limit) = cooperative_accel(
-                    &*self.cf,
-                    &self.weather,
-                    &ego_capped,
-                    &lane_view,
-                    actor.s_m,
-                    leader.as_ref().map(|l| l.gap_m),
-                    reqs,
-                )
-            {
                 accel = accel.min(limit);
             }
             if along
