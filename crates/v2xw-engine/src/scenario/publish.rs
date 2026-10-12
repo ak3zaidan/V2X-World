@@ -333,6 +333,14 @@ const DIMENSIONLESS: &[&str] = &[
     "radio.sidelink.resource_keep_probability",
     "radio.dcc.adaptive_alpha",
     "radio.dcc.adaptive_beta",
+    // traffic audit
+    "traffic.critical_gap_factor",
+    "traffic.kerbside.taxi_share",
+    "traffic.kerbside.delivery_stop_share",
+    "actors.vehicles.drivers.speed_factor",
+    "actors.vehicles.drivers.speed_spread",
+    "actors.vehicles.gnss.outage_probability",
+    // end traffic audit
 ];
 
 /// One place the scenario picks a model, and which registry family fills it.

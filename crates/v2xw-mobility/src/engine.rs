@@ -339,15 +339,36 @@ impl DriverTraits {
         class: VehicleClass,
         follow_median_s: f64,
     ) -> DriverTraits {
+        Self::draw_law(
+            ctx,
+            seq,
+            class,
+            &TraitLaw {
+                follow_median_s,
+                ..TraitLaw::default()
+            },
+        )
+    }
+
+    /// [`DriverTraits::draw`] under the population law `law` (the scenario's
+    /// `actors.vehicles.drivers` speed and reaction numbers).
+    pub fn draw_law(
+        ctx: &dyn MobCtx,
+        seq: u64,
+        class: VehicleClass,
+        law: &TraitLaw,
+    ) -> DriverTraits {
         let key = EntityRef::custom(DRIVER_TRAITS_ID, seq);
+        let speed_dev = class.spec().speed_dev * law.speed_spread;
         let speed_factor = {
             let mut rng = ctx.rng(RngDomain::DesiredSpeed, key);
-            rng.normal(1.0, class.spec().speed_dev).clamp(0.2, 2.0)
+            rng.normal(law.speed_factor_mean, speed_dev).clamp(0.2, 2.0)
         };
+        let follow_median_s = law.follow_median_s;
         // One standard-normal draw sets how quick this driver is, for both responses.
         let z = ctx.rng(RngDomain::ReactionTime, key).normal(0.0, 1.0);
-        let reaction_s =
-            math::exp(math::ln(REACTION_MEDIAN_S) + REACTION_SIGMA * z).clamp(0.3, 3.0);
+        let reaction_s = math::exp(math::ln(law.reaction_median_s.max(0.05)) + REACTION_SIGMA * z)
+            .clamp(0.3, 3.0);
         let follow_reaction_s =
             math::exp(math::ln(follow_median_s.max(0.05)) + REACTION_SIGMA * z).clamp(0.2, 3.0);
         // The amber threshold: logistic across the dilemma zone, 10 % at its near edge
@@ -385,9 +406,45 @@ impl DriverTraits {
             reaction_s,
             follow_reaction_s,
             amber_go_tti_s,
-            style: crate::style::DriverStyle::of_speed_factor(speed_factor, class.spec().speed_dev),
+            style: crate::style::DriverStyle::of_speed_factor_around(
+                speed_factor,
+                law.speed_factor_mean,
+                speed_dev,
+            ),
             params_z,
             noise_key,
+        }
+    }
+}
+
+/// The population law a driver's [`DriverTraits`] are drawn under: the scenario's
+/// `actors.vehicles.drivers` speed and reaction numbers. The default is the calibration
+/// every scenario ran before these were exposed, so a scenario that does not set them
+/// draws the same drivers bit for bit.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TraitLaw {
+    /// The mean free speed as a multiple of the posted limit (SUMO `speedFactor`'s mean,
+    /// 1.0 by default).
+    pub speed_factor_mean: f64,
+    /// A multiplier on each class's speed deviation (SUMO `speedDev`: 0.1 for a car):
+    /// 0 gives every driver the mean, 1 is SUMO's spread.
+    pub speed_spread: f64,
+    /// The median start-up reaction to a signal or crosswalk, seconds
+    /// ([`REACTION_MEDIAN_S`], Taoka 1989).
+    pub reaction_median_s: f64,
+    /// The median start-up delay behind the car in front, seconds
+    /// ([`FOLLOW_REACTION_MEDIAN_S`]).
+    pub follow_median_s: f64,
+}
+
+impl Default for TraitLaw {
+    fn default() -> Self {
+        TraitLaw {
+            speed_factor_mean: 1.0,
+            speed_spread: 1.0,
+            reaction_median_s: REACTION_MEDIAN_S,
+            follow_median_s: FOLLOW_REACTION_MEDIAN_S,
         }
     }
 }
@@ -670,6 +727,19 @@ pub struct EngineParams {
     /// The median of a queued driver's start-up delay behind the car in front, seconds
     /// ([`FOLLOW_REACTION_MEDIAN_S`], a calibrated value).
     pub queue_start_delay_median_s: f64,
+    /// The mean free speed as a multiple of the posted limit ([`TraitLaw`]); 1.0.
+    pub speed_factor_mean: f64,
+    /// A multiplier on each class's speed deviation ([`TraitLaw`]); 1.0.
+    pub speed_spread: f64,
+    /// The median start-up reaction to a signal, seconds ([`REACTION_MEDIAN_S`]).
+    pub start_reaction_median_s: f64,
+    /// The critical headway a permitted left turn accepts in the opposing flow, seconds
+    /// ([`crate::intersection::signal_fixed_time::HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S`],
+    /// HCM 6th ed. ch. 31: 4.5 s).
+    pub permitted_left_critical_headway_s: f64,
+    /// A multiplier on the HCM critical gaps and follow-up times at unsignalised
+    /// junctions ([`GapAcceptanceParams::gap_factor`]); 1.0.
+    pub critical_gap_factor: f64,
     /// How motorcycles and mopeds ride ([`TwoWheelerParams`]). Not applied in the legacy
     /// parity mode.
     pub two_wheelers: TwoWheelerParams,
@@ -745,6 +815,12 @@ impl Default for EngineParams {
             driver_heterogeneity: true,
             right_turn_on_red: false,
             queue_start_delay_median_s: FOLLOW_REACTION_MEDIAN_S,
+            speed_factor_mean: 1.0,
+            speed_spread: 1.0,
+            start_reaction_median_s: REACTION_MEDIAN_S,
+            permitted_left_critical_headway_s:
+                crate::intersection::signal_fixed_time::HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S,
+            critical_gap_factor: 1.0,
             two_wheelers: TwoWheelerParams::default(),
             cyclists: CyclistSpeeds::default(),
             amber_commit_lapse: true,
@@ -1256,6 +1332,9 @@ pub struct NativeMobility {
     /// A researcher's passenger-car driver (`actors.vehicles.drivers`): each set field
     /// replaces the car-following model's own calibration for [`VehicleClass::Passenger`].
     driver_override: DriverOverride,
+    /// Per-class car-following numbers set by hand ([`NativeMobility::with_class_override`]),
+    /// applied over the class's own profile; empty for a scenario that sets none.
+    class_overrides: Vec<(VehicleClass, DriverOverride)>,
     /// Per vehicle: the lamps shown last step (for the brake hysteresis) and the driver's
     /// signalling habit, drawn the first time the vehicle is asked about.
     lamp_memory: BTreeMap<ActorId, (u8, crate::lamps::SignalHabit)>,
@@ -1355,9 +1434,13 @@ impl NativeMobility {
             params,
             cf,
             lane_change: params.lane_changes.then_some(mobil),
-            gap: GapAcceptance::new(GapAcceptanceParams::default()),
+            gap: GapAcceptance::new(GapAcceptanceParams {
+                gap_factor: params.critical_gap_factor,
+                ..GapAcceptanceParams::default()
+            }),
             signals: FixedTimeSignals::new(SignalPlanParams {
                 right_turn_on_red: params.right_turn_on_red,
+                permitted_left_critical_headway_s: params.permitted_left_critical_headway_s,
                 ..SignalPlanParams::default()
             }),
             two_coloring: None,
@@ -1395,6 +1478,7 @@ impl NativeMobility {
             speed_sampled_at: None,
             lamp_params: crate::lamps::LampParams::default(),
             driver_override: DriverOverride::default(),
+            class_overrides: Vec::new(),
             lamp_memory: BTreeMap::new(),
             lateral: None,
         }
@@ -1404,6 +1488,15 @@ impl NativeMobility {
     /// `s0` replace the car-following model's calibration for cars, before the per-driver
     /// style and heterogeneity draws, so the population keeps its spread around them.
     #[must_use]
+    pub fn with_class_override(mut self, class: VehicleClass, o: DriverOverride) -> Self {
+        self.class_overrides.retain(|(c, _)| *c != class);
+        if o != DriverOverride::default() {
+            self.class_overrides.push((class, o));
+        }
+        self
+    }
+
+    /// Sets a passenger-car driver's car-following numbers by hand.
     pub fn with_driver_override(mut self, o: DriverOverride) -> Self {
         self.driver_override = o;
         self
@@ -2422,11 +2515,16 @@ impl NativeMobility {
     /// [`DriverTraits::NEUTRAL`] in the legacy parity mode or with heterogeneity off.
     fn traits_for(&self, ctx: &dyn MobCtx, trip: &TripRequest) -> DriverTraits {
         if self.along_path() && self.params.driver_heterogeneity {
-            DriverTraits::draw_with(
+            DriverTraits::draw_law(
                 ctx,
                 trip.seq,
                 trip.class,
-                self.params.queue_start_delay_median_s,
+                &TraitLaw {
+                    speed_factor_mean: self.params.speed_factor_mean,
+                    speed_spread: self.params.speed_spread,
+                    reaction_median_s: self.params.start_reaction_median_s,
+                    follow_median_s: self.params.queue_start_delay_median_s,
+                },
             )
         } else {
             DriverTraits::NEUTRAL
@@ -3102,6 +3200,21 @@ impl NativeMobility {
     /// The driver profile a class gets: the installed car-following model's own
     /// calibration.
     fn driver_for(&self, class: VehicleClass) -> DriverProfile {
+        let base = self.class_profile(class);
+        match self.class_overrides.iter().find(|(c, _)| *c == class) {
+            Some((_, o)) => DriverProfile {
+                max_accel_mps2: o.max_accel_mps2.unwrap_or(base.max_accel_mps2),
+                comfort_decel_mps2: o.comfort_decel_mps2.unwrap_or(base.comfort_decel_mps2),
+                time_headway_s: o.time_headway_s.unwrap_or(base.time_headway_s),
+                min_gap_m: o.min_gap_m.unwrap_or(base.min_gap_m),
+                ..base
+            },
+            None => base,
+        }
+    }
+
+    /// The driver profile of `class` before any per-class override.
+    fn class_profile(&self, class: VehicleClass) -> DriverProfile {
         if class == VehicleClass::Bicycle {
             return bicycle_driver();
         }

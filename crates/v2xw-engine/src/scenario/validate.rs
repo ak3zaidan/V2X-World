@@ -1027,6 +1027,301 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the verification queue depth",
     },
+    // --- traffic audit (2026-10-11) ----------------------------------------
+    // HCM 6th ed. (2016) ch. 20's two-way-stop critical gaps run 4.1-7.5 s and field
+    // re-measurements (e.g. LTRC Report 715, 2025) fall within about +-40 % of them; a
+    // factor of 0.5-2 covers that with room either side.
+    Bound {
+        path: "traffic.critical_gap_factor",
+        lo: 0.5,
+        hi: 2.0,
+        exclusive_lo: false,
+        what: "the critical-gap factor",
+    },
+    // A gap shorter than the 2.5 s follow-up headway is not a gap; 8 s is past any HCM
+    // critical gap (HCM 6th ed. ch. 31 uses 4.5 s).
+    Bound {
+        path: "traffic.permitted_left_gap_s",
+        lo: 2.5,
+        hi: 8.0,
+        exclusive_lo: false,
+        what: "the permitted left-turn critical gap",
+    },
+    // 0 turns the turn-speed limit off; 10 m/s² is about 1 g, past any tyre's grip
+    // (SUMO's default is 5.5).
+    Bound {
+        path: "traffic.turn_lateral_accel_mps2",
+        lo: 0.0,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the turning lateral acceleration",
+    },
+    // TCRP Report 19 (1996): urban local-bus stops 150-400 m apart, limited-stop and BRT
+    // up to about 1 km; 100-2,000 m covers both with room.
+    Bound {
+        path: "traffic.kerbside.bus_stop_spacing_m",
+        lo: 100.0,
+        hi: 2000.0,
+        exclusive_lo: false,
+        what: "the bus stop spacing",
+    },
+    // TCQSM 3rd ed. (TCRP Report 165) ch. 6: dwell times of 15-60 s typical, up to a few
+    // minutes at a major stop.
+    Bound {
+        path: "traffic.kerbside.bus_dwell_mean_s",
+        lo: 5.0,
+        hi: 300.0,
+        exclusive_lo: false,
+        what: "the mean bus dwell",
+    },
+    Bound {
+        path: "traffic.kerbside.taxi_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the taxi share",
+    },
+    // A pick-up or drop-off: seconds to a few minutes; 10 minutes is a guard.
+    Bound {
+        path: "traffic.kerbside.taxi_dwell_median_s",
+        lo: 5.0,
+        hi: 600.0,
+        exclusive_lo: false,
+        what: "the median taxi dwell",
+    },
+    Bound {
+        path: "traffic.kerbside.delivery_stop_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the delivery stop share",
+    },
+    // Urban freight double-parking studies report dwells of a few minutes to about half
+    // an hour; an hour is a guard.
+    Bound {
+        path: "traffic.kerbside.delivery_dwell_median_s",
+        lo: 30.0,
+        hi: 3600.0,
+        exclusive_lo: false,
+        what: "the median delivery dwell",
+    },
+    // SUMO's speedFactor: observed urban free-flow means are about 0.9-1.2 of the limit;
+    // 0.5-1.5 covers it with room either side. The spread multiplies SUMO's speedDev
+    // (0.1 for a car): 3 is a 30 % deviation.
+    Bound {
+        path: "actors.vehicles.drivers.speed_factor",
+        lo: 0.5,
+        hi: 1.5,
+        exclusive_lo: false,
+        what: "the mean speed factor",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.speed_spread",
+        lo: 0.0,
+        hi: 3.0,
+        exclusive_lo: false,
+        what: "the speed spread",
+    },
+    // The engine clamps each driver's draw to 0.3-3 s (Taoka 1989's lognormal: median
+    // 1.1-1.2 s); a median outside that would be clamped flat.
+    Bound {
+        path: "actors.vehicles.drivers.start_reaction_s",
+        lo: 0.3,
+        hi: 3.0,
+        exclusive_lo: false,
+        what: "the median start-up reaction",
+    },
+    // Greenshields 1947 discharge headways imply a delay under 1 s; the engine clamps
+    // each driver to 0.2-3 s.
+    Bound {
+        path: "actors.vehicles.drivers.queue_start_delay_s",
+        lo: 0.05,
+        hi: 3.0,
+        exclusive_lo: false,
+        what: "the median queue start-up delay",
+    },
+    // Per-class car-following numbers: the passenger rows' ranges (Treiber and Kesting
+    // 2013 Table 11.2), which take in SUMO's truck (accel 1.3, decel 4.0, minGap 2.5),
+    // bus (1.2, 4.0, 2.5), motorcycle (6.0 accel is capped at 5) and bicycle (1.2, 3.0,
+    // 0.5) vTypes.
+    Bound {
+        path: "actors.vehicles.drivers.truck.max_accel_mps2",
+        lo: 0.3,
+        hi: 5.0,
+        exclusive_lo: false,
+        what: "the truck acceleration",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.truck.comfort_decel_mps2",
+        lo: 0.5,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the truck comfortable deceleration",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.truck.time_headway_s",
+        lo: 0.3,
+        hi: 4.0,
+        exclusive_lo: false,
+        what: "the truck time headway",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.truck.min_gap_m",
+        lo: 0.3,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the truck standstill gap",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.bus.max_accel_mps2",
+        lo: 0.3,
+        hi: 5.0,
+        exclusive_lo: false,
+        what: "the bus acceleration",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.bus.comfort_decel_mps2",
+        lo: 0.5,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the bus comfortable deceleration",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.bus.time_headway_s",
+        lo: 0.3,
+        hi: 4.0,
+        exclusive_lo: false,
+        what: "the bus time headway",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.bus.min_gap_m",
+        lo: 0.3,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the bus standstill gap",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.motorcycle.max_accel_mps2",
+        lo: 0.3,
+        hi: 5.0,
+        exclusive_lo: false,
+        what: "the motorcycle acceleration",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.motorcycle.comfort_decel_mps2",
+        lo: 0.5,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the motorcycle comfortable deceleration",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.motorcycle.time_headway_s",
+        lo: 0.3,
+        hi: 4.0,
+        exclusive_lo: false,
+        what: "the motorcycle time headway",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.motorcycle.min_gap_m",
+        lo: 0.3,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the motorcycle standstill gap",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.bicycle.max_accel_mps2",
+        lo: 0.3,
+        hi: 5.0,
+        exclusive_lo: false,
+        what: "the bicycle acceleration",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.bicycle.comfort_decel_mps2",
+        lo: 0.5,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the bicycle comfortable deceleration",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.bicycle.time_headway_s",
+        lo: 0.3,
+        hi: 4.0,
+        exclusive_lo: false,
+        what: "the bicycle time headway",
+    },
+    Bound {
+        path: "actors.vehicles.drivers.bicycle.min_gap_m",
+        lo: 0.3,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the bicycle standstill gap",
+    },
+    // FHWA Signal Timing Manual (2008) ch. 5: cycles of 60-150 s typical, rarely above
+    // 180 s; 30 s is a two-phase minimum with short greens.
+    Bound {
+        path: "world.signals.cycle_s",
+        lo: 30.0,
+        hi: 180.0,
+        exclusive_lo: false,
+        what: "the signal cycle length",
+    },
+    // MUTCD 2009 §4D.26: a red clearance shall not exceed 6 s.
+    Bound {
+        path: "world.signals.all_red_s",
+        lo: 0.0,
+        hi: 6.0,
+        exclusive_lo: false,
+        what: "the all-red floor",
+    },
+    // MUTCD 2009 §4E.06: walk at least 7 s, 4 s where pedestrian volumes are low; 30 s
+    // is a guard.
+    Bound {
+        path: "world.signals.pedestrian_walk_s",
+        lo: 4.0,
+        hi: 30.0,
+        exclusive_lo: false,
+        what: "the pedestrian walk interval",
+    },
+    // MUTCD 2009 §4E.06: 3.5 ft/s (1.067 m/s); 3.0 ft/s (0.91 m/s) where slower
+    // pedestrians cross; 0.8-1.5 m/s brackets observed walking speeds.
+    Bound {
+        path: "world.signals.pedestrian_speed_mps",
+        lo: 0.8,
+        hi: 1.5,
+        exclusive_lo: false,
+        what: "the pedestrian clearance walking speed",
+    },
+    // GNSS: 0.01 outliers/s of 12 m and 0.006 bursts/s are the legacy engine's draws
+    // (04-models.md §3.8); the bounds are guards around them.
+    Bound {
+        path: "actors.vehicles.gnss.outlier_rate_hz",
+        lo: 0.0,
+        hi: 0.5,
+        exclusive_lo: false,
+        what: "the GNSS outlier rate",
+    },
+    Bound {
+        path: "actors.vehicles.gnss.outlier_magnitude_m",
+        lo: 1.0,
+        hi: 200.0,
+        exclusive_lo: false,
+        what: "the GNSS outlier magnitude",
+    },
+    Bound {
+        path: "actors.vehicles.gnss.burst_rate_hz",
+        lo: 0.0,
+        hi: 0.5,
+        exclusive_lo: false,
+        what: "the GNSS degraded-burst rate",
+    },
+    Bound {
+        path: "actors.vehicles.gnss.outage_probability",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the GNSS outage probability",
+    },
+    // --- end traffic audit ----------------------------------------------------
 ];
 
 /// One closed set of values the loader accepts and the published schema offers.
@@ -2533,6 +2828,93 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Each node's verification queue depth (64 unless set); a full queue drops \
                (or, under prioritized, sheds the oldest).",
     },
+    // --- traffic audit (2026-10-11) ----------------------------------------
+    KeyStatus {
+        path: "traffic.critical_gap_factor",
+        status: Status::Wired,
+        note: "Scales the HCM critical gaps and follow-up times at junctions without signals; below 1 drivers squeeze into shorter gaps.",
+    },
+    KeyStatus {
+        path: "traffic.permitted_left_gap_s",
+        status: Status::Wired,
+        note: "The gap in oncoming traffic a left turn on a green waits for.",
+    },
+    KeyStatus {
+        path: "traffic.turn_lateral_accel_mps2",
+        status: Status::Wired,
+        note: "Caps the speed through a turn at sqrt(a times the corner radius); 0 is no cap.",
+    },
+    KeyStatus {
+        path: "traffic.kerbside",
+        status: Status::Wired,
+        note: "Overrides the jurisdiction's kerbside stops: bus stops and dwell, taxi share and dwell, delivery share and dwell. Not applied to SUMO runs.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.speed_factor",
+        status: Status::Wired,
+        note: "Mean free speed as a multiple of the limit (SUMO speedFactor). Needs realism other than identical.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.speed_spread",
+        status: Status::Wired,
+        note: "Multiplies each class's speed deviation (SUMO speedDev). Needs realism other than identical.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.start_reaction_s",
+        status: Status::Wired,
+        note: "Median reaction to a green or a cleared crosswalk. Needs realism other than identical.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.queue_start_delay_s",
+        status: Status::Wired,
+        note: "Median start-up delay behind the car in front: sets start-up lost time and saturation flow. Needs realism other than identical.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.truck",
+        status: Status::Wired,
+        note: "Replaces the car-following a, b, T and s0 of trucks and trailers; each driver keeps their own spread and style around them.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.bus",
+        status: Status::Wired,
+        note: "Replaces the car-following a, b, T and s0 of buses and coaches; each driver keeps their own spread and style around them.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.motorcycle",
+        status: Status::Wired,
+        note: "Replaces the car-following a, b, T and s0 of motorcycles and mopeds; each driver keeps their own spread and style around them.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.drivers.bicycle",
+        status: Status::Wired,
+        note: "Replaces the car-following a, b, T and s0 of cyclists; each driver keeps their own spread and style around them.",
+    },
+    KeyStatus {
+        path: "world.signals.cycle_s",
+        status: Status::Wired,
+        note: "Cycle length of the plans synthesised for an imported (OSM) world.",
+    },
+    KeyStatus {
+        path: "world.signals.all_red_s",
+        status: Status::Wired,
+        note: "Floor under each phase's all-red in an imported world's plans.",
+    },
+    KeyStatus {
+        path: "world.signals.pedestrian_walk_s",
+        status: Status::Wired,
+        note: "Walk interval an imported world's greens leave room for.",
+    },
+    KeyStatus {
+        path: "actors.vehicles.gnss",
+        status: Status::Wired,
+        note: "The positioning error every equipped vehicle's BSM carries: receiver grade, outliers, degraded bursts and outages.",
+    },
+    KeyStatus {
+        path: "world.signals.pedestrian_speed_mps",
+        status: Status::Wired,
+        note: "Walking speed an imported world's pedestrian clearance is timed for.",
+    },
+    // --- end traffic audit ----------------------------------------------------
 ];
 
 /// The status entry that governs `path`: the longest matching prefix.
@@ -3062,6 +3444,193 @@ fn conflict(field: &str, conflict: String) -> ScenarioError {
 /// `path` is the *canonical* path — `threats.attackers[].fraction` — and `field` is the
 /// concrete one the author wrote — `threats.attackers[2].fraction` — so the table has one
 /// row per rule and the message names the author's own field.
+// traffic audit
+/// The ranges and the do-nothing combinations of the traffic-audit fields
+/// (docs/guides/config-inventory-traffic.md).
+fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    use crate::scenario::schema::{ClassDriver, DriverRealism};
+    let dv = &s.actors.vehicles.drivers;
+    let trait_fields = [
+        ("actors.vehicles.drivers.speed_factor", dv.speed_factor),
+        ("actors.vehicles.drivers.speed_spread", dv.speed_spread),
+        (
+            "actors.vehicles.drivers.start_reaction_s",
+            dv.start_reaction_s,
+        ),
+        (
+            "actors.vehicles.drivers.queue_start_delay_s",
+            dv.queue_start_delay_s,
+        ),
+    ];
+    for (path, v) in trait_fields {
+        if let Some(v) = v {
+            bounded_at(path, path, v, e);
+            if dv.realism == DriverRealism::Identical {
+                e.push(conflict(
+                    path,
+                    "is set, and actors.vehicles.drivers.realism is identical, whose drivers \
+                     all drive the limit and react at once; choose another realism or unset it"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    // A class's numbers do nothing when the fleet has none of that class.
+    let classes = &s.actors.vehicles.classes;
+    let has = |names: &[&str]| classes.is_empty() || names.iter().any(|n| classes.contains_key(*n));
+    let per_class: [(&str, &Option<ClassDriver>, bool); 4] = [
+        ("truck", &dv.truck, has(&["truck", "trailer"])),
+        ("bus", &dv.bus, has(&["bus", "coach"])),
+        ("motorcycle", &dv.motorcycle, has(&["motorcycle", "moped"])),
+        ("bicycle", &dv.bicycle, s.actors.vru.cyclists > 0),
+    ];
+    for (name, spec, present) in per_class {
+        let Some(cd) = spec else { continue };
+        for (leaf, v) in [
+            ("max_accel_mps2", cd.max_accel_mps2),
+            ("comfort_decel_mps2", cd.comfort_decel_mps2),
+            ("time_headway_s", cd.time_headway_s),
+            ("min_gap_m", cd.min_gap_m),
+        ] {
+            if let Some(v) = v {
+                let path = format!("actors.vehicles.drivers.{name}.{leaf}");
+                bounded_at(&path, &path, v, e);
+            }
+        }
+        if !present {
+            let why = if name == "bicycle" {
+                "sets cyclists' driving, and actors.vru.cyclists is 0".to_string()
+            } else {
+                format!("sets {name} driving, and actors.vehicles.classes has no {name}")
+            };
+            e.push(conflict(&format!("actors.vehicles.drivers.{name}"), why));
+        }
+    }
+    if let Some(t) = &s.traffic {
+        for (path, v) in [
+            ("traffic.critical_gap_factor", t.critical_gap_factor),
+            ("traffic.permitted_left_gap_s", t.permitted_left_gap_s),
+            ("traffic.turn_lateral_accel_mps2", t.turn_lateral_accel_mps2),
+        ] {
+            if let Some(v) = v {
+                bounded_at(path, path, v, e);
+            }
+        }
+        if let Some(k) = &t.kerbside {
+            for (path, v) in [
+                ("traffic.kerbside.bus_stop_spacing_m", k.bus_stop_spacing_m),
+                ("traffic.kerbside.bus_dwell_mean_s", k.bus_dwell_mean_s),
+                ("traffic.kerbside.taxi_share", k.taxi_share),
+                (
+                    "traffic.kerbside.taxi_dwell_median_s",
+                    k.taxi_dwell_median_s,
+                ),
+                (
+                    "traffic.kerbside.delivery_stop_share",
+                    k.delivery_stop_share,
+                ),
+                (
+                    "traffic.kerbside.delivery_dwell_median_s",
+                    k.delivery_dwell_median_s,
+                ),
+            ] {
+                if let Some(v) = v {
+                    bounded_at(path, path, v, e);
+                    if k.enabled == Some(false) {
+                        e.push(conflict(
+                            path,
+                            "is set, and traffic.kerbside.enabled is false".to_string(),
+                        ));
+                    }
+                }
+            }
+            if k.taxi_share == Some(0.0) && k.taxi_dwell_median_s.is_some() {
+                e.push(conflict(
+                    "traffic.kerbside.taxi_dwell_median_s",
+                    "is set, and traffic.kerbside.taxi_share is 0: no taxi stops".to_string(),
+                ));
+            }
+            if k.delivery_stop_share == Some(0.0) && k.delivery_dwell_median_s.is_some() {
+                e.push(conflict(
+                    "traffic.kerbside.delivery_dwell_median_s",
+                    "is set, and traffic.kerbside.delivery_stop_share is 0: no delivery stops"
+                        .to_string(),
+                ));
+            }
+        }
+        let native_only = t.critical_gap_factor.is_some()
+            || t.permitted_left_gap_s.is_some()
+            || t.turn_lateral_accel_mps2.is_some()
+            || t.kerbside.is_some();
+        if native_only && s.mobility.as_ref().is_some_and(|m| m.provider == "sumo") {
+            e.push(conflict(
+                "traffic",
+                "sets the native engine's junction or kerbside behaviour, and \
+                 mobility.provider is sumo"
+                    .to_string(),
+            ));
+        }
+    }
+    if let Some(g) = &s.actors.vehicles.gnss {
+        for (path, v) in [
+            ("actors.vehicles.gnss.outlier_rate_hz", g.outlier_rate_hz),
+            (
+                "actors.vehicles.gnss.outlier_magnitude_m",
+                g.outlier_magnitude_m,
+            ),
+            ("actors.vehicles.gnss.burst_rate_hz", g.burst_rate_hz),
+            (
+                "actors.vehicles.gnss.outage_probability",
+                g.outage_probability,
+            ),
+        ] {
+            if let Some(v) = v {
+                bounded_at(path, path, v, e);
+            }
+        }
+        if g.outlier_rate_hz == Some(0.0) && g.outlier_magnitude_m.is_some() {
+            e.push(conflict(
+                "actors.vehicles.gnss.outlier_magnitude_m",
+                "is set, and actors.vehicles.gnss.outlier_rate_hz is 0: no outliers".to_string(),
+            ));
+        }
+        if s.actors.vehicles.equipped_fraction == 0.0
+            && (s.actors.vru.device_fraction == 0.0
+                || s.actors.vru.pedestrians + s.actors.vru.cyclists == 0)
+        {
+            e.push(conflict(
+                "actors.vehicles.gnss",
+                "is set, and nothing carries a radio (actors.vehicles.equipped_fraction is 0), \
+                 so no position is ever reported"
+                    .to_string(),
+            ));
+        }
+    }
+    let ws = &s.world.signals;
+    let osm = matches!(s.world.source, v2xw_world::WorldSourceSpec::OsmXml { .. });
+    for (path, v) in [
+        ("world.signals.cycle_s", ws.cycle_s),
+        ("world.signals.all_red_s", ws.all_red_s),
+        ("world.signals.pedestrian_walk_s", ws.pedestrian_walk_s),
+        (
+            "world.signals.pedestrian_speed_mps",
+            ws.pedestrian_speed_mps,
+        ),
+    ] {
+        if let Some(v) = v {
+            bounded_at(path, path, v, e);
+            if !osm {
+                e.push(conflict(
+                    path,
+                    "times the plans synthesised for an imported (osm-xml) world; this world \
+                     brings its own plans (a procedural grid takes params.cycle_s)"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+}
+
 fn bounded_at(path: &str, field: &str, value: f64, e: &mut Vec<ScenarioError>) {
     let Some(b) = bound_of(path) else {
         // A field checked through this helper with no row in the table is a defect in
@@ -4144,6 +4713,7 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
             bounded_at(path, path, v, e);
         }
     }
+    traffic_audit_checks(s, e);
     if !dv.is_default() && s.mobility.as_ref().is_some_and(|m| m.provider == "sumo") {
         e.push(conflict(
             "actors.vehicles.drivers",

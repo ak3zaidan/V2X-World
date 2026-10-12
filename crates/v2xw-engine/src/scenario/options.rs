@@ -1522,6 +1522,28 @@ pub fn title(path: &str) -> Option<&'static str> {
         "seed" => "Random seed",
         "meta.name" => "Run name",
         "city" => "City",
+        // traffic audit
+        "traffic.critical_gap_factor" => "Gap acceptance at unsignalised junctions (factor)",
+        "traffic.permitted_left_gap_s" => "Left turn on green: gap accepted",
+        "traffic.turn_lateral_accel_mps2" => "Cornering acceleration through junctions",
+        "traffic.kerbside" => "Kerbside stops",
+        "traffic.kerbside.taxi_share" => "Share of cars that are taxis",
+        "traffic.kerbside.delivery_stop_share" => "Share of vans making a delivery stop",
+        "actors.vehicles.drivers.speed_factor" => "Free speed (multiple of the limit)",
+        "actors.vehicles.drivers.speed_spread" => "Spread of free speeds",
+        "actors.vehicles.drivers.start_reaction_s" => "Reaction to a green light",
+        "actors.vehicles.drivers.queue_start_delay_s" => "Queue start-up delay",
+        "actors.vehicles.drivers.truck" => "Truck drivers",
+        "actors.vehicles.drivers.bus" => "Bus drivers",
+        "actors.vehicles.drivers.motorcycle" => "Motorcyclists",
+        "actors.vehicles.drivers.bicycle" => "Cyclist riding",
+        "world.signals.cycle_s" => "Signal cycle length",
+        "world.signals.all_red_s" => "All-red between phases (minimum)",
+        "world.signals.pedestrian_walk_s" => "Pedestrian walk interval",
+        "world.signals.pedestrian_speed_mps" => "Pedestrian clearance walking speed",
+        "actors.vehicles.gnss" => "GNSS receivers",
+        "actors.vehicles.gnss.rtk" => "RTK-corrected receivers",
+        // end traffic audit
         _ => return None,
     })
 }

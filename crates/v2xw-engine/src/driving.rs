@@ -65,6 +65,20 @@ pub fn native_with_driving(
             min_gap_m: d.min_gap_m,
         });
     }
+    // traffic audit: per-class car-following numbers (`actors.vehicles.drivers.truck`, ...).
+    use v2xw_mobility::VehicleClass as C;
+    for (spec, classes) in [
+        (&d.truck, [C::Truck, C::Trailer]),
+        (&d.bus, [C::Bus, C::Coach]),
+        (&d.motorcycle, [C::Motorcycle, C::Moped]),
+        (&d.bicycle, [C::Bicycle, C::Bicycle]),
+    ] {
+        if let Some(cd) = spec {
+            for c in classes {
+                mobility = mobility.with_class_override(c, cd.as_override());
+            }
+        }
+    }
     // `actors.vehicles.drivers.motorcycle_filtering` overrides the jurisdiction's rule;
     // filtering needs the sub-lane model, so allowing it turns that model on.
     let mut rules = *rules;

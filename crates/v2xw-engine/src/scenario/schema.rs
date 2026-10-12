@@ -172,6 +172,89 @@ pub struct Traffic {
     /// How the signals are controlled.
     #[serde(default)]
     pub signals: SignalControl,
+    // traffic audit
+    /// A multiplier on the critical gaps and follow-up times drivers accept at junctions
+    /// without signals (HCM 6th ed. ch. 20 two-way-stop table: 4.1 s for a major-road left
+    /// turn to 7.1-7.5 s for a minor-road left). Below 1 drivers take shorter gaps, above
+    /// 1 they wait for longer ones. Unset is 1, the table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub critical_gap_factor: Option<f64>,
+    /// The critical headway a permitted left turn on a green accepts in the oncoming
+    /// traffic, seconds. Unset is 4.5 s (HCM 6th ed. ch. 31).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permitted_left_gap_s: Option<f64>,
+    /// The average sideways acceleration a turn through a junction is driven at, m/s²: a
+    /// corner of radius R is taken at sqrt(a·R) at most. Unset is 5.5 m/s² (SUMO
+    /// netconvert `--junctions.limit-turn-speed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_lateral_accel_mps2: Option<f64>,
+    /// Kerbside stops: buses at stops, taxis picking up, delivery vans double-parked.
+    /// Unset follows the jurisdiction (New York City has its taxis).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kerbside: Option<KerbsideSettings>,
+}
+
+// traffic audit
+/// Kerbside stops ([`Traffic::kerbside`]); each unset field keeps the jurisdiction's value
+/// ([`v2xw_mobility::kerbside::KerbsideParams`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KerbsideSettings {
+    /// Whether vehicles stop at the kerb at all. Unset is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// The distance from one bus stop to the next along a bus's route, metres. Unset is
+    /// 260 m.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus_stop_spacing_m: Option<f64>,
+    /// The mean time a bus stands at a stop, seconds. Unset is 60 s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus_dwell_mean_s: Option<f64>,
+    /// The share of passenger cars that are taxis or for-hire cars and stop at the kerb
+    /// once on their trip. Unset is the jurisdiction's (0, or 0.3 in Midtown Manhattan).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taxi_share: Option<f64>,
+    /// The median time a taxi stands at the kerb, seconds. Unset is 30 s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taxi_dwell_median_s: Option<f64>,
+    /// The share of delivery vans and trucks that make one delivery stop on their trip.
+    /// Unset is 0.6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_stop_share: Option<f64>,
+    /// The median time a delivery stop lasts, seconds. Unset is 600 s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_dwell_median_s: Option<f64>,
+}
+
+impl KerbsideSettings {
+    /// The engine's kerbside parameters: `p` (the jurisdiction's) with these over it.
+    pub fn apply(
+        &self,
+        mut p: v2xw_mobility::kerbside::KerbsideParams,
+    ) -> v2xw_mobility::kerbside::KerbsideParams {
+        if let Some(v) = self.enabled {
+            p.enabled = v;
+        }
+        if let Some(v) = self.bus_stop_spacing_m {
+            p.bus_stop_spacing_m = v;
+        }
+        if let Some(v) = self.bus_dwell_mean_s {
+            p.bus_dwell_mean_s = v;
+        }
+        if let Some(v) = self.taxi_share {
+            p.taxi_share = v;
+        }
+        if let Some(v) = self.taxi_dwell_median_s {
+            p.taxi_dwell_median_s = v;
+        }
+        if let Some(v) = self.delivery_stop_share {
+            p.delivery_stop_share = v;
+        }
+        if let Some(v) = self.delivery_dwell_median_s {
+            p.delivery_dwell_median_s = v;
+        }
+        p
+    }
 }
 
 impl Traffic {
@@ -196,6 +279,10 @@ impl Default for Traffic {
             keep_junctions_clear: true,
             gridlock_timeout_s: Traffic::DEFAULT_GRIDLOCK_TIMEOUT_S,
             signals: SignalControl::default(),
+            critical_gap_factor: None,
+            permitted_left_gap_s: None,
+            turn_lateral_accel_mps2: None,
+            kerbside: None,
         }
     }
 }
@@ -620,6 +707,23 @@ pub struct WorldSignalOptions {
     /// The green wave's speed, m/s; absent, each link's speed limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progression_speed_mps: Option<f64>,
+    // traffic audit
+    /// The cycle length of the synthesised signal plans, seconds. Unset is 90 s
+    /// (netconvert `--tls.cycle.time`). Imported (OSM) worlds only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle_s: Option<f64>,
+    /// The shortest all-red between phases, seconds; the ITE red-clearance formula may
+    /// give more. Unset is 0 (netconvert `--tls.allred.time`). Imported worlds only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all_red_s: Option<f64>,
+    /// The pedestrian walk interval each phase's green must leave room for, seconds.
+    /// Unset is 7 s (MUTCD 2009 §4E.06 minimum). Imported worlds only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pedestrian_walk_s: Option<f64>,
+    /// The walking speed pedestrian clearance is timed for, m/s. Unset is 1.067 m/s
+    /// (3.5 ft/s, MUTCD 2009 §4E.06). Imported worlds only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pedestrian_speed_mps: Option<f64>,
 }
 
 impl Default for WorldSignalOptions {
@@ -627,6 +731,10 @@ impl Default for WorldSignalOptions {
         WorldSignalOptions {
             coordinate: true,
             progression_speed_mps: None,
+            cycle_s: None,
+            all_red_s: None,
+            pedestrian_walk_s: None,
+            pedestrian_speed_mps: None,
         }
     }
 }
@@ -763,6 +871,60 @@ pub struct Vehicles {
     /// default, so a scenario that does not mention it keeps its content hash.
     #[serde(default, skip_serializing_if = "Drivers::is_default")]
     pub drivers: Drivers,
+    // traffic audit
+    /// The positioning error the vehicles' GNSS receivers make, which every BSM's
+    /// position carries. Unset is a standard automotive receiver (Reid 2019 error
+    /// percentiles, the legacy engine's outlier and burst rates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gnss: Option<GnssSettings>,
+}
+
+// traffic audit
+/// The GNSS error model's settings ([`Vehicles::gnss`]); each unset field keeps the
+/// model's default ([`v2xw_mobility::gnss::GaussMarkovParams`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GnssSettings {
+    /// An RTK-corrected receiver (Reid 2019's OxTS RT3000 rows: 0.26 m at the 68th
+    /// percentile) rather than a standard one (about 1.5 m). Unset is standard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtk: Option<bool>,
+    /// How often a fix jumps by an outlier, per second. Unset is 0.01.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outlier_rate_hz: Option<f64>,
+    /// How far an outlier puts the fix, metres. Unset is 12 m.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outlier_magnitude_m: Option<f64>,
+    /// How often a degraded burst (multipath, an urban canyon) starts, per second. Unset
+    /// is 0.006.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burst_rate_hz: Option<f64>,
+    /// The chance each fix is lost entirely. Unset is 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outage_probability: Option<f64>,
+}
+
+impl GnssSettings {
+    /// The model's parameters with these over the defaults.
+    pub fn params(&self) -> v2xw_mobility::gnss::GaussMarkovParams {
+        let mut p = v2xw_mobility::gnss::GaussMarkovParams::default();
+        if let Some(v) = self.rtk {
+            p.rtk = v;
+        }
+        if let Some(v) = self.outlier_rate_hz {
+            p.outlier_rate = v;
+        }
+        if let Some(v) = self.outlier_magnitude_m {
+            p.outlier_magnitude_m = v;
+        }
+        if let Some(v) = self.burst_rate_hz {
+            p.burst_rate = v;
+        }
+        if let Some(v) = self.outage_probability {
+            p.outage_rate = v;
+        }
+        p
+    }
 }
 
 /// How human the drivers are (`actors.vehicles.drivers`).
@@ -820,6 +982,70 @@ pub struct Drivers {
     /// lane for. Unset is 0.1 m/s² (ibid.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane_change_threshold_mps2: Option<f64>,
+    // traffic audit
+    /// How fast drivers choose to drive on a free road, as a multiple of the posted limit:
+    /// the population mean of SUMO's `speedFactor`. Unset is 1.0 (SUMO's default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_factor: Option<f64>,
+    /// How far drivers differ in that chosen speed: a multiplier on each class's
+    /// deviation (SUMO `speedDev`, 0.1 for a car). 0 gives everyone the mean. Unset is 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_spread: Option<f64>,
+    /// The median time a driver takes to move off when the light turns green or a
+    /// crosswalk clears, seconds. Unset is 1.15 s (Taoka 1989, lognormal fit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_reaction_s: Option<f64>,
+    /// The median delay before a queued driver moves off after the car in front does,
+    /// seconds: what sets the start-up lost time and the saturation flow at a light.
+    /// Unset is 0.5 s (calibrated to Greenshields 1947 discharge headways).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_start_delay_s: Option<f64>,
+    /// Trucks' and trailers' car-following numbers. Unset is the model's per-class
+    /// calibration (SUMO vType `truck`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truck: Option<ClassDriver>,
+    /// Buses' and coaches' car-following numbers. Unset is the model's (SUMO `bus`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus: Option<ClassDriver>,
+    /// Motorcycles' and mopeds' car-following numbers. Unset is the two-wheeler
+    /// calibration (2.5 m/s², 3.0 m/s², 1.2 s, 1.5 m).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motorcycle: Option<ClassDriver>,
+    /// Cyclists' car-following numbers. Unset is SUMO's bicycle vType.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bicycle: Option<ClassDriver>,
+}
+
+// traffic audit
+/// One vehicle class's car-following numbers ([`Drivers::truck`] and its siblings); each
+/// unset field keeps the class's own calibration.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClassDriver {
+    /// Comfortable maximum acceleration `a`, m/s².
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_accel_mps2: Option<f64>,
+    /// Comfortable deceleration `b`, m/s².
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comfort_decel_mps2: Option<f64>,
+    /// Desired time gap to the vehicle ahead `T`, s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_headway_s: Option<f64>,
+    /// Gap kept to a stopped vehicle `s0`, m.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_gap_m: Option<f64>,
+}
+
+impl ClassDriver {
+    /// As the engine's override.
+    pub fn as_override(&self) -> v2xw_mobility::DriverOverride {
+        v2xw_mobility::DriverOverride {
+            max_accel_mps2: self.max_accel_mps2,
+            comfort_decel_mps2: self.comfort_decel_mps2,
+            time_headway_s: self.time_headway_s,
+            min_gap_m: self.min_gap_m,
+        }
+    }
 }
 
 impl Drivers {
@@ -885,6 +1111,7 @@ impl Default for Vehicles {
             equipped_fraction: Vehicles::default_equipped(),
             driving: v2xw_mobility::carfollowing::library::DrivingSpec::default(),
             drivers: Drivers::default(),
+            gnss: None,
         }
     }
 }

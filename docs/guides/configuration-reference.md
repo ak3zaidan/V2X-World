@@ -216,6 +216,14 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `apps.glosa_compliance` | scenario's | 0 to 1 | Share of drivers who follow advice. |
 | `actors.vru.red_crossing_share` | scenario's | 0 to 1 | Pedestrian non-compliance. |
 
+The traffic audit (2026-10-11) added further traffic fields: free-speed factor and
+spread, start-up reaction, queue start-up delay, per-class drivers (truck, bus,
+motorcycle, bicycle), junction gaps and turning speed, kerbside stops, OSM signal cycle,
+all-red and pedestrian timing, and GNSS receiver settings (`actors.vehicles.gnss`).
+[config-inventory-traffic.md](config-inventory-traffic.md) lists them with their
+defaults, ranges and sources, together with every parameter left hard-coded and the
+reason.
+
 The IDM `delta` exponent and the other model internals are parameters of the chosen
 model: `actors.vehicles.driving.car_following.params`, published from the model's card.
 `actors.vehicles.drivers` is refused with `mobility.provider: sumo`, since SUMO's `vType`
@@ -246,7 +254,7 @@ holds those drivers.
 | Certificate cache size | The node's certificate store is unbounded. A bounded cache with eviction is not modelled. |
 | `prioritized` horizon, `on-demand` threshold | The verification queue is FIFO and never reads the policy's priority, and no application sets a message's relevance, so neither number would change a run (see `config-inventory-network.md`). |
 | LIMERIC as such | The ETSI adaptive approach is TS 102 687's LIMERIC-derived algorithm, and its α, β and target are above. |
-| Signal timing plan per junction | Fixed-time plans come from the map, and only coordination is configurable. |
+| Signal timing plan per junction | Fixed-time plans come from the map. Coordination, cycle length, all-red and pedestrian timing are configurable for every junction at once (`world.signals`), not per junction. |
 
 ## Tests
 

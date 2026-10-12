@@ -240,7 +240,38 @@ const BASIC: &[Basic] = &[
         path: "exporters",
         explain: "Which files the run writes when it finishes, for analysis outside the Studio.",
         recommended: "None to explore; Parquet to analyse in Python or R.",
+    }, // traffic audit
+    Basic {
+        path: "actors.vehicles.drivers.speed_factor",
+        explain: "How fast drivers go on an empty street compared with the speed limit: 1.1 means the average driver goes 10 % over.",
+        recommended: "1.0 (SUMO's default) to 1.1; 0.9 for cautious traffic.",
     },
+    Basic {
+        path: "actors.vehicles.drivers.queue_start_delay_s",
+        explain: "How long each driver in a queue waits after the car in front moves before moving off. It decides how many cars get through each green.",
+        recommended: "0.5 s (calibrated to measured discharge headways); 0.3 to 1.0 s.",
+    },
+    Basic {
+        path: "traffic.critical_gap_factor",
+        explain: "How big a gap in the main-road traffic drivers wait for before pulling out at a junction without lights: below 1 they squeeze in, above 1 they wait longer.",
+        recommended: "1 (the Highway Capacity Manual's gaps); 0.8 to 1.2.",
+    },
+    Basic {
+        path: "traffic.kerbside.enabled",
+        explain: "Whether buses stop at stops, taxis pick up and delivery vans double-park, briefly blocking a lane as they do in a real city.",
+        recommended: "On for city realism; off for a clean baseline.",
+    },
+    Basic {
+        path: "world.signals.cycle_s",
+        explain: "How long a traffic light takes to go through all its phases and come back to green on an imported city map.",
+        recommended: "60 to 120 s; 90 s is the default.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.rtk",
+        explain: "Whether vehicles position themselves with survey-grade corrected GPS (about 0.3 m) instead of an ordinary receiver (about 1.5 m). Every safety message carries this position.",
+        recommended: "Off for today's fleet; on to study what precise positioning buys.",
+    },
+    // end traffic audit
 ];
 
 /// The explanation and recommended range of advanced fields that have them: the
@@ -441,6 +472,11 @@ const ADVANCED: &[Basic] = &[
         path: "radio.sidelink.selection_window_ms",
         explain: "How late after a message is ready its new resource may be. Shorter cuts latency but leaves fewer resources to pick from.",
         recommended: "100 ms at 10 Hz; at most the message interval.",
+    }, // traffic audit
+    Basic {
+        path: "actors.vehicles.drivers.speed_spread",
+        explain: "How much drivers differ in the speed they choose: 0 makes everyone drive the same speed.",
+        recommended: "1 (SUMO's spread, about ±10 % for cars); 0 to 2.",
     },
     // network audit
     Basic {
@@ -498,6 +534,167 @@ const ADVANCED: &[Basic] = &[
         explain: "How many received messages can wait for signature verification; when the processor falls behind, messages beyond it are dropped.",
         recommended: "16 to 256; 64 is one second of 6 neighbours at 10 Hz.",
     },
+    Basic {
+        path: "actors.vehicles.drivers.start_reaction_s",
+        explain: "How long the first driver in line takes to react when the light turns green.",
+        recommended: "1.15 s (Taoka 1989); 0.8 to 1.5 s.",
+    },
+    Basic {
+        path: "traffic.permitted_left_gap_s",
+        explain: "The gap in oncoming traffic a driver waits for before turning left across it on a green light.",
+        recommended: "4.5 s (HCM); 4 to 5.5 s.",
+    },
+    Basic {
+        path: "traffic.turn_lateral_accel_mps2",
+        explain: "How fast drivers take corners through a junction: higher values let them turn faster.",
+        recommended: "5.5 m/s² (SUMO); 3 to 6 m/s².",
+    },
+    Basic {
+        path: "traffic.kerbside.bus_stop_spacing_m",
+        explain: "How far apart bus stops are along a bus route.",
+        recommended: "200 to 400 m for local buses.",
+    },
+    Basic {
+        path: "traffic.kerbside.bus_dwell_mean_s",
+        explain: "How long a bus stands at each stop on average.",
+        recommended: "15 to 60 s (TCQSM).",
+    },
+    Basic {
+        path: "traffic.kerbside.taxi_share",
+        explain: "The share of cars that are taxis or ride-hail cars making one kerbside stop.",
+        recommended: "0 outside a downtown; 0.2 to 0.3 in Midtown Manhattan.",
+    },
+    Basic {
+        path: "traffic.kerbside.taxi_dwell_median_s",
+        explain: "How long a taxi stands at the kerb for a pick-up or drop-off.",
+        recommended: "20 to 60 s.",
+    },
+    Basic {
+        path: "traffic.kerbside.delivery_stop_share",
+        explain: "The share of vans and trucks that stop once on their trip to deliver.",
+        recommended: "0.3 to 0.6.",
+    },
+    Basic {
+        path: "traffic.kerbside.delivery_dwell_median_s",
+        explain: "How long a delivery stop lasts.",
+        recommended: "5 to 15 minutes.",
+    },
+    Basic {
+        path: "world.signals.all_red_s",
+        explain: "The shortest time all directions see red between phases, so the junction clears.",
+        recommended: "0 to 2 s; the ITE formula may add more.",
+    },
+    Basic {
+        path: "world.signals.pedestrian_walk_s",
+        explain: "How long the walk signal shows; each green is made long enough for it and the crossing.",
+        recommended: "7 s (MUTCD minimum); 4 to 10 s.",
+    },
+    Basic {
+        path: "world.signals.pedestrian_speed_mps",
+        explain: "The walking speed the flashing don't-walk time is timed for: slower gives pedestrians longer and drivers shorter greens.",
+        recommended: "1.067 m/s (MUTCD 3.5 ft/s); 0.91 m/s near schools or seniors.",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.truck.max_accel_mps2",
+        explain: "How hard truck drivers accelerate when the road ahead is clear.",
+        recommended: "0.5 to 1.3 m/s².",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.truck.comfort_decel_mps2",
+        explain: "How hard truck drivers brake in normal driving.",
+        recommended: "1.5 to 4 m/s².",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.truck.time_headway_s",
+        explain: "The time gap truck drivers keep to the vehicle in front.",
+        recommended: "1.5 to 2.5 s.",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.truck.min_gap_m",
+        explain: "The distance truck drivers leave to the vehicle in front when queued.",
+        recommended: "2.5 to 4 m.",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.bus.max_accel_mps2",
+        explain: "How hard bus drivers accelerate when the road ahead is clear.",
+        recommended: "0.5 to 1.2 m/s².",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.bus.comfort_decel_mps2",
+        explain: "How hard bus drivers brake in normal driving.",
+        recommended: "1.5 to 4 m/s².",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.bus.time_headway_s",
+        explain: "The time gap bus drivers keep to the vehicle in front.",
+        recommended: "1.5 to 2.5 s.",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.bus.min_gap_m",
+        explain: "The distance bus drivers leave to the vehicle in front when queued.",
+        recommended: "2.5 to 4 m.",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.motorcycle.max_accel_mps2",
+        explain: "How hard motorcyclists accelerate when the road ahead is clear.",
+        recommended: "2 to 5 m/s².",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.motorcycle.comfort_decel_mps2",
+        explain: "How hard motorcyclists brake in normal driving.",
+        recommended: "2.5 to 4 m/s².",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.motorcycle.time_headway_s",
+        explain: "The time gap motorcyclists keep to the vehicle in front.",
+        recommended: "0.8 to 1.5 s.",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.motorcycle.min_gap_m",
+        explain: "The distance motorcyclists leave to the vehicle in front when queued.",
+        recommended: "1 to 2 m.",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.bicycle.max_accel_mps2",
+        explain: "How hard cyclists accelerate when the road ahead is clear.",
+        recommended: "0.8 to 1.5 m/s².",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.bicycle.comfort_decel_mps2",
+        explain: "How hard cyclists brake in normal driving.",
+        recommended: "1.5 to 3 m/s².",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.bicycle.time_headway_s",
+        explain: "The time gap cyclists keep to the vehicle in front.",
+        recommended: "1 to 2 s.",
+    },
+    Basic {
+        path: "actors.vehicles.drivers.bicycle.min_gap_m",
+        explain: "The distance cyclists leave to the vehicle in front when queued.",
+        recommended: "0.5 to 1.5 m.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.outlier_rate_hz",
+        explain: "How often a vehicle's GPS fix jumps away for a moment.",
+        recommended: "0.01 per second (default); 0 for clean positions.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.outlier_magnitude_m",
+        explain: "How far such a jump puts the reported position.",
+        recommended: "5 to 30 m.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.burst_rate_hz",
+        explain: "How often a stretch of poor positioning starts, as among tall buildings.",
+        recommended: "0.006 per second (default); higher for a dense downtown.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.outage_probability",
+        explain: "The chance each position fix is lost altogether, as in a tunnel.",
+        recommended: "0 (default) to 0.05.",
+    },
+    // end traffic audit
 ];
 
 /// `basic` or `advanced`.

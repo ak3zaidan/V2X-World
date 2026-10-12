@@ -295,6 +295,20 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
             osm.layers.service = scenario.world.service_roads;
             osm.signals.coordinate = scenario.world.signals.coordinate;
             osm.signals.progression_speed_mps = scenario.world.signals.progression_speed_mps;
+            // traffic audit: the synthesised plans' timing (`world.signals`).
+            let ws = &scenario.world.signals;
+            if let Some(v) = ws.cycle_s {
+                osm.signals.cycle_s = v;
+            }
+            if let Some(v) = ws.all_red_s {
+                osm.signals.all_red_s = v;
+            }
+            if let Some(v) = ws.pedestrian_walk_s {
+                osm.signals.pedestrian_walk_s = v;
+            }
+            if let Some(v) = ws.pedestrian_speed_mps {
+                osm.signals.pedestrian_speed_mps = v;
+            }
             if let Some(b) = bbox {
                 osm = osm.bbox(*b);
             }
@@ -478,6 +492,32 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     params.kerbside = v2xw_mobility::kerbside::KerbsideParams::for_highway_preset(
         scenario.world.highway_preset.map(|p| p.label()),
     );
+    // traffic audit: junction behaviour, kerbside stops and the drivers' speed and
+    // reaction (each unset field keeps the default above).
+    if let Some(v) = traffic.critical_gap_factor {
+        params.critical_gap_factor = v;
+    }
+    if let Some(v) = traffic.permitted_left_gap_s {
+        params.permitted_left_critical_headway_s = v;
+    }
+    if let Some(v) = traffic.turn_lateral_accel_mps2 {
+        params.turn_lateral_accel_mps2 = v;
+    }
+    if let Some(k) = &traffic.kerbside {
+        params.kerbside = k.apply(params.kerbside);
+    }
+    if let Some(v) = drivers.speed_factor {
+        params.speed_factor_mean = v;
+    }
+    if let Some(v) = drivers.speed_spread {
+        params.speed_spread = v;
+    }
+    if let Some(v) = drivers.start_reaction_s {
+        params.start_reaction_median_s = v;
+    }
+    if let Some(v) = drivers.queue_start_delay_s {
+        params.queue_start_delay_median_s = v;
+    }
     let mut people = match vru.behaviour {
         crate::scenario::schema::VruBehaviour::Observed => {
             v2xw_mobility::SocialForceParams::observed()
@@ -709,10 +749,17 @@ pub fn register_demand(
 /// The default is the Gauss–Markov receiver of 04-models.md §2.10 rather than a perfect
 /// one: a node whose belief equals the truth makes every plausibility detector trivially
 /// correct, which is the single most misleading default this engine could have.
-pub fn build_gnss(_scenario: &Scenario) -> Box<dyn GnssModel> {
-    Box::new(v2xw_mobility::GaussMarkovGnss::new(
-        v2xw_mobility::gnss::GaussMarkovParams::default(),
-    ))
+pub fn build_gnss(scenario: &Scenario) -> Box<dyn GnssModel> {
+    // traffic audit: `actors.vehicles.gnss` over the model's defaults.
+    let params = scenario
+        .actors
+        .vehicles
+        .gnss
+        .as_ref()
+        .map_or_else(v2xw_mobility::gnss::GaussMarkovParams::default, |g| {
+            g.params()
+        });
+    Box::new(v2xw_mobility::GaussMarkovGnss::new(params))
 }
 
 /// The radio families a scenario may name a model for in `radio.models`, and the ids
