@@ -3560,3 +3560,45 @@ Short runs of the attack and credential scenarios, read from `run-report.json` a
 - Open: dense saturated runs scale badly (~n^3 suspected); 5 Hz CBR reads ~0 for a fleet
   spawned at once; `ew_green_share` bound not checked by validate.rs; v2xw-radio clippy
   error (bler_nr.rs FRAC_1_PI) blocks clippy on the engine.
+
+## 2026-10-12 — speed: saturated radio runs (speed track, branch of 05599f6)
+
+Optimised dev build (`opt-level 2`, debug assertions on), binaries copied out of
+`target/agents`, `v2xw run --no-recording --digest`, owner's 8 GB M2 shared with other
+agents (wall ±10 %). Saturated: `scenarios/sensitivity/dsrc-dense.yaml` with the
+"queue 64->1, saturated" row's base settings (40 Hz, 25 ms step, DCC off, certificate on
+every message, 1 s) and the trip cap at 60/100/150. Fleet: `scenarios/scale/base.yaml`
+with `metrics: [all]`, cap 1,260 (+ `radio.range.max_m: 500`) or cap 560 uncapped.
+
+| run | vehicles | threads | wall s per sim s before → after | peak MB before → after | digest |
+|---|---|---|---|---|---|
+| saturated | 49 | 2 | 1.8 → 1.8 | 45 → 46 | `5b86db93e9dc` both |
+| saturated | 75 | 1 / 2 | 14.3 / 17.2 → 4.1 / 4.5 | 59 → 65 | `351c0b650895` all four |
+| saturated | 99 | 2 | 32.1 → 5.8 | 74 → 82 | `7aeb1545a6d3` both |
+| capped 500 m | 1,049 | 1 / 2 | 25.0 / 18.0 → 24.4 / 18.9 | 415-575 → 423-477 | `54ef582c5ba9` all |
+| uncapped | 520 | 2 | 21.4 (unchanged code path) | 315 | `4ad18868be20` |
+
+**Cause of the ~n^3 (measured, `sample`):** not a busy/idle edge fan-out — the engine
+has none; carrier sense is sampled at MAC polls. Each poll called `medium_idle_at` /
+`medium_busy_since`, which scanned the **whole frame table** (every queued frame of every
+node: up to 64 x n when saturated) for the node's own transmission — 65 % of the main
+thread at 75 vehicles — and `OfdmPhy::energy_dbm` walked every live arrival at every
+receiver. Polls per second grow ~n^2, so the run grew ~n^3.
+
+**Fixed** (`e71284d`): the engine keeps each node's on-air frames (`on_air_tx`, pruned at
+the node's next poll) and the PHY reads one receiver's arrivals as a key range in the same
+order. Same digests at 1 and 2 threads; radio `phy` lib 29/29, `radio_tuning` 4/4,
+`sensitivity_radio` 27/27.
+
+**Measured, not changed:**
+- 93 % of saturated MAC timer events are repeat polls of one node at one instant
+  (4.2 M of 4.5 M at 99 vehicles): every busy poll schedules another wake at the same
+  `clear`, and the copies never merge. Dropping them is not results-neutral (a repeat
+  poll after another node started a frame at that instant freezes a backoff the next poll
+  might not), so it is a model decision for the owner: dedupe and accept new digests.
+- A memo of building classification by exact link (46 % of uncapped classifications
+  repeat, queued cars at red lights) gave 8 % wall for +650 MB peak; reverted. Uncapped,
+  ring tests are 17 % and the R-tree walk 11 % of all CPU; main thread waits 73 %.
+- Capped 1,000: main thread 46 % waiting on the parallel link map, then node step
+  (one wake per reception: envelope parse + verify, ~8 %), metric providers (~8 %),
+  candidate walk (~7 %), SHA-256 ~3.5 %. No single item above 10 %; not reached.
