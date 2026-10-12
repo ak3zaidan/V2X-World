@@ -147,9 +147,19 @@ pub struct CpmService {
     last_check: Option<SimTime>,
     last_sensor_info: Option<SimTime>,
     sent: u64,
+    /// `T_GenCpm` when not [`T_GEN_CPM`] (network audit: `messages.cpm_interval_ms`).
+    t_gen: Option<Duration>,
 }
 
 impl CpmService {
+    /// The same service with another `T_GenCpm` (TS 103 324 §6.1.2.3: 100 ms to
+    /// `T_GenCpmMax`, 1 000 ms).
+    #[must_use]
+    pub fn with_generation_interval(mut self, t_gen: Duration) -> Self {
+        self.t_gen = Some(t_gen);
+        self
+    }
+
     /// Takes the sensors' latest object list and the suite.
     pub fn set_perception(&mut self, objects: Vec<ObjectIn>, sensors: Vec<SensorIn>) {
         // Objects the sensors no longer report are forgotten, so a re-acquired object is
@@ -169,7 +179,7 @@ impl CpmService {
     pub fn due(&mut self, now: SimTime) -> Option<CpmContent> {
         if self
             .last_check
-            .is_some_and(|t| now.saturating_sub(t) < T_GEN_CPM.as_nanos())
+            .is_some_and(|t| now.saturating_sub(t) < self.t_gen.unwrap_or(T_GEN_CPM).as_nanos())
         {
             return None;
         }

@@ -489,6 +489,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "1,000 ms (1 Hz, CTI 4501).",
     },
     Basic {
+        path: "messages.cpm_interval_ms",
+        explain: "How often a vehicle checks whether to share what its sensors see; a longer interval means fewer, larger collective perception messages.",
+        recommended: "100 ms (ETSI TS 103 324) to 1,000 ms.",
+    },
+    Basic {
         path: "nodes.verify_queue_depth",
         explain: "How many received messages can wait for signature verification; when the processor falls behind, messages beyond it are dropped.",
         recommended: "16 to 256; 64 is one second of 6 neighbours at 10 Hz.",

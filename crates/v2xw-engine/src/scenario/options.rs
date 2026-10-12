@@ -1416,6 +1416,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "net.geonet.max_comm_range_m" => "Assumed forwarding range (DIST_MAX)",
         "messages.spat_interval_ms" => "Signal phase (SPaT) interval",
         "messages.map_interval_ms" => "Intersection map (MAP) interval",
+        "messages.cpm_interval_ms" => "Collective perception (CPM) check interval",
         "nodes.verify_queue_depth" => "Verification queue length",
         "radio.tiers.propagation" => "Signal propagation detail",
         "radio.tiers.phy" => "Physical layer detail",

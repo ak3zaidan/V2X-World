@@ -1989,6 +1989,10 @@ pub struct Messages {
     /// (1 000 ms) unless set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub map_interval_ms: Option<u64>,
+    /// `T_GenCpm`, ms: how often a vehicle running `cpm` checks whether a CPM is due (ETSI
+    /// TS 103 324 §6.1.2.3, 100 ms unless set; at most `T_GenCpmMax`, 1 000 ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpm_interval_ms: Option<u64>,
 }
 
 impl Messages {
@@ -2009,6 +2013,7 @@ impl Default for Messages {
             rate_hz: None,
             spat_interval_ms: None,
             map_interval_ms: None,
+            cpm_interval_ms: None,
         }
     }
 }

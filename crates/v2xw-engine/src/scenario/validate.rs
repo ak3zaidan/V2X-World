@@ -1014,6 +1014,13 @@ pub static BOUNDS: &[Bound] = &[
         what: "the MAP interval",
     },
     Bound {
+        path: "messages.cpm_interval_ms",
+        lo: 100.0,
+        hi: 1_000.0,
+        exclusive_lo: false,
+        what: "the CPM generation interval",
+    },
+    Bound {
         path: "nodes.verify_queue_depth",
         lo: 1.0,
         hi: 4_096.0,
@@ -2513,6 +2520,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "A roadside unit's MAP period (CTI 4501's 1 s unless set). Refused unless \
                messages.sets has map.",
+    },
+    KeyStatus {
+        path: "messages.cpm_interval_ms",
+        status: Status::Wired,
+        note: "T_GenCpm, how often a vehicle checks whether a CPM is due (TS 103 324's \
+               100 ms unless set). Refused unless messages.sets has cpm.",
     },
     KeyStatus {
         path: "nodes.verify_queue_depth",
@@ -5437,6 +5450,7 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ("net.geonet.max_comm_range_m", g.and_then(|g| g.max_comm_range_m)),
         ("messages.spat_interval_ms", m.spat_interval_ms.map(|v| v as f64)),
         ("messages.map_interval_ms", m.map_interval_ms.map(|v| v as f64)),
+        ("messages.cpm_interval_ms", m.cpm_interval_ms.map(|v| v as f64)),
         ("nodes.verify_queue_depth", n.verify_queue_depth.map(f64::from)),
     ] {
         if let Some(v) = v {
@@ -5499,6 +5513,7 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
     for (path, set, ty) in [
         ("messages.spat_interval_ms", m.spat_interval_ms.is_some(), "spat"),
         ("messages.map_interval_ms", m.map_interval_ms.is_some(), "map"),
+        ("messages.cpm_interval_ms", m.cpm_interval_ms.is_some(), "cpm"),
     ] {
         if set && !m.sets.iter().any(|x| x == ty) {
             e.push(conflict(

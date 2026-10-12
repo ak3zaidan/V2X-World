@@ -160,6 +160,38 @@ fn the_spat_and_map_intervals_change_the_infrastructure_load() {
     assert!((tm as f64) > 1.5 * bm as f64, "MAP {tm} against {bm}");
 }
 
+/// Collective perception: a 500 ms `T_GenCpm` checks for a due CPM a fifth as often as
+/// TS 103 324's 100 ms, so fewer CPMs go out (objects that change between checks are
+/// batched; the 1 s refresh still sends the rest).
+#[test]
+fn the_cpm_interval_changes_the_cpm_rate() {
+    let mut base = junctions(8.0);
+    base.events.clear();
+    base.net.layer = "gn-btp".to_string();
+    base.security.envelope = "etsi103097".to_string();
+    base.messages.sets = vec!["cam".into(), "cpm".into()];
+    base.messages.codec_tier = "uper".to_string();
+    for rsu in &mut base.actors.rsus {
+        rsu.roles.clear();
+    }
+    base.actors.vehicles.equipped_fraction = 0.4;
+    base.actors.vru.pedestrians = 40;
+    base.actors.vru.device_fraction = 0.0;
+    let (b, _) = run(base.clone());
+    let mut slow = base;
+    slow.messages.cpm_interval_ms = Some(500);
+    let (l, _) = run(slow);
+    let sent = |r: &RunReport| r.cpm.as_ref().map_or(0, |c| c.cpms_sent);
+    eprintln!("cpms {} -> {}", sent(&b), sent(&l));
+    assert!(sent(&b) > 10, "too few CPMs to compare");
+    assert!(
+        sent(&l) < sent(&b),
+        "T_GenCpm 500 ms sent {} CPMs against {} at 100 ms",
+        sent(&l),
+        sent(&b)
+    );
+}
+
 /// A per-outcome tally of the `node.verify` records, and their total queueing wait.
 fn verify_tally(rec: &MemoryRecorder) -> (BTreeMap<String, u64>, u64) {
     let mut tally = BTreeMap::new();
@@ -265,6 +297,9 @@ fn the_loader_refuses_network_settings_that_would_do_nothing() {
     fast.messages.map_interval_ms = Some(50);
     assert!(refused(&fast, "messages.map_interval_ms"), "below the 100 ms check");
 
+    let mut cpm = junctions(1.0);
+    cpm.messages.cpm_interval_ms = Some(200);
+    assert!(refused(&cpm, "messages.cpm_interval_ms"), "no cpm in messages.sets");
     let mut depth = junctions(1.0);
     depth.nodes.verify_queue_depth = Some(0);
     assert!(refused(&depth, "nodes.verify_queue_depth"));
