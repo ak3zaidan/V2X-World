@@ -29,6 +29,8 @@ struct Fake {
     paused: bool,
     log: Log,
     staged: Option<Value>,
+    /// The running scenario's hash; a test changes it to stand for a Run pressed meanwhile.
+    running_hash: Arc<Mutex<String>>,
 }
 
 impl Fake {
@@ -41,6 +43,7 @@ impl Fake {
             paused: true,
             log: Arc::new(Mutex::new(Vec::new())),
             staged: None,
+            running_hash: Arc::new(Mutex::new("running-hash".into())),
         }
     }
 
@@ -96,20 +99,21 @@ impl RpcTransport for Fake {
             "t_end_ns": s.t_end_ns, "actors": 12, "nodes": 12, "scenario_hash": "abc",
             "state": if s.t_ns >= s.t_end_ns { "finished" } else if s.paused { "paused" } else { "running" }})
         };
+        let running_hash = self.running_hash.lock().unwrap().clone();
         Ok(match method {
             "scenario.list" => json!({"items": [
                 {"id": "scenarios/phase1-grid.yaml", "description": "procedural grid"}]}),
             "scenario.load" => {
                 // Loading the running scenario's hash withdraws a staged draft.
-                if params["path"] == "running-hash" {
+                if params["path"] == running_hash.as_str() {
                     self.staged = None;
                 }
                 json!({"scenario": base_scenario()})
             }
             "scenario.get" => match &self.staged {
-                Some(doc) => json!({"scenario": doc, "running_hash": "running-hash",
+                Some(doc) => json!({"scenario": doc, "running_hash": running_hash,
                                     "staged": {"hash": "staged-hash"}}),
-                None => json!({"scenario": self.running, "running_hash": "running-hash",
+                None => json!({"scenario": self.running, "running_hash": running_hash,
                                "staged": null}),
             },
             "scenario.set" => {
@@ -550,4 +554,38 @@ fn setup_stages_a_portland_draft_with_chips_and_undo_restores_the_window() {
             .any(|(m, p)| m == "scenario.load" && p["path"] == "running-hash")
     );
     assert!(agent.undo_setup(9).is_err(), "no such setup");
+}
+
+#[test]
+fn undo_after_the_setup_ran_stages_the_settings_from_before() {
+    // Live, 2026-10-11: Undo pressed after Run had started the setup answered 409, because the
+    // old running hash it loaded no longer named anything the engine knew.
+    let provider = ScriptedProvider::new(vec![
+        tools(vec![call(
+            "s1",
+            "setup",
+            json!({"changes": [{"key": "city", "value": "portland"}]}),
+        )]),
+        say("Ready in Settings; press Run."),
+    ]);
+    let engine = Fake::new();
+    let log = Arc::clone(&engine.log);
+    let hash = Arc::clone(&engine.running_hash);
+    let mut agent = Agent::new(Some(provider), engine)
+        .expect("builds")
+        .with_policy(quick());
+    agent.ask("Portland please", &mut |_| ()).expect("completes");
+    *hash.lock().unwrap() = "after-run".into();
+    log.lock().unwrap().clear();
+    agent.undo_setup(1).expect("undoes");
+    let calls = log.lock().unwrap().clone();
+    assert!(
+        !calls.iter().any(|(m, _)| m == "scenario.load"),
+        "the old run's hash is not loaded: {calls:?}"
+    );
+    let set = calls
+        .iter()
+        .find(|(m, _)| m == "scenario.set")
+        .expect("the settings from before are staged");
+    assert_ne!(set.1["scenario"]["city"], "portland");
 }
