@@ -197,6 +197,7 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `nodes.default_obu`, `nodes.per_class` | profile | shipped `obu/*` profiles | Crypto hardware profile: signing and verification service times. |
 | `nodes.compute_tier` | `medium` | tiers | Queueing of crypto work. |
 | `nodes.verify_queue_depth` **new** | 64 | 1 to 4096 | Verification queue. A full queue drops (`verify_overflow`). |
+| `security.signer_id_policy.on_new_neighbour` **new** | false | bool | Also attach the certificate to the next BSM or CAM after a vehicle hears a station it did not know (ETSI TS 103 097 V1.3.1 §7.1.1), on top of the cadence; a forced certificate does not restart the cadence. Refused when every message already carries one, or with no `bsm`/`cam`. |
 
 ## Traffic (`actors.vehicles`, `world.signals`, `apps`)
 
@@ -250,7 +251,6 @@ holds those drivers.
 | NR numerology other than the profile's | Sub-channel and slot structure come from the profile's transcribed link-level curves (Lusvarghi 2024 at µ = 1). |
 | Sidelink mode 1 (network-scheduled) | No gNB/eNB scheduler is modelled. |
 | Sub-channel size and count | Fixed by the profile (J3161/1, EN 303 613, EN 303 798), because the BLER curves were computed for those pools. |
-| Certificate attach on new neighbour | `security.signer_id_policy` is cadence-based only. |
 | Certificate cache size | The node's certificate store is unbounded. A bounded cache with eviction is not modelled. |
 | `prioritized` horizon, `on-demand` threshold | The verification queue is FIFO and never reads the policy's priority, and no application sets a message's relevance, so neither number would change a run (see `config-inventory-network.md`). |
 | LIMERIC as such | The ETSI adaptive approach is TS 102 687's LIMERIC-derived algorithm, and its α, β and target are above. |

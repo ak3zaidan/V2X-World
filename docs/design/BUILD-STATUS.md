@@ -3520,3 +3520,13 @@ Short runs of the attack and credential scenarios, read from `run-report.json` a
 - New fix: a lane change begun while moving is held while the vehicle stands part-way across (it slid sideways and swung its heading on the spot; a truck swept into the next lane's queue). tests/realism.rs kerbside: overlap 206 -> 47 (main 242 plus standstill 3; the test fails on both). highway-congestion 671 -> 435 (main 866).
 - Traffic validation 31 FAIL (main 32). Still worse than main at the shipped seed: midtown-peak-load 269 vs 258 (pedestrian step-outs, hard braking), berlin 283 vs 280 (a merge conflict zone), permitted-left Raff gap 7.01 vs 5.98 s (n = 21; no lags between about 2 and 7 s, so Raff's crossing point is set by one or two samples). Over seeds 11/22/33 midtown-peak-load is 1288 vs main 1328 (measured before the insertion fix).
 - Cross-validation regenerated: grid 3600 paired TT ratio 1.09, r 0.93 (main 1.21, 0.89); Manhattan 3600 376 trips vs SUMO 368, 24 left vs 32.
+
+## 2026-10-11 — sensitivity: security, message and backend settings move the metrics (branch of 0786d92)
+
+- `tests/sensitivity_security.rs`: 14 same-seed tests, about 80 s together. Rows: signature scheme, certificate cadence, new-neighbour attach, verification policy, crypto hardware, verify queue depth, pseudonym period, message rate, envelope, Uu preset and penetration, RSU backhaul latency and bandwidth, CRL cadence and fetch interval, attacker share. Table and numbers: docs/validation/sensitivity-security.md.
+- **New setting:** `security.signer_id_policy.on_new_neighbour`, the ETSI CAM rule (TS 103 097 §7.1.1). Off by default, so no digest moves. The loader refuses it when it would do nothing. A forced certificate does not restart the cadence; restarting it made unknown signers worse at a fleet-wide pseudonym change (843 -> 3,948). Now 843 -> 105. With the wiring removed, its test fails.
+- **Open:**
+  - The 5 Hz CBR sample reads about 0 for a fleet spawned together. The MAC CBR covers only the last 100 ms of each second, and the phase moves generation inside a step, not across the period.
+  - Pseudonym changes are counted only with a backend protocol.
+  - There is no Part II size knob.
+- Checks: v2xw-node tests; v2xw-engine lib `scenario` tests; sensitivity_security 14/14.
