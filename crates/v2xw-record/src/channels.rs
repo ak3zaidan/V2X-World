@@ -134,6 +134,15 @@ pub const CHANNELS: &[ChannelSpec] = &[
         visibility: Visibility::Gt,
         payload_bytes: None,
     },
+    // Which true actor signed with a pseudonym digest: the ground-truth join the
+    // detection metrics need (`v2xw_metrics::detection`). Record-only, stripped whole by
+    // the NODE-only profile like every ground-truth channel.
+    ChannelSpec {
+        name: "gt.subject",
+        wire_id: None,
+        visibility: Visibility::Gt,
+        payload_bytes: None,
+    },
     ChannelSpec {
         name: "ma.case",
         wire_id: Some(32),
@@ -414,7 +423,7 @@ mod tests {
             .filter(|c| c.wire_id.is_none())
             .map(|c| c.name)
             .collect();
-        assert_eq!(record_only, vec!["net.reassembly", "phy.prr"]);
+        assert_eq!(record_only, vec!["gt.subject", "net.reassembly", "phy.prr"]);
     }
 
     /// The channel-name pattern of §6.5's `ChannelName` schema.

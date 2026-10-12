@@ -2,7 +2,7 @@
 # every compute and HSM field is not-published and the OBU block is the flagged proxy.
 id: rsu/cohda-mk5-rsu
 kind: rsu
-version: 2026-09-18.1
+version: 2026-10-11.1
 purpose: >-
   Roadside unit (Cohda MK5 RSU). Shares the MK5 OBU radio, but the RSU brief publishes
   module-level radio specifications only, so every compute and security field here is
@@ -31,6 +31,15 @@ hsm:
       runs_on: hsm
   queue_depth: {value: null, status: todo-calibrate, calibration: "not published; measure with back-to-back sign requests"}
   servers: {value: null, status: todo-calibrate, calibration: "not published; inherit obu/cohda-mk5's single-server assumption or measure"}
+# POST-QUANTUM SOFTWARE PROXY — FLAGGED, NOT A MEASUREMENT OF THIS DEVICE. No roadside unit
+# publishes a post-quantum figure, and its secure element runs ECDSA only, so a post-quantum
+# signature is checked in software on the application processor. Until a bench exists the
+# cost is the catalogue figure for the same primitive on the Cohda MK6, a deployed V2X unit,
+# from NDSS 2024 Table V (liboqs first, Botan for ML-DSA-44; other parameter sets scaled by the
+# cited pqm4 cycle ratio, v2xw-sec CostRatio). This RSU's CPU is not published (it proxies the MK5 OBU),
+# an older generation than the MK6, so the proxy is likely optimistic; run liboqs speed_sig on it.
+# Classical operations never use it. A scenario that relies on it gets a validation warning.
+pq_software_proxy: [hw-profile/cohda-mk6-liboqs, hw-profile/cohda-mk6-botan]
 software_crypto:
   ecdsa-p256-verify: {us: null, status: not-published, calibration: "inherit obu/cohda-mk5: no benchmark on this SoC exists; PROXY = Pi 3B 1290 us [R7 §D8]"}
   ecdsa-p256-sign: {us: null, status: not-published, calibration: "inherit obu/cohda-mk5: PROXY = Pi 3B 613 us [R7 §D8]"}

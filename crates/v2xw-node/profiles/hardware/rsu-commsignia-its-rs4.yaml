@@ -1,7 +1,7 @@
 # 06-node-models.md §7.6, first RSU profile.
 id: rsu/commsignia-its-rs4
 kind: rsu
-version: 2026-09-18.1
+version: 2026-10-11.1
 purpose: >-
   Roadside unit (Commsignia ITS-RS4), the most complete public RSU datasheet in the
   hardware sheet. Two figures are carried as the sheet carries them rather than
@@ -33,6 +33,15 @@ hsm:
       runs_on: hsm
   queue_depth: {value: null, status: todo-calibrate, calibration: "not published; measure with back-to-back sign requests"}
   servers: {value: null, status: todo-calibrate, calibration: "not published; the brief does not say whether the SLI97 and the radio-variant verification engine serve concurrently. Measure"}
+# POST-QUANTUM SOFTWARE PROXY — FLAGGED, NOT A MEASUREMENT OF THIS DEVICE. No roadside unit
+# publishes a post-quantum figure, and its secure element runs ECDSA only, so a post-quantum
+# signature is checked in software on the application processor. Until a bench exists the
+# cost is the catalogue figure for the same primitive on the Cohda MK6, a deployed V2X unit,
+# from NDSS 2024 Table V (liboqs first, Botan for ML-DSA-44; other parameter sets scaled by the
+# cited pqm4 cycle ratio, v2xw-sec CostRatio). This RSU's CPU is an NXP i.MX 6 quad at 792 MHz [R7 §C2],
+# probably slower than the MK6, so the proxy is likely optimistic; run liboqs speed_sig on it.
+# Classical operations never use it. A scenario that relies on it gets a validation warning.
+pq_software_proxy: [hw-profile/cohda-mk6-liboqs, hw-profile/cohda-mk6-botan]
 software_crypto:
   ecdsa-p256-verify: {us: null, status: not-published, calibration: "no benchmark on an i.MX 6 quad exists in R7/R5; PROXY = Pi 3B Cortex-A53 @ 1.2 GHz 1290 us [R7 §D8], flagged; run openssl speed on the device"}
   ecdsa-p256-sign: {us: null, status: not-published, calibration: "PROXY = Pi 3B 613 us [R7 §D8], flagged; run openssl speed on the device"}

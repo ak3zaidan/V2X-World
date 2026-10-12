@@ -89,6 +89,7 @@ pub fn validate(path: &Path) -> Result<ValidateOutcome> {
             scenario.time.duration_s
         ));
     }
+    notes.extend(v2xw_engine::scenario::pq_rsu_proxy_warnings(&scenario));
     if let Some(base) = &scenario.meta.base {
         notes.push(format!(
             "meta.base: merged from '{base}'; the values above are the merged ones"

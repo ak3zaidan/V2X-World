@@ -809,6 +809,13 @@ pub struct Engine {
     /// position is one lookup. It was a scan of every actor, made for every frame put on
     /// the air and every node position asked for: quadratic in the fleet.
     node_actor: BTreeMap<NodeId, ActorId>,
+    /// Records made where no recorder is in hand — an attacker's `gt.attack.action` from
+    /// inside the frame build, a digest's first `gt.subject` — written, in the order they
+    /// were made, after the node phase hands its frames down
+    /// ([`Engine::flush_deferred_records`]). Until this existed they went to a null
+    /// recorder, so a run never wrote the ground truth its detection metrics join on and
+    /// every `det_*` sample read zero trials.
+    deferred_records: Vec<(SimTime, v2xw_core::ctx::OwnedRecord)>,
     /// Every application warning labelled against ground truth (`crate::app_truth`).
     app_truth: crate::app_truth::AppTruth,
     /// Which drivers follow GLOSA's advice, and the speed caps followers drive under.
@@ -1344,6 +1351,7 @@ impl Engine {
             dcc: crate::wiring::build_dcc(&scenario_for_radio),
             actors: BTreeMap::new(),
             node_actor: BTreeMap::new(),
+            deferred_records: Vec::new(),
             app_truth,
             glosa: GlosaDrivers {
                 compliance: if scenario_for_radio.apps.runs("glosa") {
@@ -4085,6 +4093,7 @@ impl Engine {
                 self.hand_down(*id, tx, now, horizon);
             }
         }
+        self.flush_deferred_records(recorder);
 
         // Pseudonym changes, credential starvation and self-revocation, from each node's
         // own store after its step.
@@ -4370,8 +4379,19 @@ impl Engine {
         };
         // The certificate cycle's fragment, if this SPDU carries one: credential octets
         // inside the envelope, in addition to the signer field the node chose.
+        // The fragment fills what *this* SDU leaves under the MTU. The model's own budget
+        // is the MTU less its fixed base frame (204 B, an ECDSA-signed BSM), but a hybrid
+        // SPDU carries its post-quantum signature too (Falcon-512: 666 B), so a fragment
+        // sized for 204 B pushed the frame past the MTU and it was refused: 391 of the
+        // pq-certificate-cycle run's frames in 30 s. The cap handed down is shifted so the
+        // model's budget comes out as `mtu - sdu_bytes`.
         let cert_piece = if node_message {
-            self.cert_cycle_piece(node, sdu, mtu)
+            let base = self
+                .frag_plan
+                .cert_cycle()
+                .map_or(0, |c| c.params().base_frame_bytes);
+            let cap = mtu.saturating_sub(sdu_bytes).saturating_add(base);
+            self.cert_cycle_piece(node, sdu, cap)
         } else {
             None
         };
@@ -4409,8 +4429,18 @@ impl Engine {
         // node rewrote it when it issued the certificate it is about to sign with. A
         // subject a report names is a subject that was on the air, so registering here
         // registers exactly the digests that can be reported — and nothing else.
-        if let (Some(cred), Some(phase2)) = (credential.as_ref(), self.phase2.as_mut()) {
-            phase2.note_digest(node, &cred.digest, cred.i_period, cred.j_index);
+        if let (Some(cred), Some(phase2)) = (credential.as_ref(), self.phase2.as_mut())
+            && phase2.note_digest(node, &cred.digest, cred.i_period, cred.j_index)
+            && let Some(actor) = self.node_actor.get(&node).copied()
+        {
+            let record = crate::records::GtSubject(v2xw_metrics::channels::GtSubjectView {
+                t: now,
+                subject: v2xw_core::hash::hex_encode(&cred.digest.0[..]),
+                actor,
+            });
+            if let Ok(owned) = v2xw_core::ctx::ErasedRecord::to_owned_record(&record) {
+                self.deferred_records.push((now, owned));
+            }
         }
         // The attacker's edit, immediately before the frame is built: everything after it
         // — the signing cost already paid, the MAC, DCC, the PHY — is the ordinary path.
@@ -4459,13 +4489,14 @@ impl Engine {
                     provenance,
                     params,
                     phase2,
+                    deferred_records,
                     ..
                 } = self;
-                let mut null = crate::ctx::NullRecorder::new();
+                let mut buffer = crate::ctx::MemoryRecorder::new();
                 let mut ctx = EngineCtx::new(
-                    scheduler, rng, world, snapshot, provenance, params, &mut null,
+                    scheduler, rng, world, snapshot, provenance, params, &mut buffer,
                 );
-                phase2.as_mut().and_then(|p| {
+                let e = phase2.as_mut().and_then(|p| {
                     p.falsify(
                         &mut ctx,
                         node,
@@ -4477,7 +4508,9 @@ impl Engine {
                         cert,
                         u64::from(frame.index()),
                     )
-                })
+                });
+                deferred_records.extend(buffer.records().iter().cloned());
+                e
             };
             if let Some(e) = emission {
                 claim = (
@@ -8094,6 +8127,20 @@ impl Engine {
         if changed {
             self.emit(recorder, &rec);
             self.traffic_log = Some(rec);
+        }
+    }
+
+    /// Writes [`Engine::deferred_records`], each at the instant it was made, through the
+    /// recorder and the metric providers exactly as [`Engine::emit_prepared`] does.
+    fn flush_deferred_records(&mut self, recorder: &mut dyn RunRecorder) {
+        for (at, owned) in std::mem::take(&mut self.deferred_records) {
+            if !crate::ctx::admitted(&owned) {
+                self.report.records_refused += 1;
+                continue;
+            }
+            self.providers.on_event(&owned);
+            recorder.write(at, &owned);
+            self.report.records += 1;
         }
     }
 
