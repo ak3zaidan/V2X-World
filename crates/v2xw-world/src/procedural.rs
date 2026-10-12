@@ -209,6 +209,9 @@ pub struct GridParams {
     pub cycle_s: f64,
     /// Amber time at the end of each green, seconds.
     pub amber_s: f64,
+    /// Share of the cycle's green time given to the east-west street (phase group 0);
+    /// the north-south street gets the rest. 0.5 splits it evenly.
+    pub ew_green_share: f64,
     /// Height of a signal lantern above the road, metres.
     pub signal_head_height_m: f64,
     /// Whether to generate a crossing across every street arm at every junction.
@@ -273,6 +276,7 @@ impl GridParams {
             signalised: false,
             cycle_s: 60.0,
             amber_s: 3.0,
+            ew_green_share: 0.5,
             signal_head_height_m: 5.0,
             crossings: false,
             crossing_width_m: 4.0,
@@ -308,6 +312,7 @@ impl GridParams {
             signalised: true,
             cycle_s: 60.0,
             amber_s: 3.0,
+            ew_green_share: 0.5,
             signal_head_height_m: 5.0,
             crossings: true,
             crossing_width_m: 4.0,
@@ -431,6 +436,15 @@ impl GridParams {
                     format!(
                         "a {} s cycle cannot hold two {} s ambers and two greens",
                         self.cycle_s, self.amber_s
+                    ),
+                ));
+            }
+            if !(self.ew_green_share.is_finite() && (0.1..=0.9).contains(&self.ew_green_share)) {
+                return Err(bad(
+                    "ew_green_share",
+                    format!(
+                        "{} is not a green share in 0.1-0.9; each street needs a usable green",
+                        self.ew_green_share
                     ),
                 ));
             }
@@ -845,7 +859,11 @@ pub fn grid(params: &GridParams, opts: &ImportOptions) -> Result<World> {
     // --- Signal plans ---------------------------------------------------------------
     let mut signals: Vec<SignalPlan> = Vec::new();
     if params.signalised {
-        let green_s = (params.cycle_s - 2.0 * params.amber_s) / 2.0;
+        // At the default share of 0.5 both greens are exactly (C - 2 amber) / 2, the
+        // even split this generator always used.
+        let total_green_s = params.cycle_s - 2.0 * params.amber_s;
+        let ew_green_s = total_green_s * params.ew_green_share;
+        let ns_green_s = total_green_s - ew_green_s;
         for jid in 0..junctions.len() as u32 {
             let movements = &movements_by_junction[jid as usize];
             if movements.is_empty() {
@@ -895,9 +913,9 @@ pub fn grid(params: &GridParams, opts: &ImportOptions) -> Result<World> {
                 offset_s: 0.0,
                 controlled,
                 phases: vec![
-                    phase(0, false, green_s),
+                    phase(0, false, ew_green_s),
                     phase(0, true, params.amber_s),
-                    phase(1, false, green_s),
+                    phase(1, false, ns_green_s),
                     phase(1, true, params.amber_s),
                 ],
                 heads,
@@ -1476,6 +1494,22 @@ pub fn card() -> ModelCard {
         ),
         "s",
         3.0.into(),
+    );
+    push(
+        Parameter::new(
+            "ew_green_share",
+            "-",
+            0.5.into(),
+            Source::new(
+                SourceKind::Standard,
+                "Webster (1958), Road Research Technical Paper 39, and HCM 6th ed. ch. 19: \
+                 effective green is split in proportion to the critical flow ratios; equal \
+                 demand on both streets gives 0.5. The accepted range 0.1-0.9 leaves each \
+                 street at least 5.4 s of green at the 60 s default cycle",
+            ),
+        ),
+        "-",
+        0.5.into(),
     );
     push(
         todo(

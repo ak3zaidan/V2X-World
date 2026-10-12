@@ -37,6 +37,7 @@ group tests fail.
 | `world.signals.all_red_s` | 0 s | 0-6 s | All-red floor (netconvert `--tls.allred.time`; MUTCD §4D.26 max 6 s) |
 | `world.signals.pedestrian_walk_s` | 7 s | 4-30 s | Walk interval (MUTCD 2009 §4E.06) |
 | `world.signals.pedestrian_speed_mps` | 1.067 m/s | 0.8-1.5 m/s | Clearance walking speed (MUTCD 2009 §4E.06, 3.5 ft/s) |
+| `world.source.params.ew_green_share` | 0.5 | 0.1-0.9 | Procedural grids: share of the green given to the east-west street (Webster 1958; HCM 6th ed. ch. 19, split by critical flow ratio) |
 | `actors.vehicles.gnss.rtk` | off | bool | Receiver grade: Reid 2019 standard vs RTK percentile rows |
 | `actors.vehicles.gnss.outlier_rate_hz` | 0.01/s | 0-0.5 | Outlier rate (legacy engine draw, 04-models.md §3.8) |
 | `actors.vehicles.gnss.outlier_magnitude_m` | 12 m | 1-200 m | Outlier size |
