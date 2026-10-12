@@ -152,6 +152,32 @@ fn probe_metrics() {
     let _ = &b.rec;
 }
 
+/// The recorded bytes per channel of an attack run, largest first (`--ignored`): what an
+/// events-level recording is made of.
+#[test]
+#[ignore = "a probe, not a check"]
+fn probe_record_bytes() {
+    let mut s = backend(30, 20.0);
+    attacked(&mut s, 0.3);
+    let m = run(s);
+    let mut by: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+    for (_, r) in m.rec.records() {
+        let e = by.entry(r.channel.to_string()).or_insert((0, 0));
+        e.0 += 1;
+        e.1 += r.json.len() as u64;
+    }
+    let mut v: Vec<_> = by.into_iter().collect();
+    v.sort_by(|a, b| b.1.1.cmp(&a.1.1));
+    for (k, (n, b)) in v.iter().take(12) {
+        println!("ROW bytes {k}: {n} records {b} bytes");
+    }
+    for ch in ["node.rx", "node.verify", "phy.rx"] {
+        if let Some((_, r)) = m.rec.records().iter().find(|(_, r)| r.channel == ch) {
+            println!("ROW sample {ch}: {}", String::from_utf8_lossy(&r.json));
+        }
+    }
+}
+
 /// The SCMS lifecycle on a compressed calendar (20 s i-periods, a top-up as soon as only
 /// the current period is left), with a cellular modem in every vehicle.
 fn backend(n: u32, secs: f64) -> Scenario {

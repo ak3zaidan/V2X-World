@@ -159,8 +159,15 @@ pub enum RecordLevel {
     /// Every record and the binary snapshot stream: what the page replays.
     #[default]
     Full,
-    /// Every record, but no snapshot frames and no per-step kinematics: what happened,
-    /// without the scene. About a third of a full recording's size on the soak scenarios.
+    /// Every record, but no snapshot frames and no per-step kinematics: every reception
+    /// included. About a third of a full recording's size on the soak scenarios.
+    Receptions,
+    /// What happened, without the scene and without the per-reception journals
+    /// (`node.rx`, `phy.rx`, `node.verify`): one record per receiver per frame grows with
+    /// the square of the fleet, and in a 30-vehicle attack run those three were 95 % of
+    /// the bytes (a 300 s run at the old `events` wrote 6.9 GB). Transmissions, detector
+    /// verdicts, attack actions, backend and security records, and every metric sample are
+    /// kept; the metrics are computed in the engine from the full stream either way.
     Events,
     /// Only the metric samples and the run's summary records — scenario events, the
     /// backend's decisions and revocations, the credential system's milestones. A day of
@@ -174,7 +181,11 @@ impl RecordLevel {
     pub fn keeps(self, channel: &str) -> bool {
         match self {
             RecordLevel::Full => true,
-            RecordLevel::Events => channel != "gt.kinematics",
+            RecordLevel::Receptions => channel != "gt.kinematics",
+            RecordLevel::Events => !matches!(
+                channel,
+                "gt.kinematics" | "node.rx" | "phy.rx" | "node.verify"
+            ),
             RecordLevel::Metrics => matches!(
                 channel,
                 "metric.sample"
@@ -199,6 +210,20 @@ impl RecordLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `events` leaves out the per-reception journals and keeps what an attack study
+    /// reads; `receptions` keeps them.
+    #[test]
+    fn events_drops_the_reception_journals_and_receptions_keeps_them() {
+        for ch in ["node.rx", "phy.rx", "node.verify"] {
+            assert!(!RecordLevel::Events.keeps(ch), "{ch}");
+            assert!(RecordLevel::Receptions.keeps(ch), "{ch}");
+        }
+        for ch in ["node.tx", "gt.attack.action", "ma.decision", "metric.sample"] {
+            assert!(RecordLevel::Events.keeps(ch), "{ch}");
+        }
+        assert!(!RecordLevel::Receptions.keeps("gt.kinematics"));
+    }
 
     /// The streamed file is byte-for-byte what the whole-document pretty printer wrote,
     /// for none, one and several samples with nesting.

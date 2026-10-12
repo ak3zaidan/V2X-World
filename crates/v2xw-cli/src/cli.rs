@@ -345,7 +345,8 @@ pub struct RunArgs {
     pub checkpoint_every: Option<f64>,
 
     /// How much of the run reaches the recording: `full` (the scene and every record),
-    /// `events` (every record, no scene) or `metrics` (metric samples and the run's
+    /// `receptions` (every record, no scene), `events` (no scene and no per-reception
+    /// records: node.rx, phy.rx, node.verify) or `metrics` (metric samples and the run's
     /// summary records only — what a run of days wants).
     #[arg(long, value_enum, default_value = "full")]
     pub record_level: crate::stream::RecordLevel,
