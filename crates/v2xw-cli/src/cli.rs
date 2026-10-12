@@ -60,6 +60,25 @@ pub enum Command {
     /// Run one scenario and seed under several signature schemes and compare their
     /// signing overhead against ECDSA P-256 (comparison.json, .csv and .md).
     CompareSignatures(CompareSignaturesArgs),
+    /// Run a sensitivity spec: a base scenario and one-at-a-time changes on the same seed,
+    /// each checked for the direction (and band) theory expects of a named metric.
+    Sensitivity(SensitivityArgs),
+}
+
+/// `v2xw sensitivity`.
+#[derive(Debug, clap::Args)]
+pub struct SensitivityArgs {
+    /// The spec file (`v2xw_engine::sensitivity::Spec`).
+    pub spec: std::path::PathBuf,
+    /// Also write the results as a Markdown table here.
+    #[arg(long, value_name = "FILE")]
+    pub markdown: Option<std::path::PathBuf>,
+    /// Print JSON rather than the table.
+    #[arg(long)]
+    pub json: bool,
+    /// Run only the base (with the spec's `set`) and print every metric it measured.
+    #[arg(long)]
+    pub base_only: bool,
 }
 
 /// `v2xw compare-signatures`.

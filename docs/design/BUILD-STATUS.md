@@ -3520,3 +3520,18 @@ Short runs of the attack and credential scenarios, read from `run-report.json` a
 - New fix: a lane change begun while moving is held while the vehicle stands part-way across (it slid sideways and swung its heading on the spot; a truck swept into the next lane's queue). tests/realism.rs kerbside: overlap 206 -> 47 (main 242 plus standstill 3; the test fails on both). highway-congestion 671 -> 435 (main 866).
 - Traffic validation 31 FAIL (main 32). Still worse than main at the shipped seed: midtown-peak-load 269 vs 258 (pedestrian step-outs, hard braking), berlin 283 vs 280 (a merge conflict zone), permitted-left Raff gap 7.01 vs 5.98 s (n = 21; no lags between about 2 and 7 s, so Raff's crossing point is set by one or two samples). Over seeds 11/22/33 midtown-peak-load is 1288 vs main 1328 (measured before the insertion fix).
 - Cross-validation regenerated: grid 3600 paired TT ratio 1.09, r 0.93 (main 1.21, 0.89); Manhattan 3600 376 trips vs SUMO 368, 24 left vs 32.
+
+## 2026-10-12 — sensitivity: radio, MAC and congestion (branch of wip/sens-radio)
+
+- `crates/v2xw-engine/tests/sensitivity_radio.rs`: 27 tests over four specs in
+  `scenarios/sensitivity/` (`radio-dsrc`, `radio-dsrc-dense`, `radio-gn`, `radio-cv2x`) show
+  that tx power, noise figure, path-loss exponent, shadowing, fading, data rate, payload,
+  fleet size, message rate, CWmin, AIFSN, MAC queue length, reactive/adaptive/J2945 DCC, GN
+  hop limit, sidelink MCS, transmissions, RRI, keep probability and sensing move their
+  metrics the way theory says, on DSRC and LTE/NR sidelink. Table and theory:
+  `docs/validation/sensitivity-radio.md`.
+- Fixed: a node's first step waits for its generation phase (the mobility step no longer
+  moves collisions); J2945/1's tracking error reads the navigation solution, not two noisy
+  fixes (density now stretches the interval); `range90_m` ignores a one-bin dip.
+- Open: saturated dense runs (150 vehicles, 40-50 Hz) are far slower than quadratic in the
+  fleet; untraced.

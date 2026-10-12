@@ -41,6 +41,66 @@ fn main() -> ExitCode {
     }
 }
 
+fn sensitivity(args: &v2xw_cli::cli::SensitivityArgs) -> v2xw_cli::Result<String> {
+    use v2xw_engine::sensitivity as sens;
+    let (spec, base) = sens::Spec::load(&args.spec)?;
+    if args.base_only {
+        let m = sens::measure(base)?;
+        let mut out = String::new();
+        for (k, v) in &m.values {
+            out.push_str(&format!("{k:<24} {v:.4}\n"));
+        }
+        for k in [
+            "range_m",
+            "range90_m",
+            "prr_0_200",
+            "prr_200_400",
+            "prr_400_600",
+            "prr_600_1000",
+        ] {
+            out.push_str(&format!("{k:<24} {:?}\n", m.get(k)));
+        }
+        // The PRR curve, one 20 m bin per entry out to 1 km: PRR (receivers).
+        out.push_str("prr per 20 m bin         ");
+        for (c, d) in m.prr_bins.iter().take(50) {
+            if *c == 0 {
+                out.push_str("- ");
+            } else {
+                out.push_str(&format!("{:.2}({c}) ", *d as f64 / *c as f64));
+            }
+        }
+        out.push('\n');
+        return Ok(out);
+    }
+    let results = sens::run_spec(&spec, &base, |r| {
+        eprintln!(
+            "{} {} ({}: {:?} -> {:?})",
+            if r.pass { "PASS" } else { "FAIL" },
+            r.row.name,
+            r.row.metric,
+            r.base,
+            r.value
+        );
+    })?;
+    if let Some(path) = &args.markdown {
+        std::fs::write(path, sens::markdown(&results))
+            .map_err(|e| v2xw_cli::CliError::Agent(format!("{}: {e}", path.display())))?;
+    }
+    let text = if args.json {
+        json(&results, "sensitivity results")?
+    } else {
+        sens::table(&results)
+    };
+    if results.iter().all(|r| r.pass) {
+        Ok(text)
+    } else {
+        print!("{text}");
+        Err(v2xw_cli::CliError::Agent(
+            "sensitivity: a row did not move as expected".into(),
+        ))
+    }
+}
+
 fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
     match &cli.command {
         Command::Agent(args) => agent::agent(&args.to_options()),
@@ -65,6 +125,7 @@ fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
                 ))
             }
         }
+        Command::Sensitivity(args) => sensitivity(args),
         Command::Cities(args) => Ok(cities(args.filter.as_deref(), args.json)),
         Command::Run(args) => {
             let outcome = run::run(&args.to_options())?;

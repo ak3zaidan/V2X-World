@@ -803,6 +803,10 @@ pub struct Engine {
     /// run's congestion control is J2945/1.
     j2945_per: Option<v2xw_radio::PerWindow>,
     j2945_quality_at: BTreeMap<NodeId, u64>,
+    /// Each on-board unit's own motion as its navigation solution gives it, for J2945/1's
+    /// tracking error (`v2xw_radio::SaeJ2945Dcc::on_tracking`): see
+    /// [`Engine::update_dcc`].
+    j2945_nav: BTreeMap<NodeId, v2xw_radio::HostState>,
     weather: WeatherState,
     actors: BTreeMap<ActorId, ActorRecord>,
     /// The actor each equipped node rides, kept beside [`Engine::actors`] so a node's
@@ -928,6 +932,14 @@ pub struct Engine {
     gen_timing: v2xw_msg::GenerationTiming,
     /// Each node's generation phase, drawn once when the node is created.
     node_phase: BTreeMap<NodeId, Duration>,
+    /// The instant a node's first periodic step is due — its creation plus its whole
+    /// phase — for a node whose phase is longer than the mobility step. The per-step
+    /// schedule folds the phase into the step (`phase mod step`), and without this hold a
+    /// node with a 100 ms period on a 50 ms step started its generator at the first step
+    /// after creation, so a fleet created together put every BSM in the same half of each
+    /// 100 ms cycle (measured: no frame in 65-100 ms and 0-10 ms; docs/validation/
+    /// sensitivity-radio.md). Removed once passed.
+    node_first_step: BTreeMap<NodeId, SimTime>,
     /// Each vehicle node's radio class, which sets its antenna height and gain.
     node_class: BTreeMap<NodeId, v2xw_radio::ActorClass>,
     /// What obstructs a link: buildings and terrain, as the scenario selected them.
@@ -1346,6 +1358,7 @@ impl Engine {
                 && crate::wiring::build_dcc(&scenario_for_radio).is_some_and(|d| d.is_j2945()))
             .then(|| v2xw_radio::PerWindow::new(v2xw_radio::J2945Params::J2945_1)),
             j2945_quality_at: BTreeMap::new(),
+            j2945_nav: BTreeMap::new(),
             // On a sidelink `build_dcc` returns only SAE J3161/1's rate control, which
             // never gates: the sidelink's CR limits are its MAC's.
             dcc: crate::wiring::build_dcc(&scenario_for_radio),
@@ -1417,6 +1430,7 @@ impl Engine {
             link_sweep: true,
             gen_timing,
             node_phase: BTreeMap::new(),
+            node_first_step: BTreeMap::new(),
             node_class: BTreeMap::new(),
             obstacles,
             range,
@@ -1655,6 +1669,10 @@ impl Engine {
     fn note_node_created(&mut self, id: NodeId) {
         let phase = self.gen_timing.phase(&self.rng, id);
         self.node_phase.insert(id, phase);
+        if phase >= self.scenario.time.mobility_step() {
+            let now = self.scheduler.now();
+            self.node_first_step.insert(id, now + phase.as_nanos());
+        }
     }
 
     /// One node's generation phase inside the mobility step, when it has one.
@@ -2730,7 +2748,9 @@ impl Engine {
                     let phase = self.node_phase.get(n).map_or(0, |d| d.as_nanos() % step_ns);
                     (*n, now + phase)
                 })
+                .filter(|(n, at)| self.node_first_step.get(n).is_none_or(|first| at >= first))
                 .collect();
+            self.node_first_step.retain(|_, first| *first > now);
             for (node, at) in due {
                 if at <= horizon {
                     self.scheduler.schedule(
@@ -3004,12 +3024,14 @@ impl Engine {
                 self.nodes.remove(&node);
                 self.inboxes.remove(&node);
                 self.node_phase.remove(&node);
+                self.node_first_step.remove(&node);
                 self.node_class.remove(&node);
                 self.mac_window.remove(&node);
                 self.node_wake.remove(&node);
                 // Node ids are never reused, so a retired node's J2945/1 sub-interval is
                 // read by nothing again; kept, it grew with every vehicle of a run of days.
                 self.j2945_quality_at.remove(&node);
+                self.j2945_nav.remove(&node);
                 // Frames the retired node had been handed and not yet processed never
                 // reach an application: each attempt is settled here rather than left
                 // without a fate.
@@ -3302,6 +3324,18 @@ impl Engine {
                     obu.set_own_acceleration(a_long);
                 }
             }
+            if self.j2945_per.is_some() {
+                self.j2945_nav.insert(
+                    node,
+                    v2xw_radio::HostState {
+                        x: truth.pos.x,
+                        y: truth.pos.y,
+                        speed_mps: v2xw_core::math::hypot(truth.vel.x, truth.vel.y),
+                        heading_rad: truth.heading_rad,
+                        at: now,
+                    },
+                );
+            }
             self.update_dcc(node, now, a_long);
         }
     }
@@ -3571,6 +3605,7 @@ impl Engine {
                 })
                 .count() as u32
         });
+        let nav = self.j2945_nav.get(&node).copied();
         let state = {
             let Engine {
                 scheduler,
@@ -3591,6 +3626,20 @@ impl Engine {
                 dcc.on_cbr(&mut ctx, node, cbr);
             }
             dcc.on_density(&mut ctx, node, neighbours);
+            // J2945/1's local estimator is the unit's navigation solution, not the raw
+            // fix: a GNSS receiver's 10 Hz output is filtered with the vehicle's wheel
+            // speed and yaw rate, so its sample-to-sample error is centimetres while its
+            // absolute error is metres. The tracking error is a difference of two states of
+            // that one solution (now, and extrapolated from the last BSM), so the slowly
+            // varying absolute error cancels and what is left is the extrapolation error
+            // of the vehicle's own motion. The fix itself carries 1.6 m of white noise per
+            // axis per sample (`gnss/error/gauss-markov`), and comparing two fixes put the
+            // tracking error at 1-5 m on every step: above vTrackingErrMax (0.5 m), so a
+            // tracking-error BSM was pending every 100 ms and J2945/1 never stretched the
+            // interval, whatever the density (docs/validation/sensitivity-radio.md). The
+            // motion is the vehicle's own sensors' about itself, like the accelerometer
+            // above; the 802.11p J2945/1 run keeps it, J3161/1 has no tracking trigger.
+            let own = nav.or(own);
             if dcc.is_sae()
                 && let Some(own) = own
             {
@@ -4631,7 +4680,13 @@ impl Engine {
                 .as_ref()
                 .is_some_and(crate::wiring::EngineDcc::is_sae)
         {
-            let sent = host_state(b, t_generated);
+            // The state the BSM is taken to carry, from the same navigation solution
+            // the tracking step reads (see `Engine::update_dcc`).
+            let sent = self
+                .j2945_nav
+                .get(&node)
+                .copied()
+                .unwrap_or_else(|| host_state(b, t_generated));
             let u = self
                 .rng
                 .checkout(

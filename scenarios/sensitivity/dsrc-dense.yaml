@@ -1,0 +1,36 @@
+# The dense variant of the sensitivity base: the same stack on a 300 m square (3 x 3 blocks
+# of 100 m) with 150 trips, which realise about a hundred vehicles, so every vehicle hears
+# every other and the channel is near a third busy (CBR about 0.31 at 10 Hz). The congestion
+# rows (MAC, queue, DCC) run here, where contention is what decides the outcome.
+schema: v2xw/scenario/1
+meta:
+  name: sensitivity-dsrc-dense
+  base: dsrc-grid.yaml
+  description: >-
+    Dense 300 m procedural grid with about a hundred vehicles, 802.11p with BSMs, for the
+    congestion rows of the radio sensitivity checks.
+world:
+  source:
+    kind: procedural
+    generator: world/source/procedural-grid
+    params:
+      cols: 3
+      rows: 3
+      block_x_m: 100.0
+      block_y_m: 100.0
+      lanes_per_direction: 1
+      lane_width_m: 3.5
+      sidewalk_m: 2.0
+      speed_limit_mps: 13.9
+      signalised: false
+      crossings: false
+      block_buildings: false
+      rsu_at_junctions: false
+actors:
+  vehicles:
+    equipped_fraction: 1.0
+    demand:
+      kind: mobility/demand/poisson
+      rate_veh_per_h: 3600000.0
+      params:
+        max_total_vehicles: 150
