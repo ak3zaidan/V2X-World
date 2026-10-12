@@ -280,7 +280,10 @@ fn the_certificate_attach_cadence_moves_overhead() {
         p2pcd(hz),
         p2pcd(slow)
     );
-    assert!(p2pcd(all) < p2pcd(hz), "a certificate on every message needs no request");
+    assert!(
+        p2pcd(all) < p2pcd(hz),
+        "a certificate on every message needs no request"
+    );
     assert!(p2pcd(hz) < p2pcd(slow));
 }
 
@@ -417,8 +420,14 @@ fn the_pseudonym_strategy_moves_linkability_and_p2pcd() {
     }
     assert!(t.report.phase2.pseudonym_changes > b.report.phase2.pseudonym_changes);
     assert!(t.get("p2pcd_requests") > b.get("p2pcd_requests"));
-    assert!(t.report.phase2.privacy_links_correct > 0, "the observer links some changes");
-    assert!(linkability(&q) < linkability(&t), "a silence hides the change");
+    assert!(
+        t.report.phase2.privacy_links_correct > 0,
+        "the observer links some changes"
+    );
+    assert!(
+        linkability(&q) < linkability(&t),
+        "a silence hides the change"
+    );
     assert!(q.report.frames_transmitted < t.report.frames_transmitted);
     // The frames a silence discards were signed, but their certificates reached no one:
     // the first frame after it must still carry one. Before the fix the cadence counted
@@ -493,7 +502,10 @@ fn the_message_rate_moves_bytes_cbr_and_aoi() {
         // Doubling the rate roughly doubles the airtime.
         let ratio = w[1].report.air_bytes.airtime_us as f64
             / w[0].report.air_bytes.airtime_us.max(1) as f64;
-        assert!((1.6..2.4).contains(&ratio), "airtime ratio {ratio:.2} for twice the rate");
+        assert!(
+            (1.6..2.4).contains(&ratio),
+            "airtime ratio {ratio:.2} for twice the rate"
+        );
         assert!(w[1].get("aoi") < w[0].get("aoi"));
     }
     // The CBR the MAC reports is its last 100 ms at each 1 s metric flush. A fleet spawned
@@ -502,7 +514,10 @@ fn the_message_rate_moves_bytes_cbr_and_aoi() {
     // and reads about 0 at 5 Hz: an open measurement limit, recorded in
     // docs/validation/sensitivity-security.md. From 10 to 20 Hz it doubles.
     let cbr = out[2].get("cbr") / out[1].get("cbr").max(1e-9);
-    assert!((1.6..2.4).contains(&cbr), "CBR ratio {cbr:.2} from 10 to 20 Hz");
+    assert!(
+        (1.6..2.4).contains(&cbr),
+        "CBR ratio {cbr:.2} from 10 to 20 Hz"
+    );
 }
 
 /// IEEE 1609.2 against ETSI TS 103 097 over GeoNetworking. TS 103 097 is a profile of
@@ -696,7 +711,10 @@ fn the_revocations_move_the_crl_size() {
             p.access.uu_dl_bytes,
         );
     }
-    assert!(few.report.phase2.revoked_attackers > 0, "nothing was revoked");
+    assert!(
+        few.report.phase2.revoked_attackers > 0,
+        "nothing was revoked"
+    );
     assert!(last(&many, "crl_entries") > last(&few, "crl_entries"));
     assert!(last(&many, "crl_bytes") > last(&few, "crl_bytes"));
 }
