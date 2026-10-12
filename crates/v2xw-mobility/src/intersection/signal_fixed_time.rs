@@ -142,6 +142,11 @@ pub struct SignalPlanParams {
     /// (6.2 s, 6.9 s against four or more lanes). Pedestrians are the crosswalk rule's, as
     /// on any turn.
     pub right_turn_on_red: bool,
+    /// The multiplier on the right-on-red critical gap, the same one gap acceptance
+    /// applies to the HCM table at unsignalised junctions (`traffic.critical_gap_factor`):
+    /// a turn on red is a minor-street right turn at a stop sign, so the driver who waits
+    /// for a longer gap there waits for one here too. 1 is the HCM table.
+    pub gap_factor: f64,
     /// How far before the stop line a vehicle halts, metres.
     pub stop_line_offset_m: f64,
 }
@@ -166,6 +171,7 @@ impl Default for SignalPlanParams {
             permissive_left: true,
             permitted_left_critical_headway_s: HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S,
             right_turn_on_red: false,
+            gap_factor: 1.0,
             stop_line_offset_m: STOP_LINE_OFFSET_M,
         }
     }
@@ -393,7 +399,8 @@ impl FixedTimeSignals {
         let critical = crate::intersection::gap_acceptance::HcmGaps::of(
             crate::intersection::gap_acceptance::Movement::MinorRight,
         )
-        .critical_gap_s(j.major_lanes);
+        .critical_gap_s(j.major_lanes)
+            * self.params.gap_factor;
         let closing = conflicts
             .iter()
             .filter(|c| c.conflicts)

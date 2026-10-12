@@ -1389,6 +1389,8 @@ pub fn title(path: &str) -> Option<&'static str> {
         "actors.vehicles.equipped_fraction" => "Share of vehicles with a V2X radio",
         "actors.vru.device_fraction" => "Share of pedestrians and cyclists with a device",
         "actors.vru.crossing_gap_margin_s" => "Pedestrian gap acceptance margin",
+        "actors.vru.walking_speed_mps" => "Pedestrian walking speed",
+        "world.source.params.ew_green_share" => "East-west green share (generated grid)",
         "actors.vehicles.drivers" => "Drivers",
         "actors.vehicles.drivers.realism" => "Driver realism",
         "actors.vehicles.drivers.parameter_spread" => "How much drivers differ",

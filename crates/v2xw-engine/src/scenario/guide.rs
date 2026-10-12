@@ -253,7 +253,7 @@ const BASIC: &[Basic] = &[
     },
     Basic {
         path: "traffic.critical_gap_factor",
-        explain: "How big a gap in the main-road traffic drivers wait for before pulling out at a junction without lights: below 1 they squeeze in, above 1 they wait longer.",
+        explain: "How big a gap in the main-road traffic drivers wait for before pulling out at a junction without lights, or turning right on red where that is allowed: below 1 they squeeze in, above 1 they wait longer.",
         recommended: "1 (the Highway Capacity Manual's gaps); 0.8 to 1.2.",
     },
     Basic {
@@ -282,6 +282,16 @@ const ADVANCED: &[Basic] = &[
         path: "security.signer_id_policy.on_new_neighbour",
         explain: "Send the full certificate in the next safety message whenever a vehicle it has not heard before comes into range, so the newcomer can check its signatures at once.",
         recommended: "Off (the US cadence alone); on for the ETSI rule (TS 103 097 §7.1.1).",
+    },
+    Basic {
+        path: "world.source.params.ew_green_share",
+        explain: "On a generated grid with traffic lights, the share of each light's green time the east-west street gets; the north-south street gets the rest. Give more to the busier street.",
+        recommended: "0.5 for equal demand (Webster 1958); 0.3 to 0.7, in proportion to the two streets' flows.",
+    },
+    Basic {
+        path: "actors.vru.walking_speed_mps",
+        explain: "How fast pedestrians under 65 walk on average; older walkers are slower in proportion. Slower walkers need longer gaps and longer crossing time.",
+        recommended: "1.51 m/s (Knoblauch 1996 crosswalk study); 1.2 to 1.6 m/s.",
     },
     Basic {
         path: "actors.vehicles.drivers.max_accel_mps2",

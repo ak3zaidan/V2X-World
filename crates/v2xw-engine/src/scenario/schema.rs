@@ -1205,6 +1205,11 @@ pub struct Vru {
     /// to walk across (the HCM's start-up and clearance time), seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crossing_gap_margin_s: Option<f64>,
+    /// Overrides the mean walking speed of pedestrians under 65, m/s. Under `observed`
+    /// the 65-and-over mean scales with it (keeping Knoblauch et al. 1996's ratio, 1.25
+    /// against 1.51 m/s); under `document` it is the one Gaussian's mean (1.34 m/s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walking_speed_mps: Option<f64>,
 }
 
 /// How the pedestrians of `actors.vru` behave.

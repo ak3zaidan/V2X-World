@@ -100,7 +100,9 @@ pub fn build_mobility(scenario: &Scenario, world: &World) -> Option<Box<dyn Mobi
     let scale = scenario.scale.as_ref()?;
     let meso = meso_params(&scale.traffic.meso);
     match scale.traffic.model.as_str() {
-        m if m == v2xw_mobility::meso::MODEL_ID => Some(Box::new(MesoMobility::new(meso))),
+        m if m == v2xw_mobility::meso::MODEL_ID => Some(Box::new(
+            MesoMobility::new(meso).with_trait_law(crate::wiring::trait_law(scenario)),
+        )),
         m if m == v2xw_mobility::meso::tiered::MODEL_ID => {
             let region = region(scenario, world)?;
             Some(Box::new(TieredMobility::new(

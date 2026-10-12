@@ -445,6 +445,13 @@ pub static BOUNDS: &[Bound] = &[
         what: "the pedestrian crossing gap margin",
     },
     Bound {
+        path: "actors.vru.walking_speed_mps",
+        lo: 0.5,
+        hi: 2.5,
+        exclusive_lo: false,
+        what: "the pedestrian walking speed",
+    },
+    Bound {
         path: "actors.vru.ebike_share",
         lo: 0.0,
         hi: 1.0,
@@ -1272,6 +1279,16 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the signal cycle length",
     },
+    // Webster (1958) and HCM 6th ed. ch. 19 split green by the critical flow ratios; the
+    // procedural grid's own check (`GridParams::validate`) holds the same 0.1-0.9, which
+    // leaves each street at least 5.4 s of green at the 60 s default cycle.
+    Bound {
+        path: "world.source.params.ew_green_share",
+        lo: 0.1,
+        hi: 0.9,
+        exclusive_lo: false,
+        what: "the east-west share of a generated grid's green",
+    },
     // MUTCD 2009 §4D.26: a red clearance shall not exceed 6 s.
     Bound {
         path: "world.signals.all_red_s",
@@ -1822,6 +1839,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                where this is t_s (start-up and clearance), the median of a lognormal \
                across pedestrians. Default 2 s (HCM, not re-verified locally); smaller \
                values make pedestrians accept tighter gaps against traffic.",
+    },
+    KeyStatus {
+        path: "actors.vru.walking_speed_mps",
+        status: Status::Wired,
+        note: "The mean walking speed of pedestrians under 65. Default 1.51 m/s under \
+               'observed' (Knoblauch, Pietrucha & Nitzburg 1996, TRR 1538: 4.95 ft/s at \
+               crosswalks; the 65-and-over mean, 1.25 m/s, scales with it) and 1.34 m/s \
+               under 'document' (Helbing & Molnar 1995). The bound 0.5-2.5 m/s spans a \
+               frail walker to a brisk one; the MUTCD clearance speed is 1.07 m/s.",
     },
     KeyStatus {
         path: "actors.vru.ebike_share",
@@ -2915,6 +2941,15 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Cycle length of the plans synthesised for an imported (OSM) world.",
     },
     KeyStatus {
+        path: "world.source.params.ew_green_share",
+        status: Status::Wired,
+        note: "The share of each signalised junction's green given to the east-west street \
+               of a generated grid (world/source/procedural-grid with signalised: true); \
+               the north-south street gets the rest. Default 0.5, an even split (Webster \
+               1958: green in proportion to the critical flow ratios, equal on a symmetric \
+               grid). An imported city's plans come from the map, not from this.",
+    },
+    KeyStatus {
         path: "world.signals.all_red_s",
         status: Status::Wired,
         note: "Floor under each phase's all-red in an imported world's plans.",
@@ -3696,6 +3731,26 @@ fn scale(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "the tiered model needs the box it drives microscopically".to_string(),
         ));
     }
+    // The queue tier reads the drivers' speed factor and spread (each vehicle's free
+    // speed) but not their reactions: a queue discharges at its headway law
+    // (`scale.traffic.meso.tau_jf_s`), so a reaction set here would do nothing.
+    if t.model == v2xw_mobility::meso::MODEL_ID {
+        let d = &s.actors.vehicles.drivers;
+        for (leaf, set) in [
+            ("start_reaction_s", d.start_reaction_s.is_some()),
+            ("queue_start_delay_s", d.queue_start_delay_s.is_some()),
+        ] {
+            if set {
+                e.push(conflict(
+                    &format!("actors.vehicles.drivers.{leaf}"),
+                    "the queue tier (scale.traffic.model: mobility/meso/queue) discharges a queue \
+                     at its headway law, not at drivers' reactions; set \
+                     scale.traffic.meso.tau_jf_s instead, or use the tiered model"
+                        .to_string(),
+                ));
+            }
+        }
+    }
     let m = &t.meso;
     for (leaf, value) in [
         ("segment_length_m", Some(m.segment_length_m)),
@@ -4047,6 +4102,24 @@ pub(crate) fn grid_params(
             )
         })?
     };
+    // The green split is checked against the published bound (the settings window's
+    // range), and refused on a grid without signals, where it would do nothing.
+    if params.get("ew_green_share").is_some() {
+        const SHARE: &str = "world.source.params.ew_green_share";
+        let mut out = Vec::new();
+        bounded_at(SHARE, SHARE, grid.ew_green_share, &mut out);
+        if let Some(why) = out.pop() {
+            return Err(why);
+        }
+        if !grid.signalised {
+            return Err(conflict(
+                SHARE,
+                "splits the green of a signalised grid, but this grid has no signals; set \
+                 world.source.params.signalised to true"
+                    .to_string(),
+            ));
+        }
+    }
     if let Err(v2xw_world::WorldError::InvalidParameter { parameter, problem }) = grid.validate() {
         return Err(conflict(
             &format!("world.source.params.{parameter}"),
@@ -4219,6 +4292,10 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
         (
             "actors.vru.crossing_gap_margin_s",
             s.actors.vru.crossing_gap_margin_s,
+        ),
+        (
+            "actors.vru.walking_speed_mps",
+            s.actors.vru.walking_speed_mps,
         ),
         (
             "actors.vehicles.drivers.parameter_spread",
