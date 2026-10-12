@@ -3493,3 +3493,21 @@ Short runs of the attack and credential scenarios, read from `run-report.json` a
 - Merged into main: protocol (detection metrics fed by gt.subject and gt.attack.action, RSU PQ software proxy, cert-cycle fragments fit the MTU) and studio (quiet agent client when no agent, Run shown when settings are staged, Undo after Run).
 - **Held, not merged:** realism (`worktree-wf_defd1f50-e87-6`, f3b5cc8). It brings grid travel time against SUMO from +18 % to +6 %, but the safety suite got worse (37 FAIL against 33): connected-intersections 0 -> 17, phase1-grid 20 -> 54, peak-density 0 -> 16, closure 0 -> 7. The track asked for these to be fixed before merging. Its worktree is kept.
 - Checks: cargo check --workspace --tests; tests rsu_pq_proxy, copilot control, metrics/record/cli lib; studio typecheck and vitest 284/284; release build; run-sim.sh boots on 8758 with the agent on.
+
+## 2026-10-11 — traffic audit: important traffic, world and run parameters configurable (branch of 0964c12)
+
+- **Exposed** (validated, published with unit, label and guide text, read at run time; defaults unchanged, so no digest moves):
+  - Drivers: `speed_factor`, `speed_spread`, `start_reaction_s` and `queue_start_delay_s`.
+  - Per-class `truck`/`bus`/`motorcycle`/`bicycle` a, b, T and s0.
+  - Junctions: `traffic.critical_gap_factor`, `permitted_left_gap_s` and `turn_lateral_accel_mps2`.
+  - Kerbside: `traffic.kerbside.*`.
+  - OSM signal timing: `world.signals.{cycle_s,all_red_s,pedestrian_walk_s,pedestrian_speed_mps}`.
+  - GNSS: `actors.vehicles.gnss.*`.
+- The loader refuses settings that would do nothing: speed and reaction fields with identical drivers, a class missing from the fleet, kerbside fields with kerbside off, signal timing on a non-OSM world, and GNSS with no radios.
+- `tests/traffic_audit_config.rs` runs one same-seed test per group; with the wiring removed, all six fail.
+- Inventory: docs/guides/config-inventory-traffic.md, covering 171 constants and the model structs.
+- **Open:**
+  - The meso tier ignores the speed and reaction fields.
+  - RTK keeps the 1.6 m white noise.
+  - `gap_factor` is not on the gap-acceptance card.
+  - `cargo clippy -p v2xw-engine` stops on an existing v2xw-radio error (bler_nr.rs:222).
