@@ -928,6 +928,14 @@ pub struct Engine {
     gen_timing: v2xw_msg::GenerationTiming,
     /// Each node's generation phase, drawn once when the node is created.
     node_phase: BTreeMap<NodeId, Duration>,
+    /// The instant a node's first periodic step is due — its creation plus its whole
+    /// phase — for a node whose phase is longer than the mobility step. The per-step
+    /// schedule folds the phase into the step (`phase mod step`), and without this hold a
+    /// node with a 100 ms period on a 50 ms step started its generator at the first step
+    /// after creation, so a fleet created together put every BSM in the same half of each
+    /// 100 ms cycle (measured: no frame in 65-100 ms and 0-10 ms; docs/validation/
+    /// sensitivity-radio.md). Removed once passed.
+    node_first_step: BTreeMap<NodeId, SimTime>,
     /// Each vehicle node's radio class, which sets its antenna height and gain.
     node_class: BTreeMap<NodeId, v2xw_radio::ActorClass>,
     /// What obstructs a link: buildings and terrain, as the scenario selected them.
@@ -1417,6 +1425,7 @@ impl Engine {
             link_sweep: true,
             gen_timing,
             node_phase: BTreeMap::new(),
+            node_first_step: BTreeMap::new(),
             node_class: BTreeMap::new(),
             obstacles,
             range,
@@ -1655,6 +1664,10 @@ impl Engine {
     fn note_node_created(&mut self, id: NodeId) {
         let phase = self.gen_timing.phase(&self.rng, id);
         self.node_phase.insert(id, phase);
+        if phase >= self.scenario.time.mobility_step() {
+            let now = self.scheduler.now();
+            self.node_first_step.insert(id, now + phase.as_nanos());
+        }
     }
 
     /// One node's generation phase inside the mobility step, when it has one.
@@ -2730,7 +2743,9 @@ impl Engine {
                     let phase = self.node_phase.get(n).map_or(0, |d| d.as_nanos() % step_ns);
                     (*n, now + phase)
                 })
+                .filter(|(n, at)| self.node_first_step.get(n).is_none_or(|first| at >= first))
                 .collect();
+            self.node_first_step.retain(|_, first| *first > now);
             for (node, at) in due {
                 if at <= horizon {
                     self.scheduler.schedule(
@@ -3004,6 +3019,7 @@ impl Engine {
                 self.nodes.remove(&node);
                 self.inboxes.remove(&node);
                 self.node_phase.remove(&node);
+                self.node_first_step.remove(&node);
                 self.node_class.remove(&node);
                 self.mac_window.remove(&node);
                 self.node_wake.remove(&node);

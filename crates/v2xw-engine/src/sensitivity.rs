@@ -200,7 +200,11 @@ impl Measured {
     /// `access_ms` (channel-access delay, `t - t_handoff` of `node.tx`), `e2e_ms_mean`,
     /// `e2e_ms_p95`, `ipg_ms_mean`, `ipg_ms_p95`, `aoi_ms`, `cbr_mean`, `cbr_max`,
     /// `queue_depth_mean`, `tx_rate_hz` (frames per transmitting node per second),
-    /// `airtime_us` and `psdu_bytes` (per frame), `collision_rate` (collision,
+    /// `airtime_us` and `psdu_bytes` (per frame), `aifs_us` and `backoff_us` (per frame),
+    /// `tx_phase_peak` (the largest share of frames on air in one 5 ms slot of the 100 ms
+    /// cycle: 0.05 when transmissions are spread evenly),
+    /// `stage_<name>_ms` (the mean of each latency stage of a delivered message: queue,
+    /// sign, handoff, access, air, rx, verify_wait, verify, deliver), `collision_rate` (collision,
     /// hidden-terminal, resource-collision and in-band-emission losses per attempt),
     /// `loss_<cause>` (per attempt), `sl_*` (sidelink report), `gn_*` (GeoNetworking).
     ///
@@ -276,6 +280,41 @@ pub struct SensitivityRecorder {
     cbr_max: f64,
     depth_sum: u64,
     records: u64,
+    aifs_ns: u128,
+    backoff_ns: u128,
+    phase_bins: [u64; 20],
+    stage_ns: [u128; STAGES.len()],
+    stage_n: [u64; STAGES.len()],
+}
+
+/// The latency stages of a delivered message, as `node.rx` stamps them: name, and the
+/// indices of the two stamps (in [`stamps`]) it lies between.
+const STAGES: [(&str, usize, usize); 9] = [
+    ("stage_queue_ms", 0, 1),
+    ("stage_sign_ms", 1, 2),
+    ("stage_handoff_ms", 2, 3),
+    ("stage_access_ms", 3, 4),
+    ("stage_air_ms", 4, 5),
+    ("stage_rx_ms", 5, 6),
+    ("stage_verify_wait_ms", 6, 7),
+    ("stage_verify_ms", 7, 8),
+    ("stage_deliver_ms", 8, 9),
+];
+
+/// A delivered message's stamps in journey order.
+fn stamps(v: &NodeRxView) -> [Option<SimTime>; 10] {
+    [
+        v.t_generated,
+        v.t_sign_start,
+        v.t_signed,
+        v.t_handoff,
+        v.t_tx_start,
+        v.t_arrival,
+        v.t_rx_done,
+        v.t_verify_start,
+        v.t_verify_done,
+        v.t_delivered,
+    ]
 }
 
 /// A [`SimTime`] in nanoseconds (it is one already; named for the reader).
@@ -324,6 +363,9 @@ impl RunRecorder for SensitivityRecorder {
                         self.access_ns += u128::from(ns(v.t).saturating_sub(ns(h)));
                         self.access_n += 1;
                     }
+                    self.phase_bins[((ns(v.t) % 100_000_000) / 5_000_000) as usize] += 1;
+                    self.aifs_ns += u128::from(v.mac_aifs_ns.unwrap_or(0));
+                    self.backoff_ns += u128::from(v.mac_backoff_ns.unwrap_or(0));
                     if let Some(a) = v.airtime_us {
                         self.airtime_us += a;
                         self.airtime_n += 1;
@@ -341,6 +383,13 @@ impl RunRecorder for SensitivityRecorder {
                         RxFate::InFlight => return,
                     }
                     self.delivered += 1;
+                    let st = stamps(&v);
+                    for (i, (_, a, b)) in STAGES.iter().enumerate() {
+                        if let (Some(a), Some(b)) = (st[*a], st[*b]) {
+                            self.stage_ns[i] += u128::from(b.saturating_sub(a));
+                            self.stage_n[i] += 1;
+                        }
+                    }
                     let (Some(g), Some(d)) = (v.t_generated, v.t_delivered) else {
                         return;
                     };
@@ -416,6 +465,19 @@ impl SensitivityRecorder {
         }
         if self.access_n > 0 {
             put("access_ms", self.access_ns as f64 / self.access_n as f64 / 1e6);
+        }
+        if self.tx_frames > 0 {
+            put("aifs_us", self.aifs_ns as f64 / self.tx_frames as f64 / 1e3);
+            put("backoff_us", self.backoff_ns as f64 / self.tx_frames as f64 / 1e3);
+        }
+        if self.tx_frames > 0 {
+            let peak = self.phase_bins.iter().copied().max().unwrap_or(0);
+            put("tx_phase_peak", peak as f64 / self.tx_frames as f64);
+        }
+        for (i, (name, _, _)) in STAGES.iter().enumerate() {
+            if self.stage_n[i] > 0 {
+                put(name, self.stage_ns[i] as f64 / self.stage_n[i] as f64 / 1e6);
+            }
         }
         if self.airtime_n > 0 {
             put("airtime_us", self.airtime_us as f64 / self.airtime_n as f64);
@@ -619,10 +681,11 @@ pub fn check_row(base: &Scenario, row: &Row, cache: &mut BaseCache) -> Result<Ro
     Ok(judge(row, b.get(&row.metric), v.get(&row.metric)))
 }
 
-/// Runs every row of `spec`, calling `progress` after each.
+/// Runs every row of `spec`, calling `progress` after each. A row whose scenario is
+/// refused or fails to run fails, with the error as its note.
 ///
 /// # Errors
-/// The first row whose scenario is refused or fails to run.
+/// None at present; the `Result` keeps room for a spec-level refusal.
 pub fn run_spec(
     spec: &Spec,
     base: &Scenario,
@@ -631,7 +694,14 @@ pub fn run_spec(
     let mut cache = BaseCache::default();
     let mut out = Vec::with_capacity(spec.rows.len());
     for row in &spec.rows {
-        let r = check_row(base, row, &mut cache)?;
+        // A refused or failed run fails its row and the rest still run.
+        let r = check_row(base, row, &mut cache).unwrap_or_else(|e| RowResult {
+            row: row.clone(),
+            base: None,
+            value: None,
+            pass: false,
+            note: e.to_string(),
+        });
         progress(&r);
         out.push(r);
     }
