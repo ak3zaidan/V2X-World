@@ -922,6 +922,10 @@ pub struct Phase2Report {
     pub revocations_repeated: u64,
     /// Decisions about a certificate the published list already revoked.
     pub decisions_already_covered: u64,
+    /// Revoke verdicts about a pseudonym of a device the authority had already decided:
+    /// the linkage authorities put both pseudonyms on one linkage chain, so the device is
+    /// revoked once and the verdict is not a second decision.
+    pub decisions_linked: u64,
     /// The most corroborated events any pseudonym the authority did not revoke reached
     /// (`threat/ma/corroborated` only): the margin an honest fleet leaves to the threshold.
     pub ma_peak_unrevoked_events: u64,
@@ -1116,6 +1120,9 @@ pub struct Phase2 {
     /// The devices a revocation has been issued or decided for (ground truth, run report
     /// only), so a device two of whose pseudonyms were decided is counted once.
     revoked_devices: BTreeSet<NodeId>,
+    /// The devices the authority has decided to revoke, as the PCA and linkage
+    /// authorities resolve a reported pseudonym (joint 2): one decision per device.
+    ma_decided_devices: BTreeSet<NodeId>,
     /// The positional accuracy each safety message stated on the air, as a 95 % radius in
     /// metres, by signer and generation time: `None` when the message said "unavailable".
     /// `v2xw_node::VerifiedMessage` does not carry it, so the detector host joins it back
@@ -1657,6 +1664,7 @@ impl Phase2 {
             attacker_at_ma: BTreeMap::new(),
             attacker_peak_events: BTreeMap::new(),
             revoked_devices: BTreeSet::new(),
+            ma_decided_devices: BTreeSet::new(),
             broadcast_accuracy: BTreeMap::new(),
             privacy_chains: BTreeMap::new(),
             privacy_tracked: BTreeMap::new(),
@@ -3114,6 +3122,19 @@ impl Phase2 {
                 }
             }
             if let Some(MaAction::Revoke { subject }) = action {
+                // The authority decides about a device, not a pseudonym. In SCMS it learns
+                // the device behind a reported certificate by asking the PCA for the
+                // linkage value's pre-linkage values and the linkage authorities for the
+                // chain they belong to (CAMP SCMS PoC EE Requirements §5; Whyte et al.,
+                // VNC 2013, §V); a second pseudonym on a chain already decided adds
+                // evidence, not a second revocation. It used to open one case per
+                // pseudonym: 22 decisions for 12 attackers in a 300 s run.
+                if let Some((device, _, _)) = self.resolve_subject(&subject)
+                    && !self.ma_decided_devices.insert(device)
+                {
+                    self.report.decisions_linked += 1;
+                    continue;
+                }
                 self.report.ma_revoke_decisions += 1;
                 tick.ma_decisions
                     .push(v2xw_threat::records::MaDecisionRecord {

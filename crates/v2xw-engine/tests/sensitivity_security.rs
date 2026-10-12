@@ -700,15 +700,30 @@ fn the_revocations_move_the_crl_size() {
         let p = &m.report.phase2;
         println!(
             "ROW crl size {n}: revoked {} entries {:.0} bytes {:.0} versions {} downloads {} \
-             uu_dl {}",
+             uu_dl {} decisions {} linked {} repeated {} attackers {}",
             p.revoked_attackers + p.revoked_honest,
             last(m, "crl_entries"),
             last(m, "crl_bytes"),
             p.crl_versions_published,
             p.crl_downloads,
             p.access.uu_dl_bytes,
+            p.ma_revoke_decisions,
+            p.decisions_linked,
+            p.revocations_repeated,
+            p.attackers,
+        );
+        // One decision per device: the linkage authorities tie a device's pseudonyms to
+        // one chain, so no device is revoked twice and no device is decided twice.
+        assert_eq!(p.revocations_repeated, 0, "a device was revoked twice");
+        assert!(
+            p.ma_revoke_decisions <= p.attackers + p.decisions_honest,
+            "more decisions than devices"
         );
     }
+    assert!(
+        many.report.phase2.decisions_linked > 0,
+        "no second pseudonym was linked to a decided device"
+    );
     assert!(
         few.report.phase2.revoked_attackers > 0,
         "nothing was revoked"
