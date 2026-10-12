@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! cross_validate [--quick] [--no-radio] [--out FILE] [--osm FILE] [--work DIR]
+//!                [--case NAME@RATE] [--no-idm]
 //! ```
 //!
 //! SUMO is found through `$SUMO_HOME`, else `$V2XW_SUMO_VENV` (a virtualenv with the
@@ -23,6 +24,8 @@ struct Args {
     out: PathBuf,
     osm: PathBuf,
     work: PathBuf,
+    case: Option<String>,
+    no_idm: bool,
 }
 
 fn args() -> Args {
@@ -32,12 +35,16 @@ fn args() -> Args {
         out: PathBuf::from("docs/validation/cross-validation.md"),
         osm: PathBuf::from("worlds/cache/manhattan.osm.xml"),
         work: std::env::temp_dir().join("v2xw-xval"),
+        case: None,
+        no_idm: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
         match x.as_str() {
             "--quick" => a.quick = true,
             "--no-radio" => a.radio = false,
+            "--case" => a.case = it.next(),
+            "--no-idm" => a.no_idm = true,
             "--out" => a.out = it.next().map(PathBuf::from).unwrap_or(a.out),
             "--osm" => a.osm = it.next().map(PathBuf::from).unwrap_or(a.osm),
             "--work" => a.work = it.next().map(PathBuf::from).unwrap_or(a.work),
@@ -84,7 +91,7 @@ fn metrics_table(s: &mut String, runs: &[Measured]) {
     }
     let _ = writeln!(s, "---:|");
     type Get = fn(&Measured) -> f64;
-    let rows: [(&str, Get, usize); 13] = [
+    let rows: [(&str, Get, usize); 21] = [
         ("trips offered", |m| m.offered as f64, 0),
         ("trips inserted", |m| m.inserted as f64, 0),
         ("trips completed", |m| m.completed as f64, 0),
@@ -102,6 +109,34 @@ fn metrics_table(s: &mut String, runs: &[Measured]) {
         ("mean vehicles halting (< 0.1 m/s)", |m| m.halting_mean, 1),
         ("max vehicles halting", |m| m.halting_max as f64, 0),
         ("halting time per trip, s", |m| m.wait_per_trip_s, 1),
+        (
+            "  of which at a stop line (last 30 m), s",
+            |m| m.halt_where_s[0] / m.inserted.max(1) as f64,
+            1,
+        ),
+        (
+            "  of which mid-block, s",
+            |m| m.halt_where_s[1] / m.inserted.max(1) as f64,
+            1,
+        ),
+        (
+            "  of which inside a junction, s",
+            |m| m.halt_where_s[2] / m.inserted.max(1) as f64,
+            1,
+        ),
+        ("stops per trip", |m| m.stops_per_trip(), 2),
+        (
+            "lane changes per vehicle-km",
+            |m| m.lane_changes_per_km(),
+            2,
+        ),
+        ("junction speed (moving), km/h", |m| m.junction_kmh(), 1),
+        ("queue discharge headway, s", |m| m.discharge_headway_s(), 2),
+        (
+            "vehicles left in network at end",
+            |m| m.left_in_network as f64,
+            0,
+        ),
     ];
     for (name, g, p) in rows {
         let _ = write!(s, "| {name} |");
@@ -180,7 +215,7 @@ fn main() {
             }
             if a.osm.exists() {
                 match xval::manhattan_study(home, &a.osm, &a.work, MANHATTAN_BBOX) {
-                    Ok(s) => studies.push((s, if a.quick { vec![1200.0] } else { vec![900.0, 2400.0] })),
+                    Ok(s) => studies.push((s, if a.quick { vec![1200.0] } else { vec![900.0, 2400.0, 3600.0] })),
                     Err(e) => setup_notes.push(format!("manhattan: {e}")),
                 }
             } else {
@@ -198,6 +233,9 @@ fn main() {
                     study.import.total_anomalies()
                 );
                 for rate in rates {
+                    if a.case.as_ref().is_some_and(|c| *c != format!("{}@{rate}", study.name)) {
+                        continue;
+                    }
                     let trips = make_trips(&study.world, &study.ids, *rate, timing.demand_s, seed);
                     eprintln!("{} @ {rate} veh/h: {} trips", study.name, trips.len());
                     let native = run_native(study, &trips, timing, seed);
@@ -205,9 +243,27 @@ fn main() {
                     let (krauss, v) = run_sumo(study, home, &trips, timing, seed, "SUMO Krauss (default)", &[]);
                     sumo_version = sumo_version.or(v);
                     eprintln!("  sumo krauss done in {:.0} s", krauss.wall_s);
-                    let (idm, _) = run_sumo(study, home, &trips, timing, seed, "SUMO IDM", &["--default.carfollowmodel", "IDM"]);
-                    eprintln!("  sumo idm done in {:.0} s", idm.wall_s);
-                    cases.push(Case { study_name: study.name.clone(), rate: *rate, runs: vec![native, krauss, idm] });
+                    if std::env::var_os("V2XW_XVAL_OUTLIERS").is_some() {
+                        let mut v: Vec<(f64, u64, f64, f64)> = native
+                            .travel_s
+                            .iter()
+                            .filter_map(|(q, a)| krauss.travel_s.get(q).map(|b| (a - b, *q, *a, *b)))
+                            .collect();
+                        v.sort_by(|x, y| y.0.total_cmp(&x.0));
+                        for q in krauss.travel_s.keys().filter(|q| !native.travel_s.contains_key(q)).take(8) {
+                            eprintln!("  outlier trip {q}: not completed natively");
+                        }
+                        for (d, q, a, b) in v.iter().take(8) {
+                            eprintln!("  outlier trip {q}: native {a:.0} s, krauss {b:.0} s, +{d:.0} s");
+                        }
+                    }
+                    let mut runs = vec![native, krauss];
+                    if !a.no_idm {
+                        let (idm, _) = run_sumo(study, home, &trips, timing, seed, "SUMO IDM", &["--default.carfollowmodel", "IDM"]);
+                        eprintln!("  sumo idm done in {:.0} s", idm.wall_s);
+                        runs.push(idm);
+                    }
+                    cases.push(Case { study_name: study.name.clone(), rate: *rate, runs });
                 }
             }
             if let Some(v) = &sumo_version {
@@ -279,13 +335,16 @@ fn main() {
                 let _ = writeln!(body, "\n- {}: {e}", r.label);
             }
         }
-        if c.runs.len() >= 3 {
+        if c.runs.len() >= 2 {
             let _ = writeln!(
                 body,
                 "\n| pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |"
             );
             let _ = writeln!(body, "|---|---:|---:|---:|---:|---:|---:|---:|");
-            for (i, j) in [(0, 1), (0, 2), (2, 1)] {
+            for (i, j) in [(0, 1), (0, 2), (2, 1)]
+                .into_iter()
+                .filter(|p| p.0.max(p.1) < c.runs.len())
+            {
                 let (share, n, r, mad) = edge_agreement(&c.runs[i], &c.runs[j]);
                 let (np, mr, md) = paired_tt(&c.runs[i], &c.runs[j]);
                 let _ = writeln!(
@@ -308,7 +367,7 @@ fn main() {
                     .map(|k| {
                         let g =
                             |m: &Measured| m.bins.get(k).map_or("—".to_string(), |b| f(b.0, 0));
-                        format!("{}/{}/{}", g(&c.runs[0]), g(&c.runs[1]), g(&c.runs[2]))
+                        c.runs.iter().map(g).collect::<Vec<_>>().join("/")
                     })
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -350,12 +409,13 @@ Network, trips, routes, signal programmes and measurement are shared, so what re
 - **The same simulator with a different car-following equation moves the results by a few per cent.** SUMO-IDM against SUMO-Krauss (rows above) agrees within about 1–4 % on speed and travel time, with edge-speed correlation 0.95–0.99. Where this engine differs from SUMO by more than that, the difference is not the car-following equation alone: it is the rest of the driver model (lane changing, junction behaviour, insertion).\n\
 - **Mean and median travel-time ratios separate a tail from a shift.** Where the paired mean ratio is well above the median ratio, most trips take about as long in both simulators and a minority take much longer in one of them.\n\n\
 The mechanisms that can produce the observed differences, with what each predicts:\n\n\
-- **Lane changing before turns.** SUMO's LC2013 makes strategic lane changes far ahead of a turn; this engine's MOBIL with strategic urgency changes later. A vehicle that reaches the end of its lane in the wrong lane waits for a gap, which slows a minority of trips a great deal and the rest not at all: the tail signature. Not yet isolated by an experiment (next step: rerun with turning trips only, and with SUMO's `--lanechange.duration` and `lcStrategic` varied).\n\
+- **Lane changing before turns: found and fixed (2026-10-11).** The travel-time tail was traced trip by trip (`V2XW_XVAL_OUTLIERS`, `V2XW_XVAL_TRACE`). Three defects of this engine, each fixed: (1) after a speed-gain change the route was re-planned on the lane graph, which has no lane changes, so a car that could not make a later turn from its new lane went round the block (296 s against SUMO's 109 s on one grid trip); (2) two cars level with each other at the same speed stayed level to the end of the lane, so the one that needed the other's lane missed its turn or was removed; it now drops behind, as LC2013's `informLeader` does (LC2013's other courtesy, the target-lane follower braking for an urgent change, `informFollower`, was tried and removed: it held queues back across the junction upstream and locked Manhattan at 3600 veh/h); (3) a car owing a change it could not make drove past the end of its lane and was removed, where SUMO waits there; it now brakes for the end of its lane from the start of the lane, and its give-up re-plan accepts any lane of the destination road. A lane change near the start of a road now also sees the car on the junction connector behind it in the target lane (the traffic validation's safety classes caught a cut-in there to a net gap of -0.05 m). With these, and with the native run on a scenario's shipped defaults (strategic lane choice on), lane changes per vehicle-km agree with SUMO within about 20 %, and the grid's paired mean travel-time ratio at 3600 veh/h fell from 1.21 to 1.09.\n\
 - **Junctions.** Both run netconvert's signal programmes from the same `net.xml`, but yield behaviour differs: SUMO uses its junction model with impatience and look-ahead over internal lanes; this engine uses gap acceptance on the connector lanes the importer builds. The traffic validation report already records this engine's permitted-left critical gap at 5.99 s against the HCM's 4.5 s (`docs/validation/traffic.md`, `calibration/permitted-left-gap`), which lengthens left-turn delays in this engine specifically.\n\
-- **Car following.** SUMO's default Krauss has driver imperfection σ = 0.5 (SUMO vType defaults: accel 2.6 m/s², decel 4.5 m/s², τ = 1 s, minGap 2.5 m); its dawdling makes vehicles stop fully more often. Fewer vehicles below 0.1 m/s in this engine at equal or longer travel time is consistent with queues that creep rather than stand.\n\
-- **Desired speed.** SUMO draws each vehicle's speed factor from N(1, 0.1) of the lane limit (SUMO `speedFactor` default `norm(1,0.1)`), so about half its vehicles exceed the limit on open links; this engine uses its own per-class desired speeds. This raises SUMO's free-flow link speeds by a few km/h.\n\
-- **Insertion.** SUMO inserts at the highest safe speed (`departSpeed=max`); this engine's insertion waits longer for space (the insertion-delay row), though by under a second.\n\
-- **Teleports.** SUMO removes a vehicle stuck for 300 s (`--time-to-teleport` default 300 s); none of these runs approaches gridlock, so this does not explain the differences here, but it would at higher demand.\n\
+- **Car following.** SUMO's default Krauss has driver imperfection σ = 0.5 (SUMO vType defaults: accel 2.6 m/s², decel 4.5 m/s², τ = 1 s, minGap 2.5 m). The queue-discharge row is where most of the remaining travel-time gap comes from: Krauss discharges a queue a few tenths of a second per vehicle faster than this engine, while SUMO's own IDM discharges at about this engine's rate, so the residual is mostly the car-following equation, not this engine's junctions or lane changing. **Here SUMO's default is the less realistic one:** field discharge headways are 3.8, 3.1, 2.7, 2.4 and 2.2 s for queue positions 1-5 (Greenshields 1947), settling near the HCM's 2.1 s in a CBD (1,900 pc/h/ln × 0.90), and this engine's saturation-flow check measures 2.13 s with a 2.85 s start-up lost time against those (`docs/validation/traffic.md`, `calibration/saturation-flow`). Krauss's quicker discharge, and its full stops where this engine's queues creep (more stops per trip and more halting time per trip in the tables above), follow from its safe-speed rule and dawdling, not from data.\n\
+- **Desired speed.** Both draw each passenger car's speed factor from N(1, 0.1) of the lane limit, bounded to 0.2-2 (SUMO `speedFactor` default `normc(1,0.1,0.2,2)`; this engine's `DriverTraits::speed_factor`), so free-flow link speeds match; the speed difference is in queues and at junctions.\n\
+- **Insertion.** SUMO inserts at the highest safe speed (`departSpeed=max`); this engine inserts at rest and waits longer for space (the insertion-delay row, under a second). Starting from rest is most of this engine's mid-block halting row (about 1.4 s per trip on the lightly loaded grid, where SUMO has none).\n\
+- **Manhattan at 3600 veh/h: spill-back found and fixed (2026-10-11).** It was the one case where this engine was clearly worse than both SUMO models (327 trips completed against SUMO Krauss's 368, 69 vehicles left at the end against 32). The worst trips stood 200-300 s at single places: mid-link queues on ~62 m links and a car on a junction connector, i.e. spill-back locking junctions. Ablated feature by feature, the cause was this engine's follower courtesy for urgent lane changes: the car behind braked for a car waiting to change in beside it, and on short links the queue behind it reached back into the junction upstream. With the courtesy removed (SUMO's own leader-side fall-back kept) this engine completes 376 trips against SUMO Krauss's 368 and leaves 24 vehicles against 32 (the Manhattan 3600 rows above).\n\
+- **Teleports.** SUMO removes a vehicle stuck for 300 s (`--time-to-teleport` default 300 s), and this engine does the same with the same 300 s (a scenario's `traffic.gridlock_timeout_s` default). Before the spill-back fix only Manhattan at 3600 veh/h reached it (one traced native car stood 300 s and was removed).\n\
 - **Reference point.** Positions are compared at the rear bumper in both (SUMO's front bumper minus vehicle length); this shifts per-edge entry times by under a second and nothing else.\n";
 
 const RADIO_INTRO: &str = "This engine's 802.11p and LTE-V2X Mode 4 stacks are run through the radio crate's highway sweep harness (`v2xw_radio::sweep`) in each study's configuration. Published curves are figures, not tables, so every reference value below was **digitised**: the Veins curve by colour-tracing the rendered figure (±0.01), the OpenCV2X curves by reading the plotted markers (±0.02). OpenCV2X is built on Artery, so it stands in for Artery here.\n\n";

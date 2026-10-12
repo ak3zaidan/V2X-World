@@ -861,12 +861,22 @@ struct Transition {
     /// heading swing is taken at [`PULL_OUT_SPEED_MPS`] at least, so a car nosing out
     /// from a standstill angles out instead of swinging round on the spot.
     pull_out: bool,
+    /// Begun while moving: such a change is held while the vehicle is later brought to a
+    /// stand part-way across. One begun at a stand (a car nosing out from a queue) slides
+    /// in as before; held, it stood a full lane width out of its new lane.
+    began_moving: bool,
 }
 
 /// The road a strategic lane change needs, per lane crossed, metres: at 11 m/s a
 /// 3 s manoeuvre (MOBIL's transition, [`crate::lanechange::mobil`]) covers 33 m, and a
 /// slower urban approach less. **A choice**, not a cited figure.
 const STRATEGIC_M_PER_CHANGE: f64 = 25.0;
+
+/// How far before the no-change zone a vehicle's strategic change counts as urgent, so
+/// that it drops back behind the target-lane leader that blocks it
+/// ([`NativeMobility::strategic_fall_back`]), metres. **A choice**: about two car lengths
+/// and a gap.
+const URGENT_LOOK_M: f64 = 20.0;
 
 /// What a strategic lane change costs in the route choice, seconds per lane crossed: the
 /// driver prefers to stay in lane unless the other lane's route saves more than this.
@@ -1232,7 +1242,9 @@ impl Actor {
     fn lateral_rate_at(&self, t: SimTime) -> f64 {
         self.transition.map_or(0.0, |tr| {
             let dur = tr.duration.as_secs_f64();
-            if dur <= 0.0 {
+            // Held while the vehicle stands (the lateral pass of the step): no sideways
+            // motion, so no heading swing either.
+            if dur <= 0.0 || (tr.switched && tr.began_moving && self.speed_mps <= STANDSTILL_MPS) {
                 return 0.0;
             }
             let p = (ns_to_secs(t.saturating_sub(tr.started)) / dur).clamp(0.0, 1.0);
@@ -1755,6 +1767,61 @@ impl NativeMobility {
         })
     }
 
+    /// The acceleration cap of a vehicle whose strategic lane change is blocked by the
+    /// vehicle ahead in the target lane: it drops back behind it, braking no harder than
+    /// its comfortable deceleration. `None` when that lane has no such blocker.
+    ///
+    /// Without it two cars side by side at the same speed stayed side by side to the end
+    /// of the lane, and the one that needed the other's lane missed its turn: on the SUMO
+    /// cross-validation grid at 600 veh/h a car drove 130 m of an empty road level with
+    /// the car 1.5 m ahead in its target lane and was removed with no route left. SUMO's
+    /// LC2013 does the same: a vehicle that cannot overtake the target-lane leader in the
+    /// space left "slow[s] down smoothly to follow leader" (SUMO
+    /// `MSLCM_LC2013::informLeader`, src/microsim/lcmodels/MSLCM_LC2013.cpp).
+    ///
+    /// The other half of LC2013's courtesy, the target-lane follower braking to let an
+    /// urgent change in (`informFollower`), is not modelled: tried, it held the follower
+    /// and the queue behind it back across the junction upstream, and on the Manhattan
+    /// extract at 3600 veh/h spill-back locked junctions (trips completed 327 against
+    /// SUMO Krauss's 368, 69 vehicles left against 32; without it 365 and 35), while on
+    /// the grid it changed nothing the barrier at the lane end does not already do
+    /// (648 trips completed either way, SUMO 648).
+    fn strategic_fall_back(
+        &self,
+        world: &World,
+        actor: &Actor,
+        ego: &VehicleView,
+        nbrs: &LaneNeighbors,
+    ) -> Option<f64> {
+        // Only once the change is urgent. Braking for every blocked change from the start of the
+        // lane, and dropping behind a target-lane follower level with the car as well as
+        // behind the leader, took the highway-congestion merge to a standstill
+        // (`traffic_audit`: overlaps 1750 -> 2988 vehicle-steps against 500cbb0, 143 cars
+        // standing 180 s); urgent and leader-only, 923 and none.
+        if self.strategic_pending(world, actor)? > self.params.no_change_zone_m + URGENT_LOOK_M {
+            return None;
+        }
+        let target = self.strategic_target(world, actor)?;
+        let side = if world.lane(target).index > world.lane(actor.lane).index {
+            Side::Left
+        } else {
+            Side::Right
+        };
+        let beside = nbrs.side(side)?;
+        let beside_lane = world.try_lane(beside.lane)?;
+        if beside_lane.edge != world.lane(actor.lane).edge {
+            return None;
+        }
+        let l = beside.leader?;
+        let mut moved = *ego;
+        moved.lane = beside.lane;
+        let a = self
+            .cf
+            .accel(&moved, Some(&l), &LaneView::of(beside_lane), &self.weather);
+        let blocked = l.gap_m < ego.driver.min_gap_m || a < -PULL_OUT_FOLLOWER_DECEL_MPS2;
+        blocked.then(|| a.max(-ego.driver.comfort_decel_mps2))
+    }
+
     /// Adds a clock model. The engine does not read it — believed time belongs to the node
     /// runtime — but holding it here keeps a scenario's mobility-side model set in one
     /// place, and it is on the manifest through this model's card.
@@ -1990,10 +2057,22 @@ impl NativeMobility {
                 continue;
             }
             let (lane, destination, class) = (a.lane, a.destination, a.class);
-            let route = self.plan_route(class, world, lane, destination, t1, &costs);
+            // To the destination lane, or failing that to another lane of the destination
+            // road, or to the reachable lane nearest it, as a closure detour does
+            // ([`Self::detour`]). Re-planning to the destination lane alone left a vehicle
+            // whose lane cannot reach it owing its change in the no-change zone, where it
+            // either changed lane or stood at the end of its lane (connected-intersections
+            // and Midtown, 120 s: the auditor's gap and lane-change-near-junction classes).
+            let route = self
+                .plan_route(class, world, lane, destination, t1, &costs)
+                .map(|r| (r, destination))
+                .or_else(|| {
+                    Self::detour(self.router_for(class), world, lane, destination, t1, &costs)
+                });
             let a = self.actors.get_mut(&id).expect("present");
-            if let Some(route) = route {
+            if let Some((route, to)) = route {
                 a.route = route;
+                a.destination = to;
                 a.route_index = 0;
                 a.planned_at = t1;
                 a.stuck_since = None;
@@ -2642,13 +2721,28 @@ impl NativeMobility {
             }
         }
         for a in self.actors.values() {
-            if a.lane != trip.origin {
+            // A vehicle changing out of the origin lane is already counted on the lane it
+            // is entering, but its body is still partly on this one: placed beside it, a
+            // car was dropped at rest across a car 0.6 m into its change, which braked at
+            // 8.5 m/s² on top of it (`tests/traffic_invariants.rs`, the dense grid).
+            let s_here = if a.lane == trip.origin {
+                a.s_m
+            } else if self.along_path()
+                && let Some(tr) = a.transition
+                && tr.switched
+                && tr.from == trip.origin
+            {
+                a.s_m + tr.from_s_delta
+            } else {
                 continue;
-            }
-            let ahead = (a.s_m - a.class.spec().length_m) - front;
-            let behind = (front - length) - a.s_m;
+            };
+            let ahead = (s_here - a.class.spec().length_m) - front;
+            let behind = (front - length) - s_here;
             if ahead.max(behind) < self.params.insertion_gap_m {
                 return Insertion::Occupied;
+            }
+            if a.lane != trip.origin {
+                continue;
             }
             // A vehicle behind the insertion point must be able to follow the newcomer
             // without an emergency stop: its standstill gap plus its time headway at its
@@ -3910,6 +4004,43 @@ impl NativeMobility {
         if lanes.len() == 1 {
             return None; // the target lane cannot make the next movement
         }
+        // The shift stopped on a later road whose lane cannot make the old route's next
+        // movement. A driver who changed lane for speed changes back on that road when
+        // another of its lanes makes the turn and the road is long enough for it, as the
+        // strategic change of a planned route does ([`Self::strategic_target`]); the old
+        // route is kept from that movement on. Re-planning from the shifted lane alone
+        // took a detour of minutes round the block for want of one lane change (grid at
+        // 600 veh/h: 296 s against SUMO's 109 s on one trip).
+        if self.params.strategic_lane_choice && k < old.len() {
+            let here = world.lane(cur);
+            let next = old[k];
+            let reaches = |l: LaneId| {
+                world
+                    .successors(l)
+                    .iter()
+                    .any(|c| c.permitted && c.via.unwrap_or(c.to_lane) == next)
+            };
+            let feasible = here.kind != LaneKind::Internal
+                && world.edge(here.edge).lanes.iter().any(|l| {
+                    let o = world.lane(*l);
+                    *l != cur
+                        && o.admits(actor.class.class_mask())
+                        && reaches(*l)
+                        && here.length_m
+                            >= self.params.no_change_zone_m
+                                + f64::from(o.index.abs_diff(here.index)) * STRATEGIC_M_PER_CHANGE
+                });
+            if feasible {
+                lanes.extend(old.iter().skip(k).copied());
+                return Some((Self::route_of(world, lanes), actor.destination));
+            }
+            // No room to change back on that road: the change would cost the turn, so it
+            // is refused, as LC2013 refuses a speed-gain change off the lanes its route
+            // needs ahead (its best-lanes look-ahead over the next roads). Allowing it and
+            // re-planning from the stuck lane sent cars round the block (Manhattan extract
+            // at 2400 veh/h: 223 trips completed with it, 225 without; SUMO 232).
+            return None;
+        }
         // Re-plan the rest from where the shift stopped, to any lane of the destination
         // road.
         let dest_lanes: Vec<LaneId> = dest_edge
@@ -4774,6 +4905,8 @@ impl Mobility for NativeMobility {
             // The stop line behind the binding virtual obstacle, when a junction's "stop"
             // is what binds: how much room there is up to the line itself.
             let mut binding_stop_line: Option<f64> = None;
+            // A signal's "stop" hidden behind a car ahead that is going on (see below).
+            let mut signal_stop: Option<(LeaderView, f64)> = None;
             for junction in self.junctions_ahead(world, actor, t0) {
                 let conflicts = self.conflicts_for(world, &junction, &ego, &claims, t0);
                 let mut decision = self.entry_decision(world, &ego, &junction, &conflicts);
@@ -4915,6 +5048,14 @@ impl Mobility for NativeMobility {
                 leader = Self::closest(leader, virtual_leader);
                 if leader != before {
                     binding_stop_line = Some(junction.stop_line_gap_m);
+                } else if let Some(v) = virtual_leader
+                    && matches!(
+                        junction.signal,
+                        Some(SignalState::Red | SignalState::RedAmber | SignalState::Amber)
+                    )
+                    && signal_stop.is_none()
+                {
+                    signal_stop = Some((v, junction.stop_line_gap_m));
                 }
             }
             // While a lane change is under way the body is still partly in the lane being
@@ -4997,6 +5138,31 @@ impl Mobility for NativeMobility {
                 leader = Self::closest(leader, Some(LeaderView::virtual_obstacle(gap, 0.0)));
                 if leader != before {
                     binding_stop_line = None;
+                }
+            }
+            // A strategic change not yet made: the lane's end is a barrier, as in SUMO,
+            // where a vehicle that cannot make its change waits at the end of its lane.
+            // A route the vehicle's own lane can make replaces the change in the
+            // no-change zone ([`Self::give_up_strategic`]), so a vehicle still owing it
+            // there has no other way on: it drove past the end of the lane and was removed with
+            // no route (SUMO cross-validation, Manhattan extract at 2400 veh/h: four trips
+            // traced, at links of about 62 m; trips completed 220 -> 223, SUMO 232).
+            // The barrier stands from the start of the lane, so the driver approaches it
+            // as it would a red light; raised only on entering the zone it was 15-30 m
+            // away at speed and the driver braked at the 6 m/s² bound, closing up the car
+            // behind (connected-intersections, 10 m/s at 25 m from the lane end).
+            if along && let Some(left) = self.strategic_pending(world, actor) {
+                let d = (left - STOP_LINE_MARGIN_M).max(0.0);
+                let before = leader;
+                leader = Self::closest(
+                    leader,
+                    Some(LeaderView::virtual_obstacle(
+                        d + actor.driver.min_gap_m,
+                        0.0,
+                    )),
+                );
+                if leader != before {
+                    binding_stop_line = Some(d + STOP_LINE_MARGIN_M);
                 }
             }
             // An external stop command is a virtual leader at zero gap.
@@ -5185,6 +5351,32 @@ impl Mobility for NativeMobility {
                     accel = accel.min(limit);
                 }
             }
+            // A red or amber the driver decided to stop for binds even while a car ahead,
+            // nearer than the line, is going on through it: following that car alone, a
+            // driver 37 m from the line at 10 m/s on the amber's onset held its speed 12 m
+            // behind a leader clearing the junction, and once the leader had gone was too
+            // close to stop and entered on red (peak-density grid, 20,000 veh/h). Drivers
+            // stop for the signal, not for the car in front (UVC §11-202(c)); the stop is
+            // braked into as any stop line is ([`static_obstacle_accel`]).
+            if along
+                && let Some((stop, line)) = signal_stop
+                && leader.is_some_and(|l| l.is_vehicle() && l.gap_m < stop.gap_m)
+            {
+                let mut stop = stop;
+                stop.gap_m = stop
+                    .gap_m
+                    .max(line - STOP_LINE_MARGIN_M + actor.driver.min_gap_m);
+                let slack = (line - 0.2) - stop.gap_m;
+                let a_stop = static_obstacle_accel(
+                    self.cf
+                        .accel(&ego_capped, Some(&stop), &lane_view, &self.weather),
+                    ego.speed_mps,
+                    stop.gap_m,
+                    actor.driver.min_gap_m,
+                    slack,
+                );
+                accel = accel.min(a_stop);
+            }
             // Any braking short of an emergency builds at a service-brake rate, whatever
             // asked for it — a car ahead braking, a merge partner, a pedestrian stepping
             // out — not only a stop line: the car-following model has no jerk term, and a
@@ -5329,7 +5521,16 @@ impl Mobility for NativeMobility {
                 if actor.transition.is_some() || t0 < actor.cooldown_until {
                     continue;
                 }
-                if self.along_path() && !self.may_consider_lane_change(ctx.world(), actor, &mobil) {
+                // A strategic change still owed by the no-change zone is the one change the
+                // zone allows: the vehicle waits at the end of its lane for it (the barrier
+                // in the decision pass) instead of driving on with no way out.
+                let owed = self.along_path()
+                    && self.strategic_target(ctx.world(), actor).is_some()
+                    && actor.s_m >= actor.class.spec().length_m;
+                if self.along_path()
+                    && !owed
+                    && !self.may_consider_lane_change(ctx.world(), actor, &mobil)
+                {
                     continue;
                 }
                 // A strategic change the route needs comes before anything discretionary.
@@ -5337,11 +5538,16 @@ impl Mobility for NativeMobility {
                 // a driver who reaches the zone without a gap gives up and finds another
                 // way ([`Self::give_up_strategic`]).
                 if self.along_path() && self.strategic_target(ctx.world(), actor).is_some() {
-                    if let Some((ego, nbrs)) = neighbours.get(&decision.actor)
-                        && let Some(change) =
+                    if let Some((ego, nbrs)) = neighbours.get(&decision.actor) {
+                        if let Some(change) =
                             self.strategic_change(ctx.world(), &mobil, actor, ego, nbrs)
-                    {
-                        decision.lane_change = change;
+                        {
+                            decision.lane_change = change;
+                        } else if let Some(cap) =
+                            self.strategic_fall_back(ctx.world(), actor, ego, nbrs)
+                        {
+                            decision.accel_mps2 = decision.accel_mps2.min(cap);
+                        }
                     }
                     continue;
                 }
@@ -5569,6 +5775,7 @@ impl Mobility for NativeMobility {
                     // Only the kerbside rules change lanes this slowly (MOBIL's own minimum
                     // is 3 m/s): a pull-out round a vehicle at the kerb, or a move to it.
                     pull_out: actor.speed_mps < PULL_OUT_SPEED_MPS,
+                    began_moving: actor.speed_mps > STANDSTILL_MPS,
                 });
                 // The route is re-planned from the lane being entered, so the vehicle's
                 // next movement is one that lane actually has. Keeping the old route
@@ -5599,6 +5806,19 @@ impl Mobility for NativeMobility {
 
             // Advance the lateral transition.
             if let Some(mut transition) = actor.transition {
+                // A vehicle brought to a stand part-way across does not go on sliding
+                // sideways: a car cannot move across the road without moving along it, and
+                // the transition is a function of time, so it is held while the vehicle
+                // stands. Left running, a 7 m truck stopped 9 m into a pull-out round a
+                // taxi swung its heading from 94 to 133 degrees on the spot and swept its
+                // body into the queue in the next lane (`tests/realism.rs`, kerbside on:
+                // 206 overlap steps).
+                if transition.switched
+                    && transition.began_moving
+                    && actor.speed_mps <= STANDSTILL_MPS
+                {
+                    transition.started = transition.started.saturating_add(t1.saturating_sub(t0));
+                }
                 let elapsed = ns_to_secs(t1.saturating_sub(transition.started));
                 let total = transition.duration.as_secs_f64().max(1e-9);
                 if !transition.switched {
@@ -8105,6 +8325,88 @@ mod tests {
             strategic_m + 50.0 < plain_m,
             "the strategic route ({strategic_m:.0} m) is not shorter than going round ({plain_m:.0} m)"
         );
+    }
+
+    #[test]
+    fn a_driver_level_with_a_car_in_the_turn_lane_drops_behind_it_and_turns() {
+        // As above, but a car starts level with the driver in the left-turn lane, at the
+        // same speed, going straight on. Without falling behind it the two drove side by
+        // side to the end of the lane and the driver missed the turn.
+        let world = v2xw_world::procedural::grid(
+            &GridParams {
+                lanes_per_direction: 2,
+                ..GridParams::legacy().with_size(3, 3).with_signals(false)
+            },
+            &ImportOptions::default(),
+        )
+        .expect("grid");
+        let pick = world.roads.lanes().iter().find_map(|l| {
+            if l.kind != LaneKind::Driving || l.index != 0 || l.length_m < 80.0 {
+                return None;
+            }
+            let left_of = world
+                .edge(l.edge)
+                .lanes
+                .iter()
+                .copied()
+                .find(|x| world.lane(*x).index == 1)?;
+            let turn = world
+                .successors(left_of)
+                .iter()
+                .find(|c| c.permitted && c.direction == TurnDirection::Left)?;
+            let straight = world
+                .successors(left_of)
+                .iter()
+                .find(|c| c.permitted && c.direction == TurnDirection::Straight)?;
+            let own_turns_left = world
+                .successors(l.id)
+                .iter()
+                .any(|c| c.direction == TurnDirection::Left);
+            (!own_turns_left).then_some((l.id, left_of, turn.to_lane, straight.to_lane))
+        });
+        let (origin, left_lane, exit, ahead) =
+            pick.expect("a right lane whose left turn is from the lane beside");
+        let rng = RngRegistry::new(3);
+        let params = EngineParams {
+            strategic_lane_choice: true,
+            driver_heterogeneity: false,
+            driver_styles: false,
+            ..EngineParams::default()
+        };
+        let mut engine = engine_on(&world, params, &rng);
+        let trip = |seq: u64, origin: LaneId, origin_s_m: f64, destination: LaneId| TripRequest {
+            seq,
+            t: 0,
+            origin,
+            origin_s_m,
+            destination,
+            class: VehicleClass::Passenger,
+            desired_speed_mps: 11.0,
+        };
+        let id = engine
+            .insert_trip(&world, &trip(0, origin, 10.0, exit), 0)
+            .expect("the turning car");
+        engine
+            .insert_trip(&world, &trip(1, left_lane, 11.0, ahead), 0)
+            .expect("the car beside it");
+        let (mut done, mut on_left) = (false, false);
+        let mut t = 0u64;
+        while t < 120 * NS_PER_S && !done {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            let u = engine.step(&mut ctx, params.step);
+            on_left |= engine.actors.get(&id).is_some_and(|a| a.lane == left_lane);
+            if let Some((_, c)) = u.despawned.iter().find(|(a, _)| *a == id) {
+                assert_eq!(
+                    *c,
+                    DespawnCause::TripComplete,
+                    "the turning car was removed"
+                );
+                done = true;
+            }
+            t += params.step.as_nanos();
+        }
+        assert!(on_left, "the turning car never got into the left-turn lane");
+        assert!(done, "the turning car did not finish in two minutes");
     }
 
     #[test]

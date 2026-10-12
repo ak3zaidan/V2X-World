@@ -224,7 +224,30 @@ pub struct Measured {
     pub error: Option<String>,
     /// Wall-clock seconds the run took.
     pub wall_s: f64,
+    /// Stops over the whole run: a vehicle that had moved faster than 1 m/s falling below
+    /// the halting threshold.
+    pub stops: u64,
+    /// Lane changes over the whole run (lane index changing within one edge).
+    pub lane_changes: u64,
+    /// Vehicle-km over the whole run.
+    pub vkt_all: f64,
+    /// Junction-internal lanes over the whole run, moving vehicles only: (sum v dt, sum dt).
+    pub junction_speed: (f64, f64),
+    /// Halting vehicle-seconds by place: within 30 m of a normal lane's end (a queue at
+    /// the stop line), elsewhere on a normal lane, inside a junction.
+    pub halt_where_s: [f64; 3],
+    /// Vehicles still in the network when the run ended.
+    pub left_in_network: u64,
+    /// Queue discharge headways: the time between two vehicles leaving the same lane
+    /// into a junction, where the second had been halting within the last
+    /// [`DISCHARGE_QUEUED_S`] and the headway is under [`DISCHARGE_MAX_S`].
+    pub discharge_s: Vec<f64>,
 }
+
+/// A vehicle counts as discharging from a queue when it halted this recently, s.
+pub const DISCHARGE_QUEUED_S: f64 = 15.0;
+/// Headways at or above this are gaps in the queue, not discharge, s.
+pub const DISCHARGE_MAX_S: f64 = 4.0;
 
 impl Measured {
     /// Edie flow, veh/h per lane.
@@ -239,7 +262,31 @@ impl Measured {
     pub fn speed_kmh(&self) -> f64 {
         self.vkt / self.vht.max(1e-9)
     }
-    /// Mean travel time.
+    /// Stops per inserted trip.
+    pub fn stops_per_trip(&self) -> f64 {
+        self.stops as f64 / self.inserted.max(1) as f64
+    }
+
+    /// Lane changes per vehicle-km over the whole run.
+    pub fn lane_changes_per_km(&self) -> f64 {
+        self.lane_changes as f64 / self.vkt_all.max(1e-9)
+    }
+
+    /// Mean speed of moving vehicles on junction-internal lanes, km/h.
+    pub fn junction_kmh(&self) -> f64 {
+        3.6 * self.junction_speed.0 / self.junction_speed.1.max(1e-9)
+    }
+
+    /// Mean queue discharge headway, s ([`Measured::discharge_s`]).
+    pub fn discharge_headway_s(&self) -> f64 {
+        if self.discharge_s.is_empty() {
+            f64::NAN
+        } else {
+            self.discharge_s.iter().sum::<f64>() / self.discharge_s.len() as f64
+        }
+    }
+
+    /// Mean travel time, s.
     pub fn mean_tt(&self) -> f64 {
         mean(self.travel_s.values().copied())
     }
@@ -274,6 +321,12 @@ pub struct Observer<'a> {
     halting_samples: (f64, f64),
     wait_total: f64,
     bin: BTreeMap<u64, (f64, f64, f64, f64)>,
+    last_lane: BTreeMap<ActorId, (EdgeId, u8)>,
+    moving: BTreeMap<ActorId, bool>,
+    in_network: u64,
+    halted_at: BTreeMap<ActorId, f64>,
+    approach: BTreeMap<ActorId, LaneId>,
+    lane_exit: BTreeMap<LaneId, f64>,
 }
 
 impl<'a> Observer<'a> {
@@ -313,6 +366,12 @@ impl<'a> Observer<'a> {
             halting_samples: (0.0, 0.0),
             wait_total: 0.0,
             bin: BTreeMap::new(),
+            last_lane: BTreeMap::new(),
+            moving: BTreeMap::new(),
+            in_network: 0,
+            halted_at: BTreeMap::new(),
+            approach: BTreeMap::new(),
+            lane_exit: BTreeMap::new(),
         }
     }
 
@@ -334,6 +393,10 @@ impl<'a> Observer<'a> {
                 self.m.travel_s.insert(seq, t1 - t0);
             }
             self.last_edge.remove(a);
+            self.last_lane.remove(a);
+            self.moving.remove(a);
+            self.halted_at.remove(a);
+            self.approach.remove(a);
         }
         let in_window = t1 > self.window.0 && t1 <= self.window.1;
         let mut halting = 0u64;
@@ -341,9 +404,56 @@ impl<'a> Observer<'a> {
         for (a, k) in &u.states {
             let v = k.vel.x.hypot(k.vel.y);
             speed_sum += v;
+            self.m.vkt_all += v * dt_s / 1000.0;
+            let lane = k.lane.map(|l| (self.world.lane(l.lane), l.s_m));
             if v < HALTING_MPS {
                 halting += 1;
                 self.wait_total += dt_s;
+                // SUMO's internal lanes have no world lane, so no lane is inside a junction.
+                let place = match lane {
+                    None => 2,
+                    Some((l, _)) if l.junction.is_some() => 2,
+                    Some((l, s)) if l.length_m - s <= 30.0 => 0,
+                    _ => 1,
+                };
+                self.m.halt_where_s[place] += dt_s;
+                self.halted_at.insert(*a, t1);
+                if self.moving.insert(*a, false) == Some(true) {
+                    self.m.stops += 1;
+                }
+            } else if v > 1.0 {
+                self.moving.insert(*a, true);
+            }
+            match lane {
+                Some((l, _)) if l.junction.is_none() => {
+                    self.approach.insert(*a, l.id);
+                }
+                _ => {
+                    if let Some(from) = self.approach.remove(a) {
+                        let queued = self
+                            .halted_at
+                            .get(a)
+                            .is_some_and(|h| t1 - h <= DISCHARGE_QUEUED_S);
+                        if let Some(prev) = self.lane_exit.insert(from, t1)
+                            && queued
+                            && t1 - prev < DISCHARGE_MAX_S
+                        {
+                            self.m.discharge_s.push(t1 - prev);
+                        }
+                    }
+                }
+            }
+            if lane.is_none_or(|(l, _)| l.junction.is_some()) {
+                if v >= HALTING_MPS {
+                    self.m.junction_speed.0 += v * dt_s;
+                    self.m.junction_speed.1 += dt_s;
+                }
+            } else if let Some((l, _)) = lane
+                && let Some((e, i)) = self.last_lane.insert(*a, (l.edge, l.index))
+                && e == l.edge
+                && i != l.index
+            {
+                self.m.lane_changes += 1;
             }
             let edge = k
                 .lane
@@ -372,6 +482,7 @@ impl<'a> Observer<'a> {
             self.halting_samples.1 += dt_s;
             self.m.halting_max = self.m.halting_max.max(halting);
         }
+        self.in_network = u.states.len() as u64;
         let b = self.bin.entry((t1 / 60.0) as u64).or_default();
         b.0 += u.states.len() as f64 * dt_s;
         b.1 += speed_sum * dt_s;
@@ -381,6 +492,7 @@ impl<'a> Observer<'a> {
 
     /// The result.
     pub fn finish(mut self) -> Measured {
+        self.m.left_in_network = self.in_network;
         self.m.halting_mean = self.halting_samples.0 / self.halting_samples.1.max(1e-9);
         self.m.wait_per_trip_s = self.wait_total / (self.m.inserted.max(1) as f64);
         self.m.bins = self
@@ -555,10 +667,18 @@ pub fn run_native(
     let started = std::time::Instant::now();
     let world = &study.world;
     let rng = RngRegistry::new(seed);
-    let mut engine = NativeMobility::new(EngineParams {
-        step: timing.step,
-        ..EngineParams::default()
-    });
+    // A scenario's shipped defaults (`v2xw_engine::wiring::native_mobility` with no
+    // `traffic` section and no highway preset), not the bare engine defaults a unit test
+    // sees: strategic lane choice on, gridlock resolution at 300 s (SUMO's
+    // `--time-to-teleport` default, which the SUMO runs here keep too).
+    let mut engine = NativeMobility::new(
+        v2xw_mobility::rules::TrafficRules::of_highway_preset(None).apply(EngineParams {
+            step: timing.step,
+            strategic_lane_choice: true,
+            time_to_teleport_s: 300.0,
+            ..EngineParams::default()
+        }),
+    );
     let mut obs = Observer::new(
         world,
         &study.ids,
@@ -577,10 +697,55 @@ pub fn run_native(
     let horizon = (timing.total_s * 1e9) as SimTime;
     let mut t = 0;
     let dt_s = timing.step.as_secs_f64();
+    // Diagnostics: `V2XW_XVAL_TRACE=<trip seq>` prints that trip's lanes and halts.
+    let trace: Option<u64> = std::env::var("V2XW_XVAL_TRACE")
+        .ok()
+        .and_then(|v| v.parse().ok());
+    let mut traced: Option<ActorId> = None;
+    let mut last: Option<(LaneId, bool)> = None;
     while t < horizon {
         let mut ctx = MobilityCtx::new(t, world, &rng);
         let u = engine.step(&mut ctx, timing.step);
         t = u.t;
+        if let Some(q) = trace {
+            if let Some(s) = u.spawned.iter().find(|s| s.seq == q) {
+                traced = Some(s.actor);
+                if let Some((_, r)) = trips.iter().find(|(t, _)| t.seq == q) {
+                    let e: Vec<String> = r
+                        .iter()
+                        .map(|l| format!("{}", world.lane(*l).edge))
+                        .collect();
+                    eprintln!("  trace route {}", e.join(" "));
+                }
+            }
+            if let Some(a) = traced
+                && let Some((_, c)) = u.despawned.iter().find(|(x, _)| *x == a)
+            {
+                eprintln!("  trace t={:.1} despawned {c:?}", t as f64 / 1e9);
+            }
+            if let Some(a) = traced
+                && let Some((_, k)) = u.states.iter().find(|(x, _)| *x == a)
+            {
+                let v = k.vel.x.hypot(k.vel.y);
+                let lane = k.lane.map_or(LaneId::new(u32::MAX), |l| l.lane);
+                let now = (lane, v < HALTING_MPS);
+                if last != Some(now) {
+                    let (len, j, e) = k.lane.map_or((0.0, false, EdgeId::new(u32::MAX)), |l| {
+                        let w = world.lane(l.lane);
+                        (w.length_m, w.junction.is_some(), w.edge)
+                    });
+                    eprintln!(
+                        "  trace t={:.1} lane={} edge={} s={:.1}/{len:.1} junction={j} v={v:.2} halt={}",
+                        t as f64 / 1e9,
+                        lane,
+                        e,
+                        k.lane.map_or(0.0, |l| l.s_m),
+                        now.1
+                    );
+                    last = Some(now);
+                }
+            }
+        }
         obs.observe(&u, dt_s);
     }
     let mut m = obs.finish();
