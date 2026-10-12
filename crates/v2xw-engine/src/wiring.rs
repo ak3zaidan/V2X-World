@@ -309,6 +309,9 @@ fn build_world_geometry(scenario: &Scenario) -> Result<World> {
             if let Some(v) = ws.pedestrian_speed_mps {
                 osm.signals.pedestrian_speed_mps = v;
             }
+            if let Some(v) = ws.join_m {
+                osm.signals.join_m = v;
+            }
             if let Some(b) = bbox {
                 osm = osm.bbox(*b);
             }
@@ -535,6 +538,13 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(margin) = vru.crossing_gap_margin_s {
         people.gap_margin_s = margin;
     }
+    if let Some(speed) = vru.walking_speed_mps {
+        // Every mean moves by the same ratio, so the age mix keeps its spread.
+        let k = speed / people.younger_speed_mean_mps;
+        people.younger_speed_mean_mps = speed;
+        people.older_speed_mean_mps *= k;
+        people.desired_speed_mean_mps = speed;
+    }
     let mut mobility = crate::driving::native_with_driving(scenario, params, &rules);
     if vru.pedestrians > 0 {
         mobility = mobility.with_vru(v2xw_mobility::SocialForce::new(people));
@@ -543,6 +553,22 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
         pedestrians: vru.pedestrians,
         cyclists: vru.cyclists,
     })
+}
+
+/// The population law drivers' traits are drawn under: `actors.vehicles.drivers`' speed
+/// factor, speed spread and reactions over the mobility crate's defaults. The queue tier
+/// (`scale.traffic.model: mobility/meso/queue`) draws with it; the microscopic engine reads the
+/// same four fields from its own parameters.
+#[must_use]
+pub fn trait_law(scenario: &Scenario) -> v2xw_mobility::engine::TraitLaw {
+    let d = &scenario.actors.vehicles.drivers;
+    let base = v2xw_mobility::engine::TraitLaw::default();
+    v2xw_mobility::engine::TraitLaw {
+        speed_factor_mean: d.speed_factor.unwrap_or(base.speed_factor_mean),
+        speed_spread: d.speed_spread.unwrap_or(base.speed_spread),
+        reaction_median_s: d.start_reaction_s.unwrap_or(base.reaction_median_s),
+        follow_median_s: d.queue_start_delay_s.unwrap_or(base.follow_median_s),
+    }
 }
 
 /// True for the classes `actors.vru` populates: whether an actor carries a device is drawn

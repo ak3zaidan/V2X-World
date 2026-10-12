@@ -218,8 +218,11 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `actors.vehicles.drivers.politeness` **new** | 0.5 | 0 to 1 | MOBIL `p` (Kesting 2007), all classes. |
 | `actors.vehicles.drivers.lane_change_threshold_mps2` **new** | 0.1 | 0 to 2 m/s² | MOBIL `Δa_th`. |
 | `world.signals.coordinate`, `.progression_speed_mps` | off | 1 to 40 m/s | Green-wave signal timing. |
+| `world.signals.join_m` **new** | off | 0 to 40 m | Joins signalised junctions this close into one plan (netconvert `--tls.join`, 20 m default there). |
+| `world.source.params.ew_green_share` **new** | 0.5 | 0.1 to 0.9 | East-west share of a generated grid's green (Webster 1958); signalised grids only. |
 | `apps.glosa_compliance` | scenario's | 0 to 1 | Share of drivers who follow advice. |
 | `actors.vru.red_crossing_share` | scenario's | 0 to 1 | Pedestrian non-compliance. |
+| `actors.vru.walking_speed_mps` **new** | 1.51 (`observed`), 1.34 (`document`) | 0.5 to 2.5 m/s | Mean walking speed under 65 (Knoblauch 1996); older walkers scale with it. |
 
 The traffic audit (2026-10-11) added further traffic fields: free-speed factor and
 spread, start-up reaction, queue start-up delay, per-class drivers (truck, bus,

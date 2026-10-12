@@ -320,6 +320,7 @@ const DIMENSIONLESS: &[&str] = &[
     "actors.vehicles.classes.*.fraction",
     "actors.vru.device_fraction",
     "actors.vru.red_crossing_share",
+    "world.source.params.ew_green_share",
     "actors.vru.ebike_share",
     "actors.vehicles.drivers.parameter_spread",
     "actors.vehicles.drivers.perception_error",
@@ -1049,6 +1050,12 @@ impl Walk<'_> {
     }
 }
 
+/// Model parameters published as their own fields (see [`walk`]), with their defaults.
+const MODEL_PARAM_LEAVES: &[(&str, fn() -> Value)] = &[(
+    "world.source.params.ew_green_share",
+    || json!(v2xw_world::procedural::GridParams::default().ew_green_share),
+)];
+
 /// The published JSON Schema and the flat field index, built together because the index is
 /// the leaves the schema walk found.
 fn walk() -> (Value, Vec<Value>) {
@@ -1060,6 +1067,16 @@ fn walk() -> (Value, Vec<Value>) {
         leaves: Vec::new(),
     };
     let mut root = walk.node("Scenario", "", "", 0);
+    // Model parameters the settings window offers as fields of their own, inside a
+    // free-form `params` block the reflection publishes only as JSON. Each has a bound,
+    // a status and a guide row like any reflected leaf; its default is the generator's.
+    for &(path, default) in MODEL_PARAM_LEAVES {
+        let mut out = Map::new();
+        out.insert("type".into(), json!("number"));
+        walk.with_meta(path, &mut out);
+        out.insert("default".into(), default());
+        walk.push_leaf(path, "number", &out);
+    }
     if let Value::Object(map) = &mut root {
         map.insert(
             "$schema".into(),

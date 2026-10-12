@@ -506,6 +506,10 @@ pub struct ImportCounts {
     /// wider than [`JOIN_MAX_SPREAD_M`].
     #[serde(default)]
     pub joins_refused_too_wide: u64,
+    /// Roads between two signalised junctions offered to the junction join by
+    /// [`SignalDefaults::join_m`] that the short-lane rule alone would not have joined.
+    #[serde(default)]
+    pub signal_joins: u64,
     /// Drive lanes moved sideways because another road's lanes overlapped them
     /// ([`crate::separate`]).
     #[serde(default)]
@@ -1111,6 +1115,25 @@ pub struct SignalDefaults {
     /// MUTCD 2009 §4E.06.
     #[serde(default = "default_ped_speed")]
     pub pedestrian_speed_mps: f64,
+    /// Joins two **signalised** junctions whose connecting road is at most this long,
+    /// metres, into one junction under one controller, as `netconvert --tls.join` does
+    /// (SUMO's `--tls.join-dist`, default 20 m), measured node centre to node centre. A
+    /// node is signalised when it is the nearest node with two or more motor arms to a
+    /// `traffic_signals` node within [`ImportOptions::guess_signals_m`], which takes in a
+    /// signalised mid-block crosswalk. 0, the default, joins none beyond the short-lane
+    /// join ([`JOIN_MAX_SEGMENT_M`]), so worlds and their cache keys are unchanged.
+    ///
+    /// Two plans 12-16 m apart, synthesised one per junction, feed the short link
+    /// between them in two upstream phases (the through green and the cross street's
+    /// turns) and release it in one downstream phase, so the link fills and holds cars
+    /// on their own green. One junction has one plan, whose phases are built over every
+    /// movement across both, so nothing is fed into a stub it cannot leave.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub join_m: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 fn default_walk_s() -> f64 {
@@ -1142,6 +1165,7 @@ impl Default for SignalDefaults {
             pedestrian_min_green: true,
             pedestrian_walk_s: default_walk_s(),
             pedestrian_speed_mps: default_ped_speed(),
+            join_m: 0.0,
         }
     }
 }
@@ -5070,6 +5094,7 @@ fn join_short_junctions(
     segments: Vec<Segment>,
     plans: &[WayPlan],
     options: &OsmOptions,
+    signal_points: &[Vec3],
     report: &mut ImportReport,
 ) -> (Vec<Segment>, JoinedJunctions) {
     let radii = junction_radii(&segments, plans, options);
@@ -5087,6 +5112,26 @@ fn join_short_junctions(
             *motor_arms.entry(segment.end_anchor).or_default() += 1;
         }
     }
+    // The nodes a traffic signal will control, as `synthesise_signals` assigns them: each
+    // `traffic_signals` node goes to the nearest node where motor roads meet (two or more
+    // motor arms: a signalised mid-block crosswalk is a two-arm node with a plan) within
+    // the guess radius (`--tls.guess-signals`). Only needed for this join.
+    let mut signalised: BTreeSet<i64> = BTreeSet::new();
+    if options.signals.join_m > 0.0 {
+        let radius = options.import.guess_signals_m.max(0.5);
+        for s in signal_points {
+            let nearest = motor_arms
+                .iter()
+                .filter(|(_, arms)| **arms >= 2)
+                .map(|(n, _)| (*n, position[n].distance_2d(*s)))
+                .filter(|(_, d)| *d <= radius)
+                .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+            if let Some((n, _)) = nearest {
+                signalised.insert(n);
+            }
+        }
+    }
+    let tls_joins = core::cell::Cell::new(0u64);
     let is_short = |segment: &Segment| -> Option<f64> {
         let plan = &plans[segment.plan];
         if plan.family != WayFamily::Motor || plan.levels_below > 0 || plan.levels_above > 0 {
@@ -5102,14 +5147,21 @@ fn join_short_junctions(
             .copied()
             .unwrap_or(0.0);
         let rb = radii.motor.get(&segment.end_anchor).copied().unwrap_or(0.0);
-        (length <= JOIN_MAX_SEGMENT_M && length - ra - rb < options.min_useful_lane_m)
-            .then_some(length)
+        let stub = length <= JOIN_MAX_SEGMENT_M && length - ra - rb < options.min_useful_lane_m;
+        let tls = length <= options.signals.join_m
+            && signalised.contains(&segment.start_anchor)
+            && signalised.contains(&segment.end_anchor);
+        if tls && !stub {
+            tls_joins.set(tls_joins.get() + 1);
+        }
+        (stub || tls).then_some(length)
     };
     let mut candidates: Vec<(f64, (i64, u32), i64, i64)> = segments
         .iter()
         .filter_map(|s| is_short(s).map(|l| (l, s.key, s.start_anchor, s.end_anchor)))
         .collect();
     candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    report.counts.signal_joins = tls_joins.get();
 
     // Union-find over node ids, each root holding its members.
     let mut parent: BTreeMap<i64, i64> = BTreeMap::new();
@@ -5126,7 +5178,9 @@ fn join_short_junctions(
             .flat_map(|x| mb.iter().map(move |y| (*x, *y)))
             .map(|(x, y)| position[&x].distance_2d(position[&y]))
             .fold(0.0f64, f64::max);
-        if spread > JOIN_MAX_SPREAD_M {
+        // A signalised join may spread wider: the pair it joins is up to `join_m` apart
+        // and either end may already hold a short-lane join.
+        if spread > JOIN_MAX_SPREAD_M.max(1.5 * options.signals.join_m) {
             report.counts.joins_refused_too_wide += 1;
             continue;
         }
@@ -9626,7 +9680,16 @@ fn import_parsed(file: &OsmFile, options: &OsmOptions, report: &mut ImportReport
     report.counts.segments_after_collapse = segments.len() as u64;
     report.counts.junctions_collapsed = collapsed;
     let (segments, joined) = if options.simplify.join_short_junctions {
-        join_short_junctions(segments, &plans, options, report)
+        let signal_points: Vec<Vec3> = if options.signals.join_m > 0.0 {
+            file.node_tags
+                .iter()
+                .filter(|(_, tags)| tags.is("highway", "traffic_signals"))
+                .filter_map(|(node, _)| file.node_index(*node).map(|i| points[i]))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        join_short_junctions(segments, &plans, options, &signal_points, report)
     } else {
         (segments, JoinedJunctions::default())
     };

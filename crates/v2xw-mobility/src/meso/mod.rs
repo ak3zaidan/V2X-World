@@ -77,7 +77,7 @@ use v2xw_world::{ClassMask, JunctionControl, LaneKind, SignalState, World};
 
 use crate::classes::VehicleClass;
 use crate::ctx::MobCtx;
-use crate::engine::DriverTraits;
+use crate::engine::{DriverTraits, TraitLaw};
 use crate::error::{MobError, Result};
 use crate::routing::dijkstra::{Dijkstra, DijkstraParams, FreeFlowCost};
 use crate::traits::{Demand, Mobility};
@@ -828,6 +828,9 @@ pub struct MesoMobility {
     pending: Vec<MobilityCommand>,
     next_actor: u32,
     dropped_trips: u64,
+    /// The population law each new driver's traits are drawn under (the scenario's
+    /// `actors.vehicles.drivers` speed numbers); the default draws as before.
+    law: TraitLaw,
     card: ModelCard,
 }
 
@@ -855,7 +858,20 @@ impl MesoMobility {
             pending: Vec::new(),
             next_actor: 0,
             dropped_trips: 0,
+            law: TraitLaw::default(),
         }
+    }
+
+    /// The tier drawing its drivers under `law`: the free speed of every vehicle in a
+    /// segment is the segment's limit times the driver's drawn speed factor, so the
+    /// scenario's speed factor and spread reach the queue model as they reach the
+    /// microscopic one. (The reactions are drawn too and carried for a hand-back, but a
+    /// queue's discharge is its headway law, so they change nothing here; the loader
+    /// refuses them on this tier.)
+    #[must_use]
+    pub fn with_trait_law(mut self, law: TraitLaw) -> Self {
+        self.law = law;
+        self
     }
 
     /// The queue network, once [`Mobility::init`] has built it.
@@ -988,7 +1004,7 @@ impl Mobility for MesoMobility {
         for trip in trips {
             let id = ActorId::new(self.next_actor);
             self.next_actor += 1;
-            let traits = DriverTraits::draw(&*ctx, trip.seq, trip.class);
+            let traits = DriverTraits::draw_law(&*ctx, trip.seq, trip.class, &self.law);
             let driver = class_driver(trip.class);
             to_route.push((trip, id, driver, traits));
         }

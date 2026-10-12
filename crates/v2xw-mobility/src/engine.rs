@@ -1452,6 +1452,7 @@ impl NativeMobility {
             }),
             signals: FixedTimeSignals::new(SignalPlanParams {
                 right_turn_on_red: params.right_turn_on_red,
+                gap_factor: params.critical_gap_factor,
                 permitted_left_critical_headway_s: params.permitted_left_critical_headway_s,
                 ..SignalPlanParams::default()
             }),

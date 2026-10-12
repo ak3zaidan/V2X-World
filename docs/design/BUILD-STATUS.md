@@ -3631,3 +3631,24 @@ order. Same digests at 1 and 2 threads; radio `phy` lib 29/29, `radio_tuning` 4/
     concurrent pseudonyms the attacker holds. They also need the certificate attached so
     receivers can verify them.
   - Only `ObuRuntime` orders by priority (the RSU and VRU runtimes do not).
+
+## 2026-10-12 — traffic stalls and VRU interaction (branch of 05599f6)
+
+- **Settings wired:** `traffic.critical_gap_factor` now also scales the right-on-red gap;
+  the pure queue tier (`mobility/meso/queue`) draws drivers with the scenario's speed
+  factor and spread (reactions refused there: a queue discharges at `tau_jf_s`);
+  `actors.vru.walking_speed_mps` (Knoblauch 1996, 1.51 m/s default under `observed`);
+  `world.source.params.ew_green_share` published as a field (bound 0.1-0.9, refused on an
+  unsignalised grid); `world.signals.join_m` (netconvert `--tls.join`, opt-in, 0-40 m).
+  All default to today's behaviour. Engine scenario tests 27/27, world osm 19/19.
+- **Measured, not fixed:** Midtown rush (traffic only, 300 s): `join_m` 20 joins nothing
+  the short-lane join had not; 40 joins 4 pairs, including the lane 2698/2695 stall (a
+  crosswalk signal 37.5 m from a junction), but stopped-on-green went 10 -> 13. Chicago:
+  no change. Pedestrians judging stopping distance at 2.0 m/s² instead of 3.4 (tried, not
+  committed): midtown-peak-load decel exceedances 46 -> 47, so the hard braking there is
+  not the pedestrians' step-out test.
+- **Open:** kerbside overlaps from junction connectors; drivers anticipating kerb-waiting
+  pedestrians; `docs/validation/traffic.md` not regenerated (no model output changed by
+  default).
+- **Build hazard:** agents share the scratchpad. Keep scripts and logs in a per-worktree
+  subdirectory, or another agent's `cd` runs your tests in its worktree.
