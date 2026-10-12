@@ -2,7 +2,7 @@
 
 Each row runs a baseline and one setting with the same seed and the same small fleet, and
 asserts the direction the cause predicts. A setting that changed nothing fails its row.
-Tests: `crates/v2xw-engine/tests/sensitivity_security.rs`. The 17 tests take about 110 s
+Tests: `crates/v2xw-engine/tests/sensitivity_security.rs`. The 16 tests take about 80 s
 together in a dev build with `opt-level=2`.
 
 **Fleet.** A procedural 5 x 8 grid, about 1.1 x 0.6 km, in open air. 20 to 60 vehicles
