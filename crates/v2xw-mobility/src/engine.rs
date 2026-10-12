@@ -785,6 +785,10 @@ struct Transition {
     /// heading swing is taken at [`PULL_OUT_SPEED_MPS`] at least, so a car nosing out
     /// from a standstill angles out instead of swinging round on the spot.
     pull_out: bool,
+    /// Begun while moving: such a change is held while the vehicle is later brought to a
+    /// stand part-way across. One begun at a stand (a car nosing out from a queue) slides
+    /// in as before; held, it stood a full lane width out of its new lane.
+    began_moving: bool,
 }
 
 /// The road a strategic lane change needs, per lane crossed, metres: at 11 m/s a
@@ -1164,7 +1168,7 @@ impl Actor {
             let dur = tr.duration.as_secs_f64();
             // Held while the vehicle stands (the lateral pass of the step): no sideways
             // motion, so no heading swing either.
-            if dur <= 0.0 || (tr.switched && self.speed_mps <= STANDSTILL_MPS) {
+            if dur <= 0.0 || (tr.switched && tr.began_moving && self.speed_mps <= STANDSTILL_MPS) {
                 return 0.0;
             }
             let p = (ns_to_secs(t.saturating_sub(tr.started)) / dur).clamp(0.0, 1.0);
@@ -5658,6 +5662,7 @@ impl Mobility for NativeMobility {
                     // Only the kerbside rules change lanes this slowly (MOBIL's own minimum
                     // is 3 m/s): a pull-out round a vehicle at the kerb, or a move to it.
                     pull_out: actor.speed_mps < PULL_OUT_SPEED_MPS,
+                    began_moving: actor.speed_mps > STANDSTILL_MPS,
                 });
                 // The route is re-planned from the lane being entered, so the vehicle's
                 // next movement is one that lane actually has. Keeping the old route
@@ -5695,7 +5700,10 @@ impl Mobility for NativeMobility {
                 // taxi swung its heading from 94 to 133 degrees on the spot and swept its
                 // body into the queue in the next lane (`tests/realism.rs`, kerbside on:
                 // 206 overlap steps).
-                if transition.switched && actor.speed_mps <= STANDSTILL_MPS {
+                if transition.switched
+                    && transition.began_moving
+                    && actor.speed_mps <= STANDSTILL_MPS
+                {
                     transition.started = transition.started.saturating_add(t1.saturating_sub(t0));
                 }
                 let elapsed = ns_to_secs(t1.saturating_sub(transition.started));
