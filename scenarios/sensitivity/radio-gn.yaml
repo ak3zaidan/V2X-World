@@ -4,18 +4,18 @@
 base: gn-grid.yaml
 rows:
   - name: GN hop limit 1->10
-    base_set: {net.geonet.hop_limit: 1}
+    base_set: {net.geonet.hop_limit: 1, radio.devices.obu.tx_power_dbm: 5.0}
     set: {net.geonet.hop_limit: 10}
     metric: gn_reach
     expect: up
-    source: a hop limit of 1 confines the warning to the originator's own range (EN 302 636-4-1 9.3.3 RHL)
+    source: a hop limit of 1 confines the warning to the originator's own range (EN 302 636-4-1 9.3.3 RHL); at 5 dBm one hop covers about 250 m of the 1 000 m area
   - name: GN hop limit 1->10
-    base_set: {net.geonet.hop_limit: 1}
+    base_set: {net.geonet.hop_limit: 1, radio.devices.obu.tx_power_dbm: 5.0}
     set: {net.geonet.hop_limit: 10}
     metric: gn_forwards_sent
     expect: up
   - name: GN hop limit 1->10
-    base_set: {net.geonet.hop_limit: 1}
+    base_set: {net.geonet.hop_limit: 1, radio.devices.obu.tx_power_dbm: 5.0}
     set: {net.geonet.hop_limit: 10}
     metric: gn_forwarded_bytes
     expect: up

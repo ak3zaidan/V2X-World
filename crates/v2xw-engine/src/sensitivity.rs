@@ -213,7 +213,8 @@ impl Measured {
     ///
     /// Computed names: `prr_<lo>_<hi>` (census PRR between `lo` and `hi` metres, on the
     /// 20 m grid), `range_m` (the lower edge of the first 20 m bin, with at least
-    /// [`PRR_MIN_CENSUS`] receivers, whose PRR is below 0.5) and `range90_m` (below 0.9).
+    /// [`PRR_MIN_CENSUS`] receivers, whose PRR is below 0.5 and stays below it in the next
+    /// such bin) and `range90_m` (below 0.9).
     #[must_use]
     pub fn get(&self, name: &str) -> Option<f64> {
         if let Some(v) = self.values.get(name) {
@@ -238,17 +239,23 @@ impl Measured {
             "range90_m" => 0.9,
             _ => return None,
         };
-        let mut last = 0.0;
-        for (i, (c, d)) in self.prr_bins.iter().enumerate() {
-            if *c < PRR_MIN_CENSUS {
-                continue;
+        // The bins with a census, as (index, below the threshold). The edge is the first
+        // bin below the threshold whose next counted bin is below it too: one bin's dip
+        // (a handful of near-field half-duplex or in-band-emission losses in the 0-20 m bin
+        // of an NR run) is not where the link budget runs out.
+        let counted: Vec<(usize, bool)> = self
+            .prr_bins
+            .iter()
+            .enumerate()
+            .filter(|(_, (c, _))| *c >= PRR_MIN_CENSUS)
+            .map(|(i, (c, d))| (i, (*d as f64) < threshold * *c as f64))
+            .collect();
+        for (k, (i, below)) in counted.iter().enumerate() {
+            if *below && counted.get(k + 1).is_none_or(|(_, next)| *next) {
+                return Some(20.0 * *i as f64);
             }
-            if (*d as f64) < threshold * *c as f64 {
-                return Some(20.0 * i as f64);
-            }
-            last = 20.0 * (i + 1) as f64;
         }
-        Some(last)
+        Some(counted.last().map_or(0.0, |(i, _)| 20.0 * (*i + 1) as f64))
     }
 }
 
@@ -821,6 +828,12 @@ mod tests {
         assert_eq!(m.get("range_m"), Some(60.0));
         assert_eq!(m.get("range90_m"), Some(40.0));
         assert_eq!(m.get("prr_0_40"), Some(194.0 / 200.0));
+        // A dip in one bin is not the edge.
+        let dip = Measured {
+            values: BTreeMap::new(),
+            prr_bins: vec![(100, 80), (100, 99), (100, 95), (100, 60), (100, 40)],
+        };
+        assert_eq!(dip.get("range90_m"), Some(60.0));
         assert_eq!(m.get("nope"), None);
     }
 }

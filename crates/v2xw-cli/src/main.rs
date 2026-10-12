@@ -53,6 +53,16 @@ fn sensitivity(args: &v2xw_cli::cli::SensitivityArgs) -> v2xw_cli::Result<String
         for k in ["range_m", "range90_m", "prr_0_200", "prr_200_400", "prr_400_600", "prr_600_1000"] {
             out.push_str(&format!("{k:<24} {:?}\n", m.get(k)));
         }
+        // The PRR curve, one 20 m bin per entry out to 1 km: PRR (receivers).
+        out.push_str("prr per 20 m bin         ");
+        for (c, d) in m.prr_bins.iter().take(50) {
+            if *c == 0 {
+                out.push_str("- ");
+            } else {
+                out.push_str(&format!("{:.2}({c}) ", *d as f64 / *c as f64));
+            }
+        }
+        out.push('\n');
         return Ok(out);
     }
     let results = sens::run_spec(&spec, &base, |r| {
