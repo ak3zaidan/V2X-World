@@ -2440,6 +2440,11 @@ pub struct SignerIdPolicySpec {
     /// Attach a digest the rest of the time.
     #[serde(default = "crate::scenario::schema::truth")]
     pub digest_otherwise: bool,
+    /// Also attach the certificate to the next BSM or CAM after a station this node has
+    /// not heard before appears (the ETSI CAM rule, TS 103 097 V1.3.1 §7.1.1). Off by
+    /// default, and left out of a scenario that does not set it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_new_neighbour: bool,
 }
 
 impl SignerIdPolicySpec {
@@ -2453,6 +2458,7 @@ impl Default for SignerIdPolicySpec {
         SignerIdPolicySpec {
             full_cert_every_ms: SignerIdPolicySpec::default_cadence(),
             digest_otherwise: true,
+            on_new_neighbour: false,
         }
     }
 }

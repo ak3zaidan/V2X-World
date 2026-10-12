@@ -1565,6 +1565,9 @@ impl ObuRuntime {
             && describes_a_station
             && let Some(signer) = m.signer.clone()
         {
+            if self.stores.neighbors.get(&signer).is_none() {
+                self.security.note_new_neighbour();
+            }
             self.stores.neighbors.observe(Neighbor {
                 signer,
                 claimed_pos: m.claimed_pos.unwrap_or(v2xw_core::geom::Vec3::ZERO),

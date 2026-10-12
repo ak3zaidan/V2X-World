@@ -90,7 +90,12 @@ fn run(s: Scenario) -> Measured {
         .into_iter()
         .map(|(k, (s, n, _))| (k, s / n.max(1.0)))
         .collect();
-    Measured { report, m, last, rec }
+    Measured {
+        report,
+        m,
+        last,
+        rec,
+    }
 }
 
 fn refused(s: &Scenario, field: &str) -> bool {
@@ -126,7 +131,11 @@ fn probe_metrics() {
     println!("air {:?}", b.report.air_bytes);
     println!("phase2 states {:?}", b.report.phase2.verification_states);
     println!("losses {:?}", b.report.rx_losses);
-    println!("pdr {:.3} attempts {}", pdr(&b.report), b.report.reception_attempts);
+    println!(
+        "pdr {:.3} attempts {}",
+        pdr(&b.report),
+        b.report.reception_attempts
+    );
     let _ = &b.rec;
 }
 
@@ -216,7 +225,10 @@ fn the_signature_scheme_moves_bytes_airtime_and_latency() {
     assert!(q.report.air_bytes.security > 5 * e.report.air_bytes.security);
     assert!(h.get("security_overhead") > e.get("security_overhead"));
     assert!(q.get("security_overhead") > e.get("security_overhead"));
-    assert!(q.report.fragments_sent > e.report.fragments_sent, "nothing fragmented");
+    assert!(
+        q.report.fragments_sent > e.report.fragments_sent,
+        "nothing fragmented"
+    );
     assert!(h.get("cbr") > e.get("cbr") && q.get("cbr") > e.get("cbr"));
     assert!(q.get("e2e_latency") > e.get("e2e_latency"));
     assert!(pdr(&q.report) <= pdr(&e.report));
@@ -237,7 +249,10 @@ fn the_certificate_attach_cadence_moves_overhead() {
         out.push(m);
     }
     let (all, hz, slow) = (&out[0], &out[1], &out[2]);
-    assert!(all.get("full_cert_share") > 0.9, "every message carries one");
+    assert!(
+        all.get("full_cert_share") > 0.9,
+        "every message carries one"
+    );
     assert!(all.get("full_cert_share") > hz.get("full_cert_share"));
     assert!(hz.get("full_cert_share") > slow.get("full_cert_share"));
     assert!(all.report.air_bytes.security > hz.report.air_bytes.security);
@@ -415,7 +430,11 @@ fn the_cellular_link_moves_topup_latency_and_availability() {
     let fast = preset("5g-first-hop", 1.0);
     let slow = preset("4g-west-coast", 1.0);
     let half = preset("4g-east-coast", 0.5);
-    for (n, m) in [("5g-first-hop", &fast), ("4g-west-coast", &slow), ("half", &half)] {
+    for (n, m) in [
+        ("5g-first-hop", &fast),
+        ("4g-west-coast", &slow),
+        ("half", &half),
+    ] {
         let p = &m.report.phase2;
         println!(
             "ROW uu {n}: topup {:?} cellular {} topups {}/{} starved {} unavailable_ms {}",
@@ -430,7 +449,10 @@ fn the_cellular_link_moves_topup_latency_and_availability() {
     let (nf, tf) = exchange_ms(&fast.report, "topup");
     let (ns, ts) = exchange_ms(&slow.report, "topup");
     assert!(nf > 0 && ns > 0, "no top-up completed");
-    assert!(ts > tf, "4g-west-coast {ts} ms against 5g-first-hop {tf} ms");
+    assert!(
+        ts > tf,
+        "4g-west-coast {ts} ms against 5g-first-hop {tf} ms"
+    );
     assert!(
         half.report.phase2.access.cellular_vehicles < fast.report.phase2.access.cellular_vehicles
     );
@@ -490,7 +512,10 @@ fn the_crl_fetch_interval_moves_downloads_and_revocation_latency() {
             p.revocation_stages
         );
     }
-    assert!(often.report.phase2.crl_versions_published > 0, "nothing was revoked");
+    assert!(
+        often.report.phase2.crl_versions_published > 0,
+        "nothing was revoked"
+    );
     let stage = |m: &Measured, st: &str| {
         m.report
             .phase2
@@ -508,7 +533,6 @@ fn the_crl_fetch_interval_moves_downloads_and_revocation_latency() {
         slow_list.report.phase2.revocation_latency_ns > often.report.phase2.revocation_latency_ns
     );
 }
-
 
 /// The attacker share: none, 10 % and 30 % of the fleet broadcasting a constant false
 /// position. Verdicts, reports about attackers and the authority's true positives rise with
@@ -535,9 +559,18 @@ fn the_attacker_share_moves_detections() {
             p.falsified_claims,
             p.verdicts_fired,
             p.reports_at_ma,
-            m.last.get("det_tp{\"level\":\"report\",\"cell\":\"tp\"}").copied().unwrap_or(0.0),
-            m.last.get("det_fp{\"level\":\"report\",\"cell\":\"fp\"}").copied().unwrap_or(0.0),
-            m.last.get("det_fn{\"level\":\"report\",\"cell\":\"fn\"}").copied().unwrap_or(0.0),
+            m.last
+                .get("det_tp{\"level\":\"report\",\"cell\":\"tp\"}")
+                .copied()
+                .unwrap_or(0.0),
+            m.last
+                .get("det_fp{\"level\":\"report\",\"cell\":\"fp\"}")
+                .copied()
+                .unwrap_or(0.0),
+            m.last
+                .get("det_fn{\"level\":\"report\",\"cell\":\"fn\"}")
+                .copied()
+                .unwrap_or(0.0),
             p.reports_about_attackers,
             p.reports_about_honest,
             p.revoked_attackers,
@@ -556,7 +589,10 @@ fn the_attacker_share_moves_detections() {
     assert!(few.report.phase2.attackers < many.report.phase2.attackers);
     assert!(few.report.phase2.verdicts_fired > none.report.phase2.verdicts_fired);
     assert!(many.report.phase2.verdicts_fired > few.report.phase2.verdicts_fired);
-    assert!(tp(few) > 0.0, "no report about an attacker reached the authority");
+    assert!(
+        tp(few) > 0.0,
+        "no report about an attacker reached the authority"
+    );
     assert!(tp(many) > tp(few));
 }
 
@@ -612,9 +648,52 @@ fn the_backhaul_latency_and_bandwidth_move_relay_topups() {
     let (_, ts) = exchange_ms(&slow.report, "topup");
     let (_, tt) = exchange_ms(&thin.report, "topup");
     assert!(nb > 0, "no top-up went through a roadside unit");
-    assert_eq!(msgs(&base), msgs(&slow), "the comparison needs the same polls");
-    assert_eq!(msgs(&base), msgs(&thin), "the comparison needs the same polls");
+    assert_eq!(
+        msgs(&base),
+        msgs(&slow),
+        "the comparison needs the same polls"
+    );
+    assert_eq!(
+        msgs(&base),
+        msgs(&thin),
+        "the comparison needs the same polls"
+    );
     assert!(ts > tb, "600 ms: {ts} ms against 200 ms: {tb} ms");
     assert!(tt > tb, "64 kbit/s: {tt} ms against the default: {tb} ms");
-    assert!(msgs(&quick) > msgs(&base), "a 5 ms line polled no more often");
+    assert!(
+        msgs(&quick) > msgs(&base),
+        "a 5 ms line polled no more often"
+    );
+}
+
+/// Certificate on a new neighbour (TS 103 097 V1.3.1 §7.1.1) on top of a 5 s cadence, with
+/// pseudonyms changing every 5 s so new stations keep appearing: more messages carry the
+/// certificate, the security bytes rise, and fewer messages arrive from a signer the
+/// receiver cannot yet verify. The loader refuses the setting where every message already
+/// carries the certificate.
+#[test]
+fn the_new_neighbour_attach_moves_overhead_and_unknown_signers() {
+    let mut base = backend(20, 20.0);
+    base.security.signer_id_policy.full_cert_every_ms = 5000;
+    base.security.pseudonym_change.period_s = Some(5.0);
+    let mut on = base.clone();
+    on.security.signer_id_policy.on_new_neighbour = true;
+    let b = run(base.clone());
+    let o = run(on);
+    row("cadence 5 s", &b);
+    row("cadence 5 s + new neighbour", &o);
+    println!(
+        "ROW new-neighbour: unknown signer {} vs {}",
+        node_lost(&o, "unknown-signer"),
+        node_lost(&b, "unknown-signer")
+    );
+    assert!(o.get("full_cert_share") > b.get("full_cert_share"));
+    assert!(o.report.air_bytes.security > b.report.air_bytes.security);
+    assert!(node_lost(&o, "unknown-signer") < node_lost(&b, "unknown-signer"));
+
+    let mut always = base;
+    always.security.signer_id_policy.full_cert_every_ms = 0;
+    always.security.signer_id_policy.digest_otherwise = false;
+    always.security.signer_id_policy.on_new_neighbour = true;
+    assert!(refused(&always, "on_new_neighbour"));
 }

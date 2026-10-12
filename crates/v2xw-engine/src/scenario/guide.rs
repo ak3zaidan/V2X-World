@@ -279,6 +279,11 @@ const BASIC: &[Basic] = &[
 /// `radio.dcc`), which a newcomer does not need but should still be able to read.
 const ADVANCED: &[Basic] = &[
     Basic {
+        path: "security.signer_id_policy.on_new_neighbour",
+        explain: "Send the full certificate in the next safety message whenever a vehicle it has not heard before comes into range, so the newcomer can check its signatures at once.",
+        recommended: "Off (the US cadence alone); on for the ETSI rule (TS 103 097 §7.1.1).",
+    },
+    Basic {
         path: "actors.vehicles.drivers.max_accel_mps2",
         explain: "How hard a car driver accelerates when the road ahead is clear.",
         recommended: "1.0 to 2.0 m/s².",

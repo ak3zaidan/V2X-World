@@ -2458,6 +2458,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "How often a full certificate is attached instead of an eight-byte digest.",
     },
     KeyStatus {
+        path: "security.signer_id_policy.on_new_neighbour",
+        status: Status::Wired,
+        note: "Also attach the certificate to a vehicle's next BSM or CAM after it hears a \
+               station it did not know (TS 103 097 V1.3.1 §7.1.1). Off unless set; refused \
+               when every message already carries one or no BSM/CAM runs.",
+    },
+    KeyStatus {
         path: "security.pseudonym_change.strategy",
         status: Status::Wired,
         note: "time changes pseudonym at period_s of age (SAE J2945/1 CERTCHG, 300 s) and \
@@ -5345,6 +5352,23 @@ fn security(s: &Scenario, e: &mut Vec<ScenarioError>) {
             "security.signer_id_policy.full_cert_every_ms",
             "is 0 (attach the certificate on every message) while digest_otherwise is true; \
              the two say opposite things about what goes in the signer identifier"
+                .to_string(),
+        ));
+    }
+    let sid = &s.security.signer_id_policy;
+    if sid.on_new_neighbour && (sid.full_cert_every_ms == 0 || !sid.digest_otherwise) {
+        e.push(conflict(
+            "security.signer_id_policy.on_new_neighbour",
+            "is set while every message already carries the certificate \
+             (full_cert_every_ms 0 or digest_otherwise false), so it would change nothing"
+                .to_string(),
+        ));
+    }
+    if sid.on_new_neighbour && !s.messages.sets.iter().any(|m| m == "bsm" || m == "cam") {
+        e.push(conflict(
+            "security.signer_id_policy.on_new_neighbour",
+            "is set but messages.sets has neither bsm nor cam, the awareness messages it \
+             attaches the certificate to"
                 .to_string(),
         ));
     }

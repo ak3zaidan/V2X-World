@@ -3308,7 +3308,8 @@ fn apply_security_profile(runtime: &mut ObuRuntime, scenario: &Scenario, env: No
     // different published defaults, and a scenario that states a cadence is overriding
     // both: two stacks behind one number would make the field mean different things for
     // different message types with nothing saying so.
-    .with_signer_id_policies(policy, policy);
+    .with_signer_id_policies(policy, policy)
+    .with_new_neighbour_attach(scenario.security.signer_id_policy.on_new_neighbour);
     *runtime.security_mut() = configured;
     // Each message under its registered PSID / ITS-AID, and certificates that permit
     // exactly what the node sends (`v2xw_msg::registry`, the IEEE PSID registry).

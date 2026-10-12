@@ -401,6 +401,11 @@ pub struct NodeSecurity {
     last_certificate: BTreeMap<&'static str, SimTime>,
     cam_policy: SignerIdPolicy,
     bsm_policy: SignerIdPolicy,
+    /// Attach the certificate to the next awareness message after a station this node has
+    /// not heard before appears (`security.signer_id_policy.on_new_neighbour`).
+    attach_on_new_neighbour: bool,
+    /// A new station has been heard since the last certificate went out.
+    new_neighbour_pending: bool,
 }
 
 impl NodeSecurity {
@@ -422,6 +427,28 @@ impl NodeSecurity {
             // the difference is real bytes on the air.
             cam_policy: SignerIdPolicy::ETSI_1S,
             bsm_policy: SignerIdPolicy::SAE_450MS,
+            attach_on_new_neighbour: false,
+            new_neighbour_pending: false,
+        }
+    }
+
+    /// The same stack, attaching the certificate to the next awareness message whenever a
+    /// station it has not heard before appears, on top of the cadence. This is the ETSI
+    /// CAM rule (TS 103 097 V1.3.1 §7.1.1: a station that receives a CAM from a station
+    /// it does not know includes its own certificate in its next CAM), so a newcomer can
+    /// verify this node without waiting up to one cadence or asking by P2PCD.
+    #[must_use]
+    pub fn with_new_neighbour_attach(mut self, on: bool) -> NodeSecurity {
+        self.attach_on_new_neighbour = on;
+        self
+    }
+
+    /// Notes that a station this node had not heard before has just been heard. Under
+    /// [`NodeSecurity::with_new_neighbour_attach`] the next awareness message carries the
+    /// certificate; otherwise this does nothing.
+    pub fn note_new_neighbour(&mut self) {
+        if self.attach_on_new_neighbour {
+            self.new_neighbour_pending = true;
         }
     }
 
@@ -596,12 +623,16 @@ impl NodeSecurity {
             MsgType::Bsm => self.bsm_policy,
             _ => self.cam_policy,
         };
-        self.envelope.choose_signer_id(
+        let choice = self.envelope.choose_signer_id(
             policy,
             believed,
             self.last_certificate.get(msg_type.as_str()).copied(),
             Some(msg_type),
-        )
+        );
+        if self.new_neighbour_pending && matches!(msg_type, MsgType::Bsm | MsgType::Cam) {
+            return SignerIdChoice::Certificate;
+        }
+        choice
     }
 
     /// Signs `payload` and returns the SPDU with the payload beside it.
@@ -644,8 +675,34 @@ impl NodeSecurity {
     }
 
     /// Records that a full certificate went out for `msg_type` at `believed`.
+    ///
+    /// A certificate sent only because a new station appeared does not restart the
+    /// cadence: the two are independent triggers (TS 103 097 V1.3.1 §7.1.1 states the
+    /// once-a-second rule and the new-station rule side by side). Restarting it measurably
+    /// hurt: when a fleet changes pseudonym together, every vehicle hears newcomers just
+    /// before its own change, spends the forced certificate on its old pseudonym, and the
+    /// restarted cadence then held back its new certificate for a full period — unknown
+    /// signers in the change second rose from 289 to 2,105 (20 vehicles, 1 s cadence).
     pub fn note_certificate_attached(&mut self, msg_type: MsgType, believed: SimTime) {
-        self.last_certificate.insert(msg_type.as_str(), believed);
+        let awareness = matches!(msg_type, MsgType::Bsm | MsgType::Cam);
+        let forced_only = awareness && self.new_neighbour_pending && {
+            let policy = match msg_type {
+                MsgType::Bsm => self.bsm_policy,
+                _ => self.cam_policy,
+            };
+            self.envelope.choose_signer_id(
+                policy,
+                believed,
+                self.last_certificate.get(msg_type.as_str()).copied(),
+                Some(msg_type),
+            ) == SignerIdChoice::Digest
+        };
+        if !forced_only {
+            self.last_certificate.insert(msg_type.as_str(), believed);
+        }
+        if awareness {
+            self.new_neighbour_pending = false;
+        }
     }
 
     /// Decodes an SPDU, or `None` when the bytes are not a `SignedData` this profile
