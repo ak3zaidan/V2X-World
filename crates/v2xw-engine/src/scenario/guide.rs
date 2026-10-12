@@ -279,6 +279,21 @@ const BASIC: &[Basic] = &[
 /// `radio.dcc`), which a newcomer does not need but should still be able to read.
 const ADVANCED: &[Basic] = &[
     Basic {
+        path: "security.on_demand_threshold",
+        explain: "Under on-demand verification, how threatening a known vehicle's message must look (from its time to collision, 0 to 1) before it is checked; lower checks more messages and costs more processor time.",
+        recommended: "0.5 (a time to collision of 1 s); 0.05 to 0.9. No published operating point (Krishnan & Weimerskirch 2011); sweep it.",
+    },
+    Basic {
+        path: "security.prioritized_horizon_m",
+        explain: "Under prioritized verification, how far away a sender can be and still be checked ahead of farther ones; senders beyond it get no head start for being near.",
+        recommended: "300 m (the DSRC/C-V2X awareness range); 100 to 1000 m.",
+    },
+    Basic {
+        path: "nodes.peer_cert_cache",
+        explain: "How many other stations' certificates each vehicle or roadside radio unit remembers; when it forgets one, that vehicle's next short-form message cannot be checked until its certificate is requested again.",
+        recommended: "128 (engine default; no device publishes one); 16 to 1024.",
+    },
+    Basic {
         path: "security.signer_id_policy.on_new_neighbour",
         explain: "Send the full certificate in the next safety message whenever a vehicle it has not heard before comes into range, so the newcomer can check its signatures at once.",
         recommended: "Off (the US cadence alone); on for the ETSI rule (TS 103 097 §7.1.1).",

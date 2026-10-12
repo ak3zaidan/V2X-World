@@ -201,6 +201,16 @@ impl<T> NodeQueue<T> {
         Admission::Queued
     }
 
+    /// Takes the item at position `i` (0 is the oldest), out of arrival order: what a
+    /// server that serves by priority rather than by age does.
+    pub fn take_at(&mut self, i: usize) -> Option<T> {
+        let item = self.items.remove(i);
+        if item.is_some() {
+            self.sample();
+        }
+        item
+    }
+
     /// Takes the oldest item.
     pub fn pop(&mut self) -> Option<T> {
         let item = self.items.pop_front();

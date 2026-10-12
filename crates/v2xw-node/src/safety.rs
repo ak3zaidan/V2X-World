@@ -1754,6 +1754,39 @@ impl SafetyAppSet {
     }
 }
 
+/// The relevance score a received message's own claim implies, before any application
+/// has run: the time to collision of the straight-line closing between the ego (its belief)
+/// and the claimed position, speed and heading, scored by [`relevance_from_ttc`].
+///
+/// Distance and heading both enter through the closing speed: a peer driving away, or
+/// abreast at the same speed, scores zero however close; one closing fast from far scores
+/// what its time to collision says. Verify-on-Demand ranks messages by exactly this kind
+/// of threat measure [Krishnan & Weimerskirch, SAE Int. J. Passenger Cars 4:536-546,
+/// 2011]; the TTC form follows SSAM [FHWA-HRT-08-051]. A peer at the ego's own position
+/// scores one.
+#[must_use]
+pub fn relevance_from_claim(
+    ego: &PositionEstimate,
+    peer_pos: Vec3,
+    peer_speed: f64,
+    peer_heading: f64,
+) -> f64 {
+    let rx = peer_pos.x - ego.pos.x;
+    let ry = peer_pos.y - ego.pos.y;
+    let d = (rx * rx + ry * ry).sqrt();
+    if !d.is_finite() {
+        return 0.0;
+    }
+    if d <= f64::EPSILON {
+        return 1.0;
+    }
+    let (sin_p, cos_p) = math::sin_cos(peer_heading);
+    let rvx = peer_speed * cos_p - ego.vel.x;
+    let rvy = peer_speed * sin_p - ego.vel.y;
+    let closing = -(rx * rvx + ry * rvy) / d;
+    relevance_from_ttc(time_to_collision_s(d, closing))
+}
+
 /// The relevance score a time to collision implies: `1 / (1 + ttc)`, clamped to `[0, 1]`.
 ///
 /// A modelling choice, not a published one. It is monotone decreasing in the time to

@@ -509,15 +509,13 @@ fn the_message_rate_moves_bytes_cbr_and_aoi() {
         assert!(w[1].get("aoi") < w[0].get("aoi"));
     }
     // The CBR the MAC reports is its last 100 ms at each 1 s metric flush. A fleet spawned
-    // in one instant sends at 5 Hz on the even 100 ms slots only (a node's phase moves it
-    // inside a mobility step, not across the period), so that sample misses every frame
-    // and reads about 0 at 5 Hz: an open measurement limit, recorded in
-    // docs/validation/sensitivity-security.md. From 10 to 20 Hz it doubles.
-    let cbr = out[2].get("cbr") / out[1].get("cbr").max(1e-9);
-    assert!(
-        (1.6..2.4).contains(&cbr),
-        "CBR ratio {cbr:.2} from 10 to 20 Hz"
-    );
+    // in one instant used to send at 5 Hz on the even 100 ms slots only (the phase window
+    // was 100 ms whatever the period), so that sample read about 0 at 5 Hz. The phase now
+    // spans the period, and the CBR doubles at each step.
+    for w in out.windows(2) {
+        let cbr = w[1].get("cbr") / w[0].get("cbr").max(1e-9);
+        assert!((1.5..2.5).contains(&cbr), "CBR ratio {cbr:.2} for twice the rate");
+    }
 }
 
 /// IEEE 1609.2 against ETSI TS 103 097 over GeoNetworking. TS 103 097 is a profile of
@@ -881,4 +879,106 @@ fn the_new_neighbour_attach_moves_overhead_and_unknown_signers() {
     always.security.signer_id_policy.digest_otherwise = false;
     always.security.signer_id_policy.on_new_neighbour = true;
     assert!(refused(&always, "on_new_neighbour"));
+}
+
+/// The on-demand relevance threshold: 0.5 (a 1 s time to collision) against 0.05 (19 s).
+/// The lower bar marks more known signers relevant, so more messages are verified and
+/// fewer reach the applications unverified. Before the claim-based relevance existed no
+/// message carried a score and the threshold moved nothing. Refused under verify-all.
+#[test]
+fn the_on_demand_threshold_moves_the_verify_load() {
+    let mut high = fleet(30, 12.0);
+    high.nodes.default_obu = "obu/unex-obu-301-craton2-software".to_string();
+    high.security.verification_policy = "on-demand".to_string();
+    let mut low = high.clone();
+    low.security.on_demand_threshold = Some(0.05);
+    let h = run(high.clone());
+    let l = run(low);
+    row("on-demand 0.5", &h);
+    row("on-demand 0.05", &l);
+    assert!(served(&l).len() > served(&h).len(), "no more messages verified");
+    assert!(l.get("unverified_ratio") < h.get("unverified_ratio"));
+
+    let mut wrong = high;
+    wrong.security.verification_policy = "verify-all".to_string();
+    wrong.security.on_demand_threshold = Some(0.05);
+    assert!(refused(&wrong, "on_demand_threshold"));
+}
+
+/// The peer certificate cache: the default 128 against 4 on a 20-vehicle fleet sending a
+/// certificate once a second and a digest otherwise. A unit that holds 4 of its 19
+/// neighbours' certificates forgets the rest, so their digest-signed messages miss and
+/// need P2PCD requests, and are unverifiable until the next certificate. Before the fix
+/// an evicted certificate stayed in the store and still verified.
+#[test]
+fn the_peer_cert_cache_moves_p2pcd_and_unknown_signers() {
+    let big = backend(20, 10.0);
+    let mut small = big.clone();
+    small.nodes.peer_cert_cache = Some(4);
+    let b = run(big);
+    let s = run(small);
+    for (name, m) in [("cache 128", &b), ("cache 4", &s)] {
+        println!(
+            "ROW {name}: p2pcd {} unknown {}",
+            events(m, "p2pcd_requests"),
+            node_lost(m, "unknown-signer")
+        );
+    }
+    assert!(s.get("p2pcd_requests") > b.get("p2pcd_requests"));
+    assert!(node_lost(&s, "unknown-signer") > node_lost(&b, "unknown-signer"));
+}
+
+/// Each verified message's queue wait (start - enqueue, ms) and the priority it was
+/// served by, from the `node.verify` records.
+fn served(m: &Measured) -> Vec<(u64, f64)> {
+    let ns = |v: &serde_json::Value| v.as_u64().or_else(|| v.as_f64().map(|f| f as u64));
+    m.rec
+        .records()
+        .iter()
+        .filter(|(_, r)| r.channel == "node.verify")
+        .filter_map(|(_, r)| serde_json::from_slice::<serde_json::Value>(&r.json).ok())
+        .filter(|v| v["outcome"] == "valid")
+        .filter_map(|v| {
+            let start = ns(&v["t_start"])?;
+            let enq = ns(&v["t_enqueue"])?;
+            Some((v["priority"].as_u64()?, start.saturating_sub(enq) as f64 / 1e6))
+        })
+        .collect()
+}
+
+/// The `prioritized` policy under a software verifier that cannot keep up with 60
+/// vehicles: the near (priority at least 500, inside half the horizon) are served ahead
+/// of the far, so their queue wait is shorter. It used to serve first in, first out and
+/// the two waits were the same. Narrowing the horizon from 300 m to 10 m leaves almost no
+/// sender near, so the share served ahead collapses. Refused under verify-all.
+#[test]
+fn the_prioritized_horizon_moves_the_service_order() {
+    let mut wide = fleet(60, 3.0);
+    wide.nodes.default_obu = "obu/unex-obu-301-craton2-software".to_string();
+    wide.security.verification_policy = "prioritized".to_string();
+    let mut narrow = wide.clone();
+    narrow.security.prioritized_horizon_m = Some(10.0);
+    let w = run(wide.clone());
+    let n = run(narrow);
+    let split = |m: &Measured| {
+        let s = served(m);
+        let mean = |hi: bool| {
+            let v: Vec<f64> = s.iter().filter(|(p, _)| (*p >= 500) == hi).map(|x| x.1).collect();
+            (v.len(), v.iter().sum::<f64>() / v.len().max(1) as f64)
+        };
+        (mean(true), mean(false))
+    };
+    let (wh, wl) = split(&w);
+    let (nh, nl) = split(&n);
+    println!("ROW horizon 300: near {} wait {:.3} ms, far {} wait {:.3} ms", wh.0, wh.1, wl.0, wl.1);
+    println!("ROW horizon 10: near {} wait {:.3} ms, far {} wait {:.3} ms", nh.0, nh.1, nl.0, nl.1);
+    assert!(wh.0 > 0 && wl.0 > 0);
+    assert!(wh.1 < 0.75 * wl.1, "the near are not served first");
+    let share = |h: (usize, f64), l: (usize, f64)| h.0 as f64 / (h.0 + l.0).max(1) as f64;
+    assert!(share(nh, nl) < share(wh, wl));
+
+    let mut wrong = wide;
+    wrong.security.verification_policy = "verify-all".to_string();
+    wrong.security.prioritized_horizon_m = Some(100.0);
+    assert!(refused(&wrong, "prioritized_horizon_m"));
 }

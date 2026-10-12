@@ -26,9 +26,12 @@ windows; counts are summed.
 | `security.verification_policy` | verify-all → on-demand (software ECDSA) | Verifications 8,105/s → 813/s. Unverified share 0.020 → 0.97. Verify wait 0.26 → 0.13 ms. E2E latency 5.3 → 3.6 ms | On-demand verifies only strangers and signers an application marks relevant (06-node-models.md §2.1). |
 | `nodes.default_obu` | Craton2 HSM → Craton2 software → SoC without HSM | Stages for HSM vs software: sign 9.0 vs 0.61 ms, verify 0.40 vs 1.29 ms. Verify wait 0.003 → 0.26 → 0.037 ms. E2E latency 12.3 → 5.3 → 3.9 ms | The eHSM signs in under 9 ms (R7 §A4). The line-rate engine verifies in at most 400 µs (derived from 2,500/s). In software the same unit signs in 613 µs and verifies in 1,290 µs (Pi 3B proxy, R7 §D8). The HSM unit is slower end to end because it signs slower. |
 | `nodes.verify_queue_depth` | 64 → 1 (60 vehicles, software verify) | Verify-overflow fates 0 → 11,917. Verifications 29,240/s → 24,864/s. Unverified share 0.055 → 0.089. AoI 60 → 75 ms | A full queue refuses the newcomer (06-node-models.md §2.2). |
+| `security.on_demand_threshold` **new** | 0.5 → 0.05 (on-demand, software ECDSA, 30 vehicles, 12 s) | Unverified share 0.992 → 0.948; verify wait 0.13 → 0.057 ms; more messages verified | A lower bar marks more known signers relevant. Relevance is 1/(1+TTC) from the message's own claim; before it, nothing scored a message and the threshold moved nothing. |
+| `security.prioritized_horizon_m` **new** | 300 → 10 m (prioritized, software ECDSA, 60 vehicles) | Near (priority >= 500) wait 0.42 ms vs far 0.92 ms at 300 m; frames served ahead 9,166 → 8 at 10 m | The queue now serves the highest priority first (it was FIFO: with the order removed the two waits are 0.87 vs 0.88 ms). |
+| `nodes.peer_cert_cache` **new** | 128 → 4 (20 vehicles, 1 s cadence, 10 s) | P2PCD requests 373 → 21,903; unknown-signer fates 373 → 24,424 | An evicted certificate now leaves the verification store too; before the fix unknown signers stayed at 373. |
 | `security.pseudonym_change.period_s` | 300 → 5 s (20 s run, 5 s cadence) | Pseudonym changes 0 → 60. Unknown-signer fates 1,275 → 4,578. Unverified share 0.018 → 0.065. AoI 68 → 154 ms | Each new pseudonym is heard first by digest, and receivers cannot check it until its certificate comes round (the P2PCD case). |
 | `security.pseudonym_change.silent_period_s` (5 s period, 20 s run, 1 s cadence) | none → [2, 4] s | Linkability against the global observer 0.88 → 0.20 (53 → 12 of 60 changes bridged). Frames 3,955 → 2,086. Unknown signers 843 → 724 (was 4,051 before the fix below). P2PCD requests against the 300 s baseline: 377 → 843 at 5 s | The tracker (Wiedersheim et al., WONS 2010) predicts where a vehicle will be; a 2-4 s gap breaks the prediction (Huang et al., "silent cascade", SECON 2005). Silence costs awareness frames. |
-| `messages.rate_hz` (50 ms step) | 5 → 10 → 20 Hz | Frames 450 → 899 → 1,790. Security bytes 54 → 96 → 179 kB. CBR (sampled) 0.003 → 0.077 → 0.152. AoI 115 → 65 → 39 ms | The load follows the rate (airtime ratio 2.0 for each doubling). The 5 Hz CBR is under **Limits**. |
+| `messages.rate_hz` (50 ms step) | 5 → 10 → 20 Hz | Frames 450 → 899 → 1,790. Security bytes 54 → 96 → 179 kB. CBR (sampled) 0.048 → 0.076 → 0.152. AoI 115 → 65 → 39 ms | The load follows the rate (airtime ratio 2.0 for each doubling). The 5 Hz CBR is under **Limits**. |
 | `messages.path_history_points` **new** (30 vehicles, 12 s) | 15 → 1 → 0 | Payload 202,734 → 202,580 → 166,610 B. Air bytes 741,606 → 741,452 → 705,482 B. Envelope/payload 1.895 → 1.897 → 2.306 | Part II's path history is about 10 B a message here. A 12 s drive on a straight grid keeps about one point, because a chord may run 300 m (J2945/1), so the cap binds at 1 and not between 1 and 15. |
 | `security.envelope` (GN/BTP, CAM + DENM, 5 s cadence) | ieee1609.2 → etsi103097 | Security bytes 715,354 → 717,469 B. Certificate share 0.033 → 0.035. 19 DENMs in both | TS 103 097 is a profile of 1609.2, so a CAM is byte-identical under both (§5.1-5.2). What differs is that a DENM must carry a certificate (§7.1.2). |
 | `net.uu.params.preset` / `penetration` | 5g-first-hop → 4g-west-coast; penetration 1 → 0.5 | Top-up exchange 1,136 → 1,259 ms. At half penetration: 10 vehicles with a modem instead of 20; 10 vehicles starved, 39 s without a valid certificate | The presets are the measured Uu latencies (`UuLatencyPreset`). A vehicle with no modem and no relay cannot top up. |
@@ -83,14 +86,14 @@ counts, because a count-weighted mean of rates over-weights a busy window.
 
 ## Limits found
 
-**CBR at 5 Hz reads about 0 in a fleet spawned in one instant.**
+**CBR at 5 Hz read about 0 in a fleet spawned in one instant (fixed 2026-10-12).**
 
-- The MAC reports the CBR of its last 100 ms at each 1 s flush.
-- A node's phase moves its generation inside a mobility step, not across the message
-  period, so a fleet that starts together sends at 5 Hz only in the even 100 ms slots.
-- The sample therefore misses every frame. Airtime and offered load are correct.
-- Fixing it needs either a CBR averaged over the whole window, or a phase spread over the
-  period. A wider phase window does not do it, because the phase is folded into the step.
+- The MAC reports the CBR of its last 100 ms at each 1 s flush, and the phase window was
+  100 ms whatever the period, so at 5 Hz every frame fell in the even 100 ms slots.
+- The phase window is now the message period (`messages.rate_hz`), as J2945/1 and
+  EN 302 637-2 have each station time its messages independently; a node's first step
+  already waits for its whole phase. CBR at 5 / 10 / 20 Hz: 0.048 / 0.076 / 0.152.
+  The 10 Hz default keeps its 100 ms window, so no default digest moves.
 
 **The pseudonym period's effect follows the certificate cadence's phase.** With a 5 s
 cadence and a 5 s period, every change falls just before a certificate, and 100 changes
