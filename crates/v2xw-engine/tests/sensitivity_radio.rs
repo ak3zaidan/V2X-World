@@ -241,6 +241,13 @@ fn cv2x_a_higher_mcs_lowers_prr_at_range() {
 }
 
 #[test]
+fn cv2x_mcs_and_payload_move_the_frequency_footprint_not_the_airtime() {
+    cv2x("LTE MCS 7->11", "cbr_mean");
+    cv2x("LTE MCS 7->11", "airtime_us");
+    cv2x("LTE certificate on every message", "cbr_mean");
+}
+
+#[test]
 fn cv2x_more_vehicles_load_the_pool() {
     cv2x("LTE vehicles 40->120", "cbr_mean");
     cv2x("LTE vehicles 40->120", "collision_rate");
@@ -265,6 +272,7 @@ fn cv2x_blind_retransmissions_cost_load_and_buy_prr() {
 fn cv2x_sps_parameters_move_access_and_reselection() {
     cv2x("LTE RRI 100->50 ms", "access_ms");
     cv2x("LTE keep probability 0.8->0", "sl_selections");
+    cv2x("NR keep probability 0->0.8", "sl_selections");
     cv2x("LTE RSRP threshold -> -60 dBm", "collision_rate");
 }
 

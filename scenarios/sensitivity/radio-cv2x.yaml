@@ -26,6 +26,21 @@ rows:
     metric: prr_600_1000
     expect: down
     source: a higher MCS needs a higher SINR for the same BLER (TS 36.213 Table 8.6.1-1)
+  - name: LTE MCS 7->11
+    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {mcs: 11}}}
+    metric: cbr_mean
+    expect: down
+    source: a higher MCS carries the same transport block on fewer sub-channels (TS 36.213 Table 7.1.7.2.1-1), and CBR counts busy sub-channels
+  - name: LTE MCS 7->11
+    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {mcs: 11}}}
+    metric: airtime_us
+    expect: same
+    source: a sidelink transmission is one subframe (1 ms) whatever the MCS; the MCS moves frequency, not time
+  - name: LTE certificate on every message
+    set: {security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    metric: cbr_mean
+    expect: up
+    source: the larger transport block needs more sub-channels at the same MCS
   # Load.
   - name: LTE vehicles 40->120
     set: {actors.vehicles.demand.params.max_total_vehicles: 120}
@@ -111,3 +126,10 @@ rows:
     set: {radio.sidelink.noise_figure_db: 15.0}
     metric: prr_600_1000
     expect: down
+  - name: NR keep probability 0->0.8
+    base_set: {radio.rat: nr-v2x-pc5}
+    set: {radio.sidelink.resource_keep_probability: 0.8}
+    metric: sl_selections
+    expect: down
+    band: [0.3, 0.7]
+    source: at each counter expiry a new selection happens with 1 - P (TS 38.321 5.22.1.1; NR's default sl-ProbResourceKeep is 0)
