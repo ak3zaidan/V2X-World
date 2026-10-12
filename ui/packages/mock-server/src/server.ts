@@ -297,6 +297,18 @@ export class MockEngineServer {
     const url = new URL(req.url ?? "/", "http://localhost");
     const headers = this.#crossOriginHeaders();
 
+    // The mock engine has no agent. It says so on `/agent/status` (200, `available: false`), as
+    // `v2xw-server --no-agent` does, so the Studio asks once and stays quiet instead of polling
+    // routes that 404 (each one a browser console error).
+    if (url.pathname.startsWith("/agent/")) {
+      const reason =
+        "This is the mock engine, which has no agent. The agent is part of the real engine: `v2xw-server` and `v2xw serve` both serve it (`./run-sim.sh <scenario>`, model keys from .env).";
+      if (url.pathname === "/agent/status") this.#json(res, 200, { available: false, reason });
+      else if (url.pathname === "/agent/compare-signatures" && req.method === "GET") this.#json(res, 200, { job: null });
+      else this.#json(res, 503, { error: reason });
+      return;
+    }
+
     if (url.pathname === "/healthz") {
       this.#json(res, 200, { ok: true, engine: "vwp-mock-server 0.1.0", runs: [this.runId] });
       return;

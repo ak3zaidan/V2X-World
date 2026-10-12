@@ -2098,8 +2098,10 @@ impl Phase2 {
         digest: &v2xw_msg::sec_types::HashedId8,
         i: u32,
         j: u32,
-    ) {
-        self.by_digest.insert(digest_key(digest), (node, i, j));
+    ) -> bool {
+        self.by_digest
+            .insert(digest_key(digest), (node, i, j))
+            .is_none()
     }
 
     /// Arms this node as an attacker if the scenario's selection rule names it.

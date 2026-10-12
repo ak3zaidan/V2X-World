@@ -3396,6 +3396,52 @@ fn world_site_count(s: &Scenario) -> Option<usize> {
     }
 }
 
+/// One warning per roadside-unit hardware profile whose post-quantum signature costs come
+/// from its flagged software proxy (`pq_software_proxy` in the profile YAML) rather than
+/// a figure for that device. No roadside unit publishes a post-quantum figure, so under a
+/// post-quantum or hybrid `security.signature` every RSU verifies (and signs) at a
+/// comparable board's benchmark. Not an error — the run is legitimate and the alternative
+/// was an RSU that dropped every post-quantum message unverified — but a result that turns
+/// on RSU verification load must say so. `v2xw validate` prints these as notes and the run
+/// manifest carries them in `warnings`.
+pub fn pq_rsu_proxy_warnings(s: &Scenario) -> Vec<String> {
+    let pq = v2xw_sec::scheme::signature(&s.security.signature)
+        .is_some_and(|x| x.mode != v2xw_sec::scheme::SchemeMode::Classical);
+    if !pq {
+        return Vec::new();
+    }
+    let default = || crate::phase2::DEFAULT_RSU_PROFILE.to_string();
+    let mut ids = BTreeSet::new();
+    for r in &s.actors.rsus {
+        ids.insert(r.profile.clone().unwrap_or_else(default));
+    }
+    if let Some(p) = &s.actors.rsu_placement {
+        ids.insert(p.profile.clone().unwrap_or_else(default));
+    }
+    let (sign_op, verify_op) = v2xw_node::profile::signature_ops(&s.security.signature);
+    ids.into_iter()
+        .filter_map(|id| {
+            let p = v2xw_node::profiles::get(&id)?;
+            let ops: Vec<&str> = [sign_op, verify_op]
+                .into_iter()
+                .filter(|op| p.op_cost_is_pq_proxy(op))
+                .collect();
+            (!ops.is_empty()).then(|| {
+                format!(
+                    "roadside profile '{id}' prices {} for security.signature '{}' from a \
+                     post-quantum SOFTWARE PROXY ({}): no roadside unit publishes a \
+                     post-quantum figure, so these are another board's benchmarks, likely \
+                     optimistic for this unit; treat RSU verification load and latency \
+                     under this scheme as indicative",
+                    ops.join(" and "),
+                    s.security.signature,
+                    p.pq_software_proxy.join(", ")
+                )
+            })
+        })
+        .collect()
+}
+
 /// The inputs the scenario names **on disk**, checked before anything is built: the map
 /// extract and the terrain raster.
 ///

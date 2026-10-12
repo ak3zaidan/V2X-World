@@ -287,6 +287,9 @@ async fn serve(argv: Vec<String>) -> std::process::ExitCode {
         options.extension = Some(h.router());
         h
     });
+    if agent_host.is_none() {
+        options.extension = Some(AgentHost::off_router());
+    }
 
     // A checkpoint names its run: the resolved scenario beside it and the build timestamp.
     // The run is served paused at the checkpoint's instant, computed there again (the

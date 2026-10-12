@@ -243,6 +243,33 @@ impl AgentHost {
             .with_state(self.clone())
     }
 
+    /// The one route an engine started with `--no-agent` serves: `GET /agent/status` answers
+    /// 200 `{"available": false, ...}`, so the Studio learns once that there is no agent and
+    /// stops asking, instead of polling a 404 (which every browser logs as a console error).
+    #[must_use]
+    pub fn off_router() -> Router {
+        const REASON: &str = "The engine was started with --no-agent, so it serves no agent \
+            (`v2xw-server` and `v2xw serve` serve one by default). Restart it without --no-agent \
+            (./run-sim.sh <scenario>) and reload this page.";
+        Router::new()
+            .route(
+                "/agent/status",
+                get(|| async {
+                    reply(
+                        StatusCode::OK,
+                        json!({ "available": false, "reason": REASON }),
+                    )
+                }),
+            )
+            // The Studio's signature-comparison pane reads any job already running on mount.
+            .route(
+                "/agent/compare-signatures",
+                get(|| async { reply(StatusCode::OK, json!({ "job": null })) }).post(|| async {
+                    reply(StatusCode::SERVICE_UNAVAILABLE, json!({ "error": REASON }))
+                }),
+            )
+    }
+
     /// The agent, built on first use so the engine's origin is known.
     fn with_agent<R>(&self, f: impl FnOnce(&mut HostAgent) -> R) -> Result<R, String> {
         let mut slot = self
@@ -420,6 +447,7 @@ async fn status(State(host): State<AgentHost>, headers: HeaderMap) -> Response {
     reply(
         StatusCode::OK,
         json!({
+            "available": true,
             "model": model,
             "provider": provider,
             "key_source": v2xw_copilot::claude::key_source(),

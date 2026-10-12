@@ -30,8 +30,11 @@
 //!
 //! * [`DetectionLevel::Report`] — the predictor is "at least one report reached the
 //!   authority about this subject". The population is the declared subjects.
-//! * [`DetectionLevel::Vehicle`] — the predictor is "the authority decided to revoke this
-//!   subject". Same population.
+//! * [`DetectionLevel::Vehicle`] — the predictor is "the authority decided to revoke one
+//!   of this vehicle's subjects". The population is the declared subjects' true actors:
+//!   a vehicle that signs under twenty pseudonyms is one vehicle, and counting each
+//!   pseudonym it was not revoked under as a false negative would sink recall to 1/20
+//!   for an authority that revoked it at once.
 //!
 //! # Where the truth comes from
 //!
@@ -39,7 +42,9 @@
 //! is *really* misbehaving is ground truth, and this crate cannot derive the link — it is
 //! exactly the ground-truth firewall of invariants I-C2 and I-T2. The run therefore
 //! **declares** it: [`DetectionProvider::declare_subject`] states that a subject id belongs
-//! to a true actor, and the attacker set comes from the `gt.attack.action` channel. A
+//! to a true actor — in an engine run, from the `gt.subject` channel, one record per
+//! pseudonym digest the first time it goes on the air — and the attacker set comes from
+//! the `gt.attack.action` channel. A
 //! subject that was never declared is counted into
 //! [`DetectionProvider::undeclared_subjects`] and left out of the matrix, because guessing
 //! would be worse than reporting the gap.
@@ -54,7 +59,8 @@ use v2xw_core::time::{Duration, SimTime};
 
 use crate::cards;
 use crate::channels::{
-    ChannelView, DetObservationView, GtAttackActionView, MaDecisionView, MaReportView, decode,
+    ChannelView, DetObservationView, GtAttackActionView, GtSubjectView, MaDecisionView,
+    MaReportView, decode,
 };
 use crate::def::{Agg, DEFAULT_LEVEL, Dim, DimValue, Dims, MetricDef, MetricSample, SampleValue};
 use crate::provider::MetricProvider;
@@ -66,7 +72,8 @@ use crate::stats::{ConfidenceLevel, Distribution, Estimate, Proportion, RatioEst
 pub enum DetectionLevel {
     /// The predictor is "at least one report about this subject reached the authority".
     Report,
-    /// The predictor is "the authority decided to revoke this subject".
+    /// The predictor is "the authority decided to revoke one of this vehicle's subjects";
+    /// one trial per true actor.
     Vehicle,
 }
 
@@ -340,6 +347,21 @@ impl DetectionProvider {
     #[must_use]
     pub fn matrix(&self, level: DetectionLevel) -> ConfusionMatrix {
         let mut m = ConfusionMatrix::new();
+        if level == DetectionLevel::Vehicle {
+            // One trial per true actor: revoked if any of its subjects was.
+            let mut revoked: BTreeMap<ActorId, bool> = BTreeMap::new();
+            for (subject, actor) in &self.subject_actor {
+                let r = self
+                    .decision
+                    .get(subject)
+                    .is_some_and(|(_, d)| d == "revoke");
+                *revoked.entry(*actor).or_insert(false) |= r;
+            }
+            for (actor, predicted) in revoked {
+                m.observe(predicted, self.attackers.contains(&actor));
+            }
+            return m;
+        }
         // Iteration over a `BTreeMap`, so the matrix is built in subject order. Integer
         // counts make it order-independent anyway; the order is fixed so that a future
         // per-subject dump is too.
@@ -667,6 +689,7 @@ impl MetricProvider for DetectionProvider {
     fn subscribe(&self) -> Vec<ChannelName> {
         vec![
             GtAttackActionView::channel_name(),
+            GtSubjectView::channel_name(),
             MaReportView::channel_name(),
             MaDecisionView::channel_name(),
             DetObservationView::channel_name(),
@@ -677,6 +700,10 @@ impl MetricProvider for DetectionProvider {
         match ev.channel {
             GtAttackActionView::CHANNEL => match decode::<GtAttackActionView>(ev) {
                 Ok(v) => self.on_attack(&v),
+                Err(_) => self.rejected += 1,
+            },
+            GtSubjectView::CHANNEL => match decode::<GtSubjectView>(ev) {
+                Ok(v) => self.declare_subject(v.subject, v.actor),
                 Err(_) => self.rejected += 1,
             },
             MaReportView::CHANNEL => match decode::<MaReportView>(ev) {
@@ -765,24 +792,37 @@ impl MetricProvider for DetectionProvider {
         // Latencies: over attackers whose onset and whose first correct report/decision are
         // both known. Built over `BTreeMap`s and reduced by `Distribution`, which sorts, so
         // the summary is a function of the data alone.
-        let mut detect = Distribution::new();
-        let mut decide = Distribution::new();
+        // One sample per attacker: its earliest correct report and revocation over every
+        // subject it signed under.
+        let mut first: BTreeMap<ActorId, (Option<SimTime>, Option<SimTime>)> = BTreeMap::new();
         for (subject, actor) in &self.subject_actor {
-            if !self.attackers.contains(actor) {
-                continue;
-            }
             let Some(&onset) = self.onset.get(actor) else {
                 continue;
             };
+            if !self.attackers.contains(actor) {
+                continue;
+            }
+            let e = first.entry(*actor).or_insert((None, None));
             if let Some(&t) = self.first_report.get(subject)
                 && t >= onset
             {
-                detect.observe(Duration::between(onset, t).as_secs_f64());
+                e.0 = Some(e.0.map_or(t, |x| x.min(t)));
             }
             if let Some((t, decision)) = self.decision.get(subject)
                 && decision == "revoke"
                 && *t >= onset
             {
+                e.1 = Some(e.1.map_or(*t, |x| x.min(*t)));
+            }
+        }
+        let mut detect = Distribution::new();
+        let mut decide = Distribution::new();
+        for (actor, (report, decision)) in &first {
+            let onset = self.onset[actor];
+            if let Some(t) = report {
+                detect.observe(Duration::between(onset, *t).as_secs_f64());
+            }
+            if let Some(t) = decision {
                 decide.observe(Duration::between(onset, *t).as_secs_f64());
             }
         }
@@ -1040,6 +1080,35 @@ mod tests {
         assert_eq!(sample(&s, "time_to_detect").value.point(), Some(2.5));
         assert_eq!(sample(&s, "time_to_detect").value.n(), 1);
         assert_eq!(sample(&s, "time_to_decision").value.point(), Some(5.0));
+    }
+
+    #[test]
+    fn gt_subject_declares_and_a_vehicle_is_one_trial_whatever_its_pseudonyms() {
+        let mut p = DetectionProvider::new().with_min_samples(1);
+        // Attacker 1 signs under three pseudonyms, benign 2 under two.
+        for (s, a) in [("a1", 1), ("a2", 1), ("a3", 1), ("b1", 2), ("b2", 2)] {
+            p.on_event(&rec("gt.subject", json!({"t":0,"subject":s,"actor":a})));
+        }
+        p.on_event(&rec(
+            "gt.attack.action",
+            json!({"t":0,"actor":1,"attacker":"ghost","action":"x"}),
+        ));
+        p.on_event(&rec(
+            "ma.decision",
+            json!({"t":1_000_000_000u64,"subject":"a2","decision":"revoke"}),
+        ));
+        assert!(p.undeclared_subjects().is_empty());
+        assert_eq!(
+            p.matrix(DetectionLevel::Vehicle),
+            ConfusionMatrix {
+                tp: 1,
+                fp: 0,
+                fn_: 0,
+                tn: 1
+            }
+        );
+        // The report level stays per subject.
+        assert_eq!(p.matrix(DetectionLevel::Report).fn_, 3);
     }
 
     #[test]

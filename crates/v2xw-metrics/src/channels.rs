@@ -1220,6 +1220,24 @@ impl ChannelView for GtAttackActionView {
     const CHANNEL: &'static str = "gt.attack.action";
 }
 
+/// `gt.subject` — the ground-truth join from a pseudonym digest, as reports and decisions
+/// name their subject, to the true actor that signed with it (GT). Emitted once per
+/// digest, the first time it goes on the air. It is the declaration
+/// `DetectionProvider::declare_subject` reads; a node never sees it (invariant I-C2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GtSubjectView {
+    /// The instant the digest first went on the air.
+    pub t: SimTime,
+    /// The pseudonym digest, hex, exactly as `ma.report` names a subject.
+    pub subject: String,
+    /// The true actor.
+    pub actor: ActorId,
+}
+
+impl ChannelView for GtSubjectView {
+    const CHANNEL: &'static str = "gt.subject";
+}
+
 /// `net.bytes` — the reader-side projection of the `net.*` byte-accounting records
 /// (08-measurement-and-data.md §2.1 names the source channels `node.tx`, `net.*`,
 /// `proto.msg`).

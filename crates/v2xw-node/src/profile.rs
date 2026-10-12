@@ -775,6 +775,15 @@ pub struct HardwareProfile {
     /// cycle ratio and flagged as such — stands in.
     #[serde(default)]
     pub crypto_anchors: Vec<String>,
+    /// Catalogue profiles that price a *post-quantum* operation this profile publishes no
+    /// figure for and [`HardwareProfile::crypto_anchors`] does not reach: a flagged
+    /// software proxy from a comparable board, never a measurement of this device. It
+    /// exists because no roadside unit publishes a post-quantum figure, and without one an
+    /// RSU drops every post-quantum message as `verify_unpriced`. A classical operation is
+    /// never priced from here, so a classical run is unchanged. A scenario whose roadside
+    /// units lean on it gets a validation warning (`roadside.profile`).
+    #[serde(default)]
+    pub pq_software_proxy: Vec<String>,
     /// The model card, built once at load.
     #[serde(skip, default = "empty_card")]
     card: ModelCard,
@@ -1002,6 +1011,61 @@ impl HardwareProfile {
         self.crypto_anchors
             .iter()
             .find_map(|a| d.cost_duration(kind, a, c))
+            .or_else(|| self.pq_proxy_cost(primitive, kind))
+    }
+
+    fn pq_proxy_cost(
+        &self,
+        primitive: v2xw_sec::primitive::PrimitiveId,
+        kind: v2xw_sec::primitive::PrimitiveOpKind,
+    ) -> Option<Duration> {
+        if !v2xw_sec::scheme::is_post_quantum_primitive(primitive) {
+            return None;
+        }
+        let c = v2xw_sec::primitive::PrimitiveCatalogue::standard();
+        let d = c.get(primitive)?;
+        // A published figure on any proxy board before a ratio-derived one on an earlier
+        // board: the MK6 publishes ML-DSA under Botan and Falcon under liboqs.
+        let published = self
+            .pq_software_proxy
+            .iter()
+            .find(|a| d.cost_duration(kind, a, c).is_some() && !d.cost_is_derived(kind, a, c));
+        published
+            .or_else(|| {
+                self.pq_software_proxy
+                    .iter()
+                    .find(|a| d.cost_duration(kind, a, c).is_some())
+            })
+            .and_then(|a| d.cost_duration(kind, a, c))
+    }
+
+    /// Whether `op`'s cost on this profile comes from its post-quantum software proxy
+    /// ([`HardwareProfile::pq_software_proxy`]): no published figure, no anchor, only the
+    /// flagged comparable-board benchmark. For a hybrid, whether any half does.
+    pub fn op_cost_is_pq_proxy(&self, op: &str) -> bool {
+        if let Some(parts) = v2xw_sec::scheme::op_components(op) {
+            return parts.iter().any(|p| self.op_cost_is_pq_proxy(p));
+        }
+        let Some((primitive, kind)) = v2xw_sec::scheme::primitive_of_op(op) else {
+            return false;
+        };
+        let published = (self.hsm.kind != HsmKind::None
+            && self.hsm.ops.get(op).and_then(HsmOp::service_time).is_some())
+            || self
+                .software_crypto
+                .get(op)
+                .and_then(CostUs::service_time)
+                .is_some();
+        if published {
+            return false;
+        }
+        let c = v2xw_sec::primitive::PrimitiveCatalogue::standard();
+        let anchored = c.get(primitive).is_some_and(|d| {
+            self.crypto_anchors
+                .iter()
+                .any(|a| d.cost_duration(kind, a, c).is_some())
+        });
+        !anchored && self.pq_proxy_cost(primitive, kind).is_some()
     }
 
     /// `op`'s modelled cost with where it runs and how the figure was arrived at, or
@@ -1044,6 +1108,13 @@ impl HardwareProfile {
                 CostBasis::SoftwareBenchmark
             };
             facts.source = c.source.clone();
+        } else if self.op_cost_is_pq_proxy(op) {
+            facts.basis = CostBasis::SoftwareProxy;
+            facts.source = Some(format!(
+                "post-quantum software proxy: the catalogue figure on {} (a comparable \
+                 board, not this device)",
+                self.pq_software_proxy.join(" / ")
+            ));
         }
         Some(facts)
     }

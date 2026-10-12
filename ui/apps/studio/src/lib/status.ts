@@ -79,6 +79,12 @@ export interface StatusInput {
   readonly reconnectAttempts?: number;
   /** Why the engine is in `error`, in its words, when it said. */
   readonly failure?: string;
+  /**
+   * True when the engine holds staged settings (`run.status.staged_hash`): an edit applied in
+   * the settings window, or a setup the agent put there, which the next `run.start` runs.
+   * Play (`run.resume`) would carry on the run as it was and silently ignore them.
+   */
+  readonly staged?: boolean;
 }
 
 const RUN: StatusAction = {
@@ -94,6 +100,12 @@ const RUN_AGAIN: StatusAction = {
 };
 
 const PLAY: StatusAction = { label: "Play", kind: "resume", hint: "Let the clock advance again" };
+
+const RUN_STAGED: StatusAction = {
+  label: "Run",
+  kind: "run",
+  hint: "Start the scenario from the beginning with the changed settings",
+};
 
 const CONNECT: StatusAction = {
   label: "Connect",
@@ -258,6 +270,18 @@ export function describeStatus(input: StatusInput): StatusView {
       };
 
     case "paused":
+      // Settings changed since this run started: Play would carry on the old run and the
+      // change (the agent's "Ready in Settings. Press Run") would never take effect.
+      if (input.staged === true) {
+        return {
+          tone: "idle",
+          chip: input.atStart === true ? "Ready" : "Paused",
+          headline: "Settings changed since this run started.",
+          detail: "Press Run to start again with them; the paused run keeps its old settings.",
+          action: RUN_STAGED,
+          banner: true,
+        };
+      }
       if (input.atStart === true) {
         return {
           tone: "idle",

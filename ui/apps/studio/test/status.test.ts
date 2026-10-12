@@ -144,6 +144,18 @@ describe("describeStatus", () => {
     expect(describeStatus(input({ runState: "paused", atStart: false })).chip).toBe("Paused");
   });
 
+  it("offers Run, not Play, when settings are staged on a paused run", () => {
+    // The agent stages a setup and says "Press Run"; Play (run.resume) would ignore it.
+    for (const atStart of [true, false]) {
+      const view = describeStatus(input({ runState: "paused", atStart, staged: true }));
+      expect(view.action?.kind).toBe("run");
+      expect(view.action?.label).toBe("Run");
+      expect(view.banner).toBe(true);
+    }
+    // A running run keeps its own controls (the header adds Pause); staged settings wait for it.
+    expect(describeStatus(input({ runState: "running", staged: true })).action?.kind).not.toBe("run");
+  });
+
   it("maps every tone onto a pill class", () => {
     expect(toneClass("ok")).toBe("ok");
     expect(toneClass("busy")).toBe("warn");
