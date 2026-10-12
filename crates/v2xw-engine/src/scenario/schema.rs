@@ -871,6 +871,60 @@ pub struct Vehicles {
     /// default, so a scenario that does not mention it keeps its content hash.
     #[serde(default, skip_serializing_if = "Drivers::is_default")]
     pub drivers: Drivers,
+    // traffic audit
+    /// The positioning error the vehicles' GNSS receivers make, which every BSM's
+    /// position carries. Unset is a standard automotive receiver (Reid 2019 error
+    /// percentiles, the legacy engine's outlier and burst rates).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gnss: Option<GnssSettings>,
+}
+
+// traffic audit
+/// The GNSS error model's settings ([`Vehicles::gnss`]); each unset field keeps the
+/// model's default ([`v2xw_mobility::gnss::GaussMarkovParams`]).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GnssSettings {
+    /// An RTK-corrected receiver (Reid 2019's OxTS RT3000 rows: 0.26 m at the 68th
+    /// percentile) rather than a standard one (about 1.5 m). Unset is standard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtk: Option<bool>,
+    /// How often a fix jumps by an outlier, per second. Unset is 0.01.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outlier_rate_hz: Option<f64>,
+    /// How far an outlier puts the fix, metres. Unset is 12 m.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outlier_magnitude_m: Option<f64>,
+    /// How often a degraded burst (multipath, an urban canyon) starts, per second. Unset
+    /// is 0.006.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub burst_rate_hz: Option<f64>,
+    /// The chance each fix is lost entirely. Unset is 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outage_probability: Option<f64>,
+}
+
+impl GnssSettings {
+    /// The model's parameters with these over the defaults.
+    pub fn params(&self) -> v2xw_mobility::gnss::GaussMarkovParams {
+        let mut p = v2xw_mobility::gnss::GaussMarkovParams::default();
+        if let Some(v) = self.rtk {
+            p.rtk = v;
+        }
+        if let Some(v) = self.outlier_rate_hz {
+            p.outlier_rate = v;
+        }
+        if let Some(v) = self.outlier_magnitude_m {
+            p.outlier_magnitude_m = v;
+        }
+        if let Some(v) = self.burst_rate_hz {
+            p.burst_rate = v;
+        }
+        if let Some(v) = self.outage_probability {
+            p.outage_rate = v;
+        }
+        p
+    }
 }
 
 /// How human the drivers are (`actors.vehicles.drivers`).
@@ -1057,6 +1111,7 @@ impl Default for Vehicles {
             equipped_fraction: Vehicles::default_equipped(),
             driving: v2xw_mobility::carfollowing::library::DrivingSpec::default(),
             drivers: Drivers::default(),
+            gnss: None,
         }
     }
 }

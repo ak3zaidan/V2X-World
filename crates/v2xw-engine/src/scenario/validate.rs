@@ -1214,6 +1214,36 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the pedestrian clearance walking speed",
     },
+    // GNSS: 0.01 outliers/s of 12 m and 0.006 bursts/s are the legacy engine's draws
+    // (04-models.md §3.8); the bounds are guards around them.
+    Bound {
+        path: "actors.vehicles.gnss.outlier_rate_hz",
+        lo: 0.0,
+        hi: 0.5,
+        exclusive_lo: false,
+        what: "the GNSS outlier rate",
+    },
+    Bound {
+        path: "actors.vehicles.gnss.outlier_magnitude_m",
+        lo: 1.0,
+        hi: 200.0,
+        exclusive_lo: false,
+        what: "the GNSS outlier magnitude",
+    },
+    Bound {
+        path: "actors.vehicles.gnss.burst_rate_hz",
+        lo: 0.0,
+        hi: 0.5,
+        exclusive_lo: false,
+        what: "the GNSS degraded-burst rate",
+    },
+    Bound {
+        path: "actors.vehicles.gnss.outage_probability",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the GNSS outage probability",
+    },
     // --- end traffic audit ----------------------------------------------------
 ];
 
@@ -2771,6 +2801,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Walk interval an imported world's greens leave room for.",
     },
     KeyStatus {
+        path: "actors.vehicles.gnss",
+        status: Status::Wired,
+        note: "The positioning error every equipped vehicle's BSM carries: receiver grade, outliers, degraded bursts and outages.",
+    },
+    KeyStatus {
         path: "world.signals.pedestrian_speed_mps",
         status: Status::Wired,
         note: "Walking speed an imported world's pedestrian clearance is timed for.",
@@ -3412,6 +3447,35 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 "traffic",
                 "sets the native engine's junction or kerbside behaviour, and \
                  mobility.provider is sumo"
+                    .to_string(),
+            ));
+        }
+    }
+    if let Some(g) = &s.actors.vehicles.gnss {
+        for (path, v) in [
+            ("actors.vehicles.gnss.outlier_rate_hz", g.outlier_rate_hz),
+            ("actors.vehicles.gnss.outlier_magnitude_m", g.outlier_magnitude_m),
+            ("actors.vehicles.gnss.burst_rate_hz", g.burst_rate_hz),
+            ("actors.vehicles.gnss.outage_probability", g.outage_probability),
+        ] {
+            if let Some(v) = v {
+                bounded_at(path, path, v, e);
+            }
+        }
+        if g.outlier_rate_hz == Some(0.0) && g.outlier_magnitude_m.is_some() {
+            e.push(conflict(
+                "actors.vehicles.gnss.outlier_magnitude_m",
+                "is set, and actors.vehicles.gnss.outlier_rate_hz is 0: no outliers".to_string(),
+            ));
+        }
+        if s.actors.vehicles.equipped_fraction == 0.0
+            && (s.actors.vru.device_fraction == 0.0
+                || s.actors.vru.pedestrians + s.actors.vru.cyclists == 0)
+        {
+            e.push(conflict(
+                "actors.vehicles.gnss",
+                "is set, and nothing carries a radio (actors.vehicles.equipped_fraction is 0), \
+                 so no position is ever reported"
                     .to_string(),
             ));
         }

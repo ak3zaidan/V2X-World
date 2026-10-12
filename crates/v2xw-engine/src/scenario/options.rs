@@ -1520,6 +1520,8 @@ pub fn title(path: &str) -> Option<&'static str> {
         "world.signals.all_red_s" => "All-red between phases (minimum)",
         "world.signals.pedestrian_walk_s" => "Pedestrian walk interval",
         "world.signals.pedestrian_speed_mps" => "Pedestrian clearance walking speed",
+        "actors.vehicles.gnss" => "GNSS receivers",
+        "actors.vehicles.gnss.rtk" => "RTK-corrected receivers",
         // end traffic audit
         _ => return None,
     })

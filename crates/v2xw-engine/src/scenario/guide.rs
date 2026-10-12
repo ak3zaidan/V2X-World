@@ -266,6 +266,11 @@ const BASIC: &[Basic] = &[
         explain: "How long a traffic light takes to go through all its phases and come back to green on an imported city map.",
         recommended: "60 to 120 s; 90 s is the default.",
     },
+    Basic {
+        path: "actors.vehicles.gnss.rtk",
+        explain: "Whether vehicles position themselves with survey-grade corrected GPS (about 0.3 m) instead of an ordinary receiver (about 1.5 m). Every safety message carries this position.",
+        recommended: "Off for today's fleet; on to study what precise positioning buys.",
+    },
     // end traffic audit
 ];
 
@@ -612,6 +617,26 @@ const ADVANCED: &[Basic] = &[
         path: "actors.vehicles.drivers.bicycle.min_gap_m",
         explain: "The distance cyclists leave to the vehicle in front when queued.",
         recommended: "0.5 to 1.5 m.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.outlier_rate_hz",
+        explain: "How often a vehicle's GPS fix jumps away for a moment.",
+        recommended: "0.01 per second (default); 0 for clean positions.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.outlier_magnitude_m",
+        explain: "How far such a jump puts the reported position.",
+        recommended: "5 to 30 m.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.burst_rate_hz",
+        explain: "How often a stretch of poor positioning starts, as among tall buildings.",
+        recommended: "0.006 per second (default); higher for a dense downtown.",
+    },
+    Basic {
+        path: "actors.vehicles.gnss.outage_probability",
+        explain: "The chance each position fix is lost altogether, as in a tunnel.",
+        recommended: "0 (default) to 0.05.",
     },
     // end traffic audit
 ];

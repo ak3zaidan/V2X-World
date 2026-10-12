@@ -749,10 +749,15 @@ pub fn register_demand(
 /// The default is the Gauss–Markov receiver of 04-models.md §2.10 rather than a perfect
 /// one: a node whose belief equals the truth makes every plausibility detector trivially
 /// correct, which is the single most misleading default this engine could have.
-pub fn build_gnss(_scenario: &Scenario) -> Box<dyn GnssModel> {
-    Box::new(v2xw_mobility::GaussMarkovGnss::new(
-        v2xw_mobility::gnss::GaussMarkovParams::default(),
-    ))
+pub fn build_gnss(scenario: &Scenario) -> Box<dyn GnssModel> {
+    // traffic audit: `actors.vehicles.gnss` over the model's defaults.
+    let params = scenario
+        .actors
+        .vehicles
+        .gnss
+        .as_ref()
+        .map_or_else(v2xw_mobility::gnss::GaussMarkovParams::default, |g| g.params());
+    Box::new(v2xw_mobility::GaussMarkovGnss::new(params))
 }
 
 /// The radio families a scenario may name a model for in `radio.models`, and the ids
