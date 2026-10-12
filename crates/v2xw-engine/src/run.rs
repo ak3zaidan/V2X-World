@@ -4494,7 +4494,13 @@ impl Engine {
                 } = self;
                 let mut buffer = crate::ctx::MemoryRecorder::new();
                 let mut ctx = EngineCtx::new(
-                    scheduler, rng, world, snapshot, provenance, params, &mut buffer,
+                    scheduler,
+                    rng,
+                    world,
+                    snapshot,
+                    provenance,
+                    params,
+                    &mut buffer,
                 );
                 let e = phase2.as_mut().and_then(|p| {
                     p.falsify(

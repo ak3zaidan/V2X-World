@@ -20,14 +20,20 @@ fn every_rsu_prices_every_post_quantum_scheme_from_the_proxy() {
         } else {
             &[]
         };
-        for scheme in ["ml-dsa-44", "ml-dsa-65", "falcon-512"].iter().chain(hybrid) {
+        for scheme in ["ml-dsa-44", "ml-dsa-65", "falcon-512"]
+            .iter()
+            .chain(hybrid)
+        {
             let (sign, verify) = signature_ops(scheme);
             for op in [sign, verify] {
                 let (t, _) = p
                     .op_cost(op)
                     .unwrap_or_else(|| panic!("{id} prices no {op} under {scheme}"));
                 assert!(t.as_nanos() > 0, "{id} {op}");
-                assert!(p.op_cost_is_pq_proxy(op), "{id} {op} is not flagged as the proxy");
+                assert!(
+                    p.op_cost_is_pq_proxy(op),
+                    "{id} {op} is not flagged as the proxy"
+                );
                 let facts = p.op_cost_facts(op).expect("facts");
                 if v2xw_sec::scheme::op_components(op).is_none() {
                     assert_eq!(

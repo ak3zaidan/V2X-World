@@ -762,7 +762,11 @@ pub(super) fn undo_setup<P: LlmProvider, T: RpcTransport>(
         .rpc
         .call("scenario.get", &json!({}))
         .ok()
-        .and_then(|v| v.get("running_hash").and_then(Value::as_str).map(str::to_string));
+        .and_then(|v| {
+            v.get("running_hash")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
     let running_before = b.get("running_hash").and_then(Value::as_str);
     let staged_before = b.get("staged").is_some_and(|s| !s.is_null());
     match running_before {

@@ -574,7 +574,9 @@ fn undo_after_the_setup_ran_stages_the_settings_from_before() {
     let mut agent = Agent::new(Some(provider), engine)
         .expect("builds")
         .with_policy(quick());
-    agent.ask("Portland please", &mut |_| ()).expect("completes");
+    agent
+        .ask("Portland please", &mut |_| ())
+        .expect("completes");
     *hash.lock().unwrap() = "after-run".into();
     log.lock().unwrap().clear();
     agent.undo_setup(1).expect("undoes");

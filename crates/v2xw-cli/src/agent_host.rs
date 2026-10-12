@@ -265,10 +265,7 @@ impl AgentHost {
             .route(
                 "/agent/compare-signatures",
                 get(|| async { reply(StatusCode::OK, json!({ "job": null })) }).post(|| async {
-                    reply(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        json!({ "error": REASON }),
-                    )
+                    reply(StatusCode::SERVICE_UNAVAILABLE, json!({ "error": REASON }))
                 }),
             )
     }
