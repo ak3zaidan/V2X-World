@@ -24,7 +24,7 @@
 //!   - name: lower transmit power
 //!     set: { radio.devices.obu.tx_power_dbm: 5.0 }
 //!     metric: range_m
-//!     expect: down          # up | down | same
+//!     expect: down          # up | down | same | changes
 //!     band: [0.2, 0.8]      # optional: changed / base must fall in it
 //!     min_change: 0.05      # optional: relative change required (default 0.01)
 //!     base_set: { }         # optional: fields applied to both runs of this row
@@ -57,6 +57,9 @@ pub enum Direction {
     Down,
     /// The value stays within `min_change` of the base.
     Same,
+    /// The value moves by at least `min_change`, either way: for a parameter whose
+    /// direction theory does not fix (a non-monotone trade-off).
+    Changes,
 }
 
 /// One perturbation and the metric it should move.
@@ -631,6 +634,7 @@ pub fn judge(row: &Row, base: Option<f64>, value: Option<f64>) -> RowResult {
         Direction::Up => v > b && rel >= tol,
         Direction::Down => v < b && -rel >= tol,
         Direction::Same => rel.abs() <= tol,
+        Direction::Changes => rel.abs() >= tol,
     };
     if !moved {
         r.note = format!("expected {:?}, changed by {:+.1} %", row.expect, rel * 100.0);
@@ -804,6 +808,8 @@ mod tests {
         assert!(!judge(&row(Direction::Up, Some([1.8, 2.2])), Some(1.0), Some(3.0)).pass);
         assert!(judge(&row(Direction::Up, Some([1.8, 2.2])), Some(1.0), Some(2.0)).pass);
         assert!(!judge(&row(Direction::Up, None), None, Some(2.0)).pass);
+        assert!(judge(&row(Direction::Changes, None), Some(1.0), Some(0.5)).pass);
+        assert!(!judge(&row(Direction::Changes, None), Some(1.0), Some(1.0)).pass);
     }
 
     #[test]

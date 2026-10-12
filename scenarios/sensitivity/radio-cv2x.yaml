@@ -1,0 +1,113 @@
+# Radio sensitivity rows for the C-V2X sidelink (LTE-V2X mode 4 and NR-V2X mode 2).
+# `v2xw sensitivity scenarios/sensitivity/radio-cv2x.yaml`; the same rows run one test each
+# in crates/v2xw-engine/tests/sensitivity_radio.rs. docs/validation/sensitivity-radio.md
+# gives the theory and the measured table.
+base: lte-grid.yaml
+rows:
+  # Link budget.
+  - name: LTE tx power 20->5 dBm
+    set: {radio.devices.obu.tx_power_dbm: 5.0}
+    metric: range90_m
+    expect: down
+    source: log-distance link budget; -15 dB moves the PRR edge in by 10^(15/10n)
+  - name: LTE tx power 20->5 dBm
+    set: {radio.devices.obu.tx_power_dbm: 5.0}
+    metric: prr_600_1000
+    expect: down
+  - name: LTE noise figure 9->15 dB (5 dBm)
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {radio.sidelink.noise_figure_db: 15.0}
+    metric: prr_600_1000
+    expect: down
+    source: noise floor = kTB + NF (TR 36.885 A.1.1); +6 dB NF is -6 dB SNR
+  - name: LTE MCS 7->11
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {mcs: 11}}}
+    metric: prr_600_1000
+    expect: down
+    source: a higher MCS needs a higher SINR for the same BLER (TS 36.213 Table 8.6.1-1)
+  # Load.
+  - name: LTE vehicles 40->120
+    set: {actors.vehicles.demand.params.max_total_vehicles: 120}
+    metric: cbr_mean
+    expect: up
+    source: CBR is the busy share of sub-channels (TS 36.214 5.1.30), linear in offered load
+  - name: LTE vehicles 40->120
+    set: {actors.vehicles.demand.params.max_total_vehicles: 120}
+    metric: collision_rate
+    expect: up
+  - name: LTE vehicles 40->120
+    set: {actors.vehicles.demand.params.max_total_vehicles: 120}
+    metric: prr
+    expect: down
+  - name: LTE vehicles 40->120
+    set: {actors.vehicles.demand.params.max_total_vehicles: 120}
+    metric: e2e_ms_mean
+    expect: up
+  - name: LTE rate 10->20 Hz (RRI 50)
+    base_set: {time.mobility_step_ms: 50, radio.sidelink.reservation_interval_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: cbr_mean
+    expect: up
+    band: [1.5, 2.5]
+  # Blind retransmissions.
+  - name: LTE transmissions 2->1
+    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {max_transmissions: 1}}}
+    metric: cbr_mean
+    expect: down
+    band: [0.4, 0.65]
+    source: each blind retransmission occupies another sub-channel set (TS 36.213 14.1.1.4C)
+  - name: LTE transmissions 2->1
+    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {max_transmissions: 1}}}
+    metric: prr
+    expect: down
+    source: HARQ combining of the blind copy recovers marginal links
+  # SPS.
+  - name: LTE RRI 100->50 ms
+    set: {radio.sidelink.reservation_interval_ms: 50}
+    metric: access_ms
+    expect: down
+    band: [0.4, 0.7]
+    source: a packet waits for its next reserved slot, on average about RRI/2
+  - name: LTE keep probability 0.8->0
+    set: {radio.sidelink.resource_keep_probability: 0.0}
+    metric: sl_selections
+    expect: up
+    band: [1.6, 4.0]
+    source: reselection after each reselection counter expiry unless kept with P (TS 36.321 5.14.1.1)
+  - name: LTE sensing off
+    set: {radio.sidelink.sensing: false}
+    metric: collision_rate
+    expect: up
+    source: random selection baseline (Ali 2021 II.1) loses the sensing exclusion
+  - name: LTE sensing off
+    set: {radio.sidelink.sensing: false}
+    metric: sl_overlapping
+    expect: up
+  - name: LTE RSRP threshold -> -60 dBm
+    set: {radio.sidelink.rsrp_threshold_dbm: -60.0}
+    metric: collision_rate
+    expect: changes
+    min_change: 0.05
+    source: non-monotone (Gonzalez-Martin 2019); the direction depends on density
+  # NR-V2X twins.
+  - name: NR tx power 20->5 dBm
+    base_set: {radio.rat: nr-v2x-pc5}
+    set: {radio.devices.obu.tx_power_dbm: 5.0}
+    metric: range90_m
+    expect: down
+  - name: NR vehicles 40->120
+    base_set: {radio.rat: nr-v2x-pc5}
+    set: {actors.vehicles.demand.params.max_total_vehicles: 120}
+    metric: cbr_mean
+    expect: up
+  - name: NR vehicles 40->120
+    base_set: {radio.rat: nr-v2x-pc5}
+    set: {actors.vehicles.demand.params.max_total_vehicles: 120}
+    metric: collision_rate
+    expect: up
+  - name: NR noise figure 9->15 dB (5 dBm)
+    base_set: {radio.rat: nr-v2x-pc5, radio.devices.obu.tx_power_dbm: 5.0}
+    set: {radio.sidelink.noise_figure_db: 15.0}
+    metric: prr_600_1000
+    expect: down

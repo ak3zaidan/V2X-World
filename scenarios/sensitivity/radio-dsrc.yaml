@@ -1,0 +1,30 @@
+base: dsrc-grid.yaml
+rows:
+  - {name: tx power 20->5 dBm, set: {radio.devices.obu.tx_power_dbm: 5.0}, metric: range90_m, expect: down}
+  - {name: tx power 20->5 dBm, set: {radio.devices.obu.tx_power_dbm: 5.0}, metric: prr_400_600, expect: down}
+  - {name: noise figure 6->12 dB, set: {radio.phy.noise_figure_db: 12.0}, metric: range90_m, expect: down}
+  - {name: noise figure 6->12 dB, set: {radio.phy.noise_figure_db: 12.0}, metric: prr_600_1000, expect: down}
+  - {name: PL exponent 2.5->3.5, base_set: {radio.channel_model.path_loss_exponent: 2.5}, set: {radio.channel_model.path_loss_exponent: 3.5}, metric: prr_200_600, expect: down}
+  - {name: shadowing 2->10 dB, base_set: {radio.channel_model.shadowing_sigma_db: 2.0}, set: {radio.channel_model.shadowing_sigma_db: 10.0}, metric: prr_200_600, expect: down}
+  - {name: nakagami m 3->1, base_set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape: 3.0}, set: {radio.channel_model.nakagami_shape: 1.0}, metric: prr_200_600, expect: down}
+  - {name: fading none->rayleigh, base_set: {radio.channel_model.fading: none}, set: {radio.channel_model.fading: rayleigh}, metric: prr_200_600, expect: down}
+  - {name: vehicles 40->120, set: {actors.vehicles.demand.params.max_total_vehicles: 120}, metric: cbr_mean, expect: up}
+  - {name: vehicles 40->120, set: {actors.vehicles.demand.params.max_total_vehicles: 120}, metric: collision_rate, expect: up}
+  - {name: vehicles 40->120, set: {actors.vehicles.demand.params.max_total_vehicles: 120}, metric: prr, expect: down}
+  - {name: vehicles 40->120, set: {actors.vehicles.demand.params.max_total_vehicles: 120}, metric: access_ms, expect: up}
+  - {name: vehicles 40->120, set: {actors.vehicles.demand.params.max_total_vehicles: 120}, metric: e2e_ms_mean, expect: up}
+  - {name: rate 10->20 Hz, base_set: {time.mobility_step_ms: 50}, set: {messages.rate_hz: 20.0}, metric: tx_rate_hz, expect: up}
+  - {name: rate 10->20 Hz, base_set: {time.mobility_step_ms: 50}, set: {messages.rate_hz: 20.0}, metric: cbr_mean, expect: up}
+  - {name: rate 10->20 Hz, base_set: {time.mobility_step_ms: 50}, set: {messages.rate_hz: 20.0}, metric: collision_rate, expect: up}
+  - {name: rate 10->20 Hz, base_set: {time.mobility_step_ms: 50}, set: {messages.rate_hz: 20.0}, metric: ipg_ms_mean, expect: down}
+  - {name: data rate 6->12 Mbps, set: {radio.phy.data_rate_mbps: 12.0}, metric: airtime_us, expect: down}
+  - {name: data rate 6->12 Mbps, set: {radio.phy.data_rate_mbps: 12.0}, metric: range90_m, expect: down}
+  - {name: data rate 6->12 Mbps, set: {radio.phy.data_rate_mbps: 12.0}, metric: cbr_mean, expect: down}
+  - {name: cert every msg, set: {security.signer_id_policy.full_cert_every_ms: 0}, metric: psdu_bytes, expect: up}
+  - {name: cert every msg, set: {security.signer_id_policy.full_cert_every_ms: 0}, metric: airtime_us, expect: up}
+  - {name: CWmin 3->63 (120 veh), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120}, set: {radio.mac.cw_min_vo: 63}, metric: access_ms, expect: up}
+  - {name: AIFSN 2->9 (120 veh), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120}, set: {radio.mac.aifsn_vo: 9}, metric: access_ms, expect: up}
+  - {name: queue 64->1 (120 veh 40 Hz), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120, messages.rate_hz: 20.0, time.mobility_step_ms: 50}, set: {radio.mac.queue_length: 1}, metric: mac_drops, expect: up}
+  - {name: DCC off->on (120 veh), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120, radio.dcc.enabled: false}, set: {radio.dcc.enabled: true}, metric: tx_rate_hz, expect: down}
+  - {name: DCC off->on (120 veh), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120, radio.dcc.enabled: false}, set: {radio.dcc.enabled: true}, metric: cbr_mean, expect: down}
+  - {name: DCC off->on (120 veh), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120, radio.dcc.enabled: false}, set: {radio.dcc.enabled: true}, metric: aoi_ms, expect: up}

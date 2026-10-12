@@ -803,6 +803,10 @@ pub struct Engine {
     /// run's congestion control is J2945/1.
     j2945_per: Option<v2xw_radio::PerWindow>,
     j2945_quality_at: BTreeMap<NodeId, u64>,
+    /// Each on-board unit's own motion as its navigation solution gives it, for J2945/1's
+    /// tracking error (`v2xw_radio::SaeJ2945Dcc::on_tracking`): see
+    /// [`Engine::update_dcc`].
+    j2945_nav: BTreeMap<NodeId, v2xw_radio::HostState>,
     weather: WeatherState,
     actors: BTreeMap<ActorId, ActorRecord>,
     /// The actor each equipped node rides, kept beside [`Engine::actors`] so a node's
@@ -1354,6 +1358,7 @@ impl Engine {
                 && crate::wiring::build_dcc(&scenario_for_radio).is_some_and(|d| d.is_j2945()))
             .then(|| v2xw_radio::PerWindow::new(v2xw_radio::J2945Params::J2945_1)),
             j2945_quality_at: BTreeMap::new(),
+            j2945_nav: BTreeMap::new(),
             // On a sidelink `build_dcc` returns only SAE J3161/1's rate control, which
             // never gates: the sidelink's CR limits are its MAC's.
             dcc: crate::wiring::build_dcc(&scenario_for_radio),
@@ -3026,6 +3031,7 @@ impl Engine {
                 // Node ids are never reused, so a retired node's J2945/1 sub-interval is
                 // read by nothing again; kept, it grew with every vehicle of a run of days.
                 self.j2945_quality_at.remove(&node);
+                self.j2945_nav.remove(&node);
                 // Frames the retired node had been handed and not yet processed never
                 // reach an application: each attempt is settled here rather than left
                 // without a fate.
@@ -3318,6 +3324,18 @@ impl Engine {
                     obu.set_own_acceleration(a_long);
                 }
             }
+            if self.j2945_per.is_some() {
+                self.j2945_nav.insert(
+                    node,
+                    v2xw_radio::HostState {
+                        x: truth.pos.x,
+                        y: truth.pos.y,
+                        speed_mps: v2xw_core::math::hypot(truth.vel.x, truth.vel.y),
+                        heading_rad: truth.heading_rad,
+                        at: now,
+                    },
+                );
+            }
             self.update_dcc(node, now, a_long);
         }
     }
@@ -3587,6 +3605,7 @@ impl Engine {
                 })
                 .count() as u32
         });
+        let nav = self.j2945_nav.get(&node).copied();
         let state = {
             let Engine {
                 scheduler,
@@ -3607,6 +3626,20 @@ impl Engine {
                 dcc.on_cbr(&mut ctx, node, cbr);
             }
             dcc.on_density(&mut ctx, node, neighbours);
+            // J2945/1's local estimator is the unit's navigation solution, not the raw
+            // fix: a GNSS receiver's 10 Hz output is filtered with the vehicle's wheel
+            // speed and yaw rate, so its sample-to-sample error is centimetres while its
+            // absolute error is metres. The tracking error is a difference of two states of
+            // that one solution (now, and extrapolated from the last BSM), so the slowly
+            // varying absolute error cancels and what is left is the extrapolation error
+            // of the vehicle's own motion. The fix itself carries 1.6 m of white noise per
+            // axis per sample (`gnss/error/gauss-markov`), and comparing two fixes put the
+            // tracking error at 1-5 m on every step: above vTrackingErrMax (0.5 m), so a
+            // tracking-error BSM was pending every 100 ms and J2945/1 never stretched the
+            // interval, whatever the density (docs/validation/sensitivity-radio.md). The
+            // motion is the vehicle's own sensors' about itself, like the accelerometer
+            // above; the 802.11p J2945/1 run keeps it, J3161/1 has no tracking trigger.
+            let own = nav.or(own);
             if dcc.is_sae()
                 && let Some(own) = own
             {
@@ -4647,7 +4680,13 @@ impl Engine {
                 .as_ref()
                 .is_some_and(crate::wiring::EngineDcc::is_sae)
         {
-            let sent = host_state(b, t_generated);
+            // The state the BSM is taken to carry, from the same navigation solution
+            // the tracking step reads (see `Engine::update_dcc`).
+            let sent = self
+                .j2945_nav
+                .get(&node)
+                .copied()
+                .unwrap_or_else(|| host_state(b, t_generated));
             let u = self
                 .rng
                 .checkout(
