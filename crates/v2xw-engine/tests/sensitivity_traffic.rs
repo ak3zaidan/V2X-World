@@ -772,7 +772,9 @@ fn rain_lowers_speed() {
 
 /// GNSS error up: the fixes the nodes broadcast are further from the truth, and the
 /// plausibility checks of honest receivers flag more of them (VeReMi, van der Heijden
-/// et al. 2018: false-positive rate rises with position noise).
+/// et al. 2018: false-positive rate rises with position noise). The false-positive step
+/// is asserted for error the sender does not state (outliers); RTK -> standard is not,
+/// because the suite widens its gates with the stated accuracy (see the validation doc).
 #[test]
 fn more_gnss_error_raises_position_error_and_false_reports() {
     let with = |grade: u8| {

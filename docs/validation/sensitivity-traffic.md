@@ -57,7 +57,7 @@ row takes most of that time, because it puts 150 radios on the channel.
 | Equipped fraction `actors.vehicles.equipped_fraction` | 1.0 -> 0.3, 1500 veh/h | awareness and neighbours down (ETSI TR 103 562) | neighbours 15.6 -> 4.4; receptions per node 4163 -> 1224 | holds |
 | Pedestrians `actors.vru.pedestrians`, device fraction 0.5 | 40 -> 300 | VRU messages up, crossing delay up (HCM 6th ed. ch. 19 f_Lpb/f_Rpb) | PSM/VAM 1380 -> 9659; vehicle stopped delay 3.75 -> 7.06 s | holds |
 | Weather `weather.initial` / `intensity` | clear -> rain 1.0 | speed down (FHWA-HOP-12-004); radio loss up only if modelled | speed 7.07 -> 6.06 m/s; PDR 0.980 -> 0.979 | holds. The radio change is recorded, not asserted: ITU-R P.838 rain attenuation at 5.9 GHz is under 1 dB/km |
-| GNSS `actors.vehicles.gnss` | RTK -> standard -> standard + outliers (0.3 /s, 60 m) | position error up, misbehaviour false positives up (van der Heijden et al. 2018, VeReMi) | position error 2.61 -> 3.78 -> 5.56 m; false verdicts **14** -> 4 -> 63 | position error holds; false positives hold from standard to outliers but **not** from RTK to standard (see below) |
+| GNSS `actors.vehicles.gnss` | RTK -> standard -> standard + outliers (0.3 /s, 60 m) | position error up, misbehaviour false positives up (van der Heijden et al. 2018, VeReMi) | position error 2.61 -> 3.78 -> 5.56 m; false verdicts **14** -> 4 -> 63 | position error holds; false positives hold for unstated error (standard -> outliers). RTK -> standard is lower by design: tolerances scale with the stated accuracy (see below) |
 
 The position error includes a constant offset that is common to every row: the
 `gt.kinematics` reference point and the BSM's position are not the same point on the
@@ -79,16 +79,22 @@ differences between rows are the GNSS model's.
      direction.
    - Unresolved: whether the owner wants a test of the case the prediction describes
      (cut-ins at a merge).
-2. **RTK fixes raise false misbehaviour verdicts.** RTK gives 14 false verdicts against
-   4 for the standard receiver: 9 position-speed, 6 heading, 2 position-jump.
-   - The detector reads each message's stated accuracy (`phase2.rs`,
-     `use_stated_accuracy`), so an RTK sender's tolerance shrinks to centimetres. Its
-     speed and heading noise, and the 100 ms motion between samples, do not shrink with
-     it.
-   - Likely cause: the position-speed and heading checks need a floor for kinematic and
-     sampling uncertainty that does not scale with the stated position accuracy.
-   - Not fixed here. It belongs in the detector suite (`v2xw-threat` / `phase2.rs`), and
-     changing it changes existing digests.
+2. **RTK fixes give more false verdicts than the standard receiver: 14 against 4** (9
+   position-speed, 6 heading, 2 position-jump). That is 0.2 % against 0.06 % of the
+   about 7,000 messages checked. This is the detector's design, not a wiring fault:
+   - The suite scales its tolerances with each message's *stated* accuracy (`phase2.rs`
+     `use_stated_accuracy`; `v2xw-threat` `detect.rs`). Position radii are floored at
+     `tolerance_floor_factor · consistency_threshold_m`. The heading check runs only when
+     the displacement exceeds `heading_conf_factor ×` the stated accuracy.
+   - A standard receiver states metres, so its messages are checked less often and with
+     wider gates. An RTK receiver states centimetres, so the heading and position-speed
+     checks run on almost every step, and turns and 100 ms sampling produce the few
+     residual false verdicts.
+   - The prediction "error up, false positives up" holds for error the sender does **not**
+     state: outliers take the count from 4 to 63, and the test asserts that step.
+   - Unresolved: whether the heading check's displacement floor (`heading_min_disp_m`)
+     should be raised for high-accuracy senders. That is a detector-suite decision, and
+     changing it changes existing digests, so it is not made here.
 3. **More pedestrians lower the network PDR** from 0.875 to 0.524, at a CBR of only 0.04
    to 0.05. The MAC access delay rises from 0.02 to 1.99 ms.
    - Recorded, not asserted.
