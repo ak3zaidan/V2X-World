@@ -219,7 +219,12 @@ mod tests {
             assert!(!RecordLevel::Events.keeps(ch), "{ch}");
             assert!(RecordLevel::Receptions.keeps(ch), "{ch}");
         }
-        for ch in ["node.tx", "gt.attack.action", "ma.decision", "metric.sample"] {
+        for ch in [
+            "node.tx",
+            "gt.attack.action",
+            "ma.decision",
+            "metric.sample",
+        ] {
             assert!(RecordLevel::Events.keeps(ch), "{ch}");
         }
         assert!(!RecordLevel::Receptions.keeps("gt.kinematics"));

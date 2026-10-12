@@ -5424,8 +5424,7 @@ fn security(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 .to_string(),
         ));
     }
-    if s.security.prioritized_horizon_m.is_some()
-        && s.security.verification_policy != "prioritized"
+    if s.security.prioritized_horizon_m.is_some() && s.security.verification_policy != "prioritized"
     {
         e.push(conflict(
             "security.prioritized_horizon_m",

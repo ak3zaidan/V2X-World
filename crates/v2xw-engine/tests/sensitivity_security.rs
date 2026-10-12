@@ -540,7 +540,10 @@ fn the_message_rate_moves_bytes_cbr_and_aoi() {
     // spans the period, and the CBR doubles at each step.
     for w in out.windows(2) {
         let cbr = w[1].get("cbr") / w[0].get("cbr").max(1e-9);
-        assert!((1.5..2.5).contains(&cbr), "CBR ratio {cbr:.2} for twice the rate");
+        assert!(
+            (1.5..2.5).contains(&cbr),
+            "CBR ratio {cbr:.2} for twice the rate"
+        );
     }
 }
 
@@ -937,7 +940,10 @@ fn the_on_demand_threshold_moves_the_verify_load() {
     let l = run(low);
     row("on-demand 0.5", &h);
     row("on-demand 0.05", &l);
-    assert!(served(&l).len() > served(&h).len(), "no more messages verified");
+    assert!(
+        served(&l).len() > served(&h).len(),
+        "no more messages verified"
+    );
     assert!(l.get("unverified_ratio") < h.get("unverified_ratio"));
 
     let mut wrong = high;
@@ -982,7 +988,10 @@ fn served(m: &Measured) -> Vec<(u64, f64)> {
         .filter_map(|v| {
             let start = ns(&v["t_start"])?;
             let enq = ns(&v["t_enqueue"])?;
-            Some((v["priority"].as_u64()?, start.saturating_sub(enq) as f64 / 1e6))
+            Some((
+                v["priority"].as_u64()?,
+                start.saturating_sub(enq) as f64 / 1e6,
+            ))
         })
         .collect()
 }
@@ -1004,15 +1013,25 @@ fn the_prioritized_horizon_moves_the_service_order() {
     let split = |m: &Measured| {
         let s = served(m);
         let mean = |hi: bool| {
-            let v: Vec<f64> = s.iter().filter(|(p, _)| (*p >= 500) == hi).map(|x| x.1).collect();
+            let v: Vec<f64> = s
+                .iter()
+                .filter(|(p, _)| (*p >= 500) == hi)
+                .map(|x| x.1)
+                .collect();
             (v.len(), v.iter().sum::<f64>() / v.len().max(1) as f64)
         };
         (mean(true), mean(false))
     };
     let (wh, wl) = split(&w);
     let (nh, nl) = split(&n);
-    println!("ROW horizon 300: near {} wait {:.3} ms, far {} wait {:.3} ms", wh.0, wh.1, wl.0, wl.1);
-    println!("ROW horizon 10: near {} wait {:.3} ms, far {} wait {:.3} ms", nh.0, nh.1, nl.0, nl.1);
+    println!(
+        "ROW horizon 300: near {} wait {:.3} ms, far {} wait {:.3} ms",
+        wh.0, wh.1, wl.0, wl.1
+    );
+    println!(
+        "ROW horizon 10: near {} wait {:.3} ms, far {} wait {:.3} ms",
+        nh.0, nh.1, nl.0, nl.1
+    );
     assert!(wh.0 > 0 && wl.0 > 0);
     assert!(wh.1 < 0.75 * wl.1, "the near are not served first");
     let share = |h: (usize, f64), l: (usize, f64)| h.0 as f64 / (h.0 + l.0).max(1) as f64;
