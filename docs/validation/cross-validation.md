@@ -59,7 +59,7 @@ This engine's procedural TR 36.885 3 × 3 grid exported to plain XML, built by n
 | junction speed (moving), km/h | 28.0 | 24.6 | 26.1 | +14 % |
 | queue discharge headway, s | 2.83 | 2.55 | 2.94 | +11 % |
 | vehicles left in network at end | 0 | 0 | 0 | — |
-| wall-clock, s | 0.2 | 1.9 | 1.8 | |
+| wall-clock, s | 0.2 | 2.1 | 1.8 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -95,7 +95,7 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 6/6/
 | junction speed (moving), km/h | 28.3 | 25.5 | 26.9 | +11 % |
 | queue discharge headway, s | 2.82 | 2.47 | 2.86 | +15 % |
 | vehicles left in network at end | 1 | 1 | 1 | +0 % |
-| wall-clock, s | 0.9 | 3.4 | 3.5 | |
+| wall-clock, s | 0.9 | 3.6 | 3.6 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -116,22 +116,22 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 13/1
 | flow q, veh/h/lane (Edie) | 105.5 | 104.2 | 103.7 | +1 % |
 | density k, veh/km/lane (Edie) | 4.05 | 3.83 | 3.95 | +6 % |
 | space-mean speed, km/h | 26.0 | 27.2 | 26.3 | -4 % |
-| mean travel time, s | 187.4 | 175.6 | 181.4 | +7 % |
-| median travel time, s | 184.8 | 174.8 | 179.9 | +6 % |
+| mean travel time, s | 187.3 | 175.6 | 181.4 | +7 % |
+| median travel time, s | 183.9 | 174.8 | 179.9 | +5 % |
 | 85th pct travel time, s | 255.5 | 250.2 | 254.5 | +2 % |
-| mean insertion delay, s | 0.34 | 0.25 | 0.32 | +33 % |
+| mean insertion delay, s | 0.34 | 0.25 | 0.32 | +34 % |
 | mean vehicles halting (< 0.1 m/s) | 34.3 | 36.9 | 35.4 | -7 % |
 | max vehicles halting | 101 | 109 | 105 | -7 % |
-| halting time per trip, s | 47.8 | 51.3 | 48.6 | -7 % |
-|   of which at a stop line (last 30 m), s | 46.0 | 50.7 | 47.7 | -9 % |
-|   of which mid-block, s | 1.8 | 0.6 | 0.9 | +201 % |
+| halting time per trip, s | 47.7 | 51.3 | 48.6 | -7 % |
+|   of which at a stop line (last 30 m), s | 45.9 | 50.7 | 47.7 | -9 % |
+|   of which mid-block, s | 1.7 | 0.6 | 0.9 | +196 % |
 |   of which inside a junction, s | 0.0 | 0.0 | 0.0 | — |
 | stops per trip | 2.44 | 2.65 | 2.76 | -8 % |
 | lane changes per vehicle-km | 1.22 | 1.04 | 1.02 | +16 % |
 | junction speed (moving), km/h | 28.9 | 26.5 | 27.5 | +9 % |
 | queue discharge headway, s | 2.78 | 2.37 | 2.75 | +17 % |
 | vehicles left in network at end | 4 | 3 | 3 | +33 % |
-| wall-clock, s | 2.1 | 6.9 | 7.1 | |
+| wall-clock, s | 2.3 | 6.8 | 6.9 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -139,7 +139,7 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 13/1
 | this engine (native) vs SUMO IDM | 80 | 100 % | 0.92 | 2.0 | 647 | 1.05 | 1.02 |
 | SUMO IDM vs SUMO Krauss (default) | 80 | 100 % | 0.98 | 1.5 | 648 | 1.04 | 1.01 |
 
-Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 24/24/24, 85/81/83, 120/119/120, 122/122/126, 134/124/126, 154/146/149, 147/132/138, 138/125/133, 75/65/68, 18/11/12, 4/3/3
+Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 24/24/24, 85/81/83, 120/119/120, 122/122/126, 134/124/126, 154/146/149, 147/132/138, 138/125/133, 74/65/68, 18/11/12, 4/3/3
 
 
 ### manhattan at 900 veh/h offered
@@ -203,7 +203,7 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 5/5/
 | junction speed (moving), km/h | 28.4 | 28.0 | 28.7 | +1 % |
 | queue discharge headway, s | 2.70 | 2.15 | 2.62 | +26 % |
 | vehicles left in network at end | 28 | 33 | 36 | -15 % |
-| wall-clock, s | 1.5 | 4.8 | 4.9 | |
+| wall-clock, s | 1.5 | 4.8 | 4.8 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -221,25 +221,25 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 9/9/
 | trips offered | 400 | 400 | 400 | +0 % |
 | trips inserted | 400 | 400 | 400 | +0 % |
 | trips completed | 376 | 368 | 363 | +2 % |
-| flow q, veh/h/lane (Edie) | 43.3 | 47.7 | 47.7 | -9 % |
-| density k, veh/km/lane (Edie) | 2.66 | 2.80 | 2.84 | -5 % |
+| flow q, veh/h/lane (Edie) | 43.4 | 47.7 | 47.7 | -9 % |
+| density k, veh/km/lane (Edie) | 2.67 | 2.80 | 2.84 | -5 % |
 | space-mean speed, km/h | 16.3 | 17.0 | 16.8 | -4 % |
-| mean travel time, s | 297.3 | 311.9 | 317.4 | -5 % |
-| median travel time, s | 281.3 | 300.2 | 301.7 | -6 % |
-| 85th pct travel time, s | 441.8 | 481.2 | 490.0 | -8 % |
-| mean insertion delay, s | 0.30 | 0.19 | 0.28 | +55 % |
-| mean vehicles halting (< 0.1 m/s) | 44.4 | 59.6 | 58.3 | -25 % |
+| mean travel time, s | 297.6 | 311.9 | 317.4 | -5 % |
+| median travel time, s | 280.9 | 300.2 | 301.7 | -6 % |
+| 85th pct travel time, s | 443.6 | 481.2 | 490.0 | -8 % |
+| mean insertion delay, s | 0.30 | 0.19 | 0.28 | +56 % |
+| mean vehicles halting (< 0.1 m/s) | 44.5 | 59.6 | 58.3 | -25 % |
 | max vehicles halting | 126 | 144 | 139 | -12 % |
-| halting time per trip, s | 108.7 | 146.9 | 144.8 | -26 % |
-|   of which at a stop line (last 30 m), s | 100.6 | 136.4 | 132.8 | -26 % |
-|   of which mid-block, s | 7.2 | 9.8 | 11.4 | -27 % |
-|   of which inside a junction, s | 0.9 | 0.7 | 0.6 | +29 % |
-| stops per trip | 5.53 | 6.27 | 6.42 | -12 % |
+| halting time per trip, s | 108.8 | 146.9 | 144.8 | -26 % |
+|   of which at a stop line (last 30 m), s | 100.7 | 136.4 | 132.8 | -26 % |
+|   of which mid-block, s | 7.2 | 9.8 | 11.4 | -26 % |
+|   of which inside a junction, s | 0.9 | 0.7 | 0.6 | +25 % |
+| stops per trip | 5.54 | 6.27 | 6.42 | -12 % |
 | lane changes per vehicle-km | 0.73 | 0.89 | 0.86 | -18 % |
 | junction speed (moving), km/h | 28.2 | 27.9 | 28.7 | +1 % |
 | queue discharge headway, s | 2.64 | 2.16 | 2.60 | +22 % |
 | vehicles left in network at end | 24 | 32 | 37 | -25 % |
-| wall-clock, s | 2.4 | 8.0 | 8.0 | |
+| wall-clock, s | 2.4 | 7.8 | 8.5 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -247,7 +247,7 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 9/9/
 | this engine (native) vs SUMO IDM | 187 | 98 % | 0.94 | 2.8 | 360 | 0.97 | 1.01 |
 | SUMO IDM vs SUMO Krauss (default) | 186 | 98 % | 0.99 | 0.9 | 360 | 1.03 | 1.00 |
 
-Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 12/12/12, 62/62/63, 96/95/97, 122/122/123, 132/134/137, 132/143/146, 138/153/155, 145/160/161, 108/125/126, 65/69/73, 24/32/37
+Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 12/12/12, 62/62/63, 96/95/97, 122/122/123, 132/134/137, 133/143/146, 138/153/155, 146/160/161, 107/125/126, 65/69/73, 24/32/37
 
 
 ## Why the simulators differ
