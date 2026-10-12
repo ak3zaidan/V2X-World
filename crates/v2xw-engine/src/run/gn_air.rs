@@ -112,6 +112,21 @@ pub(super) struct GnOnAir {
     stats: GnAirStats,
 }
 
+/// `net.geonet`'s CBF timers and `DIST_MAX` over a MIB (network audit). The loader has
+/// refused a minimum above the maximum and a non-positive range.
+pub(super) fn tuned_mib(mut mib: GnMib, g: &Geonet) -> GnMib {
+    if let Some(ms) = g.cbf_min_time_ms {
+        mib.cbf_min_ms = ms;
+    }
+    if let Some(ms) = g.cbf_max_time_ms {
+        mib.cbf_max_ms = ms;
+    }
+    if let Some(m) = g.max_comm_range_m {
+        mib.max_comm_range_m = m;
+    }
+    mib
+}
+
 /// The router configuration a scenario's `net.geonet` names (shared with the overlay).
 pub(super) fn forwarding_config(g: &Geonet) -> ForwardingConfig {
     let mib = GnMib {
@@ -128,6 +143,8 @@ pub(super) fn forwarding_config(g: &Geonet) -> ForwardingConfig {
         },
         ..GnMib::default()
     };
+    // network audit: `net.geonet` CBF timers and DIST_MAX over Annex H.
+    let mib = tuned_mib(mib, g);
     let variant = match g.cbf_variant.as_str() {
         "etsi" => CbfVariant::Etsi,
         "dpd" => CbfVariant::Dpd,

@@ -122,6 +122,8 @@ impl Engine {
             },
             ..GnMib::default()
         };
+        // network audit: `net.geonet` CBF timers and DIST_MAX over Annex H.
+        let mib = super::gn_air::tuned_mib(mib, &g);
         let variant = match g.cbf_variant.as_str() {
             "etsi" => CbfVariant::Etsi,
             "dpd" => CbfVariant::Dpd,

@@ -1790,9 +1790,19 @@ pub fn range_noise_floor_dbm(scenario: &Scenario, phy: &v2xw_radio::OfdmPhy) -> 
         _ => {
             v2xw_radio::THERMAL_NOISE_DBM_PER_HZ
                 + 10.0 * v2xw_core::math::log10(10.0e6)
-                + v2xw_radio::UE_NOISE_FIGURE_DB
+                + sidelink_noise_figure_db(scenario)
         }
     }
+}
+
+/// The sidelink UE's noise figure, dB: `radio.sidelink.noise_figure_db` or TR 36.885
+/// Annex A.1.1's 9 dB (network audit).
+pub fn sidelink_noise_figure_db(scenario: &Scenario) -> f64 {
+    scenario
+        .radio
+        .sidelink
+        .noise_figure_db
+        .unwrap_or(v2xw_radio::UE_NOISE_FIGURE_DB)
 }
 
 /// The deterministic line-of-sight loss of a propagation law at `d_m`, dB — no shadowing,
@@ -2979,6 +2989,20 @@ pub fn crypto_mode(scenario: &Scenario) -> CryptoMode {
     }
 }
 
+/// `NodeConfig`'s defaults with `nodes.verify_queue_depth` applied (network audit).
+fn node_capacities(scenario: &Scenario) -> NodeConfig {
+    let mut c = NodeConfig::default();
+    if let Some(n) = scenario.nodes.verify_queue_depth {
+        c.queue_capacity[1] = n as usize;
+    }
+    c
+}
+
+/// A SPaT or MAP period from `messages.*_interval_ms`, or the default (network audit).
+fn infra_interval(ms: Option<u64>, default: Duration) -> Duration {
+    ms.map_or(default, Duration::from_millis)
+}
+
 /// The certificate-attachment cadence `security.signer_id_policy` names.
 ///
 /// 05-protocols.md §2.4 expresses both readings as an interval, and the scenario gives it
@@ -3078,7 +3102,7 @@ pub fn build_node(
         station_type: station_type(class),
         bsm_params,
         cam_params,
-        ..NodeConfig::default()
+        ..node_capacities(scenario)
     };
     let mut runtime = ObuRuntime::new(node, profile, policy, config, at);
     // The role a CAM's low-frequency container states (EN 302 637-2, `VehicleRole`).
@@ -3533,7 +3557,17 @@ pub fn build_dcc(scenario: &Scenario) -> Option<EngineDcc> {
             }
             EngineDcc::Adaptive(v2xw_radio::AdaptiveDcc::new().with_params(p))
         }
-        DccChoice::EtsiReactive => EngineDcc::Reactive(v2xw_radio::ReactiveDcc::new()),
+        DccChoice::EtsiReactive => {
+            // network audit: `radio.dcc.reactive_table` and `.reactive_hold_ms`.
+            let mut r = v2xw_radio::ReactiveDcc::new();
+            if ds.reactive_table.as_deref() == Some("a2") {
+                r = r.with_table(v2xw_radio::ReactiveTable::A2TonUpTo500Us);
+            }
+            if let Some(ms) = ds.reactive_hold_ms {
+                r = r.with_hold(Duration::from_nanos((ms * 1e6).round() as u64));
+            }
+            EngineDcc::Reactive(r)
+        }
     })
 }
 
@@ -3611,7 +3645,9 @@ pub fn build_rsu(
         // unit that signed as a passenger car would be a unit a plausibility detector is
         // entitled to disbelieve.
         station_type: ParticipantType::Infrastructure,
-        ..NodeConfig::default()
+        spat_interval: infra_interval(scenario.messages.spat_interval_ms, v2xw_node::generate::SPAT_INTERVAL),
+        map_interval: infra_interval(scenario.messages.map_interval_ms, v2xw_node::generate::MAP_INTERVAL),
+        ..node_capacities(scenario)
     };
     // `verify-all` at a roadside unit, whatever the vehicles run: a unit that forwards
     // misbehaviour reports has to have verified the report it forwards, and the
