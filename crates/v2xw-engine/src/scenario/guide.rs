@@ -240,7 +240,7 @@ const BASIC: &[Basic] = &[
         path: "exporters",
         explain: "Which files the run writes when it finishes, for analysis outside the Studio.",
         recommended: "None to explore; Parquet to analyse in Python or R.",
-    },    // traffic audit
+    }, // traffic audit
     Basic {
         path: "actors.vehicles.drivers.speed_factor",
         explain: "How fast drivers go on an empty street compared with the speed limit: 1.1 means the average driver goes 10 % over.",
@@ -472,7 +472,7 @@ const ADVANCED: &[Basic] = &[
         path: "radio.sidelink.selection_window_ms",
         explain: "How late after a message is ready its new resource may be. Shorter cuts latency but leaves fewer resources to pick from.",
         recommended: "100 ms at 10 Hz; at most the message interval.",
-    },    // traffic audit
+    }, // traffic audit
     Basic {
         path: "actors.vehicles.drivers.speed_spread",
         explain: "How much drivers differ in the speed they choose: 0 makes everyone drive the same speed.",

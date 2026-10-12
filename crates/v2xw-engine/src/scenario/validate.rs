@@ -3348,8 +3348,14 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
     let trait_fields = [
         ("actors.vehicles.drivers.speed_factor", dv.speed_factor),
         ("actors.vehicles.drivers.speed_spread", dv.speed_spread),
-        ("actors.vehicles.drivers.start_reaction_s", dv.start_reaction_s),
-        ("actors.vehicles.drivers.queue_start_delay_s", dv.queue_start_delay_s),
+        (
+            "actors.vehicles.drivers.start_reaction_s",
+            dv.start_reaction_s,
+        ),
+        (
+            "actors.vehicles.drivers.queue_start_delay_s",
+            dv.queue_start_delay_s,
+        ),
     ];
     for (path, v) in trait_fields {
         if let Some(v) = v {
@@ -3410,9 +3416,18 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 ("traffic.kerbside.bus_stop_spacing_m", k.bus_stop_spacing_m),
                 ("traffic.kerbside.bus_dwell_mean_s", k.bus_dwell_mean_s),
                 ("traffic.kerbside.taxi_share", k.taxi_share),
-                ("traffic.kerbside.taxi_dwell_median_s", k.taxi_dwell_median_s),
-                ("traffic.kerbside.delivery_stop_share", k.delivery_stop_share),
-                ("traffic.kerbside.delivery_dwell_median_s", k.delivery_dwell_median_s),
+                (
+                    "traffic.kerbside.taxi_dwell_median_s",
+                    k.taxi_dwell_median_s,
+                ),
+                (
+                    "traffic.kerbside.delivery_stop_share",
+                    k.delivery_stop_share,
+                ),
+                (
+                    "traffic.kerbside.delivery_dwell_median_s",
+                    k.delivery_dwell_median_s,
+                ),
             ] {
                 if let Some(v) = v {
                     bounded_at(path, path, v, e);
@@ -3454,9 +3469,15 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
     if let Some(g) = &s.actors.vehicles.gnss {
         for (path, v) in [
             ("actors.vehicles.gnss.outlier_rate_hz", g.outlier_rate_hz),
-            ("actors.vehicles.gnss.outlier_magnitude_m", g.outlier_magnitude_m),
+            (
+                "actors.vehicles.gnss.outlier_magnitude_m",
+                g.outlier_magnitude_m,
+            ),
             ("actors.vehicles.gnss.burst_rate_hz", g.burst_rate_hz),
-            ("actors.vehicles.gnss.outage_probability", g.outage_probability),
+            (
+                "actors.vehicles.gnss.outage_probability",
+                g.outage_probability,
+            ),
         ] {
             if let Some(v) = v {
                 bounded_at(path, path, v, e);
@@ -3486,7 +3507,10 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
         ("world.signals.cycle_s", ws.cycle_s),
         ("world.signals.all_red_s", ws.all_red_s),
         ("world.signals.pedestrian_walk_s", ws.pedestrian_walk_s),
-        ("world.signals.pedestrian_speed_mps", ws.pedestrian_speed_mps),
+        (
+            "world.signals.pedestrian_speed_mps",
+            ws.pedestrian_speed_mps,
+        ),
     ] {
         if let Some(v) = v {
             bounded_at(path, path, v, e);

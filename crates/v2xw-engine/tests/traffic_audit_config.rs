@@ -244,10 +244,7 @@ fn the_signal_timing_reaches_the_imported_plans() {
     s.world.cache = None;
     let cycles = |s: &Scenario| -> Vec<f64> {
         let w = v2xw_engine::wiring::build_world(s).expect("the extract imports");
-        w.signals
-            .iter()
-            .map(|p| p.cycle_s)
-            .collect()
+        w.signals.iter().map(|p| p.cycle_s).collect()
     };
     let base = cycles(&s);
     eprintln!("audit-signals {} plans", base.len());
@@ -325,7 +322,10 @@ fn the_defaults_leave_the_scenario_digest_alone() {
         "pedestrian_walk_s",
         "\"truck\"",
     ] {
-        assert!(!text.contains(key), "{key} serialised for a default scenario");
+        assert!(
+            !text.contains(key),
+            "{key} serialised for a default scenario"
+        );
     }
     let mut t = s.clone();
     t.traffic = Some(Traffic::default());

@@ -756,7 +756,9 @@ pub fn build_gnss(scenario: &Scenario) -> Box<dyn GnssModel> {
         .vehicles
         .gnss
         .as_ref()
-        .map_or_else(v2xw_mobility::gnss::GaussMarkovParams::default, |g| g.params());
+        .map_or_else(v2xw_mobility::gnss::GaussMarkovParams::default, |g| {
+            g.params()
+        });
     Box::new(v2xw_mobility::GaussMarkovGnss::new(params))
 }
 

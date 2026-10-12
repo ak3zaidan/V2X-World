@@ -367,9 +367,8 @@ impl DriverTraits {
         let follow_median_s = law.follow_median_s;
         // One standard-normal draw sets how quick this driver is, for both responses.
         let z = ctx.rng(RngDomain::ReactionTime, key).normal(0.0, 1.0);
-        let reaction_s =
-            math::exp(math::ln(law.reaction_median_s.max(0.05)) + REACTION_SIGMA * z)
-                .clamp(0.3, 3.0);
+        let reaction_s = math::exp(math::ln(law.reaction_median_s.max(0.05)) + REACTION_SIGMA * z)
+            .clamp(0.3, 3.0);
         let follow_reaction_s =
             math::exp(math::ln(follow_median_s.max(0.05)) + REACTION_SIGMA * z).clamp(0.2, 3.0);
         // The amber threshold: logistic across the dilemma zone, 10 % at its near edge
