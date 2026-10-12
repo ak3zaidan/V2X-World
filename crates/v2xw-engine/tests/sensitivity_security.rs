@@ -559,3 +559,62 @@ fn the_attacker_share_moves_detections() {
     assert!(tp(few) > 0.0, "no report about an attacker reached the authority");
     assert!(tp(many) > tp(few));
 }
+
+/// The roadside backhaul: vehicles with no modem top up through provisioning-proxy units on
+/// a 300 m lattice. The exchange is a request, an acknowledgement and download polls every
+/// `download_poll_interval_s` (1 s here) until the batch is ready, so its length is set by
+/// the polls as much as by the line. On lines that need the same number of polls, a 600 ms
+/// line is slower than a 200 ms one and a 64 kbit/s line slower than the default. A 5 ms
+/// line is not the fastest: its first poll reaches the authority before the batch is ready
+/// and a second poll a second later is needed, which is how a polled download behaves.
+#[test]
+fn the_backhaul_latency_and_bandwidth_move_relay_topups() {
+    let with = |params: serde_json::Value| {
+        let mut s = backend(20, 45.0);
+        s.net.uu = None;
+        for x in [150.0, 450.0, 750.0, 1050.0] {
+            for y in [150.0, 450.0] {
+                s.actors.rsus.push(v2xw_engine::scenario::Rsu {
+                    site: None,
+                    position_m: Some([x, y, 0.0]),
+                    roles: vec!["provisioning-proxy".to_string()],
+                    profile: None,
+                    backhaul: Some("backhaul/fixed".to_string()),
+                    backhaul_params: Some(params.clone()),
+                });
+            }
+        }
+        run(s)
+    };
+    let quick = with(json!({"latency_ms": 5.0}));
+    let base = with(json!({"latency_ms": 200.0}));
+    let slow = with(json!({"latency_ms": 600.0}));
+    let thin = with(json!({"latency_ms": 200.0, "capacity_mbps": 0.064, "down_mbps": 0.064}));
+    let msgs = |m: &Measured| m.report.phase2.access.carrier.backhaul_messages;
+    for (n, m) in [
+        ("5 ms", &quick),
+        ("200 ms", &base),
+        ("600 ms", &slow),
+        ("200 ms 64 kbit/s", &thin),
+    ] {
+        let p = &m.report.phase2;
+        println!(
+            "ROW backhaul {n}: topup {:?} relay {} topups {}/{} messages {} bytes {}",
+            exchange_ms(&m.report, "topup"),
+            p.access.relay_only_vehicles,
+            p.topups_completed,
+            p.topups_started,
+            msgs(m),
+            p.access.backhaul_bytes
+        );
+    }
+    let (nb, tb) = exchange_ms(&base.report, "topup");
+    let (_, ts) = exchange_ms(&slow.report, "topup");
+    let (_, tt) = exchange_ms(&thin.report, "topup");
+    assert!(nb > 0, "no top-up went through a roadside unit");
+    assert_eq!(msgs(&base), msgs(&slow), "the comparison needs the same polls");
+    assert_eq!(msgs(&base), msgs(&thin), "the comparison needs the same polls");
+    assert!(ts > tb, "600 ms: {ts} ms against 200 ms: {tb} ms");
+    assert!(tt > tb, "64 kbit/s: {tt} ms against the default: {tb} ms");
+    assert!(msgs(&quick) > msgs(&base), "a 5 ms line polled no more often");
+}
