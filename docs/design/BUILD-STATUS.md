@@ -3487,3 +3487,9 @@ Short runs of the attack and credential scenarios, read from `run-report.json` a
     are GNSS outliers; the MA filters them (0 honest revoked).
   - 22 revoke decisions for 12 attackers: one decision per pseudonym, not per device.
   - A 300 s attack run at `--record-level events` writes 6.9 GB; use `metrics`.
+
+## 2026-10-11 — round-8 merge
+
+- Merged into main: protocol (detection metrics fed by gt.subject and gt.attack.action, RSU PQ software proxy, cert-cycle fragments fit the MTU) and studio (quiet agent client when no agent, Run shown when settings are staged, Undo after Run).
+- **Held, not merged:** realism (`worktree-wf_defd1f50-e87-6`, f3b5cc8). It brings grid travel time against SUMO from +18 % to +6 %, but the safety suite got worse (37 FAIL against 33): connected-intersections 0 -> 17, phase1-grid 20 -> 54, peak-density 0 -> 16, closure 0 -> 7. The track asked for these to be fixed before merging. Its worktree is kept.
+- Checks: cargo check --workspace --tests; tests rsu_pq_proxy, copilot control, metrics/record/cli lib; studio typecheck and vitest 284/284; release build; run-sim.sh boots on 8758 with the agent on.
