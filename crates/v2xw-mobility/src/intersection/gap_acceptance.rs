@@ -201,6 +201,10 @@ pub struct GapAcceptanceParams {
     /// hold a claim, which is what breaks the cyclic "give way to the right" priority a
     /// four-way crossing produces. See the module documentation.
     pub standing_speed_mps: f64,
+    /// A multiplier on every critical gap and follow-up time of the HCM table: below 1
+    /// drivers accept shorter gaps (aggressive), above 1 they wait for longer ones. 1 is
+    /// the table (`traffic.critical_gap_factor`).
+    pub gap_factor: f64,
 }
 
 impl Default for GapAcceptanceParams {
@@ -210,6 +214,7 @@ impl Default for GapAcceptanceParams {
             queue_follow_up: true,
             legacy_closest_first: true,
             standing_speed_mps: STANDING_SPEED_MPS,
+            gap_factor: 1.0,
         }
     }
 }
@@ -269,7 +274,7 @@ impl IntersectionControl for GapAcceptance {
         let on_minor = conflicts.iter().any(|c| c.conflicts && c.ego_must_yield);
         let movement = Movement::classify(j.movement, on_minor);
         let gaps = HcmGaps::of(movement);
-        let critical = gaps.critical_gap_s(j.major_lanes);
+        let critical = gaps.critical_gap_s(j.major_lanes) * self.params.gap_factor;
 
         // How many vehicles of this ego's own queue are ahead of it: each needs its own
         // follow-up time before the ego can use the same gap.
@@ -285,7 +290,7 @@ impl IntersectionControl for GapAcceptance {
         } else {
             0
         };
-        let required = critical + gaps.follow_up_s * ahead as f64;
+        let required = critical + gaps.follow_up_s * self.params.gap_factor * ahead as f64;
 
         // The smallest time-to-stop-line among the conflicting claimants the ego must give
         // way to. A standing claimant never closes a gap

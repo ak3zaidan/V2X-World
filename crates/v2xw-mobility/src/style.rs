@@ -128,10 +128,16 @@ impl DriverStyle {
     /// The style of a driver whose speed factor is `speed_factor` in a class whose
     /// speed factor has standard deviation `speed_dev` around 1.
     pub fn of_speed_factor(speed_factor: f64, speed_dev: f64) -> DriverStyle {
+        Self::of_speed_factor_around(speed_factor, 1.0, speed_dev)
+    }
+
+    /// [`DriverStyle::of_speed_factor`] for a population whose speed factor has mean
+    /// `mean` rather than 1 (`actors.vehicles.drivers.speed_factor`).
+    pub fn of_speed_factor_around(speed_factor: f64, mean: f64, speed_dev: f64) -> DriverStyle {
         if speed_dev <= 0.0 || !speed_factor.is_finite() {
             return DriverStyle::Normal;
         }
-        let z = (speed_factor - 1.0) / speed_dev;
+        let z = (speed_factor - mean) / speed_dev;
         if z > STYLE_CUT_Z {
             DriverStyle::Assertive
         } else if z < -STYLE_CUT_Z {
