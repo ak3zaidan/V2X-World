@@ -52,6 +52,7 @@ row takes most of that time, because it puts 150 radios on the channel.
 | MOBIL politeness `actors.vehicles.drivers.politeness` | 0 -> 1, 3-lane 1.5 km unsignalised links (highway-congestion geometry), speed spread 3 | "lane changes down" | lane changes 49 -> **59**; speed 15.2 -> 15.5 m/s | parameter reaches the model; direction **not** as stated (see below) |
 | Vehicle mix `actors.vehicles.classes` | 0 -> 50 % trucks, fleet 250 | speed and capacity down (HCM 6th ed. ch. 19 f_HV) | speed 4.82 -> 3.72 m/s; vehicle-km 106.2 -> 80.5 (-24 %) | holds |
 | Signal cycle (procedural `cycle_s`; `world.signals.cycle_s` on OSM) | 40 -> 120 s, 1200 veh/h, 120 s | delay and queue up: d1 = 0.5 C (1 - g/C)² / (1 - min(1, X) g/C) (HCM 6th ed. eq. 19-19; Webster 1958) | stopped delay 6.6 -> 22.3 s/veh; queue 2.6 -> 8.6 veh | holds; the ratio 3.4 is close to the cycle ratio 3, as d1 ∝ C says |
+| Green split (procedural `ew_green_share`, new, default 0.5) | 0.5 -> 0.2 east-west share, 1200 veh/h, 120 s | delay and queue up: d1 is convex in g/C and the starved street's X nears 1 (HCM 6th ed. eq. 19-19; Webster 1958) | stopped delay 9.69 -> 18.07 s/veh; queue 3.75 -> 6.96 veh; speed 6.35 -> 5.10 m/s | holds |
 | Actuated control `traffic.signals.control` | fixed -> actuated, 300 veh/h | delay down at low demand (FHWA STM 2008 ch. 5) | stopped delay 11.1 -> 2.1 s/veh; stops 1.34 -> 0.12 /veh-km | holds |
 | Speed limit (procedural `speed_limit_mps`) | 13.4 -> 8.9 m/s, 600 veh/h | speed down, travel time up, flow down at equal density (Greenshields 1935) | speed 7.58 -> 5.94 m/s; travel-time rate 132 -> 168 s/km; vehicle-km 7.90 -> 6.21 | holds. The steady-state density rise is not reached in 90 s, which is shorter than one trip, so it is not asserted |
 | Equipped fraction `actors.vehicles.equipped_fraction` | 1.0 -> 0.3, 1500 veh/h | awareness and neighbours down (ETSI TR 103 562) | neighbours 15.6 -> 4.4; receptions per node 4163 -> 1224 | holds |
@@ -103,11 +104,14 @@ differences between rows are the GNSS model's.
    - Worth a network-track check.
 4. **All other rows hold** with the parameter wired through to the model at run time. No
    wiring fix was needed.
+5. **Green split was not a setting.** The procedural grid always split the green evenly.
+   `world.source.params.ew_green_share` (0.1-0.9, default 0.5, `v2xw-world`
+   `procedural.rs`, model card cites Webster 1958) now sets it. At 0.5 both greens are
+   exactly (C - 2 amber) / 2 as before, so existing worlds and digests do not change.
+   On OSM worlds the split still follows lane counts (`SignalDefaults`).
 
 ## Not covered
 
-- **Green split:** not exposed for procedural grids; the OSM split follows lane counts,
-  `SignalDefaults`. Only the cycle row is here.
 - **Snow, sleet and visibility:** follow the same FHWA path as rain.
 - **The shared sensitivity harness:** was not on this base. The test file carries a
   minimal same-seed helper and a filtering recorder, `Probe`, instead.

@@ -629,6 +629,44 @@ fn a_longer_cycle_raises_delay_and_queue() {
     );
 }
 
+/// Green split (procedural `ew_green_share`): moving green away from an even split, at
+/// demand that loads both streets, starves one street and raises the network's delay and
+/// queue. Webster's uniform delay d1 = 0.5 C (1 - g/C)^2 / (1 - min(1, X) g/C) is convex
+/// in g/C, and the starved approach's X rises towards 1 (HCM 6th ed. eq. 19-19; Webster
+/// 1958), so the delay saved on the favoured street is less than the delay added on the
+/// starved one.
+#[test]
+fn a_skewed_green_split_raises_delay_and_queue() {
+    let with = |share: f64| {
+        let mut s = grid(120.0, 1200.0);
+        grid_param(&mut s, "ew_green_share", serde_json::json!(share));
+        flow(&run(s).1)
+    };
+    let (even, skewed) = (with(0.5), with(0.2));
+    eprintln!(
+        "green split 0.5 -> 0.2: stopped delay {:.2} -> {:.2} s/veh; queue {:.2} -> {:.2} veh; \
+         speed {:.2} -> {:.2} m/s",
+        even.stopped_per_veh,
+        skewed.stopped_per_veh,
+        even.queue,
+        skewed.queue,
+        even.speed,
+        skewed.speed
+    );
+    assert!(
+        skewed.stopped_per_veh > even.stopped_per_veh,
+        "stopped delay {} s (even) -> {} s (0.2)",
+        even.stopped_per_veh,
+        skewed.stopped_per_veh
+    );
+    assert!(
+        skewed.queue > even.queue,
+        "queue {} -> {}",
+        even.queue,
+        skewed.queue
+    );
+}
+
 /// Actuated against fixed-time at low demand: an actuated controller gaps out on an empty
 /// approach and serves the waiting one, so delay falls (FHWA Traffic Signal Timing
 /// Manual 2008 ch. 5; HCM 6th ed. ch. 19 actuated-control adjustment).
