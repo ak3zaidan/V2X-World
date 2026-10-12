@@ -31,7 +31,7 @@ This engine's procedural TR 36.885 3 × 3 grid exported to plain XML, built by n
 
 - SUMO: SUMO 1.27.1, driven over TraCI by `mobility/sumo-traci`.
 
-**Summary, this engine against SUMO's default model, over all 5 cases:** network flow -1 to +7 %, space-mean speed -9 to -3 %; at least 98 % of edges within GEH 5 (acceptance: 85 %); edge-speed correlation at least 0.84; paired travel-time ratio 1.10–1.20 on the mean and 1.01–1.04 on the median.
+**Summary, this engine against SUMO's default model, over all 6 cases:** network flow -7 to -1 %, space-mean speed -14 to -3 %; at least 97 % of edges within GEH 5 (acceptance: 85 %); edge-speed correlation at least 0.89; paired travel-time ratio 1.05–1.17 on the mean and 1.01–1.02 on the median.
 
 
 ### grid at 600 veh/h offered
@@ -41,25 +41,33 @@ This engine's procedural TR 36.885 3 × 3 grid exported to plain XML, built by n
 | trips offered | 96 | 96 | 96 | +0 % |
 | trips inserted | 96 | 96 | 96 | +0 % |
 | trips completed | 96 | 96 | 96 | +0 % |
-| flow q, veh/h/lane (Edie) | 14.7 | 14.2 | 14.0 | +3 % |
-| density k, veh/km/lane (Edie) | 0.54 | 0.51 | 0.52 | +6 % |
-| space-mean speed, km/h | 27.1 | 28.0 | 26.8 | -3 % |
-| mean travel time, s | 191.0 | 177.4 | 183.4 | +8 % |
-| median travel time, s | 186.3 | 173.5 | 178.5 | +7 % |
-| 85th pct travel time, s | 271.4 | 246.9 | 259.9 | +10 % |
-| mean insertion delay, s | 0.14 | 0.07 | 0.06 | +115 % |
-| mean vehicles halting (< 0.1 m/s) | 4.4 | 5.4 | 4.9 | -20 % |
-| max vehicles halting | 14 | 15 | 16 | -7 % |
-| halting time per trip, s | 45.9 | 56.7 | 50.6 | -19 % |
-| wall-clock, s | 1.5 | 2.4 | 2.4 | |
+| flow q, veh/h/lane (Edie) | 14.0 | 14.2 | 14.0 | -2 % |
+| density k, veh/km/lane (Edie) | 0.52 | 0.51 | 0.52 | +2 % |
+| space-mean speed, km/h | 27.0 | 28.0 | 26.8 | -3 % |
+| mean travel time, s | 182.3 | 177.4 | 183.4 | +3 % |
+| median travel time, s | 181.2 | 173.5 | 178.5 | +4 % |
+| 85th pct travel time, s | 252.8 | 246.9 | 259.9 | +2 % |
+| mean insertion delay, s | 0.13 | 0.07 | 0.06 | +100 % |
+| mean vehicles halting (< 0.1 m/s) | 4.3 | 5.4 | 4.9 | -20 % |
+| max vehicles halting | 15 | 15 | 16 | +0 % |
+| halting time per trip, s | 45.4 | 56.7 | 50.6 | -20 % |
+|   of which at a stop line (last 30 m), s | 43.9 | 56.7 | 50.6 | -23 % |
+|   of which mid-block, s | 1.4 | 0.0 | 0.0 | — |
+|   of which inside a junction, s | 0.0 | 0.0 | 0.0 | — |
+| stops per trip | 2.27 | 2.51 | 2.52 | -10 % |
+| lane changes per vehicle-km | 0.33 | 0.32 | 0.24 | +3 % |
+| junction speed (moving), km/h | 28.0 | 24.6 | 26.1 | +14 % |
+| queue discharge headway, s | 2.85 | 2.55 | 2.94 | +12 % |
+| vehicles left in network at end | 0 | 0 | 0 | — |
+| wall-clock, s | 0.2 | 2.0 | 1.8 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| this engine (native) vs SUMO Krauss (default) | 80 | 100 % | 0.84 | 4.1 | 96 | 1.10 | 1.02 |
-| this engine (native) vs SUMO IDM | 80 | 100 % | 0.85 | 3.2 | 96 | 1.07 | 1.02 |
+| this engine (native) vs SUMO Krauss (default) | 80 | 100 % | 0.89 | 3.2 | 96 | 1.05 | 1.02 |
+| this engine (native) vs SUMO IDM | 80 | 100 % | 0.92 | 2.3 | 96 | 1.01 | 1.01 |
 | SUMO IDM vs SUMO Krauss (default) | 80 | 100 % | 0.95 | 2.0 | 96 | 1.04 | 1.00 |
 
-Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 6/6/6, 19/18/18, 20/19/20, 23/22/22, 20/19/19, 16/14/16, 10/9/9, 19/18/18, 16/12/14, 4/2/2, 0/0/0
+Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 6/6/6, 18/18/18, 19/19/20, 23/22/22, 20/19/19, 16/14/16, 9/9/9, 18/18/18, 14/12/14, 3/2/2, 0/0/0
 
 
 ### grid at 1800 veh/h offered
@@ -68,26 +76,34 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 6/6/
 |---|---:|---:|---:|---:|
 | trips offered | 315 | 315 | 315 | +0 % |
 | trips inserted | 315 | 315 | 315 | +0 % |
-| trips completed | 313 | 314 | 314 | -0 % |
-| flow q, veh/h/lane (Edie) | 52.7 | 49.1 | 49.0 | +7 % |
-| density k, veh/km/lane (Edie) | 2.02 | 1.77 | 1.82 | +14 % |
-| space-mean speed, km/h | 26.1 | 27.7 | 26.9 | -6 % |
-| mean travel time, s | 198.1 | 176.4 | 181.2 | +12 % |
-| median travel time, s | 192.0 | 177.5 | 184.6 | +8 % |
-| 85th pct travel time, s | 268.9 | 245.3 | 255.2 | +10 % |
-| mean insertion delay, s | 0.27 | 0.12 | 0.16 | +118 % |
-| mean vehicles halting (< 0.1 m/s) | 17.4 | 18.0 | 16.4 | -3 % |
-| max vehicles halting | 53 | 48 | 47 | +10 % |
-| halting time per trip, s | 52.1 | 55.2 | 50.1 | -6 % |
-| wall-clock, s | 5.6 | 5.8 | 6.1 | |
+| trips completed | 314 | 314 | 314 | +0 % |
+| flow q, veh/h/lane (Edie) | 48.9 | 49.1 | 49.0 | -1 % |
+| density k, veh/km/lane (Edie) | 1.84 | 1.77 | 1.82 | +4 % |
+| space-mean speed, km/h | 26.5 | 27.7 | 26.9 | -4 % |
+| mean travel time, s | 183.2 | 176.4 | 181.2 | +4 % |
+| median travel time, s | 186.5 | 177.5 | 184.6 | +5 % |
+| 85th pct travel time, s | 249.8 | 245.3 | 255.2 | +2 % |
+| mean insertion delay, s | 0.27 | 0.12 | 0.16 | +121 % |
+| mean vehicles halting (< 0.1 m/s) | 15.6 | 18.0 | 16.4 | -13 % |
+| max vehicles halting | 45 | 48 | 47 | -6 % |
+| halting time per trip, s | 47.9 | 55.2 | 50.1 | -13 % |
+|   of which at a stop line (last 30 m), s | 46.6 | 55.1 | 50.0 | -15 % |
+|   of which mid-block, s | 1.3 | 0.1 | 0.1 | +2242 % |
+|   of which inside a junction, s | 0.0 | 0.0 | 0.0 | — |
+| stops per trip | 2.37 | 2.66 | 2.62 | -11 % |
+| lane changes per vehicle-km | 0.88 | 0.80 | 0.76 | +9 % |
+| junction speed (moving), km/h | 28.2 | 25.5 | 26.9 | +11 % |
+| queue discharge headway, s | 2.85 | 2.47 | 2.86 | +16 % |
+| vehicles left in network at end | 1 | 1 | 1 | +0 % |
+| wall-clock, s | 0.9 | 3.4 | 3.5 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| this engine (native) vs SUMO Krauss (default) | 80 | 100 % | 0.87 | 3.4 | 313 | 1.16 | 1.02 |
-| this engine (native) vs SUMO IDM | 80 | 100 % | 0.86 | 2.7 | 313 | 1.12 | 1.02 |
+| this engine (native) vs SUMO Krauss (default) | 80 | 100 % | 0.94 | 2.4 | 314 | 1.07 | 1.02 |
+| this engine (native) vs SUMO IDM | 80 | 100 % | 0.96 | 1.6 | 314 | 1.03 | 1.01 |
 | SUMO IDM vs SUMO Krauss (default) | 80 | 100 % | 0.97 | 1.7 | 314 | 1.03 | 1.00 |
 
-Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 13/13/13, 52/50/51, 52/48/50, 72/68/70, 72/62/63, 69/59/61, 70/58/60, 71/60/63, 39/36/38, 11/10/11, 2/1/1
+Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 13/13/13, 53/50/51, 49/48/50, 68/68/70, 64/62/63, 61/59/61, 63/58/60, 65/60/63, 39/36/38, 9/10/11, 1/1/1
 
 
 ### grid at 3600 veh/h offered
@@ -96,26 +112,34 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 13/1
 |---|---:|---:|---:|---:|
 | trips offered | 651 | 651 | 651 | +0 % |
 | trips inserted | 651 | 651 | 651 | +0 % |
-| trips completed | 627 | 648 | 648 | -3 % |
-| flow q, veh/h/lane (Edie) | 111.2 | 104.2 | 103.7 | +7 % |
-| density k, veh/km/lane (Edie) | 4.51 | 3.83 | 3.95 | +18 % |
-| space-mean speed, km/h | 24.6 | 27.2 | 26.3 | -9 % |
-| mean travel time, s | 203.9 | 175.6 | 181.4 | +16 % |
-| median travel time, s | 197.3 | 174.8 | 179.9 | +13 % |
-| 85th pct travel time, s | 291.8 | 250.2 | 254.5 | +17 % |
-| mean insertion delay, s | 0.40 | 0.25 | 0.32 | +57 % |
-| mean vehicles halting (< 0.1 m/s) | 42.3 | 36.9 | 35.4 | +14 % |
-| max vehicles halting | 118 | 109 | 105 | +8 % |
-| halting time per trip, s | 63.9 | 51.3 | 48.6 | +25 % |
-| wall-clock, s | 14.3 | 11.5 | 11.8 | |
+| trips completed | 647 | 648 | 648 | -0 % |
+| flow q, veh/h/lane (Edie) | 103.0 | 104.2 | 103.7 | -1 % |
+| density k, veh/km/lane (Edie) | 4.01 | 3.83 | 3.95 | +5 % |
+| space-mean speed, km/h | 25.7 | 27.2 | 26.3 | -6 % |
+| mean travel time, s | 185.3 | 175.6 | 181.4 | +6 % |
+| median travel time, s | 185.2 | 174.8 | 179.9 | +6 % |
+| 85th pct travel time, s | 254.6 | 250.2 | 254.5 | +2 % |
+| mean insertion delay, s | 0.36 | 0.25 | 0.32 | +43 % |
+| mean vehicles halting (< 0.1 m/s) | 35.1 | 36.9 | 35.4 | -5 % |
+| max vehicles halting | 104 | 109 | 105 | -5 % |
+| halting time per trip, s | 48.4 | 51.3 | 48.6 | -6 % |
+|   of which at a stop line (last 30 m), s | 46.6 | 50.7 | 47.7 | -8 % |
+|   of which mid-block, s | 1.8 | 0.6 | 0.9 | +213 % |
+|   of which inside a junction, s | 0.0 | 0.0 | 0.0 | — |
+| stops per trip | 2.47 | 2.65 | 2.76 | -7 % |
+| lane changes per vehicle-km | 1.22 | 1.04 | 1.02 | +17 % |
+| junction speed (moving), km/h | 28.5 | 26.5 | 27.5 | +7 % |
+| queue discharge headway, s | 2.80 | 2.37 | 2.75 | +18 % |
+| vehicles left in network at end | 3 | 3 | 3 | +0 % |
+| wall-clock, s | 2.2 | 6.9 | 6.9 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| this engine (native) vs SUMO Krauss (default) | 80 | 98 % | 0.89 | 3.5 | 627 | 1.20 | 1.04 |
-| this engine (native) vs SUMO IDM | 80 | 96 % | 0.86 | 2.7 | 627 | 1.15 | 1.03 |
+| this engine (native) vs SUMO Krauss (default) | 80 | 100 % | 0.94 | 2.5 | 647 | 1.08 | 1.02 |
+| this engine (native) vs SUMO IDM | 80 | 100 % | 0.93 | 1.9 | 647 | 1.04 | 1.02 |
 | SUMO IDM vs SUMO Krauss (default) | 80 | 100 % | 0.98 | 1.5 | 648 | 1.04 | 1.01 |
 
-Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 24/24/24, 85/81/83, 127/119/120, 134/122/126, 151/124/126, 173/146/149, 166/132/138, 163/125/133, 101/65/68, 38/11/12, 24/3/3
+Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 24/24/24, 85/81/83, 120/119/120, 124/122/126, 134/124/126, 154/146/149, 143/132/138, 133/125/133, 74/65/68, 12/11/12, 3/3/3
 
 
 ### manhattan at 900 veh/h offered
@@ -125,25 +149,33 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 24/2
 | trips offered | 99 | 99 | 99 | +0 % |
 | trips inserted | 99 | 99 | 99 | +0 % |
 | trips completed | 91 | 92 | 93 | -1 % |
-| flow q, veh/h/lane (Edie) | 12.1 | 12.2 | 12.3 | -1 % |
-| density k, veh/km/lane (Edie) | 0.74 | 0.72 | 0.73 | +2 % |
-| space-mean speed, km/h | 16.3 | 16.9 | 16.7 | -4 % |
-| mean travel time, s | 317.8 | 302.3 | 310.8 | +5 % |
-| median travel time, s | 316.9 | 315.9 | 317.4 | +0 % |
-| 85th pct travel time, s | 506.5 | 450.4 | 493.9 | +12 % |
-| mean insertion delay, s | 0.27 | 0.06 | 0.07 | +364 % |
-| mean vehicles halting (< 0.1 m/s) | 11.0 | 17.2 | 15.9 | -36 % |
-| max vehicles halting | 34 | 36 | 36 | -6 % |
-| halting time per trip, s | 105.2 | 161.4 | 150.4 | -35 % |
-| wall-clock, s | 3.2 | 3.7 | 3.7 | |
+| flow q, veh/h/lane (Edie) | 11.8 | 12.2 | 12.3 | -4 % |
+| density k, veh/km/lane (Edie) | 0.78 | 0.72 | 0.73 | +8 % |
+| space-mean speed, km/h | 15.2 | 16.9 | 16.7 | -10 % |
+| mean travel time, s | 337.8 | 302.3 | 310.8 | +12 % |
+| median travel time, s | 325.4 | 315.9 | 317.4 | +3 % |
+| 85th pct travel time, s | 507.7 | 450.4 | 493.9 | +13 % |
+| mean insertion delay, s | 0.15 | 0.06 | 0.07 | +150 % |
+| mean vehicles halting (< 0.1 m/s) | 15.2 | 17.2 | 15.9 | -11 % |
+| max vehicles halting | 40 | 36 | 36 | +11 % |
+| halting time per trip, s | 144.4 | 161.4 | 150.4 | -11 % |
+|   of which at a stop line (last 30 m), s | 139.9 | 160.7 | 150.0 | -13 % |
+|   of which mid-block, s | 2.9 | 0.3 | 0.0 | +998 % |
+|   of which inside a junction, s | 1.6 | 0.4 | 0.4 | +267 % |
+| stops per trip | 5.86 | 6.31 | 6.27 | -7 % |
+| lane changes per vehicle-km | 0.45 | 0.69 | 0.60 | -36 % |
+| junction speed (moving), km/h | 28.1 | 26.7 | 27.9 | +5 % |
+| queue discharge headway, s | 2.85 | 2.21 | 2.72 | +29 % |
+| vehicles left in network at end | 8 | 7 | 6 | +14 % |
+| wall-clock, s | 0.7 | 2.5 | 2.5 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| this engine (native) vs SUMO Krauss (default) | 152 | 100 % | 0.97 | 2.3 | 90 | 1.10 | 1.01 |
-| this engine (native) vs SUMO IDM | 150 | 100 % | 0.98 | 1.8 | 90 | 1.06 | 1.01 |
+| this engine (native) vs SUMO Krauss (default) | 152 | 99 % | 0.97 | 2.1 | 90 | 1.17 | 1.01 |
+| this engine (native) vs SUMO IDM | 150 | 100 % | 0.98 | 1.8 | 90 | 1.13 | 1.01 |
 | SUMO IDM vs SUMO Krauss (default) | 152 | 99 % | 0.99 | 0.9 | 92 | 1.03 | 1.00 |
 
-Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 5/5/5, 14/13/14, 26/26/26, 38/37/37, 35/35/35, 34/32/34, 41/39/40, 38/37/37, 26/25/25, 12/11/12, 8/7/6
+Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 5/5/5, 14/13/14, 26/26/26, 38/37/37, 35/35/35, 37/32/34, 44/39/40, 42/37/37, 29/25/25, 13/11/12, 8/7/6
 
 
 ### manhattan at 2400 veh/h offered
@@ -153,25 +185,71 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 5/5/
 | trips offered | 265 | 265 | 265 | +0 % |
 | trips inserted | 265 | 265 | 265 | +0 % |
 | trips completed | 223 | 232 | 229 | -4 % |
-| flow q, veh/h/lane (Edie) | 31.2 | 31.5 | 31.3 | -1 % |
-| density k, veh/km/lane (Edie) | 1.90 | 1.78 | 1.82 | +7 % |
-| space-mean speed, km/h | 16.4 | 17.7 | 17.2 | -8 % |
-| mean travel time, s | 320.8 | 302.3 | 307.9 | +6 % |
-| median travel time, s | 298.8 | 289.5 | 300.1 | +3 % |
-| 85th pct travel time, s | 489.4 | 462.6 | 482.2 | +6 % |
-| mean insertion delay, s | 0.56 | 0.10 | 0.13 | +481 % |
-| mean vehicles halting (< 0.1 m/s) | 29.0 | 39.0 | 38.1 | -26 % |
+| flow q, veh/h/lane (Edie) | 31.0 | 31.5 | 31.3 | -1 % |
+| density k, veh/km/lane (Edie) | 1.83 | 1.78 | 1.82 | +3 % |
+| space-mean speed, km/h | 16.9 | 17.7 | 17.2 | -4 % |
+| mean travel time, s | 311.6 | 302.3 | 307.9 | +3 % |
+| median travel time, s | 293.5 | 289.5 | 300.1 | +1 % |
+| 85th pct travel time, s | 481.2 | 462.6 | 482.2 | +4 % |
+| mean insertion delay, s | 0.17 | 0.10 | 0.13 | +75 % |
+| mean vehicles halting (< 0.1 m/s) | 31.5 | 39.0 | 38.1 | -19 % |
 | max vehicles halting | 87 | 87 | 88 | +0 % |
-| halting time per trip, s | 109.9 | 149.7 | 146.6 | -27 % |
-| wall-clock, s | 9.7 | 10.6 | 9.6 | |
+| halting time per trip, s | 129.7 | 149.7 | 146.6 | -13 % |
+|   of which at a stop line (last 30 m), s | 116.7 | 145.8 | 142.1 | -20 % |
+|   of which mid-block, s | 11.1 | 3.6 | 3.9 | +212 % |
+|   of which inside a junction, s | 1.8 | 0.3 | 0.5 | +442 % |
+| stops per trip | 5.94 | 6.19 | 6.32 | -4 % |
+| lane changes per vehicle-km | 0.66 | 0.83 | 0.77 | -21 % |
+| junction speed (moving), km/h | 28.7 | 28.0 | 28.7 | +3 % |
+| queue discharge headway, s | 2.69 | 2.15 | 2.62 | +25 % |
+| vehicles left in network at end | 42 | 33 | 36 | +27 % |
+| wall-clock, s | 1.7 | 4.9 | 4.8 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| this engine (native) vs SUMO Krauss (default) | 179 | 100 % | 0.94 | 3.6 | 223 | 1.12 | 1.02 |
-| this engine (native) vs SUMO IDM | 179 | 99 % | 0.94 | 3.1 | 221 | 1.08 | 1.02 |
+| this engine (native) vs SUMO Krauss (default) | 179 | 99 % | 0.95 | 3.0 | 223 | 1.07 | 1.01 |
+| this engine (native) vs SUMO IDM | 179 | 99 % | 0.95 | 2.4 | 222 | 1.04 | 1.01 |
 | SUMO IDM vs SUMO Krauss (default) | 180 | 99 % | 0.99 | 1.2 | 229 | 1.04 | 1.00 |
 
-Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 9/9/9, 45/44/45, 72/70/70, 83/82/82, 90/82/84, 97/90/95, 100/92/94, 104/97/97, 84/79/82, 56/50/51, 42/33/36
+Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 9/9/9, 45/44/45, 72/70/70, 82/82/82, 84/82/84, 94/90/95, 95/92/94, 100/97/97, 85/79/82, 59/50/51, 42/33/36
+
+
+### manhattan at 3600 veh/h offered
+
+| measure | this engine (native) | SUMO Krauss (default) | SUMO IDM | native vs SUMO-Krauss |
+|---|---:|---:|---:|---:|
+| trips offered | 400 | 400 | 400 | +0 % |
+| trips inserted | 399 | 400 | 400 | -0 % |
+| trips completed | 313 | 368 | 363 | -15 % |
+| flow q, veh/h/lane (Edie) | 44.3 | 47.7 | 47.7 | -7 % |
+| density k, veh/km/lane (Edie) | 3.04 | 2.80 | 2.84 | +8 % |
+| space-mean speed, km/h | 14.6 | 17.0 | 16.8 | -14 % |
+| mean travel time, s | 324.7 | 311.9 | 317.4 | +4 % |
+| median travel time, s | 297.0 | 300.2 | 301.7 | -1 % |
+| 85th pct travel time, s | 514.8 | 481.2 | 490.0 | +7 % |
+| mean insertion delay, s | 0.33 | 0.19 | 0.28 | +72 % |
+| mean vehicles halting (< 0.1 m/s) | 61.7 | 59.6 | 58.3 | +4 % |
+| max vehicles halting | 155 | 144 | 139 | +8 % |
+| halting time per trip, s | 170.3 | 146.9 | 144.8 | +16 % |
+|   of which at a stop line (last 30 m), s | 131.8 | 136.4 | 132.8 | -3 % |
+|   of which mid-block, s | 35.6 | 9.8 | 11.4 | +263 % |
+|   of which inside a junction, s | 2.9 | 0.7 | 0.6 | +296 % |
+| stops per trip | 5.80 | 6.27 | 6.42 | -8 % |
+| lane changes per vehicle-km | 0.82 | 0.89 | 0.86 | -8 % |
+| junction speed (moving), km/h | 28.2 | 27.9 | 28.7 | +1 % |
+| queue discharge headway, s | 2.63 | 2.16 | 2.60 | +22 % |
+| vehicles left in network at end | 85 | 32 | 37 | +166 % |
+| wall-clock, s | 3.1 | 7.9 | 8.1 | |
+
+- this engine (native): 1 trips dropped by the engine
+
+| pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| this engine (native) vs SUMO Krauss (default) | 186 | 97 % | 0.95 | 3.0 | 312 | 1.14 | 1.02 |
+| this engine (native) vs SUMO IDM | 186 | 98 % | 0.94 | 2.9 | 311 | 1.11 | 1.02 |
+| SUMO IDM vs SUMO Krauss (default) | 186 | 98 % | 0.99 | 0.9 | 360 | 1.03 | 1.00 |
+
+Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 12/12/12, 63/62/63, 99/95/97, 126/122/123, 141/134/137, 156/143/146, 175/153/155, 183/160/161, 146/125/126, 110/69/73, 85/32/37
 
 
 ## Why the simulators differ
@@ -183,17 +261,164 @@ Network, trips, routes, signal programmes and measurement are shared, so what re
 
 The mechanisms that can produce the observed differences, with what each predicts:
 
-- **Lane changing before turns.** SUMO's LC2013 makes strategic lane changes far ahead of a turn; this engine's MOBIL with strategic urgency changes later. A vehicle that reaches the end of its lane in the wrong lane waits for a gap, which slows a minority of trips a great deal and the rest not at all: the tail signature. Not yet isolated by an experiment (next step: rerun with turning trips only, and with SUMO's `--lanechange.duration` and `lcStrategic` varied).
+- **Lane changing before turns: found and fixed (2026-10-11).** The travel-time tail was traced trip by trip (`V2XW_XVAL_OUTLIERS`, `V2XW_XVAL_TRACE`). Three defects of this engine, each fixed: (1) after a speed-gain change the route was re-planned on the lane graph, which has no lane changes, so a car that could not make a later turn from its new lane went round the block (296 s against SUMO's 109 s on one grid trip); (2) two cars level with each other at the same speed stayed level to the end of the lane, so the one that needed the other's lane missed its turn or was removed; it now drops behind, as LC2013's `informLeader` does, and the follower behind an urgent request makes room (`informFollower`); (3) a car owing a change it could not make drove past the end of its lane and was removed, where SUMO waits there. With these, and with the native run on a scenario's shipped defaults (strategic lane choice on), lane changes per vehicle-km agree with SUMO within about 20 %, and the grid's paired mean travel-time ratio at 3600 veh/h fell from 1.21 to 1.08.
 - **Junctions.** Both run netconvert's signal programmes from the same `net.xml`, but yield behaviour differs: SUMO uses its junction model with impatience and look-ahead over internal lanes; this engine uses gap acceptance on the connector lanes the importer builds. The traffic validation report already records this engine's permitted-left critical gap at 5.99 s against the HCM's 4.5 s (`docs/validation/traffic.md`, `calibration/permitted-left-gap`), which lengthens left-turn delays in this engine specifically.
-- **Car following.** SUMO's default Krauss has driver imperfection σ = 0.5 (SUMO vType defaults: accel 2.6 m/s², decel 4.5 m/s², τ = 1 s, minGap 2.5 m); its dawdling makes vehicles stop fully more often. Fewer vehicles below 0.1 m/s in this engine at equal or longer travel time is consistent with queues that creep rather than stand.
-- **Desired speed.** SUMO draws each vehicle's speed factor from N(1, 0.1) of the lane limit (SUMO `speedFactor` default `norm(1,0.1)`), so about half its vehicles exceed the limit on open links; this engine uses its own per-class desired speeds. This raises SUMO's free-flow link speeds by a few km/h.
-- **Insertion.** SUMO inserts at the highest safe speed (`departSpeed=max`); this engine's insertion waits longer for space (the insertion-delay row), though by under a second.
-- **Teleports.** SUMO removes a vehicle stuck for 300 s (`--time-to-teleport` default 300 s); none of these runs approaches gridlock, so this does not explain the differences here, but it would at higher demand.
+- **Car following.** SUMO's default Krauss has driver imperfection σ = 0.5 (SUMO vType defaults: accel 2.6 m/s², decel 4.5 m/s², τ = 1 s, minGap 2.5 m). The queue-discharge row is where most of the remaining travel-time gap comes from: Krauss discharges a queue a few tenths of a second per vehicle faster than this engine, while SUMO's own IDM discharges at about this engine's rate, so the residual is mostly the car-following equation, not this engine's junctions or lane changing. **Here SUMO's default is the less realistic one:** field discharge headways are 3.8, 3.1, 2.7, 2.4 and 2.2 s for queue positions 1-5 (Greenshields 1947), settling near the HCM's 2.1 s in a CBD (1,900 pc/h/ln × 0.90), and this engine's saturation-flow check measures 2.13 s with a 2.85 s start-up lost time against those (`docs/validation/traffic.md`, `calibration/saturation-flow`). Krauss's quicker discharge, and its full stops where this engine's queues creep (more stops per trip and more halting time per trip in the tables above), follow from its safe-speed rule and dawdling, not from data.
+- **Desired speed.** Both draw each passenger car's speed factor from N(1, 0.1) of the lane limit, bounded to 0.2-2 (SUMO `speedFactor` default `normc(1,0.1,0.2,2)`; this engine's `DriverTraits::speed_factor`), so free-flow link speeds match; the speed difference is in queues and at junctions.
+- **Insertion.** SUMO inserts at the highest safe speed (`departSpeed=max`); this engine inserts at rest and waits longer for space (the insertion-delay row, under a second). Starting from rest is most of this engine's mid-block halting row (about 1.4 s per trip on the lightly loaded grid, where SUMO has none).
+- **Open: Manhattan at 3600 veh/h.** The one case where this engine is clearly worse than both SUMO models (speed -14 %, 15 % fewer trips completed, more than twice the vehicles left at the end). SUMO's IDM agrees with Krauss there, so it is not the car-following equation. The worst trips stand 200-300 s at single places: mid-link queues on ~62 m links and one car standing 263 s on a junction connector, i.e. spill-back that locks a junction, which SUMO's junction model (impatience, look-ahead over internal lanes) avoids. Traced to the place, not yet to the cause.
+- **Teleports.** SUMO removes a vehicle stuck for 300 s (`--time-to-teleport` default 300 s), and this engine does the same with the same 300 s (a scenario's `traffic.gridlock_timeout_s` default). Only Manhattan at 3600 veh/h reaches it: one traced native car stood 300 s and was removed.
 - **Reference point.** Positions are compared at the rear bumper in both (SUMO's front bumper minus vehicle length); this shifts per-edge entry times by under a second and nothing else.
 
 ## Radio: delivery versus distance against Veins, OpenCV2X/Artery and Molina-Masegosa
 
 This engine's 802.11p and LTE-V2X Mode 4 stacks are run through the radio crate's highway sweep harness (`v2xw_radio::sweep`) in each study's configuration. Published curves are figures, not tables, so every reference value below was **digitised**: the Veins curve by colour-tracing the rendered figure (±0.01), the OpenCV2X curves by reading the plotted markers (±0.02). OpenCV2X is built on Artery, so it stands in for Artery here.
+
+#### Veins 802.11p, 60 veh/km, 10 Hz, 190 B, 6 Mbit/s — channel `winner-plus-b1`
+
+Reference: Sepulcre, Gozalvez et al., IEEE TVT (accepted Oct. 2021), arXiv:2104.07923, Fig. 4a (Veins simulation curve, digitised ±0.01). This engine: 120 vehicles, 4800 transmissions, 282914 arrivals evaluated.
+
+| distance (m) | published PDR | this engine | difference |
+|---:|---:|---:|---:|
+| 0 | 0.986 | 1.000 | +0.014 |
+| 50 | 0.979 | 1.000 | +0.021 |
+| 100 | 0.968 | 0.980 | +0.012 |
+| 150 | 0.930 | 0.922 | -0.008 |
+| 200 | 0.859 | 0.825 | -0.034 |
+| 250 | 0.630 | 0.431 | -0.199 |
+| 300 | 0.297 | 0.155 | -0.142 |
+| 350 | 0.091 | 0.028 | -0.063 |
+| 400 | 0.019 | 0.001 | -0.018 |
+
+Mean absolute deviation: **5.7 PDR points**.
+
+#### OpenCV2X LTE-V2X Mode 4, 60 veh/km, 10 Hz, 190 B, MCS 7 — channel `winner-plus-b1`
+
+Reference: McCarthy et al., arXiv:2103.13212, Fig. 3, solid curve β=0.06 veh/m (digitised ±0.02). This engine: 120 vehicles, 4814 transmissions, 283742 arrivals evaluated.
+
+| distance (m) | published PDR | this engine | difference |
+|---:|---:|---:|---:|
+| 0 | 0.990 | 0.993 | +0.003 |
+| 50 | 0.980 | 0.985 | +0.005 |
+| 100 | 0.965 | 0.953 | -0.012 |
+| 150 | 0.950 | 0.935 | -0.015 |
+| 200 | 0.945 | 0.777 | -0.168 |
+| 250 | 0.920 | 0.387 | -0.533 |
+| 300 | 0.890 | 0.108 | -0.782 |
+| 350 | 0.820 | 0.017 | -0.803 |
+| 400 | 0.670 | 0.003 | -0.667 |
+| 450 | 0.460 | 0.000 | -0.460 |
+| 500 | 0.240 | — | — |
+
+Mean absolute deviation: **34.5 PDR points**.
+
+#### OpenCV2X LTE-V2X Mode 4, 120 veh/km, 10 Hz, 190 B, MCS 7 — channel `winner-plus-b1`
+
+Reference: McCarthy et al., arXiv:2103.13212, Fig. 3, solid curve β=0.12 veh/m (digitised ±0.02). This engine: 240 vehicles, 9584 transmissions, 1140034 arrivals evaluated.
+
+| distance (m) | published PDR | this engine | difference |
+|---:|---:|---:|---:|
+| 0 | 0.990 | 0.985 | -0.005 |
+| 50 | 0.960 | 0.960 | +0.000 |
+| 100 | 0.930 | 0.919 | -0.011 |
+| 150 | 0.920 | 0.820 | -0.100 |
+| 200 | 0.895 | 0.622 | -0.273 |
+| 250 | 0.835 | 0.317 | -0.518 |
+| 300 | 0.770 | 0.088 | -0.682 |
+| 350 | 0.680 | 0.015 | -0.665 |
+| 400 | 0.530 | 0.001 | -0.529 |
+| 450 | 0.350 | 0.001 | -0.349 |
+| 500 | 0.180 | — | — |
+
+Mean absolute deviation: **31.3 PDR points**.
+
+#### Molina-Masegosa 2017 LTE-V2X Mode 4, 120 veh/km, 10 pps — channel `winner-plus-b1`
+
+Reference: Molina-Masegosa & Gozalvez, IEEE VT Mag. 12(4) 2017, Fig. 3 (values as transcribed in v2xw-radio sweep.rs). This engine: 240 vehicles, 9584 transmissions, 1140038 arrivals evaluated.
+
+| distance (m) | published PDR | this engine | difference |
+|---:|---:|---:|---:|
+| 0 | 0.970 | 0.990 | +0.020 |
+| 100 | 0.950 | 0.930 | -0.020 |
+| 200 | 0.900 | 0.756 | -0.144 |
+| 300 | 0.790 | 0.303 | -0.487 |
+| 400 | 0.660 | 0.027 | -0.633 |
+| 500 | 0.450 | — | — |
+
+Mean absolute deviation: **26.1 PDR points**.
+
+#### Veins 802.11p, 60 veh/km, 10 Hz, 190 B, 6 Mbit/s — channel `winner-plus-b1-actual-heights`
+
+Reference: Sepulcre, Gozalvez et al., IEEE TVT (accepted Oct. 2021), arXiv:2104.07923, Fig. 4a (Veins simulation curve, digitised ±0.01). This engine: 120 vehicles, 4800 transmissions, 282914 arrivals evaluated.
+
+| distance (m) | published PDR | this engine | difference |
+|---:|---:|---:|---:|
+| 0 | 0.986 | 1.000 | +0.014 |
+| 50 | 0.979 | 0.999 | +0.020 |
+| 100 | 0.968 | 0.993 | +0.025 |
+| 150 | 0.930 | 0.995 | +0.065 |
+| 200 | 0.859 | 0.984 | +0.125 |
+| 250 | 0.630 | 0.960 | +0.330 |
+| 300 | 0.297 | 0.901 | +0.604 |
+| 350 | 0.091 | 0.845 | +0.754 |
+| 400 | 0.019 | 0.785 | +0.766 |
+
+Mean absolute deviation: **30.0 PDR points**.
+
+#### OpenCV2X LTE-V2X Mode 4, 60 veh/km, 10 Hz, 190 B, MCS 7 — channel `winner-plus-b1-actual-heights`
+
+Reference: McCarthy et al., arXiv:2103.13212, Fig. 3, solid curve β=0.06 veh/m (digitised ±0.02). This engine: 120 vehicles, 4800 transmissions, 282925 arrivals evaluated.
+
+| distance (m) | published PDR | this engine | difference |
+|---:|---:|---:|---:|
+| 0 | 0.990 | 0.995 | +0.005 |
+| 50 | 0.980 | 0.972 | -0.008 |
+| 100 | 0.965 | 0.962 | -0.003 |
+| 150 | 0.950 | 0.953 | +0.003 |
+| 200 | 0.945 | 0.937 | -0.008 |
+| 250 | 0.920 | 0.904 | -0.016 |
+| 300 | 0.890 | 0.843 | -0.047 |
+| 350 | 0.820 | 0.773 | -0.047 |
+| 400 | 0.670 | 0.736 | +0.066 |
+| 450 | 0.460 | 0.666 | +0.206 |
+| 500 | 0.240 | — | — |
+
+Mean absolute deviation: **4.1 PDR points**.
+
+#### OpenCV2X LTE-V2X Mode 4, 120 veh/km, 10 Hz, 190 B, MCS 7 — channel `winner-plus-b1-actual-heights`
+
+Reference: McCarthy et al., arXiv:2103.13212, Fig. 3, solid curve β=0.12 veh/m (digitised ±0.02). This engine: 240 vehicles, 9590 transmissions, 1140775 arrivals evaluated.
+
+| distance (m) | published PDR | this engine | difference |
+|---:|---:|---:|---:|
+| 0 | 0.990 | 0.987 | -0.003 |
+| 50 | 0.960 | 0.961 | +0.001 |
+| 100 | 0.930 | 0.914 | -0.016 |
+| 150 | 0.920 | 0.844 | -0.076 |
+| 200 | 0.895 | 0.743 | -0.152 |
+| 250 | 0.835 | 0.651 | -0.184 |
+| 300 | 0.770 | 0.570 | -0.200 |
+| 350 | 0.680 | 0.506 | -0.174 |
+| 400 | 0.530 | 0.448 | -0.082 |
+| 450 | 0.350 | 0.396 | +0.046 |
+| 500 | 0.180 | — | — |
+
+Mean absolute deviation: **9.3 PDR points**.
+
+#### Molina-Masegosa 2017 LTE-V2X Mode 4, 120 veh/km, 10 pps — channel `winner-plus-b1-actual-heights`
+
+Reference: Molina-Masegosa & Gozalvez, IEEE VT Mag. 12(4) 2017, Fig. 3 (values as transcribed in v2xw-radio sweep.rs). This engine: 240 vehicles, 9595 transmissions, 1141355 arrivals evaluated.
+
+| distance (m) | published PDR | this engine | difference |
+|---:|---:|---:|---:|
+| 0 | 0.970 | 0.987 | +0.017 |
+| 100 | 0.950 | 0.929 | -0.021 |
+| 200 | 0.900 | 0.822 | -0.078 |
+| 300 | 0.790 | 0.693 | -0.097 |
+| 400 | 0.660 | 0.571 | -0.089 |
+| 500 | 0.450 | — | — |
+
+Mean absolute deviation: **6.0 PDR points**.
 
 #### Veins 802.11p, 60 veh/km, 10 Hz, 190 B, 6 Mbit/s — channel `winner-b1-shaped-todo-calibrate`
 
