@@ -5007,9 +5007,7 @@ impl Mobility for NativeMobility {
             // as it would a red light; raised only on entering the zone it was 15-30 m
             // away at speed and the driver braked at the 6 m/s² bound, closing up the car
             // behind (connected-intersections, 10 m/s at 25 m from the lane end).
-            if along
-                && let Some(left) = self.strategic_pending(world, actor)
-            {
+            if along && let Some(left) = self.strategic_pending(world, actor) {
                 let d = (left - STOP_LINE_MARGIN_M).max(0.0);
                 let before = leader;
                 leader = Self::closest(
@@ -5356,7 +5354,7 @@ impl Mobility for NativeMobility {
                 // A strategic change still owed by the no-change zone is the one change the
                 // zone allows: the vehicle waits at the end of its lane for it (the barrier
                 // in the decision pass) instead of driving on with no way out.
-                let owed = std::env::var_os("V2XW_ABL").is_none() && self.along_path()
+                let owed = self.along_path()
                     && self.strategic_target(ctx.world(), actor).is_some()
                     && actor.s_m >= actor.class.spec().length_m;
                 if self.along_path()
