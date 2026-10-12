@@ -3652,3 +3652,11 @@ order. Same digests at 1 and 2 threads; radio `phy` lib 29/29, `radio_tuning` 4/
   default).
 - **Build hazard:** agents share the scratchpad. Keep scripts and logs in a per-worktree
   subdirectory, or another agent's `cd` runs your tests in its worktree.
+
+## Round 11 integration (2026-10-12)
+
+Merged with --no-ff, in this order: perf (saturated-run speedup), protofix (security and protocol engine fixes), trafficfix (traffic settings wiring). The only conflicts were in BUILD-STATUS sections, and both sides were kept. Then `cargo fmt` (publish.rs).
+
+- Checks: `cargo check --workspace --tests` is clean. Engine `scenario::` lib passes 27/27. The new sensitivity_security rows (on_demand, peer_cert, prioritized) pass 3/3. Radio phy passes 29/29 and v2xw-node lib passes 136/136. The release CLI build passes. run-sim.sh boots on port 8758 and the agent status endpoint returns 200.
+- Output changes come from protofix only. They affect prioritized and on-demand runs, runs with rate_hz other than 10, MA decisions in attack runs, and the events record level, which now omits receptions. The perf change keeps the digests identical. The trafficfix settings default to the old behaviour.
+- Still open: Sybil ghost frames; priority ordering for the RSU and VRU runtimes; repeated MAC polls at the same instant (removing them needs new digests, owner to decide); join_m stops-on-green; the full sensitivity_security suite has not been run end to end.
