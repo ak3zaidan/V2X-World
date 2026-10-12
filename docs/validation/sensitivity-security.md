@@ -2,7 +2,7 @@
 
 Each row runs a baseline and one setting with the same seed and the same small fleet, and
 asserts the direction the cause predicts. A setting that changed nothing fails its row.
-Tests: `crates/v2xw-engine/tests/sensitivity_security.rs`. The 16 tests take about 90 s
+Tests: `crates/v2xw-engine/tests/sensitivity_security.rs`. The 17 tests take about 110 s
 together in a dev build with `opt-level=2`.
 
 **Fleet.** A procedural 5 x 8 grid, about 1.1 x 0.6 km, in open air. 20 to 60 vehicles
@@ -34,6 +34,7 @@ windows; counts are summed.
 | `net.uu.params.preset` / `penetration` | 5g-first-hop → 4g-west-coast; penetration 1 → 0.5 | Top-up exchange 1,136 → 1,259 ms. At half penetration: 10 vehicles with a modem instead of 20; 10 vehicles starved, 39 s without a valid certificate | The presets are the measured Uu latencies (`UuLatencyPreset`). A vehicle with no modem and no relay cannot top up. |
 | `actors.rsus[].backhaul_params` (no modem, 8 provisioning proxies) | 200 → 600 ms; 200 ms at 64 kbit/s; 5 ms | Top-up 1,884 → 3,484 ms; 64 kbit/s 2,181 ms. 5 ms: 2,142 ms over 320 messages instead of 240 | The exchange is a request, an ack and download polls 1 s apart, so it crosses the line 4 times one way (600 ms adds 1.6 s). A 5 ms line is not the fastest: its first poll arrives before the batch is ready, so a second poll is needed a second later. |
 | `security.protocol.params.crl_fetch_interval_s` / `crl_cadence_s` (20 % attackers) | fetch 5 → 30 s; cadence 10 → 30 s | Revocation latency (detect → first enforcement) 7.38 → 8.08 s for the fetch interval; 7.38 → 17.38 s for the cadence. Published at 7.23 s in both fetch runs | A list is published only when the authority revokes. A vehicle downloads only a version newer than its own, at its next poll. The cadence decides when the list is published, and the fetch interval decides the last leg. |
+| CRL size (follows revocations; `threats.attackers[].fraction`, 60 s, cadence 10 s, fetch 5 s) | 0.1 → 0.3 | Revoked 3 → 7. CRL entries 3 → 7, CRL bytes 332 → 492 (40 B an entry). Downloads 30 → 30 | One entry per revoked certificate. Total cellular downlink (56.8 → 55.5 kB) does not show it, because revoked vehicles stop topping up, which outweighs 30 downloads of 160 B more. |
 | `threats.attackers[].fraction` (ConstPos, legacy-12, corroborating MA) | 0 → 0.1 → 0.3 | Attackers 0 → 3 → 8. Verdicts 27 → 1,986 → 4,286. Report-level TP 0 → 6 → 15; FP 2 → 2 → 1. Revoked attackers 0 → 3 → 7, honest 0 | A pseudonym is a subject, so 3 attackers make 6 true-positive subjects. An honest fleet's 27 verdicts are the detector suite's false positives; the authority's persistence gate keeps them from revoking anyone. |
 
 ## What was fixed
@@ -113,5 +114,6 @@ reads the last window rather than a sum.
 **Not configurable, so not a row:**
 - BSM Part II beyond the path history: the events, lights and path prediction follow
   the vehicle's state, not a setting.
-- CRL size: it follows the number of revocations, not a setting.
+- CRL size: it follows the number of revocations, not a setting. Its row moves it through
+  the attacker share.
 - An explicit cellular "availability" model beyond `penetration` and coverage.

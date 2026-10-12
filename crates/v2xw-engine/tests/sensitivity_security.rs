@@ -665,6 +665,42 @@ fn the_crl_fetch_interval_moves_downloads_and_revocation_latency() {
     );
 }
 
+/// The CRL's size is not a setting: it follows the revocations. A larger attacker share
+/// revokes more vehicles, so the published list holds more entries and bytes, and every
+/// download costs more.
+#[test]
+fn the_revocations_move_the_crl_size() {
+    let with = |fraction: f64| {
+        let mut s = backend(30, 60.0);
+        attacked(&mut s, fraction);
+        if let Some(p) = s.security.protocol.as_mut() {
+            p.params["report_shuffle_window_s"] = json!(5);
+            p.params["crl_cadence_s"] = json!(10);
+            p.params["crl_fetch_interval_s"] = json!(5);
+        }
+        run(s)
+    };
+    let few = with(0.1);
+    let many = with(0.3);
+    let last = |m: &Measured, k: &str| m.last.get(k).copied().unwrap_or(0.0);
+    for (n, m) in [("0.1", &few), ("0.3", &many)] {
+        let p = &m.report.phase2;
+        println!(
+            "ROW crl size {n}: revoked {} entries {:.0} bytes {:.0} versions {} downloads {} \
+             uu_dl {}",
+            p.revoked_attackers + p.revoked_honest,
+            last(m, "crl_entries"),
+            last(m, "crl_bytes"),
+            p.crl_versions_published,
+            p.crl_downloads,
+            p.access.uu_dl_bytes,
+        );
+    }
+    assert!(few.report.phase2.revoked_attackers > 0, "nothing was revoked");
+    assert!(last(&many, "crl_entries") > last(&few, "crl_entries"));
+    assert!(last(&many, "crl_bytes") > last(&few, "crl_bytes"));
+}
+
 /// The attacker share: none, 10 % and 30 % of the fleet broadcasting a constant false
 /// position. Verdicts, reports about attackers and the authority's true positives rise with
 /// the share; an honest fleet has no true positive, and its false positives are what the
