@@ -1,30 +1,158 @@
+# Radio sensitivity rows for 802.11p on the sparse base (forty vehicles on a 1.2 km grid):
+# link budget, channel, frame size and offered load. The contention and congestion-control
+# rows run on the dense base, in radio-dsrc-dense.yaml.
+# `v2xw sensitivity scenarios/sensitivity/radio-dsrc.yaml`; the same rows run as tests in
+# crates/v2xw-engine/tests/sensitivity_radio.rs. docs/validation/sensitivity-radio.md gives
+# the theory and the measured table.
 base: dsrc-grid.yaml
 rows:
-  - {name: tx power 20->5 dBm, set: {radio.devices.obu.tx_power_dbm: 5.0}, metric: range90_m, expect: down}
-  - {name: tx power 20->5 dBm, set: {radio.devices.obu.tx_power_dbm: 5.0}, metric: prr_400_600, expect: down}
-  - {name: noise figure 6->12 dB, set: {radio.phy.noise_figure_db: 12.0}, metric: range90_m, expect: down}
-  - {name: noise figure 6->12 dB, set: {radio.phy.noise_figure_db: 12.0}, metric: prr_600_1000, expect: down}
-  - {name: PL exponent 2.5->3.5, base_set: {radio.channel_model.path_loss_exponent: 2.5}, set: {radio.channel_model.path_loss_exponent: 3.5}, metric: prr_200_600, expect: down}
-  - {name: shadowing 2->10 dB, base_set: {radio.channel_model.shadowing_sigma_db: 2.0}, set: {radio.channel_model.shadowing_sigma_db: 10.0}, metric: prr_200_600, expect: down}
-  - {name: nakagami m 3->1, base_set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape: 3.0}, set: {radio.channel_model.nakagami_shape: 1.0}, metric: prr_200_600, expect: down}
-  - {name: fading none->rayleigh, base_set: {radio.channel_model.fading: none}, set: {radio.channel_model.fading: rayleigh}, metric: prr_200_600, expect: down}
-  - {name: vehicles 40->120, set: {actors.vehicles.demand.params.max_total_vehicles: 120}, metric: cbr_mean, expect: up}
-  - {name: vehicles 40->120, set: {actors.vehicles.demand.params.max_total_vehicles: 120}, metric: collision_rate, expect: up}
-  - {name: vehicles 40->120, set: {actors.vehicles.demand.params.max_total_vehicles: 120}, metric: prr, expect: down}
-  - {name: vehicles 40->120, set: {actors.vehicles.demand.params.max_total_vehicles: 120}, metric: access_ms, expect: up}
-  - {name: vehicles 40->120, set: {actors.vehicles.demand.params.max_total_vehicles: 120}, metric: e2e_ms_mean, expect: up}
-  - {name: rate 10->20 Hz, base_set: {time.mobility_step_ms: 50}, set: {messages.rate_hz: 20.0}, metric: tx_rate_hz, expect: up}
-  - {name: rate 10->20 Hz, base_set: {time.mobility_step_ms: 50}, set: {messages.rate_hz: 20.0}, metric: cbr_mean, expect: up}
-  - {name: rate 10->20 Hz, base_set: {time.mobility_step_ms: 50}, set: {messages.rate_hz: 20.0}, metric: collision_rate, expect: up}
-  - {name: rate 10->20 Hz, base_set: {time.mobility_step_ms: 50}, set: {messages.rate_hz: 20.0}, metric: ipg_ms_mean, expect: down}
-  - {name: data rate 6->12 Mbps, set: {radio.phy.data_rate_mbps: 12.0}, metric: airtime_us, expect: down}
-  - {name: data rate 6->12 Mbps, set: {radio.phy.data_rate_mbps: 12.0}, metric: range90_m, expect: down}
-  - {name: data rate 6->12 Mbps, set: {radio.phy.data_rate_mbps: 12.0}, metric: cbr_mean, expect: down}
-  - {name: cert every msg, set: {security.signer_id_policy.full_cert_every_ms: 0}, metric: psdu_bytes, expect: up}
-  - {name: cert every msg, set: {security.signer_id_policy.full_cert_every_ms: 0}, metric: airtime_us, expect: up}
-  - {name: CWmin 3->63 (120 veh), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120}, set: {radio.mac.cw_min_vo: 63}, metric: access_ms, expect: up}
-  - {name: AIFSN 2->9 (120 veh), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120}, set: {radio.mac.aifsn_vo: 9}, metric: access_ms, expect: up}
-  - {name: queue 64->1 (120 veh 40 Hz), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120, messages.rate_hz: 20.0, time.mobility_step_ms: 50}, set: {radio.mac.queue_length: 1}, metric: mac_drops, expect: up}
-  - {name: DCC off->on (120 veh), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120, radio.dcc.enabled: false}, set: {radio.dcc.enabled: true}, metric: tx_rate_hz, expect: down}
-  - {name: DCC off->on (120 veh), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120, radio.dcc.enabled: false}, set: {radio.dcc.enabled: true}, metric: cbr_mean, expect: down}
-  - {name: DCC off->on (120 veh), base_set: {actors.vehicles.demand.params.max_total_vehicles: 120, radio.dcc.enabled: false}, set: {radio.dcc.enabled: true}, metric: aoi_ms, expect: up}
+  # Link budget.
+  - name: tx power 20->5 dBm
+    set: {radio.devices.obu.tx_power_dbm: 5.0}
+    metric: range90_m
+    expect: down
+    source: log-distance link budget; -15 dB moves the PRR edge in by 10^(-15/10n)
+  - name: tx power 20->5 dBm
+    set: {radio.devices.obu.tx_power_dbm: 5.0}
+    metric: prr_400_600
+    expect: down
+  - name: noise figure 6->12 dB
+    set: {radio.phy.noise_figure_db: 12.0}
+    metric: range90_m
+    expect: down
+    source: noise floor = kTB + NF; +6 dB NF is -6 dB SNR at every distance
+  - name: noise figure 6->12 dB
+    set: {radio.phy.noise_figure_db: 12.0}
+    metric: prr_600_1000
+    expect: down
+  # Channel.
+  - name: PL exponent 2.5->3.5
+    base_set: {radio.channel_model.path_loss_exponent: 2.5}
+    set: {radio.channel_model.path_loss_exponent: 3.5}
+    metric: prr_200_600
+    expect: down
+    source: log-distance law, loss grows 10 n log10(d)
+  - name: shadowing 2->10 dB
+    base_set: {radio.channel_model.shadowing_sigma_db: 2.0}
+    set: {radio.channel_model.shadowing_sigma_db: 10.0}
+    metric: prr_200_600
+    expect: down
+    source: log-normal shadowing spreads the edge; where the mean SNR is above threshold a wider spread loses more than it gains
+  - name: nakagami m 3->1
+    base_set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape: 3.0}
+    set: {radio.channel_model.nakagami_shape: 1.0}
+    metric: prr_200_600
+    expect: down
+    source: Nakagami-m outage probability rises as m falls (Rayleigh at m = 1)
+  - name: fading none->rayleigh
+    base_set: {radio.channel_model.fading: none}
+    set: {radio.channel_model.fading: rayleigh}
+    metric: prr_200_600
+    expect: down
+  # Frame size and rate.
+  - name: data rate 6->12 Mbps
+    set: {radio.phy.data_rate_mbps: 12.0}
+    metric: airtime_us
+    expect: down
+    band: [0.5, 0.7]
+    source: payload symbols halve at 16-QAM 1/2; preamble and SIGNAL (40 us) stay (IEEE 802.11-2020 17.4.3)
+  - name: data rate 6->12 Mbps
+    set: {radio.phy.data_rate_mbps: 12.0}
+    metric: range90_m
+    expect: down
+    source: 16-QAM 1/2 needs about 6 dB more SNR than QPSK 1/2 (802.11-2020 Table 17-18 sensitivities)
+  - name: data rate 6->12 Mbps
+    set: {radio.phy.data_rate_mbps: 12.0}
+    metric: cbr_mean
+    expect: down
+  - name: certificate on every message
+    set: {security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    metric: psdu_bytes
+    expect: up
+    source: an explicit certificate is about 100 octets more than an 8-octet digest (IEEE 1609.2-2016 6.4.8)
+  - name: certificate on every message
+    set: {security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    metric: airtime_us
+    expect: up
+  - name: certificate on every message
+    set: {security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    metric: cbr_mean
+    expect: up
+  # Load.
+  - name: vehicles 40->120
+    set: {actors.vehicles.demand.params.max_total_vehicles: 120}
+    metric: cbr_mean
+    expect: up
+    source: CBR is offered airtime per node times neighbours (Bansal 2013 LIMERIC)
+  - name: vehicles 40->120
+    set: {actors.vehicles.demand.params.max_total_vehicles: 120}
+    metric: collision_rate
+    expect: up
+    source: collision probability grows with contenders (Bianchi 2000)
+  - name: vehicles 40->120
+    set: {actors.vehicles.demand.params.max_total_vehicles: 120}
+    metric: prr
+    expect: down
+  - name: vehicles 40->120
+    set: {actors.vehicles.demand.params.max_total_vehicles: 120}
+    metric: access_ms
+    expect: up
+    source: busier channel defers more often (802.11 DCF freeze)
+  - name: vehicles 40->120
+    set: {actors.vehicles.demand.params.max_total_vehicles: 120}
+    metric: e2e_ms_mean
+    expect: up
+    min_change: 0.005
+    band: [1.005, 1.1]
+    source: e2e = sign (9 ms on the Craton2 HSM) + handoff + access + air + verify; only access and the verify wait depend on load, so e2e rises by the access-delay increase (about +0.17 ms)
+  - name: vehicles 40->80, software verify
+    base_set: {nodes.default_obu: obu/unex-obu-301-craton2-software}
+    set: {actors.vehicles.demand.params.max_total_vehicles: 80}
+    metric: stage_verify_wait_ms
+    expect: up
+    source: M/D/1 waiting time grows with arrival rate; software ECDSA is milliseconds per verify
+  - name: vehicles 40->80, software verify
+    base_set: {nodes.default_obu: obu/unex-obu-301-craton2-software}
+    set: {actors.vehicles.demand.params.max_total_vehicles: 80}
+    metric: e2e_ms_mean
+    expect: up
+  - name: rate 10->20 Hz
+    base_set: {time.mobility_step_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: tx_rate_hz
+    expect: up
+    band: [1.7, 2.1]
+    source: J2945/1 at low density sends at the commanded rate
+  - name: rate 10->20 Hz
+    base_set: {time.mobility_step_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: cbr_mean
+    expect: up
+    band: [1.5, 2.3]
+  - name: rate 10->20 Hz
+    base_set: {time.mobility_step_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: collision_rate
+    expect: up
+  - name: rate 10->20 Hz
+    base_set: {time.mobility_step_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: ipg_ms_mean
+    expect: down
+  - name: rate 10->20 Hz
+    base_set: {time.mobility_step_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: aoi_ms
+    expect: down
+    source: age of information is about half the update interval plus latency (Kaul 2012)
+  # Regression: the mobility step is not a radio parameter.
+  - name: mobility step 100->50 ms
+    set: {time.mobility_step_ms: 50}
+    metric: collision_rate
+    expect: same
+    min_change: 0.25
+  - name: mobility step 100->50 ms
+    set: {time.mobility_step_ms: 50}
+    metric: tx_phase_peak
+    expect: same
+    min_change: 0.3

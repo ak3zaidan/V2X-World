@@ -1,0 +1,21 @@
+# GeoNetworking forwarding rows on gn-grid.yaml (802.11p, ETSI stack, one breakdown warning).
+# `v2xw sensitivity scenarios/sensitivity/radio-gn.yaml`; the same rows are tests in
+# crates/v2xw-engine/tests/sensitivity_radio.rs (docs/validation/sensitivity-radio.md).
+base: gn-grid.yaml
+rows:
+  - name: GN hop limit 1->10
+    base_set: {net.geonet.hop_limit: 1}
+    set: {net.geonet.hop_limit: 10}
+    metric: gn_reach
+    expect: up
+    source: a hop limit of 1 confines the warning to the originator's own range (EN 302 636-4-1 9.3.3 RHL)
+  - name: GN hop limit 1->10
+    base_set: {net.geonet.hop_limit: 1}
+    set: {net.geonet.hop_limit: 10}
+    metric: gn_forwards_sent
+    expect: up
+  - name: GN hop limit 1->10
+    base_set: {net.geonet.hop_limit: 1}
+    set: {net.geonet.hop_limit: 10}
+    metric: gn_forwarded_bytes
+    expect: up

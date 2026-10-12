@@ -1,6 +1,7 @@
 //! Radio, MAC and congestion parameters move the metrics the way theory says.
 //!
-//! Each test is one row of `scenarios/sensitivity/radio-dsrc.yaml` or `radio-cv2x.yaml`:
+//! Each test is one row of a spec in `scenarios/sensitivity/` (`radio-dsrc.yaml`,
+//! `radio-dsrc-dense.yaml`, `radio-gn.yaml`, `radio-cv2x.yaml`):
 //! the base scenario and the row's change run on the same seed, and the row's metric must
 //! move in the expected direction (and inside the band, where one is given). The rows, the
 //! theory and the measured numbers are in docs/validation/sensitivity-radio.md; the same
@@ -78,6 +79,14 @@ fn row(file: &str, name: &str, metric: &str) {
 
 fn dsrc(name: &str, metric: &str) {
     row("radio-dsrc.yaml", name, metric);
+}
+
+fn dense(name: &str, metric: &str) {
+    row("radio-dsrc-dense.yaml", name, metric);
+}
+
+fn gn(name: &str, metric: &str) {
+    row("radio-gn.yaml", name, metric);
 }
 
 fn cv2x(name: &str, metric: &str) {
@@ -167,39 +176,48 @@ fn dsrc_the_mobility_step_does_not_move_the_channel() {
 
 #[test]
 fn dsrc_a_wider_contention_window_lengthens_access() {
-    dsrc("CWmin 3->63", "backoff_us");
-    dsrc("CWmin 3->63", "access_ms");
+    dense("CWmin 3->63", "backoff_us");
+    dense("CWmin 3->63", "access_ms");
 }
 
 #[test]
 fn dsrc_a_longer_aifs_lengthens_access() {
-    dsrc("AIFSN 2->9", "aifs_us");
-    dsrc("AIFSN 2->9", "access_ms");
+    dense("AIFSN 2->9", "aifs_us");
+    dense("AIFSN 2->9", "access_ms");
 }
 
 #[test]
 fn dsrc_a_short_queue_drops_under_saturation() {
-    dsrc("queue 64->1, saturated", "mac_drops");
+    dense("queue 64->1, saturated", "mac_drops");
 }
 
 #[test]
 fn dsrc_reactive_dcc_caps_the_load() {
-    dsrc("reactive DCC off->on", "cbr_mean");
-    dsrc("reactive DCC off->on", "tx_rate_hz");
-    dsrc("reactive DCC off->on", "aoi_ms");
+    dense("reactive DCC off->on", "cbr_mean");
+    dense("reactive DCC off->on", "tx_rate_hz");
+    dense("reactive DCC off->on", "aoi_ms");
 }
 
 #[test]
 fn dsrc_j2945_rate_control_stretches_the_interval() {
-    dsrc("J2945/1 B 25->5", "tx_rate_hz");
-    dsrc("J2945/1 B 25->5", "cbr_mean");
-    dsrc("J2945/1 B 25->5", "ipg_ms_mean");
+    dense("J2945/1 B 25->5", "tx_rate_hz");
+    dense("J2945/1 B 25->5", "cbr_mean");
+    dense("J2945/1 B 25->5", "ipg_ms_mean");
 }
 
 #[test]
 fn dsrc_adaptive_dcc_holds_the_target() {
-    dsrc("ETSI adaptive target 0.68->0.15", "cbr_mean");
-    dsrc("ETSI adaptive target 0.68->0.15", "tx_rate_hz");
+    dense("ETSI adaptive target 0.68->0.15", "cbr_mean");
+    dense("ETSI adaptive target 0.68->0.15", "tx_rate_hz");
+}
+
+// ---- GeoNetworking forwarding ----
+
+#[test]
+fn gn_a_higher_hop_limit_reaches_further_and_costs_forwards() {
+    gn("GN hop limit 1->10", "gn_reach");
+    gn("GN hop limit 1->10", "gn_forwards_sent");
+    gn("GN hop limit 1->10", "gn_forwarded_bytes");
 }
 
 // ---- C-V2X sidelink ----
