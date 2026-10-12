@@ -167,6 +167,7 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `messages.codec_tier` | `uper` | `uper`, `size-model` | Real encoding or a size model. |
 | `messages.spat_interval_ms`, `messages.map_interval_ms` **new** | 100 / 1000 ms (CTI 4501) | 100 to 10 000 / 60 000 ms | Roadside SPaT and MAP periods. Refused without that message in `sets`. |
 | `messages.cpm_interval_ms` **new** | 100 ms | 100 to 1000 ms | `T_GenCpm` (ETSI TS 103 324 §6.1.2.3). Refused without `cpm` in `sets`. |
+| `messages.path_history_points` **new** | 15 | 0 to 23 points | The most path-history points a BSM Part II (or a CAM) carries: SAE J2945/1 recalls 15, J2735 `PathHistoryPointList` allows 23, 0 sends none. About 8 to 9 bytes a point. Refused without `bsm` or `cam` in `sets`. |
 | `security.signer_id_policy.full_cert_every_ms` | 1000 | ms | Certificate attach cadence. A digest is sent otherwise (`digest_otherwise`). 0 attaches the certificate to every message. |
 
 ## Networking (`net`)
@@ -197,6 +198,7 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `nodes.default_obu`, `nodes.per_class` | profile | shipped `obu/*` profiles | Crypto hardware profile: signing and verification service times. |
 | `nodes.compute_tier` | `medium` | tiers | Queueing of crypto work. |
 | `nodes.verify_queue_depth` **new** | 64 | 1 to 4096 | Verification queue. A full queue drops (`verify_overflow`). |
+| `security.signer_id_policy.on_new_neighbour` **new** | false | bool | Also attach the certificate to the next BSM or CAM after a vehicle hears a station it did not know (ETSI TS 103 097 V1.3.1 §7.1.1), on top of the cadence; a forced certificate does not restart the cadence. Refused when every message already carries one, or with no `bsm`/`cam`. |
 
 ## Traffic (`actors.vehicles`, `world.signals`, `apps`)
 
@@ -250,7 +252,6 @@ holds those drivers.
 | NR numerology other than the profile's | Sub-channel and slot structure come from the profile's transcribed link-level curves (Lusvarghi 2024 at µ = 1). |
 | Sidelink mode 1 (network-scheduled) | No gNB/eNB scheduler is modelled. |
 | Sub-channel size and count | Fixed by the profile (J3161/1, EN 303 613, EN 303 798), because the BLER curves were computed for those pools. |
-| Certificate attach on new neighbour | `security.signer_id_policy` is cadence-based only. |
 | Certificate cache size | The node's certificate store is unbounded. A bounded cache with eviction is not modelled. |
 | `prioritized` horizon, `on-demand` threshold | The verification queue is FIFO and never reads the policy's priority, and no application sets a message's relevance, so neither number would change a run (see `config-inventory-network.md`). |
 | LIMERIC as such | The ETSI adaptive approach is TS 102 687's LIMERIC-derived algorithm, and its α, β and target are above. |

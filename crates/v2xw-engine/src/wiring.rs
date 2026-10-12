@@ -3043,6 +3043,9 @@ fn node_capacities(scenario: &Scenario) -> NodeConfig {
         c.queue_capacity[1] = n as usize;
     }
     c.cpm_interval = infra_interval(scenario.messages.cpm_interval_ms, v2xw_node::cpm::T_GEN_CPM);
+    if let Some(n) = scenario.messages.path_history_points {
+        c.path_history_points = n as usize;
+    }
     c
 }
 
@@ -3308,7 +3311,8 @@ fn apply_security_profile(runtime: &mut ObuRuntime, scenario: &Scenario, env: No
     // different published defaults, and a scenario that states a cadence is overriding
     // both: two stacks behind one number would make the field mean different things for
     // different message types with nothing saying so.
-    .with_signer_id_policies(policy, policy);
+    .with_signer_id_policies(policy, policy)
+    .with_new_neighbour_attach(scenario.security.signer_id_policy.on_new_neighbour);
     *runtime.security_mut() = configured;
     // Each message under its registered PSID / ITS-AID, and certificates that permit
     // exactly what the node sends (`v2xw_msg::registry`, the IEEE PSID registry).

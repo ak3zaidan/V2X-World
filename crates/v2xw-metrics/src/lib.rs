@@ -45,7 +45,8 @@
 //!   `link_overhead`, `cert_bytes_share`, `air_bytes_per_payload_byte`,
 //!   `bytes_per_vehicle_hour` per bucket.
 //! * **Security** ([`security`]): `verify_rate`, `verify_cost`, `verify_wait`,
-//!   `verify_queue_depth`, `unverified_ratio`, `full_cert_share`, `envelope_overhead`,
+//!   `verify_queue_depth`, `unverified_ratio`, `full_cert_share`, `p2pcd_requests`,
+//!   `envelope_overhead`,
 //!   `revocation_latency_stage`, `crl_entries`, `crl_bytes`.
 //! * **Signing overhead** ([`signing`], opt-in with `metrics: [all, signing]`): what the
 //!   signature scheme costs on the air, in the devices and in the backend, `sig_*`.

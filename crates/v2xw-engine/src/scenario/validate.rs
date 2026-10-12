@@ -1021,6 +1021,13 @@ pub static BOUNDS: &[Bound] = &[
         what: "the CPM generation interval",
     },
     Bound {
+        path: "messages.path_history_points",
+        lo: 0.0,
+        hi: 23.0,
+        exclusive_lo: false,
+        what: "the path-history points per message (J2735 PathHistoryPointList, 1..23)",
+    },
+    Bound {
         path: "nodes.verify_queue_depth",
         lo: 1.0,
         hi: 4_096.0,
@@ -2458,6 +2465,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "How often a full certificate is attached instead of an eight-byte digest.",
     },
     KeyStatus {
+        path: "security.signer_id_policy.on_new_neighbour",
+        status: Status::Wired,
+        note: "Also attach the certificate to a vehicle's next BSM or CAM after it hears a \
+               station it did not know (TS 103 097 V1.3.1 §7.1.1). Off unless set; refused \
+               when every message already carries one or no BSM/CAM runs.",
+    },
+    KeyStatus {
         path: "security.pseudonym_change.strategy",
         status: Status::Wired,
         note: "time changes pseudonym at period_s of age (SAE J2945/1 CERTCHG, 300 s) and \
@@ -2821,6 +2835,12 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "T_GenCpm, how often a vehicle checks whether a CPM is due (TS 103 324's \
                100 ms unless set). Refused unless messages.sets has cpm.",
+    },
+    KeyStatus {
+        path: "messages.path_history_points",
+        status: Status::Wired,
+        note: "The most path-history points a BSM's Part II or a CAM carries (J2945/1's 15 \
+               unless set; 0 to 23). Refused unless messages.sets has bsm or cam.",
     },
     KeyStatus {
         path: "nodes.verify_queue_depth",
@@ -5348,6 +5368,23 @@ fn security(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 .to_string(),
         ));
     }
+    let sid = &s.security.signer_id_policy;
+    if sid.on_new_neighbour && (sid.full_cert_every_ms == 0 || !sid.digest_otherwise) {
+        e.push(conflict(
+            "security.signer_id_policy.on_new_neighbour",
+            "is set while every message already carries the certificate \
+             (full_cert_every_ms 0 or digest_otherwise false), so it would change nothing"
+                .to_string(),
+        ));
+    }
+    if sid.on_new_neighbour && !s.messages.sets.iter().any(|m| m == "bsm" || m == "cam") {
+        e.push(conflict(
+            "security.signer_id_policy.on_new_neighbour",
+            "is set but messages.sets has neither bsm nor cam, the awareness messages it \
+             attaches the certificate to"
+                .to_string(),
+        ));
+    }
     let p = &s.security.pseudonym_change;
     match p.strategy.as_str() {
         // `time` without `period_s` and `distance` without `distance_m` run on the rule's
@@ -6040,6 +6077,10 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
             m.cpm_interval_ms.map(|v| v as f64),
         ),
         (
+            "messages.path_history_points",
+            m.path_history_points.map(f64::from),
+        ),
+        (
             "nodes.verify_queue_depth",
             n.verify_queue_depth.map(f64::from),
         ),
@@ -6128,5 +6169,13 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 format!("sets the {ty} period, and messages.sets does not include {ty}"),
             ));
         }
+    }
+    if m.path_history_points.is_some() && !m.sets.iter().any(|x| x == "bsm" || x == "cam") {
+        e.push(conflict(
+            "messages.path_history_points",
+            "sets the path history's length, and messages.sets has neither bsm nor cam, the \
+             messages that carry it"
+                .to_string(),
+        ));
     }
 }

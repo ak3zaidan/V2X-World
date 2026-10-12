@@ -2220,6 +2220,11 @@ pub struct Messages {
     /// TS 103 324 §6.1.2.3, 100 ms unless set; at most `T_GenCpmMax`, 1 000 ms).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpm_interval_ms: Option<u64>,
+    /// The most path-history points a BSM's Part II (and a CAM's low-frequency container)
+    /// carries: J2945/1's 15 unless set, at most J2735's 23; 0 sends none. The points are
+    /// the Part II's bulk, about 8 to 9 bytes each.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_history_points: Option<u32>,
 }
 
 impl Messages {
@@ -2241,6 +2246,7 @@ impl Default for Messages {
             spat_interval_ms: None,
             map_interval_ms: None,
             cpm_interval_ms: None,
+            path_history_points: None,
         }
     }
 }
@@ -2440,6 +2446,11 @@ pub struct SignerIdPolicySpec {
     /// Attach a digest the rest of the time.
     #[serde(default = "crate::scenario::schema::truth")]
     pub digest_otherwise: bool,
+    /// Also attach the certificate to the next BSM or CAM after a station this node has
+    /// not heard before appears (the ETSI CAM rule, TS 103 097 V1.3.1 §7.1.1). Off by
+    /// default, and left out of a scenario that does not set it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_new_neighbour: bool,
 }
 
 impl SignerIdPolicySpec {
@@ -2453,6 +2464,7 @@ impl Default for SignerIdPolicySpec {
         SignerIdPolicySpec {
             full_cert_every_ms: SignerIdPolicySpec::default_cadence(),
             digest_otherwise: true,
+            on_new_neighbour: false,
         }
     }
 }

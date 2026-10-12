@@ -279,6 +279,11 @@ const BASIC: &[Basic] = &[
 /// `radio.dcc`), which a newcomer does not need but should still be able to read.
 const ADVANCED: &[Basic] = &[
     Basic {
+        path: "security.signer_id_policy.on_new_neighbour",
+        explain: "Send the full certificate in the next safety message whenever a vehicle it has not heard before comes into range, so the newcomer can check its signatures at once.",
+        recommended: "Off (the US cadence alone); on for the ETSI rule (TS 103 097 §7.1.1).",
+    },
+    Basic {
         path: "actors.vehicles.drivers.max_accel_mps2",
         explain: "How hard a car driver accelerates when the road ahead is clear.",
         recommended: "1.0 to 2.0 m/s².",
@@ -528,6 +533,11 @@ const ADVANCED: &[Basic] = &[
         path: "messages.cpm_interval_ms",
         explain: "How often a vehicle checks whether to share what its sensors see; a longer interval means fewer, larger collective perception messages.",
         recommended: "100 ms (ETSI TS 103 324) to 1,000 ms.",
+    },
+    Basic {
+        path: "messages.path_history_points",
+        explain: "How many points of its recent track a vehicle puts in each safety message; more points let receivers follow its path but make every message bigger.",
+        recommended: "15 (SAE J2945/1); 0 to 23 (the J2735 limit).",
     },
     Basic {
         path: "nodes.verify_queue_depth",

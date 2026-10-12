@@ -1418,6 +1418,8 @@ pub fn title(path: &str) -> Option<&'static str> {
         "messages.map_interval_ms" => "Intersection map (MAP) interval",
         "messages.cpm_interval_ms" => "Collective perception (CPM) check interval",
         "nodes.verify_queue_depth" => "Verification queue length",
+        "messages.path_history_points" => "Path history points per message",
+        "security.signer_id_policy.on_new_neighbour" => "Certificate for new neighbours",
         "radio.tiers.propagation" => "Signal propagation detail",
         "radio.tiers.phy" => "Physical layer detail",
         "radio.tiers.mac" => "Channel access detail",

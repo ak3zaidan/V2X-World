@@ -3535,3 +3535,13 @@ Short runs of the attack and credential scenarios, read from `run-report.json` a
   fixes (density now stretches the interval); `range90_m` ignores a one-bin dip.
 - Open: saturated dense runs (150 vehicles, 40-50 Hz) are far slower than quadratic in the
   fleet; untraced.
+
+## 2026-10-11 — sensitivity: security, message and backend settings move the metrics (branch of 0786d92)
+
+- `tests/sensitivity_security.rs`: 14 same-seed tests, about 80 s together. Rows: signature scheme, certificate cadence, new-neighbour attach, verification policy, crypto hardware, verify queue depth, pseudonym period, message rate, envelope, Uu preset and penetration, RSU backhaul latency and bandwidth, CRL cadence and fetch interval, attacker share. Table and numbers: docs/validation/sensitivity-security.md.
+- **New setting:** `security.signer_id_policy.on_new_neighbour`, the ETSI CAM rule (TS 103 097 §7.1.1). Off by default, so no digest moves. The loader refuses it when it would do nothing. A forced certificate does not restart the cadence; restarting it made unknown signers worse at a fleet-wide pseudonym change (843 -> 3,948). Now 843 -> 105. With the wiring removed, its test fails.
+- **Open:**
+  - The 5 Hz CBR sample reads about 0 for a fleet spawned together. The MAC CBR covers only the last 100 ms of each second, and the phase moves generation inside a step, not across the period.
+  - Pseudonym changes are counted only with a backend protocol.
+  - There is no Part II size knob.
+- Checks: v2xw-node tests; v2xw-engine lib `scenario` tests; sensitivity_security 14/14.

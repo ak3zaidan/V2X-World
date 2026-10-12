@@ -300,6 +300,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     ("radio.dcc.density_coefficient", "vehicles"),
     // network audit
     ("nodes.verify_queue_depth", "messages"),
+    ("messages.path_history_points", "points"),
 ];
 
 /// The numeric leaves that genuinely have no unit, declared rather than left blank.

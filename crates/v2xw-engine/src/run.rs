@@ -4302,6 +4302,10 @@ impl Engine {
             && policy.is_silent(node, now)
         {
             policy.silenced_frames += 1;
+            // The frame was signed but never sent, so its certificate reached no one.
+            if let Some(n) = self.nodes.get_mut(&node) {
+                n.security_mut().withdraw_certificate(tx.msg_type);
+            }
             return;
         }
         let mut jitter = self.gen_timing.jitter(&self.rng, node, tx.generation_time);
@@ -8497,6 +8501,7 @@ fn telemetry_record(
         cert_active: count(w.cert_active),
         nbr_total: count(w.nbr_total),
         nbr_verified: count(w.nbr_verified),
+        p2pcd_requests: (w.p2pcd_requests != U32_NONE).then_some(w.p2pcd_requests),
     })
 }
 
