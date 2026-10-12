@@ -50,7 +50,14 @@ fn sensitivity(args: &v2xw_cli::cli::SensitivityArgs) -> v2xw_cli::Result<String
         for (k, v) in &m.values {
             out.push_str(&format!("{k:<24} {v:.4}\n"));
         }
-        for k in ["range_m", "range90_m", "prr_0_200", "prr_200_400", "prr_400_600", "prr_600_1000"] {
+        for k in [
+            "range_m",
+            "range90_m",
+            "prr_0_200",
+            "prr_200_400",
+            "prr_400_600",
+            "prr_600_1000",
+        ] {
             out.push_str(&format!("{k:<24} {:?}\n", m.get(k)));
         }
         // The PRR curve, one 20 m bin per entry out to 1 km: PRR (receivers).

@@ -38,9 +38,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use v2xw_core::ctx::OwnedRecord;
 use v2xw_core::time::SimTime;
-use v2xw_metrics::channels::{
-    MacCbrView, NodeRxView, NodeTxView, PhyPrrView, RxFate, decode,
-};
+use v2xw_metrics::channels::{MacCbrView, NodeRxView, NodeTxView, PhyPrrView, RxFate, decode};
 
 use crate::ctx::RunRecorder;
 use crate::error::{EngineError, Result, ScenarioError};
@@ -162,9 +160,8 @@ pub fn apply(s: &Scenario, set: &BTreeMap<String, Value>) -> Result<Scenario> {
     if set.is_empty() {
         return Ok(s.clone());
     }
-    let mut doc = serde_json::to_value(s).map_err(|e| {
-        EngineError::Scenario(ScenarioError::conflict("<scenario>", e.to_string()))
-    })?;
+    let mut doc = serde_json::to_value(s)
+        .map_err(|e| EngineError::Scenario(ScenarioError::conflict("<scenario>", e.to_string())))?;
     for (path, value) in set {
         let mut at = &mut doc;
         let keys: Vec<&str> = path.split('.').collect();
@@ -474,11 +471,17 @@ impl SensitivityRecorder {
             put("prr", ok as f64 / n as f64);
         }
         if self.access_n > 0 {
-            put("access_ms", self.access_ns as f64 / self.access_n as f64 / 1e6);
+            put(
+                "access_ms",
+                self.access_ns as f64 / self.access_n as f64 / 1e6,
+            );
         }
         if self.tx_frames > 0 {
             put("aifs_us", self.aifs_ns as f64 / self.tx_frames as f64 / 1e3);
-            put("backoff_us", self.backoff_ns as f64 / self.tx_frames as f64 / 1e3);
+            put(
+                "backoff_us",
+                self.backoff_ns as f64 / self.tx_frames as f64 / 1e3,
+            );
         }
         if self.tx_frames > 0 {
             let peak = self.phase_bins.iter().copied().max().unwrap_or(0);
@@ -506,7 +509,10 @@ impl SensitivityRecorder {
         }
         let delivered: u64 = self.e2e_us.values().sum();
         if delivered > 0 {
-            put("e2e_ms_mean", self.e2e_sum_us as f64 / delivered as f64 / 1e3);
+            put(
+                "e2e_ms_mean",
+                self.e2e_sum_us as f64 / delivered as f64 / 1e3,
+            );
             if let Some(p) = quantile(&self.e2e_us, 0.95) {
                 put("e2e_ms_p95", p as f64 / 1e3);
             }
@@ -534,7 +540,10 @@ impl SensitivityRecorder {
         if self.cbr_n > 0 {
             put("cbr_mean", self.cbr_sum / self.cbr_n as f64);
             put("cbr_max", self.cbr_max);
-            put("queue_depth_mean", self.depth_sum as f64 / self.cbr_n as f64);
+            put(
+                "queue_depth_mean",
+                self.depth_sum as f64 / self.cbr_n as f64,
+            );
         }
         if let Some(sl) = &report.sidelink {
             put("sl_cbr", sl.mean_cbr_at_grant_pm as f64 / 1000.0);
@@ -644,7 +653,11 @@ pub fn judge(row: &Row, base: Option<f64>, value: Option<f64>) -> RowResult {
         Direction::Changes => rel.abs() >= tol,
     };
     if !moved {
-        r.note = format!("expected {:?}, changed by {:+.1} %", row.expect, rel * 100.0);
+        r.note = format!(
+            "expected {:?}, changed by {:+.1} %",
+            row.expect,
+            rel * 100.0
+        );
         return r;
     }
     if let (Some([lo, hi]), Some(q)) = (row.band, r.ratio())
