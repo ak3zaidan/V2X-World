@@ -49,7 +49,7 @@ export function openRunCompare(a = "previous", b = "current"): void {
 export function useCanComparePrevious(): boolean {
   const state = useStudio((s) => s.run.state);
   const generation = useStudio((s) => s.run.generation);
-  const connected = useStudio((s) => s.connection) === "open";
+  const connected = useStudio((s) => s.connection) === "streaming";
   const [can, setCan] = useState(false);
   useEffect(() => {
     if (!connected) {
@@ -220,8 +220,8 @@ function CompareDialog(): React.JSX.Element {
                       <tr>
                         <th>Setting</th>
                         <th>Section</th>
-                        <th>A</th>
-                        <th>B</th>
+                        <th className="num">A</th>
+                        <th className="num">B</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -366,8 +366,9 @@ function Overlay({ a, b, name, row, tick }: { a: string; b: string; name: string
         ],
         series: [
           { label: "t (s)" },
-          { label: "A (previous)", stroke: ca, width: 1.6, points: { show: false }, spanGaps: true },
-          { label: "B (current)", stroke: cb, width: 1.6, points: { show: false }, spanGaps: true },
+          // A wider and under B, so two identical series still show both.
+          { label: "A (previous)", stroke: ca, width: 3, points: { show: false }, spanGaps: true },
+          { label: "B (current)", stroke: cb, width: 1.4, points: { show: false }, spanGaps: true },
         ],
       },
       [xs, at(series.a), at(series.b)] as unknown as uPlot.AlignedData,

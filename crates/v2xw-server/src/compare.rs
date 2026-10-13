@@ -639,7 +639,9 @@ pub fn settings_diff(a: &Value, b: &Value) -> Vec<SettingChange> {
     let index = field_index();
     let mut out = Vec::new();
     for key in keys {
-        if key == "seed" {
+        // The seed is reported on its own; `meta` (name, description, tags, base) describes
+        // a run and changes nothing it computes.
+        if key == "seed" || key.starts_with("meta.") {
             continue;
         }
         let (va, vb) = (
@@ -686,6 +688,33 @@ pub fn humanise(key: &str) -> String {
     c.next()
         .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
         .unwrap_or_default()
+}
+
+/// A metric series in words: `verify_queue_depth.p95` → "Verify queue depth (p95)",
+/// `pdr` → "PDR".
+#[must_use]
+pub fn metric_words(name: &str) -> String {
+    let (base, suffix) = split(name);
+    const ACRONYMS: &[(&str, &str)] = &[
+        ("pdr", "PDR"), ("per", "PER"), ("aoi", "AoI"), ("cbr", "CBR"), ("pir", "PIR"),
+        ("ttc", "TTC"), ("pet", "PET"), ("crl", "CRL"), ("ma", "MA"), ("p2pcd", "P2PCD"),
+        ("nar", "NAR"), ("rsu", "RSU"), ("obu", "OBU"), ("sinr", "SINR"), ("rssi", "RSSI"),
+    ];
+    let words: Vec<String> = base
+        .split('_')
+        .enumerate()
+        .map(|(i, w)| {
+            ACRONYMS.iter().find(|(k, _)| *k == w).map_or_else(
+                || if i == 0 { humanise(w) } else { w.to_string() },
+                |(_, v)| (*v).to_string(),
+            )
+        })
+        .collect();
+    let mut out = words.join(" ");
+    if let Some(q) = suffix.strip_prefix('.') {
+        out.push_str(&format!(" ({q})"));
+    }
+    out
 }
 
 fn better_name(b: Option<Better>) -> &'static str {
@@ -917,7 +946,7 @@ fn summarise(
         let pct = r.pct.map_or_else(String::new, |p| format!(" ({p:+.0} %)"));
         out.push(format!(
             "{} {dir} from {} to {}{pct}{judged}.",
-            humanise(&r.name),
+            metric_words(&r.name),
             fmt_value(r.a, &r.unit),
             fmt_value(r.b, &r.unit),
         ));
@@ -926,7 +955,7 @@ fn summarise(
         if let (Some(la), Some(lb)) = (&r.level_a, &r.level_b)
             && la != lb
         {
-            out.push(format!("{} moved from {la} to {lb}.", humanise(&r.name)));
+            out.push(format!("{} moved from {la} to {lb}.", metric_words(&r.name)));
         }
     }
     out
@@ -1088,7 +1117,8 @@ mod tests {
             seed,
             city: None,
             scenario_hash: String::new(),
-            scenario: json!({"seed": seed, "network": {"radio": {"tx_power_dbm": power}}}),
+            scenario: json!({"seed": seed, "meta": {"name": format!("r{power}")},
+                             "network": {"radio": {"tx_power_dbm": power}}}),
             t_reached_s: 60.0,
             t_end_s: 60.0,
             source: "test".into(),
@@ -1141,6 +1171,8 @@ mod tests {
     fn exports_carry_every_row() {
         let c = compare(&digest(1, 20.0, 0.8, 10.0), &digest(1, 23.0, 0.9, 12.0));
         assert_eq!(csv(&c).lines().count(), 1 + c.rows.len() + c.settings.len());
+        assert_eq!(metric_words("verify_queue_depth.p95"), "Verify queue depth (p95)");
+        assert_eq!(metric_words("pdr_all_pairs"), "PDR all pairs");
         assert!(markdown(&c).contains("| **pdr** |"));
     }
 
