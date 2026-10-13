@@ -322,10 +322,18 @@ mod opencv2x_tests {
         // then belongs to that rate, not to MCS 7.
         let mut one = opencv2x_pool();
         one.mcs = v2xw_radio::sidelink::SlMcsSpec::new("opencv2x-190b-one-subchannel", 2, 740);
+        // OpenCV2X's own validation run (scenarios/Mode4-Validation/omnetpp.ini and
+        // mcs7_sidelink_config.xml in brianmc95/OpenCV2X): `subchannelSize = 15`,
+        // `numSubchannels = 2`, `maxSubchannel-NumberPSSCH = 1`, MCS 7, no retransmission,
+        // `probResourceKeep = 0.0`. Its sub-channels are 15 RB, not Table II's 12.
+        let mut ini = opencv2x_pool();
+        ini.subchannel_prb = 15;
+        ini.bandwidth_prb = 30;
         for (name, pool) in [
             ("4x12 RB/50 PRB", harness),
             ("2x12 RB", opencv2x_pool()),
             ("2x12 RB, 190 B in one", one),
+            ("2x15 RB (OpenCV2X ini)", ini),
         ] {
             println!(
                 "VERDICT pool {name}: {} sub-channels, 190 B takes {:?}",
@@ -360,6 +368,61 @@ mod opencv2x_tests {
                     .collect();
                 println!("VERDICT   IPG mean/max ms by m: {}", ipg.join(" "));
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod density_tests {
+    use super::*;
+
+    /// 802.11p channel load and collisions against density, in the Veins configuration of
+    /// Sepulcre et al. 2022 (10 Hz, 190 B, 23 dBm, 6 Mbit/s, WINNER+ B1). A measurement:
+    /// `cargo test -p v2xw-interop density_tests -- --ignored --nocapture`.
+    ///
+    /// What it checks against the published Veins behaviour: the busy ratio grows in
+    /// proportion to density until the channel saturates (each station's 10 Hz × T_air is
+    /// heard over the same carrier-sense extent), the collision share of losses grows with
+    /// it, and the PDR at a fixed distance falls monotonically.
+    #[test]
+    #[ignore = "measurement"]
+    fn dsrc_load_and_collisions_against_density() {
+        let mut last_pdr = f64::INFINITY;
+        for density in [30.0, 60.0, 120.0, 240.0] {
+            let mut s = HighwaySweep::highway_fast(10)
+                .with_channel(ChannelModel::WinnerPlusB1)
+                .with_density(density)
+                .with_duration(Duration::from_secs(1), Duration::from_secs(3));
+            s.payload_cycle = vec![190];
+            s.tx_power_dbm = 23.0;
+            s.mean_speed_mps = 70.0 / 3.6;
+            let r = sweep_dsrc(&s, DsrcConfig::default());
+            let lost: u64 = r.losses.values().sum();
+            let share = |k: &str| {
+                r.losses
+                    .iter()
+                    .filter(|(c, _)| c.contains(k))
+                    .map(|(_, n)| *n)
+                    .sum::<u64>() as f64
+                    / lost.max(1) as f64
+            };
+            let pdr = |d: f64| r.pdr_at(d).unwrap_or(f64::NAN);
+            println!(
+                "MEAS density {density:>5.0} veh/km: {} veh, CBR {:.3} (CBR/density {:.5}), \
+                 PDR 100/200/300 m {:.3}/{:.3}/{:.3}, losses {lost}: collision {:.2} \
+                 hidden {:.2} {:?}",
+                r.vehicles,
+                r.mean_cbr,
+                r.mean_cbr / density,
+                pdr(100.0),
+                pdr(200.0),
+                pdr(300.0),
+                share("collision"),
+                share("hidden"),
+                r.losses
+            );
+            assert!(pdr(200.0) <= last_pdr + 0.01, "PDR at 200 m rose with density");
+            last_pdr = pdr(200.0);
         }
     }
 }

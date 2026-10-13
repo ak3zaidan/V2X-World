@@ -412,7 +412,13 @@ impl CamTriggerState {
         // negative interval; treat it as "no time has passed", which delays the next CAM
         // rather than emitting a burst.
         let elapsed = Duration::between(last.t, now);
-        let floor = self.params.t_gen_cam_min.max(dcc.t_off);
+        // EN 302 637-2 §6.1.3: T_GenCamMin <= T_GenCam_DCC <= T_GenCamMax. A DCC gate
+        // longer than a second does not silence the CAM beyond the 1 s heartbeat (Artery
+        // `CaService::genCamDcc` clamps the same way; `tests/artery_cam.rs`).
+        let floor = dcc
+            .t_off
+            .max(self.params.t_gen_cam_min)
+            .min(self.params.t_gen_cam_max.max(self.params.t_gen_cam_min));
         if elapsed < floor {
             return None;
         }
