@@ -421,7 +421,10 @@ mod density_tests {
                 share("hidden"),
                 r.losses
             );
-            assert!(pdr(200.0) <= last_pdr + 0.01, "PDR at 200 m rose with density");
+            assert!(
+                pdr(200.0) <= last_pdr + 0.01,
+                "PDR at 200 m rose with density"
+            );
             last_pdr = pdr(200.0);
         }
     }

@@ -96,14 +96,14 @@ fn trajectory() -> Vec<(SimTime, CamDynamics)> {
     for k in 0..600u64 {
         let t = k as f64 * 0.1;
         let (a, w) = match t {
-            t if t < 10.0 => (0.0, 0.0),             // cruise at 50 km/h
-            t if t < 15.0 => (-2.38, 0.0),           // brake to a crawl
-            t if t < 25.0 => (0.0, 0.0),             // crawl at ~2 m/s
-            t if t < 26.0 => (-2.0, 0.0),            // stop
-            t if t < 35.0 => (0.0, 0.0),             // stationary
-            t if t < 41.0 => (1.0, 0.26),            // pull away turning ~90°
-            t if t < 47.0 => (2.5, 0.0),             // hard acceleration
-            _ => (0.0, 0.012),                       // long gentle curve
+            t if t < 10.0 => (0.0, 0.0),   // cruise at 50 km/h
+            t if t < 15.0 => (-2.38, 0.0), // brake to a crawl
+            t if t < 25.0 => (0.0, 0.0),   // crawl at ~2 m/s
+            t if t < 26.0 => (-2.0, 0.0),  // stop
+            t if t < 35.0 => (0.0, 0.0),   // stationary
+            t if t < 41.0 => (1.0, 0.26),  // pull away turning ~90°
+            t if t < 47.0 => (2.5, 0.0),   // hard acceleration
+            _ => (0.0, 0.012),             // long gentle curve
         };
         v = (v + a * 0.1).max(0.0);
         h += w * 0.1;

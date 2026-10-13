@@ -1348,11 +1348,7 @@ impl RsuRuntime {
         let mut waiting: Vec<(Queued<RxFrame>, u32)> = self.queues[1]
             .drain()
             .into_iter()
-            .zip(
-                self.verify_priority
-                    .drain(..)
-                    .chain(std::iter::repeat(0)),
-            )
+            .zip(self.verify_priority.drain(..).chain(std::iter::repeat(0)))
             .collect();
         while !waiting.is_empty() {
             let free = match where_ {

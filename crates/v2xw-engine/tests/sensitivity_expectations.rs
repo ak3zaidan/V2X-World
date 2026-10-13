@@ -61,10 +61,16 @@ fn every_row_is_planned() {
         .expect("rows parse");
     assert!(exp.len() >= 120, "{} rows", exp.len());
     let (settings, unplanned) = expect::expect_plan(&fam, &exp);
-    assert!(unplanned.is_empty(), "rows the sweep cannot plan: {unplanned:?}");
+    assert!(
+        unplanned.is_empty(),
+        "rows the sweep cannot plan: {unplanned:?}"
+    );
     // Every row's end is among the planned values.
     for e in &exp {
-        let s = settings.iter().find(|s| s.path == e.setting).expect("planned");
+        let s = settings
+            .iter()
+            .find(|s| s.path == e.setting)
+            .expect("planned");
         assert!(
             s.values.iter().any(|(l, v)| match e.change.as_str() {
                 Some(end @ ("low" | "high")) => l == end,
@@ -111,7 +117,11 @@ fn data_rate_saves_more_airtime_on_longer_frames() {
         .collect();
     assert_eq!(all.len(), 1);
     let v = expect::run_interactions(&all, &bases, 2, None, |_, _, _| {}).expect("runs");
-    assert!(v[0].pass, "{}: {:?} {}", v[0].interaction.name, v[0].values, v[0].note);
+    assert!(
+        v[0].pass,
+        "{}: {:?} {}",
+        v[0].interaction.name, v[0].values, v[0].note
+    );
 }
 
 /// The whole table: every single-setting row and every interaction.
@@ -124,10 +134,19 @@ fn the_full_table_holds() {
     let (settings, unplanned) = expect::expect_plan(&fam, &exp);
     let bases = fam.bases(&path).expect("bases load");
     let cache = std::env::var_os("V2XW_EXPECT_CACHE").map(PathBuf::from);
-    let result = sweep::run_cached(settings, vec![], &bases, &exp, 2, cache.as_deref(), |_, _, _| {})
-        .expect("runs");
-    let inter = expect::run_interactions(&interactions(), &bases, 2, cache.as_deref(), |_, _, _| {})
-        .expect("runs");
+    let result = sweep::run_cached(
+        settings,
+        vec![],
+        &bases,
+        &exp,
+        2,
+        cache.as_deref(),
+        |_, _, _| {},
+    )
+    .expect("runs");
+    let inter =
+        expect::run_interactions(&interactions(), &bases, 2, cache.as_deref(), |_, _, _| {})
+            .expect("runs");
     let report = expect::report(&result, &inter, &unplanned);
     let failed = result.verdicts.iter().filter(|v| !v.pass).count()
         + inter.iter().filter(|v| !v.pass).count();

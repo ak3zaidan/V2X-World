@@ -5083,12 +5083,8 @@ impl Engine {
                 continue;
             }
             let split = envelope.map(|e| (signed.payload_bytes().saturating_add(padding), e));
-            let mut layers = v2xw_net::FrameLayers::compose(
-                &self.net,
-                frame_msg(tx.msg_type),
-                split,
-                sdu_bytes,
-            );
+            let mut layers =
+                v2xw_net::FrameLayers::compose(&self.net, frame_msg(tx.msg_type), split, sdu_bytes);
             if sidelink {
                 layers.llc_snap = 0;
                 layers.mac_header = 0;
@@ -5150,12 +5146,11 @@ impl Engine {
                 if p.note_digest(node, &digest, i, j)
                     && let Some(actor) = self.node_actor.get(&node).copied()
                 {
-                    let record =
-                        crate::records::GtSubject(v2xw_metrics::channels::GtSubjectView {
-                            t: now,
-                            subject: v2xw_core::hash::hex_encode(&digest.0[..]),
-                            actor,
-                        });
+                    let record = crate::records::GtSubject(v2xw_metrics::channels::GtSubjectView {
+                        t: now,
+                        subject: v2xw_core::hash::hex_encode(&digest.0[..]),
+                        actor,
+                    });
                     if let Ok(owned) = v2xw_core::ctx::ErasedRecord::to_owned_record(&record) {
                         self.deferred_records.push((now, owned));
                     }

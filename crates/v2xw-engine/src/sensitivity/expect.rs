@@ -121,7 +121,10 @@ pub fn expect_plan(
     let wanted: BTreeSet<&str> = expectations.iter().map(|e| e.setting.as_str()).collect();
     settings.retain(|s| wanted.contains(s.path.as_str()));
     for s in &mut settings {
-        let rows: Vec<&Expectation> = expectations.iter().filter(|e| e.setting == s.path).collect();
+        let rows: Vec<&Expectation> = expectations
+            .iter()
+            .filter(|e| e.setting == s.path)
+            .collect();
         s.values.retain(|(label, v)| {
             rows.iter().any(|e| match e.change.as_str() {
                 Some(end @ ("low" | "high")) => label == end,
@@ -217,10 +220,7 @@ pub fn run_interactions(
                 loop {
                     let k = next.fetch_add(1, Ordering::SeqCst);
                     let Some((fam, set)) = runs.get(k) else { break };
-                    let label = format!(
-                        "{fam} {}",
-                        serde_json::to_string(set).unwrap_or_default()
-                    );
+                    let label = format!("{fam} {}", serde_json::to_string(set).unwrap_or_default());
                     let r = match bases.get(fam) {
                         None => Err(format!("no family `{fam}` in the families file")),
                         Some(base) => {
@@ -389,7 +389,11 @@ pub fn report(sweep: &Sweep, interactions: &[InteractionVerdict], unplanned: &[S
                     e.expect,
                     num(v.base),
                     num(v.value),
-                    if v.pass { String::new() } else { format!(": {}", v.note) }
+                    if v.pass {
+                        String::new()
+                    } else {
+                        format!(": {}", v.note)
+                    }
                 ),
             )
         })
@@ -405,7 +409,11 @@ pub fn report(sweep: &Sweep, interactions: &[InteractionVerdict], unplanned: &[S
                 v.interaction.expect,
                 num(v.effect),
                 num(v.effect_under),
-                if v.pass { String::new() } else { format!(": {}", v.note) }
+                if v.pass {
+                    String::new()
+                } else {
+                    format!(": {}", v.note)
+                }
             ),
         )
     }));
@@ -455,7 +463,8 @@ pub fn markdown(sweep: &Sweep, interactions: &[InteractionVerdict], note: &str) 
             super::sweep::label(&e.change),
             e.metric,
             e.expect,
-            e.band.map_or_else(String::new, |[lo, hi]| format!(" [{lo}, {hi}]")),
+            e.band
+                .map_or_else(String::new, |[lo, hi]| format!(" [{lo}, {hi}]")),
             num(v.base),
             num(v.value),
             e.source.replace('|', "/")
@@ -483,13 +492,22 @@ pub fn markdown(sweep: &Sweep, interactions: &[InteractionVerdict], note: &str) 
         .verdicts
         .iter()
         .filter(|v| !v.pass)
-        .map(|v| format!("- `{}` = {} on `{}`: {} ({})", v.expectation.setting, super::sweep::label(&v.expectation.change), v.expectation.metric, status(sweep, v), v.note))
-        .chain(
-            interactions
-                .iter()
-                .filter(|v| !v.pass)
-                .map(|v| format!("- {} on `{}`: {}", v.interaction.name, v.interaction.metric, v.note)),
-        )
+        .map(|v| {
+            format!(
+                "- `{}` = {} on `{}`: {} ({})",
+                v.expectation.setting,
+                super::sweep::label(&v.expectation.change),
+                v.expectation.metric,
+                status(sweep, v),
+                v.note
+            )
+        })
+        .chain(interactions.iter().filter(|v| !v.pass).map(|v| {
+            format!(
+                "- {} on `{}`: {}",
+                v.interaction.name, v.interaction.metric, v.note
+            )
+        }))
         .collect();
     if !failing.is_empty() {
         s.push_str("\n## Failing\n\n");
