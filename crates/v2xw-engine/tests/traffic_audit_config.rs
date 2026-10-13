@@ -388,3 +388,24 @@ fn right_turn_on_red_reaches_the_grid_signals() {
         "right turn on red changed nothing on the grid"
     );
 }
+
+/// The new signal settings: SUMO detector placement is refused under fixed-time control,
+/// and short-link clearance outside its bounds; both are accepted where they act.
+#[test]
+fn the_signal_detector_and_short_link_settings_load_where_they_act() {
+    use v2xw_engine::scenario::schema::{DetectorPlacement, SignalControlKind};
+    let mut s = grid(10.0);
+    let mut t = Traffic::default();
+    t.signals.detector_placement = DetectorPlacement::Sumo;
+    s.traffic = Some(t.clone());
+    assert!(refused(&s, "traffic.signals.detector_placement"));
+    t.signals.control = SignalControlKind::Actuated;
+    t.signals.short_link_clearance_m = Some(5.0);
+    s.traffic = Some(t.clone());
+    assert!(!refused(&s, "traffic.signals.detector_placement"));
+    assert!(refused(&s, "traffic.signals.short_link_clearance_m"));
+    t.signals.short_link_clearance_m = Some(90.0);
+    s.traffic = Some(t);
+    let (v, _) = speeds(&run(s));
+    assert!(v > 0.0);
+}
