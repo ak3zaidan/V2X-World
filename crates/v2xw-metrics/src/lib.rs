@@ -151,6 +151,7 @@ pub mod latency;
 pub mod ledger;
 pub mod load;
 pub mod overhead;
+pub mod polarity;
 pub mod provider;
 pub mod quant;
 pub mod runtime;

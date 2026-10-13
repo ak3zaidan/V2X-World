@@ -3492,7 +3492,7 @@ impl LiveEngine {
             digest_final: None,
             runs_started: 1,
             stats: RunStats::default(),
-            past_runs: std::collections::VecDeque::new(),
+            past_runs: crate::compare::load_digests(PAST_RUNS),
             exports: None,
             world_memo,
         })
@@ -4396,6 +4396,7 @@ impl Engine for LiveEngine {
                 let previous = self.current_digest();
                 self.restart(next)?;
                 if let Some(d) = previous {
+                    crate::compare::save_digest(&d);
                     self.past_runs.push_front(d);
                     self.past_runs.truncate(PAST_RUNS);
                 }
