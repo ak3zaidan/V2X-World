@@ -1,0 +1,135 @@
+# Families for the catalogue-wide sensitivity sweep (`v2xw sensitivity --catalogue`,
+# crates/v2xw-engine/src/sensitivity/sweep.rs). Every published numeric or choice setting is
+# moved one at a time on the first family its route names; a setting the family's loader
+# refuses is retried on the next. Keep the families short: the whole sweep runs in about
+# 40 minutes on two threads. docs/validation/sensitivity-catalogue.md is the result.
+families:
+  # 40 vehicles bulk-spawned on a 1.2 km open grid, 802.11p, BSMs (dsrc-grid.yaml).
+  - name: dsrc
+    base: dsrc-grid.yaml
+    set: {time.duration_s: 2.0, metrics: [all]}
+  # The same fleet on the LTE-V2X PC5 sidelink, mode 4.
+  - name: cv2x
+    base: lte-grid.yaml
+    set: {time.duration_s: 2.0, metrics: [all]}
+  # The same fleet on NR-V2X mode 2.
+  - name: nr
+    base: nr-grid.yaml
+    set: {time.duration_s: 2.0, metrics: [all]}
+  # ETSI stack, a breakdown's DENM forwarded hop by hop.
+  - name: gn
+    base: gn-grid.yaml
+    set: {metrics: [all]}  # 24 s, breakdown at 8 s (gn-grid.yaml)
+  # The CAMP SCMS lifecycle with a roadside unit, short periods.
+  - name: security
+    base: ../credential-lifecycle.yaml
+    set: {time.duration_s: 30.0, threats.attackers: []}
+  # A signalised Midtown-shaped grid (4 x 6 blocks, two lanes each way, 60 s cycle) with
+  # Poisson demand, traffic and network: the base of tests/sensitivity_traffic.rs.
+  - name: traffic
+    base: ../phase1-grid.yaml
+    set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 1500.0,
+          world.source.params.cols: 4, world.source.params.rows: 6, metrics: [all]}
+  # The same grid filled with 250 vehicles at once: queues, spillback, gridlock.
+  - name: saturated
+    base: ../phase1-grid.yaml
+    set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: null,
+          actors.vehicles.demand.fleet_size: 250,
+          world.source.params.cols: 4, world.source.params.rows: 6, metrics: [all]}
+  # Downtown Portland (OSM): synthesised signal plans, jurisdiction presets, service roads.
+  # Needs worlds/cache/portland.osm.xml (a symlink to the main checkout's cache).
+  - name: osm
+    base: ../portland-downtown.yaml
+    set: {time.duration_s: 60.0, actors.vehicles.demand.rate_veh_per_h: 1500.0}
+  # The same grid with pedestrians and crossings.
+  - name: pedestrians
+    base: ../vru-grid.yaml
+    set: {time.duration_s: 40.0, metrics: [all]}
+
+routes:
+  - {prefix: radio.sidelink, families: [cv2x, nr]}
+  - {prefix: net.geonet, families: [gn]}
+  - {prefix: net, families: [gn, dsrc, security]}
+  - {prefix: security, families: [security, dsrc]}
+  - {prefix: actors.backend, families: [security]}
+  - {prefix: actors.rsus, families: [security]}
+  - {prefix: actors.vru, families: [pedestrians]}
+  - {prefix: world.signals, families: [osm]}
+  - {prefix: world.highway_preset, families: [osm]}
+  - {prefix: world.service_roads, families: [osm]}
+  - {prefix: radio.channel_model.building_wall_loss_db, families: [traffic]}
+  - {prefix: radio.channel_model.building_loss_db_per_m, families: [traffic]}
+  - {prefix: traffic.right_turn_on_red, families: [osm, traffic]}
+  - {prefix: actors.vehicles.drivers.bicycle, families: [pedestrians]}
+  - {prefix: traffic.gridlock_timeout_s, families: [saturated]}
+  - {prefix: traffic.keep_junctions_clear, families: [saturated]}
+  - {prefix: traffic.reroute_period_s, families: [saturated]}
+  - {prefix: traffic.dynamic_rerouting, families: [saturated]}
+  - {prefix: weather, families: [traffic, dsrc]}
+  - {prefix: threats, families: [security, dsrc]}
+  - {prefix: detection, families: [security]}
+  - {prefix: actors, families: [traffic, dsrc]}
+  - {prefix: traffic, families: [traffic, pedestrians]}
+  - {prefix: world, families: [traffic, dsrc]}
+  - {prefix: radio, families: [dsrc, cv2x]}
+  - {prefix: messages, families: [dsrc, gn]}
+  - {prefix: nodes, families: [dsrc, security]}
+  - {prefix: "", families: [dsrc, traffic, security]}
+
+skip:
+  - {prefix: meta, reason: descriptive}
+  - {prefix: schema, reason: the document version}
+  - {prefix: seed, reason: "the master seed: moves everything by construction"}
+  - {prefix: time.duration_s, reason: "the run length: moves every count by construction"}
+  - {prefix: output, reason: "output plumbing: what is written, not what is simulated"}
+  - {prefix: time.des_resolution, reason: "the clock grain: 1 us is the only value the radio tiers accept"}
+  - {prefix: radio.tiers.focus, reason: "needs a focus region (a polygon), which a scalar sweep cannot supply"}
+  - {prefix: scale.traffic.model, reason: "the tiered model needs a microscopic region box; tests/scale.rs covers it"}
+  - {prefix: messages.spat_interval_ms, reason: "needs a roadside unit with the spat role at a signalised junction (tests/network_audit_config.rs covers it)"}
+  - {prefix: messages.map_interval_ms, reason: "needs a roadside unit with the map role at a signalised junction (tests/network_audit_config.rs covers it)"}
+  - {prefix: detection.perception_tier, reason: "no perception model in this build: the loader refuses every value"}
+
+# Values that replace the computed ends where the guide's range would make the run too
+# large for the 8 GB sweep machine or names no usable range.
+values:
+  # 900 veh/h base: half and double (SUMO randomTrips-style Poisson demand).
+  actors.vehicles.demand.rate_veh_per_h: [450.0, 1800.0]
+  # vehicles per lane-km: light, and near the HCM 7th ed. basic-freeway LOS F threshold (45 pc/mi/ln = 28 pc/km/ln)
+  actors.vehicles.demand.rate_veh_per_h_per_lane_km: [5.0, 30.0]
+  actors.vehicles.demand.fleet_size: [10, 80]
+  # The 3GPP TR 36.885 drop fills every lane of the grid at a 2.5 s headway (thousands of
+  # vehicles on the Midtown grid: over the 4.5 GB cap), so the sweep turns demand off
+  # instead; the drop is exercised by scenarios/sensitivity/radio-cv2x.yaml.
+  actors.vehicles.demand.kind: [mobility/demand/none]
+  actors.vru.pedestrians: [50, 300]
+  radio.range.max_m: [200.0, 2000.0]
+
+# The most values a choice is swept at (spread over its options).
+max_choices: 6
+
+# Prerequisites both runs of a setting share, so it is measured where it acts instead of
+# being refused (the loader refuses a field that would do nothing).
+context:
+  - {prefix: radio.channel_model.nakagami_shape, set: {radio.channel_model.fading: nakagami}}
+  - {prefix: radio.channel_model.nakagami_shape_far, set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_breakpoint_m: 90.0, radio.channel_model.nakagami_shape_far: 0.9}}
+  - {prefix: radio.channel_model.nakagami_breakpoint_m, set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape_far: 0.75, radio.channel_model.nakagami_breakpoint_m: 90.0}}
+  - {prefix: radio.channel_model.rice_k_db, set: {radio.channel_model.fading: rice}}
+  - {prefix: radio.dcc.cbr_target, set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.adaptive_alpha, set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.adaptive_beta, set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.reactive_table, set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.reactive_hold_ms, set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}}
+  - {prefix: radio.tiers.phy, set: {radio.tiers.mac: high}}
+  - {prefix: messages.rate_hz, set: {time.mobility_step_ms: 50}}
+  - {prefix: messages.cpm_interval_ms, set: {messages.sets: [bsm, cpm]}}
+  - {prefix: security.on_demand_threshold, set: {security.verification_policy: on-demand}}
+  - {prefix: security.prioritized_horizon_m, set: {security.verification_policy: prioritized}}
+  - {prefix: actors.vehicles.drivers.bicycle, set: {actors.vru.cyclists: 60}}
+  - {prefix: actors.rsu_placement, set: {actors.rsu_placement.count: 4}}
+  - {prefix: weather.intensity, set: {weather.initial: rain}}
+  - {prefix: traffic.signals.min_green_s, set: {traffic.signals.control: actuated}}
+  - {prefix: traffic.signals.max_green_s, set: {traffic.signals.control: actuated}}
+  - {prefix: traffic.signals.passage_s, set: {traffic.signals.control: actuated}}
+  - {prefix: traffic.signals.detector_m, set: {traffic.signals.control: actuated}}
+  - {prefix: scale.traffic.meso, set: {scale.traffic.model: mobility/meso/queue}}
+  - {prefix: scale.radio, set: {scale.traffic.model: mobility/meso/queue}}
