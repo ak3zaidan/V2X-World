@@ -272,7 +272,7 @@ fn nr_table2(index: u8) -> SlMcsSpec {
 /// The pool and the scheduler parameters a scenario's sidelink runs.
 fn configuration(rat: Rat, choice: SidelinkChoice) -> Option<(PoolConfig, SpsParams, String)> {
     use v2xw_radio::sidelink as sl;
-    let (pool, mut params, profile) = match (rat, choice.profile) {
+    let (mut pool, mut params, profile) = match (rat, choice.profile) {
         (Rat::LteV2xPc5, Some(SidelinkProfile::MolinaMasegosa2017)) => (
             PoolConfig::molina_masegosa_highway(),
             SpsParams::molina_masegosa(10),
@@ -356,6 +356,12 @@ fn configuration(rat: Rat, choice: SidelinkChoice) -> Option<(PoolConfig, SpsPar
     }
     if let Some(n) = choice.max_transmissions {
         params = params.with_max_transmissions(n);
+    }
+    // `sizing: ts-36-213`: the transport block takes TS 36.213 Table 7.1.7.2.1-1's size
+    // at the MCS's I_TBS (Table 8.6.1-1). The loader admits it on the LTE profiles with
+    // an MCS index only; MCS 7 is their default.
+    if choice.tbs_sizing && matches!(rat, Rat::LteV2xPc5) {
+        pool.lte_itbs = v2xw_radio::lte_itbs_for_mcs(choice.mcs.unwrap_or(7));
     }
     Some((pool, params, profile.to_string()))
 }

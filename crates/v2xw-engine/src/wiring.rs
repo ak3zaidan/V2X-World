@@ -1098,6 +1098,9 @@ pub struct SidelinkChoice {
     /// sensitivity, the receiver the standard guarantees; unset (`measured`), the
     /// block-error curve alone decides, as a fielded receiver does.
     pub refsens_cutoff: bool,
+    /// `sizing: ts-36-213` (LTE only): transport blocks take TS 36.213 Table 7.1.7.2.1-1's
+    /// size at the MCS's I_TBS; unset (`code-rate`), the profile's `Qm · R` estimate.
+    pub tbs_sizing: bool,
 }
 
 impl Default for SidelinkChoice {
@@ -1109,6 +1112,7 @@ impl Default for SidelinkChoice {
             congestion: CongestionChoice::ProfileDefault,
             rate_control: None,
             refsens_cutoff: false,
+            tbs_sizing: false,
         }
     }
 }
@@ -1128,6 +1132,8 @@ struct SidelinkParams {
     rate_control: Option<String>,
     #[serde(default)]
     sensitivity: Option<String>,
+    #[serde(default)]
+    sizing: Option<String>,
 }
 
 /// The sidelink profile a RAT deploys in a region when `radio.models.sidelink` names
@@ -1281,6 +1287,29 @@ fn sidelink_choice(
             ));
         }
     };
+    let tbs_sizing = match p.sizing.as_deref() {
+        None | Some("code-rate") => false,
+        Some("ts-36-213") => {
+            if !lte {
+                return Err("sizing ts-36-213 is LTE's transport-block table; NR-V2X keeps \
+                            the code-rate sizing"
+                    .to_string());
+            }
+            if matches!(profile, SidelinkProfile::MolinaMasegosa2017) {
+                return Err("sizing ts-36-213 needs an MCS index, and the Molina-Masegosa \
+                            pool has none (QPSK r0.7); choose sae-j3161 or etsi-en303613"
+                    .to_string());
+            }
+            true
+        }
+        Some(other) => {
+            return Err(format!(
+                "sizing '{other}' is not one of: code-rate (the profile's Qm·R estimate), \
+                 ts-36-213 (TS 36.213 Table 7.1.7.2.1-1 transport block sizes, as a 3GPP UE \
+                 and OpenCV2X size them)"
+            ));
+        }
+    };
     Ok(SidelinkChoice {
         profile: Some(profile),
         mcs: p.mcs,
@@ -1288,6 +1317,7 @@ fn sidelink_choice(
         congestion,
         rate_control,
         refsens_cutoff,
+        tbs_sizing,
     })
 }
 
