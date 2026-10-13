@@ -1,0 +1,141 @@
+# Physical layer and channel, quantitative (phy-channel track). Base: the open 1.2 km grid,
+# 40 vehicles, 802.11p, made analytically clean: single-slope log-distance n = 2.5, no
+# shadowing, no fading, and BSMs at 2 Hz for 4 s so collisions stay under 3 %. At 10 Hz
+# the PRR from 300 m out is set by hidden-terminal collisions, not by the link budget
+# (docs/validation/test-phy-channel.md), so a budget change moves range90 by much less
+# than the law says; that is correct physics, not a defect, and these rows avoid it.
+#
+# Without fading the PRR falls to zero at the sensitivity distance d0, which is where
+# range_m (PRR 0.5) sits: EIRP 20 dBm (J2945/1's cap) + 3 dBi receive - (-92 dBm)
+# = 115 dB = 67.9 dB (free space to 10 m at 5.89 GHz) + 25 log10(d0 / 10 m): d0 = 766 m.
+# A link budget change of D dB moves d0 by 10^(D / 25) (Rappaport 2e Eq. 4.68). Bands are
+# that factor with room for the 20 m bins (2.6 % at 760 m) and the residual interference.
+# `v2xw sensitivity scenarios/sensitivity/phy-channel.yaml` (about 4 minutes).
+base: dsrc-grid.yaml
+set:
+  time.duration_s: 4.0
+  metrics: [all]
+  messages.rate_hz: 2.0
+  radio.channel_model.path_loss_exponent: 2.5
+  radio.channel_model.shadowing_sigma_db: 0.0
+  radio.channel_model.fading: none
+rows:
+  # ---- Link budget at the sensitivity edge: d0 x 10^(D / 25) ----
+  - name: OBU tx power 23 -> 17 dBm (J2945/1 caps EIRP at 20 dBm)
+    set: {radio.devices.obu.tx_power_dbm: 17.0}
+    metric: range_m
+    expect: same
+    source: "SAE J2945/1 2016 6.3.8: the radiated power is the congestion controller's (20 dBm at most), so 23 dBm into a 3 dBi antenna transmits at 17 dBm anyway"
+  - name: OBU tx power 23 -> 11 dBm (EIRP 20 -> 14, x0.575)
+    set: {radio.devices.obu.tx_power_dbm: 11.0}
+    metric: range_m
+    expect: down
+    band: [0.50, 0.66]
+    source: "10^(-6/25) = 0.575 (Rappaport 2e Eq. 4.68)"
+  - name: OBU tx power 23 -> 11 dBm, PRR at 50 m
+    set: {radio.devices.obu.tx_power_dbm: 11.0}
+    metric: prr_40_60
+    expect: same
+    source: "50 m is far inside either range"
+  - name: OBU tx power 23 -> 11 dBm, PRR at 300 m
+    set: {radio.devices.obu.tx_power_dbm: 11.0}
+    metric: prr_280_320
+    expect: same
+    min_change: 0.02
+    source: "300 m is inside the 440 m reduced range; without fading the PRR there is the collision floor"
+  - name: OBU antenna gain 3 -> 0 dBi (receive side only, x0.76)
+    set: {radio.devices.obu.antenna_gain_dbi: 0.0}
+    metric: range_m
+    expect: down
+    band: [0.68, 0.84]
+    source: "J2945/1 holds the EIRP, so the transmit gain is given back as conducted power; the receive gain still adds: 10^(-3/25) = 0.759 (Friis 1946)"
+  - name: OBU cable loss 0 -> 1 dB (receive side only, x0.91)
+    set: {radio.devices.obu.cable_loss_db: 1.0}
+    metric: range_m
+    expect: down
+    band: [0.82, 0.99]
+    source: "the transmit side is compensated by J2945/1's EIRP control; the receive feeder loses 1 dB: 10^(-1/25) = 0.912"
+  - name: sensitivity -92 -> -86 dBm (x0.575)
+    set: {radio.phy.sensitivity_dbm: -86.0}
+    metric: range_m
+    expect: down
+    band: [0.50, 0.66]
+    source: "a 6 dB higher decode floor is a 6 dB smaller budget (IEEE 802.11-2020 17.3.10.6)"
+  - name: noise figure 6 -> 12 dB (x0.575)
+    set: {radio.phy.noise_figure_db: 12.0}
+    metric: range_m
+    expect: down
+    band: [0.50, 0.66]
+    source: "the floor kTB + NF rises from -98 to -92 dBm; QPSK 1/2 needs about 6 dB SNR, so the edge moves to about -86 dBm: 6 dB (Friis 1944)"
+  - name: data rate 6 -> 12 Mbit/s
+    set: {radio.phy.data_rate_mbps: 12.0}
+    metric: range_m
+    expect: down
+    band: [0.50, 0.70]
+    source: "16-QAM 1/2 needs 5 dB more power (802.11-2020 Table 17-18 spacing) and about 5-6 dB more SNR than QPSK 1/2: 10^(-5.5/25) = 0.60"
+  - name: path-loss exponent 2.5 -> 3.0 (d0 = 10 (76.6)^(2.5/3) = 372 m)
+    set: {radio.channel_model.path_loss_exponent: 3.0}
+    metric: range_m
+    expect: down
+    band: [0.42, 0.56]
+    source: "the same 47.1 dB beyond 10 m spent at 30 dB/decade: 372 / 766 = 0.49 (Rappaport Eq. 4.68)"
+  # ---- Fading: the 10 % outage margin moves range90 (Simon and Alouini 2e, 2.2) ----
+  - name: Nakagami m=3 -> none (+4.35 dB at the 10th percentile, x1.49)
+    base_set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape: 3.0}
+    set: {radio.channel_model.fading: none}
+    metric: range90_m
+    expect: up
+    band: [1.30, 1.70]
+    source: "the 10th percentile of a unit-mean Gamma(3) power is 0.367 (-4.35 dB); without fading the edge is a step: 10^(4.35/25) = 1.49"
+  - name: Nakagami m=3 -> Rayleigh (x0.61)
+    base_set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape: 3.0}
+    set: {radio.channel_model.fading: rayleigh}
+    metric: range90_m
+    expect: down
+    band: [0.52, 0.72]
+    source: "Rayleigh 10th percentile -ln(0.9) = 0.105 (-9.77 dB) against -4.35 dB for m = 3: 10^(-5.42/25) = 0.607"
+  - name: Nakagami m=3 -> 0.75 beyond 80 m (x0.47)
+    base_set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape: 3.0}
+    set: {radio.channel_model.nakagami_shape_far: 0.75, radio.channel_model.nakagami_breakpoint_m: 80.0}
+    metric: range90_m
+    expect: down
+    band: [0.38, 0.58]
+    source: "Gamma(0.75) 10th percentile -12.5 dB against -4.35 dB: 10^(-8.1/25) = 0.47 (Cheng et al. JSAC 2007 far-field m < 1)"
+  # ---- Shadowing ----
+  - name: shadowing 0 -> 6 dB under m=3 (x0.64)
+    base_set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape: 3.0}
+    set: {radio.channel_model.shadowing_sigma_db: 6.0}
+    metric: range90_m
+    expect: down
+    band: [0.54, 0.80]
+    source: "10th percentile of Gamma(3) x lognormal(6 dB) is -9.2 dB against -4.35 dB: 10^(-4.9/25) = 0.64 (Rappaport 4.10.2, Monte Carlo)"
+  - name: shadowing 0 -> 6 dB, PRR beyond the edge
+    set: {radio.channel_model.shadowing_sigma_db: 6.0}
+    metric: prr_800_1000
+    expect: up
+    source: "log-normal spread lifts some links past the mean range edge (Rappaport 4.10.2)"
+  - name: shadowing 6 dB, decorrelation 10 -> 200 m, mean PRR
+    base_set: {radio.channel_model.shadowing_sigma_db: 6.0, radio.channel_model.shadowing_decorrelation_m: 10.0}
+    set: {radio.channel_model.shadowing_decorrelation_m: 200.0}
+    metric: prr
+    expect: same
+    min_change: 0.03
+    source: "correlation changes when losses happen, not their marginal probability (Gudmundson 1991)"
+  # ---- Weather: ITU-R P.838-3 rain at 5.9 GHz is about 0.1 dB/km at 25 mm/h ----
+  - name: heavy rain on the radio
+    set: {weather.initial: rain, weather.intensity: 0.8}
+    metric: range_m
+    expect: same
+    source: "ITU-R P.838-3 at 6 GHz: k = 0.00071, alpha = 1.59, 25 mm/h gives 0.12 dB/km, 0.06 dB over 500 m"
+  - name: fog on the radio
+    set: {weather.initial: fog, weather.intensity: 0.8}
+    metric: range_m
+    expect: same
+    source: "ITU-R P.840: fog attenuation at 6 GHz is below 0.01 dB/km per g/m3"
+  # ---- Antenna height on a law with no height term ----
+  - name: antenna height 1.5 -> 3 m under log-distance
+    set: {radio.devices.obu.antenna_height_m: 3.0}
+    metric: prr
+    expect: same
+    min_change: 0.005
+    source: "the single-slope law has no height term (Rappaport Eq. 4.68)"
