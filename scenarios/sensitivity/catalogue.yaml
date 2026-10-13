@@ -1,0 +1,63 @@
+# Families for the catalogue-wide sensitivity sweep (`v2xw sensitivity --catalogue`,
+# crates/v2xw-engine/src/sensitivity/sweep.rs). Every published numeric or choice setting is
+# moved one at a time on the first family its route names; a setting the family's loader
+# refuses is retried on the next. Keep the families short: the whole sweep runs in about
+# 40 minutes on two threads. docs/validation/sensitivity-catalogue.md is the result.
+families:
+  # 40 vehicles bulk-spawned on a 1.2 km open grid, 802.11p, BSMs (dsrc-grid.yaml).
+  - name: dsrc
+    base: dsrc-grid.yaml
+    set: {time.duration_s: 2.0, metrics: [all]}
+  # The same fleet on the LTE-V2X PC5 sidelink, mode 4.
+  - name: cv2x
+    base: lte-grid.yaml
+    set: {time.duration_s: 2.0, metrics: [all]}
+  # The same fleet on NR-V2X mode 2.
+  - name: nr
+    base: nr-grid.yaml
+    set: {time.duration_s: 2.0, metrics: [all]}
+  # ETSI stack, a breakdown's DENM forwarded hop by hop.
+  - name: gn
+    base: gn-grid.yaml
+    set: {time.duration_s: 12.0, events: [{t: 4.0, until: 11.0, type: safety.breakdown}], metrics: [all]}
+  # The CAMP SCMS lifecycle with a roadside unit, short periods.
+  - name: security
+    base: ../credential-lifecycle.yaml
+    set: {time.duration_s: 30.0}
+  # A signalised Midtown-shaped grid with Poisson demand, traffic and network.
+  - name: traffic
+    base: ../phase1-grid.yaml
+    set: {time.duration_s: 60.0, actors.vehicles.demand.rate_veh_per_h: 1200.0, metrics: [all]}
+  # The same grid with pedestrians and crossings.
+  - name: pedestrians
+    base: ../vru-grid.yaml
+    set: {time.duration_s: 40.0, metrics: [all]}
+
+routes:
+  - {prefix: radio.sidelink, families: [cv2x, nr]}
+  - {prefix: net.geonet, families: [gn]}
+  - {prefix: net, families: [gn, dsrc, security]}
+  - {prefix: security, families: [security, dsrc]}
+  - {prefix: actors.backend, families: [security]}
+  - {prefix: actors.rsus, families: [security]}
+  - {prefix: actors.vru, families: [pedestrians]}
+  - {prefix: world.signals.pedestrian, families: [pedestrians]}
+  - {prefix: weather, families: [traffic, dsrc]}
+  - {prefix: threats, families: [security, dsrc]}
+  - {prefix: detection, families: [security]}
+  - {prefix: actors, families: [traffic, dsrc]}
+  - {prefix: traffic, families: [traffic, pedestrians]}
+  - {prefix: world, families: [traffic, dsrc]}
+  - {prefix: radio, families: [dsrc, cv2x]}
+  - {prefix: messages, families: [dsrc, gn]}
+  - {prefix: nodes, families: [dsrc, security]}
+  - {prefix: "", families: [dsrc, traffic, security]}
+
+skip:
+  - {prefix: meta, reason: descriptive}
+  - {prefix: schema, reason: the document version}
+  - {prefix: seed, reason: "the master seed: moves everything by construction"}
+  - {prefix: time.duration_s, reason: "the run length: moves every count by construction"}
+  - {prefix: output, reason: "output plumbing: what is written, not what is simulated"}
+
+values: {}

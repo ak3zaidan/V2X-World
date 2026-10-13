@@ -68,8 +68,38 @@ pub enum Command {
 /// `v2xw sensitivity`.
 #[derive(Debug, clap::Args)]
 pub struct SensitivityArgs {
-    /// The spec file (`v2xw_engine::sensitivity::Spec`).
-    pub spec: std::path::PathBuf,
+    /// The spec file (`v2xw_engine::sensitivity::Spec`). Not used with `--catalogue`.
+    #[arg(required_unless_present = "catalogue")]
+    pub spec: Option<std::path::PathBuf>,
+    /// Sweep every published numeric and choice setting instead of running a spec: low
+    /// and high end of each setting's recommended range (or each choice) against a
+    /// same-seed base, on the family the families file routes it to.
+    #[arg(long)]
+    pub catalogue: bool,
+    /// The families file for `--catalogue`.
+    #[arg(long, value_name = "FILE", default_value = "scenarios/sensitivity/catalogue.yaml")]
+    pub families: std::path::PathBuf,
+    /// Expectation files for `--catalogue` (each a YAML list), comma-separated.
+    #[arg(
+        long,
+        value_name = "FILES",
+        value_delimiter = ',',
+        default_value = "crates/v2xw-engine/tests/expectations/catalogue.yaml"
+    )]
+    pub expectations: Vec<std::path::PathBuf>,
+    /// `--catalogue`: sweep only settings whose path starts with one of these prefixes
+    /// (comma-separated).
+    #[arg(long, value_name = "PREFIXES", value_delimiter = ',')]
+    pub only: Vec<String>,
+    /// `--catalogue`: parallel runs.
+    #[arg(long, default_value_t = 2)]
+    pub jobs: usize,
+    /// `--catalogue`: print the plan (settings, values, families) and run nothing.
+    #[arg(long)]
+    pub plan: bool,
+    /// `--catalogue`: exit non-zero when an expectation is contradicted.
+    #[arg(long)]
+    pub strict: bool,
     /// Also write the results as a Markdown table here.
     #[arg(long, value_name = "FILE")]
     pub markdown: Option<std::path::PathBuf>,

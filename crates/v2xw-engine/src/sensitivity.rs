@@ -13,7 +13,8 @@
 //! does not hold its `phy.rx` stream in memory. [`Measured::get`] lists the names.
 //!
 //! `v2xw sensitivity <spec.yaml>` runs a spec file; `crates/v2xw-engine/tests/` call
-//! [`check_row`] directly, one test per row.
+//! [`check_row`] directly, one test per row. `v2xw sensitivity --catalogue` runs
+//! [`sweep`], every published setting at once.
 //!
 //! # Spec file
 //!
@@ -44,6 +45,8 @@ use crate::ctx::RunRecorder;
 use crate::error::{EngineError, Result, ScenarioError};
 use crate::run::{Engine, RunReport};
 use crate::scenario::Scenario;
+
+pub mod sweep;
 
 /// The direction a row expects its metric to move.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
