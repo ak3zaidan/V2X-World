@@ -634,6 +634,24 @@ const ADVANCED: &[Basic] = &[
         explain: "Two traffic lights this close together on an imported map run as one junction with one plan, so cars are never fed into the short gap between them faster than it empties.",
         recommended: "Off (0) as imported; 20 m (SUMO's netconvert default); 10 to 30 m.",
     },
+    // FHWA Traffic Signal Timing Manual 2e (FHWA-HOP-08-024), tables 5-3 and 5-4: minimum
+    // green 5-15 s, maximum green 30-60 s on an arterial through phase. The two ranges do
+    // not overlap, so a sweep across either one never crosses the other's default (7 / 45).
+    Basic {
+        path: "traffic.signals.min_green_s",
+        explain: "Under actuated control, the shortest a green runs once it starts, even if no more cars arrive, so the queue stored at the stop line can start up and clear.",
+        recommended: "7 s; 5 to 15 s (FHWA Signal Timing Manual).",
+    },
+    Basic {
+        path: "traffic.signals.max_green_s",
+        explain: "Under actuated control, the longest a green may be held by arriving cars while another approach waits.",
+        recommended: "45 s; 30 to 60 s (FHWA Signal Timing Manual).",
+    },
+    Basic {
+        path: "traffic.signals.detector_m",
+        explain: "Under actuated control, how far back from the stop line the detector loop reaches; cars inside it hold the green.",
+        recommended: "12.2 m (40 ft stop-line loop, FHWA); 6 to 30 m.",
+    },
     Basic {
         path: "world.signals.pedestrian_speed_mps",
         explain: "The walking speed the flashing don't-walk time is timed for: slower gives pedestrians longer and drivers shorter greens.",
