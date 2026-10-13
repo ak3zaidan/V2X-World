@@ -353,6 +353,11 @@ pub struct SignalControl {
     /// SUMO's upstream induction loop at 2 s of travel from the stop line.
     #[serde(default, skip_serializing_if = "DetectorPlacement::is_default")]
     pub detector_placement: DetectorPlacement,
+    /// Short-link clearance: a driving lane shorter than this between two signalised
+    /// junctions gets a downstream green that starts just before the upstream green that
+    /// fills it (`crate::actuated::clear_short_links`), metres. Absent is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub short_link_clearance_m: Option<f64>,
     /// A green wave: every signal's offset set so that a vehicle at this speed meets green
     /// after green travelling in green_wave_heading_deg. Absent keeps the plans' own
     /// offsets.
@@ -394,6 +399,7 @@ impl Default for SignalControl {
             passage_s: Self::default_passage(),
             detector_m: Self::default_detector(),
             detector_placement: DetectorPlacement::StopLine,
+            short_link_clearance_m: None,
             green_wave_speed_mps: None,
             green_wave_heading_deg: Self::default_wave_heading(),
         }

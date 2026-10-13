@@ -653,6 +653,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "12.2 m (40 ft stop-line loop, FHWA); 6 to 30 m.",
     },
     Basic {
+        path: "traffic.signals.short_link_clearance_m",
+        explain: "Where two traffic lights are this close, the downstream light turns green for the short street between them just before the upstream one does, so cars are not held at a green light by a full block ahead (closely spaced signals, FHWA Signal Timing Manual ch. 6).",
+        recommended: "Off for the plans as imported; 30 to 90 m (4 to 12 queued cars at the HCM's 7.62 m each).",
+    },
+    Basic {
         path: "traffic.signals.detector_placement",
         explain: "Under actuated control, where the vehicle detectors sit: a loop at the stop line, or SUMO's single loop per lane about two seconds of travel upstream, which ends the green sooner once a platoon has passed.",
         recommended: "stop-line (FHWA) for US practice; sumo to compare with a SUMO actuated run.",

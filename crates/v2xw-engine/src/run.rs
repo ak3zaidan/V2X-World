@@ -1147,6 +1147,7 @@ impl Engine {
             .map(|t| t.signals.clone())
             .unwrap_or_default();
         crate::actuated::coordinate(&signal_control, &mut world);
+        crate::actuated::clear_short_links(&signal_control, &mut world);
         let actuated = crate::actuated::ActuatedControllers::new(&signal_control, &world);
         let mut registry = Registry::new();
         crate::wiring::register_all(&mut registry)?;

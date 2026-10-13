@@ -405,6 +405,100 @@ pub fn coordinate(control: &SignalControl, world: &mut World) {
     }
 }
 
+/// How far the downstream green for a short link leads the upstream green that fills it,
+/// seconds: the HCM's default start-up lost time (2 s), so the queue stored on the link is
+/// moving before the first arrival reaches it.
+pub const SHORT_LINK_LEAD_S: f64 = 2.0;
+
+/// When the green begins, seconds into the cycle, for any of the movements `ms` of `plan`:
+/// the first phase showing one of them green after a phase that does not, or `None`.
+fn green_start(plan: &SignalPlan, ms: &[usize]) -> Option<f64> {
+    let n = plan.phases.len();
+    let green = |i: usize| {
+        ms.iter().any(|m| {
+            matches!(
+                plan.phases[i].states.get(*m),
+                Some(SignalState::Green | SignalState::GreenYield)
+            )
+        })
+    };
+    let mut at = 0.0;
+    for i in 0..n {
+        if green(i) && !green((i + n - 1) % n) {
+            return Some(at);
+        }
+        at += plan.phases[i].duration_s;
+    }
+    None
+}
+
+/// Short-link clearance (`traffic.signals.short_link_clearance_m`): for every driving
+/// lane shorter than the threshold between two signalised junctions on the same cycle,
+/// the downstream plan's offset is set so the green that empties the lane starts
+/// [`SHORT_LINK_LEAD_S`] before the upstream green that fills it. The FHWA Signal Timing
+/// Manual 2e (FHWA-HOP-08-024, ch. 6) gives closely spaced intersections simultaneous or
+/// slightly leading downstream offsets so the short link never stores a queue the
+/// upstream green cannot discharge into; SUMO's keep-clear rule (MSLink::opened) then
+/// only holds an entering car for the rare full link. Each downstream plan takes the
+/// first such link in lane-id order and is moved once. A no-op when unset.
+pub fn clear_short_links(control: &SignalControl, world: &mut World) {
+    let Some(limit) = control.short_link_clearance_m.filter(|v| *v > 0.0) else {
+        return;
+    };
+    let plan_of: BTreeMap<usize, usize> = world
+        .signals
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.junction.as_usize(), i))
+        .collect();
+    let mut moved: BTreeSet<usize> = BTreeSet::new();
+    let mut shifts: Vec<(usize, f64)> = Vec::new();
+    for lane in world.roads.lanes() {
+        if lane.kind != LaneKind::Driving || lane.length_m >= limit {
+            continue;
+        }
+        let edge = world.roads.edge(lane.edge);
+        let (Some(&u), Some(&d)) = (
+            plan_of.get(&edge.from.as_usize()),
+            plan_of.get(&edge.to.as_usize()),
+        ) else {
+            continue;
+        };
+        if u == d || moved.contains(&d) {
+            continue;
+        }
+        let (pu, pd) = (&world.signals[u], &world.signals[d]);
+        if (pu.cycle_s - pd.cycle_s).abs() > 1e-9 || pd.cycle_s <= 0.0 {
+            continue;
+        }
+        let index = |plan: &SignalPlan, via: LaneId| plan.controlled.iter().position(|l| *l == via);
+        let mut feed = Vec::new();
+        let mut drain = Vec::new();
+        for c in world.roads.connections() {
+            let Some(via) = c.via else { continue };
+            if c.to_lane == lane.id
+                && let Some(m) = index(pu, via)
+            {
+                feed.push(m);
+            }
+            if c.from_lane == lane.id
+                && let Some(m) = index(pd, via)
+            {
+                drain.push(m);
+            }
+        }
+        let (Some(su), Some(sd)) = (green_start(pu, &feed), green_start(pd, &drain)) else {
+            continue;
+        };
+        let offset = (pu.offset_s + su - SHORT_LINK_LEAD_S - sd).rem_euclid(pd.cycle_s);
+        moved.insert(d);
+        shifts.push((d, offset));
+    }
+    for (d, offset) in shifts {
+        world.signals[d].offset_s = offset;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

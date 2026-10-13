@@ -321,6 +321,15 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the green-wave speed",
     },
+    // A link of 10 m stores one car; 200 m stores 26 at the HCM's 7.62 m per queued car,
+    // beyond which a link is not "short" in any timing practice.
+    Bound {
+        path: "traffic.signals.short_link_clearance_m",
+        lo: 10.0,
+        hi: 200.0,
+        exclusive_lo: false,
+        what: "the short-link length",
+    },
     Bound {
         path: "traffic.signals.green_wave_heading_deg",
         lo: 0.0,
@@ -4540,6 +4549,14 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ),
         ] {
             bounded_at(path, path, v, e);
+        }
+        if let Some(v) = g.short_link_clearance_m {
+            bounded_at(
+                "traffic.signals.short_link_clearance_m",
+                "traffic.signals.short_link_clearance_m",
+                v,
+                e,
+            );
         }
         if let Some(v) = g.green_wave_speed_mps {
             bounded_at(
