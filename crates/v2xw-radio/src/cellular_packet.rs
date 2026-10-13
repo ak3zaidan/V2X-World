@@ -145,7 +145,9 @@ impl RatConfig {
     ///
     /// 100 PRB at 20 MHz [TS 36.101 Table 5.6-1]; 1 ms subframe of 14 symbols with normal
     /// cyclic prefix [TS 36.211 §4.1, §6.2.3]; overheads 0.14 DL / 0.08 UL [the FR1 OH
-    /// factors of TS 38.306 §4.1.2, used for LTE too, `todo-calibrate`]; CQI 1 and 15
+    /// factors of TS 38.306 §4.1.2, used for LTE too: an assumption, because LTE's
+    /// control region (1-3 of 14 symbols, TS 36.211 §6.7) plus CRS brackets the same
+    /// 7-21 % and no LTE clause prints a single factor]; CQI 1 and 15
     /// efficiencies 0.1523 and 5.5547 bit/RE and the 10 % BLER the CQI is defined at
     /// [TS 36.213 §7.2.3, Table 7.2.3-1]; 8 ms FDD HARQ RTT [TS 36.213 §8, §10.1]; four
     /// transmissions [ns-3 LTE `LteEnbMac::MaxHarqRetransmissions` = 3]; RLC AM retransmits
@@ -189,10 +191,16 @@ impl RatConfig {
     /// 273 PRB [TS 38.101-1 Table 5.3.2-1]; 0.5 ms slot of 14 symbols [TS 38.211 §4.3.2];
     /// overheads 0.14 / 0.08 [TS 38.306 §4.1.2]; top efficiency 7.4063 bit/RE of 256QAM
     /// [TS 38.214 Table 5.2.2.1-3]; RLC AM as LTE [5G-LENA reuses the ns-3 RLC AM, 20 ms
-    /// t-PollRetransmit]; the HARQ RTT, SR period, grant chain and interruption are
-    /// `todo-calibrate` (a 4-slot RTT, a 1 ms SR period, a 2 ms grant chain, 0.5 ms DL
-    /// processing; 30 ms interruption between the LTE figure and the 0 ms Rel-16 DAPS
-    /// target of TS 38.300 §9.2.3.2).
+    /// t-PollRetransmit]; a 4-slot (2 ms) HARQ RTT [TS 38.214 §5.3 Table 5.3-1 and
+    /// §6.4 Table 6.4-1, capability 1 at µ = 1: N1 = 10 and N2 = 12 symbols, so feedback
+    /// and the retransmission grant each fit in one slot after the slot they answer];
+    /// assumptions, each placed to meet TR 38.913 §7.5's 4 ms eMBB user-plane latency
+    /// target: a 1 ms SR period (2 slots, inside TS 38.331's 2-symbol to 80-slot
+    /// `periodicityAndOffset` range), a 2 ms SR → grant → data chain (the LTE chain's
+    /// four steps at 30 kHz processing), 0.5 ms DL processing (one slot); and a 30 ms
+    /// interruption, between the LTE figure and the 0 ms TR 38.913 §7.11 target that
+    /// Rel-16 DAPS reaches (TS 38.300 §9.2.3.2), because the Rel-15 break-before-make
+    /// handover keeps LTE's structure with a shorter RACH on the faster numerology.
     #[must_use]
     pub const fn nr_100mhz_30khz() -> Self {
         Self {
@@ -266,8 +274,9 @@ impl RatConfig {
 pub const SHANNON_ALPHA: f64 = 0.75;
 /// The SNR-efficiency factor of the same bound (linear; about 1 dB).
 pub const SHANNON_SNR_EFF: f64 = 1.25;
-/// The proportional-fair averaging window, TTIs [Jalali, Padovani, Pankaj, VTC 2000 use
-/// 1,000 slots; 100 TTIs is the value ns-3's PF scheduler examples use, `todo-calibrate`].
+/// The proportional-fair averaging window, TTIs [ns-3 LTE `PfFfMacScheduler`,
+/// `m_timeWindow = 99` TTI in its constructor, which its update uses as `1 − 1/T`; 100
+/// is within one TTI of it. Jalali, Padovani, Pankaj, VTC 2000 use 1,000 slots].
 pub const PF_WINDOW_TTI: f64 = 100.0;
 /// How far a copy of a cell is rolled forward before a packet is declared undeliverable.
 pub const ROLLOUT_LIMIT: Duration = Duration::from_secs(30);
@@ -1357,7 +1366,8 @@ impl PacketUu {
 }
 
 /// The share of PRBs other subscribers' traffic occupies by default: half, a mid-loaded
-/// macro cell [`todo-calibrate` against operator PRB-utilisation data].
+/// macro cell [an assumption: operator PRB utilisation is not published per city; the
+/// card keeps it `todo-calibrate` with that plan].
 pub const DEFAULT_BACKGROUND_LOAD: f64 = 0.5;
 
 impl Model for PacketUu {
@@ -1574,7 +1584,10 @@ fn packet_card() -> ModelCard {
             "bler_retx",
             "-",
             serde_json::json!(lte.bler_retx),
-            "chosen: chase combining makes a retransmission more reliable than the first",
+            "assumption: half the first transmission's 0.1, because chase combining adds \
+             the retransmission's energy to the first (about 3 dB at equal power, Chase, \
+             IEEE Trans. Commun. 1985), which on the steep turbo BLER curve near 10 % \
+             leaves well under half the errors; 0.05 is the conservative end",
             "Fit to an ns-3 LTE or 5G-LENA HARQ trace of residual BLER per attempt.",
         ),
         Parameter::new(
@@ -1614,7 +1627,9 @@ fn packet_card() -> ModelCard {
             "nr_ho_interruption_ms",
             "ms",
             serde_json::json!(RatConfig::nr_100mhz_30khz().ho_interruption_ms),
-            "chosen between the LTE figure and the 0 ms DAPS target of TS 38.300 §9.2.3.2",
+            "assumption: between the 49.5 ms LTE figure (TR 36.881 §5.2) and the 0 ms \
+             TR 38.913 §7.11 target that Rel-16 DAPS meets (TS 38.300 §9.2.3.2), because a \
+             Rel-15 break-before-make NR handover keeps LTE's steps with a shorter RACH",
             "Fit to a drive-test NR handover trace (e.g. MobileInsight 5G) or read the \
              TS 38.133 §6.1.1 interruption components.",
         ),
@@ -1633,7 +1648,9 @@ fn packet_card() -> ModelCard {
             "background_load",
             "-",
             serde_json::json!(DEFAULT_BACKGROUND_LOAD),
-            "chosen: a mid-loaded macro cell",
+            "assumption: a mid-loaded macro cell, because operator PRB utilisation is not \
+             published per city; TR 36.814 Annex A's full-buffer system evaluations bound \
+             it at 1",
             "Use operator PRB-utilisation statistics for the city being modelled.",
         ),
     ];

@@ -215,9 +215,8 @@ impl CellPlan {
             isd_m: 500.0,
             bs_tx_power_dbm: 49.0,
             bs_gain_dbi: 8.0,
-            // −124 dBm is about 20 dB below the LTE reference-signal received power a UE
-            // reports as its lowest usable value; the exact figure is not printed in
-            // 04-models.md §10.1, so it is `todo-calibrate` in the card.
+            // −124 dBm is TS 36.304 §5.2.3.2's cell-selection floor at q-RxLevMin −62, an
+            // operator setting; the card marks the choice as an assumption.
             no_coverage_below_dbm: -124.0,
             extent_sites: 64,
         }
@@ -847,9 +846,9 @@ pub mod handover {
     /// `T_IU`, the interruption uncertainty: the value the standard's own worked
     /// interruption uses, ms.
     ///
-    /// 04-models.md §10.1 writes the known-target interruption as `T_IU + 20 ms` without
-    /// printing `T_IU` itself, so this is `todo-calibrate`: the plan is to read
-    /// TS 36.133 §5.1.2.1.2's definition of `T_IU` and record the value it fixes.
+    /// TS 36.133 §5.1.2.1.2 defines `T_IU` as the uncertainty in acquiring the first PRACH
+    /// occasion in the new cell, up to 30 ms. 5 ms is its mean with one PRACH occasion per
+    /// 10 ms frame (TS 36.211 Table 5.7.1-2), an assumption the card states.
     pub const T_IU_MS: f64 = 5.0;
     /// The known-target addition, ms.
     pub const KNOWN_TARGET_MS: f64 = 20.0;
@@ -891,7 +890,7 @@ impl HandoverKind {
                 h::T_IU_MS + h::KNOWN_TARGET_MS + h::T_SEARCH_MS + h::RRC_PROCEDURE_MS
             }
             // T_sync is not printed in 04-models.md §10.1 either; it is folded into T_IU
-            // in the card's todo-calibrate note.
+            // in the card's t_iu_ms note.
             HandoverKind::EutraToUtraKnown => h::T_IU_MS + h::EUTRA_TO_UTRA_KNOWN_MS + 10.0 * f_max,
             HandoverKind::EutraToUtraUnknown => h::T_IU_MS + h::EUTRA_TO_UTRA_UNKNOWN_MS,
         }
@@ -1257,8 +1256,10 @@ fn fixed_latency_card(preset: UuLatencyPreset) -> ModelCard {
             reference: match preset {
                 UuLatencyPreset::OoklaUsMedian => {
                     "Ookla via the IEEE ComSoc blog, H2 2025 US carrier medians 31 / 32 / \
-                     34 ms; 04-models.md §10.1 marks the p95 UNVERIFIED, so the spread is \
-                     chosen"
+                     34 ms. Assumption: the 5 ms spread, because the source prints \
+                     medians only (04-models.md §10.1 marks the p95 UNVERIFIED); 5 ms is \
+                     the order of the spreads the cited Narayanan round trips print \
+                     (4.3-6.4 ms)"
                         .to_string()
                 }
                 _ => "a printed range taken at its midpoint with the half-width as the \
@@ -1422,9 +1423,11 @@ fn cell_capacity_card() -> ModelCard {
             range: Some(vec![serde_json::json!(-140.0), serde_json::json!(-80.0)]),
             source: Source {
                 kind: SourceKind::TodoCalibrate,
-                reference: "04-models.md §10.1 prints no coverage floor; it records only \
-                            that coverage PDR is near 100 % with localized drops to about \
-                            90 % in dense canyons and intersections (MASA)"
+                reference: "Assumption: the cell-selection floor of TS 36.304 §5.2.3.2 \
+                            (Srxlev = RSRP - Qrxlevmin > 0) at q-RxLevMin = -62, i.e. \
+                            Qrxlevmin = -124 dBm (TS 36.331 SIB1, range -70..-22 in 2 dB \
+                            steps). The floor is an operator setting, so no single value \
+                            is the standard's"
                     .to_string(),
                 accessed: None,
                 note: None,
@@ -1512,22 +1515,22 @@ fn handover_outage_card() -> ModelCard {
             default: serde_json::json!(handover::T_IU_MS),
             range: Some(vec![serde_json::json!(0.0), serde_json::json!(50.0)]),
             source: Source {
-                kind: SourceKind::TodoCalibrate,
-                reference: "04-models.md §10.1 writes the interruption as `T_IU + 20 ms` \
-                            without printing `T_IU`, and folds `T_sync` into the same gap"
+                kind: SourceKind::Standard,
+                reference: "TS 36.133 §5.1.2.1.2: T_IU is the uncertainty in acquiring the \
+                            first available PRACH occasion in the new cell, up to 30 ms; \
+                            5 ms is its mean when the target cell offers one PRACH \
+                            occasion per 10 ms radio frame (TS 36.211 §5.7.1, Table \
+                            5.7.1-2) and the handover command lands uniformly in the frame"
                     .to_string(),
                 accessed: None,
                 note: Some(
-                    "Every other term of the interruption is printed; this is the one that \
-                     is not, so an interruption is right to within this term."
+                    "Assumption: one PRACH occasion per frame, a common sparse \
+                     configuration; a cell with two per frame halves it. T_sync of the \
+                     E-UTRA-to-UTRA formula (§5.3.1.1.2) is folded into the same term."
                         .to_string(),
                 ),
             },
-            calibration: Some(
-                "Read TS 36.133 §5.1.2.1.2's definition of `T_IU` and §5.3.1.1.2's \
-                 `T_sync`, and record both."
-                    .to_string(),
-            ),
+            calibration: None,
         },
         Parameter::new(
             "t_search_ms",
