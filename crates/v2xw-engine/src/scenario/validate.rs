@@ -1117,6 +1117,38 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the turn-speed curve window",
     },
+    // SUMO LC2013 eagerness factors (sumo.dlr.de "Definition of Vehicles, Vehicle Types,
+    // and Routes", lane-changing models): default 1, documented in [0, inf); 0 turns a
+    // motivation off. lcCooperative is a probability-like weight in [0, 1]. 10 is ten
+    // times SUMO's eagerness, beyond any published calibration (Erdmann 2015).
+    Bound {
+        path: "traffic.lc_strategic",
+        lo: 0.0,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the LC2013 strategic eagerness",
+    },
+    Bound {
+        path: "traffic.lc_cooperative",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the LC2013 cooperativeness",
+    },
+    Bound {
+        path: "traffic.lc_speed_gain",
+        lo: 0.0,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the LC2013 speed-gain eagerness",
+    },
+    Bound {
+        path: "traffic.lc_keep_right",
+        lo: 0.0,
+        hi: 10.0,
+        exclusive_lo: false,
+        what: "the LC2013 keep-right eagerness",
+    },
     // TCRP Report 19 (1996): urban local-bus stops 150-400 m apart, limited-stop and BRT
     // up to about 1 km; 100-2,000 m covers both with room.
     Bound {
@@ -2976,6 +3008,31 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Judges a corner's radius over its tightest arc of this length instead of its average.",
     },
     KeyStatus {
+        path: "traffic.heavy_vehicle_gap_terms",
+        status: Status::Wired,
+        note: "Heavy vehicles add the HCM 6th ed. Exhibit 20-11 heavy-vehicle critical gap and follow-up terms.",
+    },
+    KeyStatus {
+        path: "traffic.lc_strategic",
+        status: Status::Wired,
+        note: "SUMO LC2013 look-ahead for route lane changes; any lc_* switches discretionary changes from MOBIL to LC2013.",
+    },
+    KeyStatus {
+        path: "traffic.lc_cooperative",
+        status: Status::Wired,
+        note: "SUMO LC2013: moves aside for a neighbour that must merge in.",
+    },
+    KeyStatus {
+        path: "traffic.lc_speed_gain",
+        status: Status::Wired,
+        note: "SUMO LC2013 speed-gain accumulator threshold 0.2 / value.",
+    },
+    KeyStatus {
+        path: "traffic.lc_keep_right",
+        status: Status::Wired,
+        note: "SUMO LC2013 keep-right accumulator.",
+    },
+    KeyStatus {
         path: "traffic.kerbside",
         status: Status::Wired,
         note: "Overrides the jurisdiction's kerbside stops: bus stops and dwell, taxi share and dwell, delivery share and dwell. Not applied to SUMO runs.",
@@ -3719,6 +3776,10 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ("traffic.permitted_left_gap_s", t.permitted_left_gap_s),
             ("traffic.turn_lateral_accel_mps2", t.turn_lateral_accel_mps2),
             ("traffic.turn_curve_window_m", t.turn_curve_window_m),
+            ("traffic.lc_strategic", t.lc_strategic),
+            ("traffic.lc_cooperative", t.lc_cooperative),
+            ("traffic.lc_speed_gain", t.lc_speed_gain),
+            ("traffic.lc_keep_right", t.lc_keep_right),
         ] {
             if let Some(v) = v {
                 bounded_at(path, path, v, e);
@@ -3770,7 +3831,43 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             || t.permitted_left_gap_s.is_some()
             || t.turn_lateral_accel_mps2.is_some()
             || t.turn_curve_window_m.is_some()
+            || t.lc_strategic.is_some()
+            || t.lc_cooperative.is_some()
+            || t.lc_speed_gain.is_some()
+            || t.lc_keep_right.is_some()
+            || t.heavy_vehicle_gap_terms.is_some()
             || t.kerbside.is_some();
+        // The LC2013 factors act only on lane changes, and the strategic one only on the
+        // changes a route needs.
+        for (path, v) in [
+            ("traffic.lc_strategic", t.lc_strategic),
+            ("traffic.lc_cooperative", t.lc_cooperative),
+            ("traffic.lc_speed_gain", t.lc_speed_gain),
+            ("traffic.lc_keep_right", t.lc_keep_right),
+        ] {
+            if v.is_some() && !t.lane_changes {
+                e.push(conflict(
+                    path,
+                    "tunes lane changing, and traffic.lane_changes is false".to_string(),
+                ));
+            }
+        }
+        if t.lc_strategic.is_some() && t.lane_changes && !t.strategic_lane_choice {
+            e.push(conflict(
+                "traffic.lc_strategic",
+                "sets when route lane changes are made, and traffic.strategic_lane_choice is \
+                 false"
+                    .to_string(),
+            ));
+        }
+        if t.lc_cooperative.is_some_and(|c| c > 0.0) && t.lane_changes && !t.strategic_lane_choice
+        {
+            e.push(conflict(
+                "traffic.lc_cooperative",
+                "makes room for route lane changes, and traffic.strategic_lane_choice is false"
+                    .to_string(),
+            ));
+        }
         if t.turn_curve_window_m.is_some_and(|w| w > 0.0) && t.turn_lateral_accel_mps2 == Some(0.0)
         {
             e.push(conflict(

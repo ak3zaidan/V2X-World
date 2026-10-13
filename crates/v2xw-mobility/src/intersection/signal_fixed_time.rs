@@ -124,6 +124,13 @@ pub struct SignalPlanParams {
     /// The two-way-stop major-street left turn's 4.1 s, which this model used before, is
     /// the unsignalised procedure's value, not the signalised one's.
     pub permitted_left_critical_headway_s: f64,
+    /// Whether a heavy vehicle's permitted left adds the HCM's heavy-vehicle critical
+    /// headway term for one heavy vehicle (1.0 s against fewer than four opposing lanes,
+    /// 2.0 s against four or more; HCM 6th ed. Exhibit 20-11, the two-way-stop
+    /// procedure's term carried to the signalised permitted left, **this crate's choice**:
+    /// Chapter 31 itself uses a fixed 4.5 s). Off by default.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub heavy_vehicle_terms: bool,
     /// Whether a right turn may be made against a steady red after a full stop at the
     /// line, giving way to the traffic it joins and to pedestrians — the jurisdiction's
     /// rule, not the junction's.
@@ -170,6 +177,7 @@ impl Default for SignalPlanParams {
             match_cycle: true,
             permissive_left: true,
             permitted_left_critical_headway_s: HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S,
+            heavy_vehicle_terms: false,
             right_turn_on_red: false,
             gap_factor: 1.0,
             stop_line_offset_m: STOP_LINE_OFFSET_M,
@@ -460,7 +468,15 @@ impl IntersectionControl for FixedTimeSignals {
             // give way to is closing on the junction. The critical gap is the HCM
             // signalised procedure's permitted left-turn critical headway.
             Some(SignalState::GreenYield) => {
-                let critical = self.params.permitted_left_critical_headway_s;
+                let critical = self.params.permitted_left_critical_headway_s
+                    + if self.params.heavy_vehicle_terms && crate::style::is_heavy(ego.class) {
+                        crate::intersection::gap_acceptance::hcm_heavy_vehicle_terms_s(
+                            j.major_lanes,
+                        )
+                        .0
+                    } else {
+                        0.0
+                    };
                 // A left turner on a permissive green gives way to everything coming the
                 // other way that is not itself turning left (UVC §11-402), whatever the
                 // junction's matrix says. A matrix that leaves the two movements level

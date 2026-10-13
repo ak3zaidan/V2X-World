@@ -338,6 +338,10 @@ const DIMENSIONLESS: &[&str] = &[
     "radio.dcc.adaptive_beta",
     // traffic audit
     "traffic.critical_gap_factor",
+    "traffic.lc_strategic",
+    "traffic.lc_cooperative",
+    "traffic.lc_speed_gain",
+    "traffic.lc_keep_right",
     "traffic.kerbside.taxi_share",
     "traffic.kerbside.delivery_stop_share",
     "actors.vehicles.drivers.speed_factor",

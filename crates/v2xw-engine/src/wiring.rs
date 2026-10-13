@@ -509,6 +509,24 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(v) = traffic.turn_curve_window_m {
         params.turn_curve_window_m = v;
     }
+    if let Some(v) = traffic.heavy_vehicle_gap_terms {
+        params.heavy_vehicle_gap_terms = v;
+    }
+    // SUMO LC2013's motivations: any lc_* field switches them on; the unset ones take
+    // SUMO's default of 1 (`v2xw_mobility::lanechange::lc2013`).
+    if traffic.lc_strategic.is_some()
+        || traffic.lc_cooperative.is_some()
+        || traffic.lc_speed_gain.is_some()
+        || traffic.lc_keep_right.is_some()
+    {
+        let d = v2xw_mobility::lanechange::lc2013::Lc2013Params::default();
+        params.lc2013 = Some(v2xw_mobility::lanechange::lc2013::Lc2013Params {
+            strategic: traffic.lc_strategic.unwrap_or(d.strategic),
+            cooperative: traffic.lc_cooperative.unwrap_or(d.cooperative),
+            speed_gain: traffic.lc_speed_gain.unwrap_or(d.speed_gain),
+            keep_right: traffic.lc_keep_right.unwrap_or(d.keep_right),
+        });
+    }
     if let Some(k) = &traffic.kerbside {
         params.kerbside = k.apply(params.kerbside);
     }

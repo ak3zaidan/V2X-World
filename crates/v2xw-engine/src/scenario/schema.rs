@@ -194,6 +194,30 @@ pub struct Traffic {
     /// drivers slow for the apex of a corner, not only for its average.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_curve_window_m: Option<f64>,
+    /// SUMO LC2013's eagerness for the lane changes a route needs: it scales how far
+    /// ahead of the turn the change becomes due (10 s at the look-ahead speed, twice that
+    /// to the left). Setting any `lc_*` field drives discretionary lane changes by LC2013's
+    /// motivations instead of MOBIL; unset `lc_*` fields take SUMO's default 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lc_strategic: Option<f64>,
+    /// LC2013's willingness to change lane to let a neighbour that must merge in (0 never,
+    /// 1 always unless it costs speed). See `lc_strategic`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lc_cooperative: Option<f64>,
+    /// LC2013's eagerness to change lane for speed: the speed-gain threshold is
+    /// 0.2 / lc_speed_gain (0 turns speed-gain changes off). See `lc_strategic`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lc_speed_gain: Option<f64>,
+    /// LC2013's eagerness to move back right when the right lane is free (0 off). See
+    /// `lc_strategic`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lc_keep_right: Option<f64>,
+    /// Whether trucks, buses and coaches wait for longer gaps than cars when yielding:
+    /// the HCM 6th ed. heavy-vehicle terms (Exhibit 20-11: +1.0 s critical gap on a major
+    /// road of under four lanes, +2.0 s on four or more; +0.9 / 1.0 s follow-up), at
+    /// unsignalised junctions and on a permitted left. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heavy_vehicle_gap_terms: Option<bool>,
     /// Kerbside stops: buses at stops, taxis picking up, delivery vans double-parked.
     /// Unset follows the jurisdiction (New York City has its taxis).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -289,6 +313,11 @@ impl Default for Traffic {
             permitted_left_gap_s: None,
             turn_lateral_accel_mps2: None,
             turn_curve_window_m: None,
+            lc_strategic: None,
+            lc_cooperative: None,
+            lc_speed_gain: None,
+            lc_keep_right: None,
+            heavy_vehicle_gap_terms: None,
             kerbside: None,
         }
     }

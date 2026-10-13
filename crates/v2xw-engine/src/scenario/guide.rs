@@ -279,6 +279,16 @@ const BASIC: &[Basic] = &[
 /// `radio.dcc`), which a newcomer does not need but should still be able to read.
 const ADVANCED: &[Basic] = &[
     Basic {
+        path: "traffic.lc_strategic",
+        explain: "How early drivers move into the lane their next turn needs: higher values change lane further before the junction.",
+        recommended: "Unset (today's MOBIL); 1 (SUMO default); 0.5 to 4.",
+    },
+    Basic {
+        path: "traffic.lc_cooperative",
+        explain: "How willing drivers are to move over to let in a car that must merge into their lane.",
+        recommended: "Unset (today's MOBIL); 1 (SUMO default); 0 to 1.",
+    },
+    Basic {
         path: "security.on_demand_threshold",
         explain: "Under on-demand verification, how threatening a known vehicle's message must look (from its time to collision, 0 to 1) before it is checked; lower checks more messages and costs more processor time.",
         recommended: "0.5 (a time to collision of 1 s); 0.05 to 0.9. No published operating point (Krishnan & Weimerskirch 2011); sweep it.",
@@ -583,6 +593,21 @@ const ADVANCED: &[Basic] = &[
         path: "traffic.turn_lateral_accel_mps2",
         explain: "How fast drivers take corners through a junction: higher values let them turn faster.",
         recommended: "5.5 m/s² (SUMO); 3 to 6 m/s².",
+    },
+    Basic {
+        path: "traffic.heavy_vehicle_gap_terms",
+        explain: "Whether trucks and buses, which accelerate slowly, wait for longer gaps in traffic than cars before pulling out or turning left across it.",
+        recommended: "Off (today); on for HCM heavy-vehicle gaps (+1 s, +2 s on wide roads).",
+    },
+    Basic {
+        path: "traffic.lc_speed_gain",
+        explain: "How readily drivers change lane to get past slower traffic; setting any of the lane-change eagerness settings switches to SUMO's LC2013 lane-changing.",
+        recommended: "Unset (today's MOBIL); 1 (SUMO default); 0.5 to 2.",
+    },
+    Basic {
+        path: "traffic.lc_keep_right",
+        explain: "How readily drivers move back into the right lane when it is free, as the keep-right rule asks.",
+        recommended: "Unset (today's MOBIL); 1 (SUMO default); 0 to 2.",
     },
     Basic {
         path: "traffic.turn_curve_window_m",
