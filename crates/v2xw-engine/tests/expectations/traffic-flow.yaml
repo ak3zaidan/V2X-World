@@ -1,0 +1,141 @@
+# Expectation rows, traffic-flow track (round 15): the traffic settings traffic.yaml does
+# not cover, plus the fundamental-diagram, signal-control and run-cost rows. Format: see
+# catalogue.yaml. Families and contexts: scenarios/sensitivity/catalogue.yaml.
+# docs/validation/test-traffic-flow.md gives the measured table.
+
+# ---- Demand: fundamental diagram and run cost ----
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: high, metric: metric.density, expect: up,
+   source: "more arrivals per hour on the same network is more vehicles per km (q = k v, Greenshields 1935; HCM 7th ed. ch. 4)"}
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: high, metric: metric.flow, expect: up,
+   source: "below capacity the measured flow follows the demand (HCM 7th ed. ch. 4: v/c < 1)"}
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: high, metric: traffic.stopped_share, expect: up,
+   source: "random plus overflow delay grows with the degree of saturation X (Webster 1958 second term; HCM 7th ed. eq. 19-20 d2)"}
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: high, metric: report.reception_attempts, expect: up, min_change: 0.1,
+   source: "run cost: every frame is offered to every node in range, so reception attempts grow about as N^2 with the fleet (ns-3 / Veins YansWifiChannel: one receive event per receiver per frame)"}
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: low, metric: report.reception_attempts, expect: down, min_change: 0.2,
+   source: "run cost falls about as N^2 when the fleet halves (one receive event per receiver per frame)"}
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: low, metric: metric.density, expect: down,
+   source: "fewer arrivals, fewer vehicles per km (q = k v)"}
+- {setting: actors.vehicles.demand.fleet_size, change: high, metric: metric.density, expect: up,
+   source: "a larger fleet on the same network is a higher density (k = N / L)"}
+
+# ---- Car following (IDM; Treiber, Hennecke, Helbing 2000) ----
+- {setting: actors.vehicles.drivers.time_headway_s, change: 0.8, metric: metric.headway_time, expect: down, min_change: 0.02,
+   source: "IDM desired gap s* = s0 + vT: a shorter T is a shorter following headway (Treiber 2000 eq. 2). The range low end (1.0 s) is the urban default: measured bit-identical, so 0.8 s"}
+- {setting: actors.vehicles.drivers.min_gap_m, change: low, metric: metric.headway_distance, expect: down, min_change: 0.002,
+   source: "IDM jam distance s0 is the standstill gap (Treiber 2000); queued vehicles sit closer"}
+- {setting: actors.vehicles.drivers.comfort_decel_mps2, change: low, metric: traffic.speed_mean_mps, expect: down, min_change: 0.0005,
+   source: "IDM intelligent-braking term v dv / (2 sqrt(ab)): a smaller comfortable deceleration b starts braking earlier for a queue or red (Treiber 2000 eq. 2)"}
+- {setting: actors.vehicles.drivers.speed_factor, change: high, metric: traffic.speed_mean_mps, expect: up, min_change: 0.002,
+   source: "desired speed = speedFactor x limit: faster free-flow on an undersaturated network (SUMO vType speedFactor; HCM 7th ed. 18 free-flow speed)"}
+- {setting: actors.vehicles.drivers.speed_spread, change: high, metric: metric.speed, expect: changes, min_change: 0.0005,
+   source: "a wider desired-speed distribution changes the speed statistics (SUMO speedDev; Krajzewicz 2012)"}
+- {setting: actors.vehicles.drivers.queue_start_delay_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.002,
+   source: "a longer delay before each queued vehicle starts is more start-up lost time and a longer queue discharge (HCM 7th ed. 19.2 start-up lost time; Greenshields 1947 discharge headways). Small: the 1500 veh/h family has about 44 vehicles in 90 s and check-traffic finds no queue of five, so start-up delay acts on short queues only (+0.3 % / -0.2 % measured)"}
+- {setting: actors.vehicles.drivers.queue_start_delay_s, change: low, metric: traffic.stopped_share, expect: down, min_change: 0.001,
+   source: "less start-up delay, queues discharge sooner (HCM 7th ed. 19.2)"}
+- {setting: actors.vehicles.drivers.perception_error, change: high, metric: metric.acceleration, expect: changes, min_change: 0.001,
+   source: "HDM estimation errors in gap and approach rate perturb each driver's acceleration (Treiber, Kesting, Helbing, Physica A 360, 2006)"}
+- {setting: actors.vehicles.drivers.parameter_spread, change: high, metric: metric.headway_time, expect: changes, min_change: 0.002,
+   source: "inter-driver heterogeneity in T and s0 changes the headway distribution (Ossen and Hoogendoorn, TRR 1934, 2005)"}
+- {setting: actors.vehicles.drivers.realism, change: identical, metric: metric.headway_time, expect: changes, min_change: 0.002,
+   source: "identical drivers remove the per-driver draws of T and s0 (Ossen and Hoogendoorn 2005)"}
+- {setting: actors.vehicles.drivers.reaction_time_s, change: low, metric: metric.acceleration, expect: changes, min_change: 0.001,
+   source: "HDM: a shorter reaction delay changes the response dynamics (Treiber, Kesting, Helbing 2006)"}
+
+# ---- Lane changing (MOBIL; Kesting, Treiber, Helbing, TRR 1999, 2007) ----
+- {setting: actors.vehicles.drivers.politeness, change: high, metric: traffic.speed_mean_mps, expect: changes, min_change: 0.0005,
+   source: "MOBIL politeness p weighs the followers' loss: a politer driver changes lanes less often (Kesting 2007 eq. 3)"}
+- {setting: actors.vehicles.drivers.lane_change_threshold_mps2, change: high, metric: traffic.speed_mean_mps, expect: changes, min_change: 0.0005,
+   source: "MOBIL threshold a_thr: a higher threshold suppresses marginal lane changes (Kesting 2007 eq. 3)"}
+- {setting: traffic.strategic_lane_choice, change: false, metric: traffic.speed_mean_mps, expect: changes, min_change: 0.0005,
+   source: "without strategic lane choice turners reach their turn lane late or not at all (Erdmann, LC2013, SUMO 2014: strategic motivation)"}
+
+# ---- Per-class drivers (contexts: a 20 % class share, catalogue.yaml) ----
+- {setting: actors.vehicles.drivers.motorcycle.time_headway_s, change: low, metric: metric.headway_time, expect: down, min_change: 0.001,
+   source: "motorcyclists keep shorter time gaps (Vlahogianni 2014); IDM T per class"}
+
+# ---- Signals ----
+- {setting: traffic.signals.max_green_s, change: low, metric: metric.signal_max_outs, expect: up,
+   source: "a shorter maximum green is reached more often by a continuing queue (FHWA Signal Timing Manual 2e, 5.3.3 max-out)"}
+- {setting: traffic.signals.passage_s, change: low, metric: metric.signal_gap_outs, expect: up, min_change: 0.003,
+   source: "a short passage time ends green at the first gap in arrivals: more gap-outs (FHWA Signal Timing Manual 2e, 5.3.2). Small: at the default passage almost every actuated green already gaps out on this light grid (663 gap-outs, 0 max-outs), +0.5 % measured"}
+- {setting: traffic.signals.detector_m, change: high, metric: traffic.stopped_share, expect: changes, min_change: 0.0005,
+   source: "an upstream detector extends green for vehicles further away (FHWA Signal Timing Manual 2e, 5.3.2 detector setback)"}
+- {setting: world.source.params.ew_green_share, change: high, metric: traffic.stopped_share, expect: changes, min_change: 0.002,
+   source: "the split between avenue and street changes each approach's g/C and so its uniform delay (Webster 1958; HCM 7th ed. eq. 19-19)"}
+- {setting: world.signals.all_red_s, change: 4.0, metric: traffic.speed_mean_mps, expect: down, min_change: 0.0005,
+   source: "all-red is lost time in every phase change: less effective green per cycle (HCM 7th ed. 19.2 lost time l2; ITE 2020 change interval)"}
+- {setting: world.signals.coordinate, change: false, metric: traffic.speed_mean_mps, expect: down, min_change: 0.0005,
+   source: "uncoordinated offsets break the progression band: more stops (FHWA Signal Timing Manual 2e, 6.4)"}
+
+# ---- Junctions ----
+- {setting: traffic.turn_curve_window_m, change: high, metric: traffic.speed_mean_mps, expect: down, min_change: 0.0005,
+   source: "the turn speed sqrt(a_lat R) over the tightest arc (a smaller R) is lower than over the average radius (AASHTO Green Book 2018, 3.3.5)"}
+
+# ---- Kerbside (contexts in catalogue.yaml) ----
+- {setting: traffic.kerbside.taxi_dwell_median_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.001,
+   source: "longer taxi dwells block the kerb lane longer (HCM 7th ed. 19 f_bb; Morris et al., NYC curb studies)"}
+- {setting: traffic.signals.green_wave_heading_deg, change: low, metric: traffic.speed_mean_mps, expect: changes, min_change: 0.0005,
+   source: "turning the wave from eastbound to northbound moves the progression band to the other streets (Morgan and Little 1964; FHWA Signal Timing Manual 2e, 6.4)"}
+- {setting: traffic.signals.green_wave_speed_mps, change: high, metric: traffic.speed_mean_mps, expect: up, min_change: 0.005,
+   source: "a 40 m/s wave is nearly simultaneous offsets; on 80 m blocks that a 25 mph vehicle crosses in 7 s of a 60 s cycle, a simultaneous system carries platoons through several greens (FHWA Signal Timing Manual 2e, 6.4: simultaneous offsets suit closely spaced signals). The first expectation (down, against a tuned wave) was wrong: the base is the plans' own uncoordinated offsets. +5.3 % measured"}
+
+# ---- Weather ----
+- {setting: weather.initial, change: fog, metric: traffic.speed_mean_mps, expect: down,
+   source: "fog lowers free-flow speed 10-12 % on arterials and the visibility speed cap binds (Rakha et al., FHWA-HOP-07-073, 2007)"}
+- {setting: weather.intensity, change: high, metric: traffic.speed_mean_mps, expect: down, min_change: 0.005,
+   source: "heavier rain, larger speed loss: arterial wet-pavement band 10-25 % placed by intensity (FHWA Road Weather Management; HCM 7th ed. Exhibit 11-20 orders the loss by rain rate)"}
+
+# ---- Saturated network: gridlock handling ----
+- {setting: traffic.gridlock_timeout_s, change: 30.0, metric: metric.traffic_teleports, expect: up,
+   source: "SUMO time-to-teleport: a vehicle stuck longer than the timeout is moved on. The 300 s default never fires in a 90 s run; 30 s does on the saturated grid (SUMO --time-to-teleport)"}
+
+# ---- Open (round 15): dead or contradicted on the main binary, not yet fixed ----
+# See docs/validation/test-traffic-flow.md for each lead. Uncomment when fixed.
+# - {setting: actors.vehicles.drivers.truck.min_gap_m, change: high, metric: metric.headway_distance, expect: up, min_change: 0.0005,
+#    source: "IDM s0 per class: trucks standing further back lengthen the fleet's standstill gaps (SUMO truck vType minGap 2.5 m)"}
+# - {setting: actors.vehicles.drivers.bus.time_headway_s, change: high, metric: metric.headway_time, expect: up, min_change: 0.001,
+#    source: "IDM T per class (Treiber 2000; TCRP Report 165 bus operation)"}
+# - {setting: actors.vehicles.drivers.motorcycle_filtering, change: true, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
+#    source: "filtering motorcycles pass standing queues and wait less (Vlahogianni, Transportation Research Part C 2014; UK Highway Code rule 88)"}
+# - {setting: actors.vehicles.drivers.truck_lane_restriction, change: true, metric: traffic.speed_mean_mps, expect: changes, min_change: 0.0005,
+#    source: "trucks kept out of the left lane change who blocks whom (FHWA truck lane restriction studies, FHWA-HRT-04-xxx; HCM 7th ed. 12)"}
+# - {setting: traffic.permitted_left_gap_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.0005,
+#    source: "a longer critical headway accepts fewer gaps in the opposing flow: permitted lefts wait longer (HCM 7th ed. 31; Raff 1950)"}
+# - {setting: traffic.critical_gap_factor, change: high, metric: traffic.speed_mean_mps, expect: down, min_change: 0.0005,
+#    source: "longer critical gaps and follow-up times at stop- and yield-controlled junctions: less capacity, more delay (HCM 7th ed. ch. 20 eq. 20-30)"}
+# - {setting: traffic.kerbside.bus_dwell_mean_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.001,
+#    source: "a longer dwell is longer kerb-lane blockage (TCQSM 3rd ed. ch. 6; HCM 7th ed. 19 f_bb)"}
+# - {setting: traffic.kerbside.bus_stop_spacing_m, change: high, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
+#    source: "wider stop spacing is fewer stops per bus (TCRP Report 19)"}
+# - {setting: traffic.kerbside.delivery_stop_share, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.0005,
+#    source: "more delivery stops, more kerb-lane blockage (HCM 7th ed. 19 f_bb)"}
+# - {setting: traffic.kerbside.delivery_dwell_median_s, change: low, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
+#    source: "a 30 s unloading instead of the 10 min default frees the lane within the run (Urban Freight Lab, Seattle CBD 2018-2020; HCM 7th ed. 19 f_bb)"}
+# - {setting: traffic.keep_junctions_clear, change: false, metric: metric.traffic_jammed, expect: up,
+#    source: "vehicles entering a junction they cannot leave block the cross street: spillback gridlock (Daganzo 1996 gridlock; SUMO junction blocking)"}
+# - {setting: weather.intensity, change: high, metric: metric.headway_time, expect: up, min_change: 0.005,
+#    source: "heavier rain, larger saturation-flow loss (2-21 % wet band), so longer headways (FHWA Road Weather Management; Perrin, Martin, Hansen TRR 1776, 2001)"}
+
+# ---- Lane changes per vehicle (new fingerprint metric traffic.lane_changes_per_veh, round 15) ----
+# Not yet measured: the main release binary has no lane-change count. Uncomment after a
+# release build with the sweep.rs counter.
+# - {setting: traffic.lane_changes, change: false, metric: traffic.lane_changes_per_veh, expect: down, band: [0.0, 0.2],
+#    source: "no lane-change model, no discretionary or strategic changes (Kesting, Treiber, Helbing, TRR 1999, 2007)"}
+# - {setting: actors.vehicles.drivers.politeness, change: high, metric: traffic.lane_changes_per_veh, expect: down, min_change: 0.005,
+#    source: "MOBIL: a politer driver counts the new follower's loss and changes less (Kesting 2007 eq. 3)"}
+# - {setting: actors.vehicles.drivers.lane_change_threshold_mps2, change: high, metric: traffic.lane_changes_per_veh, expect: down, min_change: 0.005,
+#    source: "MOBIL: a higher switching threshold a_thr suppresses marginal changes (Kesting 2007 eq. 3)"}
+# - {setting: traffic.strategic_lane_choice, change: false, metric: traffic.lane_changes_per_veh, expect: changes, min_change: 0.005,
+#    source: "without route lane choice the changes a turn needs are not made upstream (Erdmann 2014, strategic motivation)"}
+# - {setting: traffic.lc_speed_gain, change: high, metric: traffic.lane_changes_per_veh, expect: up, min_change: 0.005,
+#    source: "LC2013: the speed-gain threshold falls as 1/lcSpeedGain, so more speed-gain changes (Erdmann, SUMO2014, LC2013; SUMO vType lcSpeedGain)"}
+# - {setting: traffic.lc_speed_gain, change: low, metric: traffic.lane_changes_per_veh, expect: down, min_change: 0.005,
+#    source: "LC2013: a lower lcSpeedGain needs a larger speed gain to change (Erdmann 2014)"}
+# - {setting: traffic.lc_keep_right, change: high, metric: traffic.lane_changes_per_veh, expect: changes, min_change: 0.005,
+#    source: "LC2013 lcKeepRight: a stronger urge to return right adds keep-right changes (Erdmann 2014)"}
+# - {setting: traffic.lc_strategic, change: high, metric: traffic.lane_changes_per_veh, expect: changes, min_change: 0.005,
+#    source: "LC2013 lcStrategic: route changes start further upstream, which changes when and how often vehicles change (Erdmann 2014)"}
+# - {setting: actors.vehicles.demand.rate_veh_per_h, change: high, metric: traffic.lane_changes, expect: up,
+#    source: "more vehicles, more leaders to pass and more turners (Kesting 2007)"}

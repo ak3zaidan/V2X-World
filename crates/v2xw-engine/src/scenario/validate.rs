@@ -4733,6 +4733,20 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
                     .to_string(),
             ));
         }
+        // The heading only orients a green wave (crate::actuated::coordinate is a no-op
+        // without a speed), so a heading moved off its default with no speed would do
+        // nothing (the round-15 test found it dead on every family).
+        if g.green_wave_speed_mps.is_none()
+            && g.green_wave_heading_deg
+                != super::schema::SignalControl::default().green_wave_heading_deg
+        {
+            e.push(conflict(
+                "traffic.signals.green_wave_heading_deg",
+                "orients a green wave, and traffic.signals.green_wave_speed_mps is not set; \
+                 set the wave speed or remove the heading"
+                    .to_string(),
+            ));
+        }
         if g.max_green_s < g.min_green_s {
             e.push(conflict(
                 "traffic.signals.max_green_s",
