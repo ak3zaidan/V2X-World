@@ -546,7 +546,8 @@ fn documents(report: &AgentReport) -> Vec<Value> {
 }
 
 /// The results of the tools that read the build's own registry (model cards, metric
-/// definitions, the settings index): a number quoted from a card is sourced, though it is
+/// definitions, the settings index) and the engine's validator (setup and prepare_scenario
+/// answers, which name a refused value's range): a number quoted from them is sourced, though it is
 /// not run data.
 fn registry_results(history: &[v2xw_copilot::ChatMessage]) -> String {
     let mut names: BTreeMap<String, String> = BTreeMap::new();
@@ -558,7 +559,7 @@ fn registry_results(history: &[v2xw_copilot::ChatMessage]) -> String {
         if let Some(id) = &m.tool_call_id {
             if names
                 .get(id)
-                .is_some_and(|n| n.starts_with("registry__") || n == "find_settings")
+                .is_some_and(|n| n.starts_with("registry__") || matches!(n.as_str(), "find_settings" | "setup" | "prepare_scenario"))
             {
                 out.push_str(m.text());
                 out.push('\n');
@@ -1082,7 +1083,7 @@ fn main() {
                 score(
                     case,
                     &report,
-                    &format!("{prompts}\n{}", registry_results(agent.history())),
+                    &format!("{prompts}\n{}\n{}", registry_results(agent.history()), serde_json::to_string(agent.runs()).unwrap_or_default()),
                     &mut r,
                 );
             }

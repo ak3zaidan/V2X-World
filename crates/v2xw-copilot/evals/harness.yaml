@@ -23,7 +23,7 @@
 #   that contain the listed ones) and `no_calls` (tools that must not be called).
 #
 # The engine the live runner starts serves `scenarios/phase1-grid.yaml` (DSRC, 30 veh/h,
-# 60 s, tx power unset = the 20 dBm default); the draft is reset to it before every case
+# 60 s, tx power unset = the 23 dBm default); the draft is reset to it before every case
 # that is not a follow-up.
 
 cases:
@@ -35,7 +35,8 @@ cases:
     runs: {min: 0, max: 0}
     resolve: [radio.devices.obu.tx_power_dbm]
     draft:
-      - {key: radio.devices.obu.tx_power_dbm, max: 19}
+      # Below the 23 dBm default (3GPP TR 36.885, the published default).
+      - {key: radio.devices.obu.tx_power_dbm, max: 22.9}
 
   - id: set-cv2x-mode4
     category: setting
@@ -59,7 +60,9 @@ cases:
       - {key: security.signer_id_policy.full_cert_every_ms, value: 0,
          want_key: security.signer_id_policy.full_cert_every_ms, want_value: 0}
     draft:
-      - {key: security.signer_id_policy.full_cert_every_ms, max: 100}
+      # Either way of saying it (full_cert_every_ms 0, or no digest otherwise) leaves
+      # digest_otherwise false: the loader reads both as a certificate on every message.
+      - {key: security.signer_id_policy.digest_otherwise, equals: false}
 
   - id: set-truck-headway
     category: setting

@@ -219,6 +219,10 @@ pub struct AgentPolicy {
     pub speed: f64,
     /// The longest simulated duration the agent may set without being asked, seconds.
     pub max_duration_s: f64,
+    /// The most conversation text sent with each model call, in characters (about four to a
+    /// token). Over it, earlier turns' long tool results are cut to their head, oldest
+    /// first ([`budgeted_history`]); the current turn is always sent whole.
+    pub history_chars: usize,
 }
 
 impl Default for AgentPolicy {
@@ -230,8 +234,45 @@ impl Default for AgentPolicy {
             max_polls: 14_400,
             speed: 0.0,
             max_duration_s: 300.0,
+            history_chars: 120_000,
         }
     }
+}
+
+/// What an earlier turn's cut tool result says in place of its tail.
+pub const TRIMMED: &str = " … [trimmed: an earlier turn's tool result. Its numbers are still \
+    this conversation's data: re-read them with list_runs, compare_runs, finding_detail, \
+    live_metrics or query_metric rather than from memory.]";
+
+/// The conversation as sent to the model: whole while it fits in `budget` characters;
+/// otherwise the tool results before `turn_start` longer than 600 characters are cut to
+/// their first 400, oldest first, until it fits. The stored history is never edited (it is
+/// append-only, which is what the provider's prompt cache relies on), and while a
+/// conversation fits nothing is cut, so short conversations keep their cache.
+#[must_use]
+pub fn budgeted_history(history: &[ChatMessage], turn_start: usize, budget: usize) -> Vec<ChatMessage> {
+    let mut out: Vec<ChatMessage> = history.to_vec();
+    let mut total: usize = out.iter().map(|m| m.text().len()).sum();
+    if total <= budget {
+        return out;
+    }
+    for m in out.iter_mut().take(turn_start) {
+        if total <= budget {
+            break;
+        }
+        if m.role != crate::provider::Role::Tool || m.text().len() <= 600 {
+            continue;
+        }
+        let text = m.text();
+        let mut cut = 400;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let short = format!("{}{TRIMMED}", &text[..cut]);
+        total = total - text.len() + short.len();
+        m.content = Some(short);
+    }
+    out
 }
 
 /// The agent.
@@ -405,10 +446,18 @@ pub fn agent_system_prompt() -> String {
      4. \"Run / compare / sweep / what happens if\" means `simulate` (it builds, runs to \
      the end and analyses; for a comparison put every arm in `variants`, the first is the \
      baseline). Follow-ups: base `last`, the one change, compare_to_last: true. Ask before \
-     anything over 300 simulated seconds.\n\
+     anything over 300 simulated seconds. \"Compare with the previous run\" with nothing \
+     to change is compare_runs over the last two runs (list_runs numbers them; runs the \
+     person made in the Studio are among them).\n\
      5. A question about the run on screen (\"is the network healthy?\", \"why is PDR \
      low?\") is about the current run: live_metrics, query_metric, inspect or \
-     analyse_current_run, never a new run.\n\
+     analyse_current_run, never a new run. A question about a number of an earlier run \
+     is answered from a tool result read in this turn (compare_runs, finding_detail, \
+     list_runs, live_metrics), never from an earlier reply; name the metric with each \
+     number (overall delivery_ratio and the within-range delivery are different \
+     numbers: say which).\n\
+     Run control is run_control: start, pause, resume, speed {speed}, restart = seek \
+     {t_s: 0}, stop. A new run length is setup time.duration_s.\n\
      6. If something cannot be done here (an attacker kind this engine refuses, a radio it \
      does not have), say so in one sentence and do the closest supported thing only if \
      the person asked for something general (\"some attackers\" means a rendered kind).\n\
@@ -547,6 +596,28 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         self.notes.push(text.into());
     }
 
+    /// Adds a run the person made in the Studio (the watcher's analysis of it when it
+    /// ended) to this conversation's runs, so "compare with the previous run" and
+    /// `compare_runs` reach it, and tells the model before the next prompt. Returns its
+    /// index in [`Agent::runs`].
+    pub fn adopt_run(&mut self, label: impl Into<String>, analysis: Analysis, t_s: f64) -> usize {
+        let label = label.into();
+        self.runs.push(RunRecord {
+            label: label.clone(),
+            prepared: None,
+            analysis,
+            t_s,
+        });
+        let index = self.runs.len() - 1;
+        self.notes.push(format!(
+            "The person ran \"{label}\" in the Studio to {} s; it is run {index} (list_runs, \
+             compare_runs). \"Compare with the previous run\" means compare_runs over the last \
+             two runs.",
+            fmt(t_s)
+        ));
+        index
+    }
+
     fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::SeqCst)
     }
@@ -572,6 +643,7 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             text: format!("Working on it with {}.", self.provider_name()),
         });
         let mut comparison: Option<Comparison> = None;
+        let turn_start = self.history.len();
         if self.notes.is_empty() {
             self.history.push(ChatMessage::user(prompt));
         } else {
@@ -597,7 +669,11 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             }
             let mut messages = Vec::with_capacity(self.history.len() + 1);
             messages.push(ChatMessage::system(system.clone()));
-            messages.extend(self.history.iter().cloned());
+            messages.extend(budgeted_history(
+                &self.history,
+                turn_start,
+                self.policy.history_chars,
+            ));
             let provider = self.provider.as_mut().expect("checked above");
             let completion = provider.complete(&ChatRequest {
                 messages,
@@ -1534,6 +1610,35 @@ pub fn ungrounded_numbers(overview: &str, corpus: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_conversation_sends_earlier_tool_results_cut_and_the_current_turn_whole() {
+        let long = "x".repeat(5_000);
+        let h = vec![
+            ChatMessage::user("first"),
+            ChatMessage::tool("a", long.clone()),
+            ChatMessage::user("second"),
+            ChatMessage::tool("b", long.clone()),
+        ];
+        assert_eq!(budgeted_history(&h, 2, 1_000_000), h, "fits: nothing is cut");
+        let sent = budgeted_history(&h, 2, 6_000);
+        assert!(sent[1].text().ends_with(TRIMMED), "the earlier result is cut");
+        assert_eq!(sent[3].text(), long, "the current turn is whole");
+        assert_eq!(sent.len(), h.len(), "no message is dropped, so call ids still pair");
+    }
+
+    #[test]
+    fn two_studio_runs_are_compared_as_the_previous_run_and_this_one() {
+        let mut agent: Agent<crate::provider::ScriptedProvider, crate::transport::NoEngine> =
+            Agent::new(None, crate::transport::NoEngine).expect("builds");
+        let a = analyst::analyse(&crate::analyst::RunEvidence::default(), &Thresholds::default());
+        assert_eq!(agent.adopt_run("grid (Studio run 1)", a.clone(), 60.0), 0);
+        assert_eq!(agent.adopt_run("grid (Studio run 2)", a, 60.0), 1);
+        let mut cmp = None;
+        let out = control::compare_runs(&mut agent, &json!({}), &mut cmp).expect("compares");
+        assert!(cmp.is_some() && out.is_object(), "{out}");
+        assert_eq!(agent.notes.len(), 2, "the model is told about each run");
+    }
 
     #[test]
     fn every_method_the_agent_calls_is_one_the_server_publishes() {
