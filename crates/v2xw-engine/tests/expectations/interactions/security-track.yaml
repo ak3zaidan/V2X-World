@@ -1,0 +1,196 @@
+# Security track checks (docs/validation/test-security.md): attackers, misbehaviour
+# detection, revocation, pseudonyms and verification under load. Format: interactions.yaml.
+#
+# `security` is the CAMP SCMS lifecycle family (credential-lifecycle.yaml, no attackers).
+# Every check here runs 90 s with short report and CRL windows, so an attacker active from
+# 5 s is detected, reported, judged and revoked inside the run. `dsrc` checks under load
+# use 160 vehicles at 20 Hz on a software-only OBU, where verification is the bottleneck.
+
+# ---- Attackers and detection ----
+- name: ConstPos attackers x MA pipeline (true positives)
+  family: security
+  base_set: &b90 {time.duration_s: 90.0, security.protocol.params.report_shuffle_window_s: 2,
+                  security.protocol.params.crl_cadence_s: 5, security.protocol.params.crl_fetch_interval_s: 5}
+  factor: {threats.attackers: [{id: threat/attacker/legacy/ConstPos, count: 3, schedule: {from_s: 5.0, to_s: 90.0}}]}
+  condition: {detection.ma: {id: threat/ma/legacy-window, params: {}}}
+  metric: metric.det_tp
+  expect: holds
+  direction: up
+  source: "a constant-position attacker fails the plausibility checks on every message, so the receivers' detectors flag it whatever the authority does with the reports (van der Heijden et al., VeReMi, SecureComm 2018, Table 3)"
+- name: ConstPos attackers x MA pipeline (attackers revoked)
+  family: security
+  base_set: *b90
+  factor: {threats.attackers: [{id: threat/attacker/legacy/ConstPos, count: 3, schedule: {from_s: 5.0, to_s: 90.0}}]}
+  condition: {detection.ma: {id: threat/ma/legacy-window, params: {}}}
+  metric: report.phase2.revoked_attackers
+  expect: holds
+  direction: up
+  source: "reports about a flagged sender reach the MA, which revokes it and lists it on the next CRL (IEEE 1609.2.1-2022 clause 5.3; CAMP SCMS PoC, Brecht et al., IEEE T-ITS 2018)"
+- name: attacker share x on-demand verification (detections)
+  family: security
+  base_set: {time.duration_s: 90.0, security.protocol.params.report_shuffle_window_s: 2,
+             security.protocol.params.crl_cadence_s: 5, security.protocol.params.crl_fetch_interval_s: 5,
+             threats.attackers: [{id: threat/attacker/legacy/ConstPos, count: 1, schedule: {from_s: 5.0, to_s: 90.0}}]}
+  factor: {threats.attackers: [{id: threat/attacker/legacy/ConstPos, count: 4, schedule: {from_s: 5.0, to_s: 90.0}}]}
+  condition: {detection.ma: {id: threat/ma/legacy-window, params: {}}}
+  metric: metric.det_tp
+  expect: holds
+  direction: up
+  source: "true detections scale with the number of misbehaving senders heard (VeReMi 2018: detection counts per attacker density)"
+- name: replay attackers x MA pipeline (detections)
+  family: security
+  base_set: *b90
+  factor: {threats.attackers: [{id: threat/attacker/legacy/DataReplay, count: 3, schedule: {from_s: 5.0, to_s: 90.0}}]}
+  condition: {detection.ma: {id: threat/ma/legacy-window, params: {}}}
+  metric: metric.det_tp
+  expect: holds
+  direction: up
+  source: "a replayed state from an earlier position contradicts the sender's own recent claims (VeReMi extension, Kamel et al., ICC 2020: DataReplay detectable by consistency checks)"
+- name: Sybil attackers x MA pipeline (ghost frames)
+  family: security
+  base_set: *b90
+  factor: {threats.attackers: [{id: threat/attacker/legacy/Sybil, count: 2, schedule: {from_s: 5.0, to_s: 90.0}}]}
+  condition: {detection.ma: {id: threat/ma/legacy-window, params: {}}}
+  metric: report.phase2.ghost_frames
+  expect: holds
+  direction: up
+  source: "a Sybil attacker sends under several pseudonyms at once, each a ghost vehicle (Kamel et al., ICC 2020, GridSybil; Douceur, IPTPS 2002)"
+- name: constant jammer x MA pipeline (reception)
+  family: security
+  base_set: *b90
+  factor: {threats.jammers: [{id: attacker/jammer/constant, params: {at: busiest-junction, power_dbm: 23, from_s: 5.0, to_s: 90.0}}]}
+  condition: {detection.ma: {id: threat/ma/legacy-window, params: {}}}
+  metric: prr
+  expect: holds
+  direction: down
+  source: "a constant jammer raises the interference floor around it, so frames within its blind area are lost (Punal et al., IEEE WoWMoM 2012)"
+
+# ---- Revocation and CRL delivery ----
+- name: CRL fetch interval x MBMS delivery (revocation latency)
+  family: security
+  base_set: {time.duration_s: 90.0, security.protocol.params.report_shuffle_window_s: 2,
+             security.protocol.params.crl_cadence_s: 5, security.protocol.params.crl_fetch_interval_s: 5,
+             actors.rsus: [{position_m: [548.0, 280.0, 0.0], roles: [report-forward, provisioning-proxy], profile: rsu/commsignia-its-rs4}],
+             threats.attackers: [{id: threat/attacker/legacy/ConstPos, count: 3, schedule: {from_s: 5.0, to_s: 90.0}}]}
+  factor: {security.protocol.params.crl_fetch_interval_s: 30}
+  condition: {net.uu.params.crl_delivery: mbms}
+  # No `crl` role on the roadside unit: its over-the-air CRL broadcast reaches the first
+  # vehicle before any cellular poll, so with it neither the poll interval nor MBMS moved
+  # the first enforcement at all (3.10 s in all four runs, first measurement).
+  metric: report.phase2.revocation_latency_ns
+  expect: dampens
+  direction: up
+  source: "a polling vehicle waits half a fetch interval on average for a new list; an eMBMS broadcast pushes it once per cell when it is issued, so the poll interval stops mattering (3GPP TS 23.246; IEEE 1609.2.1-2022 6.3.5 CRL distribution)"
+- name: CRL cadence x attackers (revocation latency)
+  family: security
+  base_set: {time.duration_s: 90.0, security.protocol.params.report_shuffle_window_s: 2,
+             security.protocol.params.crl_cadence_s: 5, security.protocol.params.crl_fetch_interval_s: 5,
+             threats.attackers: [{id: threat/attacker/legacy/ConstPos, count: 3, schedule: {from_s: 5.0, to_s: 90.0}}]}
+  factor: {security.protocol.params.crl_cadence_s: 30}
+  condition: {detection.ma: {id: threat/ma/legacy-window, params: {}}}
+  metric: report.phase2.revocation_latency_ns
+  expect: holds
+  direction: up
+  source: "a revocation waits for the next CRL issue: half the cadence on average (IEEE 1609.2.1-2022 6.3.5; Haas, Hu, Laberteaux, IEEE JSAC 2011)"
+
+# ---- Pseudonyms and privacy ----
+- name: pseudonym period x peer cache (P2PCD requests)
+  family: security
+  base_set: {}
+  factor: {security.pseudonym_change.period_s: 5.0}
+  condition: {nodes.peer_cert_cache: 16}
+  metric: metric.p2pcd_requests
+  expect: holds
+  direction: up
+  source: "after each change the new pseudonym is unknown to every neighbour until its next full certificate, so digest-signed messages from it trigger P2PCD (IEEE 1609.2-2016 8.4)"
+- name: silent period x peer cache (silenced frames)
+  family: security
+  base_set: {security.pseudonym_change.period_s: 5.0}
+  factor: {security.pseudonym_change.silent_period_s: [3.0, 13.0]}
+  condition: {nodes.peer_cert_cache: 16}
+  metric: report.phase2.pseudonym_silenced_frames
+  expect: holds
+  direction: up
+  source: "PRESERVE's 3-13 s silent period: after each change the vehicle sends nothing for a uniform draw (Huang et al., SASN 2005; Buttyan, Holczer, Vajda, ESAS 2007); the first run used strategy silent, which is no scheduled change and so changed nothing" # the vehicle's beacons after each change (Buttyan, Holczer, Vajda, ESAS 2007; ETSI TR 103 415)"
+- name: silent period x eavesdropper coverage (correct links)
+  family: security
+  base_set: {security.pseudonym_change.period_s: 5.0}
+  factor: {security.pseudonym_change.silent_period_s: [3.0, 13.0]}
+  condition: {threats.eavesdropper: {id: threat/observer/passive-privacy, params: {sniffer_fraction: 0.5}}}
+  metric: report.phase2.privacy_links_correct
+  expect: holds
+  direction: down
+  source: "silence across the change breaks the tracker's position continuity, so fewer old-new pseudonym pairs are linked correctly (Buttyan et al. 2007; Wiedersheim et al., WONS 2010)"
+- name: pseudonym period x eavesdropper (changes)
+  family: security
+  base_set: {}
+  factor: {security.pseudonym_change.period_s: 5.0}
+  condition: {threats.eavesdropper: {id: threat/observer/passive-privacy, params: {sniffer_fraction: 0.5}}}
+  metric: report.phase2.pseudonym_changes
+  expect: holds
+  direction: up
+  source: "a time-based strategy changes once per period: 30 s at 5 s is about six changes per vehicle (ETSI TR 103 415 4.2)"
+
+# ---- Verification under load ----
+- name: verify queue depth x on-demand (unverified share)
+  family: dsrc
+  base_set: &load {time.mobility_step_ms: 50, messages.rate_hz: 20.0,
+                   actors.vehicles.demand.params.max_total_vehicles: 160,
+                   nodes.default_obu: obu/generic-automotive-soc-no-hsm}
+  factor: {nodes.verify_queue_depth: 6}
+  condition: {security.verification_policy: on-demand}
+  metric: stage_verify_wait_ms
+  expect: dampens
+  direction: down
+  source: "M/M/1/K under overload (rho > 1): throughput is the service rate whatever K, so the loss share barely moves (measured 0.437 -> 0.438), but the wait is bounded by K/mu, so a 6-deep queue waits far less than 64. Verify-on-demand admits fewer messages, so the depth matters less (Kleinrock, Queueing Systems I, 3.6; Krishnan and Weimerskirch, SAE 2011-01-0584)" # Verify-on-demand admits fewer messages, so the depth matters less (Kleinrock, Queueing Systems I, M/M/1/K; Krishnan and Weimerskirch, SAE 2011-01-0584)"
+- name: software crypto x load (verification wait)
+  family: dsrc
+  base_set: {time.mobility_step_ms: 50, messages.rate_hz: 20.0}
+  factor: {nodes.default_obu: obu/generic-automotive-soc-no-hsm}
+  condition: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  metric: stage_verify_wait_ms
+  expect: amplifies
+  direction: up
+  source: "M/M/1 waiting time rho/(mu - lambda): a slower verifier (no HSM, about 2-4 ms per ECDSA verify against 0.2 ms) waits longer, and much longer as arrivals grow (Kleinrock; Hsu et al., VNC 2013)"
+- name: prioritized horizon x load (end-to-end latency)
+  family: dsrc
+  base_set: {time.mobility_step_ms: 50, messages.rate_hz: 20.0,
+             actors.vehicles.demand.params.max_total_vehicles: 160,
+             nodes.default_obu: obu/generic-automotive-soc-no-hsm,
+             security.verification_policy: prioritized}
+  factor: {security.prioritized_horizon_m: 50.0}
+  condition: {nodes.verify_queue_depth: 256}
+  metric: e2e_ms_mean
+  expect: holds
+  direction: changes
+  source: "the horizon sets which messages jump the queue; with a saturated verifier the order changes who waits, so the mean moves (Kleinrock, priority queues, Vol. II 3.6)"
+
+# ---- Mix zones, KEM and backhaul ----
+- name: mix-zone radius x eavesdropper (correct links)
+  family: security
+  base_set: {time.duration_s: 90.0, security.pseudonym_change.strategy: mix-zone,
+             security.pseudonym_change.mix_zone_min_age_s: 5.0}
+  factor: {security.pseudonym_change.mix_zone_radius_m: 100.0}
+  condition: {threats.eavesdropper: {id: threat/observer/passive-privacy, params: {sniffer_fraction: 0.5}}}
+  metric: report.phase2.pseudonym_changes
+  expect: holds
+  direction: up
+  source: "a larger zone around each signalised intersection is entered by more vehicles, each changing inside it (Freudiger et al., CMIX, ESAS 2007; Beresford and Stajano, IEEE Pervasive 2003)"
+- name: post-quantum KEM x hybrid signature (cellular downlink bytes)
+  family: security
+  base_set: {time.duration_s: 150.0}
+  factor: {security.kem: ml-kem-768}
+  condition: {nodes.peer_cert_cache: 16}
+  metric: report.phase2.access.uu_dl_bytes
+  expect: holds
+  direction: up
+  source: "every key encrypted to a device in a certificate batch is an ML-KEM-768 ciphertext of 1088 octets against about 81 for ECIES P-256 (FIPS 203 Table 3; IEEE 1609.2-2016 6.3.33)"
+- name: backhaul technology x relay-only vehicles (exchange latency)
+  family: security
+  base_set: {time.duration_s: 150.0, net.uu.params.penetration: 0.0}
+  factor: {net.backhaul: {id: backhaul/dsl, params: {}}}
+  condition: {nodes.peer_cert_cache: 16}
+  metric: report.phase2.access.backhaul_bytes
+  expect: holds
+  direction: changes
+  source: "without modems every backend exchange rides the roadside unit's backhaul; a DSL line is slower than fibre, so exchanges take longer and the bytes on it shift in time (ITU-T G.992.5; 06-node-models.md backhaul table)"
