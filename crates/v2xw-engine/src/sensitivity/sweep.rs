@@ -92,6 +92,22 @@ pub struct Families {
     /// of fifty jurisdictions does not cost fifty runs. Default 8.
     #[serde(default)]
     pub max_choices: Option<usize>,
+    /// Prerequisites: fields applied to both the base and the changed run of every
+    /// setting under a prefix (a Nakagami shape needs `fading: nakagami`), so the setting
+    /// is measured where it acts rather than refused. Every matching entry applies, in
+    /// order.
+    #[serde(default)]
+    pub context: Vec<Context>,
+}
+
+/// One prerequisite entry of a families file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Context {
+    /// A dotted-path prefix.
+    pub prefix: String,
+    /// The fields both runs set.
+    pub set: BTreeMap<String, Value>,
 }
 
 /// One expectation: moving `setting` to its `change` end moves `metric` `expect`.
@@ -128,6 +144,9 @@ pub struct Setting {
     pub values: Vec<(String, Value)>,
     /// The families to try, first first.
     pub families: Vec<String>,
+    /// Fields both runs set (the families file's `context`).
+    #[serde(default)]
+    pub context: BTreeMap<String, Value>,
 }
 
 /// The fingerprint of one run: every metric the sweep reads, by name.
@@ -151,6 +170,10 @@ pub struct Outcome {
     pub moved: BTreeMap<String, (Option<f64>, Option<f64>)>,
     /// A run error (not a refusal), if the run failed.
     pub error: Option<String>,
+    /// The key of the base run it is compared with in [`Sweep::bases`]: the family, and
+    /// the context when there is one.
+    #[serde(default)]
+    pub base: String,
 }
 
 impl Outcome {
@@ -481,8 +504,18 @@ pub fn plan(families: &Families, expectations: &[Expectation]) -> (Vec<Setting>,
         }
         let closed = row.get("x-options-open").and_then(Value::as_bool) != Some(true);
         let mut values = if let Some(v) = families.values.get(path) {
+            // Two numbers are a low and a high end, like the computed ones.
+            let ends = v.len() == 2 && v.iter().all(Value::is_number);
             v.iter()
-                .map(|v| (v.as_str().map_or_else(|| v.to_string(), str::to_string), v.clone()))
+                .enumerate()
+                .map(|(i, v)| {
+                    let label = if ends {
+                        ["low", "high"][i].to_string()
+                    } else {
+                        v.as_str().map_or_else(|| v.to_string(), str::to_string)
+                    };
+                    (label, v.clone())
+                })
                 .collect()
         } else {
             match kind {
@@ -538,6 +571,12 @@ pub fn plan(families: &Families, expectations: &[Expectation]) -> (Vec<Setting>,
             default: row.get("default").cloned(),
             values,
             families: fams.to_vec(),
+            context: families
+                .context
+                .iter()
+                .filter(|c| prefix_matches(&c.prefix, path))
+                .flat_map(|c| c.set.clone())
+                .collect(),
         });
     }
     (settings, skipped)
@@ -733,6 +772,7 @@ fn cache_key(s: &Setting, value: &Value, bases: &BTreeMap<String, Scenario>) -> 
         f.hash(&mut h);
         serde_json::to_string(&bases.get(f)).unwrap_or_default().hash(&mut h);
     }
+    serde_json::to_string(&s.context).unwrap_or_default().hash(&mut h);
     format!("{}={}#{:016x}", s.path, value, h.finish())
 }
 
@@ -778,8 +818,10 @@ pub fn run_cached(
                 format!("a route names family `{name}`, which the file does not define"),
             )));
         };
-        base_fp.insert(name.clone(), fingerprint(s.clone())?);
+        base_fp.insert(name.clone(), Ok(fingerprint(s.clone())?));
     }
+    let base_fp: Mutex<BTreeMap<String, std::result::Result<Fingerprint, String>>> =
+        Mutex::new(base_fp);
     let work: Vec<(usize, usize)> = settings
         .iter()
         .enumerate()
@@ -828,7 +870,12 @@ pub fn run_cached(
         settings,
         skipped,
         outcomes,
-        bases: base_fp,
+        bases: base_fp
+            .into_inner()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(k, v)| v.ok().map(|v| (k, v)))
+            .collect(),
         verdicts: Vec::new(),
         wall_s: started.elapsed().as_secs_f64(),
     };
@@ -841,7 +888,7 @@ fn perturb(
     s: &Setting,
     j: usize,
     bases: &BTreeMap<String, Scenario>,
-    base_fp: &BTreeMap<String, Fingerprint>,
+    base_fp: &Mutex<BTreeMap<String, std::result::Result<Fingerprint, String>>>,
 ) -> Outcome {
     let (label, value) = s.values[j].clone();
     let mut o = Outcome {
@@ -852,13 +899,42 @@ fn perturb(
         refusals: Vec::new(),
         moved: BTreeMap::new(),
         error: None,
+        base: String::new(),
     };
-    let set: BTreeMap<String, Value> = [(s.path.clone(), value)].into_iter().collect();
+    let mut set = s.context.clone();
+    set.insert(s.path.clone(), value);
     for fam in &s.families {
-        let (Some(base), Some(bfp)) = (bases.get(fam), base_fp.get(fam)) else {
+        let Some(family_base) = bases.get(fam) else {
             continue;
         };
-        let changed = match apply(base, &set) {
+        // The base this perturbation is compared with: the family with the context.
+        let key = if s.context.is_empty() {
+            fam.clone()
+        } else {
+            format!("{fam} + {}", serde_json::to_string(&s.context).unwrap_or_default())
+        };
+        let known = base_fp.lock().ok().and_then(|m| m.get(&key).cloned());
+        let bfp = match known {
+            Some(b) => b,
+            None => {
+                let b = apply(family_base, &s.context)
+                    .and_then(fingerprint)
+                    .map_err(|e| e.to_string());
+                if let Ok(mut m) = base_fp.lock() {
+                    m.insert(key.clone(), b.clone());
+                }
+                b
+            }
+        };
+        let bfp = match bfp {
+            Ok(b) => b,
+            Err(e) => {
+                o.refusals.push((fam.clone(), format!("context refused: {e}")));
+                continue;
+            }
+        };
+        o.base = key;
+        let changed = match apply(family_base, &set) {
             Ok(c) => c,
             Err(e) => {
                 o.refusals.push((fam.clone(), e.to_string()));
@@ -868,7 +944,7 @@ fn perturb(
         match fingerprint(changed) {
             Ok(fp) => {
                 o.family = Some(fam.clone());
-                o.moved = diff(bfp, &fp);
+                o.moved = diff(&bfp, &fp);
                 return o;
             }
             Err(e) if is_refusal(&e) => o.refusals.push((fam.clone(), e.to_string())),
@@ -915,7 +991,8 @@ impl Sweep {
                     v.note = format!("run failed: {err}");
                     return v;
                 }
-                let base = self.bases.get(fam).and_then(|b| b.get(&e.metric)).copied();
+                let key = if o.base.is_empty() { fam } else { &o.base };
+                let base = self.bases.get(key).and_then(|b| b.get(&e.metric)).copied();
                 let value = match o.moved.get(&e.metric) {
                     Some((_, after)) => *after,
                     None => base,
@@ -1208,6 +1285,7 @@ mod tests {
             refusals: vec![],
             moved: diff(&base, &base.clone()),
             error: None,
+            base: "dsrc".into(),
         };
         assert!(o.dead());
         let mut moved = base.clone();
