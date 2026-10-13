@@ -2132,7 +2132,10 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                J3161/1's density-driven BSM interval on LTE-V2X, on by default under \
                the sae-j3161 profile; sensitivity measured, the default, where the \
                block-error curve decides, or ts-36-101, which loses every copy under the \
-               conformance sensitivity), and dcc for 802.11p \
+               conformance sensitivity; sizing code-rate, the default, the profile's \
+               Qm·R estimate of a transport block, or ts-36-213, LTE only, TS 36.213 \
+               Table 7.1.7.2.1-1's block sizes at the MCS, as OpenCV2X sizes them), and \
+               dcc for 802.11p \
                (dcc/sae/j2945-1-rate-power, dcc/etsi/adaptive-ts102687 or \
                dcc/etsi/reactive-ts102687; the region's by default). J2945/1 sets the \
                interval from the neighbours within 100 m and the power from the busy \

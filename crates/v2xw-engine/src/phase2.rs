@@ -2499,6 +2499,19 @@ impl Phase2 {
             .unwrap_or_default()
     }
 
+    /// Cellular vehicles with a multi-message backend flow (a top-up or a re-enrolment)
+    /// in flight, in node order.
+    #[must_use]
+    pub fn cellular_flows_in_flight(&self) -> Vec<NodeId> {
+        self.nodes
+            .iter()
+            .filter(|(_, n)| {
+                n.access == Some(AccessKind::Cellular) && (n.topup.is_some() || n.reenrol.is_some())
+            })
+            .map(|(k, _)| *k)
+            .collect()
+    }
+
     /// Vehicles with reports held.
     #[must_use]
     pub fn nodes_with_outbox(&self) -> Vec<NodeId> {

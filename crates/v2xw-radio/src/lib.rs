@@ -212,7 +212,8 @@ pub use hybrid::{
 };
 pub use sidelink::{
     IbeMask, NrMcsTable, Numerology, PoolConfig, ProbResourceKeep, Rri, SciSize, SidelinkOccupancy,
-    SlMcsSpec, SlRat, SlResource, TxPercentage, cr_limit, nr_mcs, rsrp_threshold_dbm,
+    SlMcsSpec, SlRat, SlResource, TxPercentage, cr_limit, lte_itbs_for_mcs, lte_tbs, nr_mcs,
+    rsrp_threshold_dbm,
 };
 pub use sps::{
     Reservation, SelectionOutcome, SelectionReason, SensingHistory, SlGrantInfo, SpsEngine,
