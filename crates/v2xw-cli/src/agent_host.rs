@@ -88,7 +88,15 @@ struct WatchState {
     unreachable: Option<String>,
     /// The model is writing the last summary's overview.
     overview_pending: bool,
+    /// Runs the person made in the Studio that ended since the agent last heard of them:
+    /// `(label, analysis, simulated seconds)`. Handed to the agent at its next prompt
+    /// ([`v2xw_copilot::agent::Agent::adopt_run`]) so it can compare with the previous run.
+    /// Runs that end while an agent job is running are the agent's own and are not kept.
+    studio_runs: Vec<(String, v2xw_copilot::Analysis, f64)>,
 }
+
+/// The most Studio runs kept for the agent between prompts.
+const STUDIO_RUNS: usize = 8;
 
 impl AgentHost {
     /// A host whose engine origin is set later, once the engine has bound its port.
@@ -176,10 +184,20 @@ impl AgentHost {
                     let Ok(evidence) = v2xw_copilot::gather::gather(&mut rpc) else {
                         continue;
                     };
+                    // A run that ends while no agent job runs is one the person made.
+                    let agent_busy = self.job.lock().map(|j| j.running).unwrap_or(true);
                     let summary = match self.watch.lock() {
                         Ok(mut w) => {
                             let s = w.watcher.finish(&evidence);
                             w.overview_pending = v2xw_copilot::claude::key_source().is_some();
+                            if !agent_busy {
+                                let label = format!("{} (Studio run {})", s.scenario, s.generation);
+                                w.studio_runs.push((label, s.analysis.clone(), s.t_s));
+                                let n = w.studio_runs.len();
+                                if n > STUDIO_RUNS {
+                                    w.studio_runs.drain(..n - STUDIO_RUNS);
+                                }
+                            }
                             s
                         }
                         Err(_) => return,
@@ -487,9 +505,23 @@ async fn ask(
     // What the watcher flagged in the run on screen, so a question about it is answered
     // with the alerts the person saw beside the chat.
     let alerts = host.alerts_note();
+    // The runs the person made in the Studio since the last prompt, for "compare with the
+    // previous run". Left in place when the agent is busy (the prompt is refused then).
+    let busy = host.job.lock().map(|j| j.running).unwrap_or(true);
+    let studio_runs = if busy {
+        Vec::new()
+    } else {
+        host.watch
+            .lock()
+            .map(|mut w| std::mem::take(&mut w.studio_runs))
+            .unwrap_or_default()
+    };
     host.start("ask", move |agent, sink| {
         if !agent.has_model() {
             return Err(v2xw_copilot::claude::HOW_TO_ADD_A_KEY.to_string());
+        }
+        for (label, analysis, t_s) in studio_runs {
+            agent.adopt_run(label, analysis, t_s);
         }
         if let Some(n) = alerts {
             agent.note(n);

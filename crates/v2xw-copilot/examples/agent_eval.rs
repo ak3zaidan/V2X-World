@@ -30,9 +30,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use v2xw_copilot::agent::{Agent, AgentEvent, AgentPolicy, AgentReport, ungrounded_numbers};
 use v2xw_copilot::provider::{ChatRequest, Completion, LlmProvider, Usage};
+use v2xw_copilot::transport::RpcTransport;
 use v2xw_copilot::{CurlPost, HttpRpc};
 
 // ----------------------------------------------------------------------------- the suite
@@ -63,6 +64,77 @@ struct Case {
     findings: Vec<String>,
     #[serde(default)]
     asks: bool,
+    /// Run by default (the harness suite marks the cases worth a model call).
+    #[serde(default)]
+    live: bool,
+    /// Checks on the Settings window's draft after the turn.
+    #[serde(default)]
+    draft: Vec<Check>,
+    /// Tools that must have been called, with arguments containing these.
+    #[serde(default)]
+    calls: Vec<CallCheck>,
+    /// Tools that must not have been called.
+    #[serde(default)]
+    no_calls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CallCheck {
+    tool: String,
+    #[serde(default)]
+    args: Map<String, Value>,
+}
+
+/// What the turn called, as `(tool, arguments)`.
+fn turn_calls(history: &[v2xw_copilot::ChatMessage], from: usize) -> Vec<(String, Value)> {
+    history
+        .iter()
+        .skip(from)
+        .flat_map(|m| m.tool_calls.iter())
+        .map(|c| {
+            (
+                c.name.clone(),
+                serde_json::from_str(&c.arguments).unwrap_or(Value::Null),
+            )
+        })
+        .collect()
+}
+
+/// The draft/call checks of the harness suite, as notes (empty when all hold).
+fn harness_notes(case: &Case, draft: &Value, calls: &[(String, Value)]) -> Vec<String> {
+    let mut notes = Vec::new();
+    for c in &case.draft {
+        if !c.holds(draft) {
+            let pointer = format!("/{}", c.key.replace('.', "/"));
+            notes.push(format!(
+                "draft not met: {} (is {})",
+                c.describe(),
+                draft.pointer(&pointer).unwrap_or(&Value::Null)
+            ));
+        }
+    }
+    for want in &case.calls {
+        let ok = calls.iter().any(|(name, args)| {
+            *name == want.tool
+                && want
+                    .args
+                    .iter()
+                    .all(|(k, v)| args.get(k).is_some_and(|a| loose_eq(a, v)))
+        });
+        if !ok {
+            notes.push(format!(
+                "no call {}({})",
+                want.tool,
+                Value::Object(want.args.clone())
+            ));
+        }
+    }
+    for t in &case.no_calls {
+        if calls.iter().any(|(name, _)| name == t) {
+            notes.push(format!("called {t}"));
+        }
+    }
+    notes
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -284,6 +356,8 @@ impl CaseResult {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SuiteResult {
     label: String,
+    #[serde(default)]
+    suite: String,
     provider: String,
     cases: Vec<CaseResult>,
 }
@@ -409,6 +483,8 @@ struct Args {
     category: Vec<String>,
     append: bool,
     transcripts: Option<PathBuf>,
+    /// Run every case, not only those marked `live: true`.
+    all: bool,
 }
 
 fn args() -> Args {
@@ -426,6 +502,7 @@ fn args() -> Args {
         category: Vec::new(),
         append: false,
         transcripts: None,
+        all: false,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -433,6 +510,11 @@ fn args() -> Args {
         let next = argv.get(i + 1).cloned().unwrap_or_default();
         if argv[i] == "--append" {
             a.append = true;
+            i += 1;
+            continue;
+        }
+        if argv[i] == "--all" {
+            a.all = true;
             i += 1;
             continue;
         }
@@ -466,7 +548,8 @@ fn documents(report: &AgentReport) -> Vec<Value> {
 }
 
 /// The results of the tools that read the build's own registry (model cards, metric
-/// definitions, the settings index): a number quoted from a card is sourced, though it is
+/// definitions, the settings index) and the engine's validator (setup and prepare_scenario
+/// answers, which name a refused value's range; run_control's run status): a number quoted from them is sourced, though it is
 /// not run data.
 fn registry_results(history: &[v2xw_copilot::ChatMessage]) -> String {
     let mut names: BTreeMap<String, String> = BTreeMap::new();
@@ -476,10 +559,13 @@ fn registry_results(history: &[v2xw_copilot::ChatMessage]) -> String {
             names.insert(c.id.clone(), c.name.clone());
         }
         if let Some(id) = &m.tool_call_id {
-            if names
-                .get(id)
-                .is_some_and(|n| n.starts_with("registry__") || n == "find_settings")
-            {
+            if names.get(id).is_some_and(|n| {
+                n.starts_with("registry__")
+                    || matches!(
+                        n.as_str(),
+                        "find_settings" | "setup" | "prepare_scenario" | "run_control"
+                    )
+            }) {
                 out.push_str(m.text());
                 out.push('\n');
             }
@@ -604,6 +690,10 @@ fn score(case: &Case, report: &AgentReport, prompts: &str, r: &mut CaseResult) {
                 "unsupported",
                 "not available",
                 "unable",
+                "outside the allowed",
+                "out of range",
+                "nothing was changed",
+                "not allowed",
             ]
             .iter()
             .any(|w| text.contains(w));
@@ -703,13 +793,15 @@ fn markdown(s: &SuiteResult, before: Option<&SuiteResult>) -> String {
     let mut md = String::new();
     md.push_str("# Agent evaluation\n\n");
     md.push_str(&format!(
-        "Suite `crates/v2xw-copilot/evals/prompts.yaml`, run by `cargo run -p v2xw-copilot --example agent_eval`. \
+        "Suite `{}`, run by `cargo run -p v2xw-copilot --example agent_eval`. \
          Provider `{}`, label `{}`. Each case is scored on four checks: configuration (the scenario changes \
          and run count the prompt implies), run completed, numbers grounded (every number in the answer is in \
          the runs' data) and conclusions (the answer says what the prompt asked about, or asks / explains when \
          it should). Times are wall-clock seconds from the prompt; \"first feedback\" is the first event the \
          person sees, \"first model output\" the model's first plan, tool call or answer.\n\n",
-        s.provider, s.label
+        if s.suite.is_empty() { "crates/v2xw-copilot/evals/prompts.yaml" } else { s.suite.as_str() },
+        s.provider,
+        s.label
     ));
     md.push_str("## Summary\n\n");
     let now = summary(s);
@@ -818,6 +910,18 @@ fn main() {
         .and_then(|t| serde_json::from_str(&t).ok());
     let engine = start_engine(&args);
     eprintln!("engine at {}", engine.origin);
+    // The runner's own line to the engine: the draft before every fresh case is put back to
+    // the scenario the engine started with, and read after every turn for `draft` checks.
+    let mut probe = HttpRpc::new(CurlPost::new().with_timeout_s(30), &engine.origin);
+    let scenario_of = |probe: &mut HttpRpc<CurlPost>| {
+        probe
+            .call("scenario.get", &json!({}))
+            .ok()
+            .and_then(|v| v.get("scenario").cloned())
+            .unwrap_or(Value::Null)
+    };
+    let start_scenario = scenario_of(&mut probe);
+    let live_only = !args.all && suite.cases.iter().any(|c| c.live);
 
     let mut agents: BTreeMap<
         String,
@@ -840,6 +944,11 @@ fn main() {
         None => SuiteResult::default(),
     };
     result.label = args.label.clone();
+    result.suite = args
+        .suite
+        .file_name()
+        .map(|n| format!("crates/v2xw-copilot/evals/{}", n.to_string_lossy()))
+        .unwrap_or_default();
     if let Some(dir) = args.out.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -851,9 +960,17 @@ fn main() {
                 .follow_up_of
                 .as_ref()
                 .is_some_and(|p| args.only.contains(p)))
-            && (args.category.is_empty() || args.category.contains(&case.category));
+            && (args.category.is_empty() || args.category.contains(&case.category))
+            && (!live_only || case.live || !args.only.is_empty());
         if !selected {
             continue;
+        }
+        if case.follow_up_of.is_none() {
+            let _ = probe.call("run.pause", &json!({}));
+            let _ = probe.call(
+                "scenario.set",
+                &json!({"scenario": start_scenario, "validate": false}),
+            );
         }
         let (mut agent, calls, mut prompts) =
             match case.follow_up_of.as_ref().and_then(|p| agents.remove(p)) {
@@ -878,6 +995,7 @@ fn main() {
                 }
             };
         let calls_before = calls.lock().map(|c| c.len()).unwrap_or(0);
+        let history_before = agent.history().len();
         prompts.push_str(&case.prompt);
         prompts.push('\n');
         eprintln!("\n=== {} ({})\n> {}", case.id, case.category, case.prompt);
@@ -981,7 +1099,11 @@ fn main() {
                 score(
                     case,
                     &report,
-                    &format!("{prompts}\n{}", registry_results(agent.history())),
+                    &format!(
+                        "{prompts}\n{}\n{}",
+                        registry_results(agent.history()),
+                        serde_json::to_string(agent.runs()).unwrap_or_default()
+                    ),
                     &mut r,
                 );
             }
@@ -999,6 +1121,15 @@ fn main() {
                 };
                 score(case, &empty, &prompts, &mut r);
             }
+        }
+        let extra = harness_notes(
+            case,
+            &scenario_of(&mut probe),
+            &turn_calls(agent.history(), history_before),
+        );
+        if !extra.is_empty() {
+            r.config_ok = false;
+            r.config_notes.extend(extra);
         }
         eprintln!(
             "  => score {:.2} config {} done {} grounded {} concl {} | {:.1}s, {} calls, {} in / {} out tokens{}",

@@ -219,6 +219,10 @@ pub struct AgentPolicy {
     pub speed: f64,
     /// The longest simulated duration the agent may set without being asked, seconds.
     pub max_duration_s: f64,
+    /// The most conversation text sent with each model call, in characters (about four to a
+    /// token). Over it, earlier turns' long tool results are cut to their head, oldest
+    /// first ([`budgeted_history`]); the current turn is always sent whole.
+    pub history_chars: usize,
 }
 
 impl Default for AgentPolicy {
@@ -230,8 +234,49 @@ impl Default for AgentPolicy {
             max_polls: 14_400,
             speed: 0.0,
             max_duration_s: 300.0,
+            history_chars: 120_000,
         }
     }
+}
+
+/// What an earlier turn's cut tool result says in place of its tail.
+pub const TRIMMED: &str = " … [trimmed: an earlier turn's tool result. Its numbers are still \
+    this conversation's data: re-read them with list_runs, compare_runs, finding_detail, \
+    live_metrics or query_metric rather than from memory.]";
+
+/// The conversation as sent to the model: whole while it fits in `budget` characters;
+/// otherwise the tool results before `turn_start` longer than 600 characters are cut to
+/// their first 400, oldest first, until it fits. The stored history is never edited (it is
+/// append-only, which is what the provider's prompt cache relies on), and while a
+/// conversation fits nothing is cut, so short conversations keep their cache.
+#[must_use]
+pub fn budgeted_history(
+    history: &[ChatMessage],
+    turn_start: usize,
+    budget: usize,
+) -> Vec<ChatMessage> {
+    let mut out: Vec<ChatMessage> = history.to_vec();
+    let mut total: usize = out.iter().map(|m| m.text().len()).sum();
+    if total <= budget {
+        return out;
+    }
+    for m in out.iter_mut().take(turn_start) {
+        if total <= budget {
+            break;
+        }
+        if m.role != crate::provider::Role::Tool || m.text().len() <= 600 {
+            continue;
+        }
+        let text = m.text();
+        let mut cut = 400;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let short = format!("{}{TRIMMED}", &text[..cut]);
+        total = total - text.len() + short.len();
+        m.content = Some(short);
+    }
+    out
 }
 
 /// The agent.
@@ -274,7 +319,7 @@ pub fn agent_tools() -> Vec<Value> {
     tools.extend(base_tools().into_iter().filter(|t| {
         !matches!(
             t.pointer("/function/name").and_then(Value::as_str),
-            Some("list_scenarios" | "run_prepared")
+            Some("list_scenarios" | "run_prepared" | "find_settings")
         )
     }));
     tools
@@ -405,10 +450,18 @@ pub fn agent_system_prompt() -> String {
      4. \"Run / compare / sweep / what happens if\" means `simulate` (it builds, runs to \
      the end and analyses; for a comparison put every arm in `variants`, the first is the \
      baseline). Follow-ups: base `last`, the one change, compare_to_last: true. Ask before \
-     anything over 300 simulated seconds.\n\
+     anything over 300 simulated seconds. \"Compare with the previous run\" with nothing \
+     to change is compare_runs over the last two runs (list_runs numbers them; runs the \
+     person made in the Studio are among them).\n\
      5. A question about the run on screen (\"is the network healthy?\", \"why is PDR \
      low?\") is about the current run: live_metrics, query_metric, inspect or \
-     analyse_current_run, never a new run.\n\
+     analyse_current_run, never a new run. A question about a number of an earlier run \
+     is answered from a tool result read in this turn (compare_runs, finding_detail, \
+     list_runs, live_metrics), never from an earlier reply; name the metric with each \
+     number (overall delivery_ratio and the within-range delivery are different \
+     numbers: say which).\n\
+     Run control is run_control: start, pause, resume, speed {speed}, restart = seek \
+     {t_s: 0}, stop. A new run length is setup time.duration_s.\n\
      6. If something cannot be done here (an attacker kind this engine refuses, a radio it \
      does not have), say so in one sentence and do the closest supported thing only if \
      the person asked for something general (\"some attackers\" means a rendered kind).\n\
@@ -547,6 +600,28 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         self.notes.push(text.into());
     }
 
+    /// Adds a run the person made in the Studio (the watcher's analysis of it when it
+    /// ended) to this conversation's runs, so "compare with the previous run" and
+    /// `compare_runs` reach it, and tells the model before the next prompt. Returns its
+    /// index in [`Agent::runs`].
+    pub fn adopt_run(&mut self, label: impl Into<String>, analysis: Analysis, t_s: f64) -> usize {
+        let label = label.into();
+        self.runs.push(RunRecord {
+            label: label.clone(),
+            prepared: None,
+            analysis,
+            t_s,
+        });
+        let index = self.runs.len() - 1;
+        self.notes.push(format!(
+            "The person ran \"{label}\" in the Studio to {} s; it is run {index} (list_runs, \
+             compare_runs). \"Compare with the previous run\" means compare_runs over the last \
+             two runs.",
+            fmt(t_s)
+        ));
+        index
+    }
+
     fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::SeqCst)
     }
@@ -572,6 +647,7 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             text: format!("Working on it with {}.", self.provider_name()),
         });
         let mut comparison: Option<Comparison> = None;
+        let turn_start = self.history.len();
         if self.notes.is_empty() {
             self.history.push(ChatMessage::user(prompt));
         } else {
@@ -597,7 +673,11 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             }
             let mut messages = Vec::with_capacity(self.history.len() + 1);
             messages.push(ChatMessage::system(system.clone()));
-            messages.extend(self.history.iter().cloned());
+            messages.extend(budgeted_history(
+                &self.history,
+                turn_start,
+                self.policy.history_chars,
+            ));
             let provider = self.provider.as_mut().expect("checked above");
             let completion = provider.complete(&ChatRequest {
                 messages,
@@ -756,13 +836,9 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                     None => json!({"scenario": d}),
                 }
             }),
-            "find_settings" => Ok(find_settings(&s("query"))),
+            "find_settings" => Ok(crate::catalog::find_settings(&s("query"), 12)),
             "prepare_scenario" => {
-                let changes = args
-                    .get("changes")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
+                let changes = control::changes_of(args.get("changes"));
                 self.prepare(&s("base"), &s("reason"), &changes, sink)
             }
             "run_prepared" => {
@@ -858,12 +934,26 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         }
     }
 
-    /// Builds and validates the scenario to run.
+    /// Builds and validates the scenario the agent will run (its duration capped by the
+    /// policy).
     fn prepare(
         &mut self,
         base: &str,
         reason: &str,
         changes: &[Value],
+        sink: &mut dyn FnMut(AgentEvent),
+    ) -> Result<Value> {
+        self.prepare_with(base, reason, changes, true, sink)
+    }
+
+    /// Builds and validates a scenario. `cap` holds the duration to the policy's limit: on
+    /// for a run the agent makes, off for a `setup` the person runs from the Studio.
+    fn prepare_with(
+        &mut self,
+        base: &str,
+        reason: &str,
+        changes: &[Value],
+        cap: bool,
         sink: &mut dyn FnMut(AgentEvent),
     ) -> Result<Value> {
         let mut doc = self.base_document(base)?;
@@ -886,9 +976,16 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                 .unwrap_or("")
                 .to_string();
             let value = c.get("value").cloned().unwrap_or(Value::Null);
-            // Set, {multiply}, {add}, {append}, {remove}, and a jammer's "centre".
-            let (before, after) = control::apply_change(&mut doc, &key, &value)?;
-            if let Some(d) = after.as_f64().filter(|_| key == "time.duration_s") {
+            // Set, {multiply}, {add}, {append}, {remove}, and a jammer's "centre", after
+            // the key and value are read as meant (crate::repair).
+            let control::Applied {
+                key,
+                before,
+                after,
+                notes,
+            } = control::apply_repaired(&mut doc, &key, &value)?;
+            let why = control::why_with(why, &notes);
+            if let Some(d) = after.as_f64().filter(|_| cap && key == "time.duration_s") {
                 if d > self.policy.max_duration_s {
                     return Err(CopilotError::Rpc {
                         method: "prepare_scenario".into(),
@@ -927,8 +1024,19 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             errors: report.errors.clone(),
         });
         if !report.ok {
-            return Ok(json!({"ok": false, "errors": report.errors,
-                             "changes": applied, "note": "nothing was staged; fix and retry"}));
+            // What each refused setting allows, from the settings index, so the model can
+            // fix the change or explain the refusal without another lookup.
+            let mut allowed: Vec<String> = report
+                .errors
+                .iter()
+                .filter_map(|e| e.field.as_deref().and_then(crate::repair::allowed))
+                .collect();
+            allowed.dedup();
+            return Ok(
+                json!({"ok": false, "errors": report.errors, "allowed": allowed,
+                             "changes": applied, "note": "nothing was staged; fix and retry, \
+                             or tell the person in one sentence why it cannot be set"}),
+            );
         }
         let hash = report.content_hash.clone().unwrap_or_default();
         self.prepared = Some(Prepared {
@@ -1364,65 +1472,19 @@ fn cell(v: &Value) -> String {
     }
 }
 
-/// The settings whose key, title or description contain every word of `query`, from the
-/// engine's own published settings surface (`v2xw_engine::scenario::publish::surface`, the
-/// same index the settings window is generated from). At most 25, in the surface's order.
-#[must_use]
-pub fn find_settings(query: &str) -> Value {
-    let surface = v2xw_engine::scenario::publish::surface();
-    let words: Vec<String> = query
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
-        .collect();
-    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-    let mut matches = Vec::new();
-    let mut total = 0usize;
-    for f in surface
-        .get("fields")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let path = text(f, "x-path");
-        if path.is_empty() {
-            continue;
-        }
-        let hay =
-            format!("{} {} {}", path, text(f, "title"), text(f, "description")).to_lowercase();
-        if words.is_empty() || !words.iter().all(|w| hay.contains(w.as_str())) {
-            continue;
-        }
-        total += 1;
-        if matches.len() >= 25 {
-            continue;
-        }
-        let mut row = Map::new();
-        row.insert("key".into(), json!(path));
-        for k in [
-            "title",
-            "unit",
-            "enum",
-            "x-range",
-            "default",
-            "x-implemented",
-            "x-status-note",
-        ] {
-            if let Some(v) = f.get(k).filter(|v| !v.is_null()) {
-                row.insert(k.trim_start_matches("x-").replace('-', "_"), v.clone());
-            }
-        }
-        let d = text(f, "description");
-        if !d.is_empty() {
-            row.insert(
-                "description".into(),
-                json!(d.chars().take(240).collect::<String>()),
-            );
-        }
-        matches.push(Value::Object(row));
-    }
-    json!({"query": query, "matches": matches, "total": total,
-           "note": if total > matches.len() { "more matched; narrow the words" } else { "" }})
+/// Applies one requested change to `doc` exactly as `setup`, `simulate` and
+/// `prepare_scenario` do, and returns the key it landed on with the value before and after.
+/// The harness evaluation (`tests/harness_eval.rs`) drives it directly.
+///
+/// # Errors
+/// When the change cannot be applied (see the tools' own errors).
+pub fn apply_requested_change(
+    doc: &mut Value,
+    key: &str,
+    value: &Value,
+) -> Result<(String, Value, Value)> {
+    let a = control::apply_repaired(doc, key, value)?;
+    Ok((a.key, a.before, a.after))
 }
 
 /// A dotted key or a JSON Pointer, as a JSON Pointer.
@@ -1552,6 +1614,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_long_conversation_sends_earlier_tool_results_cut_and_the_current_turn_whole() {
+        let long = "x".repeat(5_000);
+        let h = vec![
+            ChatMessage::user("first"),
+            ChatMessage::tool("a", long.clone()),
+            ChatMessage::user("second"),
+            ChatMessage::tool("b", long.clone()),
+        ];
+        assert_eq!(
+            budgeted_history(&h, 2, 1_000_000),
+            h,
+            "fits: nothing is cut"
+        );
+        let sent = budgeted_history(&h, 2, 6_000);
+        assert!(
+            sent[1].text().ends_with(TRIMMED),
+            "the earlier result is cut"
+        );
+        assert_eq!(sent[3].text(), long, "the current turn is whole");
+        assert_eq!(
+            sent.len(),
+            h.len(),
+            "no message is dropped, so call ids still pair"
+        );
+    }
+
+    #[test]
+    fn two_studio_runs_are_compared_as_the_previous_run_and_this_one() {
+        let mut agent: Agent<crate::provider::ScriptedProvider, crate::transport::NoEngine> =
+            Agent::new(None, crate::transport::NoEngine).expect("builds");
+        let a = analyst::analyse(
+            &crate::analyst::RunEvidence::default(),
+            &Thresholds::default(),
+        );
+        assert_eq!(agent.adopt_run("grid (Studio run 1)", a.clone(), 60.0), 0);
+        assert_eq!(agent.adopt_run("grid (Studio run 2)", a, 60.0), 1);
+        let mut cmp = None;
+        let out = control::compare_runs(&mut agent, &json!({}), &mut cmp).expect("compares");
+        assert!(cmp.is_some() && out.is_object(), "{out}");
+        assert_eq!(agent.notes.len(), 2, "the model is told about each run");
+    }
+
+    #[test]
     fn every_method_the_agent_calls_is_one_the_server_publishes() {
         for m in AGENT_METHODS {
             assert!(
@@ -1559,31 +1664,6 @@ mod tests {
                 "{m} is not a server method"
             );
         }
-    }
-
-    #[test]
-    fn settings_are_found_in_the_engines_own_surface() {
-        let r = find_settings("rat");
-        let keys: Vec<&str> = r["matches"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|m| m["key"].as_str())
-            .collect();
-        assert!(keys.contains(&"radio.rat"), "{r:#}");
-        let rat = r["matches"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|m| m["key"] == "radio.rat")
-            .unwrap();
-        assert!(
-            rat["enum"].as_array().is_some_and(|e| !e.is_empty()),
-            "its choices: {rat:#}"
-        );
-        // A word nothing has finds nothing, and an empty query does not list everything.
-        assert_eq!(find_settings("zzqxj")["total"], 0);
-        assert_eq!(find_settings("")["total"], 0);
     }
 
     #[test]

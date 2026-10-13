@@ -40,6 +40,10 @@ pub struct Setting {
     pub level: String,
     /// The recommended range, in words, when the engine publishes one.
     pub recommended: String,
+    /// The loader's lower bound, when it has one (the published row's `minimum`).
+    pub range_min: Option<f64>,
+    /// The loader's upper bound (`maximum`).
+    pub range_max: Option<f64>,
 }
 
 impl Setting {
@@ -63,6 +67,9 @@ impl Setting {
         }
         if !self.title.is_empty() {
             m.insert("label".into(), json!(self.title));
+        }
+        if self.range_min.is_some() || self.range_max.is_some() {
+            m.insert("range".into(), json!([self.range_min, self.range_max]));
         }
         if !self.recommended.is_empty() {
             m.insert("recommended".into(), json!(self.recommended));
@@ -137,6 +144,195 @@ pub const JAMMERS: [(&str, &str); 3] = [
     ),
 ];
 
+/// Words that say nothing about which setting is meant.
+const STOP_WORDS: &[&str] = &[
+    "the", "to", "a", "an", "make", "use", "set", "turn", "on", "off", "of", "more", "less",
+    "please", "every", "with", "and", "for", "at", "in", "only", "have", "has", "than", "instead",
+    "go", "back", "plain", "give", "so", "are", "is", "it", "its", "this", "that", "into", "after",
+    "be", "can", "how", "what", "which", "my", "our", "all", "each", "do", "lower", "higher",
+    "raise", "change", "switch", "slower", "faster", "allow", "add",
+];
+
+/// The words people use for a setting (each phrase is matched inside the lower-cased query
+/// padded with spaces), and fragments of the paths or choices they mean. A fragment in a
+/// path weighs more than a query word in one, so "make the radio weaker" finds the
+/// transmit power before every other `radio.*` setting.
+const SYNONYMS: &[(&[&str], &[&str])] = &[
+    (
+        &[
+            "weak",
+            "strong",
+            "louder",
+            "quieter",
+            "transmit",
+            "tx power",
+            "power level",
+        ],
+        &["tx_power_dbm"],
+    ),
+    (
+        &[
+            "c-v2x",
+            "cv2x",
+            "mode 4",
+            " lte",
+            "5g",
+            " nr ",
+            " nr-",
+            "802.11p",
+            "dsrc",
+            "its-g5",
+            "radio technology",
+            "access technology",
+            " rat ",
+            "wifi",
+            "wi-fi",
+        ],
+        &["radio.rat"],
+    ),
+    (&["certificate", " cert"], &["full_cert_every_ms"]),
+    (
+        &["headway", "following distance", "time gap"],
+        &["time_headway_s"],
+    ),
+    (&[" idm", "car-following", "car following"], &["drivers."]),
+    (&["truck", "lorr", "hgv"], &[".truck."]),
+    (&[" bus", "buses"], &[".bus."]),
+    (&["motorcycl", "motorbike"], &[".motorcycle."]),
+    (&["congestion control", " dcc"], &["radio.dcc.enabled"]),
+    (
+        &[
+            "penetration",
+            "equipped",
+            "v2x radio",
+            "have v2x",
+            "of the cars",
+            "of cars",
+            "of vehicles",
+            "market share",
+        ],
+        &["equipped_fraction"],
+    ),
+    (
+        &[
+            "quantum",
+            "ml-dsa",
+            "mldsa",
+            "falcon",
+            "dilithium",
+            "signature",
+            "sign with",
+        ],
+        &["security.signature"],
+    ),
+    (
+        &[
+            " rain", " snow", " fog", "sleet", " wind", "weather", "storm",
+        ],
+        &["weather.initial", "weather.intensity"],
+    ),
+    (
+        &[
+            "jaywalk",
+            "against the red",
+            "red light",
+            "cross against",
+            "on red",
+        ],
+        &["red_crossing_share"],
+    ),
+    (
+        &["pedestrian", "walker", "people walking"],
+        &["actors.vru."],
+    ),
+    (&[" walk"], &["walking_speed_mps"]),
+    (
+        &[
+            "europ",
+            " eu ",
+            "frequency",
+            "regulat",
+            " etsi",
+            " fcc",
+            "channel plan",
+        ],
+        &["radio.region"],
+    ),
+    (&["sensitivity"], &["sensitivity_dbm"]),
+    (&["pseudonym"], &["pseudonym_change.period_s"]),
+    (
+        &[
+            " bsm",
+            "beacon",
+            "message rate",
+            " hz",
+            "messages per second",
+        ],
+        &["messages.rate_hz"],
+    ),
+    (&["building"], &["world.buildings.enabled"]),
+    (
+        &["fading", "nakagami", "rayleigh", "rician"],
+        &["channel_model.fading"],
+    ),
+    (&["shadowing"], &["shadowing_sigma_db"]),
+    (&["roadside", " rsu"], &["rsu_placement.count"]),
+    (
+        &["right turn on red", "right on red"],
+        &["right_turn_on_red"],
+    ),
+    (&[" rtk", " gps", "gnss"], &["gnss.rtk"]),
+    (&["react"], &["reaction_time_s"]),
+    (
+        &["green wave", "coordinat"],
+        &["world.signals.coordinate", "green_wave"],
+    ),
+    (&["path loss", "path-loss"], &["path_loss_exponent"]),
+    (&["gridlock", "stuck", "deadlock"], &["gridlock_timeout_s"]),
+    (&["noise figure"], &["noise_figure_db"]),
+    (&["antenna"], &["antenna_gain_dbi"]),
+    (
+        &[
+            " long",
+            "duration",
+            " seconds ",
+            " minutes ",
+            "how long",
+            "run length",
+        ],
+        &["time.duration_s"],
+    ),
+    (
+        &[
+            "traffic volume",
+            "veh/h",
+            "vehicles per hour",
+            "cars per hour",
+            "demand",
+            "rush hour",
+            "busier",
+            "more cars",
+            "more traffic",
+            "less traffic",
+        ],
+        &["demand.rate_veh_per_h"],
+    ),
+    (
+        &[
+            "lane change",
+            "changing lanes",
+            "change lanes",
+            "aggressive",
+            "polite",
+        ],
+        &["politeness", "lane_change_threshold"],
+    ),
+    (&[" jam"], &["threats.jammers"]),
+    (&["attack"], &["threats.attackers"]),
+    (&["detector", "misbehavio", " mbd"], &["detection.local"]),
+    (&["verif"], &["verification_policy"]),
+];
+
 /// Every editable setting of the scenario schema, built once.
 pub fn settings() -> &'static [Setting] {
     static CELL: OnceLock<Vec<Setting>> = OnceLock::new();
@@ -171,6 +367,8 @@ pub fn settings() -> &'static [Setting] {
                 title: s("title"),
                 level: s("x-level"),
                 recommended: shorten(&s("x-recommended"), 120),
+                range_min: row.get("minimum").and_then(Value::as_f64),
+                range_max: row.get("maximum").and_then(Value::as_f64),
             });
         }
         out
@@ -195,11 +393,25 @@ pub fn shorten(text: &str, n: usize) -> String {
 /// first. A word matching the path counts three times a word matching the note.
 #[must_use]
 pub fn find_settings(query: &str, limit: usize) -> Value {
-    let words: Vec<String> = query
-        .to_lowercase()
+    let q = format!(" {} ", query.to_lowercase());
+    let words: Vec<String> = q
         .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '.' && c != '-')
-        .filter(|w| w.len() > 1)
-        .map(str::to_string)
+        .map(|w| w.trim_matches('.'))
+        .filter(|w| w.len() > 1 && !STOP_WORDS.contains(w))
+        .map(|w| {
+            // Plurals: `trucks` finds `truck`.
+            if w.len() > 4 && w.ends_with('s') && !w.ends_with("ss") {
+                w[..w.len() - 1].to_string()
+            } else {
+                w.to_string()
+            }
+        })
+        .collect();
+    // The words people use for a setting, as fragments of its path or of its choices.
+    let terms: Vec<&str> = SYNONYMS
+        .iter()
+        .filter(|(phrases, _)| phrases.iter().any(|p| q.contains(p)))
+        .flat_map(|(_, t)| t.iter().copied())
         .collect();
     let mut scored: Vec<(usize, &Setting)> = settings()
         .iter()
@@ -214,19 +426,35 @@ pub fn find_settings(query: &str, limit: usize) -> Value {
                         + 2 * usize::from(values.contains(w.as_str()))
                         + usize::from(note.contains(w.as_str()))
                 })
-                .sum::<usize>();
+                .sum::<usize>()
+                + terms
+                    .iter()
+                    .map(|t| 4 * usize::from(path.contains(t)) + usize::from(values.contains(t)))
+                    .sum::<usize>();
             (score, s)
         })
         .filter(|(score, _)| *score > 0)
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.path.cmp(&b.1.path)));
+    // Ties: the settings window's basic page first, the vehicle's radio before the
+    // roadside unit's and the pedestrian's, the fleet-wide value before one class's.
+    let rank = |s: &Setting| {
+        (
+            usize::from(s.level != "basic"),
+            usize::from(s.path.contains(".rsu.") || s.path.contains(".vru.")),
+            s.path.matches('.').count(),
+        )
+    };
+    scored.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| rank(a.1).cmp(&rank(b.1)))
+            .then_with(|| a.1.path.cmp(&b.1.path))
+    });
     let rows: Vec<Value> = scored
         .iter()
         .take(limit.max(1))
         .map(|(_, s)| s.to_json())
         .collect();
     let mut out = json!({"settings": rows});
-    let q = query.to_lowercase();
     if q.contains("attack") || q.contains("threat") || q.contains("misbehav") {
         out["attackers"] = json!({
             "id": "threat/attacker/legacy/<Kind>",
@@ -379,7 +607,7 @@ pub fn quick_reference() -> &'static str {
             .collect::<Vec<_>>()
             .join(", ");
         format!(
-            "Settings (dotted keys for `changes`; find_settings has the other ~160):\n\
+            "Settings (dotted keys for `changes`; find_settings searches all {n} by plain words or synonyms; values may carry units, e.g. \"2 min\", \"30%\"):\n\
              - city: a city id from the list below (top level; any scenario runs on any \
              city; it replaces the base's map)\n\
              - time.duration_s (s); seed (keep it to compare like with like)\n\
@@ -433,6 +661,7 @@ pub fn quick_reference() -> &'static str {
              Cities (`city` ids; every one is supported; list_cities says whether its map \
              is downloaded): {cities}",
             cities = cities_line(),
+            n = settings().len(),
             rat = values("radio.rat"),
             region = values("radio.region"),
             weather = values("weather.initial"),

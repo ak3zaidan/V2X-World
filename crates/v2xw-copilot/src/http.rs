@@ -110,6 +110,21 @@ impl HttpResponse {
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status)
     }
+
+    /// Whether the same request may succeed if sent again: no status read (0, a cut
+    /// connection), a timeout (408), a conflict or too-early answer (409, 425), a rate limit
+    /// (429), an overloaded or failing server (5xx, Anthropic's 529).
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        matches!(self.status, 0 | 408 | 409 | 425 | 429) || self.status >= 500
+    }
+}
+
+/// Whether a failed post is worth sending again: the request never got an answer (a
+/// timeout, a reset connection), as opposed to an answer that refused it.
+#[must_use]
+pub fn transient_failure(e: &crate::error::CopilotError) -> bool {
+    matches!(e, crate::error::CopilotError::Transport(_))
 }
 
 /// Posting JSON somewhere.

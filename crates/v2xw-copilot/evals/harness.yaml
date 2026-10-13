@@ -1,0 +1,455 @@
+# The harness suite: can the agent do anything a person can do in the Studio, by asking?
+#
+# `prompts.yaml` asks for analyses; this suite asks for control: set any published setting
+# by its plain name or a synonym, set several at once, pick a city or a scenario, have a
+# refusal explained, drive the run (start, pause, speed, restart, duration), compare runs
+# (A vs B, "compare with the previous run", a sweep), and answer questions about a run from
+# its measured numbers.
+#
+# Two runners read it:
+#
+# * `tests/harness_eval.rs` (offline, deterministic, every `cargo test`): the parts the
+#   harness owns, with no model. `resolve` — a search of the settings index with the
+#   person's own words finds each listed key in its first `resolve_top` (default 5) rows;
+#   `repair` — a change written the way a model plausibly writes it (a short key, a value
+#   with its unit, a synonym of a choice) lands on `want_key` = `want_value` and the engine's
+#   loader accepts the result; `refuse` — a change the loader refuses comes back with an
+#   explanation naming each listed word (the allowed range, the choices).
+# * `examples/agent_eval.rs --suite crates/v2xw-copilot/evals/harness.yaml` (live: a real
+#   model, a real engine). It runs the cases marked `live: true` unless `--all`. On top of
+#   prompts.yaml's checks (`expect` on run documents, `runs`, `differ`, `compares`,
+#   `mentions`, `asks`) it scores `draft` (checks on the Settings window's draft after the
+#   turn, same vocabulary as `expect`), `calls` (each listed tool was called with arguments
+#   that contain the listed ones) and `no_calls` (tools that must not be called).
+#
+# The engine the live runner starts serves `scenarios/phase1-grid.yaml` (DSRC, 30 veh/h,
+# 60 s, tx power unset = the 23 dBm default); the draft is reset to it before every case
+# that is not a follow-up.
+
+cases:
+  # ------------------------------------------------------------ one setting, plain words
+  - id: set-radio-weaker
+    category: setting
+    live: true
+    prompt: Make the radio weaker.
+    runs: {min: 0, max: 0}
+    resolve: [radio.devices.obu.tx_power_dbm]
+    draft:
+      # Below the 23 dBm default (3GPP TR 36.885, the published default).
+      - {key: radio.devices.obu.tx_power_dbm, max: 22.9}
+
+  - id: set-cv2x-mode4
+    category: setting
+    live: true
+    prompt: Use C-V2X mode 4.
+    runs: {min: 0, max: 0}
+    resolve: [radio.rat]
+    repair:
+      - {key: radio.rat, value: "C-V2X mode 4", want_key: radio.rat, want_value: lte-v2x-pc5}
+      - {key: radio.rat, value: "LTE-V2X", want_key: radio.rat, want_value: lte-v2x-pc5}
+    draft:
+      - {key: radio.rat, equals: lte-v2x-pc5}
+
+  - id: set-cert-every-message
+    category: setting
+    live: true
+    prompt: Attach the full certificate to every message.
+    runs: {min: 0, max: 0}
+    resolve: [security.signer_id_policy.full_cert_every_ms]
+    repair:
+      - {key: security.signer_id_policy.full_cert_every_ms, value: 0,
+         want_key: security.signer_id_policy.full_cert_every_ms, want_value: 0}
+    draft:
+      # Either way of saying it (full_cert_every_ms 0, or no digest otherwise) leaves
+      # digest_otherwise false: the loader reads both as a certificate on every message.
+      - {key: security.signer_id_policy.digest_otherwise, equals: false}
+
+  - id: set-truck-headway
+    category: setting
+    live: true
+    prompt: IDM headway 2 s for trucks.
+    runs: {min: 0, max: 0}
+    resolve: [actors.vehicles.drivers.truck.time_headway_s]
+    repair:
+      - {key: actors.vehicles.drivers.truck.time_headway_s, value: "2 s",
+         want_key: actors.vehicles.drivers.truck.time_headway_s, want_value: 2}
+      - {key: drivers.truck.time_headway_s, value: 2,
+         want_key: actors.vehicles.drivers.truck.time_headway_s, want_value: 2}
+    draft:
+      - {key: actors.vehicles.drivers.truck.time_headway_s, approx: 2}
+
+  - id: set-dcc-on
+    category: setting
+    prompt: Turn on decentralised congestion control.
+    runs: {min: 0, max: 0}
+    resolve: [radio.dcc.enabled]
+    repair:
+      - {key: radio.dcc.enabled, value: "on", want_key: radio.dcc.enabled, want_value: true}
+    draft:
+      - {key: radio.dcc.enabled, equals: true}
+
+  - id: set-nr
+    category: setting
+    prompt: Switch the radio to 5G NR sidelink.
+    runs: {min: 0, max: 0}
+    resolve: [radio.rat]
+    repair:
+      - {key: radio.rat, value: "5G NR-V2X", want_key: radio.rat, want_value: nr-v2x-pc5}
+      - {key: radio.rat, value: "NR", want_key: radio.rat, want_value: nr-v2x-pc5}
+    draft:
+      - {key: radio.rat, equals: nr-v2x-pc5}
+
+  - id: set-dsrc
+    category: setting
+    prompt: Go back to plain 802.11p.
+    runs: {min: 0, max: 0}
+    resolve: [radio.rat]
+    repair:
+      - {key: radio.rat, value: "802.11p", want_key: radio.rat, want_value: dsrc-80211p}
+      - {key: radio.rat, value: "DSRC", want_key: radio.rat, want_value: dsrc-80211p}
+
+  - id: set-shadowing
+    category: setting
+    prompt: Set the shadowing standard deviation to 6 dB.
+    runs: {min: 0, max: 0}
+    resolve: [radio.channel_model.shadowing_sigma_db]
+    repair:
+      - {key: radio.channel_model.shadowing_sigma_db, value: "6 dB",
+         want_key: radio.channel_model.shadowing_sigma_db, want_value: 6}
+      - {key: shadowing_sigma_db, value: 6,
+         want_key: radio.channel_model.shadowing_sigma_db, want_value: 6}
+
+  - id: set-penetration
+    category: setting
+    live: true
+    prompt: Only 30% of the cars have a V2X radio.
+    runs: {min: 0, max: 0}
+    resolve: [actors.vehicles.equipped_fraction]
+    repair:
+      - {key: actors.vehicles.equipped_fraction, value: "30%",
+         want_key: actors.vehicles.equipped_fraction, want_value: 0.3}
+      - {key: actors.vehicles.equipped_fraction, value: 30,
+         want_key: actors.vehicles.equipped_fraction, want_value: 0.3}
+    draft:
+      - {key: actors.vehicles.equipped_fraction, approx: 0.3}
+
+  - id: set-pq-signature
+    category: setting
+    prompt: Sign with the post-quantum ML-DSA hybrid.
+    runs: {min: 0, max: 0}
+    resolve: [security.signature]
+    repair:
+      - {key: security.signature, value: "ML-DSA-44 hybrid",
+         want_key: security.signature, want_value: hybrid-mldsa44-ecdsa-p256}
+
+  - id: set-heavy-rain
+    category: setting
+    prompt: Heavy rain.
+    runs: {min: 0, max: 0}
+    resolve: [weather.initial, weather.intensity]
+    repair:
+      - {key: weather.initial, value: "Rain", want_key: weather.initial, want_value: rain}
+
+  - id: set-jaywalking
+    category: setting
+    prompt: Make pedestrians cross against the red light more often.
+    runs: {min: 0, max: 0}
+    resolve: [actors.vru.red_crossing_share]
+
+  - id: set-walk-speed
+    category: setting
+    prompt: Slower pedestrians, walking at 1 m/s.
+    runs: {min: 0, max: 0}
+    resolve: [actors.vru.walking_speed_mps]
+    repair:
+      - {key: actors.vru.walking_speed_mps, value: "1 m/s",
+         want_key: actors.vru.walking_speed_mps, want_value: 1}
+
+  - id: set-eu-region
+    category: setting
+    prompt: Use the European frequency rules.
+    runs: {min: 0, max: 0}
+    resolve: [radio.region]
+
+  - id: set-sensitivity
+    category: setting
+    prompt: Set the receiver sensitivity to -95 dBm.
+    runs: {min: 0, max: 0}
+    resolve: [radio.phy.sensitivity_dbm]
+    repair:
+      - {key: radio.phy.sensitivity_dbm, value: "-95 dBm",
+         want_key: radio.phy.sensitivity_dbm, want_value: -95}
+
+  - id: set-pseudonym-period
+    category: setting
+    live: true
+    prompt: Change pseudonyms every 2 minutes.
+    runs: {min: 0, max: 0}
+    resolve: [security.pseudonym_change.period_s]
+    repair:
+      - {key: security.pseudonym_change.period_s, value: "2 min",
+         want_key: security.pseudonym_change.period_s, want_value: 120}
+    draft:
+      - {key: security.pseudonym_change.period_s, approx: 120}
+
+  - id: set-bsm-rate
+    category: setting
+    prompt: Send BSMs at 5 Hz instead of 10.
+    runs: {min: 0, max: 0}
+    resolve: [messages.rate_hz]
+    repair:
+      - {key: messages.rate_hz, value: "5 Hz", want_key: messages.rate_hz, want_value: 5}
+      - {key: messages.rate_hz, value: "200 ms", want_key: messages.rate_hz, want_value: 5}
+
+  - id: set-no-buildings
+    category: setting
+    prompt: Turn off building shadowing.
+    runs: {min: 0, max: 0}
+    resolve: [world.buildings.enabled]
+    repair:
+      - {key: world.buildings.enabled, value: "off", want_key: world.buildings.enabled, want_value: false}
+
+  - id: set-fading
+    category: setting
+    prompt: Use Nakagami fading.
+    runs: {min: 0, max: 0}
+    resolve: [radio.channel_model.fading]
+
+  - id: set-rsus
+    category: setting
+    prompt: Add 4 roadside units.
+    runs: {min: 0, max: 0}
+    resolve: [actors.rsu_placement.count]
+
+  - id: set-right-on-red
+    category: setting
+    prompt: Allow right turn on red.
+    runs: {min: 0, max: 0}
+    resolve: [traffic.right_turn_on_red]
+    repair:
+      - {key: traffic.right_turn_on_red, value: "yes", want_key: traffic.right_turn_on_red, want_value: true}
+
+  - id: set-rtk
+    category: setting
+    prompt: Give every car RTK GPS so positions are precise.
+    runs: {min: 0, max: 0}
+    resolve: [actors.vehicles.gnss.rtk]
+
+  - id: set-reaction
+    category: setting
+    prompt: Drivers react slower, 1.5 seconds reaction time.
+    runs: {min: 0, max: 0}
+    resolve: [actors.vehicles.drivers.reaction_time_s]
+    repair:
+      - {key: reaction_time_s, value: "1.5 s",
+         want_key: actors.vehicles.drivers.reaction_time_s, want_value: 1.5}
+
+  - id: set-green-wave
+    category: setting
+    prompt: Coordinate the traffic lights into a green wave.
+    runs: {min: 0, max: 0}
+    resolve: [world.signals.coordinate]
+
+  - id: set-path-loss
+    category: setting
+    prompt: Path loss exponent 2.7 please.
+    runs: {min: 0, max: 0}
+    resolve: [radio.channel_model.path_loss_exponent]
+
+  - id: set-gridlock
+    category: setting
+    prompt: Clear gridlocked vehicles after 120 seconds stuck.
+    runs: {min: 0, max: 0}
+    resolve: [traffic.gridlock_timeout_s]
+    repair:
+      - {key: traffic.gridlock_timeout_s, value: "2 min",
+         want_key: traffic.gridlock_timeout_s, want_value: 120}
+
+  # ------------------------------------------------------------ several settings at once
+  - id: multi-portland-rush
+    category: multi
+    live: true
+    prompt: Set up a rush-hour run in Portland, OR at 4000 vehicles per hour, 20% trucks, on LTE-V2X, 10 minutes long.
+    runs: {min: 0, max: 0}
+    draft:
+      - {key: city, equals: portland}
+      - {key: actors.vehicles.demand.rate_veh_per_h, approx: 4000}
+      - {key: actors.vehicles.classes.truck.fraction, approx: 0.2}
+      - {key: radio.rat, equals: lte-v2x-pc5}
+      - {key: time.duration_s, approx: 600}
+
+  - id: multi-attack-detect
+    category: multi
+    live: true
+    prompt: Configure 5% constant-position attackers, turn the misbehaviour detectors on, and change pseudonyms every 60 s.
+    runs: {min: 0, max: 0}
+    draft:
+      - {key: threats.attackers, has_id: threat/attacker/legacy/ConstPos}
+      - {key: detection.local, has_id: detect/}
+      - {key: security.pseudonym_change.period_s, approx: 60}
+
+  - id: multi-radio-tuning
+    category: multi
+    prompt: Transmit at 23 dBm with 3 dBi antennas and a 6 dB noise figure.
+    runs: {min: 0, max: 0}
+    resolve: [radio.devices.obu.tx_power_dbm, radio.devices.obu.antenna_gain_dbi, radio.phy.noise_figure_db]
+
+  # ------------------------------------------------------------ cities and scenarios
+  - id: city-chicago
+    category: city
+    prompt: Move this to Chicago.
+    runs: {min: 0, max: 0}
+    draft:
+      - {key: city, equals: chicago}
+
+  - id: scenario-highway
+    category: city
+    prompt: Load the highway congestion scenario.
+    runs: {min: 0, max: 0}
+    resolve: []
+
+  # ------------------------------------------------------------ refusals, explained
+  - id: refuse-power-60
+    category: refusal
+    live: true
+    prompt: Set the transmit power to 60 dBm.
+    asks: true
+    refuse:
+      - {key: radio.devices.obu.tx_power_dbm, value: 60, words: ["tx_power_dbm"]}
+    draft:
+      - {key: radio.devices.obu.tx_power_dbm, max: 40}
+
+  - id: refuse-sybil
+    category: refusal
+    prompt: Add a Sybil attacker.
+    asks: true
+
+  - id: refuse-fraction
+    category: refusal
+    prompt: Set the equipped fraction to 1.5.
+    asks: true
+    refuse:
+      - {key: actors.vehicles.equipped_fraction, value: 1.5, words: ["equipped_fraction"]}
+
+  - id: refuse-rat
+    category: refusal
+    prompt: Use Wi-Fi 7 for the V2X radio.
+    asks: true
+    refuse:
+      - {key: radio.rat, value: "wifi-7", words: ["dsrc-80211p", "lte-v2x-pc5"]}
+
+  # ------------------------------------------------------------ run control
+  - id: control-start
+    category: control
+    live: true
+    prompt: Start the run.
+    runs: {min: 0, max: 1}
+    calls:
+      - {tool: run_control, args: {action: start}}
+    no_calls: [simulate]
+
+  - id: control-pause
+    category: control
+    live: true
+    follow_up_of: control-start
+    prompt: Pause it.
+    runs: {min: 0, max: 1}
+    calls:
+      - {tool: run_control, args: {action: pause}}
+    no_calls: [simulate]
+
+  - id: control-speed
+    category: control
+    follow_up_of: control-pause
+    prompt: Resume at 4x speed.
+    runs: {min: 0, max: 1}
+    calls:
+      - {tool: run_control, args: {action: speed, speed: 4}}
+
+  - id: control-restart
+    category: control
+    follow_up_of: control-speed
+    prompt: Restart it from the beginning.
+    runs: {min: 0, max: 1}
+    no_calls: [simulate]
+
+  - id: control-duration
+    category: control
+    live: true
+    prompt: Make the run 90 seconds long.
+    runs: {min: 0, max: 0}
+    resolve: [time.duration_s]
+    repair:
+      - {key: time.duration_s, value: "1.5 min", want_key: time.duration_s, want_value: 90}
+    draft:
+      - {key: time.duration_s, approx: 90}
+
+  # ------------------------------------------------------------ comparisons and sweeps
+  - id: compare-dsrc-lte
+    category: compare
+    live: true
+    prompt: Run the grid for 20 s at 1500 veh/h with DSRC, then the same with LTE-V2X, and compare delivery.
+    runs: {min: 2, max: 2}
+    compares: true
+    differ: [radio.rat]
+    expect:
+      - {key: time.duration_s, approx: 20, all: true}
+    mentions: [[pdr, delivery, reception]]
+
+  - id: compare-previous
+    category: compare
+    live: true
+    follow_up_of: compare-dsrc-lte
+    prompt: Now double the traffic on the LTE run and compare with the previous run.
+    runs: {min: 1, max: 2}
+    compares: true
+    mentions: [[pdr, delivery, cbr, channel, busy]]
+
+  - id: sweep-power
+    category: compare
+    prompt: Sweep the transmit power over 10, 20 and 30 dBm, 15 s each at 1500 veh/h, and tell me how delivery changes.
+    runs: {min: 3, max: 3}
+    compares: true
+    differ: [radio.devices.obu.tx_power_dbm]
+    mentions: [[pdr, delivery]]
+
+  - id: sensitivity-rate
+    category: compare
+    prompt: How sensitive is the channel load to the BSM rate? Try 5 Hz and 10 Hz for 15 s at 1500 veh/h.
+    runs: {min: 2, max: 2}
+    compares: true
+    differ: [messages.rate_hz]
+    mentions: [[cbr, channel busy, busy ratio, channel load]]
+
+  # ------------------------------------------------------------ analysis from measured numbers
+  - id: analysis-pdr
+    category: analysis
+    live: true
+    follow_up_of: compare-previous
+    prompt: What was the packet delivery ratio of the last run?
+    runs: {min: 0, max: 1}
+    no_calls: [simulate]
+    mentions: [[pdr, delivery]]
+
+  - id: analysis-latency
+    category: analysis
+    follow_up_of: sweep-power
+    prompt: What was the 95th-percentile latency at 30 dBm, in milliseconds?
+    runs: {min: 0, max: 1}
+    no_calls: [simulate]
+    mentions: [[ms, millisecond]]
+
+  - id: analysis-cbr-limit
+    category: analysis
+    follow_up_of: sensitivity-rate
+    prompt: Was the channel busy ratio inside the J2945/1 limit in both runs?
+    runs: {min: 0, max: 1}
+    no_calls: [simulate]
+    mentions: [[cbr, busy]]
+
+  - id: anomaly-flag
+    category: analysis
+    prompt: Run 20 s of the grid at 20000 veh/h with a constant jammer in the middle and flag anything wrong.
+    runs: {min: 1, max: 1}
+    findings: [radio.jammed, channel.congested, radio.low-pdr, radio.range]
+    mentions: [[jam, interference, pdr, delivery]]

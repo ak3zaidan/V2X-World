@@ -3673,3 +3673,22 @@ Merged with --no-ff, in this order: perf (saturated-run speedup), protofix (secu
   - The loader does not refuse `truck`, `bus` and `motorcycle` driver parameters, or the RSU and VRU device parameters, when there is no such actor.
   - RTOR is dead on the procedural grid.
 - **Cost:** a full sweep from an empty cache takes about 47 minutes on two threads, and the saturated family dominates. With the cache it takes about 8 minutes. The nakagami context fix is committed but has not been re-swept. Clippy has not been run.
+
+## 2026-10-13 — agent harness robustness (branch of d06658f)
+
+Track: the built-in agent (`crates/v2xw-copilot`, the agent host in `v2xw-cli`).
+
+- **Eval suite** `crates/v2xw-copilot/evals/harness.yaml`: 48 cases. They cover setting things by plain name or synonym, several settings at once, cities, refusals, run control, A/B tests, compare-with-previous, sweeps and analysis. The offline half (`tests/harness_eval.rs`, no model) checks key resolution, value repair and refusal text. It scored 20/60 on the harness as received and scores 60/60 now. The live half is `examples/agent_eval.rs --suite …harness.yaml` with new `draft` / `calls` / `no_calls` checks. Its reports are in `docs/validation/agent-harness-live-{1,2}.md`. The live runs used 62 model calls with gpt-6.1-sol. Run 1 passed 11/15 and run 2 passed 8/10. Every remaining failure was in the scoring, not the agent: two expectations were wrong about the engine (tx default 23 dBm; `digest_otherwise: false` already means a cert on every message), one explanation phrase was missing from the vocabulary, and run status was not counted as a source. All four are fixed in the suite and runner but have not been re-run live, because the call budget was spent.
+- **Fixes**:
+  - The model was being served the old all-words surface search under a duplicate `find_settings` tool name. There is now one tool, with synonyms, stop words, plurals and ranges.
+  - `repair.rs` now reads a change against the published index: short keys, values with units (`2 min`, `30%`, `200 ms` → 5 Hz), choice synonyms (`C-V2X mode 4`, `802.11p`, `5G NR`), on/off. It also adds companion settings: a cert on every message sets `digest_otherwise` to false, and a PQ signature switches to an OBU that prices it, as in `pq-signatures.yaml`.
+  - Refusals now carry the field's choices, range, unit and recommended range.
+  - `changes` is accepted in any shape models write.
+  - `run_control` understands action synonyms (restart = seek 0). `start` used to start paused at maximum speed; it now plays.
+  - `setup` no longer caps the duration.
+  - Both providers retry timeouts, resets and 408/409/425.
+  - A history budget sends earlier turns' long tool results cut once the conversation passes 120k characters.
+  - Studio runs are handed to the agent (`Agent::adopt_run`), so "compare with the previous run" reaches runs the person made.
+  - Numbers about earlier runs are read from a tool in the same turn.
+- **Checks**: copilot lib 112/112, tests control 5/5, agent 7/7, harness_eval 1/1; `v2xw-cli` bins build. Clippy on copilot is blocked by an existing `v2xw-radio` lint error (`bler_nr.rs:222`, FRAC_1_PI). No engine output changes; digests unaffected.
+- **Open**: run the full live suite (`--all`, about 110 calls). Studio-run adoption has no live end-to-end test yet: it is unit-tested, but the host wiring has not been exercised with a browser.

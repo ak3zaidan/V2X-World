@@ -141,6 +141,7 @@ pub mod insight;
 pub mod openai;
 pub mod openai_responses;
 pub mod provider;
+pub mod repair;
 pub mod scenario;
 pub mod secret;
 pub mod session;
