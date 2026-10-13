@@ -764,8 +764,23 @@ impl NodeSecurity {
     /// Separate from [`NodeSecurity::verify_parsed`] because the caller has to resolve the
     /// signer's certificate in between, out of its own bounded cache — which is what makes
     /// P2PCD a cost rather than a formality.
+    ///
+    /// Every receiver of one frame is handed the same bytes, one after another, so the
+    /// last decode is kept per thread and reused when the profile and the bytes match.
+    /// Decoding is a pure function of those two, so the reuse cannot change a verdict.
     pub fn parse(&self, bytes: &[u8]) -> Option<ParsedSecured> {
-        self.envelope.parse(bytes).ok()
+        let profile = SecurityEnvelopeInfo::profile(&self.envelope);
+        LAST_PARSE.with(|cell| {
+            let mut last = cell.borrow_mut();
+            if let Some((p, b, parsed)) = last.as_ref() {
+                if *p == profile && b.as_slice() == bytes {
+                    return parsed.clone();
+                }
+            }
+            let parsed = self.envelope.parse(bytes).ok();
+            *last = Some((profile, bytes.to_vec(), parsed.clone()));
+            parsed
+        })
     }
 
     /// Checks a parsed SPDU's signature against `certificate`.
@@ -937,4 +952,11 @@ mod tests {
         };
         assert_eq!(sizes(CryptoMode::Real), sizes(CryptoMode::Modeled));
     }
+}
+
+type LastParse = Option<(EnvelopeProfile, Vec<u8>, Option<ParsedSecured>)>;
+
+thread_local! {
+    /// The last SPDU [`NodeSecurity::parse`] decoded on this thread (see there).
+    static LAST_PARSE: std::cell::RefCell<LastParse> = const { std::cell::RefCell::new(None) };
 }

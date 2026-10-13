@@ -278,6 +278,25 @@ mod tests {
         assert_eq!(empty.finish(), sha256(b""));
     }
 
+    /// The threaded hasher digests exactly what the serial one does, across batches,
+    /// mid-stream snapshots and a tail that never filled a batch.
+    #[test]
+    fn threaded_sha256_matches_the_serial_digest() {
+        let payload: Vec<u8> = (0..900_000u32).map(|i| (i * 31 % 251) as u8).collect();
+        let mut t = ThreadedSha256::new();
+        for (k, chunk) in payload.chunks(7_919).enumerate() {
+            t.update(chunk);
+            if k == 40 {
+                let upto = ((k + 1) * 7_919).min(payload.len());
+                assert_eq!(t.finish_hex(), sha256_hex(&payload[..upto]));
+            }
+        }
+        assert_eq!(t.finish_hex(), sha256_hex(&payload));
+        let mut short = ThreadedSha256::new();
+        short.update(b"abc");
+        assert_eq!(short.finish_hex(), sha256_hex(b"abc"));
+    }
+
     /// `write` reports the whole buffer as written, so `write_all` never loops, and the
     /// two halves of a split write digest as one stream.
     #[test]
@@ -307,5 +326,160 @@ mod tests {
             String::from_utf8(canonical_json(&a).unwrap()).unwrap(),
             r#"{"a":{"x":3,"y":2},"b":1}"#
         );
+    }
+}
+
+/// A [`Sha256Writer`] whose hashing runs on its own thread, for a stream digest computed
+/// beside a hot loop (the run's record digest).
+///
+/// `update` only appends to a batch; each full batch goes over a channel to one hasher
+/// thread, which absorbs the batches in the order they were sent. Chunk boundaries are
+/// invisible to SHA-256, so the digest is the serial one byte for byte. The thread is
+/// started at the first full batch, so a short stream never starts one, and where threads
+/// are unavailable (wasm, or a failed spawn) the batches are hashed inline.
+pub struct ThreadedSha256 {
+    pending: Vec<u8>,
+    inline: Sha256Writer,
+    worker: Option<HashWorker>,
+}
+
+/// How many bytes [`ThreadedSha256`] gathers before handing a batch to its thread.
+const THREADED_BATCH_BYTES: usize = 256 * 1024;
+
+enum HashMsg {
+    Data(Vec<u8>),
+    /// The digest so far plus this unsent tail, answered on the channel given.
+    Snapshot(Vec<u8>, std::sync::mpsc::Sender<String>),
+}
+
+struct HashWorker {
+    tx: Option<std::sync::mpsc::Sender<HashMsg>>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl HashWorker {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn() -> Option<Self> {
+        let (tx, rx) = std::sync::mpsc::channel::<HashMsg>();
+        let handle = std::thread::Builder::new()
+            .name("v2xw-sha256".into())
+            .spawn(move || {
+                let mut h = Sha256Writer::new();
+                for msg in rx {
+                    match msg {
+                        HashMsg::Data(b) => h.update(&b),
+                        HashMsg::Snapshot(tail, reply) => {
+                            let mut s = h.clone();
+                            s.update(&tail);
+                            let _ = reply.send(s.finish_hex());
+                        }
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self {
+            tx: Some(tx),
+            handle: Some(handle),
+        })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn spawn() -> Option<Self> {
+        None
+    }
+
+    fn send(&self, msg: HashMsg) {
+        if let Some(tx) = &self.tx
+            && tx.send(msg).is_err()
+        {
+            unreachable!("the hasher thread ends only when its sender is dropped");
+        }
+    }
+}
+
+impl Drop for HashWorker {
+    fn drop(&mut self) {
+        drop(self.tx.take());
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+impl ThreadedSha256 {
+    /// A fresh hasher over zero bytes; no thread yet.
+    pub fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+            inline: Sha256Writer::new(),
+            worker: None,
+        }
+    }
+
+    /// Absorbs `bytes`.
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.pending.extend_from_slice(bytes);
+        if self.pending.len() >= THREADED_BATCH_BYTES {
+            self.flush_batch();
+        }
+    }
+
+    fn flush_batch(&mut self) {
+        if self.worker.is_none() && self.inline.bytes_written() == 0 {
+            self.worker = HashWorker::spawn();
+        }
+        match &self.worker {
+            Some(w) => {
+                let batch = std::mem::replace(
+                    &mut self.pending,
+                    Vec::with_capacity(THREADED_BATCH_BYTES + 4096),
+                );
+                w.send(HashMsg::Data(batch));
+            }
+            None => {
+                self.inline.update(&self.pending);
+                self.pending.clear();
+            }
+        }
+    }
+
+    /// The digest of everything absorbed so far, as lower-case hex; the stream can go on.
+    pub fn finish_hex(&self) -> String {
+        match &self.worker {
+            Some(w) => {
+                let (reply, answer) = std::sync::mpsc::channel();
+                w.send(HashMsg::Snapshot(self.pending.clone(), reply));
+                answer
+                    .recv()
+                    .unwrap_or_else(|_| unreachable!("the hasher thread answers every snapshot"))
+            }
+            None => {
+                let mut s = self.inline.clone();
+                s.update(&self.pending);
+                s.finish_hex()
+            }
+        }
+    }
+}
+
+impl core::fmt::Debug for ThreadedSha256 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ThreadedSha256")
+            .field("pending", &self.pending.len())
+            .field("threaded", &self.worker.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for ThreadedSha256 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl core::fmt::Write for ThreadedSha256 {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.update(s.as_bytes());
+        Ok(())
     }
 }

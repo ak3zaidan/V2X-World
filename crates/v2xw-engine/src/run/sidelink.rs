@@ -65,7 +65,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use v2xw_core::card::Tier;
-use v2xw_core::event::EventClass;
 use v2xw_core::ids::{FrameSeq, NodeId};
 use v2xw_core::time::{Duration, SimTime};
 use v2xw_radio::sidelink::{CrLimitTable, SlMcsSpec};
@@ -77,7 +76,6 @@ use v2xw_radio::{
 use super::{Engine, FrameState, LinkOutcome};
 use crate::ctx::{EngineCtx, RunRecorder};
 use crate::error::Result;
-use crate::event::Event;
 use crate::scenario::Scenario;
 use crate::scenario::schema::Rat;
 use crate::wiring::{CongestionChoice, SidelinkChoice, SidelinkProfile};
@@ -779,14 +777,7 @@ impl Engine {
             .sidelink
             .as_ref()
             .map_or(self.dsrc_channel, |sl| sl.channel);
-        self.scheduler.schedule(
-            at,
-            EventClass::MacTimer,
-            Event::MacTimer {
-                node,
-                channel: channel.0,
-            },
-        );
+        self.schedule_mac_timer(at, node, channel.0);
     }
 
     /// A transport block goes on the air: the receivers measure its energy, and it and

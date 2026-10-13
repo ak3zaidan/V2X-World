@@ -884,6 +884,13 @@ pub struct Engine {
     /// poll of a saturated run cost O(nodes x queue). A superset: entries whose frame has
     /// ended or gone are skipped when read and pruned at the node's next MAC poll.
     on_air_tx: BTreeMap<NodeId, BTreeSet<FrameSeq>>,
+    /// The MAC timers queued and not yet dispatched, as `(instant, node, channel)`. A
+    /// second timer for the same node and channel at the same instant would poll the same
+    /// state machine twice in one nanosecond, and in a saturated run 93 % of all timer
+    /// events (4.2M of 4.5M) were such repeats, so [`Engine::schedule_mac_timer`] drops
+    /// it: the one already queued is the earliest by sequence, the one the kernel
+    /// dispatches first, so the order of every other event is unchanged.
+    mac_timers_queued: BTreeSet<(SimTime, NodeId, u16)>,
     /// Frames whose signature has finished but which the MAC has not yet been handed,
     /// per transmitter, keyed by (ready instant, frame) so the walk is in time order.
     pending_tx: BTreeMap<NodeId, Vec<(SimTime, FrameSeq)>>,
@@ -1415,6 +1422,7 @@ impl Engine {
             frames: BTreeMap::new(),
             live_at_rx: BTreeMap::new(),
             on_air_tx: BTreeMap::new(),
+            mac_timers_queued: BTreeSet::new(),
             pending_tx: BTreeMap::new(),
             phase2: None,
             pseudonym_policy: None,
@@ -2044,6 +2052,7 @@ impl Engine {
                     task: crate::event::NodeTask::Reassembly,
                 } => self.on_reassembly_timer(recorder, node),
                 Event::MacTimer { node, channel } => {
+                    self.mac_timers_queued.remove(&(key.time, node, channel));
                     self.on_mac_timer(node, ChannelId(channel), horizon);
                     if self
                         .sidelink
@@ -3996,9 +4005,33 @@ impl Engine {
         // What each cooperative vehicle heard, for its CACC or platoon law (`run/coop.rs`).
         self.feed_cooperative(&results, now);
 
-        for (_, _, records, _) in &results {
-            for rec in records {
-                self.providers.on_event(rec);
+        // The metric views of the node records, decoded from their JSON in parallel over
+        // the nodes (a pure function of each record) and handed over in the same order, so
+        // the providers see exactly what `on_event` would have decoded on this thread.
+        let (want_tx, want_rx) = (
+            self.providers.wants("node.tx"),
+            self.providers.wants("node.rx"),
+        );
+        let mut views: Vec<Vec<Option<v2xw_metrics::Predecoded>>> = results
+            .par_iter()
+            .map(|(_, _, records, _)| {
+                records
+                    .iter()
+                    .map(|rec| match rec.channel {
+                        "node.tx" if want_tx => {
+                            v2xw_metrics::Predecoded::of::<v2xw_metrics::channels::NodeTxView>(rec)
+                        }
+                        "node.rx" if want_rx => {
+                            v2xw_metrics::Predecoded::of::<v2xw_metrics::channels::NodeRxView>(rec)
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect();
+        for ((_, _, records, _), node_views) in results.iter().zip(views.iter_mut()) {
+            for (rec, view) in records.iter().zip(node_views.drain(..)) {
+                self.providers.on_event_predecoded(rec, view);
                 recorder.write(now, rec);
                 self.report.records += 1;
             }
@@ -4957,14 +4990,7 @@ impl Engine {
         let mut on_air_until = ready;
         let queued = self.mac.is_some() || self.sidelink.is_some();
         if queued {
-            self.scheduler.schedule(
-                ready,
-                EventClass::MacTimer,
-                Event::MacTimer {
-                    node,
-                    channel: channel.0,
-                },
-            );
+            self.schedule_mac_timer(ready, node, channel.0);
         }
         for (seq, state) in frames {
             let air = state.air;
@@ -5283,6 +5309,15 @@ impl Engine {
     /// carrier sense heard the earlier one below the CCA threshold, or not at all, and the
     /// loss is then [`LossCause::HiddenTerminal`]. Two frames that start in the same
     /// nanosecond (equal backoff expiry) stay a plain [`LossCause::Collision`].
+    /// Queues one node's MAC timer at `at`, unless one for the same node and channel is
+    /// already queued at that instant (see [`Engine::mac_timers_queued`]).
+    pub(crate) fn schedule_mac_timer(&mut self, at: SimTime, node: NodeId, channel: u16) {
+        if self.mac_timers_queued.insert((at, node, channel)) {
+            self.scheduler
+                .schedule(at, EventClass::MacTimer, Event::MacTimer { node, channel });
+        }
+    }
+
     fn on_mac_timer(&mut self, node: NodeId, channel: ChannelId, horizon: SimTime) {
         if self.sidelink.is_some() {
             self.on_sidelink_timer(node, horizon);
@@ -5418,14 +5453,7 @@ impl Engine {
                     v2xw_radio::GateDecision::DelayUntil(t) => {
                         if t <= horizon {
                             self.pending_tx.entry(node).or_default().push((t, frame));
-                            self.scheduler.schedule(
-                                t,
-                                EventClass::MacTimer,
-                                Event::MacTimer {
-                                    node,
-                                    channel: channel.0,
-                                },
-                            );
+                            self.schedule_mac_timer(t, node, channel.0);
                         } else {
                             // The gate opens after the run: the frame never goes on air.
                             self.frames.remove(&frame);
@@ -5569,14 +5597,7 @@ impl Engine {
         if busy {
             let clear = self.medium_idle_at(node, now);
             if clear > now && clear <= horizon {
-                self.scheduler.schedule(
-                    clear,
-                    EventClass::MacTimer,
-                    Event::MacTimer {
-                        node,
-                        channel: channel.0,
-                    },
-                );
+                self.schedule_mac_timer(clear, node, channel.0);
             }
         }
 
@@ -5590,14 +5611,7 @@ impl Engine {
             // instant and the loop would not advance.
             let at = next.max(now + 1);
             if at <= horizon {
-                self.scheduler.schedule(
-                    at,
-                    EventClass::MacTimer,
-                    Event::MacTimer {
-                        node,
-                        channel: channel.0,
-                    },
-                );
+                self.schedule_mac_timer(at, node, channel.0);
             }
         }
     }

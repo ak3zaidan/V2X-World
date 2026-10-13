@@ -238,9 +238,15 @@ impl RunRecorder for MemoryRecorder {
 /// `digest_hex` agrees with [`MemoryRecorder::digest_hex`] record for record; the two are
 /// checked against each other in this module's tests, because a digest that is only
 /// self-consistent proves nothing about the stream it claims to cover.
+///
+/// # The hashing runs on its own thread
+///
+/// `write` only appends the record's bytes to a batch; full batches go over a channel to
+/// one hasher thread ([`v2xw_core::hash::ThreadedSha256`]), which feeds them to SHA-256
+/// in the order they were sent, so the digest is the serial one byte for byte.
 pub struct DigestRecorder {
-    hasher: v2xw_core::hash::Sha256Writer,
-    frame_hasher: v2xw_core::hash::Sha256Writer,
+    hasher: v2xw_core::hash::ThreadedSha256,
+    frame_hasher: v2xw_core::hash::ThreadedSha256,
     written: u64,
     frames: u64,
     per_channel: std::collections::BTreeMap<String, (u64, u64)>,
@@ -268,8 +274,8 @@ impl DigestRecorder {
     /// An empty recorder.
     pub fn new() -> Self {
         Self {
-            hasher: v2xw_core::hash::Sha256Writer::new(),
-            frame_hasher: v2xw_core::hash::Sha256Writer::new(),
+            hasher: v2xw_core::hash::ThreadedSha256::new(),
+            frame_hasher: v2xw_core::hash::ThreadedSha256::new(),
             written: 0,
             frames: 0,
             per_channel: std::collections::BTreeMap::new(),
@@ -293,7 +299,7 @@ impl DigestRecorder {
 
     /// The digest over every record, in order: `SHA-256(t ‖ channel ‖ visibility ‖ json)*`.
     pub fn digest_hex(&self) -> String {
-        self.hasher.clone().finish_hex()
+        self.hasher.finish_hex()
     }
 
     /// The digest over every VWP frame, in order: `SHA-256(frame bytes)*`.
@@ -302,7 +308,7 @@ impl DigestRecorder {
     /// [`MemoryRecorder::frame_digest_hex`] gives: the record digest is a published
     /// number and adding a second stream to it would move it for no determinism reason.
     pub fn frame_digest_hex(&self) -> String {
-        self.frame_hasher.clone().finish_hex()
+        self.frame_hasher.finish_hex()
     }
 }
 
@@ -310,7 +316,8 @@ impl RunRecorder for DigestRecorder {
     fn write(&mut self, at: SimTime, record: &OwnedRecord) {
         self.hasher.update(&at.to_le_bytes());
         self.hasher.update(record.channel.as_bytes());
-        self.hasher.update(record.visibility.to_string().as_bytes());
+        let _ =
+            core::fmt::Write::write_fmt(&mut self.hasher, format_args!("{}", record.visibility));
         self.hasher.update(&record.json);
         self.written += 1;
         // Looked up by `&str` first: a channel's name is allocated once, not per record.
