@@ -240,5 +240,125 @@ own determinism review.
   curve.
 - OpenCV2X's 2 × 12 RB pool is reproduced; matching its curve needs 190 B in one
   sub-channel, which the TBS arithmetic here does not allow at MCS 7 (§1). The 120 veh/km
-  gap is 6.5 points under that bound, 9.3 on the harness pool.
+  gap is 6.5 points under that bound, 9.3 on the harness pool. §7.4 confirms from
+  OpenCV2X's own validation configuration that it does put 190 B in one 15-RB
+  sub-channel; this engine's QPSK r0.5 abstraction does not, so the LTE TBS table
+  (TS 36.213 Table 7.1.7.2.1-1) for the sidelink is the missing piece.
 - Labelling exposed-node deferrals (§4).
+
+## 7. Against the reference code: Veins, Artery, Vanetza, OpenCV2X (2026-10-13)
+
+Read from shallow clones of `sommer/veins` (master), `riebl/artery` (master),
+`riebl/vanetza` (master) and `brianmc95/simulte` + `brianmc95/OpenCV2X` (master), only
+the functions named. Each row was measured before and after on this branch.
+
+### 7.1 The 802.11p frame error model against Veins `Decider80211p`
+
+Veins (`checkIfSignalOk`, `packetOk`): the **minimum** SINR over `[start + 32 µs, end]`
+(the preamble is ignored), then two independent trials, the 24-bit SIGNAL field at
+BPSK 1/2 and `16 + 8·L + 6` DATA bits at the frame's MCS, both through `NistErrorRate`
+(the ns-3 polynomials). This engine uses the same NIST curves, but apportions the SIGNAL
+and DATA bits to each SINR window by time (ns-3 `InterferenceHelper` chunks).
+`cargo test -p v2xw-radio --lib veins -- --nocapture`; 300 B at 6 Mbit/s, −85 dBm, one
+interferer at the given SIR; cells are success probability, this engine / Veins:
+
+| interferer covers | 0 dB | 3 dB | 6 dB | 9 dB | 12 dB | 15 dB |
+|---|---|---|---|---|---|---|
+| the whole frame | 0.000 / 0.000 | 0.000 / 0.000 | 0.000 / 0.000 | 0.998 / 0.998 | 1.000 / 1.000 | 1.000 / 1.000 |
+| its second half | 0.000 / 0.000 | 0.000 / 0.000 | 0.004 / 0.000 | 0.999 / 0.998 | 1.000 / 1.000 | 1.000 / 1.000 |
+| its last tenth | 0.000 / 0.000 | 0.000 / 0.000 | **0.331 / 0.000** | 1.000 / 0.998 | 1.000 / 1.000 | 1.000 / 1.000 |
+| the preamble only | 1.000 / 1.000 | 1.000 / 1.000 | 1.000 / 1.000 | 1.000 / 1.000 | 1.000 / 1.000 | 1.000 / 1.000 |
+
+The two agree exactly when interference is constant over the frame, which the test
+asserts. A short overlap is where they part: Veins applies the worst window to every bit,
+so a 10 % tail overlap at 6 dB loses the frame in Veins and survives a third of the time
+here. This engine is never the more pessimistic of the two (asserted on all 24 cells).
+Interference accumulation is the same in both: every concurrent arrival is summed in mW
+over each window. A preamble-only interferer passes the error model in both. In Veins it
+is ignored; at this engine's high tier it can still cost the preamble lock (§2,
+`preamble-missed`).
+
+### 7.2 CAM generation against Artery `CaService`
+
+`crates/v2xw-msg/tests/artery_cam.rs` transcribes `checkTriggeringConditions`, `sendCam`
+(the 500 ms low-frequency container) and `genCamDcc` (the DCC interval clamped to
+`[minInterval, maxInterval]`), with the `CaService.ned` defaults: 0.1 s, 1 s, 4°, 4 m and
+0.5 m/s. Both drive the same 60 s trajectory (cruise, braking, a crawl, a stop, a turn,
+hard acceleration, a curve), sampled every 100 ms:
+
+| DCC gate | this engine before | after | Artery | mismatched checks before → after |
+|---:|---:|---:|---:|---:|
+| 0 ms | 181 CAMs | 181 | 181 | 0 → 0 |
+| 100 ms | 181 | 181 | 181 | 0 → 0 |
+| 250 ms | 159 | 159 | 159 | 0 → 0 |
+| 500 ms | 104 | 104 | 104 | 0 → 0 |
+| 1,000 ms | 60 | 60 | 60 | 0 → 0 |
+| 2,000 ms | **30** | 60 | 60 | **30** → 0 |
+
+Fixed: a DCC gate longer than `T_GenCamMax` silenced the CAM past its 1 s heartbeat.
+EN 302 637-2 V1.3.2 §6.1.3 bounds `T_GenCam_DCC` to `[T_GenCamMin, T_GenCamMax]`. The
+low-frequency container decisions agree in every case.
+
+### 7.3 DCC gatekeeper against Vanetza (TS 102 687 Annex B)
+
+Vanetza's `LimericBudget` implements both equations of Annex B. B.1 is
+`T_on/δ` clamped to 25 ms–1 s. B.2 applies when δ changes while the gate is closed: the
+remaining wait is rescaled to the new δ. This engine had B.1 only, so a gate stayed closed
+for its old interval after the channel cleared. B.2 is now applied on every δ update
+(`AdaptiveDcc::regate`), and the conformance floor's wait is kept. Test
+`a_delta_change_while_the_gate_is_closed_rescales_the_wait`: a 400 µs frame at δ = 0.004
+closes the gate for 100 ms. If δ doubles half-way, the gate opens at 75 ms (Vanetza's
+value) instead of 100 ms. If δ halves, it opens at 150 ms. **Output shift:** runs with
+`dcc/etsi/adaptive-ts102687`.
+
+### 7.4 OpenCV2X Mode 4 SPS, line by line
+
+| mechanism | OpenCV2X (`LteMacVUeMode4.cc`, `LtePhyVUeMode4.cc`) | this engine |
+|---|---|---|
+| reselection counter | `intuniform(5,15)` at RRI ≥ 100 ms, `(10,30)` at 50 ms, `(25,75)` at 20 ms | same (`sps.rs`, TS 36.321 §5.14.1.1) |
+| keep at expiry | `probResourceKeep` (validation runs use 0.0) | same parameter |
+| sensing window | `pStep · 10` subframes (1,000 at 100 ms) | 1,000-subframe ring |
+| exclusion relaxation | lowers RSRP exclusion by threshold steps until < 80 % of CSRs are excluded | 3 dB steps until 20 % remain (TS 36.213 §14.1.1.6) |
+| not-sensed subframes (half duplex) | removed from the candidates | removed (`q·RRI` exclusion) |
+| choice | uniform over the best 20 % by S-RSSI | same |
+| sub-channels per 190 B packet | **1**: `maxSubchannel-NumberPSSCH = 1`, 15-RB sub-channels | from the TBS arithmetic (below) |
+
+No mechanism differs. The packet size is where the two diverge. OpenCV2X's own validation
+config (`scenarios/Mode4-Validation/omnetpp.ini`, `mcs7_sidelink_config.xml`) uses 2 × 15 RB
+sub-channels, MCS 7, no retransmission, and caps a 190 B packet at one sub-channel. The
+earlier assumption from McCarthy Table II was 2 × 12 RB. Measured on the pools,
+`cargo test -p v2xw-interop opencv2x_tests -- --ignored --nocapture` (MAD in PDR points
+against Fig. 3):
+
+| pool | 190 B takes | 60 veh/km | 120 veh/km | IPG mean at 388 m, 120 veh/km |
+|---|---:|---:|---:|---:|
+| harness 4 × 12 RB / 50 PRB, QPSK r0.5 | 2 | 4.1 | 9.3 | 180 ms |
+| 2 × 12 RB, QPSK r0.5 | 2 | 7.4 | 19.2 | 230 ms |
+| 2 × 12 RB, 190 B in one (r 0.72) | 1 | 4.2 | **6.5** | 165 ms |
+| **2 × 15 RB (OpenCV2X ini), QPSK r0.5** | 2 | 8.2 | 19.8 | 236 ms |
+
+Even with 15 RB, this engine's QPSK r0.5 abstraction needs two sub-channels, which is the
+whole pool. OpenCV2X uses one, so its pool carries twice the transmissions per subframe.
+The one-sub-channel row is therefore the like-for-like comparison, and it is the closest
+one. The real fix is the LTE TBS table for the sidelink, which is still open (§6).
+
+### 7.5 Channel load and losses against density (802.11p, the Veins configuration)
+
+`cargo test -p v2xw-interop density_tests -- --ignored --nocapture`, run with the Sepulcre
+et al. 2022 Veins setup (10 Hz, 190 B, 23 dBm, 6 Mbit/s, WINNER+ B1). Each run is 1 s
+warm-up and 3 s measured:
+
+| veh/km | CBR | CBR per veh/km | PDR 100 m | 200 m | 300 m | hidden-terminal share of losses | preamble-missed |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 30 | 0.045 | 0.00151 | 0.986 | 0.842 | 0.151 | 0.03 | 569 |
+| 60 | 0.093 | 0.00155 | 0.985 | 0.798 | 0.157 | 0.03 | 2,473 |
+| 120 | 0.186 | 0.00155 | 0.962 | 0.699 | 0.127 | 0.06 | 25,572 |
+| 240 | 0.372 | 0.00155 | 0.849 | 0.454 | 0.063 | 0.12 | 242,507 |
+
+The busy ratio is proportional to density (0.00155 per veh/km, constant to 3 %). That is
+what a channel below saturation does: 10 Hz × T_air summed over the carrier-sense extent.
+The interference share of losses quadruples between 30 and 240 veh/km, and PDR at 200 m
+falls monotonically (asserted). This matches the published Veins trend: PDR falls with
+density at a fixed rate and MCS. No digitised Veins curve above 60 veh/km was available,
+so the high-density rows are a trend check only. At 60 veh/km, 200 m, this short run reads
+0.798 against Veins' 0.859. The full-length §1 run is the calibrated comparison.
