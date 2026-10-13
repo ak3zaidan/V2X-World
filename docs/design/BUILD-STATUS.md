@@ -3707,3 +3707,27 @@ Track: the built-in agent (`crates/v2xw-copilot`, the agent host in `v2xw-cli`).
 - **Playwright (mock):** `ui/packages/mock-server/dist` was stale. The agent and metrics specs failed on `/agent/status` 404s until it was rebuilt (`npx tsc -b`). `studio.spec.ts:71` (`feed-row-sent` never shows) also fails on the pre-merge Studio source, so this round did not cause it. It is still open.
 - **Release:** `cargo build --release -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots with the agent available, and `runs.list` answers.
 - **Open:** the items listed in the three sections above. These include weather intensity on arterials, phantom-actor settings that the loader accepts, the full live agent suite, and digests that are kept only in memory.
+
+## 2026-10-13: traffic realism against SUMO, round 13 (branch of 0e9d662)
+
+- **Hard braking at crosswalks (midtown-peak-load), cause found and fixed.** The cause was pedestrians, but not the kerb step-out test that was ruled out on 10-12. A walker already on one crossing went straight onto the next crossing lane with no traffic check. This happens at a refuge island, or where two crossings meet. In the traced case the walker stepped out 5 m ahead of a car doing 9.3 m/s, and the car stopped inside the junction at -22 m/s². The fix: the walker now holds at the far end of the first crossing while a vehicle is too close to yield on the second (UVC §11-502(b)). While standing there it does not count as occupying the first crossing, for drivers or for the audit. This follows SUMO's `MSPModel_Interacting::blockedAtDist`, where a standing pedestrian outside a vehicle's path does not block it.
+  - Results on midtown-peak-load (traffic only, 180 s, `check-traffic`): decel exceedances 15 → 0, red entries 18 → 14, stopped on green 89 → 76, jerk 556 → 491. Long stops (11) and overlaps (14) are unchanged.
+  - Results in the traffic validation: safety-class violations midtown-peak-load 269 → 180, midtown-pedestrians 74 → 60, midtown-street-life 92 → 90.
+  - Digests change for scenarios with pedestrians.
+  - `check-traffic --trace` now also prints the pedestrians on crossings near the traced vehicle.
+- **`traffic.turn_curve_window_m`** (new, opt-in; default 0 keeps today's behaviour). SUMO's netconvert caps a turn at sqrt(a·R) using the connector's average radius, so the apex is taken faster than that. Measured on the Midtown grid at a = 5.5, the 85th-percentile peak was 7.7 m/s² (AASHTO allows ≤ 3.73).
+  - The setting judges the radius over the tightest arc of the given length. At 6 m the peak equals a: 5.46 at 5.5, 3.52 at 3.5.
+  - Cross-validation with the 6 m window: the junction-speed gap to SUMO falls from +9..+14 % to +2..+7 % on the grid. Manhattan moves from +1..+5 % to -2..-6 %, and space-mean speed shifts by up to 2 points. The window is therefore not made the default; that is for the owner to decide.
+  - It is published as Basic, and the loader refuses it when `turn_lateral_accel_mps2` is 0.
+  - Test: `traffic_audit_config::the_turn_curve_window_reaches_the_turn_speeds`.
+- **Permitted-left Raff estimate.** Lags rejected while a pedestrian was on the turn's crosswalk are now excluded, which is field practice: 7.01 → 6.79 s. It still FAILs. The estimate rests on 21 accepted lags, and three long rejections decide it. The decision rule itself uses 4.5 s.
+- **Cross-validation:** the native defaults are unchanged, so every traffic row is as before. Grid / Manhattan vs SUMO Krauss: flow -9..+1 %, speed -5..-4 %, GEH ≥ 97 %, paired TT ratio 0.99-1.09.
+  - `V2XW_XVAL_TURN_WINDOW_M` is a diagnostic knob.
+  - Tooling note: the shared SUMO venv had lost `data/typemap/osmNetconvert.typ.xml`, so Manhattan was silently skipped. It has been restored from the v1_27_1 tag.
+- **Open:**
+  - Lane changes per vehicle-km on Manhattan are 18-41 % below SUMO (LC2013 speed-gain/keep-right not modelled).
+  - Halting time is 26 % below SUMO on Manhattan (Krauss full stops against IDM creep).
+  - Stopped-on-green: 76 on midtown-peak-load.
+  - Kerbside overlaps from connectors, the in-building corner lane change and actuated detector placement were not reached.
+  - Start-up lost time is 3.06 s, outside the HCM's ±1 s band. Greenshields' own headways imply 3.6 s, so the band itself is in question.
+- **Checks:** mobility lib 289/289, engine `scenario::` 27/27, `traffic_audit_config` 9/9.

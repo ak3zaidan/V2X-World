@@ -26,6 +26,7 @@ group tests fail.
 | `traffic.critical_gap_factor` | 1 | 0.5-2 | Scales the HCM 6th ed. ch. 20 critical gaps and follow-up times (unsignalised junctions) |
 | `traffic.permitted_left_gap_s` | 4.5 s | 2.5-8 s | Permitted left-turn critical headway (HCM 6th ed. ch. 31) |
 | `traffic.turn_lateral_accel_mps2` | 5.5 m/s² | 0-10 | Turn-speed cap sqrt(a·R) (SUMO `--junctions.limit-turn-speed`) |
+| `traffic.turn_curve_window_m` | 0 (average radius) | 0-30 m | Radius over the tightest arc of this length; 6 m suggested (`DEFAULT_TURN_CURVE_WINDOW_M`, this crate's choice) |
 | `traffic.kerbside.enabled` | on | bool | Kerbside stops on/off |
 | `traffic.kerbside.bus_stop_spacing_m` | 260 m | 100-2000 m | Bus stop spacing (TCRP Report 19) |
 | `traffic.kerbside.bus_dwell_mean_s` | 60 s | 5-300 s | Mean bus dwell (TCQSM 3rd ed. ch. 6) |
