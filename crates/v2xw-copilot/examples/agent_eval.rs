@@ -356,6 +356,8 @@ impl CaseResult {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SuiteResult {
     label: String,
+    #[serde(default)]
+    suite: String,
     provider: String,
     cases: Vec<CaseResult>,
 }
@@ -791,13 +793,15 @@ fn markdown(s: &SuiteResult, before: Option<&SuiteResult>) -> String {
     let mut md = String::new();
     md.push_str("# Agent evaluation\n\n");
     md.push_str(&format!(
-        "Suite `crates/v2xw-copilot/evals/prompts.yaml`, run by `cargo run -p v2xw-copilot --example agent_eval`. \
+        "Suite `{}`, run by `cargo run -p v2xw-copilot --example agent_eval`. \
          Provider `{}`, label `{}`. Each case is scored on four checks: configuration (the scenario changes \
          and run count the prompt implies), run completed, numbers grounded (every number in the answer is in \
          the runs' data) and conclusions (the answer says what the prompt asked about, or asks / explains when \
          it should). Times are wall-clock seconds from the prompt; \"first feedback\" is the first event the \
          person sees, \"first model output\" the model's first plan, tool call or answer.\n\n",
-        s.provider, s.label
+        if s.suite.is_empty() { "crates/v2xw-copilot/evals/prompts.yaml" } else { s.suite.as_str() },
+        s.provider,
+        s.label
     ));
     md.push_str("## Summary\n\n");
     let now = summary(s);
@@ -940,6 +944,11 @@ fn main() {
         None => SuiteResult::default(),
     };
     result.label = args.label.clone();
+    result.suite = args
+        .suite
+        .file_name()
+        .map(|n| format!("crates/v2xw-copilot/evals/{}", n.to_string_lossy()))
+        .unwrap_or_default();
     if let Some(dir) = args.out.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
