@@ -279,6 +279,61 @@ const BASIC: &[Basic] = &[
 /// `radio.dcc`), which a newcomer does not need but should still be able to read.
 const ADVANCED: &[Basic] = &[
     Basic {
+        path: "scale.traffic.model",
+        explain: "City scale: drive a map box vehicle by vehicle and everything outside it as queues (tiered), or the whole map as queues; the queues carry a whole city's traffic at a fraction of the cost.",
+        recommended: "mobility/tiered/meso-micro with a box around the area you study; leave the section out for a single microscopic map.",
+    },
+    Basic {
+        path: "scale.traffic.meso.segment_length_m",
+        explain: "The longest stretch of road one queue covers; shorter segments place vehicles more precisely and cost more.",
+        recommended: "98 m (SUMO MESO --meso-edgelength default); 50 to 200 m.",
+    },
+    Basic {
+        path: "scale.traffic.meso.tau_ff_s",
+        explain: "Time between vehicles leaving a free-flowing queue into another free-flowing one.",
+        recommended: "1.13 s (SUMO MESO --meso-tauff, Eissfeldt 2003); 0.9 to 1.5 s.",
+    },
+    Basic {
+        path: "scale.traffic.meso.tau_fj_s",
+        explain: "Time between vehicles leaving a free-flowing queue into a jammed one.",
+        recommended: "1.13 s (SUMO MESO --meso-taufj); 0.9 to 1.5 s.",
+    },
+    Basic {
+        path: "scale.traffic.meso.tau_jf_s",
+        explain: "Time between vehicles leaving a jammed queue into a free-flowing one: the start-up loss of a jam.",
+        recommended: "1.73 s (SUMO MESO --meso-taujf); 1.4 to 2.2 s.",
+    },
+    Basic {
+        path: "scale.traffic.meso.tau_jj_s",
+        explain: "Time between vehicles leaving a jammed queue into another jammed one.",
+        recommended: "1.4 s (SUMO MESO --meso-taujj); 1.1 to 1.8 s.",
+    },
+    Basic {
+        path: "scale.traffic.meso.jam_threshold",
+        explain: "How full a queue must be before it counts as jammed; left out, SUMO's speed rule decides.",
+        recommended: "Leave unset (SUMO's default); 0.2 to 0.8 when set.",
+    },
+    Basic {
+        path: "scale.traffic.meso.junction_control",
+        explain: "Whether a red signal holds the head of a queue, as it would a real car.",
+        recommended: "On (SUMO MESO --meso-junction-control); off only to compare with an unsignalled queue network.",
+    },
+    Basic {
+        path: "scale.radio.follows",
+        explain: "Whether the radio's detailed region is the traffic's detailed box, so radios outside it use the cheap abstract model.",
+        recommended: "On, unless radio.tiers.focus names its own region.",
+    },
+    Basic {
+        path: "scale.radio.margin_m",
+        explain: "How far outside the detailed box a queued vehicle's radio stays on; beyond it, it neither sends nor hears.",
+        recommended: "Leave unset (the radio's own range, about 300 m for DSRC); 100 to 1000 m.",
+    },
+    Basic {
+        path: "scale.radio.receive_in_margin",
+        explain: "Whether queued vehicles near the box also receive messages, not only send them; on costs most of a city's reception work.",
+        recommended: "Off for speed; on when receivers outside the box matter to the study.",
+    },
+    Basic {
         path: "security.on_demand_threshold",
         explain: "Under on-demand verification, how threatening a known vehicle's message must look (from its time to collision, 0 to 1) before it is checked; lower checks more messages and costs more processor time.",
         recommended: "0.5 (a time to collision of 1 s); 0.05 to 0.9. No published operating point (Krishnan & Weimerskirch 2011); sweep it.",

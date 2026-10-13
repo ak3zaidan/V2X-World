@@ -233,7 +233,7 @@ const GROUPS: &[(&str, &str, &str)] = &[
     (
         "scale",
         "Traffic",
-        "What moves and what transmits: the fleet, its size, roadside units and the backend.",
+        "City scale: a detailed box driven vehicle by vehicle, the rest of the city as queues, and the radio matched to the box.",
     ),
 ];
 
