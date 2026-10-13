@@ -135,6 +135,31 @@ fn the_junction_numbers_reach_the_junction_models() {
     );
 }
 
+/// The turn-speed curve window: judging each corner by its tightest 6 m slows turning
+/// traffic against the same corners judged by their average radius (SUMO's rule).
+#[test]
+fn the_turn_curve_window_reaches_the_turn_speeds() {
+    let mut base = grid(60.0);
+    if let v2xw_world::WorldSourceSpec::Procedural { params, .. } = &mut base.world.source {
+        params["signalised"] = serde_json::json!(false);
+    }
+    let with = |window: Option<f64>| {
+        let mut s = base.clone();
+        s.traffic = Some(Traffic {
+            turn_lateral_accel_mps2: Some(3.0),
+            turn_curve_window_m: window,
+            ..Traffic::default()
+        });
+        s
+    };
+    let (average, _) = speeds(&run(with(None)));
+    let (apex, _) = speeds(&run(with(Some(4.0))));
+    assert!(
+        apex < average,
+        "apex-judged corners averaged {apex:.3} m/s against average-radius ones' {average:.3} m/s"
+    );
+}
+
 /// Kerbside stops: an all-bus fleet stopping every 100 m for two minutes is slower than
 /// the same buses with kerbside stops off.
 #[test]
@@ -300,6 +325,14 @@ fn the_loader_refuses_settings_that_would_do_nothing() {
     });
     assert!(refused(&s, "actors.vehicles.gnss"));
 
+    let mut s = base.clone();
+    s.traffic = Some(Traffic {
+        turn_lateral_accel_mps2: Some(0.0),
+        turn_curve_window_m: Some(6.0),
+        ..Traffic::default()
+    });
+    assert!(refused(&s, "traffic.turn_curve_window_m"));
+
     let mut s = base;
     s.traffic = Some(Traffic {
         critical_gap_factor: Some(5.0),
@@ -317,6 +350,7 @@ fn the_defaults_leave_the_scenario_digest_alone() {
     for key in [
         "speed_factor",
         "critical_gap_factor",
+        "turn_curve_window",
         "kerbside",
         "gnss",
         "pedestrian_walk_s",

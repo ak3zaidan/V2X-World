@@ -188,6 +188,12 @@ pub struct Traffic {
     /// netconvert `--junctions.limit-turn-speed`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_lateral_accel_mps2: Option<f64>,
+    /// The arc length, m, over which a junction connector's radius is judged for its turn
+    /// speed. Unset (or 0) averages the radius over the whole connector, as SUMO
+    /// netconvert does; a window (6 m suggested) takes the tightest arc of that length, so
+    /// drivers slow for the apex of a corner, not only for its average.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_curve_window_m: Option<f64>,
     /// Kerbside stops: buses at stops, taxis picking up, delivery vans double-parked.
     /// Unset follows the jurisdiction (New York City has its taxis).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -282,6 +288,7 @@ impl Default for Traffic {
             critical_gap_factor: None,
             permitted_left_gap_s: None,
             turn_lateral_accel_mps2: None,
+            turn_curve_window_m: None,
             kerbside: None,
         }
     }

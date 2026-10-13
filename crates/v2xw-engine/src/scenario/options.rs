@@ -1533,6 +1533,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "traffic.critical_gap_factor" => "Gap acceptance at unsignalised junctions (factor)",
         "traffic.permitted_left_gap_s" => "Left turn on green: gap accepted",
         "traffic.turn_lateral_accel_mps2" => "Cornering acceleration through junctions",
+        "traffic.turn_curve_window_m" => "Corner radius judged over",
         "traffic.kerbside" => "Kerbside stops",
         "traffic.kerbside.taxi_share" => "Share of cars that are taxis",
         "traffic.kerbside.delivery_stop_share" => "Share of vans making a delivery stop",

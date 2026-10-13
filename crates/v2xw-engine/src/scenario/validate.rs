@@ -1099,6 +1099,15 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the turning lateral acceleration",
     },
+    // 0 is the whole connector (SUMO's average radius); 30 m is longer than any urban
+    // junction connector, where the window is the connector again.
+    Bound {
+        path: "traffic.turn_curve_window_m",
+        lo: 0.0,
+        hi: 30.0,
+        exclusive_lo: false,
+        what: "the turn-speed curve window",
+    },
     // TCRP Report 19 (1996): urban local-bus stops 150-400 m apart, limited-stop and BRT
     // up to about 1 km; 100-2,000 m covers both with room.
     Bound {
@@ -2948,6 +2957,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Caps the speed through a turn at sqrt(a times the corner radius); 0 is no cap.",
     },
     KeyStatus {
+        path: "traffic.turn_curve_window_m",
+        status: Status::Wired,
+        note: "Judges a corner's radius over its tightest arc of this length instead of its average.",
+    },
+    KeyStatus {
         path: "traffic.kerbside",
         status: Status::Wired,
         note: "Overrides the jurisdiction's kerbside stops: bus stops and dwell, taxi share and dwell, delivery share and dwell. Not applied to SUMO runs.",
@@ -3632,6 +3646,7 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ("traffic.critical_gap_factor", t.critical_gap_factor),
             ("traffic.permitted_left_gap_s", t.permitted_left_gap_s),
             ("traffic.turn_lateral_accel_mps2", t.turn_lateral_accel_mps2),
+            ("traffic.turn_curve_window_m", t.turn_curve_window_m),
         ] {
             if let Some(v) = v {
                 bounded_at(path, path, v, e);
@@ -3682,7 +3697,17 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
         let native_only = t.critical_gap_factor.is_some()
             || t.permitted_left_gap_s.is_some()
             || t.turn_lateral_accel_mps2.is_some()
+            || t.turn_curve_window_m.is_some()
             || t.kerbside.is_some();
+        if t.turn_curve_window_m.is_some_and(|w| w > 0.0) && t.turn_lateral_accel_mps2 == Some(0.0)
+        {
+            e.push(conflict(
+                "traffic.turn_curve_window_m",
+                "sets how a corner's radius is judged, and traffic.turn_lateral_accel_mps2 is \
+                 0, which turns the turn-speed limit off"
+                    .to_string(),
+            ));
+        }
         if native_only && s.mobility.as_ref().is_some_and(|m| m.provider == "sumo") {
             e.push(conflict(
                 "traffic",

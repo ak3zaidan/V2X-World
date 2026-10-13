@@ -68,6 +68,9 @@ pub enum GridVariant {
     NoJunctionControl,
     /// Turning at 6 m/s² of lateral acceleration.
     FastTurns,
+    /// The turn speed judged over the tightest 6 m of a connector
+    /// (`traffic.turn_curve_window_m`), at this lateral acceleration (tenths of m/s²).
+    ApexTurns(u32),
     /// Pedestrians cross against the signal with this probability (per mille).
     Jaywalk(u32),
     /// 15 % motorcycles in the fleet.
@@ -169,6 +172,10 @@ pub fn grid_study(
                 params.crosswalk_yield = false;
             }
             GridVariant::FastTurns => params.turn_lateral_accel_mps2 = 6.0,
+            GridVariant::ApexTurns(a) => {
+                params.turn_curve_window_m = v2xw_mobility::engine::DEFAULT_TURN_CURVE_WINDOW_M;
+                params.turn_lateral_accel_mps2 = f64::from(a) / 10.0;
+            }
             GridVariant::Jaywalk(pm) => sf.jaywalk_probability = f64::from(pm) / 1000.0,
             GridVariant::Motorcycles => {
                 fleet = FleetMix::from_shares(&[
@@ -445,6 +452,37 @@ fn turning(lab: &mut Lab, variant: Variant) -> Result<Outcome, String> {
             .n(sm.n),
         );
     }
+    // The opt-in apex rule (`traffic.turn_curve_window_m`), beside the shipped average
+    // radius: at SUMO's 5.5 m/s² and at AASHTO's 0.36 g.
+    if !variant.is_fault() {
+        for a10 in [55u32, 35] {
+            let apex = grid_study(lab, GridVariant::ApexTurns(a10), None)?;
+            let l = &apex.motion.turn_peak_lateral_mps2;
+            rows.push(
+                Row::reported(
+                    format!(
+                        "with the 6 m apex window at {:.1} m/s²: peak lateral acceleration, 85th percentile, m/s²",
+                        f64::from(a10) / 10.0
+                    ),
+                    l.p85,
+                    "opt-in `traffic.turn_curve_window_m` (not shipped)",
+                )
+                .n(l.n),
+            );
+            for (turn, sm) in &apex.calib.turn_speed_mps {
+                if turn == "left" || turn == "right" {
+                    rows.push(Row::reported(
+                        format!(
+                            "with the 6 m apex window at {:.1} m/s²: {turn} turn lowest speed, mean, km/h",
+                            f64::from(a10) / 10.0
+                        ),
+                        sm.mean * 3.6,
+                        "opt-in (not shipped)",
+                    ));
+                }
+            }
+        }
+    }
     Ok(Outcome {
         rows,
         notes: vec![],
@@ -458,6 +496,15 @@ fn permitted_left(lab: &mut Lab, _variant: Variant) -> Result<Outcome, String> {
     let r = &s.calib.permitted_left_lag_rejected_s;
     rows.push(Row::reported("lags accepted, mean, s", a.mean, "—").n(a.n));
     rows.push(Row::reported("lags rejected, mean, s", r.mean, "—").n(r.n));
+    let pb = &s.calib.permitted_left_lag_ped_blocked_s;
+    rows.push(
+        Row::reported(
+            "lags let go while a pedestrian was on the turn's crosswalk (not in Raff's estimate), mean, s",
+            pb.mean,
+            "—",
+        )
+        .n(pb.n),
+    );
     Ok(Outcome {
         rows,
         notes: vec!["No fault is listed: a fault only proves a check can fail, and this one has failed as shipped (see the verdict).".to_string()],

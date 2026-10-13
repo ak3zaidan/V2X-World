@@ -585,6 +585,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "5.5 m/s² (SUMO); 3 to 6 m/s².",
     },
     Basic {
+        path: "traffic.turn_curve_window_m",
+        explain: "Whether drivers slow for the sharpest part of a corner (a few metres) or only for its average curve, which is what SUMO does.",
+        recommended: "0 m (SUMO, average); 6 m to slow for the apex.",
+    },
+    Basic {
         path: "traffic.kerbside.bus_stop_spacing_m",
         explain: "How far apart bus stops are along a bus route.",
         recommended: "200 to 400 m for local buses.",

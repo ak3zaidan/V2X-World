@@ -121,6 +121,12 @@ pub const DEFAULT_NO_CHANGE_ZONE_M: f64 = 30.0;
 /// --junctions.limit-turn-speed`'s default.
 pub const DEFAULT_TURN_LATERAL_ACCEL_MPS2: f64 = 5.5;
 
+/// A suggested window for [`EngineParams::turn_curve_window_m`], metres: **this crate's
+/// choice**, one passenger-car length plus a metre (4.5 m + 1 m, rounded up to 6 m), the arc
+/// a car's wheelbase spans through the tightest part of a corner; the traffic validation's
+/// turning check averages over 1 s, which at 5-7 m/s turning speeds is the same 5-7 m.
+pub const DEFAULT_TURN_CURVE_WINDOW_M: f64 = 6.0;
+
 /// The card's note on how a stop line is braked for (see [`static_obstacle_accel`]).
 const STOP_LINE_ONSET_NOTE: &str = "a virtual stop-line obstacle is braked for at \
     max(a_IDM, −v²/(2·(s − s0))): the constant-acceleration heuristic (Kesting, Treiber & \
@@ -708,6 +714,13 @@ pub struct EngineParams {
     /// 5.5 m/s² is SUMO `netconvert --junctions.limit-turn-speed`'s default ("limits speed
     /// on junctions to an average lateral acceleration of at most FLOAT m/s²").
     pub turn_lateral_accel_mps2: f64,
+    /// The arc length over which a connector's radius is judged for its turn speed,
+    /// metres. `0` (the default) judges the whole connector by its average radius, as
+    /// SUMO's netconvert does; a positive window takes the tightest arc of that length
+    /// (the connector's vertex angles summed over the window), so the lateral acceleration stays near `turn_lateral_accel_mps2` at
+    /// the apex too, not only on average ([`DEFAULT_TURN_CURVE_WINDOW_M`] when enabled
+    /// from the guide).
+    pub turn_curve_window_m: f64,
     /// Whether a vehicle yields to vehicles already inside the junction on a conflicting
     /// movement, and does not enter a junction whose exit has no room for it. Not applied
     /// in the legacy parity mode. See [`crate::intersection::zones`].
@@ -810,6 +823,7 @@ impl Default for EngineParams {
             dynamic_rerouting: true,
             no_change_zone_m: DEFAULT_NO_CHANGE_ZONE_M,
             turn_lateral_accel_mps2: DEFAULT_TURN_LATERAL_ACCEL_MPS2,
+            turn_curve_window_m: 0.0,
             junction_clearance: true,
             crosswalk_yield: true,
             driver_heterogeneity: true,
@@ -4645,7 +4659,11 @@ impl Mobility for NativeMobility {
                 self.zones = ConflictZones::build(world);
             }
             if self.params.turn_lateral_accel_mps2 > 0.0 {
-                self.turn_speed = turn_speeds(world, self.params.turn_lateral_accel_mps2);
+                self.turn_speed = turn_speeds(
+                    world,
+                    self.params.turn_lateral_accel_mps2,
+                    self.params.turn_curve_window_m,
+                );
             }
         }
         // Where a pedestrian may be placed: a pavement, never a crosswalk — putting someone
@@ -6374,24 +6392,42 @@ fn router_of<'r>(
     }
 }
 
-fn turn_speeds(world: &World, a_lat_mps2: f64) -> BTreeMap<LaneId, f64> {
+fn turn_speeds(world: &World, a_lat_mps2: f64, window_m: f64) -> BTreeMap<LaneId, f64> {
     let mut out = BTreeMap::new();
     for lane in world.roads.lanes() {
         if lane.kind != LaneKind::Internal || lane.length_m <= 0.0 {
             continue;
         }
-        let mut turned = 0.0;
+        // The heading change at each interior vertex, and where along the lane it is.
+        let mut bends: Vec<(f64, f64)> = Vec::new();
         for i in 0..lane.centreline.len().saturating_sub(2) {
             let (a, b) = lane.segment(i);
             let (_, c) = lane.segment(i + 1);
             let h0 = math::atan2(b.y - a.y, b.x - a.x);
             let h1 = math::atan2(c.y - b.y, c.x - b.x);
-            turned += v2xw_world::model::normalise_angle(h1 - h0).abs();
+            let at = lane.cumulative.get(i + 1).copied().unwrap_or(0.0);
+            bends.push((at, v2xw_world::model::normalise_angle(h1 - h0).abs()));
         }
+        let turned: f64 = bends.iter().map(|b| b.1).sum();
         if turned < 0.1 {
             continue;
         }
-        let radius = lane.length_m / turned;
+        let mut radius = lane.length_m / turned;
+        if window_m > 0.0 {
+            // The tightest arc: the most heading change within any window of `window_m`
+            // starting at a vertex (the whole lane when it is shorter than the window).
+            let w = window_m.min(lane.length_m);
+            for (k, &(s0, _)) in bends.iter().enumerate() {
+                let sum: f64 = bends[k..]
+                    .iter()
+                    .take_while(|b| b.0 - s0 <= w + 1e-9)
+                    .map(|b| b.1)
+                    .sum();
+                if sum > 1e-6 {
+                    radius = radius.min(w / sum);
+                }
+            }
+        }
         out.insert(
             lane.id,
             math::sqrt(a_lat_mps2 * radius).min(lane.speed_limit_mps),
@@ -6853,6 +6889,19 @@ pub fn card(params: &EngineParams, car_following: &str) -> ModelCard {
             v2xw_core::rng::RngDomain::DesiredSpeed.as_str().to_string(),
         ],
     };
+    // Listed only when set, so a card of the default engine is unchanged.
+    if params.turn_curve_window_m > 0.0 {
+        card.parameters.push(Parameter::new(
+            "turn_curve_window",
+            "m",
+            serde_json::json!(params.turn_curve_window_m),
+            Source::new(
+                SourceKind::Code,
+                "this crate's choice: the turn speed is set by the tightest arc of this \
+                 length, where SUMO netconvert averages the radius over the connector",
+            ),
+        ));
+    }
     card.validation = Validation {
         status: ValidationStatus::LiteratureChecked,
         references: vec![Source::new(
