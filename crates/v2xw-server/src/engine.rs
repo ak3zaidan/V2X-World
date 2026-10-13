@@ -526,6 +526,18 @@ pub trait Engine: Send + std::fmt::Debug {
         Vec::new()
     }
 
+    /// The current run's digest (when it has produced a metric) and the digests of the
+    /// runs before it, newest first — `runs.list` and `runs.compare` (`crate::compare`).
+    /// Empty for an engine that runs once (a recording, the fixture).
+    fn run_history(
+        &self,
+    ) -> (
+        Option<crate::compare::RunDigest>,
+        Vec<crate::compare::RunDigest>,
+    ) {
+        (None, Vec::new())
+    }
+
     /// The node table as of now, for an engine whose nodes appear during the run.
     ///
     /// `None` means the run's nodes are exactly [`RunDescriptor::hello`]`.nodes` and were

@@ -447,3 +447,32 @@
 .sigcmp-bar.worse { background: var(--err); }
 .sigcmp-bar.better { background: var(--ok); }
 .sigcmp-caveats { font-size: 11px; padding-left: 18px; }
+
+/* ---- Compare runs (RunCompare.tsx) ---------------------------------------------------------- */
+.rcmp { width: min(1100px, calc(100vw - 32px)); }
+.rcmp-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0 0 8px; }
+.rcmp-side { border: 1px solid var(--border); border-left-width: 4px; border-radius: var(--radius); padding: 7px 10px; background: var(--bg-panel); font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
+.rcmp-side.a { border-left-color: var(--viz-1); }
+.rcmp-side.b { border-left-color: var(--viz-2); }
+.rcmp-tag { font-size: 11px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; }
+.rcmp-note { font-size: 12px; margin: 0 0 14px; padding: 7px 10px; border-radius: var(--radius); border: 1px solid var(--border); }
+.rcmp-note.same { border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); }
+.rcmp-note.noise { border-color: color-mix(in srgb, var(--warn) 70%, var(--border)); }
+.rcmp-summary { margin: 0; padding-left: 18px; font-size: 13px; display: flex; flex-direction: column; gap: 3px; }
+.rcmp-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 6px; }
+.rcmp-tools h3 { margin: 0; }
+.rcmp-all { font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+.rcmp-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.rcmp-table th { text-align: left; font-weight: 600; color: var(--text-dim); border-bottom: 1px solid var(--border); padding: 4px 6px; }
+.rcmp-table td { border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); padding: 4px 6px; }
+.rcmp-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rcmp-table[data-testid="run-compare-metrics"] tbody tr { cursor: pointer; }
+.rcmp-table tr.on td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.rcmp-table tr.meaningful td:first-child { font-weight: 600; }
+.rcmp-better { color: var(--ok); }
+.rcmp-worse { color: var(--err); }
+.rcmp-neutral { color: var(--text-dim); }
+.rcmp-health { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.rcmp-chart { width: 100%; min-height: 200px; }
+.rcmp-history td { vertical-align: middle; }
+@media (max-width: 640px) { .rcmp-sides { grid-template-columns: 1fr; } }

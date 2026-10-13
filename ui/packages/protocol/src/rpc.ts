@@ -925,6 +925,102 @@ export interface ExperimentStatusResult {
     error?: string;
   }[];
 }
+/** One kept run, as `runs.list` lists it (`crates/v2xw-server/src/compare.rs`). */
+export interface RunHeader {
+  /** `current`, `previous`, or the run id: what `runs.compare` and `runs.digest` take. */
+  ref?: string;
+  run_id: string;
+  label: string;
+  seed: number;
+  city: string | null;
+  scenario_hash: string;
+  t_reached_s: number;
+  t_end_s: number;
+  finished: boolean;
+  source: string;
+  replications: number;
+}
+/** `runs.list` result. */
+export interface RunsListResult {
+  runs: RunHeader[];
+  can_compare_previous: boolean;
+}
+/** One metric of a run digest. */
+export interface DigestMetric {
+  name: string;
+  base: string;
+  unit: string;
+  value: number | null;
+  n: number;
+  se: number | null;
+  replications: number;
+  /** `[t_s, value]` per window. */
+  series: [number, number][];
+}
+/** `runs.digest` result (`v2xw/run-digest/1`). */
+export interface RunDigest {
+  schema: "v2xw/run-digest/1";
+  run_id: string;
+  label: string;
+  seed: number;
+  city: string | null;
+  scenario_hash: string;
+  scenario: unknown;
+  t_reached_s: number;
+  t_end_s: number;
+  source: string;
+  metrics: DigestMetric[];
+}
+/** `runs.digest` params. */
+export interface RunsDigestParams {
+  run?: string;
+  metrics?: string[];
+}
+/** One setting that differs between two runs. */
+export interface RunSettingChange {
+  path: string;
+  label: string;
+  group: string;
+  unit: string;
+  before: unknown;
+  after: unknown;
+  text: string;
+}
+/** One metric of a run comparison. */
+export interface RunMetricRow {
+  name: string;
+  base: string;
+  unit: string;
+  better: "higher" | "lower" | "neutral";
+  a: number | null;
+  b: number | null;
+  delta: number | null;
+  pct: number | null;
+  verdict: "better" | "worse" | "changed" | "same" | "missing";
+  level_a: "healthy" | "caution" | "unhealthy" | null;
+  level_b: "healthy" | "caution" | "unhealthy" | null;
+  meaningful: boolean;
+  beyond_noise: boolean | null;
+}
+/** `runs.compare` params: each side a ref or an inline digest. */
+export interface RunsCompareParams {
+  a?: string | RunDigest;
+  b?: string | RunDigest;
+  format?: "json" | "markdown" | "csv" | "text";
+  all?: boolean;
+}
+/** `runs.compare` result (`v2xw/run-comparison/1`). */
+export interface RunsCompareResult {
+  schema: "v2xw/run-comparison/1";
+  a: RunHeader;
+  b: RunHeader;
+  same_seed: boolean;
+  noise_note: string;
+  settings: RunSettingChange[];
+  rows: RunMetricRow[];
+  summary: string[];
+  text?: string;
+}
 /** §6.13 `rpc.discover` params. */
 export interface RpcDiscoverParams {
   method?: string;
@@ -976,13 +1072,16 @@ export interface VwpMethods {
   "experiment.define": { params: ExperimentDefineParams; result: ExperimentDefineResult };
   "experiment.run": { params: ExperimentRunParams; result: ExperimentRunResult };
   "experiment.status": { params: ExperimentStatusParams; result: ExperimentStatusResult };
+  "runs.list": { params: Record<string, never>; result: RunsListResult };
+  "runs.compare": { params: RunsCompareParams; result: RunsCompareResult };
+  "runs.digest": { params: RunsDigestParams; result: RunDigest };
   "rpc.discover": { params: RpcDiscoverParams; result: RpcDiscoverResult };
 }
 
 /** Every method name of §6.15. */
 export type VwpMethodName = keyof VwpMethods;
 
-/** §6.15 — the method names as a runtime array (33 entries), in the order the table lists them. */
+/** §6.15 — the method names as a runtime array (36 entries), in the order the table lists them; the three `runs.*` methods are the run history and comparison. */
 export const VWP_METHODS: readonly VwpMethodName[] = [
   "run.start", "run.pause", "run.resume", "run.step", "run.seek", "run.speed", "run.stop", "run.status",
   "view.follow", "view.camera", "overlay.set",
@@ -994,6 +1093,7 @@ export const VWP_METHODS: readonly VwpMethodName[] = [
   "metrics.query", "metrics.plot",
   "export.dataset", "export.recording",
   "experiment.define", "experiment.run", "experiment.status",
+  "runs.list", "runs.compare", "runs.digest",
   "rpc.discover",
 ] as const;
 

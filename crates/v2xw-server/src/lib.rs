@@ -49,6 +49,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod compare;
 pub mod engine;
 pub mod error;
 pub mod feed;

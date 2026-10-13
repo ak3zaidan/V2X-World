@@ -41,6 +41,7 @@ pub mod import;
 pub mod info;
 pub mod progress;
 pub mod run;
+pub mod runcompare;
 pub mod sigcompare;
 pub mod signal;
 pub mod stream;

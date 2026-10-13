@@ -34,6 +34,7 @@ import { useCallback, useRef, useState } from "react";
 import { Identifier } from "./Identifier.js";
 import { useStatus } from "./Status.js";
 import { compare } from "../state/compare.js";
+import { RunHistory } from "../metrics/RunHistory.js";
 import { engine } from "../state/engine.js";
 import { useStudio, type RecordingEntry } from "../state/store.js";
 import { bytes, durationNs, int, simClock } from "../lib/format.js";
@@ -258,6 +259,8 @@ export function RunBrowser(): React.JSX.Element {
           <p className="dim">{status.headline}</p>
         )}
       </div>
+
+      <RunHistory />
 
       <div className="section">
         <h3>Recordings ({recordings.length})</h3>

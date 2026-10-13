@@ -369,6 +369,16 @@ impl Run {
         self.engine.lock().seek(t)
     }
 
+    /// The current run's digest and the previous runs', newest first (`runs.list`).
+    pub fn run_history(
+        &self,
+    ) -> (
+        Option<crate::compare::RunDigest>,
+        Vec<crate::compare::RunDigest>,
+    ) {
+        self.engine.lock().run_history()
+    }
+
     /// The metric catalogue (§6.12), for the RPC layer's visibility checks.
     pub fn metric_catalogue(&self) -> Vec<crate::introspect::MetricInfo> {
         self.engine.lock().metric_catalogue()

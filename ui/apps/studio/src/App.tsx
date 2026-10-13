@@ -43,6 +43,7 @@ import { TimeControls } from "./components/TimeControls.js";
 import { Viewport } from "./components/Viewport.js";
 import { SettingsWindow } from "./settings/SettingsWindow.js";
 import { RunSummary } from "./metrics/RunSummary.js";
+import { RunCompare } from "./metrics/RunCompare.js";
 import { Header } from "./shell/Header.js";
 import { FullPanel, Sheet } from "./shell/PanelFrame.js";
 import { PANELS } from "./shell/panels.js";
@@ -236,6 +237,7 @@ export function App(): React.JSX.Element {
           </FullPanel>
         ))}
       <RunSummary />
+      <RunCompare />
     </div>
   );
 }

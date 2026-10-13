@@ -21,6 +21,7 @@ import { transport } from "../state/transport.js";
 import { applyThemeToDocument } from "../lib/theme.js";
 import { changedPointers } from "../lib/schema.js";
 import { RunSummaryButton } from "../metrics/RunSummary.js";
+import { ComparePreviousButton } from "../metrics/RunCompare.js";
 import { AgentIcon, ChartIcon, GearIcon, InspectorIcon, MoreIcon } from "./Icons.js";
 import { MenuButton } from "./Menu.js";
 import { PANELS } from "./panels.js";
@@ -263,6 +264,7 @@ export function Header({ onConnect }: { onConnect: () => void }): React.JSX.Elem
         <span>Metrics</span>
       </button>
       <RunSummaryButton />
+      <ComparePreviousButton />
       <button
         type="button"
         className={panel === "agent" ? "icon-button labelled on" : "icon-button labelled"}
