@@ -561,6 +561,60 @@ fn the_etsi_pki_revokes_passively_and_the_scms_actively() {
     );
 }
 
+/// `crl_delivery: mbms` end to end: a revocation's list is broadcast on the eMBMS bearer
+/// (TS 23.246) to the cellular fleet, with no uplink poll, and the vehicles install it.
+/// The same run under unicast broadcasts nothing.
+#[test]
+fn an_mbms_broadcast_delivers_the_crl() {
+    let base = |delivery: &str| {
+        let mut s = grid(90.0, 900.0);
+        s.security.verification_policy = "verify-all".to_string();
+        s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+        s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+            id: "threat/attacker/legacy/ConstPos".to_string(),
+            count: Some(1),
+            schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+                from_s: 5.0,
+                to_s: 90.0,
+            }),
+            ..Default::default()
+        }];
+        s.net.uu = Some(ModelChoice {
+            id: "cellular/uu/fixed-latency".to_string(),
+            params: json!({"preset": "4g-east-coast", "crl_delivery": delivery}),
+        });
+        lifecycle(
+            &mut s,
+            json!({
+                "i_period_s": 30, "cert_lifetime_s": 31, "certs_per_period": 3,
+                "cert_shuffle_window_s": 1, "first_batch_delay_s": 1,
+                "download_poll_interval_s": 1, "report_shuffle_window_s": 2,
+                "crl_cadence_s": 0, "crl_fetch_interval_s": 2
+            }),
+        );
+        s
+    };
+    let (mbms, _) = run(base("mbms"));
+    let (unicast, _) = run(base("unicast"));
+    let (m, u) = (&mbms.phase2, &unicast.phase2);
+    println!(
+        "MEAS mbms: {} broadcasts, {} receptions, {} issued, {} installed; unicast: {} \
+         broadcasts, {} installed",
+        m.access.mbms_broadcasts,
+        m.access.mbms_receptions,
+        m.crls_issued,
+        m.crls_installed,
+        u.access.mbms_broadcasts,
+        u.crls_installed
+    );
+    assert_eq!(m.backend_errors, 0, "{}", m.first_backend_error);
+    assert!(m.crls_issued > 0, "the revocation must issue a list");
+    assert!(m.access.mbms_broadcasts > 0, "no eMBMS broadcast went out");
+    assert!(m.access.mbms_receptions > 0, "no vehicle received the broadcast");
+    assert!(m.crls_installed > 0, "no vehicle installed the broadcast list");
+    assert_eq!(u.access.mbms_broadcasts, 0, "unicast delivery broadcast a list");
+}
+
 /// A vehicle with no modem reaches the backend through a roadside unit: the report goes on
 /// the air to the unit, crosses its backhaul, and the bytes land in the backhaul bucket and
 /// not in a cellular one. The same fleet with the unit's backhaul cut reaches nothing.
