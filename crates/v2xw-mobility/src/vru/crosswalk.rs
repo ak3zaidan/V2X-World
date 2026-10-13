@@ -171,6 +171,11 @@ impl CrosswalkIndex {
         self.walk_of.get(&crossing_lane).copied()
     }
 
+    /// Every crossing lane's crosswalk.
+    pub fn walk_map(&self) -> &BTreeMap<LaneId, usize> {
+        &self.walk_of
+    }
+
     /// The crosswalk bands a driven lane has, by arc length.
     pub fn conflicts_on(&self, lane: LaneId) -> &[CrosswalkConflict] {
         self.by_lane.get(&lane).map_or(&[], Vec::as_slice)

@@ -4856,10 +4856,17 @@ impl Mobility for NativeMobility {
         let claims = self.claims(world, &snapshot, t0);
         let occupancy = self.occupancy(world);
         // The crosswalks someone is walking on, from the start-of-step positions.
+        // Not counted: someone at the far end of one crossing about to go onto the next (a
+        // refuge island, where `SocialForce` holds them while a vehicle is too close to
+        // the second crossing). They are out of this crossing's traffic, as
+        // in SUMO, where a standing pedestrian outside a vehicle's path does not block it
+        // (`MSPModel_Interacting::blockedAtDist`).
         let crosswalks_in_use = self.crosswalks.occupied(
-            self.vru
-                .iter()
-                .flat_map(|v| v.people().filter(|p| !p.arrived).map(|p| p.lane)),
+            self.vru.iter().flat_map(|v| {
+                v.people()
+                    .filter(|p| !p.arrived && !v.at_refuge(p, world))
+                    .map(|p| p.lane)
+            }),
         );
         // The mid-block paths in use, from the start-of-step positions: each band, the
         // pedestrian it belongs to, and whether that pedestrian is in (or about to step
@@ -6091,6 +6098,9 @@ impl Mobility for NativeMobility {
                 vru.set_crossing_permits(
                     self.crosswalks.permits_exposed(&signal_states, &exposure),
                 );
+                if !vru.knows_crosswalks() {
+                    vru.set_crosswalk_of(self.crosswalks.walk_map().clone());
+                }
             }
             if !midblock.is_empty() {
                 let go = self.midblock_permits(&*ctx, world, &vru, &midblock);

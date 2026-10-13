@@ -412,6 +412,11 @@ impl SocialForceParams {
     }
 }
 
+/// How near the end of a crossing a walker bound for a second crosswalk counts as standing
+/// on the refuge between the two, metres: **this crate's choice**, the kerb margin (0.3 m)
+/// plus a walker's body depth (0.5 m, `VehicleClass::Pedestrian`) and a step (0.7 m).
+pub const REFUGE_M: f64 = 1.5;
+
 /// One pedestrian.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pedestrian {
@@ -597,6 +602,10 @@ pub struct SocialForce {
     /// ([`SocialForce::set_crossing_permits`]); a crossing lane with no entry has no signal
     /// and no hazard.
     permits: BTreeMap<LaneId, CrossingPermit>,
+    /// Which crosswalk each crossing lane belongs to (set by the engine once), so a walker
+    /// going from one crossing lane straight onto another can tell a second crosswalk (an
+    /// island, a chained crossing) from the rest of the one it is on.
+    crosswalk_of: BTreeMap<LaneId, usize>,
     /// The world's mid-block crossing points, when mid-block crossing is on.
     midblock_index: Option<Arc<MidblockIndex>>,
     /// Which pedestrians waiting mid-block may step off now (set by the engine, from the
@@ -624,6 +633,7 @@ impl SocialForce {
             params,
             people: BTreeMap::new(),
             permits: BTreeMap::new(),
+            crosswalk_of: BTreeMap::new(),
             midblock_index: None,
             midblock_go: BTreeMap::new(),
             beside_queue: std::collections::BTreeSet::new(),
@@ -725,6 +735,36 @@ impl SocialForce {
     /// [`crate::vru::crosswalk::CrosswalkIndex::permits`]).
     pub fn set_crossing_permits(&mut self, permits: BTreeMap<LaneId, CrossingPermit>) {
         self.permits = permits;
+    }
+
+    /// Hands the model the crosswalk each crossing lane belongs to
+    /// ([`crate::vru::crosswalk::CrosswalkIndex::crosswalk_of`]).
+    pub fn set_crosswalk_of(&mut self, crosswalk_of: BTreeMap<LaneId, usize>) {
+        self.crosswalk_of = crosswalk_of;
+    }
+
+    /// Whether `person` stands at the far end of one crosswalk, within [`REFUGE_M`] of it,
+    /// with a second crosswalk next on its way: at the refuge between two roadways, out
+    /// of the first one's traffic.
+    pub fn at_refuge(&self, person: &Pedestrian, world: &World) -> bool {
+        let Some(lane) = world.try_lane(person.lane) else {
+            return false;
+        };
+        if lane.kind != LaneKind::Crossing || lane.length_m - person.s_m > REFUGE_M {
+            return false;
+        }
+        let Some(next) = self.next_lane(person) else {
+            return false;
+        };
+        matches!(
+            (self.crosswalk_of.get(&lane.id), self.crosswalk_of.get(&next)),
+            (Some(a), Some(b)) if a != b
+        )
+    }
+
+    /// Whether the model has been handed the crosswalk of each crossing lane.
+    pub fn knows_crosswalks(&self) -> bool {
+        !self.crosswalk_of.is_empty()
     }
 
     /// The walkable lanes a walker may go on to from `lane`: its walkable successors whose
@@ -1270,6 +1310,23 @@ impl VruMobility for SocialForce {
                             permit.hazard || !(legacy || violates || committed)
                         }
                     }
+                }
+                // From one crosswalk straight onto another (a refuge island, or two
+                // crossings that meet with no pavement between): the walker is already
+                // crossing and walks on whatever the signal shows, but does not step into
+                // the second roadway in front of a vehicle too close to yield (UVC
+                // §11-502(b)), as at a kerb. Without this, a walker came off one crossing
+                // onto the next 5 m ahead of a car at 9 m/s, which stopped from 9.3 m/s
+                // in 0.4 s inside the junction (-22 m/s², midtown-peak-load).
+                Some(n)
+                    if midblock.is_none()
+                        && lane.kind == LaneKind::Crossing
+                        && matches!(
+                            (self.crosswalk_of.get(&lane.id), self.crosswalk_of.get(&n)),
+                            (Some(a), Some(b)) if a != b
+                        ) =>
+                {
+                    self.permits.get(&n).is_some_and(|p| p.hazard)
                 }
                 _ => false,
             };

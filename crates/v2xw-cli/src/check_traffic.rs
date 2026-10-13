@@ -1039,6 +1039,20 @@ pub fn check_recording(
                 a.y,
                 states.join(" ")
             );
+            // The people near it on a crossing, who may be what it yields to.
+            for (pid, p) in &now {
+                if !ped_class(p.class) || p.lane == U32_NONE || (p.lane as usize) >= lanes.len() {
+                    continue;
+                }
+                let d = ((p.x - a.x).powi(2) + (p.y - a.y).powi(2)).sqrt();
+                let kind = world.lane(LaneId::new(p.lane)).kind;
+                if d <= 30.0 && kind == v2xw_world::LaneKind::Crossing {
+                    eprintln!(
+                        "trace t {t:.1}   ped {pid} on crossing lane {} at {d:.1} m xy ({:.2}, {:.2}) v {:.2}",
+                        p.lane, p.x, p.y, p.speed
+                    );
+                }
+            }
         }
         prev = now;
         Ok(())
