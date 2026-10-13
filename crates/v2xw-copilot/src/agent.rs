@@ -250,7 +250,11 @@ pub const TRIMMED: &str = " … [trimmed: an earlier turn's tool result. Its num
 /// append-only, which is what the provider's prompt cache relies on), and while a
 /// conversation fits nothing is cut, so short conversations keep their cache.
 #[must_use]
-pub fn budgeted_history(history: &[ChatMessage], turn_start: usize, budget: usize) -> Vec<ChatMessage> {
+pub fn budgeted_history(
+    history: &[ChatMessage],
+    turn_start: usize,
+    budget: usize,
+) -> Vec<ChatMessage> {
     let mut out: Vec<ChatMessage> = history.to_vec();
     let mut total: usize = out.iter().map(|m| m.text().len()).sum();
     if total <= budget {
@@ -1028,9 +1032,11 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                 .filter_map(|e| e.field.as_deref().and_then(crate::repair::allowed))
                 .collect();
             allowed.dedup();
-            return Ok(json!({"ok": false, "errors": report.errors, "allowed": allowed,
+            return Ok(
+                json!({"ok": false, "errors": report.errors, "allowed": allowed,
                              "changes": applied, "note": "nothing was staged; fix and retry, \
-                             or tell the person in one sentence why it cannot be set"}));
+                             or tell the person in one sentence why it cannot be set"}),
+            );
         }
         let hash = report.content_hash.clone().unwrap_or_default();
         self.prepared = Some(Prepared {
@@ -1616,18 +1622,32 @@ mod tests {
             ChatMessage::user("second"),
             ChatMessage::tool("b", long.clone()),
         ];
-        assert_eq!(budgeted_history(&h, 2, 1_000_000), h, "fits: nothing is cut");
+        assert_eq!(
+            budgeted_history(&h, 2, 1_000_000),
+            h,
+            "fits: nothing is cut"
+        );
         let sent = budgeted_history(&h, 2, 6_000);
-        assert!(sent[1].text().ends_with(TRIMMED), "the earlier result is cut");
+        assert!(
+            sent[1].text().ends_with(TRIMMED),
+            "the earlier result is cut"
+        );
         assert_eq!(sent[3].text(), long, "the current turn is whole");
-        assert_eq!(sent.len(), h.len(), "no message is dropped, so call ids still pair");
+        assert_eq!(
+            sent.len(),
+            h.len(),
+            "no message is dropped, so call ids still pair"
+        );
     }
 
     #[test]
     fn two_studio_runs_are_compared_as_the_previous_run_and_this_one() {
         let mut agent: Agent<crate::provider::ScriptedProvider, crate::transport::NoEngine> =
             Agent::new(None, crate::transport::NoEngine).expect("builds");
-        let a = analyst::analyse(&crate::analyst::RunEvidence::default(), &Thresholds::default());
+        let a = analyst::analyse(
+            &crate::analyst::RunEvidence::default(),
+            &Thresholds::default(),
+        );
         assert_eq!(agent.adopt_run("grid (Studio run 1)", a.clone(), 60.0), 0);
         assert_eq!(agent.adopt_run("grid (Studio run 2)", a, 60.0), 1);
         let mut cmp = None;

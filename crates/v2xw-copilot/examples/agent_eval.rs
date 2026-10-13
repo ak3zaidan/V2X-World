@@ -32,8 +32,8 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use v2xw_copilot::agent::{Agent, AgentEvent, AgentPolicy, AgentReport, ungrounded_numbers};
-use v2xw_copilot::transport::RpcTransport;
 use v2xw_copilot::provider::{ChatRequest, Completion, LlmProvider, Usage};
+use v2xw_copilot::transport::RpcTransport;
 use v2xw_copilot::{CurlPost, HttpRpc};
 
 // ----------------------------------------------------------------------------- the suite
@@ -547,7 +547,7 @@ fn documents(report: &AgentReport) -> Vec<Value> {
 
 /// The results of the tools that read the build's own registry (model cards, metric
 /// definitions, the settings index) and the engine's validator (setup and prepare_scenario
-/// answers, which name a refused value's range): a number quoted from them is sourced, though it is
+/// answers, which name a refused value's range; run_control's run status): a number quoted from them is sourced, though it is
 /// not run data.
 fn registry_results(history: &[v2xw_copilot::ChatMessage]) -> String {
     let mut names: BTreeMap<String, String> = BTreeMap::new();
@@ -557,10 +557,13 @@ fn registry_results(history: &[v2xw_copilot::ChatMessage]) -> String {
             names.insert(c.id.clone(), c.name.clone());
         }
         if let Some(id) = &m.tool_call_id {
-            if names
-                .get(id)
-                .is_some_and(|n| n.starts_with("registry__") || matches!(n.as_str(), "find_settings" | "setup" | "prepare_scenario"))
-            {
+            if names.get(id).is_some_and(|n| {
+                n.starts_with("registry__")
+                    || matches!(
+                        n.as_str(),
+                        "find_settings" | "setup" | "prepare_scenario" | "run_control"
+                    )
+            }) {
                 out.push_str(m.text());
                 out.push('\n');
             }
@@ -685,6 +688,10 @@ fn score(case: &Case, report: &AgentReport, prompts: &str, r: &mut CaseResult) {
                 "unsupported",
                 "not available",
                 "unable",
+                "outside the allowed",
+                "out of range",
+                "nothing was changed",
+                "not allowed",
             ]
             .iter()
             .any(|w| text.contains(w));
@@ -1083,7 +1090,11 @@ fn main() {
                 score(
                     case,
                     &report,
-                    &format!("{prompts}\n{}\n{}", registry_results(agent.history()), serde_json::to_string(agent.runs()).unwrap_or_default()),
+                    &format!(
+                        "{prompts}\n{}\n{}",
+                        registry_results(agent.history()),
+                        serde_json::to_string(agent.runs()).unwrap_or_default()
+                    ),
                     &mut r,
                 );
             }

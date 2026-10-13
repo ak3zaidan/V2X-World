@@ -452,7 +452,11 @@ pub(super) fn why_with(why: String, notes: &[String]) -> String {
         return why;
     }
     let n = format!("(read: {})", notes.join("; "));
-    if why.is_empty() { n } else { format!("{why} {n}") }
+    if why.is_empty() {
+        n
+    } else {
+        format!("{why} {n}")
+    }
 }
 
 /// Applies one change to a document. Returns the value before and after.
@@ -913,10 +917,7 @@ fn simulate<P: LlmProvider, T: RpcTransport>(
                 .get("label")
                 .and_then(Value::as_str)
                 .map_or_else(|| format!("arm {}", i + 1), str::to_string);
-            (
-                label,
-                changes_of(v.get("changes")),
-            )
+            (label, changes_of(v.get("changes")))
         })
         .collect();
     if variants.is_empty() {
@@ -1864,7 +1865,9 @@ mod tests {
             want
         );
         assert_eq!(
-            changes_of(Some(&json!("[{\"key\":\"radio.rat\",\"value\":\"lte-v2x-pc5\",\"why\":\"\"}]"))),
+            changes_of(Some(&json!(
+                "[{\"key\":\"radio.rat\",\"value\":\"lte-v2x-pc5\",\"why\":\"\"}]"
+            ))),
             want
         );
         assert!(changes_of(None).is_empty());

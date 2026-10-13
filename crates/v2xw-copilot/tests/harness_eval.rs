@@ -104,7 +104,11 @@ fn the_harness_suite_offline() {
         &std::fs::read_to_string(root().join("evals/harness.yaml")).expect("the suite reads"),
     )
     .expect("the suite parses");
-    assert!(suite.cases.len() >= 40, "the suite has {} cases", suite.cases.len());
+    assert!(
+        suite.cases.len() >= 40,
+        "the suite has {} cases",
+        suite.cases.len()
+    );
 
     let mut checks = 0usize;
     let mut failed: Vec<String> = Vec::new();
@@ -115,7 +119,11 @@ fn the_harness_suite_offline() {
             .chain(case.repair.iter().map(|r| &r.want_key))
             .chain(case.refuse.iter().map(|r| &r.key))
         {
-            assert!(published(key), "{}: `{key}` is not a published setting", case.id);
+            assert!(
+                published(key),
+                "{}: `{key}` is not a published setting",
+                case.id
+            );
         }
         let top = case.resolve_top.unwrap_or(5);
         if !case.resolve.is_empty() {
@@ -154,7 +162,11 @@ fn the_harness_suite_offline() {
                     r.value,
                     r.want_key,
                     outcome.map_or_else(|e| e.to_string(), |o| format!("landed on {}", o.0)),
-                    report.errors.first().map_or("ok".to_string(), |e| e.message.chars().take(120).collect()),
+                    report.errors.first().map_or("ok".to_string(), |e| e
+                        .message
+                        .chars()
+                        .take(120)
+                        .collect()),
                 ));
             }
         }
@@ -172,8 +184,11 @@ fn the_harness_suite_offline() {
                     }
                 }
             };
-            let missing: Vec<&String> =
-                r.words.iter().filter(|w| !text.contains(w.as_str())).collect();
+            let missing: Vec<&String> = r
+                .words
+                .iter()
+                .filter(|w| !text.contains(w.as_str()))
+                .collect();
             if text.is_empty() || !missing.is_empty() {
                 failed.push(format!(
                     "{} refuse: {} = {} → {:?} (missing {missing:?})",

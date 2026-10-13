@@ -127,7 +127,10 @@ fn known(key: &str) -> bool {
         match relation(&k, &p) {
             Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Less) => true,
             Some(std::cmp::Ordering::Greater) => {
-                s.kind == "json" || s.kind == "object" || s.kind == "array" || s.path.ends_with("[]")
+                s.kind == "json"
+                    || s.kind == "object"
+                    || s.kind == "array"
+                    || s.path.ends_with("[]")
             }
             None => false,
         }
@@ -189,7 +192,11 @@ fn resolve_key(raw: &str) -> Result<(String, Option<String>), String> {
         }
         // The fleet-wide value rather than one class's.
         if tails.len() > 1 {
-            let shortest = tails.iter().map(|t| t.split('.').count()).min().unwrap_or(0);
+            let shortest = tails
+                .iter()
+                .map(|t| t.split('.').count())
+                .min()
+                .unwrap_or(0);
             let short: Vec<&String> = tails
                 .iter()
                 .filter(|t| t.split('.').count() == shortest)
@@ -202,7 +209,10 @@ fn resolve_key(raw: &str) -> Result<(String, Option<String>), String> {
     match tails.len() {
         1 => {
             let full = tails.remove(0);
-            Ok((full.clone(), Some(format!("key `{trimmed}` read as `{full}`"))))
+            Ok((
+                full.clone(),
+                Some(format!("key `{trimmed}` read as `{full}`")),
+            ))
         }
         0 => {
             let words = lower.replace(['.', '_'], " ");
@@ -221,7 +231,10 @@ fn resolve_key(raw: &str) -> Result<(String, Option<String>), String> {
                     if near.is_empty() {
                         String::new()
                     } else {
-                        format!("; if the loader refuses it, the closest are {}", near.join(", "))
+                        format!(
+                            "; if the loader refuses it, the closest are {}",
+                            near.join(", ")
+                        )
                     }
                 )),
             ))
@@ -324,7 +337,14 @@ fn read_number(s: &Setting, raw: &Value, notes: &mut Vec<String>) -> Value {
     } else {
         json!(y)
     };
-    notes.push(format!("\"{text}\" read as {out}{}", if field_unit.is_empty() { String::new() } else { format!(" {}", s.unit) }));
+    notes.push(format!(
+        "\"{text}\" read as {out}{}",
+        if field_unit.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", s.unit)
+        }
+    ));
     out
 }
 
@@ -427,9 +447,8 @@ pub fn repair(key: &str, value: &Value) -> Result<Repaired, String> {
             "security.signer_id_policy.digest_otherwise".to_string(),
             json!(false),
         ));
-        notes.push(
-            "a certificate on every message also sets digest_otherwise to false".to_string(),
-        );
+        notes
+            .push("a certificate on every message also sets digest_otherwise to false".to_string());
     }
     Ok(Repaired {
         key,
@@ -472,12 +491,18 @@ mod tests {
 
     #[test]
     fn keys_values_and_companions_are_read_as_meant() {
-        assert_eq!(r("radio.rat", json!("C-V2X mode 4")).value, json!("lte-v2x-pc5"));
+        assert_eq!(
+            r("radio.rat", json!("C-V2X mode 4")).value,
+            json!("lte-v2x-pc5")
+        );
         assert_eq!(r("/radio/rat", json!("DSRC")).value, json!("dsrc-80211p"));
         let t = r("drivers.truck.time_headway_s", json!("2 s"));
         assert_eq!(t.key, "actors.vehicles.drivers.truck.time_headway_s");
         assert_eq!(t.value, json!(2.0));
-        assert_eq!(r("tx_power_dbm", json!(15)).key, "radio.devices.obu.tx_power_dbm");
+        assert_eq!(
+            r("tx_power_dbm", json!(15)).key,
+            "radio.devices.obu.tx_power_dbm"
+        );
         assert_eq!(r("messages.rate_hz", json!("200 ms")).value, json!(5.0));
         assert_eq!(
             r("actors.vehicles.equipped_fraction", json!("30%")).value,
@@ -487,7 +512,11 @@ mod tests {
         assert_eq!(c.companions.len(), 1);
         // An operation is passed through untouched.
         assert_eq!(
-            r("actors.vehicles.demand.rate_veh_per_h", json!({"multiply": 2})).value,
+            r(
+                "actors.vehicles.demand.rate_veh_per_h",
+                json!({"multiply": 2})
+            )
+            .value,
             json!({"multiply": 2})
         );
     }
@@ -496,11 +525,16 @@ mod tests {
     fn an_unknown_key_is_never_guessed_and_names_the_closest_ones() {
         let u = r("radio.loudness", json!(3));
         assert_eq!(u.key, "radio.loudness", "left for the loader to refuse");
-        assert!(u.notes[0].contains("not in the settings index"), "{:?}", u.notes);
+        assert!(
+            u.notes[0].contains("not in the settings index"),
+            "{:?}",
+            u.notes
+        );
         // A tail the fleet-wide value shares with each class's lands on the fleet-wide one.
         let e = repair("min_gap_m", &json!(3));
         assert!(
-            e.as_ref().is_ok_and(|r| r.key == "actors.vehicles.drivers.min_gap_m"),
+            e.as_ref()
+                .is_ok_and(|r| r.key == "actors.vehicles.drivers.min_gap_m"),
             "the fleet-wide value: {e:?}"
         );
     }
