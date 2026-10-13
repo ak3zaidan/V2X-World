@@ -13,8 +13,9 @@ fn the_inventory_is_the_thirty_two_methods_of_section_6_15() {
     // added them did not update this count.
     assert_eq!(
         METHODS.len(),
-        34,
-        "§6.15: 31 methods plus rpc.discover, plus scenario.schema and cities.list"
+        37,
+        "§6.15: 31 methods plus rpc.discover, plus scenario.schema, cities.list and the \
+         three runs.* methods (run history and comparison)"
     );
     let mut sorted = METHODS.to_vec();
     sorted.sort_unstable();

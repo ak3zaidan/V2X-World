@@ -60,6 +60,10 @@ pub enum Command {
     /// Run one scenario and seed under several signature schemes and compare their
     /// signing overhead against ECDSA P-256 (comparison.json, .csv and .md).
     CompareSignatures(CompareSignaturesArgs),
+    /// Compare two runs: the settings that differ and every headline metric's change,
+    /// better or worse by its health direction (run directories, digest files, or
+    /// comma-separated replications).
+    Compare(CompareArgs),
     /// Run a sensitivity spec: a base scenario and one-at-a-time changes on the same seed,
     /// each checked for the direction (and band) theory expects of a named metric.
     Sensitivity(SensitivityArgs),
@@ -117,6 +121,28 @@ pub struct SensitivityArgs {
     /// Run only the base (with the spec's `set`) and print every metric it measured.
     #[arg(long)]
     pub base_only: bool,
+}
+
+/// `v2xw compare`.
+#[derive(Debug, clap::Args)]
+pub struct CompareArgs {
+    /// The baseline: a `v2xw run --out` directory, a run digest JSON (`runs.digest`, the
+    /// Studio's export), an experiment directory, or comma-separated replications.
+    pub a: String,
+    /// The run compared against it, in the same forms.
+    pub b: String,
+    /// Show every metric, not only the meaningful changes.
+    #[arg(long)]
+    pub all: bool,
+    /// Print JSON (`v2xw/run-comparison/1`).
+    #[arg(long, conflicts_with_all = ["markdown", "csv"])]
+    pub json: bool,
+    /// Print Markdown.
+    #[arg(long, conflicts_with = "csv")]
+    pub markdown: bool,
+    /// Print CSV.
+    #[arg(long)]
+    pub csv: bool,
 }
 
 /// `v2xw compare-signatures`.

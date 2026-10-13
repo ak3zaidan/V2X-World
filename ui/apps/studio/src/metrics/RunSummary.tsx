@@ -45,6 +45,7 @@ import {
   type EntityLoad,
 } from "./summaryModel.js";
 import { closeRunSummary, useRunSummary } from "./summaryStore.js";
+import { openRunCompare, useCanComparePrevious } from "./RunCompare.js";
 import "./metrics.css";
 
 /** The most windows the summary asks for per series: full resolution for a run of ten minutes at 1 s. */
@@ -223,6 +224,7 @@ function SummaryDialog(): React.JSX.Element {
   };
 
   const finished = run.state === "finished";
+  const canCompare = useCanComparePrevious();
   const data = load.status === "ready" ? load.data : null;
   const judged = data?.judgements ?? [];
   const out = outOfBand(judged);
@@ -252,6 +254,20 @@ function SummaryDialog(): React.JSX.Element {
           >
             All metrics
           </button>
+          {canCompare ? (
+            <button
+              type="button"
+              className="small"
+              onClick={() => {
+                closeRunSummary();
+                openRunCompare();
+              }}
+              data-testid="run-summary-compare"
+              title="What changed in the settings and in every metric since the previous run"
+            >
+              Compare with previous run
+            </button>
+          ) : null}
           <button type="button" className="icon-button" onClick={closeRunSummary} aria-label="Close the run summary" title="Close (Esc)" data-testid="run-summary-close">
             <CloseIcon />
           </button>

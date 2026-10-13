@@ -113,6 +113,10 @@ use crate::introspect::{Introspect, MetricInfo};
 /// reports progress and gives the run lock back.
 const EXTEND_SLICE_STEPS: usize = 50;
 
+/// How many finished runs' digests the engine keeps for `runs.list` / `runs.compare`. A
+/// digest is a few hundred kilobytes (every headline series at 400 points).
+pub const PAST_RUNS: usize = 8;
+
 /// How a live run is started.
 #[derive(Debug, Clone)]
 pub struct LiveOptions {
@@ -1507,6 +1511,9 @@ struct Projector {
     /// The stream instant of the last [`Projector::prune`] sweep of the link histories.
     links_swept: SimTime,
     last_index: u64,
+    /// The run's headline metrics pooled over every window produced, for the run digest
+    /// `runs.compare` compares (`crate::compare`).
+    pools: crate::compare::DigestBuilder,
 }
 
 impl Projector {
@@ -1576,6 +1583,7 @@ impl Projector {
             retired: std::collections::VecDeque::new(),
             links_swept: 0,
             last_index: setup.duration / step_ns,
+            pools: crate::compare::DigestBuilder::new(false),
         }
     }
 
@@ -1874,7 +1882,10 @@ impl Projector {
                     Err(_) => self.undecodable(record.channel),
                 },
                 "metric.sample" => match serde_json::from_slice::<MetricSample>(&record.json) {
-                    Ok(sample) => self.push_metric(&sample, &mut metrics),
+                    Ok(sample) => {
+                        self.pools.add(&sample);
+                        self.push_metric(&sample, &mut metrics);
+                    }
                     Err(_) => self.undecodable(record.channel),
                 },
                 other => {
@@ -3296,6 +3307,9 @@ pub struct LiveEngine {
     runs_started: u64,
     /// Whole-run totals, accumulated as the kernel produces steps.
     stats: RunStats,
+    /// The digests of the runs this engine ran before the current one, newest first, at
+    /// most [`PAST_RUNS`]: what "compare with the previous run" compares against.
+    past_runs: std::collections::VecDeque<crate::compare::RunDigest>,
     /// What the scenario's exporters wrote after the run, or why they could not.
     exports: Option<std::result::Result<Vec<v2xw_engine::export::Exported>, String>>,
     /// The last imported world, for the next run's kernel (see [`WorldMemo`]).
@@ -3478,6 +3492,7 @@ impl LiveEngine {
             digest_final: None,
             runs_started: 1,
             stats: RunStats::default(),
+            past_runs: std::collections::VecDeque::new(),
             exports: None,
             world_memo,
         })
@@ -3857,6 +3872,38 @@ impl LiveEngine {
         self.exports = None;
         self.runs_started += 1;
         Ok(())
+    }
+
+    /// The current run reduced to a [`crate::compare::RunDigest`], or `None` before it
+    /// has produced a metric window.
+    fn current_digest(&self) -> Option<crate::compare::RunDigest> {
+        let series: BTreeMap<String, Vec<(f64, f64)>> = self
+            .history
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    v.iter().map(|&(t, x)| (t as f64 / 1e9, x)).collect(),
+                )
+            })
+            .collect();
+        let metrics = self.projector.pools.metrics(Some(&series));
+        if metrics.is_empty() {
+            return None;
+        }
+        Some(crate::compare::RunDigest {
+            schema: crate::compare::DIGEST_SCHEMA.to_string(),
+            run_id: self.descriptor.run_id.clone(),
+            label: self.scenario.meta.name.clone(),
+            seed: self.scenario.seed,
+            city: self.scenario.current_city().map(|c| c.id.clone()),
+            scenario_hash: self.descriptor.scenario_hash_hex.clone(),
+            scenario: self.descriptor.scenario.clone(),
+            t_reached_s: self.projector.pools.t_max_s(),
+            t_end_s: self.descriptor.duration as f64 / 1e9,
+            source: "live".to_string(),
+            metrics,
+        })
     }
 
     /// The scenario `run.start` will run when it names none: the staged one, else the
@@ -4291,6 +4338,18 @@ impl Engine for LiveEngine {
         self.setup.catalogue.clone()
     }
 
+    fn run_history(
+        &self,
+    ) -> (
+        Option<crate::compare::RunDigest>,
+        Vec<crate::compare::RunDigest>,
+    ) {
+        (
+            self.current_digest(),
+            self.past_runs.iter().cloned().collect(),
+        )
+    }
+
     fn control(&mut self, command: Control) -> Result<ControlOutcome> {
         let mut extra = BTreeMap::new();
         match command {
@@ -4332,7 +4391,14 @@ impl Engine for LiveEngine {
                 if !missing.is_empty() {
                     return Err(ServerError::ScenarioInvalid(missing));
                 }
+                // The run on screen becomes "the previous run" once the next one builds; a
+                // start that is refused keeps it the current one.
+                let previous = self.current_digest();
                 self.restart(next)?;
+                if let Some(d) = previous {
+                    self.past_runs.push_front(d);
+                    self.past_runs.truncate(PAST_RUNS);
+                }
                 // Staged edits are consumed by the run that runs them; the form then shows
                 // the running scenario, which is now the edited one.
                 self.staged = None;

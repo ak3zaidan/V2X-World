@@ -866,6 +866,58 @@ fn all_methods() -> Vec<Value> {
             &[-32011],
         ),
         method(
+            "runs.list",
+            "The current run and the runs this server ran before it, newest first (at most \
+             eight), each with the `ref` runs.compare and runs.digest take.",
+            object(&[], json!({})),
+            object(
+                &["runs"],
+                json!({"runs": {"type": "array", "items": {"type": "object"}},
+                       "can_compare_previous": {"type": "boolean"}}),
+            ),
+            &[],
+        ),
+        method(
+            "runs.compare",
+            "Compare two runs: the settings that differ, every headline metric's pooled \
+             value on both sides with its change, direction and health, and a plain summary. \
+             Same seed: the differences are the settings'; different seeds: a noise note and \
+             a batch-means error test.",
+            object(
+                &[],
+                json!({"a": {"description": "baseline: `previous` (default), `current`, a run id, or a digest object"},
+                       "b": {"description": "`current` (default), `previous`, a run id, or a digest object"},
+                       "format": {"enum": ["json", "markdown", "csv", "text"], "default": "json"},
+                       "all": {"type": "boolean", "default": false}}),
+            ),
+            object(
+                &["schema", "a", "b", "settings", "rows", "summary"],
+                json!({"schema": {"const": "v2xw/run-comparison/1"},
+                       "a": {"type": "object"}, "b": {"type": "object"},
+                       "same_seed": {"type": "boolean"}, "noise_note": {"type": "string"},
+                       "settings": {"type": "array", "items": {"type": "object"}},
+                       "rows": {"type": "array", "items": {"type": "object"}},
+                       "summary": {"type": "array", "items": {"type": "string"}},
+                       "text": {"type": "string"}}),
+            ),
+            &[-32602],
+        ),
+        method(
+            "runs.digest",
+            "One kept run reduced to its scenario, seed and headline metrics with their \
+             series (schema v2xw/run-digest/1); save it to compare later with `v2xw compare`.",
+            object(
+                &[],
+                json!({"run": {"type": "string", "default": "current"},
+                       "metrics": {"type": "array", "items": {"type": "string"}}}),
+            ),
+            object(
+                &["schema", "run_id", "metrics"],
+                json!({"schema": {"const": "v2xw/run-digest/1"}}),
+            ),
+            &[-32602],
+        ),
+        method(
             "rpc.discover",
             "This document.",
             object(&[], json!({"method": {"type": "string"}})),

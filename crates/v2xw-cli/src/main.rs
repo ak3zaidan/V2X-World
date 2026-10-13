@@ -291,6 +291,19 @@ fn dispatch(cli: &Cli) -> v2xw_cli::Result<String> {
                 Ok(energy::format(&outcome))
             }
         }
+        Command::Compare(args) => {
+            use v2xw_cli::runcompare::Format;
+            let format = if args.json {
+                Format::Json
+            } else if args.markdown {
+                Format::Markdown
+            } else if args.csv {
+                Format::Csv
+            } else {
+                Format::Text
+            };
+            v2xw_cli::runcompare::run(&args.a, &args.b, format, args.all)
+        }
         Command::CompareSignatures(args) => {
             let outcome = v2xw_cli::sigcompare::run(&args.to_options())?;
             if args.json {

@@ -3692,3 +3692,10 @@ Track: the built-in agent (`crates/v2xw-copilot`, the agent host in `v2xw-cli`).
   - Numbers about earlier runs are read from a tool in the same turn.
 - **Checks**: copilot lib 112/112, tests control 5/5, agent 7/7, harness_eval 1/1; `v2xw-cli` bins build. Clippy on copilot is blocked by an existing `v2xw-radio` lint error (`bler_nr.rs:222`, FRAC_1_PI). No engine output changes; digests unaffected.
 - **Open**: run the full live suite (`--all`, about 110 calls). Studio-run adoption has no live end-to-end test yet: it is unit-tested, but the host wiring has not been exercised with a browser.
+
+## 2026-10-13 — compare with the previous run (branch of d06658f)
+
+- Engine/server: `crates/v2xw-server/src/compare.rs` reduces a run to a digest (scenario, seed, city, every headline metric pooled over the run plus a 400-point series). The live engine keeps the last eight runs when `run.start` begins the next one, but not on a seek rewind. New RPCs: `runs.list`, `runs.compare` (json/markdown/csv/text) and `runs.digest`; the agent picks them up from OpenRPC. Each comparison gives the labelled settings diff, previous/current/change/% per metric with its direction and health on both sides, a meaningful flag (crosses a band, or ≥10 % and past the unit's resolution; with different seeds it must also exceed 2× the combined batch-means SE), and a computed summary.
+- CLI: `v2xw compare <A> <B>` takes run dirs, digest files, experiment dirs or comma-separated replications.
+- Studio: header "Compare with previous", a run-summary button, and a dialog with sides, a seed/noise note, the summary, settings, an overlaid chart, the metrics table, CSV/Markdown export and Ask the agent. The Runs tab gets "Runs this session" (pick A/B, save a digest).
+- Checked: real engine e2e `e2e-engine/compare-runs.spec.ts` (grid, and Manhattan at 23 → 10 dBm: PDR −22 %, AoI +129 %, channel load −18 %, same seed). The CLI gives the same numbers. Digests unchanged (the comparison is read-only). Guide: docs/guides/compare-runs.md.

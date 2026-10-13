@@ -23,7 +23,7 @@ use crate::run::Run;
 use crate::session::{CameraState, OVERLAYS, Session, overlay_is_gt};
 
 /// Every method name of §6.15, in the order the inventory lists them.
-pub const METHODS: [&str; 34] = [
+pub const METHODS: [&str; 37] = [
     "run.start",
     "run.pause",
     "run.resume",
@@ -57,6 +57,9 @@ pub const METHODS: [&str; 34] = [
     "experiment.define",
     "experiment.run",
     "experiment.status",
+    "runs.list",
+    "runs.compare",
+    "runs.digest",
     "rpc.discover",
 ];
 
@@ -316,6 +319,9 @@ pub fn dispatch(ctx: &mut Context<'_>, request: &Request) -> Result<Outcome> {
         "experiment.define" => experiment_define(ctx, p),
         "experiment.run" => experiment_run(ctx, p),
         "experiment.status" => experiment_status(ctx, p),
+        "runs.list" => runs_list(ctx),
+        "runs.compare" => runs_compare(ctx, p),
+        "runs.digest" => runs_digest(ctx, p),
         "rpc.discover" => Ok(Outcome::of(crate::openrpc::document(text(p, "method")))),
         _ => Err(ServerError::MethodNotFound(method.to_string())),
     }
@@ -1977,4 +1983,106 @@ fn drain_pending(ctx: &mut Context<'_>) -> Result<Vec<Frame>> {
         frames.extend(session.encode_step(&output)?.frames);
     }
     Ok(frames)
+}
+
+// ------------------------------------------------------------------------------------------------
+// Run history and comparison (`crate::compare`)
+// ------------------------------------------------------------------------------------------------
+
+/// `runs.list`: the current run and the runs before it, newest first, each with the `ref`
+/// `runs.compare` and `runs.digest` take.
+fn runs_list(ctx: &mut Context<'_>) -> Result<Outcome> {
+    let (current, past) = ctx.run.run_history();
+    let mut runs = Vec::new();
+    if let Some(d) = &current {
+        let mut h = d.header();
+        h["ref"] = json!("current");
+        runs.push(h);
+    }
+    for (i, d) in past.iter().enumerate() {
+        let mut h = d.header();
+        h["ref"] = json!(if i == 0 {
+            "previous".to_string()
+        } else {
+            d.run_id.clone()
+        });
+        runs.push(h);
+    }
+    Ok(Outcome::of(json!({
+        "runs": runs,
+        "can_compare_previous": current.is_some() && !past.is_empty(),
+    })))
+}
+
+/// A run named by `ref` (`current`, `previous`, or a run id), or a digest passed inline.
+fn resolve_run(
+    ctx: &mut Context<'_>,
+    p: &Map<String, Value>,
+    key: &str,
+    default: &str,
+) -> Result<crate::compare::RunDigest> {
+    if let Some(doc @ Value::Object(_)) = p.get(key) {
+        return serde_json::from_value(doc.clone()).map_err(|e| {
+            ServerError::param(
+                &format!("/{key}"),
+                &format!("is not a run digest: {e}"),
+                "pass a `runs.digest` result, or a ref from runs.list",
+            )
+        });
+    }
+    let want = text(p, key).unwrap_or(default);
+    let (current, past) = ctx.run.run_history();
+    let found = match want {
+        "current" => current,
+        "previous" => past.into_iter().next(),
+        id => current.into_iter().chain(past).find(|d| d.run_id == id),
+    };
+    found.ok_or_else(|| {
+        ServerError::param(
+            &format!("/{key}"),
+            &format!("no run `{want}` is kept"),
+            "runs.list lists the runs this server remembers; a run appears once it has \
+             produced a metric window, and `previous` once a second run has started",
+        )
+    })
+}
+
+/// `runs.compare {a = "previous", b = "current", format = "json"}`.
+fn runs_compare(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcome> {
+    let format = text(p, "format").unwrap_or("json");
+    if !["json", "markdown", "csv", "text"].contains(&format) {
+        return Err(ServerError::param(
+            "/format",
+            "must be json, markdown, csv or text",
+            "omit it for json",
+        ));
+    }
+    let a = resolve_run(ctx, p, "a", "previous")?;
+    let b = resolve_run(ctx, p, "b", "current")?;
+    let c = crate::compare::compare(&a, &b);
+    let mut out = serde_json::to_value(&c).map_err(|e| ServerError::Internal(e.to_string()))?;
+    match format {
+        "markdown" => out["text"] = json!(crate::compare::markdown(&c)),
+        "csv" => out["text"] = json!(crate::compare::csv(&c)),
+        "text" => out["text"] = json!(crate::compare::text(&c, flag(p, "all", false))),
+        _ => {}
+    }
+    Ok(Outcome::of(out))
+}
+
+/// `runs.digest {run = "current", metrics?}`: one kept run's digest, with only the named
+/// metrics' series when `metrics` is given.
+fn runs_digest(ctx: &mut Context<'_>, p: &Map<String, Value>) -> Result<Outcome> {
+    let mut d = resolve_run(ctx, p, "run", "current")?;
+    let names = strings(p, "metrics");
+    if !names.is_empty() {
+        for m in &mut d.metrics {
+            if !names.contains(&m.name) {
+                m.series.clear();
+            }
+        }
+    }
+    Ok(Outcome::of(
+        serde_json::to_value(&d).map_err(|e| ServerError::Internal(e.to_string()))?,
+    ))
 }
