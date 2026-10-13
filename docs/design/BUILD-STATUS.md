@@ -3801,3 +3801,19 @@ Track: the built-in agent (`crates/v2xw-copilot`, the agent host in `v2xw-cli`).
 - **Release:** `cargo build --release -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots and `/agent/status` reports the agent available.
 - **Owner decisions owed:** the crosswalk refuge hold is on by default and changes digests of scenarios with pedestrians on crossings; the 6 m turn curve window (off by default); the `weather.intensity` arterial fix (digest change). Headway metric output changed wherever safety metrics are on.
 - **Open:** the items in the three sections above (LTE TBS table, engine RSUs on the OBU runtime, permitted-left gap, lane-change/halting gaps to SUMO, truck headway family, `gnss.rtk` false verdicts).
+
+## 2026-10-13: LC2013 lane-change motivations and HCM heavy-vehicle gaps (branch of e2b03c9)
+
+- **`traffic.lc_strategic`, `lc_cooperative`, `lc_speed_gain`, `lc_keep_right`** (new, opt-in). They port SUMO `MSLCM_LC2013.cpp` into `v2xw_mobility::lanechange::lc2013`:
+  - **Strategic look-ahead:** a route change is due within lookAheadSpeed · 10 s · lcStrategic (×2 to the left) + 2 · (length + minGap). Further out, the vehicle changes only toward a lane that is no slower.
+  - **Speed gain:** an accumulator per side with thresholds of 0.2 / lcSpeedGain on the left and 2 / lcSpeedGain on the right, plus a 20 s remain-time rule.
+  - **Keep right:** its own accumulator (`KEEP_RIGHT_TIME` 5 s; acceptance time 7 · v).
+  - **Cooperation:** a vehicle blocking a neighbour's urgent strategic change moves aside, unless the inconvenience is above lcCooperative.
+  - MOBIL's b_safe criterion still gates every change.
+  - Setting any of the four replaces MOBIL's discretionary decision. Unset fields take SUMO's default of 1. With all four unset, nothing changes and digests stay the same.
+  - The loader refuses them when `lane_changes` is false, and refuses strategic/cooperative when `strategic_lane_choice` is false. Diagnostic knob: `V2XW_XVAL_LC2013=1`.
+- **`traffic.heavy_vehicle_gap_terms`** (new, opt-in). Adds the HCM 6th ed. Exhibit 20-11 terms for one heavy vehicle: t_c,HV is +1.0 s, or +2.0 s with four or more major lanes; t_f,HV is +0.9 / 1.0 s. They apply at unsignalised junctions and on a permitted left.
+- **Permitted-left Raff 6.79 s, reviewed and not fixed.** The decision rule judges the opposing car as if it accelerates at 1.4 m/s² up to 11.2 m/s (`time_to_stop_line_launching_s`). The tracker times the car's real arrival, from an ETA at its present speed. A car cruising below the cap is therefore rejected on a predicted lag that is shorter than the one measured. That is a likely source of the long "rejected" lags.
+  - SUMO `MSLink::blockedAtTime` instead compares the foe's announced arrival window with the ego's own leave time plus a 1 s minor time gap. Impatience blends in the foe's braking arrival.
+  - Aligning the two would change the defaults, so it was not done this round.
+- **Cross-validation (Manhattan @1200, quick, LC2013 on):** lane changes per vehicle-km came out at 0.02 against SUMO's 0.67. LC2013 as wired suppresses changes; this is a defect still to be found. Halting time per trip is 99 s against 136 s (-27 %). The baseline comparison run and the new ring test `lc2013_overtakes_a_slow_leader` were queued behind another agent's heavy job and had not run when this was written.

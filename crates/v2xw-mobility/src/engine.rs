@@ -9123,6 +9123,61 @@ mod tests {
     }
 
     #[test]
+    fn lc2013_overtakes_a_slow_leader() {
+        // The same ring, with SUMO LC2013's motivations in place of MOBIL: the speed-gain
+        // accumulator takes the follower left past the slow leader.
+        let world = ring(&RingParams {
+            circumference_m: 800.0,
+            segments: 4,
+            lanes: 2,
+            ..RingParams::default()
+        })
+        .expect("a ring");
+        let right = crate::worlds::ring_cycle(&world, 0);
+        let rng = RngRegistry::new(19);
+        let params = EngineParams {
+            intersections: IntersectionMode::None,
+            lane_changes: true,
+            dynamic_rerouting: false,
+            lc2013: Some(crate::lanechange::lc2013::Lc2013Params::default()),
+            ..EngineParams::default()
+        };
+        let mut engine = NativeMobility::new(params);
+        {
+            let mut ctx = MobilityCtx::new(0, &world, &rng);
+            engine
+                .init(&mut ctx, Box::new(NoDemand::new()))
+                .expect("init");
+        }
+        let route: Vec<LaneId> = right.iter().cycle().take(right.len() * 8).copied().collect();
+        let driver = IdmPreset::Kesting2010.profile(VehicleClass::Passenger);
+        let leader = engine
+            .spawn_with_route(&world, 0, VehicleClass::Passenger, driver, route.clone(), 60.0)
+            .expect("leader");
+        let follower = engine
+            .spawn_with_route(&world, 0, VehicleClass::Passenger, driver, route, 20.0)
+            .expect("follower");
+        engine.set_speed(leader, 4.0).expect("speed");
+        engine.set_speed(follower, 25.0).expect("speed");
+        let mut went_left = false;
+        let mut t = 0u64;
+        for _ in 0..1200 {
+            let mut ctx = MobilityCtx::new(t, &world, &rng);
+            engine.step(&mut ctx, params.step);
+            t += 100 * NS_PER_MS;
+            if engine
+                .longitudinal_states()
+                .iter()
+                .any(|s| s.0 == follower && !right.contains(&s.1))
+            {
+                went_left = true;
+                break;
+            }
+        }
+        assert!(went_left, "LC2013 never overtook the slow leader");
+    }
+
+    #[test]
     fn the_card_validates_and_declares_its_domains() {
         let engine = NativeMobility::new(EngineParams::default());
         engine.card().validate().expect("validates");
