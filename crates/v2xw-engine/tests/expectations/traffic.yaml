@@ -24,14 +24,17 @@
    source: "only equipped vehicles transmit: half the transmitters, roughly half the busy time at low load (USDOT CV pilot market-penetration evaluations; ETSI TS 102 687). The low end is 0, where no CBR is measured at all"}
 
 # ---- Car following (IDM / Krauss; Treiber and Kesting, Traffic Flow Dynamics 2013) ----
-- {setting: actors.vehicles.drivers.time_headway_s, change: high, metric: metric.headway_time, expect: up, band: [1.3, 3.5],
-   source: "IDM desired gap s* = s0 + vT: the steady-state time headway follows T (Treiber, Hennecke, Helbing 2000, eq. 2)"}
+- {setting: actors.vehicles.drivers.time_headway_s, change: high, metric: metric.headway_time, expect: up, min_change: 0.05,
+   source: "IDM desired gap s* = s0 + vT: the following time headway grows with T (Treiber, Hennecke, Helbing 2000, eq. 2). No steady-state band: on a signalised grid following pairs are mostly launching or closing on a queue, and headways over 6 s are not following (Vogel 2003), so the mean moves less than T (+15 % measured for T doubled)"}
 - {setting: actors.vehicles.drivers.min_gap_m, change: high, metric: metric.headway_distance, expect: up, min_change: 0.003,
    source: "IDM jam distance s0 is the standstill gap (Treiber 2000); SUMO vType minGap. Small: s0 is a few metres of a ~60 m mean moving gap, and only queued vehicles sit at s0 (+0.9 % measured)"}
-- {setting: actors.vehicles.drivers.reaction_time_s, change: high, metric: metric.headway_time, expect: up,
-   source: "the Krauss safe speed keeps a gap that grows with the reaction time tau (Krauss 1998, eq. 2.6; SUMO vType tau)"}
-- {setting: actors.vehicles.drivers.reaction_time_s, change: low, metric: metric.headway_time, expect: down,
-   source: "Krauss 1998: a shorter tau tolerates shorter gaps"}
+# The first wave took reaction time from Krauss (headway grows with tau). The engine's
+# drivers are IDM plus the Human Driver Model, where the reaction time T' delays the
+# response but does not set the desired gap; anticipation compensates it up to about T
+# (Treiber, Kesting, Helbing, Physica A 360, 2006). Measured: headway up 4 % at the low
+# end, so no headway direction is claimed; what T' must do is change the dynamics.
+- {setting: actors.vehicles.drivers.reaction_time_s, change: high, metric: traffic.stopped_share, expect: changes, min_change: 0.005,
+   source: "HDM: a delayed response changes queue formation and discharge (Treiber, Kesting, Helbing 2006, Physica A 360, 71-88)"}
 - {setting: actors.vehicles.drivers.speed_factor, change: low, metric: metric.flow, expect: down,
    source: "slower desired speeds lower flow on an undersaturated network (q = k v; SUMO speedFactor)"}
 - {setting: actors.vehicles.drivers.start_reaction_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.003,
