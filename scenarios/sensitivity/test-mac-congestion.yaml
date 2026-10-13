@@ -1,0 +1,251 @@
+# Medium access and congestion test (docs/validation/test-mac-congestion.md): 802.11p EDCA,
+# the MAC queue, DCC and offered load (vehicles, rate, payload) on the dense base (about a
+# hundred vehicles in a 300 m square, every one in range of every other). Unless a row says
+# otherwise DCC is off and BSMs go at 20 Hz on a 50 ms mobility step, so the channel is
+# loaded (CBR about 0.55) and contention, not range, decides the outcome.
+# `v2xw sensitivity scenarios/sensitivity/test-mac-congestion.yaml`
+base: dsrc-dense.yaml
+rows:
+  # ---- Offered load: vehicles ----
+  - name: vehicles 150->300 trips
+    base_set: &load {radio.dcc.enabled: false, messages.rate_hz: 20.0, time.mobility_step_ms: 50}
+    set: {actors.vehicles.demand.params.max_total_vehicles: 300}
+    metric: cbr_mean
+    expect: up
+    band: [1.3, 2.3]
+    source: CBR is the offered airtime summed over the senders in range, so it scales with the vehicle count until saturation (ETSI TS 102 687 4.2; Bansal et al. LIMERIC, IEEE TVT 2013)
+  - name: vehicles 150->300 trips
+    base_set: *load
+    set: {actors.vehicles.demand.params.max_total_vehicles: 300}
+    metric: collision_rate
+    expect: up
+    source: the probability that two of n broadcasters end their back-off in the same slot rises with n (Bianchi, IEEE JSAC 2000; Ma and Chen, IEEE TVT 2007 for broadcast)
+  - name: vehicles 150->300 trips
+    base_set: *load
+    set: {actors.vehicles.demand.params.max_total_vehicles: 300}
+    metric: pdr
+    expect: down
+    source: Bianchi 2000; Jiang, Chen, Delgrossi, VTC 2008 (PDR falls with density)
+  - name: vehicles 150->300 trips
+    base_set: *load
+    set: {actors.vehicles.demand.params.max_total_vehicles: 300}
+    metric: access_ms
+    expect: up
+    source: a busier channel defers more frames and freezes their back-off longer (IEEE 802.11-2020 10.3.4.3)
+  - name: vehicles 150->300 trips
+    base_set: *load
+    set: {actors.vehicles.demand.params.max_total_vehicles: 300}
+    metric: e2e_ms_mean
+    expect: up
+    source: end-to-end latency includes the access delay, which grows with load (IEEE 802.11-2020 10.3.4.3)
+  # ---- Offered load: rate ----
+  - name: rate 10->20 Hz
+    base_set: {radio.dcc.enabled: false, time.mobility_step_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: cbr_mean
+    expect: up
+    band: [1.5, 2.2]
+    source: twice the frames per second is about twice the busy time below saturation (ETSI TS 102 687)
+  - name: rate 10->20 Hz
+    base_set: {radio.dcc.enabled: false, time.mobility_step_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: collision_rate
+    expect: up
+    source: more frames per second, more same-slot back-off ends (Bianchi 2000)
+  - name: rate 10->20 Hz
+    base_set: {radio.dcc.enabled: false, time.mobility_step_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: access_ms
+    expect: up
+    source: more deferrals behind a busier medium (IEEE 802.11-2020 10.3.4.3)
+  - name: rate 10->20 Hz
+    base_set: {radio.dcc.enabled: false, time.mobility_step_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: aoi_ms
+    expect: down
+    source: AoI is about half the update interval plus latency (Kaul, Yates, Gruteser, INFOCOM 2012)
+  - name: rate 10->20 Hz
+    base_set: {radio.dcc.enabled: false, time.mobility_step_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: ipg_ms_mean
+    expect: down
+    band: [0.4, 0.65]
+    source: the inter-packet gap is the update interval over the delivery ratio (SAE J2945/1 2016 6.3.6)
+  # ---- Offered load: payload ----
+  - name: path history 15->0 points
+    base_set: *load
+    set: {messages.path_history_points: 0}
+    metric: psdu_bytes
+    expect: down
+    source: about 8 to 9 bytes a PathHistoryPoint (SAE J2735 PathHistoryPointList; J2945/1 6.3.5)
+  - name: path history 15->0 points
+    base_set: *load
+    set: {messages.path_history_points: 0}
+    metric: airtime_us
+    expect: down
+    source: payload symbols scale with bytes (IEEE 802.11-2020 17.4.3 TXTIME)
+  - name: path history 15->0 points
+    base_set: *load
+    set: {messages.path_history_points: 0}
+    metric: cbr_mean
+    expect: down
+    source: shorter frames, less busy time (ETSI TS 102 687)
+  - name: certificate on every message
+    base_set: *load
+    set: {security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    metric: psdu_bytes
+    expect: up
+    source: an explicit certificate adds about 100 bytes against an 8-byte digest (IEEE 1609.2-2016 6.4.8; CAMP SCMS PoC)
+  - name: certificate on every message
+    base_set: *load
+    set: {security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    metric: cbr_mean
+    expect: up
+    source: longer frames, more busy time (ETSI TS 102 687)
+  - name: certificate on every message
+    base_set: *load
+    set: {security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    metric: collision_rate
+    expect: up
+    source: a longer busy period gathers more deferred frames, which then contend in the same window (Bianchi 2000)
+  # ---- EDCA ----
+  - name: CWmin 3->63 at load
+    base_set: *load
+    set: {radio.mac.cw_min_vo: 63}
+    metric: collision_rate
+    expect: down
+    source: with W slots the chance two deferred frames pick the same slot is about 1/W (Bianchi 2000; Ma and Chen 2007; Reinders et al., Veins CW study, IEEE VNC 2011)
+  - name: CWmin 3->63 at load
+    base_set: *load
+    set: {radio.mac.cw_min_vo: 63}
+    metric: access_ms
+    expect: up
+    source: mean back-off is CW/2 slots of 13 us (IEEE 802.11-2020 10.3.2.3)
+  - name: CWmin 3->63 at load
+    base_set: *load
+    set: {radio.mac.cw_min_vo: 63}
+    metric: pdr
+    expect: up
+    source: fewer collisions, more receptions (Reinders 2011)
+  - name: AIFSN 2->9 at load
+    base_set: *load
+    set: {radio.mac.aifsn_vo: 9}
+    metric: access_ms
+    expect: up
+    source: AIFS = 32 + 13 AIFSN us (IEEE 802.11-2020 10.22.2.4)
+  - name: access category vo->bk at load
+    base_set: *load
+    set: {radio.mac.periodic_access_category: bk}
+    metric: collision_rate
+    expect: down
+    source: AC_BK CWmin 15 against AC_VO 3 on the OCB channel (IEEE 802.11-2020 Table 9-155)
+  - name: access category vo->bk at load
+    base_set: *load
+    set: {radio.mac.periodic_access_category: bk}
+    metric: access_ms
+    expect: up
+    source: AIFSN 9 and CWmin 15 against 2 and 3 (IEEE 802.11-2020 Table 9-155)
+  - name: access category vo->vi at load
+    base_set: *load
+    set: {radio.mac.periodic_access_category: vi}
+    metric: access_ms
+    expect: up
+    source: AC_VI AIFSN 3 and CWmin 7 against 2 and 3 (EN 302 663 Table B.3)
+  - name: CWmin_vi 7->63 under AC_VI
+    base_set: {radio.dcc.enabled: false, messages.rate_hz: 20.0, time.mobility_step_ms: 50, radio.mac.periodic_access_category: vi}
+    set: {radio.mac.cw_min_vi: 63}
+    metric: backoff_us
+    expect: up
+    source: mean back-off is CW/2 slots (IEEE 802.11-2020 10.3.2.3)
+  # A queue of 16 overflows only when a node's backlog passes 16 frames: the channel must be
+  # overloaded (offered airtime above one), so 300 trips at 40 Hz with a certificate on
+  # every frame (about 300 x 40 x 0.45 ms = 5.4), 1 s. Each node then gets about 1/300 of the
+  # medium and its queue grows by tens of frames a second. The MAC queue wait is part of
+  # access_ms (enqueue to grant), not of stage_queue_ms (the signing queue).
+  - name: queue 64->16, overloaded
+    base_set: &sat {time.duration_s: 1.0, actors.vehicles.demand.params.max_total_vehicles: 300, radio.dcc.enabled: false, messages.rate_hz: 40.0, time.mobility_step_ms: 25, security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    set: {radio.mac.queue_length: 16}
+    metric: mac_drops
+    expect: up
+    source: M/D/1/K blocking grows as K falls when the offered load exceeds one (Gross and Harris, Fundamentals of Queueing Theory 4e, 2.5)
+  - name: queue 64->16, overloaded
+    base_set: *sat
+    set: {radio.mac.queue_length: 16}
+    metric: access_ms
+    expect: down
+    source: a shorter queue bounds the wait of the frames it admits (Little's law)
+  # ---- DCC ----
+  - name: J2945/1 off->on
+    base_set: {radio.dcc.enabled: false, messages.rate_hz: 10.0}
+    set: {radio.dcc.enabled: true}
+    metric: tx_rate_hz
+    expect: down
+    source: about 100 vehicles over B = 25 stretches the ITT to 100 ms x N/B (SAE J2945/1 6.3.6)
+  - name: J2945/1 off->on
+    base_set: {radio.dcc.enabled: false, messages.rate_hz: 10.0}
+    set: {radio.dcc.enabled: true}
+    metric: cbr_mean
+    expect: down
+    source: fewer frames, less busy time (SAE J2945/1 6.3.6; ETSI TS 102 687)
+  - name: J2945/1 off->on
+    base_set: {radio.dcc.enabled: false, messages.rate_hz: 10.0}
+    set: {radio.dcc.enabled: true}
+    metric: aoi_ms
+    expect: up
+    source: a longer update interval ages the neighbour table (Kaul 2012)
+  - name: J2945/1 vMax_ITT 600->100 ms
+    set: {radio.dcc.max_itt_ms: 100.0}
+    metric: tx_rate_hz
+    expect: up
+    source: the density ITT is capped at vMax_ITT (SAE J2945/1 6.3.6), so a 100 ms cap restores 10 Hz
+  - name: J2945/1 vMax_ITT 600->100 ms
+    set: {radio.dcc.max_itt_ms: 100.0}
+    metric: aoi_ms
+    expect: down
+    source: Kaul 2012
+  # SUPRA keeps vRP_Max until the busy percentage passes vMinCU = 0.50 (Ahmad et al. 2019
+  # Eq. 9), so power control is tested where rate control alone leaves the channel above
+  # it: 300 trips with vMax_ITT at 100 ms (no rate relief), CBR about 0.8.
+  - name: J2945/1 power control on->off, CBR 0.8
+    base_set: &pwr {radio.dcc.max_itt_ms: 100.0, actors.vehicles.demand.params.max_total_vehicles: 300}
+    set: {radio.dcc.power_control: false}
+    metric: cbr_mean
+    expect: up
+    source: J2945/1 6.3.8 lowers power toward vRP_Min as CBR rises; full power is sensed by more nodes
+  - name: J2945/1 vRP_Min 10->20 dBm, CBR 0.8
+    base_set: *pwr
+    set: {radio.dcc.min_power_dbm: 20.0}
+    metric: cbr_mean
+    expect: up
+    source: the power floor bounds how far power control can lower the power (SAE J2945/1 6.3.8)
+  - name: ETSI adaptive off->on
+    base_set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687}, radio.dcc.enabled: false, messages.rate_hz: 20.0, time.mobility_step_ms: 50, actors.vehicles.demand.params.max_total_vehicles: 300}
+    set: {radio.dcc.enabled: true}
+    metric: tx_rate_hz
+    expect: down
+    source: LIMERIC drives the duty cycle to the target CBR 0.68 (ETSI TS 102 687 V1.2.1 5.4; Bansal 2013)
+  - name: ETSI adaptive off->on
+    base_set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687}, radio.dcc.enabled: false, messages.rate_hz: 20.0, time.mobility_step_ms: 50, actors.vehicles.demand.params.max_total_vehicles: 300}
+    set: {radio.dcc.enabled: true}
+    metric: cbr_mean
+    expect: down
+    source: Bansal 2013
+  # Below the 0.68 target LIMERIC is not binding and beta cannot matter: 300 trips.
+  - name: ETSI adaptive beta 0.0012->0.05, 300 trips
+    base_set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687}, messages.rate_hz: 20.0, time.mobility_step_ms: 50, actors.vehicles.demand.params.max_total_vehicles: 300}
+    set: {radio.dcc.adaptive_beta: 0.05}
+    metric: tx_rate_hz
+    expect: up
+    source: the LIMERIC equilibrium duty cycle beta x target / (alpha + K beta) rises with beta (Bansal 2013 eq. 6)
+  - name: reactive table a1->a2
+    base_set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687}, messages.rate_hz: 20.0, time.mobility_step_ms: 50}
+    set: {radio.dcc.reactive_table: a2}
+    metric: tx_rate_hz
+    expect: changes
+    source: Table A.2 limits T_on to 500 us and sets its own T_off per state (TS 102 687 V1.2.1 Annex A)
+  - name: reactive hold 0->1000 ms
+    base_set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687}, messages.rate_hz: 20.0, time.mobility_step_ms: 50}
+    set: {radio.dcc.reactive_hold_ms: 1000.0}
+    metric: tx_rate_hz
+    expect: changes
+    source: a state may only relax after the hold, so the run spends longer in the restrictive states (TS 102 687 V1.2.1 5.3)
