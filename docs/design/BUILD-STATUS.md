@@ -3767,3 +3767,29 @@ Track: the built-in agent (`crates/v2xw-copilot`, the agent host in `v2xw-cli`).
   - Kerbside overlaps from connectors, the in-building corner lane change and actuated detector placement were not reached.
   - Start-up lost time is 3.06 s, outside the HCM's ±1 s band. Greenshields' own headways imply 3.6 s, so the band itself is in question.
 - **Checks:** mobility lib 289/289, engine `scenario::` 27/27, `traffic_audit_config` 9/9.
+
+## 2026-10-13: expectation checks across the catalogue (branch of 0e9d662)
+
+- **Table:** 151 single-setting rows over 78 settings (36 before), each with a cited source, in `crates/v2xw-engine/tests/expectations/{catalogue,radio,security-network,traffic}.yaml`. 17 interaction checks in `tests/expectations/interactions/`: 2 × 2 same-seed runs, judged as dampens / amplifies / holds / reverses (`sensitivity/expect.rs`). Rows may carry a magnitude band.
+- **Run:**
+  - `v2xw sensitivity --expect` plans only what the table names and gives one pass/fail line per row. It takes about 7 min from an empty cache, about 1 min with the cache.
+  - `tests/sensitivity_expectations.rs` is the fast part. `-- --ignored` runs the full table.
+  - Results are in `docs/validation/sensitivity-expectations.md`.
+- **Result:** the first run passed 144/160; the result now is 166/168. Fixes:
+  - **Metric fix:** `metric.headway_time` now counts only following pairs: the follower is at or above 5 mi/h and the headway is at most 6 s. Before, its mean was 129 s and it moved the wrong way. Metric samples change wherever safety metrics are on.
+  - **Families file:**
+    - `rate_veh_per_h_per_lane_km` is a rate, not a density.
+    - The ML-DSA context gets a fragmenter; without one, every frame was refused at the MTU.
+    - GNSS is judged on the lifecycle family.
+    - 20 % trucks/buses/motorcycles for the per-class and NLOSv rows.
+    - The NYC preset for kerbside.
+    - Real ends for `outlier_rate_hz`.
+  - **Planner:** a boolean with no published default is swept both ways. Several "dead" switches were schema-default `true`.
+  - **Expectations corrected with evidence:**
+    - The streak gate tolerates one-sample GNSS outliers.
+    - HDM reaction time does not set the headway.
+    - LIMERIC does not throttle below CBR 0.68.
+    - Demand effects at X ≪ 1.
+- **Still failing:** `weather.intensity` on arterials (owner decision, unchanged), and truck time headway, which is below this family's resolution.
+- **Seen:** `gnss.rtk: true` gives 3 false verdicts against 0 on the lifecycle family.
+- **Catalogue doc:** `docs/validation/sensitivity-catalogue.md` was regenerated from a cache. Entries carried over from the round-12 cache predate the headway metric fix.

@@ -46,6 +46,7 @@ use crate::error::{EngineError, Result, ScenarioError};
 use crate::run::{Engine, RunReport};
 use crate::scenario::Scenario;
 
+pub mod expect;
 pub mod sweep;
 
 /// The direction a row expects its metric to move.

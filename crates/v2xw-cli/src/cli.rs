@@ -73,13 +73,26 @@ pub enum Command {
 #[derive(Debug, clap::Args)]
 pub struct SensitivityArgs {
     /// The spec file (`v2xw_engine::sensitivity::Spec`). Not used with `--catalogue`.
-    #[arg(required_unless_present = "catalogue")]
+    #[arg(required_unless_present_any = ["catalogue", "expect"])]
     pub spec: Option<std::path::PathBuf>,
     /// Sweep every published numeric and choice setting instead of running a spec: low
     /// and high end of each setting's recommended range (or each choice) against a
     /// same-seed base, on the family the families file routes it to.
     #[arg(long)]
     pub catalogue: bool,
+    /// Run the expectation table on its own: only the perturbations its rows name, plus
+    /// the interaction checks (two settings together, 2 x 2 on one family), with a
+    /// pass/fail line per row. Exits non-zero when a row fails.
+    #[arg(long, conflicts_with = "catalogue")]
+    pub expect: bool,
+    /// Interaction files for `--expect` (files or directories of `*.yaml`), comma-separated.
+    #[arg(
+        long,
+        value_name = "FILES",
+        value_delimiter = ',',
+        default_value = "crates/v2xw-engine/tests/expectations/interactions"
+    )]
+    pub interactions: Vec<std::path::PathBuf>,
     /// The families file for `--catalogue`.
     #[arg(
         long,
@@ -87,12 +100,13 @@ pub struct SensitivityArgs {
         default_value = "scenarios/sensitivity/catalogue.yaml"
     )]
     pub families: std::path::PathBuf,
-    /// Expectation files for `--catalogue` (each a YAML list), comma-separated.
+    /// Expectation files for `--catalogue` and `--expect` (YAML lists, or directories of
+    /// them), comma-separated.
     #[arg(
         long,
         value_name = "FILES",
         value_delimiter = ',',
-        default_value = "crates/v2xw-engine/tests/expectations/catalogue.yaml"
+        default_value = "crates/v2xw-engine/tests/expectations"
     )]
     pub expectations: Vec<std::path::PathBuf>,
     /// `--catalogue`: sweep only settings whose path starts with one of these prefixes

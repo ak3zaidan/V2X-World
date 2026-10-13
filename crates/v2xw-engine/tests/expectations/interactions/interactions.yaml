@@ -1,0 +1,173 @@
+# Interaction checks: two settings together (crates/v2xw-engine/src/sensitivity/expect.rs).
+# Each is a 2 x 2 on one family, all four runs on the same seed: base, factor (A),
+# condition (B), both (AB). `expect` says how B changes A's effect, compared in the
+# metric's own units: A - base against AB - B (Montgomery, Design and Analysis of
+# Experiments 9e, 5.2). `direction` is A's effect alone, checked too.
+#
+# The DSRC family is 40 vehicles on a 1.2 km open grid at 10 Hz; `dense` below is 160
+# vehicles at 20 Hz (mobility at 50 ms so 20 Hz is reachable), a CBR of about 0.6, where
+# congestion control and contention have something to act on.
+
+# ---- Density x DCC ----
+- name: density x reactive DCC (CBR)
+  family: dsrc
+  base_set: {time.mobility_step_ms: 50, messages.rate_hz: 20.0}
+  factor: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  condition: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}
+  metric: cbr_mean
+  expect: dampens
+  direction: up
+  source: "reactive DCC moves to a longer Toff as CBR crosses 0.30/0.40/0.50/0.60, holding the channel load down as density rises (ETSI TS 102 687 V1.2.1 Table A.2; Autolitano et al., IEEE TVT 2013)"
+# Adaptive DCC steers toward CBR_target = 0.68 and does not throttle below it: at 160
+# vehicles (CBR 0.52) the first run found no dampening, as LIMERIC predicts. 280 vehicles
+# take the channel past the target, where it must act.
+- name: density x adaptive DCC (CBR)
+  family: dsrc
+  base_set: {time.mobility_step_ms: 50, messages.rate_hz: 20.0}
+  factor: {actors.vehicles.demand.params.max_total_vehicles: 280}
+  condition: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}
+  metric: cbr_mean
+  expect: dampens
+  direction: up
+  source: "LIMERIC drives the aggregate rate toward a CBR target, so CBR rises less than in proportion to K (Bansal et al., IEEE TVT 2013, eq. 6; ETSI TS 102 687 V1.2.1 5.4)"
+- name: DCC x density (AoI)
+  family: dsrc
+  base_set: {time.mobility_step_ms: 50, messages.rate_hz: 20.0}
+  factor: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}
+  condition: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  metric: aoi_ms
+  expect: amplifies
+  source: "DCC throttles only when the channel is loaded: its AoI cost is near zero on a light channel and grows with density (ETSI TS 102 687 Table A.2; Kaul, Yates, Gruteser 2012)"
+- name: DCC x density (frames)
+  family: dsrc
+  base_set: {time.mobility_step_ms: 50, messages.rate_hz: 20.0}
+  factor: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}
+  condition: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  metric: frames_tx
+  expect: amplifies
+  source: "reactive DCC removes more frames the more vehicles share the channel (ETSI TS 102 687 Table A.2)"
+
+# ---- Contention under load (Bianchi 2000) ----
+- name: density x capture threshold (PRR)
+  family: dsrc
+  base_set: {time.mobility_step_ms: 50, messages.rate_hz: 20.0}
+  factor: {radio.phy.capture_threshold_db: 10.0}
+  condition: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  metric: prr
+  expect: amplifies
+  direction: down
+  source: "the capture threshold matters only when frames overlap; overlaps grow with the number of contenders (Kochut et al. ICNP 2004; Bianchi, IEEE JSAC 2000)"
+- name: density x message rate (collisions)
+  family: dsrc
+  base_set: {time.mobility_step_ms: 50}
+  factor: {messages.rate_hz: 20.0}
+  condition: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  metric: collision_rate
+  expect: amplifies
+  direction: up
+  source: "the collision probability of a broadcast rises with n x rate x airtime: doubling the rate adds more collisions where n is larger (Bianchi 2000; Jiang, Chen, Delgrossi VTC 2008)"
+- name: density x message rate (PRR)
+  family: dsrc
+  base_set: {time.mobility_step_ms: 50}
+  factor: {messages.rate_hz: 20.0}
+  condition: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  metric: prr
+  expect: amplifies
+  direction: down
+  source: "PRR falls with channel load, more steeply the more vehicles contend (Bai, Stancil, Krishnan VTC 2010; Bianchi 2000)"
+
+# ---- Signature size x message rate ----
+- name: message rate x full certificate every message (CBR)
+  family: dsrc
+  base_set: {time.mobility_step_ms: 50}
+  factor: {messages.rate_hz: 20.0}
+  condition: {security.signer_id_policy.digest_otherwise: false}
+  metric: cbr_mean
+  expect: amplifies
+  direction: up
+  source: "CBR is rate x airtime per frame: the same rate increase costs more channel when each frame carries a certificate (ETSI TS 102 687; IEEE 1609.2-2016 6.4.8)"
+- name: message rate x Falcon-512 (CBR)
+  family: dsrc
+  base_set: {time.mobility_step_ms: 50, nodes.default_obu: obu/generic-automotive-soc-no-hsm}
+  factor: {messages.rate_hz: 20.0}
+  condition: {security.signature: falcon-512}
+  metric: cbr_mean
+  expect: amplifies
+  direction: up
+  source: "a 666-octet Falcon-512 signature makes each frame longer, so each extra message per second costs more airtime (NIST Falcon spec 1.2; ETSI TS 102 687)"
+- name: data rate x frame size (airtime)
+  family: dsrc
+  factor: {radio.phy.data_rate_mbps: 12.0}
+  condition: {security.signer_id_policy.digest_otherwise: false}
+  metric: airtime_us
+  expect: amplifies
+  direction: down
+  source: "TXTIME's payload term is 8 L / rate: the airtime a faster rate saves grows with the frame length L; the preamble does not shrink (IEEE 802.11-2020 17.4.3)"
+
+# ---- Link budget x environment ----
+- name: transmit power x path-loss exponent (range)
+  family: dsrc
+  factor: {radio.devices.obu.tx_power_dbm: 10.0}
+  condition: {radio.channel_model.path_loss_exponent: 2.0}
+  metric: range90_m
+  expect: amplifies
+  direction: down
+  source: "range is d0 10^(budget / 10 n): a dB of budget buys more metres when the exponent n is smaller (Rappaport 2e, 4.9)"
+
+# ---- Demand x capacity (traffic grid, 1500 veh/h base) ----
+# The grid at 1500 veh/h holds about 45 vehicles, far below capacity (X << 1), where
+# Webster's delay barely depends on flow: the first run found more demand moved speed by
+# +0.6 %, so speed and stopped share are not what demand moves here. Flow is.
+- name: demand x time headway (flow)
+  family: traffic
+  factor: {actors.vehicles.demand.rate_veh_per_h: 2400.0}
+  condition: {actors.vehicles.drivers.time_headway_s: 2.5}
+  metric: metric.flow
+  expect: holds
+  direction: up
+  source: "below capacity, flow out equals demand in (q = demand) whatever the saturation headway (HCM 7th ed. 19.2: capacity s g / C only binds at X >= 1)"
+- name: actuated signals x demand (speed)
+  family: traffic
+  factor: {traffic.signals.control: actuated}
+  condition: {actors.vehicles.demand.rate_veh_per_h: 2400.0}
+  metric: traffic.speed_mean_mps
+  expect: dampens
+  direction: up
+  source: "actuation pays most at low volume, where it can skip and gap out; as demand grows the phases run longer toward max green and the gain over fixed time shrinks (FHWA Signal Timing Manual 2e, 5.1; HCM 7th ed. 19.4)"
+- name: demand x DCC on the traffic grid (CBR)
+  family: traffic
+  factor: {actors.vehicles.demand.rate_veh_per_h: 2400.0}
+  condition: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}
+  metric: cbr_mean
+  expect: holds
+  direction: up
+  source: "at the low CBR of a Midtown grid (about 0.01) reactive DCC stays in its relaxed state, so more vehicles still means more load (ETSI TS 102 687 Table A.2)"
+
+# ---- Heavy vehicles (owner's example: more trucks, lower speed) ----
+# `condition: {}` makes B the base, so the check is a single structured change (a fleet
+# mix) judged by its direction, with `holds` trivially true.
+- name: trucks (20 %) on the traffic grid (speed)
+  family: traffic
+  factor: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}
+  condition: {}
+  metric: traffic.speed_mean_mps
+  expect: holds
+  direction: down
+  min_effect: 0.001
+  source: "heavy vehicles accelerate slower and occupy more road: HCM 7th ed. eq. 19-8 f_HV = 100 / (100 + P_HV (E_T - 1)), E_T 2.0 at signals; SUMO truck vType accel 1.3 m/s2, length 7.1 m. Far below capacity (X << 1) the cost is only the trucks' own launches, so small (-0.2 % measured)"
+- name: trucks x snow (speed)
+  family: traffic
+  factor: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}
+  condition: {weather.initial: snow}
+  metric: traffic.speed_mean_mps
+  expect: holds
+  direction: down
+  min_effect: 0.001
+  source: "heavy vehicles slow traffic in any weather (HCM 7th ed. f_HV); the effect keeps its sign on snow (FHWA-HOP-07-073)"
+- name: trucks x vehicle blockage (PRR)
+  family: traffic
+  factor: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}
+  condition: {radio.channel_model.vehicle_blockage: true}
+  metric: prr
+  expect: amplifies
+  source: "TR 37.885 NLOSv charges a blocker only when it is taller than an antenna (case 2/3, mean 9-10 dB): trucks change PRR more when blockage is modelled (3GPP TR 37.885 6.2.1; Boban et al., IEEE TVT 2011)"

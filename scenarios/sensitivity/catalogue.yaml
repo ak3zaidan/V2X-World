@@ -54,10 +54,16 @@ routes:
   - {prefix: actors.backend, families: [security]}
   - {prefix: actors.rsus, families: [security]}
   - {prefix: actors.vru, families: [pedestrians]}
+  # GNSS error is judged by what misbehaviour detection makes of it: the lifecycle family
+  # runs legacy-12 plausibility checks.
+  - {prefix: actors.vehicles.gnss, families: [security, traffic]}
   - {prefix: world.signals, families: [osm]}
   - {prefix: world.highway_preset, families: [osm]}
   - {prefix: world.service_roads, families: [osm]}
   - {prefix: radio.channel_model.building_wall_loss_db, families: [traffic]}
+  # NLOSv needs a vehicle within 8 m of a same-street path: 40 vehicles on the DSRC
+  # family's 17 km of open street almost never line up in 2 s, the Midtown queues do.
+  - {prefix: radio.channel_model.vehicle_blockage, families: [traffic, dsrc]}
   - {prefix: radio.channel_model.building_loss_db_per_m, families: [traffic]}
   - {prefix: traffic.right_turn_on_red, families: [osm, traffic]}
   - {prefix: actors.vehicles.drivers.bicycle, families: [pedestrians]}
@@ -94,8 +100,11 @@ skip:
 values:
   # 900 veh/h base: half and double (SUMO randomTrips-style Poisson demand).
   actors.vehicles.demand.rate_veh_per_h: [450.0, 1800.0]
-  # vehicles per lane-km: light, and near the HCM 7th ed. basic-freeway LOS F threshold (45 pc/mi/ln = 28 pc/km/ln)
-  actors.vehicles.demand.rate_veh_per_h_per_lane_km: [5.0, 30.0]
+  # An arrival rate per lane-km per hour (city.rs adapt_to_world multiplies it by the
+  # world's driving lane-km), not a density: [5, 30] read as a density put the "high" end
+  # below the family's own 1500 veh/h (about 53 per lane-km on its ~28 lane-km), so more
+  # "density" spawned half the vehicles. Half and double the base instead.
+  actors.vehicles.demand.rate_veh_per_h_per_lane_km: [25.0, 100.0]
   actors.vehicles.demand.fleet_size: [10, 80]
   # The 3GPP TR 36.885 drop fills every lane of the grid at a 2.5 s headway (thousands of
   # vehicles on the Midtown grid: over the 4.5 GB cap), so the sweep turns demand off
@@ -103,6 +112,10 @@ values:
   actors.vehicles.demand.kind: [mobility/demand/none]
   actors.vru.pedestrians: [50, 300]
   radio.range.max_m: [200.0, 2000.0]
+  # The guide's "0.01 per second (default); 0 for clean positions" parses to 0 and the
+  # model default, so the high end moved nothing. Clean, and one jump per 10 s (urban
+  # multipath outliers: Groves, Principles of GNSS, Inertial and Multisensor Navigation 2e, 9.4).
+  actors.vehicles.gnss.outlier_rate_hz: [0.0, 0.1]
 
 # The most values a choice is swept at (spread over its options).
 max_choices: 6
@@ -122,6 +135,28 @@ context:
   - {prefix: radio.tiers.phy, set: {radio.tiers.mac: high}}
   - {prefix: messages.rate_hz, set: {time.mobility_step_ms: 50}}
   - {prefix: messages.cpm_interval_ms, set: {messages.sets: [bsm, cpm]}}
+  # The post-quantum signatures need an OBU that publishes a figure for them
+  # (pq-signatures.yaml uses the same one).
+  # and a fragmenter: without one an ML-DSA SPDU (over the 1,400-octet WSMP MTU) is
+  # refused at the network layer (net_mtu_refusals), every frame, and the run sends
+  # nothing — the first expect run measured exactly that (frames 1941 -> 0).
+  - {prefix: security.signature, set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm, net.fragmenter: {id: fragmenter/generic-sdu}}}
+  # Per-class driver settings act only on a fleet with that class (the first sweep found
+  # all of truck.*, bus.* and motorcycle.* dead on the car-only families), and TR 37.885
+  # NLOSv only blocks when the blocker is taller than an antenna: cars under roof
+  # antennas are case 1 (0 dB), so blockage needs trucks too. 20 % heavy vehicles is
+  # an urban-arterial share (HCM 7th ed. 19: default 2-3 % HV; FHWA 2019 urban truck
+  # VMT about 10 %): enough for the effect to show in a 90 s run.
+  - {prefix: actors.vehicles.drivers.truck, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}}
+  - {prefix: actors.vehicles.drivers.truck_lane_restriction, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}}
+  - {prefix: actors.vehicles.drivers.bus, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, bus: {fraction: 0.2}}}}
+  - {prefix: actors.vehicles.drivers.motorcycle, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, motorcycle: {fraction: 0.2}}}}
+  - {prefix: actors.vehicles.drivers.motorcycle_filtering, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, motorcycle: {fraction: 0.2}}}}
+  - {prefix: radio.channel_model.vehicle_blockage, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}}
+  # Kerbside stops on a car-only fleet come from taxis alone, and only the New York preset
+  # has taxis (v2xw-mobility kerbside.rs). taxi_share with enabled: false is refused by the
+  # loader (it would do nothing), so the context is the jurisdiction instead.
+  - {prefix: traffic.kerbside.enabled, set: {world.highway_preset: urban-us-nyc}}
   - {prefix: security.on_demand_threshold, set: {security.verification_policy: on-demand}}
   - {prefix: security.prioritized_horizon_m, set: {security.verification_policy: prioritized}}
   - {prefix: actors.vehicles.drivers.bicycle, set: {actors.vru.cyclists: 60}}

@@ -1,0 +1,111 @@
+# Expectation rows, radio and MAC (second wave). Format: see catalogue.yaml. Families and
+# routes: scenarios/sensitivity/catalogue.yaml (radio.* runs on the DSRC family: 40
+# vehicles, 1.2 km open grid, 802.11p, 2 s; radio.sidelink.* on LTE-V2X / NR-V2X).
+
+# ---- Link budget ----
+- {setting: radio.devices.obu.tx_power_dbm, change: low, metric: aoi_ms, expect: up,
+   source: "fewer receptions per update at range: age of information grows as delivery falls (Kaul, Yates, Gruteser, INFOCOM 2012)"}
+- {setting: radio.devices.obu.antenna_gain_dbi, change: high, metric: prr, expect: up,
+   source: "EIRP and receive gain add dB for dB to the link budget (Friis 1946; ETSI EN 302 571 EIRP limits)"}
+- {setting: radio.devices.obu.antenna_gain_dbi, change: high, metric: cbr_mean, expect: up,
+   source: "a stronger signal is sensed above the CCA threshold by more nodes: more busy time (ETSI TS 102 687 CBR definition)"}
+- {setting: radio.devices.obu.antenna_gain_dbi, change: low, metric: prr, expect: down,
+   source: "Friis: less gain, less SNR at every distance"}
+- {setting: radio.devices.obu.antenna_gain_dbi, change: low, metric: cbr_mean, expect: down,
+   source: "ETSI TS 102 687: fewer nodes sense the frame above the CCA threshold"}
+- {setting: radio.devices.obu.cable_loss_db, change: high, metric: prr, expect: down,
+   source: "feeder loss is subtracted from both ends of the link budget (Rappaport 2e, 4.9; SAE J2945/1 6.4 antenna system)"}
+- {setting: radio.devices.obu.cable_loss_db, change: high, metric: cbr_mean, expect: down,
+   source: "ETSI TS 102 687: weaker frames are sensed by fewer nodes"}
+- {setting: radio.phy.noise_figure_db, change: low, metric: prr, expect: up, min_change: 0.001,
+   source: "noise floor = kTB + NF: lower NF is more SNR (Friis 1944). Small: most links are interference- or range-limited at 40 vehicles"}
+- {setting: radio.phy.sensitivity_dbm, change: high, metric: prr, expect: down,
+   source: "frames below the receiver's sensitivity are not decoded (IEEE 802.11-2020 17.3.10.6)"}
+- {setting: radio.channel_model.path_loss_exponent, change: high, metric: prr, expect: down,
+   source: "log-distance law: 10 n log10(d) more loss (Rappaport 4.9; Cheng et al., IEEE JSAC 2007 measured n 2-4 for V2V)"}
+- {setting: radio.channel_model.path_loss_exponent, change: high, metric: cbr_mean, expect: down,
+   source: "less received power, fewer nodes above the CCA threshold (ETSI TS 102 687)"}
+- {setting: radio.channel_model.path_loss_exponent, change: low, metric: prr, expect: up,
+   source: "log-distance law (Rappaport 4.9)"}
+- {setting: radio.channel_model.path_loss_exponent, change: low, metric: cbr_mean, expect: up,
+   source: "more nodes sense each frame above the CCA threshold (ETSI TS 102 687)"}
+
+# ---- Small-scale fading (Nakagami-m, Rice K): deeper fading lowers PRR above the mean SNR ----
+- {setting: radio.channel_model.fading, change: rayleigh, metric: prr, expect: down,
+   source: "Rayleigh (m = 1) is the deepest of the usual fades: the outage probability at a given mean SNR is highest (Simon and Alouini, Digital Communication over Fading Channels 2e, 2.2)"}
+- {setting: radio.channel_model.fading, change: none, metric: prr, expect: up,
+   source: "no fading: no fade-induced outages above the mean-SNR threshold (Simon and Alouini 2.2)"}
+- {setting: radio.channel_model.nakagami_shape, change: low, metric: prr, expect: down,
+   source: "smaller Nakagami m, deeper fades (Cheng et al. JSAC 2007 fitted m 0.75-3 by distance; Simon and Alouini 2.2.1.4)"}
+- {setting: radio.channel_model.nakagami_shape, change: high, metric: prr, expect: up,
+   source: "larger Nakagami m tends to AWGN (Simon and Alouini 2.2.1.4)"}
+- {setting: radio.channel_model.rice_k_db, change: high, metric: prr, expect: up,
+   source: "a stronger line-of-sight component (larger K) means shallower fades (Simon and Alouini 2.2.1.2)"}
+- {setting: radio.channel_model.rice_k_db, change: low, metric: prr, expect: down,
+   source: "K -> 0 tends to Rayleigh (Simon and Alouini 2.2.1.2)"}
+- {setting: radio.channel_model.shadowing_sigma_db, change: high, metric: prr, expect: changes,
+   source: "wider log-normal shadowing helps some far links and hurts near ones: the net sign depends on where the links sit relative to the range edge (Rappaport 4.10.2), but the PRR must move"}
+
+# ---- Receiver thresholds, capture, carrier sense ----
+- {setting: radio.phy.capture_threshold_db, change: high, metric: prr, expect: down,
+   source: "a frame overlapped by another survives only if its SIR exceeds the capture threshold: a higher threshold loses more (Kochut et al., IEEE ICNP 2004; ns-3 / Veins capture model)"}
+- {setting: radio.phy.capture_threshold_db, change: high, metric: collision_rate, expect: up,
+   source: "more overlaps end as collisions instead of captures (Kochut 2004)"}
+- {setting: radio.phy.cca_threshold_dbm, change: high, metric: collision_rate, expect: up,
+   source: "a less sensitive carrier sense hides more transmitters: more hidden-terminal collisions (Jiang, Chen, Delgrossi, IEEE VTC 2008 'Ns-2 simulation of 802.11p'; IEEE 802.11-2020 17.3.10.6 CCA)"}
+- {setting: radio.phy.cca_threshold_dbm, change: high, metric: cbr_mean, expect: down,
+   source: "CBR counts time the medium is sensed busy above the CCA threshold (ETSI TS 102 687 4.2)"}
+- {setting: radio.range.max_m, change: low, metric: cbr_mean, expect: down,
+   source: "frames beyond the propagation cut-off are not delivered to the PHY, so they cannot load the channel (ns-3 RangePropagationLossModel; Veins maxInterfDist)"}
+
+# ---- Frame size, rate, access ----
+- {setting: radio.phy.data_rate_mbps, change: low, metric: cbr_mean, expect: up,
+   source: "half the rate is about twice the payload airtime (IEEE 802.11-2020 17.4.3 TXTIME; ETSI TS 102 687 CBR)"}
+- {setting: radio.phy.data_rate_mbps, change: high, metric: airtime_us, expect: down, band: [0.25, 0.75],
+   source: "TXTIME = 20 us preamble + 4 us x ceil((16 + 8 L + 6) / N_DBPS): from 6 to 12-18 Mb/s the payload part halves or better (IEEE 802.11-2020 17.4.3)"}
+- {setting: messages.rate_hz, change: high, metric: cbr_mean, expect: up, band: [1.5, 2.5],
+   source: "CBR is offered airtime: twice the rate is about twice the CBR at low load (Bansal et al. LIMERIC, IEEE TVT 2013; ETSI TS 102 687)"}
+- {setting: messages.rate_hz, change: high, metric: frames_tx, expect: up,
+   source: "SAE J2945/1 6.3.6: a vehicle sends at the commanded rate"}
+- {setting: messages.rate_hz, change: high, metric: aoi_ms, expect: down,
+   source: "AoI is about half the update interval plus latency (Kaul, Yates, Gruteser 2012)"}
+- {setting: messages.rate_hz, change: high, metric: collision_rate, expect: up,
+   source: "more frames per second, more overlaps (Bianchi, IEEE JSAC 2000: collision probability rises with offered load)"}
+- {setting: messages.rate_hz, change: high, metric: prr, expect: down,
+   source: "PRR falls as channel load rises (Bai, Stancil, Krishnan VTC 2010; Jiang 2008)"}
+- {setting: messages.path_history_points, change: low, metric: cbr_mean, expect: down,
+   source: "shorter BSMs, less airtime per frame (SAE J2735 DF_PathHistory; ETSI TS 102 687)"}
+- {setting: radio.mac.periodic_access_category, change: bk, metric: aifs_us, expect: up,
+   source: "AC_BK has AIFSN 9 against AC_VO's 2 on the OCB channel (IEEE 802.11-2020 Table 9-155, dot11OCBActivated)"}
+- {setting: radio.mac.periodic_access_category, change: bk, metric: access_ms, expect: up,
+   source: "longer AIFS and CWmin 15 vs 3: longer channel access (IEEE 802.11-2020 Table 9-155)"}
+- {setting: net.channel_access, change: alternating, metric: e2e_ms_mean, expect: up,
+   source: "alternating access sends only in the 46 ms CCH interval: a frame generated in the SCH interval waits up to 50 ms (IEEE 1609.4-2016 6.2.5)"}
+- {setting: net.channel_access, change: alternating, metric: collision_rate, expect: up,
+   source: "frames held over the SCH interval are released together at the CCH boundary: synchronized collisions (Chen, Jiang, Delgrossi, IEEE VNC 2009 'Overhaul of 802.11 modeling')"}
+- {setting: net.channel_access, change: alternating, metric: prr, expect: down,
+   source: "the same offered frames in half the time: higher load and synchronized contention (IEEE 1609.4-2016 6.2.5; Chen 2009)"}
+
+# ---- Congestion control (ETSI TS 102 687 LIMERIC / reactive) ----
+- {setting: radio.dcc.adaptive_alpha, change: high, metric: cbr_mean, expect: down,
+   source: "LIMERIC: r <- (1 - a) r + b (target - CBR); the equilibrium per-vehicle rate b*target/(a + K b) falls as a grows (Bansal et al. IEEE TVT 2013, eq. 6)"}
+- {setting: radio.dcc.adaptive_alpha, change: high, metric: aoi_ms, expect: up,
+   source: "a lower equilibrium rate means a longer update interval: higher AoI (Bansal 2013; Kaul 2012)"}
+- {setting: radio.dcc.adaptive_alpha, change: high, metric: frames_tx, expect: down,
+   source: "LIMERIC equilibrium rate falls with alpha (Bansal 2013)"}
+
+# ---- C-V2X sidelink ----
+- {setting: radio.sidelink.cbr_threshold_dbm, change: high, metric: cbr_mean, expect: down,
+   source: "SL CBR counts subchannels whose S-RSSI exceeds the threshold: a higher threshold counts fewer (3GPP TS 36.214 5.1.30)"}
+- {setting: radio.sidelink.cbr_threshold_dbm, change: low, metric: cbr_mean, expect: up,
+   source: "3GPP TS 36.214 5.1.30"}
+- {setting: radio.sidelink.candidate_percent, change: high, metric: collision_rate, expect: down,
+   source: "a larger candidate set lowers the chance two UEs pick the same resource (3GPP TS 38.214 8.1.4 X%; Molina-Masegosa and Gozalvez, IEEE VT Magazine 2017)"}
+- {setting: radio.sidelink.selection_window_ms, change: low, metric: e2e_ms_mean, expect: down,
+   source: "the selected resource lies in [n + T1, n + T2]: a smaller T2 bounds the access delay (3GPP TS 38.214 8.1.4)"}
+- {setting: radio.sidelink.sensing, change: false, metric: collision_rate, expect: up,
+   source: "without sensing, SPS picks resources at random instead of excluding the ones neighbours reserved: more resource collisions (3GPP TS 36.213 14.1.1.6; Molina-Masegosa and Gozalvez 2017; Bazzi et al., IEEE TVT 2019)"}
+- {setting: radio.channel_model.vehicle_blockage, change: true, metric: prr, expect: down, min_change: 0.0005,
+   source: "unset, the medium tier's log-distance law looks for no vehicles; on, a vehicle on a same-street path switches the link to the obstructed-LOS fit, about 5 dB more loss (Abbas et al., IEEE TVT 2015 OLOS; 3GPP TR 37.885 6.2.1 NLOSv; Boban et al., IEEE TVT 2011). Measured with 20 % trucks (cars under roof antennas are TR 37.885 case 1, 0 dB); small on the Midtown grid, where most links are already building-blocked (-0.1 %)"}
+- {setting: radio.sidelink.resource_keep_probability, change: low, metric: sl_selections, expect: up,
+   source: "on reselection counter expiry the UE keeps the resource with probability P_keep, else reselects (3GPP TS 36.321 5.14.1.1)"}
