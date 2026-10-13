@@ -92,3 +92,18 @@ Carlo). The measured edge is the start of the first 20 m bin below PRR 0.5.
   more, or a per-link burst-length metric.
 - **Missing metrics:** there is no RSSI or SINR distribution in the sensitivity
   fingerprint. The checks above use PRR per distance bin and the loss-cause shares.
+
+## Not run (blocked by the machine-wide heavy-job lock for the last 30 minutes)
+
+- **The spec as committed.** Its rows reproduce the base-only measurements above, with one
+  exception: the `antenna_gain_dbi` 3 → 0 dBi row (expected ×0.76) has not been measured.
+- **Building loss.** The building wall-loss (9 → 20 dB) and per-metre loss (0.4 → 1 dB/m)
+  variants have not run, nor B1 NLOS `sommer` against `manhattan`, nor the high
+  (geometric) tier with buildings.
+- **Run cost.** `radio.range.max_m` 200 and `radio.range.margin_db` 0 and 30 have not run.
+  The expected effect is fewer link attempts and the same PRR inside the range.
+- **Sidelink.** No LTE-V2X or NR-V2X runs have been made: tx power −6 dB, sidelink NF 3 and
+  15 dB, path-loss exponent 3, Rayleigh fading, and rain. The variant file is
+  `v4.json` in the track scratchpad.
+- **`v2xw sensitivity --expect --only`** for the four new rows in
+  `tests/expectations/phy-channel.yaml`.
