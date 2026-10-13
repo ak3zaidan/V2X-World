@@ -3699,3 +3699,11 @@ Track: the built-in agent (`crates/v2xw-copilot`, the agent host in `v2xw-cli`).
 - CLI: `v2xw compare <A> <B>` takes run dirs, digest files, experiment dirs or comma-separated replications.
 - Studio: header "Compare with previous", a run-summary button, and a dialog with sides, a seed/noise note, the summary, settings, an overlaid chart, the metrics table, CSV/Markdown export and Ask the agent. The Runs tab gets "Runs this session" (pick A/B, save a digest).
 - Checked: real engine e2e `e2e-engine/compare-runs.spec.ts` (grid, and Manhattan at 23 → 10 dBm: PDR −22 %, AoI +129 %, channel load −18 %, same seed). The CLI gives the same numbers. Digests unchanged (the comparison is read-only). Guide: docs/guides/compare-runs.md.
+
+## 2026-10-13: round-12 integration notes
+
+- **Merged** (`--no-ff`, in order): catalogue sensitivity sweep, agent harness robustness, compare runs. The only conflicts were in this file; both sections were kept each time.
+- **Checks:** `cargo check --workspace --tests` is clean. These pass: engine `scenario::`/`publish::`/`guide::` lib tests (27), `sensitivity_catalogue` (3), copilot lib 112 + control 5 + agent 7 + harness_eval 1, server `rpc` 11. Protocol and viewer `tsc -b` pass. The Studio typecheck passes, and vitest passes 288/288.
+- **Playwright (mock):** `ui/packages/mock-server/dist` was stale. The agent and metrics specs failed on `/agent/status` 404s until it was rebuilt (`npx tsc -b`). `studio.spec.ts:71` (`feed-row-sent` never shows) also fails on the pre-merge Studio source, so this round did not cause it. It is still open.
+- **Release:** `cargo build --release -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots with the agent available, and `runs.list` answers.
+- **Open:** the items listed in the three sections above. These include weather intensity on arterials, phantom-actor settings that the loader accepts, the full live agent suite, and digests that are kept only in memory.
