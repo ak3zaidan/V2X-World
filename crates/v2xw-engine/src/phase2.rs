@@ -399,7 +399,10 @@ pub const ATTACKER_PARAMS: [(&str, Option<&str>); 33] = [
     ("disruptive_speed_up_mps", Some("Disruptive")),
     ("disruptive_speed_down_mps", Some("Disruptive")),
     ("disruptive_heading_deg", Some("Disruptive")),
-    ("pos_speed_inconsistent_drop_mps", Some("PosSpeedInconsistent")),
+    (
+        "pos_speed_inconsistent_drop_mps",
+        Some("PosSpeedInconsistent"),
+    ),
     ("pos_heading_swing_m", Some("PosHeadingInconsistent")),
     ("pos_heading_omega_rad_s", Some("PosHeadingInconsistent")),
     ("eventual_stop_delay_s", Some("EventualStop")),

@@ -449,7 +449,13 @@ pub fn save_digest(d: &RunDigest) {
     let id: String = d
         .run_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .take(64)
         .collect();
     let path = dir.join(format!("{stamp:015}-{id}.json"));

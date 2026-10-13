@@ -1309,14 +1309,18 @@ fn sidelink_choice(
         None | Some("code-rate") => false,
         Some("ts-36-213") => {
             if !lte {
-                return Err("sizing ts-36-213 is LTE's transport-block table; NR-V2X keeps \
+                return Err(
+                    "sizing ts-36-213 is LTE's transport-block table; NR-V2X keeps \
                             the code-rate sizing"
-                    .to_string());
+                        .to_string(),
+                );
             }
             if matches!(profile, SidelinkProfile::MolinaMasegosa2017) {
-                return Err("sizing ts-36-213 needs an MCS index, and the Molina-Masegosa \
+                return Err(
+                    "sizing ts-36-213 needs an MCS index, and the Molina-Masegosa \
                             pool has none (QPSK r0.7); choose sae-j3161 or etsi-en303613"
-                    .to_string());
+                        .to_string(),
+                );
             }
             true
         }

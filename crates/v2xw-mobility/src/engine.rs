@@ -1890,7 +1890,12 @@ impl NativeMobility {
         }
         let lane = world.lane(actor.lane);
         let v_max = ego.driver.desired_speed_mps.min(lane.speed_limit_mps);
-        let this_v = lane_v_safe(v_max, nbrs.leader.as_ref(), DECEL_MPS2, ego.driver.min_gap_m);
+        let this_v = lane_v_safe(
+            v_max,
+            nbrs.leader.as_ref(),
+            DECEL_MPS2,
+            ego.driver.min_gap_m,
+        );
         self.lc2013_offer(world, actor, ego, nbrs, side, v_max)
             .is_some_and(|(o, _)| o.v_safe >= this_v)
     }
@@ -1973,7 +1978,10 @@ impl NativeMobility {
                 if p.inconvenience(st, out, this_v, o.v_safe) > p.cooperative {
                     continue;
                 }
-                if mobil.incentive(world, ego, nbrs, out, &self.weather).is_none() {
+                if mobil
+                    .incentive(world, ego, nbrs, out, &self.weather)
+                    .is_none()
+                {
                     continue;
                 }
                 return change(out);
@@ -1991,7 +1999,11 @@ impl NativeMobility {
             left.map(|(o, _)| o),
         );
         match wanted {
-            Some((side, _)) if mobil.incentive(world, ego, nbrs, side, &self.weather).is_some() => {
+            Some((side, _))
+                if mobil
+                    .incentive(world, ego, nbrs, side, &self.weather)
+                    .is_some() =>
+            {
                 change(side)
             }
             _ => LaneChangeDecision::Stay,
@@ -5763,8 +5775,7 @@ impl Mobility for NativeMobility {
             // LC2013's per-vehicle memory, written back after the walk.
             let lc_params = self.params.lc2013;
             let lc_dt = self.params.step.as_secs_f64();
-            let mut lc_updates: Vec<(ActorId, crate::lanechange::lc2013::Lc2013State)> =
-                Vec::new();
+            let mut lc_updates: Vec<(ActorId, crate::lanechange::lc2013::Lc2013State)> = Vec::new();
             for decision in &mut decisions {
                 let Some(actor) = self.actors.get(&decision.actor) else {
                     continue;
@@ -5870,16 +5881,9 @@ impl Mobility for NativeMobility {
                     continue;
                 }
                 decision.lane_change = match (lc_params, lc_updates.last_mut()) {
-                    (Some(p), Some((_, st))) => self.lc2013_decide(
-                        ctx.world(),
-                        &mobil,
-                        &p,
-                        st,
-                        actor,
-                        ego,
-                        nbrs,
-                        lc_dt,
-                    ),
+                    (Some(p), Some((_, st))) => {
+                        self.lc2013_decide(ctx.world(), &mobil, &p, st, actor, ego, nbrs, lc_dt)
+                    }
                     _ => mobil.decide(ctx, ego, nbrs, &self.weather),
                 };
                 // Heavy goods vehicles keep out of a motorway's leftmost lane where the
@@ -9179,10 +9183,22 @@ mod tests {
                 .init(&mut ctx, Box::new(NoDemand::new()))
                 .expect("init");
         }
-        let route: Vec<LaneId> = right.iter().cycle().take(right.len() * 8).copied().collect();
+        let route: Vec<LaneId> = right
+            .iter()
+            .cycle()
+            .take(right.len() * 8)
+            .copied()
+            .collect();
         let driver = IdmPreset::Kesting2010.profile(VehicleClass::Passenger);
         let leader = engine
-            .spawn_with_route(&world, 0, VehicleClass::Passenger, driver, route.clone(), 60.0)
+            .spawn_with_route(
+                &world,
+                0,
+                VehicleClass::Passenger,
+                driver,
+                route.clone(),
+                60.0,
+            )
             .expect("leader");
         let follower = engine
             .spawn_with_route(&world, 0, VehicleClass::Passenger, driver, route, 20.0)

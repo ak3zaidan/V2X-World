@@ -217,7 +217,11 @@ pub struct GapAcceptanceParams {
 /// The HCM 6th ed. Exhibit 20-11 heavy-vehicle adjustments for one heavy vehicle:
 /// (`t_c,HV`, `t_f,HV`) in seconds on a major flow of `major_lanes` lanes.
 pub fn hcm_heavy_vehicle_terms_s(major_lanes: u8) -> (f64, f64) {
-    if major_lanes >= 4 { (2.0, 1.0) } else { (1.0, 0.9) }
+    if major_lanes >= 4 {
+        (2.0, 1.0)
+    } else {
+        (1.0, 0.9)
+    }
 }
 
 impl Default for GapAcceptanceParams {
@@ -288,12 +292,11 @@ impl IntersectionControl for GapAcceptance {
         let on_minor = conflicts.iter().any(|c| c.conflicts && c.ego_must_yield);
         let movement = Movement::classify(j.movement, on_minor);
         let gaps = HcmGaps::of(movement);
-        let (hv_c, hv_f) =
-            if self.params.heavy_vehicle_terms && crate::style::is_heavy(ego.class) {
-                hcm_heavy_vehicle_terms_s(j.major_lanes)
-            } else {
-                (0.0, 0.0)
-            };
+        let (hv_c, hv_f) = if self.params.heavy_vehicle_terms && crate::style::is_heavy(ego.class) {
+            hcm_heavy_vehicle_terms_s(j.major_lanes)
+        } else {
+            (0.0, 0.0)
+        };
         let critical = (gaps.critical_gap_s(j.major_lanes) + hv_c) * self.params.gap_factor;
 
         // How many vehicles of this ego's own queue are ahead of it: each needs its own
@@ -310,8 +313,7 @@ impl IntersectionControl for GapAcceptance {
         } else {
             0
         };
-        let required =
-            critical + (gaps.follow_up_s + hv_f) * self.params.gap_factor * ahead as f64;
+        let required = critical + (gaps.follow_up_s + hv_f) * self.params.gap_factor * ahead as f64;
 
         // The smallest time-to-stop-line among the conflicting claimants the ego must give
         // way to. A standing claimant never closes a gap

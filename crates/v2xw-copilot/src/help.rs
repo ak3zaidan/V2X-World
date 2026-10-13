@@ -216,7 +216,10 @@ pub fn sensitivity(setting: &str, metric: &str) -> Value {
         let mut s = sensitivity_of(k, 12);
         if !metric.is_empty() {
             if let Some(a) = s["expected_by_theory"].as_array_mut() {
-                a.retain(|r| r.as_str().is_some_and(|t| t.to_lowercase().contains(&metric)));
+                a.retain(|r| {
+                    r.as_str()
+                        .is_some_and(|t| t.to_lowercase().contains(&metric))
+                });
             }
         }
         out["setting"] = json!(k);
@@ -276,21 +279,21 @@ mod tests {
                 .filter_map(|f| f.get("x-path").and_then(Value::as_str))
                 .map(str::to_string)
                 .collect();
-        let catalogue: std::collections::BTreeSet<String> = catalog::settings()
-            .iter()
-            .map(|s| s.path.clone())
-            .collect();
+        let catalogue: std::collections::BTreeSet<String> =
+            catalog::settings().iter().map(|s| s.path.clone()).collect();
         assert_eq!(published, catalogue);
         assert!(catalogue.len() >= 250, "{}", catalogue.len());
         for (key, value) in [
             ("actors.vehicles.drivers.politeness", json!(0.8)),
-            ("actors.vehicles.drivers.lane_change_threshold_mps2", json!(0.4)),
+            (
+                "actors.vehicles.drivers.lane_change_threshold_mps2",
+                json!(0.4),
+            ),
             ("weather.intensity", json!(0.9)),
             ("radio.sidelink.resource_keep_probability", json!(0.4)),
             ("traffic.turn_curve_window_m", json!(6.0)),
         ] {
-            let r = crate::repair::repair(key, &value)
-                .unwrap_or_else(|e| panic!("{key}: {e}"));
+            let r = crate::repair::repair(key, &value).unwrap_or_else(|e| panic!("{key}: {e}"));
             assert_eq!(r.key, key);
         }
         let refused = catalog::refused_attackers();

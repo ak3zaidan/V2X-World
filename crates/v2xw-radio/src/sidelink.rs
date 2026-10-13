@@ -1824,7 +1824,11 @@ mod tests {
                     let bp = b + 24 * c;
                     bp % c == 0 && k_sizes.contains(&(bp / c))
                 };
-                assert!(ok, "I_TBS {i}, N_PRB {}: {tbs} is not a turbo-codable size", j + 1);
+                assert!(
+                    ok,
+                    "I_TBS {i}, N_PRB {}: {tbs} is not a turbo-codable size",
+                    j + 1
+                );
             }
         }
         // Spot values a reader can check against the printed table.
@@ -1857,7 +1861,11 @@ mod tests {
             (LTE_MCS11_J3161, 11, 741, 4),
             (LTE_MCS11_J3161, 11, 139, 1),
         ] {
-            assert_eq!(pool(mcs, idx).subchannels_for(bytes), Some(want), "MCS {idx}, {bytes} B");
+            assert_eq!(
+                pool(mcs, idx).subchannels_for(bytes),
+                Some(want),
+                "MCS {idx}, {bytes} B"
+            );
         }
         // OpenCV2X's validation pool (15-RB sub-channels, adjacent PSCCH, MCS 7): 190 B
         // takes one sub-channel, 13 PSSCH PRB carrying 1,608 bits.

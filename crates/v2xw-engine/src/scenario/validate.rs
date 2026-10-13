@@ -3860,8 +3860,7 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
                     .to_string(),
             ));
         }
-        if t.lc_cooperative.is_some_and(|c| c > 0.0) && t.lane_changes && !t.strategic_lane_choice
-        {
+        if t.lc_cooperative.is_some_and(|c| c > 0.0) && t.lane_changes && !t.strategic_lane_choice {
             e.push(conflict(
                 "traffic.lc_cooperative",
                 "makes room for route lane changes, and traffic.strategic_lane_choice is false"

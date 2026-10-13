@@ -610,9 +610,18 @@ fn an_mbms_broadcast_delivers_the_crl() {
     assert_eq!(m.backend_errors, 0, "{}", m.first_backend_error);
     assert!(m.crls_issued > 0, "the revocation must issue a list");
     assert!(m.access.mbms_broadcasts > 0, "no eMBMS broadcast went out");
-    assert!(m.access.mbms_receptions > 0, "no vehicle received the broadcast");
-    assert!(m.crls_installed > 0, "no vehicle installed the broadcast list");
-    assert_eq!(u.access.mbms_broadcasts, 0, "unicast delivery broadcast a list");
+    assert!(
+        m.access.mbms_receptions > 0,
+        "no vehicle received the broadcast"
+    );
+    assert!(
+        m.crls_installed > 0,
+        "no vehicle installed the broadcast list"
+    );
+    assert_eq!(
+        u.access.mbms_broadcasts, 0,
+        "unicast delivery broadcast a list"
+    );
 }
 
 /// A vehicle with no modem reaches the backend through a roadside unit: the report goes on

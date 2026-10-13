@@ -84,7 +84,10 @@ impl Setting {
 /// The attacker kinds the engine renders on the air, as
 /// `threat/attacker/legacy/<Kind>` names them, with the family each belongs to.
 pub const RENDERED_ATTACKERS: [(&str, &str); 23] = [
-    ("Sybil", "identity: ghost vehicles, each signing under its own pseudonym"),
+    (
+        "Sybil",
+        "identity: ghost vehicles, each signing under its own pseudonym",
+    ),
     ("ConstPos", "position: freezes its claimed position"),
     ("ConstPosOffset", "position: a constant offset"),
     ("RandomPos", "position: a random position each message"),
@@ -456,9 +459,11 @@ pub fn find_settings(query: &str, limit: usize) -> Value {
         .map(|(_, s)| s.to_json())
         .collect();
     let mut out = json!({"settings": rows});
-    if ["attack", "threat", "misbehav", "sybil", "ghost", "spoof", "fake"]
-        .iter()
-        .any(|w| q.contains(w))
+    if [
+        "attack", "threat", "misbehav", "sybil", "ghost", "spoof", "fake",
+    ]
+    .iter()
+    .any(|w| q.contains(w))
     {
         let params: Map<String, Value> = v2xw_engine::phase2::ATTACKER_PARAMS
             .iter()

@@ -207,7 +207,11 @@ impl Lc2013Params {
                 state.gain_right *= 0.5_f64.powf(dt);
             } else {
                 state.gain_right += dt * rel;
-                let road_factor = if speed_limit > 0.0 { v_max / speed_limit } else { 1.0 };
+                let road_factor = if speed_limit > 0.0 {
+                    v_max / speed_limit
+                } else {
+                    1.0
+                };
                 let acceptance = 7.0 * road_factor * speed.max(1.0);
                 let vm = v_max.max(0.1);
                 let mut gap = (r.dist_m - vm * vm / (2.0 * decel.max(0.1))).max(0.0);
@@ -215,7 +219,9 @@ impl Lc2013Params {
                 if let Some(l) = r.leader
                     && l.speed_mps < vm
                 {
-                    let secure = (vm * TAU_S + (vm * vm - l.speed_mps * l.speed_mps) / (2.0 * decel.max(0.1))).max(0.0);
+                    let secure = (vm * TAU_S
+                        + (vm * vm - l.speed_mps * l.speed_mps) / (2.0 * decel.max(0.1)))
+                    .max(0.0);
                     gap = gap.min(l.gap_m - secure).max(0.0);
                     secs = secs.min(gap / (vm - l.speed_mps));
                 }
@@ -271,7 +277,11 @@ mod tests {
     fn a_faster_left_lane_is_wanted_after_the_accumulator_fills() {
         let p = Lc2013Params::default();
         let mut s = Lc2013State::default();
-        let left = SideOffer { v_safe: 14.0, dist_m: 2000.0, leader: None };
+        let left = SideOffer {
+            v_safe: 14.0,
+            dist_m: 2000.0,
+            leader: None,
+        };
         let mut wanted = None;
         let mut t = 0.0;
         while wanted.is_none() && t < 10.0 {
@@ -287,7 +297,11 @@ mod tests {
     fn an_empty_right_lane_draws_a_free_driver_back() {
         let p = Lc2013Params::default();
         let mut s = Lc2013State::default();
-        let right = SideOffer { v_safe: 14.0, dist_m: 3000.0, leader: None };
+        let right = SideOffer {
+            v_safe: 14.0,
+            dist_m: 3000.0,
+            leader: None,
+        };
         let mut wanted = None;
         let mut t = 0.0;
         while wanted.is_none() && t < 120.0 {
@@ -299,7 +313,10 @@ mod tests {
         off.keep_right = 0.0;
         let mut s = Lc2013State::default();
         for _ in 0..1200 {
-            assert_eq!(off.step(&mut s, 0.1, 14.0, 14.0, 14.0, 4.5, 14.0, Some(right), None), None);
+            assert_eq!(
+                off.step(&mut s, 0.1, 14.0, 14.0, 14.0, 4.5, 14.0, Some(right), None),
+                None
+            );
         }
     }
 }
