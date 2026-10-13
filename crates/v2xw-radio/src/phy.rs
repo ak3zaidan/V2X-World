@@ -651,13 +651,32 @@ impl OfdmPhy {
     /// Sums in id order, like every other power reduction in the crate.
     #[must_use]
     pub fn energy_dbm(&self, node: NodeId, ch: ChannelId, at: SimTime) -> f64 {
+        self.energy_started_by(node, ch, at, at)
+    }
+
+    /// The energy carrier sense sees at `at`: the arrivals that began at least
+    /// [`crate::types::timing::CCA_TIME`] before it (see [`Phy::cca`]), and any jammer.
+    #[must_use]
+    pub fn sensed_energy_dbm(&self, node: NodeId, ch: ChannelId, at: SimTime) -> f64 {
+        let cutoff = at.saturating_sub(crate::types::timing::CCA_TIME.as_nanos());
+        self.energy_started_by(node, ch, at, cutoff)
+    }
+
+    /// The energy at `at` of the arrivals that began at or before `started_by`.
+    fn energy_started_by(
+        &self,
+        node: NodeId,
+        ch: ChannelId,
+        at: SimTime,
+        started_by: SimTime,
+    ) -> f64 {
         // The map is keyed `(receiver, tx id)`, so this node's arrivals are one range, in
         // the same tx-id order a filtered walk of the whole map visits them.
         let contributors: Vec<(NodeId, f64)> = self
             .arrivals
             .range((node.index(), 0)..=(node.index(), u64::MAX))
             .map(|(_, a)| a)
-            .filter(|a| a.rx == node && a.frame.channel == ch && a.start <= at && at < a.end)
+            .filter(|a| a.rx == node && a.frame.channel == ch && a.start <= started_by && at < a.end)
             .map(|a| (a.tx, numeric::dbm_to_mw(a.power_dbm)))
             .collect();
         // A jammer's energy is energy: it makes carrier sense report a busy medium and it
@@ -1021,7 +1040,13 @@ impl<C: Ctx + ?Sized> Phy<C> for OfdmPhy {
                 energy_dbm: f64::INFINITY,
             };
         }
-        let energy = self.energy_dbm(node, ch, at);
+        // A frame is sensed only `aCCATime` after its energy starts arriving: one that a
+        // neighbour began in this same slot is not yet visible, so stations whose back-off
+        // ends at the same slot boundary both transmit and collide (IEEE 802.11-2020
+        // 10.3.7, Table 17-21). Sensing a frame from its first nanosecond would let
+        // whichever station the event queue served first silence every other one, and
+        // same-slot collisions, the ones CWmin exists to spread, would never happen.
+        let energy = self.sensed_energy_dbm(node, ch, at);
         if energy >= self.cca.cca_threshold_dbm() {
             CcaState::Busy { energy_dbm: energy }
         } else {
