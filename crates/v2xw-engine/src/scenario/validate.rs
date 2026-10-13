@@ -2639,7 +2639,9 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                On the air the engine renders an attacker's claimed position, speed, \
                heading and generation time, a forged signature (the SPDU's signature \
                octets are corrupted, so a receiver checking the bytes finds it) and a \
-               certificate outside its validity window. DoS, DoSRandom, Sybil, \
+               certificate outside its validity window, and a Sybil attacker's ghost \
+               frames (genuine SPDUs under its concurrent pseudonyms, certificate \
+               attached). DoS, DoSRandom, \
                VruImpersonation, VruPositionSpoof, FakeHazard and SelectiveDrop change \
                none of those and are refused by name rather than counted as lies nobody \
                could hear.",

@@ -3136,6 +3136,26 @@ pub fn station_type(class: VehicleClass) -> ParticipantType {
     }
 }
 
+/// The scenario's `security.verification_policy`, as the model a receiving device runs.
+///
+/// Vehicles and VRU devices both run it; a roadside unit runs `verify-all` whatever the
+/// scenario says ([`build_rsu`]).
+pub(crate) fn verification_policy(scenario: &Scenario) -> Box<dyn VerificationPolicy> {
+    match scenario.security.verification_policy.as_str() {
+        "verify-all" => Box::new(VerifyAll::new()),
+        // The two parameterised policies take one number each, and neither has a published
+        // default: `on-demand`'s relevance threshold and `prioritized`'s range are study
+        // choices. The values here are the ones `v2xw-node::register_all` registers, so a
+        // run and the manifest's card agree.
+        "on-demand" => Box::new(OnDemand::new(
+            scenario.security.on_demand_threshold.unwrap_or(0.5),
+        )),
+        _ => Box::new(Prioritized::new(
+            scenario.security.prioritized_horizon_m.unwrap_or(300.0),
+        )),
+    }
+}
+
 /// Builds one node on the scenario's profile, with a bootstrap credential.
 ///
 /// `class` selects the hardware profile through `nodes.per_class` and the CAM
@@ -3157,19 +3177,7 @@ pub fn build_node(
                 .expect("the reference profile ships with v2xw-node")
                 .clone()
         });
-    let policy: Box<dyn VerificationPolicy> = match scenario.security.verification_policy.as_str() {
-        "verify-all" => Box::new(VerifyAll::new()),
-        // The two parameterised policies take one number each, and neither has a published
-        // default: `on-demand`'s relevance threshold and `prioritized`'s range are study
-        // choices. The values here are the ones `v2xw-node::register_all` registers, so a
-        // run and the manifest's card agree.
-        "on-demand" => Box::new(OnDemand::new(
-            scenario.security.on_demand_threshold.unwrap_or(0.5),
-        )),
-        _ => Box::new(Prioritized::new(
-            scenario.security.prioritized_horizon_m.unwrap_or(300.0),
-        )),
-    };
+    let policy = verification_policy(scenario);
     let (bsm_params, cam_params) = generator_params(scenario);
     // The node's own record of its transmit power is its class's `radio.devices` power;
     // the frame's actual power (congestion control, EIRP) is the engine's.

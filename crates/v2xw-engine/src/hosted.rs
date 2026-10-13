@@ -316,6 +316,10 @@ pub fn build_vru_device(
         ..VruConfig::for_kind(VruDeviceKind::Handset)
     };
     let mut device = VruDeviceRuntime::new(node, profile, config, at);
+    // The scenario's verification policy, as a vehicle runs it. A handset used to run
+    // `verify-all` whatever the scenario said, so `prioritized` and `on-demand` changed
+    // nothing on a pedestrian's phone.
+    device.set_policy(crate::wiring::verification_policy(scenario));
     let policy = crate::wiring::signer_id_policy(scenario);
     *device.security_mut() = NodeSecurity::new(
         env.wall,

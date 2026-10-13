@@ -3707,3 +3707,39 @@ Track: the built-in agent (`crates/v2xw-copilot`, the agent host in `v2xw-cli`).
 - **Playwright (mock):** `ui/packages/mock-server/dist` was stale. The agent and metrics specs failed on `/agent/status` 404s until it was rebuilt (`npx tsc -b`). `studio.spec.ts:71` (`feed-row-sent` never shows) also fails on the pre-merge Studio source, so this round did not cause it. It is still open.
 - **Release:** `cargo build --release -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots with the agent available, and `runs.list` answers.
 - **Open:** the items listed in the three sections above. These include weather intensity on arterials, phantom-actor settings that the loader accepts, the full live agent suite, and digests that are kept only in memory.
+
+## 2026-10-13: network realism against the reference code (branch of 0e9d662)
+
+- **Sybil on the air.** The attack is no longer refused. Each ghost re-signs the attacker's
+  payload under one of its concurrent pseudonyms (`NodeSecurity::sign_as`) with the
+  certificate attached, and is queued behind the attacker's own frame. Ghosts are
+  registered for ground truth and for the MA.
+  - New attacker params: `sybil_ghosts` (6, F2MD) and `sybil_jitter_m` (1 m). Both are
+    refused on any other kind.
+  - Measured on a 40 s grid: 2,100 ghost frames. `sybilCoLocation` fired 20 times (0 in
+    the ConstPos control), and there were 15 reports about the attacker. Before this
+    change, `Engine::build` refused the attack.
+- **Verify priority.** `pick_by_priority` is now shared: RsuRuntime and VruDeviceRuntime
+  order by it as the OBU does, and stay FIFO at priority 0.
+  - VRU devices now run `security.verification_policy` (before, they always ran
+    verify-all) plus the claim-based relevance used by `on-demand`. VRU checks under
+    prioritized: 10,708 near and 14,505 far. Before, every check had priority 0. A
+    handset is not loaded, so the waits are equal (0.021/0.019 ms).
+  - Engine RSUs still run `ObuRuntime` + verify-all by design.
+- **Reference comparisons** (docs/validation/radio-fidelity.md §7):
+  - Veins `Decider80211p` error model: equal under constant interference, never more
+    pessimistic.
+  - Artery `CaService`: 0 mismatches. This needed a fix: the DCC gate is now clamped to
+    `T_GenCamMax`, and at a 2 s gate the count went 30 → 60 CAMs.
+  - Vanetza: TS 102 687 eq. B.2 regating was added.
+  - OpenCV2X SPS: no mechanism differs. Its validation ini uses 15-RB sub-channels and 1
+    sub-channel per 190 B packet.
+  - 802.11p density: CBR is linear (0.00155 per veh/km), and losses to interference rise
+    from 3 % to 12 % of all losses.
+- **Output shifts:** Sybil runs (newly runnable). Runs with `prioritized`/`on-demand` and
+  VRU devices. Adaptive-DCC runs (B.2). CAM runs whose DCC gate exceeds 1 s.
+- **Checks:** engine `scenario::` 27/27, security_lifecycle sybil+refused 2/2, vru
+  policy 1/1, node 34, radio dcc 30 + veins, msg generator 22 + artery_cam 1.
+- **Open:** no live end-to-end Sybil run in the Studio yet. The sidelink still needs the
+  LTE TBS table. Engine RSUs do not use RsuRuntime. The full catalogue sensitivity sweep
+  has not been re-run.

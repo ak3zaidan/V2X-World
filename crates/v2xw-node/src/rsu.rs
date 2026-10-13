@@ -75,7 +75,9 @@ use crate::policy::{
     PolicyView, RxSummary, VerificationPolicy, VerifyAll, VerifyDecision, VerifyDecisionRecord,
 };
 use crate::profile::{HardwareProfile, RunsOn};
-use crate::queue::{Admission, DropCause, DropLedger, NodeQueue, QueueKind, Queued};
+use crate::queue::{
+    Admission, DropCause, DropLedger, NodeQueue, QueueKind, Queued, pick_by_priority,
+};
 use crate::runtime::{RxFrame, Transmission, VerifiedMessage};
 use crate::secure::{CryptoMode, NodeSecurity, PSID_SAFETY, SpduVerdict};
 use crate::server::{OpDescriptor, ProfileServiceModel, ServerBank, ServiceModel};
@@ -854,6 +856,8 @@ pub struct RsuRuntime {
     hsm: ServerBank,
     accel: ServerBank,
     queues: [NodeQueue<Queued<RxFrame>>; 5],
+    /// The policy priority of each check waiting in the verify queue, in queue order.
+    verify_priority: std::collections::VecDeque<u32>,
     drops: DropLedger,
     clock: ClockModel,
     belief: PositionEstimate,
@@ -944,6 +948,7 @@ impl RsuRuntime {
                 NodeQueue::new(QueueKind::Tx, config.queue_capacity[3]),
                 NodeQueue::new(QueueKind::Crl, config.queue_capacity[4]),
             ],
+            verify_priority: std::collections::VecDeque::new(),
             drops: DropLedger::new(),
             // A surveyed mast has a perfect clock as often as it has a bad one; the drift
             // is the scenario's to set through `clock_mut`, and zero is the honest default
@@ -1288,7 +1293,7 @@ impl RsuRuntime {
                     let m = self.to_message(&frame, believed, VerificationState::Unverified);
                     self.deliver(m, out);
                 }
-                VerifyDecision::Verify { .. } => {
+                VerifyDecision::Verify { priority, .. } => {
                     let admitted = if self.policy.oldest_drop() {
                         self.queues[1].push_evicting(Queued {
                             item: frame,
@@ -1300,8 +1305,14 @@ impl RsuRuntime {
                             enqueued_at: believed,
                         })
                     };
-                    if !matches!(admitted, Admission::Queued) {
-                        self.drops.record(DropCause::VerifyOverflow);
+                    match admitted {
+                        Admission::Queued => self.verify_priority.push_back(priority),
+                        Admission::Evicted(_) => {
+                            self.verify_priority.pop_front();
+                            self.verify_priority.push_back(priority);
+                            self.drops.record(DropCause::VerifyOverflow);
+                        }
+                        Admission::Refused(_) => self.drops.record(DropCause::VerifyOverflow),
                     }
                 }
             }
@@ -1332,7 +1343,26 @@ impl RsuRuntime {
             return;
         }
         let where_ = self.service.runs_on(&probe);
-        for q in self.queues[1].drain() {
+        // Served in the order the policy's priority gives (`prioritized` serves the near
+        // first; every other policy is first in, first out), as the OBU's queue is.
+        let mut waiting: Vec<(Queued<RxFrame>, u32)> = self.queues[1]
+            .drain()
+            .into_iter()
+            .zip(
+                self.verify_priority
+                    .drain(..)
+                    .chain(std::iter::repeat(0)),
+            )
+            .collect();
+        while !waiting.is_empty() {
+            let free = match where_ {
+                RunsOn::Hsm => self.hsm.earliest_free(),
+                RunsOn::Accelerator => self.accel.earliest_free(),
+                RunsOn::Cpu => self.cpu.earliest_free(),
+            };
+            let keys: Vec<(SimTime, u32)> =
+                waiting.iter().map(|(q, p)| (q.enqueued_at, *p)).collect();
+            let (q, priority) = waiting.remove(pick_by_priority(&keys, free));
             let frame = q.item;
             let op = OpDescriptor::verify(self.config.verify_op, frame.bytes);
             let Some(cost) = self.service.service_time(ctx, &op) else {
@@ -1345,7 +1375,7 @@ impl RsuRuntime {
             };
             self.window.verification(sched.wait);
             let verdict = self.classify(ctx, &frame);
-            ctx.emit(VerifyDecisionRecord::verified(
+            let mut rec = VerifyDecisionRecord::verified(
                 self.node,
                 q.enqueued_at,
                 sched.start,
@@ -1359,7 +1389,9 @@ impl RsuRuntime {
                     _ => "skipped",
                 },
                 0,
-            ));
+            );
+            rec.priority = priority;
+            ctx.emit(rec);
             // The report-forwarding role, on the one message type that reaches it over the
             // air: a verified misbehaviour report goes into store-and-forward, and an
             // unverified one does not. A relay that forwarded what it had not checked

@@ -679,11 +679,24 @@ impl Attacker for LegacyAttacker {
 
         // Sybil ghosts: concurrent valid pseudonyms this node holds, each claiming a
         // position within a metre of the attacker's own claim, with its speed and heading.
+        //
+        // The signers are the ones handed in at construction, or else the credentials the
+        // view says this node holds right now, less the one its own frame is signed with:
+        // a host that provisions credentials after arming (the engine does) passes them
+        // here, on every message, rather than at construction.
         if self.params.kind == AttackKind::Sybil {
-            let n = (self.params.sybil_ghosts as usize).min(self.ghost_signers.len());
+            let signers: Vec<[u8; 8]> = if self.ghost_signers.is_empty() {
+                view.own_credentials
+                    .iter()
+                    .copied()
+                    .filter(|c| *c != out.signer)
+                    .collect()
+            } else {
+                self.ghost_signers.clone()
+            };
+            let n = (self.params.sybil_ghosts as usize).min(signers.len());
             let j = self.params.sybil_jitter_m;
-            for i in 0..n {
-                let signer = self.ghost_signers[i];
+            for &signer in signers.iter().take(n) {
                 let mut rng = ctx.rng(RngDomain::Attack, EntityRef::Node(self.node));
                 let dx = rng.uniform(-j, j);
                 let dy = rng.uniform(-j, j);

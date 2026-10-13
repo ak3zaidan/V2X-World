@@ -260,6 +260,15 @@ pub struct AdaptiveNodeState {
     /// saturates to zero whenever a CBR report arrives after the gate deadline. The HUD
     /// and the metrics export it as `T_off`, so it has to be one.
     pub last_t_off: Duration,
+    /// `t_pg`, when the gate last let a frame through (TS 102 687 Annex B).
+    #[serde(default)]
+    pub gate_pg: SimTime,
+    /// `T_on,pp` of that frame, ns: what equation B.2 rescales when δ moves.
+    #[serde(default)]
+    pub gate_t_on_ns: u64,
+    /// The conformance floor's share of that gate, ns: B.2 never opens the gate earlier.
+    #[serde(default)]
+    pub gate_floor_ns: u64,
 }
 
 impl Default for AdaptiveNodeState {
@@ -274,6 +283,9 @@ impl Default for AdaptiveNodeState {
             last_update: None,
             gate_open_at: 0,
             last_t_off: Duration::ZERO,
+            gate_pg: 0,
+            gate_t_on_ns: 0,
+            gate_floor_ns: 0,
         }
     }
 }
@@ -379,6 +391,30 @@ impl AdaptiveDcc {
         0.5 * previous + 0.5 * (cbr_now + cbr_prev) / 2.0
     }
 
+    /// TS 102 687 V1.2.1 Annex B equation B.2: δ changed while the gate was closed, so the
+    /// remaining wait is rescaled to the new δ,
+    /// `t_go = t_pg + min(max(T_on/δ · (t_go − now)/(t_go − t_pg) + (now − t_pg), 25 ms), 1 s)`.
+    ///
+    /// Transcribed from Vanetza's `LimericBudget::update` (the same rescaling, the same
+    /// 25 ms / 1 s clamp), which Artery runs. Without it a gate closed under a small δ stays
+    /// closed for the old interval after the channel has cleared, and one closed under a
+    /// large δ opens early after it has filled. The conformance floor's wait is kept.
+    #[must_use]
+    pub fn regate(state: &AdaptiveNodeState, now: SimTime) -> SimTime {
+        if now >= state.gate_open_at || state.gate_t_on_ns == 0 || state.delta <= 0.0 {
+            return state.gate_open_at;
+        }
+        let interval = state.gate_open_at.saturating_sub(state.gate_pg) as f64;
+        if interval <= 0.0 {
+            return state.gate_open_at;
+        }
+        let delay = state.gate_open_at.saturating_sub(now) as f64;
+        let rescaled = (state.gate_t_on_ns as f64 / state.delta) * (delay / interval)
+            + now.saturating_sub(state.gate_pg) as f64;
+        let clamped = rescaled.clamp(25e6, 1e9).round() as u64;
+        state.gate_pg + clamped.max(state.gate_floor_ns)
+    }
+
     /// The gatekeeper interval of TS 102 687 Annex B:
     /// `t_go = t_pg + min(max(T_on,pp/δ, 25 ms), 1 s)`.
     #[must_use]
@@ -420,6 +456,11 @@ impl<C: Ctx + ?Sized> Dcc<C> for AdaptiveDcc {
             state.cbr_its_s = AdaptiveDcc::smooth(state.cbr_its_s, state.cbr_now, state.cbr_prev);
             state.delta = AdaptiveDcc::update_delta(params, state.delta, state.cbr_its_s);
             state.last_update = Some(now);
+            if now < state.gate_open_at {
+                let open = AdaptiveDcc::regate(state, now);
+                state.last_t_off = Duration::from_nanos(open.saturating_sub(state.gate_pg));
+                state.gate_open_at = open;
+            }
         }
     }
 
@@ -461,6 +502,9 @@ impl<C: Ctx + ?Sized> Dcc<C> for AdaptiveDcc {
         let state = self.nodes.entry(node.index()).or_default();
         state.gate_open_at = wait.after(now);
         state.last_t_off = wait;
+        state.gate_pg = now;
+        state.gate_t_on_ns = req.air_time.as_nanos();
+        state.gate_floor_ns = floor.as_nanos();
         GateDecision::Now {
             power_dbm: req.power_dbm,
             mcs: req.mcs,
@@ -2340,6 +2384,29 @@ mod tests {
             at_target = AdaptiveDcc::update_delta(p, at_target, p.cbr_target);
         }
         assert!((at_target - p.delta_min).abs() < 1e-9, "{at_target}");
+    }
+
+    /// Equation B.2 against Vanetza's `LimericBudget::update`: a 400 µs frame under
+    /// δ = 0.004 closes the gate for 100 ms; half-way through δ doubles, so the remaining
+    /// half is served at the new δ (25 ms) and the gate opens at 75 ms, not 100. Halving δ
+    /// instead opens it at 150 ms. The conformance floor is never undercut.
+    #[test]
+    fn a_delta_change_while_the_gate_is_closed_rescales_the_wait() {
+        let ms = 1_000_000u64;
+        let mut s = AdaptiveNodeState {
+            delta: 0.008,
+            gate_pg: 0,
+            gate_open_at: 100 * ms,
+            gate_t_on_ns: 400_000,
+            ..AdaptiveNodeState::default()
+        };
+        assert_eq!(AdaptiveDcc::regate(&s, 50 * ms), 75 * ms);
+        s.delta = 0.002;
+        assert_eq!(AdaptiveDcc::regate(&s, 50 * ms), 150 * ms);
+        s.gate_floor_ns = 160 * ms;
+        assert_eq!(AdaptiveDcc::regate(&s, 50 * ms), 160 * ms);
+        // An open gate is left alone.
+        assert_eq!(AdaptiveDcc::regate(&s, 120 * ms), 100 * ms);
     }
 
     #[test]

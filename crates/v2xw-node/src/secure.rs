@@ -674,6 +674,47 @@ impl NodeSecurity {
         Ok((frame, pdu))
     }
 
+    /// Signs `payload` under one of the node's *other* provisioned pseudonyms, with the
+    /// full certificate attached, without changing which pseudonym is active.
+    ///
+    /// What a Sybil attacker does with the concurrent pseudonyms an SCMS issues (20 a
+    /// week under CAMP, `certs_per_period`): each ghost frame is a genuine SPDU a receiver
+    /// can verify, and it carries its certificate because no receiver has ever heard that
+    /// pseudonym before. `None` if the pseudonym was never provisioned.
+    pub fn sign_as(
+        &mut self,
+        ctx: &mut dyn NodeCtx,
+        i_period: u32,
+        j_index: u32,
+        msg_type: MsgType,
+        payload: &[u8],
+    ) -> Option<(SignedFrame, SecuredPdu)> {
+        let signer = self.signers.get(&(i_period, j_index)).cloned()?;
+        let hdr = HeaderInfoSpec {
+            psid: self.psid_for(msg_type),
+            msg_type: Some(msg_type),
+            ..HeaderInfoSpec::default()
+        };
+        let pdu = self
+            .crypto
+            .sign_envelope(
+                &self.envelope,
+                ctx,
+                &signer,
+                payload,
+                &hdr,
+                SignerIdChoice::Certificate,
+            )
+            .ok()?;
+        let cert_bytes = u32::try_from(signer.cert_coer().len()).unwrap_or(u32::MAX);
+        let frame = SignedFrame {
+            payload: payload.to_vec(),
+            spdu: pdu.bytes().to_vec(),
+            cert_bytes,
+        };
+        Some((frame, pdu))
+    }
+
     /// Records that a full certificate went out for `msg_type` at `believed`.
     ///
     /// A certificate sent only because a new station appeared does not restart the

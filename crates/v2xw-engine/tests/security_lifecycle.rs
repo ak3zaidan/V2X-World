@@ -352,10 +352,62 @@ fn a_forged_signature_is_on_the_air_and_reported() {
     assert!(p.reports_about_attackers > 0, "nobody reported the forger");
 }
 
+/// A Sybil attacker's ghosts are on the air: extra frames, each a genuine SPDU signed under
+/// one of the attacker's concurrent pseudonyms with its certificate attached, so receivers
+/// verify them and the co-location detector sees several certificates at one point. Before
+/// the host rendered them the kind was refused by name.
+#[test]
+fn sybil_ghosts_are_on_the_air_and_detected() {
+    let sybil = |on: bool| {
+        let mut s = grid(40.0, 900.0);
+        s.security.verification_policy = "verify-all".to_string();
+        s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
+        s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {
+            id: if on {
+                "threat/attacker/legacy/Sybil".to_string()
+            } else {
+                "threat/attacker/legacy/ConstPos".to_string()
+            },
+            count: Some(1),
+            schedule: Some(v2xw_engine::scenario::schema::DilationWindow {
+                from_s: 5.0,
+                to_s: 40.0,
+            }),
+            ..Default::default()
+        }];
+        cellular(&mut s);
+        let (report, _) = run(s);
+        report.phase2
+    };
+    let p = sybil(true);
+    let q = sybil(false);
+    let fired = |p: &v2xw_engine::phase2::Phase2Report| {
+        p.verdicts_by_detector
+            .get("sybilCoLocation")
+            .copied()
+            .unwrap_or(0)
+    };
+    println!(
+        "Sybil: {} ghost frames, sybilCoLocation fired {} (control {}), states {:?}, {} reports \
+         about the attacker",
+        p.ghost_frames,
+        fired(&p),
+        fired(&q),
+        p.verification_states,
+        p.reports_about_attackers
+    );
+    assert!(p.ghost_frames > 0, "no ghost frame went on the air");
+    assert_eq!(q.ghost_frames, 0, "a non-Sybil attacker sent ghosts");
+    assert!(
+        fired(&p) > fired(&q),
+        "the co-location detector did not see the ghosts"
+    );
+}
+
 /// An attack the engine cannot put on the air is refused by name, not run silently.
 #[test]
 fn an_attack_the_engine_cannot_render_is_refused() {
-    for kind in ["Sybil", "DoS", "VruImpersonation"] {
+    for kind in ["DoS", "VruImpersonation"] {
         let mut s = grid(10.0, 900.0);
         s.detection.local = vec![ModelChoice::new(v2xw_engine::phase2::LEGACY_12)];
         s.threats.attackers = vec![v2xw_engine::scenario::schema::Attacker {

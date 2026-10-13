@@ -2449,4 +2449,72 @@ mod tests {
         assert!(f.kind.is_group_addressed());
         assert_eq!(f.kind, FrameKind::Broadcast);
     }
+
+    /// Veins 5.2 `Decider80211p::checkIfSignalOk` and `packetOk`, on this PHY's own SINR
+    /// windows: the *minimum* SINR over `[start + 32 µs, end]` (the preamble is ignored),
+    /// then two independent trials, the 24-bit PLCP SIGNAL at BPSK 1/2 and the
+    /// `16 + 8·bytes + 6` DATA bits at the frame's MCS, both through `NistErrorRate`
+    /// (the same ns-3 polynomials as [`PerModel`]).
+    fn veins_psr(phy: &OfdmPhy, a: &Arrival) -> f64 {
+        let from = a.start + timing::PREAMBLE.as_nanos();
+        let sinr_min = phy
+            .sinr_windows(a)
+            .iter()
+            .filter(|(s, e, _)| *e > from && *s < a.end)
+            .map(|w| w.2)
+            .fold(f64::INFINITY, f64::min);
+        let per = phy.per_model();
+        PerModel::survival(per.pe_signal(sinr_min), f64::from(timing::SIGNAL_BITS))
+            * PerModel::survival(
+                per.pe_data(a.frame.mcs, sinr_min),
+                crate::per::data_field_bits(a.frame.bytes) as f64,
+            )
+    }
+
+    /// The frame-error model and interference accumulation against Veins' decider, on one
+    /// geometry: a 300 B frame at 6 Mbit/s received at −85 dBm, with one interferer at a
+    /// given signal-to-interference ratio covering the whole frame, its second half, its
+    /// last tenth, or only the preamble. Printed as `MEAS veins …` rows for
+    /// docs/validation/radio-fidelity.md.
+    ///
+    /// The two agree exactly when the interference is constant over the frame (the
+    /// single-SINR PER both evaluate). Where it is not, Veins applies the worst SINR to
+    /// every bit and this PHY apportions the bits to the windows by time (ns-3
+    /// `InterferenceHelper` chunks), so this PHY is never the more pessimistic of the two.
+    #[test]
+    fn the_error_model_against_veins_decider80211p() {
+        let phy = OfdmPhy::new(Tier::Medium);
+        let f = frame(300, Mcs::R6Qpsk12);
+        let base = arrival(0, 1, -85.0, 0, f);
+        let air = base.end - base.start;
+        let cases: [(&str, u64, u64); 4] = [
+            ("whole", 0, air),
+            ("second-half", air / 2, air),
+            ("last-tenth", air - air / 10, air),
+            ("preamble-only", 0, timing::PREAMBLE.as_nanos()),
+        ];
+        for (name, s, e) in cases {
+            let mut row = Vec::new();
+            for sir in [0.0, 3.0, 6.0, 9.0, 12.0, 15.0] {
+                let mut a = base.clone();
+                a.interferers.push(InterferenceSource::new(
+                    NodeId::new(9),
+                    -85.0 - sir,
+                    a.start + s,
+                    a.start + e,
+                ));
+                let ours = phy.success_probability(&a);
+                let veins = veins_psr(&phy, &a);
+                assert!(
+                    ours + 1e-12 >= veins,
+                    "{name} SIR {sir}: ours {ours} below Veins {veins}"
+                );
+                if name == "whole" {
+                    assert!((ours - veins).abs() < 1e-9, "{name} SIR {sir}");
+                }
+                row.push(format!("{sir:>4.0} dB {ours:.3}/{veins:.3}"));
+            }
+            println!("MEAS veins {name:>13}: {}", row.join(" | "));
+        }
+    }
 }
