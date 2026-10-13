@@ -44,6 +44,8 @@
    source: "after an outage the fix resumes far from the last reported one: a position jump on honest senders (VeReMi 2018)"}
 - {setting: actors.vehicles.gnss.outlier_rate_hz, change: high, metric: report.phase2.verdicts_fired, expect: same, min_change: 0.0,
    source: "the streak gate: a check fires after several consecutive suspicious messages from one signer, so isolated one-sample outliers do not raise false positives (So, Sharma, Petit, IEEE ICMLA 2018; v2xw-threat detect.rs)"}
+- {setting: actors.vehicles.gnss.rtk, change: true, metric: report.phase2.verdicts_fired, expect: same, min_change: 0.0,
+   source: "an RTK fix (Reid 2019, OxTS RT3000: 0.26 m at the 68th percentile) is tighter than a standard one, so an honest RTK sender gives the plausibility checks less to flag, never more (VeReMi 2018: false positives grow with position noise). Measured 3 -> 0 after the RTK white-noise fix."}
 
 # ---- GeoNetworking forwarding (ETSI EN 302 636-4-1) ----
 - {setting: net.geonet.area_forwarding, change: simple, metric: gn_forwards_sent, expect: up,

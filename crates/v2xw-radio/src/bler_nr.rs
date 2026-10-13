@@ -189,6 +189,8 @@ macro_rules! lut {
 ///
 /// The first point of each curve is the last SNR the source plots at BLER 1 (or just
 /// below it); BLER is 1 at every SNR below it.
+// Digitised BLER points: 0.318 is a read value, not 1/pi.
+#[allow(clippy::approx_constant)]
 pub const NR_TB_LUTS: &[NrLut] = &[
     // --- Fig. 8: highway LOS, 0 km/h, N_sub 1, smallest and largest rate per modulation.
     lut!(
