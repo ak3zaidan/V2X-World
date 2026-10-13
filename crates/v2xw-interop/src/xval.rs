@@ -676,6 +676,12 @@ pub fn run_native(
             step: timing.step,
             strategic_lane_choice: true,
             time_to_teleport_s: 300.0,
+            // A diagnostic knob, like `V2XW_XVAL_TRACE`: the opt-in apex turn speed
+            // (`traffic.turn_curve_window_m`), to set it beside SUMO. Unset is the default.
+            turn_curve_window_m: std::env::var("V2XW_XVAL_TURN_WINDOW_M")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0),
             ..EngineParams::default()
         }),
     );

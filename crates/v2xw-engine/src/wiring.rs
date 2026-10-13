@@ -506,6 +506,9 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(v) = traffic.turn_lateral_accel_mps2 {
         params.turn_lateral_accel_mps2 = v;
     }
+    if let Some(v) = traffic.turn_curve_window_m {
+        params.turn_curve_window_m = v;
+    }
     if let Some(k) = &traffic.kerbside {
         params.kerbside = k.apply(params.kerbside);
     }

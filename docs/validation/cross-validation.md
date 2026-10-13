@@ -59,7 +59,7 @@ This engine's procedural TR 36.885 3 × 3 grid exported to plain XML, built by n
 | junction speed (moving), km/h | 28.0 | 24.6 | 26.1 | +14 % |
 | queue discharge headway, s | 2.83 | 2.55 | 2.94 | +11 % |
 | vehicles left in network at end | 0 | 0 | 0 | — |
-| wall-clock, s | 0.2 | 2.1 | 1.8 | |
+| wall-clock, s | 0.2 | 2.0 | 1.8 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -131,7 +131,7 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 13/1
 | junction speed (moving), km/h | 28.9 | 26.5 | 27.5 | +9 % |
 | queue discharge headway, s | 2.78 | 2.37 | 2.75 | +17 % |
 | vehicles left in network at end | 4 | 3 | 3 | +33 % |
-| wall-clock, s | 2.4 | 7.1 | 7.0 | |
+| wall-clock, s | 2.3 | 6.7 | 6.9 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -167,7 +167,7 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 24/2
 | junction speed (moving), km/h | 27.9 | 26.7 | 27.9 | +5 % |
 | queue discharge headway, s | 2.93 | 2.21 | 2.72 | +33 % |
 | vehicles left in network at end | 7 | 7 | 6 | +0 % |
-| wall-clock, s | 0.5 | 2.5 | 2.6 | |
+| wall-clock, s | 0.5 | 2.5 | 2.4 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -203,7 +203,7 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 5/5/
 | junction speed (moving), km/h | 28.4 | 28.0 | 28.7 | +1 % |
 | queue discharge headway, s | 2.70 | 2.15 | 2.62 | +26 % |
 | vehicles left in network at end | 28 | 33 | 36 | -15 % |
-| wall-clock, s | 1.6 | 4.9 | 5.4 | |
+| wall-clock, s | 1.5 | 4.8 | 4.9 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -239,7 +239,7 @@ Vehicles in the network per 2-minute bin (native / SUMO Krauss / SUMO IDM): 9/9/
 | junction speed (moving), km/h | 28.2 | 27.9 | 28.7 | +1 % |
 | queue discharge headway, s | 2.64 | 2.16 | 2.60 | +22 % |
 | vehicles left in network at end | 24 | 32 | 37 | -25 % |
-| wall-clock, s | 2.6 | 8.1 | 8.0 | |
+| wall-clock, s | 2.4 | 7.7 | 7.6 | |
 
 | pair | edges | edges with GEH < 5 | edge-speed Pearson r | mean abs edge-speed diff, km/h | trips completed by both | mean TT ratio | median TT ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -260,7 +260,7 @@ Network, trips, routes, signal programmes and measurement are shared, so what re
 The mechanisms that can produce the observed differences, with what each predicts:
 
 - **Lane changing before turns: found and fixed (2026-10-11).** The travel-time tail was traced trip by trip (`V2XW_XVAL_OUTLIERS`, `V2XW_XVAL_TRACE`). Three defects of this engine, each fixed: (1) after a speed-gain change the route was re-planned on the lane graph, which has no lane changes, so a car that could not make a later turn from its new lane went round the block (296 s against SUMO's 109 s on one grid trip); (2) two cars level with each other at the same speed stayed level to the end of the lane, so the one that needed the other's lane missed its turn or was removed; it now drops behind, as LC2013's `informLeader` does (LC2013's other courtesy, the target-lane follower braking for an urgent change, `informFollower`, was tried and removed: it held queues back across the junction upstream and locked Manhattan at 3600 veh/h); (3) a car owing a change it could not make drove past the end of its lane and was removed, where SUMO waits there; it now brakes for the end of its lane from the start of the lane, and its give-up re-plan accepts any lane of the destination road. A lane change near the start of a road now also sees the car on the junction connector behind it in the target lane (the traffic validation's safety classes caught a cut-in there to a net gap of -0.05 m). With these, and with the native run on a scenario's shipped defaults (strategic lane choice on), lane changes per vehicle-km agree with SUMO within about 20 %, and the grid's paired mean travel-time ratio at 3600 veh/h fell from 1.21 to 1.09.
-- **Junctions.** Both run netconvert's signal programmes from the same `net.xml`, but yield behaviour differs: SUMO uses its junction model with impatience and look-ahead over internal lanes; this engine uses gap acceptance on the connector lanes the importer builds. The traffic validation report already records this engine's permitted-left critical gap at 5.99 s against the HCM's 4.5 s (`docs/validation/traffic.md`, `calibration/permitted-left-gap`), which lengthens left-turn delays in this engine specifically.
+- **Junctions.** Both run netconvert's signal programmes from the same `net.xml`, but yield behaviour differs: SUMO uses its junction model with impatience and look-ahead over internal lanes; this engine uses gap acceptance on the connector lanes the importer builds. The traffic validation report records this engine's permitted-left critical gap by Raff's method at 6.8 s against the HCM's 4.5 s (`docs/validation/traffic.md`, `calibration/permitted-left-gap`; the decision rule itself uses 4.5 s, and the estimate rests on 21 accepted lags, three long rejections deciding it), which lengthens left-turn delays in this engine specifically. Moving through a junction this engine is 1-14 % faster than SUMO Krauss (the junction-speed row): both cap a turn at sqrt(5.5 m/s² · R) over the connector's average radius (netconvert `--junctions.limit-turn-speed`), and the apex of a curved connector is then taken at about 7.7 m/s² (85th percentile, `calibration/turning`). With the opt-in `traffic.turn_curve_window_m` at 6 m (radius judged over the tightest 6 m; `V2XW_XVAL_TURN_WINDOW_M=6` here) the grid's junction-speed gap falls to +2 to +7 %, Manhattan's moves to -2 to -6 %, and the space-mean speed difference widens by up to 2 points (2026-10-13 run).
 - **Car following.** SUMO's default Krauss has driver imperfection σ = 0.5 (SUMO vType defaults: accel 2.6 m/s², decel 4.5 m/s², τ = 1 s, minGap 2.5 m). The queue-discharge row is where most of the remaining travel-time gap comes from: Krauss discharges a queue a few tenths of a second per vehicle faster than this engine, while SUMO's own IDM discharges at about this engine's rate, so the residual is mostly the car-following equation, not this engine's junctions or lane changing. **Here SUMO's default is the less realistic one:** field discharge headways are 3.8, 3.1, 2.7, 2.4 and 2.2 s for queue positions 1-5 (Greenshields 1947), settling near the HCM's 2.1 s in a CBD (1,900 pc/h/ln × 0.90), and this engine's saturation-flow check measures 2.13 s with a 2.85 s start-up lost time against those (`docs/validation/traffic.md`, `calibration/saturation-flow`). Krauss's quicker discharge, and its full stops where this engine's queues creep (more stops per trip and more halting time per trip in the tables above), follow from its safe-speed rule and dawdling, not from data.
 - **Desired speed.** Both draw each passenger car's speed factor from N(1, 0.1) of the lane limit, bounded to 0.2-2 (SUMO `speedFactor` default `normc(1,0.1,0.2,2)`; this engine's `DriverTraits::speed_factor`), so free-flow link speeds match; the speed difference is in queues and at junctions.
 - **Insertion.** SUMO inserts at the highest safe speed (`departSpeed=max`); this engine inserts at rest and waits longer for space (the insertion-delay row, under a second). Starting from rest is most of this engine's mid-block halting row (about 1.4 s per trip on the lightly loaded grid, where SUMO has none).

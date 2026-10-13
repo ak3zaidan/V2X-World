@@ -172,8 +172,16 @@ pub struct CalibrationObserver {
     lefts: BTreeMap<ActorId, LeftTurner>,
     /// Lags accepted by permitted left turners, seconds.
     lag_accepted_s: Vec<f64>,
-    /// Every lag rejected, seconds.
+    /// Every lag rejected, seconds (lags let go while a pedestrian was on the turn's
+    /// crosswalk are not among them: `lag_ped_blocked_s`).
     lag_rejected_s: Vec<f64>,
+    /// Lags let go while someone was on a crosswalk the turn crosses: the turner was
+    /// yielding to the pedestrian, not judging the gap, and a field observer applying
+    /// Raff's method leaves such lags out (HCM 6th ed. Ch. 31 bases the permitted-left
+    /// headway on the opposing flow alone; pedestrian blockage is a separate adjustment).
+    lag_ped_blocked_s: Vec<f64>,
+    /// The world's crosswalks, to tell which a left turn crosses.
+    crosswalks: crate::vru::CrosswalkIndex,
     /// Lags whose closing vehicle has not arrived yet: (it, when the lag began, taken).
     pending_lags: Vec<(ActorId, f64, bool)>,
     /// Every signalised approach road: its motorised lanes, and the vehicles that have
@@ -194,6 +202,9 @@ struct LeftTurner {
     /// The opposing vehicle that closes the lag now on offer, and when the lag began,
     /// seconds.
     offered: Option<(ActorId, f64)>,
+    /// Whether a pedestrian has been on a crosswalk the turn crosses while this lag was
+    /// on offer.
+    ped_blocked: bool,
 }
 
 impl CalibrationObserver {
@@ -254,6 +265,8 @@ impl CalibrationObserver {
             lefts: BTreeMap::new(),
             lag_accepted_s: Vec::new(),
             lag_rejected_s: Vec::new(),
+            lag_ped_blocked_s: Vec::new(),
+            crosswalks: crate::vru::CrosswalkIndex::build(world),
             pending_lags: Vec::new(),
             approach_counts,
             span_s: None,
@@ -299,7 +312,7 @@ impl CalibrationObserver {
         self.span_s = Some(self.span_s.map_or((t0_s, t1_s), |(a, _)| (a, t1_s)));
         self.capture_queues(world, t0_s, t1_s, actors);
         self.track_queues(world, t1, dt, actors, despawned);
-        self.track_permitted_lefts(world, t0, t1, dt, actors);
+        self.track_permitted_lefts(world, t0, t1, dt, actors, pedestrians);
         self.track_vehicles(world, t1, dt, actors, despawned);
         self.track_pedestrians(world, t0_s, dt, pedestrians);
         self.network
@@ -327,6 +340,7 @@ impl CalibrationObserver {
         t1: SimTime,
         dt: f64,
         actors: &[AuditActor],
+        pedestrians: &[AuditPedestrian],
     ) {
         struct Opp {
             actor: ActorId,
@@ -401,6 +415,11 @@ impl CalibrationObserver {
                 *e = (a.s_m, a.actor);
             }
         }
+        let occupied = if self.crosswalks.is_empty() {
+            BTreeSet::new()
+        } else {
+            self.crosswalks.occupied(pedestrians.iter().map(|p| p.lane))
+        };
         let mut still = BTreeMap::new();
         for a in actors {
             let lane = world.lane(a.lane);
@@ -448,8 +467,23 @@ impl CalibrationObserver {
                 _ => LeftTurner {
                     lane: a.lane,
                     offered: None,
+                    ped_blocked: false,
                 },
             };
+            // Someone on a crosswalk the turn crosses: on its connector or at the start of
+            // the road it turns into.
+            if !occupied.is_empty() {
+                let mut lanes = vec![next];
+                lanes.extend(world.roads.successors(next).iter().map(|c| c.to_lane));
+                if lanes.iter().any(|l| {
+                    self.crosswalks
+                        .conflicts_on(*l)
+                        .iter()
+                        .any(|c| occupied.contains(&c.crosswalk))
+                }) {
+                    l.ped_blocked = true;
+                }
+            }
             match (l.offered, nearest) {
                 (Some((id, _)), Some(o)) if id == o.actor => {}
                 (prior, now) => {
@@ -459,9 +493,14 @@ impl CalibrationObserver {
                     if let Some((opp, presented)) = prior
                         && let Some(t) = arrived.get(&opp)
                     {
-                        self.lag_rejected_s.push((t - presented).max(0.0));
+                        if l.ped_blocked {
+                            self.lag_ped_blocked_s.push((t - presented).max(0.0));
+                        } else {
+                            self.lag_rejected_s.push((t - presented).max(0.0));
+                        }
                     }
                     l.offered = now.map(|o| (o.actor, t1_s));
+                    l.ped_blocked = false;
                 }
             }
             still.insert(a.actor, l);
@@ -1019,6 +1058,7 @@ impl CalibrationObserver {
             pedestrian_speed_mps: Summary::of(&self.ped_speed_mps),
             permitted_left_lag_accepted_s: Summary::of(&self.lag_accepted_s),
             permitted_left_lag_rejected_s: Summary::of(&self.lag_rejected_s),
+            permitted_left_lag_ped_blocked_s: Summary::of(&self.lag_ped_blocked_s),
             permitted_left_critical_gap_s: raff_critical_gap(
                 &self.lag_accepted_s,
                 &self.lag_rejected_s,
@@ -1232,6 +1272,9 @@ pub struct CalibrationReport {
     pub permitted_left_lag_accepted_s: Summary,
     /// Lags they rejected, seconds.
     pub permitted_left_lag_rejected_s: Summary,
+    /// Lags let go while a pedestrian was on a crosswalk the turn crosses (not in Raff's
+    /// estimate), seconds.
+    pub permitted_left_lag_ped_blocked_s: Summary,
     /// Raff's critical gap from the two ([`raff_critical_gap`]), seconds.
     pub permitted_left_critical_gap_s: f64,
     /// Crossings started at a signalised crosswalk.

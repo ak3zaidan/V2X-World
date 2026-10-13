@@ -983,9 +983,24 @@ impl TrafficAuditor {
         if self.crosswalks.is_empty() || self.prev_peds.is_empty() {
             return;
         }
+        // Someone at the far end of one crossing, where it meets a second crosswalk (a
+        // refuge), is out of the first one's traffic, as the engine's yield rule has it.
+        let refuge = |p: &AuditPedestrian| {
+            world.try_lane(p.lane).is_some_and(|l| {
+                l.kind == LaneKind::Crossing
+                    && l.length_m - p.s_m <= crate::vru::social_force::REFUGE_M
+                    && crate::vru::social_force::SocialForce::walk_successors(world, p.lane)
+                        .into_iter()
+                        .any(|n| {
+                            world.lane(n).kind == LaneKind::Crossing
+                                && self.crosswalks.crosswalk_of(n)
+                                    != self.crosswalks.crosswalk_of(p.lane)
+                        })
+            })
+        };
         let occupied = self
             .crosswalks
-            .occupied(self.prev_peds.iter().map(|p| p.lane));
+            .occupied(self.prev_peds.iter().filter(|p| !refuge(p)).map(|p| p.lane));
         if occupied.is_empty() {
             return;
         }
