@@ -460,6 +460,51 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the pedestrian walking speed",
     },
+    // The applications' thresholds. The loader checked them by hand (positive, at most
+    // 30) with no row here, so the settings window and the sensitivity catalogue saw no
+    // range and the catalogue could not sweep any of them.
+    Bound {
+        path: "apps.glosa_compliance",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the share of drivers who follow GLOSA advice",
+    },
+    Bound {
+        path: "apps.fcw_ttc_s",
+        lo: 0.0,
+        hi: 30.0,
+        exclusive_lo: true,
+        what: "the FCW time-to-collision threshold",
+    },
+    Bound {
+        path: "apps.ima_tti_s",
+        lo: 0.0,
+        hi: 30.0,
+        exclusive_lo: true,
+        what: "the IMA look-ahead",
+    },
+    Bound {
+        path: "apps.lta_gap_s",
+        lo: 0.0,
+        hi: 30.0,
+        exclusive_lo: true,
+        what: "the LTA critical gap",
+    },
+    Bound {
+        path: "apps.pcw_ttc_s",
+        lo: 0.0,
+        hi: 30.0,
+        exclusive_lo: true,
+        what: "the PCW time threshold",
+    },
+    Bound {
+        path: "apps.rlvw_decel_mps2",
+        lo: 0.0,
+        hi: 30.0,
+        exclusive_lo: true,
+        what: "the RLVW comfortable-stop deceleration",
+    },
     Bound {
         path: "actors.vru.ebike_share",
         lo: 0.0,
@@ -6269,28 +6314,23 @@ fn apps(s: &Scenario, e: &mut Vec<ScenarioError>) {
             e,
         );
     }
-    if !(a.glosa_compliance.is_finite() && (0.0..=1.0).contains(&a.glosa_compliance)) {
-        e.push(conflict(
-            "apps.glosa_compliance",
-            format!(
-                "is {}, and a fraction of drivers is in [0, 1]",
-                a.glosa_compliance
-            ),
-        ));
-    }
     for (field, v) in [
+        ("apps.glosa_compliance", a.glosa_compliance),
         ("apps.fcw_ttc_s", a.fcw_ttc_s),
         ("apps.ima_tti_s", a.ima_tti_s),
         ("apps.lta_gap_s", a.lta_gap_s),
         ("apps.pcw_ttc_s", a.pcw_ttc_s),
         ("apps.rlvw_decel_mps2", a.rlvw_decel_mps2),
     ] {
-        if !(v.is_finite() && v > 0.0 && v <= 30.0) {
-            e.push(conflict(
-                field,
-                format!("is {v}; it must be a positive number no larger than 30"),
-            ));
-        }
+        bounded_at(field, field, v, e);
+    }
+    // A GLOSA compliance with GLOSA not running would do nothing.
+    if a.glosa_compliance > 0.0 && !a.runs("glosa") {
+        e.push(conflict(
+            "apps.glosa_compliance",
+            "is set, but `glosa` is not in apps.enabled, so no driver gets advice to follow"
+                .to_string(),
+        ));
     }
 }
 

@@ -56,6 +56,12 @@ families:
     set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 12000.0,
           actors.vehicles.classes: {passenger: {fraction: 0.7}, truck: {fraction: 0.3}},
           metrics: [all]}
+  # Six signalised junctions with SPaT/MAP roadside units and every application on
+  # (connected-intersections.yaml): where RLVW, GLOSA, IMA and LTA have signals and
+  # crossing traffic to act on. 3000 veh/h, every vehicle equipped.
+  - name: intersections
+    base: ../connected-intersections.yaml
+    set: {time.duration_s: 60.0, metrics: [all]}
 
 routes:
   - {prefix: actors.vehicles.drivers.truck.time_headway_s, families: [freeway, traffic]}
@@ -66,6 +72,10 @@ routes:
   - {prefix: actors.backend, families: [security]}
   - {prefix: actors.rsus, families: [security]}
   - {prefix: actors.vru, families: [pedestrians]}
+  # PCW acts on pedestrians and cyclists; the other applications on signals and crossing
+  # traffic (docs/validation/test-vru-safety.md).
+  - {prefix: apps.pcw_ttc_s, families: [pedestrians]}
+  - {prefix: apps, families: [intersections, pedestrians]}
   # GNSS error is judged by what misbehaviour detection makes of it: the lifecycle family
   # runs legacy-12 plausibility checks.
   - {prefix: actors.vehicles.gnss, families: [security, traffic]}
