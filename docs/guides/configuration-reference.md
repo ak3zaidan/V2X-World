@@ -124,6 +124,7 @@ Refused on an 802.11p run.
 | `radio.models.sidelink.params.mcs` | 7 | profile's table | MCS (TS 36.213 / TS 38.214 Table 5.1.3.1-2). |
 | `radio.models.sidelink.params.max_transmissions` | 1 | 1 to 3 | Blind retransmissions (HARQ without feedback). |
 | `radio.models.sidelink.params.congestion_control` | profile's CR-limit table | `off` or table id | TS 36.213 §14.1.1.4C CR limits. |
+| `radio.models.sidelink.params.sizing` **new** | `code-rate` | `code-rate`, `ts-36-213` (LTE, not `molina-masegosa-2017`) | How a transport block is sized: the profile's Qm·R estimate, or TS 36.213 Table 7.1.7.2.1-1 at the MCS's I_TBS (Table 8.6.1-1), as a UE and OpenCV2X do (190 B fits one 15-RB sub-channel at MCS 7). |
 | `radio.sidelink.reservation_interval_ms` **new** | 100 | LTE 20, 50, 100, ... 1000; NR 1-99 or a multiple of 100 up to 1000 | Resource reservation interval (TS 36.331). |
 | `radio.sidelink.resource_keep_probability` **new** | profile's (0.8 J3161/1) | 0, 0.2, 0.4, 0.6, 0.8 | `probResourceKeep`. |
 | `radio.sidelink.rsrp_threshold_dbm` **new** | profile's (-128 NR, -110 LTE studies) | -128 to -60 dBm | Sensing exclusion threshold (TS 36.213 §14.1.1.6), raised 3 dB until enough candidates remain. |
