@@ -418,6 +418,85 @@ pub fn label_of(doc: &Value) -> String {
 }
 
 // ------------------------------------------------------------------------------------------------
+// Persistence
+// ------------------------------------------------------------------------------------------------
+
+/// How many digest files the store keeps on disk; older ones are deleted on save.
+pub const STORED_DIGESTS: usize = 32;
+
+/// Where finished runs' digests are kept between server starts: `V2XW_RUN_DIGESTS_DIR`, else
+/// `runs/digests` under the working directory. `off` (or an empty value) turns the store off,
+/// and unit tests never use it.
+#[must_use]
+pub fn digest_dir() -> Option<std::path::PathBuf> {
+    if cfg!(test) {
+        return None;
+    }
+    match std::env::var("V2XW_RUN_DIGESTS_DIR") {
+        Ok(v) if v.is_empty() || v == "off" => None,
+        Ok(v) => Some(v.into()),
+        Err(_) => Some("runs/digests".into()),
+    }
+}
+
+/// Write `d` to the store and prune it to [`STORED_DIGESTS`]. Failures are logged, never
+/// fatal: the in-memory history still works.
+pub fn save_digest(d: &RunDigest) {
+    let Some(dir) = digest_dir() else { return };
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |t| t.as_millis());
+    let id: String = d
+        .run_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .take(64)
+        .collect();
+    let path = dir.join(format!("{stamp:015}-{id}.json"));
+    let res = std::fs::create_dir_all(&dir)
+        .and_then(|()| serde_json::to_vec(d).map_err(std::io::Error::other))
+        .and_then(|bytes| std::fs::write(&path, bytes));
+    if let Err(e) = res {
+        tracing::warn!("run digest not saved to {}: {e}", path.display());
+        return;
+    }
+    let mut files = stored_files(&dir);
+    while files.len() > STORED_DIGESTS {
+        let _ = std::fs::remove_file(files.remove(files.len() - 1));
+    }
+}
+
+/// The store's files, newest first.
+fn stored_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    files.sort();
+    files.reverse();
+    files
+}
+
+/// Up to `cap` stored digests, newest first; unreadable or other-schema files are skipped.
+#[must_use]
+pub fn load_digests(cap: usize) -> std::collections::VecDeque<RunDigest> {
+    let Some(dir) = digest_dir() else {
+        return std::collections::VecDeque::new();
+    };
+    stored_files(&dir)
+        .into_iter()
+        .filter_map(|p| {
+            let d: RunDigest = serde_json::from_slice(&std::fs::read(p).ok()?).ok()?;
+            (d.schema == DIGEST_SCHEMA).then_some(d)
+        })
+        .take(cap)
+        .collect()
+}
+
+// ------------------------------------------------------------------------------------------------
 // Direction and health
 // ------------------------------------------------------------------------------------------------
 
@@ -438,66 +517,11 @@ fn split(name: &str) -> (&str, &str) {
     (name, "")
 }
 
-/// Which way is better, for a metric family: the health band's direction, else the same
-/// table the Studio's `polarityOf` uses. `None` is neutral (a speed, a flow, a count).
+/// Which way is better, for a metric family: the shared table in `v2xw_metrics::polarity`,
+/// which the Studio's `polarityOf` reads too. `None` is neutral (a speed, a flow, a count).
 #[must_use]
 pub fn better_of(base: &str) -> Option<Better> {
-    if let Some(b) = v2xw_metrics::health::band_for(base) {
-        return Some(b.better);
-    }
-    const HIGHER: &[&str] = &[
-        "pdr",
-        "pdr_all_pairs",
-        "delivery_ratio",
-        "goodput",
-        "nar",
-        "det_recall",
-        "det_precision",
-        "det_accuracy",
-        "det_f1",
-        "ttc_min",
-        "pet",
-        "headway_time",
-        "headway_distance",
-        "cert_pool_valid",
-        "backend_link_up",
-        "carried_load",
-    ];
-    const NEUTRAL: &[&str] = &[
-        "mean_speed",
-        "speed",
-        "acceleration",
-        "flow",
-        "density",
-        "offered_load",
-        "verify_rate",
-        "crl_entries",
-        "pseudonym_change_rate",
-        "events_processed",
-        "events_per_second",
-        "bytes_total",
-    ];
-    if HIGHER.contains(&base) {
-        return Some(Better::Higher);
-    }
-    if NEUTRAL.contains(&base) {
-        return None;
-    }
-    if [
-        "recall",
-        "precision",
-        "accuracy",
-        "delivery",
-        "pdr",
-        "availability",
-    ]
-    .iter()
-    .any(|k| base.contains(k))
-        || base.ends_with("_up")
-    {
-        return Some(Better::Higher);
-    }
-    Some(Better::Lower)
+    v2xw_metrics::polarity::better_of(base)
 }
 
 fn level_name(l: HealthLevel) -> &'static str {

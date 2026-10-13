@@ -226,7 +226,7 @@ fn the_shipped_scenarios_validate() {
         let o = validate(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert_eq!(o.schema, "v2xw/scenario/1");
         assert_eq!(o.master_seed_hex, "0xc0ffee5eed");
-        assert_eq!(o.metrics, vec!["pdr".to_string()]);
+        assert_eq!(o.metrics, vec!["all".to_string()]);
         assert_eq!(o.scenario_hash.len(), 64);
     }
     // Negative control: the two differ, so the hash is over the document and not a

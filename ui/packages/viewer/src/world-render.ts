@@ -103,6 +103,26 @@ export const ABOVE_SURFACE_OFFSET_UNITS = -(RANK_CROSSING * LAYER_BIAS_STEPS + 4
 export const SURFACE_LAYER_BIAS_GLSL = "gl_Position.z -= uLayerBias * aLayer * gl_Position.w;";
 /** Width of a painted lane line, metres: `addOffsetLine`'s half-width 0.09 twice. */
 const MARKING_WIDTH_M = 0.18;
+/**
+ * Per-fragment fade of a lane marking by its own distance, in the marking fragment shader.
+ *
+ * The faint white dashes on building walls along the horizon were lane markings behind the walls:
+ * the markings' polygon offset (factor −2 and {@link ABOVE_SURFACE_OFFSET_UNITS} units) is scaled
+ * by the depth slope, and a road seen at a grazing angle 1–2 km out has a steep one, so the offset
+ * pulled a marking near a wall's foot metres in front of the wall in the depth buffer (one 24-bit
+ * step alone is ≈ 0.7 m at 2 km from a 0.35 m near plane). {@link WorldRenderer.fadeMarkings}
+ * faded markings by the camera's *target* distance only, so from street level the far ones stayed
+ * at full strength. Each fragment now applies the same coverage rule (gone below a third of a pixel,
+ * full from about one) to its own distance, with a screen-door dither (interleaved gradient noise,
+ * Jimenez, "Next Generation Post Processing in Call of Duty: Advanced Warfare", SIGGRAPH 2014) so
+ * the material stays opaque. `uMarkingPxK` is metres per pixel per metre of distance.
+ */
+const MARKING_DISTANCE_FADE_GLSL = `if (uMarkingPxK > 0.0) {
+  float markingCov = ${MARKING_WIDTH_M.toFixed(2)} / max(vMarkingDist * uMarkingPxK, 1e-6);
+  float markingKeep = smoothstep(0.35, 0.9, markingCov);
+  float markingNoise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  if (markingKeep <= markingNoise) discard;
+}`;
 
 /** Tuning for {@link WorldRenderer}. */
 export interface WorldRendererOptions {
@@ -308,6 +328,8 @@ export class WorldRenderer {
   /** The surface shader's per-rank depth bias, in NDC depth (a 24-bit step is 2⁻²³ of it). */
   #layerBias = { value: LAYER_BIAS_STEPS * 2 ** -23 };
   #markingMaterial: MeshBasicMaterial;
+  /** Metres per pixel per metre of view distance, for the per-fragment marking fade; 0 is off. */
+  #markingPxK = { value: 0 };
   #buildingMaterial: MeshLambertMaterial;
   #siteMaterial: MeshLambertMaterial;
   #disposables: (BufferGeometry | Material)[] = [];
@@ -420,6 +442,16 @@ export class WorldRenderer {
       toneMapped: false, depthWrite: false,
     });
     this.markings.renderOrder = 1;
+    this.#markingMaterial.onBeforeCompile = (shader) => {
+      shader.uniforms.uMarkingPxK = this.#markingPxK;
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nvarying float vMarkingDist;")
+        .replace("#include <project_vertex>", "#include <project_vertex>\nvMarkingDist = -mvPosition.z;");
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", "#include <common>\nvarying float vMarkingDist;\nuniform float uMarkingPxK;")
+        .replace("#include <clipping_planes_fragment>", `#include <clipping_planes_fragment>\n${MARKING_DISTANCE_FADE_GLSL}`);
+    };
+    this.#markingMaterial.customProgramCacheKey = () => "vwp-marking-distance-fade";
     this.#buildingMaterial = new MeshLambertMaterial({ vertexColors: true, name: "buildings" });
     this.#siteMaterial = new MeshLambertMaterial({ vertexColors: true, name: "sites" });
 
@@ -1601,7 +1633,9 @@ export class WorldRenderer {
    */
   fadeMarkings(distanceM: number, fovDeg: number, viewportPx: number): void {
     this.signals.setBarVisibility(distanceM);
-    const mPerPx = (2 * Math.max(1, distanceM) * Math.tan((fovDeg * Math.PI) / 360)) / Math.max(1, viewportPx);
+    const pxK = (2 * Math.tan((fovDeg * Math.PI) / 360)) / Math.max(1, viewportPx);
+    this.#markingPxK.value = pxK;
+    const mPerPx = Math.max(1, distanceM) * pxK;
     const coverage = MARKING_WIDTH_M / mPerPx;
     const t = Math.min(1, Math.max(0, (coverage - 0.35) / (0.9 - 0.35)));
     const opacity = t * t * (3 - 2 * t);

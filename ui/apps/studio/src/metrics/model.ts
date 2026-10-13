@@ -16,6 +16,7 @@
  */
 
 import type { MetricHealthBand } from "@vwp/protocol";
+import polarityTable from "./polarity.generated.json";
 
 // ------------------------------------------------------------------------------------------------
 // The catalogue
@@ -415,45 +416,18 @@ export function labelOf(base: string): string {
 /** Whether a larger value is better, worse, or neither (a speed, a flow, a count of events). */
 export type Polarity = "higher-better" | "lower-better" | "neutral";
 
-const HIGHER_BETTER = new Set([
-  "pdr",
-  "pdr_all_pairs",
-  "delivery_ratio",
-  "goodput",
-  "nar",
-  "det_recall",
-  "det_precision",
-  "det_accuracy",
-  "det_f1",
-  "ttc_min",
-  "pet",
-  "headway_time",
-  "headway_distance",
-  "cert_pool_valid",
-  "backend_link_up",
-  "carried_load",
-]);
-
-const NEUTRAL = new Set([
-  "mean_speed",
-  "speed",
-  "acceleration",
-  "flow",
-  "density",
-  "offered_load",
-  "verify_rate",
-  "crl_entries",
-  "pseudonym_change_rate",
-  "events_processed",
-  "events_per_second",
-  "bytes_total",
-]);
+/**
+ * One table with the server's run comparison: generated from the engine's metric catalogue (each
+ * health band's direction, then the family lists) by `v2xw-metrics` `polarity::studio_table`.
+ */
+const FAMILIES = polarityTable.families as Readonly<Record<string, Polarity>>;
+const HIGHER_HINTS: readonly string[] = polarityTable.higherHints;
 
 export function polarityOf(base: string): Polarity {
-  if (HIGHER_BETTER.has(base)) return "higher-better";
-  if (NEUTRAL.has(base)) return "neutral";
-  if (/recall|precision|accuracy|delivery|pdr|availability|_up$/.test(base)) return "higher-better";
-  return "lower-better";
+  const known = FAMILIES[base];
+  if (known !== undefined) return known;
+  if (HIGHER_HINTS.some((k) => base.includes(k)) || base.endsWith(polarityTable.higherSuffix)) return "higher-better";
+  return polarityTable.fallback as Polarity;
 }
 
 /** How a ranking by this polarity is headed. */

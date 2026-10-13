@@ -36,6 +36,12 @@ import {
   type JsonRpcRequest,
   type NodeRowInit,
   type RunState,
+  NODE_FEED_VERSION,
+  type FeedOptions,
+  type FeedReceived,
+  type FeedSent,
+  type FeedSubscription,
+  type NodeFeedNotification,
 } from "@vwp/protocol";
 import { WebSocketServer, type WebSocket } from "ws";
 
@@ -76,6 +82,16 @@ interface RingEntry {
   readonly gopIndex: number;
 }
 
+/** A connection's `node.feed` subscription. */
+interface MockFeed {
+  node: number;
+  hz: number;
+  sent: number;
+  received: number;
+  /** The instant the previous push covered; `null` before the first. */
+  sinceNs: bigint | null;
+}
+
 interface Conn {
   readonly ws: WebSocket;
   readonly id: number;
@@ -86,6 +102,8 @@ interface Conn {
   /** Nodes subscribed to `Telemetry` through `view.follow` (§6.7). */
   telemetryNodes: Set<number>;
   following: number | null;
+  /** The followed node's `node.feed` subscription (§6.14), when `view.follow` asked for one. */
+  feed: MockFeed | null;
   overlays: Map<string, boolean>;
   helloSent: boolean;
   resyncPending: boolean;
@@ -393,6 +411,7 @@ export class MockEngineServer {
       maxEventsPerStep: 5000,
       telemetryNodes: new Set(),
       following: null,
+      feed: null,
       overlays: new Map(),
       helloSent: false,
       resyncPending: false,
@@ -654,6 +673,7 @@ export class MockEngineServer {
       this.#stepsSinceTelemetry = 0;
       this.#sendTelemetry();
     }
+    this.#sendFeeds();
 
     this.#stepsSinceMetric += 1;
     const metricSteps = Number(this.run.timing.metricPeriodNs / this.run.timing.mobilityStepNs);
@@ -725,6 +745,106 @@ export class MockEngineServer {
       emitted = true;
     }
     if (emitted) this.#seq += 1n;
+  }
+
+  /**
+   * §6.14 — the followed node's synthetic message feed: a 10 Hz BSM of its own and one reception
+   * per neighbour within 300 m per BSM interval, pushed `hz` times a simulated second, newest
+   * first. Deterministic (no randomness): it gives the Studio's message panel rows to draw.
+   */
+  #sendFeeds(): void {
+    const now = this.run.simTimeNs;
+    for (const conn of this.#conns.values()) {
+      const f = conn.feed;
+      if (f === null || conn.following !== f.node) continue;
+      const periodNs = BigInt(Math.round(1e9 / f.hz));
+      if (f.sinceNs !== null && now >= f.sinceNs && now - f.sinceNs < periodNs) continue;
+      const me = this.run.actorForNode(f.node);
+      if (!me) continue;
+      const reset = f.sinceNs === null || now < f.sinceNs;
+      const from = reset || f.sinceNs === null ? now - 1_000_000_000n : f.sinceNs;
+      const bsmNs = 100_000_000n;
+      const times: bigint[] = [];
+      for (let t = (from / bsmNs + 1n) * bsmNs; t <= now; t += bsmNs) if (t >= 0n) times.unshift(t);
+      const neighbours: { id: number; d: number }[] = [];
+      for (const id of this.run.nodeIds()) {
+        if (id === f.node) continue;
+        const a = this.run.actorForNode(id);
+        if (!a) continue;
+        const d = Math.hypot(a.xM - me.xM, a.yM - me.yM);
+        if (d <= 300) neighbours.push({ id, d });
+      }
+      neighbours.sort((a, b) => a.d - b.d || a.id - b.id);
+      neighbours.length = Math.min(neighbours.length, 12);
+      const sentAll: FeedSent[] = times.map((t) => {
+        const count = Number((t / bsmNs) % 128n);
+        const on = Number(t);
+        return {
+          msg: Number(t / bsmNs),
+          t_ns: on,
+          type: "bsm",
+          bytes: { on_wire: 343, payload: 39, envelope: 148, certificate: count % 10 === 0 ? 133 : 0, network: 9, link: 147 },
+          radio: { power_dbm: 20, channel: 172, airtime_us: 556 },
+          signer: count % 10 === 0 ? "certificate" : "digest",
+          pseudonym: `mock-${f.node.toString(16)}`,
+          timing: {
+            generated_ns: on - 2_000_000,
+            sign_start_ns: on - 2_000_000,
+            signed_ns: on - 500_000,
+            on_air_ns: on,
+            sign_queue_ms: 0,
+            sign_ms: 1.5,
+            channel_access_ms: 0.5,
+          },
+          decoded: {
+            message: {
+              format: "SAE J2735 BSM (synthetic)",
+              fields: [
+                { k: "msg_cnt", label: "Message count", v: count, raw: count },
+                { k: "speed", label: "Speed", v: me.speedMps, raw: me.speedMps, unit: "m/s" },
+              ],
+            },
+          },
+        };
+      });
+      const receivedAll: FeedReceived[] = [];
+      for (const t of times) {
+        for (const n of neighbours) {
+          const delivered = n.d < 250;
+          receivedAll.push({
+            msg: Number(t / bsmNs),
+            t_ns: Number(t) + 1_000_000,
+            type: "bsm",
+            outcome: delivered ? "delivered" : "lost",
+            cause: delivered ? null : "below-sensitivity",
+            verification: delivered ? "verified" : null,
+            rssi_dbm: -40 - 20 * Math.log10(Math.max(1, n.d)),
+            sinr_db: null,
+            bytes_on_wire: 343,
+            e2e_ms: delivered ? 2.5 : null,
+            stages_ms: {},
+            from: n.id,
+            dist_m: n.d,
+          });
+        }
+      }
+      const push = {
+        v: NODE_FEED_VERSION,
+        node: f.node,
+        t_ns: Number(now),
+        since_ns: reset || f.sinceNs === null ? null : Number(f.sinceNs),
+        reset,
+        sent: sentAll.slice(0, f.sent),
+        received: receivedAll.slice(0, f.received),
+        omitted: { sent: Math.max(0, sentAll.length - f.sent), received: Math.max(0, receivedAll.length - f.received) },
+        shed: { sent: 0, received: 0 },
+        undetected: 0,
+        history_ns: 10_000_000_000,
+        queues: { t_ns: Number(now), step_ms: 100, window_ms: 1000, drop_window_ms: 1000, source: "mock", list: [] },
+      } satisfies NodeFeedNotification;
+      f.sinceNs = now;
+      this.#notify(conn, "node.feed", push);
+    }
   }
 
   #sendMetrics(): void {
@@ -932,6 +1052,7 @@ export class MockEngineServer {
         if (!conn) return err(RpcErrorCode.NOT_SUPPORTED_HERE, "view.follow is connection-scoped", { why: "HTTP has no connection state" });
         if (params.clear === true) {
           conn.following = null;
+          conn.feed = null;
           conn.telemetryNodes.clear();
           return ok({ following: null, subscribed_nodes: [] });
         }
@@ -941,7 +1062,23 @@ export class MockEngineServer {
         const info = this.run.actorForNode(nodeId);
         if (!info && !this.world.siteNodeIds.includes(nodeId)) return err(RpcErrorCode.UNKNOWN_ID, "unknown node", { kind: "node", id: nodeId });
         conn.following = nodeId;
+        conn.feed = null;
         if (params.telemetry !== false) conn.telemetryNodes.add(nodeId);
+        // §6.14 — `feed` asks for the node's `node.feed` pushes. The mock synthesises them for a
+        // vehicle; before it answered nothing and the Studio's message panel stayed empty.
+        let feedAnswer: FeedSubscription | undefined;
+        if (typeof params.feed === "object" && params.feed !== null) {
+          if (info) {
+            const f = params.feed as FeedOptions;
+            const hz = Math.min(10, Math.max(0.5, Number(f.hz ?? 4)));
+            const sent = Math.min(200, Math.max(1, Math.floor(Number(f.sent ?? 25))));
+            const received = Math.min(400, Math.max(1, Math.floor(Number(f.received ?? 50))));
+            conn.feed = { node: nodeId, hz, sent, received, sinceNs: null };
+            feedAnswer = { v: NODE_FEED_VERSION, available: true, hz, sent, received, waiting: 0, bytes: false };
+          } else {
+            feedAnswer = { v: NODE_FEED_VERSION, available: false, reason: "the mock server has a message feed for vehicles only" };
+          }
+        }
         const radius = Number(params.radius_m ?? 0);
         if (radius > 0 && info) {
           for (const other of this.run.nodeIds()) {
@@ -953,6 +1090,7 @@ export class MockEngineServer {
           following: nodeId,
           camera: (params.camera as string) ?? "chase",
           subscribed_nodes: [...conn.telemetryNodes],
+          ...(feedAnswer ? { feed: feedAnswer } : {}),
         });
       }
       case "view.camera": {

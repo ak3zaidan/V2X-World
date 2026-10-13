@@ -38,7 +38,9 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], viewport: { width: 1680, height: 1050 } } }],
   webServer: [
     {
-      command: `node ../../packages/mock-server/dist/index.js --actors ${actors} --port ${enginePort} --quiet`,
+      // Rebuilt first (`tsc -b` is incremental, a no-op when nothing changed): a stale dist was
+      // the mock the Studio was tested against, without the features the source has.
+      command: `pnpm --dir ../../packages/mock-server run build && node ../../packages/mock-server/dist/index.js --actors ${actors} --port ${enginePort} --quiet`,
       url: `http://127.0.0.1:${enginePort}/healthz`,
       reuseExistingServer: false,
       stdout: "ignore",
