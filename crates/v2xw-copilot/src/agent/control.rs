@@ -9,7 +9,7 @@
 //! | Tool | What it does | Server methods |
 //! |---|---|---|
 //! | `simulate` | build one or more variants of a base (same seed), validate all, run each to the end, analyse, compare — one call for a run, an A/B, or a sweep | `scenario.*`, `run.start`, `run.status`, `metrics.query`, `inspect.entity` |
-//! | `find_settings` | search the ~160 scenario settings: path, type, allowed values, unit, default, whether the engine acts on it | none (the build's own schema) |
+//! | `find_settings` | search every published setting (about 360) by plain words or synonyms: path, type, allowed values, unit, range, default, recommended range, whether the engine acts on it | none (the build's own schema) |
 //! | `run_control` | start / pause / resume / step / seek / run to a time / speed / stop / status | `run.*`, `scenario.get` |
 //! | `live_metrics` | the current run's values so far, with units and health bands | `metrics.query` |
 //! | `query_metric` | one metric over time, or broken down by a dimension | `metrics.query` |
@@ -226,9 +226,11 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "find_settings",
-            "Search the scenario's settings by words: path, type, allowed values, unit, \
-             default, and whether the engine acts on it. Attack and jam searches also list \
-             the attacker kinds and jammer models.",
+            "Search every published scenario setting by plain words or synonyms (\"weaker \
+             radio\", \"C-V2X\", \"truck headway\", \"jaywalking\"): path, type, allowed \
+             values, unit, range, default, recommended range, and whether the engine acts on \
+             it. Attack and jam searches also list the attacker kinds and jammer models. \
+             Never guess a key: search first.",
             json!({"type": "object", "additionalProperties": false, "required": ["query"],
                    "properties": {"query": {"type": "string"}}}),
         ),
@@ -351,6 +353,63 @@ pub(super) fn scenario_list<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P
         agent.harness.scenarios = Some(v.clone());
     }
     v
+}
+
+/// One requested change after [`crate::repair`] and application.
+pub(super) struct Applied {
+    /// The published key it landed on.
+    pub key: String,
+    pub before: Value,
+    pub after: Value,
+    /// What was read differently from how it was written, and any companion set.
+    pub notes: Vec<String>,
+}
+
+/// Repairs one change as the model wrote it ([`crate::repair::repair`]: the key, the
+/// value's unit or synonym, a companion setting) and applies it.
+///
+/// # Errors
+/// When the key could mean several settings, or the change cannot be applied.
+pub(super) fn apply_repaired(doc: &mut Value, key: &str, value: &Value) -> Result<Applied> {
+    let r = crate::repair::repair(key, value).map_err(|m| err("prepare_scenario", m))?;
+    let (before, after) = apply_change(doc, &r.key, &r.value)?;
+    let mut notes = r.notes;
+    for (k, v) in &r.companions {
+        let (_, a) = apply_change(doc, k, v)?;
+        notes.push(format!("also set {k} = {a}"));
+    }
+    // A post-quantum or hybrid signature needs an on-board unit that publishes its costs;
+    // when the base's does not, the loader names it, and the one the shipped
+    // `scenarios/pq-signatures.yaml` runs every scheme on is taken instead.
+    if r.key == "security.signature"
+        && after.as_str().is_some_and(|s| !s.starts_with("ecdsa"))
+        && check_document(doc.clone())
+            .errors
+            .iter()
+            .any(|e| e.field.as_deref() == Some("nodes.default_obu"))
+    {
+        let obu = json!("obu/generic-automotive-soc-no-hsm");
+        apply_change(doc, "nodes.default_obu", &obu)?;
+        notes.push(format!(
+            "the base's on-board unit cannot price {after}, so nodes.default_obu = {obu} \
+             (as scenarios/pq-signatures.yaml)"
+        ));
+    }
+    Ok(Applied {
+        key: r.key,
+        before,
+        after,
+        notes,
+    })
+}
+
+/// `why`, with the repair notes after it.
+pub(super) fn why_with(why: String, notes: &[String]) -> String {
+    if notes.is_empty() {
+        return why;
+    }
+    let n = format!("(read: {})", notes.join("; "));
+    if why.is_empty() { n } else { format!("{why} {n}") }
 }
 
 /// Applies one change to a document. Returns the value before and after.
@@ -524,12 +583,12 @@ fn build(
                 .unwrap_or("")
                 .to_string();
             let value = c.get("value").cloned().unwrap_or(Value::Null);
-            let (before, after) = apply_change(&mut doc, &key, &value)?;
+            let a = apply_repaired(&mut doc, &key, &value)?;
             applied.push(Change {
-                key,
-                before,
-                after,
-                why,
+                key: a.key,
+                before: a.before,
+                after: a.after,
+                why: why_with(why, &a.notes),
             });
         }
     }
@@ -708,7 +767,7 @@ fn setup<P: LlmProvider, T: RpcTransport>(
         .cloned()
         .unwrap_or_default();
     let before = agent.rpc.call("scenario.get", &json!({})).ok();
-    let prepared = agent.prepare(&base, &reason, &changes, sink)?;
+    let prepared = agent.prepare_with(&base, &reason, &changes, false, sink)?;
     if prepared.get("ok") != Some(&Value::Bool(true)) {
         return Ok(prepared);
     }
@@ -894,7 +953,10 @@ fn simulate<P: LlmProvider, T: RpcTransport>(
             ));
         } else {
             invalid.push(json!({"label": label, "errors": report.errors.iter()
-                .map(|e| json!({"field": e.field, "message": e.message})).collect::<Vec<_>>()}));
+                .map(|e| match e.field.as_deref().and_then(crate::repair::allowed) {
+                    Some(a) => json!({"field": e.field, "message": e.message, "allowed": a}),
+                    None => json!({"field": e.field, "message": e.message}),
+                }).collect::<Vec<_>>()}));
         }
     }
     if !invalid.is_empty() {

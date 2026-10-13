@@ -201,13 +201,24 @@ impl<H: HttpPost> OpenAi<H> {
         let mut attempt = 0;
         loop {
             let request = HttpRequest::json(self.url.clone(), body.clone(), self.key.clone());
-            let response = self.http.post_json(&request)?;
+            // A request that got no answer (timeout, reset) is sent again like a 5xx.
+            let response = match self.http.post_json(&request) {
+                Ok(r) => r,
+                Err(e) if crate::http::transient_failure(&e) && attempt < self.retries => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_secs(
+                        u64::from(attempt) * self.pause_s,
+                    ));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             let text = self.key.redact(&response.body);
             if response.is_success() {
                 return serde_json::from_str(&text)
                     .map_err(|e| CopilotError::Decode(format!("the reply is not JSON: {e}")));
             }
-            let retryable = response.status == 429 || response.status >= 500;
+            let retryable = response.is_transient();
             if retryable && attempt < self.retries {
                 attempt += 1;
                 // A pause between attempts is not a reading of the clock: nothing is

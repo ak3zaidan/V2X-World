@@ -332,7 +332,18 @@ impl<H: HttpPost> LlmProvider for Claude<H> {
         let mut attempt = 0;
         loop {
             let http_request = self.request(body.clone());
-            let response = self.http.post_json(&http_request)?;
+            // A request that got no answer (timeout, reset) is sent again like a 5xx.
+            let response = match self.http.post_json(&http_request) {
+                Ok(r) => r,
+                Err(e) if crate::http::transient_failure(&e) && attempt < self.retries => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_secs(
+                        u64::from(attempt) * self.pause_s,
+                    ));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             let text = self.key.redact(&response.body);
             if response.is_success() {
                 let value: Value = serde_json::from_str(&text)
@@ -341,9 +352,10 @@ impl<H: HttpPost> LlmProvider for Claude<H> {
                 self.last_usage = decode_usage(&value);
                 return Ok(completion);
             }
-            // 429 (rate limit), 529 (overloaded) and 5xx are worth a second try; anything
-            // else is the request's fault and would fail the same way again.
-            let retryable = response.status == 429 || response.status >= 500;
+            // A rate limit, an overloaded or failing server, a timeout are worth another
+            // try (`HttpResponse::is_transient`); anything else is the request's fault and
+            // would fail the same way again.
+            let retryable = response.is_transient();
             if retryable && attempt < self.retries {
                 attempt += 1;
                 // A pause between attempts is not a reading of the clock: nothing is
@@ -780,5 +792,39 @@ mod tests {
             .expect("the retry succeeds");
         assert_eq!(c.finish_reason, "tool_calls");
         assert_eq!(p.http().calls(), 2);
+    }
+
+    /// A request that timed out is sent again; one that was refused (400) is not.
+    #[test]
+    fn a_timed_out_request_is_retried_and_a_refused_one_is_not() {
+        struct Flaky(Vec<crate::Result<HttpResponse>>, usize);
+        impl crate::http::HttpPost for Flaky {
+            fn post_json(&mut self, _: &crate::http::HttpRequest) -> crate::Result<HttpResponse> {
+                self.1 += 1;
+                self.0.remove(0)
+            }
+        }
+        let timeout = || Err(CopilotError::Transport("curl: (28) timed out".into()));
+        let mut p = Claude::new(
+            Flaky(vec![timeout(), Ok(HttpResponse::new(200, tool_reply()))], 0),
+            Secret::new("k"),
+        );
+        p.retries = 1;
+        p.pause_s = 0;
+        assert!(p.complete(&ChatRequest::default()).is_ok());
+        let mut q = Claude::new(
+            Flaky(
+                vec![
+                    Ok(HttpResponse::new(400, r#"{"error":{"message":"bad"}}"#)),
+                    Ok(HttpResponse::new(200, tool_reply())),
+                ],
+                0,
+            ),
+            Secret::new("k"),
+        );
+        q.retries = 1;
+        q.pause_s = 0;
+        assert!(q.complete(&ChatRequest::default()).is_err());
+        assert_eq!(q.http().1, 1, "a refusal is not sent again");
     }
 }

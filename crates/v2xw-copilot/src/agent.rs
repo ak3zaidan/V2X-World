@@ -274,7 +274,7 @@ pub fn agent_tools() -> Vec<Value> {
     tools.extend(base_tools().into_iter().filter(|t| {
         !matches!(
             t.pointer("/function/name").and_then(Value::as_str),
-            Some("list_scenarios" | "run_prepared")
+            Some("list_scenarios" | "run_prepared" | "find_settings")
         )
     }));
     tools
@@ -756,7 +756,7 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                     None => json!({"scenario": d}),
                 }
             }),
-            "find_settings" => Ok(find_settings(&s("query"))),
+            "find_settings" => Ok(crate::catalog::find_settings(&s("query"), 12)),
             "prepare_scenario" => {
                 let changes = args
                     .get("changes")
@@ -858,12 +858,26 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
         }
     }
 
-    /// Builds and validates the scenario to run.
+    /// Builds and validates the scenario the agent will run (its duration capped by the
+    /// policy).
     fn prepare(
         &mut self,
         base: &str,
         reason: &str,
         changes: &[Value],
+        sink: &mut dyn FnMut(AgentEvent),
+    ) -> Result<Value> {
+        self.prepare_with(base, reason, changes, true, sink)
+    }
+
+    /// Builds and validates a scenario. `cap` holds the duration to the policy's limit: on
+    /// for a run the agent makes, off for a `setup` the person runs from the Studio.
+    fn prepare_with(
+        &mut self,
+        base: &str,
+        reason: &str,
+        changes: &[Value],
+        cap: bool,
         sink: &mut dyn FnMut(AgentEvent),
     ) -> Result<Value> {
         let mut doc = self.base_document(base)?;
@@ -886,9 +900,16 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
                 .unwrap_or("")
                 .to_string();
             let value = c.get("value").cloned().unwrap_or(Value::Null);
-            // Set, {multiply}, {add}, {append}, {remove}, and a jammer's "centre".
-            let (before, after) = control::apply_change(&mut doc, &key, &value)?;
-            if let Some(d) = after.as_f64().filter(|_| key == "time.duration_s") {
+            // Set, {multiply}, {add}, {append}, {remove}, and a jammer's "centre", after
+            // the key and value are read as meant (crate::repair).
+            let control::Applied {
+                key,
+                before,
+                after,
+                notes,
+            } = control::apply_repaired(&mut doc, &key, &value)?;
+            let why = control::why_with(why, &notes);
+            if let Some(d) = after.as_f64().filter(|_| cap && key == "time.duration_s") {
                 if d > self.policy.max_duration_s {
                     return Err(CopilotError::Rpc {
                         method: "prepare_scenario".into(),
@@ -927,8 +948,17 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             errors: report.errors.clone(),
         });
         if !report.ok {
-            return Ok(json!({"ok": false, "errors": report.errors,
-                             "changes": applied, "note": "nothing was staged; fix and retry"}));
+            // What each refused setting allows, from the settings index, so the model can
+            // fix the change or explain the refusal without another lookup.
+            let mut allowed: Vec<String> = report
+                .errors
+                .iter()
+                .filter_map(|e| e.field.as_deref().and_then(crate::repair::allowed))
+                .collect();
+            allowed.dedup();
+            return Ok(json!({"ok": false, "errors": report.errors, "allowed": allowed,
+                             "changes": applied, "note": "nothing was staged; fix and retry, \
+                             or tell the person in one sentence why it cannot be set"}));
         }
         let hash = report.content_hash.clone().unwrap_or_default();
         self.prepared = Some(Prepared {
@@ -1364,65 +1394,19 @@ fn cell(v: &Value) -> String {
     }
 }
 
-/// The settings whose key, title or description contain every word of `query`, from the
-/// engine's own published settings surface (`v2xw_engine::scenario::publish::surface`, the
-/// same index the settings window is generated from). At most 25, in the surface's order.
-#[must_use]
-pub fn find_settings(query: &str) -> Value {
-    let surface = v2xw_engine::scenario::publish::surface();
-    let words: Vec<String> = query
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
-        .collect();
-    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-    let mut matches = Vec::new();
-    let mut total = 0usize;
-    for f in surface
-        .get("fields")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let path = text(f, "x-path");
-        if path.is_empty() {
-            continue;
-        }
-        let hay =
-            format!("{} {} {}", path, text(f, "title"), text(f, "description")).to_lowercase();
-        if words.is_empty() || !words.iter().all(|w| hay.contains(w.as_str())) {
-            continue;
-        }
-        total += 1;
-        if matches.len() >= 25 {
-            continue;
-        }
-        let mut row = Map::new();
-        row.insert("key".into(), json!(path));
-        for k in [
-            "title",
-            "unit",
-            "enum",
-            "x-range",
-            "default",
-            "x-implemented",
-            "x-status-note",
-        ] {
-            if let Some(v) = f.get(k).filter(|v| !v.is_null()) {
-                row.insert(k.trim_start_matches("x-").replace('-', "_"), v.clone());
-            }
-        }
-        let d = text(f, "description");
-        if !d.is_empty() {
-            row.insert(
-                "description".into(),
-                json!(d.chars().take(240).collect::<String>()),
-            );
-        }
-        matches.push(Value::Object(row));
-    }
-    json!({"query": query, "matches": matches, "total": total,
-           "note": if total > matches.len() { "more matched; narrow the words" } else { "" }})
+/// Applies one requested change to `doc` exactly as `setup`, `simulate` and
+/// `prepare_scenario` do, and returns the key it landed on with the value before and after.
+/// The harness evaluation (`tests/harness_eval.rs`) drives it directly.
+///
+/// # Errors
+/// When the change cannot be applied (see the tools' own errors).
+pub fn apply_requested_change(
+    doc: &mut Value,
+    key: &str,
+    value: &Value,
+) -> Result<(String, Value, Value)> {
+    let a = control::apply_repaired(doc, key, value)?;
+    Ok((a.key, a.before, a.after))
 }
 
 /// A dotted key or a JSON Pointer, as a JSON Pointer.
@@ -1559,31 +1543,6 @@ mod tests {
                 "{m} is not a server method"
             );
         }
-    }
-
-    #[test]
-    fn settings_are_found_in_the_engines_own_surface() {
-        let r = find_settings("rat");
-        let keys: Vec<&str> = r["matches"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|m| m["key"].as_str())
-            .collect();
-        assert!(keys.contains(&"radio.rat"), "{r:#}");
-        let rat = r["matches"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|m| m["key"] == "radio.rat")
-            .unwrap();
-        assert!(
-            rat["enum"].as_array().is_some_and(|e| !e.is_empty()),
-            "its choices: {rat:#}"
-        );
-        // A word nothing has finds nothing, and an empty query does not list everything.
-        assert_eq!(find_settings("zzqxj")["total"], 0);
-        assert_eq!(find_settings("")["total"], 0);
     }
 
     #[test]
