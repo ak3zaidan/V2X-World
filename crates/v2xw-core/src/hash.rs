@@ -278,6 +278,25 @@ mod tests {
         assert_eq!(empty.finish(), sha256(b""));
     }
 
+    /// The threaded hasher digests exactly what the serial one does, across batches,
+    /// mid-stream snapshots and a tail that never filled a batch.
+    #[test]
+    fn threaded_sha256_matches_the_serial_digest() {
+        let payload: Vec<u8> = (0..900_000u32).map(|i| (i * 31 % 251) as u8).collect();
+        let mut t = ThreadedSha256::new();
+        for (k, chunk) in payload.chunks(7_919).enumerate() {
+            t.update(chunk);
+            if k == 40 {
+                let upto = ((k + 1) * 7_919).min(payload.len());
+                assert_eq!(t.finish_hex(), sha256_hex(&payload[..upto]));
+            }
+        }
+        assert_eq!(t.finish_hex(), sha256_hex(&payload));
+        let mut short = ThreadedSha256::new();
+        short.update(b"abc");
+        assert_eq!(short.finish_hex(), sha256_hex(b"abc"));
+    }
+
     /// `write` reports the whole buffer as written, so `write_all` never loops, and the
     /// two halves of a split write digest as one stream.
     #[test]

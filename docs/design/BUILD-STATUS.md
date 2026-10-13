@@ -3801,3 +3801,35 @@ Track: the built-in agent (`crates/v2xw-copilot`, the agent host in `v2xw-cli`).
 - **Release:** `cargo build --release -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots and `/agent/status` reports the agent available.
 - **Owner decisions owed:** the crosswalk refuge hold is on by default and changes digests of scenarios with pedestrians on crossings; the 6 m turn curve window (off by default); the `weather.intensity` arterial fix (digest change). Headway metric output changed wherever safety metrics are on.
 - **Open:** the items in the three sections above (LTE TBS table, engine RSUs on the OBU runtime, permitted-left gap, lane-change/halting gaps to SUMO, truck headway family, `gnss.rtk` false verdicts).
+
+## 2026-10-13: speed, round 14 (speed track, branch of e2b03c9)
+
+Plain `dev` build (unoptimised, as built under `target/agents` this round, so absolute
+times are higher than the 2026-10-12 opt-level-2 table), binaries copied out,
+`v2xw run --no-recording`, 2 threads, owner's 8 GB machine shared with other agents
+(wall ±10 %). Saturated: `dsrc-dense.yaml` with the "queue 64->1, saturated" base settings,
+trip cap 150 (99 vehicles), 1 s. Capped: `scale/base.yaml`, cap 1,260, `radio.range.max_m:
+500`, `metrics: [all]`, 2 s (1,049 vehicles).
+
+| run | wall s per sim s before → after | MAC timer events before → after | peak MB before → after |
+|---|---|---|---|
+| saturated, 99 | 64.7 → 31.0 | 5.34 M → 0.32 M | 83 → 82 |
+| capped, 1,049 | 174.2 → 158.3 | 18.7 k (unchanged) | 420 → 416 |
+
+- **MAC timer coalescing** (`f0c987d`, digest change approved): `Engine::schedule_mac_timer`
+  drops a timer for a node and channel already queued at that instant (the queued one has
+  the lower sequence number, so it is the one that would have dispatched first). Saturated
+  99: frames sent 1,833 → 1,951, records 521,796 → 524,843; the capped run is identical
+  record for record (it never queued duplicates).
+- **Digest off the main thread** (`61504a6`, `a1095a8`): `v2xw_core::hash::ThreadedSha256`
+  (256 KiB batches over a channel to one hasher thread, started at the first full batch,
+  inline on wasm). Used by the CLI's `Tally` and by `DigestRecorder`; same digest (unit
+  test `threaded_sha256_matches_the_serial_digest`).
+- **Decode once** (`8fd2a2a`): `NodeSecurity::parse` reuses the last `(profile, bytes)`
+  decode per thread, so the receivers of one frame decode its envelope once; the node phase
+  decodes `node.tx`/`node.rx` metric views in parallel and hands them over with
+  `ProviderSet::on_event_predecoded`.
+- **Determinism:** saturated 99 after: stream digest `5083b56a9632` at 1 and 2 threads, identical per-channel counts and JSON bytes.
+- **Not done:** record JSON emission is still serial on the main thread. In the capped run
+  most of the time is `node.rx`/`phy.rx` encoding (2.7 M records, 2 GB of JSON). The
+  saturated run still has 335 k `NodeTask` events, which have not been profiled.
