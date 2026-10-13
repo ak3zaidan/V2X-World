@@ -103,5 +103,9 @@
    source: "a larger candidate set lowers the chance two UEs pick the same resource (3GPP TS 38.214 8.1.4 X%; Molina-Masegosa and Gozalvez, IEEE VT Magazine 2017)"}
 - {setting: radio.sidelink.selection_window_ms, change: low, metric: e2e_ms_mean, expect: down,
    source: "the selected resource lies in [n + T1, n + T2]: a smaller T2 bounds the access delay (3GPP TS 38.214 8.1.4)"}
+- {setting: radio.sidelink.sensing, change: false, metric: collision_rate, expect: up,
+   source: "without sensing, SPS picks resources at random instead of excluding the ones neighbours reserved: more resource collisions (3GPP TS 36.213 14.1.1.6; Molina-Masegosa and Gozalvez 2017; Bazzi et al., IEEE TVT 2019)"}
+- {setting: radio.channel_model.vehicle_blockage, change: true, metric: prr, expect: down, min_change: 0.0005,
+   source: "unset, the medium tier's log-distance law looks for no vehicles; on, a vehicle on a same-street path switches the link to the obstructed-LOS fit, about 5 dB more loss (Abbas et al., IEEE TVT 2015 OLOS; 3GPP TR 37.885 6.2.1 NLOSv; Boban et al., IEEE TVT 2011). Measured with 20 % trucks (cars under roof antennas are TR 37.885 case 1, 0 dB); small on the Midtown grid, where most links are already building-blocked (-0.1 %)"}
 - {setting: radio.sidelink.resource_keep_probability, change: low, metric: sl_selections, expect: up,
    source: "on reselection counter expiry the UE keeps the resource with probability P_keep, else reselects (3GPP TS 36.321 5.14.1.1)"}

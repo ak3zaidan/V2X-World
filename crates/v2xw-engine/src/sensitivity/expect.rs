@@ -69,6 +69,9 @@ pub struct Interaction {
     /// The direction of A's effect without B, when theory fixes it (checked too).
     #[serde(default)]
     pub direction: Option<Direction>,
+    /// The relative change A alone must reach for `direction` (default 0.01).
+    #[serde(default)]
+    pub min_effect: Option<f64>,
     /// The relative margin: `dampens` needs |AB − B| ≤ (1 − m)·|A − base|, `amplifies`
     /// |AB − B| ≥ (1 + m)·|A − base|. Default 0.05.
     #[serde(default)]
@@ -299,11 +302,12 @@ pub fn judge_interaction(i: &Interaction, values: [Option<f64>; 4]) -> Interacti
     let tiny = 1e-12 * b0.abs().max(b1.abs()).max(1.0);
     if let Some(dir) = i.direction {
         let rel = d0 / b0.abs().max(1e-12);
+        let tol = i.min_effect.unwrap_or(0.01);
         let ok = match dir {
-            Direction::Up => d0 > tiny && rel >= 0.01,
-            Direction::Down => d0 < -tiny && -rel >= 0.01,
-            Direction::Same => rel.abs() <= 0.01,
-            Direction::Changes => rel.abs() >= 0.01,
+            Direction::Up => d0 > tiny && rel >= tol,
+            Direction::Down => d0 < -tiny && -rel >= tol,
+            Direction::Same => rel.abs() <= tol,
+            Direction::Changes => rel.abs() >= tol,
         };
         if !ok {
             out.note = format!(

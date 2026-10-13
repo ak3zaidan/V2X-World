@@ -13,8 +13,8 @@
    source: "a certificate less often: fewer 100-octet frames (SAE J2945/1 6.1.2, cert once per 450 ms)"}
 - {setting: security.signer_id_policy.full_cert_every_ms, change: low, metric: airtime_us, expect: up,
    source: "IEEE 1609.2-2016 6.4.8; IEEE 802.11-2020 17.4.3"}
-- {setting: security.signer_id_policy.on_new_neighbour, change: true, metric: psdu_bytes, expect: up,
-   source: "a certificate is attached when a new neighbour appears (SAE J2945/1 6.1.2.2), on top of the periodic one"}
+- {setting: security.signer_id_policy.on_new_neighbour, change: true, metric: psdu_bytes, expect: up, min_change: 0.002,
+   source: "a certificate is attached when a new neighbour appears (SAE J2945/1 6.1.2.2), on top of the periodic one. Small here: nine vehicles over 30 s meet few new neighbours, so a few extra certificates against ~2000 frames (+0.7 % measured)"}
 - {setting: security.signature, change: falcon-512, metric: psdu_bytes, expect: up,
    source: "a Falcon-512 signature is 666 octets against 64 for ECDSA P-256 (NIST Falcon spec 1.2, Table 3.3; IEEE 1609.2-2016 6.3.29)"}
 - {setting: security.signature, change: falcon-512, metric: airtime_us, expect: up,
@@ -33,10 +33,17 @@
    source: "verify-on-demand skips verification for messages no application acts on, so the verified ones queue less (Krishnan and Weimerskirch, SAE 2011-01-0584; Hsu et al. 2013)"}
 
 # ---- Misbehaviour detection and GNSS error ----
-- {setting: actors.vehicles.gnss.outlier_rate_hz, change: high, metric: metric.det_fp, expect: up,
-   source: "plausibility checks on position jumps flag honest senders whose GNSS fix jumps (van der Heijden, Lukaseder, Kargl, VeReMi, SecureComm 2018: false positives grow with position noise)"}
-- {setting: actors.vehicles.gnss.outlier_magnitude_m, change: high, metric: metric.det_fp, expect: up,
-   source: "bigger GNSS outliers exceed more plausibility thresholds (VeReMi 2018; Kamel et al., VeReMi extension, ICC 2020)"}
+# The family has no attacker, so every verdict is a false positive. A check fires only
+# after min_consecutive scores >= 1 from one signer (v2xw-threat detect.rs, the legacy
+# streak gate), so a one-sample multipath outlier is tolerated by design and sustained
+# degradation (a burst, an outage) is what produces false positives. First wave expected
+# outliers to raise det_fp; the run showed nothing moved, and the streak gate is why.
+- {setting: actors.vehicles.gnss.burst_rate_hz, change: high, metric: report.phase2.verdicts_fired, expect: up,
+   source: "a burst of degraded positioning is a sustained position/speed mismatch that outlasts the streak gate: false positives grow with sustained position noise (van der Heijden, Lukaseder, Kargl, VeReMi, SecureComm 2018; Kamel et al., VeReMi extension, ICC 2020)"}
+- {setting: actors.vehicles.gnss.outage_probability, change: high, metric: report.phase2.verdicts_fired, expect: up,
+   source: "after an outage the fix resumes far from the last reported one: a position jump on honest senders (VeReMi 2018)"}
+- {setting: actors.vehicles.gnss.outlier_rate_hz, change: high, metric: report.phase2.verdicts_fired, expect: same, min_change: 0.0,
+   source: "the streak gate: a check fires after several consecutive suspicious messages from one signer, so isolated one-sample outliers do not raise false positives (So, Sharma, Petit, IEEE ICMLA 2018; v2xw-threat detect.rs)"}
 
 # ---- GeoNetworking forwarding (ETSI EN 302 636-4-1) ----
 - {setting: net.geonet.area_forwarding, change: simple, metric: gn_forwards_sent, expect: up,

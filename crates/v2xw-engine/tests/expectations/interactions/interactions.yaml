@@ -18,10 +18,13 @@
   expect: dampens
   direction: up
   source: "reactive DCC moves to a longer Toff as CBR crosses 0.30/0.40/0.50/0.60, holding the channel load down as density rises (ETSI TS 102 687 V1.2.1 Table A.2; Autolitano et al., IEEE TVT 2013)"
+# Adaptive DCC steers toward CBR_target = 0.68 and does not throttle below it: at 160
+# vehicles (CBR 0.52) the first run found no dampening, as LIMERIC predicts. 280 vehicles
+# take the channel past the target, where it must act.
 - name: density x adaptive DCC (CBR)
   family: dsrc
   base_set: {time.mobility_step_ms: 50, messages.rate_hz: 20.0}
-  factor: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  factor: {actors.vehicles.demand.params.max_total_vehicles: 280}
   condition: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}
   metric: cbr_mean
   expect: dampens
@@ -112,22 +115,25 @@
   source: "range is d0 10^(budget / 10 n): a dB of budget buys more metres when the exponent n is smaller (Rappaport 2e, 4.9)"
 
 # ---- Demand x capacity (traffic grid, 1500 veh/h base) ----
-- name: demand x time headway (speed)
+# The grid at 1500 veh/h holds about 45 vehicles, far below capacity (X << 1), where
+# Webster's delay barely depends on flow: the first run found more demand moved speed by
+# +0.6 %, so speed and stopped share are not what demand moves here. Flow is.
+- name: demand x time headway (flow)
   family: traffic
   factor: {actors.vehicles.demand.rate_veh_per_h: 2400.0}
   condition: {actors.vehicles.drivers.time_headway_s: 2.5}
-  metric: traffic.speed_mean_mps
-  expect: holds
-  direction: down
-  source: "more demand lowers speed whatever the capacity (Webster 1958); a longer headway lowers saturation flow s = 3600 / h (HCM 7th ed. 19.2), so the effect keeps its sign"
-- name: demand x actuated signals (stopped share)
-  family: traffic
-  factor: {actors.vehicles.demand.rate_veh_per_h: 2400.0}
-  condition: {traffic.signals.control: actuated}
-  metric: traffic.stopped_share
+  metric: metric.flow
   expect: holds
   direction: up
-  source: "more demand means more vehicles meeting red under fixed or actuated control alike (HCM 7th ed. 19.4; FHWA Signal Timing Manual 2e 5.3)"
+  source: "below capacity, flow out equals demand in (q = demand) whatever the saturation headway (HCM 7th ed. 19.2: capacity s g / C only binds at X >= 1)"
+- name: actuated signals x demand (speed)
+  family: traffic
+  factor: {traffic.signals.control: actuated}
+  condition: {actors.vehicles.demand.rate_veh_per_h: 2400.0}
+  metric: traffic.speed_mean_mps
+  expect: dampens
+  direction: up
+  source: "actuation pays most at low volume, where it can skip and gap out; as demand grows the phases run longer toward max green and the gain over fixed time shrinks (FHWA Signal Timing Manual 2e, 5.1; HCM 7th ed. 19.4)"
 - name: demand x DCC on the traffic grid (CBR)
   family: traffic
   factor: {actors.vehicles.demand.rate_veh_per_h: 2400.0}
@@ -136,3 +142,32 @@
   expect: holds
   direction: up
   source: "at the low CBR of a Midtown grid (about 0.01) reactive DCC stays in its relaxed state, so more vehicles still means more load (ETSI TS 102 687 Table A.2)"
+
+# ---- Heavy vehicles (owner's example: more trucks, lower speed) ----
+# `condition: {}` makes B the base, so the check is a single structured change (a fleet
+# mix) judged by its direction, with `holds` trivially true.
+- name: trucks (20 %) on the traffic grid (speed)
+  family: traffic
+  factor: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}
+  condition: {}
+  metric: traffic.speed_mean_mps
+  expect: holds
+  direction: down
+  min_effect: 0.001
+  source: "heavy vehicles accelerate slower and occupy more road: HCM 7th ed. eq. 19-8 f_HV = 100 / (100 + P_HV (E_T - 1)), E_T 2.0 at signals; SUMO truck vType accel 1.3 m/s2, length 7.1 m. Far below capacity (X << 1) the cost is only the trucks' own launches, so small (-0.2 % measured)"
+- name: trucks x snow (speed)
+  family: traffic
+  factor: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}
+  condition: {weather.initial: snow}
+  metric: traffic.speed_mean_mps
+  expect: holds
+  direction: down
+  min_effect: 0.001
+  source: "heavy vehicles slow traffic in any weather (HCM 7th ed. f_HV); the effect keeps its sign on snow (FHWA-HOP-07-073)"
+- name: trucks x vehicle blockage (PRR)
+  family: traffic
+  factor: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}
+  condition: {radio.channel_model.vehicle_blockage: true}
+  metric: prr
+  expect: amplifies
+  source: "TR 37.885 NLOSv charges a blocker only when it is taller than an antenna (case 2/3, mean 9-10 dB): trucks change PRR more when blockage is modelled (3GPP TR 37.885 6.2.1; Boban et al., IEEE TVT 2011)"

@@ -69,6 +69,15 @@ use crate::stats::{Distribution, Estimate, ratio_of_sums};
 /// distributions.
 pub const TTC_THRESHOLD_S: f64 = 1.5;
 
+/// The follower speed below which no time headway is taken, m/s: 5 mi/h, the speed under
+/// which HCM 7th ed. (Ch. 4, queued state; Ch. 19 control delay) counts a vehicle as
+/// stopped or queued. A queue creeping at 0.05 m/s 7 m behind its leader has a "time
+/// headway" of 140 s, which is not a car-following headway at all; with every crawling
+/// follower in it the mean ran to 129 s on the Midtown grid and a longer desired headway
+/// for trucks *lowered* it by 60 % (docs/validation/sensitivity-expectations.md). The
+/// distance headway keeps every pair.
+pub const HEADWAY_MIN_SPEED_MPS: f64 = 2.235;
+
 /// One vehicle's state on a lane, as this provider needs it.
 #[derive(Debug, Clone, Copy)]
 struct OnLane {
@@ -246,7 +255,10 @@ impl SafetyProvider {
                 "drac",
                 "drac = (v_follower − v_leader)² / (2·gap) for a closing same-lane pair",
             ),
-            v2xw_core::card::Equation::new("headway_time", "headway_time = gap / v_follower"),
+            v2xw_core::card::Equation::new(
+                "headway_time",
+                "headway_time = gap / v_follower, for v_follower >= 2.235 m/s (5 mi/h, HCM queued)",
+            ),
             v2xw_core::card::Equation::new(
                 "edie",
                 "k = Σ Δt / (L·T); q = Σ v·Δt / (L·T); v̄ = q / k (the space-mean speed)",
@@ -598,7 +610,7 @@ impl SafetyProvider {
                     continue;
                 }
                 self.headway_distance.observe(gap);
-                if follower.speed_mps > 0.0 {
+                if follower.speed_mps >= HEADWAY_MIN_SPEED_MPS {
                     self.headway_time.observe(gap / follower.speed_mps);
                 }
                 let closing = follower.speed_mps - leader.speed_mps;
@@ -894,6 +906,15 @@ mod tests {
         assert_eq!(sample(&s, "headway_time").value.point(), Some(1.5));
         assert_eq!(sample(&s, "headway_distance").value.point(), Some(30.0));
         assert_eq!(sample(&s, "drac").value.point(), Some(1.667));
+
+        // A creeping queue (0.05 m/s, 7 m gap) is queued, not following: it has a
+        // distance headway and no time headway.
+        let mut p = SafetyProvider::new(0).with_min_samples(1);
+        p.on_event(&kin(0, 1, Some(7), 0.0, 0.05, Some(0.0)));
+        p.on_event(&kin(0, 2, Some(7), 7.0, 0.05, Some(0.0)));
+        let s = p.flush(1_000_000_000);
+        assert_eq!(sample(&s, "headway_distance").value.point(), Some(7.0));
+        assert_eq!(sample(&s, "headway_time").value.point(), None);
         assert_eq!(
             sample(&s, "ttc_conflicts").value,
             SampleValue::count(0),
