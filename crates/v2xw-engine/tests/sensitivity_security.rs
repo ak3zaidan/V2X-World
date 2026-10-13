@@ -1042,3 +1042,15 @@ fn the_prioritized_horizon_moves_the_service_order() {
     wrong.security.prioritized_horizon_m = Some(100.0);
     assert!(refused(&wrong, "prioritized_horizon_m"));
 }
+
+/// A compromised-RSU attack with no compromised unit does nothing, so the loader refuses it
+/// on any scenario, not only on one that runs the credential lifecycle (the security-track
+/// catalogue sweep found it accepted and dead on the DSRC family).
+#[test]
+fn a_compromised_rsu_attack_without_units_is_refused() {
+    let mut s = Scenario::load(root().join("scenarios/phase1-grid.yaml")).expect("loads");
+    s.threats.compromised_rsu_attack = Some(ModelChoice::new("threat/attacker/compromised-rsu"));
+    assert!(refused(&s, "compromised_rsu_attack"));
+    s.threats.compromised_rsu_attack = None;
+    assert!(!refused(&s, "compromised_rsu_attack"));
+}
