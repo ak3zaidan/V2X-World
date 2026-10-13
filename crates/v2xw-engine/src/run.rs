@@ -7063,6 +7063,23 @@ impl Engine {
             .filter_map(|a| a.node.map(|n| (n, a.last.pos)))
             .collect();
 
+        // 0. A multi-message flow (a top-up's request, acknowledgement and polls) runs for
+        // seconds over `packet-pf`, and the vehicle keeps driving: its modem sees each
+        // step's position, so a cell change mid-flow starts a handover the flow's later
+        // segments wait out, rather than the whole flow staying in the cell it began in.
+        // Only `packet-pf` carries a flow segment by segment; `packet_link` is `None`
+        // (and observes nothing) for every other Uu model.
+        let flows = self
+            .phase2
+            .as_ref()
+            .map(crate::phase2::Phase2::cellular_flows_in_flight)
+            .unwrap_or_default();
+        for node in flows {
+            if let Some(&pos) = positions.get(&node) {
+                let _ = self.packet_link(node, pos);
+            }
+        }
+
         // 1. Reports held for want of connectivity.
         let held = self
             .phase2
