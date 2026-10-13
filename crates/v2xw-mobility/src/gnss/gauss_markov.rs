@@ -298,7 +298,22 @@ impl Default for GaussMarkovGnss {
 
 impl GaussMarkovGnss {
     /// Fits the model to the measured quantiles and builds it.
-    pub fn new(params: GaussMarkovParams) -> Self {
+    pub fn new(mut params: GaussMarkovParams) -> Self {
+        // An RTK receiver's white noise is the standard receiver's scaled by the ratio of
+        // the two fitted horizontal σ (Reid 2019: 0.26 m against 3.07 m at the 68th
+        // percentile), so the white/bias split stays the one fitted for the standard
+        // receiver. Before, an RTK receiver kept the 1.6 m `gpsSensor` white noise, which
+        // exceeds the whole RTK σ: its fixes scattered like a standard receiver's and its
+        // degraded bursts reached 10 m while it stated a 3.9 m radius, which the
+        // misbehaviour detector rightly read as position/speed inconsistency (3 false
+        // verdicts on the lifecycle family against 0 without RTK).
+        if params.rtk {
+            let sps = QuantileFit::horizontal("horizontal", &REID_HORIZONTAL_M).sigma_m;
+            let rtk = QuantileFit::horizontal("rtk-horizontal", &REID_RTK_HORIZONTAL_M).sigma_m;
+            if sps > 0.0 {
+                params.sigma_white_h_m *= rtk / sps;
+            }
+        }
         let horizontal = if params.rtk {
             QuantileFit::horizontal("rtk-horizontal", &REID_RTK_HORIZONTAL_M)
         } else {
@@ -1323,6 +1338,8 @@ mod tests {
         let sps = GaussMarkovGnss::default();
         let rtk = GaussMarkovGnss::rtk();
         assert!(rtk.fits()[0].sigma_m < sps.fits()[0].sigma_m / 2.0);
+        // The white noise shrinks with the fit, so the reported radius does too.
+        assert!(rtk.params().sigma_white_h_m < 0.2 * sps.params().sigma_white_h_m);
         assert_eq!(rtk.outage_p95_s(), RTK_OUTAGE_P95_S);
         assert_eq!(sps.outage_p95_s(), SPS_OUTAGE_P95_S);
     }
