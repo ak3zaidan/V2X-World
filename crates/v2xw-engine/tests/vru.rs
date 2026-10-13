@@ -287,3 +287,74 @@ fn a_run_with_vru_devices_is_deterministic() {
     assert_eq!(ra.records, rb.records);
     assert!(digest(&a) == digest(&b), "two runs of one scenario differ");
 }
+
+/// `security.verification_policy` reaches a pedestrian's device. A handset used to run
+/// `verify-all` whatever the scenario said, so every check it made carried priority 0 and
+/// was served first in, first out; under `prioritized` it now serves the near first, by the
+/// same rule as a vehicle.
+#[test]
+fn a_vru_device_runs_the_scenarios_verification_policy() {
+    let run = |policy: &str| {
+        let mut scenario = Scenario::minimal();
+        scenario.world.source = WorldSourceSpec::procedural(
+            "world/source/procedural-grid",
+            serde_json::json!({
+                "cols": 4, "rows": 4, "block_x_m": 120.0, "block_y_m": 90.0,
+                "lanes_per_direction": 1, "sidewalk_m": 2.0, "crossings": true,
+                "signalised": true, "corner_radius_m": 4.5, "bicycles_on_roads": true
+            }),
+        );
+        scenario.actors.vru.pedestrians = 12;
+        scenario.actors.vru.device_fraction = 1.0;
+        scenario.actors.vehicles.equipped_fraction = 1.0;
+        scenario.actors.vehicles.demand.kind = "mobility/demand/poisson".to_string();
+        scenario.actors.vehicles.demand.rate_veh_per_h = Some(3600.0);
+        scenario.messages.sets = vec!["bsm".to_string()];
+        scenario.time.duration_s = 20.0;
+        scenario.security.verification_policy = policy.to_string();
+        scenario.validate().expect("validates");
+        let mut engine = v2xw_engine::Engine::build(scenario, "").expect("builds");
+        let mut recorder = v2xw_engine::MemoryRecorder::new();
+        engine.run(&mut recorder).expect("runs");
+        let tx = by_type(&recorder, "node.tx");
+        let vru: std::collections::BTreeSet<u64> = tx
+            .iter()
+            .filter(|r| r["msg_type"] == "psm")
+            .filter_map(|r| r["node"].as_u64())
+            .collect();
+        let ns = |v: &serde_json::Value| v.as_u64().or_else(|| v.as_f64().map(|f| f as u64));
+        let served: Vec<(u64, f64)> = by_type(&recorder, "node.verify")
+            .iter()
+            .filter(|r| vru.contains(&r["node"].as_u64().unwrap_or(u64::MAX)))
+            .filter(|r| r["outcome"] == "valid")
+            .filter_map(|r| {
+                Some((
+                    r["priority"].as_u64()?,
+                    ns(&r["t_start"])?.saturating_sub(ns(&r["t_enqueue"])?) as f64 / 1e6,
+                ))
+            })
+            .collect();
+        served
+    };
+    let all = run("verify-all");
+    let pri = run("prioritized");
+    let near: Vec<f64> = pri.iter().filter(|p| p.0 >= 500).map(|p| p.1).collect();
+    let far: Vec<f64> = pri.iter().filter(|p| p.0 < 500).map(|p| p.1).collect();
+    let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
+    println!(
+        "MEAS vru verify: verify-all {} checks (max priority {}); prioritized {} checks, near {} \
+         wait {:.3} ms, far {} wait {:.3} ms",
+        all.len(),
+        all.iter().map(|p| p.0).max().unwrap_or(0),
+        pri.len(),
+        near.len(),
+        mean(&near),
+        far.len(),
+        mean(&far)
+    );
+    assert!(!all.is_empty() && all.iter().all(|p| p.0 == 0));
+    assert!(
+        pri.iter().any(|p| p.0 > 0),
+        "no VRU check carried a priority: the policy did not reach the device"
+    );
+}

@@ -87,7 +87,9 @@ use crate::policy::{
     PolicyView, RxSummary, VerificationPolicy, VerifyAll, VerifyDecision, VerifyDecisionRecord,
 };
 use crate::profile::{HardwareProfile, RunsOn};
-use crate::queue::{Admission, DropCause, DropLedger, NodeQueue, QueueKind, Queued};
+use crate::queue::{
+    Admission, DropCause, DropLedger, NodeQueue, QueueKind, Queued, pick_by_priority,
+};
 use crate::runtime::{RxDisposition, RxFrame, RxReport, RxStamp, Transmission, VerifiedMessage};
 use crate::secure::{CryptoMode, NodeSecurity, PSID_SAFETY, SpduVerdict};
 use crate::server::{OpDescriptor, ProfileServiceModel, ServerBank, ServiceModel};
@@ -1068,6 +1070,8 @@ struct RxItem {
     frame: RxFrame,
     token: u64,
     arrived: SimTime,
+    /// The verification policy's service priority (0 for every policy but `prioritized`).
+    priority: u32,
 }
 
 /// A vulnerable-road-user device: a phone or a beacon, with the limits a hand-held radio
@@ -1407,6 +1411,7 @@ impl VruDeviceRuntime {
                     arrived: arrival(&self.clock, &stamp),
                     token: stamp.token,
                     frame,
+                    priority: 0,
                 })
                 .collect();
             self.receive(ctx, believed, items, &mut out);
@@ -1472,7 +1477,19 @@ impl VruDeviceRuntime {
             let relevance = frame
                 .signer
                 .as_ref()
-                .and_then(|s| self.relevance.get(&crate::safety::digest_key(s)).copied());
+                .and_then(|s| self.relevance.get(&crate::safety::digest_key(s)).copied())
+                // As on a vehicle: with no installed score, the message's own claim
+                // against this device's belief (time to collision), so `on-demand` decides.
+                .or_else(|| {
+                    frame.claimed_pos.map(|p| {
+                        crate::safety::relevance_from_claim(
+                            &self.belief,
+                            p,
+                            frame.claimed_speed_mps,
+                            frame.claimed_heading_rad,
+                        )
+                    })
+                });
             let summary = RxSummary {
                 signer: frame.signer.clone(),
                 msg_type: frame.msg_type,
@@ -1510,7 +1527,9 @@ impl VruDeviceRuntime {
                         verify_done: None,
                     });
                 }
-                VerifyDecision::Verify { .. } => {
+                VerifyDecision::Verify { priority, .. } => {
+                    let mut item = item;
+                    item.priority = priority;
                     let queued = Queued {
                         enqueued_at: item.arrived,
                         item,
@@ -1560,7 +1579,20 @@ impl VruDeviceRuntime {
             return;
         }
         let where_ = self.service.runs_on(&probe);
-        for q in self.queues[1].drain() {
+        // Served in the order the policy's priority gives (`prioritized` serves the near
+        // first; every other policy is first in, first out), as the OBU's queue is.
+        let mut waiting = self.queues[1].drain();
+        while !waiting.is_empty() {
+            let free = match where_ {
+                RunsOn::Hsm => self.hsm.earliest_free(),
+                RunsOn::Accelerator => self.accel.earliest_free(),
+                RunsOn::Cpu => self.cpu.earliest_free(),
+            };
+            let keys: Vec<(SimTime, u32)> = waiting
+                .iter()
+                .map(|q| (q.enqueued_at, q.item.priority))
+                .collect();
+            let q = waiting.remove(pick_by_priority(&keys, free));
             let item = q.item;
             let frame = item.frame.clone();
             let op = OpDescriptor::verify(self.config.verify_op, frame.bytes);
@@ -1574,7 +1606,7 @@ impl VruDeviceRuntime {
             };
             self.window.verification(sched.wait);
             let verdict = self.classify(ctx, &frame);
-            ctx.emit(VerifyDecisionRecord::verified(
+            let mut rec = VerifyDecisionRecord::verified(
                 self.node,
                 q.enqueued_at,
                 sched.start,
@@ -1588,7 +1620,9 @@ impl VruDeviceRuntime {
                     _ => "skipped",
                 },
                 0,
-            ));
+            );
+            rec.priority = item.priority;
+            ctx.emit(rec);
             let held =
                 verdict == VerificationState::Unverified && self.policy.holds_unknown_signer();
             if held {

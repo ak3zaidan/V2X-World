@@ -1610,7 +1610,8 @@ mod tests {
         // Attack types: runnable ones offered, refused ones listed and marked unavailable.
         let attacks = options("threats.attackers[].id");
         assert!(attacks.contains(&("threat/attacker/legacy/ConstPos".to_string(), true)));
-        assert!(attacks.contains(&("threat/attacker/legacy/Sybil".to_string(), false)));
+        assert!(attacks.contains(&("threat/attacker/legacy/Sybil".to_string(), true)));
+        assert!(attacks.contains(&("threat/attacker/legacy/DoS".to_string(), false)));
         // A reflected enum keeps its values and gains words; 'hybrid' is refused by the loader.
         assert!(options("radio.rat").contains(&("hybrid".to_string(), false)));
         // Closed string sets inside a list.

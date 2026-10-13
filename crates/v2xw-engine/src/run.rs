@@ -4511,6 +4511,7 @@ impl Engine {
         );
         let mut signature_valid = true;
         let mut claimed_generation = tx.generation_time;
+        let mut ghosts: Vec<v2xw_threat::attack::Emission> = Vec::new();
         if self.phase2.as_ref().is_some_and(|p| p.is_attacker(node)) {
             let actor = self
                 .node_actor
@@ -4540,6 +4541,21 @@ impl Engine {
             let cert = credential
                 .as_ref()
                 .map_or((0, SimTime::MAX), |c| (c.valid_from, c.valid_until));
+            // The concurrent pseudonyms this node holds (an SCMS issues `certs_per_period`
+            // valid at once): what a Sybil attacker's ghosts sign with.
+            let held: Vec<[u8; 8]> = self
+                .nodes
+                .get(&node)
+                .map(|n| {
+                    n.stores()
+                        .certs
+                        .credentials()
+                        .iter()
+                        .filter(|c| c.is_valid_at(believed))
+                        .map(|c| crate::phase2::digest_bytes(&c.digest))
+                        .collect()
+                })
+                .unwrap_or_default();
             let emission = {
                 let Engine {
                     scheduler,
@@ -4573,12 +4589,14 @@ impl Engine {
                         me,
                         cert,
                         u64::from(frame.index()),
+                        &held,
                     )
                 });
                 deferred_records.extend(buffer.records().iter().cloned());
                 e
             };
-            if let Some(e) = emission {
+            if let Some(mut e) = emission {
+                ghosts = std::mem::take(&mut e.ghosts);
                 claim = (
                     Vec3::new(e.x_m, e.y_m, claim.0.z),
                     e.speed_mps,
@@ -4929,6 +4947,11 @@ impl Engine {
                 }
             }
         }
+        // A Sybil attacker's ghosts: one more whole frame per ghost, after its own.
+        if !ghosts.is_empty() && node_message && frames.len() == 1 {
+            let extra = self.ghost_frames(node, tx, &frames[0].1, &ghosts, padding, now);
+            frames.extend(extra);
+        }
         // At the abstract tier there is no MAC to queue the fragments of one SDU behind
         // each other, so each one waits for the one before it to leave the air.
         let mut on_air_until = ready;
@@ -4969,6 +4992,187 @@ impl Engine {
                 );
             }
         }
+    }
+
+    /// A Sybil attacker's ghost frames, one per ghost claim (07-threats §2.2).
+    ///
+    /// Each is the attacker's own payload signed again under one of its *concurrent*
+    /// pseudonyms, with the full certificate attached (no receiver has heard that
+    /// pseudonym before, so a digest would leave it unverifiable), claiming the ghost's
+    /// position. The frame is otherwise the attacker's own: same message type, MCS, power
+    /// and access category, queued behind it at the MAC. The extra signatures are not
+    /// charged to the attacker's signer: an attacker running its own software signs off
+    /// the critical path, and charging it would only delay its own frame.
+    fn ghost_frames(
+        &mut self,
+        node: NodeId,
+        tx: &Transmission,
+        base: &FrameState,
+        ghosts: &[v2xw_threat::attack::Emission],
+        padding: u32,
+        now: SimTime,
+    ) -> Vec<(FrameSeq, FrameState)> {
+        let mut out = Vec::new();
+        if !matches!(tx.msg_type, v2xw_msg::MsgType::Bsm | v2xw_msg::MsgType::Cam) {
+            return out;
+        }
+        let Some(payload) = tx.signed.as_ref().map(|f| f.payload.clone()) else {
+            return out;
+        };
+        let held: Vec<(u32, u32, v2xw_msg::sec_types::HashedId8)> = self
+            .nodes
+            .get(&node)
+            .map(|n| {
+                n.stores()
+                    .certs
+                    .credentials()
+                    .iter()
+                    .map(|c| (c.i_period, c.j_index, c.digest.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let belief = self
+            .nodes
+            .get(&node)
+            .map(|n| v2xw_core::NodeView::position(n).clone());
+        let sidelink = self.sidelink.is_some();
+        let mtu = self.net.sdu_mtu();
+        let slot = self.sidelink.as_ref().map(|sl| sl.slot());
+        for g in ghosts {
+            let Some((i, j, digest)) = held
+                .iter()
+                .find(|c| crate::phase2::digest_bytes(&c.2) == g.signer)
+                .cloned()
+            else {
+                continue;
+            };
+            let signed = {
+                let Engine {
+                    scheduler,
+                    rng,
+                    world,
+                    snapshot,
+                    provenance,
+                    params,
+                    nodes,
+                    ..
+                } = self;
+                let mut null = crate::ctx::NullRecorder::new();
+                let mut ctx = EngineCtx::new(
+                    scheduler, rng, world, snapshot, provenance, params, &mut null,
+                );
+                let mut nctx = crate::adapters::node(&mut ctx);
+                nodes.get_mut(&node).and_then(|n| {
+                    n.security_mut()
+                        .sign_as(&mut nctx, i, j, tx.msg_type, &payload)
+                })
+            };
+            let Some((signed, _)) = signed else {
+                continue;
+            };
+            let (spdu_bytes, envelope, cert) = crate::signature::resize(
+                &self.scenario.security.signature,
+                signed.bytes_on_wire(),
+                Some(signed.envelope_bytes()),
+                Some(signed.cert_bytes),
+                self.frag_plan.cert_cycle().is_none(),
+            );
+            let sdu_bytes = spdu_bytes.saturating_add(padding);
+            if sdu_bytes > mtu {
+                self.report.net_mtu_refusals += 1;
+                continue;
+            }
+            let split = envelope.map(|e| (signed.payload_bytes().saturating_add(padding), e));
+            let mut layers = v2xw_net::FrameLayers::compose(
+                &self.net,
+                frame_msg(tx.msg_type),
+                split,
+                sdu_bytes,
+            );
+            if sidelink {
+                layers.llc_snap = 0;
+                layers.mac_header = 0;
+                layers.fcs = 0;
+            }
+            let psdu = layers.psdu_bytes();
+            let air = slot.unwrap_or_else(|| v2xw_radio::air_time(psdu, base.descriptor.mcs));
+            let seq = FrameSeq::new(self.next_frame);
+            self.next_frame += 1;
+            let sdu = v2xw_core::ids::SduId::new(seq.index());
+            let claim = (
+                Vec3::new(g.x_m, g.y_m, base.claimed_pos.z),
+                g.speed_mps,
+                g.heading_rad,
+            );
+            let mut st = base.clone();
+            st.bytes = sdu_bytes;
+            st.descriptor.bytes = psdu;
+            st.descriptor.sdu_ref = SduRef::new(sdu, seq);
+            st.air = air;
+            st.end = air.after(st.ready_at);
+            st.signer = digest.clone();
+            st.full_certificate = true;
+            st.claimed_pos = claim.0;
+            st.claimed_speed_mps = claim.1;
+            st.claimed_heading_rad = claim.2;
+            st.claimed_cert_period = i;
+            st.claimed_linkage = self.phase2.as_ref().and_then(|p| {
+                p.creds(node)
+                    .iter()
+                    .find(|c| c.i == i && c.j == j)
+                    .map(|c| c.lv)
+            });
+            st.signature_valid = true;
+            st.spdu = Some(signed.spdu.clone());
+            st.payload_bytes = split.map(|(p, _)| p);
+            st.envelope_bytes = split.map(|(_, e)| e);
+            st.layers = layers;
+            st.cert_bytes = cert;
+            st.dcc_event = None;
+            st.cert_frag = None;
+            st.frag = None;
+            st.content = Some(message_content(
+                tx.msg_type,
+                Some(payload.as_slice()),
+                &digest,
+                claim,
+            ));
+            st.gn = if sidelink {
+                None
+            } else {
+                self.gn_originate(node, tx.msg_type, sdu_bytes, now)
+            };
+            // The engine's own knowledge of who signs under what, and the receivers'
+            // view of the ghost's stated accuracy, exactly as for the attacker's own frame.
+            self.app_truth.note_signer(&digest.0[..], node);
+            if let Some(p) = self.phase2.as_mut() {
+                p.note_ghost_frame();
+                if p.note_digest(node, &digest, i, j)
+                    && let Some(actor) = self.node_actor.get(&node).copied()
+                {
+                    let record =
+                        crate::records::GtSubject(v2xw_metrics::channels::GtSubjectView {
+                            t: now,
+                            subject: v2xw_core::hash::hex_encode(&digest.0[..]),
+                            actor,
+                        });
+                    if let Ok(owned) = v2xw_core::ctx::ErasedRecord::to_owned_record(&record) {
+                        self.deferred_records.push((now, owned));
+                    }
+                }
+                if p.detection_on()
+                    && let Some(b) = belief
+                {
+                    p.note_broadcast_accuracy(
+                        g.signer,
+                        st.generation_time,
+                        crate::phase2::broadcast_accuracy_95_m(tx.msg_type, &b),
+                    );
+                }
+            }
+            out.push((seq, st));
+        }
+        out
     }
 
     /// The certificate-cycle fragment this node's next SPDU carries, if any, advancing its

@@ -370,9 +370,6 @@ pub(crate) fn unrendered(kind: AttackKind) -> Option<&'static str> {
             "a flood is extra transmissions per generation interval, and the host sends one \
              frame per generation",
         ),
-        AttackKind::Sybil => Some(
-            "its ghost identities need concurrent pseudonyms the host does not hand an attacker",
-        ),
         AttackKind::VruImpersonation | AttackKind::VruPositionSpoof => Some(
             "it changes the declared station type, which a BSM does not carry; the host does \
              not switch a vehicle to sending PSMs",
@@ -797,6 +794,9 @@ pub struct Phase2Report {
     pub attackers: u64,
     /// How many outgoing claims an attacker falsified.
     pub falsified_claims: u64,
+    /// Sybil ghost frames put on the air: each a genuine SPDU signed under one of the
+    /// attacker's concurrent pseudonyms, with its certificate attached.
+    pub ghost_frames: u64,
     /// How many messages the local detectors checked.
     pub messages_checked: u64,
     /// How many detector verdicts fired.
@@ -2176,6 +2176,11 @@ impl Phase2 {
         }
     }
 
+    /// Counts one Sybil ghost frame handed to the access layer.
+    pub fn note_ghost_frame(&mut self) {
+        self.report.ghost_frames += 1;
+    }
+
     /// Whether the local detector suite runs in this scenario.
     #[must_use]
     pub fn detection_on(&self) -> bool {
@@ -2231,6 +2236,7 @@ impl Phase2 {
         belief: SelfBelief,
         cert: (SimTime, SimTime),
         msg: u64,
+        own_credentials: &[[u8; 8]],
     ) -> Option<Emission> {
         let slot = self.attackers.get_mut(&node)?;
         if believed_time < slot.from || believed_time >= slot.to {
@@ -2238,7 +2244,7 @@ impl Phase2 {
         }
         let view = AttackerView {
             own_rx: &[],
-            own_credentials: &[],
+            own_credentials,
             crl_revocations_seen: None,
             own_belief: belief,
             honest,
@@ -4154,6 +4160,17 @@ pub fn attacker_params(
             "pos_heading_omega_rad_s" => m.pos_heading_omega_rad_s = v,
             "eventual_stop_delay_s" => m.eventual_stop_delay_s = v,
             "eventual_stop_base_speed_mps" => m.eventual_stop_base_speed_mps = v,
+            // F2MD `SybilVehNumber` and the legacy pre-pass's `sr.uniform(-1, 1)`: how many
+            // concurrent pseudonyms the ghost set uses, and how far each ghost's claim sits
+            // from the attacker's own. Refused on any other kind, where nothing reads them.
+            "sybil_ghosts" | "sybil_jitter_m" if kind != AttackKind::Sybil => {
+                return Err(conflict(
+                    &format!("threats.attackers[].params.{key}"),
+                    "is read only by threat/attacker/legacy/Sybil".to_string(),
+                ));
+            }
+            "sybil_ghosts" => p.sybil_ghosts = (whole(v) as u32).clamp(1, 59),
+            "sybil_jitter_m" => p.sybil_jitter_m = v.clamp(0.0, 50.0),
             other => {
                 return Err(conflict(
                     &format!("threats.attackers[].params.{other}"),

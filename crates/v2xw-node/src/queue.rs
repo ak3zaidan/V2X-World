@@ -456,3 +456,42 @@ mod tests {
         );
     }
 }
+
+/// Which waiting signature check a server that frees at `free` takes next, given each
+/// waiting check's `(enqueued_at, priority)` in arrival order.
+///
+/// The highest priority among those that have arrived by the instant the server starts,
+/// the oldest of them on a tie (06-node-models.md §2.1: `prioritized` verifies the
+/// relevant and the near first). Every policy but `prioritized` gives every check
+/// priority 0, so the answer is then always 0: first in, first out, as before. The OBU,
+/// roadside and VRU runtimes all serve their verify queue through this rule.
+#[must_use]
+pub fn pick_by_priority(waiting: &[(SimTime, u32)], free: SimTime) -> usize {
+    let Some(earliest) = waiting.iter().map(|w| w.0).min() else {
+        return 0;
+    };
+    let start = earliest.max(free);
+    let mut pick = 0;
+    let mut best = waiting[0].1;
+    for (i, &(at, priority)) in waiting.iter().enumerate().skip(1) {
+        if at <= start && priority > best {
+            best = priority;
+            pick = i;
+        }
+    }
+    pick
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::pick_by_priority;
+
+    #[test]
+    fn equal_priorities_are_first_in_first_out_and_a_higher_one_jumps_the_line() {
+        assert_eq!(pick_by_priority(&[(0, 0), (1, 0), (2, 0)], 5), 0);
+        assert_eq!(pick_by_priority(&[(0, 10), (1, 900), (2, 900)], 5), 1);
+        // Not yet arrived when the server starts: it cannot be served first.
+        assert_eq!(pick_by_priority(&[(0, 10), (9, 900)], 5), 0);
+        assert_eq!(pick_by_priority(&[], 5), 0);
+    }
+}
