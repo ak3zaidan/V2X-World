@@ -48,9 +48,7 @@ use v2xw_net::stack::{
 use v2xw_radio::types::AccessCategory;
 
 use super::{Engine, FrameState, GeonetWarning};
-use crate::event::Event;
 use crate::scenario::schema::{Geonet, Scenario};
-use v2xw_core::event::EventClass;
 
 /// The GeoNetworking state a frame carries when the run forwards on the air.
 #[derive(Debug, Clone)]
@@ -407,14 +405,7 @@ impl Engine {
         }
         self.frames.insert(seq, state);
         self.pending_tx.entry(node).or_default().push((at, seq));
-        self.scheduler.schedule(
-            at,
-            EventClass::MacTimer,
-            Event::MacTimer {
-                node,
-                channel: self.dsrc_channel.0,
-            },
-        );
+        self.schedule_mac_timer(at, node, self.dsrc_channel.0);
     }
 
     fn gn_count_forward(&mut self, node: NodeId, state: &FrameState) {
