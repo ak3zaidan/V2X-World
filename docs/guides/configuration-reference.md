@@ -219,6 +219,8 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `actors.vehicles.drivers.lane_change_threshold_mps2` **new** | 0.1 | 0 to 2 m/s² | MOBIL `Δa_th`. |
 | `world.signals.coordinate`, `.progression_speed_mps` | off | 1 to 40 m/s | Green-wave signal timing. |
 | `world.signals.join_m` **new** | off | 0 to 40 m | Joins signalised junctions this close into one plan (netconvert `--tls.join`, 20 m default there). |
+| `traffic.signals.short_link_clearance_m` **new** | off | 10 to 200 m | Downstream green for a link shorter than this starts 2 s before the upstream green that fills it (FHWA Signal Timing Manual 2e ch. 6, closely spaced signals). |
+| `traffic.signals.detector_placement` **new** | stop-line | stop-line, sumo | `sumo`: one loop per approach lane at speed limit x 2 s upstream (SUMO actuated `detector-gap`); actuated control only. |
 | `world.source.params.ew_green_share` **new** | 0.5 | 0.1 to 0.9 | East-west share of a generated grid's green (Webster 1958); signalised grids only. |
 | `traffic.turn_curve_window_m` **new** | 0 (whole connector) | 0 to 30 m | Judges a junction turn's radius over its tightest arc of this length instead of its average (SUMO netconvert `--junctions.limit-turn-speed` averages). At 6 m the 85th-percentile peak lateral acceleration equals `turn_lateral_accel_mps2` (5.46 at 5.5, 3.52 at 3.5, AASHTO 0.38 g = 3.73); at 0 it is 7.7 at 5.5. Refused when `turn_lateral_accel_mps2` is 0. |
 | `apps.glosa_compliance` | scenario's | 0 to 1 | Share of drivers who follow advice. |
