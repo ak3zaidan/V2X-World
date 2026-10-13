@@ -176,6 +176,10 @@ pub struct EventServices {
     stationary_event: Option<EventId>,
     /// The cause of each live event.
     denm_causes: BTreeMap<EventId, (DenmCause, u8)>,
+    /// The stationary-vehicle DENM's repetition instruction when the scenario sets one
+    /// (`net.geonet.repetition_*`); [`STATIONARY_REPETITION`] for
+    /// [`STATIONARY_REPETITION_DURATION`] otherwise.
+    stationary_repetition: Option<Repetition>,
 }
 
 impl EventServices {
@@ -206,6 +210,12 @@ impl EventServices {
     /// How many DENM events this node has raised.
     pub fn denm_raised(&self) -> u64 {
         self.denm_raised
+    }
+
+    /// The stationary-vehicle DENM's repetition (EN 302 637-3 6.1.4.2): `interval`
+    /// for `duration`; a zero interval sends each DENM once.
+    pub fn set_stationary_repetition(&mut self, interval: Duration, duration: Duration) {
+        self.stationary_repetition = Some(Repetition::new(interval, duration));
     }
 
     /// The hazard switch.
@@ -384,7 +394,9 @@ impl EventServices {
         {
             self.stationary_event = None;
         }
-        let repetition = Repetition::new(STATIONARY_REPETITION, STATIONARY_REPETITION_DURATION);
+        let repetition = self
+            .stationary_repetition
+            .unwrap_or(Repetition::new(STATIONARY_REPETITION, STATIONARY_REPETITION_DURATION));
         let moved_long = self
             .moving_since
             .is_some_and(|t| now.saturating_sub(t) >= STATIONARY_MOVING_CANCEL.as_nanos());

@@ -125,7 +125,7 @@ pub use gcbr::GlobalCbrTally;
 mod cpm_metrics;
 pub use cpm_metrics::CpmTally;
 mod air_bytes;
-pub use air_bytes::AirBytes;
+pub use air_bytes::{AirBytes, TypeAir};
 pub mod jamming;
 mod link;
 mod radios;
@@ -530,6 +530,10 @@ pub struct RunReport {
     /// Every octet that went on the air, by layer, with the PHY's own time and the
     /// forwarding share ([`AirBytes`]).
     pub air_bytes: AirBytes,
+    /// The same frames by message type (`bsm`, `cam`, `denm`, `cpm`, ...): frames, octets,
+    /// mean size and air time, so each type's share of the channel load ([`TypeAir`]).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub air_by_type: BTreeMap<String, TypeAir>,
 }
 
 /// The city-scale radio gate's totals ([`crate::scale`]).
@@ -2530,7 +2534,17 @@ impl Engine {
                     .insert(index, (chosen.actor, chosen.node));
                 if let Some(n) = chosen.node {
                     self.timeline.hazard_lights.insert(n);
+                    let repetition = self
+                        .scenario
+                        .net
+                        .geonet
+                        .as_ref()
+                        .filter(|g| self.scenario.net.layer == "gn-btp" && g.forwarding == "on-air")
+                        .map(gn_air::on_air_repetition);
                     if let Some(obu) = self.nodes.get_mut(&n).and_then(|r| r.as_obu_mut()) {
+                        if let Some((interval, duration)) = repetition {
+                            obu.set_stationary_repetition(interval, duration);
+                        }
                         obu.set_hazard_lights(true);
                     }
                 }
@@ -6314,6 +6328,14 @@ impl Engine {
         let _ = frame_index;
         self.finish_rx_only(recorder, frame, state, now, tx_id, outcomes);
         self.report.air_bytes.add(state);
+        self.report
+            .air_by_type
+            .entry(state.msg_type.as_str().to_string())
+            .or_default()
+            .add(
+                u64::from(state.layers.psdu_bytes()),
+                state.air.as_nanos() / 1_000,
+            );
         self.emit_tx_record(recorder, frame, state);
     }
 

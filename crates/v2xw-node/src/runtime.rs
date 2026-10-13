@@ -693,6 +693,16 @@ impl ObuRuntime {
         self.own.set_bus(bus);
     }
 
+    /// The stationary-vehicle DENM's repetition interval and duration
+    /// ([`crate::events::EventServices::set_stationary_repetition`]).
+    pub fn set_stationary_repetition(
+        &mut self,
+        interval: v2xw_core::time::Duration,
+        duration: v2xw_core::time::Duration,
+    ) {
+        self.events.set_stationary_repetition(interval, duration);
+    }
+
     /// Switches the vehicle's hazard warning lights, which its stationary-vehicle DENM
     /// and its BSM's event flags read.
     pub fn set_hazard_lights(&mut self, on: bool) {

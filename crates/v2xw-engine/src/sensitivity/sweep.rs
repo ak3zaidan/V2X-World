@@ -721,7 +721,7 @@ impl RunRecorder for FingerprintRecorder {
 }
 
 /// Every numeric leaf of `v`, flattened to dotted names under `prefix`.
-fn flatten(prefix: &str, v: &Value, out: &mut Fingerprint) {
+pub(crate) fn flatten(prefix: &str, v: &Value, out: &mut Fingerprint) {
     match v {
         Value::Number(n) => {
             if let Some(x) = n.as_f64() {
