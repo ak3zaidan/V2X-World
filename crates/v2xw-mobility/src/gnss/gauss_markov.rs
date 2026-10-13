@@ -1339,7 +1339,12 @@ mod tests {
         let rtk = GaussMarkovGnss::rtk();
         assert!(rtk.fits()[0].sigma_m < sps.fits()[0].sigma_m / 2.0);
         // The white noise shrinks with the fit, so the reported radius does too.
-        assert!(rtk.params().sigma_white_h_m < 0.2 * sps.params().sigma_white_h_m);
+        let ratio = rtk.fits()[0].sigma_m / sps.fits()[0].sigma_m;
+        assert!(
+            (rtk.params().sigma_white_h_m - ratio * sps.params().sigma_white_h_m).abs() < 1e-9,
+            "RTK white noise scales with the fitted σ ratio"
+        );
+        assert!(rtk.params().sigma_white_h_m < 0.5 * sps.params().sigma_white_h_m);
         assert_eq!(rtk.outage_p95_s(), RTK_OUTAGE_P95_S);
         assert_eq!(sps.outage_p95_s(), SPS_OUTAGE_P95_S);
     }

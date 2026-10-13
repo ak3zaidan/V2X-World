@@ -276,11 +276,14 @@ fn one_prompt_configures_runs_analyses_and_reports_then_a_follow_up_compares() {
         .expect("demand changed");
     assert_eq!(demand.before, json!(30.0));
     assert_eq!(demand.after, json!(60.0));
+    // phase1-grid already records `metrics: [all]`, so the agent need not change it;
+    // any change it does make must keep every metric.
     assert!(
         changes
             .0
             .iter()
-            .any(|c| c.key == "metrics" && c.after == json!(["all"]))
+            .filter(|c| c.key == "metrics")
+            .all(|c| c.after == json!(["all"]))
     );
     assert!(
         events
