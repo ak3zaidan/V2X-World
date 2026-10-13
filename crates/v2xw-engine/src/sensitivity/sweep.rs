@@ -88,6 +88,10 @@ pub struct Families {
     /// guide text names no usable range), by dotted path.
     #[serde(default)]
     pub values: BTreeMap<String, Vec<Value>>,
+    /// The most values a choice is swept at (spread evenly over its options), so a list
+    /// of fifty jurisdictions does not cost fifty runs. Default 8.
+    #[serde(default)]
+    pub max_choices: Option<usize>,
 }
 
 /// One expectation: moving `setting` to its `change` end moves `metric` `expect`.
@@ -506,6 +510,11 @@ pub fn plan(families: &Families, expectations: &[Expectation]) -> (Vec<Setting>,
                 }
             }
         };
+        let cap = families.max_choices.unwrap_or(8).max(1);
+        if values.len() > cap && kind != "number" && kind != "integer" {
+            let n = values.len();
+            values = (0..cap).map(|i| values[i * n / cap].clone()).collect();
+        }
         // Literal values an expectation names run too.
         for e in expectations.iter().filter(|e| e.setting == path) {
             if !matches!(e.change.as_str(), Some("low" | "high"))
@@ -712,6 +721,53 @@ pub fn run(
     jobs: usize,
     progress: impl Fn(usize, usize, &Outcome) + Sync,
 ) -> Result<Sweep> {
+    run_cached(settings, skipped, bases, expectations, jobs, None, progress)
+}
+
+/// A cache key for one perturbation: the setting, the value, and the families' base
+/// scenarios it may run on (so an edited family invalidates its entries).
+fn cache_key(s: &Setting, value: &Value, bases: &BTreeMap<String, Scenario>) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for f in &s.families {
+        f.hash(&mut h);
+        serde_json::to_string(&bases.get(f)).unwrap_or_default().hash(&mut h);
+    }
+    format!("{}={}#{:016x}", s.path, value, h.finish())
+}
+
+/// [`run`], with a JSON-lines cache of finished perturbations at `cache`: an entry whose
+/// key matches is reused instead of re-run, and each new outcome is appended as it
+/// finishes, so a sweep that is stopped (a memory cap, a closed laptop) resumes where it
+/// stopped. Base fingerprints are always re-measured (seven short runs).
+///
+/// # Errors
+/// As [`run`].
+pub fn run_cached(
+    settings: Vec<Setting>,
+    skipped: Vec<(String, String)>,
+    bases: &BTreeMap<String, Scenario>,
+    expectations: &[Expectation],
+    jobs: usize,
+    cache: Option<&Path>,
+    progress: impl Fn(usize, usize, &Outcome) + Sync,
+) -> Result<Sweep> {
+    let cached: BTreeMap<String, Outcome> = cache
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| {
+            t.lines()
+                .filter_map(|l| serde_json::from_str::<(String, Outcome)>(l).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let sink: Option<Mutex<std::fs::File>> = cache.and_then(|p| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+            .ok()
+            .map(Mutex::new)
+    });
     let started = std::time::Instant::now();
     let used: BTreeSet<&String> = settings.iter().flat_map(|s| s.families.iter()).collect();
     let mut base_fp = BTreeMap::new();
@@ -738,7 +794,21 @@ pub fn run(
                 loop {
                     let k = next.fetch_add(1, Ordering::SeqCst);
                     let Some(&(i, j)) = work.get(k) else { break };
-                    let o = perturb(&settings[i], j, bases, &base_fp);
+                    let key = cache_key(&settings[i], &settings[i].values[j].1, bases);
+                    let o = match cached.get(&key) {
+                        Some(o) => o.clone(),
+                        None => {
+                            let o = perturb(&settings[i], j, bases, &base_fp);
+                            if let Some(f) = &sink
+                                && let Ok(mut f) = f.lock()
+                                && let Ok(line) = serde_json::to_string(&(&key, &o))
+                            {
+                                use std::io::Write as _;
+                                let _ = writeln!(f, "{line}");
+                            }
+                            o
+                        }
+                    };
                     let n = done.fetch_add(1, Ordering::SeqCst) + 1;
                     progress(n, work.len(), &o);
                     if let Ok(mut r) = results.lock() {
@@ -926,7 +996,7 @@ fn cell(o: &Outcome, metric: &str) -> String {
             if b.abs() < 1e-12 {
                 format!("{arrow}{v:.3}")
             } else {
-                format!("{arrow}{:.0}%", rel * 100.0)
+                format!("{arrow}{:.0}%", rel.abs() * 100.0)
             }
         }
         Some((None, Some(_))) => "new".into(),
@@ -984,6 +1054,25 @@ pub fn markdown(sweep: &Sweep, title_note: &str) -> String {
             d.status,
             fams.into_iter().collect::<Vec<_>>().join(", "),
             vals.join(", ")
+        ));
+    }
+    // Ends that moved nothing, of settings that are live elsewhere.
+    let dead_paths: BTreeSet<&str> = dead.iter().map(|d| d.path.as_str()).collect();
+    let quiet: Vec<&Outcome> = sweep
+        .outcomes
+        .iter()
+        .filter(|o| o.dead() && !dead_paths.contains(o.path.as_str()))
+        .collect();
+    s.push_str(&format!(
+        "\n### Values that moved nothing, of settings live at another value ({})\n\nUsually the value equals the model's implicit default (a field with no published default), or the family never exercises it; a choice listed here may also be a value the model treats like the default.\n\n| Setting | Value | Family |\n|---|---|---|\n",
+        quiet.len()
+    ));
+    for o in &quiet {
+        s.push_str(&format!(
+            "| `{}` | {} | {} |\n",
+            o.path,
+            short(&o.value),
+            o.family.as_deref().unwrap_or("-")
         ));
     }
     // (b)

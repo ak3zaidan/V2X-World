@@ -1,1 +1,94 @@
-[]
+# Expectation table for the catalogue sweep (`v2xw sensitivity --catalogue`).
+#
+# One row per (setting, end, metric): moving `setting` to `change` (`low` / `high` = the
+# ends of its recommended range the sweep computes, or a literal value) on the family the
+# families file (scenarios/sensitivity/catalogue.yaml) routes it to must move `metric`
+# (a fingerprint name: see crates/v2xw-engine/src/sensitivity/sweep.rs) `expect`
+# (up | down | same | changes) by at least `min_change` (relative, default 0.01).
+# Only physics and traffic theory with a citation goes here; the next wave extends it.
+# A row the sweep contradicts lands in list (b) of docs/validation/sensitivity-catalogue.md.
+
+# ---- Link budget (DSRC family: 40 vehicles, 1.2 km open grid, 802.11p) ----
+- {setting: radio.devices.obu.tx_power_dbm, change: low, metric: range90_m, expect: down,
+   source: "log-distance link budget: received power falls dB for dB with transmit power (Rappaport, Wireless Communications 2e, 4.9)"}
+- {setting: radio.devices.obu.tx_power_dbm, change: low, metric: prr, expect: down,
+   source: "less SNR at every distance lowers the PRR curve (Bai, Stancil, Krishnan, IEEE VTC 2010)"}
+- {setting: radio.devices.obu.tx_power_dbm, change: low, metric: cbr_mean, expect: down,
+   source: "fewer nodes sense the frame above the CCA threshold, so less busy time per node (Bansal et al. LIMERIC, IEEE TVT 2013)"}
+- {setting: radio.phy.noise_figure_db, change: high, metric: range90_m, expect: down,
+   source: "noise floor = kTB + NF: +NF dB is -NF dB SNR at every distance (Friis 1944)"}
+- {setting: radio.phy.noise_figure_db, change: high, metric: prr, expect: down,
+   source: "lower SNR lowers the PRR curve (IEEE 802.11-2020 17.3.10.6 minimum sensitivity)"}
+- {setting: radio.phy.data_rate_mbps, change: high, metric: airtime_us, expect: down,
+   source: "payload symbols scale with 1/rate; preamble and SIGNAL stay (IEEE 802.11-2020 17.4.3 TXTIME)"}
+- {setting: radio.phy.data_rate_mbps, change: high, metric: range90_m, expect: down,
+   source: "higher MCS needs more SNR (IEEE 802.11-2020 Table 17-18 receiver sensitivities)"}
+- {setting: radio.phy.data_rate_mbps, change: low, metric: airtime_us, expect: up,
+   source: "IEEE 802.11-2020 17.4.3 TXTIME"}
+- {setting: radio.phy.data_rate_mbps, change: high, metric: cbr_mean, expect: down,
+   source: "CBR is offered airtime: shorter frames, less busy time (ETSI TS 102 687)"}
+- {setting: radio.channel_model.path_loss_exponent, change: high, metric: range90_m, expect: down,
+   source: "log-distance law, loss grows 10 n log10(d) (Rappaport 4.9)"}
+- {setting: radio.channel_model.path_loss_exponent, change: low, metric: range90_m, expect: up,
+   source: "log-distance law (Rappaport 4.9)"}
+- {setting: radio.phy.sensitivity_dbm, change: high, metric: range90_m, expect: down,
+   source: "a frame below the receiver's sensitivity is not decoded: a higher floor shortens range (IEEE 802.11-2020 17.3.10.6)"}
+
+# ---- Frame size, rate and access (DSRC family) ----
+- {setting: messages.rate_hz, change: low, metric: tx_rate_hz, expect: down,
+   source: "SAE J2945/1 2016 6.3.6: a vehicle sends at the commanded rate at low density"}
+- {setting: messages.rate_hz, change: low, metric: cbr_mean, expect: down,
+   source: "CBR scales with offered frames per second (Bansal 2013)"}
+- {setting: messages.rate_hz, change: low, metric: aoi_ms, expect: up,
+   source: "age of information is about half the update interval plus latency (Kaul, Yates, Gruteser, INFOCOM 2012)"}
+- {setting: messages.rate_hz, change: low, metric: ipg_ms_mean, expect: up,
+   source: "inter-packet gap is the update interval over the delivery ratio (SAE J2945/1 IPG definition)"}
+- {setting: messages.path_history_points, change: low, metric: psdu_bytes, expect: down,
+   source: "each PathHistoryPoint adds octets to BSM Part II (SAE J2735 DF_PathHistory)"}
+- {setting: messages.path_history_points, change: low, metric: airtime_us, expect: down,
+   source: "longer PSDU, more OFDM symbols (IEEE 802.11-2020 17.4.3)"}
+- {setting: radio.mac.aifsn_vo, change: high, metric: aifs_us, expect: up,
+   source: "AIFS = SIFS + AIFSN x slot (IEEE 802.11-2020 10.22.2.4)"}
+- {setting: radio.mac.cw_min_vo, change: high, metric: backoff_us, expect: up,
+   source: "the mean backoff is CW/2 slots (IEEE 802.11-2020 10.3.4.3)"}
+- {setting: security.signer_id_policy.full_cert_every_ms, change: low, metric: psdu_bytes, expect: up,
+   source: "a certificate is about 100 octets more than an 8-octet digest (IEEE 1609.2-2016 6.4.8; SAE J2945/1 6.1.2)"}
+
+# ---- C-V2X sidelink (LTE-V2X mode 4 family) ----
+- {setting: radio.sidelink.noise_figure_db, change: high, metric: prr_600_1000, expect: down,
+   source: "noise floor = kTB + NF (3GPP TR 36.885 A.1.1, NF 9 dB)"}
+
+# ---- GeoNetworking (GN family: DENM forwarded hop by hop) ----
+- {setting: net.geonet.hop_limit, change: low, metric: gn_forwards_sent, expect: down,
+   source: "the remaining hop limit caps how often a packet is re-broadcast (ETSI EN 302 636-4-1 9.3.3)"}
+
+# ---- Traffic (signalised Midtown-shaped grid, Poisson demand) ----
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: high, metric: traffic.actors, expect: up,
+   source: "Poisson arrivals: the expected count is rate x time (SUMO randomTrips --period / flows)"}
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: high, metric: frames_tx, expect: up,
+   source: "every equipped vehicle sends at 10 Hz, so frames scale with vehicles (SAE J2945/1)"}
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: low, metric: traffic.actors, expect: down,
+   source: "Poisson arrivals: rate x time"}
+- {setting: actors.vehicles.equipped_fraction, change: low, metric: frames_tx, expect: down,
+   source: "only equipped vehicles transmit (market penetration rate, USDOT CV pilot evaluations)"}
+- {setting: actors.vehicles.drivers.speed_factor, change: low, metric: traffic.speed_mean_mps, expect: down,
+   source: "the desired speed is the limit times the speed factor (SUMO vType speedFactor; Krauss 1998)"}
+- {setting: actors.vehicles.drivers.speed_factor, change: high, metric: traffic.speed_mean_mps, expect: up,
+   source: "SUMO vType speedFactor"}
+- {setting: actors.vehicles.drivers.max_accel_mps2, change: low, metric: traffic.speed_mean_mps, expect: down,
+   source: "IDM: lower a lengthens every launch from a stop (Treiber, Hennecke, Helbing 2000)"}
+- {setting: actors.vehicles.drivers.time_headway_s, change: high, metric: traffic.speed_mean_mps, expect: down,
+   min_change: 0.002,
+   source: "IDM: a longer desired headway lowers queue-discharge flow and speed (Treiber 2000; HCM 7th ed. saturation headway)"}
+- {setting: traffic.right_turn_on_red, change: false, metric: traffic.stopped_share, expect: up,
+   source: "without RTOR right-turners wait the red out (HCM 7th ed. 19.4 RTOR volume reduction)"}
+- {setting: weather.intensity, change: high, metric: traffic.speed_mean_mps, expect: down,
+   source: "rain and snow lower free-flow speed (HCM 7th ed. Exhibit 11-20; Rakha et al., FHWA-HOP-07-073, 2007)"}
+
+# ---- Pedestrians (Midtown grid with crossings) ----
+- {setting: actors.vru.walking_speed_mps, change: high, metric: vru.speed_mean_mps, expect: up,
+   source: "pedestrian free walking speed (HCM 7th ed. 1.2 m/s design; Knoblauch 1996 measured 1.25-1.5 m/s)"}
+- {setting: actors.vru.walking_speed_mps, change: low, metric: vru.speed_mean_mps, expect: down,
+   source: "Knoblauch, Pietrucha, Nitzburg 1996 (TRR 1538)"}
+- {setting: actors.vru.pedestrians, change: high, metric: vru.actors, expect: up,
+   source: "the pedestrian count is the population spawned"}

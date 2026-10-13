@@ -19,15 +19,15 @@ families:
   # ETSI stack, a breakdown's DENM forwarded hop by hop.
   - name: gn
     base: gn-grid.yaml
-    set: {time.duration_s: 12.0, events: [{t: 4.0, until: 11.0, type: safety.breakdown}], metrics: [all]}
+    set: {metrics: [all]}  # 24 s, breakdown at 8 s (gn-grid.yaml)
   # The CAMP SCMS lifecycle with a roadside unit, short periods.
   - name: security
     base: ../credential-lifecycle.yaml
-    set: {time.duration_s: 30.0}
+    set: {time.duration_s: 30.0, threats.attackers: []}
   # A signalised Midtown-shaped grid with Poisson demand, traffic and network.
   - name: traffic
     base: ../phase1-grid.yaml
-    set: {time.duration_s: 60.0, actors.vehicles.demand.rate_veh_per_h: 1200.0, metrics: [all]}
+    set: {time.duration_s: 45.0, actors.vehicles.demand.rate_veh_per_h: 900.0, metrics: [all]}
   # The same grid with pedestrians and crossings.
   - name: pedestrians
     base: ../vru-grid.yaml
@@ -60,4 +60,16 @@ skip:
   - {prefix: time.duration_s, reason: "the run length: moves every count by construction"}
   - {prefix: output, reason: "output plumbing: what is written, not what is simulated"}
 
-values: {}
+# Values that replace the computed ends where the guide's range would make the run too
+# large for the 8 GB sweep machine or names no usable range.
+values:
+  # 900 veh/h base: half and double (SUMO randomTrips-style Poisson demand).
+  actors.vehicles.demand.rate_veh_per_h: [450.0, 1800.0]
+  # vehicles per lane-km: light, and near the HCM 7th ed. basic-freeway LOS F threshold (45 pc/mi/ln = 28 pc/km/ln)
+  actors.vehicles.demand.rate_veh_per_h_per_lane_km: [5.0, 30.0]
+  actors.vehicles.demand.fleet_size: [10, 80]
+  actors.vru.pedestrians: [50, 300]
+  radio.range.max_m: [200.0, 2000.0]
+
+# The most values a choice is swept at (spread over its options).
+max_choices: 6

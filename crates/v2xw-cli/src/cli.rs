@@ -97,6 +97,10 @@ pub struct SensitivityArgs {
     /// `--catalogue`: print the plan (settings, values, families) and run nothing.
     #[arg(long)]
     pub plan: bool,
+    /// `--catalogue`: a JSON-lines cache of finished perturbations; a rerun reuses the
+    /// entries whose setting, value and family scenarios match, so a stopped sweep resumes.
+    #[arg(long, value_name = "FILE")]
+    pub cache: Option<std::path::PathBuf>,
     /// `--catalogue`: exit non-zero when an expectation is contradicted.
     #[arg(long)]
     pub strict: bool,

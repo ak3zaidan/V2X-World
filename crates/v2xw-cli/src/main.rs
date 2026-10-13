@@ -140,7 +140,7 @@ fn catalogue(args: &v2xw_cli::cli::SensitivityArgs) -> v2xw_cli::Result<String> 
         return Ok(out);
     }
     let bases = families.bases(&args.families)?;
-    let result = sweep::run(settings, skipped, &bases, &expectations, args.jobs, |n, total, o| {
+    let result = sweep::run_cached(settings, skipped, &bases, &expectations, args.jobs, args.cache.as_deref(), |n, total, o| {
         eprintln!(
             "[{n}/{total}] {} = {} on {}: {} moved{}",
             o.path,
