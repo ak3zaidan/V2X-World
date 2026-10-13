@@ -366,3 +366,25 @@ fn the_defaults_leave_the_scenario_digest_alone() {
     let text = serde_json::to_string(&t).expect("serialises");
     assert!(!text.contains("permitted_left_gap_s"));
 }
+
+/// Right turn on red on the procedural grid: permitted, right-turners who have stopped at
+/// the line go in a gap instead of waiting the red out, so the run differs from one where
+/// it is prohibited (HCM 7th ed. 19.4: RTOR reduces right-turn delay).
+#[test]
+fn right_turn_on_red_reaches_the_grid_signals() {
+    let with = |rtor: bool| {
+        let mut s = grid(150.0);
+        s.traffic = Some(Traffic {
+            right_turn_on_red: Some(rtor),
+            ..Traffic::default()
+        });
+        s
+    };
+    let (on, n_on) = speeds(&run(with(true)));
+    let (off, n_off) = speeds(&run(with(false)));
+    eprintln!("rtor on {on:.4} ({n_on}) off {off:.4} ({n_off})");
+    assert!(
+        (on - off).abs() > 1e-6 || n_on != n_off,
+        "right turn on red changed nothing on the grid"
+    );
+}
