@@ -307,6 +307,28 @@ pub enum SignalControlKind {
     Actuated,
 }
 
+/// Where an actuated controller's vehicle detectors are ([`SignalControl::detector_placement`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DetectorPlacement {
+    /// A presence loop covering the last `detector_m` of every approach lane (FHWA Signal
+    /// Timing Manual 2e, ch. 5: stop-line presence detection).
+    #[default]
+    StopLine,
+    /// SUMO's `actuated` default (MSActuatedTrafficLightLogic): one induction loop per
+    /// approach lane, the lane's speed limit times `detector-gap` = 2 s upstream of the
+    /// stop line (at least 1 m, at most the lane), which extends the green while a vehicle
+    /// covers it. A vehicle standing in the last `detector_m` still places the call on a
+    /// red approach, as a stop-line loop does.
+    Sumo,
+}
+
+impl DetectorPlacement {
+    fn is_default(&self) -> bool {
+        *self == Self::StopLine
+    }
+}
+
 /// Signal control ([`Traffic::signals`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -327,6 +349,10 @@ pub struct SignalControl {
     /// How far back from the stop line the detector sees, metres.
     #[serde(default = "SignalControl::default_detector")]
     pub detector_m: f64,
+    /// Where the extension detectors are: a stop-line presence loop (the default) or
+    /// SUMO's upstream induction loop at 2 s of travel from the stop line.
+    #[serde(default, skip_serializing_if = "DetectorPlacement::is_default")]
+    pub detector_placement: DetectorPlacement,
     /// A green wave: every signal's offset set so that a vehicle at this speed meets green
     /// after green travelling in green_wave_heading_deg. Absent keeps the plans' own
     /// offsets.
@@ -367,6 +393,7 @@ impl Default for SignalControl {
             max_green_s: Self::default_max_green(),
             passage_s: Self::default_passage(),
             detector_m: Self::default_detector(),
+            detector_placement: DetectorPlacement::StopLine,
             green_wave_speed_mps: None,
             green_wave_heading_deg: Self::default_wave_heading(),
         }

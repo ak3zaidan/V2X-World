@@ -653,6 +653,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "12.2 m (40 ft stop-line loop, FHWA); 6 to 30 m.",
     },
     Basic {
+        path: "traffic.signals.detector_placement",
+        explain: "Under actuated control, where the vehicle detectors sit: a loop at the stop line, or SUMO's single loop per lane about two seconds of travel upstream, which ends the green sooner once a platoon has passed.",
+        recommended: "stop-line (FHWA) for US practice; sumo to compare with a SUMO actuated run.",
+    },
+    Basic {
         path: "world.signals.pedestrian_speed_mps",
         explain: "The walking speed the flashing don't-walk time is timed for: slower gives pedestrians longer and drivers shorter greens.",
         recommended: "1.067 m/s (MUTCD 3.5 ft/s); 0.91 m/s near schools or seniors.",

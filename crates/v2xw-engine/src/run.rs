@@ -2668,15 +2668,17 @@ impl Engine {
         // Actuated control reads its detectors at the start of the step and moves its
         // plans before the drivers look at the lamps, as the priority service does.
         if self.actuated.is_active() {
-            let calls = self.actuated.calls(
-                &self.world,
+            let positions = || {
                 self.actors
                     .values()
                     .filter(|a| !crate::wiring::is_vru_class(a.class))
-                    .filter_map(|a| a.last.lane.map(|p| (p.lane, p.s_m))),
-            );
-            self.actuated.step(
+                    .filter_map(|a| a.last.lane.map(|p| (p.lane, p.s_m)))
+            };
+            let calls = self.actuated.calls(&self.world, positions());
+            let extend = self.actuated.extension_calls(&self.world, positions());
+            self.actuated.step_with(
                 &mut self.world,
+                &extend,
                 &calls,
                 v2xw_core::time::ns_to_secs(now),
                 step.as_secs_f64(),

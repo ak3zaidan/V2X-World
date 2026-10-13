@@ -25,7 +25,11 @@
 //!   a controller without recall does.
 //!
 //! A detector is the last `detector_m` of each approach lane (a stop-line presence loop):
-//! a vehicle whose front is on it is a call. Amber and all-red phases are never moved.
+//! a vehicle whose front is on it is a call. With `detector_placement: sumo` the green is
+//! extended instead by SUMO's per-lane induction loop (MSActuatedTrafficLightLogic,
+//! `detector-gap` 2 s: the loop sits the lane's speed limit times 2 s before the stop
+//! line), occupied while a vehicle's body covers it; the stop-line zone still places the
+//! call of a vehicle waiting on red. Amber and all-red phases are never moved.
 //!
 //! # Green wave
 //!
@@ -43,7 +47,16 @@ use v2xw_core::time::SimTime;
 use v2xw_world::model::LaneKind;
 use v2xw_world::{SignalPlan, SignalState, World};
 
-use crate::scenario::schema::{SignalControl, SignalControlKind};
+use crate::scenario::schema::{DetectorPlacement, SignalControl, SignalControlKind};
+
+/// SUMO's default `detector-gap` for actuated signals: the loop is this many seconds of
+/// travel at the lane's speed limit upstream of the stop line (SUMO documentation,
+/// "Traffic Lights", actuated parameters; MSActuatedTrafficLightLogic).
+pub const SUMO_DETECTOR_GAP_S: f64 = 2.0;
+
+/// The vehicle length a loop is taken to be covered for, metres: a passenger car (SUMO's
+/// default vType length, 5 m).
+const LOOP_COVER_M: f64 = 5.0;
 
 /// What one movement of a plan is, for the controller.
 #[derive(Debug, Clone, Default)]
@@ -235,9 +248,48 @@ impl ActuatedControllers {
             .collect()
     }
 
+    /// The calls that extend a green: [`Self::calls`] under stop-line placement, and the
+    /// lanes whose SUMO upstream loop a vehicle covers under `sumo` placement.
+    pub fn extension_calls(
+        &self,
+        world: &World,
+        positions: impl Iterator<Item = (LaneId, f64)>,
+    ) -> BTreeSet<LaneId> {
+        let Some(p) = &self.params else {
+            return BTreeSet::new();
+        };
+        if p.detector_placement == DetectorPlacement::StopLine {
+            return self.calls(world, positions);
+        }
+        positions
+            .filter(|(l, s)| {
+                world.roads.try_lane(*l).is_some_and(|lane| {
+                    let at = (lane.speed_limit_mps * SUMO_DETECTOR_GAP_S)
+                        .clamp(1.0, lane.length_m.max(1.0));
+                    let to_end = lane.length_m - s;
+                    to_end <= at && to_end > at - LOOP_COVER_M
+                })
+            })
+            .map(|(l, _)| l)
+            .collect()
+    }
+
     /// Advances every controller to `now_s` by `dt_s`, moving the plans' offsets in
     /// `world`. `calls` is [`Self::calls`] at the start of the step.
     pub fn step(&mut self, world: &mut World, calls: &BTreeSet<LaneId>, now_s: f64, dt_s: f64) {
+        self.step_with(world, calls, calls, now_s, dt_s);
+    }
+
+    /// [`Self::step`] with the extension detectors apart from the presence calls on red
+    /// ([`Self::extension_calls`]).
+    pub fn step_with(
+        &mut self,
+        world: &mut World,
+        extend: &BTreeSet<LaneId>,
+        calls: &BTreeSet<LaneId>,
+        now_s: f64,
+        dt_s: f64,
+    ) {
         let Some(p) = self.params.clone() else {
             return;
         };
@@ -273,7 +325,8 @@ impl ActuatedControllers {
                 continue; // an overlap: the green continues into the next phase
             }
             let called = |m: &usize| st.approach[*m].is_some_and(|l| calls.contains(&l));
-            if ending.iter().any(called) {
+            let extends = |m: &usize| st.approach[*m].is_some_and(|l| extend.contains(&l));
+            if ending.iter().any(extends) {
                 st.last_call_s = now_s;
             }
             let waiting = (0..plan.controlled.len())

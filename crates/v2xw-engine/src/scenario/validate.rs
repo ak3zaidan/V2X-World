@@ -4549,6 +4549,16 @@ fn actors(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 e,
             );
         }
+        if g.detector_placement != super::schema::DetectorPlacement::StopLine
+            && g.control != super::schema::SignalControlKind::Actuated
+        {
+            e.push(conflict(
+                "traffic.signals.detector_placement",
+                "places the detectors of actuated control, and traffic.signals.control is \
+                 fixed-time; set control to actuated or remove it"
+                    .to_string(),
+            ));
+        }
         if g.max_green_s < g.min_green_s {
             e.push(conflict(
                 "traffic.signals.max_green_s",
