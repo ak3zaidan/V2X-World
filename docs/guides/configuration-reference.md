@@ -282,3 +282,11 @@ side on the same seed for each area:
 fields: sidelink noise figure and CBR threshold, the reactive DCC table, CBF timers, SPaT, MAP
 and CPM intervals, the verification queue depth, and the loader's refusals. Every number found in
 the network crates, exposed or kept and why, is listed in `config-inventory-network.md`.
+
+`v2xw sensitivity --catalogue` sweeps every published numeric and choice setting at once.
+It runs each one at both ends of its recommended range, or at each of its choices, against a
+same-seed base on a small family of scenarios (`scenarios/sensitivity/catalogue.yaml`). It
+then lists the settings that move no metric, the effects that contradict
+`crates/v2xw-engine/tests/expectations/*.yaml`, and the values every family refuses. The
+result is `docs/validation/sensitivity-catalogue.md`, and
+`crates/v2xw-engine/tests/sensitivity_catalogue.rs` is its fast CI subset.

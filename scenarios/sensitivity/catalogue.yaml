@@ -57,7 +57,9 @@ routes:
   - {prefix: world.signals, families: [osm]}
   - {prefix: world.highway_preset, families: [osm]}
   - {prefix: world.service_roads, families: [osm]}
-  - {prefix: radio.channel_model.building, families: [traffic]}
+  - {prefix: radio.channel_model.building_wall_loss_db, families: [traffic]}
+  - {prefix: radio.channel_model.building_loss_db_per_m, families: [traffic]}
+  - {prefix: traffic.right_turn_on_red, families: [osm, traffic]}
   - {prefix: actors.vehicles.drivers.bicycle, families: [pedestrians]}
   - {prefix: traffic.gridlock_timeout_s, families: [saturated]}
   - {prefix: traffic.keep_junctions_clear, families: [saturated]}
@@ -83,6 +85,8 @@ skip:
   - {prefix: time.des_resolution, reason: "the clock grain: 1 us is the only value the radio tiers accept"}
   - {prefix: radio.tiers.focus, reason: "needs a focus region (a polygon), which a scalar sweep cannot supply"}
   - {prefix: scale.traffic.model, reason: "the tiered model needs a microscopic region box; tests/scale.rs covers it"}
+  - {prefix: messages.spat_interval_ms, reason: "needs a roadside unit with the spat role at a signalised junction (tests/network_audit_config.rs covers it)"}
+  - {prefix: messages.map_interval_ms, reason: "needs a roadside unit with the map role at a signalised junction (tests/network_audit_config.rs covers it)"}
   - {prefix: detection.perception_tier, reason: "no perception model in this build: the loader refuses every value"}
 
 # Values that replace the computed ends where the guide's range would make the run too
@@ -106,16 +110,18 @@ max_choices: 6
 # Prerequisites both runs of a setting share, so it is measured where it acts instead of
 # being refused (the loader refuses a field that would do nothing).
 context:
-  - {prefix: radio.channel_model.nakagami, set: {radio.channel_model.fading: nakagami}}
+  - {prefix: radio.channel_model.nakagami_shape, set: {radio.channel_model.fading: nakagami}}
+  - {prefix: radio.channel_model.nakagami_shape_far, set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_breakpoint_m: 90.0, radio.channel_model.nakagami_shape_far: 0.9}}
+  - {prefix: radio.channel_model.nakagami_breakpoint_m, set: {radio.channel_model.fading: nakagami, radio.channel_model.nakagami_shape_far: 0.75, radio.channel_model.nakagami_breakpoint_m: 90.0}}
   - {prefix: radio.channel_model.rice_k_db, set: {radio.channel_model.fading: rice}}
   - {prefix: radio.dcc.cbr_target, set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}}
-  - {prefix: radio.dcc.adaptive, set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}}
-  - {prefix: radio.dcc.reactive, set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.adaptive_alpha, set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.adaptive_beta, set: {radio.models.dcc: {id: dcc/etsi/adaptive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.reactive_table, set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}}
+  - {prefix: radio.dcc.reactive_hold_ms, set: {radio.models.dcc: {id: dcc/etsi/reactive-ts102687, params: {}}}}
   - {prefix: radio.tiers.phy, set: {radio.tiers.mac: high}}
   - {prefix: messages.rate_hz, set: {time.mobility_step_ms: 50}}
   - {prefix: messages.cpm_interval_ms, set: {messages.sets: [bsm, cpm]}}
-  - {prefix: messages.spat_interval_ms, set: {messages.sets: [bsm, spat]}}
-  - {prefix: messages.map_interval_ms, set: {messages.sets: [bsm, map]}}
   - {prefix: security.on_demand_threshold, set: {security.verification_policy: on-demand}}
   - {prefix: security.prioritized_horizon_m, set: {security.verification_policy: prioritized}}
   - {prefix: actors.vehicles.drivers.bicycle, set: {actors.vru.cyclists: 60}}

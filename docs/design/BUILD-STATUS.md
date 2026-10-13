@@ -3660,3 +3660,16 @@ Merged with --no-ff, in this order: perf (saturated-run speedup), protofix (secu
 - Checks: `cargo check --workspace --tests` is clean. Engine `scenario::` lib passes 27/27. The new sensitivity_security rows (on_demand, peer_cert, prioritized) pass 3/3. Radio phy passes 29/29 and v2xw-node lib passes 136/136. The release CLI build passes. run-sim.sh boots on port 8758 and the agent status endpoint returns 200.
 - Output changes come from protofix only. They affect prioritized and on-demand runs, runs with rate_hz other than 10, MA decisions in attack runs, and the events record level, which now omits receptions. The perf change keeps the digests identical. The trafficfix settings default to the old behaviour.
 - Still open: Sybil ghost frames; priority ordering for the RSU and VRU runtimes; repeated MAC polls at the same instant (removing them needs new digests, owner to decide); join_m stops-on-green; the full sensitivity_security suite has not been run end to end.
+
+## 2026-10-13: catalogue-wide sensitivity sweep (branch of d06658f)
+
+- **Command:** `v2xw sensitivity --catalogue`, implemented in `crates/v2xw-engine/src/sensitivity/sweep.rs`. It moves every published numeric or choice setting (217 settings, 420 perturbations) on a same-seed family run. The families are DSRC, LTE, NR, GN, security, traffic, saturated, OSM Portland and pedestrians, all in `scenarios/sensitivity/catalogue.yaml`, which also holds the routes, prerequisite contexts and value overrides. The sweep diffs a fingerprint of about 280 metrics (radio harness, `report.*`, `metric.*`, kinematics). It has a JSON-lines `--cache`, so a stopped sweep resumes.
+- **Outputs:**
+  - `docs/validation/sensitivity-catalogue.md`: the matrix and three lists (89 dead, 1 contradiction, 13 refused), with an analysis of each.
+  - The seed expectation table `crates/v2xw-engine/tests/expectations/catalogue.yaml`: 36 rows, each with a cited source.
+  - The CI subset `tests/sensitivity_catalogue.rs`: 3 tests, about 4 s. An injected wrong-direction row turns it red.
+- **Not changed (owner decision):**
+  - Weather intensity is ignored on arterials. Fixing it changes the midtown-rain digest.
+  - The loader does not refuse `truck`, `bus` and `motorcycle` driver parameters, or the RSU and VRU device parameters, when there is no such actor.
+  - RTOR is dead on the procedural grid.
+- **Cost:** a full sweep from an empty cache takes about 47 minutes on two threads, and the saturated family dominates. With the cache it takes about 8 minutes. The nakagami context fix is committed but has not been re-swept. Clippy has not been run.

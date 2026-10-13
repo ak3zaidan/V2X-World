@@ -50,7 +50,10 @@ fn every_expectation_names_a_planned_setting_and_end() {
             missing.push(format!("{} {} (no such end)", e.setting, e.change));
         }
     }
-    assert!(missing.is_empty(), "expectations the sweep cannot judge: {missing:?}");
+    assert!(
+        missing.is_empty(),
+        "expectations the sweep cannot judge: {missing:?}"
+    );
 }
 
 #[test]
@@ -92,7 +95,12 @@ fn the_fast_subset_moves_as_expected() {
     let bad: Vec<String> = out
         .contradictions()
         .iter()
-        .map(|v| format!("{} {} {}: {}", v.expectation.setting, v.expectation.change, v.expectation.metric, v.note))
+        .map(|v| {
+            format!(
+                "{} {} {}: {}",
+                v.expectation.setting, v.expectation.change, v.expectation.metric, v.note
+            )
+        })
         .collect();
     assert!(bad.is_empty(), "contradicted: {bad:#?}");
 }

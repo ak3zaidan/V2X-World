@@ -77,7 +77,11 @@ pub struct SensitivityArgs {
     #[arg(long)]
     pub catalogue: bool,
     /// The families file for `--catalogue`.
-    #[arg(long, value_name = "FILE", default_value = "scenarios/sensitivity/catalogue.yaml")]
+    #[arg(
+        long,
+        value_name = "FILE",
+        default_value = "scenarios/sensitivity/catalogue.yaml"
+    )]
     pub families: std::path::PathBuf,
     /// Expectation files for `--catalogue` (each a YAML list), comma-separated.
     #[arg(

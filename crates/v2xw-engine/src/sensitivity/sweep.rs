@@ -318,7 +318,10 @@ pub fn numbers_in(text: &str) -> Vec<f64> {
         if neg {
             i += 1;
         }
-        if i < b.len() && b[i].is_ascii_digit() && (start == 0 || !b[start - 1].is_ascii_alphabetic()) {
+        if i < b.len()
+            && b[i].is_ascii_digit()
+            && (start == 0 || !b[start - 1].is_ascii_alphabetic())
+        {
             let mut j = i;
             // "10 000" and "1,000" group thousands in the guide's prose.
             let mut digits = String::new();
@@ -341,7 +344,24 @@ pub fn numbers_in(text: &str) -> Vec<f64> {
             }
             let digits = digits.trim_end_matches('.');
             // A dotted identifier ("802.11p", "1609.2") is a name, not a number.
-            let ident = b.get(j).is_some_and(|c| c.is_ascii_alphabetic() && *c != b'e' && !matches!(*c, b'x' | b's' | b'm' | b'k' | b'h' | b'd' | b'u' | b'n' | b'H' | b'M' | b'G' | b'%'));
+            let ident = b.get(j).is_some_and(|c| {
+                c.is_ascii_alphabetic()
+                    && *c != b'e'
+                    && !matches!(
+                        *c,
+                        b'x' | b's'
+                            | b'm'
+                            | b'k'
+                            | b'h'
+                            | b'd'
+                            | b'u'
+                            | b'n'
+                            | b'H'
+                            | b'M'
+                            | b'G'
+                            | b'%'
+                    )
+            });
             if let Ok(v) = digits.parse::<f64>()
                 && !ident
             {
@@ -389,7 +409,11 @@ fn numeric_ends(row: &Value, integer: bool) -> Vec<(String, Value)> {
     if lo.is_none() {
         match default {
             Some(d) if d != 0.0 => {
-                let (a, b) = if d > 0.0 { (d / 2.0, d * 2.0) } else { (d * 2.0, d / 2.0) };
+                let (a, b) = if d > 0.0 {
+                    (d / 2.0, d * 2.0)
+                } else {
+                    (d * 2.0, d / 2.0)
+                };
                 lo = Some(if inside(a) { a } else { lo_b.max(a) });
                 hi = Some(if inside(b) { b } else { hi_b.min(b) });
             }
@@ -437,12 +461,16 @@ fn choice_values(row: &Value, bare_slot: Option<bool>) -> Vec<(String, Value)> {
     } else if let Some(Value::Array(o)) = row.get("x-options") {
         values.extend(
             o.iter()
-                .filter(|r| r.get("available").is_none_or(|a| a.as_bool() != Some(false)))
+                .filter(|r| {
+                    r.get("available")
+                        .is_none_or(|a| a.as_bool() != Some(false))
+                })
                 .filter_map(|r| r.get("value").and_then(Value::as_str))
                 .map(str::to_string),
         );
     }
-    let default_id = default.and_then(|d| d.as_str().or_else(|| d.get("id").and_then(Value::as_str)));
+    let default_id =
+        default.and_then(|d| d.as_str().or_else(|| d.get("id").and_then(Value::as_str)));
     values
         .into_iter()
         .filter(|v| Some(v.as_str()) != default_id)
@@ -459,7 +487,10 @@ fn choice_values(row: &Value, bare_slot: Option<bool>) -> Vec<(String, Value)> {
 /// The sweep's plan: every published setting with its perturbations and families, and the
 /// settings left out with the reason.
 #[must_use]
-pub fn plan(families: &Families, expectations: &[Expectation]) -> (Vec<Setting>, Vec<(String, String)>) {
+pub fn plan(
+    families: &Families,
+    expectations: &[Expectation],
+) -> (Vec<Setting>, Vec<(String, String)>) {
     let fields = crate::scenario::publish::fields();
     let slots = crate::scenario::publish::slots();
     let spelling: BTreeMap<String, bool> = slots
@@ -627,9 +658,8 @@ impl RunRecorder for FingerprintRecorder {
                 }
             }
             "gt.kinematics" => {
-                if let Ok(k) = v2xw_metrics::channels::decode::<
-                    v2xw_metrics::channels::GtKinematicsView,
-                >(r)
+                if let Ok(k) =
+                    v2xw_metrics::channels::decode::<v2xw_metrics::channels::GtKinematicsView>(r)
                 {
                     let i = usize::from(is_vru(k.class.as_deref()));
                     let e = &mut self.kin[i];
@@ -677,7 +707,14 @@ fn flatten(prefix: &str, v: &Value, out: &mut Fingerprint) {
 
 /// Report fields that describe the recording rather than the system: they move with
 /// anything (every extra record), so they would hide a dead setting behind a live one.
-const BOOKKEEPING: &[&str] = &["report.records", "report.records_written", "report.keyframes", "report.deltas", "report.frames_written", "report.records_refused"];
+const BOOKKEEPING: &[&str] = &[
+    "report.records",
+    "report.records_written",
+    "report.keyframes",
+    "report.deltas",
+    "report.frames_written",
+    "report.records_refused",
+];
 
 impl FingerprintRecorder {
     /// The fingerprint, joined with the run report.
@@ -685,7 +722,14 @@ impl FingerprintRecorder {
     pub fn finish(&self, report: &RunReport, duration_s: f64) -> Fingerprint {
         let m: Measured = self.inner.finish(report, duration_s);
         let mut f: Fingerprint = m.values.clone();
-        for k in ["range_m", "range90_m", "prr_0_200", "prr_200_400", "prr_400_600", "prr_600_1000"] {
+        for k in [
+            "range_m",
+            "range90_m",
+            "prr_0_200",
+            "prr_200_400",
+            "prr_400_600",
+            "prr_600_1000",
+        ] {
             if let Some(v) = m.get(k)
                 && !m.prr_bins.is_empty()
             {
@@ -770,9 +814,13 @@ fn cache_key(s: &Setting, value: &Value, bases: &BTreeMap<String, Scenario>) -> 
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for f in &s.families {
         f.hash(&mut h);
-        serde_json::to_string(&bases.get(f)).unwrap_or_default().hash(&mut h);
+        serde_json::to_string(&bases.get(f))
+            .unwrap_or_default()
+            .hash(&mut h);
     }
-    serde_json::to_string(&s.context).unwrap_or_default().hash(&mut h);
+    serde_json::to_string(&s.context)
+        .unwrap_or_default()
+        .hash(&mut h);
     format!("{}={}#{:016x}", s.path, value, h.finish())
 }
 
@@ -838,7 +886,15 @@ pub fn run_cached(
                     let Some(&(i, j)) = work.get(k) else { break };
                     let key = cache_key(&settings[i], &settings[i].values[j].1, bases);
                     let o = match cached.get(&key) {
-                        Some(o) => o.clone(),
+                        Some(o) => {
+                            // A cached outcome still needs its base in this sweep's table.
+                            if let Some(fam) = &o.family
+                                && let Some(b) = bases.get(fam)
+                            {
+                                let _ = base_of(&settings[i], fam, b, &base_fp);
+                            }
+                            o.clone()
+                        }
                         None => {
                             let o = perturb(&settings[i], j, bases, &base_fp);
                             if let Some(f) = &sink
@@ -883,6 +939,39 @@ pub fn run_cached(
     Ok(sweep)
 }
 
+/// The base fingerprint a perturbation of `s` on `fam` is compared with (the family with
+/// the setting's context), measured on first use.
+fn base_of(
+    s: &Setting,
+    fam: &str,
+    family_base: &Scenario,
+    base_fp: &Mutex<BTreeMap<String, std::result::Result<Fingerprint, String>>>,
+) -> std::result::Result<Fingerprint, String> {
+    let key = base_key(s, fam);
+    if let Some(b) = base_fp.lock().ok().and_then(|m| m.get(&key).cloned()) {
+        return b;
+    }
+    let b = apply(family_base, &s.context)
+        .and_then(fingerprint)
+        .map_err(|e| e.to_string());
+    if let Ok(mut m) = base_fp.lock() {
+        m.insert(key, b.clone());
+    }
+    b
+}
+
+/// The key of [`base_of`]'s run in [`Sweep::bases`].
+fn base_key(s: &Setting, fam: &str) -> String {
+    if s.context.is_empty() {
+        fam.to_string()
+    } else {
+        format!(
+            "{fam} + {}",
+            serde_json::to_string(&s.context).unwrap_or_default()
+        )
+    }
+}
+
 /// One perturbation: the setting's `j`th value on the first family that accepts it.
 fn perturb(
     s: &Setting,
@@ -908,28 +997,12 @@ fn perturb(
             continue;
         };
         // The base this perturbation is compared with: the family with the context.
-        let key = if s.context.is_empty() {
-            fam.clone()
-        } else {
-            format!("{fam} + {}", serde_json::to_string(&s.context).unwrap_or_default())
-        };
-        let known = base_fp.lock().ok().and_then(|m| m.get(&key).cloned());
-        let bfp = match known {
-            Some(b) => b,
-            None => {
-                let b = apply(family_base, &s.context)
-                    .and_then(fingerprint)
-                    .map_err(|e| e.to_string());
-                if let Ok(mut m) = base_fp.lock() {
-                    m.insert(key.clone(), b.clone());
-                }
-                b
-            }
-        };
-        let bfp = match bfp {
+        let key = base_key(s, fam);
+        let bfp = match base_of(s, fam, family_base, base_fp) {
             Ok(b) => b,
             Err(e) => {
-                o.refusals.push((fam.clone(), format!("context refused: {e}")));
+                o.refusals
+                    .push((fam.clone(), format!("context refused: {e}")));
                 continue;
             }
         };
@@ -1023,7 +1096,8 @@ impl Sweep {
         self.settings
             .iter()
             .filter(|s| {
-                let mine: Vec<&Outcome> = self.outcomes.iter().filter(|o| o.path == s.path).collect();
+                let mine: Vec<&Outcome> =
+                    self.outcomes.iter().filter(|o| o.path == s.path).collect();
                 !mine.is_empty()
                     && mine.iter().any(|o| o.dead())
                     && mine.iter().all(|o| o.dead() || o.family.is_none())
@@ -1084,7 +1158,14 @@ fn cell(o: &Outcome, metric: &str) -> String {
 
 fn short(v: &Value) -> String {
     let s = label_of(v);
-    if s.len() > 40 { format!("{}…", &s[..s.char_indices().nth(39).map_or(s.len(), |(i, _)| i)]) } else { s }
+    if s.len() > 40 {
+        format!(
+            "{}…",
+            &s[..s.char_indices().nth(39).map_or(s.len(), |(i, _)| i)]
+        )
+    } else {
+        s
+    }
 }
 
 /// The three lists and the matrix, in Markdown.
@@ -1115,7 +1196,10 @@ pub fn markdown(sweep: &Sweep, title_note: &str) -> String {
     }
     // (a)
     let dead = sweep.dead();
-    s.push_str(&format!("\n## (a) Dead settings — no metric moved ({})\n\n", dead.len()));
+    s.push_str(&format!(
+        "\n## (a) Dead settings — no metric moved ({})\n\n",
+        dead.len()
+    ));
     s.push_str("Same seed, so an unread setting gives a bit-identical run. A setting listed here is either not read on this family, or read by something no reported metric observes.\n\n| Setting | Status | Family | Values tried |\n|---|---|---|---|\n");
     for d in &dead {
         let fams: BTreeSet<String> = sweep
@@ -1181,12 +1265,16 @@ pub fn markdown(sweep: &Sweep, title_note: &str) -> String {
         refused.len()
     ));
     for o in &refused {
-        let why = o
-            .refusals
-            .first()
-            .map_or(String::new(), |(f, m)| format!("{f}: {}", m.replace('|', "/").replace('\n', " ")));
+        let why = o.refusals.first().map_or(String::new(), |(f, m)| {
+            format!("{f}: {}", m.replace('|', "/").replace('\n', " "))
+        });
         let why: String = why.chars().take(220).collect();
-        s.push_str(&format!("| `{}` | {} | {} |\n", o.path, short(&o.value), why));
+        s.push_str(&format!(
+            "| `{}` | {} | {} |\n",
+            o.path,
+            short(&o.value),
+            why
+        ));
     }
     // Expectations that held.
     let good: Vec<&Verdict> = sweep.verdicts.iter().filter(|v| v.pass).collect();
@@ -1219,7 +1307,13 @@ pub fn markdown(sweep: &Sweep, title_note: &str) -> String {
             (Some(f), Some(_)) => format!("{f} (run failed)"),
             (Some(f), None) => f.clone(),
         };
-        s.push_str(&format!("| `{}` | {} | {} | {} |", o.path, short(&o.value), fam, o.moved.len()));
+        s.push_str(&format!(
+            "| `{}` | {} | {} | {} |",
+            o.path,
+            short(&o.value),
+            fam,
+            o.moved.len()
+        ));
         for (k, _) in HEADLINE {
             s.push_str(&format!(" {} |", cell(o, k)));
         }
@@ -1245,7 +1339,10 @@ pub fn markdown(sweep: &Sweep, title_note: &str) -> String {
     for (p, r) in &sweep.skipped {
         by_reason.entry(r.as_str()).or_default().push(p.as_str());
     }
-    s.push_str(&format!("\n## Settings not swept ({})\n\n", sweep.skipped.len()));
+    s.push_str(&format!(
+        "\n## Settings not swept ({})\n\n",
+        sweep.skipped.len()
+    ));
     for (r, ps) in by_reason {
         s.push_str(&format!("- **{r}** ({}): ", ps.len()));
         let shown: Vec<String> = ps.iter().take(40).map(|p| format!("`{p}`")).collect();
@@ -1305,9 +1402,21 @@ mod tests {
         let row = serde_json::json!({"default": 20.0, "minimum": 0.0, "maximum": 33.0,
                                      "x-recommended": "10 to 23 dBm"});
         let v = numeric_ends(&row, false);
-        assert_eq!(v, vec![("low".into(), Value::from(10.0)), ("high".into(), Value::from(23.0))]);
+        assert_eq!(
+            v,
+            vec![
+                ("low".into(), Value::from(10.0)),
+                ("high".into(), Value::from(23.0))
+            ]
+        );
         let row = serde_json::json!({"default": 4, "minimum": 1, "maximum": 5});
         let v = numeric_ends(&row, true);
-        assert_eq!(v, vec![("low".into(), Value::from(2)), ("high".into(), Value::from(5))]);
+        assert_eq!(
+            v,
+            vec![
+                ("low".into(), Value::from(2)),
+                ("high".into(), Value::from(5))
+            ]
+        );
     }
 }
