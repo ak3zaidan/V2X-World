@@ -3920,7 +3920,11 @@ impl NativeMobility {
                         o.s_m - o.class.spec().length_m - actor.s_m < actor.driver.min_gap_m
                     }
                 });
-            let route = if clash || alongside {
+            // Nor between lanes that are not side by side where the slide happens: near a
+            // junction an imported lane can bend round a corner its neighbour does not, and
+            // the lateral transition then cut the corner through the building on it.
+            let skewed = self.along_path() && !lanes_parallel_ahead(world, actor, from, to);
+            let route = if clash || alongside || skewed {
                 None
             } else {
                 self.route_after_change(world, actor, to, t, &costs)
@@ -6398,6 +6402,32 @@ fn router_of<'r>(
     } else {
         by_class.get(&class.class_mask().bits()).unwrap_or(general)
     }
+}
+
+/// How far apart in heading two lanes may be for a lateral lane change between them,
+/// radians (10°). **This crate's choice**: SUMO's netconvert builds lanes of one edge
+/// parallel by construction, and a change is only offered between them; an imported
+/// lane that bends round a corner its neighbour does not is not a lane to slide into.
+const LANE_CHANGE_PARALLEL_RAD: f64 = 10.0 * std::f64::consts::PI / 180.0;
+
+/// How far ahead of the vehicle the two lanes must stay parallel, metres: the length a
+/// lateral transition of a few seconds covers at city speed. **This crate's choice.**
+const LANE_CHANGE_PARALLEL_LOOK_M: f64 = 15.0;
+
+/// Whether `from` and `to` run side by side from the vehicle's position for
+/// [`LANE_CHANGE_PARALLEL_LOOK_M`]: heading within [`LANE_CHANGE_PARALLEL_RAD`] at both
+/// ends, with `to` sampled where the point on `from` projects onto it.
+fn lanes_parallel_ahead(world: &World, actor: &Actor, from: LaneId, to: LaneId) -> bool {
+    let (Some(a), Some(b)) = (world.try_lane(from), world.try_lane(to)) else {
+        return true;
+    };
+    let s0 = actor.s_m.clamp(0.0, a.length_m);
+    let s1 = (actor.s_m + LANE_CHANGE_PARALLEL_LOOK_M).clamp(0.0, a.length_m);
+    [s0, s1].into_iter().all(|s| {
+        let p = b.project_point(a.point_at(s));
+        let d = v2xw_world::model::normalise_angle(a.heading_at(s) - b.heading_at(p.s_m));
+        d.abs() <= LANE_CHANGE_PARALLEL_RAD
+    })
 }
 
 fn turn_speeds(world: &World, a_lat_mps2: f64, window_m: f64) -> BTreeMap<LaneId, f64> {

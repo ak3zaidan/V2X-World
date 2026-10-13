@@ -25,7 +25,11 @@
 //!   a controller without recall does.
 //!
 //! A detector is the last `detector_m` of each approach lane (a stop-line presence loop):
-//! a vehicle whose front is on it is a call. Amber and all-red phases are never moved.
+//! a vehicle whose front is on it is a call. With `detector_placement: sumo` the green is
+//! extended instead by SUMO's per-lane induction loop (MSActuatedTrafficLightLogic,
+//! `detector-gap` 2 s: the loop sits the lane's speed limit times 2 s before the stop
+//! line), occupied while a vehicle's body covers it; the stop-line zone still places the
+//! call of a vehicle waiting on red. Amber and all-red phases are never moved.
 //!
 //! # Green wave
 //!
@@ -43,7 +47,16 @@ use v2xw_core::time::SimTime;
 use v2xw_world::model::LaneKind;
 use v2xw_world::{SignalPlan, SignalState, World};
 
-use crate::scenario::schema::{SignalControl, SignalControlKind};
+use crate::scenario::schema::{DetectorPlacement, SignalControl, SignalControlKind};
+
+/// SUMO's default `detector-gap` for actuated signals: the loop is this many seconds of
+/// travel at the lane's speed limit upstream of the stop line (SUMO documentation,
+/// "Traffic Lights", actuated parameters; MSActuatedTrafficLightLogic).
+pub const SUMO_DETECTOR_GAP_S: f64 = 2.0;
+
+/// The vehicle length a loop is taken to be covered for, metres: a passenger car (SUMO's
+/// default vType length, 5 m).
+const LOOP_COVER_M: f64 = 5.0;
 
 /// What one movement of a plan is, for the controller.
 #[derive(Debug, Clone, Default)]
@@ -235,9 +248,48 @@ impl ActuatedControllers {
             .collect()
     }
 
+    /// The calls that extend a green: [`Self::calls`] under stop-line placement, and the
+    /// lanes whose SUMO upstream loop a vehicle covers under `sumo` placement.
+    pub fn extension_calls(
+        &self,
+        world: &World,
+        positions: impl Iterator<Item = (LaneId, f64)>,
+    ) -> BTreeSet<LaneId> {
+        let Some(p) = &self.params else {
+            return BTreeSet::new();
+        };
+        if p.detector_placement == DetectorPlacement::StopLine {
+            return self.calls(world, positions);
+        }
+        positions
+            .filter(|(l, s)| {
+                world.roads.try_lane(*l).is_some_and(|lane| {
+                    let at = (lane.speed_limit_mps * SUMO_DETECTOR_GAP_S)
+                        .clamp(1.0, lane.length_m.max(1.0));
+                    let to_end = lane.length_m - s;
+                    to_end <= at && to_end > at - LOOP_COVER_M
+                })
+            })
+            .map(|(l, _)| l)
+            .collect()
+    }
+
     /// Advances every controller to `now_s` by `dt_s`, moving the plans' offsets in
     /// `world`. `calls` is [`Self::calls`] at the start of the step.
     pub fn step(&mut self, world: &mut World, calls: &BTreeSet<LaneId>, now_s: f64, dt_s: f64) {
+        self.step_with(world, calls, calls, now_s, dt_s);
+    }
+
+    /// [`Self::step`] with the extension detectors apart from the presence calls on red
+    /// ([`Self::extension_calls`]).
+    pub fn step_with(
+        &mut self,
+        world: &mut World,
+        extend: &BTreeSet<LaneId>,
+        calls: &BTreeSet<LaneId>,
+        now_s: f64,
+        dt_s: f64,
+    ) {
         let Some(p) = self.params.clone() else {
             return;
         };
@@ -273,7 +325,8 @@ impl ActuatedControllers {
                 continue; // an overlap: the green continues into the next phase
             }
             let called = |m: &usize| st.approach[*m].is_some_and(|l| calls.contains(&l));
-            if ending.iter().any(called) {
+            let extends = |m: &usize| st.approach[*m].is_some_and(|l| extend.contains(&l));
+            if ending.iter().any(extends) {
                 st.last_call_s = now_s;
             }
             let waiting = (0..plan.controlled.len())
@@ -349,6 +402,100 @@ pub fn coordinate(control: &SignalControl, world: &mut World) {
         if plan.cycle_s > 0.0 {
             plan.offset_s = ((d - start) / v).rem_euclid(plan.cycle_s);
         }
+    }
+}
+
+/// How far the downstream green for a short link leads the upstream green that fills it,
+/// seconds: the HCM's default start-up lost time (2 s), so the queue stored on the link is
+/// moving before the first arrival reaches it.
+pub const SHORT_LINK_LEAD_S: f64 = 2.0;
+
+/// When the green begins, seconds into the cycle, for any of the movements `ms` of `plan`:
+/// the first phase showing one of them green after a phase that does not, or `None`.
+fn green_start(plan: &SignalPlan, ms: &[usize]) -> Option<f64> {
+    let n = plan.phases.len();
+    let green = |i: usize| {
+        ms.iter().any(|m| {
+            matches!(
+                plan.phases[i].states.get(*m),
+                Some(SignalState::Green | SignalState::GreenYield)
+            )
+        })
+    };
+    let mut at = 0.0;
+    for i in 0..n {
+        if green(i) && !green((i + n - 1) % n) {
+            return Some(at);
+        }
+        at += plan.phases[i].duration_s;
+    }
+    None
+}
+
+/// Short-link clearance (`traffic.signals.short_link_clearance_m`): for every driving
+/// lane shorter than the threshold between two signalised junctions on the same cycle,
+/// the downstream plan's offset is set so the green that empties the lane starts
+/// [`SHORT_LINK_LEAD_S`] before the upstream green that fills it. The FHWA Signal Timing
+/// Manual 2e (FHWA-HOP-08-024, ch. 6) gives closely spaced intersections simultaneous or
+/// slightly leading downstream offsets so the short link never stores a queue the
+/// upstream green cannot discharge into; SUMO's keep-clear rule (MSLink::opened) then
+/// only holds an entering car for the rare full link. Each downstream plan takes the
+/// first such link in lane-id order and is moved once. A no-op when unset.
+pub fn clear_short_links(control: &SignalControl, world: &mut World) {
+    let Some(limit) = control.short_link_clearance_m.filter(|v| *v > 0.0) else {
+        return;
+    };
+    let plan_of: BTreeMap<usize, usize> = world
+        .signals
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.junction.as_usize(), i))
+        .collect();
+    let mut moved: BTreeSet<usize> = BTreeSet::new();
+    let mut shifts: Vec<(usize, f64)> = Vec::new();
+    for lane in world.roads.lanes() {
+        if lane.kind != LaneKind::Driving || lane.length_m >= limit {
+            continue;
+        }
+        let edge = world.roads.edge(lane.edge);
+        let (Some(&u), Some(&d)) = (
+            plan_of.get(&edge.from.as_usize()),
+            plan_of.get(&edge.to.as_usize()),
+        ) else {
+            continue;
+        };
+        if u == d || moved.contains(&d) {
+            continue;
+        }
+        let (pu, pd) = (&world.signals[u], &world.signals[d]);
+        if (pu.cycle_s - pd.cycle_s).abs() > 1e-9 || pd.cycle_s <= 0.0 {
+            continue;
+        }
+        let index = |plan: &SignalPlan, via: LaneId| plan.controlled.iter().position(|l| *l == via);
+        let mut feed = Vec::new();
+        let mut drain = Vec::new();
+        for c in world.roads.connections() {
+            let Some(via) = c.via else { continue };
+            if c.to_lane == lane.id
+                && let Some(m) = index(pu, via)
+            {
+                feed.push(m);
+            }
+            if c.from_lane == lane.id
+                && let Some(m) = index(pd, via)
+            {
+                drain.push(m);
+            }
+        }
+        let (Some(su), Some(sd)) = (green_start(pu, &feed), green_start(pd, &drain)) else {
+            continue;
+        };
+        let offset = (pu.offset_s + su - SHORT_LINK_LEAD_S - sd).rem_euclid(pd.cycle_s);
+        moved.insert(d);
+        shifts.push((d, offset));
+    }
+    for (d, offset) in shifts {
+        world.signals[d].offset_s = offset;
     }
 }
 

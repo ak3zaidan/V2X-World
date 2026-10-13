@@ -3843,3 +3843,14 @@ trip cap 150 (99 vehicles), 1 s. Capped: `scale/base.yaml`, cap 1,260, `radio.ra
 - **Clippy:** `bler_nr.rs` digitised 0.318 point allowed past `approx_constant`; `cargo clippy -p v2xw-radio -p v2xw-mobility -p v2xw-threat -p v2xw-engine --no-deps` now has warnings only, no errors.
 - **Not measured:** the truck time-headway row on the new freeway family. One `--expect --only` run on a debug build had not finished its first 90 s highway run after 25 min and was stopped. Run it on the release binary: `v2xw sensitivity --expect --only actors.vehicles.drivers.truck.time_headway_s`. If it is too slow, shorten the family to 30 s.
 - **Checks:** `sensitivity_expectations` 4/4 (+1 ignored). `cargo clippy` (four crates) shows warnings only. Mobility, engine `scenario::` unit tests, and the full table were not run.
+
+## 2026-10-13: junction and signal stalls (branch of e2b03c9)
+
+- **`traffic.signals.short_link_clearance_m`** (new, opt-in, 10-200 m): for a driving lane shorter than this between two signalised junctions on one cycle, the downstream offset makes the green that empties it lead the upstream green that fills it by 2 s (FHWA STM 2e ch. 6). Keep-clear (`traffic.keep_junctions_clear`, SUMO's MSLink keepClear) already holds a car out of a full link; this removes the cause. Not measured on midtown-peak-load this round.
+- **`traffic.signals.detector_placement`** (new, `stop-line` default | `sumo`): SUMO's per-lane loop at speed limit x 2 s upstream extends the green; stop-line presence still calls a red approach. Refused under fixed-time control.
+- **Lane changes between non-parallel lanes refused** (> 10 degrees at the vehicle or 15 m ahead): the corner lane change through a building. Grid lanes are parallel, so grid digests hold; imported maps may change.
+- **Recommended ranges** for min green (5-15 s) and max green (30-60 s), FHWA STM 2e, so sweeps never cross the other's default.
+- **Right turn on red on the grid** is live (150 s, 1500 veh/h: 6.501 vs 6.473 m/s); the catalogue's "dead" verdict came from the thin 90 s family. Test `right_turn_on_red_reaches_the_grid_signals`.
+- **Not reached:** kerbside overlaps from connectors; start-up lost time calibration (3.06 s vs HCM 2 s needs a measured re-fit of the green-onset reaction, a digest change).
+- **Checks:** `traffic_audit_config` 11/11, engine `scenario::` 27/27.
+- **Build hazard:** the shared target dir served a stale `scenario_reflect.rs`; `touch crates/v2xw-engine/build.rs` forces it.
