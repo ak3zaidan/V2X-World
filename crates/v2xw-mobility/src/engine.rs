@@ -792,6 +792,11 @@ pub struct EngineParams {
     /// Needs `lane_changes`; off by default so a unit test sees the plain router, set by a
     /// scenario's `traffic.strategic_lane_choice`.
     pub strategic_lane_choice: bool,
+    /// SUMO LC2013's lane-change motivations ([`crate::lanechange::lc2013`]) in place of
+    /// MOBIL's discretionary decision, or `None` (the default: MOBIL). Set by any of
+    /// `traffic.lc_strategic`, `lc_cooperative`, `lc_speed_gain`, `lc_keep_right`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lc2013: Option<crate::lanechange::lc2013::Lc2013Params>,
     /// Congestion-aware rerouting, every this many seconds per vehicle, or `0` (off, the
     /// default). When on, each lane's speed is sampled every second and smoothed over
     /// [`CONGESTION_ADAPTATION_STEPS`] samples, the router prices a lane at its length over
@@ -844,6 +849,7 @@ impl Default for EngineParams {
             class_routing: true,
             time_to_teleport_s: 0.0,
             strategic_lane_choice: false,
+            lc2013: None,
             reroute_period_s: 0.0,
             human: crate::drivers::HumanDriverParams::default(),
             reverse_order: false,
@@ -977,6 +983,8 @@ struct Actor {
     stuck_since: Option<SimTime>,
     /// The driver's reaction history and perception errors ([`crate::drivers`]).
     human: crate::drivers::HumanState,
+    /// Its LC2013 accumulators ([`EngineParams::lc2013`]).
+    lc: crate::lanechange::lc2013::Lc2013State,
 }
 
 impl Actor {
@@ -1782,6 +1790,205 @@ impl NativeMobility {
         })
     }
 
+    /// How far a vehicle can stay on `lane` (one of its road's lanes) and still follow its
+    /// route, metres: to the end of the lane when it cannot reach the route's next lane,
+    /// else on along the route, up to SUMO's 3,000 m look-ahead (`MSVehicle::updateBestLanes`).
+    fn lane_route_dist(&self, world: &World, actor: &Actor, lane: LaneId) -> (f64, bool) {
+        let rem = (world.lane(lane).length_m - actor.s_m).max(0.0);
+        let Some(&next) = actor.route.lanes.get(actor.route_index + 1) else {
+            return (rem, true);
+        };
+        let reaches = world
+            .successors(lane)
+            .iter()
+            .any(|c| c.permitted && c.via.unwrap_or(c.to_lane) == next);
+        if !reaches {
+            return (rem, false);
+        }
+        let mut d = rem;
+        for l in &actor.route.lanes[actor.route_index + 1..] {
+            d += world.lane(*l).length_m;
+            if d >= 3000.0 {
+                break;
+            }
+        }
+        (d, true)
+    }
+
+    /// What each side offers an LC2013 driver ([`crate::lanechange::lc2013::SideOffer`]),
+    /// with whether that lane keeps the route.
+    fn lc2013_offer(
+        &self,
+        world: &World,
+        actor: &Actor,
+        ego: &VehicleView,
+        nbrs: &LaneNeighbors,
+        side: Side,
+        v_max: f64,
+    ) -> Option<(crate::lanechange::lc2013::SideOffer, bool)> {
+        use crate::lanechange::lc2013::{DECEL_MPS2, SideOffer, lane_v_safe};
+        let sn = nbrs.side(side)?;
+        let l = world.try_lane(sn.lane)?;
+        if l.edge != world.lane(actor.lane).edge
+            || !l.kind.is_motorised()
+            || !l.admits(actor.class.class_mask())
+        {
+            return None;
+        }
+        let (dist_m, on_route) = self.lane_route_dist(world, actor, sn.lane);
+        Some((
+            SideOffer {
+                v_safe: lane_v_safe(
+                    v_max.min(l.speed_limit_mps),
+                    sn.leader.as_ref(),
+                    DECEL_MPS2,
+                    ego.driver.min_gap_m,
+                ),
+                dist_m,
+                leader: sn.leader,
+            },
+            on_route,
+        ))
+    }
+
+    /// Whether a strategic change is due under LC2013: within the look-ahead
+    /// ([`crate::lanechange::lc2013::Lc2013Params::look_ahead_m`]), or further out when the
+    /// target lane is no slower than the own (`changeToBest`).
+    fn lc2013_strategic_due(
+        &self,
+        world: &World,
+        p: &crate::lanechange::lc2013::Lc2013Params,
+        st: &crate::lanechange::lc2013::Lc2013State,
+        actor: &Actor,
+        ego: &VehicleView,
+        nbrs: &LaneNeighbors,
+    ) -> bool {
+        use crate::lanechange::lc2013::{DECEL_MPS2, lane_v_safe};
+        let (Some(target), Some(pending)) = (
+            self.strategic_target(world, actor),
+            self.strategic_pending(world, actor),
+        ) else {
+            return true;
+        };
+        let side = if world.lane(target).index > world.lane(actor.lane).index {
+            Side::Left
+        } else {
+            Side::Right
+        };
+        let la = p.look_ahead_m(st, ego.dims.length_m + ego.driver.min_gap_m, side);
+        if pending <= la {
+            return true;
+        }
+        let lane = world.lane(actor.lane);
+        let v_max = ego.driver.desired_speed_mps.min(lane.speed_limit_mps);
+        let this_v = lane_v_safe(v_max, nbrs.leader.as_ref(), DECEL_MPS2, ego.driver.min_gap_m);
+        self.lc2013_offer(world, actor, ego, nbrs, side, v_max)
+            .is_some_and(|(o, _)| o.v_safe >= this_v)
+    }
+
+    /// LC2013's discretionary decision ([`crate::lanechange::lc2013`]): cooperation first,
+    /// then keep right and speed gain, each through MOBIL's safety criterion.
+    #[allow(clippy::too_many_arguments)]
+    fn lc2013_decide(
+        &self,
+        world: &World,
+        mobil: &Mobil,
+        p: &crate::lanechange::lc2013::Lc2013Params,
+        st: &mut crate::lanechange::lc2013::Lc2013State,
+        actor: &Actor,
+        ego: &VehicleView,
+        nbrs: &LaneNeighbors,
+        dt: f64,
+    ) -> LaneChangeDecision {
+        use crate::lanechange::lc2013::{DECEL_MPS2, TAU_S, lane_v_safe};
+        let lane = world.lane(actor.lane);
+        let v_max = ego.driver.desired_speed_mps.min(lane.speed_limit_mps);
+        let s0 = ego.driver.min_gap_m;
+        let this_v = lane_v_safe(v_max, nbrs.leader.as_ref(), DECEL_MPS2, s0);
+        let right = self.lc2013_offer(world, actor, ego, nbrs, Side::Right, v_max);
+        let left = self.lc2013_offer(world, actor, ego, nbrs, Side::Left, v_max);
+        let change = |side: Side| -> LaneChangeDecision {
+            let Some(sn) = nbrs.side(side) else {
+                return LaneChangeDecision::Stay;
+            };
+            let w = world.lane(sn.lane).width_m;
+            LaneChangeDecision::Change {
+                to: sn.lane,
+                side,
+                incentive_mps2: 0.0,
+                duration: crate::lanechange::mobil::transition_duration(
+                    mobil.params(),
+                    0.5 * (lane.width_m + w),
+                    ego.speed_mps.max(PULL_OUT_SPEED_MPS),
+                ),
+            }
+        };
+        // Cooperation: make room for a neighbour whose urgent strategic change needs this
+        // lane and which this vehicle blocks as its target-lane follower.
+        if p.cooperative > 0.0 {
+            for (blocked, out) in [(Side::Left, Side::Right), (Side::Right, Side::Left)] {
+                let Some(l) = nbrs.side(blocked).and_then(|sn| sn.leader) else {
+                    continue;
+                };
+                let Some(m) = l.vehicle.and_then(|v| self.actors.get(&v.actor)) else {
+                    continue;
+                };
+                if self.strategic_target(world, m) != Some(actor.lane) {
+                    continue;
+                }
+                let Some(pending) = self.strategic_pending(world, m) else {
+                    continue;
+                };
+                let towards = match blocked {
+                    Side::Left => Side::Right,
+                    Side::Right => Side::Left,
+                };
+                let m_len = m.class.spec().length_m + m.driver.min_gap_m;
+                if pending > p.look_ahead_m(&m.lc, m_len, towards) {
+                    continue;
+                }
+                let v = ego.speed_mps;
+                let secure = (v * TAU_S + (v * v - l.speed_mps * l.speed_mps) / (2.0 * DECEL_MPS2))
+                    .max(0.0)
+                    + s0;
+                if l.gap_m >= secure {
+                    continue;
+                }
+                let offer = match out {
+                    Side::Left => left,
+                    Side::Right => right,
+                };
+                let Some((o, true)) = offer else {
+                    continue;
+                };
+                if p.inconvenience(st, out, this_v, o.v_safe) > p.cooperative {
+                    continue;
+                }
+                if mobil.incentive(world, ego, nbrs, out, &self.weather).is_none() {
+                    continue;
+                }
+                return change(out);
+            }
+        }
+        let wanted = p.step(
+            st,
+            dt,
+            ego.speed_mps,
+            v_max,
+            lane.speed_limit_mps,
+            DECEL_MPS2,
+            this_v,
+            right.map(|(o, _)| o),
+            left.map(|(o, _)| o),
+        );
+        match wanted {
+            Some((side, _)) if mobil.incentive(world, ego, nbrs, side, &self.weather).is_some() => {
+                change(side)
+            }
+            _ => LaneChangeDecision::Stay,
+        }
+    }
+
     /// The acceleration cap of a vehicle whose strategic lane change is blocked by the
     /// vehicle ahead in the target lane: it drops back behind it, braking no harder than
     /// its comfortable deceleration. `None` when that lane has no such blocker.
@@ -2291,6 +2498,7 @@ impl NativeMobility {
                 forced_cut_in: None,
                 kerb: crate::kerbside::KerbState::NONE,
                 human: crate::drivers::HumanState::default(),
+                lc: crate::lanechange::lc2013::Lc2013State::default(),
             },
         );
         Ok(id)
@@ -2875,6 +3083,7 @@ impl NativeMobility {
                 forced_cut_in: None,
                 kerb: crate::kerbside::KerbState::NONE,
                 human: crate::drivers::HumanState::default(),
+                lc: crate::lanechange::lc2013::Lc2013State::default(),
             },
         );
         self.next_seq = self.next_seq.max(trip.seq + 1);
@@ -5538,10 +5747,23 @@ impl Mobility for NativeMobility {
                 .filter(|a| a.kerb.at_kerb())
                 .map(|a| a.id)
                 .collect();
+            // LC2013's per-vehicle memory, written back after the walk.
+            let lc_params = self.params.lc2013;
+            let lc_dt = self.params.step.as_secs_f64();
+            let mut lc_updates: Vec<(ActorId, crate::lanechange::lc2013::Lc2013State)> =
+                Vec::new();
             for decision in &mut decisions {
                 let Some(actor) = self.actors.get(&decision.actor) else {
                     continue;
                 };
+                if lc_params.is_some() {
+                    let mut st = actor.lc;
+                    if actor.transition.is_some() {
+                        st.changed();
+                    }
+                    st.track_speed(actor.speed_mps, lc_dt);
+                    lc_updates.push((actor.id, st));
+                }
                 if actor.transition.is_some() || t0 < actor.cooldown_until {
                     continue;
                 }
@@ -5563,6 +5785,14 @@ impl Mobility for NativeMobility {
                 // way ([`Self::give_up_strategic`]).
                 if self.along_path() && self.strategic_target(ctx.world(), actor).is_some() {
                     if let Some((ego, nbrs)) = neighbours.get(&decision.actor) {
+                        // LC2013: further out than the look-ahead the change waits unless
+                        // the target lane is no slower (`changeToBest`).
+                        if let Some(p) = lc_params
+                            && let Some(st) = lc_updates.last()
+                            && !self.lc2013_strategic_due(ctx.world(), &p, &st.1, actor, ego, nbrs)
+                        {
+                            continue;
+                        }
                         if let Some(change) =
                             self.strategic_change(ctx.world(), &mobil, actor, ego, nbrs)
                         {
@@ -5626,7 +5856,19 @@ impl Mobility for NativeMobility {
                     }
                     continue;
                 }
-                decision.lane_change = mobil.decide(ctx, ego, nbrs, &self.weather);
+                decision.lane_change = match (lc_params, lc_updates.last_mut()) {
+                    (Some(p), Some((_, st))) => self.lc2013_decide(
+                        ctx.world(),
+                        &mobil,
+                        &p,
+                        st,
+                        actor,
+                        ego,
+                        nbrs,
+                        lc_dt,
+                    ),
+                    _ => mobil.decide(ctx, ego, nbrs, &self.weather),
+                };
                 // Heavy goods vehicles keep out of a motorway's leftmost lane where the
                 // carriageway has three or more ([`crate::drivers`], StVO §18(11)).
                 if self.params.human.truck_lane_restriction
@@ -5639,6 +5881,11 @@ impl Mobility for NativeMobility {
                     && crate::drivers::is_restricted_left_lane(ctx.world(), to)
                 {
                     decision.lane_change = LaneChangeDecision::Stay;
+                }
+            }
+            for (id, st) in lc_updates {
+                if let Some(a) = self.actors.get_mut(&id) {
+                    a.lc = st;
                 }
             }
             self.lane_change = Some(mobil);
@@ -6909,6 +7156,25 @@ pub fn card(params: &EngineParams, car_following: &str) -> ModelCard {
                  length, where SUMO netconvert averages the radius over the connector",
             ),
         ));
+    }
+    if let Some(lc) = params.lc2013 {
+        for (name, v) in [
+            ("lc_strategic", lc.strategic),
+            ("lc_cooperative", lc.cooperative),
+            ("lc_speed_gain", lc.speed_gain),
+            ("lc_keep_right", lc.keep_right),
+        ] {
+            card.parameters.push(Parameter::new(
+                name,
+                "1",
+                serde_json::json!(v),
+                Source::new(
+                    SourceKind::Code,
+                    "SUMO MSLCM_LC2013.cpp (Erdmann 2015), vType lcStrategic / lcCooperative / \
+                     lcSpeedGain / lcKeepRight, default 1",
+                ),
+            ));
+        }
     }
     card.validation = Validation {
         status: ValidationStatus::LiteratureChecked,

@@ -266,6 +266,23 @@ impl Mobil {
         (self.params.reconsider_rate_per_s * self.params.step_s).clamp(0.0, 1.0)
     }
 
+    /// MOBIL's incentive for a change to `side`, or `None` when its safety criterion
+    /// (the new follower braking no harder than `b_safe`) refuses it. Other lane-change
+    /// motivations (SUMO LC2013, [`crate::lanechange::lc2013`]) take their safety from here.
+    pub fn incentive(
+        &self,
+        world: &v2xw_world::World,
+        ego: &VehicleView,
+        nbrs: &LaneNeighbors,
+        side: Side,
+        w: &WeatherState,
+    ) -> Option<f64> {
+        let target = nbrs.side(side)?;
+        let ego_lane = LaneView::of(world.try_lane(ego.lane)?);
+        let target_lane = LaneView::of(world.try_lane(target.lane)?);
+        self.score(ego, nbrs, target, &ego_lane, &target_lane, w)
+    }
+
     /// The acceleration `veh` would have behind `leader` on a lane of limit
     /// `speed_limit_mps`.
     fn accel_of(
