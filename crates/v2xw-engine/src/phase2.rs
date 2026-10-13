@@ -358,6 +358,56 @@ pub fn renders_on_air(kind: AttackKind) -> bool {
     unrendered(kind).is_none()
 }
 
+/// Every attacker kind of the catalogue by name, with why the engine refuses it (`None`
+/// for a kind it renders on the air). The agent's settings search reads this rather than
+/// a copied list, so a kind that becomes runnable shows up without an edit elsewhere.
+#[must_use]
+pub fn attack_kinds() -> Vec<(&'static str, Option<&'static str>)> {
+    AttackKind::ALL
+        .iter()
+        .map(|k| (k.as_str(), unrendered(*k)))
+        .collect()
+}
+
+/// The keys `threats.attackers[].params` accepts, with the kind that uses each one
+/// (`None`: every kind; only the Sybil keys are refused on another kind). The same set the params parser below matches; the agent lists
+/// it so "5 Sybil ghosts" lands on `params.sybil_ghosts` (F2MD `SybilVehNumber`).
+pub const ATTACKER_PARAMS: [(&str, Option<&str>); 33] = [
+    ("intensity", None),
+    ("dt_s", None),
+    ("magnitude_scale", None),
+    ("dos_burst", None),
+    ("delay_s", Some("DelayedMessages")),
+    ("expired_cert_lag_s", Some("ExpiredCert")),
+    ("not_yet_valid_lead_s", Some("NotYetValid")),
+    ("const_pos_offset_m", Some("ConstPosOffset")),
+    ("random_pos_half_range_m", Some("RandomPos")),
+    ("teleport_dx_m", Some("Teleport")),
+    ("teleport_dy_m", Some("Teleport")),
+    ("teleport_period_s", Some("Teleport")),
+    ("sine_pos_amplitude_m", Some("SineWavePos")),
+    ("sine_pos_omega_rad_s", Some("SineWavePos")),
+    ("const_speed_offset_mps", Some("ConstSpeedOffset")),
+    ("random_speed_max_mps", Some("RandomSpeed")),
+    ("stop_and_go_speed_mps", Some("StopAndGo")),
+    ("heading_offset_deg", Some("HeadingOffset")),
+    ("replay_lag_samples", Some("DataReplay")),
+    ("slow_drift_ramp_mps", Some("SlowDrift")),
+    ("slow_drift_max_rate_mps", Some("SlowDrift")),
+    ("along_road_offset_m", Some("AlongRoadOffset")),
+    ("disruptive_pos_half_range_m", Some("Disruptive")),
+    ("disruptive_speed_up_mps", Some("Disruptive")),
+    ("disruptive_speed_down_mps", Some("Disruptive")),
+    ("disruptive_heading_deg", Some("Disruptive")),
+    ("pos_speed_inconsistent_drop_mps", Some("PosSpeedInconsistent")),
+    ("pos_heading_swing_m", Some("PosHeadingInconsistent")),
+    ("pos_heading_omega_rad_s", Some("PosHeadingInconsistent")),
+    ("eventual_stop_delay_s", Some("EventualStop")),
+    ("eventual_stop_base_speed_mps", Some("EventualStop")),
+    ("sybil_ghosts", Some("Sybil")),
+    ("sybil_jitter_m", Some("Sybil")),
+];
+
 /// Why the engine cannot render an attack kind on the air, or `None` when it can.
 ///
 /// The host applies an attacker's claimed position, speed, heading and generation time,

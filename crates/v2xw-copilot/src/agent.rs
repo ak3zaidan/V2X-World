@@ -241,7 +241,7 @@ impl Default for AgentPolicy {
 
 /// What an earlier turn's cut tool result says in place of its tail.
 pub const TRIMMED: &str = " … [trimmed: an earlier turn's tool result. Its numbers are still \
-    this conversation's data: re-read them with list_runs, compare_runs, finding_detail, \
+    this conversation's data: re-read them with list_runs, compare_runs, engine_runs, finding_detail, \
     live_metrics or query_metric rather than from memory.]";
 
 /// The conversation as sent to the model: whole while it fits in `budget` characters;
@@ -452,12 +452,17 @@ pub fn agent_system_prompt() -> String {
      baseline). Follow-ups: base `last`, the one change, compare_to_last: true. Ask before \
      anything over 300 simulated seconds. \"Compare with the previous run\" with nothing \
      to change is compare_runs over the last two runs (list_runs numbers them; runs the \
-     person made in the Studio are among them).\n\
+     person made in the Studio are among them); if those are not two runs of this \
+     conversation, engine_runs compare (previous vs current, every run the engine kept).\n\
+     5a. \"What does X do / what should X be / does X matter / how sensitive is M to X\": \
+     setting_help or sensitivity (instant, from the build's checked-in sweeps); simulate \
+     only if the person wants it measured on their scenario. A setting the engine ignores \
+     on its own (the loader refuses it) is explained, never forced.\n\
      5. A question about the run on screen (\"is the network healthy?\", \"why is PDR \
      low?\") is about the current run: live_metrics, query_metric, inspect or \
      analyse_current_run, never a new run. A question about a number of an earlier run \
-     is answered from a tool result read in this turn (compare_runs, finding_detail, \
-     list_runs, live_metrics), never from an earlier reply; name the metric with each \
+     is answered from a tool result read in this turn (compare_runs, engine_runs, \
+     finding_detail, list_runs, live_metrics), never from an earlier reply; name the metric with each \
      number (overall delivery_ratio and the within-range delivery are different \
      numbers: say which).\n\
      Run control is run_control: start, pause, resume, speed {speed}, restart = seek \

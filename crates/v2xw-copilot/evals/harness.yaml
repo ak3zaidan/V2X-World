@@ -319,9 +319,11 @@ cases:
     draft:
       - {key: radio.devices.obu.tx_power_dbm, max: 40}
 
-  - id: refuse-sybil
+  - id: refuse-dos
     category: refusal
-    prompt: Add a Sybil attacker.
+    # Sybil is rendered since round 13 (ghost frames under their own pseudonyms); a
+    # message flood is still refused by name (phase2::attack_kinds).
+    prompt: Add a message-flooding (DoS) attacker.
     asks: true
 
   - id: refuse-fraction
@@ -453,3 +455,105 @@ cases:
     runs: {min: 1, max: 1}
     findings: [radio.jammed, channel.congested, radio.low-pdr, radio.range]
     mentions: [[jam, interference, pdr, delivery]]
+
+  # ------------------------------------------------------------ hard cases (round 14)
+  # Settings by vague description, multi-step setup + run + compare, sensitivity
+  # questions answered from the checked-in sweeps, invalid combinations the loader
+  # refuses, and explaining a bad metric from the run's data.
+  - id: hard-cautious-drivers
+    category: hard
+    live: true
+    prompt: Make the drivers more cautious - they should keep bigger gaps to the car ahead and be less eager to change lanes.
+    runs: {min: 0, max: 0}
+    resolve: [actors.vehicles.drivers.time_headway_s, actors.vehicles.drivers.politeness]
+    repair:
+      - {key: drivers.politeness, value: 0.8, want_key: actors.vehicles.drivers.politeness, want_value: 0.8}
+      - {key: lane_change_threshold_mps2, value: "0.4 m/s2", want_key: actors.vehicles.drivers.lane_change_threshold_mps2, want_value: 0.4}
+    draft:
+      # IDM T above the model's urban default (about 1.5 s; HCM 7th ed. saturation headway).
+      - {key: actors.vehicles.drivers.time_headway_s, min: 1.51}
+    # Not a `mentions` check: the instructions say a setup reply is one line, the applied
+    # changes show as chips (live-3 set the lane-change threshold to 0.3 m/s2 and said so
+    # only in the chips). Politeness or the threshold both answer "less eager".
+    calls:
+      - {tool: setup, args: {base: current}}
+
+  - id: hard-sidelink-reselect
+    category: hard
+    live: true
+    prompt: Switch to LTE C-V2X and make the vehicles reselect their sidelink resources more often than the standard does.
+    runs: {min: 0, max: 0}
+    resolve: [radio.sidelink.resource_keep_probability]
+    draft:
+      - {key: radio.rat, equals: lte-v2x-pc5}
+      # Below the J3161/1 profile's probResourceKeep 0.8.
+      - {key: radio.sidelink.resource_keep_probability, max: 0.79}
+
+  - id: hard-storm
+    category: hard
+    live: true
+    prompt: Set it up like a stormy evening downtown with heavy rain.
+    runs: {min: 0, max: 0}
+    resolve: [weather.initial]
+    draft:
+      - {key: weather.initial, equals: rain}
+    mentions: [[rain, weather]]
+
+  - id: hard-multistep
+    category: hard
+    live: true
+    prompt: On the grid, run 20 s at 600 veh/h, then run the same with the traffic doubled, and compare the two runs.
+    runs: {min: 2, max: 2}
+    compares: true
+    differ: [actors.vehicles.demand.rate_veh_per_h]
+    mentions: [[cbr, busy, pdr, delivery]]
+
+  - id: hard-compare-again
+    category: hard
+    live: true
+    follow_up_of: hard-multistep
+    prompt: Compare those two again - which metric changed the most?
+    runs: {min: 0, max: 0}
+    no_calls: [simulate]
+    mentions: [[cbr, busy, pdr, delivery, latency, frames]]
+
+  - id: hard-explain-bad-pdr
+    category: hard
+    live: true
+    follow_up_of: hard-multistep
+    prompt: Why is packet delivery below 100 percent in the busier run? Explain it from the data.
+    runs: {min: 0, max: 1}
+    no_calls: [simulate]
+    mentions: [[distance, range, collision, interference, hidden, path loss, busy, congest]]
+
+  - id: hard-sensitivity-power
+    category: hard
+    live: true
+    prompt: Without running anything, how sensitive is the channel busy ratio to transmit power?
+    runs: {min: 0, max: 0}
+    no_calls: [simulate]
+    calls:
+      - {tool: sensitivity}
+    mentions: [[cbr, busy]]
+
+  - id: hard-sensitivity-dead
+    category: hard
+    live: true
+    prompt: Does the receiver noise figure setting actually change any result?
+    runs: {min: 0, max: 0}
+    no_calls: [simulate]
+    mentions: [[range, prr, delivery, reception]]
+
+  - id: hard-invalid-phy-on-cv2x
+    category: hard
+    live: true
+    prompt: Use LTE-V2X and set the 802.11p data rate to 12 Mbps.
+    asks: true
+    mentions: [["802.11p", dsrc, sidelink, mcs]]
+
+  - id: hard-invalid-ghosts
+    category: hard
+    live: true
+    prompt: Add a constant-position attacker with 5 Sybil ghosts.
+    asks: true
+    mentions: [[sybil, ghost]]

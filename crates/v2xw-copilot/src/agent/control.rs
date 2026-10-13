@@ -281,6 +281,47 @@ pub fn tools() -> Vec<Value> {
             "This conversation's runs: index, label, what changed, run id.",
             json!({"type": "object", "additionalProperties": false, "properties": {}}),
         ),
+        tool(
+            "engine_runs",
+            "The runs the engine kept (the current one and up to eight before it, including \
+             runs the person made in the Studio, not only this conversation's). action \
+             `list` (each with its `ref`); `compare` {a, b}: a = baseline (default \
+             `previous`), b (default `current`), each `previous`, `current` or a run id: the \
+             settings that differ, every headline metric on both sides with change, \
+             direction, health, a meaningful flag and a plain summary; `digest` {run}: one \
+             run's scenario, seed and pooled headline metrics. Use it for \"compare with \
+             the previous run\" when the runs were not made by simulate in this conversation.",
+            json!({"type": "object", "additionalProperties": false, "required": ["action"],
+                   "properties": {
+                       "action": {"enum": ["list", "compare", "digest"]},
+                       "a": {"type": "string"}, "b": {"type": "string"},
+                       "run": {"type": "string"},
+                       "all": {"type": "boolean",
+                               "description": "compare: every metric, not just the headline"}}}),
+        ),
+        tool(
+            "setting_help",
+            "Everything about one setting, by dotted key or plain words: label, unit, \
+             allowed values or range, default, recommended range, Basic/Advanced, whether \
+             the engine acts on it, the configuration reference's source and effect, and a \
+             sensitivity summary (what theory expects it to move, what the same-seed sweep \
+             measured, whether it was dead). Use for \"what does X do\", \"what should X \
+             be\", \"why did changing X do nothing\".",
+            json!({"type": "object", "additionalProperties": false, "required": ["key"],
+                   "properties": {"key": {"type": "string"}}}),
+        ),
+        tool(
+            "sensitivity",
+            "How sensitive a metric is to a setting, from the checked-in sweeps (v2xw \
+             sensitivity --catalogue and --expect, same seed, recommended-range ends): give \
+             `setting` for what it moves (theory with citation, and measured change), \
+             `metric` (e.g. cbr_mean, prr, pdr, range90_m, latency, traffic.speed_mean_mps, \
+             metric.headway_time) for the settings expected to move it, or both. Instant; \
+             run simulate yourself when the person wants it measured on their scenario.",
+            json!({"type": "object", "additionalProperties": false,
+                   "properties": {"setting": {"type": "string"},
+                                  "metric": {"type": "string"}}}),
+        ),
     ]
 }
 
@@ -298,7 +339,7 @@ pub(super) fn dispatch<P: LlmProvider, T: RpcTransport>(
             args.get("query").and_then(Value::as_str).unwrap_or(""),
             12,
         )),
-        "setup" => setup(agent, args, sink),
+        "setup" => setup(agent, args, sink).map_err(missing_map_hint),
         "list_cities" => Ok(catalog::cities(
             args.get("query").and_then(Value::as_str).unwrap_or(""),
         )),
@@ -307,6 +348,17 @@ pub(super) fn dispatch<P: LlmProvider, T: RpcTransport>(
         "query_metric" => query_metric(agent, args),
         "inspect" => inspect(agent, args),
         "list_runs" => Ok(list_runs(agent)),
+        "engine_runs" => engine_runs(agent, args),
+        "setting_help" => Ok(crate::help::setting_help(
+            args.get("key")
+                .or_else(|| args.get("query"))
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+        )),
+        "sensitivity" => Ok(crate::help::sensitivity(
+            args.get("setting").and_then(Value::as_str).unwrap_or(""),
+            args.get("metric").and_then(Value::as_str).unwrap_or(""),
+        )),
         _ => return None,
     };
     Some(match result {
@@ -315,6 +367,25 @@ pub(super) fn dispatch<P: LlmProvider, T: RpcTransport>(
             message: e.to_string(),
         },
     })
+}
+
+/// A base whose map is not downloaded blocks every change of the request, which the
+/// model then reports as "nothing applied". The refusal says how to still apply the rest.
+fn missing_map_hint(e: CopilotError) -> CopilotError {
+    let text = e.to_string();
+    if text.contains("world.source.path") && text.contains("does not exist") {
+        err(
+            "setup",
+            format!(
+                "{text}\nNothing was staged. The chosen base or city needs a map that is not \
+                 downloaded: call setup again now with base `current` (or a city whose map \
+                 list_cities shows as downloaded) and the same other changes, then tell the \
+                 person the one command that fetches the missing map."
+            ),
+        )
+    } else {
+        e
+    }
 }
 
 fn err(method: &str, message: impl Into<String>) -> CopilotError {
@@ -1392,6 +1463,65 @@ pub(super) fn record_meta<P: LlmProvider, T: RpcTransport>(agent: &mut Agent<P, 
         findings.sort_by(|a, b| b.severity.cmp(&a.severity));
     }
     agent.harness.meta.insert(index, meta);
+}
+
+/// The engine's kept runs: `runs.list`, `runs.compare`, `runs.digest`. A digest's series
+/// are dropped (hundreds of points the model does not need; `query_metric` has them).
+fn engine_runs<P: LlmProvider, T: RpcTransport>(
+    agent: &mut Agent<P, T>,
+    args: &Value,
+) -> Result<Value> {
+    let s = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").trim();
+    let action = match s("action").to_ascii_lowercase().as_str() {
+        "" | "list" | "ls" => "list",
+        "compare" | "diff" | "vs" => "compare",
+        "digest" | "summary" | "get" => "digest",
+        other => {
+            return Err(err(
+                "engine_runs",
+                format!("unknown action {other:?}: list, compare or digest"),
+            ));
+        }
+    };
+    match action {
+        "list" => agent.rpc.call("runs.list", &json!({})),
+        "compare" => {
+            let mut p = json!({"format": "json",
+                "all": args.get("all").and_then(Value::as_bool).unwrap_or(false)});
+            if !s("a").is_empty() {
+                p["a"] = json!(s("a"));
+            }
+            if !s("b").is_empty() {
+                p["b"] = json!(s("b"));
+            }
+            let mut v = agent.rpc.call("runs.compare", &p)?;
+            strip_series(&mut v);
+            Ok(v)
+        }
+        _ => {
+            let run = if s("run").is_empty() {
+                "current"
+            } else {
+                s("run")
+            };
+            let mut v = agent.rpc.call("runs.digest", &json!({"run": run}))?;
+            strip_series(&mut v);
+            Ok(v)
+        }
+    }
+}
+
+fn strip_series(v: &mut Value) {
+    match v {
+        Value::Object(m) => {
+            m.remove("series");
+            for x in m.values_mut() {
+                strip_series(x);
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(strip_series),
+        _ => {}
+    }
 }
 
 fn list_runs<P: LlmProvider, T: RpcTransport>(agent: &Agent<P, T>) -> Value {
