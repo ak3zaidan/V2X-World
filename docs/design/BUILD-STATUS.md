@@ -3793,3 +3793,11 @@ Track: the built-in agent (`crates/v2xw-copilot`, the agent host in `v2xw-cli`).
 - **Still failing:** `weather.intensity` on arterials (owner decision, unchanged), and truck time headway, which is below this family's resolution.
 - **Seen:** `gnss.rtk: true` gives 3 false verdicts against 0 on the lifecycle family.
 - **Catalogue doc:** `docs/validation/sensitivity-catalogue.md` was regenerated from a cache. Entries carried over from the round-12 cache predate the headway metric fix.
+
+## 2026-10-13: round-13 integration notes
+
+- **Merged** (`--no-ff`, in order): network realism against the reference code, traffic realism against SUMO, sensitivity expectations. The only conflicts were in this file; both sections were kept each time. `cargo fmt --all` is its own commit.
+- **Checks:** `cargo check --workspace --tests` is clean (three pre-existing unused-import warnings). These pass: engine `scenario::` 27, `publish::` 12, `guide::` 3; `sensitivity_expectations` 4 (+1 ignored full table), `security_lifecycle` 12, `traffic_audit_config` 9, `vru` 5; `v2xw-msg` `artery_cam` 1. The full `--expect` table, clippy and Studio/Playwright were not run this round.
+- **Release:** `cargo build --release -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots and `/agent/status` reports the agent available.
+- **Owner decisions owed:** the crosswalk refuge hold is on by default and changes digests of scenarios with pedestrians on crossings; the 6 m turn curve window (off by default); the `weather.intensity` arterial fix (digest change). Headway metric output changed wherever safety metrics are on.
+- **Open:** the items in the three sections above (LTE TBS table, engine RSUs on the OBU runtime, permitted-left gap, lane-change/halting gaps to SUMO, truck headway family, `gnss.rtk` false verdicts).
