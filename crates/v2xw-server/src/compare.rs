@@ -302,7 +302,10 @@ impl DigestBuilder {
             };
             push(sample.metric.clone(), sample.value.point());
             if let SampleValue::Distribution(d) = &sample.value {
-                push(format!("{}.p95", sample.metric), d.quantile(Percentile::P95));
+                push(
+                    format!("{}.p95", sample.metric),
+                    d.quantile(Percentile::P95),
+                );
             }
         }
     }
@@ -354,7 +357,10 @@ pub fn batch_se(series: &[(f64, f64)]) -> Option<f64> {
     let size = n / b;
     let means: Vec<f64> = (0..b)
         .filter_map(|i| {
-            let chunk: Vec<f64> = series[i * size..(i + 1) * size].iter().map(|p| p.1).collect();
+            let chunk: Vec<f64> = series[i * size..(i + 1) * size]
+                .iter()
+                .map(|p| p.1)
+                .collect();
             mean(&chunk)
         })
         .collect();
@@ -440,14 +446,36 @@ pub fn better_of(base: &str) -> Option<Better> {
         return Some(b.better);
     }
     const HIGHER: &[&str] = &[
-        "pdr", "pdr_all_pairs", "delivery_ratio", "goodput", "nar", "det_recall",
-        "det_precision", "det_accuracy", "det_f1", "ttc_min", "pet", "headway_time",
-        "headway_distance", "cert_pool_valid", "backend_link_up", "carried_load",
+        "pdr",
+        "pdr_all_pairs",
+        "delivery_ratio",
+        "goodput",
+        "nar",
+        "det_recall",
+        "det_precision",
+        "det_accuracy",
+        "det_f1",
+        "ttc_min",
+        "pet",
+        "headway_time",
+        "headway_distance",
+        "cert_pool_valid",
+        "backend_link_up",
+        "carried_load",
     ];
     const NEUTRAL: &[&str] = &[
-        "mean_speed", "speed", "acceleration", "flow", "density", "offered_load",
-        "verify_rate", "crl_entries", "pseudonym_change_rate", "events_processed",
-        "events_per_second", "bytes_total",
+        "mean_speed",
+        "speed",
+        "acceleration",
+        "flow",
+        "density",
+        "offered_load",
+        "verify_rate",
+        "crl_entries",
+        "pseudonym_change_rate",
+        "events_processed",
+        "events_per_second",
+        "bytes_total",
     ];
     if HIGHER.contains(&base) {
         return Some(Better::Higher);
@@ -455,9 +483,16 @@ pub fn better_of(base: &str) -> Option<Better> {
     if NEUTRAL.contains(&base) {
         return None;
     }
-    if ["recall", "precision", "accuracy", "delivery", "pdr", "availability"]
-        .iter()
-        .any(|k| base.contains(k))
+    if [
+        "recall",
+        "precision",
+        "accuracy",
+        "delivery",
+        "pdr",
+        "availability",
+    ]
+    .iter()
+    .any(|k| base.contains(k))
         || base.ends_with("_up")
     {
         return Some(Better::Higher);
@@ -615,7 +650,10 @@ fn show_value(v: &Value, unit: &str) -> String {
         other => {
             let s = other.to_string();
             if s.len() > 60 {
-                format!("{}…", &s[..s.char_indices().nth(57).map_or(s.len(), |c| c.0)])
+                format!(
+                    "{}…",
+                    &s[..s.char_indices().nth(57).map_or(s.len(), |c| c.0)]
+                )
             } else {
                 s
             }
@@ -696,9 +734,21 @@ pub fn humanise(key: &str) -> String {
 pub fn metric_words(name: &str) -> String {
     let (base, suffix) = split(name);
     const ACRONYMS: &[(&str, &str)] = &[
-        ("pdr", "PDR"), ("per", "PER"), ("aoi", "AoI"), ("cbr", "CBR"), ("pir", "PIR"),
-        ("ttc", "TTC"), ("pet", "PET"), ("crl", "CRL"), ("ma", "MA"), ("p2pcd", "P2PCD"),
-        ("nar", "NAR"), ("rsu", "RSU"), ("obu", "OBU"), ("sinr", "SINR"), ("rssi", "RSSI"),
+        ("pdr", "PDR"),
+        ("per", "PER"),
+        ("aoi", "AoI"),
+        ("cbr", "CBR"),
+        ("pir", "PIR"),
+        ("ttc", "TTC"),
+        ("pet", "PET"),
+        ("crl", "CRL"),
+        ("ma", "MA"),
+        ("p2pcd", "P2PCD"),
+        ("nar", "NAR"),
+        ("rsu", "RSU"),
+        ("obu", "OBU"),
+        ("sinr", "SINR"),
+        ("rssi", "RSSI"),
     ];
     let words: Vec<String> = base
         .split('_')
@@ -729,7 +779,11 @@ fn better_name(b: Option<Better>) -> &'static str {
 #[must_use]
 pub fn compare(a: &RunDigest, b: &RunDigest) -> Comparison {
     let same_seed = a.seed == b.seed;
-    let replicated = a.metrics.iter().chain(&b.metrics).any(|m| m.replications > 1);
+    let replicated = a
+        .metrics
+        .iter()
+        .chain(&b.metrics)
+        .any(|m| m.replications > 1);
     let noise_note = if replicated {
         "Replications exist: a difference is marked beyond noise when it exceeds twice the \
          combined standard error across replications."
@@ -817,7 +871,13 @@ pub fn compare(a: &RunDigest, b: &RunDigest) -> Comparison {
         let key = |r: &MetricRow| {
             let crossed = r.level_a.is_some() && r.level_a != r.level_b;
             let size = r.pct.map_or_else(
-                || if r.delta.is_some_and(|d| d != 0.0) { 1e9 } else { 0.0 },
+                || {
+                    if r.delta.is_some_and(|d| d != 0.0) {
+                        1e9
+                    } else {
+                        0.0
+                    }
+                },
                 f64::abs,
             );
             (r.meaningful, crossed, size)
@@ -911,7 +971,9 @@ fn summarise(
             a.seed, b.seed
         ));
     }
-    if a.t_reached_s + 1.0 < b.t_reached_s.min(a.t_end_s) || b.t_reached_s + 1.0 < a.t_reached_s.min(b.t_end_s) {
+    if a.t_reached_s + 1.0 < b.t_reached_s.min(a.t_end_s)
+        || b.t_reached_s + 1.0 < a.t_reached_s.min(b.t_end_s)
+    {
         out.push(format!(
             "The runs cover different spans ({:.0} s and {:.0} s of simulated time); a \
              metric that builds up over a run is not comparable until both finish.",
@@ -955,7 +1017,10 @@ fn summarise(
         if let (Some(la), Some(lb)) = (&r.level_a, &r.level_b)
             && la != lb
         {
-            out.push(format!("{} moved from {la} to {lb}.", metric_words(&r.name)));
+            out.push(format!(
+                "{} moved from {la} to {lb}.",
+                metric_words(&r.name)
+            ));
         }
     }
     out
@@ -965,7 +1030,11 @@ fn summarise(
 #[must_use]
 pub fn markdown(c: &Comparison) -> String {
     let mut s = String::new();
-    let h = |v: &Value, k: &str| v.get(k).map_or(String::new(), |x| x.to_string().trim_matches('"').to_string());
+    let h = |v: &Value, k: &str| {
+        v.get(k).map_or(String::new(), |x| {
+            x.to_string().trim_matches('"').to_string()
+        })
+    };
     s.push_str(&format!(
         "# Run comparison\n\n- **A (baseline):** {} — run `{}`, seed {}\n- **B:** {} — run `{}`, seed {}\n\n> {}\n\n",
         h(&c.a, "label"), h(&c.a, "run_id"), h(&c.a, "seed"),
@@ -998,7 +1067,8 @@ pub fn markdown(c: &Comparison) -> String {
             r.name,
             fmt_value(r.a, &r.unit),
             fmt_value(r.b, &r.unit),
-            r.delta.map_or_else(String::new, |d| fmt_value(Some(d), &r.unit)),
+            r.delta
+                .map_or_else(String::new, |d| fmt_value(Some(d), &r.unit)),
             fmt_pct(r.pct),
             r.verdict,
             match (&r.level_a, &r.level_b) {
@@ -1079,7 +1149,8 @@ pub fn text(c: &Comparison, all: bool) -> String {
             r.name,
             fmt_value(r.a, &r.unit),
             fmt_value(r.b, &r.unit),
-            r.delta.map_or_else(String::new, |d| fmt_value(Some(d), &r.unit)),
+            r.delta
+                .map_or_else(String::new, |d| fmt_value(Some(d), &r.unit)),
             fmt_pct(r.pct),
             r.verdict,
             match (&r.level_a, &r.level_b) {
@@ -1090,7 +1161,9 @@ pub fn text(c: &Comparison, all: bool) -> String {
     }
     if !all {
         let hidden = c.rows.iter().filter(|r| !r.meaningful).count();
-        s.push_str(&format!("  ({hidden} rows without a meaningful change hidden; --all shows them)\n"));
+        s.push_str(&format!(
+            "  ({hidden} rows without a meaningful change hidden; --all shows them)\n"
+        ));
     }
     s
 }
@@ -1122,7 +1195,11 @@ mod tests {
             t_reached_s: 60.0,
             t_end_s: 60.0,
             source: "test".into(),
-            metrics: vec![m("pdr", "ratio", pdr), m("cbr", "ratio", 0.3), m("latency", "ms", lat)],
+            metrics: vec![
+                m("pdr", "ratio", pdr),
+                m("cbr", "ratio", 0.3),
+                m("latency", "ms", lat),
+            ],
         }
     }
 
@@ -1164,14 +1241,20 @@ mod tests {
         assert!(c.noise_note.contains("noise"));
         let pdr = c.rows.iter().find(|r| r.name == "pdr").unwrap();
         assert_eq!(pdr.beyond_noise, Some(false));
-        assert!(!pdr.meaningful, "inside twice the combined error: not called out");
+        assert!(
+            !pdr.meaningful,
+            "inside twice the combined error: not called out"
+        );
     }
 
     #[test]
     fn exports_carry_every_row() {
         let c = compare(&digest(1, 20.0, 0.8, 10.0), &digest(1, 23.0, 0.9, 12.0));
         assert_eq!(csv(&c).lines().count(), 1 + c.rows.len() + c.settings.len());
-        assert_eq!(metric_words("verify_queue_depth.p95"), "Verify queue depth (p95)");
+        assert_eq!(
+            metric_words("verify_queue_depth.p95"),
+            "Verify queue depth (p95)"
+        );
         assert_eq!(metric_words("pdr_all_pairs"), "PDR all pairs");
         assert!(markdown(&c).contains("| **pdr** |"));
     }

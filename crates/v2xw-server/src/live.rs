@@ -4344,7 +4344,10 @@ impl Engine for LiveEngine {
         Option<crate::compare::RunDigest>,
         Vec<crate::compare::RunDigest>,
     ) {
-        (self.current_digest(), self.past_runs.iter().cloned().collect())
+        (
+            self.current_digest(),
+            self.past_runs.iter().cloned().collect(),
+        )
     }
 
     fn control(&mut self, command: Control) -> Result<ControlOutcome> {
