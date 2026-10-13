@@ -4005,9 +4005,33 @@ impl Engine {
         // What each cooperative vehicle heard, for its CACC or platoon law (`run/coop.rs`).
         self.feed_cooperative(&results, now);
 
-        for (_, _, records, _) in &results {
-            for rec in records {
-                self.providers.on_event(rec);
+        // The metric views of the node records, decoded from their JSON in parallel over
+        // the nodes (a pure function of each record) and handed over in the same order, so
+        // the providers see exactly what `on_event` would have decoded on this thread.
+        let (want_tx, want_rx) = (
+            self.providers.wants("node.tx"),
+            self.providers.wants("node.rx"),
+        );
+        let mut views: Vec<Vec<Option<v2xw_metrics::Predecoded>>> = results
+            .par_iter()
+            .map(|(_, _, records, _)| {
+                records
+                    .iter()
+                    .map(|rec| match rec.channel {
+                        "node.tx" if want_tx => v2xw_metrics::Predecoded::of::<
+                            v2xw_metrics::channels::NodeTxView,
+                        >(rec),
+                        "node.rx" if want_rx => v2xw_metrics::Predecoded::of::<
+                            v2xw_metrics::channels::NodeRxView,
+                        >(rec),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect();
+        for ((_, _, records, _), node_views) in results.iter().zip(views.iter_mut()) {
+            for (rec, view) in records.iter().zip(node_views.drain(..)) {
+                self.providers.on_event_predecoded(rec, view);
                 recorder.write(now, rec);
                 self.report.records += 1;
             }
