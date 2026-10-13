@@ -682,6 +682,11 @@ pub fn run_native(
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0.0),
+            // A diagnostic knob: `V2XW_XVAL_LC2013=1` runs SUMO LC2013's motivations at
+            // SUMO's defaults (`traffic.lc_*`) in place of MOBIL. Unset is the default.
+            lc2013: std::env::var("V2XW_XVAL_LC2013")
+                .is_ok_and(|v| v == "1")
+                .then(v2xw_mobility::lanechange::lc2013::Lc2013Params::default),
             ..EngineParams::default()
         }),
     );

@@ -1534,6 +1534,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "traffic.permitted_left_gap_s" => "Left turn on green: gap accepted",
         "traffic.turn_lateral_accel_mps2" => "Cornering acceleration through junctions",
         "traffic.turn_curve_window_m" => "Corner radius judged over",
+        "traffic.heavy_vehicle_gap_terms" => "Trucks and buses wait for longer gaps (HCM)",
         "traffic.lc_strategic" => "Lane change for the turn: eagerness (LC2013)",
         "traffic.lc_cooperative" => "Lane change to let others in (LC2013)",
         "traffic.lc_speed_gain" => "Lane change for speed: eagerness (LC2013)",

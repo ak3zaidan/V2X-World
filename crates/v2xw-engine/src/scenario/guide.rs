@@ -595,6 +595,11 @@ const ADVANCED: &[Basic] = &[
         recommended: "5.5 m/s² (SUMO); 3 to 6 m/s².",
     },
     Basic {
+        path: "traffic.heavy_vehicle_gap_terms",
+        explain: "Whether trucks and buses, which accelerate slowly, wait for longer gaps in traffic than cars before pulling out or turning left across it.",
+        recommended: "Off (today); on for HCM heavy-vehicle gaps (+1 s, +2 s on wide roads).",
+    },
+    Basic {
         path: "traffic.lc_speed_gain",
         explain: "How readily drivers change lane to get past slower traffic; setting any of the lane-change eagerness settings switches to SUMO's LC2013 lane-changing.",
         recommended: "Unset (today's MOBIL); 1 (SUMO default); 0.5 to 2.",

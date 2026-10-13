@@ -509,6 +509,9 @@ pub fn native_mobility(scenario: &Scenario) -> NativeMobility {
     if let Some(v) = traffic.turn_curve_window_m {
         params.turn_curve_window_m = v;
     }
+    if let Some(v) = traffic.heavy_vehicle_gap_terms {
+        params.heavy_vehicle_gap_terms = v;
+    }
     // SUMO LC2013's motivations: any lc_* field switches them on; the unset ones take
     // SUMO's default of 1 (`v2xw_mobility::lanechange::lc2013`).
     if traffic.lc_strategic.is_some()

@@ -212,6 +212,12 @@ pub struct Traffic {
     /// `lc_strategic`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lc_keep_right: Option<f64>,
+    /// Whether trucks, buses and coaches wait for longer gaps than cars when yielding:
+    /// the HCM 6th ed. heavy-vehicle terms (Exhibit 20-11: +1.0 s critical gap on a major
+    /// road of under four lanes, +2.0 s on four or more; +0.9 / 1.0 s follow-up), at
+    /// unsignalised junctions and on a permitted left. Unset is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heavy_vehicle_gap_terms: Option<bool>,
     /// Kerbside stops: buses at stops, taxis picking up, delivery vans double-parked.
     /// Unset follows the jurisdiction (New York City has its taxis).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -311,6 +317,7 @@ impl Default for Traffic {
             lc_cooperative: None,
             lc_speed_gain: None,
             lc_keep_right: None,
+            heavy_vehicle_gap_terms: None,
             kerbside: None,
         }
     }

@@ -205,6 +205,19 @@ pub struct GapAcceptanceParams {
     /// drivers accept shorter gaps (aggressive), above 1 they wait for longer ones. 1 is
     /// the table (`traffic.critical_gap_factor`).
     pub gap_factor: f64,
+    /// Whether a heavy vehicle (truck, trailer, bus, coach) adds the HCM's heavy-vehicle
+    /// terms for one heavy vehicle (`P_HV` = 1): `t_c,HV` = 1.0 s on a major flow of under
+    /// four lanes, 2.0 s on four or more, and `t_f,HV` = 0.9 s / 1.0 s (HCM 6th ed.
+    /// Exhibit 20-11, **secondary** like the table above). Off by default
+    /// (`traffic.heavy_vehicle_gap_terms`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub heavy_vehicle_terms: bool,
+}
+
+/// The HCM 6th ed. Exhibit 20-11 heavy-vehicle adjustments for one heavy vehicle:
+/// (`t_c,HV`, `t_f,HV`) in seconds on a major flow of `major_lanes` lanes.
+pub fn hcm_heavy_vehicle_terms_s(major_lanes: u8) -> (f64, f64) {
+    if major_lanes >= 4 { (2.0, 1.0) } else { (1.0, 0.9) }
 }
 
 impl Default for GapAcceptanceParams {
@@ -215,6 +228,7 @@ impl Default for GapAcceptanceParams {
             legacy_closest_first: true,
             standing_speed_mps: STANDING_SPEED_MPS,
             gap_factor: 1.0,
+            heavy_vehicle_terms: false,
         }
     }
 }
@@ -274,7 +288,13 @@ impl IntersectionControl for GapAcceptance {
         let on_minor = conflicts.iter().any(|c| c.conflicts && c.ego_must_yield);
         let movement = Movement::classify(j.movement, on_minor);
         let gaps = HcmGaps::of(movement);
-        let critical = gaps.critical_gap_s(j.major_lanes) * self.params.gap_factor;
+        let (hv_c, hv_f) =
+            if self.params.heavy_vehicle_terms && crate::style::is_heavy(ego.class) {
+                hcm_heavy_vehicle_terms_s(j.major_lanes)
+            } else {
+                (0.0, 0.0)
+            };
+        let critical = (gaps.critical_gap_s(j.major_lanes) + hv_c) * self.params.gap_factor;
 
         // How many vehicles of this ego's own queue are ahead of it: each needs its own
         // follow-up time before the ego can use the same gap.
@@ -290,7 +310,8 @@ impl IntersectionControl for GapAcceptance {
         } else {
             0
         };
-        let required = critical + gaps.follow_up_s * self.params.gap_factor * ahead as f64;
+        let required =
+            critical + (gaps.follow_up_s + hv_f) * self.params.gap_factor * ahead as f64;
 
         // The smallest time-to-stop-line among the conflicting claimants the ego must give
         // way to. A standing claimant never closes a gap

@@ -2996,6 +2996,11 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Judges a corner's radius over its tightest arc of this length instead of its average.",
     },
     KeyStatus {
+        path: "traffic.heavy_vehicle_gap_terms",
+        status: Status::Wired,
+        note: "Heavy vehicles add the HCM 6th ed. Exhibit 20-11 heavy-vehicle critical gap and follow-up terms.",
+    },
+    KeyStatus {
         path: "traffic.lc_strategic",
         status: Status::Wired,
         note: "SUMO LC2013 look-ahead for route lane changes; any lc_* switches discretionary changes from MOBIL to LC2013.",
@@ -3760,6 +3765,7 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             || t.lc_cooperative.is_some()
             || t.lc_speed_gain.is_some()
             || t.lc_keep_right.is_some()
+            || t.heavy_vehicle_gap_terms.is_some()
             || t.kerbside.is_some();
         // The LC2013 factors act only on lane changes, and the strategic one only on the
         // changes a route needs.

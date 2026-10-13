@@ -750,6 +750,12 @@ pub struct EngineParams {
     /// ([`crate::intersection::signal_fixed_time::HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S`],
     /// HCM 6th ed. ch. 31: 4.5 s).
     pub permitted_left_critical_headway_s: f64,
+    /// Whether heavy vehicles add the HCM 6th ed. Exhibit 20-11 heavy-vehicle terms to
+    /// their critical gap and follow-up time, at unsignalised junctions and on a
+    /// permitted left ([`crate::intersection::gap_acceptance::hcm_heavy_vehicle_terms_s`]).
+    /// Off by default; `traffic.heavy_vehicle_gap_terms`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub heavy_vehicle_gap_terms: bool,
     /// A multiplier on the HCM critical gaps and follow-up times at unsignalised
     /// junctions ([`GapAcceptanceParams::gap_factor`]); 1.0.
     pub critical_gap_factor: f64,
@@ -837,6 +843,7 @@ impl Default for EngineParams {
             speed_factor_mean: 1.0,
             speed_spread: 1.0,
             start_reaction_median_s: REACTION_MEDIAN_S,
+            heavy_vehicle_gap_terms: false,
             permitted_left_critical_headway_s:
                 crate::intersection::signal_fixed_time::HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S,
             critical_gap_factor: 1.0,
@@ -1470,12 +1477,14 @@ impl NativeMobility {
             lane_change: params.lane_changes.then_some(mobil),
             gap: GapAcceptance::new(GapAcceptanceParams {
                 gap_factor: params.critical_gap_factor,
+                heavy_vehicle_terms: params.heavy_vehicle_gap_terms,
                 ..GapAcceptanceParams::default()
             }),
             signals: FixedTimeSignals::new(SignalPlanParams {
                 right_turn_on_red: params.right_turn_on_red,
                 gap_factor: params.critical_gap_factor,
                 permitted_left_critical_headway_s: params.permitted_left_critical_headway_s,
+                heavy_vehicle_terms: params.heavy_vehicle_gap_terms,
                 ..SignalPlanParams::default()
             }),
             two_coloring: None,
