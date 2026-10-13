@@ -403,6 +403,49 @@ pub(super) fn apply_repaired(doc: &mut Value, key: &str, value: &Value) -> Resul
     })
 }
 
+/// A tool's `changes` argument in the one shape the tools apply, `[{key, value, why}]`,
+/// from the shapes models also write: a map `{"radio.rat": "lte-v2x-pc5"}`, a single change
+/// object, a change whose key is under `path` / `setting` / `name` and whose value is under
+/// `to` / `set`. Anything else is passed through for the tool to refuse.
+pub(super) fn changes_of(v: Option<&Value>) -> Vec<Value> {
+    let one = |c: &Value| -> Value {
+        let Some(o) = c.as_object() else {
+            return c.clone();
+        };
+        if o.contains_key("key") && o.contains_key("value") {
+            return c.clone();
+        }
+        let key = ["key", "path", "setting", "name", "field"]
+            .iter()
+            .find_map(|k| o.get(*k).filter(|v| v.is_string()));
+        let value = ["value", "to", "set", "new_value", "new"]
+            .iter()
+            .find_map(|k| o.get(*k));
+        match (key, value) {
+            (Some(k), Some(v)) => {
+                json!({"key": k, "value": v, "why": o.get("why").cloned().unwrap_or(json!(""))})
+            }
+            _ => c.clone(),
+        }
+    };
+    match v {
+        Some(Value::Array(a)) => a.iter().map(one).collect(),
+        Some(Value::Object(o)) if o.contains_key("key") || o.contains_key("path") => {
+            vec![one(&Value::Object(o.clone()))]
+        }
+        Some(Value::Object(o)) => o
+            .iter()
+            .map(|(k, v)| json!({"key": k, "value": v, "why": ""}))
+            .collect(),
+        Some(Value::String(s)) => serde_json::from_str::<Value>(s)
+            .ok()
+            .filter(|p| p.is_array() || p.is_object())
+            .map(|p| changes_of(Some(&p)))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
 /// `why`, with the repair notes after it.
 pub(super) fn why_with(why: String, notes: &[String]) -> String {
     if notes.is_empty() {
@@ -761,11 +804,7 @@ fn setup<P: LlmProvider, T: RpcTransport>(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let changes = args
-        .get("changes")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let changes = changes_of(args.get("changes"));
     let before = agent.rpc.call("scenario.get", &json!({})).ok();
     let prepared = agent.prepare_with(&base, &reason, &changes, false, sink)?;
     if prepared.get("ok") != Some(&Value::Bool(true)) {
@@ -862,11 +901,7 @@ fn simulate<P: LlmProvider, T: RpcTransport>(
         s("base")
     };
     let reason = s("reason");
-    let common: Vec<Value> = args
-        .get("changes")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let common: Vec<Value> = changes_of(args.get("changes"));
     let mut variants: Vec<(String, Vec<Value>)> = args
         .get("variants")
         .and_then(Value::as_array)
@@ -880,10 +915,7 @@ fn simulate<P: LlmProvider, T: RpcTransport>(
                 .map_or_else(|| format!("arm {}", i + 1), str::to_string);
             (
                 label,
-                v.get("changes")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default(),
+                changes_of(v.get("changes")),
             )
         })
         .collect();
@@ -1416,11 +1448,44 @@ fn run_control<P: LlmProvider, T: RpcTransport>(
     args: &Value,
     sink: &mut dyn FnMut(AgentEvent),
 ) -> Result<Value> {
-    let action = args
+    let raw = args
         .get("action")
         .and_then(Value::as_str)
-        .unwrap_or("status");
-    let num = |k: &str| args.get(k).and_then(Value::as_f64);
+        .unwrap_or("status")
+        .trim()
+        .to_ascii_lowercase();
+    // The words a model also uses for an action, and a number written with its unit
+    // ("4x", "30 s").
+    let mut args = args.clone();
+    let action = match raw.as_str() {
+        "play" | "run" | "go" | "begin" => "start",
+        "unpause" | "continue" => "resume",
+        "halt" | "end" | "cancel" => "stop",
+        "restart" | "rewind" | "reset" => {
+            args["t_s"] = json!(0.0);
+            "seek"
+        }
+        "set_speed" | "speed_up" | "slow_down" => "speed",
+        "jump" | "goto" | "go_to" => "seek",
+        "run_until" | "advance_to" => "run_to",
+        "state" | "get_status" => "status",
+        other => other,
+    }
+    .to_string();
+    let action = action.as_str();
+    let num = |k: &str| {
+        args.get(k).and_then(|v| {
+            v.as_f64().or_else(|| {
+                v.as_str().and_then(|s| {
+                    let t: String = s
+                        .trim()
+                        .trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '×' || c == ' ')
+                        .to_string();
+                    t.parse().ok()
+                })
+            })
+        })
+    };
     match action {
         "status" => {}
         "pause" | "resume" => {
@@ -1439,16 +1504,19 @@ fn run_control<P: LlmProvider, T: RpcTransport>(
             agent.rpc.call("run.speed", &json!({"speed": v}))?;
         }
         "start" => {
-            let paused = args.get("paused").and_then(Value::as_bool).unwrap_or(true);
+            // "Start the run" means it plays, at the speed the person has set (the
+            // server keeps the current speed when none is sent) unless one is given.
+            let paused = args.get("paused").and_then(Value::as_bool).unwrap_or(false);
             let _ = agent.rpc.call("run.pause", &json!({}));
             let doc = match &agent.prepared {
                 Some(p) => p.document.clone(),
                 None => agent.base_document("current")?,
             };
-            let started = agent.rpc.call(
-                "run.start",
-                &json!({"scenario": &doc, "speed": agent.policy.speed, "paused": paused}),
-            )?;
+            let mut params = json!({"scenario": &doc, "paused": paused});
+            if let Some(s) = num("speed") {
+                params["speed"] = json!(s);
+            }
+            let started = agent.rpc.call("run.start", &params)?;
             agent.last_document = Some(doc);
             sink(AgentEvent::RunStarted {
                 label: "manual".into(),
@@ -1786,6 +1854,21 @@ fn inspect<P: LlmProvider, T: RpcTransport>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changes_written_in_other_shapes_are_read_as_the_one_shape() {
+        let want = vec![json!({"key": "radio.rat", "value": "lte-v2x-pc5", "why": ""})];
+        assert_eq!(changes_of(Some(&json!({"radio.rat": "lte-v2x-pc5"}))), want);
+        assert_eq!(
+            changes_of(Some(&json!([{"path": "radio.rat", "to": "lte-v2x-pc5"}]))),
+            want
+        );
+        assert_eq!(
+            changes_of(Some(&json!("[{\"key\":\"radio.rat\",\"value\":\"lte-v2x-pc5\",\"why\":\"\"}]"))),
+            want
+        );
+        assert!(changes_of(None).is_empty());
+    }
 
     #[test]
     fn a_setups_changes_read_as_short_chips() {

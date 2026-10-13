@@ -40,3 +40,30 @@ minutes; the "before" run of the harness as received cost about four.
 
 A model is not deterministic: a single failing case is a finding to read (the transcript
 says why), not a flaky test to re-run until it passes.
+
+## The harness suite (`harness.yaml`)
+
+`harness.yaml` asks for control rather than analysis: 48 cases that set a published
+setting by its plain name or a synonym ("make the radio weaker", "use C-V2X mode 4",
+"IDM headway 2 s for trucks"), set several at once, pick a city, have a refusal
+explained, drive the run (start, pause, speed, restart, duration), compare runs (A vs B,
+"compare with the previous run", a sweep) and answer from measured numbers.
+
+Its offline half runs on every `cargo test -p v2xw-copilot --test harness_eval`, with
+no model: a settings search with the person's own words finds the key (`resolve`), a
+change written as a model writes it ("2 min", "30%", "C-V2X mode 4", a key without its
+first segments) lands on the right key and value and the loader accepts it (`repair`),
+and a refused value comes back explained (`refuse`). It was 20/60 on the harness as
+received and is 60/60 now.
+
+Its live half is the cases marked `live: true`, run by the same example:
+
+```sh
+cargo run -p v2xw-copilot --example agent_eval -- \
+    --suite crates/v2xw-copilot/evals/harness.yaml --server-bin <v2xw-server> --port 8752
+```
+
+`--all` runs every case. On top of `prompts.yaml`'s checks it scores `draft` (the Settings
+window's draft after the turn), `calls` (a tool called with arguments containing these)
+and `no_calls`. The draft is put back to the engine's starting scenario before every case
+that is not a follow-up.

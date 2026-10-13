@@ -834,11 +834,7 @@ impl<P: LlmProvider, T: RpcTransport> Agent<P, T> {
             }),
             "find_settings" => Ok(crate::catalog::find_settings(&s("query"), 12)),
             "prepare_scenario" => {
-                let changes = args
-                    .get("changes")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
+                let changes = control::changes_of(args.get("changes"));
                 self.prepare(&s("base"), &s("reason"), &changes, sink)
             }
             "run_prepared" => {
