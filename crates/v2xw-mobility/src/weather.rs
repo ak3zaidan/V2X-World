@@ -194,9 +194,25 @@ pub fn fhwa_driving_effects(w: &WeatherState, road: RoadContext) -> DrivingEffec
         // the neutral element rather than a guessed band.
         _ => ((0.0, 0.0), (0.0, 0.0)),
     };
-    let mid = |band: (f64, f64)| 0.5 * (band.0 + band.1);
-    let speed_cut = mid(speed);
-    let capacity_cut = mid(capacity);
+    // Where the cut sits inside its band. The freeway rows already split light from heavy,
+    // so they take the band midpoint (§2.6). The arterial rows are written by pavement state
+    // only (FHWA Road Weather Management, "Impacts on arterials": wet pavement 10-25 %
+    // speed, 2-21 % saturation flow; snowy 30-40 % speed, 15-30 % volume), so without this
+    // a downpour and a drizzle gave one number on every city street. There the precipitation
+    // intensity places the cut linearly across the band: the low end of the band for a trace
+    // and the high end for the heaviest modelled event, which matches the ordering HCM 7th
+    // ed. Exhibit 11-20 gives (speed loss grows with rain and snow rate). Intensity 0.5 is
+    // the midpoint, so the old value is kept at the threshold. Fog has no precipitation
+    // rate and stays at the midpoint.
+    let position = match (road, w.kind) {
+        (RoadContext::Arterial, WeatherKind::Rain | WeatherKind::Snow | WeatherKind::Sleet) => {
+            w.intensity.clamp(0.0, 1.0)
+        }
+        _ => 0.5,
+    };
+    let at = |band: (f64, f64)| band.0 + position * (band.1 - band.0);
+    let speed_cut = at(speed);
+    let capacity_cut = at(capacity);
     DrivingEffects {
         desired_speed_factor: 1.0 - speed_cut,
         headway_factor: 1.0 / (1.0 - capacity_cut),
@@ -400,8 +416,8 @@ mod scenario_weather_tests {
             RoadContext::Freeway
         );
         assert_eq!(RoadContext::Freeway.resolve(5.0), RoadContext::Freeway);
-        // Rain slows a 25 mph street by the arterial band's midpoint, 17.5 %.
-        let rain = WeatherState::new(WeatherKind::Rain, 0.2, f64::INFINITY, SurfaceCondition::Wet);
+        // Rain at intensity 0.5 slows a 25 mph street by the arterial band's midpoint, 17.5 %.
+        let rain = WeatherState::new(WeatherKind::Rain, 0.5, f64::INFINITY, SurfaceCondition::Wet);
         let e = fhwa_driving_effects(&rain, RoadContext::BySpeedLimit.resolve(11.176));
         assert!((e.desired_speed_factor - 0.825).abs() < 1e-12);
     }
@@ -467,6 +483,19 @@ mod tests {
             assert_eq!(n.desired_speed_factor, 1.0);
             assert_eq!(n.headway_factor, 1.0);
         }
+    }
+
+    #[test]
+    fn heavier_rain_and_snow_slow_an_arterial_more() {
+        for kind in [WeatherKind::Rain, WeatherKind::Snow] {
+            let light = fhwa_driving_effects(&state(kind, 0.2), RoadContext::Arterial);
+            let heavy = fhwa_driving_effects(&state(kind, 0.9), RoadContext::Arterial);
+            assert!(heavy.desired_speed_factor < light.desired_speed_factor);
+            assert!(heavy.headway_factor > light.headway_factor);
+        }
+        // Full intensity reaches the top of the wet band, 25 %.
+        let e = fhwa_driving_effects(&state(WeatherKind::Rain, 1.0), RoadContext::Arterial);
+        assert!((e.desired_speed_factor - 0.75).abs() < 1e-12);
     }
 
     #[test]
