@@ -45,8 +45,20 @@ families:
   - name: pedestrians
     base: ../vru-grid.yaml
     set: {time.duration_s: 40.0, metrics: [all]}
+  # A truck-heavy freeway: the six-lane highway (highway-congestion.yaml) at 65 mph with
+  # 30 % trucks, the share of rural Interstates (FHWA Highway Statistics 2019, VM-1:
+  # combination and single-unit trucks are 25-35 % of rural Interstate VMT). On the Midtown
+  # grid a truck's own gap was below the headway metric's resolution: trucks there mostly
+  # queue at signals. On a free-flowing freeway they follow at their desired time gap, so
+  # the truck time headway shows in the fleet's mean.
+  - name: freeway
+    base: ../highway-congestion.yaml
+    set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 12000.0,
+          actors.vehicles.classes: {passenger: {fraction: 0.7}, truck: {fraction: 0.3}},
+          metrics: [all]}
 
 routes:
+  - {prefix: actors.vehicles.drivers.truck.time_headway_s, families: [freeway, traffic]}
   - {prefix: radio.sidelink, families: [cv2x, nr]}
   - {prefix: net.geonet, families: [gn]}
   - {prefix: net, families: [gn, dsrc, security]}
@@ -153,6 +165,8 @@ context:
   - {prefix: actors.vehicles.drivers.motorcycle, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, motorcycle: {fraction: 0.2}}}}
   - {prefix: actors.vehicles.drivers.motorcycle_filtering, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, motorcycle: {fraction: 0.2}}}}
   - {prefix: radio.channel_model.vehicle_blockage, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}}
+  # The freeway family's own 30 % trucks, not the 20 % urban context above.
+  - {prefix: actors.vehicles.drivers.truck.time_headway_s, set: {actors.vehicles.classes: {passenger: {fraction: 0.7}, truck: {fraction: 0.3}}}}
   # Kerbside stops on a car-only fleet come from taxis alone, and only the New York preset
   # has taxis (v2xw-mobility kerbside.rs). taxi_share with enabled: false is refused by the
   # loader (it would do nothing), so the context is the jurisdiction instead.

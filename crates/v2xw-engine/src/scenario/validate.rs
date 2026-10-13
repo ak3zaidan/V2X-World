@@ -3109,7 +3109,35 @@ pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     e.extend(crate::driving::validate(s));
     network_audit(s, &mut e);
     unreachable_keys(s, &mut e);
+    absent_radio_holders(s, &mut e);
     e
+}
+
+/// Roadside and handset radio settings do nothing when the scenario has no roadside unit
+/// or no pedestrian or cyclist carrying a device, the same rule the per-class driver
+/// settings follow.
+fn absent_radio_holders(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let d = &s.radio.devices;
+    let no_rsu = s.actors.rsus.is_empty() && s.actors.rsu_placement.is_none();
+    if no_rsu && d.rsu != crate::scenario::schema::RsuRadio::default() {
+        e.push(conflict(
+            "radio.devices.rsu",
+            "sets the roadside units' radio, and the scenario has none; add actors.rsus or \
+             actors.rsu_placement, or unset it"
+                .to_string(),
+        ));
+    }
+    let v = &s.actors.vru;
+    let no_handset = v.pedestrians + v.cyclists == 0 || v.device_fraction == 0.0;
+    if no_handset && d.vru != crate::scenario::schema::VruRadio::default() {
+        e.push(conflict(
+            "radio.devices.vru",
+            "sets pedestrians' and cyclists' handset radio, and none carries one; add \
+             actors.vru.pedestrians or actors.vru.cyclists with a device_fraction above 0, \
+             or unset it"
+                .to_string(),
+        ));
+    }
 }
 
 /// The security lifecycle's and the backend's keys, checked by the very functions that
@@ -3614,7 +3642,34 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
     }
     // A class's numbers do nothing when the fleet has none of that class.
     let classes = &s.actors.vehicles.classes;
-    let has = |names: &[&str]| classes.is_empty() || names.iter().any(|n| classes.contains_key(*n));
+    // With no `classes`, the Poisson models draw from their `fleet` preset, whose default
+    // is cars only; the other demand kinds (GTFS buses, OD tables, composites) may bring
+    // any class, so they are given the benefit of the doubt.
+    let demand = &s.actors.vehicles.demand;
+    let poisson = matches!(
+        demand.kind.as_str(),
+        "mobility/demand/poisson" | v2xw_mobility::demand::poisson::MODEL_ID
+    );
+    let fleet = demand
+        .params
+        .get("fleet")
+        .and_then(|v| v.as_str())
+        .unwrap_or("cars-only");
+    let preset_has = |names: &[&str]| {
+        !poisson
+            || match fleet {
+                "cars-only" => false,
+                "kesting2007" => names.contains(&"truck"),
+                _ => true,
+            }
+    };
+    let has = |names: &[&str]| {
+        if classes.is_empty() {
+            preset_has(names)
+        } else {
+            names.iter().any(|n| classes.contains_key(*n))
+        }
+    };
     let per_class: [(&str, &Option<ClassDriver>, bool); 4] = [
         ("truck", &dv.truck, has(&["truck", "trailer"])),
         ("bus", &dv.bus, has(&["bus", "coach"])),
@@ -3638,7 +3693,10 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
             let why = if name == "bicycle" {
                 "sets cyclists' driving, and actors.vru.cyclists is 0".to_string()
             } else {
-                format!("sets {name} driving, and actors.vehicles.classes has no {name}")
+                format!(
+                    "sets {name} driving, and the fleet has no {name}; add a {name} share to \
+                     actors.vehicles.classes (for example {name}: {{fraction: 0.1}}) or unset it"
+                )
             };
             e.push(conflict(&format!("actors.vehicles.drivers.{name}"), why));
         }
