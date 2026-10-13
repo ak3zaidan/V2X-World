@@ -3816,4 +3816,14 @@ Track: the built-in agent (`crates/v2xw-copilot`, the agent host in `v2xw-cli`).
 - **Permitted-left Raff 6.79 s, reviewed and not fixed.** The decision rule judges the opposing car as if it accelerates at 1.4 m/s² up to 11.2 m/s (`time_to_stop_line_launching_s`). The tracker times the car's real arrival, from an ETA at its present speed. A car cruising below the cap is therefore rejected on a predicted lag that is shorter than the one measured. That is a likely source of the long "rejected" lags.
   - SUMO `MSLink::blockedAtTime` instead compares the foe's announced arrival window with the ego's own leave time plus a 1 s minor time gap. Impatience blends in the foe's braking arrival.
   - Aligning the two would change the defaults, so it was not done this round.
-- **Cross-validation (Manhattan @1200, quick, LC2013 on):** lane changes per vehicle-km came out at 0.02 against SUMO's 0.67. LC2013 as wired suppresses changes; this is a defect still to be found. Halting time per trip is 99 s against 136 s (-27 %). The baseline comparison run and the new ring test `lc2013_overtakes_a_slow_leader` were queued behind another agent's heavy job and had not run when this was written.
+- **Cross-validation, Manhattan @1200, quick, same build.** These numbers show LC2013 is not ready as a default:
+
+  | Run | Lane changes per vehicle-km | vs SUMO Krauss 0.67 | Halting time per trip |
+  |---|---|---|---|
+  | MOBIL baseline | 0.48 | -28 % | 93.8 s |
+  | LC2013 on | 0.02 | -97 % | 99.0 s |
+
+  - On the network, LC2013 almost stops lane changes, strategic ones included.
+  - On a two-lane ring with no junctions it does overtake: the test `engine::tests::lc2013_overtakes_a_slow_leader` passes, and so do the 2 `lc2013` unit tests.
+  - The defect is therefore in the junction-network path. Suspects to check first: `lc2013_strategic_due` gating strategic changes; `lane_route_dist` and the remain-time rule; the offer filter.
+  - It is not yet traced. Keep it opt-in.
