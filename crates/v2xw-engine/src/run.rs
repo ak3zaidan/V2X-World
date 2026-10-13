@@ -4018,12 +4018,12 @@ impl Engine {
                 records
                     .iter()
                     .map(|rec| match rec.channel {
-                        "node.tx" if want_tx => v2xw_metrics::Predecoded::of::<
-                            v2xw_metrics::channels::NodeTxView,
-                        >(rec),
-                        "node.rx" if want_rx => v2xw_metrics::Predecoded::of::<
-                            v2xw_metrics::channels::NodeRxView,
-                        >(rec),
+                        "node.tx" if want_tx => {
+                            v2xw_metrics::Predecoded::of::<v2xw_metrics::channels::NodeTxView>(rec)
+                        }
+                        "node.rx" if want_rx => {
+                            v2xw_metrics::Predecoded::of::<v2xw_metrics::channels::NodeRxView>(rec)
+                        }
                         _ => None,
                     })
                     .collect()

@@ -46,7 +46,7 @@ pub struct Tally<R: RunRecorder> {
     /// `SHA-256(t ‖ channel ‖ visibility ‖ json)*` [`v2xw_engine::DigestRecorder`] computes.
     /// It is taken in front of any filter, so it names what the engine emitted whatever
     /// reached the recording, and a resumed run is checked against it.
-    digest: v2xw_core::hash::Sha256Writer,
+    digest: v2xw_core::hash::ThreadedSha256,
     records: u64,
 }
 
@@ -58,7 +58,7 @@ impl<R: RunRecorder> Tally<R> {
             by_channel: BTreeMap::new(),
             metrics: None,
             metric_count: 0,
-            digest: v2xw_core::hash::Sha256Writer::new(),
+            digest: v2xw_core::hash::ThreadedSha256::new(),
             records: 0,
             frames: 0,
         }
@@ -96,7 +96,7 @@ impl<R: RunRecorder> Tally<R> {
 
     /// The record digest so far, hex.
     pub fn record_digest_hex(&self) -> String {
-        self.digest.clone().finish_hex()
+        self.digest.finish_hex()
     }
 
     /// How many records went past, over every channel.
@@ -159,10 +159,8 @@ impl<R: RunRecorder> RunRecorder for Tally<R> {
         self.digest.update(&at.to_le_bytes());
         self.digest.update(record.channel.as_bytes());
         // The same bytes `to_string()` gave, written straight into the hash.
-        let _ = core::fmt::Write::write_fmt(
-            &mut DigestFmt(&mut self.digest),
-            format_args!("{}", record.visibility),
-        );
+        let _ =
+            core::fmt::Write::write_fmt(&mut self.digest, format_args!("{}", record.visibility));
         self.digest.update(&record.json);
         if record.channel == "metric.sample" {
             self.metric_count += 1;
@@ -191,15 +189,5 @@ impl<R: RunRecorder> RunRecorder for Tally<R> {
 
     fn cancelled(&self) -> bool {
         self.inner.cancelled()
-    }
-}
-
-/// Feeds formatted text into the digest without building a `String` first.
-struct DigestFmt<'a>(&'a mut v2xw_core::hash::Sha256Writer);
-
-impl core::fmt::Write for DigestFmt<'_> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        self.0.update(s.as_bytes());
-        Ok(())
     }
 }

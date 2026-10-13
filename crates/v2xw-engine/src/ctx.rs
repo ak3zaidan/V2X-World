@@ -242,14 +242,11 @@ impl RunRecorder for MemoryRecorder {
 /// # The hashing runs on its own thread
 ///
 /// `write` only appends the record's bytes to a batch; full batches go over a channel to
-/// one hasher thread, which feeds them to SHA-256 in the order they were sent. SHA-256 of
-/// a concatenation does not depend on how it was split into updates, so the digest is
-/// the serial one byte for byte, and the main loop no longer pays for the hashing.
-/// Where threads are unavailable (wasm) the batches are hashed inline.
+/// one hasher thread ([`v2xw_core::hash::ThreadedSha256`]), which feeds them to SHA-256
+/// in the order they were sent, so the digest is the serial one byte for byte.
 pub struct DigestRecorder {
-    pipe: DigestPipe,
-    pending: Vec<u8>,
-    pending_frames: Vec<u8>,
+    hasher: v2xw_core::hash::ThreadedSha256,
+    frame_hasher: v2xw_core::hash::ThreadedSha256,
     written: u64,
     frames: u64,
     per_channel: std::collections::BTreeMap<String, (u64, u64)>,
@@ -277,9 +274,8 @@ impl DigestRecorder {
     /// An empty recorder.
     pub fn new() -> Self {
         Self {
-            pipe: DigestPipe::start(),
-            pending: Vec::with_capacity(DIGEST_BATCH_BYTES + 4096),
-            pending_frames: Vec::new(),
+            hasher: v2xw_core::hash::ThreadedSha256::new(),
+            frame_hasher: v2xw_core::hash::ThreadedSha256::new(),
             written: 0,
             frames: 0,
             per_channel: std::collections::BTreeMap::new(),
@@ -303,7 +299,7 @@ impl DigestRecorder {
 
     /// The digest over every record, in order: `SHA-256(t ‖ channel ‖ visibility ‖ json)*`.
     pub fn digest_hex(&self) -> String {
-        self.pipe.snapshot(&self.pending, &self.pending_frames).0
+        self.hasher.finish_hex()
     }
 
     /// The digest over every VWP frame, in order: `SHA-256(frame bytes)*`.
@@ -312,149 +308,17 @@ impl DigestRecorder {
     /// [`MemoryRecorder::frame_digest_hex`] gives: the record digest is a published
     /// number and adding a second stream to it would move it for no determinism reason.
     pub fn frame_digest_hex(&self) -> String {
-        self.pipe.snapshot(&self.pending, &self.pending_frames).1
-    }
-
-    fn flush_if_full(&mut self) {
-        if self.pending.len() >= DIGEST_BATCH_BYTES {
-            let batch = std::mem::replace(
-                &mut self.pending,
-                Vec::with_capacity(DIGEST_BATCH_BYTES + 4096),
-            );
-            self.pipe.send(DigestMsg::Records(batch));
-        }
-        if self.pending_frames.len() >= DIGEST_BATCH_BYTES {
-            let batch = std::mem::take(&mut self.pending_frames);
-            self.pipe.send(DigestMsg::Frames(batch));
-        }
-    }
-}
-
-/// How many bytes `DigestRecorder` gathers before handing a batch to its hasher.
-const DIGEST_BATCH_BYTES: usize = 256 * 1024;
-
-enum DigestMsg {
-    Records(Vec<u8>),
-    Frames(Vec<u8>),
-    /// The digests so far plus these unsent tails, answered on the channel given.
-    Snapshot(Vec<u8>, Vec<u8>, std::sync::mpsc::Sender<(String, String)>),
-}
-
-/// The two running hashes, with the batch hashing that every pipe shares.
-#[derive(Clone)]
-struct DigestState {
-    records: v2xw_core::hash::Sha256Writer,
-    frames: v2xw_core::hash::Sha256Writer,
-}
-
-impl DigestState {
-    fn new() -> Self {
-        Self {
-            records: v2xw_core::hash::Sha256Writer::new(),
-            frames: v2xw_core::hash::Sha256Writer::new(),
-        }
-    }
-
-    /// Applies one message; a snapshot is answered and leaves the state as it was.
-    fn apply(&mut self, msg: DigestMsg) {
-        match msg {
-            DigestMsg::Records(b) => self.records.update(&b),
-            DigestMsg::Frames(b) => self.frames.update(&b),
-            DigestMsg::Snapshot(r, f, reply) => {
-                let _ = reply.send(self.finish_with(&r, &f));
-            }
-        }
-    }
-
-    fn finish_with(&self, r: &[u8], f: &[u8]) -> (String, String) {
-        let mut rec = self.records.clone();
-        rec.update(r);
-        let mut fr = self.frames.clone();
-        fr.update(f);
-        (rec.finish_hex(), fr.finish_hex())
-    }
-}
-
-/// Where `DigestRecorder`'s batches go: one hasher thread fed in order, or inline.
-enum DigestPipe {
-    Thread {
-        tx: Option<std::sync::mpsc::Sender<DigestMsg>>,
-        handle: Option<std::thread::JoinHandle<()>>,
-    },
-    Inline(std::sync::Mutex<DigestState>),
-}
-
-impl DigestPipe {
-    fn start() -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let (tx, rx) = std::sync::mpsc::channel::<DigestMsg>();
-            let spawned = std::thread::Builder::new()
-                .name("v2xw-digest".into())
-                .spawn(move || {
-                    let mut state = DigestState::new();
-                    for msg in rx {
-                        state.apply(msg);
-                    }
-                });
-            if let Ok(handle) = spawned {
-                return Self::Thread {
-                    tx: Some(tx),
-                    handle: Some(handle),
-                };
-            }
-        }
-        Self::Inline(std::sync::Mutex::new(DigestState::new()))
-    }
-
-    fn send(&self, msg: DigestMsg) {
-        match self {
-            Self::Thread { tx: Some(tx), .. } => {
-                if let Err(e) = tx.send(msg) {
-                    unreachable!("digest thread ended early: {e}")
-                }
-            }
-            Self::Thread { tx: None, .. } => unreachable!("sender lives until drop"),
-            Self::Inline(state) => state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .apply(msg),
-        }
-    }
-
-    fn snapshot(&self, records: &[u8], frames: &[u8]) -> (String, String) {
-        match self {
-            Self::Thread { .. } => {
-                let (reply, answer) = std::sync::mpsc::channel();
-                self.send(DigestMsg::Snapshot(records.to_vec(), frames.to_vec(), reply));
-                answer.recv().unwrap_or_default()
-            }
-            Self::Inline(state) => state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .finish_with(records, frames),
-        }
-    }
-}
-
-impl Drop for DigestPipe {
-    fn drop(&mut self) {
-        if let Self::Thread { tx, handle } = self {
-            drop(tx.take());
-            if let Some(h) = handle.take() {
-                let _ = h.join();
-            }
-        }
+        self.frame_hasher.finish_hex()
     }
 }
 
 impl RunRecorder for DigestRecorder {
     fn write(&mut self, at: SimTime, record: &OwnedRecord) {
-        self.pending.extend_from_slice(&at.to_le_bytes());
-        self.pending.extend_from_slice(record.channel.as_bytes());
-        self.pending
-            .extend_from_slice(record.visibility.to_string().as_bytes());
-        self.pending.extend_from_slice(&record.json);
+        self.hasher.update(&at.to_le_bytes());
+        self.hasher.update(record.channel.as_bytes());
+        let _ =
+            core::fmt::Write::write_fmt(&mut self.hasher, format_args!("{}", record.visibility));
+        self.hasher.update(&record.json);
         self.written += 1;
         // Looked up by `&str` first: a channel's name is allocated once, not per record.
         if !self.per_channel.contains_key(record.channel) {
@@ -465,13 +329,11 @@ impl RunRecorder for DigestRecorder {
         };
         entry.0 += 1;
         entry.1 += record.json.len() as u64;
-        self.flush_if_full();
     }
 
     fn write_wire_frame(&mut self, frame: &v2xw_record::wire::Frame) {
-        self.pending_frames.extend_from_slice(frame.as_bytes());
+        self.frame_hasher.update(frame.as_bytes());
         self.frames += 1;
-        self.flush_if_full();
     }
 
     fn records_written(&self) -> Option<u64> {
