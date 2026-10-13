@@ -3,7 +3,7 @@
 //! Fast (default): every interaction check builds and validates its four scenarios; the
 //! judging goes red on a wrong expectation; one cheap interaction runs end to end.
 //! Full (`cargo test -p v2xw-engine --test sensitivity_expectations -- --ignored`, about
-//! 25 minutes on two threads): every row of `tests/expectations/*.yaml` and every check in
+//! 7 minutes on two threads): every row of `tests/expectations/*.yaml` and every check in
 //! `tests/expectations/interactions/*.yaml` holds.
 
 use std::path::{Path, PathBuf};
@@ -116,7 +116,7 @@ fn data_rate_saves_more_airtime_on_longer_frames() {
 
 /// The whole table: every single-setting row and every interaction.
 #[test]
-#[ignore = "about 25 minutes on two threads; run with --ignored, or `v2xw sensitivity --expect`"]
+#[ignore = "about 7 minutes on two threads; run with --ignored, or `v2xw sensitivity --expect`"]
 fn the_full_table_holds() {
     let (path, fam) = families();
     let exp = sweep::load_expectations(&[root().join("crates/v2xw-engine/tests/expectations")])
