@@ -998,12 +998,9 @@ impl TrafficAuditor {
                         })
             })
         };
-        let occupied = self.crosswalks.occupied(
-            self.prev_peds
-                .iter()
-                .filter(|p| !refuge(p))
-                .map(|p| p.lane),
-        );
+        let occupied = self
+            .crosswalks
+            .occupied(self.prev_peds.iter().filter(|p| !refuge(p)).map(|p| p.lane));
         if occupied.is_empty() {
             return;
         }

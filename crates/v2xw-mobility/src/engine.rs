@@ -4861,13 +4861,11 @@ impl Mobility for NativeMobility {
         // the second crossing). They are out of this crossing's traffic, as
         // in SUMO, where a standing pedestrian outside a vehicle's path does not block it
         // (`MSPModel_Interacting::blockedAtDist`).
-        let crosswalks_in_use = self.crosswalks.occupied(
-            self.vru.iter().flat_map(|v| {
-                v.people()
-                    .filter(|p| !p.arrived && !v.at_refuge(p, world))
-                    .map(|p| p.lane)
-            }),
-        );
+        let crosswalks_in_use = self.crosswalks.occupied(self.vru.iter().flat_map(|v| {
+            v.people()
+                .filter(|p| !p.arrived && !v.at_refuge(p, world))
+                .map(|p| p.lane)
+        }));
         // The mid-block paths in use, from the start-of-step positions: each band, the
         // pedestrian it belongs to, and whether that pedestrian is in (or about to step
         // into) the lane it cuts.
