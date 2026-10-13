@@ -187,6 +187,9 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   // something the build does not have. It is in the header's menu.
   const commands = async (): Promise<void> => {
     await page.getByTestId("app-menu-button").click();
+    // The command catalogue is listed only in developer mode.
+    const toggle = page.getByTestId("dev-details-toggle");
+    if ((await toggle.getAttribute("aria-checked")) !== "true") await toggle.click();
     await page.getByTestId("menu-commands").click();
     await expect(page.getByTestId("panel-commands")).toBeVisible();
   };
@@ -240,6 +243,9 @@ test("the Studio streams VWP v1, renders actors, flies down on a click and fills
   await page.screenshot({ path: `${SHOTS}/04-settings.png` });
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("settings-window")).toHaveCount(0);
+  // The seek to the start leaves the run paused at 0 s with no measurements; play on so
+  // the dashboard has cards to show.
+  if (await page.getByTestId("play").isVisible()) await page.getByTestId("play").click();
   await page.getByTestId("metrics-button").click();
   await expect(page.getByTestId("metrics-search")).toBeVisible();
   await expect(page.getByTestId("metric-card-pdr")).toBeVisible();

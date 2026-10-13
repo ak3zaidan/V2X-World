@@ -1319,6 +1319,9 @@ export class MockEngineServer {
           truncated: rows.length >= limit,
         });
       }
+      case "runs.list":
+        // The mock keeps no run history; an empty list is a valid answer.
+        return ok({ runs: [], can_compare_previous: false });
       case "rpc.discover":
         return ok(this.#openRpcDocument());
       default:
