@@ -1,0 +1,53 @@
+# Expectation rows, security and networking (second wave). Format: see catalogue.yaml.
+# security.* runs on the SCMS lifecycle family (30 s, RSU, misbehaviour detection), with
+# the DSRC grid as fallback; net.geonet.* on the GN family (a DENM forwarded hop by hop).
+
+# ---- Certificates and signatures in the frame ----
+- {setting: security.signer_id_policy.digest_otherwise, change: false, metric: psdu_bytes, expect: up,
+   source: "a certificate in every message instead of an 8-octet digest adds about 100 octets (IEEE 1609.2-2016 6.4.8 SignerIdentifier; SAE J2945/1 6.1.2)"}
+- {setting: security.signer_id_policy.digest_otherwise, change: false, metric: airtime_us, expect: up,
+   source: "longer PSDU, more OFDM symbols (IEEE 802.11-2020 17.4.3)"}
+- {setting: security.signer_id_policy.digest_otherwise, change: false, metric: cbr_mean, expect: up,
+   source: "more airtime per frame at the same rate: higher CBR (ETSI TS 102 687)"}
+- {setting: security.signer_id_policy.full_cert_every_ms, change: high, metric: psdu_bytes, expect: down,
+   source: "a certificate less often: fewer 100-octet frames (SAE J2945/1 6.1.2, cert once per 450 ms)"}
+- {setting: security.signer_id_policy.full_cert_every_ms, change: low, metric: airtime_us, expect: up,
+   source: "IEEE 1609.2-2016 6.4.8; IEEE 802.11-2020 17.4.3"}
+- {setting: security.signer_id_policy.on_new_neighbour, change: true, metric: psdu_bytes, expect: up,
+   source: "a certificate is attached when a new neighbour appears (SAE J2945/1 6.1.2.2), on top of the periodic one"}
+- {setting: security.signature, change: falcon-512, metric: psdu_bytes, expect: up,
+   source: "a Falcon-512 signature is 666 octets against 64 for ECDSA P-256 (NIST Falcon spec 1.2, Table 3.3; IEEE 1609.2-2016 6.3.29)"}
+- {setting: security.signature, change: falcon-512, metric: airtime_us, expect: up,
+   source: "larger PSDU, more OFDM symbols (IEEE 802.11-2020 17.4.3)"}
+- {setting: security.signature, change: ml-dsa-65, metric: psdu_bytes, expect: up,
+   source: "an ML-DSA-65 signature is 3309 octets (FIPS 204 Table 2): the message is fragmented, every fragment carrying headers"}
+- {setting: security.signature, change: ml-dsa-65, metric: frames_tx, expect: up,
+   source: "a 3.3 kB signed message exceeds the 802.11p MSDU the stack sends in one frame, so it is split (IEEE 1609.3-2020 WSM length; ETSI TS 103 097 has no fragmentation, the generic fragmenter does)"}
+- {setting: security.pseudonym_change.period_s, change: low, metric: aoi_ms, expect: up,
+   source: "after a pseudonym change receivers hold no certificate for the new digest and must wait for the next full certificate before they can verify (IEEE 1609.2-2016 5.3.4; Petit et al., IEEE COMST 2015)"}
+
+# ---- Verification ----
+- {setting: nodes.peer_cert_cache, change: low, metric: aoi_ms, expect: up,
+   source: "a smaller peer-certificate cache evicts signers, so a digest-signed message from an evicted signer cannot be verified until the next full certificate (IEEE 1609.2-2016 5.1.3; SAE J2945/1 6.1.2)"}
+- {setting: security.verification_policy, change: on-demand, metric: e2e_ms_mean, expect: down,
+   source: "verify-on-demand skips verification for messages no application acts on, so the verified ones queue less (Krishnan and Weimerskirch, SAE 2011-01-0584; Hsu et al. 2013)"}
+
+# ---- Misbehaviour detection and GNSS error ----
+- {setting: actors.vehicles.gnss.outlier_rate_hz, change: high, metric: metric.det_fp, expect: up,
+   source: "plausibility checks on position jumps flag honest senders whose GNSS fix jumps (van der Heijden, Lukaseder, Kargl, VeReMi, SecureComm 2018: false positives grow with position noise)"}
+- {setting: actors.vehicles.gnss.outlier_magnitude_m, change: high, metric: metric.det_fp, expect: up,
+   source: "bigger GNSS outliers exceed more plausibility thresholds (VeReMi 2018; Kamel et al., VeReMi extension, ICC 2020)"}
+
+# ---- GeoNetworking forwarding (ETSI EN 302 636-4-1) ----
+- {setting: net.geonet.area_forwarding, change: simple, metric: gn_forwards_sent, expect: up,
+   source: "simple GeoBroadcast forwarding rebroadcasts on every receiver inside the area; CBF lets the farthest forwarder suppress the rest (EN 302 636-4-1 Annex F.2 vs F.3)"}
+- {setting: net.geonet.cbf_max_time_ms, change: low, metric: report.geonet.0.latency_p95_us, expect: down,
+   source: "the CBF timer is TO_max - (TO_max - TO_min) d / DIST_max: a lower TO_max shortens every hop's wait (EN 302 636-4-1 F.3)"}
+- {setting: net.geonet.max_comm_range_m, change: low, metric: gn_forwards_sent, expect: up,
+   source: "with DIST_max below the real range, distant receivers all clamp to TO_min and forward before they can hear each other: more duplicates (EN 302 636-4-1 F.3)"}
+
+# ---- Messages ----
+- {setting: messages.cpm_interval_ms, change: high, metric: cbr_mean, expect: down,
+   source: "fewer CPMs per second, less airtime (ETSI TS 103 324 6.1.2 generation rules)"}
+- {setting: messages.cpm_interval_ms, change: high, metric: frames_tx, expect: down,
+   source: "ETSI TS 103 324: the CPM generation period bounds how often one is sent"}

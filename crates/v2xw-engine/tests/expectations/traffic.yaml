@@ -1,0 +1,96 @@
+# Expectation rows, traffic and pedestrians (second wave). Format: see catalogue.yaml.
+# actors.* and traffic.* run on the signalised Midtown-shaped grid (4 x 6 blocks, two
+# lanes each way, 60 s cycle, 1500 veh/h Poisson demand, 90 s); world.signals.* and
+# world.highway_preset on downtown Portland (OSM); actors.vru.* on the pedestrian grid.
+
+# ---- Demand and penetration ----
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: high, metric: cbr_mean, expect: up,
+   source: "more vehicles, more BSMs per second on the channel (SAE J2945/1; ETSI TS 102 687)"}
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: high, metric: traffic.speed_mean_mps, expect: down, min_change: 0.002,
+   source: "speed falls as flow approaches capacity at signals (Webster 1958 delay; HCM 7th ed. 19 uniform + incremental delay)"}
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: low, metric: cbr_mean, expect: down,
+   source: "fewer transmitters (ETSI TS 102 687)"}
+- {setting: actors.vehicles.demand.rate_veh_per_h, change: low, metric: frames_tx, expect: down,
+   source: "frames scale with equipped vehicles (SAE J2945/1)"}
+- {setting: actors.vehicles.demand.fleet_size, change: high, metric: traffic.actors, expect: up,
+   source: "a larger fleet is more vehicles on the network (SUMO --scale / fleet size)"}
+- {setting: actors.vehicles.demand.fleet_size, change: high, metric: cbr_mean, expect: up,
+   source: "more transmitters in range, more busy time (ETSI TS 102 687)"}
+- {setting: actors.vehicles.demand.rate_veh_per_h_per_lane_km, change: high, metric: traffic.actors, expect: up,
+   source: "density x lane-km is the vehicle count (HCM 7th ed. density definition)"}
+- {setting: actors.vehicles.equipped_fraction, change: low, metric: cbr_mean, expect: down,
+   source: "only equipped vehicles transmit (USDOT CV pilot market-penetration evaluations)"}
+
+# ---- Car following (IDM / Krauss; Treiber and Kesting, Traffic Flow Dynamics 2013) ----
+- {setting: actors.vehicles.drivers.time_headway_s, change: high, metric: metric.headway_time, expect: up, band: [1.3, 3.5],
+   source: "IDM desired gap s* = s0 + vT: the steady-state time headway follows T (Treiber, Hennecke, Helbing 2000, eq. 2)"}
+- {setting: actors.vehicles.drivers.min_gap_m, change: high, metric: metric.headway_distance, expect: up,
+   source: "IDM jam distance s0 is the standstill gap (Treiber 2000); SUMO vType minGap"}
+- {setting: actors.vehicles.drivers.reaction_time_s, change: high, metric: metric.headway_time, expect: up,
+   source: "the Krauss safe speed keeps a gap that grows with the reaction time tau (Krauss 1998, eq. 2.6; SUMO vType tau)"}
+- {setting: actors.vehicles.drivers.reaction_time_s, change: low, metric: metric.headway_time, expect: down,
+   source: "Krauss 1998: a shorter tau tolerates shorter gaps"}
+- {setting: actors.vehicles.drivers.speed_factor, change: low, metric: metric.flow, expect: down,
+   source: "slower desired speeds lower flow on an undersaturated network (q = k v; SUMO speedFactor)"}
+- {setting: actors.vehicles.drivers.start_reaction_s, change: high, metric: traffic.stopped_share, expect: up,
+   source: "a longer start-up reaction is more start-up lost time per green (HCM 7th ed. 19.2: 2 s lost time; Bonneson 1992)"}
+- {setting: actors.vehicles.drivers.start_reaction_s, change: low, metric: traffic.stopped_share, expect: down,
+   source: "less start-up lost time, queues discharge sooner (HCM 7th ed. 19.2)"}
+- {setting: actors.vehicles.drivers.max_accel_mps2, change: low, metric: metric.flow, expect: down, min_change: 0.002,
+   source: "slower launches lengthen queue discharge (IDM a; Treiber 2000)"}
+
+# ---- Signals and junctions ----
+- {setting: traffic.signals.control, change: actuated, metric: traffic.stopped_share, expect: down,
+   source: "actuated control ends green when the queue clears and serves demand as it arrives: less delay at moderate volume (HCM 7th ed. 19.4; FHWA Signal Timing Manual 2e, 5.3)"}
+- {setting: traffic.signals.control, change: actuated, metric: traffic.speed_mean_mps, expect: up,
+   source: "less signal delay, higher average travel speed (FHWA Signal Timing Manual 2e)"}
+- {setting: traffic.signals.passage_s, change: high, metric: traffic.stopped_share, expect: up,
+   source: "a long passage (gap) time extends green after the queue clears while the other approaches wait (FHWA Signal Timing Manual 2e, 5.3.2; Bonneson and McCoy, NCHRP 3-66)"}
+- {setting: traffic.signals.min_green_s, change: low, metric: traffic.stopped_share, expect: down,
+   source: "a shorter minimum green wastes less green on a light approach (FHWA Signal Timing Manual 2e, 5.3.1)"}
+- {setting: world.signals.cycle_s, change: high, metric: traffic.speed_mean_mps, expect: down,
+   source: "below saturation, uniform delay grows with the cycle length: d1 = 0.5 C (1 - g/C)^2 / (1 - X g/C) (Webster 1958; HCM 7th ed. eq. 19-19)"}
+- {setting: world.signals.cycle_s, change: low, metric: traffic.speed_mean_mps, expect: up,
+   source: "Webster 1958: shorter cycles, less uniform delay while capacity holds"}
+- {setting: world.signals.progression_speed_mps, change: high, metric: traffic.speed_mean_mps, expect: down,
+   source: "offsets timed for a speed faster than traffic drives break the green band (Morgan and Little 1964; FHWA Signal Timing Manual 2e, 6.4)"}
+- {setting: world.signals.progression_speed_mps, change: low, metric: traffic.speed_mean_mps, expect: down,
+   source: "offsets timed for a slower speed than traffic drives make platoons arrive early on red (FHWA Signal Timing Manual 2e, 6.4)"}
+- {setting: traffic.right_turn_on_red, change: false, metric: traffic.speed_mean_mps, expect: down,
+   source: "right-turners wait the red out: more delay (HCM 7th ed. 19.4 RTOR)"}
+- {setting: traffic.kerbside.taxi_share, change: high, metric: traffic.speed_mean_mps, expect: down,
+   source: "kerbside pick-ups block the kerb lane (HCM 7th ed. 19 f_bb bus/parking blockage factor; SUMO stops)"}
+- {setting: traffic.kerbside.taxi_share, change: high, metric: traffic.stopped_share, expect: up,
+   source: "a stopped taxi and the vehicles queued behind it are stopped (HCM 7th ed. f_bb)"}
+- {setting: traffic.turn_lateral_accel_mps2, change: low, metric: traffic.speed_mean_mps, expect: down,
+   source: "the turn speed is sqrt(a_lat R): a lower comfortable lateral acceleration means slower turns (AASHTO Green Book 2018, 3.3.5)"}
+
+# ---- Weather (FHWA-HOP-07-073; HCM 7th ed. Exhibit 11-20) ----
+- {setting: weather.initial, change: rain, metric: traffic.speed_mean_mps, expect: down,
+   source: "rain lowers free-flow speed 2-14 % on arterials (Rakha et al., FHWA-HOP-07-073, 2007; HCM 7th ed. Exhibit 11-20)"}
+- {setting: weather.initial, change: snow, metric: traffic.speed_mean_mps, expect: down, band: [0.5, 0.95],
+   source: "snow lowers free-flow speed 5-40 % (FHWA-HOP-07-073; HCM 7th ed. Exhibit 11-20)"}
+- {setting: weather.initial, change: snow, metric: metric.headway_time, expect: up,
+   source: "drivers keep longer headways in snow: saturation headway +12-20 % (Perrin, Martin, Hansen, TRR 1776, 2001)"}
+- {setting: weather.surface, change: ice, metric: metric.ttc_conflicts, expect: up,
+   source: "on ice the braking cap (mu g) binds: more low-TTC conflicts (AASHTO Green Book 2018 3.2.2 friction; SSAM TTC < 1.5 s)"}
+
+# ---- Radio in the built environment ----
+- {setting: world.buildings.enabled, change: false, metric: prr, expect: up,
+   source: "no buildings, no NLOS loss between streets (3GPP TR 37.885 6.2.1 LOS / NLOS; Mangel, Klemp, Hartenstein 2011)"}
+- {setting: world.buildings.enabled, change: false, metric: cbr_mean, expect: up,
+   source: "without building loss each frame is sensed over a larger area (ETSI TS 102 687)"}
+- {setting: radio.channel_model.building_loss_db_per_m, change: low, metric: prr, expect: up,
+   source: "less loss per metre of building crossed (Sommer et al., Veins obstacle model, IEEE WONS 2011: beta per metre)"}
+- {setting: radio.channel_model.building_wall_loss_db, change: low, metric: prr, expect: up,
+   source: "less loss per wall crossed (Sommer et al. WONS 2011: beta per wall)"}
+
+# ---- Pedestrians and cyclists (Midtown grid with crossings) ----
+- {setting: actors.vru.pedestrians, change: high, metric: frames_tx, expect: up,
+   source: "every equipped pedestrian sends PSMs (SAE J2945/9 2017)"}
+- {setting: actors.vru.device_fraction, change: high, metric: frames_tx, expect: up,
+   source: "only pedestrians carrying a device transmit (SAE J2945/9)"}
+- {setting: actors.vru.cyclists, change: high, metric: vru.actors, expect: up,
+   source: "the cyclist count is the population spawned"}
+- {setting: actors.vru.red_crossing_share, change: high, metric: traffic.stopped_share, expect: up,
+   source: "drivers yield to pedestrians crossing against the signal (Uniform Vehicle Code 11-502; Brosseau et al. 2013 measured 10-30 % red crossings)"}

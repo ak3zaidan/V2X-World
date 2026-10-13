@@ -54,6 +54,9 @@ routes:
   - {prefix: actors.backend, families: [security]}
   - {prefix: actors.rsus, families: [security]}
   - {prefix: actors.vru, families: [pedestrians]}
+  # GNSS error is judged by what misbehaviour detection makes of it: the lifecycle family
+  # runs legacy-12 plausibility checks.
+  - {prefix: actors.vehicles.gnss, families: [security, traffic]}
   - {prefix: world.signals, families: [osm]}
   - {prefix: world.highway_preset, families: [osm]}
   - {prefix: world.service_roads, families: [osm]}
@@ -103,6 +106,10 @@ values:
   actors.vehicles.demand.kind: [mobility/demand/none]
   actors.vru.pedestrians: [50, 300]
   radio.range.max_m: [200.0, 2000.0]
+  # The guide's "0.01 per second (default); 0 for clean positions" parses to 0 and the
+  # model default, so the high end moved nothing. Clean, and one jump per 10 s (urban
+  # multipath outliers: Groves, Principles of GNSS, Inertial and Multisensor Navigation 2e, 9.4).
+  actors.vehicles.gnss.outlier_rate_hz: [0.0, 0.1]
 
 # The most values a choice is swept at (spread over its options).
 max_choices: 6
@@ -122,6 +129,9 @@ context:
   - {prefix: radio.tiers.phy, set: {radio.tiers.mac: high}}
   - {prefix: messages.rate_hz, set: {time.mobility_step_ms: 50}}
   - {prefix: messages.cpm_interval_ms, set: {messages.sets: [bsm, cpm]}}
+  # The post-quantum signatures need an OBU that publishes a figure for them
+  # (pq-signatures.yaml uses the same one).
+  - {prefix: security.signature, set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm}}
   - {prefix: security.on_demand_threshold, set: {security.verification_policy: on-demand}}
   - {prefix: security.prioritized_horizon_m, set: {security.verification_policy: prioritized}}
   - {prefix: actors.vehicles.drivers.bicycle, set: {actors.vru.cyclists: 60}}

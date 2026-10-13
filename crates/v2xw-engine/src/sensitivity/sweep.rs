@@ -125,6 +125,9 @@ pub struct Expectation {
     /// The relative change required (default 0.01).
     #[serde(default)]
     pub min_change: Option<f64>,
+    /// The band `changed / base` must fall in, where theory gives a magnitude.
+    #[serde(default)]
+    pub band: Option<[f64; 2]>,
     /// The theory, with a citation.
     pub source: String,
 }
@@ -226,7 +229,7 @@ pub struct Sweep {
 }
 
 /// Reads a YAML file.
-fn read_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+pub(crate) fn read_yaml<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
     let text = std::fs::read_to_string(path).map_err(|source| EngineError::Io {
         path: path.display().to_string(),
         source,
@@ -289,9 +292,35 @@ impl Families {
 /// A file cannot be read or parsed.
 pub fn load_expectations(paths: &[PathBuf]) -> Result<Vec<Expectation>> {
     let mut out = Vec::new();
-    for p in paths {
-        let mut rows: Vec<Expectation> = read_yaml(p)?;
+    for p in yaml_files(paths)? {
+        let mut rows: Vec<Expectation> = read_yaml(&p)?;
         out.append(&mut rows);
+    }
+    Ok(out)
+}
+
+/// The YAML files `paths` name: a file as given, a directory's `*.yaml` (not recursive), in
+/// name order.
+///
+/// # Errors
+/// A directory cannot be read.
+pub fn yaml_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    for p in paths {
+        if p.is_dir() {
+            let rd = std::fs::read_dir(p).map_err(|source| EngineError::Io {
+                path: p.display().to_string(),
+                source,
+            })?;
+            let mut files: Vec<PathBuf> = rd
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|f| f.is_file() && f.extension().is_some_and(|x| x == "yaml"))
+                .collect();
+            files.sort();
+            out.extend(files);
+        } else {
+            out.push(p.clone());
+        }
     }
     Ok(out)
 }
@@ -552,10 +581,15 @@ pub fn plan(
             match kind {
                 "number" => numeric_ends(row, false),
                 "integer" => numeric_ends(row, true),
-                "boolean" => {
-                    let d = row.get("default").and_then(Value::as_bool).unwrap_or(false);
-                    vec![((!d).to_string(), Value::Bool(!d))]
-                }
+                "boolean" => match row.get("default").and_then(Value::as_bool) {
+                    Some(d) => vec![((!d).to_string(), Value::Bool(!d))],
+                    // No published default: the schema's may be either, and sweeping
+                    // only `true` against a `true` default reads as dead. Both values.
+                    None => vec![
+                        ("true".to_string(), Value::Bool(true)),
+                        ("false".to_string(), Value::Bool(false)),
+                    ],
+                },
                 "enum" if closed || row.get("enum").is_some() => choice_values(row, None),
                 "json" if row.get("x-slot").is_some() && row.get("x-options").is_some() => {
                     choice_values(row, Some(spelling.get(path).copied().unwrap_or(false)))
@@ -615,6 +649,12 @@ pub fn plan(
 
 fn label_of(v: &Value) -> String {
     v.as_str().map_or_else(|| v.to_string(), str::to_string)
+}
+
+/// A value as a short label: a string bare, anything else as JSON.
+#[must_use]
+pub fn label(v: &Value) -> String {
+    label_of(v)
 }
 
 /// A recorder that measures the whole fingerprint: the radio harness's metrics, the
@@ -1065,10 +1105,14 @@ impl Sweep {
                     return v;
                 }
                 let key = if o.base.is_empty() { fam } else { &o.base };
-                let base = self.bases.get(key).and_then(|b| b.get(&e.metric)).copied();
-                let value = match o.moved.get(&e.metric) {
-                    Some((_, after)) => *after,
-                    None => base,
+                // A moved metric carries its own base (the run it was diffed against);
+                // an unmoved one equals the base.
+                let (base, value) = match o.moved.get(&e.metric) {
+                    Some((before, after)) => (*before, *after),
+                    None => {
+                        let b = self.bases.get(key).and_then(|b| b.get(&e.metric)).copied();
+                        (b, b)
+                    }
                 };
                 let row = Row {
                     name: e.setting.clone(),
@@ -1076,7 +1120,7 @@ impl Sweep {
                     base_set: BTreeMap::new(),
                     metric: e.metric.clone(),
                     expect: e.expect,
-                    band: None,
+                    band: e.band,
                     min_change: e.min_change,
                     source: Some(e.source.clone()),
                 };
