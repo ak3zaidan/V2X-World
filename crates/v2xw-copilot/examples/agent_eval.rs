@@ -702,6 +702,13 @@ fn score(case: &Case, report: &AgentReport, prompts: &str, r: &mut CaseResult) {
                 "out of range",
                 "nothing was changed",
                 "not allowed",
+                // A refusal reported as the loader's verdict ("the engine refuses X with
+                // LTE-V2X, so it was not applied") explains just as well.
+                "refuse",
+                "not applied",
+                "were not added",
+                "was not added",
+                "only by",
             ]
             .iter()
             .any(|w| text.contains(w));

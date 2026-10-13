@@ -339,7 +339,7 @@ pub(super) fn dispatch<P: LlmProvider, T: RpcTransport>(
             args.get("query").and_then(Value::as_str).unwrap_or(""),
             12,
         )),
-        "setup" => setup(agent, args, sink),
+        "setup" => setup(agent, args, sink).map_err(missing_map_hint),
         "list_cities" => Ok(catalog::cities(
             args.get("query").and_then(Value::as_str).unwrap_or(""),
         )),
@@ -367,6 +367,25 @@ pub(super) fn dispatch<P: LlmProvider, T: RpcTransport>(
             message: e.to_string(),
         },
     })
+}
+
+/// A base whose map is not downloaded blocks every change of the request, which the
+/// model then reports as "nothing applied". The refusal says how to still apply the rest.
+fn missing_map_hint(e: CopilotError) -> CopilotError {
+    let text = e.to_string();
+    if text.contains("world.source.path") && text.contains("does not exist") {
+        err(
+            "setup",
+            format!(
+                "{text}\nNothing was staged. The chosen base or city needs a map that is not \
+                 downloaded: call setup again now with base `current` (or a city whose map \
+                 list_cities shows as downloaded) and the same other changes, then tell the \
+                 person the one command that fetches the missing map."
+            ),
+        )
+    } else {
+        e
+    }
 }
 
 fn err(method: &str, message: impl Into<String>) -> CopilotError {

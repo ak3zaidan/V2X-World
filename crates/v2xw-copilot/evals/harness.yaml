@@ -472,7 +472,11 @@ cases:
     draft:
       # IDM T above the model's urban default (about 1.5 s; HCM 7th ed. saturation headway).
       - {key: actors.vehicles.drivers.time_headway_s, min: 1.51}
-    mentions: [[lane, politeness, threshold]]
+    # Not a `mentions` check: the instructions say a setup reply is one line, the applied
+    # changes show as chips (live-3 set the lane-change threshold to 0.3 m/s2 and said so
+    # only in the chips). Politeness or the threshold both answer "less eager".
+    calls:
+      - {tool: setup, args: {base: current}}
 
   - id: hard-sidelink-reselect
     category: hard

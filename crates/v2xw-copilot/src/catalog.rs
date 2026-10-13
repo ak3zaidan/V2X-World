@@ -456,11 +456,23 @@ pub fn find_settings(query: &str, limit: usize) -> Value {
         .map(|(_, s)| s.to_json())
         .collect();
     let mut out = json!({"settings": rows});
-    if q.contains("attack") || q.contains("threat") || q.contains("misbehav") {
+    if ["attack", "threat", "misbehav", "sybil", "ghost", "spoof", "fake"]
+        .iter()
+        .any(|w| q.contains(w))
+    {
+        let params: Map<String, Value> = v2xw_engine::phase2::ATTACKER_PARAMS
+            .iter()
+            .map(|(k, kind)| ((*k).to_string(), json!(kind.unwrap_or("any kind"))))
+            .collect();
         out["attackers"] = json!({
             "id": "threat/attacker/legacy/<Kind>",
             "kinds": RENDERED_ATTACKERS.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
             "refused_by_this_engine": refused_attackers(),
+            "params": params,
+            "params_how": "threats.attackers[].params.<key> = number, e.g. {append: {id: \
+                           threat/attacker/legacy/Sybil, count: 1, params: {sybil_ghosts: 5}}}; \
+                           the value names the kind that uses the key, and sybil_* is refused \
+                           on any other kind",
         });
     }
     if q.contains("city") || q.contains("place") || q.contains("map") || q.contains("where") {
