@@ -549,7 +549,9 @@ fn documents(report: &AgentReport) -> Vec<Value> {
 
 /// The results of the tools that read the build's own registry (model cards, metric
 /// definitions, the settings index) and the engine's validator (setup and prepare_scenario
-/// answers, which name a refused value's range; run_control's run status): a number quoted from them is sourced, though it is
+/// answers, which name a refused value's range; run_control's run status; setting help and
+/// the checked-in sensitivity sweeps; the engine's kept-run comparisons): a number quoted
+/// from them is sourced, though it is
 /// not run data.
 fn registry_results(history: &[v2xw_copilot::ChatMessage]) -> String {
     let mut names: BTreeMap<String, String> = BTreeMap::new();
@@ -563,7 +565,13 @@ fn registry_results(history: &[v2xw_copilot::ChatMessage]) -> String {
                 n.starts_with("registry__")
                     || matches!(
                         n.as_str(),
-                        "find_settings" | "setup" | "prepare_scenario" | "run_control"
+                        "find_settings"
+                            | "setup"
+                            | "prepare_scenario"
+                            | "run_control"
+                            | "setting_help"
+                            | "sensitivity"
+                            | "engine_runs"
                     )
             }) {
                 out.push_str(m.text());

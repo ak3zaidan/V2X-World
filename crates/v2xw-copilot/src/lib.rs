@@ -137,6 +137,7 @@ pub mod explain;
 pub mod gather;
 pub mod grounding;
 pub mod http;
+pub mod help;
 pub mod insight;
 pub mod openai;
 pub mod openai_responses;

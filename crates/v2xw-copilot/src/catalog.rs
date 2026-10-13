@@ -9,7 +9,7 @@
 //!
 //! [`RENDERED_ATTACKERS`] and [`JAMMERS`] are the two lists the reflection cannot give: the
 //! attacker catalogue is resolved by name inside the engine (`threat/attacker/legacy/<Kind>`)
-//! and seven of its kinds are refused by name because the engine does not put them on the
+//! and some of its kinds are refused by name because the engine does not put them on the
 //! air (the `threats.attackers` row of `validate::KEY_STATUS` names them). The eval suite
 //! runs one of each family live.
 
@@ -83,7 +83,8 @@ impl Setting {
 
 /// The attacker kinds the engine renders on the air, as
 /// `threat/attacker/legacy/<Kind>` names them, with the family each belongs to.
-pub const RENDERED_ATTACKERS: [(&str, &str); 22] = [
+pub const RENDERED_ATTACKERS: [(&str, &str); 23] = [
+    ("Sybil", "identity: ghost vehicles, each signing under its own pseudonym"),
     ("ConstPos", "position: freezes its claimed position"),
     ("ConstPosOffset", "position: a constant offset"),
     ("RandomPos", "position: a random position each message"),
@@ -120,16 +121,16 @@ pub const RENDERED_ATTACKERS: [(&str, &str); 22] = [
     ),
 ];
 
-/// Attacker kinds in the catalogue the engine refuses by name.
-pub const REFUSED_ATTACKERS: [&str; 7] = [
-    "DoS",
-    "DoSRandom",
-    "Sybil",
-    "VruImpersonation",
-    "VruPositionSpoof",
-    "FakeHazard",
-    "SelectiveDrop",
-];
+/// Attacker kinds in the catalogue the engine refuses by name, read from the engine
+/// (`phase2::attack_kinds`), with the reason.
+#[must_use]
+pub fn refused_attackers() -> Vec<&'static str> {
+    v2xw_engine::phase2::attack_kinds()
+        .into_iter()
+        .filter(|(_, why)| why.is_some())
+        .map(|(k, _)| k)
+        .collect()
+}
 
 /// The jammer models (`threats.jammers[].id`).
 pub const JAMMERS: [(&str, &str); 3] = [
@@ -459,7 +460,7 @@ pub fn find_settings(query: &str, limit: usize) -> Value {
         out["attackers"] = json!({
             "id": "threat/attacker/legacy/<Kind>",
             "kinds": RENDERED_ATTACKERS.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
-            "refused_by_this_engine": REFUSED_ATTACKERS,
+            "refused_by_this_engine": refused_attackers(),
         });
     }
     if q.contains("city") || q.contains("place") || q.contains("map") || q.contains("where") {
@@ -668,7 +669,7 @@ pub fn quick_reference() -> &'static str {
             sig = values("security.signature"),
             verify = values("security.verification_policy"),
             pseud = values("security.pseudonym_change.strategy"),
-            refused = REFUSED_ATTACKERS.join(", "),
+            refused = refused_attackers().join(", "),
         )
     })
 }

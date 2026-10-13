@@ -618,7 +618,7 @@ fn attack_words(kind: &str) -> Option<(&'static str, &'static str)> {
         ),
         "Sybil" => (
             "Ghost vehicles (Sybil)",
-            "Not runnable yet: the host does not hand an attacker several pseudonyms at once.",
+            "Sends extra signed messages for ghost vehicles that do not exist, each under its own valid pseudonym.",
         ),
         "DoS" => (
             "Message flood (DoS)",

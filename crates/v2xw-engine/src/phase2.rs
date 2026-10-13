@@ -358,6 +358,17 @@ pub fn renders_on_air(kind: AttackKind) -> bool {
     unrendered(kind).is_none()
 }
 
+/// Every attacker kind of the catalogue by name, with why the engine refuses it (`None`
+/// for a kind it renders on the air). The agent's settings search reads this rather than
+/// a copied list, so a kind that becomes runnable shows up without an edit elsewhere.
+#[must_use]
+pub fn attack_kinds() -> Vec<(&'static str, Option<&'static str>)> {
+    AttackKind::ALL
+        .iter()
+        .map(|k| (k.as_str(), unrendered(*k)))
+        .collect()
+}
+
 /// Why the engine cannot render an attack kind on the air, or `None` when it can.
 ///
 /// The host applies an attacker's claimed position, speed, heading and generation time,

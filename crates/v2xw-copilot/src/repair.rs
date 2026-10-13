@@ -138,7 +138,7 @@ fn known(key: &str) -> bool {
 }
 
 /// The published key `key` most plausibly means, with a note when it is not `key` itself.
-fn resolve_key(raw: &str) -> Result<(String, Option<String>), String> {
+pub(crate) fn resolve_key(raw: &str) -> Result<(String, Option<String>), String> {
     let trimmed = raw.trim();
     let mut key = trimmed
         .trim_start_matches('/')
