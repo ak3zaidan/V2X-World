@@ -314,6 +314,17 @@ fn buses_taxis_and_deliveries_stop_at_the_kerb_and_the_traffic_goes_round() {
             e.detail
         );
     }
+    for e in audit
+        .examples
+        .iter()
+        .filter(|e| e.check == Check::Standstill)
+        .take(4)
+    {
+        eprintln!(
+            "  [standstill] t={:.1}s actor={:?} lane={:?}: {}",
+            e.t_s, e.actor, e.lane, e.detail
+        );
+    }
     let dwell = &after.network.kerbside_dwell_s;
     let now = &after.network.kerbside_now;
     eprintln!("[kerbside on] at the kerb at the end: {now:?}");
