@@ -1,0 +1,13 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-f520-uncapped
+  base: ../base.yaml
+  description: Run-cost measurement, about 520 vehicles, no reach cap, all metrics; building classification dominates (fleet-speed table in BUILD-STATUS).
+time:
+  duration_s: 2.0
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 560
+metrics: [all]
