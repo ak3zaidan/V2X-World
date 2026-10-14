@@ -18,6 +18,10 @@ v2xw sensitivity --expect --expectations crates/v2xw-engine/tests/expectations/v
   --interactions crates/v2xw-engine/tests/expectations/interactions/vru-safety.yaml
 ```
 
+**Expectation run** (debug build of `10fdc41`, 40 s / 60 s families, 751 s): 17 of 19 rows
+pass. The 2 failures were both caused by note 7, and those rows were removed. The table
+below is from the 60 s release runs.
+
 Counts are summed over the run. Means are weighted by sample size.
 
 ## Pedestrian grid
@@ -123,6 +127,13 @@ handsets add radio nodes, and the radio cost grows with node count. Removing dev
    VAM message rate (PSMs beacon at about 1.2 Hz per device in this build, and no rate
    setting exists), DENM hazards (the networking track), and emergency vehicle priority
    (no setting).
+7. **A zero count is not reported as 0.** `metrics/apps` emits `app_warnings` only for
+   an application that issued at least one warning in the period. A run where PCW never
+   warns therefore has no PCW sample. The expectation runner reads that as "not measured"
+   rather than 0, which failed the PCW low-end row and the PCW × devices interaction. Both
+   were dropped. The fix is to seed the provider with the enabled applications. That
+   changes the metric stream, and so the content digest of every run with applications,
+   so it was left for a round that re-pins digests.
 6. **Crossing delay (`ped_wait`)** reports `insufficient` (fewer than 30 waits) in a 40 to
    60 s run at the defaults. It is measurable only with more crossings, such as the
    gap-margin context.

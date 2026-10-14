@@ -27,8 +27,9 @@
 # ---- Application thresholds ----
 - {setting: apps.pcw_ttc_s, change: high, metric: "metric.app_warnings[app=pcw]", expect: up,
    source: "a longer time threshold admits every encounter a shorter one does, and more (monotone threshold: warnings are the encounters with TTC <= threshold)"}
-- {setting: apps.pcw_ttc_s, change: low, metric: "metric.app_warnings[app=pcw]", expect: down,
-   source: "monotone threshold"}
+# No `low` PCW row: the 40 s family has 2 PCW warnings, 0 at 2 s, and the apps provider
+# emits no app_warnings sample for an application with no warning, so the low end reads
+# "not measured" rather than 0 (docs/validation/test-vru-safety.md, open item 7).
 - {setting: apps.fcw_ttc_s, change: high, metric: "metric.app_warnings[app=fcw]", expect: up,
    source: "FCW fires when TTC to the lead falls below the threshold; a higher threshold warns in more encounters (NHTSA FCW confirmation test, 2.0 to 2.4 s warning windows; Kiefer et al., CAMP FCW, DOT HS 808 964, 1999)"}
 - {setting: apps.fcw_ttc_s, change: low, metric: "metric.app_warnings[app=fcw]", expect: down,

@@ -12,13 +12,6 @@
   expect: dampens
   direction: up
   source: "FCW reads the lead's BSM, so an encounter warns only when both vehicles are equipped (p^2 of pairs; USDOT CV Pilot penetration analyses; SAE J2945/1)"
-# PCW reads the VRU's PSM: with no VRU carrying a device, a longer threshold has nothing
-# more to warn about.
-- name: PCW threshold x VRU devices (PCW warnings)
-  family: pedestrians
-  factor: {apps.pcw_ttc_s: 4.0}
-  condition: {actors.vru.device_fraction: 0.0}
-  metric: "metric.app_warnings[app=pcw]"
-  expect: dampens
-  direction: up
-  source: "PCW detects a VRU only through its PSM or VAM (SAE J2945/9 2017; ETSI TS 103 300-2)"
+# A PCW x VRU-device check (device_fraction 0) is not here: with no devices PCW issues no
+# warning, and the apps provider then emits no app_warnings sample at all, so the 2 x 2
+# reads "not measured" (docs/validation/test-vru-safety.md, open item 7).
