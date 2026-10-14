@@ -1,0 +1,14 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-rate5
+  base: ../base.yaml
+  description: Run-cost measurement, rate5.
+time:
+  duration_s: 2.0
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 150
+messages:
+  rate_hz: 5

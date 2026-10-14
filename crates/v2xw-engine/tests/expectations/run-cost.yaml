@@ -1,0 +1,27 @@
+# Expectation rows, run cost. Format: see catalogue.yaml. Wall time is not deterministic, so
+# these rows pin the work counters that wall time follows: the measured release-binary cost
+# is proportional to `report.reception_attempts` (about 12-15 us of CPU per attempt on the
+# Manhattan ladder, docs/validation/test-run-cost.md) and to `report.frames_transmitted`.
+# Families as routed by scenarios/sensitivity/catalogue.yaml (dsrc: 40 vehicles, 1.2 km grid).
+
+# ---- Work a transmission costs: receivers followed ----
+- {setting: radio.range.max_m, change: low, metric: report.reception_attempts, expect: down,
+   source: "the cap bounds the fully evaluated range, so fewer links get a link budget (ns-3 RangePropagationLossModel; Veins maxInterfDist); measured 271 566 -> 32 063 attempts and 8.7 s -> 1.6 s at 300 m on the 145-vehicle ladder"}
+- {setting: radio.range.margin_db, change: low, metric: report.reception_attempts, expect: same, min_change: 0.0,
+   source: "corrected: on the 1.2 km open grid the 33 dBm line-of-sight reach (CandidateRangePlan) exceeds the world's diagonal at 5 and 10 dB alike and every open-air link clears N - margin, so the same links are followed; on Manhattan, where buildings put links under the floor, the margin does move the set (docs/validation/test-run-cost.md)"}
+- {setting: radio.devices.obu.tx_power_dbm, change: low, metric: report.reception_attempts, expect: same, min_change: 0.0,
+   source: "the followed set is taken at the fixed 33 dBm reference EIRP (FCC 24-123 95.3204(b)) so a power study does not change what is evaluated, only the outcome"}
+
+# ---- Work per simulated second: frames ----
+- {setting: messages.rate_hz, change: high, metric: report.frames_transmitted, expect: up, min_change: 0.5,
+   source: "frames are rate x vehicles x time (SAE J2945/1 periodic BSM); measured 10 -> 20 Hz doubles frames and run time (2 808 -> 5 626 frames, 1.70 -> 3.37 s per simulated s)"}
+- {setting: messages.rate_hz, change: low, metric: report.frames_transmitted, expect: down, min_change: 0.5,
+   source: "rate x vehicles x time (SAE J2945/1); 10 -> 5 Hz halves frames and run time on the ladder"}
+- {setting: messages.rate_hz, change: high, metric: report.reception_attempts, expect: up,
+   source: "each frame is followed to every receiver in reach, so attempts scale with frames at a fixed fleet"}
+
+# ---- Channel-access tier ----
+- {setting: radio.tiers.mac, change: abstract, metric: report.mac_grants, expect: down,
+   source: "the abstract tier models no EDCA contention (IEEE 802.11-2020 10.22.2), so no channel-access grant or backoff timer is scheduled (measured: no MacTimer events at all)"}
+- {setting: radio.tiers.mac, change: high, metric: report.reception_attempts, expect: same, min_change: 0.0,
+   source: "no 802.11p MAC model reads the high tier (wiring::build_mac); it only permits phy 'high'. Measured identical frame for frame on the ladder; the settings label says so"}

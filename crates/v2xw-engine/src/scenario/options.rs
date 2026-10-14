@@ -44,6 +44,15 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
                  model runs. Only propagation and channel access have an abstract tier.",
                 true,
             )),
+            // The run-cost audit (docs/validation/test-run-cost.md) found `mac: high` beside
+            // a medium PHY identical to `medium` frame for frame: no MAC model reads the
+            // high tier; it only unlocks the frame-level PHY, which requires it.
+            "high" if path == "radio.tiers.mac" => Some((
+                "Detailed (high) — runs as Standard",
+                "Channel access has no separate high tier in this build: the Standard EDCA \
+                 model runs. Choosing it is what allows the Detailed physical layer.",
+                true,
+            )),
             "abstract" => Some((
                 "Fast (abstract)",
                 "Closed-form stand-ins: cheapest, for very large fleets; least faithful.",

@@ -1,0 +1,15 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-step50-rate20
+  base: ../base.yaml
+  description: Run-cost measurement, step50.
+time:
+  duration_s: 2.0
+  mobility_step_ms: 50
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 150
+messages:
+  rate_hz: 20

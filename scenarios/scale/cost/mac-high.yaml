@@ -1,0 +1,18 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-mac-high
+  base: ../base.yaml
+  description: Run-cost measurement, mac-high.
+time:
+  duration_s: 2.0
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 150
+radio:
+  rat: dsrc-80211p
+  tiers:
+    propagation: medium
+    phy: medium
+    mac: high

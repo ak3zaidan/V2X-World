@@ -1,0 +1,16 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-pq-falcon
+  base: ../base.yaml
+  description: Run-cost measurement, pq-falcon.
+time:
+  duration_s: 2.0
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 150
+nodes:
+  default_obu: obu/pq-capable-hypothetical
+security:
+  signature: falcon-512

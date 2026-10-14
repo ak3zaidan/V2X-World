@@ -1,0 +1,18 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-gnbtp
+  base: ../base.yaml
+  description: Run-cost measurement, gnbtp.
+time:
+  duration_s: 2.0
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 150
+net:
+  layer: gn-btp
+messages:
+  sets: [cam]
+security:
+  envelope: etsi103097
