@@ -1572,10 +1572,15 @@ mod tests {
             let mut cur = &mut doc;
             let segments: Vec<&str> = path.split('.').collect();
             for segment in &segments[..segments.len() - 1] {
+                // A section the minimal document leaves out because it is the default
+                // (`apps`) is published with its defaults; write it in.
                 cur = cur
                     .as_object_mut()
-                    .and_then(|m| m.get_mut(*segment))
-                    .expect("a default's parent is in the minimal document");
+                    .map(|m| {
+                        m.entry((*segment).to_string())
+                            .or_insert_with(|| Value::Object(Map::new()))
+                    })
+                    .expect("a default's parent is an object");
             }
             if let Some(map) = cur.as_object_mut() {
                 map.insert(segments[segments.len() - 1].to_string(), default.clone());
