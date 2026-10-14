@@ -259,6 +259,8 @@ export class CameraController {
   #followPos = new Vector3();
   #followHeading = 0;
   #followSpeed = 0;
+  /** Drawn sim seconds per wall second: 0 paused, 1 real time, 4 at 4x. Scales the feed-forward only. */
+  #followTimeScale = 1;
 
   #altitude: number;
   #minAltitude: number;
@@ -661,6 +663,14 @@ export class CameraController {
   }
 
   /** Feed the followed actor's interpolated pose. Call once per frame before {@link update}. */
+  /**
+   * How fast the drawn clock runs against the wall clock, sim seconds per second: 0 while the run
+   * is paused, the playback speed otherwise. Only the spring's velocity feed-forward reads it.
+   */
+  setFollowTimeScale(scale: number): void {
+    this.#followTimeScale = Number.isFinite(scale) ? Math.min(64, Math.max(0, scale)) : 1;
+  }
+
   setFollowPose(x: number, y: number, z: number, headingRad: number, speedMps: number, jumped = false): void {
     // A discontinuity in the subject's own data (the interpolator snapped it) is followed with a
     // cut, not a whip: a spring chasing a car that jumped two metres swings the whole picture.
@@ -884,7 +894,10 @@ export class CameraController {
       const dash = this.#mode === "dashboard";
       const omega = dash ? 25 : 10;
       // A subject that has left the stream is standing where it was last seen.
-      const speed = this.#followValid ? this.#followSpeed : 0;
+      // The pose stream's speed is in sim metres per sim second; the drawn subject moves at that
+      // times the drawn clock's rate. Paused, the subject stands still, and feeding its last speed
+      // forward made the camera creep ahead of a stopped car for ever (the frame never settled).
+      const speed = this.#followValid ? this.#followSpeed * this.#followTimeScale : 0;
       const c = Math.cos(this.#followHeading);
       const sn = Math.sin(this.#followHeading);
       const vx = c * speed;

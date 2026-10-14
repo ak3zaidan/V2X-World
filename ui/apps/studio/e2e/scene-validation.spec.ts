@@ -339,6 +339,8 @@ interface SceneFacts {
   readonly statsInstances: number;
   readonly statsLive: number;
   readonly poseOccupied: number;
+  /** Occupied slots at the drawn instant (the interpolator's output), which lags the pose buffer. */
+  readonly drawnOccupied: number;
   readonly nodeTableSize: number;
   readonly worldSites: number;
 }
@@ -376,6 +378,7 @@ async function sceneFacts(page: Page): Promise<SceneFacts> {
         cameras: { state(): Record<string, unknown> };
         actors: { stats: Record<string, number>; hiddenActorId: number };
         stats: { snapshot(): Record<string, number> };
+        interpolator: { count: number; outOccupied: Uint8Array };
       };
       client: { poses: { count: number; occupied: Uint8Array } } | null;
       nodes: Map<number, unknown>;
@@ -392,6 +395,9 @@ async function sceneFacts(page: Page): Promise<SceneFacts> {
     const poses = engine.client?.poses;
     let occupied = 0;
     if (poses) for (let i = 0; i < poses.count; i++) if (poses.occupied[i] === 1) occupied++;
+    let drawnOccupied = 0;
+    const ip = v.interpolator;
+    for (let i = 0; i < ip.count; i++) if (ip.outOccupied[i] === 1) drawnOccupied++;
     const bb = engine.world?.bbox;
     return {
       mode: s.mode,
@@ -409,6 +415,7 @@ async function sceneFacts(page: Page): Promise<SceneFacts> {
       statsInstances: snap.actorInstances,
       statsLive: snap.actorLive,
       poseOccupied: occupied,
+      drawnOccupied,
       nodeTableSize: engine.nodes.size,
       worldSites: engine.world?.sites.count ?? 0,
     };
@@ -671,8 +678,12 @@ test("the aerial view draws one mark per live vehicle", async ({ page }) => {
   expect(f.live).toBeGreaterThan(0);
   expect(f.poseOccupied).toBeGreaterThan(0);
 
-  // The scene's own accounting: nothing may go missing between the pose buffer and the instances.
-  expect(f.live).toBe(f.poseOccupied);
+  // The scene's own accounting: nothing may go missing between the drawn instant and the instances.
+  // The drawn instant is a beat behind the newest pose snapshot, so a vehicle that left (or arrived)
+  // in between is still fading out (or not yet in) — measured 201 drawn against 200 in the buffer on
+  // a running mock. Exact against the interpolator's output; within a couple of vehicles of the buffer.
+  expect(f.live).toBe(f.drawnOccupied);
+  expect(Math.abs(f.live - f.poseOccupied)).toBeLessThanOrEqual(Math.max(2, Math.ceil(f.poseOccupied * 0.02)));
   expect(f.drawn + f.culled + f.dropped + (f.hiddenActorId >= 0 ? 1 : 0)).toBe(f.live);
 
   expect(f.culled, `${f.culled} of ${f.live} live vehicles are outside the opening aerial frustum`).toBe(0);
