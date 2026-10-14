@@ -42,8 +42,12 @@ rows:
     base_set: {radio.rat: lte-v2x-pc5, security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
     set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {sizing: ts-36-213}}}
     metric: cbr_mean
-    expect: changes
-    source: TS 36.213 Table 7.1.7.2.1-1 at I_TBS 7 against the Qm R estimate sets how many sub-channels a ~330 B frame needs
+    expect: same
+    source: >-
+      the J3161/1 profile's code rate (LTE_MCS7_J3161) is fitted to the allocations of Abrar
+      et al. 2026 Table 3, which TS 36.213 Table 7.1.7.2.1-1 reproduces (sidelink.rs
+      tbs_sizing_reproduces_j3161_and_opencv2x: 301 B takes 3 sub-channels either way), so a
+      200 B or 330 B frame gets the same allocation; measured 0.8093 -> 0.8093
   # The J3161/1 limit at CBR >= 0.65 is 1.5 %; a BSM at 10 Hz, two transmissions of two of
   # ten sub-channels occupies 10 x 2 x 2 / 10 000 = 0.4 %, so the limit never binds and
   # turning it off changes nothing. ETSI TS 103 574 Table 1 allows 0.3 % (PPPP 3-5) above

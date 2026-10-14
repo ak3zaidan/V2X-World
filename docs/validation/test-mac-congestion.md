@@ -96,8 +96,8 @@ it, because they test load, payload or DCC rather than same-slot contention.
 | radio.mac.periodic_access_category | vo → bk | access_ms | up | 0.47 → 1.49 | yes |
 | radio.mac.periodic_access_category | vo → vi | access_ms | up | 0.47 → 0.58 | yes |
 | radio.mac.cw_min_vi (under AC_VI) | 7 → 63 | backoff_us | up | 27.6 → 252 | yes |
-| radio.mac.queue_length | 64 → 16 | mac_drops | up | PENDING_Q1 | |
-| radio.mac.queue_length | 64 → 16 | access_ms | down | PENDING_Q2 | |
+| radio.mac.queue_length | 64 → 16 | mac_drops | up | not run (corrected base, see below) | |
+| radio.mac.queue_length | 64 → 16 | access_ms | down | not run (corrected base, see below) | |
 
 \* AIFSN: this expectation was first written as "same", on the reasoning that one
 AIFSN for every station does not separate them. The measured +21 % is explained by
@@ -120,13 +120,13 @@ it measures the signing queue, while the MAC queue wait is part of `access_ms`.
 | radio.dcc.enabled (J2945/1) | off → on | aoi_ms | up | 64.9 → 68.8 | yes |
 | radio.dcc.max_itt_ms | 600 → 100 | tx_rate_hz | up | 8.78 → 9.39 | yes |
 | radio.dcc.max_itt_ms | 600 → 100 | aoi_ms | down | 68.8 → 62.4 | yes |
-| radio.dcc.power_control | on → off, CBR 0.8 | cbr_mean | up | PENDING_P1 | |
-| radio.dcc.min_power_dbm | 10 → 20, CBR 0.8 | cbr_mean | up | PENDING_P2 | |
+| radio.dcc.power_control | on → off, CBR 0.8 | cbr_mean | up | not run (corrected base, see below) | |
+| radio.dcc.min_power_dbm | 10 → 20, CBR 0.8 | cbr_mean | up | not run (corrected base, see below) | |
 | ETSI adaptive (LIMERIC) | off → on, 300 trips | tx_rate_hz | down | 17.9 → 13.5 | yes |
 | ETSI adaptive | off → on, 300 trips | cbr_mean | down | 0.836 → 0.584 (target 0.68) | yes |
-| radio.dcc.adaptive_beta | 0.0012 → 0.05, 300 trips | tx_rate_hz | up | PENDING_B | |
+| radio.dcc.adaptive_beta | 0.0012 → 0.05, 300 trips | tx_rate_hz | up | not run (corrected base, see below) | |
 | radio.dcc.reactive_table | a1 → a2 | tx_rate_hz | changes | 7.60 → 9.64 | yes |
-| radio.dcc.reactive_hold_ms | 0 → 1000 | tx_rate_hz | changes | PENDING_H | |
+| radio.dcc.reactive_hold_ms | 0 → 1000 | tx_rate_hz | changes | not run (corrected base, see below) | |
 
 **Corrected expectations:**
 
@@ -151,17 +151,28 @@ it measures the signing queue, while the MAC queue wait is part of `access_ms`.
 | resource_keep_probability | 0.8 → 0 | sl_selections | up | 168 → 387 | yes |
 | mcs | 7 → 11 | cbr_mean | down | 0.798 → 0.773 | yes |
 | sizing | code-rate → ts-36-213 (200 B BSM) | cbr_mean | changes | 0.798 → 0.798 | corrected |
-| sizing | code-rate → ts-36-213 (cert, ~330 B) | cbr_mean | changes | PENDING_S | |
+| sizing | code-rate → ts-36-213 (cert, ~330 B) | cbr_mean | changes, corrected to same | 0.8093 → 0.8093 | corrected |
 | congestion_control | J3161 → off, 300 trips | cbr_mean | up | 0.843 → 0.843 | corrected |
-| congestion_control | J3161 → off, 300 trips | cbr_mean | same | PENDING_C1 | |
-| congestion_control | J3161 → ETSI TS 103 574 | cbr_mean | down | PENDING_C2 | |
+| congestion_control | J3161 → off, 300 trips | cbr_mean | same | 0.843 → 0.843 | yes |
+| congestion_control | J3161 → ETSI TS 103 574, 300 trips | cbr_mean | down | 0.843 → 0.783 | yes |
 
 - **Sizing:** under the J3161/1 pool, every transport block is at least two
   sub-channels of 10 PRB. A BSM of about 200 B fits that minimum under either sizing,
-  so the setting cannot change a plain BSM.
+  so the setting cannot change a plain BSM. The same holds at about 330 B (a
+  certificate on every frame). The profile's code rate (`LTE_MCS7_J3161`) is fitted to
+  the J3161/1 allocations that the TS 36.213 table reproduces
+  (`tbs_sizing_reproduces_j3161_and_opencv2x`: 301 B takes 3 sub-channels either way).
+  So on the only profile where the loader admits it, the setting is a cross-check of
+  the fit rather than a study variable. **Finding:** the loader does not refuse it,
+  because the two sizings may still differ at some payload size.
 - **CR limit:** a 10 Hz BSM with 2 transmissions on 2 of 10 sub-channels occupies
   0.4 %. The J3161/1 limit at CBR ≥ 0.65 is 1.5 %, so it never binds, and switching it
   off changes nothing. ETSI TS 103 574's 0.3 % above CBR 0.8 does bind.
+
+**Not run this round:** the corrected queue, power-control, vRP_Min, β and
+reactive-hold rows (they are in the full spec). The reactive hold moved `tx_rate_hz` by only −0.8 % in 2 s at a steady CBR,
+below the 1 % bar. A hold only matters when CBR falls, so it needs a scenario whose
+load changes.
 
 ## Not exposed, not tested
 
@@ -170,4 +181,13 @@ count per profile are fixed by the profile and are not settings.
 
 ## Run cost
 
-PENDING_COST
+Not measured this round, because of lock contention.
+
+**Theory:** a medium-tier 802.11p run evaluates every frame at every receiver in
+range. Its cost therefore grows with frames × receivers: with N² × rate for vehicles,
+linearly with rate, and hardly at all with payload or EDCA numbers. On the dense base,
+150 → 300 trips should cost about 4× and 10 → 20 Hz about 2×.
+
+The cost scenarios are ready in the scratch folder, and `v2xw run --no-recording`
+times them. Only one sweep was timed here: 39 dense runs took 355 s on the release
+binary, and the 300-trip rows dominated.

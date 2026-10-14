@@ -5184,6 +5184,58 @@ fn radio(s: &Scenario, e: &mut Vec<ScenarioError>) {
 
 /// `radio.phy`, `radio.mac` and `radio.channel_model`: ranges, closed sets, and the
 /// combinations that would leave a number with nothing to act on.
+/// Refuses an EDCA number for a queue no frame of the run waits in, and an event queue on
+/// a run with no event traffic: each would change nothing.
+///
+/// Without `net.access_categories: etsi-profiles` periodic messages wait in
+/// `periodic_access_category` (AC_VO by default) and DENMs and forwarded copies, which only
+/// a GeoNetworking stack sends, in `event_access_category` (`Engine::access_category`).
+/// `etsi-profiles` uses AC_VO for DENMs alone and never AC_VI (EN 302 663 Annex B).
+fn mac_queue_in_use(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let m = &s.radio.mac;
+    let events = s.net.layer == "gn-btp";
+    if m.event_access_category.is_some() && !events {
+        e.push(conflict(
+            "radio.mac.event_access_category",
+            "chooses the queue of DENMs and forwarded copies, which only a GeoNetworking \
+             stack sends; set net.layer to 'gn-btp' or remove it"
+                .to_string(),
+        ));
+    }
+    let etsi = s.net.access_categories.as_deref() == Some("etsi-profiles");
+    let periodic = m.periodic_access_category.as_deref().unwrap_or("vo");
+    let event = m.event_access_category.as_deref().unwrap_or("vo");
+    let has_denm = s.messages.sets.iter().any(|x| x == "denm");
+    let used = |ac: &str| {
+        if etsi {
+            ac == "vo" && has_denm
+        } else {
+            periodic == ac || (events && event == ac)
+        }
+    };
+    for (ac, fields) in [
+        ("vo", [("radio.mac.cw_min_vo", m.cw_min_vo), ("radio.mac.aifsn_vo", m.aifsn_vo)]),
+        ("vi", [("radio.mac.cw_min_vi", m.cw_min_vi), ("radio.mac.aifsn_vi", m.aifsn_vi)]),
+    ] {
+        if used(ac) {
+            continue;
+        }
+        for (path, v) in fields {
+            if v.is_some() {
+                e.push(conflict(
+                    path,
+                    format!(
+                        "tunes the AC_{} queue, and no frame of this run waits in it; map a \
+                         message there with radio.mac.periodic_access_category (or \
+                         event_access_category on a gn-btp stack) or remove it",
+                        ac.to_uppercase()
+                    ),
+                ));
+            }
+        }
+    }
+}
+
 fn radio_tuning(s: &Scenario, e: &mut Vec<ScenarioError>) {
     let p = &s.radio.phy;
     let m = &s.radio.mac;
@@ -5250,7 +5302,8 @@ fn radio_tuning(s: &Scenario, e: &mut Vec<ScenarioError>) {
             one_of(path, ac, &ACCESS_CATEGORIES, e);
         }
     }
-    let dsrc = s.radio.rat == crate::scenario::schema::Rat::Dsrc80211p;
+    mac_queue_in_use(s, e);
+    let dsrc =s.radio.rat == crate::scenario::schema::Rat::Dsrc80211p;
     if !dsrc && (!p.is_default() || !m.is_default()) {
         let path = if p.is_default() {
             "radio.mac"
