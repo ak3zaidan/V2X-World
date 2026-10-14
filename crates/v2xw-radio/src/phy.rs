@@ -778,6 +778,14 @@ impl OfdmPhy {
         bounds.sort_unstable();
         bounds.dedup();
         let mut windows = Vec::with_capacity(bounds.len().saturating_sub(1));
+        // Each interferer's power in milliwatts, converted once per arrival rather than
+        // once per window it overlaps (the same values: the conversion is pure). A frame
+        // with k mid-frame interferers has up to 2k + 1 windows, so this was k² `pow`s.
+        let interferer_mw: Vec<f64> = arrival
+            .interferers
+            .iter()
+            .map(|i| numeric::dbm_to_mw(i.power_dbm))
+            .collect();
         for w in bounds.windows(2) {
             let (from, to) = (w[0], w[1]);
             if to <= from {
@@ -786,8 +794,9 @@ impl OfdmPhy {
             let active: Vec<(NodeId, f64)> = arrival
                 .interferers
                 .iter()
-                .filter(|i| i.start < to && from < i.end)
-                .map(|i| (i.node, numeric::dbm_to_mw(i.power_dbm)))
+                .zip(&interferer_mw)
+                .filter(|(i, _)| i.start < to && from < i.end)
+                .map(|(i, &mw)| (i.node, mw))
                 .collect();
             let noise = if with_jamming {
                 self.noise_dbm_during(arrival.rx, arrival.frame.channel, from, to)
