@@ -43,6 +43,9 @@ pub struct AppsProvider {
     card: ModelCard,
     level: ConfidenceLevel,
     sums: BTreeMap<String, Sums>,
+    /// The applications a run has on: each reports a sample every period, zero
+    /// warnings included, so a check reads 0 rather than "not measured".
+    seeded: Vec<String>,
     rejected: u64,
 }
 
@@ -81,8 +84,23 @@ impl AppsProvider {
             card,
             level: DEFAULT_LEVEL,
             sums: BTreeMap::new(),
+            seeded: Vec::new(),
             rejected: 0,
         }
+    }
+
+    /// The same provider, reporting `app_warnings` for each of `apps` every period even
+    /// when it issued none (an explicit 0, not a missing sample).
+    #[must_use]
+    pub fn with_apps<I, S>(mut self, apps: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.seeded = apps.into_iter().map(Into::into).collect();
+        self.seeded.sort();
+        self.seeded.dedup();
+        self
     }
 
     fn definitions() -> Vec<MetricDef> {
@@ -210,6 +228,9 @@ impl MetricProvider for AppsProvider {
     fn flush(&mut self, at: SimTime) -> Vec<MetricSample> {
         let defs = Self::definitions();
         let mut out = Vec::new();
+        for app in &self.seeded {
+            self.sums.entry(app.clone()).or_default();
+        }
         for (app, s) in core::mem::take(&mut self.sums) {
             let mut dims = Dims::new();
             dims.insert(Dim::App, DimValue::label(app));
@@ -293,6 +314,19 @@ mod tests {
         assert!(out.iter().any(|s| s.metric == "app_precision"));
         assert!(out.iter().any(|s| s.metric == "app_miss_ratio"));
         assert_eq!(p.rejected(), 0);
+    }
+
+    #[test]
+    fn a_seeded_app_with_no_warnings_reports_zero() {
+        let mut p = AppsProvider::new().with_apps(["rlvw", "fcw"]);
+        for _ in 0..2 {
+            let out = p.flush(1);
+            let zero = out
+                .iter()
+                .find(|s| s.metric == "app_warnings" && format!("{:?}", s.dims).contains("rlvw"))
+                .expect("a zero sample for rlvw");
+            assert!(matches!(zero.value, SampleValue::Count { count: 0 }));
+        }
     }
 
     /// Every definition passes the registry's own validation; one that did not stopped
