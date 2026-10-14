@@ -4002,3 +4002,12 @@ Merged `--no-ff` in this order: speed, netreal, appspq, deadset, junction, lc201
 - **Threads:** `--no-recording --digest` stream digests match at `RAYON_NUM_THREADS` 1 and 4 on all three. Recording `data_digest` does differ, even with a fixed `--build-utc`, because of the last ~12 KB of the MCAP (summary section). Run reports are byte-identical.
 - **Seen:** `compare` prints flow as "6.32e-3 veh/h" for a 30 veh/h demand. That looks like veh/s labelled veh/h.
 - **Not done:** the `--catalogue` regeneration (about 47 min from an empty cache).
+
+## 2026-10-13: round-17 integration
+
+Merged `--no-ff`: verify (docs only, no conflicts). No code changed, so no fixes were needed after the merge and `cargo fmt --all` made no changes.
+
+- **Checks:** `cargo check --workspace --tests` passes. Engine `scenario`/`publish`/`guide` lib tests pass (31).
+- **Release:** `cargo build --release -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots, and `/agent/status` reports the agent available.
+- **Digests:** unchanged (docs-only round).
+- **Still open:** see the group 5 section above (Falcon AoI verify path, selection_window, `--catalogue` regeneration, MCAP tail digest, compare veh/s label).
