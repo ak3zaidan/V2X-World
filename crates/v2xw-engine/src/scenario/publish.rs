@@ -301,6 +301,7 @@ const UNIT_OVERRIDES: &[(&str, &str)] = &[
     // network audit
     ("nodes.verify_queue_depth", "messages"),
     ("nodes.peer_cert_cache", "certificates"),
+    ("nodes.hsm_sign_lower_us", "us"),
     ("messages.path_history_points", "points"),
 ];
 

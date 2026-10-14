@@ -90,6 +90,7 @@ sidelink's MCS and sensitivity are `radio.models.sidelink`'s.
 | `radio.channel_model.shadowing_sigma_db` **new** | the law's own sigma (4.15 dB LOS, 6.67 dB OLOS urban, Abbas 2015) | 0 to 15 dB | Log-normal shadowing spread, applied to every law with shadowing (log-distance, TR 37.885, geometric, WINNER+ B1). |
 | `radio.channel_model.shadowing_decorrelation_m` **new** | environment's (about 10 m city) | 0 to 500 m (exclusive of 0) | Gudmundson 1991 correlation distance. |
 | `radio.channel_model.fading` **new** | tier's (Nakagami m = 3 for 802.11p, none for C-V2X curves) | `none`, `rayleigh`, `rice`, `nakagami` | Small-scale fading. Refused beside `radio.models.fading`. |
+| `radio.channel_model.fading_coherence` **new** | `independent` | `independent`, `doppler` | `doppler` draws one fade per link per coherence block, `T_c = 0.423/f_D` (Rappaport 2002 Eq. 5.40c) with `f_D = (|v_tx|+|v_rx|)·f_c/c` (Akki & Haber 1986), floored at 0.05 m/s: queued vehicles fade in bursts, fast ones decorrelate per frame. Refused when the run draws no fading. |
 | `radio.channel_model.nakagami_shape` **new** | 3 | 0.5 to 20 | Nakagami m (needs `fading: nakagami`). |
 | `radio.channel_model.rice_k_db` **new** | 6 dB (Cheng 2007 LOS 3-10 dB) | -10 to 30 dB | Rice K, simulated as Nakagami `m = (K+1)²/(2K+1)` (Stüber Eq. 2.57). Needs `fading: rice`. |
 | `radio.channel_model.nakagami_shape_far`, `.nakagami_breakpoint_m` **new** | unset (one m everywhere) | 0.5 to 20; (0, 5000] m | Distance-dependent Nakagami m (Veins-style 1.5 near, 0.75 far). Need `fading: nakagami`, and each other. |
@@ -182,7 +183,7 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `net.geonet.non_area_forwarding` | `greedy` | `greedy`, `cbf` | Towards the area. |
 | `net.geonet.cbf_variant` | `etsi` | `etsi`, `dpd`, `gpc` | CBF timer rule (1-100 ms over `DIST_MAX` 1000 m). |
 | `net.geonet.area_radius_m` | 1000 | 0 to 1784 m | DENM destination area. |
-| `net.geonet.repetition_interval_ms` / `_duration_ms` | 1000 / 5000 | 0 to 60 s / 0 to 600 s | DENM repetition (EN 302 637-3). |
+| `net.geonet.repetition_interval_ms` / `_duration_ms` | 1000 / unset (5000 overlay, 15000 on-air C2C-CC stationary profile) | 0 to 60 s / 0 to 600 s | DENM repetition (EN 302 637-3). An explicit duration, 5000 included, is used as given. |
 | `net.geonet.keep_alive_forwarding` | false | bool | Keep-alive forwarding. |
 | `net.geonet.cbf_min_time_ms`, `.cbf_max_time_ms` **new** | 1 / 100 ms | 0 to 1000 ms, min below max | `itsGnGeoBroadcastCbfMinTime` / `MaxTime` (EN 302 636-4-1 Annex H). Refused unless a forwarding algorithm is `cbf`. |
 | `net.geonet.max_comm_range_m` **new** | 1000 m | (0, 5000] m | `DIST_MAX`, where the CBF timer reaches its minimum (Annex H). |
@@ -201,6 +202,7 @@ under the US default J2945/1 is refused, and so is any number when `enabled: fal
 | `nodes.compute_tier` | `medium` | tiers | Queueing of crypto work. |
 | `nodes.verify_queue_depth` **new** | 64 | 1 to 4096 | Verification queue. A full queue drops (`verify_overflow`). |
 | `nodes.peer_cert_cache` **new** | 128 | 1 to 65536 | Peer certificates each vehicle or roadside unit holds (LRU, 06-node-models.md §2.2). An evicted peer's next digest-signed message needs a P2PCD request and cannot be verified until its certificate arrives again. |
+| `nodes.hsm_sign_lower_us` **new** | unset (every signature at the profile's upper bound, CRATON2 <9 ms) | (0, 1e6) us, below the bound | Each HSM signature drawn uniformly in [this, bound] from the node's own stream. No typical CRATON2/SECTON value is published (searched 2026-10-13). Refused when the default OBU has no upper-bound signing time. |
 | `security.on_demand_threshold` **new** | 0.5 | (0, 1] | Relevance score (1/(1+TTC) from the sender's claimed position, speed and heading against the receiver's own) at or above which an `on-demand` unit verifies a known signer. No published operating point (Krishnan & Weimerskirch 2011). Refused under any other policy. |
 | `security.prioritized_horizon_m` **new** | 300 | 10 to 2000 m | Range over which nearness raises a `prioritized` unit's verification priority; the queue now serves the highest priority first. Refused under any other policy. |
 | `security.signer_id_policy.on_new_neighbour` **new** | false | bool | Also attach the certificate to the next BSM or CAM after a vehicle hears a station it did not know (ETSI TS 103 097 V1.3.1 §7.1.1), on top of the cadence; a forced certificate does not restart the cadence. Refused when every message already carries one, or with no `bsm`/`cam`. |

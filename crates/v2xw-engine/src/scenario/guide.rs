@@ -384,6 +384,16 @@ const ADVANCED: &[Basic] = &[
         recommended: "300 m (the DSRC/C-V2X awareness range); 100 to 1000 m.",
     },
     Basic {
+        path: "nodes.hsm_sign_lower_us",
+        explain: "The fastest a hardware security module signs a message, when its maker only publishes a worst case; each signature then takes a random time between this and the worst case instead of always the worst case.",
+        recommended: "Unset (every signature at the CRATON2's published <9 ms bound; no typical value is published); 613 us (software ECDSA P-256 on a Cortex-A53, R7 §D8) to 9,000 us.",
+    },
+    Basic {
+        path: "radio.channel_model.fading_coherence",
+        explain: "Whether a link's fade carries over from one message to the next: with doppler, vehicles standing still (a queue at a red light) keep a bad fade for many messages in a row, while fast vehicles get a fresh fade with every message.",
+        recommended: "independent (today's behaviour); doppler for burst-loss studies (Akki & Haber 1986; Rappaport 2002 Eq. 5.40c).",
+    },
+    Basic {
         path: "nodes.peer_cert_cache",
         explain: "How many other stations' certificates each vehicle or roadside radio unit remembers; when it forgets one, that vehicle's next short-form message cannot be checked until its certificate is requested again.",
         recommended: "128 (engine default; no device publishes one); 16 to 1024.",
