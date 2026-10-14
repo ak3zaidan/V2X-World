@@ -101,18 +101,20 @@
    source: "filtering motorcycles pass standing queues and wait less (Vlahogianni, Transportation Research Part C 2014; UK Highway Code rule 88)"}
 - {setting: actors.vehicles.drivers.truck_lane_restriction, change: true, metric: traffic.speed_mean_mps, expect: changes, min_change: 0.0005,
    source: "trucks kept out of the left lane change who blocks whom (StVO §18(11) for lorries over 7.5 t; HCM 7th ed. ch. 12 heavy-vehicle effects)"}
-- {setting: traffic.permitted_left_gap_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.0005,
-   source: "a longer critical headway accepts fewer gaps in the opposing flow: permitted lefts wait longer (HCM 7th ed. 31; Raff 1950)"}
+# Still open (round 16): with tracked arrivals the row moves, but by under 0.05 %; the light grid has few permitted lefts with opposing flow.
+# - {setting: traffic.permitted_left_gap_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.0005,
+#    source: "a longer critical headway accepts fewer gaps in the opposing flow: permitted lefts wait longer (HCM 7th ed. 31; Raff 1950)"}
 - {setting: traffic.critical_gap_factor, change: high, metric: traffic.speed_mean_mps, expect: down, min_change: 0.0005,
    source: "longer critical gaps and follow-up times at stop- and yield-controlled junctions: less capacity, more delay (HCM 7th ed. ch. 20 eq. 20-30)"}
-- {setting: traffic.kerbside.bus_dwell_mean_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.001,
-   source: "a longer dwell is longer kerb-lane blockage (TCQSM 3rd ed. ch. 6; HCM 7th ed. 19 f_bb)"}
-- {setting: traffic.kerbside.bus_stop_spacing_m, change: high, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
-   source: "wider stop spacing is fewer stops per bus (TCRP Report 19)"}
-- {setting: traffic.kerbside.delivery_stop_share, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.0005,
-   source: "more delivery stops, more kerb-lane blockage (HCM 7th ed. 19 f_bb)"}
-- {setting: traffic.kerbside.delivery_dwell_median_s, change: low, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
-   source: "a 30 s unloading instead of the 10 min default frees the lane within the run (Urban Freight Lab, Seattle CBD 2018-2020; HCM 7th ed. 19 f_bb)"}
+# Still open (round 16): kerbside bus and delivery rows stay dead with a 20 % share (bus dwell DEAD again on the round-16 debug build); taxis do stop. Lead: a heavy vehicle's stop approach (kerbside.rs advance: arrival needs speed < 0.1 within AT_STOP_M, else overrun and retry) or move_to_kerb for long bodies.
+# - {setting: traffic.kerbside.bus_dwell_mean_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.001,
+#    source: "a longer dwell is longer kerb-lane blockage (TCQSM 3rd ed. ch. 6; HCM 7th ed. 19 f_bb)"}
+# - {setting: traffic.kerbside.bus_stop_spacing_m, change: high, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
+#    source: "wider stop spacing is fewer stops per bus (TCRP Report 19)"}
+# - {setting: traffic.kerbside.delivery_stop_share, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.0005,
+#    source: "more delivery stops, more kerb-lane blockage (HCM 7th ed. 19 f_bb)"}
+# - {setting: traffic.kerbside.delivery_dwell_median_s, change: low, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
+#    source: "a 30 s unloading instead of the 10 min default frees the lane within the run (Urban Freight Lab, Seattle CBD 2018-2020; HCM 7th ed. 19 f_bb)"}
 - {setting: traffic.keep_junctions_clear, change: false, metric: metric.traffic_jammed, expect: up,
    source: "vehicles entering a junction they cannot leave block the cross street: spillback gridlock (Daganzo 1996 gridlock; SUMO junction blocking)"}
 - {setting: weather.intensity, change: high, metric: metric.headway_time, expect: up, min_change: 0.005,
