@@ -5651,7 +5651,12 @@ fn radio_tuning(s: &Scenario, e: &mut Vec<ScenarioError>) {
         }
     }
     if let Some(f) = &c.fading_coherence {
-        one_of("radio.channel_model.fading_coherence", f, &FADING_COHERENCE, e);
+        one_of(
+            "radio.channel_model.fading_coherence",
+            f,
+            &FADING_COHERENCE,
+            e,
+        );
     }
     if let Some(f) = &c.fading {
         one_of("radio.channel_model.fading", f, &FADING_LAWS, e);

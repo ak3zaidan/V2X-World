@@ -586,7 +586,10 @@ mod tests {
                 }
             }
         }
-        assert!(shortcuts > 50_000, "the shortcut must fire at high SINR, got {shortcuts}");
+        assert!(
+            shortcuts > 50_000,
+            "the shortcut must fire at high SINR, got {shortcuts}"
+        );
     }
 
     /// 04-models.md §4.7's model-output table: SNR in dB for 10 % PER at 200, 400 and

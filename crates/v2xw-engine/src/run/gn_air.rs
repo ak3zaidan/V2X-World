@@ -165,9 +165,9 @@ pub(super) fn on_air_repetition(
     g: &Geonet,
 ) -> (v2xw_core::time::Duration, v2xw_core::time::Duration) {
     use v2xw_core::time::Duration;
-    let duration_ms = g.repetition_duration_ms.unwrap_or(
-        v2xw_node::events::STATIONARY_REPETITION_DURATION.as_nanos() / 1_000_000,
-    );
+    let duration_ms = g
+        .repetition_duration_ms
+        .unwrap_or(v2xw_node::events::STATIONARY_REPETITION_DURATION.as_nanos() / 1_000_000);
     (
         Duration::from_millis(g.repetition_interval_ms),
         Duration::from_millis(duration_ms),

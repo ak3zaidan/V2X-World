@@ -5948,7 +5948,8 @@ impl Engine {
                     // Doppler coherence: the draw is keyed by the start of the link's
                     // coherence block, from both ends' speeds (a roadside unit stands still).
                     let at = coherence.map_or(now, |c| {
-                        let speed = |v: Vec3| v2xw_core::math::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+                        let speed =
+                            |v: Vec3| v2xw_core::math::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
                         let rx_vel = velocities.get(&rx).copied().unwrap_or(Vec3::ZERO);
                         c.block_start(now, speed(tx_vel) + speed(rx_vel))
                     });

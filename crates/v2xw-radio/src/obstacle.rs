@@ -309,7 +309,10 @@ impl SegmentSelection {
             let (mut ta, mut tb) = if self.inv[k] == 0.0 {
                 ((lo - self.a[k]) / d, (hi - self.a[k]) / d)
             } else {
-                ((lo - self.a[k]) * self.inv[k], (hi - self.a[k]) * self.inv[k])
+                (
+                    (lo - self.a[k]) * self.inv[k],
+                    (hi - self.a[k]) * self.inv[k],
+                )
             };
             if ta > tb {
                 core::mem::swap(&mut ta, &mut tb);
@@ -358,7 +361,10 @@ pub fn segment_blocked(world: &World, index: &BuildingIndex, a: Vec3, b: Vec3) -
         let ring = &building.footprint;
         // A boolean OR, so the walls are tried first; an end can only be inside when some
         // edge straddles its y (`point_in_ring` toggles on no other edge).
-        let (mut sa, mut sb) = (closing_edge_straddles(ring, a), closing_edge_straddles(ring, b));
+        let (mut sa, mut sb) = (
+            closing_edge_straddles(ring, a),
+            closing_edge_straddles(ring, b),
+        );
         for w in ring.windows(2) {
             if segment_intersection_t(a, b, w[0], w[1]).is_some() {
                 return true;
@@ -2245,9 +2251,24 @@ mod tests {
     #[test]
     fn the_division_free_crossing_test_matches_the_division() {
         let edge = [
-            0.0, -0.0, 1.0, -1.0, f64::MIN_POSITIVE, 5e-324, -5e-324, 1e-300, -1e-300, 1e300,
-            -1e300, f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 1.0 + f64::EPSILON,
-            1.0 - f64::EPSILON / 2.0, 3.0, -3.0,
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            f64::MIN_POSITIVE,
+            5e-324,
+            -5e-324,
+            1e-300,
+            -1e-300,
+            1e300,
+            -1e300,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            1.0 + f64::EPSILON,
+            1.0 - f64::EPSILON / 2.0,
+            3.0,
+            -3.0,
         ];
         for &n in &edge {
             for &d in &edge {
@@ -2291,7 +2312,10 @@ mod tests {
             assert_eq!(fast.map(f64::to_bits), slow.map(f64::to_bits), "case {i}");
             hits += usize::from(slow.is_some());
         }
-        assert!(hits > 10_000, "the cases must exercise crossings, got {hits}");
+        assert!(
+            hits > 10_000,
+            "the cases must exercise crossings, got {hits}"
+        );
     }
 
     /// A link through a whole row of towers is charged the around-the-corner excess of

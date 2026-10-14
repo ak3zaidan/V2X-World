@@ -963,10 +963,14 @@ pub fn check_recording(
                     // standing queue (NY VTL §1175, the engine's keep-clear rule), so
                     // the wait is lawful and not a stop on green.
                     let exit_full = exit_of_via.get(m).is_some_and(|x| {
-                        by_lane.get(&x.index()).and_then(|v| v.first()).is_some_and(|tail| {
-                            now.get(&tail.2).is_some_and(|n| n.speed <= EXIT_QUEUE_MOVING_MPS)
-                                && tail.0 - tail.3 < own_len + EXIT_MIN_GAP_M
-                        })
+                        by_lane
+                            .get(&x.index())
+                            .and_then(|v| v.first())
+                            .is_some_and(|tail| {
+                                now.get(&tail.2)
+                                    .is_some_and(|n| n.speed <= EXIT_QUEUE_MOVING_MPS)
+                                    && tail.0 - tail.3 < own_len + EXIT_MIN_GAP_M
+                            })
                     });
                     if exit_full {
                         continue;

@@ -247,5 +247,8 @@ fn every_expected_finding_id_is_emitted_somewhere() {
             }
         }
     }
-    assert!(missing.is_empty(), "finding ids no insight emits: {missing:?}");
+    assert!(
+        missing.is_empty(),
+        "finding ids no insight emits: {missing:?}"
+    );
 }

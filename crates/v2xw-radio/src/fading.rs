@@ -672,13 +672,19 @@ mod tests {
     fn doppler_coherence_shrinks_with_speed() {
         let c = super::DopplerCoherence { carrier_hz: 5.9e9 };
         let fast = c.coherence_time_s(2.0 * 140.0 / 3.6);
-        assert!((fast - 0.423 / (77.78 * 5.9e9 / 299_792_458.0)).abs() < 1e-6, "{fast}");
+        assert!(
+            (fast - 0.423 / (77.78 * 5.9e9 / 299_792_458.0)).abs() < 1e-6,
+            "{fast}"
+        );
         assert!(fast < 3e-4);
         assert!(c.coherence_time_s(0.0) > 0.4);
         let beacons = [0u64, 100_000_000, 200_000_000];
         let key = |v: f64| beacons.map(|t| c.block_start(t + 3_000_000_000, v));
         let still = key(0.0);
-        assert_eq!(still[0], still[1], "a stationary pair shares a fade across beacons");
+        assert_eq!(
+            still[0], still[1],
+            "a stationary pair shares a fade across beacons"
+        );
         let moving = key(77.78);
         assert!(moving[0] != moving[1] && moving[1] != moving[2]);
         for (t, k) in beacons.iter().zip(moving) {
