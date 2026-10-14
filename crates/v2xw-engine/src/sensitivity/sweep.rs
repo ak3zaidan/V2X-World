@@ -667,6 +667,19 @@ pub struct FingerprintRecorder {
     /// [vehicles, vrus] x (speed sum, samples, stopped samples)
     kin: [(f64, u64, u64); 2],
     actors: [BTreeSet<u64>; 2],
+    /// Each vehicle's last (lane, distance along it), for the lane-change count.
+    last_lane: BTreeMap<u64, (u32, f64)>,
+    /// Lateral lane changes: the lane changed while the distance along it carried over.
+    lane_changes: u64,
+}
+
+/// Whether a vehicle that moved from `prev` (at `prev_pos` m along it) to `lane` (at `pos`)
+/// changed lane sideways rather than crossing into the next lane at a junction: a lateral
+/// change keeps the distance along the road (parallel lanes of one edge share it), while a
+/// junction crossing restarts it near 0. Neither the step (0.1 s at 25 mph is 1.1 m) nor a
+/// change near a lane's start reaches the 3 m floor, so the count is a slight undercount.
+fn is_lateral_change(prev: u32, prev_pos: f64, lane: u32, pos: f64) -> bool {
+    prev != lane && pos > 3.0 && prev_pos > 3.0 && (pos - prev_pos).abs() < 5.0
 }
 
 fn is_vru(class: Option<&str>) -> bool {
@@ -708,7 +721,17 @@ impl RunRecorder for FingerprintRecorder {
                     if k.speed_mps < 0.1 {
                         e.2 += 1;
                     }
-                    self.actors[i].insert(u64::from(k.actor.index()));
+                    let id = u64::from(k.actor.index());
+                    self.actors[i].insert(id);
+                    if i == 0
+                        && let (Some(lane), Some(pos)) = (k.lane, k.lane_pos_m)
+                    {
+                        if let Some((prev, prev_pos)) = self.last_lane.insert(id, (lane, pos))
+                            && is_lateral_change(prev, prev_pos, lane, pos)
+                        {
+                            self.lane_changes += 1;
+                        }
+                    }
                 }
             }
             _ => {}
@@ -790,6 +813,28 @@ impl FingerprintRecorder {
                 f.insert(format!("{who}.stopped_share"), stopped as f64 / n as f64);
                 f.insert(format!("{who}.actors"), self.actors[i].len() as f64);
             }
+        }
+        if self.kin[0].1 > 0 {
+            // The traffic.control counters are sampled only when a controller reports, so
+            // a run with no gridlock (or no actuated signal) had no value at all, and a
+            // row comparing it with a run that teleported 325 vehicles could not be judged
+            // (round 15). With vehicles on the road, an absent counter is a zero.
+            for name in [
+                "traffic_jammed",
+                "traffic_teleports",
+                "traffic_removed",
+                "signal_gap_outs",
+                "signal_max_outs",
+            ] {
+                f.entry(format!("metric.{name}")).or_insert(0.0);
+            }
+            // Lane changes per vehicle seen, so a demand change does not read as a
+            // lane-change change by itself.
+            f.insert("traffic.lane_changes".into(), self.lane_changes as f64);
+            f.insert(
+                "traffic.lane_changes_per_veh".into(),
+                self.lane_changes as f64 / self.actors[0].len().max(1) as f64,
+            );
         }
         f
     }

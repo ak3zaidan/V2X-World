@@ -59,6 +59,12 @@ families:
 
 routes:
   - {prefix: actors.vehicles.drivers.truck.time_headway_s, families: [freeway, traffic]}
+  # The restriction acts only on a motorway with three or more lanes (drivers.rs
+  # is_restricted_left_lane): the Midtown grid's two lanes never trigger it.
+  - {prefix: actors.vehicles.drivers.truck_lane_restriction, families: [freeway, traffic]}
+  # HCM ch. 20 gaps act at stop- and yield-controlled junctions; every Midtown grid
+  # junction is signalised, Portland's side streets are not.
+  - {prefix: traffic.critical_gap_factor, families: [osm, traffic]}
   - {prefix: radio.sidelink, families: [cv2x, nr]}
   - {prefix: net.geonet, families: [gn]}
   - {prefix: net, families: [gn, dsrc, security]}
@@ -187,3 +193,21 @@ context:
   - {prefix: traffic.signals.detector_m, set: {traffic.signals.control: actuated}}
   - {prefix: scale.traffic.meso, set: {scale.traffic.model: mobility/meso/queue}}
   - {prefix: scale.radio, set: {scale.traffic.model: mobility/meso/queue}}
+  # Traffic-flow track (round 15): each setting measured where it acts. The heading only
+  # orients a wave that has a speed (the loader now refuses it alone); the grid limit
+  # (25 mph) is the wave speed. Taxi dwells need taxis, bus settings buses, delivery
+  # settings vans or trucks (kerbside.rs candidate_role): the catalogue found all of
+  # them dead on the car-only family with no taxi share.
+  - {prefix: traffic.signals.green_wave_heading_deg, set: {traffic.signals.green_wave_speed_mps: 11.176}}
+  - {prefix: traffic.kerbside.taxi_dwell_median_s, set: {traffic.kerbside.taxi_share: 0.3}}
+  # Setting any lc_* field switches lane changing from MOBIL to LC2013 (wiring.rs), so
+  # against a MOBIL base each one only measured the model switch. LC2013 runs in both
+  # runs here (another factor at SUMO's default), so the row measures the factor itself.
+  - {prefix: traffic.lc_strategic, set: {traffic.lc_keep_right: 1.0}}
+  - {prefix: traffic.lc_cooperative, set: {traffic.lc_strategic: 1.0}}
+  - {prefix: traffic.lc_speed_gain, set: {traffic.lc_strategic: 1.0}}
+  - {prefix: traffic.lc_keep_right, set: {traffic.lc_strategic: 1.0}}
+  - {prefix: traffic.kerbside.bus_dwell_mean_s, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, bus: {fraction: 0.2}}}}
+  - {prefix: traffic.kerbside.bus_stop_spacing_m, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, bus: {fraction: 0.2}}}}
+  - {prefix: traffic.kerbside.delivery_stop_share, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}}
+  - {prefix: traffic.kerbside.delivery_dwell_median_s, set: {actors.vehicles.classes: {passenger: {fraction: 0.8}, truck: {fraction: 0.2}}}}
