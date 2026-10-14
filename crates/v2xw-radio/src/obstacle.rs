@@ -785,11 +785,11 @@ fn segment_intersection_t(p: Vec3, p2: Vec3, q: Vec3, q2: Vec3) -> Option<f64> {
 /// `2^-1074` can, and those (and every non-finite operand) take the division.
 #[inline]
 fn unit_quotient(n: f64, d: f64) -> bool {
-    if n == 0.0 {
-        return true;
-    }
     if !(n.is_finite() && d.is_finite()) {
         return (0.0..=1.0).contains(&(n / d));
+    }
+    if n == 0.0 {
+        return true;
     }
     let (an, ad) = (n.abs(), d.abs());
     if (n > 0.0) == (d > 0.0) {
