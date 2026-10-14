@@ -127,7 +127,9 @@ handsets add radio nodes, and the radio cost grows with node count. Removing dev
    rule goes only if the line is reached 0.3 s before the red). New setting
    `actors.vehicles.drivers.red_runner_share` (0 by default) makes that share of drivers
    go inside their dilemma-zone threshold regardless of the red; rows for it and for
-   `apps.lta_gap_s` are in `vru-safety.yaml` (not yet run). LTA does warn on the osm and
+   `apps.lta_gap_s` are in `vru-safety.yaml` (not yet run). A 40 s debug run of
+   connected-intersections at share 0.2 still gave 0 RLVW warnings (FCW 6, IMA 9, BSW 8,
+   zeros now reported): whether any red entry happened at the four SPaT junctions is unchecked. LTA does warn on the osm and
    traffic families (sensitivity catalogue), only not on these two.
 5. **Not covered:** cyclist and motorcycle driver parameters (the traffic track has rows),
    VAM message rate (PSMs beacon at about 1.2 Hz per device in this build, and no rate
