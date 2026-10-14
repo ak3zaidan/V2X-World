@@ -830,15 +830,14 @@ impl OfdmPhy {
             let signal_overlap = overlap_ns(from, to, signal_from, signal_to) as f64;
             if signal_overlap > 0.0 {
                 let share = signal_overlap / (signal_to - signal_from) as f64;
-                psr *= PerModel::survival(self.per.pe_signal(sinr), signal_bits * share);
+                psr *= self.per.survival_signal(sinr, signal_bits * share);
             }
             let data_overlap = overlap_ns(from, to, data_from, data_to) as f64;
             if data_overlap > 0.0 && data_to > data_from {
                 let share = data_overlap / (data_to - data_from) as f64;
-                psr *= PerModel::survival(
-                    self.per.pe_data(arrival.frame.mcs, sinr),
-                    data_bits * share,
-                );
+                psr *= self
+                    .per
+                    .survival_data(arrival.frame.mcs, sinr, data_bits * share);
             }
         }
         psr.clamp(0.0, 1.0)
@@ -2491,9 +2490,10 @@ mod tests {
             .map(|w| w.2)
             .fold(f64::INFINITY, f64::min);
         let per = phy.per_model();
-        PerModel::survival(per.pe_signal(sinr_min), f64::from(timing::SIGNAL_BITS))
-            * PerModel::survival(
-                per.pe_data(a.frame.mcs, sinr_min),
+        per.survival_signal(sinr_min, f64::from(timing::SIGNAL_BITS))
+            * per.survival_data(
+                a.frame.mcs,
+                sinr_min,
                 crate::per::data_field_bits(a.frame.bytes) as f64,
             )
     }
