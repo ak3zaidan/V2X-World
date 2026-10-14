@@ -346,6 +346,7 @@ const DIMENSIONLESS: &[&str] = &[
     "traffic.kerbside.delivery_stop_share",
     "actors.vehicles.drivers.speed_factor",
     "actors.vehicles.drivers.speed_spread",
+    "actors.vehicles.drivers.red_runner_share",
     "actors.vehicles.gnss.outage_probability",
     // end traffic audit
     "security.on_demand_threshold",

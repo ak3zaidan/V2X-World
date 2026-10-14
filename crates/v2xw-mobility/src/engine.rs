@@ -225,6 +225,10 @@ pub const AMBER_DILEMMA_TTI_S: (f64, f64) = (2.5, 5.5);
 /// The model id a driver's amber threshold is drawn under ([`DriverTraits`]).
 const AMBER_TRAIT_ID: &str = "mobility/native/driver/amber";
 
+/// The model id a driver's red-light-running habit is drawn under
+/// ([`EngineParams::red_runner_share`]).
+const AMBER_RUNNER_ID: &str = "mobility/native/driver/amber-runner";
+
 /// The keyed stream a driver's signalling habit is drawn from ([`crate::lamps`]).
 const LAMP_HABIT_ID: &str = "mobility/native/driver/lamps";
 
@@ -310,6 +314,10 @@ pub struct DriverTraits {
     /// The time to the stop line below which this driver goes on amber rather than stops,
     /// seconds; zero never goes where it could stop.
     pub amber_go_tti_s: f64,
+    /// Whether this driver goes on an amber inside their threshold without checking they
+    /// reach the line before the red, and so may enter on red
+    /// ([`EngineParams::red_runner_share`]); false for every driver by default.
+    pub amber_runner: bool,
     /// How the driver follows ([`crate::style::DriverStyle`]), read from the same latent
     /// as `speed_factor`.
     pub style: crate::style::DriverStyle,
@@ -327,6 +335,7 @@ impl DriverTraits {
         reaction_s: 0.0,
         follow_reaction_s: 0.0,
         amber_go_tti_s: 0.0,
+        amber_runner: false,
         style: crate::style::DriverStyle::Normal,
         params_z: [0.0; 4],
         noise_key: 0,
@@ -412,6 +421,7 @@ impl DriverTraits {
             reaction_s,
             follow_reaction_s,
             amber_go_tti_s,
+            amber_runner: false,
             style: crate::style::DriverStyle::of_speed_factor_around(
                 speed_factor,
                 law.speed_factor_mean,
@@ -768,6 +778,12 @@ pub struct EngineParams {
     /// line loses the commitment (on by default; off reproduces the earlier behaviour, for
     /// an ablation).
     pub amber_commit_lapse: bool,
+    /// The share of drivers who run reds: inside their amber threshold they go without
+    /// checking that they reach the line before the red, so some enter on red (the
+    /// violations RLVW is built to warn of). 0 by default: every driver who goes clears
+    /// on amber. Drawn per trip from a keyed stream of its own, so it moves no other draw.
+    #[serde(skip_serializing_if = "is_zero_share")]
+    pub red_runner_share: f64,
     /// Kerbside stops: buses at stops, taxis, double-parked deliveries
     /// ([`crate::kerbside`]). Not applied in the legacy parity mode, nor to a vehicle
     /// placed by a command.
@@ -821,6 +837,11 @@ pub struct EngineParams {
     pub reverse_order: bool,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_share(x: &f64) -> bool {
+    *x == 0.0
+}
+
 impl Default for EngineParams {
     fn default() -> Self {
         Self {
@@ -850,6 +871,7 @@ impl Default for EngineParams {
             two_wheelers: TwoWheelerParams::default(),
             cyclists: CyclistSpeeds::default(),
             amber_commit_lapse: true,
+            red_runner_share: 0.0,
             kerbside: crate::kerbside::KerbsideParams::default(),
             driver_styles: true,
             heavy_turns: true,
@@ -2838,7 +2860,7 @@ impl NativeMobility {
     /// [`DriverTraits::NEUTRAL`] in the legacy parity mode or with heterogeneity off.
     fn traits_for(&self, ctx: &dyn MobCtx, trip: &TripRequest) -> DriverTraits {
         if self.along_path() && self.params.driver_heterogeneity {
-            DriverTraits::draw_law(
+            let mut traits = DriverTraits::draw_law(
                 ctx,
                 trip.seq,
                 trip.class,
@@ -2848,7 +2870,18 @@ impl NativeMobility {
                     reaction_median_s: self.params.start_reaction_median_s,
                     follow_median_s: self.params.queue_start_delay_median_s,
                 },
-            )
+            );
+            let share = self.params.red_runner_share;
+            if share > 0.0 {
+                let u = ctx
+                    .rng(
+                        RngDomain::ReactionTime,
+                        EntityRef::custom(AMBER_RUNNER_ID, trip.seq),
+                    )
+                    .uniform(0.0, 1.0);
+                traits.amber_runner = u < share;
+            }
+            traits
         } else {
             DriverTraits::NEUTRAL
         }
@@ -5188,7 +5221,9 @@ impl Mobility for NativeMobility {
                         let left = self
                             .amber_left_s(world, junction.id, junction.movement_lane, t0)
                             .unwrap_or(0.0);
-                        if tti < actor.traits.amber_go_tti_s && tti + AMBER_GO_MARGIN_S <= left {
+                        if tti < actor.traits.amber_go_tti_s
+                            && (actor.traits.amber_runner || tti + AMBER_GO_MARGIN_S <= left)
+                        {
                             decision = EntryDecision::Proceed;
                         }
                     }

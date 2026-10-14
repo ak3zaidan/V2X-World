@@ -1066,6 +1066,10 @@ pub struct Drivers {
     /// deviation (SUMO `speedDev`, 0.1 for a car). 0 gives everyone the mean. Unset is 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed_spread: Option<f64>,
+    /// The share of drivers who run reds: they go on an amber inside their threshold
+    /// without checking they reach the line before the red. Unset is 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_runner_share: Option<f64>,
     /// The median time a driver takes to move off when the light turns green or a
     /// crosswalk clears, seconds. Unset is 1.15 s (Taoka 1989, lognormal fit).
     #[serde(default, skip_serializing_if = "Option::is_none")]

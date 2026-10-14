@@ -64,6 +64,8 @@ families:
     set: {time.duration_s: 60.0, metrics: [all]}
 
 routes:
+  # Red runners matter where signals and SPaT are: RLVW warns of exactly their entries.
+  - {prefix: actors.vehicles.drivers.red_runner_share, families: [intersections]}
   - {prefix: actors.vehicles.drivers.truck.time_headway_s, families: [freeway, traffic]}
   # The restriction acts only on a motorway with three or more lanes (drivers.rs
   # is_restricted_left_lane): the Midtown grid's two lanes never trigger it.
@@ -126,6 +128,8 @@ skip:
 # Values that replace the computed ends where the guide's range would make the run too
 # large for the 8 GB sweep machine or names no usable range.
 values:
+  # Off by default; 0.2 runs reds often enough in 60 s for RLVW to warn (guide.rs).
+  actors.vehicles.drivers.red_runner_share: [0.2]
   # 900 veh/h base: half and double (SUMO randomTrips-style Poisson demand).
   actors.vehicles.demand.rate_veh_per_h: [450.0, 1800.0]
   # An arrival rate per lane-km per hour (city.rs adapt_to_world multiplies it by the

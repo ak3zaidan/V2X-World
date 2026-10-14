@@ -123,6 +123,12 @@ handsets add radio nodes, and the radio cost grows with node count. Removing dev
    for red or clear on amber. LTA needs an opposed left turn inside the gap, and none
    occurred in 60 s. Checking them needs a family with red-light runners and protected or
    permissive left turns.
+   **Round 16:** RLVW could not fire because no driver ever entered on red (the amber
+   rule goes only if the line is reached 0.3 s before the red). New setting
+   `actors.vehicles.drivers.red_runner_share` (0 by default) makes that share of drivers
+   go inside their dilemma-zone threshold regardless of the red; rows for it and for
+   `apps.lta_gap_s` are in `vru-safety.yaml` (not yet run). LTA does warn on the osm and
+   traffic families (sensitivity catalogue), only not on these two.
 5. **Not covered:** cyclist and motorcycle driver parameters (the traffic track has rows),
    VAM message rate (PSMs beacon at about 1.2 Hz per device in this build, and no rate
    setting exists), DENM hazards (the networking track), and emergency vehicle priority
@@ -134,6 +140,8 @@ handsets add radio nodes, and the radio cost grows with node count. Removing dev
    were dropped. The fix is to seed the provider with the enabled applications. That
    changes the metric stream, and so the content digest of every run with applications,
    so it was left for a round that re-pins digests.
+   **Fixed in round 16:** the provider is seeded with the enabled warning applications
+   and reports 0; the PCW low-end row and the PCW x devices interaction are back.
 6. **Crossing delay (`ped_wait`)** reports `insufficient` (fewer than 30 waits) in a 40 to
    60 s run at the defaults. It is measurable only with more crossings, such as the
    gap-margin context.

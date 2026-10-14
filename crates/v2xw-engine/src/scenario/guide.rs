@@ -279,6 +279,11 @@ const BASIC: &[Basic] = &[
 /// `radio.dcc`), which a newcomer does not need but should still be able to read.
 const ADVANCED: &[Basic] = &[
     Basic {
+        path: "actors.vehicles.drivers.red_runner_share",
+        explain: "The share of drivers who keep going on amber even when they will reach the line after it turns red, as red-light runners do; 0 makes every driver clear on amber.",
+        recommended: "0 (the default); 0.05 to 0.2 to study red-light-violation warnings. Field studies count roughly 1 to 5 red entries per 1,000 vehicles at urban signals (Bonneson, Zimmerman & Brewer, TTI 0-4027, 2002, as FHWA's red-light-running guidance quotes it).",
+    },
+    Basic {
         path: "traffic.lc_strategic",
         explain: "How early drivers move into the lane their next turn needs: higher values change lane further before the junction.",
         recommended: "Unset (today's MOBIL); 1 (SUMO default); 0.5 to 4.",

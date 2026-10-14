@@ -1553,6 +1553,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "traffic.kerbside.delivery_stop_share" => "Share of vans making a delivery stop",
         "actors.vehicles.drivers.speed_factor" => "Free speed (multiple of the limit)",
         "actors.vehicles.drivers.speed_spread" => "Spread of free speeds",
+        "actors.vehicles.drivers.red_runner_share" => "Share of drivers who run reds",
         "actors.vehicles.drivers.start_reaction_s" => "Reaction to a green light",
         "actors.vehicles.drivers.queue_start_delay_s" => "Queue start-up delay",
         "actors.vehicles.drivers.truck" => "Truck drivers",

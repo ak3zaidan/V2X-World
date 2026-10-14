@@ -1260,6 +1260,13 @@ pub static BOUNDS: &[Bound] = &[
         exclusive_lo: false,
         what: "the speed spread",
     },
+    Bound {
+        path: "actors.vehicles.drivers.red_runner_share",
+        lo: 0.0,
+        hi: 1.0,
+        exclusive_lo: false,
+        what: "the share of drivers who run reds",
+    },
     // The engine clamps each driver's draw to 0.3-3 s (Taoka 1989's lognormal: median
     // 1.1-1.2 s); a median outside that would be clamped flat.
     Bound {
@@ -3093,6 +3100,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         note: "Multiplies each class's speed deviation (SUMO speedDev). Needs realism other than identical.",
     },
     KeyStatus {
+        path: "actors.vehicles.drivers.red_runner_share",
+        status: Status::Wired,
+        note: "The share of drivers who go on an amber inside their dilemma-zone threshold \
+               without checking they reach the line before the red, so some enter on red. \
+               Microscopic engine only. Needs realism other than identical.",
+    },
+    KeyStatus {
         path: "actors.vehicles.drivers.start_reaction_s",
         status: Status::Wired,
         note: "Median reaction to a green or a cleared crosswalk. Needs realism other than identical.",
@@ -3743,6 +3757,10 @@ fn traffic_audit_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
     let trait_fields = [
         ("actors.vehicles.drivers.speed_factor", dv.speed_factor),
         ("actors.vehicles.drivers.speed_spread", dv.speed_spread),
+        (
+            "actors.vehicles.drivers.red_runner_share",
+            dv.red_runner_share,
+        ),
         (
             "actors.vehicles.drivers.start_reaction_s",
             dv.start_reaction_s,
