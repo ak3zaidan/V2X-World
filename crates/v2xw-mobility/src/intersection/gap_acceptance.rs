@@ -560,6 +560,7 @@ mod tests {
             movement_lane: Some(LaneId::new(11)),
             conflicts: true,
             ego_must_yield: must_yield,
+            arrival_s: None,
         }
     }
 

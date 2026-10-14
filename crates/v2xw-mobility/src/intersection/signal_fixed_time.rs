@@ -66,6 +66,11 @@ pub const OPPOSING_START_ACCEL_MPS2: f64 = 1.4;
 /// slower accelerates at [`OPPOSING_START_ACCEL_MPS2`] up to this and no further.
 pub const OPPOSING_CRUISE_CAP_MPS: f64 = 11.176;
 
+/// The margin a permitted left turner keeps against an opposing car's tracked arrival,
+/// seconds: SUMO's minor-link time gap, the vType junction-model parameter
+/// `jmTimegapMinor` (default 1 s), which `MSLink::blockedAtTime` adds to a foe's window.
+pub const PERMITTED_LEFT_ARRIVAL_MARGIN_S: f64 = 1.0;
+
 /// The HCM 6th edition's critical headway for a permitted left turn at a signal, seconds
 /// ([`SignalPlanParams::permitted_left_critical_headway_s`]).
 pub const HCM_PERMITTED_LEFT_CRITICAL_HEADWAY_S: f64 = 4.5;
@@ -497,11 +502,17 @@ impl IntersectionControl for FixedTimeSignals {
                                         TurnDirection::Left | TurnDirection::UTurn
                                     )))
                     })
-                    .map(|c| {
-                        c.time_to_stop_line_launching_s(
+                    .map(|c| match c.arrival_s {
+                        // The claimant's own tracked arrival, less SUMO's minor-link
+                        // margin (jmTimegapMinor, 1 s; MSLink::blockedAtTime): a
+                        // tracked arrival is the claimant's plan, not a promise.
+                        Some(t) => (t - PERMITTED_LEFT_ARRIVAL_MARGIN_S).max(0.0),
+                        // A hand-built view without a tracked arrival: the assumed
+                        // launch of an opposing car from its line.
+                        None => c.time_to_stop_line_launching_s(
                             OPPOSING_START_ACCEL_MPS2,
                             OPPOSING_CRUISE_CAP_MPS,
-                        )
+                        ),
                     })
                     .fold(f64::INFINITY, f64::min);
                 if closing >= critical {
@@ -850,6 +861,7 @@ mod tests {
             movement_lane: Some(LaneId::new(2)),
             conflicts: true,
             ego_must_yield: true,
+            arrival_s: None,
         };
         // Standing 3 m from the line: it reaches it in sqrt(2·3/1.4) ≈ 2.1 s < 4.5 s.
         assert_eq!(
@@ -882,6 +894,7 @@ mod tests {
             movement_lane: Some(LaneId::new(2)),
             conflicts: true,
             ego_must_yield: true,
+            arrival_s: None,
         };
         assert_eq!(
             m.may_enter(&ego(5.0), &j, &[opposing(47.0)], &WeatherState::CLEAR),
@@ -941,6 +954,7 @@ mod tests {
             movement_lane: Some(LaneId::new(2)),
             conflicts: true,
             ego_must_yield: false,
+            arrival_s: None,
         };
         assert!(matches!(
             us.may_enter(&ego(0.0), &j, &[cross(40.0)], &WeatherState::CLEAR),
