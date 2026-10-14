@@ -1067,7 +1067,7 @@ pub struct Drivers {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed_spread: Option<f64>,
     /// The median time a driver takes to move off when the light turns green or a
-    /// crosswalk clears, seconds. Unset is 1.15 s (Taoka 1989, lognormal fit).
+    /// crosswalk clears, seconds. Unset is 1.08 s (Bonneson 1992's 1.22 s mean start-response, lognormal σ 0.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_reaction_s: Option<f64>,
     /// The median delay before a queued driver moves off after the car in front does,

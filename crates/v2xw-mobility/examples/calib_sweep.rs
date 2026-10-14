@@ -1,7 +1,7 @@
 //! The car-following sweep behind `IdmPreset::UrbanHcm`: runs the saturation-flow experiment
-//! (`calibration::SaturationExperiment`) for each driver set given as `T,A,B,S0,FOLLOW`
+//! (`calibration::SaturationExperiment`) for each driver set given as `T,A,B,S0,FOLLOW[,START]`
 //! (time gap s, max acceleration, comfortable deceleration, standstill gap, queue start-up
-//! delay median s) and prints the HCM figures; `trace` prints a loaded green onset step by
+//! delay median s, green-onset reaction median s) and prints the HCM figures; `trace` prints a loaded green onset step by
 //! step.
 //!
 //! ```text
@@ -229,6 +229,7 @@ fn run(spec: &str) {
     let params = EngineParams {
         driver_heterogeneity: env("HET", 1.0) > 0.5,
         queue_start_delay_median_s: at(4, EngineParams::default().queue_start_delay_median_s),
+        start_reaction_median_s: at(5, EngineParams::default().start_reaction_median_s),
         ..EngineParams::default()
     };
     let engine = NativeMobility::with_models(params, cf, MobilPreset::Kesting2007);

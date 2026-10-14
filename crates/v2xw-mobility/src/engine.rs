@@ -183,17 +183,24 @@ const DRIVER_TRAITS_ID: &str = "mobility/native/driver";
 /// under ([`crate::drivers`]).
 const DRIVER_PARAMS_ID: &str = "mobility/native/driver/params";
 
-/// The median of a driver's reaction time, seconds.
+/// The median of a queue head's reaction to the green onset, seconds.
 ///
-/// Taoka 1989 (TRR 1213, "An analytical model for driver response") fits a lognormal to
-/// published measurements of drivers responding to a signal change — the amber onset —
-/// and reports a median of 1.1-1.2 s, a mean of 1.3-1.4 s and a standard deviation of
-/// 0.55-0.75 s (**secondary**: read in the paper's abstract and a search excerpt, not the
-/// full text). 1.15 s is the middle of the median range.
-pub const REACTION_MEDIAN_S: f64 = 1.15;
+/// Bonneson 1992 (TRR 1365, "Modeling queued driver behavior at signalized junctions")
+/// measured the first queued driver's start-response time to the green at a mean of
+/// 1.22 s (**secondary**: as Çalışkanelli & Tanyel 2018 tabulate it, which also lists
+/// ITE 1994's 1.0 s for signalised intersections). With the lognormal shape
+/// [`REACTION_SIGMA`] that mean is a median of 1.22 / e^(σ²/2) = 1.08 s.
+///
+/// Until 2026-10-13 this was Taoka 1989's 1.15 s (TRR 1213), a fit to responses at the
+/// *amber* onset (mean 1.30 s with this shape). On the saturation-flow experiment
+/// ([`crate::calibration::SaturationExperiment`], seed default, 450 s) the re-fit moves
+/// start-up lost time 3.15 → 2.95 s (HCM 2.0 s, band 1-3) and the first discharge headway
+/// 3.87 → 3.80 s (Greenshields 1947: 3.8 s); saturation headway 2.14 → 2.15 s.
+pub const REACTION_MEDIAN_S: f64 = 1.08;
 
-/// The lognormal shape of a driver's reaction time: σ = 0.5 gives a mean of 1.30 s and a
-/// standard deviation of 0.69 s with the median above, inside Taoka's ranges.
+/// The lognormal shape of a driver's reaction time: σ = 0.5, the middle of Taoka 1989's
+/// spread (standard deviation 0.55-0.75 s at a 1.1-1.2 s median); with the median above
+/// it gives Bonneson's 1.22 s mean.
 pub const REACTION_SIGMA: f64 = 0.5;
 
 /// The median of a queued driver's start-up delay once the car in front has moved off,
@@ -283,7 +290,7 @@ const PULL_OUT_SPEED_MPS: f64 = 2.0;
 ///   distribution of free speeds against the 25 mph limit was available to calibrate it.
 /// * `reaction_s` — how long the driver takes to move off once a signal or a crosswalk
 ///   that held them lets them go: lognormal with median [`REACTION_MEDIAN_S`] and shape
-///   [`REACTION_SIGMA`] (Taoka 1989), clamped to 0.3-3 s.
+///   [`REACTION_SIGMA`] (Bonneson 1992 mean, Taoka 1989 shape), clamped to 0.3-3 s.
 /// * `amber_go_tti_s` — the time to the stop line at the onset of amber below which the
 ///   driver goes on rather than stops, where stopping at 3 m/s² would still be possible:
 ///   logistic across the dilemma zone [`AMBER_DILEMMA_TTI_S`] (10 % of drivers stop at its
@@ -437,7 +444,7 @@ pub struct TraitLaw {
     /// 0 gives every driver the mean, 1 is SUMO's spread.
     pub speed_spread: f64,
     /// The median start-up reaction to a signal or crosswalk, seconds
-    /// ([`REACTION_MEDIAN_S`], Taoka 1989).
+    /// ([`REACTION_MEDIAN_S`], Bonneson 1992).
     pub reaction_median_s: f64,
     /// The median start-up delay behind the car in front, seconds
     /// ([`FOLLOW_REACTION_MEDIAN_S`]).

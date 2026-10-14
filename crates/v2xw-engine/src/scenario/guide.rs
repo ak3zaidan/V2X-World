@@ -667,7 +667,7 @@ const ADVANCED: &[Basic] = &[
     Basic {
         path: "actors.vehicles.drivers.start_reaction_s",
         explain: "How long the first driver in line takes to react when the light turns green.",
-        recommended: "1.15 s (Taoka 1989); 0.8 to 1.5 s.",
+        recommended: "1.08 s (Bonneson 1992, a 1.22 s mean); 0.8 to 1.5 s.",
     },
     Basic {
         path: "traffic.permitted_left_gap_s",
