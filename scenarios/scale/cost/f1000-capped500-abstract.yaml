@@ -1,0 +1,21 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-f1000-capped500-abstract
+  base: ../base.yaml
+  description: Run-cost measurement, f1000-capped500 with all three radio tiers abstract.
+time:
+  duration_s: 2.0
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 1260
+radio:
+  rat: dsrc-80211p
+  range:
+    max_m: 500.0
+  tiers:
+    propagation: abstract
+    phy: abstract
+    mac: abstract
+metrics: [all]

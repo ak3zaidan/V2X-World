@@ -3901,3 +3901,51 @@ trip cap 150 (99 vehicles), 1 s. Capped: `scale/base.yaml`, cap 1,260, `radio.ra
 - **Engine changes that move results**: 802.11p carrier sense now waits aCCATime (8 us), so every contended DSRC result changes (more collisions, lower PDR); on-air DENM honours `net.geonet.repetition_*` (defaults unchanged); `v2xw compare` uses Welch's t; new refusals (EDCA on unused queues, compromised RSU without units, GLOSA compliance with GLOSA off, green-wave heading without speed, on-air keep-alive). Fingerprints gain `report.air_by_type`, lane-change and zeroed traffic counters, `metric[dim=value]` slices.
 - **Ran**: `cargo check --workspace --tests`; engine `scenario::`/`sensitivity::` lib tests, `networking_track`, `radio_access`, `researcher_config`, `sensitivity_expectations` (fast), `sensitivity_security`, server `compare`: all pass. Release CLI built; `run-sim.sh` boots on 8758 with the agent available.
 - **Open**: many corrected expectation rows were never re-run (heavy-lock contention): phy-channel, mac-congestion, security-track, run-cost, coupling Falcon rows; traffic lane-change rows stay commented until re-run on this release build. Catalogue and `--expect` reports need regenerating after the CCA fix. Dead settings listed in each `docs/validation/test-*.md`.
+
+## 2026-10-13: speed, group 4 (speed track, branch of bbbb29a)
+
+Optimised dev build (`CARGO_PROFILE_DEV_OPT_LEVEL=2`, debug assertions on), binaries copied
+out of `target/agents`, `v2xw run --no-recording --digest`, owner's 8 GB machine with load
+average 7-15 from other agents, so wall times carry **±50 %** noise (an `after` run that
+overlapped a cargo test ran single-core; `user ≈ real` in its log). Overlays committed in
+`scenarios/scale/cost/`: `f1000-capped500` (cap 1,260, `radio.range.max_m: 500`,
+`metrics: [all]`, ~1,050 vehicles), `f520-uncapped` (cap 560, no reach cap), and
+`f1000-capped500-abstract` (all three radio tiers abstract).
+
+| run | threads | wall s per sim s before → after | attempts | digest before → after |
+|---|---|---|---|---|
+| capped 500 m, ~1,050 veh | 2 | 19.5 → 41.8 (after ran beside a cargo test; not comparable) | 2,732,608 | `d2490d16d431` → same |
+| uncapped, ~520 veh | 2 | 54.6 (sampled) → 45.4 | 3,075,769 | `447bc6190a45` → same |
+| uncapped, ~520 veh | 1 | — → 44.7 (machine-bound: 1 and 2 threads equal) | 3,075,769 | → `447bc6190a45` (same as 2 threads) |
+| capped, all abstract | 2 | 26.7 (sampled) | 2,740,167 | `—` |
+
+**Where the time goes** (`sample`, before): uncapped 520, building classification
+(`ring_crossing` 15 %, R-tree selection 15 %, `point_in_ring` 9 %, footprint box 3 %) is
+about 44 % of busy CPU, matching the "half the CPU" estimate. Capped 1,050 at the abstract
+tier, libm `pow` is a third of busy CPU, almost all inside the NIST PER model (ten `pow`
+per coded-error call, called per SINR window for the SIGNAL and DATA fields) and the
+per-window dBm → mW conversion of every interferer; the medium tier runs the same PHY.
+
+**Fixed (all bit-identical; digests above unchanged):**
+- `189075e`, `3f64c31` — building rays: `segment_intersection_t` decides `t, u ∈ [0, 1]`
+  without dividing (`unit_quotient`, exact by correct rounding, falls back to the division
+  for non-finite operands and possible underflow); `ring_crossing`/`segment_blocked` skip
+  `point_in_ring` when no edge straddles the point's y; the R-tree segment selection
+  multiplies by a per-segment reciprocal (conservative under the 1 mm envelope pad). Test
+  `the_division_free_crossing_test_matches_the_division` (200 k random and end-touching
+  cases plus quotient edge cases; it caught a NaN-divisor ordering bug).
+- `e8d48f2` — `PerModel::survival_data/survival_signal` return exactly 1 when a bound
+  `4·(Σc)·d^k_min/(2b)` shows `Pe < 2^-54` (then `1 − Pe` rounds to 1), skipping the ten
+  `pow`; test `the_shortcut_survival_is_the_exact_survival` sweeps every MCS, both presets.
+- `e3390bd` — `sinr_windows_with` converts each interferer to mW once per arrival, not once
+  per window (k² → k `pow`).
+- `6dddff9` — the abstract tier is not cheap, so it is relabelled: the audit's 11 % comes from
+  free space with no buildings letting 49 % more links reach (receptions, not the radio
+  model, dominate cost). `radio.tiers.propagation`/`mac` abstract words now say what they
+  do and point large fleets at `radio.range.max_m`. Labels are not hashed.
+
+**Not done / open:** a quiet-machine before/after table (rerun the three overlays with
+`v2xw-before`/`v2xw-after` back to back when load < 3); an abstract PHY that is actually a
+table lookup (02-architecture §7) is a model change with new abstract digests, owner's call;
+per-link classification cache (8 % for +650 MB in round 12) not retried; 1,000 vehicles in
+real time not reached.

@@ -99,7 +99,47 @@ pub fn coded_error_probability(p: f64, rate: CodeRate) -> f64 {
     let d = math::sqrt(4.0 * p * (1.0 - p));
     // Powers are accumulated in increasing exponent, so the sum is ordered by
     // construction and two builds cannot disagree about its last bit.
-    let terms: &[(f64, i32)] = match rate {
+    let terms = distance_spectrum(rate);
+    let sum = math::sum_ordered(
+        terms
+            .iter()
+            .map(|(coeff, exp)| coeff * math::pow(d, f64::from(*exp))),
+    );
+    let pe = sum / (2.0 * f64::from(rate.b_value()));
+    pe.clamp(0.0, 1.0)
+}
+
+/// Whether [`coded_error_probability`]`(p, rate)` is certainly below `2^-54`, the size
+/// under which `1 − Pe` rounds to exactly 1, decided with a few multiplications instead
+/// of its ten `pow` calls.
+///
+/// With `d ≤ 1`, every term `c·d^k` is at most `c·d^k_min`, so the sum is at most
+/// `(Σc)·d^k_min`; the bound is taken with a factor of 4 to spare, which covers the
+/// rounding of this product and of the exact sum. A `false` only means "compute it".
+fn coded_error_negligible(p: f64, rate: CodeRate) -> bool {
+    if p.is_nan() || p <= 0.0 {
+        return false;
+    }
+    let d = math::sqrt(4.0 * p * (1.0 - p));
+    if !(d <= 1.0) {
+        return false;
+    }
+    let terms = distance_spectrum(rate);
+    let k_min = terms.first().map_or(0, |t| t.1);
+    let coeff_sum: f64 = terms.iter().map(|t| t.0).sum();
+    let mut dk = 1.0;
+    for _ in 0..k_min {
+        dk *= d;
+    }
+    // 2^-54.
+    const ONE_MINUS_ROUNDS_TO_ONE: f64 = f64::from_bits((1023 - 54) << 52);
+    4.0 * coeff_sum * dk / (2.0 * f64::from(rate.b_value())) < ONE_MINUS_ROUNDS_TO_ONE
+}
+
+/// The distance spectrum `(c_d, d)` of the punctured K = 7 code at `rate`, in increasing
+/// distance.
+fn distance_spectrum(rate: CodeRate) -> &'static [(f64, i32)] {
+    match rate {
         CodeRate::R1_2 => &[
             (36.0, 10),
             (211.0, 12),
@@ -135,14 +175,7 @@ pub fn coded_error_probability(p: f64, rate: CodeRate) -> f64 {
             (75_152_755.0, 13),
             (428_005_675.0, 14),
         ],
-    };
-    let sum = math::sum_ordered(
-        terms
-            .iter()
-            .map(|(coeff, exp)| coeff * math::pow(d, f64::from(*exp))),
-    );
-    let pe = sum / (2.0 * f64::from(rate.b_value()));
-    pe.clamp(0.0, 1.0)
+    }
 }
 
 /// The NIST OFDM error model, `phy/80211p/nist-per`.
@@ -254,6 +287,37 @@ impl PerModel {
     pub fn pe_signal(&self, sinr_db: f64) -> f64 {
         let snr = numeric::db_to_linear(sinr_db - self.rx_impl_loss_db);
         coded_error_probability(uncoded_ber(Modulation::Bpsk, snr), CodeRate::R1_2)
+    }
+
+    /// [`PerModel::survival`] of [`PerModel::pe_data`], bit for bit, without the coded sum
+    /// when its error probability is too small to move `1 − Pe` off 1 — most receptions
+    /// near the sender. The PHY's per-window success probability is built from these.
+    #[must_use]
+    pub fn survival_data(&self, mcs: Mcs, sinr_db: f64, bits: f64) -> f64 {
+        if bits <= 0.0 {
+            return 1.0;
+        }
+        let snr = numeric::db_to_linear(sinr_db - self.rx_impl_loss_db);
+        let p = uncoded_ber(mcs.modulation(), snr);
+        if coded_error_negligible(p, mcs.code_rate()) {
+            return 1.0;
+        }
+        Self::survival(coded_error_probability(p, mcs.code_rate()), bits)
+    }
+
+    /// [`PerModel::survival`] of [`PerModel::pe_signal`], bit for bit; see
+    /// [`PerModel::survival_data`].
+    #[must_use]
+    pub fn survival_signal(&self, sinr_db: f64, bits: f64) -> f64 {
+        if bits <= 0.0 {
+            return 1.0;
+        }
+        let snr = numeric::db_to_linear(sinr_db - self.rx_impl_loss_db);
+        let p = uncoded_ber(Modulation::Bpsk, snr);
+        if coded_error_negligible(p, CodeRate::R1_2) {
+            return 1.0;
+        }
+        Self::survival(coded_error_probability(p, CodeRate::R1_2), bits)
     }
 
     /// The probability that `bits` bits survive at one SINR: `(1 − Pe)^bits`.
@@ -495,6 +559,35 @@ fn per_card(preset: PerPreset) -> ModelCard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shortcut survivals give `survival(pe_*)` bit for bit across the whole SINR range
+    /// at every rate and both presets, and do take the shortcut at high SINR. Goes red if
+    /// the bound's margin is dropped below what the rounding needs or the threshold is
+    /// raised past 2^-54.
+    #[test]
+    fn the_shortcut_survival_is_the_exact_survival() {
+        let mut shortcuts = 0;
+        for preset in [PerPreset::Ideal, PerPreset::SjobergAtheros] {
+            let m = PerModel::new(preset);
+            for mcs in Mcs::ALL {
+                for i in 0..=14_000 {
+                    let sinr = -20.0 + f64::from(i) * 0.005;
+                    for bits in [0.0, 13.7, 24.0, 2_000.0, 12_000.0] {
+                        let exact = PerModel::survival(m.pe_data(mcs, sinr), bits);
+                        let fast = m.survival_data(mcs, sinr, bits);
+                        assert_eq!(fast.to_bits(), exact.to_bits(), "{mcs:?} {sinr} {bits}");
+                        let exact = PerModel::survival(m.pe_signal(sinr), bits);
+                        let fast = m.survival_signal(sinr, bits);
+                        assert_eq!(fast.to_bits(), exact.to_bits(), "signal {sinr} {bits}");
+                    }
+                    let snr = numeric::db_to_linear(sinr - m.rx_impl_loss_db());
+                    let p = uncoded_ber(mcs.modulation(), snr);
+                    shortcuts += usize::from(coded_error_negligible(p, mcs.code_rate()));
+                }
+            }
+        }
+        assert!(shortcuts > 50_000, "the shortcut must fire at high SINR, got {shortcuts}");
+    }
 
     /// 04-models.md §4.7's model-output table: SNR in dB for 10 % PER at 200, 400 and
     /// 1,000 B, and for 1 % PER at 400 B.

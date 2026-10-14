@@ -79,6 +79,7 @@ sidelink's MCS and sensitivity are `radio.models.sidelink`'s.
 | `radio.models.per` | `per/nist-ofdm` ideal | presets `ideal`, `sjoberg-atheros` | Implementation loss of the NIST error model. |
 | `radio.models.phy` | `measured-obu` | `etsi-static`, `etsi-dynamic`, `cohda-mk5`, `measured-obu` | Per-rate sensitivity table. |
 | `radio.tiers.phy` | `medium` | `abstract`, `medium`, `high` | Fidelity. |
+| `radio.tiers.propagation`, `radio.tiers.mac` | `medium` | `abstract`, `medium`, `high` | Fidelity. `abstract` is not a cheap large-fleet mode: free space with no buildings lets more links reach, and receptions dominate run cost (all three abstract measured 11 % cheaper than medium, `docs/validation/test-run-cost.md`). For large fleets cap `radio.range.max_m` or use city-scale traffic tiers. |
 
 ## Channel model (`radio.channel_model`, `radio.models`)
 

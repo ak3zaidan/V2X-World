@@ -778,6 +778,14 @@ impl OfdmPhy {
         bounds.sort_unstable();
         bounds.dedup();
         let mut windows = Vec::with_capacity(bounds.len().saturating_sub(1));
+        // Each interferer's power in milliwatts, converted once per arrival rather than
+        // once per window it overlaps (the same values: the conversion is pure). A frame
+        // with k mid-frame interferers has up to 2k + 1 windows, so this was k² `pow`s.
+        let interferer_mw: Vec<f64> = arrival
+            .interferers
+            .iter()
+            .map(|i| numeric::dbm_to_mw(i.power_dbm))
+            .collect();
         for w in bounds.windows(2) {
             let (from, to) = (w[0], w[1]);
             if to <= from {
@@ -786,8 +794,9 @@ impl OfdmPhy {
             let active: Vec<(NodeId, f64)> = arrival
                 .interferers
                 .iter()
-                .filter(|i| i.start < to && from < i.end)
-                .map(|i| (i.node, numeric::dbm_to_mw(i.power_dbm)))
+                .zip(&interferer_mw)
+                .filter(|(i, _)| i.start < to && from < i.end)
+                .map(|(i, &mw)| (i.node, mw))
                 .collect();
             let noise = if with_jamming {
                 self.noise_dbm_during(arrival.rx, arrival.frame.channel, from, to)
@@ -830,15 +839,14 @@ impl OfdmPhy {
             let signal_overlap = overlap_ns(from, to, signal_from, signal_to) as f64;
             if signal_overlap > 0.0 {
                 let share = signal_overlap / (signal_to - signal_from) as f64;
-                psr *= PerModel::survival(self.per.pe_signal(sinr), signal_bits * share);
+                psr *= self.per.survival_signal(sinr, signal_bits * share);
             }
             let data_overlap = overlap_ns(from, to, data_from, data_to) as f64;
             if data_overlap > 0.0 && data_to > data_from {
                 let share = data_overlap / (data_to - data_from) as f64;
-                psr *= PerModel::survival(
-                    self.per.pe_data(arrival.frame.mcs, sinr),
-                    data_bits * share,
-                );
+                psr *= self
+                    .per
+                    .survival_data(arrival.frame.mcs, sinr, data_bits * share);
             }
         }
         psr.clamp(0.0, 1.0)
@@ -2491,9 +2499,10 @@ mod tests {
             .map(|w| w.2)
             .fold(f64::INFINITY, f64::min);
         let per = phy.per_model();
-        PerModel::survival(per.pe_signal(sinr_min), f64::from(timing::SIGNAL_BITS))
-            * PerModel::survival(
-                per.pe_data(a.frame.mcs, sinr_min),
+        per.survival_signal(sinr_min, f64::from(timing::SIGNAL_BITS))
+            * per.survival_data(
+                a.frame.mcs,
+                sinr_min,
                 crate::per::data_field_bits(a.frame.bytes) as f64,
             )
     }

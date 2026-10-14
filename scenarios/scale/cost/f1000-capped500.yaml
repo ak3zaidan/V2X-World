@@ -1,0 +1,16 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-f1000-capped500
+  base: ../base.yaml
+  description: Run-cost measurement, about 1,050 vehicles, 500 m reach cap, all metrics (fleet-speed table in BUILD-STATUS).
+time:
+  duration_s: 2.0
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 1260
+radio:
+  range:
+    max_m: 500.0
+metrics: [all]

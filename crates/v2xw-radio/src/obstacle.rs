@@ -246,11 +246,7 @@ impl FootprintBox {
         if self.open {
             return true;
         }
-        SegmentSelection {
-            a: self.project(a),
-            b: self.project(b),
-        }
-        .meets(self.lo, self.hi)
+        SegmentSelection::from_2d(self.project(a), self.project(b)).meets(self.lo, self.hi)
     }
 }
 
@@ -268,13 +264,32 @@ const ENVELOPE_PAD_M: f64 = 1e-3;
 struct SegmentSelection {
     a: [f64; 2],
     b: [f64; 2],
+    /// `1 / (b - a)` per axis, or 0 where that is not a usable finite number (the axis is
+    /// then clipped by division, as before). One R-tree walk tests the same segment
+    /// against hundreds of node boxes, so the slab test multiplies instead of dividing;
+    /// the reciprocal's rounding moves a slab boundary by about 1e-16 of a coordinate a
+    /// few kilometres long, picometres against the millimetre [`ENVELOPE_PAD_M`], so the
+    /// filter stays a superset of the footprints the ring test can find.
+    inv: [f64; 2],
 }
 
 impl SegmentSelection {
     fn new(a: Vec3, b: Vec3) -> Self {
+        Self::from_2d([a.x, a.y], [b.x, b.y])
+    }
+
+    fn from_2d(a: [f64; 2], b: [f64; 2]) -> Self {
+        let inv = |d: f64| {
+            if d.abs() >= 1e-200 && d.is_finite() {
+                1.0 / d
+            } else {
+                0.0
+            }
+        };
         Self {
-            a: [a.x, a.y],
-            b: [b.x, b.y],
+            a,
+            b,
+            inv: [inv(b[0] - a[0]), inv(b[1] - a[1])],
         }
     }
 
@@ -291,7 +306,11 @@ impl SegmentSelection {
                 }
                 continue;
             }
-            let (mut ta, mut tb) = ((lo - self.a[k]) / d, (hi - self.a[k]) / d);
+            let (mut ta, mut tb) = if self.inv[k] == 0.0 {
+                ((lo - self.a[k]) / d, (hi - self.a[k]) / d)
+            } else {
+                ((lo - self.a[k]) * self.inv[k], (hi - self.a[k]) * self.inv[k])
+            };
             if ta > tb {
                 core::mem::swap(&mut ta, &mut tb);
             }
@@ -337,13 +356,17 @@ pub fn segment_blocked(world: &World, index: &BuildingIndex, a: Vec3, b: Vec3) -
             continue;
         }
         let ring = &building.footprint;
-        if point_in_ring(ring, a) || point_in_ring(ring, b) {
-            return true;
+        // A boolean OR, so the walls are tried first; an end can only be inside when some
+        // edge straddles its y (`point_in_ring` toggles on no other edge).
+        let (mut sa, mut sb) = (closing_edge_straddles(ring, a), closing_edge_straddles(ring, b));
+        for w in ring.windows(2) {
+            if segment_intersection_t(a, b, w[0], w[1]).is_some() {
+                return true;
+            }
+            sa |= (w[0].y > a.y) != (w[1].y > a.y);
+            sb |= (w[0].y > b.y) != (w[1].y > b.y);
         }
-        if ring
-            .windows(2)
-            .any(|w| segment_intersection_t(a, b, w[0], w[1]).is_some())
-        {
+        if (sa && point_in_ring(ring, a)) || (sb && point_in_ring(ring, b)) {
             return true;
         }
     }
@@ -676,13 +699,17 @@ pub fn ring_crossing(ring: &[Vec3], a: Vec3, b: Vec3) -> PolygonCrossing {
     // and the sort below sees the same values whatever order they were pushed in.
     let mut ts: Vec<f64> = Vec::new();
     let mut walls = 0u16;
+    // Whether any ring edge straddles `a`'s y: `point_in_ring` toggles only on such an
+    // edge, so without one `a` is outside and its walk is skipped (same answer).
+    let mut straddles = closing_edge_straddles(ring, a);
     for w in ring.windows(2) {
+        straddles |= (w[0].y > a.y) != (w[1].y > a.y);
         if let Some(t) = segment_intersection_t(a, b, w[0], w[1]) {
             walls = walls.saturating_add(1);
             ts.push(t);
         }
     }
-    if walls == 0 && !point_in_ring(ring, a) {
+    if walls == 0 && !(straddles && point_in_ring(ring, a)) {
         return PolygonCrossing::default();
     }
     ts.push(0.0);
@@ -707,6 +734,16 @@ pub fn ring_crossing(ring: &[Vec3], a: Vec3, b: Vec3) -> PolygonCrossing {
     }
 }
 
+/// Whether the ring's closing edge (last point back to the first), which
+/// `ring.windows(2)` does not visit and [`point_in_ring`] does, straddles `p`'s y.
+#[inline]
+fn closing_edge_straddles(ring: &[Vec3], p: Vec3) -> bool {
+    match (ring.first(), ring.last()) {
+        (Some(f), Some(l)) => (f.y > p.y) != (l.y > p.y),
+        _ => false,
+    }
+}
+
 /// The parameter `t` along `p → p2` at which it crosses `q → q2`, if it does.
 ///
 /// Returns `None` for parallel or non-crossing segments. Collinear overlap returns
@@ -720,13 +757,51 @@ fn segment_intersection_t(p: Vec3, p2: Vec3, q: Vec3, q2: Vec3) -> Option<f64> {
         return None;
     }
     let qp = (q.x - p.x, q.y - p.y);
-    let t = (qp.0 * s.1 - qp.1 * s.0) / denom;
-    let u = (qp.0 * r.1 - qp.1 * r.0) / denom;
-    if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
-        Some(t)
-    } else {
-        None
+    // The same numerators and the same final quotient as `t = tn / denom`,
+    // `u = un / denom` tested against [0, 1]; the range tests are decided without
+    // dividing ([`unit_quotient`], exact), so the edges a path misses — nearly all of
+    // them — cost no division. Profiling a dense Manhattan run had this test as the
+    // largest single item of CPU.
+    let tn = qp.0 * s.1 - qp.1 * s.0;
+    if !unit_quotient(tn, denom) {
+        return None;
     }
+    let un = qp.0 * r.1 - qp.1 * r.0;
+    if !unit_quotient(un, denom) {
+        return None;
+    }
+    Some(tn / denom)
+}
+
+/// Whether the rounded quotient `n / d` lies in `[0, 1]`, for `d != 0` — the same answer
+/// as `(0.0..=1.0).contains(&(n / d))`, bit for bit, without the division in the
+/// common case.
+///
+/// Exact because IEEE 754 division is correctly rounded: a quotient of two same-signed
+/// numbers is at most 1 exactly when `|n| <= |d|` (if `|n| > |d|` then
+/// `|n| >= |d|·(1 + 2^-52·2^e/|d|)`, whose quotient lies above the midpoint between 1 and
+/// the next double, so it cannot round down to 1); a quotient of opposite-signed
+/// numbers is negative, unless it underflows to `-0.0`, which only a ratio below
+/// `2^-1074` can, and those (and every non-finite operand) take the division.
+#[inline]
+fn unit_quotient(n: f64, d: f64) -> bool {
+    if !(n.is_finite() && d.is_finite()) {
+        return (0.0..=1.0).contains(&(n / d));
+    }
+    if n == 0.0 {
+        return true;
+    }
+    let (an, ad) = (n.abs(), d.abs());
+    if (n > 0.0) == (d > 0.0) {
+        return an <= ad;
+    }
+    // 2^-900: far above the underflow threshold, so the product below is exact and any
+    // quotient that could round to zero is sent to the division.
+    const TINY: f64 = f64::from_bits(123 << 52);
+    if an < ad * TINY {
+        return (0.0..=1.0).contains(&(n / d));
+    }
+    false
 }
 
 /// The height of the straight transmitter-receiver line at a fraction `f` of the way
@@ -2147,6 +2222,77 @@ fn terrain_card(rule: MultiEdgeRule, exact: bool) -> ModelCard {
 mod tests {
     use super::*;
     use crate::testctx::{TestCtx, tiny_world, world_with_building};
+
+    /// The division-based crossing test the fast one replaced.
+    fn reference_intersection_t(p: Vec3, p2: Vec3, q: Vec3, q2: Vec3) -> Option<f64> {
+        let r = (p2.x - p.x, p2.y - p.y);
+        let s = (q2.x - q.x, q2.y - q.y);
+        let denom = r.0 * s.1 - r.1 * s.0;
+        if denom == 0.0 {
+            return None;
+        }
+        let qp = (q.x - p.x, q.y - p.y);
+        let t = (qp.0 * s.1 - qp.1 * s.0) / denom;
+        let u = (qp.0 * r.1 - qp.1 * r.0) / denom;
+        ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some(t)
+    }
+
+    /// The division-free range test gives the division's answer bit for bit: on random
+    /// city-scale segments, on segments meeting exactly at an end (t or u of exactly 0 or
+    /// 1, and one ulp either side), and on the quotient edge cases (underflow to -0.0,
+    /// subnormals, infinities, NaN). Goes red if `unit_quotient` takes `<` for `<=` or
+    /// drops its underflow fallback.
+    #[test]
+    fn the_division_free_crossing_test_matches_the_division() {
+        let edge = [
+            0.0, -0.0, 1.0, -1.0, f64::MIN_POSITIVE, 5e-324, -5e-324, 1e-300, -1e-300, 1e300,
+            -1e300, f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 1.0 + f64::EPSILON,
+            1.0 - f64::EPSILON / 2.0, 3.0, -3.0,
+        ];
+        for &n in &edge {
+            for &d in &edge {
+                if d == 0.0 {
+                    continue;
+                }
+                assert_eq!(
+                    unit_quotient(n, d),
+                    (0.0..=1.0).contains(&(n / d)),
+                    "n {n:e} d {d:e}"
+                );
+            }
+        }
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            (x >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut hits = 0;
+        for i in 0..200_000 {
+            let mut c = [0.0f64; 8];
+            for v in &mut c {
+                *v = (next() - 0.5) * 4000.0;
+            }
+            // Every fourth case shares an end, or lies one ulp off it, to land on t or u
+            // of exactly 0 or 1.
+            match i % 4 {
+                1 => (c[4], c[5]) = (c[2], c[3]),
+                2 => (c[6], c[7]) = (c[0].next_up(), c[1]),
+                3 => (c[4], c[5]) = (c[2].next_down(), c[3].next_up()),
+                _ => {}
+            }
+            let p = Vec3::new(c[0], c[1], 0.0);
+            let p2 = Vec3::new(c[2], c[3], 0.0);
+            let q = Vec3::new(c[4], c[5], 0.0);
+            let q2 = Vec3::new(c[6], c[7], 0.0);
+            let fast = segment_intersection_t(p, p2, q, q2);
+            let slow = reference_intersection_t(p, p2, q, q2);
+            assert_eq!(fast.map(f64::to_bits), slow.map(f64::to_bits), "case {i}");
+            hits += usize::from(slow.is_some());
+        }
+        assert!(hits > 10_000, "the cases must exercise crossings, got {hits}");
+    }
 
     /// A link through a whole row of towers is charged the around-the-corner excess of
     /// TR 37.885's NLOS law, not every wall on the straight line; a thin building is
