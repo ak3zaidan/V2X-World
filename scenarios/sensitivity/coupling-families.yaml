@@ -1,0 +1,25 @@
+# Families for the cross-domain coupling checks (docs/validation/test-coupling.md):
+#   v2xw sensitivity --expect --families scenarios/sensitivity/coupling-families.yaml
+#     --expectations crates/v2xw-engine/tests/expectations/coupling.yaml
+#     --interactions crates/v2xw-engine/tests/expectations/interactions/coupling.yaml
+# The same bases as catalogue.yaml, plus the applications family.
+families:
+  # 40 vehicles, 1.2 km open grid, 802.11p BSMs at 10 Hz (dsrc-grid.yaml).
+  - name: dsrc
+    base: dsrc-grid.yaml
+    set: {time.duration_s: 2.0, metrics: [all]}
+  # The same fleet on NR-V2X mode 2 (relative speed sets the link's Doppler class).
+  - name: nr
+    base: nr-grid.yaml
+    set: {time.duration_s: 2.0, metrics: [all]}
+  # Signalised 4 x 6 Midtown-shaped grid, Poisson demand, traffic and network.
+  - name: traffic
+    base: ../phase1-grid.yaml
+    set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 1500.0,
+          world.source.params.cols: 4, world.source.params.rows: 6, metrics: [all]}
+  # Four roadside units with SPaT/MAP and every vehicle running the V2X applications.
+  - name: apps
+    base: ../connected-intersections.yaml
+    set: {time.duration_s: 40.0, metrics: [all]}
+routes:
+  - {prefix: "", families: [dsrc]}

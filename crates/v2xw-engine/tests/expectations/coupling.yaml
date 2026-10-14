@@ -1,0 +1,6 @@
+# Cross-domain coupling, single-setting rows (docs/validation/test-coupling.md). Run with
+# --families scenarios/sensitivity/coupling-families.yaml (every setting routes to dsrc).
+- {setting: world.source.params.speed_limit_mps, change: 33.3, metric: tx_rate_hz, expect: same, min_change: 0.01,
+   source: "BSM generation at a fixed 10 Hz does not depend on speed (SAE J2945/1 6.3.6, below congestion control)"}
+- {setting: world.source.params.speed_limit_mps, change: 33.3, metric: traffic.speed_mean_mps, expect: up,
+   source: "on an open uncongested grid vehicles drive at their desired speed, which follows the limit (IDM v0; Treiber and Kesting, Traffic Flow Dynamics 2013, 11.3)"}
