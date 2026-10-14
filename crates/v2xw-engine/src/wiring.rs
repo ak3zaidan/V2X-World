@@ -2896,7 +2896,19 @@ pub fn build_metrics_for(
     ];
     // The applications' warnings, labelled against ground truth, when vehicles run any.
     if !scenario.apps.enabled.is_empty() {
-        candidates.push(Box::new(v2xw_metrics::apps::AppsProvider::new()));
+        // Seeded with the warning applications on, so one that never warns reports 0.
+        // GLOSA advises and issues no warnings; BSW's provider also issues LCW.
+        let mut seeds: Vec<String> = Vec::new();
+        for a in &scenario.apps.enabled {
+            match a.as_str() {
+                "glosa" => {}
+                "bsw" => seeds.extend(["bsw".to_string(), "lcw".to_string()]),
+                other => seeds.push(other.to_string()),
+            }
+        }
+        candidates.push(Box::new(
+            v2xw_metrics::apps::AppsProvider::new().with_apps(seeds),
+        ));
     }
     // The pseudonym, pool, linkability and backend-link metrics read records only the
     // security path writes, so a run without it would publish a column of empty samples.
