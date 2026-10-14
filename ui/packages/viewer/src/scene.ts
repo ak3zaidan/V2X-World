@@ -260,6 +260,8 @@ export class Viewer {
   #startMs = 0;
   #fixedClock = 0;
   #accumulator = 0;
+  /** The drawn sim time at the previous frame, for the camera's feed-forward rate. */
+  #prevRenderSim = Number.NaN;
   #fixedStep: number;
   #maxSubSteps: number;
   #maxFrame: number;
@@ -1169,6 +1171,17 @@ export class Viewer {
 
     // 1. Poses, and the signal states for the instant they are drawn at.
     const sample = this.interpolator.sample(renderClock);
+    {
+      // Drawn sim seconds per wall second: zero on a paused run, the playback speed otherwise.
+      const sim = this.interpolator.renderSimSeconds;
+      const prev = this.#prevRenderSim;
+      this.#prevRenderSim = sim;
+      if (dt > 0 && Number.isFinite(prev) && Number.isFinite(sim)) {
+        const rate = (sim - prev) / dt;
+        // A seek is a jump, not a speed: keep the last rate (the interpolator snaps the subject).
+        if (rate >= 0 && rate <= 64) this.cameras.setFollowTimeScale(rate);
+      }
+    }
     this.#flushSignals();
     this.#syncSun();
     this.worldRenderer.signals.update(renderClock);
