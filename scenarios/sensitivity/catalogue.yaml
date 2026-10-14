@@ -101,6 +101,11 @@ routes:
   - {prefix: traffic.keep_junctions_clear, families: [saturated]}
   - {prefix: traffic.reroute_period_s, families: [saturated]}
   - {prefix: traffic.dynamic_rerouting, families: [saturated]}
+  # Rain's headway effect on the light grid is hidden by the headway metric's 6 s cut
+  # (Vogel 2003): slower free-flowing pairs cross 6 s and drop out, so the mean fell 4.7 %
+  # while every driver's T rose. On the near-capacity freeway the fleet follows, so the
+  # FHWA capacity cut shows as a longer headway.
+  - {prefix: weather.intensity, families: [freeway, traffic]}
   - {prefix: weather, families: [traffic, dsrc]}
   - {prefix: threats, families: [security, dsrc]}
   - {prefix: detection, families: [security]}
@@ -216,6 +221,9 @@ context:
   - {prefix: traffic.signals.green_wave_heading_deg, set: {traffic.signals.green_wave_speed_mps: 11.176}}
   - {prefix: traffic.kerbside.taxi_dwell_median_s, set: {traffic.kerbside.taxi_share: 0.3}}
   - {prefix: traffic.critical_gap_factor, set: {world.source.params.signalised: false}}
+  # Jammed counts vehicles standing still for a whole gridlock timeout; at SUMO's 300 s
+  # default none can within 90 s, so the row uses 30 s in both runs.
+  - {prefix: traffic.keep_junctions_clear, set: {traffic.gridlock_timeout_s: 30.0}}
   # Setting any lc_* field switches lane changing from MOBIL to LC2013 (wiring.rs), so
   # against a MOBIL base each one only measured the model switch. LC2013 runs in both
   # runs here (another factor at SUMO's default), so the row measures the factor itself.

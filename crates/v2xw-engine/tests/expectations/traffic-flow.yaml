@@ -91,32 +91,32 @@
 - {setting: traffic.gridlock_timeout_s, change: 30.0, metric: metric.traffic_teleports, expect: up,
    source: "SUMO time-to-teleport: a vehicle stuck longer than the timeout is moved on. The 300 s default never fires in a 90 s run; 30 s does on the saturated grid (SUMO --time-to-teleport)"}
 
-# ---- Open (round 15): dead or contradicted on the main binary, not yet fixed ----
-# See docs/validation/test-traffic-flow.md for each lead. Uncomment when fixed.
-# - {setting: actors.vehicles.drivers.truck.min_gap_m, change: high, metric: metric.headway_distance, expect: up, min_change: 0.0005,
-#    source: "IDM s0 per class: trucks standing further back lengthen the fleet's standstill gaps (SUMO truck vType minGap 2.5 m)"}
+# ---- Fixed in round 16 (were open in round 15; docs/validation/test-traffic-flow.md) ----
+- {setting: actors.vehicles.drivers.truck.min_gap_m, change: low, metric: metric.headway_distance, expect: down, min_change: 0.0005,
+   source: "IDM s0 per class: the high end was the default (bit-identical), so the low end: trucks standing closer shorten the fleet's standstill gaps (SUMO truck vType minGap 2.5 m)"}
+# Still open: buses rarely follow anything on the light grid.
 # - {setting: actors.vehicles.drivers.bus.time_headway_s, change: high, metric: metric.headway_time, expect: up, min_change: 0.001,
 #    source: "IDM T per class (Treiber 2000; TCRP Report 165 bus operation)"}
-# - {setting: actors.vehicles.drivers.motorcycle_filtering, change: true, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
-#    source: "filtering motorcycles pass standing queues and wait less (Vlahogianni, Transportation Research Part C 2014; UK Highway Code rule 88)"}
-# - {setting: actors.vehicles.drivers.truck_lane_restriction, change: true, metric: traffic.speed_mean_mps, expect: changes, min_change: 0.0005,
-#    source: "trucks kept out of the left lane change who blocks whom (FHWA truck lane restriction studies, FHWA-HRT-04-xxx; HCM 7th ed. 12)"}
-# - {setting: traffic.permitted_left_gap_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.0005,
-#    source: "a longer critical headway accepts fewer gaps in the opposing flow: permitted lefts wait longer (HCM 7th ed. 31; Raff 1950)"}
-# - {setting: traffic.critical_gap_factor, change: high, metric: traffic.speed_mean_mps, expect: down, min_change: 0.0005,
-#    source: "longer critical gaps and follow-up times at stop- and yield-controlled junctions: less capacity, more delay (HCM 7th ed. ch. 20 eq. 20-30)"}
-# - {setting: traffic.kerbside.bus_dwell_mean_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.001,
-#    source: "a longer dwell is longer kerb-lane blockage (TCQSM 3rd ed. ch. 6; HCM 7th ed. 19 f_bb)"}
-# - {setting: traffic.kerbside.bus_stop_spacing_m, change: high, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
-#    source: "wider stop spacing is fewer stops per bus (TCRP Report 19)"}
-# - {setting: traffic.kerbside.delivery_stop_share, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.0005,
-#    source: "more delivery stops, more kerb-lane blockage (HCM 7th ed. 19 f_bb)"}
-# - {setting: traffic.kerbside.delivery_dwell_median_s, change: low, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
-#    source: "a 30 s unloading instead of the 10 min default frees the lane within the run (Urban Freight Lab, Seattle CBD 2018-2020; HCM 7th ed. 19 f_bb)"}
-# - {setting: traffic.keep_junctions_clear, change: false, metric: metric.traffic_jammed, expect: up,
-#    source: "vehicles entering a junction they cannot leave block the cross street: spillback gridlock (Daganzo 1996 gridlock; SUMO junction blocking)"}
-# - {setting: weather.intensity, change: high, metric: metric.headway_time, expect: up, min_change: 0.005,
-#    source: "heavier rain, larger saturation-flow loss (2-21 % wet band), so longer headways (FHWA Road Weather Management; Perrin, Martin, Hansen TRR 1776, 2001)"}
+- {setting: actors.vehicles.drivers.motorcycle_filtering, change: true, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
+   source: "filtering motorcycles pass standing queues and wait less (Vlahogianni, Transportation Research Part C 2014; UK Highway Code rule 88)"}
+- {setting: actors.vehicles.drivers.truck_lane_restriction, change: true, metric: traffic.speed_mean_mps, expect: changes, min_change: 0.0005,
+   source: "trucks kept out of the left lane change who blocks whom (StVO §18(11) for lorries over 7.5 t; HCM 7th ed. ch. 12 heavy-vehicle effects)"}
+- {setting: traffic.permitted_left_gap_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.0005,
+   source: "a longer critical headway accepts fewer gaps in the opposing flow: permitted lefts wait longer (HCM 7th ed. 31; Raff 1950)"}
+- {setting: traffic.critical_gap_factor, change: high, metric: traffic.speed_mean_mps, expect: down, min_change: 0.0005,
+   source: "longer critical gaps and follow-up times at stop- and yield-controlled junctions: less capacity, more delay (HCM 7th ed. ch. 20 eq. 20-30)"}
+- {setting: traffic.kerbside.bus_dwell_mean_s, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.001,
+   source: "a longer dwell is longer kerb-lane blockage (TCQSM 3rd ed. ch. 6; HCM 7th ed. 19 f_bb)"}
+- {setting: traffic.kerbside.bus_stop_spacing_m, change: high, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
+   source: "wider stop spacing is fewer stops per bus (TCRP Report 19)"}
+- {setting: traffic.kerbside.delivery_stop_share, change: high, metric: traffic.stopped_share, expect: up, min_change: 0.0005,
+   source: "more delivery stops, more kerb-lane blockage (HCM 7th ed. 19 f_bb)"}
+- {setting: traffic.kerbside.delivery_dwell_median_s, change: low, metric: traffic.stopped_share, expect: down, min_change: 0.0005,
+   source: "a 30 s unloading instead of the 10 min default frees the lane within the run (Urban Freight Lab, Seattle CBD 2018-2020; HCM 7th ed. 19 f_bb)"}
+- {setting: traffic.keep_junctions_clear, change: false, metric: metric.traffic_jammed, expect: up,
+   source: "vehicles entering a junction they cannot leave block the cross street: spillback gridlock (Daganzo 1996 gridlock; SUMO junction blocking)"}
+- {setting: weather.intensity, change: high, metric: metric.headway_time, expect: up, min_change: 0.005,
+   source: "heavier rain, larger saturation-flow loss (2-21 % wet band), so longer headways (FHWA Road Weather Management; Perrin, Martin, Hansen TRR 1776, 2001)"}
 
 # ---- Lane changes per vehicle (new fingerprint metric traffic.lane_changes_per_veh, round 15) ----
 # Not yet measured: the main release binary has no lane-change count. Uncomment after a
