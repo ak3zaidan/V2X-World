@@ -67,7 +67,9 @@ cases:
   - id: set-truck-headway
     category: setting
     live: true
-    prompt: IDM headway 2 s for trucks.
+    # The starting scenario has no trucks, and the loader refuses truck driving settings on
+    # a fleet without trucks (they would do nothing), so the prompt adds them.
+    prompt: Add 10% trucks and give them an IDM headway of 2 s.
     runs: {min: 0, max: 0}
     resolve: [actors.vehicles.drivers.truck.time_headway_s]
     repair:
@@ -76,7 +78,17 @@ cases:
       - {key: drivers.truck.time_headway_s, value: 2,
          want_key: actors.vehicles.drivers.truck.time_headway_s, want_value: 2}
     draft:
+      - {key: actors.vehicles.classes.truck.fraction, approx: 0.1}
       - {key: actors.vehicles.drivers.truck.time_headway_s, approx: 2}
+
+  - id: set-truck-headway-no-trucks
+    category: refusal
+    live: true
+    # Same request on a fleet with no trucks: the loader refuses it, and the agent must
+    # say so or ask for a truck share rather than invent a fleet mix.
+    prompt: IDM headway 2 s for trucks.
+    runs: {min: 0, max: 0}
+    asks: true
 
   - id: set-dcc-on
     category: setting
