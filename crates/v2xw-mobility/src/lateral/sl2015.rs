@@ -165,7 +165,7 @@ impl Sl2015 {
             if !alongside {
                 return true;
             }
-            match self.params.filter.pair_gap(ego.class, n.view.class) {
+            match self.params.filter.pair_gap_of(&at, &n.view) {
                 None => true,
                 Some(g) => SublaneFilter::clearance(&at, &n.view) >= g,
             }
@@ -188,7 +188,10 @@ impl LateralModel for Sl2015 {
         neighbours: &[LateralNeighbor],
         preferred_m: f64,
     ) -> LateralDecision {
-        let half = 0.5 * (lane.width_m - ego.dims.width_m).max(0.0);
+        let half = self
+            .params
+            .filter
+            .half_range_m(ego.class, ego.dims.width_m, lane.width_m);
         let clamp = |x: f64| x.clamp(-half, half);
         let preferred = clamp(preferred_m);
         let current = clamp(ego.lateral_m);

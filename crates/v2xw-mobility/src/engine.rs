@@ -3893,6 +3893,17 @@ impl NativeMobility {
                 // *pair* of movements, not of the claim.
                 conflicts: false,
                 ego_must_yield: false,
+                // Its own tracked arrival: its launch at its own acceleration up to the
+                // speed it wants on its lane (SUMO MSLink::setApproaching).
+                arrival_s: Some(merge_arrival_s(
+                    view.stop_line_gap_m,
+                    state.speed_mps,
+                    actor.driver.max_accel_mps2,
+                    actor
+                        .driver
+                        .desired_speed_mps
+                        .min(world.lane(actor.lane).speed_limit_mps),
+                )),
             });
         }
         for list in out.values_mut() {

@@ -331,6 +331,14 @@ pub struct ConflictView {
     /// True if the ego must give way to it: the world's `response` row, or the priority
     /// rule of the model when the world has no matrix.
     pub ego_must_yield: bool,
+    /// When this claimant itself expects to reach the stop line, seconds from now: its
+    /// own launch at its own maximum acceleration up to its own desired speed on its
+    /// lane, as the engine tracks it (SUMO registers each approaching vehicle's arrival
+    /// time on the link, `MSLink::setApproaching`, and a turner asks
+    /// `MSLink::blockedAtTime`). `None` when no engine filled it in (a hand-built view):
+    /// the reader falls back to an assumed launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrival_s: Option<f64>,
 }
 
 impl ConflictView {
