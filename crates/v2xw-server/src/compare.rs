@@ -386,6 +386,46 @@ pub fn decimate(series: &[(f64, f64)], points: usize) -> Vec<[f64; 2]> {
         .collect()
 }
 
+/// Two-sided 95 % Student t quantiles, t(0.975, ν) for ν = 1..30 (Abramowitz and Stegun,
+/// Handbook of Mathematical Functions, Table 26.10).
+const T975: [f64; 30] = [
+    12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.160,
+    2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086, 2.080, 2.074, 2.069, 2.064, 2.060, 2.056,
+    2.052, 2.048, 2.045, 2.042,
+];
+
+/// t(0.975, ν), rounding ν down (conservative); above 30 it falls toward 1.96 as 1/ν.
+fn t975(df: f64) -> f64 {
+    if !df.is_finite() || df < 1.0 {
+        return T975[0];
+    }
+    if df > 30.0 {
+        return 1.96 + (T975[29] - 1.96) * 30.0 / df;
+    }
+    T975[(df.floor() as usize).clamp(1, 30) - 1]
+}
+
+/// How many combined standard errors a difference must clear. Between two sets of
+/// replications the standard errors come from only `n − 1` degrees of freedom each, so
+/// the threshold is Welch's: t(0.975) at the Welch–Satterthwaite degrees of freedom (Law,
+/// Simulation Modeling and Analysis 5e, §10.2.1). The flat 2 that a single run's batch
+/// means use would let a seed-only change between 5 and 5 replications pass for real
+/// about 8 % of the time per metric instead of 5 %.
+fn noise_multiplier(sa: f64, sb: f64, (na, nb): (u32, u32)) -> f64 {
+    if na < 2 || nb < 2 {
+        return 2.0;
+    }
+    let (va, vb) = (sa * sa, sb * sb);
+    let (fa, fb) = (f64::from(na - 1), f64::from(nb - 1));
+    let den = va * va / fa + vb * vb / fb;
+    let df = if den > 0.0 {
+        (va + vb) * (va + vb) / den
+    } else {
+        fa + fb
+    };
+    t975(df)
+}
+
 fn mean(v: &[f64]) -> Option<f64> {
     (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64)
 }
@@ -858,9 +898,13 @@ pub fn compare(a: &RunDigest, b: &RunDigest) -> Comparison {
             .zip(delta)
             .and_then(|(x, d)| (x.abs() > 0.0).then(|| d / x.abs() * 100.0));
         let se = ma.and_then(|m| m.se).zip(mb.and_then(|m| m.se));
-        let beyond_noise = se
-            .zip(delta)
-            .map(|((sa, sb), d)| d.abs() > 2.0 * (sa * sa + sb * sb).sqrt());
+        let reps = (
+            ma.map_or(1, |m| m.replications),
+            mb.map_or(1, |m| m.replications),
+        );
+        let beyond_noise = se.zip(delta).map(|((sa, sb), d)| {
+            d.abs() > noise_multiplier(sa, sb, reps) * (sa * sa + sb * sb).sqrt()
+        });
         let res = resolution(&any.unit);
         let big = match (va, delta) {
             (Some(x), Some(d)) => {
@@ -1258,6 +1302,24 @@ mod tests {
         assert_eq!(lat.verdict, "worse", "a latency going up is worse");
         let pdr = c.rows.iter().find(|r| r.name == "pdr").unwrap();
         assert_eq!(pdr.verdict, "same");
+    }
+
+    #[test]
+    fn replications_use_the_welch_t_threshold() {
+        // 5 and 5 replications, equal errors: ν = 8, t = 2.306, so a 2.1-SE difference
+        // that the flat 2 would call real is noise.
+        assert!((noise_multiplier(1.0, 1.0, (5, 5)) - 2.306).abs() < 1e-9);
+        assert_eq!(noise_multiplier(1.0, 1.0, (1, 1)), 2.0);
+        assert!(noise_multiplier(1.0, 1.0, (200, 200)) < 1.97);
+        let mut a = digest(1, 20.0, 0.80, 10.0);
+        let mut b = digest(2, 20.0, 0.80 + 2.1 * 0.02_f64.sqrt() * 0.1, 10.0);
+        for (d, m) in [(&mut a, 0), (&mut b, 0)] {
+            d.metrics[m].se = Some(0.01);
+            d.metrics[m].replications = 5;
+        }
+        let pdr = compare(&a, &b);
+        let pdr = pdr.rows.iter().find(|r| r.name == "pdr").unwrap();
+        assert_eq!(pdr.beyond_noise, Some(false));
     }
 
     #[test]
