@@ -1,6 +1,6 @@
-# Cross-domain coupling checks (docs/validation/test-coupling.md). Families come from
-# scenarios/sensitivity/coupling-families.yaml (dsrc, nr, traffic, apps), so run with
-# `--families scenarios/sensitivity/coupling-families.yaml`.
+# Cross-domain coupling checks (docs/validation/test-coupling.md), on the families of
+# scenarios/sensitivity/catalogue.yaml (dsrc, nr, traffic; the traffic family's vehicles
+# run the V2X applications, so it carries the network -> application rows).
 #
 # Two kinds of row. A coupling row (security x density, ...) is a true 2 x 2. A
 # robustness row puts a different master seed as the condition and expects `holds`: the
@@ -110,24 +110,24 @@
   source: "AoI follows the loss (Kaul et al. 2011), and the loss Falcon adds grows with density"
 
 # ---- (2) network -> applications ----
-- name: transmit power x seed on the applications grid (AoI)
-  family: apps
+- name: transmit power x seed on the city grid (AoI)
+  family: traffic
   factor: {radio.devices.obu.tx_power_dbm: 0.0}
   condition: {seed: "0x5EED_0002"}
   metric: aoi_ms
   expect: holds
   direction: up
   source: "about 20 dB less transmit power shortens range, so fewer of each neighbour's messages arrive and every link's age grows (Kaul et al. 2011; Rappaport 4.9)"
-- name: transmit power x seed on the applications grid (missed warnings)
-  family: apps
+- name: transmit power x seed on the city grid (missed warnings)
+  family: traffic
   factor: {radio.devices.obu.tx_power_dbm: 0.0}
   condition: {seed: "0x5EED_0002"}
   metric: metric.app_miss_ratio
   expect: holds
   direction: up
   source: "a warning needs a fresh enough BSM from the threat vehicle; with fewer delivered the application sees the conflict late or not at all (CAMP VSC-A final report, DOT HS 811 492A, 2011, 3.2; Kaul et al. 2011)"
-- name: transmit power x seed on the applications grid (warnings)
-  family: apps
+- name: transmit power x seed on the city grid (warnings)
+  family: traffic
   factor: {radio.devices.obu.tx_power_dbm: 0.0}
   condition: {seed: "0x5EED_0002"}
   metric: metric.app_warnings
