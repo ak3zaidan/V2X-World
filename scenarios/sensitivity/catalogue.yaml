@@ -68,9 +68,11 @@ routes:
   # The restriction acts only on a motorway with three or more lanes (drivers.rs
   # is_restricted_left_lane): the Midtown grid's two lanes never trigger it.
   - {prefix: actors.vehicles.drivers.truck_lane_restriction, families: [freeway, traffic]}
-  # HCM ch. 20 gaps act at stop- and yield-controlled junctions; every Midtown grid
-  # junction is signalised, Portland's side streets are not.
-  - {prefix: traffic.critical_gap_factor, families: [osm, traffic]}
+  # HCM ch. 20 gaps act at stop- and yield-controlled junctions. Every Midtown grid
+  # junction is signalised, and on Portland the run was bit-identical (its downtown is
+  # signalised too), so the row runs on the grid with its signals off: every junction
+  # is then a priority junction whose minor arm gives way (context below).
+  - {prefix: traffic.critical_gap_factor, families: [traffic]}
   - {prefix: radio.sidelink, families: [cv2x, nr]}
   - {prefix: net.geonet, families: [gn]}
   - {prefix: net, families: [gn, dsrc, security]}
@@ -213,6 +215,7 @@ context:
   # them dead on the car-only family with no taxi share.
   - {prefix: traffic.signals.green_wave_heading_deg, set: {traffic.signals.green_wave_speed_mps: 11.176}}
   - {prefix: traffic.kerbside.taxi_dwell_median_s, set: {traffic.kerbside.taxi_share: 0.3}}
+  - {prefix: traffic.critical_gap_factor, set: {world.source.params.signalised: false}}
   # Setting any lc_* field switches lane changing from MOBIL to LC2013 (wiring.rs), so
   # against a MOBIL base each one only measured the model switch. LC2013 runs in both
   # runs here (another factor at SUMO's default), so the row measures the factor itself.

@@ -64,6 +64,17 @@ impl Default for SublaneFilter {
     }
 }
 
+/// Below this speed a motor vehicle counts as standing in a queue for filtering, m/s:
+/// 5 mi/h, the HCM's queued-vehicle threshold (HCM 7th ed. ch. 31), the same one the
+/// headway metrics use.
+pub const FILTER_QUEUED_MPS: f64 = 2.235;
+
+/// The lateral clearance a filtering motorcycle keeps passing a queued vehicle, metres.
+/// **A choice**: no measured filtering clearance was read. SUMO's moving-traffic
+/// `minGapLat` (0.6 m) cannot be met by a 0.9 m motorcycle beside a 1.8 m car in a
+/// 3.5 m lane even on the lane line, so with it filtering never happened.
+pub const FILTER_STANDING_GAP_M: f64 = 0.3;
+
 /// The narrow classes that may share a lane at all.
 fn narrow(class: VehicleClass) -> bool {
     matches!(
@@ -100,6 +111,37 @@ impl SublaneFilter {
         }
     }
 
+    /// [`Self::pair_gap`] for two vehicles as they are now: a filtering motorcycle or
+    /// moped passes a motor vehicle standing in a queue ([`FILTER_QUEUED_MPS`]) at
+    /// [`FILTER_STANDING_GAP_M`], not at the moving-traffic `min_gap_lat_m`. Filtering is
+    /// lawful only between stopped or slow vehicles where it is lawful at all (CVC
+    /// §21658.1; Utah Code §41-6a-704.5, at most 15 mph, others stopped).
+    pub fn pair_gap_of(&self, a: &VehicleView, b: &VehicleView) -> Option<f64> {
+        let gap = self.pair_gap(a.class, b.class)?;
+        let moto = |c: VehicleClass| matches!(c, VehicleClass::Motorcycle | VehicleClass::Moped);
+        let filtering_past = |m: &VehicleView, other: &VehicleView| {
+            moto(m.class) && !narrow(other.class) && other.speed_mps < FILTER_QUEUED_MPS
+        };
+        if self.motorcycles_share && (filtering_past(a, b) || filtering_past(b, a)) {
+            Some(gap.min(FILTER_STANDING_GAP_M))
+        } else {
+            Some(gap)
+        }
+    }
+
+    /// How far across its lane a vehicle of `class` may hold its centre, metres either
+    /// side of the centreline, in a lane `lane_width_m` wide: a filtering motorcycle rides
+    /// up to the lane line, the space between two queues (lane splitting); everyone else
+    /// keeps its body inside the lane.
+    pub fn half_range_m(&self, class: VehicleClass, width_m: f64, lane_width_m: f64) -> f64 {
+        if self.motorcycles_share && matches!(class, VehicleClass::Motorcycle | VehicleClass::Moped)
+        {
+            0.5 * lane_width_m
+        } else {
+            0.5 * (lane_width_m - width_m).max(0.0)
+        }
+    }
+
     /// The lateral clearance between two bodies at their current offsets, metres
     /// (negative when they overlap).
     pub fn clearance(a: &VehicleView, b: &VehicleView) -> f64 {
@@ -109,7 +151,7 @@ impl SublaneFilter {
     /// Whether `cand`, ahead of `ego` in its lane, is `ego`'s leader: always when the two
     /// may not share; otherwise only when they are closer laterally than their clearance.
     pub fn is_leader(&self, ego: &VehicleView, cand: &VehicleView) -> bool {
-        match self.pair_gap(ego.class, cand.class) {
+        match self.pair_gap_of(ego, cand) {
             None => true,
             Some(gap) => Self::clearance(ego, cand) < gap,
         }
