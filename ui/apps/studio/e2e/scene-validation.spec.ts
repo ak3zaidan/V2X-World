@@ -1092,7 +1092,12 @@ test("the views are still correct at t = 0 and after the run has finished", asyn
     await freeze(page);
     const f = await sceneFacts(page);
     expect(f.live, `${where}: no live vehicles`).toBeGreaterThan(0);
-    expect(f.live, `${where}: live count disagrees with the pose buffer`).toBe(f.poseOccupied);
+    // Against the drawn instant's own slots: paused, the drawn instant stays a beat behind the
+    // newest snapshot, so a vehicle that left in between is still there (201 drawn vs 200 buffered).
+    expect(f.live, `${where}: live count disagrees with the drawn instant`).toBe(f.drawnOccupied);
+    expect(Math.abs(f.live - f.poseOccupied), `${where}: live count far from the pose buffer`).toBeLessThanOrEqual(
+      Math.max(2, Math.ceil(f.poseOccupied * 0.02)),
+    );
     expect(f.drawn + f.culled + f.dropped + (f.hiddenActorId >= 0 ? 1 : 0), `${where}: vehicles unaccounted for`).toBe(
       f.live,
     );
