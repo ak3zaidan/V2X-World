@@ -14,7 +14,7 @@
 //!
 //! | row | fails when |
 //! |---|---|
-//! | `stopped_on_green` | a queue head stands at its stop line longer than [`CheckOptions::green_stop_s`] while its own movement shows a protected green |
+//! | `stopped_on_green` | a queue head stands at its stop line longer than [`CheckOptions::green_stop_s`] while its own movement shows a protected green and its exit lane has room (a hold behind a standing exit queue is the keep-clear rule, NY VTL §1175, and is not counted) |
 //! | `stopped_on_permitted_green` | as above for a permitted (yield) green, over [`CheckOptions::permitted_stop_s`] |
 //! | `stopped_at_clear_junction` | a queue head at an unsignalised junction stands longer than [`CheckOptions::clear_stop_s`] while nothing is in or approaching the junction |
 //! | `phantom_stop` | a vehicle stands mid-lane, nobody ahead within 30 m, longer than [`CheckOptions::phantom_stop_s`] |
@@ -151,6 +151,14 @@ pub struct TrafficCheck {
 }
 
 const STOP_MPS: f64 = 0.1;
+
+/// The speed at or under which the tail of the queue on a movement's exit lane counts as
+/// standing: the mobility engine's `EXIT_QUEUE_MOVING_MPS`.
+const EXIT_QUEUE_MOVING_MPS: f64 = 2.0;
+
+/// The gap a driver wants behind the exit queue's tail before entering, metres: the
+/// engine's default IDM `s0` (2 m, Treiber & Kesting 2013 table 11.2).
+const EXIT_MIN_GAP_M: f64 = 2.0;
 
 /// How far before the junction a stop line stands, metres: the mobility engine's
 /// `STOP_LINE_OFFSET_M`.
@@ -499,9 +507,11 @@ pub fn check_recording(
     // signalised.
     let lanes = world.roads.lanes();
     let mut vias: Vec<Vec<LaneId>> = vec![Vec::new(); lanes.len()];
+    let mut exit_of_via: BTreeMap<LaneId, LaneId> = BTreeMap::new();
     for c in world.roads.connections() {
         if let Some(v) = c.via {
             vias[c.from_lane.as_usize()].push(v);
+            exit_of_via.insert(v, c.to_lane);
         }
     }
     let junction_of_lane = |l: LaneId| -> Option<usize> {
@@ -947,7 +957,20 @@ pub fn check_recording(
             st.s = s;
             let head = ahead.is_none() && len - s < 12.0 && lane.kind != LaneKind::Internal;
             if head {
+                let own_len = entry.map_or(0.0, |k| by_lane[&a.lane][k].3);
                 for m in &vias[l.as_usize()] {
+                    // A green the driver may not take: the exit has no room behind a
+                    // standing queue (NY VTL §1175, the engine's keep-clear rule), so
+                    // the wait is lawful and not a stop on green.
+                    let exit_full = exit_of_via.get(m).is_some_and(|x| {
+                        by_lane.get(&x.index()).and_then(|v| v.first()).is_some_and(|tail| {
+                            now.get(&tail.2).is_some_and(|n| n.speed <= EXIT_QUEUE_MOVING_MPS)
+                                && tail.0 - tail.3 < own_len + EXIT_MIN_GAP_M
+                        })
+                    });
+                    if exit_full {
+                        continue;
+                    }
                     match sig.state(world, *m) {
                         Some(SignalState::Green) => st.green.entry(*m).or_default().0 += dt,
                         Some(SignalState::GreenYield) => st.green.entry(*m).or_default().1 += dt,
