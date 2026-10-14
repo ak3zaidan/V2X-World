@@ -4525,6 +4525,69 @@ pub fn pq_rsu_proxy_warnings(s: &Scenario) -> Vec<String> {
         .collect()
 }
 
+/// A warning when `security.signature` makes every signed message larger than the network
+/// layer's MTU and no fragmenter splits it: each SPDU is then refused before the MAC
+/// (`net_mtu_refusals`), so the run sends no frames and costs nothing, which reads as a
+/// cheap scheme rather than an impossible one. Not a refusal, so that a study of exactly
+/// that impossibility still runs. The bound is the signature alone (FIPS 204: ML-DSA-44
+/// 2,420 B, ML-DSA-65 3,309 B, ML-DSA-87 4,627 B; FIPS 205 SLH-DSA-128s 7,856 B) against
+/// the WSM payload of 1,400 octets (IEEE 1609.3-2020 WsmMaxLength default) or the
+/// GeoNetworking SDU of 1,398 (ETSI EN 302 636-4-1 Annex H), so it never warns on a
+/// scheme some message could fit under.
+pub fn signature_mtu_warnings(s: &Scenario) -> Vec<String> {
+    let Some(scheme) = v2xw_sec::scheme::signature(&s.security.signature) else {
+        return Vec::new();
+    };
+    if s.messages.sets.is_empty() {
+        return Vec::new();
+    }
+    let splits = s
+        .net
+        .fragmenter
+        .as_ref()
+        .is_some_and(|f| f.id != v2xw_net::FRAGMENTER_NONE_ID);
+    if splits {
+        return Vec::new();
+    }
+    let gn = s.net.layer == "gn-btp";
+    let mtu = if gn {
+        v2xw_net::gn::ITS_GN_MAX_SDU_SIZE
+    } else {
+        v2xw_net::wsmp::WSM_MAX_PAYLOAD_MIB_DEFAULT
+    };
+    let sig = scheme.sig_octets();
+    if sig <= mtu {
+        return Vec::new();
+    }
+    let dsrc = s.radio.rat == crate::scenario::schema::Rat::Dsrc80211p;
+    let offer = if !dsrc {
+        "fragmentation runs over 802.11p only in this build, so choose a scheme whose \
+         signature fits (falcon-512, falcon-1024 or hybrid-falcon512-ecdsa-p256) or set \
+         radio.rat to DSRC with a fragmenter"
+            .to_string()
+    } else if gn {
+        format!(
+            "set net.fragmenter to '{}' (ETSI facilities-layer segmentation) or '{}' to \
+             send it in pieces",
+            v2xw_net::FRAGMENTER_FACILITIES_ID,
+            v2xw_net::FRAGMENTER_GENERIC_ID
+        )
+    } else {
+        format!(
+            "set net.fragmenter to '{}' to send it in pieces, reassembled at the receiver",
+            v2xw_net::FRAGMENTER_GENERIC_ID
+        )
+    };
+    vec![format!(
+        "security.signature '{}' signs with {sig} octets, more than the {} MTU of {mtu} \
+         octets, and net.fragmenter does not split messages: every signed message will be \
+         refused before the radio (counted in net_mtu_refusals) and the run will send no \
+         frames; {offer}",
+        s.security.signature,
+        if gn { "GeoNetworking" } else { "WSMP" },
+    )]
+}
+
 /// The inputs the scenario names **on disk**, checked before anything is built: the map
 /// extract and the terrain raster.
 ///
