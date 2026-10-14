@@ -308,8 +308,17 @@ pub fn remember(s: &mut HumanState, reaction_s: f64, dt_s: f64, decided_now: f64
     }
 }
 
+/// The lowest posted limit read as a freeway's where the world gives no road class, m/s:
+/// 55 mph, the bottom of the range US limited-access highways are posted at, against
+/// 25-45 mph on urban arterials (FHWA, Methods and Practices for Setting Speed Limits,
+/// FHWA-SA-12-004, 2012). A procedural world tags every edge `Residential`, so without
+/// this the six-lane procedural freeway never had a restricted lane.
+pub const FREEWAY_MIN_LIMIT_MPS: f64 = 24.587;
+
 /// Whether `lane` is the leftmost driving lane of a motorway or trunk edge with three or
-/// more driving lanes: the lane a restricted truck may not change into.
+/// more driving lanes: the lane a restricted truck may not change into. An edge of a
+/// world without road classes (procedural, tagged `Residential`) counts as a motorway
+/// when its limit is a freeway's ([`FREEWAY_MIN_LIMIT_MPS`]).
 pub fn is_restricted_left_lane(world: &v2xw_world::World, lane: v2xw_core::ids::LaneId) -> bool {
     use v2xw_world::{LaneKind, RoadClass};
     let Some(l) = world.try_lane(lane) else {
@@ -319,7 +328,12 @@ pub fn is_restricted_left_lane(world: &v2xw_world::World, lane: v2xw_core::ids::
         return false;
     }
     let edge = world.edge(l.edge);
-    if !matches!(edge.road_class, RoadClass::Motorway | RoadClass::Trunk) {
+    let freeway = match edge.road_class {
+        RoadClass::Motorway | RoadClass::Trunk => true,
+        RoadClass::Residential => l.speed_limit_mps >= FREEWAY_MIN_LIMIT_MPS,
+        _ => false,
+    };
+    if !freeway {
         return false;
     }
     let driving: Vec<u8> = edge
