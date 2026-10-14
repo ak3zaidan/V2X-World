@@ -3335,6 +3335,17 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
             ));
         }
     }
+    // The lifecycle refuses this too, but only a scenario that runs the lifecycle reaches
+    // it: on a run without a credential backend the attack was accepted and did nothing
+    // (the security-track catalogue sweep found it dead on the DSRC family).
+    if s.threats.compromised_rsu_attack.is_some() && s.threats.compromised_rsus.is_empty() {
+        e.push(conflict(
+            "threats.compromised_rsu_attack",
+            "is set but threats.compromised_rsus names no roadside unit, so no unit \
+             carries it out; name the units by their position in actors.rsus or remove it"
+                .to_string(),
+        ));
+    }
     if s.detection.responder.is_some() {
         e.push(conflict(
             "detection.responder",

@@ -1,0 +1,74 @@
+# Expectation rows, security track (docs/validation/test-security.md). Format: catalogue.yaml.
+# security.* runs on the SCMS lifecycle family (30 s, 9 vehicles, one RSU, no attacker);
+# nodes.* on the DSRC grid (40 vehicles, 10 Hz).
+
+# ---- Signature scheme: bytes, airtime, fragmentation, crypto time ----
+- {setting: security.signature, change: falcon-512, metric: report.air_bytes.security, expect: up,
+   source: "Falcon-512 signature 666 octets and public key 897 against 64 and 33 for ECDSA P-256 (NIST Falcon spec 1.2 Table 3.3; IEEE 1609.2-2016 6.3.29)"}
+- {setting: security.signature, change: falcon-512, metric: cbr_mean, expect: up,
+   source: "more octets per frame at the same rate is more airtime (ETSI TS 102 687)"}
+- {setting: security.signature, change: ml-dsa-65, metric: report.sdus_fragmented, expect: up,
+   source: "an ML-DSA-65 signature is 3309 octets (FIPS 204 Table 2), over the 1500-octet MTU the stack sends in one frame"}
+- {setting: security.signature, change: ml-dsa-65, metric: e2e_ms_mean, expect: up,
+   source: "several fragments queue and go on air one after another, and the message is delivered when the last arrives"}
+- {setting: security.signature, change: slh-dsa-sha2-128s, metric: stage_sign_ms, expect: up,
+   source: "SLH-DSA-128s signing is hundreds of ms on embedded CPUs, about 1000x ECDSA (FIPS 205; Kannwischer et al., pqm4 2019)"}
+- {setting: security.signature, change: slh-dsa-sha2-128s, metric: psdu_bytes, expect: up,
+   source: "SLH-DSA-SHA2-128s signature is 7856 octets (FIPS 205 Table 2)"}
+- {setting: security.signature, change: hybrid-falcon512-ecdsa-p256, metric: report.air_bytes.security, expect: up,
+   source: "a hybrid carries both signatures, 64 + 666 octets (Bindel et al., PQCrypto 2017 composite signatures)"}
+- {setting: security.signature, change: ecdsa-brainpoolp256r1, metric: psdu_bytes, expect: same, min_change: 0.0,
+   source: "brainpoolP256r1 has the same 256-bit field as P-256: a 64-octet signature and 33-octet compressed key (IEEE 1609.2-2016 6.3.29, 6.3.38)"}
+- {setting: security.envelope, change: etsi103097, metric: psdu_bytes, expect: same, min_change: 0.01,
+   source: "ETSI TS 103 097 V1.3.1 profiles the IEEE 1609.2 Ieee1609Dot2Data structure itself (clause 5.1): the same header fields, so a near-identical size"}
+
+# ---- Certificate attach policy and P2PCD ----
+- {setting: security.signer_id_policy.full_cert_every_ms, change: low, metric: metric.full_cert_share, expect: up,
+   source: "a certificate every 500 ms instead of 1000 ms doubles the share of frames carrying one (SAE J2945/1 6.1.2)"}
+- {setting: security.signer_id_policy.full_cert_every_ms, change: high, metric: metric.p2pcd_requests, expect: up,
+   source: "certificates further apart leave a new neighbour without one longer, so it asks for it (IEEE 1609.2-2016 8.4 P2PCD)"}
+- {setting: security.signer_id_policy.digest_otherwise, change: false, metric: metric.full_cert_share, expect: up,
+   source: "every frame carries a certificate (IEEE 1609.2-2016 6.4.8)"}
+- {setting: security.signer_id_policy.digest_otherwise, change: false, metric: metric.p2pcd_requests, expect: down,
+   source: "no digest-signed frame from an unknown signer, so nothing to ask for (IEEE 1609.2-2016 8.4)"}
+- {setting: security.signer_id_policy.on_new_neighbour, change: true, metric: metric.full_cert_share, expect: up, min_change: 0.002,
+   source: "an extra certificate after a new neighbour appears (ETSI TS 103 097 V1.3.1 7.1.1)"}
+- {setting: security.pseudonym_change.period_s, change: low, metric: metric.p2pcd_requests, expect: up,
+   source: "each change makes the sender unknown to every neighbour (IEEE 1609.2-2016 8.4)"}
+- {setting: security.pseudonym_change.period_s, change: low, metric: report.phase2.pseudonym_changes, expect: up,
+   source: "a 1 s period changes thirty times in 30 s where 300 s changes none (ETSI TR 103 415 4.2)"}
+
+# ---- Verification policy ----
+- {setting: security.verification_policy, change: on-demand, metric: metric.verify_rate, expect: down,
+   source: "only messages an application acts on are verified (Krishnan and Weimerskirch, SAE 2011-01-0584)"}
+- {setting: security.verification_policy, change: prioritized, metric: metric.verify_rate, expect: same, min_change: 0.02,
+   source: "prioritized still verifies everything, only the order differs; under light load the rate is the arrival rate"}
+- {setting: security.on_demand_threshold, change: high, metric: metric.verify_rate, expect: down,
+   source: "a higher relevance threshold admits fewer messages to verification"}
+- {setting: security.on_demand_threshold, change: low, metric: metric.verify_rate, expect: up,
+   source: "a lower relevance threshold admits more"}
+
+# ---- Crypto hardware and caches (DSRC family) ----
+- {setting: nodes.default_obu, change: obu/generic-automotive-soc-no-hsm, metric: stage_verify_ms, expect: up,
+   source: "a software verify on an automotive SoC without an HSM is milliseconds against about 0.2 ms on a V2X HSM (06-node-models.md profile table; Hsu et al., VNC 2013)"}
+# First expected up; measured 9.0 -> 0.244 ms. The reference Craton2 profile signs in its
+# HSM at the vendor's published "<9 ms" ceiling (R7 A4), while a Cortex-A72 signs P-256 in
+# software in 244 us (openssl speed, R5 B.2). An HSM buys key protection, not speed.
+- {setting: nodes.default_obu, change: obu/generic-automotive-soc-no-hsm, metric: stage_sign_ms, expect: down,
+   source: "Craton2 HSM P-256 sign latency <9 ms, an upper bound (Unex/Autotalks brief, R7 A4) against 244 us in software on a Cortex-A72 (R5 B.2)"}
+- {setting: nodes.peer_cert_cache, change: low, metric: metric.p2pcd_requests, expect: up,
+   source: "a smaller cache evicts known signers, whose next digest frame needs P2PCD (IEEE 1609.2-2016 5.1.3, 8.4)"}
+- {setting: nodes.peer_cert_cache, change: high, metric: metric.p2pcd_requests, expect: same, min_change: 0.0,
+   source: "40 vehicles never fill a 128-entry cache, so a bigger one changes nothing"}
+- {setting: nodes.verify_queue_depth, change: high, metric: metric.unverified_ratio, expect: same, min_change: 0.0,
+   source: "at 40 vehicles the verifier keeps up (queue depth about 0.05), so a deeper queue changes nothing"}
+
+# ---- Settings whose effect this 30 s family cannot show, by design ----
+- {setting: security.crypto_mode, change: real, metric: e2e_ms_mean, expect: same, min_change: 0.0,
+   source: "real mode does the mathematics but charges the same hardware-profile service times, so timing is unchanged; only validity checks become real"}
+- {setting: threats.eavesdropper.id, change: threat/observer/passive-privacy, metric: report.phase2.privacy_links_correct, expect: same, min_change: 0.0,
+   source: "absent, the observer already hears every safety frame (schema.rs Threats::eavesdropper); the default coverage is the same"}
+- {setting: security.kem, change: ml-kem-768, metric: report.phase2.access.uu_dl_bytes, expect: same, min_change: 0.0,
+   source: "the 30 s family starts with a full certificate pool and downloads no batch, so no key is encrypted to a device; tested over 150 s in interactions/security-track.yaml"}
+- {setting: security.pseudonym_change.distance_m, change: low, metric: report.phase2.pseudonym_changes, expect: up,
+   source: "under the distance strategy (context), a 1 m threshold changes pseudonym at almost every step (NYC CV pilot uses 2 km)"}

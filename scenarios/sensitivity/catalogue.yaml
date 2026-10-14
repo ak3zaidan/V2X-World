@@ -173,6 +173,11 @@ context:
   - {prefix: traffic.kerbside.enabled, set: {world.highway_preset: urban-us-nyc}}
   - {prefix: security.on_demand_threshold, set: {security.verification_policy: on-demand}}
   - {prefix: security.prioritized_horizon_m, set: {security.verification_policy: prioritized}}
+  # distance_m is read only by the distance strategy and mix_zone_* only by mix-zone
+  # (pseudonym_policy.rs, v2xw-proto pseudonym.rs); on the family's time strategy both were
+  # swept dead (security track, test-security.md).
+  - {prefix: security.pseudonym_change.distance_m, set: {security.pseudonym_change.strategy: distance}}
+  - {prefix: security.pseudonym_change.mix_zone, set: {security.pseudonym_change.strategy: mix-zone}}
   - {prefix: actors.vehicles.drivers.bicycle, set: {actors.vru.cyclists: 60}}
   - {prefix: actors.rsu_placement, set: {actors.rsu_placement.count: 4}}
   - {prefix: weather.intensity, set: {weather.initial: rain}}

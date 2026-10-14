@@ -262,8 +262,6 @@ holds those drivers.
 | NR numerology other than the profile's | Sub-channel and slot structure come from the profile's transcribed link-level curves (Lusvarghi 2024 at µ = 1). |
 | Sidelink mode 1 (network-scheduled) | No gNB/eNB scheduler is modelled. |
 | Sub-channel size and count | Fixed by the profile (J3161/1, EN 303 613, EN 303 798), because the BLER curves were computed for those pools. |
-| Certificate cache size | The node's certificate store is unbounded. A bounded cache with eviction is not modelled. |
-| `prioritized` horizon, `on-demand` threshold | The verification queue is FIFO and never reads the policy's priority, and no application sets a message's relevance, so neither number would change a run (see `config-inventory-network.md`). |
 | LIMERIC as such | The ETSI adaptive approach is TS 102 687's LIMERIC-derived algorithm, and its α, β and target are above. |
 | Signal timing plan per junction | Fixed-time plans come from the map. Coordination, cycle length, all-red and pedestrian timing are configurable for every junction at once (`world.signals`), not per junction. |
 
