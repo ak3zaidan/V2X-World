@@ -3994,3 +3994,11 @@ Merged `--no-ff` in this order: speed, netreal, appspq, deadset, junction, lc201
 - **Release:** `cargo build --release -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots with the agent watching.
 - **Digests move** with appspq (explicit zero app warnings), deadset (per-car permitted-left arrivals), junction (1.08 s start reaction) and netreal (the `net.geonet` serialization). Speed, lc2013, agentlive and studio leave digests unchanged.
 - **Still open:** see each track's section above. In short: RLVW is not yet shown to fire, bus/delivery kerbside stops, `permitted_left_gap_s`, RSU runtime, a speed rerun on a quiet machine, the live re-run of anomaly-flag, and the `test:engine` Playwright suite.
+
+## 2026-10-13: group 5, checks re-run on release `08e71fb`
+
+- **`--expect`, full table:** 310 of 321 pass (265/274 rows, 45/47 interactions), 3,012 s from an empty cache. Report regenerated: `docs/validation/sensitivity-expectations.md`. Of the rows not re-run last round, phy-channel, mac-congestion, security-track and run-cost all pass except `radio.sidelink.noise_figure_db` low (+0.04 %, edge not noise-limited) and the backhaul x relay-only interaction (dead). Falcon x density passes on PRR and CBR. It fails on AoI, because `unverified_ratio` is 1.0 with Falcon on the no-HSM OBU (suspected verify-path bug). `selection_window_ms` low now raises e2e latency by 8.1 % (it was -1.6 %).
+- **Seeds:** 5 vs 5 seeds on dsrc-grid, lte-grid and phase1-grid. `v2xw compare` reports no meaningful change for seed-only differences, and 5 of 8 (or 5 of 25) metrics changed for a real change (vehicles 40 → 120, demand 30 → 300 veh/h).
+- **Threads:** `--no-recording --digest` stream digests match at `RAYON_NUM_THREADS` 1 and 4 on all three. Recording `data_digest` does differ, even with a fixed `--build-utc`, because of the last ~12 KB of the MCAP (summary section). Run reports are byte-identical.
+- **Seen:** `compare` prints flow as "6.32e-3 veh/h" for a 30 veh/h demand. That looks like veh/s labelled veh/h.
+- **Not done:** the `--catalogue` regeneration (about 47 min from an empty cache).
