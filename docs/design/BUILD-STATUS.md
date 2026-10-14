@@ -3963,3 +3963,24 @@ real time not reached.
   - This changes digests wherever a queue starts at a green.
 - **Kerbside test** (`realism.rs buses_taxis...`): overlaps are 40 with kerbside on, against 60 off and 39 on main, so the overlap assertion now passes. The test still fails on standstill (2 vs 0): cars on lane 39 wait 180 s behind a passenger car (actor 62) held part-way through a 38→39 lane change beside a standing delivery van on lane 37. Not fixed.
 - **Checks**: `check_traffic` CLI test passes. The mobility lib tests and the engine digests were not re-run.
+
+## 2026-10-13: LC2013 lane changes on street networks (group 2a)
+
+- **Cause** (`v2xw-mobility/src/engine.rs`, line-by-line against SUMO `MSLCM_LC2013::_wantsChange`):
+  - `lane_route_dist` asked whether a side lane reaches the route's exact next lane. That lane is only the one the current lane leads to, so every side lane of a multi-lane street looked like a dead end. The 20 s remain-time rule then refused nearly every speed-gain change. It now follows SUMO best-lanes: a lane keeps the route when it connects to the route's next road. A change already re-plans the route from its new lane.
+  - Strategic urgency is now SUMO's `currentDistDisallows(usableDist, bestLaneOffset, laDist)`: the distance left, minus the target lane's occupation (`JAM_FACTOR` 1), divided by the lanes still to cross.
+  - A strategic change that is not yet due no longer skips the discretionary decision. SUMO's vetoes guard it: changing away needs room to come back (`|offset| + 2`), and a driver does not leave a lane that keeps the route for one that turns off within `TURN_LANE_DIST` = 200 m.
+- **Cross-validation, LC2013 on (`V2XW_XVAL_LC2013=1`), lane changes per vehicle-km, this engine / SUMO Krauss:**
+
+  | Case | MOBIL (default) | LC2013 before | LC2013 now | SUMO |
+  |---|---|---|---|---|
+  | Manhattan @1200 quick | 0.48 (-28 %) | 0.02 (-97 %) | 0.70 (+4 %) | 0.67 |
+  | Manhattan @900 | 0.41 (-41 %) | | 0.62 (-11 %) | 0.69 |
+  | Manhattan @2400 | 0.61 (-26 %) | | 0.74 (-11 %) | 0.83 |
+  | Manhattan @3600 | 0.73 (-18 %) | | 0.83 (-7 %) | 0.89 |
+  | Grid @1800 | 0.86 (+8 %) | | 0.64 (-20 %) | 0.80 |
+
+  - Throughput holds: Manhattan trips completed 92 / 236 / 377 (SUMO 92 / 232 / 368); vehicles left at the end 7 / 29 / 23 (SUMO 7 / 33 / 32). Halting time per trip stays about 25 % under SUMO, as with MOBIL.
+- **`v2xw check-traffic`**, `scenarios/manhattan-5min.yaml` for 150 s (66 vehicles, debug build): PASS with MOBIL and PASS with `traffic.lc_speed_gain: 1`, so there are no new violations.
+- **Tests:** `v2xw-mobility` lib tests filtered on `lc2013`, `strategic` and `lane_change` (8): pass.
+- **Default: not switched.** LC2013 now beats MOBIL on Manhattan at every rate, but on the grid it goes from +8 % to -20 %. Switching would also move every scenario digest and the pinned saturated-DSRC digests. Before flipping it, re-run the grid at 600 and 3600 and the full engine suites. It stays opt-in (`traffic.lc_*`); MOBIL results are unchanged.

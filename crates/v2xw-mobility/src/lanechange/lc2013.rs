@@ -51,6 +51,9 @@ pub const SPEED_GAIN_RIGHT: f64 = 0.1;
 pub const SPEED_GAIN_REMAIN_TIME_S: f64 = 20.0;
 /// SUMO `RELGAIN_NORMALIZATION_MIN_SPEED`, m/s.
 pub const RELGAIN_NORMALIZATION_MIN_SPEED: f64 = 10.0;
+/// SUMO `TURN_LANE_DIST`, metres: a driver on a lane that keeps its route does not leave
+/// it for one that turns off within this distance.
+pub const TURN_LANE_DIST_M: f64 = 200.0;
 /// SUMO `KEEP_RIGHT_TIME`, seconds.
 pub const KEEP_RIGHT_TIME_S: f64 = 5.0;
 /// The deceleration `vSafe` is judged at: SUMO's passenger-car `decel` default, m/s²
