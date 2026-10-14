@@ -891,6 +891,7 @@ mod tests {
             movement_lane: None,
             conflicts: true,
             ego_must_yield: true,
+            arrival_s: None,
         };
         assert!(c.time_to_stop_line_s().is_infinite());
         c.speed_mps = 5.0;
