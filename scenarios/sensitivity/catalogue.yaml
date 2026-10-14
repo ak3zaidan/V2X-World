@@ -56,6 +56,12 @@ families:
     set: {time.duration_s: 90.0, actors.vehicles.demand.rate_veh_per_h: 12000.0,
           actors.vehicles.classes: {passenger: {fraction: 0.7}, truck: {fraction: 0.3}},
           metrics: [all]}
+  # Six signalised junctions with SPaT/MAP roadside units and every application on
+  # (connected-intersections.yaml): where RLVW, GLOSA, IMA and LTA have signals and
+  # crossing traffic to act on. 3000 veh/h, every vehicle equipped.
+  - name: intersections
+    base: ../connected-intersections.yaml
+    set: {time.duration_s: 60.0, metrics: [all]}
 
 routes:
   - {prefix: actors.vehicles.drivers.truck.time_headway_s, families: [freeway, traffic]}
@@ -72,6 +78,10 @@ routes:
   - {prefix: actors.backend, families: [security]}
   - {prefix: actors.rsus, families: [security]}
   - {prefix: actors.vru, families: [pedestrians]}
+  # PCW acts on pedestrians and cyclists; the other applications on signals and crossing
+  # traffic (docs/validation/test-vru-safety.md).
+  - {prefix: apps.pcw_ttc_s, families: [pedestrians]}
+  - {prefix: apps, families: [intersections, pedestrians]}
   # GNSS error is judged by what misbehaviour detection makes of it: the lifecycle family
   # runs legacy-12 plausibility checks.
   - {prefix: actors.vehicles.gnss, families: [security, traffic]}
@@ -185,6 +195,9 @@ context:
   - {prefix: security.pseudonym_change.distance_m, set: {security.pseudonym_change.strategy: distance}}
   - {prefix: security.pseudonym_change.mix_zone, set: {security.pseudonym_change.strategy: mix-zone}}
   - {prefix: actors.vehicles.drivers.bicycle, set: {actors.vru.cyclists: 60}}
+  # The gap margin is read only by a pedestrian crossing against the signal or mid-block;
+  # at the observed defaults few do in 40 s and the run was bit-identical at 0.5 and 6 s.
+  - {prefix: actors.vru.crossing_gap_margin_s, set: {actors.vru.red_crossing_share: 0.5, actors.vru.midblock_rate_per_100m: 20.0}}
   - {prefix: actors.rsu_placement, set: {actors.rsu_placement.count: 4}}
   - {prefix: weather.intensity, set: {weather.initial: rain}}
   - {prefix: traffic.signals.min_green_s, set: {traffic.signals.control: actuated}}

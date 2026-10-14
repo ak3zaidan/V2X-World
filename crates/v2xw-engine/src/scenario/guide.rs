@@ -289,6 +289,36 @@ const ADVANCED: &[Basic] = &[
         recommended: "Unset (today's MOBIL); 1 (SUMO default); 0 to 1.",
     },
     Basic {
+        path: "apps.glosa_compliance",
+        explain: "The share of drivers who slow down to the speed a green-light advisory tells them, so they arrive on green instead of stopping at red.",
+        recommended: "0 (advice shown, not followed: no field rate is published); 0.25 to 1 to study the benefit.",
+    },
+    Basic {
+        path: "apps.fcw_ttc_s",
+        explain: "How many seconds before a rear-end collision the forward collision warning sounds: earlier warns sooner but more often for nothing.",
+        recommended: "2.4 s (NHTSA's FCW confirmation test); 2.0 to 3.0 s.",
+    },
+    Basic {
+        path: "apps.ima_tti_s",
+        explain: "How far ahead, in seconds of driving, the intersection movement assist looks for a crossing vehicle that would reach the same point.",
+        recommended: "4 s (this build's choice); 3 to 6 s.",
+    },
+    Basic {
+        path: "apps.lta_gap_s",
+        explain: "The gap in oncoming traffic the left-turn assist requires before it stays quiet: a smaller gap means fewer warnings.",
+        recommended: "4.1 s (HCM 6th ed. Exhibit 20-11 critical gap); 3.5 to 5.5 s.",
+    },
+    Basic {
+        path: "apps.pcw_ttc_s",
+        explain: "How many seconds before a pedestrian or cyclist would be in the vehicle's path the pedestrian collision warning sounds.",
+        recommended: "3 s (this build's choice); 2 to 4 s.",
+    },
+    Basic {
+        path: "apps.rlvw_decel_mps2",
+        explain: "The braking a driver can do comfortably: the red-light violation warning sounds once stopping for the red would need harder braking than this.",
+        recommended: "3.4 m/s² (AASHTO Green Book comfortable deceleration); 2.5 to 4.5 m/s².",
+    },
+    Basic {
         path: "scale.traffic.model",
         explain: "City scale: drive a map box vehicle by vehicle and everything outside it as queues (tiered), or the whole map as queues; the queues carry a whole city's traffic at a fraction of the cost.",
         recommended: "mobility/tiered/meso-micro with a box around the area you study; leave the section out for a single microscopic map.",

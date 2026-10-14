@@ -699,14 +699,30 @@ impl RunRecorder for FingerprintRecorder {
                     && p.is_finite()
                 {
                     let count = matches!(s.value, v2xw_metrics::SampleValue::Count { .. });
-                    let e = self.samples.entry(s.metric).or_insert((0.0, 0.0, count));
-                    if count {
-                        e.0 += p;
-                        e.1 = 1.0;
-                    } else {
-                        let n = s.value.n().max(1) as f64;
-                        e.0 += p * n;
-                        e.1 += n;
+                    let n = s.value.n().max(1) as f64;
+                    // The bare name pools every dimension (an `aoi` over all links and
+                    // VRU links alike); a dimensioned sample is also kept under
+                    // `name[dim=value,...]` so a row can name one slice, such as
+                    // `metric.aoi[class=vru]` or `metric.app_warnings[app=pcw]`.
+                    let mut keys = vec![s.metric.clone()];
+                    if !s.dims.is_empty()
+                        && let Ok(Value::Object(d)) = serde_json::to_value(&s.dims)
+                    {
+                        let parts: Vec<String> = d
+                            .iter()
+                            .map(|(k, v)| format!("{k}={}", label_of(v)))
+                            .collect();
+                        keys.push(format!("{}[{}]", s.metric, parts.join(",")));
+                    }
+                    for key in keys {
+                        let e = self.samples.entry(key).or_insert((0.0, 0.0, count));
+                        if count {
+                            e.0 += p;
+                            e.1 = 1.0;
+                        } else {
+                            e.0 += p * n;
+                            e.1 += n;
+                        }
                     }
                 }
             }

@@ -1063,7 +1063,15 @@ const MODEL_PARAM_LEAVES: &[(&str, fn() -> Value)] =
 /// The published JSON Schema and the flat field index, built together because the index is
 /// the leaves the schema walk found.
 fn walk() -> (Value, Vec<Value>) {
-    let defaults = serde_json::to_value(crate::Scenario::minimal()).unwrap_or(Value::Null);
+    let mut defaults = serde_json::to_value(crate::Scenario::minimal()).unwrap_or(Value::Null);
+    // `apps` is left out of a serialised scenario when it is the default (so content
+    // hashes stay put), which left every `apps.*` field with no published default: the
+    // settings window showed blanks and the sensitivity catalogue had no value to move
+    // from. The loader's default is `Apps::default()`; publish that.
+    if let Value::Object(m) = &mut defaults {
+        m.entry("apps")
+            .or_insert_with(|| serde_json::to_value(crate::scenario::Apps::default()).unwrap_or(Value::Null));
+    }
     let registry = catalogue();
     let mut walk = Walk {
         defaults: &defaults,
@@ -1564,10 +1572,15 @@ mod tests {
             let mut cur = &mut doc;
             let segments: Vec<&str> = path.split('.').collect();
             for segment in &segments[..segments.len() - 1] {
+                // A section the minimal document leaves out because it is the default
+                // (`apps`) is published with its defaults; write it in.
                 cur = cur
                     .as_object_mut()
-                    .and_then(|m| m.get_mut(*segment))
-                    .expect("a default's parent is in the minimal document");
+                    .map(|m| {
+                        m.entry((*segment).to_string())
+                            .or_insert_with(|| Value::Object(Map::new()))
+                    })
+                    .expect("a default's parent is an object");
             }
             if let Some(map) = cur.as_object_mut() {
                 map.insert(segments[segments.len() - 1].to_string(), default.clone());
