@@ -53,6 +53,27 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
                  model runs. Choosing it is what allows the Detailed physical layer.",
                 true,
             )),
+            // The run-cost audit (docs/validation/test-run-cost.md, finding 4) measured all
+            // three radio tiers at abstract only 11 % cheaper than medium on Manhattan:
+            // each link is cheaper to price, but free space with no buildings lets 49 %
+            // more links reach a receiver, and receptions (records, metrics, a node wake
+            // and a verification each), not the radio model, are most of the cost. The
+            // words for the two radio paths say so instead of promising a cheap run.
+            "abstract" if path == "radio.tiers.propagation" => Some((
+                "Simplified (abstract) — free space, no buildings",
+                "Free-space loss with no buildings, shadowing or fading: each link is cheaper \
+                 to price, but with nothing in the way more links reach each receiver, so a \
+                 city run costs about as much as Standard; cap radio.range.max_m to make a \
+                 large fleet cheap.",
+                true,
+            )),
+            "abstract" if path == "radio.tiers.mac" => Some((
+                "Simplified (abstract) — no channel access",
+                "Every frame goes on air when it is queued, with no carrier sense, backoff \
+                 or channel busy ratio (so no congestion control); it saves little run \
+                 time, because receptions, not channel access, are most of the cost.",
+                true,
+            )),
             "abstract" => Some((
                 "Fast (abstract)",
                 "Closed-form stand-ins: cheapest, for very large fleets; least faithful.",
