@@ -1,0 +1,27 @@
+# Expectation rows, medium access and congestion track (docs/validation/test-mac-congestion.md).
+# Format: see catalogue.yaml. These run on the sparse DSRC family (40 vehicles on a 1.2 km
+# grid, CBR about 0.05): what EDCA and DCC must and must not do when the channel is nearly
+# empty. The loaded rows (contention, CW against collisions, DCC binding, queue overflow)
+# need the dense base and live in scenarios/sensitivity/test-mac-congestion.yaml.
+
+# ---- EDCA on an idle channel: access delay moves, nothing else has to ----
+- {setting: radio.mac.cw_min_vo, change: high, metric: access_ms, expect: up,
+   source: "mean back-off CW/2 slots of 13 us is paid whenever a frame finds the medium busy (IEEE 802.11-2020 10.3.4.3)"}
+- {setting: radio.mac.aifsn_vo, change: high, metric: access_ms, expect: up,
+   source: "AIFS = 32 + 13 AIFSN us after every busy period (IEEE 802.11-2020 10.22.2.4)"}
+- {setting: radio.mac.periodic_access_category, change: vi, metric: aifs_us, expect: up,
+   source: "AC_VI AIFSN 3 against AC_VO 2 (EN 302 663 V1.3.1 Table B.3)"}
+- {setting: radio.mac.periodic_access_category, change: be, metric: aifs_us, expect: up,
+   source: "AC_BE AIFSN 6 against AC_VO 2 (EN 302 663 V1.3.1 Table B.3)"}
+- {setting: radio.mac.queue_length, change: low, metric: mac_drops, expect: same,
+   source: "a vehicle's next BSM is 100 ms away and access takes well under 1 ms at CBR 0.05: the queue never holds more than one frame, so 16 places drop nothing (M/D/1/K with load far below one)"}
+
+# ---- J2945/1 below its thresholds ----
+- {setting: radio.dcc.max_itt_ms, change: low, metric: tx_rate_hz, expect: same,
+   source: "with fewer than B = 25 neighbours within 100 m the density rule keeps ITT at vMinITT 100 ms; vMax_ITT only caps a longer ITT (SAE J2945/1 6.3.6)"}
+- {setting: radio.dcc.density_coefficient, change: low, metric: tx_rate_hz, expect: down,
+   source: "ITT = 100 ms x N/B once N > B: B = 1 stretches it for every vehicle with a neighbour (SAE J2945/1 6.3.6)"}
+- {setting: radio.dcc.density_coefficient, change: low, metric: aoi_ms, expect: up,
+   source: "a longer update interval ages the neighbour table (Kaul, Yates, Gruteser, INFOCOM 2012)"}
+- {setting: radio.dcc.min_power_dbm, change: low, metric: cbr_mean, expect: same,
+   source: "SUPRA holds vRP_Max while the busy percentage is below vMinCU 0.50 (Ahmad et al. 2019 Eq. 9), so the floor never binds at CBR 0.05"}

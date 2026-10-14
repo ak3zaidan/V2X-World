@@ -91,6 +91,12 @@ pub mod timing {
 
     /// `aSlotTime`, 13 µs [EN 302 663 V1.3.1 Annex C.4.4].
     pub const SLOT_TIME: Duration = Duration::from_micros(13);
+    /// `aCCATime`, 8 µs: the longest a receiver's clear-channel assessment may take to
+    /// report a frame that began [IEEE 802.11-2020 Table 17-21, 10 MHz channel spacing].
+    /// `aSlotTime` = `aCCATime` + `aRxTxTurnaroundTime` + `aAirPropagationTime` +
+    /// `aMACProcessingDelay` (ibid. 10.3.7), which is why two stations whose back-off ends
+    /// at the same slot boundary cannot hear each other in time and collide.
+    pub const CCA_TIME: Duration = Duration::from_micros(8);
     /// `aSIFSTime`, 32 µs [EN 302 663 V1.3.1 Annex C.4.4].
     pub const SIFS: Duration = Duration::from_micros(32);
     /// PLCP preamble (short + long training sequence), 32 µs [EN 302 663 Table C.2].

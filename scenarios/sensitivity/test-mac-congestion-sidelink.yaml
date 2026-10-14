@@ -1,0 +1,84 @@
+# Medium access and congestion test, C-V2X sidelink half (docs/validation/test-mac-congestion.md):
+# LTE-V2X mode 4 on the dense base (dsrc-dense.yaml with the access layer swapped: about a
+# hundred vehicles in a 300 m square), where SPS resource contention and the CR limits decide
+# the outcome rather than range. radio-cv2x.yaml covers the same settings on the sparse grid.
+# `v2xw sensitivity scenarios/sensitivity/test-mac-congestion-sidelink.yaml`
+base: dsrc-dense.yaml
+rows:
+  - name: LTE vehicles 150->300 trips
+    base_set: &lte {radio.rat: lte-v2x-pc5}
+    set: {actors.vehicles.demand.params.max_total_vehicles: 300}
+    metric: cbr_mean
+    expect: up
+    source: SL CBR is the share of sub-channels whose S-RSSI is above the threshold, which grows with the senders in range (3GPP TS 36.214 5.1.30)
+  - name: LTE vehicles 150->300 trips
+    base_set: *lte
+    set: {actors.vehicles.demand.params.max_total_vehicles: 300}
+    metric: collision_rate
+    expect: up
+    source: with fewer free resources in the selection window more UEs share one (Molina-Masegosa and Gozalvez, IEEE VT Magazine 2017; Gonzalez-Martin et al., IEEE TVT 2019)
+  - name: LTE vehicles 150->300 trips
+    base_set: *lte
+    set: {actors.vehicles.demand.params.max_total_vehicles: 300}
+    metric: pdr
+    expect: down
+    source: Gonzalez-Martin et al. 2019 (PDR falls with density)
+  - name: LTE rate 10->20 Hz (RRI 50)
+    base_set: {radio.rat: lte-v2x-pc5, time.mobility_step_ms: 50, radio.sidelink.reservation_interval_ms: 50}
+    set: {messages.rate_hz: 20.0}
+    metric: collision_rate
+    expect: up
+    source: twice the reservations in the same pool (Molina-Masegosa and Gozalvez 2017)
+  - name: LTE transmissions 2->1, dense
+    base_set: *lte
+    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {max_transmissions: 1}}}
+    metric: cbr_mean
+    expect: down
+    source: a blind retransmission occupies a second resource (3GPP TS 36.321 5.14.1.1; Bazzi et al. 2019)
+  # Under the SAE J3161/1 pool (ten 10-PRB sub-channels, at least two per transport block)
+  # a ~200 B BSM fits the two-sub-channel minimum under either sizing; the TS 36.213 table
+  # can only change the allocation for a larger frame: a certificate on every message.
+  - name: LTE sizing code-rate->ts-36-213, certificate every message
+    base_set: {radio.rat: lte-v2x-pc5, security.signer_id_policy.full_cert_every_ms: 0, security.signer_id_policy.digest_otherwise: false}
+    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {sizing: ts-36-213}}}
+    metric: cbr_mean
+    expect: same
+    source: >-
+      the J3161/1 profile's code rate (LTE_MCS7_J3161) is fitted to the allocations of Abrar
+      et al. 2026 Table 3, which TS 36.213 Table 7.1.7.2.1-1 reproduces (sidelink.rs
+      tbs_sizing_reproduces_j3161_and_opencv2x: 301 B takes 3 sub-channels either way), so a
+      200 B or 330 B frame gets the same allocation; measured 0.8093 -> 0.8093
+  # The J3161/1 limit at CBR >= 0.65 is 1.5 %; a BSM at 10 Hz, two transmissions of two of
+  # ten sub-channels occupies 10 x 2 x 2 / 10 000 = 0.4 %, so the limit never binds and
+  # turning it off changes nothing. ETSI TS 103 574 Table 1 allows 0.3 % (PPPP 3-5) above
+  # CBR 0.8, which does bind on the 300-trip base (CBR 0.84).
+  - name: LTE CR limits default->off, 300 trips
+    base_set: &lte300 {radio.rat: lte-v2x-pc5, actors.vehicles.demand.params.max_total_vehicles: 300}
+    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {congestion_control: "off"}}}
+    metric: cbr_mean
+    expect: same
+    source: occupancy 0.4 % against the J3161/1 PPPP 5 limit 1.5 % (Abrar et al. 2026 quoting SAE J3161/1; TS 36.213 14.1.1.4C)
+  - name: LTE CR limits J3161->ETSI TS 103 574, 300 trips
+    base_set: *lte300
+    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {congestion_control: etsi-ts-103-574}}}
+    metric: cbr_mean
+    expect: down
+    source: the 0.3 % limit above CBR 0.8 is below a BSM's 0.4 % occupancy, so the UE drops transmissions or retransmissions (ETSI TS 103 574 V1.1.1 Table 1; TS 36.213 14.1.1.4C)
+  - name: LTE sensing off, dense
+    base_set: *lte
+    set: {radio.sidelink.sensing: false}
+    metric: collision_rate
+    expect: up
+    source: random selection does not exclude neighbours' reservations (3GPP TS 36.213 14.1.1.6; Bazzi et al. 2019)
+  - name: LTE keep probability 0.8->0, dense
+    base_set: *lte
+    set: {radio.sidelink.resource_keep_probability: 0.0}
+    metric: sl_selections
+    expect: up
+    source: P_keep is the chance to keep the resource at counter expiry (3GPP TS 36.321 5.14.1.1)
+  - name: LTE MCS 7->11, dense
+    base_set: *lte
+    set: {radio.models.sidelink: {id: access/sidelink/engine-coupling, params: {mcs: 11}}}
+    metric: cbr_mean
+    expect: down
+    source: a higher MCS fits the BSM in fewer sub-channels (3GPP TS 36.213 Table 8.6.1-1)

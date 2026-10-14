@@ -5640,20 +5640,24 @@ impl Engine {
         // the arrivals at or above the CCA threshold, this node's own frame, and a jammer
         // above the energy-detection threshold. A busy period chained from frames that
         // have already ended is dated from the oldest frame still on the air.
+        // Another node's frame is sensed `aCCATime` after it begins (`Phy::cca`), so that
+        // is when it froze this node's countdown.
         let threshold = self.phy.cca_config().cca_threshold_dbm();
+        let cca_time = v2xw_radio::types::timing::CCA_TIME.as_nanos();
         let mut since = now;
         for frame in self.live_at_rx.get(&node).into_iter().flatten() {
             let Some(state) = self.frames.get(frame) else {
                 continue;
             };
-            if state.start <= now
+            let sensed = state.start.saturating_add(cca_time);
+            if sensed <= now
                 && state.end > now
                 && state
                     .arrivals
                     .get(&node)
                     .is_some_and(|&(p, _)| p >= threshold)
             {
-                since = since.min(state.start);
+                since = since.min(sensed);
             }
         }
         for state in self.own_on_air(node) {

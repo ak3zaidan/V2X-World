@@ -206,6 +206,16 @@ fn the_loader_refuses_meaningless_settings() {
     let mut s = base.clone();
     s.radio.mac.cw_min_vo = Some(10);
     assert!(refused(&s, "radio.mac.cw_min_vo"));
+    // A window for a queue no frame waits in changes nothing, so it is refused; mapping
+    // the BSMs there makes it legal.
+    let mut s = base.clone();
+    s.radio.mac.cw_min_vi = Some(63);
+    assert!(refused(&s, "radio.mac.cw_min_vi"));
+    s.radio.mac.periodic_access_category = Some("vi".to_string());
+    assert!(!refused(&s, "radio.mac.cw_min_vi"));
+    let mut s = base.clone();
+    s.radio.mac.event_access_category = Some("bk".to_string());
+    assert!(refused(&s, "radio.mac.event_access_category"));
     let mut s = base.clone();
     s.radio.channel_model.nakagami_shape = Some(2.0);
     assert!(refused(&s, "radio.channel_model.nakagami_shape"));
