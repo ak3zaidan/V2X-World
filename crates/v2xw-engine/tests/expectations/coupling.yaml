@@ -1,0 +1,4 @@
+# Cross-domain coupling, single-setting rows (docs/validation/test-coupling.md).
+# None yet: world.source.params.speed_limit_mps is not a published setting, so the speed
+# rows could not be planned; the coupling checks are 2 x 2s in interactions/coupling.yaml.
+[]

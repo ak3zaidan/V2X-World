@@ -1,0 +1,102 @@
+# Cross-domain coupling checks (docs/validation/test-coupling.md), on the families of
+# scenarios/sensitivity/catalogue.yaml (dsrc, nr, traffic; the traffic family's vehicles
+# run the V2X applications, so it carries the network -> application rows).
+#
+# Two kinds of row. A coupling row (security x density, ...) is a true 2 x 2. A
+# robustness row puts a different master seed as the condition and expects `holds`: the
+# factor's effect must keep its sign on a second, independent draw of the same scenario,
+# so a direction that is an artefact of one seed's geometry fails.
+
+# ---- (1) traffic -> network: density ----
+- name: density x seed (CBR)
+  family: dsrc
+  factor: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  condition: {seed: "0x5EED_0002"}
+  metric: cbr_mean
+  expect: holds
+  direction: up
+  min_effect: 0.5
+  source: "CBR is offered airtime: N vehicles x rate x frame airtime per sensing range; four times the vehicles is about four times the busy share below saturation (ETSI TS 102 687 4.2; Bansal et al., LIMERIC, IEEE TVT 2013)"
+- name: density x seed (PRR)
+  family: dsrc
+  factor: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  condition: {seed: "0x5EED_0002"}
+  metric: prr
+  expect: holds
+  direction: down
+  source: "more simultaneous transmitters, more hidden-terminal collisions and interference: PRR falls with density (Jiang, Chen, Delgrossi, IEEE VNC 2008; Bazzi et al., IEEE TVT 2017)"
+- name: density x seed (collisions)
+  family: dsrc
+  factor: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  condition: {seed: "0x5EED_0002"}
+  metric: collision_rate
+  expect: holds
+  direction: up
+  source: "hidden-terminal collision probability grows with the number of transmitters outside carrier-sense range (Jiang et al. 2008)"
+- name: density x seed (access delay)
+  family: dsrc
+  factor: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  condition: {seed: "0x5EED_0002"}
+  metric: access_ms
+  expect: holds
+  direction: up
+  source: "a busier channel defers more often: CSMA access delay grows with channel load (Bianchi, IEEE JSAC 2000; IEEE 802.11-2020 10.3.2)"
+- name: density x seed (AoI)
+  family: dsrc
+  factor: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  condition: {seed: "0x5EED_0002"}
+  metric: aoi_ms
+  expect: holds
+  direction: up
+  min_effect: 0.005
+  source: "lost packets lengthen the gap between fresh updates: average AoI = T(1/(2 p) + 1/2) for loss 1 - p at period T grows as PRR falls (Kaul, Gruteser et al., IEEE SECON 2011)"
+# Light-traffic city grid: the Poisson demand drives density, and the network follows.
+- name: demand x seed on the city grid (CBR)
+  family: traffic
+  factor: {actors.vehicles.demand.rate_veh_per_h: 3000.0}
+  condition: {seed: "0x5EED_0002"}
+  metric: cbr_mean
+  expect: holds
+  direction: up
+  source: "twice the arrival rate, about twice the vehicles in the network after the fill time, so more offered airtime (ETSI TS 102 687 4.2)"
+# Queues at junctions concentrate transmitters: the peak CBR rises more than the mean.
+- name: saturated fleet x seed (peak CBR)
+  family: traffic
+  factor: {actors.vehicles.demand.rate_veh_per_h: null, actors.vehicles.demand.fleet_size: 250}
+  condition: {seed: "0x5EED_0002"}
+  metric: cbr_max
+  expect: holds
+  direction: up
+  source: "standing queues pack vehicles at a few metres' spacing around the stop lines, so the node with the most neighbours senses far more airtime than the average (Bazzi et al. 2017 density-dependence; ETSI TS 102 687 CBR per node)"
+
+# ---- (1) traffic -> network: speed ----
+# NR mode 2 BLER curves are indexed by relative speed on highway links (TR 37.885; the
+# sidelink's NrLinkCondition); 802.11p's PER model has no Doppler (crates/v2xw-radio
+# per.rs limitation), so there speed only moves geometry.
+- name: Falcon-512 x density (PRR)
+  family: dsrc
+  base_set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm}
+  factor: {security.signature: falcon-512}
+  condition: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  metric: prr
+  expect: amplifies
+  direction: down
+  min_effect: 0.0
+  source: "a 666-octet signature triples the frame's airtime; on a light channel that costs little, on a loaded one it multiplies collisions and SINR loss, so PRR falls more at density (Falcon spec 1.2 Table 3.3; Bazzi et al., IEEE TVT 2017 PRR vs packet size and density)"
+- name: Falcon-512 x density (CBR)
+  family: dsrc
+  base_set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm}
+  factor: {security.signature: falcon-512}
+  condition: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  metric: cbr_mean
+  expect: amplifies
+  direction: up
+  source: "the extra airtime per frame is multiplied by the number of transmitters in range (ETSI TS 102 687 4.2)"
+- name: Falcon-512 x density (AoI)
+  family: dsrc
+  base_set: {nodes.default_obu: obu/generic-automotive-soc-no-hsm}
+  factor: {security.signature: falcon-512}
+  condition: {actors.vehicles.demand.params.max_total_vehicles: 160}
+  metric: aoi_ms
+  expect: amplifies
+  source: "AoI follows the loss (Kaul et al. 2011), and the loss Falcon adds grows with density"
