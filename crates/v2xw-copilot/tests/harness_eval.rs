@@ -48,6 +48,9 @@ struct Repair {
     value: Value,
     want_key: String,
     want_value: Value,
+    /// Settings the prompt also asks for, applied first (a truck headway needs trucks).
+    #[serde(default)]
+    with: std::collections::BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +150,9 @@ fn the_harness_suite_offline() {
         for r in &case.repair {
             checks += 1;
             let mut doc = base();
+            for (k, v) in &r.with {
+                apply_requested_change(&mut doc, k, v).expect("a `with` setting applies");
+            }
             let outcome = apply_requested_change(&mut doc, &r.key, &r.value);
             let got = doc
                 .pointer(&to_pointer(&r.want_key))
@@ -216,4 +222,30 @@ fn the_harness_suite_offline() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.0);
     assert!(rate >= min, "{passed}/{checks} below {min}");
+}
+
+/// Every finding id a live suite expects (`findings:` in `harness.yaml` and `prompts.yaml`)
+/// is one the insight engine can emit, so a renamed or invented id turns this red instead
+/// of leaving a live check that can never pass (`anomaly-flag` once expected
+/// `radio.jammed` and `radio.low-pdr`, which never existed).
+#[test]
+fn every_expected_finding_id_is_emitted_somewhere() {
+    let sources: String = ["src/insight.rs", "src/analyst.rs"]
+        .iter()
+        .map(|p| std::fs::read_to_string(root().join(p)).expect("the insight source reads"))
+        .collect();
+    let mut missing = Vec::new();
+    for suite in ["evals/harness.yaml", "evals/prompts.yaml"] {
+        let text = std::fs::read_to_string(root().join(suite)).expect("the suite reads");
+        let doc: Value = serde_yml::from_str(&text).expect("the suite parses");
+        for case in doc["cases"].as_array().expect("cases") {
+            for id in case["findings"].as_array().into_iter().flatten() {
+                let id = id.as_str().expect("a finding id is a string");
+                if !sources.contains(&format!("\"{id}\"")) {
+                    missing.push(format!("{suite} {}: {id}", case["id"]));
+                }
+            }
+        }
+    }
+    assert!(missing.is_empty(), "finding ids no insight emits: {missing:?}");
 }
