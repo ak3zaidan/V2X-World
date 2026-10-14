@@ -3984,3 +3984,13 @@ real time not reached.
 - **`v2xw check-traffic`**, `scenarios/manhattan-5min.yaml` for 150 s (66 vehicles, debug build): PASS with MOBIL and PASS with `traffic.lc_speed_gain: 1`, so there are no new violations.
 - **Tests:** `v2xw-mobility` lib tests filtered on `lc2013`, `strategic` and `lane_change` (8): pass.
 - **Default: not switched.** LC2013 now beats MOBIL on Manhattan at every rate, but on the grid it goes from +8 % to -20 %. Switching would also move every scenario digest and the pinned saturated-DSRC digests. Before flipping it, re-run the grid at 600 and 3600 and the full engine suites. It stays opt-in (`traffic.lc_*`); MOBIL results are unchanged.
+
+## Round 16 integration (2026-10-13)
+
+Merged `--no-ff` in this order: speed, netreal, appspq, deadset, junction, lc2013, agentlive, studio. The only conflicts were BUILD-STATUS sections, and both sides were kept. The fix after the merge: deadset's new `ConflictView.arrival_s` was missing from a mobility unit-test initializer.
+
+- **Checks:** `cargo check --workspace --tests` passes. Passing tests: engine `scenario::` lib (29), `tests/scenario.rs` (15), `sensitivity_expectations` (4), `sensitivity_catalogue` (3), `network_realism` (2), mobility lib (293), radio lib (341), copilot `harness_eval` (2). Studio typecheck passes, and Studio vitest passes 288/288.
+- **Studio Playwright:** in the first run, a chase-mode fuzz step on rewind failed with "flat frame" (luma 24.6). A rerun right after passed 26/26 (7.9 min, load about 6.7). It looks like a flaky test; watch it.
+- **Release:** `cargo build --release -p v2xw-cli --bins` succeeds. `V2XW_PORT=8758 ./run-sim.sh` boots with the agent watching.
+- **Digests move** with appspq (explicit zero app warnings), deadset (per-car permitted-left arrivals), junction (1.08 s start reaction) and netreal (the `net.geonet` serialization). Speed, lc2013, agentlive and studio leave digests unchanged.
+- **Still open:** see each track's section above. In short: RLVW is not yet shown to fire, bus/delivery kerbside stops, `permitted_left_gap_s`, RSU runtime, a speed rerun on a quiet machine, the live re-run of anomaly-flag, and the `test:engine` Playwright suite.
