@@ -3901,3 +3901,17 @@ trip cap 150 (99 vehicles), 1 s. Capped: `scale/base.yaml`, cap 1,260, `radio.ra
 - **Engine changes that move results**: 802.11p carrier sense now waits aCCATime (8 us), so every contended DSRC result changes (more collisions, lower PDR); on-air DENM honours `net.geonet.repetition_*` (defaults unchanged); `v2xw compare` uses Welch's t; new refusals (EDCA on unused queues, compromised RSU without units, GLOSA compliance with GLOSA off, green-wave heading without speed, on-air keep-alive). Fingerprints gain `report.air_by_type`, lane-change and zeroed traffic counters, `metric[dim=value]` slices.
 - **Ran**: `cargo check --workspace --tests`; engine `scenario::`/`sensitivity::` lib tests, `networking_track`, `radio_access`, `researcher_config`, `sensitivity_expectations` (fast), `sensitivity_security`, server `compare`: all pass. Release CLI built; `run-sim.sh` boots on 8758 with the agent available.
 - **Open**: many corrected expectation rows were never re-run (heavy-lock contention): phy-channel, mac-congestion, security-track, run-cost, coupling Falcon rows; traffic lane-change rows stay commented until re-run on this release build. Catalogue and `--expect` reports need regenerating after the CCA fix. Dead settings listed in each `docs/validation/test-*.md`.
+
+## 2026-10-13: junction stalls and start-up (branch of bbbb29a)
+
+- **Measured** on midtown-peak-load, traffic only (equipped 0, VRU devices 0), 180 s, `check-traffic`, round-15 release binary:
+  - Base: stopped on green 76, long stops 11, overlaps 14, red entries 14, decel 0.
+  - `traffic.signals.short_link_clearance_m: 60`: stopped on green 60, but long stops 18, overlaps 22, decel 1. It stays opt-in.
+  - Kerbside off: 73. No pedestrians or cyclists: 37. About half the stalls are drivers yielding to walkers.
+- **Check fix**: when a queue head is held because its exit lane is full behind a stopped queue (keep-clear, NY VTL §1175), `check-traffic` no longer counts it as stopped on green. On the same base recording the count falls from 76 to 58. The remaining cases include exit-lane tails that stand mid-lane with nothing visible ahead; those are not yet traced.
+- **Green-onset reaction re-fit**: `REACTION_MEDIAN_S` and the `start_reaction_s` default change from 1.15 s to 1.08 s.
+  - 1.15 s was Taoka's fit to the amber onset. The new value is Bonneson 1992's first-driver start-response mean of 1.22 s, converted to a median with lognormal σ 0.5. This value is secondary, taken from Çalışkanelli & Tanyel 2018.
+  - Saturation-flow experiment (`calib_sweep 1.0,1.7,2,2,0.5,1.08`, 450 s): start-up lost time 3.15 → 2.95 s, first headway 3.87 → 3.80 s, saturation headway 2.14 → 2.15 s.
+  - This changes digests wherever a queue starts at a green.
+- **Kerbside test** (`realism.rs buses_taxis...`): overlaps are 40 with kerbside on, against 60 off and 39 on main, so the overlap assertion now passes. The test still fails on standstill (2 vs 0): cars on lane 39 wait 180 s behind a passenger car (actor 62) held part-way through a 38→39 lane change beside a standing delivery van on lane 37. Not fixed.
+- **Checks**: `check_traffic` CLI test passes. The mobility lib tests and the engine digests were not re-run.
