@@ -583,6 +583,12 @@ impl SensitivityRecorder {
             put("gn_forward_airtime_us", g.forward_airtime_us as f64);
         }
         put("gn_forwarded_bytes", report.air_bytes.gn_forwarded as f64);
+        // Every numeric report field as `report.<path>` (the catalogue fingerprint's
+        // names), so a spec row can name a layer's octets (`report.air_bytes.network`) or
+        // one message type's air time (`report.air_by_type.cam.airtime_us`).
+        if let Ok(v) = serde_json::to_value(report) {
+            sweep::flatten("report", &v, &mut m);
+        }
         Measured {
             values: m,
             prr_bins: self.prr.clone(),

@@ -15,6 +15,32 @@ use super::FrameState;
 /// The 802.11p PLCP preamble and SIGNAL at 10 MHz, µs (IEEE 802.11-2020 Table 17-21).
 pub const PHY_PREAMBLE_SIGNAL_US: u64 = 40;
 
+/// One message type's frames on the air ([`super::RunReport::air_by_type`]): what each
+/// message family costs the channel. Its `airtime_us` over the run's airtime is the type's
+/// share of the channel busy time, so of the CBR (ETSI TS 102 687 4.2: CBR is the busy
+/// share of the channel; every frame's air time counts once at each node that senses it).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TypeAir {
+    /// Frames of this type that went on the air.
+    pub frames: u64,
+    /// Their PSDU octets.
+    pub psdu: u64,
+    /// The mean PSDU of one frame, octets (the size distribution's centre).
+    pub psdu_mean: u64,
+    /// Their air time, µs.
+    pub airtime_us: u64,
+}
+
+impl TypeAir {
+    /// Counts one frame of this type.
+    pub(super) fn add(&mut self, psdu: u64, airtime_us: u64) {
+        self.frames += 1;
+        self.psdu += psdu;
+        self.airtime_us += airtime_us;
+        self.psdu_mean = self.psdu / self.frames;
+    }
+}
+
 /// Octets on the air by layer over the run, for [`super::RunReport::air_bytes`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct AirBytes {

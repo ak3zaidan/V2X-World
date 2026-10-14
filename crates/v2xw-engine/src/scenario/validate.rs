@@ -5566,6 +5566,16 @@ fn net(s: &Scenario, e: &mut Vec<ScenarioError>) {
             e,
         );
         bounded_at("net.geonet.window_s", "net.geonet.window_s", g.window_s, e);
+        // The on-air routers (run/gn_air.rs) have no keep-alive forwarding: only the
+        // overlay's DEN model re-sends a warning a vehicle stops hearing.
+        if g.keep_alive_forwarding && g.forwarding == "on-air" {
+            e.push(conflict(
+                "net.geonet.keep_alive_forwarding",
+                "is modelled by the overlay forwarding only; on the air it would do \
+                 nothing. Set net.geonet.forwarding: overlay, or unset it"
+                    .to_string(),
+            ));
+        }
     }
 }
 

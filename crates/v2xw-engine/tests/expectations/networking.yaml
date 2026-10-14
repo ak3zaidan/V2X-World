@@ -1,0 +1,34 @@
+# Expectation rows, networking and messages track (docs/validation/test-networking.md).
+# Format: see catalogue.yaml. net.geonet.* runs on the GN family (gn-grid.yaml, default
+# power: one hop covers the 1 000 m area there, so multi-hop reach rows live in
+# scenarios/sensitivity/test-networking.yaml at 5 dBm); messages.* on the DSRC family.
+
+# ---- GeoNetworking forwarding (ETSI EN 302 636-4-1, EN 302 637-3) ----
+- {setting: net.geonet.hop_limit, change: low, metric: report.gn_air.forwards_sent, expect: down,
+   source: "a remaining hop limit of 1 leaves nothing to forward (EN 302 636-4-1 9.3.3, RHL decremented per hop)"}
+- {setting: net.geonet.hop_limit, change: low, metric: report.air_bytes.gn_forwarded, expect: down,
+   source: "the forwarding overhead is the forwarded copies' octets: none without forwarding (EN 302 636-4-1 F.3)"}
+- {setting: net.geonet.forwarding, change: overlay, metric: report.air_bytes.gn_forwarded, expect: down,
+   source: "overlay forwarding is protocol-only: no forwarded frame goes on the air"}
+- {setting: net.geonet.area_radius_m, change: 300.0, metric: report.geonet.0.in_area, expect: down,
+   source: "a smaller circle around the hazard holds fewer vehicles (EN 302 931 geographic areas). The high end (1784 m) cannot rise: the 1000 m default already holds all 39 other vehicles of the 1.2 km grid (measured 39 -> 39)"}
+- {setting: net.geonet.repetition_interval_ms, change: low, metric: report.air_by_type.denm.airtime_us, expect: down,
+   source: "repetitionInterval 0 sends the DENM once (EN 302 637-3 8.2.1.4)"}
+- {setting: net.geonet.repetition_duration_ms, change: low, metric: report.air_by_type.denm.airtime_us, expect: down,
+   source: "repetitions stop at repetitionDuration (EN 302 637-3 8.2.1.4)"}
+
+# ---- Access categories (ETSI TS 102 724) and channel access (IEEE 1609.4) ----
+- {setting: net.access_categories, change: etsi-profiles, metric: aifs_us, expect: up,
+   source: "CAMs move from AC_VO (AIFSN 2) to AC_BE (AIFSN 6): 4 more 13 us slots each (IEEE 802.11-2020 Table 9-155 OCB; ETSI TS 102 724 4.2.2)"}
+- {setting: net.channel_access, change: alternating, metric: e2e_ms_mean, expect: up,
+   source: "a message generated during the SCH interval waits for the next CCH interval (IEEE 1609.4-2016 6.2.5)"}
+
+# ---- Messages ----
+- {setting: messages.path_history_points, change: high, metric: psdu_bytes, expect: same, min_change: 0.0,
+   source: "the J2945/1 concise path history (6.1.4, Annex A.5) stops once the points span 300 m with under 1 m chord error: on straight grid streets that takes fewer than the 15 default points, so allowing 23 adds none (measured 205.96 -> 205.96 octets). Fewer allowed points do cut it (the low row)"}
+- {setting: messages.path_history_points, change: low, metric: psdu_bytes, expect: down,
+   source: "no path history, a smaller BSM (SAE J2735 2016)"}
+- {setting: messages.rate_hz, change: high, metric: frames_tx, expect: up,
+   source: "SAE J2945/1 6.3.6: the commanded rate at low density"}
+- {setting: messages.codec_tier, change: size-model, metric: psdu_bytes, expect: same, min_change: 0.05,
+   source: "the size model stands in for the UPER encoder (ITU-T X.691) and is fitted to its output, so the mean frame size should agree within a few per cent"}

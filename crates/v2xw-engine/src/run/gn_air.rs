@@ -155,6 +155,25 @@ pub(super) fn forwarding_config(g: &Geonet) -> ForwardingConfig {
     }
 }
 
+/// The originator's DENM repetition on the air (`net.geonet.repetition_*`), as
+/// (interval, duration). The on-air breakdown DENM is the node's own DEN service, which
+/// before this setting reached it always repeated every 1 s for 15 s (the C2C-CC
+/// stationary-vehicle profile, `v2xw_node::events::STATIONARY_REPETITION_DURATION`). The
+/// schema default duration (5 000 ms, the overlay's) therefore keeps that 15 s, so
+/// existing runs do not change; any other value is used as given.
+pub(super) fn on_air_repetition(g: &Geonet) -> (v2xw_core::time::Duration, v2xw_core::time::Duration) {
+    use v2xw_core::time::Duration;
+    let duration_ms = if g.repetition_duration_ms == Geonet::default().repetition_duration_ms {
+        v2xw_node::events::STATIONARY_REPETITION_DURATION.as_nanos() / 1_000_000
+    } else {
+        g.repetition_duration_ms
+    };
+    (
+        Duration::from_millis(g.repetition_interval_ms),
+        Duration::from_millis(duration_ms),
+    )
+}
+
 impl GnOnAir {
     /// The layer, when the scenario forwards on the air and the run has a MAC to queue in.
     pub(super) fn for_scenario(s: &Scenario, has_mac: bool) -> Option<Self> {
