@@ -1,0 +1,183 @@
+# Networking and messages: one-at-a-time rows on gn-grid.yaml (40 vehicles, 802.11p,
+# GeoNetworking/BTP, CAMs and a breakdown DENM repeated every second from 8 s).
+# `v2xw sensitivity scenarios/sensitivity/test-networking.yaml`; the report is
+# docs/validation/test-networking.md. Run cost is read from the event counts
+# (`report.events_by_class.*`): deterministic, unlike wall time.
+#
+# Multi-hop rows lower the OBU power to 5 dBm: at the default power one hop covers the
+# whole 1 000 m area on this grid (base max_hops = 1), so hop limit and CBF timers act
+# only once one hop no longer reaches the edge (the same context as radio-gn.yaml).
+base: gn-grid.yaml
+set: {metrics: [all]}
+rows:
+  # ---- Hop limit (EN 302 636-4-1 9.3.3, RHL decremented per hop) ----
+  - name: GN hop limit 10->1 at 5 dBm
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.hop_limit: 1}
+    metric: gn_reach
+    expect: down
+    source: with RHL 1 no receiver may forward, so the warning reaches only the originator's one-hop neighbours (EN 302 636-4-1 9.3.3)
+  - name: GN hop limit 10->1 at 5 dBm
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.hop_limit: 1}
+    metric: gn_forwards_sent
+    expect: down
+    source: no forwarding at RHL 1 (EN 302 636-4-1 9.3.3)
+  - name: GN hop limit 10->1 at 5 dBm
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.hop_limit: 1}
+    metric: report.air_bytes.gn_forwarded
+    expect: down
+    source: forwarding overhead is the forwarded copies' octets (EN 302 636-4-1 F.3)
+  - name: GN hop limit 10->1 at 5 dBm
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.hop_limit: 1}
+    metric: gn_max_hops
+    expect: down
+    source: a hop limit of 1 caps the path at one hop (EN 302 636-4-1 9.3.3)
+  - name: GN hop limit 10->2 at 5 dBm
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.hop_limit: 2}
+    metric: gn_max_hops
+    expect: down
+    source: RHL 2 allows the originator plus one forwarding hop (EN 302 636-4-1 9.3.3)
+  # ---- Area forwarding algorithm and CBF variant (Annex F) ----
+  - name: GN simple area forwarding at 5 dBm
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.area_forwarding: simple}
+    metric: gn_forward_airtime_us
+    expect: up
+    source: simple GeoBroadcast rebroadcasts at every receiver inside the area; CBF lets the farthest forwarder suppress the rest (EN 302 636-4-1 F.2 vs F.3)
+  - name: GN simple area forwarding at 5 dBm
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.area_forwarding: simple}
+    metric: report.geonet.0.latency_p95_us
+    expect: down
+    source: the median receiver hears the originator directly (74 % at 5 dBm), so the forwarding wait shows in the p95; simple forwarding rebroadcasts at once, without the CBF wait of up to TO_max per hop (EN 302 636-4-1 F.2, F.3)
+  - name: GN CBF variant etsi->dpd at 5 dBm
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.cbf_variant: dpd}
+    metric: gn_forwards_sent
+    expect: down
+    min_change: 0.0
+    source: duplicate-packet detection forbids a second forward of the same packet, the ETSI baseline takes a later copy as new (Rondinone, Gozalvez et al., 'Improving the reliability of contention-based forwarding', IEEE VNC 2013 / Computer Networks 2015)
+  # ---- CBF timers (EN 302 636-4-1 F.3: TO = TO_max - (TO_max - TO_min) d / DIST_max) ----
+  - name: GN CBF max time 100->20 ms at 5 dBm
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.cbf_max_time_ms: 20}
+    metric: report.geonet.0.latency_p95_us
+    expect: down
+    source: a lower TO_max shortens every forwarding hop's wait (EN 302 636-4-1 F.3)
+  - name: GN CBF min time 1->50 ms at 5 dBm
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.cbf_min_time_ms: 50}
+    metric: report.geonet.0.latency_p95_us
+    expect: up
+    source: with one hop (about 250 m at 5 dBm) short of DIST_max the forwarder's timer is TO_max - (TO_max - TO_min) d / DIST_max, about 75 ms at TO_min 1 ms and 88 ms at 50 ms (EN 302 636-4-1 F.3); the median receiver is a direct one, so the p95 shows it
+  - name: GN DIST_MAX 1000->300 m at 5 dBm
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.max_comm_range_m: 300.0}
+    metric: report.gn_air.cbf_cancelled
+    expect: down
+    source: receivers beyond DIST_max all clamp to TO_min and fire together, before any can hear another and cancel (EN 302 636-4-1 F.3)
+  # ---- Area, repetition, keep-alive (EN 302 637-3 DEN basic service) ----
+  - name: GN area radius 1000->300 m
+    set: {net.geonet.area_radius_m: 300.0}
+    metric: report.geonet.0.in_area
+    expect: down
+    source: a smaller circle around the hazard holds fewer vehicles (EN 302 931 geographic area); 1000 m already holds all 39 others
+  - name: GN area radius 1000->300 m
+    set: {net.geonet.area_radius_m: 300.0}
+    metric: report.gn_air.forwards_sent
+    expect: down
+    source: a smaller area has fewer forwarders inside it, so fewer rebroadcasts (EN 302 636-4-1 F.3)
+  - name: DENM repetition 1000->0 ms
+    set: {net.geonet.repetition_interval_ms: 0}
+    metric: report.gn_air.gbc_originated
+    expect: down
+    source: with no repetition the DENM is sent once (EN 302 637-3 8.2.1.4 repetitionInterval)
+  - name: DENM repetition 1000->200 ms
+    set: {net.geonet.repetition_interval_ms: 200}
+    metric: report.air_by_type.denm.airtime_us
+    expect: up
+    source: five times the repetitions, five times the DENM airtime (EN 302 637-3 8.2.1.4)
+  - name: DENM repetition 1000->200 ms
+    set: {net.geonet.repetition_interval_ms: 200}
+    metric: report.events_by_class.PhyEnd
+    expect: up
+    min_change: 0.002
+    source: run cost - every extra frame is one more PHY end event; the DENM is one sender among 40 CAM senders, so a few dozen extra frames on about 6600 (+0.5 %)
+  # The DENM is raised about 19.5 s in (breakdown at 8 s, then the 10 s stationary timer)
+  # and cancelled at 23 s, so it lives about 3 s: a 2 s duration still sends 3 copies.
+  - name: DENM repetition duration -> 0.5 s
+    set: {net.geonet.repetition_duration_ms: 500}
+    metric: report.air_by_type.denm.airtime_us
+    expect: down
+    source: gbc_originated counts new GeoBroadcast packets, not repetitions, so the DENM air time is the measure; repetitions stop after repetitionDuration (EN 302 637-3 8.2.1.4)
+  # The on-air routers have no keep-alive forwarding (the loader refuses it there), so
+  # this row runs on the overlay, the model that has it.
+  - name: GN keep-alive forwarding on (overlay)
+    base_set: {net.geonet.forwarding: overlay, net.geonet.repetition_interval_ms: 0}
+    set: {net.geonet.keep_alive_forwarding: true}
+    metric: report.geonet.0.kept_alive
+    expect: up
+    source: keep-alive forwarding re-sends a warning vehicles in the area stop hearing (EN 302 637-3 8.2.2, C2C-CC Triggering Conditions RS 2006)
+  - name: GN overlay forwarding
+    base_set: {radio.devices.obu.tx_power_dbm: 5.0}
+    set: {net.geonet.forwarding: overlay}
+    metric: report.air_bytes.gn_forwarded
+    expect: down
+    source: overlay forwarding is protocol-only with no frames on the air, so no forwarded octets
+  # ---- Access categories (TS 102 724) and channel access ----
+  - name: ETSI access-category profiles
+    set: {net.access_categories: etsi-profiles}
+    metric: aifs_us
+    expect: up
+    source: CAMs move from AC_VO (AIFSN 2) to AC_BE (AIFSN 6), so each waits 4 more slots of 13 us (IEEE 802.11-2020 Table 9-155, OCB; ETSI TS 102 724 4.2.2)
+  # ---- Message sets and sizes ----
+  - name: add CPM to CAM+DENM
+    set: {messages.sets: [cam, denm, cpm]}
+    metric: cbr_mean
+    expect: up
+    source: another periodic message type adds airtime, so CBR (ETSI TS 103 324 6.1.2; TS 102 687 CBR definition)
+  - name: add CPM to CAM+DENM
+    set: {messages.sets: [cam, denm, cpm]}
+    metric: frames_tx
+    expect: up
+    source: CPMs on the air where there were none (TS 103 324); measured 0 -> 1.18 s of CPM air time
+  - name: add CPM to CAM+DENM
+    set: {messages.sets: [cam, denm, cpm]}
+    metric: report.air_bytes.payload
+    expect: up
+    source: perceived-object containers are extra payload (TS 103 324 7.6)
+  - name: add CPM to CAM+DENM
+    set: {messages.sets: [cam, denm, cpm]}
+    metric: report.events_by_class.PhyEnd
+    expect: up
+    source: run cost - more frames, more PHY events
+  - name: CAM path history 23 points
+    set: {messages.path_history_points: 23}
+    metric: report.air_by_type.cam.psdu_mean
+    expect: same
+    min_change: 0.0
+    source: the concise path history stops at 300 m of track (J2945/1 Annex A.5, which the CAM generator shares), reached in under 15 points on straight streets; the low-frequency container carries the path history; 23 points instead of the default add octets to every LF CAM (EN 302 637-2 B.25; TS 103 900)
+  - name: CAM path history 0 points
+    set: {messages.path_history_points: 0}
+    metric: report.air_by_type.cam.psdu_mean
+    expect: down
+    source: an empty path history removes its points from the LF container (EN 302 637-2 B.25)
+  - name: CAM T_GenCamMax 1000->200 ms
+    set: {messages.generator: {id: generator/cam-en302637-2, params: {t_gen_cam_max_ms: 200}}}
+    metric: report.air_by_type.cam.frames
+    expect: up
+    source: a slow vehicle that triggers no dynamics condition sends at T_GenCamMax, so lowering it raises the CAM rate (EN 302 637-2 6.1.3)
+  - name: CAM thresholds 4 m/4 deg/0.5 m/s -> 40 m/40 deg/5 m/s
+    set: {messages.generator: {id: generator/cam-en302637-2, params: {position_threshold_m: 40.0, heading_threshold_deg: 40.0, speed_threshold_mps: 5.0}}}
+    metric: report.air_by_type.cam.frames
+    expect: down
+    source: looser dynamics triggers fire less, so CAMs fall back towards T_GenCamMax (EN 302 637-2 6.1.3)
+  - name: CAM T_GenCamMin 100->500 ms
+    set: {messages.generator: {id: generator/cam-en302637-2, params: {t_gen_cam_min_ms: 500}}}
+    metric: report.air_by_type.cam.frames
+    expect: down
+    source: T_GenCamMin bounds the fastest CAM rate (EN 302 637-2 6.1.3)

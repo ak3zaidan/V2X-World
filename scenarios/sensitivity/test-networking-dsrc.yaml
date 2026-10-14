@@ -1,0 +1,61 @@
+# Networking and messages on the US stack: dsrc-grid.yaml (40 vehicles, 802.11p, WSMP,
+# BSMs, 3 s). `v2xw sensitivity scenarios/sensitivity/test-networking-dsrc.yaml`; the
+# report is docs/validation/test-networking.md.
+base: dsrc-grid.yaml
+set: {metrics: [all], time.mobility_step_ms: 50}
+rows:
+  # ---- BSM path history (SAE J2735 PathHistory, J2945/1 6.1.4) ----
+  - name: BSM path history 15->23 points
+    set: {messages.path_history_points: 23}
+    metric: report.air_by_type.bsm.psdu_mean
+    expect: same
+    min_change: 0.0
+    source: the concise path history stops once its points span 300 m (J2945/1 6.1.4, Annex A.5), which straight grid streets reach in under 15 points, so 23 allowed points add none; each PathHistoryPoint is a few octets of UPER in Part II, so more points make every BSM bigger (SAE J2735 2016 DF_PathHistoryPoint; J2945/1 6.1.4)
+  - name: BSM path history 15->0 points
+    set: {messages.path_history_points: 0}
+    metric: report.air_bytes.payload
+    expect: down
+    source: no path history, a smaller Part II (SAE J2735 2016)
+  # A 3 s run builds about one point of history; 20 s of driving (about 280 m at the
+  # 13.9 m/s limit) builds several.
+  - name: BSM path history 15->1 point, 20 s
+    base_set: {time.duration_s: 20.0}
+    set: {messages.path_history_points: 1}
+    metric: report.air_by_type.bsm.psdu_mean
+    expect: down
+    source: fewer points, a smaller Part II (SAE J2735 2016 DF_PathHistory)
+  # ---- BSM rate (J2945/1 6.3.6 ITT) ----
+  - name: BSM 10->20 Hz
+    set: {messages.rate_hz: 20.0}
+    metric: report.air_by_type.bsm.frames
+    expect: up
+    band: [1.6, 2.2]
+    source: twice the rate, about twice the frames (SAE J2945/1 6.3.6)
+  - name: BSM 10->20 Hz
+    set: {messages.rate_hz: 20.0}
+    metric: cbr_mean
+    expect: up
+    source: twice the offered airtime (ETSI TS 102 687 CBR definition)
+  - name: BSM 10->20 Hz
+    set: {messages.rate_hz: 20.0}
+    metric: report.events_by_class.PhyEnd
+    expect: up
+    source: run cost - one PHY end event per frame
+  - name: BSM nominal ITT 100->300 ms
+    set: {messages.generator: {id: generator/bsm-j2945-1, params: {nominal_itt_ms: 300}}}
+    metric: report.air_by_type.bsm.frames
+    expect: down
+    source: the inter-transmit time sets the BSM rate (SAE J2945/1 6.3.6)
+  # ---- IEEE 1609.4 channel switching ----
+  - name: 1609.4 alternating access
+    set: {net.channel_access: alternating}
+    metric: e2e_ms_mean
+    expect: up
+    source: a BSM generated in the 50 ms SCH interval waits for the next CCH interval, about 12.5 ms on average over a 100 ms sync interval (IEEE 1609.4-2016 5.5, 6.2.5; Chen, Jiang et al., IEEE VTC 2009)
+  - name: 1609.4 alternating access
+    set: {net.channel_access: alternating}
+    metric: collision_rate
+    expect: up
+    source: frames that waited out the SCH interval contend at the start of the CCH interval together (Campolo, Molinaro, Vinel, IEEE Comm. Letters 2011)
+  # CPM is refused on WSMP (an ETSI facilities message: net.layer gn-btp), so the
+  # message-set rows live in test-networking.yaml.
