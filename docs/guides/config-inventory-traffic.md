@@ -20,7 +20,7 @@ group tests fail.
 |---|---|---|---|
 | `actors.vehicles.drivers.speed_factor` | 1.0 | 0.5-1.5 | Mean free speed / limit (SUMO `speedFactor`); `DriverTraits::draw_law` |
 | `actors.vehicles.drivers.speed_spread` | 1 | 0-3 | Multiplier on class `speedDev` (SUMO: 0.1 car, 0.05 truck/bus) |
-| `actors.vehicles.drivers.start_reaction_s` | 1.15 s | 0.3-3 s | Median reaction to a green (Taoka 1989, TRR 1213) |
+| `actors.vehicles.drivers.start_reaction_s` | 1.08 s | 0.3-3 s | Median reaction to a green (Bonneson 1992, TRR 1365: 1.22 s mean; was Taoka 1989's amber-onset 1.15 s) |
 | `actors.vehicles.drivers.queue_start_delay_s` | 0.5 s | 0.05-3 s | Median queue start-up delay (calibrated to Greenshields 1947 headways); sets saturation flow |
 | `actors.vehicles.drivers.{truck,bus,motorcycle,bicycle}.{max_accel_mps2,comfort_decel_mps2,time_headway_s,min_gap_m}` | class's own | as passenger rows | Per-class IDM a, b, T, s0 over the model calibration (SUMO vTypes; Treiber & Kesting 2013 Table 11.2); truck = truck+trailer, bus = bus+coach, motorcycle = motorcycle+moped |
 | `traffic.critical_gap_factor` | 1 | 0.5-2 | Scales the HCM 6th ed. ch. 20 critical gaps and follow-up times (unsignalised junctions) |
@@ -172,7 +172,7 @@ commit.
 | `PLANNED_STOP_MAX_DECEL_MPS2` | mobility/engine.rs:158 | `3.4` | kept: ITE 3.4 m/s² planned-stop deceleration, the same figure the yellow timing assumes |
 | `CAP_MAX_DECEL_MPS2` | mobility/engine.rs:164 | `8.5` | kept: a physical braking cap (dry road) |
 | `STOP_FLOOR_BIND_MPS2` | mobility/engine.rs:171 | `0.3` | kept because it is a model internal |
-| `REACTION_MEDIAN_S` | mobility/engine.rs:187 | `1.15` | exposed as `actors.vehicles.drivers.start_reaction_s` (new) |
+| `REACTION_MEDIAN_S` | mobility/engine.rs:193 | `1.08` | exposed as `actors.vehicles.drivers.start_reaction_s` (new) |
 | `REACTION_SIGMA` | mobility/engine.rs:191 | `0.5` | kept: a fitted shape (Taoka 1989); the median is exposed |
 | `FOLLOW_REACTION_MEDIAN_S` | mobility/engine.rs:208 | `0.5` | exposed as `actors.vehicles.drivers.queue_start_delay_s` (new) |
 | `AMBER_GO_MARGIN_S` | mobility/engine.rs:228 | `0.3` | kept: a numerical margin on the amber decision; the dilemma zone itself is sourced (Zegeer & Deen 1978) |
