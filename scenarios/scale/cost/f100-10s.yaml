@@ -1,0 +1,12 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-f100-10s
+  base: ../base.yaml
+  description: Run-cost measurement, f100-10s.
+time:
+  duration_s: 10.0
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 150

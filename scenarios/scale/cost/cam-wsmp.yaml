@@ -1,0 +1,16 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-cam-wsmp
+  base: ../base.yaml
+  description: Run-cost measurement, cam-wsmp.
+time:
+  duration_s: 2.0
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 150
+messages:
+  sets: [cam]
+security:
+  envelope: etsi103097

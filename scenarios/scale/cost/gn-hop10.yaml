@@ -1,0 +1,13 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-gn-hop10
+  base: ../../sensitivity/gn-grid.yaml
+  description: Run-cost measurement, GeoNetworking hop limit 10.
+net:
+  layer: gn-btp
+  geonet:
+    hop_limit: 10
+radio:
+  devices:
+    obu:
+      tx_power_dbm: 5.0

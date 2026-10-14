@@ -1,0 +1,20 @@
+schema: v2xw/scenario/1
+meta:
+  name: cost-meso1000-nofollow
+  base: ../base.yaml
+  description: Run-cost measurement, meso1000-nofollow.
+time:
+  duration_s: 2.0
+actors:
+  vehicles:
+    demand:
+      params:
+        max_total_vehicles: 1600
+scale:
+  traffic:
+    model: mobility/tiered/meso-micro
+    region:
+      min_lat_deg: 40.7503
+      min_lon_deg: -73.9826
+      max_lat_deg: 40.7557
+      max_lon_deg: -73.9754
