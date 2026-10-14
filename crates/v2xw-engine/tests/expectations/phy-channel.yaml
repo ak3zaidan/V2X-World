@@ -1,0 +1,13 @@
+# Expectation rows, physical layer and channel (phy-channel track). Format: see
+# catalogue.yaml. These cover the radio settings no other file has a row for; the
+# quantitative checks (bands on range against the link-budget law) are the spec
+# scenarios/sensitivity/phy-channel.yaml, report docs/validation/test-phy-channel.md.
+
+- {setting: radio.devices.obu.antenna_height_m, change: high, metric: prr, expect: same, min_change: 0.005,
+   source: "the default medium-tier law is the Abbas 2015 dual-slope fit, which has no height term; height acts only through two-ray, WINNER+ B1, TR 37.885 and building geometry (Abbas et al., IEEE TVT 2015; measured bit-identical at 3 m in test-phy-channel.md)"}
+- {setting: radio.channel_model.shadowing_decorrelation_m, change: high, metric: prr, expect: same, min_change: 0.03,
+   source: "the correlation distance changes when shadowing losses happen, not their marginal probability (Gudmundson, Electronics Letters 1991)"}
+- {setting: radio.region, change: eu, metric: range90_m, expect: up,
+   source: "ETSI EN 302 571 allows 33 dBm EIRP and ETSI DCC does not cut power at low load, against J2945/1's 20 dBm radiated power in us-2016: +6 dB at 23 dBm into 3 dBi (SAE J2945/1 2016 6.3.8)"}
+- {setting: radio.sidelink.noise_figure_db, change: low, metric: prr_600_1000, expect: up,
+   source: "noise floor = kTB + NF: 3 dB less NF is 3 dB more SINR at the noise-limited edge (Friis 1944; TS 36.101 Table 7.3 assumes a 9 dB UE NF)"}
