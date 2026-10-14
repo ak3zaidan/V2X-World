@@ -42,6 +42,7 @@ const CHANNEL_ACCESS: [&str; 2] = ["continuous", "alternating"];
 const ACCESS_CATEGORIES: [&str; 4] = ["vo", "vi", "be", "bk"];
 /// The small-scale fading laws `radio.channel_model.fading` names.
 const FADING_LAWS: [&str; 4] = ["none", "rayleigh", "rice", "nakagami"];
+const FADING_COHERENCE: [&str; 2] = ["independent", "doppler"];
 /// The eight 10 MHz OFDM data rates, Mbit/s (IEEE 802.11-2020 Table 17-4).
 pub const DATA_RATES_MBPS: [f64; 8] = [3.0, 4.5, 6.0, 9.0, 12.0, 18.0, 24.0, 27.0];
 const GN_FORWARDING: [&str; 2] = ["on-air", "overlay"];
@@ -1117,6 +1118,15 @@ pub static BOUNDS: &[Bound] = &[
     },
     // A unit must hold at least one certificate; 65 536 is far above any neighbourhood
     // a 1 km radio range holds.
+    // A lower edge of the HSM signing time; the upper edge is the profile's own bound,
+    // checked against it in `check_hsm_sign_lower`.
+    Bound {
+        path: "nodes.hsm_sign_lower_us",
+        lo: 0.0,
+        hi: 1_000_000.0,
+        exclusive_lo: true,
+        what: "the lower edge of the HSM signing time",
+    },
     Bound {
         path: "nodes.peer_cert_cache",
         lo: 1.0,
@@ -1529,6 +1539,7 @@ pub static CHOICES: &[Choices] = &[
     choices("radio.mac.periodic_access_category", &ACCESS_CATEGORIES),
     choices("radio.mac.event_access_category", &ACCESS_CATEGORIES),
     choices("radio.channel_model.fading", &FADING_LAWS),
+    choices("radio.channel_model.fading_coherence", &FADING_COHERENCE),
     choices("net.geonet.forwarding", &GN_FORWARDING),
     choices("net.access_categories", &NET_ACCESS_CATEGORIES),
     choices("net.dcc_cbr", &DCC_CBR),
@@ -2635,6 +2646,14 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                priority (300 m unless set). Refused under any other policy.",
     },
     KeyStatus {
+        path: "nodes.hsm_sign_lower_us",
+        status: Status::Wired,
+        note: "Lower edge of the HSM signing time where the profile publishes only an upper \
+               bound (CRATON2 <9 ms); each signature is drawn uniformly between it and the \
+               bound. Unset, every signature takes the bound. Refused when the default OBU \
+               publishes no upper-bound signing time, or at or above that bound.",
+    },
+    KeyStatus {
         path: "nodes.peer_cert_cache",
         status: Status::Wired,
         note: "Peer certificates each vehicle or roadside unit holds (128 unless set); an evicted \
@@ -3024,6 +3043,13 @@ pub static KEY_STATUS: &[KeyStatus] = &[
         status: Status::Wired,
         note: "The most path-history points a BSM's Part II or a CAM carries (J2945/1's 15 \
                unless set; 0 to 23). Refused unless messages.sets has bsm or cam.",
+    },
+    KeyStatus {
+        path: "radio.channel_model.fading_coherence",
+        status: Status::Wired,
+        note: "independent (unset) draws each frame's fade on its own; doppler keys it by \
+               the link's coherence block, 0.423/f_D with f_D = (|v_tx|+|v_rx|)·f_c/c. \
+               Refused when the run draws no fading.",
     },
     KeyStatus {
         path: "nodes.verify_queue_depth",
@@ -3664,6 +3690,16 @@ fn radio_law_checks(s: &Scenario, e: &mut Vec<ScenarioError>) {
         e.push(conflict(
             "radio.channel_model.fading",
             "would change nothing: the abstract propagation tier draws no fading".to_string(),
+        ));
+    }
+    // Doppler coherence correlates a fading draw; a run that draws none has nothing to
+    // correlate (wiring::draws_fading).
+    if c.fading_coherence.as_deref() == Some("doppler") && !crate::wiring::draws_fading(s) {
+        e.push(conflict(
+            "radio.channel_model.fading_coherence",
+            "would change nothing: this run draws no small-scale fading (the abstract \
+             tier, a sidelink run without radio.channel_model.fading, or fading 'none')"
+                .to_string(),
         ));
     }
     let buildings_charged = !matches!(law, PropagationChoice::Tr37885);
@@ -5533,6 +5569,9 @@ fn radio_tuning(s: &Scenario, e: &mut Vec<ScenarioError>) {
             }
         }
     }
+    if let Some(f) = &c.fading_coherence {
+        one_of("radio.channel_model.fading_coherence", f, &FADING_COHERENCE, e);
+    }
     if let Some(f) = &c.fading {
         one_of("radio.channel_model.fading", f, &FADING_LAWS, e);
         if s.radio.models.contains_key("fading") {
@@ -5641,12 +5680,14 @@ fn net(s: &Scenario, e: &mut Vec<ScenarioError>) {
             g.repetition_interval_ms as f64,
             e,
         );
-        bounded_at(
-            "net.geonet.repetition_duration_ms",
-            "net.geonet.repetition_duration_ms",
-            g.repetition_duration_ms as f64,
-            e,
-        );
+        if let Some(ms) = g.repetition_duration_ms {
+            bounded_at(
+                "net.geonet.repetition_duration_ms",
+                "net.geonet.repetition_duration_ms",
+                ms as f64,
+                e,
+            );
+        }
         bounded_at("net.geonet.window_s", "net.geonet.window_s", g.window_s, e);
         // The on-air routers (run/gn_air.rs) have no keep-alive forwarding: only the
         // overlay's DEN model re-sends a warning a vehicle stops hearing.
@@ -6597,6 +6638,7 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
             n.verify_queue_depth.map(f64::from),
         ),
         ("nodes.peer_cert_cache", n.peer_cert_cache.map(f64::from)),
+        ("nodes.hsm_sign_lower_us", n.hsm_sign_lower_us),
         (
             "security.on_demand_threshold",
             s.security.on_demand_threshold,
@@ -6608,6 +6650,35 @@ fn network_audit(s: &Scenario, e: &mut Vec<ScenarioError>) {
     ] {
         if let Some(v) = v {
             bounded_at(path, path, v, e);
+        }
+    }
+    // A signing lower edge only acts on a profile whose signing time is a published upper
+    // bound (wiring::with_sign_lower_edge, v2xw_node HsmOp::range_us), and only below it.
+    if let Some(lo) = n.hsm_sign_lower_us {
+        let (sign_op, _) = v2xw_node::profile::signature_ops(&s.security.signature);
+        let bound = v2xw_node::profiles::get(&n.default_obu)
+            .and_then(|p| p.hsm.ops.get(sign_op))
+            .filter(|op| {
+                matches!(
+                    op.latency_us.status,
+                    Some(v2xw_node::profile::FieldStatus::UpperBound)
+                )
+            })
+            .and_then(|op| op.latency_us.value);
+        match bound {
+            None => e.push(conflict(
+                "nodes.hsm_sign_lower_us",
+                format!(
+                    "{} publishes no upper-bound HSM time for {sign_op}, so a lower edge \
+                     would do nothing",
+                    n.default_obu
+                ),
+            )),
+            Some(hi) if lo >= hi => e.push(conflict(
+                "nodes.hsm_sign_lower_us",
+                format!("{lo} us is not below the profile's {hi} us signing bound"),
+            )),
+            Some(_) => {}
         }
     }
     // The sidelink pair rides on `radio.sidelink`, which `radio_tuning` already refuses on

@@ -158,7 +158,7 @@ pub use dcc::{
     AdaptiveDcc, AdaptiveParams, En302571Floor, HostState, J2945Params, J2945Trigger, PerWindow,
     ReactiveDcc, ReactiveTable, SaeJ2945Dcc,
 };
-pub use fading::{NakagamiFading, NakagamiPreset, NoFading};
+pub use fading::{DopplerCoherence, NakagamiFading, NakagamiPreset, NoFading};
 pub use focus::{
     BOUNDARY_BIAS_TOLERANCE_PP, BoundaryBiasMeter, BoundaryBiasReport, BoundaryBinBias,
     BoundaryObservation, FocusPlan, FocusShape, FocusWarning, LinkEvaluation, LinkPlacement,

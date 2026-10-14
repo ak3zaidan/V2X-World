@@ -2187,6 +2187,37 @@ pub fn build_radio_at(
     (propagation, fading)
 }
 
+/// Whether the run draws small-scale fading at all: what the default and the named laws
+/// in [`build_radio_at`]'s fading half resolve to.
+pub fn draws_fading(scenario: &Scenario) -> bool {
+    let cm = &scenario.radio.channel_model;
+    match cm.fading.as_deref() {
+        Some("none") => return false,
+        Some(_) => return scenario.radio.tiers.propagation != v2xw_core::card::Tier::Abstract,
+        None => {}
+    }
+    if scenario.radio.tiers.propagation == v2xw_core::card::Tier::Abstract {
+        return false;
+    }
+    if let Some(choice) = scenario.radio.models.get("fading") {
+        return choice.id != v2xw_radio::NoFading::ID;
+    }
+    !matches!(
+        scenario.radio.rat,
+        crate::scenario::schema::Rat::LteV2xPc5 | crate::scenario::schema::Rat::NrV2xPc5
+    )
+}
+
+/// The Doppler coherence model the run keys its fading draws by
+/// (`radio.channel_model.fading_coherence: doppler`), on the run's carrier.
+pub fn fading_coherence(
+    scenario: &Scenario,
+    carrier_hz: f64,
+) -> Option<v2xw_radio::DopplerCoherence> {
+    (scenario.radio.channel_model.fading_coherence.as_deref() == Some("doppler"))
+        .then_some(v2xw_radio::DopplerCoherence { carrier_hz })
+}
+
 /// The Rice factor `radio.channel_model.rice_k_db` defaults to, dB: a moderate direct
 /// path, inside the 3 to 10 dB that V2V measurements at 5.9 GHz report for line of sight
 /// (Cheng et al., IEEE JSAC 25(8), 2007, §IV).
@@ -3126,6 +3157,24 @@ pub fn crypto_mode(scenario: &Scenario) -> CryptoMode {
     }
 }
 
+/// `nodes.hsm_sign_lower_us` applied to a node's profile: the signing operation's
+/// published upper bound gains this lower edge, so the service model draws each signature
+/// inside it ([`v2xw_node::profile::HsmOp::range_us`]). A profile without an upper-bound
+/// signing time is left as it is (the loader refuses that combination for the default OBU).
+pub(crate) fn with_sign_lower_edge(
+    scenario: &Scenario,
+    mut profile: v2xw_node::profile::HardwareProfile,
+) -> v2xw_node::profile::HardwareProfile {
+    if let Some(lo) = scenario.nodes.hsm_sign_lower_us {
+        let (sign_op, _) = v2xw_node::profile::signature_ops(&scenario.security.signature);
+        if let Some(op) = profile.hsm.ops.get_mut(sign_op) {
+            op.latency_lower_us.value = Some(lo);
+            op.latency_lower_us.source = Some("scenario nodes.hsm_sign_lower_us".to_string());
+        }
+    }
+    profile
+}
+
 /// `NodeConfig`'s defaults with `nodes.verify_queue_depth` applied (network audit).
 fn node_capacities(scenario: &Scenario) -> NodeConfig {
     let mut c = NodeConfig::default();
@@ -3232,6 +3281,7 @@ pub fn build_node(
                 .expect("the reference profile ships with v2xw-node")
                 .clone()
         });
+    let profile = with_sign_lower_edge(scenario, profile);
     let policy = verification_policy(scenario);
     let (bsm_params, cam_params) = generator_params(scenario);
     // The node's own record of its transmit power is its class's `radio.devices` power;
@@ -3786,6 +3836,7 @@ pub fn build_rsu(
                 .expect("the reference profile ships with v2xw-node")
                 .clone()
         });
+    let profile = with_sign_lower_edge(scenario, profile);
     let (sign_op, verify_op) = v2xw_node::profile::signature_ops(&scenario.security.signature);
     let config = NodeConfig {
         tx_power_dbm: device_for(scenario, v2xw_radio::ActorClass::Rsu).tx_power_dbm,

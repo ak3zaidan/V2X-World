@@ -138,7 +138,9 @@ impl Engine {
             },
             den: DenParams {
                 repetition_interval_ms: g.repetition_interval_ms,
-                repetition_duration_ms: g.repetition_duration_ms,
+                repetition_duration_ms: g
+                    .repetition_duration_ms
+                    .unwrap_or(crate::scenario::schema::Geonet::OVERLAY_REPETITION_DURATION_MS),
                 transmission_interval_ms: if g.keep_alive_forwarding {
                     g.repetition_interval_ms.max(1_000)
                 } else {

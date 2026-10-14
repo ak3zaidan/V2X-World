@@ -794,6 +794,9 @@ pub struct Engine {
     gnss: Box<dyn GnssModel>,
     propagation: Box<dyn BoxedPropagation>,
     fading: Box<dyn BoxedFading>,
+    /// `radio.channel_model.fading_coherence: doppler`: fading draws are keyed by the
+    /// link's coherence block instead of the frame (`v2xw_radio::DopplerCoherence`).
+    coherence: Option<v2xw_radio::DopplerCoherence>,
     /// The physical layer. One instance for the run: it holds the live arrival set, every
     /// node's transmit intervals for the half-duplex test, and the air-time ledger.
     phy: OfdmPhy,
@@ -1348,6 +1351,10 @@ impl Engine {
             crate::app_truth::AppTruth::new(crate::wiring::app_params(&scenario_for_radio))
                 .with_signals(crate::app_truth::SignalIndex::build(&world))
         };
+        let coherence = crate::wiring::fading_coherence(
+            &scenario,
+            sidelink.as_ref().map_or(dsrc_freq_hz, |sl| sl.freq_hz),
+        );
         let mut engine = Engine {
             snapshot: ActorSnapshot::new(0, SNAPSHOT_CELL_M),
             weather: crate::wiring::initial_weather(&scenario),
@@ -1364,6 +1371,7 @@ impl Engine {
             gnss,
             propagation,
             fading,
+            coherence,
             phy: crate::wiring::build_phy(&scenario_for_radio),
             // 802.11p's EDCA and J2945/1 congestion control belong to the DSRC stack; a
             // sidelink scenario runs the SPS engine in `sidelink` instead.
@@ -5861,7 +5869,7 @@ impl Engine {
                 continue;
             }
             let pos = rec.last.extrapolate(now).pos;
-            if self.sidelink.is_some() {
+            if self.sidelink.is_some() || self.coherence.is_some() {
                 velocities.insert(node, rec.last.vel);
             }
             if state.tx_pos.distance_2d(pos) <= full_m {
@@ -5924,6 +5932,8 @@ impl Engine {
             let shadow_main = self.propagation.as_log_distance();
             let shadow_focus = self.focus.as_ref().map(|f| f.propagation.as_log_distance());
             let rng = &self.rng;
+            let coherence = self.coherence;
+            let velocities = &velocities;
             let (tx, tx_pos, tx_heading) = (state.tx, state.tx_pos, state.tx_heading);
             let one = |&(rx, rx_pos, rx_heading): &(NodeId, Vec3, Option<f64>)| {
                 use v2xw_radio::LinkPlacement;
@@ -5934,7 +5944,16 @@ impl Engine {
                     (_, Some(LinkPlacement::Inbound)) => None,
                     _ => fade_main,
                 }
-                .map(|m| m.sample_db(rng, LinkKey::new(tx, rx), tx_pos.distance(rx_pos), now));
+                .map(|m| {
+                    // Doppler coherence: the draw is keyed by the start of the link's
+                    // coherence block, from both ends' speeds (a roadside unit stands still).
+                    let at = coherence.map_or(now, |c| {
+                        let speed = |v: Vec3| v2xw_core::math::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+                        let rx_vel = velocities.get(&rx).copied().unwrap_or(Vec3::ZERO);
+                        c.block_start(now, speed(tx_vel) + speed(rx_vel))
+                    });
+                    m.sample_db(rng, LinkKey::new(tx, rx), tx_pos.distance(rx_pos), at)
+                });
                 let shadow = match (shadow_focus, placement) {
                     (Some(f), Some(LinkPlacement::Inside)) => f,
                     _ => shadow_main,

@@ -400,6 +400,66 @@ fn nakagami_card(preset: NakagamiPreset) -> ModelCard {
     card
 }
 
+/// Time correlation of the small-scale fade from the link's Doppler (Clarke/Jakes, and
+/// Akki-Haber for a link whose two ends both move).
+///
+/// With static scatterers and both ends moving, the fade's autocorrelation is
+/// `J0(2π f_1 τ)·J0(2π f_2 τ)` with `f_i = v_i·f_c/c` (Akki & Haber, IEEE TVT 35(1),
+/// 1986), so it decorrelates at the rate of the sum of the two Doppler shifts; the model
+/// takes `f_D = (|v_tx| + |v_rx|)·f_c/c` and the coherence time `T_c = 0.423 / f_D`
+/// (Rappaport, *Wireless Communications*, 2nd ed., 2002, Eq. 5.40c: the geometric mean of
+/// the Clarke-model `9/(16π f_D)` and `1/f_D`). The fade is block-constant: one draw per
+/// link per coherence block, so frames on a slow link inside one block share a fade and
+/// frames on a fast link decorrelate. The block length is rounded down to a power of two
+/// nanoseconds, so blocks nest and a small change of speed does not re-key every frame.
+///
+/// At 5.9 GHz two cars at 140 km/h (TR 37.885 Table 6.1.2-1's highest relative speed is
+/// 280 km/h) have `f_D` ≈ 1.5 kHz and `T_c` ≈ 0.3 ms, so every 100 ms beacon fades
+/// independently; cars queued at a red light keep one fade for many beacons, the burst
+/// loss stationary traffic sees. Moving scatterers keep a link from freezing when both
+/// ends stand still: the speed is floored at [`DopplerCoherence::SPEED_FLOOR_MPS`] (an
+/// engine assumption, walking-pace scatterers: about 1 Hz and a 0.4 s block at 5.9 GHz).
+/// What it does not model: the 802.11p receiver's channel estimate ageing within one
+/// frame (a per-frame PER loss at high Doppler), for which no cited curve is shipped.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DopplerCoherence {
+    /// The carrier frequency, Hz.
+    pub carrier_hz: f64,
+}
+
+impl DopplerCoherence {
+    /// The Doppler speed below which the link is treated as moving at this speed, m/s.
+    pub const SPEED_FLOOR_MPS: f64 = 0.05;
+    /// Rappaport (2002) Eq. 5.40c's constant.
+    pub const COHERENCE_CONSTANT: f64 = 0.423;
+
+    /// The Doppler spread, Hz, for `v_rel_mps` = `|v_tx| + |v_rx|`, m/s.
+    #[must_use]
+    pub fn doppler_hz(&self, v_rel_mps: f64) -> f64 {
+        let v = if v_rel_mps.is_finite() {
+            v_rel_mps.abs().max(Self::SPEED_FLOOR_MPS)
+        } else {
+            Self::SPEED_FLOOR_MPS
+        };
+        v * self.carrier_hz / 299_792_458.0
+    }
+
+    /// The coherence time, seconds.
+    #[must_use]
+    pub fn coherence_time_s(&self, v_rel_mps: f64) -> f64 {
+        Self::COHERENCE_CONSTANT / self.doppler_hz(v_rel_mps)
+    }
+
+    /// The time the fade of a frame sent at `t` is keyed by: the start of its coherence
+    /// block, the block length rounded down to a power of two nanoseconds.
+    #[must_use]
+    pub fn block_start(&self, t: SimTime, v_rel_mps: f64) -> SimTime {
+        let tc_ns = (self.coherence_time_s(v_rel_mps) * 1e9).max(1.0) as u64;
+        let q = 1u64 << (63 - tc_ns.max(1).leading_zeros());
+        (t / q) * q
+    }
+}
+
 /// `fading/none` — the medium tier's fading model, which is no fading at all
 /// (04-models.md §3.4, and the tier table of §3: "medium ignores fast fading").
 #[derive(Debug, Clone)]
@@ -603,6 +663,26 @@ mod tests {
                 .card()
                 .validate()
                 .expect("card validates");
+        }
+    }
+
+    /// Faster ends decorrelate the fade faster: at 5.9 GHz a queue at a red light keeps
+    /// one block across 100 ms beacons, two cars at 140 km/h get a new one per frame.
+    #[test]
+    fn doppler_coherence_shrinks_with_speed() {
+        let c = super::DopplerCoherence { carrier_hz: 5.9e9 };
+        let fast = c.coherence_time_s(2.0 * 140.0 / 3.6);
+        assert!((fast - 0.423 / (77.78 * 5.9e9 / 299_792_458.0)).abs() < 1e-6, "{fast}");
+        assert!(fast < 3e-4);
+        assert!(c.coherence_time_s(0.0) > 0.4);
+        let beacons = [0u64, 100_000_000, 200_000_000];
+        let key = |v: f64| beacons.map(|t| c.block_start(t + 3_000_000_000, v));
+        let still = key(0.0);
+        assert_eq!(still[0], still[1], "a stationary pair shares a fade across beacons");
+        let moving = key(77.78);
+        assert!(moving[0] != moving[1] && moving[1] != moving[2]);
+        for (t, k) in beacons.iter().zip(moving) {
+            assert!(k <= t + 3_000_000_000 && t + 3_000_000_000 - k < 300_000);
         }
     }
 }

@@ -33,7 +33,7 @@ fn on_air_denm_follows_the_repetition_duration() {
         .geonet
         .as_mut()
         .expect("geonet")
-        .repetition_duration_ms = 500;
+        .repetition_duration_ms = Some(500);
     let air = |s| {
         sens::measure(s)
             .expect("runs")

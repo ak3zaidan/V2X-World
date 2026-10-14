@@ -158,18 +158,16 @@ pub(super) fn forwarding_config(g: &Geonet) -> ForwardingConfig {
 /// The originator's DENM repetition on the air (`net.geonet.repetition_*`), as
 /// (interval, duration). The on-air breakdown DENM is the node's own DEN service, which
 /// before this setting reached it always repeated every 1 s for 15 s (the C2C-CC
-/// stationary-vehicle profile, `v2xw_node::events::STATIONARY_REPETITION_DURATION`). The
-/// schema default duration (5 000 ms, the overlay's) therefore keeps that 15 s, so
-/// existing runs do not change; any other value is used as given.
+/// stationary-vehicle profile, `v2xw_node::events::STATIONARY_REPETITION_DURATION`). An
+/// unset duration therefore keeps that 15 s, so existing runs do not change; any value
+/// given (5 000 ms included) is used as given.
 pub(super) fn on_air_repetition(
     g: &Geonet,
 ) -> (v2xw_core::time::Duration, v2xw_core::time::Duration) {
     use v2xw_core::time::Duration;
-    let duration_ms = if g.repetition_duration_ms == Geonet::default().repetition_duration_ms {
-        v2xw_node::events::STATIONARY_REPETITION_DURATION.as_nanos() / 1_000_000
-    } else {
-        g.repetition_duration_ms
-    };
+    let duration_ms = g.repetition_duration_ms.unwrap_or(
+        v2xw_node::events::STATIONARY_REPETITION_DURATION.as_nanos() / 1_000_000,
+    );
     (
         Duration::from_millis(g.repetition_interval_ms),
         Duration::from_millis(duration_ms),
@@ -590,5 +588,22 @@ impl Engine {
         let stats = gn.stats.clone();
         self.report.geonet.extend(rows);
         self.report.gn_air = Some(stats);
+    }
+}
+
+#[cfg(test)]
+mod repetition_tests {
+    use super::on_air_repetition;
+    use crate::scenario::schema::Geonet;
+
+    #[test]
+    fn an_explicit_5000_ms_duration_holds_on_the_air() {
+        let mut g = Geonet::default();
+        assert_eq!(on_air_repetition(&g).1.as_nanos() / 1_000_000, 15_000);
+        g.repetition_duration_ms = Some(5_000);
+        assert_eq!(on_air_repetition(&g).1.as_nanos() / 1_000_000, 5_000);
+        let parsed: Geonet =
+            serde_json::from_str(r#"{"repetition_duration_ms": 5000}"#).expect("parses");
+        assert_eq!(parsed.repetition_duration_ms, Some(5_000));
     }
 }

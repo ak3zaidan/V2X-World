@@ -140,6 +140,14 @@ fn words(path: &str, value: &str) -> Option<(&'static str, &'static str, bool)> 
             "Background (AC_BK, lowest)",
             "AIFSN 9, CWmin 15: the longest wait.",
         ),
+        ("radio.channel_model.fading_coherence", "independent") => w(
+            "Independent per message",
+            "Every message on a link gets its own fade, whatever the speeds.",
+        ),
+        ("radio.channel_model.fading_coherence", "doppler") => w(
+            "Doppler (speed-dependent)",
+            "A fade lasts one coherence time: long for vehicles standing still, a fraction of a millisecond at highway speed.",
+        ),
         ("radio.channel_model.fading", "none") => w(
             "None",
             "No small-scale fading: the received power is the path loss and shadowing only.",
@@ -1430,6 +1438,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "messages.cpm_interval_ms" => "Collective perception (CPM) check interval",
         "nodes.verify_queue_depth" => "Verification queue length",
         "nodes.peer_cert_cache" => "Peer certificates remembered",
+        "nodes.hsm_sign_lower_us" => "Fastest HSM signing time",
         "security.on_demand_threshold" => "On-demand relevance threshold",
         "security.prioritized_horizon_m" => "Prioritized verification range",
         "messages.path_history_points" => "Path history points per message",
@@ -1492,6 +1501,7 @@ pub fn title(path: &str) -> Option<&'static str> {
         "radio.channel_model.path_loss_exponent" => "Path-loss exponent",
         "radio.channel_model.shadowing_sigma_db" => "Shadowing spread (sigma)",
         "radio.channel_model.shadowing_decorrelation_m" => "Shadowing decorrelation distance",
+        "radio.channel_model.fading_coherence" => "Fading over time (Doppler)",
         "radio.channel_model.fading" => "Fading law",
         "radio.channel_model.nakagami_shape" => "Nakagami shape (m)",
         "radio.channel_model.rice_k_db" => "Rice factor (K)",

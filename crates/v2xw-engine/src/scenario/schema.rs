@@ -1697,6 +1697,12 @@ pub struct ChannelModelSettings {
     /// Unset keeps the tier's choice (Nakagami m = 3 for 802.11p).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fading: Option<String>,
+    /// How the fade of one link changes from frame to frame: `independent` (each frame
+    /// draws its own, the default) or `doppler` (one fade per coherence time,
+    /// `0.423 / f_D` with `f_D` from both ends' speeds and the carrier, so slow links fade
+    /// in bursts and fast links decorrelate; Akki & Haber 1986, Rappaport 2002 Eq. 5.40c).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fading_coherence: Option<String>,
     /// The Nakagami shape `m` when `fading` is `nakagami` (written `m` in the literature): 1 is Rayleigh, larger is
     /// milder. Unset is 3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2166,9 +2172,11 @@ pub struct Geonet {
     /// How often the originator repeats the warning, ms; 0 sends it once.
     #[serde(default = "Geonet::default_repetition_interval_ms")]
     pub repetition_interval_ms: u64,
-    /// How long it keeps repeating, ms.
-    #[serde(default = "Geonet::default_repetition_duration_ms")]
-    pub repetition_duration_ms: u64,
+    /// How long it keeps repeating, ms. Unset, the overlay repeats for 5 000 ms and the
+    /// on-air DEN service for 15 000 ms (the C2C-CC stationary-vehicle profile); any value
+    /// given, 5 000 included, is used as given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repetition_duration_ms: Option<u64>,
     /// Keep-alive forwarding: vehicles in the area re-send a warning they stop hearing,
     /// so it reaches vehicles that arrive later.
     #[serde(default)]
@@ -2216,9 +2224,8 @@ impl Geonet {
     fn default_repetition_interval_ms() -> u64 {
         1_000
     }
-    fn default_repetition_duration_ms() -> u64 {
-        5_000
-    }
+    /// The overlay's repetition duration when `repetition_duration_ms` is unset, ms.
+    pub const OVERLAY_REPETITION_DURATION_MS: u64 = 5_000;
     fn default_window_s() -> f64 {
         10.0
     }
@@ -2235,7 +2242,7 @@ impl Default for Geonet {
             area_radius_m: Geonet::default_area_radius_m(),
             range_m: Geonet::default_range_m(),
             repetition_interval_ms: Geonet::default_repetition_interval_ms(),
-            repetition_duration_ms: Geonet::default_repetition_duration_ms(),
+            repetition_duration_ms: None,
             keep_alive_forwarding: false,
             window_s: Geonet::default_window_s(),
             cbf_min_time_ms: None,
@@ -2629,6 +2636,14 @@ pub struct Nodes {
     /// recently used one. 128 unless set (no profile publishes one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_cert_cache: Option<u32>,
+    /// The lower edge of the HSM signing time, microseconds, for a profile that publishes
+    /// only an upper bound (the CRATON2's "<9 ms"). Set, each signature takes a time drawn
+    /// uniformly between this edge and the bound from the node's own random stream; unset,
+    /// every signature takes the bound itself (the worst case). No typical value is
+    /// published for the CRATON2/SECTON eHSM (searched 2026-10-13: Unex sheets, Autotalks
+    /// pages, CMVP #3556/#4395 policies), so the default stays the bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hsm_sign_lower_us: Option<f64>,
 }
 
 impl Nodes {
@@ -2655,6 +2670,7 @@ impl Default for Nodes {
             backend_tier: Tier::Medium,
             verify_queue_depth: None,
             peer_cert_cache: None,
+            hsm_sign_lower_us: None,
         }
     }
 }
