@@ -1,0 +1,45 @@
+# Expectation rows, vulnerable road users and safety applications (docs/validation/test-vru-safety.md).
+# actors.vru.* and apps.pcw_ttc_s run on the pedestrian grid (vru-grid.yaml, 40 s);
+# the other apps.* on the connected-intersections family (six signalised junctions with
+# SPaT/MAP RSUs, 3000 veh/h, every application on). Metric names with [dim=value] are one
+# slice of a dimensioned metric (sweep.rs FingerprintRecorder).
+
+# ---- Pedestrian devices and PCW (SAE J2945/9) ----
+- {setting: actors.vru.device_fraction, change: high, metric: "metric.app_warnings[app=pcw]", expect: up,
+   source: "PCW warns from a pedestrian's or cyclist's PSM/VAM, so only a road user who carries a device can be warned about: more carriers, more warnings (SAE J2945/9 2017 1.1; measured 11 -> 31 at 0.3 -> 0.6, 0 at 0)"}
+- {setting: actors.vru.device_fraction, change: high, metric: frames_tx, expect: up,
+   source: "every device beacons PSMs (SAE J2945/9 6.2)"}
+
+# ---- Crossing behaviour (observed social-force model) ----
+- {setting: actors.vru.midblock_rate_per_100m, change: high, metric: metric.ped_midblock_share, expect: up,
+   source: "the rate is the decisions to cross mid-block per 100 m of eligible sidewalk walked, so the share of crossings made mid-block rises with it (Sisiopiku and Akin 2003, mid-block crossing observations)"}
+- {setting: actors.vru.midblock_rate_per_100m, change: low, metric: metric.ped_midblock_share, expect: down,
+   source: "rate 0 turns mid-block crossing off"}
+- {setting: actors.vru.behaviour, change: document, metric: metric.ped_midblock_share, expect: down,
+   source: "the 1995 social-force document defaults: everyone waits for walk and nobody crosses mid-block (Helbing and Molnar 1995; 04-models.md 2.5)"}
+- {setting: actors.vru.ebike_share, change: high, metric: vru.speed_mean_mps, expect: up, min_change: 0.002,
+   source: "e-bike riders travel faster than pedal cyclists (Langford, Chen and Cherry, Accident Analysis and Prevention 82, 2015: about 1.5 to 3 km/h higher on roads); cyclists are 15 of 165 VRUs, so the fleet mean moves a little"}
+- {setting: actors.vru.cyclists, change: high, metric: traffic.speed_mean_mps, expect: down, min_change: 0.005,
+   source: "cyclists ride the carriageway (bicycles_on_roads) and cars queue behind them at the bicycle's speed (HCM 7th ed. ch. 15 bicycle effects on motorised flow; measured -22 % in vehicle mean speed at 15 -> 60 riders)"}
+- {setting: actors.vru.crossing_gap_margin_s, change: high, metric: metric.ped_wait, expect: up, min_change: 0.005,
+   source: "the critical headway t_c = L/S_p + t_s grows with t_s, and the expected wait for an acceptable gap grows with t_c (HCM 7th ed. ch. 20 pedestrian delay at uncontrolled crossings, d_g = (e^(lambda t_c) - lambda t_c - 1)/lambda; measured +5 % at 2 -> 6 s with half the pedestrians crossing on red)"}
+
+# ---- Application thresholds ----
+- {setting: apps.pcw_ttc_s, change: high, metric: "metric.app_warnings[app=pcw]", expect: up,
+   source: "a longer time threshold admits every encounter a shorter one does, and more (monotone threshold: warnings are the encounters with TTC <= threshold)"}
+- {setting: apps.pcw_ttc_s, change: low, metric: "metric.app_warnings[app=pcw]", expect: down,
+   source: "monotone threshold"}
+- {setting: apps.fcw_ttc_s, change: high, metric: "metric.app_warnings[app=fcw]", expect: up,
+   source: "FCW fires when TTC to the lead falls below the threshold; a higher threshold warns in more encounters (NHTSA FCW confirmation test, 2.0 to 2.4 s warning windows; Kiefer et al., CAMP FCW, DOT HS 808 964, 1999)"}
+- {setting: apps.fcw_ttc_s, change: low, metric: "metric.app_warnings[app=fcw]", expect: down,
+   source: "monotone threshold"}
+- {setting: apps.fcw_ttc_s, change: high, metric: "metric.app_lead_time_s[app=fcw]", expect: up,
+   source: "a warning at a larger TTC comes earlier before the conflict (lead time = TTC at warning; Kiefer et al. 1999)"}
+- {setting: apps.ima_tti_s, change: high, metric: "metric.app_warnings[app=ima]", expect: up,
+   source: "IMA looks further ahead to the conflict point, so more crossing pairs fall inside its window (CAMP V2V-SA IMA, DOT HS 812 014, 2014)"}
+- {setting: apps.ima_tti_s, change: low, metric: "metric.app_warnings[app=ima]", expect: down,
+   source: "monotone threshold"}
+- {setting: apps.ima_tti_s, change: high, metric: "metric.app_lead_time_s[app=ima]", expect: up,
+   source: "a longer look-ahead warns earlier (lead time is the time to the conflict point at the warning)"}
+- {setting: apps.glosa_compliance, change: high, metric: metric.drac, expect: down,
+   source: "drivers who follow GLOSA coast to the green instead of braking to the red, so the deceleration needed to avoid the vehicle ahead falls (Katsaros et al., IEEE IWCMC 2011; Stahlmann et al., IEEE VNC 2016; measured -17 % DRAC at 0 -> 1)"}
