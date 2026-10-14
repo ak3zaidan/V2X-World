@@ -394,9 +394,10 @@ impl EventServices {
         {
             self.stationary_event = None;
         }
-        let repetition = self
-            .stationary_repetition
-            .unwrap_or(Repetition::new(STATIONARY_REPETITION, STATIONARY_REPETITION_DURATION));
+        let repetition = self.stationary_repetition.unwrap_or(Repetition::new(
+            STATIONARY_REPETITION,
+            STATIONARY_REPETITION_DURATION,
+        ));
         let moved_long = self
             .moving_since
             .is_some_and(|t| now.saturating_sub(t) >= STATIONARY_MOVING_CANCEL.as_nanos());

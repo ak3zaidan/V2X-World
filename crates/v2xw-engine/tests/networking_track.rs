@@ -7,8 +7,7 @@ use std::path::{Path, PathBuf};
 use v2xw_engine::sensitivity::{self as sens, Spec};
 
 fn spec() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../scenarios/sensitivity/test-networking.yaml")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenarios/sensitivity/test-networking.yaml")
 }
 
 #[test]
@@ -29,7 +28,12 @@ fn on_air_keep_alive_is_refused() {
 fn on_air_denm_follows_the_repetition_duration() {
     let (_, base) = Spec::load(&spec()).expect("loads");
     let mut short = base.clone();
-    short.net.geonet.as_mut().expect("geonet").repetition_duration_ms = 500;
+    short
+        .net
+        .geonet
+        .as_mut()
+        .expect("geonet")
+        .repetition_duration_ms = 500;
     let air = |s| {
         sens::measure(s)
             .expect("runs")
@@ -37,5 +41,8 @@ fn on_air_denm_follows_the_repetition_duration() {
             .expect("DENMs went on the air")
     };
     let (b, v) = (air(base), air(short));
-    assert!(v < b, "a 0.5 s repetition sends fewer DENM copies: {b} -> {v}");
+    assert!(
+        v < b,
+        "a 0.5 s repetition sends fewer DENM copies: {b} -> {v}"
+    );
 }

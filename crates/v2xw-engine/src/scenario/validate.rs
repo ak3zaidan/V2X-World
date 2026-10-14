@@ -5284,8 +5284,20 @@ fn mac_queue_in_use(s: &Scenario, e: &mut Vec<ScenarioError>) {
         }
     };
     for (ac, fields) in [
-        ("vo", [("radio.mac.cw_min_vo", m.cw_min_vo), ("radio.mac.aifsn_vo", m.aifsn_vo)]),
-        ("vi", [("radio.mac.cw_min_vi", m.cw_min_vi), ("radio.mac.aifsn_vi", m.aifsn_vi)]),
+        (
+            "vo",
+            [
+                ("radio.mac.cw_min_vo", m.cw_min_vo),
+                ("radio.mac.aifsn_vo", m.aifsn_vo),
+            ],
+        ),
+        (
+            "vi",
+            [
+                ("radio.mac.cw_min_vi", m.cw_min_vi),
+                ("radio.mac.aifsn_vi", m.aifsn_vi),
+            ],
+        ),
     ] {
         if used(ac) {
             continue;
@@ -5373,7 +5385,7 @@ fn radio_tuning(s: &Scenario, e: &mut Vec<ScenarioError>) {
         }
     }
     mac_queue_in_use(s, e);
-    let dsrc =s.radio.rat == crate::scenario::schema::Rat::Dsrc80211p;
+    let dsrc = s.radio.rat == crate::scenario::schema::Rat::Dsrc80211p;
     if !dsrc && (!p.is_default() || !m.is_default()) {
         let path = if p.is_default() {
             "radio.mac"

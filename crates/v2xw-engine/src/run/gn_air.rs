@@ -161,7 +161,9 @@ pub(super) fn forwarding_config(g: &Geonet) -> ForwardingConfig {
 /// stationary-vehicle profile, `v2xw_node::events::STATIONARY_REPETITION_DURATION`). The
 /// schema default duration (5 000 ms, the overlay's) therefore keeps that 15 s, so
 /// existing runs do not change; any other value is used as given.
-pub(super) fn on_air_repetition(g: &Geonet) -> (v2xw_core::time::Duration, v2xw_core::time::Duration) {
+pub(super) fn on_air_repetition(
+    g: &Geonet,
+) -> (v2xw_core::time::Duration, v2xw_core::time::Duration) {
     use v2xw_core::time::Duration;
     let duration_ms = if g.repetition_duration_ms == Geonet::default().repetition_duration_ms {
         v2xw_node::events::STATIONARY_REPETITION_DURATION.as_nanos() / 1_000_000

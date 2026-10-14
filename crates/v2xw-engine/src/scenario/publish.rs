@@ -1069,8 +1069,9 @@ fn walk() -> (Value, Vec<Value>) {
     // settings window showed blanks and the sensitivity catalogue had no value to move
     // from. The loader's default is `Apps::default()`; publish that.
     if let Value::Object(m) = &mut defaults {
-        m.entry("apps")
-            .or_insert_with(|| serde_json::to_value(crate::scenario::Apps::default()).unwrap_or(Value::Null));
+        m.entry("apps").or_insert_with(|| {
+            serde_json::to_value(crate::scenario::Apps::default()).unwrap_or(Value::Null)
+        });
     }
     let registry = catalogue();
     let mut walk = Walk {

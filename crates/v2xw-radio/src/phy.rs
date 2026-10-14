@@ -676,7 +676,9 @@ impl OfdmPhy {
             .arrivals
             .range((node.index(), 0)..=(node.index(), u64::MAX))
             .map(|(_, a)| a)
-            .filter(|a| a.rx == node && a.frame.channel == ch && a.start <= started_by && at < a.end)
+            .filter(|a| {
+                a.rx == node && a.frame.channel == ch && a.start <= started_by && at < a.end
+            })
             .map(|a| (a.tx, numeric::dbm_to_mw(a.power_dbm)))
             .collect();
         // A jammer's energy is energy: it makes carrier sense report a busy medium and it
