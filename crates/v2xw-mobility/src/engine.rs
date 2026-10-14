@@ -1802,15 +1802,28 @@ impl NativeMobility {
     /// How far a vehicle can stay on `lane` (one of its road's lanes) and still follow its
     /// route, metres: to the end of the lane when it cannot reach the route's next lane,
     /// else on along the route, up to SUMO's 3,000 m look-ahead (`MSVehicle::updateBestLanes`).
+    ///
+    /// As in SUMO's best-lanes, a lane continues the route when it connects to the route's
+    /// next *road*, on whichever of its lanes: the route's next lane is only the one its
+    /// present lane leads to, and a change re-plans the route from the new lane
+    /// ([`Self::resolve_lane_changes`]). Matching the exact next lane made every side lane
+    /// of a multi-lane street look like a dead end, so the 20 s remain-time rule refused
+    /// almost every speed-gain change on a street network.
     fn lane_route_dist(&self, world: &World, actor: &Actor, lane: LaneId) -> (f64, bool) {
         let rem = (world.lane(lane).length_m - actor.s_m).max(0.0);
-        let Some(&next) = actor.route.lanes.get(actor.route_index + 1) else {
+        let Some(next_edge) = actor.route.lanes
+            [(actor.route_index + 1).min(actor.route.lanes.len())..]
+            .iter()
+            .filter_map(|l| world.try_lane(*l))
+            .find(|l| l.kind != LaneKind::Internal)
+            .map(|l| l.edge)
+        else {
             return (rem, true);
         };
         let reaches = world
             .successors(lane)
             .iter()
-            .any(|c| c.permitted && c.via.unwrap_or(c.to_lane) == next);
+            .any(|c| c.permitted && world.lane(c.to_lane).edge == next_edge);
         if !reaches {
             return (rem, false);
         }
@@ -1863,6 +1876,14 @@ impl NativeMobility {
     /// Whether a strategic change is due under LC2013: within the look-ahead
     /// ([`crate::lanechange::lc2013::Lc2013Params::look_ahead_m`]), or further out when the
     /// target lane is no slower than the own (`changeToBest`).
+    ///
+    /// As SUMO's `currentDistDisallows(usableDist, bestLaneOffset, laDist)`
+    /// (MSLCM_LC2013.cpp): the distance left is shortened by the vehicles already standing
+    /// on the target lane (`best.occupation · JAM_FACTOR`, `JAM_FACTOR` = 1) and shared
+    /// out over the lanes still to cross. Without the occupation a car slowing into the
+    /// queue at a red light had its look-ahead shrink to two car lengths and never made the
+    /// change before the no-change zone.
+    #[allow(clippy::too_many_arguments)]
     fn lc2013_strategic_due(
         &self,
         world: &World,
@@ -1871,6 +1892,7 @@ impl NativeMobility {
         actor: &Actor,
         ego: &VehicleView,
         nbrs: &LaneNeighbors,
+        occupation: &BTreeMap<LaneId, f64>,
     ) -> bool {
         use crate::lanechange::lc2013::{DECEL_MPS2, lane_v_safe};
         let (Some(target), Some(pending)) = (
@@ -1885,7 +1907,15 @@ impl NativeMobility {
             Side::Right
         };
         let la = p.look_ahead_m(st, ego.dims.length_m + ego.driver.min_gap_m, side);
-        if pending <= la {
+        let crossed = f64::from(
+            world
+                .lane(target)
+                .index
+                .abs_diff(world.lane(actor.lane).index)
+                .max(1),
+        );
+        let usable = pending - occupation.get(&target).copied().unwrap_or(0.0);
+        if usable / crossed < la {
             return true;
         }
         let lane = world.lane(actor.lane);
@@ -1914,7 +1944,7 @@ impl NativeMobility {
         nbrs: &LaneNeighbors,
         dt: f64,
     ) -> LaneChangeDecision {
-        use crate::lanechange::lc2013::{DECEL_MPS2, TAU_S, lane_v_safe};
+        use crate::lanechange::lc2013::{DECEL_MPS2, TAU_S, TURN_LANE_DIST_M, lane_v_safe};
         let lane = world.lane(actor.lane);
         let v_max = ego.driver.desired_speed_mps.min(lane.speed_limit_mps);
         let s0 = ego.driver.min_gap_m;
@@ -1998,15 +2028,48 @@ impl NativeMobility {
             right.map(|(o, _)| o),
             left.map(|(o, _)| o),
         );
-        match wanted {
-            Some((side, _))
-                if mobil
-                    .incentive(world, ego, nbrs, side, &self.weather)
-                    .is_some() =>
-            {
-                change(side)
+        let Some((side, _)) = wanted else {
+            return LaneChangeDecision::Stay;
+        };
+        // SUMO's strategic vetoes on a discretionary change (MSLCM_LC2013.cpp,
+        // `_wantsChange`): away from a lane change the route still needs only when there
+        // is room to come back (`currentDistDisallows(neighLeftPlace, |bestLaneOffset| + 2,
+        // laDist)`), and off a lane that keeps the route onto one that does not only when
+        // that lane runs on for `TURN_LANE_DIST` = 200 m and twice the look-ahead
+        // ("stayOnBest", "could not change back and forth in time (2)").
+        let len_gap = ego.dims.length_m + ego.driver.min_gap_m;
+        if let Some(target) = self.strategic_target(world, actor) {
+            let to_target = if world.lane(target).index > lane.index {
+                Side::Left
+            } else {
+                Side::Right
+            };
+            if side != to_target {
+                let crossed = f64::from(world.lane(target).index.abs_diff(lane.index).max(1));
+                let room = (lane.length_m - actor.s_m).max(0.0);
+                if room / (crossed + 2.0) < p.look_ahead_m(st, len_gap, to_target) {
+                    return LaneChangeDecision::Stay;
+                }
             }
-            _ => LaneChangeDecision::Stay,
+        } else {
+            let offer = match side {
+                Side::Left => left,
+                Side::Right => right,
+            };
+            if let Some((o, false)) = offer
+                && (o.dist_m < TURN_LANE_DIST_M
+                    || 2.0 * o.dist_m < p.look_ahead_m(st, len_gap, side))
+            {
+                return LaneChangeDecision::Stay;
+            }
+        }
+        if mobil
+            .incentive(world, ego, nbrs, side, &self.weather)
+            .is_some()
+        {
+            change(side)
+        } else {
+            LaneChangeDecision::Stay
         }
     }
 
@@ -5776,6 +5839,15 @@ impl Mobility for NativeMobility {
             let lc_params = self.params.lc2013;
             let lc_dt = self.params.step.as_secs_f64();
             let mut lc_updates: Vec<(ActorId, crate::lanechange::lc2013::Lc2013State)> = Vec::new();
+            // Each lane's brutto occupation (length plus minimum gap of the vehicles on it),
+            // SUMO's `LaneQ::occupation`, for LC2013's strategic urgency.
+            let mut lc_occupation: BTreeMap<LaneId, f64> = BTreeMap::new();
+            if lc_params.is_some() {
+                for a in self.actors.values() {
+                    *lc_occupation.entry(a.lane).or_default() +=
+                        a.class.spec().length_m + a.driver.min_gap_m;
+                }
+            }
             for decision in &mut decisions {
                 let Some(actor) = self.actors.get(&decision.actor) else {
                     continue;
@@ -5807,27 +5879,38 @@ impl Mobility for NativeMobility {
                 // It too keeps out of the no-change zone (MUTCD 2009 §3B.04's solid line):
                 // a driver who reaches the zone without a gap gives up and finds another
                 // way ([`Self::give_up_strategic`]).
+                // LC2013: further out than the look-ahead the change waits unless the
+                // target lane is no slower (`changeToBest`), and meanwhile the driver
+                // weighs discretionary changes as SUMO's `_wantsChange` goes on to do.
                 if self.along_path() && self.strategic_target(ctx.world(), actor).is_some() {
                     if let Some((ego, nbrs)) = neighbours.get(&decision.actor) {
-                        // LC2013: further out than the look-ahead the change waits unless
-                        // the target lane is no slower (`changeToBest`).
                         if let Some(p) = lc_params
                             && let Some(st) = lc_updates.last()
-                            && !self.lc2013_strategic_due(ctx.world(), &p, &st.1, actor, ego, nbrs)
+                            && !self.lc2013_strategic_due(
+                                ctx.world(),
+                                &p,
+                                &st.1,
+                                actor,
+                                ego,
+                                nbrs,
+                                &lc_occupation,
+                            )
                         {
+                        } else {
+                            if let Some(change) =
+                                self.strategic_change(ctx.world(), &mobil, actor, ego, nbrs)
+                            {
+                                decision.lane_change = change;
+                            } else if let Some(cap) =
+                                self.strategic_fall_back(ctx.world(), actor, ego, nbrs)
+                            {
+                                decision.accel_mps2 = decision.accel_mps2.min(cap);
+                            }
                             continue;
                         }
-                        if let Some(change) =
-                            self.strategic_change(ctx.world(), &mobil, actor, ego, nbrs)
-                        {
-                            decision.lane_change = change;
-                        } else if let Some(cap) =
-                            self.strategic_fall_back(ctx.world(), actor, ego, nbrs)
-                        {
-                            decision.accel_mps2 = decision.accel_mps2.min(cap);
-                        }
+                    } else {
+                        continue;
                     }
-                    continue;
                 }
                 // A vehicle making for its kerbside stop keeps to the kerb lane.
                 if actor.kerb.stop.is_some() {
