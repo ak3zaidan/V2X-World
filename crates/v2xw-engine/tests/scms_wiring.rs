@@ -11,6 +11,13 @@
 //!   library default and the same test fails (iCert 573).
 //! * `ScmsRun::new_at` building `ScmsPki::new` (its own P-384 root) again —
 //!   `the_pdu_pki_is_anchored_at_the_governance_root` fails on the root.
+//! * `Phase2::real_mbr` taking the evidence BSMs of another signer (the first in the
+//!   evidence map) — the MA's evidence check fails and
+//!   `detectors_file_real_us_reports_that_the_ma_opens_and_verifies` fails.
+//! * `Phase2::advance` without its `governance_due` call — the rollover is never
+//!   decided and `a_scheduled_root_rollover_is_decided_and_waits_for_its_sla` fails.
+//! * The report store drained in insertion order (lowest `seq` first) — the lib test
+//!   `phase2::report_store_tests` fails (the decayed older report comes out first).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -109,7 +116,10 @@ fn real_calendar_puts_the_real_i_on_the_air() {
             "validity start of i = {i}"
         );
     }
-    assert!(seen.iter().any(|(i, _)| *i == 614), "nobody signs in i = 614");
+    assert!(
+        seen.iter().any(|(i, _)| *i == 614),
+        "nobody signs in i = 614"
+    );
 }
 
 /// Joint (5): the PDU layer's Root CA and ICA are the governance entities' own, so the
@@ -140,9 +150,7 @@ fn the_pdu_pki_is_anchored_at_the_governance_root() {
     let id8 = |c| v2xw_sec::hashedid::id8_bytes(&v2xw_sec::cert::cert_id8(c).expect("id8"));
     let issuer = |c: &v2xw_msg::sec_types::ieee1609_dot2::Certificate| match &c.0.issuer {
         v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(d)
-        | v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha384AndDigest(d) => {
-            d.0.to_vec()
-        }
+        | v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha384AndDigest(d) => d.0.to_vec(),
         other => panic!("issuer {other:?}"),
     };
     assert_eq!(issuer(&pki.ica.cert), id8(&pki.root.cert).to_vec());
@@ -159,4 +167,92 @@ fn the_pdu_pki_is_anchored_at_the_governance_root() {
             panic!("{name} does not validate up to the CTL root: {e:?}");
         }
     }
+}
+
+/// Joint (1): a vehicle's detector files a real US misbehaviour report (SM-MBR v1.1)
+/// whose evidence is the accused's own signed BSMs, the RA accepts its enrolment-signed
+/// upload, the MA decrypts it and verifies the evidence, and the revocation goes through
+/// the MA's decision mode (`request_revocation`; automatic here, `ma_review_s: 0`).
+#[test]
+fn detectors_file_real_us_reports_that_the_ma_opens_and_verifies() {
+    let mut s =
+        Scenario::load(root().join("scenarios").join("phase2-manhattan.yaml")).expect("loads");
+    if let v2xw_world::WorldSourceSpec::OsmXml { path, .. } = &mut s.world.source
+        && Path::new(path).is_relative()
+    {
+        *path = root().join(&*path).to_string_lossy().into_owned();
+    }
+    s.time.duration_s = 120.0;
+    // The RA's report shuffle closes after 5 s, so the late vehicle reports reach the MA
+    // inside the run (the shipped 60 s is itself a compression of one day).
+    if let Some(p) = s.security.protocol.as_mut() {
+        p.params["report_shuffle_window_s"] = serde_json::json!(5.0);
+    }
+    s.security.crypto_mode = serde_json::from_value(serde_json::json!("real")).expect("mode");
+    let mut engine = Engine::build(s, "").expect("builds");
+    let mut rec = MemoryRecorder::new();
+    let report = engine.run(&mut rec).expect("runs");
+    let p = &report.phase2;
+    println!(
+        "{:?} cell {} relay {} rsu {} real {} unmapped {} unsecured {} sent {} at_ma {} cases {}",
+        p.reports_mbr_unsecured_by,
+        p.reports_uploaded_cellular,
+        p.reports_uploaded_relay,
+        p.reports_from_rsus,
+        p.reports_mbr_real,
+        p.reports_mbr_unmapped,
+        p.reports_mbr_unsecured,
+        p.reports_sent,
+        p.reports_at_ma,
+        p.cases_opened
+    );
+    assert!(p.reports_mbr_real > 0, "no real US report was filed");
+    let st = &engine.phase2().expect("phase 2").scms().state;
+    assert!(
+        st.pdu_rejections.is_empty(),
+        "the backend refused: {:?}",
+        st.pdu_rejections
+    );
+    assert!(!st.ma.opened_reports.is_empty(), "the MA opened no report");
+    for o in &st.ma.opened_reports {
+        assert!(
+            o.evidence_verified,
+            "evidence does not verify: {:?}",
+            o.report.subtypes
+        );
+        assert_eq!(
+            o.report.mbr_type,
+            v2xw_proto::scms::mbr::MbrType::OneVInconsistent
+        );
+    }
+    assert!(p.cases_opened > 0, "the MA opened no case");
+}
+
+/// Joint (4): an EAC root rollover scheduled in the run is decided at its time, and its
+/// CTL waits for the SLA publication deadline.
+///
+/// Independent derivation: `time.t0` 2026-10-16T12:00:00Z is a Friday; a root addition
+/// decided at t = 1 s must be published within 3 business days (Provider Req. v1.1
+/// §3.4.11): Monday, Tuesday, Wednesday, so at 1 s + 5 days. The genesis CTL stays the
+/// published one for the whole (short) run.
+#[test]
+fn a_scheduled_root_rollover_is_decided_and_waits_for_its_sla() {
+    let mut s = load("phase2-manhattan.yaml", 3.0);
+    s.time.t0 = "2026-10-16T12:00:00Z".into();
+    if let Some(p) = s.security.protocol.as_mut() {
+        p.params["root_rollover_at_s"] = serde_json::json!(1.0);
+    }
+    let mut engine = Engine::build(s, "").expect("builds");
+    let mut rec = MemoryRecorder::new();
+    let report = engine.run(&mut rec).expect("runs");
+    assert_eq!(
+        report.phase2.gov_decisions, 1,
+        "the rollover was not decided"
+    );
+    assert_eq!(report.phase2.ctls_published, 0);
+    let gov = &engine.phase2().expect("phase 2").scms().state.gov;
+    assert_eq!(gov.counters.roots_added, 1);
+    assert_eq!(gov.ctl.sequence, 0, "published before its deadline");
+    let pending: Vec<(u64, u32)> = gov.pending.iter().map(|(t, c)| (*t, c.sequence)).collect();
+    assert_eq!(pending, vec![((5 * 86_400 + 1) * 1_000_000_000, 1)]);
 }

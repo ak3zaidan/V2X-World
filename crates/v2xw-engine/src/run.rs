@@ -6732,6 +6732,13 @@ impl Engine {
         // Not a record: nothing recorded, counted or digested changes.
         if let Some(spdu) = state.spdu.as_deref() {
             recorder.tap_frame(self.scheduler.now(), state.tx, frame_index, spdu);
+            // A signed BSM is what a misbehaviour report about its certificate attaches.
+            if state.msg_type == v2xw_msg::MsgType::Bsm
+                && let Some(p) = self.phase2.as_mut()
+                && let Ok(signer) = <[u8; 8]>::try_from(&state.signer.0[..])
+            {
+                p.note_signed_bsm(signer, spdu);
+            }
         }
         self.emit(recorder, &tx_record);
     }
@@ -6991,8 +6998,17 @@ impl Engine {
                     }
                 };
                 self.emit(recorder, &trace);
+                let location = self.report_location(reporter);
                 if let Some(phase2) = self.phase2.as_mut() {
-                    phase2.report_at_proxy(*report, reporter, detected_at, sent_at, now, transport);
+                    phase2.report_at_proxy(
+                        *report,
+                        reporter,
+                        detected_at,
+                        sent_at,
+                        now,
+                        transport,
+                        location,
+                    );
                 }
             }
             Transfer::Crl {
@@ -7179,7 +7195,7 @@ impl Engine {
             let reports = self
                 .phase2
                 .as_mut()
-                .map(|p| p.take_outbox(node))
+                .map(|p| p.take_outbox(node, now))
                 .unwrap_or_default();
             for (report, detected) in reports {
                 self.route_report(node, report, detected, now, horizon);
@@ -7600,6 +7616,21 @@ impl Engine {
         }
         let rec = NetBytes::new(t, id, bucket, bytes, node);
         self.emit(recorder, &rec);
+    }
+
+    /// A report's `generationLocation`: the reporter's position as a 1609.2
+    /// `ThreeDLocation` (tenths of a microdegree; elevation in decimetres + 4095, the
+    /// node layer's `elevation_1609`).
+    fn report_location(&self, node: NodeId) -> v2xw_sec::envelope::GenerationLocation {
+        let origin: v2xw_core::geo::GeoOrigin = self.world.origin.into();
+        let pos = self.actor_of(node).map_or(Vec3::ZERO, |a| a.last.pos);
+        let (lat, lon, alt) = origin.to_geodetic(pos);
+        let tenth_micro = |deg: f64, lim: f64| (deg.clamp(-lim, lim) * 1e7).round() as i32;
+        v2xw_sec::envelope::GenerationLocation {
+            lat_tenth_microdeg: tenth_micro(lat, 90.0),
+            lon_tenth_microdeg: tenth_micro(lon, 180.0),
+            elevation: ((alt * 10.0).round() + 4_095.0).clamp(0.0, 65_534.0) as u16,
+        }
     }
 
     /// Sends one misbehaviour report over the reporter's backend access, or holds it.

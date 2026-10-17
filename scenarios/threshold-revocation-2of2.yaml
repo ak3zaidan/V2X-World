@@ -129,6 +129,9 @@ security:
       # default), compressed with the lifetime.
       reenrol_download_delay_s: 2
       report_shuffle_window_s: 30
+      # The MA operator's review before a revocation (CV-pilot manual MA, 8 h, an
+      # assumption) -> 0, the automatic MA, as this run compresses the report path.
+      ma_review_s: 0
       crl_cadence_s: 30
       crl_fetch_interval_s: 30
 

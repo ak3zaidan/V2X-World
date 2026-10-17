@@ -570,6 +570,14 @@ pub fn sign_bsm(
     .map_err(|e| PduError::Coer(e.to_string()))
 }
 
+/// A signed BSM as received (COER `Ieee1609Dot2Data`), for a report's evidence.
+///
+/// # Errors
+/// The octets are not one COER `Ieee1609Dot2Data`.
+pub fn decode_signed_bsm(spdu: &[u8]) -> Result<Ieee1609Dot2Data> {
+    rasn::coer::decode::<Ieee1609Dot2Data>(spdu).map_err(|e| PduError::Coer(e.to_string()))
+}
+
 fn header(psid: u64, t_us: u64) -> v2xw_msg::sec_types::ieee1609_dot2::HeaderInfo {
     let mut h = sig1609::header_psid_only(psid);
     h.generation_time = Some(Time64(Uint64(t_us)));
