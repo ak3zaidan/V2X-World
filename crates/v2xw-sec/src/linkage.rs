@@ -123,6 +123,12 @@ impl LinkageSeed {
 pub struct PreLinkageValue([u8; PLV_BYTES]);
 
 impl PreLinkageValue {
+    /// A pre-linkage value from its 9 bytes, as the ACA recovers it from an
+    /// `EncryptedIndividualPLV` (IEEE 1609.2.1 `AcaRaInterface`).
+    pub const fn from_bytes(bytes: [u8; PLV_BYTES]) -> PreLinkageValue {
+        PreLinkageValue(bytes)
+    }
+
     /// The value's bytes.
     pub const fn as_bytes(&self) -> &[u8; PLV_BYTES] {
         &self.0

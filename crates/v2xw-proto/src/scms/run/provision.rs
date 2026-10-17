@@ -7,6 +7,7 @@
 use super::*;
 
 use crate::scms::pdu::{self, Pdu, PduError, RequestSigner, SpduKind};
+use crate::scms::pdu_prov;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::EeRaInterfacePdu;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPduContent;
 
@@ -69,7 +70,17 @@ impl ScmsRun {
                 .checkout(RngDomain::Crypto, EntityRef::Node(device));
             g.fill_bytes(&mut seed);
         }
-        let cat = Caterpillar::from_seed(&seed).expect("64 bytes of seed");
+        let fresh = Caterpillar::from_seed(&seed).expect("64 bytes of seed");
+        // A top-up keeps the device's caterpillar: the butterfly keys are made once and the
+        // RA expands every later period from the same A, ck, H, ek (1609.2.1 §9.3; 03 §6.4
+        // "request once"). A fresh caterpillar here orphaned every certificate already
+        // installed: the device could no longer derive their keys (WP-B3a NYC test). The
+        // seed is still drawn so no other stream shifts.
+        let cat = match (flow, self.state.devices.get(&device).and_then(|d| d.caterpillar.clone()))
+        {
+            (FlowId::Topup, Some(c)) => c,
+            _ => fresh,
+        };
         let request = ProvisioningRequest {
             // Filled by the device when it signs the request (see its handler).
             enrolment: None,
@@ -252,7 +263,7 @@ impl ScmsState {
     fn ra_ack_pdu(&mut self, request_hash8: [u8; 8], start_i: u32, at: SimTime) -> Option<Pdu> {
         let pki = self.pki.clone()?;
         let t = self.time32(at);
-        let next = self.time32(self.params.first_batch_delay.after(at));
+        let next = self.time32(self.next_download_at(at));
         let first_i = u16::try_from(start_i).unwrap_or(u16::MAX);
         let ack = pdu::ra_ee_cert_ack(t, request_hash8, first_i, next);
         Some(Pdu::new(pdu::signed(&ack, &pki.ra.cert, &pki.ra.key).ok()?))
@@ -277,7 +288,49 @@ impl ScmsState {
         Ok(())
     }
 
+    /// Device side: the `EeRaDownloadRequestSpdu` naming `<requestHash>_<i>.zip`, or
+    /// `None` when the layer is off or the device has no real enrolment credential.
+    fn ee_download_request_pdu(&mut self, device: NodeId, i: u32, at: SimTime) -> Option<Pdu> {
+        let pki = self.pki.clone()?;
+        let d = self.devices.get(&device)?;
+        let cred = d.enrolment_credential.clone()?;
+        let name = pdu::batch_filename(d.request_hash8?, i);
+        let t = self.time32(at);
+        pdu_prov::ee_download_request_spdu(&pki, &cred.cert, &cred.key, t, &name, &mut self.pdu_rng)
+            .ok()
+    }
+
+    /// When the RA tells a device to come for its first batch (`RaEeCertAck.nextDlTime`,
+    /// 03 §3.3): no earlier than `first_batch_delay` after the ack, and no earlier than the
+    /// latest the request shuffle can close (the armed batch's deadline, or a whole window
+    /// from now). A device that polled before the shuffle's age could close would spend
+    /// its `download-maxReqs` polls on a 2-day CAMP 1.2.2 window and give up.
+    pub(super) fn next_download_at(&self, at: SimTime) -> SimTime {
+        let release = if self.ra.shuffle_armed {
+            self.ra.shuffle_deadline.max(at)
+        } else {
+            self.params.shuffle_window.after(at)
+        };
+        self.params.first_batch_delay.after(at).max(release)
+    }
+
+    /// `nextDlTime` of a (verified) ack.
+    fn ack_next_dl(&self, ack: &Pdu) -> Option<u32> {
+        let pki = self.pki.clone()?;
+        let (p, _) = pdu::open_signed_pdu(ack.bytes(), &pki).ok()?;
+        let ScmsPduContent::ee_ra(EeRaInterfacePdu::raEeCertAck(a)) = p.content else {
+            return None;
+        };
+        Some(a.next_dl_time.0.0)
+    }
+
+    /// From `at` to the `Time32` `t` (zero if already past).
+    fn wait_until_time32(&self, at: SimTime, t: u32) -> Duration {
+        Duration::from_secs(u64::from(t.saturating_sub(self.time32(at))))
+    }
+
     /// The PCA's answer to the RA: the certified batch.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn send_batch(
         &mut self,
         device: NodeId,
@@ -285,6 +338,7 @@ impl ScmsState {
         credentials: Vec<IssuedCredential>,
         flow: FlowId,
         run: FlowRun,
+        at: SimTime,
         out: &mut Outbox<ScmsMsg>,
     ) {
         let n = self.nodes;
@@ -292,6 +346,23 @@ impl ScmsState {
         if self.pca.certified_runs.insert(run) {
             out.stage_at(StageId::Certified, n.pca, None, flow, run);
         }
+        // The real path: one `AcaRaCertResponseSpdu` per certificate, charged its bytes.
+        let mut real = 0u32;
+        let mut any = false;
+        for c in &credentials {
+            if let Some(p) = &c.response {
+                any = true;
+                real = real.saturating_add(
+                    self.emit_pdu(SpduKind::AcaRaCertResponse, n.pca, n.ra, at, p)
+                        .bytes(),
+                );
+            }
+        }
+        let size = if any {
+            WireSize::real(real, "AcaRaCertResponseSpdu x n")
+        } else {
+            self.sizes.cert_batch(count)
+        };
         out.send(
             n.ra,
             ScmsMsg::CertResponse {
@@ -300,7 +371,7 @@ impl ScmsState {
                 credentials: Box::new(credentials),
             },
             "cert-response",
-            self.sizes.cert_batch(count),
+            size,
             Transport::BackendNet,
             flow,
             run,
@@ -316,10 +387,13 @@ impl ScmsState {
         out: &mut Outbox<ScmsMsg>,
         n: ScmsNodes,
         to: NodeId,
+        at: SimTime,
     ) {
         self.ra.shuffle_armed = false;
         self.ra.shuffle_generation += 1;
         let jobs = core::mem::take(&mut self.ra.jobs);
+        let pki = self.pki.clone();
+        let now32 = self.time32(at);
         let mut still_waiting = Vec::new();
         for mut job in jobs {
             if job.responses < 2 || job.sent {
@@ -340,6 +414,33 @@ impl ScmsState {
                     ) else {
                         continue;
                     };
+                    // The real `RaAcaCertRequestSpdu`: B_ij, J_ij, both encrypted PLVs and a
+                    // dummy linkage value, signed by the RA (03 §3.3, §9).
+                    let spdu = match (
+                        pki.as_deref(),
+                        job.cocoon_enc.get(&(i, j)),
+                        job.enc_plv[0].get(&(i, j)),
+                        job.enc_plv[1].get(&(i, j)),
+                    ) {
+                        (Some(pki), Some(jk), Some(e1), Some(e2)) => {
+                            let mut dummy = [0u8; 9];
+                            dummy.copy_from_slice(&self.pdu_rng.next32()[..9]);
+                            let x = pdu_prov::RaAcaInput {
+                                generation_time: now32,
+                                i: u16::try_from(i).unwrap_or(u16::MAX),
+                                cocoon_signing: b,
+                                cocoon_encryption: *jk,
+                                plv: [e1.clone(), e2.clone()],
+                                valid_from: self.time32(self.params.period_start(i)),
+                                dummy_lv: dummy,
+                            };
+                            pdu_prov::ra_aca_cert_request_spdu(pki, &x).ok()
+                        }
+                        _ => None,
+                    };
+                    if let Some(p) = &spdu {
+                        job.aca_requests.insert(p.hashed_id8(), (i, j));
+                    }
                     items.push(CertRequestItem {
                         i,
                         j,
@@ -349,9 +450,28 @@ impl ScmsState {
                         lci1: SealedForPca::seal(l1),
                         lci2: SealedForPca::seal(l2),
                         request_hash: job.request_hash,
+                        spdu,
                     });
                 }
                 let count = u32::try_from(items.len()).unwrap_or(u32::MAX);
+                let mut real = 0u32;
+                let mut signed = 0u32;
+                for it in &items {
+                    if let Some(p) = &it.spdu {
+                        signed += 1;
+                        real = real.saturating_add(
+                            self.emit_pdu(SpduKind::RaAcaCertRequest, to, n.pca, at, p)
+                                .bytes(),
+                        );
+                    }
+                }
+                // The RA signs every request it forwards.
+                Self::sign(out, signed);
+                let size = if signed > 0 {
+                    WireSize::real(real, "RaAcaCertRequestSpdu x n")
+                } else {
+                    self.sizes.cert_request_for(count)
+                };
                 out.send(
                     n.pca,
                     ScmsMsg::CertRequest {
@@ -360,7 +480,7 @@ impl ScmsState {
                         items: Box::new(items),
                     },
                     "cert-request",
-                    self.sizes.cert_request_for(count),
+                    size,
                     Transport::BackendNet,
                     job.flow,
                     job.run,
@@ -564,9 +684,10 @@ impl ScmsState {
                     Self::scalar_mults(out, 2 * total);
                 }
                 let mut cocoons = BTreeMap::new();
+                let mut cocoon_enc = BTreeMap::new();
                 for i in req.start_i..req.start_i + req.periods {
                     for j in 0..req.jmax {
-                        let (b, _q) = butterfly::ra_cocoon_keys(
+                        let (b, q) = butterfly::ra_cocoon_keys(
                             &req.signing_public,
                             &req.encryption_public,
                             &req.ck,
@@ -575,6 +696,7 @@ impl ScmsState {
                             j,
                         );
                         cocoons.insert((i, j), b);
+                        cocoon_enc.insert((i, j), q);
                     }
                 }
                 out.stage_at(StageId::Expanded, to, None, flow, run);
@@ -588,7 +710,11 @@ impl ScmsState {
                     periods: req.periods,
                     jmax: req.jmax,
                     cocoons,
+                    cocoon_enc,
                     plv: [BTreeMap::new(), BTreeMap::new()],
+                    enc_plv: [BTreeMap::new(), BTreeMap::new()],
+                    aca_requests: BTreeMap::new(),
+                    request_hash8,
                     lci: [None, None],
                     responses: 0,
                     periods_certified: 0,
@@ -670,8 +796,8 @@ impl ScmsState {
             } => {
                 // The device verifies the RA's signature and that the ack answers the
                 // request it sent; an ack that does not is ignored, and recorded.
-                if let Some(p) = pdu {
-                    if let Err(e) = self.ee_check_ack(device, &p) {
+                if let Some(p) = &pdu {
+                    if let Err(e) = self.ee_check_ack(device, p) {
                         self.reject_pdu(SpduKind::RaEeCertAck, device, at, e);
                         return Ok(());
                     }
@@ -684,9 +810,18 @@ impl ScmsState {
                 {
                     p.periods = periods;
                 }
-                // The device now waits for the first batch time and polls the repository.
+                // The device now waits for the first batch time and polls the repository:
+                // `nextDlTime` from the ack on the real path (it read it from the bytes),
+                // the RA's same estimate on the modelled one.
+                let wait = match &pdu {
+                    Some(p) => self.ack_next_dl(p).map_or_else(
+                        || self.params.first_batch_delay,
+                        |t| self.wait_until_time32(at, t),
+                    ),
+                    None => Duration::from_nanos(self.next_download_at(at).saturating_sub(at)),
+                };
                 out.start_timer(
-                    self.params.first_batch_delay,
+                    wait,
                     ScmsMsg::BatchDownloadRequest {
                         device,
                         i: self
@@ -694,6 +829,7 @@ impl ScmsState {
                             .get(&device)
                             .and_then(|d| d.provisioning)
                             .map_or(0, |p| p.start_i),
+                        pdu: None,
                     },
                     flow,
                     run,
@@ -734,18 +870,50 @@ impl ScmsState {
                 Self::aes(out, periods.saturating_mul(jmax).saturating_mul(2));
 
                 let mut values = Vec::new();
+                let mut encrypted = Vec::new();
+                // The real path: each PLV sealed with AES-128-CCM under the key this LA
+                // shares with the ACA (`EncryptedIndividualPLV`, 02 §10.3).
+                let seal = match (self.pki.is_some(), self.la_aca) {
+                    (true, Some(k)) => Some(k.current(la_id.0, self.time32(at))),
+                    _ => None,
+                };
                 for i in start_i..start_i + periods {
                     let ls_i = linkage::linkage_seed_at(la_id, ls0, i);
                     for j in 0..jmax {
-                        values.push((
-                            i,
-                            j,
-                            SealedForPca::seal(linkage::pre_linkage_value(la_id, ls_i, j)),
-                        ));
+                        let plv = linkage::pre_linkage_value(la_id, ls_i, j);
+                        if let Some(key) = &seal {
+                            if let Ok(e) = pdu_prov::encrypted_individual_plv(
+                                la_id.0,
+                                &plv,
+                                key,
+                                &mut self.pdu_rng,
+                            ) {
+                                encrypted.push(e);
+                            }
+                        }
+                        values.push((i, j, SealedForPca::seal(plv)));
                     }
                 }
                 let count = u32::try_from(values.len()).unwrap_or(u32::MAX);
                 self.la[idx].plv_issued += u64::from(count);
+                let size = if encrypted.is_empty() {
+                    self.sizes.pre_linkage_response(count)
+                } else {
+                    // Per PLV: the data key wrapped (16 B: 2⌈16/16⌉+2 = 4 AES calls) and
+                    // the 9-byte value (4 calls), CCM as C4 prices it.
+                    Self::aes(out, count.saturating_mul(8));
+                    let mut real = 0u32;
+                    for e in &encrypted {
+                        if let Ok(b) = pdu_prov::encode_plv(e) {
+                            let p = Pdu::new(b);
+                            real = real.saturating_add(
+                                self.emit_pdu(SpduKind::EncryptedIndividualPlv, to, n.ra, at, &p)
+                                    .bytes(),
+                            );
+                        }
+                    }
+                    WireSize::real(real, "EncryptedIndividualPLV x n")
+                };
                 out.send(
                     n.ra,
                     ScmsMsg::PreLinkageResponse(Box::new(PreLinkageBatch {
@@ -753,9 +921,10 @@ impl ScmsState {
                         la_id,
                         lci,
                         values,
+                        encrypted,
                     })),
                     "pre-linkage-response",
-                    self.sizes.pre_linkage_response(count),
+                    size,
                     Transport::BackendNet,
                     flow,
                     run,
@@ -770,8 +939,15 @@ impl ScmsState {
                 };
                 let idx = batch.la.idx();
                 job.lci[idx] = Some(batch.lci);
+                let real = batch.encrypted.len() == batch.values.len();
+                let mut enc = batch.encrypted.into_iter();
                 for (i, j, plv) in batch.values {
                     job.plv[idx].insert((i, j), plv);
+                    if real {
+                        if let Some(e) = enc.next() {
+                            job.enc_plv[idx].insert((i, j), e);
+                        }
+                    }
                 }
                 job.responses += 1;
                 let hash = job.request_hash;
@@ -790,10 +966,11 @@ impl ScmsState {
                         .filter(|j| j.responses >= 2 && !j.sent)
                         .count();
                     if waiting >= self.params.shuffle_threshold as usize {
-                        // The count closes this batch before the day does.
-                        self.release_request_shuffle(out, n, to);
+                        // The count closes this batch before the window does.
+                        self.release_request_shuffle(out, n, to, at);
                     } else if !self.ra.shuffle_armed {
                         self.ra.shuffle_armed = true;
+                        self.ra.shuffle_deadline = self.params.shuffle_window.after(at);
                         out.start_timer(
                             self.params.shuffle_window,
                             ScmsMsg::ShuffleTimer {
@@ -807,11 +984,97 @@ impl ScmsState {
             }
             ScmsMsg::ShuffleTimer { generation } => {
                 if generation == self.ra.shuffle_generation {
-                    self.release_request_shuffle(out, n, to);
+                    self.release_request_shuffle(out, n, to, at);
                 }
             }
             ScmsMsg::CertRequest { device, i, items } => {
                 let count = u32::try_from(items.len()).unwrap_or(u32::MAX);
+                let real = self.pki.is_some() && items.iter().all(|it| it.spdu.is_some());
+                if real {
+                    // The real path (WP-B3a): the ACA reads only the RA-signed request.
+                    // Per certificate: verify the RA's signature, two AES-CCM PLV
+                    // decryptions (8 AES calls each, as the LA's sealing), one ECQV
+                    // issuance, one ECIES encryption to J_ij, and two signatures (the
+                    // private response and the AcaRaCertResponse around it).
+                    Self::verify(out, count);
+                    Self::aes(out, count.saturating_mul(16));
+                    Self::scalar_mults(out, count);
+                    Self::encrypt(out, count);
+                    // A committee ACA signs through its session instead (below).
+                    let committee = self.committees.role("pca");
+                    if committee.is_none() {
+                        Self::sign(out, count.saturating_mul(2));
+                    }
+                    let pki = self.pki.clone().expect("checked");
+                    let keys = self.la_aca.unwrap_or(pdu_prov::LaAcaKeys::new(0, 0));
+                    let now32 = self.time32(at);
+                    let mut credentials = Vec::new();
+                    for item in items.into_iter() {
+                        let (Some(lci1), Some(lci2)) =
+                            (item.lci1.open(to, n.pca), item.lci2.open(to, n.pca))
+                        else {
+                            return Err(ProtoError::Flow {
+                                flow: "provisioning",
+                                detail: "only the PCA may open a sealed chain identifier".into(),
+                            });
+                        };
+                        let spdu = item.spdu.expect("checked");
+                        match pdu_prov::aca_issue(&pki, &keys, spdu.bytes(), now32, &mut self.pdu_rng)
+                        {
+                            Ok(iss) => {
+                                self.pca.issued.insert(
+                                    (u32::from(iss.i), *iss.lv.as_bytes()),
+                                    PcaLookup {
+                                        lci1,
+                                        lci2,
+                                        request_hash: item.request_hash,
+                                    },
+                                );
+                                self.pca.issued_count += 1;
+                                // A carrier for the response: the RA reads only
+                                // `response`; the device derives everything else.
+                                credentials.push(IssuedCredential {
+                                    i: u32::from(iss.i),
+                                    j: item.j,
+                                    lv: iss.lv,
+                                    certified_public: item.cocoon_signing,
+                                    c: p256::Scalar::ZERO,
+                                    response: Some(iss.to_ra),
+                                    implicit: None,
+                                });
+                            }
+                            Err(e) => self.reject_pdu(SpduKind::RaAcaCertRequest, to, at, e),
+                        }
+                    }
+                    if let Some(role) = committee {
+                        // Two committee signatures per certificate (the private response
+                        // and the AcaRaCertResponse). The SPDUs carry the single ACA key's
+                        // signature as a stand-in for the threshold one (same length,
+                        // P-256 ECDSA).
+                        let n_sig = u32::try_from(credentials.len())
+                            .unwrap_or(u32::MAX)
+                            .saturating_mul(2);
+                        self.committees.start(
+                            role,
+                            n_sig,
+                            Pending::IssueBatch {
+                                device,
+                                i,
+                                credentials: Box::new(credentials),
+                                flow,
+                                run,
+                            },
+                            at,
+                            flow,
+                            run,
+                            out,
+                            wrap_committee,
+                        );
+                        return Ok(());
+                    }
+                    self.send_batch(device, i, credentials, flow, run, at, out);
+                    return Ok(());
+                }
                 // Per certificate: two decryptions of the pre-linkage values, one ECQV
                 // issuance, one encryption to the device and one signature (05-protocols
                 // §3.2). The decryptions and the encryption are ECIES scalar
@@ -870,6 +1133,8 @@ impl ScmsState {
                         lv,
                         certified_public,
                         c,
+                        response: None,
+                        implicit: None,
                     });
                 }
                 if let Some(role) = committee {
@@ -894,18 +1159,50 @@ impl ScmsState {
                     );
                     return Ok(());
                 }
-                self.send_batch(device, i, credentials, flow, run, out);
+                self.send_batch(device, i, credentials, flow, run, at, out);
             }
             ScmsMsg::CertResponse {
                 device,
                 i,
                 credentials,
             } => {
-                self.ra
-                    .repos
-                    .entry(device)
-                    .or_default()
-                    .insert(i, *credentials);
+                // The real path: the RA verifies each ACA-signed answer, routes it by the
+                // request hash to the `(i, j)` it kept, and files the private response as
+                // `i_j` in `<requestHash>_<i>.zip`. It cannot open what it files.
+                let mut batch = RepoBatch::default();
+                let pki = self.pki.clone();
+                let job = self.ra.jobs.iter().position(|j| j.run == run);
+                let mut opened = 0u32;
+                for c in credentials.into_iter() {
+                    match (&c.response, pki.as_deref()) {
+                        (Some(resp), Some(pki)) => {
+                            opened += 1;
+                            match pdu_prov::ra_open_aca_response(pki, resp.bytes()) {
+                                Ok((rh, private)) => {
+                                    let ij = job.and_then(|k| {
+                                        self.ra.jobs[k].aca_requests.get(&rh).copied()
+                                    });
+                                    match ij {
+                                        Some((ii, jj)) if ii == i => {
+                                            batch.files.push((jj, private));
+                                        }
+                                        _ => self.ra.unrouted_responses += 1,
+                                    }
+                                }
+                                Err(e) => {
+                                    self.reject_pdu(SpduKind::AcaRaCertResponse, to, at, e);
+                                }
+                            }
+                        }
+                        _ => batch.modelled.push(c),
+                    }
+                }
+                Self::verify(out, opened);
+                batch.files.sort_by_key(|(j, _)| *j);
+                if let Some(h) = job.and_then(|k| self.ra.jobs[k].request_hash8) {
+                    batch.name = pdu::batch_filename(h, i);
+                }
+                self.ra.repos.entry(device).or_default().insert(i, batch);
                 // `batch_ready` is the first moment the repository holds something the
                 // device can fetch, not the last: a device that polls early downloads the
                 // first i-period while later ones are still being certified, and a stage
@@ -924,38 +1221,103 @@ impl ScmsState {
                     self.ra.jobs.retain(|j| j.run != run);
                 }
             }
-            ScmsMsg::BatchDownloadRequest { device, i } if to == device => {
+            ScmsMsg::BatchDownloadRequest { device, i, .. } if to == device => {
+                // The real `EeRaDownloadRequestSpdu`: the file name, signed by the
+                // enrolment certificate, encrypted to the RA.
+                let pdu = self.ee_download_request_pdu(device, i, at);
+                if pdu.is_some() {
+                    Self::sign(out, 1);
+                    Self::scalar_mults(out, 1);
+                }
+                let size = match &pdu {
+                    Some(p) => self.emit_pdu(SpduKind::EeRaDownloadRequest, device, n.lop, at, p),
+                    None => self.sizes.batch_download_request(),
+                };
                 out.send(
                     n.lop,
-                    ScmsMsg::BatchDownloadRequest { device, i },
+                    ScmsMsg::BatchDownloadRequest { device, i, pdu },
                     "batch-download-request",
-                    self.sizes.batch_download_request(),
+                    size,
                     Transport::CellularUu,
                     flow,
                     run,
                 );
             }
-            ScmsMsg::BatchDownloadRequest { device, i } if to == n.lop => {
+            ScmsMsg::BatchDownloadRequest { device, i, pdu } if to == n.lop => {
                 self.lop.upstream += 1;
+                let size = match &pdu {
+                    Some(p) => self.emit_pdu(SpduKind::EeRaDownloadRequest, to, n.ra, at, p),
+                    None => self.sizes.batch_download_request(),
+                };
                 out.send(
                     n.ra,
-                    ScmsMsg::BatchDownloadRequest { device, i },
+                    ScmsMsg::BatchDownloadRequest { device, i, pdu },
                     "batch-download-request-proxied",
-                    self.sizes.batch_download_request(),
+                    size,
                     Transport::BackendNet,
                     flow,
                     run,
                 );
             }
-            ScmsMsg::BatchDownloadRequest { device, i } => {
-                let credentials = self
+            ScmsMsg::BatchDownloadRequest { device, i, pdu } => {
+                // The RA opens the request and serves the file it names, from the folder
+                // of the request hash in that name.
+                if let (Some(p), Some(pki)) = (&pdu, self.pki.clone()) {
+                    Self::decrypt(out, 1);
+                    Self::verify(out, 1);
+                    let tol = u32::try_from(self.params.download_request_tolerance.as_nanos() / 1_000_000_000)
+                        .unwrap_or(u32::MAX);
+                    match pdu_prov::ra_open_download_request(&pki, p.bytes(), self.time32(at), tol) {
+                        Ok(o) => {
+                            let held = self
+                                .ra
+                                .repos
+                                .get(&device)
+                                .and_then(|r| r.get(&i))
+                                .map(|b| b.name.clone());
+                            let expected = self
+                                .devices
+                                .get(&device)
+                                .and_then(|d| d.request_hash8)
+                                .map(|h| pdu::batch_filename(h, i));
+                            if held.is_some_and(|h| !h.is_empty() && h != o.filename)
+                                || expected.is_some_and(|e| e != o.filename)
+                            {
+                                self.reject_pdu(
+                                    SpduKind::EeRaDownloadRequest,
+                                    to,
+                                    at,
+                                    PduError::Shape("filename names another device's batch"),
+                                );
+                                return Ok(());
+                            }
+                        }
+                        Err(e) => {
+                            self.reject_pdu(SpduKind::EeRaDownloadRequest, to, at, e);
+                            return Ok(());
+                        }
+                    }
+                }
+                let batch = self
                     .ra
                     .repos
                     .get(&device)
                     .and_then(|r| r.get(&i))
                     .cloned()
                     .unwrap_or_default();
+                let files = batch.files;
+                let credentials = batch.modelled;
                 let count = u32::try_from(credentials.len()).unwrap_or(u32::MAX);
+                let size = if files.is_empty() {
+                    self.sizes.batch_download(count)
+                } else {
+                    let mut entries = Vec::with_capacity(files.len());
+                    for (j, p) in &files {
+                        self.emit_pdu(SpduKind::AcaEeCertResponsePrivate, to, n.lop, at, p);
+                        entries.push((pdu_prov::batch_entry_name(i, *j), p.len()));
+                    }
+                    WireSize::real(pdu_prov::stored_zip_len(&entries), "batch zip (stored)")
+                };
                 // The batch file travels back through the proxy, encrypted end to end: each
                 // certificate to the device's butterfly encryption key, which neither the
                 // RA nor the LOP holds.
@@ -965,9 +1327,10 @@ impl ScmsState {
                         device,
                         i,
                         credentials: Box::new(credentials),
+                        files: Box::new(files),
                     },
                     "batch-download",
-                    self.sizes.batch_download(count),
+                    size,
                     Transport::BackendNet,
                     flow,
                     run,
@@ -977,18 +1340,29 @@ impl ScmsState {
                 device,
                 i,
                 credentials,
+                files,
             } if to == n.lop => {
                 self.lop.downstream += 1;
                 let count = u32::try_from(credentials.len()).unwrap_or(u32::MAX);
+                let size = if files.is_empty() {
+                    self.sizes.batch_download(count)
+                } else {
+                    let entries: Vec<(String, u32)> = files
+                        .iter()
+                        .map(|(j, p)| (pdu_prov::batch_entry_name(i, *j), p.len()))
+                        .collect();
+                    WireSize::real(pdu_prov::stored_zip_len(&entries), "batch zip (stored)")
+                };
                 out.send(
                     device,
                     ScmsMsg::BatchDownload {
                         device,
                         i,
                         credentials,
+                        files,
                     },
                     "batch-download-proxied",
-                    self.sizes.batch_download(count),
+                    size,
                     Transport::CellularUu,
                     flow,
                     run,
@@ -998,9 +1372,47 @@ impl ScmsState {
                 device,
                 i,
                 credentials,
+                files,
             } => {
                 let poll = self.params.download_poll_interval;
                 let cap = self.params.max_download_polls;
+                // The real path: open every `i_j` with h_ij, check the issuing ACA signed
+                // it, and derive d = e·b_ij + r against e·P_U + Q_ACA. A file that fails
+                // is refused and recorded; the rest install.
+                let mut credentials = *credentials;
+                if !files.is_empty() {
+                    let pki = self.pki.clone();
+                    let cat = self.devices.get(&device).and_then(|d| d.caterpillar.clone());
+                    let n_files = u32::try_from(files.len()).unwrap_or(u32::MAX);
+                    Self::verify(out, n_files);
+                    Self::decrypt(out, n_files);
+                    if let (Some(pki), Some(cat)) = (pki, cat) {
+                        for (j, p) in files.iter() {
+                            match pdu_prov::ee_open_aca_response(&pki, p.bytes(), &cat, i, *j) {
+                                Ok(o) => credentials.push(IssuedCredential {
+                                    i,
+                                    j: *j,
+                                    lv: o.lv,
+                                    certified_public: o.public,
+                                    c: p256::Scalar::ZERO,
+                                    response: None,
+                                    implicit: Some(Box::new(crate::scms::msg::ImplicitCredential {
+                                        aca_id8: pdu::cert_id8(&o.aca),
+                                        certificate: o.certificate,
+                                        e: o.e,
+                                        r: o.r,
+                                    })),
+                                }),
+                                Err(e) => self.reject_pdu(
+                                    SpduKind::AcaEeCertResponsePrivate,
+                                    device,
+                                    at,
+                                    e,
+                                ),
+                            }
+                        }
+                    }
+                }
                 let Some(dev) = self.devices.get_mut(&device) else {
                     return Err(ProtoError::NoEntity { node: device });
                 };
@@ -1009,7 +1421,7 @@ impl ScmsState {
                     if dev.download_retries <= cap {
                         out.start_timer(
                             poll,
-                            ScmsMsg::BatchDownloadRequest { device, i },
+                            ScmsMsg::BatchDownloadRequest { device, i, pdu: None },
                             flow,
                             run,
                         );
@@ -1054,12 +1466,15 @@ impl ScmsState {
                     dev.provisioning = None;
                     out.stage_at(StageId::Installed, device, None, flow, run);
                 } else if let Some(i_next) = next_i {
-                    out.send(
-                        n.lop,
-                        ScmsMsg::BatchDownloadRequest { device, i: i_next },
-                        "batch-download-request",
-                        self.sizes.batch_download_request(),
-                        Transport::CellularUu,
+                    // The device's next request goes out as its own message, so it is
+                    // built (and signed) by the device handler like the first.
+                    out.start_timer(
+                        Duration::ZERO,
+                        ScmsMsg::BatchDownloadRequest {
+                            device,
+                            i: i_next,
+                            pdu: None,
+                        },
                         flow,
                         run,
                     );

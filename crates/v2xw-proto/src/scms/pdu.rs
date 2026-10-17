@@ -63,7 +63,7 @@ use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::{
     EeRaDownloadRequest, EeRaInterfacePdu, RaEeCertAck, RaEeCertInfo,
 };
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::{
-    AcaSsp, DcmSsp, EcaSsp, IcaSsp, LaSsp, MaSsp, RaSsp, RootCaSsp, ScmsPdu, ScmsPduContent,
+    AcaSsp, CrlSignerSsp, DcmSsp, EcaSsp, IcaSsp, LaSsp, MaSsp, RaSsp, RootCaSsp, ScmsPdu, ScmsPduContent,
     ScopedCertificateRequest, SecurityMgmtSsp, SignedCertificateRequest,
 };
 use v2xw_sec::butterfly::Caterpillar;
@@ -300,13 +300,21 @@ pub struct ScmsPki {
     pub la2: Authority,
     /// Device Configuration Manager.
     pub dcm: Authority,
+    /// CRL Generator: the CRACA of every pseudonym certificate the ACA issues (its
+    /// `cracaId` is the low 3 bytes of this certificate's HashedId8, 02 §5 row 2). Its
+    /// profile is a stand-in until WP-B4 (gap row 13).
+    pub crlg: Authority,
+    /// Further components of the same provider (a second ACA, ...), searched by
+    /// [`ScmsPki::by_id8`] like the core ones: the deployment topology (WP-D1) and the
+    /// attack studies add them with [`ScmsPki::issue_component`].
+    pub extra: Vec<Authority>,
 }
 
-fn opaque_ssp(ssp: &SecurityMgmtSsp) -> Result<ServiceSpecificPermissions> {
+pub(crate) fn opaque_ssp(ssp: &SecurityMgmtSsp) -> Result<ServiceSpecificPermissions> {
     Ok(ServiceSpecificPermissions::opaque(coer(ssp)?.into()))
 }
 
-fn public_encryption_key(p: &Point) -> Result<PublicEncryptionKey> {
+pub(crate) fn public_encryption_key(p: &Point) -> Result<PublicEncryptionKey> {
     Ok(PublicEncryptionKey::new(
         SymmAlgorithm::aes128Ccm,
         BasePublicEncryptionKey::eciesNistP256(
@@ -475,6 +483,17 @@ impl ScmsPki {
             false,
             start,
         )?;
+        // Drawn after every other component, so adding it moved no earlier key.
+        let crlg = Self::issue(
+            &ica,
+            &mut g,
+            "crlg.provider-a",
+            3,
+            &SecurityMgmtSsp::crl(CrlSignerSsp::new(Uint8(2))),
+            false,
+            false,
+            start,
+        )?;
         Ok(ScmsPki {
             root,
             ica,
@@ -485,6 +504,8 @@ impl ScmsPki {
             la1,
             la2,
             dcm,
+            crlg,
+            extra: Vec::new(),
         })
     }
 
@@ -537,17 +558,48 @@ impl ScmsPki {
         })
     }
 
-    /// Every component, root first.
-    pub fn all(&self) -> [&Authority; 9] {
+    /// Every core component, root first.
+    pub fn all(&self) -> [&Authority; 10] {
         [
             &self.root, &self.ica, &self.eca, &self.ra, &self.aca, &self.ma, &self.la1, &self.la2,
-            &self.dcm,
+            &self.dcm, &self.crlg,
         ]
     }
 
     /// The component whose whole-certificate HashedId8 is `id8`.
     pub fn by_id8(&self, id8: &[u8; 8]) -> Option<&Authority> {
-        self.all().into_iter().find(|a| &a.id8() == id8)
+        self.all()
+            .into_iter()
+            .chain(self.extra.iter())
+            .find(|a| &a.id8() == id8)
+    }
+
+    /// The `cracaId` a pseudonym certificate carries: the low 3 bytes of the CRL
+    /// Generator's whole-certificate HashedId8.
+    pub fn craca_id(&self) -> [u8; 3] {
+        let h = self.crlg.id8();
+        [h[5], h[6], h[7]]
+    }
+
+    /// Issues one more P-256 component under the ICA, keys from `seed` and `name`, and
+    /// adds it to [`ScmsPki::extra`]. Returns its index there.
+    ///
+    /// # Errors
+    /// The certificate does not encode.
+    pub fn issue_component(
+        &mut self,
+        seed: u64,
+        name: &str,
+        ssp: &SecurityMgmtSsp,
+        with_enc: bool,
+        start: u32,
+    ) -> Result<usize> {
+        let mut label = b"pki-extra:".to_vec();
+        label.extend_from_slice(name.as_bytes());
+        let mut g = Drbg::new(seed, &label);
+        let a = Self::issue(&self.ica, &mut g, name, 3, ssp, false, with_enc, start)?;
+        self.extra.push(a);
+        Ok(self.extra.len() - 1)
     }
 
     /// The verification key of `cert` if it chains to this PKI: an explicit component
@@ -825,7 +877,8 @@ pub fn ee_ra_cert_request(
         EeRaInterfacePdu::eeRaCertRequest(EeRaCertRequest::new(
             Uint8(STRUCT_VERSION),
             Time32(Uint32(generation_time)),
-            CertificateType::explicit,
+            // The US pseudonym is an implicit certificate (02 §6, §9.3): the EE asks for one.
+            CertificateType::implicit,
             tbs,
             Some(AdditionalParams::original(ButterflyParamsOriginal::new(
                 ButterflyExpansion::aes128(OctetString::from(ck.to_vec())),
@@ -939,7 +992,7 @@ pub fn signed(p: &ScmsPdu, signer: &Certificate, key: &Signer1609) -> Result<Vec
     signed_bytes(coer(p)?, signer, key)
 }
 
-fn signed_bytes(payload: Vec<u8>, signer: &Certificate, key: &Signer1609) -> Result<Vec<u8>> {
+pub(crate) fn signed_bytes(payload: Vec<u8>, signer: &Certificate, key: &Signer1609) -> Result<Vec<u8>> {
     let d = sig1609::sign_spdu(
         sig1609::header_psid_only(SECURITY_MGMT_PSID),
         payload,
@@ -1159,7 +1212,7 @@ pub(crate) fn outer(bytes: &[u8]) -> Result<Ieee1609Dot2Data> {
     Ok(d)
 }
 
-fn scms_pdu(bytes: &[u8]) -> Result<ScmsPdu> {
+pub(crate) fn scms_pdu(bytes: &[u8]) -> Result<ScmsPdu> {
     let p: ScmsPdu = decode(bytes)?;
     if p.version.0 != SCMS_PDU_VERSION {
         return Err(PduError::Version("ScmsPdu.version"));
@@ -1506,12 +1559,16 @@ pub enum SpduKind {
     EeRaSuccessorEnrollmentCertRequest,
     /// `RaEeEnrollmentCertAckSpdu` (`raEeCertInfo`, `acpcTreeId` ABSENT, Signed, RA). WP-B2.
     RaEeEnrollmentCertAck,
-    /// `RaAcaCertRequestSpdu` (SignedCertRequest, RA).
+    /// `EncryptedIndividualPLV` (SymmEncryptedSingleRecipient, LA → ACA via the RA).
+    EncryptedIndividualPlv,
+    /// `RaAcaCertRequestSpdu` (SignedCertRequest, RA certificate).
     RaAcaCertRequest,
     /// `AcaRaCertResponseSpdu` (Signed, ACA).
     AcaRaCertResponse,
-    /// `AcaEeCertResponsePrivateSpdu` (EncryptedSigned, the issuing ACA).
+    /// `AcaEeCertResponsePrivateSpdu` (EncryptedSigned: to `J_ij`, then the issuing ACA).
     AcaEeCertResponsePrivate,
+    /// `RaEeCertInfoSpdu`, the `.info` file (Unsecured).
+    RaEeCertInfo,
 }
 
 impl SpduKind {
@@ -1527,9 +1584,11 @@ impl SpduKind {
                 "EeRaSuccessorEnrollmentCertRequestSpdu"
             }
             SpduKind::RaEeEnrollmentCertAck => "RaEeEnrollmentCertAckSpdu",
+            SpduKind::EncryptedIndividualPlv => "EncryptedIndividualPLV",
             SpduKind::RaAcaCertRequest => "RaAcaCertRequestSpdu",
             SpduKind::AcaRaCertResponse => "AcaRaCertResponseSpdu",
             SpduKind::AcaEeCertResponsePrivate => "AcaEeCertResponsePrivateSpdu",
+            SpduKind::RaEeCertInfo => "RaEeCertInfoSpdu",
         }
     }
 }
