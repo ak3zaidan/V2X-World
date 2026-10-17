@@ -25,7 +25,8 @@ test.beforeAll(async () => {
   const path = join(dir, "e2e-backend.yaml");
   const text = source
     .replace("name: phase1-grid", "name: e2e-backend")
-    .replace("duration_s: 60.0", "duration_s: 40.0")
+    // A 20 s i-period is a compressed calendar, which the scenario must declare (WP-D2).
+    .replace("duration_s: 60.0", "duration_s: 40.0\n  calendar: compressed")
     .replace("rate_veh_per_h: 30.0", "rate_veh_per_h: 900.0")
     .replace("actors:\n", "actors:\n  backend:\n    protocol: protocol/scms/camp\n")
     // Cellular access, so vehicles top up through the LOP during the run.

@@ -29,6 +29,11 @@ seed: "0xC0FFEE_5EED"
 
 time:
   t0: "2027-03-04T17:00:00Z"
+  # A compressed calendar (WP-D2): security.protocol.params shortens the i-period so
+  # the backend's weekly work happens inside this run's radio minutes. Every output
+  # (the manifest's warnings, the run report's `calendar`) labels it; quote no
+  # calendar-driven latency from it.
+  calendar: compressed
   duration_s: 300.0
   # The car-following models' calibration step, and the BSM period: one step, one message.
   mobility_step_ms: 100

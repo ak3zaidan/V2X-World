@@ -33,6 +33,7 @@ fn packet_level_cellular_carries_the_backend_and_reports_the_comparison() {
             "first_batch_delay_s": 1, "download_poll_interval_s": 1
         }),
     });
+    s.time.calendar = v2xw_engine::scenario::Calendar::Compressed;
     s.net.uu = Some(ModelChoice {
         id: "cellular/uu/packet-pf".to_string(),
         params: json!({"rat": "lte", "background_load": 0.5, "isd_m": 500}),

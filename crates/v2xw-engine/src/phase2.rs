@@ -713,12 +713,15 @@ impl LifecycleParams {
         // is derived from the scenario's own `time.t0`, and on the real weekly grid the
         // i-period counts from the US epoch, 2015-01-06 04:00 EST (03 §1 fact 4), so a
         // run starting 2026-10-16 provisions i = 614. A compressed grid (`i_period_s`
-        // other than one week) keeps i-period 0 at the run's start: its numbers are not
-        // the deployment's and say so (WP-D2 adds the `calendar: compressed` flag).
+        // other than one week, which validation admits only under `time.calendar:
+        // compressed`, WP-D2) keeps i-period 0 at the run's start: its numbers are not
+        // the deployment's, and the manifest and the run report say so.
         if let Ok(wall) = v2xw_core::time::WallClock::parse_rfc3339(&scenario.time.t0) {
             p.scms.pdu.t0_unix_s = wall.t0_unix_s();
         }
-        if p.scms.i_period == v2xw_core::time::Duration::from_secs(US_I_PERIOD_S) {
+        if scenario.time.calendar.is_real()
+            && p.scms.i_period == v2xw_core::time::Duration::from_secs(US_I_PERIOD_S)
+        {
             p.scms.calendar_epoch_unix_s =
                 Some(v2xw_proto::scms::governance::US_IPERIOD_EPOCH_UNIX_S);
         } else if !map.contains_key("ma_review_s") {
@@ -760,6 +763,35 @@ impl LifecycleParams {
     pub fn topup_at(&self, last_period: u32) -> Option<SimTime> {
         let below = self.topup_below_periods;
         (below > 0).then(|| self.period_start(last_period.saturating_add(1).saturating_sub(below)))
+    }
+}
+
+/// The home provider's CRL publication rule on the real calendar (WP-D2): under the US
+/// presets the CRL Generator publishes at the next business-day slot after a change, the
+/// "within 1 business day" SLA ([SM-PROV] §3.4.9; 01 §1.4, 03 §9), in real Eastern time
+/// with the federal holidays observed (`v2xw_proto::scms::calendar`); `camp-reference`
+/// keeps the fixed daily cadence, and `on-decision` publishes at once. An explicit
+/// `crl_cadence_s`, and every compressed calendar, keep the cadence the scenario states —
+/// a business day has no meaning on a grid whose week lasts a minute.
+fn apply_crl_publication(
+    scenario: &Scenario,
+    deployment: &v2xw_proto::scms::deployment::Deployment,
+    p: &mut ScmsParams,
+) {
+    use v2xw_proto::scms::deployment::CrlPublication;
+    let explicit = scenario
+        .security
+        .protocol
+        .as_ref()
+        .and_then(|c| c.params.get("crl_cadence_s"))
+        .is_some();
+    if explicit || p.calendar_epoch_unix_s.is_none() {
+        return;
+    }
+    match deployment.providers.first().map(|h| h.crl_publication) {
+        Some(CrlPublication::SlaOneBusinessDay) => p.crl.business_day_sla = true,
+        Some(CrlPublication::OnDecision) => p.publish_on_cadence = false,
+        Some(CrlPublication::Cadence) | None => {}
     }
 }
 
@@ -1752,6 +1784,7 @@ impl Phase2 {
         scms_params.kem = kem;
         scms_params.threshold = crate::crypto_config::threshold_deployment(scenario)?;
         let deployment = deployment_of(scenario, protocol.as_deref() == Some(CAMP_SCMS))?;
+        apply_crl_publication(scenario, &deployment, &mut scms_params);
         let mut scms = ScmsRun::new_deployed(scms_params, 0, deployment).map_err(|e| {
             conflict(
                 "actors.backend",
@@ -3298,6 +3331,74 @@ impl Phase2 {
         push_bytes(&mut tick, steps);
         self.maybe_publish_view(now, &mut tick);
         tick
+    }
+
+    /// The earliest instant after `now` at which the credential system has something to
+    /// do (WP-D2's fast-forward): a delivery or timer in the backend's own kernel (a
+    /// shuffle release, a pre-generation, the CRL publication slot, a download poll, an
+    /// MA review), a CTL due for publication or a scheduled root rollover or removal, or
+    /// a vehicle's own clock reaching its top-up horizon, its re-enrolment lead, its next
+    /// CRL fetch or trust-list fetch, or the eMBMS carousel. `None` when nothing is ever
+    /// due again.
+    ///
+    /// Work the backend holds — a kernel delivery, a CTL, a governance decision — counts
+    /// even when it is due at `now` itself: a request started in this very tick is
+    /// injected at `now` and runs on the next step, as in a full run. A vehicle's own
+    /// horizon counts only strictly after `now`: one already due that could not be started
+    /// (no access at a frozen position) does not become startable by time alone, and the
+    /// fast-forward retries it at its next stop. The backend view's cadence is
+    /// deliberately not a wake: it observes, and changes nothing.
+    #[must_use]
+    pub fn next_wake(&self, now: SimTime) -> Option<SimTime> {
+        let mut best: Option<SimTime> = None;
+        let mut offer = |t: SimTime| {
+            if t > now && best.is_none_or(|b| t < b) {
+                best = Some(t);
+            }
+        };
+        let held = |t: SimTime| t.max(now.saturating_add(1));
+        if let Some(t) = self.scms.kernel.next_due() {
+            offer(held(t));
+        }
+        if let Some(t) = self.etsi.as_ref().and_then(|e| e.kernel.next_due()) {
+            offer(held(t));
+        }
+        for (t, _) in &self.scms.state.gov.pending {
+            offer(held(*t));
+        }
+        if let Some(t) = self.params.root_rollover_at {
+            offer(held(t));
+        }
+        if let Some(t) = self.params.root_removal_at {
+            offer(held(t));
+        }
+        if self.access.crl_delivery() == crate::backend::CrlDelivery::Mbms
+            && self.published_version > 0
+        {
+            offer(self.mbms_next);
+        }
+        let us = self.etsi.is_none();
+        let lead = self.params.scms.reenrol_lead.as_nanos();
+        for n in self.nodes.values() {
+            if n.access == Some(AccessKind::Cellular) && !n.crl_fetch_in_flight {
+                offer(n.next_crl_fetch);
+            }
+            if n.topup.is_none()
+                && !n.self_revoked
+                && !n.blocked
+                && n.etsi_batch.is_none()
+                && let Some(t) = self.params.topup_at(n.last_period)
+            {
+                offer(t);
+            }
+            if us && n.reenrol.is_none() && !n.blocked && !n.self_revoked {
+                offer(n.enrolment_until.saturating_sub(lead));
+            }
+            if !us && n.trust_fetch.is_none() {
+                offer(n.next_trust_fetch);
+            }
+        }
+        best
     }
 
     /// Acts on what the RA and the ECA answered: a refused top-up ends the request (a

@@ -198,10 +198,13 @@ pub fn assemble(
         })
         .collect();
 
+    // A fast-forward window skips the radio too, so it is a time-dilation window as far
+    // as a reader of the radio metrics is concerned (WP-D2).
     m.time_dilation_windows = scenario
         .time
         .time_dilation
         .iter()
+        .chain(scenario.time.fast_forward.iter())
         .map(|w| {
             TimeDilationWindow::new(
                 (w.from_s * 1e9).round().max(0.0) as u64,
@@ -227,6 +230,7 @@ pub fn assemble(
         .extend(crate::scenario::signature_mtu_warnings(scenario));
     m.warnings
         .extend(crate::phase2::deployment_warnings(scenario));
+    m.warnings.extend(calendar_warnings(scenario));
 
     if GIT_COMMIT == "unknown" {
         m.warnings.push(
@@ -449,4 +453,37 @@ mod tests {
         assert!(v.contains_key("rustc"));
         assert!(v.contains_key("v2xw-core"));
     }
+}
+
+/// The calendar labels a manifest carries (WP-D2, gap rows 43 and 44): a compressed
+/// calendar, and every fast-forward window, said in the artefact itself.
+#[must_use]
+pub fn calendar_warnings(scenario: &Scenario) -> Vec<String> {
+    let mut out = Vec::new();
+    if scenario.time.calendar == crate::scenario::Calendar::Compressed {
+        let i = scenario
+            .security
+            .protocol
+            .as_ref()
+            .and_then(|p| p.params.get("i_period_s"))
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0);
+        out.push(format!(
+            "calendar: compressed — the credential system's i-period is {i} s (the \
+             deployment's is one week from 2015-01-06 04:00 Eastern, CAMP-EE §2.1.5.3.2): \
+             i-period numbers count from the run's start, and validity windows, top-up \
+             horizons and every calendar-driven wait are not the deployment's; quote no \
+             latency from this run without substituting the real windows back"
+        ));
+    }
+    for w in &scenario.time.fast_forward {
+        out.push(format!(
+            "fast-forward [{}, {}] s: traffic frozen and no radio frame generated; only \
+             the credential backend ran, on the real calendar, stopping at each of its \
+             events on the mobility-step grid. Radio and traffic metrics are not observed \
+             inside it",
+            w.from_s, w.to_s
+        ));
+    }
+    out
 }

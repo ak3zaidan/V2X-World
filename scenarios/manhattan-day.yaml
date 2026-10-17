@@ -51,6 +51,9 @@ meta:
 time:
   # Local midnight, New York standard time (UTC−5), on a Thursday.
   t0: "2027-03-04T05:00:00Z"
+  # The deployment's calendar (WP-D2): the base's compressed flag goes with its
+  # compressed lifecycle values, removed below.
+  calendar: real
   duration_s: 86400.0
   metric_period_s: 60.0
 

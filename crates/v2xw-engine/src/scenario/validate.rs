@@ -1682,6 +1682,24 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                time-dilation window off the promised grid.",
     },
     KeyStatus {
+        path: "time.calendar",
+        status: Status::Wired,
+        note: "real (the default): one-week i-periods from the US epoch, 2015-01-06 04:00 \
+               Eastern, the deployment's CRL publication rule and the CV-pilot manual MA. \
+               compressed: the only way to state a shorter security.protocol.params.\
+               i_period_s; the i-period counts from the run's start, the MA is automatic \
+               unless ma_review_s says otherwise, and the manifest and run report label it.",
+    },
+    KeyStatus {
+        path: "time.fast_forward",
+        status: Status::Wired,
+        note: "Windows in which the traffic is frozen, no radio frame is generated, and \
+               the run jumps from one credential-system event to the next on the \
+               mobility-step grid (top-ups, shuffles, CRL publication and fetches, \
+               re-enrolment, root rollovers), so weeks of PKI behaviour fit in a short \
+               run. Requires a credential backend. Recorded in the manifest.",
+    },
+    KeyStatus {
         path: "time.time_dilation",
         status: Status::Partial,
         note: "Inside a window no radio frame is generated: the frames are counted as \
@@ -3263,6 +3281,8 @@ pub fn choices_of(path: &str) -> Option<&'static Choices> {
 pub fn validate(s: &Scenario) -> Vec<ScenarioError> {
     let mut e = Vec::new();
     time(s, &mut e);
+    calendar(s, &mut e);
+    fast_forward(s, &mut e);
     world(s, &mut e);
     actors(s, &mut e);
     weather(s, &mut e);
@@ -4321,6 +4341,119 @@ fn time(s: &Scenario, e: &mut Vec<ScenarioError>) {
                         "overlaps time.time_dilation[{j}] ([{}, {}] s): the manifest records \
                          windows as disjoint intervals and metrics are marked not-observed \
                          per window, so an overlap has no single answer",
+                        prev.0, prev.1
+                    ),
+                ));
+            }
+        }
+        windows.push((w.from_s, w.to_s));
+    }
+}
+
+/// The US i-period, seconds: one week [CAMP-EE §2.1.5.3.2; SMP §2.1.17 Table 2].
+const REAL_I_PERIOD_S: f64 = 604_800.0;
+
+/// The calendar lint (WP-D2, gap row 43): a credential system on anything but the
+/// deployment's weekly grid must say so with `time.calendar: compressed`, so no output of
+/// a compressed run can be read as the deployment's; and a run that says compressed must
+/// be.
+fn calendar(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    let i_period = s
+        .security
+        .protocol
+        .as_ref()
+        .and_then(|p| p.params.get("i_period_s"))
+        .and_then(serde_json::Value::as_f64);
+    let compressed = i_period.is_some_and(|v| (v - REAL_I_PERIOD_S).abs() > 1e-9);
+    match (s.time.calendar, compressed) {
+        (crate::scenario::Calendar::Real, true) => e.push(conflict(
+            "security.protocol.params.i_period_s",
+            format!(
+                "is {} s, and the deployment's i-period is one week (604800 s, CAMP-EE \
+                 §2.1.5.3.2): a shorter grid is a compressed calendar whose i-period \
+                 numbers, validity windows and calendar waits are not the deployment's. \
+                 Declare it with time.calendar: compressed, or remove i_period_s and use \
+                 time.fast_forward to make the weeks pass",
+                i_period.unwrap_or_default()
+            ),
+        )),
+        (crate::scenario::Calendar::Compressed, false) => e.push(conflict(
+            "time.calendar",
+            "is compressed, and the run's i-period is the deployment's week (no shorter \
+             security.protocol.params.i_period_s): remove the flag, or state the \
+             compressed i_period_s"
+                .to_string(),
+        )),
+        _ => {}
+    }
+}
+
+/// `time.fast_forward`: each window inside the run, ordered, disjoint, on the promised
+/// grid, and with a credential backend to advance.
+fn fast_forward(s: &Scenario, e: &mut Vec<ScenarioError>) {
+    if s.time.fast_forward.is_empty() {
+        return;
+    }
+    let backend = s.actors.backend.protocol.is_some() || s.security.protocol.is_some();
+    if !backend {
+        e.push(conflict(
+            "time.fast_forward",
+            "has windows, and the run has no credential backend (security.protocol or \
+             actors.backend.protocol): a fast-forward window freezes the traffic and the \
+             radio and advances only the backend, so here it would skip everything"
+                .to_string(),
+        ));
+    }
+    let grid = match s.time.des_resolution.as_str() {
+        "1us" => Some(1e-6),
+        "1ms" => Some(1e-3),
+        _ => None,
+    };
+    let horizon = s.time.duration_s;
+    let mut windows: Vec<(f64, f64)> = Vec::new();
+    for (i, w) in s.time.fast_forward.iter().enumerate() {
+        let field = format!("time.fast_forward[{i}]");
+        if let Some(g) = grid {
+            for (name, at) in [("from_s", w.from_s), ("to_s", w.to_s)] {
+                let ticks = at / g;
+                if (ticks - ticks.round()).abs() > 1e-6 {
+                    e.push(conflict(
+                        &format!("{field}.{name}"),
+                        format!(
+                            "is {at} s, which is not on the {} grid time.des_resolution \
+                             promises",
+                            s.time.des_resolution
+                        ),
+                    ));
+                }
+            }
+        }
+        if !(w.from_s.is_finite() && w.to_s.is_finite()) || w.to_s <= w.from_s {
+            e.push(conflict(
+                &field,
+                format!(
+                    "to_s is {} but from_s is {}; a window ends after it starts",
+                    w.to_s, w.from_s
+                ),
+            ));
+            continue;
+        }
+        if w.from_s < 0.0 || w.to_s > horizon {
+            e.push(conflict(
+                &field,
+                format!(
+                    "spans [{}, {}] s but the run is [0, {}] s (time.duration_s); a window \
+                     outside the run fast-forwards nothing",
+                    w.from_s, w.to_s, horizon
+                ),
+            ));
+        }
+        for (j, prev) in windows.iter().enumerate() {
+            if w.from_s < prev.1 && prev.0 < w.to_s {
+                e.push(conflict(
+                    &field,
+                    format!(
+                        "overlaps time.fast_forward[{j}] ([{}, {}] s); merge the two",
                         prev.0, prev.1
                     ),
                 ));

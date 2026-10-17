@@ -444,6 +444,25 @@ impl ReceiverValidationReport {
     }
 }
 
+/// The longest a fast-forward stop may jump (WP-D2): a minute, so a request that was
+/// due and could not start is retried within a minute, and the Backend view still sees
+/// the week pass a minute at a time — about 10,080 backend ticks a week.
+pub const FAST_FORWARD_MAX_JUMP: Duration = Duration::from_secs(60);
+
+/// What the `time.fast_forward` windows of a run did (WP-D2).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct FastForwardReport {
+    /// How many windows the run entered.
+    pub windows: u64,
+    /// Backend ticks run inside the windows: the instants the run stopped at because a
+    /// credential-system event was due.
+    pub backend_ticks: u64,
+    /// Mobility steps not simulated inside the windows: traffic frozen, no radio.
+    pub skipped_steps: u64,
+    /// Simulated nanoseconds spent inside the windows.
+    pub skipped_ns: u64,
+}
+
 /// What one run produced.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct RunReport {
@@ -509,6 +528,13 @@ pub struct RunReport {
     /// How many frames were *not* generated because the instant fell in a time-dilation
     /// window (02-architecture.md §5.4).
     pub suppressed_frames: u64,
+    /// The credential system's calendar (`time.calendar`, WP-D2): `real`, the
+    /// deployment's weekly grid from the 2015 epoch, or `compressed`, whose i-period
+    /// numbers and calendar waits are not the deployment's. Empty for a run without a
+    /// credential backend.
+    pub calendar: String,
+    /// What the `time.fast_forward` windows skipped (WP-D2). All zeroes without one.
+    pub fast_forward: FastForwardReport,
     /// How many times a roadside unit's SPaT failed to encode, so the unit sent its last
     /// good one. Zero in a healthy run; anything else is an encoder defect.
     pub infra_encode_failures: u64,
@@ -1093,6 +1119,8 @@ pub struct Engine {
     /// Equipped actors whose node is not created yet: spawned dormant (`crate::scale`).
     deferred_nodes: BTreeSet<ActorId>,
     report: RunReport,
+    /// Whether the last mobility step was a fast-forward stop (`time.fast_forward`).
+    in_fast_forward: bool,
     /// Whether [`Engine::advance`] has reached the end of the run.
     ended: bool,
 }
@@ -1564,6 +1592,7 @@ impl Engine {
             radio_gate: None,
             deferred_nodes: BTreeSet::new(),
             report: RunReport::default(),
+            in_fast_forward: false,
             ended: false,
         };
         engine.radio_gate = crate::scale::RadioGate::for_scenario(
@@ -1585,6 +1614,15 @@ impl Engine {
         };
         let phase2 = crate::phase2::Phase2::build(&engine.scenario, &engine.world)?;
         engine.phase2 = phase2;
+        // The calendar label every output carries (WP-D2, gap row 43).
+        if let Some(p) = engine.phase2.as_ref() {
+            engine.report.calendar = if p.params().scms.calendar_epoch_unix_s.is_some() {
+                "real"
+            } else {
+                "compressed"
+            }
+            .to_string();
+        }
         let (roots, chain_file) = engine
             .phase2
             .as_ref()
@@ -2812,6 +2850,14 @@ impl Engine {
     ) -> Result<()> {
         let now = self.scheduler.now();
 
+        // `time.fast_forward` (WP-D2): inside a window the world is frozen and only the
+        // credential backend runs, from one of its events to the next.
+        if let Some(end) = self.scenario.time.fast_forward_end(now) {
+            self.fast_forward_tick(recorder, now, end, step, horizon);
+            return Ok(());
+        }
+        self.in_fast_forward = false;
+
         // The published state of *this* instant goes out before the world advances past
         // it. A mobility step dispatched at `now` produces states for `now + step`, so
         // publishing the step's own result here would file every record one step early
@@ -2940,6 +2986,52 @@ impl Engine {
                 .schedule(next, EventClass::MobilityStep, Event::MobilityStep);
         }
         Ok(())
+    }
+
+    /// One stop inside a `time.fast_forward` window (WP-D2, gap row 44): the backend step
+    /// a full run takes at this instant — the same `on_backend_step`, with the vehicles
+    /// where the window froze them — and then the next stop: the first mobility-step
+    /// instant at or after the credential system's next event
+    /// ([`crate::phase2::Phase2::next_wake`]), at most [`FAST_FORWARD_MAX_JUMP`] ahead,
+    /// and no later than the window's end. A backend event therefore lands on exactly the
+    /// step a full run would have handled it on; between two stops no mobility, no node
+    /// step and no radio event is simulated.
+    fn fast_forward_tick(
+        &mut self,
+        recorder: &mut dyn RunRecorder,
+        now: SimTime,
+        end: SimTime,
+        step: Duration,
+        horizon: SimTime,
+    ) {
+        if !self.in_fast_forward {
+            self.in_fast_forward = true;
+            self.report.fast_forward.windows += 1;
+        }
+        self.report.fast_forward.backend_ticks += 1;
+        self.transmitted_since_step.clear();
+        self.on_backend_step(recorder, now, horizon);
+        let step_ns = step.as_nanos().max(1);
+        let wake = self
+            .phase2
+            .as_ref()
+            .and_then(|p| p.next_wake(now))
+            .unwrap_or(SimTime::MAX);
+        let target = wake
+            .min(end)
+            .min(now.saturating_add(FAST_FORWARD_MAX_JUMP.as_nanos()));
+        // Up to the mobility grid (`k · step` from zero), and at least one step on.
+        let next = target
+            .div_ceil(step_ns)
+            .saturating_mul(step_ns)
+            .max(now.saturating_add(step_ns));
+        let until = next.min(horizon);
+        self.report.fast_forward.skipped_ns += until.saturating_sub(now);
+        self.report.fast_forward.skipped_steps += (until.saturating_sub(now) / step_ns).max(1) - 1;
+        if next <= horizon {
+            self.scheduler
+                .schedule(next, EventClass::MobilityStep, Event::MobilityStep);
+        }
     }
 
     /// Recomputes which nodes are dormant ([`crate::scale::RadioGate`]).
@@ -7194,6 +7286,24 @@ impl Engine {
     fn on_flow_timer(&mut self, horizon: SimTime) {
         let now = self.scheduler.now();
         self.crl_timer_armed = false;
+        // No roadside broadcast inside a fast-forward window (no radio): the carousel
+        // resumes on its first turn after the window (WP-D2).
+        if let Some(end) = self.scenario.time.fast_forward_end(now) {
+            let interval = self
+                .phase2
+                .as_ref()
+                .map_or(1, |p| p.params().crl_broadcast_interval.as_nanos().max(1));
+            let at = now.saturating_add(end.saturating_sub(now).div_ceil(interval) * interval);
+            if at <= horizon {
+                self.crl_timer_armed = true;
+                self.scheduler.schedule(
+                    at,
+                    EventClass::FlowTimer,
+                    Event::FlowTimer { flow: 0, step: 0 },
+                );
+            }
+            return;
+        }
         let Some(phase2) = self.phase2.as_ref() else {
             return;
         };
@@ -8285,7 +8395,13 @@ impl Engine {
                 self.emit(recorder, &sample);
             }
         }
-        let next = self.metric_period.after(now);
+        let mut next = self.metric_period.after(now);
+        // Inside a fast-forward window nothing a metric observes happens: the next
+        // window closes on the first period boundary after it (WP-D2).
+        if let Some(end) = self.scenario.time.fast_forward_end(next) {
+            let p = self.metric_period.as_nanos().max(1);
+            next = now.saturating_add((end.saturating_sub(now)).div_ceil(p).saturating_mul(p));
+        }
         if next <= horizon {
             self.scheduler.schedule(
                 next,

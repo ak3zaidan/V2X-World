@@ -94,6 +94,6 @@ pub mod wiring;
 pub use ctx::{DigestRecorder, EngineCtx, MemoryRecorder, NullRecorder, RunRecorder};
 pub use error::{EngineError, Result, ScenarioError};
 pub use event::{Event, NodeTask, Observe};
-pub use run::{Engine, RunReport};
+pub use run::{Engine, FastForwardReport, RunReport};
 pub use scenario::Scenario;
 pub use snapshot::{ActorState, SnapshotStream, snapshot_cadence};
