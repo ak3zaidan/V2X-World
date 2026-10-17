@@ -489,8 +489,9 @@ fn the_generation_time_is_on_the_ieee_epoch() {
     let parsed = envelope.parse(pdu.bytes()).expect("parses");
     let expected_us = u64::from(T0_1609_SECONDS) * 1_000_000 + 1_500_000;
     assert_eq!(parsed.generation_time, Some(expected_us));
-    // 2026-01-01T00:00:00Z is 694,310,400 s after 2004-01-01T00:00:00Z, so 1.5 s into
-    // the run the whole-second part is one more than that.
-    assert_eq!(T0_1609_SECONDS, 694_310_400);
-    assert_eq!(expected_us / 1_000_000, 694_310_401);
+    // 2026-01-01T00:00:00Z is 694,310,400 UTC seconds after 2004-01-01T00:00:00Z, and
+    // 694,310,405 TAI seconds (five leap seconds since 2004, 02 §4), which is what
+    // 1609.2 Time64 counts; 1.5 s into the run the whole-second part is one more.
+    assert_eq!(T0_1609_SECONDS, 694_310_405);
+    assert_eq!(expected_us / 1_000_000, 694_310_406);
 }

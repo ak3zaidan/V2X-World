@@ -31,12 +31,13 @@ use v2xw_sec::{PeerCertCache, TrustStore};
 /// The Unix timestamp of 2026-01-01T00:00:00Z, for the scenario wall clock.
 pub const T0_UNIX: i64 = 1_767_225_600;
 
-/// Seconds from the IEEE 1609.2 epoch (2004-01-01) to `T0_UNIX`.
+/// IEEE 1609.2 `Time32` of `T0_UNIX`: TAI seconds from the 1609.2 epoch (2004-01-01),
+/// leap seconds included.
 ///
 /// Derived rather than written out, because a hand-computed epoch offset is exactly the
-/// kind of constant that is wrong by one day and produces certificates that are valid,
-/// verifiable and stamped in the wrong year.
-pub const T0_1609_SECONDS: u32 = (T0_UNIX - v2xw_core::time::IEEE1609_EPOCH_UNIX_S) as u32;
+/// kind of constant that is wrong by one day (or by the five leap seconds) and produces
+/// certificates that are valid, verifiable and stamped at the wrong instant.
+pub const T0_1609_SECONDS: u32 = v2xw_core::time::utc_unix_to_tai_since_1609_epoch(T0_UNIX) as u32;
 
 /// The PSID the tests sign under: 0x20, the value 04-models.md §9.1 uses in its
 /// envelope-overhead derivation.

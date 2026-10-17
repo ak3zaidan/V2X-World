@@ -26,7 +26,7 @@ use crate::{Check, Cost, Layer, Mode, Outcome};
 
 /// 2026-01-01T00:00:00Z.
 const T0_UNIX: i64 = 1_767_225_600;
-const T0_1609: u32 = (T0_UNIX - v2xw_core::time::IEEE1609_EPOCH_UNIX_S) as u32;
+const T0_1609: u32 = v2xw_core::time::utc_unix_to_tai_since_1609_epoch(T0_UNIX) as u32;
 const PSID_BSM: u64 = 0x20;
 
 /// The checks of this layer.

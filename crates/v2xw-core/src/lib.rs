@@ -149,7 +149,8 @@ pub use registry::{
 };
 pub use rng::{EntityRef, PluginDomain, RngDomain, RngGuard, RngRegistry, RngStream};
 pub use time::{
-    CivilDateTime, Duration, IEEE1609_EPOCH_UNIX_S, NS_PER_MS, NS_PER_S, NS_PER_US, SimTime,
-    TimeError, WallClock, format_sim_time, ns_to_secs, secs_to_ns,
+    CivilDateTime, Duration, IEEE1609_EPOCH_UNIX_S, LEAP_SECONDS, NS_PER_MS, NS_PER_S, NS_PER_US,
+    SimTime, TimeError, WallClock, format_sim_time, ns_to_secs, secs_to_ns, time32_to_utc_unix,
+    utc_unix_to_tai_since_1609_epoch, utc_unix_to_time32,
 };
 pub use weather::{DrivingEffects, SurfaceCondition, WeatherKind, WeatherState};

@@ -251,11 +251,116 @@ impl core::fmt::Display for Duration {
 
 /// Unix timestamp of the IEEE 1609.2 epoch, 2004-01-01T00:00:00Z.
 ///
-/// IEEE 1609.2 `Time32` counts seconds and `Time64` counts microseconds since this
-/// epoch. The engine does not model leap seconds: it treats the 1609.2 time scale as
-/// UTC-without-leap-seconds, which is what every simulator and most implementations do
-/// and which keeps `Time64` a pure function of `t0` and [`SimTime`].
+/// IEEE 1609.2 `Time32` counts **TAI** seconds and `Time64` TAI microseconds since this
+/// epoch (S1 `Ieee1609Dot2BaseTypes`, `Time32`/`Time64`; docs/design/scms-real/02 §4):
+/// the number of SI seconds that have elapsed, so every leap second inserted into UTC
+/// since 2004 adds one. [`utc_unix_to_time32`] does the conversion with
+/// [`LEAP_SECONDS`]; a Unix timestamp minus this constant is only the UTC-without-leap
+/// part, which is five seconds short of the real bits for any instant after 2017.
 pub const IEEE1609_EPOCH_UNIX_S: i64 = 1_072_915_200;
+
+/// Offset between the NTP era-0 epoch (1900-01-01) and the Unix epoch, in seconds.
+const NTP_UNIX_OFFSET_S: i64 = 2_208_988_800;
+
+/// TAI − UTC at the IEEE 1609.2 epoch, 2004-01-01T00:00:00Z, in seconds.
+///
+/// From the `3124137600 32 # 1 Jan 1999` line of [`LEAP_SECONDS`]' source: no leap
+/// second was inserted between 1999-01-01 and 2006-01-01.
+pub const TAI_MINUS_UTC_AT_1609_EPOCH_S: i64 = 32;
+
+/// Every UTC leap second inserted after the IEEE 1609.2 epoch, as the
+/// `(NTP seconds, TAI − UTC)` pairs of the IANA/IERS `leap-seconds.list`: each NTP value
+/// is the UTC midnight that *follows* an inserted 23:59:60, and the second column is
+/// TAI − UTC from that midnight on.
+///
+/// Source: IANA tzdb `leap-seconds.list`, https://data.iana.org/time-zones/tzdb/leap-seconds.list
+/// (fetched 2026-10-16, sha256 `db5a895f16853b03bfc865e8d68f9fc8710ef1740e3400c701cd46a5bbbc3433`),
+/// "Updated through IERS Bulletin C", "File expires on 28 June 2027". The five entries
+/// are the ones docs/design/scms-real/02 §4 lists (end-2005, end-2008, mid-2012,
+/// mid-2015, end-2016). No leap second has been announced since 2016-12-31; an instant
+/// past the file's expiry is converted as if none follows, and when IERS announces one
+/// this table gains a row.
+pub const LEAP_SECONDS: [(i64, i64); 5] = [
+    (3_345_062_400, 33), // 1 Jan 2006
+    (3_439_756_800, 34), // 1 Jan 2009
+    (3_550_089_600, 35), // 1 Jul 2012
+    (3_644_697_600, 36), // 1 Jul 2015
+    (3_692_217_600, 37), // 1 Jan 2017
+];
+
+/// Unix seconds of the UTC midnight that follows leap second `i` of [`LEAP_SECONDS`].
+const fn leap_unix(i: usize) -> i64 {
+    LEAP_SECONDS[i].0 - NTP_UNIX_OFFSET_S
+}
+
+/// Leap seconds inserted into UTC between the IEEE 1609.2 epoch and the UTC instant
+/// `unix_s` (POSIX seconds): the count of [`LEAP_SECONDS`] rows whose following
+/// midnight is at or before `unix_s`.
+pub const fn leap_seconds_since_1609_epoch(unix_s: i64) -> i64 {
+    let mut n = 0;
+    let mut i = 0;
+    while i < LEAP_SECONDS.len() {
+        if unix_s >= leap_unix(i) {
+            n = LEAP_SECONDS[i].1 - TAI_MINUS_UTC_AT_1609_EPOCH_S;
+        }
+        i += 1;
+    }
+    n
+}
+
+/// TAI seconds since the IEEE 1609.2 epoch of the UTC instant `unix_s` (POSIX seconds):
+/// the value an IEEE 1609.2 `Time32` carries, before the `u32` range check. Negative
+/// for instants before 2004-01-01T00:00:00Z.
+///
+/// `Time32 = unix_s − 1 072 915 200 + leap seconds inserted since 2004`
+/// (docs/design/scms-real/02 §4). Example: 2025-07-16T08:00:00Z (Unix 1 752 652 800) is
+/// 679 737 600 UTC seconds after the epoch and 679 737 605 TAI seconds, the
+/// `effectiveDate` of the published production CTL (01 §3.1).
+pub const fn utc_unix_to_tai_since_1609_epoch(unix_s: i64) -> i64 {
+    unix_s - IEEE1609_EPOCH_UNIX_S + leap_seconds_since_1609_epoch(unix_s)
+}
+
+/// IEEE 1609.2 `Time32` of the UTC instant `unix_s`: TAI seconds since 2004-01-01.
+///
+/// Returns [`TimeError::BeforeIeeeEpoch`] for an instant before the epoch, and
+/// saturates at `u32::MAX` (the year 2140).
+pub const fn utc_unix_to_time32(unix_s: i64) -> Result<u32, TimeError> {
+    let tai = utc_unix_to_tai_since_1609_epoch(unix_s);
+    if tai < 0 {
+        return Err(TimeError::BeforeIeeeEpoch);
+    }
+    if tai > u32::MAX as i64 {
+        return Ok(u32::MAX);
+    }
+    Ok(tai as u32)
+}
+
+/// UTC instant (POSIX seconds) of the IEEE 1609.2 `Time32` value `t32`: the inverse of
+/// [`utc_unix_to_time32`], for display.
+///
+/// POSIX time cannot name an inserted 23:59:60, so the TAI second of each leap second
+/// maps to the following midnight, the same POSIX second as the TAI second after it.
+/// Every other value round-trips exactly.
+pub const fn time32_to_utc_unix(t32: u32) -> i64 {
+    let tai = t32 as i64;
+    let mut n = 0;
+    let mut i = 0;
+    while i < LEAP_SECONDS.len() {
+        // TAI seconds of the midnight that follows leap second i: the UTC seconds to it
+        // plus the leap seconds counted up to and including it.
+        let leaps_through = LEAP_SECONDS[i].1 - TAI_MINUS_UTC_AT_1609_EPOCH_S;
+        let midnight_tai = leap_unix(i) - IEEE1609_EPOCH_UNIX_S + leaps_through;
+        if tai >= midnight_tai {
+            n = leaps_through;
+        } else if tai == midnight_tai - 1 {
+            // The inserted second itself.
+            n = leaps_through - 1;
+            return tai - n + IEEE1609_EPOCH_UNIX_S;
+        }
+        i += 1;
+    }
+    tai - n + IEEE1609_EPOCH_UNIX_S
+}
 
 /// Seconds in one day, used by the civil-date conversions.
 const SECONDS_PER_DAY: i64 = 86_400;
@@ -512,27 +617,38 @@ impl WallClock {
         CivilDateTime::from_unix_seconds(self.unix_seconds_at(t))
     }
 
-    /// IEEE 1609.2 `Time32` at simulated time `t`: **seconds** since the 1609.2 epoch,
-    /// 2004-01-01T00:00:00Z (not the Unix epoch).
+    /// TAI seconds since the IEEE 1609.2 epoch at simulated time `t`.
+    ///
+    /// `t0` is a UTC instant and converts through the leap-second table; [`SimTime`]
+    /// then counts SI seconds, which is what TAI counts, so a leap second inserted
+    /// during a run is counted without a table lookup and `Time32` never steps back.
+    const fn tai_seconds_at(self, t: SimTime) -> i64 {
+        utc_unix_to_tai_since_1609_epoch(self.t0_unix_s) + (t / NS_PER_S) as i64
+    }
+
+    /// IEEE 1609.2 `Time32` at simulated time `t`: **TAI seconds** since the 1609.2
+    /// epoch, 2004-01-01T00:00:00Z (not the Unix epoch), leap seconds included
+    /// ([`utc_unix_to_time32`]). A `t0` of 2026-01-01T00:00:00Z gives 694 310 405, five
+    /// more than the UTC difference.
     ///
     /// Returns [`TimeError::BeforeIeeeEpoch`] if the scenario `t0` places the instant
     /// before that epoch, and saturates at `u32::MAX` (year 2140).
     pub fn time32(self, t: SimTime) -> Result<u32, TimeError> {
-        let secs = self.unix_seconds_at(t) - IEEE1609_EPOCH_UNIX_S;
+        let secs = self.tai_seconds_at(t);
         if secs < 0 {
             return Err(TimeError::BeforeIeeeEpoch);
         }
         Ok(u32::try_from(secs).unwrap_or(u32::MAX))
     }
 
-    /// IEEE 1609.2 `Time64` at simulated time `t`: **microseconds** since the 1609.2
-    /// epoch, 2004-01-01T00:00:00Z (not the Unix epoch).
+    /// IEEE 1609.2 `Time64` at simulated time `t`: TAI **microseconds** since the 1609.2
+    /// epoch, 2004-01-01T00:00:00Z (not the Unix epoch), leap seconds included.
     ///
     /// Returns [`TimeError::BeforeIeeeEpoch`] if the instant precedes that epoch. The
     /// sub-second part comes from `t` itself, truncated to whole microseconds, which is
     /// the resolution 1609.2 carries and the resolution the engine guarantees models.
     pub fn time64(self, t: SimTime) -> Result<u64, TimeError> {
-        let whole_s = self.unix_seconds_at(t) - IEEE1609_EPOCH_UNIX_S;
+        let whole_s = self.tai_seconds_at(t);
         if whole_s < 0 {
             return Err(TimeError::BeforeIeeeEpoch);
         }
@@ -808,6 +924,66 @@ mod tests {
         assert_eq!(old.time32(NS_PER_S).unwrap(), 0);
         // The default clock is the epoch itself.
         assert_eq!(WallClock::default().time32(0).unwrap(), 0);
+    }
+
+    /// `Time32` is TAI: known instants (docs/design/scms-real/00 §1 row 4, 02 §4).
+    #[test]
+    fn time32_is_tai_known_instants() {
+        let t32 = |s: &str| {
+            utc_unix_to_time32(CivilDateTime::parse_rfc3339(s).unwrap().to_unix_seconds())
+                .unwrap()
+        };
+        // 3 leap seconds by then (end-2005, end-2008, mid-2012): 347 619 600 + 3.
+        assert_eq!(t32("2015-01-06T09:00:00Z"), 347_619_603);
+        // The published production CTL's effectiveDate (01 §3.1) is a round UTC hour
+        // only under TAI: 679 737 605 = 2025-07-16T08:00:00Z + 5 leap seconds.
+        assert_eq!(t32("2025-07-16T08:00:00Z"), 679_737_605);
+        assert_eq!(
+            CivilDateTime::from_unix_seconds(time32_to_utc_unix(679_737_605)).to_rfc3339(),
+            "2025-07-16T08:00:00Z"
+        );
+        assert_eq!(t32("2026-01-01T00:00:00Z"), 694_310_405);
+        // No leap second before the first one.
+        assert_eq!(t32("2004-01-01T00:00:00Z"), 0);
+        assert_eq!(t32("2005-12-31T23:59:59Z"), 63_158_399);
+        // 23:59:60 is TAI 63 158 400, so the next midnight is one further on.
+        assert_eq!(t32("2006-01-01T00:00:00Z"), 63_158_401);
+        assert_eq!(t32("2016-12-31T23:59:59Z"), 410_313_603);
+        assert_eq!(t32("2017-01-01T00:00:00Z"), 410_313_605);
+        assert_eq!(
+            utc_unix_to_time32(IEEE1609_EPOCH_UNIX_S - 1),
+            Err(TimeError::BeforeIeeeEpoch)
+        );
+    }
+
+    /// The inverse round-trips every ordinary second around each leap second, and the
+    /// inserted second maps to the following midnight.
+    #[test]
+    fn time32_inverse_round_trips_around_leap_seconds() {
+        for (i, &(ntp, tai_utc)) in LEAP_SECONDS.iter().enumerate() {
+            let midnight = ntp - NTP_UNIX_OFFSET_S;
+            for u in midnight - 3..midnight + 3 {
+                let t = utc_unix_to_time32(u).unwrap();
+                assert_eq!(time32_to_utc_unix(t), u, "leap {i}, unix {u}");
+            }
+            let inserted = utc_unix_to_time32(midnight).unwrap() - 1;
+            assert_eq!(utc_unix_to_time32(midnight - 1).unwrap() + 1, inserted);
+            assert_eq!(time32_to_utc_unix(inserted), midnight);
+            assert_eq!(leap_seconds_since_1609_epoch(midnight), tai_utc - 32);
+        }
+    }
+
+    /// The wall clock carries TAI: `t0` converts through the table and simulated time
+    /// adds SI seconds, so a leap second inside the run is counted.
+    #[test]
+    fn wall_clock_time32_is_tai() {
+        let w = WallClock::parse_rfc3339("2026-01-01T00:00:00Z").unwrap();
+        assert_eq!(w.time32(0).unwrap(), 694_310_405);
+        assert_eq!(w.time64(1_500_000_000).unwrap(), 694_310_406_500_000);
+        // A run starting 2 s before the end-2016 leap second.
+        let w = WallClock::parse_rfc3339("2016-12-31T23:59:58Z").unwrap();
+        assert_eq!(w.time32(0).unwrap(), 410_313_602);
+        assert_eq!(w.time32(3 * NS_PER_S).unwrap(), 410_313_605);
     }
 
     #[test]
