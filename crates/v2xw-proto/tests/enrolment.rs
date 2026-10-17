@@ -20,13 +20,13 @@ use std::collections::BTreeMap;
 
 use common::{DEVICE_A, DEVICE_B, provisioned};
 use v2xw_core::time::Duration;
+use v2xw_msg::sec_types::ieee1609_dot2::CertificateType;
 use v2xw_proto::scms::enrolment::{self, EnrolAuth, RA_URL};
 use v2xw_proto::scms::msg::Refusal;
 use v2xw_proto::scms::params::ScmsParams;
 use v2xw_proto::scms::pdu::{self, PduError, SpduKind};
 use v2xw_proto::scms::run::ScmsRun;
 use v2xw_proto::stage::StageId;
-use v2xw_msg::sec_types::ieee1609_dot2::CertificateType;
 use v2xw_sec::ctl;
 
 const DAY_S: u64 = 86_400;
@@ -78,11 +78,17 @@ fn the_bootstrap_issues_the_us_enrolment_certificate_and_registers_it_with_the_r
     let (r, auth) =
         enrolment::open_ee_eca_cert_request(req.bytes(), &|id| canonical.get(id).copied())
             .expect("canonical-signed");
-    assert!(matches!(auth, EnrolAuth::Canonical(_)), "direct authorisation");
+    assert!(
+        matches!(auth, EnrolAuth::Canonical(_)),
+        "direct authorisation"
+    );
     assert_eq!(r.tbs_cert.region, t.region);
     assert_eq!(st.eca.names.get(&name), Some(&DEVICE_A));
     // Registered with the RA by the DCM, and the device knows where the RA is.
-    assert!(st.ra.is_registered(DEVICE_A, Some(pdu::cert_id8(&cred.cert))));
+    assert!(
+        st.ra
+            .is_registered(DEVICE_A, Some(pdu::cert_id8(&cred.cert)))
+    );
     assert!(!st.ra.is_registered(DEVICE_B, None));
     assert_eq!(d.ra_url.as_deref(), Some(RA_URL));
     for role in ["root", "ra", "ma", "eca"] {
@@ -99,7 +105,10 @@ fn the_ra_serves_only_registered_enrolment_certificates() {
     let t = run.topup(DEVICE_A, 1, 2);
     run.run().expect("runs");
     assert!(run.kernel.stages.at(t, StageId::Installed).is_none());
-    assert_eq!(run.topup_refusal_of(DEVICE_A), Some(Refusal::UnknownEnrolment));
+    assert_eq!(
+        run.topup_refusal_of(DEVICE_A),
+        Some(Refusal::UnknownEnrolment)
+    );
     assert_eq!(run.state.ra.unregistered_refused, 1);
     // Nor will it forward a successor request signed by that certificate.
     let r = run.reenrol_at(DEVICE_A, run.kernel.now());
@@ -125,15 +134,19 @@ fn the_eca_refuses_a_second_bootstrap_of_a_name_it_already_issued() {
     assert_eq!(st.eca.profile_refused, 1);
     assert_eq!(st.eca.issued, 1);
     assert!(
-        st.pdu_rejections.iter().any(|r| r.kind == SpduKind::EeEcaCertRequest
-            && matches!(r.reason, PduError::Policy(w) if w.starts_with("id.name is unique"))),
+        st.pdu_rejections
+            .iter()
+            .any(|r| r.kind == SpduKind::EeEcaCertRequest
+                && matches!(r.reason, PduError::Policy(w) if w.starts_with("id.name is unique"))),
         "{:?}",
         st.pdu_rejections
     );
     let d = &st.devices[&DEVICE_A];
     assert_eq!(d.refused, Some(Refusal::ProfileViolation));
     assert_eq!(
-        d.enrolment_credential.as_ref().map(|c| pdu::cert_id8(&c.cert)),
+        d.enrolment_credential
+            .as_ref()
+            .map(|c| pdu::cert_id8(&c.cert)),
         Some(pdu::cert_id8(&first.cert)),
         "the first certificate stays"
     );
@@ -190,7 +203,10 @@ fn a_successor_requested_at_the_lead_takes_over_exactly_at_expiry() {
     );
     // Stamped when the device finishes the step (key generation and two signatures).
     let requested = run.kernel.stages.at(r, StageId::Requested).unwrap();
-    assert!((due..due + NS).contains(&requested), "requested at the lead");
+    assert!(
+        (due..due + NS).contains(&requested),
+        "requested at the lead"
+    );
     let downloaded = run.kernel.stages.at(r, StageId::Installed).unwrap();
     assert!(
         downloaded >= due + run.state.params.reenrol_download_delay.as_nanos(),
@@ -201,15 +217,31 @@ fn a_successor_requested_at_the_lead_takes_over_exactly_at_expiry() {
     let d = &st.devices[&DEVICE_A];
     let next = d.successor.expect("held");
     assert_eq!((next.generation, next.valid_from), (1, expiry));
-    assert_eq!(next.valid_until - next.valid_from, st.params.enrolment_lifetime.as_nanos());
-    assert_eq!(d.enrolment, Some(current), "the current certificate is still in force");
+    assert_eq!(
+        next.valid_until - next.valid_from,
+        st.params.enrolment_lifetime.as_nanos()
+    );
+    assert_eq!(
+        d.enrolment,
+        Some(current),
+        "the current certificate is still in force"
+    );
     // The real certificates agree: the successor starts at the current one's last second.
     let new = d.successor_credential.clone().expect("real successor");
     assert_eq!(ctl::validity(&new.cert).0, ctl::validity(&old.cert).1);
-    assert_eq!(enrolment::tbs_name(&new.cert.0.to_be_signed), d.name.as_deref());
+    assert_eq!(
+        enrolment::tbs_name(&new.cert.0.to_be_signed),
+        d.name.as_deref()
+    );
     // The RA linked old and new.
-    assert!(st.ra.is_registered(DEVICE_A, Some(pdu::cert_id8(&old.cert))));
-    assert!(st.ra.is_registered(DEVICE_A, Some(pdu::cert_id8(&new.cert))));
+    assert!(
+        st.ra
+            .is_registered(DEVICE_A, Some(pdu::cert_id8(&old.cert)))
+    );
+    assert!(
+        st.ra
+            .is_registered(DEVICE_A, Some(pdu::cert_id8(&new.cert)))
+    );
     if let Ok(dir) = std::env::var("V2XW_PDU_OUT") {
         write_corpus(&run, std::path::Path::new(&dir));
     }
@@ -219,11 +251,26 @@ fn a_successor_requested_at_the_lead_takes_over_exactly_at_expiry() {
     // expiry reaches the RA after it and is refused as expired: the RA checks validity on
     // receipt.)
     let jmax = 2;
-    let before = run.topup_at(DEVICE_A, expiry - NS, period_after(&run.state.params, expiry), jmax);
+    let before = run.topup_at(
+        DEVICE_A,
+        expiry - NS,
+        period_after(&run.state.params, expiry),
+        jmax,
+    );
     run.run().expect("runs");
-    assert!(run.kernel.stages.at(before, StageId::Acknowledged).is_some());
+    assert!(
+        run.kernel
+            .stages
+            .at(before, StageId::Acknowledged)
+            .is_some()
+    );
     assert_eq!(last_request_signer(&run), pdu::cert_id8(&old.cert));
-    let at = run.topup_at(DEVICE_A, expiry, period_after(&run.state.params, expiry) + 1, jmax);
+    let at = run.topup_at(
+        DEVICE_A,
+        expiry,
+        period_after(&run.state.params, expiry) + 1,
+        jmax,
+    );
     run.run().expect("runs");
     assert!(run.kernel.stages.at(at, StageId::Acknowledged).is_some());
     assert_eq!(last_request_signer(&run), pdu::cert_id8(&new.cert));
@@ -244,7 +291,11 @@ fn a_second_successor_request_before_download_supersedes_the_first_and_blocklist
     let st = &run.state;
     assert_eq!(st.ra.successor_requests, 2);
     assert_eq!(st.ra.successors_superseded, 1);
-    assert_eq!(st.ra.successors_blocklisted.len(), 1, "the first was already issued");
+    assert_eq!(
+        st.ra.successors_blocklisted.len(),
+        1,
+        "the first was already issued"
+    );
     assert_eq!(st.eca.successors, 2);
     assert!(run.kernel.stages.at(second, StageId::Installed).is_some());
     let d = &st.devices[&DEVICE_A];
@@ -274,7 +325,12 @@ fn write_corpus(run: &ScmsRun, dir: &std::path::Path) {
     let certs: BTreeMap<String, String> = pki
         .all()
         .iter()
-        .map(|a| (a.name.clone(), hex(&v2xw_sec::cert::encode(&a.cert).unwrap())))
+        .map(|a| {
+            (
+                a.name.clone(),
+                hex(&v2xw_sec::cert::encode(&a.cert).unwrap()),
+            )
+        })
         .collect();
     let m = serde_json::json!({
         "pdus": files,
@@ -285,5 +341,9 @@ fn write_corpus(run: &ScmsRun, dir: &std::path::Path) {
             .map(|(id, q)| (id.clone(), hex(&q.compressed().unwrap())))
             .collect::<BTreeMap<_, _>>(),
     });
-    std::fs::write(dir.join("manifest.json"), serde_json::to_string_pretty(&m).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_string_pretty(&m).unwrap(),
+    )
+    .unwrap();
 }

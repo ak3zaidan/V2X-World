@@ -12,8 +12,8 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::{DEVICE_A, provisioned};
-use v2xw_proto::scms::params::ScmsParams;
 use v2xw_proto::scms::enrolment;
+use v2xw_proto::scms::params::ScmsParams;
 use v2xw_proto::scms::pdu::{self, PduError, SpduKind};
 use v2xw_proto::scms::run::ScmsRun;
 use v2xw_proto::stage::{FlowId, StageId};
@@ -30,7 +30,9 @@ fn run_with_bytes() -> ScmsRun {
 fn kind_of(step: &str) -> Option<SpduKind> {
     Some(match step {
         "enrol-request" => SpduKind::EeEcaCertRequest,
-        "enrol-response" | "enrol-response-proxied" | "successor-enrol-certified"
+        "enrol-response"
+        | "enrol-response-proxied"
+        | "successor-enrol-certified"
         | "successor-enrol-response" => SpduKind::EcaEeCertResponse,
         "successor-enrol-request" => SpduKind::EeRaSuccessorEnrollmentCertRequest,
         "successor-enrol-forward" => SpduKind::EeEcaCertRequest,
@@ -92,10 +94,9 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
             SpduKind::EeEcaCertRequest => {
                 // Signed with the canonical key the operator registered (WP-B2).
                 let canonical = &st.eca.canonical;
-                let (_, auth) = enrolment::open_ee_eca_cert_request(b, &|id| {
-                    canonical.get(id).copied()
-                })
-                .expect("canonical-signed request");
+                let (_, auth) =
+                    enrolment::open_ee_eca_cert_request(b, &|id| canonical.get(id).copied())
+                        .expect("canonical-signed request");
                 assert!(matches!(auth, enrolment::EnrolAuth::Canonical(_)));
             }
             SpduKind::EeRaSuccessorEnrollmentCertRequest => {

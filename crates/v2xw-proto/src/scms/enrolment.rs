@@ -261,8 +261,17 @@ pub fn open_ee_eca_cert_request(
 /// run's.
 pub fn check_us_profile(r: &EeEcaCertRequest, eca: &Certificate, now: u32) -> Result<()> {
     let t = &r.tbs_cert;
-    let rule = |ok: bool, what: &'static str| if ok { Ok(()) } else { Err(PduError::Policy(what)) };
-    rule(r.version.0 == STRUCT_VERSION, "EeEcaCertRequest.version is 2")?;
+    let rule = |ok: bool, what: &'static str| {
+        if ok {
+            Ok(())
+        } else {
+            Err(PduError::Policy(what))
+        }
+    };
+    rule(
+        r.version.0 == STRUCT_VERSION,
+        "EeEcaCertRequest.version is 2",
+    )?;
     rule(r.r_type == CertificateType::implicit, "type is implicit")?;
     let g = r.generation_time.0.0;
     rule(
@@ -308,7 +317,10 @@ pub fn check_us_profile(r: &EeEcaCertRequest, eca: &Certificate, now: u32) -> Re
     )?;
     let (s, e) = request_validity(t);
     let (es, ee) = v2xw_sec::ctl::validity(eca);
-    rule(s >= es && e <= ee, "the requested validity lies inside the ECA's")?;
+    rule(
+        s >= es && e <= ee,
+        "the requested validity lies inside the ECA's",
+    )?;
     Ok(())
 }
 
@@ -316,7 +328,10 @@ pub fn check_us_profile(r: &EeEcaCertRequest, eca: &Certificate, now: u32) -> Re
 #[must_use]
 pub fn request_validity(t: &ToBeSignedCertificate) -> (u64, u64) {
     let s = u64::from(t.validity_period.start.0.0);
-    (s, s + v2xw_sec::ctl::duration_s(&t.validity_period.duration))
+    (
+        s,
+        s + v2xw_sec::ctl::duration_s(&t.validity_period.duration),
+    )
 }
 
 /// The requested key `R_U` of an enrolment request.
@@ -324,7 +339,9 @@ pub fn request_key(r: &EeEcaCertRequest) -> Result<Point> {
     let VerificationKeyIndicator::verificationKey(PublicVerificationKey::ecdsaNistP256(pt)) =
         &r.tbs_cert.verify_key_indicator
     else {
-        return Err(PduError::Shape("request key is not a P-256 verificationKey"));
+        return Err(PduError::Shape(
+            "request key is not a P-256 verificationKey",
+        ));
     };
     pdu::point_of(pt)
 }
@@ -344,9 +361,21 @@ pub fn tbs_name(t: &ToBeSignedCertificate) -> Option<&str> {
 /// self-signed by the new key, never canonical.
 pub fn check_successor(new: &EeEcaCertRequest, current: &Certificate) -> Result<()> {
     let (n, c) = (&new.tbs_cert, &current.0.to_be_signed);
-    let rule = |ok: bool, what: &'static str| if ok { Ok(()) } else { Err(PduError::Policy(what)) };
-    rule(new.canonical_id.is_none(), "a successor request is self-signed by the new key")?;
-    rule(tbs_name(n).is_some() && tbs_name(n) == tbs_name(c), "the successor keeps id.name")?;
+    let rule = |ok: bool, what: &'static str| {
+        if ok {
+            Ok(())
+        } else {
+            Err(PduError::Policy(what))
+        }
+    };
+    rule(
+        new.canonical_id.is_none(),
+        "a successor request is self-signed by the new key",
+    )?;
+    rule(
+        tbs_name(n).is_some() && tbs_name(n) == tbs_name(c),
+        "the successor keeps id.name",
+    )?;
     rule(n.region == c.region, "the successor keeps the region")?;
     rule(
         n.cert_request_permissions == c.cert_request_permissions,
@@ -354,9 +383,14 @@ pub fn check_successor(new: &EeEcaCertRequest, current: &Certificate) -> Result<
     )?;
     let (ns, _) = request_validity(n);
     let (_, ce) = v2xw_sec::ctl::validity(current);
-    rule(ns == ce, "the successor starts when the current certificate ends (no overlap)")?;
+    rule(
+        ns == ce,
+        "the successor starts when the current certificate ends (no overlap)",
+    )?;
     let VerificationKeyIndicator::reconstructionValue(cur) = &c.verify_key_indicator else {
-        return Err(PduError::Policy("the current enrolment certificate is implicit"));
+        return Err(PduError::Policy(
+            "the current enrolment certificate is implicit",
+        ));
     };
     let fresh = match &n.verify_key_indicator {
         VerificationKeyIndicator::verificationKey(PublicVerificationKey::ecdsaNistP256(p)) => {
@@ -401,7 +435,9 @@ pub fn ra_open_successor_request(pki: &ScmsPki, spdu: &[u8]) -> Result<(Certific
     let ScmsPduContent::ee_ra(EeRaInterfacePdu::eeRaSuccessorEnrollmentCertRequest(inner)) =
         p.content
     else {
-        return Err(PduError::Shape("expected ee-ra.eeRaSuccessorEnrollmentCertRequest"));
+        return Err(PduError::Shape(
+            "expected ee-ra.eeRaSuccessorEnrollmentCertRequest",
+        ));
     };
     Ok((current, pdu::coer(&inner)?))
 }

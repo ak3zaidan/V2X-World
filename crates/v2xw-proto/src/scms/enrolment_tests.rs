@@ -3,9 +3,9 @@
 
 use super::*;
 use crate::scms::pdu::{Drbg, RequestSigner};
-use v2xw_sec::sig1609::Signer1609;
 use p256::Scalar;
 use v2xw_sec::ec;
+use v2xw_sec::sig1609::Signer1609;
 
 const T: u32 = 694_310_405;
 const SIX_YEARS: u64 = 6 * 365 * 86_400;
@@ -184,9 +184,15 @@ fn the_issued_enrolment_certificate_carries_the_us_profile() {
     assert_eq!(tbs_name(t), Some("obu-0001.ee"));
     assert_eq!(t.crl_series.0.0, 4);
     assert_eq!(t.region, Some(us_region(&[840, 124, 484])));
-    assert_eq!(t.cert_request_permissions, Some(wildcard_request_permissions()));
+    assert_eq!(
+        t.cert_request_permissions,
+        Some(wildcard_request_permissions())
+    );
     assert!(t.app_permissions.is_none());
-    assert_eq!(v2xw_sec::ctl::validity(&cert), (u64::from(T), u64::from(T) + SIX_YEARS));
+    assert_eq!(
+        v2xw_sec::ctl::validity(&cert),
+        (u64::from(T), u64::from(T) + SIX_YEARS)
+    );
     pdu::reconstruct_enrolment(&k, &cert, &k_u, &rr).expect("d·G = e·P_U + Q_ECA");
 }
 
@@ -208,7 +214,8 @@ fn enrolled_and_successor(
         ..good(start)
     };
     let p = ee_eca_cert_request_us(T + 10, &Point::mul_base(&k_new), &req, None).unwrap();
-    let inner_bytes = pdu::signed_cert_request(&p, RequestSigner::SelfSigned(&key(&k_new))).unwrap();
+    let inner_bytes =
+        pdu::signed_cert_request(&p, RequestSigner::SelfSigned(&key(&k_new))).unwrap();
     let outer = ee_ra_successor_request(&inner_bytes).unwrap();
     let ra_key = k.ra.enc_public().unwrap();
     let spdu = pdu::signed_encrypted_cert_request(
@@ -234,8 +241,14 @@ fn a_successor_request_opens_at_the_ra_and_must_start_when_the_current_one_ends(
     check_us_profile(&r, &k.eca.cert, T + 10).expect("the successor meets the profile");
 
     for (start, why) in [
-        (end - 1, "the successor starts when the current certificate ends (no overlap)"),
-        (end + 1, "the successor starts when the current certificate ends (no overlap)"),
+        (
+            end - 1,
+            "the successor starts when the current certificate ends (no overlap)",
+        ),
+        (
+            end + 1,
+            "the successor starts when the current certificate ends (no overlap)",
+        ),
     ] {
         let (_, cert, _, new) = enrolled_and_successor(start, "obu-0001.ee");
         assert_eq!(check_successor(&new, &cert), Err(PduError::Policy(why)));

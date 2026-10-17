@@ -24,7 +24,9 @@
 
 use super::*;
 
-use crate::scms::enrolment::{self as us, EnrolAuth, EnrolmentRequest, RA_URL, US_ENROLMENT_REGIONS};
+use crate::scms::enrolment::{
+    self as us, EnrolAuth, EnrolmentRequest, RA_URL, US_ENROLMENT_REGIONS,
+};
 use crate::scms::pdu::{self, Pdu, PduError, RequestSigner, SpduKind};
 use v2xw_msg::sec_types::ieee1609_dot2::Certificate;
 use v2xw_msg::sec_types::ieee1609_dot2_dot1_eca_ee_interface::EcaEeInterfacePdu;
@@ -324,12 +326,7 @@ impl ScmsState {
     /// request for a successor that starts when the current certificate ends, self-signed
     /// by the new key, then signed by the current enrolment certificate and encrypted to
     /// the RA.
-    fn successor_request_pdu(
-        &mut self,
-        device: NodeId,
-        at: SimTime,
-        run: FlowRun,
-    ) -> Option<Pdu> {
+    fn successor_request_pdu(&mut self, device: NodeId, at: SimTime, run: FlowRun) -> Option<Pdu> {
         let pki = self.pki.clone()?;
         let cred = self.devices.get(&device)?.enrolment_credential.clone()?;
         let name = us::tbs_name(&cred.cert.0.to_be_signed)?.to_string();
@@ -369,7 +366,9 @@ impl ScmsState {
     fn ra_successor_ack(&mut self, hash8: [u8; 8], at: SimTime, next: SimTime) -> Option<Pdu> {
         let pki = self.pki.clone()?;
         let info = pdu::ra_ee_cert_info(self.time32(at), 0, hash8, self.time32(next));
-        Some(Pdu::new(pdu::signed(&info, &pki.ra.cert, &pki.ra.key).ok()?))
+        Some(Pdu::new(
+            pdu::signed(&info, &pki.ra.cert, &pki.ra.key).ok()?,
+        ))
     }
 
     /// Device side: the `EeRaDownloadRequestSpdu` for `<requestHash>.zip`, signed by the
@@ -398,7 +397,10 @@ impl ScmsState {
     /// certificate of `device`, and names the file of its successor request.
     fn ra_open_download(&self, device: NodeId, spdu: &Pdu, hash8: [u8; 8]) -> pdu::Result<()> {
         let pki = self.pki.clone().ok_or(PduError::Shape("PDU layer off"))?;
-        let enc = pki.ra.enc_private.ok_or(PduError::Key("RA encryption key"))?;
+        let enc = pki
+            .ra
+            .enc_private
+            .ok_or(PduError::Key("RA encryption key"))?;
         let plain = pdu::decrypt_cert(spdu.bytes(), &pki.ra.cert, &enc)?;
         let (p, signer) = pdu::open_signed_pdu(&plain, &pki)?;
         if !self.ra.is_registered(device, Some(pdu::cert_id8(&signer))) {
@@ -655,7 +657,9 @@ impl ScmsState {
                     );
                 }
             }
-            ScmsMsg::SuccessorEnrolRequest { device, current, .. } if to == device => {
+            ScmsMsg::SuccessorEnrolRequest {
+                device, current, ..
+            } if to == device => {
                 // A new key pair, and the request signed with the certificate it replaces.
                 Self::scalar_mults(out, 1);
                 Self::sign(out, 2);
@@ -946,9 +950,9 @@ impl ScmsState {
                     return Ok(());
                 }
                 if let (Some(p), Some(pki)) = (&pdu, self.pki.clone()) {
-                    let ok = pdu::open_signed_pdu(p.bytes(), &pki).ok().and_then(|(q, s)| {
-                        (pdu::cert_id8(&s) == pki.ra.id8()).then_some(q)
-                    });
+                    let ok = pdu::open_signed_pdu(p.bytes(), &pki)
+                        .ok()
+                        .and_then(|(q, s)| (pdu::cert_id8(&s) == pki.ra.id8()).then_some(q));
                     let matches = ok.is_some_and(|q| {
                         matches!(q.content,
                             ScmsPduContent::ee_ra(EeRaInterfacePdu::raEeCertInfo(i))
@@ -1019,7 +1023,9 @@ impl ScmsState {
                     Some((cert, resp)) => {
                         self.ra.successors.remove(&device);
                         let size = match &resp {
-                            Some(p) => self.emit_pdu(SpduKind::EcaEeCertResponse, to, device, at, p),
+                            Some(p) => {
+                                self.emit_pdu(SpduKind::EcaEeCertResponse, to, device, at, p)
+                            }
                             None => self.sizes.enrol_response(),
                         };
                         out.send(

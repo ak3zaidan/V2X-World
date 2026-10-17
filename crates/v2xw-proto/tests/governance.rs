@@ -198,7 +198,10 @@ fn an_expired_enrolment_cannot_get_a_top_up_until_it_is_renewed() {
     );
     assert_eq!(d.enrolment.map(|e| e.generation), Some(0));
     let mut later = d.clone();
-    assert_eq!(later.roll_enrolment(old_end - 1).map(|e| e.generation), Some(0));
+    assert_eq!(
+        later.roll_enrolment(old_end - 1).map(|e| e.generation),
+        Some(0)
+    );
     assert_eq!(later.roll_enrolment(old_end).map(|e| e.generation), Some(1));
     assert!(later.successor.is_none());
     let t = run.topup(DEVICE_A, 1, JMAX);

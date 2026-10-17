@@ -1068,7 +1068,10 @@ impl ScmsSizes {
             ("successor-enrol-request", self.successor_request()),
             ("successor-enrol-forward", self.successor_request()),
             ("successor-enrol-ack", self.provisioning_ack()),
-            ("successor-enrol-download-request", self.batch_download_request()),
+            (
+                "successor-enrol-download-request",
+                self.batch_download_request(),
+            ),
             ("successor-enrol-certified", self.enrol_response()),
             ("successor-enrol-response", self.enrol_response()),
             ("enrol-response-proxied", self.enrol_response()),
