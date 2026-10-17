@@ -574,6 +574,10 @@ pub struct CrlGate {
     own_revoked: Vec<[u8; 8]>,
     entries: usize,
     expansion_pm: u16,
+    /// Linkage entries from CRLs the node verified itself (WP-C2), by the low three bytes
+    /// of their `crlCraca`: an entry revokes only a series-1 certificate whose `cracaId`
+    /// names the same CRACA (1609.2 §5.1.3.2; 02 §11.2).
+    tagged: BTreeMap<[u8; 3], v2xw_sec::CrlStore>,
 }
 
 /// A gate at i-period 0 with the plausibility window every gate has.
@@ -604,6 +608,7 @@ impl CrlGate {
             own_revoked: Vec::new(),
             entries: 0,
             expansion_pm: 0,
+            tagged: BTreeMap::new(),
         }
     }
 
@@ -636,6 +641,53 @@ impl CrlGate {
         self.entries += 1;
     }
 
+    /// Adds the linkage entries of a CRL the node verified, issued by the CRACA whose
+    /// whole-certificate HashedId8 is `craca` (WP-C2).
+    pub fn add_verified_linkage(&mut self, craca: [u8; 8], entries: &[CrlLinkageEntry]) {
+        let mut c3 = [0u8; 3];
+        c3.copy_from_slice(&craca[5..]);
+        let store = self.tagged.entry(c3).or_default();
+        for e in entries {
+            store.add_linkage_entry(*e);
+            self.entries += 1;
+        }
+    }
+
+    /// Whether any linkage entry, verified or not, revokes the certificate carrying `lv`
+    /// in period `i` (the node's own-revocation check).
+    pub fn revokes_linkage_at_period(&self, i: u32, lv: LinkageValue) -> bool {
+        self.store.revokes_linkage_at_period(i, lv)
+            || self
+                .tagged
+                .values()
+                .any(|s| s.revokes_linkage_at_period(i, lv))
+    }
+
+    /// [`CrlGate::check`] for a certificate whose `cracaId` and `crlSeries` are known:
+    /// verified entries apply only to a series-1 certificate of the same CRACA.
+    pub fn check_from(
+        &mut self,
+        claimed_period: u32,
+        lv: LinkageValue,
+        craca: [u8; 3],
+        series: u16,
+        authenticated: bool,
+    ) -> CrlVerdict {
+        let v = self.check(claimed_period, lv, authenticated);
+        if v != CrlVerdict::NotRevoked || series != crate::rxval::SERIES_PSEUDONYM {
+            return v;
+        }
+        let Some(store) = self.tagged.get(&craca) else {
+            return v;
+        };
+        self.work = self.work.saturating_add(store.len() as u64);
+        if store.revokes_linkage_at_period(claimed_period, lv) {
+            CrlVerdict::Revoked
+        } else {
+            CrlVerdict::NotRevoked
+        }
+    }
+
     /// Revokes one certificate by hash.
     pub fn revoke_hash(&mut self, id: HashedId10) {
         self.store.revoke_hash(id);
@@ -660,14 +712,19 @@ impl CrlGate {
         self.own_revoked.binary_search(&key(digest)).is_ok()
     }
 
-    /// How many entries of both kinds.
+    /// How many entries of both kinds, verified ones included.
     pub fn entries(&self) -> usize {
         self.store.len()
+            + self
+                .tagged
+                .values()
+                .map(v2xw_sec::CrlStore::len)
+                .sum::<usize>()
     }
 
     /// Bytes the store occupies, per the profile's accounting.
     pub fn bytes(&self, storage: &StorageModel) -> u64 {
-        self.store.len() as u64 * u64::from(storage.crl_bytes_per_entry)
+        self.entries() as u64 * u64::from(storage.crl_bytes_per_entry)
     }
 
     /// How far through the current i-period's expansion the node is, per mille.

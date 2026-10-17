@@ -587,6 +587,65 @@ pub fn revokes(contents: &CrlContents, cert: &Certificate) -> bool {
     }
 }
 
+/// Every individual linkage entry a linkage CRL carries, as the device's
+/// [`CrlLinkageEntry`] at the CRL's `iRev`, each bounded by its group's `iMax` (WP-C2: what
+/// a device installs once it has verified the CRL). Empty for a hash CRL. The same walk
+/// [`revokes`] makes, so the two cannot disagree.
+pub fn linkage_entries(contents: &CrlContents) -> Vec<CrlLinkageEntry> {
+    let mut out = Vec::new();
+    let (TypeSpecificCrlContents::fullLinkedCrl(l) | TypeSpecificCrlContents::deltaLinkedCrl(l)) =
+        &contents.type_specific
+    else {
+        return out;
+    };
+    let i_rev = u32::from(l.i_rev.0.0);
+    for jg in l.individual.iter().flat_map(|s| s.0.iter()) {
+        for lg in &jg.contents.0 {
+            let la1 = LaId(u16::from_be_bytes([lg.la1_id.0[0], lg.la1_id.0[1]]));
+            let la2 = LaId(u16::from_be_bytes([lg.la2_id.0[0], lg.la2_id.0[1]]));
+            for ig in &lg.contents.0 {
+                let Some(forward) = u32::from(ig.i_max.0).checked_sub(i_rev) else {
+                    continue;
+                };
+                for r in &ig.contents.0 {
+                    let mut s1 = [0u8; 16];
+                    let mut s2 = [0u8; 16];
+                    s1.copy_from_slice(&r.linkage_seed1.0[..]);
+                    s2.copy_from_slice(&r.linkage_seed2.0[..]);
+                    out.push(CrlLinkageEntry {
+                        i: i_rev,
+                        la_id1: la1,
+                        la_id2: la2,
+                        ls1_i: LinkageSeed::new(s1),
+                        ls2_i: LinkageSeed::new(s2),
+                        jmax: u32::from(jg.jmax.0),
+                        max_forward: forward,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The `HashedId10` of every certificate a hash CRL revokes, with its `expiry`. Empty for
+/// a linkage CRL.
+pub fn hash_entries(contents: &CrlContents) -> Vec<([u8; 10], u32)> {
+    match &contents.type_specific {
+        TypeSpecificCrlContents::fullHashCrl(t) | TypeSpecificCrlContents::deltaHashCrl(t) => t
+            .entries
+            .0
+            .iter()
+            .map(|e| {
+                let mut id = [0u8; 10];
+                id.copy_from_slice(&e.id.0[..]);
+                (id, e.expiry.0.0)
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// The `HashRevocation` entry for `cert`, expiring when it does.
 pub fn hash_entry(cert: &Certificate) -> Result<HashRevocation, CrlError> {
     let (_, end) = crate::ctl::validity(cert);

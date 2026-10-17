@@ -87,6 +87,9 @@ impl crate::wiring::CredentialSink for HostedNode {
     fn sink_forget(&mut self) {
         both!(self, n => n.security_mut().forget_credentials())
     }
+    fn sink_security(&mut self) -> &mut v2xw_node::NodeSecurity {
+        both!(self, n => n.security_mut())
+    }
     fn sink_install(
         &mut self,
         handle: CredentialHandle,
@@ -161,6 +164,27 @@ impl HostedNode {
     /// The security stack, mutably.
     pub fn security_mut(&mut self) -> &mut NodeSecurity {
         both!(self, n => n.security_mut())
+    }
+
+    /// Verifies a received `SecuredCrl` on the device (WP-C2). An OBU charges the work to
+    /// its CPU bank; a VRU device's work is priced and counted but has no bank to queue on.
+    ///
+    /// # Errors
+    /// Why the device refused the CRL.
+    pub fn install_secured_crl(
+        &mut self,
+        bytes: &[u8],
+        now: SimTime,
+    ) -> Result<v2xw_node::rxval::VerifiedCrl, v2xw_node::rxval::RxReject> {
+        match self {
+            HostedNode::Obu(n) => n.install_secured_crl(bytes, now),
+            HostedNode::Vru(n) => {
+                let r = n.security_mut().verify_secured_crl(bytes, now);
+                let id = n.profile().id.clone();
+                let _ = v2xw_node::rxval::charge(n.security_mut(), &id);
+                r
+            }
+        }
     }
 
     /// The hardware profile.
@@ -388,6 +412,7 @@ pub fn install_credentials<R: crate::wiring::CredentialSink + ?Sized>(
 ) -> usize {
     let policy = crate::wiring::rotation_policy(scenario);
     device.sink_forget();
+    factory.install_trust(device.sink_security());
     let stores = device.sink_stores();
     *stores = Stores {
         certs: v2xw_node::CertStore::new().with_policy(policy),

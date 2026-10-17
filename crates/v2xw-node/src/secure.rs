@@ -38,10 +38,9 @@
 //! A relying party reconstructs a sender's key as `e·P_U + Q_ACA`, which needs the issuing
 //! ACA's certificate. A node holds the ACA certificates of its own downloads; a sender
 //! whose ACA it does not hold is [`SpduVerdict::Unverifiable`], never `Invalid` (the
-//! P2PCD case). What this module still does **not** do is walk the chain from the ACA to
-//! the root, check validity, region, PSID and SSP, or check the ACA itself for
-//! revocation: that is WP-C2's receiver validation, stated rather than papered over in
-//! [`NodeSecurity::verify_parsed`].
+//! P2PCD case). With a trust store installed, [`NodeSecurity::verify_parsed`] also
+//! applies WP-C2's receiver validation ([`crate::rxval`]): the chain to a CTL-approved
+//! root, validity, region, PSID and hash revocation, each refusal counted by rule.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -351,6 +350,12 @@ pub enum SpduVerdict {
     /// P2PCD case, and it is *not* a rejection: a node that answered `Invalid` here would
     /// blame a peer for its own empty cache.
     Unverifiable,
+    /// A 1609.2 receiver rule refused the SPDU (chain to the installed root, validity,
+    /// region, PSID, CRL overdue: [`crate::rxval::RxReject`]); the signature was not the
+    /// reason. Counted by rule in [`crate::rxval::RxStats::refused`].
+    Refused,
+    /// The signer, or a CA above it, is on a hash CRL the node verified.
+    Revoked,
 }
 
 /// One signed frame: the payload, the SPDU, and the split between them.
@@ -432,6 +437,10 @@ pub struct NodeSecurity {
     attach_on_new_neighbour: bool,
     /// A new station has been heard since the last certificate went out.
     new_neighbour_pending: bool,
+    /// The receiver trust: installed roots, validated CA paths, CRLs (WP-C2).
+    trust: crate::rxval::RxTrust,
+    /// The clock receiver checks read time in (TAI `Time32`).
+    wall: WallClock,
 }
 
 impl NodeSecurity {
@@ -455,6 +464,8 @@ impl NodeSecurity {
             bsm_policy: SignerIdPolicy::SAE_450MS,
             attach_on_new_neighbour: false,
             new_neighbour_pending: false,
+            trust: crate::rxval::RxTrust::default(),
+            wall,
         }
     }
 
@@ -481,6 +492,7 @@ impl NodeSecurity {
     /// The same stack under a different envelope profile.
     #[must_use]
     pub fn with_profile(mut self, profile: EnvelopeProfile, wall: WallClock) -> NodeSecurity {
+        self.wall = wall;
         self.envelope = match profile {
             EnvelopeProfile::Ieee1609Dot2 => Envelope::ieee1609(wall),
             EnvelopeProfile::EtsiTs103097 => Envelope::etsi(wall),
@@ -611,10 +623,57 @@ impl NodeSecurity {
     /// Adds a CA certificate to this node's cache (an ACA certificate from a download or
     /// from the local certificate chain file). Idempotent.
     pub fn learn_issuer(&mut self, ca: Arc<Certificate>) {
-        if let Ok(coer) = cert::encode(&ca) {
-            let id = hashedid::id8_bytes(&hashedid::hashed_id8(&coer));
-            self.issuers.entry(id).or_insert(ca);
+        // The 1609.2 HashedId8 with the hash of the certificate's own key: SHA-384 for a
+        // P-384 root, which is how its subordinates name it (`sha384AndDigest`).
+        if let Ok(id) = cert::cert_id8(&ca) {
+            self.issuers.entry(hashedid::id8_bytes(&id)).or_insert(ca);
         }
+    }
+
+    /// Installs the node's trust (WP-C2): `roots` are the CTL-approved roots, `cas` the
+    /// local certificate chain file. Every CA path is validated on install, as a device
+    /// checks its chain file. From now on every received SPDU is validated to a root.
+    pub fn install_trust(&mut self, roots: &[Arc<Certificate>], cas: &[Arc<Certificate>]) {
+        for r in roots {
+            self.trust.install_root(r);
+            self.learn_issuer(Arc::clone(r));
+        }
+        for c in cas {
+            self.learn_issuer(Arc::clone(c));
+        }
+        self.trust.validate_chain_file(&self.issuers);
+    }
+
+    /// The receiver trust and what it has done.
+    pub fn trust(&self) -> &crate::rxval::RxTrust {
+        &self.trust
+    }
+
+    /// The receiver trust, mutably (for counters the runtime adds).
+    pub fn trust_mut(&mut self) -> &mut crate::rxval::RxTrust {
+        &mut self.trust
+    }
+
+    /// The primitive operations receiver validation performed since the last call, for
+    /// the runtime to price with its hardware profile.
+    pub fn take_validation_ops(
+        &mut self,
+    ) -> Vec<(PrimitiveId, v2xw_sec::primitive::PrimitiveOpKind, u32)> {
+        self.trust.take_ops()
+    }
+
+    /// Verifies a received `SecuredCrl` against the installed trust at `now` and returns
+    /// what to install ([`crate::rxval::RxTrust::verify_secured_crl`]).
+    ///
+    /// # Errors
+    /// Why the CRL was refused.
+    pub fn verify_secured_crl(
+        &mut self,
+        bytes: &[u8],
+        now: SimTime,
+    ) -> Result<crate::rxval::VerifiedCrl, crate::rxval::RxReject> {
+        let now32 = self.wall.time32(now).unwrap_or(0);
+        self.trust.verify_secured_crl(&self.issuers, bytes, now32)
     }
 
     /// The CA certificate an implicit certificate names as its issuer, if this node holds
@@ -801,8 +860,8 @@ impl NodeSecurity {
     /// An implicit certificate's key is reconstructed under its issuing ACA's certificate
     /// from this node's CA cache; without it the answer is `Unverifiable`.
     ///
-    /// What this does **not** do yet is validate the chain above the ACA, validity,
-    /// region, PSID or SSP (WP-C2). See the module documentation.
+    /// With a trust store installed ([`NodeSecurity::install_trust`]) the signer is first
+    /// validated to an installed root under every receiver rule of [`crate::rxval`].
     pub fn verify_parsed(
         &mut self,
         ctx: &mut dyn NodeCtx,
@@ -813,6 +872,22 @@ impl NodeSecurity {
         let Ok(cert_coer) = cert::encode(certificate) else {
             return SpduVerdict::Invalid;
         };
+        // The receiver rules of 1609.2 §5.2 (WP-C2): the chain to an installed root,
+        // validity, region, PSID and hash revocation, before any signature work.
+        if self.trust.is_installed() {
+            let now32 = self.wall.time32(ctx.now()).unwrap_or(0);
+            match self
+                .trust
+                .validate_signer(&self.issuers, certificate, parsed, now32)
+            {
+                Ok(()) => {}
+                Err(crate::rxval::RxReject::UnknownIssuer) => return SpduVerdict::Unverifiable,
+                Err(r) if r.is_revocation() => return SpduVerdict::Revoked,
+                Err(_) => return SpduVerdict::Refused,
+            }
+        } else {
+            self.trust.stats.chain_unchecked += 1;
+        }
         let digest = parsed.signing_digest(&cert_coer);
         // An implicit certificate's key exists only once it is reconstructed under the
         // issuer, so a signer whose ACA certificate this node lacks has told it nothing.

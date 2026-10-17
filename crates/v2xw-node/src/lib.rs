@@ -99,6 +99,7 @@ pub mod profiles;
 pub mod queue;
 pub mod rsu;
 pub mod runtime;
+pub mod rxval;
 pub mod safety;
 pub mod secure;
 pub mod server;

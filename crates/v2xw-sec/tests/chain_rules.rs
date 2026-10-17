@@ -812,3 +812,94 @@ fn the_same_aca_response_rule() {
     assert!(chain::same_aca_response(&a.cert, &e.cert));
     assert!(!chain::same_aca_response(&a2.cert, &e.cert));
 }
+
+// ------------------------------------------------------------------------------------
+// The published US RA profile (WP-C2 documented deviation).
+
+/// The shape of the published US RA certificates (SAESOL production, `ra.prod.s2x.io` in
+/// the 2025-08-13 production chain file; the same group sits in `certRequestPermissions`
+/// on the Autocrypt, ISS and SAESOL test RAs): explicit, `certIssuePermissions {all,
+/// minChainLength 0, chainLengthRange 0, eeType app}`, under an ICA whose `all` group is
+/// `{2, 0}` under a root whose `all` group is `{3, -1}` (governance.rs
+/// `cert_issue_permissions`, transcribed from those files).
+fn published_ra_chain(null: (i64, i64), in_request: bool) -> (Vec<Certificate>, Node, Node) {
+    let both = || ee_type(true, true);
+    let mut root_spec = Spec::ca("rootca.prod.s2x.io", group(None, 3, -1, both()));
+    root_spec.issue.as_mut().unwrap().push(group(
+        Some(vec![rng(35, None), rng(256, Some(SspRange::all(())))]),
+        1,
+        -1,
+        both(),
+    ));
+    let r = root(root_spec, 11);
+    // The ICA: `{all, 2, 0}` and `{35, 256 sspRange all; 1, -1}`, app and enrol.
+    let mut ica_spec = Spec::ca("ica.prod.s2x.io", group(None, 2, 0, both()));
+    ica_spec.issue.as_mut().unwrap().push(group(
+        Some(vec![
+            rng(35, Some(SspRange::all(()))),
+            rng(256, Some(SspRange::all(()))),
+        ]),
+        1,
+        -1,
+        both(),
+    ));
+    let i = explicit(&r, ica_spec, 21);
+    let mut ra_spec = Spec::ca("ra.prod.s2x.io", all(null.0, null.1));
+    ra_spec.app = Some(vec![app(35, None)]);
+    if in_request {
+        ra_spec.request = ra_spec.issue.take();
+    }
+    let ra = explicit(&i, ra_spec, 31);
+    (vec![ra.cert.clone(), i.cert.clone(), r.cert.clone()], ra, r)
+}
+
+#[test]
+fn the_published_ra_profile_is_refused_strictly_and_accepted_by_a_us_device() {
+    for in_request in [false, true] {
+        let (c, _, r) = published_ra_chain((0, 0), in_request);
+        let strict = ChainPolicy::trusting([&r.cert]).unwrap();
+        let errs = chain::validate(&c, &strict).expect_err("the strict rules refuse it");
+        assert!(
+            errs.iter()
+                .all(|e| e.kind == K::ChainLength && e.index == 0),
+            "{errs:?}"
+        );
+        let anchors = BTreeSet::from([cert::hashed_id32(&r.cert).unwrap()]);
+        let us = ChainPolicy::us_device(anchors, START + 10);
+        let v = chain::validate(&c, &us).expect("a US device accepts the published RA");
+        assert_eq!(
+            v.tolerated.len(),
+            errs.len(),
+            "every tolerated finding is reported"
+        );
+        assert!(
+            v.tolerated
+                .iter()
+                .all(|e| e.detail.starts_with(chain::NULL_GROUP_TAG))
+        );
+    }
+}
+
+#[test]
+fn the_tolerance_grants_nothing_and_covers_only_the_null_group() {
+    let (_, _, r) = published_ra_chain((0, 0), false);
+    let anchors = BTreeSet::from([cert::hashed_id32(&r.cert).unwrap()]);
+    let us = ChainPolicy::us_device(anchors, START + 10);
+    // A `{0, 1}` group is not the published profile and stays refused.
+    let (c, _, _) = published_ra_chain((0, 1), false);
+    assert!(
+        chain::validate(&c, &us).is_err(),
+        "{{0, 1}} is not tolerated"
+    );
+    // A certificate the published RA issued is refused: `{0, 0}` authorises nothing.
+    let (c, ra, _) = published_ra_chain((0, 0), false);
+    let ee = explicit(&ra, Spec::ee(), 41);
+    let mut chain = vec![ee.cert];
+    chain.extend(c);
+    let errs = chain::validate(&chain, &us).expect_err("the RA cannot issue");
+    assert!(
+        errs.iter()
+            .any(|e| e.index == 0 && e.kind == K::ChainLength),
+        "{errs:?}"
+    );
+}

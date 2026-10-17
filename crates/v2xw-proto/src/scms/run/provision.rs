@@ -226,13 +226,14 @@ impl ScmsState {
         let ra_key = pki.ra.enc_public()?;
         let t = self.time32(at);
         let first = self.time32(self.params.period_start(req.start_i));
-        let p = pdu::ee_ra_cert_request(
+        let p = pdu::ee_ra_cert_request_for(
             t,
             &req.signing_public,
             &req.encryption_public,
             &req.ck,
             &req.ek,
             first,
+            self.params.pdu.pseudonym_psids.as_slice(),
         )
         .ok()?;
         let bytes = pdu::signed_encrypted_cert_request(
@@ -438,6 +439,7 @@ impl ScmsState {
                                 plv: [e1.clone(), e2.clone()],
                                 valid_from: self.time32(self.params.period_start(i)),
                                 dummy_lv: dummy,
+                                psids: self.params.pdu.pseudonym_psids.as_slice().to_vec(),
                             };
                             pdu_prov::ra_aca_cert_request_spdu(pki, &x).ok()
                         }

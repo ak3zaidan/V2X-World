@@ -37,6 +37,10 @@ pub struct CredentialFactory {
     wall: WallClock,
     /// Whether the issuer is the SCMS run's own ACA.
     scms_aca: bool,
+    /// The CTL-approved roots every node installs (WP-C2).
+    roots: Vec<Arc<v2xw_msg::sec_types::Certificate>>,
+    /// The local certificate chain file every node installs: the CA certificates.
+    chain_file: Vec<Arc<v2xw_msg::sec_types::Certificate>>,
 }
 
 impl CredentialFactory {
@@ -60,12 +64,47 @@ impl CredentialFactory {
                 false,
             ),
         };
+        // With no SCMS the standalone CA is its own self-signed root; an SCMS run's
+        // roots and chain file are set by `with_trust`.
+        let roots = if scms_aca {
+            Vec::new()
+        } else {
+            vec![Arc::clone(issuer.certificate())]
+        };
         CredentialFactory {
             issuer,
             seed: secret,
             wall,
             scms_aca,
+            roots,
+            chain_file: Vec::new(),
         }
+    }
+
+    /// The same factory with the trust every node installs: the CTL-approved `roots` and
+    /// the CA certificates of the local certificate chain file (WP-C2).
+    #[must_use]
+    pub fn with_trust(
+        mut self,
+        roots: Vec<Arc<v2xw_msg::sec_types::Certificate>>,
+        chain_file: Vec<Arc<v2xw_msg::sec_types::Certificate>>,
+    ) -> CredentialFactory {
+        if !roots.is_empty() {
+            self.roots = roots;
+            self.chain_file = chain_file;
+        }
+        self
+    }
+
+    /// Installs this run's trust on a node's security stack: the roots and the chain
+    /// file. The chain file's validation is done at install, before the node is deployed,
+    /// so its operations are not charged to the node's first received frame.
+    pub fn install_trust(&self, sec: &mut v2xw_node::NodeSecurity) {
+        if self.roots.is_empty() {
+            return;
+        }
+        sec.install_trust(&self.roots, &self.chain_file);
+        let _ = sec.take_validation_ops();
     }
 
     /// The factory a node built outside an engine run gets (tools and tests that call the

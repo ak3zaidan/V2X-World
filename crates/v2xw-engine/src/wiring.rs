@@ -3577,6 +3577,8 @@ pub trait CredentialSink {
     fn sink_permissions(&self) -> Vec<u64>;
     /// Forgets every installed credential key (a new pool replaces the old one).
     fn sink_forget(&mut self);
+    /// Its security stack (to install the run's trust, WP-C2).
+    fn sink_security(&mut self) -> &mut v2xw_node::NodeSecurity;
     /// Installs one credential with its key (`install_credential`).
     ///
     /// # Errors
@@ -3598,6 +3600,9 @@ impl CredentialSink for ObuRuntime {
     fn sink_forget(&mut self) {
         self.security_mut().forget_credentials();
     }
+    fn sink_security(&mut self) -> &mut v2xw_node::NodeSecurity {
+        self.security_mut()
+    }
     fn sink_install(
         &mut self,
         handle: CredentialHandle,
@@ -3616,6 +3621,9 @@ impl CredentialSink for v2xw_node::VruDeviceRuntime {
     }
     fn sink_forget(&mut self) {
         self.security_mut().forget_credentials();
+    }
+    fn sink_security(&mut self) -> &mut v2xw_node::NodeSecurity {
+        self.security_mut()
     }
     fn sink_install(
         &mut self,
@@ -3683,6 +3691,8 @@ pub fn bootstrap_credentials(
         certs: core::mem::take(&mut store.certs).with_policy(policy),
         ..core::mem::take(store)
     };
+    // The roots and the chain file every receiver validates against (WP-C2).
+    factory.install_trust(runtime.security_mut());
     let perms = runtime.security().cert_permissions();
     let count = if rsu { 1 } else { BOOTSTRAP_PSEUDONYMS };
     for j in 0..count {

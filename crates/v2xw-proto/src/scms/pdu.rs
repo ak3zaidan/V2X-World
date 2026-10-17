@@ -340,6 +340,32 @@ fn component_tbs(
         Some(opaque_ssp(ssp)?),
     )];
     app.extend_from_slice(extra_app);
+    // The issue permissions of the published certificates (WP-C2: a receiver validates
+    // the chain, so the ACA must hold the group that covers what it issues): root
+    // `{all, 3, -1}` and three explicit groups, ICA `{all, 2, 0}` and `{35, 256}`, the
+    // ACA (`pca`) `{all, 1, 0, app}`, and the RA the SAESOL production RA's
+    // `{all, 0, 0, app}`, the published profile `chain::ChainPolicy::
+    // accept_published_ra_profile` tolerates (governance.rs `cert_issue_permissions`).
+    let role = name.split('.').next().unwrap_or("");
+    let published = match role {
+        "root" | "ica" | "eca" => crate::scms::governance::cert_issue_permissions(role),
+        "aca" => crate::scms::governance::cert_issue_permissions("pca"),
+        "ra" => Some(SequenceOfPsidGroupPermissions(vec![
+            v2xw_msg::sec_types::PsidGroupPermissions::new(
+                v2xw_msg::sec_types::ieee1609_dot2::SubjectPermissions::all(()),
+                Integer::from(0),
+                Integer::from(0),
+                {
+                    let mut b = rasn::types::FixedBitString::<8>::ZERO;
+                    b.set(0, true);
+                    v2xw_msg::sec_types::EndEntityType(b)
+                },
+            ),
+        ])),
+        _ => None,
+    };
+    let issue = published
+        .or_else(|| issues.then(|| SequenceOfPsidGroupPermissions(vec![cert::issue_all_group()])));
     Ok(ToBeSignedCertificate::new(
         CertificateId::name(Hostname(name.into())),
         HashedId3(FixedOctetString::from([0u8; 3])),
@@ -351,7 +377,7 @@ fn component_tbs(
         None,
         None,
         Some(SequenceOfPsidSsp(app)),
-        issues.then(|| SequenceOfPsidGroupPermissions(vec![cert::issue_all_group()])),
+        issue,
         None,
         None,
         enc.map(public_encryption_key).transpose()?,
@@ -555,7 +581,7 @@ impl ScmsPki {
         let key = Signer1609::p256(&ec::scalar_to_be32(&d)).ok_or(PduError::Key("P-256"))?;
         let enc_private = with_enc.then(|| g.scalar());
         let enc_public = enc_private.as_ref().map(Point::mul_base);
-        let tbs = component_tbs(
+        let mut tbs = component_tbs(
             name,
             start,
             years,
@@ -565,6 +591,12 @@ impl ScmsPki {
             VerificationKeyIndicator::verificationKey(key.public_key()),
             extra_app,
         )?;
+        // A component is revoked by hash on series 2 ([SMP] Table 1: ICA, ACA, ECA, RA,
+        // LA), under its issuer as CRACA, so a receiver can match a series-2 CRL entry to
+        // it (WP-C2: a revoked CA revokes everything that chains to it).
+        let iid = issuer.id8();
+        tbs.craca_id = HashedId3(FixedOctetString::from([iid[5], iid[6], iid[7]]));
+        tbs.crl_series = CrlSeries(Uint16(2));
         let issuer_key = match &issuer.key {
             Signer1609::P256(_) => CertKey::P256(Point::mul_base(
                 issuer
@@ -889,6 +921,28 @@ pub fn ee_ra_cert_request(
     ek: &[u8; 16],
     first_batch_start: u32,
 ) -> Result<ScmsPdu> {
+    ee_ra_cert_request_for(
+        generation_time,
+        cat_signing,
+        cat_encryption,
+        ck,
+        ek,
+        first_batch_start,
+        &[BSM_PSID],
+    )
+}
+
+/// [`ee_ra_cert_request`] asking for `appPermissions` `psids` (no SSP), the pseudonym
+/// permission profile of [`crate::scms::params::PduLayer::pseudonym_psids`].
+pub fn ee_ra_cert_request_for(
+    generation_time: u32,
+    cat_signing: &Point,
+    cat_encryption: &Point,
+    ck: &[u8; 16],
+    ek: &[u8; 16],
+    first_batch_start: u32,
+    psids: &[u64],
+) -> Result<ScmsPdu> {
     let tbs = ToBeSignedCertificate::new(
         CertificateId::none(()),
         HashedId3(FixedOctetString::from([0u8; 3])),
@@ -899,10 +953,12 @@ pub fn ee_ra_cert_request(
         ),
         None,
         None,
-        Some(SequenceOfPsidSsp(vec![PsidSsp::new(
-            Psid(Integer::from(BSM_PSID)),
-            None,
-        )])),
+        Some(SequenceOfPsidSsp(
+            psids
+                .iter()
+                .map(|p| PsidSsp::new(Psid(Integer::from(*p)), None))
+                .collect(),
+        )),
         None,
         None,
         None,

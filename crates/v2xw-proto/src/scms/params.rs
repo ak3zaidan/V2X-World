@@ -358,6 +358,45 @@ pub struct PduLayer {
     /// `Time32` (CAMP `shared_key_update_interval`, a local option, [CAMP122] Table 68).
     /// **Assumption**: one week, the i-period; 0 never rotates.
     pub la_aca_key_rotation_s: u32,
+    /// The PSIDs a pseudonym certificate's `appPermissions` lists: what the EE requests
+    /// in its `EeRaCertRequest` and the RA forwards to the ACA (03 §3.3). Every PSID an
+    /// honest vehicle signs under must be here, or a receiver that checks the SPDU PSID
+    /// against `appPermissions` (1609.2 §5.2; WP-C2) refuses the message. Default: BSM
+    /// (0x20) and misbehaviour reporting (38, the PSID the reporter's pseudonym signs a
+    /// report under, WP-B4); the engine adds what the scenario's vehicles send.
+    /// **Assumption**: one permission profile for the whole fleet.
+    pub pseudonym_psids: PsidList,
+}
+
+/// Up to eight PSIDs, ascending and distinct, by value (1609.2 requires a verifier to
+/// support at least eight `appPermissions` entries, 02 §12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PsidList {
+    n: u8,
+    psids: [u64; 8],
+}
+
+impl PsidList {
+    /// The list of `psids`, sorted and deduplicated; entries past the eighth are dropped.
+    #[must_use]
+    pub fn of(psids: &[u64]) -> PsidList {
+        let mut v = psids.to_vec();
+        v.sort_unstable();
+        v.dedup();
+        v.truncate(8);
+        let mut out = PsidList {
+            n: u8::try_from(v.len()).unwrap_or(8),
+            psids: [0; 8],
+        };
+        out.psids[..v.len()].copy_from_slice(&v);
+        out
+    }
+
+    /// The PSIDs, ascending.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u64] {
+        &self.psids[..usize::from(self.n)]
+    }
 }
 
 impl Default for PduLayer {
@@ -367,6 +406,7 @@ impl Default for PduLayer {
             keep_bytes: false,
             t0_unix_s: 1_767_571_200,
             la_aca_key_rotation_s: 7 * 86_400,
+            pseudonym_psids: PsidList::of(&[0x20, 38]),
         }
     }
 }
