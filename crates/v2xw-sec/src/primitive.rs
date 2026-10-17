@@ -740,8 +740,9 @@ fn scale(c: OpCost, target_clock_hz: f64) -> OpCost {
             p95_us: None,
             ops_per_s: None,
             bytes_per_s: None,
-            over_bytes: None,
-            over_units: None,
+            // The rescaled time still covers the same input as the published one.
+            over_bytes: c.over_bytes,
+            over_units: c.over_units,
         },
         // Nothing to scale: a throughput figure carries no cycle count, so it is passed
         // through unchanged rather than silently reinterpreted on other silicon.
@@ -3938,5 +3939,21 @@ mod tests {
             }
             println!("{line}");
         }
+    }
+    /// Clock-scaling a per-block row keeps what the figure covers: the AURIX HSM's 65
+    /// cycles per SHA-256 block at 100 MHz is 325 ns per block at 200 MHz, not 325 ns
+    /// per call whatever its length.
+    #[test]
+    fn a_scaled_per_block_row_still_counts_blocks() {
+        let sha = d(PrimitiveId::SHA_256);
+        let row = sha
+            .cost
+            .row_or_scaled("hw-profile/test-200mhz", 200.0e6)
+            .expect("scalable");
+        assert!(row.scaled);
+        let unit = sha.cost_unit;
+        let t = |n| row.duration_for_units(PrimitiveOpKind::Verify, unit, unit.units(n));
+        assert_eq!(t(0), Some(Duration::from_nanos(325)));
+        assert_eq!(t(120), Some(Duration::from_nanos(3 * 325)));
     }
 }
