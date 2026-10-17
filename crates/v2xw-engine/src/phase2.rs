@@ -1579,6 +1579,16 @@ impl Phase2 {
             .clone()
             .or_else(|| scenario.security.protocol.as_ref().map(|c| c.id.clone()));
         let wants_backend = protocol.is_some();
+        if scenario.security.scms.is_some() && protocol.as_deref() != Some(CAMP_SCMS) {
+            return Err(conflict(
+                "security.scms",
+                format!(
+                    "describes an SCMS deployment, and this run's credential protocol is \
+                     {}; set security.protocol to {CAMP_SCMS} or remove security.scms",
+                    protocol.as_deref().unwrap_or("none")
+                ),
+            ));
+        }
         let wants_rsus = !scenario.actors.rsus.is_empty();
         let wants_threats = !scenario.threats.attackers.is_empty();
         let wants_detection = !scenario.detection.local.is_empty();
@@ -1741,7 +1751,8 @@ impl Phase2 {
         scms_params.hybrid = hybrid;
         scms_params.kem = kem;
         scms_params.threshold = crate::crypto_config::threshold_deployment(scenario)?;
-        let mut scms = ScmsRun::new_at(scms_params, 0).map_err(|e| {
+        let deployment = deployment_of(scenario, protocol.as_deref() == Some(CAMP_SCMS))?;
+        let mut scms = ScmsRun::new_deployed(scms_params, 0, deployment).map_err(|e| {
             conflict(
                 "actors.backend",
                 format!("the SCMS deployment refused to start: {e}"),
@@ -1750,8 +1761,10 @@ impl Phase2 {
         apply_backend_topology(scenario, &mut scms)?;
         let faults = crate::crypto_config::backend_faults(scenario, &scms)?;
         scms.set_faults(faults);
+        // The deployment sets the elector count and quorum and, under the region model,
+        // the intra-region backend latency (WP-D1).
         let params = LifecycleParams {
-            scms: scms_params,
+            scms: scms.state.params,
             ..params
         };
         let etsi = if protocol.as_deref() == Some(ETSI_PKI) {
@@ -2328,14 +2341,56 @@ impl Phase2 {
         let Some(pki) = self.scms.state.pki.as_ref() else {
             return (Vec::new(), Vec::new());
         };
-        let roots = vec![std::sync::Arc::new(pki.root.cert.clone())];
-        let cas = pki
-            .all()
+        // Every provider whose root the CTL approves (WP-D1, gap row 42): its root as a
+        // trust anchor and its components in the chain file, so a device verifies
+        // another provider's pseudonyms and application certificates. A provider off
+        // the CTL contributes nothing, and whatever it certifies does not verify.
+        let st = &self.scms.state;
+        let on_ctl = |label: &str| {
+            st.gov
+                .root_of(label)
+                .is_some_and(|r| st.gov.ctl.roots.contains(&r))
+        };
+        let mut pkis = vec![pki];
+        pkis.extend(
+            st.peer_pki
+                .iter()
+                .filter(|(label, _)| on_ctl(label))
+                .map(|(_, p)| p),
+        );
+        let roots = pkis
             .iter()
-            .chain(pki.extra.iter().collect::<Vec<_>>().iter())
+            .map(|p| std::sync::Arc::new(p.root.cert.clone()))
+            .collect();
+        let cas = pkis
+            .iter()
+            .flat_map(|p| p.all().into_iter().chain(p.extra.iter()))
             .map(|a| std::sync::Arc::new(a.cert.clone()))
             .collect();
         (roots, cas)
+    }
+
+    /// Every provider's ACA as an issuer, in deployment order (the home provider first):
+    /// the issuer [`crate::credentials::CredentialFactory`] uses for a device assigned to
+    /// that provider. Empty without a PDU layer.
+    #[must_use]
+    pub fn provider_issuers(&self) -> Vec<v2xw_sec::credential::ImplicitIssuer> {
+        let st = &self.scms.state;
+        let Some(home) = st.pki.as_ref() else {
+            return Vec::new();
+        };
+        core::iter::once(home)
+            .chain(st.peer_pki.iter().map(|(_, p)| p))
+            .filter_map(|p| {
+                v2xw_sec::credential::ImplicitIssuer::new(p.aca.cert.clone(), p.aca.private?).ok()
+            })
+            .collect()
+    }
+
+    /// The deployment this run's backend was built from (WP-D1).
+    #[must_use]
+    pub fn deployment(&self) -> &v2xw_proto::scms::deployment::Deployment {
+        &self.scms.state.deployment
     }
 
     /// The current signed CRL the CRL Generator distributes (series 1, full), as the
@@ -4684,6 +4739,243 @@ pub fn attacker_params(
 /// Also the loader's check of the key (`crate::scenario::validate` runs it on a default
 /// parameter set), so a wrong id or parameter is refused at Check, in the same words, and
 /// not first discovered when the run is built.
+/// The SCMS deployment a scenario runs on (`security.scms.deployment`, WP-D1).
+///
+/// An SCMS run (`protocol/scms/camp`) defaults to `us-production-2025`, the US system;
+/// any other run keeps the single-SCMS `camp-reference` topology its backend has always
+/// had. An explicit `net.backend_net.params.latency_ms` is a flat link latency, so it
+/// selects the `flat` latency model unless the deployment names one.
+///
+/// # Errors
+/// [`EngineError::Scenario`] for an unknown preset, provider, role, region, latency model
+/// or butterfly, a refused butterfly (`unified`, `cubk`), a `custom` preset without
+/// providers, or a deployment that does not validate.
+pub fn deployment_of(
+    scenario: &Scenario,
+    scms_run: bool,
+) -> Result<v2xw_proto::scms::deployment::Deployment> {
+    use v2xw_proto::scms::deployment::{Deployment, LatencyModel, Preset, Provider, Region};
+    let spec = scenario
+        .security
+        .scms
+        .as_ref()
+        .and_then(|s| s.deployment.as_ref());
+    let field = "security.scms.deployment";
+    let preset = match spec {
+        Some(s) => Preset::parse(&s.preset).ok_or_else(|| {
+            conflict(
+                &format!("{field}.preset"),
+                format!(
+                    "'{}' is not a preset; allowed: {}",
+                    s.preset,
+                    Preset::IDS.join(", ")
+                ),
+            )
+        })?,
+        None if scms_run => Preset::UsProduction2025,
+        None => Preset::CampReference,
+    };
+    let mut d = Deployment::preset(preset);
+    let flat_override = scenario
+        .net
+        .backend_net
+        .as_ref()
+        .and_then(|c| c.params.get("latency_ms"))
+        .is_some();
+    if flat_override {
+        d.latency = LatencyModel::Flat;
+    }
+    let Some(s) = spec else {
+        return Ok(d);
+    };
+    if preset == Preset::Custom {
+        if s.providers.is_empty() {
+            return Err(conflict(
+                &format!("{field}.providers"),
+                "is empty; a custom deployment lists its providers".to_string(),
+            ));
+        }
+        d.providers.clear();
+    }
+    for p in &s.providers {
+        let at = format!("{field}.providers.{}", p.name);
+        let idx = match d.providers.iter().position(|q| q.name == p.name) {
+            Some(i) => i,
+            None if preset == Preset::Custom => {
+                let mut q = Deployment::preset(Preset::UsProduction2025).providers[0].clone();
+                q.name.clone_from(&p.name);
+                q.fleet_share = 0.0;
+                d.providers.push(q);
+                d.providers.len() - 1
+            }
+            None => {
+                return Err(conflict(
+                    &at,
+                    format!(
+                        "is not a provider of {}; it has {}. Use preset custom to name others",
+                        preset.id(),
+                        d.providers
+                            .iter()
+                            .map(|q| q.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                ));
+            }
+        };
+        let q: &mut Provider = &mut d.providers[idx];
+        for (role, n) in &p.components {
+            q.components.insert(role.clone(), *n);
+        }
+        if let Some(r) = &p.region {
+            q.region = Region::assumed(r).ok_or_else(|| {
+                conflict(
+                    &format!("{at}.region"),
+                    format!(
+                        "'{r}' is not a region; allowed: {}",
+                        v2xw_proto::scms::deployment::REGIONS
+                            .iter()
+                            .map(|x| x.name)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+            })?;
+        }
+        if let Some(f) = p.fleet_share {
+            q.fleet_share = f;
+        }
+        if let Some(on) = p.on_ctl {
+            q.on_ctl = on;
+        }
+    }
+    if let Some(n) = s.electors {
+        d.electors = n;
+    }
+    if let Some(n) = s.quorum {
+        d.quorum = n;
+    }
+    if let Some(o) = &s.options {
+        if let Some(lop) = o.lop {
+            d.options.lop = lop;
+        }
+        if let Some(b) = &o.butterfly {
+            d.options.butterfly = Deployment::butterfly(b)
+                .map_err(|e| conflict(&format!("{field}.options.butterfly"), e.to_string()))?;
+        }
+    }
+    let (fibre, per_link) = (s.fibre_fraction, s.per_link_ms);
+    match s.latency.as_deref() {
+        None if fibre.is_none() && per_link.is_none() => {}
+        None | Some("region") => {
+            let (f0, o0) = match LatencyModel::DEFAULT_REGION {
+                LatencyModel::Region {
+                    fibre_fraction,
+                    per_link_overhead,
+                } => (fibre_fraction, per_link_overhead),
+                LatencyModel::Flat => unreachable!(),
+            };
+            let f = fibre.unwrap_or(f0);
+            if !(f > 0.0 && f <= 1.0) {
+                return Err(conflict(
+                    &format!("{field}.fibre_fraction"),
+                    format!("{f} must be in (0, 1]"),
+                ));
+            }
+            let o = match per_link {
+                Some(ms) if ms.is_finite() && ms >= 0.0 => {
+                    Duration::from_nanos((ms * 1e6).round() as u64)
+                }
+                Some(ms) => {
+                    return Err(conflict(
+                        &format!("{field}.per_link_ms"),
+                        format!("{ms} must be ≥ 0"),
+                    ));
+                }
+                None => o0,
+            };
+            d.latency = LatencyModel::Region {
+                fibre_fraction: f,
+                per_link_overhead: o,
+            };
+        }
+        Some("flat") if fibre.is_none() && per_link.is_none() => d.latency = LatencyModel::Flat,
+        Some("flat") => {
+            return Err(conflict(
+                &format!("{field}.latency"),
+                "is flat, which has no fibre_fraction or per_link_ms; remove them or choose region"
+                    .to_string(),
+            ));
+        }
+        Some(other) => {
+            return Err(conflict(
+                &format!("{field}.latency"),
+                format!("'{other}' is not a latency model; allowed: region, flat"),
+            ));
+        }
+    }
+    if let Some(on) = s.ma_report_sharing {
+        if d.providers.len() == 1 {
+            return Err(conflict(
+                &format!("{field}.ma_report_sharing"),
+                "has nothing to share with: the deployment has one provider".to_string(),
+            ));
+        }
+        d.ma_report_sharing = on;
+    }
+    d.validate().map_err(|e| conflict(field, e.to_string()))?;
+    Ok(d)
+}
+
+/// What the run manifest says about the SCMS deployment (WP-D1): its preset and providers,
+/// every labelled assumption it rests on, and what this build does not model yet. Empty
+/// for a run that is not an SCMS run or whose deployment does not build (the loader
+/// refuses that one).
+#[must_use]
+pub fn deployment_warnings(scenario: &Scenario) -> Vec<String> {
+    let protocol = scenario
+        .actors
+        .backend
+        .protocol
+        .clone()
+        .or_else(|| scenario.security.protocol.as_ref().map(|c| c.id.clone()));
+    if protocol.as_deref() != Some(CAMP_SCMS) {
+        return Vec::new();
+    }
+    let Ok(d) = deployment_of(scenario, true) else {
+        return Vec::new();
+    };
+    let mut out = vec![format!(
+        "SCMS deployment {}: {} ({}); {} electors, quorum {}{}",
+        d.preset.id(),
+        d.providers
+            .iter()
+            .map(|p| format!(
+                "{}{} share {:.3}",
+                p.name,
+                if p.on_ctl { "" } else { " (NOT on the CTL)" },
+                p.fleet_share
+            ))
+            .collect::<Vec<_>>()
+            .join(", "),
+        if d.options.lop { "LOP on" } else { "no LOP" },
+        d.electors,
+        d.quorum,
+        if d.is_us() { "" } else { "; NOT the US system" }
+    )];
+    out.extend(d.assumptions());
+    if d.providers.len() > 1 {
+        out.push(format!(
+            "SCMS deployment: every vehicle's enrolment, provisioning, reports and \
+             revocation run on {}'s backend; the other providers certify roadside units \
+             (by fleet share) and are hosted and linked, but carry no vehicle flows in \
+             this build (WP-D1 open item)",
+            d.providers[0].name
+        ));
+    }
+    out
+}
+
 pub(crate) fn apply_backend_net(scenario: &Scenario, p: &mut ScmsParams) -> Result<()> {
     let Some(choice) = &scenario.net.backend_net else {
         return Ok(());

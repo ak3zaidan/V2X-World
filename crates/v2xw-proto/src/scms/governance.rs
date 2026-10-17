@@ -991,6 +991,9 @@ pub struct PeerProvider {
     pub ica: NodeId,
     /// Its Policy Generator.
     pub pg: NodeId,
+    /// Whether the genesis CTL approves its root
+    /// ([`crate::scms::deployment::Provider::on_ctl`]).
+    pub on_ctl: bool,
 }
 
 impl PeerProvider {
@@ -1006,6 +1009,7 @@ impl PeerProvider {
                     root: n.root,
                     ica: n.ica,
                     pg: n.pg,
+                    on_ctl: d.providers[k].on_ctl,
                 }
             })
             .collect()
@@ -1386,7 +1390,7 @@ impl Governance {
         self.roots.push(RootSlot {
             label: label.to_string(),
             authority: root,
-            approved: true,
+            approved: peer.on_ctl,
         });
         self.peer_authorities.insert(label.to_string(), set);
     }

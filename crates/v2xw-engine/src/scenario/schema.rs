@@ -2385,6 +2385,100 @@ pub struct Security {
     /// priority, metres. 300 unless set; refused under any other policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prioritized_horizon_m: Option<f64>,
+    /// The SCMS deployment the credential lifecycle runs on (`protocol/scms/camp` only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scms: Option<ScmsSpec>,
+}
+
+/// `security.scms`: the SCMS deployment (WP-D1, 00-gap-analysis §2).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScmsSpec {
+    /// Which providers run, what each runs and where. Absent: `us-production-2025`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment: Option<DeploymentSpec>,
+}
+
+/// `security.scms.deployment`: the providers on the CTL and what each runs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentSpec {
+    /// `us-production-2025` (two providers on one CTL, the US system), `us-test-ctl-2025`
+    /// (six roots), `camp-reference` (one SCMS with LOP and a central MA, the earlier
+    /// topology) or `custom` (the providers listed below).
+    #[serde(default = "DeploymentSpec::default_preset")]
+    pub preset: String,
+    /// Per-provider changes, matched by name to the preset's providers; under `custom`,
+    /// the providers themselves.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderSpec>,
+    /// Elector count (5). Any other value marks the run as not the US system.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub electors: Option<u32>,
+    /// Elector signatures a trust list needs (3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quorum: Option<u32>,
+    /// Elements specified but not deployed in the US.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<DeploymentOptionsSpec>,
+    /// `region`: latency from great-circle distance at fibre speed plus a per-link
+    /// overhead (ASSUMPTION); `flat`: the fixed backend link latency on every link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency: Option<String>,
+    /// Signal speed in fibre as a fraction of c, under `region` (2/3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fibre_fraction: Option<f64>,
+    /// Added to every link under `region`, ms (1, ASSUMPTION).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_link_ms: Option<f64>,
+    /// Whether each MA forwards a report about another provider's certificate to that
+    /// provider's MA (on).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ma_report_sharing: Option<bool>,
+}
+
+impl DeploymentSpec {
+    fn default_preset() -> String {
+        "us-production-2025".to_string()
+    }
+}
+
+/// `security.scms.deployment.providers[]`: one provider.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderSpec {
+    /// Its neutral label, e.g. `provider-b`.
+    pub name: String,
+    /// Instances per role (`root`, `ica`, `eca`, `ra`, `aca`, `la1`, `la2`, `ma`, `crlg`,
+    /// `pg`); a role left out keeps the preset's count.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub components: BTreeMap<String, u32>,
+    /// Its cloud region (ASSUMPTION: no provider publishes one): `us-east`, `us-east-2`,
+    /// `us-central`, `us-south`, `us-west`, `us-west-1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// The share of roadside units it certifies (ASSUMPTION: no market share is
+    /// published); the shares sum to 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_share: Option<f64>,
+    /// Whether the electors have approved its root onto the CTL (on). Off models a
+    /// provider whose root is not trusted: a test-CTL root on the production system, or
+    /// a rogue SCMS; nothing it certifies verifies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_ctl: Option<bool>,
+}
+
+/// `security.scms.deployment.options`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentOptionsSpec {
+    /// The Location Obscurer Proxy (off: not in 1609.2.1 or the US profile). Off makes
+    /// the proxy hop transparent: no latency, no queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lop: Option<bool>,
+    /// `original` only: the unified and compact unified butterflies are refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub butterfly: Option<String>,
 }
 
 impl Security {
@@ -2416,6 +2510,7 @@ impl Default for Security {
             pseudonym_change: PseudonymChangeSpec::default(),
             on_demand_threshold: None,
             prioritized_horizon_m: None,
+            scms: None,
         }
     }
 }

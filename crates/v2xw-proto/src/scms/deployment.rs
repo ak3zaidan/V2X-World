@@ -75,8 +75,9 @@ pub const US_QUORUM: u32 = 3;
 /// The node-id block of provider `k` for `k ≥ 1`: `PEER_NODE_BASE + k · PEER_NODE_STRIDE`.
 /// Provider 0 keeps [`ScmsNodes::default`]'s 1–11, so a one-provider deployment reproduces
 /// today's ids. The blocks are clear of the governance ids (20–59, roots from 60), the
-/// committees (200–391) and the devices (from 1,000,000 in the engine).
-pub const PEER_NODE_BASE: u32 = 1_000;
+/// committees (200–391), the library tests' devices (from 1,000) and the engine's devices
+/// (from 1,000,000).
+pub const PEER_NODE_BASE: u32 = 900_000;
 /// See [`PEER_NODE_BASE`].
 pub const PEER_NODE_STRIDE: u32 = 100;
 /// Within a provider's block, the extra instances of a role (a second ACA, say) start here.
@@ -301,6 +302,10 @@ pub struct Provider {
     pub crl_publication: CrlPublication,
     /// The share of the fleet it serves (ASSUMPTION: no market share is published).
     pub fleet_share: f64,
+    /// Whether the electors approved its root onto the CTL. Off models a provider whose
+    /// root nobody trusts (a test-CTL root on the production system, a rogue SCMS): it
+    /// still certifies, and nothing it certifies verifies. The home provider must be on.
+    pub on_ctl: bool,
 }
 
 impl Provider {
@@ -322,6 +327,7 @@ impl Provider {
             ma_mode,
             crl_publication: CrlPublication::SlaOneBusinessDay,
             fleet_share: share,
+            on_ctl: true,
         }
     }
 }
@@ -453,7 +459,9 @@ impl Deployment {
                 .map(|s| Provider::standard(&format!("provider-{s}"), 1, manual, 1.0 / 6.0))
                 .collect()),
             Preset::CampReference => {
-                let mut camp = Provider::standard("camp", 1, manual, 1.0);
+                // Labelled like the home provider so today's certificates (named
+                // `<role>.provider-a.sim`) are reproduced byte for byte.
+                let mut camp = Provider::standard("provider-a", 1, manual, 1.0);
                 for role in ["lop", "crl_store", "crl_broadcast"] {
                     camp.components.insert(role.to_string(), 1);
                 }
@@ -516,6 +524,12 @@ impl Deployment {
                     "{} of {} electors; it must be 1 to the elector count (≤ 32)",
                     self.quorum, self.electors
                 ),
+            ));
+        }
+        if !self.providers[0].on_ctl {
+            return Err(invalid(
+                &format!("providers.{}.on_ctl", self.providers[0].name),
+                "the first (home) provider runs the run's flows and must be on the CTL".into(),
             ));
         }
         let mut names = std::collections::BTreeSet::new();
