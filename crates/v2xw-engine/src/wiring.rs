@@ -3575,6 +3575,8 @@ pub trait CredentialSink {
     fn sink_stores(&mut self) -> &mut v2xw_node::Stores;
     /// The PSIDs its certificates must permit.
     fn sink_permissions(&self) -> Vec<u64>;
+    /// Forgets every installed credential key (a new pool replaces the old one).
+    fn sink_forget(&mut self);
     /// Installs one credential with its key (`install_credential`).
     ///
     /// # Errors
@@ -3593,6 +3595,9 @@ impl CredentialSink for ObuRuntime {
     fn sink_permissions(&self) -> Vec<u64> {
         self.security().cert_permissions()
     }
+    fn sink_forget(&mut self) {
+        self.security_mut().forget_credentials();
+    }
     fn sink_install(
         &mut self,
         handle: CredentialHandle,
@@ -3608,6 +3613,9 @@ impl CredentialSink for v2xw_node::VruDeviceRuntime {
     }
     fn sink_permissions(&self) -> Vec<u64> {
         self.security().cert_permissions()
+    }
+    fn sink_forget(&mut self) {
+        self.security_mut().forget_credentials();
     }
     fn sink_install(
         &mut self,
@@ -4012,6 +4020,7 @@ pub fn install_provisioned<R: CredentialSink + ?Sized>(
     // empty. The rotation policy is re-applied from the scenario, exactly as
     // `bootstrap_credentials` set it.
     let policy = rotation_policy(scenario);
+    runtime.sink_forget();
     *runtime.sink_stores() = v2xw_node::Stores {
         certs: v2xw_node::CertStore::new().with_policy(policy),
         ..core::mem::take(runtime.sink_stores())

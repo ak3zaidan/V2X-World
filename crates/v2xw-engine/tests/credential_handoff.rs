@@ -167,6 +167,14 @@ fn vehicles_sign_under_the_runs_aca() {
         match &cert.0.to_be_signed.id {
             CertificateId::linkageData(_) => {
                 assert_eq!(cert.0.to_be_signed.crl_series.0.0, 1);
+                // The protocol's certificate, not a factory one: the ACA put the CRL
+                // Generator's cracaId in it, where factory issuance puts the ACA's own.
+                // (Every vehicle of this run is provisioned before it drives.)
+                assert_ne!(
+                    cert.0.to_be_signed.craca_id,
+                    v2xw_sec::hashed_id3(&aca_coer),
+                    "node {node:?} signs under a factory certificate, not its SCMS batch"
+                );
                 pseudonyms.insert(digest);
             }
             CertificateId::none(()) => {

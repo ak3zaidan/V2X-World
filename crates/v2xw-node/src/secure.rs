@@ -585,13 +585,27 @@ impl NodeSecurity {
         j_index: u32,
         key: &ImplicitKey,
     ) -> Result<&SignerHandle, SecError> {
-        if !self.signers.contains_key(&(i_period, j_index)) {
+        // Reused only for the same certificate: a handle left under `(i, j)` by an earlier
+        // pool (the factory batch a vehicle starts with, before its SCMS batch replaces it)
+        // must not keep signing under the new credential's name.
+        let same = self
+            .signers
+            .get(&(i_period, j_index))
+            .is_some_and(|s| s.certificate.as_ref() == key.certificate().as_ref());
+        if !same {
             let handle = self.crypto.import_implicit(node, key)?;
             self.learn_issuer(Arc::clone(key.issuer()));
             let signer = SignerHandle::new(node, handle, Arc::clone(key.certificate()))?;
             self.signers.insert((i_period, j_index), signer);
         }
         Ok(&self.signers[&(i_period, j_index)])
+    }
+
+    /// Forgets every installed credential (the signer handles and the active choice), as
+    /// a device does when a new batch replaces its pool. The CA cache is kept.
+    pub fn forget_credentials(&mut self) {
+        self.signers.clear();
+        self.active = None;
     }
 
     /// Adds a CA certificate to this node's cache (an ACA certificate from a download or
