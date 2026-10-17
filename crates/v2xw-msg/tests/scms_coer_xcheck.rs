@@ -43,15 +43,33 @@ fn table() -> BTreeMap<&'static str, RoundTrip> {
         ("RaEeCertAckSpdu", rt::<p::RaEeCertAckSpdu>),
         ("RaEeCertInfoSpdu", rt::<p::RaEeCertInfoSpdu>),
         ("RaEeCertAndAcpcInfoSpdu", rt::<p::RaEeCertAndAcpcInfoSpdu>),
-        ("EeRaDownloadRequestPlainSpdu", rt::<p::EeRaDownloadRequestPlainSpdu>),
+        (
+            "EeRaDownloadRequestPlainSpdu",
+            rt::<p::EeRaDownloadRequestPlainSpdu>,
+        ),
         ("EeRaDownloadRequestSpdu", rt::<p::EeRaDownloadRequestSpdu>),
-        ("EeRaSuccessorEnrollmentCertRequestSpdu", rt::<p::EeRaSuccessorEnrollmentCertRequestSpdu>),
-        ("RaEeEnrollmentCertAckSpdu", rt::<p::RaEeEnrollmentCertAckSpdu>),
+        (
+            "EeRaSuccessorEnrollmentCertRequestSpdu",
+            rt::<p::EeRaSuccessorEnrollmentCertRequestSpdu>,
+        ),
+        (
+            "RaEeEnrollmentCertAckSpdu",
+            rt::<p::RaEeEnrollmentCertAckSpdu>,
+        ),
         ("RaAcaCertRequestSpdu", rt::<p::RaAcaCertRequestSpdu>),
         ("AcaRaCertResponseSpdu", rt::<p::AcaRaCertResponseSpdu>),
-        ("AcaEeCertResponsePlainSpdu", rt::<p::AcaEeCertResponsePlainSpdu>),
-        ("AcaEeCertResponsePrivateSpdu", rt::<p::AcaEeCertResponsePrivateSpdu>),
-        ("AcaEeCertResponseCubkSpdu", rt::<p::AcaEeCertResponseCubkSpdu>),
+        (
+            "AcaEeCertResponsePlainSpdu",
+            rt::<p::AcaEeCertResponsePlainSpdu>,
+        ),
+        (
+            "AcaEeCertResponsePrivateSpdu",
+            rt::<p::AcaEeCertResponsePrivateSpdu>,
+        ),
+        (
+            "AcaEeCertResponseCubkSpdu",
+            rt::<p::AcaEeCertResponseCubkSpdu>,
+        ),
         ("CompositeCrlSpdu", rt::<p::CompositeCrlSpdu>),
         ("CertificateChainSpdu", rt::<p::CertificateChainSpdu>),
         ("MultiSignedCtlSpdu", rt::<p::MultiSignedCtlSpdu>),
@@ -69,11 +87,17 @@ fn table() -> BTreeMap<&'static str, RoundTrip> {
         ("AcaEeCertResponse", rt::<aca_ee::AcaEeCertResponse>),
         ("RaAcaCertRequest", rt::<aca_ra::RaAcaCertRequest>),
         ("AcaRaCertResponse", rt::<aca_ra::AcaRaCertResponse>),
-        ("EncryptedIndividualPLV", rt::<aca_ra::EncryptedIndividualPLV>),
+        (
+            "EncryptedIndividualPLV",
+            rt::<aca_ra::EncryptedIndividualPLV>,
+        ),
         ("CertManagementPdu", rt::<cm::CertManagementPdu>),
         ("FullIeeeTbsCtl", rt::<cm::FullIeeeTbsCtl>),
         ("ToBeSignedCtlSignature", rt::<cm::ToBeSignedCtlSignature>),
-        ("CertificateManagementInfoStatus", rt::<cm::CertificateManagementInfoStatus>),
+        (
+            "CertificateManagementInfoStatus",
+            rt::<cm::CertificateManagementInfoStatus>,
+        ),
         ("CompositeCrl", rt::<cm::CompositeCrl>),
         ("CertificateChain", rt::<cm::CertificateChain>),
         ("Ieee1609Dot2Data", rt::<d2::Ieee1609Dot2Data>),
@@ -105,7 +129,11 @@ fn dump(name: &str, input: &[u8], output: &[u8]) {
         return;
     };
     let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = writeln!(f, "{name} {} {}", hex(input), hex(output));
     }
 }
@@ -131,7 +159,11 @@ fn corpus() -> Vec<Value> {
                 Some("NESTED") => true,
                 Some(other) => panic!("unknown corpus flag {other:?}"),
             };
-            Value { name, bytes, nested }
+            Value {
+                name,
+                bytes,
+                nested,
+            }
         })
         .collect()
 }
@@ -180,7 +212,9 @@ fn rasn_reencodes_every_asn1tools_value_byte_for_byte() {
     }
     let mut by_type: BTreeMap<&str, usize> = BTreeMap::new();
     for f in &failures {
-        *by_type.entry(f.split(':').next().unwrap_or("")).or_default() += 1;
+        *by_type
+            .entry(f.split(':').next().unwrap_or(""))
+            .or_default() += 1;
     }
     let mut seen = std::collections::BTreeSet::new();
     let first_per_type: Vec<_> = failures
@@ -196,9 +230,16 @@ fn rasn_reencodes_every_asn1tools_value_byte_for_byte() {
     // Every type is covered, at the promised depth, outside the exempt class.
     for name in table.keys() {
         let n = per_type.get(name).copied().unwrap_or(0);
-        assert!(n >= PER_TYPE, "{name}: {n} corpus values, want at least {PER_TYPE}");
+        assert!(
+            n >= PER_TYPE,
+            "{name}: {n} corpus values, want at least {PER_TYPE}"
+        );
     }
-    assert_eq!(per_type.len(), table.len(), "corpus and table name different types");
+    assert_eq!(
+        per_type.len(),
+        table.len(),
+        "corpus and table name different types"
+    );
     let total: usize = per_type.values().sum();
     assert!(
         nested * 20 < total,
@@ -221,7 +262,10 @@ fn the_corpus_exercises_the_hard_parts_of_coer() {
         .filter(|v| v.bytes.windows(2).any(|w| w[0] == 0x81 || w[0] == 0x82))
         .count();
     let big = values.iter().filter(|v| v.bytes.len() > 500).count();
-    assert!(long_form > 1000, "only {long_form} values contain a long-form length byte");
+    assert!(
+        long_form > 1000,
+        "only {long_form} values contain a long-form length byte"
+    );
     assert!(big > 200, "only {big} values exceed 500 bytes");
 }
 
@@ -250,7 +294,8 @@ fn rasn_defect_nested_extension_additions_corrupt_the_encoding() {
         "rasn now re-encodes a nested extension addition correctly: remove the NESTED exemption"
     );
     assert!(
-        rasn::coer::decode::<d2::HeaderInfo>(&again).is_err() || rt::<d2::HeaderInfo>(&again).ok() != Some(again.clone()),
+        rasn::coer::decode::<d2::HeaderInfo>(&again).is_err()
+            || rt::<d2::HeaderInfo>(&again).ok() != Some(again.clone()),
         "the corrupt encoding should not survive a second round trip unchanged"
     );
 }
@@ -270,7 +315,10 @@ fn rasn_defect_psid_at_or_above_2_pow_63() {
     // Correct below the bound (X.696: length, then minimal unsigned octets).
     assert_eq!(enc(0x80), [0x01, 0x80]);
     assert_eq!(enc(0x8007), [0x02, 0x80, 0x07]);
-    assert_eq!(enc(0x7fff_ffff_ffff_ffff), [0x08, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    assert_eq!(
+        enc(0x7fff_ffff_ffff_ffff),
+        [0x08, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+    );
     // Wrong at and above it: X.696 wants 08 80 00 00 00 00 00 00 00.
     assert_eq!(
         enc(0x8000_0000_0000_0000),

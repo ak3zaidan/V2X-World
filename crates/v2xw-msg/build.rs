@@ -374,7 +374,10 @@ fn link_ieee1609dot2dot1_scopes(generated: &mut String) -> Result<(), String> {
              module, found {reexported}. rasn-compiler's output layout changed."
         ));
     }
-    let fixed = body.replace("\n    use super::ieee1609_dot2", "\n    pub use super::ieee1609_dot2");
+    let fixed = body.replace(
+        "\n    use super::ieee1609_dot2",
+        "\n    pub use super::ieee1609_dot2",
+    );
     generated.replace_range(start..end, &fixed);
 
     for module in DOT1_MODULES {

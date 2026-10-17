@@ -138,6 +138,7 @@ pub mod generator;
 pub mod j2735;
 pub mod j2945;
 pub mod registry;
+pub mod scms_types;
 pub mod sec_types;
 pub mod size_model;
 pub mod units;
