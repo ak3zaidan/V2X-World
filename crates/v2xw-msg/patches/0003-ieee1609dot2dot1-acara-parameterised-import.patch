@@ -1,0 +1,21 @@
+# Defect: rasn-compiler 0.16 emits an import of a parameterised type it never defines.
+#
+# Module:   Ieee1609Dot2Dot1AcaRaInterface (IEEE 1609.2.1-2022, ETSI forge tag
+#           2022-published, commit 329ff68846fe)
+# ASN.1:    IMPORTS Ieee1609Dot2Data-SymmEncryptedSingleRecipient{}
+#           FROM Ieee1609Dot2Dot1Protocol
+# Error:    E0432 — as in patch 0002: the parameterised definition has no Rust item; its
+#           one use (EncryptedIndividualPLV.encPlv) is expanded in place.
+#
+# The name is dropped from the import list. No type, tag or constraint changes.
+unit: sec_types.rs
+expect: 1
+@@FIND@@
+        AcaEeCertResponseCubkSpdu, AcaEeCertResponsePlainSpdu, AcaEeCertResponsePrivateSpdu,
+        Ieee1609Dot2DataSymmEncryptedSingleRecipient,
+    };
+@@REPLACE@@
+        // PATCHED by crates/v2xw-msg/patches/0003-ieee1609dot2dot1-acara-parameterised-import.patch
+        AcaEeCertResponseCubkSpdu, AcaEeCertResponsePlainSpdu, AcaEeCertResponsePrivateSpdu,
+    };
+@@END@@

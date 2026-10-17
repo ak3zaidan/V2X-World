@@ -135,6 +135,61 @@ TS 103 097 can import it. No licence file has been invented to fill the gap: thi
 is the record, and anyone republishing this repository should fetch the repository's own
 `LICENSE` rather than assume the text above.
 
+### 3.6 IEEE 1609.2.1-2022 — ETSI forge mirror (tag `2022-published`)
+
+Added 2026-10-16 (SCMS realism WP-A1, `docs/design/scms-real/00-gap-analysis-and-plan.md`).
+Compiled into the security unit (`sec_types.rs`) alongside §3.4 and §3.5. Every module
+imports the 1609.2 modules `WITH SUCCESSORS`, which the 1609.2-2025 modules of §3.5 satisfy.
+All 14 files are ASCII, so they need no `normalized-utf8/` copy.
+
+Source: <https://forge.etsi.org/rep/ITS/asn1/ieee1609.2.1/-/raw/2022-published/FILE>, tag
+`2022-published` = commit `329ff68846fe` (2022-10-28), fetched 2026-10-16. **Cross-check:**
+each file is byte-identical (same sha256) to the copy in IEEE's own download bundle,
+<https://standards.ieee.org/wp-content/uploads/2022/05/1609.2.1-2022_downloads.zip>
+(zip sha256 `bc4f5c257e38a73b8104439eab6b07ad900f063d2334c1508a9302bd3fed7117`).
+
+| File (`ieee1609.2.1/`) | Bytes | sha256 |
+|---|---:|---|
+| `Ieee1609Dot2Dot1AcaEeInterface.asn` | 3 903 | `3e9e325e3b39ff2fe1e0eb328bd741170520d01d779fdec8d1c4bde60edf0a6e` |
+| `Ieee1609Dot2Dot1AcaLaInterface.asn` | 892 | `e26b8eba57105fb0165db47157780702422985c5c86e2c635ca0804e030b99e4` |
+| `Ieee1609Dot2Dot1AcaMaInterface.asn` | 892 | `ddaaecc0d621b6d2d298e7558e6fcfb2d4423009a168d9df25699830948228a8` |
+| `Ieee1609Dot2Dot1AcaRaInterface.asn` | 10 346 | `ba6d088314e84aba616b60f1f66213ddac59871aa6b4dd4c0e67c28b03364ad0` |
+| `Ieee1609Dot2Dot1Acpc.asn` | 6 464 | `274eac6a838365f27c4b2e57c9fc3fe631d01f8a102ba78f23b1aade4ee774e8` |
+| `Ieee1609Dot2Dot1CamRaInterface.asn` | 2 800 | `1ad2d323bc1df046e2754a818daedbb27c4403084f7bf93f4192e5118d9898c8` |
+| `Ieee1609Dot2Dot1CertManagement.asn` | 15 091 | `2ae224980487e9b76e02884aacd724316a4290d165d0f55e593d542b44ec28f1` |
+| `Ieee1609Dot2Dot1EcaEeInterface.asn` | 6 776 | `5a808bb3209241cd55cbbeee257629076cc0574d507dfba90a4a69a4dc081cbf` |
+| `Ieee1609Dot2Dot1EeMaInterface.asn` | 923 | `0e31e548070ca9af2a73fa607fffd52cfdbbb77f3d5e64abf9ab0aabf2450580` |
+| `Ieee1609Dot2Dot1EeRaInterface.asn` | 12 081 | `5f96c040dfc9282aa11089a7961dc542bb58fc9f03b05c198c4b086c4a90c2fa` |
+| `Ieee1609Dot2Dot1LaMaInterface.asn` | 890 | `003c19ce857aff7350835094ff532b51a07e758bd375c67139845096faa7b96b` |
+| `Ieee1609Dot2Dot1LaRaInterface.asn` | 890 | `c3e599663f5e770785fb532ad886191dd82b06a63568caf7e91c59d5f7a65420` |
+| `Ieee1609Dot2Dot1MaRaInterface.asn` | 890 | `61321da9ee2967d9f151c1d0cd2de554b5970f9d9502fd2caa5814aa9f4ddbfc` |
+| `Ieee1609Dot2Dot1Protocol.asn` | 45 185 | `b98b1c982b17776a38dc3cf2150cfd1c080c072be2dac35950ce386cf51045ed` |
+
+### 3.7 IEEE 1609.2-2022 — reference copies, **not compiled**
+
+The 2022 edition of the four 1609.2 modules, from the forge tag `2022-published` = commit
+`880216d33d08` (2022-10-27), <https://forge.etsi.org/rep/ITS/asn1/ieee1609.2/-/raw/2022-published/FILE>,
+fetched 2026-10-16. This is the edition SCMS Manager's 1609.2.1 profile v1.0.3 profiles.
+The build does not read them. They are here so that (a) a test can pin the exact code
+difference between the 2022 and the 2025 edition (three places; see
+`crates/v2xw-msg/src/scms_types.rs`), and (b) the independent oracle can compile the 2022
+edition unchanged. `Ieee1609Dot2.asn` and `Ieee1609Dot2BaseTypes.asn` are CP1252, like
+their 2025 successors; no UTF-8 copy is kept because nothing here needs one.
+
+| File (`ieee1609.2-2022/`) | ASN.1 module | Bytes | sha256 |
+|---|---|---:|---|
+| `Ieee1609Dot2.asn` | `Ieee1609Dot2` v2.6 | 65 964 | `990de68dc76dfe235c999c5f5de973b989167b61b7cc29e000e81c38a28ce609` |
+| `Ieee1609Dot2BaseTypes.asn` | `Ieee1609Dot2BaseTypes` v2.4 | 60 723 | `cc0fe455d56e33692907325e8c927db8fd1d7d927ce03a2c43f4580098bb7191` |
+| `Ieee1609Dot2Crl.asn` | `Ieee1609Dot2Crl` v3.2 | 2 306 | `5b1f5612a151b8da4356797d217802a4e4eccd9f9fcd529bd257944c51b40ed5` |
+| `Ieee1609Dot2CrlBaseTypes.asn` | `Ieee1609Dot2CrlBaseTypes` v3.2 | 16 918 | `ffaa6d4aeb1135cdf8b77b368f912607b5a64192d538a83779d04d0e013b23f2` |
+
+**Licence note for §3.6 and §3.7.** As for §3.5: neither forge repository (`ieee1609.2`,
+`ieee1609.2.1`) has a `LICENSE` file at any branch or tag checked (`master`, `ieee`,
+`2022-published`), and the IEEE download bundle carries no licence text either. The module
+text is IEEE copyright, published by IEEE as a free download and mirrored by ETSI. These
+files are committed on the same basis as §3.5, and anyone republishing this repository
+should confirm the terms with IEEE rather than rely on this note.
+
 ## 4. Patches
 
 `crates/v2xw-msg/patches/` holds fixes for known defects, applied to the **generated Rust**,
@@ -145,6 +200,21 @@ than silently ignored.
 | Patch | Defect |
 |---|---|
 | `0001-ieee1609dot2-endentitytype-default.patch` | `rasn-compiler` 0.16 emits `EndEntityType([true, false].into_iter().collect())` for `PsidGroupPermissions.eeType DEFAULT {app}`; `FixedBitString<8>` is a `BitArray` and has no `FromIterator<bool>`. |
+| `0002-ieee1609dot2dot1-acpc-parameterised-imports.patch` | `Ieee1609Dot2Dot1Acpc` imports the parameterised `Ieee1609Dot2Data-Signed{}`/`-Unsecured{}`; the compiler expands each use in place and emits no item for the definition, so the import names nothing (E0432). The import is dropped. |
+| `0003-ieee1609dot2dot1-acara-parameterised-import.patch` | Same defect for `Ieee1609Dot2Data-SymmEncryptedSingleRecipient{}` in `Ieee1609Dot2Dot1AcaRaInterface`. |
+| `0004-ieee1609dot2dot1-certmanagement-crlseries-import.patch` | `Ieee1609Dot2Dot1CertManagement` imports `CrlSeries` from `Ieee1609Dot2CrlBaseTypes`, which only re-exports it (allowed by X.680 §13); the compiler's import there is private (E0603). The import names the defining module; same type. |
+
+`crates/v2xw-msg/build.rs` (`link_ieee1609dot2dot1_scopes`) also makes the
+`Ieee1609Dot2Dot1Protocol` module's imports public (the other 1609.2.1 modules import
+`ToBeSignedCertificate` and friends *from Protocol*) and adds glob imports of the 1609.2
+modules to each 1609.2.1 module (the in-place expansions name `Ieee1609Dot2Content`,
+`SignedData`, `Opaque` without importing them). Both steps fail the build if the generated
+text they hang on is not found. Neither changes a type or a byte; the COER cross-check in
+`crates/v2xw-msg/tests/scms_coer_xcheck.rs` is what shows it.
+
+The 1609.2.1 modules were the case PROVENANCE §1 warned about (parameterised types).
+`rasn-compiler` 0.16 handled them; the hand-written fallback the SCMS plan allows was not
+needed.
 
 Build decision D5 also named the duplicated `SequenceOfTrajectoryInterceptionIndication`
 import in `VAM-PDU-Descriptions.asn`; with VAM generated (2026-09-23) it turned out to need

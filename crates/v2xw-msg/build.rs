@@ -10,7 +10,7 @@
 //! | Unit | File | ASN.1 modules | Encoding |
 //! |---|---|---|---|
 //! | facilities | `etsi_facilities.rs` | `ETSI-ITS-CDD` (TS 102 894-2 R2), `CAM-PDU-Descriptions` (TS 103 900 R2), `DENM-PDU-Description` (TS 103 831 R2) | UPER |
-//! | security | `sec_types.rs` | `Ieee1609Dot2BaseTypes`, `Ieee1609Dot2`, `Ieee1609Dot2CrlBaseTypes`, `Ieee1609Dot2Crl`, `EtsiTs103097Module`, `EtsiTs103097ExtensionModule` | COER |
+//! | security | `sec_types.rs` | `Ieee1609Dot2BaseTypes`, `Ieee1609Dot2`, `Ieee1609Dot2CrlBaseTypes`, `Ieee1609Dot2Crl`, `EtsiTs103097Module`, `EtsiTs103097ExtensionModule`, the 14 `Ieee1609Dot2Dot1*` modules (IEEE 1609.2.1-2022) | COER |
 //!
 //! They are separate because they are consumed separately: `v2xw-sec` needs the second
 //! and nothing of the first, and the CDD (370 KB of ASN.1, ~10 k lines of Rust) has no
@@ -130,6 +130,24 @@ const SECURITY: Unit = Unit {
         "ieee1609.2/Ieee1609Dot2Crl.asn",
         "sec_ts103097/EtsiTs103097ExtensionModule.asn",
         "sec_ts103097/EtsiTs103097Module.asn",
+        // IEEE 1609.2.1-2022 (SCMS protocol). Every module imports the 1609.2 modules
+        // `WITH SUCCESSORS`, which the 1609.2-2025 modules above satisfy. The modules
+        // import one another in a cycle (Protocol <-> the interfaces); the compiler links
+        // the whole unit at once, so the order below is only for readable errors.
+        "ieee1609.2.1/Ieee1609Dot2Dot1Protocol.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1Acpc.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1CertManagement.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1EcaEeInterface.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1EeRaInterface.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1AcaRaInterface.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1AcaEeInterface.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1AcaLaInterface.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1AcaMaInterface.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1CamRaInterface.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1EeMaInterface.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1LaMaInterface.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1LaRaInterface.asn",
+        "ieee1609.2.1/Ieee1609Dot2Dot1MaRaInterface.asn",
     ],
 };
 
@@ -269,6 +287,9 @@ fn generate(unit: &Unit, asn_root: &Path, out_dir: &Path, patches: &[Patch]) -> 
     }
 
     let mut generated = sanitise_doc_comments(&result.generated);
+    if unit.out_file == SECURITY.out_file {
+        link_ieee1609dot2dot1_scopes(&mut generated)?;
+    }
     apply_patches(unit, &mut generated, patches)?;
 
     let header = format!(
@@ -282,6 +303,93 @@ fn generate(unit: &Unit, asn_root: &Path, out_dir: &Path, patches: &[Patch]) -> 
     let dest = out_dir.join(unit.out_file);
     std::fs::write(&dest, header + &generated)
         .map_err(|e| format!("cannot write {}: {e}", dest.display()))?;
+    Ok(())
+}
+
+/// The 14 IEEE 1609.2.1-2022 modules, as `rasn-compiler` names their Rust modules.
+const DOT1_MODULES: &[&str] = &[
+    "ieee1609_dot2_dot1_aca_ee_interface",
+    "ieee1609_dot2_dot1_aca_la_interface",
+    "ieee1609_dot2_dot1_aca_ma_interface",
+    "ieee1609_dot2_dot1_aca_ra_interface",
+    "ieee1609_dot2_dot1_acpc",
+    "ieee1609_dot2_dot1_cam_ra_interface",
+    "ieee1609_dot2_dot1_cert_management",
+    "ieee1609_dot2_dot1_eca_ee_interface",
+    "ieee1609_dot2_dot1_ee_ma_interface",
+    "ieee1609_dot2_dot1_ee_ra_interface",
+    "ieee1609_dot2_dot1_la_ma_interface",
+    "ieee1609_dot2_dot1_la_ra_interface",
+    "ieee1609_dot2_dot1_ma_ra_interface",
+    "ieee1609_dot2_dot1_protocol",
+];
+
+/// Fixes two scoping gaps in what `rasn-compiler` 0.16 emits for the 1609.2.1 modules.
+///
+/// Neither changes a type, a tag, a constraint or a byte on the wire; both are Rust
+/// name-resolution fixes, and the build fails if the text they hang on is not found, so a
+/// compiler upgrade that changes its output is noticed.
+///
+/// 1. **Re-exported imports.** X.680 §13 lets a module import a symbol from a module that
+///    itself only imports it (`EXPORTS ALL` covers imported symbols), and 1609.2.1 does
+///    this: `Ieee1609Dot2Dot1EcaEeInterface` imports `ToBeSignedCertificate` and
+///    `PublicVerificationKey` FROM `Ieee1609Dot2Dot1Protocol`. The compiler emits private
+///    `use` lines in the Protocol module, so the importers cannot see them. They are made
+///    `pub use`.
+/// 2. **Instantiated parameterised types.** The compiler expands each use of a
+///    parameterised type (`Ieee1609Dot2Data-Signed{Tbs, Psid}` and the rest of the
+///    Protocol module's wrappers) into a structural copy of `Ieee1609Dot2Data` *inside
+///    the using module*, naming `Ieee1609Dot2Content`, `SignedData`, `Opaque`… without
+///    importing them. Every 1609.2.1 module gets glob imports of the 1609.2 modules. A
+///    glob import is shadowed by any item or explicit import of the same name, so this
+///    cannot change which type an existing name resolves to.
+///
+/// What the expansion *drops* is recorded in `crates/v2xw-msg/src/scms_types.rs`: the
+/// `WITH COMPONENTS` and `CONTAINING` constraints of the wrappers are not checked by the
+/// generated types (they do not change COER bytes) and are left to the protocol layer.
+fn link_ieee1609dot2dot1_scopes(generated: &mut String) -> Result<(), String> {
+    const GLOBS: &str = "    extern crate alloc;\n\
+         \x20   #[allow(unused_imports)]\n\
+         \x20   use super::ieee1609_dot2::*;\n\
+         \x20   #[allow(unused_imports)]\n\
+         \x20   use super::ieee1609_dot2_base_types::*;\n\
+         \x20   #[allow(unused_imports)]\n\
+         \x20   use super::ieee1609_dot2_crl::*;\n\
+         \x20   #[allow(unused_imports)]\n\
+         \x20   use super::ieee1609_dot2_crl_base_types::*;\n";
+    let start = generated
+        .find("pub mod ieee1609_dot2_dot1_protocol {")
+        .ok_or("1609.2.1 scope fix: the Protocol module is missing from the output")?;
+    let end = generated[start..]
+        .find("\n}\n")
+        .map(|i| start + i)
+        .ok_or("1609.2.1 scope fix: the Protocol module does not close")?;
+    let body = &generated[start..end];
+    let reexported = body.matches("\n    use super::ieee1609_dot2").count();
+    // 2 explicit 1609.2 imports + 12 imports from the other 1609.2.1 modules. This runs
+    // before the glob imports are injected below, so the globs are not made public.
+    if reexported != 14 {
+        return Err(format!(
+            "1609.2.1 scope fix: expected 14 `use super::` imports in the Protocol \
+             module, found {reexported}. rasn-compiler's output layout changed."
+        ));
+    }
+    let fixed = body.replace("\n    use super::ieee1609_dot2", "\n    pub use super::ieee1609_dot2");
+    generated.replace_range(start..end, &fixed);
+
+    for module in DOT1_MODULES {
+        let anchor = format!("pub mod {module} {{\n    extern crate alloc;\n");
+        let count = generated.matches(&anchor).count();
+        if count != 1 {
+            return Err(format!(
+                "1609.2.1 scope fix: expected the generated module `{module}` to open exactly \
+                 once with `extern crate alloc;`, found {count}. rasn-compiler's output layout \
+                 changed; re-check link_ieee1609dot2dot1_scopes in build.rs."
+            ));
+        }
+        let with_globs = format!("pub mod {module} {{\n{GLOBS}");
+        *generated = generated.replacen(&anchor, &with_globs, 1);
+    }
     Ok(())
 }
 
