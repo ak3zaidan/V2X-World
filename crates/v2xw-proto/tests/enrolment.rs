@@ -332,6 +332,31 @@ fn write_corpus(run: &ScmsRun, dir: &std::path::Path) {
             )
         })
         .collect();
+    // WP-B3a: what the device and the LA↔ACA link hold, so the oracle can open every
+    // provisioning PDU itself: the caterpillar, each LA's key for the epoch it sealed in,
+    // and the (i, j) each filed private response is for.
+    let st = &run.state;
+    let cat = st.devices[&DEVICE_A].caterpillar.as_ref().unwrap();
+    let keys = st.la_aca.unwrap();
+    let t_plv = st
+        .pdus
+        .iter()
+        .find(|p| p.kind == SpduKind::EncryptedIndividualPlv)
+        .map(|p| st.time32(p.at))
+        .unwrap();
+    let ij: Vec<[u32; 2]> = st
+        .ra
+        .batch_files(DEVICE_A)
+        .iter()
+        .flat_map(|(_, entries)| entries.clone())
+        .map(|e| {
+            let (i, j) = e.split_once('_').unwrap();
+            [
+                u32::from_str_radix(i, 16).unwrap(),
+                u32::from_str_radix(j, 16).unwrap(),
+            ]
+        })
+        .collect();
     let m = serde_json::json!({
         "pdus": files,
         "certs": certs,
@@ -340,6 +365,17 @@ fn write_corpus(run: &ScmsRun, dir: &std::path::Path) {
         "canonical": run.state.eca.canonical.iter()
             .map(|(id, q)| (id.clone(), hex(&q.compressed().unwrap())))
             .collect::<BTreeMap<_, _>>(),
+        "device": {
+            "a": hex(&v2xw_sec::ec::scalar_to_be32(cat.a())),
+            "p": hex(&v2xw_sec::ec::scalar_to_be32(cat.p())),
+            "ck": hex(cat.ck()),
+            "ek": hex(cat.ek()),
+        },
+        "la_aca_keys": {
+            "1": hex(&keys.current(1, t_plv)),
+            "2": hex(&keys.current(2, t_plv)),
+        },
+        "private_ij": ij,
     });
     std::fs::write(
         dir.join("manifest.json"),

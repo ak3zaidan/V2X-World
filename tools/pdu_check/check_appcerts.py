@@ -106,7 +106,7 @@ def check(kind, data, pki, m, st):
     ica = pki.by_name['ica.provider-a']
     if kind == 'EeRaCertRequestSpdu':
         plain = cp.decrypt_to(data, ra, ec.os2i(bytes.fromhex(m['ra_enc_private'])))
-        (iface, (c, req)), signer = cp.open_cert_request(plain, pki)
+        (iface, (c, req)), signer, _ = cp.open_cert_request(plain, pki)
         need((iface, c) == ('ee-ra', 'eeRaCertRequest'), 'eeRaCertRequest')
         need(signer is not None and signer['type'] == 'implicit', 'signed by an implicit enrolment certificate')
         need(signer['issuer'] == ('sha256AndDigest', certs.hashed_id8(pki.by_name['eca.provider-a'])), 'issued by the ECA')
@@ -128,7 +128,7 @@ def check(kind, data, pki, m, st):
         need(r is not None, 'requestHash of a request sent')
         need(('firstI' in ack) == (r['req']['additionalParams'][0] == 'original'), 'firstI iff butterfly')
     elif kind == 'RaAcaCertRequestSpdu':
-        (iface, (c, req)), signer = cp.open_cert_request(data, pki)
+        (iface, (c, req)), signer, _ = cp.open_cert_request(data, pki)
         need((iface, c) == ('aca-ra', 'raAcaCertRequest'), 'raAcaCertRequest')
         need(signer is not None and certs.hashed_id8(signer) == certs.hashed_id8(ra), 'SignerSingleCert = RA')
         need(req['type'] == 'implicit', 'implicit')
