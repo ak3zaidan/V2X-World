@@ -164,13 +164,11 @@ pub struct ScmsParams {
     /// successor (IEEE 1609.2.1's successor enrolment). **Uncited**: a week, so a device
     /// that is offline for a few days still renews in time.
     pub reenrol_lead: Duration,
-    /// How many electors endorse the trust list.
-    ///
-    /// **Uncited.** The CAMP design has several electors and a quorum; three electors
-    /// with a quorum of two is the smallest arrangement in which no single elector can
-    /// either endorse or block a list alone.
+    /// How many electors sign the trust list: 5 (SCMS Manager Elector Policy v1.0 §2;
+    /// Profile §2.1.15: EEs are initialised with the five elector certificates).
     pub electors: u32,
-    /// How many valid elector endorsements a device requires of a trust list.
+    /// How many valid elector signatures a device requires of a trust list: any 3 of the
+    /// 5 (Elector Technical Specification v1.1 §2.2; the published CTLs' `quorum` 3).
     pub elector_quorum: u32,
     /// The RA's certificate-request shuffle window [CAMP-EE §2.2.7].
     pub shuffle_window: Duration,
@@ -313,8 +311,8 @@ impl Default for ScmsParams {
             max_periods_ahead: 156,
             enrolment_lifetime: Duration::from_secs(6 * 365 * 86_400),
             reenrol_lead: Duration::from_secs(7 * 86_400),
-            electors: 3,
-            elector_quorum: 2,
+            electors: 5,
+            elector_quorum: 3,
             shuffle_window: BatchPolicy::CAMP_SHUFFLE.max_delay,
             report_shuffle_window: BatchPolicy::CAMP_SHUFFLE.max_delay,
             shuffle_threshold: BatchPolicy::CAMP_SHUFFLE.max_items,

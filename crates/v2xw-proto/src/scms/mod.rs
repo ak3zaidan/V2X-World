@@ -616,21 +616,24 @@ fn card(p: &ScmsParams) -> ModelCard {
             "How early a device requests its successor enrolment certificate. An OEM \
              setting; measure from a deployed OBU's configuration.",
         ),
-        todo(
+        Parameter::new(
             "electors",
             "-",
             serde_json::json!(p.electors),
-            "How many electors endorse the trust list. The CAMP governance names electors \
-             and a quorum without a number this build can cite; take both from the SCMS \
-             Manager's published governance.",
+            std_src(
+                "SCMS Manager Elector Policy v1.0 §2; IEEE 1609.2.1 Profile v1.0.3 §2.1.15 \
+                 (five elector certificates, P-384, staggered 12-24 y validity as published)",
+            ),
         ),
-        todo(
+        Parameter::new(
             "elector_quorum",
             "-",
             serde_json::json!(p.elector_quorum),
-            "Valid elector endorsements a device requires of a trust list (IEEE 1609.2.1 \
-             MultiSignedCtl); same source as electors. A device never accepts fewer than a \
-             majority of the anchors it holds.",
+            std_src(
+                "SCMS Manager Elector Technical Specification v1.1 §2.2 (any 3 of 5; the \
+                 published CTLs carry quorum 3). A CTL's quorum governs the next CTL \
+                 (IEEE 1609.2.1 FullIeeeTbsCtl)",
+            ),
         ),
         Parameter::new(
             "shuffle_threshold_requests",
