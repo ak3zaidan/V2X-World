@@ -755,6 +755,45 @@ pub struct ScmsState {
     /// The other providers' PDU-layer PKIs under their own governance roots and ICAs, in
     /// deployment order (empty with the layer off or with one provider).
     pub peer_pki: Vec<(String, std::sync::Arc<crate::scms::pdu::ScmsPki>)>,
+    /// Which provider of [`ScmsState::deployment`] this run is (WP-D1: one run per
+    /// provider; 0 is the home provider, whose run owns the SCMS Manager's decisions).
+    pub provider: usize,
+    /// What this provider's MA verifies a report's signatures and evidence under: its
+    /// own PKI plus every other provider's CA certificates from the chain file, so the
+    /// MA can check evidence signed under another provider's pseudonym before it shares
+    /// the report with that provider (01 §9). `None` with the PDU layer off.
+    pub ma_trust: Option<std::sync::Arc<crate::scms::pdu::ScmsPki>>,
+    /// Inter-provider report sharing at this provider's MA (WP-D1).
+    pub shared: SharedReports,
+}
+
+/// Inter-provider report sharing at one provider's MA (WP-D1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct SharedReports {
+    /// Reports another provider's MA forwarded here.
+    pub received: u64,
+    /// Reports this MA forwarded to the provider that issued the accused certificate.
+    pub forwarded: u64,
+    /// Reports about another provider's certificate this MA could neither resolve (only
+    /// the issuing provider's ACA and LAs can) nor share (sharing off).
+    pub unresolvable: u64,
+}
+
+/// What `home`'s MA verifies under: `home` plus every authority of `peers`.
+fn ma_trust_of(
+    home: Option<&std::sync::Arc<crate::scms::pdu::ScmsPki>>,
+    peers: &[(String, std::sync::Arc<crate::scms::pdu::ScmsPki>)],
+) -> Option<std::sync::Arc<crate::scms::pdu::ScmsPki>> {
+    let home = home?;
+    if peers.is_empty() {
+        return Some(std::sync::Arc::clone(home));
+    }
+    let mut view = (**home).clone();
+    for (_, p) in peers {
+        view.extra
+            .extend(p.all().into_iter().chain(p.extra.iter()).cloned());
+    }
+    Some(std::sync::Arc::new(view))
 }
 
 /// What an authority does once its committee has signed: the continuation a committee
@@ -969,24 +1008,14 @@ impl ScmsRun {
                 };
                 let (root, ica) = (anchor("root")?, anchor("ica")?);
                 let start = ica.0.0.to_be_signed.validity_period.start.0.0;
-                let seed = u64::from_be_bytes(
-                    v2xw_core::hash::sha256(
-                        &[
-                            &params.master_seed.to_be_bytes()[..],
-                            b"/provider/",
-                            p.name.as_bytes(),
-                        ]
-                        .concat(),
-                    )[..8]
-                        .try_into()
-                        .expect("8 bytes"),
-                );
+                let seed = provider_seed(params.master_seed, &p.name);
                 let peer =
                     crate::scms::pdu::ScmsPki::under_anchors_of(&p.name, seed, start, root, ica)
                         .map_err(|e| refuse(e.to_string()))?;
                 peer_pki.push((p.name.clone(), std::sync::Arc::new(peer)));
             }
         }
+        let ma_trust = ma_trust_of(pki.as_ref(), &peer_pki);
         Ok(ScmsRun {
             state: ScmsState {
                 nodes,
@@ -1026,10 +1055,231 @@ impl ScmsRun {
                 next_run: 0,
                 apps: appcert::AppCertState::new(params.master_seed),
                 deployment,
+                ma_trust,
                 peer_pki,
+                provider: 0,
+                shared: SharedReports::default(),
             },
             kernel,
         })
+    }
+
+    /// Provider `k`'s own run (WP-D1: one run per provider), built from the home run
+    /// `home` ([`ScmsRun::new_deployed`]) so that every provider shares one CTL, one set
+    /// of electors and one clock, and provider `k`'s flows sign and encrypt under the PKI
+    /// the home run certified for it (`home.state.peer_pki`).
+    ///
+    /// Its online components are the ones [`Deployment::nodes`] places for `k`, linked
+    /// inside its region at the intra-region latency; its MA is linked to every other
+    /// provider's MA at the inter-provider latency (report sharing). Its randomness (LA
+    /// seeds, the PDU layer's DRBG, the LA-ACA keys) comes from its own seed
+    /// ([`provider_seed`]), the derivation its PKI's keys came from, so no two providers
+    /// draw the same secret.
+    ///
+    /// [`Deployment::nodes`]: crate::scms::deployment::Deployment::nodes
+    ///
+    /// # Errors
+    /// [`ProtoError::Payload`] when `k` is not a peer provider of `home`.
+    pub fn new_peer(home: &ScmsRun, k: usize) -> Result<ScmsRun> {
+        let refuse = |detail: String| ProtoError::Payload {
+            what: "SCMS provider run",
+            detail,
+        };
+        let deployment = home.state.deployment.clone();
+        let Some(provider) = deployment.providers.get(k).filter(|_| k > 0) else {
+            return Err(refuse(format!(
+                "provider {k} is not a peer of the home run"
+            )));
+        };
+        let label = provider.name.clone();
+        let mut params = home.state.params;
+        params.master_seed = provider_seed(home.state.params.master_seed, &label);
+        let nodes = deployment.nodes(k).online;
+        let gov = home
+            .state
+            .gov
+            .rehome(&label)
+            .ok_or_else(|| refuse(format!("governance holds no provider {label}")))?;
+        let backend = Link {
+            latency: params.backend_link_latency,
+            bandwidth_bps: params.backend_link_bandwidth_bps,
+            transport: Transport::BackendNet,
+        };
+        let mut net = BackendNet::new();
+        for (a, b) in nodes.backend_links() {
+            net.connect(a, b, backend);
+        }
+        for (a, b) in governance_links(&nodes, &gov) {
+            net.connect(a, b, backend);
+        }
+        let transparent = Link {
+            latency: Duration::ZERO,
+            bandwidth_bps: u64::MAX,
+            transport: Transport::BackendNet,
+        };
+        if !deployment.options.lop {
+            net.connect(nodes.lop, nodes.ra, transparent);
+        }
+        if deployment.ma_report_sharing {
+            for b in (0..deployment.providers.len()).filter(|b| *b != k) {
+                let link = Link {
+                    latency: deployment
+                        .inter_provider_latency(k, b)
+                        .unwrap_or(backend.latency),
+                    ..backend
+                };
+                net.connect(deployment.nodes(b).online.ma, nodes.ma, link);
+            }
+        }
+        let t0 = home.kernel.now();
+        let mut kernel = Kernel::new_at(net, t0);
+        for (node, spec) in nodes.backend_service_models(&params) {
+            let spec = if node == nodes.lop && !deployment.options.lop {
+                crate::service::ServiceModelSpec::new(64, Duration::ZERO)
+            } else {
+                spec
+            };
+            kernel.host(node, &spec, params.backend_profile);
+        }
+        host_governance(&mut kernel, &gov, &params);
+        let committees = build_committees(
+            &params,
+            &nodes,
+            &mut kernel,
+            home.state.sizes.envelope_digest(),
+        );
+        let pki = match home.state.pki.as_ref() {
+            Some(_) => Some(
+                home.state
+                    .peer_pki
+                    .iter()
+                    .find(|(l, _)| *l == label)
+                    .map(|(_, p)| std::sync::Arc::clone(p))
+                    .ok_or_else(|| refuse(format!("no PDU PKI for {label}")))?,
+            ),
+            None => None,
+        };
+        // The other providers, the home one first, as this run's peers.
+        let mut peer_pki: Vec<(String, std::sync::Arc<crate::scms::pdu::ScmsPki>)> = Vec::new();
+        if let Some(h) = home.state.pki.as_ref() {
+            peer_pki.push((
+                deployment.providers[0].name.clone(),
+                std::sync::Arc::clone(h),
+            ));
+            peer_pki.extend(
+                home.state
+                    .peer_pki
+                    .iter()
+                    .filter(|(l, _)| *l != label)
+                    .cloned(),
+            );
+        }
+        let ma_trust = ma_trust_of(pki.as_ref(), &peer_pki);
+        let seed = params.master_seed;
+        Ok(ScmsRun {
+            state: ScmsState {
+                nodes,
+                params,
+                sizes: home.state.sizes.clone(),
+                ra: RaState::default(),
+                pca: PcaState::default(),
+                la: [
+                    LaState::new(LaIndex::One, LaId(1)),
+                    LaState::new(LaIndex::Two, LaId(2)),
+                ],
+                ma: MaState::default(),
+                crlg: CrlState::default(),
+                crl_store: CrlState::default(),
+                crl_broadcast: CrlState::default(),
+                devices: BTreeMap::new(),
+                gov,
+                eca: EcaState::default(),
+                dcm: DcmState::default(),
+                lop: LopState::default(),
+                rng: RngRegistry::new(seed),
+                issued_enrolment: BTreeSet::new(),
+                faults: FaultPlan::default(),
+                committees,
+                threshold_failures: BTreeMap::new(),
+                pki,
+                pdus: Vec::new(),
+                pdu_rejections: Vec::new(),
+                pdu_rng: crate::scms::pdu::Drbg::new(seed, b"run"),
+                la_aca: params.pdu.enabled.then(|| {
+                    crate::scms::pdu_prov::LaAcaKeys::new(seed, params.pdu.la_aca_key_rotation_s)
+                }),
+                wall: home.state.wall,
+                next_run: 0,
+                apps: appcert::AppCertState::new(seed),
+                deployment,
+                ma_trust,
+                peer_pki,
+                provider: k,
+                shared: SharedReports::default(),
+            },
+            kernel,
+        })
+    }
+
+    /// A report another provider's MA (`from`, its node) shares with this provider's MA
+    /// because the accused certificate is this provider's (WP-D1; Provider Req. §2.2:
+    /// only the issuing provider's ACA and LAs can resolve its pseudonyms).
+    ///
+    /// The report about `(subject_i, subject_lv)` leaves `from` at `sent_at` (or this
+    /// kernel's clock, if later) and crosses the MA-to-MA link; `bytes` is what crosses
+    /// (the report re-encrypted to this MA: the length of the encrypted report the device
+    /// uploaded). **Modelled:** no published specification defines the MA-to-MA format,
+    /// so the shared report carries the accused `(iCert, linkage value)` and its length,
+    /// not new bytes, and this MA does not re-verify evidence the forwarding MA verified.
+    /// Returns the flow run whose `ReportReceived` stage marks its arrival here.
+    pub fn shared_report_at_ma(
+        &mut self,
+        from: NodeId,
+        subject_i: u32,
+        subject_lv: LinkageValue,
+        observed_at: SimTime,
+        sent_at: SimTime,
+        bytes: u32,
+    ) -> FlowRun {
+        let run = self.new_run();
+        let flow = FlowId::Report;
+        let ma = self.state.nodes.ma;
+        let link = self.kernel.net().link(from, ma).unwrap_or(Link {
+            latency: self.state.params.backend_link_latency,
+            bandwidth_bps: self.state.params.backend_link_bandwidth_bps,
+            transport: Transport::BackendNet,
+        });
+        let sent_at = sent_at.max(self.kernel.now());
+        let arrive_at = link.delay(bytes).after(sent_at);
+        self.kernel.steps.push(crate::stage::WireStep {
+            t: sent_at,
+            from,
+            to: ma,
+            flow,
+            run,
+            step: "report-shared",
+            bytes,
+            transport: Transport::BackendNet,
+        });
+        self.state.shared.received += 1;
+        self.kernel.inject_at(
+            arrive_at,
+            Delivery {
+                at: arrive_at,
+                from,
+                to: ma,
+                msg: ScmsMsg::Report(Box::new(ReportSubmission {
+                    reporter: from,
+                    subject_i,
+                    subject_lv,
+                    observed_at,
+                    secured: None,
+                })),
+                flow,
+                run,
+            },
+        );
+        run
     }
 
     /// Declares which backend servers are down, slow or lying, and when.
@@ -1639,6 +1889,19 @@ fn host_committees(kernel: &mut Kernel<ScmsMsg>, committees: &Committees<Pending
             kernel.host(*m, &spec, p.backend_profile);
         }
     }
+}
+
+/// Provider `label`'s own seed: SHA-256(master seed || "/provider/" || label), first 8
+/// octets. Its PKI keys and, in its own run, all its randomness come from it.
+#[must_use]
+pub fn provider_seed(master: u64, label: &str) -> u64 {
+    u64::from_be_bytes(
+        v2xw_core::hash::sha256(
+            &[&master.to_be_bytes()[..], b"/provider/", label.as_bytes()].concat(),
+        )[..8]
+            .try_into()
+            .expect("8 bytes"),
+    )
 }
 
 /// Links the other providers' online components inside their regions and every MA to

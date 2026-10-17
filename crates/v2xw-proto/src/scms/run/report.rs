@@ -487,7 +487,7 @@ impl ScmsState {
             ScmsMsg::Report(r) => {
                 Self::verify(out, 1);
                 Self::scalar_mults(out, 1);
-                if let (Some(s), Some(pki)) = (r.secured.as_ref(), self.pki.clone()) {
+                if let (Some(s), Some(pki)) = (r.secured.as_ref(), self.ma_trust.clone()) {
                     // The MA decrypts, checks the reporter's pseudonym signature and the
                     // evidence ([SM-MBR] §3; [5GAA] (263)). A report that fails is
                     // recorded and goes no further.

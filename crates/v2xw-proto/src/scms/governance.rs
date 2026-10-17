@@ -1444,6 +1444,91 @@ impl Governance {
         Some((cert_hashed_id8(&a.cert).ok()?, out))
     }
 
+    /// The same governance seen from provider `label` (WP-D1: one run per provider).
+    ///
+    /// The electors, the roots and the CTL are the deployment's, shared and unchanged:
+    /// nothing is re-signed that the electors signed. Only the "home" view moves: `label`'s
+    /// ICA and components become this view's own authorities (its RA signs the local
+    /// policy and chain files, its CRL Generator signs its CRLs), the former home
+    /// provider becomes a peer, and the local policy and chain files are re-signed by
+    /// `label`'s RA. `None` when `label` is not a peer of this governance.
+    #[must_use]
+    pub fn rehome(&self, label: &str) -> Option<Governance> {
+        let mut set = self.peer_authorities.get(label)?.clone();
+        let idx = self.config.peers.iter().position(|p| p.label == label)?;
+        let peer = self.config.peers[idx].clone();
+        let old_label = self.config.provider.clone();
+        let old_root = self
+            .roots
+            .iter()
+            .rev()
+            .find(|r| r.label == old_label)?
+            .authority
+            .clone();
+        let mut old_set = self.authorities.clone();
+        old_set.insert("root", old_root);
+        set.remove("root");
+        let mut peer_authorities = self.peer_authorities.clone();
+        peer_authorities.remove(label);
+        peer_authorities.insert(old_label.clone(), old_set);
+        let mut config = self.config.clone();
+        config.provider = label.to_string();
+        config.peers[idx] = PeerProvider {
+            label: old_label,
+            online: ScmsNodes::default(),
+            root: self.nodes.root,
+            ica: self.nodes.ica,
+            pg: self.nodes.pg,
+            on_ctl: true,
+        };
+        let mut nodes = self.nodes.clone();
+        nodes.root = peer.root;
+        nodes.ica = peer.ica;
+        nodes.pg = peer.pg;
+        let mut gov = Governance {
+            nodes,
+            config,
+            electors: self.electors.clone(),
+            roots: self.roots.clone(),
+            authorities: set,
+            peer_authorities,
+            retired: Vec::new(),
+            quorum: self.quorum,
+            ctl: self.ctl.clone(),
+            ctl_history: self.ctl_history.clone(),
+            pending: self.pending.clone(),
+            gpf: self.gpf.clone(),
+            gccf: self.gccf.clone(),
+            lpf: self.lpf.clone(),
+            lccf: self.lccf.clone(),
+            counters: GovernanceCounters::default(),
+            log: Vec::new(),
+        };
+        gov.lpf.version = 0;
+        gov.lccf.version = 0;
+        gov.sign_local();
+        Some(gov)
+    }
+
+    /// Takes the shared trust state — electors, roots, the published CTL, its history
+    /// and the decided-but-unpublished CTLs — from `from`, the governance view the SCMS
+    /// Manager's decisions are made on (WP-D1: every provider distributes the one CTL).
+    /// Returns whether the published CTL changed; the local files are then re-signed.
+    pub fn sync_trust_from(&mut self, from: &Governance) -> bool {
+        let changed = self.ctl.sequence != from.ctl.sequence;
+        self.electors.clone_from(&from.electors);
+        self.roots.clone_from(&from.roots);
+        self.quorum = from.quorum;
+        self.pending.clone_from(&from.pending);
+        if changed {
+            self.ctl = from.ctl.clone();
+            self.ctl_history.clone_from(&from.ctl_history);
+            self.gpf = from.gpf.clone();
+            self.sign_local();
+        }
+        changed
+    }
+
     fn home_root(&self) -> &RootSlot {
         self.roots
             .iter()

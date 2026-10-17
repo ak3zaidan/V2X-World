@@ -4496,6 +4496,9 @@ impl Engine {
                         phase2.note_revoked_reception();
                     }
                 }
+                if let Some(phase2) = self.phase2.as_mut() {
+                    phase2.note_provider_receptions(*id, &outcome.delivered);
+                }
                 self.run_detectors(*id, &outcome.delivered, now, horizon);
             }
         }
@@ -7123,18 +7126,20 @@ impl Engine {
                 );
             }
             AppPayload::Crl(list) => {
-                let (version, entries, secured) = (list.0, list.1.clone(), list.2.clone());
-                self.install_crl_at(recorder, rx, version, &entries, secured, now, false);
+                let (version, entries) = (list.0, list.1.clone());
+                let secured: Vec<std::sync::Arc<[u8]>> = list.2.iter().cloned().collect();
+                self.install_crl_at(recorder, rx, version, &entries, &secured, now, false);
             }
         }
     }
 
     /// A vehicle installs CRL entries it received, and enforces them.
     ///
-    /// With the signed CRL in hand (`secured`, relayed unchanged by the store or the RSU)
-    /// and a trust store installed, the vehicle verifies it itself (WP-C2): the signer
-    /// chains to its root, `verify_crl` accepts it, and every entry the frame carries is
-    /// one the CRL signs. Otherwise the frame is refused, and the engine does not judge it.
+    /// With the signed CRLs in hand (`secured`, relayed unchanged by the store or the
+    /// RSU: one per provider whose CRL the vehicle's RA serves, WP-D1) and a trust store
+    /// installed, the vehicle verifies each itself (WP-C2): the signer chains to its root,
+    /// `verify_crl` accepts it, and every entry the frame carries is one a CRL signs.
+    /// Otherwise the frame is refused, and the engine does not judge it.
     #[allow(clippy::too_many_arguments)]
     fn install_crl_at(
         &mut self,
@@ -7142,29 +7147,38 @@ impl Engine {
         node: NodeId,
         version: u32,
         entries: &[v2xw_sec::linkage::CrlLinkageEntry],
-        secured: Option<std::sync::Arc<[u8]>>,
+        secured: &[std::sync::Arc<[u8]>],
         now: SimTime,
         cellular: bool,
     ) {
         if self.rsus.contains_key(&node) {
             return;
         }
-        // The node's own verdict on the signed CRL, when it can form one.
-        let verified = match (secured.as_deref(), self.nodes.get_mut(&node)) {
-            (Some(bytes), Some(rt)) if rt.security().trust().is_installed() => {
-                match rt.install_secured_crl(bytes, now) {
-                    // Every entry the frame carries is one the CRL signs (in the CRL's
-                    // form: seeds at iRev), or one already exhausted before iRev.
-                    Ok(v)
-                        if entries
-                            .iter()
-                            .all(|e| !matches!(v.signed_form(e), Some(Err(())))) =>
-                    {
-                        Some(Some(v))
+        // The node's own verdict on the signed CRLs, when it can form one: every CRL
+        // verifies, and every entry the frame carries is one some CRL signs (in that
+        // CRL's form: seeds at iRev) or one already exhausted before iRev.
+        let verified = match self.nodes.get_mut(&node) {
+            Some(rt) if !secured.is_empty() && rt.security().trust().is_installed() => {
+                let mut crls = Vec::with_capacity(secured.len());
+                for bytes in secured {
+                    match rt.install_secured_crl(bytes, now) {
+                        Ok(v) => crls.push(v),
+                        Err(_) => {
+                            crls.clear();
+                            break;
+                        }
                     }
-                    // A frame carrying an entry the signed CRL does not, or a CRL that
-                    // does not verify: refused by the node.
-                    _ => Some(None),
+                }
+                let signed = |e: &v2xw_sec::linkage::CrlLinkageEntry| {
+                    crls.iter()
+                        .any(|v| !matches!(v.signed_form(e), Some(Err(()))))
+                };
+                if !crls.is_empty() && entries.iter().all(signed) {
+                    Some(Some(crls))
+                } else {
+                    // A frame carrying an entry no signed CRL does, or a CRL that does
+                    // not verify: refused by the node.
+                    Some(None)
                 }
             }
             _ => None,
@@ -7176,9 +7190,9 @@ impl Engine {
             phase2.crl_frame_refused(node, cellular);
             return;
         }
-        let craca = verified.as_ref().and_then(|v| v.as_ref().map(|v| v.craca));
+        let node_verified = matches!(verified, Some(Some(_)));
         let (fresh, records) =
-            phase2.install_crl(node, version, entries, now, cellular, craca.is_some());
+            phase2.install_crl(node, version, entries, now, cellular, node_verified);
         if fresh.is_empty() && records.is_empty() {
             return;
         }
@@ -7187,16 +7201,21 @@ impl Engine {
                 return;
             };
             match verified.as_ref().and_then(|v| v.as_ref()) {
-                // What the node installs is what the CRL it verified signs.
-                Some(v) => {
-                    let signed: Vec<v2xw_sec::linkage::CrlLinkageEntry> = fresh
-                        .iter()
-                        .filter_map(|e| v.signed_form(e).and_then(|r| r.ok()))
-                        .collect();
-                    runtime
-                        .stores_mut()
-                        .crl
-                        .add_verified_linkage(v.craca, &signed);
+                // What the node installs is what the CRLs it verified sign, each entry
+                // under the CRACA of the CRL that signs it.
+                Some(crls) => {
+                    for v in crls {
+                        let signed: Vec<v2xw_sec::linkage::CrlLinkageEntry> = fresh
+                            .iter()
+                            .filter_map(|e| v.signed_form(e).and_then(|r| r.ok()))
+                            .collect();
+                        if !signed.is_empty() {
+                            runtime
+                                .stores_mut()
+                                .crl
+                                .add_verified_linkage(v.craca, &signed);
+                        }
+                    }
                 }
                 None => {
                     for e in &fresh {
@@ -7347,12 +7366,14 @@ impl Engine {
                     let kind = if mbms { "crl-mbms" } else { "crl-fetch" };
                     p.access_mut().note_exchange(kind, requested_at, now);
                 }
-                // The store serves the CRL Generator's current signed CRL unchanged.
+                // The vehicle's RA serves every provider's signed CRL it holds, unchanged
+                // (WP-D1).
                 let secured = self
                     .phase2
                     .as_ref()
-                    .and_then(crate::phase2::Phase2::secured_crl);
-                self.install_crl_at(recorder, node, version, &entries, secured, now, true);
+                    .map(|p| p.published_crl_for(node).2)
+                    .unwrap_or_default();
+                self.install_crl_at(recorder, node, version, &entries, &secured, now, true);
             }
         }
     }
@@ -7718,8 +7739,8 @@ impl Engine {
             let pos = positions.get(&node).copied().unwrap_or(Vec3::ZERO);
             let (version, entries, req, size) = {
                 let Some(p) = self.phase2.as_ref() else { break };
-                let (v, e) = p.published_crl();
-                (v, e.to_vec(), p.crl_request_size(), p.crl_size(v))
+                let (v, e, _) = p.published_crl_for(node);
+                (v, e, p.crl_request_size(), p.crl_size(v))
             };
             let (ul, dl) = {
                 let Engine {
