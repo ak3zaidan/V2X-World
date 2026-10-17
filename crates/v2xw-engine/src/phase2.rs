@@ -831,9 +831,58 @@ pub struct Revocation {
     pub subject_digest: String,
 }
 
+/// One CRL version a provider's CRL Store published.
+#[derive(Debug, Clone)]
+struct CrlVersion {
+    /// When it was published.
+    at: SimTime,
+    /// Its version: the store's entry count.
+    version: u32,
+    /// Its entries.
+    entries: Vec<CrlLinkageEntry>,
+    /// The signed CRL its CRL Generator issued (`None` with the PDU layer off).
+    secured: Option<std::sync::Arc<[u8]>>,
+}
+
+/// The internet leg a device's backend message crosses after its access leg: the
+/// scenario's city to the provider's region (WP-D1; ASSUMPTION, see
+/// [`v2xw_proto::scms::deployment::Deployment::city_latency`]), added to whatever the
+/// access model answers for a device link. Backend-internal links are untouched.
+#[derive(Debug)]
+struct InternetLeg {
+    inner: v2xw_proto::net::SharedOracle,
+    extra: Duration,
+}
+
+impl v2xw_proto::net::PathOracle for InternetLeg {
+    fn carry(
+        &mut self,
+        from: NodeId,
+        to: NodeId,
+        link: &v2xw_proto::Link,
+        bytes: u32,
+        at: SimTime,
+    ) -> Option<SimTime> {
+        let base = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|mut o| o.carry(from, to, link, bytes, at));
+        if link.transport == Transport::BackendNet {
+            return base;
+        }
+        Some(
+            base.unwrap_or_else(|| link.delay(bytes).after(at))
+                .saturating_add(self.extra.as_nanos()),
+        )
+    }
+}
+
 /// A decision waiting for, or being carried out by, the backend.
 #[derive(Debug, Clone)]
 struct Case {
+    /// The provider whose MA decides (the one that issued the accused certificate).
+    provider: usize,
     subject: NodeId,
     subject_digest: String,
     /// The triggering report's backend run.
@@ -988,6 +1037,23 @@ pub struct Phase2Report {
     pub ctls_published: u64,
     /// [`Phase2Report::reports_mbr_unsecured`] by reason.
     pub reports_mbr_unsecured_by: BTreeMap<String, u64>,
+    /// Reports an MA shared with the provider that issued the accused certificate
+    /// (WP-D1, inter-provider report sharing).
+    pub reports_shared: u64,
+    /// Reports an MA held about another provider's certificate and could neither
+    /// resolve nor share (`ma_report_sharing: false`).
+    pub reports_foreign_unresolvable: u64,
+    /// SCMS devices each provider enrolled, by provider name (the seeded fleet split).
+    pub devices_by_provider: BTreeMap<String, u64>,
+    /// CRL entries each provider's CRL Generator issued, by provider name.
+    pub revocations_by_provider: BTreeMap<String, u64>,
+    /// Reports that reached a reporter's privacy proxy, by `"<reporter's provider><-<the
+    /// accused's provider>"`.
+    pub reports_by_provider: BTreeMap<String, u64>,
+    /// Messages receivers verified, by `"<receiver's provider><-<signer's provider>"`.
+    pub verified_by_provider: BTreeMap<String, u64>,
+    /// Messages receivers refused because a CRL revoked the signer, keyed the same way.
+    pub revoked_by_provider: BTreeMap<String, u64>,
     /// Reports the access link lost.
     pub reports_lost: u64,
     /// How many reached the Location Obscurer Proxy.
@@ -1222,7 +1288,25 @@ pub struct BackendTick {
 
 /// The Phase 2 state of one run.
 pub struct Phase2 {
-    scms: ScmsRun,
+    /// One SCMS run per provider of the deployment (WP-D1), in deployment order: the
+    /// home provider's first. Read through [`Phase2::home`], [`Phase2::run_of`] and
+    /// [`Phase2::run_of_mut`], never by index at a call site.
+    runs: Vec<ScmsRun>,
+    /// Which provider serves each SCMS device (by its device id), from the seeded fleet
+    /// split ([`v2xw_proto::scms::deployment::Deployment::provider_of`]).
+    device_provider: BTreeMap<NodeId, usize>,
+    /// The scenario seed the fleet split is drawn under (the one roadside units use).
+    fleet_seed: u64,
+    /// Every CRL version each provider's CRL Store published: when, its entry count, its
+    /// entries and the signed CRL. A provider's RA serves every provider's latest CRL
+    /// once the inter-provider link has carried it (WP-D1; the composite CRL of
+    /// 1609.2.1 §6.3.5.7).
+    crl_feeds: Vec<Vec<CrlVersion>>,
+    /// The backend's clock at its last step.
+    backend_now: SimTime,
+    /// Per provider, the internet leg from the scenario's city to its region that a
+    /// device's backend message crosses after its access leg (zero under `flat`).
+    internet_legs: Vec<Duration>,
     /// The ETSI ITS PKI, when `security.protocol` selects it; `scms` then carries nothing.
     etsi: Option<v2xw_proto::etsi::ts102941::EtsiRun>,
     /// ETSI decisions, carried out as blocklistings.
@@ -1249,23 +1333,25 @@ pub struct Phase2 {
     /// with no map, whose `mapOffRoad` check cannot fire).
     map_check: bool,
     report_interval: Duration,
-    ma: MaHost,
+    /// One Misbehaviour Authority per provider (WP-D1), in deployment order.
+    ma: Vec<MaHost>,
     vehicles: u64,
     /// When each (reporter, subject) pair was last filed.
     filed: BTreeMap<(NodeId, String), SimTime>,
     /// When each receiver last ran its suite on each sender.
     checked_at: BTreeMap<(NodeId, [u8; 8]), SimTime>,
     forwarded: BTreeSet<String>,
-    in_flight: BTreeMap<FlowRun, InFlightReport>,
+    in_flight: BTreeMap<(usize, FlowRun), InFlightReport>,
     /// The home root a scheduled rollover superseded (`root_removal_at_s` removes it).
     superseded_root: Option<[u8; 32]>,
     /// The last signed BSMs on the air per signer digest: a report's evidence.
     evidence: BTreeMap<[u8; 8], VecDeque<Vec<u8>>>,
-    stage_cursor: usize,
-    step_cursor: usize,
-    queue: VecDeque<Case>,
+    stage_cursor: Vec<usize>,
+    step_cursor: Vec<usize>,
+    queue: Vec<VecDeque<Case>>,
     cases: Vec<Case>,
-    published_version: u32,
+    /// Each provider's last published CRL version (its store's entry count).
+    published: Vec<u32>,
     broadcast_version: u32,
     nodes: BTreeMap<NodeId, NodeSec>,
     revocation: Option<Revocation>,
@@ -1517,8 +1603,9 @@ impl Phase2 {
     /// census ([`crate::Engine::census`]). A diagnostic: nothing reads it back.
     pub fn census(&self, out: &mut Vec<(&'static str, u64)>) {
         let n = |v: usize| v as u64;
-        let st = &self.scms.state;
-        let k = &self.scms.kernel;
+        out.push(("scms.providers", n(self.runs.len())));
+        let st = &self.home().state;
+        let k = &self.home().kernel;
         out.extend([
             ("p2.creds_nodes", n(self.creds.len())),
             ("p2.creds_total", n(self.creds.values().map(Vec::len).sum())),
@@ -1761,10 +1848,22 @@ impl Phase2 {
         apply_backend_topology(scenario, &mut scms)?;
         let faults = crate::crypto_config::backend_faults(scenario, &scms)?;
         scms.set_faults(faults);
+        // One run per provider (WP-D1): every other provider's run is built from the
+        // home one, on the same CTL, electors and clock, under its own PKI and seed.
+        let mut runs = Vec::with_capacity(scms.state.deployment.providers.len());
+        for k in 1..scms.state.deployment.providers.len() {
+            runs.push(ScmsRun::new_peer(&scms, k).map_err(|e| {
+                conflict(
+                    "security.scms.deployment",
+                    format!("provider {k}'s backend refused to start: {e}"),
+                )
+            })?);
+        }
+        runs.insert(0, scms);
         // The deployment sets the elector count and quorum and, under the region model,
         // the intra-region backend latency (WP-D1).
         let params = LifecycleParams {
-            scms: scms.state.params,
+            scms: runs[0].state.params,
             ..params
         };
         let etsi = if protocol.as_deref() == Some(ETSI_PKI) {
@@ -1790,13 +1889,44 @@ impl Phase2 {
         };
         // Every message of every backend flow rides the run's access model: the kernels
         // ask the carrier for each one's arrival (`backend::Carrier`).
-        scms.set_path_oracle(access.oracle());
+        // Under the region latency model each provider's device legs also cross the
+        // internet from the scenario's city to that provider's region (ASSUMPTION).
+        for (k, run) in runs.iter_mut().enumerate() {
+            let leg =
+                run.state
+                    .deployment
+                    .city_latency(k, world.origin.lat_deg, world.origin.lon_deg);
+            match leg {
+                Some(extra) => {
+                    run.set_path_oracle(std::sync::Arc::new(std::sync::Mutex::new(InternetLeg {
+                        inner: access.oracle(),
+                        extra,
+                    })))
+                }
+                None => run.set_path_oracle(access.oracle()),
+            }
+        }
+        let providers = runs.len();
+        let internet_legs: Vec<Duration> = (0..providers)
+            .map(|k| {
+                runs[0]
+                    .state
+                    .deployment
+                    .city_latency(k, world.origin.lat_deg, world.origin.lon_deg)
+                    .unwrap_or(Duration::ZERO)
+            })
+            .collect();
         let mut etsi = etsi;
         if let Some(e) = etsi.as_mut() {
             e.set_path_oracle(access.oracle());
         }
         Ok(Some(Phase2 {
-            scms,
+            runs,
+            device_provider: BTreeMap::new(),
+            fleet_seed: scenario.seed,
+            crl_feeds: vec![Vec::new(); providers],
+            backend_now: 0,
+            internet_legs,
             etsi,
             blocks: Vec::new(),
             params,
@@ -1821,7 +1951,7 @@ impl Phase2 {
                     .iter()
                     .any(|l| l.admits(RoadMap::vehicles())),
             report_interval,
-            ma,
+            ma: vec![ma; providers],
             vehicles: 0,
             filed: BTreeMap::new(),
             checked_at: BTreeMap::new(),
@@ -1829,11 +1959,11 @@ impl Phase2 {
             in_flight: BTreeMap::new(),
             evidence: BTreeMap::new(),
             superseded_root: None,
-            stage_cursor: 0,
-            step_cursor: 0,
-            queue: VecDeque::new(),
+            stage_cursor: vec![0; providers],
+            step_cursor: vec![0; providers],
+            queue: vec![VecDeque::new(); providers],
             cases: Vec::new(),
-            published_version: 0,
+            published: vec![0; providers],
             broadcast_version: 0,
             nodes: BTreeMap::new(),
             revocation: None,
@@ -1879,7 +2009,42 @@ impl Phase2 {
     /// tests and for an attack study that inspects what the backend saw.
     #[must_use]
     pub fn scms(&self) -> &ScmsRun {
-        &self.scms
+        self.home()
+    }
+
+    /// Every provider's SCMS run, in deployment order (WP-D1).
+    #[must_use]
+    pub fn scms_runs(&self) -> &[ScmsRun] {
+        &self.runs
+    }
+
+    /// The provider (index in the deployment) that serves `node`'s vehicle, once it is
+    /// provisioned; `None` before.
+    #[must_use]
+    pub fn provider_of_node(&self, node: NodeId) -> Option<usize> {
+        self.device_provider.get(&device_of(node)).copied()
+    }
+
+    /// The home provider's run: the one the SCMS Manager's governance decisions are
+    /// taken on, and the one every node's trust bundle is read from.
+    fn home(&self) -> &ScmsRun {
+        &self.runs[0]
+    }
+
+    /// The provider serving SCMS device `device` (0 until it is assigned).
+    fn provider_of_device(&self, device: NodeId) -> usize {
+        self.device_provider.get(&device).copied().unwrap_or(0)
+    }
+
+    /// The run of the provider serving SCMS device `device`.
+    fn run_of(&self, device: NodeId) -> &ScmsRun {
+        &self.runs[self.provider_of_device(device)]
+    }
+
+    /// The run of the provider serving SCMS device `device`, mutably.
+    fn run_of_mut(&mut self, device: NodeId) -> &mut ScmsRun {
+        let k = self.provider_of_device(device);
+        &mut self.runs[k]
     }
 
     /// The roadside units to create, in declaration order.
@@ -1960,8 +2125,9 @@ impl Phase2 {
                 self.report.rsu_reports_poisoned += 1;
                 // The forgery arrives as the unit's own report, and the authority trusts
                 // infrastructure: that is the attack.
-                self.ma
-                    .trust_infrastructure(forged.reporter_cert_digest.clone());
+                for ma in &mut self.ma {
+                    ma.trust_infrastructure(forged.reporter_cert_digest.clone());
+                }
                 Some(*forged)
             }
         }
@@ -2083,7 +2249,7 @@ impl Phase2 {
     pub fn report(&self) -> Phase2Report {
         let mut r = self.report.clone();
         r.access = self.access.report_now();
-        let st = &self.scms.state;
+        let st = &self.home().state;
         r.committees = st
             .committees
             .stats
@@ -2095,7 +2261,7 @@ impl Phase2 {
             .iter()
             .map(|(k, v)| ((*k).to_string(), *v))
             .collect();
-        r.backend_deliveries_dropped = st.faults.dropped;
+        r.backend_deliveries_dropped = self.runs.iter().map(|x| x.state.faults.dropped).sum();
         r.reports_unsent = self.nodes.values().map(|n| n.outbox.0.len() as u64).sum();
         r.reports_evicted = self.nodes.values().map(|n| n.outbox.0.evicted).sum();
         r.reports_expired = self.nodes.values().map(|n| n.outbox.0.expired).sum();
@@ -2204,9 +2370,17 @@ impl Phase2 {
             self.creds.insert(node, out.clone());
             return out;
         }
+        // The seeded fleet split (WP-D1): the same draw that assigns a roadside unit's
+        // application certificate, so a vehicle is enrolled, provisioned, reported and
+        // revoked by one provider for its whole life.
+        let k = self
+            .home()
+            .state
+            .deployment
+            .provider_of(self.fleet_seed, u64::from(node.index()));
+        self.device_provider.insert(device, k);
         let preloaded =
-            self.scms
-                .preload(device, start, self.params.pool_periods, self.params.jmax);
+            self.runs[k].preload(device, start, self.params.pool_periods, self.params.jmax);
         if preloaded.is_err() {
             self.nodes.insert(
                 node,
@@ -2240,7 +2414,7 @@ impl Phase2 {
             .f64();
         let remaining = ((u * lifetime as f64) as u64).clamp(1, lifetime);
         let until = now.saturating_add(remaining);
-        self.scms.set_enrolment(
+        self.run_of_mut(device).set_enrolment(
             device,
             v2xw_proto::scms::msg::EnrolmentCert {
                 generation: 0,
@@ -2254,7 +2428,7 @@ impl Phase2 {
         let mut enrolment_until = until;
         if remaining <= self.params.scms.reenrol_lead.as_nanos() {
             enrolment_until = until.saturating_add(lifetime);
-            self.scms.set_successor_enrolment(
+            self.run_of_mut(device).set_successor_enrolment(
                 device,
                 v2xw_proto::scms::msg::EnrolmentCert {
                     generation: 1,
@@ -2284,10 +2458,11 @@ impl Phase2 {
     /// `d = e·b_ij + r` from the device's own caterpillar. Nothing about the device's
     /// seeds or the LAs crosses: only the certificate, its issuer and `d`.
     fn creds_of_device(&self, device: NodeId, from_i: u32) -> Vec<ProvisionedCred> {
-        let Some(dev) = self.scms.state.devices.get(&device) else {
+        let run = self.run_of(device);
+        let Some(dev) = run.state.devices.get(&device) else {
             return Vec::new();
         };
-        let pki = self.scms.state.pki.as_ref();
+        let pki = run.state.pki.as_ref();
         dev.credentials
             .iter()
             .filter(|((i, _), _)| *i >= from_i)
@@ -2319,7 +2494,7 @@ impl Phase2 {
     /// ([`crate::credentials`]); `None` when the run has no PDU layer.
     #[must_use]
     pub fn aca_issuer(&self) -> Option<v2xw_sec::credential::ImplicitIssuer> {
-        let pki = self.scms.state.pki.as_ref()?;
+        let pki = self.home().state.pki.as_ref()?;
         let d = pki.aca.private?;
         v2xw_sec::credential::ImplicitIssuer::new(pki.aca.cert.clone(), d).ok()
     }
@@ -2338,14 +2513,14 @@ impl Phase2 {
         Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
         Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>,
     ) {
-        let Some(pki) = self.scms.state.pki.as_ref() else {
+        let Some(pki) = self.home().state.pki.as_ref() else {
             return (Vec::new(), Vec::new());
         };
         // Every provider whose root the CTL approves (WP-D1, gap row 42): its root as a
         // trust anchor and its components in the chain file, so a device verifies
         // another provider's pseudonyms and application certificates. A provider off
         // the CTL contributes nothing, and whatever it certifies does not verify.
-        let st = &self.scms.state;
+        let st = &self.home().state;
         let on_ctl = |label: &str| {
             st.gov
                 .root_of(label)
@@ -2375,7 +2550,7 @@ impl Phase2 {
     /// that provider. Empty without a PDU layer.
     #[must_use]
     pub fn provider_issuers(&self) -> Vec<v2xw_sec::credential::ImplicitIssuer> {
-        let st = &self.scms.state;
+        let st = &self.home().state;
         let Some(home) = st.pki.as_ref() else {
             return Vec::new();
         };
@@ -2390,14 +2565,14 @@ impl Phase2 {
     /// The deployment this run's backend was built from (WP-D1).
     #[must_use]
     pub fn deployment(&self) -> &v2xw_proto::scms::deployment::Deployment {
-        &self.scms.state.deployment
+        &self.home().state.deployment
     }
 
     /// The current signed CRL the CRL Generator distributes (series 1, full), as the
     /// bytes a store or an RSU relays unchanged. `None` with the PDU layer off.
     #[must_use]
     pub fn secured_crl(&self) -> Option<std::sync::Arc<[u8]>> {
-        self.scms
+        self.home()
             .state
             .crlg
             .secured
@@ -2730,7 +2905,9 @@ impl Phase2 {
                 .clone()
                 .unwrap_or_else(|| v2xw_core::hash::hex_encode(&me.node.index().to_le_bytes()));
             if self.rsu_nodes.contains(&node) {
-                self.ma.trust_infrastructure(reporter.clone());
+                for ma in &mut self.ma {
+                    ma.trust_infrastructure(reporter.clone());
+                }
             }
             if let Some(report) =
                 MisbehaviourReport::from_verdict(id, node, reporter, &verdict, &evidence)
@@ -2868,7 +3045,7 @@ impl Phase2 {
     ///
     /// [`Governance::publish_due`]: v2xw_proto::scms::governance::Governance::publish_due
     fn governance_due(&mut self, now: SimTime) {
-        let st = &mut self.scms.state;
+        let st = &mut self.runs[0].state;
         if let Some(at) = self.params.root_rollover_at.filter(|t| *t <= now) {
             self.params.root_rollover_at = None;
             let (old, _new, _publish) = st.gov.rollover_root(&st.rng, &st.nodes, at);
@@ -2884,6 +3061,13 @@ impl Phase2 {
             }
         }
         self.report.ctls_published += u64::from(st.gov.publish_due(now));
+        // One CTL for every provider: the other providers' RAs serve what the SCMS
+        // Manager published (WP-D1).
+        if let Some((home, peers)) = self.runs.split_first_mut() {
+            for run in peers {
+                run.state.gov.sync_trust_from(&home.state.gov);
+            }
+        }
     }
 
     fn note_unsecured(&mut self, why: &str) {
@@ -2898,7 +3082,7 @@ impl Phase2 {
     /// A signed BSM `signer` put on the air: kept (the last [`EVIDENCE_BSMS`]) as the
     /// evidence a real misbehaviour report about that certificate attaches.
     pub fn note_signed_bsm(&mut self, signer: [u8; 8], spdu: &[u8]) {
-        if self.etsi.is_some() || self.scms.state.pki.is_none() {
+        if self.etsi.is_some() || self.home().state.pki.is_none() {
             return;
         }
         let q = self.evidence.entry(signer).or_default();
@@ -2984,6 +3168,14 @@ impl Phase2 {
         let Some((subject, i, lv)) = self.resolve_subject(&report.subject_cert_digest) else {
             return;
         };
+        if self.runs.len() > 1 {
+            let names = &self.runs[0].state.deployment.providers;
+            let of = |n: NodeId| self.device_provider.get(&device_of(n)).copied();
+            if let (Some(a), Some(b)) = (of(reporter), of(subject)) {
+                let key = format!("{}<-{}", names[a].name, names[b].name);
+                *self.report.reports_by_provider.entry(key).or_insert(0) += 1;
+            }
+        }
         if let Some(etsi) = self.etsi.as_mut() {
             // TS 103 759: the report goes to the MA, signed with the reporter's ticket and
             // encrypted to the authority — no RA shuffle in the ETSI system.
@@ -2997,29 +3189,35 @@ impl Phase2 {
                 report_bytes(),
             );
             self.in_flight
-                .insert(run, InFlightReport { report, subject });
+                .insert((0, run), InFlightReport { report, subject });
             return;
         }
+        // The reporter's own provider's RA and MA receive it (WP-D1), after the internet
+        // leg from the city to that provider's region.
+        let kr = self.provider_of_device(device_of(reporter));
+        let arrive_at = arrive_at.saturating_add(self.internet_legs[kr].as_nanos());
         let run = match self.real_mbr(&report, location) {
-            MbrBuild::Real(mbr) => match self.scms.secure_mbr(device_of(reporter), &mbr, sent_at) {
-                Ok((si, slv, secured)) => {
-                    self.report.reports_mbr_real += 1;
-                    Some(self.scms.secured_at_proxy(
-                        device_of(reporter),
-                        si,
-                        slv,
-                        secured,
-                        detected_at,
-                        sent_at,
-                        arrive_at,
-                        transport,
-                    ))
+            MbrBuild::Real(mbr) => {
+                match self.runs[kr].secure_mbr(device_of(reporter), &mbr, sent_at) {
+                    Ok((si, slv, secured)) => {
+                        self.report.reports_mbr_real += 1;
+                        Some(self.runs[kr].secured_at_proxy(
+                            device_of(reporter),
+                            si,
+                            slv,
+                            secured,
+                            detected_at,
+                            sent_at,
+                            arrive_at,
+                            transport,
+                        ))
+                    }
+                    Err(e) => {
+                        self.note_unsecured(&e.to_string());
+                        None
+                    }
                 }
-                Err(e) => {
-                    self.note_unsecured(&e.to_string());
-                    None
-                }
-            },
+            }
             MbrBuild::Unmapped => {
                 self.report.reports_mbr_unmapped += 1;
                 None
@@ -3031,7 +3229,7 @@ impl Phase2 {
             MbrBuild::Off => None,
         };
         let run = run.unwrap_or_else(|| {
-            self.scms.report_at_proxy(
+            self.runs[kr].report_at_proxy(
                 device_of(reporter),
                 i,
                 lv,
@@ -3043,7 +3241,7 @@ impl Phase2 {
             )
         });
         self.in_flight
-            .insert(run, InFlightReport { report, subject });
+            .insert((kr, run), InFlightReport { report, subject });
     }
 
     /// The US misbehaviour report ([SM-MBR] v1.1, PSID 0x20) a device files for `r`.
@@ -3065,16 +3263,18 @@ impl Phase2 {
         r: &MisbehaviourReport,
         location: v2xw_sec::envelope::GenerationLocation,
     ) -> MbrBuild {
-        if self.etsi.is_some() || self.scms.state.pki.is_none() {
+        if self.etsi.is_some() || self.home().state.pki.is_none() {
             return MbrBuild::Off;
         }
         let Some(subtype) = r.reason_codes.iter().find_map(|c| us_subtype(c)) else {
             return MbrBuild::Unmapped;
         };
-        if !r
-            .reporter
-            .is_some_and(|n| self.scms.state.devices.contains_key(&device_of(n)))
-        {
+        if !r.reporter.is_some_and(|n| {
+            self.run_of(device_of(n))
+                .state
+                .devices
+                .contains_key(&device_of(n))
+        }) {
             // A roadside unit holds no pseudonym or enrolment certificate of this SCMS
             // (its application certificate is the factory's until WP-B3b is wired).
             return MbrBuild::Unsecured("the reporter holds no SCMS enrolment");
@@ -3086,7 +3286,7 @@ impl Phase2 {
             return MbrBuild::Unsecured("the accused certificate is not one the run issued");
         };
         let Some(cert) = self
-            .scms
+            .run_of(device_of(node))
             .state
             .devices
             .get(&device_of(node))
@@ -3109,7 +3309,7 @@ impl Phase2 {
             mbr::MbrType::Implausible if !bsms.is_empty() => bsms[bsms.len() - 1..].to_vec(),
             _ => return MbrBuild::Unsecured("too few of the accused's signed BSMs heard"),
         };
-        let generation_time = self.scms.state.time32(r.generation_time);
+        let generation_time = self.home().state.time32(r.generation_time);
         MbrBuild::Real(mbr::MisbehaviorReport {
             generation_time,
             location,
@@ -3120,6 +3320,10 @@ impl Phase2 {
     }
 
     /// Runs the backend to `now` and turns what happened into records and actions.
+    ///
+    /// Every provider's run steps to `now` (WP-D1). A report one provider's MA shares
+    /// with the provider that issued the accused certificate lands in that provider's
+    /// run, which then steps again, so a shared report is never a step late.
     #[allow(clippy::too_many_lines)]
     pub fn advance(&mut self, now: SimTime) -> BackendTick {
         if self.etsi.is_some() {
@@ -3129,57 +3333,78 @@ impl Phase2 {
         self.governance_due(now);
         // Start any queued case the backend can take.
         self.start_cases(now);
-        if let Err(e) = self.scms.run_until(now) {
-            self.note_backend_error(&e);
+        let providers = self.runs.len();
+        let mut stamps: Vec<Vec<v2xw_proto::stage::StageStamp>> = vec![Vec::new(); providers];
+        for _pass in 0..=providers {
+            let mut shared = false;
+            for k in 0..providers {
+                if let Err(e) = self.runs[k].run_until(now) {
+                    self.note_backend_error(&e);
+                }
+                // Stage stamps since the last look.
+                let new: Vec<v2xw_proto::stage::StageStamp> = {
+                    let (new, cursor) = self.runs[k].kernel.stages_since(self.stage_cursor[k]);
+                    let v = new.to_vec();
+                    self.stage_cursor[k] = cursor;
+                    v
+                };
+                let (decided, forwarded) = self.ingest_arrivals(k, &new, &mut tick);
+                shared |= forwarded;
+                stamps[k].extend(new);
+                for (subject, subject_digest, report_run, _t) in decided {
+                    self.queue[k].push_back(Case {
+                        provider: k,
+                        subject,
+                        subject_digest,
+                        report_run,
+                        runs: None,
+                        entry: None,
+                        stamps_emitted: BTreeSet::new(),
+                        enforced_first: None,
+                    });
+                }
+            }
+            if !shared {
+                break;
+            }
         }
-        // Stage stamps since the last tick.
-        let stamps: Vec<v2xw_proto::stage::StageStamp> = {
-            let (new, cursor) = self.scms.kernel.stages_since(self.stage_cursor);
-            let v = new.to_vec();
-            self.stage_cursor = cursor;
-            v
-        };
-        for (subject, subject_digest, report_run, _t) in self.ingest_arrivals(&stamps, &mut tick) {
-            self.queue.push_back(Case {
-                subject,
-                subject_digest,
-                report_run,
-                runs: None,
-                entry: None,
-                stamps_emitted: BTreeSet::new(),
-                enforced_first: None,
-            });
-        }
+        self.backend_now = now;
         self.start_cases(now);
-        if !self.queue.is_empty() || self.scms.case_open() {
-            if let Err(e) = self.scms.run_until(now) {
+        for k in 0..providers {
+            if (!self.queue[k].is_empty() || self.runs[k].case_open())
+                && let Err(e) = self.runs[k].run_until(now)
+            {
                 self.note_backend_error(&e);
             }
         }
-        // Cases: note issuance, and emit the stages each has reached.
-        let crlg_entries = self.scms.state.crlg.entries.clone();
-        let log = self.scms.kernel.stages.clone();
+        // Cases: note issuance, and emit the stages each has reached, each on the
+        // deciding provider's own log.
         for case in &mut self.cases {
             let Some((resolution, issuance)) = case.runs else {
                 continue;
             };
+            let run = &self.runs[case.provider];
+            let log = &run.kernel.stages;
             if case.entry.is_none()
-                && let Some(t) = log.at(issuance, StageId::Issued)
+                && log.at(issuance, StageId::Issued).is_some()
+                && let Some(entry) = run.state.crlg.entries.last()
             {
-                let _ = t;
-                if let Some(entry) = crlg_entries.last() {
-                    self.report.crls_issued += 1;
-                    // The ground-truth join, for the run report only: whether the device
-                    // the authority revoked was the one that lied.
-                    if !self.revoked_devices.insert(case.subject) {
-                        self.report.revocations_repeated += 1;
-                    } else if self.attackers.contains_key(&case.subject) {
-                        self.report.revoked_attackers += 1;
-                    } else {
-                        self.report.revoked_honest += 1;
-                    }
-                    case.entry = Some((entry.clone(), crlg_entries.len() as u32));
+                self.report.crls_issued += 1;
+                *self
+                    .report
+                    .revocations_by_provider
+                    .entry(run.state.deployment.providers[case.provider].name.clone())
+                    .or_insert(0) += 1;
+                // The ground-truth join, for the run report only: whether the device the
+                // authority revoked was the one that lied.
+                if !self.revoked_devices.insert(case.subject) {
+                    self.report.revocations_repeated += 1;
+                } else if self.attackers.contains_key(&case.subject) {
+                    self.report.revoked_attackers += 1;
+                } else {
+                    self.report.revoked_honest += 1;
                 }
+                case.entry = Some((*entry, run.state.crlg.entries.len() as u32));
             }
             for (stage, run) in [
                 (StageId::Detect, case.report_run),
@@ -3211,19 +3436,34 @@ impl Phase2 {
             .iter()
             .filter(|c| c.runs.is_some() && c.entry.is_none())
             .count() as u64;
-        if !self.scms.case_open() {
+        if self.runs.iter().all(|r| !r.case_open()) {
             self.report.cases_unresolved = unresolved;
         }
-        // Publication.
-        let store = u32::try_from(self.scms.state.crl_store.entries.len()).unwrap_or(u32::MAX);
-        if store > self.published_version {
-            self.published_version = store;
+        // Publication, per provider: each CRL Store's new version is a CRL every RA
+        // serves once the inter-provider link has carried it.
+        for k in 0..providers {
+            let st = &self.runs[k].state;
+            let store = u32::try_from(st.crl_store.entries.len()).unwrap_or(u32::MAX);
+            if store <= self.published[k] {
+                continue;
+            }
+            self.published[k] = store;
             self.report.crl_versions_published += 1;
             tick.published = Some(store);
-            let size = u64::from(crl_bytes(&self.scms.state.sizes, store).bytes());
-            for s in &stamps {
+            self.crl_feeds[k].push(CrlVersion {
+                at: now,
+                version: store,
+                entries: st.crl_store.entries.clone(),
+                secured: st
+                    .crlg
+                    .secured
+                    .as_ref()
+                    .map(|p| std::sync::Arc::<[u8]>::from(p.bytes())),
+            });
+            let size = u64::from(crl_bytes(&st.sizes, store).bytes());
+            for s in &stamps[k] {
                 if s.stage == StageId::Published || s.stage == StageId::FirstRsuBroadcast {
-                    for case in &mut self.cases {
+                    for case in self.cases.iter_mut().filter(|c| c.provider == k) {
                         if case.entry.as_ref().is_some_and(|(_, v)| *v <= store)
                             && case.stamps_emitted.insert((s.stage as u8, s.t))
                         {
@@ -3241,11 +3481,12 @@ impl Phase2 {
             }
         }
         self.broadcast_version =
-            u32::try_from(self.scms.state.crl_broadcast.entries.len()).unwrap_or(u32::MAX);
-        // Top-ups whose batch has been installed.
+            u32::try_from(self.home().state.crl_broadcast.entries.len()).unwrap_or(u32::MAX);
+        // Top-ups whose batch has been installed, on each vehicle's provider's log.
         let mut finished = Vec::new();
         for (node, n) in &self.nodes {
             let Some(run) = n.topup else { continue };
+            let log = &self.run_of(device_of(*node)).kernel.stages;
             if let Some(t) = log
                 .at_node(run, StageId::Installed, device_of(*node))
                 .or_else(|| log.at(run, StageId::Installed))
@@ -3264,7 +3505,7 @@ impl Phase2 {
             // top-up against a cellular downlink that carried about 1,100.
             let device = device_of(node);
             let bytes = self
-                .scms
+                .run_of(device)
                 .kernel
                 .steps
                 .iter()
@@ -3288,14 +3529,16 @@ impl Phase2 {
             }
         }
         // Top-ups the RA refused, and successor enrolments that finished either way.
-        self.settle_refusals_and_renewals(&log, &mut tick, now);
-        // Bytes the backend moved.
-        let (steps, cursor) = {
-            let (new, cursor) = self.scms.kernel.steps_since(self.step_cursor);
-            (new.to_vec(), cursor)
-        };
-        self.step_cursor = cursor;
-        push_bytes(&mut tick, steps);
+        self.settle_refusals_and_renewals(&mut tick, now);
+        // Bytes every provider's backend moved.
+        for k in 0..providers {
+            let (steps, cursor) = {
+                let (new, cursor) = self.runs[k].kernel.steps_since(self.step_cursor[k]);
+                (new.to_vec(), cursor)
+            };
+            self.step_cursor[k] = cursor;
+            push_bytes(&mut tick, steps);
+        }
         self.maybe_publish_view(now, &mut tick);
         tick
     }
@@ -3303,32 +3546,27 @@ impl Phase2 {
     /// Acts on what the RA and the ECA answered: a refused top-up ends the request (a
     /// blocklisted vehicle asks for nothing more; an expired enrolment is renewed first),
     /// and a successor enrolment moves the vehicle's certificate expiry.
-    fn settle_refusals_and_renewals(
-        &mut self,
-        log: &v2xw_proto::stage::StageLog,
-        tick: &mut BackendTick,
-        now: SimTime,
-    ) {
+    fn settle_refusals_and_renewals(&mut self, tick: &mut BackendTick, now: SimTime) {
         let mut refused = Vec::new();
         let mut renewed = Vec::new();
         for (node, n) in &self.nodes {
             let device = device_of(*node);
+            let scms = self.run_of(device);
             if n.topup.is_some()
-                && let Some(reason) = self.scms.topup_refusal_of(device)
+                && let Some(reason) = scms.topup_refusal_of(device)
             {
                 refused.push((*node, reason));
             }
             if let Some(run) = n.reenrol {
-                if log.at(run, StageId::Installed).is_some() {
-                    let until = self
-                        .scms
+                if scms.kernel.stages.at(run, StageId::Installed).is_some() {
+                    let until = scms
                         .state
                         .devices
                         .get(&device)
                         .and_then(|d| d.latest_enrolment())
                         .map_or(n.enrolment_until, |e| e.valid_until);
                     renewed.push((*node, Some(until)));
-                } else if self.scms.reenrol_refusal_of(device).is_some() {
+                } else if scms.reenrol_refusal_of(device).is_some() {
                     renewed.push((*node, None));
                 }
             }
@@ -3438,8 +3676,9 @@ impl Phase2 {
     /// Starts one vehicle's successor enrolment over `link`.
     pub fn start_reenrol(&mut self, node: NodeId, link: v2xw_proto::Link, now: SimTime) {
         let device = device_of(node);
-        self.scms.set_access(device, link);
-        let run = self.scms.reenrol_at(device, now);
+        let scms = self.run_of_mut(device);
+        scms.set_access(device, link);
+        let run = scms.reenrol_at(device, now);
         self.report.reenrolments_started += 1;
         if let Some(n) = self.nodes.get_mut(&node) {
             n.reenrol = Some(run);
@@ -3463,7 +3702,7 @@ impl Phase2 {
     pub fn backend_view(&mut self, now: SimTime) -> BackendView {
         let mut view = match self.etsi.as_ref() {
             Some(e) => e.backend_view(now, &mut self.tracker),
-            None => self.scms.backend_view(now, &mut self.tracker),
+            None => self.runs[0].backend_view(now, &mut self.tracker),
         };
         let r = &self.report;
         let a_now = self.access.report_now();
@@ -3481,9 +3720,17 @@ impl Phase2 {
                     e.set("reports_ingested", r.reports_at_ma);
                     e.set("revocation_decisions", r.ma_revoke_decisions);
                     e.set("cases_opened", r.cases_opened);
-                    e.set("decision_rule", self.ma.id());
-                    e.set("subjects_under_evidence", self.ma.subjects() as u64);
-                    if let Some(peak) = self.ma.peak_unrevoked_events() {
+                    e.set("decision_rule", self.ma[0].id());
+                    e.set(
+                        "subjects_under_evidence",
+                        self.ma.iter().map(MaHost::subjects).sum::<usize>() as u64,
+                    );
+                    if let Some(peak) = self
+                        .ma
+                        .iter()
+                        .filter_map(MaHost::peak_unrevoked_events)
+                        .max()
+                    {
                         // How close an unrevoked pseudonym came to the threshold: the
                         // margin an honest fleet leaves.
                         e.set("most_corroborated_events_unrevoked", u64::from(peak));
@@ -3629,17 +3876,81 @@ impl Phase2 {
     /// order their evidence was observed (a shuffle releases a batch at one instant, and
     /// the gate dates evidence by observation, not by arrival). Returns each decision:
     /// `(subject node, certificate digest, the triggering report's run, the instant)`.
+    /// The reports provider `k`'s MA received in `stamps`, and its decisions about them.
+    ///
+    /// A report about a certificate another provider issued cannot be resolved here: only
+    /// the issuing provider's ACA and LAs can link it to a device (Provider Req. §2.2;
+    /// 01 §9). With `ma_report_sharing` on (the US default) this MA forwards it over the
+    /// MA-to-MA link to that provider's MA, which decides; off, it is counted as
+    /// unresolvable and goes no further. Returns the decisions and whether anything was
+    /// forwarded.
     fn ingest_arrivals(
         &mut self,
+        k: usize,
         stamps: &[v2xw_proto::stage::StageStamp],
         tick: &mut BackendTick,
-    ) -> Vec<(NodeId, String, FlowRun, SimTime)> {
+    ) -> (Vec<(NodeId, String, FlowRun, SimTime)>, bool) {
         let mut arrived: Vec<(SimTime, FlowRun, InFlightReport)> = Vec::new();
+        let mut forwarded = false;
         for s in stamps {
             if s.stage == StageId::ReportReceived
-                && let Some(f) = self.in_flight.remove(&s.run)
+                && let Some(f) = self.in_flight.remove(&(k, s.run))
             {
-                arrived.push((s.t, s.run, f));
+                let ks = self.provider_of_device(device_of(f.subject));
+                if self.etsi.is_some() || ks == k {
+                    arrived.push((s.t, s.run, f));
+                    continue;
+                }
+                let Some((_, i, lv)) = self.resolve_subject(&f.report.subject_cert_digest) else {
+                    continue;
+                };
+                if !self.home().state.deployment.ma_report_sharing {
+                    self.runs[k].state.shared.unresolvable += 1;
+                    continue;
+                }
+                // The report as this MA holds it: its real length when it was a real
+                // report, re-encrypted to the accused's provider's MA.
+                let bytes = self.runs[k]
+                    .state
+                    .ma
+                    .reports
+                    .iter()
+                    .rev()
+                    .find(|r| r.subject_lv == lv)
+                    .and_then(|r| r.secured.as_ref().map(|x| x.report.len()))
+                    .map_or(report_bytes(), |n| u32::try_from(n).unwrap_or(u32::MAX));
+                let from = self.runs[k].state.nodes.ma;
+                let observed = f.report.detection_time;
+                let run = self.runs[ks].shared_report_at_ma(from, i, lv, observed, s.t, bytes);
+                self.runs[k].state.shared.forwarded += 1;
+                // The report's history before the sharing leg (detection, upload, the
+                // RA's shuffle) carries over to the deciding provider's log, so its
+                // revocation decomposes end to end; its arrival there is the deciding
+                // MA's `ReportReceived`.
+                let prior: Vec<v2xw_proto::stage::StageStamp> = [
+                    StageId::Detect,
+                    StageId::ReportSent,
+                    StageId::ProxyForwarded,
+                    StageId::Shuffled,
+                ]
+                .into_iter()
+                .filter_map(|stage| {
+                    let log = &self.runs[k].kernel.stages;
+                    log.at(s.run, stage).map(|t| v2xw_proto::stage::StageStamp {
+                        t,
+                        run,
+                        flow: s.flow,
+                        stage,
+                        node: None,
+                        size: None,
+                    })
+                })
+                .collect();
+                for p in prior {
+                    self.runs[ks].kernel.stages.push(p);
+                }
+                self.in_flight.insert((ks, run), f);
+                forwarded = true;
             }
         }
         arrived.sort_by(|a, b| {
@@ -3657,10 +3968,10 @@ impl Phase2 {
                 subject: r.subject_cert_digest.clone(),
                 detector: r.leading_reason().map(str::to_string),
             });
-            let action = self.ma.ingest_evidence(&r, r.detection_time);
+            let action = self.ma[k].ingest_evidence(&r, r.detection_time);
             if self.attackers.contains_key(&f.subject) {
                 *self.attacker_at_ma.entry(f.subject).or_insert(0) += 1;
-                if let Some(events) = self.ma.corroborated_events(&r.subject_cert_digest) {
+                if let Some(events) = self.ma[k].corroborated_events(&r.subject_cert_digest) {
                     let peak = self.attacker_peak_events.entry(f.subject).or_insert(0);
                     *peak = (*peak).max(events);
                 }
@@ -3692,7 +4003,7 @@ impl Phase2 {
         for (subject, _, _, t) in &decisions {
             self.note_decision_truth(*subject, *t);
         }
-        decisions
+        (decisions, forwarded)
     }
 
     /// The ETSI deployment's share of a step: reports through the gate, a decision
@@ -3711,9 +4022,9 @@ impl Phase2 {
         }
         let stamps: Vec<v2xw_proto::stage::StageStamp> = {
             let etsi = self.etsi.as_ref().expect("checked");
-            let (new, cursor) = etsi.kernel.stages_since(self.stage_cursor);
+            let (new, cursor) = etsi.kernel.stages_since(self.stage_cursor[0]);
             let v = new.to_vec();
-            self.stage_cursor = cursor;
+            self.stage_cursor[0] = cursor;
             v
         };
         for s in &stamps {
@@ -3761,7 +4072,7 @@ impl Phase2 {
                 }
             }
         }
-        for (subject, subject_digest, run, t) in self.ingest_arrivals(&stamps, &mut tick) {
+        for (subject, subject_digest, run, t) in self.ingest_arrivals(0, &stamps, &mut tick).0 {
             if self.blocks.iter().any(|b| b.subject == subject) {
                 self.report.decisions_already_covered += 1;
                 continue;
@@ -3926,10 +4237,10 @@ impl Phase2 {
         }
         let (steps, cursor) = {
             let etsi = self.etsi.as_ref().expect("checked");
-            let (new, cursor) = etsi.kernel.steps_since(self.step_cursor);
+            let (new, cursor) = etsi.kernel.steps_since(self.step_cursor[0]);
             (new.to_vec(), cursor)
         };
-        self.step_cursor = cursor;
+        self.step_cursor[0] = cursor;
         push_bytes(&mut tick, steps);
         self.maybe_publish_view(now, &mut tick);
         tick
@@ -3946,8 +4257,15 @@ impl Phase2 {
     }
 
     fn start_cases(&mut self, now: SimTime) {
-        while !self.scms.case_open() {
-            let Some(mut case) = self.queue.pop_front() else {
+        for k in 0..self.runs.len() {
+            self.start_cases_of(k, now);
+        }
+    }
+
+    /// Provider `k`'s MA takes its queued decisions, one open case at a time.
+    fn start_cases_of(&mut self, k: usize, now: SimTime) {
+        while !self.runs[k].case_open() {
+            let Some(mut case) = self.queue[k].pop_front() else {
                 return;
             };
             // The report the authority holds about the decided certificate: the latest
@@ -3956,8 +4274,7 @@ impl Phase2 {
                 self.report.cases_unresolved += 1;
                 continue;
             };
-            let Some(index) = self
-                .scms
+            let Some(index) = self.runs[k]
                 .state
                 .ma
                 .reports
@@ -3971,7 +4288,7 @@ impl Phase2 {
             // authority holds the list and checks it before spending lookups [BRECHT §VI-D:
             // one entry revokes every certificate of the device from `i` on].
             let mut covered = v2xw_sec::CrlStore::new();
-            for e in &self.scms.state.crlg.entries {
+            for e in &self.runs[k].state.crlg.entries {
                 covered.add_linkage_entry(*e);
             }
             if covered.revokes_linkage_at_period(i, lv) {
@@ -3983,21 +4300,82 @@ impl Phase2 {
             // every earlier certificate unlinkable [BRECHT §VI-D].
             // Through the MA's decision mode: the CV-pilot manual review by default
             // (`ma_review_s`), the automatic MA when it is 0 (gap row 28).
-            if let Some(runs) = self.scms.request_revocation(index, i, self.params.jmax) {
+            if let Some(runs) = self.runs[k].request_revocation(index, i, self.params.jmax) {
                 self.report.cases_opened += 1;
                 case.runs = Some(runs);
                 self.cases.push(case);
             } else {
-                self.queue.push_front(case);
+                self.queue[k].push_front(case);
                 return;
             }
         }
     }
 
+    /// The CRL versions provider `h`'s RA serves at the backend's last step: every
+    /// provider's latest version once it has crossed the inter-provider link (its own at
+    /// once). Each is `(provider, version)`.
+    fn visible_versions(&self, h: usize) -> Vec<(usize, &CrlVersion)> {
+        let d = &self.home().state.deployment;
+        let now = self.backend_now;
+        self.crl_feeds
+            .iter()
+            .enumerate()
+            .filter_map(|(k, feed)| {
+                let lag = if k == h {
+                    Duration::ZERO
+                } else {
+                    d.inter_provider_latency(k, h).unwrap_or(Duration::ZERO)
+                };
+                feed.iter()
+                    .rev()
+                    .find(|v| v.at.saturating_add(lag.as_nanos()) <= now)
+                    .map(|v| (k, v))
+            })
+            .collect()
+    }
+
+    /// The composite list vehicle `node`'s RA serves (WP-D1): its version (the sum of
+    /// every visible provider's version), every visible provider's entries, and their
+    /// signed CRLs.
+    #[must_use]
+    pub fn published_crl_for(
+        &self,
+        node: NodeId,
+    ) -> (u32, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>) {
+        let h = self.provider_of_device(device_of(node));
+        let mut version = 0u32;
+        let mut entries = Vec::new();
+        let mut secured = Vec::new();
+        for (_, v) in self.visible_versions(h) {
+            version = version.saturating_add(v.version);
+            entries.extend(v.entries.iter().copied());
+            secured.extend(v.secured.clone());
+        }
+        (version, entries, secured)
+    }
+
     /// The list the CRL Store has published: its version (entry count) and entries.
     #[must_use]
-    pub fn published_crl(&self) -> (u32, &[CrlLinkageEntry]) {
-        (self.published_version, &self.scms.state.crl_store.entries)
+    pub fn published_crl(&self) -> (u32, Vec<CrlLinkageEntry>) {
+        // The home provider's RA's composite list (a vehicle's own is
+        // [`Phase2::published_crl_for`]).
+        let (v, e, _) = self.published_crl_for_provider(0);
+        (v, e)
+    }
+
+    fn published_crl_for_provider(
+        &self,
+        h: usize,
+    ) -> (u32, Vec<CrlLinkageEntry>, Vec<std::sync::Arc<[u8]>>) {
+        let mut version = 0u32;
+        let mut entries = Vec::new();
+        let mut secured = Vec::new();
+        for (_, v) in self.visible_versions(h) {
+            version = version.saturating_add(v.version);
+            entries.extend(v.entries.iter().copied());
+            secured.extend(v.secured.clone());
+        }
+        (version, entries, secured)
     }
 
     /// The list the roadside broadcast path holds.
@@ -4005,27 +4383,30 @@ impl Phase2 {
     pub fn broadcast_crl(&self) -> (u32, &[CrlLinkageEntry]) {
         (
             self.broadcast_version,
-            &self.scms.state.crl_broadcast.entries,
+            &self.home().state.crl_broadcast.entries,
         )
     }
 
     /// The CRL's size on the wire for `entries` entries.
     #[must_use]
     pub fn crl_size(&self, entries: u32) -> u32 {
-        crl_bytes(&self.scms.state.sizes, entries).bytes()
+        crl_bytes(&self.home().state.sizes, entries).bytes()
     }
 
     /// The size of a CRL request, bytes.
     #[must_use]
     pub fn crl_request_size(&self) -> u32 {
-        self.scms.state.sizes.crl_request().bytes()
+        self.home().state.sizes.crl_request().bytes()
     }
 
     /// Vehicles whose CRL poll is due at `now`, with the version they hold. Advances each
     /// one's next poll.
     pub fn crl_polls_due(&mut self, now: SimTime) -> Vec<(NodeId, u32)> {
         let interval = self.params.crl_fetch_interval;
-        let published = self.published_version;
+        let published: Vec<u32> = (0..self.runs.len())
+            .map(|h| self.published_crl_for_provider(h).0)
+            .collect();
+        let providers = &self.device_provider;
         let mut out = Vec::new();
         for (node, n) in &mut self.nodes {
             if n.access != Some(AccessKind::Cellular) || n.crl_fetch_in_flight {
@@ -4033,7 +4414,8 @@ impl Phase2 {
             }
             if n.next_crl_fetch <= now {
                 n.next_crl_fetch = interval.after(now);
-                if n.crl_version < published {
+                let h = providers.get(&device_of(*node)).copied().unwrap_or(0);
+                if n.crl_version < published[h] {
                     n.crl_fetch_in_flight = true;
                     out.push((*node, n.crl_version));
                 }
@@ -4069,7 +4451,7 @@ impl Phase2 {
         if self.access.crl_delivery() != crate::backend::CrlDelivery::Mbms {
             return None;
         }
-        let version = self.published_version;
+        let version = self.published_crl_for_provider(0).0;
         if version == 0 || (!published && now < self.mbms_next) {
             return None;
         }
@@ -4132,8 +4514,9 @@ impl Phase2 {
         // no signed bytes exist) still compares against the Generator's own list, which
         // is what the modelled digest signature covers (`crl_digest`).
         if !node_verified {
-            let signed = &self.scms.state.crlg.entries;
-            if !entries.iter().all(|e| signed.contains(e)) {
+            let signed =
+                |e: &CrlLinkageEntry| self.runs.iter().any(|r| r.state.crlg.entries.contains(e));
+            if !entries.iter().all(signed) {
                 self.crl_frame_refused(node, cellular);
                 return (Vec::new(), records);
             }
@@ -4155,7 +4538,7 @@ impl Phase2 {
         if n.crl_installed.len() >= version as usize {
             n.crl_version = n.crl_version.max(version);
         }
-        let size = u64::from(crl_bytes(&self.scms.state.sizes, version).bytes());
+        let size = u64::from(crl_bytes(&self.home().state.sizes, version).bytes());
         self.report.crls_installed += fresh.len() as u64;
         for case in &mut self.cases {
             let Some((entry, _)) = case.entry.as_ref() else {
@@ -4210,7 +4593,7 @@ impl Phase2 {
         else {
             return;
         };
-        let log = &self.scms.kernel.stages;
+        let log = &self.runs[case.provider].kernel.stages;
         let latency = RevocationLatency::assemble(
             log,
             device_of(case.subject),
@@ -4233,7 +4616,7 @@ impl Phase2 {
             entry,
             stages,
             latency: total,
-            bytes: crl_bytes(&self.scms.state.sizes, version).bytes(),
+            bytes: crl_bytes(&self.home().state.sizes, version).bytes(),
             subject: case.subject,
             subject_digest: case.subject_digest.clone(),
         });
@@ -4316,8 +4699,10 @@ impl Phase2 {
             let _ = i;
             return;
         }
-        self.scms.set_access(device, link);
-        let run = self.scms.topup_at(device, now, i, self.params.jmax);
+        let jmax = self.params.jmax;
+        let scms = self.run_of_mut(device);
+        scms.set_access(device, link);
+        let run = scms.topup_at(device, now, i, jmax);
         self.report.topups_started += 1;
         if let Some(n) = self.nodes.get_mut(&node) {
             n.topup = Some(run);
@@ -4466,6 +4851,45 @@ impl Phase2 {
         self.report.revoked_receptions += 1;
     }
 
+    /// Counts what receiver `node` verified and refused as revoked, by the provider that
+    /// serves it and the one that certified each signer (WP-D1): `"<receiver's
+    /// provider><-<signer's provider>"`. Cross-provider trust is visible here, from each
+    /// node's own verdicts; the signer's provider is the engine's bookkeeping (which
+    /// vehicle holds the certificate), never read by a decision.
+    pub fn note_provider_receptions(
+        &mut self,
+        node: NodeId,
+        delivered: &[v2xw_node::VerifiedMessage],
+    ) {
+        if self.runs.len() < 2 {
+            return;
+        }
+        let Some(&rk) = self.device_provider.get(&device_of(node)) else {
+            return;
+        };
+        let names = &self.runs[0].state.deployment.providers;
+        for m in delivered {
+            let Some(signer) = &m.signer else { continue };
+            let Some(&(sender, _, _)) = self.by_digest.get(&digest_key(signer)) else {
+                continue;
+            };
+            let Some(&sk) = self.device_provider.get(&device_of(sender)) else {
+                continue;
+            };
+            let key = format!("{}<-{}", names[rk].name, names[sk].name);
+            let bucket = match m.verification {
+                v2xw_node::stores::VerificationState::Verified => {
+                    &mut self.report.verified_by_provider
+                }
+                v2xw_node::stores::VerificationState::Revoked => {
+                    &mut self.report.revoked_by_provider
+                }
+                _ => continue,
+            };
+            *bucket.entry(key).or_insert(0) += 1;
+        }
+    }
+
     /// Settles the end of the run: an issued entry that no store published before the
     /// horizon is counted as cut off by it.
     pub fn finish(&mut self) {
@@ -4475,12 +4899,28 @@ impl Phase2 {
             .filter(|c| {
                 c.entry
                     .as_ref()
-                    .is_some_and(|(_, v)| *v > self.published_version)
+                    .is_some_and(|(_, v)| *v > self.published[c.provider])
             })
             .count() as u64;
         self.report.crl_past_horizon = self.report.crl_past_horizon.max(issued_unpublished);
-        self.report.ma_peak_unrevoked_events =
-            u64::from(self.ma.peak_unrevoked_events().unwrap_or(0));
+        self.report.ma_peak_unrevoked_events = u64::from(
+            self.ma
+                .iter()
+                .filter_map(MaHost::peak_unrevoked_events)
+                .max()
+                .unwrap_or(0),
+        );
+        self.report.reports_shared = self.runs.iter().map(|r| r.state.shared.forwarded).sum();
+        self.report.reports_foreign_unresolvable =
+            self.runs.iter().map(|r| r.state.shared.unresolvable).sum();
+        for run in &self.runs {
+            let name = run.state.deployment.providers[run.state.provider]
+                .name
+                .clone();
+            self.report
+                .devices_by_provider
+                .insert(name, run.state.devices.len() as u64);
+        }
         self.report.privacy_tracked_vehicles = self.privacy_tracked.len() as u64;
         self.report.privacy_followed_across_change = self.privacy_across.len() as u64;
         self.report.privacy_tracked_sum_ns = self.privacy_tracked.values().sum();
@@ -4966,10 +5406,18 @@ pub fn deployment_warnings(scenario: &Scenario) -> Vec<String> {
     out.extend(d.assumptions());
     if d.providers.len() > 1 {
         out.push(format!(
-            "SCMS deployment: every vehicle's enrolment, provisioning, reports and \
-             revocation run on {}'s backend; the other providers certify roadside units \
-             (by fleet share) and are hosted and linked, but carry no vehicle flows in \
-             this build (WP-D1 open item)",
+            "SCMS deployment: one backend per provider; each vehicle and roadside unit is \
+             served by one provider by the seeded fleet split, an MA {} reports about \
+             another provider's certificate with that provider's MA, and every RA serves \
+             every provider's CRL after the inter-provider link. The MA-to-MA report \
+             format is modelled (no published specification); the governance decisions \
+             (root rollover, removal) are taken on {}'s view and its CTL distributed to \
+             every provider",
+            if d.ma_report_sharing {
+                "shares"
+            } else {
+                "does not share (ma_report_sharing off)"
+            },
             d.providers[0].name
         ));
     }
