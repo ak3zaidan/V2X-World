@@ -392,6 +392,58 @@ impl GlosaDrivers {
 /// The model id GLOSA compliance draws under ([`v2xw_core::rng::RngDomain::plugin`]).
 pub const GLOSA_COMPLIANCE_ID: &str = "app/glosa/compliance";
 
+/// The vehicles' receiver validation, summed over the run (WP-C2).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ReceiverValidationReport {
+    /// SPDUs validated to an installed root.
+    pub checked: u64,
+    /// SPDUs checked by signature only (no trust store installed).
+    pub chain_unchecked: u64,
+    /// Refusals, by rule (`v2xw_node::rxval::RxReject::name`).
+    pub refused: std::collections::BTreeMap<String, u64>,
+    /// CA paths and end-entity certificates validated (cache misses).
+    pub ca_validations: u64,
+    /// End-entity certificates validated.
+    pub ee_validations: u64,
+    /// Chain findings tolerated as the published US RA profile.
+    pub tolerated: u64,
+    /// Signers with an identified region no location could be placed in.
+    pub region_unchecked: u64,
+    /// Signed CRLs the vehicles verified and installed.
+    pub crls_accepted: u64,
+    /// Signed CRLs refused, by reason.
+    pub crls_refused: std::collections::BTreeMap<String, u64>,
+    /// Validation operations no hardware anchor priced.
+    pub unpriced: u64,
+    /// Simulated validation time charged, ns.
+    pub charged_ns: u64,
+}
+
+impl ReceiverValidationReport {
+    /// Nothing was validated.
+    pub fn is_empty(&self) -> bool {
+        self.checked == 0 && self.crls_accepted == 0 && self.crls_refused.is_empty()
+    }
+
+    fn add(&mut self, s: &v2xw_node::rxval::RxStats) {
+        self.checked += s.checked;
+        self.chain_unchecked += s.chain_unchecked;
+        for (k, v) in &s.refused {
+            *self.refused.entry((*k).to_string()).or_insert(0) += v;
+        }
+        self.ca_validations += s.ca_validations;
+        self.ee_validations += s.ee_validations;
+        self.tolerated += s.tolerated;
+        self.region_unchecked += s.region_unchecked;
+        self.crls_accepted += s.crls_accepted;
+        for (k, v) in &s.crls_refused {
+            *self.crls_refused.entry((*k).to_string()).or_insert(0) += v;
+        }
+        self.unpriced += s.unpriced;
+        self.charged_ns = self.charged_ns.saturating_add(s.charged_ns);
+    }
+}
+
 /// What one run produced.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct RunReport {
@@ -512,6 +564,11 @@ pub struct RunReport {
     /// handed does not reconstruct under its certificate (`d·G ≠ e·P_U + Q_ACA`), or that
     /// could not be issued: each one is a certificate the device cannot sign with (WP-C1).
     pub credentials_refused: u64,
+    /// What the vehicles' receiver validation did (WP-C2, `v2xw_node::rxval`): every
+    /// refusal by 1609.2 rule, CRLs accepted and refused, the published-RA findings
+    /// tolerated, and the validation time charged. Absent when no node validated.
+    #[serde(skip_serializing_if = "ReceiverValidationReport::is_empty")]
+    pub receiver_validation: ReceiverValidationReport,
     /// How many PSMs and VAMs a VRU device wanted to send and did not: the EN 302 571 duty
     /// cycle, the energy budget, or no credential (`v2xw_node::vru`).
     pub vru_suppressed: u64,
@@ -2236,6 +2293,11 @@ impl Engine {
         if let Some(phase2) = self.phase2.as_mut() {
             phase2.report_mut().crl_period_refusals = refusals;
         }
+        let mut rx = ReceiverValidationReport::default();
+        for n in self.nodes.values() {
+            rx.add(&n.security().trust().stats);
+        }
+        self.report.receiver_validation = rx;
         if let (Some(phase2), Some(policy)) = (self.phase2.as_mut(), self.pseudonym_policy.as_ref())
         {
             phase2.note_policy_totals(policy.silenced_frames, policy.requested_changes);

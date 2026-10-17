@@ -581,6 +581,33 @@ impl LifecycleParams {
         // A run publishes the CRL on the deployment's cadence: that wait is part of what
         // revocation costs (05-protocols §2.5), and `crl_cadence_s: 0` turns it off.
         scms.publish_on_cadence = true;
+        // WP-C2: the pseudonym certificates permit every PSID the fleet signs under —
+        // what the scenario's vehicles send (an emergency vehicle's SRM included) and
+        // the misbehaviour report — so a receiver checking the SPDU PSID against
+        // `appPermissions` refuses no honest message.
+        {
+            let etsi = crate::wiring::etsi_facilities(scenario);
+            let s = crate::wiring::vehicle_services(
+                scenario,
+                v2xw_mobility::classes::VehicleClass::Emergency,
+            );
+            let mut psids = vec![
+                v2xw_msg::registry::psid(v2xw_msg::MsgType::Bsm, etsi),
+                v2xw_msg::registry::psid(v2xw_msg::MsgType::Mbr, etsi),
+            ];
+            for (on, m) in [
+                (s.bsm, v2xw_msg::MsgType::Bsm),
+                (s.cam, v2xw_msg::MsgType::Cam),
+                (s.denm, v2xw_msg::MsgType::Denm),
+                (s.cpm, v2xw_msg::MsgType::Cpm),
+                (s.srm, v2xw_msg::MsgType::Srm),
+            ] {
+                if on {
+                    psids.push(v2xw_msg::registry::psid(m, etsi));
+                }
+            }
+            scms.pdu.pseudonym_psids = v2xw_proto::scms::params::PsidList::of(&psids);
+        }
         let mut p = LifecycleParams {
             scms,
             jmax: scms.certs_per_period,

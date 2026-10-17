@@ -451,3 +451,39 @@ fn two_weeks_past_next_crl_every_message_is_refused() {
     assert_eq!(refused(&rx, "crl-overdue"), 1);
     let _ = key;
 }
+
+#[test]
+fn a_crl_signer_whose_certificate_the_ica_did_not_sign_is_refused() {
+    use v2xw_msg::sec_types::ieee1609_dot2_base_types::Signature;
+    let pki = pki();
+    // The CRL signer's own certificate with its issuer signature altered: its key, its
+    // SSP and its issuer field are unchanged, so only the chain check can refuse it.
+    let mut forged = pki.crlg.cert.clone();
+    if let Some(Signature::ecdsaNistP256Signature(s)) = forged.0.signature.as_mut() {
+        let mut b = s.s_sig.to_vec();
+        b[31] ^= 0x01;
+        s.s_sig = b.into();
+    } else {
+        panic!("the CRL signer certificate is P-256 signed");
+    }
+    let contents = crl::crl_contents(&CrlSpec {
+        series: 1,
+        craca: pki.craca_id8(),
+        issue_date: t0(),
+        next_crl: t0() + WEEK,
+        priority: None,
+        delta: false,
+        body: CrlBody::Linkage {
+            i_rev: 0,
+            index_within_i: 0,
+            individual: Vec::new(),
+        },
+    });
+    let bytes =
+        crl::encode_crl(&crl::sign_crl(&contents, &forged, &pki.crlg.key).unwrap()).unwrap();
+    let mut rx = trusted(CryptoMode::Real, &pki);
+    assert_eq!(
+        rx.verify_secured_crl(&bytes, 5 * NS_PER_S),
+        Err(RxReject::CrlSignerUntrusted)
+    );
+}
