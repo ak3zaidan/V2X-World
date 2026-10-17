@@ -225,6 +225,8 @@ pub fn assemble(
         .extend(crate::scenario::pq_rsu_proxy_warnings(scenario));
     m.warnings
         .extend(crate::scenario::signature_mtu_warnings(scenario));
+    m.warnings
+        .extend(crate::phase2::deployment_warnings(scenario));
 
     if GIT_COMMIT == "unknown" {
         m.warnings.push(

@@ -1599,7 +1599,24 @@ impl Engine {
                     .as_ref()
                     .and_then(crate::phase2::Phase2::aca_issuer),
             )
-            .with_trust(roots, chain_file),
+            .with_trust(roots, chain_file)
+            .with_providers(
+                engine
+                    .phase2
+                    .as_ref()
+                    .map(crate::phase2::Phase2::provider_issuers)
+                    .unwrap_or_default(),
+                engine
+                    .phase2
+                    .as_ref()
+                    .map(|p| p.deployment().clone())
+                    .unwrap_or_else(|| {
+                        v2xw_proto::scms::deployment::Deployment::preset(
+                            v2xw_proto::scms::deployment::Preset::CampReference,
+                        )
+                    }),
+                engine.scenario.seed,
+            ),
         );
         let policy = crate::pseudonym_policy::PseudonymPolicy::from_scenario(
             &engine.scenario,
@@ -1687,9 +1704,17 @@ impl Engine {
         &self.report
     }
 
-    /// The certificate of the ACA every credential in this run was issued under, and
-    /// whether it is the SCMS run's own ACA (WP-C1): what an external verifier of the
-    /// run's SPDUs needs to reconstruct the signers' keys.
+    /// Every ACA a credential in this run can be issued under, one per provider in
+    /// deployment order (WP-D1): what an external verifier of the run's SPDUs needs to
+    /// reconstruct the signers' keys.
+    #[must_use]
+    pub fn credential_issuers(&self) -> Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>> {
+        self.credential_factory.provider_certificates()
+    }
+
+    /// The run's credential issuer (the home provider's ACA under an SCMS) and whether it
+    /// is an SCMS ACA. [`Engine::credential_issuers`] lists every provider's.
+    #[must_use]
     pub fn credential_issuer(&self) -> (std::sync::Arc<v2xw_msg::sec_types::Certificate>, bool) {
         (
             std::sync::Arc::clone(self.credential_factory.issuer_certificate()),

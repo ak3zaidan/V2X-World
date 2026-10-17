@@ -41,6 +41,10 @@ pub struct CredentialFactory {
     roots: Vec<Arc<v2xw_msg::sec_types::Certificate>>,
     /// The local certificate chain file every node installs: the CA certificates.
     chain_file: Vec<Arc<v2xw_msg::sec_types::Certificate>>,
+    /// Every provider's ACA (WP-D1), in deployment order, and the deployment and seed
+    /// that assign a roadside unit to one of them. Empty: `issuer` certifies every node.
+    providers: Vec<ImplicitIssuer>,
+    assignment: Option<(v2xw_proto::scms::deployment::Deployment, u64)>,
 }
 
 impl CredentialFactory {
@@ -78,7 +82,51 @@ impl CredentialFactory {
             scms_aca,
             roots,
             chain_file: Vec::new(),
+            providers: Vec::new(),
+            assignment: None,
         }
+    }
+
+    /// The same factory with one ACA per provider (WP-D1): a roadside unit's
+    /// application certificate comes from the provider [`Deployment::provider_of`]
+    /// assigns it under `seed`. Ignored unless `providers` has one ACA per provider.
+    ///
+    /// [`Deployment::provider_of`]: v2xw_proto::scms::deployment::Deployment::provider_of
+    #[must_use]
+    pub fn with_providers(
+        mut self,
+        providers: Vec<ImplicitIssuer>,
+        deployment: v2xw_proto::scms::deployment::Deployment,
+        seed: u64,
+    ) -> CredentialFactory {
+        if self.scms_aca && providers.len() == deployment.providers.len() && providers.len() > 1 {
+            self.providers = providers;
+            self.assignment = Some((deployment, seed));
+        }
+        self
+    }
+
+    /// Every provider's ACA certificate, in deployment order (just the run's issuer
+    /// without a multi-provider deployment).
+    #[must_use]
+    pub fn provider_certificates(&self) -> Vec<Arc<v2xw_msg::sec_types::Certificate>> {
+        if self.providers.is_empty() {
+            return vec![Arc::clone(self.issuer.certificate())];
+        }
+        self.providers
+            .iter()
+            .map(|i| Arc::clone(i.certificate()))
+            .collect()
+    }
+
+    /// The provider (index in the deployment) that certifies `node`'s roadside
+    /// application certificates: 0, the home provider, without a multi-provider
+    /// deployment.
+    #[must_use]
+    pub fn provider_of(&self, node: NodeId) -> usize {
+        self.assignment
+            .as_ref()
+            .map_or(0, |(d, seed)| d.provider_of(*seed, u64::from(node.index())))
     }
 
     /// The same factory with the trust every node installs: the CTL-approved `roots` and
@@ -197,7 +245,11 @@ impl CredentialFactory {
         from: SimTime,
         psids: &[u64],
     ) -> Result<ImplicitKey, v2xw_sec::SecError> {
-        self.issuer.issue_factory(
+        let issuer = self
+            .providers
+            .get(self.provider_of(node))
+            .unwrap_or(&self.issuer);
+        issuer.issue_factory(
             FactoryProfile::RsuApplication,
             &self.device_secret(node, b"rsu"),
             i,

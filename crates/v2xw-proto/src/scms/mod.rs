@@ -13,6 +13,7 @@
 
 pub mod appcert;
 pub mod calendar;
+pub mod deployment;
 pub mod enrolment;
 pub mod governance;
 pub mod inspect;

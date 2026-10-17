@@ -2566,6 +2566,25 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                (TS 102 941 §6.3.3); nothing re-issues either list during a run.",
     },
     KeyStatus {
+        path: "security.scms",
+        status: Status::Partial,
+        note: "The SCMS deployment (protocol/scms/camp only; refused otherwise). \
+               deployment.preset: us-production-2025 (default: two providers with neutral \
+               labels on one CTL signed by the five shared electors, quorum 3; each with \
+               its own offline root and ICA and its own ECA, RA, ACA (provider-b two), LA1, \
+               LA2, MA, CRL Generator and PG; no LOP, no CRL broadcast), us-test-ctl-2025 \
+               (six roots), camp-reference (the single SCMS with LOP and a central MA) or \
+               custom. providers[]: components, region (an ASSUMPTION; no provider \
+               publishes one), fleet_share (roadside units are split by it), on_ctl (off: a \
+               provider nobody trusts). latency region (great-circle distance at \
+               fibre_fraction of c plus per_link_ms, ASSUMPTION) or flat; options.lop \
+               (off: the proxy hop is transparent) and options.butterfly (original only). \
+               Every node trusts every root on the CTL and holds every such provider's \
+               chain. Partial: vehicles' credential flows all run on the home provider's \
+               backend; the other providers' components are certified, hosted and linked \
+               (MA to MA for report sharing) but carry no flows yet.",
+    },
+    KeyStatus {
         path: "security.signature",
         status: Status::Partial,
         note: "Any scheme in the registry (v2xw_sec::scheme::SIGNATURE_IDS; adding one is one \
@@ -3367,6 +3386,32 @@ fn security_backend(s: &Scenario, e: &mut Vec<ScenarioError>) {
                 b.id
             ),
         ));
+    }
+    // `security.scms` describes an SCMS deployment: on any other protocol it would do
+    // nothing (the settings contract refuses it), and a deployment that does not build is
+    // refused here as the run would refuse it.
+    if s.security.scms.is_some() {
+        let protocol = s
+            .actors
+            .backend
+            .protocol
+            .clone()
+            .or_else(|| s.security.protocol.as_ref().map(|c| c.id.clone()));
+        if protocol.as_deref() != Some(crate::phase2::CAMP_SCMS) {
+            e.push(conflict(
+                "security.scms",
+                format!(
+                    "describes an SCMS deployment, and the credential protocol is {}; set \
+                     security.protocol to {} or remove security.scms",
+                    protocol.as_deref().unwrap_or("none"),
+                    crate::phase2::CAMP_SCMS
+                ),
+            ));
+        } else if let Err(crate::EngineError::Scenario(inner)) =
+            crate::phase2::deployment_of(s, true)
+        {
+            e.push(inner);
+        }
     }
     let etsi = s.actors.backend.protocol.as_deref() == Some(crate::phase2::ETSI_PKI)
         || s.security

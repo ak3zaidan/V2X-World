@@ -438,7 +438,7 @@ impl ScmsPki {
             false,
             start,
         )?;
-        Self::components(root, ica, &mut g, start)
+        Self::components(root, ica, &mut g, start, "provider-a")
     }
 
     /// The provider's components under the governance entities' own Root CA and ICA
@@ -452,6 +452,21 @@ impl ScmsPki {
     /// # Errors
     /// An anchor key is not P-256 or P-384, or a certificate does not build.
     pub fn under_anchors(
+        seed: u64,
+        start: u32,
+        root: (&Certificate, &Signer1609),
+        ica: (&Certificate, &Signer1609),
+    ) -> Result<ScmsPki> {
+        Self::under_anchors_of("provider-a", seed, start, root, ica)
+    }
+
+    /// [`ScmsPki::under_anchors`] for provider `label` (WP-D1): its components are named
+    /// `<role>.<label>`, and a peer provider's keys come from its own `seed`.
+    ///
+    /// # Errors
+    /// As [`ScmsPki::under_anchors`].
+    pub fn under_anchors_of(
+        label: &str,
         seed: u64,
         start: u32,
         root: (&Certificate, &Signer1609),
@@ -477,15 +492,21 @@ impl ScmsPki {
         };
         let root = anchor("root.governance", root)?;
         let ica = anchor("ica.governance", ica)?;
-        Self::components(root, ica, &mut g, start)
+        Self::components(root, ica, &mut g, start, label)
     }
 
     /// Every component under `ica`, in a fixed draw order.
-    fn components(root: Authority, ica: Authority, g: &mut Drbg, start: u32) -> Result<ScmsPki> {
+    fn components(
+        root: Authority,
+        ica: Authority,
+        g: &mut Drbg,
+        start: u32,
+        label: &str,
+    ) -> Result<ScmsPki> {
         let eca = Self::issue(
             &ica,
             g,
-            "eca.provider-a",
+            &format!("eca.{label}"),
             15,
             &SecurityMgmtSsp::eca(EcaSsp::new(Uint8(2))),
             false,
@@ -495,7 +516,7 @@ impl ScmsPki {
         let ra = Self::issue(
             &ica,
             g,
-            "ra.provider-a",
+            &format!("ra.{label}"),
             3,
             &SecurityMgmtSsp::ra(RaSsp::new(Uint8(2))),
             false,
@@ -505,7 +526,7 @@ impl ScmsPki {
         let aca = Self::issue(
             &ica,
             g,
-            "aca.provider-a",
+            &format!("aca.{label}"),
             3,
             &SecurityMgmtSsp::aca(AcaSsp::new(Uint8(2))),
             false,
@@ -515,7 +536,7 @@ impl ScmsPki {
         let ma = Self::issue(
             &ica,
             g,
-            "ma.provider-a",
+            &format!("ma.{label}"),
             3,
             &SecurityMgmtSsp::ma(MaSsp::new(
                 Uint8(2),
@@ -530,7 +551,7 @@ impl ScmsPki {
         let la1 = Self::issue(
             &ica,
             g,
-            "la1.provider-a",
+            &format!("la1.{label}"),
             3,
             &SecurityMgmtSsp::la(LaSsp::new(Uint8(2), Uint16(1))),
             false,
@@ -540,7 +561,7 @@ impl ScmsPki {
         let la2 = Self::issue(
             &ica,
             g,
-            "la2.provider-b",
+            &format!("la2.{label}"),
             3,
             &SecurityMgmtSsp::la(LaSsp::new(Uint8(2), Uint16(2))),
             false,
@@ -550,7 +571,7 @@ impl ScmsPki {
         let dcm = Self::issue(
             &ica,
             g,
-            "dcm.provider-a",
+            &format!("dcm.{label}"),
             3,
             &SecurityMgmtSsp::dcm(DcmSsp::new(Uint8(2))),
             false,
@@ -572,7 +593,7 @@ impl ScmsPki {
         let crlg = Self::issue_with(
             &ica,
             g,
-            "crlg.provider-a",
+            &format!("crlg.{label}"),
             3,
             &SecurityMgmtSsp::crl(CrlSignerSsp::new(Uint8(2))),
             false,

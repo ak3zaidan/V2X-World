@@ -749,6 +749,12 @@ pub struct ScmsState {
     next_run: u32,
     /// RSU application and OBU identification certificates (WP-B3b).
     pub apps: appcert::AppCertState,
+    /// The deployment topology this run was built from (WP-D1). This run's flows are the
+    /// first (home) provider's; the others are hosted and certified on the same CTL.
+    pub deployment: crate::scms::deployment::Deployment,
+    /// The other providers' PDU-layer PKIs under their own governance roots and ICAs, in
+    /// deployment order (empty with the layer off or with one provider).
+    pub peer_pki: Vec<(String, std::sync::Arc<crate::scms::pdu::ScmsPki>)>,
 }
 
 /// What an authority does once its committee has signed: the continuation a committee
@@ -826,7 +832,44 @@ impl ScmsRun {
     /// # Errors
     /// [`ProtoError::Size`] if the certificate profile does not encode.
     pub fn new_at(params: ScmsParams, t0: SimTime) -> Result<ScmsRun> {
-        let nodes = ScmsNodes::default();
+        ScmsRun::new_deployed(
+            params,
+            t0,
+            crate::scms::deployment::Deployment::preset(
+                crate::scms::deployment::Preset::CampReference,
+            ),
+        )
+    }
+
+    /// The deployment `deployment` describes (WP-D1), its clock starting at `t0`.
+    ///
+    /// The home provider (the first) runs this run's flows on [`ScmsNodes::default`]'s
+    /// ids. Every provider's root is on the genesis CTL, signed by the shared electors,
+    /// and every provider's ICA and components are certified under its own root; the
+    /// other providers' online components are hosted on their own nodes, linked inside
+    /// their region, and each MA is linked to every other for report sharing. Under the
+    /// region latency model the intra-provider backend links take its intra-region
+    /// latency. With the LOP not deployed (`options.lop` off) the proxy hop is
+    /// transparent: zero latency, no queue (the node is kept so flows address it).
+    ///
+    /// # Errors
+    /// [`ProtoError::Payload`] for a deployment that does not validate, and as
+    /// [`ScmsRun::new_at`].
+    pub fn new_deployed(
+        mut params: ScmsParams,
+        t0: SimTime,
+        deployment: crate::scms::deployment::Deployment,
+    ) -> Result<ScmsRun> {
+        deployment.validate().map_err(|e| ProtoError::Payload {
+            what: "SCMS deployment",
+            detail: e.to_string(),
+        })?;
+        params.electors = deployment.electors;
+        params.elector_quorum = deployment.quorum;
+        if let Some(intra) = deployment.intra_region_latency() {
+            params.backend_link_latency = intra;
+        }
+        let nodes = deployment.nodes(0).online;
         let umbrella_leaves = params
             .threshold
             .filter(|t| t.pca && t.protocol == crate::threshold::umbrella::ID)
@@ -855,15 +898,35 @@ impl ScmsRun {
             t0,
             crate::scms::governance::GovernanceConfig {
                 clock: v2xw_core::time::WallClock::new(params.pdu.t0_unix_s),
-                ..crate::scms::governance::GovernanceConfig::default()
+                provider: deployment.providers[0].name.clone(),
+                peers: crate::scms::governance::PeerProvider::of_deployment(&deployment),
             },
         );
         for (a, b) in governance_links(&nodes, &gov) {
             net.connect(a, b, backend);
         }
+        let transparent = Link {
+            latency: Duration::ZERO,
+            bandwidth_bps: u64::MAX,
+            transport: Transport::BackendNet,
+        };
+        if !deployment.options.lop {
+            net.connect(nodes.lop, nodes.ra, transparent);
+        }
+        let peer_links = peer_topology(&deployment, &mut net, backend);
         let mut kernel = Kernel::new_at(net, t0);
         for (node, spec) in nodes.backend_service_models(&params) {
+            let spec = if node == nodes.lop && !deployment.options.lop {
+                crate::service::ServiceModelSpec::new(64, Duration::ZERO)
+            } else {
+                spec
+            };
             kernel.host(node, &spec, params.backend_profile);
+        }
+        let plain =
+            crate::service::ServiceModelSpec::new(params.backend_servers, params.backend_overhead);
+        for node in peer_links {
+            kernel.host(node, &plain, params.backend_profile);
         }
         host_governance(&mut kernel, &gov, &params);
         let committees = build_committees(&params, &nodes, &mut kernel, sizes.envelope_digest());
@@ -890,6 +953,40 @@ impl ScmsRun {
         } else {
             None
         };
+        // Every other provider's PDU PKI, under its own governance root and ICA; its
+        // component keys from its own stream (the label keys the seed).
+        let mut peer_pki = Vec::new();
+        if pki.is_some() {
+            for p in &deployment.providers[1..] {
+                let refuse = |detail: String| ProtoError::Payload {
+                    what: "SCMS PKI",
+                    detail,
+                };
+                let anchor = |role: &str| {
+                    gov.peer_cert(&p.name, role)
+                        .zip(gov.peer_signing_key(&p.name, role))
+                        .ok_or_else(|| refuse(format!("governance holds no {role} of {}", p.name)))
+                };
+                let (root, ica) = (anchor("root")?, anchor("ica")?);
+                let start = ica.0.0.to_be_signed.validity_period.start.0.0;
+                let seed = u64::from_be_bytes(
+                    v2xw_core::hash::sha256(
+                        &[
+                            &params.master_seed.to_be_bytes()[..],
+                            b"/provider/",
+                            p.name.as_bytes(),
+                        ]
+                        .concat(),
+                    )[..8]
+                        .try_into()
+                        .expect("8 bytes"),
+                );
+                let peer =
+                    crate::scms::pdu::ScmsPki::under_anchors_of(&p.name, seed, start, root, ica)
+                        .map_err(|e| refuse(e.to_string()))?;
+                peer_pki.push((p.name.clone(), std::sync::Arc::new(peer)));
+            }
+        }
         Ok(ScmsRun {
             state: ScmsState {
                 nodes,
@@ -928,6 +1025,8 @@ impl ScmsRun {
                 wall,
                 next_run: 0,
                 apps: appcert::AppCertState::new(params.master_seed),
+                deployment,
+                peer_pki,
             },
             kernel,
         })
@@ -1540,6 +1639,55 @@ fn host_committees(kernel: &mut Kernel<ScmsMsg>, committees: &Committees<Pending
             kernel.host(*m, &spec, p.backend_profile);
         }
     }
+}
+
+/// Links the other providers' online components inside their regions and every MA to
+/// every other (report sharing, WP-D1). Returns the peer nodes to host.
+fn peer_topology(
+    d: &crate::scms::deployment::Deployment,
+    net: &mut BackendNet,
+    intra: Link,
+) -> Vec<NodeId> {
+    let mut hosted = Vec::new();
+    for k in 1..d.providers.len() {
+        let pn = d.nodes(k);
+        let of = |role: &str| -> Vec<NodeId> {
+            pn.instances
+                .iter()
+                .filter(|(r, _, _)| r == role)
+                .map(|(_, _, n)| *n)
+                .collect()
+        };
+        let (ra, ma) = (pn.online.ra, pn.online.ma);
+        for (hub, roles) in [
+            (ra, &["aca", "la1", "la2", "ma", "eca", "pg"][..]),
+            (ma, &["aca", "la1", "la2", "crlg"][..]),
+        ] {
+            for role in roles {
+                for n in of(role) {
+                    net.connect(hub, n, intra);
+                }
+            }
+        }
+        hosted.extend(
+            pn.instances
+                .iter()
+                .filter(|(r, _, _)| !crate::scms::deployment::is_offline(r))
+                .map(|(_, _, n)| *n),
+        );
+    }
+    if d.ma_report_sharing {
+        for a in 0..d.providers.len() {
+            for b in a + 1..d.providers.len() {
+                let link = Link {
+                    latency: d.inter_provider_latency(a, b).unwrap_or(intra.latency),
+                    ..intra
+                };
+                net.connect(d.nodes(a).online.ma, d.nodes(b).online.ma, link);
+            }
+        }
+    }
+    hosted
 }
 
 fn governance_links(n: &ScmsNodes, gov: &Governance) -> Vec<(NodeId, NodeId)> {
