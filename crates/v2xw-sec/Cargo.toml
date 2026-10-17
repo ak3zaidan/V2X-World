@@ -43,3 +43,9 @@ serde_json = { workspace = true }
 [dev-dependencies]
 # The golden-vector tests read the pinned legacy vectors as JSON.
 serde_json = { workspace = true }
+
+# WP-C4 host benchmark of the crate's own primitives (ratios that check the cost
+# recipes; never a device cost). `cargo bench -p v2xw-sec --bench primitives`.
+[[bench]]
+name = "primitives"
+harness = false

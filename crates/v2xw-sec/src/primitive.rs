@@ -73,6 +73,26 @@ impl PrimitiveId {
     pub const ECQV_P256: PrimitiveId = PrimitiveId("primitive/ecqv-p256");
     /// SHA-256.
     pub const SHA_256: PrimitiveId = PrimitiveId("primitive/sha-256");
+    /// SHA-384 (FIPS 180-4): the hash of every P-384 signature, the elector and root
+    /// signatures among them.
+    pub const SHA_384: PrimitiveId = PrimitiveId("primitive/sha-384");
+    /// The bare AES-128 block permutation (FIPS 197): the linkage-value and
+    /// butterfly-expansion constructions and every block of CCM are made of it.
+    pub const AES_128: PrimitiveId = PrimitiveId("primitive/aes-128");
+    /// AES-128-CCM as IEEE 1609.2 profiles it (12-byte nonce, 16-byte tag, no associated
+    /// data).
+    pub const AES_128_CCM: PrimitiveId = PrimitiveId("primitive/aes-128-ccm");
+    /// ECDH over NIST P-256: one variable-base scalar multiplication. ECIES and the ECQV
+    /// reconstruction are priced from it.
+    pub const ECDH_P256: PrimitiveId = PrimitiveId("primitive/ecdh-p256");
+    /// ECIES over P-256 as IEEE 1609.2 §5.3.5 profiles it (KDF2 and MAC1 over SHA-256)
+    /// wrapping a 16-byte AES key.
+    pub const ECIES_P256: PrimitiveId = PrimitiveId("primitive/ecies-p256");
+    /// The original (US-profile) butterfly key expansion of IEEE 1609.2.1 §9.3, one
+    /// `(i, j)` certificate's worth.
+    pub const BUTTERFLY_EXPAND_P256: PrimitiveId = PrimitiveId("primitive/butterfly-expand-p256");
+    /// The SCMS linkage-value construction (CAMP `lv`; 02 §10.1).
+    pub const LINKAGE_VALUE: PrimitiveId = PrimitiveId("primitive/linkage-value");
     /// ML-DSA-44 (FIPS 204).
     pub const ML_DSA_44: PrimitiveId = PrimitiveId("primitive/ml-dsa-44");
     /// ML-DSA-65 (FIPS 204).
@@ -137,6 +157,143 @@ pub enum PrimitiveFamily {
     Aead,
     /// An implicit-certificate scheme (ECQV).
     ImplicitCert,
+    /// A key-agreement primitive (ECDH) or a hybrid encryption built on one (ECIES).
+    KeyAgreement,
+    /// A bare block cipher.
+    BlockCipher,
+    /// A construction made of other primitives (butterfly expansion, linkage values),
+    /// costed only through its [`CostRecipe`].
+    Construction,
+}
+
+/// How a primitive's cost grows with the length of its input.
+///
+/// A signature costs the same whatever it signs, because the message is hashed first and
+/// the hash is a separate primitive. A hash or a cipher does not: hashing a 3 KB
+/// certificate chain costs fifty times what hashing one 64-byte block does, and a CRL
+/// expansion is thousands of AES calls. So these primitives are priced *per unit of
+/// work* — a compression-function call, a block-cipher call — and
+/// [`PrimitiveDescriptor::cost_for_len`] counts the units for an input length exactly as
+/// the algorithm does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CostUnit {
+    /// One operation, whatever the input length.
+    #[default]
+    PerOperation,
+    /// A Merkle–Damgård hash: one compression call per `block` bytes after FIPS 180-4
+    /// padding (one `0x80` byte and a `length_field`-byte length).
+    HashBlocks {
+        /// Compression-function block, in bytes.
+        block: u32,
+        /// Length-encoding field appended by the padding, in bytes.
+        length_field: u32,
+    },
+    /// One block-cipher call per `block` bytes, and at least one.
+    CipherBlocks {
+        /// Cipher block, in bytes.
+        block: u32,
+    },
+    /// AES calls of AES-128-CCM with no associated data (SP 800-38C §6.1, as IEEE 1609.2
+    /// §5.3.8 profiles it): CBC-MAC over `B0` and the ⌈n/16⌉ payload blocks, then CTR
+    /// over the payload and `A0` for the tag — `2·⌈n/16⌉ + 2` in all.
+    CcmAesCalls,
+}
+
+impl CostUnit {
+    /// How many units an input of `bytes` bytes costs.
+    pub const fn units(self, bytes: u32) -> u64 {
+        let n = bytes as u64;
+        match self {
+            CostUnit::PerOperation => 1,
+            CostUnit::HashBlocks {
+                block,
+                length_field,
+            } => (n + 1 + length_field as u64).div_ceil(block as u64),
+            CostUnit::CipherBlocks { block } => {
+                let b = n.div_ceil(block as u64);
+                if b == 0 { 1 } else { b }
+            }
+            CostUnit::CcmAesCalls => 2 * n.div_ceil(16) + 2,
+        }
+    }
+
+    fn is_per_operation(&self) -> bool {
+        *self == CostUnit::PerOperation
+    }
+}
+
+/// One term of a [`CostRecipe`]: `count` runs of `primitive`'s `op` over `bytes` bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct RecipeStep {
+    /// The primitive run.
+    pub primitive: PrimitiveId,
+    /// Which of its operations.
+    pub op: PrimitiveOpKind,
+    /// Input length, for a per-length primitive ([`CostUnit`]); ignored otherwise.
+    pub bytes: u32,
+    /// How many times.
+    pub count: u32,
+    /// The operation priced instead when `primitive`'s `op` has no figure on the
+    /// profile, always an upper bound of it: a fixed-base scalar multiplication (a key
+    /// generation) is priced as an ECDSA signature, which is that multiplication plus an
+    /// inversion, where a profile publishes no key-generation figure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upper_bound: Option<(PrimitiveId, PrimitiveOpKind)>,
+}
+
+impl RecipeStep {
+    const fn new(primitive: PrimitiveId, op: PrimitiveOpKind, bytes: u32, count: u32) -> Self {
+        RecipeStep {
+            primitive,
+            op,
+            bytes,
+            count,
+            upper_bound: None,
+        }
+    }
+
+    /// A fixed-base P-256 scalar multiplication (`k·G`), `count` times: the ECDSA
+    /// key-generation figure, or the ECDSA signing figure where none is published.
+    const fn mul_base(count: u32) -> Self {
+        RecipeStep {
+            primitive: PrimitiveId::ECDSA_P256_SHA256,
+            op: PrimitiveOpKind::KeyGen,
+            bytes: 0,
+            count,
+            upper_bound: Some((PrimitiveId::ECDSA_P256_SHA256, PrimitiveOpKind::Sign)),
+        }
+    }
+}
+
+/// A primitive's cost as the sum of the primitive operations it is made of, per
+/// operation kind.
+///
+/// For the constructions no benchmark publishes as a unit — ECIES, the ECQV
+/// reconstruction, the butterfly expansion, a linkage value — but whose operation count
+/// is fixed by the standard. Each step is a published figure; the recipe is the
+/// standard's own arithmetic, written down so a reader can check it. Terms the recipe
+/// leaves out (a point addition, a scalar addition, an XOR) are each far below 1 % of
+/// the scalar multiplication beside them and are named in the descriptor's notes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CostRecipe {
+    /// Key generation.
+    pub keygen: &'static [RecipeStep],
+    /// Signing, encryption, issuance, or the construction's forward direction.
+    pub sign: &'static [RecipeStep],
+    /// Verification, decryption, reconstruction, or the construction's checking side.
+    pub verify: &'static [RecipeStep],
+}
+
+impl CostRecipe {
+    /// The steps for `op`.
+    pub fn steps(&self, op: PrimitiveOpKind) -> &'static [RecipeStep] {
+        match op {
+            PrimitiveOpKind::KeyGen => self.keygen,
+            PrimitiveOpKind::Sign => self.sign,
+            PrimitiveOpKind::Verify => self.verify,
+        }
+    }
 }
 
 /// A size that is either fixed or variable.
@@ -208,6 +365,18 @@ pub struct OpCost {
     /// Operations per second, as published.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ops_per_s: Option<f64>,
+    /// Bytes per second, as published, for a per-length primitive ([`CostUnit`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_per_s: Option<f64>,
+    /// The input length the published figure was measured over: the chunk size of a
+    /// throughput benchmark, or the length of the one message a source timed. A
+    /// per-length cost divides the figure by the units this many bytes cost.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub over_bytes: Option<u32>,
+    /// The number of [`CostUnit`]s the published figure covers, where the source states
+    /// it in units rather than bytes (a cycle count per block).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub over_units: Option<u32>,
 }
 
 /// Microsecond quantum for every cost value (ADR 0004 decision 7, build decision D9).
@@ -225,6 +394,9 @@ impl OpCost {
             mean_us: None,
             p95_us: None,
             ops_per_s: None,
+            bytes_per_s: None,
+            over_bytes: None,
+            over_units: None,
         }
     }
 
@@ -235,6 +407,9 @@ impl OpCost {
             mean_us: Some(quantize_to(mean_us, COST_US_QUANTUM)),
             p95_us: None,
             ops_per_s: None,
+            bytes_per_s: None,
+            over_bytes: None,
+            over_units: None,
         }
     }
 
@@ -245,6 +420,9 @@ impl OpCost {
             mean_us: Some(quantize_to(mean_us, COST_US_QUANTUM)),
             p95_us: None,
             ops_per_s: None,
+            bytes_per_s: None,
+            over_bytes: None,
+            over_units: None,
         }
     }
 
@@ -258,7 +436,46 @@ impl OpCost {
             mean_us: Some(quantize_to(1.0e6 / rate, COST_US_QUANTUM)),
             p95_us: None,
             ops_per_s: Some(rate),
+            bytes_per_s: None,
+            over_bytes: None,
+            over_units: None,
         }
+    }
+
+    /// A per-length cost published as a throughput of `rate` bytes per second, measured
+    /// on chunks of `chunk_bytes` bytes (an `openssl speed` column, a wolfCrypt
+    /// `benchmark` block size).
+    ///
+    /// `mean_us` is the time for one chunk, `chunk_bytes / rate`, quantised; the chunk
+    /// size is kept because the per-unit cost is that time divided by the units *one
+    /// chunk* costs, padding included.
+    pub fn from_bytes_per_s(rate: f64, chunk_bytes: u32) -> OpCost {
+        OpCost {
+            cycles: None,
+            mean_us: Some(quantize_to(
+                f64::from(chunk_bytes) / rate * 1.0e6,
+                COST_US_QUANTUM,
+            )),
+            p95_us: None,
+            ops_per_s: None,
+            bytes_per_s: Some(rate),
+            over_bytes: Some(chunk_bytes),
+            over_units: None,
+        }
+    }
+
+    /// A per-length cost published as one timed message of `bytes` bytes.
+    pub fn from_us_over_bytes(mean_us: f64, bytes: u32) -> OpCost {
+        OpCost {
+            over_bytes: Some(bytes),
+            ..OpCost::from_us(mean_us)
+        }
+    }
+
+    /// The same figure, stated as covering `units` [`CostUnit`]s.
+    pub fn over_units(mut self, units: u32) -> OpCost {
+        self.over_units = Some(units);
+        self
     }
 
     /// A cost published as a mean cycle count together with the worst case the source
@@ -277,6 +494,9 @@ impl OpCost {
                 COST_US_QUANTUM,
             )),
             ops_per_s: None,
+            bytes_per_s: None,
+            over_bytes: None,
+            over_units: None,
         }
     }
 
@@ -357,6 +577,41 @@ impl CostRow {
     fn keygen(mut self, c: OpCost) -> CostRow {
         self.keygen = Some(c);
         self
+    }
+
+    /// The same figure for both directions: a hash, or a cipher whose encryption and
+    /// decryption make the same number of block calls.
+    fn both(self, c: OpCost) -> CostRow {
+        self.sign(c).verify(c)
+    }
+
+    /// The cost of `units` units of `op` on this profile, for a primitive costed per
+    /// `unit`.
+    ///
+    /// The published figure covers [`OpCost::over_units`] units, or the units
+    /// [`OpCost::over_bytes`] bytes cost; the result is the figure scaled to `units`, in
+    /// integer nanoseconds rounded half up. A figure that states neither is a per-call
+    /// figure (an HSM's transactions per second, payload unstated) and is charged once
+    /// whatever the length, which the row's note must say.
+    fn duration_for_units(
+        &self,
+        op: PrimitiveOpKind,
+        unit: CostUnit,
+        units: u64,
+    ) -> Option<Duration> {
+        let c = self.op(op)?;
+        let whole = c.mean(self.clock_hz)?.as_nanos();
+        let covered = match (c.over_units, c.over_bytes) {
+            (Some(u), _) => u64::from(u),
+            (None, Some(b)) => unit.units(b),
+            (None, None) => return Some(Duration::from_nanos(whole)),
+        };
+        if covered == 0 {
+            return None;
+        }
+        let ns =
+            (u128::from(whole) * u128::from(units) + u128::from(covered) / 2) / u128::from(covered);
+        Some(Duration::from_nanos(u64::try_from(ns).unwrap_or(u64::MAX)))
     }
 
     fn note(mut self, n: &'static str) -> CostRow {
@@ -484,6 +739,10 @@ fn scale(c: OpCost, target_clock_hz: f64) -> OpCost {
             )),
             p95_us: None,
             ops_per_s: None,
+            bytes_per_s: None,
+            // The rescaled time still covers the same input as the published one.
+            over_bytes: c.over_bytes,
+            over_units: c.over_units,
         },
         // Nothing to scale: a throughput figure carries no cycle count, so it is passed
         // through unchanged rather than silently reinterpreted on other silicon.
@@ -568,6 +827,14 @@ pub struct PrimitiveDescriptor {
     /// [`PrimitiveDescriptor::cost_is_derived`] reports it as derived so a run can say so.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_ratio: Option<CostRatio>,
+    /// How the cost grows with the input length (per operation for everything but the
+    /// hashes and ciphers).
+    #[serde(skip_serializing_if = "CostUnit::is_per_operation")]
+    pub cost_unit: CostUnit,
+    /// The operations this primitive's cost is the sum of, on a profile with no row of
+    /// its own (ECIES, ECQV, the butterfly expansion, linkage values).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_recipe: Option<CostRecipe>,
     /// Where the sizes come from.
     pub sources: Vec<Citation>,
     /// Anything that qualifies the entry.
@@ -605,8 +872,22 @@ impl PrimitiveDescriptor {
         profile: &str,
         catalogue: &PrimitiveCatalogue,
     ) -> Option<Duration> {
+        if !self.cost_unit.is_per_operation() {
+            // A per-length primitive asked for "one operation" is charged one unit: one
+            // compression call, one block-cipher call. Length-aware callers use
+            // [`PrimitiveDescriptor::cost_for_len`].
+            return self.cost_for_units(op, profile, 1, catalogue);
+        }
         if let Some(row) = self.cost.row(profile) {
-            return row.duration(op);
+            // A row that publishes this operation wins; one that does not (an HSM that
+            // publishes ECIES decryption only) falls to the recipe when there is one.
+            let own = row.duration(op);
+            if own.is_some() || self.cost_recipe.is_none() {
+                return own;
+            }
+        }
+        if let Some(recipe) = self.cost_recipe {
+            return recipe_cost(recipe.steps(op), profile, catalogue);
         }
         if let Some(proxy) = self.cost_proxy {
             return catalogue.get(proxy)?.cost_duration(op, profile, catalogue);
@@ -644,8 +925,13 @@ impl PrimitiveDescriptor {
         profile: &str,
         catalogue: &PrimitiveCatalogue,
     ) -> bool {
-        if let Some(row) = self.cost.row(profile) {
+        if let Some(row) = self.cost.row(profile)
+            && (row.duration(op).is_some() || self.cost_recipe.is_none())
+        {
             return row.scaled && row.duration(op).is_some();
+        }
+        if self.cost_recipe.is_some() {
+            return self.cost_duration(op, profile, catalogue).is_some();
         }
         if let Some(proxy) = self.cost_proxy {
             return catalogue
@@ -662,10 +948,74 @@ impl PrimitiveDescriptor {
         self.cost_ratio.is_some() && self.cost_duration(op, profile, catalogue).is_some()
     }
 
+    /// The modelled duration of `op` over an input of `bytes` bytes on `profile`.
+    ///
+    /// For a per-operation primitive this is [`PrimitiveDescriptor::cost_duration`]. For
+    /// a hash or a cipher it is the per-unit figure times the units `bytes` costs
+    /// ([`CostUnit::units`]): from this primitive's own row, or — for AES-128-CCM — from
+    /// its proxy's per-block figure times CCM's own block-call count. `None` when no
+    /// figure exists: an unpriced hash is not free, it is unknown.
+    pub fn cost_for_len(
+        &self,
+        op: PrimitiveOpKind,
+        profile: &str,
+        bytes: u32,
+        catalogue: &PrimitiveCatalogue,
+    ) -> Option<Duration> {
+        if self.cost_unit.is_per_operation() {
+            return self.cost_duration(op, profile, catalogue);
+        }
+        self.cost_for_units(op, profile, self.cost_unit.units(bytes), catalogue)
+    }
+
+    fn cost_for_units(
+        &self,
+        op: PrimitiveOpKind,
+        profile: &str,
+        units: u64,
+        catalogue: &PrimitiveCatalogue,
+    ) -> Option<Duration> {
+        if let Some(row) = self.cost.row(profile) {
+            return row.duration_for_units(op, self.cost_unit, units);
+        }
+        let proxy = catalogue.get(self.cost_proxy?)?;
+        // The proxy's figure is per *its* unit (an AES block call); `units` are this
+        // primitive's own count of those calls.
+        proxy
+            .cost
+            .row(profile)?
+            .duration_for_units(op, proxy.cost_unit, units)
+    }
+
     /// The nominal signature size as carried in the 1609.2 envelope.
     pub fn envelope_sig_bytes(&self) -> u32 {
         self.sig_bytes_encoded.unwrap_or(self.sig_bytes.nominal())
     }
+}
+
+/// The cost of a recipe's steps on one profile, or `None` when any step has no figure
+/// there (a recipe that silently dropped a term would under-cost exactly the operation
+/// it exists to price).
+fn recipe_cost(
+    steps: &[RecipeStep],
+    profile: &str,
+    catalogue: &PrimitiveCatalogue,
+) -> Option<Duration> {
+    if steps.is_empty() {
+        return None;
+    }
+    let mut total: u64 = 0;
+    for s in steps {
+        let price = |p: PrimitiveId, op| {
+            catalogue
+                .get(p)?
+                .cost_for_len(op, profile, s.bytes, catalogue)
+        };
+        let one =
+            price(s.primitive, s.op).or_else(|| s.upper_bound.and_then(|(p, op)| price(p, op)))?;
+        total = total.saturating_add(one.as_nanos().saturating_mul(u64::from(s.count)));
+    }
+    Some(Duration::from_nanos(total))
 }
 
 /// Every primitive descriptor, by id.
@@ -715,6 +1065,199 @@ impl PrimitiveCatalogue {
     pub fn is_empty(&self) -> bool {
         self.descriptors.is_empty()
     }
+
+    /// The cost of `op` of `primitive` over `bytes` bytes on a device priced by
+    /// `anchors`: the first anchor with a figure, scaled as the anchor says.
+    ///
+    /// `None` when no anchor prices it — never a zero.
+    pub fn price(
+        &self,
+        primitive: PrimitiveId,
+        op: PrimitiveOpKind,
+        bytes: u32,
+        anchors: &[anchors::Anchor],
+    ) -> Option<Priced> {
+        let d = self.get(primitive)?;
+        anchors.iter().find_map(|a| {
+            let t = d.cost_for_len(op, a.profile, bytes, self)?;
+            let ns = (u128::from(t.as_nanos()) * u128::from(a.num) + u128::from(a.den) / 2)
+                / u128::from(a.den.max(1));
+            Some(Priced {
+                duration: Duration::from_nanos(u64::try_from(ns).unwrap_or(u64::MAX)),
+                profile: a.profile,
+                clock_scaled: a.is_scaled(),
+                derived: a.is_scaled() || d.cost_is_derived(op, a.profile, self),
+            })
+        })
+    }
+}
+
+/// One primitive operation this crate executes, the module that executes it, and a
+/// representative input length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ExecutedOp {
+    /// The `v2xw_sec` module that runs it.
+    pub module: &'static str,
+    /// The primitive.
+    pub primitive: PrimitiveId,
+    /// Which operation.
+    pub op: PrimitiveOpKind,
+    /// A representative input length, for a per-length primitive.
+    pub bytes: u32,
+}
+
+const fn exec(
+    module: &'static str,
+    primitive: PrimitiveId,
+    op: PrimitiveOpKind,
+    bytes: u32,
+) -> ExecutedOp {
+    ExecutedOp {
+        module,
+        primitive,
+        op,
+        bytes,
+    }
+}
+
+/// Every primitive operation the crate's cryptographic modules run, by module.
+///
+/// The list a test walks to prove that every operation that can run in a simulation
+/// costs time on every device that can run it (WP-C4 acceptance: "no zero-cost primitive
+/// that runs"). A test also reads `lib.rs` and fails when a module appears that is
+/// neither listed here nor declared free of cryptography, so a new primitive cannot
+/// enter the crate unpriced.
+pub const EXECUTED: &[ExecutedOp] = {
+    use PrimitiveId as P;
+    use PrimitiveOpKind::{KeyGen as K, Sign as S, Verify as V};
+    &[
+        exec("crypto", P::ECDSA_P256_SHA256, K, 0),
+        exec("crypto", P::ECDSA_P256_SHA256, S, 0),
+        exec("crypto", P::ECDSA_P256_SHA256, V, 0),
+        exec("crypto", P::ECQV_P256, V, 0),
+        exec("sig1609", P::ECDSA_P256_SHA256, S, 0),
+        exec("sig1609", P::ECDSA_P256_SHA256, V, 0),
+        exec("sig1609", P::SHA_256, V, 200),
+        exec("p384", P::ECDSA_P384, S, 0),
+        exec("p384", P::ECDSA_P384, V, 0),
+        exec("p384", P::SHA_384, V, 200),
+        exec("hashedid", P::SHA_256, V, 150),
+        exec("cert", P::ECQV_P256, K, 0),
+        exec("cert", P::ECQV_P256, S, 0),
+        exec("cert", P::ECQV_P256, V, 0),
+        exec("cert", P::SHA_256, V, 150),
+        exec("chain", P::ECDSA_P256_SHA256, V, 0),
+        exec("chain", P::ECDSA_P384, V, 0),
+        exec("chain", P::ECQV_P256, V, 0),
+        exec("chain", P::SHA_256, V, 300),
+        exec("chain", P::SHA_384, V, 300),
+        exec("crl", P::SHA_256, V, 4_000),
+        exec("crl", P::LINKAGE_VALUE, K, 0),
+        exec("crl", P::LINKAGE_VALUE, V, 0),
+        exec("ctl", P::SHA_256, V, 2_000),
+        exec("ctl", P::SHA_384, V, 2_000),
+        exec("ctl", P::ECDSA_P384, V, 0),
+        exec("envelope", P::SHA_256, V, 300),
+        exec("envelope", P::ECDSA_P256_SHA256, V, 0),
+        exec("envelope", P::ECQV_P256, V, 0),
+        exec("aes128", P::AES_128, S, 16),
+        exec("ccm", P::AES_128_CCM, S, 100),
+        exec("ccm", P::AES_128_CCM, V, 1_000),
+        exec("ec", P::ECDH_P256, K, 0),
+        exec("ec", P::ECDH_P256, V, 0),
+        exec("ecies", P::ECIES_P256, K, 0),
+        exec("ecies", P::ECIES_P256, S, 0),
+        exec("ecies", P::ECIES_P256, V, 0),
+        exec("kdf", P::SHA_256, V, 68),
+        exec("butterfly", P::BUTTERFLY_EXPAND_P256, K, 0),
+        exec("butterfly", P::BUTTERFLY_EXPAND_P256, S, 0),
+        exec("butterfly", P::BUTTERFLY_EXPAND_P256, V, 0),
+        exec("linkage", P::LINKAGE_VALUE, K, 0),
+        exec("linkage", P::LINKAGE_VALUE, S, 0),
+        exec("linkage", P::LINKAGE_VALUE, V, 0),
+    ]
+};
+
+/// The `v2xw_sec` modules that run no cryptography of their own (types, errors, the
+/// catalogue, scheme descriptors, the test PKI).
+pub const MODULES_WITHOUT_CRYPTO: &[&str] = &["error", "primitive", "scheme", "testctx"];
+
+/// One link of a certificate chain, as far as its validation cost is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainLink {
+    /// An explicit certificate signed by an issuer with a P-256 or P-384 key.
+    Explicit {
+        /// The issuer's signature primitive (`ECDSA_P256_SHA256` or `ECDSA_P384`).
+        signer: PrimitiveId,
+        /// Length of the COER `ToBeSignedCertificate`.
+        tbs_bytes: u32,
+        /// Length of the COER issuer certificate.
+        issuer_bytes: u32,
+    },
+    /// An implicit (ECQV) certificate.
+    Implicit,
+}
+
+impl ChainLink {
+    /// The primitive operations validating this link performs, as `(primitive, op,
+    /// input bytes)`: for an explicit link, IEEE 1609.2 §5.3.1's signature input
+    /// `H(H(tbs) ‖ H(issuer))` — three hash calls with the issuer's hash, SHA-384 for a
+    /// P-384 issuer — then the verification; for an implicit link, the ECQV
+    /// reconstruction (whose recipe carries its own hashes).
+    pub fn ops(self) -> Vec<(PrimitiveId, PrimitiveOpKind, u32)> {
+        use PrimitiveOpKind::Verify as V;
+        match self {
+            ChainLink::Explicit {
+                signer,
+                tbs_bytes,
+                issuer_bytes,
+            } => {
+                let (h, d) = if signer == PrimitiveId::ECDSA_P384 {
+                    (PrimitiveId::SHA_384, 48)
+                } else {
+                    (PrimitiveId::SHA_256, 32)
+                };
+                vec![
+                    (h, V, tbs_bytes),
+                    (h, V, issuer_bytes),
+                    (h, V, 2 * d),
+                    (signer, V, 0),
+                ]
+            }
+            ChainLink::Implicit => vec![(PrimitiveId::ECQV_P256, V, 0)],
+        }
+    }
+}
+
+impl PrimitiveCatalogue {
+    /// The total cost of `ops` on a device priced by `anchors`, or `None` when any one of
+    /// them is unpriced (a validation cost that silently dropped a term would be an
+    /// under-cost, which is the defect WP-C4 removes).
+    pub fn price_all(
+        &self,
+        ops: &[(PrimitiveId, PrimitiveOpKind, u32)],
+        anchors: &[anchors::Anchor],
+    ) -> Option<Duration> {
+        let mut total = 0u64;
+        for &(p, op, bytes) in ops {
+            total = total.saturating_add(self.price(p, op, bytes, anchors)?.duration.as_nanos());
+        }
+        Some(Duration::from_nanos(total))
+    }
+}
+
+/// A priced operation: what it costs and which published figure the cost came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Priced {
+    /// The modelled duration.
+    pub duration: Duration,
+    /// The catalogue profile whose figure was used.
+    pub profile: &'static str,
+    /// True when the figure was rescaled by clock or appliance tier.
+    pub clock_scaled: bool,
+    /// True when the figure is not one published for this primitive on that profile
+    /// (scaled, proxied, or composed by a recipe).
+    pub derived: bool,
 }
 
 /// A primitive as a registrable model: a descriptor plus its card.
@@ -805,6 +1348,7 @@ fn card_for(d: &PrimitiveDescriptor) -> ModelCard {
         tests: vec![
             "the_descriptor_sizes_are_the_published_ones".to_string(),
             "every_cost_row_carries_a_citation".to_string(),
+            "every_executed_primitive_is_priced_on_every_device".to_string(),
         ],
     };
     card
@@ -872,6 +1416,240 @@ pub mod profiles {
     pub const AURIX_TC3XX_HSM: &str = "hw-profile/aurix-tc3xx-hsm-100mhz";
     /// CAMP's own planning assumption: a 2 GHz processor.
     pub const CAMP_PLANNING_2GHZ: &str = "hw-profile/camp-planning-2ghz";
+    /// An x86-64 server, OpenSSL 1.1.1f, as Ristic's OpenSSL Cookbook ran `openssl speed`
+    /// (CPU not stated) — the source `backend/cloud-vm-x86` already prices ECDSA from.
+    pub const X86_OPENSSL_COOKBOOK: &str = "hw-profile/x86-64-openssl-1.1.1f-cookbook";
+    /// Thales Luna Network HSM 7, A750/S750 enterprise tier.
+    pub const LUNA7_A750: &str = "hw-profile/thales-luna7-a750";
+    /// Thales Luna Network HSM 7, A790/S790 maximum tier.
+    pub const LUNA7_A790: &str = "hw-profile/thales-luna7-a790";
+    /// Thales TCT T-5000 (government) HSM: the one Thales sheet with a P-384 figure.
+    pub const THALES_T5000: &str = "hw-profile/thales-tct-t5000";
+}
+
+/// Which catalogue profiles price each node hardware profile's cryptography.
+///
+/// A node's own hardware profile (`crates/v2xw-node/profiles/hardware/*.yaml`) publishes
+/// ECDSA sign and verify figures for its secure element or accelerator, and almost
+/// nothing else: no OBU vendor publishes a SHA-256, AES, CCM, ECIES or ECQV figure. Those
+/// operations run, so they must cost time; the honest figure is the closest *published*
+/// measurement of the same operation on comparable silicon, scaled by clock where the
+/// node profile publishes a clock, and every such choice is written down here with its
+/// reason. [`PrimitiveCatalogue::price`] walks a node's anchors in order and takes the
+/// first that prices the operation.
+pub mod anchors {
+    use super::profiles as p;
+
+    /// What kind of device a node hardware profile is.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub enum DeviceClass {
+        /// An OBU whose keys live in a secure element or HSM, possibly with a separate
+        /// verification accelerator.
+        ObuHsm,
+        /// An OBU doing all cryptography in software on its application processor.
+        ObuCpu,
+        /// A roadside unit.
+        Rsu,
+        /// A VRU device (handset class).
+        Vru,
+        /// A backend HSM appliance (RA, ACA, LA, MA, CRL signer keys).
+        BackendHsm,
+        /// A backend host CPU.
+        BackendCpu,
+        /// A node that performs no 1609.2 cryptography (a cellular base station).
+        NoCrypto,
+    }
+
+    /// One catalogue profile a node's cost is read from, with an optional clock scaling.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+    pub struct Anchor {
+        /// The catalogue profile.
+        pub profile: &'static str,
+        /// The catalogue figure is multiplied by `num / den` — the clock ratio
+        /// `catalogue clock / node clock` when the node profile publishes its clock, or an
+        /// appliance-tier ratio. `1/1` is unscaled.
+        pub num: u64,
+        /// See [`Anchor::num`].
+        pub den: u64,
+        /// Why this anchor stands in for the node's silicon.
+        pub why: &'static str,
+    }
+
+    impl Anchor {
+        const fn same(profile: &'static str, why: &'static str) -> Anchor {
+            Anchor {
+                profile,
+                num: 1,
+                den: 1,
+                why,
+            }
+        }
+
+        /// True when the figure is rescaled rather than used as published.
+        pub const fn is_scaled(&self) -> bool {
+            self.num != self.den
+        }
+    }
+
+    /// A node hardware profile and the anchors that price its cryptography.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+    pub struct DeviceAnchors {
+        /// The node hardware profile id (`id:` in its YAML).
+        pub node_profile: &'static str,
+        /// What kind of device it is.
+        pub class: DeviceClass,
+        /// The anchors, in the order they are tried.
+        pub anchors: &'static [Anchor],
+    }
+
+    const PI3B_WHY: &str = "the slowest benchmarked Cortex-A (Pi 3B, Cortex-A53 @ 1.2 GHz, \
+        OpenSSL 1.1.0f built for armhf, the same ARMv7 instruction set an in-order Cortex-A7 \
+        or A9 runs) — the proxy the node profile itself names for its software path [R7 §D8]";
+
+    /// Every node hardware profile shipped in `v2xw-node/profiles/hardware`.
+    pub const DEVICES: &[DeviceAnchors] = &[
+        DeviceAnchors {
+            node_profile: "obu/unex-obu-301-craton2",
+            class: DeviceClass::ObuHsm,
+            anchors: &[Anchor {
+                profile: p::CORTEX_A53_PI3B,
+                num: 1_200,
+                den: 600,
+                why: "no CRATON2 figure for SHA, AES, ECDH or ECIES is published; the \
+                      Pi 3B Cortex-A53 figure scaled by clock 1.2 GHz / 600 MHz to the \
+                      CRATON2's dual Cortex-A7 [R7 §A4, §D8]",
+            }],
+        },
+        DeviceAnchors {
+            node_profile: "obu/unex-obu-301-craton2-software",
+            class: DeviceClass::ObuCpu,
+            anchors: &[Anchor {
+                profile: p::CORTEX_A53_PI3B,
+                num: 1_200,
+                den: 600,
+                why: "as obu/unex-obu-301-craton2: Pi 3B scaled by clock to 600 MHz",
+            }],
+        },
+        DeviceAnchors {
+            node_profile: "obu/cohda-mk5",
+            class: DeviceClass::ObuHsm,
+            anchors: &[Anchor::same(p::CORTEX_A53_PI3B, PI3B_WHY)],
+        },
+        DeviceAnchors {
+            node_profile: "obu/cohda-mk6c-qualcomm-9150",
+            class: DeviceClass::ObuHsm,
+            // Not the NDSS 2024 MK6 Botan row: it publishes ECDSA only, and its verify
+            // figure is the flagged 0.001 ms anomaly.
+            anchors: &[Anchor {
+                profile: p::CORTEX_A53_PI3B,
+                num: 1_200,
+                den: 800,
+                why: "no MK6 SHA/AES/ECDH figure; Pi 3B scaled to the sibling MK6's \
+                      published 800 MHz proxy clock [R7 §A2, §D8]",
+            }],
+        },
+        DeviceAnchors {
+            node_profile: "obu/generic-automotive-soc-no-hsm",
+            class: DeviceClass::ObuCpu,
+            anchors: &[Anchor::same(
+                p::CORTEX_A72_PI4_OPENSSL,
+                "the profile is the Pi 4B Cortex-A72 proxy; OpenSSL 1.1.1d [R7 §D8]",
+            )],
+        },
+        DeviceAnchors {
+            node_profile: "obu/pq-capable-hypothetical",
+            class: DeviceClass::ObuCpu,
+            anchors: &[
+                Anchor::same(
+                    p::CORTEX_A76_PI5_WOLFSSL,
+                    "the profile is the Pi 5 Cortex-A76 proxy; wolfCrypt 5.9.1 [R5 §B.5]",
+                ),
+                Anchor::same(
+                    p::CORTEX_A72_PI4_OPENSSL,
+                    "P-384 is not in the Pi 5 benchmark; the Pi 4 OpenSSL figure is the \
+                     nearest published (an over-estimate on a Cortex-A76)",
+                ),
+            ],
+        },
+        DeviceAnchors {
+            node_profile: "rsu/cohda-mk5-rsu",
+            class: DeviceClass::Rsu,
+            anchors: &[Anchor::same(p::CORTEX_A53_PI3B, PI3B_WHY)],
+        },
+        DeviceAnchors {
+            node_profile: "rsu/commsignia-its-rs4",
+            class: DeviceClass::Rsu,
+            anchors: &[Anchor {
+                profile: p::CORTEX_A53_PI3B,
+                num: 1_200_000,
+                den: 792_000,
+                why: "no RS4 crypto figure beyond ECDSA; Pi 3B scaled by clock to the \
+                      published i.MX 6 792 MHz [R7 §C2, §D8]",
+            }],
+        },
+        DeviceAnchors {
+            node_profile: "vru-device/handset-generic",
+            class: DeviceClass::Vru,
+            anchors: &[Anchor::same(
+                p::CORTEX_A72_PI4_OPENSSL,
+                "the profile's own Cortex-A72-class assumption [R7 §D8]",
+            )],
+        },
+        DeviceAnchors {
+            node_profile: "backend/hsm-appliance-luna7",
+            class: DeviceClass::BackendHsm,
+            anchors: &[
+                Anchor::same(p::LUNA7_A750, "the profile's own tier [R7 §F2]"),
+                Anchor {
+                    profile: p::LUNA7_A790,
+                    num: 22_000,
+                    den: 10_000,
+                    why: "ECIES is published only for the A790 tier; scaled to the A750 by \
+                          the two tiers' published ECC P-256 rates, 22,000 / 10,000 tps \
+                          [R7 §F2]",
+                },
+                Anchor::same(
+                    p::THALES_T5000,
+                    "P-384 is published for no Luna 7 tier; the Thales T-5000 is the one \
+                     Thales HSM with a P-384 figure [R7 §F2]",
+                ),
+                Anchor::same(
+                    p::X86_OPENSSL_COOKBOOK,
+                    "work the appliance does not publish runs on its x86 host [R7 §F1]",
+                ),
+                Anchor::same(
+                    p::I9_11950H_WOLFSSL,
+                    "hashing and ECDH on the host: the one x86 benchmark that publishes \
+                     them [R5 §B.5]",
+                ),
+            ],
+        },
+        DeviceAnchors {
+            node_profile: "backend/cloud-vm-x86",
+            class: DeviceClass::BackendCpu,
+            anchors: &[
+                Anchor::same(
+                    p::X86_OPENSSL_COOKBOOK,
+                    "the source the profile prices ECDSA from [R7 §F1]",
+                ),
+                Anchor::same(
+                    p::I9_11950H_WOLFSSL,
+                    "hashing and ECDH: the one x86 benchmark that publishes them [R5 §B.5]",
+                ),
+            ],
+        },
+        DeviceAnchors {
+            node_profile: "bs/lte-macro-generic",
+            class: DeviceClass::NoCrypto,
+            anchors: &[],
+        },
+    ];
+
+    /// The anchors for node hardware profile `id`.
+    pub fn for_node_profile(id: &str) -> Option<&'static DeviceAnchors> {
+        DEVICES.iter().find(|d| d.node_profile == id)
+    }
 }
 
 fn std_src(reference: &'static str) -> Citation {
@@ -989,8 +1767,407 @@ fn ecdsa_p256_costs() -> CostTable {
         .at(100.0e6)
         .sign(OpCost::from_ops_per_s(200.0))
         .verify(OpCost::from_ops_per_s(100.0)),
+        CostRow::new(p::X86_OPENSSL_COOKBOOK, CostSite::Cpu, sheet(COOKBOOK))
+            .sign(OpCost::from_ops_per_s(20_508.1))
+            .verify(OpCost::from_ops_per_s(6_566.2))
+            .note("CPU not stated by the source"),
+        CostRow::new(p::LUNA7_A750, CostSite::Hsm, sheet(LUNA7))
+            .sign(OpCost::from_ops_per_s(10_000.0))
+            .verify(OpCost::from_ops_per_s(10_000.0))
+            .note(LUNA_COMBINED),
+        CostRow::new(p::LUNA7_A790, CostSite::Hsm, sheet(LUNA7))
+            .sign(OpCost::from_ops_per_s(22_000.0))
+            .verify(OpCost::from_ops_per_s(22_000.0))
+            .note(LUNA_COMBINED),
     ])
 }
+
+// --------------------------------------------------------------------------------------
+// WP-C4: the operations around the signature — hashing, AES, CCM, ECDH, ECIES, ECQV,
+// P-384 — every one of which runs on a device or a backend and therefore costs time.
+// Each figure is transcribed as its source published it (rate and chunk size, or a timed
+// message and its length); the per-unit conversion happens on the way out
+// (`CostRow::duration_for_units`).
+// --------------------------------------------------------------------------------------
+
+const GIST_PI3: &str = "gist dchest/6b624752d3b54200362f1e031c790f3d, `openssl speed`, OpenSSL \
+     1.1.0f armhf (sha256 adb49576… 3B.txt, 3c8184c2… 3B-Plus.txt) [R7 §D8]";
+const GIST_PI4: &str = "gist HimaJyun/f05d3017dfb05a4ccb0def010bb2c91a, `openssl speed`, OpenSSL \
+     1.1.1d (sha256 50bcb60a… Pi4B-OpenSSL.txt) [R7 §D8]";
+const WOLF: &str = "wolfSSL vs MbedTLS benchmark, 2026-06-26, 1024-byte blocks [R5 §B.5]";
+const COOKBOOK: &str = "Ristic, OpenSSL Cookbook, 'Performance' chapter, OpenSSL 1.1.1f [R7 §F1]";
+const LUNA7: &str = "Thales Luna Network HSM 7 product brief, per-tier performance [R7 §F2]";
+const LUNA_COMBINED: &str = "the brief gives one ECC P-256 transactions-per-second figure, not \
+     split into sign and verify; applied to both, as backend/hsm-appliance-luna7 does";
+const SPEED_64: &str = "the 64-byte `openssl speed` column: two compression calls per message, \
+     the size class of the hashes a 1609.2 receiver runs (tbsData, a certificate, KDF2 and \
+     MAC1 inputs); the longer columns amortise a per-call overhead a short V2X hash pays";
+const SPEED_16: &str = "the 16-byte `openssl speed` column: one block per call, the pattern of \
+     the linkage-value and butterfly constructions; the key schedule is outside the timed \
+     loop, so a construction that rekeys per call (a linkage seed as the AES key) is \
+     under-costed by one key expansion per call";
+const GCM_FOR_AES: &str = "AES-128-GCM throughput stands in for raw AES blocks: GCM is one AES \
+     call per block plus GHASH, so the per-block figure is an upper bound of the AES call";
+
+/// SHA-256 anchors, priced per 64-byte compression call ([`CostUnit::HashBlocks`]).
+fn sha256_costs() -> CostTable {
+    use profiles as p;
+    const MIB: f64 = 1_048_576.0;
+    const KIB: f64 = 1_024.0;
+    CostTable::new(vec![
+        CostRow::new(
+            p::AURIX_TC3XX_HSM,
+            CostSite::Hsm,
+            sheet("Infineon AURIX TC3xx HSM training document [R7 §D1]"),
+        )
+        .at(100.0e6)
+        .both(OpCost::from_cycles(65).over_units(1))
+        .note(
+            "65 clock cycles per 512-bit block on the SHA-224/256 accelerator; the same \
+             document's '<2 µs latency per block' is an upper bound including setup and is \
+             not charged",
+        ),
+        CostRow::new(
+            p::CORTEX_M4_NRF52840,
+            CostSite::Cpu,
+            Source::new(
+                SourceKind::Dataset,
+                "Nordic DevZone thread 46695 (nrf52840), E. Thorsrud (Nordic): SHA-256 of a \
+                 4,123-byte message, Oberon software backend 4.7413 ms, CC310 0.1596 ms",
+            ),
+        )
+        .both(OpCost::from_us_over_bytes(4_741.3, 4_123))
+        .note(
+            "the Oberon software figure, for the software profile; the CryptoCell-310 \
+             hardware figure is not this profile's path",
+        ),
+        CostRow::new(p::CORTEX_A53_PI3B, CostSite::Cpu, code(GIST_PI3))
+            .both(OpCost::from_bytes_per_s(29_271.49e3, 64))
+            .note(SPEED_64),
+        CostRow::new(p::CORTEX_A53_PI3BPLUS, CostSite::Cpu, code(GIST_PI3))
+            .both(OpCost::from_bytes_per_s(34_078.38e3, 64))
+            .note(SPEED_64),
+        CostRow::new(p::CORTEX_A72_PI4_OPENSSL, CostSite::Cpu, code(GIST_PI4))
+            .both(OpCost::from_bytes_per_s(54_260.59e3, 64))
+            .note(SPEED_64),
+        CostRow::new(p::CORTEX_A76_PI5_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(1_464.0 * MIB, 1_024)),
+        CostRow::new(p::CORTEX_A76_PI5_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(205.0 * MIB, 1_024)),
+        CostRow::new(p::I9_11950H_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(1_703.0 * MIB, 1_024)),
+        CostRow::new(p::I9_11950H_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(340.0 * MIB, 1_024)),
+        CostRow::new(p::CORTEX_M33_STM32H563_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .at(250.0e6)
+            .both(OpCost::from_bytes_per_s(5_488.0 * KIB, 1_024)),
+        CostRow::new(p::CORTEX_M33_STM32H563_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .at(250.0e6)
+            .both(OpCost::from_bytes_per_s(3_849.0 * KIB, 1_024)),
+    ])
+}
+
+/// SHA-384 anchors, priced per 128-byte compression call. SHA-384 is SHA-512's
+/// compression function with other initial values and a truncated output (FIPS 180-4
+/// §6.5), so a SHA-512 throughput is a SHA-384 throughput.
+fn sha384_costs() -> CostTable {
+    use profiles as p;
+    const MIB: f64 = 1_048_576.0;
+    const KIB: f64 = 1_024.0;
+    const SHA512: &str = "the source's SHA-512 row: SHA-384 runs the same compression function \
+         (FIPS 180-4 §6.5)";
+    CostTable::new(vec![
+        CostRow::new(p::CORTEX_A53_PI3B, CostSite::Cpu, code(GIST_PI3))
+            .both(OpCost::from_bytes_per_s(14_035.35e3, 64))
+            .note(SHA512),
+        CostRow::new(p::CORTEX_A53_PI3BPLUS, CostSite::Cpu, code(GIST_PI3))
+            .both(OpCost::from_bytes_per_s(16_233.92e3, 64))
+            .note(SHA512),
+        CostRow::new(p::CORTEX_A72_PI4_OPENSSL, CostSite::Cpu, code(GIST_PI4))
+            .both(OpCost::from_bytes_per_s(20_136.47e3, 64))
+            .note(SHA512),
+        CostRow::new(p::CORTEX_A76_PI5_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(416.0 * MIB, 1_024)),
+        CostRow::new(p::CORTEX_A76_PI5_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(225.0 * MIB, 1_024))
+            .note(SHA512),
+        CostRow::new(p::I9_11950H_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(852.0 * MIB, 1_024)),
+        CostRow::new(p::I9_11950H_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(516.0 * MIB, 1_024))
+            .note(SHA512),
+        CostRow::new(p::CORTEX_M33_STM32H563_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .at(250.0e6)
+            .both(OpCost::from_bytes_per_s(2_387.0 * KIB, 1_024))
+            .note("code placed in SRAM; from cached flash the source measures 1,858 KiB/s"),
+        CostRow::new(p::CORTEX_M33_STM32H563_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .at(250.0e6)
+            .both(OpCost::from_bytes_per_s(2_271.0 * KIB, 1_024))
+            .note(SHA512),
+    ])
+}
+
+/// AES-128 block-call anchors ([`CostUnit::CipherBlocks`]).
+fn aes128_costs() -> CostTable {
+    use profiles as p;
+    const MIB: f64 = 1_048_576.0;
+    const KIB: f64 = 1_024.0;
+    CostTable::new(vec![
+        CostRow::new(
+            p::CORTEX_M4_NRF52840,
+            CostSite::Cpu,
+            Source::new(
+                SourceKind::Dataset,
+                "Nordic DevZone thread 46695 (nrf52840), E. Thorsrud (Nordic): AES-CCM-128, \
+                 message 16 B, associated data 250 B, tag 8 B, nonce 13 B: 0.6879 ms in \
+                 mbed TLS software (0.1389 ms on CC310)",
+            ),
+        )
+        .both(OpCost::from_us(687.9).over_units(20))
+        .note(
+            "the CCM call is 20 AES calls (SP 800-38C): CBC-MAC over B0, 16 blocks of the \
+             2-byte-length-prefixed 250-byte associated data and 1 payload block, plus CTR \
+             over A0 and 1 payload block; the figure includes CCM's own bookkeeping, so the \
+             per-call cost is an upper bound",
+        ),
+        CostRow::new(p::CORTEX_A53_PI3B, CostSite::Cpu, code(GIST_PI3))
+            .both(OpCost::from_bytes_per_s(41_225.96e3, 16))
+            .note(SPEED_16),
+        CostRow::new(p::CORTEX_A53_PI3BPLUS, CostSite::Cpu, code(GIST_PI3))
+            .both(OpCost::from_bytes_per_s(47_570.23e3, 16))
+            .note(SPEED_16),
+        CostRow::new(p::CORTEX_A72_PI4_OPENSSL, CostSite::Cpu, code(GIST_PI4))
+            .both(OpCost::from_bytes_per_s(75_181.94e3, 16))
+            .note(SPEED_16),
+        CostRow::new(p::X86_OPENSSL_COOKBOOK, CostSite::Cpu, sheet(COOKBOOK))
+            .both(OpCost::from_bytes_per_s(421_949.23e3, 16))
+            .note("`openssl speed -evp aes-128-cbc` (AES-NI), 16-byte column"),
+        CostRow::new(p::CORTEX_A76_PI5_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(2_104.0 * MIB, 1_024))
+            .note(GCM_FOR_AES),
+        CostRow::new(p::CORTEX_A76_PI5_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(489.0 * MIB, 1_024))
+            .note(GCM_FOR_AES),
+        CostRow::new(p::I9_11950H_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(7_663.0 * MIB, 1_024))
+            .note(GCM_FOR_AES),
+        CostRow::new(p::I9_11950H_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .both(OpCost::from_bytes_per_s(445.0 * MIB, 1_024))
+            .note(GCM_FOR_AES),
+        CostRow::new(p::CORTEX_M33_STM32H563_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .at(250.0e6)
+            .both(OpCost::from_bytes_per_s(5_175.0 * KIB, 1_024))
+            .note("AES-128-CBC: one AES call per block"),
+        CostRow::new(p::CORTEX_M33_STM32H563_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .at(250.0e6)
+            .both(OpCost::from_bytes_per_s(2_832.0 * KIB, 1_024))
+            .note("AES-128-CBC: one AES call per block"),
+        CostRow::new(
+            p::CAMP_PLANNING_2GHZ,
+            CostSite::Cpu,
+            paper("CAMP SCMS PoC EE Requirements and Specifications, SCMS Software Release 1.1 (2016) [R7 §F4]"),
+        )
+        .at(2.0e9)
+        .both(OpCost::from_bytes_per_s(81.0e6, 16))
+        .note("\"81 MB/s encryption on a 2 GHz processor\", chunk size not stated; read per block"),
+    ])
+}
+
+/// AES-128-CCM rows of its own: only the HSMs, which publish a per-transaction rate.
+/// Everywhere else CCM is priced as its exact count of AES calls ([`CostUnit::CcmAesCalls`])
+/// through the AES-128 proxy.
+fn aes128_ccm_costs() -> CostTable {
+    use profiles as p;
+    const PER_CALL: &str = "AES-GCM transactions per second, payload size unstated: charged once \
+         per CCM call whatever its length, with GCM standing in for CCM (both one AES pass \
+         plus a MAC pass)";
+    CostTable::new(vec![
+        CostRow::new(p::LUNA7_A750, CostSite::Hsm, sheet(LUNA7))
+            .both(OpCost::from_ops_per_s(10_000.0))
+            .note(PER_CALL),
+        CostRow::new(p::LUNA7_A790, CostSite::Hsm, sheet(LUNA7))
+            .both(OpCost::from_ops_per_s(17_000.0))
+            .note(PER_CALL),
+    ])
+}
+
+/// ECDH P-256 anchors. `verify` is the shared-secret derivation (one variable-base scalar
+/// multiplication), `keygen` the key pair (one fixed-base multiplication), the KEM
+/// convention [`CostRow`] documents.
+fn ecdh_p256_costs() -> CostTable {
+    use profiles as p;
+    CostTable::new(vec![
+        CostRow::new(
+            p::CORTEX_M4_NRF52840,
+            CostSite::Cpu,
+            code("Emill/P256-Cortex-M4 README [R5 §B]"),
+        )
+        .at(64.0e6)
+        .keygen(OpCost::from_cycles_and_us(327_000, 5_100.0))
+        .verify(OpCost::from_cycles(906_000)),
+        CostRow::new(p::CORTEX_A53_PI3B, CostSite::Cpu, code(GIST_PI3))
+            .verify(OpCost::from_ops_per_s(1_033.0)),
+        CostRow::new(p::CORTEX_A53_PI3BPLUS, CostSite::Cpu, code(GIST_PI3))
+            .verify(OpCost::from_ops_per_s(1_213.5)),
+        CostRow::new(p::CORTEX_A72_PI4_OPENSSL, CostSite::Cpu, code(GIST_PI4))
+            .verify(OpCost::from_ops_per_s(2_342.9)),
+        CostRow::new(p::CORTEX_A76_PI5_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .verify(OpCost::from_ops_per_s(17_586.0)),
+        CostRow::new(p::CORTEX_A76_PI5_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .verify(OpCost::from_ops_per_s(637.0)),
+        CostRow::new(p::I9_11950H_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .verify(OpCost::from_ops_per_s(68_400.0)),
+        CostRow::new(p::I9_11950H_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .verify(OpCost::from_ops_per_s(1_277.0)),
+        CostRow::new(p::CORTEX_M33_STM32H563_WOLFSSL, CostSite::Cpu, sheet(WOLF))
+            .at(250.0e6)
+            .verify(OpCost::from_ops_per_s(175.0)),
+        CostRow::new(p::CORTEX_M33_STM32H563_MBEDTLS, CostSite::Cpu, sheet(WOLF))
+            .at(250.0e6)
+            .verify(OpCost::from_ops_per_s(18.6)),
+    ])
+}
+
+/// ECDSA P-384 anchors: the root and elector signatures a chain validation and a CTL
+/// check verify (01 §3.1).
+fn ecdsa_p384_costs() -> CostTable {
+    use profiles as p;
+    CostTable::new(vec![
+        CostRow::new(p::CORTEX_A53_PI3B, CostSite::Cpu, code(GIST_PI3))
+            .sign(OpCost::from_ops_per_s(358.4))
+            .verify(OpCost::from_ops_per_s(94.1)),
+        CostRow::new(p::CORTEX_A53_PI3BPLUS, CostSite::Cpu, code(GIST_PI3))
+            .sign(OpCost::from_ops_per_s(419.6))
+            .verify(OpCost::from_ops_per_s(109.7)),
+        CostRow::new(p::CORTEX_A72_PI4_OPENSSL, CostSite::Cpu, code(GIST_PI4))
+            .sign(OpCost::from_ops_per_s(123.4))
+            .verify(OpCost::from_ops_per_s(174.8))
+            .note(
+                "recorded as published: OpenSSL 1.1.1d signs P-384 slower here than 1.1.0f \
+                 does on the slower Pi 3B (no constant-time nistp384 assembly in 1.1.1d)",
+            ),
+        CostRow::new(p::X86_OPENSSL_COOKBOOK, CostSite::Cpu, sheet(COOKBOOK))
+            .sign(OpCost::from_ops_per_s(580.4))
+            .verify(OpCost::from_ops_per_s(755.0))
+            .note("CPU not stated by the source"),
+        CostRow::new(
+            p::THALES_T5000,
+            CostSite::Hsm,
+            sheet("Thales TCT HSM family sheet, T-5000 Enterprise, ECC P-384 [R7 §F2]"),
+        )
+        .sign(OpCost::from_ops_per_s(16_000.0))
+        .verify(OpCost::from_ops_per_s(16_000.0))
+        .note("one ECC P-384 tps figure, applied to sign and verify"),
+    ])
+}
+
+/// ECIES P-256 rows of its own: only the published HSM decrypt rate. Everywhere else
+/// ECIES is priced by its recipe.
+fn ecies_p256_costs() -> CostTable {
+    CostTable::new(vec![
+        CostRow::new(
+            profiles::LUNA7_A790,
+            CostSite::Hsm,
+            sheet("Thales Luna HSM for 5G performance brief [R7 §F2]"),
+        )
+        .verify(OpCost::from_ops_per_s(7_000.0))
+        .note(
+            "56,000 TPS ECIES P-256 decrypt from a cluster of 8 A790 appliances, divided \
+             by 8 (derived per appliance); the brief's workload is 5G SUCI concealment, \
+             whose ECIES differs from 1609.2's only in KDF parameters",
+        ),
+    ])
+}
+
+const SHA: PrimitiveId = PrimitiveId::SHA_256;
+const AES: PrimitiveId = PrimitiveId::AES_128;
+const ECDH: PrimitiveId = PrimitiveId::ECDH_P256;
+const V: PrimitiveOpKind = PrimitiveOpKind::Verify;
+
+/// ECIES (1609.2 §5.3.5; 02 §8.2): `v = k·G`, `Z = k·R`, `K = KDF2(Z, 48, P1)` — two
+/// SHA-256 calls over `Z ‖ counter ‖ P1` (68 bytes) — and `t = MAC1(K2, c)`, an
+/// HMAC-SHA-256 over a 16-byte `c` with a 32-byte key: inner hash 64 + 16 bytes, outer
+/// 64 + 32 bytes.
+const ECIES_STEPS_SHARED: [RecipeStep; 4] = [
+    RecipeStep::new(ECDH, V, 0, 1),
+    RecipeStep::new(SHA, V, 68, 2),
+    RecipeStep::new(SHA, V, 80, 1),
+    RecipeStep::new(SHA, V, 96, 1),
+];
+const ECIES_ENCRYPT: [RecipeStep; 5] = [
+    RecipeStep::mul_base(1),
+    ECIES_STEPS_SHARED[0],
+    ECIES_STEPS_SHARED[1],
+    ECIES_STEPS_SHARED[2],
+    ECIES_STEPS_SHARED[3],
+];
+/// ECDSA key generation where a row publishes only sign and verify: one signature, an
+/// upper bound of the fixed-base multiplication.
+const ECDSA_KEYGEN_RECIPE: CostRecipe = CostRecipe {
+    keygen: &[RecipeStep::new(
+        PrimitiveId::ECDSA_P256_SHA256,
+        PrimitiveOpKind::Sign,
+        0,
+        1,
+    )],
+    sign: &[],
+    verify: &[],
+};
+
+/// `openssl speed ecdh` times the derivation only; the key pair is a fixed-base
+/// multiplication, priced as such where no row publishes it.
+const ECDH_RECIPE: CostRecipe = CostRecipe {
+    keygen: &[RecipeStep::mul_base(1)],
+    sign: &[],
+    verify: &[],
+};
+const ECIES_RECIPE: CostRecipe = CostRecipe {
+    keygen: &[RecipeStep::mul_base(1)],
+    sign: &ECIES_ENCRYPT,
+    verify: &ECIES_STEPS_SHARED,
+};
+
+/// ECQV as 1609.2 profiles it (02 §6): `e = Hn(H(tbs) ‖ H(issuer))` is one SHA-256 over
+/// the to-be-signed certificate (bounded by the 80-byte implicit certificate) and one over
+/// the two 32-byte digests; the issuer's digest is its HashedId8 input, computed once per
+/// CA certificate and cached. Reconstruction is `Q_U = e·P_U + Q_CA` — one variable-base
+/// multiplication, the ECDH operation; issuance is `P_U = R_U + k·G` — one fixed-base
+/// multiplication.
+const ECQV_RECIPE: CostRecipe = CostRecipe {
+    keygen: &[RecipeStep::mul_base(1)],
+    sign: &[
+        RecipeStep::mul_base(1),
+        RecipeStep::new(SHA, V, 80, 1),
+        RecipeStep::new(SHA, V, 64, 1),
+    ],
+    verify: &[
+        RecipeStep::new(ECDH, V, 0, 1),
+        RecipeStep::new(SHA, V, 80, 1),
+        RecipeStep::new(SHA, V, 64, 1),
+    ],
+};
+
+/// The original butterfly expansion (IEEE 1609.2.1 §9.3; 02 §9.2): `f_int` is three AES
+/// calls, and the original scheme expands a signing and an encryption key per `(i, j)`.
+const BUTTERFLY_RECIPE: CostRecipe = CostRecipe {
+    // The caterpillar key pairs `A = a·G`, `P = p·G`.
+    keygen: &[RecipeStep::mul_base(2)],
+    // The RA's public expansion: `A + f1(i,j)·G` and `P + f2(i,j)·G`.
+    sign: &[RecipeStep::new(AES, V, 16, 6), RecipeStep::mul_base(2)],
+    // The device's private expansion: `a + f1(i,j)` and `p + f2(i,j)`.
+    verify: &[RecipeStep::new(AES, V, 16, 6)],
+};
+
+/// Linkage values (02 §10.1): a seed step is one SHA-256 over 32 bytes per LA; a linkage
+/// value is one AES (Davies–Meyer) per LA, XORed.
+const LINKAGE_RECIPE: CostRecipe = CostRecipe {
+    // Advance both LAs' seeds one i-period.
+    keygen: &[RecipeStep::new(SHA, V, 32, 2)],
+    // One `lv(i, j)` from the two seeds — the LA's PLVs, or a receiver expanding a CRL
+    // entry.
+    sign: &[RecipeStep::new(AES, V, 16, 2)],
+    verify: &[RecipeStep::new(AES, V, 16, 2)],
+};
 
 fn ml_dsa_44_costs() -> CostTable {
     use profiles as p;
@@ -1338,6 +2515,8 @@ fn sig(
         cost_components: Vec::new(),
         cost_proxy: None,
         cost_ratio: None,
+        cost_unit: CostUnit::PerOperation,
+        cost_recipe: None,
         sources,
         notes: Vec::new(),
     }
@@ -1411,6 +2590,8 @@ fn kem(id: PrimitiveId, ek: u32, dk: u32, ct: u32, ss: u32, level: u8) -> Primit
         cost_components: Vec::new(),
         cost_proxy: None,
         cost_ratio: None,
+        cost_unit: CostUnit::PerOperation,
+        cost_recipe: None,
         sources: vec![std_src("FIPS 203 Table 3")],
         notes: vec![
             "`sig_bytes` is the ciphertext size; `shared_secret_bytes` is the shared secret.",
@@ -1441,12 +2622,15 @@ fn build_standard_catalogue() -> PrimitiveCatalogue {
     );
     ecdsa.pk_bytes_uncompressed = Some(65);
     ecdsa.sig_bytes_encoded = Some(66);
+    ecdsa.cost_recipe = Some(ECDSA_KEYGEN_RECIPE);
     ecdsa.cert_bytes = Some(147);
     ecdsa.notes = vec![
         "66 encoded bytes under IEEE 1609.2: `Signature` choice tag 1 + `rSig` \
          (`EccP256CurvePoint` choice tag 1 + 32) + `sSig` 32 (04-models.md §9.1).",
         "`cert_bytes` is the DERIVED explicit-certificate size of §9.2 (NDSS's \
          30 + pk + sig accounting gives 162 for the same certificate).",
+        "Key generation, where a profile publishes none, is charged as one signature: a \
+         fixed-base multiplication plus an inversion, so an upper bound (WP-C4).",
     ];
     v.push(ecdsa);
 
@@ -1474,7 +2658,7 @@ fn build_standard_catalogue() -> PrimitiveCatalogue {
         48,
         SizeSpec::Fixed(96),
         3,
-        CostTable::default(),
+        ecdsa_p384_costs(),
         vec![
             std_src("IEEE 1609.2 Ieee1609Dot2BaseTypes.asn"),
             std_src("SEC 1 §2.3.3"),
@@ -1484,9 +2668,8 @@ fn build_standard_catalogue() -> PrimitiveCatalogue {
     p384.sig_bytes_encoded = Some(98);
     p384.notes = vec![
         "Covers brainpoolP384r1 too; 04-models.md §9.4 gives the two the same sizes.",
-        "04-models.md §9.4 lists no cost anchor for any P-384 curve on any profile, and \
-         none is invented: a P-384 operation is materially slower than a P-256 one, so \
-         the P-256 anchors are not an acceptable proxy.",
+        "04-models.md §9.4 listed no P-384 anchor; WP-C4 adds the published `openssl speed` \
+         and HSM figures. The P-256 anchors are never a proxy: P-384 is materially slower.",
         "§9.4 states the level as \"192-bit\" rather than as a NIST category; 3 is the \
          category that 192-bit classical strength sits in.",
     ];
@@ -1523,27 +2706,180 @@ fn build_standard_catalogue() -> PrimitiveCatalogue {
         security_level: 1,
         cost: CostTable::default(),
         cost_components: Vec::new(),
-        cost_proxy: Some(PrimitiveId::ECDSA_P256_SHA256),
+        cost_proxy: None,
         cost_ratio: None,
+        cost_unit: CostUnit::PerOperation,
+        cost_recipe: Some(ECQV_RECIPE),
         sources: vec![std_src("SEC 4 §3.4-3.5"), std_src("SEC 1 §2.3.3")],
         notes: vec![
             "`pk_bytes` 33 is the reconstruction value, a compressed point (§9.2, VERIFIED).",
             "`cert_bytes` 80 is the DERIVED implicit pseudonym certificate size of §9.2; \
              cross-checks are Rostami's 250 - 180 = 70 B delta and VSC-A's 117.",
-            "No published ECQV timing was found. Reconstruction is one point \
-             multiplication plus one addition — the dominant term of an ECDSA \
-             verification — so the ECDSA P-256 verify anchor is the declared cost proxy.",
+            "No published ECQV timing was found, so the cost is the recipe of the operations \
+             1609.2's ECQV performs (02 §6): reconstruction is one variable-base point \
+             multiplication (priced as ECDH P-256) and two SHA-256 calls; issuance one \
+             fixed-base multiplication and the same hashes. Left out: one point addition \
+             and the decompression of P_U (a field square root), measured on the host by \
+             `benches/primitives.rs` at a few per cent of the multiplication.",
+            "WP-C4 replaced the earlier proxy (the ECDSA P-256 verify figure, a double \
+             multiplication): reconstruction now costs about as much as ECDH, not as an \
+             ECDSA verification.",
         ],
     });
 
-    // --- hash --------------------------------------------------------------------------
-    v.push(PrimitiveDescriptor {
-        id: PrimitiveId::SHA_256,
+    // --- hashes ------------------------------------------------------------------------
+    let hash = |id, digest, unit, cost, source, note| PrimitiveDescriptor {
+        id,
         family: PrimitiveFamily::Hash,
         pk_bytes: 0,
         pk_bytes_uncompressed: None,
         sk_bytes: 0,
-        sig_bytes: SizeSpec::Fixed(32),
+        sig_bytes: SizeSpec::Fixed(digest),
+        sig_bytes_encoded: None,
+        shared_secret_bytes: None,
+        cert_bytes: None,
+        security_level: 1,
+        cost,
+        cost_components: Vec::new(),
+        cost_proxy: None,
+        cost_ratio: None,
+        cost_unit: unit,
+        cost_recipe: None,
+        sources: vec![source],
+        notes: vec![note],
+    };
+    v.push(hash(
+        PrimitiveId::SHA_256,
+        32,
+        CostUnit::HashBlocks {
+            block: 64,
+            length_field: 8,
+        },
+        sha256_costs(),
+        std_src("FIPS 180-4"),
+        "`sig_bytes` is the digest length. Priced per 64-byte compression call after \
+         padding (WP-C4); a verify plan's hashes cost time on every profile with a row, \
+         and are unknown — not free — on one without.",
+    ));
+    let mut sha384 = hash(
+        PrimitiveId::SHA_384,
+        48,
+        CostUnit::HashBlocks {
+            block: 128,
+            length_field: 16,
+        },
+        sha384_costs(),
+        std_src("FIPS 180-4 §6.5"),
+        "Priced per 128-byte compression call: the hash of the P-384 root and elector \
+         signatures (01 §3.1).",
+    );
+    sha384.security_level = 3;
+    v.push(sha384);
+
+    // --- symmetric ---------------------------------------------------------------------
+    let symmetric = |id, family, unit, cost, proxy, sources, notes| PrimitiveDescriptor {
+        id,
+        family,
+        pk_bytes: 0,
+        pk_bytes_uncompressed: None,
+        sk_bytes: 16,
+        sig_bytes: SizeSpec::Fixed(16),
+        sig_bytes_encoded: None,
+        shared_secret_bytes: None,
+        cert_bytes: None,
+        security_level: 1,
+        cost,
+        cost_components: Vec::new(),
+        cost_proxy: proxy,
+        cost_ratio: None,
+        cost_unit: unit,
+        cost_recipe: None,
+        sources,
+        notes,
+    };
+    v.push(symmetric(
+        PrimitiveId::AES_128,
+        PrimitiveFamily::BlockCipher,
+        CostUnit::CipherBlocks { block: 16 },
+        aes128_costs(),
+        None,
+        vec![std_src("FIPS 197")],
+        vec![
+            "Priced per 16-byte block call; `sig_bytes` is the block. The key schedule is \
+             not priced separately (see the rows' notes).",
+        ],
+    ));
+    v.push(symmetric(
+        PrimitiveId::AES_128_CCM,
+        PrimitiveFamily::Aead,
+        CostUnit::CcmAesCalls,
+        aes128_ccm_costs(),
+        Some(PrimitiveId::AES_128),
+        vec![std_src("NIST SP 800-38C §6"), std_src("IEEE 1609.2 §5.3.8")],
+        vec![
+            "`sig_bytes` is the 16-byte tag. Priced as its exact AES-call count, \
+             2·⌈n/16⌉ + 2 for an n-byte plaintext with no associated data, times the \
+             AES-128 per-call figure on the same profile; an HSM that publishes a \
+             per-transaction rate is charged that instead.",
+        ],
+    ));
+
+    // --- key agreement -------------------------------------------------------------------
+    let agreement = |id, cost, recipe, ct, notes| PrimitiveDescriptor {
+        id,
+        family: PrimitiveFamily::KeyAgreement,
+        pk_bytes: 33,
+        pk_bytes_uncompressed: Some(65),
+        sk_bytes: 32,
+        sig_bytes: SizeSpec::Fixed(ct),
+        sig_bytes_encoded: None,
+        shared_secret_bytes: Some(32),
+        cert_bytes: None,
+        security_level: 1,
+        cost,
+        cost_components: Vec::new(),
+        cost_proxy: None,
+        cost_ratio: None,
+        cost_unit: CostUnit::PerOperation,
+        cost_recipe: recipe,
+        sources: vec![std_src("SEC 1 §3.3.1"), std_src("IEEE 1609.2 §5.3.5")],
+        notes,
+    };
+    v.push(agreement(
+        PrimitiveId::ECDH_P256,
+        ecdh_p256_costs(),
+        Some(ECDH_RECIPE),
+        33,
+        vec![
+            "`verify` is the shared-secret derivation (one variable-base multiplication), \
+             `keygen` the key pair (one fixed-base multiplication); `sig_bytes` is the \
+             compressed public point sent.",
+        ],
+    ));
+    v.push(agreement(
+        PrimitiveId::ECIES_P256,
+        ecies_p256_costs(),
+        Some(ECIES_RECIPE),
+        // `EciesP256EncryptedKey`: v (33, compressed) + c (16) + t (16).
+        65,
+        vec![
+            "`sign` is encryption, `verify` decryption. Priced by its recipe (one fixed-base \
+             and one variable-base multiplication to encrypt, the variable-base one to \
+             decrypt, and six SHA-256 calls for KDF2 and MAC1) except where an HSM \
+             publishes a rate. Left out: the 16-byte XOR and the on-curve check of v.",
+            "`sig_bytes` 65 is the COER `EciesP256EncryptedKey` with v compressed \
+             (33 + 16 + 16).",
+        ],
+    ));
+
+    // --- SCMS constructions ----------------------------------------------------------------
+    let construction = |id, recipe, sources, notes| PrimitiveDescriptor {
+        id,
+        family: PrimitiveFamily::Construction,
+        pk_bytes: 0,
+        pk_bytes_uncompressed: None,
+        sk_bytes: 0,
+        sig_bytes: SizeSpec::Fixed(0),
         sig_bytes_encoded: None,
         shared_secret_bytes: None,
         cert_bytes: None,
@@ -1552,14 +2888,32 @@ fn build_standard_catalogue() -> PrimitiveCatalogue {
         cost_components: Vec::new(),
         cost_proxy: None,
         cost_ratio: None,
-        sources: vec![std_src("FIPS 180-4")],
-        notes: vec![
-            "`sig_bytes` is the digest length. 04-models.md §9.4 lists no cost anchor for \
-             SHA-256 on any profile; hashing a V2X-sized message is negligible beside a \
-             point multiplication, and the envelope's verify plan charges it as zero \
-             until a profile publishes a figure.",
+        cost_unit: CostUnit::PerOperation,
+        cost_recipe: Some(recipe),
+        sources,
+        notes,
+    };
+    v.push(construction(
+        PrimitiveId::BUTTERFLY_EXPAND_P256,
+        BUTTERFLY_RECIPE,
+        vec![std_src("IEEE 1609.2.1 §9.3"), std_src("CAMP bfkeyexp")],
+        vec![
+            "One (i, j) of the original (US-profile) butterfly: `keygen` the caterpillar key \
+             pairs, `sign` the RA's public expansion (six AES calls, two fixed-base \
+             multiplications), `verify` the device's private expansion (six AES calls). \
+             Left out: two point additions and two scalar additions.",
         ],
-    });
+    ));
+    v.push(construction(
+        PrimitiveId::LINKAGE_VALUE,
+        LINKAGE_RECIPE,
+        vec![std_src("CAMP lv.txt (02-cryptography-and-formats §10.1)")],
+        vec![
+            "`keygen` advances both LAs' seeds one i-period (two SHA-256 calls), `sign` and \
+             `verify` compute one lv(i, j) (two AES calls) — the LA's work, and a receiver's \
+             per-entry, per-j CRL expansion. Left out: the 9-byte XOR.",
+        ],
+    ));
 
     // --- ML-DSA (FIPS 204) -------------------------------------------------------------
     for (id, pk, sk, s, level, cost) in [
@@ -2051,19 +3405,32 @@ mod tests {
     #[test]
     fn a_cost_proxy_resolves_and_is_declared() {
         let c = PrimitiveCatalogue::standard();
-        let ecqv = c.require(PrimitiveId::ECQV_P256).expect("present");
-        assert!(ecqv.cost.is_empty());
-        assert_eq!(ecqv.cost_proxy, Some(PrimitiveId::ECDSA_P256_SHA256));
-        let row = ecqv
+        // brainpoolP256r1 borrows the P-256 anchors (same field size, same operation
+        // count). ECQV used to borrow the ECDSA verify figure too; WP-C4 replaced that
+        // with its recipe (`ecqv_reconstruction_is_one_variable_base_multiplication`).
+        let bp = c
+            .require(PrimitiveId::ECDSA_BRAINPOOL_P256R1)
+            .expect("present");
+        assert!(bp.cost.is_empty());
+        assert_eq!(bp.cost_proxy, Some(PrimitiveId::ECDSA_P256_SHA256));
+        let row = bp
             .cost_row(profiles::CORTEX_M4_NRF52840, c)
             .expect("resolves through the proxy");
         assert_eq!(row.verify.expect("verify").cycles, Some(976_000));
+        let ecqv = c.require(PrimitiveId::ECQV_P256).expect("present");
+        assert!(ecqv.cost.is_empty());
+        assert_eq!(ecqv.cost_proxy, None, "the ECDSA proxy is gone");
+        assert!(ecqv.cost_recipe.is_some());
         // Every primitive with an empty table either declares a proxy, declares the
-        // components its cost is the sum of, or says in its notes that no anchor exists.
-        // The point of the assertion is that the third case is *stated*: a silent zero or
-        // a silently borrowed number is what "no black box" forbids.
+        // components its cost is the sum of, declares a recipe, or says in its notes that
+        // no anchor exists. The point of the assertion is that the last case is *stated*:
+        // a silent zero or a silently borrowed number is what "no black box" forbids.
         for d in c.iter() {
-            if d.cost.is_empty() && d.cost_proxy.is_none() && d.cost_components.is_empty() {
+            if d.cost.is_empty()
+                && d.cost_proxy.is_none()
+                && d.cost_components.is_empty()
+                && d.cost_recipe.is_none()
+            {
                 assert!(
                     d.notes.iter().any(|n| n.to_lowercase().contains("no cost")
                         || n.to_lowercase().contains("lists no cost")),
@@ -2178,5 +3545,415 @@ mod tests {
                 }
             }
         }
+    }
+    // ---------------------------------------------------------------------------------
+    // WP-C4: every primitive that runs costs time.
+    // ---------------------------------------------------------------------------------
+
+    fn d(id: PrimitiveId) -> &'static PrimitiveDescriptor {
+        PrimitiveCatalogue::standard().require(id).expect("present")
+    }
+
+    fn ns(t: Option<Duration>) -> u64 {
+        t.expect("priced").as_nanos()
+    }
+
+    /// SHA-256 and SHA-384 cost their FIPS 180-4 compression calls: the published
+    /// nRF52840 figure is one 4,123-byte message (65 calls), so one call is 1/65 of it,
+    /// and the padding boundary (55/56 bytes for SHA-256, 111/112 for SHA-384) is where a
+    /// second call starts.
+    #[test]
+    fn a_hash_costs_its_fips_180_4_compression_calls() {
+        let c = PrimitiveCatalogue::standard();
+        let sha = d(PrimitiveId::SHA_256);
+        let at =
+            |n| ns(sha.cost_for_len(PrimitiveOpKind::Verify, profiles::CORTEX_M4_NRF52840, n, c));
+        let per_call = |calls: u64| (4_741_300 * calls + 32) / 65;
+        assert_eq!(
+            at(4_123),
+            4_741_300,
+            "the published message costs the published time"
+        );
+        assert_eq!(at(0), per_call(1));
+        assert_eq!(at(55), per_call(1));
+        assert_eq!(at(56), per_call(2), "56 bytes + 0x80 + 8-byte length > 64");
+        assert_eq!(at(119), per_call(2));
+        assert_eq!(at(120), per_call(3));
+        // SHA-384: 128-byte blocks and a 16-byte length; the Pi 4 SHA-512 64-byte column,
+        // 64 bytes in 64 / 20,136,470 s = 3.178 µs, is one call.
+        let s384 = d(PrimitiveId::SHA_384);
+        let at = |n| {
+            ns(s384.cost_for_len(
+                PrimitiveOpKind::Verify,
+                profiles::CORTEX_A72_PI4_OPENSSL,
+                n,
+                c,
+            ))
+        };
+        assert_eq!(at(64), 3_178);
+        assert_eq!(at(111), 3_178);
+        assert_eq!(
+            at(112),
+            2 * 3_178,
+            "112 bytes + 0x80 + 16-byte length > 128"
+        );
+        // "One operation" of a hash is one call, never zero.
+        assert_eq!(
+            sha.cost_duration(PrimitiveOpKind::Verify, profiles::CORTEX_M4_NRF52840, c),
+            Some(Duration::from_nanos(per_call(1)))
+        );
+    }
+
+    /// AES-128-CCM costs exactly the AES calls SP 800-38C makes. The count is checked
+    /// against an independent CCM written here over the crate's AES block and compared
+    /// bit for bit with `ccm::encrypt` (itself vector-checked against 1609.2a D.6.1), so
+    /// the formula is what CCM actually does, not what this module believes it does.
+    #[test]
+    fn ccm_costs_exactly_the_aes_calls_it_makes() {
+        use crate::{aes128, ccm};
+        fn counted_ccm(key: &[u8; 16], nonce: &[u8; 12], pt: &[u8]) -> (Vec<u8>, u64) {
+            let mut calls = 0u64;
+            let mut e = |b: &[u8; 16]| {
+                calls += 1;
+                aes128::encrypt_block(key, b)
+            };
+            // B0: flags (Adata 0, t = 16 -> M' = 7, q = 3 -> L' = 2), nonce, 3-byte length.
+            let mut b0 = [0u8; 16];
+            b0[0] = (7 << 3) | 2;
+            b0[1..13].copy_from_slice(nonce);
+            b0[13..16].copy_from_slice(&(pt.len() as u32).to_be_bytes()[1..]);
+            let mut x = e(&b0);
+            for chunk in pt.chunks(16) {
+                let mut blk = [0u8; 16];
+                blk[..chunk.len()].copy_from_slice(chunk);
+                for i in 0..16 {
+                    blk[i] ^= x[i];
+                }
+                x = e(&blk);
+            }
+            let ctr = |i: u32| {
+                let mut a = [0u8; 16];
+                a[0] = 2;
+                a[1..13].copy_from_slice(nonce);
+                a[13..16].copy_from_slice(&i.to_be_bytes()[1..]);
+                a
+            };
+            let mut out = Vec::with_capacity(pt.len() + 16);
+            for (i, chunk) in pt.chunks(16).enumerate() {
+                let s = e(&ctr(i as u32 + 1));
+                out.extend(chunk.iter().zip(s.iter()).map(|(p, k)| p ^ k));
+            }
+            let s0 = e(&ctr(0));
+            out.extend(x.iter().zip(s0.iter()).map(|(t, k)| t ^ k));
+            (out, calls)
+        }
+        let c = PrimitiveCatalogue::standard();
+        let key = [0x2bu8; 16];
+        let nonce = [0x5au8; 12];
+        // Pi 3B: the 16-byte aes-128-cbc column, 16 / 41,225,960 s = 0.388 µs per call.
+        let per_call = 388u64;
+        let ccm_d = d(PrimitiveId::AES_128_CCM);
+        for n in [0usize, 1, 15, 16, 17, 31, 32, 33, 100, 1_000] {
+            let pt: Vec<u8> = (0..n).map(|i| i as u8).collect();
+            let (mine, calls) = counted_ccm(&key, &nonce, &pt);
+            assert_eq!(
+                mine,
+                ccm::encrypt(&key, &nonce, &pt).expect("encrypts"),
+                "n = {n}"
+            );
+            assert_eq!(CostUnit::CcmAesCalls.units(n as u32), calls, "n = {n}");
+            assert_eq!(
+                ns(ccm_d.cost_for_len(
+                    PrimitiveOpKind::Sign,
+                    profiles::CORTEX_A53_PI3B,
+                    n as u32,
+                    c
+                )),
+                per_call * calls,
+                "n = {n}"
+            );
+        }
+        // An HSM that publishes a per-transaction rate is charged it once per call.
+        assert_eq!(
+            ccm_d.cost_for_len(PrimitiveOpKind::Verify, profiles::LUNA7_A750, 10_000, c),
+            Some(Duration::from_micros(100))
+        );
+    }
+
+    /// ECQV reconstruction is one variable-base multiplication and two SHA-256 calls
+    /// (02 §6), not an ECDSA verification (a double multiplication).
+    #[test]
+    fn ecqv_reconstruction_is_one_variable_base_multiplication() {
+        let c = PrimitiveCatalogue::standard();
+        let ecqv = d(PrimitiveId::ECQV_P256);
+        // Cortex-M4 @ 64 MHz: ECDH 906,000 cycles = 14,156,250 ns; SHA-256 over 80 and
+        // 64 bytes is two calls each at 4,741,300 / 65 ns.
+        let sha2 = (4_741_300 * 2 + 32) / 65;
+        assert_eq!(
+            ns(ecqv.cost_duration(PrimitiveOpKind::Verify, profiles::CORTEX_M4_NRF52840, c)),
+            14_156_250 + 2 * sha2
+        );
+        assert!(ecqv.cost_is_derived(PrimitiveOpKind::Verify, profiles::CORTEX_M4_NRF52840, c));
+        // On every profile that prices both, reconstructing costs less than verifying.
+        let ecdsa = d(PrimitiveId::ECDSA_P256_SHA256);
+        let mut compared = 0;
+        for row in ecdsa.cost.rows() {
+            let (Some(r), Some(v)) = (
+                ecqv.cost_duration(PrimitiveOpKind::Verify, row.profile, c),
+                row.duration(PrimitiveOpKind::Verify),
+            ) else {
+                continue;
+            };
+            assert!(r < v, "{}: reconstruct {r:?} >= verify {v:?}", row.profile);
+            compared += 1;
+        }
+        assert!(compared >= 6, "compared on {compared} profiles");
+    }
+
+    /// ECIES is the 1609.2 §5.3.5 operation count: decryption one variable-base
+    /// multiplication and six SHA-256 calls (KDF2 two calls of two blocks, MAC1's inner
+    /// and outer hash of two blocks each), encryption one fixed-base multiplication more.
+    #[test]
+    fn ecies_costs_its_1609_2_operation_count() {
+        let c = PrimitiveCatalogue::standard();
+        let ecies = d(PrimitiveId::ECIES_P256);
+        let p = profiles::CORTEX_A72_PI4_OPENSSL;
+        // Pi 4: ECDH 2,342.9/s = 426.821 µs; SHA-256 64-byte column = 1.179 µs per
+        // two-call message, so a two-call input is 1,179 ns; ECDSA sign 4,097.4/s =
+        // 244.057 µs stands in (upper bound) for the unpublished fixed-base keygen.
+        let decrypt = 426_821 + 4 * 1_179;
+        assert_eq!(
+            ns(ecies.cost_duration(PrimitiveOpKind::Verify, p, c)),
+            decrypt
+        );
+        assert_eq!(
+            ns(ecies.cost_duration(PrimitiveOpKind::Sign, p, c)),
+            decrypt + 244_057
+        );
+        // The published HSM decrypt rate wins where it exists, and encryption, which the
+        // HSM does not publish, falls to the recipe rather than to nothing.
+        assert_eq!(
+            ecies.cost_duration(PrimitiveOpKind::Verify, profiles::LUNA7_A790, c),
+            Some(Duration::from_nanos(142_857))
+        );
+    }
+
+    /// The acceptance test of WP-C4: every primitive operation the crate executes is
+    /// priced, above zero, on every device that runs cryptography.
+    #[test]
+    fn every_executed_primitive_is_priced_on_every_device() {
+        let c = PrimitiveCatalogue::standard();
+        let mut checked = 0;
+        for dev in anchors::DEVICES {
+            if dev.class == anchors::DeviceClass::NoCrypto {
+                assert!(dev.anchors.is_empty(), "{}", dev.node_profile);
+                continue;
+            }
+            for e in EXECUTED {
+                let priced = c.price(e.primitive, e.op, e.bytes, dev.anchors);
+                let Some(priced) = priced else {
+                    panic!(
+                        "{} ({}) cannot price {} {:?} over {} B, run by `{}`",
+                        dev.node_profile, e.module, e.primitive, e.op, e.bytes, e.module
+                    );
+                };
+                assert!(
+                    priced.duration > Duration::ZERO,
+                    "{}: {} {:?} costs zero",
+                    dev.node_profile,
+                    e.primitive,
+                    e.op
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 400, "checked {checked}");
+    }
+
+    /// A clock-scaled anchor scales: the CRATON2's 600 MHz Cortex-A7 is charged twice the
+    /// Pi 3B's 1.2 GHz figure, and says it was scaled.
+    #[test]
+    fn a_clock_scaled_anchor_scales_and_says_so() {
+        let c = PrimitiveCatalogue::standard();
+        let craton = anchors::for_node_profile("obu/unex-obu-301-craton2").expect("mapped");
+        let pi3 = [anchors::Anchor {
+            profile: profiles::CORTEX_A53_PI3B,
+            num: 1,
+            den: 1,
+            why: "",
+        }];
+        let a = c
+            .price(
+                PrimitiveId::SHA_256,
+                PrimitiveOpKind::Verify,
+                64,
+                craton.anchors,
+            )
+            .expect("priced");
+        let b = c
+            .price(PrimitiveId::SHA_256, PrimitiveOpKind::Verify, 64, &pi3)
+            .expect("priced");
+        assert_eq!(a.duration.as_nanos(), 2 * b.duration.as_nanos());
+        assert!(a.clock_scaled && a.derived && !b.clock_scaled);
+        assert_eq!(a.profile, profiles::CORTEX_A53_PI3B);
+    }
+
+    /// Every node hardware profile the repository ships is mapped to anchors, and every
+    /// mapping names a profile that exists — so a new OBU cannot arrive unpriced.
+    #[test]
+    fn every_node_hardware_profile_has_crypto_anchors() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../v2xw-node/profiles/hardware");
+        let mut ids = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("profiles directory") {
+            let path = entry.expect("entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("readable");
+            let id = text
+                .lines()
+                .find_map(|l| l.strip_prefix("id: "))
+                .expect("an id line")
+                .trim()
+                .to_string();
+            assert!(
+                anchors::for_node_profile(&id).is_some(),
+                "{} ({}) has no crypto anchors",
+                id,
+                path.display()
+            );
+            ids.push(id);
+        }
+        assert!(ids.len() >= 12, "found {} profiles", ids.len());
+        for dev in anchors::DEVICES {
+            assert!(
+                ids.iter().any(|i| i == dev.node_profile),
+                "anchors for {} name no shipped profile",
+                dev.node_profile
+            );
+            for a in dev.anchors {
+                assert!(
+                    !a.why.trim().is_empty(),
+                    "{}: anchor without a reason",
+                    dev.node_profile
+                );
+                assert!(a.den > 0 && a.num > 0);
+            }
+        }
+    }
+
+    /// Every cryptographic module of the crate is in [`EXECUTED`], and every module is
+    /// either there or declared free of cryptography: adding a module that runs a
+    /// primitive without pricing it fails here.
+    #[test]
+    fn every_crypto_module_is_in_the_executed_registry() {
+        let lib = include_str!("lib.rs");
+        let modules: Vec<&str> = lib
+            .lines()
+            .filter_map(|l| l.strip_prefix("pub mod "))
+            .map(|l| l.trim_end_matches(';').trim())
+            .collect();
+        assert!(modules.len() >= 15, "{modules:?}");
+        for m in &modules {
+            let listed = EXECUTED.iter().any(|e| e.module == *m);
+            let exempt = MODULES_WITHOUT_CRYPTO.contains(m);
+            assert!(
+                listed ^ exempt,
+                "module `{m}`: listed {listed}, exempt {exempt}"
+            );
+        }
+        for e in EXECUTED {
+            assert!(
+                modules.contains(&e.module),
+                "`{}` is not a module",
+                e.module
+            );
+            assert!(
+                PrimitiveCatalogue::standard().get(e.primitive).is_some(),
+                "{} not in the catalogue",
+                e.primitive
+            );
+        }
+    }
+
+    /// A chain link costs its three hashes and its verification; a P-384 issuer hashes
+    /// with SHA-384.
+    #[test]
+    fn a_chain_link_costs_its_hashes_and_its_verification() {
+        let c = PrimitiveCatalogue::standard();
+        let pi4 = [anchors::Anchor {
+            profile: profiles::CORTEX_A72_PI4_OPENSSL,
+            num: 1,
+            den: 1,
+            why: "test",
+        }];
+        let link = ChainLink::Explicit {
+            signer: PrimitiveId::ECDSA_P384,
+            tbs_bytes: 100,
+            issuer_bytes: 200,
+        };
+        let ops = link.ops();
+        assert_eq!(
+            ops.iter().filter(|o| o.0 == PrimitiveId::SHA_384).count(),
+            3
+        );
+        // Pi 4: P-384 verify 174.8/s = 5,720.824 µs; SHA-384 1 + 2 + 1 calls at 3,178 ns.
+        assert_eq!(ns(c.price_all(&ops, &pi4)), 5_720_824 + 4 * 3_178);
+        assert_eq!(
+            ChainLink::Implicit.ops(),
+            vec![(PrimitiveId::ECQV_P256, PrimitiveOpKind::Verify, 0)]
+        );
+    }
+    /// The device × operation matrix the WP-C4 findings note prints, in microseconds
+    /// (`cargo test -p v2xw-sec --lib device_cost_matrix -- --nocapture`). Every cell is
+    /// priced, or the test fails.
+    #[test]
+    fn device_cost_matrix() {
+        use PrimitiveOpKind::{Sign as S, Verify as V};
+        let c = PrimitiveCatalogue::standard();
+        let cols: [(&str, PrimitiveId, PrimitiveOpKind, u32); 11] = [
+            ("SHA-256 150 B", PrimitiveId::SHA_256, V, 150),
+            ("SHA-384 300 B", PrimitiveId::SHA_384, V, 300),
+            ("AES block", PrimitiveId::AES_128, V, 16),
+            ("CCM 1 KB", PrimitiveId::AES_128_CCM, V, 1_000),
+            ("ECIES dec", PrimitiveId::ECIES_P256, V, 0),
+            ("ECIES enc", PrimitiveId::ECIES_P256, S, 0),
+            ("ECQV recon", PrimitiveId::ECQV_P256, V, 0),
+            ("P-256 verify", PrimitiveId::ECDSA_P256_SHA256, V, 0),
+            ("P-384 verify", PrimitiveId::ECDSA_P384, V, 0),
+            ("lv(i,j)", PrimitiveId::LINKAGE_VALUE, V, 0),
+            ("bf expand (RA)", PrimitiveId::BUTTERFLY_EXPAND_P256, S, 0),
+        ];
+        let mut head = String::from("| node profile |");
+        for (n, ..) in &cols {
+            head.push_str(&format!(" {n} |"));
+        }
+        println!("{head}");
+        println!("|---|{}", "---:|".repeat(cols.len()));
+        for dev in anchors::DEVICES.iter().filter(|d| !d.anchors.is_empty()) {
+            let mut line = format!("| `{}` |", dev.node_profile);
+            for (_, p, op, b) in &cols {
+                let t = c.price(*p, *op, *b, dev.anchors).expect("priced");
+                line.push_str(&format!(" {:.1} |", t.duration.as_nanos() as f64 / 1e3));
+            }
+            println!("{line}");
+        }
+    }
+    /// Clock-scaling a per-block row keeps what the figure covers: the AURIX HSM's 65
+    /// cycles per SHA-256 block at 100 MHz is 325 ns per block at 200 MHz, not 325 ns
+    /// per call whatever its length.
+    #[test]
+    fn a_scaled_per_block_row_still_counts_blocks() {
+        let sha = d(PrimitiveId::SHA_256);
+        let row = sha
+            .cost
+            .row_or_scaled("hw-profile/test-200mhz", 200.0e6)
+            .expect("scalable");
+        assert!(row.scaled);
+        let unit = sha.cost_unit;
+        let t = |n| row.duration_for_units(PrimitiveOpKind::Verify, unit, unit.units(n));
+        assert_eq!(t(0), Some(Duration::from_nanos(325)));
+        assert_eq!(t(120), Some(Duration::from_nanos(3 * 325)));
     }
 }
