@@ -827,9 +827,12 @@ fn the_attacker_share_moves_detections() {
 /// a 300 m lattice. The exchange is a request, an acknowledgement and download polls every
 /// `download_poll_interval_s` (1 s here) until the batch is ready, so its length is set by
 /// the polls as much as by the line. On lines that need the same number of polls, a 600 ms
-/// line is slower than a 200 ms one and a 64 kbit/s line slower than the default. A 5 ms
+/// line is slower than a 200 ms one and a 128 kbit/s line slower than the default. A 5 ms
 /// line is not the fastest: its first poll reaches the authority before the batch is ready
 /// and a second poll a second later is needed, which is how a polled download behaves.
+/// (The thin line was 64 kbit/s until wave 4 of the SCMS realism plan: real enrolment
+/// certificates and stored-zip batch files made each exchange longer, so a 64 kbit/s line
+/// needed one extra poll and no longer met the same-polls precondition.)
 #[test]
 fn the_backhaul_latency_and_bandwidth_move_relay_topups() {
     let with = |params: serde_json::Value| {
@@ -852,13 +855,13 @@ fn the_backhaul_latency_and_bandwidth_move_relay_topups() {
     let quick = with(json!({"latency_ms": 5.0}));
     let base = with(json!({"latency_ms": 200.0}));
     let slow = with(json!({"latency_ms": 600.0}));
-    let thin = with(json!({"latency_ms": 200.0, "capacity_mbps": 0.064, "down_mbps": 0.064}));
+    let thin = with(json!({"latency_ms": 200.0, "capacity_mbps": 0.128, "down_mbps": 0.128}));
     let msgs = |m: &Measured| m.report.phase2.access.carrier.backhaul_messages;
     for (n, m) in [
         ("5 ms", &quick),
         ("200 ms", &base),
         ("600 ms", &slow),
-        ("200 ms 64 kbit/s", &thin),
+        ("200 ms 128 kbit/s", &thin),
     ] {
         let p = &m.report.phase2;
         println!(
@@ -886,7 +889,7 @@ fn the_backhaul_latency_and_bandwidth_move_relay_topups() {
         "the comparison needs the same polls"
     );
     assert!(ts > tb, "600 ms: {ts} ms against 200 ms: {tb} ms");
-    assert!(tt > tb, "64 kbit/s: {tt} ms against the default: {tb} ms");
+    assert!(tt > tb, "128 kbit/s: {tt} ms against the default: {tb} ms");
     assert!(
         msgs(&quick) > msgs(&base),
         "a 5 ms line polled no more often"
