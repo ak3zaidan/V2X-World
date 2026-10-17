@@ -4,6 +4,8 @@
 //! helpers stay in [`super`].
 
 use super::*;
+use crate::scms::msg::SecuredReport;
+use crate::scms::pdu::SpduKind;
 
 impl ScmsRun {
     /// Submits a misbehaviour report about the certificate `(subject_i, subject_lv)`.
@@ -22,6 +24,119 @@ impl ScmsRun {
                 subject_i,
                 subject_lv,
                 observed_at,
+                secured: None,
+            })),
+            FlowId::Report,
+            run,
+        );
+        run
+    }
+
+    /// Submits a real US misbehaviour report (WP-B4; `crate::scms::mbr`): encoded, signed
+    /// by the reporter's active pseudonym certificate under PSID 0x26, encrypted to the
+    /// MA whose `MaSsp.relevantPsids` covers 0x20, and POSTed through the proxy to the RA
+    /// with a `Download-Req` header signed by the reporter's enrolment certificate.
+    ///
+    /// The accused certificate is the one in the evidence (`signingCertificate`): its
+    /// `linkageData` names the `(iCert, linkage value)` the investigation starts from.
+    ///
+    /// # Errors
+    /// The PDU layer is off, the reporter has no pseudonym or enrolment credential, no MA
+    /// covers PSID 0x20, the evidence certificate has no linkage data, or the report does
+    /// not encode.
+    pub fn submit_mbr(
+        &mut self,
+        reporter: NodeId,
+        report: &crate::scms::mbr::MisbehaviorReport,
+    ) -> core::result::Result<FlowRun, crate::scms::pdu::PduError> {
+        use crate::scms::mbr;
+        use crate::scms::pdu::{Pdu, PduError};
+        let pki = self.state.pki.clone().ok_or(PduError::Shape("the PDU layer is off"))?;
+        let dev = self
+            .state
+            .devices
+            .get(&reporter)
+            .ok_or(PduError::Shape("no such device"))?;
+        // The pseudonym in use, or (before the first rotation picks one) the first
+        // installed certificate the device may use.
+        let cred = dev
+            .active_credential()
+            .or_else(|| {
+                dev.credentials
+                    .iter()
+                    .find(|((i, j), c)| c.implicit.is_some() && dev.credential_is_usable(*i, *j))
+                    .map(|(_, c)| c)
+            })
+            .and_then(|c| c.implicit.as_deref())
+            .ok_or(PduError::Key("no active pseudonym certificate"))?
+            .clone();
+        let enrol = dev
+            .enrolment_credential
+            .clone()
+            .ok_or(PduError::Key("no enrolment credential"))?;
+        let key = v2xw_sec::sig1609::Signer1609::p256(&ec::scalar_to_be32(&cred.private))
+            .ok_or(PduError::Key("pseudonym key"))?;
+        let mas: Vec<&crate::scms::pdu::Authority> =
+            core::iter::once(&pki.ma).chain(pki.extra.iter()).collect();
+        let ma = mas
+            .iter()
+            .find(|a| mbr::ma_covers(&a.cert, mbr::BSM_APP_PSID))
+            .ok_or(PduError::Shape("no MA certificate covers PSID 0x20"))?;
+        let ma_enc = ma.enc_public().ok_or(PduError::Key("MA encryption key"))?;
+        let v2xw_msg::sec_types::ieee1609_dot2::CertificateId::linkageData(ld) =
+            &report.evidence.suspect().cert.0.to_be_signed.id
+        else {
+            return Err(PduError::Shape("the accused certificate has no linkageData"));
+        };
+        let subject_i = u32::from(ld.i_cert.0.0);
+        let mut lv = [0u8; 9];
+        lv.copy_from_slice(&ld.linkage_value.0[..]);
+        let now = self.kernel.now();
+        let t32 = self.state.time32(now);
+        let t64 = self.state.wall.time64(now).unwrap_or(0);
+        let coer = mbr::encode_report(report)?;
+        let body = mbr::secure_report(
+            &coer,
+            t64,
+            &cred.certificate,
+            &key,
+            &ma.cert,
+            &ma_enc,
+            &mut self.state.pdu_rng,
+        )?;
+        let ra_enc = pki.ra.enc_public().ok_or(PduError::Key("RA encryption key"))?;
+        let header = mbr::upload_header(t32, &enrol, &pki.ra.cert, &ra_enc, &mut self.state.pdu_rng)?;
+        Ok(self.submit_secured(
+            reporter,
+            subject_i,
+            LinkageValue::new(lv),
+            SecuredReport {
+                report: Pdu::new(body),
+                header: Some(Pdu::new(header)),
+            },
+        ))
+    }
+
+    /// Sends report bytes as `reporter` exactly as given: what an attack study uses to
+    /// put a forged, replayed or unauthenticated upload on the wire. The RA and the MA
+    /// apply their checks and record what they refuse in `pdu_rejections`.
+    pub fn submit_secured(
+        &mut self,
+        reporter: NodeId,
+        subject_i: u32,
+        subject_lv: LinkageValue,
+        secured: SecuredReport,
+    ) -> FlowRun {
+        let run = self.new_run();
+        let observed_at = self.kernel.now();
+        self.inject(
+            reporter,
+            ScmsMsg::Report(Box::new(ReportSubmission {
+                reporter,
+                subject_i,
+                subject_lv,
+                observed_at,
+                secured: Some(secured),
             })),
             FlowId::Report,
             run,
@@ -88,6 +203,7 @@ impl ScmsRun {
                     subject_i,
                     subject_lv,
                     observed_at: detected_at,
+                    secured: None,
                 })),
                 flow,
                 run,
@@ -98,6 +214,71 @@ impl ScmsRun {
 }
 
 impl ScmsState {
+    /// The charged size of a report hop: the real bytes when the report is real (the
+    /// encrypted report plus, device → RA, the `Download-Req` header), recorded as an
+    /// emitted SPDU; the size model otherwise.
+    fn report_size(
+        &mut self,
+        r: &ReportSubmission,
+        from: NodeId,
+        to: NodeId,
+        at: SimTime,
+        record: bool,
+    ) -> WireSize {
+        let Some(s) = r.secured.as_ref() else {
+            return self.sizes.report();
+        };
+        let header = s.header.as_ref().map_or(0, crate::scms::pdu::Pdu::len);
+        if record {
+            let p = s.report.clone();
+            self.emit_pdu(SpduKind::SecuredMisbehaviorReport, from, to, at, &p);
+            if let Some(h) = s.header.clone() {
+                self.emit_pdu(SpduKind::EeRaDownloadRequest, from, to, at, &h);
+            }
+        }
+        WireSize::real(s.report.len() + header, SpduKind::SecuredMisbehaviorReport.name())
+    }
+
+    /// The RA's check of a report upload's `Download-Req` header.
+    fn ra_check_upload(
+        &self,
+        reporter: NodeId,
+        s: &SecuredReport,
+    ) -> core::result::Result<(), crate::scms::pdu::PduError> {
+        use crate::scms::pdu::{self, PduError};
+        let pki = self.pki.as_ref().ok_or(PduError::Shape("the PDU layer is off"))?;
+        let h = s
+            .header
+            .as_ref()
+            .ok_or(PduError::Shape("a report upload carries a Download-Req header"))?;
+        let plain = pdu::decrypt_cert(
+            h.bytes(),
+            &pki.ra.cert,
+            pki.ra.enc_private.as_ref().ok_or(PduError::Key("RA key"))?,
+        )?;
+        let (p, signer) = pdu::open_signed_pdu(&plain, pki)?;
+        // The signer must be an enrolment certificate the ECA issued (implicit, under the
+        // ECA), not a pseudonym or a component certificate.
+        let issued_by_eca = matches!(&signer.0.issuer,
+            v2xw_msg::sec_types::ieee1609_dot2::IssuerIdentifier::sha256AndDigest(d)
+                if d.0[..] == pki.eca.id8()[..]);
+        if !issued_by_eca {
+            return Err(PduError::Signer("the enrolment certificate"));
+        }
+        use v2xw_msg::sec_types::ieee1609_dot2_dot1_ee_ra_interface::EeRaInterfacePdu;
+        use v2xw_msg::sec_types::ieee1609_dot2_dot1_protocol::ScmsPduContent;
+        let ScmsPduContent::ee_ra(EeRaInterfacePdu::eeRaDownloadRequest(d)) = p.content else {
+            return Err(PduError::Shape("expected ee-ra.eeRaDownloadRequest"));
+        };
+        if d.filename.as_str() != crate::scms::mbr::UPLOAD_FILENAME {
+            return Err(PduError::Shape("Download-Req names misbehavior-report"));
+        }
+        if !self.ra.is_registered(reporter, Some(pdu::cert_id8(&signer))) {
+            return Err(PduError::UntrustedSigner);
+        }
+        Ok(())
+    }
+
     /// Closes the RA's report shuffle: every waiting report goes on to the MA. Run by the
     /// window's timer or, first, by the count threshold (CAMP-EE SCMS-765).
     pub(super) fn release_report_shuffle(
@@ -105,16 +286,29 @@ impl ScmsState {
         out: &mut Outbox<ScmsMsg>,
         n: ScmsNodes,
         to: NodeId,
+        out_now: SimTime,
     ) {
         self.ra.report_shuffle_armed = false;
         self.ra.report_shuffle_generation += 1;
-        for (r_run, report) in core::mem::take(&mut self.ra.reports) {
+        for (r_run, mut report) in core::mem::take(&mut self.ra.reports) {
             out.stage_at(StageId::Shuffled, to, None, FlowId::Report, r_run);
+            // The RA keeps the upload's authentication to itself: only the encrypted
+            // report goes on to the MA (the LOP/RA strip identifiers, 03 §8.2).
+            if let Some(s) = report.secured.as_mut() {
+                s.header = None;
+            }
+            let size = match report.secured.as_ref() {
+                Some(s) => {
+                    let p = s.report.clone();
+                    self.emit_pdu(SpduKind::SecuredMisbehaviorReport, to, n.ma, out_now, &p)
+                }
+                None => self.sizes.report(),
+            };
             out.send(
                 n.ma,
                 ScmsMsg::Report(Box::new(report)),
                 "report-forward",
-                self.sizes.report(),
+                size,
                 Transport::BackendNet,
                 FlowId::Report,
                 r_run,
@@ -137,11 +331,12 @@ impl ScmsState {
                 Self::scalar_mults(out, 1);
                 out.stage_at(StageId::Detect, r.reporter, None, flow, run);
                 out.stage_at(StageId::ReportSent, r.reporter, None, flow, run);
+                let size = self.report_size(&r, to, n.lop, at, true);
                 out.send(
                     n.lop,
                     ScmsMsg::Report(r),
                     "report",
-                    self.sizes.report(),
+                    size,
                     Transport::CellularUu,
                     flow,
                     run,
@@ -150,21 +345,34 @@ impl ScmsState {
             ScmsMsg::Report(r) if to == n.lop => {
                 self.lop.upstream += 1;
                 out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
+                let size = self.report_size(&r, to, n.ra, at, false);
                 out.send(
                     n.ra,
                     ScmsMsg::Report(r),
                     "report-proxied",
-                    self.sizes.report(),
+                    size,
                     Transport::BackendNet,
                     flow,
                     run,
                 );
             }
             ScmsMsg::Report(r) if to == n.ra => {
+                // A real upload is accepted only with a valid `Download-Req`: an
+                // `EeRaDownloadRequest` for `misbehavior-report`, signed by an enrolment
+                // certificate of this PKI and encrypted to the RA ([SM-MBR] §4). The RA
+                // cannot open the report itself.
+                if let Some(s) = r.secured.as_ref() {
+                    Self::decrypt(out, 1);
+                    Self::verify(out, 1);
+                    if let Err(e) = self.ra_check_upload(r.reporter, s) {
+                        self.reject_pdu(SpduKind::SecuredMisbehaviorReport, to, at, e);
+                        return Ok(());
+                    }
+                }
                 self.ra.reports.push((run, *r));
                 if self.ra.reports.len() >= self.params.report_shuffle_threshold as usize {
                     // The count closes the batch before the day does (CAMP-EE SCMS-765).
-                    self.release_report_shuffle(out, n, to);
+                    self.release_report_shuffle(out, n, to, at);
                 } else if !self.ra.report_shuffle_armed {
                     self.ra.report_shuffle_armed = true;
                     out.start_timer(
@@ -180,12 +388,33 @@ impl ScmsState {
             ScmsMsg::Report(r) => {
                 Self::verify(out, 1);
                 Self::scalar_mults(out, 1);
+                if let (Some(s), Some(pki)) = (r.secured.as_ref(), self.pki.clone()) {
+                    // The MA decrypts, checks the reporter's pseudonym signature and the
+                    // evidence ([SM-MBR] §3; [5GAA] (263)). A report that fails is
+                    // recorded and goes no further.
+                    Self::decrypt(out, 1);
+                    let n_bsm = 1;
+                    Self::verify(out, n_bsm);
+                    let opened = match crate::scms::mbr::ma_open_report(
+                        s.report.bytes(),
+                        &pki.ma.cert,
+                        pki.ma.enc_private.as_ref().expect("the MA certificate has a key"),
+                        &pki,
+                    ) {
+                        Ok(o) => o,
+                        Err(e) => {
+                            self.reject_pdu(SpduKind::SecuredMisbehaviorReport, to, at, e);
+                            return Ok(());
+                        }
+                    };
+                    self.ma.opened_reports.push(opened);
+                }
                 self.ma.reports.push(*r);
                 out.stage_at(StageId::ReportReceived, to, None, flow, run);
             }
             ScmsMsg::ReportShuffleTimer { generation } => {
                 if generation == self.ra.report_shuffle_generation {
-                    self.release_report_shuffle(out, n, to);
+                    self.release_report_shuffle(out, n, to, at);
                 }
             }
             _ => unreachable!("ScmsState::handle routes only this flow's messages here"),

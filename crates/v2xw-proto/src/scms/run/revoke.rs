@@ -7,9 +7,13 @@ use super::*;
 
 impl ScmsRun {
     /// Opens an investigation over the two reports the MA holds at `indices`, revoking
-    /// from period `i_rev` forward if they resolve to one device.
+    /// from period `i_rev` forward if they resolve to one device: the "link" collaboration
+    /// {MA, PCA, one LA per chain} and then, on "same device", the revocation set
+    /// [BRECHT §VI-B/C/D]. The MA's decision is already taken; see
+    /// [`ScmsRun::request_link`] for one that goes through [`MaMode`].
     ///
-    /// Returns the resolution run and the CRL-issuance run.
+    /// Returns the resolution run and the CRL-issuance run, or `None` when a report is
+    /// not held or the MA's case table is full ([`crate::scms::params::MaPolicy::max_open_cases`]).
     pub fn investigate(
         &mut self,
         a: usize,
@@ -17,36 +21,17 @@ impl ScmsRun {
         i_rev: u32,
         jmax: u32,
     ) -> Option<(FlowRun, FlowRun)> {
-        let run = self.new_run();
-        let crl_run = self.new_run();
         let (ra, rb) = {
             let reports = &self.state.ma.reports;
             (reports.get(a)?.clone(), reports.get(b)?.clone())
         };
-        self.state.ma.case = Some(Case {
-            run,
-            crl_run,
-            subjects: [(ra.subject_i, ra.subject_lv), (rb.subject_i, rb.subject_lv)],
-            lookups: Vec::new(),
-            same: [None, None],
-            seeds: [None, None],
+        self.open_case(
+            [(ra.subject_i, ra.subject_lv), (rb.subject_i, rb.subject_lv)],
+            false,
             i_rev,
             jmax,
-            resolved: false,
-            direct: false,
-            done: false,
-        });
-        let ma = self.state.nodes.ma;
-        self.inject(
-            ma,
-            ScmsMsg::PcaLookupRequest {
-                i: ra.subject_i,
-                lv: ra.subject_lv,
-            },
-            FlowId::LinkageResolution,
-            run,
-        );
-        Some((run, crl_run))
+            Duration::ZERO,
+        )
     }
 
     /// Revokes the device behind the report the MA holds at `index`, from period `i_rev`
@@ -59,47 +44,120 @@ impl ScmsRun {
     ///
     /// The decision to revoke is the authority's pipeline's, taken before this is called
     /// (`v2xw_threat::LegacyWindow`); this is only the protocol that carries it out.
+    /// [`ScmsRun::request_revocation`] is the same through the MA's decision mode.
     ///
     /// Returns the resolution run and the CRL-issuance run, or `None` when no such report
-    /// is held or a case is still in progress (cases are carried out one at a time, as the
-    /// single `MaState::case` slot says; the caller queues).
+    /// is held or the MA's case table is full ([`crate::scms::params::MaPolicy::max_open_cases`]); cases run
+    /// concurrently, each message naming its case by run (gap row 27).
     pub fn revoke(&mut self, index: usize, i_rev: u32, jmax: u32) -> Option<(FlowRun, FlowRun)> {
-        if self.case_open() {
-            return None;
-        }
         let r = self.state.ma.reports.get(index)?.clone();
-        let run = self.new_run();
-        let crl_run = self.new_run();
-        self.state.ma.case = Some(Case {
-            run,
-            crl_run,
-            subjects: [(r.subject_i, r.subject_lv), (r.subject_i, r.subject_lv)],
-            lookups: Vec::new(),
-            same: [None, None],
-            seeds: [None, None],
+        self.open_case(
+            [(r.subject_i, r.subject_lv), (r.subject_i, r.subject_lv)],
+            true,
             i_rev,
             jmax,
-            resolved: false,
-            direct: true,
-            done: false,
-        });
-        let ma = self.state.nodes.ma;
-        self.inject(
-            ma,
-            ScmsMsg::PcaLookupRequest {
-                i: r.subject_i,
-                lv: r.subject_lv,
+            Duration::ZERO,
+        )
+    }
+
+    /// A revocation the MA's pipeline asks for, carried out under the MA's decision mode
+    /// (gap row 28): in [`MaMode::ManualReview`] the case is opened now and the operator's
+    /// go-ahead (the `decision` stage) comes `review` later, as in the CV pilots' manual
+    /// MA; in [`MaMode::Automatic`] it is [`ScmsRun::revoke`].
+    pub fn request_revocation(
+        &mut self,
+        index: usize,
+        i_rev: u32,
+        jmax: u32,
+    ) -> Option<(FlowRun, FlowRun)> {
+        let r = self.state.ma.reports.get(index)?.clone();
+        let delay = self.review_delay();
+        self.open_case(
+            [(r.subject_i, r.subject_lv), (r.subject_i, r.subject_lv)],
+            true,
+            i_rev,
+            jmax,
+            delay,
+        )
+    }
+
+    /// [`ScmsRun::investigate`] under the MA's decision mode.
+    pub fn request_link(
+        &mut self,
+        a: usize,
+        b: usize,
+        i_rev: u32,
+        jmax: u32,
+    ) -> Option<(FlowRun, FlowRun)> {
+        let (ra, rb) = {
+            let reports = &self.state.ma.reports;
+            (reports.get(a)?.clone(), reports.get(b)?.clone())
+        };
+        let delay = self.review_delay();
+        self.open_case(
+            [(ra.subject_i, ra.subject_lv), (rb.subject_i, rb.subject_lv)],
+            false,
+            i_rev,
+            jmax,
+            delay,
+        )
+    }
+
+    fn review_delay(&self) -> Duration {
+        match self.state.params.ma.mode {
+            MaMode::ManualReview { review } => review,
+            MaMode::Automatic => Duration::ZERO,
+        }
+    }
+
+    fn open_case(
+        &mut self,
+        subjects: [(u32, LinkageValue); 2],
+        direct: bool,
+        i_rev: u32,
+        jmax: u32,
+        delay: Duration,
+    ) -> Option<(FlowRun, FlowRun)> {
+        let cap = self.state.params.ma.max_open_cases as usize;
+        if self.state.ma.open_cases() >= cap {
+            return None;
+        }
+        let run = self.new_run();
+        let crl_run = self.new_run();
+        self.state.ma.cases.insert(
+            run,
+            Case {
+                run,
+                crl_run,
+                subjects,
+                lookups: Vec::new(),
+                same: [None, None],
+                seeds: [None, None],
+                i_rev,
+                jmax,
+                resolved: false,
+                direct,
+                done: false,
             },
+        );
+        self.state.ma.last_case = Some(run);
+        let ma = self.state.nodes.ma;
+        let (i, lv) = subjects[0];
+        let at = delay.after(self.kernel.now());
+        self.inject_at(
+            at,
+            ma,
+            ScmsMsg::PcaLookupRequest { i, lv },
             FlowId::LinkageResolution,
             run,
         );
         Some((run, crl_run))
     }
 
-    /// Whether a case is in progress.
+    /// Whether any case is in progress.
     #[must_use]
     pub fn case_open(&self) -> bool {
-        self.state.ma.case.as_ref().is_some_and(|c| !c.done)
+        self.state.ma.open_cases() > 0
     }
 }
 
@@ -140,7 +198,7 @@ impl ScmsState {
                 );
             }
             ScmsMsg::PcaLookupResponse { found } => {
-                let Some(case) = self.ma.case.as_mut() else {
+                let Some(case) = self.ma.cases.get_mut(&run) else {
                     return Ok(());
                 };
                 let Some(found) = found else {
@@ -216,7 +274,7 @@ impl ScmsState {
             }
             ScmsMsg::SameDeviceResponse { la, same } => {
                 let (ready, hash) = {
-                    let Some(case) = self.ma.case.as_mut() else {
+                    let Some(case) = self.ma.cases.get_mut(&run) else {
                         return Ok(());
                     };
                     case.same[la.idx()] = Some(same);
@@ -278,12 +336,12 @@ impl ScmsState {
             }
             ScmsMsg::BlocklistResponse { known, lci1, lci2 } => {
                 if !known {
-                    if let Some(case) = self.ma.case.as_mut() {
+                    if let Some(case) = self.ma.cases.get_mut(&run) {
                         case.done = true;
                     }
                     return Ok(());
                 }
-                let Some(case) = self.ma.case.as_ref() else {
+                let Some(case) = self.ma.cases.get(&run) else {
                     return Ok(());
                 };
                 let i_rev = case.i_rev;
@@ -294,6 +352,7 @@ impl ScmsState {
                         role,
                         2,
                         Pending::SeedsReleased {
+                            case: run,
                             lci1,
                             lci2,
                             i: i_rev,
@@ -356,7 +415,7 @@ impl ScmsState {
             }
             ScmsMsg::SeedResponse { la, la_id, seed, i } => {
                 let (ready, jmax, crl_run) = {
-                    let Some(case) = self.ma.case.as_mut() else {
+                    let Some(case) = self.ma.cases.get_mut(&run) else {
                         return Ok(());
                     };
                     case.seeds[la.idx()] = Some((la_id, seed));
@@ -367,7 +426,7 @@ impl ScmsState {
                     )
                 };
                 if ready {
-                    let case = self.ma.case.as_ref().expect("checked");
+                    let case = self.ma.cases.get(&run).expect("checked");
                     let (la1, la2) = (
                         case.seeds[0].expect("both present"),
                         case.seeds[1].expect("both present"),
@@ -389,7 +448,7 @@ impl ScmsState {
                 i,
                 tries,
             } => {
-                let Some(case) = self.ma.case.as_ref() else {
+                let Some(case) = self.ma.cases.get(&run) else {
                     return Ok(());
                 };
                 // A timer from an earlier case, a case already complete, or one that has

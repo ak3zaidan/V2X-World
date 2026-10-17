@@ -300,9 +300,9 @@ pub struct ScmsPki {
     pub la2: Authority,
     /// Device Configuration Manager.
     pub dcm: Authority,
-    /// CRL Generator: the CRACA of every pseudonym certificate the ACA issues (its
-    /// `cracaId` is the low 3 bytes of this certificate's HashedId8, 02 §5 row 2). Its
-    /// profile is a stand-in until WP-B4 (gap row 13).
+    /// CRL Generator, the provider's CRL signer: PSID 256 with `CrlSsp{issuerIsCraca,
+    /// 4, 3, 1, 2}` as the published US CRL signer holds, so its issuer (the ICA) is the
+    /// CRACA every pseudonym, application and identification certificate names (WP-B4).
     pub crlg: Authority,
     /// Further components of the same provider (a second ACA, ...), searched by
     /// [`ScmsPki::by_id8`] like the core ones: the deployment topology (WP-D1) and the
@@ -333,7 +333,13 @@ fn component_tbs(
     issues: bool,
     enc: Option<&Point>,
     vki: VerificationKeyIndicator,
+    extra_app: &[PsidSsp],
 ) -> Result<ToBeSignedCertificate> {
+    let mut app = vec![PsidSsp::new(
+        Psid(Integer::from(SECURITY_MGMT_PSID)),
+        Some(opaque_ssp(ssp)?),
+    )];
+    app.extend_from_slice(extra_app);
     Ok(ToBeSignedCertificate::new(
         CertificateId::name(Hostname(name.into())),
         HashedId3(FixedOctetString::from([0u8; 3])),
@@ -344,10 +350,7 @@ fn component_tbs(
         ),
         None,
         None,
-        Some(SequenceOfPsidSsp(vec![PsidSsp::new(
-            Psid(Integer::from(SECURITY_MGMT_PSID)),
-            Some(opaque_ssp(ssp)?),
-        )])),
+        Some(SequenceOfPsidSsp(app)),
         issues.then(|| SequenceOfPsidGroupPermissions(vec![cert::issue_all_group()])),
         None,
         None,
@@ -386,6 +389,7 @@ impl ScmsPki {
             true,
             None,
             VerificationKeyIndicator::verificationKey(root_key.public_key()),
+            &[],
         )?;
         let root_cert = cert::issue_explicit_cert(root_tbs, None, CertHash::Sha384, |dg| {
             Ok(root_key.sign_digest(dg))
@@ -483,8 +487,19 @@ impl ScmsPki {
             false,
             start,
         )?;
-        // Drawn after every other component, so adding it moved no earlier key.
-        let crlg = Self::issue(
+        // Drawn after every other component, so adding it moved no earlier key. The
+        // published US CRL signer (ISS chain file, `governance.rs`) holds PSID 256 with
+        // `CrlSsp{version 1, issuerIsCraca, crls 4, 3, 1, 2}`: the ICA that issued it is
+        // the CRACA (WP-B4, gap row 13).
+        let crl_ssp = PsidSsp::new(
+            Psid(Integer::from(v2xw_sec::crl::CRL_PSID)),
+            Some(ServiceSpecificPermissions::opaque(
+                v2xw_sec::crl::CrlSsp::new(v2xw_sec::crl::CracaType::issuerIsCraca, &[4, 3, 1, 2])
+                    .to_coer()
+                    .into(),
+            )),
+        );
+        let crlg = Self::issue_with(
             &ica,
             &mut g,
             "crlg.provider-a",
@@ -493,6 +508,7 @@ impl ScmsPki {
             false,
             false,
             start,
+            &[crl_ssp],
         )?;
         Ok(ScmsPki {
             root,
@@ -520,6 +536,21 @@ impl ScmsPki {
         with_enc: bool,
         start: u32,
     ) -> Result<Authority> {
+        Self::issue_with(issuer, g, name, years, ssp, issues, with_enc, start, &[])
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn issue_with(
+        issuer: &Authority,
+        g: &mut Drbg,
+        name: &str,
+        years: u16,
+        ssp: &SecurityMgmtSsp,
+        issues: bool,
+        with_enc: bool,
+        start: u32,
+        extra_app: &[PsidSsp],
+    ) -> Result<Authority> {
         let d = g.scalar();
         let key = Signer1609::p256(&ec::scalar_to_be32(&d)).ok_or(PduError::Key("P-256"))?;
         let enc_private = with_enc.then(|| g.scalar());
@@ -532,6 +563,7 @@ impl ScmsPki {
             issues,
             enc_public.as_ref(),
             VerificationKeyIndicator::verificationKey(key.public_key()),
+            extra_app,
         )?;
         let issuer_key = match &issuer.key {
             Signer1609::P256(_) => CertKey::P256(Point::mul_base(
@@ -574,11 +606,19 @@ impl ScmsPki {
             .find(|a| &a.id8() == id8)
     }
 
-    /// The `cracaId` a pseudonym certificate carries: the low 3 bytes of the CRL
-    /// Generator's whole-certificate HashedId8.
+    /// The `cracaId` a pseudonym certificate carries: the low 3 bytes of the CRACA's
+    /// whole-certificate HashedId8. The CRACA is the ICA, because the CRL signer's
+    /// `CrlSsp` says `issuerIsCraca` (WP-B4; the B3b application certificates already
+    /// use the ICA). A device matches a CRL to a certificate only when this equals the
+    /// low 3 bytes of the CRL's `crlCraca` ([`ScmsPki::craca_id8`]).
     pub fn craca_id(&self) -> [u8; 3] {
-        let h = self.crlg.id8();
+        let h = self.craca_id8();
         [h[5], h[6], h[7]]
+    }
+
+    /// The CRL's `crlCraca`: the whole-certificate HashedId8 of the CRACA (the ICA).
+    pub fn craca_id8(&self) -> [u8; 8] {
+        self.ica.id8()
     }
 
     /// Issues one more P-256 component under the ICA, keys from `seed` and `name`, and
@@ -1573,6 +1613,11 @@ pub enum SpduKind {
     AcaEeCertResponsePrivate,
     /// `RaEeCertInfoSpdu`, the `.info` file (Unsecured).
     RaEeCertInfo,
+    /// `SecuredCrl` (1609.2 `Ieee1609Dot2Crl`: signed, psid 256, CRL signer). WP-B4.
+    SecuredCrl,
+    /// `SecuredMisbehaviorReport` ([SM-MBR] §3: signed by a pseudonym under psid 0x26,
+    /// encrypted to the MA). WP-B4.
+    SecuredMisbehaviorReport,
 }
 
 impl SpduKind {
@@ -1593,6 +1638,8 @@ impl SpduKind {
             SpduKind::AcaRaCertResponse => "AcaRaCertResponseSpdu",
             SpduKind::AcaEeCertResponsePrivate => "AcaEeCertResponsePrivateSpdu",
             SpduKind::RaEeCertInfo => "RaEeCertInfoSpdu",
+            SpduKind::SecuredCrl => "SecuredCrl",
+            SpduKind::SecuredMisbehaviorReport => "SecuredMisbehaviorReport",
         }
     }
 }

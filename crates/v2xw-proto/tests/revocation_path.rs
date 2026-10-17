@@ -88,7 +88,7 @@ fn a_report_becomes_a_vehicle_that_cannot_sign() {
 
     // The Misbehaviour Authority resolved the device, and it took *both* LAs to do it:
     // either one alone answers a single bit and cannot name the device.
-    let case = run.state.ma.case.as_ref().expect("a case was opened");
+    let case = run.state.ma.case().expect("a case was opened");
     assert!(case.resolved, "the two reports must resolve to one device");
     assert_eq!(
         case.same,

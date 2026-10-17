@@ -259,6 +259,83 @@ pub struct ScmsParams {
     pub seed_retry: Duration,
     /// The real IEEE 1609.2.1 PDU layer (`crate::scms::pdu`, WP-B1).
     pub pdu: PduLayer,
+    /// How the CRL Generator issues real `SecuredCrl`s (WP-B4).
+    pub crl: CrlIssuance,
+    /// How the Misbehaviour Authority decides and how many cases it runs (WP-B4).
+    pub ma: MaPolicy,
+}
+
+/// How the provider's CRL Generator issues 1609.2 CRLs (WP-B4; 02 §11, 03 §10).
+///
+/// With the PDU layer on, every publication signs a real full linkage CRL (series 1)
+/// and, when series 3 or 4 have entries, full hash CRLs; with [`Self::deltas`] it also
+/// signs a delta linkage CRL holding what was added since the previous publication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrlIssuance {
+    /// Publish only at the provider's business-day slot: a change decided on a Friday
+    /// evening, a weekend or a US federal holiday goes out on the next business day,
+    /// inside the "within 1 business day of any change" rule ([SM-PROV] §3.4.9).
+    ///
+    /// Off in the crate default for the same reason as
+    /// [`ScmsParams::publish_on_cadence`]: the flow tests measure the protocol path. A
+    /// deployment study (and the US production preset of WP-D1) turns it on.
+    pub business_day_sla: bool,
+    /// The slot's Eastern hour and minute. **Assumption**: 10:00 ET (the rule fixes the
+    /// deadline, not the hour).
+    pub slot_et: (u32, u32),
+    /// `nextCrl - issueDate`. **Assumption**: 7 days, so that the "no later than once a
+    /// week" device fetch ([CAMP122] §3 item 10) always finds a current CRL; the draft
+    /// CP's ceiling is monthly ([5GAA] (254)).
+    pub next_crl: Duration,
+    /// Also issue a delta linkage CRL with the entries added since the previous
+    /// publication.
+    pub deltas: bool,
+}
+
+impl Default for CrlIssuance {
+    fn default() -> CrlIssuance {
+        CrlIssuance {
+            business_day_sla: false,
+            slot_et: (10, 0),
+            next_crl: Duration::from_secs(7 * 86_400),
+            deltas: true,
+        }
+    }
+}
+
+/// How the Misbehaviour Authority decides (gap row 28) and how many investigations it
+/// carries at once (gap row 27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaPolicy {
+    /// The MA's case table capacity: investigations open at once. **Assumption**: 1,000.
+    pub max_open_cases: u32,
+    /// Who decides to revoke.
+    pub mode: MaMode,
+}
+
+impl Default for MaPolicy {
+    fn default() -> MaPolicy {
+        MaPolicy {
+            max_open_cases: 1_000,
+            mode: MaMode::ManualReview {
+                review: Duration::from_secs(8 * 3600),
+            },
+        }
+    }
+}
+
+/// Who decides to revoke (gap row 28).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaMode {
+    /// An operator reviews each case before the MA acts: the CV-pilot "minimum viable"
+    /// MA ([CAMP122] §4.2-4.3; [PRIMER] pp. 6, 8). The default (owner decision). The
+    /// operator's delay is **an assumption** (8 h, one working shift); a scenario sets it.
+    ManualReview {
+        /// Time from opening the case to the operator's go-ahead.
+        review: Duration,
+    },
+    /// The pipeline's decision is acted on at once (today's `v2xw-threat` pipelines).
+    Automatic,
 }
 
 /// The real 1609.2.1 SPDU layer's settings (`crate::scms::pdu`).
@@ -410,6 +487,8 @@ impl Default for ScmsParams {
             threshold: None,
             seed_retry: Duration::from_secs(30),
             pdu: PduLayer::default(),
+            crl: CrlIssuance::default(),
+            ma: MaPolicy::default(),
         }
     }
 }

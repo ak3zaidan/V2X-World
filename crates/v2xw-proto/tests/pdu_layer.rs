@@ -184,6 +184,19 @@ fn enrolment_and_provisioning_are_real_spdus_charged_their_encoded_length() {
                 pdu::open_signed(b, pki).expect("ACA-signed");
             }
             SpduKind::EncryptedIndividualPlv | SpduKind::RaEeCertInfo => {}
+            // WP-B4 kinds (not emitted by this flow; tests/crl_issuance.rs, tests/mbr.rs).
+            SpduKind::SecuredCrl => {
+                v2xw_sec::crl::decode_crl(b).expect("a SecuredCrl");
+            }
+            SpduKind::SecuredMisbehaviorReport => {
+                v2xw_proto::scms::mbr::ma_open_report(
+                    b,
+                    &pki.ma.cert,
+                    pki.ma.enc_private.as_ref().unwrap(),
+                    pki,
+                )
+                .expect("to the MA");
+            }
         }
     }
     if let Ok(dir) = std::env::var("V2XW_PDU_OUT") {

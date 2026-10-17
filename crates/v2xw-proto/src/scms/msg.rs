@@ -252,6 +252,20 @@ pub struct ReportSubmission {
     pub subject_lv: LinkageValue,
     /// When the observation was made.
     pub observed_at: v2xw_core::time::SimTime,
+    /// The real report (WP-B4), when the device sent one: `None` on the modelled path.
+    pub secured: Option<SecuredReport>,
+}
+
+/// A real US misbehaviour report as it travels ([SM-MBR] §3–4; `crate::scms::mbr`).
+#[derive(Debug, Clone)]
+pub struct SecuredReport {
+    /// The POST body: the report signed by the reporter's pseudonym certificate under
+    /// PSID 0x26 and encrypted to the MA. The RA forwards it and cannot read it.
+    pub report: crate::scms::pdu::Pdu,
+    /// The `Download-Req` header: an `EeRaDownloadRequest` for `misbehavior-report`
+    /// signed by the reporter's enrolment certificate and encrypted to the RA, which
+    /// authenticates the upload. The MA never receives it.
+    pub header: Option<crate::scms::pdu::Pdu>,
 }
 
 /// What the PCA answers a `lv → ?` lookup with ([BRECHT §VI-C]).
