@@ -67,8 +67,11 @@ fn two_reports_about_two_devices_do_not_resolve() {
 #[test]
 fn certificates_from_two_different_provisioning_requests_still_resolve_to_one_device() {
     // The case the Pseudonym Certificate Authority cannot settle on its own: the two
-    // certificates carry different chain identifiers, so only the Linkage Authorities can
-    // say they are one device. Both must be asked, and both must agree.
+    // certificates carry chain identifiers the PCA cannot compare, so only the Linkage
+    // Authorities can say they are one device. Both must be asked, and both must agree.
+    // Under `ra-maxReqs` = 1 the second week is the RA's pre-generation of the one
+    // request (the same LA chains), and the PCA still cannot link the two: what it holds
+    // for each is a fresh LA ciphertext and the hash of that one RA→ACA request.
     let mut run = deployment(2);
     provisioned(&mut run, DEVICE_B, 0, 1, 2);
     run.topup(DEVICE_B, 1, 2);
@@ -91,9 +94,10 @@ fn certificates_from_two_different_provisioning_requests_still_resolve_to_one_de
     };
     assert_ne!(
         a.lci1, b.lci1,
-        "two provisioning requests must get two chains, or the PCA could link them itself"
+        "the PCA must hold two different ciphertexts, or it could link them itself"
     );
-    assert_ne!(a.request_hash, b.request_hash);
+    assert_ne!(a.lci2, b.lci2);
+    assert_ne!(a.handle, b.handle);
 
     run.investigate(0, 1, 1, 2).expect("two reports");
     run.run().expect("investigation runs");

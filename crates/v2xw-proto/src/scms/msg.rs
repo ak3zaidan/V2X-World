@@ -48,6 +48,58 @@ impl<T> SealedForPca<T> {
     }
 }
 
+/// A value only the Linkage Authority that sealed it may open: the LA encrypts its chain
+/// identifier for itself ([BRECHT §V-B]), so the RA can pass it to the ACA, and the ACA to
+/// the MA, without either reading it.
+///
+/// Each copy is a randomised encryption: one per pre-linkage value, under its own nonce
+/// (derived from the LA's seed for that `(i, j)`, which only the LA holds). Two copies of
+/// one chain identifier are therefore two different ciphertexts, and the ACA, which keeps
+/// one per certificate, cannot group a device's certificates by them. Equality compares
+/// what an observer can compare: the LA and the ciphertext, never the value.
+#[derive(Clone, Copy)]
+pub struct SealedForLa<T> {
+    la: LaIndex,
+    nonce: [u8; 16],
+    inner: T,
+}
+
+impl<T: Copy> SealedForLa<T> {
+    /// Seals `inner` for LA `la` under `nonce`.
+    pub const fn seal(la: LaIndex, nonce: [u8; 16], inner: T) -> SealedForLa<T> {
+        SealedForLa { la, nonce, inner }
+    }
+
+    /// Opens it, if `opener` is the node of the LA it was sealed for in `nodes`.
+    pub fn open(&self, opener: NodeId, nodes: &crate::scms::params::ScmsNodes) -> Option<T> {
+        (opener == nodes.la(self.la)).then_some(self.inner)
+    }
+
+    /// The LA it was sealed for.
+    pub const fn la(&self) -> LaIndex {
+        self.la
+    }
+
+    /// The ciphertext as an observer sees it (its nonce stands for it).
+    pub const fn ciphertext(&self) -> [u8; 16] {
+        self.nonce
+    }
+}
+
+impl<T> PartialEq for SealedForLa<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.la == other.la && self.nonce == other.nonce
+    }
+}
+
+impl<T> Eq for SealedForLa<T> {}
+
+impl<T> core::fmt::Debug for SealedForLa<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "SealedForLa({:?}, {:02x?})", self.la, self.nonce)
+    }
+}
+
 /// A linkage-chain identifier: the handle an LA knows a device's seed chain by.
 ///
 /// Opaque by construction. The RA holds a pair of them per device and the MA is told them
@@ -98,6 +150,10 @@ pub enum Refusal {
     /// series, name, permissions, validity, key reuse, request age; WP-B2). The precise
     /// rule is recorded in the run's `pdu_rejections`.
     ProfileViolation,
+    /// A second butterfly request from a device the RA already pre-generates for:
+    /// `ra-maxReqs` = 1 ([SMP] §2.1.21 Table 3; [CAMP122] SCMS-520 "request only the
+    /// initial set, or again when parameters change"). The device tops up by download.
+    RequestLimit,
 }
 
 impl Refusal {
@@ -109,6 +165,7 @@ impl Refusal {
             Refusal::EnrolmentExpired => "enrolment-expired",
             Refusal::UnknownEnrolment => "unknown-enrolment",
             Refusal::ProfileViolation => "profile-violation",
+            Refusal::RequestLimit => "request-limit",
         }
     }
 }
@@ -212,13 +269,16 @@ pub struct CertRequestItem {
     pub plv1: SealedForPca<PreLinkageValue>,
     /// LA2's pre-linkage value, sealed.
     pub plv2: SealedForPca<PreLinkageValue>,
-    /// LA1's chain identifier, sealed: the PCA stores it so an investigation can start.
-    pub lci1: SealedForPca<Lci>,
-    /// LA2's chain identifier, sealed.
-    pub lci2: SealedForPca<Lci>,
-    /// The hash of the device's provisioning request, which is all that ties the
-    /// certificate back to the RA's record.
-    pub request_hash: [u8; 32],
+    /// LA1's chain identifier, sealed by LA1 for itself (a fresh ciphertext per
+    /// certificate): the PCA stores it, cannot read it, and hands it to the MA so an
+    /// investigation can ask LA1.
+    pub lci1: SealedForLa<Lci>,
+    /// LA2's chain identifier, sealed by LA2 for itself.
+    pub lci2: SealedForLa<Lci>,
+    /// The hash of this one RA→ACA request (SHA-256 of the `RaAcaCertRequestSpdu`, or on
+    /// the modelled path a per-certificate RA-keyed hash): the PCA's only route back to
+    /// the RA's record ([BRECHT §VI-D]). Unique per certificate, so it links nothing.
+    pub handle: [u8; 32],
     /// The real `RaAcaCertRequestSpdu` (WP-B3a); the ACA reads only this when present.
     pub spdu: Option<crate::scms::pdu::Pdu>,
 }
@@ -234,6 +294,9 @@ pub struct PreLinkageBatch {
     pub lci: Lci,
     /// `(i, j, plv)`, sealed for the PCA, in ascending `(i, j)`.
     pub values: Vec<(u32, u32, SealedForPca<PreLinkageValue>)>,
+    /// The chain identifier sealed by this LA for itself, one fresh ciphertext per value,
+    /// same order.
+    pub sealed_lci: Vec<SealedForLa<Lci>>,
     /// The real `EncryptedIndividualPLV` of each value, same order (WP-B3a); empty when
     /// the PDU layer is off.
     pub encrypted:
@@ -271,12 +334,13 @@ pub struct SecuredReport {
 /// What the PCA answers a `lv → ?` lookup with ([BRECHT §VI-C]).
 #[derive(Debug, Clone, Copy)]
 pub struct PcaLookup {
-    /// LA1's chain identifier for the device that holds this linkage value.
-    pub lci1: Lci,
-    /// LA2's chain identifier.
-    pub lci2: Lci,
-    /// The provisioning request the certificate came from.
-    pub request_hash: [u8; 32],
+    /// LA1's chain identifier for the device that holds this linkage value, sealed for
+    /// LA1 (the PCA cannot read it).
+    pub lci1: SealedForLa<Lci>,
+    /// LA2's chain identifier, sealed for LA2.
+    pub lci2: SealedForLa<Lci>,
+    /// The hash of the RA→ACA request the certificate came from.
+    pub handle: [u8; 32],
 }
 
 /// The messages of the CAMP SCMS flows.
@@ -341,6 +405,11 @@ pub enum ScmsMsg {
         periods: u32,
         /// Certificates per period.
         jmax: u32,
+        /// The chain this LA already holds for the request, when the RA pre-generates a
+        /// later period of the one request ([PRIMER] p.6 "adds one week every week"):
+        /// the LA walks the same seed forward instead of allocating a new chain, so a
+        /// revocation by seed covers every pre-generated week.
+        chain: Option<Lci>,
     },
     /// LA → RA: the sealed pre-linkage values.
     PreLinkageResponse(Box<PreLinkageBatch>),
@@ -353,9 +422,6 @@ pub enum ScmsMsg {
     },
     /// RA → PCA: one i-period of certificate requests.
     CertRequest {
-        /// The device (carried for the simulation's bookkeeping; the PCA learns only the
-        /// request hash, and `tests/privacy.rs` checks that its state records no more).
-        device: NodeId,
         /// The i-period.
         i: u32,
         /// The requests.
@@ -363,8 +429,6 @@ pub enum ScmsMsg {
     },
     /// PCA → RA: the certified credentials, sealed for the device.
     CertResponse {
-        /// The device.
-        device: NodeId,
         /// The i-period.
         i: u32,
         /// The credentials.
@@ -418,10 +482,10 @@ pub enum ScmsMsg {
     SameDeviceRequest {
         /// Which LA.
         la: LaIndex,
-        /// One chain.
-        a: Lci,
+        /// One chain, as the PCA stored it (sealed for this LA).
+        a: SealedForLa<Lci>,
         /// The other.
-        b: Lci,
+        b: SealedForLa<Lci>,
     },
     /// LA → MA: a boolean, and nothing else ([BRECHT §VI-C]).
     SameDeviceResponse {
@@ -430,10 +494,10 @@ pub enum ScmsMsg {
         /// Whether the two chains belong to one device.
         same: bool,
     },
-    /// MA → RA: blocklist the enrolment certificate behind this request hash.
+    /// MA → RA: blocklist the enrolment certificate behind this RA→ACA request.
     BlocklistRequest {
-        /// The request hash.
-        request_hash: [u8; 32],
+        /// The PCA's handle: the hash of the RA→ACA request.
+        handle: [u8; 32],
     },
     /// RA → MA: the LA hosts and chain identifiers ([BRECHT §VI-D]).
     BlocklistResponse {
@@ -527,6 +591,40 @@ pub enum ScmsMsg {
         lpf: Option<Box<crate::scms::governance::PolicyFile>>,
         /// A newer Local Certificate Chain File.
         lccf: Option<Box<crate::scms::governance::ChainFile>>,
+    },
+    /// Device → LOP → RA: a top-off, `GET /download/info` with a `Download-Req` header
+    /// naming `<requestHash>.info`, signed by the enrolment certificate ([CAMP122] §6.3,
+    /// Table 79; 03 §4.2). No new butterfly request: `ra-maxReqs` = 1.
+    InfoRequest {
+        /// The device.
+        device: NodeId,
+        /// The i-period the device wants next.
+        i: u32,
+        /// The enrolment certificate it signs with (the modelled path's signer).
+        enrolment: Option<EnrolmentCert>,
+        /// The real `EeRaDownloadRequestSpdu` naming the `.info` file; `None` when the
+        /// layer is off.
+        pdu: Option<crate::scms::pdu::Pdu>,
+    },
+    /// RA → LOP → device: the `.info` body, one `Time32`: when the batch for `i` can be
+    /// downloaded. `None` when the RA will never generate it (before `firstI`).
+    InfoResponse {
+        /// The device.
+        device: NodeId,
+        /// The i-period asked for.
+        i: u32,
+        /// The next download time.
+        next_dl: Option<v2xw_core::time::SimTime>,
+        /// The COER body (four octets), on the real path.
+        body: Option<Vec<u8>>,
+    },
+    /// The RA's weekly pre-generation job reaching period `i` of `device`'s account
+    /// ([PRIMER] p.6; `ra-maxGenDelay` 1 week, [SMP] Table 3).
+    PregenTimer {
+        /// The device whose account it is.
+        device: NodeId,
+        /// The i-period now due.
+        i: u32,
     },
     /// RA → LOP → device: the provisioning request was refused.
     ProvisioningRefused {

@@ -319,6 +319,170 @@ impl ScmsState {
         self.params.first_batch_delay.after(at).max(release)
     }
 
+    /// Device side: the `EeRaDownloadRequestSpdu` naming `<requestHash>.info`.
+    fn ee_info_request_pdu(&mut self, device: NodeId, at: SimTime) -> Option<Pdu> {
+        let pki = self.pki.clone()?;
+        let d = self.devices.get(&device)?;
+        let cred = d.enrolment_credential.clone()?;
+        let name = pdu_prov::info_filename(d.request_hash8?);
+        let t = self.time32(at);
+        pdu_prov::ee_download_request_spdu(&pki, &cred.cert, &cred.key, t, &name, &mut self.pdu_rng)
+            .ok()
+    }
+
+    /// When the weekly job generates period `i` of `account`: the request's own periods,
+    /// and every period within `ra-maxPreloadTime` (the Local Policy File's
+    /// `max_periods_ahead`, 156 weeks = 3 years) of `firstI`, at acceptance; each later
+    /// period at the i-period boundary that brings it inside the horizon ("adds one week
+    /// every week", [PRIMER] p.6). The job runs at the boundary, so the generation delay
+    /// is zero, inside `ra-maxGenDelay` = 1 week ([SMP] Table 3). `None` before `firstI`.
+    #[must_use]
+    pub fn pregen_due(&self, account: &PregenAccount, i: u32) -> Option<SimTime> {
+        if i < account.first_i {
+            return None;
+        }
+        let h = self.gov.lpf.policy.max_periods_ahead.max(1);
+        let covered = account.first_i.saturating_add(h);
+        if i < covered || account.generated.contains(&i) {
+            return Some(account.accepted_at);
+        }
+        let p = &self.params;
+        let len = p.i_period.as_nanos().max(1);
+        let p0 = account.accepted_at.saturating_sub(p.epoch) / len;
+        let k = u64::from(i - covered) + 1;
+        let boundary = u32::try_from(p0 + k).unwrap_or(u32::MAX);
+        Some(p.period_start(boundary).max(account.accepted_at))
+    }
+
+    /// The RA's answer to a `.info` request for period `i`: when the batch can be
+    /// downloaded. A held batch: now. One the schedule has reached: generated now, ready
+    /// `first_batch_delay` later. One it has not: the weekly job is armed for that
+    /// boundary.
+    fn pregen_next(
+        &mut self,
+        device: NodeId,
+        i: u32,
+        at: SimTime,
+        out: &mut Outbox<ScmsMsg>,
+        flow: FlowId,
+        run: FlowRun,
+    ) -> Option<SimTime> {
+        let account = self.ra.accounts.get(&device)?.clone();
+        let due = self.pregen_due(&account, i)?;
+        if self.ra.repos.get(&device).is_some_and(|r| r.contains_key(&i)) {
+            return Some(at);
+        }
+        let ready_after = self.params.first_batch_delay;
+        if account.generated.contains(&i) {
+            return Some(ready_after.after(at));
+        }
+        if due <= at {
+            self.start_pregen_job(device, i, out, flow, run);
+            return Some(ready_after.after(at));
+        }
+        self.ra.pregen_deferred += 1;
+        if self.ra.pregen_timers.insert((device, i)) {
+            out.start_timer(
+                Duration::from_nanos(due - at),
+                ScmsMsg::PregenTimer { device, i },
+                flow,
+                run,
+            );
+        }
+        Some(ready_after.after(due))
+    }
+
+    /// Expands, and sends to the LAs, one pre-generated week of `device`'s account, under
+    /// the policy in force now (a smaller `certs_per_period` clips it).
+    fn start_pregen_job(
+        &mut self,
+        device: NodeId,
+        i: u32,
+        out: &mut Outbox<ScmsMsg>,
+        flow: FlowId,
+        run: FlowRun,
+    ) {
+        let n = self.nodes;
+        let Some(account) = self.ra.accounts.get_mut(&device) else {
+            return;
+        };
+        if !account.generated.insert(i) {
+            return;
+        }
+        let req = account.request.clone();
+        let request_hash = account.request_hash;
+        let request_hash8 = account.request_hash8;
+        let policy = self.gov.lpf.policy;
+        let jmax = req.jmax.min(policy.certs_per_period.max(1));
+        if jmax != req.jmax {
+            self.ra.clipped += 1;
+        }
+        self.ra.pregen_periods += 1;
+        let chains = self
+            .ra
+            .requests
+            .get(&request_hash)
+            .map_or([None, None], |r| [r.lci1, r.lci2]);
+        if out.classical_signs() {
+            Self::scalar_mults(out, 2 * jmax);
+        }
+        let mut cocoons = BTreeMap::new();
+        let mut cocoon_enc = BTreeMap::new();
+        for j in 0..jmax {
+            let (b, q) = butterfly::ra_cocoon_keys(
+                &req.signing_public,
+                &req.encryption_public,
+                &req.ck,
+                &req.ek,
+                i,
+                j,
+            );
+            cocoons.insert((i, j), b);
+            cocoon_enc.insert((i, j), q);
+        }
+        out.stage_at(StageId::Expanded, n.ra, None, flow, run);
+        self.ra.jobs.push(ProvisioningJob {
+            run,
+            flow,
+            device,
+            request_hash,
+            start_i: i,
+            periods: 1,
+            jmax,
+            cocoons,
+            cocoon_enc,
+            plv: [BTreeMap::new(), BTreeMap::new()],
+            enc_plv: [BTreeMap::new(), BTreeMap::new()],
+            aca_requests: BTreeMap::new(),
+            request_hash8,
+            lci: [None, None],
+            lci_sealed: [BTreeMap::new(), BTreeMap::new()],
+            responses: 0,
+            periods_certified: 0,
+            sent: false,
+            batch_ready_stamped: false,
+            pregen: true,
+        });
+        for la in [LaIndex::One, LaIndex::Two] {
+            out.send(
+                n.la(la),
+                ScmsMsg::PreLinkageRequest {
+                    device,
+                    la,
+                    start_i: i,
+                    periods: 1,
+                    jmax,
+                    chain: chains[la.idx()],
+                },
+                "pre-linkage-request",
+                self.sizes.pre_linkage_request(),
+                Transport::BackendNet,
+                flow,
+                run,
+            );
+        }
+    }
+
     /// `nextDlTime` of a (verified) ack.
     fn ack_next_dl(&self, ack: &Pdu) -> Option<u32> {
         let pki = self.pki.clone()?;
@@ -338,7 +502,6 @@ impl ScmsState {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn send_batch(
         &mut self,
-        device: NodeId,
         i: u32,
         credentials: Vec<IssuedCredential>,
         flow: FlowId,
@@ -371,7 +534,6 @@ impl ScmsState {
         out.send(
             n.ra,
             ScmsMsg::CertResponse {
-                device,
                 i,
                 credentials: Box::new(credentials),
             },
@@ -396,12 +558,25 @@ impl ScmsState {
     ) {
         self.ra.shuffle_armed = false;
         self.ra.shuffle_generation += 1;
+        self.release_jobs(out, n, to, at, None);
+    }
+
+    /// Sends the RA→ACA requests of every job whose pre-linkage values are in (`only`:
+    /// just that run's, a pre-generated week).
+    fn release_jobs(
+        &mut self,
+        out: &mut Outbox<ScmsMsg>,
+        n: ScmsNodes,
+        to: NodeId,
+        at: SimTime,
+        only: Option<FlowRun>,
+    ) {
         let jobs = core::mem::take(&mut self.ra.jobs);
         let pki = self.pki.clone();
         let now32 = self.time32(at);
         let mut still_waiting = Vec::new();
         for mut job in jobs {
-            if job.responses < 2 || job.sent {
+            if job.responses < 2 || job.sent || only.is_some_and(|r| r != job.run) {
                 still_waiting.push(job);
                 continue;
             }
@@ -414,8 +589,8 @@ impl ScmsState {
                         job.cocoons.get(&(i, j)).copied(),
                         job.plv[0].get(&(i, j)).cloned(),
                         job.plv[1].get(&(i, j)).cloned(),
-                        job.lci[0],
-                        job.lci[1],
+                        job.lci_sealed[0].get(&(i, j)).copied(),
+                        job.lci_sealed[1].get(&(i, j)).copied(),
                     ) else {
                         continue;
                     };
@@ -446,15 +621,30 @@ impl ScmsState {
                     if let Some(p) = &spdu {
                         job.aca_requests.insert(p.hashed_id8(), (i, j));
                     }
+                    // The PCA's handle on this certificate: the hash of this one request
+                    // (Brecht §VI-D), unique per certificate; the RA alone maps it back.
+                    let handle = match &spdu {
+                        Some(p) => sha256(p.bytes()),
+                        None => {
+                            let mut m = Vec::with_capacity(60);
+                            m.extend_from_slice(b"ra-aca-request");
+                            m.extend_from_slice(&self.params.master_seed.to_be_bytes());
+                            m.extend_from_slice(&job.request_hash);
+                            m.extend_from_slice(&i.to_be_bytes());
+                            m.extend_from_slice(&j.to_be_bytes());
+                            sha256(&m)
+                        }
+                    };
+                    self.ra.handles.insert(handle, job.request_hash);
                     items.push(CertRequestItem {
                         i,
                         j,
                         cocoon_signing: b,
                         plv1: p1,
                         plv2: p2,
-                        lci1: SealedForPca::seal(l1),
-                        lci2: SealedForPca::seal(l2),
-                        request_hash: job.request_hash,
+                        lci1: l1,
+                        lci2: l2,
+                        handle,
                         spdu,
                     });
                 }
@@ -480,7 +670,6 @@ impl ScmsState {
                 out.send(
                     n.pca,
                     ScmsMsg::CertRequest {
-                        device: job.device,
                         i,
                         items: Box::new(items),
                     },
@@ -541,6 +730,46 @@ impl ScmsState {
                     flow,
                     run,
                 );
+                // A device the RA already pre-generates for does not request again
+                // (`ra-maxReqs` = 1): it asks `/download/info` when its next batch is
+                // ready, in the same session as the file check ([CAMP122] §3 step 8).
+                let topoff = flow == FlowId::Topup
+                    && self
+                        .devices
+                        .get(&req.device)
+                        .is_some_and(|d| d.ra_account.is_some());
+                if topoff {
+                    let pdu = self.ee_info_request_pdu(req.device, at);
+                    if pdu.is_some() {
+                        Self::sign(out, 1);
+                        Self::scalar_mults(out, 1);
+                    }
+                    if let Some(dev) = self.devices.get_mut(&req.device) {
+                        dev.info_requests += 1;
+                    }
+                    out.stage_at(StageId::Requested, req.device, None, flow, run);
+                    let size = match &pdu {
+                        Some(p) => {
+                            self.emit_pdu(SpduKind::EeRaDownloadRequest, req.device, n.lop, at, p)
+                        }
+                        None => self.sizes.batch_download_request(),
+                    };
+                    out.send(
+                        n.lop,
+                        ScmsMsg::InfoRequest {
+                            device: req.device,
+                            i: req.start_i,
+                            enrolment: req.enrolment,
+                            pdu,
+                        },
+                        "info-request",
+                        size,
+                        Transport::CellularUu,
+                        flow,
+                        run,
+                    );
+                    return Ok(());
+                }
                 // The device signs the request with its enrolment certificate and
                 // encrypts it to the RA.
                 Self::sign(out, 1);
@@ -659,6 +888,32 @@ impl ScmsState {
                     );
                     return Ok(());
                 }
+                // `ra-maxReqs` = 1: a device the RA already pre-generates for is refused
+                // a second request, unless the policy changed since ([CAMP122] SCMS-520,
+                // "or again when parameters change"). Recorded: a device re-requesting
+                // with fresh keys is how one would try to hoard pseudonyms.
+                if self
+                    .ra
+                    .accounts
+                    .get(&req.device)
+                    .is_some_and(|a| a.lpf_version == self.gov.lpf.version)
+                {
+                    self.ra.max_reqs_refused += 1;
+                    Self::sign(out, 1);
+                    out.send(
+                        n.lop,
+                        ScmsMsg::ProvisioningRefused {
+                            device: req.device,
+                            reason: Refusal::RequestLimit,
+                        },
+                        "provisioning-refused",
+                        self.sizes.refusal(),
+                        Transport::BackendNet,
+                        flow,
+                        run,
+                    );
+                    return Ok(());
+                }
                 // The policy the RA serves is the policy it enforces.
                 let policy = self.gov.lpf.policy;
                 let jmax = req.jmax.min(policy.certs_per_period.max(1));
@@ -721,11 +976,27 @@ impl ScmsState {
                     aca_requests: BTreeMap::new(),
                     request_hash8,
                     lci: [None, None],
+                    lci_sealed: [BTreeMap::new(), BTreeMap::new()],
                     responses: 0,
                     periods_certified: 0,
                     sent: false,
                     batch_ready_stamped: false,
+                    pregen: false,
                 });
+                let mut account_req = (*req).clone();
+                account_req.spdu = None;
+                self.ra.accounts.insert(
+                    req.device,
+                    PregenAccount {
+                        request: account_req,
+                        request_hash,
+                        request_hash8,
+                        first_i: req.start_i,
+                        accepted_at: at,
+                        lpf_version: self.gov.lpf.version,
+                        generated: (req.start_i..req.start_i + req.periods).collect(),
+                    },
+                );
 
                 let ack = request_hash8.and_then(|h| self.ra_ack_pdu(h, req.start_i, at));
                 let size = match &ack {
@@ -756,6 +1027,7 @@ impl ScmsState {
                             start_i: req.start_i,
                             periods: req.periods,
                             jmax: req.jmax,
+                            chain: None,
                         },
                         "pre-linkage-request",
                         self.sizes.pre_linkage_request(),
@@ -795,6 +1067,7 @@ impl ScmsState {
             }
             ScmsMsg::ProvisioningAck {
                 device,
+                request_hash,
                 periods,
                 pdu,
                 ..
@@ -806,6 +1079,9 @@ impl ScmsState {
                         self.reject_pdu(SpduKind::RaEeCertAck, device, at, e);
                         return Ok(());
                     }
+                }
+                if let Some(dev) = self.devices.get_mut(&device) {
+                    dev.ra_account = Some(request_hash);
                 }
                 // What the RA accepted, which may be less than was asked.
                 if let Some(p) = self
@@ -846,27 +1122,34 @@ impl ScmsState {
                 start_i,
                 periods,
                 jmax,
+                chain,
             } => {
                 let idx = la.idx();
-                let lci = {
-                    let st = &mut self.la[idx];
-                    let lci = Lci(st.next_lci);
-                    st.next_lci += 1;
-                    lci
-                };
-                let mut seed_bytes = [0u8; linkage::LS_BYTES];
-                {
-                    let mut g = self
-                        .rng
-                        .checkout(RngDomain::Crypto, EntityRef::Node(self.nodes.la(la)));
-                    g.fill_bytes(&mut seed_bytes);
-                }
-                let ls0 = LinkageSeed::new(seed_bytes);
-                {
+                // A pre-generated week of a request this LA already holds a chain for
+                // walks that chain forward; anything else gets a new chain.
+                let held = chain.and_then(|c| self.la[idx].chains.get(&c).map(|s| (c, *s)));
+                let (lci, ls0) = if let Some(h) = held {
+                    h
+                } else {
+                    let lci = {
+                        let st = &mut self.la[idx];
+                        let lci = Lci(st.next_lci);
+                        st.next_lci += 1;
+                        lci
+                    };
+                    let mut seed_bytes = [0u8; linkage::LS_BYTES];
+                    {
+                        let mut g = self
+                            .rng
+                            .checkout(RngDomain::Crypto, EntityRef::Node(self.nodes.la(la)));
+                        g.fill_bytes(&mut seed_bytes);
+                    }
+                    let ls0 = LinkageSeed::new(seed_bytes);
                     let st = &mut self.la[idx];
                     st.chains.insert(lci, ls0);
                     st.owner.insert(lci, device);
-                }
+                    (lci, ls0)
+                };
                 let la_id = self.la[idx].la_id;
 
                 // One hash per period to walk the chain, two AES blocks per pre-linkage
@@ -875,6 +1158,7 @@ impl ScmsState {
                 Self::aes(out, periods.saturating_mul(jmax).saturating_mul(2));
 
                 let mut values = Vec::new();
+                let mut sealed_lci = Vec::new();
                 let mut encrypted = Vec::new();
                 // The real path: each PLV sealed with AES-128-CCM under the key this LA
                 // shares with the ACA (`EncryptedIndividualPLV`, 02 §10.3).
@@ -897,6 +1181,15 @@ impl ScmsState {
                             }
                         }
                         values.push((i, j, SealedForPca::seal(plv)));
+                        // The LA's own encryption of its chain identifier, fresh per
+                        // value: the nonce comes from the seed only this LA holds.
+                        let mut m = Vec::with_capacity(40);
+                        m.extend_from_slice(b"lci-nonce");
+                        m.extend_from_slice(ls_i.as_bytes());
+                        m.extend_from_slice(&j.to_be_bytes());
+                        let mut nonce = [0u8; 16];
+                        nonce.copy_from_slice(&sha256(&m)[..16]);
+                        sealed_lci.push(SealedForLa::seal(la, nonce, lci));
                     }
                 }
                 let count = u32::try_from(values.len()).unwrap_or(u32::MAX);
@@ -926,6 +1219,7 @@ impl ScmsState {
                         la_id,
                         lci,
                         values,
+                        sealed_lci,
                         encrypted,
                     })),
                     "pre-linkage-response",
@@ -946,8 +1240,12 @@ impl ScmsState {
                 job.lci[idx] = Some(batch.lci);
                 let real = batch.encrypted.len() == batch.values.len();
                 let mut enc = batch.encrypted.into_iter();
+                let mut sealed = batch.sealed_lci.into_iter();
                 for (i, j, plv) in batch.values {
                     job.plv[idx].insert((i, j), plv);
+                    if let Some(l) = sealed.next() {
+                        job.lci_sealed[idx].insert((i, j), l);
+                    }
                     if real {
                         if let Some(e) = enc.next() {
                             job.enc_plv[idx].insert((i, j), e);
@@ -957,12 +1255,18 @@ impl ScmsState {
                 job.responses += 1;
                 let hash = job.request_hash;
                 let ready = job.responses == 2;
+                let pregen = job.pregen;
                 let lcis = job.lci;
                 if let Some(rec) = self.ra.requests.get_mut(&hash) {
                     rec.lci1 = lcis[0];
                     rec.lci2 = lcis[1];
                 }
-                if ready {
+                if ready && pregen {
+                    // A pre-generated week: the weekly job's population shuffle is not
+                    // the initial request's age-bound one; it goes to the ACA now.
+                    out.stage_at(StageId::PreLinkageReady, to, None, flow, run);
+                    self.release_jobs(out, n, to, at, Some(run));
+                } else if ready {
                     out.stage_at(StageId::PreLinkageReady, to, None, flow, run);
                     let waiting = self
                         .ra
@@ -992,7 +1296,7 @@ impl ScmsState {
                     self.release_request_shuffle(out, n, to, at);
                 }
             }
-            ScmsMsg::CertRequest { device, i, items } => {
+            ScmsMsg::CertRequest { i, items } => {
                 let count = u32::try_from(items.len()).unwrap_or(u32::MAX);
                 let real = self.pki.is_some() && items.iter().all(|it| it.spdu.is_some());
                 if real {
@@ -1015,14 +1319,7 @@ impl ScmsState {
                     let now32 = self.time32(at);
                     let mut credentials = Vec::new();
                     for item in items.into_iter() {
-                        let (Some(lci1), Some(lci2)) =
-                            (item.lci1.open(to, n.pca), item.lci2.open(to, n.pca))
-                        else {
-                            return Err(ProtoError::Flow {
-                                flow: "provisioning",
-                                detail: "only the PCA may open a sealed chain identifier".into(),
-                            });
-                        };
+                        let (lci1, lci2) = (item.lci1, item.lci2);
                         let spdu = item.spdu.expect("checked");
                         match pdu_prov::aca_issue(
                             &pki,
@@ -1037,7 +1334,7 @@ impl ScmsState {
                                     PcaLookup {
                                         lci1,
                                         lci2,
-                                        request_hash: item.request_hash,
+                                        handle: item.handle,
                                     },
                                 );
                                 self.pca.issued_count += 1;
@@ -1068,7 +1365,6 @@ impl ScmsState {
                             role,
                             n_sig,
                             Pending::IssueBatch {
-                                device,
                                 i,
                                 credentials: Box::new(credentials),
                                 flow,
@@ -1082,7 +1378,7 @@ impl ScmsState {
                         );
                         return Ok(());
                     }
-                    self.send_batch(device, i, credentials, flow, run, at, out);
+                    self.send_batch(i, credentials, flow, run, at, out);
                     return Ok(());
                 }
                 // Per certificate: two decryptions of the pre-linkage values, one ECQV
@@ -1108,12 +1404,10 @@ impl ScmsState {
                 }
                 let mut credentials = Vec::new();
                 for item in items.into_iter() {
-                    let (Some(plv1), Some(plv2), Some(lci1), Some(lci2)) = (
-                        item.plv1.open(to, n.pca),
-                        item.plv2.open(to, n.pca),
-                        item.lci1.open(to, n.pca),
-                        item.lci2.open(to, n.pca),
-                    ) else {
+                    let (lci1, lci2) = (item.lci1, item.lci2);
+                    let (Some(plv1), Some(plv2)) =
+                        (item.plv1.open(to, n.pca), item.plv2.open(to, n.pca))
+                    else {
                         return Err(ProtoError::Flow {
                             flow: "provisioning",
                             detail: "only the PCA may open a sealed pre-linkage value".into(),
@@ -1133,7 +1427,7 @@ impl ScmsState {
                         PcaLookup {
                             lci1,
                             lci2,
-                            request_hash: item.request_hash,
+                            handle: item.handle,
                         },
                     );
                     self.pca.issued_count += 1;
@@ -1155,7 +1449,6 @@ impl ScmsState {
                         role,
                         count,
                         Pending::IssueBatch {
-                            device,
                             i,
                             credentials: Box::new(credentials),
                             flow,
@@ -1169,13 +1462,21 @@ impl ScmsState {
                     );
                     return Ok(());
                 }
-                self.send_batch(device, i, credentials, flow, run, at, out);
+                self.send_batch(i, credentials, flow, run, at, out);
             }
-            ScmsMsg::CertResponse {
-                device,
-                i,
-                credentials,
-            } => {
+            ScmsMsg::CertResponse { i, credentials } => {
+                // The PCA does not know whose batch this is; the RA routes it by its own
+                // job (the request it holds for this run).
+                let Some(device) = self
+                    .ra
+                    .jobs
+                    .iter()
+                    .find(|j| j.run == run)
+                    .map(|j| j.device)
+                else {
+                    self.ra.unrouted_responses += 1;
+                    return Ok(());
+                };
                 // The real path: the RA verifies each ACA-signed answer, routes it by the
                 // request hash to the `(i, j)` it kept, and files the private response as
                 // `i_j` in `<requestHash>_<i>.zip`. It cannot open what it files.
@@ -1502,6 +1803,214 @@ impl ScmsState {
                         run,
                     );
                 }
+            }
+            ScmsMsg::InfoRequest {
+                device,
+                i,
+                enrolment,
+                pdu,
+            } if to == n.lop => {
+                self.lop.upstream += 1;
+                out.stage_at(StageId::ProxyForwarded, to, None, flow, run);
+                let size = match &pdu {
+                    Some(p) => self.emit_pdu(SpduKind::EeRaDownloadRequest, to, n.ra, at, p),
+                    None => self.sizes.batch_download_request(),
+                };
+                out.send(
+                    n.ra,
+                    ScmsMsg::InfoRequest {
+                        device,
+                        i,
+                        enrolment,
+                        pdu,
+                    },
+                    "info-request-proxied",
+                    size,
+                    Transport::BackendNet,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::InfoRequest {
+                device,
+                i,
+                enrolment,
+                pdu,
+            } => {
+                // The RA authenticates the `Download-Req` exactly as a batch download's:
+                // enrolment-signed, fresh within the client-signature TTL, naming this
+                // device's own `.info` file.
+                let mut signer_id8 = None;
+                if let (Some(p), Some(pki)) = (&pdu, self.pki.clone()) {
+                    Self::decrypt(out, 1);
+                    Self::verify(out, 1);
+                    let tol = u32::try_from(
+                        self.params.download_request_tolerance.as_nanos() / 1_000_000_000,
+                    )
+                    .unwrap_or(u32::MAX);
+                    match pdu_prov::ra_open_download_request(&pki, p.bytes(), self.time32(at), tol)
+                    {
+                        Ok(o) => {
+                            let own = self.ra.accounts.get(&device).and_then(|a| a.request_hash8);
+                            let named = match pdu_prov::parse_download_filename(&o.filename) {
+                                Some(pdu_prov::DownloadFile::Info { request_hash8 }) => {
+                                    Some(request_hash8)
+                                }
+                                _ => None,
+                            };
+                            if named.is_none() || named != own {
+                                self.reject_pdu(
+                                    SpduKind::EeRaDownloadRequest,
+                                    to,
+                                    at,
+                                    PduError::Shape("the .info file names another request"),
+                                );
+                                return Ok(());
+                            }
+                            signer_id8 = Some(pdu::cert_id8(&o.enrolment));
+                        }
+                        Err(e) => {
+                            self.reject_pdu(SpduKind::EeRaDownloadRequest, to, at, e);
+                            return Ok(());
+                        }
+                    }
+                } else {
+                    Self::verify(out, 1);
+                }
+                // The request's own checks, on every top-off: registered, valid, not
+                // blocklisted, and an account to top off.
+                let registered = self.ra.is_registered(device, signer_id8);
+                if !registered && enrolment.is_some() {
+                    self.ra.unregistered_refused += 1;
+                }
+                let refusal = if self.ra.blocklist.contains(&device) {
+                    Some(Refusal::Blocklisted)
+                } else {
+                    match enrolment {
+                        Some(ec) if registered && self.ra.accounts.contains_key(&device) => {
+                            (!ec.valid_at(at)).then_some(Refusal::EnrolmentExpired)
+                        }
+                        _ => Some(Refusal::UnknownEnrolment),
+                    }
+                };
+                if let Some(reason) = refusal {
+                    if reason == Refusal::Blocklisted {
+                        self.ra.refused += 1;
+                    } else {
+                        self.ra.refused_enrolment += 1;
+                    }
+                    Self::sign(out, 1);
+                    out.send(
+                        n.lop,
+                        ScmsMsg::ProvisioningRefused { device, reason },
+                        "provisioning-refused",
+                        self.sizes.refusal(),
+                        Transport::BackendNet,
+                        flow,
+                        run,
+                    );
+                    return Ok(());
+                }
+                self.ra.info_served += 1;
+                out.stage_at(StageId::Acknowledged, to, None, flow, run);
+                let next_dl = self.pregen_next(device, i, at, out, flow, run);
+                let body = match (next_dl, self.pki.is_some()) {
+                    (Some(t), true) => pdu_prov::info_body(self.time32(t)).ok(),
+                    _ => None,
+                };
+                let size = match &body {
+                    Some(b) => WireSize::real(
+                        u32::try_from(b.len()).unwrap_or(u32::MAX),
+                        ".info Time32",
+                    ),
+                    None => self.sizes.provisioning_ack(),
+                };
+                out.send(
+                    n.lop,
+                    ScmsMsg::InfoResponse {
+                        device,
+                        i,
+                        next_dl,
+                        body,
+                    },
+                    "info-response",
+                    size,
+                    Transport::BackendNet,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::PregenTimer { device, i } => {
+                self.ra.pregen_timers.remove(&(device, i));
+                let held = self
+                    .ra
+                    .accounts
+                    .get(&device)
+                    .is_some_and(|a| a.generated.contains(&i));
+                if !held {
+                    self.start_pregen_job(device, i, out, flow, run);
+                }
+            }
+            ScmsMsg::InfoResponse {
+                device,
+                i,
+                next_dl,
+                body,
+            } if to == n.lop => {
+                self.lop.downstream += 1;
+                let size = match &body {
+                    Some(b) => WireSize::real(
+                        u32::try_from(b.len()).unwrap_or(u32::MAX),
+                        ".info Time32",
+                    ),
+                    None => self.sizes.provisioning_ack(),
+                };
+                out.send(
+                    device,
+                    ScmsMsg::InfoResponse {
+                        device,
+                        i,
+                        next_dl,
+                        body,
+                    },
+                    "info-response-proxied",
+                    size,
+                    Transport::CellularUu,
+                    flow,
+                    run,
+                );
+            }
+            ScmsMsg::InfoResponse {
+                device,
+                i,
+                next_dl,
+                body,
+            } => {
+                // The device reads the Time32 it was sent (the real path) and comes back
+                // for the batch then.
+                let at_dl = match &body {
+                    Some(b) => pdu_prov::open_info_body(b)
+                        .ok()
+                        .map(|t| self.wait_until_time32(at, t).after(at)),
+                    None => next_dl,
+                };
+                let Some(when) = at_dl else {
+                    if let Some(dev) = self.devices.get_mut(&device) {
+                        dev.topoffs_unavailable += 1;
+                        dev.provisioning = None;
+                    }
+                    return Ok(());
+                };
+                out.start_timer(
+                    Duration::from_nanos(when.saturating_sub(at)),
+                    ScmsMsg::BatchDownloadRequest {
+                        device,
+                        i,
+                        pdu: None,
+                    },
+                    flow,
+                    run,
+                );
             }
             ScmsMsg::ProvisioningRefused { device, reason } if to == n.lop => {
                 self.lop.downstream += 1;
