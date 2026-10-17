@@ -79,7 +79,9 @@ fn compressed() -> Value {
         "topup_below_periods": 1,
         "cert_shuffle_window_s": 1,
         "first_batch_delay_s": 1,
-        "download_poll_interval_s": 1
+        "download_poll_interval_s": 1,
+        // The successor's download wait (5 min, download-minWait) compressed with the rest.
+        "reenrol_download_delay_s": 1
     })
 }
 

@@ -2556,8 +2556,8 @@ pub static KEY_STATUS: &[KeyStatus] = &[
                download (TS 102 941 V2 §6.2.3.5) instead of a request per ticket, and the \
                AA never sees the enrolment identity. SCMS only: every vehicle is \
                bootstrapped through the DCM with the electors' trust list and the RA's \
-               policy and chain files; enrolment_lifetime_s (six years, uncited) with \
-               reenrol_lead_s (a week) renews the enrolment certificate at the ECA; \
+               policy and chain files; enrolment_lifetime_s (six years, CAMP 1.2.2) with \
+               reenrol_lead_s (18 months, SM-REENR) renews it through the RA, no overlap; \
                max_periods_ahead (156) caps what the RA provisions; a blocklisted or expired \
                enrolment is refused its top-up. ETSI only: the TLM signs one ECTL and the \
                Root CA one CA-CRL at the start, and every station fetches both from the \
