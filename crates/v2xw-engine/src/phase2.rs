@@ -3006,6 +3006,10 @@ impl Phase2 {
                     // again (the ECA refuses an expired one, which is then final).
                     Refusal::EnrolmentExpired => n.enrolment_until = 0,
                     Refusal::UnknownEnrolment | Refusal::ProfileViolation => n.blocked = true,
+                    // `ra-maxReqs` = 1: a second butterfly request. A vehicle that holds
+                    // an account tops off by download, so this is a request raced
+                    // against its own first ack; it asks again on the next top-up.
+                    Refusal::RequestLimit => {}
                 }
             }
         }

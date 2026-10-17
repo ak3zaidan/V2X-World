@@ -337,3 +337,113 @@ fn a_pseudonym_and_every_component_validate_to_the_root_under_the_us_policy() {
     }
     assert!(!chain::ee_permits_psid(&p.certificate, 35));
 }
+
+fn enrolled(pki: &ScmsPki, g: &mut Drbg) -> pdu::EnrolmentCredential {
+    use v2xw_msg::sec_types::ieee1609_dot2_dot1_eca_ee_interface::EcaEeInterfacePdu;
+    let k_u = g.scalar();
+    let req = pdu::ee_eca_cert_request(T, &Point::mul_base(&k_u), T, 52_596).unwrap();
+    let ScmsPduContent::eca_ee(EcaEeInterfacePdu::eeEcaCertRequest(r)) = &req.content else {
+        panic!("eeEcaCertRequest")
+    };
+    let (cert, rr) = pdu::issue_enrolment(pki, &r.tbs_cert, &Point::mul_base(&k_u), g).unwrap();
+    pdu::reconstruct_enrolment(pki, &cert, &k_u, &rr).unwrap()
+}
+
+#[test]
+fn a_download_request_is_fresh_within_five_seconds_either_way() {
+    // [CAMP122] SCMS-1203, `ra.client-signature-ttl-sec` = 5: the RA checks the
+    // enrolment-signed `generationTime` against its own clock.
+    let pki = pki();
+    let mut g = Drbg::new(9, b"t");
+    let e = enrolled(&pki, &mut g);
+    let name = pdu::batch_filename([1; 8], 614);
+    for (dt, ok) in [(-6i64, false), (-5, true), (0, true), (5, true), (6, false)] {
+        let t = u32::try_from(i64::from(T) + dt).unwrap();
+        let r = ee_download_request_spdu(&pki, &e.cert, &e.key, t, &name, &mut g).unwrap();
+        let got = ra_open_download_request(&pki, r.bytes(), T, 5);
+        assert_eq!(got.is_ok(), ok, "generationTime {dt:+} s: {got:?}");
+        if let Ok(o) = got {
+            assert_eq!(o.filename, name);
+            assert_eq!(o.generation_time, t);
+            assert_eq!(pdu::cert_id8(&o.enrolment), pdu::cert_id8(&e.cert));
+        }
+    }
+}
+
+#[test]
+fn only_an_eca_issued_enrolment_certificate_may_sign_a_download_request() {
+    let pki = pki();
+    let mut g = Drbg::new(10, b"t");
+    let name = info_filename([2; 8]);
+    // The RA's own certificate chains to the PKI but was not issued by the ECA.
+    let r = ee_download_request_spdu(&pki, &pki.ra.cert, &pki.ra.key, T, &name, &mut g).unwrap();
+    assert_eq!(
+        ra_open_download_request(&pki, r.bytes(), T, 5).unwrap_err(),
+        PduError::UntrustedSigner
+    );
+    let e = enrolled(&pki, &mut g);
+    let r = ee_download_request_spdu(&pki, &e.cert, &e.key, T, &name, &mut g).unwrap();
+    assert_eq!(
+        ra_open_download_request(&pki, r.bytes(), T, 5)
+            .unwrap()
+            .filename,
+        name
+    );
+    // A flipped ciphertext byte is caught (AES-CCM tag).
+    let mut b = r.bytes().to_vec();
+    let k = b.len() - 20;
+    b[k] ^= 1;
+    assert!(ra_open_download_request(&pki, &b, T, 5).is_err());
+}
+
+#[test]
+fn download_file_names_follow_the_camp_grammar() {
+    let h = [0xAB, 0x09, 0x28, 0x1C, 0x98, 0x67, 0xDE, 0x53];
+    assert_eq!(info_filename(h), "AB09281C9867DE53.info");
+    assert_eq!(
+        parse_download_filename("AB09281C9867DE53.info"),
+        Some(DownloadFile::Info { request_hash8: h })
+    );
+    assert_eq!(
+        parse_download_filename("AB09281C9867DE53_F.zip"),
+        Some(DownloadFile::Batch {
+            request_hash8: h,
+            i: 15
+        })
+    );
+    assert_eq!(
+        parse_download_filename(&pdu::batch_filename(h, 0xFFFF_FFFF)),
+        Some(DownloadFile::Batch {
+            request_hash8: h,
+            i: u32::MAX
+        })
+    );
+    for bad in [
+        "ab09281c9867de53.info",
+        "AB09281C9867DE5.info",
+        "AB09281C9867DE530.info",
+        "AB09281C9867DE53_123456789.zip",
+        // Nine digits that would still fit a u32: the grammar allows eight.
+        "AB09281C9867DE53_000000001.zip",
+        "AB09281C9867DE53_f.zip",
+        "AB09281C9867DE53_.zip",
+        "AB09281C9867DE53_F.tar",
+        "AB09281C9867DE53.zip",
+        "misbehavior-report",
+    ] {
+        assert_eq!(parse_download_filename(bad), None, "{bad}");
+    }
+}
+
+#[test]
+fn an_info_body_is_one_four_octet_time32() {
+    // X.696 §10.3.4: a fixed-size 0..2^32−1 integer is four octets, big-endian.
+    assert_eq!(info_body(0x2961_6F05).unwrap(), [0x29, 0x61, 0x6F, 0x05]);
+    assert_eq!(info_body(0).unwrap(), [0; 4]);
+    assert_eq!(
+        open_info_body(&[0x29, 0x61, 0x6F, 0x05]).unwrap(),
+        0x2961_6F05
+    );
+    assert!(open_info_body(&[0x29, 0x61, 0x6F]).is_err());
+    assert!(open_info_body(&[0x29, 0x61, 0x6F, 0x05, 0]).is_err());
+}

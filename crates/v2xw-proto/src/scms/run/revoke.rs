@@ -212,12 +212,12 @@ impl ScmsState {
                     // One certificate names one enrolment: the PCA's answer is the
                     // request hash, which is the device ([BRECHT §VI-D]).
                     case.resolved = true;
-                    let hash = found.request_hash;
+                    let hash = found.handle;
                     self.ma.decisions.push(hash);
                     out.stage_at(StageId::Resolved, to, None, flow, run);
                     out.send(
                         n.ra,
-                        ScmsMsg::BlocklistRequest { request_hash: hash },
+                        ScmsMsg::BlocklistRequest { handle: hash },
                         "blocklist-request",
                         self.sizes.blocklist_request(),
                         Transport::BackendNet,
@@ -257,9 +257,14 @@ impl ScmsState {
                 // The LA answers a single bit: whether the two chains belong to one
                 // device. It never reveals which device, and the MA never learns a seed
                 // from this exchange ([BRECHT §VI-C]).
+                // It opens the two sealed identifiers (only it can) and compares owners.
+                let nodes = self.nodes;
                 let st = &self.la[la.idx()];
-                let same = match (st.owner.get(&a), st.owner.get(&b)) {
-                    (Some(x), Some(y)) => x == y,
+                let same = match (a.open(to, &nodes), b.open(to, &nodes)) {
+                    (Some(a), Some(b)) => match (st.owner.get(&a), st.owner.get(&b)) {
+                        (Some(x), Some(y)) => x == y,
+                        _ => false,
+                    },
                     _ => false,
                 };
                 out.send(
@@ -284,7 +289,7 @@ impl ScmsState {
                             if !case.resolved {
                                 case.done = true;
                             }
-                            (case.resolved, case.lookups[0].request_hash)
+                            (case.resolved, case.lookups[0].handle)
                         }
                         _ => (false, [0u8; 32]),
                     }
@@ -294,7 +299,7 @@ impl ScmsState {
                     out.stage_at(StageId::Resolved, to, None, flow, run);
                     out.send(
                         n.ra,
-                        ScmsMsg::BlocklistRequest { request_hash: hash },
+                        ScmsMsg::BlocklistRequest { handle: hash },
                         "blocklist-request",
                         self.sizes.blocklist_request(),
                         Transport::BackendNet,
@@ -303,8 +308,14 @@ impl ScmsState {
                     );
                 }
             }
-            ScmsMsg::BlocklistRequest { request_hash } => {
-                let rec = self.ra.requests.get(&request_hash).copied();
+            ScmsMsg::BlocklistRequest { handle } => {
+                // The RA alone maps the PCA's per-certificate handle to the request.
+                let rec = self
+                    .ra
+                    .handles
+                    .get(&handle)
+                    .and_then(|h| self.ra.requests.get(h))
+                    .copied();
                 if let Some(r) = rec {
                     self.ra.blocklist.insert(r.device);
                     // The ECA must not issue the blocklisted device a successor either,

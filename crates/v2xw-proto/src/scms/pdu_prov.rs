@@ -717,6 +717,95 @@ pub fn ra_open_download_request(
     })
 }
 
+/// The `.info` file of a provisioning request: `<16 upper-case hex of requestHash>.info`
+/// ([CAMP122] §6.3, `/download/info`, filename `[0-9A-F]{16}.info`; 03 §4.2).
+#[must_use]
+pub fn info_filename(request_hash8: [u8; 8]) -> String {
+    let mut s = String::with_capacity(21);
+    for b in request_hash8 {
+        s.push_str(&format!("{b:02X}"));
+    }
+    s.push_str(".info");
+    s
+}
+
+/// What a `Download-Req` file name asks for, under the CAMP grammar ([CAMP122] §6.3,
+/// Table 79): `[0-9A-F]{16}_[0-9A-F]{1,8}.zip` is the batch of one i-period,
+/// `[0-9A-F]{16}.info` the next-download time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadFile {
+    /// `<hash>_<i>.zip`.
+    Batch {
+        /// The low 8 bytes of the request hash.
+        request_hash8: [u8; 8],
+        /// The i-period.
+        i: u32,
+    },
+    /// `<hash>.info`.
+    Info {
+        /// The low 8 bytes of the request hash.
+        request_hash8: [u8; 8],
+    },
+}
+
+fn upper_hex(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
+}
+
+fn hash8_of(s: &str) -> Option<[u8; 8]> {
+    if s.len() != 16 || !upper_hex(s) {
+        return None;
+    }
+    let mut h = [0u8; 8];
+    for (k, b) in h.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[2 * k..2 * k + 2], 16).ok()?;
+    }
+    Some(h)
+}
+
+/// Parses a `Download-Req` file name; `None` for anything outside the grammar (lower-case
+/// hex, a 17-digit hash, a 9-digit i, another extension), which the RA refuses.
+#[must_use]
+pub fn parse_download_filename(name: &str) -> Option<DownloadFile> {
+    if let Some(stem) = name.strip_suffix(".info") {
+        return hash8_of(stem).map(|request_hash8| DownloadFile::Info { request_hash8 });
+    }
+    let stem = name.strip_suffix(".zip")?;
+    let (h, i) = stem.split_once('_')?;
+    if i.len() > 8 || !upper_hex(i) {
+        return None;
+    }
+    Some(DownloadFile::Batch {
+        request_hash8: hash8_of(h)?,
+        i: u32::from_str_radix(i, 16).ok()?,
+    })
+}
+
+/// The body of a `.info` download: a single COER `Time32`, the time of the next batch
+/// ([CAMP122] §6.3, Table 79 "single Time32 (next batch time)"). `Time32` is `Uint32`, a
+/// fixed-size 0..2^32−1 integer, so its OER is exactly four octets, big-endian
+/// (ITU-T X.696 §10.3.4).
+///
+/// # Errors
+/// Encoding fails.
+pub fn info_body(next_dl_time: u32) -> Result<Vec<u8>> {
+    rasn::coer::encode(&Time32(Uint32(next_dl_time))).map_err(|e| PduError::Coer(e.to_string()))
+}
+
+/// Reads a `.info` body back.
+///
+/// # Errors
+/// Not one COER `Time32`.
+pub fn open_info_body(bytes: &[u8]) -> Result<u32> {
+    let t: Time32 = rasn::coer::decode(bytes).map_err(|e| PduError::Coer(e.to_string()))?;
+    if bytes.len() != 4 {
+        return Err(PduError::Shape(".info is one Time32"));
+    }
+    Ok(t.0.0)
+}
+
 /// The name of file `i_j` inside a batch zip: `X_Y`, X = i and Y = j in upper-case hex
 /// (03 §4.2, [CAMP122] §6.3).
 #[must_use]

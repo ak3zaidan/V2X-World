@@ -161,9 +161,30 @@ fn period_after(p: &ScmsParams, t: u64) -> u32 {
     i
 }
 
-/// The enrolment certificate that signed the RA's last `EeRaCertRequestSpdu`.
+/// The enrolment certificate that signed the device's last top-up request to the RA.
+///
+/// Under `ra-maxReqs` = 1 a top-up is no longer a second `EeRaCertRequestSpdu` but the
+/// enrolment-signed `Download-Req` for `<requestHash>.info` (WP-B3a leftovers), so that is
+/// the request whose signer is read; the initial request is read as before.
 fn last_request_signer(run: &ScmsRun) -> [u8; 8] {
     let pki = run.state.pki.as_ref().unwrap();
+    let enc = pki.ra.enc_private.unwrap();
+    let info = run
+        .state
+        .pdus
+        .iter()
+        .rev()
+        .filter(|p| p.kind == SpduKind::EeRaDownloadRequest)
+        .filter_map(|p| p.bytes.clone())
+        .find_map(|b| {
+            let plain = pdu::decrypt_cert(b.bytes(), &pki.ra.cert, &enc).ok()?;
+            let (p, signer) = pdu::open_signed_pdu(&plain, pki).ok()?;
+            let name = format!("{:?}", p.content);
+            name.contains(".info").then(|| pdu::cert_id8(&signer))
+        });
+    if let Some(id8) = info {
+        return id8;
+    }
     let b = last_pdu(run, SpduKind::EeRaCertRequest);
     let plain = pdu::decrypt_cert(b.bytes(), &pki.ra.cert, &pki.ra.enc_private.unwrap()).unwrap();
     match pdu::open_signed_cert_request(&plain, pki).unwrap().1 {

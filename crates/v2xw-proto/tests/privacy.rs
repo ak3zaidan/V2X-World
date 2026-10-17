@@ -10,7 +10,7 @@ mod common;
 
 use common::{DEVICE_A, DEVICE_B, deployment, provisioned};
 use v2xw_core::ids::NodeId;
-use v2xw_proto::scms::msg::{Lci, SealedForPca};
+use v2xw_proto::scms::msg::{LaIndex, Lci, SealedForPca};
 use v2xw_sec::butterfly;
 
 #[test]
@@ -144,11 +144,25 @@ fn the_pca_holds_no_device_identity_only_a_request_hash() {
     let mut run = deployment(1);
     provisioned(&mut run, DEVICE_A, 0, 1, 2);
     assert_eq!(run.state.pca.issued.len(), 2);
+    let pca = run.state.nodes.pca;
     for lookup in run.state.pca.issued.values() {
         // Chain identifiers and a request hash — the three things §VI-C says an
-        // investigation starts from. No node id, and nothing that names the device.
-        assert_ne!(lookup.lci1, Lci(0));
-        assert_ne!(lookup.lci2, Lci(0));
-        assert_ne!(lookup.request_hash, [0u8; 32]);
+        // investigation starts from. No node id, and nothing that names the device. The
+        // chain identifiers are the LAs' own ciphertexts, which the PCA cannot open, and
+        // the hash is of the one RA→ACA request (WP-B3a ACA blindness).
+        let nodes = &run.state.nodes;
+        assert_eq!(lookup.lci1.open(pca, nodes), None);
+        assert_eq!(lookup.lci2.open(pca, nodes), None);
+        assert_eq!(lookup.lci1.open(nodes.la(LaIndex::Two), nodes), None);
+        assert!(
+            lookup.lci1.open(nodes.la(LaIndex::One), nodes).is_some()
+                && lookup.lci2.open(nodes.la(LaIndex::Two), nodes).is_some(),
+            "each LA opens its own"
+        );
+        assert_ne!(
+            lookup.lci1.open(nodes.la(LaIndex::One), nodes),
+            Some(Lci(0))
+        );
+        assert_ne!(lookup.handle, [0u8; 32]);
     }
 }
