@@ -1166,28 +1166,57 @@ impl<C: Ctx + ?Sized> CryptoBackend<C> for Modeled {
 ///
 /// # Which hash
 ///
-/// SEC 4 hashes the encoded certificate. IEEE 1609.2 §5.3.2 hashes
-/// `H(H(certificate) ‖ H(signer identifier input))`, the same two-stage construction it
-/// uses for a signature, so that a certificate is bound to its issuer's own certificate.
-/// Both are provided — [`cert_hash_sec4`] and [`cert_hash_1609`] — because a
-/// simulator that mixed them up would produce keys that verify nothing, and neither is
-/// derivable from the other.
+/// SEC 4 §2.3 `Hn` hashes the encoded certificate and keeps the **leftmost ⌊log2 n⌋ =
+/// 255 bits** of the SHA-256 output. IEEE 1609.2 §5.3.2 deviates in two ways (02 §6):
+///
+/// * (b) the input is not the certificate: it is
+///   `SHA-256(COER canonical ToBeSignedCertificate) ‖ SHA-256(COER canonical issuer
+///   certificate)`, so a certificate is bound to its issuer's own certificate;
+/// * (d) there is **no truncation**: `e` is the full 256-bit SHA-256 output, reduced
+///   mod n only in the arithmetic.
+///
+/// Both are provided — [`cert_hash_sec4`] and [`cert_hash_1609`] — because a simulator
+/// that mixed them up would produce keys that verify nothing, and neither is derivable
+/// from the other. The SEC 4 form exists only so the CAMP `implicit.txt` vectors (which
+/// use it, 02 §6 warning) can test the algebra; every certificate path in the engine uses
+/// the 1609.2 form, through [`crate::cert::issue_implicit`] and
+/// [`crate::cert::verification_key`].
 pub mod ecqv {
     use super::*;
 
-    /// `e = H(IC) mod n`, the SEC 4 §3.4 certificate hash.
-    pub fn cert_hash_sec4(cert_coer: &[u8]) -> Scalar {
-        hash_to_scalar(&sha256(cert_coer))
+    /// `e = Hn(Cert_U)`, the SEC 4 §2.3 / §3.4 certificate hash: the leftmost 255 bits
+    /// of SHA-256 (⌊log2 n⌋ = 255 for P-256), i.e. the digest shifted right by one bit.
+    ///
+    /// Not the 1609.2 profile — see the module documentation. Used only by the CAMP
+    /// `implicit.txt` vector test.
+    pub fn cert_hash_sec4(cert_u: &[u8]) -> Scalar {
+        hash_to_scalar(&shr1(&sha256(cert_u)))
     }
 
-    /// `e = H( H(certificate) ‖ H(signer identifier input) ) mod n`, the IEEE 1609.2
-    /// §5.3.2 certificate hash.
+    /// The full 256-bit IEEE 1609.2 §5.3.2 ECQV hash value, before reduction:
+    /// `SHA-256( SHA-256(tbs_coer) ‖ SHA-256(issuer_cert_coer) )`.
     ///
-    /// `signer_identifier_input` is the COER encoding of the issuer's certificate, or the
-    /// empty string when the issuer is `self`.
-    pub fn cert_hash_1609(cert_coer: &[u8], signer_identifier_input: &[u8]) -> Scalar {
-        let inner = [sha256(cert_coer), sha256(signer_identifier_input)].concat();
-        hash_to_scalar(&sha256(&inner))
+    /// `tbs_coer` is the canonical COER of the subject's `ToBeSignedCertificate` and
+    /// `issuer_cert_coer` the canonical COER of the whole issuer certificate (02 §6).
+    pub fn e_bytes_1609(tbs_coer: &[u8], issuer_cert_coer: &[u8]) -> [u8; 32] {
+        let inner = [sha256(tbs_coer), sha256(issuer_cert_coer)].concat();
+        sha256(&inner)
+    }
+
+    /// `e mod n` for the IEEE 1609.2 §5.3.2 ECQV hash, with no SEC 4 truncation.
+    pub fn cert_hash_1609(tbs_coer: &[u8], issuer_cert_coer: &[u8]) -> Scalar {
+        hash_to_scalar(&e_bytes_1609(tbs_coer, issuer_cert_coer))
+    }
+
+    /// A 256-bit big-endian value shifted right by one bit.
+    fn shr1(d: &[u8; 32]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        let mut carry = 0u8;
+        for (o, b) in out.iter_mut().zip(d.iter()) {
+            *o = (b >> 1) | carry;
+            carry = b << 7;
+        }
+        out
     }
 
     /// A 32-byte digest reduced to a scalar.

@@ -42,6 +42,8 @@
 
 use std::sync::Arc;
 
+use p256::Scalar;
+use p256::elliptic_curve::Field;
 use v2xw_msg::codec::MsgType;
 use v2xw_msg::sec_types::ieee1609_dot2::VerificationKeyIndicator;
 use v2xw_msg::sec_types::{
@@ -49,8 +51,9 @@ use v2xw_msg::sec_types::{
     HashedId8, IssuerIdentifier, LinkageData, PsidGroupPermissions, Signature,
     ToBeSignedCertificate, ValidityPeriod, coer,
     ieee1609_dot2_base_types::{
-        CrlSeries, Duration as Ieee1609Duration, EccP256CurvePoint, EcdsaP256Signature, IValue,
-        Psid, PsidSsp, PublicVerificationKey, SequenceOfPsidSsp, Time32, Uint16, Uint32,
+        BasePublicEncryptionKey, CrlSeries, Duration as Ieee1609Duration, EccP256CurvePoint,
+        EccP384CurvePoint, EcdsaP256Signature, EcdsaP384Signature, IValue, Psid, PsidSsp,
+        PublicVerificationKey, SequenceOfPsidSsp, Time32, Uint16, Uint32,
     },
 };
 
@@ -95,6 +98,10 @@ pub struct CertSpec {
     pub valid_for: Ieee1609Duration,
     /// The PSIDs the holder may sign under.
     pub app_permissions: Vec<u64>,
+    /// What the holder may issue (`certIssuePermissions`); `None` for an end entity.
+    /// A CA certificate needs it, or nothing it issues passes chain validation
+    /// ([`crate::chain`], 02 §12).
+    pub issue_permissions: Option<Vec<PsidGroupPermissions>>,
 }
 
 impl CertSpec {
@@ -114,6 +121,7 @@ impl CertSpec {
             valid_from,
             valid_for: Ieee1609Duration::minutes(Uint16(10_140)),
             app_permissions: vec![psid],
+            issue_permissions: None,
         }
     }
 
@@ -128,7 +136,18 @@ impl CertSpec {
             valid_from,
             valid_for: Ieee1609Duration::years(Uint16(3)),
             app_permissions: vec![psid],
+            issue_permissions: None,
         }
+    }
+
+    /// [`CertSpec::authority`] that may also issue: one `certIssuePermissions` group,
+    /// `subjectPermissions all`, `minChainLength 1`, `chainLengthRange -1` (any depth),
+    /// `eeType app`. The certificate a test or scenario CA needs for its subordinates to
+    /// pass chain validation.
+    pub fn issuing_authority(valid_from: u32, psid: u64) -> CertSpec {
+        let mut s = CertSpec::authority(valid_from, psid);
+        s.issue_permissions = Some(vec![issue_all_group()]);
+        s
     }
 }
 
@@ -207,7 +226,9 @@ pub fn to_be_signed(
         None, // region
         None, // assuranceLevel
         Some(app_permissions),
-        None, // certIssuePermissions: a pseudonym certificate issues nothing
+        spec.issue_permissions
+            .clone()
+            .map(v2xw_msg::sec_types::ieee1609_dot2::SequenceOfPsidGroupPermissions),
         None, // certRequestPermissions
         None, // canRequestRollover
         None, // encryptionKey
@@ -433,6 +454,20 @@ fn issuer_identifier(spec: &CertSpec) -> IssuerIdentifier {
     }
 }
 
+/// The `certIssuePermissions` group "issue anything, at any depth, to application end
+/// entities": `subjectPermissions all`, `minChainLength 1`, `chainLengthRange -1`,
+/// `eeType app` (02 §5).
+pub fn issue_all_group() -> PsidGroupPermissions {
+    let mut app = rasn::types::FixedBitString::<8>::ZERO;
+    app.set(0, true);
+    PsidGroupPermissions::new(
+        v2xw_msg::sec_types::ieee1609_dot2::SubjectPermissions::all(()),
+        rasn::types::Integer::from(1),
+        rasn::types::Integer::from(-1),
+        v2xw_msg::sec_types::EndEntityType(app),
+    )
+}
+
 /// The `PsidGroupPermissions` default this crate never builds, referenced so the patched
 /// generated type stays in use.
 ///
@@ -443,6 +478,653 @@ fn issuer_identifier(spec: &CertSpec) -> IssuerIdentifier {
 /// `v2xw-msg`'s own tests. Naming it here makes the dependency explicit.
 pub fn group_permissions_type_is_reachable() -> bool {
     core::mem::size_of::<PsidGroupPermissions>() > 0
+}
+
+// ======================================================================================
+// IEEE 1609.2 certificate operations (WP-A3; 02 §5-§6)
+//
+// Canonical form, the whole-certificate hash, explicit and implicit (ECQV-1609) issuance,
+// and the extraction of a certificate's verification key. Every function here takes a
+// whole `ToBeSignedCertificate` rather than a `CertSpec`, so the chain validator, the
+// authorities and the real published certificates all go through one code path.
+// ======================================================================================
+
+/// A hash algorithm a certificate names in its `issuer` field.
+///
+/// The `issuer` choice names the hash used to verify **this** certificate
+/// (`sha256AndDigest` → SHA-256, `sha384AndDigest` → SHA-384, `self(h)` → h), and the
+/// whole-certificate hash of this certificate (its HashedId3/8/10) is computed with the
+/// same algorithm (1609.2-2022 `IssuerIdentifier` note and §5.3.9.2, the rule the oracle's
+/// `certs.cert_hash_alg` also applies).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CertHash {
+    /// SHA-256 (P-256 issuers).
+    Sha256,
+    /// SHA-384 (P-384 issuers: electors, 01 §3.1).
+    Sha384,
+}
+
+impl CertHash {
+    /// The digest of `bytes`.
+    pub fn digest(self, bytes: &[u8]) -> Vec<u8> {
+        match self {
+            CertHash::Sha256 => v2xw_core::hash::sha256(bytes).to_vec(),
+            CertHash::Sha384 => crate::p384::sha384(bytes).to_vec(),
+        }
+    }
+
+    fn of_alg(h: &HashAlgorithm) -> Result<CertHash> {
+        match h {
+            HashAlgorithm::sha256 => Ok(CertHash::Sha256),
+            HashAlgorithm::sha384 => Ok(CertHash::Sha384),
+            _ => Err(SecError::UnsupportedPrimitive {
+                backend: "certificate",
+                primitive: crate::primitive::PrimitiveId::SHA_256,
+            }),
+        }
+    }
+}
+
+/// A certificate's public verification key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CertKey {
+    /// An ECDSA NIST P-256 key (every SCMS component and end entity).
+    P256(Point),
+    /// An ECDSA NIST P-384 key, as SEC 1 bytes (electors and any P-384 root).
+    P384(Vec<u8>),
+}
+
+impl CertKey {
+    /// The hash a signature under this key is computed with (02 §7: SHA-256 for P-256,
+    /// SHA-384 for P-384).
+    pub fn hash(&self) -> CertHash {
+        match self {
+            CertKey::P256(_) => CertHash::Sha256,
+            CertKey::P384(_) => CertHash::Sha384,
+        }
+    }
+
+    /// The `IssuerIdentifier` a certificate issued under this key carries.
+    pub fn issuer_identifier(&self, issuer: &Certificate) -> Result<IssuerIdentifier> {
+        let id = cert_id8(issuer)?;
+        Ok(match self {
+            CertKey::P256(_) => IssuerIdentifier::sha256AndDigest(id),
+            CertKey::P384(_) => IssuerIdentifier::sha384AndDigest(id),
+        })
+    }
+}
+
+fn canonical_p256(p: &EccP256CurvePoint) -> EccP256CurvePoint {
+    match p {
+        EccP256CurvePoint::uncompressedP256(u) => {
+            let x = rasn::types::OctetString::from_slice(&u.x);
+            if u.y.last().is_some_and(|b| b & 1 == 1) {
+                EccP256CurvePoint::compressed_y_1(x)
+            } else {
+                EccP256CurvePoint::compressed_y_0(x)
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+fn canonical_p384(p: &EccP384CurvePoint) -> EccP384CurvePoint {
+    match p {
+        EccP384CurvePoint::uncompressedP384(u) => {
+            let x = rasn::types::OctetString::from_slice(&u.x);
+            if u.y.last().is_some_and(|b| b & 1 == 1) {
+                EccP384CurvePoint::compressed_y_1(x)
+            } else {
+                EccP384CurvePoint::compressed_y_0(x)
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+/// The canonical form of a `ToBeSignedCertificate` (1609.2 §6.1.2; 02 §3): every
+/// elliptic-curve point compressed.
+pub fn canonical_tbs(tbs: &ToBeSignedCertificate) -> ToBeSignedCertificate {
+    let mut t = tbs.clone();
+    t.verify_key_indicator = match &tbs.verify_key_indicator {
+        VerificationKeyIndicator::verificationKey(k) => {
+            VerificationKeyIndicator::verificationKey(match k {
+                PublicVerificationKey::ecdsaNistP256(p) => {
+                    PublicVerificationKey::ecdsaNistP256(canonical_p256(p))
+                }
+                PublicVerificationKey::ecdsaBrainpoolP256r1(p) => {
+                    PublicVerificationKey::ecdsaBrainpoolP256r1(canonical_p256(p))
+                }
+                PublicVerificationKey::ecdsaNistP384(p) => {
+                    PublicVerificationKey::ecdsaNistP384(canonical_p384(p))
+                }
+                PublicVerificationKey::ecdsaBrainpoolP384r1(p) => {
+                    PublicVerificationKey::ecdsaBrainpoolP384r1(canonical_p384(p))
+                }
+                PublicVerificationKey::ecsigSm2(p) => {
+                    PublicVerificationKey::ecsigSm2(canonical_p256(p))
+                }
+                other => other.clone(),
+            })
+        }
+        VerificationKeyIndicator::reconstructionValue(p) => {
+            VerificationKeyIndicator::reconstructionValue(canonical_p256(p))
+        }
+        other => other.clone(),
+    };
+    if let Some(ek) = &tbs.encryption_key {
+        let mut ek = ek.clone();
+        ek.public_key = match &ek.public_key {
+            BasePublicEncryptionKey::eciesNistP256(p) => {
+                BasePublicEncryptionKey::eciesNistP256(canonical_p256(p))
+            }
+            BasePublicEncryptionKey::eciesBrainpoolP256r1(p) => {
+                BasePublicEncryptionKey::eciesBrainpoolP256r1(canonical_p256(p))
+            }
+            BasePublicEncryptionKey::ecencSm2(p) => {
+                BasePublicEncryptionKey::ecencSm2(canonical_p256(p))
+            }
+            other => other.clone(),
+        };
+        t.encryption_key = Some(ek);
+    }
+    t
+}
+
+/// The canonical form of a signature: `rSig` as `x-only` (02 §7).
+pub fn canonical_signature(sig: &Signature) -> Signature {
+    fn x256(p: &EccP256CurvePoint) -> EccP256CurvePoint {
+        match p {
+            EccP256CurvePoint::compressed_y_0(x) | EccP256CurvePoint::compressed_y_1(x) => {
+                EccP256CurvePoint::x_only(x.clone())
+            }
+            EccP256CurvePoint::uncompressedP256(u) => EccP256CurvePoint::x_only(u.x.clone()),
+            other => other.clone(),
+        }
+    }
+    fn x384(p: &EccP384CurvePoint) -> EccP384CurvePoint {
+        match p {
+            EccP384CurvePoint::compressed_y_0(x) | EccP384CurvePoint::compressed_y_1(x) => {
+                EccP384CurvePoint::x_only(x.clone())
+            }
+            EccP384CurvePoint::uncompressedP384(u) => EccP384CurvePoint::x_only(u.x.clone()),
+            other => other.clone(),
+        }
+    }
+    match sig {
+        Signature::ecdsaNistP256Signature(s) => Signature::ecdsaNistP256Signature(
+            EcdsaP256Signature::new(x256(&s.r_sig), s.s_sig.clone()),
+        ),
+        Signature::ecdsaBrainpoolP256r1Signature(s) => Signature::ecdsaBrainpoolP256r1Signature(
+            EcdsaP256Signature::new(x256(&s.r_sig), s.s_sig.clone()),
+        ),
+        Signature::ecdsaNistP384Signature(s) => Signature::ecdsaNistP384Signature(
+            EcdsaP384Signature::new(x384(&s.r_sig), s.s_sig.clone()),
+        ),
+        Signature::ecdsaBrainpoolP384r1Signature(s) => Signature::ecdsaBrainpoolP384r1Signature(
+            EcdsaP384Signature::new(x384(&s.r_sig), s.s_sig.clone()),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// The canonical form of a certificate (its `toBeSigned` and its signature).
+pub fn canonical(cert: &Certificate) -> Certificate {
+    let mut c = cert.clone();
+    c.0.to_be_signed = canonical_tbs(&cert.0.to_be_signed);
+    c.0.signature = cert.0.signature.as_ref().map(canonical_signature);
+    c
+}
+
+/// COER of the canonical certificate: the bytes every hash of a certificate covers.
+pub fn canonical_coer(cert: &Certificate) -> Result<Vec<u8>> {
+    encode(&canonical(cert))
+}
+
+/// COER of the canonical `ToBeSignedCertificate`.
+pub fn tbs_canonical_coer(tbs: &ToBeSignedCertificate) -> Result<Vec<u8>> {
+    Ok(coer::encode(MsgType::Crl, &canonical_tbs(tbs))?)
+}
+
+/// The whole-certificate hash algorithm of `cert` (see [`CertHash`]).
+pub fn whole_cert_hash_alg(cert: &Certificate) -> Result<CertHash> {
+    match &cert.0.issuer {
+        IssuerIdentifier::sha256AndDigest(_) => Ok(CertHash::Sha256),
+        IssuerIdentifier::sha384AndDigest(_) => Ok(CertHash::Sha384),
+        IssuerIdentifier::R_self(h) => CertHash::of_alg(h),
+        _ => Err(SecError::UnsupportedPrimitive {
+            backend: "certificate",
+            primitive: crate::primitive::PrimitiveId::SHA_256,
+        }),
+    }
+}
+
+/// The whole-certificate hash: the certificate's hash algorithm over its canonical COER.
+pub fn whole_cert_hash(cert: &Certificate) -> Result<Vec<u8>> {
+    Ok(whole_cert_hash_alg(cert)?.digest(&canonical_coer(cert)?))
+}
+
+fn low_bytes<const N: usize>(h: &[u8]) -> [u8; N] {
+    let mut out = [0u8; N];
+    out.copy_from_slice(&h[h.len() - N..]);
+    out
+}
+
+/// The certificate's `HashedId8`, with the whole-certificate hash algorithm.
+pub fn cert_id8(cert: &Certificate) -> Result<HashedId8> {
+    Ok(HashedId8(rasn::types::FixedOctetString::from(
+        low_bytes::<8>(&whole_cert_hash(cert)?),
+    )))
+}
+
+/// The certificate's `HashedId3` (what a `cracaId` holds).
+pub fn cert_id3(cert: &Certificate) -> Result<HashedId3> {
+    Ok(HashedId3(rasn::types::FixedOctetString::from(
+        low_bytes::<3>(&whole_cert_hash(cert)?),
+    )))
+}
+
+/// The certificate's `HashedId10` (what a hash-based CRL lists).
+pub fn cert_id10(cert: &Certificate) -> Result<[u8; 10]> {
+    Ok(low_bytes::<10>(&whole_cert_hash(cert)?))
+}
+
+/// The `HashedId32` a CTL's `rootCaApprove` names a root by: SHA-256 of the canonical
+/// COER of the root certificate (02 §4; the oracle's `chain.validate` anchor rule).
+pub fn hashed_id32(cert: &Certificate) -> Result<[u8; 32]> {
+    Ok(v2xw_core::hash::sha256(&canonical_coer(cert)?))
+}
+
+/// The digest an explicit certificate's signature covers (02 §5, §7):
+/// `H( H(COER tbs) ‖ H(COER canonical issuer certificate, or "" when self-signed) )`.
+pub fn explicit_cert_digest(
+    tbs: &ToBeSignedCertificate,
+    issuer: Option<&Certificate>,
+    hash: CertHash,
+) -> Result<Vec<u8>> {
+    let signer_input = match issuer {
+        Some(i) => canonical_coer(i)?,
+        None => Vec::new(),
+    };
+    let inner = [
+        hash.digest(&tbs_canonical_coer(tbs)?),
+        hash.digest(&signer_input),
+    ]
+    .concat();
+    Ok(hash.digest(&inner))
+}
+
+/// Issues an explicit certificate. `issuer` is `None` for a self-signed root, which is
+/// then signed under its own key with `self_hash`.
+///
+/// `tbs` must carry `verificationKey`. `sign` receives the digest of
+/// [`explicit_cert_digest`] and returns the signature (a key held by a backend, or
+/// [`ecdsa_p256_sign_with_k`] for vectors).
+pub fn issue_explicit_cert<F>(
+    tbs: ToBeSignedCertificate,
+    issuer: Option<(&Certificate, &CertKey)>,
+    self_hash: CertHash,
+    sign: F,
+) -> Result<Certificate>
+where
+    F: FnOnce(&[u8]) -> Result<Signature>,
+{
+    if !matches!(
+        tbs.verify_key_indicator,
+        VerificationKeyIndicator::verificationKey(_)
+    ) {
+        return Err(SecError::MissingField {
+            profile: "explicit certificate",
+            field: "toBeSigned.verifyKeyIndicator.verificationKey",
+        });
+    }
+    let (issuer_id, hash) = match issuer {
+        Some((cert, key)) => (key.issuer_identifier(cert)?, key.hash()),
+        None => (
+            IssuerIdentifier::R_self(match self_hash {
+                CertHash::Sha256 => HashAlgorithm::sha256,
+                CertHash::Sha384 => HashAlgorithm::sha384,
+            }),
+            self_hash,
+        ),
+    };
+    let digest = explicit_cert_digest(&tbs, issuer.map(|(c, _)| c), hash)?;
+    let signature = sign(&digest)?;
+    Ok(Certificate(CertificateBase::new(
+        v2xw_msg::sec_types::Uint8(CERT_VERSION),
+        CertificateType::explicit,
+        issuer_id,
+        tbs,
+        Some(signature),
+    )))
+}
+
+/// What an ECQV-1609 issuance returns.
+#[derive(Debug, Clone)]
+pub struct ImplicitIssued {
+    /// The implicit certificate, `reconstructionValue = P_U` (compressed).
+    pub certificate: Certificate,
+    /// `r = e·k + d_CA mod n`, sent to the requester as `privateKeyInfo`.
+    pub private_key_contribution: Scalar,
+    /// `e mod n`.
+    pub e: Scalar,
+    /// The CA ephemeral `k` the certificate was finally issued with.
+    pub k: Scalar,
+    /// How many `k` were drawn (more than one only after the SEC 4 §3.4 retry).
+    pub attempts: u32,
+}
+
+/// The maximum number of CA ephemerals [`issue_implicit`] draws before giving up. The
+/// retry fires with probability about 2^-256 per draw for honest inputs, so reaching the
+/// bound means the `draw_k` source is broken.
+pub const ECQV_MAX_ATTEMPTS: u32 = 16;
+
+/// ECQV-1609 issuance (SEC 4 §3.4 with the 1609.2 §5.3.2 deviations; 02 §6):
+///
+/// ```text
+/// P_U = R_U + k·G
+/// e   = SHA-256( SHA-256(COER canonical tbs) ‖ SHA-256(COER canonical issuer cert) )   (256 bits)
+/// r   = e·k + d_CA mod n
+/// ```
+///
+/// `tbs` is the certificate's content; its `verifyKeyIndicator` is replaced by
+/// `reconstructionValue(P_U)`. The `issuer` field is `sha256AndDigest(HashedId8(issuer))`.
+/// When `P_U` or `e·P_U + Q_CA` is the point at infinity, a new `k` is drawn (the SEC 4
+/// §3.4 retry).
+pub fn issue_implicit<K>(
+    tbs: &ToBeSignedCertificate,
+    issuer: &Certificate,
+    issuer_key: &Point,
+    issuer_private: &Scalar,
+    request_public: &Point,
+    mut draw_k: K,
+) -> Result<ImplicitIssued>
+where
+    K: FnMut() -> Scalar,
+{
+    use crate::crypto::ecqv;
+    let issuer_coer = canonical_coer(issuer)?;
+    let issuer_id = IssuerIdentifier::sha256AndDigest(cert_id8(issuer)?);
+    for attempt in 1..=ECQV_MAX_ATTEMPTS {
+        let k = draw_k();
+        let p_u = ecqv::reconstruction_value(request_public, &k);
+        let Some(p_u_bytes) = p_u.compressed() else {
+            continue;
+        };
+        let mut t = tbs.clone();
+        t.verify_key_indicator = reconstruction_key_indicator(&p_u_bytes)?;
+        let e = ecqv::cert_hash_1609(&tbs_canonical_coer(&t)?, &issuer_coer);
+        if ecqv::reconstruct_public_key(&e, &p_u, issuer_key).is_identity() {
+            continue;
+        }
+        let r = ecqv::private_key_contribution(&e, &k, issuer_private);
+        return Ok(ImplicitIssued {
+            certificate: Certificate(CertificateBase::new(
+                v2xw_msg::sec_types::Uint8(CERT_VERSION),
+                CertificateType::implicit,
+                issuer_id,
+                t,
+                None,
+            )),
+            private_key_contribution: r,
+            e,
+            k,
+            attempts: attempt,
+        });
+    }
+    Err(SecError::Crypto {
+        op: "ECQV issuance",
+        primitive: crate::primitive::PrimitiveId::ECQV_P256,
+        detail: format!(
+            "{ECQV_MAX_ATTEMPTS} CA ephemerals all gave the point at infinity; the k source is broken"
+        ),
+    })
+}
+
+/// The ECQV-1609 hash `e mod n` of an implicit certificate under its issuer.
+pub fn implicit_e(cert: &Certificate, issuer: &Certificate) -> Result<Scalar> {
+    Ok(crate::crypto::ecqv::cert_hash_1609(
+        &tbs_canonical_coer(&cert.0.to_be_signed)?,
+        &canonical_coer(issuer)?,
+    ))
+}
+
+fn p256_point(p: &EccP256CurvePoint) -> Result<Point> {
+    let mut sec1 = Vec::with_capacity(65);
+    match p {
+        EccP256CurvePoint::compressed_y_0(x) => {
+            sec1.push(0x02);
+            sec1.extend_from_slice(x);
+        }
+        EccP256CurvePoint::compressed_y_1(x) => {
+            sec1.push(0x03);
+            sec1.extend_from_slice(x);
+        }
+        EccP256CurvePoint::uncompressedP256(u) => {
+            sec1.push(0x04);
+            sec1.extend_from_slice(&u.x);
+            sec1.extend_from_slice(&u.y);
+        }
+        _ => {
+            return Err(SecError::Crypto {
+                op: "certificate key decode",
+                primitive: crate::primitive::PrimitiveId::ECDSA_P256_SHA256,
+                detail: "an x-only or fill point is not a public key".to_string(),
+            });
+        }
+    }
+    Point::from_sec1(&sec1)
+}
+
+fn p384_sec1(p: &EccP384CurvePoint) -> Result<Vec<u8>> {
+    let mut sec1 = Vec::with_capacity(97);
+    match p {
+        EccP384CurvePoint::compressed_y_0(x) => {
+            sec1.push(0x02);
+            sec1.extend_from_slice(x);
+        }
+        EccP384CurvePoint::compressed_y_1(x) => {
+            sec1.push(0x03);
+            sec1.extend_from_slice(x);
+        }
+        EccP384CurvePoint::uncompressedP384(u) => {
+            sec1.push(0x04);
+            sec1.extend_from_slice(&u.x);
+            sec1.extend_from_slice(&u.y);
+        }
+        _ => {
+            return Err(SecError::Crypto {
+                op: "certificate key decode",
+                primitive: crate::primitive::PrimitiveId::ECDSA_P384,
+                detail: "an x-only or fill point is not a public key".to_string(),
+            });
+        }
+    }
+    Ok(sec1)
+}
+
+/// The verification key of `cert`.
+///
+/// An explicit certificate carries it. An implicit one is reconstructed with ECQV-1609,
+/// `Q_U = e·P_U + Q_issuer`, which needs the issuer certificate and the issuer's own
+/// (already resolved) key; the issuer key must be P-256. A reconstruction that lands on the
+/// point at infinity is an error, not a key.
+pub fn verification_key(
+    cert: &Certificate,
+    issuer: Option<(&Certificate, &CertKey)>,
+) -> Result<CertKey> {
+    match &cert.0.to_be_signed.verify_key_indicator {
+        VerificationKeyIndicator::verificationKey(k) => match k {
+            PublicVerificationKey::ecdsaNistP256(p) => Ok(CertKey::P256(p256_point(p)?)),
+            PublicVerificationKey::ecdsaNistP384(p) => {
+                let sec1 = p384_sec1(p)?;
+                // Refuse material that is not a P-384 point now rather than at verify.
+                ::p384::ecdsa::VerifyingKey::from_sec1_bytes(&sec1).map_err(|_| {
+                    SecError::Crypto {
+                        op: "certificate key decode",
+                        primitive: crate::primitive::PrimitiveId::ECDSA_P384,
+                        detail: "not a P-384 point".to_string(),
+                    }
+                })?;
+                Ok(CertKey::P384(sec1))
+            }
+            _ => Err(SecError::UnsupportedPrimitive {
+                backend: "certificate",
+                primitive: crate::primitive::PrimitiveId::ECDSA_P256_SHA256,
+            }),
+        },
+        VerificationKeyIndicator::reconstructionValue(p) => {
+            let Some((issuer_cert, issuer_key)) = issuer else {
+                return Err(SecError::MissingField {
+                    profile: "implicit certificate",
+                    field: "the issuer certificate (needed to reconstruct the key)",
+                });
+            };
+            let CertKey::P256(q_ca) = issuer_key else {
+                return Err(SecError::UnsupportedPrimitive {
+                    backend: "ECQV",
+                    primitive: crate::primitive::PrimitiveId::ECDSA_P384,
+                });
+            };
+            let p_u = p256_point(p)?;
+            let e = implicit_e(cert, issuer_cert)?;
+            let q = crate::crypto::ecqv::reconstruct_public_key(&e, &p_u, q_ca);
+            if q.is_identity() {
+                return Err(SecError::Crypto {
+                    op: "ECQV reconstruction",
+                    primitive: crate::primitive::PrimitiveId::ECQV_P256,
+                    detail: "the reconstructed key is the point at infinity".to_string(),
+                });
+            }
+            Ok(CertKey::P256(q))
+        }
+        _ => Err(SecError::MissingField {
+            profile: "certificate",
+            field: "toBeSigned.verifyKeyIndicator (unrecognised alternative)",
+        }),
+    }
+}
+
+fn sig_parts(sig: &Signature) -> Option<(Vec<u8>, Vec<u8>, bool)> {
+    fn r256(p: &EccP256CurvePoint) -> Option<Vec<u8>> {
+        match p {
+            EccP256CurvePoint::x_only(x)
+            | EccP256CurvePoint::compressed_y_0(x)
+            | EccP256CurvePoint::compressed_y_1(x) => Some(x.to_vec()),
+            EccP256CurvePoint::uncompressedP256(u) => Some(u.x.to_vec()),
+            EccP256CurvePoint::fill(()) => None,
+        }
+    }
+    fn r384(p: &EccP384CurvePoint) -> Option<Vec<u8>> {
+        match p {
+            EccP384CurvePoint::x_only(x)
+            | EccP384CurvePoint::compressed_y_0(x)
+            | EccP384CurvePoint::compressed_y_1(x) => Some(x.to_vec()),
+            EccP384CurvePoint::uncompressedP384(u) => Some(u.x.to_vec()),
+            EccP384CurvePoint::fill(()) => None,
+        }
+    }
+    match sig {
+        Signature::ecdsaNistP256Signature(s) => Some((r256(&s.r_sig)?, s.s_sig.to_vec(), false)),
+        Signature::ecdsaNistP384Signature(s) => Some((r384(&s.r_sig)?, s.s_sig.to_vec(), true)),
+        _ => None,
+    }
+}
+
+/// ECDSA verification of a 1609.2 signature over an already computed digest.
+///
+/// The curve of the signature must match the key's; any other pairing, a malformed
+/// signature, or an `r`/`s` outside `[1, n)` is `false`.
+pub fn ecdsa_verify_digest(key: &CertKey, digest: &[u8], sig: &Signature) -> bool {
+    use p256::ecdsa::signature::hazmat::PrehashVerifier;
+    let Some((r, s, is384)) = sig_parts(sig) else {
+        return false;
+    };
+    match key {
+        CertKey::P256(q) if !is384 => {
+            if r.len() != 32 || s.len() != 32 || digest.len() != 32 {
+                return false;
+            }
+            let Some(q_bytes) = q.compressed() else {
+                return false;
+            };
+            let Ok(vk) = p256::ecdsa::VerifyingKey::from_sec1_bytes(&q_bytes) else {
+                return false;
+            };
+            let mut rs = [0u8; 64];
+            rs[..32].copy_from_slice(&r);
+            rs[32..].copy_from_slice(&s);
+            let Ok(signature) = p256::ecdsa::Signature::from_slice(&rs) else {
+                return false;
+            };
+            vk.verify_prehash(digest, &signature).is_ok()
+        }
+        CertKey::P384(sec1) if is384 => {
+            let (Ok(r), Ok(s), Ok(d)) = (
+                <[u8; 48]>::try_from(r.as_slice()),
+                <[u8; 48]>::try_from(s.as_slice()),
+                <[u8; 48]>::try_from(digest),
+            ) else {
+                return false;
+            };
+            crate::p384::verify_digest(sec1, &d, &crate::p384::P384Signature { r, s })
+        }
+        _ => false,
+    }
+}
+
+/// Verifies an explicit certificate's signature. `issuer` is `None` for a self-signed
+/// certificate, which is then verified under its own key with the hash its `self` field
+/// names. `false` for an implicit certificate, a missing signature, or a hash choice that
+/// does not match the issuer key's curve.
+pub fn verify_explicit_cert(
+    cert: &Certificate,
+    issuer: Option<(&Certificate, &CertKey)>,
+) -> Result<bool> {
+    if cert.0.r_type != CertificateType::explicit {
+        return Ok(false);
+    }
+    let Some(sig) = &cert.0.signature else {
+        return Ok(false);
+    };
+    let own_hash = whole_cert_hash_alg(cert)?;
+    let (key, issuer_cert) = match issuer {
+        Some((c, k)) => (k.clone(), Some(c)),
+        None => (verification_key(cert, None)?, None),
+    };
+    if key.hash() != own_hash {
+        return Ok(false);
+    }
+    let digest = explicit_cert_digest(&cert.0.to_be_signed, issuer_cert, own_hash)?;
+    Ok(ecdsa_verify_digest(&key, &digest, sig))
+}
+
+/// Deterministic ECDSA P-256 over a digest with a caller-supplied nonce `k`
+/// (`r = x(k·G) mod n`, `s = k^-1 (z + r·d) mod n`), `rSig` in the canonical `x-only`
+/// form. For vectors and dual-implementation checks, where the oracle fixes `k`;
+/// production signing goes through a [`crate::crypto::CryptoBackend`].
+pub fn ecdsa_p256_sign_with_k(d: &Scalar, k: &Scalar, digest: &[u8; 32]) -> Result<Signature> {
+    let fail = |detail: &str| SecError::Crypto {
+        op: "ECDSA sign",
+        primitive: crate::primitive::PrimitiveId::ECDSA_P256_SHA256,
+        detail: detail.to_string(),
+    };
+    let (x, _) = Point::mul_base(k)
+        .xy()
+        .ok_or_else(|| fail("k·G is the point at infinity"))?;
+    let r = crate::ec::scalar_from_be_mod_n(&x);
+    let z = crate::ec::scalar_from_be_mod_n(digest);
+    let k_inv = Option::<Scalar>::from(k.invert()).ok_or_else(|| fail("k is zero"))?;
+    let s = k_inv * (z + r * d);
+    if bool::from(r.is_zero()) || bool::from(s.is_zero()) {
+        return Err(fail("r or s is zero; draw another k"));
+    }
+    Ok(Signature::ecdsaNistP256Signature(EcdsaP256Signature::new(
+        EccP256CurvePoint::x_only(rasn::types::OctetString::from_slice(
+            &crate::ec::scalar_to_be32(&r),
+        )),
+        rasn::types::OctetString::from_slice(&crate::ec::scalar_to_be32(&s)),
+    )))
 }
 
 #[cfg(test)]
