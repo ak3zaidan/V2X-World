@@ -714,7 +714,12 @@ impl CrlGate {
 
     /// How many entries of both kinds, verified ones included.
     pub fn entries(&self) -> usize {
-        self.store.len() + self.tagged.values().map(v2xw_sec::CrlStore::len).sum::<usize>()
+        self.store.len()
+            + self
+                .tagged
+                .values()
+                .map(v2xw_sec::CrlStore::len)
+                .sum::<usize>()
     }
 
     /// Bytes the store occupies, per the profile's accounting.

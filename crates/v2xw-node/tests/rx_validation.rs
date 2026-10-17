@@ -70,8 +70,14 @@ fn device() -> DeviceLinkageContext {
 
 /// A pseudonym the authority `aca` issues, with the US profile (series 1, the ICA as
 /// CRACA, one week), changed by `f`.
-fn pseudonym(pki: &ScmsPki, aca: &Authority, seed: u8, f: impl FnOnce(&mut CertSpec)) -> ImplicitKey {
-    let iss = ImplicitIssuer::new(aca.cert.clone(), aca.private.expect("P-256 CA")).expect("issuer");
+fn pseudonym(
+    pki: &ScmsPki,
+    aca: &Authority,
+    seed: u8,
+    f: impl FnOnce(&mut CertSpec),
+) -> ImplicitKey {
+    let iss =
+        ImplicitIssuer::new(aca.cert.clone(), aca.private.expect("P-256 CA")).expect("issuer");
     let id8 = hashedid::hashed_id8(&cert::encode(&aca.cert).expect("enc"));
     let mut spec = CertSpec::pseudonym(
         id8,
@@ -101,12 +107,19 @@ fn bsm(mode: CryptoMode, key: &ImplicitKey, at: u64, loc: Option<GenerationLocat
     let reg = RngRegistry::new(3);
     let mut ctx = NodeRuntimeCtx::new(at * NS_PER_S, &reg);
     let mut tx = NodeSecurity::new(wall(), mode, PSID_SAFETY);
-    tx.install(v2xw_core::ids::NodeId::new(1), 0, 0, key).expect("installs");
+    tx.install(v2xw_core::ids::NodeId::new(1), 0, 0, key)
+        .expect("installs");
     assert!(tx.set_active(0, 0));
-    tx.sign(&mut ctx, MsgType::Bsm, b"bsm-payload", SignerIdChoice::Certificate, loc)
-        .expect("signs")
-        .0
-        .spdu
+    tx.sign(
+        &mut ctx,
+        MsgType::Bsm,
+        b"bsm-payload",
+        SignerIdChoice::Certificate,
+        loc,
+    )
+    .expect("signs")
+    .0
+    .spdu
 }
 
 /// What a receiver at `at` (s) concludes about `spdu`.
@@ -136,7 +149,10 @@ fn an_honest_pseudonym_validates_to_the_installed_root_and_the_work_is_priced() 
         assert_eq!(t.stats.checked, 1);
         assert!(t.stats.refused.is_empty(), "{:?}", t.stats.refused);
         // The chain file's RA carries the published {all, 0, 0} group: tolerated, counted.
-        assert!(t.stats.tolerated >= 2, "the published RA profile is recorded");
+        assert!(
+            t.stats.tolerated >= 2,
+            "the published RA profile is recorded"
+        );
         // The new pseudonym's work (its hash, its reconstruction) is priced on a profile.
         let ops = rx.take_validation_ops();
         assert!(!ops.is_empty());
@@ -155,7 +171,10 @@ fn rule_psid_not_in_app_permissions() {
     let key = pseudonym(&pki, &pki.aca, 2, |s| s.app_permissions = vec![38]);
     for mode in MODES {
         let mut rx = trusted(mode, &pki);
-        assert_eq!(receive(&mut rx, &bsm(mode, &key, 10, None), 11), SpduVerdict::Refused);
+        assert_eq!(
+            receive(&mut rx, &bsm(mode, &key, 10, None), 11),
+            SpduVerdict::Refused
+        );
         assert_eq!(refused(&rx, "psid-not-permitted"), 1, "{mode:?}");
     }
 }
@@ -168,11 +187,17 @@ fn rule_generation_time_outside_validity_and_expired() {
         // Signed eight days in: after the 169 h validity.
         let mut rx = trusted(mode, &pki);
         let late = u64::from(8 * 86_400u32);
-        assert_eq!(receive(&mut rx, &bsm(mode, &key, late, None), late), SpduVerdict::Refused);
+        assert_eq!(
+            receive(&mut rx, &bsm(mode, &key, late, None), late),
+            SpduVerdict::Refused
+        );
         assert_eq!(refused(&rx, "generation-time-outside-validity"), 1);
         // Signed in time, received eight days later: the certificate has expired.
         let mut rx = trusted(mode, &pki);
-        assert_eq!(receive(&mut rx, &bsm(mode, &key, 10, None), late), SpduVerdict::Refused);
+        assert_eq!(
+            receive(&mut rx, &bsm(mode, &key, 10, None), late),
+            SpduVerdict::Refused
+        );
         assert_eq!(refused(&rx, "chain-expired"), 1, "{mode:?}");
     }
 }
@@ -211,7 +236,10 @@ fn rule_generation_location_outside_region() {
     };
     for mode in MODES {
         let mut rx = trusted(mode, &pki);
-        assert_eq!(receive(&mut rx, &bsm(mode, &key, 10, Some(inside)), 11), SpduVerdict::Valid);
+        assert_eq!(
+            receive(&mut rx, &bsm(mode, &key, 10, Some(inside)), 11),
+            SpduVerdict::Valid
+        );
         assert_eq!(
             receive(&mut rx, &bsm(mode, &key, 12, Some(outside)), 13),
             SpduVerdict::Refused
@@ -231,7 +259,10 @@ fn rule_untrusted_root() {
         let cas: Vec<Arc<Certificate>> =
             pki.all().iter().map(|a| Arc::new(a.cert.clone())).collect();
         rx.install_trust(&[Arc::new(other.root.cert.clone())], &cas);
-        assert_eq!(receive(&mut rx, &bsm(mode, &key, 10, None), 11), SpduVerdict::Refused);
+        assert_eq!(
+            receive(&mut rx, &bsm(mode, &key, 10, None), 11),
+            SpduVerdict::Refused
+        );
         assert_eq!(refused(&rx, "chain-untrusted-root"), 1, "{mode:?}");
     }
 }
@@ -252,7 +283,10 @@ fn rule_issuer_lacking_cert_issue_permissions() {
     let key = pseudonym(&pki, &rogue, 6, |_| {});
     for mode in MODES {
         let mut rx = trusted(mode, &pki);
-        assert_eq!(receive(&mut rx, &bsm(mode, &key, 10, None), 11), SpduVerdict::Refused);
+        assert_eq!(
+            receive(&mut rx, &bsm(mode, &key, 10, None), 11),
+            SpduVerdict::Refused
+        );
         assert_eq!(refused(&rx, "chain-permission-not-covered"), 1, "{mode:?}");
     }
 }
@@ -291,7 +325,10 @@ fn rule_chain_length_exceeded() {
     for mode in MODES {
         let mut rx = trusted(mode, &pki);
         rx.learn_issuer(Arc::new(sub.clone()));
-        assert_eq!(receive(&mut rx, &bsm(mode, &key, 10, None), 11), SpduVerdict::Refused);
+        assert_eq!(
+            receive(&mut rx, &bsm(mode, &key, 10, None), 11),
+            SpduVerdict::Refused
+        );
         assert_eq!(refused(&rx, "chain-length"), 1, "{mode:?}");
     }
 }
@@ -342,7 +379,9 @@ fn a_signed_crl_is_accepted_and_one_altered_byte_is_refused_by_the_node() {
     let bytes = linkage_crl(&pki, &[entry], t0());
     for mode in MODES {
         let mut rx = trusted(mode, &pki);
-        let v = rx.verify_secured_crl(&bytes, 5 * NS_PER_S).expect("accepted");
+        let v = rx
+            .verify_secured_crl(&bytes, 5 * NS_PER_S)
+            .expect("accepted");
         assert!(v.fresh);
         assert_eq!(v.craca, pki.craca_id8());
         assert_eq!(v.linkage, vec![entry]);
@@ -395,13 +434,19 @@ fn a_linkage_entry_revokes_only_a_pseudonym_of_the_same_craca() {
     gate.add_verified_linkage(v.craca, &v.linkage);
     let honest = pseudonym(&pki, &pki.aca, 3, |_| {});
     let (i, lv, craca, series) = v2xw_node::rxval::linkage_key(honest.certificate()).unwrap();
-    assert_eq!(gate.check_from(u32::from(i), lv, craca, series, true), CrlVerdict::Revoked);
+    assert_eq!(
+        gate.check_from(u32::from(i), lv, craca, series, true),
+        CrlVerdict::Revoked
+    );
     // The same linkage value under another CRACA is not this CRL's to revoke.
     let other = pseudonym(&pki, &pki.aca, 3, |s| {
         s.craca_id = HashedId3(rasn::types::FixedOctetString::from([9, 9, 9]));
     });
     let (i, lv, craca, series) = v2xw_node::rxval::linkage_key(other.certificate()).unwrap();
-    assert_eq!(gate.check_from(u32::from(i), lv, craca, series, true), CrlVerdict::NotRevoked);
+    assert_eq!(
+        gate.check_from(u32::from(i), lv, craca, series, true),
+        CrlVerdict::NotRevoked
+    );
 }
 
 #[test]
@@ -423,9 +468,16 @@ fn a_revoked_aca_revokes_every_pseudonym_under_it() {
     );
     for mode in MODES {
         let mut rx = trusted(mode, &pki);
-        assert_eq!(receive(&mut rx, &bsm(mode, &key, 10, None), 11), SpduVerdict::Valid);
-        rx.verify_secured_crl(&bytes, 12 * NS_PER_S).expect("accepted");
-        assert_eq!(receive(&mut rx, &bsm(mode, &key, 13, None), 13), SpduVerdict::Revoked);
+        assert_eq!(
+            receive(&mut rx, &bsm(mode, &key, 10, None), 11),
+            SpduVerdict::Valid
+        );
+        rx.verify_secured_crl(&bytes, 12 * NS_PER_S)
+            .expect("accepted");
+        assert_eq!(
+            receive(&mut rx, &bsm(mode, &key, 13, None), 13),
+            SpduVerdict::Revoked
+        );
         assert_eq!(refused(&rx, "issuer-revoked"), 1, "{mode:?}");
     }
 }
@@ -443,11 +495,21 @@ fn two_weeks_past_next_crl_every_message_is_refused() {
     let renewed = pseudonym(&pki, &pki.aca, 11, |s| {
         s.valid_from = t0() + WEEK + 13 * 86_400;
     });
-    assert_eq!(receive(&mut rx, &bsm(CryptoMode::Real, &renewed, ok_at, None), ok_at), SpduVerdict::Valid);
+    assert_eq!(
+        receive(
+            &mut rx,
+            &bsm(CryptoMode::Real, &renewed, ok_at, None),
+            ok_at
+        ),
+        SpduVerdict::Valid
+    );
     let renewed = pseudonym(&pki, &pki.aca, 12, |s| {
         s.valid_from = t0() + WEEK + 14 * 86_400;
     });
-    assert_eq!(receive(&mut rx, &bsm(CryptoMode::Real, &renewed, late, None), late), SpduVerdict::Refused);
+    assert_eq!(
+        receive(&mut rx, &bsm(CryptoMode::Real, &renewed, late, None), late),
+        SpduVerdict::Refused
+    );
     assert_eq!(refused(&rx, "crl-overdue"), 1);
     let _ = key;
 }

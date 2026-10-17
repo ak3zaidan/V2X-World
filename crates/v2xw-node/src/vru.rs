@@ -1623,8 +1623,7 @@ impl VruDeviceRuntime {
             // Receiver validation runs before the server is booked, so the time it charges
             // (chain links, reconstructions, CRL work) is in this frame's service time (WP-C2).
             let verdict = self.classify(ctx, &frame);
-            let cost = cost
-                + crate::rxval::charge(&mut self.security, &self.service.profile().id);
+            let cost = cost + crate::rxval::charge(&mut self.security, &self.service.profile().id);
             let sched = match where_ {
                 RunsOn::Hsm => self.hsm.submit(q.enqueued_at, cost),
                 RunsOn::Accelerator => self.accel.submit(q.enqueued_at, cost),
@@ -1716,9 +1715,11 @@ impl VruDeviceRuntime {
                 self.stores.crl.set_period(mine);
             }
         }
-        match self.stores
+        match self
+            .stores
             .crl
-            .check_from(u32::from(i_cert), lv, craca, series, authentic) {
+            .check_from(u32::from(i_cert), lv, craca, series, authentic)
+        {
             crate::stores::CrlVerdict::Revoked => VerificationState::Revoked,
             crate::stores::CrlVerdict::NotRevoked => VerificationState::Verified,
             crate::stores::CrlVerdict::RefusedImplausiblePeriod { .. } => {

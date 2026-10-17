@@ -235,7 +235,10 @@ pub fn linkage_key(c: &Certificate) -> Option<LinkageKey> {
 /// Takes the validation operations `sec` performed and prices them on the hardware
 /// profile `profile_id`: the extra service time the frame costs. Unpriced work charges
 /// nothing and is counted in [`RxStats::unpriced`].
-pub fn charge(sec: &mut crate::secure::NodeSecurity, profile_id: &str) -> v2xw_core::time::Duration {
+pub fn charge(
+    sec: &mut crate::secure::NodeSecurity,
+    profile_id: &str,
+) -> v2xw_core::time::Duration {
     let ops = sec.take_validation_ops();
     if ops.is_empty() {
         return v2xw_core::time::Duration::from_nanos(0);
@@ -292,7 +295,10 @@ fn series(c: &Certificate) -> u16 {
 }
 
 /// The primitive operations validating the explicit link `sub` → `iss` performs.
-fn explicit_link_ops(sub: &Certificate, iss: &Certificate) -> Vec<(PrimitiveId, PrimitiveOpKind, u32)> {
+fn explicit_link_ops(
+    sub: &Certificate,
+    iss: &Certificate,
+) -> Vec<(PrimitiveId, PrimitiveOpKind, u32)> {
     let signer = match cert::verification_key(iss, None) {
         Ok(CertKey::P384(_)) => PrimitiveId::ECDSA_P384,
         _ => PrimitiveId::ECDSA_P256_SHA256,
@@ -368,7 +374,8 @@ impl VerifiedCrl {
         if e.i > i_rev || e.i.saturating_add(e.max_forward) < i_rev {
             return None;
         }
-        let walk = |la, ls| (e.i..i_rev).fold(ls, |s, _| v2xw_sec::linkage::linkage_seed_next(la, s));
+        let walk =
+            |la, ls| (e.i..i_rev).fold(ls, |s, _| v2xw_sec::linkage::linkage_seed_next(la, s));
         let r = CrlLinkageEntry {
             i: i_rev,
             la_id1: e.la_id1,
@@ -378,7 +385,11 @@ impl VerifiedCrl {
             jmax: e.jmax.min(255),
             max_forward: e.i.saturating_add(e.max_forward).min(65_535) - i_rev,
         };
-        Some(if self.linkage.contains(&r) { Ok(r) } else { Err(()) })
+        Some(if self.linkage.contains(&r) {
+            Ok(r)
+        } else {
+            Err(())
+        })
     }
 }
 
@@ -483,7 +494,9 @@ impl RxTrust {
                         key: v.keys[0].clone(),
                         tolerated: u32::try_from(v.tolerated.len()).unwrap_or(u32::MAX),
                     },
-                    Err(errs) => Memo::Err(errs.first().map_or(ChainErrorKind::Malformed, |e| e.kind)),
+                    Err(errs) => {
+                        Memo::Err(errs.first().map_or(ChainErrorKind::Malformed, |e| e.kind))
+                    }
                 };
                 CHAIN_MEMO.with(|c| c.borrow_mut().insert(memo_key, m.clone()));
                 m
@@ -678,7 +691,8 @@ impl RxTrust {
         let mut craca = [0u8; 8];
         craca.copy_from_slice(&c.crl_craca.0[..]);
         let series_no = c.crl_series.0.0;
-        let out = |fresh: bool| VerifiedCrl {
+        let out = |fresh: bool| {
+            VerifiedCrl {
             craca,
             series: series_no,
             issue_date: c.issue_date.0.0,
@@ -693,6 +707,7 @@ impl RxTrust {
             linkage: v2xw_sec::crl::linkage_entries(c),
             hashes: v2xw_sec::crl::hash_entries(c).into_iter().map(|(h, _)| h).collect(),
             fresh,
+        }
         };
         if self.seen_crls.contains(&digest) {
             return Ok(out(false));
@@ -704,7 +719,9 @@ impl RxTrust {
         };
         // The signer chains to the installed root: its issuer's path, then its own link.
         let iss = issuer_id8(&signer).ok_or(RxReject::CrlSignerUntrusted)?;
-        let path = self.ca_path(cas, iss).map_err(|_| RxReject::CrlSignerUntrusted)?;
+        let path = self
+            .ca_path(cas, iss)
+            .map_err(|_| RxReject::CrlSignerUntrusted)?;
         let now = u64::from(now32);
         let mut seg: Vec<&Certificate> = vec![signer.as_ref()];
         seg.extend(path.certs.iter().map(|c| c.as_ref()));

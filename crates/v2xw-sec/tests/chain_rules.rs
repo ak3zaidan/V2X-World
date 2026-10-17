@@ -835,7 +835,10 @@ fn published_ra_chain(null: (i64, i64), in_request: bool) -> (Vec<Certificate>, 
     // The ICA: `{all, 2, 0}` and `{35, 256 sspRange all; 1, -1}`, app and enrol.
     let mut ica_spec = Spec::ca("ica.prod.s2x.io", group(None, 2, 0, both()));
     ica_spec.issue.as_mut().unwrap().push(group(
-        Some(vec![rng(35, Some(SspRange::all(()))), rng(256, Some(SspRange::all(())))]),
+        Some(vec![
+            rng(35, Some(SspRange::all(()))),
+            rng(256, Some(SspRange::all(()))),
+        ]),
         1,
         -1,
         both(),
@@ -857,7 +860,8 @@ fn the_published_ra_profile_is_refused_strictly_and_accepted_by_a_us_device() {
         let strict = ChainPolicy::trusting([&r.cert]).unwrap();
         let errs = chain::validate(&c, &strict).expect_err("the strict rules refuse it");
         assert!(
-            errs.iter().all(|e| e.kind == K::ChainLength && e.index == 0),
+            errs.iter()
+                .all(|e| e.kind == K::ChainLength && e.index == 0),
             "{errs:?}"
         );
         let anchors = BTreeSet::from([cert::hashed_id32(&r.cert).unwrap()]);
@@ -883,7 +887,10 @@ fn the_tolerance_grants_nothing_and_covers_only_the_null_group() {
     let us = ChainPolicy::us_device(anchors, START + 10);
     // A `{0, 1}` group is not the published profile and stays refused.
     let (c, _, _) = published_ra_chain((0, 1), false);
-    assert!(chain::validate(&c, &us).is_err(), "{{0, 1}} is not tolerated");
+    assert!(
+        chain::validate(&c, &us).is_err(),
+        "{{0, 1}} is not tolerated"
+    );
     // A certificate the published RA issued is refused: `{0, 0}` authorises nothing.
     let (c, ra, _) = published_ra_chain((0, 0), false);
     let ee = explicit(&ra, Spec::ee(), 41);
@@ -891,7 +898,8 @@ fn the_tolerance_grants_nothing_and_covers_only_the_null_group() {
     chain.extend(c);
     let errs = chain::validate(&chain, &us).expect_err("the RA cannot issue");
     assert!(
-        errs.iter().any(|e| e.index == 0 && e.kind == K::ChainLength),
+        errs.iter()
+            .any(|e| e.index == 0 && e.kind == K::ChainLength),
         "{errs:?}"
     );
 }

@@ -350,21 +350,22 @@ fn component_tbs(
     let published = match role {
         "root" | "ica" | "eca" => crate::scms::governance::cert_issue_permissions(role),
         "aca" => crate::scms::governance::cert_issue_permissions("pca"),
-        "ra" => Some(SequenceOfPsidGroupPermissions(vec![v2xw_msg::sec_types::PsidGroupPermissions::new(
-            v2xw_msg::sec_types::ieee1609_dot2::SubjectPermissions::all(()),
-            Integer::from(0),
-            Integer::from(0),
-            {
-                let mut b = rasn::types::FixedBitString::<8>::ZERO;
-                b.set(0, true);
-                v2xw_msg::sec_types::EndEntityType(b)
-            },
-        )])),
+        "ra" => Some(SequenceOfPsidGroupPermissions(vec![
+            v2xw_msg::sec_types::PsidGroupPermissions::new(
+                v2xw_msg::sec_types::ieee1609_dot2::SubjectPermissions::all(()),
+                Integer::from(0),
+                Integer::from(0),
+                {
+                    let mut b = rasn::types::FixedBitString::<8>::ZERO;
+                    b.set(0, true);
+                    v2xw_msg::sec_types::EndEntityType(b)
+                },
+            ),
+        ])),
         _ => None,
     };
-    let issue = published.or_else(|| {
-        issues.then(|| SequenceOfPsidGroupPermissions(vec![cert::issue_all_group()]))
-    });
+    let issue = published
+        .or_else(|| issues.then(|| SequenceOfPsidGroupPermissions(vec![cert::issue_all_group()])));
     Ok(ToBeSignedCertificate::new(
         CertificateId::name(Hostname(name.into())),
         HashedId3(FixedOctetString::from([0u8; 3])),

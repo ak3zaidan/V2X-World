@@ -241,7 +241,10 @@ pub fn ra_aca_cert_request(
         None,
         None,
         Some(SequenceOfPsidSsp(if x.psids.is_empty() {
-            vec![PsidSsp::new(Psid(rasn::types::Integer::from(BSM_PSID)), None)]
+            vec![PsidSsp::new(
+                Psid(rasn::types::Integer::from(BSM_PSID)),
+                None,
+            )]
         } else {
             x.psids
                 .iter()

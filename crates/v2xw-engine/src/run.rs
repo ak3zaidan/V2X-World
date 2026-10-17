@@ -6993,7 +6993,10 @@ impl Engine {
                         .iter()
                         .filter_map(|e| v.signed_form(e).and_then(|r| r.ok()))
                         .collect();
-                    runtime.stores_mut().crl.add_verified_linkage(v.craca, &signed);
+                    runtime
+                        .stores_mut()
+                        .crl
+                        .add_verified_linkage(v.craca, &signed);
                 }
                 None => {
                     for e in &fresh {

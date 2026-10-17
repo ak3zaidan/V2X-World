@@ -656,7 +656,9 @@ impl NodeSecurity {
 
     /// The primitive operations receiver validation performed since the last call, for
     /// the runtime to price with its hardware profile.
-    pub fn take_validation_ops(&mut self) -> Vec<(PrimitiveId, v2xw_sec::primitive::PrimitiveOpKind, u32)> {
+    pub fn take_validation_ops(
+        &mut self,
+    ) -> Vec<(PrimitiveId, v2xw_sec::primitive::PrimitiveOpKind, u32)> {
         self.trust.take_ops()
     }
 
