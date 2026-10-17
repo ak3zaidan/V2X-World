@@ -45,6 +45,10 @@ pub struct CredentialFactory {
     /// that assign a roadside unit to one of them. Empty: `issuer` certifies every node.
     providers: Vec<ImplicitIssuer>,
     assignment: Option<(v2xw_proto::scms::deployment::Deployment, u64)>,
+    /// Under `security.scms.chain_file: home-provider`, each provider's own chain file in
+    /// deployment order: a device installs its certifying provider's alone. Empty: every
+    /// device installs `chain_file`.
+    home_chain_files: Vec<Vec<Arc<v2xw_msg::sec_types::Certificate>>>,
 }
 
 impl CredentialFactory {
@@ -83,6 +87,7 @@ impl CredentialFactory {
             roots,
             chain_file: Vec::new(),
             providers: Vec::new(),
+            home_chain_files: Vec::new(),
             assignment: None,
         }
     }
@@ -142,6 +147,35 @@ impl CredentialFactory {
             self.chain_file = chain_file;
         }
         self
+    }
+
+    /// The same factory with one chain file per provider (`security.scms.chain_file:
+    /// home-provider`, in deployment order): a device then installs only its certifying
+    /// provider's, and learns the others' CA certificates by P2PCD.
+    #[must_use]
+    pub fn with_home_chain_files(
+        mut self,
+        files: Vec<Vec<Arc<v2xw_msg::sec_types::Certificate>>>,
+    ) -> CredentialFactory {
+        self.home_chain_files = files;
+        self
+    }
+
+    /// Installs this run's trust on `node`'s security stack: every CTL root, and the
+    /// chain file of the provider that certifies it under `home-provider` (a roadside
+    /// unit's is [`CredentialFactory::provider_of`], a vehicle's and a handset's the home
+    /// provider's), otherwise the whole chain file.
+    pub fn install_trust_for(&self, node: NodeId, rsu: bool, sec: &mut v2xw_node::NodeSecurity) {
+        if self.roots.is_empty() {
+            return;
+        }
+        let provider = if rsu { self.provider_of(node) } else { 0 };
+        let Some(file) = self.home_chain_files.get(provider) else {
+            self.install_trust(sec);
+            return;
+        };
+        sec.install_trust(&self.roots, file);
+        let _ = sec.take_validation_ops();
     }
 
     /// Installs this run's trust on a node's security stack: the roots and the chain

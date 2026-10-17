@@ -896,6 +896,9 @@ pub struct RsuRuntime {
     /// The §3.5.2 field marked **GT**, handed in from outside the firewall by
     /// [`RsuRuntime::observe_truth`] and read by nothing but the telemetry path.
     gt_pos_error_m: f32,
+    /// Out-of-band P2PCD learning responses the unit's P2P entity broadcast, with the
+    /// node-clock instant each became due ([`RsuRuntime::take_p2pcd_responses`]).
+    p2pcd_outbox: Vec<(SimTime, Vec<u8>)>,
 }
 
 impl core::fmt::Debug for RsuRuntime {
@@ -974,6 +977,7 @@ impl RsuRuntime {
             dcc: DccState::UNRESTRICTED,
             dcc_state_code: v2xw_record::wire::U16_NONE,
             security: NodeSecurity::new(config.wall, config.crypto_mode, config.psid),
+            p2pcd_outbox: Vec::new(),
             card,
             payloads: Vec::new(),
             unsized_broadcasts: 0,
@@ -1234,6 +1238,9 @@ impl RsuRuntime {
         }
 
         self.receive(ctx, believed, inbox, &mut out);
+        for pdu in self.security.p2pcd_due(now) {
+            self.p2pcd_outbox.push((believed, pdu));
+        }
         self.stores.neighbors.age(believed);
         self.stores.certs.sweep(believed, &self.stores.crl);
 
@@ -1283,7 +1290,16 @@ impl RsuRuntime {
 
         for q in self.queues[0].drain() {
             let frame = q.item;
+            // An out-of-band P2PCD learning response: for the P2PCD Entity, never the
+            // verifier (as on a vehicle, `ObuRuntime`).
+            if frame.msg_type == MsgType::P2pcd {
+                if let Some(bytes) = frame.spdu.as_deref() {
+                    let _ = self.security.p2pcd_receive_response(bytes);
+                }
+                continue;
+            }
             self.learn_or_request(&frame);
+            self.p2pcd_rx(ctx, &frame);
             let summary = RxSummary {
                 signer: frame.signer.clone(),
                 msg_type: frame.msg_type,
@@ -1340,6 +1356,41 @@ impl RsuRuntime {
         }
 
         self.run_verifications(ctx, believed, out);
+    }
+
+    /// The SDS's P2PCD preprocessing of one received signed SPDU (WP-C3), as on a vehicle:
+    /// the peer's requests (which may start this unit's response process, for a CA
+    /// certificate in the chain it signs SPaT/MAP under), a `requestedCertificate`, and a
+    /// request for an issuer or signer the unit does not hold.
+    fn p2pcd_rx(&mut self, ctx: &mut dyn NodeCtx, frame: &RxFrame) {
+        let Some(bytes) = frame.spdu.as_deref() else {
+            return;
+        };
+        let Some(parsed) = self.security.parse(bytes) else {
+            return;
+        };
+        let known = match &parsed.signer {
+            v2xw_sec::envelope::ParsedSigner::Digest(d) => {
+                self.stores.peers.certificate(d).is_some()
+            }
+            _ => true,
+        };
+        self.security
+            .p2pcd_preprocess(ctx, self.node, &parsed, known);
+    }
+
+    /// The out-of-band P2PCD learning responses (`Ieee1609dot2Peer2PeerPDU`, unsecured,
+    /// PSID [`v2xw_sec::p2pcd::P2PCD_PSID`]) this unit broadcast since the last call, each
+    /// with the node-clock instant it became due. The host puts them on the air.
+    pub fn take_p2pcd_responses(&mut self) -> Vec<(SimTime, Vec<u8>)> {
+        core::mem::take(&mut self.p2pcd_outbox)
+    }
+
+    /// When the earliest out-of-band response back-off expires, seen from `now`.
+    #[must_use]
+    pub fn next_p2pcd_due_after(&self, now: SimTime) -> Option<SimTime> {
+        let due = self.security.p2pcd_next_due()?;
+        Some(due.max(now))
     }
 
     fn learn_or_request(&mut self, frame: &RxFrame) {

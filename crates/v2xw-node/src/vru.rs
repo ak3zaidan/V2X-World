@@ -1111,6 +1111,12 @@ pub struct VruDeviceRuntime {
     /// The §3.5.2 field marked **GT**, handed in from outside the firewall by
     /// [`VruDeviceRuntime::observe_truth`] and read by nothing but the telemetry path.
     gt_pos_error_m: f32,
+    /// Out-of-band P2PCD learning responses the device's P2P entity broadcast, with the
+    /// node-clock instant each became due, waiting for the host
+    /// ([`VruDeviceRuntime::take_p2pcd_responses`]).
+    p2pcd_outbox: Vec<(SimTime, Vec<u8>)>,
+    /// The P2PCD counters as of the last `node.p2pcd` record.
+    p2pcd_seen: crate::p2pcd::P2pcdStats,
 }
 
 impl core::fmt::Debug for VruDeviceRuntime {
@@ -1184,6 +1190,8 @@ impl VruDeviceRuntime {
             card,
             relevance: BTreeMap::new(),
             gt_pos_error_m: f32::NAN,
+            p2pcd_outbox: Vec::new(),
+            p2pcd_seen: crate::p2pcd::P2pcdStats::default(),
             service,
             config,
         }
@@ -1454,6 +1462,7 @@ impl VruDeviceRuntime {
                 });
             }
         }
+        self.p2pcd_send_due(ctx, believed);
         self.stores.neighbors.age(believed);
         self.stores.certs.travelled(distance_travelled_m);
         self.stores.certs.sweep(believed, &self.stores.crl);
@@ -1462,6 +1471,7 @@ impl VruDeviceRuntime {
         if self.state.transmits() && !self.power.is_exhausted() {
             self.generate(ctx, believed, &mut out);
         }
+        self.p2pcd_record(ctx, believed);
 
         if self.window.length(now) >= self.config.telemetry_period {
             out.telemetry = Some(self.close_window(now));
@@ -1494,7 +1504,24 @@ impl VruDeviceRuntime {
         for q in self.queues[0].drain() {
             let item = q.item;
             let frame = item.frame.clone();
+            // An out-of-band P2PCD learning response: for the P2PCD Entity, never the
+            // verifier or an application (as on a vehicle, `ObuRuntime`).
+            if frame.msg_type == MsgType::P2pcd {
+                if let Some(bytes) = frame.spdu.as_deref() {
+                    let _ = self.security.p2pcd_receive_response(bytes);
+                }
+                out.rx_reports.push(RxReport {
+                    token: item.token,
+                    disposition: RxDisposition::P2pcdResponse,
+                    arrived: item.arrived,
+                    parsed: item.arrived,
+                    verify_start: None,
+                    verify_done: None,
+                });
+                continue;
+            }
             self.learn_or_request(&frame);
+            self.p2pcd_rx(ctx, &frame);
             let relevance = frame
                 .signer
                 .as_ref()
@@ -1583,6 +1610,83 @@ impl VruDeviceRuntime {
             self.stores.peers.learn(&signer);
         } else if !self.stores.peers.touch(&signer) {
             self.stores.peers.record_p2pcd_request();
+        }
+    }
+
+    /// The SDS's P2PCD preprocessing of one received signed SPDU (WP-C3), as on a vehicle
+    /// (`ObuRuntime`): the peer's requests and responses, and a request for an issuer or
+    /// signer this device does not hold. Independent of the verification policy.
+    fn p2pcd_rx(&mut self, ctx: &mut dyn NodeCtx, frame: &RxFrame) {
+        let Some(bytes) = frame.spdu.as_deref() else {
+            return;
+        };
+        let Some(parsed) = self.security.parse(bytes) else {
+            return;
+        };
+        let known = match &parsed.signer {
+            v2xw_sec::envelope::ParsedSigner::Digest(d) => {
+                self.stores.peers.certificate(d).is_some()
+            }
+            _ => true,
+        };
+        self.security
+            .p2pcd_preprocess(ctx, self.node, &parsed, known);
+    }
+
+    /// The out-of-band P2PCD learning responses (`Ieee1609dot2Peer2PeerPDU`, unsecured,
+    /// PSID [`v2xw_sec::p2pcd::P2PCD_PSID`]) this device broadcast since the last call,
+    /// each with the node-clock instant it became due. The host puts them on the air.
+    pub fn take_p2pcd_responses(&mut self) -> Vec<(SimTime, Vec<u8>)> {
+        core::mem::take(&mut self.p2pcd_outbox)
+    }
+
+    /// A learning response heard on the air, outside the receive path (a host that
+    /// delivers it directly): counted and learned from, validated to an installed root.
+    ///
+    /// # Errors
+    /// The bytes are not a learning response.
+    pub fn receive_p2pcd_response(&mut self, bytes: &[u8]) -> Result<usize, v2xw_sec::SecError> {
+        self.security.p2pcd_receive_response(bytes)
+    }
+
+    /// When the earliest out-of-band response back-off expires, seen from `now`: the
+    /// instant a host wakes the device for ([`VruDeviceRuntime::wake_p2pcd`]).
+    #[must_use]
+    pub fn next_p2pcd_due_after(&self, now: SimTime) -> Option<SimTime> {
+        let due = self.security.p2pcd_next_due()?;
+        Some(due.max(now))
+    }
+
+    /// A wake between periodic steps for the P2PCD back-off alone: the responses due by
+    /// now go to the outbox, and nothing else runs (the device's inbox waits for its
+    /// step, as it always does).
+    pub fn wake_p2pcd(&mut self, ctx: &mut dyn NodeCtx) {
+        if self.state == NodeState::Off {
+            return;
+        }
+        let now = ctx.now();
+        let believed = self.clock.believed_time(now);
+        self.p2pcd_send_due(ctx, believed);
+        self.p2pcd_record(ctx, believed);
+    }
+
+    fn p2pcd_send_due(&mut self, ctx: &mut dyn NodeCtx, believed: SimTime) {
+        for pdu in self.security.p2pcd_due(ctx.now()) {
+            self.p2pcd_outbox.push((believed, pdu));
+        }
+    }
+
+    /// Records what P2PCD did since the last record, on `node.p2pcd`.
+    fn p2pcd_record(&mut self, ctx: &mut dyn NodeCtx, believed: SimTime) {
+        let p = self.security.p2pcd();
+        if let Some(delta) = p.stats.since(&self.p2pcd_seen) {
+            self.p2pcd_seen = p.stats.clone();
+            ctx.emit(crate::p2pcd::P2pcdRecord {
+                t: believed,
+                node: self.node,
+                flavor: p.flavor().as_str(),
+                delta,
+            });
         }
     }
 

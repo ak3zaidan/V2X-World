@@ -596,6 +596,24 @@ impl NodeSecurity {
         self.signers.get(&(i_period, j_index))
     }
 
+    /// Re-files the installed signer of slot `from` under slot `to` (the store's handle
+    /// for it was moved to another period, as a roadside unit's application certificate
+    /// is moved to the period the system is in). Nothing about the certificate or its
+    /// key changes. Returns whether a signer was moved.
+    pub fn move_signer(&mut self, from: (u32, u32), to: (u32, u32)) -> bool {
+        if from == to {
+            return self.signers.contains_key(&from);
+        }
+        let Some(signer) = self.signers.remove(&from) else {
+            return false;
+        };
+        self.signers.insert(to, signer);
+        if self.active == Some(from) {
+            self.active = Some(to);
+        }
+        true
+    }
+
     /// Selects the pseudonym that signs from now on. `false` if it is not provisioned.
     pub fn set_active(&mut self, i_period: u32, j_index: u32) -> bool {
         if self.signers.contains_key(&(i_period, j_index)) {
@@ -791,6 +809,14 @@ impl NodeSecurity {
             ..HeaderInfoSpec::default()
         };
         let mut sid = sid;
+        if !carries_p2pcd(msg_type) && self.p2pcd.flavor() != v2xw_sec::p2pcd::P2pcdFlavor::None {
+            // The responder rule (1609.2a-2017 §8.2.4.2.2 a)1)) is about the certificates
+            // this node *signs with*, whatever the SDEE: a roadside unit that signs only
+            // SPaT and MAP still answers for the CA certificates in its chain. Only the
+            // request fields ride the awareness messages.
+            let chain = self.own_chain(&signer);
+            self.p2pcd.note_signed_with(&chain, ctx.now());
+        }
         if carries_p2pcd(msg_type) {
             let now = ctx.now();
             let add = self.p2pcd_header(&signer, now);
@@ -1024,7 +1050,13 @@ impl NodeSecurity {
     /// # Errors
     /// The PDU does not decode ([`v2xw_sec::p2pcd::decode_learning_response`]).
     pub fn p2pcd_receive_response(&mut self, bytes: &[u8]) -> Result<usize, SecError> {
-        let certs = v2xw_sec::p2pcd::decode_learning_response(bytes)?;
+        let certs = match v2xw_sec::p2pcd::decode_learning_response(bytes) {
+            Ok(c) => c,
+            Err(e) => {
+                self.p2pcd.stats.responses_malformed += 1;
+                return Err(e);
+            }
+        };
         if let Ok(id) = cert::cert_id3(&certs[0]) {
             self.p2pcd
                 .on_response_observed(crate::p2pcd::id3_bytes(&id));

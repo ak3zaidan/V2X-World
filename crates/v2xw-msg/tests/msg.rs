@@ -214,6 +214,7 @@ fn the_registered_codecs_partition_the_message_set_they_claim() {
             MsgType::Wsa, // IEEE 1609.3, no codec planned
             MsgType::Crl, // v2xw-sec, over sec_types
             MsgType::Mbr, // TS 103 759, a later stage
+            MsgType::P2pcd, // v2xw-sec::p2pcd, over sec_types
         ]
     );
 

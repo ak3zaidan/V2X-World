@@ -2370,6 +2370,37 @@ impl Phase2 {
         (roots, cas)
     }
 
+    /// Every provider's chain file, in deployment order (the home provider first, as
+    /// [`Phase2::provider_issuers`]): the CA certificates of that provider alone, empty
+    /// for a provider whose root is not on the CTL. What a device's chain file holds under
+    /// `security.scms.chain_file: home-provider`.
+    #[must_use]
+    pub fn provider_chain_files(&self) -> Vec<Vec<std::sync::Arc<v2xw_msg::sec_types::Certificate>>> {
+        let st = &self.scms.state;
+        let Some(home) = st.pki.as_ref() else {
+            return Vec::new();
+        };
+        let on_ctl = |label: &str| {
+            st.gov
+                .root_of(label)
+                .is_some_and(|r| st.gov.ctl.roots.contains(&r))
+        };
+        let file = |p: &v2xw_proto::scms::pdu::ScmsPki| {
+            p.all()
+                .into_iter()
+                .chain(p.extra.iter())
+                .map(|a| std::sync::Arc::new(a.cert.clone()))
+                .collect::<Vec<_>>()
+        };
+        core::iter::once(file(home))
+            .chain(
+                st.peer_pki
+                    .iter()
+                    .map(|(label, p)| if on_ctl(label) { file(p) } else { Vec::new() }),
+            )
+            .collect()
+    }
+
     /// Every provider's ACA as an issuer, in deployment order (the home provider first):
     /// the issuer [`crate::credentials::CredentialFactory`] uses for a device assigned to
     /// that provider. Empty without a PDU layer.
@@ -4739,6 +4770,28 @@ pub fn attacker_params(
 /// Also the loader's check of the key (`crate::scenario::validate` runs it on a default
 /// parameter set), so a wrong id or parameter is refused at Check, in the same words, and
 /// not first discovered when the run is built.
+/// Whether each device's chain file holds only its own provider's CA certificates
+/// (`security.scms.chain_file: home-provider`) rather than every CTL provider's
+/// (`all-providers`, the default).
+///
+/// # Errors
+/// [`EngineError::Scenario`] for any other value.
+pub fn home_chain_file_of(scenario: &Scenario) -> Result<bool> {
+    match scenario
+        .security
+        .scms
+        .as_ref()
+        .and_then(|s| s.chain_file.as_deref())
+    {
+        None | Some("all-providers") => Ok(false),
+        Some("home-provider") => Ok(true),
+        Some(other) => Err(conflict(
+            "security.scms.chain_file",
+            format!("'{other}' is not a chain file scope; allowed: all-providers, home-provider"),
+        )),
+    }
+}
+
 /// The SCMS deployment a scenario runs on (`security.scms.deployment`, WP-D1).
 ///
 /// An SCMS run (`protocol/scms/camp`) defaults to `us-production-2025`, the US system;
